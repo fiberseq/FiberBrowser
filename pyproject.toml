@@ -1,0 +1,159 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fiberbrowser"
+dynamic = ["version"]
+description = "Interactive genome browser for fiber-seq and DAF-seq footprints at single-molecule resolution"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{name = "FiberBrowser Authors"}]
+requires-python = ">=3.10"
+keywords = ["bioinformatics", "genome-browser", "fiber-seq", "DAF-seq", "chromatin", "footprinting",
+            "single-molecule", "FiberHMM"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Web Environment",
+    "Framework :: FastAPI",
+    "Intended Audience :: Science/Research",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Visualization",
+]
+# Keep in step with requirements.txt (tests/test_packaging.py checks it). The
+# Apple-silicon Copilot runtime (mlx-lm, huggingface_hub) is the [copilot]
+# extra here: requirements.txt installs it by marker, a pip install asks for it.
+dependencies = [
+    "numpy>=1.23",
+    "scipy>=1.9",
+    "pandas>=1.5",
+    "pysam>=0.20",
+    "tqdm>=4.64",
+    "fastapi>=0.100,<0.143",
+    "uvicorn>=0.22",
+    "pydantic>=2.0",
+    "pyBigWig>=0.3.18",
+    "pillow>=9.0",
+    "scikit-learn>=1.1",
+    "numba>=0.57",
+    "python-multipart>=0.0.5",
+    "orjson>=3.9",
+    "boto3>=1.26",
+    "requests>=2.28",
+    "fiberhmm[consensus]>=3.0,<4",
+    "pyjaspar>=3.0",
+    "tomli>=1.1; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+# The app window: `fiberbrowser --app`, `fiberbrowser-app`, the menu shortcut.
+app = ["pywebview>=5.0"]
+# Local Copilot on Apple silicon (macOS 13+, native arm64 Python).
+copilot = [
+    'mlx-lm>=0.19; platform_system == "Darwin" and platform_machine == "arm64" and platform_release >= "22"',
+    'huggingface_hub>=0.20; platform_system == "Darwin" and platform_machine == "arm64" and platform_release >= "22"',
+]
+# Primer design panel (BLAST+ specificity checks also need blastn/makeblastdb on PATH).
+primers = ["primer3-py>=2.0", "seqfold>=0.7"]
+# .cool / .mcool contact matrices (DAF-C, Micro-C), local or s3:// (boto3 only).
+# `s3` (s3fs) is no longer used by FiberBrowser; kept so existing installs still resolve.
+contact-maps = ["cooler", "h5py"]
+s3 = ["s3fs"]
+# UMAP option in the cluster Projection tab.
+umap = ["umap-learn"]
+# Server-side diagnostic plots and the standalone primer_designer CLI.
+plots = ["matplotlib>=3.5", "seaborn>=0.11"]
+# "New DAF-seq run" aligns with minimap2: the minimap2 program (conda/brew) or,
+# without it, the mappy module this extra installs.
+pipeline = ["mappy>=2.24"]
+all = [
+    "fiberbrowser[app,copilot,primers,contact-maps,s3,umap,plots,pipeline]",
+]
+
+[project.scripts]
+fiberbrowser = "fiberbrowser.cli:main"
+
+[project.gui-scripts]
+fiberbrowser-app = "fiberbrowser.cli:app_main"
+
+[project.urls]
+Homepage = "https://github.com/fiberseq/FiberBrowser"
+Documentation = "https://github.com/fiberseq/FiberBrowser/blob/main/docs/index.md"
+Repository = "https://github.com/fiberseq/FiberBrowser"
+Issues = "https://github.com/fiberseq/FiberBrowser/issues"
+Changelog = "https://github.com/fiberseq/FiberBrowser/blob/main/CHANGELOG.md"
+
+[tool.hatch.version]
+path = "browser/version.py"
+
+# The installed package mirrors the repository root under fiberbrowser/ (see
+# fiberbrowser/_paths.py): the backend imports `services`, `routers`, ... from
+# its own folder, so they must never land in site-packages as top-level names.
+[tool.hatch.build]
+# The demo BAM is tracked although .gitignore lists *.bam; select files here.
+ignore-vcs = true
+exclude = [
+    "__pycache__",
+    "*.pyc",
+    ".DS_Store",
+    "browser/frontend/node_modules",
+    "browser/frontend/test-results",
+    "browser/frontend/playwright-report",
+    "browser/uploads",
+    "browser/routers/uploads",
+]
+
+[tool.hatch.build.targets.sdist]
+only-include = [
+    "fiberbrowser",
+    "browser",
+    "browser.py",
+    "browser_client.py",
+    "data/copilot_dataset/models.json",
+    "plugins",
+    "packaging/python",
+    "requirements.txt",
+    "README.md",
+    "LICENSE",
+]
+
+[tool.hatch.build.targets.wheel]
+only-include = ["fiberbrowser"]
+# Application files, placed under fiberbrowser/. Frontend sources, tests and
+# tooling stay out: the wheel serves the committed build (frontend/dist).
+[tool.hatch.build.targets.wheel.force-include]
+"browser.py" = "fiberbrowser/browser.py"
+"browser_client.py" = "fiberbrowser/browser_client.py"
+"packaging/python/browser_client_shim.py" = "browser_client.py"
+"data/copilot_dataset/models.json" = "fiberbrowser/data/copilot_dataset/models.json"
+"plugins" = "fiberbrowser/plugins"
+"browser/version.py" = "fiberbrowser/browser/version.py"
+"browser/server.py" = "fiberbrowser/browser/server.py"
+"browser/server_compat.py" = "fiberbrowser/browser/server_compat.py"
+"browser/render.py" = "fiberbrowser/browser/render.py"
+"browser/s3_utils.py" = "fiberbrowser/browser/s3_utils.py"
+"browser/prepare_genomes.py" = "fiberbrowser/browser/prepare_genomes.py"
+"browser/primer_designer.py" = "fiberbrowser/browser/primer_designer.py"
+"browser/data" = "fiberbrowser/browser/data"
+"browser/models" = "fiberbrowser/browser/models"
+"browser/plugins" = "fiberbrowser/browser/plugins"
+# Analysis modules included in every release; legacy paths preserve saved sessions.
+"browser/lab" = "fiberbrowser/browser/lab"
+"browser/plugin-template" = "fiberbrowser/browser/plugin-template"
+"browser/routers" = "fiberbrowser/browser/routers"
+"browser/services" = "fiberbrowser/browser/services"
+"browser/state" = "fiberbrowser/browser/state"
+"browser/utils" = "fiberbrowser/browser/utils"
+"browser/frontend/dist" = "fiberbrowser/browser/frontend/dist"
+"browser/frontend/src/data" = "fiberbrowser/browser/frontend/src/data"
+"browser/frontend/scripts/render-headless.mjs" = "fiberbrowser/browser/frontend/scripts/render-headless.mjs"
+"browser/frontend/package.json" = "fiberbrowser/browser/frontend/package.json"

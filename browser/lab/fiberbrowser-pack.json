@@ -1,0 +1,30 @@
+{
+  "name": "lab",
+  "label": "Analysis features",
+  "flavor": "public",
+  "module": "lab.pack",
+  "description": "NFR analysis and Synchronise regions, included in every FiberBrowser release. The lab identifier preserves saved-session compatibility.",
+  "fiberhmm": {
+    "min_version": "3.0",
+    "features": [
+      {
+        "label": "the NFR engine",
+        "module": "fiberhmm.inference.accessibility",
+        "schema": {
+          "module": "fiberhmm.inference.accessibility.workflow",
+          "name": "SCHEMA",
+          "min": "fiberhmm.accessibility.preview.v1"
+        }
+      },
+      {
+        "label": "the provenance API",
+        "module": "fiberhmm.io.provenance",
+        "names": [
+          "basecaller_provenance",
+          "parse_ds_tokens",
+          "parse_override"
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,46 @@
+# An always-on FiberBrowser lab server in Docker, with Caddy for HTTPS.
+#   cp deploy/lab/lab-docker.toml /srv/fiberbrowser/config/fiberbrowser-server.toml   (edit it)
+#   FIBERBROWSER_DOMAIN=fiberbrowser.lab.internal LAB_DATA=/data/lab \
+#     docker compose -f deploy/lab/docker-compose.lab.yml up -d --build
+#   docker compose -f deploy/lab/docker-compose.lab.yml exec fiberbrowser \
+#     python -m fiberbrowser users invite alice --role admin --config /config/fiberbrowser-server.toml
+services:
+  fiberbrowser:
+    build:
+      context: ../..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    # The image installs FiberBrowser as a package (deploy/Dockerfile).
+    entrypoint: ["fiberbrowser", "serve", "--config", "/config/fiberbrowser-server.toml"]
+    command: []
+    volumes:
+      - ${LAB_DATA:-/data/lab}:/data/lab             # data roots and the writable runs folder
+      - ${LAB_STATE:-/srv/fiberbrowser/state}:/state # shared state: accounts, Library, sessions, audit
+      - ${LAB_CONFIG:-/srv/fiberbrowser/config}:/config:ro
+      - fiberbrowser-cache:/home/fiberbrowser/.fiberhmm
+    environment:
+      FIBERBROWSER_ALLOWED_HOSTS: ${FIBERBROWSER_DOMAIN:-fiberbrowser.lab.internal},fiberbrowser
+    read_only: true
+    tmpfs:
+      - /tmp
+    expose:
+      - "8000"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "443:443"
+      - "80:80"
+    environment:
+      FIBERBROWSER_DOMAIN: ${FIBERBROWSER_DOMAIN:-fiberbrowser.lab.internal}
+      FIBERBROWSER_UPSTREAM: fiberbrowser:8000
+    volumes:
+      - ./Caddyfile.lab:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on:
+      - fiberbrowser
+
+volumes:
+  fiberbrowser-cache:
+  caddy-data:

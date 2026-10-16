@@ -1,0 +1,12 @@
+{
+  "name": "FiberBrowser demo",
+  "groups": [
+    {
+      "name": "NAPA promoter (DddA-seq, hg38)",
+      "description": "3,202 DddA-seq reads around the NAPA promoter, chr19:47,514,000-47,518,000.",
+      "datasets": [
+        {"path": "../../browser/data/demo/napa_ddda.bam", "label": "NAPA demo (DddA-seq)"}
+      ]
+    }
+  ]
+}

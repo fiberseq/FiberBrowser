@@ -1,0 +1,735 @@
+{
+ "supported": true,
+ "genome": "mm10",
+ "assays": [
+  {
+   "key": "Histone ChIP-seq",
+   "count": 8588
+  },
+  {
+   "key": "total RNA-seq",
+   "count": 2418
+  },
+  {
+   "key": "polyA plus RNA-seq",
+   "count": 2080
+  },
+  {
+   "key": "TF ChIP-seq",
+   "count": 2026
+  },
+  {
+   "key": "microRNA-seq",
+   "count": 1943
+  },
+  {
+   "key": "DNase-seq",
+   "count": 1375
+  },
+  {
+   "key": "ATAC-seq",
+   "count": 704
+  },
+  {
+   "key": "WGBS",
+   "count": 648
+  },
+  {
+   "key": "in situ Hi-C",
+   "count": 108
+  },
+  {
+   "key": "intact Hi-C",
+   "count": 75
+  },
+  {
+   "key": "scRNA-seq",
+   "count": 24
+  },
+  {
+   "key": "ChIA-PET",
+   "count": 19
+  },
+  {
+   "key": "STARR-seq",
+   "count": 15
+  },
+  {
+   "key": "pooled clone sequencing",
+   "count": 9
+  },
+  {
+   "key": "dilution Hi-C",
+   "count": 4
+  },
+  {
+   "key": "FACS CRISPR screen",
+   "count": 3
+  }
+ ],
+ "targets": [
+  {
+   "key": "H3K4me3",
+   "count": 1268
+  },
+  {
+   "key": "H3K4me1",
+   "count": 1232
+  },
+  {
+   "key": "H3K27ac",
+   "count": 1146
+  },
+  {
+   "key": "H3K36me3",
+   "count": 1118
+  },
+  {
+   "key": "H3K27me3",
+   "count": 1102
+  },
+  {
+   "key": "H3K9me3",
+   "count": 978
+  },
+  {
+   "key": "H3K9ac",
+   "count": 864
+  },
+  {
+   "key": "H3K4me2",
+   "count": 808
+  },
+  {
+   "key": "CTCF",
+   "count": 449
+  },
+  {
+   "key": "POLR2A",
+   "count": 242
+  },
+  {
+   "key": "EP300",
+   "count": 120
+  },
+  {
+   "key": "GATA1",
+   "count": 80
+  },
+  {
+   "key": "H3K79me2",
+   "count": 62
+  },
+  {
+   "key": "MAFK",
+   "count": 48
+  },
+  {
+   "key": "TAL1",
+   "count": 44
+  },
+  {
+   "key": "CHD2",
+   "count": 36
+  },
+  {
+   "key": "HCFC1",
+   "count": 36
+  },
+  {
+   "key": "POLR2AphosphoS5",
+   "count": 36
+  },
+  {
+   "key": "RAD21",
+   "count": 36
+  },
+  {
+   "key": "USF2",
+   "count": 36
+  },
+  {
+   "key": "ZC3H11A",
+   "count": 36
+  },
+  {
+   "key": "ZNF384",
+   "count": 36
+  },
+  {
+   "key": "MAX",
+   "count": 32
+  },
+  {
+   "key": "USF1",
+   "count": 32
+  },
+  {
+   "key": "E2F4",
+   "count": 28
+  },
+  {
+   "key": "POLR2AphosphoS2",
+   "count": 28
+  },
+  {
+   "key": "TCF12",
+   "count": 28
+  },
+  {
+   "key": "BHLHE40",
+   "count": 24
+  },
+  {
+   "key": "CHD1",
+   "count": 24
+  },
+  {
+   "key": "ELF1",
+   "count": 24
+  },
+  {
+   "key": "ETS1",
+   "count": 24
+  },
+  {
+   "key": "GABPA",
+   "count": 24
+  },
+  {
+   "key": "GATA2",
+   "count": 24
+  },
+  {
+   "key": "JUND",
+   "count": 24
+  },
+  {
+   "key": "KAT2A",
+   "count": 24
+  },
+  {
+   "key": "MAZ",
+   "count": 24
+  },
+  {
+   "key": "MEF2A",
+   "count": 24
+  },
+  {
+   "key": "MXI1",
+   "count": 24
+  },
+  {
+   "key": "MYC",
+   "count": 24
+  },
+  {
+   "key": "NELFE",
+   "count": 24
+  },
+  {
+   "key": "NRF1",
+   "count": 24
+  },
+  {
+   "key": "RCOR1",
+   "count": 24
+  },
+  {
+   "key": "SIN3A",
+   "count": 24
+  },
+  {
+   "key": "SMC3",
+   "count": 24
+  },
+  {
+   "key": "TBP",
+   "count": 24
+  },
+  {
+   "key": "UBTF",
+   "count": 24
+  },
+  {
+   "key": "ZKSCAN1",
+   "count": 24
+  },
+  {
+   "key": "ZMIZ1",
+   "count": 24
+  },
+  {
+   "key": "CEBPB",
+   "count": 16
+  },
+  {
+   "key": "MYOD1",
+   "count": 16
+  },
+  {
+   "key": "MYOG",
+   "count": 16
+  },
+  {
+   "key": "FLI1",
+   "count": 12
+  },
+  {
+   "key": "GATA4",
+   "count": 12
+  },
+  {
+   "key": "IRF4",
+   "count": 12
+  },
+  {
+   "key": "JUN",
+   "count": 12
+  },
+  {
+   "key": "MYB",
+   "count": 12
+  },
+  {
+   "key": "NANOG",
+   "count": 12
+  },
+  {
+   "key": "PAX5",
+   "count": 12
+  },
+  {
+   "key": "POU5F1",
+   "count": 12
+  },
+  {
+   "key": "H3ac",
+   "count": 6
+  },
+  {
+   "key": "H3K79me3",
+   "count": 4
+  },
+  {
+   "key": "REST",
+   "count": 4
+  },
+  {
+   "key": "SRF",
+   "count": 4
+  },
+  {
+   "key": "TCF3",
+   "count": 4
+  },
+  {
+   "key": "FOSL1",
+   "count": 2
+  }
+ ],
+ "biosamples": [
+  {
+   "key": "heart",
+   "count": 1859
+  },
+  {
+   "key": "liver",
+   "count": 1390
+  },
+  {
+   "key": "forebrain",
+   "count": 1139
+  },
+  {
+   "key": "midbrain",
+   "count": 1109
+  },
+  {
+   "key": "hindbrain",
+   "count": 1102
+  },
+  {
+   "key": "macrophage",
+   "count": 956
+  },
+  {
+   "key": "MEL",
+   "count": 865
+  },
+  {
+   "key": "limb",
+   "count": 824
+  },
+  {
+   "key": "embryonic facial prominence",
+   "count": 796
+  },
+  {
+   "key": "kidney",
+   "count": 763
+  },
+  {
+   "key": "lung",
+   "count": 729
+  },
+  {
+   "key": "neural tube",
+   "count": 713
+  },
+  {
+   "key": "CH12.LX",
+   "count": 678
+  },
+  {
+   "key": "stomach",
+   "count": 586
+  },
+  {
+   "key": "adrenal gland",
+   "count": 564
+  },
+  {
+   "key": "intestine",
+   "count": 548
+  },
+  {
+   "key": "left cerebral cortex",
+   "count": 405
+  },
+  {
+   "key": "brain",
+   "count": 377
+  },
+  {
+   "key": "layer of hippocampus",
+   "count": 350
+  },
+  {
+   "key": "gastrocnemius",
+   "count": 344
+  },
+  {
+   "key": "G1E-ER4",
+   "count": 280
+  },
+  {
+   "key": "thymus",
+   "count": 202
+  },
+  {
+   "key": "cerebellum",
+   "count": 190
+  },
+  {
+   "key": "G1E",
+   "count": 188
+  },
+  {
+   "key": "ES-E14",
+   "count": 186
+  },
+  {
+   "key": "muscle organ",
+   "count": 180
+  },
+  {
+   "key": "spleen",
+   "count": 176
+  },
+  {
+   "key": "erythroblast",
+   "count": 146
+  },
+  {
+   "key": "testis",
+   "count": 136
+  },
+  {
+   "key": "megakaryocyte",
+   "count": 134
+  },
+  {
+   "key": "small intestine",
+   "count": 134
+  },
+  {
+   "key": "ES-Bruce4",
+   "count": 114
+  },
+  {
+   "key": "myocyte",
+   "count": 100
+  },
+  {
+   "key": "E14TG2a.4",
+   "count": 96
+  },
+  {
+   "key": "T-cell",
+   "count": 90
+  },
+  {
+   "key": "B cell",
+   "count": 89
+  },
+  {
+   "key": "cortical plate",
+   "count": 88
+  },
+  {
+   "key": "dendritic cell",
+   "count": 86
+  },
+  {
+   "key": "olfactory bulb",
+   "count": 78
+  },
+  {
+   "key": "bone marrow",
+   "count": 72
+  },
+  {
+   "key": "bone marrow macrophage",
+   "count": 72
+  },
+  {
+   "key": "embryonic fibroblast",
+   "count": 72
+  },
+  {
+   "key": "urinary bladder",
+   "count": 70
+  },
+  {
+   "key": "T-helper 17 cell",
+   "count": 68
+  },
+  {
+   "key": "placenta",
+   "count": 64
+  },
+  {
+   "key": "frontal cortex",
+   "count": 63
+  },
+  {
+   "key": "T-helper 2 cell",
+   "count": 62
+  },
+  {
+   "key": "C2C12",
+   "count": 60
+  },
+  {
+   "key": "megakaryocyte-erythroid progenitor cell",
+   "count": 58
+  },
+  {
+   "key": "regulatory T cell",
+   "count": 58
+  },
+  {
+   "key": "neutrophil",
+   "count": 52
+  },
+  {
+   "key": "hematopoietic stem cell",
+   "count": 50
+  },
+  {
+   "key": "brown adipose tissue",
+   "count": 48
+  },
+  {
+   "key": "central nervous system",
+   "count": 48
+  },
+  {
+   "key": "monocyte",
+   "count": 47
+  },
+  {
+   "key": "skeletal muscle tissue",
+   "count": 46
+  },
+  {
+   "key": "T-helper 1 cell",
+   "count": 42
+  },
+  {
+   "key": "common myeloid progenitor",
+   "count": 42
+  },
+  {
+   "key": "granulocyte monocyte progenitor cell",
+   "count": 42
+  },
+  {
+   "key": "erythroid progenitor cell",
+   "count": 38
+  },
+  {
+   "key": "megakaryocyte progenitor cell",
+   "count": 38
+  },
+  {
+   "key": "right cerebral cortex",
+   "count": 37
+  },
+  {
+   "key": "inflammation-experienced regulatory T-cells",
+   "count": 36
+  },
+  {
+   "key": "ovary",
+   "count": 36
+  },
+  {
+   "key": "splenic B cell",
+   "count": 36
+  },
+  {
+   "key": "activated CD4-positive, CD25-positive, alpha-beta regulatory T cell",
+   "count": 32
+  },
+  {
+   "key": "CD4-positive, CD25-positive, alpha-beta regulatory T cell",
+   "count": 29
+  },
+  {
+   "key": "large intestine",
+   "count": 28
+  },
+  {
+   "key": "mature B cell",
+   "count": 28
+  },
+  {
+   "key": "embryo",
+   "count": 27
+  },
+  {
+   "key": "mouse trophoblast stem cell",
+   "count": 24
+  },
+  {
+   "key": "leukemia stem cell",
+   "count": 22
+  },
+  {
+   "key": "Patski",
+   "count": 20
+  },
+  {
+   "key": "ZHBTc4",
+   "count": 19
+  },
+  {
+   "key": "gonadal fat pad",
+   "count": 19
+  },
+  {
+   "key": "naive thymus-derived CD4-positive, alpha-beta T cell",
+   "count": 18
+  },
+  {
+   "key": "adipose tissue",
+   "count": 16
+  },
+  {
+   "key": "colon",
+   "count": 16
+  },
+  {
+   "key": "duodenum",
+   "count": 16
+  },
+  {
+   "key": "hematopoietic multipotent progenitor cell",
+   "count": 16
+  },
+  {
+   "key": "mammary gland",
+   "count": 16
+  },
+  {
+   "key": "pancreas",
+   "count": 16
+  },
+  {
+   "key": "retina",
+   "count": 16
+  },
+  {
+   "key": "sigmoid colon",
+   "count": 16
+  },
+  {
+   "key": "subcutaneous adipose tissue",
+   "count": 16
+  },
+  {
+   "key": "CD8-positive naive resting alpha-beta T cell",
+   "count": 14
+  },
+  {
+   "key": "natural killer cell",
+   "count": 13
+  },
+  {
+   "key": "MN1",
+   "count": 12
+  },
+  {
+   "key": "WW6",
+   "count": 12
+  },
+  {
+   "key": "effector memory CD4-positive, alpha-beta T cell",
+   "count": 12
+  },
+  {
+   "key": "embryonic stem cell",
+   "count": 12
+  },
+  {
+   "key": "DNA cloning sample",
+   "count": 9
+  },
+  {
+   "key": "Muller cell",
+   "count": 9
+  },
+  {
+   "key": "telencephalon",
+   "count": 9
+  },
+  {
+   "key": "C3H10T1/2",
+   "count": 8
+  },
+  {
+   "key": "CD4-positive naive resting alpha-beta T cell",
+   "count": 8
+  },
+  {
+   "key": "CH12F3",
+   "count": 8
+  },
+  {
+   "key": "Purkinje cell",
+   "count": 8
+  },
+  {
+   "key": "cerebellar granule layer",
+   "count": 8
+  },
+  {
+   "key": "mouse embryonic stem cell",
+   "count": 8
+  }
+ ],
+ "generated": "2026-02-02"
+}

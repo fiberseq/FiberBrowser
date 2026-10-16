@@ -1,0 +1,36 @@
+cff-version: 1.2.0
+message: >-
+  If you use FiberBrowser in published work, please cite it as below, and cite
+  FiberHMM, which calls the footprints FiberBrowser shows.
+type: software
+title: "FiberBrowser: a genome browser for single-molecule chromatin data (Fiber-seq and DAF-seq)"
+version: 3.0.0
+date-released: "2026-10-15"
+authors:
+  - name: "FiberBrowser Authors"
+license: MIT
+repository-code: "https://github.com/fiberseq/FiberBrowser"
+url: "https://github.com/fiberseq/FiberBrowser"
+abstract: >-
+  FiberBrowser shows single DNA molecules from Fiber-seq (m6A) and DAF-seq
+  (deamination) data with their chromatin footprints, clusters and sorts reads
+  by their footprints at a locus, displays structural variants and the
+  chromatin inside insertions, and exports figures and data. Footprints are
+  called by FiberHMM.
+keywords:
+  - bioinformatics
+  - chromatin
+  - fiber-seq
+  - DAF-seq
+  - genome-browser
+  - single-molecule
+  - footprinting
+references:
+  - type: software
+    title: "FiberHMM: chromatin footprint calling from single-molecule Fiber-seq and DAF-seq data"
+    version: 3.0.0
+    authors:
+      - name: "FiberHMM Authors"
+    license: MIT
+    repository-code: "https://github.com/fiberseq/FiberHMM"
+    url: "https://fiberseq.github.io/FiberHMM/"

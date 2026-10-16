@@ -1,0 +1,35 @@
+# Apptainer / Singularity image with FiberBrowser, FiberHMM and minimap2.
+#   apptainer build fiberbrowser.sif deploy/cluster/fiberbrowser.def
+# (run from the repository root; many clusters build with --fakeroot, or on a
+# workstation and copy the .sif over). Use it from the Open OnDemand app
+# ("Apptainer image") or directly:
+#   apptainer exec --bind /data/lab fiberbrowser.sif fiberbrowser serve --config server.toml
+Bootstrap: docker
+From: condaforge/miniforge3:latest
+
+%files
+    deploy/cluster/environment.yml /opt/fiberbrowser-environment.yml
+
+%post
+    set -e
+    /opt/conda/bin/mamba env update -n base -f /opt/fiberbrowser-environment.yml
+    /opt/conda/bin/mamba clean -a -y
+    rm -rf /root/.cache/pip
+
+%environment
+    export PATH=/opt/conda/bin:$PATH
+    # FiberHMM's consensus kernel reproduces its reference digests single-threaded BLAS only.
+    export OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+    export FIBERBROWSER_NO_OPEN=1 FIBERHMM_NO_UPDATE_CHECK=1
+
+%runscript
+    exec fiberbrowser "$@"
+
+%test
+    fiberbrowser --version
+    minimap2 --version
+    command -v fiberhmm-pipeline
+
+%labels
+    org.opencontainers.image.title FiberBrowser
+    org.opencontainers.image.description FiberBrowser + FiberHMM + minimap2 for HPC (Open OnDemand app: deploy/ondemand)

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+<title>FiberBrowser</title>
+<defs>
+<linearGradient id="tile" x1="0.15" y1="0" x2="0.85" y2="1"><stop offset="0" stop-color="#2a4fb5"/><stop offset="1" stop-color="#0f1a3d"/></linearGradient>
+<radialGradient id="sheen" cx="0.28" cy="0.08" r="0.9"><stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/><stop offset="0.55" stop-color="#ffffff" stop-opacity="0"/></radialGradient>
+<linearGradient id="nuc" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6fd67b"/><stop offset="1" stop-color="#2b8f3d"/></linearGradient>
+<linearGradient id="tf" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fb8bff"/><stop offset="1" stop-color="#c026d3"/></linearGradient>
+<linearGradient id="beam" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#9fdcf5" stop-opacity="0.2"/><stop offset="0.5" stop-color="#9fdcf5" stop-opacity="0.45"/><stop offset="1" stop-color="#9fdcf5" stop-opacity="0.2"/></linearGradient>
+</defs>
+<rect width="32" height="32" rx="7" fill="url(#tile)"/>
+<rect width="32" height="32" rx="7" fill="url(#sheen)"/>
+<rect x="13" y="3" width="6" height="25" rx="3" fill="url(#beam)"/>
+<g fill="#cbd5e1" opacity="0.22">
+<rect x="5" y="5" width="25" height="5" rx="2.5"/><rect x="2" y="13" width="25" height="5" rx="2.5"/><rect x="2" y="21" width="27" height="5" rx="2.5"/>
+</g>
+<g fill="url(#nuc)">
+<rect x="7" y="5" width="5" height="5" rx="1.5"/><rect x="20" y="5" width="5" height="5" rx="1.5"/><rect x="26" y="5" width="3" height="5" rx="1.5"/>
+<rect x="3" y="13" width="3" height="5" rx="1.5"/><rect x="7" y="13" width="5" height="5" rx="1.5"/><rect x="20" y="13" width="5" height="5" rx="1.5"/>
+<rect x="3" y="21" width="3" height="5" rx="1.5"/><rect x="7" y="21" width="5" height="5" rx="1.5"/><rect x="20" y="21" width="5" height="5" rx="1.5"/><rect x="26" y="21" width="2" height="5" rx="1"/>
+</g>
+<rect x="15" y="5" width="2" height="5" rx="1" fill="url(#tf)"/>
+<rect x="0.5" y="0.5" width="31" height="31" rx="6.5" fill="none" stroke="#ffffff" stroke-opacity="0.08"/>
+</svg>

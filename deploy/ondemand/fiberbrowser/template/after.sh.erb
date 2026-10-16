@@ -1,0 +1,9 @@
+# Wait for FiberBrowser to listen before OnDemand shows the Connect button.
+echo "Waiting for FiberBrowser to open port ${port}..."
+if wait_until_port_used "${host}:${port}" 600; then
+  echo "FiberBrowser is listening on ${host}:${port}"
+else
+  echo "Timed out waiting for FiberBrowser to open port ${port}"
+  clean_up 1
+fi
+sleep 2

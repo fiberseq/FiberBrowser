@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+<title>FiberBrowser</title>
+<defs>
+<linearGradient id="tile" x1="0.15" y1="0" x2="0.85" y2="1"><stop offset="0" stop-color="#2a4fb5"/><stop offset="1" stop-color="#0f1a3d"/></linearGradient>
+<radialGradient id="sheen" cx="0.28" cy="0.08" r="0.9"><stop offset="0" stop-color="#ffffff" stop-opacity="0.14"/><stop offset="0.55" stop-color="#ffffff" stop-opacity="0"/></radialGradient>
+<linearGradient id="nuc" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6fd67b"/><stop offset="1" stop-color="#2b8f3d"/></linearGradient>
+<linearGradient id="tf" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fb8bff"/><stop offset="1" stop-color="#c026d3"/></linearGradient>
+<linearGradient id="beam" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#9fdcf5" stop-opacity="0.2"/><stop offset="0.5" stop-color="#9fdcf5" stop-opacity="0.45"/><stop offset="1" stop-color="#9fdcf5" stop-opacity="0.2"/></linearGradient>
+</defs>
+<rect width="16" height="16" rx="3" fill="url(#tile)"/>
+<rect width="16" height="16" rx="3" fill="url(#sheen)"/>
+<rect x="6" y="1" width="4" height="13" fill="#9fdcf5" opacity="0.4"/>
+<g fill="#cbd5e1" opacity="0.28"><rect x="2" y="2" width="13" height="3"/><rect x="1" y="6" width="13" height="3"/><rect x="1" y="10" width="14" height="3"/></g>
+<g fill="#45b556"><rect x="2" y="2" width="3" height="3"/><rect x="11" y="2" width="3" height="3"/><rect x="2" y="6" width="3" height="3"/><rect x="11" y="6" width="3" height="3"/><rect x="2" y="10" width="3" height="3"/><rect x="11" y="10" width="3" height="3"/></g>
+<rect x="7" y="2" width="2" height="3" fill="#ea4cfb"/>
+</svg>

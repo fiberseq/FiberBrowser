@@ -1,0 +1,2792 @@
+{
+ "version": 1,
+ "anchors": [
+  {
+   "id": "load-dataset",
+   "label": "Open",
+   "selector": "[data-testid=\"load-file-button\"]",
+   "where": "top bar",
+   "reveal": {},
+   "description": "Open a BAM, BigBed, BigWig, GTF, FASTA or a saved session file; the arrow beside it lists the Library, Load by path / URL, Connect to cluster, Process raw data (New DAF-seq run) and Data quality."
+  },
+  {
+   "id": "save-session",
+   "label": "Save",
+   "selector": "[data-testid=\"save-session-button\"]",
+   "where": "top bar",
+   "reveal": {},
+   "description": "Download a session file you can reload later with Open."
+  },
+  {
+   "id": "export-figure",
+   "label": "Export",
+   "selector": "[data-testid=\"export-screenshot-button\"]",
+   "where": "top bar",
+   "reveal": {},
+   "description": "Export a figure of what you see (PNG, SVG or PDF). Data exports are under Data (Export data)."
+  },
+  {
+   "id": "sidebar-toggle",
+   "label": "Settings rail",
+   "selector": "[data-testid=\"settings-rail-sections\"]",
+   "where": "right edge (side rail)",
+   "reveal": {},
+   "description": "Each icon opens one page of settings: Data & Sessions, Reference & Tracks, Reads & Display, Analysis & Reproducibility. Click another icon to switch, the same icon (or the X) to close; Cmd/Ctrl+B reopens the last page."
+  },
+  {
+   "id": "guided-tour",
+   "label": "Tutorial > Start from the beginning",
+   "selector": "[data-testid=\"tutorial-start-tour\"]",
+   "where": "Tutorial panel",
+   "reveal": {
+    "panel": "history",
+    "tab": "tour"
+   },
+   "description": "A scripted walk through the main tools on a demo dataset; the Tutorial panel also starts it at any step."
+  },
+  {
+   "id": "layout-menu",
+   "label": "Layout > Equal widths",
+   "selector": "[data-testid=\"layout-equal-widths\"]",
+   "where": "Layout panel",
+   "reveal": {
+    "panel": "dataset-layout"
+   },
+   "description": "The Layout panel arranges all panels at once: Equal widths evens out their widths; Reset puts rows and sizes back."
+  },
+  {
+   "id": "undo",
+   "label": "Undo",
+   "selector": "[data-testid=\"quick-undo-button\"]",
+   "where": "top bar",
+   "reveal": {},
+   "description": "Undo the last change (Cmd+Z)."
+  },
+  {
+   "id": "toolbar-more",
+   "label": "More menu",
+   "selector": "[data-testid=\"toolbar-more-button\"]",
+   "where": "top bar, right end",
+   "reveal": {},
+   "description": "Reset view, analysis details, keyboard shortcuts and quit."
+  },
+  {
+   "id": "reset-view",
+   "label": "Reset view",
+   "selector": "[data-testid=\"reset-view-button\"]",
+   "where": "top bar, in the More menu at the right end",
+   "reveal": {
+    "expand": "toolbar-more"
+   },
+   "description": "Clear clustering, filters and selections in one step (R); Undo brings them back."
+  },
+  {
+   "id": "redo",
+   "label": "Redo",
+   "selector": "[data-testid=\"quick-redo-button\"]",
+   "where": "top bar",
+   "reveal": {},
+   "description": "Redo (Cmd+Shift+Z)."
+  },
+  {
+   "id": "history-timeline",
+   "label": "History timeline",
+   "selector": "[data-testid=\"history-timeline-button\"]",
+   "where": "top bar, next to Undo",
+   "reveal": {},
+   "description": "Jump back to any earlier step of the session."
+  },
+  {
+   "id": "search-bar",
+   "label": "Search box",
+   "selector": "[data-testid=\"location-search-input\"]",
+   "where": "navigation bar",
+   "reveal": {},
+   "description": "Type a gene name or coordinates (chr2R:9,970,000-9,980,000) and press Enter."
+  },
+  {
+   "id": "chrom-selector",
+   "label": "Chromosome selector",
+   "selector": "[data-testid=\"chrom-selector\"]",
+   "where": "navigation bar",
+   "reveal": {},
+   "description": "Pick a chromosome from the loaded reference."
+  },
+  {
+   "id": "zoom-in",
+   "label": "Zoom in",
+   "selector": "[data-testid=\"zoom-in-button\"]",
+   "where": "navigation bar",
+   "reveal": {},
+   "description": "Zoom in 1.5x (keyboard: up arrow or +)."
+  },
+  {
+   "id": "zoom-out",
+   "label": "Zoom out",
+   "selector": "[data-testid=\"zoom-out-button\"]",
+   "where": "navigation bar",
+   "reveal": {},
+   "description": "Zoom out 1.5x (keyboard: down arrow or -). Reads are drawn only while the view is smaller than the read window."
+  },
+  {
+   "id": "pan-left",
+   "label": "Pan left",
+   "selector": "[data-testid=\"pan-left-button\"]",
+   "where": "navigation bar",
+   "reveal": {},
+   "description": "Shift the view left (keyboard: left arrow)."
+  },
+  {
+   "id": "pan-right",
+   "label": "Pan right",
+   "selector": "[data-testid=\"pan-right-button\"]",
+   "where": "navigation bar",
+   "reveal": {},
+   "description": "Shift the view right (keyboard: right arrow)."
+  },
+  {
+   "id": "go-to-reads",
+   "label": "Go to reads",
+   "selector": "[data-testid=\"random-window-button\"]",
+   "where": "navigation bar",
+   "reveal": {},
+   "description": "Jump to the next best-covered window at this zoom, deepest first."
+  },
+  {
+   "id": "spanning-toggle",
+   "label": "Spanning only",
+   "selector": "[data-copilot-anchor=\"spanning-only-toggle\"]",
+   "where": "navigation bar",
+   "reveal": {},
+   "description": "Only show reads that cover the whole view edge to edge; off shows every overlapping read."
+  },
+  {
+   "id": "reverse-view",
+   "label": "Reverse view",
+   "selector": "[data-tour=\"reverse-view\"]",
+   "where": "navigation bar",
+   "reveal": {},
+   "description": "Flip the view 3' to 5'; reads and coordinates reverse."
+  },
+  {
+   "id": "relative-coords",
+   "label": "TSS-relative coordinates",
+   "selector": "[data-tour=\"relative-coords\"]",
+   "where": "navigation bar",
+   "reveal": {},
+   "description": "Show coordinates relative to the selected gene's TSS."
+  },
+  {
+   "id": "reads-toolbar",
+   "label": "Reads toolbar group",
+   "selector": "[data-testid=\"toolbar-group-reads\"]",
+   "where": "toolbar",
+   "reveal": {},
+   "description": "How reads are drawn: all reads or a sample, row height, spacing."
+  },
+  {
+   "id": "read-display-mode",
+   "label": "All / sample reads toggle",
+   "selector": "[data-testid=\"read-display-mode-toggle\"]",
+   "where": "toolbar > Reads",
+   "reveal": {
+    "expand": "reads-controls-expand"
+   },
+   "description": "Switch between drawing every read and a random sample."
+  },
+  {
+   "id": "row-height",
+   "label": "Read row height",
+   "selector": "[data-testid=\"read-display-row-height-compact\"]",
+   "where": "toolbar > Reads",
+   "reveal": {
+    "expand": "reads-controls-expand"
+   },
+   "description": "Pixels per read row (Cmd/Ctrl+scroll over the reads also changes it)."
+  },
+  {
+   "id": "layer-toggles",
+   "label": "Layer toggles",
+   "selector": "[data-testid=\"layer-toggle-group\"]",
+   "where": "toolbar > Layers",
+   "reveal": {
+    "expand": "layers-controls-expand"
+   },
+   "description": "Show or hide each layer: nucleosomes, TF footprints, FIRE/MSP, m6A, 5mC, deamination."
+  },
+  {
+   "id": "peaks-toolbar",
+   "label": "Peaks toolbar group",
+   "selector": "[data-testid=\"toolbar-group-peaks\"]",
+   "where": "toolbar",
+   "reveal": {},
+   "description": "Peak count, Scan, lock, draw and peak rules."
+  },
+  {
+   "id": "scan-peaks-button",
+   "label": "Scan",
+   "selector": "[data-copilot-anchor=\"scan-peaks-button\"]",
+   "where": "toolbar > Peaks",
+   "reveal": {},
+   "description": "Detect peaks in the current view with the enabled peak rules."
+  },
+  {
+   "id": "peaks-lock",
+   "label": "Lock peaks",
+   "selector": "[data-copilot-anchor=\"peaks-lock-toggle\"]",
+   "where": "toolbar > Peaks",
+   "reveal": {
+    "expand": "peaks-controls-expand"
+   },
+   "description": "Freeze the current peaks so navigating doesn't rescan them."
+  },
+  {
+   "id": "peak-draw",
+   "label": "Draw a peak",
+   "selector": "[data-testid=\"peak-draw-toggle\"]",
+   "where": "toolbar > Peaks",
+   "reveal": {
+    "expand": "peaks-controls-expand"
+   },
+   "description": "Draw your own peak: click a start and an end on the Peaks track."
+  },
+  {
+   "id": "peak-rules",
+   "label": "Peak rules",
+   "selector": "[data-testid=\"peak-rules-button\"]",
+   "where": "toolbar > Peaks",
+   "reveal": {
+    "expand": "peaks-controls-expand"
+   },
+   "description": "Edit the rules that define peaks (source layer, threshold, width)."
+  },
+  {
+   "id": "peak-clear-selection",
+   "label": "Clear peak selection",
+   "selector": "[data-testid=\"peak-clear-selection\"]",
+   "where": "toolbar > Peaks",
+   "reveal": {
+    "expand": "peaks-controls-expand"
+   },
+   "description": "Deselect all peaks."
+  },
+  {
+   "id": "peaks-track",
+   "label": "Peaks track",
+   "selector": "[data-copilot-track=\"peaks\"]",
+   "where": "dataset panel, above the reads",
+   "reveal": {},
+   "description": "Detected peaks. Click one to select it; Cmd/Ctrl+click adds to the selection."
+  },
+  {
+   "id": "cluster-toolbar",
+   "label": "Cluster toolbar group",
+   "selector": "[data-testid=\"toolbar-group-cluster\"]",
+   "where": "toolbar",
+   "reveal": {},
+   "description": "Clustering method, K and the Cluster button."
+  },
+  {
+   "id": "cluster-button",
+   "label": "Cluster",
+   "selector": "[data-copilot-anchor=\"cluster-button\"]",
+   "where": "toolbar > Cluster",
+   "reveal": {},
+   "description": "Group reads by their footprints at the selected peaks."
+  },
+  {
+   "id": "cluster-method",
+   "label": "Clustering method",
+   "selector": "[data-copilot-anchor=\"cluster-mode-select\"]",
+   "where": "toolbar > Cluster",
+   "reveal": {
+    "expand": "cluster-controls-expand"
+   },
+   "description": "K-means (exact or fast), hierarchical, HDBSCAN, combinatorial, or Neighbourhoods (groups on the t-SNE map, with a Resolution)."
+  },
+  {
+   "id": "cluster-k",
+   "label": "K",
+   "selector": "[data-copilot-anchor=\"cluster-k-input\"]",
+   "where": "toolbar > Cluster",
+   "reveal": {
+    "expand": "cluster-controls-expand"
+   },
+   "description": "Number of clusters for K-means / KMeans++ (2-20)."
+  },
+  {
+   "id": "merge-similar",
+   "label": "Merge similar clusters",
+   "selector": "[data-copilot-anchor=\"cluster-auto-cull-button\"]",
+   "where": "toolbar > Cluster",
+   "reveal": {
+    "expand": "cluster-controls-expand"
+   },
+   "description": "Merge tiny clusters and near-duplicates into their nearest cluster."
+  },
+  {
+   "id": "cluster-details-button",
+   "label": "Cluster details",
+   "selector": "[data-testid=\"cluster-detail-button\"]",
+   "where": "toolbar > Cluster",
+   "reveal": {
+    "expand": "cluster-controls-expand"
+   },
+   "description": "Open the Clusters panel.",
+   "needs": "has_clusters"
+  },
+  {
+   "id": "cluster-clear",
+   "label": "Clear clusters",
+   "selector": "[data-testid=\"cluster-clear-button\"]",
+   "where": "toolbar > Cluster",
+   "reveal": {
+    "expand": "cluster-controls-expand"
+   },
+   "description": "Remove the current clustering.",
+   "needs": "has_clusters"
+  },
+  {
+   "id": "cluster-rules-button",
+   "label": "Cluster rules",
+   "selector": "[data-testid=\"cluster-feature-rules-button\"]",
+   "where": "toolbar > Cluster",
+   "reveal": {
+    "expand": "cluster-controls-expand"
+   },
+   "description": "Open the Rules panel on the Cluster tab."
+  },
+  {
+   "id": "sort-button",
+   "label": "Sort",
+   "selector": "[data-testid=\"sort-run-button\"]",
+   "where": "toolbar > Sort",
+   "reveal": {},
+   "description": "Order reads (and clusters) by the chosen sort rule."
+  },
+  {
+   "id": "sort-rules",
+   "label": "Sort rules",
+   "selector": "[data-testid=\"sort-rules-button\"]",
+   "where": "toolbar > Sort",
+   "reveal": {
+    "expand": "sort-controls-expand"
+   },
+   "description": "Open the Rules panel on the Sort tab."
+  },
+  {
+   "id": "cluster-order-lock",
+   "label": "Lock cluster order",
+   "selector": "[data-copilot-anchor=\"cluster-order-lock-toggle\"]",
+   "where": "toolbar > Sort",
+   "reveal": {
+    "expand": "sort-controls-expand"
+   },
+   "description": "Keep the cluster order fixed when re-sorting or zooming.",
+   "needs": "has_clusters"
+  },
+  {
+   "id": "filter-button",
+   "label": "Filter",
+   "selector": "[data-testid=\"filter-run-button\"]",
+   "where": "toolbar > Filter",
+   "reveal": {},
+   "description": "Hide reads that fail the chosen filter rule."
+  },
+  {
+   "id": "filter-rules",
+   "label": "Filter rules",
+   "selector": "[data-testid=\"filter-rules-button\"]",
+   "where": "toolbar > Filter",
+   "reveal": {
+    "expand": "filter-controls-expand"
+   },
+   "description": "Open the Rules panel on the Filter tab."
+  },
+  {
+   "id": "clear-filter",
+   "label": "Clear filter",
+   "selector": "[data-testid=\"filter-clear-button\"]",
+   "where": "toolbar > Filter",
+   "reveal": {
+    "expand": "filter-controls-expand"
+   },
+   "description": "Remove the active read filter so every read shows again."
+  },
+  {
+   "id": "quality-filters",
+   "label": "Quality",
+   "selector": "[data-testid=\"toolbar-group-quality\"]",
+   "where": "toolbar",
+   "reveal": {},
+   "description": "Minimum call quality per layer; calls below it are hidden."
+  },
+  {
+   "id": "quality-cutoffs",
+   "label": "Quality cutoffs",
+   "selector": "[data-testid=\"quality-controls-toolbar\"]",
+   "where": "toolbar > Quality (open the group)",
+   "reveal": {
+    "expand": "quality-controls-expand"
+   },
+   "description": "Set the minimum call quality for each layer."
+  },
+  {
+   "id": "reads-controls-expand",
+   "label": "Reads controls toggle",
+   "selector": "[data-tour=\"reads-controls-expand\"]",
+   "where": "toolbar, start of the Reads group",
+   "reveal": {},
+   "description": "Click the small Reads label to show or hide the rest of the Reads controls."
+  },
+  {
+   "id": "layers-controls-expand",
+   "label": "Layers controls toggle",
+   "selector": "[data-tour=\"layers-controls-expand\"]",
+   "where": "toolbar, start of the Layers group",
+   "reveal": {},
+   "description": "Click the small Layers label to show or hide the rest of the Layers controls."
+  },
+  {
+   "id": "peaks-controls-expand",
+   "label": "Peaks controls toggle",
+   "selector": "[data-tour=\"peaks-controls-expand\"]",
+   "where": "toolbar, start of the Peaks group",
+   "reveal": {},
+   "description": "Click the small Peaks label to show or hide the rest of the Peaks controls."
+  },
+  {
+   "id": "cluster-controls-expand",
+   "label": "Cluster controls toggle",
+   "selector": "[data-tour=\"cluster-controls-expand\"]",
+   "where": "toolbar, start of the Cluster group",
+   "reveal": {},
+   "description": "Click the small Cluster label to show or hide the rest of the Cluster controls."
+  },
+  {
+   "id": "sort-controls-expand",
+   "label": "Sort controls toggle",
+   "selector": "[data-tour=\"sort-controls-expand\"]",
+   "where": "toolbar, start of the Sort group",
+   "reveal": {},
+   "description": "Click the small Sort label to show or hide the rest of the Sort controls."
+  },
+  {
+   "id": "filter-controls-expand",
+   "label": "Filter controls toggle",
+   "selector": "[data-tour=\"filter-controls-expand\"]",
+   "where": "toolbar, start of the Filter group",
+   "reveal": {},
+   "description": "Click the small Filter label to show or hide the rest of the Filter controls."
+  },
+  {
+   "id": "quality-controls-expand",
+   "label": "Quality controls toggle",
+   "selector": "[data-tour=\"quality-controls-expand\"]",
+   "where": "toolbar, start of the Quality group",
+   "reveal": {},
+   "description": "Click the small Quality label to show or hide the rest of the Quality controls."
+  },
+  {
+   "id": "analysis-strip",
+   "label": "Analysis panels",
+   "selector": "[data-testid=\"panel-rail\"], [data-testid=\"analysis-strip\"], [data-testid=\"analysis-strip-collapsed\"]",
+   "where": "the coloured tiles in the rail at the right edge (or, with Analysis panels set to Strip (classic), the strip below the toolbar)",
+   "reveal": {},
+   "description": "One coloured tile per analysis panel (Clusters, Footprints, Rules, ...); hover for its name, click to open it."
+  },
+  {
+   "id": "reads-track",
+   "label": "Reads",
+   "selector": "[data-copilot-track=\"reads\"]",
+   "where": "dataset panel",
+   "reveal": {},
+   "description": "One row per molecule. Click a footprint to inspect it; Shift+click selects the read; Cmd/Ctrl+click analyses the footprint."
+  },
+  {
+   "id": "panel-actions",
+   "label": "Panel actions (⋯)",
+   "selector": "[data-tour=\"panel-actions\"]",
+   "where": "dataset panel header, when it is too narrow for every action",
+   "reveal": {},
+   "description": "The header's actions that don't fit beside the name."
+  },
+  {
+   "id": "panel-add-copy",
+   "label": "+ Add a copy",
+   "selector": "[data-tour=\"panel-add-copy\"]",
+   "where": "dataset panel header (or its ⋯ menu when narrow)",
+   "reveal": {
+    "expand": "panel-actions"
+   },
+   "description": "Add a copy of the panel; unlink it to view another locus, chromosome or haplotype."
+  },
+  {
+   "id": "panel-compare-haplotypes",
+   "label": "Compare haplotypes…",
+   "selector": "[data-tour=\"panel-compare-haplotypes\"]",
+   "where": "dataset panel header (or its ⋯ menu when narrow)",
+   "reveal": {
+    "expand": "panel-actions"
+   },
+   "description": "Opens Regions › Compare haplotypes with this panel's chromosome and coordinates filled in."
+  },
+  {
+   "id": "panel-full-view",
+   "label": "Full view",
+   "selector": "[data-tour=\"panel-full-view\"]",
+   "where": "dataset panel header",
+   "reveal": {
+    "expand": "panel-actions"
+   },
+   "description": "Expand one panel to fill the window; click again to restore."
+  },
+  {
+   "id": "panel-subtracks",
+   "label": "Tracks in this panel",
+   "selector": "[data-tour=\"panel-subtracks\"]",
+   "where": "dataset panel header: Tracks",
+   "reveal": {
+    "expand": "panel-actions"
+   },
+   "description": "Every track of the panel: show, remove, restore, reorder, and add tracks (also from any track's right-click menu)."
+  },
+  {
+   "id": "panel-minimize",
+   "label": "Minimize panel",
+   "selector": "[data-tour=\"panel-minimize\"]",
+   "where": "dataset panel header",
+   "reveal": {
+    "expand": "panel-actions"
+   },
+   "description": "Minimize the panel to a chip at the bottom."
+  },
+  {
+   "id": "panel-close",
+   "label": "Close panel",
+   "selector": "[data-tour=\"panel-close\"]",
+   "where": "dataset panel header",
+   "reveal": {
+    "expand": "panel-actions"
+   },
+   "description": "Close the panel (removes the dataset if it is its last panel)."
+  },
+  {
+   "id": "panel-expand",
+   "label": "Minimized panel chip",
+   "selector": "[data-tour=\"panel-expand\"]",
+   "where": "bottom of the tracks, or sidebar > Loaded Datasets",
+   "reveal": {},
+   "description": "Click a minimized panel's chip to restore it.",
+   "shows_when": "a panel is minimized"
+  },
+  {
+   "id": "layout-rows",
+   "label": "Row bar",
+   "selector": "[data-tour=\"layout-rows\"]",
+   "where": "above each row of panels",
+   "reveal": {},
+   "description": "Click to collapse or expand a whole row of panels.",
+   "shows_when": "panels are arranged in more than one row"
+  },
+  {
+   "id": "panel-location-bar",
+   "label": "Panel location bar",
+   "selector": "[data-testid=\"panel-site-bar\"]",
+   "where": "top of an unlinked copy",
+   "reveal": {},
+   "description": "The copy's own location box, pan and zoom.",
+   "needs": "has_panel_copy"
+  },
+  {
+   "id": "panel-link",
+   "label": "Link / Unlink",
+   "selector": "[data-testid=\"panel-site-lock\"]",
+   "where": "panel location bar",
+   "reveal": {},
+   "description": "Link the copy to the main view, or unlink it to move it on its own.",
+   "needs": "has_panel_copy"
+  },
+  {
+   "id": "strand-chip",
+   "label": "Strand chip",
+   "selector": "[data-testid=\"panel-strand-chip\"]",
+   "where": "DAF-seq panel header",
+   "reveal": {},
+   "description": "Choose CT, GA or both strands, or split the panel into a CT and a GA panel.",
+   "shows_when": "a DAF-seq dataset is loaded"
+  },
+  {
+   "id": "split-by-strand",
+   "label": "Split into CT and GA panels",
+   "selector": "[data-testid=\"split-by-strand\"]",
+   "where": "strand chip menu",
+   "reveal": {
+    "expand": "strand-chip"
+   },
+   "description": "Show CT reads in this panel and GA reads in a copy beside it; both follow the main view.",
+   "shows_when": "a DAF-seq dataset is loaded"
+  },
+  {
+   "id": "sidebar-data",
+   "label": "Data & Sessions",
+   "selector": "[data-tour=\"sidebar-file\"]",
+   "where": "sidebar",
+   "reveal": {
+    "sidebar": "file"
+   },
+   "description": "Load data, manage loaded datasets, and save or restore sessions."
+  },
+  {
+   "id": "sidebar-reference",
+   "label": "Reference & Tracks",
+   "selector": "[data-tour=\"sidebar-genome\"]",
+   "where": "sidebar",
+   "reveal": {
+    "sidebar": "genome"
+   },
+   "description": "Reference FASTA and gene annotation, bundled genomes and online tracks."
+  },
+  {
+   "id": "sidebar-reads-display",
+   "label": "Reads & Display",
+   "selector": "[data-tour=\"sidebar-view\"]",
+   "where": "sidebar",
+   "reveal": {
+    "sidebar": "view"
+   },
+   "description": "Read rendering, navigation, display limits and read filters."
+  },
+  {
+   "id": "sidebar-analysis",
+   "label": "Analysis & Reproducibility",
+   "selector": "[data-tour=\"sidebar-analysis\"]",
+   "where": "sidebar",
+   "reveal": {
+    "sidebar": "analysis"
+   },
+   "description": "Sampling seed, peak detection and analysis settings."
+  },
+  {
+   "id": "restore-session",
+   "label": "Restore session",
+   "selector": "[data-testid=\"restore-session-button\"]",
+   "where": "sidebar > Data & Sessions",
+   "reveal": {
+    "sidebar": "file"
+   },
+   "description": "Reload a saved session file."
+  },
+  {
+   "id": "load-by-path",
+   "label": "Load by path",
+   "selector": "[data-tour=\"sidebar-file.loadpath\"]",
+   "where": "sidebar > Data & Sessions",
+   "reveal": {
+    "sidebar": "file",
+    "subsection": "file.loadpath"
+   },
+   "description": "Type a local or server path to load a file."
+  },
+  {
+   "id": "load-remote-url",
+   "label": "Load Remote URL",
+   "selector": "[data-tour=\"sidebar-file.remote\"]",
+   "where": "sidebar > Data & Sessions",
+   "reveal": {
+    "sidebar": "file",
+    "subsection": "file.remote"
+   },
+   "description": "Load a file from an https:// or s3:// URL."
+  },
+  {
+   "id": "loaded-datasets",
+   "label": "Loaded Datasets",
+   "selector": "[data-tour=\"sidebar-file.panels\"]",
+   "where": "sidebar > Data & Sessions",
+   "reveal": {
+    "sidebar": "file",
+    "subsection": "file.panels"
+   },
+   "description": "Every loaded dataset: rename, recolour, merge, restore minimized panels."
+  },
+  {
+   "id": "session-settings",
+   "label": "Session",
+   "selector": "[data-tour=\"sidebar-file.session\"]",
+   "where": "sidebar > Data & Sessions",
+   "reveal": {
+    "sidebar": "file",
+    "subsection": "file.session"
+   },
+   "description": "Save, export or copy a link to the session."
+  },
+  {
+   "id": "reference-files",
+   "label": "Reference Files",
+   "selector": "[data-tour=\"sidebar-genome.reference\"]",
+   "where": "sidebar > Reference & Tracks",
+   "reveal": {
+    "sidebar": "genome",
+    "subsection": "genome.reference"
+   },
+   "description": "Load the reference FASTA and gene annotation for your data."
+  },
+  {
+   "id": "load-fasta",
+   "label": "Load Reference FASTA",
+   "selector": "[data-tour=\"load-fasta\"]",
+   "where": "sidebar > Reference & Tracks > Reference Files",
+   "reveal": {
+    "sidebar": "genome",
+    "subsection": "genome.reference"
+   },
+   "description": "Load or change the reference FASTA (needed for sequence, primers and motifs)."
+  },
+  {
+   "id": "load-gtf",
+   "label": "Load gene annotation",
+   "selector": "[data-tour=\"load-gtf\"]",
+   "where": "sidebar > Reference & Tracks > Reference Files",
+   "reveal": {
+    "sidebar": "genome",
+    "subsection": "genome.reference"
+   },
+   "description": "Load a GTF/GFF/BED gene annotation (needed for gene search and the gene track)."
+  },
+  {
+   "id": "load-plasmid",
+   "label": "Load Plasmid Map",
+   "selector": "[data-testid=\"plasmid-reference-rows\"]",
+   "where": "sidebar > Reference & Tracks > Reference Files",
+   "reveal": {
+    "sidebar": "genome",
+    "subsection": "genome.reference"
+   },
+   "description": "Add a plasmid map (GenBank, SnapGene, EMBL, SBOL) as its own contig."
+  },
+  {
+   "id": "reference-pairs",
+   "label": "Multiple FASTA / annotation pairs",
+   "selector": "[data-tour=\"reference-pairs\"]",
+   "where": "sidebar > Reference & Tracks > Reference Files",
+   "reveal": {
+    "sidebar": "genome",
+    "subsection": "genome.reference"
+   },
+   "description": "Load several references at once, e.g. two haplotypes with distinct chromosome names."
+  },
+  {
+   "id": "genome-selector",
+   "label": "Genome list",
+   "selector": "[data-tour=\"genome-selector\"]",
+   "where": "sidebar > Reference & Tracks > Online Genome & Tracks",
+   "reveal": {
+    "sidebar": "genome",
+    "subsection": "genome.online"
+   },
+   "description": "Switch to a bundled genome (dm6, hg38, mm10, ...); its gene annotation loads with it."
+  },
+  {
+   "id": "open-tracks",
+   "label": "Open Tracks...",
+   "selector": "[data-tour=\"sidebar-open-tracks\"]",
+   "where": "sidebar > Reference & Tracks > Online Genome & Tracks",
+   "reveal": {
+    "sidebar": "genome",
+    "subsection": "genome.online"
+   },
+   "description": "Open the Tracks panel to add UCSC, ENCODE or ChIP-Atlas tracks."
+  },
+  {
+   "id": "read-display-settings",
+   "label": "Read Display",
+   "selector": "[data-tour=\"sidebar-view.display\"]",
+   "where": "sidebar > Reads & Display",
+   "reveal": {
+    "sidebar": "view",
+    "subsection": "view.display"
+   },
+   "description": "Row height, separators, colours and display limits."
+  },
+  {
+   "id": "read-window-setting",
+   "label": "Show reads up to",
+   "selector": "[data-tour=\"read-window-setting\"]",
+   "where": "sidebar > Reads & Display > Read Display",
+   "reveal": {
+    "sidebar": "view",
+    "subsection": "view.display"
+   },
+   "description": "Largest view in which individual reads are drawn; beyond it a coverage histogram is shown."
+  },
+  {
+   "id": "navigation-settings",
+   "label": "Navigation",
+   "selector": "[data-tour=\"sidebar-view.navigation\"]",
+   "where": "sidebar > Reads & Display",
+   "reveal": {
+    "sidebar": "view",
+    "subsection": "view.navigation"
+   },
+   "description": "Gene padding, autozoom and navigation options."
+  },
+  {
+   "id": "read-filters",
+   "label": "Read Filters",
+   "selector": "[data-tour=\"sidebar-view.advanced\"]",
+   "where": "sidebar > Reads & Display",
+   "reveal": {
+    "sidebar": "view",
+    "subsection": "view.advanced"
+   },
+   "description": "Minimum footprints, gap and quality filters on which reads are shown."
+  },
+  {
+   "id": "reproducibility",
+   "label": "Reproducibility",
+   "selector": "[data-tour=\"sidebar-analysis.reproducibility\"]",
+   "where": "sidebar > Analysis & Reproducibility",
+   "reveal": {
+    "sidebar": "analysis",
+    "subsection": "analysis.reproducibility"
+   },
+   "description": "Sample size and seed so clustering and profiles repeat exactly."
+  },
+  {
+   "id": "peak-detection-settings",
+   "label": "Peak Detection",
+   "selector": "[data-tour=\"sidebar-analysis.peaks\"]",
+   "where": "sidebar > Analysis & Reproducibility",
+   "reveal": {
+    "sidebar": "analysis",
+    "subsection": "analysis.peaks"
+   },
+   "description": "Defaults for peak scanning."
+  },
+  {
+   "id": "clusters-overview",
+   "label": "Clusters > Overview tab",
+   "selector": "[data-panel-content-type=\"cluster-detail\"] [data-analysis-tab=\"overview\"]",
+   "where": "Clusters panel",
+   "reveal": {
+    "panel": "cluster-detail",
+    "tab": "overview"
+   },
+   "description": "Every cluster with its read count; focus, hide, select, merge or subcluster clusters.",
+   "needs": "has_clusters"
+  },
+  {
+   "id": "cluster-focus-bar",
+   "label": "Hidden clusters / Unhide all",
+   "selector": "[data-tour=\"cluster-unhide-all\"], [data-panel-content-type=\"cluster-detail\"] [data-analysis-tab=\"overview\"]",
+   "where": "Clusters panel > Overview",
+   "reveal": {
+    "panel": "cluster-detail",
+    "tab": "overview"
+   },
+   "description": "When a cluster focus hides reads, Unhide all shows every cluster again. Clicking a colour in the bar left of the reads also toggles the focus.",
+   "needs": "has_clusters"
+  },
+  {
+   "id": "clusters-profiles",
+   "label": "Clusters > Profiles tab",
+   "selector": "[data-panel-content-type=\"cluster-detail\"] [data-analysis-tab=\"profiles\"]",
+   "where": "Clusters panel",
+   "reveal": {
+    "panel": "cluster-detail",
+    "tab": "profiles"
+   },
+   "description": "Each cluster's average profile, overlaid.",
+   "needs": "has_clusters"
+  },
+  {
+   "id": "clusters-composition",
+   "label": "Clusters > Composition tab",
+   "selector": "[data-panel-content-type=\"cluster-detail\"] [data-analysis-tab=\"composition\"]",
+   "where": "Clusters panel",
+   "reveal": {
+    "panel": "cluster-detail",
+    "tab": "composition"
+   },
+   "description": "Each cluster's mix of footprint types.",
+   "needs": "has_clusters"
+  },
+  {
+   "id": "clusters-vplot",
+   "label": "Clusters > V-Plot tab",
+   "selector": "[data-panel-content-type=\"cluster-detail\"] [data-analysis-tab=\"vplot\"]",
+   "where": "Clusters panel",
+   "reveal": {
+    "panel": "cluster-detail",
+    "tab": "vplot"
+   },
+   "description": "Footprint size against position, per cluster.",
+   "needs": "has_clusters"
+  },
+  {
+   "id": "clusters-projection",
+   "label": "Clusters > Projection tab",
+   "selector": "[data-panel-content-type=\"cluster-detail\"] [data-analysis-tab=\"projection\"]",
+   "where": "Clusters panel",
+   "reveal": {
+    "panel": "cluster-detail",
+    "tab": "projection"
+   },
+   "description": "Each read as a dot on a t-SNE map (or UMAP, PCA), coloured by cluster; Export table saves it. Also the Merge similar clusters preview.",
+   "needs": "has_clusters"
+  },
+  {
+   "id": "clusters-merge-similar",
+   "label": "Merge similar clusters (Clusters panel)",
+   "selector": "[data-copilot-anchor=\"cluster-panel-auto-cull\"]",
+   "where": "Clusters panel",
+   "reveal": {
+    "panel": "cluster-detail"
+   },
+   "description": "Merge tiny clusters and near-duplicates into their nearest cluster.",
+   "needs": "has_clusters"
+  },
+  {
+   "id": "merge-settings",
+   "label": "Merge similar clusters settings",
+   "selector": "[data-testid=\"merge-settings-button\"]",
+   "where": "Clusters panel (3+ clusters)",
+   "reveal": {
+    "panel": "cluster-detail"
+   },
+   "description": "Smallest-cluster % and similarity cutoff for merging, with a before/after preview in the Projection tab.",
+   "needs": "has_clusters"
+  },
+  {
+   "id": "cluster-snapshot",
+   "label": "Snapshot",
+   "selector": "[data-tour=\"cluster-snapshot\"]",
+   "where": "Clusters panel",
+   "reveal": {
+    "panel": "cluster-detail"
+   },
+   "description": "Save the current clustering to come back to it (Saved tab).",
+   "needs": "has_clusters"
+  },
+  {
+   "id": "clusters-saved",
+   "label": "Clusters > Saved tab",
+   "selector": "[data-panel-content-type=\"cluster-detail\"] [data-analysis-tab=\"saved\"]",
+   "where": "Clusters panel",
+   "reveal": {
+    "panel": "cluster-detail",
+    "tab": "saved"
+   },
+   "description": "Saved clusterings; click one to restore it.",
+   "needs": "has_clusters"
+  },
+  {
+   "id": "cluster-branches",
+   "label": "Cluster branch map",
+   "selector": "[data-copilot-anchor=\"cluster-branch-map\"]",
+   "where": "Clusters panel",
+   "reveal": {
+    "panel": "cluster-detail"
+   },
+   "description": "Subcluster branches; click a branch to switch to it.",
+   "needs": "has_clusters"
+  },
+  {
+   "id": "cluster-dynamic",
+   "label": "Dynamic reassignment",
+   "selector": "[data-copilot-anchor=\"cluster-dynamic-toggle\"]",
+   "where": "Clusters panel",
+   "reveal": {
+    "panel": "cluster-detail"
+   },
+   "description": "Reassign reads to the nearest cluster as you pan.",
+   "needs": "has_clusters"
+  },
+  {
+   "id": "rules-cluster-tab",
+   "label": "Rules > Cluster tab",
+   "selector": "[data-panel-content-type=\"cluster-features\"] [data-analysis-tab=\"cluster\"]",
+   "where": "Rules panel",
+   "reveal": {
+    "panel": "cluster-features",
+    "tab": "cluster"
+   },
+   "description": "Reusable cluster rules: which footprints at which regions define clusters."
+  },
+  {
+   "id": "rules-sort-tab",
+   "label": "Rules > Sort tab",
+   "selector": "[data-panel-content-type=\"cluster-features\"] [data-analysis-tab=\"sort\"]",
+   "where": "Rules panel",
+   "reveal": {
+    "panel": "cluster-features",
+    "tab": "sort"
+   },
+   "description": "Reusable sort rules for the Sort button."
+  },
+  {
+   "id": "rules-filter-tab",
+   "label": "Rules > Filter tab",
+   "selector": "[data-panel-content-type=\"cluster-features\"] [data-analysis-tab=\"filter\"]",
+   "where": "Rules panel",
+   "reveal": {
+    "panel": "cluster-features",
+    "tab": "filter"
+   },
+   "description": "Reusable filter rules for the Filter button."
+  },
+  {
+   "id": "rules-peaks-tab",
+   "label": "Rules > Peaks tab",
+   "selector": "[data-panel-content-type=\"cluster-features\"] [data-analysis-tab=\"peaks\"]",
+   "where": "Rules panel",
+   "reveal": {
+    "panel": "cluster-features",
+    "tab": "peaks"
+   },
+   "description": "Peak rules used by Scan."
+  },
+  {
+   "id": "add-cluster-rule",
+   "label": "Add cluster rule",
+   "selector": "[data-copilot-anchor=\"analysis-rules-add-cluster-rule\"]",
+   "where": "Rules panel > Cluster",
+   "reveal": {
+    "panel": "cluster-features",
+    "tab": "cluster"
+   },
+   "description": "Add a new cluster rule."
+  },
+  {
+   "id": "add-sort-rule",
+   "label": "Add sort rule",
+   "selector": "[data-copilot-anchor=\"analysis-rules-add-sort-rule\"]",
+   "where": "Rules panel > Sort",
+   "reveal": {
+    "panel": "cluster-features",
+    "tab": "sort"
+   },
+   "description": "Add a new sort rule."
+  },
+  {
+   "id": "add-filter-rule",
+   "label": "Add filter rule",
+   "selector": "[data-copilot-anchor=\"analysis-rules-add-filter-rule\"]",
+   "where": "Rules panel > Filter",
+   "reveal": {
+    "panel": "cluster-features",
+    "tab": "filter"
+   },
+   "description": "Add a new filter rule."
+  },
+  {
+   "id": "labeling-rules",
+   "label": "Labeling > Rules tab",
+   "selector": "[data-panel-content-type=\"colormap\"] [data-analysis-tab=\"rules\"]",
+   "where": "Labeling panel",
+   "reveal": {
+    "panel": "colormap",
+    "tab": "rules"
+   },
+   "description": "Colour footprints by size, layer, region, motif or track overlap."
+  },
+  {
+   "id": "add-label-rule",
+   "label": "Add labeling rule",
+   "selector": "[data-copilot-anchor=\"colormap-add-rule\"]",
+   "where": "Labeling panel > Rules",
+   "reveal": {
+    "panel": "colormap",
+    "tab": "rules"
+   },
+   "description": "Add a colour rule."
+  },
+  {
+   "id": "labeling-quality",
+   "label": "Labeling > Quality tab",
+   "selector": "[data-panel-content-type=\"colormap\"] [data-analysis-tab=\"quality\"]",
+   "where": "Labeling panel",
+   "reveal": {
+    "panel": "colormap",
+    "tab": "quality"
+   },
+   "description": "Quality cutoffs and shading per layer."
+  },
+  {
+   "id": "peak-detection-rules",
+   "label": "Peak Detection panel",
+   "selector": "[data-panel-content-type=\"peak-detection\"]",
+   "where": "Peak Detection panel",
+   "reveal": {
+    "panel": "peak-detection"
+   },
+   "description": "Peak rules: source layer, threshold, minimum width."
+  },
+  {
+   "id": "footprints-classes",
+   "label": "Footprints > Classes tab",
+   "selector": "[data-panel-content-type=\"footprint-analysis\"] [data-analysis-tab=\"states\"]",
+   "where": "Footprints panel",
+   "reveal": {
+    "panel": "footprint-analysis",
+    "tab": "states"
+   },
+   "description": "The Classes tab: the footprint you Cmd/Ctrl+clicked (its sizes, to save), then Find footprint classes and the class table."
+  },
+  {
+   "id": "footprints-saved",
+   "label": "Footprints > Saved tab",
+   "selector": "[data-panel-content-type=\"footprint-analysis\"] [data-analysis-tab=\"saved\"]",
+   "where": "Footprints panel",
+   "reveal": {
+    "panel": "footprint-analysis",
+    "tab": "saved"
+   },
+   "description": "Saved footprint definitions you can label, filter and cluster by."
+  },
+  {
+   "id": "footprints-cooccupancy",
+   "label": "Footprints > Co-occupancy tab",
+   "selector": "[data-panel-content-type=\"footprint-analysis\"] [data-analysis-tab=\"co-occ\"]",
+   "where": "Footprints panel",
+   "reveal": {
+    "panel": "footprint-analysis",
+    "tab": "co-occ"
+   },
+   "description": "Which saved footprints occur together on the same molecules; cluster reads by them."
+  },
+  {
+   "id": "selected-footprint",
+   "label": "Selected footprint",
+   "selector": "[data-testid=\"selected-footprint-rule\"]",
+   "where": "Footprints panel",
+   "reveal": {
+    "panel": "footprint-analysis"
+   },
+   "description": "The footprint you Cmd/Ctrl+clicked: its size range and where it sits; Save keeps it as a definition.",
+   "needs": "has_selected_footprint"
+  },
+  {
+   "id": "save-footprint",
+   "label": "Save (this footprint)",
+   "selector": "[data-copilot-anchor=\"footprint-add-group\"]",
+   "where": "Footprints panel > Selected footprint",
+   "reveal": {
+    "panel": "footprint-analysis"
+   },
+   "description": "Save this size range at this position; it is coloured on reads and listed in the Saved tab.",
+   "needs": "has_selected_footprint"
+  },
+  {
+   "id": "save-footprints",
+   "label": "Save all selected footprints",
+   "selector": "[data-testid=\"save-all-selected-footprints\"]",
+   "where": "Footprints panel > Selected footprint",
+   "reveal": {
+    "panel": "footprint-analysis"
+   },
+   "description": "With two or more footprints selected: save each with its default size range.",
+   "needs": "has_selected_footprint"
+  },
+  {
+   "id": "consensus-caller",
+   "label": "Find footprint classes",
+   "selector": "[data-testid=\"run-lattice-consensus\"]",
+   "where": "Footprints panel > Classes",
+   "reveal": {
+    "panel": "footprint-analysis",
+    "tab": "states"
+   },
+   "description": "Find the footprint classes that recur in this view across molecules (lattice recaller); a few kb take a minute or two."
+  },
+  {
+   "id": "read-stats-summary",
+   "label": "Read Stats > Summary tab",
+   "selector": "[data-panel-content-type=\"read-stats\"] [data-analysis-tab=\"summary\"]",
+   "where": "Read Stats panel",
+   "reveal": {
+    "panel": "read-stats",
+    "tab": "summary"
+   },
+   "description": "Summary of the Shift+clicked reads.",
+   "needs": "has_selected_reads"
+  },
+  {
+   "id": "read-stats-table",
+   "label": "Read Stats > Table tab",
+   "selector": "[data-panel-content-type=\"read-stats\"] [data-analysis-tab=\"table\"]",
+   "where": "Read Stats panel",
+   "reveal": {
+    "panel": "read-stats",
+    "tab": "table"
+   },
+   "description": "One row per selected read: span, footprints, accessibility, MAPQ.",
+   "needs": "has_selected_reads"
+  },
+  {
+   "id": "read-stats-scope",
+   "label": "Reads (group)",
+   "selector": "[data-tour=\"read-stats-scope\"]",
+   "where": "Read Stats panel",
+   "reveal": {
+    "panel": "read-stats"
+   },
+   "description": "Which reads the statistics describe: the selected reads, every read shown, or one cluster."
+  },
+  {
+   "id": "tracks-browse-hubs",
+   "label": "Browse hubs",
+   "selector": "[data-tour=\"track-browse-hubs\"]",
+   "where": "Tracks panel",
+   "reveal": {
+    "panel": "track-browser"
+   },
+   "description": "Browse UCSC, ENCODE and ChIP-Atlas tracks for the current genome."
+  },
+  {
+   "id": "tracks-add-metaprofile",
+   "label": "Add metaprofile",
+   "selector": "[data-tour=\"track-add-metaprofile\"]",
+   "where": "Tracks panel",
+   "reveal": {
+    "panel": "track-browser"
+   },
+   "description": "Add a metaprofile track built from your reads."
+  },
+  {
+   "id": "tracks-add-file",
+   "label": "Add a track file or URL",
+   "selector": "[data-testid=\"add-track-box\"]",
+   "where": "Tracks panel",
+   "reveal": {
+    "panel": "track-browser"
+   },
+   "description": "Add a BigWig, BigBed or BED track by path, URL or upload."
+  },
+  {
+   "id": "coacc-matrix",
+   "label": "Co-accessibility matrix",
+   "selector": "[data-testid=\"coacc-matrix\"]",
+   "where": "Co-accessibility panel",
+   "reveal": {
+    "panel": "co-accessibility"
+   },
+   "description": "How often pairs of positions are open on the same molecule."
+  },
+  {
+   "id": "coacc-refresh",
+   "label": "Refresh co-accessibility",
+   "selector": "[data-testid=\"coacc-refresh-button\"]",
+   "where": "Co-accessibility panel",
+   "reveal": {
+    "panel": "co-accessibility"
+   },
+   "description": "Recompute the matrix for the current view."
+  },
+  {
+   "id": "regions-add-view",
+   "label": "Save view",
+   "selector": "[data-tour=\"region-add-view\"]",
+   "where": "Regions panel",
+   "reveal": {
+    "panel": "circular-genome",
+    "tab": "catalog"
+   },
+   "description": "Save the current view as a region, named after its nearest gene, in a category of the Regions catalog."
+  },
+  {
+   "id": "regions-plasmid",
+   "label": "Load plasmid map",
+   "selector": "[data-tour=\"plasmid-load\"]",
+   "where": "Regions panel",
+   "reveal": {
+    "panel": "circular-genome",
+    "tab": "navigator"
+   },
+   "description": "Load a plasmid map and view it as a circular contig."
+  },
+  {
+   "id": "primers-design-tab",
+   "label": "Primers > Design tab",
+   "selector": "[data-panel-content-type=\"primer-design\"] [data-analysis-tab=\"design\"]",
+   "where": "Primers panel",
+   "reveal": {
+    "panel": "primer-design",
+    "tab": "design"
+   },
+   "description": "Design primers around the selected peaks or the view."
+  },
+  {
+   "id": "primers-design-button",
+   "label": "Design primers",
+   "selector": "[data-copilot-anchor=\"primer-design-button\"]",
+   "where": "Primers panel > Design",
+   "reveal": {
+    "panel": "primer-design",
+    "tab": "design"
+   },
+   "description": "Run primer design (with BLAST specificity when configured)."
+  },
+  {
+   "id": "primers-order-tab",
+   "label": "Primers > Order list tab",
+   "selector": "[data-panel-content-type=\"primer-design\"] [data-analysis-tab=\"order\"]",
+   "where": "Primers panel",
+   "reveal": {
+    "panel": "primer-design",
+    "tab": "order"
+   },
+   "description": "Saved primers, exported as an order sheet (IDT, Twist, ...)."
+  },
+  {
+   "id": "capture-add-region",
+   "label": "Add capture region",
+   "selector": "[data-copilot-anchor=\"capture-add-region\"]",
+   "where": "Capture panel",
+   "reveal": {
+    "panel": "capture"
+   },
+   "description": "Add the view or selection as a capture region."
+  },
+  {
+   "id": "capture-export",
+   "label": "Capture > Export tab",
+   "selector": "[data-panel-content-type=\"capture\"] [data-analysis-tab=\"export\"]",
+   "where": "Capture panel",
+   "reveal": {
+    "panel": "capture",
+    "tab": "export"
+   },
+   "description": "Export capture regions as BED, FASTA or probes."
+  },
+  {
+   "id": "contacts-map",
+   "label": "Contacts > Map tab",
+   "selector": "[data-panel-content-type=\"contact-map\"] [data-analysis-tab=\"map\"]",
+   "where": "Contacts panel",
+   "reveal": {
+    "panel": "contact-map",
+    "tab": "map"
+   },
+   "description": "The contact map (Micro-C / DAF-C)."
+  },
+  {
+   "id": "haplotype-compare",
+   "label": "Regions > Compare haplotypes tab",
+   "selector": "[data-panel-content-type=\"circular-genome\"] [data-analysis-tab=\"haplotype\"]",
+   "where": "Regions panel",
+   "reveal": {
+    "panel": "circular-genome",
+    "tab": "haplotype"
+   },
+   "description": "Compare two haplotypes or two loci side by side in linked panels."
+  },
+  {
+   "id": "haplotype-form",
+   "label": "Haplotype comparison form",
+   "selector": "[data-tour=\"haplotype-compare-form\"]",
+   "where": "Regions panel > Compare haplotypes",
+   "reveal": {
+    "panel": "circular-genome",
+    "tab": "haplotype"
+   },
+   "description": "Pick the two haplotype chromosomes (or loci) and open them side by side."
+  },
+  {
+   "id": "transcription-filters",
+   "label": "Transcription > Filters tab",
+   "selector": "[data-panel-content-type=\"transcription-state\"] [data-analysis-tab=\"filters\"]",
+   "where": "Transcription panel",
+   "reveal": {
+    "panel": "transcription-state",
+    "tab": "filters"
+   },
+   "description": "Filter reads by Pol II state (PIC, paused, elongating) at the selected genes.",
+   "needs": "has_selected_gene"
+  },
+  {
+   "id": "transcription-distribution",
+   "label": "Transcription > Distribution tab",
+   "selector": "[data-panel-content-type=\"transcription-state\"] [data-analysis-tab=\"distribution\"]",
+   "where": "Transcription panel",
+   "reveal": {
+    "panel": "transcription-state",
+    "tab": "distribution"
+   },
+   "description": "Share of reads in each Pol II state.",
+   "needs": "has_selected_gene"
+  },
+  {
+   "id": "layout-panel",
+   "label": "Layout panel",
+   "selector": "[data-panel-content-type=\"dataset-layout\"]",
+   "where": "Layout panel",
+   "reveal": {
+    "panel": "dataset-layout"
+   },
+   "description": "Arrange, rename, link and merge dataset panels; save layout presets."
+  },
+  {
+   "id": "layout-link",
+   "label": "Link datasets",
+   "selector": "[data-copilot-anchor=\"dataset-link-button\"]",
+   "where": "Layout panel",
+   "reveal": {
+    "panel": "dataset-layout"
+   },
+   "description": "Link the selected panels so they move together."
+  },
+  {
+   "id": "layout-merge",
+   "label": "Merge datasets",
+   "selector": "[data-copilot-anchor=\"dataset-merge-button\"]",
+   "where": "Layout panel",
+   "reveal": {
+    "panel": "dataset-layout"
+   },
+   "description": "Merge the selected datasets into one panel."
+  },
+  {
+   "id": "annotations-files",
+   "label": "Annotations > Files tab",
+   "selector": "[data-panel-content-type=\"annotations\"] [data-analysis-tab=\"files\"]",
+   "where": "Annotations panel",
+   "reveal": {
+    "panel": "annotations",
+    "tab": "files"
+   },
+   "description": "Per-read annotation files and their types."
+  },
+  {
+   "id": "annotations-filter",
+   "label": "Annotations > Filter tab",
+   "selector": "[data-panel-content-type=\"annotations\"] [data-analysis-tab=\"filter\"]",
+   "where": "Annotations panel",
+   "reveal": {
+    "panel": "annotations",
+    "tab": "filter"
+   },
+   "description": "Filter reads by annotation type."
+  },
+  {
+   "id": "copilot-input",
+   "label": "Copilot box",
+   "selector": "[data-tour=\"copilot-input\"]",
+   "where": "Copilot panel",
+   "reveal": {
+    "panel": "history",
+    "tab": "copilot"
+   },
+   "description": "Ask how to do something."
+  },
+  {
+   "id": "peak-add-rule",
+   "label": "+ Add Rule",
+   "selector": "[data-tour=\"peak-add-rule\"]",
+   "where": "Peak Detection panel",
+   "reveal": {
+    "panel": "peak-detection"
+   },
+   "description": "Adds a peak rule: a signal source (accessibility, FIRE, a layer, m6A, a track, or Custom draw) scanned for peaks."
+  },
+  {
+   "id": "peak-rule-card",
+   "label": "Peak rule",
+   "selector": "[data-tour=\"peak-rule-card\"]",
+   "where": "Peak Detection panel",
+   "reveal": {
+    "panel": "peak-detection"
+   },
+   "description": "One rule per row: its checkbox enables it, its colour marks its peaks, and clicking the row opens its settings. The number is its peak count."
+  },
+  {
+   "id": "peak-rule-source",
+   "label": "Peak rule Source",
+   "selector": "[data-tour=\"peak-rule-source\"]",
+   "where": "Peak Detection panel > rule settings",
+   "reveal": {
+    "panel": "peak-detection",
+    "expand": "peak-rule-card"
+   },
+   "description": "The signal this rule scans: accessibility, FIRE, a footprint layer, a modification, a loaded track, or Custom (draw)."
+  },
+  {
+   "id": "peak-rule-signal",
+   "label": "Rule signal profile",
+   "selector": "[data-tour=\"peak-rule-signal\"]",
+   "where": "Peak Detection panel > rule settings",
+   "reveal": {
+    "panel": "peak-detection",
+    "expand": "peak-rule-card"
+   },
+   "description": "The rule's signal across the view with its cutoffs drawn in; peaks are where it rises above them."
+  },
+  {
+   "id": "peak-rule-cutoffs",
+   "label": "Signal cutoffs",
+   "selector": "[data-tour=\"peak-rule-cutoffs\"]",
+   "where": "Peak Detection panel > rule settings",
+   "reveal": {
+    "panel": "peak-detection",
+    "expand": "peak-rule-card"
+   },
+   "description": "Strong / Medium / Weak / Rare cutoffs (0–1); Fill from percentile sets them from this view once."
+  },
+  {
+   "id": "peak-presets",
+   "label": "Presets ▾",
+   "selector": "[data-tour=\"peak-presets\"]",
+   "where": "Peak Detection panel",
+   "reveal": {
+    "panel": "peak-detection"
+   },
+   "description": "Save and load sets of peak rules, import or export peaks as BED, and import/export the rules as JSON."
+  },
+  {
+   "id": "peak-import-bed",
+   "label": "Import Peak BED...",
+   "selector": "[data-tour=\"peak-import-bed\"]",
+   "where": "Peak Detection panel > Presets",
+   "reveal": {
+    "panel": "peak-detection",
+    "expand": "peak-presets"
+   },
+   "description": "Loads BED peaks as locked imported peaks on the current chromosome."
+  },
+  {
+   "id": "regions-circular-toggle",
+   "label": "Circular / Linear",
+   "selector": "[data-tour=\"regions-circular-toggle\"]",
+   "where": "Regions panel",
+   "reveal": {
+    "panel": "circular-genome",
+    "tab": "navigator"
+   },
+   "description": "Switches the chromosome map between a circular and a linear view (for plasmids and small circular contigs)."
+  },
+  {
+   "id": "regions-map",
+   "label": "Chromosome map",
+   "selector": "[data-tour=\"regions-map\"]",
+   "where": "Regions panel",
+   "reveal": {
+    "panel": "circular-genome",
+    "tab": "navigator"
+   },
+   "description": "The whole chromosome; click anywhere to move the view there."
+  },
+  {
+   "id": "regions-zoom-window",
+   "label": "Zoom window",
+   "selector": "[data-tour=\"regions-zoom-window\"]",
+   "where": "Regions panel",
+   "reveal": {
+    "panel": "circular-genome",
+    "tab": "navigator"
+   },
+   "description": "Sets how much of the chromosome around the view the zoom window map shows."
+  },
+  {
+   "id": "regions-lens",
+   "label": "Zoom window map",
+   "selector": "[data-tour=\"regions-lens\"]",
+   "where": "Regions panel",
+   "reveal": {
+    "panel": "circular-genome",
+    "tab": "navigator"
+   },
+   "description": "The genes around the view, with the view marked; click a gene to go to it, or anywhere to move the view there."
+  },
+  {
+   "id": "regions-open-all",
+   "label": "Open side by side",
+   "selector": "[data-tour=\"regions-open-all\"]",
+   "where": "Regions panel",
+   "reveal": {
+    "panel": "circular-genome",
+    "tab": "catalog"
+   },
+   "description": "With saved regions ticked: open them (up to eight) as panel copies, side by side.",
+   "shows_when": "saved regions are ticked in the Regions tab"
+  },
+  {
+   "id": "regions-saved",
+   "label": "Saved regions",
+   "selector": "[data-tour=\"regions-saved\"]",
+   "where": "Regions panel",
+   "reveal": {
+    "panel": "circular-genome",
+    "tab": "catalog"
+   },
+   "description": "The saved regions of the current category: click a name to go there, tick several to highlight, open side by side or move them; each row's ⋯ has Edit coordinates, Open beside and Delete."
+  },
+  {
+   "id": "history-steps",
+   "label": "History steps",
+   "selector": "[data-tour=\"history-steps\"]",
+   "where": "History timeline (▾ next to Undo)",
+   "reveal": {
+    "expand": "history-timeline"
+   },
+   "description": "Every change, newest first; click one to restore its analysis state without moving the view."
+  },
+  {
+   "id": "history-view-step",
+   "label": "View (history step)",
+   "selector": "[data-tour=\"history-view-step\"]",
+   "where": "History timeline",
+   "reveal": {
+    "expand": "history-timeline"
+   },
+   "description": "Restores that step and also jumps to its viewport."
+  },
+  {
+   "id": "history-clear",
+   "label": "Clear history",
+   "selector": "[data-tour=\"history-clear\"]",
+   "where": "History timeline",
+   "reveal": {
+    "expand": "history-timeline"
+   },
+   "description": "Empties the undo history."
+  },
+  {
+   "id": "gene-track",
+   "label": "Gene track",
+   "selector": "[data-tour=\"gene-track\"]",
+   "where": "each dataset panel, under the reads",
+   "reveal": {},
+   "description": "Genes in view. Click a gene to select it, Shift+click to add more, Cmd/Ctrl+click to select it and open Transcription."
+  },
+  {
+   "id": "transcription-states",
+   "label": "Pause / PIC / Elongating",
+   "selector": "[data-tour=\"transcription-states\"]",
+   "where": "Transcription > Filters",
+   "reveal": {
+    "panel": "transcription-state",
+    "tab": "filters"
+   },
+   "description": "Tick the Pol II states to keep; each shows how many reads at the selected genes are in it.",
+   "needs": "has_selected_gene"
+  },
+  {
+   "id": "transcription-min-pol2",
+   "label": "Minimum Pol II count",
+   "selector": "[data-tour=\"transcription-min-pol2\"]",
+   "where": "Transcription > Filters > State thresholds",
+   "reveal": {
+    "panel": "transcription-state",
+    "tab": "filters",
+    "expand": "transcription-thresholds"
+   },
+   "description": "How many elongating Pol II footprints a read needs to count as elongating (plus an optional maximum).",
+   "needs": "has_selected_gene"
+  },
+  {
+   "id": "transcription-thresholds",
+   "label": "State thresholds",
+   "selector": "[data-tour=\"transcription-thresholds\"]",
+   "where": "Transcription > Filters",
+   "reveal": {
+    "panel": "transcription-state",
+    "tab": "filters"
+   },
+   "description": "Opens the elongating Pol II count thresholds.",
+   "needs": "has_selected_gene"
+  },
+  {
+   "id": "transcription-apply",
+   "label": "Apply (Transcription)",
+   "selector": "[data-tour=\"transcription-apply\"]",
+   "where": "Transcription panel header",
+   "reveal": {
+    "panel": "transcription-state"
+   },
+   "description": "Filters the reads to the ticked states.",
+   "needs": "has_selected_gene"
+  },
+  {
+   "id": "transcription-clear",
+   "label": "Clear (Transcription)",
+   "selector": "[data-tour=\"transcription-clear\"]",
+   "where": "Transcription panel header",
+   "reveal": {
+    "panel": "transcription-state"
+   },
+   "description": "Removes the transcription filter.",
+   "needs": "has_selected_gene"
+  },
+  {
+   "id": "transcription-export",
+   "label": "JSON (Transcription)",
+   "selector": "[data-tour=\"transcription-export\"]",
+   "where": "Transcription panel header",
+   "reveal": {
+    "panel": "transcription-state"
+   },
+   "description": "Exports the settings and state counts; TSV next to it exports one row per read.",
+   "needs": "has_selected_gene"
+  },
+  {
+   "id": "transcription-cooccur",
+   "label": "Transcription > Co-occur tab",
+   "selector": "[data-panel-content-type=\"transcription-state\"] [data-analysis-tab=\"cooccurrence\"]",
+   "where": "Transcription panel",
+   "reveal": {
+    "panel": "transcription-state",
+    "tab": "cooccurrence"
+   },
+   "description": "How often two states occur together on the same molecule.",
+   "needs": "has_selected_gene"
+  },
+  {
+   "id": "transcription-pol2com",
+   "label": "Transcription > Pol II COM tab",
+   "selector": "[data-panel-content-type=\"transcription-state\"] [data-analysis-tab=\"pol2com\"]",
+   "where": "Transcription panel",
+   "reveal": {
+    "panel": "transcription-state",
+    "tab": "pol2com"
+   },
+   "description": "Where along the gene each read's Pol II sits (centre of mass), by cluster.",
+   "needs": "has_selected_gene"
+  },
+  {
+   "id": "coacc-settings-toggle",
+   "label": "Co-accessibility Settings",
+   "selector": "[data-tour=\"coacc-settings-toggle\"]",
+   "where": "Co-accessibility panel",
+   "reveal": {
+    "panel": "co-accessibility"
+   },
+   "description": "Opens the signal, normalization, coverage and track-display settings."
+  },
+  {
+   "id": "coacc-signal",
+   "label": "Signal",
+   "selector": "[data-tour=\"coacc-signal\"]",
+   "where": "Co-accessibility > Settings",
+   "reveal": {
+    "panel": "co-accessibility",
+    "expand": "coacc-settings-toggle"
+   },
+   "description": "What is correlated between positions: accessibility, nucleosome, small footprint, linker or all footprints."
+  },
+  {
+   "id": "coacc-normalization",
+   "label": "Normalization",
+   "selector": "[data-tour=\"coacc-normalization\"]",
+   "where": "Co-accessibility > Settings",
+   "reveal": {
+    "panel": "co-accessibility",
+    "expand": "coacc-settings-toggle"
+   },
+   "description": "Raw co-occurrence, O/E against each position's marginal or against distance, or correlation."
+  },
+  {
+   "id": "coacc-min-coverage",
+   "label": "Min coverage",
+   "selector": "[data-tour=\"coacc-min-coverage\"]",
+   "where": "Co-accessibility > Settings",
+   "reveal": {
+    "panel": "co-accessibility",
+    "expand": "coacc-settings-toggle"
+   },
+   "description": "Cells with fewer reads than this are masked (grey)."
+  },
+  {
+   "id": "coacc-track-display",
+   "label": "Track Display",
+   "selector": "[data-tour=\"coacc-track-display\"]",
+   "where": "Co-accessibility > Settings",
+   "reveal": {
+    "panel": "co-accessibility",
+    "expand": "coacc-settings-toggle"
+   },
+   "description": "Draws the result under the reads as a Heatmap Strip, Arcs, or a Virtual 4C profile."
+  },
+  {
+   "id": "coacc-layer",
+   "label": "Layer chips",
+   "selector": "[data-tour=\"coacc-layer\"]",
+   "where": "Co-accessibility panel",
+   "reveal": {
+    "panel": "co-accessibility"
+   },
+   "description": "Which footprint layer the signal is read from."
+  },
+  {
+   "id": "coacc-metadata",
+   "label": "Reads / bins / coverage",
+   "selector": "[data-testid=\"coacc-metadata\"]",
+   "where": "Co-accessibility panel",
+   "reveal": {
+    "panel": "co-accessibility"
+   },
+   "description": "How many reads, the bin size, median coverage and how much of the matrix is masked."
+  },
+  {
+   "id": "coacc-export",
+   "label": "JSON (Co-accessibility)",
+   "selector": "[data-testid=\"coacc-export-json-button\"]",
+   "where": "Co-accessibility panel header",
+   "reveal": {
+    "panel": "co-accessibility"
+   },
+   "description": "Exports the matrix and its settings; TSV and Python sit next to it."
+  },
+  {
+   "id": "annotations-types",
+   "label": "Annotations > Types tab",
+   "selector": "[data-panel-content-type=\"annotations\"] [data-analysis-tab=\"types\"]",
+   "where": "Annotations panel",
+   "reveal": {
+    "panel": "annotations",
+    "tab": "types"
+   },
+   "description": "Every annotation type in the files: toggle, recolour and set its overlay threshold."
+  },
+  {
+   "id": "annotations-cluster",
+   "label": "Annotations > Cluster tab",
+   "selector": "[data-panel-content-type=\"annotations\"] [data-analysis-tab=\"cluster\"]",
+   "where": "Annotations panel",
+   "reveal": {
+    "panel": "annotations",
+    "tab": "cluster"
+   },
+   "description": "Clusters reads by which annotation types they carry at the selected peaks."
+  },
+  {
+   "id": "annotations-profile",
+   "label": "Annotations > Profile tab",
+   "selector": "[data-panel-content-type=\"annotations\"] [data-analysis-tab=\"profile\"]",
+   "where": "Annotations panel",
+   "reveal": {
+    "panel": "annotations",
+    "tab": "profile"
+   },
+   "description": "Density of each annotation type across the view."
+  },
+  {
+   "id": "annotations-load-file",
+   "label": "Load File... (Annotations)",
+   "selector": "[data-tour=\"annotations-load-file\"]",
+   "where": "Annotations > Files",
+   "reveal": {
+    "panel": "annotations",
+    "tab": "files"
+   },
+   "description": "Loads a per-read annotation BigBed."
+  },
+  {
+   "id": "annotations-type-list",
+   "label": "Annotation types",
+   "selector": "[data-tour=\"annotations-type-list\"]",
+   "where": "Annotations > Types",
+   "reveal": {
+    "panel": "annotations",
+    "tab": "types"
+   },
+   "description": "One row per type: checkbox shows it on the reads, the swatch sets its colour."
+  },
+  {
+   "id": "annotations-filter-mode",
+   "label": "Has Any / Has All / Lacks All",
+   "selector": "[data-tour=\"annotations-filter-mode\"]",
+   "where": "Annotations > Filter",
+   "reveal": {
+    "panel": "annotations",
+    "tab": "filter"
+   },
+   "description": "Keep reads that carry any, all, or none of the ticked types."
+  },
+  {
+   "id": "annotations-filter-apply",
+   "label": "Apply Filter (Annotations)",
+   "selector": "[data-tour=\"annotations-filter-apply\"]",
+   "where": "Annotations > Filter",
+   "reveal": {
+    "panel": "annotations",
+    "tab": "filter"
+   },
+   "description": "Filters the reads by the ticked annotation types."
+  },
+  {
+   "id": "annotations-cluster-button",
+   "label": "Cluster (Annotations)",
+   "selector": "[data-tour=\"annotations-cluster-button\"]",
+   "where": "Annotations > Cluster",
+   "reveal": {
+    "panel": "annotations",
+    "tab": "cluster"
+   },
+   "description": "Clusters by the ticked types at the selected peaks (Combinatorial or K-means)."
+  },
+  {
+   "id": "capture-regions-tab",
+   "label": "Capture > Regions tab",
+   "selector": "[data-panel-content-type=\"capture\"] [data-analysis-tab=\"cart\"]",
+   "where": "Capture panel",
+   "reveal": {
+    "panel": "capture",
+    "tab": "cart"
+   },
+   "description": "The capture cart: regions to target for enrichment, with their padded sizes."
+  },
+  {
+   "id": "capture-target",
+   "label": "Target preview",
+   "selector": "[data-tour=\"capture-target\"]",
+   "where": "Capture > Regions",
+   "reveal": {
+    "panel": "capture",
+    "tab": "cart"
+   },
+   "description": "The region the selected peaks span, before padding."
+  },
+  {
+   "id": "capture-padding",
+   "label": "Padding",
+   "selector": "[data-tour=\"capture-padding\"]",
+   "where": "Capture > Regions",
+   "reveal": {
+    "panel": "capture",
+    "tab": "cart"
+   },
+   "description": "Extra bp added on each side of every region."
+  },
+  {
+   "id": "capture-add-bounding",
+   "label": "+ Bounding",
+   "selector": "[data-tour=\"capture-add-bounding\"]",
+   "where": "Capture > Regions",
+   "reveal": {
+    "panel": "capture",
+    "tab": "cart"
+   },
+   "description": "Adds one region spanning the selected peaks.",
+   "needs": "has_selected_peak"
+  },
+  {
+   "id": "capture-export-format",
+   "label": "Export format",
+   "selector": "[data-tour=\"capture-export-format\"]",
+   "where": "Capture > Export",
+   "reveal": {
+    "panel": "capture",
+    "tab": "export"
+   },
+   "description": "BED, Twist TSV, FASTA or Probe TSV (FASTA and probes need a reference)."
+  },
+  {
+   "id": "capture-download",
+   "label": "Download (Capture)",
+   "selector": "[data-tour=\"capture-download\"]",
+   "where": "Capture > Export",
+   "reveal": {
+    "panel": "capture",
+    "tab": "export"
+   },
+   "description": "Downloads the regions in the chosen format."
+  },
+  {
+   "id": "read-stats-distributions",
+   "label": "Read Stats > Distributions tab",
+   "selector": "[data-panel-content-type=\"read-stats\"] [data-analysis-tab=\"distributions\"]",
+   "where": "Read Stats panel",
+   "reveal": {
+    "panel": "read-stats",
+    "tab": "distributions"
+   },
+   "description": "Histograms of accessibility, footprint size, read length, MAPQ and modification % for the selected reads.",
+   "needs": "has_selected_reads"
+  },
+  {
+   "id": "read-stats-export",
+   "label": "TSV (Read Stats)",
+   "selector": "[data-tour=\"read-stats-export\"]",
+   "where": "Read Stats panel header",
+   "reveal": {
+    "panel": "read-stats"
+   },
+   "description": "Downloads one row per selected read; Copy TSV and JSON sit next to it.",
+   "needs": "has_selected_reads"
+  },
+  {
+   "id": "read-stats-select-cluster",
+   "label": "Select cluster reads",
+   "selector": "[data-tour=\"read-stats-select-cluster\"]",
+   "where": "Read Stats panel header",
+   "reveal": {
+    "panel": "read-stats"
+   },
+   "description": "Selects every read of the focused cluster.",
+   "shows_when": "a cluster is focused"
+  },
+  {
+   "id": "read-stats-deselect",
+   "label": "Deselect",
+   "selector": "[data-tour=\"read-stats-deselect\"]",
+   "where": "Read Stats panel header",
+   "reveal": {
+    "panel": "read-stats"
+   },
+   "description": "Clears the read selection.",
+   "needs": "has_selected_reads"
+  },
+  {
+   "id": "contacts-locus-inputs",
+   "label": "Locus X / Locus Y",
+   "selector": "[data-tour=\"contacts-locus-inputs\"]",
+   "where": "Contacts > Compare loci",
+   "reveal": {
+    "panel": "contact-map",
+    "tab": "map"
+   },
+   "description": "Two genes or regions to show side by side as linked panels.",
+   "shows_when": "no contact map is loaded"
+  },
+  {
+   "id": "contacts-create-split",
+   "label": "Create Split View",
+   "selector": "[data-tour=\"contacts-create-split\"]",
+   "where": "Contacts > Compare loci",
+   "reveal": {
+    "panel": "contact-map",
+    "tab": "map"
+   },
+   "description": "Opens Locus X and Locus Y as two linked panels.",
+   "shows_when": "no contact map is loaded"
+  },
+  {
+   "id": "contacts-split-current",
+   "label": "Split Current View",
+   "selector": "[data-tour=\"contacts-split-current\"]",
+   "where": "Contacts > Compare loci",
+   "reveal": {
+    "panel": "contact-map",
+    "tab": "map"
+   },
+   "description": "Splits the current view into two halves.",
+   "shows_when": "no contact map is loaded"
+  },
+  {
+   "id": "contacts-settings",
+   "label": "Contacts > Settings tab",
+   "selector": "[data-panel-content-type=\"contact-map\"] [data-analysis-tab=\"settings\"]",
+   "where": "Contacts panel",
+   "reveal": {
+    "panel": "contact-map",
+    "tab": "settings"
+   },
+   "description": "How contacts are drawn under the reads: matrix strip, arcs, or Virtual 4C.",
+   "shows_when": "a contact map is loaded"
+  },
+  {
+   "id": "contacts-track-overlay",
+   "label": "Track overlay",
+   "selector": "[data-tour=\"contacts-track-overlay\"]",
+   "where": "Contacts > Settings",
+   "reveal": {
+    "panel": "contact-map",
+    "tab": "settings"
+   },
+   "description": "Picks Matrix strip, Arcs or Virtual 4C and the maximum contact distance.",
+   "shows_when": "a contact map is loaded"
+  },
+  {
+   "id": "contacts-matrix-settings",
+   "label": "Matrix strip settings",
+   "selector": "[data-tour=\"contacts-matrix-settings\"]",
+   "where": "Contacts > Settings",
+   "reveal": {
+    "panel": "contact-map",
+    "tab": "settings"
+   },
+   "description": "Scale, colours and normalization (Raw, Balanced, O/E local or global).",
+   "shows_when": "a contact map is loaded"
+  },
+  {
+   "id": "contacts-arcs-settings",
+   "label": "Arcs settings",
+   "selector": "[data-tour=\"contacts-arcs-settings\"]",
+   "where": "Contacts > Settings",
+   "reveal": {
+    "panel": "contact-map",
+    "tab": "settings"
+   },
+   "description": "Minimum distance, normalization, strength and accessibility correction for arcs.",
+   "shows_when": "a contact map is loaded"
+  },
+  {
+   "id": "contacts-v4c-settings",
+   "label": "Virtual 4C settings",
+   "selector": "[data-tour=\"contacts-v4c-settings\"]",
+   "where": "Contacts > Settings",
+   "reveal": {
+    "panel": "contact-map",
+    "tab": "settings"
+   },
+   "description": "Normalization, smoothing and minimum count for the viewpoint profile.",
+   "shows_when": "a contact map is loaded"
+  },
+  {
+   "id": "contacts-open-regions",
+   "label": "Open Regions",
+   "selector": "[data-tour=\"contacts-open-regions\"]",
+   "where": "Contacts > Map (after a selection)",
+   "reveal": {
+    "panel": "contact-map",
+    "tab": "map"
+   },
+   "description": "Opens the two ends of a selected contact rectangle as linked panels of the reads that join them.",
+   "shows_when": "a rectangle is selected on the contact map"
+  },
+  {
+   "id": "layout-select-panel",
+   "label": "Select panel (Layout)",
+   "selector": "[data-tour=\"layout-select-panel\"]",
+   "where": "Layout panel",
+   "reveal": {
+    "panel": "dataset-layout"
+   },
+   "description": "Tick panels here, then Merge, Link, Unlink or Unmerge them."
+  },
+  {
+   "id": "layout-rename",
+   "label": "Dataset label",
+   "selector": "[data-tour=\"layout-rename\"]",
+   "where": "Layout panel",
+   "reveal": {
+    "panel": "dataset-layout"
+   },
+   "description": "Click to rename a dataset panel."
+  },
+  {
+   "id": "layout-unlink",
+   "label": "Unlink",
+   "selector": "[data-copilot-anchor=\"dataset-unlink-button\"]",
+   "where": "Layout panel",
+   "reveal": {
+    "panel": "dataset-layout"
+   },
+   "description": "Unlinks the selected panels so each moves on its own."
+  },
+  {
+   "id": "layout-unmerge",
+   "label": "Unmerge",
+   "selector": "[data-copilot-anchor=\"dataset-unmerge-button\"]",
+   "where": "Layout panel",
+   "reveal": {
+    "panel": "dataset-layout"
+   },
+   "description": "Splits a merged dataset back into its files."
+  },
+  {
+   "id": "layout-reset",
+   "label": "Reset (Layout)",
+   "selector": "[data-tour=\"layout-reset\"]",
+   "where": "Layout panel header",
+   "reveal": {
+    "panel": "dataset-layout"
+   },
+   "description": "Resets rows, sizes and track layout."
+  },
+  {
+   "id": "layout-tree",
+   "label": "Merge / Link Tree",
+   "selector": "[data-tour=\"layout-tree\"]",
+   "where": "Layout panel",
+   "reveal": {
+    "panel": "dataset-layout"
+   },
+   "description": "How the panels are grouped: which are merged, which are linked, and which move on their own."
+  },
+  {
+   "id": "layout-save-arrangement",
+   "label": "Save Arrangement",
+   "selector": "[data-tour=\"layout-save-arrangement\"]",
+   "where": "Layout panel",
+   "reveal": {
+    "panel": "dataset-layout"
+   },
+   "description": "Saves the current datasets, groups and order under a name."
+  },
+  {
+   "id": "layout-saved-arrangements",
+   "label": "Saved Arrangements",
+   "selector": "[data-tour=\"layout-saved-arrangements\"]",
+   "where": "Layout panel",
+   "reveal": {
+    "panel": "dataset-layout"
+   },
+   "description": "Load a saved arrangement to reopen its datasets and groups."
+  },
+  {
+   "id": "labeling-rule-row",
+   "label": "Labeling rule",
+   "selector": "[data-testid=\"labeling-rule-row\"]",
+   "where": "Labeling > Rules",
+   "reveal": {
+    "panel": "colormap",
+    "tab": "rules"
+   },
+   "description": "One rule per row, top rule wins: its size range, layers and conditions, and the colour it paints."
+  },
+  {
+   "id": "labeling-rule-edit",
+   "label": "Edit rule ▸",
+   "selector": "[data-tour=\"labeling-rule-edit\"]",
+   "where": "Labeling > Rules",
+   "reveal": {
+    "panel": "colormap",
+    "tab": "rules"
+   },
+   "description": "Opens a rule's settings."
+  },
+  {
+   "id": "labeling-size-range",
+   "label": "Size range",
+   "selector": "[data-tour=\"labeling-size-range\"]",
+   "where": "Labeling > Rules (open rule)",
+   "reveal": {
+    "panel": "colormap",
+    "tab": "rules",
+    "expand": "labeling-rule-edit"
+   },
+   "description": "Footprints between these sizes (bp) get this rule's colour."
+  },
+  {
+   "id": "labeling-rule-color",
+   "label": "Rule colour",
+   "selector": "[data-tour=\"labeling-rule-color\"]",
+   "where": "Labeling > Rules (open rule)",
+   "reveal": {
+    "panel": "colormap",
+    "tab": "rules",
+    "expand": "labeling-rule-edit"
+   },
+   "description": "A solid colour or a gradient across the size range."
+  },
+  {
+   "id": "labeling-target-layers",
+   "label": "Layers (rule)",
+   "selector": "[data-tour=\"labeling-target-layers\"]",
+   "where": "Labeling > Rules (open rule)",
+   "reveal": {
+    "panel": "colormap",
+    "tab": "rules",
+    "expand": "labeling-rule-edit"
+   },
+   "description": "Which layers the rule applies to (all when none is ticked)."
+  },
+  {
+   "id": "labeling-add-condition",
+   "label": "+ Add condition",
+   "selector": "[data-tour=\"labeling-add-condition\"]",
+   "where": "Labeling > Rules (open rule)",
+   "reveal": {
+    "panel": "colormap",
+    "tab": "rules",
+    "expand": "labeling-rule-edit"
+   },
+   "description": "Restricts the rule to footprints in a gene, a peak, a track or a motif track (or NOT in one)."
+  },
+  {
+   "id": "labeling-add-gate",
+   "label": "+ Add quality gate",
+   "selector": "[data-tour=\"labeling-add-gate\"]",
+   "where": "Labeling > Rules (open rule)",
+   "reveal": {
+    "panel": "colormap",
+    "tab": "rules",
+    "expand": "labeling-rule-edit"
+   },
+   "description": "Only colours calls whose quality score passes (e.g. aq ≥ 230 for confident FIRE calls)."
+  },
+  {
+   "id": "labeling-display-options",
+   "label": "Display options",
+   "selector": "[data-testid=\"labeling-display-options\"]",
+   "where": "Labeling > Rules",
+   "reveal": {
+    "panel": "colormap",
+    "tab": "rules"
+   },
+   "description": "Background colours, opacity of unmatched layers, and edge ambiguity shading."
+  },
+  {
+   "id": "clusters-enrichment",
+   "label": "Clusters > Differences tab",
+   "selector": "[data-panel-content-type=\"cluster-detail\"] [data-analysis-tab=\"enrichment\"]",
+   "where": "Clusters panel",
+   "reveal": {
+    "panel": "cluster-detail",
+    "tab": "enrichment"
+   },
+   "description": "What sets each cluster apart: per labeling rule, how much more or less common a matching footprint is in the cluster than in all other clusters, with intervals and Fisher tests.",
+   "needs": "has_clusters",
+   "shows_when": "a rule exists"
+  },
+  {
+   "id": "clusters-vplot-settings",
+   "label": "V-plot settings",
+   "selector": "[data-tour=\"clusters-vplot-settings\"]",
+   "where": "Clusters > V-Plot",
+   "reveal": {
+    "panel": "cluster-detail",
+    "tab": "vplot"
+   },
+   "description": "Size bins, layer and axes of the footprint size-vs-position plot.",
+   "needs": "has_clusters"
+  },
+  {
+   "id": "clusters-projection-controls",
+   "label": "Projection Method / View",
+   "selector": "[data-tour=\"clusters-projection-controls\"]",
+   "where": "Clusters > Projection",
+   "reveal": {
+    "panel": "cluster-detail",
+    "tab": "projection"
+   },
+   "description": "t-SNE (default), UMAP or PCA of the reads, before or after Merge similar clusters, or side by side; Export table writes each read's map position.",
+   "needs": "has_clusters"
+  },
+  {
+   "id": "clusters-merge-preview",
+   "label": "Merge similar clusters (preview settings)",
+   "selector": "[data-testid=\"merge-settings\"]",
+   "where": "Clusters > Projection",
+   "reveal": {
+    "panel": "cluster-detail",
+    "tab": "projection"
+   },
+   "description": "Smallest cluster % and similarity cutoff, with a preview of what would merge and Merge now.",
+   "needs": "has_clusters"
+  },
+  {
+   "id": "footprints-consensus",
+   "label": "Footprint classes",
+   "selector": "[data-testid=\"consensus-tools\"]",
+   "where": "Footprints > Classes",
+   "reveal": {
+    "panel": "footprint-analysis",
+    "tab": "states"
+   },
+   "description": "Finds the footprint classes that recur in the view (engine, Class discovery stringency) and lists them in the class table."
+  },
+  {
+   "id": "footprints-stringency",
+   "label": "Class discovery stringency",
+   "selector": "[data-testid=\"recaller-stringency\"]",
+   "where": "Footprints > Classes",
+   "reveal": {
+    "panel": "footprint-analysis",
+    "tab": "states"
+   },
+   "description": "Finer finds more, smaller classes; Coarser finds fewer. Used by the next Find footprint classes."
+  },
+  {
+   "id": "footprints-class-list",
+   "label": "Class table",
+   "selector": "[data-testid=\"recaller-class-table\"]",
+   "where": "Footprints > Classes",
+   "reveal": {
+    "panel": "footprint-analysis",
+    "tab": "states"
+   },
+   "description": "The classes found: one row per class with its size and prevalence bars per strand; click a name to highlight it on the reads, Save to keep it.",
+   "shows_when": "footprint classes have been found"
+  },
+  {
+   "id": "footprints-class-save",
+   "label": "Save (a class)",
+   "selector": "[data-testid=\"recaller-save\"]",
+   "where": "Footprints panel > Classes tab, class table",
+   "reveal": {
+    "panel": "footprint-analysis",
+    "tab": "states"
+   },
+   "description": "Keeps a class in Saved as S1, S2, … with the run it came from, to count, filter, plot, export and compare it."
+  },
+  {
+   "id": "footprints-saved-classes-plot",
+   "label": "Plot (saved classes)",
+   "selector": "[data-testid=\"saved-classes-plot\"]",
+   "where": "Footprints panel > Saved tab, above the saved classes",
+   "reveal": {
+    "panel": "footprint-analysis",
+    "tab": "saved"
+   },
+   "description": "Draws the saved classes' prevalence on each strand side by side."
+  },
+  {
+   "id": "footprints-compare",
+   "label": "Compare strands and datasets",
+   "selector": "[data-testid=\"compare-datasets\"]",
+   "where": "Footprints > Classes",
+   "reveal": {
+    "panel": "footprint-analysis",
+    "tab": "states"
+   },
+   "description": "Each class's prevalence on the CT and GA strands (and other datasets) side by side: sort by discrepancy, Plot, Export TSV."
+  },
+  {
+   "id": "footprints-assay",
+   "label": "Dataset assay types",
+   "selector": "[data-testid=\"dataset-assay-types\"]",
+   "where": "Footprints > Classes",
+   "reveal": {
+    "panel": "footprint-analysis",
+    "tab": "states"
+   },
+   "description": "Which assay made each dataset (DddA/DddB DAF-seq or Hia5 Fiber-seq); needed to find classes."
+  },
+  {
+   "id": "footprints-sizes",
+   "label": "Footprint size block",
+   "selector": "[data-testid=\"footprint-size-block\"]",
+   "where": "Footprints > Classes (selected footprint)",
+   "reveal": {
+    "panel": "footprint-analysis",
+    "tab": "states"
+   },
+   "description": "The size range saved for the selected footprint, with the size histogram around it.",
+   "needs": "has_selected_footprint"
+  },
+  {
+   "id": "footprints-saved-load",
+   "label": "Load (Saved footprints)",
+   "selector": "[data-testid=\"saved-load-menu\"]",
+   "where": "Footprints > Saved",
+   "reveal": {
+    "panel": "footprint-analysis",
+    "tab": "saved"
+   },
+   "description": "Loads saved footprint definitions from a file."
+  },
+  {
+   "id": "footprints-saved-export",
+   "label": "Export (Saved footprints)",
+   "selector": "[data-testid=\"saved-export-menu\"]",
+   "where": "Footprints > Saved",
+   "reveal": {
+    "panel": "footprint-analysis",
+    "tab": "saved"
+   },
+   "description": "Exports the saved definitions or their sequences as FASTA.",
+   "needs": "has_saved_footprints"
+  },
+  {
+   "id": "footprints-cluster-by-groups",
+   "label": "Cluster reads by N footprints",
+   "selector": "[data-tour=\"footprints-cluster-by-groups\"]",
+   "where": "Footprints > Co-occupancy",
+   "reveal": {
+    "panel": "footprint-analysis",
+    "tab": "co-occ"
+   },
+   "description": "Clusters reads by which of the ticked saved footprints they carry (both, one, neither…); tick them under Cluster by.",
+   "needs": "has_saved_footprints"
+  },
+  {
+   "id": "footprints-open-coacc",
+   "label": "Layer matrix",
+   "selector": "[data-tour=\"footprints-open-coacc\"]",
+   "where": "Footprints > Co-occupancy",
+   "reveal": {
+    "panel": "footprint-analysis",
+    "tab": "co-occ"
+   },
+   "description": "Opens Co-accessibility using this footprint layer."
+  },
+  {
+   "id": "footprints-membership-legend",
+   "label": "Membership clusters",
+   "selector": "[data-testid=\"membership-cluster-legend\"]",
+   "where": "Footprints > Co-occupancy",
+   "reveal": {
+    "panel": "footprint-analysis",
+    "tab": "co-occ"
+   },
+   "description": "What each cluster made from saved footprints contains.",
+   "shows_when": "reads were clustered by saved footprints"
+  },
+  {
+   "id": "tracks-motif-search",
+   "label": "Add a track box",
+   "selector": "[data-copilot-anchor=\"jaspar-name-input\"]",
+   "where": "Tracks panel",
+   "reveal": {
+    "panel": "track-browser"
+   },
+   "description": "Type a TF or motif name to search JASPAR, a DNA sequence for a sequence motif, or a path/URL for a track."
+  },
+  {
+   "id": "tracks-browse-files",
+   "label": "Browse files…",
+   "selector": "[data-tour=\"tracks-browse-files\"]",
+   "where": "Tracks panel",
+   "reveal": {
+    "panel": "track-browser"
+   },
+   "description": "Pick a BigWig, BigBed, BED or motif file (JASPAR, MEME, HOMER, PFM)."
+  },
+  {
+   "id": "tracks-motif-options",
+   "label": "Motif options",
+   "selector": "[data-tour=\"tracks-motif-options\"]",
+   "where": "Tracks panel",
+   "reveal": {
+    "panel": "track-browser"
+   },
+   "description": "Match threshold: the minimum relative PWM score for a motif hit."
+  },
+  {
+   "id": "tracks-row",
+   "label": "Track row",
+   "selector": "[data-tour=\"tracks-row\"]",
+   "where": "Tracks panel",
+   "reveal": {
+    "panel": "track-browser"
+   },
+   "description": "One loaded track: show/hide, colour, scale, and its motif shading options.",
+   "needs": "has_tracks"
+  },
+  {
+   "id": "tracks-cart-actions",
+   "label": "Track actions",
+   "selector": "[data-tour=\"tracks-cart-actions\"]",
+   "where": "Tracks panel",
+   "reveal": {
+    "panel": "track-browser"
+   },
+   "description": "Show or hide every track, and save or load the track cart as JSON."
+  },
+  {
+   "id": "daf-run-new",
+   "label": "New DAF-seq run",
+   "selector": "[data-testid=\"daf-run-open\"]",
+   "where": "sidebar > Data & Sessions > DAF-seq runs",
+   "reveal": {
+    "sidebar": "file",
+    "subsection": "file.dafrun"
+   },
+   "description": "Align and call raw DAF-seq reads (FASTQ, a folder or a Plasmidsaurus zip) against a genome or plasmid map, then open the results and their QC."
+  },
+  {
+   "id": "command-palette",
+   "label": "Search commands and settings",
+   "selector": "[data-testid=\"command-palette-button\"]",
+   "where": "top bar, right (the magnifier)",
+   "reveal": {},
+   "description": "Cmd/Ctrl+K: find any command, panel or setting, or go to a locus, gene, saved region or read name. On/off settings switch in the list."
+  },
+  {
+   "id": "settings-search",
+   "label": "Search settings",
+   "selector": "[data-testid=\"settings-search-input\"]",
+   "where": "top of the settings sidebar",
+   "reveal": {
+    "sidebar": "file"
+   },
+   "description": "Filters the settings sidebar as you type; with no match it offers the command palette."
+  },
+  {
+   "id": "export-data",
+   "label": "Data (Export data)",
+   "selector": "[data-testid=\"export-data-button\"]",
+   "where": "top bar, next to Export",
+   "reveal": {},
+   "description": "Export data (Cmd/Ctrl+Shift+E): read names, read and class tables, BED files, projection coordinates and the session file; on a local server also a BAM subset of chosen reads."
+  },
+  {
+   "id": "export-match-ui-size",
+   "label": "Match UI size",
+   "selector": "[data-testid=\"export-match-ui-size\"]",
+   "where": "Export dialog > Image tab",
+   "reveal": {
+    "expand": "export-figure"
+   },
+   "description": "Figures draw text, labels and rows as large as on screen (on by default); off draws them at 100%."
+  },
+  {
+   "id": "highlight-toolbar",
+   "label": "Highlight toolbar group",
+   "selector": "[data-testid=\"toolbar-group-highlight\"]",
+   "where": "toolbar",
+   "reveal": {},
+   "description": "Shade regions in every panel on a genome: turn Highlight on and drag on a ruler (or Shift-drag a ruler any time), or highlight the view or the selected peaks.",
+   "shows_when": "the Highlight group is in the toolbar row (a narrow window puts it in More)"
+  },
+  {
+   "id": "highlight-controls-expand",
+   "label": "Highlight controls toggle",
+   "selector": "[data-tour=\"highlight-controls-expand\"]",
+   "where": "toolbar > Highlight",
+   "reveal": {},
+   "description": "Open or fold the Highlight group (colours, View, Peaks, List).",
+   "shows_when": "the Highlight group is in the toolbar row (a narrow window puts it in More)"
+  },
+  {
+   "id": "highlight-view",
+   "label": "Highlight > View",
+   "selector": "[data-testid=\"highlight-view-button\"]",
+   "where": "toolbar > Highlight",
+   "reveal": {
+    "expand": "highlight-controls-expand"
+   },
+   "description": "Highlight what the view shows."
+  },
+  {
+   "id": "highlight-list",
+   "label": "Highlight > List",
+   "selector": "[data-testid=\"highlight-list-button\"]",
+   "where": "toolbar > Highlight",
+   "reveal": {
+    "expand": "highlight-controls-expand"
+   },
+   "description": "The highlights: rename, go there, recolour or remove each; Clear all removes them."
+  },
+  {
+   "id": "regions-catalog",
+   "label": "Regions > Regions tab",
+   "selector": "[data-panel-content-type=\"circular-genome\"] [data-analysis-tab=\"catalog\"]",
+   "where": "Regions panel",
+   "reveal": {
+    "panel": "circular-genome",
+    "tab": "catalog"
+   },
+   "description": "Saved regions in categories (views you save, BED files, a dataset's amplicons or top regions); click one to go there, N/P step through a category."
+  },
+  {
+   "id": "regions-find",
+   "label": "Scan regions",
+   "selector": "[data-testid=\"region-find\"]",
+   "where": "Regions panel > Regions",
+   "reveal": {
+    "panel": "circular-genome",
+    "tab": "catalog"
+   },
+   "description": "Scan every open BAM for its regions (amplicons, read clusters, a targeted run's loci from its index); each dataset says what it found or why it was skipped, each region is named after its nearest gene."
+  },
+  {
+   "id": "regions-import-bed",
+   "label": "Import BED",
+   "selector": "[data-testid=\"region-import-bed\"]",
+   "where": "Regions panel > Regions",
+   "reveal": {
+    "panel": "circular-genome",
+    "tab": "catalog"
+   },
+   "description": "Add the regions of a BED file as a category."
+  },
+  {
+   "id": "regions-export-bed",
+   "label": "Export BED",
+   "selector": "[data-testid=\"region-export-bed\"]",
+   "where": "Regions panel > Regions",
+   "reveal": {
+    "panel": "circular-genome",
+    "tab": "catalog"
+   },
+   "description": "Save the ticked regions (else all listed) as a BED file."
+  },
+  {
+   "id": "regions-next",
+   "label": "Next region (N)",
+   "selector": "[data-testid=\"region-next\"]",
+   "where": "Regions panel > Regions",
+   "reveal": {
+    "panel": "circular-genome",
+    "tab": "catalog"
+   },
+   "description": "Go to the next region of the current category (N; P goes back)."
+  },
+  {
+   "id": "regions-map-tab",
+   "label": "Regions > Map tab",
+   "selector": "[data-panel-content-type=\"circular-genome\"] [data-analysis-tab=\"navigator\"]",
+   "where": "Regions panel",
+   "reveal": {
+    "panel": "circular-genome",
+    "tab": "navigator"
+   },
+   "description": "The whole chromosome or a circular plasmid map, with a zoom window of the genes around the view; Load plasmid map… is here."
+  },
+  {
+   "id": "navigation-mode",
+   "label": "Linked / Per panel",
+   "selector": "[data-testid=\"navigation-mode-toggle\"]",
+   "where": "top bar, left of the chromosome selector",
+   "reveal": {},
+   "description": "Linked: the panels on each genome move together. Per panel: each panel has its own locus box."
+  },
+  {
+   "id": "panel-match",
+   "label": "Match",
+   "selector": "[data-testid=\"panel-match-others\"]",
+   "where": "a panel's location bar (Per panel)",
+   "reveal": {},
+   "description": "Move the other panels on this genome to this panel's locus, without linking them.",
+   "shows_when": "navigation is Per panel and another panel shows the same genome"
+  },
+  {
+   "id": "projection-export",
+   "label": "Export table (Projection)",
+   "selector": "[data-testid=\"projection-export\"]",
+   "where": "Clusters panel > Projection",
+   "reveal": {
+    "panel": "cluster-detail",
+    "tab": "projection"
+   },
+   "description": "Download one row per read: name, dataset, strand, cluster and its x/y on the map.",
+   "needs": "has_clusters"
+  },
+  {
+   "id": "footprints-robust",
+   "label": "Check robustness to read order",
+   "selector": "[data-testid=\"recaller-robust\"]",
+   "where": "Footprints panel > Classes",
+   "reveal": {
+    "panel": "footprint-analysis",
+    "tab": "states"
+   },
+   "description": "Repeat the class search with the reads in two other orders and mark each class robust or varies (about 3x slower)."
+  },
+  {
+   "id": "read-end-footprints",
+   "label": "Hide footprints cut off at read ends",
+   "selector": "[data-testid=\"hide-short-end-footprints\"]",
+   "where": "sidebar > Reads & Display > Read Filters",
+   "reveal": {
+    "sidebar": "view",
+    "subsection": "view.advanced"
+   },
+   "description": "Drop a first or last footprint under 90 bp that a read end cuts off, in the reads and the analyses (not in Find footprint classes); on by default."
+  },
+  {
+   "id": "library",
+   "label": "Open Library",
+   "selector": "[data-testid=\"library-open-panel\"]",
+   "where": "sidebar > Data & Sessions > Library",
+   "reveal": {
+    "sidebar": "file",
+    "subsection": "file.library"
+   },
+   "description": "The BAMs, BigBeds and plasmid maps you open, DAF-seq runs and watched folders: search, tag and reopen them with their genome."
+  },
+  {
+   "id": "drawer-resize",
+   "label": "Resize the side panels",
+   "selector": "[data-testid=\"analysis-overlay-resize\"]",
+   "where": "left edge of the side-panel drawer",
+   "reveal": {},
+   "description": "Drag (or arrow keys) to resize the drawer of side panels; double-click for the default width.",
+   "shows_when": "side panels are pinned into the drawer and the drawer is open"
+  }
+ ]
+}

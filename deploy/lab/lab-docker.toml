@@ -1,0 +1,27 @@
+# fiberbrowser-server.toml for deploy/lab/docker-compose.lab.yml (paths inside the container).
+profile = "lab"
+
+[server]
+host = "0.0.0.0"
+port = 8000
+public_url = "https://fiberbrowser.lab.internal"
+
+[[data.roots]]
+path = "/data/lab/fiberseq"
+label = "Lab data"
+
+[[data.roots]]
+path = "/data/lab/fiberbrowser-runs"
+label = "Runs"
+writable = true
+
+[state]
+dir = "/state"
+
+[auth]
+mode = "accounts"
+# Caddy's address on the compose network: its X-Forwarded-For is believed (audit log addresses).
+trusted_proxies = ["172.16.0.0/12", "192.168.0.0/16", "10.0.0.0/8"]
+
+[jobs]
+enabled = false

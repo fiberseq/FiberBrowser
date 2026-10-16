@@ -1,0 +1,83 @@
+/*
+ * Render-mode chrome-hiding rules. Scoped to `html.render-mode` (set by
+ * renderMode.ts when ?render=1) so the live UI is unaffected.
+ *
+ * Hides: top nav bar, sidebar, Copilot panel button, crash-recovery banner,
+ * chromosome ideogram, genome overview, tutorial popovers, tooltips, and any
+ * absolute-positioned chrome the worker shouldn't capture.
+ *
+ * Promotes: the tracks-region wrapper (data-testid="tracks-region") to fill
+ * the viewport so the screenshot crops cleanly.
+ */
+
+html.render-mode,
+html.render-mode body {
+  background: #ffffff;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+html.render-mode body {
+  /* Keep the React root flush against the top-left so screenshot coords
+     are predictable. */
+  display: block;
+}
+
+html.render-mode #root {
+  height: 100vh;
+  width: 100vw;
+}
+
+/* Hide UI chrome that's not part of the rendered tracks region.
+   Using attribute / data-testid selectors where present keeps these rules
+   tolerant of class-name churn from Tailwind refactors. */
+html.render-mode [data-copilot-anchor="copilot-toggle"],
+html.render-mode [data-copilot-panel="trigger"],
+html.render-mode .copilot-tutorial-popover,
+html.render-mode .copilot-highlight,
+html.render-mode .copilot-panel-flash,
+html.render-mode .copilot-region-flash,
+html.render-mode [data-testid="sidebar"],
+html.render-mode aside,
+html.render-mode header,
+html.render-mode nav,
+html.render-mode [role="tooltip"],
+html.render-mode [data-testid="crash-recovery-banner"],
+html.render-mode [data-testid="chromosome-ideogram"],
+html.render-mode [data-testid="genome-overview"],
+html.render-mode [data-testid="operations-toolbar"],
+html.render-mode [data-testid="navigation-bar"] {
+  display: none !important;
+}
+
+/* When a tracks-region wrapper is present, force it to the full viewport so
+   screenshots don't include scrollbars or empty margins. */
+html.render-mode [data-testid="tracks-region"] {
+  position: absolute !important;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100vw !important;
+  max-width: 100vw !important;
+  height: 100vh !important;
+  max-height: 100vh !important;
+  overflow: hidden !important;
+}
+
+/* Scrollbars look bad in figure renders. Hide them everywhere in render
+   mode but keep scrolling functional (overlay-style). */
+html.render-mode ::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  background: transparent;
+}
+
+/* Hide in-track overlay nudges (read filter empty / span-empty / hints /
+   warning toasts / aggressive-filter banner) so figure renders don't capture
+   them. The render-mode payload may opt them back in with `show_nudges: true`
+   on RenderRequest, which sets html.render-mode-show-nudges. */
+html.render-mode:not(.render-mode-show-nudges) [data-render-hide="true"] {
+  display: none !important;
+}

@@ -1,0 +1,50 @@
+name: Docker image
+
+# Publishes the public/reviewer server image (deploy/Dockerfile) to the GitHub
+# Container Registry on v* tags: ghcr.io/<owner>/fiberbrowser:<version>,
+# :<major>.<minor> and :latest. Uses the workflow's GITHUB_TOKEN; no secrets.
+# The image installs requirements.txt, so FiberHMM 3.0 must be on PyPI first.
+# Usage: deploy/README.md.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/fiberbrowser
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=sha,enable=${{ !startsWith(github.ref, 'refs/tags/v') }}
+          labels: |
+            org.opencontainers.image.title=FiberBrowser
+            org.opencontainers.image.description=FiberBrowser public/reviewer server (--public)
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

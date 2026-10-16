@@ -1,0 +1,42 @@
+{
+  "$comment": "What FiberBrowser opens, in one place: the open dialogs' filters (native, desktop app, in-page browser), the frontend's file dispatch (utils/supportedFiles.ts, utils/openFiles.ts) and the backend's checks (browser/services/supported_files.py) all read this file. Suffixes are lower case and matched at the end of the file name, longest first. 'sidecars' are index files: never opened on their own, used automatically when they sit next to their main file; a 'coordinate_index' (BAI, CSI, CRAI, tabix) is the one a remote file is opened with (a PacBio .pbi is not one). 'not_supported' gives the reason for formats people commonly try.",
+  "groups": [
+    {"id": "alignments", "label": "Alignments (BAM)", "opens": "dataset", "suffixes": [".bam"]},
+    {"id": "fiberseq", "label": "Fiber-seq BigBed (bb, bigBed)", "opens": "dataset", "suffixes": [".bb", ".bigbed"]},
+    {"id": "tracks", "label": "Tracks (bigWig, BED)", "opens": "track", "suffixes": [".bw", ".bigwig", ".bed", ".bed.gz"]},
+    {"id": "annotations", "label": "Gene annotations (GTF, GFF)", "opens": "annotation", "suffixes": [".gtf", ".gtf.gz", ".gff", ".gff.gz", ".gff3", ".gff3.gz"]},
+    {"id": "reference", "label": "Reference genome (FASTA)", "opens": "reference", "suffixes": [".fa", ".fasta", ".fna", ".fa.gz", ".fasta.gz", ".fna.gz"]},
+    {"id": "plasmids", "label": "Plasmid maps (SnapGene, GenBank, EMBL, SBOL)", "opens": "plasmid", "suffixes": [".dna", ".gb", ".gbk", ".genbank", ".embl", ".emb", ".sbol", ".rdf", ".ttl"]},
+    {"id": "contacts", "label": "Contact maps (cool, mcool)", "opens": "contact_map", "suffixes": [".cool", ".mcool"]},
+    {"id": "motifs", "label": "Motifs (JASPAR, MEME, HOMER)", "opens": "motif", "suffixes": [".jaspar", ".meme", ".pfm", ".motif", ".homer"]},
+    {"id": "sessions", "label": "Sessions and layer bundles (json)", "opens": "session", "suffixes": [".json", ".fiberlayers.bb", ".fiberlayers.bigbed", ".fiberlayers.bed"]}
+  ],
+  "pickers": {
+    "open": ["alignments", "fiberseq", "tracks", "annotations", "reference", "plasmids", "contacts", "motifs", "sessions"],
+    "dataset": ["alignments", "fiberseq"]
+  },
+  "sidecars": [
+    {"suffix": ".bai", "label": "BAM index", "for": [".bam"], "coordinate_index": true},
+    {"suffix": ".csi", "label": "CSI index", "for": [".bam", ".bed.gz", ".gff.gz", ".gff3.gz", ".gtf.gz"], "coordinate_index": true},
+    {"suffix": ".pbi", "label": "PacBio BAM index", "for": [".bam"]},
+    {"suffix": ".crai", "label": "CRAM index", "for": [".cram"], "coordinate_index": true},
+    {"suffix": ".fai", "label": "FASTA index", "for": [".fa", ".fasta", ".fna", ".fa.gz", ".fasta.gz", ".fna.gz"]},
+    {"suffix": ".gzi", "label": "bgzip index", "for": [".fa.gz", ".fasta.gz", ".fna.gz"]},
+    {"suffix": ".tbi", "label": "tabix index", "for": [".bed.gz", ".gff.gz", ".gff3.gz", ".gtf.gz"], "coordinate_index": true},
+    {"suffix": ".dict", "label": "sequence dictionary", "for": [".fa", ".fasta", ".fna"]}
+  ],
+  "not_supported": [
+    {"suffix": ".cram", "why": "CRAM files can't be opened; convert to BAM first (samtools view -b -o reads.bam reads.cram, then samtools index reads.bam)"},
+    {"suffix": ".sam", "why": "SAM text files can't be opened; convert to an indexed BAM first (samtools sort -o reads.bam reads.sam, then samtools index reads.bam)"},
+    {"suffix": ".bedgraph", "why": "bedGraph can't be opened; convert it to bigWig first (bedGraphToBigWig)"},
+    {"suffix": ".bdg", "why": "bedGraph can't be opened; convert it to bigWig first (bedGraphToBigWig)"},
+    {"suffix": ".wig", "why": "WIG can't be opened; convert it to bigWig first (wigToBigWig)"},
+    {"suffix": ".vcf", "why": "VCF files are not a FiberBrowser format"},
+    {"suffix": ".vcf.gz", "why": "VCF files are not a FiberBrowser format"},
+    {"suffix": ".fastq", "why": "FASTQ reads are unaligned; align them to a BAM first"},
+    {"suffix": ".fq", "why": "FASTQ reads are unaligned; align them to a BAM first"},
+    {"suffix": ".fastq.gz", "why": "FASTQ reads are unaligned; align them to a BAM first"},
+    {"suffix": ".fq.gz", "why": "FASTQ reads are unaligned; align them to a BAM first"},
+    {"suffix": ".hic", "why": ".hic contact maps can't be opened; convert to .mcool first (hic2cool)"}
+  ]
+}

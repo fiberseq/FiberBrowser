@@ -1,0 +1,79 @@
+# FiberBrowser server configuration: every key, with its default.
+#   fiberbrowser serve --config fiberbrowser-server.toml
+#   fiberbrowser check-config fiberbrowser-server.toml
+# Command-line flags win over this file. Relative paths are relative to this file.
+# See docs/deployment/ (lab-server.md, ondemand.md).
+
+# personal: one user, access token (today's default)
+# public:   anonymous visitors, read-only catalog (today's --public)
+# lab:      a shared lab server: members sign in and share data, Library, runs, sessions
+profile = "lab"
+
+[server]
+host = "127.0.0.1"          # behind a reverse proxy on the same machine; 0.0.0.0 to listen on the network
+port = 8000
+root_path = ""              # URL prefix when a proxy serves the app under a sub-path, e.g. "/fiberbrowser"
+public_url = ""             # e.g. "https://fiberbrowser.lab.example.org" (printed in invites; CSRF origin)
+# open_browser = false      # servers never open a browser unless set
+
+[data]
+catalog = ""                # optional catalog.json of curated datasets
+gtf = ""                    # optional gene annotation loaded at start
+fasta = ""                  # optional reference FASTA loaded at start
+
+# Folders members may browse and open files from (symlinks that leave them are refused).
+# Mark writable = true where runs and exports may write.
+[[data.roots]]
+path = "/data/lab/fiberseq"
+label = "Lab data"
+writable = false
+
+[[data.roots]]
+path = "/data/lab/fiberbrowser-runs"
+label = "Runs"
+writable = true
+
+[state]
+# Shared lab state: library.json, jobs/, sessions/, uploads/, users.json, logins.json, audit.log.
+# Back this folder up (docs/deployment/lab-server.md).
+dir = "/data/lab/fiberbrowser-state"
+
+[auth]
+mode = "accounts"           # accounts | proxy | none
+users_file = ""             # default: <state.dir>/users.json
+session_hours = 12          # a sign-in lasts this long
+secure_cookies = "auto"     # auto (Secure over HTTPS) | always | never
+max_failed_logins = 5       # per user name (x5 per address) ...
+lockout_minutes = 15        # ... then sign-in is refused this long
+# mode = "proxy": a reverse proxy that signs people in (SSO) passes the user name in a header.
+proxy_header = "X-Forwarded-User"
+trusted_proxies = ["127.0.0.1", "::1"]   # only these peers may set the header (IPs or networks)
+admins = []                 # proxy/none mode: user names that are admins
+allowed_users = []          # proxy mode: if set, only these user names
+# mode = "none": no sign-in; everything is attributed to `user` (an admin). Only behind a proxy that
+# already authenticated the person (Open OnDemand), together with the launch token:
+user = ""
+# access_token = true       # mode "none": require the launch token (FIBERBROWSER_TOKEN); keep it on
+
+[jobs]
+enabled = false             # "New DAF-seq run" on this server (off by default)
+max_cores_total = 0         # 0: every core of the machine / allocation
+max_cores_per_user = 0      # cores one run may use; 0: max_cores_total
+max_concurrent_per_user = 2
+max_concurrent_total = 4
+dir = ""                    # run registry (default <state.dir>/jobs); one per machine when several
+                            # servers share the state folder (Open OnDemand sessions on different nodes)
+
+[limits]
+upload_max_mb = 2048        # drag-and-drop uploads (0: no extra limit)
+max_span_bp = 0             # largest read window per request (0: none for members)
+max_reads = 0               # cap on max_reads-style parameters (0: none for members)
+max_working_reads = 0
+max_users = 64              # members with a working state in memory at once
+
+[public_catalog]
+enabled = false             # anonymous visitors may browse the catalog read-only (public-mode rules)
+catalog = ""                # its catalog.json (or data.catalog)
+
+[copilot]
+enabled = false             # the local LLM Copilot: off on servers

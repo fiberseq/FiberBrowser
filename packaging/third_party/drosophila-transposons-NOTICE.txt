@@ -1,0 +1,14 @@
+D. melanogaster transposable-element library bundled with FiberBrowser
+=======================================================================
+
+Files:    D_mel_transposon_sequence_set_v10.2.fa, transposon_sequence_set_v10.2.gff
+Release:  canonical transposon sequence set v10.2 (Bergman lab, continuing the
+          FlyBase canonical set)
+Source:   https://github.com/bergmanlab/drosophila-transposons
+          (commit 9b28cdbe9d2b3ef895df37f8495b33104677e516, files unchanged)
+Licence:  CC0 1.0 Universal (public domain dedication); the full text follows.
+Cite:     Bergman CM, Han S et al. Drosophila transposon canonical sequence set
+          (FlyBase), release v10.2. github.com/bergmanlab/drosophila-transposons
+
+------------------------------------------------------------------------------
+

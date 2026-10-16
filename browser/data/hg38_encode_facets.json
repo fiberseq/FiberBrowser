@@ -1,0 +1,955 @@
+{
+ "supported": true,
+ "genome": "hg38",
+ "assays": [
+  {
+   "key": "TF ChIP-seq",
+   "count": 29822
+  },
+  {
+   "key": "Histone ChIP-seq",
+   "count": 21134
+  },
+  {
+   "key": "shRNA RNA-seq",
+   "count": 12052
+  },
+  {
+   "key": "DNase-seq",
+   "count": 6763
+  },
+  {
+   "key": "total RNA-seq",
+   "count": 5200
+  },
+  {
+   "key": "CRISPR RNA-seq",
+   "count": 4400
+  },
+  {
+   "key": "polyA plus RNA-seq",
+   "count": 3634
+  },
+  {
+   "key": "Mint-ChIP-seq",
+   "count": 2598
+  },
+  {
+   "key": "ATAC-seq",
+   "count": 1682
+  },
+  {
+   "key": "microRNA-seq",
+   "count": 1587
+  },
+  {
+   "key": "intact Hi-C",
+   "count": 1470
+  },
+  {
+   "key": "small RNA-seq",
+   "count": 1184
+  },
+  {
+   "key": "eCLIP",
+   "count": 1008
+  },
+  {
+   "key": "PRO-cap",
+   "count": 942
+  },
+  {
+   "key": "RAMPAGE",
+   "count": 940
+  },
+  {
+   "key": "CRISPRi RNA-seq",
+   "count": 672
+  },
+  {
+   "key": "WGBS",
+   "count": 616
+  },
+  {
+   "key": "Control eCLIP",
+   "count": 580
+  },
+  {
+   "key": "CAGE",
+   "count": 476
+  },
+  {
+   "key": "polyA minus RNA-seq",
+   "count": 472
+  },
+  {
+   "key": "siRNA RNA-seq",
+   "count": 424
+  },
+  {
+   "key": "Bru-seq",
+   "count": 392
+  },
+  {
+   "key": "in situ Hi-C",
+   "count": 344
+  },
+  {
+   "key": "BruChase-seq",
+   "count": 256
+  },
+  {
+   "key": "ChIA-PET",
+   "count": 233
+  },
+  {
+   "key": "STARR-seq",
+   "count": 144
+  },
+  {
+   "key": "BruUV-seq",
+   "count": 128
+  },
+  {
+   "key": "GM DNase-seq",
+   "count": 125
+  },
+  {
+   "key": "PRO-seq",
+   "count": 124
+  },
+  {
+   "key": "PAS-seq",
+   "count": 52
+  },
+  {
+   "key": "Flow-FISH CRISPR screen",
+   "count": 40
+  },
+  {
+   "key": "scRNA-seq",
+   "count": 28
+  },
+  {
+   "key": "pooled clone sequencing",
+   "count": 26
+  },
+  {
+   "key": "proliferation CRISPR screen",
+   "count": 25
+  },
+  {
+   "key": "dilution Hi-C",
+   "count": 24
+  },
+  {
+   "key": "GRO-cap",
+   "count": 8
+  }
+ ],
+ "targets": [
+  {
+   "key": "H3K4me3",
+   "count": 4055
+  },
+  {
+   "key": "H3K27ac",
+   "count": 3041
+  },
+  {
+   "key": "H3K27me3",
+   "count": 3036
+  },
+  {
+   "key": "H3K36me3",
+   "count": 3024
+  },
+  {
+   "key": "H3K4me1",
+   "count": 2988
+  },
+  {
+   "key": "H3K9me3",
+   "count": 2804
+  },
+  {
+   "key": "CTCF",
+   "count": 2792
+  },
+  {
+   "key": "H3K9ac",
+   "count": 950
+  },
+  {
+   "key": "POLR2A",
+   "count": 860
+  },
+  {
+   "key": "H3K4me2",
+   "count": 802
+  },
+  {
+   "key": "H4K20me1",
+   "count": 598
+  },
+  {
+   "key": "H3K79me2",
+   "count": 520
+  },
+  {
+   "key": "H2AFZ",
+   "count": 510
+  },
+  {
+   "key": "EP300",
+   "count": 450
+  },
+  {
+   "key": "RAD21",
+   "count": 393
+  },
+  {
+   "key": "NR3C1",
+   "count": 333
+  },
+  {
+   "key": "JUN",
+   "count": 330
+  },
+  {
+   "key": "REST",
+   "count": 306
+  },
+  {
+   "key": "POLR2AphosphoS5",
+   "count": 302
+  },
+  {
+   "key": "CEBPB",
+   "count": 267
+  },
+  {
+   "key": "EZH2",
+   "count": 220
+  },
+  {
+   "key": "SMC3",
+   "count": 216
+  },
+  {
+   "key": "MYC",
+   "count": 206
+  },
+  {
+   "key": "YY1",
+   "count": 206
+  },
+  {
+   "key": "JUND",
+   "count": 196
+  },
+  {
+   "key": "MAX",
+   "count": 194
+  },
+  {
+   "key": "TARDBP",
+   "count": 194
+  },
+  {
+   "key": "H3K9me2",
+   "count": 192
+  },
+  {
+   "key": "TAF1",
+   "count": 180
+  },
+  {
+   "key": "FOSL2",
+   "count": 177
+  },
+  {
+   "key": "H3F3A",
+   "count": 166
+  },
+  {
+   "key": "JUNB",
+   "count": 158
+  },
+  {
+   "key": "GTF2F1",
+   "count": 152
+  },
+  {
+   "key": "SP1",
+   "count": 152
+  },
+  {
+   "key": "ZBTB33",
+   "count": 152
+  },
+  {
+   "key": "BCL3",
+   "count": 150
+  },
+  {
+   "key": "ATF3",
+   "count": 148
+  },
+  {
+   "key": "EZH2phosphoT487",
+   "count": 148
+  },
+  {
+   "key": "FOXA1",
+   "count": 144
+  },
+  {
+   "key": "GABPA",
+   "count": 144
+  },
+  {
+   "key": "SIN3A",
+   "count": 144
+  },
+  {
+   "key": "HDAC2",
+   "count": 132
+  },
+  {
+   "key": "NRF1",
+   "count": 132
+  },
+  {
+   "key": "NONO",
+   "count": 130
+  },
+  {
+   "key": "USF1",
+   "count": 128
+  },
+  {
+   "key": "TCF12",
+   "count": 126
+  },
+  {
+   "key": "BCLAF1",
+   "count": 124
+  },
+  {
+   "key": "EGR1",
+   "count": 124
+  },
+  {
+   "key": "Cebpa",
+   "count": 120
+  },
+  {
+   "key": "ELF1",
+   "count": 120
+  },
+  {
+   "key": "HES2",
+   "count": 120
+  },
+  {
+   "key": "MAZ",
+   "count": 120
+  },
+  {
+   "key": "CREB1",
+   "count": 116
+  },
+  {
+   "key": "MAFK",
+   "count": 116
+  },
+  {
+   "key": "USF2",
+   "count": 116
+  },
+  {
+   "key": "SUZ12",
+   "count": 114
+  },
+  {
+   "key": "ZFX",
+   "count": 114
+  },
+  {
+   "key": "FOS",
+   "count": 112
+  },
+  {
+   "key": "ZNF24",
+   "count": 112
+  },
+  {
+   "key": "SRF",
+   "count": 110
+  },
+  {
+   "key": "RFX5",
+   "count": 104
+  },
+  {
+   "key": "TAF15",
+   "count": 104
+  },
+  {
+   "key": "ZNF274",
+   "count": 104
+  },
+  {
+   "key": "BHLHE40",
+   "count": 98
+  },
+  {
+   "key": "RCOR1",
+   "count": 98
+  },
+  {
+   "key": "ESR1",
+   "count": 96
+  },
+  {
+   "key": "RNF2",
+   "count": 94
+  },
+  {
+   "key": "CEBPZ",
+   "count": 92
+  },
+  {
+   "key": "HDGF",
+   "count": 92
+  },
+  {
+   "key": "LARP7",
+   "count": 92
+  },
+  {
+   "key": "RELA",
+   "count": 88
+  },
+  {
+   "key": "SRSF9",
+   "count": 88
+  },
+  {
+   "key": "KDM1A",
+   "count": 86
+  },
+  {
+   "key": "TEAD4",
+   "count": 86
+  },
+  {
+   "key": "ATF2",
+   "count": 84
+  },
+  {
+   "key": "DGCR8",
+   "count": 84
+  },
+  {
+   "key": "H2AK5ac",
+   "count": 84
+  },
+  {
+   "key": "HNRNPU",
+   "count": 84
+  },
+  {
+   "key": "MNT",
+   "count": 84
+  },
+  {
+   "key": "SRSF1",
+   "count": 84
+  },
+  {
+   "key": "MXI1",
+   "count": 82
+  },
+  {
+   "key": "CHD2",
+   "count": 80
+  },
+  {
+   "key": "FOXK2",
+   "count": 80
+  },
+  {
+   "key": "FUS",
+   "count": 80
+  },
+  {
+   "key": "GATA2",
+   "count": 80
+  },
+  {
+   "key": "H3K18ac",
+   "count": 80
+  },
+  {
+   "key": "H3K79me1",
+   "count": 80
+  },
+  {
+   "key": "HNRNPC",
+   "count": 80
+  },
+  {
+   "key": "HNRNPL",
+   "count": 80
+  },
+  {
+   "key": "HNRNPUL1",
+   "count": 80
+  },
+  {
+   "key": "PCBP1",
+   "count": 80
+  },
+  {
+   "key": "PTBP1",
+   "count": 80
+  },
+  {
+   "key": "RBFOX2",
+   "count": 80
+  },
+  {
+   "key": "RBM22",
+   "count": 80
+  },
+  {
+   "key": "U2AF1",
+   "count": 80
+  },
+  {
+   "key": "U2AF2",
+   "count": 80
+  },
+  {
+   "key": "ELK1",
+   "count": 78
+  },
+  {
+   "key": "ESRRA",
+   "count": 78
+  },
+  {
+   "key": "HNRNPK",
+   "count": 78
+  },
+  {
+   "key": "IRF1",
+   "count": 78
+  }
+ ],
+ "biosamples": [
+  {
+   "key": "K562",
+   "count": 19936
+  },
+  {
+   "key": "HepG2",
+   "count": 15985
+  },
+  {
+   "key": "A549",
+   "count": 4919
+  },
+  {
+   "key": "GM12878",
+   "count": 3341
+  },
+  {
+   "key": "HEK293",
+   "count": 2532
+  },
+  {
+   "key": "MCF-7",
+   "count": 2419
+  },
+  {
+   "key": "H1",
+   "count": 1768
+  },
+  {
+   "key": "HCT116",
+   "count": 1590
+  },
+  {
+   "key": "dorsolateral prefrontal cortex",
+   "count": 1563
+  },
+  {
+   "key": "SK-N-SH",
+   "count": 1331
+  },
+  {
+   "key": "BLaER1",
+   "count": 1296
+  },
+  {
+   "key": "spleen",
+   "count": 1285
+  },
+  {
+   "key": "adrenal gland",
+   "count": 1259
+  },
+  {
+   "key": "HeLa-S3",
+   "count": 1253
+  },
+  {
+   "key": "liver",
+   "count": 1104
+  },
+  {
+   "key": "stomach",
+   "count": 1101
+  },
+  {
+   "key": "IMR-90",
+   "count": 1067
+  },
+  {
+   "key": "heart",
+   "count": 918
+  },
+  {
+   "key": "heart left ventricle",
+   "count": 914
+  },
+  {
+   "key": "sigmoid colon",
+   "count": 858
+  },
+  {
+   "key": "thyroid gland",
+   "count": 822
+  },
+  {
+   "key": "lung",
+   "count": 805
+  },
+  {
+   "key": "transverse colon",
+   "count": 801
+  },
+  {
+   "key": "endothelial cell of umbilical vein",
+   "count": 792
+  },
+  {
+   "key": "gastrocnemius medialis",
+   "count": 738
+  },
+  {
+   "key": "common myeloid progenitor, CD34-positive",
+   "count": 710
+  },
+  {
+   "key": "WTC11",
+   "count": 709
+  },
+  {
+   "key": "mammary epithelial cell",
+   "count": 708
+  },
+  {
+   "key": "H9",
+   "count": 701
+  },
+  {
+   "key": "B cell",
+   "count": 674
+  },
+  {
+   "key": "keratinocyte",
+   "count": 666
+  },
+  {
+   "key": "CD4-positive, alpha-beta T cell",
+   "count": 620
+  },
+  {
+   "key": "body of pancreas",
+   "count": 620
+  },
+  {
+   "key": "upper lobe of left lung",
+   "count": 609
+  },
+  {
+   "key": "brain",
+   "count": 590
+  },
+  {
+   "key": "esophagus muscularis mucosa",
+   "count": 589
+  },
+  {
+   "key": "heart right ventricle",
+   "count": 582
+  },
+  {
+   "key": "CD14-positive monocyte",
+   "count": 581
+  },
+  {
+   "key": "foreskin keratinocyte",
+   "count": 568
+  },
+  {
+   "key": "esophagus squamous epithelium",
+   "count": 567
+  },
+  {
+   "key": "pancreas",
+   "count": 563
+  },
+  {
+   "key": "gastroesophageal sphincter",
+   "count": 560
+  },
+  {
+   "key": "ovary",
+   "count": 553
+  },
+  {
+   "key": "Peyer's patch",
+   "count": 544
+  },
+  {
+   "key": "subcutaneous abdominal adipose tissue",
+   "count": 544
+  },
+  {
+   "key": "small intestine",
+   "count": 532
+  },
+  {
+   "key": "placenta",
+   "count": 513
+  },
+  {
+   "key": "uterus",
+   "count": 491
+  },
+  {
+   "key": "chorionic villus",
+   "count": 480
+  },
+  {
+   "key": "mesenchymal stem cell",
+   "count": 472
+  },
+  {
+   "key": "GM23338",
+   "count": 466
+  },
+  {
+   "key": "suprapubic skin",
+   "count": 462
+  },
+  {
+   "key": "tibial nerve",
+   "count": 461
+  },
+  {
+   "key": "naive thymus-derived CD4-positive, alpha-beta T cell",
+   "count": 457
+  },
+  {
+   "key": "neuronal stem cell",
+   "count": 456
+  },
+  {
+   "key": "skeletal muscle tissue",
+   "count": 456
+  },
+  {
+   "key": "CD8-positive, alpha-beta T cell",
+   "count": 438
+  },
+  {
+   "key": "kidney",
+   "count": 438
+  },
+  {
+   "key": "fibroblast of lung",
+   "count": 434
+  },
+  {
+   "key": "T-cell",
+   "count": 425
+  },
+  {
+   "key": "omental fat pad",
+   "count": 411
+  },
+  {
+   "key": "neurosphere",
+   "count": 410
+  },
+  {
+   "key": "peripheral blood mononuclear cell",
+   "count": 410
+  },
+  {
+   "key": "skeletal muscle myoblast",
+   "count": 404
+  },
+  {
+   "key": "prostate gland",
+   "count": 403
+  },
+  {
+   "key": "trophoblast cell",
+   "count": 400
+  },
+  {
+   "key": "esophagus",
+   "count": 392
+  },
+  {
+   "key": "neural cell",
+   "count": 376
+  },
+  {
+   "key": "CD4-positive, alpha-beta memory T cell",
+   "count": 368
+  },
+  {
+   "key": "SK-N-DZ",
+   "count": 360
+  },
+  {
+   "key": "fibroblast of dermis",
+   "count": 360
+  },
+  {
+   "key": "neural progenitor cell",
+   "count": 358
+  },
+  {
+   "key": "PC-3",
+   "count": 355
+  },
+  {
+   "key": "SK-MEL-5",
+   "count": 350
+  },
+  {
+   "key": "testis",
+   "count": 347
+  },
+  {
+   "key": "NCI-H460",
+   "count": 343
+  },
+  {
+   "key": "OCI-LY7",
+   "count": 336
+  },
+  {
+   "key": "osteoblast",
+   "count": 336
+  },
+  {
+   "key": "temporal lobe",
+   "count": 336
+  },
+  {
+   "key": "Ishikawa",
+   "count": 333
+  },
+  {
+   "key": "psoas muscle",
+   "count": 331
+  },
+  {
+   "key": "layer of hippocampus",
+   "count": 330
+  },
+  {
+   "key": "endocrine pancreas",
+   "count": 328
+  },
+  {
+   "key": "PC-9",
+   "count": 327
+  },
+  {
+   "key": "Panc1",
+   "count": 327
+  },
+  {
+   "key": "GM23248",
+   "count": 322
+  },
+  {
+   "key": "breast epithelium",
+   "count": 321
+  },
+  {
+   "key": "right lobe of liver",
+   "count": 318
+  },
+  {
+   "key": "natural killer cell",
+   "count": 315
+  },
+  {
+   "key": "colon",
+   "count": 314
+  },
+  {
+   "key": "hepatocyte",
+   "count": 314
+  },
+  {
+   "key": "vagina",
+   "count": 313
+  },
+  {
+   "key": "subcutaneous adipose tissue",
+   "count": 312
+  },
+  {
+   "key": "lower leg skin",
+   "count": 310
+  },
+  {
+   "key": "mesendoderm",
+   "count": 308
+  },
+  {
+   "key": "smooth muscle cell",
+   "count": 307
+  },
+  {
+   "key": "thoracic aorta",
+   "count": 306
+  },
+  {
+   "key": "astrocyte",
+   "count": 305
+  },
+  {
+   "key": "right atrium auricular region",
+   "count": 305
+  },
+  {
+   "key": "HEK293T",
+   "count": 302
+  }
+ ],
+ "generated": "2026-02-02"
+}

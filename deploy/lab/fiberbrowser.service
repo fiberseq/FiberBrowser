@@ -1,0 +1,31 @@
+# systemd unit for an always-on FiberBrowser lab server (a lab workstation or VM).
+#   sudo cp deploy/lab/fiberbrowser.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now fiberbrowser
+# Put HTTPS in front (deploy/lab/Caddyfile.lab); keep server.host = "127.0.0.1".
+[Unit]
+Description=FiberBrowser lab server
+After=network-online.target remote-fs.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# A dedicated account in the lab's group: it reads the data roots and writes
+# the state folder and the writable roots, nothing else.
+User=fiberbrowser
+Group=lab
+UMask=0007
+# The fiberbrowser command of the environment it was installed into.
+ExecStart=/opt/fiberbrowser/env/bin/fiberbrowser serve --config /etc/fiberbrowser/fiberbrowser-server.toml
+Restart=on-failure
+RestartSec=5
+Environment=FIBERBROWSER_NO_OPEN=1 OPENBLAS_NUM_THREADS=1 PYTHONUNBUFFERED=1
+# Hardening: the server needs its data, state and cache folders only.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/data/lab/fiberbrowser-state /data/lab/fiberbrowser-runs /var/lib/fiberbrowser
+Environment=HOME=/var/lib/fiberbrowser
+
+[Install]
+WantedBy=multi-user.target

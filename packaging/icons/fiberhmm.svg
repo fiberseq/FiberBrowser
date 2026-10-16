@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>FiberHMM</title>
+  <!-- FiberBrowser's sibling (the future FiberHMM runner app): same tile and
+       fiber, on teal; the stepped line above the fiber is the hidden-state
+       path the HMM calls (footprint / accessible). -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0f766e"/>
+      <stop offset="1" stop-color="#042f2e"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="184" fill="url(#tile)"/>
+  <path d="M196 468 H228 V332 H404 V468 H472 V372 H544 V468 H612 V332 H788 V468 H828"
+        fill="none" stroke="#f8fafc" stroke-width="28" stroke-linejoin="round" stroke-linecap="round"/>
+  <line x1="196" y1="652" x2="828" y2="652" stroke="#cbd5e1" stroke-width="20" stroke-linecap="round"/>
+  <g fill="#5eead4">
+    <rect x="228" y="596" width="176" height="112" rx="28"/>
+    <rect x="612" y="596" width="176" height="112" rx="28"/>
+  </g>
+  <rect x="472" y="612" width="72" height="80" rx="18" fill="#fbbf24"/>
+  <g fill="#f472b6">
+    <circle cx="436" cy="652" r="17"/><circle cx="578" cy="652" r="17"/>
+  </g>
+</svg>

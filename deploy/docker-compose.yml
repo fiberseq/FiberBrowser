@@ -1,0 +1,80 @@
+# FiberBrowser public server: FiberBrowser replicas behind Caddy (HTTPS).
+#   docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d
+# deploy/.env sets FIBERBROWSER_DOMAIN and FIBERBROWSER_DATA (the host folder
+# with the catalog's files and catalog.json); see docs/deployment/public-server.md.
+services:
+  fiberbrowser:
+    image: ghcr.io/fiberseq/fiberbrowser:${FIBERBROWSER_VERSION:-3.0.0}
+    # Or build it here: docker compose ... up -d --build
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    # One process per replica; a browser stays on its replica (Caddy's
+    # lb_policy cookie). Roughly one replica per two CPU cores.
+    deploy:
+      replicas: ${FIBERBROWSER_REPLICAS:-2}
+      resources:
+        limits:
+          memory: ${FIBERBROWSER_REPLICA_MEMORY:-6g}
+    # The data folder, read-only, with catalog.json at its top: the catalog
+    # (the image's default --catalog /data/catalog.json) and the paths in it,
+    # relative to it or absolute under /data, resolve inside the container.
+    volumes:
+      - ${FIBERBROWSER_DATA}:/data:ro
+      - fiberbrowser-cache:/home/fiberbrowser/.fiberhmm
+    environment:
+      FIBERBROWSER_ALLOWED_HOSTS: ${FIBERBROWSER_DOMAIN}
+      # Caddy's address: its X-Forwarded-For names the real visitor.
+      FIBERBROWSER_TRUSTED_PROXIES: 172.30.0.0/24
+      FIBERBROWSER_MAX_SESSIONS: ${FIBERBROWSER_MAX_SESSIONS:-150}
+      # Stop admitting new visitors before the container's memory limit.
+      FIBERBROWSER_PUBLIC_MEMORY_MB: ${FIBERBROWSER_PUBLIC_MEMORY_MB:-4500}
+    # No AWS or Hugging Face credentials in this container.
+    read_only: true
+    tmpfs:
+      - /tmp:size=2g
+    expose:
+      - "8000"
+    networks:
+      - web
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      FIBERBROWSER_DOMAIN: ${FIBERBROWSER_DOMAIN}
+      FIBERBROWSER_PASSWORD_HASH: ${FIBERBROWSER_PASSWORD_HASH:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - fiberbrowser
+    networks:
+      - web
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+networks:
+  web:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  fiberbrowser-cache:
+  caddy-data:
+  caddy-config:

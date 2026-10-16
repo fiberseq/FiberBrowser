@@ -1,0 +1,12 @@
+# Runs on the compute node before script.sh (Batch Connect "basic" template;
+# `host` is set by OnDemand, find_port / create_passwd are its helpers).
+
+# Export the module function for script.sh if the site uses environment modules.
+[[ $(type -t module) == "function" ]] && export -f module
+
+# A free port on this node, and this session's password. The password is
+# FiberBrowser's launch token: without it the server answers nobody, so other
+# users of the cluster can't use your session by connecting to the node.
+port=$(find_port "${host}")
+password="$(create_passwd 32)"
+export port password

@@ -1,0 +1,30 @@
+Third-party programs and data bundled with FiberBrowser
+=======================================================
+
+Besides the Python packages (their licences are in their own folders), the
+FiberBrowser app and its Windows (WSL) distribution bundle:
+
+minimap2 2.31
+    Heng Li. MIT licence (minimap2-LICENSE.txt).
+    https://github.com/lh3/minimap2
+
+BLAST+: blastn and makeblastdb only
+    National Center for Biotechnology Information. NCBI's code is public
+    domain, a "United States Government Work".
+    Mac app: BLAST+ 2.17.0, NCBI's macOS release binaries, unchanged
+    (BLAST-LICENSE.txt holds NCBI's notice). They statically include
+    third-party libraries under their own licences: LMDB (OpenLDAP Public
+    License), Mbed TLS (Apache-2.0), nghttp2 and libuv (MIT). Details and
+    licence texts: BLAST-THIRD-PARTY.txt.
+    Windows (WSL) distribution (ncbi-blast+ 2.12.0):
+    BLAST+ and its dependencies come from Debian bookworm packages; sources at https://sources.debian.org / snapshot.debian.org
+    Each package's copyright file is in /usr/share/doc/<package>/copyright.
+    https://blast.ncbi.nlm.nih.gov/doc/blast-help/downloadblastdata.html
+    FiberBrowser runs it with BLAST_USAGE_REPORT=false (NCBI's opt-out of
+    BLAST+ usage reporting) unless you set that variable yourself.
+    Camacho C et al. BLAST+: architecture and applications.
+    BMC Bioinformatics 10:421 (2009).
+
+D. melanogaster TE canonical sequence set v10.2 (FASTA + GFF3)
+    Bergman lab / FlyBase. CC0 1.0 (drosophila-transposons-LICENSE.txt).
+    https://github.com/bergmanlab/drosophila-transposons

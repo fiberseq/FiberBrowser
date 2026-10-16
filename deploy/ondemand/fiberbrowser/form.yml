@@ -1,0 +1,78 @@
+---
+# Open OnDemand Batch Connect form for FiberBrowser (generic: fill in the
+# placeholders for your site; see docs/deployment/ondemand.md).
+cluster: "CLUSTER_NAME"   # the cluster's name in /etc/ood/config/clusters.d/<name>.yml
+form:
+  - bc_account
+  - bc_queue
+  - bc_num_hours
+  - num_cores
+  - memory_gb
+  - lab_data_dir
+  - run_output_dir
+  - lab_state_dir
+  - enable_runs
+  - fiberbrowser_setup
+  - fiberbrowser_image
+  - bc_email_on_started
+attributes:
+  bc_account:
+    label: "Account"
+    help: "Slurm account to charge (leave empty for your default)."
+  bc_queue:
+    label: "Partition"
+    help: "Leave empty for the default partition."
+  bc_num_hours:
+    value: 4
+    min: 1
+    max: 72
+  num_cores:
+    widget: "number_field"
+    label: "Cores"
+    value: 4
+    min: 1
+    max: 32
+    step: 1
+    help: "FiberBrowser itself needs 1-2; New DAF-seq runs use the rest of the allocation."
+  memory_gb:
+    widget: "number_field"
+    label: "Memory (GB)"
+    value: 16
+    min: 4
+    max: 256
+    step: 1
+  lab_data_dir:
+    widget: "text_field"
+    label: "Lab data folder"
+    value: "/path/to/lab/data"   # PLACEHOLDER: the lab's shared data folder
+    help: "FiberBrowser lists and opens files only inside this folder (read-only)."
+  run_output_dir:
+    widget: "text_field"
+    label: "Run and export output folder"
+    value: ""
+    help: "Writable; empty means ~/fiberbrowser-runs."
+  lab_state_dir:
+    widget: "text_field"
+    label: "Shared lab state folder"
+    value: ""
+    help: >-
+      Library, saved lab sessions and the audit log. Use the same group-writable
+      folder as your lab mates to share them; empty means ~/.fiberhmm/ondemand-state (just you).
+  enable_runs:
+    widget: "check_box"
+    label: "Allow New DAF-seq runs in this session"
+    value: "1"
+    help: "Pipeline runs use this allocation's cores and stop when the session ends."
+  fiberbrowser_setup:
+    widget: "text_area"
+    label: "Environment setup"
+    value: |
+      # PLACEHOLDER: how FiberBrowser is installed on your cluster, e.g.
+      # module load anaconda3/2024.6
+      # conda activate fiberbrowser
+    help: "Shell lines run before FiberBrowser starts (with an Apptainer image set, load its apptainer module here)."
+  fiberbrowser_image:
+    widget: "text_field"
+    label: "Apptainer image (optional)"
+    value: ""
+    help: "Path to fiberbrowser.sif built from deploy/cluster/fiberbrowser.def; FiberBrowser then runs from the image (the setup above still runs first, e.g. to load apptainer)."

@@ -1,0 +1,4 @@
+# Eval suite outputs are large + frequently regenerated; keep the dir but
+# ignore the contents. To share a baseline run, copy specific files out.
+*
+!.gitignore

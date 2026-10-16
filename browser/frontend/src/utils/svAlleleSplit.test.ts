@@ -1,0 +1,164 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useBrowserStore } from '../stores/browserStore';
+import { keepSvSplitsInView, normalizeClusterGroupLabels, normalizeSvSplits } from '../stores/svSlice';
+import { getClusterLabel } from '../components/tracks/read-track/constants';
+import { SESSION_POST_VIEWPORT_KEYS } from '../api/session';
+import { PER_PANEL_STATE_KEYS } from '../stores/panelSlice';
+import { refreshSvSplit, splitBySv } from './svAlleleSplit';
+
+const TARGET = { stateKey: 'ds', datasetId: 'ds', chrom: 'chrSV', viewStart: 8_000, viewEnd: 16_000 };
+const SV = { t: 'D' as const, ref: 10_000, len: 1503 };
+
+function mockSplit(assignments: Record<string, number>) {
+  const counts = [0, 0, 0];
+  for (const g of Object.values(assignments)) counts[g] += 1;
+  const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => new Response(JSON.stringify({
+    assignments, counts, label: 'x', margin: 100, body: init?.body,
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
+describe('Split by SV allele', () => {
+  let initial: ReturnType<typeof useBrowserStore.getState>;
+  beforeEach(() => {
+    initial = useBrowserStore.getState();
+    useBrowserStore.setState({ chrom: 'chrSV', start: 8_000, end: 16_000 });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    useBrowserStore.setState(initial, true);
+  });
+
+  it('puts carriers / reference / not informative in the cluster machinery, with names', async () => {
+    const fetchMock = mockSplit({ c1: 0, c2: 0, r1: 1, n1: 2 });
+    const def = await splitBySv(TARGET, SV);
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/sv/split');
+    expect(body).toMatchObject({ dataset_id: 'ds', chrom: 'chrSV', start: 8000, end: 16000, t: 'D', ref: 10_000, len: 1503 });
+    const s = useBrowserStore.getState();
+    expect(s.clusterAssignments.ds).toEqual({ c1: 0, c2: 0, r1: 1, n1: 2 });
+    expect(s.clusterOrder.ds).toEqual([0, 1, 2]);
+    expect(s.dynamicClustering).toBe(false);
+    expect(s.svSplits.ds.label).toBe('DEL 1.5 kb @ chrSV:10,001');
+    expect(def.counts).toEqual([2, 1, 1]);
+    // Group names reach every cluster label (tooltips, Overview, charts).
+    expect(getClusterLabel(0, true)).toBe('Carriers');
+    expect(getClusterLabel(1)).toBe('Reference');
+    expect(getClusterLabel(2, true)).toBe('Not informative');
+    // One undo step.
+    expect(s._historyStack?.at(-1)?.label ?? '').toContain('Split by SV allele');
+  });
+
+  it('survives pan/zoom while the locus is in view; reads of the new view join their groups', async () => {
+    mockSplit({ c1: 0, r1: 1 });
+    await splitBySv(TARGET, SV);
+    useBrowserStore.getState().setViewport('chrSV', 9_000, 17_000);
+    let s = useBrowserStore.getState();
+    expect(s.clusterAssignments.ds).toEqual({ c1: 0, r1: 1 });
+    expect(s.svSplits.ds).toBeTruthy();
+    mockSplit({ c1: 0, r1: 1, r2: 1, n9: 2 });
+    await refreshSvSplit({ ...TARGET, viewStart: 9_000, viewEnd: 17_000 }, s.svSplits.ds);
+    s = useBrowserStore.getState();
+    expect(s.clusterAssignments.ds).toEqual({ c1: 0, r1: 1, r2: 1, n9: 2 });
+    expect(s.svSplits.ds.counts).toEqual([1, 2, 1]);
+    expect(s.svSplits.ds.viewStart).toBe(9_000);
+    // The locus leaves the view: the split and its groups go.
+    useBrowserStore.getState().setViewport('chrSV', 20_000, 28_000);
+    s = useBrowserStore.getState();
+    expect(s.svSplits.ds).toBeUndefined();
+    expect(s.clusterAssignments.ds).toBeUndefined();
+    expect(getClusterLabel(0)).toBe('Cluster 0');
+  });
+
+  it('another grouping replaces the split and its names', async () => {
+    mockSplit({ c1: 0, r1: 1 });
+    await splitBySv(TARGET, SV);
+    useBrowserStore.getState().setClusterAssignments('ds', { c1: 3, r1: 4 });
+    const s = useBrowserStore.getState();
+    expect(s.svSplits.ds).toBeUndefined();
+    expect(s.clusterGroupLabels.ds).toBeUndefined();
+    expect(getClusterLabel(0)).toBe('Cluster 0');
+  });
+
+  it('keepSvSplitsInView keeps only splits whose locus overlaps the view', () => {
+    const def = { datasetId: 'a', chrom: 'chrSV', t: 'D' as const, ref: 10_000, len: 1500, end: 11_500, margin: 100, label: '', counts: [1, 1, 1] as [number, number, number], viewStart: 0, viewEnd: 1 };
+    const state = {
+      svSplits: { a: def, b: { ...def, datasetId: 'b', chrom: 'chr2' } },
+      clusterGroupLabels: { a: { 0: 'Carriers' }, b: { 0: 'Carriers' } },
+      clusterAssignments: { a: { r: 0 }, b: { s: 0 }, c: { t: 5 } },
+      clusterOrder: { a: [0, 1, 2], b: [0, 1, 2], c: [5] },
+    } as never;
+    const out = keepSvSplitsInView(state, { clusterAssignments: {}, clusterOrder: {} }, 'chrSV', 11_000, 12_000);
+    expect(Object.keys(out.svSplits ?? {})).toEqual(['a']);
+    expect(out.clusterAssignments).toEqual({ a: { r: 0 } });
+    const gone = keepSvSplitsInView(state, { clusterAssignments: {} }, 'chrSV', 12_000, 13_000);
+    expect(gone.svSplits).toEqual({});
+    // A path that keeps clusterings still drops the groups of a split whose locus left.
+    const kept = keepSvSplitsInView(state, {}, 'chrSV', 12_000, 13_000);
+    expect(kept.clusterAssignments).toEqual({ c: { t: 5 } });
+    expect(kept.clusterOrder).toEqual({ c: [5] });
+  });
+
+  it('is saved with sessions and per panel, and restored validated', () => {
+    expect(SESSION_POST_VIEWPORT_KEYS).toContain('svSplits');
+    expect(SESSION_POST_VIEWPORT_KEYS).toContain('clusterGroupLabels');
+    expect(PER_PANEL_STATE_KEYS).toContain('svSplits');
+    expect(normalizeSvSplits({ a: { chrom: 'c', t: 'D', ref: 5, len: 10 }, bad: { t: 'X' } })).toEqual({
+      a: expect.objectContaining({ chrom: 'c', t: 'D', ref: 5, len: 10, end: 15, margin: 100 }),
+    });
+    expect(normalizeClusterGroupLabels({ a: { 0: 'Carriers', x: 'no', 1: 5 } })).toEqual({ a: { 0: 'Carriers' } });
+  });
+});
+
+describe('SV allele groups in exports', () => {
+  it('name each read\'s group in the cluster assignments TSV', async () => {
+    const { formatClusterAssignmentsTsv } = await import('./clusterExport');
+    const tsv = formatClusterAssignmentsTsv({
+      clusterAssignments: { ds: { c1: 0, r1: 1, n1: 2 } },
+      clusterOrder: { ds: [0, 1, 2] },
+      clusterGroupLabels: { ds: { 0: 'Carriers', 1: 'Reference', 2: 'Not informative' } },
+      provenance: { sv_allele_split: { ds: 'DEL 1.5 kb @ chrSV:10,001 (margin 100 bp)' } },
+    });
+    const lines = tsv.trim().split('\n');
+    expect(lines).toContain('# sv_allele_split: {"ds":"DEL 1.5 kb @ chrSV:10,001 (margin 100 bp)"}');
+    expect(lines).toContain('read_id\tdataset\tcluster\tgroup\tviewer_order');
+    expect(lines).toContain('c1\tds\t0\tCarriers\t1');
+    expect(lines).toContain('n1\tds\t2\tNot informative\t3');
+  });
+});
+
+describe('review fixes (fb-n9-sv)', () => {
+  let initial: ReturnType<typeof useBrowserStore.getState>;
+  beforeEach(() => { initial = useBrowserStore.getState(); useBrowserStore.setState({ chrom: 'chrSV', start: 8_000, end: 16_000 }); });
+  afterEach(() => { vi.unstubAllGlobals(); useBrowserStore.setState(initial, true); });
+
+  it('group names never rename another panel\'s ordinary clusters', async () => {
+    mockSplit({ c1: 0, r1: 1 });
+    await splitBySv(TARGET, SV);
+    expect(getClusterLabel(0, true)).toBe('Carriers');
+    useBrowserStore.getState().setClusterAssignments('other', { x: 0, y: 1 });
+    expect(getClusterLabel(0, true)).toBe('C0');
+    expect(useBrowserStore.getState().svSplits.ds).toBeTruthy();
+  });
+
+  it('Clear SV split clears this panel only', async () => {
+    const { clearSvSplit } = await import('./svAlleleSplit');
+    mockSplit({ c1: 0, r1: 1 });
+    await splitBySv(TARGET, SV);
+    useBrowserStore.getState().setClusterAssignments('other', { x: 3 });
+    clearSvSplit('ds');
+    const s = useBrowserStore.getState();
+    expect(s.svSplits.ds).toBeUndefined();
+    expect(Object.keys(s.clusterAssignments.ds ?? {})).toHaveLength(0);
+    expect(s.clusterAssignments.other).toEqual({ x: 3 });
+  });
+
+  it('classifies duplicates when the panel shows them', async () => {
+    const fetchMock = mockSplit({ c1: 0 });
+    useBrowserStore.setState({ showDuplicateReads: true });
+    const def = await splitBySv(TARGET, SV);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).include_duplicates).toBe(true);
+    expect(def.includeDuplicates).toBe(true);
+  });
+});

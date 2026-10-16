@@ -1,0 +1,18 @@
+# FiberBrowser + FiberHMM + minimap2 for a cluster (conda / mamba):
+#   mamba env create -f deploy/cluster/environment.yml
+#   conda activate fiberbrowser && fiberbrowser --version
+# Shared lab install: create it once in a group folder (-p /path/to/envs/fiberbrowser)
+# and point the Open OnDemand app's "Environment setup" at it.
+name: fiberbrowser
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.11
+  - pip
+  - minimap2>=2.24        # "New DAF-seq run" alignment
+  - samtools              # optional: handy for checking BAMs on the cluster
+  - pip:
+      # Pulls fiberhmm[consensus]>=3.0,<4 (footprint classes, the pipeline).
+      # A development build instead: "fiberbrowser @ git+https://github.com/fiberseq/FiberBrowser@main"
+      - fiberbrowser[pipeline,plots]>=3.0,<4

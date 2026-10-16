@@ -1,0 +1,32 @@
+# One FiberBrowser public-server process per instance; the instance name is
+# its port: systemctl enable --now fiberbrowser@8001 fiberbrowser@8002
+# Caddy on the same machine balances over them (docs/deployment/public-server.md).
+[Unit]
+Description=FiberBrowser public server (port %i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=fiberbrowser
+Group=fiberbrowser
+# htslib keeps remote (https/s3) BAM indexes in the working directory.
+WorkingDirectory=/srv/fiberbrowser/cache
+Environment=FIBERBROWSER_NO_OPEN=1 FIBERHMM_NO_UPDATE_CHECK=1 PYTHONUNBUFFERED=1
+Environment=FIBERBROWSER_ALLOWED_HOSTS=browser.example.org
+Environment=FIBERBROWSER_PUBLIC_MEMORY_MB=4500
+ExecStart=/srv/fiberbrowser/venv/bin/fiberbrowser --public --host 127.0.0.1 --port %i \
+    --trusted-proxy 127.0.0.1 --no-open-browser --copilot off \
+    --catalog /srv/fiberbrowser/data/catalog.json
+Restart=on-failure
+RestartSec=5
+MemoryMax=6G
+# Sandboxing: read-only system, no home directory writes except the cache.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/srv/fiberbrowser/cache
+Environment=HOME=/srv/fiberbrowser/cache
+
+[Install]
+WantedBy=multi-user.target

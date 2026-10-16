@@ -1,0 +1,266 @@
+# Coordinate frame of footprint tags
+
+This is the rule FiberBrowser (`browser/services/bam_tags.py`,
+`legacy_tag_frame_report`) and FiberHMM (`fiberhmm.io.annotation_frame`,
+`legacy_tag_frame_report`; used by `fiberhmm-recall-tfs` /
+`fiberhmm-recall-nucs --input-frame auto`, the pass-through tools' `@PG`
+records, `fiberhmm-tag-m5c` / `-call-m5c` auto frames, `fiberhmm-extract` (FiberHMM ≥ 3.0.1),
+QC, strand rescue and consensus) use to
+decide how to read a BAM's footprint tags on reverse-strand reads. Both
+implementations must follow it; the same page is in both repositories.
+
+## Frames
+
+- **Molecular frame:** offsets count from the start of the original molecule,
+  so a reverse read's offsets count from its genomic right end. To get SEQ
+  offsets, use `seq_start = read_length - (start + length)`.
+- **SEQ frame:** offsets count along the BAM SEQ (the reference-forward
+  orientation). FiberHMM 2.12 and earlier wrote this frame and marked
+  nothing.
+
+| Tags | Frame |
+|---|---|
+| `Ma`/`Aq`/`An` (fibertools-rs ≥ 0.13) | Always molecular. |
+| `MA`/`AQ`/`AN` | Molecular when `coord=molecular` appears anywhere in `@PG` or `@CO`, otherwise SEQ. This is FiberHMM's `ma_annotation_frame`, and this rule does not change it. Only for headers without evidence (below) does each group's own strand decide that group's frame. |
+| Legacy `ns/nl`, `as/al` and the parallel `nq`, `aq`, `lq`, `rq` | Decided by the rule below. The quality arrays follow their intervals' order. |
+
+**DddA m5C groups** in `MA` (`ddda_mcg`, `ddda_ucg`, `ddda_mcg_hemi`, with
+any qualifier `.`, `+` or `-`) are always molecular: `fiberhmm-tag-m5c`,
+`-call-m5c` and `-pair` write them so (`ddda_mcg_frame=molecular` in their
+`@PG DS`) whatever frame the footprint tags use, and FiberHMM's CpG mask and
+`fiberhmm-extract` read them so in every header state
+(`annotation_frame.MAGroupFrame`).
+
+**Consensus family layers** in `MA` carry their own frame. The
+`@CO FIBERHMM-CONSENSUS-MA:v1:` contract lists them with
+`"coordinates": "original_source_call_in_molecular_frame"`, and both readers
+treat those layers as molecular ahead of the header rule: FiberBrowser in
+its compact read loader, FiberHMM in `consensus_molecular_layers`. The rest
+of an exported `MA` follows the header rule. FiberHMM's export copies a
+fibertools read's `Ma` groups into the `MA` it writes, because `MA` wins over
+`Ma`. It writes each copied group in the frame the written header gives it
+(`annotation_frame.MAGroupFrame`): SEQ unless `coord=molecular` is declared,
+or molecular for a `.` group when the header has no frame evidence, so the
+copy reads back at the same positions. It adds no `coord=` token of its own.
+
+Every FiberHMM reader of `MA` groups (extract, QC, recall, the m5C tools,
+the duplex recall mask, `fiberhmm-pair` dyads, consensus loading and
+replay) resolves each group through `MAGroupFrame`, per group rather than
+per feature name (FiberHMM ≥ 3.0.1). FiberBrowser's readers resolve groups by the
+same rule (`browser/services/bam_tags.py`, `MAGroupFrame`), with FiberHMM 3.0.0
+as well.
+
+Evidence that fibertools-rs writes molecular frame:
+
+- In the 0.6.2 source, `add_nucleosomes_to_record` gets its input from
+  `m6a.get_forward_starts()`. `Ranges::new` reads `ns`/`as` as forward starts,
+  and `fire.rs` reverses `aq` on reverse reads.
+- The 0.13 binary writes `Ma` at molecular offsets. `convert-tags` and
+  `extract -r` read legacy `ns` as molecular.
+
+See `tests/fixtures/fibertools_frame`.
+
+## Only one declaration token exists
+
+The token is `coord=molecular`, matched case-insensitively. It has two scopes:
+
+- **Record level:** the token appears in a FiberHMM `@PG` record, in its `DS`
+  field for `fiberhmm-call`, `-apply` and `-recall-*`, and for pass-through
+  tools that carried molecular tags (below).
+- **Header level:** an `@CO` line contains it. `fiberhmm-call`, `-apply` and
+  `-recall-*` write `@CO fiberhmm:coord=molecular` as well as the `DS` token;
+  `fiberhmm-call` adds it before its `FIBERHMM-CHEMISTRY` and `MA-TYPES`
+  lines.
+
+No token declares SEQ frame.
+
+## 1. Producer identity of an `@PG` record
+
+Names are matched case-insensitively. Collision suffixes added by samtools and
+pysam (`\.\d+` or `-[0-9a-f]{6,8}`, stripped repeatedly) are removed from `ID`
+only when classifying a record. They are never removed when resolving `PP`.
+
+1. **If `PN` is present, it alone decides:**
+   - If it contains `fibertools`, the record is fibertools.
+   - If it matches `^fiberhmm(-[a-z0-9-]+)?$`, the record is FiberHMM.
+   - Anything else is another program, whatever `ID` or `CL` say. For example,
+     `PN:samtools ID:samtools-fiberhmm-output` is not FiberHMM.
+2. **If `PN` is absent, use the `ID` base:**
+   - `ft`, or a base starting with `fibertools`, is fibertools.
+   - A base matching `^fiberhmm(-…)?$` is FiberHMM.
+3. **If that fails, use the basename of the first `CL` token:**
+   - `ft`, `fibertools` or `fibertools-rs` is fibertools.
+   - `fiberhmm(-…)?` is FiberHMM.
+4. **Otherwise** the record is another program and never writes footprint tags.
+
+## 2. Footprint writers
+
+- **fibertools record:** it is a writer when any `CL` token after the program
+  token is one of these subcommands:
+  - `predict-m6a`, `m6a`, `predict` (fibertools-rs 0.1–0.3)
+  - `add-nucleosomes`, `add-nucleosome`, `add` (0.2)
+  - `fire`
+  - `fiber-hmm`
+
+  The token may also be an unambiguous prefix of one of them, as fibertools
+  itself accepts: at least `add` for add-nucleosomes, `pred` for predict-m6a,
+  `fir` for fire, and `fiber` for fiber-hmm. `ft add-nuc` appears in real
+  headers.
+
+  Its frame is always **molecular**. A fibertools record without `CL`, or with
+  any other subcommand (`extract`, `convert-tags`, `pileup`, …), is not a
+  writer.
+- **FiberHMM record:** it is a writer when either of these holds:
+  - The record contains `coord=molecular`.
+  - One of its names (`PN`, the `ID` base, or the basename of the first `CL`
+    token) is `fiberhmm-apply`, `fiberhmm-call`, `fiberhmm-recall-tfs` or
+    `fiberhmm-recall-nucs`.
+
+  Its frame is **molecular** if the record or an `@CO` line declares
+  `coord=molecular`, and **SEQ** otherwise.
+
+  All other FiberHMM programs pass the legacy tags through unchanged and are
+  not writers: `tag-m5c`, `call-m5c`, `dedup`, `merge`, `pair`,
+  `strand-rescue-annotate`, `tag-consensus`, `pipeline`, and so on.
+
+## 3. Chains
+
+**Parent links:**
+- If **any** `@PG` record has a `PP` field, `PP` links define ancestry. A record
+  without `PP` is a root.
+- If a `PP` names an `ID` that several records share, it links to the nearest
+  such record earlier in the header, or to the last one if none is earlier.
+- A `PP` that names a missing `ID`, or the record itself, ends the chain.
+
+**Fallback:** only when **no** record has a `PP` field is header order the
+single chain, with each record the child of the one before it.
+
+**Walking the chains:**
+- A **leaf** is a record that no other record names as its parent.
+- From each leaf, walk up the parents. The walk stops at a root, a missing
+  parent or an already-visited record, so cycles terminate.
+- If every record is some record's parent (a pure cycle), the last record in
+  the header is the only leaf.
+- A chain's vote is the frame of the **first writer met walking from the
+  leaf**, which is the last writer that ran. A chain with no writer does not
+  vote.
+
+## 4. Decision
+
+| Votes | Frame | Source | Ambiguous |
+|---|---|---|---|
+| All agree | That frame | `provenance` | No |
+| None, but `coord=molecular` appears anywhere | Molecular | `declared` | No |
+| None, no declaration | SEQ | `default` (unmarked FiberHMM ≤ 2.12) | No |
+| Disagree, `coord=molecular` appears anywhere | Molecular | `declared` | **Yes** |
+| Disagree, no declaration | Majority of chain votes; SEQ on a tie | `majority` | **Yes** |
+
+**FiberHMM differs in the last row only.** A wrong frame changes calls, so
+`legacy_tag_frame` returns no frame there: `fiberhmm-recall-tfs` /
+`-recall-nucs --input-frame auto` stop at the first read that carries
+`ns`/`nl`/`as`/`al` (reads whose only footprints are fibertools `Ma` tags need
+no frame) and ask for `--input-frame query` or `molecular`;
+`fiberhmm-extract` (FiberHMM ≥ 3.0.1) asks for it before extracting nucleosomes or MSPs.
+Pass-through tools record nothing, and `fiberhmm-tag-m5c` / `-call-m5c` keep
+their historical fallback (the `coord=molecular` marker, else SEQ).
+
+FiberHMM consensus reads legacy tags only for Hia5 input without `MA`/`Ma`,
+under its `legacy_hia5_annotation_frame` option. When that is `disabled`, it
+applies molecular frame only when **every** chain's last writer is fibertools
+and no `@CO` marker is present, which is stricter than this rule. A FiberHMM
+writer's `coord=molecular` covers the reads it tagged. The reads it left
+without `MA` are ones it skipped, and they keep whatever tags they had before
+(for example SEQ-frame tags from FiberHMM ≤ 2.12). Otherwise consensus stops
+and asks for the option.
+
+## Writers keep carried annotations in place
+
+A writer whose output declares a frame expresses every annotation it carries
+through unchanged in that frame. This covers `MA` groups (including `tf_sr`,
+`deam` and consensus layers), legacy `ns/nl/as/al` with `nq/aq`, and `Ma`. Each
+annotation's input frame is resolved from the input header and the read's
+original tags, before anything is stripped, by the rules above. An annotation
+whose input frame cannot be decided is dropped.
+
+- `fiberhmm-apply`, `-call` and `-recall-tfs`/`-nucs` declare
+  `coord=molecular`. Apply `--no-msps` MSPs, call/recall `--no-legacy-tags`
+  legacy tags, recall's preserved `MA` groups and the reads they leave
+  uncalled are converted to molecular frame (`fiberhmm.io.frame_carry`).
+Pass-through tools (`dedup`, `pair`, `merge`, `tag-m5c`, `call-m5c`,
+`tag-consensus`, `strand-rescue-annotate`) copy annotations unchanged and
+add `coord=molecular (footprint tags carried over from the input)` to their
+own `@PG` `DS` when the tags they carried are molecular by this rule. They
+are supported on FiberHMM 3.0 output, whose header declares the frame. On
+pre-3.0 or header-stripped BAMs, re-call with 3.0 first. Every command that
+reads or carries footprint annotations prints one warning per input file
+whose header gives no frame evidence (`warn_if_frames_unverifiable`).
+
+Consensus's stricter check looks through pass-through records.
+
+FiberBrowser reports this in `diagnose_bam_tags(...)["legacy_tag_frame"]`
+(fields `frame`, `source`, `ambiguous`, `votes`, `writers`, `chains`). When the
+frame is ambiguous and legacy tags are present, the Diagnose BAM
+recommendations include a warning.
+
+## Headers without evidence
+
+A header has frame evidence when the rule above finds a footprint writer on a
+`@PG` chain or `coord=molecular` anywhere (source other than `default`).
+Then everything above decides, unchanged. Only a header without evidence (a
+pipeline stripped `@PG`, or kept only unrelated programs) gets this extension:
+
+- **`MA`, per annotation group.** A group written with the `.` strand
+  (`nuc.Q:`, `msp.:`; FiberHMM ≥ 2.13.2 and fibertools write every type that
+  way) is molecular; a `+`/`-` group (FiberHMM ≤ 2.13.1) follows the header
+  rule (SEQ). A group never decides another group's frame, so an appended `.`
+  m5C layer (`ddda_mcg.`, `ddda_ucg.`) leaves historical `+` footprints alone.
+- **Legacy `ns/nl/as/al`.** A read whose `MA` has a `.` nuc/msp/tf group is
+  molecular (the same writer wrote both); an m5C group does not count.
+  Otherwise SEQ is assumed. FiberHMM's recall, tag-m5c, call-m5c and (FiberHMM ≥ 3.0.1) extract
+  print a warning when they use this extension, and QC applies it too. Strand rescue
+  and consensus apply the `MA` part; their legacy tags follow consensus's
+  `legacy_hia5_annotation_frame` rule (section 4).
+
+A `FIBERHMM-CHEMISTRY` declaration never decides a frame: pass-through
+producers such as `fiberhmm-merge --recall` and `fiberhmm-pair` add it while
+carrying historical reads unchanged.
+
+## Examples
+
+**Example 1:** `ft0.6.2_addnuc_fire.bam`.
+
+```text
+@PG ID:ft.1 PN:fibertools-rs VN:0.6.2 CL:ft add-nucleosomes -t 1 input.bam n062.bam
+@PG ID:ft.2 PN:fibertools-rs VN:0.6.2 PP:ft.1 CL:ft fire -t 1 n062.bam f062.bam
+```
+
+`ft.2` is the only leaf. It is a fibertools writer, so the chain votes
+molecular and the frame is molecular (source `provenance`). The result is the
+same if the two lines are swapped, if both lose `PN`, or if a
+`PN:samtools ID:samtools-fiberhmm-output PP:ft.2` record is appended.
+
+**Example 2:** a Hia5 amplicon BAM merged from several runs (abridged).
+
+```text
+@PG PN:samtools ID:samtools PP:pbmm2 CL:samtools cat ...
+@PG PN:fiberhmm-call ID:fiberhmm-call PP:samtools DS:...; coord=molecular ...
+@PG PN:fibertools-rs ID:ft.1 PP:lima CL:ft fire - -
+@PG PN:samtools ID:samtools.1 PP:fiberhmm-call CL:samtools sort ...
+@PG PN:samtools ID:samtools.2 PP:ft.1 CL:samtools sort ...
+@PG PN:fiberhmm-call ID:fiberhmm-call.2 PP:samtools.2 DS:...; coord=molecular ...
+...
+```
+
+Nine leaves give five writer votes, all molecular, so the frame is molecular
+and not ambiguous.
+
+**Example 3:** an unmarked `fiberhmm-apply` that ran after `ft predict-m6a`.
+Its PP points at `ft.1`, even though its record is listed first in the header.
+The chain's last writer is the unmarked FiberHMM run, so the frame is SEQ.
+
+## Known limit
+
+FiberHMM before June 2026 wrote SEQ-frame tags and **no** `@PG`. Run on a
+fibertools BAM, it leaves only the fibertools record in the header, so this
+rule reads its tags as molecular. No header signal can tell these files apart.
+FiberHMM releases since June 2026 always write a `@PG` record, and their footprint writers declare `coord=molecular`.

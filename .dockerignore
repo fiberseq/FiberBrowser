@@ -1,0 +1,26 @@
+.git
+**/__pycache__
+**/node_modules
+**/*.pyc
+.venv
+fused_models
+logs
+reports
+tests
+*.ipynb
+browser/frontend/tests
+browser/frontend/test-results
+browser/frontend/playwright-report
+# Frontend sources stay out (the image serves the committed build), except the
+# data files the package ships.
+browser/frontend/src/*
+!browser/frontend/src/data
+# Lab data stays out; the tracked demo and the Copilot model list are shipped.
+data/*
+!data/copilot_dataset
+data/copilot_dataset/*
+!data/copilot_dataset/models.json
+*.bam
+*.bai
+!browser/data/demo/napa_ddda.bam
+!browser/data/demo/napa_ddda.bam.bai

@@ -1,0 +1,435 @@
+{
+ "supported": true,
+ "genome": "dm6",
+ "assays": [
+  {
+   "key": "TF ChIP-seq",
+   "count": 6699
+  },
+  {
+   "key": "Control ChIP-seq",
+   "count": 1042
+  }
+ ],
+ "targets": [
+  {
+   "key": "pan",
+   "count": 57
+  },
+  {
+   "key": "psq",
+   "count": 51
+  },
+  {
+   "key": "lola",
+   "count": 48
+  },
+  {
+   "key": "Su(H)",
+   "count": 45
+  },
+  {
+   "key": "usp",
+   "count": 42
+  },
+  {
+   "key": "EcR",
+   "count": 36
+  },
+  {
+   "key": "insv",
+   "count": 36
+  },
+  {
+   "key": "CG8478",
+   "count": 33
+  },
+  {
+   "key": "Trl",
+   "count": 33
+  },
+  {
+   "key": "h",
+   "count": 33
+  },
+  {
+   "key": "br",
+   "count": 30
+  },
+  {
+   "key": "sc",
+   "count": 30
+  },
+  {
+   "key": "CG8290",
+   "count": 27
+  },
+  {
+   "key": "CTCF",
+   "count": 27
+  },
+  {
+   "key": "Dfd",
+   "count": 27
+  },
+  {
+   "key": "Hr78",
+   "count": 27
+  },
+  {
+   "key": "Stat92E",
+   "count": 27
+  },
+  {
+   "key": "Su(var)205",
+   "count": 27
+  },
+  {
+   "key": "cnc",
+   "count": 27
+  },
+  {
+   "key": "prd",
+   "count": 26
+  },
+  {
+   "key": "Blimp-1",
+   "count": 24
+  },
+  {
+   "key": "Pdp1",
+   "count": 24
+  },
+  {
+   "key": "chif",
+   "count": 24
+  },
+  {
+   "key": "dpn",
+   "count": 24
+  },
+  {
+   "key": "salr",
+   "count": 24
+  },
+  {
+   "key": "CG6854",
+   "count": 21
+  },
+  {
+   "key": "D",
+   "count": 21
+  },
+  {
+   "key": "E(spl)m\u03b2-HLH",
+   "count": 21
+  },
+  {
+   "key": "Hr51",
+   "count": 21
+  },
+  {
+   "key": "Lpt",
+   "count": 21
+  },
+  {
+   "key": "OdsH",
+   "count": 21
+  },
+  {
+   "key": "Rel",
+   "count": 21
+  },
+  {
+   "key": "crp",
+   "count": 21
+  },
+  {
+   "key": "foxo",
+   "count": 21
+  },
+  {
+   "key": "fru",
+   "count": 21
+  },
+  {
+   "key": "ss",
+   "count": 21
+  },
+  {
+   "key": "su(Hw)",
+   "count": 21
+  },
+  {
+   "key": "Dll",
+   "count": 19
+  },
+  {
+   "key": "Abd-B",
+   "count": 18
+  },
+  {
+   "key": "CG16779",
+   "count": 18
+  },
+  {
+   "key": "Eip74EF",
+   "count": 18
+  },
+  {
+   "key": "Hr39",
+   "count": 18
+  },
+  {
+   "key": "Myc",
+   "count": 18
+  },
+  {
+   "key": "Sin3A",
+   "count": 18
+  },
+  {
+   "key": "Sox102F",
+   "count": 18
+  },
+  {
+   "key": "bsh",
+   "count": 18
+  },
+  {
+   "key": "dl",
+   "count": 18
+  },
+  {
+   "key": "eve",
+   "count": 18
+  },
+  {
+   "key": "kay",
+   "count": 18
+  },
+  {
+   "key": "tll",
+   "count": 18
+  },
+  {
+   "key": "lov",
+   "count": 17
+  },
+  {
+   "key": "Gug",
+   "count": 16
+  },
+  {
+   "key": "CG1233",
+   "count": 15
+  },
+  {
+   "key": "CG8924",
+   "count": 15
+  },
+  {
+   "key": "Eip78C",
+   "count": 15
+  },
+  {
+   "key": "dsx",
+   "count": 15
+  },
+  {
+   "key": "exex",
+   "count": 15
+  },
+  {
+   "key": "hkb",
+   "count": 15
+  },
+  {
+   "key": "ttk",
+   "count": 15
+  },
+  {
+   "key": "ken",
+   "count": 14
+  },
+  {
+   "key": "Antp",
+   "count": 12
+  },
+  {
+   "key": "Atf3",
+   "count": 12
+  },
+  {
+   "key": "BEAF-32",
+   "count": 12
+  },
+  {
+   "key": "Bdp1",
+   "count": 12
+  },
+  {
+   "key": "BtbVII",
+   "count": 12
+  },
+  {
+   "key": "CG10209",
+   "count": 12
+  },
+  {
+   "key": "CG10267",
+   "count": 12
+  },
+  {
+   "key": "CG10274",
+   "count": 12
+  },
+  {
+   "key": "CG10431",
+   "count": 12
+  },
+  {
+   "key": "CG10543",
+   "count": 12
+  },
+  {
+   "key": "CG10565",
+   "count": 12
+  },
+  {
+   "key": "CG10669",
+   "count": 12
+  },
+  {
+   "key": "CG11504",
+   "count": 12
+  },
+  {
+   "key": "CG11762",
+   "count": 12
+  },
+  {
+   "key": "CG11902",
+   "count": 12
+  },
+  {
+   "key": "CG12071",
+   "count": 12
+  },
+  {
+   "key": "CG12104",
+   "count": 12
+  },
+  {
+   "key": "CG12155",
+   "count": 12
+  },
+  {
+   "key": "CG12219",
+   "count": 12
+  },
+  {
+   "key": "CG12391",
+   "count": 12
+  },
+  {
+   "key": "CG12659",
+   "count": 12
+  },
+  {
+   "key": "CG12942",
+   "count": 12
+  },
+  {
+   "key": "CG13296",
+   "count": 12
+  },
+  {
+   "key": "CG13775",
+   "count": 12
+  },
+  {
+   "key": "CG13894",
+   "count": 12
+  },
+  {
+   "key": "CG14655",
+   "count": 12
+  },
+  {
+   "key": "CG14710",
+   "count": 12
+  },
+  {
+   "key": "CG15011",
+   "count": 12
+  },
+  {
+   "key": "CG1529",
+   "count": 12
+  },
+  {
+   "key": "CG15479",
+   "count": 12
+  },
+  {
+   "key": "CG15514",
+   "count": 12
+  },
+  {
+   "key": "CG15601",
+   "count": 12
+  },
+  {
+   "key": "CG1602",
+   "count": 12
+  },
+  {
+   "key": "CG1621",
+   "count": 12
+  },
+  {
+   "key": "CG1647",
+   "count": 12
+  },
+  {
+   "key": "CG16815",
+   "count": 12
+  },
+  {
+   "key": "CG16863",
+   "count": 12
+  },
+  {
+   "key": "CG17186",
+   "count": 12
+  },
+  {
+   "key": "CG17359",
+   "count": 12
+  },
+  {
+   "key": "CG17385",
+   "count": 12
+  }
+ ],
+ "biosamples": [
+  {
+   "key": "whole organism",
+   "count": 7619
+  },
+  {
+   "key": "Kc167",
+   "count": 78
+  },
+  {
+   "key": "S2",
+   "count": 33
+  },
+  {
+   "key": "ovary",
+   "count": 11
+  }
+ ],
+ "generated": "2026-02-02"
+}

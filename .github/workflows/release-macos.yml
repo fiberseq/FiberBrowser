@@ -1,0 +1,137 @@
+name: Release macOS app
+
+# FiberBrowser.app + FiberBrowser-<version>-arm64.dmg, built by
+# packaging/macos/build_app.sh (the same script as a local build).
+#
+# Signing and notarization use these repository secrets (see
+# packaging/macos/SIGNING.md). Without MACOS_CERT_P12 the job still builds an
+# ad-hoc signed, un-notarized DMG and says so.
+#   MACOS_CERT_P12       base64 of the "Developer ID Application" certificate + key (.p12)
+#   MACOS_CERT_PASSWORD  the .p12 password
+#   APPLE_TEAM_ID        the team ID in that certificate (checked against it)
+#   ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8 (base64 of AuthKey_<id>.p8)
+#                        an App Store Connect API key for notarytool
+# FiberHMM comes from PyPI unless the FIBERHMM_REQUIREMENT repository variable
+# (or the manual-run input) names another source, e.g.
+#   fiberhmm[consensus] @ git+https://github.com/fiberseq/FiberHMM@v3.0.0
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      fiberhmm:
+        description: "FiberHMM to bundle (pip requirement; empty = the repository variable or PyPI)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write  # attach the DMG to the release
+
+concurrency:
+  group: release-macos-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  app:
+    runs-on: macos-14  # Apple silicon
+    timeout-minutes: 120
+    env:
+      MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+      MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+      FB_BUILD_DIR: ${{ github.workspace }}/build/macos
+      FB_FIBERHMM: ${{ inputs.fiberhmm || vars.FIBERHMM_REQUIREMENT || 'fiberhmm[consensus]>=3.0,<4' }}
+      FB_NOTARIZE: "0"
+      FIBERHMM_NO_UPDATE_CHECK: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check the tag matches browser/version.py
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version="$(python -c 'import re; print(re.search(r"__version__ = \"(.+?)\"", open("browser/version.py").read())[1])')"
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME but browser/version.py says $version"; exit 1; }
+
+      - name: Import the Developer ID certificate (temporary keychain)
+        if: env.MACOS_CERT_P12 != ''
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/fiberbrowser-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          printf '%s' "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$MACOS_CERT_PASSWORD" -f pkcs12 \
+            -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" \
+                      | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)"
+          [ -n "$IDENTITY" ] || { echo "::error::MACOS_CERT_P12 holds no 'Developer ID Application' identity"; exit 1; }
+          if [ -n "$APPLE_TEAM_ID" ] && [[ "$IDENTITY" != *"($APPLE_TEAM_ID)"* ]]; then
+            echo "::error::the certificate's team isn't APPLE_TEAM_ID ($IDENTITY)"; exit 1
+          fi
+          echo "Signing identity: $IDENTITY"
+          echo "FB_SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          echo "FB_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+
+      - name: Store the notarization credentials
+        if: env.MACOS_CERT_P12 != '' && env.ASC_KEY_P8 != ''
+        run: |
+          printf '%s' "$ASC_KEY_P8" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
+          xcrun notarytool store-credentials fiberhmm-notary --key "$RUNNER_TEMP/AuthKey.p8" \
+            --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" --keychain "$FB_KEYCHAIN"
+          rm -f "$RUNNER_TEMP/AuthKey.p8"
+          echo "FB_NOTARY_KEYCHAIN=$FB_KEYCHAIN" >> "$GITHUB_ENV"
+          echo "FB_NOTARIZE=1" >> "$GITHUB_ENV"
+
+      - name: No signing secrets
+        if: env.MACOS_CERT_P12 == ''
+        run: echo "::warning::MACOS_CERT_P12 is not set; building an ad-hoc signed, un-notarized app (Gatekeeper will block it on other Macs)."
+
+      - name: Build FiberBrowser.app and the DMG
+        run: FB_PYTHON="$(command -v python)" bash packaging/macos/build_app.sh
+
+      - name: Smoke-test the app
+        run: bash packaging/macos/check_app.sh "$FB_BUILD_DIR/dist/FiberBrowser.app"
+
+      - name: Verify signature, Gatekeeper and staple
+        if: env.FB_SIGN_IDENTITY != ''
+        run: |
+          APP="$FB_BUILD_DIR/dist/FiberBrowser.app"
+          codesign -dv --verbose=4 "$APP" 2>&1 | grep -E "Authority|TeamIdentifier|Runtime|Timestamp"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          if [ "$FB_NOTARIZE" = "1" ]; then
+            spctl -a -vv "$APP"
+            xcrun stapler validate "$APP"
+            xcrun stapler validate "$FB_BUILD_DIR"/dist/FiberBrowser-*.dmg
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FiberBrowser-macos-arm64
+          path: build/macos/dist/FiberBrowser-*.dmg
+          if-no-files-found: error
+
+      - name: Attach the DMG to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --verify-tag --title "FiberBrowser ${GITHUB_REF_NAME#v}" --generate-notes \
+            || true
+          gh release upload "$GITHUB_REF_NAME" "$FB_BUILD_DIR"/dist/FiberBrowser-*.dmg --clobber
+
+      - name: Remove the temporary keychain
+        if: always() && env.FB_KEYCHAIN != ''
+        run: security delete-keychain "$FB_KEYCHAIN" || true

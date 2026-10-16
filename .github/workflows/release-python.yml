@@ -1,0 +1,114 @@
+name: Python package
+
+# Builds the fiberbrowser sdist and wheel, installs the wheel in a clean venv
+# and starts it (every pull request touching packaging checks this). On a v*
+# tag it publishes to PyPI with trusted publishing (no token: PyPI trusts this
+# workflow; set up once as described in docs/install.md, "Maintainers") and
+# attaches both files to the GitHub release.
+#
+# FiberBrowser requires fiberhmm[consensus]>=3.0,<4: publish FiberHMM 3.0 to
+# PyPI first. Until then the smoke test installs FiberHMM from the
+# FIBERHMM_REQUIREMENT repository variable, e.g.
+#   fiberhmm[consensus] @ git+https://github.com/fiberseq/FiberHMM@v3.0.0
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - pyproject.toml
+      - requirements.txt
+      - browser.py
+      - fiberbrowser/**
+      - packaging/**
+      - .github/workflows/release-python.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      FIBERHMM_REQUIREMENT: ${{ vars.FIBERHMM_REQUIREMENT || 'fiberhmm[consensus]>=3.0,<4' }}
+      FIBERHMM_NO_UPDATE_CHECK: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the sdist and wheel
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          twine check --strict dist/*
+          ls -l dist
+      - name: Check the tag matches browser/version.py
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          test -f "dist/fiberbrowser-${GITHUB_REF_NAME#v}-py3-none-any.whl" \
+            || { echo "::error::tag $GITHUB_REF_NAME doesn't match the built version"; ls dist; exit 1; }
+      - name: Install the wheel in a clean venv and start it
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --upgrade pip
+          "$RUNNER_TEMP/venv/bin/pip" install "$FIBERHMM_REQUIREMENT"
+          "$RUNNER_TEMP/venv/bin/pip" install dist/fiberbrowser-*.whl
+          cd "$RUNNER_TEMP"
+          venv/bin/fiberbrowser --version
+          venv/bin/fiberbrowser --help > /dev/null
+          export FIBERBROWSER_RUNTIME_FILE="$RUNNER_TEMP/runtime.json"
+          venv/bin/fiberbrowser --port 8799 --no-open-browser --copilot off > server.log 2>&1 &
+          for i in $(seq 1 90); do
+            [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8799/api/status)" = "401" ] && break
+            sleep 1
+          done
+          token="$(python -c 'import json,os; print(json.load(open(os.environ["FIBERBROWSER_RUNTIME_FILE"]))["servers"]["8799"]["token"])')"
+          curl -sf -H "X-FiberBrowser-Token: $token" http://127.0.0.1:8799/api/status > /dev/null
+          curl -sf -H "X-FiberBrowser-Token: $token" -X POST http://127.0.0.1:8799/api/demo/load | grep -q '"success":true'
+          curl -sf http://127.0.0.1:8799/assets/manifest.webmanifest > /dev/null
+          kill %1
+          cat server.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: dist/
+          if-no-files-found: error
+
+  pypi:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/fiberbrowser
+    permissions:
+      id-token: write  # trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-dist
+          path: dist/
+      - name: Attach the sdist and wheel to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --verify-tag --title "FiberBrowser ${GITHUB_REF_NAME#v}" --generate-notes \
+            || true
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber

@@ -1,0 +1,16 @@
+{
+  "name": "fibercnn",
+  "label": "TF Predictions",
+  "headerColor": "#8b5cf6",
+  "description": "Scan viewport for per-fiber TF binding predictions (FiberCNN)",
+  "tier": "python",
+  "config": {
+    "fibercnn_path": "${FIBERCNN_PATH}",
+    "checkpoint": "${FIBERCNN_CHECKPOINT}",
+    "motif_index": "${FIBERCNN_MOTIF_INDEX}",
+    "device": "cuda",
+    "min_confidence": 0.3,
+    "pred_window": 1000,
+    "max_region_bp": 30000
+  }
+}

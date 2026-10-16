@@ -1,0 +1,106 @@
+<%- require 'shellwords' -%>
+#!/usr/bin/env bash
+# FiberBrowser on a compute node, started by Open OnDemand (template "basic").
+# before.sh set: host, port, password. The portal publishes the server at
+# https://<ondemand>/rnode/${host}/${port}/ and its Connect button POSTs the
+# password (FiberBrowser's launch token), see view.html.erb.
+#
+# Profile "lab" with auth = "none": OnDemand already signed you in, and the
+# launch token keeps everyone else out; everything is attributed to $USER.
+
+# Group-shared files in a shared lab state folder, nothing for "other".
+umask 007
+SESSION_DIR="$(pwd)"   # OnDemand starts this in the session's own folder
+cd "${HOME}" || exit 1
+
+DATA_DIR=<%= Shellwords.escape(context.lab_data_dir.to_s.strip) %>
+RUN_DIR=<%= Shellwords.escape(context.run_output_dir.to_s.strip) %>
+STATE_DIR=<%= Shellwords.escape(context.lab_state_dir.to_s.strip) %>
+IMAGE=<%= Shellwords.escape(context.fiberbrowser_image.to_s.strip) %>
+ENABLE_RUNS=<%= context.enable_runs.to_s == "1" ? "true" : "false" %>
+CORES=<%= context.num_cores.to_i < 1 ? 1 : context.num_cores.to_i %>
+[[ -n "${RUN_DIR}" ]] || RUN_DIR="${HOME}/fiberbrowser-runs"
+[[ -n "${STATE_DIR}" ]] || STATE_DIR="${HOME}/.fiberhmm/ondemand-state"
+
+if [[ ! -d "${DATA_DIR}" ]]; then
+  echo "FiberBrowser: the lab data folder '${DATA_DIR}' does not exist or is not readable." >&2
+  exit 1
+fi
+mkdir -p "${RUN_DIR}" "${STATE_DIR}" || exit 1
+
+# A TOML string: backslashes and quotes escaped.
+toml_string() { local s=${1//\\/\\\\}; s=${s//\"/\\\"}; printf '"%s"' "${s}"; }
+
+CONFIG="${SESSION_DIR}/fiberbrowser-server.toml"
+cat > "${CONFIG}" <<EOF
+# Written by the FiberBrowser Open OnDemand app for job ${SLURM_JOB_ID:-?} on ${host}.
+profile = "lab"
+
+[server]
+host = "0.0.0.0"
+port = ${port}
+root_path = $(toml_string "/rnode/${host}/${port}")
+
+[[data.roots]]
+path = $(toml_string "${DATA_DIR}")
+label = "Lab data"
+writable = false
+
+[[data.roots]]
+path = $(toml_string "${RUN_DIR}")
+label = "Runs"
+writable = true
+
+[state]
+dir = $(toml_string "${STATE_DIR}")
+
+[auth]
+mode = "none"
+user = $(toml_string "${USER}")
+access_token = true
+
+[jobs]
+enabled = ${ENABLE_RUNS}
+max_cores_total = ${CORES}
+max_concurrent_per_user = 4
+max_concurrent_total = 4
+# One run registry per node: a server watches only its own node's processes.
+dir = $(toml_string "${STATE_DIR}/jobs/${host}")
+
+[copilot]
+enabled = false
+EOF
+
+# The launch token: FiberBrowser answers only requests that carry it (the
+# Connect button sets it as a cookie). Never printed.
+export FIBERBROWSER_TOKEN="${password}"
+export FIBERBROWSER_NO_OPEN=1 OPENBLAS_NUM_THREADS=1 PYTHONUNBUFFERED=1
+# Numba / pipelines use the allocation, not the whole node.
+export NUMBA_NUM_THREADS="${CORES}" OMP_NUM_THREADS="${CORES}"
+
+echo "FiberBrowser: starting on ${host}:${port} (job ${SLURM_JOB_ID:-?}, ${CORES} cores) at $(date)"
+echo "  data: ${DATA_DIR}  runs: ${RUN_DIR}  shared state: ${STATE_DIR}  config: ${CONFIG}"
+
+# The site's environment setup from the form (module load / conda activate ...).
+# Before the image check: on many clusters apptainer itself comes from a module.
+<%= context.fiberbrowser_setup.to_s %>
+
+if [[ -n "${IMAGE}" ]]; then
+  # Apptainer / Singularity image built from deploy/cluster/fiberbrowser.def.
+  RUNNER=$(command -v apptainer || command -v singularity)
+  if [[ -z "${RUNNER}" ]]; then
+    echo "FiberBrowser: neither apptainer nor singularity is on PATH (load its module in the setup box)." >&2
+    exit 1
+  fi
+  export APPTAINERENV_FIBERBROWSER_TOKEN="${password}" SINGULARITYENV_FIBERBROWSER_TOKEN="${password}"
+  exec "${RUNNER}" exec --cleanenv \
+    --bind "${DATA_DIR}:${DATA_DIR}:ro" --bind "${RUN_DIR}" --bind "${STATE_DIR}" --bind "${SESSION_DIR}" \
+    "${IMAGE}" fiberbrowser serve --config "${CONFIG}"
+fi
+
+if ! command -v fiberbrowser >/dev/null 2>&1; then
+  echo "FiberBrowser: the 'fiberbrowser' command is not on PATH after the environment setup." >&2
+  echo "  Install it (deploy/cluster/environment.yml) or set an Apptainer image in the form." >&2
+  exit 1
+fi
+exec fiberbrowser serve --config "${CONFIG}"

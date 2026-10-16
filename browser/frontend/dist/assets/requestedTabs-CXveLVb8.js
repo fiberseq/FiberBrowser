@@ -1,0 +1,1 @@
+function i(e,n){return Array.isArray(e)?e.includes(n):e.has(n)}function o(e,n,r,s={}){if(!e)return r;const t=s[e];return t||(i(n,e)?e:r)}function c(e,n,r,s={}){if(typeof window>"u"&&!s.storage)return r;const t=s.storage??window.sessionStorage,u=t.getItem(e);return u!==null&&t.removeItem(e),o(u,n,r,s.aliases)}export{c,o as n};

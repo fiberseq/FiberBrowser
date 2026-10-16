@@ -1,0 +1,15 @@
+---
+# Slurm. Other schedulers: see https://osc.github.io/ood-documentation/latest/
+# (submit.yml.erb "script.native" takes your scheduler's own options).
+batch_connect:
+  template: "basic"
+  conn_params:
+    - host
+    - port
+    - password
+script:
+  native:
+    - "--nodes=1"
+    - "--ntasks=1"
+    - "--cpus-per-task=<%= num_cores.to_i < 1 ? 1 : num_cores.to_i %>"
+    - "--mem=<%= memory_gb.to_i < 1 ? 4 : memory_gb.to_i %>G"

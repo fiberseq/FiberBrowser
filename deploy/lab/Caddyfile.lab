@@ -1,0 +1,19 @@
+# HTTPS in front of a FiberBrowser lab server (members sign in inside FiberBrowser).
+# Intranet name with Caddy's own CA (install Caddy's root certificate on lab
+# machines once, or use the institution's certificate: `tls /path/cert.pem /path/key.pem`).
+{$FIBERBROWSER_DOMAIN:fiberbrowser.lab.internal} {
+	tls {$FIBERBROWSER_TLS:internal}
+	encode gzip
+	request_body {
+		max_size 2GB
+	}
+	reverse_proxy {$FIBERBROWSER_UPSTREAM:127.0.0.1:8000} {
+		transport http {
+			read_timeout 10m
+		}
+	}
+	header Strict-Transport-Security "max-age=31536000"
+	log {
+		output stdout
+	}
+}

@@ -1,0 +1,753 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { box-sizing: border-box; }
+
+/* ===========================================================================
+   Design tokens. One brand (the app icon's navy tile and its single-molecule
+   colours), theme-aware neutrals, radii and shadows. Tailwind reads the RGB
+   triplets through tailwind.config.js (brand-*, surface*, line, ink*).
+   Data-track colours are NOT here: they live in utils/layerColors.ts.
+   =========================================================================== */
+:root {
+  --fb-brand-50: 240 244 253;
+  --fb-brand-100: 224 232 251;
+  --fb-brand-200: 194 209 246;
+  --fb-brand-300: 147 172 236;
+  --fb-brand-400: 98 134 224;
+  --fb-brand-500: 61 99 204;
+  --fb-brand-600: 42 79 181;   /* the icon tile's top colour #2a4fb5 */
+  --fb-brand-700: 30 58 138;   /* hover/pressed #1e3a8a */
+  --fb-brand-800: 26 50 120;
+  --fb-brand-900: 20 38 88;
+  --fb-brand-950: 10 19 48;    /* the tile's deep end */
+  --fb-nuc: #33a040;
+  --fb-tf: #e040fb;
+  --fb-acc: #87ceeb;
+
+  --fb-canvas: 244 246 250;        /* app background */
+  --fb-surface: 255 255 255;       /* panels, dialogs */
+  --fb-surface-raised: 255 255 255;
+  --fb-surface-sunken: 246 247 250;
+  --fb-line: 223 227 235;
+  --fb-ink: 17 24 39;
+  --fb-ink-muted: 91 100 117;
+  --fb-ink-faint: 139 147 163;
+  /* Secondary text that must stay readable (numbers beside a value: coordinates, CIs, read counts):
+     5.6:1 on white, 5.2:1 on the sunken surface (usability audit Top 6; ink-faint is decoration only). */
+  --fb-ink-secondary: 95 104 120;
+
+  --fb-radius: 6px;
+  --fb-radius-lg: 10px;
+  --fb-focus-ring: 0 0 0 3px rgb(var(--fb-brand-500) / 0.28);
+  --fb-brand-gradient: linear-gradient(135deg, rgb(var(--fb-brand-600)) 0%, rgb(var(--fb-brand-950)) 100%);
+
+  /* Panels as blocks (design tokens radius-panel, space-panel-gap, shadow-panel-card).
+     Whether panels are rounded is UI_THEME.panelShape in src/theme/uiTheme.ts. */
+  --fb-radius-panel: 12px;
+  --fb-space-panel-gap: 8px;
+  --fb-shadow-panel-card: 0 1px 2px rgb(15 23 42 / 0.05), 0 1px 3px rgb(15 23 42 / 0.04);
+  --fb-panel-ground: 238 241 246;  /* behind the panel blocks */
+
+  /* Function colours of the read operations, one each (Scan, Cluster, Sort, Filter);
+     Scan, Cluster and Filter are the colours of the panels they lead to (Peak Detection
+     #1d4ed8, Clusters #0891b2, Rules #9333ea). Cluster's label is a step darker in the same
+     cyan (#0e7490): white-ground text in the panel's own cyan is under 4.5:1. */
+  --fb-action-peaks: #1d4ed8;
+  --fb-action-cluster: #0891b2;
+  --fb-action-cluster-ink: #0e7490;
+  --fb-action-sort: #b45309;
+  --fb-action-filter: #9333ea;
+  /* Highlight: the Regions panel's teal (highlights are region annotations). */
+  --fb-action-highlight: #0f766e;
+}
+
+html.dark {
+  /* Brand fills a step lighter so white text and links keep their contrast on navy. */
+  --fb-brand-600: 74 111 214;
+  --fb-brand-700: 61 99 204;
+  --fb-brand-800: 42 79 181;
+
+  --fb-canvas: 11 16 28;
+  --fb-surface: 15 21 36;
+  --fb-surface-raised: 22 30 49;
+  --fb-surface-sunken: 11 16 28;
+  --fb-line: 38 48 70;
+  --fb-ink: 229 233 241;
+  --fb-ink-muted: 160 169 187;
+  --fb-ink-faint: 112 122 142;
+  --fb-ink-secondary: 163 173 191;  /* 8.1:1 on the dark surface, 7.3:1 raised */
+
+  --fb-shadow-panel-card: 0 1px 2px rgb(0 0 0 / 0.35), 0 1px 3px rgb(0 0 0 / 0.25);
+  --fb-panel-ground: 7 11 20;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', 'Segoe UI', Roboto, sans-serif;
+  background-color: rgb(var(--fb-canvas));
+  color: rgb(var(--fb-ink));
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'cv11', 'ss01';
+}
+
+html.dark body {
+  background-color: rgb(var(--fb-canvas));
+  color-scheme: dark;
+}
+
+#root {
+  width: 100vw;
+  height: 100vh;
+}
+
+/* Native controls take the brand colour (checkboxes, radios, sliders). */
+input[type='checkbox'], input[type='radio'], input[type='range'], progress {
+  accent-color: rgb(var(--fb-brand-600));
+}
+
+/* A visible keyboard focus ring wherever a component has not drawn its own. */
+:where(button, a, summary, [role='button'], [role='tab'], input[type='checkbox'], input[type='radio']):focus-visible {
+  outline: 2px solid rgb(var(--fb-brand-500) / 0.85);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+
+/* Quiet, thin scrollbars in panels (WebKit/Blink; Firefox uses scrollbar-width). */
+* { scrollbar-width: thin; scrollbar-color: rgb(var(--fb-ink-faint) / 0.45) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background-color: rgb(var(--fb-ink-faint) / 0.35);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover { background-color: rgb(var(--fb-ink-faint) / 0.6); }
+
+@layer components {
+  /* --- Buttons ------------------------------------------------------------ */
+  .btn-tool {
+    @apply px-3 py-1.5 text-[13px] font-medium rounded-fb transition-all duration-150 ease-out active:scale-[0.98];
+  }
+  .btn-tool-default {
+    @apply btn-tool bg-white text-gray-700 shadow-chip min-h-[32px]
+           border border-line
+           hover:bg-surface-sunken hover:border-gray-300 hover:text-gray-900
+           disabled:opacity-40 disabled:cursor-not-allowed
+           dark:bg-white/[0.06] dark:text-gray-200 dark:shadow-none dark:hover:bg-white/[0.12]
+           dark:border-white/[0.08];
+  }
+  .btn-tool-primary {
+    @apply btn-tool bg-brand-600 text-white shadow-chip ring-1 ring-inset ring-brand-700/40
+           hover:bg-brand-700
+           disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-tool-active {
+    @apply btn-tool bg-brand-600 text-white shadow-btn-active;
+  }
+  /* Shared button family for new and polished controls. */
+  .fb-btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-fb px-2.5 py-1 text-[12px] font-medium leading-4
+           transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-45;
+  }
+  .fb-btn-primary {
+    @apply fb-btn border border-brand-700/50 bg-brand-600 text-white shadow-chip hover:bg-brand-700;
+  }
+  .fb-btn-secondary {
+    @apply fb-btn border border-line bg-white text-gray-700 shadow-chip hover:bg-surface-sunken hover:text-gray-900
+           dark:border-white/10 dark:bg-white/[0.06] dark:text-gray-200 dark:hover:bg-white/[0.12];
+  }
+  .fb-btn-ghost {
+    @apply fb-btn text-gray-600 hover:bg-gray-900/[0.06] hover:text-gray-900
+           dark:text-gray-300 dark:hover:bg-white/10 dark:hover:text-white;
+  }
+  .fb-icon-btn {
+    @apply inline-flex h-7 w-7 items-center justify-center rounded-fb text-gray-500 transition-colors duration-150
+           hover:bg-gray-900/[0.06] hover:text-gray-900 disabled:opacity-40
+           dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-white;
+  }
+  .fb-icon-btn-active {
+    @apply bg-brand-600/10 text-brand-700 dark:bg-brand-400/15 dark:text-brand-300;
+  }
+  /* Settings sidebar: controls never stick out of it. Fields shrink to the
+     sidebar's width, and rows of controls wrap onto another line instead of
+     overlapping (rows that must stay on one line say flex-nowrap). */
+  .fb-sidebar select,
+  .fb-sidebar input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  .fb-sidebar textarea {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .fb-sidebar .flex:not(.flex-col):not(.flex-nowrap):not(.flex-col-reverse) {
+    flex-wrap: wrap;
+  }
+  .fb-sidebar button,
+  .fb-sidebar label {
+    max-width: 100%;
+  }
+  /* The settings side rail: icon buttons with a clear hover (raised white tile,
+     brand ink) and focus ring, since the rail is how settings open. */
+  .fb-rail-btn {
+    @apply inline-flex h-7 w-7 items-center justify-center rounded-fb text-gray-500 transition-colors duration-150
+           hover:bg-white hover:text-brand-700 hover:shadow-chip hover:ring-1 hover:ring-line
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60
+           dark:text-gray-400 dark:hover:bg-white/[0.12] dark:hover:text-brand-200 dark:hover:ring-white/15;
+  }
+
+  /* --- Inputs ------------------------------------------------------------- */
+  .input-tool {
+    @apply rounded-fb px-2.5 py-[5px] text-sm min-h-[32px] bg-white border border-line shadow-[inset_0_1px_1px_rgb(15_23_42/0.04)]
+           placeholder:text-gray-400
+           focus:outline-none focus:border-brand-400 focus:ring-[3px] focus:ring-brand-500/20
+           dark:bg-white/[0.06] dark:border-white/10 dark:text-gray-200 dark:placeholder:text-gray-500 dark:focus:border-brand-400;
+  }
+
+  /* --- Chips, badges, keys ------------------------------------------------ */
+  .fb-chip {
+    @apply inline-flex items-center gap-1 rounded-full border border-line bg-white px-2 py-0.5 text-[11px] font-medium text-gray-600
+           dark:border-white/10 dark:bg-white/[0.05] dark:text-gray-300;
+  }
+  .fb-badge {
+    @apply inline-flex items-center gap-1 rounded px-1.5 py-px text-[11px] font-semibold
+           bg-brand-50 text-brand-700 dark:bg-brand-400/15 dark:text-brand-300;
+  }
+  .fb-kbd {
+    @apply inline-flex items-center rounded border border-line bg-surface-sunken px-1 font-mono text-[11px] leading-4 text-gray-500
+           shadow-[inset_0_-1px_0_rgb(15_23_42/0.06)] dark:border-white/10 dark:bg-white/[0.05] dark:text-gray-400;
+  }
+
+  /* --- Surfaces ----------------------------------------------------------- */
+  .fb-card {
+    @apply rounded-fb-lg border border-line bg-white shadow-panel dark:border-white/10 dark:bg-dark-surface dark:shadow-none;
+  }
+  .fb-empty {
+    @apply flex flex-col items-center justify-center gap-2 px-4 py-6 text-center text-[12px] text-gray-500 dark:text-gray-400;
+  }
+  .fb-empty-icon {
+    @apply flex h-10 w-10 items-center justify-center rounded-full bg-brand-50 text-brand-600 ring-1 ring-brand-100
+           dark:bg-brand-400/10 dark:text-brand-300 dark:ring-brand-400/20;
+  }
+
+  .dropdown-panel {
+    @apply absolute bg-white/95 backdrop-blur-xl border border-line rounded-fb-lg shadow-dropdown z-50 p-2.5
+           dark:bg-dark-surface/95 dark:border-white/10 dark:shadow-dropdown-dark;
+  }
+  .section-label {
+    @apply text-[11px] font-semibold text-gray-500 mb-1.5
+           dark:text-gray-500;
+  }
+  .menu-label {
+    @apply px-2.5 py-0.5 rounded-[4px] cursor-default select-none
+           text-[13px] text-gray-700 dark:text-gray-300
+           hover:bg-black/5 dark:hover:bg-white/10;
+  }
+  .menu-label-active {
+    @apply bg-brand-600 text-white hover:bg-brand-700;
+  }
+  .menu-item {
+    @apply flex items-center gap-2 px-3 py-2 mx-1 rounded-[5px]
+           text-[13px] text-gray-800 dark:text-gray-200
+           hover:bg-brand-600 hover:text-white cursor-default;
+  }
+  .menu-item-disabled {
+    @apply opacity-40 pointer-events-none;
+  }
+  .menu-separator {
+    @apply my-1 border-t border-gray-200/50 dark:border-white/10;
+  }
+
+  /* Sidebar inline menu — remove dropdown-specific styles when menus are rendered inside sidebar */
+  .sidebar-menu-inline .menu-item {
+    @apply mx-0 px-2 py-1 text-[12px];
+  }
+  .sidebar-menu-inline .menu-separator {
+    @apply my-0.5;
+  }
+}
+
+/* ===========================================================================
+   Copilot tutorial overlays — used by utils/copilotAnchors.ts to spotlight
+   the panel + button responsible for each action while a Copilot plan runs.
+   =========================================================================== */
+
+@keyframes copilot-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(59, 99, 227, 0.5); }
+  50%      { box-shadow: 0 0 0 10px rgba(59, 99, 227, 0); }
+}
+.copilot-highlight {
+  opacity: 1 !important;  /* hover-only buttons (a panel header's +) must show while pointed at */
+  visibility: visible !important;
+  position: relative;
+  z-index: 10;
+  outline: 2px solid rgba(59, 99, 227, 0.9) !important;
+  outline-offset: 2px;
+  border-radius: 4px;
+  animation: copilot-pulse 0.8s ease-out infinite;
+  transition: outline 200ms;
+}
+
+@keyframes copilot-panel-flash {
+  0%, 100% { background-color: transparent; }
+  50%      { background-color: rgba(59, 99, 227, 0.14); }
+}
+.copilot-panel-flash {
+  animation: copilot-panel-flash 0.8s ease-out 2;
+}
+
+/* Canvas-region flash. Used when the planner targets a genomic region
+   that lives on a canvas (footprints, reads) — no DOM element to ring,
+   so we overlay a transient box. Amber to distinguish from the green
+   "control highlight" ring above. */
+@keyframes copilot-region-flash {
+  0%   { background-color: rgba(245, 158, 11, 0); box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+  20%  { background-color: rgba(245, 158, 11, 0.30); box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.55); }
+  100% { background-color: rgba(245, 158, 11, 0); box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+}
+.copilot-region-flash {
+  border: 1px solid rgba(245, 158, 11, 0.7);
+  border-radius: 3px;
+  animation: copilot-region-flash 1.8s ease-out;
+}
+
+.copilot-tutorial-popover {
+  position: fixed;
+  z-index: 9999;
+  max-width: 320px;
+  pointer-events: auto;
+  animation: copilot-popover-in 180ms ease-out;
+}
+@keyframes copilot-popover-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+/* A multi-step walkthrough keeps one popover and slides it to each step's target. */
+.copilot-tutorial-popover.copilot-tutorial-moving {
+  animation: none;
+  transition: left 220ms ease, top 220ms ease;
+}
+/* Between steps (the next control is being revealed). */
+.copilot-tutorial-popover.copilot-tutorial-waiting {
+  opacity: 0.6;
+}
+/* A try_it step: the user's turn to click; it moves on once they have. */
+.copilot-tutorial-your-turn .copilot-tutorial-popover-inner {
+  border-color: rgba(245, 158, 11, 0.8);
+}
+.copilot-tutorial-badge {
+  align-self: flex-start;
+  border-radius: 9999px;
+  background: rgba(245, 158, 11, 0.2);
+  color: #fcd34d;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 8px;
+}
+.copilot-tutorial-popover-inner {
+  /* The app icon's navy tile. */
+  background: linear-gradient(160deg, rgba(42, 79, 181, 0.98) 0%, rgba(10, 19, 48, 0.98) 72%);
+  color: #f1f5f9;
+  border: 1px solid rgba(135, 206, 235, 0.35);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 12px;
+  line-height: 1.45;
+  box-shadow: 0 10px 30px rgba(10, 19, 48, 0.35), 0 2px 6px rgba(10, 19, 48, 0.2);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.copilot-tutorial-popover-inner::before {
+  content: '';
+  position: absolute;
+  top: -6px;
+  left: 16px;
+  width: 10px;
+  height: 10px;
+  background: rgb(42, 79, 181);
+  border-top: 1px solid rgba(135, 206, 235, 0.35);
+  border-left: 1px solid rgba(135, 206, 235, 0.35);
+  transform: rotate(45deg);
+}
+/* Bump max-width when the popover carries extra sections so the manualHow
+   and thinking blurbs have room without wrapping every other word. */
+.copilot-tutorial-popover { max-width: 380px; }
+.copilot-tutorial-popover-body {
+  font-weight: 500;
+}
+.copilot-tutorial-popover-how {
+  font-size: 11px;
+  color: rgba(186, 226, 245, 0.92);         /* the icon's light blue, softened */
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  line-height: 1.45;
+}
+.copilot-tutorial-popover-thinking::before {
+  content: 'Model thinking';
+  display: block;
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(135, 206, 235, 0.85);
+  margin-bottom: 1px;
+}
+.copilot-tutorial-popover-thinking {
+  font-size: 11px;
+  font-style: italic;
+  color: rgba(203, 213, 225, 0.78);         /* slate-300 dim */
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  line-height: 1.45;
+  max-height: 4.5em;                        /* ~3 lines before scroll */
+  overflow-y: auto;
+}
+.copilot-tutorial-next {
+  align-self: flex-end;
+  background: #87ceeb;
+  color: #0b1220;
+  font-weight: 600;
+  font-size: 11px;
+  padding: 3px 12px;
+  border-radius: 6px;
+  border: 0;
+  cursor: pointer;
+}
+.copilot-tutorial-next:hover { background: #a9dcf1; }
+.copilot-tutorial-popover-title { font-size: 13px; font-weight: 700; color: #ffffff; }
+.copilot-tutorial-footer { display: flex; align-items: center; gap: 8px; padding-top: 2px; }
+.copilot-tutorial-progress { flex: 1; font-size: 11px; color: rgba(203, 213, 225, 0.7); }
+.copilot-tutorial-footer .copilot-tutorial-next { align-self: auto; }
+.copilot-tutorial-end {
+  background: transparent; border: 0; cursor: pointer; font-size: 11px;
+  color: rgba(203, 213, 225, 0.8); padding: 2px 4px;
+}
+.copilot-tutorial-end:hover { color: #ffffff; text-decoration: underline; }
+/* Above its target: the arrow points down; floating: no arrow. */
+.copilot-tutorial-above .copilot-tutorial-popover-inner::before { top: auto; bottom: -6px; transform: rotate(225deg); }
+.copilot-tutorial-floating .copilot-tutorial-popover-inner::before { display: none; }
+
+/* Guided tour: shown while a step works, so End tour is always there. */
+.copilot-tutorial-working {
+  position: fixed; z-index: 9999; left: 50%; bottom: 24px; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 10px;
+  background: linear-gradient(160deg, rgba(42, 79, 181, 0.96), rgba(10, 19, 48, 0.96)); color: #f1f5f9; font-size: 12px;
+  border: 1px solid rgba(135, 206, 235, 0.35); border-radius: 10px; padding: 6px 12px;
+  box-shadow: 0 10px 30px rgba(11, 18, 32, 0.35);
+}
+
+.copilot-tutorial-extra {
+  background: transparent; color: #bae2f5; font-weight: 600; font-size: 11px;
+  border: 1px solid rgba(135, 206, 235, 0.55); border-radius: 6px; padding: 2px 8px; cursor: pointer;
+}
+.copilot-tutorial-extra:hover { background: rgba(135, 206, 235, 0.15); }
+
+/* ===========================================================================
+   Design-system components (FiberBrowser Design System, Sep 30 direction).
+   =========================================================================== */
+@layer components {
+  /* Toolbar: thin dividers between the sets File | History | Navigation | App. */
+  .fb-tb-div {
+    @apply mx-1 h-5 w-px shrink-0 bg-gray-300 dark:bg-white/[0.12];
+  }
+
+  /* Function-coloured read operations: Scan (peaks blue), Cluster (cyan), Sort (amber),
+     Filter (purple). One shape; tinted at rest, solid when running or chosen; a
+     blocked action turns neutral grey but stays legible and says why on hover. */
+  .fb-action {
+    --tone: var(--fb-action-peaks);
+    @apply inline-flex items-center justify-center gap-[5px] whitespace-nowrap rounded-fb border py-[3px] pl-[7px] pr-[9px]
+           text-[12px] font-medium leading-4 transition-[background-color,box-shadow,filter] duration-150;
+    color: var(--tone-ink, var(--tone));
+    background-color: color-mix(in srgb, var(--tone) 8%, transparent);
+    border-color: color-mix(in srgb, var(--tone) 30%, transparent);
+  }
+  .fb-action:hover:not([aria-disabled='true']):not(:disabled) {
+    background-color: color-mix(in srgb, var(--tone) 14%, transparent);
+    box-shadow: 0 1px 2px rgb(15 23 42 / 0.08);
+  }
+  /* Can't run now (the tooltip says why): its own colour, faded, never grey (owner, 1 Oct:
+     a grey Cluster or Filter read as another button). */
+  .fb-action[aria-disabled='true'], .fb-action:disabled:not(.fb-action-busy):not(.fb-action-active) {
+    cursor: not-allowed;
+    box-shadow: none;
+    opacity: 0.55;
+  }
+  /* Running (busy, so also disabled) or chosen: solid in the tone, never greyed out. */
+  .fb-action[aria-pressed='true'], .fb-action.fb-action-active, .fb-action.fb-action-active:disabled {
+    cursor: default;
+    color: #fff;
+    background-color: var(--tone);
+    border-color: var(--tone);
+  }
+  .fb-action.fb-action-active svg { opacity: 1; }
+  /* Busy (running): the at-rest look in the tone's own ink, with a spinner, never white on a pale fill. */
+  .fb-action.fb-action-busy:disabled {
+    cursor: progress;
+    color: var(--tone-ink, var(--tone));
+    background-color: color-mix(in srgb, var(--tone) 8%, transparent);
+    border-color: color-mix(in srgb, var(--tone) 30%, transparent);
+  }
+  html.dark .fb-action.fb-action-busy:disabled {
+    color: color-mix(in srgb, var(--tone) 55%, white);
+    background-color: color-mix(in srgb, var(--tone) 18%, transparent);
+    border-color: color-mix(in srgb, var(--tone) 45%, transparent);
+  }
+  .fb-action-spinner {
+    @apply inline-block h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent;
+  }
+  .fb-action-peaks { --tone: var(--fb-action-peaks); }
+  .fb-action-cluster { --tone: var(--fb-action-cluster); --tone-ink: var(--fb-action-cluster-ink); }
+  .fb-action-sort { --tone: var(--fb-action-sort); }
+  .fb-action-filter { --tone: var(--fb-action-filter); }
+  .fb-action-highlight { --tone: var(--fb-action-highlight); }
+  html.dark .fb-action:not([aria-pressed='true']):not(.fb-action-active):not(.fb-action-busy) {
+    color: color-mix(in srgb, var(--tone) 55%, white);
+    background-color: color-mix(in srgb, var(--tone) 18%, transparent);
+    border-color: color-mix(in srgb, var(--tone) 45%, transparent);
+  }
+
+  /* Analysis-strip chip in its panel's colour (--chip): tinted at rest, solid when open. */
+  .fb-strip-chip {
+    --chip: #666;
+    @apply inline-flex cursor-pointer items-center gap-[3px] whitespace-nowrap rounded-full border py-[2px] pl-[5px] pr-[9px]
+           text-[12px] font-medium leading-4 transition-colors duration-150;
+    color: var(--chip);
+    border-color: color-mix(in srgb, var(--chip) 35%, transparent);
+    background-color: color-mix(in srgb, var(--chip) 5%, transparent);
+  }
+  .fb-strip-chip:hover { background-color: color-mix(in srgb, var(--chip) 12%, transparent); }
+  .fb-strip-chip[aria-pressed='true'] {
+    color: #fff;
+    background-color: var(--chip);
+    border-color: var(--chip);
+    box-shadow: 0 1px 1px rgb(15 23 42 / 0.06);
+  }
+  html.dark .fb-strip-chip:not([aria-pressed='true']) {
+    color: color-mix(in srgb, var(--chip) 60%, white);
+    border-color: color-mix(in srgb, var(--chip) 50%, transparent);
+    background-color: color-mix(in srgb, var(--chip) 14%, transparent);
+  }
+
+  /* Pill in a coloured header (read count, strand). */
+  .fb-header-pill {
+    @apply inline-flex shrink-0 items-center gap-[3px] whitespace-nowrap rounded-full px-2 text-[11px] font-medium leading-4 tabular-nums;
+    background: rgb(255 255 255 / 0.18);
+  }
+  [data-fb-header='tint'] .fb-header-pill { background: var(--pill-tint, rgb(0 0 0 / 0.06)); color: rgb(var(--fb-ink)); }
+
+  /* Buttons in a coloured header bar. */
+  .fb-header-act {
+    /* At least 24 x 24 px: an easy target (usability audit Top 6; it was 22 x 18). */
+    @apply inline-flex min-h-[24px] min-w-[24px] items-center justify-center rounded px-1 py-0.5 leading-none transition-colors;
+  }
+  .fb-header-act:hover { background: rgb(255 255 255 / 0.2); }
+  [data-fb-header='tint'] .fb-header-act { color: rgb(var(--fb-ink-muted)); }
+  [data-fb-header='tint'] .fb-header-act:hover { background: rgb(0 0 0 / 0.06); color: rgb(var(--fb-ink)); }
+
+  /* Dropdown menu (toolbar More menu). */
+  .fb-menu {
+    @apply absolute right-0 top-full z-[90] mt-1 min-w-[15rem] rounded-fb-lg border border-line bg-white py-1 text-[12px] shadow-dropdown
+           dark:border-white/10 dark:bg-dark-surface dark:shadow-dropdown-dark;
+  }
+  .fb-menu-item {
+    @apply flex w-full items-center gap-2 px-3 py-1.5 text-left text-gray-700 hover:bg-gray-100 hover:text-gray-900
+           dark:text-gray-200 dark:hover:bg-white/10 dark:hover:text-white;
+  }
+  .fb-menu-sep { @apply my-1 border-t border-line dark:border-white/10; }
+}
+
+@layer components {
+  /* A collapsible box (Advanced, Compare strands, …): chevron instead of the ▶ marker. */
+  .fb-disc {
+    @apply rounded-fb border border-line bg-white text-[12px] dark:border-white/10 dark:bg-transparent;
+  }
+  .fb-disc > summary {
+    @apply flex cursor-pointer list-none items-center gap-2 px-2.5 py-2 font-medium text-gray-800 dark:text-gray-100;
+  }
+  .fb-disc > summary::-webkit-details-marker { display: none; }
+  .fb-disc > summary > .fb-disc-chevron { flex-shrink: 0; transition: transform 0.15s; }
+  .fb-disc[open] > summary > .fb-disc-chevron { transform: rotate(90deg); }
+  .fb-disc > .fb-disc-body { @apply space-y-2 px-2.5 pb-2.5; }
+
+  /* A card inside a panel (the Footprint classes card, Co-occupancy tables). */
+  .fb-panel-card {
+    @apply space-y-2.5 rounded-fb-lg border border-line bg-white p-3 shadow-[0_1px_2px_rgb(15_23_42/0.05)] dark:border-white/10 dark:bg-white/[0.02] dark:shadow-none;
+  }
+}
+
+@layer components {
+  /* Track labels and empty-row hints: hidden over the data until the row is hovered
+     or focused (TrackLabels.tsx). The read canvas stays light in dark mode, so they do too. */
+  .fb-hover-label {
+    @apply pointer-events-none absolute z-[5] whitespace-nowrap rounded-[3px] px-1 text-[10px] font-medium leading-[13px] opacity-0 transition-opacity duration-150;
+    left: 4px;
+    top: 2px;
+    color: #4b5563;
+    background: rgb(255 255 255 / 0.9);
+    box-shadow: 0 0 0 1px rgb(0 0 0 / 0.06);
+  }
+  .fb-hover-hint {
+    @apply pointer-events-none absolute inset-0 z-[5] flex items-center justify-center text-[11px] opacity-0 transition-opacity duration-150;
+    color: #6b7280;
+  }
+  .fb-track-row:hover .fb-hover-label, .fb-track-row:hover .fb-hover-hint,
+  .fb-track-row:focus-within .fb-hover-label, .fb-track-row:focus-within .fb-hover-hint {
+    opacity: 1;
+  }
+  .fb-track-row:focus-visible { outline: 2px solid rgb(var(--fb-brand-500) / 0.7); outline-offset: -2px; }
+}
+
+/* A pointer drag on the tracks (utils/pointerDrag.ts) never selects text on its way. */
+.fb-pointer-drag, .fb-pointer-drag * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+
+/* Every control in an open toolbar group fits the group's row (24 px: TOOLBAR_CONTROL_MAX_HEIGHT
+   in ToolbarGroups.tsx), so opening or folding a group never changes the toolbar's height and
+   never moves the reads (owner, 1 Oct: Cluster's K box and the Reads inputs were 32 px). */
+[data-toolbar-controls] .input-tool {
+  min-height: 0;
+  height: 24px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+/* The compact top bar (NavBar.tsx, NAV_COMPACT_BELOW: a narrow window or a large UI size):
+   the Navigation set's controls flow in the bar's own rows, beside File and History, instead
+   of stacking in a narrow column of their own (audit H5: four rows at UI size 150%). */
+[data-chrome-compact] > [data-toolbar-set="navigation"] {
+  display: contents;
+}
+
+/* A setting the command palette or the settings search pointed at (utils/revealSetting.ts):
+   a brand ring and tint that fade out. */
+.fb-setting-flash {
+  border-radius: 6px;
+  animation: fb-setting-flash 1.8s ease-out;
+}
+@keyframes fb-setting-flash {
+  0%, 35% { box-shadow: 0 0 0 2px rgb(var(--fb-brand-500) / 0.85); background-color: rgb(var(--fb-brand-500) / 0.12); }
+  100% { box-shadow: 0 0 0 2px rgb(var(--fb-brand-500) / 0); background-color: rgb(var(--fb-brand-500) / 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fb-setting-flash { animation: none; box-shadow: 0 0 0 2px rgb(var(--fb-brand-500) / 0.85); }
+}
+
+/* Analysis panel launchers in the sidebar rail (components/controls/PanelRail):
+   the settings icons' size, but a tile filled with the panel's colour (shaded
+   for 4.5:1 under the white icon, utils/railTileColor) so the two groups read
+   apart. An open panel is ringed in its colour; a minimized one has a dot. */
+.fb-rail-tile {
+  --tile: #475569;
+  --tile-ring: var(--tile);
+  position: relative;
+  display: inline-flex;
+  height: 2rem;
+  width: 2rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  outline: none;
+}
+.fb-rail-tile-face {
+  display: inline-flex;
+  height: 1.75rem;
+  width: 1.75rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  color: #fff;
+  background-color: var(--tile);
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.08), 0 1px 1px rgb(15 23 42 / 0.08);
+  transition: filter 150ms, transform 150ms;
+}
+.fb-rail-tile-round .fb-rail-tile-face { border-radius: 9999px; }
+.fb-rail-tile:hover .fb-rail-tile-face { filter: brightness(0.9); }
+.fb-rail-tile:active .fb-rail-tile-face { transform: scale(0.95); }
+.fb-rail-tile[aria-pressed='true'] .fb-rail-tile-face {
+  outline: 2px solid var(--tile);
+  outline-offset: 2px;
+}
+.fb-rail-tile:focus-visible { box-shadow: 0 0 0 2px rgb(var(--fb-brand-500) / 0.7); }
+.fb-rail-tile-dot {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  height: 8px;
+  width: 8px;
+  border-radius: 9999px;
+  background-color: var(--tile);
+  box-shadow: 0 0 0 2px rgb(var(--fb-surface-sunken));
+}
+html.dark .fb-rail-tile-face { box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.14); }
+/* On the dark rail the ring is the panel's own colour lifted toward white (3:1 on the rail). */
+html.dark .fb-rail-tile[aria-pressed='true'] .fb-rail-tile-face { outline-color: color-mix(in srgb, var(--tile-ring) 70%, white); }
+html.dark .fb-rail-tile-dot { box-shadow: 0 0 0 2px #0f1524; }
+/* A Preview feature's tile (utils/previewFeatures): a small amber "P" at its top right. */
+.fb-rail-tile-preview {
+  position: absolute;
+  right: -2px;
+  top: -3px;
+  min-width: 11px;
+  height: 11px;
+  border-radius: 9999px;
+  padding: 0 2px;
+  font: 700 8px/11px system-ui, sans-serif;
+  text-align: center;
+  color: #78350f;
+  background-color: #fcd34d;
+  box-shadow: 0 0 0 1.5px rgb(var(--fb-surface-sunken));
+}
+html.dark .fb-rail-tile-preview { box-shadow: 0 0 0 1.5px #0f1524; }
+/* The launchers scroll in a small window without a scrollbar eating the rail's width
+   (fades at the ends show there is more). */
+.fb-rail-scroll { scrollbar-width: none; }
+.fb-rail-scroll::-webkit-scrollbar { display: none; }
+
+/* Rail mode: a side panel opened into the drawer slides in from the window's edge,
+   where its launcher is (the tray). */
+.fb-drawer-slide-in { animation: fb-drawer-slide-in 200ms ease-out; }
+@keyframes fb-drawer-slide-in {
+  from { transform: translateX(100%); opacity: 0.4; }
+  to { transform: translateX(0); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fb-drawer-slide-in { animation: none; }
+  .fb-rail-tile-face { transition: none; }
+}
+/* A panel row's edge chip pulses when the panel the user worked in went past that edge (round 3, R2). */
+.fb-cue-pulse { animation: fb-cue-pulse 800ms ease-in-out 3; }
+@keyframes fb-cue-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(59 130 246 / 0); }
+  50% { box-shadow: 0 0 0 4px rgb(59 130 246 / 0.45); border-color: rgb(59 130 246); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fb-cue-pulse { animation: none; box-shadow: 0 0 0 2px rgb(59 130 246 / 0.6); }
+}
+/* The rail's "more panels" chevrons at the ends of its launchers. */
+.fb-rail-more {
+  display: flex;
+  height: 1.25rem;
+  align-items: center;
+  justify-content: center;
+  color: rgb(var(--fb-ink-muted, 100 116 139));
+}
+.fb-rail-more:hover { color: rgb(var(--fb-brand-600, 42 79 181)); }
+
+/* A dataset panel shown again by the Library's Open (utils/panelReveal.ts): marked for a moment. */
+[data-panel-id][data-revealed="true"] {
+  outline: 2px solid #14b8a6;
+  outline-offset: -2px;
+}
+
+/* Numeric secondary text (coordinates, CIs, counts): the readable secondary ink, in tabular figures. */
+.fb-num-secondary { color: rgb(var(--fb-ink-secondary)); font-variant-numeric: tabular-nums; }
+
+/* A hover tip never shows under an open context menu (usability audit SV-5): tips carry data-fb-hover-tip,
+   menus set data-fb-menu-open on <body> while they are open. */
+body[data-fb-menu-open] [data-fb-hover-tip] { display: none !important; }

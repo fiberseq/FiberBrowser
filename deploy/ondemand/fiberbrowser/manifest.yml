@@ -1,0 +1,12 @@
+---
+name: FiberBrowser
+category: Interactive Apps
+subcategory: Servers
+role: batch_connect
+description: |
+  [FiberBrowser](https://github.com/fiberseq/FiberBrowser): a genome browser for
+  fiber-seq and DAF-seq single-molecule footprints, running on a compute node.
+
+  It opens the lab data folder you choose (read-only) and writes runs to the
+  output folder. Give several lab members the same *shared lab state folder*
+  to share one Library, saved sessions and audit log.

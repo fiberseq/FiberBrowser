@@ -1,0 +1,137 @@
+import type { ClusterMergeLog } from '../stores/clusterMergeLog';
+import type { ClusterFeatureRule } from './index';
+
+// Clustering and transcription state types
+
+export interface TranscriptionStateFilters {
+  pause?: boolean;
+  pic?: boolean;
+  elongating?: number | null;  // null = disabled, number = min count threshold (>=)
+  elongating_max?: number | null;  // null = no upper bound, number = max count threshold (<=)
+}
+
+export interface ReadStateInfo {
+  pause: boolean;
+  pic: boolean;
+  elongating_count: number;
+}
+
+/**
+ * A run over panels at several loci: each panel's own matched peaks (state
+ * key -> absolute peaks, as sent), valid while the clustering's peaks are
+ * still that run's `regions`, with the view each was clustered at.
+ */
+export interface ClusterWindowPeaks {
+  regions: Array<{ start: number; end: number; mode?: string; chrom?: string; genome?: string }>;
+  byKey: Record<string, Array<{ start: number; end: number; mode?: string }>>;
+  /** Each window's view when clustered: its locus and reference (null: the main genome). */
+  views?: Record<string, { chrom: string; start: number; end: number; genome: string | null }>;
+}
+
+/** A saved clustering result that persists across navigation. */
+export interface SavedCluster {
+  id: string;                    // crypto.randomUUID()
+  name: string;                  // user-editable, auto-generated default
+  addedAt: number;               // Date.now()
+
+  // Viewport where clustering was performed
+  chrom: string;
+  start: number;
+  end: number;
+
+  // Config
+  clusterMethod: string;
+  clusterK: number;
+  /** Method 'graph': community resolution (older records: 1). */
+  clusterResolution?: number;
+  subnucleosomalThreshold: number;
+  accessibilityThreshold: number;
+  clusterFeatureRules?: ClusterFeatureRule[];
+
+  // Peak regions (absolute genomic coords)
+  peakRegions: Array<{ start: number; end: number; mode?: string; chrom?: string }>;
+  customPeaks: Array<{ start: number; end: number; chrom?: string }>;
+  selectedPeakIndices: number[];
+  peakModes: Record<number, string>;
+
+  // Results — keyed by datasetId (not stateKey, for portability): the panel
+  // showing the saved view, when one dataset had several panels.
+  assignments: Record<string, Record<string, number>>;
+  order: Record<string, number[]>;
+  patterns: Record<number, number[]>;
+  /** Each clustered panel's own result, so two panels of one dataset
+   *  (independently clustered, or at their own locus) come back as they were. */
+  panelResults?: Array<{
+    stateKey: string;
+    datasetId: string;
+    /** The panel's own locus; absent when it showed the saved view. */
+    viewport?: { chrom: string; start: number; end: number };
+    /** The panel's own reference (PanelConfig.genome); absent: the main genome. */
+    genome?: string;
+    assignments: Record<string, number>;
+    order?: number[];
+  }>;
+  /** A run over panels at several loci: each panel's own matched peaks (as clusterWindowPeaks). */
+  windowPeaks?: ClusterWindowPeaks | null;
+  /**
+   * The merges behind this clustering (stores/clusterMergeLog.ts), keyed by
+   * state key, so Unmerge and Split back work again once it is restored
+   * (older saves: none).
+   */
+  mergeLog?: ClusterMergeLog | null;
+}
+
+/** One persistent node in a drill-down clustering tree. */
+export interface ClusterTreeNode {
+  preparationSamples?: Record<string, import('./index').ClusterPreparationSample>;
+  preparationCount?: number | null;
+  id: string;
+  parentId: string | null;
+  name: string;
+  createdAt: number;
+
+  // Viewport where this branch was computed.
+  chrom: string;
+  start: number;
+  end: number;
+
+  // Parent branch provenance.
+  sourceClusterIds: number[];
+  sourceLabel?: string;
+  readScope?: Record<string, string[]>;
+
+  // Config used to compute this branch.
+  clusterMethod: string;
+  clusterK: number;
+  /** Method 'graph': community resolution (older records: 1). */
+  clusterResolution?: number;
+  clusterPeakMode?: string;
+  subnucleosomalThreshold: number;
+  accessibilityThreshold: number;
+  clusterFeatureRules?: ClusterFeatureRule[];
+
+  // Peak regions are absolute genomic coords.
+  peakRegions: Array<{ start: number; end: number; mode?: string; chrom?: string }>;
+  selectedPeakIndices: number[];
+  peakModes: Record<number, string>;
+  patterns: Record<number, number[]>;
+  // Per-cluster centroids + feature-column widths for non-combinatorial dynamic
+  // reassignment (kmeans, etc.). Empty for combinatorial branches (patterns).
+  centroids?: Record<number, number[]>;
+  peakWidths?: number[];
+  dynamicClustering: boolean;
+
+  // Results are keyed by current stateKey for in-session branch switching.
+  assignments: Record<string, Record<string, number>>;
+  order: Record<string, number[]>;
+  focus: Record<string, number[] | null>;
+}
+
+// Analysis panel type — open string for plugin panels
+export type AnalysisPanelType = string;
+
+export interface AnalysisPanel {
+  id: string;
+  type: AnalysisPanelType;
+  label: string;
+}

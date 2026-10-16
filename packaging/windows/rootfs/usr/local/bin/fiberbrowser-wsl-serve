@@ -1,0 +1,40 @@
+#!/bin/sh
+# FiberBrowser's server inside its WSL distribution, as the Windows launcher
+# (FiberBrowser.ps1) starts it:
+#
+#   wsl.exe -d FiberBrowser -u fiberbrowser --cd ~ -- fiberbrowser-wsl-serve \
+#       --log /mnt/c/Users/<you>/AppData/Local/FiberBrowser/logs/server.log \
+#       --token <token> --port 8756
+#
+# Everything after the wrapper's own options goes to the `fiberbrowser`
+# command. The access token is the launcher's (it opens the tokened link in
+# the app window); the server never opens a browser itself and runs without
+# the Copilot, like the Mac app.
+set -u
+log=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --log) log="$2"; shift 2 ;;
+    --token) FIBERBROWSER_TOKEN="$2"; export FIBERBROWSER_TOKEN; shift 2 ;;
+    *) break ;;
+  esac
+done
+export LANG=C.UTF-8 LC_ALL=C.UTF-8
+export PYTHONUNBUFFERED=1 FIBERBROWSER_NO_OPEN=1 OPENBLAS_NUM_THREADS=1
+# The install under /opt is read-only for this user: byte code and numba's
+# compiled kernels go to the user's cache (as the Mac app's go to ~/Library/Caches).
+export PYTHONPYCACHEPREFIX="$HOME/.cache/fiberbrowser/pycache"
+export NUMBA_CACHE_DIR="$HOME/.cache/fiberbrowser/numba"
+export FIBERBROWSER_WSL_APP=1
+# Stop with the WSL session that started this (the launcher's wsl.exe): when it
+# goes away this process is re-parented and the server shuts down.
+if [ "$PPID" -gt 1 ] 2>/dev/null; then
+  export FIBERBROWSER_EXIT_WITH_PARENT="$PPID"
+fi
+if [ -n "$log" ]; then
+  mkdir -p "$(dirname "$log")" 2>/dev/null
+  exec >>"$log" 2>&1
+  echo "=== FiberBrowser WSL server, $(date '+%Y-%m-%d %H:%M:%S'), distro ${WSL_DISTRO_NAME:-?}, $(uname -r) ==="
+fi
+cd "$HOME" || exit 1
+exec /opt/fiberbrowser/bin/fiberbrowser --no-open-browser --no-copilot "$@"

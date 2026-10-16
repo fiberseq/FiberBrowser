@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <title>FiberHMM</title>
+  <rect width="16" height="16" rx="3" fill="#0f766e"/>
+  <path d="M1.5 7.5 H2.5 V3.5 H6.5 V7.5 H9.5 V3.5 H13.5 V7.5 H14.5" fill="none" stroke="#f8fafc" stroke-width="1"/>
+  <rect x="1" y="11" width="14" height="2" fill="#cbd5e1"/>
+  <g fill="#5eead4">
+    <rect x="2" y="10" width="4" height="4" rx="1"/>
+    <rect x="10" y="10" width="4" height="4" rx="1"/>
+  </g>
+  <rect x="7" y="10" width="2" height="4" fill="#fbbf24"/>
+</svg>

@@ -1,0 +1,52 @@
+# FiberBrowser public server: HTTPS (certificates from Let's Encrypt, renewed
+# by Caddy), compression, and sticky load balancing over the FiberBrowser
+# replicas. See docs/deployment/public-server.md.
+{
+	# Uncomment while testing, so a mistake doesn't use up Let's Encrypt's rate limit:
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+{$FIBERBROWSER_DOMAIN:browser.example.org} {
+	# Optional: a shared password for a reviewers-only server. Uncomment and set
+	# FIBERBROWSER_PASSWORD_HASH (docker run --rm caddy:2 caddy hash-password).
+	# basic_auth {
+	# 	reviewer {$FIBERBROWSER_PASSWORD_HASH}
+	# }
+
+	encode zstd gzip
+	request_body {
+		max_size 4MB
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+
+	reverse_proxy {
+		# Every replica of the compose service "fiberbrowser".
+		dynamic a {
+			name fiberbrowser
+			port 8000
+			refresh 30s
+		}
+		# A visitor's session lives in one replica's memory: keep each
+		# browser on the same replica.
+		lb_policy cookie fb_replica
+		# Caddy runs no active health checks on dynamic upstreams: a replica
+		# that fails a request (or answers 502/504) is avoided for 30 s, and
+		# the request is retried on another replica for up to 10 s.
+		fail_duration 30s
+		max_fails 1
+		unhealthy_status 502 504
+		lb_try_duration 10s
+		lb_try_interval 250ms
+		transport http {
+			read_timeout 5m
+		}
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

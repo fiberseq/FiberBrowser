@@ -1,0 +1,50 @@
+{
+ "version": 1,
+ "panel_types": [
+  "cluster-detail", "cluster-features", "colormap", "footprint-analysis", "read-stats",
+  "primer-design", "track-browser", "co-accessibility", "circular-genome", "capture",
+  "contact-map", "transcription-state", "dataset-layout", "annotations", "peak-detection", "history"
+ ],
+ "milestones": [
+  {"id": "dataset_loaded", "description": "A dataset was loaded", "anchor": "load-dataset"},
+  {"id": "genome_loaded", "description": "A genome or reference FASTA was loaded", "anchor": "genome-selector"},
+  {"id": "navigated", "description": "The view moved (search, zoom or pan)", "anchor": "search-bar"},
+  {"id": "peaks_scanned", "description": "Peaks were scanned in the view", "anchor": "scan-peaks-button"},
+  {"id": "peak_selected", "description": "A peak was selected", "anchor": "peaks-track"},
+  {"id": "clustered", "description": "Reads were clustered", "anchor": "cluster-button"},
+  {"id": "clusters_merged", "description": "Clusters were merged", "anchor": "merge-similar"},
+  {"id": "cluster_focused", "description": "A cluster was focused or hidden", "anchor": "clusters-overview"},
+  {"id": "footprint_selected", "description": "A footprint was selected (Cmd/Ctrl+click in the reads)", "anchor": "reads-track"},
+  {"id": "gene_selected", "description": "A gene was selected (click it in the gene track, Shift+click for more)", "anchor": "gene-track"},
+  {"id": "footprint_saved", "description": "A footprint was saved as a definition (Footprints > Saved)", "anchor": "save-footprints"},
+  {"id": "reads_selected", "description": "Reads were selected (Shift+click in the reads)", "anchor": "reads-track"},
+  {"id": "filter_applied", "description": "A read filter was applied", "anchor": "filter-button"},
+  {"id": "filter_cleared", "description": "A read filter was cleared", "anchor": "clear-filter"},
+  {"id": "sorted", "description": "Reads were sorted", "anchor": "sort-button"},
+  {"id": "panel_opened:<panel>", "description": "The named analysis panel was opened (e.g. panel_opened:footprint-analysis)", "anchor": "analysis-strip", "parameter": "panel"},
+  {"id": "panel_copy_made", "description": "A dataset panel copy was added (+ in the panel header)", "anchor": "panel-add-copy"},
+  {"id": "strand_split", "description": "A DAF-seq panel was split into CT and GA panels", "anchor": "strand-chip"},
+  {"id": "primers_designed", "description": "Primers were designed", "anchor": "primers-design-button"},
+  {"id": "track_added", "description": "A track was added", "anchor": "tracks-add-file"},
+  {"id": "session_saved", "description": "The session was saved", "anchor": "save-session"},
+  {"id": "undo_used", "description": "Undo was used", "anchor": "undo"}
+ ],
+ "conditions": [
+  {"id": "has_dataset", "description": "a dataset is loaded", "anchor": "load-dataset", "hint": "Load a dataset first: Open in the top bar."},
+  {"id": "has_reference", "description": "a genome or reference FASTA is loaded", "anchor": "genome-selector", "hint": "Load a reference first: pick a genome in the sidebar, or load a FASTA."},
+  {"id": "has_gtf", "description": "a gene annotation is loaded", "anchor": "load-gtf", "hint": "Load a gene annotation first (Reference Files in the sidebar)."},
+  {"id": "has_peaks", "description": "peaks were detected in the view", "anchor": "scan-peaks-button", "hint": "Scan for peaks first: click Scan in the toolbar."},
+  {"id": "has_selected_peak", "description": "a peak is selected", "anchor": "peaks-track", "hint": "Select a peak first: click one in the Peaks track (Cmd/Ctrl+click for more)."},
+  {"id": "has_clusters", "description": "the reads are clustered", "anchor": "cluster-button", "hint": "Cluster first: with peaks selected, click Cluster."},
+  {"id": "has_selected_footprint", "description": "a footprint is selected", "anchor": "reads-track", "hint": "Select a footprint first: Cmd/Ctrl+click one in the reads."},
+  {"id": "has_saved_footprints", "description": "at least one footprint definition is saved", "anchor": "footprints-saved", "hint": "Save a footprint first: Cmd/Ctrl+click one, then save it in the Footprints panel."},
+  {"id": "has_selected_reads", "description": "reads are selected", "anchor": "reads-track", "hint": "Select reads first: Shift+click one or more reads."},
+  {"id": "has_selected_gene", "description": "a gene is selected", "anchor": "gene-track", "hint": "Select a gene first: click it in the gene track (search for it to get there)."},
+  {"id": "has_filter", "description": "a read filter is applied", "anchor": "filter-button", "hint": "Apply a filter first: pick a filter rule and click Filter."},
+  {"id": "has_panel_copy", "description": "a dataset has more than one panel", "anchor": "panel-add-copy", "hint": "Add a panel copy first: + in the dataset panel header."},
+  {"id": "has_strand_split", "description": "a panel shows only one DAF-seq strand", "anchor": "strand-chip", "hint": "Split by strand first: open the strand chip."},
+  {"id": "has_tracks", "description": "an extra track (BigWig, BigBed, motif) is loaded", "anchor": "tracks-add-file", "hint": "Add a track first: Tracks panel, or Open."},
+  {"id": "has_primers", "description": "primers are designed or saved", "anchor": "primers-design-button", "hint": "Design primers first: Primers panel > Design."},
+  {"id": "panel_open:<panel>", "description": "the named analysis panel is open (e.g. panel_open:cluster-detail)", "anchor": "analysis-strip", "hint": "Open the panel from its coloured tile in the sidebar rail at the right edge (or its button in the classic strip above the reads).", "parameter": "panel"}
+ ]
+}

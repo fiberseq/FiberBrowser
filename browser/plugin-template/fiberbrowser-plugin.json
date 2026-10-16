@@ -1,0 +1,7 @@
+{
+  "name": "my-analysis",
+  "label": "My Analysis",
+  "headerColor": "#6366f1",
+  "description": "Example plugin — footprint size histogram",
+  "tier": "python"
+}

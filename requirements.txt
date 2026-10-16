@@ -1,0 +1,77 @@
+# Needs Python 3.10 or newer. macOS's built-in
+# /usr/bin/python3 (Command Line Tools, Python 3.9) is too old: use
+# scripts/install.sh, or see the README's Installation section.
+#
+# Core — required for the browser to start and serve any dataset.
+numpy>=1.23
+scipy>=1.9
+pandas>=1.5
+pysam>=0.20
+tqdm>=4.64
+# Tested on FastAPI 0.124 and 0.142 (0.142 changed how included routers are
+# stored; the public-mode guard handles both). Raise the bound after testing
+# a newer FastAPI with tests/test_public_mode_guard.py and tests/test_sandbox.py.
+fastapi>=0.100,<0.143
+uvicorn>=0.22
+pydantic>=2.0
+pyBigWig>=0.3.18
+pillow>=9.0
+scikit-learn>=1.1
+numba>=0.57
+python-multipart>=0.0.5
+orjson>=3.9
+boto3>=1.26
+# The Jupyter client (browser_client.py) and the headless render tests.
+requests>=2.28
+# FiberHMM: footprint classes (consensus), chemistry detection and BAM
+# export. The browser also starts without it (those features then explain
+# how to install it). A development checkout can point FIBERHMM_SOURCE_DIR
+# at a FiberHMM source tree instead.
+fiberhmm[consensus]>=3.0,<4
+# JASPAR motif search (Tracks > Motifs, footprint motif scans). Bundles its
+# own offline database.
+pyjaspar>=3.0
+# Server config files (fiberbrowser serve --config *.toml) on Python 3.10;
+# 3.11+ reads TOML with the standard library.
+tomli>=1.1; python_version < "3.11"
+
+# Local Copilot backend on Apple Silicon. Installs the MLX runtime + HF
+# downloader so the Copilot panel can download and start the trained model
+# with one click. The marker installs it only for a native arm64 Python on
+# macOS 13+ (Darwin 22+): MLX has no wheels for macOS 12, Intel Macs, an
+# Intel Python under Rosetta, Linux or Windows, and requiring it there would
+# make this whole install fail. The browser works without it everywhere;
+# `python browser.py --copilot-doctor` says what this machine needs.
+mlx-lm>=0.19; platform_system == "Darwin" and platform_machine == "arm64" and platform_release >= "22"
+huggingface_hub>=0.20; platform_system == "Darwin" and platform_machine == "arm64" and platform_release >= "22"
+
+# Optional: Primer design panel. Required to run the Design Primers button —
+# without them the panel is inert but the rest of the browser runs fine.
+# primer3-py
+# seqfold
+#
+# Primer BLAST specificity also needs the external BLAST+ tools `blastn` and
+# `makeblastdb` on PATH. Install with:
+#   conda install -c bioconda blast
+# or on macOS:
+#   brew install blast
+
+# Optional: Contact matrix support (.cool / .mcool files — DAF-C / Micro-C).
+# cooler
+# h5py
+
+# Optional: Server-side clustering diagnostic plots and the standalone
+# primer_designer CLI (primer_designer.py -m cli). The browser's Primer
+# panel does NOT require these — they're only pulled in by --save-plot
+# style CLI workflows.
+# matplotlib>=3.5
+# seaborn>=0.11
+
+# s3:// files (BAM, bigBed/bigWig, .cool/.mcool) need only boto3 (listed
+# above, core), including public buckets and custom endpoints (R2, B2,
+# MinIO). s3fs is no longer used (kept as the `s3` extra for compatibility).
+
+# Optional: UMAP projection in the cluster Projection tab
+# (PCA and t-SNE are already available via scikit-learn; umap-learn only
+# enables the UMAP option. Endpoint falls back to PCA if not installed.)
+# umap-learn

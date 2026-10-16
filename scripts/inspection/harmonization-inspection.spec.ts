@@ -1,0 +1,76 @@
+import {test,expect} from '@playwright/test';
+import {writeFile} from 'node:fs/promises';
+
+test('current harmonization comparisons and reversible native-class curation',async({page},info)=>{
+  const base=process.env.FIBERBROWSER_HARMONIZATION_INSPECT;
+  test.skip(!base,'Requires a fresh isolated native harmonization demo');
+  test.setTimeout(300000);page.setDefaultTimeout(30000);
+  await page.route('**/api/shutdown',r=>r.abort());
+  const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
+  const get=async(path:string)=>{const r=await page.request.get(`${base}${path}`);expect(r.ok()).toBe(true);return r.json();};
+  const history=await get('/api/footprint/consensus/jobs');
+  const jpath=`/api/footprint/consensus/jobs/${history.active_job}`,job=await get(jpath),catalog=await get(jpath+'/catalog');
+  expect(job.cr_mode).toBe('call_harmonization');expect(job.status).toBe('complete');
+  const original=await get(jpath+'/curation');
+  expect(original.operations).toEqual([]);expect(original.can_undo).toBe(false);expect(original.can_redo).toBe(false);
+  const ds=job.request.dataset_ids.find((id:string)=>job.request.chemistry_overrides[id]==='ddda');expect(ds).toBeTruthy();
+  const hia5=job.request.dataset_ids.find((id:string)=>job.request.chemistry_overrides[id]==='hia5-pacbio');
+  expect(job.summary[hia5].source_calls_in_region).toBe(1303);
+  expect(job.summary[hia5].assignments).toBe(1303);
+  const rows=async(layer:string)=>{
+    const r=await get(`/api/reads/compact?${new URLSearchParams({dataset_id:ds,chrom:'chr19',start:'47514988',end:'47515670',max_reads:'100',include_layers:'true'})}`);
+    return r.reads.flatMap((u:any)=>(u.layers?.[layer]?.consensus_records??[]).map((c:any)=>({read:u.id,...c})));
+  };
+  const keys=(rows:any[])=>rows.map(c=>JSON.stringify([c.read,c.source_call_id,c.interval])).sort();
+  const before=await rows('tf_cr');expect(before.length).toBeGreaterThan(0);
+  await page.addInitScript(()=>{(window as any).__FIBERBROWSER_E2E_DISABLE_GENOME_AUTOLOAD=true;localStorage.clear();sessionStorage.clear();});
+  await page.setViewportSize({width:2200,height:1500});
+  await page.goto(`${base}/?chr=chr19&start=47514988&end=47515670&shared=1`,{waitUntil:'domcontentloaded'});
+  const track=page.getByTestId(`consensus-family-track-${ds}`);await expect(track).toBeVisible({timeout:90000});
+  await expect.poll(()=>track.locator('[data-family-id]').count()).toBeGreaterThan(1);
+  await track.locator('[data-family-id]').first().click();
+  const tools=page.getByTestId('consensus-tools');await expect(tools).toBeVisible();
+  await expect(tools).toContainText('Native-call harmonization');
+  await expect(tools).not.toContainText('optimizer status unreported');
+  await expect(tools.getByLabel('Classification reference percent exact',{exact:true})).toHaveCount(0);
+  await expect(tools.getByLabel('minimum_model_q exact',{exact:true})).toHaveCount(0);
+  await page.getByTestId('compare-datasets').getByText('Compare datasets',{exact:true}).click();
+  const panel=page.getByTestId('consensus-comparison');await expect(panel).toContainText('native calls only');
+  await expect.poll(()=>panel.locator('article').count()).toBeGreaterThan(0);
+  await panel.getByLabel('Lattice comparability filter').selectOption('lattice_comparable');
+  await panel.getByLabel('Observed agreement filter').selectOption('discordant_observed_fractions');
+  await expect.poll(()=>panel.locator('article').count()).toBeGreaterThan(0);
+  await expect(panel.locator('article').first()).toContainText('Lattice comparable · Discordant fractions');
+  await page.screenshot({path:info.outputPath('harmonization-comparable-disagreement.png'),fullPage:true});
+  await panel.getByLabel('Observed agreement filter').selectOption('all');
+  await panel.getByLabel('Lattice comparability filter').selectOption('all');
+  await panel.getByLabel('Comparison resolution').selectOption('coarse_any_child');
+  await expect(panel).toContainText('wider recurrent assay-native geometry');
+  const event=catalog.comparison.rows.find((r:any)=>r.resolution==='coarse_any_child'&&r.comparison_kind==='assay'&&r.established&&
+    r.left_label===ds&&r.child_families.filter((id:string)=>catalog.datasets[ds].catalog.some((f:any)=>f.family===id)).length>1);
+  expect(event).toBeTruthy();await panel.getByLabel('Search class comparisons').fill(event.family);
+  await expect(panel.locator('article')).toHaveCount(1);
+  await panel.getByRole('button',{name:'Inspect / select left classes',exact:true}).click();
+  const toolbar=panel.getByTestId('consensus-curation-panel');
+  await expect(toolbar.getByRole('button',{name:'Group selected',exact:true})).toBeEnabled();
+  await toolbar.getByRole('button',{name:'Group selected',exact:true}).click();
+  await expect.poll(async()=>(await get(jpath+'/curation')).manual_groups.length).toBe(1);
+  await expect(panel).toContainText('manual groups do not inherit automatic comparability flags');
+  expect(keys(await rows('tf_cr_manual'))).toEqual(keys(before));
+  await toolbar.getByRole('button',{name:'Undo edit',exact:true}).click();
+  await expect.poll(async()=>(await get(jpath+'/curation')).manual_groups.length).toBe(0);
+  await toolbar.getByRole('button',{name:'Redo edit',exact:true}).click();
+  await expect.poll(async()=>(await get(jpath+'/curation')).manual_groups.length).toBe(1);
+  await toolbar.getByRole('button',{name:'Reset manual edits',exact:true}).click();
+  await expect.poll(async()=>(await get(jpath+'/curation')).manual_groups.length).toBe(0);
+  await expect(panel).not.toContainText('Manual display overrides are active');
+  await panel.getByLabel('Comparison resolution').selectOption('coarse_any_child');
+  await panel.getByLabel('Search class comparisons').fill(event.family);
+  expect((await get(jpath+'/catalog')).comparison).toEqual(catalog.comparison);
+  expect(keys(await rows('tf_cr'))).toEqual(keys(before));
+  await page.screenshot({path:info.outputPath('harmonization-coarse-comparison.png'),fullPage:true});
+  await writeFile(info.outputPath('harmonization-ui-receipt.json'),JSON.stringify({job_id:job.job_id,cr_mode:job.cr_mode,
+    native_source_spans_unchanged:true,comparison_ledger_unchanged:true,manual_edits_reset:true,manual_merge_and_split_verified:true,
+    compared_source_calls:before.length,errors},null,2));
+  expect(errors).toEqual([]);
+});

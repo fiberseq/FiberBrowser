@@ -1,0 +1,44 @@
+{
+  "name": "fiberseq-browser",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "pretest:e2e": "npm run build",
+    "test:e2e": "playwright test",
+    "pretest:e2e:release": "npm run build",
+    "test:e2e:release": "playwright test smoke layers workflow reproducibility release-panels release-v1-workflows release-consensus staged-families ui-controls ui-scale ui-chrome-small ui-export-panels ui-export-scale tour.spec daf-run.spec daf-run-pod5 public-server.spec session-links.spec ui-layout-r2 ui-chrome-r3 read-drag panel-genomes open-files command-palette export-data session-reopen read-actions regions.spec projection-tsne panel-scope ui-export-figure export-panel-genomes files-placeholders-references footprint-cluster-projection regions-two-references startup-mixed-genomes ui-chrome-budget palette-panels panel-runs projection-map class-region open-menu cluster-charts sv-display panel-rail navperf panel-tracks split-locus-library alt-allele insertion-lens split-sv-carriers variants.spec preview-features tests/e2e/lab/",
+    "pretest:e2e:perf": "npm run build",
+    "test:e2e:perf": "FIBERBROWSER_RUN_PERF_E2E=1 playwright test performance.spec.ts",
+    "pretest:e2e:ui": "npm run build",
+    "test:e2e:ui": "playwright test --ui",
+    "pretest:e2e:headed": "npm run build",
+    "test:e2e:headed": "playwright test --headed"
+  },
+  "dependencies": {
+    "html-to-image": "^1.11.13",
+    "jspdf": "^4.1.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "zustand": "^4.5.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.59.1",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@vitejs/plugin-react": "^4.2.0",
+    "autoprefixer": "^10.4.0",
+    "jsdom": "^27.0.1",
+    "postcss": "^8.4.0",
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.3.0",
+    "vite": "^5.1.0",
+    "vitest": "^3.2.4"
+  }
+}

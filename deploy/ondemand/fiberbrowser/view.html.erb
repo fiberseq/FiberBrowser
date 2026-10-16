@@ -1,0 +1,10 @@
+<%# The session card's Connect button. It POSTs this session's password (the
+    FiberBrowser launch token) once; FiberBrowser answers with an HttpOnly
+    cookie scoped to /rnode/<host>/<port>/ and opens the app, so the token is
+    never in a URL. %>
+<form action="/rnode/<%= host %>/<%= port %>/auth/token" method="post" target="_blank">
+  <input type="hidden" name="token" value="<%= password %>">
+  <button class="btn btn-primary" type="submit">
+    <i class="fa fa-dna"></i> Connect to FiberBrowser
+  </button>
+</form>

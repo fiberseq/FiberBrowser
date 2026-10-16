@@ -1,0 +1,262 @@
+{
+ "assay": {
+  "control_curve_schema_version": 2,
+  "enzyme": "ddda",
+  "mode": "daf",
+  "packaged_control_curve": true,
+  "probability_threshold": 125,
+  "reference_label": "Human DddA DAF-seq controls",
+  "reference_profile": "ddda",
+  "reference_sources": [
+   "Human DddA DAF-seq controls (two targeted loci; fixed-seed bounded samples)"
+  ]
+ },
+ "background": {
+  "metric": "median per-read outside-MSP rate",
+  "n_rate_reads": 1992,
+  "note": "",
+  "pass_max": 0.19152542372881357,
+  "reference_median": 0.16520210896309315,
+  "reference_source": "tags",
+  "score": 96.33145327957214,
+  "status": "PASS",
+  "value": 0.16842105263157894,
+  "warn_max": 0.22799097065462753
+ },
+ "deduplication": {
+  "cluster_tagged_reads": 0,
+  "detected": false,
+  "duplicate_flagged_reads": 0,
+  "duplicate_fraction": null,
+  "duplicate_fraction_basis": "not detected; QC did not run deduplication",
+  "full_run": false,
+  "method": null,
+  "mode": "not_run",
+  "molecule_cluster_size_histogram": {},
+  "observed_duplicate_cluster_size_histogram": {},
+  "sampled_reads": 2000
+ },
+ "efficiency": {
+  "metric": "median per-read in-MSP rate",
+  "n_rate_reads": 1939,
+  "note": "",
+  "pass_min": 0.6243014083607448,
+  "reference_median": 0.664429303451771,
+  "reference_source": "tags",
+  "score": 67.4984934346592,
+  "status": "WARN",
+  "value": 0.6212121212121212,
+  "warn_min": 0.5543478260869565
+ },
+ "fiberhmm_version": "3.0.0",
+ "footprints": {
+  "fraction_nucleosome_85_250_bp": 0.99637458702453,
+  "fraction_nucleosome_over_1000_bp": 8.771160424524164e-05,
+  "fraction_nucleosome_over_300_bp": 8.771160424524164e-05,
+  "median_nucleosome_bp": 157.0,
+  "median_tf_footprint_bp": 21.0,
+  "n_nucleosomes": 34203,
+  "n_tagged_reads": 1997,
+  "n_tf_footprints": 24085,
+  "q25_nucleosome_bp": 130.0,
+  "q25_tf_footprint_bp": 12.0,
+  "q75_nucleosome_bp": 180.0,
+  "q75_tf_footprint_bp": 32.0
+ },
+ "input": "/data/qc_demo/napa_ddda.bam",
+ "outputs": {
+  "curves": "/data/qc_demo/qc/napa_ddda.qc.curves.json",
+  "json": "/data/qc_demo/qc/napa_ddda.qc.json",
+  "pdf": "/data/qc_demo/qc/napa_ddda.qc.pdf",
+  "plot": "/data/qc_demo/qc/napa_ddda.qc.png",
+  "tsv": "/data/qc_demo/qc/napa_ddda.qc.tsv"
+ },
+ "overall": {
+  "components": [
+   "efficiency",
+   "background",
+   "periodicity"
+  ],
+  "score": 69.94331557141045,
+  "status": "WARN",
+  "verdict_basis": "state-aware"
+ },
+ "periodicity": {
+  "autocorrelation_strength": 0.03759868805423328,
+  "n_informative_reads": 2000,
+  "nrl_bp": 185,
+  "pair_distance_observations_le_1000": 56937807,
+  "reference_curve_correlation": 0.8482500478769341,
+  "reference_pattern_amplitude_ratio": 0.8601679684383239,
+  "score": 46.0,
+  "search_interval_bp": [
+   160,
+   220
+  ],
+  "status": "WARN"
+ },
+ "sampling": {
+  "records_examined": 3202,
+  "requested_reads": 2000,
+  "sampled_reads": 2000,
+  "seed": 20260824,
+  "strategy": "indexed random windows (168 x 20,000 bp) + bounded fill",
+  "whole_bam_scanned": false,
+  "windows_examined": 168
+ },
+ "schema_minor_version": 1,
+ "schema_version": 1,
+ "signal": {
+  "aggregate_rate": 0.15112877215625659,
+  "label": "deamination",
+  "mean_per_read_rate": 0.15027654189133216,
+  "median_per_read_rate": 0.15045791539467945,
+  "n_events": 650574,
+  "n_opportunities": 4304766,
+  "n_rate_reads": 2000,
+  "n_signal_reads": 2000,
+  "note": "",
+  "p05_per_read_rate": 0.10496290118770601,
+  "p95_per_read_rate": 0.19365460095944176,
+  "q25_per_read_rate": 0.13309275695864395,
+  "q75_per_read_rate": 0.1689018988474479,
+  "score": 0.0,
+  "status": "FAIL"
+ },
+ "state_rates": {
+  "all_states": {
+   "aggregate_rate": 0.30849595847019,
+   "n_events": 460317,
+   "n_opportunities": 1492133
+  },
+  "available": true,
+  "definition": {
+   "daf_run_mask": ">=2/keep-one",
+   "edge_trim_bp": 10,
+   "min_msp_bp": 85,
+   "min_state_opportunities_per_read": 50,
+   "msp": "FiberHMM MSP of >= 85 bp",
+   "opportunities": "C (CT reads) or G (GA reads) targets on the deaminated strand, as encoded for calling (chemistry adjacent-run mask and SNP mask applied)",
+   "outside_msp": "every other base: nucleosomes, linkers and accessible gaps < 85 bp",
+   "probability_threshold": 125,
+   "terminal_segments": "cap"
+  },
+  "median_per_read_msp_length_fraction": 0.28677948822610944,
+  "msp": {
+   "aggregate_rate": 0.6179621165434127,
+   "aggregate_rate_wilson95": [
+    0.6165680618119785,
+    0.6193542319108808
+   ],
+   "mean_per_read_rate": 0.6194914715264915,
+   "median_per_read_rate": 0.6212121212121212,
+   "n_events": 288791,
+   "n_opportunities": 467328,
+   "n_rate_reads": 1939,
+   "p05_per_read_rate": 0.5108917215534863,
+   "p95_per_read_rate": 0.7230377635607776,
+   "q25_per_read_rate": 0.5833333333333334,
+   "q75_per_read_rate": 0.6622661786917625
+  },
+  "msp_length_fraction": 0.2906924999386525,
+  "msp_to_outside_ratio": 3.6607623568866163,
+  "outside_msp": {
+   "aggregate_rate": 0.16880694683196357,
+   "aggregate_rate_wilson95": [
+    0.16806360354684524,
+    0.1695529078452574
+   ],
+   "mean_per_read_rate": 0.1693801918422645,
+   "median_per_read_rate": 0.16842105263157894,
+   "n_events": 164092,
+   "n_opportunities": 972069,
+   "n_rate_reads": 1992,
+   "p05_per_read_rate": 0.11831108633996981,
+   "p95_per_read_rate": 0.22248128957973506,
+   "q25_per_read_rate": 0.14747046738572162,
+   "q75_per_read_rate": 0.19064124783362218
+  },
+  "reads": {
+   "reads_chimera_skipped": 5,
+   "reads_considered": 1997,
+   "reads_mm_unreliable": 0,
+   "reads_single_segment": 9,
+   "reads_used": 1992,
+   "reads_with_calls": 1997,
+   "reads_without_calls": 3,
+   "reads_without_signal": 0
+  },
+  "reference": {
+   "all_states_rate": 0.2995311547334634,
+   "median_per_read_msp_length_fraction": 0.2560053380782918,
+   "msp": {
+    "aggregate_rate": 0.6646466512200223,
+    "n_events": 489378,
+    "n_opportunities": 736298,
+    "n_rate_reads": 3592,
+    "probabilities": [
+     0.05,
+     0.25,
+     0.5,
+     0.75,
+     0.95
+    ],
+    "quantiles": [
+     0.5543478260869565,
+     0.6243014083607448,
+     0.664429303451771,
+     0.7027027027027027,
+     0.75
+    ]
+   },
+   "msp_to_outside_ratio": 4.012180076605699,
+   "n_reads_used": 3701,
+   "outside_msp": {
+    "aggregate_rate": 0.16565723335686186,
+    "n_events": 317770,
+    "n_opportunities": 1918238,
+    "n_rate_reads": 3701,
+    "probabilities": [
+     0.05,
+     0.25,
+     0.5,
+     0.75,
+     0.95
+    ],
+    "quantiles": [
+     0.10946196660482375,
+     0.14157303370786517,
+     0.16520210896309315,
+     0.19152542372881357,
+     0.22799097065462753
+    ]
+   }
+  },
+  "source": "tags",
+  "tag_frames": {
+   "MA": "molecular",
+   "legacy": "molecular"
+  },
+  "tag_producer": {
+   "program": "fiberhmm-call",
+   "version": "2.14.0"
+  },
+  "terminal_excluded_opportunities": 52736
+ },
+ "variant_masking": {
+  "amplicons": [],
+  "applied": false,
+  "caller_report_path": null,
+  "dominant_amplicon": null,
+  "mask_path": null,
+  "median_alternate_fraction": null,
+  "median_opposite_direction_depth": null,
+  "method": null,
+  "n_discovered_amplicons": 0,
+  "n_masked_sites": 0,
+  "n_profiled_sites": 0,
+  "note": "not run",
+  "parameters": {},
+  "threshold_policy": null
+ }
+}

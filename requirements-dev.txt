@@ -1,0 +1,15 @@
+# Test and development tools. Install with the runtime packages:
+#   pip install -r requirements.txt -r requirements-dev.txt
+pytest>=7
+# FastAPI's TestClient
+httpx>=0.24
+# Primer tests (the Primer panel's optional packages)
+primer3-py>=2.0
+seqfold>=0.7
+#
+# Optional, not installed by this file:
+# - Browser end-to-end tests (browser/frontend/tests/e2e) use Playwright from
+#   the frontend's own package.json: cd browser/frontend && npm ci &&
+#   npx playwright install chromium.
+# - The gated headless-render tests (FIBERBROWSER_RUN_PLAYWRIGHT_RENDER=1)
+#   need Node and the same Chromium.
