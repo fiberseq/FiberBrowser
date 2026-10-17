@@ -351,7 +351,7 @@ def split_span(start: int, end: int, cuts: Sequence[tuple[int, int]]) -> list[tu
     return _subtract_spans(int(start), int(end), sorted(cuts))
 
 
-_LAYER_ALIGNED_LIST_KEYS = ("annotation_names", "circular_ids")
+_LAYER_ALIGNED_LIST_KEYS = ("annotation_names", "circular_ids", "_fiberbrowser_calls")
 
 
 def _subtract_spans(a: int, b: int, cuts: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
@@ -413,9 +413,13 @@ def split_compact_read_at_deletions(read_data: dict, cuts: Sequence[tuple[int, i
     cuts = sorted((int(a), int(b)) for a, b in cuts if b > a)
     if not cuts:
         return read_data
+    # Live lift's per-call metadata (services/lift), parallel to intervals and fire.
+    calls = read_data.get("_fiberbrowser_calls") or {}
     split = _split_intervals(read_data.get("intervals"), cuts)
     if split is not None:
         intervals, index = split
+        if calls.get("intervals") is not None:
+            calls["intervals"] = [calls["intervals"][i] if i < len(calls["intervals"]) else None for i in index]
         quals = read_data.get("qualities")
         if quals:
             # Primary qualities follow the positive (footprint) intervals.
@@ -437,6 +441,8 @@ def split_compact_read_at_deletions(read_data: dict, cuts: Sequence[tuple[int, i
         split = _split_intervals(fire, cuts)
         if split is not None:
             read_data["fire"] = split[0]
+            if calls.get("fire") is not None:
+                calls["fire"] = [calls["fire"][i] if i < len(calls["fire"]) else None for i in split[1]]
     for layer in (read_data.get("layers") or {}).values():
         if not isinstance(layer, dict):
             continue

@@ -1252,7 +1252,8 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
                                  skip_query_spans=None,
                                  skip_span_layers=(),
                                  skipped_in_region=None,
-                                 present_names=None) -> Dict[str, Dict]:
+                                 present_names=None,
+                                 call_meta=None) -> Dict[str, Dict]:
     """Parse fiberseq MA:Z + AQ:B:C tags into a layers dict.
 
     By default MA/AQ intervals are treated as SEQ/query-frame offsets, matching
@@ -1271,6 +1272,10 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
     ``skipped_in_region``: a list that receives the layer name of each skipped
     call that would have been drawn in the region.
     ``present_names``: a set receiving mapped layer names before viewport clipping.
+    ``call_meta``: ``(read_length, lead_hard_clip, is_reverse)`` of the record, for
+    live lift (services/lift): each layer then carries ``_fiberbrowser_calls``,
+    parallel to its intervals, ``[call_id, mol_start, mol_end)`` with the stable
+    ``call_id`` ``"MA<section>:<index>"`` and the call's molecular span.
     """
     group_frame = ma_group_frame(tags_are_molecular)
     if not ma_str or not isinstance(ma_str, str):
@@ -1320,7 +1325,7 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
     # skipped (its AQ bytes and AN names are still stepped over).
     spec_by_name: Dict[str, str] = {}
 
-    for part in parts[1:]:
+    for section_index, part in enumerate(parts[1:]):
         if ":" not in part:
             continue
         type_sig, intervals_str = part.split(":", 1)
@@ -1400,7 +1405,7 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
 
             query_start = s_one - 1
             query_end = query_start + l
-            parsed_intervals.append((query_start, query_end, l, aq_cursor, ann_name))
+            parsed_intervals.append((query_start, query_end, l, aq_cursor, ann_name, len(parsed_intervals)))
             if include_qualities:
                 aq_cursor += n_qual_per
 
@@ -1417,15 +1422,15 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
         if flip_molecular_reverse:
             parsed_intervals = sorted(
                 (
-                    (read_length - qe, read_length - qs, l, qstart, ann)
-                    for (qs, qe, l, qstart, ann) in parsed_intervals
+                    (read_length - qe, read_length - qs, l, qstart, ann, k)
+                    for (qs, qe, l, qstart, ann, k) in parsed_intervals
                 ),
                 key=lambda t: t[0],
             )
 
         query_positions = []
         if not callable(query_interval_to_ref):
-            for (q_start, q_end, _l, _qstart, _ann) in parsed_intervals:
+            for (q_start, q_end, _l, _qstart, _ann, _k) in parsed_intervals:
                 query_positions.extend([q_start, q_end - 1])
 
         if parsed_intervals and not callable(query_interval_to_ref):
@@ -1441,9 +1446,10 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
             mapped_positions = []
 
         layer_annotation_names = []
+        layer_calls = []
         keep_source_intervals = "fi" in qual_names
         skip_here = skip_query_spans if skip_query_spans and name in skip_span_layers else None
-        for interval_index, (query_start, query_end, l, qual_start, ann_name) in enumerate(parsed_intervals):
+        for interval_index, (query_start, query_end, l, qual_start, ann_name, call_index) in enumerate(parsed_intervals):
             if callable(query_interval_to_ref):
                 ref_start, ref_end = query_interval_to_ref(query_start, query_end - 1)
                 if ref_start is None or ref_end is None:
@@ -1469,6 +1475,9 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
                     skipped_in_region.append(name)
                 continue
             interval = [int(cs - region_start), int(ce - region_start), int(l)]
+            if call_meta is not None:
+                layer_calls.append([f"MA{section_index}:{call_index}",
+                                    *seq_span_to_molecular(query_start, query_end, *call_meta)])
             source_interval = [
                 int(ref_start - region_start),
                 int(ref_end - region_start),
@@ -1515,6 +1524,8 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
         if any(layer_annotation_names):
             layer_payload["annotation_names"] = layer_annotation_names
             layer_payload["circular_ids"] = layer_annotation_names
+        if call_meta is not None:
+            layer_payload["_fiberbrowser_calls"] = layer_calls
 
         if (family_contracts or {}).get(name,{}).get('fq','').startswith('zero_unavailable'):
             layer_payload['family_confidence_kind']='unavailable'
@@ -1532,6 +1543,17 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
             layers[name] = layer_payload
 
     return layers
+
+
+def seq_span_to_molecular(seq_start: int, seq_end: int, read_length: int, lead_hard_clip: int,
+                          is_reverse: bool) -> list:
+    """A half-open SEQ-frame query span as a half-open molecular span (the
+    original read, hard clips included; reverse records count from the read's
+    other end)."""
+    a, b = int(seq_start) + int(lead_hard_clip), int(seq_end) + int(lead_hard_clip)
+    if is_reverse:
+        return [int(read_length) - b, int(read_length) - a]
+    return [a, b]
 
 
 def _merge_layer_sections(existing: Dict, section: Dict) -> None:
@@ -1571,6 +1593,11 @@ def _merge_layer_sections(existing: Dict, section: Dict) -> None:
         merged_names = [names[i] for i in order]
         existing["annotation_names"] = merged_names
         existing["circular_ids"] = merged_names
+
+    if "_fiberbrowser_calls" in existing or "_fiberbrowser_calls" in section:
+        calls = (list(existing.get("_fiberbrowser_calls") or [None] * old_n)
+                 + list(section.get("_fiberbrowser_calls") or [None] * new_n))
+        existing["_fiberbrowser_calls"] = [calls[i] for i in order]
 
 
 def generate_msp_from_nuc_gaps(intervals, min_nuc_size: int = 90) -> List:

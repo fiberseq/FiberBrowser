@@ -1576,6 +1576,11 @@ def build_compact_reads_from_bam(
     sv_min_len=SV_MIN_LEN_DEFAULT,
     include_sv_seq=False,
     fetch_regions=None,
+    include_supplementary=False,
+    include_lift_meta=False,
+    lift_counts=None,
+    load_budget=None,
+    sample_bounds=None,
 ):
     """Build compact interval reads from a BAM file.
 
@@ -1595,7 +1600,18 @@ def build_compact_reads_from_bam(
     with their head part (if also in view) into one read.  Reads with a
     wrapped part carry ``alignment_spans``: their parts' alignment extents,
     projected to the window's coordinates (``reference_start``/``end`` stay
-    the record's own, for consensus identity)."""
+    the record's own, for consensus identity).
+
+    Live lift (services/lift) decodes source records with:
+    ``include_supplementary``: also soft-clipped supplementary records (a
+    hard-clipped one carrying annotation tags is skipped and counted in
+    ``lift_counts['hard_clipped_supplementary']``);
+    ``include_lift_meta``: internal per-read fields for lifting
+    (``lift_meta_fields``); also turns the shared SignalWindow off;
+    ``load_budget``: an object whose ``examine()`` is asked before each record
+    (False stops the load) and whose ``account(read)`` sees each decoded read;
+    ``sample_bounds``: ``(ref_start, ref_end) -> [(start, end), ...]``, the
+    extents a sampled record is counted at (the target frame's)."""
     options = dict(
         include_methylation=include_methylation,
         ml_threshold=ml_threshold,
@@ -1617,6 +1633,11 @@ def build_compact_reads_from_bam(
         sv_min_len=sv_min_len,
         include_sv_seq=include_sv_seq,
         fetch_regions=fetch_regions,
+        include_supplementary=include_supplementary,
+        include_lift_meta=include_lift_meta,
+        lift_counts=lift_counts,
+        load_budget=load_budget,
+        sample_bounds=sample_bounds,
     )
     wrap_length = _bam_wrap_length_for(bam_path, chrom, bool(circular), bam_handle_getter, chrom_map, contig_links)
     if wrap_length and fetch_regions is not None:
@@ -1812,6 +1833,11 @@ def _build_compact_reads_from_bam_region(
     sv_min_len=SV_MIN_LEN_DEFAULT,
     include_sv_seq=False,
     fetch_regions=None,
+    include_supplementary=False,
+    include_lift_meta=False,
+    lift_counts=None,
+    load_budget=None,
+    sample_bounds=None,
 ):
     """Compact reads of the records overlapping one linear BAM region.
 
@@ -1821,6 +1847,7 @@ def _build_compact_reads_from_bam_region(
     import traceback
 
     from services.bam_tags import (
+        seq_span_to_molecular,
         bam_legacy_frame,
         bam_ma_group_frame,
         read_legacy_tags_are_molecular,
@@ -1937,9 +1964,12 @@ def _build_compact_reads_from_bam_region(
             sampler = None
         records_seen = 0
         from services.signal_windows import SignalWindow
+        # A lifted source load (supplementaries, budget stops) never feeds the
+        # shared per-window signal counts.
         signal_window = (SignalWindow(bam_path, actual_chrom, region_start, region_end,
             regions=fetch_regions, source={"header": signal_provenance, "references": tuple(references)})
-            if partition is None or partition == (0, 1) else None)
+            if (partition is None or partition == (0, 1)) and not (include_lift_meta or include_supplementary)
+            else None)
         from services.read_edge_cache import iter_edge_records
         # An unrepaired graph lift (ft pg-lift) turned supplementaries into
         # extra primaries: hide those that carry evidence of it
@@ -1950,11 +1980,17 @@ def _build_compact_reads_from_bam_region(
             records_seen += 1
             if not records_seen & 255:
                 checkpoint()  # a background job whose client went away stops here
+            if load_budget is not None and not load_budget.examine():
+                break
             if profile_bam:
                 profile_counts["records_seen"] += 1
-            if read.is_unmapped or read.is_secondary or read.is_supplementary:
+            if read.is_unmapped or read.is_secondary or (read.is_supplementary and not include_supplementary):
                 if profile_bam:
                     profile_counts["records_unmapped"] += 1
+                continue
+            if read.is_supplementary and not supplementary_decodable(read):
+                if lift_counts is not None:
+                    lift_counts["hard_clipped_supplementary"] = lift_counts.get("hard_clipped_supplementary", 0) + 1
                 continue
             if lift_hidden is not None and lift_hidden(read):
                 continue
@@ -1971,12 +2007,16 @@ def _build_compact_reads_from_bam_region(
             # name after signal eligibility; a skipped read leaves its extent.
             if sampler is not None:
                 counted = include_duplicates or not read.is_duplicate
+                extents = (sample_bounds(read.reference_start, read.reference_end) if sample_bounds is not None
+                           else ((read.reference_start, read.reference_end),))
                 if not sampler.keep(read.query_name):
                     if counted:
-                        sampler.skip(read.reference_start, read.reference_end)
+                        for extent in extents:
+                            sampler.skip(*extent)
                     continue
                 if counted:
-                    sampler.kept(read.reference_start, read.reference_end)
+                    for extent in extents:
+                        sampler.kept(*extent)
             is_duplicate = bool(getattr(read, "is_duplicate", False))
             if is_duplicate and not include_duplicates:
                 if profile_bam:
@@ -1990,6 +2030,7 @@ def _build_compact_reads_from_bam_region(
                 if profile_bam:
                     profile_counts["records_nonspanning"] += 1
                 continue
+            lift_call_meta = record_call_meta(read) if include_lift_meta else None
 
             phase_t0 = _profile_start()
             ns_tag = None
@@ -2104,6 +2145,7 @@ def _build_compact_reads_from_bam_region(
                                 family_contracts=family_contracts,
                                 skip_query_spans=terminal_drop or None,
                                 skip_span_layers=_MA_FOOTPRINT_TYPES,
+                                call_meta=lift_call_meta,
                             )
                             if ma_layers:
                                 read_data["layers"] = ma_layers
@@ -2151,6 +2193,10 @@ def _build_compact_reads_from_bam_region(
                             read_data["cigar"] = cigar_events
                         _profile_add("cigar_parse", phase_t0)
                     phase_t0 = _profile_start()
+                    if include_lift_meta:
+                        read_data.update(lift_meta_fields(
+                            read, CigarCoordMapper(read.cigartuples, ref_start), lift_call_meta,
+                            interval_calls=[None] * len(read_data["intervals"])))
                     _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq)
                     from services.read_binary import binary_read_context
                     if binary_read_context.get():
@@ -2159,6 +2205,8 @@ def _build_compact_reads_from_bam_region(
                     if partition is not None:
                         read_data['_fiberbrowser_source_order'] = records_seen
                     reads.append(read_data)
+                    if load_budget is not None:
+                        load_budget.account(read_data)
                     if stream is not None:
                         stream.append(read_data)
                 continue
@@ -2284,6 +2332,7 @@ def _build_compact_reads_from_bam_region(
                     skip_span_layers=_MA_FOOTPRINT_TYPES,
                     skipped_in_region=ma_skipped_in_region,
                     present_names=ma_layer_names,
+                    call_meta=lift_call_meta,
                 )
                 _profile_add("ma_layer_parse", phase_t0)
 
@@ -2469,6 +2518,7 @@ def _build_compact_reads_from_bam_region(
 
             fire_intervals = []
             fire_sizes = []
+            fire_calls = [] if include_lift_meta else None
             has_explicit_msp = fire_starts is not None and len(fire_starts) > 0
             fire_qualities_available = fire_quals is not None and any(int(q) not in (0, 128) for q in fire_quals)
             if _wants_layer("fire", "msp") and fire_starts is not None and fire_lengths is not None:
@@ -2500,6 +2550,9 @@ def _build_compact_reads_from_bam_region(
                         int(clip_end - region_start),
                         quality,
                     ])
+                    if fire_calls is not None:
+                        fire_calls.append([f"as:{fire_index}",
+                                           *seq_span_to_molecular(fs_int, fs_int + fl_int, *lift_call_meta)])
                     # Color/quality semantics belong to the call, independent
                     # of whether this load was a viewport or a wider cache fill.
                     fire_sizes.append(int(fe_ref - fs_ref))
@@ -2551,6 +2604,10 @@ def _build_compact_reads_from_bam_region(
                 # legacy inference, just as when cropping a containing cache.
                 layers = {name: layer for name, layer in legacy_layers.items() if name not in ma_layer_names}
                 layers.update(ma_layers)
+                if (fire_calls and "msp" in layers and "msp" not in ma_layers
+                        and len(layers["msp"]["intervals"]) == len(fire_calls)):
+                    # The MSP layer built from as/al: one call per FIRE interval.
+                    layers["msp"]["_fiberbrowser_calls"] = [list(call) for call in fire_calls]
 
                 if infer_legacy_layers and wants_msp_layer and not has_explicit_msp and "msp" not in layers and "msp" not in ma_layer_names:
                     msp_intervals = generate_msp_from_nuc_gaps(intervals, min_nuc_size=legacy_nuc_min_size)
@@ -2566,11 +2623,22 @@ def _build_compact_reads_from_bam_region(
                 _profile_add("layer_build", phase_t0)
 
             phase_t0 = _profile_start()
+            if include_lift_meta:
+                read_data.update(lift_meta_fields(
+                    read, coord_mapper, lift_call_meta,
+                    interval_calls=_footprint_interval_calls(
+                        intervals, footprints, region_start, region_end, fp_starts_query, fp_lengths, lift_call_meta),
+                    fire_calls=fire_calls,
+                    edge_qualities=_footprint_edge_qualities(footprints, lq_qualities, rq_qualities),
+                    legacy={"ma_names": sorted(ma_layer_names), "explicit_msp": has_explicit_msp,
+                            "fire_qualities_available": fire_qualities_available}))
             _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq, mapper=coord_mapper)
             _profile_add("sv_events", phase_t0)
             if partition is not None:
                 read_data['_fiberbrowser_source_order'] = records_seen
             reads.append(read_data)
+            if load_budget is not None:
+                load_budget.account(read_data)
             if stream is not None:
                 stream.append(read_data)
 
@@ -2624,6 +2692,101 @@ def _build_compact_reads_from_bam_region(
         )
 
     return reads.finish() if isinstance(reads, PackedReadBuilder) else reads
+
+
+# Tags whose offsets a hard clip would put out of frame (see supplementary_decodable).
+_ANNOTATION_TAGS = ("MA", "Ma", "ns", "as", "MM", "Mm")
+
+
+def supplementary_decodable(read) -> bool:
+    """Whether a supplementary record can be decoded on its own: soft-clipped,
+    or carrying no annotation tags. The loader flips molecular-frame tags by
+    SEQ length, which a hard clip shortens (FiberHMM's lift scopes annotations
+    per record instead; live lift hides these and counts them)."""
+    if not any(op == 5 for op, _length in (read.cigartuples or ())):
+        return True
+    return not any(read.has_tag(tag) for tag in _ANNOTATION_TAGS)
+
+
+def record_call_meta(read) -> tuple:
+    """``(read_length, lead_hard_clip, is_reverse)``: what turns SEQ-frame query
+    spans into molecular spans (``bam_tags.seq_span_to_molecular``)."""
+    cigar = read.cigartuples or ()
+    lead = int(cigar[0][1]) if cigar and cigar[0][0] == 5 else 0
+    try:
+        length = int(read.infer_read_length() or 0)
+    except Exception:
+        length = 0
+    return (length or int(read.query_length or 0) + lead, lead, bool(read.is_reverse))
+
+
+def lift_meta_fields(read, coord_mapper, call_meta, *, interval_calls=None, fire_calls=None,
+                     edge_qualities=None, legacy=None) -> dict:
+    """Internal fields live lift (services/lift) needs from a decoded record,
+    never sent to a client (``_fiberbrowser_`` prefix):
+
+    ``_fiberbrowser_aligned_runs``: ``[ref_start, mol_start, len]`` per aligned
+    CIGAR run (M/=/X), absolute reference; ``mol_start`` is the molecular index
+    of the run's first reference base (on a reverse record the run goes down
+    the molecule from there);
+    ``_fiberbrowser_calls``: ``{'intervals': [...], 'fire': [...]}`` parallel to
+    those lists (layers carry their own ``_fiberbrowser_calls``): per call
+    ``[call_id, mol_start, mol_end]`` (``None`` for gaps and neutral rows), with
+    ``call_id`` ``'<group>:<tag index>'`` stable for the record;
+    ``_fiberbrowser_primary``: ``{is_supplementary, sa}``;
+    ``_fiberbrowser_lift_record``: ``{contig, reverse, length}``;
+    ``_fiberbrowser_edge_qualities``: ``{call_id: [lq, rq]}`` of ns/nl calls;
+    ``_fiberbrowser_legacy``: what legacy layer inference after lifting needs."""
+    length, lead, reverse = call_meta
+    runs = []
+    for q0, q1, offset in zip(coord_mapper._aligned_starts, coord_mapper._aligned_ends,
+                              coord_mapper._aligned_offsets):
+        mol = length - 1 - (q0 + lead) if reverse else q0 + lead
+        runs.append([int(q0 + offset), int(mol), int(q1 - q0)])
+    sa = read.get_tag("SA") if read.has_tag("SA") else None
+    fields = {
+        "_fiberbrowser_aligned_runs": runs,
+        "_fiberbrowser_calls": {"intervals": interval_calls, "fire": fire_calls},
+        "_fiberbrowser_primary": {"is_supplementary": bool(read.is_supplementary), "sa": sa},
+        "_fiberbrowser_lift_record": {"contig": read.reference_name, "reverse": reverse, "length": int(length)},
+    }
+    if edge_qualities:
+        fields["_fiberbrowser_edge_qualities"] = edge_qualities
+    if legacy is not None:
+        fields["_fiberbrowser_legacy"] = legacy
+    return fields
+
+
+def _footprint_interval_calls(intervals, footprints, region_start, region_end, starts, lengths, call_meta):
+    """Per-interval ``[call_id, mol_start, mol_end]`` of the ns/nl footprints
+    ``build_intervals_from_footprints`` drew (gaps and a neutral row: None)."""
+    from services.bam_tags import seq_span_to_molecular
+    drawn = [fp for fp in sorted(footprints, key=lambda item: item[0])
+             if fp[1] > region_start and fp[0] < region_end]
+    if sum(1 for iv in intervals if iv[2] >= 0) != len(drawn):
+        return [None] * len(intervals)
+    calls, it = [], iter(drawn)
+    for iv in intervals:
+        if iv[2] < 0:
+            calls.append(None)
+            continue
+        tag = next(it)[4]
+        start = int(starts[tag])
+        calls.append([f"ns:{tag}", *seq_span_to_molecular(start, start + int(lengths[tag]), *call_meta)])
+    return calls
+
+
+def _footprint_edge_qualities(footprints, lq_qualities, rq_qualities):
+    if lq_qualities is None and rq_qualities is None:
+        return None
+    out = {}
+    for fp in footprints:
+        tag = fp[4]
+        out[f"ns:{tag}"] = [
+            int(lq_qualities[tag]) if lq_qualities is not None and tag < len(lq_qualities) else 0,
+            int(rq_qualities[tag]) if rq_qualities is not None and tag < len(rq_qualities) else 0,
+        ]
+    return out
 
 
 def _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq=False, mapper=None):
