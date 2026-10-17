@@ -110,6 +110,25 @@ class _SeqRuns:
         seq = self.seq_at(x)
         return self.length - 1 - seq if self.reverse else seq
 
+    def mol_at_many(self, xs):
+        """``mol_at`` for many positions at once."""
+        if not self.ref:
+            return [0] * len(xs)
+        ref = np.asarray(self.ref, dtype=np.int64)
+        seq = np.asarray(self.seq, dtype=np.int64)
+        ln = np.asarray(self.len, dtype=np.int64)
+        x = np.asarray(xs, dtype=np.int64)
+        i = np.searchsorted(ref, x, side="right") - 1
+        ii = np.maximum(i, 0)
+        inside = (i >= 0) & (x < ref[ii] + ln[ii])
+        nxt = np.minimum(i + 1, len(ref) - 1)
+        after = seq[nxt]
+        end = seq[-1] + ln[-1]
+        out = np.where(inside, seq[ii] + (x - ref[ii]), np.where(i + 1 < len(ref), after, end))
+        if self.reverse:
+            out = self.length - 1 - out
+        return out.tolist()
+
     def mol_between(self, a, b):
         """Molecular bases (aligned or inserted) between source boundaries ``a <= b``."""
         return max(0, self.seq_at(b) - self.seq_at(a)) if self.ref else 0
@@ -537,23 +556,32 @@ def _call_identity(calls, ivs, parts, row, base, runs, lo):
     first part of its rejoin group (walking back over joinable gaps while the
     call extends there). Both depend only on the record and the chain, never on
     the view or the clipping."""
-    if not calls:
-        return [None] * len(parts), [None] * len(parts)
-    ids, keys = [], []
-    for _t0, _t1, i, k in parts:
-        call = calls[i] if i < len(calls) else None
+    n = len(parts)
+    if not calls or not n:
+        return [None] * n, [None] * n
+    frags, joinable = row.frags, row.joinable
+    ncalls = len(calls)
+    ids, part_src, group_src, special = [], [], [], {}
+    for j, (_t0, _t1, i, k) in enumerate(parts):
+        call = calls[i] if i < ncalls else None
+        iv = ivs[i]
         if not call:
             ids.append(None)
-            keys.append(None)
+            special[j] = None
+            part_src.append(0)
+            group_src.append(0)
             continue
         ids.append(call[0])
-        f = row.frags[k]
-        if ivs[i][1] - ivs[i][0] == 1 and not runs.has_aligned(int(call[1]), int(call[2])):
-            keys.append([int(call[1]), int(call[1])])  # insertion-only: its own molecular start
-            continue
-        a = base + int(lo.get(call[0], ivs[i][0]))
-        g = row.group_start(k, a)
-        keys.append([runs.mol_at(max(base + int(ivs[i][0]), f.s)), runs.mol_at(max(a, row.frags[g].s))])
+        if iv[1] - iv[0] == 1 and not runs.has_aligned(int(call[1]), int(call[2])):
+            special[j] = [int(call[1]), int(call[1])]  # insertion-only: its own molecular start
+        a = base + iv[0]
+        f = frags[k]
+        part_src.append(a if a > f.s else f.s)
+        first = base + lo.get(call[0], iv[0])
+        g = row.group_start(k, first) if k and joinable[k - 1] else k
+        group_src.append(max(first, frags[g].s))
+    mols = runs.mol_at_many(part_src + group_src)
+    keys = [special[j] if j in special else [mols[j], mols[n + j]] for j in range(n)]
     return ids, keys
 
 
