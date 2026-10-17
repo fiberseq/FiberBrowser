@@ -1942,11 +1942,10 @@ def _build_compact_reads_from_bam_region(
             if partition is None or partition == (0, 1) else None)
         from services.read_edge_cache import iter_edge_records
         # An unrepaired graph lift (ft pg-lift) turned supplementaries into
-        # extra primaries: show each molecule once (services.graph_lift),
-        # deciding over the whole view so an edge fetch agrees with a full one.
-        from services.graph_lift import is_lift_duplicate, is_unrepaired_lift, lift_duplicate_records
-        lift_drop = (lift_duplicate_records(bam.fetch(actual_chrom, region_start, region_end))
-                     if is_unrepaired_lift(bam.header) else set())
+        # extra primaries: hide those that carry evidence of it
+        # (services.graph_lift; per record, so every view agrees).
+        from services.graph_lift import is_lift_ex_supplementary, is_unrepaired_lift
+        unrepaired_lift = is_unrepaired_lift(bam.header)
         for read in iter_edge_records(bam, actual_chrom, region_start, region_end, fetch_regions):
             records_seen += 1
             if not records_seen & 255:
@@ -1957,7 +1956,7 @@ def _build_compact_reads_from_bam_region(
                 if profile_bam:
                     profile_counts["records_unmapped"] += 1
                 continue
-            if lift_drop and is_lift_duplicate(read, lift_drop):
+            if unrepaired_lift and is_lift_ex_supplementary(read):
                 continue
             if partition is not None:
                 from services.read_sampling import name_hash

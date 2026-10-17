@@ -12,6 +12,9 @@ from __future__ import annotations
 from typing import Iterable, Optional
 
 STRANDS = ("CT", "GA")
+# A read's ``strand`` when its st:Z tag is present but neither CT nor GA:
+# FiberHMM gives such a read no strand ('.'), whatever its R/Y marks say.
+ST_UNKNOWN = "."
 
 
 def normalize_strand(value: Optional[str]) -> Optional[str]:
@@ -28,6 +31,8 @@ def read_strand(read: dict) -> Optional[str]:
     cached = read.get("strand")
     if cached in STRANDS:
         return cached
+    if cached == ST_UNKNOWN:
+        return None  # an st tag FiberHMM reads as no strand: the marks do not decide
     ct = ga = 0
     for event in read.get("deam") or ():
         kind = event[1] if isinstance(event, (list, tuple)) and len(event) > 1 else None
@@ -65,7 +70,9 @@ def record_strand_fields(read) -> dict:
     then decides the read's strand over its deamination marks, see
     :func:`read_strand`), plus ``strand_conflict: True`` when the SEQ's R/Y
     marks say the other strand (``st`` not swapped when a lift reversed the
-    read, ``fiberhmm-lift`` repairs it). Empty without a usable ``st``."""
+    read, ``fiberhmm-lift`` repairs it). An ``st`` that is neither CT nor GA
+    gives ``{'strand': '.'}`` (present, no strand, as in FiberHMM); empty
+    without an ``st`` tag (the marks decide)."""
     try:
         if not read.has_tag("st"):
             return {}
@@ -73,7 +80,7 @@ def record_strand_fields(read) -> dict:
     except (AttributeError, KeyError):
         return {}
     if strand is None:
-        return {}
+        return {"strand": ST_UNKNOWN}
     seq_strand = seq_ry_strand(getattr(read, "query_sequence", None))
     if seq_strand is not None and seq_strand != strand:
         return {"strand": strand, "strand_conflict": True}

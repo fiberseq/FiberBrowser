@@ -1,6 +1,6 @@
 """DAF-C reads from BAMs (services/dafc_reads.query_bam_for_dafc): nucleosomes from
 legacy ns/nl, FiberHMM 3.0 MA and fibertools Ma, and an unrepaired graph lift's
-ex-supplementaries shown once. Synthetic BAMs written with pysam in tmp_path.
+ex-supplementaries hidden. Synthetic BAMs written with pysam in tmp_path.
 """
 from __future__ import annotations
 
@@ -37,7 +37,20 @@ def test_dafc_reads_take_nucleosomes_from_ma_and_ft_ma(tmp_path):
     assert rows["uncalled"] == ("", "", False)
 
 
-def test_dafc_reads_dedupe_unrepaired_lift(tmp_path):
+def test_dafc_reads_hide_unrepaired_lift_ex_supplementaries(tmp_path):
     path = _write_bam(tmp_path / "dafc_lift.bam", VG_LIFT_PGS, _split_molecule_specs())
-    names = sorted(r["name"] for r in dafc_reads.query_bam_for_dafc(path, "chr1", 0, CHROM_LEN))
-    assert names == ["m1", "m2"]
+    rows = dafc_reads.query_bam_for_dafc(path, "chr1", 0, CHROM_LEN)
+    assert sorted((r["name"], r["start"]) for r in rows) == [("m1", 1_000), ("m1", 16_000), ("m2", 2_000)]
+
+
+def test_dafc_ma_nucleosomes_project_through_aligned_bases(tmp_path):
+    # 100M200I100M: query [100, 300) is inserted. A nucleosome wholly inside the
+    # insertion has no reference block; one ending inside it stops at the last
+    # aligned base (no extra base), as the read track's MA parser projects them.
+    specs = [
+        (("inside", 1_000, 400), {"cigar": "100M200I100M", "tags": [("MA", "400;nuc+Q:151-100", "Z")]}),
+        (("ends_in", 1_000, 400), {"cigar": "100M200I100M", "tags": [("MA", "400;nuc+Q:51-100", "Z")]}),
+    ]
+    rows = _nuc_blocks(dafc_reads.query_bam_for_dafc(_write_bam(tmp_path / "ins.bam", [], specs), "chr1", 0, CHROM_LEN))
+    assert rows["inside"] == ("", "", True)
+    assert rows["ends_in"] == ("50", "50", True)

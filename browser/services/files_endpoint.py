@@ -120,9 +120,9 @@ def diagnose_bam_payload(state, *, bam_path=None, dataset_idx: int = 0, chrom=No
         if lift.get("unrepaired"):
             recommendations.append(
                 f"Lifted through a pangenome graph (@PG {', '.join(lift['unrepaired'])}) without fiberhmm-lift's "
-                "repair: supplementary alignments lost 0x800 (FiberBrowser shows each molecule once, keeping the "
-                "record with the longest SEQ, then the longest alignment, then the highest MAPQ), hard clips were "
-                "dropped, MD/NM/SA still describe the source assembly and st:Z was not swapped on reads that "
+                "repair: supplementary alignments lost 0x800 and show as extra reads (FiberBrowser hides only those "
+                "that carry evidence of it: an MA/Ma read length longer than SEQ, or fiberhmm-lift stash tags), "
+                "hard clips were dropped, MD/NM/SA still describe the source assembly and st:Z was not swapped on reads that "
                 f"changed strand. Repair it: {REPAIR_COMMAND}."
             )
         conflicts = int(result.get("st_strand_conflicts") or 0)

@@ -31,9 +31,9 @@ afterEach(() => {
 
 describe('ReadTooltip graph-lift and strand lines', () => {
   it('shows where a lifted read came from and its source MAPQ', () => {
-    const el = render({ id: 'r1', intervals: [[0, 500, -500]], lift: { from: 'chr1_MATERNAL:1141849:-', mapq: 7 } });
+    const el = render({ id: 'r1', intervals: [[0, 500, -500]], lift: { from: 'chr1_A:1141849:-', mapq: 7 } });
     expect(el.querySelector('[data-testid="read-lift-provenance"]')?.textContent)
-      .toBe('Lifted from chr1_MATERNAL:1141849:- · source MAPQ 7');
+      .toBe('Lifted from chr1_A:1141849:- · source MAPQ 7');
     expect(el.querySelector('[data-testid="read-strand-conflict"]')).toBeNull();
   });
 

@@ -16,7 +16,7 @@ from services.bam_tags import (
     read_legacy_tags_are_molecular,
 )
 from services.compact_read_loader import _read_ma_tags, ma_footprint_query_spans
-from services.graph_lift import is_lift_duplicate, is_unrepaired_lift, lift_duplicate_records
+from services.graph_lift import is_lift_ex_supplementary, is_unrepaired_lift
 from services.dafc_diagnostics import DAFC_DIAGNOSTICS_ENV, log_dafc_diagnostic
 from state.dependencies import get_dafc_state, get_state
 from utils.chrom import get_chrom_variants
@@ -120,14 +120,13 @@ def query_bam_for_dafc(bam_path: str, chrom: str, start: int, end: int) -> List[
                 family_contracts = bam_consensus_contracts(bam.header)
             except Exception:
                 ma_frame, family_contracts = False, {}
-            # An unrepaired graph lift: each molecule once (services/graph_lift.py).
-            lift_drop = (lift_duplicate_records(bam.fetch(actual_chrom, start, end))
-                         if is_unrepaired_lift(bam.header) else set())
+            # An unrepaired graph lift's ex-supplementaries, as the read track hides them.
+            unrepaired_lift = is_unrepaired_lift(bam.header)
 
             for read in bam.fetch(actual_chrom, start, end):
                 if read.is_unmapped or read.is_secondary or read.is_supplementary:
                     continue
-                if lift_drop and is_lift_duplicate(read, lift_drop):
+                if unrepaired_lift and is_lift_ex_supplementary(read):
                     continue
 
                 ref_start = read.reference_start
@@ -139,6 +138,7 @@ def query_bam_for_dafc(bam_path: str, chrom: str, start: int, end: int) -> List[
 
                 try:
                     seq_spans = None
+                    from_ma = False
                     if read.has_tag('ns') and read.has_tag('nl'):
                         ns_tag = read.get_tag('ns')
                         nl_tag = read.get_tag('nl')
@@ -156,6 +156,7 @@ def query_bam_for_dafc(bam_path: str, chrom: str, start: int, end: int) -> List[
                         ma_tags = _read_ma_tags(read, ma_frame)
                         if ma_tags is not None and _ma_has_nuc_group(ma_tags[0]):
                             footprints_called = True
+                            from_ma = True
                             seq_spans = [(q_start, q_end - q_start) for name, q_start, q_end in ma_footprint_query_spans(
                                 ma_tags, read_length=read.query_length or 0, is_reverse=read.is_reverse,
                                 family_contracts=family_contracts) if name == 'nuc']
@@ -171,7 +172,10 @@ def query_bam_for_dafc(bam_path: str, chrom: str, start: int, end: int) -> List[
                                 continue
                             # Both ends through the CIGAR: the block's
                             # reference length, across indels.
-                            fp_ref_start, fp_ref_end = mapper.footprint_to_ref(int(ns), int(ns) + int(nl) - 1)
+                            # MA/Ma through aligned bases only, as the read track's MA
+                            # parser projects them (nothing for a call inside an insertion).
+                            project = mapper.aligned_query_interval_to_ref if from_ma else mapper.footprint_to_ref
+                            fp_ref_start, fp_ref_end = project(int(ns), int(ns) + int(nl) - 1)
                             if fp_ref_start is None or fp_ref_end is None or fp_ref_end <= fp_ref_start:
                                 continue
                             for piece_start, piece_end in split_span(fp_ref_start, fp_ref_end, cuts):

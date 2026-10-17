@@ -122,8 +122,8 @@ export interface CompactRead {
   id: string;
   /** BAM 0x400 / FiberHMM BigBed isDuplicate annotation. */
   duplicate?: boolean;
-  /** DAF strand from the record's st:Z tag (FiberHMM's rule). */
-  strand?: 'CT' | 'GA';
+  /** DAF strand from the record's st:Z tag (FiberHMM's rule); '.' = st present but neither CT nor GA (no strand). */
+  strand?: 'CT' | 'GA' | '.';
   /** st:Z and the SEQ's R/Y deamination marks name different strands (e.g. st not swapped by a graph lift). */
   strand_conflict?: boolean;
   /** A fiberhmm-lift record's provenance: source locus (Yp:Z, contig:POS:strand) and source MAPQ (Yq:i). */

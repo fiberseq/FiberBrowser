@@ -282,6 +282,8 @@ def diagnose_bam_tags(
             ma_layer_types: set[str] = set(declared_ma_layer_types)
             # Annotation types actually seen in MA/Ma tags (not just declared in the header).
             observed_ma_types: set[str] = set()
+            # Types present in a read's MA/Ma tag, even with no intervals (a call that found none).
+            present_ma_types: set[str] = set()
             has_circular_annotations = False
             seen_read_keys: set[tuple] = set()
 
@@ -311,6 +313,7 @@ def diagnose_bam_tags(
                                 idx = sig.find(separator)
                                 if idx > 0:
                                     ma_layer_types.add(sig[:idx])
+                                    present_ma_types.add(sig[:idx])
                                     if part.split(":", 1)[1].strip():
                                         observed_ma_types.add(sig[:idx])
                                     break
@@ -350,7 +353,7 @@ def diagnose_bam_tags(
                         has_iupac_ry = True
 
                 strand_fields = record_strand_fields(read)
-                if strand_fields:
+                if strand_fields.get("strand") in ("CT", "GA"):
                     st_reads += 1
                     st_conflicts += bool(strand_fields.get("strand_conflict"))
 
@@ -452,11 +455,12 @@ def diagnose_bam_tags(
         }
 
         # An MA/Ma nuc./msp. type carries what the legacy arrays (and their
-        # nq/aq qualities) would; fibertools >= 0.13 writes only Ma/Aq.
+        # nq/aq qualities) would; fibertools >= 0.13 writes only Ma/Aq. A type
+        # present with no intervals is a call that found none: still covered.
         covered_by_ma = set()
-        if "nuc" in observed_ma_types:
+        if "nuc" in present_ma_types:
             covered_by_ma.update(("ns", "nl", "nq"))
-        if "msp" in observed_ma_types or "fire" in observed_ma_types:
+        if "msp" in present_ma_types or "fire" in present_ma_types:
             covered_by_ma.update(("as", "al", "aq"))
 
         missing_tags = []

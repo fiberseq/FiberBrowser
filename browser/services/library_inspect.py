@@ -707,6 +707,8 @@ def extras_stale(previous: dict, path: str) -> bool:
         return True  # recorded before basecaller provenance was read: read once more
     if "frame_unverifiable" not in previous and not previous.get("error"):
         return True  # recorded before the frame-evidence check: read once more
+    if "graph_lift" not in previous and not previous.get("error"):
+        return True  # recorded before graph-lift provenance was read: read once more
     for sidecar, stamp in stamps.items():
         if sidecar_stamp(sidecar) != stamp:
             return True  # a QC / outputs.json / index file changed, vanished or was downloaded
@@ -949,8 +951,9 @@ def inspect_bam(path: str, identity: dict, sidecars: Optional[Sidecars] = None) 
     info["fiberhmm"] = fiberhmm_provenance(header, chemistry)
     from services.graph_lift import lift_summary, lift_summary_text
     lift = lift_summary(header)
-    if lift is not None:  # a pangenome-graph lift (fiberhmm-lift @PG, or an unrepaired vg/ft one)
-        info["graph_lift"] = {**lift, "text": lift_summary_text(lift)}
+    # A pangenome-graph lift (fiberhmm-lift @PG, or an unrepaired vg/ft one); None (not
+    # absent) for any other BAM, so extras_stale can tell entries read before this check.
+    info["graph_lift"] = {**lift, "text": lift_summary_text(lift)} if lift is not None else None
     info["reference"] = reference_identity(header, path)
     samples = [str(rg.get("SM")) for rg in header.get("RG", []) or [] if rg.get("SM")]
     dates = [str(rg.get("DT")) for rg in header.get("RG", []) or [] if rg.get("DT")]

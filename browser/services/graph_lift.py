@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Iterable, Optional
+from typing import Optional
 
 LIFT_PROGRAM = "fiberhmm-lift"
 TAG_SOURCE_MAPQ = "Yq"
 TAG_SOURCE_LOCUS = "Yp"
+TAG_STASH_FLAG = "Yf"        # fiberhmm-lift stash (removed by the repair): source FLAG
+TAG_STASH_HARDCLIP = "Yh"    # fiberhmm-lift stash: source hard clips
 REPAIR_COMMAND = ("fiberhmm-lift --repair-only -i <lifted.bam> --source <source.bam> "
                   "--target-fasta <target.fa> -o <repaired.bam>")
 
@@ -34,17 +36,25 @@ def _header_dict(header) -> dict:
         return {}
 
 
+def _is_vg(pg: dict) -> bool:
+    return str(pg.get("PN", "") or "").strip().lower() == "vg"
+
+
+def _is_ft_lift(pg: dict) -> bool:
+    tokens = str(pg.get("CL", "") or "").split()
+    return bool(tokens) and os.path.basename(tokens[0]) in ("ft", "fibertools", "fibertools-rs") \
+        and any(t in ("pg-pansn", "pg-lift", "pg-inject") for t in tokens[1:3])
+
+
+def _is_vg_lift_cl(pg: dict) -> bool:
+    return re.match(r"^\S*\bvg\s+(surject|inject)\b", str(pg.get("CL", "") or "")) is not None
+
+
 def _is_lift_pg(pg: dict) -> bool:
-    """A @PG line written by a graph lift: vg, or ft pg-pansn / pg-lift (FiberHMM ``is_lift_pg``)."""
-    pn = str(pg.get("PN", "") or "").strip().lower()
-    ident = str(pg.get("ID", "") or "").strip().lower()
-    cl = str(pg.get("CL", "") or "")
-    if pn == "vg" or re.match(r"^vg(?:[ .-]|$)", ident) or re.match(r"^\S*\bvg\s+(surject|inject)\b", cl):
-        return True
-    tokens = cl.split()
-    if tokens and os.path.basename(tokens[0]) in ("ft", "fibertools", "fibertools-rs"):
-        return any(t in ("pg-pansn", "pg-lift", "pg-inject") for t in tokens[1:3])
-    return False
+    """A @PG line that by itself shows a graph lift (FiberHMM ``is_lift_pg``): ft
+    pg-pansn / pg-lift / pg-inject, or vg inject/surject in CL. vg's own bare
+    ``@PG ID:0 PN:vg`` is not: a native vg giraffe alignment writes the same."""
+    return _is_ft_lift(pg) or _is_vg_lift_cl(pg)
 
 
 def _is_repair_pg(pg: dict) -> bool:
@@ -54,13 +64,16 @@ def _is_repair_pg(pg: dict) -> bool:
 
 
 def _pending_lift_indices(pgs: list) -> list:
-    """FiberHMM ``pending_lift_indices``: a vg line without PP, or a lift line
-    no fiberhmm-lift @PG descends from through PP."""
-    pending = {i for i, pg in enumerate(pgs)
-               if _is_lift_pg(pg) and str(pg.get("PN", "") or "").strip().lower() == "vg" and not pg.get("PP")}
+    """FiberHMM ``pending_lift_indices`` (without the source BAM's @PG): an
+    :func:`_is_lift_pg` line is pending unless a fiberhmm-lift @PG descends
+    from it through PP. A bare ``PN:vg`` line (no CL) belongs to a pending
+    lift only when one exists, has no PP, and is not the root of other
+    history: of identical-ID bare lines the first is the lift's, and a single
+    one some other line names as its PP is a native alignment's."""
+    bare = {i for i, pg in enumerate(pgs) if _is_vg(pg) and not _is_lift_pg(pg) and not pg.get("PP")}
     by_id = {}
     for i, pg in enumerate(pgs):
-        if i not in pending:
+        if i not in bare:
             by_id.setdefault(pg.get("ID"), i)
     repaired = set()
     for pg in pgs:
@@ -72,7 +85,17 @@ def _pending_lift_indices(pgs: list) -> list:
             seen.add(j)
             parent = pgs[j].get("PP")
         repaired |= seen
-    pending |= {i for i, pg in enumerate(pgs) if _is_lift_pg(pg) and i not in repaired}
+    pending = {i for i, pg in enumerate(pgs) if _is_lift_pg(pg) and i not in repaired}
+    if not pending:
+        return []
+    referenced = {pg.get("PP") for i, pg in enumerate(pgs)
+                  if i not in bare and not _is_lift_pg(pg) and not _is_repair_pg(pg)}
+    by_bare_id: dict = {}
+    for i in sorted(bare):
+        by_bare_id.setdefault(pgs[i].get("ID"), []).append(i)
+    for ident, indices in by_bare_id.items():
+        if len(indices) > 1 or ident not in referenced:
+            pending.add(indices[0])
     return sorted(pending)
 
 
@@ -135,7 +158,7 @@ def lift_summary(header) -> Optional[dict]:
 
 
 def lift_summary_text(summary: Optional[dict]) -> str:
-    """One line for file details: ``HG002 → GRCh38 · graph hprc.gbz · MD/NM recomputed``."""
+    """One line for file details: ``asmA → asmB · graph graph.gbz · MD/NM recomputed``."""
     if not summary:
         return ""
     if not summary.get("lifts"):
@@ -189,54 +212,42 @@ def _declared_read_length(read) -> Optional[int]:
     return None
 
 
-def _record_key(read) -> tuple:
-    return (read.query_name, read.reference_start, read.reference_end,
-            bool(read.is_reverse), getattr(read, "mapping_quality", 0))
+def _stash_flag(read) -> Optional[int]:
+    try:
+        return int(read.get_tag(TAG_STASH_FLAG)) if read.has_tag(TAG_STASH_FLAG) else None
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
 
 
-def _rank(read) -> tuple:
-    span = (read.reference_end or 0) - (read.reference_start or 0)
-    return (int(read.query_length or 0), span, int(getattr(read, "mapping_quality", 0) or 0))
-
-
-def lift_duplicate_records(records: Iterable) -> set:
-    """Record keys (:func:`is_lift_duplicate`) of an unrepaired lift's extra primaries.
+def is_lift_ex_supplementary(read) -> bool:
+    """A primary of an unrepaired lift that was a supplementary before it.
 
     ``ft pg-lift`` drops 0x800, so a molecule's supplementaries come out as
-    more primaries with the same QNAME. A record is an ex-supplementary when
+    extra primaries. A record is hidden only on evidence it carries itself,
+    so the decision does not depend on which other records are in view (a
+    cached, cropped or extended view agrees with a fresh load):
 
-    - its ``MA``/``Ma``/``MN`` molecule length is longer than its SEQ (a
-      hard-clipped supplementary whose clips the lift dropped), whatever else
-      is in view; or
-    - another primary of its QNAME in ``records`` ranks higher: longer SEQ
-      (the primary carries the whole molecule), then longer reference span,
-      then higher MAPQ, then the first one met.
+    - fiberhmm-lift's stash tags (a lift that was stashed but not repaired):
+      ``Yf:i`` (source FLAG) has 0x800, or ``Yh:Z`` (source hard clips) is
+      present (only supplementaries are hard-clipped);
+    - its ``MA``/``Ma`` read length (or ``MN:i``) is longer than its SEQ: a
+      hard-clipped supplementary whose clips the lift dropped.
 
-    A soft-clipped ex-supplementary whose primary lies outside ``records`` is
-    still shown. Only used for unrepaired lifts (merged libraries can share
-    QNAMEs legitimately); a repaired lift restores 0x800.
+    A soft-clipped ex-supplementary without stash tags carries no such
+    evidence and is still shown: real reads (other read groups, mates) are
+    never hidden on a shared QNAME alone. SA cannot help: the lift copies it
+    verbatim, so it still names source-assembly positions.
     """
-    best: dict = {}
-    drop: set = set()
-    for read in records:
-        if read.is_unmapped or read.is_secondary or read.is_supplementary:
-            continue
-        key = _record_key(read)
-        declared = _declared_read_length(read)
-        if declared is not None and read.query_length and declared > int(read.query_length):
-            drop.add(key)
-            continue
-        rank = _rank(read)
-        held = best.get(read.query_name)
-        if held is None or held[1] == key:
-            best[read.query_name] = (rank, key)
-        elif rank > held[0]:
-            drop.add(held[1])
-            best[read.query_name] = (rank, key)
-        else:
-            drop.add(key)
-    return drop
-
-
-def is_lift_duplicate(read, drop: set) -> bool:
-    return bool(drop) and _record_key(read) in drop
+    if read.is_unmapped or read.is_secondary or read.is_supplementary:
+        return False
+    flag = _stash_flag(read)
+    if flag is not None and flag & 0x800:
+        return True
+    try:
+        if read.has_tag(TAG_STASH_HARDCLIP):
+            return True
+    except (AttributeError, KeyError):
+        pass
+    declared = _declared_read_length(read)
+    length = read.query_length or 0
+    return declared is not None and length > 0 and declared > length
