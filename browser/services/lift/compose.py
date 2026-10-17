@@ -25,7 +25,8 @@ reverse-complemented, clip sides swap).
 from __future__ import annotations
 
 import bisect
-from typing import Optional
+
+import numpy as np
 
 _COMPLEMENT = str.maketrans("ACGTNRYKMSWBDHVacgtnrykmswbdhv", "TGCANYRMKSWVHDBtgcanyrmkswvhdb")
 # Left/right quality tracks that trade places when intervals reverse (bam_tags.parse_ma_aq_tags_into_layers).
@@ -128,6 +129,20 @@ class _Row:
             self.frags.append(f)
             self.run_of.append(len(self.segments_runs) if hasattr(self, "segments_runs") else 0)
         self.segments_runs = getattr(self, "segments_runs", []) + [run]
+
+    def index(self):
+        """Lookup tables for the fast paths (fragments disjoint in source order)."""
+        self.starts = [f.s for f in self.frags]
+        self.disjoint = all(a.e <= b.s for a, b in zip(self.frags, self.frags[1:]))
+
+    def inside(self, a, b):
+        """The one fragment holding all of source ``[a, b)``, when fragments are disjoint."""
+        if not self.disjoint:
+            return None
+        k = bisect.bisect_right(self.starts, a) - 1
+        if k >= 0 and b <= self.frags[k].e:
+            return self.frags[k]
+        return None
 
     # Mapping of source positions (absolute, forward) through this row.
     def point(self, x):
@@ -312,6 +327,7 @@ def _lift_read(read, by_contig, haps, ctx):
         ctx.count("records_without_correspondence")
         return []
     for row in rows:
+        row.index()
         _row_geometry(row, contig, runs, ctx)
     _outside_badges([r for r in rows if not r.alt], contig, rs, re_, runs, haps, ctx)
     return [_row_payload(read, row, idx, len(rows), contig, runs, ctx) for idx, row in enumerate(rows)]
@@ -378,20 +394,66 @@ def _map_group(ivs, calls, row, base, runs, ctx):
     intervals ``ivs`` (region-relative source); an insertion-only call (no
     aligned base in its molecular span) is a zero-width marker at its
     insertion boundary. Gaps (negative size) are left out. ``logical`` is
-    None for a call drawn as one logical call, else its logical part index."""
-    out = []
+    None for a call drawn as one logical call, else its logical part index.
+
+    Intervals inside one fragment of a row with disjoint fragments (nearly
+    all of them) are mapped in one vectorised pass; the rest one by one."""
+    if not ivs:
+        return []
     width, rs0 = ctx.width, ctx.region_start
-    for i, iv in enumerate(ivs or ()):
-        if len(iv) > 2 and iv[2] < 0:
-            continue
-        a, b = base + int(iv[0]), base + int(iv[1])
+    n = len(ivs)
+    a = np.fromiter((iv[0] for iv in ivs), dtype=np.int64, count=n) + base
+    b = np.fromiter((iv[1] for iv in ivs), dtype=np.int64, count=n) + base
+    size = np.fromiter((iv[2] if len(iv) > 2 else 0 for iv in ivs), dtype=np.int64, count=n)
+    todo = size >= 0
+    out = []
+    if row.disjoint and calls is not None:
+        # Insertion-only candidates (one reference base) go the slow way.
+        slow = todo & (b - a == 1)
+    else:
+        slow = np.zeros(n, dtype=bool)
+    if row.disjoint:
+        starts = np.asarray(row.starts, dtype=np.int64)
+        ends = np.asarray([f.e for f in row.frags], dtype=np.int64)
+        k = np.searchsorted(starts, a, side="right") - 1
+        kk = np.maximum(k, 0)
+        fast = todo & ~slow & (k >= 0) & (b <= ends[kk])
+        if fast.any():
+            idx = np.flatnonzero(fast)
+            t0 = np.empty(len(idx), dtype=np.int64)
+            t1 = np.empty(len(idx), dtype=np.int64)
+            for j, f in enumerate(row.frags):
+                m = kk[idx] == j
+                if not m.any():
+                    continue
+                p, aa, bb = f.p, a[idx[m]], b[idx[m]]
+                if f.minus:
+                    t0[m] = p.t_end - 1 - (bb - 1 - p.q_start)
+                    t1[m] = p.t_end - 1 - (aa - p.q_start) + 1
+                else:
+                    t0[m] = p.t_start + (aa - p.q_start)
+                    t1[m] = p.t_start + (bb - 1 - p.q_start) + 1
+            c0 = np.maximum(t0 - rs0, 0)
+            c1 = np.minimum(t1 - rs0, width)
+            keep = c1 > c0
+            c0, c1, idx = c0[keep], c1[keep], idx[keep]
+            order = np.lexsort((idx, c1, c0))
+            out = list(zip(c0[order].tolist(), c1[order].tolist(), idx[order].tolist(), [None] * len(order)))
+        rest = np.flatnonzero(todo & ~fast)
+        if not len(rest):
+            return out
+    else:
+        rest = np.flatnonzero(todo)
+    for i in rest.tolist():
+        ai, bi = int(a[i]), int(b[i])
         call = calls[i] if calls is not None and i < len(calls) else None
-        if call is not None and not runs.has_aligned(int(call[1]), int(call[2])):
-            t = row.boundary(a)
+        # An insertion-only call decodes to the one reference base after its insertion.
+        if call is not None and bi - ai == 1 and not runs.has_aligned(int(call[1]), int(call[2])):
+            t = row.boundary(ai)
             if t is not None and 0 <= t - rs0 <= width:
                 out.append((t - rs0, t - rs0, i, None))
             continue
-        parts = row.parts(a, b)
+        parts = row.parts(ai, bi)
         split = parts and parts[-1][2] > 0
         for t0, t1, logical in parts:
             c0, c1 = max(t0 - rs0, 0), min(t1 - rs0, width)
@@ -399,6 +461,16 @@ def _map_group(ivs, calls, row, base, runs, ctx):
                 out.append((c0, c1, i, logical if split else None))
     out.sort(key=lambda x: (x[0], x[1], x[2]))
     return out
+
+
+def _call_ids(calls, parts):
+    """Call ids of mapped parts, in order (``_call_id`` for many)."""
+    if not calls:
+        return [None] * len(parts)
+    base = [c[0] if c else None for c in calls]
+    n = len(base)
+    return [(base[i] if i < n else None) if logical is None else
+            (f"{base[i]}/{logical}" if i < n and base[i] else None) for _t0, _t1, i, logical in parts]
 
 
 def _call_id(calls, part):
@@ -442,7 +514,7 @@ def _map_layer(name, layer, row, base, runs, ctx, call_ids_out):
         if values:
             out[key] = [_map_source_span(values[i] if i < len(values) else src[i], (t0, t1), row, base, ctx)
                         for t0, t1, i, _l in parts]
-    call_ids_out[f"layer:{name}"] = [_call_id(calls, part) for part in parts]
+    call_ids_out[f"layer:{name}"] = _call_ids(calls, parts)
     return out
 
 
@@ -459,19 +531,26 @@ def _map_source_span(src, part, row, base, ctx):
 
 
 def _map_points(values, row, base, ctx, pairs=False):
-    out, dropped = [], 0
+    """Point marks through the row's base map ``T`` (vectorised; first
+    fragment holding a position wins, as ``_Row.point``)."""
+    if not values:
+        return [], 0
     rs0, width = ctx.region_start, ctx.width
-    for v in values or ():
-        x = base + int(v[0] if pairs else v)
-        t = row.point(x)
-        if t is None:
-            dropped += 1
-            continue
-        rel = t - rs0
-        if 0 <= rel < width:
-            out.append([rel, *v[1:]] if pairs else rel)
-    out.sort(key=(lambda e: e[0]) if pairs else None)
-    return out, dropped
+    xs = np.asarray([v[0] for v in values] if pairs else values, dtype=np.int64) + base
+    t = np.full(len(xs), -1, dtype=np.int64)
+    for f in row.frags:
+        m = (xs >= f.s) & (xs < f.e) & (t < 0)
+        if m.any():
+            p = f.p
+            t[m] = (p.t_end - 1 - (xs[m] - p.q_start)) if f.minus else (p.t_start + (xs[m] - p.q_start))
+    mapped = t >= 0
+    dropped = int(len(xs) - mapped.sum())
+    rel = t - rs0
+    keep = np.flatnonzero(mapped & (rel >= 0) & (rel < width))
+    keep = keep[np.argsort(rel[keep], kind="stable")]
+    if pairs:
+        return [[int(rel[k]), *values[k][1:]] for k in keep.tolist()], dropped
+    return rel[keep].tolist(), dropped
 
 
 def _map_cigar(events, row, base, ctx):
@@ -591,12 +670,12 @@ def _row_payload(read, row, idx, count, contig, runs, ctx):
     spans = _body_spans(row, ctx)
     mapped = [[t0, t1, *ivs[i][2:]] for t0, t1, i, _l in parts]
     gaps = _with_gaps(mapped, [(max(a, 0), min(b, width)) for a, b in spans], ctx.hide_terminal_gaps, width)
-    order = sorted(range(len(mapped) + len(gaps)),
-                   key=lambda j: ((mapped + gaps)[j][0], (mapped + gaps)[j][1], j))
     combined = mapped + gaps
+    order = sorted(range(len(combined)), key=lambda j: (combined[j][0], combined[j][1], j))
     payload["intervals"] = [combined[j] for j in order]
     part_of = {j: parts[j][2] for j in range(len(parts))}
-    payload_calls = [_call_id(iv_calls, parts[j]) if j in part_of else None for j in order]
+    part_ids = _call_ids(iv_calls, parts)
+    payload_calls = [part_ids[j] if j < len(parts) else None for j in order]
     call_ids["intervals"] = payload_calls
     if quals:
         payload["qualities"] = [quals[rank[part_of[j]]] for j in order
@@ -606,7 +685,7 @@ def _row_payload(read, row, idx, count, contig, runs, ctx):
         fire_calls = calls.get("fire")
         fparts = _map_group(read["fire"], fire_calls, row, base, runs, ctx)
         payload["fire"] = [[t0, t1, *read["fire"][i][2:]] for t0, t1, i, _l in fparts]
-        call_ids["fire"] = [_call_id(fire_calls, part) for part in fparts]
+        call_ids["fire"] = _call_ids(fire_calls, fparts)
 
     layers = {}
     for name, layer in (read.get("layers") or {}).items():
