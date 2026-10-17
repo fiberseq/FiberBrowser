@@ -236,7 +236,7 @@ def _merge(entry: dict, info: dict, source: Optional[str]) -> dict:
     merged = {**entry, **{k: v for k, v in info.items() if k not in USER_FIELDS}}
     # Fields a new inspection didn't produce (e.g. QC that disappeared) are dropped.
     for key in ("qc", "pipeline", "role", "error", "advisories", "sidecars", "sidecar_roots", "basecaller",
-                "sidecar_errors", "sidecars_online_only", "frame_unverifiable"):
+                "sidecar_errors", "sidecars_online_only", "frame_unverifiable", "graph_lift"):
         if key not in info:
             merged.pop(key, None)
     if advisories and "advisories" not in info and (advisories.get("key") or "").split("|")[0] == \
