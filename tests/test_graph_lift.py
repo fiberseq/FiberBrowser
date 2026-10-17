@@ -414,3 +414,22 @@ def test_variant_and_sv_readers_skip_hidden_records(tmp_path, monkeypatch):
     assert [r.reference_start for r, _ in sv] == [1_000]
     rows = list(sv_endpoint._bam_records(state, "reads", "chr1", 2_500, 3_500))
     assert [r.reference_start for r, _ in rows] == [1_000]
+
+
+def test_read_locate_never_caches_a_hidden_record_as_the_primary(tmp_path):
+    from types import SimpleNamespace
+    from services.read_locate import clear_cache, locate_reads
+    clear_cache()
+    specs = [(("m", 1_000, 2_000), {"tags": [("Yf", 0, "i")]}),
+             (("m", 15_000, 2_000), {"tags": [("Yf", 2048, "i")]})]
+    path = _write_bam(tmp_path / "locate.bam", VG_LIFT_PGS, specs)
+    dataset = SimpleNamespace(id="d", data_type="bam", paths=[path], label="d")
+    state = SimpleNamespace(get_dataset={"d": dataset}.get, dataset_order=["d"], chroms=[])
+    try:
+        near = locate_reads(state, ["m"], scope="region", chrom="chr1", start=14_000, end=18_000)
+        assert [(f["start"], f["supplementary"]) for f in near["found"]] == [(15_000, True)]
+        # The next, wider search finds the drawn primary, not a cached hidden record.
+        wide = locate_reads(state, ["m"], scope="chrom", chrom="chr1")
+        assert [(f["start"], f["supplementary"]) for f in wide["found"]] == [(1_000, False)]
+    finally:
+        clear_cache()

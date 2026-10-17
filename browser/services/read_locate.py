@@ -202,7 +202,9 @@ class _Search:
             self.fallback.setdefault(requested, hit)
 
 
-def _bam_hit(search: _Search, state, dataset, read, path: str) -> dict:
+def _bam_hit(search: _Search, state, dataset, read, path: str, primary: Optional[bool] = None) -> dict:
+    """``primary``: the caller's decision that this is the drawn record (default: the
+    BAM flags). Only primaries are cached, never an unrepaired lift's hidden record."""
     contig = read.reference_name
     start = int(read.reference_start)
     end = int(read.reference_end or start + 1)
@@ -215,7 +217,9 @@ def _bam_hit(search: _Search, state, dataset, read, path: str) -> dict:
         "end": end,
         "strand": "-" if read.is_reverse else "+",
     }
-    if not (read.is_secondary or read.is_supplementary):
+    if primary is None:
+        primary = not (read.is_secondary or read.is_supplementary)
+    if primary:
         _cache_put(path, search.version(path), read.query_name, {k: hit[k] for k in ("read_id", "contig", "start", "end", "strand")})
     return hit
 
@@ -278,7 +282,7 @@ def _scan_bam_records(search: _Search, state, dataset, path: str, bam, intervals
                     continue
                 # An unrepaired lift's ex-supplementary is not the drawn record: a supplementary hit.
                 primary = not read.is_supplementary and not (hidden is not None and hidden(read))
-                search.record(requested, _bam_hit(search, state, dataset, read, path), primary=primary)
+                search.record(requested, _bam_hit(search, state, dataset, read, path, primary), primary=primary)
                 if search.done():
                     search.scanned += n % CHECK_EVERY
                     return
