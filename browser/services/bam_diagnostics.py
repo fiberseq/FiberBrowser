@@ -307,7 +307,7 @@ def diagnose_bam_tags(
                                     if part.split(":", 1)[1].strip():
                                         observed_ma_types.add(sig[:idx])
                                     break
-                    if tag == "AN" and isinstance(value, str):
+                    if tag in ("AN", "An") and isinstance(value, str):
                         names = [name for name in value.split(",") if name and name != "."]
                         has_circular_annotations = has_circular_annotations or len(names) != len(set(names))
 
@@ -438,12 +438,20 @@ def diagnose_bam_tags(
             "ML": "modification likelihoods",
         }
 
+        # An MA/Ma nuc./msp. type carries what the legacy arrays (and their
+        # nq/aq qualities) would; fibertools >= 0.13 writes only Ma/Aq.
+        covered_by_ma = set()
+        if "nuc" in observed_ma_types:
+            covered_by_ma.update(("ns", "nl", "nq"))
+        if "msp" in observed_ma_types or "fire" in observed_ma_types:
+            covered_by_ma.update(("as", "al", "aq"))
+
         missing_tags = []
         present_tags = []
         for tag, desc in fiberseq_tags.items():
             if tag in tag_counts:
                 present_tags.append(f"{tag} ({desc})")
-            else:
+            elif tag not in covered_by_ma:
                 missing_tags.append(f"{tag} ({desc})")
 
         return {
@@ -465,7 +473,10 @@ def diagnose_bam_tags(
             # legacy ns/nl, as/al signals (they drive the `footprint` layer).
             "has_ma_nucleosomes": "nuc" in observed_ma_types,
             "has_ma_msps": "msp" in observed_ma_types,
-            "has_fire": "aq" in tag_counts and "as" in tag_counts and "al" in tag_counts,
+            "has_fire": (
+                ("aq" in tag_counts and "as" in tag_counts and "al" in tag_counts)
+                or "fire" in observed_ma_types
+            ),
             "has_m6a": has_m6a_mm or (("MM" in tag_counts) and not has_m5c_mm and not has_m6a_mm),
             "has_m5c": has_m5c_mm,
             "has_deam": has_iupac_ry or has_daf_mismatches,

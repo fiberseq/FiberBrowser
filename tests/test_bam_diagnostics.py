@@ -1,4 +1,6 @@
 import sys
+from array import array
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -287,3 +289,112 @@ def test_diagnose_bam_tags_offers_per_strand_deam_coverage_layers(monkeypatch):
     monkeypatch.setitem(sys.modules, "pysam", fake_pysam)
     result = diagnose_bam_tags("https://example.org/sample.bam", chrom="2R", limit=1)
     assert {"deam", "deam_ct", "deam_ga"} <= set(result["ma_layers"])
+
+
+DEMO_BAM = Path(__file__).resolve().parents[1] / "browser" / "data" / "demo" / "h1_chr1_insertion.bam"
+LEGACY_FOOTPRINT_TAGS = ("ns", "nl", "as", "al", "nq", "aq")
+
+
+def _demo_variant(tmp_path, kind):
+    """Rewrite the demo BAM (legacy ns/nl/as/al + FiberHMM MA/AQ) as one producer's tag set.
+
+    ``ft013``: fibertools >= 0.13 (Ma/Aq only, no An, no legacy arrays, no FiberHMM
+    @CO frame/type lines), with a fire.Q group added from each read's first MSP.
+    ``fiberhmm``: FiberHMM MA/AQ only. ``legacy``: ns/nl/as/al/nq/aq only.
+    """
+    import pysam
+
+    out = tmp_path / f"{kind}.bam"
+    with pysam.AlignmentFile(str(DEMO_BAM)) as src:
+        header = src.header.to_dict()
+        if kind == "ft013":
+            header["CO"] = [c for c in header.get("CO", [])
+                            if not c.startswith(("MA-TYPES", "fiberhmm:coord"))]
+        with pysam.AlignmentFile(str(out), "wb", header=header) as dst:
+            for read in src:
+                if kind in ("ft013", "fiberhmm"):
+                    for tag in LEGACY_FOOTPRINT_TAGS:
+                        read.set_tag(tag, None)
+                if kind == "legacy":
+                    for tag in ("MA", "AQ", "AN"):
+                        read.set_tag(tag, None)
+                if kind == "ft013" and read.has_tag("MA"):
+                    ma = str(read.get_tag("MA"))
+                    aq = list(read.get_tag("AQ")) if read.has_tag("AQ") else []
+                    msp = [p for p in ma.split(";") if p.startswith("msp.:")]
+                    first = msp[0].split(":", 1)[1].split(",")[0] if msp else ""
+                    if first:
+                        ma += f";fire.Q:{first}"
+                        aq.append(200)
+                    for tag in ("MA", "AQ", "AN"):
+                        read.set_tag(tag, None)
+                    read.set_tag("Ma", ma, value_type="Z")
+                    read.set_tag("Aq", array("B", aq))
+                dst.write(read)
+    pysam.index(str(out))
+    return str(out)
+
+
+def _diagnose(path):
+    from services.files_endpoint import diagnose_bam_payload
+
+    return diagnose_bam_payload(SimpleNamespace(), bam_path=path, limit=50)
+
+
+def test_diagnose_fibertools_013_ma_bam_reports_nothing_missing(tmp_path):
+    result = _diagnose(_demo_variant(tmp_path, "ft013"))
+
+    assert "error" not in result
+    assert {"Ma", "Aq"} <= set(result["all_tags"])
+    assert not {"MA", "AQ", "An", *LEGACY_FOOTPRINT_TAGS} & set(result["all_tags"])
+    assert result["fiberseq_missing"] == []
+    assert result["recommendations"] == []
+    assert result["has_ma_nucleosomes"] and result["has_ma_msps"]
+    assert result["has_fire"]
+    assert not result["has_nucleosomes"] and not result["has_msps"]
+    assert {"nuc", "msp", "tf", "fire"} <= set(result["ma_layers"])
+
+
+def test_diagnose_fiberhmm_ma_bam_reports_nothing_missing(tmp_path):
+    result = _diagnose(_demo_variant(tmp_path, "fiberhmm"))
+
+    assert "error" not in result
+    assert {"MA", "AQ"} <= set(result["all_tags"])
+    assert result["fiberseq_missing"] == []
+    assert result["recommendations"] == []
+    assert result["has_ma_nucleosomes"] and result["has_ma_msps"]
+    assert not result["has_fire"]
+    assert {"nuc", "msp", "tf"} <= set(result["ma_layers"])
+
+
+def test_diagnose_legacy_only_bam_keeps_legacy_capabilities(tmp_path):
+    result = _diagnose(_demo_variant(tmp_path, "legacy"))
+
+    assert "error" not in result
+    assert not {"MA", "AQ", "Ma", "Aq"} & set(result["all_tags"])
+    assert result["fiberseq_missing"] == []
+    assert result["recommendations"] == []
+    assert result["has_nucleosomes"] and result["has_msps"]
+    assert result["has_fire"]
+    assert not result["has_ma_nucleosomes"] and not result["has_ma_msps"]
+
+
+def test_diagnose_ma_bam_without_msp_still_reports_missing_as_al(tmp_path):
+    """Coverage is per type: an MA with nuc. but no msp. leaves as/al/aq missing."""
+    import pysam
+
+    src_path = _demo_variant(tmp_path, "fiberhmm")
+    out = tmp_path / "nuc_only.bam"
+    with pysam.AlignmentFile(src_path) as src, pysam.AlignmentFile(str(out), "wb", header=src.header) as dst:
+        for read in src:
+            if read.has_tag("MA"):
+                parts = [p for p in str(read.get_tag("MA")).split(";") if not p.startswith("msp.")]
+                read.set_tag("MA", ";".join(parts), value_type="Z")
+            dst.write(read)
+    pysam.index(str(out))
+
+    result = _diagnose(str(out))
+
+    missing = {entry.split(" ", 1)[0] for entry in result["fiberseq_missing"]}
+    assert missing == {"as", "al", "aq"}
+    assert any(r.startswith("Missing Fiber-seq tags: as") for r in result["recommendations"])
