@@ -50,7 +50,8 @@ def _lift(sidecar, src, chrom, size):
 
 
 def _call_hulls(rows, base, layer):
-    """Per molecule, the target hull of each logical call (parts by call id)."""
+    """Per molecule, the target hull of each call (its parts by call id; the
+    native side's deletion pieces are joined the same way in ``_native``)."""
     out = collections.defaultdict(set)
     for r in rows:
         lay = (r.get("layers") or {}).get(layer)
@@ -59,7 +60,7 @@ def _call_hulls(rows, base, layer):
         ids = r["live_lift"]["calls"][f"layer:{layer}"]
         hulls = {}
         for k, (iv, cid) in enumerate(zip(lay["intervals"], ids)):
-            key = cid.split("/")[0] if cid else k
+            key = cid if cid else k
             h = hulls.get(key)
             hulls[key] = (iv[0], iv[1]) if h is None else (min(h[0], iv[0]), max(h[1], iv[1]))
         out[r["id"]] |= {(a + base, b + base) for a, b in hulls.values()}
@@ -67,18 +68,42 @@ def _call_hulls(rows, base, layer):
 
 
 def _native(path, chrom, start, end, layer):
+    """Native calls per molecule, with the pieces the decoder cut at a deletion joined again."""
     out = collections.defaultdict(set)
     for r in build_compact_reads_from_bam(path, chrom, start, end, spanning_only=False, **OPTS):
         lay = (r.get("layers") or {}).get(layer)
-        for iv in (lay or {}).get("intervals", ()):
+        dels = {(int(e["ref"]) - start, int(e["ref"]) + int(e["len"]) - start) for e in r.get("sv", ())
+                if e.get("t") == "D"}
+        merged = []
+        for iv in sorted((lay or {}).get("intervals", ())):
+            if merged and (merged[-1][1], iv[0]) in dels and merged[-1][2] == iv[2]:
+                merged[-1][1] = iv[1]
+            else:
+                merged.append(list(iv))
+        for iv in merged:
             out[r["id"]].add((iv[0] + start, iv[1] + start))
     return out
 
 
-def _agreement(ours, theirs):
-    shared = set(ours) & set(theirs)
-    total = sum(len(theirs[i]) for i in shared)
-    return len(shared), sum(len(ours[i] & theirs[i]) for i in shared) / max(total, 1)
+def _agreement(ours, theirs, molecules=None):
+    """Symmetric agreement over ``molecules`` (default: both sides'): matched
+    calls over the union of both sides' calls, so a missing molecule, a missing
+    call and an extra call all count against it. Returns (molecules, score)."""
+    molecules = set(ours) | set(theirs) if molecules is None else set(molecules)
+    matched = sum(len(ours.get(i, set()) & theirs.get(i, set())) for i in molecules)
+    union = sum(len(ours.get(i, set()) | theirs.get(i, set())) for i in molecules)
+    return len(molecules & set(ours) & set(theirs)), matched / max(union, 1)
+
+
+def _source_molecules(path, contig):
+    with pysam.AlignmentFile(path) as bam:
+        return {r.query_name for r in bam.fetch(contig) if not r.is_secondary}
+
+
+def test_agreement_is_symmetric():
+    ours = {"kept": {(0, 10), (200, 210)}}
+    theirs = {"kept": {(0, 10)}, "lost": {(40, 50)}}
+    assert _agreement(ours, theirs)[1] == pytest.approx(1 / 3)
 
 
 @pytest.fixture(scope="module")
@@ -88,15 +113,16 @@ def alu(tmp_path_factory):
 
 
 def test_alu_calls_match_fiberhmm_lift_and_native(alu):
-    _src, load = alu
+    src, load = alu
+    source_molecules = _source_molecules(src, "chr3_MATERNAL")
     base = load.region_start + ALU_OFFSET
-    for layer, vs_lift, vs_native in (("nuc", 0.995, 0.98), ("msp", 0.995, 0.99)):
+    for layer, vs_lift, vs_native in (("nuc", 0.995, 0.96), ("msp", 0.995, 0.96)):
         ours = _call_hulls(load.rows, base, layer)
         n, a = _agreement(ours, _native(os.path.join(WORK, "demo", "alu.MAT.fiberhmm_lift.bam"), "chr3",
                                         ALU_OFFSET, ALU_OFFSET + 240_000, layer))
         assert n >= 200 and a >= vs_lift, (layer, n, a)
         n, a = _agreement(ours, _native(os.path.join(WORK, "demo", "alu.native_GRCh38.bam"), "chr3",
-                                        ALU_OFFSET, ALU_OFFSET + 240_000, layer))
+                                        ALU_OFFSET, ALU_OFFSET + 240_000, layer), source_molecules)
         assert n >= 200 and a >= vs_native, (layer, n, a)
 
 

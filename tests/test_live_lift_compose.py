@@ -73,7 +73,11 @@ def test_plus_row_connector_badge_and_disconnected_parts(toy):
     assert ll_["badges"] == [[6010, "source_insertion", 100, 100, "I"]]
     assert r["intervals"] == [[3900, 4000, 200], [4010, 4110, 200], [4110, 5960, -1850], [5960, 6010, 200],
                               [6010, 6060, 200], [6060, 6410, -350], [6410, 6610, 200]]
-    assert ll_["calls"]["intervals"] == ["ns:0/0", "ns:0/1", None, "ns:1/0", "ns:1/1", None, "ns:2"]
+    # Call ids are immutable; the parts across the 10 bp connector and the 100 bp badge
+    # are separate logical groups (call_parts: [part, group] molecular keys).
+    assert ll_["calls"]["intervals"] == ["ns:0", "ns:0", None, "ns:1", "ns:1", None, "ns:2"]
+    assert ll_["call_parts"]["intervals"] == [[400, 400], [500, 500], None, [2450, 2450], [2600, 2600], None,
+                                             [3000, 3000]]
     assert r["qualities"] == [10, 10, 20, 20, 30]
     assert r["methyl_m6a"] == [3500]
     assert (r["reference_start"], r["reference_end"]) == (3500, 6710)
@@ -117,12 +121,15 @@ def test_minus_deletion_span_and_sv(toy):
 def test_rejoined_call_shares_id_but_never_spans_the_connector(toy):
     (r,) = _rows(_load(toy), "rejoin")
     assert r["live_lift"]["connectors"] == [[8200, 8203]]
-    pos = [(iv[:2], cid) for iv, cid in zip(r["intervals"], r["live_lift"]["calls"]["intervals"]) if iv[2] > 0]
-    assert pos == [([8150, 8200], "ns:0"), ([8203, 8253], "ns:0")]
+    ll_ = r["live_lift"]
+    pos = [(iv[:2], cid, part) for iv, cid, part in
+           zip(r["intervals"], ll_["calls"]["intervals"], ll_["call_parts"]["intervals"]) if iv[2] > 0]
+    # One logical call (same id, same group) drawn as two disconnected parts.
+    assert pos == [([8150, 8200], "ns:0", [100, 100]), ([8203, 8253], "ns:0", [150, 100])]
     assert not any(iv[0] < 8203 and iv[1] > 8200 for iv in r["intervals"])
-    assert len({cid for _iv, cid in pos}) == 1  # one logical call, counted once
     no_rejoin = _rows(_load(toy, ll.LiftSettings(rejoin_bp=0)), "rejoin")[0]
-    assert [c for c in no_rejoin["live_lift"]["calls"]["intervals"] if c] == ["ns:0/0", "ns:0/1"]
+    assert [c for c in no_rejoin["live_lift"]["calls"]["intervals"] if c] == ["ns:0", "ns:0"]
+    assert [p[1] for p in no_rejoin["live_lift"]["call_parts"]["intervals"] if p] == [100, 150]
 
 
 def test_elsewhere_badge_and_alternative_rows(toy):

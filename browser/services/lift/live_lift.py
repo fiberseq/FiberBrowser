@@ -116,16 +116,9 @@ class LiftMapHandle:
             raw = fh.read()
         self.map = LiftMap(json.loads(raw), os.path.dirname(self.path))
         self.manifest = self.map.m
-        files = []
-        for target in sorted(self.manifest.get("target_files", {})):
-            for name in self.manifest["target_files"][target]:
-                try:
-                    st = os.stat(os.path.join(self.map.dir, name))
-                    files.append((name, st.st_size, st.st_mtime_ns))
-                except OSError:
-                    files.append((name, None, None))
+        self.payload_stamps = payload_stamps(self.manifest, self.map.dir)
         digest = hashlib.sha256(raw)
-        digest.update(json.dumps(files).encode())
+        digest.update(json.dumps(self.payload_stamps).encode())
         self.fingerprint = digest.hexdigest()
         # Source contig -> haplotype, from the chains (one haplotype per source).
         self.source_haplotype = {}
@@ -136,6 +129,26 @@ class LiftMapHandle:
         self.chain_rank = {ci: (-int(c.get("score", c.get("aligned", 0)) or 0), c.get("key", "")) for ci, c in
                            enumerate(self.map.chains)}
         self.lock = threading.Lock()
+
+    def resolve_haplotypes(self, values: Iterable[str]) -> list:
+        """Haplotype keys for ``values`` given as keys (``HG002#2``) or labels
+        (``MAT``/``PAT``, case-insensitive); unknown values raise."""
+        by_label = {}
+        for hap, label in self.haplotype_labels.items():
+            by_label.setdefault(str(label).upper(), []).append(hap)
+        out = []
+        for value in values:
+            if value in self.haplotypes:
+                hits = [value]
+            else:
+                hits = by_label.get(str(value).upper())
+            if not hits:
+                known = ", ".join(sorted(set(self.haplotypes) | set(self.haplotype_labels.values())))
+                raise LiftSettingsError(f"unknown haplotype {value!r} (this map has {known})")
+            out += [h for h in hits if h not in out]
+        if not out:
+            raise LiftSettingsError("no haplotype selected")
+        return out
 
     def target_size(self, chrom: str) -> Optional[int]:
         ti = self.map.targets.get(chrom)
@@ -166,20 +179,37 @@ def _haplotype_labels(manifest) -> dict:
     return out
 
 
+def payload_stamps(manifest, directory) -> list:
+    """``[(file, size, mtime_ns)]`` of every target payload file."""
+    files = []
+    for target in sorted(manifest.get("target_files", {})):
+        for name in manifest["target_files"][target]:
+            try:
+                st = os.stat(os.path.join(directory, name))
+                files.append((name, st.st_size, st.st_mtime_ns))
+            except OSError:
+                files.append((name, None, None))
+    return files
+
+
 _MAPS: "OrderedDict[tuple, LiftMapHandle]" = OrderedDict()
 _MAPS_LOCK = threading.Lock()
 _MAX_MAPS = 4
 
 
 def open_lift_map(manifest_path: str) -> LiftMapHandle:
-    """The shared handle of a sidecar manifest (reopened when the file changes)."""
+    """The shared handle of a sidecar manifest, reopened when the manifest or
+    any target payload file changes (size or mtime)."""
     path = os.path.abspath(manifest_path)
     st = os.stat(path)
     key = (path, st.st_size, st.st_mtime_ns)
     with _MAPS_LOCK:
         handle = _MAPS.get(key)
-        if handle is not None:
-            _MAPS.move_to_end(key)
+    if handle is not None:
+        if payload_stamps(handle.manifest, handle.map.dir) == handle.payload_stamps:
+            with _MAPS_LOCK:
+                if key in _MAPS:
+                    _MAPS.move_to_end(key)
             return handle
     handle = LiftMapHandle(path)
     with _MAPS_LOCK:
@@ -346,11 +376,14 @@ class ContigFetch:
     pieces: list           # the selection's pieces on this contig, sorted by q_start
 
     def target_extents(self, ref_start: int, ref_end: int) -> list:
-        """A source extent's target extents: one hull per projected chain
-        (sampling counts a skipped record there without a CIGAR walk)."""
+        """A source extent's target extents through primary pieces: one hull
+        per projected chain (sampling counts a record there without a CIGAR
+        walk)."""
         hulls: dict = {}
         k = bisect.bisect_right([p.q_start for p in self.pieces], ref_end)
         for p in self.pieces[:k]:
+            if not p.primary:
+                continue
             s, e = max(p.q_start, ref_start), min(p.q_end, ref_end)
             if e <= s:
                 continue
@@ -429,6 +462,8 @@ class LoadBudget:
 
     def account(self, read: dict) -> None:
         self.bytes += decoded_size_estimate(read)
+        if self.bytes >= self.max_bytes:
+            self.truncated = True  # the record that crosses the limit marks it
 
 
 def decoded_size_estimate(read: dict) -> int:
@@ -467,15 +502,20 @@ def estimate_lifted_reads(bam_paths: Iterable[str], plan: FetchPlan, **kwargs) -
 
 @contextmanager
 def lifted_decode():
-    """Nothing streamed or packed while source records decode: rows are
-    published only after lifting (§3.3)."""
-    from services.packed_reads import packed_decode
+    """Nothing streamed or packed while source records decode (rows are
+    published only after lifting, §3.3), and no ambient sampler, read-id scope
+    or decode partition applies: a lifted load is unfiltered unless its caller
+    passes a sampler explicitly."""
+    from services.packed_reads import decode_partition, packed_decode
+    from services.read_sampling import sampling
     from services.read_stream import decoded_read_sink
 
-    sink, packed = decoded_read_sink.set(None), packed_decode.set(False)
+    sink, packed, partition = decoded_read_sink.set(None), packed_decode.set(False), decode_partition.set(None)
     try:
-        yield
+        with sampling(None):
+            yield
     finally:
+        decode_partition.reset(partition)
         packed_decode.reset(packed)
         decoded_read_sink.reset(sink)
 
@@ -499,10 +539,13 @@ class LiftedLoad:
 
 def decode_source_records(bam_paths: Iterable[str], plan: FetchPlan, *, loader_options: Optional[dict] = None,
                           budget: Optional[LoadBudget] = None, counts: Optional[dict] = None,
-                          sampled: bool = False, bam_handle_getter=None, include_supplementary: bool = True) -> list:
+                          sampler=None, bam_handle_getter=None, include_supplementary: bool = True) -> list:
     """Decode the plan's source windows with the compact-read loader in source
     coordinates. Each read gets ``_fiberbrowser_source_base`` (its intervals'
-    origin) and ``source_path``."""
+    origin) and ``source_path``. Ambient sampling never applies; ``sampler``
+    (``read_sampling.Sampler``) samples explicitly, by QNAME, counting each
+    primary record at its target extents (primary pieces)."""
+    from services.read_sampling import sampling
     from services.compact_read_loader import build_compact_reads_from_bam
     from services.read_edge_cache import EdgeFetchUnsupported
 
@@ -511,14 +554,14 @@ def decode_source_records(bam_paths: Iterable[str], plan: FetchPlan, *, loader_o
     if bam_handle_getter is not None:
         options["bam_handle_getter"] = bam_handle_getter
     out = []
-    with lifted_decode():
+    with lifted_decode(), sampling(sampler):
         for path in bam_paths:
             for c in plan.contigs:
                 try:
                     reads = build_compact_reads_from_bam(
                         path, c.contig, c.region_start, c.region_end, fetch_regions=c.windows,
                         lift_counts=counts, load_budget=budget,
-                        sample_bounds=c.target_extents if sampled else None, **options)
+                        sample_bounds=c.target_extents if sampler is not None else None, **options)
                 except EdgeFetchUnsupported:
                     raise LiftRefused(f"Live lift: source contig {c.contig} is circular (not supported).",
                                       status=409) from None
@@ -532,7 +575,7 @@ def decode_source_records(bam_paths: Iterable[str], plan: FetchPlan, *, loader_o
 def load_lifted_rows(handle: LiftMapHandle, bam_paths: Iterable[str], chrom: str, start: int, end: int, *,
                      haplotypes: Iterable[str], settings: LiftSettings, dataset_id: str,
                      loader_options: Optional[dict] = None, budget: Optional[LoadBudget] = None,
-                     bam_handle_getter=None, use_cache: bool = True) -> LiftedLoad:
+                     bam_handle_getter=None, use_cache: bool = True, sampler=None) -> LiftedLoad:
     """Every lifted row of target view ``[start, end)`` plus its selection
     margin: selection -> plan -> source decode -> primary metadata -> lift.
     Rows are relative to, and clipped to, the selection range
@@ -540,11 +583,14 @@ def load_lifted_rows(handle: LiftMapHandle, bam_paths: Iterable[str], chrom: str
     haplotype, display or cap filter is applied; supplementary and alternative
     rows come flagged whenever display or cohort settings need them. The only
     filtering is the source loader's own duplicate, signal and record filters
-    (``loader_options`` must not ask for read ids or spanning)."""
+    (``loader_options`` must not ask for read ids or spanning).
+    ``haplotypes``: keys or labels (``MAT``/``PAT``); unknown ones raise.
+    ``sampler``: the separate sampled path (``decode_source_records``); the
+    load then reports ``counts['sampled']`` and its estimate."""
     from services.lift.compose import lift_compact_reads
 
     bam_paths = list(bam_paths)
-    haplotypes = list(haplotypes)
+    haplotypes = handle.resolve_haplotypes(haplotypes)
     key = lift_key(handle, haplotypes, settings)
     selection = select_pieces(handle, chrom, start, end, haplotypes=haplotypes, settings=settings, key=key,
                               use_cache=use_cache)
@@ -554,8 +600,10 @@ def load_lifted_rows(handle: LiftMapHandle, bam_paths: Iterable[str], chrom: str
     if all("://" not in str(p) for p in bam_paths):
         counts["estimated_reads"] = estimate_lifted_reads(bam_paths, plan)
     decoded = decode_source_records(bam_paths, plan, loader_options=loader_options, budget=budget, counts=counts,
-                                    bam_handle_getter=bam_handle_getter,
+                                    bam_handle_getter=bam_handle_getter, sampler=sampler,
                                     include_supplementary=settings.load_supplementaries)
+    if sampler is not None:
+        counts["sampled"] = {"level": int(sampler.level), "estimated": True}
     molecules = resolve_primary_metadata(handle, decoded, settings=settings, counts=counts,
                                          bam_handle_getter=bam_handle_getter)
     rows = lift_compact_reads(decoded, plan, handle=handle, region_start=selection.start,
@@ -570,7 +618,7 @@ def load_lifted_rows(handle: LiftMapHandle, bam_paths: Iterable[str], chrom: str
 
 # ── Primary metadata (§3.5) ─────────────────────────────────────────────────
 
-MAX_PRIMARY_LOOKUPS = 32
+MAX_PRIMARY_LOOKUPS = 32          # SA point fetches per request
 _PRIMARY_CACHE: "OrderedDict[tuple, Optional[dict]]" = OrderedDict()
 _PRIMARY_CACHE_LOCK = threading.Lock()
 _PRIMARY_CACHE_MAX = 50_000
@@ -593,9 +641,17 @@ def parse_sa(sa: Optional[str]) -> list:
     return out
 
 
-def lookup_primary(bam, qname: str, sa: Optional[str]) -> Optional[dict]:
+class _FetchBudget:
+    def __init__(self, n):
+        self.left = int(n)
+        self.exhausted = False
+
+
+def lookup_primary(bam, qname: str, sa: Optional[str], budget: Optional[_FetchBudget] = None) -> Optional[dict]:
     """The primary record of a supplementary, found through its SA loci (point
-    fetches): ``{contig, strand?}`` or None when absent or ambiguous."""
+    fetches, each one charged to ``budget``): ``{contig, strand?,
+    strand_conflict?}``, or None when absent, ambiguous or out of budget."""
+    from services.background_work import checkpoint
     from services.read_strand import record_strand_fields
 
     found = {}
@@ -603,25 +659,44 @@ def lookup_primary(bam, qname: str, sa: Optional[str]) -> Optional[dict]:
     for contig, pos, _strand, _cigar in parse_sa(sa):
         if contig not in references:
             continue
+        if budget is not None:
+            if budget.left <= 0:
+                budget.exhausted = True
+                return None
+            budget.left -= 1
+        checkpoint()
         for rec in bam.fetch(contig, pos, pos + 1):
             if rec.query_name != qname or rec.is_supplementary or rec.is_secondary or rec.is_unmapped:
                 continue
             if rec.reference_start != pos:
                 continue
-            meta = {"contig": rec.reference_name, **record_strand_fields(rec)}
-            found[(rec.reference_name, rec.reference_start)] = meta
+            found[(rec.reference_name, rec.reference_start)] = {"contig": rec.reference_name,
+                                                                **record_strand_fields(rec)}
     if len(found) != 1:
         return None
     return next(iter(found.values()))
 
 
+def _bam_identity(path) -> tuple:
+    """Path, size and mtime of a BAM and its index (cache generations)."""
+    out = [str(path)]
+    for candidate in (path, f"{path}.bai", f"{path}.csi"):
+        try:
+            st = os.stat(candidate)
+            out += [st.st_size, st.st_mtime_ns]
+        except (OSError, TypeError):
+            out += [None, None]
+    return tuple(out)
+
+
 def resolve_primary_metadata(handle: LiftMapHandle, reads: list, *, settings: LiftSettings, counts: dict,
                              bam_handle_getter=None) -> dict:
-    """``{molecule_key: {hap, strand, source}}`` from each molecule's primary
-    record (§3.5): fetched, else (``primary_lookup``) found through SA point
-    fetches (at most 32 per request, cached by molecule in source
-    coordinates); otherwise the record's own contig and strand
-    (``source: 'record'``, counted)."""
+    """``{molecule_key: {hap, strand?, strand_conflict?}}`` of molecules whose
+    primary record is known (§3.5): fetched, else (``primary_lookup``) found
+    through SA point fetches (at most 32 per request, cached per BAM
+    generation and molecule). Molecules left out fall back per record (each
+    row keeps its own contig's haplotype and strand; ``lift_compact_reads``
+    counts them)."""
     out: dict = {}
     pending: dict = {}
     for read in reads:
@@ -629,42 +704,47 @@ def resolve_primary_metadata(handle: LiftMapHandle, reads: list, *, settings: Li
         prim = read.get("_fiberbrowser_primary") or {}
         if not prim.get("is_supplementary"):
             contig = (read.get("_fiberbrowser_lift_record") or {}).get("contig")
-            out[key] = {"hap": handle.source_haplotype.get(contig), "strand": read.get("strand"), "source": "primary"}
+            out[key] = {"hap": handle.source_haplotype.get(contig),
+                        **{k: read[k] for k in ("strand", "strand_conflict") if k in read}}
         else:
-            pending.setdefault(key, read)
-    lookups = 0
-    for key, read in pending.items():
+            pending.setdefault(key, []).append(read)
+    if not settings.primary_lookup:
+        return out
+    budget = _FetchBudget(MAX_PRIMARY_LOOKUPS)
+    for key, records in pending.items():
         if key in out:
             continue
-        meta = None
-        if settings.primary_lookup:
-            ck = (handle.fingerprint, key)
-            with _PRIMARY_CACHE_LOCK:
-                cached = ck in _PRIMARY_CACHE
-                meta = _PRIMARY_CACHE.get(ck)
-            if not cached and lookups < MAX_PRIMARY_LOOKUPS:
-                lookups += 1
-                try:
-                    if bam_handle_getter is None:
-                        from services.bam_handles import get_bam_handle as bam_handle_getter
-                    bam = bam_handle_getter(read.get("source_path"))
-                    meta = lookup_primary(bam, read.get("id"), (read.get("_fiberbrowser_primary") or {}).get("sa"))
-                except Exception:  # noqa: BLE001 - a failed lookup falls back to the record
-                    meta = None
-                with _PRIMARY_CACHE_LOCK:
-                    _PRIMARY_CACHE[ck] = meta
-                    while len(_PRIMARY_CACHE) > _PRIMARY_CACHE_MAX:
-                        _PRIMARY_CACHE.popitem(last=False)
-            elif not cached:
+        read = records[0]
+        path = read.get("source_path")
+        ck = (_bam_identity(path), key)
+        with _PRIMARY_CACHE_LOCK:
+            cached = ck in _PRIMARY_CACHE
+            meta = _PRIMARY_CACHE.get(ck)
+        if not cached:
+            if budget.left <= 0:
                 counts["primary_lookup_capped"] = counts.get("primary_lookup_capped", 0) + 1
+                continue
+            try:
+                if bam_handle_getter is None:
+                    from services.bam_handles import get_bam_handle as bam_handle_getter
+                bam = bam_handle_getter(path)
+                sa = next(((r.get("_fiberbrowser_primary") or {}).get("sa") for r in records
+                           if (r.get("_fiberbrowser_primary") or {}).get("sa")), None)
+                meta = lookup_primary(bam, read.get("id"), sa, budget)
+            except Exception:  # noqa: BLE001 - a failed lookup falls back to the records (Cancelled is not one)
+                meta = None
+            if budget.exhausted:
+                counts["primary_lookup_capped"] = counts.get("primary_lookup_capped", 0) + 1
+                continue  # not cached: the next request may have budget left
+            with _PRIMARY_CACHE_LOCK:
+                _PRIMARY_CACHE[ck] = meta
+                while len(_PRIMARY_CACHE) > _PRIMARY_CACHE_MAX:
+                    _PRIMARY_CACHE.popitem(last=False)
         if meta is not None and handle.source_haplotype.get(meta["contig"]) is not None:
-            out[key] = {"hap": handle.source_haplotype[meta["contig"]], "strand": meta.get("strand"),
-                        "source": "primary"}
+            out[key] = {"hap": handle.source_haplotype[meta["contig"]],
+                        **{k: meta[k] for k in ("strand", "strand_conflict") if k in meta}}
             counts["primary_found_by_lookup"] = counts.get("primary_found_by_lookup", 0) + 1
-        else:
-            contig = (read.get("_fiberbrowser_lift_record") or {}).get("contig")
-            out[key] = {"hap": handle.source_haplotype.get(contig), "strand": read.get("strand"), "source": "record"}
-            counts["hap_from_record"] = counts.get("hap_from_record", 0) + 1
+    counts["primary_sa_fetches"] = MAX_PRIMARY_LOOKUPS - budget.left
     return out
 
 

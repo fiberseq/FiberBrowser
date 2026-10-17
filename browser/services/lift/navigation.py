@@ -35,8 +35,11 @@ MAGIC = b"GLT1"
 # ── Summary and outline ─────────────────────────────────────────────────────
 
 def map_summary(handle) -> list:
-    """``[target, t_start, t_end, source, q_start, q_end, strand, hap, primary_bp]``
-    per chain (forward source coordinates)."""
+    """``[target, t_start, t_end, source, q_start, q_end, strand, hap,
+    primary_span_bp, aligned_bp]`` per chain (forward source coordinates).
+    ``primary_span_bp``: target bp of the net rows where the chain is primary
+    (spans, so target gaps inside them count); ``aligned_bp``: the chain's
+    aligned bases (manifest ``aligned``)."""
     m = handle.manifest
     primary_bp = defaultdict(int)
     for rows in m["nets"].values():
@@ -45,7 +48,8 @@ def map_summary(handle) -> list:
     out = []
     for ci, c in enumerate(handle.map.chains):
         out.append([m["targets"][c["target"]]["name"], c["t_start"], c["t_end"], m["sources"][c["source"]]["name"],
-                    c["q_start_forward"], c["q_end_forward"], c["strand"], c["haplotype"], primary_bp[ci]])
+                    c["q_start_forward"], c["q_end_forward"], c["strand"], c["haplotype"], primary_bp[ci],
+                    int(c.get("aligned") or 0)])
     return out
 
 
@@ -92,15 +96,45 @@ def outline(handle, chrom: str, pieces=None, gap: int = OUTLINE_GAP, max_drift: 
 
 
 class Outline:
-    """An outline with its lookup index."""
+    """An outline with lookup indexes both ways. ``chain_sources``: chain ->
+    source contig (``outline_chain_sources``), for source -> target lookups."""
 
-    def __init__(self, rows: list):
+    def __init__(self, rows: list, chain_sources: dict = None):
         self.rows = rows
         self.starts = [r[0] for r in rows]
         self.reach, top = [], 0
         for r in rows:
             top = max(top, r[1])
             self.reach.append(top)
+        self.by_source = {}
+        for r in rows:
+            src = (chain_sources or {}).get(r[5])
+            if src is not None:
+                self.by_source.setdefault(src, []).append(r)
+        self.source_index = {}
+        for src, rs in self.by_source.items():
+            rs.sort(key=lambda r: r[2])
+            reach, top = [], 0
+            for r in rs:
+                top = max(top, r[3])
+                reach.append(top)
+            self.source_index[src] = ([r[2] for r in rs], reach)
+
+    def lookup_source(self, source: str, q: int) -> list:
+        """``[(chain, t, max_drift)]`` of forward source position ``q`` (approximate)."""
+        rows = self.by_source.get(source)
+        if not rows:
+            return []
+        starts, reach = self.source_index[source]
+        out = []
+        i = bisect.bisect_right(starts, q) - 1
+        while i >= 0 and reach[i] > q:
+            r = rows[i]
+            if q < r[3]:
+                d = (q - r[2]) if r[4] == "+" else (r[3] - 1 - q)
+                out.append((r[5], min(max(r[0] + d, r[0]), r[1] - 1), r[6]))
+            i -= 1
+        return out
 
     def lookup(self, t: int) -> list:
         """``[(chain, q, max_drift)]`` of target position ``t`` (approximate)."""
@@ -162,8 +196,35 @@ def tile_runs(pieces, side: int, tile: int) -> list:
     return sorted(out, key=key)
 
 
+def outline_chain_sources(handle) -> dict:
+    return {ci: handle.manifest["sources"][c["source"]]["name"] for ci, c in enumerate(handle.map.chains)}
+
+
+def build_source_tiles(pieces) -> dict:
+    """``{(source contig, tile index): encoded tile}``: source-indexed tiles,
+    one set per source contig."""
+    by_source = defaultdict(list)
+    for p in pieces:
+        by_source[p.source].append(p)
+    return {(src, k): blob for src, ps in by_source.items() for k, blob in build_tiles(ps, 1).items()}
+
+
+def source_tile(handle, source: str, tile: int, haplotypes=None) -> bytes:
+    """One source-indexed tile straight from the map (``source_to_target``,
+    primary pieces of the selected haplotypes, every target)."""
+    from services.lift.live_lift import _as_lift_pieces
+    with handle.lock:
+        raw = handle.map.source_to_target(source, tile * TILE_BP, (tile + 1) * TILE_BP)
+    pieces = [p for p in _as_lift_pieces(handle, raw) if p.primary and (haplotypes is None or p.hap in haplotypes)]
+    return encode_tile(tile_runs(pieces, 1, tile), 1, tile)
+
+
 def build_tiles(pieces, side: int) -> dict:
-    """``{tile index: encoded tile}`` of every tile the pieces touch, in one pass."""
+    """``{tile index: encoded tile}`` of every tile the pieces touch, in one
+    pass. Source-side tiles need pieces of one source contig
+    (``build_source_tiles`` groups them)."""
+    if side == 1 and len({p.source for p in pieces}) > 1:
+        raise ValueError("source tiles hold one source contig: use build_source_tiles")
     buckets = defaultdict(list)
     for p in pieces:
         lo, hi = (p.t_start, p.t_end) if side == 0 else (p.q_start, p.q_end)

@@ -153,7 +153,11 @@ def main():
         cmp_pairs = np.concatenate(cmp_pairs) if cmp_pairs else np.zeros(0, np.int64)
         lab = np.full(length, "", dtype="<U16")
         projd = has_src & (lifted >= 0)
-        agree = projd & np.isin(np.where(lifted >= 0, (np.arange(length) << 32) | np.maximum(lifted, 0), -1), cmp_pairs)
+        # A base agrees when any of its lifted placements is a comparison position.
+        agree_mol = np.zeros(length, bool)
+        if len(pairs):
+            agree_mol[pairs[np.isin(pairs, cmp_pairs)] >> 32] = True
+        agree = projd & agree_mol
         lab[agree] = "agree_primary"
         other = projd & ~agree & (cmp_pos >= 0)
         d = np.abs(lifted - cmp_pos)

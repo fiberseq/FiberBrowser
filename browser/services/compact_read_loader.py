@@ -2006,7 +2006,8 @@ def _build_compact_reads_from_bam_region(
             # A sampled display load (services/read_sampling.py): decided on the
             # name after signal eligibility; a skipped read leaves its extent.
             if sampler is not None:
-                counted = include_duplicates or not read.is_duplicate
+                # Counted once per molecule: a supplementary shares its primary's name (and fate).
+                counted = (include_duplicates or not read.is_duplicate) and not read.is_supplementary
                 extents = (sample_bounds(read.reference_start, read.reference_end) if sample_bounds is not None
                            else ((read.reference_start, read.reference_end),))
                 if not sampler.keep(read.query_name):
