@@ -41,7 +41,7 @@ def test_dependencies_match_requirements_txt():
     core = [r for r in _requirement_lines() if ";" not in r or "python_version" in r]
     gated = [r for r in _requirement_lines() if ";" in r and "python_version" not in r]
     assert [norm(r) for r in project["dependencies"]] == [norm(r) for r in core]
-    assert "fiberhmm[consensus]>=3.0,<4" in project["dependencies"]
+    assert "fiberhmm[consensus]>=3.0.2,<4" in project["dependencies"]
     # requirements.txt installs the Apple-silicon Copilot runtime by marker; the
     # pip package offers it as the [copilot] extra with the same markers.
     assert [r.replace(" ", "") for r in project["optional-dependencies"]["copilot"]] == \

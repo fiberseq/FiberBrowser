@@ -125,6 +125,34 @@ def _registry_genome_on_disk(genome_id: str) -> bool:
     return bool(urls or info.get("gtf_url"))
 
 
+def _registry_genome_busy(genome_id: str) -> bool:
+    """Another request is downloading or verifying the genome's cached FASTA (its
+    download lock is held, or a partial download is there). A tour then goes on
+    without the reference rather than wait for it (a multi-GB download)."""
+    try:
+        from services.download_locks import download_lock
+        from services.genome_registry import GENOME_REGISTRY
+        from state.browser_state import _plain_fasta_basename
+        info = GENOME_REGISTRY[genome_id]
+    except Exception:
+        return False
+    urls = [u for u in (info.get("fasta_urls") or ([info["fasta_url"]] if info.get("fasta_url") else [])) if u]
+    if not urls:
+        return False
+    cache = os.path.join(os.path.expanduser("~"), ".fiberhmm", "genomes")
+    plain = os.path.abspath(os.path.join(cache, _plain_fasta_basename(urls[0])))
+    if os.path.exists(plain + ".download.tmp"):
+        return True
+    lock = download_lock(f"fasta-cache:{plain}")
+    try:
+        if not lock.acquire(blocking=False):
+            return True
+    except Exception:
+        return False
+    lock.release()
+    return False
+
+
 def _clear_reference(state) -> None:
     from services.genome_loading import state_lock
     with state_lock(state):
@@ -151,7 +179,8 @@ def ensure_demo_reference(state, *, sandbox: Optional[bool] = None,
     """In a tour tab, the demo is shown on its own genome, whatever the main
     tab has loaded (the sandbox owns copies of the reference, so this never
     changes the user's). The genome loads from the local cache only; when it
-    isn't on this computer, the tab gets no reference rather than another
+    isn't on this computer (or another request is downloading or verifying it
+    right now), the tab gets no reference rather than another
     genome's (no mismatch banner, no wrong chromosome list). None when nothing
     changed, else what the tab's reference now is. ``sandbox``: whether
     ``state`` is a sandbox's (default: the current request's); ``demo_id``:
@@ -165,15 +194,23 @@ def ensure_demo_reference(state, *, sandbox: Optional[bool] = None,
     has_reference = getattr(state, "fasta", None) is not None or bool(getattr(state, "chroms", None))
     if getattr(state, "current_genome", None) == want and has_reference:
         return None
-    if _registry_genome_on_disk(want):
+    if _registry_genome_on_disk(want) and not _registry_genome_busy(want):
+        from services.download_locks import no_wait
         from services.genome_loading import load_genome_blocking
         from services.genome_registry import GENOME_REGISTRY
         try:
-            result = load_genome_blocking(state, want, GENOME_REGISTRY[want])
+            # A download or index check another request starts after the probe above: no wait either (the
+            # cache file's lock is taken without blocking). A load that met one is a failed load, whatever part
+            # of it (FASTA or GTF) went on: the tab is cleared to no reference, never left half-switched.
+            with no_wait() as scope:
+                result = load_genome_blocking(state, want, GENOME_REGISTRY[want])
+            if scope.busy:
+                result = {"success": False, "error": "the demo's genome is being downloaded or checked"}
         except Exception as exc:  # the tour still runs, on no reference
             result = {"success": False, "error": str(exc)}
         if result.get("success"):
             return {"genome": want, "has_fasta": getattr(state, "fasta", None) is not None}
+        has_reference = getattr(state, "fasta", None) is not None or bool(getattr(state, "chroms", None))
     if not has_reference and getattr(state, "current_genome", None) is None:
         return None
     _clear_reference(state)

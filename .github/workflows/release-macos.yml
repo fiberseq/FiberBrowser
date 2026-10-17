@@ -44,7 +44,7 @@ jobs:
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
       ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
       FB_BUILD_DIR: ${{ github.workspace }}/build/macos
-      FB_FIBERHMM: ${{ inputs.fiberhmm || vars.FIBERHMM_REQUIREMENT || 'fiberhmm[consensus]>=3.0,<4' }}
+      FB_FIBERHMM: ${{ inputs.fiberhmm || vars.FIBERHMM_REQUIREMENT || 'fiberhmm[consensus]>=3.0.2,<4' }}
       FB_NOTARIZE: "0"
       FIBERHMM_NO_UPDATE_CHECK: "1"
     steps:

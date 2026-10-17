@@ -149,7 +149,7 @@ You need a Linux VM with Docker, a DNS name pointing at it, and ports 80 and
    ```bash
    FIBERBROWSER_DOMAIN=browser.example.org
    FIBERBROWSER_DATA=/srv/fiberbrowser-data
-   FIBERBROWSER_VERSION=3.0.0          # the image tag
+   FIBERBROWSER_VERSION=3.0.1          # the image tag
    FIBERBROWSER_REPLICAS=2             # FiberBrowser processes (see Sizing)
    FIBERBROWSER_REPLICA_MEMORY=6g      # memory limit per process
    FIBERBROWSER_PUBLIC_MEMORY_MB=4500  # stop admitting visitors before that limit
@@ -196,7 +196,7 @@ How the containers are set up:
 Try the image on its own, without Caddy:
 
 ```bash
-docker run --rm -p 127.0.0.1:8000:8000 ghcr.io/fiberseq/fiberbrowser:3.0.0 \
+docker run --rm -p 127.0.0.1:8000:8000 ghcr.io/fiberseq/fiberbrowser:3.0.1 \
   --catalog /opt/fiberbrowser-demo/deploy/demo/catalog.json
 ```
 
@@ -208,7 +208,7 @@ On a VM with Python 3.10 or newer:
 sudo useradd --system --home /srv/fiberbrowser fiberbrowser
 sudo mkdir -p /srv/fiberbrowser/{data,cache} && sudo chown -R fiberbrowser: /srv/fiberbrowser
 sudo -u fiberbrowser python3 -m venv /srv/fiberbrowser/venv
-sudo -u fiberbrowser /srv/fiberbrowser/venv/bin/pip install fiberbrowser==3.0.0
+sudo -u fiberbrowser /srv/fiberbrowser/venv/bin/pip install fiberbrowser==3.0.1
 sudo cp deploy/systemd/fiberbrowser@.service /etc/systemd/system/
 # edit FIBERBROWSER_ALLOWED_HOSTS and the catalog path in the unit, then:
 sudo systemctl daemon-reload

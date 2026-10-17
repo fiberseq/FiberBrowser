@@ -13,6 +13,19 @@
  */
 
 import { getStatus, type StatusResponse } from '../api/status';
+import { isSandboxPage } from './sandbox';
+
+/**
+ * Whether this page restores a reference on start-up. Not a tour tab: its
+ * sandbox gets the demo's genome from the server (POST /api/sandbox and
+ * /api/demo/load, from the local cache only), and a genome load of its own
+ * held the sandbox while it waited for a download, so the demo couldn't be
+ * added until that was done (the tour sat at its first step).
+ */
+export function startupGenomeAutoload(): boolean {
+  if (typeof window !== 'undefined' && window.__FIBERBROWSER_E2E_DISABLE_GENOME_AUTOLOAD) return false;
+  return !isSandboxPage();
+}
 
 /**
  * The server's status when it already has this registry genome with a FASTA (its download, or the user's

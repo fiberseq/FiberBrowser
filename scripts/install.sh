@@ -125,9 +125,9 @@ env PATH="$CLEAN_PATH" "$PY" -m pip install --quiet --upgrade pip setuptools whe
   || die "pip upgrade failed (offline? behind a proxy? set HTTPS_PROXY and try again)."
 say "Installing FiberBrowser's packages (a few minutes the first time)..."
 if ! env PATH="$CLEAN_PATH" "$PY" -m pip install -r requirements.txt; then
-  if ! env PATH="$CLEAN_PATH" "$PY" -m pip install --dry-run --quiet "fiberhmm[consensus]>=3.0,<4" >/dev/null 2>&1; then
+  if ! env PATH="$CLEAN_PATH" "$PY" -m pip install --dry-run --quiet "fiberhmm[consensus]>=3.0.2,<4" >/dev/null 2>&1; then
     say
-    say "pip could not find FiberHMM 3.x (fiberhmm[consensus]>=3.0,<4), which footprint classes,"
+    say "pip could not find FiberHMM 3.0.2 or later (fiberhmm[consensus]>=3.0.2,<4), which footprint classes,"
     say "chemistry detection and BAM export need. If you have a FiberHMM 3 source checkout, install it"
     say "into this venv and re-run this script:"
     say "  $PY -m pip install \"/path/to/FiberHMM[consensus]\""
@@ -168,10 +168,10 @@ major = int(str(getattr(fiberhmm, "__version__", "0")).split(".")[0] or 0)
 sys.exit(0 if major >= 3 else 1)' 2>/dev/null; then
   say "Warning: FiberHMM 3.x is not importable in $VENV. The browser runs, but footprint classes,"
   say "chemistry detection and BAM export need it:"
-  say "  $PY -m pip install \"fiberhmm[consensus]>=3.0,<4\""
+  say "  $PY -m pip install \"fiberhmm[consensus]>=3.0.2,<4\""
 elif ! "$PY" -c 'import numba, sklearn' 2>/dev/null; then
   say "Warning: FiberHMM is installed without its consensus extras; footprint classes need them:"
-  say "  $PY -m pip install \"fiberhmm[consensus]>=3.0,<4\""
+  say "  $PY -m pip install \"fiberhmm[consensus]>=3.0.2,<4\""
 fi
 
 say

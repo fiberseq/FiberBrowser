@@ -10,7 +10,7 @@ import { fetchApiResponse } from './api/sharedFetch';
 import { registerAnalysisPanel } from './plugins';
 import { PythonPluginPanel } from './components/controls/PythonPluginPanel';
 import { openTourTab } from './utils/tourTab';
-import { genomeLoadHasFasta, pickAutoloadGenome } from './utils/genomeAutoload';
+import { genomeLoadHasFasta, pickAutoloadGenome, startupGenomeAutoload } from './utils/genomeAutoload';
 import { installPlasmidLinkWatcher } from './utils/plasmidLoader';
 import { SessionLinkHost } from './components/controls/SessionLinkDialog';
 import { LinkExpiryBanner } from './components/controls/LinkExpiryBanner';
@@ -191,7 +191,7 @@ function App() {
   // Skipped entirely if the store already has currentGenome/hasFasta — that
   // means session restore beat us to the punch.
   useEffect(() => {
-    if (window.__FIBERBROWSER_E2E_DISABLE_GENOME_AUTOLOAD) return;
+    if (!startupGenomeAutoload()) return;
 
     // Opened with a session link: its genome (once confirmed) wins; the usual
     // auto-load runs only if the link loaded no reference.

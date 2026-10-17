@@ -56,7 +56,7 @@ def test_install_prompt_targets_browser_python_and_consensus_extra():
 def test_install_prompt_names_the_fiberhmm_3_requirement():
     from services.consensus_workflow import _consensus_install_help
     message=_consensus_install_help()
-    assert 'fiberhmm[consensus]>=3.0,<4' in message
+    assert 'fiberhmm[consensus]>=3.0.2,<4' in message
     assert '/path/to/FiberHMM' not in message
 
 
@@ -80,7 +80,7 @@ def test_startup_log_warns_about_fiberhmm_older_than_3(monkeypatch):
         'path':'/site-packages/fiberhmm','compatible':False,'error':None})
     lines=[]
     runtime.log_fiberhmm_runtime(lines.append)
-    assert 'WARNING' in lines[0] and '2.16.8' in lines[0] and 'fiberhmm[consensus]>=3.0,<4' in lines[0]
+    assert 'WARNING' in lines[0] and '2.16.8' in lines[0] and 'fiberhmm[consensus]>=3.0.2,<4' in lines[0]
     monkeypatch.setattr(runtime,'describe_fiberhmm',lambda:{'available':True,'version':'3.0.0',
         'path':'/site-packages/fiberhmm','compatible':True,'error':None})
     lines.clear()

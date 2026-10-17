@@ -226,9 +226,9 @@ def _load_genome_unlocked(state, genome_id: str, info: dict) -> dict:
             os.makedirs(cache_dir, exist_ok=True)
             gtf_cache_path = os.path.join(cache_dir, f"{genome_id}.gtf")
 
-            from services.download_locks import download_lock
+            from services.download_locks import holding
 
-            with download_lock(os.path.abspath(gtf_cache_path)):
+            with holding(os.path.abspath(gtf_cache_path)):
                 _download_gtf(gtf_url, gtf_cache_path)
 
             from services.gene_annotations import load_gtf

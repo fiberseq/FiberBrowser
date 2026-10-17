@@ -51,7 +51,7 @@ only when there is an update or the check needs you to sign in. Turn it off with
 **pip.** Update both packages in FiberBrowser's Python:
 
 ```bash
-pip install -U fiberbrowser "fiberhmm[consensus]>=3.0,<4"
+pip install -U fiberbrowser "fiberhmm[consensus]>=3.0.2,<4"
 ```
 
 (`pip install -U fiberhmm` updates FiberHMM alone; FiberHMM's own commands also tell pip users when a newer FiberHMM

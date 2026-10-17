@@ -340,7 +340,7 @@ basecalls again.
 
 | Problem | What to do |
 |---|---|
-| "fiberhmm-pipeline (FiberHMM 3.0 or newer) is not installed" | Install FiberHMM 3 in FiberBrowser's Python: `python -m pip install "fiberhmm[consensus]>=3.0,<4"`. |
+| "fiberhmm-pipeline (FiberHMM 3.0 or newer) is not installed" | Install FiberHMM 3 in FiberBrowser's Python: `python -m pip install "fiberhmm[consensus]>=3.0.2,<4"`. |
 | "minimap2 is not installed" | Install minimap2 (see [What you need](#what-you-need)) and open the dialog again. |
 | A genome says "not downloaded" | Click **Download**. The genome also loads in the window. |
 | "This FiberHMM's fiberhmm-pipeline has no option for …" | The installed FiberHMM is older than the option. Update FiberHMM, or leave that option at its default. |

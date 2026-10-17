@@ -13,6 +13,6 @@ dependencies:
   - minimap2>=2.24        # "New DAF-seq run" alignment
   - samtools              # optional: handy for checking BAMs on the cluster
   - pip:
-      # Pulls fiberhmm[consensus]>=3.0,<4 (footprint classes, the pipeline).
+      # Pulls fiberhmm[consensus]>=3.0.2,<4 (footprint classes, the pipeline).
       # A development build instead: "fiberbrowser @ git+https://github.com/fiberseq/FiberBrowser@main"
-      - fiberbrowser[pipeline,plots]>=3.0,<4
+      - fiberbrowser[pipeline,plots]>=3.0.1,<4

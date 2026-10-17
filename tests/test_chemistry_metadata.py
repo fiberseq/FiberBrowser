@@ -219,8 +219,8 @@ def test_without_fiberhmm_chemistry_is_unavailable_with_install_help(tmp_path, m
     result = inspect_bam_chemistry(str(path))
     assert result["status"] == "unavailable"
     assert result["chemistry"] is None
-    assert 'fiberhmm[consensus]>=3.0,<4' in result["message"]
+    assert 'fiberhmm[consensus]>=3.0.2,<4' in result["message"]
 
     combined = inspect_dataset_chemistry([str(path)])
     assert combined["status"] == "unavailable"
-    assert 'fiberhmm[consensus]>=3.0,<4' in combined["message"]
+    assert 'fiberhmm[consensus]>=3.0.2,<4' in combined["message"]

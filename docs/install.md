@@ -174,7 +174,7 @@ fiberbrowser -b sample.bam -g genes.gtf -f genome.fa
 fiberbrowser --help                       # every option (the same as python browser.py)
 ```
 
-This installs FiberHMM 3 (`fiberhmm[consensus]>=3.0,<4`) from PyPI with it.
+This installs FiberHMM 3 (`fiberhmm[consensus]>=3.0.2,<4`) from PyPI with it.
 FiberHMM runs footprint classes, chemistry detection, consensus BAM export,
 DAF-seq runs and re-run advisories; browsing works without it. At startup the
 server prints the FiberHMM version and location it uses and warns when it is
@@ -262,7 +262,7 @@ The public/reviewer server image is published to the GitHub Container Registry
 on every release:
 
 ```bash
-docker pull ghcr.io/fiberseq/fiberbrowser:3.0.0
+docker pull ghcr.io/fiberseq/fiberbrowser:3.0.1
 ```
 
 It runs `--public` (read-only catalog, per-visitor sessions, rate limits). How
@@ -323,7 +323,7 @@ npm --prefix browser/frontend run build          # the production bundle the ser
 - **Icons**: edit the SVGs in `packaging/icons/`, then
   `python packaging/icons/build_icons.py`.
 - **Releasing** (tag `v<version>` = `browser/version.py`): the wheel, the image
-  and the app install FiberHMM 3.x from PyPI (`fiberhmm[consensus]>=3.0,<4`);
+  and the app install FiberHMM 3.x from PyPI (`fiberhmm[consensus]>=3.0.2,<4`);
   the repository variable `FIBERHMM_REQUIREMENT` overrides it for the Mac and
   Python workflows, e.g. a git URL to test an unreleased FiberHMM. Pushing the
   tag runs:

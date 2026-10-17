@@ -762,7 +762,7 @@ class BrowserState:
         """Download a remote FASTA and its .fai index to the cache directory, one download at a time per
         cache file name (services/download_locks.py): a second request for it waits and then finds the cached
         file, or (another source of that name) takes a source-hashed name."""
-        from services.download_locks import download_lock
+        from services.download_locks import holding
         first = (list(fasta_urls or []) or [url])[0] or url
         # Keyed on the cache file the source's name maps to, not the URL: two sources with one file name
         # (https://a/ref.fa, https://b/ref.fa) pick their cache file (cached_fasta_path: the plain name, or a
@@ -770,7 +770,7 @@ class BrowserState:
         # into the same .download.tmp. Existing caches keep their names.
         cache_dir = os.path.join(os.path.expanduser("~"), ".fiberhmm", "genomes")
         plain = os.path.abspath(os.path.join(cache_dir, _plain_fasta_basename(first)))
-        with download_lock(f"fasta-cache:{plain}"):
+        with holding(f"fasta-cache:{plain}"):
             return BrowserState._download_fasta_to_cache_unlocked(
                 url, fai_url=fai_url, fasta_urls=fasta_urls, fai_urls=fai_urls)
 
@@ -1801,13 +1801,13 @@ def verified_cached_fasta(fasta_urls) -> Optional[str]:
     """The download cache's FASTA for these URLs with an index verified to describe it (the same lock as the
     download; a compressed cache decompressed first), or None when it is not downloaded (or was not a FASTA). Raises ReferenceIndexError when no matching index can be
     had. Every path that opens a cached registry reference goes through here or the download."""
-    from services.download_locks import download_lock
+    from services.download_locks import holding
     urls = [u for u in (fasta_urls or []) if u]
     if not urls:
         return None
     cache_dir = os.path.join(os.path.expanduser("~"), ".fiberhmm", "genomes")
     plain = os.path.abspath(os.path.join(cache_dir, _plain_fasta_basename(urls[0])))
-    with download_lock(f"fasta-cache:{plain}"):
+    with holding(f"fasta-cache:{plain}"):
         local = cached_fasta_path(cache_dir, urls)
         # A compressed cache is made plain first (the downloader's normalisation); the verifier is plain-only.
         if not os.path.isfile(local) or not _ensure_plain_cached_fasta(local):

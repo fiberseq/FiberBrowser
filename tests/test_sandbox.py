@@ -413,6 +413,139 @@ def test_without_the_demos_genome_on_disk_the_tour_tab_has_no_reference(client, 
 
 
 @pytest.mark.skipif(not DEMO_BAM.exists(), reason="demo BAM not present")
+def test_the_tour_never_waits_for_a_download_of_the_demos_genome(client, sandboxes, monkeypatch):
+    """Owner report (3.0.0, first launch): the tour sat at its first step while another request was getting hg38.
+    A genome another request is downloading or verifying is treated as not there: the tab goes on without it."""
+    main = sandboxes.template
+    main.current_genome = "dm6"
+    main.chroms = [{"name": "chr2L", "size": 23_513_712}]
+    loaded = []
+    demo_data = _fake_genome_load(monkeypatch, loaded)
+    monkeypatch.setattr(demo_data, "_registry_genome_on_disk", lambda genome_id: True)
+    monkeypatch.setattr(demo_data, "_registry_genome_busy", lambda genome_id: True)
+    sandbox_id = _new(client)
+    answer = client.post("/api/demo/load", headers=_in(sandbox_id)).json()
+    assert answer["success"], answer
+    assert loaded == []
+    assert sandboxes.get(sandbox_id).current_genome is None
+    assert main.current_genome == "dm6"
+
+
+def test_a_genome_being_downloaded_or_verified_is_busy(tmp_path, monkeypatch):
+    import threading
+    import services.demo_data as demo_data
+    from services.download_locks import download_lock
+    from services.genome_registry import GENOME_REGISTRY
+    from state.browser_state import _plain_fasta_basename
+    monkeypatch.setenv("HOME", str(tmp_path))
+    info = GENOME_REGISTRY["hg38"]
+    url = (info.get("fasta_urls") or [info.get("fasta_url")])[0]
+    cache = tmp_path / ".fiberhmm" / "genomes"
+    cache.mkdir(parents=True)
+    plain = os.path.abspath(str(cache / _plain_fasta_basename(url)))
+    assert demo_data._registry_genome_busy("hg38") is False
+    # A download under way: its partial file.
+    partial = Path(plain + ".download.tmp")
+    partial.write_bytes(b">chr1\nACGT")
+    assert demo_data._registry_genome_busy("hg38") is True
+    partial.unlink()
+    # A download or an index check in another request: the cache file's lock is held.
+    held, done = threading.Event(), threading.Event()
+
+    def hold():
+        with download_lock(f"fasta-cache:{plain}"):
+            held.set()
+            done.wait(10)
+
+    worker = threading.Thread(target=hold)
+    worker.start()
+    try:
+        assert held.wait(10)
+        assert demo_data._registry_genome_busy("hg38") is True
+    finally:
+        done.set()
+        worker.join(10)
+    assert demo_data._registry_genome_busy("hg38") is False
+
+
+def test_inside_no_wait_a_held_download_lock_raises_instead_of_waiting():
+    import threading
+    from services.download_locks import DownloadBusy, holding, no_wait
+    key = "fasta-cache:/test/no_wait.fa"
+    held, done = threading.Event(), threading.Event()
+
+    def hold():
+        with holding(key):
+            held.set()
+            done.wait(10)
+
+    worker = threading.Thread(target=hold)
+    worker.start()
+    try:
+        assert held.wait(10)
+        with no_wait(), pytest.raises(DownloadBusy):
+            with holding(key):
+                pass
+    finally:
+        done.set()
+        worker.join(10)
+    with no_wait(), holding(key):   # free again: taken at once
+        pass
+
+
+@pytest.mark.parametrize("with_gtf", [False, True])
+def test_the_tour_never_waits_for_a_download_that_starts_after_its_check(tmp_path, monkeypatch, with_gtf):
+    """The busy check and the load are two steps: a download or index check another request starts between them
+    must not hold the tour either (the cache file's lock is taken without waiting inside the load). A load that
+    met it is a failed load: with the annotation cached, the tab still ends on no reference, not on the demo's
+    genome name and annotations over the main tab's chromosomes."""
+    import threading
+    import services.demo_data as demo_data
+    from services.download_locks import download_lock
+    from services.genome_registry import GENOME_REGISTRY
+    from state.browser_state import BrowserState, _plain_fasta_basename
+    monkeypatch.setenv("HOME", str(tmp_path))
+    url = "https://example.invalid/demo_genome.fa"
+    entry = {"name": "hg38", "fasta_urls": [url]}  # no network: the files below are the cache
+    cache = tmp_path / ".fiberhmm" / "genomes"
+    cache.mkdir(parents=True)
+    if with_gtf:
+        entry["gtf_url"] = "https://example.invalid/demo_genome.gtf"
+        (cache / "hg38.gtf").write_text('chr19\tt\texon\t1\t4\t.\t+\t.\tgene_id "g1"; transcript_id "t1"; gene_name "G1";\n')
+    monkeypatch.setitem(GENOME_REGISTRY, "hg38", entry)
+    plain = os.path.abspath(str(cache / _plain_fasta_basename(url)))
+    Path(plain).write_text(">chr19\nACGT\n")
+    monkeypatch.setattr(demo_data, "_registry_genome_on_disk", lambda genome_id: True)
+    monkeypatch.setattr(demo_data, "_registry_genome_busy", lambda genome_id: False)  # the probe saw it free
+    state = BrowserState(None)
+    state.current_genome = "dm6"
+    state.chroms = [{"name": "chr2L", "size": 23_513_712}]
+    state.chrom_map = {"chr2L": "chr2L"}
+    held, done = threading.Event(), threading.Event()
+
+    def hold():
+        with download_lock(f"fasta-cache:{plain}"):
+            held.set()
+            done.wait(30)
+
+    worker = threading.Thread(target=hold)
+    worker.start()
+    answer = {}
+    try:
+        assert held.wait(10)
+        tour = threading.Thread(target=lambda: answer.update(r=demo_data.ensure_demo_reference(state, sandbox=True)))
+        tour.start()
+        tour.join(10)
+        assert not tour.is_alive(), "the tour waited for another request's download"
+    finally:
+        done.set()
+        worker.join(10)
+    assert answer["r"] == {"genome": None, "has_fasta": False}
+    assert state.current_genome is None and state.chroms == [] and state.chrom_map == {}
+    assert state.gtf_data is None and state.gtf_path is None and state.fasta is None
+
+
+@pytest.mark.skipif(not DEMO_BAM.exists(), reason="demo BAM not present")
 def test_the_main_tabs_demo_load_never_touches_its_genome(client, sandboxes, monkeypatch):
     main = sandboxes.template
     main.current_genome = "dm6"

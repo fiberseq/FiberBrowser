@@ -47,7 +47,7 @@ export, sessions and workspaces.
 | [Reference](reference.md) | Every CLI flag and environment variable, the access token and workspaces, supported file formats and remote files, BAM tags and layer toggles, the dataset catalog, screen layout, panels, online genomes, and keyboard shortcuts. |
 | [Deploying on a server](deployment/index.md) (optional) | One config file for a server; a shared lab server with sign-in; an Open OnDemand app for clusters; FiberBrowser on a cluster just for you. |
 | [A public server](deployment/public-server.md) | Publishing your datasets on the web for anyone (or reviewers): the catalog, BigBed and remote data, Docker Compose or systemd behind Caddy, sizing, limits, and the security design. |
-| [Changelog](../CHANGELOG.md) | What changed in 3.0.0, and upgrading from 2.17. |
+| [Changelog](../CHANGELOG.md) | What changed in each release, and upgrading from 2.17. |
 | [What 3.0 includes](release-scope.md) | Supported features (including the Variants panel), and the Preview features (insert-expanded panels behind **Show preview features**; the footprint-class section, labelled): their badges, known limitations and what graduates them. |
 | [Identify](identify.md) | What Identify reports about an insertion: candidates with their evidence, **Ambiguous** and **No confident match**, and the thresholds. |
 

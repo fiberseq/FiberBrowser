@@ -251,6 +251,55 @@ test("the tour tab runs on the demo's genome, not the main tab's", async ({ page
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// Owner report (3.0.0, first launch): the tour sat at its first step. The tour tab ran the start-up genome
+// auto-load too (hg38, its default, when the main tab had no genome yet); that load held the tab's sandbox while
+// it waited for the main tab's hg38 download, so the demo couldn't be added until the download was done. A tour
+// tab now loads no genome of its own (the server gives it the demo's), and the tour goes on while the main tab
+// is still getting its genome.
+test.describe('a tour tab and the start-up genome', () => {
+  let proc: ServerProcess | null = null;
+  test.afterEach(async () => {
+    proc?.kill('SIGTERM');
+    proc = null;
+  });
+
+  test('the tour tab loads no genome of its own while the main tab is still getting one', async ({ page, context }) => {
+    test.setTimeout(3 * 60_000);
+    // A server with no reference (not even FIBERBROWSER_TEST_FASTA), as on a first launch.
+    const testFasta = process.env.FIBERBROWSER_TEST_FASTA;
+    delete process.env.FIBERBROWSER_TEST_FASTA;
+    try {
+      proc = await startServer(null, await pickRandomPort());
+    } finally {
+      if (testFasta !== undefined) process.env.FIBERBROWSER_TEST_FASTA = testFasta;
+    }
+    const server = proc;
+    // Every start-up genome load is held (never answered, never downloads): the main tab's stays pending.
+    await context.route(/\/api\/(load_genome|load_fasta)/, async () => {
+      await new Promise(() => {});
+    });
+    await page.goto(server.baseUrl);
+    await expect(page.getByTestId('welcome-tour-cta')).toBeVisible({ timeout: 30_000 });
+    const sandbox = await page.evaluate(async () => (await (await fetch('/api/sandbox', { method: 'POST' })).json()).id as string);
+    const tour = await context.newPage();
+    const fromTour: string[] = [];
+    tour.on('request', request => {
+      const where = new URL(request.url()).pathname;
+      if (/^\/api\/(load_genome|load_fasta)/.test(where)) fromTour.push(where);
+    });
+    await tour.goto(`${server.baseUrl}/?sandbox=${sandbox}&tour=1&panels=${PANEL_LAUNCHER}`);
+    const popover = tour.locator('.copilot-tutorial-popover:not(.copilot-tutorial-waiting)');
+    const title = popover.locator('.copilot-tutorial-popover-title');
+    await expect(title).toHaveText(TOUR_CHECKED.welcome, { timeout: 60_000 });
+    await popover.locator('.copilot-tutorial-next').click();
+    // The demo loads and the tour goes on to its next step.
+    await expect(title).not.toHaveText(TOUR_CHECKED.welcome, { timeout: 60_000 });
+    await expect.poll(async () => (await readTracks(tour)).some(t => t.rendered > 0), { timeout: 60_000, intervals: [250] }).toBe(true);
+    await expect(popover.locator('.copilot-tutorial-popover-body')).not.toContainText('load a BAM');
+    expect(fromTour).toEqual([]);
+  });
+});
+
 // Codex integration review (fb24, M4): in a narrow window Sort (and the groups after it) go to the
 // toolbar's More menu; the tour never opened it, so a normal tab skipped those steps
 // and a sandbox tab said the controls only exist in the main tab.

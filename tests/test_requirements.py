@@ -11,7 +11,7 @@ def _requirements(name):
 
 def test_runtime_requirements_declare_fiberhmm_3_and_requests():
     reqs = _requirements("requirements.txt")
-    assert "fiberhmm[consensus]>=3.0,<4" in reqs
+    assert "fiberhmm[consensus]>=3.0.2,<4" in reqs
     assert any(r.startswith("requests") for r in reqs)
     # FastAPI has a tested upper bound (0.142 changed router internals).
     assert any(r.startswith("fastapi>=") and "<" in r for r in reqs)

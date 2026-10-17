@@ -21,7 +21,7 @@
 #                       python3.11, python3.10, python3). Its minimum macOS carries into the app.
 #   FB_FIBERBROWSER     what to install as FiberBrowser (default: this checkout)
 #   FB_FIBERHMM         FiberHMM to bundle: a pip requirement or a source folder
-#                       (default: fiberhmm[consensus]>=3.0,<4 from PyPI)
+#                       (default: fiberhmm[consensus]>=3.0.2,<4 from PyPI)
 #   FB_MINIMAP2         an existing arm64 minimap2 to bundle (default: build v$MINIMAP2_VERSION
 #                       from source; MIT licence, copied into the app)
 #   FB_BLAST_TARBALL    a local copy of NCBI's ncbi-blast-<version>+-aarch64-macosx.tar.gz (offline
@@ -134,7 +134,7 @@ python_ok "$VENV/bin/python" || die "the build venv $VENV was made with a Python
 pip_install() { env PATH="$VENV/bin:$CLEAN_PATH" "$VENV/bin/python" -m pip install --disable-pip-version-check "$@"; }
 say "Installing FiberBrowser, FiberHMM, pywebview and PyInstaller into $VENV"
 pip_install -q --upgrade pip
-FIBERHMM_SPEC="${FB_FIBERHMM:-fiberhmm[consensus]>=3.0,<4}"
+FIBERHMM_SPEC="${FB_FIBERHMM:-fiberhmm[consensus]>=3.0.2,<4}"
 if [ -d "$FIBERHMM_SPEC" ]; then
   # A source folder: always reinstall it (its version may not have changed).
   pip_install -q --force-reinstall --no-deps "$FIBERHMM_SPEC"

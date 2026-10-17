@@ -27,7 +27,7 @@ requests>=2.28
 # export. The browser also starts without it (those features then explain
 # how to install it). A development checkout can point FIBERHMM_SOURCE_DIR
 # at a FiberHMM source tree instead.
-fiberhmm[consensus]>=3.0,<4
+fiberhmm[consensus]>=3.0.2,<4
 # JASPAR motif search (Tracks > Motifs, footprint motif scans). Bundles its
 # own offline database.
 pyjaspar>=3.0

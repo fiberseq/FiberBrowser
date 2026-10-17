@@ -4,7 +4,7 @@
 # with the catalog's files and catalog.json); see docs/deployment/public-server.md.
 services:
   fiberbrowser:
-    image: ghcr.io/fiberseq/fiberbrowser:${FIBERBROWSER_VERSION:-3.0.0}
+    image: ghcr.io/fiberseq/fiberbrowser:${FIBERBROWSER_VERSION:-3.0.1}
     # Or build it here: docker compose ... up -d --build
     build:
       context: ..

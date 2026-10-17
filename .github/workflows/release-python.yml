@@ -6,7 +6,7 @@ name: Python package
 # workflow; set up once as described in docs/install.md, "Maintainers") and
 # attaches both files to the GitHub release.
 #
-# FiberBrowser requires fiberhmm[consensus]>=3.0,<4: publish FiberHMM 3.0 to
+# FiberBrowser requires fiberhmm[consensus]>=3.0.2,<4: publish FiberHMM 3.0 to
 # PyPI first. Until then the smoke test installs FiberHMM from the
 # FIBERHMM_REQUIREMENT repository variable, e.g.
 #   fiberhmm[consensus] @ git+https://github.com/fiberseq/FiberHMM@v3.0.0
@@ -31,7 +31,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      FIBERHMM_REQUIREMENT: ${{ vars.FIBERHMM_REQUIREMENT || 'fiberhmm[consensus]>=3.0,<4' }}
+      FIBERHMM_REQUIREMENT: ${{ vars.FIBERHMM_REQUIREMENT || 'fiberhmm[consensus]>=3.0.2,<4' }}
       FIBERHMM_NO_UPDATE_CHECK: "1"
     steps:
       - uses: actions/checkout@v4

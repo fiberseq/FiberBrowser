@@ -1,5 +1,26 @@
 # Changelog
 
+## 3.0.1 — 2026-10-16
+
+FiberBrowser 3.0.1 bundles FiberHMM 3.0.2 and requires
+`fiberhmm[consensus]>=3.0.2,<4`.
+
+### Fixed
+
+- **The guided tour starts on first launch.** After declining the offer to
+  restore a session (or on a first launch with no genome downloaded), the tour
+  could stop at its first step with "load a BAM or BigBed with Open". The tour
+  tab no longer loads a start-up genome of its own, so it no longer waits for
+  the main window's genome download; it opens the demo at once, without a
+  reference sequence if the demo's genome is still downloading. If the demo
+  cannot be opened, the tour asks again and then says why it can't start.
+- **DddA QC grades against a somatic DddA control.** FiberHMM 3.0.2 replaces
+  the DddA reference that `fiberhmm-qc` compares samples with: the packaged
+  one came from a sperm DAF-seq sample, so normal DddA libraries failed the
+  signal-rate and periodicity grades. Re-run **Data quality** (QC) on DddA
+  datasets; QC reports made with earlier versions graded DddA against the
+  wrong control. Footprint calls, DddB and Hia5 grades are unchanged.
+
 ## 3.0.0 — 2026-10-15
 
 FiberBrowser 3.0 is released together with FiberHMM 3.0, the third

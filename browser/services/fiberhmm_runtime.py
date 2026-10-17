@@ -8,7 +8,7 @@ Which FiberHMM a process runs (``fiberhmm_selection``):
   ``~/.fiberhmm/browser_settings.json`` does not apply to them.
 - **Source runs and pip installs** (``python browser.py``, ``fiberbrowser``): ``FIBERHMM_SOURCE_DIR`` >
   ``fiberhmm_source_dir`` in ``~/.fiberhmm/browser_settings.json`` > the ``fiberhmm`` installed in their Python
-  (``pip install "fiberhmm[consensus]>=3.0,<4"``).
+  (``pip install "fiberhmm[consensus]>=3.0.2,<4"``).
 
 A source tree is put first on ``sys.path`` so an older installed package never shadows it.
 
@@ -37,7 +37,7 @@ _APP_CHOICE: Optional[tuple] = None
 
 
 MIN_FIBERHMM_MAJOR = 3
-FIBERHMM_REQUIREMENT = "fiberhmm[consensus]>=3.0,<4"
+FIBERHMM_REQUIREMENT = "fiberhmm[consensus]>=3.0.2,<4"
 # What every build needs. Plugin packs add theirs in their manifest (plugins/packs.py, ARCHITECTURE.md):
 #   "fiberhmm": {"features": [{"label": "...", "module": "fiberhmm.x.y",
 #                              "names": ["function", ...],                       (optional: defined in that module)

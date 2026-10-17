@@ -58,7 +58,7 @@ FAILURE_TTL_S = 600.0
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,200}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 BROWSER_DIR = Path(__file__).resolve().parent.parent
-PIP_COMMAND = 'pip install -U fiberbrowser "fiberhmm[consensus]>=3.0,<4"'
+PIP_COMMAND = 'pip install -U fiberbrowser "fiberhmm[consensus]>=3.0.2,<4"'
 
 
 class UpdateError(Exception):

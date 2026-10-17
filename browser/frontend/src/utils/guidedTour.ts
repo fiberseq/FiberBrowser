@@ -7,7 +7,7 @@ import { panelReversed } from '../hooks/usePanelDisplayStore';
  * involved, so it works with Copilot off.
  */
 import { revealDrawerPanel } from '../stores/drawerTabsStore';
-import { getDemo, loadDemo, type DemoEntry, type DemoId, type DemoReference, type DemoRegion } from '../api/demo';
+import { getDemo, loadDemo, type DemoEntry, type DemoId, type DemoInfo, type DemoReference, type DemoRegion } from '../api/demo';
 import { getChromosomes } from '../api/reference';
 import { getDatasets, removeDataset as removeDatasetOnServer } from '../api/datasets';
 import { executeBrowserAction, type BrowserAction } from '../actions/browserActions';
@@ -602,13 +602,58 @@ function hideWorking(session: TourSession): void {
   session.bar = null;
 }
 
+/** A request that got no answer (the connection failed or was cut), as opposed to the server's error answer. */
+export function unanswered(err: unknown): boolean {
+  return err instanceof TypeError;
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** `request`, asked again (up to `tries` times in all) while `retry` says its failure is worth another go. */
+export async function askAgainIfUnanswered<T>(
+  request: () => Promise<T>,
+  { tries = 3, waitMs = 1000, retry = unanswered }: { tries?: number; waitMs?: number; retry?: (err: unknown) => boolean } = {},
+): Promise<T> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await request();
+    } catch (err) {
+      if (attempt >= tries || !retry(err)) throw err;
+      await new Promise(resolve => setTimeout(resolve, waitMs));
+    }
+  }
+}
+
+/**
+ * The demo the tour runs on, if this server has one. A tour tab has nothing
+ * else to tour, so there it asks again after any failure before giving up;
+ * `error` then says what went wrong.
+ */
+export async function findTourDemo(sandbox: boolean, waitMs = 1000): Promise<{ info: DemoInfo | null; error: string | null }> {
+  try {
+    const info = await askAgainIfUnanswered(() => getDemo(), sandbox ? { tries: 4, waitMs, retry: () => true } : { tries: 1 });
+    return { info, error: null };
+  } catch (err) {
+    return { info: null, error: errorText(err) };
+  }
+}
+
 /**
  * Load the demo (once), show its panel, and go to its region; the tour's first
  * real step. With other data loaded, the tour's actions are kept to the demo:
  * its panel is unlinked and selected (the user's selection comes back after).
  */
 async function showDemo(region: DemoRegion, session: TourSession, demoId?: DemoId): Promise<void> {
-  const res = await loadDemo(demoId);
+  // Loaded once on the server, so asking again after a request that got no answer is safe.
+  let res: Awaited<ReturnType<typeof loadDemo>>;
+  try {
+    res = await askAgainIfUnanswered(() => loadDemo(demoId));
+  } catch (err) {
+    if (!unanswered(err)) throw err;
+    throw new Error(`FiberBrowser didn't answer while loading the demo (${errorText(err)}). Start the tour again in a moment.`);
+  }
   if (!res.success) throw new Error(res.error || 'Could not load the demo dataset');
   if (res.reference) await showDemoReference(res.reference);
   const id = res.dataset_id ?? res.dataset?.id;
@@ -1724,18 +1769,22 @@ export async function runGuidedTour(opts: { stepId?: string } = {}): Promise<voi
     let demoId: string | null = null;
     // The structural-variant demo of the Variants section (servers from before 3.0 have none).
     let sv: DemoEntry | null = null;
-    try {
-      const info = await getDemo();
-      if (info.available) {
-        demo = info.region;
-        demoId = info.dataset_id;
-        sv = info.demos?.find(d => d.id === 'sv' && d.available) ?? null;
-      }
-    } catch { /* public server or older backend: tour the loaded data */ }
+    // (A public server or an older backend has no demo: the tour tours the loaded data.)
+    const found = await findTourDemo(inSandboxTab());
+    const info = found.info;
+    if (info?.available) {
+      demo = info.region;
+      demoId = info.dataset_id;
+      sv = info.demos?.find(d => d.id === 'sv' && d.available) ?? null;
+    }
     if (!demo && useBrowserStore.getState().datasets.length === 0) {
-      await executeBrowserAction({ type: 'explain', text: 'Load a dataset first' } as BrowserAction, {
-        tutorial: true, waitForClick: true, title: 'Guided tour',
-        description: 'The tour needs data: load a BAM or BigBed with Open, then start the tour again.',
+      // A tour tab never has data of its own: it needs the demo, and says why it has none.
+      const description = inSandboxTab()
+        ? `The tour's demo dataset ${found.error ? `couldn't be loaded (${found.error})` : "isn't available here"}. Close this tab and start the tour again.`
+        : 'The tour needs data: load a BAM or BigBed with Open, then start the tour again.';
+      await executeBrowserAction({ type: 'explain', text: inSandboxTab() ? 'No demo dataset' : 'Load a dataset first' } as BrowserAction, {
+        tutorial: true, waitForClick: true, title: inSandboxTab() ? 'The tour can\'t start' : 'Guided tour',
+        description,
         durationMs: 400,
       });
       return;
