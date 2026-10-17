@@ -9,10 +9,31 @@ import weakref
 from services.signal_evidence import active_signal_filters, record_keeps_signal, signal_header, signal_filter_key
 
 
+def _lift_hidden_by_path(datasets) -> dict:
+    """Each input BAM's ex-supplementary rule (services.graph_lift), for unrepaired lifts only."""
+    from services.graph_lift import lift_hidden_predicate
+    from services.remote_sources.opening import open_alignment_file
+    hidden = {}
+    for dataset in datasets:
+        paths = dataset["paths"]
+        for path in ([paths] if isinstance(paths, str) else paths):
+            try:
+                with open_alignment_file(path, "rb") as bam:
+                    predicate = lift_hidden_predicate(bam.header)
+            except Exception:
+                predicate = None
+            if predicate is not None:
+                hidden[str(path)] = predicate
+    return hidden
+
+
 @contextmanager
 def filtered_bam_inputs(datasets, region):
-    """Preserve complete records in scratch BAMs, before the engine samples them."""
-    if not any(signal_filter_key()):
+    """Preserve complete records in scratch BAMs, before the engine samples them:
+    the signal filters' records, and an unrepaired graph lift's ex-supplementaries
+    (hidden from the read track, so never inference evidence either)."""
+    lift_hidden = _lift_hidden_by_path(datasets)
+    if not any(signal_filter_key()) and not lift_hidden:
         yield datasets, {}
         return
     import pysam
@@ -28,6 +49,7 @@ def filtered_bam_inputs(datasets, region):
             selected = []
             for path in paths:
                 target = str(Path(folder) / f"input-{len(replacements)}.bam")
+                hidden = lift_hidden.get(str(path))
                 with open_alignment_file(path, "rb") as bam:
                     provenance = signal_header(bam.header)
                     chrom = resolve_reference_name(region["chrom"], bam.references)
@@ -37,6 +59,8 @@ def filtered_bam_inputs(datasets, region):
                         for i, read in enumerate(bam.fetch(chrom, max(0, region["start"]), region["end"])):
                             if not i & 255:
                                 checkpoint()
+                            if hidden is not None and hidden(read):
+                                continue
                             if record_keeps_signal(read, provenance):
                                 out.write(read)
                 pysam.index(target)

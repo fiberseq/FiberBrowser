@@ -96,13 +96,13 @@ SEQ = ("ACGT" * 2500)[:10_000]
 
 
 def _split_molecule_specs():
-    """m1's primary (10 kb SEQ, MA says 10 kb) and its hard-clipped supplementary as
-    the lift wrote it (3 kb SEQ, 0x800 lost, MA still 10 kb), a soft-clipped one
-    (whole SEQ, no evidence) and a lone molecule m2."""
+    """m1's primary and a supplementary as a stashed lift wrote them (Yf: the source
+    FLAG; the supplementary lost 0x800), a soft-clipped supplementary of an
+    unstashed lift (no evidence: shown) and a lone molecule m2."""
     ma = [("MA", "10000;nuc+Q:101-150", "Z")]
     return [
-        (("m1", 1_000, 0), {"seq": SEQ, "tags": ma + [("SA", "chr1_A,13001,+,7000S3000M,60,0;", "Z")]}),
-        (("m1", 12_000, 0), {"seq": SEQ[:3_000], "tags": ma + [("SA", "chr1_A,1001,+,10000M,60,0;", "Z")]}),
+        (("m1", 1_000, 0), {"seq": SEQ, "tags": ma + [("Yf", 0, "i")]}),
+        (("m1", 12_000, 0), {"seq": SEQ[:3_000], "tags": ma + [("Yf", 2048, "i"), ("Yh", "S:7000,0", "Z")]}),
         (("m1", 16_000, 0), {"seq": SEQ, "cigar": "7000S3000M", "mapq": 5}),
         (("m2", 2_000, 4_000), {}),
     ]
@@ -149,14 +149,61 @@ def test_stash_flag_decides_and_hard_clipped_primaries_are_kept(tmp_path):
         # A source primary with hard clips (100H2000M): Yf says primary, so it stays,
         # even though its MA length is longer than its SEQ.
         (("h", 9_000, 2_000), {"tags": [("Yf", 0, "i"), ("Yh", "H:100,0", "Z"), *ma]}),
-        # The same without stash tags and outside a split alignment (no SA): kept.
-        (("n", 12_000, 2_000), {"tags": ma}),
+        # A hard-clipped primary (500H2000M) of an unstashed lift: MA longer than SEQ
+        # and an SA tag look like a supplementary's, but without Yf nothing is hidden.
+        (("n", 12_000, 2_000), {"tags": [("MA", "2500;nuc+Q:101-150", "Z"),
+                                          ("SA", "chr1_A,9001,+,2000S500M,60,0;", "Z")]}),
     ]
     path = _write_bam(tmp_path / "stash.bam", VG_LIFT_PGS, specs)
     assert _names(_load(path)) == [("h", 9_000), ("n", 12_000), ("s", 1_000)]
     from services import dafc_reads
     rows = dafc_reads.query_bam_for_dafc(path, "chr1", 0, CHROM_LEN)
     assert sorted((r["name"], r["start"]) for r in rows) == [("h", 9_000), ("n", 12_000), ("s", 1_000)]
+    from types import SimpleNamespace
+    from services.bam_handles import get_bam_handle
+    from services.read_coverage import compute_binned_read_coverage
+    cov = compute_binned_read_coverage([SimpleNamespace(data_type="bam", paths=[path], id="d")], "chr1",
+                                       12_000, 14_000, 2, get_bam_handle, lambda _p: None)
+    assert cov["reads"] == 1
+
+
+def test_inference_inputs_exclude_hidden_records(tmp_path):
+    from services.signal_bam_input import filtered_bam_inputs, load_signal_region_evidence
+    path = _write_bam(tmp_path / "infer.bam", VG_LIFT_PGS, _split_molecule_specs())
+    region = dict(chrom="chr1", start=0, end=CHROM_LEN)
+
+    def records(bam_path, *_args, **_kw):
+        with pysam.AlignmentFile(bam_path) as bam:
+            return [SimpleNamespace(name=r.query_name, start=r.reference_start, library_id=bam_path)
+                    for r in bam.fetch("chr1", 0, CHROM_LEN)]
+
+    from types import SimpleNamespace
+    loaded = load_signal_region_evidence(records, path, "chr1", 0, CHROM_LEN)
+    assert sorted((r.name, r.start) for r in loaded) == [("m1", 1_000), ("m1", 16_000), ("m2", 2_000)]
+    assert {r.library_id for r in loaded} == {str((tmp_path / "infer.bam").resolve())}
+    # The payload route (all-BAM consensus) gets the same filtered inputs.
+    with filtered_bam_inputs([dict(dataset_id="d", paths=[path])], region) as (inputs, replacements):
+        assert replacements and len(records(inputs[0]["paths"][0])) == 3
+    # A file that is not an unrepaired lift is handed over untouched.
+    plain = _write_bam(tmp_path / "infer_plain.bam", REPAIRED_PGS, _split_molecule_specs())
+    with filtered_bam_inputs([dict(dataset_id="d", paths=[plain])], region) as (inputs, replacements):
+        assert replacements == {} and inputs[0]["paths"] == [plain]
+
+
+def test_clustering_sample_skips_hidden_records(tmp_path, monkeypatch):
+    from services.cluster_sample import prepare_cluster_sample
+    from services.read_metrics import DEFAULT_SAMPLE_SEED
+    from state.browser_state import BrowserState
+    monkeypatch.setenv("FIBERBROWSER_LIBRARY_NO_STARTUP_SCAN", "1")
+    monkeypatch.setenv("FIBERBROWSER_SETTINGS", str(tmp_path / "settings.json"))
+    specs = [((f"h{i}", 1_000 + 50 * i, 3_000), {"tags": [("Yf", 2048, "i")]}) for i in range(30)]
+    specs += [((f"v{i}", 1_200 + 50 * i, 3_000), {"tags": [("Yf", 0, "i")]}) for i in range(3)]
+    path = _write_bam(tmp_path / "cluster.bam", VG_LIFT_PGS, specs)
+    state = BrowserState(None, reference_only=True)
+    state.add_dataset("reads", [path])
+    sample = prepare_cluster_sample(state, "reads", "chr1", 0, CHROM_LEN, 2, DEFAULT_SAMPLE_SEED)
+    assert sample is not None and sample.total == 3
+    assert len(sample.names) == 2 and sample.names <= {"v0", "v1", "v2"}
 
 
 def test_coverage_skips_hidden_ex_supplementaries(tmp_path):

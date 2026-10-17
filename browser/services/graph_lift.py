@@ -193,24 +193,6 @@ def read_lift_provenance(read) -> Optional[dict]:
 # Ex-supplementaries of an unrepaired lift
 # ---------------------------------------------------------------------------
 
-def _declared_read_length(read) -> Optional[int]:
-    """The molecule length an ``MA``/``Ma`` tag (first field) or ``MN:i`` records."""
-    for tag in ("MA", "Ma"):
-        try:
-            if read.has_tag(tag):
-                head = str(read.get_tag(tag)).split(";", 1)[0]
-                if head.isdigit():
-                    return int(head)
-        except (AttributeError, KeyError):
-            pass
-    try:
-        if read.has_tag("MN"):
-            return int(read.get_tag("MN"))
-    except (AttributeError, KeyError, TypeError, ValueError):
-        pass
-    return None
-
-
 def _stash_flag(read) -> Optional[int]:
     try:
         return int(read.get_tag(TAG_STASH_FLAG)) if read.has_tag(TAG_STASH_FLAG) else None
@@ -219,40 +201,22 @@ def _stash_flag(read) -> Optional[int]:
 
 
 def is_lift_ex_supplementary(read) -> bool:
-    """A primary of an unrepaired lift that was a supplementary before it.
+    """A primary of an unrepaired lift that fiberhmm-lift's stash marks as a
+    source supplementary or secondary: ``Yf:i`` (the source FLAG) has 0x800
+    or 0x100.
 
     ``ft pg-lift`` drops 0x800, so a molecule's supplementaries come out as
-    extra primaries. A record is hidden only on evidence it carries itself,
-    so the decision does not depend on which other records are in view (a
-    cached, cropped or extended view agrees with a fresh load):
-
-    - with fiberhmm-lift's stash (a lift stashed but not repaired), ``Yf:i``
-      (the source FLAG) decides alone: hidden when it has 0x800 or 0x100. A
-      hard-clipped source primary (``Yf:i:0`` plus ``Yh``) is kept;
-    - without it, a record of a split alignment (it has ``SA``) whose
-      ``MA``/``Ma`` read length (or ``MN:i``) is longer than its SEQ is a
-      hard-clipped supplementary whose clips the lift dropped. minimap2 and
-      pbmm2 never hard-clip a primary; one that a later tool hard-clipped
-      and that has no stash tags would be hidden too.
-
-    A soft-clipped ex-supplementary without stash tags carries no such
-    evidence and is still shown: real reads (other read groups, mates) are
-    never hidden on a shared QNAME alone. SA cannot place a sibling: the lift
-    copies it verbatim, so it still names source-assembly positions.
+    extra primaries. Only the stash says which record was which: a record
+    without ``Yf`` is always shown (a hard-clipped primary can look like a
+    supplementary by length or SA), and so is a source primary with hard
+    clips (``Yf:i:0`` plus ``Yh``). The decision uses the record alone, so
+    every view agrees. An unrepaired lift without stash tags shows all its
+    records; file diagnose recommends ``fiberhmm-lift --repair-only``.
     """
     if read.is_unmapped or read.is_secondary or read.is_supplementary:
         return False
     flag = _stash_flag(read)
-    if flag is not None:
-        return bool(flag & 0x900)
-    try:
-        if not read.has_tag("SA"):
-            return False
-    except (AttributeError, KeyError):
-        return False
-    declared = _declared_read_length(read)
-    length = read.query_length or 0
-    return declared is not None and length > 0 and declared > length
+    return flag is not None and bool(flag & 0x900)
 
 
 def lift_hidden_predicate(header):
