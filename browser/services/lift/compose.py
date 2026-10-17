@@ -267,22 +267,47 @@ def lift_compact_reads(reads, plan, *, handle, region_start, region_end, setting
     return out
 
 
-def _lift_read(read, by_contig, haps, ctx):
-    rec = read.get("_fiberbrowser_lift_record") or {}
-    contig = rec.get("contig")
-    pieces = by_contig.get(contig) or []
+def _read_rows(read, pieces, settings):
+    """A read's rows: primary fragments, then one row set per alternative chain."""
     rs, re_ = int(read["reference_start"]), int(read["reference_end"])
-    runs = _SeqRuns(read.get("_fiberbrowser_aligned_runs"), rec)
     primary_frags, alt_frags = [], {}
     k = bisect.bisect_left([p.q_start for p in pieces], re_)
     for p in pieces[:k]:
         s, e = max(p.q_start, rs), min(p.q_end, re_)
         if e > s:
             (primary_frags if p.primary else alt_frags.setdefault(p.chain, [])).append(_Frag(s, e, p))
-    settings = ctx.settings
     rows = _rows_from_runs(_runs_from_frags(primary_frags, settings.g_split), False, settings.rejoin_bp)
     for chain in sorted(alt_frags):
         rows += _rows_from_runs(_runs_from_frags(alt_frags[chain], settings.g_split), True, settings.rejoin_bp)
+    return rows
+
+
+def project_aligned_runs(read, pieces, settings, *, alternatives=False):
+    """A decoded read's aligned bases through its rows' fragments:
+    ``[(seq_start, target_start, length, step, row_index)]`` where SEQ index
+    ``seq_start + i`` (hard clips included) lands on ``target_start + step*i``.
+    The primitive behind lifted coverage and the per-base equivalence harness;
+    alternative rows only with ``alternatives``."""
+    rec = read.get("_fiberbrowser_lift_record") or {}
+    runs = _SeqRuns(read.get("_fiberbrowser_aligned_runs"), rec)
+    out = []
+    for idx, row in enumerate(_read_rows(read, sorted(pieces, key=lambda p: (p.q_start, p.q_end)), settings)):
+        if row.alt and not alternatives:
+            continue
+        for r0, s0, n in zip(runs.ref, runs.seq, runs.len):
+            for f in row.frags:
+                a, b = max(r0, f.s), min(r0 + n, f.e)
+                if b > a:
+                    out.append((s0 + (a - r0), f.T(a), b - a, -1 if f.minus else 1, idx))
+    return out
+
+
+def _lift_read(read, by_contig, haps, ctx):
+    rec = read.get("_fiberbrowser_lift_record") or {}
+    contig = rec.get("contig")
+    runs = _SeqRuns(read.get("_fiberbrowser_aligned_runs"), rec)
+    rs, re_ = int(read["reference_start"]), int(read["reference_end"])
+    rows = _read_rows(read, by_contig.get(contig) or [], ctx.settings)
     if not rows:
         ctx.count("records_without_correspondence")
         return []
