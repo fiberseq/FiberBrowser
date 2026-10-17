@@ -253,6 +253,8 @@ def _scan_bam(search: _Search, state, dataset, path: str, intervals) -> None:
 
 def _scan_bam_records(search: _Search, state, dataset, path: str, bam, intervals) -> None:
     wanted = search.wanted
+    from services.graph_lift import lift_hidden_predicate
+    hidden = lift_hidden_predicate(getattr(bam, "header", None))
     for contig, lo, hi in intervals:
         if search.done() or search.out_of_budget():
             return
@@ -274,7 +276,9 @@ def _scan_bam_records(search: _Search, state, dataset, path: str, bam, intervals
                     continue
                 if read.is_unmapped or read.is_secondary:
                     continue
-                search.record(requested, _bam_hit(search, state, dataset, read, path), primary=not read.is_supplementary)
+                # An unrepaired lift's ex-supplementary is not the drawn record: a supplementary hit.
+                primary = not read.is_supplementary and not (hidden is not None and hidden(read))
+                search.record(requested, _bam_hit(search, state, dataset, read, path), primary=primary)
                 if search.done():
                     search.scanned += n % CHECK_EVERY
                     return

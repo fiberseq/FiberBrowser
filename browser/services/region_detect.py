@@ -330,6 +330,8 @@ def _scan(contigs, deadline: float, chrom: Optional[str] = None, start: Optional
         if hi <= lo:
             continue
         rows = out.setdefault(c.contig, [])
+        from services.graph_lift import lift_hidden_predicate
+        hidden = lift_hidden_predicate(getattr(bam, "header", None))
         try:
             for read in bam.fetch(c.contig, lo, hi):
                 records += 1
@@ -338,6 +340,8 @@ def _scan(contigs, deadline: float, chrom: Optional[str] = None, start: Optional
                 if records >= (record_cap or SCAN_RECORD_CAP) or ((records & 1023) == 0 and time.monotonic() > deadline):
                     return stop()
                 if read.is_unmapped or read.is_secondary or read.is_supplementary:
+                    continue
+                if hidden is not None and hidden(read):
                     continue
                 rs = int(read.reference_start)
                 re_ = int(read.reference_end or rs + 1)

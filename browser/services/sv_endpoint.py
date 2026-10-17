@@ -56,8 +56,12 @@ def _bam_records(state, dataset_id: str, chrom: str, start: int, end: int,
         if actual is None:
             continue
         provenance = signal_header(bam.header)
+        from services.graph_lift import lift_hidden_predicate
+        hidden = lift_hidden_predicate(bam.header)  # an unrepaired lift's ex-supplementaries, as the read track
         for read in bam.fetch(actual, max(0, int(start)), int(end)):
             if read.is_unmapped or read.is_secondary or read.is_supplementary:
+                continue
+            if hidden is not None and hidden(read):
                 continue
             if not record_keeps_signal(read, provenance):
                 continue

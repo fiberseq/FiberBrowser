@@ -536,8 +536,12 @@ def _fit_window_to_reads(datasets, scope: Optional[_Scope], contig: str, start: 
                     bam = get_bam_handle(c.path)
                     if bam is None:
                         continue
+                    from services.graph_lift import lift_hidden_predicate
+                    hidden = lift_hidden_predicate(getattr(bam, "header", None))
                     for read in bam.fetch(contig, max(0, start), max(start + 1, end)):
                         if read.is_unmapped or read.is_secondary or read.is_supplementary:
+                            continue
+                        if hidden is not None and hidden(read):
                             continue
                         starts.append(int(read.reference_start))
                         ends.append(int(read.reference_end or read.reference_start + 1))

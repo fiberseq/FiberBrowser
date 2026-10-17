@@ -70,8 +70,11 @@ def _records(state, dataset, chrom: str, start: int, end: int) -> Iterator:
             continue
         ids = getattr(state, "_variant_read_ids", None)
         provenance = signal_header(bam.header)
+        from services.graph_lift import lift_hidden_predicate
+        hidden = lift_hidden_predicate(bam.header)  # an unrepaired lift's ex-supplementaries, as the read track
         yield from (read for read in bam.fetch(actual, max(0, int(start)), int(end))
-                    if (ids is None or read.query_name in ids) and record_keeps_signal(read, provenance))
+                    if (ids is None or read.query_name in ids) and record_keeps_signal(read, provenance)
+                    and (hidden is None or not hidden(read)))
 
 
 def _reference(state, chrom: str, start: int, end: int) -> Optional[np.ndarray]:
@@ -498,8 +501,12 @@ def _sv_records(state, dataset, chrom: str, start: int, end: int, include_duplic
         if actual is None:
             continue
         provenance = signal_header(bam.header)
+        from services.graph_lift import lift_hidden_predicate
+        hidden = lift_hidden_predicate(bam.header)
         for read in bam.fetch(actual, max(0, int(start)), int(end)):
             if not record_keeps_signal(read, provenance):
+                continue
+            if hidden is not None and hidden(read):
                 continue
             ids = getattr(state, "_variant_read_ids", None)
             if ids is not None and read.query_name not in ids:

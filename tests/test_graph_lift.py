@@ -394,3 +394,23 @@ def test_library_entries_read_before_lift_provenance_are_read_again(tmp_path):
     plain = _write_bam(tmp_path / "plain.bam", [], [(("r", 1_000, 2_000), {})])
     info = library_inspect.inspect_file(plain)
     assert info["graph_lift"] is None and not library_inspect.extras_stale(info, plain)
+
+
+def test_variant_and_sv_readers_skip_hidden_records(tmp_path, monkeypatch):
+    from services import sv_endpoint, variants_endpoint
+    from state.browser_state import BrowserState
+    monkeypatch.setenv("FIBERBROWSER_LIBRARY_NO_STARTUP_SCAN", "1")
+    monkeypatch.setenv("FIBERBROWSER_SETTINGS", str(tmp_path / "settings.json"))
+    # The visible primary and its hidden ex-supplementary (Yf 0x800) carrying a 600 bp deletion.
+    specs = [(("m", 1_000, 4_000), {"tags": [("Yf", 0, "i")]}),
+             (("m", 2_000, 0), {"seq": SEQ[:3_000], "cigar": "1000M600D2000M", "tags": [("Yf", 2048, "i")]})]
+    path = _write_bam(tmp_path / "var.bam", VG_LIFT_PGS, specs)
+    state = BrowserState(None, reference_only=True)
+    state.add_dataset("reads", [path])
+    dataset = state.get_dataset("reads")
+    assert len(_load(path, 2_500, 3_500)) == 1
+    assert [r.reference_start for r in variants_endpoint._records(state, dataset, "chr1", 2_500, 3_500)] == [1_000]
+    sv = variants_endpoint._sv_records(state, dataset, "chr1", 2_500, 3_500, False)
+    assert [r.reference_start for r, _ in sv] == [1_000]
+    rows = list(sv_endpoint._bam_records(state, "reads", "chr1", 2_500, 3_500))
+    assert [r.reference_start for r, _ in rows] == [1_000]
