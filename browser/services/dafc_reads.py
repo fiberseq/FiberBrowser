@@ -11,7 +11,12 @@ import pyBigWig
 
 from models.domain import CigarCoordMapper, ContactMode
 from services.sv_events import read_deletion_cuts, split_span
-from services.bam_tags import bam_legacy_frame, legacy_starts_in_seq_frame, read_legacy_tags_are_molecular
+from services.bam_tags import (
+    bam_consensus_contracts, bam_legacy_frame, bam_ma_group_frame, legacy_starts_in_seq_frame,
+    read_legacy_tags_are_molecular,
+)
+from services.compact_read_loader import _read_ma_tags, ma_footprint_query_spans
+from services.graph_lift import is_lift_duplicate, is_unrepaired_lift, lift_duplicate_records
 from services.dafc_diagnostics import DAFC_DIAGNOSTICS_ENV, log_dafc_diagnostic
 from state.dependencies import get_dafc_state, get_state
 from utils.chrom import get_chrom_variants
@@ -72,6 +77,15 @@ def query_bigbed_for_dafc(bb, chrom: str, start: int, end: int) -> List[Dict]:
     return reads
 
 
+def _ma_has_nuc_group(ma) -> bool:
+    """Whether an MA/Ma tag has a ``nuc`` group (nucleosomes were called, maybe none)."""
+    for part in str(ma or '').split(';')[1:]:
+        head = part.partition(':')[0]
+        if head.startswith('nuc') and head[3:4] in ('+', '-', '.'):
+            return True
+    return False
+
+
 def query_bam_for_dafc(bam_path: str, chrom: str, start: int, end: int) -> List[Dict]:
     """Query BAM file for DAF-C entries, returning all reads overlapping region."""
     import pysam
@@ -99,9 +113,21 @@ def query_bam_for_dafc(bam_path: str, chrom: str, start: int, end: int) -> List[
                 legacy_frame = bam_legacy_frame(bam.header)
             except Exception:
                 legacy_frame = (False, False)
+            # FiberHMM 3.0 MA / fibertools Ma nucleosomes (no ns/nl), with the
+            # header's per-group frame, as the read track reads them.
+            try:
+                ma_frame = bam_ma_group_frame(bam.header)
+                family_contracts = bam_consensus_contracts(bam.header)
+            except Exception:
+                ma_frame, family_contracts = False, {}
+            # An unrepaired graph lift: each molecule once (services/graph_lift.py).
+            lift_drop = (lift_duplicate_records(bam.fetch(actual_chrom, start, end))
+                         if is_unrepaired_lift(bam.header) else set())
 
             for read in bam.fetch(actual_chrom, start, end):
                 if read.is_unmapped or read.is_secondary or read.is_supplementary:
+                    continue
+                if lift_drop and is_lift_duplicate(read, lift_drop):
                     continue
 
                 ref_start = read.reference_start
@@ -112,46 +138,55 @@ def query_bam_for_dafc(bam_path: str, chrom: str, start: int, end: int) -> List[
                 footprints_called = False
 
                 try:
-                    ns_tag = read.get_tag('ns')
-                    nl_tag = read.get_tag('nl')
-
-                    if ns_tag is not None and nl_tag is not None:
-                        footprints_called = True
+                    seq_spans = None
+                    if read.has_tag('ns') and read.has_tag('nl'):
+                        ns_tag = read.get_tag('ns')
+                        nl_tag = read.get_tag('nl')
                         if hasattr(ns_tag, 'tolist'):
                             ns_list = ns_tag.tolist()
                             nl_list = nl_tag.tolist()
                         else:
                             ns_list = list(ns_tag)
                             nl_list = list(nl_tag)
-
+                        footprints_called = True
                         if len(ns_list) > 0 and len(ns_list) == len(nl_list):
                             seq_starts = legacy_starts_in_seq_frame(ns_list, nl_list, read, read_legacy_tags_are_molecular(read, legacy_frame))
-                            mapper = CigarCoordMapper(read.cigartuples, ref_start)
-                            # Footprints spanning an SV-sized deletion are split at it,
-                            # as the read track's loader splits them (services/sv_events.py).
-                            cuts = read_deletion_cuts(read, mapper=mapper)
-                            blocks = []
-                            for ns, nl in zip(seq_starts, nl_list):
-                                if int(nl) <= 0:
-                                    continue
-                                # Both ends through the CIGAR: the block's
-                                # reference length, across indels.
-                                fp_ref_start, fp_ref_end = mapper.footprint_to_ref(int(ns), int(ns) + int(nl) - 1)
-                                if fp_ref_start is None or fp_ref_end is None or fp_ref_end <= fp_ref_start:
-                                    continue
-                                for piece_start, piece_end in split_span(fp_ref_start, fp_ref_end, cuts):
-                                    rel_start = piece_start - ref_start
-                                    if rel_start >= 0:
-                                        blocks.append((rel_start, piece_end - piece_start))
-                            # BED blocks ascend (a flipped reverse read's come reversed).
-                            blocks.sort()
-                            ref_block_starts = [b[0] for b in blocks]
-                            ref_block_sizes = [b[1] for b in blocks]
+                            seq_spans = list(zip(seq_starts, nl_list))
+                    else:
+                        ma_tags = _read_ma_tags(read, ma_frame)
+                        if ma_tags is not None and _ma_has_nuc_group(ma_tags[0]):
+                            footprints_called = True
+                            seq_spans = [(q_start, q_end - q_start) for name, q_start, q_end in ma_footprint_query_spans(
+                                ma_tags, read_length=read.query_length or 0, is_reverse=read.is_reverse,
+                                family_contracts=family_contracts) if name == 'nuc']
 
-                            if ref_block_starts:
-                                block_starts = ','.join(str(s) for s in ref_block_starts)
-                                block_sizes = ','.join(str(s) for s in ref_block_sizes)
-                                block_count = len(ref_block_starts)
+                    if seq_spans:
+                        mapper = CigarCoordMapper(read.cigartuples, ref_start)
+                        # Footprints spanning an SV-sized deletion are split at it,
+                        # as the read track's loader splits them (services/sv_events.py).
+                        cuts = read_deletion_cuts(read, mapper=mapper)
+                        blocks = []
+                        for ns, nl in seq_spans:
+                            if int(nl) <= 0:
+                                continue
+                            # Both ends through the CIGAR: the block's
+                            # reference length, across indels.
+                            fp_ref_start, fp_ref_end = mapper.footprint_to_ref(int(ns), int(ns) + int(nl) - 1)
+                            if fp_ref_start is None or fp_ref_end is None or fp_ref_end <= fp_ref_start:
+                                continue
+                            for piece_start, piece_end in split_span(fp_ref_start, fp_ref_end, cuts):
+                                rel_start = piece_start - ref_start
+                                if rel_start >= 0:
+                                    blocks.append((rel_start, piece_end - piece_start))
+                        # BED blocks ascend (a flipped reverse read's come reversed).
+                        blocks.sort()
+                        ref_block_starts = [b[0] for b in blocks]
+                        ref_block_sizes = [b[1] for b in blocks]
+
+                        if ref_block_starts:
+                            block_starts = ','.join(str(s) for s in ref_block_starts)
+                            block_sizes = ','.join(str(s) for s in ref_block_sizes)
+                            block_count = len(ref_block_starts)
                 except KeyError:
                     pass
 
