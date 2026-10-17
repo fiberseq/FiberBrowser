@@ -229,10 +229,14 @@ def _select_bam_evidence_read_names(
     try:
         from services.signal_evidence import record_keeps_signal, signal_header
         provenance = signal_header(getattr(handle, "header", None))
+        from services.graph_lift import lift_hidden_predicate
+        lift_hidden = lift_hidden_predicate(getattr(handle, "header", None))
         iterator = handle.fetch(chrom, int(start), int(end))
         for ordinal, read in enumerate(iterator):
             records_scanned = ordinal + 1
             if read.is_unmapped or read.is_secondary or read.is_supplementary:
+                continue
+            if lift_hidden is not None and lift_hidden(read):
                 continue
             if not record_keeps_signal(read, provenance):
                 continue

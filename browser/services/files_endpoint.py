@@ -78,8 +78,10 @@ def diagnose_bam_payload(state, *, bam_path=None, dataset_idx: int = 0, chrom=No
         recommendations = []
         # Nucleosomes/MSPs may be in legacy ns/nl, as/al tags or only in an
         # MA/Ma annotation tag (current fibertools writes only Ma).
-        has_nucleosomes = bool(result.get("has_nucleosomes") or result.get("has_ma_nucleosomes"))
-        has_msps = bool(result.get("has_msps") or result.get("has_ma_msps"))
+        # An MA/Ma group with no intervals means the calling ran and found none: not "run it".
+        has_nucleosomes = bool(result.get("has_nucleosomes") or result.get("has_ma_nucleosomes")
+                               or result.get("has_ma_nucleosome_calls"))
+        has_msps = bool(result.get("has_msps") or result.get("has_ma_msps") or result.get("has_ma_msp_calls"))
         if not has_nucleosomes and not has_msps:
             recommendations.append(
                 "No nucleosome (ns/nl) or FIRE/accessibility (as/al) tags found. "

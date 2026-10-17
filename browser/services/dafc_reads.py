@@ -16,7 +16,7 @@ from services.bam_tags import (
     read_legacy_tags_are_molecular,
 )
 from services.compact_read_loader import _read_ma_tags, ma_footprint_query_spans
-from services.graph_lift import is_lift_ex_supplementary, is_unrepaired_lift
+from services.graph_lift import lift_hidden_predicate
 from services.dafc_diagnostics import DAFC_DIAGNOSTICS_ENV, log_dafc_diagnostic
 from state.dependencies import get_dafc_state, get_state
 from utils.chrom import get_chrom_variants
@@ -121,12 +121,12 @@ def query_bam_for_dafc(bam_path: str, chrom: str, start: int, end: int) -> List[
             except Exception:
                 ma_frame, family_contracts = False, {}
             # An unrepaired graph lift's ex-supplementaries, as the read track hides them.
-            unrepaired_lift = is_unrepaired_lift(bam.header)
+            lift_hidden = lift_hidden_predicate(bam.header)
 
             for read in bam.fetch(actual_chrom, start, end):
                 if read.is_unmapped or read.is_secondary or read.is_supplementary:
                     continue
-                if unrepaired_lift and is_lift_ex_supplementary(read):
+                if lift_hidden is not None and lift_hidden(read):
                     continue
 
                 ref_start = read.reference_start

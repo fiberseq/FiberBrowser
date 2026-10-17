@@ -1944,8 +1944,8 @@ def _build_compact_reads_from_bam_region(
         # An unrepaired graph lift (ft pg-lift) turned supplementaries into
         # extra primaries: hide those that carry evidence of it
         # (services.graph_lift; per record, so every view agrees).
-        from services.graph_lift import is_lift_ex_supplementary, is_unrepaired_lift
-        unrepaired_lift = is_unrepaired_lift(bam.header)
+        from services.graph_lift import lift_hidden_predicate
+        lift_hidden = lift_hidden_predicate(bam.header)
         for read in iter_edge_records(bam, actual_chrom, region_start, region_end, fetch_regions):
             records_seen += 1
             if not records_seen & 255:
@@ -1956,7 +1956,7 @@ def _build_compact_reads_from_bam_region(
                 if profile_bam:
                     profile_counts["records_unmapped"] += 1
                 continue
-            if unrepaired_lift and is_lift_ex_supplementary(read):
+            if lift_hidden is not None and lift_hidden(read):
                 continue
             if partition is not None:
                 from services.read_sampling import name_hash

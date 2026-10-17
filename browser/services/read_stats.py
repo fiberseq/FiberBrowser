@@ -240,6 +240,8 @@ def _collect_bam_read_stats(
             continue
         from services.signal_evidence import record_keeps_signal, record_signal, signal_header
         provenance = signal_header(getattr(bam, "header", None))
+        from services.graph_lift import lift_hidden_predicate
+        lift_hidden = lift_hidden_predicate(getattr(bam, "header", None))
         try:
             for read in bam.fetch(bam_chrom, start, end):
                 # Only the primary alignment is the displayed read (the read
@@ -247,6 +249,8 @@ def _collect_bam_read_stats(
                 # sharing its name must not stand in for it.
                 if (getattr(read, "is_unmapped", False) or getattr(read, "is_secondary", False)
                         or getattr(read, "is_supplementary", False)):
+                    continue
+                if lift_hidden is not None and lift_hidden(read):
                     continue
                 if not record_keeps_signal(read, provenance):
                     continue

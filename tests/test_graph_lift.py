@@ -101,8 +101,8 @@ def _split_molecule_specs():
     (whole SEQ, no evidence) and a lone molecule m2."""
     ma = [("MA", "10000;nuc+Q:101-150", "Z")]
     return [
-        (("m1", 1_000, 0), {"seq": SEQ, "tags": ma}),
-        (("m1", 12_000, 0), {"seq": SEQ[:3_000], "tags": ma}),
+        (("m1", 1_000, 0), {"seq": SEQ, "tags": ma + [("SA", "chr1_A,13001,+,7000S3000M,60,0;", "Z")]}),
+        (("m1", 12_000, 0), {"seq": SEQ[:3_000], "tags": ma + [("SA", "chr1_A,1001,+,10000M,60,0;", "Z")]}),
         (("m1", 16_000, 0), {"seq": SEQ, "cigar": "7000S3000M", "mapq": 5}),
         (("m2", 2_000, 4_000), {}),
     ]
@@ -140,14 +140,38 @@ def _overlaps(key, start, end):
     return key[1] < end and spans[key] > start
 
 
-def test_stash_tags_mark_ex_supplementaries(tmp_path):
+def test_stash_flag_decides_and_hard_clipped_primaries_are_kept(tmp_path):
+    ma = [("MA", "2500;nuc+Q:101-150", "Z")]
     specs = [
         (("s", 1_000, 2_000), {"tags": [("Yf", 0, "i")]}),             # source primary
         (("s", 5_000, 2_000), {"tags": [("Yf", 2048, "i")]}),          # source supplementary
-        (("t", 6_000, 2_000), {"tags": [("Yh", "S:500,0", "Z")]}),     # filled hard clips
+        (("u", 7_000, 2_000), {"tags": [("Yf", 256, "i")]}),           # source secondary
+        # A source primary with hard clips (100H2000M): Yf says primary, so it stays,
+        # even though its MA length is longer than its SEQ.
+        (("h", 9_000, 2_000), {"tags": [("Yf", 0, "i"), ("Yh", "H:100,0", "Z"), *ma]}),
+        # The same without stash tags and outside a split alignment (no SA): kept.
+        (("n", 12_000, 2_000), {"tags": ma}),
     ]
     path = _write_bam(tmp_path / "stash.bam", VG_LIFT_PGS, specs)
-    assert _names(_load(path)) == [("s", 1_000)]
+    assert _names(_load(path)) == [("h", 9_000), ("n", 12_000), ("s", 1_000)]
+    from services import dafc_reads
+    rows = dafc_reads.query_bam_for_dafc(path, "chr1", 0, CHROM_LEN)
+    assert sorted((r["name"], r["start"]) for r in rows) == [("h", 9_000), ("n", 12_000), ("s", 1_000)]
+
+
+def test_coverage_skips_hidden_ex_supplementaries(tmp_path):
+    from types import SimpleNamespace
+    from services.bam_handles import get_bam_handle
+    from services.read_coverage import compute_binned_read_coverage
+    path = _write_bam(tmp_path / "cov.bam", VG_LIFT_PGS, _split_molecule_specs())
+    dataset = SimpleNamespace(data_type="bam", paths=[path], id="d")
+    assert _names(_load(path, 11_000, 15_000)) == []
+    cov = compute_binned_read_coverage([dataset], "chr1", 11_000, 15_000, 4, get_bam_handle, lambda _p: None)
+    assert cov["reads"] == 0 and cov["coverage"] == [0, 0, 0, 0]
+    unlifted = _write_bam(tmp_path / "cov_plain.bam", [], _split_molecule_specs())
+    dataset = SimpleNamespace(data_type="bam", paths=[unlifted], id="d")
+    assert compute_binned_read_coverage([dataset], "chr1", 11_000, 15_000, 4, get_bam_handle,
+                                        lambda _p: None)["reads"] == 1
 
 
 def test_shared_qnames_in_other_read_groups_and_mates_are_kept(tmp_path):
@@ -230,6 +254,18 @@ def test_st_tag_decides_strand_and_conflicts_are_flagged(tmp_path):
     assert record_strand_fields(by_name["dot_st"]) == {"strand": "."}
 
 
+def test_per_record_st_wins_over_the_name_cache(tmp_path):
+    from services.read_strand import filter_reads_by_strand
+    seq = "ACGTACGTAC" * 30
+    specs = [((("q", 1_000 + 100 * i, 0)), {"seq": seq, "tags": [("st", st, "Z"), ("RG", rg, "Z")]})
+             for i, (st, rg) in enumerate((("CT", "a"), ("GA", "b"), (".", "c")))]
+    path = _write_bam(tmp_path / "st_rg.bam", [], specs, rg=("a", "b", "c"))
+    reads = _load(path, include_methylation=True)
+    calls: dict = {}
+    assert [r["strand"] for r in filter_reads_by_strand(reads, "CT", calls)] == ["CT"]
+    assert [r["strand"] for r in filter_reads_by_strand(reads, "GA", calls)] == ["GA"]
+
+
 def test_lift_provenance_on_reads(tmp_path):
     specs = [(("r", 1_000, 2_000), {"tags": [("Yp", "chr1_A:1141849:-", "Z"), ("Yq", 7, "i")]}),
              (("plain", 1_000, 2_000), {})]
@@ -277,6 +313,14 @@ def test_diagnose_counts_empty_ma_groups_as_present(tmp_path):
     only_empty = _write_bam(tmp_path / "only_empty.bam", [], specs[:1])
     missing = " ".join(diagnose_bam_tags(only_empty)["fiberseq_missing"])
     assert "ns " not in missing and "nl " not in missing and "nq " not in missing
+    # Nucleosome calling ran and found none: no "run ft add-nucleosomes" advice.
+    from array import array
+    from services.files_endpoint import diagnose_bam_payload
+    with_m6a = _write_bam(tmp_path / "empty_m6a.bam", [], [(("r", 1_000, 2_000), {"tags": [
+        ("Ma", "2000;nuc.:;msp.:1-2000", "Z"), ("MM", "A+a?,0,1;", "Z"), ("ML", array("B", [250, 250]), None)]})])
+    result = diagnose_bam_payload(None, bam_path=with_m6a)
+    assert result["has_ma_nucleosome_calls"] and not result["has_ma_nucleosomes"]
+    assert not any("add-nucleosomes" in r for r in result["recommendations"]), result["recommendations"]
 
 
 def _inspect(path):

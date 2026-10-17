@@ -174,12 +174,16 @@ def load_reads_from_bam(
             from services.background_work import checkpoint
             from services.signal_evidence import signal_header, record_keeps_signal
             signal_provenance = signal_header(bam.header)
+            from services.graph_lift import lift_hidden_predicate
+            lift_hidden = lift_hidden_predicate(bam.header)
             records_seen = 0
             for read in bam.fetch(actual_chrom, start, end):
                 records_seen += 1
                 if not records_seen & 255:
                     checkpoint()  # a background job whose client went away stops here
                 if read.is_unmapped or read.is_secondary or read.is_supplementary:
+                    continue
+                if lift_hidden is not None and lift_hidden(read):
                     continue
 
                 if not record_keeps_signal(read, signal_provenance):

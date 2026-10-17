@@ -151,6 +151,8 @@ def compute_binned_read_coverage(
 
                 from services.signal_evidence import signal_header, record_keeps_signal
                 signal_provenance = signal_header(getattr(bam, "header", None))
+                from services.graph_lift import lift_hidden_predicate
+                lift_hidden = lift_hidden_predicate(getattr(bam, "header", None))
                 try:
                     count = 0
                     wrap_length = bam_wrap_length(bam, bam_chrom, flagged_circular=circular)
@@ -167,6 +169,8 @@ def compute_binned_read_coverage(
                             occurrences: dict[tuple, int] = {}
                             for read in bam.fetch(bam_chrom, pass_start, pass_end):
                                 if read.is_unmapped or read.is_secondary or read.is_supplementary:
+                                    continue
+                                if lift_hidden is not None and lift_hidden(read):
                                     continue
                                 if not record_keeps_signal(read, signal_provenance):
                                     continue

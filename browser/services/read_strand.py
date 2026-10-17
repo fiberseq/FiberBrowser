@@ -108,7 +108,9 @@ def strand_calls(state, dataset_id: Optional[str]) -> dict:
 
 
 def cached_read_strand(read: dict, calls: Optional[dict]) -> Optional[str]:
-    if calls is None:
+    if calls is None or read.get("strand") in STRANDS or read.get("strand") == ST_UNKNOWN:
+        # A record's own st:Z decides for that record; the per-name cache is
+        # only for strands called from marks (records sharing a name can differ).
         return read_strand(read)
     read_id = read.get("id")
     known = calls.get(read_id)

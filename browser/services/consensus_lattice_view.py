@@ -55,8 +55,11 @@ def lattice_payload(state, request):
             from services.plasmid_reconcile import contig_links
             actual,lo,hi,_=_resolve_bam_fetch_region(path,chrom,start,end,links=contig_links(state,dataset_id=dsid))
             with open_alignment_file(path,'rb') as bam:
+                from services.graph_lift import lift_hidden_predicate
+                lift_hidden=lift_hidden_predicate(bam.header)
                 for read in bam.fetch(actual,lo,hi):
                     if read.query_name not in wanted or read.is_secondary or read.is_supplementary or read.is_unmapped:continue
+                    if lift_hidden is not None and lift_hidden(read):continue
                     identity=dict(library_id=library,reference_start=int(read.reference_start),
                         reference_end=int(read.reference_end),
                         alignment_orientation='reverse' if read.is_reverse else 'forward')

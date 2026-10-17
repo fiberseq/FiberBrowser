@@ -24,7 +24,6 @@ LIFT_PROGRAM = "fiberhmm-lift"
 TAG_SOURCE_MAPQ = "Yq"
 TAG_SOURCE_LOCUS = "Yp"
 TAG_STASH_FLAG = "Yf"        # fiberhmm-lift stash (removed by the repair): source FLAG
-TAG_STASH_HARDCLIP = "Yh"    # fiberhmm-lift stash: source hard clips
 REPAIR_COMMAND = ("fiberhmm-lift --repair-only -i <lifted.bam> --source <source.bam> "
                   "--target-fasta <target.fa> -o <repaired.bam>")
 
@@ -227,27 +226,39 @@ def is_lift_ex_supplementary(read) -> bool:
     so the decision does not depend on which other records are in view (a
     cached, cropped or extended view agrees with a fresh load):
 
-    - fiberhmm-lift's stash tags (a lift that was stashed but not repaired):
-      ``Yf:i`` (source FLAG) has 0x800, or ``Yh:Z`` (source hard clips) is
-      present (only supplementaries are hard-clipped);
-    - its ``MA``/``Ma`` read length (or ``MN:i``) is longer than its SEQ: a
-      hard-clipped supplementary whose clips the lift dropped.
+    - with fiberhmm-lift's stash (a lift stashed but not repaired), ``Yf:i``
+      (the source FLAG) decides alone: hidden when it has 0x800 or 0x100. A
+      hard-clipped source primary (``Yf:i:0`` plus ``Yh``) is kept;
+    - without it, a record of a split alignment (it has ``SA``) whose
+      ``MA``/``Ma`` read length (or ``MN:i``) is longer than its SEQ is a
+      hard-clipped supplementary whose clips the lift dropped. minimap2 and
+      pbmm2 never hard-clip a primary; one that a later tool hard-clipped
+      and that has no stash tags would be hidden too.
 
     A soft-clipped ex-supplementary without stash tags carries no such
     evidence and is still shown: real reads (other read groups, mates) are
-    never hidden on a shared QNAME alone. SA cannot help: the lift copies it
-    verbatim, so it still names source-assembly positions.
+    never hidden on a shared QNAME alone. SA cannot place a sibling: the lift
+    copies it verbatim, so it still names source-assembly positions.
     """
     if read.is_unmapped or read.is_secondary or read.is_supplementary:
         return False
     flag = _stash_flag(read)
-    if flag is not None and flag & 0x800:
-        return True
+    if flag is not None:
+        return bool(flag & 0x900)
     try:
-        if read.has_tag(TAG_STASH_HARDCLIP):
-            return True
+        if not read.has_tag("SA"):
+            return False
     except (AttributeError, KeyError):
-        pass
+        return False
     declared = _declared_read_length(read)
     length = read.query_length or 0
     return declared is not None and length > 0 and declared > length
+
+
+def lift_hidden_predicate(header):
+    """The one rule every BAM reader applies: ``is_lift_ex_supplementary`` for
+    an unrepaired lift, None (nothing hidden) for any other BAM."""
+    try:
+        return is_lift_ex_supplementary if is_unrepaired_lift(header) else None
+    except Exception:
+        return None

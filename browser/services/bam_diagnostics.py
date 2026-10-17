@@ -490,6 +490,10 @@ def diagnose_bam_tags(
             # legacy ns/nl, as/al signals (they drive the `footprint` layer).
             "has_ma_nucleosomes": "nuc" in observed_ma_types,
             "has_ma_msps": "msp" in observed_ma_types,
+            # The calls ran (the type is in a read's MA/Ma), whether or not
+            # they found anything: a nuc./msp. group with no intervals.
+            "has_ma_nucleosome_calls": "nuc" in present_ma_types,
+            "has_ma_msp_calls": "msp" in present_ma_types or "fire" in present_ma_types,
             "has_fire": (
                 ("aq" in tag_counts and "as" in tag_counts and "al" in tag_counts)
                 or "fire" in observed_ma_types
