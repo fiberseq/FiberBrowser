@@ -236,7 +236,12 @@ class _Ctx:
         key = (contig, pos)
         hit = self._gap_cache.get(key)
         if hit is None:
-            hit = self._gap_cache[key] = self.handle.map.gap_span(contig, pos)[0] if self.handle else "unknown"
+            if self.handle is None:
+                hit = "unknown"
+            else:
+                with self.handle.lock:  # gap_span may load another target's file
+                    hit = self.handle.map.gap_span(contig, pos)[0]
+            self._gap_cache[key] = hit
         return hit
 
     def outside(self, contig, u0, u1, haps):
