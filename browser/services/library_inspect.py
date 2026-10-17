@@ -947,6 +947,10 @@ def inspect_bam(path: str, identity: dict, sidecars: Optional[Sidecars] = None) 
     chemistry = chemistry_summary(header)
     info["chemistry"] = chemistry
     info["fiberhmm"] = fiberhmm_provenance(header, chemistry)
+    from services.graph_lift import lift_summary, lift_summary_text
+    lift = lift_summary(header)
+    if lift is not None:  # a pangenome-graph lift (fiberhmm-lift @PG, or an unrepaired vg/ft one)
+        info["graph_lift"] = {**lift, "text": lift_summary_text(lift)}
     info["reference"] = reference_identity(header, path)
     samples = [str(rg.get("SM")) for rg in header.get("RG", []) or [] if rg.get("SM")]
     dates = [str(rg.get("DT")) for rg in header.get("RG", []) or [] if rg.get("DT")]

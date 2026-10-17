@@ -1359,6 +1359,8 @@ def project_broad_read_to_viewport(
         "reference_start", "reference_end", "alignment_orientation",
         "chemical_strand", "daf_strand", "strand", "_original_id",
         "alignment_spans", "signal",
+        # st/SEQ strand disagreement and graph-lift provenance (record-level).
+        "strand_conflict", "lift",
         # SV events are in absolute reference coordinates: never shifted.
         "sv",
     ):

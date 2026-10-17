@@ -59,6 +59,19 @@ def _read_ma_tags(read, ma_molecular):
     return None
 
 
+def _attach_record_fields(read_data, read):
+    """Per-record fields every compact read carries when its record has them:
+    the DAF strand from ``st:Z`` and an ``st``/SEQ disagreement
+    (``services.read_strand.record_strand_fields``), and a repaired graph
+    lift's provenance ``lift: {from: Yp, mapq: Yq}`` (``services.graph_lift``)."""
+    from services.graph_lift import read_lift_provenance
+    from services.read_strand import record_strand_fields
+    read_data.update(record_strand_fields(read))
+    lift = read_lift_provenance(read)
+    if lift is not None:
+        read_data["lift"] = lift
+
+
 _MA_FOOTPRINT_TYPES = ('nuc', 'tf', 'fp_v2')   # as dense_bam_loader.MA_FOOTPRINT_LAYERS
 
 
@@ -1928,6 +1941,12 @@ def _build_compact_reads_from_bam_region(
             regions=fetch_regions, source={"header": signal_provenance, "references": tuple(references)})
             if partition is None or partition == (0, 1) else None)
         from services.read_edge_cache import iter_edge_records
+        # An unrepaired graph lift (ft pg-lift) turned supplementaries into
+        # extra primaries: show each molecule once (services.graph_lift),
+        # deciding over the whole view so an edge fetch agrees with a full one.
+        from services.graph_lift import is_lift_duplicate, is_unrepaired_lift, lift_duplicate_records
+        lift_drop = (lift_duplicate_records(bam.fetch(actual_chrom, region_start, region_end))
+                     if is_unrepaired_lift(bam.header) else set())
         for read in iter_edge_records(bam, actual_chrom, region_start, region_end, fetch_regions):
             records_seen += 1
             if not records_seen & 255:
@@ -1937,6 +1956,8 @@ def _build_compact_reads_from_bam_region(
             if read.is_unmapped or read.is_secondary or read.is_supplementary:
                 if profile_bam:
                     profile_counts["records_unmapped"] += 1
+                continue
+            if lift_drop and is_lift_duplicate(read, lift_drop):
                 continue
             if partition is not None:
                 from services.read_sampling import name_hash
@@ -2052,6 +2073,7 @@ def _build_compact_reads_from_bam_region(
                     }
                     if is_duplicate:
                         read_data["duplicate"] = True
+                    _attach_record_fields(read_data, read)
                     if include_layers and ma_tags is not None:
                         phase_t0 = _profile_start()
                         try:
@@ -2402,6 +2424,7 @@ def _build_compact_reads_from_bam_region(
                 )
             if is_duplicate:
                 read_data["duplicate"] = True
+            _attach_record_fields(read_data, read)
 
             if fp_quality_list:
                 read_data["qualities"] = fp_quality_list

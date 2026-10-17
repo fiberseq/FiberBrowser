@@ -113,6 +113,27 @@ def diagnose_bam_payload(state, *, bam_path=None, dataset_idx: int = 0, chrom=No
                 "(nuc./msp./tf.) use molecular frame. If reverse-strand footprints look mirrored, keep the "
                 "producer's @PG/@CO header lines."
             )
+        from services.graph_lift import REPAIR_COMMAND, lift_summary_text
+        lift = result.get("graph_lift") or {}
+        if lift:
+            result["graph_lift_text"] = lift_summary_text(lift)
+        if lift.get("unrepaired"):
+            recommendations.append(
+                f"Lifted through a pangenome graph (@PG {', '.join(lift['unrepaired'])}) without fiberhmm-lift's "
+                "repair: supplementary alignments lost 0x800 (FiberBrowser shows each molecule once, keeping the "
+                "record with the longest SEQ, then the longest alignment, then the highest MAPQ), hard clips were "
+                "dropped, MD/NM/SA still describe the source assembly and st:Z was not swapped on reads that "
+                f"changed strand. Repair it: {REPAIR_COMMAND}."
+            )
+        conflicts = int(result.get("st_strand_conflicts") or 0)
+        if conflicts:
+            recommendations.append(
+                f"{conflicts} of {result.get('st_strand_reads', 0)} sampled DAF reads have an st:Z strand tag that "
+                "disagrees with the R/Y deamination marks in SEQ. FiberBrowser, like FiberHMM, takes the strand "
+                "from st (these reads are flagged in the read tooltip)"
+                + ("; the lift left st unswapped on reads that changed strand, which fiberhmm-lift's repair fixes."
+                   if lift.get("unrepaired") else ".")
+            )
         result["recommendations"] = recommendations
 
     return result

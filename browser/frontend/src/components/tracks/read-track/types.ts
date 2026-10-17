@@ -122,6 +122,12 @@ export interface CompactRead {
   id: string;
   /** BAM 0x400 / FiberHMM BigBed isDuplicate annotation. */
   duplicate?: boolean;
+  /** DAF strand from the record's st:Z tag (FiberHMM's rule). */
+  strand?: 'CT' | 'GA';
+  /** st:Z and the SEQ's R/Y deamination marks name different strands (e.g. st not swapped by a graph lift). */
+  strand_conflict?: boolean;
+  /** A fiberhmm-lift record's provenance: source locus (Yp:Z, contig:POS:strand) and source MAPQ (Yq:i). */
+  lift?: { from: string; mapq?: number };
   intervals: [number, number, number][]; // [start, end, size] - size negative for gaps (primary layer, backward compat)
   /** Legacy union field — populated with whichever modification signal is
    *  primary for this read (m6a preferred, then m5c, then deam positions).

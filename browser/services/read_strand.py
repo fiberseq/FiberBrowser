@@ -2,9 +2,10 @@
 
 Each DAF read is one strand of one molecule: deamination shows as C->T on
 one strand and G->A on the other (deam events carry type 1 = C->T / Y and
-0 = G->A / R). A read's strand is the majority type among its events in the
-loaded region, as FiberHMM's class run assigns reads to its ::CT / ::GA
-channels. Reads with no events there have no strand call.
+0 = G->A / R). A read with an ``st:Z`` tag takes its strand from the tag, as FiberHMM does
+(the loader stores it as the read's ``strand``); otherwise the strand is the
+majority type among its events in the loaded region, as FiberHMM's class run
+assigns reads to its ::CT / ::GA channels. Reads with neither have no call.
 """
 from __future__ import annotations
 
@@ -37,6 +38,46 @@ def read_strand(read: dict) -> Optional[str]:
     if ct == ga:
         return None
     return "CT" if ct > ga else "GA"
+
+
+def st_tag_strand(value) -> Optional[str]:
+    """FiberHMM's DAF strand from an ``st:Z`` tag: ``CT`` or ``GA``, else None.
+
+    Mirrors ``fiberhmm.core.bam_reader.extract_daf_iupac_positions`` (and
+    ``fiberhmm.inference.engine.daf_iupac_strand``): with an ``st`` tag the
+    tag decides; only without one does the R/Y majority in SEQ."""
+    value = str(value or "").strip().upper()
+    return value if value in STRANDS else None
+
+
+def seq_ry_strand(sequence: Optional[str]) -> Optional[str]:
+    """The R/Y majority of a SEQ (Y = C->T marks, R = G->A): FiberHMM's rule
+    when a read has no ``st`` tag. None on a tie or no marks."""
+    upper = (sequence or "").upper()
+    y, r = upper.count("Y"), upper.count("R")
+    if y == r:
+        return None
+    return "CT" if y > r else "GA"
+
+
+def record_strand_fields(read) -> dict:
+    """``{'strand': 'CT'|'GA'}`` from a record's ``st:Z`` (FiberHMM's rule; it
+    then decides the read's strand over its deamination marks, see
+    :func:`read_strand`), plus ``strand_conflict: True`` when the SEQ's R/Y
+    marks say the other strand (``st`` not swapped when a lift reversed the
+    read, ``fiberhmm-lift`` repairs it). Empty without a usable ``st``."""
+    try:
+        if not read.has_tag("st"):
+            return {}
+        strand = st_tag_strand(read.get_tag("st"))
+    except (AttributeError, KeyError):
+        return {}
+    if strand is None:
+        return {}
+    seq_strand = seq_ry_strand(getattr(read, "query_sequence", None))
+    if seq_strand is not None and seq_strand != strand:
+        return {"strand": strand, "strand_conflict": True}
+    return {"strand": strand}
 
 
 _MAX_CACHED_CALLS = 500_000

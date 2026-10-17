@@ -434,6 +434,7 @@ export function LibraryDetails({ entry, groups, fiberhmmVersion, onOpen, onChang
           {referenceLabel(entry)}
           {ref?.n_contigs ? ` · ${ref.n_contigs.toLocaleString()} contig${ref.n_contigs === 1 ? '' : 's'}` : ''}
         </Row>
+        <Row label="Graph lift">{full.graph_lift?.text}</Row>
         <Row label="Reads">{entry.reads != null ? entry.reads.toLocaleString() : ''}</Row>
         <Row label="Size">{formatBytes(entry.identity?.size)}</Row>
         <Row label="Date">{entry.date ? `${entry.date.replace('T', ' ')}${entry.date_source ? ` (${entry.date_source})` : ''}` : ''}</Row>

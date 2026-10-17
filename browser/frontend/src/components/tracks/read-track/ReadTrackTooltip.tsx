@@ -76,6 +76,16 @@ export function ReadTooltip({
           <div className="text-amber-300">Consensus: PCR-propagated hypothesis</div>
         )}
         <div>Span: {readSize.toLocaleString()} bp ({chrom}:{(start + readStart).toLocaleString()}-{(start + readEnd).toLocaleString()})</div>
+        {read.lift && (
+          <div data-testid="read-lift-provenance">
+            Lifted from {read.lift.from}{read.lift.mapq != null ? ` · source MAPQ ${read.lift.mapq}` : ''}
+          </div>
+        )}
+        {read.strand_conflict && (
+          <div className="text-amber-300" data-testid="read-strand-conflict">
+            Strand: {read.strand} (st tag); SEQ marks say {read.strand === 'CT' ? 'GA' : 'CT'}
+          </div>
+        )}
         {cluster !== undefined && (
           <div className="flex items-center gap-1">
             Cluster: <span

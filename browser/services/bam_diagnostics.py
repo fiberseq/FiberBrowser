@@ -260,6 +260,10 @@ def diagnose_bam_tags(
                 chroms_to_try = chroms
 
             has_iupac_ry = False
+            # Sampled reads with an st:Z strand tag, and those whose SEQ R/Y
+            # marks say the other strand (services/read_strand.py).
+            st_reads = 0
+            st_conflicts = 0
             has_m6a_mm = False
             has_m5c_mm = False
             daf_mismatches = 0
@@ -272,6 +276,9 @@ def diagnose_bam_tags(
             circular_contigs = header_circular_contigs(bam.header)
             from services.bam_tags import legacy_tag_frame_report
             legacy_tag_frame = legacy_tag_frame_report(bam.header)
+            from services.graph_lift import lift_summary
+            from services.read_strand import record_strand_fields
+            graph_lift = lift_summary(bam.header)
             ma_layer_types: set[str] = set(declared_ma_layer_types)
             # Annotation types actually seen in MA/Ma tags (not just declared in the header).
             observed_ma_types: set[str] = set()
@@ -324,6 +331,7 @@ def diagnose_bam_tags(
                 nonlocal reads_checked
                 nonlocal has_iupac_ry
                 nonlocal daf_mismatches, other_mismatches
+                nonlocal st_reads, st_conflicts
 
                 if reads_checked >= limit:
                     return
@@ -340,6 +348,11 @@ def diagnose_bam_tags(
                     seq = read.query_sequence.upper()
                     if "R" in seq or "Y" in seq:
                         has_iupac_ry = True
+
+                strand_fields = record_strand_fields(read)
+                if strand_fields:
+                    st_reads += 1
+                    st_conflicts += bool(strand_fields.get("strand_conflict"))
 
                 try:
                     if read.has_tag("MD") and read.query_sequence:
@@ -493,6 +506,11 @@ def diagnose_bam_tags(
             "legacy_tag_frame": legacy_tag_frame,
             # @SQ TP:circular contigs (the SAM circular representation).
             "circular_contigs": circular_contigs,
+            # Sampled reads whose st:Z tag and SEQ R/Y marks name different DAF strands.
+            "st_strand_reads": st_reads,
+            "st_strand_conflicts": st_conflicts,
+            # A pangenome-graph lift (services/graph_lift.lift_summary), or None.
+            "graph_lift": graph_lift,
         }
     except Exception as exc:
         return {"error": str(exc), "traceback": traceback.format_exc()}
