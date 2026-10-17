@@ -11,6 +11,8 @@ The toy map (``write_toy_sidecar``): target ``chrT`` (20 kb); source
 - chain 2, PAT ``+``: source ``[0, 4000)`` -> target ``[15000, 19000)``.
 - chain 3, MAT ``+``: source ``[9100, 9500)`` -> target ``[8000, 8400)`` with a
   3 bp target gap after source 9300 (``[9300, 9500)`` -> ``[8203, 8403)``).
+- chain 4, MAT ``+``, never primary (an alternative): source ``[9600, 9900)``
+  -> target ``[1500, 1800)``.
 """
 from __future__ import annotations
 
@@ -51,15 +53,17 @@ def write_toy_sidecar(directory) -> str:
     c1 = [[12000, SSIZE - 9000, 2000]]           # '-' blocks are in reverse-complement source coordinates
     c2 = [[15000, 0, 4000]]
     c3 = [[8000, 9100, 200], [8203, 9300, 200]]
+    c4 = [[1500, 9600, 300]]
     chains = [_chain("c0", "H#1", 0, "+", c0, SSIZE), _chain("c1", "H#1", 0, "-", c1, SSIZE),
-              _chain("c2", "H#2", 1, "+", c2, SSIZE), _chain("c3", "H#1", 0, "+", c3, SSIZE)]
+              _chain("c2", "H#2", 1, "+", c2, SSIZE), _chain("c3", "H#1", 0, "+", c3, SSIZE),
+              _chain("c4", "H#1", 0, "+", c4, SSIZE)]
     payload = {
         "target": TARGET,
-        "blocks": {"0": c0, "1": c1, "2": c2, "3": c3},
+        "blocks": {"0": c0, "1": c1, "2": c2, "3": c3, "4": c4},
         "gaps": {"0": _gaps(c0, ["target_insertion", "source_insertion"]), "1": [], "2": [],
-                 "3": _gaps(c3, ["target_insertion"])},
+                 "3": _gaps(c3, ["target_insertion"]), "4": []},
     }
-    nets = {"H#1": [[0, 1000, 7900, 0, []], [0, 8000, 8403, 3, []], [0, 12000, 14000, 1, []]],
+    nets = {"H#1": [[0, 1000, 7900, 0, [4]], [0, 8000, 8403, 3, []], [0, 12000, 14000, 1, []]],
             "H#2": [[0, 15000, 19000, 2, []]]}
     manifest = dict(format="graphlift.sidecar", version=2, block_kinds=["anchor", "substitution", "aligned"],
                     gap_reasons=GAP_REASONS, targets=[{"name": TARGET, "size": TSIZE}],
