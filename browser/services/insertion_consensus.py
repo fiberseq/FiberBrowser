@@ -297,7 +297,9 @@ def fiberhmm_insert_consensus():
 def daf_aware_consensus(records: list, module=None) -> tuple[Optional[dict], Optional[str]]:
     """FiberHMM's deamination-aware consensus of CIGAR-insert carriers, or (None, why not).
 
-    ``records``: ``(pysam record, insert start in SEQ, insert length)`` per carrier. Each
+    ``records``: ``(pysam record, insert start in SEQ, insert length[, canonical sequence])``
+    per carrier. Sequence overrides rotate each observation before alignment;
+    strand and record identity still come from the original read. Each
     carrier's strand is the one fiberhmm-call gives the read (its MD comparison, or MM/ML
     marks); carriers it cannot assign, and PCR duplicates, do not vote. Returns
     ``{seq, confident_fraction, carriers_ct, carriers_ga}``: ``confident_fraction`` is the
@@ -312,18 +314,19 @@ def daf_aware_consensus(records: list, module=None) -> tuple[Optional[dict], Opt
     # CIGAR insertion, any length); the carrier is the lens's insert span, which may join
     # several nearby insertion pieces into one.
     strands: dict = {}
-    for _contig, _pos, carrier in module.collect_carriers([read for read, _q, _l in records], min_length=1):
+    for _contig, _pos, carrier in module.collect_carriers([read for read, *_span in records], min_length=1):
         strands.setdefault(carrier.key, carrier.strand)
     carriers = []
     seen = set()
-    for read, q, length in records:
+    for record in records:
+        read, q, length, *canonical = record
         key = module.record_key(read)
         strand = strands.get(key)
         if strand is None or read.is_duplicate or (key, int(q)) in seen:
             continue
         seen.add((key, int(q)))
         seq = read.query_sequence or ""
-        carriers.append(module.Carrier(key, int(q), seq[int(q):int(q) + int(length)], strand, False))
+        carriers.append(module.Carrier(key, int(q), (canonical[0] if canonical and canonical[0] is not None else seq[int(q):int(q) + int(length)]), strand, False))
     if len(carriers) < 2:
         return None, ("FiberHMM could not tell the deamination strand of enough carriers (it reads it from the "
                       "MD tag or MM/ML marks)")

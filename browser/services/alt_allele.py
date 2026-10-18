@@ -244,16 +244,11 @@ def build_alt_allele(bam_paths: list[str], definition: dict, out_dir: str, *, fa
                          len(plan.get('canonical_alt_seq', read.query_sequence[plan['q']:plan['q'] + plan['len']])) == plan['len']
                          for plan, read in full)
     if daf and (not canonical_changed or pure_rotations):
-        daf_info, fallback = daf_aware_consensus([(read, plan["q"], plan["len"]) for plan, read in full])
+        daf_info, fallback = daf_aware_consensus([(read, plan["q"], plan["len"], plan.get("canonical_alt_seq")) for plan, read in full])
         if daf_info is not None:
             method = "daf"
     if daf_info is not None:
         consensus = daf_info["seq"]
-        if canonical_changed and consensus:
-            shifts = sorted(plan['ref'] - ref for plan, _read in full)
-            rotation = shifts[len(shifts) // 2] % len(consensus)
-            if rotation:
-                consensus = consensus[-rotation:] + consensus[:-rotation]
     else:
         consensus = build_consensus([plan.get('canonical_alt_seq', read.query_sequence[plan['q']:plan['q'] + plan['len']])
                                      for plan, read in full])

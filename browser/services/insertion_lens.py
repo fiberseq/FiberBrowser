@@ -677,6 +677,8 @@ def build_lens(
                                         item[1].query_name, item[2]))
     carriers_out: list[dict] = []
     full_seqs: list[str] = []
+    canonical_seqs: list[str] = []
+    daf_compatible = True
     full_records: list[tuple] = []
     full_entries: list[dict] = []
     partial_items: list[tuple[str, str]] = []
@@ -736,8 +738,11 @@ def build_lens(
             if include_sequences:
                 entry["seq"] = insert
             if plan["kind"] == "cigar":
-                full_seqs.append(insert)
-                full_records.append((read, plan["q"], ins_len))
+                full_seqs.append(insert)  # knots remain on the observed query axis
+                canonical = plan.get('canonical_alt_seq', insert)
+                canonical_seqs.append(canonical)
+                daf_compatible &= canonical == insert or (plan['ref_end'] == plan['ref'] and len(canonical) == ins_len)
+                full_records.append((read, plan["q"], ins_len, canonical))
                 full_entries.append(entry)
             else:
                 partial_items.append((insert, plan["partial"]))
@@ -806,12 +811,15 @@ def build_lens(
         from services.insertion_consensus import consensus_with_knots, partials_to_consensus
         cons_started = time.perf_counter()
         method, why_not, daf_consensus = "majority", None, None
-        if daf:
+        if daf and daf_compatible:
             from services.insertion_consensus import daf_aware_consensus
             daf_consensus, why_not = daf_aware_consensus(full_records)
             if daf_consensus is not None:
                 method = "daf"
-        cons = consensus_with_knots(full_seqs, seq=daf_consensus["seq"] if daf_consensus else None)
+        if daf and not daf_compatible:
+            why_not = 'Canonical allele normalization changes the source query span; using canonical sequence majority'
+        from services.insertion_consensus import build_consensus
+        cons = consensus_with_knots(full_seqs, seq=daf_consensus["seq"] if daf_consensus else build_consensus(canonical_seqs))
         for entry, read_cons in zip(full_entries, cons["reads"]):
             entry["knots"] = read_cons["knots"]
             entry["identity"] = read_cons["identity"]

@@ -132,3 +132,39 @@ def test_minimized_replacements_recompute_size_and_apply_the_cutoff(tmp_path, al
     assert event['inserted_len'] == expected[2] and event['deleted_len'] == expected[1]
     assert haplotype(ref, event) == rec.query_sequence
     assert extract_sv_events(rec, 50, reference=fasta) is None
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_daf_builders_consense_each_repeat_carrier_in_the_canonical_frame(tmp_path, reverse):
+    pytest.importorskip('fiberhmm.daf.insert_consensus')
+    from services.alt_allele import build_alt_allele, normalize_definition
+    from services.insertion_lens import build_lens
+    ref = 'C' * 1000 + 'ACGT' * 250 + 'G' * 1000
+    fasta = fasta_file(tmp_path, ref)
+    path = str(tmp_path / 'repeat.bam')
+    records = []
+    for i, anchor in enumerate([1100] * 4 + [1101] * 3 + [1102] * 4):
+        insert = ref[anchor:anchor + 4] * 25
+        rec = _seg([(0, anchor), (1, 100), (0, len(ref) - anchor)], start=0,
+                   seq=ref[:anchor] + insert + ref[anchor:], reverse=reverse)
+        rec.query_sequence = rec.query_sequence[:10] + ('Y' if i % 2 else 'R') + rec.query_sequence[11:]
+        rec.query_name = f'carrier-{i}'
+        rec.set_tag('st', 'CT' if i % 2 else 'GA')
+        records.append(rec)
+    with pysam.AlignmentFile(path, 'wb', header=records[0].header) as bam:
+        for rec in records:
+            bam.write(rec)
+    pysam.index(path)
+    meta = build_alt_allele([path], normalize_definition(dict(chrom='chrT', ref=1000, pos=1000, length=100, flank=500)),
+                            str(tmp_path / 'alt'), fasta=fasta, daf=True)
+    with pysam.FastaFile(str(tmp_path / 'alt' / 'alt.fa')) as alt:
+        layout = meta['layout']
+        assert alt.fetch(alt.references[0])[layout['insert_start']:layout['insert_end']] == 'ACGT' * 25
+    assert meta['consensus']['method'] == 'daf'
+    lens = build_lens([path], 'chrT', pos=1000, ref=1000, length=100, reference=fasta, daf=True,
+                      include_sequences=True, loader=lambda *_a, **_k: [])
+    assert lens['consensus']['method'] == 'daf' and lens['consensus']['seq'] == 'ACGT' * 25
+    assert {c['q'] for c in lens['carriers']} == {1100, 1101, 1102}
+    assert meta['consensus']['carriers_ct'] == 5 and meta['consensus']['carriers_ga'] == 6
+    assert all(c['seq'] == ref[c['q']:c['q'] + 4] * 25 for c in lens['carriers'])
+    assert all(c['knots'][0][0] == 0 and c['knots'][-1][0] == 100 for c in lens['carriers'])

@@ -124,7 +124,9 @@ reference span; reference reads align their replaced query segment against that
 allele. Insert-sequence lookup concatenates raw I pieces, excluding matched
 bridges, and uses the raw anchor when locating the source record.
 Canonical alternate-allele consensus uses normalized allele sequences. DAF
-consensus retains chemistry calls through pure repeat rotations; if minimizing a
+consensus rotates each observation before chemistry-aware alignment, retaining
+its original record, query offset and CT/GA strand. Native lens sequences and
+knots retain the observed query axes; if minimizing a
 complex replacement changes its query span, canonical sequence majority is used
 with an explicit fallback reason. The native lens retains observed query axes.
 
