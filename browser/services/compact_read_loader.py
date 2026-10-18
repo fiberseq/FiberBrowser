@@ -1709,7 +1709,8 @@ def _clip_part_before(read: dict, frame_end: int) -> Optional[dict]:
         layer_key=None, include_layer_qualities=True)
     if clipped is None:
         return None
-    for key in ("duplicate", "alignment_spans", "sv", "aligned_blocks", "sv_segments", "sequence_span"):
+    for key in ("duplicate", "alignment_spans", "sv", "sv_evidence", "aligned_blocks", "sv_segments",
+                "sequence_span", "sv_alignments", "supplementary"):
         if key in read:
             clipped[key] = read[key]
     if read.get("cigar"):
@@ -2000,6 +2001,31 @@ def _build_compact_reads_from_bam_region(
             if spanning_only and (ref_start > region_start or ref_end < region_end):
                 if profile_bam:
                     profile_counts["records_nonspanning"] += 1
+                continue
+
+            # Annotation tags on recovered hard-clipped segments may still use
+            # whole-molecule coordinates. The per-layer frame cannot be proven
+            # from truncated SEQ: keep SV evidence without displaced chromatin.
+            if read.is_supplementary and any(op == 5 for op, _n in read.cigartuples or []):
+                if min_fp_quality > 0 or min_footprints > 0:
+                    continue
+                a, b = max(ref_start, region_start), min(ref_end, region_end)
+                if b > a:
+                    read_data = {'id': read.query_name, 'intervals': [[a - region_start, b - region_start, 0]],
+                                 'no_calls': True,
+                                 **_bam_projection_identity(read, projection_library_id, projection_occurrences)}
+                    if is_duplicate:
+                        read_data['duplicate'] = True
+                    _attach_record_fields(read_data, read)
+                    _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq,
+                                      molecule_records=molecule_records, reference=sv_reference)
+                    if include_cigar:
+                        read_data['cigar'] = extract_cigar_events(read, region_start, region_end)
+                    if partition is not None:
+                        read_data['_fiberbrowser_source_order'] = records_seen
+                    reads.append(read_data)
+                    if stream is not None:
+                        stream.append(read_data)
                 continue
 
             phase_t0 = _profile_start()

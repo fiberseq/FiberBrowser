@@ -98,3 +98,35 @@ def test_supplementary_only_with_annotations_outside_local_alignment_keeps_a_neu
     assert len(rows) == 1 and rows[0]['supplementary'] is True
     assert rows[0]['intervals'] == [[100, 200, 0]]
     assert any(event['t'] == 'S' for event in rows[0]['sv'])
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_annotated_hard_clipped_recovery_is_neutral_on_both_strands(tmp_path, reverse):
+    import array
+    rec = _seg([(5, 100), (0, 200), (1, 50), (0, 200), (5, 100)], start=1000,
+               reverse=reverse, supplementary=True)
+    rec.set_tag('ns', array.array('i', [150]))
+    rec.set_tag('nl', array.array('i', [50]))
+    rec.set_tag('MA', 'nuc.:150+50;')
+    path = str(tmp_path / 'hard-clipped.bam')
+    header = rec.header.to_dict()
+    header['CO'] = ['FIBERHMM-TAG-FRAME:v1:coord=molecular']
+    with pysam.AlignmentFile(path, 'wb', header=header) as bam:
+        bam.write(rec)
+    pysam.index(path)
+    kwargs = dict(spanning_only=False, include_layers=True, include_methylation=True,
+                  hide_terminal_gaps=False, short_terminal_footprint_bp=0)
+    row, = build_compact_reads_from_bam(path, 'chrT', 900, 1500, **kwargs)
+    assert row['intervals'] == [[100, 500, 0]] and row['no_calls']
+    assert not row.get('layers') and not row.get('methyl')
+    assert any(e['t'] == 'I' for e in row['sv']) and row['sequence_span'] == [100, 550]
+    assert build_compact_reads_from_bam(path, 'chrT', 900, 1500, min_footprints=1, **kwargs) == []
+
+
+def test_circular_clipping_preserves_supplementary_bundles():
+    from services.compact_read_loader import _clip_part_before
+    read = dict(id='wrapped', intervals=[[0, 100, 0]], reference_start=0, reference_end=100,
+                supplementary=True, sv_alignments=[dict(id='wrapped', sv=[])], sv_evidence=[])
+    clipped = _clip_part_before(read, 50)
+    assert clipped['supplementary'] and clipped['sv_alignments'] == read['sv_alignments']
+    assert clipped['sv_evidence'] == []

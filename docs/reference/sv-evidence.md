@@ -133,5 +133,10 @@ with an explicit fallback reason. The native lens retains observed query axes.
 Supplementary-only alignments whose whole-molecule annotation calls lie outside
 the local segment retain a neutral evidence row when no footprint quality or
 minimum-count gate excludes them. This does not fabricate chromatin calls on
-unaligned or hard-clipped bases. Server-side job cancellation, uncapped exports,
+unaligned or hard-clipped bases. Recovered hard-clipped anchors always retain
+neutral rows: truncated SEQ cannot prove the whole-molecule annotation frame for
+every layer. They expose CIGAR/segment evidence and no chromatin or modification
+marks; positive footprint quality/count gates exclude these unsafe rows.
+Circular clipping preserves their supplementary status and alignment bundles.
+Server-side job cancellation, uncapped exports,
 and a persistent cross-window variant catalogue remain outside this change.
