@@ -23,6 +23,23 @@ def test_off_window_primary_cold_warm_and_display(two_hap_evidence, monkeypatch)
     assert {(r['hap_label'], r['hg002'], r['allele']) for r in cold['rows']} == {('PAT', 'A', 'other')}
 
 
+def test_missing_primary_uses_one_budget_and_is_not_cached(two_hap_evidence, monkeypatch):
+    state, ds, tmp = two_hap_evidence
+    ds.paths = [write_bam(tmp / 'missing-primary.bam', lambda h: [
+        make_record(h, 'molecule', MAT, 0, '200M', seq='A'*200, flag=2048,
+                    tags=[('MD', '200'), ('SA', f'{PAT},501,+,200M,60,0;')])])]
+    original = ll.lookup_primary
+    calls = []
+    def lookup(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(ll, 'lookup_primary', lookup)
+    for count in (1, 2):
+        diff.difference_reads(state, ds, TARGET, 1100, 1101)
+        assert len(calls) == count
+        assert not any(v is None for v in ll._PRIMARY_CACHE.values())
+
+
 def test_cross_parent_insertion_keeps_observed_and_expected_separate(two_hap_evidence):
     state, ds, tmp = two_hap_evidence
     ds.paths = [write_bam(tmp / 'cross-insertion.bam', lambda h: [

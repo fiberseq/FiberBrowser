@@ -700,8 +700,10 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
             # handles, so the display fallback stays inside this exact cohort.
             empty = _Records(next(iter(adapters.values())).bam, [])
             display = lifted_reads_for_region(dataset, chrom, view_start, view_end,
-                                               dict(include_layers=True, include_methylation=True),
-                                               bam_handle_getter=lambda p: adapters.get(p, empty))
+                                               dict(include_layers=True, include_methylation=True,
+                                                    insertion_ids=[s["id"] for s in spans] if pos == end else []),
+                                               bam_handle_getter=lambda p: adapters.get(p, empty),
+                                               primary_metadata=molecules)
         display = filter_lift_display(display or [], dataset, None)
         by_record = {}
         for row in display:

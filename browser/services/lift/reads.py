@@ -41,7 +41,8 @@ def lift_identity(dataset) -> tuple:
 
 
 def lifted_reads_for_region(dataset, chrom: str, start: int, end: int, options: Optional[dict] = None,
-                            counts_out: Optional[dict] = None, *, sampler=None, bam_handle_getter=None) -> list:
+                            counts_out: Optional[dict] = None, *, sampler=None, bam_handle_getter=None,
+                            primary_metadata=None) -> list:
     """Lifted rows of ``[start, end)`` on the main genome, relative to
     ``start`` and clipped to it, as the BAM loader returns them; every row (no
     spanning, id, strand, haplotype or cap filter)."""
@@ -57,7 +58,7 @@ def lifted_reads_for_region(dataset, chrom: str, start: int, end: int, options: 
     load = load_lifted_rows(handle, list(dataset.paths), chrom, int(start), int(end), haplotypes=config.haplotypes,
                             settings=config.settings, dataset_id=dataset.id, loader_options=loader_options,
                             output_region=(int(start), int(end)), sampler=sampler, budget=budget,
-                            bam_handle_getter=bam_handle_getter)
+                            bam_handle_getter=bam_handle_getter, primary_metadata=primary_metadata)
     if load.truncated:
         # Never publish or cache a partial cohort as though it were complete.
         limit = (f"{budget.max_bytes / (1024 * 1024):g} MB" if budget.bytes >= budget.max_bytes

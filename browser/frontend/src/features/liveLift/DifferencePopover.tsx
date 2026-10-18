@@ -33,7 +33,7 @@ export function DifferencePopover({ panel, dataset, anchor }: { panel: PanelConf
     if (!current || !d) return;
     const controller = new AbortController();
     void getDifferenceReads({ datasetId: dataset.id, liftKey: dataset.live_lift?.key ?? '', chrom: current.chrom,
-      pos: d.t_start, end: Math.min(d.t_end, d.t_start + 50_000), liftHap: panel.liftHap, itemId: d.source === 'assembly' ? d.id : undefined, includeSequence: current.action === 'identify' }, controller.signal)
+      pos: d.t_start, end: Math.min(d.t_end, d.t_start + 50_000), liftHap: panel.liftHap ?? d.hap_label, itemId: d.source === 'assembly' ? d.id : undefined, includeSequence: current.action === 'identify' }, controller.signal)
       .then(r => { if (!controller.signal.aborted) setData(r); })
       .catch(e => { if (!controller.signal.aborted) setError(String(e.message ?? e)); });
     return () => { controller.abort(); sequenceRequest.current?.abort(); };
@@ -72,7 +72,7 @@ export function DifferencePopover({ panel, dataset, anchor }: { panel: PanelConf
     setFetchingSequence(true); setError('');
     try {
       const result = await getDifferenceReads({ datasetId: dataset.id, liftKey: dataset.live_lift?.key ?? '',
-        chrom: current.chrom, pos: d.t_start, end: d.t_end, liftHap: panel.liftHap,
+        chrom: current.chrom, pos: d.t_start, end: d.t_end, liftHap: panel.liftHap ?? d.hap_label,
         itemId: d.source === 'assembly' ? d.id : undefined, includeSequence: true }, controller.signal);
       if (!controller.signal.aborted) { setData(result); setIdentify(true); }
     } catch (e) { if (!controller.signal.aborted) setError(String((e as Error).message ?? e)); }

@@ -565,7 +565,7 @@ def decode_source_records(bam_paths: Iterable[str], plan: FetchPlan, *, loader_o
     from services.read_edge_cache import EdgeFetchUnsupported
 
     options = dict(loader_options or {})
-    for internal in ("target_fasta", "source_fasta", "detail_view", "include_mismatches"):
+    for internal in ("target_fasta", "source_fasta", "detail_view", "include_mismatches", "insertion_ids"):
         options.pop(internal, None)
     options.update(_FIXED_LOADER_OPTIONS, include_supplementary=bool(include_supplementary))
     if bam_handle_getter is not None:
@@ -593,7 +593,7 @@ def load_lifted_rows(handle: LiftMapHandle, bam_paths: Iterable[str], chrom: str
                      haplotypes: Iterable[str], settings: LiftSettings, dataset_id: str,
                      loader_options: Optional[dict] = None, budget: Optional[LoadBudget] = None,
                      bam_handle_getter=None, use_cache: bool = True, sampler=None,
-                     output_region: Optional[tuple] = None) -> LiftedLoad:
+                     output_region: Optional[tuple] = None, primary_metadata=None) -> LiftedLoad:
     """Every lifted row of target view ``[start, end)`` plus its selection
     margin: selection -> plan -> source decode -> primary metadata -> lift.
     Rows are relative to, and clipped to, the selection range
@@ -628,8 +628,9 @@ def load_lifted_rows(handle: LiftMapHandle, bam_paths: Iterable[str], chrom: str
                                     include_supplementary=settings.load_supplementaries)
     if sampler is not None:
         counts["sampled"] = {"level": int(sampler.level), "estimated": True}
-    molecules = resolve_primary_metadata(handle, decoded, settings=settings, counts=counts,
-                                         bam_handle_getter=bam_handle_getter)
+    molecules = (resolve_primary_metadata(handle, decoded, settings=settings, counts=counts,
+                                          bam_handle_getter=bam_handle_getter)
+                 if primary_metadata is None else primary_metadata)
     r0, r1 = output_region if output_region is not None else (selection.start, selection.end)
     rows = lift_compact_reads(decoded, plan, handle=handle, region_start=r0,
                               region_end=r1, settings=settings,
