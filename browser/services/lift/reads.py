@@ -12,6 +12,8 @@
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Iterable, Optional
 
 # Loader options a lifted load takes from the display paths (the rest are fixed by live_lift).
@@ -130,6 +132,37 @@ def geometry_intervals(read: dict) -> list:
 
 
 # ── Haplotype panels ────────────────────────────────────────────────────────
+
+# A display request's haplotype rule (``lift_hap``), set around the working-set
+# build so the display filter runs on the unfiltered broad rows *before* the
+# working-set cap and its sampling (§3.8 ``prepare_lift_cohort(purpose='display')``).
+_display_hap: ContextVar = ContextVar("live_lift_display_hap", default=None)
+
+
+@contextmanager
+def lift_display_hap(hap: Optional[str]):
+    token = _display_hap.set(hap or None)
+    try:
+        yield
+    finally:
+        _display_hap.reset(token)
+
+
+def display_row_filter(dataset):
+    """For a lifted dataset, the predicate a working set applies to broad rows
+    before its spanning/id filters and caps (haplotype of the current display
+    request, supplementary/alternative display settings); None otherwise."""
+    if not is_lifted(dataset):
+        return None
+    hap = _display_hap.get()
+    return lambda read: bool(filter_lift_display([read], dataset, hap))
+
+
+def display_key(dataset) -> Optional[tuple]:
+    """What a lifted working set's cache key adds for the display filter (the
+    settings are already in ``lift_key``)."""
+    return ("lift_hap", _display_hap.get()) if is_lifted(dataset) else None
+
 
 def filter_lift_hap(reads: Iterable[dict], hap: Optional[str]) -> list:
     """Rows of one haplotype (label or key) for a split panel's rule; reads

@@ -64,6 +64,23 @@ def require(dataset, feature: str) -> None:
         raise LiveLiftUnsupported(feature, getattr(dataset, "label", None))
 
 
+def unsupported_notice(feature: str) -> str:
+    """The one-line notice a refused or suppressed feature gives for lifted datasets."""
+    return str(LiveLiftUnsupported(feature))
+
+
+def lifted_display_notices(state, dataset_id, *, include_metaprofile: bool = False) -> list:
+    """Notices for a lifted display request whose extras were suppressed (§3.10):
+    a metaprofile asked for and left out."""
+    dataset = (getattr(state, "datasets", {}) or {}).get(dataset_id) if dataset_id else None
+    if not is_lifted(dataset):
+        return []
+    out = []
+    if include_metaprofile:
+        out.append(unsupported_notice("metaprofile"))
+    return out
+
+
 def require_all(datasets: Iterable, feature: str) -> None:
     for dataset in datasets or ():
         require(dataset, feature)

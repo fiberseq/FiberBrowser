@@ -487,19 +487,6 @@ def _compact_reads_payload(
     include_sv_seq = query_bool(include_sv_seq, False)
     include_sv_summary = query_bool(include_sv_summary, True)
     lift_hap = unwrap_query_default(lift_hap, None) or None
-    from services.lift.capability import is_lifted
-    lifted_dataset = is_lifted(state.datasets.get(dataset_id)) if dataset_id else False
-    if lifted_dataset:
-        # A live-lift panel: no SV summary (its connectors are not SVs; capability table §3.10).
-        include_sv_summary = False
-    else:
-        lift_hap = None  # a haplotype rule means nothing to a native dataset
-    from services.lift.reads import filter_lift_display
-    lift_dataset = state.datasets.get(dataset_id) if lifted_dataset else None
-
-    def filter_lift_hap(reads, hap):
-        # A lifted panel's rows: its haplotype, and the display settings for supplementary/alternative rows.
-        return filter_lift_display(reads, lift_dataset, hap)
     sv_floor = sv_extraction_floor(min_sv_len)
     from services.read_strand import cached_read_strand, filter_reads_by_strand, normalize_strand, strand_calls, strand_totals
     strand = normalize_strand(unwrap_query_default(strand, None))
@@ -539,6 +526,23 @@ def _compact_reads_payload(
     )
     sample_seed = query.sample_seed
     dataset_id = query.dataset_ids[0] if query.dataset_ids else None
+    # Classified after the dataset is resolved: a request without dataset_id gets the default dataset,
+    # which may be lifted (its display filter, SV summary and reuse rules depend on it).
+    from services.lift.capability import is_lifted
+    lifted_dataset = is_lifted(state.datasets.get(dataset_id)) if dataset_id else False
+    if lifted_dataset:
+        # A live-lift panel: no SV summary (its connectors are not SVs; capability table §3.10) and no
+        # metaprofile (§3.10: forced off until the body-span helpers land, with a notice).
+        include_sv_summary = False
+        include_metaprofile = False
+    else:
+        lift_hap = None  # a haplotype rule means nothing to a native dataset
+    from services.lift.reads import filter_lift_display
+    lift_dataset = state.datasets.get(dataset_id) if lifted_dataset else None
+
+    def filter_lift_hap(reads, hap):
+        # A lifted panel's rows: its haplotype, and the display settings for supplementary/alternative rows.
+        return filter_lift_display(reads, lift_dataset, hap)
     calls = strand_calls(state, dataset_id) if strand else None
     chrom = query.chrom
     start = query.start
@@ -969,13 +973,16 @@ def _compact_reads_payload(
         if broad_reads is None:
             log_read_diagnostic("  No broad cache available, using working set")
             phase_t0 = time.perf_counter()
-            working_set = query.build_working_set(
-                state,
-                dataset_id,
-                read_ids=list(filter_id_set) if filter_id_set is not None else None,
-                include_layer_qualities=include_layer_qualities,
-                quality_filters=display_quality_filters,
-            )
+            from services.lift.reads import lift_display_hap
+            # A lifted panel's haplotype rule applies inside the build, before its working-read cap.
+            with lift_display_hap(lift_hap):
+                working_set = query.build_working_set(
+                    state,
+                    dataset_id,
+                    read_ids=list(filter_id_set) if filter_id_set is not None else None,
+                    include_layer_qualities=include_layer_qualities,
+                    quality_filters=display_quality_filters,
+                )
             server_timings["working_set_ms"] = phase_ms(phase_t0)
             # BrowserState.build_working_set projects an active run; the filtered
             # subsets below keep its rows (and so its projection).
@@ -1304,6 +1311,11 @@ def compact_reads_payload_for_request(state, *, pin_ids: Optional[str] = None, *
     from services.read_pins import parse_pin_ids, pinned_reads
     with pinned_reads(parse_pin_ids(unwrap_query_default(pin_ids, None))):
         payload = _compact_reads_payload(state, **kwargs)
+    from services.lift.capability import lifted_display_notices
+    notices = lifted_display_notices(state, payload.get("dataset_id"),
+                                     include_metaprofile=query_bool(kwargs.get("include_metaprofile"), False))
+    if notices:
+        payload["live_lift_notices"] = notices
     min_footprints = int(query_int(kwargs.get("min_footprints", 0), 0) or 0)
     if min_footprints > 0 and _empty_payload(payload):
         # Only Min footprints changes: layers, qualities and marks stay as asked,
@@ -1425,6 +1437,13 @@ def compact_all_dataset_result(
     dataset = state.get_dataset(dataset_id)
     if not dataset:
         return None
+    from services.lift.capability import lifted_display_notices
+    # Live lift (§3.10, enforced here, not only by the router): no metaprofile and no SV summary.
+    lift_notices = lifted_display_notices(state, dataset_id, include_metaprofile=bool(include_metaprofile))
+    from services.lift.capability import is_lifted as _lifted_entry
+    if _lifted_entry(dataset):
+        include_metaprofile = False
+        include_sv_summary = False
 
     effective_requested_layers = requested_layers
     effective_include_layers = include_layers
@@ -1586,6 +1605,7 @@ def compact_all_dataset_result(
             compact_reads_available_layers(display_reads),
         ),
         "metaprofile": metaprofile,
+        **({"live_lift_notices": lift_notices} if lift_notices else {}),
         "metaprofile_read_count": len(profile_reads) if include_metaprofile else 0,
         "profile_max_reads": profile_max_reads,
         "sample_seed": sample_seed,

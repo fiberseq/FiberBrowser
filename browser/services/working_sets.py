@@ -1472,7 +1472,10 @@ def _viewport_reads_from_broad(
     include_layer_qualities: bool = True,
     quality_filters: Optional[Iterable[dict]] = None,
     bc_end: Optional[int] = None,
+    row_filter: Optional[Callable] = None,
 ) -> tuple[list[dict], int, int]:
+    """``row_filter``: rows that never enter the working set (a lifted display's
+    haplotype and display settings), applied before every count, filter and cap."""
     viewport_offset = start - bc_start
     viewport_reads = PackedReadBuilder() if bounded_analysis.get() else []
     total_overlapping = 0
@@ -1500,6 +1503,8 @@ def _viewport_reads_from_broad(
         from services.packed_reads import select_read_ids
         candidates = select_read_ids(all_reads, read_id_set, aliases=True)
     for read in candidates:
+        if row_filter is not None and not row_filter(read):
+            continue
         if early_read_id_filter:
             bounds = _read_viewport_bounds(read, viewport_offset, region_width, layer_key)
             if bounds is None:
@@ -2107,6 +2112,8 @@ def _build_working_set(
     if cluster_sample is not None:
         level = 1
     topology = read_load_token(state, chrom, terminal_bp, sample_level=level)
+    from services.lift.reads import display_key, display_row_filter
+    lift_display = display_key(dataset)
 
     working_cache_key = make_working_cache_key(
         dataset_id,
@@ -2123,7 +2130,8 @@ def _build_working_set(
         infer_legacy_layers,
         legacy_nuc_min_size,
         include_layer_qualities,
-        topology=topology,
+        # A lifted display's haplotype rule: its rows are filtered before the cap below.
+        topology=topology if lift_display is None else (*topology, lift_display),
     )
     if cacheable and not force_reload:
         cache_lock, _inflight = _broad_cache_sync(state)
@@ -2269,6 +2277,7 @@ def _build_working_set(
         include_layer_qualities=include_layer_qualities,
         quality_filters=quality_filters,
         bc_end=broad_cache_key[3] if broad_cache_key else broad_end,
+        row_filter=display_row_filter(dataset),
     )
     sampling_metadata = sampling_info(all_reads, start, end, total_overlapping, total_spanning) if level else None
     if sampling_metadata:

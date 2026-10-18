@@ -396,6 +396,11 @@ app.add_middleware(OffloopGZipMiddleware, minimum_size=1000, compresslevel=GZIP_
                    # Remote requests retain level 6, including desktop shares.
                    loopback_compresslevel=1 if os.environ.get("FIBERBROWSER_EXIT_WITH_PARENT") else None)
 
+from services.lift.guard import install_live_lift_guard
+
+# Live-lift datasets outside the display paths: one uniform 409 (services/lift/guard.py).
+from state.dependencies import get_state as _guard_state
+install_live_lift_guard(app, _guard_state)
 from services.runtime import get_public_mode
 
 install_public_mode_guard(app, get_public_mode)

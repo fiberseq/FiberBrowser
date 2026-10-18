@@ -319,6 +319,11 @@ def add_grouped_datasets_for_request(state, req: AddDatasetRequest) -> dict:
 
 def merge_datasets_for_request(state, req: MergeDatasetsRequest) -> dict:
     """Merge 2+ datasets into one multi-file dataset."""
+    # Live-lift datasets are never merged (a merge would register their source BAMs as a plain
+    # BAM dataset, drawn in source coordinates): refused (409) before anything changes.
+    from services.lift.capability import require
+    for raw_id in req.dataset_ids or ():
+        require(state.get_dataset(resolve_dataset_id(state, raw_id)), "merge")
     try:
         resolved_ids = [
             dataset_id

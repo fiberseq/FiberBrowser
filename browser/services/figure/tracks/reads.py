@@ -442,7 +442,10 @@ def _fetch(ctx: TrackContext, plan: dict, max_reads: int, filter_param: str, ser
     issued here through DataCache.get with a key of all its parameters.
     """
     from services.read_endpoint import compact_reads_payload_for_request
+    from services.lift.capability import require
 
+    # Figure read tracks paint extent hulls: refused for live-lift datasets (§3.10).
+    require(ctx.state.get_dataset(ctx.panel.dataset_id) if hasattr(ctx.state, 'get_dataset') else None, 'figure')
     fe, ds = ctx.fe, ctx.panel.dataset
     meta_layers = sorted(_active_metaprofile_ids(fe)) if server_meta else []
     params = dict(

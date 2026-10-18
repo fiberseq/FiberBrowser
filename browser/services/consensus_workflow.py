@@ -516,6 +516,9 @@ def recaller_preflight(state,dataset_ids,options):
 
 
 def submit(state,request,*,payload_loader=None,analysis_runner=None):
+    # Live-lift datasets first (409, services/lift/capability.py): never the BAM/BigBed guidance below.
+    from services.lift.capability import require_for_ids
+    require_for_ids(state,list(request.get('dataset_ids') or ()) or [request.get('dataset_id')],'consensus')
     from services.signal_evidence import active_signal_filters
     request = {**request, "signal_filters": active_signal_filters()}
     if request.get("region_windows") and payload_loader is None:
