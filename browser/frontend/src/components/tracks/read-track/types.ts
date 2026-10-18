@@ -104,7 +104,7 @@ export interface SvCluster {
 }
 
 export interface SvSummary {
-  evidence_targets?: Pick<SvCluster, 't' | 'ref' | 'len'>[];
+  evidence_targets?: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty'>[];
   min_len: number;
   margin: number;
   /** 'loaded': a working-read cap truncated the reads in view. */

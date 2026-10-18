@@ -156,8 +156,8 @@ export function eventsMatch(t: 'D' | 'I', ref: number, len: number, cRef: number
  * Insertion clips keep the existing >=50 bp floor, on either side/strand.
  */
 export function svEvidenceLevel(read: Pick<CompactRead, 'sv' | 'sv_evidence' | 'sv_segments' | 'sequence_span' | 'sv_alignments'>,
-  cluster: Pick<SvCluster, 't' | 'ref' | 'len'>, chrom?: string,
-  targets: Pick<SvCluster, 't' | 'ref' | 'len'>[] = []): 'confirmed' | 'putative' | 'ambiguous' | null {
+  cluster: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty'>, chrom?: string,
+  targets: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty'>[] = []): 'confirmed' | 'putative' | 'ambiguous' | null {
   if (read.sv_alignments?.length) {
     const levels = read.sv_alignments.map(part => svEvidenceLevel({ ...part,
       sv_segments: read.sv_segments ?? part.sv_segments }, cluster, chrom, targets));
@@ -166,9 +166,15 @@ export function svEvidenceLevel(read: Pick<CompactRead, 'sv' | 'sv_evidence' | '
   }
   const events = read.sv_evidence ?? read.sv ?? [];
   for (const ev of events) {
-    if (ev.t === cluster.t && eventsMatch(cluster.t, ev.ref, ev.len, cluster.ref, cluster.len)) return 'confirmed';
+    if (ev.t !== cluster.t) continue;
+    const [lo, hi] = cluster.uncertainty ?? [cluster.ref, cluster.ref];
+    const [elo, ehi] = ev.uncertainty ?? [ev.ref, ev.ref];
+    if (eventsMatch(cluster.t, ev.ref, ev.len, cluster.ref, cluster.len)
+      || (Math.max(lo, elo) <= Math.min(hi, ehi)
+        && eventsMatch(cluster.t, cluster.ref, ev.len, cluster.ref, cluster.len))) return 'confirmed';
   }
   const tol = breakpointTolerance(cluster.len);
+  const [lo, hi] = cluster.uncertainty ?? [cluster.ref, cluster.ref];
   const uniqueSegments = new Map<string, NonNullable<CompactRead['sv_segments']>[number]>();
   for (const s of read.sv_segments ?? []) {
     const key = JSON.stringify([s.chrom, s.pos, s.cigar_ref_len, s.strand, s.q_start, s.q_end, s.query_length]);
@@ -181,30 +187,38 @@ export function svEvidenceLevel(read: Pick<CompactRead, 'sv' | 'sv_evidence' | '
     if (left === right || left.mapq < 20 || right.mapq < 20 || left.strand !== right.strand
       || left.chrom !== right.chrom || (chrom && left.chrom !== chrom) || left.query_length !== right.query_length) continue;
     const gap = right.q_start - left.q_end;
-    if (gap < 0 || Math.abs(left.pos + left.cigar_ref_len - cluster.ref) > tol) continue;
-    if (cluster.t === 'D' && gap <= 20 && Math.abs(right.pos - cluster.ref - cluster.len) <= tol) return 'confirmed';
-    if (cluster.t === 'I' && Math.abs(right.pos - cluster.ref) <= tol && eventsMatch('I', cluster.ref, gap, cluster.ref, cluster.len)) {
+    if (gap < 0 || (left.pos + left.cigar_ref_len < lo - tol || left.pos + left.cigar_ref_len > hi + tol)) continue;
+    if (cluster.t === 'D' && gap <= 20 && Math.abs(right.pos - left.pos - left.cigar_ref_len - cluster.len) <= tol) return 'confirmed';
+    if (cluster.t === 'I' && Math.abs(right.pos - left.pos - left.cigar_ref_len) <= tol && eventsMatch('I', cluster.ref, gap, cluster.ref, cluster.len)) {
       const [a, b] = read.sequence_span ?? [0, 0];
-      if (a <= left.q_end && right.q_start <= b && events.some(ev => ev.t === 'S' && ev.len >= 50
-        && Math.abs(ev.ref - cluster.ref) <= Math.max(20, Math.min(tol, 50)))) return 'confirmed';
+      if (a <= left.q_end && right.q_start <= b && events.some(ev => ev.t === 'S' && !ev.h && ev.len >= 50
+        && ev.ref >= lo - Math.max(20, Math.min(tol, 50)) && ev.ref <= hi + Math.max(20, Math.min(tol, 50)))) return 'confirmed';
     }
   }
-  const clippedAt = (target: Pick<SvCluster, 't' | 'ref' | 'len'>) => events.some(ev => ev.t === 'S' && (
-    target.t === 'I' ? ev.len >= 50 && Math.abs(ev.ref - target.ref) <= Math.max(20, Math.min(breakpointTolerance(target.len), 50))
-      : (ev.side === 'R' && Math.abs(ev.ref - target.ref) <= breakpointTolerance(target.len))
-        || (ev.side === 'L' && Math.abs(ev.ref - target.ref - target.len) <= breakpointTolerance(target.len))));
-  if (!clippedAt(cluster)) return null;
-  return targets.some(t => t.t === cluster.t && (t.ref !== cluster.ref || t.len !== cluster.len) && clippedAt(t)) ? 'ambiguous' : 'putative';
+  const clippedAt = (ev: SvEvent, target: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty'>) => {
+    if (ev.t !== 'S') return false;
+    const [a, b] = target.uncertainty ?? [target.ref, target.ref];
+    const tolerance = target.t === 'I' ? Math.max(20, Math.min(breakpointTolerance(target.len), 50)) : breakpointTolerance(target.len);
+    const point = ev.ref - (target.t === 'D' && ev.side === 'L' ? target.len : 0);
+    return (target.t !== 'I' || ev.len >= 50) && point >= a - tolerance && point <= b + tolerance;
+  };
+  // Competition concerns the particular clip supporting this target.
+  const matching = events.filter((ev): ev is Extract<SvEvent, { t: 'S' }> => ev.t === 'S' && clippedAt(ev, cluster)).sort((a, b) =>
+    Math.max(lo - a.ref!, a.ref! - hi, 0) - Math.max(lo - b.ref!, b.ref! - hi, 0));
+  const clip = matching[0];
+  if (!clip) return null;
+  return targets.some(t => (t.t !== cluster.t || t.ref !== cluster.ref || t.len !== cluster.len)
+    && clippedAt(clip, t)) ? 'ambiguous' : 'putative';
 }
 
 export function readCarriesCluster(read: Pick<CompactRead, 'sv' | 'sv_evidence' | 'sv_segments' | 'sequence_span' | 'sv_alignments'>,
-  cluster: Pick<SvCluster, 't' | 'ref' | 'len'>, chrom?: string): boolean {
+  cluster: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty'>, chrom?: string): boolean {
   return svEvidenceLevel(read, cluster, chrom) === 'confirmed';
 }
 
 /** Ids of the reads (among `reads`) that carry a cluster's event. */
 export function supportingReadIds(reads: CompactRead[], cluster: SvCluster, chrom?: string,
-  level: 'confirmed' | 'putative' | 'ambiguous' = 'confirmed', targets: Pick<SvCluster, 't' | 'ref' | 'len'>[] = []): string[] {
+  level: 'confirmed' | 'putative' | 'ambiguous' = 'confirmed', targets: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty'>[] = []): string[] {
   const levels = new Map<string, 'confirmed' | 'putative' | 'ambiguous'>();
   const rank = { confirmed: 0, putative: 1, ambiguous: 2 };
   const bundles = new Map<string, CompactRead[]>();

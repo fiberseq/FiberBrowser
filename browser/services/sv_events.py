@@ -116,11 +116,16 @@ def alignment_evidence(read) -> dict:
     if read.has_tag('SA'):
         segments.extend(parse_sa_tag(read.get_tag('SA'), read_reverse=read.is_reverse))
     blocks = []
-    for a, b in read.get_blocks():
-        if blocks and a == blocks[-1][1]:
-            blocks[-1][1] = b
-        else:
-            blocks.append([a, b])
+    pos = int(read.reference_start)
+    for op, n in read.cigartuples or []:
+        if op in (0, 7, 8) or (op == 2 and n <= SV_EVIDENCE_FLOOR):
+            if blocks and blocks[-1][1] == pos:
+                blocks[-1][1] = pos + n
+            else:
+                blocks.append([pos, pos + n])
+            pos += n
+        elif op in (2, 3):
+            pos += n  # large deletions and every reference skip break support
     return {'aligned_blocks': blocks, 'sv_segments': segments, 'supplementary': bool(read.is_supplementary),
             'sequence_span': [hard_left, hard_left + int(read.query_length or 0)]}
 
@@ -648,7 +653,7 @@ def insertion_clip_min(length: int) -> int:
     return SV_MIN_LEN_DEFAULT
 
 
-def insertion_clip_at(events: Iterable[dict], ref: int, length: int) -> Optional[dict]:
+def insertion_clip_at(events: Iterable[dict], ref: int, length: int, uncertainty=None) -> Optional[dict]:
     """The read's clip (``S`` event) at insertion ``ref``: either side (an
     ``R`` clip's ``ref`` is the alignment end, an ``L`` clip's the alignment
     start, so the clipped bases face the insertion), at least
@@ -659,13 +664,14 @@ def insertion_clip_at(events: Iterable[dict], ref: int, length: int) -> Optional
     for ev in events or ():
         if ev.get("t") != "S" or int(ev.get("len", 0)) < floor:
             continue
-        d = abs(int(ev["ref"]) - ref)
+        lo, hi = uncertainty or (ref, ref)
+        d = max(lo - int(ev["ref"]), int(ev["ref"]) - hi, 0)
         if d <= tol and (best is None or d < best[0]):
             best = (d, ev)
     return best[1] if best else None
 
 
-def carrier_evidence(read: dict, t: str, ref: int, length: int, chrom: Optional[str] = None) -> Optional[dict]:
+def carrier_evidence(read: dict, t: str, ref: int, length: int, chrom: Optional[str] = None, *, uncertainty=None) -> Optional[dict]:
     """How a read carries the event, or None:
 
     - ``{'kind': 'cigar', 'event': ev}``: a matching D/I event (the nearest);
@@ -677,20 +683,21 @@ def carrier_evidence(read: dict, t: str, ref: int, length: int, chrom: Optional[
     events = read.get("sv_evidence", read.get("sv")) or ()
     best = None
     for ev in events:
-        if ev.get("t") == t and events_match(t, int(ev["ref"]), int(ev["len"]), ref, length):
+        if ev.get("t") == t and allele_matches(ev, t, ref, length, uncertainty):
             d = abs(int(ev["ref"]) - ref)
             if best is None or d < best[0]:
                 best = (d, ev)
     if best is not None:
         return {"kind": "cigar", "event": best[1], "level": "confirmed"}
-    junction = junction_evidence(read, t, ref, length, chrom)
+    junction = junction_evidence(read, t, ref, length, chrom, uncertainty=uncertainty)
     if junction is not None:
         return junction
     if t == "I":
-        clip = insertion_clip_at(events, ref, length)
+        clip = insertion_clip_at(events, ref, length, uncertainty)
         return {"kind": "clip", "clip": clip, "level": "putative"} if clip is not None else None
     if t != "D":
         return None
+    lo, hi = uncertainty or (ref, ref)
     end = ref + length
     tol = breakpoint_tolerance(length)
     clips = [ev for ev in events if ev.get("t") == "S"]
@@ -711,16 +718,17 @@ def carrier_evidence(read: dict, t: str, ref: int, length: int, chrom: Optional[
             if clip["side"] == "L" and abs(cref - end) <= tol and abs(seg_end - ref) <= tol:
                 return {"kind": "sa", "clip": clip, "level": "putative"}
     for clip in clips:
-        if ((clip['side'] == 'R' and abs(int(clip['ref']) - ref) <= tol)
-                or (clip['side'] == 'L' and abs(int(clip['ref']) - end) <= tol)):
+        if ((clip['side'] == 'R' and lo - tol <= int(clip['ref']) <= hi + tol)
+                or (clip['side'] == 'L' and lo + length - tol <= int(clip['ref']) <= hi + length + tol)):
             return {'kind': 'clip', 'clip': clip, 'level': 'putative'}
     return None
 
 
-def junction_evidence(read: dict, t: str, ref: int, length: int, chrom=None) -> Optional[dict]:
+def junction_evidence(read: dict, t: str, ref: int, length: int, chrom=None, *, uncertainty=None) -> Optional[dict]:
     """Only high-quality, same-strand, non-overlapping query-collinear junctions confirm."""
     segments = read.get('sv_segments') or []
     tol = breakpoint_tolerance(length)
+    lo, hi = uncertainty or (ref, ref)
     for left in segments:
         if int(left.get('mapq', 0)) < SV_JUNCTION_MIN_MAPQ or 'q_end' not in left:
             continue
@@ -734,15 +742,16 @@ def junction_evidence(read: dict, t: str, ref: int, length: int, chrom=None) -> 
             rstart = int(right['pos'])
             qleft, qright = int(left['q_end']), int(right['q_start'])
             gap = qright - qleft
-            if gap < 0 or abs(lend - ref) > tol:
+            if gap < 0 or not lo - tol <= lend <= hi + tol:
                 continue
-            if t == 'D' and abs(rstart - ref - length) <= tol and gap <= SV_CLIP_TOL_BP:
+            if t == 'D' and abs(rstart - lend - length) <= tol and gap <= SV_CLIP_TOL_BP:
                 return {'kind': 'sa', 'level': 'confirmed', 'junction': [left, right]}
-            if t == 'I' and abs(rstart - ref) <= tol and events_match('I', ref, gap, ref, length):
+            if t == 'I' and abs(rstart - lend) <= tol and events_match('I', ref, gap, ref, length):
                 # A hard-clipped interval has no sequence in this record.
                 a, b = read.get('sequence_span', [0, 0])
                 if a <= qleft and qright <= b:
-                    clip = insertion_clip_at(read.get('sv_evidence') or read.get('sv') or [], ref, length)
+                    clip = insertion_clip_at([ev for ev in read.get('sv_evidence') or read.get('sv') or []
+                                              if not ev.get('h')], ref, length, uncertainty)
                     if clip is not None:
                         return {'kind': 'sa', 'level': 'confirmed', 'clip': clip, 'junction': [left, right]}
     return None
@@ -755,11 +764,31 @@ def read_carries(read: dict, t: str, ref: int, length: int, chrom: Optional[str]
     return evidence["kind"] if evidence and evidence["level"] == "confirmed" else None
 
 
-def other_insertion_at(read: dict, ref: int, length: int) -> bool:
-    """The read has an insertion at ``ref`` that is not this one (another
-    allele): it is not reference sequence there."""
+def allele_matches(event, t, ref, length, uncertainty=None):
+    """Length-compatible CIGAR evidence at tolerance/equivalent placements."""
+    if events_match(t, int(event['ref']), int(event['len']), ref, length):
+        return True
+    lo, hi = uncertainty or (ref, ref)
+    elo, ehi = event.get('uncertainty', (event['ref'], event['ref']))
+    return (max(lo, elo) <= min(hi, ehi)
+            and events_match(t, ref, int(event['len']), ref, length))
+
+
+def clip_matches(clip, target):
+    if target['t'] == 'I':
+        return insertion_clip_at([clip], target['ref'], target['len'], target.get('uncertainty')) is not None
+    lo, hi = target.get('uncertainty', (target['ref'], target['ref']))
+    point = int(clip['ref']) - (target['len'] if clip['side'] == 'L' else 0)
+    return lo - breakpoint_tolerance(target['len']) <= point <= hi + breakpoint_tolerance(target['len'])
+
+
+def other_insertion_at(read: dict, ref: int, length: int, uncertainty=None) -> bool:
+    lo, hi = uncertainty or (ref, ref)
     tol = breakpoint_tolerance(length)
-    return any(ev.get("t") == "I" and abs(int(ev["ref"]) - ref) <= tol for ev in read.get("sv_evidence", read.get("sv")) or ())
+    return any(ev.get('t') == 'I' and ev.get('len', 0) > SV_EVIDENCE_FLOOR
+               and max(lo, ev.get('uncertainty', [ev['ref'], ev['ref']])[0])
+                   <= min(hi, ev.get('uncertainty', [ev['ref'], ev['ref']])[1]) + tol
+               for ev in read.get('sv_evidence') or read.get('sv') or ())
 
 
 def read_spans(read: dict, a: int, b: int) -> Optional[bool]:
@@ -770,7 +799,7 @@ def read_spans(read: dict, a: int, b: int) -> Optional[bool]:
     if 'aligned_blocks' in read:
         return any(int(s) <= a and int(e) >= b for s, e in read['aligned_blocks'])
     # Legacy compact records still expose large deletion gaps as events.
-    if any(start < b and end > a for start, end in deletion_spans(read.get('sv_evidence') or read.get('sv') or [])):
+    if any(end - start > SV_EVIDENCE_FLOOR and start < b and end > a for start, end in deletion_spans(read.get('sv_evidence') or read.get('sv') or [])):
         return False
     spans = read.get("alignment_spans")
     if spans:
@@ -780,32 +809,26 @@ def read_spans(read: dict, a: int, b: int) -> Optional[bool]:
 
 def classify_allele_evidence(read: dict, t: str, ref: int, length: int, margin: int = SV_SPAN_MARGIN,
                              chrom: Optional[str] = None, *, targets=(), include_putative=False,
-                             target_end=None) -> tuple[int, Optional[dict]]:
+                             target_end=None, uncertainty=None) -> tuple[int, Optional[dict]]:
     """(allele, evidence): 0 carrier (with ``carrier_evidence``), 1 reference
     (spans both breakpoints +- margin without it), 2 not informative. A read
     with another insertion at an insertion's site is not informative
     (evidence ``{'kind': 'other'}``)."""
-    evidence = carrier_evidence(read, t, ref, length, chrom)
+    evidence = carrier_evidence(read, t, ref, length, chrom, uncertainty=uncertainty)
     if evidence is not None:
         if evidence['level'] == 'putative':
             compatible = {(t, ref, length)}
             for target in targets:
-                if target['t'] != t:
-                    continue
-                other = (insertion_clip_at(read.get('sv_evidence') or read.get('sv') or [], target['ref'], target['len'])
-                         if t == 'I' else any(ev.get('t') == 'S' and (
-                             (ev['side'] == 'R' and abs(int(ev['ref']) - target['ref']) <= breakpoint_tolerance(target['len']))
-                             or (ev['side'] == 'L' and abs(int(ev['ref']) - target['ref'] - target['len']) <= breakpoint_tolerance(target['len'])))
-                             for ev in read.get('sv_evidence') or read.get('sv') or []))
-                if other:
+                if clip_matches(evidence['clip'], target):
                     compatible.add((target['t'], target['ref'], target['len']))
             if len(compatible) > 1:
                 evidence = {**evidence, 'level': 'ambiguous', 'targets': sorted(compatible)}
         return (0 if evidence['level'] == 'confirmed' or (include_putative and evidence['level'] == 'putative') else 2), evidence
-    if t == "I" and other_insertion_at(read, ref, length):
+    if t == "I" and other_insertion_at(read, ref, length, uncertainty):
         return 2, {"kind": "other"}
     end = target_end if target_end is not None else ref + length if t == "D" else ref
-    if read_spans(read, ref - margin, end + margin):
+    lo, hi = uncertainty or (ref, ref)
+    if read_spans(read, lo - margin, end + hi - ref + margin):
         return 1, None
     return 2, None
 
@@ -816,22 +839,8 @@ def classify_allele(read: dict, t: str, ref: int, length: int, margin: int = SV_
     return classify_allele_evidence(read, t, ref, length, margin, chrom)[0]
 
 
-def prefer_allele_call(previous, allele: int, evidence: Optional[dict]) -> bool:
-    """Molecule reduction shared by summaries, split and lens.
-
-    Carrier > reference > uninformative. For multiple carrier records prefer
-    CIGAR, then SA, then clip, so evidence subtotals are independent of file order.
-    """
-    if previous is None or allele < previous["allele"]:
-        return True
-    rank = {"cigar": 0, "sa": 1, "clip": 2}
-    return (allele == previous["allele"] == 0
-            and rank.get((evidence or {}).get("kind"), 3)
-            < rank.get((previous.get("evidence") or {}).get("kind"), 3))
-
-
 def classify_molecules(entries, *, t: str, ref: int, length: int, margin: int = SV_SPAN_MARGIN,
-                       chrom: Optional[str] = None, targets=None, include_putative=False, target_end=None) -> dict:
+                       chrom: Optional[str] = None, targets=None, include_putative=False, target_end=None, uncertainty=None) -> dict:
     """Classify (compact read, original item) entries, once per QNAME."""
     grouped = {}
     for read, item in entries:
@@ -846,6 +855,10 @@ def classify_molecules(entries, *, t: str, ref: int, length: int, margin: int = 
                  for ev in read.get('sv_evidence') or read.get('sv') or []
                  if ev.get('t') == t and events_match(t, ev['ref'], ev['len'], ref, length)]
         target_end = ref + int(round(_median(spans))) if spans else ref + (length if t == 'D' else 0)
+    if uncertainty is None:
+        bounds = [target.get('uncertainty', (target['ref'], target['ref'])) for target in targets
+                  if target['t'] == t and events_match(t, target['ref'], target['len'], ref, length)]
+        uncertainty = (min([ref] + [b[0] for b in bounds]), max([ref] + [b[1] for b in bounds]))
     by_name = {}
     for name, bundle in grouped.items():
         from services.sv_molecules import unique_segments
@@ -855,7 +868,7 @@ def classify_molecules(entries, *, t: str, ref: int, length: int, margin: int = 
             if segments is not None:
                 read = {**read, 'sv_segments': segments}
             allele, evidence = classify_allele_evidence(read, t, ref, length, margin,
-                chrom=read.get('file_chrom', chrom), targets=targets, include_putative=include_putative, target_end=target_end)
+                chrom=read.get('file_chrom', chrom), targets=targets, include_putative=include_putative, target_end=target_end, uncertainty=uncertainty)
             calls.append({'allele': allele, 'evidence': evidence, 'record': item, 'read': read})
         def rank(call):
             ev = call['evidence'] or {}
@@ -908,15 +921,16 @@ def sv_summary_for_reads(reads: Sequence[dict], start: int, end: int, min_len: i
     out_clusters = []
     for c in clusters:
         t, ref, length, cend = c["t"], c["ref"], c["len"], c["end"]
-        a, b = ref - margin, cend + margin
+        ulo, uhi = c.get('uncertainty', (ref, ref))
+        a, b = ulo - margin, cend + uhi - ref + margin
         candidates = set(plain[(starts <= a) & (ends >= b)].tolist())
         candidates.update(i for i in special if read_spans(reads[i], a, b))
         # A matching CIGAR length is at most target_length / (1 - length_tol).
         # Also includes every eligible insertion clip or deletion clip+SA.
         tol = max(insertion_clip_tolerance(length), breakpoint_tolerance(length / (1 - SV_LENGTH_TOL_FRAC)))
-        for point in (ref, cend) if t == "D" else (ref,):
-            lo = bisect.bisect_left(event_refs, point - tol)
-            hi = bisect.bisect_right(event_refs, point + tol)
+        for offset in (0, cend - ref) if t == "D" else (0,):
+            lo = bisect.bisect_left(event_refs, ulo + offset - tol)
+            hi = bisect.bisect_right(event_refs, uhi + offset + tol)
             candidates.update(i for _r, i in event_items[lo:hi])
         # A selected segment brings its molecule's other local alignments too.
         candidates.update(j for i in tuple(candidates) for j in molecule_indices[reads[i].get('id')])
@@ -937,7 +951,7 @@ def sv_summary_for_reads(reads: Sequence[dict], start: int, end: int, min_len: i
     return {
         "min_len": int(min_len), "margin": int(margin), "scope": scope,
         "n_reads": len({read.get("id") for read in reads}), "clusters": out_clusters, "clips": clips,
-        "evidence_targets": [{key: c[key] for key in ('t', 'ref', 'len')} for c in competition],
+        "evidence_targets": [{key: c[key] for key in ('t', 'ref', 'len', 'uncertainty') if key in c} for c in competition],
     }
 
 

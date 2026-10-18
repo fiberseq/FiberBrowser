@@ -18,7 +18,9 @@ Evidence is classified per molecule (QNAME) per target:
   evidence. Insertion clips retain the 50 bp floor. Mixed soft/hard clips expose
   only their available soft sequence. Hard clips alone never confirm an insert.
 - **Ambiguous:** clip evidence compatible with multiple nearby seeded alleles.
-  Competition includes 50 bp seed targets even when the display cutoff is higher.
+  Competition tests the particular supporting clip across insertion and deletion
+  targets, including 50 bp seeds hidden by a higher display cutoff. Opposite-end
+  clips do not compete with each other.
   Ambiguous evidence never enters the carrier group, including inclusive splits.
 
 Summary `support`/`confirmed` and `informative` count confirmed molecules and
@@ -30,10 +32,15 @@ to confirmed only and offer include-putative in Variants and lens; the chosen
 policy and separate counts persist in panel/session state. The lens returns all
 three evidence cohorts, with `evidence_total` describing its capped row pool.
 
-Reference requires an aligned block covering both breakpoints and their 100 bp
-margins. Outer alignment bounds cannot establish reference across a deletion or
-skip. Legacy compact evidence without blocks excludes any retained deletion
-crossing that interval. A different insertion at the target is uninformative.
+Reference requires an aligned block covering both breakpoints, the full interval
+of equivalent placements, and 100 bp flanks. Blocks bridge small CIGAR indels
+(deletions up to 10 bp); larger deletions and every N skip break support. Outer
+alignment bounds cannot establish reference across those gaps. Legacy compact
+evidence excludes retained deletions larger than 10 bp crossing the interval.
+Compatible CIGARs and clips anywhere in an equivalent-anchor interval are
+reconciled first; a different insertion there is uninformative. These are
+alignment-evidence denominators, not validated biological genotypes: homologous
+sequence in repetitive loci can still align across a site on the wrong haplotype.
 
 Every molecule call retains its complete `evidence_bundle` of compact alignment
 records and original items. The representative prefers confirmed, putative,
@@ -101,7 +108,8 @@ cannot retain its original SV size. Missing reference contigs retain raw evidenc
 read, split and insertion-tile/lens caches. Worker options carry reference paths,
 not open handles.
 
-Clustering and highlighting use canonical anchors. A raw in-view CIGAR can seed
+Clustering uses canonical anchors. Classification, candidate indexing and
+highlight competition also carry the equivalent-anchor interval. A raw in-view CIGAR can seed
 its canonical cluster even when left normalization moves that anchor outside the
 view; raw per-read glyphs remain at their observed positions. Cluster medians
 remain tolerance-based summaries, with per-alignment exact alleles retained.

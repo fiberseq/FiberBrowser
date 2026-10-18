@@ -115,3 +115,46 @@ def test_unrelated_cigar_deletion_does_not_make_a_clip_ambiguous():
     targets = [dict(t='D', ref=ref, len=1000) for ref in (1000, 5000)]
     allele, evidence = classify_allele_evidence(read, 'D', 1000, 1000, targets=targets)
     assert allele == 2 and evidence['level'] == 'putative'
+
+
+@pytest.mark.parametrize('op,size,reference', [(2, 1, True), (2, 9, True), (2, 10, True),
+                                               (2, 11, False), (2, 500, False), (3, 1, False), (1, 9, True)])
+def test_reference_flanks_tolerate_small_indels_but_not_large_deletions_or_skips(op, size, reference):
+    read = _compact_record(_seg([(0, 1000), (op, size), (0, 1000)], start=0), 'chrT', 10)
+    assert (classify_allele_evidence(read, 'I', 1000, 100)[0] == 1) is reference
+    assert len(read['aligned_blocks']) == (1 if reference else 2)
+
+
+def test_opposite_terminal_clip_does_not_compete_with_the_matching_clip():
+    read = dict(id='double-clipped', sv=[dict(t='S', side='L', ref=750, len=100, q=0),
+                                        dict(t='S', side='R', ref=1000, len=100, q=350)])
+    targets = [dict(t='I', ref=p, len=100) for p in (750, 1000)]
+    allele, ev = classify_allele_evidence(read, 'I', 1000, 100, targets=targets, include_putative=True)
+    assert allele == 0 and ev['level'] == 'putative'
+    # The same clip can compete across event types too.
+    targets.append(dict(t='D', ref=1000, len=200))
+    assert classify_allele_evidence(read, 'I', 1000, 100, targets=targets)[1]['level'] == 'ambiguous'
+
+
+def test_equivalent_anchors_retain_clips_and_reconcile_other_alleles_before_reference(tmp_path):
+    from test_sv_alleles import fasta_file
+    ref = 'C' * 1000 + 'A' * 1000 + 'G' * 1000
+    fasta = fasta_file(tmp_path, ref)
+    seed = _seg([(0, 1500), (1, 50), (0, 1500)], start=0, seq=ref[:1500] + 'A' * 50 + ref[1500:])
+    seed.query_name = 'seed'
+    clip = _seg([(0, 300), (4, 50)], start=1200, seq=ref[1200:1500] + 'A' * 50)
+    clip.query_name = 'clip'
+    rows = [_compact_record(r, 'chrT', 10, reference=fasta) for r in (seed, clip)]
+    summary = sv_summary_for_reads(rows, 0, 3000, 50)
+    c, = summary['clusters']
+    assert (c['confirmed'], c['putative'], c['informative']) == (1, 1, 1)
+    calls = classify_molecules([(r, None) for r in rows], t='I', ref=1000, length=50)
+    assert calls['clip']['evidence']['level'] == 'putative' and calls['clip']['allele'] == 2
+    # A different allele anywhere in the equivalent interval excludes reference.
+    other = dict(id='other', reference_start=0, reference_end=3000, aligned_blocks=[[0, 3000]],
+                 sv=[dict(t='I', ref=1700, len=200, q=1700)])
+    allele, evidence = classify_allele_evidence(other, 'I', 1000, 50, uncertainty=[1000, 2000])
+    assert allele == 2 and evidence['kind'] == 'other'
+    # A raw, noncanonical CIGAR placement is reconciled through the interval.
+    other['sv'][0]['len'] = 50
+    assert classify_allele_evidence(other, 'I', 1000, 50, uncertainty=[1000, 2000])[1]['level'] == 'confirmed'

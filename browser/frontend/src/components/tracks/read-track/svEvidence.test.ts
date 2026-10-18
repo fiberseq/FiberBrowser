@@ -63,3 +63,18 @@ describe('SV evidence levels', () => {
     expect(supportingReadIds([only, only], target)).toEqual(['clip']);
   });
 });
+
+it('tests the matching clip across targets, retaining hard clips as putative only', () => {
+  const double = { ...clip, sv: [...clip.sv!, { t: 'S' as const, side: 'L' as const, ref: 750, len: 100, q: 0 }] };
+  expect(svEvidenceLevel(double, target, 'chrT', [target, { ...target, ref: 750 }])).toBe('putative');
+  expect(svEvidenceLevel(double, target, 'chrT', [target, { ...target, t: 'D', len: 200 }])).toBe('ambiguous');
+  expect(svEvidenceLevel({ ...clip, sv: [{ ...clip.sv![0], t: 'S', side: 'R', ref: 1000, len: 100, q: 0, h: 1 }] }, target)).toBe('putative');
+});
+
+it('propagates equivalent anchors through clipping and target competition', () => {
+  const normalized = { ...target, uncertainty: [1000, 2000] as [number, number] };
+  const shifted = { ...clip, sv: [{ t: 'S' as const, side: 'R' as const, ref: 1500, len: 100, q: 0 }] };
+  expect(svEvidenceLevel(shifted, normalized)).toBe('putative');
+  expect(svEvidenceLevel(shifted, normalized, 'chrT', [normalized, { ...normalized, len: 300 }])).toBe('ambiguous');
+  expect(svEvidenceLevel({ ...clip, sv: [{ t: 'I', ref: 1500, len: 100, q: 0 }] }, normalized)).toBe('confirmed');
+});
