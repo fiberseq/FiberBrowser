@@ -534,7 +534,7 @@ def compute_compact_metaprofile_payload(
             )
             if np.any(valid):
                 start_bins = np.clip((starts[valid] / bin_size).astype(np.intp), 0, resolution - 1)
-                end_bins = np.clip((ends[valid] / bin_size).astype(np.intp), 0, resolution - 1)
+                end_bins = np.clip((np.maximum(starts[valid], ends[valid] - 1) / bin_size).astype(np.intp), 0, resolution - 1)
                 diff = _interval_bin_diff(start_bins, end_bins, resolution)
         profile_diffs[name] = diff
 
