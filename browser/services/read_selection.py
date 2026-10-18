@@ -13,16 +13,27 @@ def base_read_id(read_id: str) -> str:
     return read_id
 
 
-def read_matches_id_filter(read_id: str, filter_ids: set[str]) -> bool:
+def read_id_keys(read):
+    """Display identity and cohort identity; never infer molecule sharing from QNAME."""
+    if isinstance(read, Mapping):
+        return {str(v) for v in (read.get("id"), read.get("analysis_id")) if v is not None}
+    return {str(read)}
+
+
+def cohort_read_id(read):
+    return read.get("analysis_id") or read.get("id", "")
+
+
+def read_matches_id_filter(read_id, filter_ids: set[str]) -> bool:
     """Match either exact read IDs or base IDs with numeric segment suffixes."""
-    return read_id in filter_ids or base_read_id(read_id) in filter_ids
+    return any(key in filter_ids or base_read_id(key) in filter_ids for key in read_id_keys(read_id))
 
 
 def filter_reads_by_id_set(reads: Sequence[Mapping[str, Any]], filter_ids: set[str]) -> list[dict]:
     return [
         dict(read)
         for read in reads
-        if read_matches_id_filter(str(read.get("id", "")), filter_ids)
+        if read_matches_id_filter(read, filter_ids)
     ]
 
 
@@ -63,5 +74,5 @@ def filter_reads_by_cluster_focus(
     return [
         dict(read)
         for read in reads
-        if cluster_assignments.get(str(read.get("id", ""))) in focus_clusters
+        if cluster_assignments.get(cohort_read_id(read)) in focus_clusters
     ]

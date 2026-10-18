@@ -1093,7 +1093,7 @@ def _compact_reads_payload(
                     continue
 
                 total_in_viewport += 1
-                if filter_id_set and not read_matches_id_filter(read["id"], filter_id_set):
+                if filter_id_set and not read_matches_id_filter(read, filter_id_set):
                     continue
 
                 if not matches_cluster(read["id"]):

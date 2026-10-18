@@ -740,7 +740,7 @@ export function ReadTrack({
     if (!hasCluster || displayReads.length === 0) return new Map<number, number>();
     const counts = new Map<number, number>();
     for (const read of displayReads) {
-      const cluster = clusterAssignmentForRead(myClusterAssignments, read.id);
+      const cluster = clusterAssignmentForRead(myClusterAssignments, read.analysis_id ?? read.id);
       if (cluster !== undefined) {
         counts.set(cluster, (counts.get(cluster) || 0) + 1);
       }
@@ -1088,7 +1088,7 @@ export function ReadTrack({
         const perCluster: Record<number, Record<string, number[]>> = {};
         for (const clusterId of clusterIds) {
           const clusterReads = profileReads.filter(
-            r => clusterAssignmentForRead(myClusterAssignments, r.id) === clusterId,
+            r => clusterAssignmentForRead(myClusterAssignments, r.analysis_id ?? r.id) === clusterId,
           );
           if (clusterReads.length === 0) continue;
           const cp = computeMetaprofileFromReads(clusterReads, viewWidth, ruleCtx);

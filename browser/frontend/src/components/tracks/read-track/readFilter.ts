@@ -1,5 +1,6 @@
 export interface ReadWithId {
   id: string;
+  analysis_id?: string;
 }
 
 export function stripSegmentSuffix(readId: string): string {
@@ -33,7 +34,7 @@ export function filterReadsByReadIdSet<T extends ReadWithId>(
   }
 
   return reads.filter(read => (
-    expandedIds.has(read.id) || expandedIds.has(stripSegmentSuffix(read.id))
+    readIdKeys(read).some(id => expandedIds.has(id) || expandedIds.has(stripSegmentSuffix(id)))
   ));
 }
 
@@ -45,4 +46,9 @@ export function filterReadsByBranchScope<T extends ReadWithId>(
   if (!branchScopeActive) return reads;
   if (!readIds || readIds.size === 0) return [];
   return filterReadsByReadIdSet(reads, readIds);
+}
+
+/** A QNAME is a display label; analysis identity can represent several rows. */
+export function readIdKeys(read: ReadWithId): string[] {
+  return read.analysis_id ? [read.id, read.analysis_id] : [read.id];
 }

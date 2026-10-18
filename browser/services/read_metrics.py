@@ -159,7 +159,7 @@ def sample_stable_by_id(reads: list, n: int, seed: str = DEFAULT_SAMPLE_SEED) ->
 
     def stable_key(item):
         idx, read = item
-        read_id = str(read.get("id", idx))
+        read_id = str(read.get("analysis_id") or read.get("id", idx))
         digest = hashlib.blake2b(f"{seed}:{read_id}".encode(), digest_size=8).digest()
         return digest, read_id, idx
 

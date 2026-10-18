@@ -338,7 +338,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
     for (let i = 0; i < n; i++) {
       const read = displayReads[i];
       const y = headerHeight + histogramHeight + i * (rowHeight + rowGap) - (needsScroll ? clampedScrollOffset : 0);
-      const cluster = clusterAssignmentForRead(myClusterAssignments, read.id);
+      const cluster = clusterAssignmentForRead(myClusterAssignments, read.analysis_id ?? read.id);
       if (cluster !== undefined) {
         const actualY = headerHeight + histogramHeight + i * (rowHeight + rowGap);
         if (!clusterBounds.has(cluster)) {

@@ -68,10 +68,11 @@ def active_peak_regions(peak_regions: List[Any], region_start: int) -> tuple[lis
 
 def prefix_compact_read(read: dict, dataset_key: str) -> dict:
     """Return a shallow copy with a dataset-prefixed ID for joint feature matrices."""
-    original_id = read["id"]
+    original_id = read.get("analysis_id") or read["id"]
     return {
         **read,
         "_original_id": original_id,
+        **({"analysis_id": f"{dataset_key}::{original_id}"} if read.get("analysis_id") else {}),
         "id": f"{dataset_key}::{original_id}",
     }
 
@@ -140,7 +141,7 @@ def collect_assigned_feature_rows(
             continue
 
         assigned_ids = set(ds_assignments.keys())
-        reads_to_use = [read for read in working_set.reads if read["id"] in assigned_ids]
+        reads_to_use = [read for read in working_set.reads if read_matches_id_filter(read, assigned_ids)]
         if not reads_to_use:
             continue
 

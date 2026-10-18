@@ -203,10 +203,10 @@ class PackedReads(Sequence):
     def read_ids(self):
         index = getattr(self, '_display_index', None)
         if index is not None:
-            return (str(row.get('id', '')) for row in index.metadata)
+            return (str(row.get('analysis_id') or row.get('id', '')) for row in index.metadata)
         ids = getattr(self, '_read_ids', None)
         # Legacy in-process objects without metadata still remain readable.
-        return iter(ids) if ids is not None else (str(r.get('id', '')) for r in self)
+        return iter(ids) if ids is not None else (str(r.get('analysis_id') or r.get('id', '')) for r in self)
 
     def selected(self, ids, *, aliases=False):
         """Expand selected frames only, keeping every physical duplicate in order."""
@@ -327,7 +327,7 @@ class ReadDisplayIndex:
             segments.extend((index, start, end) for start, end in merged)
             bounds.append((merged[0][0], merged[-1][1]) if merged else empty)
             metadata.append({key: read[key] for key in
-                ('id', 'reference_start', 'reference_end', 'alignment_spans', 'sv') if key in read})
+                ('id', 'analysis_id', 'live_lift', 'reference_start', 'reference_end', 'alignment_spans', 'sv') if key in read})
         self.segments = np.asarray(segments, dtype=np.int64).reshape(-1, 3)
         # The same geometry per group (merged within it), for a request showing only some (see overlapping).
         self.group_segments = np.asarray(group_segments, dtype=np.int64).reshape(-1, 4)
@@ -468,7 +468,7 @@ def select_read_ids(reads, ids, *, aliases=False):
         return reads
     if isinstance(reads, PackedReads):
         return reads.selected(ids, aliases=aliases)
-    from services.read_selection import read_matches_id_filter
+    from services.read_selection import read_matches_id_filter, read_id_keys
     wanted = set(ids)
-    return (r for r in reads if (read_matches_id_filter(str(r.get('id', '')), wanted)
-                                if aliases else r.get('id') in wanted))
+    return (r for r in reads if (read_matches_id_filter(r, wanted)
+                                if aliases else bool(read_id_keys(r) & wanted)))

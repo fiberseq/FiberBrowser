@@ -112,7 +112,7 @@ def cached_read_strand(read: dict, calls: Optional[dict]) -> Optional[str]:
         # A record's own st:Z decides for that record; the per-name cache is
         # only for strands called from marks (records sharing a name can differ).
         return read_strand(read)
-    read_id = read.get("id")
+    read_id = (read.get("live_lift") or {}).get("molecule") or read.get("analysis_id") or read.get("id")
     known = calls.get(read_id)
     if known is not None:
         return known

@@ -35,6 +35,7 @@ class AnalysisReadQuery:
     start: int
     end: int
     dataset_ids: list[str]
+    purpose: str = "analysis"
     spanning: bool = False
     sample_seed: str = DEFAULT_SAMPLE_SEED
     read_ids_by_dataset: dict[str, list[str]] = field(default_factory=dict)
@@ -50,6 +51,7 @@ class AnalysisReadQuery:
     legacy_nuc_min_size: int = 90
     # DAF-seq panels showing one strand: dataset id -> 'CT' / 'GA'.
     strand_by_dataset: dict[str, str] = field(default_factory=dict)
+    lift_hap_by_dataset: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_request(
@@ -75,6 +77,7 @@ class AnalysisReadQuery:
         legacy_nuc_min_size: Optional[int] = None,
         strand_by_dataset: Optional[Mapping[str, str]] = None,
         capability: str = "analysis",
+        lift_hap_by_dataset: Optional[Mapping[str, str]] = None,
     ) -> "AnalysisReadQuery":
         resolved_dataset_ids = resolve_dataset_ids(state, dataset_ids=dataset_ids, dataset_id=dataset_id)
         # Live-lift datasets support the display paths only (services/lift/capability.py, default-deny): an
@@ -101,6 +104,7 @@ class AnalysisReadQuery:
             end=int(end),
             dataset_ids=resolved_dataset_ids,
             spanning=bool(spanning),
+            purpose="display" if capability in ("compact_reads", "compact_all") else "analysis",
             sample_seed=normalize_sample_seed(sample_seed),
             read_ids_by_dataset=normalized_read_ids,
             singleton_read_ids=(
@@ -123,6 +127,7 @@ class AnalysisReadQuery:
                 else legacy_nuc_min_size
             ),
             strand_by_dataset=strands,
+            lift_hap_by_dataset=dict(lift_hap_by_dataset or {}),
         )
 
     @property
@@ -151,7 +156,8 @@ class AnalysisReadQuery:
         if len(read_ids) == 0:
             return []
         requested = set(read_ids)
-        filtered = [read for read in reads if read.get("id") in requested]
+        from services.read_selection import read_matches_id_filter
+        filtered = [read for read in reads if read_matches_id_filter(read, requested)]
         return filtered if filtered or not fallback_to_all else reads
 
     def cap_reads(self, reads: list[dict], *, namespace: str, label: str) -> list[dict]:
@@ -182,15 +188,18 @@ class AnalysisReadQuery:
         legacy_nuc_min_size: Optional[int] = None,
         broad_prefetch_multiplier: Optional[int] = None,
         force_reload: bool = False,
+        lift_hap: Optional[str] = None,
     ) -> WorkingSet:
-        ws = self._build_working_set(state, dataset_id, chrom=chrom, start=start, end=end, spanning=spanning,
+        from services.lift.cohort import using_lift_cohort
+        with using_lift_cohort(self.purpose, lift_hap or self.lift_hap_by_dataset.get(dataset_id), self.strand_by_dataset.get(dataset_id)):
+            ws = self._build_working_set(state, dataset_id, chrom=chrom, start=start, end=end, spanning=spanning,
                                      read_ids=read_ids, include_methylation=include_methylation,
                                      include_layers=include_layers, requested_layers=requested_layers,
                                      include_layer_qualities=include_layer_qualities, quality_filters=quality_filters,
                                      infer_legacy_layers=infer_legacy_layers, legacy_nuc_min_size=legacy_nuc_min_size,
                                      broad_prefetch_multiplier=broad_prefetch_multiplier, force_reload=force_reload)
         strand = self.strand_by_dataset.get(dataset_id)
-        if not strand:
+        if not strand or getattr(state.datasets.get(dataset_id), "data_type", None) == "bam_livelift":
             return ws
         from services.read_strand import filter_reads_by_strand, strand_calls, strand_totals
         reads = filter_reads_by_strand(ws.reads, strand, strand_calls(state, dataset_id))

@@ -258,6 +258,9 @@ def filter_lift_display(reads: Iterable[dict], dataset, hap: Optional[str] = Non
     ``supplementary_display='hide'``, alternative placements only with
     ``alternatives``."""
     config = getattr(dataset, "live_lift", None)
+    if config is not None:
+        from services.lift.cohort import prepare_lift_cohort
+        return prepare_lift_cohort(reads, "display", config.settings, hap).rows
     rows = filter_lift_hap(reads, hap)
     if config is None:
         return rows

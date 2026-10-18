@@ -1394,7 +1394,7 @@ def project_broad_read_to_viewport(
         "chemical_strand", "daf_strand", "strand", "_original_id",
         "alignment_spans", "signal",
         # st/SEQ strand disagreement and graph-lift provenance (record-level).
-        "strand_conflict", "lift",
+        "strand_conflict", "lift", "analysis_id",
         # SV events are in absolute reference coordinates: never shifted.
         "sv",
     ):
@@ -1507,6 +1507,16 @@ def _viewport_reads_from_broad(
 ) -> tuple[list[dict], int, int]:
     """``row_filter``: rows that never enter the working set (a lifted display's
     haplotype and display settings), applied before every count, filter and cap."""
+    # Prepare the complete broad cohort before spatial, spanning or ID filters.
+    from services.lift.capability import is_lifted
+    if is_lifted(dataset):
+        from services.lift.cohort import prepare_lift_cohort, cohort_scope
+        purpose, hap, strand = cohort_scope(dataset)
+        all_reads = prepare_lift_cohort(all_reads, purpose, dataset.live_lift.settings, hap).rows
+        if strand:
+            from services.read_strand import filter_reads_by_strand, strand_calls
+            all_reads = filter_reads_by_strand(all_reads, strand, strand_calls(state, dataset.id))
+        row_filter = None
     viewport_offset = start - bc_start
     viewport_reads = PackedReadBuilder() if bounded_analysis.get() else []
     total_overlapping = 0
@@ -1546,7 +1556,7 @@ def _viewport_reads_from_broad(
                 total_spanning += 1
             if spanning and not is_spanning:
                 continue
-            if not read_matches_id_filter(str(read.get("id", "")), read_id_set):
+            if not read_matches_id_filter(read, read_id_set):
                 continue
             adjusted_read, _ = project_broad_read_to_viewport(
                 read,
@@ -1590,7 +1600,7 @@ def _viewport_reads_from_broad(
         if spanning and not is_spanning:
             continue
 
-        if read_ids is None or read_matches_id_filter(str(adjusted_read.get("id", "")), read_id_set):
+        if read_ids is None or read_matches_id_filter(adjusted_read, read_id_set):
             viewport_reads.append(adjusted_read)
 
     if isinstance(viewport_reads, PackedReadBuilder):
@@ -2144,8 +2154,9 @@ def _build_working_set(
     if cluster_sample is not None:
         level = 1
     topology = read_load_token(state, chrom, terminal_bp, sample_level=level)
-    from services.lift.reads import display_key, display_row_filter
-    lift_display = display_key(dataset)
+    from services.lift.reads import display_row_filter
+    from services.lift.cohort import cohort_key
+    lift_display = cohort_key(dataset)
 
     working_cache_key = make_working_cache_key(
         dataset_id,
@@ -2228,8 +2239,10 @@ def _build_working_set(
     if all_reads is None and selected_analysis.get() and read_ids is not None and not force_reload:
         if not read_ids:
             return WorkingSet([], 0, 0, chrom, start, end)
-        scope = decode_read_scope.set(dict(only_ids=set(map(str, read_ids)),
-            raw_aliases={re.sub(r'_\d+$', '', str(name)) for name in read_ids}))
+        from services.lift.cohort import raw_qnames
+        raw_ids = raw_qnames(read_ids, dataset) if dataset.data_type == "bam_livelift" else set(map(str, read_ids))
+        scope = decode_read_scope.set(dict(only_ids=raw_ids,
+            raw_aliases={re.sub(r'_\d+$', '', str(name)) for name in raw_ids}))
         try:
             return _build_working_set(state, dataset_id, chrom, start, end,
                 spanning=spanning, min_footprints=min_footprints, read_ids=read_ids,
@@ -2384,7 +2397,7 @@ def build_working_set(state, dataset_id, chrom, start, end, **kwargs):
     from services.read_sampling import decode_read_scope, name_hash
     ids = kwargs.get('read_ids')
     cap = int(getattr(state, 'max_working_reads', 0) or 0)
-    if getattr(state, 'performance', {}).get('effective') != 'low' or ids is None or not cap:
+    if getattr(state.get_dataset(dataset_id), 'data_type', None) == 'bam_livelift' or getattr(state, 'performance', {}).get('effective') != 'low' or ids is None or not cap:
         return _build_working_set(state, dataset_id, chrom, start, end, **kwargs)
     selected = heapq.nsmallest(cap, set(map(str, ids)), key=lambda name: (name_hash(name), name))
     token = decode_read_scope.set(dict(only_ids=set(selected),

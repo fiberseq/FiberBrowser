@@ -166,6 +166,7 @@ export interface LiveLiftInsertion {
 export interface CompactRead {
   signal?: import('../../../utils/signalFilters').SignalEvidence;
   id: string;
+  analysis_id?: string;
   /** BAM 0x400 / FiberHMM BigBed isDuplicate annotation. */
   duplicate?: boolean;
   /** DAF strand from the record's st:Z tag (FiberHMM's rule); '.' = st present but neither CT nor GA (no strand). */
