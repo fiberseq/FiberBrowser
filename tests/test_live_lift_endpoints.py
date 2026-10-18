@@ -217,3 +217,19 @@ def test_display_settings_hide_supplementary_rows(lift_env):
     client.post(f"/api/lift/datasets/{did}/settings", json={"settings": {"supplementary_display": "hide"}})
     hidden = _compact(client, did)
     assert hidden["reads"] and not any(r["live_lift"]["source"]["supplementary"] for r in hidden["reads"])
+
+
+def test_binary_transport_keeps_live_lift_and_reuse_is_off(lift_env):
+    client, _state, manifest, bam = lift_env
+    did = _add(client, manifest, bam)["dataset"]["id"]
+    from services.read_binary import MEDIA_TYPE
+    from test_read_binary import decode
+    params = dict(chrom=TARGET, start=1000, end=9000, dataset_id=did, max_reads=5000, include_layers="true",
+                  full_working_set="true", hide_terminal_gaps="false", terminal_gap_threshold=0)
+    r = client.get("/api/reads/compact", params=params, headers={"accept": MEDIA_TYPE})
+    assert r.headers["content-type"].startswith(MEDIA_TYPE)
+    data = decode(r.content)
+    reads = {x["id"]: x for x in data["reads"]}
+    assert reads["plus"]["live_lift"]["segments"] == [[2500, 5710, 0, "+", True]]
+    assert reads["plus"]["live_lift"]["connectors"] == [[3000, 3010]]
+    assert data.get("_region_reuse_safe") is False
