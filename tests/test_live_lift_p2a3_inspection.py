@@ -1,17 +1,19 @@
 """P2a3 review reproductions using synthetic, public fixtures."""
+import pytest
 from test_live_lift_differences import evidence, two_hap_evidence
 from live_lift_fixtures import MAT, PAT, TARGET, make_record, write_bam
 from services.lift import differences as diff, live_lift as ll
 from services.lift.reads import lifted_reads_for_region
 
 
-def test_off_window_primary_cold_warm_and_display(two_hap_evidence, monkeypatch):
+@pytest.mark.parametrize('primary_strand', [None, 'GA'])
+def test_off_window_primary_cold_warm_and_display(two_hap_evidence, monkeypatch, primary_strand):
     state, ds, tmp = two_hap_evidence
     ds.paths = [write_bam(tmp / 'off-window.bam', lambda h: [
         make_record(h, 'molecule', MAT, 0, '200M', seq='A'*100+'C'+'A'*99, flag=2048,
-                    tags=[('MD', '200'), ('SA', f'{PAT},501,+,200M,60,0;')]),
+                    tags=[('MD', '200'), ('st', 'CT'), ('SA', f'{PAT},501,+,200M,60,0;')]),
         make_record(h, 'molecule', PAT, 500, '200M', seq='A'*200,
-                    tags=[('MD', '200'), ('SA', f'{MAT},1,+,200M,60,0;')])])]
+                    tags=[('MD', '200'), ('SA', f'{MAT},1,+,200M,60,0;')] + ([('st', primary_strand)] if primary_strand else []))])]
     ll.clear_primary_cache()
     cold = diff.difference_reads(state, ds, TARGET, 1100, 1101)
     normal = lifted_reads_for_region(ds, TARGET, 1050, 1151, dict(include_layers=True, include_methylation=True))
@@ -21,6 +23,7 @@ def test_off_window_primary_cold_warm_and_display(two_hap_evidence, monkeypatch)
     warm = diff.difference_reads(state, ds, TARGET, 1100, 1101)
     assert cold == warm
     assert {(r['hap_label'], r['hg002'], r['allele']) for r in cold['rows']} == {('PAT', 'A', 'other')}
+    assert {r['strand'] for r in cold['rows']} == {primary_strand}
 
 
 def test_missing_primary_uses_one_budget_and_is_not_cached(two_hap_evidence, monkeypatch):

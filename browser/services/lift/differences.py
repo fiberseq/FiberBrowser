@@ -49,9 +49,12 @@ distinct haplotype carrying GRCh38 is flagged grch38. Other/deleted/no_coverage
 retain their ordinary meanings. ``lift_hap``/``item_id`` prioritise one
 haplotype's reads without hiding the other haplotype's summary.
 Insertion inspection (``pos==end``) resolves map intervals at that boundary.
-Carriage (hg002) requires full source-span coverage and molecular length within
+Observed carriage requires full source-span coverage and molecular length within
 max(10%,50 bp); clipped alignments are partial, empty spans deleted, and
-flank-spanning non-carriers no_insertion. Identity is a best-effort percent
+flank-spanning non-carriers no_insertion. Cross-parent carriage is kept separate
+from the molecule's own-parent allele and cannot supply the selected parent's
+Identify sequence. Read-only CIGAR insertions resolve zero-width source sites.
+Identity is a best-effort percent
 from the source CIGAR, independent of carriage. Inserted read_bases is at most
 60 bases; read_bases_length/mol_bp preserve its full length. include_sequence
 returns one full oriented carrier for item_id on demand (at most 50 kb). Missing target
@@ -766,7 +769,7 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
                               "unknown" if hg is None else
                               "no_insertion" if not rb and not hg else "deleted" if not rb else
                               "hg002" if carries and (hap == span["hap"] or rb == hg) and bool(hg) else "other")
-                st = row.get("strand") or (record.get_tag("st") if record.has_tag("st") else None)
+                st = meta.get("strand") if meta else (record.get_tag("st") if record.has_tag("st") else None)
                 item = dict(id=record.query_name, molecule=ll.get("molecule", f"{dataset.id}|{record.query_name}"),
                             hap_label=config.handle.haplotype_labels.get(hap, hap), record=ll.get("record", record_id),
                             supplementary=bool(record.is_supplementary), strand=st, source_pos=dict(src),
