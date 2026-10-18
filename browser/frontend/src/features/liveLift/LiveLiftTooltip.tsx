@@ -5,6 +5,7 @@
  */
 import type { CompactRead } from '../../components/tracks/read-track/types';
 import { BADGE_REASONS, formatBadgeBp } from '../../components/tracks/read-track/liveLiftCanvas';
+import { liveLiftHaplotypeColor } from './palette';
 
 export function liveLiftTooltipLines(read: Pick<CompactRead, 'live_lift' | 'strand'>): string[] {
   const ll = read.live_lift;
@@ -41,7 +42,8 @@ export function LiveLiftTooltipLines({ read }: { read: CompactRead }) {
   if (!lines.length) return null;
   return (
     <div data-testid="read-live-lift" className="text-cyan-200">
-      {lines.map((line, i) => <div key={i}>{line}</div>)}
+      {lines.map((line, i) => <div key={i} style={line.startsWith('Haplotype ')
+        ? { color: liveLiftHaplotypeColor(read.live_lift?.hap_label ?? read.live_lift?.hap, true) } : undefined}>{line}</div>)}
     </div>
   );
 }

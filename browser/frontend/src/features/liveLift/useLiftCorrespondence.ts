@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import type { Dataset } from '../../types';
 import { isLiveLift } from '../../utils/datasetKinds';
 import { liftCoverage } from './api';
+import { useBrowserStore } from '../../stores/browserStore';
 
 export const CORRESPONDENCE_BINS = 200;
 
@@ -15,20 +16,22 @@ export function useLiftCorrespondence(
   enabled: boolean,
 ): number[] | null {
   const [value, setValue] = useState<{ key: string; corr: number[] } | null>(null);
+  const refreshGeneration = useBrowserStore(s => s.refreshGeneration);
   const on = enabled && isLiveLift(dataset) && dataset?.live_lift?.settings?.coverage_hatching !== false && end > start;
-  const key = on ? [dataset!.id, dataset!.live_lift?.key, chrom, start, end, liftHap ?? ''].join('|') : '';
+  const key = on ? [dataset!.id, dataset!.live_lift?.key, chrom, start, end, liftHap ?? '', refreshGeneration].join('|') : '';
   useEffect(() => {
     if (!on) return;
-    let live = true;
-    liftCoverage({ chrom, start, end, bins: CORRESPONDENCE_BINS, datasetId: dataset!.id, liftHap })
+    const controller = new AbortController();
+    liftCoverage({ chrom, start, end, bins: CORRESPONDENCE_BINS, datasetId: dataset!.id, liftHap,
+      liftKey: dataset!.live_lift?.key, refreshGeneration }, { signal: controller.signal })
       .then(r => {
-        if (!live || !r.live_lift) return;
+        if (controller.signal.aborted || !r.live_lift) return;
         const corr = liftHap && r.live_lift.haplotypes[liftHap]
           ? r.live_lift.haplotypes[liftHap].correspondence : r.live_lift.pooled.correspondence;
         setValue({ key, corr });
       })
       .catch(() => { /* hatching is a hint: a failed request leaves the histogram plain */ });
-    return () => { live = false; };
+    return () => controller.abort();
   }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
   return on && value?.key === key ? value.corr : null;
 }

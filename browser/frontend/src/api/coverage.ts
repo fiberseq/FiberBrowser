@@ -39,6 +39,22 @@ export interface CoverageResponse {
   max: number;
   /** Reads (molecules) counted in the window: the read panel's reads there before its filters. */
   reads?: number;
+  /** Map correspondence accompanies depth, including bins with no mapped bases (distinct from zero reads). */
+  live_lift?: LiveLiftCoverage;
+}
+
+export interface LiveLiftCoverage {
+  haplotypes: Record<string, { depth: Array<number | null> | null; correspondence: number[] }>;
+  pooled: { depth: Array<number | null> | null; correspondence: number[]; mode: string };
+  hatching: boolean;
+}
+
+export interface CoverageLiftOptions {
+  liftHap?: string | null;
+  liftKey?: string;
+  refreshGeneration?: number;
+  /** Map-only hatching must never pay for BAM decoding or molecular depth. */
+  correspondenceOnly?: boolean;
 }
 
 export function coverageQueryKey(params: URLSearchParams): string {
@@ -53,6 +69,7 @@ export async function getCoverage(
   datasetId?: string,
   options?: RequestInit,
   includeDuplicates = false,
+  lift?: CoverageLiftOptions,
 ): Promise<CoverageResponse> {
   const params = new URLSearchParams({
     chrom,
@@ -63,6 +80,11 @@ export async function getCoverage(
   if (datasetId) params.set('dataset_id', datasetId);
   // Duplicate-flagged molecules count only when the read panel shows them.
   if (includeDuplicates) params.set('include_duplicates', 'true');
+  if (lift?.liftHap) params.set('lift_hap', lift.liftHap);
+  // Identity and refresh are URL fields as well as hook keys: shared in-flight requests must not cross settings.
+  if (lift?.liftKey) params.set('lift_key', lift.liftKey);
+  if (lift?.refreshGeneration !== undefined) params.set('refresh_generation', String(lift.refreshGeneration));
+  if (lift?.correspondenceOnly) params.set('lift_correspondence_only', 'true');
   return fetchJsonSharedGet(coverageQueryKey(params), options);
 }
 

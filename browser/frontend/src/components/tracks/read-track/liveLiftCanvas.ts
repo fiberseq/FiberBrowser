@@ -8,6 +8,7 @@
  */
 import type { CompactRead, LiveLiftRow } from './types';
 import { labelFits, rowLabelFontPx } from './svDrawing';
+import { liveLiftHaplotypeColor } from '../../../features/liveLift/palette';
 
 type Ctx = CanvasRenderingContext2D;
 
@@ -99,12 +100,66 @@ export interface LiveLiftMarkOptions {
   backgroundColor: string;
 }
 
+export type LiveLiftBadge = NonNullable<LiveLiftRow['badges']>[number];
+interface PixelRect { x: number; y: number; w: number; h: number }
+export interface LiveLiftBadgeGeometry {
+  badge: LiveLiftBadge;
+  x: number;
+  notch: PixelRect;
+  label: (PixelRect & { text: string; fontPx: number }) | null;
+}
+
+/**
+ * Shared drawn and interactive geometry. Coordinates include the linked origin and the panel's reversed mapping;
+ * badges remain anchored to that mapping while their text always reads left-to-right. Fixed label advances reserve
+ * the same box in canvas and mouse code, without a second font-measuring canvas on every mouse move.
+ */
+export function liveLiftBadgeGeometry(ll: LiveLiftRow, o: Omit<LiveLiftMarkOptions, 'backgroundColor' | 'isReversed'>): LiveLiftBadgeGeometry[] {
+  const { y, rowHeight, linkedOffset, regionWidth, toX } = o;
+  const h = Math.max(2, rowHeight);
+  const fontPx = rowLabelFontPx(rowHeight);
+  const badges: LiveLiftBadgeGeometry[] = [];
+  for (const badge of ll.badges ?? []) {
+    const [pos, kind, molBp] = badge;
+    if (pos + linkedOffset < 0 || pos + linkedOffset > regionWidth) continue;
+    const x = toX(pos + linkedOffset);
+    const text = formatBadgeBp(molBp);
+    const labelled = (molBp >= BADGE_LABEL_MIN_BP || kind === 'elsewhere')
+      && fontPx > 0 && labelFits(text, 60, fontPx * 0.56);
+    badges.push({ badge, x, notch: { x: x - 3, y, w: 6, h },
+      label: labelled ? { x: x + 3, y: y + rowHeight / 2 - fontPx / 2 - 1,
+        w: text.length * fontPx * 0.56 + 4, h: fontPx + 2, text, fontPx } : null });
+  }
+  return badges;
+}
+
+/** A hit names its badge, so a later badge action need not guess from a read-level tooltip. */
+export function liveLiftHitAt(ll: LiveLiftRow, x: number, y: number,
+  options: Parameters<typeof liveLiftBadgeGeometry>[1]): { badge?: LiveLiftBadge } | null {
+  const inside = (r: PixelRect) => x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
+  for (const b of liveLiftBadgeGeometry(ll, options)) {
+    if (inside(b.notch) || (b.label && inside(b.label))) return { badge: b.badge };
+  }
+  const bodies = liveLiftBodyRects(ll, options.linkedOffset, options.regionWidth, options.toX);
+  return bodies.some(rect => inside({ ...rect, y: options.y, h: Math.max(1, options.rowHeight) })) ? {} : null;
+}
+
+/** Only pooled rows need the parental identity at their leftmost visible body edge (also in a reversed panel). */
+export function drawLiveLiftHaplotypeStripe(ctx: Ctx, ll: LiveLiftRow,
+  options: Parameters<typeof liveLiftBadgeGeometry>[1], liftHap?: string | null, dark = false): void {
+  if (liftHap) return;
+  const bodies = liveLiftBodyRects(ll, options.linkedOffset, options.regionWidth, options.toX);
+  const left = bodies.reduce<{ x: number; w: number } | null>((a, b) => !a || b.x < a.x ? b : a, null);
+  if (!left) return;
+  ctx.fillStyle = liveLiftHaplotypeColor(ll.hap_label ?? ll.hap, dark);
+  ctx.fillRect(left.x, options.y, Math.min(3, left.w), Math.max(1, options.rowHeight));
+}
+
 /** Connectors, reversed-segment edges and badges of a lifted row, over its (already drawn) body. */
 export function drawLiveLiftMarks(ctx: Ctx, ll: LiveLiftRow, o: LiveLiftMarkOptions): void {
   const { y, rowHeight, toX, linkedOffset, regionWidth } = o;
   if (rowHeight <= 0) return;
   const midY = y + rowHeight / 2;
-  const inView = (p: number) => p + linkedOffset >= 0 && p + linkedOffset <= regionWidth;
   // Connectors: dashed, so a target-only gap never reads as a deletion of the molecule.
   ctx.save();
   ctx.strokeStyle = LIVE_LIFT_COLORS.connector;
@@ -145,11 +200,8 @@ export function drawLiveLiftMarks(ctx: Ctx, ll: LiveLiftRow, o: LiveLiftMarkOpti
     }
   }
   // Badges: a notch with the molecule's bases that have no target here.
-  const fontPx = rowLabelFontPx(rowHeight);
-  for (const badge of ll.badges ?? []) {
-    const [pos, kind, molBp] = badge;
-    if (!inView(pos)) continue;
-    const x = toX(pos + linkedOffset);
+  for (const { badge, x, label } of liveLiftBadgeGeometry(ll, o)) {
+    const [, kind, molBp] = badge;
     const color = kind === 'elsewhere' ? LIVE_LIFT_COLORS.elsewhere : LIVE_LIFT_COLORS.badge;
     ctx.fillStyle = color;
     const h = Math.max(2, rowHeight);
@@ -166,16 +218,14 @@ export function drawLiveLiftMarks(ctx: Ctx, ll: LiveLiftRow, o: LiveLiftMarkOpti
     ctx.closePath();
     ctx.fill();
     ctx.fillRect(x - 0.5, y, 1, h);
-    const text = formatBadgeBp(molBp);
-    if (fontPx > 0 && labelFits(text, 60, fontPx * 0.56)) {
-      ctx.font = `${fontPx}px system-ui, sans-serif`;
+    if (label) {
+      ctx.font = `${label.fontPx}px system-ui, sans-serif`;
       ctx.textBaseline = 'middle';
       ctx.textAlign = 'left';
-      const w = (ctx.measureText?.(text)?.width ?? text.length * fontPx * 0.56) + 4;
       ctx.fillStyle = o.backgroundColor;
-      ctx.fillRect(x + 3, midY - fontPx / 2 - 1, w, fontPx + 2);
+      ctx.fillRect(label.x, label.y, label.w, label.h);
       ctx.fillStyle = color;
-      ctx.fillText(text, x + 5, midY);
+      ctx.fillText(label.text, x + 5, midY, label.w - 4);
     }
   }
 }

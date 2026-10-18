@@ -10,7 +10,7 @@ import {
   getLinkedCompactReads,
   linkedCompactReadsQueryKey,
 } from '../../../api/readOperations';
-import { getCoverage } from '../../../api/coverage';
+import { getCoverage, type CoverageLiftOptions, type LiveLiftCoverage } from '../../../api/coverage';
 import { getOverlayMarks } from '../../../api/overlays';
 import { registerReadSet } from '../../../api/readSets';
 import type { CompactRead, ReadsResponse, SvSummary, WorkingSampling } from './types';
@@ -28,10 +28,11 @@ import { logPerfTiming, nowMs } from '../../../utils/perfDebug';
 import { computeReadRowGap } from './layout';
 import { getBrowserPerformanceProfile } from '../../../utils/performanceProfile';
 
-/** Identifies a zoomed-out coverage request (dataset, region, bins, duplicates shown). */
+/** The lift identity, haplotype and refresh also identify coverage: the same region can now mean other molecules. */
 export function coverageRequestKey(datasetId: string, chrom: string, start: number, end: number, bins: number,
-  includeDuplicates = false): string {
-  return `${datasetId}|${chrom}:${start}-${end}|${bins}${includeDuplicates ? '|dup' : ''}`;
+  includeDuplicates = false, lift?: CoverageLiftOptions): string {
+  return `${datasetId}|${chrom}:${start}-${end}|${bins}${includeDuplicates ? '|dup' : ''}`
+    + (lift ? `|${JSON.stringify([lift.liftHap ?? '', lift.liftKey ?? '', lift.refreshGeneration])}` : '');
 }
 
 const EMPTY_OVERLAY_MARKS: Record<string, Record<string, number[]>> = {};
@@ -305,6 +306,7 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
   // Watch refreshGeneration so triggerRefresh() (crash recovery, undo/redo) re-fetches reads
   const signalFilters = useBrowserStore(s => s.signalFilters);
   const refreshGeneration = useBrowserStore(s => s.refreshGeneration);
+  const liftKey = useBrowserStore(s => s.datasets.find(d => d.id === datasetId)?.live_lift?.key);
   useEffect(() => {
     useBrowserStore.getState().setSignalCounts(stateKey ?? datasetId, null);
     return () => { useBrowserStore.getState().setSignalCounts(stateKey ?? datasetId, null); };
@@ -348,7 +350,8 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
   // Zoomed-out coverage data
   // Zoomed-out coverage, tagged with the request it answers: another region's
   // (still loading here, or failed) is never shown under this one's axis.
-  const [coverage, setCoverage] = useState<{ key: string; data: number[]; max: number; reads: number | null } | null>(null);
+  const [coverage, setCoverage] = useState<{ key: string; data: number[]; max: number; reads: number | null;
+    live_lift?: LiveLiftCoverage } | null>(null);
 
   // Track the last completed compact-read request. Store/layout updates can
   // re-run this hook without changing the actual API request; avoid logging and
@@ -833,22 +836,24 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
 
     const controller = new AbortController();
     const bins = Math.max(100, Math.min(width, 2000));
-    const key = coverageRequestKey(datasetId, chrom, start, end, bins, showDuplicateReads);
+    const lift = { liftHap, liftKey, refreshGeneration };
+    const key = coverageRequestKey(datasetId, chrom, start, end, bins, showDuplicateReads, lift);
 
-    getCoverage(chrom, start, end, bins, datasetId, { signal: controller.signal }, showDuplicateReads)
+    getCoverage(chrom, start, end, bins, datasetId, { signal: controller.signal }, showDuplicateReads, lift)
       .then(result => {
         if (controller.signal.aborted) return;
         setCoverage({ key, data: result.coverage, max: result.max,
-          reads: typeof result.reads === 'number' ? result.reads : null });
+          reads: typeof result.reads === 'number' ? result.reads : null, live_lift: result.live_lift });
       })
       .catch(err => {
+        if (controller.signal.aborted) return;
         if (err instanceof DOMException && err.name === 'AbortError') return;
         console.error('Failed to fetch zoomed-out coverage:', err);
         setCoverage(null);
       });
 
     return () => controller.abort();
-  }, [chrom, start, end, datasetId, width, linkedSessionId, maxRegionForReads, showDuplicateReads]);
+  }, [chrom, start, end, datasetId, width, linkedSessionId, maxRegionForReads, showDuplicateReads, liftHap, liftKey, refreshGeneration]);
 
   // Derive displayReads: apply client-side filters and ordering only
   const { displayReads, profileReads, displaySampleCount } = useMemo(() => {
@@ -1041,7 +1046,8 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
     return () => { controller.abort(); };
   }, [chrom, start, end, modificationOverlays]);
 
-  const coverageKey = coverageRequestKey(datasetId, chrom, start, end, Math.max(100, Math.min(width, 2000)), showDuplicateReads);
+  const coverageKey = coverageRequestKey(datasetId, chrom, start, end, Math.max(100, Math.min(width, 2000)), showDuplicateReads,
+    { liftHap, liftKey, refreshGeneration });
   const currentCoverage = coverage && coverage.key === coverageKey ? coverage : null;
   const coverageData = currentCoverage?.data ?? null;
   const coverageMax = currentCoverage?.max ?? 0;
@@ -1071,6 +1077,7 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
     coverageData,
     coverageMax,
     coverageReads,
+    coverageLiveLift: currentCoverage?.live_lift ?? null,
     dataViewportKey,
     serverMetaprofile,
     fulfilledReadFetchCount,

@@ -5,6 +5,7 @@ import { DEBUG, generatePanelId, createDefaultSubTracks, createGenomeSubTracks, 
 import { restoreOrphanSplitSources } from './splitSources';
 import { mergeDatasets, unmergeDataset } from '../api/datasets';
 import { cancelFirstReadsJump, markFirstReadsJump, viewportKey } from '../utils/firstReadsJump';
+import { isLiveLift } from '../utils/datasetKinds';
 
 
 // ============================================================
@@ -301,6 +302,7 @@ export function createDatasetSlice(set: (partial: Partial<BrowserState> | ((stat
         id: generatePanelId(),
         contentType: 'dataset' as PanelContentType,
         datasetId: d.id,
+        ...(isLiveLift(d) ? { liftHaplotypeMode: d.live_lift?.settings?.haplotype_mode ?? 'split' } : {}),
         subTracks: createDefaultSubTracks(state.orthogonalTracks, state.compositeTracks),
         collapsed: false,
         linkGroup: defaultLinkGroup,
@@ -407,6 +409,7 @@ export function createDatasetSlice(set: (partial: Partial<BrowserState> | ((stat
       id: generatePanelId(),
       contentType: 'dataset',
       datasetId: dataset.id,
+      ...(isLiveLift(dataset) ? { liftHaplotypeMode: dataset.live_lift?.settings?.haplotype_mode ?? 'split' } : {}),
       subTracks: createDefaultSubTracks(state.orthogonalTracks, state.compositeTracks),
       collapsed: false,
       linkGroup: existingLinkGroup,  // Link to existing panels by default

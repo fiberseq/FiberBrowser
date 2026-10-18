@@ -744,6 +744,8 @@ export interface PanelConfig {
   strand?: 'CT' | 'GA';          // DAF-seq: show only this strand's reads (server-filtered)
   /** Live lift: show only this haplotype's rows ('MAT'/'PAT'; server-filtered, a rule that follows the view). */
   liftHap?: string;
+  /** Live lift: the panel's saved layout choice, independent of the dataset's default for newly opened panels. */
+  liftHaplotypeMode?: 'split' | 'pooled';
   siteLocked?: boolean;          // own-view panel that pans/zooms with the main view and other locked panels (stores/siteLock.ts)
   /** Its dataset is on another assembly with a reference of its own (its key: `dm6`, `fasta:…`, `contigs:…`); always navigates on its own. */
   genome?: string;

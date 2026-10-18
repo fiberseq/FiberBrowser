@@ -11,6 +11,7 @@ import { isLiveLift } from '../../utils/datasetKinds';
 import { useLiftSettingsDialog } from './LiveLiftSettingsDialog';
 import { useLiveLiftStore } from './store';
 import { liftHapLabels } from './types';
+import { liveLiftHaplotypeColor } from './palette';
 
 export function liveLiftChipText(ctx: Pick<PanelHeaderContext, 'panel' | 'dataset'>): string | null {
   if (!isLiveLift(ctx.dataset)) return null;
@@ -19,7 +20,8 @@ export function liveLiftChipText(ctx: Pick<PanelHeaderContext, 'panel' | 'datase
   return `Live lift · ${which} → this genome`;
 }
 
-function useLiveLiftHeader(ctx: PanelHeaderContext) {
+export function useLiveLiftHeader(ctx: PanelHeaderContext) {
+  const dark = useBrowserStore(s => s.darkMode);
   const { panel, dataset } = ctx;
   const labels = liftHapLabels(dataset?.live_lift);
   if (!isLiveLift(dataset) || !panel.datasetId) return null;
@@ -28,7 +30,8 @@ function useLiveLiftHeader(ctx: PanelHeaderContext) {
   const title = `Live lift: ${dataset?.label} drawn on this genome through ${dataset?.live_lift?.map_label ?? 'its map'}`
     + ` (no realignment). ${split ? `This panel shows haplotype ${panel.liftHap}.` : 'Haplotypes pooled.'}`;
   const chips = (
-    <span className="fb-header-pill flex-shrink-0 truncate" title={title} data-testid="live-lift-chip">{text}</span>
+    <span className="fb-header-pill flex-shrink-0 truncate" style={{ color: liveLiftHaplotypeColor(panel.liftHap, dark) }}
+      title={title} data-testid="live-lift-chip">{text}</span>
   );
   const menu = (
     <>
@@ -65,7 +68,9 @@ export function autoSplitNewLiftedDatasets(seen: Set<string>): void {
     if (!mine.length) continue;   // its panel arrives in a later update
     seen.add(dataset.id);
     const labels = liftHapLabels(dataset.live_lift);
-    if (mine.some(p => p.liftHap) || labels.length < 2 || dataset.live_lift?.settings?.haplotype_mode === 'pooled') continue;
+    // Only newly created panels carry an explicit split intent without a haplotype yet. A restored older panel
+    // without that intent is already a view the user saved; its dataset's default must not rearrange it.
+    if (mine.some(p => p.liftHap) || mine[0].liftHaplotypeMode !== 'split' || labels.length < 2) continue;
     state.splitPanelByLiftHap(mine[0].id, labels);
   }
 }

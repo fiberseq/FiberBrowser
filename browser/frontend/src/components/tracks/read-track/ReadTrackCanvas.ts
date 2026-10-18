@@ -1,5 +1,5 @@
 import { useBrowserStore } from '../../../stores/browserStore';
-import { drawLiveLiftMarks, liveLiftBodyRects, liveLiftBodySpans } from './liveLiftCanvas';
+import { drawLiveLiftMarks, drawLiveLiftHaplotypeStripe, liveLiftBodyRects, liveLiftBodySpans } from './liveLiftCanvas';
 import { getCanvasRenderScale, setupHighDpiCanvas } from '../../../utils/canvasUtils';
 import { buildRuleMatchContext, footprintMatchesRule, ruleTargetsLayer } from '../../../utils/ruleMatching';
 import { buildRuleColorResolver } from '../../../utils/ruleColors';
@@ -45,6 +45,8 @@ interface JupyterMarkerItem {
 interface DrawReadsParams {
   /** A live-lift panel: map correspondence per bin over the view (hatching on the coverage histogram). */
   liftCorrespondence?: number[] | null;
+  /** A split panel identifies its haplotype in the header; pooled panels identify each row with a stripe. */
+  liftHap?: string | null;
   genome?: string | null;
   canvas: HTMLCanvasElement;
   displayReads: CompactRead[];
@@ -164,6 +166,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
     layerColors,selectedConsensusFamily,selectedConsensusFamilies,relatedConsensusFamilies,consensusViewJobId,nativeLattice,latticeShowHits,latticeStyle,
     svEnabled = false, svMinLen = 50, svBandHeight = 0, svSummary = null, coverageFooterHeight = 0,
     liftCorrespondence = null,
+    liftHap,
   } = params;
   const selectedFootprints = allSelectedFootprints.filter(fp => fp.genome === undefined || fp.genome === (genome ?? null));
 
@@ -531,6 +534,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
   }
 
   // Draw reads (in clipped/translated context for panning)
+  const liveLiftDark = inkOn(noReadBackgroundColor).dark;
   for (let i = firstVisibleRow; i <= lastVisibleRow; i++) {
     const read = displayReads[i];
     const y = headerHeight + histogramHeight + i * (rowHeight + rowGap) - (needsScroll ? clampedScrollOffset : 0);
@@ -1471,6 +1475,9 @@ export function drawReadTrack(params: DrawReadsParams): void {
         y, rowHeight: Math.max(1, rowHeight - rowGap), linkedOffset, regionWidth, toX, isReversed,
         backgroundColor: readBackgroundColor,
       });
+      drawLiveLiftHaplotypeStripe(ctx, read.live_lift, {
+        y, rowHeight: Math.max(1, rowHeight - rowGap), linkedOffset, regionWidth, toX,
+      }, liftHap, liveLiftDark);
     }
 
     // Draw CIGAR events (small indels: SV display draws those of at least its min size)
@@ -1955,8 +1962,17 @@ export function coverageHistogramBins(
 ): Float32Array {
   const binSize = regionWidth / histBins;
   const coverageDiff = new Float32Array(histBins + 1);
+  const groups: Array<Array<[number, number]>> = [];
+  const molecules = new Map<string, Array<[number, number]>>();
   for (const read of reads) {
-    const ranges: Array<[number, number]> = [];
+    if (read.live_lift?.alt) continue;
+    const molecule = read.live_lift?.molecule;
+    let ranges = molecule ? molecules.get(molecule) : undefined;
+    if (!ranges) {
+      ranges = [];
+      groups.push(ranges);
+      if (molecule) molecules.set(molecule, ranges);
+    }
     // A live-lift row covers its body (segments minus connectors), never its hull across a connector.
     const spans: Array<[number, number] | [number, number, number]> = read.live_lift
       ? liveLiftBodySpans(read.live_lift) : read.intervals;
@@ -1965,6 +1981,10 @@ export function coverageHistogramBins(
       const b1 = Math.min(histBins, Math.ceil((ivEnd + linkedOffset) / binSize));
       if (b1 > b0) ranges.push([b0, b1]);
     }
+  }
+  // Supplementary/orientation rows of one lifted molecule can overlap; union their bins before adding evidence.
+  // Native rows still form individual groups, preserving their existing interval semantics.
+  for (const ranges of groups) {
     ranges.sort((a, b) => a[0] - b[0]);
     let curStart = -1;
     let curEnd = -1;

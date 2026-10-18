@@ -14,6 +14,7 @@ import { seedHistoryBaseline } from './historySlice';
 import { canLinkToMainView, inComparisonGroup, isMainViewPanel, linkGroupPeers, recordPanelMove } from '../utils/panelNavigation';
 import { forgetRememberedState } from '../hooks/useRememberedState';
 import { isStacked, sideBySide, stackBelow, stackTarget, type PanelArrangement } from './panelArrangement';
+import { isLiveLift } from '../utils/datasetKinds';
 
 /** Analysis state kept per panel (keyed by stateKey ?? datasetId). */
 
@@ -738,10 +739,12 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
   addPanel: (datasetId) => {
     const id = generatePanelId();
     const state = get();
+    const dataset = state.datasets.find(d => d.id === datasetId);
     const panel: PanelConfig = {
       id,
       contentType: 'dataset',
       datasetId,
+      ...(isLiveLift(dataset) ? { liftHaplotypeMode: dataset?.live_lift?.settings?.haplotype_mode ?? 'split' } : {}),
       subTracks: createDefaultSubTracks(state.orthogonalTracks, state.compositeTracks),
       collapsed: false,
       linkGroup: null,
@@ -1160,7 +1163,7 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
     const copies: PanelConfig[] = labels.slice(1).map(label => {
       const id = generatePanelId();
       return {
-        ...source, id, stateKey: id, liftHap: label,
+        ...source, id, stateKey: id, liftHap: label, liftHaplotypeMode: 'split',
         subTracks: source.subTracks.map(track => ({ ...track })),
         collapsed: false, regionLabel: undefined,
         contactRegionGroupId: undefined, contactRegionRole: undefined, genomeRegionGroupId: undefined,
@@ -1174,7 +1177,7 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
       const src = panels[idx];
       // Other reads now: the source panel's clusters and filters don't apply.
       const { stateKey, reset } = isolatePanelState(current, src);
-      panels[idx] = { ...src, liftHap: labels[0], ...(stateKey ? { stateKey } : {}) };
+      panels[idx] = { ...src, liftHap: labels[0], liftHaplotypeMode: 'split', ...(stateKey ? { stateKey } : {}) };
       panels.splice(idx + 1, 0, ...copies);
       return { ...reset, panels };
     }));
@@ -1189,7 +1192,7 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
     return {
       ...reset,
       panels: state.panels.filter(p => !drop.has(p.id))
-        .map(p => p.id === keep.id ? { ...p, liftHap: undefined, ...(stateKey ? { stateKey } : {}) } : p),
+        .map(p => p.id === keep.id ? { ...p, liftHap: undefined, liftHaplotypeMode: 'pooled', ...(stateKey ? { stateKey } : {}) } : p),
     };
   })),
   setPanelViewport: (panelId, start, end) => {
@@ -1488,6 +1491,7 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
       id: generatePanelId(),
       contentType: 'dataset' as PanelContentType,
       datasetId: ds.id,
+      ...(isLiveLift(ds) ? { liftHaplotypeMode: ds.live_lift?.settings?.haplotype_mode ?? 'split' } : {}),
       subTracks: createDefaultSubTracks(state.orthogonalTracks, state.compositeTracks),
       collapsed: false,
       linkGroup: defaultLinkGroup,

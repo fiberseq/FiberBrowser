@@ -1,6 +1,7 @@
 /** Live-lift endpoints (routers/lift.py); every one answers 404 while the server's flag is off. */
 import type { Dataset } from '../../types';
 import { fetchJson } from '../../api/sharedFetch';
+import { getCoverage, type CoverageResponse } from '../../api/coverage';
 
 export interface LiftMapInfo {
   manifest: string;
@@ -59,21 +60,11 @@ export function updateLiftSettings(datasetId: string, settings: LiftSettings): P
   });
 }
 
-export interface LiftCorrespondence {
-  coverage: number[];
-  live_lift?: {
-    haplotypes: Record<string, { depth: Array<number | null>; correspondence: number[] }>;
-    pooled: { depth: Array<number | null>; correspondence: number[]; mode: string };
-    hatching: boolean;
-  };
-}
+/** The map-only endpoint deliberately returns no depth/coverage; it need not open a read file. */
+export type LiftCorrespondence = Omit<CoverageResponse, 'coverage'> & { coverage: number[] | null };
 
 export function liftCoverage(params: { chrom: string; start: number; end: number; bins: number; datasetId: string;
-  liftHap?: string | null }): Promise<LiftCorrespondence> {
-  const q = new URLSearchParams({
-    chrom: params.chrom, start: String(params.start), end: String(params.end), bins: String(params.bins),
-    dataset_id: params.datasetId,
-  });
-  if (params.liftHap) q.set('lift_hap', params.liftHap);
-  return fetchJson(`/api/coverage?${q.toString()}`);
+  liftHap?: string | null; liftKey?: string; refreshGeneration?: number }, options?: RequestInit): Promise<LiftCorrespondence> {
+  return getCoverage(params.chrom, params.start, params.end, params.bins, params.datasetId, options, false,
+    { liftHap: params.liftHap, liftKey: params.liftKey, refreshGeneration: params.refreshGeneration, correspondenceOnly: true });
 }

@@ -11,6 +11,7 @@ import { createTestStore, ensureBuiltinPanelsRegistered } from '../../stores/__t
 import { liveLiftTooltipLines } from './LiveLiftTooltip';
 import { liveLiftChipText } from './register';
 import { isBamBacked, isLiveLift } from '../../utils/datasetKinds';
+import { liveLiftHaplotypeColor } from './palette';
 
 /** A recording 2D context (as svCanvasDraw.test.ts): fills after clipping, horizontal strokes and texts. */
 function recordingContext() {
@@ -135,6 +136,25 @@ describe('live-lift rows on the read canvas (SV display off)', () => {
     const { fills } = draw([LIFTED], { isReversed: true });
     const body = fills.filter(f => f.y >= 0 && f.y < 20 && f.h <= 20 && f.fill === readBg);
     expect(body.some(f => f.x0 === 0 && f.x1 === 300)).toBe(true);   // the '-' segment 700..1000 mirrored
+  });
+
+  it('stripes pooled rows at the left body edge by haplotype; split and native rows need no stripe', () => {
+    for (const hap of ['MAT', 'PAT', 'other']) {
+      const read = { ...LIFTED, live_lift: { ...LL, hap_label: hap } };
+      const color = liveLiftHaplotypeColor(hap);
+      const pooled = draw([read]).fills.filter(f => f.fill === color);
+      expect(pooled).toEqual([{ x0: 0, x1: 3, y: 0, h: 20, fill: color }]);
+      expect(draw([read], { liftHap: hap }).fills.some(f => f.fill === color)).toBe(false);
+      expect(draw([{ ...read, live_lift: undefined }]).fills.some(f => f.fill === color)).toBe(false);
+      const reversed = draw([read], { isReversed: true }).fills.filter(f => f.fill === color);
+      expect(reversed[0].x0).toBe(0);
+    }
+  });
+
+  it('uses a readable haplotype stripe on a dark canvas ground', () => {
+    const color = liveLiftHaplotypeColor('MAT', true);
+    const { fills } = draw([LIFTED], { activeColormap: { ...DEFAULT_COLORMAP, noReadBackgroundColor: '#111827' } });
+    expect(fills.some(f => f.fill === color && f.x0 === 0 && f.x1 === 3)).toBe(true);
   });
 });
 
