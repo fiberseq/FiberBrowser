@@ -85,10 +85,13 @@ def insertion_span(handle, contig, a, b, chain):
         with handle.lock:
             c = handle.map.chains[chain]
             size = handle.manifest["sources"][c["source"]]["size"]
-            for _t, q, dt, dq, _reason in handle.map.chain_data(chain)["gaps"]:
-                lo, hi = (q, q + dq) if c["strand"] == "+" else (size - q - dq, size - q)
-                if dt == 0 and dq > 0 and lo <= a < b <= hi:
-                    return lo, hi
+            q0, q1 = (a, b) if c["strand"] == "+" else (size - b, size - a)
+            data = handle.map.chain_data(chain)
+            i = bisect.bisect_right(data["gq"], q0) - 1
+            if i >= 0:
+                _t, q, dt, dq, _reason = data["gaps"][i]
+                if dt == 0 and dq > 0 and q <= q0 < q1 <= q + dq:
+                    return _source_span(handle, c, q, dq)
     return a, b
 
 
@@ -329,45 +332,72 @@ def row_mismatches(read, row, ctx):
     runs = _SeqRuns(read.get("_fiberbrowser_aligned_runs"), record)
     md = md_reference(read.get("_fiberbrowser_md"), read.get("_fiberbrowser_aligned_runs") or [])
     lead = int(read.get("_fiberbrowser_sequence_lead", 0))
+    import numpy as np
+
     out = []
-    target = ctx.loader_options["target_fasta"]
     detail_start, detail_end = ctx.loader_options.get("detail_view", (ctx.region_start, ctx.region_end))
+    start, end = max(ctx.region_start, detail_start), min(ctx.region_end, detail_end)
+    if end <= start:
+        return out
+    # One target fetch and one inferred-run sweep per chain/window, shared by
+    # all records. NumPy compares contiguous slices; Python sees only X sites.
+    cache = getattr(ctx, "_mismatch_windows", None)
+    if cache is None:
+        ctx._mismatch_windows = cache = {}
+    if "target" not in cache:
+        cache["target"] = fasta_bases(ctx.loader_options["target_fasta"], ctx.selection.chrom, start, end)
+    target = cache["target"]
+    if target is None:
+        return out
     for f in row.frags:
-        a, b = max(ctx.region_start, f.t0, detail_start), min(ctx.region_end, f.t1, detail_end)
+        a, b = max(start, f.t0), min(end, f.t1)
         if b <= a:
             continue
-        ref = fasta_bases(target, ctx.selection.chrom, a, b)
-        if ref is None:
-            continue
-        with ctx.handle.lock:
-            inferred = ctx.handle.map.inferred_runs(f.p.chain, a, b)
+        if f.p.chain not in cache:
+            flags = np.zeros(end - start, dtype=np.uint8)
+            with ctx.handle.lock:
+                inferred = ctx.handle.map.inferred_runs(f.p.chain, start, end)
+            for t, n, kind in inferred:
+                flags[max(start, t) - start:min(end, t + n) - start] = (1 if kind == "substitution" else 2 if kind == "aligned" else 0)
+            cache[f.p.chain] = flags
+        flags = cache[f.p.chain]
         qlo = f.p.q_start + (f.p.t_end - b if f.minus else a - f.p.t_start)
         qhi = qlo + b - a
-        source_ref = fasta_bases(getattr(ctx, "source_fasta", None), record.get("contig"), qlo, qhi)
+        source_key = ("source", f.p.chain, qlo, qhi)
+        if source_key not in cache:
+            cache[source_key] = fasta_bases(getattr(ctx, "source_fasta", None), record.get("contig"), qlo, qhi)
+        source_ref = cache[source_key]
         for r0, q0, n in zip(runs.ref, runs.seq, runs.len):
-            lo, hi = max(r0, f.s, qlo), min(r0 + n, f.e, qhi)
-            for x in range(lo, hi):
-                t = f.T(x)
-                if not a <= t < b:
-                    continue
-                qi = q0 + x - r0 - lead
-                if not 0 <= qi < len(seq):
-                    continue
-                base = seq[qi].upper()
-                hg = (source_ref[x - qlo] if source_ref is not None else
-                      md.get(x, base) if read.get("_fiberbrowser_md") is not None else None)
-                if f.minus:
-                    base, hg = revcomp(base), revcomp(hg) if hg is not None else None
-                rb = ref[t - a]
-                kinds = [k for s, ln, k in inferred if s <= t < s + ln]
-                mapped = any(k in ("substitution", "aligned") for k in kinds)
-                is_ref = "substitution" in kinds and hg is not None and hg != rb and base == rb
-                if base != rb or is_ref:
-                    ev = dict(type="X", pos=t - ctx.region_start, base=base, ref=rb,
-                              source="assembly" if mapped and hg == base else "reads", len=1, seq=base)
-                    if is_ref:
-                        ev["allele"] = "grch38"
-                    out.append(ev)
+            lo = max(r0, f.s, qlo, r0 + lead - q0)
+            hi = min(r0 + n, f.e, qhi, r0 + lead - q0 + len(seq))
+            if hi <= lo:
+                continue
+            qi = q0 + lo - r0 - lead
+            bases = seq[qi:qi + hi - lo].upper()
+            hg = source_ref[lo - qlo:hi - qlo] if source_ref is not None else None
+            if hg is None and read.get("_fiberbrowser_md") is not None:
+                expected = bytearray(bases.encode("ascii"))
+                for x, base in md.items():
+                    if lo <= x < hi:
+                        expected[x - lo] = ord(base)
+                hg = expected.decode("ascii")
+            if f.minus:
+                bases, hg = revcomp(bases), revcomp(hg) if hg is not None else None
+            t = min(f.T(lo), f.T(hi - 1))
+            rb = target[t - start:t - start + len(bases)]
+            observed = np.frombuffer(bases.encode("ascii"), dtype=np.uint8)
+            reference = np.frombuffer(rb.encode("ascii"), dtype=np.uint8)
+            mapped = flags[t - start:t - start + len(bases)]
+            hg_array = np.frombuffer(hg.encode("ascii"), dtype=np.uint8) if hg is not None else None
+            is_ref = ((mapped == 1) & (hg_array != reference) & (observed == reference)
+                      if hg_array is not None else np.zeros(len(bases), dtype=bool))
+            for i in np.flatnonzero((observed != reference) | is_ref):
+                base = bases[i]
+                ev = dict(type="X", pos=t + int(i) - ctx.region_start, base=base, ref=rb[i],
+                          source="assembly" if mapped[i] and hg is not None and hg[i] == base else "reads", len=1, seq=base)
+                if is_ref[i]:
+                    ev["allele"] = "grch38"
+                out.append(ev)
     return out
 
 

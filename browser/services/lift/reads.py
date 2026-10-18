@@ -21,7 +21,7 @@ _PASSED_OPTIONS = ("include_methylation", "ml_threshold", "include_layers", "req
                    "include_layer_qualities", "infer_legacy_layers", "legacy_nuc_min_size", "min_footprints",
                    "short_terminal_footprint_bp", "hide_terminal_gaps", "terminal_gap_threshold",
                    "include_duplicates", "sv_min_len", "include_sv_seq", "min_fp_quality", "include_cigar",
-                   "target_fasta")
+                   "target_fasta", "include_mismatches", "detail_view")
 
 
 def is_lifted(dataset) -> bool:

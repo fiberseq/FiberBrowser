@@ -260,6 +260,8 @@ def load_direct_reads_for_dataset(
     short_terminal_footprint_bp: Optional[int] = None,
     sv_min_len: int = SV_MIN_LEN_DEFAULT,
     include_sv_seq: bool = False,
+    include_mismatches: bool = True,
+    detail_view=None,
 ) -> list[dict]:
     """Load compact reads directly from BAM/BigBed for non-cacheable options.
 
@@ -282,6 +284,7 @@ def load_direct_reads_for_dataset(
                 ml_threshold=ml_threshold,
                 min_fp_quality=min_fp_quality,
                 include_cigar=include_cigar,
+                include_mismatches=include_mismatches, detail_view=detail_view,
                 hide_terminal_gaps=hide_terminal_gaps,
                 terminal_gap_threshold=terminal_gap_threshold,
                 include_layers=include_layers,
@@ -333,7 +336,7 @@ def load_direct_reads_for_dataset(
         # Spanning is judged by the loaders on the alignment's extent: with
         # terminal gaps hidden, a read's intervals start at its first footprint.
         bam_read_options=dict(
-            **({"target_fasta": getattr(state, "fasta", None)} if dataset.data_type == "bam_livelift" else {}),
+            **({"target_fasta": getattr(state, "fasta", None), "include_mismatches": include_mismatches, "detail_view": detail_view} if dataset.data_type == "bam_livelift" else {}),
             spanning_only=spanning_only,
             min_fp_quality=min_fp_quality,
             include_cigar=include_cigar,
@@ -466,6 +469,7 @@ def _compact_reads_payload(
     cluster_focus: Optional[str] = None,
     filter_ids: Optional[str | list[str]] = None,  # a list: exact names (a registered read set)
     include_cigar: bool = False,
+    include_mismatches: bool = True,
     hide_terminal_gaps: bool = True,
     terminal_gap_threshold: int = 500,
     infer_legacy_layers: bool = True,
@@ -652,6 +656,7 @@ def _compact_reads_payload(
             ml_threshold,
             min_fp_quality,
             include_cigar,
+            bool(include_mismatches), viewport_start, viewport_end,
             layer_key,
             bool(include_layer_qualities),
             hide_terminal_gaps,
@@ -673,6 +678,8 @@ def _compact_reads_payload(
                 state, dataset, chrom=chrom, start=start, end=end, spanning_only=False,
                 include_methylation=include_methylation, ml_threshold=ml_threshold,
                 min_fp_quality=min_fp_quality, include_cigar=include_cigar,
+                include_mismatches=query_bool(include_mismatches, True),
+                detail_view=(viewport_start, viewport_end) if viewport_start is not None and viewport_end is not None else (start, end),
                 hide_terminal_gaps=hide_terminal_gaps, terminal_gap_threshold=terminal_gap_threshold,
                 include_layers=include_layers, requested_layers=requested_layers,
                 include_layer_qualities=include_layer_qualities, infer_legacy_layers=infer_legacy_layers,

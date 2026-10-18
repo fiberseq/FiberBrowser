@@ -892,7 +892,8 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
     if "cigar" in read:
         payload["cigar"], d = _map_cigar(read["cigar"], row, base, ctx)
         dropped["events"] += d
-    if ctx.loader_options.get("include_cigar") and ctx.loader_options.get("target_fasta") is not None:
+    if (ctx.loader_options.get("include_cigar") and ctx.loader_options.get("include_mismatches", True)
+            and ctx.loader_options.get("target_fasta") is not None):
         from services.lift.differences import row_mismatches
         payload.setdefault("cigar", []).extend(row_mismatches(read, row, ctx))
         payload["cigar"].sort(key=lambda e: (e["pos"], e["type"]))

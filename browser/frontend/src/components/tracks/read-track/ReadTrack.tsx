@@ -570,7 +570,7 @@ export function ReadTrack({
     batchNeedsMethylation, batchRequestedLayers, batchNeedsLayerQualities,
     useServerMetaprofile: canUseServerMetaprofile,
     serverMetaprofileLayers,
-    needsCigar, fillSmallGaps, fillGapSize, hideTerminalGaps,
+    needsCigar, needsMismatches: Boolean(enabledCigarTypes?.mismatches), fillSmallGaps, fillGapSize, hideTerminalGaps,
     terminalGapThreshold, minFpQuality, minFootprints, showDuplicateReads, downsampleCount, readDisplayMode, allReadsDisplayCap,
     backgroundReadCap,
     readRowHeight: renderReadRowHeight,

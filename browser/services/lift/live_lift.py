@@ -565,7 +565,7 @@ def decode_source_records(bam_paths: Iterable[str], plan: FetchPlan, *, loader_o
     from services.read_edge_cache import EdgeFetchUnsupported
 
     options = dict(loader_options or {})
-    for internal in ("target_fasta", "source_fasta", "detail_view"):
+    for internal in ("target_fasta", "source_fasta", "detail_view", "include_mismatches"):
         options.pop(internal, None)
     options.update(_FIXED_LOADER_OPTIONS, include_supplementary=bool(include_supplementary))
     if bam_handle_getter is not None:
@@ -611,7 +611,8 @@ def load_lifted_rows(handle: LiftMapHandle, bam_paths: Iterable[str], chrom: str
     the margin still composes them."""
     from services.lift.compose import lift_compact_reads
 
-    loader_options = dict(loader_options or {}, detail_view=(int(start), int(end)))
+    loader_options = dict(loader_options or {})
+    loader_options.setdefault("detail_view", (int(start), int(end)))
     bam_paths = list(bam_paths)
     haplotypes = handle.resolve_haplotypes(haplotypes)
     key = lift_key(handle, haplotypes, settings)

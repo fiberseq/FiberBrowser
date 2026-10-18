@@ -222,6 +222,7 @@ interface UseReadTrackDataParams {
   useServerMetaprofile: boolean;
   serverMetaprofileLayers: string[];
   needsCigar: boolean;
+  needsMismatches?: boolean;
   fillSmallGaps: boolean;
   fillGapSize: number;
   hideTerminalGaps: boolean;
@@ -287,7 +288,7 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
     chrom, start, end, datasetId, spanningOnly, width, height, isBAM,
     needsMethylation, needsLayers, requestedLayers, needsLayerQualities, batchNeedsMethylation, batchRequestedLayers, batchNeedsLayerQualities,
     useServerMetaprofile, serverMetaprofileLayers,
-    needsCigar, fillSmallGaps, fillGapSize, hideTerminalGaps,
+    needsCigar, needsMismatches = true, fillSmallGaps, fillGapSize, hideTerminalGaps,
     terminalGapThreshold, minFpQuality, minFootprints, showDuplicateReads, downsampleCount, readDisplayMode, allReadsDisplayCap, backgroundReadCap, readRowHeight,
     readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth,
     exportMatchedReadCount, exportMatchedReadFetchCount,
@@ -562,6 +563,7 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
             include_layers: needsLayers.toString(),
             include_layer_qualities: needsLayerQualities.toString(),
             include_cigar: needsCigar.toString(),
+            include_mismatches: needsMismatches.toString(),
             include_duplicates: showDuplicateReads.toString(),
             ml_threshold: '125',
             hide_terminal_gaps: hideTerminalGaps.toString(),
@@ -824,7 +826,7 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
 
     fetchReads();
     return () => { controller.abort(); };
-  }, [chrom, start, end, datasetId, needsMethylation, needsLayers, requestedLayersKey, needsLayerQualities, batchNeedsMethylation, batchRequestedLayersKey, batchNeedsLayerQualities, useServerMetaprofile, serverMetaprofileLayersKey, needsCigar, fillSmallGaps, fillGapSize, hideTerminalGaps, terminalGapThreshold, legacyLayerInference, legacyNucMinSize, showDuplicateReads, isBAM, minFpQuality, minFootprints, spanningOnly, readDisplayMode, downsampleCount, allReadsDisplayCap, backgroundReadCap, height, readRowHeight, readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth, exportMatchedReadFetchCount, hasPushedReads, jupyterPushedReads, requestFilterIdsParam, requestFilterKey, rootClusterFocusReadIdsKey, clusteredReadIdsKey, linkedSessionId, linkedRegion, linkedSortBy, panelLabel, refreshGeneration, maxRegionForReads, sampleSeed, batchDatasetIds, batchSourceIdentity, batchNeedsSvSummary, readStrand, liftHap, showsMainView, readEndFootprints, pinnedKey, minSvLen, svSummaryEnabled, loadAllReads]);
+  }, [chrom, start, end, datasetId, needsMethylation, needsLayers, requestedLayersKey, needsLayerQualities, batchNeedsMethylation, batchRequestedLayersKey, batchNeedsLayerQualities, useServerMetaprofile, serverMetaprofileLayersKey, needsCigar, needsMismatches, fillSmallGaps, fillGapSize, hideTerminalGaps, terminalGapThreshold, legacyLayerInference, legacyNucMinSize, showDuplicateReads, isBAM, minFpQuality, minFootprints, spanningOnly, readDisplayMode, downsampleCount, allReadsDisplayCap, backgroundReadCap, height, readRowHeight, readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth, exportMatchedReadFetchCount, hasPushedReads, jupyterPushedReads, requestFilterIdsParam, requestFilterKey, rootClusterFocusReadIdsKey, clusteredReadIdsKey, linkedSessionId, linkedRegion, linkedSortBy, panelLabel, refreshGeneration, maxRegionForReads, sampleSeed, batchDatasetIds, batchSourceIdentity, batchNeedsSvSummary, readStrand, liftHap, showsMainView, readEndFootprints, pinnedKey, minSvLen, svSummaryEnabled, loadAllReads]);
 
   // Fetch coverage data when zoomed out past maxRegionForReads
   useEffect(() => {
