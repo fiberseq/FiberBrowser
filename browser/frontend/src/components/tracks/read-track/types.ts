@@ -125,7 +125,9 @@ export interface AnnotationLayer {
 
 /** A live-lift row's map geometry and provenance (services/lift/compose.py; view-relative like `intervals`). */
 export interface LiveLiftRow {
+  /** Canonical insertion IDs parallel to badges, retained while collapsed (null for small/unresolved spans). */
   badge_ids?: Array<string | null>;
+  /** Insertion-local annotations fetched for expanded IDs; usually empty on collapsed rows. */
   insertions?: Record<string, LiveLiftInsertion | { length: number; too_large: true }>;
   v: number;
   key?: string;

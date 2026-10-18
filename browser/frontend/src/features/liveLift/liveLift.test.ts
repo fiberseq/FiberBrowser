@@ -161,15 +161,25 @@ describe('live-lift geometry', () => {
     expect(liveLiftHitAt(tied, large.x, 12, options)?.badge).toBe(tied.badges![1]);
   });
 
-  it('publishes a labelled notch resolved to the same payload-backed badge', () => {
+  it.each(['omitted', 'collapsed', 'expanded'] as const)('publishes the badge ID and molecular bp with %s insertion annotations', annotations => {
     const id = 'MAT:src:100-2453:insertion';
-    const ll: LiveLiftRow = { ...LL, badges: [[598, 'source_insertion', 1, 1, 'I'], LL.badges![0]], badge_ids: ['tiny', id],
-      insertions: { [id]: { pos: 600, length: 2353, mol_bp: 2353, src: ['src', 100, 2453], hap_label: 'MAT', orientation: '+', covered: [0, 2353], intervals: [] } } };
+    const payload: LiveLiftInsertion = { pos: 600, length: 2353, mol_bp: 2300, src: ['src', 100, 2453], hap_label: 'MAT', orientation: '+', covered: [53, 2353], intervals: [] };
+    const ll: LiveLiftRow = { ...LL,
+      badges: [[300, 'outside_chains', 2400, 2400, 'R'], [598, 'source_insertion', 1, 1, 'I'], [600, 'source_insertion', 2300, 2300, 'I']],
+      badge_ids: [null, null, id],
+      ...(annotations === 'omitted' ? {} : { insertions: annotations === 'expanded' ? { [id]: payload } : {} }) };
     const { canvas } = draw([{ ...LIFTED, live_lift: ll }]);
     const target = JSON.parse(canvas.dataset.liveLiftBadgeTarget);
-    expect(target.ins_id).toBe(id);
+    // Partial/noisy carrier bp must not replace the full map insertion's ID.
+    expect(target).toEqual({ x: 600, y: 10, ins_id: id, bp: 2300 });
+    expect(canvas.dataset.liveLiftInsertionCalls).toBe('0');
     const hit = liveLiftHitAt(ll, target.x, target.y, { y: 0, rowHeight: 20, linkedOffset: 0, regionWidth: 1000, toX: p => p });
-    expect(hit?.badge).toBe(ll.badges![1]);
+    expect(hit?.badge).toBe(ll.badges![2]);
+  });
+
+  it('does not publish an unresolved badge as an insertion target', () => {
+    const { canvas } = draw([{ ...LIFTED, live_lift: { ...LL, badge_ids: [null], insertions: {} } }]);
+    expect(canvas.dataset.liveLiftBadgeTarget).toBe('');
   });
 
   it('body spans are segments minus connectors', () => {

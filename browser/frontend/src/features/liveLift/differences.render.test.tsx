@@ -116,12 +116,12 @@ describe('differences strip and inspection', () => {
 });
 
 describe('badge click and sibling axes', () => {
-  it('clicking a badge expands its canonical ID and the native sibling gets the same gap; collapse restores both', () => {
+  it('clicking a collapsed badge expands its canonical ID and the native sibling gets the same gap; collapse restores both', () => {
     rememberDifferences(response());
     let handlers: ReturnType<typeof useReadTrackMouse>;
     const badge: NonNullable<CompactRead['live_lift']>['badges'] = [[500, 'source_insertion', 2353, 2353, 'I']];
     const read: CompactRead = { id: 'r', intervals: [[0, 1000, -1000]], live_lift: { v: 1, hap_label: 'MAT', segments: [[0, 1000, 1, '+', true]],
-      badges: badge, badge_ids: [diff.id], insertions: { [diff.id]: { pos: 500, length: 2353, mol_bp: 2353, src: ['src', 100, 2453], hap_label: 'MAT', orientation: '+', covered: [0, 2353], intervals: [[50, 200, 150]] } } } };
+      badges: badge, badge_ids: [diff.id], insertions: {} } };
     function Mouse() {
       const { axis } = useLiveLiftAxis('chr1', 0, 1000, 1000, false);
       handlers = useReadTrackMouse({ displayReads: [read], width: 1000, height: 200, sidebarWidth: 0, regionWidth: 1000, start: 0, end: 1000, axis,
@@ -174,10 +174,9 @@ describe('badge click and sibling axes', () => {
     expect(useDifferenceSelection.getState().selection?.difference.source).toBe('reads');
     expect(document.querySelector('[data-testid="live-lift-diff-popover"]')?.textContent).toContain('read-only event');
   });
-  it('expands a payload-backed badge after fetching its canonical map ID without opening a popover', async () => {
+  it('expands a collapsed partial carrier after fetching its canonical map ID without opening a popover', async () => {
     const carrier: CompactRead = { ...read, live_lift: { ...read.live_lift!, badge_ids: [diff.id],
-      badges: [[500, 'source_insertion', 2000, 2000, 'I']], insertions: { [diff.id]: { pos: 500, length: 2353, mol_bp: 2000,
-        src: ['src', 100, 2453], hap_label: 'MAT', orientation: '+', covered: [353, 2353], intervals: [[400, 500, 100]] } } } };
+      badges: [[500, 'source_insertion', 2000, 2000, 'I']], insertions: {} } };
     await act(async () => { selectReadDifference(carrier, carrier.live_lift!.badges![0], 500,
       { datasetId: 'lift', stateKey: 'mat-state', chrom: 'chr1', start: 0 }); });
     expect(useBrowserStore.getState().liveLiftExpansions.main[0]).toMatchObject({ ins_id: diff.id, length: 2353, label: 'HG002 MAT +2,353 bp', src: diff.src });

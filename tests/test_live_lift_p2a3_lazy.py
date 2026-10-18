@@ -22,6 +22,12 @@ def test_compact_only_composes_requested_insertions(evidence, lift_env, monkeypa
     assert not calls
     assert all(not r['live_lift']['insertions'] for r in cold.json()['reads'])
     key = f'MAT:{MAT}:5000-5100:insertion'
+    # The canvas and primary click use this parallel metadata before any
+    # insertion-local annotations have been composed.
+    badges = [badge for r in cold.json()['reads']
+              for badge, ins_id in zip(r['live_lift']['badges'], r['live_lift']['badge_ids'])
+              if ins_id == key]
+    assert badges and all(b[1] == 'source_insertion' and b[2] > 0 for b in badges)
     expanded = client.get('/api/reads/compact', params={**params, 'insertion_ids': key})
     assert expanded.status_code == 200, expanded.text
     assert calls

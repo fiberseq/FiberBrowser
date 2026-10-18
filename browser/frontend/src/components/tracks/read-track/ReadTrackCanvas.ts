@@ -577,11 +577,12 @@ export function drawReadTrack(params: DrawReadsParams): void {
       const ll = read.live_lift;
       const options = { y, rowHeight: Math.max(1, rowHeight - rowGap), linkedOffset, regionWidth, toX };
       const badgeY = y + options.rowHeight / 2;
+      // Collapsed rows retain IDs; insertion annotations load only after expansion.
       const badge = liveLiftBadgeGeometry(ll, options)
         .find(b => b.label && b.badge[2] >= 2000 && b.badge[2] < 3000 && y >= headerHeight && y + rowHeight <= height
           && b.x >= sidebarWidth && b.x < width && liveLiftHitAt(ll, b.x, badgeY, options)?.badge === b.badge
           && !params.axis?.fromX(b.x - sidebarWidth).ins_id
-          && ll.insertions?.[ll.badge_ids?.[ll.badges!.indexOf(b.badge)] ?? '']);
+          && ll.badge_ids?.[ll.badges!.indexOf(b.badge)]);
       const id = badge ? ll.badge_ids?.[ll.badges!.indexOf(badge.badge)] : undefined;
       if (badge && id) badgeTarget = { x: badge.x, y: badgeY, ins_id: id, bp: badge.badge[2] };
     }

@@ -60,7 +60,7 @@ describe('useReadTrackData loading flag', () => {
     container.remove();
   });
 
-  it('sends visible bounds and refetches requested insertion alleles on expansion', async () => {
+  it('sends visible bounds and refetches insertion alleles on expansion and collapse', async () => {
     const { useBrowserStore } = await import('../../../stores/browserStore');
     const before = useBrowserStore.getState();
     getCompactReads.mockImplementation(() => new Promise(() => {}));
@@ -77,6 +77,11 @@ describe('useReadTrackData loading flag', () => {
       await act(async () => useBrowserStore.getState().expandLiveLift('main', { chrom: 'chr1', pos: 1500, ins_id: 'mat', hap_label: 'MAT', length: 100,
         label: 'shared', datasetId: 'ds', alleles: [{ ins_id: 'mat', hap_label: 'MAT', length: 100 }, { ins_id: 'pat', hap_label: 'PAT', length: 99 }] }));
       expect(queries().at(-1)?.get('insertion_ids')).toBe('mat,pat');
+      expect(queries().at(-1)?.get('lift_hap')).toBe('PAT');
+      const expandedRequests = queries().length;
+      await act(async () => useBrowserStore.getState().collapseLiveLift('main', 'mat'));
+      expect(queries()).toHaveLength(expandedRequests + 1);
+      expect(queries().at(-1)?.has('insertion_ids')).toBe(false);
       expect(queries().at(-1)?.get('lift_hap')).toBe('PAT');
     } finally {
       await act(async () => useBrowserStore.setState({ datasets: before.datasets, panels: before.panels, liveLiftExpansions: before.liveLiftExpansions }));
