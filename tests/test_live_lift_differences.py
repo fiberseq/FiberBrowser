@@ -334,7 +334,7 @@ def test_insertion_carriage_is_independent_of_sequence_identity(evidence):
     for name in ("noisy", "indel", "tolerance"):
         assert rows[name]["allele"] == "hg002" and rows[name]["carries_insertion"]
     assert rows["noisy"]["identity"] == 90 and rows["indel"]["identity"] == pytest.approx(9800 / 105, abs=.01)
-    assert rows["wrong-length"]["allele"] == "no_insertion" and not rows["wrong-length"]["carries_insertion"]
+    assert rows["wrong-length"]["allele"] == "other" and not rows["wrong-length"]["carries_insertion"]
     assert rows["deleted"]["allele"] == "deleted" and rows["skip"]["allele"] == "no_coverage"
     for name in ("clipped-end", "clipped-start"):
         assert rows[name]["allele"] == "partial" and not rows[name]["carries_insertion"]

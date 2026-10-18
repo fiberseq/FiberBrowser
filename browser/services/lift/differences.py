@@ -577,8 +577,8 @@ def _chromatin(row, origin, pos, orientation):
 def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=None, include_sequence=False):
     """Bounded source-record inspection; see the module docstring for JSON.
     An in-memory BAM adapter lets the ordinary display composer decode the
-    same <=500 fetched records when a broad cache is absent. No second BAM
-    fetch or primary-record lookup can escape the inspection record budget.
+    same <=500 fetched records when a broad cache is absent. Primary metadata
+    is resolved separately with the ordinary bounded SA point-lookup budget.
     """
     import hashlib
     import time
@@ -612,6 +612,7 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
     class _Records:
         def __init__(self, bam, records):
             self.bam, self.records = bam, records
+            self.primary_metadata_bam = bam
 
         def __getattr__(self, name):
             return getattr(self.bam, name)
@@ -652,6 +653,15 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
             adapters[path] = _Records(bam, records)
             if capped:
                 break
+        from services.lift.live_lift import resolve_primary_metadata, molecule_key
+        from services.read_strand import record_strand_fields
+        metadata_reads = [dict(id=r.query_name, source_path=path,
+                               _fiberbrowser_lift_record=dict(contig=r.reference_name),
+                               _fiberbrowser_primary=dict(is_supplementary=r.is_supplementary,
+                                                          sa=r.get_tag("SA") if r.has_tag("SA") else None),
+                               **record_strand_fields(r)) for path, r, _ in fetched]
+        molecules = resolve_primary_metadata(config.handle, metadata_reads, settings=config.settings, counts={},
+                                             bam_handle_getter=lambda p: adapters[p].bam)
         available = {(r.get("source_path"), (r.get("live_lift") or {}).get("record")) for r in display or []}
         if fetched and (display is None or any((path, rid) not in available for path, _, rid in fetched)):
             origin = view_start
@@ -705,7 +715,8 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
                 if span["strand"] == "-":
                     rb, hg = revcomp(rb), revcomp(hg) if hg is not None else None
                 alignment_hg = hg
-                hap = ll.get("hap", span["hap"])
+                meta = molecules.get(molecule_key(dict(source_path=path, id=record.query_name)), {})
+                hap = meta.get("hap") or span["hap"]
                 hg = alignment_hg if hap == span["hap"] else expected.get(hap)
                 allele = ("no_coverage" if not overlaps else "deleted" if not rb else "unknown" if hg is None else
                           "hg002" if hg is not None and ref is not None and rb == hg and hg != ref else
@@ -716,17 +727,21 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
                     full = record.reference_start <= a and record.reference_end >= b
                     length = b - a
                     carries = full and length > 0 and bool(rb) and abs(len(rb) - length) <= max(length * .1, 50)
-                    allele = ("no_coverage" if not overlaps else "no_insertion" if length == 0 else
-                              "partial" if not full else "deleted" if not rb else
-                              "hg002" if carries else "no_insertion")
+                    own_spans = [s for s in spans if s["hap"] == hap]
+                    own = own_spans[0] if len(own_spans) == 1 else None
+                    allele = ("no_coverage" if not overlaps else "partial" if not full else
+                              "unknown" if hg is None else
+                              "no_insertion" if not rb and not hg else "deleted" if not rb else
+                              "hg002" if carries and (hap == span["hap"] or rb == hg) and bool(hg) else "other")
                 st = row.get("strand") or (record.get_tag("st") if record.has_tag("st") else None)
                 item = dict(id=record.query_name, molecule=ll.get("molecule", f"{dataset.id}|{record.query_name}"),
-                            hap_label=ll.get("hap_label", span["hap_label"]), record=ll.get("record", record_id),
+                            hap_label=config.handle.haplotype_labels.get(hap, hap), record=ll.get("record", record_id),
                             supplementary=bool(record.is_supplementary), strand=st, source_pos=dict(src),
                             read_bases=rb, hg002=hg, alignment_hg002=alignment_hg, grch38=ref, allele=allele,
                             chromatin=_chromatin(row, origin, pos, span["strand"]))
                 if pos == end:
-                    if (include_sequence and carries and span["id"] == item_id and len(rb) <= 50_000):
+                    own_carrier = carries and hap == span["hap"]
+                    if (include_sequence and own_carrier and span["id"] == item_id and len(rb) <= 50_000):
                         score = (abs(len(rb) - length), bool(record.is_supplementary), record_id)
                         if sequence_score is None or score < sequence_score:
                             sequence_score = score
@@ -735,7 +750,9 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
                     item.update(carries_insertion=carries, mol_bp=len(rb), identity=identity,
                                 read_bases=rb[:60], read_bases_length=len(rb))
                     if span["kind"] == "insertion":
-                        item["ins_id"] = span["id"]
+                        item["alignment_ins_id"] = span["id"]
+                    if own and own["kind"] == "insertion":
+                        item["ins_id"] = own["id"]
                     # At an insertion boundary inspect the hidden block's state
                     # at the first covered base, rather than an unrelated call
                     # on the target flank. This also exposes the row's flip.

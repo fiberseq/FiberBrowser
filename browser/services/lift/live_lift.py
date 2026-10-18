@@ -763,6 +763,9 @@ def resolve_primary_metadata(handle: LiftMapHandle, reads: list, *, settings: Li
                 if bam_handle_getter is None:
                     from services.bam_handles import get_bam_handle as bam_handle_getter
                 bam = bam_handle_getter(path)
+                # A bounded annotation adapter cannot establish absence at an
+                # SA locus. Metadata lookup uses its authoritative BAM handle.
+                bam = getattr(bam, "primary_metadata_bam", bam)
                 sa = next(((r.get("_fiberbrowser_primary") or {}).get("sa") for r in records
                            if (r.get("_fiberbrowser_primary") or {}).get("sa")), None)
                 meta = lookup_primary(bam, read.get("id"), sa, budget)
@@ -771,10 +774,11 @@ def resolve_primary_metadata(handle: LiftMapHandle, reads: list, *, settings: Li
             if budget.exhausted:
                 counts["primary_lookup_capped"] = counts.get("primary_lookup_capped", 0) + 1
                 continue  # not cached: the next request may have budget left
-            with _PRIMARY_CACHE_LOCK:
-                _PRIMARY_CACHE[ck] = meta
-                while len(_PRIMARY_CACHE) > _PRIMARY_CACHE_MAX:
-                    _PRIMARY_CACHE.popitem(last=False)
+            if meta is not None:
+                with _PRIMARY_CACHE_LOCK:
+                    _PRIMARY_CACHE[ck] = meta
+                    while len(_PRIMARY_CACHE) > _PRIMARY_CACHE_MAX:
+                        _PRIMARY_CACHE.popitem(last=False)
         if meta is not None and handle.source_haplotype.get(meta["contig"]) is not None:
             out[key] = {"hap": handle.source_haplotype[meta["contig"]],
                         **{k: meta[k] for k in ("strand", "strand_conflict") if k in meta}}

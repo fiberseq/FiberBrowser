@@ -21,6 +21,7 @@ export interface DifferenceInspection {
   allele: 'hg002' | 'same_as_grch38' | 'grch38' | 'other' | 'deleted' | 'no_coverage' | 'partial' | 'no_insertion' | 'unknown';
   chromatin: { state: 'nucleosome' | 'footprint' | 'accessible' | 'none'; layer: string | null; nearest_m6a_bp: number | null; orientation: '+' | '-' };
   alignment_hg002?: string | null;
+  alignment_ins_id?: string;
   ins_id?: string; carries_insertion?: boolean; mol_bp?: number; identity?: number | null; read_bases_length?: number;
 }
 export interface DifferenceReadsResponse {
