@@ -32,6 +32,9 @@ export const DEFAULT_COMBO_OPTIONS: ComboOptions = { source: 'selected', partial
 export type SavedGrouping = Omit<AlleleGrouping, 'assignments'> & { request: ComboOptions & { snps: string[] } };
 
 export interface VariantsPanelState {
+  includePutative?: boolean;
+  includeConflicting?: boolean;
+  includeAmbiguous?: boolean;
   tab?: VariantsTab;
   /** The dataset scanned ('' or unset: the first BAM dataset shown). */
   datasetId?: string;
@@ -80,6 +83,9 @@ export function normalizeVariantsState(raw: unknown): NormalizedVariantsState {
   const grouping = s.grouping && typeof s.grouping === 'object' && Array.isArray((s.grouping as SavedGrouping).groups)
     ? s.grouping as SavedGrouping : undefined;
   return {
+    includePutative: s.includePutative !== false,
+    includeConflicting: s.includeConflicting === true,
+    includeAmbiguous: s.includeAmbiguous === true,
     tab: VARIANTS_TABS.includes(s.tab as VariantsTab) ? s.tab as VariantsTab : 'snps',
     datasetId: typeof s.datasetId === 'string' ? s.datasetId : undefined,
     params: {

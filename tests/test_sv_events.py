@@ -162,12 +162,14 @@ def test_cluster_reconciliation_respects_view_and_summary_skips_unused_members(m
 def test_deletion_insertion_and_clips_in_absolute_coordinates():
     a = _seg([(4, 80), (0, 100), (2, 1500), (0, 50), (1, 400), (0, 30), (5, 60)], start=1000)
     ev = extract_sv_events(a, 50)
+    anchor = dict(chrom='chrT', pos=1000, cigar_ref_len=1680, strand='+',
+                  q_start=80, q_end=660, query_length=720)
     assert ev == [
-        {"t": "S", "side": "L", "ref": 1000, "len": 80, "q": 0},
+        {"t": "S", "side": "L", "ref": 1000, "len": 80, "q": 0, "anchor": anchor},
         {"t": "D", "ref": 1100, "len": 1500, "q": 180},
         {"t": "I", "ref": 2650, "len": 400, "q": 230},
         # Right clip 60 bp, all hard: q is where SEQ ends.
-        {"t": "S", "side": "R", "ref": 2680, "len": 60, "q": 660, "h": 1},
+        {"t": "S", "side": "R", "ref": 2680, "len": 60, "q": 660, "h": 1, "anchor": anchor},
     ]
 
 
@@ -201,9 +203,9 @@ def test_sa_tag_is_parsed_zero_based():
     assert ev[0]["t"] == "S" and ev[0]["side"] == "R"
     assert ev[1:] == [
         {"t": "SA", "chrom": "chr2L", "pos": 11500, "strand": "-", "mapq": 30, "nm": 3, "cigar_ref_len": 2000,
-         "supp": False, "same_strand": False, "q_start": 500, "q_end": 2500, "query_length": 2500},
+         "supp": False, "same_strand": False, "q_start": 500, "q_end": 2500, "query_length": 2500, "query_blocks": [[500, 2500]]},
         {"t": "SA", "chrom": "chrX", "pos": 9, "strand": "+", "mapq": 0, "nm": 0, "cigar_ref_len": 5,
-         "supp": False, "same_strand": True, "q_start": 0, "q_end": 5, "query_length": 5},
+         "supp": False, "same_strand": True, "q_start": 0, "q_end": 5, "query_length": 5, "query_blocks": [[0, 5]]},
     ]
     assert parse_sa_tag("bad;chr1,1,+,10M,60,0", supplementary=True)[0]["supp"] is True
 
@@ -494,9 +496,11 @@ def test_mapper_walk_and_cigar_walk_give_the_same_events(sv_bam):
     mapper = CigarCoordMapper(split.cigartuples, 0)
     assert extract_sv_events(split, 50, mapper=mapper) == extract_sv_events(split, 50)
     clips = [e for e in extract_sv_events(split, 50) if e['t'] == 'S']
+    anchor = dict(chrom='chrT', pos=0, cigar_ref_len=1700, strand='+',
+                  q_start=70, q_end=272, query_length=332)
     assert clips == [
-        {"t": "S", "side": "L", "ref": 0, "len": 70, "q": 0, "h": 1},
-        {"t": "S", "side": "R", "ref": 1700, "len": 60, "q": 242},
+        {"t": "S", "side": "L", "ref": 0, "len": 70, "q": 0, "h": 1, "anchor": anchor},
+        {"t": "S", "side": "R", "ref": 1700, "len": 60, "q": 242, "anchor": anchor},
     ]
 
 

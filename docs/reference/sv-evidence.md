@@ -22,10 +22,17 @@ Evidence is classified per molecule (QNAME) per target:
   >=20**, on another chromosome or **more than 100,000 bp** from the target
   interval. Distance includes the target's equivalent placements. This is a
   warning about competing alignment evidence, not a proven noncarrier genotype.
+  Explained bases count the union of **M/=/X query blocks** intersecting that
+  clip; internal I bases do not count. D/N operations add no query bases. Each
+  clip retains its originating alignment's reference/query geometry and strand,
+  so pooled alignments sharing an endpoint cannot lend it a different clip frame.
   Clips at the other end of a molecule do not trigger it. Query intervals must
   have equal full-molecule lengths, include hard clips, and are reflected when
   the segment strands differ. Fetched segments and SA descriptions use the
-  existing deduplication rule. Missing SA/geometry never creates a conflict.
+  existing deduplication rule. Distance uses the full replaced reference span
+  (`end`/`ref_len`) and equivalent placements in both classifiers. Missing
+  aligned-query blocks never creates a conflict; legacy clips without an origin
+  require a unique matching endpoint, clip length and query frame.
   A local inversion or short repeat hit alone is insufficient. Confirmed CIGAR
   or junction evidence remains authoritative. Conflict classification precedes
   nearby-allele ambiguity; it has its own opt-in, independent of ambiguity.
@@ -49,6 +56,11 @@ clip fraction and MAPQ. Variants, split labels/dialogs and insertion lists expla
 that conflicting clips align elsewhere. Highlighting offers a conflicting-only
 action. Explicitly included conflicting lens rows remain hatched and their
 profiles/insert exports follow the selected cohort.
+Soft-clipped putative, conflicting and ambiguous lens rows are hatched even
+when the cohort contains no hard clips. Single-SV panel splits retain each
+group's evidence levels, including after saving and reopening a session.
+Browser and figure SV bands apply their support gate to confirmed + putative;
+conflicting and ambiguous counts do not make a band visible by default.
 Summary `support` and `informative` retain the evidence-statistic definitions
 above, rather than presenting an inclusive carrier fraction as a genotype.
 Insertion lists use confirmed + putative carrier totals with separate counts.
@@ -60,6 +72,10 @@ refresh (conflict detection disabled for that saved definition). New splits save
 their conflict thresholds and explicit inclusion choice; changing the global
 defaults does not rewrite a saved split. The lens returns all four evidence cohorts, with `evidence_total`
 describing its capped row pool.
+The lens target and Variants panel also save their three carrier-tier checkbox
+choices in panel/session/snapshot state. Missing fields use the new-action
+defaults: putative included, conflicting and ambiguous excluded. These panel
+preferences are separate from a previously saved split's historical policy.
 
 Advanced View settings expose an enable switch, maximum local distance,
 minimum elsewhere MAPQ, minimum explained bases and minimum clip fraction.
@@ -80,6 +96,20 @@ as validated across loci or samples. Standalone low anchor MAPQ, high NM
 (which includes genuine indels), both-end clipping and small noncollinear SA
 fragments do not exclude a molecule. No whole-reference sequence search or
 assembly-specific carrier list is used at runtime.
+Long homologous TE inserts, true rearrangements and chimeric molecules can
+still receive the competing-alignment warning. The AluY check does not validate
+other repeat families or independent samples; the 100 kb locality choice is
+uncalibrated. The evaluation uses the same molecules/loci that informed these
+provisional thresholds, and calls across nearby targets can reuse a molecule.
+Regional assembly BAMs can omit elsewhere or low-quality alignments. Neither a
+missing compatible assembly gap nor a high-MAPQ alignment somewhere on the same
+chromosome proves noncarriage: an explicit allele and coverage check is needed.
+Unresolved calls stay separate from positives and negatives; approximate
+assembly-gap overlap is not a test of exact allele identity.
+Retrospective deletion-junction checks must use alignment continuity across
+small indels, as reference evidence does, rather than requiring a single raw
+CIGAR match block. A small sequencing indel must not turn adequate flank
+coverage into unresolved truth.
 
 Reference requires an aligned block covering both breakpoints, the full interval
 of equivalent placements, and 100 bp flanks. Blocks bridge small CIGAR indels

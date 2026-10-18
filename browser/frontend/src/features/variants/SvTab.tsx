@@ -16,7 +16,7 @@ import { targetForCluster } from '../insertion/insertionLensModel';
 import { openInsertionLens } from '../insertion/insertionLensTarget';
 import { AnalysisButton, CheckboxRow } from '../../components/controls/shared';
 import { panelForDataset } from './useSnpScan';
-import { updateVariantsState } from './variantsState';
+import { updateVariantsState, useVariantsPanelState } from './variantsState';
 import { formatShare } from '../../utils/denominators';
 import { formatPctInterval } from '../../utils/proportionInterval';
 
@@ -53,10 +53,11 @@ export function SvTab({ datasetId: chosen, params, duplicates }: { datasetId: st
   const [clusters, setClusters] = useState<SvClusterInView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [includePutative, setIncludePutative] = useState(true);
+  const savedPolicy = useVariantsPanelState();
+  const includePutative = savedPolicy?.includePutative !== false;
   const conflictOptions = useBrowserStore(s => s.svConflictOptions);
-  const [includeConflicting, setIncludeConflicting] = useState(false);
-  const [includeAmbiguous, setIncludeAmbiguous] = useState(false);
+  const includeConflicting = savedPolicy?.includeConflicting === true;
+  const includeAmbiguous = savedPolicy?.includeAmbiguous === true;
   const [linkage, setLinkage] = useState<Record<string, SvLinkage | 'loading' | { error: string }>>({});
   const [refresh, setRefresh] = useState(0);
   const evidencePolicy = JSON.stringify([includePutative, includeAmbiguous, includeConflicting, conflictOptions]);
@@ -135,9 +136,9 @@ export function SvTab({ datasetId: chosen, params, duplicates }: { datasetId: st
 
   return (
     <div className="px-3 py-2 flex flex-col gap-2 text-[12px]" data-testid="variants-svs">
-      <label><input type="checkbox" checked={includePutative} onChange={e => setIncludePutative(e.target.checked)} /> Include putative carriers (uncheck for confirmed only)</label>
-      <label title="A substantial part of the supporting clip aligns elsewhere"><input type="checkbox" checked={includeConflicting} onChange={e => setIncludeConflicting(e.target.checked)} /> Include conflicting carriers (clip aligns elsewhere)</label>
-      <label><input type="checkbox" checked={includeAmbiguous} onChange={e => setIncludeAmbiguous(e.target.checked)} /> Include ambiguous carriers</label>
+      <label><input type="checkbox" checked={includePutative} onChange={e => updateVariantsState({ includePutative: e.target.checked })} /> Include putative carriers (uncheck for confirmed only)</label>
+      <label title="A substantial part of the supporting clip aligns elsewhere"><input type="checkbox" checked={includeConflicting} onChange={e => updateVariantsState({ includeConflicting: e.target.checked })} /> Include conflicting carriers (clip aligns elsewhere)</label>
+      <label><input type="checkbox" checked={includeAmbiguous} onChange={e => updateVariantsState({ includeAmbiguous: e.target.checked })} /> Include ambiguous carriers</label>
       <div className="flex items-center gap-2">
         <span className="text-ink-muted flex-1">SVs of {svMinLen.toLocaleString()} bp or more in {chrom}:{Math.round(start).toLocaleString()}–{Math.round(end).toLocaleString()}
           {sourcePanelId && <span data-testid="variants-svs-split-source"> · all reads of the split panels</span>}</span>

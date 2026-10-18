@@ -32,16 +32,28 @@ export function clipConflict(read: Pick<CompactRead, 'sv_segments'>, clip: Extra
   if (!p.enabled) return null;
   const segments = read.sv_segments ?? [];
   const reasons: SvConflictReason[] = [];
-  for (const anchor of segments) {
-    if (anchor.t === 'SA' || (chrom && anchor.chrom !== chrom)
-      || (clip.side === 'L' ? anchor.pos : anchor.pos + anchor.cigar_ref_len) !== clip.ref) continue;
+  const keys = ['chrom', 'pos', 'cigar_ref_len', 'strand', 'q_start', 'q_end', 'query_length'] as const;
+  const anchors = segments.filter(s => s.t !== 'SA' && (!chrom || s.chrom === chrom)
+    && (clip.side === 'L' ? s.pos : s.pos + s.cigar_ref_len) === clip.ref
+    && (clip.side === 'L' ? s.q_start : s.query_length - s.q_end) === clip.len
+    && (!clip.anchor || keys.every(k => s[k] === clip.anchor![k])));
+  // Legacy clips without an origin must identify a single query frame.
+  if (!anchors.length || anchors.some(s => keys.some(k => s[k] !== anchors[0][k]))) return null;
+  for (const anchor of anchors) {
     const total = anchor.query_length;
     const [a, b] = clip.side === 'L' ? [0, anchor.q_start] : [anchor.q_end, total];
     if (b <= a) continue;
     for (const s of segments) {
       if (s === anchor || s.query_length !== total || s.mapq < p.min_mapq) continue;
-      const [x, y] = s.strand === anchor.strand ? [s.q_start, s.q_end] : [total - s.q_end, total - s.q_start];
-      const overlap = Math.max(0, Math.min(b, y) - Math.max(a, x));
+      const blocks = (s.query_blocks ?? []).map(([start, stop]) => {
+        const [x, y] = s.strand === anchor.strand ? [start, stop] : [total - stop, total - start];
+        return [Math.max(a, x), Math.min(b, y)];
+      }).filter(([x, y]) => y > x).sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+      let overlap = 0, coveredEnd = a;
+      for (const [x, y] of blocks) {
+        overlap += Math.max(0, y - Math.max(x, coveredEnd));
+        coveredEnd = Math.max(coveredEnd, y);
+      }
       const fraction = overlap / (b - a);
       if (overlap < p.min_overlap || fraction < p.min_clip_fraction) continue;
       const elsewhere = s.chrom !== anchor.chrom;

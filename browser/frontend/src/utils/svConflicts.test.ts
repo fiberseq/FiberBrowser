@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import fixture from '../../../../tests/data/sv_conflicts.json';
+import regressions from '../../../../tests/data/sv_conflict_regressions.json';
+import visibility from '../../../../tests/data/sv_visibility.json';
 import { clipConflict, normalizeSvConflictOptions } from './svConflicts';
-import { supportingReadIds, svEvidenceLevel } from '../components/tracks/read-track/svDrawing';
+import { supportingReadIds, svEvidenceLevel, visibleSvSummary } from '../components/tracks/read-track/svDrawing';
 import type { CompactRead, SvCluster } from '../components/tracks/read-track/types';
 import { describeCarrier, layoutLens, type LensResponse } from '../features/insertion/insertionLensModel';
 import { ReadTooltip } from '../components/tracks/read-track/ReadTrackTooltip';
@@ -11,6 +13,26 @@ import { ReadTooltip } from '../components/tracks/read-track/ReadTrackTooltip';
 const target = { ...fixture.target, id: 'target', end: 1000, support: 0, informative: 0, sa_support: 0 } as SvCluster;
 
 describe('shared backend/frontend clip conflicts', () => {
+  it.each(visibility.cases)('matches figure visibility at $min_len bp / $min_support carriers', c => {
+    const summary = { clusters: visibility.clusters, clips: [] } as unknown as Parameters<typeof visibleSvSummary>[0];
+    expect(visibleSvSummary(summary, c.min_len, c.min_support)?.clusters.map(c => c.id) ?? []).toEqual(c.ids);
+  });
+  it.each(regressions)('$name (CIGAR regression)', c => {
+    const reads = c.reads.map(r => ({ ...r, intervals: [] })) as CompactRead[];
+    const cluster = { id: 'target', support: 0, informative: 0, ...c.target } as SvCluster;
+    for (const rows of [reads, [...reads].reverse()]) {
+      expect(supportingReadIds(rows, cluster, 'chrT', c.expected as 'putative' | 'conflicting')).toEqual(['synthetic']);
+      expect(supportingReadIds(rows, cluster, 'chrT')).toEqual(c.expected === 'putative' ? ['synthetic'] : []);
+      const consolidated = { ...rows[0], sv_alignments: rows, sv_segments: rows.flatMap(r => r.sv_segments ?? []) };
+      expect(svEvidenceLevel(consolidated, cluster, 'chrT')).toBe(c.expected);
+      expect(rows.map(r => svEvidenceLevel({ ...r, sv_segments: consolidated.sv_segments }, cluster, 'chrT')).sort())
+        .toEqual([...c.levels].sort());
+      if ('overlap' in c) {
+        const clip = rows[0].sv!.find(e => e.t === 'S')! as Extract<NonNullable<CompactRead['sv']>[number], { t: 'S' }>;
+        expect(clipConflict(consolidated, clip, cluster.ref, cluster.end, 'chrT')?.overlap).toBe(c.overlap);
+      }
+    }
+  });
   it.each(fixture.cases)('$name', c => {
     const read = { ...c.read, intervals: [] } as CompactRead;
     const policy = normalizeSvConflictOptions('options' in c ? c.options : undefined);

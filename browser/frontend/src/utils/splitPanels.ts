@@ -126,6 +126,7 @@ export async function loadSplitGrouping(source: SplitSource): Promise<SplitGroup
   const panel = s.panels.find(p => p.id === source.panelId);
   const key = panel ? panel.stateKey ?? panel.datasetId ?? panel.id : '';
   const assignments = s.clusterAssignments[key] ?? {};
+  const evidence = s.svCarrierEvidence[key] ?? {};
   const names = s.clusterGroupLabels[key] ?? {};
   const byId = new Map<number, string[]>();
   for (const [read, id] of Object.entries(assignments)) { const list = byId.get(id) ?? []; list.push(read); byId.set(id, list); }
@@ -134,7 +135,9 @@ export async function loadSplitGrouping(source: SplitSource): Promise<SplitGroup
     title: source.title, rule: { kind: 'frozen' },
     groups: [...byId.entries()].sort((a, b) => a[0] - b[0]).map(([id, reads]) => {
       const label = names[id] ?? `Cluster ${id}`;
+      const svEvidenceLevels = Object.fromEntries(reads.filter(read => evidence[read]).map(read => [read, evidence[read]]));
       return { key: String(id), label, count: reads.length, colour: getClusterColor(id),
+        ...(Object.keys(svEvidenceLevels).length ? { ruleExtras: { svEvidenceLevels } } : {}),
         kind: /not informative/i.test(label) ? 'na' as const : 'group' as const, ids: { [ds]: reads } };
     }),
   };

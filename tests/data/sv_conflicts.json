@@ -31,7 +31,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 1000,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
           },
           {
             "t": "SA",
@@ -42,7 +43,8 @@
             "mapq": 60,
             "q_start": 1000,
             "q_end": 1800,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[1000, 1800]]
           }
         ]
       },
@@ -73,7 +75,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 1000,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
           },
           {
             "t": "SA",
@@ -84,7 +87,8 @@
             "mapq": 60,
             "q_start": 1000,
             "q_end": 1800,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[1000, 1800]]
           }
         ]
       },
@@ -115,7 +119,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 1000,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
           },
           {
             "t": "SA",
@@ -126,7 +131,8 @@
             "mapq": 60,
             "q_start": 1000,
             "q_end": 1800,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[1000, 1800]]
           }
         ]
       },
@@ -157,7 +163,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 1000,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
           },
           {
             "t": "SA",
@@ -168,7 +175,8 @@
             "mapq": 60,
             "q_start": 1000,
             "q_end": 1800,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[1000, 1800]]
           }
         ]
       },
@@ -202,7 +210,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 1000,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
           },
           {
             "t": "SA",
@@ -213,7 +222,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 800,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 800]]
           }
         ]
       },
@@ -244,7 +254,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 1000,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
           },
           {
             "t": "SA",
@@ -255,7 +266,8 @@
             "mapq": 19,
             "q_start": 1000,
             "q_end": 1800,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[1000, 1800]]
           }
         ]
       },
@@ -286,7 +298,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 1000,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
           },
           {
             "t": "SA",
@@ -297,7 +310,8 @@
             "mapq": 19,
             "q_start": 1000,
             "q_end": 1800,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[1000, 1800]]
           }
         ]
       },
@@ -331,7 +345,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 1000,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
           },
           {
             "t": "SA",
@@ -342,7 +357,8 @@
             "mapq": 60,
             "q_start": 1000,
             "q_end": 1399,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[1000, 1399]]
           }
         ]
       },
@@ -376,7 +392,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 1000,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
           },
           {
             "t": "SA",
@@ -387,7 +404,8 @@
             "mapq": 60,
             "q_start": 1000,
             "q_end": 1400,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[1000, 1400]]
           }
         ]
       },
@@ -421,7 +439,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 1000,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
           },
           {
             "t": "SA",
@@ -432,7 +451,8 @@
             "mapq": 60,
             "q_start": 1000,
             "q_end": 1799,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[1000, 1799]]
           }
         ]
       },
@@ -466,7 +486,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 1000,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
           },
           {
             "t": "SA",
@@ -477,7 +498,8 @@
             "mapq": 60,
             "q_start": 1000,
             "q_end": 1099,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[1000, 1099]]
           }
         ]
       },
@@ -512,7 +534,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 1000,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
           },
           {
             "t": "SA",
@@ -523,7 +546,8 @@
             "mapq": 60,
             "q_start": 1000,
             "q_end": 1100,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[1000, 1100]]
           }
         ]
       },
@@ -558,7 +582,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 1000,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
           },
           {
             "t": "SA",
@@ -569,7 +594,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 800,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 800]]
           }
         ]
       },
@@ -600,7 +626,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 1000,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
           },
           {
             "t": "SA",
@@ -611,7 +638,8 @@
             "mapq": 60,
             "q_start": 1000,
             "q_end": 1800,
-            "query_length": 1801
+            "query_length": 1801,
+            "query_blocks": [[1000, 1800]]
           }
         ]
       },
@@ -642,7 +670,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 1000,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
           },
           {
             "t": "SA",
@@ -653,7 +682,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 800,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 800]]
           }
         ]
       },
@@ -684,7 +714,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 1000,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
           },
           {
             "t": "SA",
@@ -695,7 +726,8 @@
             "mapq": 60,
             "q_start": 1000,
             "q_end": 1800,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[1000, 1800]]
           }
         ]
       },
@@ -727,7 +759,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 1000,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
           },
           {
             "t": "SA",
@@ -738,7 +771,8 @@
             "mapq": 60,
             "q_start": 1000,
             "q_end": 1800,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[1000, 1800]]
           }
         ]
       },
@@ -769,7 +803,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 1000,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
           },
           {
             "t": "SA",
@@ -780,7 +815,8 @@
             "mapq": 60,
             "q_start": 1000,
             "q_end": 1800,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[1000, 1800]]
           }
         ]
       },
@@ -814,7 +850,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 1000,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
           }
         ]
       },
@@ -871,7 +908,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 1000,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
           },
           {
             "t": "SA",
@@ -882,7 +920,8 @@
             "mapq": 60,
             "q_start": 1000,
             "q_end": 1800,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[1000, 1800]]
           }
         ]
       },
@@ -913,7 +952,8 @@
             "mapq": 0,
             "q_start": 0,
             "q_end": 1000,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
           }
         ]
       },
@@ -944,7 +984,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 1000,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
           }
         ],
         "nm": 1000
@@ -983,7 +1024,8 @@
             "mapq": 60,
             "q_start": 100,
             "q_end": 1000,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[100, 1000]]
           }
         ]
       },
@@ -1015,7 +1057,8 @@
             "mapq": 60,
             "q_start": 800,
             "q_end": 1800,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[800, 1800]]
           },
           {
             "t": "SA",
@@ -1026,7 +1069,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 800,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 800]]
           }
         ],
         "sequence_span": [
@@ -1062,7 +1106,8 @@
             "mapq": 60,
             "q_start": 800,
             "q_end": 1800,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[800, 1800]]
           },
           {
             "t": "SA",
@@ -1073,7 +1118,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 800,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 800]]
           }
         ],
         "sequence_span": [
@@ -1115,7 +1161,8 @@
             "mapq": 60,
             "q_start": 800,
             "q_end": 1000,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[800, 1000]]
           },
           {
             "t": "SA",
@@ -1126,7 +1173,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 800,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 800]]
           }
         ]
       },
@@ -1157,7 +1205,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 1000,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
           },
           {
             "t": "SA",
@@ -1168,7 +1217,8 @@
             "mapq": 60,
             "q_start": 1000,
             "q_end": 1499,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[1000, 1499]]
           }
         ]
       },
@@ -1199,7 +1249,8 @@
             "mapq": 60,
             "q_start": 0,
             "q_end": 1000,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
           },
           {
             "t": "SA",
@@ -1210,11 +1261,99 @@
             "mapq": 60,
             "q_start": 1000,
             "q_end": 1500,
-            "query_length": 1800
+            "query_length": 1800,
+            "query_blocks": [[1000, 1500]]
           }
         ]
       },
       "expected": "conflicting"
+    },
+    {
+      "name": "overlapping-blocks-count-union",
+      "read": {
+        "id": "synthetic",
+        "reference_start": 0,
+        "reference_end": 1000,
+        "file_chrom": "chrT",
+        "sv": [
+          {
+            "t": "S",
+            "side": "R",
+            "ref": 1000,
+            "len": 800,
+            "q": 1000
+          }
+        ],
+        "sv_segments": [
+          {
+            "chrom": "chrT",
+            "pos": 0,
+            "cigar_ref_len": 1000,
+            "strand": "+",
+            "mapq": 60,
+            "q_start": 0,
+            "q_end": 1000,
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
+          },
+          {
+            "t": "SA",
+            "chrom": "chrElsewhere",
+            "pos": 5000,
+            "cigar_ref_len": 800,
+            "strand": "+",
+            "mapq": 60,
+            "q_start": 1000,
+            "q_end": 1800,
+            "query_length": 1800,
+            "query_blocks": [[1000, 1300], [1000, 1300], [1100, 1250]]
+          }
+        ]
+      },
+      "expected": "putative"
+    },
+    {
+      "name": "missing-aligned-blocks",
+      "read": {
+        "id": "synthetic",
+        "reference_start": 0,
+        "reference_end": 1000,
+        "file_chrom": "chrT",
+        "sv": [
+          {
+            "t": "S",
+            "side": "R",
+            "ref": 1000,
+            "len": 800,
+            "q": 1000
+          }
+        ],
+        "sv_segments": [
+          {
+            "chrom": "chrT",
+            "pos": 0,
+            "cigar_ref_len": 1000,
+            "strand": "+",
+            "mapq": 60,
+            "q_start": 0,
+            "q_end": 1000,
+            "query_length": 1800,
+            "query_blocks": [[0, 1000]]
+          },
+          {
+            "t": "SA",
+            "chrom": "chrElsewhere",
+            "pos": 5000,
+            "cigar_ref_len": 800,
+            "strand": "+",
+            "mapq": 60,
+            "q_start": 1000,
+            "q_end": 1800,
+            "query_length": 1800
+          }
+        ]
+      },
+      "expected": "putative"
     }
   ]
 }

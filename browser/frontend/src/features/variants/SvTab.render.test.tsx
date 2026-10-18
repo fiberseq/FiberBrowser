@@ -6,6 +6,7 @@ import { useBrowserStore } from '../../stores/browserStore';
 import { svsInView } from './api';
 import { SvTab, WEAK_SV_CARRIERS, splitWeakSvs } from './SvTab';
 import { DEFAULT_SNP_PARAMS } from './api';
+import { applyImportedState, collectFrontendState } from '../../api/session';
 
 vi.mock('./api', async importOriginal => ({ ...(await importOriginal<typeof import('./api')>()), svsInView: vi.fn() }));
 
@@ -37,6 +38,27 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); container.remove(); });
 
 describe('Variants › SVs', () => {
+  it('keeps all three carrier choices through a session import and remount', async () => {
+    useBrowserStore.setState(s => ({ panels: [...s.panels, { id: 'variants', contentType: 'variants' } as never] }));
+    act(() => root.render(<SvTab datasetId="numb" params={DEFAULT_SNP_PARAMS} duplicates={false} />));
+    const input = (label: string) => [...container.querySelectorAll('label')].find(l => l.textContent?.includes(label))!.querySelector('input')!;
+    expect(input('Include putative').checked).toBe(true);
+    expect(input('Include conflicting').checked).toBe(false);
+    expect(input('Include ambiguous').checked).toBe(false);
+    act(() => { input('Include putative').click(); });
+    act(() => { input('Include conflicting').click(); });
+    act(() => { input('Include ambiguous').click(); });
+    expect(useBrowserStore.getState().panels.find(p => p.id === 'variants')?.variants)
+      .toMatchObject({ includePutative: false, includeConflicting: true, includeAmbiguous: true });
+    const saved = JSON.parse(JSON.stringify(collectFrontendState()));
+    act(() => { root.render(null); useBrowserStore.setState({ panels: [] }); });
+    act(() => applyImportedState({ datasets: [], overlays: [], has_fasta: false, frontend: saved,
+      viewport: { chrom: 'chr2L', start: 9462000, end: 9492000 } }));
+    act(() => root.render(<SvTab datasetId="numb" params={DEFAULT_SNP_PARAMS} duplicates={false} />));
+    expect(input('Include putative').checked).toBe(false);
+    expect(input('Include conflicting').checked).toBe(true);
+    expect(input('Include ambiguous').checked).toBe(true);
+  });
   it('the combined-split bar is there before anything is ticked (rows never move), its buttons disabled', async () => {
     act(() => root.render(<SvTab datasetId="numb" params={DEFAULT_SNP_PARAMS} duplicates={false} />));
     await wait(450);

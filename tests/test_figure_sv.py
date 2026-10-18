@@ -2,15 +2,27 @@
 from __future__ import annotations
 
 import copy
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from services.figure.spec import FigureSpec, PanelSpec, TrackSpec, _merge_defaults
 from services.figure.surface import make_surface
 from services.figure.tracks import TrackContext
 from services.figure.tracks import _read_sv as sv
 from services.figure.tracks import reads as rt
+
+VISIBILITY = json.loads((Path(__file__).parent / 'data/sv_visibility.json').read_text())
+
+
+@pytest.mark.parametrize('case', VISIBILITY['cases'])
+def test_figure_default_carrier_visibility_parity(case):
+    payload = {'sv_summary': {'clusters': VISIBILITY['clusters'], 'clips': []}}
+    result = sv.visible_summary(payload, {'svMinLen': case['min_len'], 'svMinSupport': case['min_support']})
+    assert [c['id'] for c in (result or {}).get('clusters', [])] == case['ids']
 
 
 def test_figure_sv_support_matches_browser_default_and_override():

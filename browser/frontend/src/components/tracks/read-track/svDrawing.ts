@@ -157,7 +157,7 @@ export function eventsMatch(t: 'D' | 'I', ref: number, len: number, cRef: number
  * Insertion clips keep the existing >=50 bp floor, on either side/strand.
  */
 export function svEvidenceLevel(read: Pick<CompactRead, 'sv' | 'sv_evidence' | 'sv_segments' | 'sequence_span' | 'sv_alignments'>,
-  cluster: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty'>, chrom?: string,
+  cluster: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty' | 'ref_len'> & Partial<Pick<SvCluster, 'end'>>, chrom?: string,
   targets: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty'>[] = [], conflictOptions?: SvConflictOptions): 'confirmed' | 'putative' | 'conflicting' | 'ambiguous' | null {
   if (read.sv_alignments?.length) {
     const levels = read.sv_alignments.map(part => svEvidenceLevel({ ...part,
@@ -208,13 +208,14 @@ export function svEvidenceLevel(read: Pick<CompactRead, 'sv' | 'sv_evidence' | '
     Math.max(lo - a.ref!, a.ref! - hi, 0) - Math.max(lo - b.ref!, b.ref! - hi, 0));
   const clip = matching[0];
   if (!clip) return null;
-  if (clipConflict(read, clip, lo, hi + (cluster.t === 'D' ? cluster.len : 0), chrom, conflictOptions)) return 'conflicting';
+  const end = cluster.end ?? cluster.ref + (cluster.ref_len ?? (cluster.t === 'D' ? cluster.len : 0));
+  if (clipConflict(read, clip, lo, end + hi - cluster.ref, chrom, conflictOptions)) return 'conflicting';
   return targets.some(t => (t.t !== cluster.t || t.ref !== cluster.ref || t.len !== cluster.len)
     && clippedAt(clip, t)) ? 'ambiguous' : 'putative';
 }
 
 export function readCarriesCluster(read: Pick<CompactRead, 'sv' | 'sv_evidence' | 'sv_segments' | 'sequence_span' | 'sv_alignments'>,
-  cluster: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty'>, chrom?: string): boolean {
+  cluster: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty' | 'ref_len'> & Partial<Pick<SvCluster, 'end'>>, chrom?: string): boolean {
   const level = svEvidenceLevel(read, cluster, chrom);
   return level === 'confirmed' || level === 'putative';
 }

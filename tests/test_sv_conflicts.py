@@ -11,6 +11,41 @@ from services.sv_endpoint import _compact_record
 from test_sv_events import _seg
 
 FIXTURE = json.loads((Path(__file__).parent / 'data/sv_conflicts.json').read_text())
+REGRESSIONS = json.loads((Path(__file__).parent / 'data/sv_conflict_regressions.json').read_text())
+
+
+@pytest.mark.parametrize('case', REGRESSIONS, ids=lambda c: c['name'])
+def test_cigar_conflict_regressions(case):
+    import pysam
+    header = pysam.AlignmentHeader.from_dict({'SQ': [{'SN': 'chrT', 'LN': 1000000}]})
+    rows = []
+    for spec in case['records']:
+        rec = pysam.AlignedSegment(header)
+        rec.query_name = 'synthetic'
+        rec.reference_id = 0
+        rec.reference_start = spec['start']
+        rec.mapping_quality = 60
+        rec.flag = (16 if spec['reverse'] else 0) | (2048 if spec['supp'] else 0)
+        rec.cigarstring = spec['cigar']
+        rec.query_sequence = 'A' * rec.infer_query_length()
+        if spec['sa']:
+            rec.set_tag('SA', spec['sa'])
+        rows.append(_compact_record(rec, 'chrT', 10))
+    c = case['target']
+    kwargs = dict(t=c['t'], ref=c['ref'], length=c['len'], chrom='chrT',
+                  target_end=c.get('end', c['ref'] + c.get('ref_len', c['len'] if c['t'] == 'D' else 0)),
+                  uncertainty=c.get('uncertainty'))
+    for inputs in (rows, list(reversed(rows)), case['reads']):
+        call = classify_molecules([(r, None) for r in inputs], **kwargs)['synthetic']
+        assert call['evidence']['level'] == case['expected']
+        levels = [(x['evidence'] or {}).get('level') for x in call['evidence_bundle']]
+        assert sorted(levels, key=str) == sorted(case['levels'], key=str)
+        if 'overlap' in case:
+            assert call['evidence']['reason']['overlap'] == case['overlap']
+    # The serialized frontend fixture must describe the extracted CIGAR geometry.
+    for actual, expected in zip(rows, case['reads']):
+        assert actual['sv_segments'] == expected['sv_segments']
+        assert actual['sv'] == expected['sv']
 
 
 @pytest.mark.parametrize('case', FIXTURE['cases'], ids=lambda c: c['name'])

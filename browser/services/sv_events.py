@@ -104,7 +104,24 @@ def segment_geometry(cigar: str) -> dict:
         if op not in 'SH':
             break
         right += n
-    return {'q_start': left, 'q_end': total - right, 'query_length': total}
+    q = 0
+    blocks = []
+    for n, op in ops:
+        if op in 'M=X':
+            blocks.append([q, q + n])
+        if op in 'MISH=X':
+            q += n
+    return {'q_start': left, 'q_end': total - right, 'query_length': total,
+            'query_blocks': blocks}
+
+
+def _clip_anchor(read):
+    """Stable identity of the alignment that produced a terminal clip."""
+    geometry = segment_geometry(getattr(read, 'cigarstring', None) or '')
+    return dict(chrom=read.reference_name, pos=int(read.reference_start),
+                cigar_ref_len=int(read.reference_end) - int(read.reference_start),
+                strand='-' if read.is_reverse else '+',
+                **{k: geometry[k] for k in ('q_start', 'q_end', 'query_length')})
 
 
 def alignment_evidence(read) -> dict:
@@ -199,6 +216,10 @@ def _clip_events(read, min_len: int) -> list[dict]:
         if hard_right:
             ev["h"] = 1
         events.append(ev)
+    if events:
+        anchor = _clip_anchor(read)
+        for ev in events:
+            ev['anchor'] = anchor
     return events
 
 

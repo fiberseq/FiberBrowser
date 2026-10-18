@@ -13,6 +13,7 @@ import { splitBySv } from '../../utils/svAlleleSplit';
 import { identifyLens } from './IdentifyTab';
 import { openAltAllelePanel } from '../altAllele/altAllelePanel';
 import { downloadTextFile } from '../../utils/analysisExport';
+import { applyImportedState, collectFrontendState } from '../../api/session';
 
 vi.mock('../../components/tracks/read-track/ReadTrackCanvas', () => ({ drawReadTrack: vi.fn() }));
 vi.mock('../../utils/analysisExport', async importOriginal => ({ ...await importOriginal<typeof import('../../utils/analysisExport')>(), downloadTextFile: vi.fn() }));
@@ -108,6 +109,36 @@ describe('lens actions belong to the current response identity', () => {
     act(() => { input('Include putative').click(); input('Include ambiguous').click(); input('Include conflicting').click(); });
     await act(async () => { (actions() as HTMLButtonElement).click(); });
     expect(splitBySv).toHaveBeenLastCalledWith(expect.objectContaining({ includePutative: false, includeAmbiguous: true, includeConflicting: true }), expect.anything());
+    expect(useBrowserStore.getState().panels.find(p => p.id === 'lens')?.insertionLens)
+      .toMatchObject({ includePutative: false, includeAmbiguous: true, includeConflicting: true });
+    const saved = JSON.parse(JSON.stringify(collectFrontendState()));
+    act(() => { root.render(null); useBrowserStore.setState({ panels: [] }); });
+    act(() => applyImportedState({ datasets: [], overlays: [], has_fasta: false, frontend: saved,
+      viewport: { chrom: 'chr1', start: 0, end: 10000 } }));
+    await act(async () => { root.render(<InsertionLensPanel />); });
+    await finish(1, 1000);
+    expect(input('Include putative').checked).toBe(false);
+    expect(input('Include conflicting').checked).toBe(true);
+    expect(input('Include ambiguous').checked).toBe(true);
+    await act(async () => { (actions() as HTMLButtonElement).click(); });
+    expect(splitBySv).toHaveBeenLastCalledWith(expect.objectContaining({ includePutative: false, includeAmbiguous: true, includeConflicting: true }), expect.anything());
+  });
+
+  it.each(['putative', 'conflicting', 'ambiguous', 'confirmed'] as const)('hatches a soft-clipped %s row without hard-clipped rows', async evidence_level => {
+    const rect = vi.fn();
+    const context = new Proxy({ rect, measureText: () => ({ width: 10 }) }, {
+      get: (obj, key) => key in obj ? obj[key as keyof typeof obj] : () => {},
+    }) as unknown as CanvasRenderingContext2D;
+    vi.mocked(HTMLCanvasElement.prototype.getContext).mockReturnValue(context);
+    useBrowserStore.setState(s => ({ panels: s.panels.map(p => p.id === 'lens' ? {
+      ...p, insertionLens: { ...target('a', 1000), includeConflicting: true, includeAmbiguous: true },
+    } : p) }));
+    await act(async () => { root.render(<InsertionLensPanel />); });
+    const data = response(1000);
+    data.carriers = [{ id: 'soft', strand: '+', kind: 'clip', partial: 'start', evidence_level,
+      ref: 1000, ref_end: 1000, len: 100, read: { id: 'soft', intervals: [[0, 50, 50]] } }];
+    await act(async () => { pending[0].resolve(new Response(JSON.stringify(data))); });
+    expect(rect.mock.calls.some(args => args[3] === 7)).toBe(evidence_level !== 'confirmed');
   });
 
   it('invalidates response actions and export identity when conflict thresholds change', async () => {

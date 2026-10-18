@@ -69,7 +69,8 @@ export interface SvAlleleMetadata {
 export type SvEvent = (
   | { t: 'D'; ref: number; len: number; q: number }
   | { t: 'I'; ref: number; len: number; q: number; seq?: string }
-  | { t: 'S'; side: 'L' | 'R'; ref: number; len: number; q: number; h?: 1 }
+  | { t: 'S'; side: 'L' | 'R'; ref: number; len: number; q: number; h?: 1;
+      anchor?: Omit<SvSegment, 't' | 'mapq' | 'query_blocks'> }
   | { t: 'SA'; chrom: string; pos: number; strand: '+' | '-'; mapq: number; nm: number; cigar_ref_len: number; supp: boolean;
       /** The segment aligns on the read's own strand (a deletion's split read; an inversion's does not). */
       same_strand?: boolean }) & SvAlleleMetadata;
@@ -79,6 +80,8 @@ export interface SvSegment {
   t?: 'SA';
   chrom: string; pos: number; cigar_ref_len: number; strand: '+' | '-'; mapq: number;
   q_start: number; q_end: number; query_length: number;
+  /** Full-query M/=/X intervals; internal insertions do not align elsewhere. */
+  query_blocks?: [number, number][];
 }
 
 /** One SV cluster across the reads in view. */

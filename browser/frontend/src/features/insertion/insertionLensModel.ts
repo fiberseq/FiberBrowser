@@ -152,6 +152,9 @@ export interface InsertionCluster {
 
 /** What the lens shows; kept on the lens panel's PanelConfig (saved with sessions). */
 export interface InsertionLensTarget {
+  includePutative?: boolean;
+  includeConflicting?: boolean;
+  includeAmbiguous?: boolean;
   genome?: string | null;
   datasetId: string;
   chrom: string;
@@ -662,6 +665,9 @@ export function targetForCluster(
     flank: previous?.flank ?? 1000,
     anchor: previous?.anchor ?? 'consensus',
     reversed: previous?.reversed ?? false,
+    ...(previous?.includePutative !== undefined ? { includePutative: previous.includePutative } : {}),
+    ...(previous?.includeConflicting !== undefined ? { includeConflicting: previous.includeConflicting } : {}),
+    ...(previous?.includeAmbiguous !== undefined ? { includeAmbiguous: previous.includeAmbiguous } : {}),
   };
 }
 

@@ -40,7 +40,8 @@ def visible_summary(payload: dict, fe: dict) -> Optional[dict]:
     support = _num(fe.get('svMinSupport'), 3)
     min_support = int(max(1, min(1_000_000, support + 0.5))) if np.isfinite(support) else 3
     clusters = [c for c in summary.get('clusters') or []
-                if int(c.get('len', 0)) >= min_len and c.get('support', 0) >= min_support]
+                if int(c.get('len', 0)) >= min_len
+                and c.get('support', 0) + (c.get('putative') or 0) >= min_support]
     clips = [c for c in summary.get('clips') or [] if c.get('n', 0) >= min_support]
     if not clusters and not clips:
         return None

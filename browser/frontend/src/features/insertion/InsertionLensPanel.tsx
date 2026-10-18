@@ -89,7 +89,7 @@ function drawInsertBand(ctx: CanvasRenderingContext2D, axis: LensAxis, width: nu
   ctx.restore();
 }
 
-/** A light hatch over the insert on the rows of hard-clipped carriers (no bases to draw). */
+/** A light hatch over hard clips and every uncertain carrier tier. */
 function drawHardRows(ctx: CanvasRenderingContext2D, axis: LensAxis, width: number, rows: LensRowMeta[]) {
   const x0 = ((axis.reversed ? axis.total - axis.flank - axis.displayLen : axis.flank) / axis.total) * width;
   const x1 = x0 + (axis.displayLen / axis.total) * width;
@@ -263,9 +263,9 @@ export function InsertionLensPanel() {
   const currentResponse = useRef(loadedResponse);
   currentResponse.current = response ? loadedResponse : null;
   const exportController = useRef<AbortController | null>(null);
-  const [includePutative, setIncludePutative] = useState(true);
-  const [includeConflicting, setIncludeConflicting] = useState(false);
-  const [includeAmbiguous, setIncludeAmbiguous] = useState(false);
+  const includePutative = target?.includePutative !== false;
+  const includeConflicting = target?.includeConflicting === true;
+  const includeAmbiguous = target?.includeAmbiguous === true;
   useEffect(() => () => { exportController.current?.abort(); }, [requestIdentity]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -413,7 +413,10 @@ export function InsertionLensPanel() {
 
   const anchor: LensAnchor = target?.anchor ?? 'consensus';
   const reversed = Boolean(target?.reversed);
-  const update = (patch: Partial<InsertionLensTarget>) => { if (target) setInsertionLensState({ ...target, ...patch }); };
+  const update = (patch: Partial<InsertionLensTarget>) => useBrowserStore.setState(s => ({
+    panels: s.panels.map(p => p.contentType === INSERTION_LENS_PANEL && p.insertionLens && !isSeek(p.insertionLens)
+      ? { ...p, insertionLens: { ...p.insertionLens, ...patch } } : p),
+  }));
 
   const layout: LensLayout | null = useMemo(
     () => (response ? layoutLens({ ...response, carriers: response.carriers.filter(c => !c.evidence_level
@@ -472,7 +475,7 @@ export function InsertionLensPanel() {
     if (ctx) {
       // drawReadTrack leaves the context scaled to CSS pixels.
       drawInsertBand(ctx, axis, width, height, hatch);
-      if (rows?.some(r => r.hard)) drawHardRows(ctx, axis, width, rows);
+      if (rows?.length) drawHardRows(ctx, axis, width, rows);
     }
   }, [width, response, enabledModTypes, activeColormap]);
 
@@ -712,9 +715,9 @@ export function InsertionLensPanel() {
               <span className="mx-1 h-4 w-px bg-slate-300 dark:bg-slate-600" />
               <AnalysisButton onClick={savePng}>Save PNG</AnalysisButton>
               <AnalysisButton onClick={downloadProfiles}>Profiles TSV</AnalysisButton>
-              <label><input type="checkbox" checked={includePutative} onChange={e => setIncludePutative(e.target.checked)} /> Include putative (hatched; uncheck for confirmed only)</label>
-              <label title="A substantial part of the supporting clip aligns elsewhere"><input type="checkbox" checked={includeConflicting} onChange={e => setIncludeConflicting(e.target.checked)} /> Include conflicting (clip aligns elsewhere)</label>
-              <label><input type="checkbox" checked={includeAmbiguous} onChange={e => setIncludeAmbiguous(e.target.checked)} /> Include ambiguous</label>
+              <label><input type="checkbox" checked={includePutative} onChange={e => update({ includePutative: e.target.checked })} /> Include putative (hatched; uncheck for confirmed only)</label>
+              <label title="A substantial part of the supporting clip aligns elsewhere"><input type="checkbox" checked={includeConflicting} onChange={e => update({ includeConflicting: e.target.checked })} /> Include conflicting (clip aligns elsewhere)</label>
+              <label><input type="checkbox" checked={includeAmbiguous} onChange={e => update({ includeAmbiguous: e.target.checked })} /> Include ambiguous</label>
               <span className="mx-1 h-4 w-px bg-slate-300 dark:bg-slate-600" />
               <AnalysisButton
                 onClick={splitReads}
