@@ -220,3 +220,14 @@ def test_decode_partitions_count_only_their_own_sampling_extents(regional_bam):
     assert sorted(r['id'] for rows, _ in parts for r in rows) == sorted(r['id'] for r in serial)
     for field in ('kept_starts', 'kept_ends', 'skipped_starts', 'skipped_ends'):
         assert sorted(v for _, sampler in parts for v in getattr(sampler, field)) == sorted(getattr(expected, field))
+
+
+def test_spooling_preserves_exact_scalar_and_array_float_tags():
+    import array
+    from services.sv_molecules import molecule_bundles
+    source = _seg([(0, 100)])
+    source.set_tag('rq', 0.123456789, value_type='f')
+    source.set_tag('vf', array.array('f', [0.123456789, 0.99999994]))
+    bundle, = molecule_bundles([source], lambda _: True)
+    assert bundle[0].get_tags(with_value_type=True) == source.get_tags(with_value_type=True)
+    assert bundle[0].query_sequence == source.query_sequence and bundle[0].cigartuples == source.cigartuples

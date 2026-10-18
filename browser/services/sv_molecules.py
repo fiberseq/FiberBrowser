@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
+from contextlib import ExitStack
 
 EVIDENCE_FIELDS = ('id', 'reference_start', 'reference_end', 'file_chrom', 'sv', 'sv_evidence',
                    'aligned_blocks', 'sv_segments', 'sequence_span', 'supplementary')
@@ -41,8 +43,9 @@ def molecule_bundles(records, eligible, *, keep=None, on_skipped=None,
     from services.background_work import checkpoint
     import pysam
     groups = {}
-    header = None
-    with tempfile.TemporaryFile(mode='w+b', prefix='fiberbrowser-molecules-') as spool:
+    with tempfile.TemporaryDirectory(prefix='fiberbrowser-molecules-') as directory, ExitStack() as handles:
+        path = os.path.join(directory, 'alignments.bam')
+        writer = None
         for i, read in enumerate(records):
             if not i & 255:
                 checkpoint()
@@ -71,20 +74,25 @@ def molecule_bundles(records, eligible, *, keep=None, on_skipped=None,
             if group['selected'] is False:
                 continue
             if isinstance(read, pysam.AlignedSegment):
-                header = read.header if header is None else header
-                data = read.to_string().encode('utf-8')
-                group['size'] += len(data)
+                if writer is None:
+                    writer = handles.enter_context(pysam.AlignmentFile(path, 'wb0', header=read.header))
+                offset = writer.tell()
+                writer.write(read)
+                end = writer.tell()
+                # Level-zero BGZF byte offsets plus buffered bytes give a
+                # conservative serialized-size count, including block overhead.
+                group['size'] += (end >> 16) + (end & 65535) - (offset >> 16) - (offset & 65535)
                 if group['size'] > raw_budget_bytes:
                     raise MoleculeBudgetError('A molecule exceeds the raw alignment budget; narrow the region')
-                offset = spool.tell()
-                spool.write(data)
-                group['records'].append((offset, len(data)))
-                del data
+                group['records'].append(offset)
             else:  # Small protocol/test records without pysam serialization.
                 group['size'] += len(getattr(read, 'query_sequence', '') or '') * 4 + 4096
                 if group['size'] > raw_budget_bytes:
                     raise MoleculeBudgetError('A molecule exceeds the raw alignment budget')
                 group['records'].append(read)
+        if writer is not None:
+            writer.close()
+            spool = handles.enter_context(pysam.AlignmentFile(path, 'rb'))
         source_order = 0
         for i, (name, group) in enumerate(groups.items()):
             if not i & 255:
@@ -102,10 +110,9 @@ def molecule_bundles(records, eligible, *, keep=None, on_skipped=None,
                 continue
             bundle = []
             for entry in group['records']:
-                if isinstance(entry, tuple):
-                    offset, size = entry
-                    spool.seek(offset)
-                    bundle.append(pysam.AlignedSegment.fromstring(spool.read(size).decode('utf-8'), header))
+                if isinstance(entry, int):
+                    spool.seek(entry)
+                    bundle.append(next(spool))
                 else:
                     bundle.append(entry)
             if bundle:

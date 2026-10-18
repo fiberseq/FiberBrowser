@@ -77,7 +77,8 @@ imports retain declared-header geometry on both strands.
 All eligible primary and supplementary records fetched in the window contribute
 to a molecule bundle. Collection checkpoints cancellation every 256 records,
 applies name sampling/selection budgets during collection, and losslessly
-spools selected alignments to temporary storage. Only one molecule's raw records
+spools selected alignments to temporary binary BAM storage, preserving exact
+tag values (SAM text can round floating-point tags). Only one molecule's raw records
 are materialized at a time. A 64 MiB serialized-record budget per molecule and a
 250,000-molecule index budget fail explicitly rather than returning partial
 evidence. Temporary storage closes on completion, cancellation and budget errors.
