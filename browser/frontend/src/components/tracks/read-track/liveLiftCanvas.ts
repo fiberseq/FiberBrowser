@@ -11,6 +11,9 @@ import { labelFits, rowLabelFontPx } from './svDrawing';
 
 type Ctx = CanvasRenderingContext2D;
 
+/** A badge with fewer molecular bp is a thin tick without a label (the maps' 1-3 bp indels would crowd every row). */
+export const BADGE_LABEL_MIN_BP = 50;
+
 export const LIVE_LIFT_COLORS = {
   connector: '#0e7490',
   badge: '#0e7490',
@@ -150,6 +153,12 @@ export function drawLiveLiftMarks(ctx: Ctx, ll: LiveLiftRow, o: LiveLiftMarkOpti
     const color = kind === 'elsewhere' ? LIVE_LIFT_COLORS.elsewhere : LIVE_LIFT_COLORS.badge;
     ctx.fillStyle = color;
     const h = Math.max(2, rowHeight);
+    if (molBp < BADGE_LABEL_MIN_BP && kind !== 'elsewhere') {
+      ctx.globalAlpha = 0.6;
+      ctx.fillRect(x - 0.5, y, 1, h);
+      ctx.globalAlpha = 1;
+      continue;
+    }
     ctx.beginPath();
     ctx.moveTo(x - 3, y);
     ctx.lineTo(x + 3, y);

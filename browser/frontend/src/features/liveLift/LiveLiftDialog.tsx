@@ -7,17 +7,8 @@ import { useEffect, useState } from 'react';
 import { useBrowserStore } from '../../stores/browserStore';
 import { addLiveLiftDataset, inspectLiftMap, type LiftMapInfo, type LiftSettings } from './api';
 import { useLiveLiftStore } from './store';
-import { liftHapLabels } from './types';
 
 const input = 'w-full rounded border border-line px-2 py-1 text-[12px] dark:border-white/15 dark:bg-white/5';
-
-/** Opens a lifted dataset's panels: one per haplotype in split mode (the default). */
-export function openLiftPanels(datasetId: string, labels: string[], mode: 'split' | 'pooled'): void {
-  const state = useBrowserStore.getState();
-  const panel = state.panels.find(p => p.contentType === 'dataset' && p.datasetId === datasetId && !p.liftHap);
-  if (!panel || mode !== 'split' || labels.length < 2) return;
-  state.splitPanelByLiftHap(panel.id, labels);
-}
 
 export function LiveLiftDialog() {
   const open = useLiveLiftStore(s => s.dialogOpen);
@@ -66,8 +57,8 @@ export function LiveLiftDialog() {
         settings, label: label.trim() || undefined,
       });
       if (!r.success || !r.dataset) { setError(r.error ?? 'The dataset could not be opened.'); return; }
+      // Split into one panel per haplotype unless Pooled (register.autoSplitNewLiftedDatasets, from its settings).
       useBrowserStore.getState().addDataset(r.dataset);
-      openLiftPanels(r.dataset.id, liftHapLabels(r.dataset.live_lift), mode);
       close();
     } catch (err) {
       setError(String((err as Error)?.message ?? err));

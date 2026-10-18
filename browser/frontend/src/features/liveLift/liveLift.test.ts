@@ -197,3 +197,20 @@ describe('haplotype panels', () => {
     expect(canProjectReadRegion(params)).toBe(true);
   });
 });
+
+describe('split by default', () => {
+  it('a lifted dataset that arrives opens one panel per haplotype once; pooled stays pooled', async () => {
+    const { autoSplitNewLiftedDatasets } = await import('./register');
+    const { useBrowserStore } = await import('../../stores/browserStore');
+    const live = { haplotypes: ['H#2', 'H#1'], haplotype_labels: { 'H#2': 'MAT', 'H#1': 'PAT' }, settings: { haplotype_mode: 'split' } };
+    useBrowserStore.setState({ datasets: [{ id: 'lift', label: 'l', path: 'x.bam', color: '#000', data_type: 'bam_livelift', live_lift: live } as never],
+      panels: [] });
+    useBrowserStore.getState().addPanel('lift');
+    const seen = new Set<string>();
+    autoSplitNewLiftedDatasets(seen);
+    expect(useBrowserStore.getState().panels.map(p => p.liftHap)).toEqual(['MAT', 'PAT']);
+    useBrowserStore.getState().poolLiftHapPanels('lift');
+    autoSplitNewLiftedDatasets(seen);
+    expect(useBrowserStore.getState().panels.map(p => p.liftHap)).toEqual([undefined]);
+  });
+});

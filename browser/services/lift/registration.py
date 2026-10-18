@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from typing import Iterable, Optional
 
-from services.lift.dataset import LiveLiftConfig, live_lift_enabled
+from services.lift.dataset import LiveLiftConfig, label_order, live_lift_enabled
 from services.lift.live_lift import LiftSettings, LiftSettingsError, open_lift_map
 
 DISABLED_MESSAGE = ("This session or request uses a live-lift dataset, which is turned off in this server. "
@@ -37,7 +37,8 @@ def inspect_map(manifest: str) -> dict:
     handle = open_lift_map(os.path.expanduser(manifest))
     return {
         "manifest": handle.path,
-        "haplotypes": [{"key": hap, "label": handle.haplotype_labels.get(hap, hap)} for hap in handle.haplotypes],
+        "haplotypes": [{"key": hap, "label": handle.haplotype_labels.get(hap, hap)}
+                       for hap in sorted(handle.haplotypes, key=lambda h: label_order(handle.haplotype_labels.get(h, h)))],
         "targets": [t["name"] for t in handle.manifest["targets"]],
         "sources": len(handle.manifest["sources"]),
         "chains": len(handle.map.chains),

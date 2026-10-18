@@ -52,6 +52,24 @@ function useLiveLiftHeader(ctx: PanelHeaderContext) {
   return { chipTexts: [text], chips, menu, wantsMenu: true, menuTitle: 'live lift' };
 }
 
+/**
+ * A lifted dataset opens split into one panel per haplotype when its settings say so (the default), however it was
+ * opened (the dialog, the API, a script). Once per dataset: a panel set the user pooled, or a session's panels (which
+ * carry their haplotypes), are left as they are.
+ */
+export function autoSplitNewLiftedDatasets(seen: Set<string>): void {
+  const state = useBrowserStore.getState();
+  for (const dataset of state.datasets) {
+    if (!isLiveLift(dataset) || seen.has(dataset.id)) continue;
+    const mine = state.panels.filter(p => p.contentType === 'dataset' && p.datasetId === dataset.id);
+    if (!mine.length) continue;   // its panel arrives in a later update
+    seen.add(dataset.id);
+    const labels = liftHapLabels(dataset.live_lift);
+    if (mine.some(p => p.liftHap) || labels.length < 2 || dataset.live_lift?.settings?.haplotype_mode === 'pooled') continue;
+    state.splitPanelByLiftHap(mine[0].id, labels);
+  }
+}
+
 let done = false;
 
 export function registerLiveLift(): void {
@@ -59,4 +77,10 @@ export function registerLiveLift(): void {
   done = true;
   registerPanelHeaderExtension(useLiveLiftHeader);
   void useLiveLiftStore.getState().check();
+  const seen = new Set<string>();
+  useBrowserStore.subscribe((s, previous) => {
+    if (s.datasets === previous.datasets && s.panels === previous.panels) return;
+    if (!s.datasets.some(d => isLiveLift(d) && !seen.has(d.id))) return;
+    queueMicrotask(() => autoSplitNewLiftedDatasets(seen));
+  });
 }

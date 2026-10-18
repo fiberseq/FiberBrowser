@@ -18,13 +18,20 @@ def live_lift_enabled() -> bool:
     return os.environ.get(FLAG_ENV, "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def label_order(label: str) -> tuple:
+    """MAT before PAT before anything else (panels, chips and menus list haplotypes this way)."""
+    return ({"MAT": 0, "PAT": 1}.get(str(label).upper(), 2), str(label))
+
+
 class LiveLiftConfig:
     """A lifted dataset's map, haplotypes and advanced settings."""
 
     def __init__(self, manifest: str, haplotypes: Iterable[str], settings: Optional[LiftSettings] = None):
         self.manifest = os.path.abspath(os.path.expanduser(manifest))
         self.settings = settings or LiftSettings()
-        self.haplotypes = self.handle.resolve_haplotypes(list(haplotypes) or self.handle.haplotypes)
+        labels = self.handle.haplotype_labels
+        self.haplotypes = sorted(self.handle.resolve_haplotypes(list(haplotypes) or self.handle.haplotypes),
+                                 key=lambda h: label_order(labels.get(h, h)))
 
     @property
     def handle(self):
