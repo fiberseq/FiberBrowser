@@ -198,7 +198,8 @@ def test_compact_metaprofile_payload_supports_coordinate_offsets():
         coordinate_offset=100,
     )
 
-    assert payload["layers"]["tf"][10:21] == [1.0] * 11
+    assert payload["layers"]["tf"][10:20] == [1.0] * 10
+    assert payload["layers"]["tf"][20] == 0.0
     assert payload["nucleosome_profile"] == []
     assert payload["subnuc_profile"] == []
 
