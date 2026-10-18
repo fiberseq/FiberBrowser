@@ -1,3 +1,4 @@
+import { normalizeSvConflictOptions, DEFAULT_SV_CONFLICT_OPTIONS, type SvConflictOptions, type SvConflictReason } from '../utils/svConflicts';
 import type { BrowserState } from './browserStore';
 import { clampMinSvLen, SV_MIN_LEN_DEFAULT, clampMinSvSupport, SV_MIN_SUPPORT_DEFAULT } from '../components/tracks/read-track/svDrawing';
 
@@ -32,11 +33,14 @@ export interface SvSplitDef {
   includeDuplicates?: boolean;
   includePutative?: boolean;
   includeAmbiguous?: boolean;
-  evidenceLevels?: Record<string, 'confirmed' | 'putative' | 'ambiguous' | null>;
-  evidenceCounts?: { confirmed: number; putative: number; ambiguous: number };
+  includeConflicting?: boolean;
+  conflictOptions?: SvConflictOptions;
+  evidenceReasons?: Record<string, SvConflictReason>;
+  evidenceLevels?: Record<string, 'confirmed' | 'putative' | 'conflicting' | 'ambiguous' | null>;
+  evidenceCounts?: { confirmed: number; putative: number; conflicting?: number; ambiguous: number };
 }
 
-export type SvCarrierEvidence = Record<string, 'confirmed' | 'putative' | 'ambiguous'>;
+export type SvCarrierEvidence = Record<string, 'confirmed' | 'putative' | 'conflicting' | 'ambiguous'>;
 
 export interface SvSlice {
   svCarrierEvidence: Record<string, SvCarrierEvidence>;
@@ -45,6 +49,8 @@ export interface SvSlice {
   svDisplayEnabled: boolean;
   svMinLen: number;
   svMinSupport: number;
+  svConflictOptions: SvConflictOptions;
+  setSvConflictOptions: (value: Partial<SvConflictOptions>) => void;
   /** The cluster selected in an SV band (its supporting reads are highlighted), by state key. */
   svSelectedCluster: Record<string, string>;
   svSplits: Record<string, SvSplitDef>;
@@ -63,6 +69,8 @@ export function createSvSlice(set: SetState, _get: () => BrowserState): SvSlice 
     svDisplayEnabled: true,
     svMinLen: SV_MIN_LEN_DEFAULT,
     svMinSupport: SV_MIN_SUPPORT_DEFAULT,
+    svConflictOptions: DEFAULT_SV_CONFLICT_OPTIONS,
+    setSvConflictOptions: value => set(state => ({ svConflictOptions: normalizeSvConflictOptions({ ...state.svConflictOptions, ...value }) })),
     svSelectedCluster: {},
     svSplits: {},
     svCarrierEvidence: {},
@@ -92,7 +100,7 @@ export function createSvSlice(set: SetState, _get: () => BrowserState): SvSlice 
       }
       const svCarrierEvidence = { ...state.svCarrierEvidence };
       if (def?.evidenceLevels) svCarrierEvidence[stateKey] = Object.fromEntries(Object.entries(def.evidenceLevels).filter(([, level]) =>
-        level === 'confirmed' || (level === 'putative' && def.includePutative) || (level === 'ambiguous' && def.includeAmbiguous))) as SvCarrierEvidence;
+        level === 'confirmed' || (level === 'putative' && def.includePutative) || (level === 'conflicting' && def.includeConflicting) || (level === 'ambiguous' && def.includeAmbiguous))) as SvCarrierEvidence;
       else delete svCarrierEvidence[stateKey];
       return { svSplits, clusterGroupLabels, svCarrierEvidence };
     }),
@@ -120,6 +128,10 @@ export function normalizeSvSplits(raw: unknown): Record<string, SvSplitDef> {
       includeDuplicates: Boolean(d.includeDuplicates),
       includePutative: Boolean(d.includePutative), // absent in old sessions means their original confirmed-only choice
       includeAmbiguous: Boolean(d.includeAmbiguous),
+      includeConflicting: Boolean(d.includeConflicting),
+      // Earlier saved policies predate conflict filtering; preserve their cohort on refresh.
+      conflictOptions: normalizeSvConflictOptions(d.conflictOptions ?? { enabled: false }),
+      evidenceReasons: d.evidenceReasons,
       evidenceLevels: d.evidenceLevels,
       evidenceCounts: d.evidenceCounts,
     };
@@ -209,5 +221,5 @@ export function normalizeSvCarrierEvidence(raw: unknown): Record<string, SvCarri
   if (!raw || typeof raw !== 'object') return {};
   return Object.fromEntries(Object.entries(raw).filter(([, levels]) => levels && typeof levels === 'object')
     .map(([key, levels]) => [key, Object.fromEntries(Object.entries(levels as Record<string, unknown>)
-      .filter(([, level]) => level === 'confirmed' || level === 'putative' || level === 'ambiguous'))])) as Record<string, SvCarrierEvidence>;
+      .filter(([, level]) => level === 'confirmed' || level === 'putative' || level === 'conflicting' || level === 'ambiguous'))])) as Record<string, SvCarrierEvidence>;
 }

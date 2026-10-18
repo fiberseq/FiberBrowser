@@ -1,3 +1,4 @@
+import { normalizeSvConflictOptions, type SvConflictOptions } from '../utils/svConflicts';
 import { validateMatchedState } from '../utils/matchedRegions';
 import { normalizeSignalFilters } from '../utils/signalFilters';
 import { normalizeSvCarrierEvidence, normalizeClusterGroupLabels, normalizeSvSplits } from './svSlice';
@@ -288,6 +289,7 @@ export interface SerializedState {
   svDisplayEnabled?: boolean;
   svMinLen?: number;
   svMinSupport?: number;
+  svConflictOptions?: SvConflictOptions;
   /** Retired (fb-n11-tracks): the SV summary is a track row; a true here restores it at its smallest height. */
   svTrackCollapsed?: boolean;
   clusterOrder: Record<string, number[]>;
@@ -843,6 +845,7 @@ export function serializeState(state: BrowserState): SerializedState {
     svDisplayEnabled: state.svDisplayEnabled,
     svMinLen: state.svMinLen,
     svMinSupport: state.svMinSupport,
+    svConflictOptions: state.svConflictOptions,
     darkMode: state.darkMode,
     peakSettings: { ...state.peakSettings },
     activeColormap: migrateColormap(state.activeColormap as any),
@@ -1090,6 +1093,7 @@ function deserializeState(
     enabledCigarTypes: s.enabledCigarTypes,
     svDisplayEnabled: s.svDisplayEnabled ?? true,
     svMinLen: clampMinSvLen(s.svMinLen ?? SV_MIN_LEN_DEFAULT),
+    svConflictOptions: normalizeSvConflictOptions(s.svConflictOptions),
     svMinSupport: clampMinSvSupport(s.svMinSupport ?? SV_MIN_SUPPORT_DEFAULT),
     // Theme and UI size are preferences, not steps: undo/redo keep the current ones.
     ...(!currentState && s.darkMode !== undefined ? { darkMode: s.darkMode } : {}),

@@ -35,11 +35,11 @@ describe('SV items in the read menu', () => {
     const entries = svClusterMenu({ cluster: 'DEL 1.5 kb, 13/21', insertion: false, splitActive: false, splitAllowed: true });
     expect(entries[0]).toEqual({ kind: 'heading', label: 'DEL 1.5 kb, 13/21' });
     expect(entries.filter((e): e is ReadMenuItem => e.kind === 'item').map(i => i.action))
-      .toEqual(['sv-split-this', 'sv-split-this-panels', 'sv-highlight-supporting', 'sv-highlight-confirmed', 'sv-highlight-putative', 'sv-highlight-ambiguous']);
+      .toEqual(['sv-split-this', 'sv-split-this-panels', 'sv-highlight-supporting', 'sv-highlight-confirmed', 'sv-highlight-putative', 'sv-highlight-conflicting', 'sv-highlight-ambiguous']);
     // An insertion's cluster: the same items (plugin packs add their own: readMenuModel.registerReadMenuContribution).
     const ins = svClusterMenu({ cluster: 'INS 9.2 kb, 3267/3600', insertion: true, splitActive: true, splitAllowed: true, bamReads: true });
     expect(ins.filter((e): e is ReadMenuItem => e.kind === 'item' && !e.action.startsWith('ext:')).map(i => i.action))
-      .toEqual(['sv-split-this', 'sv-split-this-panels', 'sv-highlight-supporting', 'sv-highlight-confirmed', 'sv-highlight-putative', 'sv-highlight-ambiguous', 'sv-split-panels', 'sv-clear-split']);
+      .toEqual(['sv-split-this', 'sv-split-this-panels', 'sv-highlight-supporting', 'sv-highlight-confirmed', 'sv-highlight-putative', 'sv-highlight-conflicting', 'sv-highlight-ambiguous', 'sv-split-panels', 'sv-clear-split']);
     expect(ins.find((e): e is ReadMenuItem => e.kind === 'item' && e.action === 'sv-split-this-panels')!.label).toBe('Split into panels by this SV');
     // Between clusters: nothing of its own (the track menu's common items follow).
     expect(svClusterMenu({ cluster: null, insertion: false, splitActive: false, splitAllowed: true, bamReads: true })).toEqual([]);
@@ -59,7 +59,7 @@ describe('SV settings', () => {
     expect(words('view.cigar-deletions')).toContain('show small indels');
     expect(words('view.sv-display')).toContain('sv track');
     expect(allSettings().filter(s => s.id.startsWith('view.sv-')).map(s => s.id).sort()).toEqual([
-      'view.sv-display', 'view.sv-min-size', 'view.sv-min-support',
+      'view.sv-conflicts', 'view.sv-display', 'view.sv-min-size', 'view.sv-min-support',
     ]);
     expect(words('view.sv-min-support')).toContain('minimum carriers');
   });

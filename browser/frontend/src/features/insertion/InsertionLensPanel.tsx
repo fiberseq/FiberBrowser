@@ -97,7 +97,7 @@ function drawHardRows(ctx: CanvasRenderingContext2D, axis: LensAxis, width: numb
   ctx.strokeStyle = HARD_HATCH;
   ctx.lineWidth = 1;
   rows.forEach((row, i) => {
-    if (!row.hard && row.evidenceLevel !== 'putative' && row.evidenceLevel !== 'ambiguous') return;
+    if (!row.hard && row.evidenceLevel !== 'putative' && row.evidenceLevel !== 'ambiguous' && row.evidenceLevel !== 'conflicting') return;
     const top = i * ROW_PITCH;
     ctx.save();
     ctx.beginPath();
@@ -252,7 +252,9 @@ export function InsertionLensPanel() {
   const [tab, setTab] = useRememberedState<Tab>(`${INSERTION_LENS_PANEL}:tab`, () => 'lens');
   const showDuplicateReads = useBrowserStore(s => Boolean(s.showDuplicateReads));
   const refreshGeneration = useBrowserStore(s => s.refreshGeneration);
-  const dupParam = { include_duplicates: String(showDuplicateReads) };
+  const conflictOptions = useBrowserStore(s => s.svConflictOptions);
+  const conflictOptionsKey = JSON.stringify(conflictOptions);
+  const dupParam = { include_duplicates: String(showDuplicateReads), conflict_options: conflictOptionsKey };
   const fetchKey = target ? lensParams(target, dupParam).toString() : '';
   const requestIdentity = JSON.stringify([fetchKey, refreshGeneration]);
   const [loadedResponse, setLoadedResponse] = useState<{ identity: string; data: LensResponse } | null>(null);
@@ -262,6 +264,7 @@ export function InsertionLensPanel() {
   currentResponse.current = response ? loadedResponse : null;
   const exportController = useRef<AbortController | null>(null);
   const [includePutative, setIncludePutative] = useState(true);
+  const [includeConflicting, setIncludeConflicting] = useState(false);
   const [includeAmbiguous, setIncludeAmbiguous] = useState(false);
   useEffect(() => () => { exportController.current?.abort(); }, [requestIdentity]);
   const [loading, setLoading] = useState(false);
@@ -319,6 +322,7 @@ export function InsertionLensPanel() {
     let cancelled = false;
     const controller = new AbortController();
     const params = new URLSearchParams({
+      conflict_options: conflictOptionsKey,
       chrom: state.chrom, start: String(Math.max(0, Math.round(state.pos - 300))), end: String(Math.round(state.pos + 300)),
       ...(state.genome ? { panel_genome: state.genome } : {}), dataset_id: state.datasetId, min_len: '50',
     });
@@ -338,7 +342,7 @@ export function InsertionLensPanel() {
       })
       .catch(err => { if (!cancelled) { setLoading(false); setError(String(err?.message ?? err)); } });
     return () => { cancelled = true; controller.abort(); };
-  }, [state]);
+  }, [state, conflictOptionsKey]);
 
   // The lens data. Anchor and reverse are view options: no refetch. Duplicates
   // follow the panels' setting, as "Split by this SV" does (same reads).
@@ -371,6 +375,7 @@ export function InsertionLensPanel() {
     if (!listDatasetId) { setClusterError('Open a BAM or choose one in the Library: insertions live in the alignments.'); return; }
     const span = viewEnd - viewStart;
     const params = new URLSearchParams({
+      conflict_options: conflictOptionsKey,
       chrom: viewChrom, start: String(Math.max(0, Math.round(viewStart))), end: String(Math.round(viewEnd)),
       ...(viewGenome ? { panel_genome: viewGenome } : {}), dataset_id: listDatasetId, min_len: span > 200_000 ? '500' : '50',
     });
@@ -388,7 +393,7 @@ export function InsertionLensPanel() {
       { keep: res => Boolean(res?.success), ttlMs: fresh ? -1 : undefined })
       .then(res => { if (!signal?.aborted) show(res); })
       .catch(err => { if (!signal?.aborted && !isAbortError(err)) setClusterError(String(err?.message ?? err)); });
-  }, [listDatasetId, viewGenome, viewChrom, viewStart, viewEnd, refreshGeneration]);
+  }, [listDatasetId, viewGenome, viewChrom, viewStart, viewEnd, refreshGeneration, conflictOptionsKey]);
 
   const readsReady = useViewReadsReady();
   // Refresh asks again for this view (through the effect, so a view left meanwhile aborts it too).
@@ -412,8 +417,8 @@ export function InsertionLensPanel() {
 
   const layout: LensLayout | null = useMemo(
     () => (response ? layoutLens({ ...response, carriers: response.carriers.filter(c => !c.evidence_level
-      || c.evidence_level === 'confirmed' || (includePutative && c.evidence_level === 'putative') || (includeAmbiguous && c.evidence_level === 'ambiguous')) }, anchor, reversed) : null),
-    [response, anchor, reversed, includePutative, includeAmbiguous],
+      || c.evidence_level === 'confirmed' || (includePutative && c.evidence_level === 'putative') || (includeConflicting && c.evidence_level === 'conflicting') || (includeAmbiguous && c.evidence_level === 'ambiguous')) }, anchor, reversed) : null),
+    [response, anchor, reversed, includePutative, includeAmbiguous, includeConflicting],
   );
   const markColor = useMemo(() => {
     const first = response?.carriers[0]?.read;
@@ -423,7 +428,7 @@ export function InsertionLensPanel() {
   }, [response]);
   const profiles = useMemo(() => {
     if (!layout) return [];
-    const groups = [{ label: `Carriers (${layout.carriers.length}; ${layout.carrierRows.filter(r => !r.evidenceLevel || r.evidenceLevel === 'confirmed').length} confirmed, ${layout.carrierRows.filter(r => r.evidenceLevel === 'putative').length} putative, ${layout.carrierRows.filter(r => r.evidenceLevel === 'ambiguous').length} ambiguous)`, profile: computeLensProfile(layout.carriers, layout.axis.total) }];
+    const groups = [{ label: `Carriers (${layout.carriers.length}; ${layout.carrierRows.filter(r => !r.evidenceLevel || r.evidenceLevel === 'confirmed').length} confirmed, ${layout.carrierRows.filter(r => r.evidenceLevel === 'putative').length} putative, ${layout.carrierRows.filter(r => r.evidenceLevel === 'conflicting').length} conflicting, ${layout.carrierRows.filter(r => r.evidenceLevel === 'ambiguous').length} ambiguous)`, profile: computeLensProfile(layout.carriers, layout.axis.total) }];
     if (layout.reference.length) {
       groups.push({ label: `Reference (${layout.reference.length})`, profile: computeLensProfile(layout.reference, layout.axis.total) });
     }
@@ -514,7 +519,7 @@ export function InsertionLensPanel() {
     if (!response?.sv || !target || !splitView?.stateKey || !splitView.inView) return;
     try {
       const def = await splitBySv(
-        { stateKey: splitView.stateKey, datasetId: target.datasetId, chrom: viewChrom, viewStart, viewEnd, includePutative, includeAmbiguous },
+        { stateKey: splitView.stateKey, datasetId: target.datasetId, chrom: viewChrom, viewStart, viewEnd, includePutative, includeAmbiguous, includeConflicting },
         { t: 'I', ref: response.sv.ref, len: response.sv.len },
       );
       say(`Grouped by ${def.label}: ${def.counts[0].toLocaleString()} carriers, ${def.counts[1].toLocaleString()} reference, ${def.counts[2].toLocaleString()} not informative (all reads in view)`);
@@ -544,7 +549,7 @@ export function InsertionLensPanel() {
       if (controller.signal.aborted || currentResponse.current !== snapshot) return;
       if (!res.success) throw new Error(res.error || 'Could not fetch the inserts');
       downloadTextFile(insertsFasta(res.carriers.filter(c => !c.evidence_level || c.evidence_level === 'confirmed'
-        || (includePutative && c.evidence_level === 'putative') || (includeAmbiguous && c.evidence_level === 'ambiguous')), response, reversed), `${fileStem}_inserts.fa`, 'text/x-fasta');
+        || (includePutative && c.evidence_level === 'putative') || (includeConflicting && c.evidence_level === 'conflicting') || (includeAmbiguous && c.evidence_level === 'ambiguous')), response, reversed), `${fileStem}_inserts.fa`, 'text/x-fasta');
     } catch (err) {
       if (controller.signal.aborted || currentResponse.current !== snapshot) return;
       say(`Could not fetch the inserts: ${String((err as Error)?.message ?? err)}`);
@@ -603,7 +608,7 @@ export function InsertionLensPanel() {
           title="Sequence or query-collinear junction evidence; denominator includes confirmed and reference molecules">
           {formatShare(cl.carriers, informative, 'informative', { pct: true })}
         </LensField>
-        <LensField label="Other evidence">{cl.putative ?? 0} putative · {cl.ambiguous ?? 0} ambiguous</LensField>
+        <LensField label="Other evidence">{cl.putative ?? 0} putative · <span title="Supporting clip aligns elsewhere; excluded by default">{cl.conflicting ?? 0} conflicting</span> · {cl.ambiguous ?? 0} ambiguous</LensField>
         {clipped > 0 && (
           <LensField label="Alignment evidence" testId="insertion-lens-clipped"
             title="Clips alone are putative or ambiguous; hard clips contain no inserted sequence">
@@ -621,7 +626,7 @@ export function InsertionLensPanel() {
         {strands && <LensField label="Strands (drawn)" title="Strands of the carriers drawn here">{strands['+']} + · {strands['-']} −</LensField>}
         {response.truncated.carriers > 0 && (
           <LensField label="Drawn" testId="insertion-lens-drawn" title="The lens draws a sample of the carriers; the counts above are of all of them">
-            {formatShare(layout?.carriers.length ?? 0, cl.carriers + (includePutative ? cl.putative ?? 0 : 0) + (includeAmbiguous ? cl.ambiguous ?? 0 : 0), includePutative ? 'confirmed + putative' : 'confirmed')}
+            {formatShare(layout?.carriers.length ?? 0, cl.carriers + (includePutative ? cl.putative ?? 0 : 0) + (includeAmbiguous ? cl.ambiguous ?? 0 : 0) + (includeConflicting ? cl.conflicting ?? 0 : 0), ['confirmed', ...(includePutative ? ['putative'] : []), ...(includeConflicting ? ['conflicting'] : []), ...(includeAmbiguous ? ['ambiguous'] : [])].join(' + '))}
           </LensField>
         )}
       </dl>
@@ -708,6 +713,7 @@ export function InsertionLensPanel() {
               <AnalysisButton onClick={savePng}>Save PNG</AnalysisButton>
               <AnalysisButton onClick={downloadProfiles}>Profiles TSV</AnalysisButton>
               <label><input type="checkbox" checked={includePutative} onChange={e => setIncludePutative(e.target.checked)} /> Include putative (hatched; uncheck for confirmed only)</label>
+              <label title="A substantial part of the supporting clip aligns elsewhere"><input type="checkbox" checked={includeConflicting} onChange={e => setIncludeConflicting(e.target.checked)} /> Include conflicting (clip aligns elsewhere)</label>
               <label><input type="checkbox" checked={includeAmbiguous} onChange={e => setIncludeAmbiguous(e.target.checked)} /> Include ambiguous</label>
               <span className="mx-1 h-4 w-px bg-slate-300 dark:bg-slate-600" />
               <AnalysisButton
@@ -795,7 +801,7 @@ export function InsertionLensPanel() {
                     <td>{viewChrom}:{c.ref.toLocaleString()}</td>
                     <td>{c.len.toLocaleString()} bp</td>
                     <td>
-                      {(c.confirmed ?? c.carriers).toLocaleString()} confirmed · {c.putative ?? 0} putative · {c.ambiguous ?? 0} ambiguous
+                      {(c.confirmed ?? c.carriers).toLocaleString()} confirmed · {c.putative ?? 0} putative · <span title="Supporting clip aligns elsewhere; excluded by default">{c.conflicting ?? 0} conflicting</span> · {c.ambiguous ?? 0} ambiguous
                       {(c.clip_support ?? 0) > 0 && <span className="text-ink-muted"> ({c.clip_support!.toLocaleString()} clipped)</span>}
                     </td>
                     <td className="text-right py-0.5">

@@ -1,3 +1,4 @@
+import { normalizeSvConflictOptions, type SvConflictOptions, type SvConflictReason } from './svConflicts';
 /**
  * "Split by this SV" (fb-n9-sv): group a panel's reads in view by one SV's
  * allele (0 carriers, 1 reference, 2 not informative) through the existing
@@ -20,8 +21,9 @@ export interface SvSplitResponse {
   counts: [number, number, number];
   label: string;
   margin: number;
-  evidence_levels?: Record<string, 'confirmed' | 'putative' | 'ambiguous' | null>;
-  evidence_counts?: { confirmed: number; putative: number; ambiguous: number };
+  evidence_levels?: Record<string, 'confirmed' | 'putative' | 'conflicting' | 'ambiguous' | null>;
+  evidence_reasons?: Record<string, SvConflictReason>;
+  evidence_counts?: { confirmed: number; putative: number; conflicting?: number; ambiguous: number };
 }
 
 export interface SvSplitTarget {
@@ -32,6 +34,8 @@ export interface SvSplitTarget {
   viewEnd: number;
   includePutative?: boolean;
   includeAmbiguous?: boolean;
+  includeConflicting?: boolean;
+  conflictOptions?: SvConflictOptions;
 }
 
 export function requestSvSplit(target: SvSplitTarget, sv: SvSplitAllele, margin = SV_SPAN_MARGIN, signal?: AbortSignal, includeDuplicates = Boolean(useBrowserStore.getState().showDuplicateReads)): Promise<SvSplitResponse> {
@@ -46,6 +50,8 @@ export function requestSvSplit(target: SvSplitTarget, sv: SvSplitAllele, margin 
       include_duplicates: includeDuplicates,
       include_putative: target.includePutative ?? true,
       include_ambiguous: Boolean(target.includeAmbiguous),
+      include_conflicting: Boolean(target.includeConflicting),
+      conflict_options: target.conflictOptions ?? useBrowserStore.getState().svConflictOptions,
     }),
     signal,
   });
@@ -62,6 +68,9 @@ export function svSplitDef(target: SvSplitTarget, sv: SvSplitAllele, response: S
     includeDuplicates,
     includePutative: target.includePutative ?? true,
     includeAmbiguous: Boolean(target.includeAmbiguous),
+    includeConflicting: Boolean(target.includeConflicting),
+    conflictOptions: normalizeSvConflictOptions(target.conflictOptions ?? useBrowserStore.getState().svConflictOptions),
+    evidenceReasons: response.evidence_reasons,
     evidenceCounts: response.evidence_counts,
     evidenceLevels: response.evidence_levels,
   };
@@ -87,9 +96,10 @@ function evidenceGroupLabels(def: SvSplitDef): Record<number, string> {
   if (!def.evidenceCounts) return SV_GROUP_LABELS;
   const counts = def.evidenceCounts;
   const excluded = [!def.includePutative ? `${counts.putative} putative` : null,
+    !def.includeConflicting ? `${counts.conflicting ?? 0} conflicting (supporting clip aligns elsewhere)` : null,
     !def.includeAmbiguous ? `${counts.ambiguous} ambiguous` : null].filter(Boolean);
   return { ...SV_GROUP_LABELS,
-    0: `Confirmed (${counts.confirmed})${def.includePutative ? ` + putative (${counts.putative})` : ''}${def.includeAmbiguous ? ` + ambiguous (${counts.ambiguous})` : ''}`,
+    0: `Confirmed (${counts.confirmed})${def.includePutative ? ` + putative (${counts.putative})` : ''}${def.includeConflicting ? ` + conflicting (${counts.conflicting ?? 0}; clip aligns elsewhere)` : ''}${def.includeAmbiguous ? ` + ambiguous (${counts.ambiguous})` : ''}`,
     2: `Not informative${excluded.length ? ` (${excluded.join(', ')})` : ''}`,
   };
 }
@@ -97,6 +107,7 @@ function evidenceGroupLabels(def: SvSplitDef): Record<number, string> {
 const initialRequests = new Map<string, symbol>();
 
 export async function splitBySv(target: SvSplitTarget, sv: SvSplitAllele): Promise<SvSplitDef> {
+  target = { ...target, conflictOptions: normalizeSvConflictOptions(target.conflictOptions ?? useBrowserStore.getState().svConflictOptions) };
   const request = Symbol();
   initialRequests.set(target.stateKey, request);
   let response: SvSplitResponse;
@@ -129,7 +140,7 @@ export async function splitIntoPanelsBySv(target: SvSplitTarget, sv: SvSplitAlle
  */
 export async function refreshSvSplit(target: SvSplitTarget, def: SvSplitDef, signal?: AbortSignal): Promise<void> {
   const includeDuplicates = Boolean(useBrowserStore.getState().showDuplicateReads);
-  const response = await requestSvSplit({ ...target, includePutative: Boolean(def.includePutative), includeAmbiguous: Boolean(def.includeAmbiguous) }, def, def.margin, signal);
+  const response = await requestSvSplit({ ...target, includePutative: Boolean(def.includePutative), includeAmbiguous: Boolean(def.includeAmbiguous), includeConflicting: Boolean(def.includeConflicting), conflictOptions: def.conflictOptions ?? normalizeSvConflictOptions({ enabled: false }) }, def, def.margin, signal);
   const store = useBrowserStore.getState();
   if (signal?.aborted || store.svSplits[target.stateKey] !== def
       || Boolean(store.showDuplicateReads) !== includeDuplicates) return;
@@ -143,6 +154,7 @@ export async function refreshSvSplit(target: SvSplitTarget, def: SvSplitDef, sig
     includeDuplicates,
     evidenceCounts: response.evidence_counts,
     evidenceLevels: response.evidence_levels,
+    evidenceReasons: response.evidence_reasons,
   };
   store.setSvSplit(target.stateKey, updated, evidenceGroupLabels(updated));
 }

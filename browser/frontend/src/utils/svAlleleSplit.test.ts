@@ -197,6 +197,26 @@ describe('current split counts and historical assignments', () => {
     }
   });
 
+  it('preserves saved conflict choices and thresholds, including policies predating this filter', async () => {
+    const fetchMock = mockSplit({ c: 0 });
+    useBrowserStore.getState().setSvConflictOptions({ max_distance: 5000 });
+    const fresh = await splitBySv({ ...TARGET, includeConflicting: true }, SV);
+    expect(fresh).toMatchObject({ includePutative: true, includeConflicting: true, conflictOptions: { enabled: true, max_distance: 5000 } });
+    useBrowserStore.getState().setSvConflictOptions({ max_distance: 9999 });
+    const saved = normalizeSvSplits({ ds: fresh }).ds;
+    useBrowserStore.getState().setSvSplit('ds', saved);
+    await refreshSvSplit(TARGET, saved);
+    expect(JSON.parse(String(fetchMock.mock.lastCall?.[1]?.body))).toMatchObject({
+      include_conflicting: true, conflict_options: { max_distance: 5000 },
+    });
+    const legacy = normalizeSvSplits({ ds: { ...fresh, conflictOptions: undefined, includeConflicting: undefined } }).ds;
+    useBrowserStore.getState().setSvSplit('ds', legacy);
+    await refreshSvSplit(TARGET, legacy);
+    expect(JSON.parse(String(fetchMock.mock.lastCall?.[1]?.body))).toMatchObject({
+      include_putative: true, include_conflicting: false, conflict_options: { enabled: false },
+    });
+  });
+
   it('retries an initial split when its duplicate setting changes while waiting', async () => {
     let finish!: (response: Response) => void;
     const fetchMock = vi.fn().mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }))

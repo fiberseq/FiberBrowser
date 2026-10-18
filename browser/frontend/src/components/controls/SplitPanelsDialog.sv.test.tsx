@@ -16,7 +16,7 @@ describe('split dialog evidence counts', () => {
     const value = { ...def, includePutative, counts: (includePutative ? [15, 8, 2] : [10, 8, 7]) as [number, number, number],
       evidenceCounts: { confirmed: 10, putative: 5, ambiguous: 2 } };
     expect(text(value)).toContain('Confirmed: 10 of 18 informative');
-    expect(text(value)).toContain('5 putative · 2 ambiguous');
+    expect(text(value)).toContain('5 putative · 0 conflicting · 2 ambiguous');
     expect(text(value)).toContain('all 25 reads in view');
   });
   it('preserves legacy session counts when evidence levels are unavailable', () => {

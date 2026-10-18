@@ -1,3 +1,4 @@
+import type { SvConflictReason } from '../../utils/svConflicts';
 /**
  * Insertion lens: pure view logic (no React, no canvas).
  *
@@ -36,7 +37,8 @@ export interface LensStraddle { layer: string; start: number; end: number; size:
 export type LensPartial = 'start' | 'end';
 
 export interface LensEntry {
-  evidence_level?: 'confirmed' | 'putative' | 'ambiguous';
+  evidence_reason?: SvConflictReason;
+  evidence_level?: 'confirmed' | 'putative' | 'conflicting' | 'ambiguous';
   id: string;
   strand: '+' | '-';
   /** Carriers: a CIGAR insertion, or a read clipped at the breakpoint. */
@@ -73,7 +75,7 @@ export interface LensResponse {
     ref: number; len: number; len_lo: number; len_hi: number;
     /** Every carrier: CIGAR + clipped. */
     carriers: number;
-    confirmed?: number; putative?: number; ambiguous?: number; evidence_total?: number;
+    confirmed?: number; putative?: number; conflicting?: number; ambiguous?: number; evidence_total?: number;
     ref_len?: number; alt_len?: number;
     cigar?: number;
     /** Clipped at the breakpoint (hard-clipped included). */
@@ -135,7 +137,7 @@ export function consensusMethod(response: Pick<LensResponse, 'consensus' | 'run_
 
 /** An insertion in view, as the SV summary clusters it (/api/insertions/clusters). */
 export interface InsertionCluster {
-  confirmed?: number; putative?: number; ambiguous?: number;
+  confirmed?: number; putative?: number; conflicting?: number; ambiguous?: number;
   uncertainty?: [number, number];
   id?: string;
   ref: number;
@@ -173,7 +175,8 @@ export interface LensAxis {
 }
 
 export interface LensRowMeta {
-  evidenceLevel?: 'confirmed' | 'putative' | 'ambiguous';
+  evidenceReason?: SvConflictReason;
+  evidenceLevel?: 'confirmed' | 'putative' | 'conflicting' | 'ambiguous';
   id: string; strand: '+' | '-'; len: number; identity?: number; carrier: boolean;
   partial?: LensPartial; hard?: boolean; clipLen?: number; sa?: boolean;
 }
@@ -415,7 +418,7 @@ export function layoutLens(response: LensResponse, anchorWanted: LensAnchor, rev
   const flank = response.flank;
   const axis: LensAxis = { flank, displayLen, total: 2 * flank + displayLen, reversed };
   const row = (e: LensEntry, carrier: boolean): LensRowMeta => ({
-    evidenceLevel: e.evidence_level,
+    evidenceLevel: e.evidence_level, evidenceReason: e.evidence_reason,
     id: e.id, strand: e.strand, len: e.len, identity: e.identity, carrier,
     ...(e.partial ? { partial: e.partial, clipLen: e.clip_len, sa: Boolean(e.sa) } : {}),
     ...(e.hard ? { hard: true } : {}),
@@ -432,6 +435,7 @@ export function layoutLens(response: LensResponse, anchorWanted: LensAnchor, rev
 
 /** What a carrier row is, in words (its tooltip). */
 export function describeCarrier(row: LensRowMeta): string {
+  if (row.evidenceReason) return `conflicting · ${row.evidenceReason.message}`;
   const size = (n: number) => `${n.toLocaleString()} bp`;
   if (!row.partial) {
     return `insert ${size(row.len)}${row.identity !== undefined ? ` · ${(row.identity * 100).toFixed(1)}% identity to consensus` : ''}`;

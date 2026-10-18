@@ -102,11 +102,23 @@ describe('lens actions belong to the current response identity', () => {
     const input = (label: string) => [...container.querySelectorAll('label')].find(l => l.textContent?.includes(label))!.querySelector('input')!;
     expect(input('Include putative').checked).toBe(true);
     expect(input('Include ambiguous').checked).toBe(false);
+    expect(input('Include conflicting').checked).toBe(false);
     await act(async () => { (actions() as HTMLButtonElement).click(); });
     expect(splitBySv).toHaveBeenLastCalledWith(expect.objectContaining({ includePutative: true, includeAmbiguous: false }), expect.anything());
-    act(() => { input('Include putative').click(); input('Include ambiguous').click(); });
+    act(() => { input('Include putative').click(); input('Include ambiguous').click(); input('Include conflicting').click(); });
     await act(async () => { (actions() as HTMLButtonElement).click(); });
-    expect(splitBySv).toHaveBeenLastCalledWith(expect.objectContaining({ includePutative: false, includeAmbiguous: true }), expect.anything());
+    expect(splitBySv).toHaveBeenLastCalledWith(expect.objectContaining({ includePutative: false, includeAmbiguous: true, includeConflicting: true }), expect.anything());
+  });
+
+  it('invalidates response actions and export identity when conflict thresholds change', async () => {
+    await act(async () => { root.render(<InsertionLensPanel />); });
+    await finish(0, 1000);
+    expect(actions()).not.toBeNull();
+    await act(async () => { useBrowserStore.getState().setSvConflictOptions({ max_distance: 5000 }); });
+    expect(actions()).toBeNull();
+    expect(JSON.parse(pending[1].url.searchParams.get('conflict_options')!)).toMatchObject({ max_distance: 5000 });
+    await finish(1, 1000);
+    expect(actions()).not.toBeNull();
   });
 
   it('ignores late responses, including returning to the same dataset and target', async () => {

@@ -299,6 +299,8 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
   const pinnedKey = (pinnedReadIds ?? []).join(',');
 
   // Watch refreshGeneration so triggerRefresh() (crash recovery, undo/redo) re-fetches reads
+  const conflictOptions = useBrowserStore(s => s.svConflictOptions);
+  const conflictOptionsKey = JSON.stringify(conflictOptions);
   const signalFilters = useBrowserStore(s => s.signalFilters);
   const refreshGeneration = useBrowserStore(s => s.refreshGeneration);
   useEffect(() => {
@@ -564,6 +566,7 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
             sample_seed: sampleSeed,
             read_end_footprints: readEndFootprints,
             min_sv_len: String(minSvLen),
+            sv_conflict_options: conflictOptionsKey,
             include_sv_summary: String(svSummaryEnabled),
           });
           fetchParams.set('refresh_generation', String(refreshGeneration));
@@ -816,7 +819,7 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
 
     fetchReads();
     return () => { controller.abort(); };
-  }, [chrom, start, end, datasetId, needsMethylation, needsLayers, requestedLayersKey, needsLayerQualities, batchNeedsMethylation, batchRequestedLayersKey, batchNeedsLayerQualities, useServerMetaprofile, serverMetaprofileLayersKey, needsCigar, fillSmallGaps, fillGapSize, hideTerminalGaps, terminalGapThreshold, legacyLayerInference, legacyNucMinSize, showDuplicateReads, isBAM, minFpQuality, minFootprints, spanningOnly, readDisplayMode, downsampleCount, allReadsDisplayCap, backgroundReadCap, height, readRowHeight, readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth, exportMatchedReadFetchCount, hasPushedReads, jupyterPushedReads, requestFilterIdsParam, requestFilterKey, rootClusterFocusReadIdsKey, clusteredReadIdsKey, linkedSessionId, linkedRegion, linkedSortBy, panelLabel, refreshGeneration, maxRegionForReads, sampleSeed, batchDatasetIds, batchSourceIdentity, batchNeedsSvSummary, readStrand, showsMainView, readEndFootprints, pinnedKey, minSvLen, svSummaryEnabled, loadAllReads]);
+  }, [chrom, start, end, datasetId, needsMethylation, needsLayers, requestedLayersKey, needsLayerQualities, batchNeedsMethylation, batchRequestedLayersKey, batchNeedsLayerQualities, useServerMetaprofile, serverMetaprofileLayersKey, needsCigar, fillSmallGaps, fillGapSize, hideTerminalGaps, terminalGapThreshold, legacyLayerInference, legacyNucMinSize, showDuplicateReads, isBAM, minFpQuality, minFootprints, spanningOnly, readDisplayMode, downsampleCount, allReadsDisplayCap, backgroundReadCap, height, readRowHeight, readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth, exportMatchedReadFetchCount, hasPushedReads, jupyterPushedReads, requestFilterIdsParam, requestFilterKey, rootClusterFocusReadIdsKey, clusteredReadIdsKey, linkedSessionId, linkedRegion, linkedSortBy, panelLabel, refreshGeneration, maxRegionForReads, sampleSeed, batchDatasetIds, batchSourceIdentity, batchNeedsSvSummary, readStrand, showsMainView, readEndFootprints, pinnedKey, minSvLen, svSummaryEnabled, conflictOptionsKey, loadAllReads]);
 
   // Fetch coverage data when zoomed out past maxRegionForReads
   useEffect(() => {

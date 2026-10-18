@@ -1,3 +1,4 @@
+import { normalizeSvConflictOptions } from '../utils/svConflicts';
 import { validateMatchedState } from '../utils/matchedRegions';
 import { normalizeFeatureRefs } from '../stores/featureStore';
 import { useSplitPanelStore } from '../stores/splitPanelStore';
@@ -45,7 +46,7 @@ export const SESSION_PRE_VIEWPORT_KEYS = [
   'mergeMinFraction', 'mergeMaxSimilarity', 'mergeStrategy', 'mergeThresholds',
   'enabledModTypes', 'enabledMetaProfiles', 'cachedLayerTypes', 'legacyLayerInference', 'legacyNucMinSize', 'clickTargetLayer', 'footprintAnalysisLayer',
   'fillSmallGaps', 'fillGapSize', 'hideTerminalGaps', 'terminalGapThreshold', 'hideShortEndFootprints', 'minFpQuality', 'minFootprints', 'minFootprintsAuto', 'showDuplicateReads', 'signalFilters',
-  'enabledCigarTypes', 'svDisplayEnabled', 'svMinLen', 'svMinSupport', 'isReversed', 'darkMode', 'peakSettings', 'activeColormap', 'fillReadHeight', 'showHiddenTrackStrip',
+  'enabledCigarTypes', 'svDisplayEnabled', 'svMinLen', 'svMinSupport', 'svConflictOptions', 'isReversed', 'darkMode', 'peakSettings', 'activeColormap', 'fillReadHeight', 'showHiddenTrackStrip',
   'readSeparatorMode', 'readSeparatorMinHeight', 'readSeparatorWidth',
   'showReadTooltip', 'showCoverageHistogram', 'maxRegionForReads', 'motifThreshold', 'readRowHeight',
   'readScrollOffsets', 'showGenomeOverview', 'publicMode',
@@ -429,6 +430,7 @@ export function applyImportedState(result: Record<string, unknown>): void {
     // SV display (fb-n9-sv): a session saved before it gets its defaults, not the open session's.
     if (!('svDisplayEnabled' in batch)) batch.svDisplayEnabled = true;
     batch.svMinLen = clampMinSvLen(batch.svMinLen ?? SV_MIN_LEN_DEFAULT);
+    batch.svConflictOptions = normalizeSvConflictOptions(batch.svConflictOptions);
     batch.svMinSupport = clampMinSvSupport(batch.svMinSupport ?? SV_MIN_SUPPORT_DEFAULT);
     if ('clusterFeatureRules' in batch) {
       batch.clusterFeatureRules = normalizeClusterFeatureRules(batch.clusterFeatureRules);

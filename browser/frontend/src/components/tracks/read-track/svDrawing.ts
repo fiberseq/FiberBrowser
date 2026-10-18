@@ -1,3 +1,4 @@
+import { clipConflict, type SvConflictOptions } from '../../../utils/svConflicts';
 /**
  * Structural-variant display (fb-n9-sv): the pure decisions behind drawing
  * size-aware indels on reads and the SV summary band, so they are testable
@@ -157,12 +158,12 @@ export function eventsMatch(t: 'D' | 'I', ref: number, len: number, cRef: number
  */
 export function svEvidenceLevel(read: Pick<CompactRead, 'sv' | 'sv_evidence' | 'sv_segments' | 'sequence_span' | 'sv_alignments'>,
   cluster: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty'>, chrom?: string,
-  targets: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty'>[] = []): 'confirmed' | 'putative' | 'ambiguous' | null {
+  targets: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty'>[] = [], conflictOptions?: SvConflictOptions): 'confirmed' | 'putative' | 'conflicting' | 'ambiguous' | null {
   if (read.sv_alignments?.length) {
     const levels = read.sv_alignments.map(part => svEvidenceLevel({ ...part,
-      sv_segments: read.sv_segments ?? part.sv_segments }, cluster, chrom, targets));
+      sv_segments: read.sv_segments ?? part.sv_segments }, cluster, chrom, targets, conflictOptions));
     return levels.includes('confirmed') ? 'confirmed' : levels.includes('putative') ? 'putative'
-      : levels.includes('ambiguous') ? 'ambiguous' : null;
+      : levels.includes('conflicting') ? 'conflicting' : levels.includes('ambiguous') ? 'ambiguous' : null;
   }
   const events = read.sv_evidence ?? read.sv ?? [];
   for (const ev of events) {
@@ -207,6 +208,7 @@ export function svEvidenceLevel(read: Pick<CompactRead, 'sv' | 'sv_evidence' | '
     Math.max(lo - a.ref!, a.ref! - hi, 0) - Math.max(lo - b.ref!, b.ref! - hi, 0));
   const clip = matching[0];
   if (!clip) return null;
+  if (clipConflict(read, clip, lo, hi + (cluster.t === 'D' ? cluster.len : 0), chrom, conflictOptions)) return 'conflicting';
   return targets.some(t => (t.t !== cluster.t || t.ref !== cluster.ref || t.len !== cluster.len)
     && clippedAt(clip, t)) ? 'ambiguous' : 'putative';
 }
@@ -219,14 +221,14 @@ export function readCarriesCluster(read: Pick<CompactRead, 'sv' | 'sv_evidence' 
 
 /** Ids of the reads (among `reads`) that carry a cluster's event. */
 export function supportingReadIds(reads: CompactRead[], cluster: SvCluster, chrom?: string,
-  level: 'carriers' | 'confirmed' | 'putative' | 'ambiguous' = 'carriers', targets: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty'>[] = []): string[] {
-  const levels = new Map<string, 'confirmed' | 'putative' | 'ambiguous'>();
-  const rank = { confirmed: 0, putative: 1, ambiguous: 2 };
+  level: 'carriers' | 'confirmed' | 'putative' | 'conflicting' | 'ambiguous' = 'carriers', targets: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty'>[] = [], conflictOptions?: SvConflictOptions): string[] {
+  const levels = new Map<string, 'confirmed' | 'putative' | 'conflicting' | 'ambiguous'>();
+  const rank = { confirmed: 0, putative: 1, conflicting: 2, ambiguous: 3 };
   const bundles = new Map<string, CompactRead[]>();
   for (const read of reads) bundles.set(read.id, [...(bundles.get(read.id) ?? []), read]);
   for (const read of reads) {
     const segments = bundles.get(read.id)!.flatMap(r => r.sv_segments ?? []);
-    const evidence = svEvidenceLevel({ ...read, sv_segments: segments }, cluster, chrom, targets);
+    const evidence = svEvidenceLevel({ ...read, sv_segments: segments }, cluster, chrom, targets, conflictOptions);
     if (evidence && (!levels.has(read.id) || rank[evidence] < rank[levels.get(read.id)!])) levels.set(read.id, evidence);
   }
   return [...levels].filter(([, value]) => level === 'carriers' ? value === 'confirmed' || value === 'putative' : value === level).map(([id]) => id);
@@ -392,7 +394,7 @@ export function describeSvCluster(c: SvCluster, summary: SvSummary | null, reads
   // the insertion lens always count every read in view.
   const scope = summary?.scope === 'loaded' ? 'loaded reads' : 'reads in view';
   const support = `${c.support.toLocaleString()} confirmed of ${c.informative.toLocaleString()} informative ${scope}${extra ? ` (${extra})` : ''}`
-    + ` · ${c.putative ?? 0} putative · ${c.ambiguous ?? 0} ambiguous`
+    + ` · ${c.putative ?? 0} putative · ${c.conflicting ?? 0} conflicting (supporting clip aligns elsewhere) · ${c.ambiguous ?? 0} ambiguous`
     + (summary?.scope === 'loaded' ? ' · the split and the lens count every read in view' : '');
   const op = c.t === 'D' ? 'D' : 'I';
   const counts = new Map<number, number>();

@@ -74,7 +74,7 @@ export type SvEvent = (
       /** The segment aligns on the read's own strand (a deletion's split read; an inversion's does not). */
       same_strand?: boolean }) & SvAlleleMetadata;
 
-export type SvEvidenceLevel = 'confirmed' | 'putative' | 'ambiguous';
+export type SvEvidenceLevel = 'confirmed' | 'putative' | 'conflicting' | 'ambiguous';
 export interface SvSegment {
   t?: 'SA';
   chrom: string; pos: number; cigar_ref_len: number; strand: '+' | '-'; mapq: number;
@@ -94,6 +94,7 @@ export interface SvCluster {
   support: number;
   confirmed?: number;
   putative?: number;
+  conflicting?: number;
   ambiguous?: number;
   /** Carriers plus reads spanning [ref - margin, end + margin] without it. */
   informative: number;
@@ -104,6 +105,7 @@ export interface SvCluster {
 }
 
 export interface SvSummary {
+  conflict_options?: import('../../../utils/svConflicts').SvConflictOptions;
   evidence_targets?: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty'>[];
   min_len: number;
   margin: number;

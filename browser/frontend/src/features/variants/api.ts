@@ -1,3 +1,4 @@
+import { useBrowserStore } from '../../stores/browserStore';
 import { usePanelGenomeStore } from '../../stores/panelGenomeStore';
 /**
  * The Variants panel's endpoints (browser/routers/variants.py): SNPs in a view, reads grouped by SNP allele or
@@ -110,7 +111,7 @@ export interface AlleleGrouping {
 export type AlleleSource = 'selected' | 'informative' | 'hp';
 
 export interface AlleleRequest {
-  includePutative?: boolean; includeAmbiguous?: boolean;
+  includePutative?: boolean; includeAmbiguous?: boolean; includeConflicting?: boolean;
   source: AlleleSource;
   snps?: string[];
   partial: boolean;
@@ -124,7 +125,7 @@ export interface AlleleRequest {
 
 export interface SvClusterInView {
   ref_len?: number; alt_len?: number; raw_ref?: number; uncertainty?: [number, number];
-  confirmed?: number; putative?: number; ambiguous?: number;
+  confirmed?: number; putative?: number; conflicting?: number; ambiguous?: number;
   id: string;
   t: 'D' | 'I';
   ref: number;
@@ -147,7 +148,7 @@ export interface SvLinkageRow {
 }
 
 export interface SvLinkage {
-  carrier_evidence_counts?: { confirmed: number; putative: number; ambiguous: number };
+  carrier_evidence_counts?: { confirmed: number; putative: number; conflicting?: number; ambiguous: number };
   sv: { t: 'D' | 'I'; ref: number; len: number };
   counts: { carriers: number; reference: number; not_informative: number };
   tested: number;
@@ -181,6 +182,7 @@ export function groupByAlleles(target: ScanTarget, params: SnpParams, includeDup
     body: body(target, params, includeDuplicates, {
       source: request.source === 'hp' ? 'hp' : 'snps',
       snps: request.source === 'informative' ? 'informative' : request.snps ?? [],
+      conflict_options: useBrowserStore.getState().svConflictOptions, include_conflicting: Boolean(request.includeConflicting),
       include_putative: request.includePutative ?? true, include_ambiguous: Boolean(request.includeAmbiguous),
       partial: request.partial, min_fraction: request.minFraction, auto_phase: request.autoPhase,
       as_combination: Boolean(request.asCombination),
@@ -195,15 +197,16 @@ export function svsInView(target: ScanTarget, minLen: number, includeDuplicates:
   return fetchJson(scopedUrl('/api/variants/svs', target), {
     ...post,
     body: JSON.stringify({ dataset_id: target.datasetId, chrom: target.chrom, start: Math.floor(target.start), end: Math.ceil(target.end),
-      ...(target.readIds ? { read_ids: target.readIds } : {}), min_len: minLen, include_duplicates: includeDuplicates }),
+      ...(target.readIds ? { read_ids: target.readIds } : {}), min_len: minLen, include_duplicates: includeDuplicates, conflict_options: useBrowserStore.getState().svConflictOptions }),
     signal,
   });
 }
 
 export function svLinkage(target: ScanTarget, params: SnpParams, includeDuplicates: boolean,
-  sv: Pick<SvClusterInView, 't' | 'ref' | 'len'>, signal?: AbortSignal, policy: { includePutative?: boolean; includeAmbiguous?: boolean } = {}): Promise<SvLinkage> {
+  sv: Pick<SvClusterInView, 't' | 'ref' | 'len'>, signal?: AbortSignal, policy: { includePutative?: boolean; includeAmbiguous?: boolean; includeConflicting?: boolean } = {}): Promise<SvLinkage> {
   return fetchJson<SvLinkage>(scopedUrl('/api/variants/sv_linkage', target), {
     ...post, body: body(target, params, includeDuplicates, { t: sv.t, ref: sv.ref, len: sv.len,
+      conflict_options: useBrowserStore.getState().svConflictOptions, include_conflicting: Boolean(policy.includeConflicting),
       include_putative: policy.includePutative ?? true, include_ambiguous: Boolean(policy.includeAmbiguous) }), signal,
   });
 }

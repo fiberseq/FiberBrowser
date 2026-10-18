@@ -672,7 +672,7 @@ export interface FootprintGroup {
  * whose groups belong to one view). Plugin packs' sources add their own fields (ReadSubsetRule is augmented).
  */
 export interface ReadSubsetRule {
-  svEvidenceLevels?: Record<string, 'confirmed' | 'putative' | 'ambiguous'>;
+  svEvidenceLevels?: Record<string, 'confirmed' | 'putative' | 'conflicting' | 'ambiguous'>;
   /** patterns, frozen, or a plugin pack's split source (utils/splitPanels.ts registerSplitSourceKind). */
   kind: 'patterns' | 'frozen' | (string & {});
   /** The dataset whose reads the panel shows. */

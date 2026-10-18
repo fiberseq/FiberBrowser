@@ -530,7 +530,7 @@ export function ReadTrack({
   const uncertainSvIds = useMemo(() => new Set([
     ...(highlightUncertainIds ?? []),
     ...Object.entries(svCarrierEvidence ?? splitSvEvidence ?? {}).filter(([, level]) =>
-      level === 'putative' || level === 'ambiguous').map(([id]) => id),
+      level === 'putative' || level === 'conflicting' || level === 'ambiguous').map(([id]) => id),
   ]), [highlightUncertainIds, svCarrierEvidence, splitSvEvidence]);
   const effectiveExcludeIds = useMemo(() => {
     if (!excludedFromMenu || excludedFromMenu.size === 0) return excludeIds;
@@ -1833,6 +1833,7 @@ export function ReadTrack({
           myReadStateDetails={myReadStateDetails}
           annotationOverlays={myAnnotationOverlays}
           annotationColors={annotationColors}
+          svSummary={svSummary}
         />
       )}
       {hoveredSv && !isPanning && !contextTarget && (

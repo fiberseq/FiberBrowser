@@ -22,7 +22,7 @@ export function SvSplitCounts({ def }: { def: SvSplitDef }) {
     title="All molecules in view; confirmed plus reference are informative, with weaker evidence counted separately">
     {evidence ? <>
       Confirmed: {formatShare(evidence.confirmed, evidence.confirmed + def.counts[1], 'informative reads', { pct: true })}
-      {' · '}{evidence.putative.toLocaleString()} putative · {evidence.ambiguous.toLocaleString()} ambiguous
+      {' · '}{evidence.putative.toLocaleString()} putative · <span title="Supporting clip aligns elsewhere; excluded by default">{(evidence.conflicting ?? 0).toLocaleString()} conflicting</span> · {evidence.ambiguous.toLocaleString()} ambiguous
     </> : <>Carriers: {formatShare(def.counts[0], def.counts[0] + def.counts[1], 'informative reads', { pct: true })}</>}
     {' '}(all {(def.counts[0] + def.counts[1] + def.counts[2]).toLocaleString()} reads in view; the SV row counts loaded reads only).
   </p>;

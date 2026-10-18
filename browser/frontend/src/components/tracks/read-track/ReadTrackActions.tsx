@@ -315,13 +315,14 @@ export function ReadTrackActions(props: ReadTrackActionsProps) {
       case 'sv-highlight-supporting':
       case 'sv-highlight-confirmed':
       case 'sv-highlight-putative':
+      case 'sv-highlight-conflicting':
       case 'sv-highlight-ambiguous': {
         const cluster = svTarget?.thisCluster;
         if (!cluster) break;
-        const level = action === 'sv-highlight-putative' ? 'putative' : action === 'sv-highlight-ambiguous' ? 'ambiguous' : action === 'sv-highlight-confirmed' ? 'confirmed' : 'carriers';
-        const ids = supportingReadIds(reads, cluster, chrom, level, svSummary?.evidence_targets ?? svSummary?.clusters);
+        const level = action === 'sv-highlight-conflicting' ? 'conflicting' : action === 'sv-highlight-putative' ? 'putative' : action === 'sv-highlight-ambiguous' ? 'ambiguous' : action === 'sv-highlight-confirmed' ? 'confirmed' : 'carriers';
+        const ids = supportingReadIds(reads, cluster, chrom, level, svSummary?.evidence_targets ?? svSummary?.clusters, svSummary?.conflict_options);
         if (ids.length) actions.highlightReads(ids, { uncertainIds: level === 'confirmed' ? [] : level === 'carriers'
-          ? supportingReadIds(reads, cluster, chrom, 'putative', svSummary?.evidence_targets ?? svSummary?.clusters) : ids });
+          ? supportingReadIds(reads, cluster, chrom, 'putative', svSummary?.evidence_targets ?? svSummary?.clusters, svSummary?.conflict_options) : ids });
         else actions.clearHighlight();
         store.setSvSelectedCluster(stateKey, cluster.id);
         break;

@@ -35,6 +35,7 @@ export type ReadMenuAction =
   | 'sv-highlight-supporting'
   | 'sv-highlight-confirmed'
   | 'sv-highlight-putative'
+  | 'sv-highlight-conflicting'
   | 'sv-highlight-ambiguous'
   | 'sv-copy-inserted'
   | 'sv-clear-split'
@@ -197,6 +198,7 @@ export function svClusterMenu(sv: SvClusterMenuContext): ReadMenuEntry[] {
     entries.push(item('sv-highlight-supporting', 'Highlight carriers (confirmed + putative)', 'pin'),
       item('sv-highlight-confirmed', 'Highlight confirmed only', 'pin'),
       item('sv-highlight-putative', 'Highlight putative reads', 'pin'),
+      item('sv-highlight-conflicting', 'Highlight conflicting reads (clip aligns elsewhere)', 'pin'),
       item('sv-highlight-ambiguous', 'Highlight ambiguous reads', 'pin'));
     for (const c of shown()) entries.push(...(c.svClusterItems?.(sv) ?? []));
   }

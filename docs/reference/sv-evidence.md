@@ -17,6 +17,18 @@ Evidence is classified per molecule (QNAME) per target:
 - **Putative:** a compatible terminal clip without definitive sequence/junction
   evidence. Insertion clips retain the 50 bp floor. Mixed soft/hard clips expose
   only their available soft sequence. Hard clips alone never confirm an insert.
+- **Conflicting (putative — elsewhere):** another alignment segment explains
+  at least **500 bp and 50% of the particular supporting clip**, with **MAPQ
+  >=20**, on another chromosome or **more than 100,000 bp** from the target
+  interval. Distance includes the target's equivalent placements. This is a
+  warning about competing alignment evidence, not a proven noncarrier genotype.
+  Clips at the other end of a molecule do not trigger it. Query intervals must
+  have equal full-molecule lengths, include hard clips, and are reflected when
+  the segment strands differ. Fetched segments and SA descriptions use the
+  existing deduplication rule. Missing SA/geometry never creates a conflict.
+  A local inversion or short repeat hit alone is insufficient. Confirmed CIGAR
+  or junction evidence remains authoritative. Conflict classification precedes
+  nearby-allele ambiguity; it has its own opt-in, independent of ambiguity.
 - **Ambiguous:** clip evidence compatible with multiple nearby seeded alleles.
   Competition tests the particular supporting clip across insertion and deletion
   targets, including 50 bp seeds hidden by a higher display cutoff. Opposite-end
@@ -25,21 +37,49 @@ Evidence is classified per molecule (QNAME) per target:
   explicit opt-in.
 
 Summary `support`/`confirmed` and `informative` count confirmed molecules and
-confirmed plus reference molecules respectively. `putative` and `ambiguous` are
+confirmed plus reference molecules respectively. `putative`, `conflicting` and `ambiguous` are
 separate counts. Variants, summary tooltips and lens show those levels. Default
 carrier sets include **confirmed + putative** in highlighting, single and combined
 splits, Variants/linkage and lens rows, profiles and insert exports. Confirmed
-only is an option; ambiguous requires a separate explicit opt-in. Putative lens
+only is an option; conflicting and ambiguous each require a separate explicit opt-in. Putative lens
 rows are hatched, and weaker read highlights/group rows have pale dashed
-evidence markers. Labels count confirmed, putative and ambiguous separately.
+evidence markers. Labels count confirmed, putative, conflicting and ambiguous separately.
+Read and lens tooltips retain the conflict's destination, explained bases,
+clip fraction and MAPQ. Variants, split labels/dialogs and insertion lists explain
+that conflicting clips align elsewhere. Highlighting offers a conflicting-only
+action. Explicitly included conflicting lens rows remain hatched and their
+profiles/insert exports follow the selected cohort.
 Summary `support` and `informative` retain the evidence-statistic definitions
 above, rather than presenting an inclusive carrier fraction as a genotype.
 Insertion lists use confirmed + putative carrier totals with separate counts.
 Split choices and rendering tiers persist through panel/session/snapshot state;
 refresh uses the saved policy. Legacy saved splits lacking a policy field retain
 their original confirmed-only choice. New unsaved actions use the inclusive
-default. The lens returns all three evidence cohorts, with `evidence_total`
+default. Splits saved before conflict filtering retain their earlier cohort on
+refresh (conflict detection disabled for that saved definition). New splits save
+their conflict thresholds and explicit inclusion choice; changing the global
+defaults does not rewrite a saved split. The lens returns all four evidence cohorts, with `evidence_total`
 describing its capped row pool.
+
+Advanced View settings expose an enable switch, maximum local distance,
+minimum elsewhere MAPQ, minimum explained bases and minimum clip fraction.
+Defaults are 100 kb / 20 / 500 bp / 0.5, respectively. Sessions, snapshots and
+crash recovery preserve these settings. Reads use `sv_conflict_options` (JSON
+query parameter); split/Variants bodies and lens/list queries use
+`conflict_options` with `enabled`, `max_distance`, `min_mapq`, `min_overlap`,
+`min_clip_fraction`. `include_conflicting` defaults to false. The options travel
+with summary responses and all affected request/cache identities.
+
+The rule was explored on **an HG002 Fiber-seq sample**, including an AluY
+insertion, MHC paralog alignments and a wider chr1 interval. It keeps 35/35
+assembly-supported AluY putatives while flagging 65/65 focal MHC paralog
+putatives. The wider chr1 check flags one low-confidence split/chimeric molecule;
+its assembly truth remains unresolved. This retrospective check is not a
+general sensitivity/specificity estimate and the defaults must not be treated
+as validated across loci or samples. Standalone low anchor MAPQ, high NM
+(which includes genuine indels), both-end clipping and small noncollinear SA
+fragments do not exclude a molecule. No whole-reference sequence search or
+assembly-specific carrier list is used at runtime.
 
 Reference requires an aligned block covering both breakpoints, the full interval
 of equivalent placements, and 100 bp flanks. Blocks bridge small CIGAR indels
@@ -53,7 +93,7 @@ sequence in repetitive loci can still align across a site on the wrong haplotype
 
 Every molecule call retains its complete `evidence_bundle` of compact alignment
 records and original items. The representative prefers confirmed, putative,
-ambiguous, reference, then unknown; CIGAR precedes junction and clip within a
+conflicting, ambiguous, reference, then unknown; CIGAR precedes junction and clip within a
 level. Alternative records remain available independently of grouping. Molecules
 count once per target, including merged files; overlapping target tolerances do
 not establish exclusive alleles.

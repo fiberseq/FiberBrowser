@@ -171,7 +171,7 @@ export function goToSvView(datasetId: string, view: { chrom: string; start: numb
  * A string when it can't be done (why).
  */
 export async function svGenotypeGrouping(features: FeatureRef[], opts: { partial?: boolean; minFraction?: number; snps?: string[];
-  params?: SnpParams; signal?: AbortSignal; includePutative?: boolean; includeAmbiguous?: boolean } = {}): Promise<AlleleGrouping | string> {
+  params?: SnpParams; signal?: AbortSignal; includePutative?: boolean; includeAmbiguous?: boolean; includeConflicting?: boolean } = {}): Promise<AlleleGrouping | string> {
   const svs = features.filter(f => f.kind === 'sv');
   if (!svs.length) return 'Select SVs first (shift-click them in the SV row, or tick them in Variants › SVs).';
   const datasets = [...new Set(svs.map(f => f.datasetId))];
@@ -192,7 +192,7 @@ export async function svGenotypeGrouping(features: FeatureRef[], opts: { partial
   return groupByAlleles(variantScanTarget(useBrowserStore.getState(), datasetId, svComboPanel(datasetId)?.id), opts.params ?? DEFAULT_SNP_PARAMS,
     Boolean(s.showDuplicateReads), {
       source: 'selected', snps: opts.snps ?? [], partial: Boolean(opts.partial), minFraction: opts.minFraction ?? 0.02,
-      autoPhase: false, asCombination: true, includePutative: opts.includePutative ?? true, includeAmbiguous: opts.includeAmbiguous ?? false,
+      autoPhase: false, asCombination: true, includePutative: opts.includePutative ?? true, includeAmbiguous: opts.includeAmbiguous ?? false, includeConflicting: opts.includeConflicting ?? false,
       svs: svs.map(f => ({ ...svOfFeature(f)!, name: f.label || svShortName(svOfFeature(f)!) })),
     }, opts.signal);
 }
@@ -209,7 +209,7 @@ export const useSvComboStore = create<{
 }));
 
 /** "Group in this panel" by the selected SVs' combined genotype. Returns an error message, or null. */
-export async function groupBySelectedSvs(features: FeatureRef[], partial = false, policy: { includePutative?: boolean; includeAmbiguous?: boolean } = {}): Promise<string | null> {
+export async function groupBySelectedSvs(features: FeatureRef[], partial = false, policy: { includePutative?: boolean; includeAmbiguous?: boolean; includeConflicting?: boolean } = {}): Promise<string | null> {
   // Only the SVs (other features also selected are not part of a genotype split; the chip says so).
   const svs = features.filter(f => f.kind === 'sv');
   const blocked = svs[0]?.datasetId ? svGroupBlocked(svs[0].datasetId) : null;
@@ -230,7 +230,7 @@ export async function groupBySelectedSvs(features: FeatureRef[], partial = false
 }
 
 /** "Split into panels" by the selected SVs' combined genotype: the panel-count dialog (top 4, confirm above 8, at most 16). */
-export async function splitBySelectedSvs(features: FeatureRef[], partial = false, policy: { includePutative?: boolean; includeAmbiguous?: boolean } = {}): Promise<string | null> {
+export async function splitBySelectedSvs(features: FeatureRef[], partial = false, policy: { includePutative?: boolean; includeAmbiguous?: boolean; includeConflicting?: boolean } = {}): Promise<string | null> {
   // Only the SVs (other features also selected are not part of a genotype split; the chip says so).
   const svs = features.filter(f => f.kind === 'sv');
   try {

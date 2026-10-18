@@ -83,7 +83,7 @@ describe('the insertion and variant features', () => {
 
   it('an insertion of the SV row: the lens and the carriers with the insert expanded (BAM panels)', () => {
     const ins = svClusterMenu({ cluster: 'INS 9.2 kb, 3267/3600', insertion: true, splitActive: true, splitAllowed: true, bamReads: true });
-    expect(actions(ins)).toEqual(['sv-split-this', 'sv-split-this-panels', 'sv-highlight-supporting', 'sv-highlight-putative', 'sv-highlight-ambiguous', 'ext:insertion-lens', 'ext:alt-allele', 'sv-split-panels', 'sv-clear-split']);
+    expect(actions(ins)).toEqual(['sv-split-this', 'sv-split-this-panels', 'sv-highlight-supporting', 'sv-highlight-confirmed', 'sv-highlight-putative', 'sv-highlight-conflicting', 'sv-highlight-ambiguous', 'ext:insertion-lens', 'ext:alt-allele', 'sv-split-panels', 'sv-clear-split']);
     const split = ins.find((e): e is ReadMenuItem => e.kind === 'item' && e.action === 'sv-split-this-panels')!;
     expect(split.title).toMatch(/an insertion's Carriers open with the insert expanded/);
     // VAR-11: this insertion in the lens, apart from the panel item ("Insertion lens panel") of the row's menu.
