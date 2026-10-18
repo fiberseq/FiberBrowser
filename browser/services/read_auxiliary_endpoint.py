@@ -588,7 +588,7 @@ def get_coverage_payload(
     return result
 
 
-def _cached_lift_rows(state, dataset, chrom, start, end, now):
+def _cached_lift_rows(state, dataset, chrom, start, end, now, *, annotations=False):
     """Reuse display geometry, regardless of its requested annotation groups.
     Match its load token to today's sources/lift key; a sampled display entry
     is usable too. Coverage needs bodies only, so expanding/redecoding tags
@@ -607,7 +607,9 @@ def _cached_lift_rows(state, dataset, chrom, start, end, now):
         if topology[:len(token)] != token:
             continue
         infer, nuc_min = broad_cache_legacy_layer_settings(key)
-        rows, found = find_broad_cache_entry(state, dataset.id, chrom, start, end, False, (), now,
+        if annotations and (not infer or nuc_min != 90 or broad_cache_min_footprints(key)):
+            continue
+        rows, found = find_broad_cache_entry(state, dataset.id, chrom, start, end, annotations, None if annotations else (), now,
                                             include_layer_qualities=False, infer_legacy_layers=infer,
                                             legacy_nuc_min_size=nuc_min, min_footprints=broad_cache_min_footprints(key),
                                             load_token=topology)

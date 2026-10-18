@@ -327,7 +327,41 @@ def md_reference(md, runs):
     return out
 
 
-def row_mismatches(read, row, ctx):
+def _haplotype_reference(ctx, hap, start, end):
+    """Target-oriented assembly bases for a molecule aligned to another parent.
+    Multiple primary projections, missing FASTA and uncovered bases stay unknown.
+    Cached per inspection window; alignment-contig MD cannot establish this allele.
+    """
+    import numpy as np
+
+    cache = ctx._mismatch_windows
+    key = ("hap", hap, start, end)
+    if key not in cache:
+        expected = np.full(end - start, ord("N"), dtype=np.uint8)
+        count = np.zeros(end - start, dtype=np.uint8)
+        flags = np.zeros(end - start, dtype=np.uint8)
+        with ctx.handle.lock:
+            pieces = ctx.handle.map.target_to_source(ctx.selection.chrom, start, end)
+        for p in pieces:
+            c = ctx.handle.map.chains[p.chain]
+            if not p.primary or c["haplotype"] != hap:
+                continue
+            contig = ctx.handle.manifest["sources"][c["source"]]["name"]
+            ref = fasta_bases(getattr(ctx, "source_fasta", None), contig, p.q_start, p.q_end)
+            lo, hi = p.t_start - start, p.t_end - start
+            count[lo:hi] += 1
+            if ref is not None and len(ref) == hi - lo:
+                expected[lo:hi] = np.frombuffer((revcomp(ref) if p.strand == "-" else ref).encode("ascii"), dtype=np.uint8)
+            with ctx.handle.lock:
+                inferred = ctx.handle.map.inferred_runs(p.chain, p.t_start, p.t_end)
+            for t, n, kind in inferred:
+                flags[max(t, p.t_start) - start:min(t + n, p.t_end) - start] = (1 if kind == "substitution" else 2 if kind == "aligned" else 0)
+        expected[count != 1] = ord("N")
+        cache[key] = expected.tobytes().decode("ascii"), flags
+    return cache[key]
+
+
+def row_mismatches(read, row, ctx, hap=None):
     """View-only X markers with native renderer aliases ``len=1, seq=base``.
     SEQ indices in _SeqRuns include hard clips; subtract the leading clip
     before indexing the stored SEQ. Ref/alt are complemented on '-' pieces.
@@ -394,17 +428,25 @@ def row_mismatches(read, row, ctx):
             if f.minus:
                 bases, hg = revcomp(bases), revcomp(hg) if hg is not None else None
             t = min(f.T(lo), f.T(hi - 1))
+            alignment_hg = hg
+            own_flags = None
+            if hap is not None and hap != f.p.hap:
+                own, own_flags = _haplotype_reference(ctx, hap, start, end)
+                hg = own[t - start:t - start + len(bases)]
             rb = target[t - start:t - start + len(bases)]
             observed = np.frombuffer(bases.encode("ascii"), dtype=np.uint8)
             reference = np.frombuffer(rb.encode("ascii"), dtype=np.uint8)
-            mapped = flags[t - start:t - start + len(bases)]
+            mapped = (own_flags if own_flags is not None else flags)[t - start:t - start + len(bases)]
             hg_array = np.frombuffer(hg.encode("ascii"), dtype=np.uint8) if hg is not None else None
-            is_ref = ((mapped == 1) & (hg_array != reference) & (observed == reference)
+            is_ref = ((mapped == 1) & (hg_array != ord("N")) & (hg_array != reference) & (observed == reference)
                       if hg_array is not None else np.zeros(len(bases), dtype=bool))
             for i in np.flatnonzero((observed != reference) | is_ref):
                 base = bases[i]
                 ev = dict(type="X", pos=t + int(i) - ctx.region_start, base=base, ref=rb[i],
                           source="assembly" if mapped[i] and hg is not None and hg[i] == base else "reads", len=1, seq=base)
+                if hap is not None and hap != f.p.hap:
+                    ev["hg002"] = hg[i] if hg is not None and hg[i] != "N" else None
+                    ev["alignment_hg002"] = alignment_hg[i] if alignment_hg is not None else None
                 if is_ref[i]:
                     ev["allele"] = "grch38"
                 out.append(ev)
@@ -450,11 +492,15 @@ def _inspection_spans(config, chrom, pos, end, lift_hap):
         spans = list(grouped.values())
         # A target-only gap has no primary aligned piece, but its adjacent
         # source records can still be inspected as deleted against GRCh38.
-        if not spans:
-            for hap in haps:
+        present = {span["hap"] for span in spans}
+        for hap in haps:
+            if hap not in present:
                 for item in _bin_items(config, chrom, pos // BIN_BP, hap):
                     if item["kind"] == "deletion" and item["t_start"] <= pos and item["t_end"] >= end:
                         spans.append(item)
+                        present.add(hap)
+                if hap not in present:
+                    spans.append(_item(handle, hap, None, "no_correspondence", "no_correspondence", pos, end, None, None))
     return spans
 
 
@@ -537,6 +583,7 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
     from contextlib import ExitStack
     import pysam
     from services.lift.reads import lifted_reads_for_region, filter_lift_display
+
     from services.read_auxiliary_endpoint import _cached_lift_rows
 
     config = dataset.live_lift
@@ -546,12 +593,16 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
     preferred = selected["hap"] if selected else (next(iter(_haps(config, lift_hap)), None) if lift_hap else None)
     preferred_label = config.handle.haplotype_labels.get(preferred, preferred)
     spans.sort(key=lambda s: s["hap"] != preferred)
-    if any(s["src"]["end"] - s["src"]["start"] > 50_000 for s in spans):
+    if any(s["src"]["start"] is not None and s["src"]["end"] - s["src"]["start"] > 50_000 for s in spans):
         from services.lift.live_lift import LiftRefused
         raise LiftRefused("Live lift: this insertion exceeds the 50 kb inspection limit")
     rows, capped = [], False
-    view_start, view_end = max(0, pos - 50), min(config.handle.target_size(chrom), max(pos + 1, end) + 50)
-    display, broad_key = _cached_lift_rows(state, dataset, chrom, view_start, view_end, time.time())
+    view_start = max(0, pos - 50)
+    view_end = min(config.handle.target_size(chrom) or max(pos + 1, end) + 50, max(pos + 1, end) + 50)
+    # Broad display caches may be sampled, annotation-free or missing individual
+    # records. Decode complete annotations on this bounded cohort, so both its
+    # membership and its chromatin are independent of display cache history.
+    display, broad_key = _cached_lift_rows(state, dataset, chrom, view_start, view_end, time.time(), annotations=True)
     origin = broad_key[2] if broad_key else view_start
 
     class _Records:
@@ -572,7 +623,7 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
             records, seen, occurrences = [], set(), {}
             for span in spans:
                 src = span["src"]
-                if src["contig"] not in bam.references:
+                if src["start"] is None or src["contig"] not in bam.references:
                     continue
                 a, b = src["start"], src["end"]
                 for record in bam.fetch(src["contig"], max(0, a - (a == b)), max(a + 1, b)):
@@ -597,7 +648,9 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
             adapters[path] = _Records(bam, records)
             if capped:
                 break
-        if display is None and fetched:
+        available = {(r.get("source_path"), (r.get("live_lift") or {}).get("record")) for r in display or []}
+        if fetched and (display is None or any((path, rid) not in available for path, _, rid in fetched)):
+            origin = view_start
             # Missing paths after the cap are empty adapters, never real BAM
             # handles, so the display fallback stays inside this exact cohort.
             empty = _Records(next(iter(adapters.values())).bam, [])
@@ -610,12 +663,33 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
             ll = row.get("live_lift") or {}
             by_record.setdefault((row.get("source_path"), ll.get("record")), []).append(row)
         ref = fasta_bases(getattr(state, "fasta", None), chrom, pos, end)
+        expected = {}
+        for span in spans:
+            src = span["src"]
+            value = None
+            if src["start"] is not None:
+                value = fasta_bases(source, src["contig"], src["start"], src["end"])
+                if value is not None and span["strand"] == "-":
+                    value = revcomp(value)
+                if value is None:
+                    values = set()
+                    for _, rec, _ in fetched:
+                        if (rec.reference_name == src["contig"] and rec.reference_start <= src["start"]
+                                and rec.reference_end >= src["end"]):
+                            _, hg, _, _, _ = _record_alleles(rec, src["start"], src["end"], source)
+                            if hg is not None:
+                                values.add(revcomp(hg) if span["strand"] == "-" else hg)
+                    value = next(iter(values)) if len(values) == 1 else None
+            expected.setdefault(span["hap"], []).append(value)
+        expected = {hap: values[0] if len(values) == 1 else None for hap, values in expected.items()}
         for path, record, record_id in fetched:
             candidates = by_record.get((path, record_id), [])
             for span in spans:
                 src = span["src"]
                 a, b = src["start"], src["end"]
-                if record.reference_name != src["contig"] or not (record.reference_start < max(a + 1, b) and record.reference_end > a):
+                if a is None or record.reference_name != src["contig"] or not (record.reference_start < max(a + 1, b) and record.reference_end > a):
+                    continue
+                if span["kind"] == "deletion" and not record.reference_start < a < record.reference_end:
                     continue
                 row = next((r for r in candidates if any(s[3] == span["strand"] for s in r["live_lift"]["segments"])), {})
                 ll = row.get("live_lift") or {}
@@ -626,6 +700,9 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
                 rb, hg, n_aligned, overlaps, identity = _record_alleles(record, a, b, source)
                 if span["strand"] == "-":
                     rb, hg = revcomp(rb), revcomp(hg) if hg is not None else None
+                alignment_hg = hg
+                hap = ll.get("hap", span["hap"])
+                hg = alignment_hg if hap == span["hap"] else expected.get(hap)
                 allele = ("no_coverage" if not overlaps else "deleted" if not rb else
                           "hg002" if hg is not None and ref is not None and rb == hg and hg != ref else
                           "same_as_grch38" if hg is not None and ref is not None and rb == hg == ref else
@@ -642,7 +719,7 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
                 item = dict(id=record.query_name, molecule=ll.get("molecule", f"{dataset.id}|{record.query_name}"),
                             hap_label=ll.get("hap_label", span["hap_label"]), record=ll.get("record", record_id),
                             supplementary=bool(record.is_supplementary), strand=st, source_pos=dict(src),
-                            read_bases=rb, hg002=hg, grch38=ref, allele=allele,
+                            read_bases=rb, hg002=hg, alignment_hg002=alignment_hg, grch38=ref, allele=allele,
                             chromatin=_chromatin(row, origin, pos, span["strand"]))
                 if pos == end:
                     item.update(carries_insertion=carries, mol_bp=len(rb), identity=identity,
@@ -662,4 +739,5 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
         counts = summary.setdefault(row["hap_label"], {})
         counts[row["allele"]] = counts.get(row["allele"], 0) + 1
     return dict(dataset_id=dataset.id, lift_key=config.key(), chrom=chrom, pos=pos, end=end, rows=rows,
-                summary=summary, preferred_hap=preferred_label, capped=capped, max_records=500)
+                summary=summary, preferred_hap=preferred_label, capped=capped, max_records=500,
+                hap_status={s["hap_label"]: ("aligned" if s["kind"] == "inspection" else s["kind"]) for s in spans})
