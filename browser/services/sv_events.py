@@ -508,7 +508,8 @@ def _sorted_median(s):
     return s[mid] if n % 2 else (s[mid - 1] + s[mid]) / 2
 
 
-def cluster_sv_events(reads: Iterable[dict], start: int, end: int, min_len: int) -> tuple[list[dict], list[dict]]:
+def cluster_sv_events(reads: Iterable[dict], start: int, end: int, min_len: int, *,
+                      reconcile_members: bool = True) -> tuple[list[dict], list[dict]]:
     """Cluster the reads' D/I events in ``[start, end)`` and pile up their clips.
 
     Returns (clusters, clip piles). A cluster is ``{t, ref, len, end, members:
@@ -526,12 +527,12 @@ def cluster_sv_events(reads: Iterable[dict], start: int, end: int, min_len: int)
             t = ev.get("t")
             if t not in ("D", "I", "S"):
                 continue
-            if t in ("D", "I"):
-                evidence_items.add((t, int(ev["ref"]), int(ev["len"]), rid))
-            if int(ev.get("len", 0)) < min_len:
-                continue
             a, b = event_span(ev)
             if not (b > start and a < end):
+                continue
+            if reconcile_members and t in ("D", "I"):
+                evidence_items.add((t, int(ev["ref"]), int(ev["len"]), rid))
+            if int(ev.get("len", 0)) < min_len:
                 continue
             if t == "S":
                 clips.append((ev["side"], int(ev["ref"]), rid))
@@ -543,7 +544,7 @@ def cluster_sv_events(reads: Iterable[dict], start: int, end: int, min_len: int)
     clusters: list[dict] = []
     by_type: dict[str, list[dict]] = {"D": [], "I": []}
     tol_bp, tol_frac, len_frac = SV_BREAKPOINT_TOL_BP, SV_BREAKPOINT_TOL_FRAC, SV_LENGTH_TOL_FRAC
-    for t, ref, length, rid in sorted(items, key=lambda x: (x[1], x[0])):
+    for t, ref, length, rid in sorted(items, key=lambda x: (x[1], x[0], x[2], str(x[3]))):
         best = None
         # events_match, inlined (this loop runs once per event in view).
         for c in by_type[t]:
@@ -559,29 +560,51 @@ def cluster_sv_events(reads: Iterable[dict], start: int, end: int, min_len: int)
                 continue
             if big > 0 and abs(length - c_len) > len_frac * big:
                 continue
-            best = c
-            break
+            # Nearest compatible target; ties use the target and its first seed.
+            score = (abs(ref - c_ref), abs(length - c_len), c_ref, c_len, c["seed"])
+            if best is None or score < best_score:
+                best, best_score = c, score
         if best is None:
-            best = {"t": t, "refs": [], "lens": [], "members": set(), "ref": ref, "len": length}
+            best = {"t": t, "refs": [], "lens": [], "members": set(), "ref": ref, "len": length,
+                    "seed": (ref, length, str(rid))}
             clusters.append(best)
             by_type[t].append(best)
         # Kept sorted, so the running median is one insort, not a sort per join.
+        if rid in best["members"]:
+            continue  # one median vote per molecule, including shifted merged-file records
         bisect.insort(best["refs"], ref)
         bisect.insort(best["lens"], length)
         best["members"].add(rid)
         best["ref"] = _sorted_median(best["refs"])
         best["len"] = _sorted_median(best["lens"])
     out = []
-    for c in clusters:
+    evidence_index = {}
+    for t in ("D", "I"):
+        rows = sorted((r, n, str(rid), rid) for et, r, n, rid in evidence_items if et == t)
+        evidence_index[t] = ([row[0] for row in rows], rows)
+    targets = set()
+    for c in sorted(clusters, key=lambda c: (-len(c["members"]), c["ref"], c["t"], c["len"], c["seed"])):
         ref = int(round(c["ref"]))
         length = int(round(c["len"]))
+        target = (c["t"], ref, length)
+        if target in targets:
+            continue
+        # A stranded singleton must not acquire a second shadow pile merely
+        # because a stronger pile's median moved into its tolerance range.
+        if len(c["members"]) == 1 and any(t == c["t"] and events_match(t, ref, length, r, n)
+                                          for t, r, n in targets):
+            continue
+        targets.add(target)
+        refs, rows = evidence_index[c["t"]]
+        tol = breakpoint_tolerance(length / (1 - SV_LENGTH_TOL_FRAC))
+        nearby = rows[bisect.bisect_left(refs, ref - tol):bisect.bisect_right(refs, ref + tol)]
         out.append({
             "t": c["t"], "ref": ref, "len": length,
             "end": ref + length if c["t"] == "D" else ref,
             # Reconcile against the rounded final target, including events originally
             # put in adjacent clusters. Never retain stale running-median members.
-            "members": {rid for t, r, n, rid in evidence_items
-                        if t == c["t"] and events_match(t, r, n, ref, length)},
+            "members": {rid for r, n, _key, rid in nearby if events_match(c["t"], r, n, ref, length)}
+                       if reconcile_members else c["members"],
         })
     piles: list[dict] = []
     for side, ref, rid in sorted(clips, key=lambda x: (x[0], x[1])):
@@ -593,6 +616,7 @@ def cluster_sv_events(reads: Iterable[dict], start: int, end: int, min_len: int)
         pile["ids"].add(rid)
         pile["_last"] = ref
     clip_out = [{"side": p["side"], "ref": int(round(_median(p["refs"]))), "n": len(p["ids"])} for p in piles]
+    out.sort(key=lambda c: (c["ref"], c["t"], c["len"]))
     return out, clip_out
 
 
@@ -753,7 +777,7 @@ def sv_summary_for_reads(reads: Sequence[dict], start: int, end: int, min_len: i
     """
     import numpy as np
 
-    clusters, clips = cluster_sv_events(reads, start, end, min_len)
+    clusters, clips = cluster_sv_events(reads, start, end, min_len, reconcile_members=False)
     if not clusters and not clips:
         return None
     starts, ends, plain, special, event_items = [], [], [], [], []

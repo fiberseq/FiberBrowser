@@ -7,6 +7,11 @@ carrier clip. Compact payloads retain `sv_evidence` when filtering `sv` for draw
 client region projection preserves it too. The frontend carrier helper mirrors
 `sv_events.carrier_evidence`, checked against the same sequence-free Alu/MHC fixtures.
 
+Projection also preserves lazy FBR1 evidence using writable data properties and
+checks retained evidence at cropped boundaries. Initial splits capture duplicate
+settings before requesting, retry changed settings and reject superseded requests.
+Insert exports abort on replacement, target changes and unmount.
+
 After running-median clustering, CIGAR memberships are reconciled against the
 rounded final targets. Events originally assigned to adjacent seed clusters are
 considered, and stale members are removed. Membership is evaluated per target:
@@ -35,6 +40,17 @@ come only from the latest region/duplicate-setting response.
 Unexpected MA molecular-frame header-policy/import failures propagate. Missing
 optional policy imports still use the existing declared-header fallback. A
 runtime failure cannot silently choose SEQ geometry.
+
+The public compact loader propagates `FramePolicyError` with its original cause.
+Direct BAM cache keys and deletion interval cuts use the display cutoff, while
+event extraction continues to use the independent 10 bp evidence floor.
+
+Seeds have a total position/type/length/molecule order; nearest-target assignment
+uses deterministic ties. Each molecule contributes one median vote per cluster.
+A stranded singleton compatible with a stronger final target cannot become a
+shadow cluster by reconciliation. Identical targets collapse. Reconciliation is
+indexed and restricted to in-view events; summaries skip unused memberships and
+classify full molecule evidence against their final targets.
 
 Carrier evidence otherwise keeps the existing rules: matching CIGAR indels,
 clips plus same-strand SA endpoints for deletions, and nearby soft/hard clips of

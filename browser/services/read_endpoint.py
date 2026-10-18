@@ -633,7 +633,7 @@ def _compact_reads_payload(
             include_duplicates,
             direct_min_footprints,
             read_load_token(state, chrom, direct_terminal_bp, sample_level=direct_level),
-            sv_floor,
+            min_sv_len,
             include_sv_seq,
         )
 
@@ -650,7 +650,7 @@ def _compact_reads_payload(
                 include_layer_qualities=include_layer_qualities, infer_legacy_layers=infer_legacy_layers,
                 legacy_nuc_min_size=legacy_nuc_min_size, include_duplicates=include_duplicates,
                 min_footprints=direct_min_footprints, short_terminal_footprint_bp=direct_terminal_bp,
-                sv_min_len=sv_floor, include_sv_seq=include_sv_seq,
+                sv_min_len=min_sv_len, include_sv_seq=include_sv_seq,
             )
 
         generation = dataset_generation(state, dataset_id)

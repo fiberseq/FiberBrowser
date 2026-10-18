@@ -2579,6 +2579,9 @@ def _build_compact_reads_from_bam_region(
             signal_window.finish()
 
     except Exception as exc:
+        from services.bam_tags import FramePolicyError
+        if isinstance(exc, FramePolicyError):
+            raise
         from services.packed_reads import bounded_analysis
         if stream is not None or fetch_regions is not None or bounded_analysis.get():
             raise

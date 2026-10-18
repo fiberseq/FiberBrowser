@@ -42,6 +42,87 @@ def _seg(cigar, start=1000, *, reverse=False, sa=None, supplementary=False, seq=
     return a
 
 
+def test_frame_policy_error_propagates_through_public_compact_loader(sv_bam, monkeypatch):
+    from services import bam_tags
+
+    def broken(_header):
+        raise RuntimeError('injected frame policy failure')
+
+    monkeypatch.setattr(bam_tags, 'bam_ma_aq_tags_are_molecular', broken)
+    with pytest.raises(bam_tags.FramePolicyError, match='injected frame policy') as error:
+        compact_read_loader.build_compact_reads_from_bam(sv_bam, fx.CHROM, *fx.VIEW, spanning_only=False)
+    assert isinstance(error.value.__cause__, RuntimeError)
+
+
+def test_direct_endpoint_uses_display_cutoff_for_interval_cuts_and_cache(sv_client, monkeypatch):
+    from services import read_endpoint
+    client, _state = sv_client
+    cutoffs = []
+    original = read_endpoint.load_direct_reads_for_dataset
+
+    def capture(*args, **kwargs):
+        cutoffs.append(kwargs['sv_min_len'])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(read_endpoint, 'load_direct_reads_for_dataset', capture)
+    for cutoff in (50, 100):
+        result = client.get('/api/reads/compact', params=dict(
+            dataset_id='sv', chrom=fx.CHROM, start=fx.VIEW[0], end=fx.VIEW[1],
+            include_duplicates=True, min_sv_len=cutoff, spanning=False))
+        assert result.status_code == 200, result.text
+    assert cutoffs == [50, 100]
+
+
+def test_evidence_floor_does_not_cut_chromatin_at_sub_display_deletions():
+    from models.domain import CigarCoordMapper
+    a = _seg([(0, 100), (2, 15), (0, 100), (2, 60), (0, 100)])
+    compact = {'id': 'synthetic', 'intervals': [[50, 300, 1]]}
+    compact_read_loader._attach_sv_events(compact, a, 1000, sv_min_len=50,
+                                        mapper=CigarCoordMapper(a.cigartuples, 1000))
+    assert compact['intervals'] == [[50, 215, 1], [275, 300, 1]]
+    assert [ev['len'] for ev in compact['sv']] == [15, 60]
+
+
+def _seed(name, length, ref=1000):
+    return dict(id=name, reference_start=0, reference_end=4000,
+                sv=[dict(t='I', ref=ref, len=length, q=100)])
+
+
+def test_cluster_targets_are_permutation_and_merged_file_order_invariant():
+    import itertools
+    rows = [_seed(str(i), length) for i, length in enumerate([100, 140, 120, 120, 120])]
+    expected = sv_summary_for_reads(rows, 0, 4000, 50)
+    for order in itertools.permutations(rows):
+        assert sv_summary_for_reads(order, 0, 4000, 50) == expected
+    for first, second in ((rows[:2], rows[2:]), (rows[2:], rows[:2])):
+        assert sv_summary_for_reads(first + second + first, 0, 4000, 50)['clusters'] == expected['clusters']
+
+
+def test_singleton_outlier_does_not_gain_a_shadow_cluster_after_reconciliation():
+    rows = [_seed('low', 100), _seed('high', 140)] + [_seed(str(i), 120, 1001) for i in range(6)]
+    clusters, _ = cluster_sv_events(rows, 0, 4000, 50)
+    assert [(c['ref'], c['len'], len(c['members'])) for c in clusters] == [(1001, 120, 8)]
+
+
+def test_shifted_duplicate_molecule_has_one_median_vote():
+    rows = [_seed('duplicate', 100), _seed('other', 120)]
+    expected = cluster_sv_events(rows, 0, 4000, 50)
+    assert cluster_sv_events(rows + [_seed('duplicate', 101)], 0, 4000, 50) == expected
+    assert expected[0][0]['len'] == 110
+
+
+def test_cluster_reconciliation_respects_view_and_summary_skips_unused_members(monkeypatch):
+    from services import sv_events
+    rows = [_seed('in', 100, 1005), _seed('out', 100, 990)]
+    assert cluster_sv_events(rows, 1000, 2000, 50)[0][0]['members'] == {'in'}
+    original = sv_events.cluster_sv_events
+    def checked(*args, **kwargs):
+        assert kwargs['reconcile_members'] is False
+        return original(*args, **kwargs)
+    monkeypatch.setattr(sv_events, 'cluster_sv_events', checked)
+    assert sv_summary_for_reads(rows, 1000, 2000, 50)['clusters'][0]['support'] == 2
+
+
 # ---------------------------------------------------------------------------
 # Extraction
 
