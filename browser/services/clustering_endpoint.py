@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from services.analysis_query import AnalysisReadQuery
+from services.read_selection import cohort_read_id, read_matches_id_filter
 from services.cluster_analysis import (
     MERGE_DEFAULT_ALPHA,
     compute_cluster_projection,
@@ -246,6 +247,8 @@ def assigned_cluster_feature_rows(
 
     query = AnalysisReadQuery.from_request(
         state,
+        capability="clustering",
+        lift_hap_by_dataset=getattr(req, "lift_hap_by_dataset", None),
         chrom=chrom,
         start=start,
         end=end,
@@ -952,6 +955,8 @@ def run_cluster_projection_endpoint(
             (getattr(dataset, "available_layers", None) or {}).get("deam"))
         working_query = AnalysisReadQuery.from_request(
             state,
+            capability="clustering",
+            lift_hap_by_dataset=getattr(req, "lift_hap_by_dataset", None),
             chrom=chrom,
             start=start,
             end=end,
@@ -968,7 +973,7 @@ def run_cluster_projection_endpoint(
         if not working_set.reads:
             continue
 
-        reads_to_use = [read for read in working_set.reads if read["id"] in assigned]
+        reads_to_use = [read for read in working_set.reads if read_matches_id_filter(read, set(assigned))]
         if not reads_to_use:
             continue
 
@@ -998,7 +1003,7 @@ def run_cluster_projection_endpoint(
             skipped_datasets.append(dataset_id)
             continue
 
-        reads_by_id = {read["id"]: read for read in reads_to_use}
+        reads_by_id = {cohort_read_id(read): read for read in reads_to_use}
         calls = strand_calls(state, dataset_id)
         for index, read_id in enumerate(read_ids):
             read_dataset_id, original_id = split_prefixed_read_id(read_id, dataset_id)
@@ -1194,6 +1199,8 @@ def run_cluster_all_endpoint(
     include_layers = cluster_modes_need_layers(peak_modes)
     analysis_query = AnalysisReadQuery.from_request(
         state,
+        capability="clustering",
+        lift_hap_by_dataset=getattr(req, "lift_hap_by_dataset", None),
         chrom=chrom,
         start=start,
         end=end,
@@ -1227,8 +1234,15 @@ def run_cluster_all_endpoint(
     dataset_read_stats = {}
     working_totals = {}
     preparation_samples = {}
+    cohort_descriptions = {}
+    joint_report = {}
 
     def with_performance_sampling(payload):
+        if joint_report:
+            payload["joint_cohort"] = joint_report
+        for key, desc in cohort_descriptions.items():
+            if key in payload.get("results", {}):
+                payload["results"][key]["cohort"] = desc
         for key, result in payload.get('results', {}).items():
             if key in preparation_samples:
                 result['preparation_sampling'] = {
@@ -1292,7 +1306,7 @@ def run_cluster_all_endpoint(
                 state,
                 dataset_id,
                 chrom=job_chrom,
-                **(dict(start=view.start, end=view.end, read_ids=view.read_ids) if view else {}),
+                **(dict(start=view.start, end=view.end, read_ids=view.read_ids, lift_hap=view.lift_hap, strand=view.strand) if view else {}),
                 **(dict(broad_prefetch_multiplier=3) if sample is not None else {}),
             )
         timings.add("working_set", phase_start)
@@ -1304,6 +1318,8 @@ def run_cluster_all_endpoint(
                 result_key=result_key, dataset_id=dataset_id,
                 start=view.start if view else start, end=view.end if view else end)
         working_totals[result_key] = working_set.total_overlapping
+        if getattr(working_set, "lift_cohort", None):
+            cohort_descriptions[result_key] = working_set.lift_cohort
 
         if not working_set.reads:
             dataset_read_ids[result_key] = []
@@ -1333,7 +1349,7 @@ def run_cluster_all_endpoint(
         reads_for_job = (working_set.reads if view else analysis_query.filter_reads_for_dataset(dataset_id, working_set.reads))
         if view and view.read_ids is not None:
             allowed = set(view.read_ids)
-            reads_for_job = [read for read in reads_for_job if read['id'] in allowed]
+            reads_for_job = [read for read in reads_for_job if read_matches_id_filter(read, allowed)]
         if view and getattr(view, 'strand', None):
             from services.read_strand import filter_reads_by_strand, strand_calls
             reads_for_job = filter_reads_by_strand(reads_for_job, view.strand, strand_calls(state, dataset_id))
@@ -1384,7 +1400,7 @@ def run_cluster_all_endpoint(
             original_ids = []
             prefixed_reads = []
             for read in reads_for_job:
-                original_ids.append(read["id"])
+                original_ids.append(cohort_read_id(read))
                 prefixed_reads.append(prefix_compact_read({**read, '_consensus_dataset_id': dataset_id,
                     '_consensus_chrom': job_chrom, '_cluster_group': result_key}, result_key))
             all_compact.extend(prefixed_reads)
@@ -1420,6 +1436,13 @@ def run_cluster_all_endpoint(
             "analysis_read_count": len(original_ids),
         }
 
+    if all_compact:
+        from services.lift.joint import prepare_joint_cohort
+        all_compact, joint_report = prepare_joint_cohort(state, all_compact)
+        for key in dataset_read_ids:
+            dataset_read_ids[key] = [r["_original_id"] for r in all_compact if r.get("_cluster_group") == key]
+            if key in dataset_read_stats:
+                dataset_read_stats[key]["analysis_read_count"] = len(dataset_read_ids[key])
     t2 = time.perf_counter()
     total_reads = (len(columnar) if columnar is not None else
                    len(all_compact) if use_compact_path else sum(len(df) for df in all_reads))
@@ -1430,7 +1453,7 @@ def run_cluster_all_endpoint(
     cluster_features = {}
     if columnar is not None:
         if not len(columnar):
-            return timings.attach(with_performance_sampling({"results": empty_cluster_all_results(dataset_ids)}))
+            return timings.attach(with_performance_sampling({"results": empty_cluster_all_results(list(viewports) if viewports else dataset_ids)}))
         phase_start = time.perf_counter()
         assignments, counts, sorted_idx, element_info = columnar.finish()
         timings.add('cluster_columnar', phase_start)
@@ -1577,6 +1600,8 @@ def run_assign_to_clusters_endpoint(
 
     query = AnalysisReadQuery.from_request(
         state,
+        capability="clustering",
+        lift_hap_by_dataset=getattr(req, "lift_hap_by_dataset", None),
         chrom=chrom,
         start=start,
         end=end,
@@ -1603,7 +1628,7 @@ def run_assign_to_clusters_endpoint(
             continue
         # Saved footprint-class features look reads up by dataset and chromosome
         # (as cluster_all tags them); read IDs here are not dataset-prefixed.
-        reads = [{**read, '_consensus_dataset_id': ds_id, '_consensus_chrom': query.chrom} for read in reads]
+        reads = [prefix_compact_read({**read, '_consensus_dataset_id': ds_id, '_consensus_chrom': query.chrom}, ds_id) for read in reads]
         if use_centroids:
             results[ds_id] = assign_reads_to_centroids(
                 reads,
@@ -1631,6 +1656,11 @@ def run_assign_to_clusters_endpoint(
                 cluster_rule_context=cluster_rule_context,
             )
 
+        assignments = results[ds_id]["assignments"]
+        results[ds_id]["assignments"] = {split_prefixed_read_id(k, ds_id)[1]: v for k, v in assignments.items()}
+        results[ds_id]["filtered_read_ids"] = list(results[ds_id]["assignments"])
+        if getattr(working_set, "lift_cohort", None):
+            results[ds_id]["cohort"] = working_set.lift_cohort
         dataset = state.get_dataset(ds_id)
         if dataset:
             # Dynamic assignment covers only the reads available in this

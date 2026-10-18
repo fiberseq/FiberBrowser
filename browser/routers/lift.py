@@ -139,3 +139,33 @@ async def lift_difference_reads(dataset_id: str, chrom: str, pos: int = Query(..
     if end < pos or end - pos > 50_000:
         raise HTTPException(422, "Inspection requires pos <= end <= pos+50000")
     return await asyncio.to_thread(difference_reads, state, dataset, chrom, pos, end, lift_hap=lift_hap, item_id=item_id, include_sequence=include_sequence)
+
+
+class MoleculeProvenanceRequest(BaseModel):
+    molecule_groups: list[list[str]] = Field(default_factory=list)
+    joint_dedup: str = "off"
+
+
+@router.post("/api/lift/provenance/{dataset_id}")
+async def lift_molecule_provenance(dataset_id: str, req: MoleculeProvenanceRequest, state=Depends(get_state)):
+    """Declare sharing with a native BAM; QNAME alone never establishes identity."""
+    from services.lift.registration import require_enabled, update_settings
+    from services.lift.capability import is_bam_backed, is_lifted
+    from services.lift.live_lift import LiftSettings
+    require_enabled()
+    dataset = state.get_dataset(dataset_id)
+    if not dataset or not is_bam_backed(dataset):
+        raise HTTPException(422, "Molecule provenance requires a BAM dataset")
+    try:
+        settings = LiftSettings(molecule_groups=req.molecule_groups, joint_dedup=req.joint_dedup)
+        if any(path not in dataset.paths for path, label in settings.molecule_groups):
+            raise ValueError("Provenance must name a BAM in this dataset")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if is_lifted(dataset):
+        return update_settings(state, dataset_id, dict(molecule_groups=settings.as_dict()["molecule_groups"], joint_dedup=settings.joint_dedup), None)
+    dataset.molecule_groups = settings.as_dict()["molecule_groups"]
+    dataset.joint_dedup = settings.joint_dedup
+    from services.dataset_registration import invalidate_dataset_caches
+    invalidate_dataset_caches(state, dataset_id)
+    return {"success": True, "dataset": dataset.to_dict()}

@@ -400,7 +400,11 @@ def _sampled_entry_with_reads(state, dataset, dataset_id, chrom, start, end, rea
                 continue
             have = set()
             exact_ids = len(token) >= 3 and token[-3] == 'cluster_sample_v1'
-            names = reads.read_ids() if isinstance(reads, PackedReads) else (str(r.get("id", "")) for r in reads)
+            if getattr(dataset, "data_type", None) == "bam_livelift":
+                from services.lift.cohort import analysis_id
+                names = (key for r in reads for key in (r.get("id", ""), analysis_id(r, dataset.live_lift.settings)))
+            else:
+                names = reads.read_ids() if isinstance(reads, PackedReads) else (str(r.get("id", "")) for r in reads)
             for read_id in names:
                 have.add(read_id)
                 if not exact_ids:
@@ -1504,6 +1508,7 @@ def _viewport_reads_from_broad(
     quality_filters: Optional[Iterable[dict]] = None,
     bc_end: Optional[int] = None,
     row_filter: Optional[Callable] = None,
+    cohort_out: Optional[dict] = None,
 ) -> tuple[list[dict], int, int]:
     """``row_filter``: rows that never enter the working set (a lifted display's
     haplotype and display settings), applied before every count, filter and cap."""
@@ -1512,7 +1517,10 @@ def _viewport_reads_from_broad(
     if is_lifted(dataset):
         from services.lift.cohort import prepare_lift_cohort, cohort_scope
         purpose, hap, strand = cohort_scope(dataset)
-        all_reads = prepare_lift_cohort(all_reads, purpose, dataset.live_lift.settings, hap).rows
+        prepared = prepare_lift_cohort(all_reads, purpose, dataset.live_lift.settings, hap)
+        all_reads = prepared.rows
+        if cohort_out is not None:
+            cohort_out.update(prepared.description)
         if strand:
             from services.read_strand import filter_reads_by_strand, strand_calls
             all_reads = filter_reads_by_strand(all_reads, strand, strand_calls(state, dataset.id))
@@ -2309,6 +2317,7 @@ def _build_working_set(
             )
 
     bc_start = broad_cache_key[2] if broad_cache_key else broad_start
+    cohort_description = {}
     viewport_reads, total_overlapping, total_spanning = _viewport_reads_from_broad(
         state=state,
         all_reads=all_reads,
@@ -2326,6 +2335,7 @@ def _build_working_set(
         quality_filters=quality_filters,
         bc_end=broad_cache_key[3] if broad_cache_key else broad_end,
         row_filter=display_row_filter(dataset),
+        cohort_out=cohort_description,
     )
     sampling_metadata = sampling_info(all_reads, start, end, total_overlapping, total_spanning) if level else None
     if sampling_metadata:
@@ -2366,6 +2376,9 @@ def _build_working_set(
 
     working_set = WorkingSet(viewport_reads, total_overlapping, total_spanning, chrom, start, end)
     working_set.sampling = sampling_metadata
+    if cohort_description:
+        working_set.lift_cohort = {**cohort_description, "scope": "broad load before viewport filters",
+                                   "overlapping_rows": total_overlapping, "used_rows": len(viewport_reads)}
     if cacheable:
         if isinstance(state._working_set_cache, ByteCache) and len(viewport_reads) >= 4096:
             import copy

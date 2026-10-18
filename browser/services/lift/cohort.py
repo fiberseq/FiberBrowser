@@ -53,7 +53,12 @@ def raw_qnames(ids, dataset):
     for value in ids:
         value = str(value)
         parts = value.rsplit("|", count)
-        out.add(parts[0].split("|", 1)[1] if len(parts) == count + 1 and "|" in parts[0] else value)
+        groups = settings.molecule_group_map(getattr(dataset, "paths", []), getattr(dataset, "id", ""))
+        prefixes = sorted(set(groups.values()), key=len, reverse=True)
+        molecule = parts[0] if len(parts) == count + 1 else ""
+        prefix = next((g for g in prefixes if molecule.startswith(g + "|")), None)
+        out.add(molecule[len(prefix) + 1:] if prefix is not None else
+                molecule.split("|", 1)[1] if "|" in molecule else value)
     return out
 
 

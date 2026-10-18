@@ -108,6 +108,7 @@ def collect_assigned_feature_rows(
     requested_layers = cluster_modes_requested_layers(peak_modes)
     query = query or AnalysisReadQuery.from_request(
         state,
+        capability="clustering",
         chrom=chrom,
         start=start,
         end=end,

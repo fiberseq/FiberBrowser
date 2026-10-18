@@ -189,9 +189,10 @@ class AnalysisReadQuery:
         broad_prefetch_multiplier: Optional[int] = None,
         force_reload: bool = False,
         lift_hap: Optional[str] = None,
+        strand: Optional[str] = None,
     ) -> WorkingSet:
         from services.lift.cohort import using_lift_cohort
-        with using_lift_cohort(self.purpose, lift_hap or self.lift_hap_by_dataset.get(dataset_id), self.strand_by_dataset.get(dataset_id)):
+        with using_lift_cohort(self.purpose, lift_hap or self.lift_hap_by_dataset.get(dataset_id), strand or self.strand_by_dataset.get(dataset_id)):
             ws = self._build_working_set(state, dataset_id, chrom=chrom, start=start, end=end, spanning=spanning,
                                      read_ids=read_ids, include_methylation=include_methylation,
                                      include_layers=include_layers, requested_layers=requested_layers,

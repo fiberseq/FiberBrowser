@@ -27,6 +27,10 @@ LIFT_ALLOWED: frozenset = frozenset({
     # Display paths (compact reads, coverage, locate) and the lift routes.
     (_GET, "/api/reads/compact"), (_GET, "/api/reads/compact_all"), (_GET, "/api/coverage"),
     (_GET, "/api/reads/locate"), (_POST, "/api/reads/locate"),
+    # Prepared-cohort clustering only. All other analysis routes stay closed.
+    (_POST, "/api/cluster_all"), (_POST, "/api/cluster_matched_views"),
+    (_POST, "/api/cluster_projection"), (_POST, "/api/assign_to_clusters"),
+    (_POST, "/api/dissolve_cluster"), (_POST, "/api/auto_cull_clusters"),
     # Dataset bookkeeping (list, remove, its assembly report).
     (_DELETE, "/api/datasets/{dataset_id}"), (_GET, "/api/datasets/{dataset_id}/assembly"),
     (_POST, "/api/datasets/{dataset_id}/refresh_capabilities"),

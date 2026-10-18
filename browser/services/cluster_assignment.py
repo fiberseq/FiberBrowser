@@ -383,7 +383,7 @@ def cluster_compact_reads(compact_reads, peak_regions, region_start, n_clusters,
             from services.dynamic_clustering import match_pattern_to_cluster, read_peak_overlap_weights
             reads_by_id = {}
             for read in compact_reads:
-                reads_by_id.setdefault(read.get("id"), read)
+                reads_by_id.setdefault(read.get("analysis_id") or read.get("id"), read)
             labels = np.empty(n_samples, dtype=np.int32)
             for i in range(n_samples):
                 pattern = read_patterns[i]

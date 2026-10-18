@@ -1,6 +1,6 @@
 """Live-lift capabilities, checked inside services (DESIGN_LIVE_LIFT.md §3.10).
 
-A ``bam_livelift`` dataset supports the display paths only (compact reads,
+A ``bam_livelift`` dataset supports display and prepared-cohort clustering (compact reads,
 ``compact_all``, coverage, locate, tooltips). Every other analysis refuses it
 with ``LiveLiftUnsupported`` (HTTP 409 and one notice), default-deny: a
 service that has not been taught about lifted datasets calls ``require`` (or
@@ -13,7 +13,7 @@ from typing import Iterable
 
 LIFTED_TYPE = "bam_livelift"
 # What lifted datasets support in this phase (P2a: display).
-SUPPORTED = frozenset({"compact_reads", "compact_all", "coverage", "lift_correspondence_only", "locate", "tooltip", "settings", "differences"})
+SUPPORTED = frozenset({"compact_reads", "compact_all", "coverage", "lift_correspondence_only", "locate", "tooltip", "settings", "differences", "clustering"})
 
 
 class LiveLiftUnsupported(Exception):

@@ -128,6 +128,11 @@ def update_settings(state, dataset_id: str, settings: Optional[dict] = None,
         return {"success": False, "error": "Live lift: " + " ".join(validation.errors), "validation": validation.as_dict()}
     new.validation = validation.as_dict()
     dataset.live_lift = new
+    dataset.cluster_assignments = {}
+    dataset.cluster_element_info = None
+    dataset.cluster_peak_regions = None
+    dataset.cluster_feature_settings = None
+    dataset.sorted_indices = None
     from services.dataset_registration import invalidate_dataset_caches
     invalidate_dataset_caches(state, dataset_id)
     return {"success": True, "dataset": dataset.to_dict()}

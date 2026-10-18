@@ -330,6 +330,8 @@ class Dataset:
         from utils.validation import is_url, detect_data_format
 
         self.id = dataset_id
+        self.molecule_groups = []
+        self.joint_dedup = "off"
         self.cluster_assignments = {}
         self.cluster_element_info = None
         self.cluster_peak_regions = None
@@ -446,13 +448,16 @@ class Dataset:
         return {
             # A live-lift dataset's settings are part of what its reads are (lift_key): client caches follow them.
             "source_identity": hashlib.sha256(repr((file_identity(self.paths),
-                                                    *(lift_identity(self)))).encode()).hexdigest(),
+                                                    tuple(tuple(p) for p in getattr(self, "molecule_groups", [])),
+                                getattr(self, "joint_dedup", "off"), *(lift_identity(self)))).encode()).hexdigest(),
             "id": self.id,
             "label": self.label,
             "path": self.path,
             "paths": self.paths,
             "color": self.color,
             "data_type": self.data_type,
+            "molecule_groups": getattr(self, "molecule_groups", []),
+            "joint_dedup": getattr(self, "joint_dedup", "off"),
             "is_remote": self.is_remote,
             "layer_type": self.layer_type,
             "available_layers": self.available_layers,

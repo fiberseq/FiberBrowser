@@ -31,6 +31,7 @@ from typing import Any, Dict
 import numpy as np
 
 from services.analysis_query import AnalysisReadQuery
+from services.read_selection import read_matches_id_filter
 from services.clustering_features import extract_features_from_compact, resample_feature_blocks
 from services.clustering_inputs import (
     active_peak_regions,
@@ -174,11 +175,13 @@ def run_matched_views_endpoint(*, state, req) -> Dict[str, Any]:
     row_views: list[str] = []
     metadata: dict[str, dict[str, Any]] = {}
 
+    pending = []
     phase_start = time.perf_counter()
     for view, (peaks, modes) in zip(req.views, features):
         strands = {p.dataset_id: p.strand for p in view.panels if p.strand}
         query = AnalysisReadQuery.from_request(
             state,
+            capability="clustering",
             chrom=view.chrom,
             start=view.start,
             end=view.end,
@@ -190,11 +193,11 @@ def run_matched_views_endpoint(*, state, req) -> Dict[str, Any]:
             requested_layers=cluster_modes_requested_layers(modes),
         )
         for panel in view.panels:
-            working_set = query.build_working_set(state, panel.dataset_id, read_ids=panel.read_ids)
+            working_set = query.build_working_set(state, panel.dataset_id, read_ids=panel.read_ids, lift_hap=panel.lift_hap, strand=panel.strand)
             reads = list(working_set.reads or [])
             if panel.read_ids is not None:
                 allowed = set(panel.read_ids)
-                reads = [read for read in reads if read.get("id") in allowed]
+                reads = [read for read in reads if read_matches_id_filter(read, allowed)]
             if panel.strand:
                 from services.read_strand import filter_reads_by_strand, strand_calls
                 reads = filter_reads_by_strand(reads, panel.strand, strand_calls(state, panel.dataset_id))
@@ -202,28 +205,36 @@ def run_matched_views_endpoint(*, state, req) -> Dict[str, Any]:
             reads = filter_reads_covering_regions(reads, peaks)
             covering = len(reads)
             reads = query.cap_reads(reads, namespace="matched_views", label=panel.result_key)
-            ids: list[str] = []
-            if reads:
-                prefixed = [prefix_compact_read(read, panel.result_key) for read in reads]
-                raw, prefixed_ids, widths, _ = extract_features_from_compact(
-                    prefixed, peaks, view.start, step=FEATURE_STEP,
-                    subnucleosomal_threshold=req.subnucleosomal_threshold, peak_modes=modes,
-                )
-                if len(prefixed_ids) and raw.ndim == 2 and raw.shape[1] > 0:
-                    rows.append(resample_feature_blocks(raw, widths, bins, reverse=view.reverse))
-                    bit_rows.append(_feature_bits(raw, widths, req.accessibility_threshold, view.reverse))
-                    ids = [read["_original_id"] for read in prefixed]
-            row_read_ids.extend(ids)
-            row_keys.extend([panel.result_key] * len(ids))
-            row_views.extend([view.id] * len(ids))
+            prefixed = [prefix_compact_read({**read, "_consensus_dataset_id": panel.dataset_id,
+                                                "_cluster_group": panel.result_key}, panel.result_key) for read in reads]
+            pending.append((view, panel, peaks, modes, prefixed))
             metadata[panel.result_key] = {
                 "view_id": view.id,
                 "dataset_id": panel.dataset_id,
                 "chrom": view.chrom,
                 "eligible_read_count": eligible,
                 "peak_covering_read_count": covering,
-                "analysis_read_count": len(ids),
+                "analysis_read_count": len(reads),
+                **({"cohort": working_set.lift_cohort} if getattr(working_set, "lift_cohort", None) else {}),
             }
+    from services.lift.joint import prepare_joint_cohort
+    joint_rows, joint_report = prepare_joint_cohort(state, [r for *_, cohort in pending for r in cohort])
+    retained = {id(r) for r in joint_rows}
+    for view, panel, peaks, modes, cohort in pending:
+        prefixed = [r for r in cohort if id(r) in retained]
+        ids = []
+        if prefixed:
+            raw, prefixed_ids, widths, _ = extract_features_from_compact(
+                prefixed, peaks, view.start, step=FEATURE_STEP,
+                subnucleosomal_threshold=req.subnucleosomal_threshold, peak_modes=modes)
+            if len(prefixed_ids) and raw.ndim == 2 and raw.shape[1] > 0:
+                rows.append(resample_feature_blocks(raw, widths, bins, reverse=view.reverse))
+                bit_rows.append(_feature_bits(raw, widths, req.accessibility_threshold, view.reverse))
+                ids = [read["_original_id"] for read in prefixed]
+        row_read_ids.extend(ids)
+        row_keys.extend([panel.result_key] * len(ids))
+        row_views.extend([view.id] * len(ids))
+        metadata[panel.result_key]["analysis_read_count"] = len(ids)
     timings.add("feature_extraction", phase_start)
 
     response: Dict[str, Any] = {
@@ -234,6 +245,7 @@ def run_matched_views_endpoint(*, state, req) -> Dict[str, Any]:
         "sample_seed": sample_seed,
         "cluster_random_state": random_state,
         "total_reads": len(row_read_ids),
+        "joint_cohort": joint_report,
     }
     if not row_read_ids:
         results = {key: {**meta, "assignments": {}, "cluster_counts": {}} for key, meta in metadata.items()}

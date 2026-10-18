@@ -703,6 +703,8 @@ def _restore_chemistry_override(dataset, dataset_data: dict) -> None:
     """Put back a chemistry the session's user chose in the browser."""
     from services.chemistry_metadata import DECLARATIONS
 
+    dataset.molecule_groups = dataset_data.get("molecule_groups") or []
+    dataset.joint_dedup = dataset_data.get("joint_dedup", "off")
     # consensus_chemistry; sessions saved before 3.0 call it family_scan_chemistry.
     chemistry = dataset_data.get("consensus_chemistry") or dataset_data.get("family_scan_chemistry")
     metadata = dataset_data.get("chemistry_metadata")

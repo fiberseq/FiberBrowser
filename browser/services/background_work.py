@@ -435,5 +435,6 @@ def dataset_identity(state, dataset_ids) -> tuple:
         paths = list(getattr(dataset, "paths", None) or ([getattr(dataset, "path", None)] if getattr(dataset, "path", None) else []))
         from services.lift.reads import lift_identity
         out.append((str(dataset_id), dataset_generation(state, dataset_id), file_identity(paths),
-                    *lift_identity(dataset)))
+                    *lift_identity(dataset), tuple(tuple(p) for p in getattr(dataset, "molecule_groups", [])),
+                    getattr(dataset, "joint_dedup", "off")))
     return tuple(out)

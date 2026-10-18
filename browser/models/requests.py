@@ -87,6 +87,7 @@ class PeakRegion(BaseModel):
     mode: str = 'accessibility'  # 'accessibility', 'tf', 'modification', 'annotation', or 'off'
 
 class ScanPeaksRequest(BaseModel):
+    lift_hap: Optional[str] = None
     strand: Optional[Literal["CT", "GA"]] = None
     min_width: int = 80
     min_reads: int = 5
@@ -120,6 +121,7 @@ class ClusterViewport(BaseModel):
     start: int = Field(ge=0)
     end: int = Field(gt=0)
     read_ids: Optional[List[str]] = None
+    lift_hap: Optional[str] = None
     strand: Optional[Literal["CT", "GA"]] = None  # DAF-seq panel showing one strand
     # This window's own peaks (absolute), matched one-to-one and equal in width
     # to every other window's, so reads at different loci cluster together.
@@ -152,6 +154,7 @@ class MatchedViewPanel(BaseModel):
     dataset_id: str
     result_key: str
     read_ids: Optional[List[str]] = None
+    lift_hap: Optional[str] = None
     strand: Optional[Literal["CT", "GA"]] = None
 
 
@@ -185,6 +188,7 @@ class MatchedClusterRequest(BaseModel):
 
 
 class DissolveClusterRequest(BaseModel):
+    lift_hap_by_dataset: Optional[Dict[str, str]] = None
     cluster_to_dissolve: int
     current_assignments: Dict[str, Dict[str, int]]
     peak_regions: List[PeakRegion] = []
@@ -195,6 +199,7 @@ class DissolveClusterRequest(BaseModel):
     cluster_feature_rules: List[Dict[str, Any]] = []
 
 class AutoCullRequest(BaseModel):
+    lift_hap_by_dataset: Optional[Dict[str, str]] = None
     current_assignments: Dict[str, Dict[str, int]]
     peak_regions: List[PeakRegion] = []
     dataset_ids: List[str] = []
@@ -212,6 +217,7 @@ class AutoCullRequest(BaseModel):
     cluster_feature_rules: List[Dict[str, Any]] = []
 
 class AssignToClustersRequest(BaseModel):
+    lift_hap_by_dataset: Optional[Dict[str, str]] = None
     peak_regions: List[PeakRegion] = []
     # Combinatorial dynamic reassignment uses binary patterns. Non-combinatorial
     # methods (kmeans, etc.) supply per-cluster centroids + the feature-column
@@ -258,6 +264,7 @@ class ClusterVPlotRequest(BaseModel):
     cluster_assignments: Optional[Dict[str, Dict[str, int]]] = None
 
 class ProjectionRequest(BaseModel):
+    lift_hap_by_dataset: Optional[Dict[str, str]] = None
     dataset_ids: List[str] = []
     peak_regions: List[PeakRegion] = []
     # t-SNE by default: it keeps each read's nearest neighbours together.
