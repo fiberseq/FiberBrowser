@@ -129,6 +129,7 @@ def _fold(rows):
                                       bool(r["live_lift"].get("alt")),
                                       r.get("reference_start", 0), r["analysis_id"],
                                       r["live_lift"]["record"], r["live_lift"].get("row_index", 0)))
+    rows = arbitrate_molecular_placements(rows)
     out = deepcopy(rows[0])
     ll = out["live_lift"]
     ll["records"] = sorted({r["live_lift"]["record"] for r in rows})
@@ -159,7 +160,7 @@ def _fold(rows):
             out[group] = ivs
         ll["calls"][group] = [e[1] for e in entries]
         ll["call_parts"][group] = [e[2] for e in entries]
-    for field in ("segments", "connectors", "badges", "badge_ids"):
+    for field in ("segments", "connectors", "badges", "badge_ids", "molecular_spans"):
         ll[field] = [v for r in rows for v in r["live_lift"].get(field, [])]
     for field in ("methyl", "methyl_m6a", "methyl_m5c", "deam", "possible_deam_ct", "possible_deam_ga"):
         if any(field in r for r in rows):
@@ -167,5 +168,91 @@ def _fold(rows):
     out["alignment_spans"] = _merge(s for r in rows for s in r.get("alignment_spans", []))
     out["reference_start"] = min(r.get("reference_start", 0) for r in rows)
     out["reference_end"] = max(r.get("reference_end", 0) for r in rows)
+    from services.read_selection import read_body_spans
+    ll["segments"] = [[a, b, 0, "+", True] for a, b in _merge(s for r in rows for s in read_body_spans(r))]
+    ll["connectors"] = []
+    ll["insertions"] = {}
     out.pop("qualities", None)
+    return out
+
+
+def _subtract_spans(a, b, occupied):
+    cursor = a
+    for x, y in occupied:
+        if y <= cursor:
+            continue
+        if x >= b:
+            break
+        if x > cursor:
+            yield cursor, min(x, b)
+        cursor = max(cursor, y)
+    if cursor < b:
+        yield cursor, b
+
+
+def arbitrate_molecular_placements(rows):
+    """One placement per molecular base: primary record, primary chain, target.
+
+    Run before merging calls, so two records' local call IDs never imply
+    equivalence. Source insertion payloads never participate.
+    """
+    from services.lift.reads import _merge
+    from services.background_work import checkpoint
+    from services.read_selection import read_body_spans
+    placements = []
+    for i, row in enumerate(rows):
+        ll = row["live_lift"]
+        for a, b, m, step, primary in ll.get("molecular_spans", []):
+            placements.append((bool(ll.get("source", {}).get("supplementary")), not primary,
+                               a, ll["record"], ll.get("row_index", 0), i, b, m, step))
+    if not placements:
+        return rows  # compatibility for synthetic/older rows without the map
+    occupied, allowed = [], defaultdict(list)
+    for n, (_, _, a, _, _, i, b, m, step) in enumerate(sorted(placements)):
+        if n % 256 == 0:
+            checkpoint()
+        last = m + (b - a - 1) * step
+        lo, hi = min(m, last), max(m, last) + 1
+        for x, y in _subtract_spans(lo, hi, occupied):
+            ta = a + (x - m if step == 1 else m - y + 1)
+            allowed[i].append([ta, ta + y - x])
+        occupied = _merge([*occupied, [lo, hi]])
+    result = []
+    for i, row in enumerate(rows):
+        masks = _merge(allowed[i])
+        if not masks:
+            continue
+        result.append(_clip_row(row, masks))
+    return result or rows[:1]
+
+
+def _clip_row(row, masks):
+    """Clip parallel annotation/call arrays to the winning target placements."""
+    out = deepcopy(row)
+    ll = out["live_lift"]
+    groups = {"intervals": out.get("intervals", []), "fire": out.get("fire", [])}
+    groups.update({"layer:" + name: layer.get("intervals", []) for name, layer in out.get("layers", {}).items()})
+    for group, intervals in groups.items():
+        clipped, calls, parts = [], [], []
+        ids = ll.get("calls", {}).get(group, [])
+        provenance = ll.get("call_parts", {}).get(group, [])
+        for j, iv in enumerate(intervals):
+            for a, b in masks:
+                x, y = max(a, iv[0]), min(b, iv[1])
+                if y > x or (iv[0] == iv[1] and a <= iv[0] <= b):
+                    clipped.append([x, y, *iv[2:]])
+                    calls.append(ids[j] if j < len(ids) else None)
+                    parts.append(provenance[j] if j < len(provenance) else None)
+        if group.startswith("layer:"):
+            out["layers"][group[6:]]["intervals"] = clipped
+            out["layers"][group[6:]]["qualities"] = None
+        else:
+            out[group] = clipped
+        ll.setdefault("calls", {})[group] = calls
+        ll.setdefault("call_parts", {})[group] = parts
+    for field in ("methyl", "methyl_m6a", "methyl_m5c", "deam", "possible_deam_ct", "possible_deam_ga"):
+        if field in out:
+            out[field] = [v for v in out[field] if any(a <= (v[0] if isinstance(v, (list, tuple)) else v) < b for a, b in masks)]
+    ll["segments"] = [[a, b, 0, "+", True] for a, b in masks]
+    ll["connectors"] = []
     return out

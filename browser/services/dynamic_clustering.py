@@ -1,5 +1,7 @@
 """Dynamic cluster assignment helpers."""
 from __future__ import annotations
+from services.read_selection import read_body_spans, body_overlap
+from services.read_metrics import read_covers_regions
 
 import numpy as np
 
@@ -186,9 +188,7 @@ def read_peak_overlap_weights(read: dict, peaks: list[list[int]]) -> tuple[int, 
     read_end_rel = max(int(iv[1]) for iv in intervals if len(iv) >= 2)
     weights = []
     for peak_start, peak_end in peaks:
-        overlap_start = max(int(peak_start), read_start_rel)
-        overlap_end = min(int(peak_end), read_end_rel)
-        weights.append(max(0, overlap_end - overlap_start))
+        weights.append(body_overlap(read, int(peak_start), int(peak_end)))
     return tuple(weights)
 
 
@@ -214,7 +214,7 @@ def read_accessibility_pattern(
             pattern_bits.append(0)
             continue
 
-        if not (read_start_rel <= peak_start and read_end_rel >= peak_end):
+        if not read_covers_regions(read, [[peak_start, peak_end]]):
             pattern_bits.append(0)
             continue
 
@@ -254,7 +254,7 @@ def read_accessibility_pattern_by_overlap(
     for peak_start, peak_end in peaks:
         overlap_start = max(int(peak_start), read_start_rel)
         overlap_end = min(int(peak_end), read_end_rel)
-        overlap_width = max(0, overlap_end - overlap_start)
+        overlap_width = body_overlap(read, int(peak_start), int(peak_end))
         overlap_weights.append(overlap_width)
         if overlap_width <= 0:
             pattern_bits.append(0)
@@ -378,7 +378,7 @@ def assign_reads_to_cluster_patterns(
             if not is_class:
                 # Sample j of a peak is at its left edge + j*step: keep the covered ones.
                 sample_pos = int(peaks[peak_idx][0]) + step * np.arange(width)
-                values = values[(sample_pos >= read_lo) & (sample_pos < read_hi)]
+                values = values[np.asarray([any(a <= p < b for a, b in read_body_spans(read)) for p in sample_pos])]
             threshold = 0.5 if is_class else accessibility_threshold
             pattern_bits.append(1 if values.size and values.mean() > threshold else 0)
         class_overlap_weights = [overlap_weights[i] for i, _, _, _ in pattern_slices]

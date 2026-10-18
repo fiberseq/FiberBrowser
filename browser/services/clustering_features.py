@@ -485,7 +485,7 @@ def extract_features_from_compact(
         return np.array([]), [], [], [info[2] for info in peak_col_info]
 
     features = np.zeros((len(compact_reads), total_cols), dtype=np.float32)
-    read_ids = [read["id"] for read in compact_reads]
+    read_ids = [read.get("analysis_id") or read["id"] for read in compact_reads]
 
     for read_idx, read in enumerate(compact_reads):
         for col, term, left, right in class_columns:
@@ -536,6 +536,11 @@ def extract_features_from_compact(
                     cluster_feature_rules=cluster_feature_rules_by_id,
                     cluster_rule_context=cluster_rule_context,
                 )
+                if read.get("live_lift"):
+                    from services.read_selection import read_body_spans
+                    weighted_intervals = sorted((max(a, x), min(b, y), value)
+                        for a, b, value in weighted_intervals for x, y in read_body_spans(read)
+                        if min(b, y) > max(a, x))
                 starts = [start for start, _, _ in weighted_intervals]
                 interval_cache[mode] = (weighted_intervals, starts)
             else:

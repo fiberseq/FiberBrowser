@@ -46,7 +46,12 @@ def is_read_spanning(read: Mapping[str, Any], region_width: int) -> bool:
 
 
 def count_footprints(read: Mapping[str, Any]) -> int:
-    return sum(1 for interval in read.get("intervals", []) if interval[2] > 0)
+    ll = read.get("live_lift")
+    if not ll:
+        return sum(1 for interval in read.get("intervals", []) if interval[2] > 0)
+    calls = ll.get("calls", {}).get("intervals", [])
+    return len({(ll.get("record"), calls[i] if i < len(calls) and calls[i] is not None else ("interval", i))
+                for i, iv in enumerate(read.get("intervals", [])) if iv[2] > 0})
 
 
 def filter_reads_by_min_footprints(
@@ -76,3 +81,17 @@ def filter_reads_by_cluster_focus(
         for read in reads
         if cluster_assignments.get(cohort_read_id(read)) in focus_clusters
     ]
+
+
+def read_body_spans(read):
+    """Continuous target body; connectors and off-target payloads are holes."""
+    ll = read.get("live_lift")
+    if ll:
+        from services.lift.reads import _body_spans, _merge
+        return _merge(_body_spans(ll))
+    intervals = read.get("intervals") or []
+    return [[intervals[0][0], intervals[-1][1]]] if intervals else []
+
+
+def body_overlap(read, start, end):
+    return sum(max(0, min(end, b) - max(start, a)) for a, b in read_body_spans(read))

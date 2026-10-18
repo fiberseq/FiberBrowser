@@ -946,6 +946,7 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
         "source": {"contig": contig, "start": int(read["reference_start"]), "end": int(read["reference_end"]),
                    "orientation": read.get("alignment_orientation"),
                    "supplementary": bool(prim.get("is_supplementary")), "sa": sa or None},
+        "molecular_spans": _molecular_spans(row, runs, rs0),
         "segments": [[s0 - rs0, s1 - rs0, chain, strand, primary] for s0, s1, chain, strand, primary in row.segments],
         "connectors": [[c0 - rs0, c1 - rs0] for c0, c1 in sorted(row.connectors)],
         "badges": [[b[0] - rs0, *b[1:]] for b in sorted(row.badges, key=lambda b: b[0])],
@@ -1094,3 +1095,18 @@ def _infer_legacy(read, layers, payload, parts, mapped, ids, keys, logical, cuts
             layers["msp"] = {"intervals": msp, "qualities": None, "quality_names": []}
             call_ids["layer:msp"] = [None] * len(msp)
             call_parts["layer:msp"] = [None] * len(msp)
+
+
+def _molecular_spans(row, runs, origin):
+    """[target start, end, molecule at start, step, primary chain]."""
+    out = []
+    for frag in row.frags:
+        for r0, length in zip(runs.ref, runs.len):
+            a, b = max(frag.s, r0), min(frag.e, r0 + length)
+            if b <= a:
+                continue
+            t0, t1 = frag.span_of(a, b)
+            m0 = runs.mol_at(b - 1 if frag.minus else a)
+            step = (-1 if runs.reverse else 1) * (-1 if frag.minus else 1)
+            out.append([t0 - origin, t1 - origin, m0, step, bool(frag.p.primary)])
+    return sorted(out)

@@ -120,6 +120,11 @@ def clip_geometry(ll: dict, offset: int, width: int) -> dict:
         if any(b > offset and a < offset + width for a, b in body):
             segs.append([max(segment[0] - offset, 0), min(segment[1] - offset, width), *segment[2:]])
     out["segments"] = segs
+    if "molecular_spans" in ll:
+        out["molecular_spans"] = [[max(a, offset) - offset, min(b, offset + width) - offset,
+                                   m + (max(a, offset) - a) * step, step, primary]
+                                  for a, b, m, step, primary in ll["molecular_spans"]
+                                  if b > offset and a < offset + width]
     cons = []
     for c0, c1 in ll.get("connectors") or ():
         a, b = c0 - offset, c1 - offset

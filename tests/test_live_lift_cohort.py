@@ -45,3 +45,51 @@ def test_inferred_strand_is_a_qualified_molecule_property():
     a["deam"], b["deam"], unrelated["deam"] = [[1, 1], [2, 1]], [[3, 0]], [[1, 0]]
     prepared = prepare_lift_cohort([a, b, unrelated], "display", LiftSettings()).rows
     assert [r["strand"] for r in prepared] == ["CT", "CT", "GA"]
+
+
+def test_split_calls_count_once_after_crop_and_record_ids_do_not_merge():
+    from services.read_selection import count_footprints
+    from services.working_sets import project_broad_read_to_viewport
+    a = row()
+    a['intervals'] = [[0, 10, 20], [20, 30, 20]]
+    a['live_lift']['segments'] = [[0, 10, 1, '+', True], [20, 30, 1, '+', True]]
+    a['live_lift']['calls']['intervals'] = ['call', 'call']
+    a['live_lift']['call_parts']['intervals'] = [[0, 0], [10, 0]]
+    assert count_footprints(a) == 1
+    cropped, _ = project_broad_read_to_viewport(a, viewport_offset=20, region_width=10,
+                                               include_methylation=False, layer_key=())
+    assert count_footprints(cropped) == 1
+    b = row(record='other', start=30)
+    folded = prepare_lift_cohort([a, b], 'analysis', LiftSettings(fold_molecule=True)).rows[0]
+    assert count_footprints(folded) == 2
+
+
+def test_molecular_overlap_arbitration_is_order_independent():
+    a, b = row(start=0), row(record='supp', supp=True, start=100)
+    a['live_lift']['molecular_spans'] = [[0, 20, 0, 1, True]]
+    b['live_lift']['molecular_spans'] = [[100, 120, 10, 1, True]]
+    settings = LiftSettings(fold_molecule=True)
+    first = prepare_lift_cohort([a, b], 'analysis', settings).rows
+    second = prepare_lift_cohort([b, a], 'analysis', settings).rows
+    assert first == second
+    assert first[0]['intervals'] == [[0, 20, 20], [110, 120, 20]]
+
+
+def test_mixed_metaprofile_denominators_and_dynamic_overlap_ignore_connectors():
+    import numpy as np
+    from services.read_metrics import compute_metaprofile_from_compact_reads, compute_compact_metaprofile_payload, read_covers_regions
+    from services.dynamic_clustering import read_peak_overlap_weights
+    a = row()
+    a['intervals'] = [[0, 100, 100]]  # even a stale hull must not cover a hole
+    a['live_lift']['segments'] = [[0, 100, 1, '+', True]]
+    a['live_lift']['connectors'] = [[20, 80]]
+    assert not read_covers_regions(a, [[30, 40]])
+    assert read_peak_overlap_weights(a, [[0, 100], [30, 40]]) == (40, 0)
+    # The lifted molecule has no footprint in the hole. Native signal is 1,
+    # rather than 1/2 from a false lifted denominator.
+    a['intervals'] = [[0, 20, 100], [80, 100, 100]]
+    native = dict(id='native', intervals=[[0, 100, 100]])
+    profile = compute_metaprofile_from_compact_reads([native, a], 100, 90, 1000)
+    assert np.allclose(profile, 1)
+    fast = compute_compact_metaprofile_payload([native, a], 100, ['nuc'])
+    assert np.allclose(fast['layers']['nuc'], 1)

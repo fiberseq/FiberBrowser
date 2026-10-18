@@ -101,7 +101,7 @@ def compute_scan_counts(
         intervals = read.get("intervals") or []
 
         if signal_source == "fire":
-            _append_read_span(intervals, total_starts, total_ends, coordinate_offset)
+            _append_read_span(read, total_starts, total_ends, coordinate_offset)
             for fs, fe in _fire_intervals_for_signal(read):
                 _append_range(numerator_starts, numerator_ends, fs, fe, coordinate_offset)
             continue
@@ -114,7 +114,7 @@ def compute_scan_counts(
             continue
 
         if signal_source in MODIFICATION_SIGNAL_SOURCES:
-            _append_read_span(intervals, total_starts, total_ends, coordinate_offset)
+            _append_read_span(read, total_starts, total_ends, coordinate_offset)
             for position in _marks_for_signal(read, signal_source):
                 shifted = int(position) - coordinate_offset
                 if 0 <= shifted < region_width:
@@ -122,7 +122,7 @@ def compute_scan_counts(
             continue
 
         if layer_name is not None:
-            _append_read_span(intervals, total_starts, total_ends, coordinate_offset)
+            _append_read_span(read, total_starts, total_ends, coordinate_offset)
             layer_data = (read.get("layers") or {}).get(layer_name)
             if layer_data:
                 for layer_interval in layer_data.get("intervals", []):
@@ -424,14 +424,14 @@ def _append_range(starts: list[int], ends: list[int], start: int, end: int, coor
 
 
 def _append_read_span(
-    intervals: Sequence[Sequence[int]],
+    read: dict,
     starts: list[int],
     ends: list[int],
     coordinate_offset: int,
 ) -> None:
-    if not intervals:
-        return
-    _append_range(starts, ends, intervals[0][0], intervals[-1][1], coordinate_offset)
+    from services.read_selection import read_body_spans
+    for a, b in read_body_spans(read):
+        _append_range(starts, ends, a, b, coordinate_offset)
 
 
 def _find_threshold_regions(

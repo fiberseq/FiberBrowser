@@ -11,6 +11,7 @@ from bisect import bisect_left, bisect_right
 from typing import Optional
 
 import numpy as np
+from services.read_selection import read_body_spans, body_overlap
 
 
 DEFAULT_SAMPLE_SEED = "fiberbrowser-analysis"
@@ -81,7 +82,7 @@ def compact_reads_to_dataframe(compact_reads, region_start, region_end):
     rows = []
     read_ids = []
     for read in compact_reads:
-        read_id = read["id"]
+        read_id = read.get("analysis_id") or read["id"]
         read_ids.append(read_id)
 
         row = np.full(len(positions), 2, dtype=np.float32)
@@ -115,9 +116,9 @@ def read_covers_regions(read: dict, regions: list) -> bool:
         return True
 
     spans = sorted(
-        (int(iv[0]), int(iv[1]))
-        for iv in intervals
-        if len(iv) >= 2 and iv[1] > iv[0]
+        (int(max(iv[0], a)), int(min(iv[1], b)))
+        for iv in intervals for a, b in read_body_spans(read)
+        if len(iv) >= 2 and min(iv[1], b) > max(iv[0], a)
     )
     if not spans:
         return False
@@ -200,13 +201,7 @@ def sample_by_coverage(reads: list, n: int, region_start: int, region_end: int) 
         intervals = read.get("intervals")
         if not intervals:
             return 0
-        read_start = intervals[0][0] + region_start
-        read_end = intervals[-1][1] + region_start
-        overlap_start = max(read_start, region_start)
-        overlap_end = min(read_end, region_end)
-        if overlap_end <= overlap_start:
-            return 0
-        return (overlap_end - overlap_start) / region_width
+        return body_overlap(read, 0, region_width) / region_width
 
     return heapq.nlargest(n, reads, key=read_coverage)
 
@@ -233,13 +228,11 @@ def compute_metaprofile_from_compact_reads(
         if not primary_intervals:
             continue
 
-        read_start = primary_intervals[0][0]
-        read_end = primary_intervals[-1][1]
-        s_cov = max(0, read_start)
-        e_cov = min(region_width, read_end)
-        if e_cov > s_cov:
-            cov_starts.append(s_cov)
-            cov_ends.append(e_cov)
+        for a, b in read_body_spans(read):
+            s_cov, e_cov = max(0, a), min(region_width, b)
+            if e_cov > s_cov:
+                cov_starts.append(s_cov)
+                cov_ends.append(e_cov)
 
         profile_intervals = get_layer_intervals(read, layer) if layer else primary_intervals
 
@@ -491,11 +484,9 @@ def compute_compact_metaprofile_payload(
         if not primary_intervals:
             continue
 
-        _intervals, primary_starts, primary_ends = _get_interval_index(read)
-        read_start = int(primary_starts[0]) - coordinate_offset if primary_starts else 0
-        read_end = int(primary_ends[-1]) - coordinate_offset if primary_ends else 0
-        cov_starts.append(read_start)
-        cov_ends.append(read_end)
+        for a, b in read_body_spans(read):
+            cov_starts.append(int(a) - coordinate_offset)
+            cov_ends.append(int(b) - coordinate_offset)
 
         view_start = coordinate_offset
         view_end = coordinate_offset + region_width
