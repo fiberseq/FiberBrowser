@@ -243,7 +243,7 @@ def test_read_deletion_and_missing_md(evidence):
     assert rows["deleted"]["read_bases"] == "" and rows["deleted"]["hg002"] == "C"
     assert rows["deleted"]["allele"] == "deleted"
     assert rows["unknown"]["hg002"] is None
-    assert rows["unknown"]["allele"] == "other"
+    assert rows["unknown"]["allele"] == "unknown"
 
 
 def test_reverse_record_hard_clips_and_cigar_insertion(evidence):
@@ -417,14 +417,10 @@ def test_http_native_bam_match_flag_gate_and_detail(evidence, monkeypatch):
 
 def test_real_alu_expansion_smoke():
     """The owner's hg38 AluY view, skipped on machines without handoff data."""
-    import pwd
-    root = Path(os.environ.get("PGLIFT_WORK", str(Path(pwd.getpwuid(os.getuid()).pw_dir) / "pglift_work")))
-    manifest = root / "pglift_20261017/native/graphlift/scratch/v4/hprc.GRCh38.HG002.chain.graphlift.json"
-    handoff = Path(os.environ.get("LIVE_LIFT_DEMO_DATA", str(Path(pwd.getpwuid(os.getuid()).pw_dir) /
-                    "pglift_work/demo_data")))
-    bam = handoff / "SAMPLE_A.alu_chr3.hg002v1.1.bam"
-    if not manifest.exists() or not bam.exists():
-        pytest.skip("AluY handoff BAM and whole-genome sidecar not present")
+    manifest = Path(os.environ.get("FIBERBROWSER_TEST_LIFT_MAP", ""))
+    bam = Path(os.environ.get("FIBERBROWSER_TEST_LIFT_BAM", ""))
+    if not manifest.is_file() or not bam.is_file():
+        pytest.skip("Set FIBERBROWSER_TEST_LIFT_BAM and FIBERBROWSER_TEST_LIFT_MAP for the AluY smoke")
     ds = SimpleNamespace(id="real", data_type="bam_livelift", paths=[str(bam)], live_lift=LiveLiftConfig(str(manifest), []))
     state = SimpleNamespace(fasta=None)
     items = diff.differences_for_region(state, ds, "chr3", 128650000, 128670000, lift_hap="MAT")["items"]
@@ -434,7 +430,8 @@ def test_real_alu_expansion_smoke():
     assert any(any(iv[2] > 0 for iv in block.get("intervals", []))
                for row in rows if row["live_lift"]["hap_label"] == "MAT"
                for key, block in row["live_lift"]["insertions"].items() if key in {i["id"] for i in ins})
-    inspected = diff.difference_reads(state, ds, "chr3", 128657390, 128657390, item_id=ins[0]["id"])
+    inspected = diff.difference_reads(state, ds, "chr3", 128657390, 128657390, item_id=ins[0]["id"], include_sequence=True)
+    assert len(inspected["sequence"]["sequence"]) > 2000
     for hap in ("MAT", "PAT"):
         cohort = [r for r in inspected["rows"] if r["hap_label"] == hap]
         assert sum(r["allele"] == "hg002" for r in cohort) > len(cohort) / 2

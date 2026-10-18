@@ -61,11 +61,11 @@ export function DifferencePopover({ panel, dataset, anchor }: { panel: PanelConf
     consensus: { seq: sequence, length: sequence.length, n_reads: 1, seconds: 0, method_label: 'one full carrier (read sequence)' },
   }), [d, sequence, current, dataset.id, model]);
   useEffect(() => {
-    if (lens && current?.action === 'identify') { identifyLens(lens, dataset.id, { key: identifyKey }); setIdentify(true); }
+    if (lens && current?.action === 'identify') setIdentify(true);
   }, [lens, current?.action, dataset.id, identifyKey]);
   const requestIdentification = async () => {
     if (!current || !d) return;
-    if (lens) { identifyLens(lens, dataset.id, { key: identifyKey }); setIdentify(true); return; }
+    if (lens) { setIdentify(true); return; }
     const controller = new AbortController();
     sequenceRequest.current?.abort(); sequenceRequest.current = controller;
     setFetchingSequence(true); setError('');

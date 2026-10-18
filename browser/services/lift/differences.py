@@ -34,7 +34,8 @@ GET /api/lift/difference_reads returns::
 
   {dataset_id, lift_key, chrom, pos, end, rows:[Inspection],
    summary:{hap_label:{allele:count}}, preferred_hap:str|null,
-   capped:bool, max_records:500}
+   capped:bool, max_records:500, hap_status:{hap_label:status},
+   sequence:null|{sequence,read_id,record,ins_id,orientation,source:'reads'}}
 
 Inspection is ``{id,molecule,hap_label,record,supplementary,strand,source_pos:
 {contig,start,end},read_bases:str,hg002:str|null,grch38:str|null,allele,
@@ -52,9 +53,10 @@ Carriage (hg002) requires full source-span coverage and molecular length within
 max(10%,50 bp); clipped alignments are partial, empty spans deleted, and
 flank-spanning non-carriers no_insertion. Identity is a best-effort percent
 from the source CIGAR, independent of carriage. Inserted read_bases is at most
-60 bases; read_bases_length/mol_bp preserve its full length. Missing target
+60 bases; read_bases_length/mol_bp preserve its full length. include_sequence
+returns one full oriented carrier for item_id on demand (at most 50 kb). Missing target
 bases leave base alleles as other. Missing MD and source FASTA leave HG002
-unknown. A displayed row's
+unknown (allele=unknown). Cross-parent rows keep alignment_hg002 separately. A displayed row's
 record key is reused when available, and orientation describes its display.
 """
 from __future__ import annotations
@@ -77,9 +79,9 @@ def difference_id(label, contig, start, end, kind):
 
 
 def source_only_gap(handle, contig, a, b, chain):
-    """Canonical full map gap for a partial read's badge, else its own span.
-    Only source-only gaps are expanded this way: replacement and elsewhere
-    badges retain their exact source span rather than claiming a map insertion.
+    """Canonical source-only map gap containing this badge, or None.
+    Indexed source coordinates work on both strands; an unmatched source
+    span never establishes an assembly insertion.
     """
     if handle is not None:
         with handle.lock:
@@ -443,7 +445,7 @@ def row_mismatches(read, row, ctx, hap=None):
             for i in np.flatnonzero((observed != reference) | is_ref):
                 base = bases[i]
                 ev = dict(type="X", pos=t + int(i) - ctx.region_start, base=base, ref=rb[i],
-                          source="assembly" if mapped[i] and hg is not None and hg[i] == base else "reads", len=1, seq=base)
+                          source="assembly" if mapped[i] and hg is not None and hg[i] != "N" and hg[i] == base else "reads", len=1, seq=base)
                 if hap is not None and hap != f.p.hap:
                     ev["hg002"] = hg[i] if hg is not None and hg[i] != "N" else None
                     ev["alignment_hg002"] = alignment_hg[i] if alignment_hg is not None else None
@@ -705,7 +707,7 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
                 alignment_hg = hg
                 hap = ll.get("hap", span["hap"])
                 hg = alignment_hg if hap == span["hap"] else expected.get(hap)
-                allele = ("no_coverage" if not overlaps else "deleted" if not rb else
+                allele = ("no_coverage" if not overlaps else "deleted" if not rb else "unknown" if hg is None else
                           "hg002" if hg is not None and ref is not None and rb == hg and hg != ref else
                           "same_as_grch38" if hg is not None and ref is not None and rb == hg == ref else
                           "grch38" if hg is not None and ref is not None and hg != ref and rb == ref else "other")

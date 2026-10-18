@@ -67,3 +67,19 @@ def test_missing_correspondence_is_explicit_per_parent(evidence):
     result = diff.difference_reads(state, ds, TARGET, 19000, 19001)
     assert result['rows'] == []
     assert set(result['hap_status'].values()) == {'no_correspondence'}
+
+
+def test_cross_parent_ambiguous_expected_allele_stays_unknown(two_hap_evidence):
+    state, ds, tmp = two_hap_evidence
+    ds.live_lift.source_fasta = None
+    seq = 'A'*100+'C'+'A'*99
+    ds.paths = [write_bam(tmp / 'ambiguous-parent.bam', lambda h: [
+        make_record(h, 'molecule', MAT, 0, '200M', seq=seq, flag=2048,
+                    tags=[('MD', '200'), ('SA', f'{PAT},1,+,200M,60,1;')]),
+        make_record(h, 'molecule', PAT, 0, '200M', seq=seq,
+                    tags=[('MD', '100A99'), ('SA', f'{MAT},1,+,200M,60,0;')]),
+        make_record(h, 'conflicting-reference', PAT, 0, '200M', seq='A'*100+'G'+'A'*99, tags=[('MD', '200')])])]
+    result = diff.difference_reads(state, ds, TARGET, 1100, 1101)
+    row = next(r for r in result['rows'] if r['supplementary'])
+    assert row['hap_label'] == 'PAT' and row['hg002'] is None
+    assert row['allele'] == 'unknown' and row['alignment_hg002'] == 'C'

@@ -69,7 +69,7 @@ target display orientation. Insertions have `t_start == t_end`; deletions
 have `alt_bp == 0`; replacements have both lengths positive. `reason` retains
 the manifest gap reason. An `aligned_bubble` is approximate correspondence,
 not a list of called variants. `no_correspondence` describes target sequence
-with no primary aligned piece, including target-only gaps; it has null
+outside the primary net coverage. Deletions and replacements retain their own kinds; it has null
 source fields and uses target chromosome/start/end in its ID. Inversions
 span the primary minus-strand net region.
 
@@ -110,9 +110,9 @@ type Inspection = {
   id: string; molecule: string; hap_label: string; record: string;
   supplementary: boolean; strand: string | null;
   source_pos: {contig: string; start: number; end: number};
-  read_bases: string; hg002: string | null; grch38: string | null;
+  read_bases: string; alignment_hg002?: string | null; hg002: string | null; grch38: string | null;
   allele: 'hg002' | 'same_as_grch38' | 'grch38' | 'other' | 'deleted' | 'no_coverage'
-      | 'partial' | 'no_insertion';
+      | 'partial' | 'no_insertion' | 'unknown';
   chromatin: {
     state: 'nucleosome' | 'footprint' | 'accessible' | 'none';
     layer: string | null;
@@ -131,6 +131,9 @@ type DifferenceReadsResponse = {
   preferred_hap: string | null;
   capped: boolean;
   max_records: 500;
+  hap_status: Record<string, string>;
+  sequence: null | {sequence: string; read_id: string; record: string;
+    ins_id: string; orientation: string; source: "reads"};
 };
 ```
 
@@ -142,13 +145,13 @@ All strings follow target display orientation. `hg002` allele means the read
 matches its own haplotype's HG002 base and that base differs from GRCh38.
 `same_as_grch38` means this haplotype has no difference and the read agrees.
 `grch38` flags a read carrying the target allele when its own haplotype differs;
-`other` includes unknown reference comparisons.
+`unknown` means the haplotype allele could not be established; `other` is a known comparison that matches neither allele. Cross-parent supplementary alignments retain `alignment_hg002` separately; `hg002` follows the molecule’s haplotype.
 `no_coverage` includes skipped source sequence rather than a CIGAR deletion.
 
 `strand` is molecular `st`; it does not flip on a minus piece. Without `st` it
 is null and the popover shows only the haplotype chip.
 `chromatin.orientation` describes the display flip. Chromatin comes from
-display rows, reusing a broad cache when available; nearest m6A is an unsigned
+display rows, reusing only completely annotated caches and decoding the bounded cohort when records are missing; nearest m6A is an unsigned
 distance at most 50 bp, otherwise null. Insertion inspection reports the
 hidden block's state at its first covered display base. `carries_insertion`
 requires the source alignment to span the full map gap with `mol_bp` within
@@ -159,7 +162,9 @@ actual SEQ bases there. Insertion `read_bases` is truncated to 60 bases with
 the full length in `read_bases_length`; `identity` is a best-effort percentage
 against the assembly using aligned CIGAR positions and indels, independent
 of carriage. A record projected through
-several primary chains can contribute several inspection rows.
+several primary chains can contribute several inspection rows. Each parent independently resolves aligned, deleted or no-correspondence status. Deletion carriers must span their zero-width source boundary.
+
+`include_sequence=true` with the selected `item_id` returns one full, oriented carrier in `sequence`, at most 50 kb. It selects the full carrier closest to the assembly length, allowing read indels; ordinary inspections keep only previews. No complete eligible carrier returns null.
 
 At most 500 distinct source records are fetched across BAMs and windows.
 `capped` is true if another eligible record was encountered. Fallback display
@@ -208,12 +213,11 @@ Blocks exist for source spans of at least 50 bp. Over 50 kb, only `length`
 and `too_large: true` are emitted. Smaller badges have a null ID. The key is
 the strip's insertion ID, shared across records and panels. Partial terminal
 badges use the full map gap's ID and block width. A badge for source sequence
-without a matching map insertion still has a source-span insertion ID.
+without a matching source-only map gap has a null ID and no insertion payload or assembly insertion SV.
 
 `pos` is viewport-relative, like the badge. All other coordinates are
 insertion-local in left-to-right target display order. Minus blocks mirror
-span boundaries and points with `x -> length-x`: a source offset 10 point in
-a 100 bp insertion appears at 90. Qualities swap left/right on minus rows.
+span boundaries with `x -> length-x` and bases with `x -> length-1-x`: a source offset 10 base in a 100 bp insertion appears at 89. Base marks render at their centers. Qualities swap left/right on minus rows.
 Footprint gaps, MSP inference, deletion cuts and explicit layers follow the
 ordinary composer. Crops retain matching badge IDs/blocks and shift only
 `pos`. Hidden content never enters the row's target intervals, layers or
@@ -235,7 +239,7 @@ geometry only at events whose `t == "D"`.
 
 ## Mismatch detail on compact reads
 
-Only `include_cigar=true` requests with a loaded target FASTA emit view-local
+Only `include_cigar=true` and `include_mismatches=true` requests with a loaded target FASTA emit view-local
 events of this shape (no mismatches are inferred without target bases):
 
 ```json
@@ -249,3 +253,5 @@ with `allele: "grch38"`, even though its base matches the target. `len` and
 `seq` preserve native renderer field names. The current canvas dispatches
 native mismatch type `M`; the frontend must accept type `X` too. Existing
 I/D CIGAR events keep their native shape plus `source: "reads"`.
+
+The frontend explicitly requests mismatches only for the mismatch layer. Target reference and inferred-run masks are shared per requested window; gap lookup uses the source index. If chromosome size is unknown, no unbounded trailing no-correspondence item is invented at a cache-bin edge.

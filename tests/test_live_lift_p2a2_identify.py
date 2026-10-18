@@ -33,3 +33,21 @@ def test_identify_accepts_read_indels_and_orients_one_bounded_sequence(evidence)
     minus = diff.difference_reads(state, ds, TARGET, 12900, 12900, item_id=minus_key, include_sequence=True)
     assert minus['sequence']['sequence'] == 'A'*100
     assert minus['sequence']['orientation'] == '-'
+
+
+def test_full_sequence_is_opt_in_through_the_api(evidence, lift_env):
+    _, ds, _ = evidence
+    client, _, _, _ = lift_env
+    added = _add(client, ds.live_lift.manifest, ds.paths[0])
+    assert added['success'], added
+    key = f'MAT:{MAT}:5000-5100:insertion'
+    params = dict(dataset_id=added['dataset']['id'], chrom=TARGET, pos=6010, end=6010, item_id=key)
+    preview = client.get('/api/lift/difference_reads', params=params)
+    assert preview.status_code == 200
+    assert preview.json()['sequence'] is None
+    response = client.get('/api/lift/difference_reads', params={**params, 'include_sequence': True})
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload['sequence']['sequence']) == 100
+    assert payload['sequence']['ins_id'] == key
+    assert all(len(row['read_bases']) <= 60 for row in payload['rows'])

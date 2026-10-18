@@ -591,8 +591,9 @@ def get_coverage_payload(
 def _cached_lift_rows(state, dataset, chrom, start, end, now, *, annotations=False):
     """Reuse display geometry, regardless of its requested annotation groups.
     Match its load token to today's sources/lift key; a sampled display entry
-    is usable too. Coverage needs bodies only, so expanding/redecoding tags
-    for a second load buys nothing."""
+    is usable too. Coverage needs bodies only. With annotations=True,
+    inspection requires marks, all layers and default inference; its caller
+    must still decode any records omitted by a sampled cache."""
     from services.working_sets import (find_broad_cache_entry, read_load_token, broad_cache_topology,
                                        broad_cache_legacy_layer_settings, broad_cache_min_footprints,
                                        _broad_cache_sync)

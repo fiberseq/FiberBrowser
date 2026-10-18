@@ -18,8 +18,9 @@ export interface DifferencesResponse {
 export interface DifferenceInspection {
   id: string; molecule: string; hap_label: string; record: string; supplementary: boolean; strand: string | null;
   source_pos: { contig: string; start: number; end: number }; read_bases: string; hg002: string | null; grch38: string | null;
-  allele: 'hg002' | 'same_as_grch38' | 'grch38' | 'other' | 'deleted' | 'no_coverage' | 'partial' | 'no_insertion';
+  allele: 'hg002' | 'same_as_grch38' | 'grch38' | 'other' | 'deleted' | 'no_coverage' | 'partial' | 'no_insertion' | 'unknown';
   chromatin: { state: 'nucleosome' | 'footprint' | 'accessible' | 'none'; layer: string | null; nearest_m6a_bp: number | null; orientation: '+' | '-' };
+  alignment_hg002?: string | null;
   ins_id?: string; carries_insertion?: boolean; mol_bp?: number; identity?: number | null; read_bases_length?: number;
 }
 export interface DifferenceReadsResponse {
