@@ -1491,6 +1491,12 @@ def compact_all_dataset_result(
         server_timings["working_set_ms"] = phase_ms(phase_t0)
         reads = list(working_set.reads)
 
+    lift_ds = state.datasets.get(dataset_id)
+    from services.lift.capability import is_lifted as _is_lifted
+    if _is_lifted(lift_ds):
+        # A lifted dataset in the combined request: the display's supplementary/alternative settings.
+        from services.lift.reads import filter_lift_display
+        reads = filter_lift_display(reads, lift_ds)
     if fill_gap_size and fill_gap_size > 0:
         phase_t0 = time.perf_counter()
         reads = [fill_small_gaps_in_read(read, fill_gap_size) for read in reads]
@@ -1505,12 +1511,6 @@ def compact_all_dataset_result(
         total_spanning = working_set.total_spanning
         total_overlapping = working_set.total_overlapping
 
-    dataset = state.datasets.get(dataset_id)
-    from services.lift.capability import is_lifted as _is_lifted
-    if _is_lifted(dataset):
-        # A lifted dataset in the combined request: the display's supplementary/alternative settings.
-        from services.lift.reads import filter_lift_display
-        reads = filter_lift_display(reads, dataset)
     total_count = len(reads)
     has_methylation = compact_reads_have_methylation(reads)
 

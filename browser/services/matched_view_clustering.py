@@ -134,8 +134,6 @@ def _nmi(groups: list[str], labels: np.ndarray) -> float | None:
 def run_matched_views_endpoint(*, state, req) -> Dict[str, Any]:
     """Cluster the reads of two comparison views on their matched features."""
     from services.clustering_endpoint import EndpointTimings
-    from services.lift.capability import require_for_ids
-    require_for_ids(state, [p.dataset_id for view in req.views for p in view.panels], "clustering")
 
     timings = EndpointTimings()
     method = req.method
@@ -155,6 +153,8 @@ def run_matched_views_endpoint(*, state, req) -> Dict[str, Any]:
             raise ValueError(f"Comparison view {view.id!r} needs a region and at least one dataset")
 
     combinatorial = method in ("binary", "combinatorial")
+    from services.lift.capability import require_for_ids
+    require_for_ids(state, [p.dataset_id for view in req.views for p in view.panels], "clustering")  # P2b
     features = [_view_features(view, combinatorial) for view in req.views]
     feature_count = len(features[0][0])
     if feature_count == 0 or any(len(peaks) != feature_count for peaks, _ in features):

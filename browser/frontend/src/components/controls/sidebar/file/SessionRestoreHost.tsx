@@ -24,6 +24,9 @@ async function restore(session: Record<string, unknown>, pathMapping?: Record<st
     if (failedDatasets || failedOverlays || failedAnnotations || importResults?.fasta_error || importResults?.contact_map_error || packNote) {
       setError([
         failedDatasets ? `${failedDatasets} dataset${failedDatasets === 1 ? '' : 's'} failed` : '',
+        // Live lift turned off on this server: say how to open them (services/lift/registration.py).
+        ...((importResults?.datasets_failed ?? []) as Array<{ error?: string }>)
+          .map(f => f.error ?? '').filter(e => e.includes('FIBERBROWSER_LIVE_LIFT')).slice(0, 1),
         failedOverlays ? `${failedOverlays} overlay${failedOverlays === 1 ? '' : 's'} failed` : '',
         failedAnnotations ? `${failedAnnotations} annotation file${failedAnnotations === 1 ? '' : 's'} failed` : '',
         importResults?.fasta_error ? `FASTA: ${importResults.fasta_error}` : '',

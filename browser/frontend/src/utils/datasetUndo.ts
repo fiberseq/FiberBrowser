@@ -170,7 +170,12 @@ export async function reconcileClosedDatasets(
     const ds = pending.shift()!;
     if (isOpen(ds.id)) continue;
     try {
-      const res = await addDataset(ds.paths.length > 1 ? ds.paths : ds.paths[0], ds.label);
+      const res = ds.live_lift
+        // A live-lift dataset comes back through its own route (its map and settings), never as a plain BAM.
+        ? await (await import('../features/liveLift/api')).addLiveLiftDataset({
+          paths: ds.paths, manifest: ds.live_lift.manifest, haplotypes: ds.live_lift.haplotypes,
+          settings: ds.live_lift.settings, label: ds.label })
+        : await addDataset(ds.paths.length > 1 ? ds.paths : ds.paths[0], ds.label);
       if (res.success && res.dataset) {
         store.getState().addDataset(res.dataset);
         reopened.push({ id: res.dataset.id, dataset: ds });

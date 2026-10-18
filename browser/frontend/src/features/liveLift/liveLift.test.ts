@@ -214,3 +214,18 @@ describe('split by default', () => {
     expect(useBrowserStore.getState().panels.map(p => p.liftHap)).toEqual([undefined]);
   });
 });
+
+describe('history and sessions', () => {
+  it('a lifted dataset keeps its map in history (undo reopens it through the lift route) and panels keep liftHap', async () => {
+    const { serializeDataset, serializeState } = await import('../../stores/historySlice');
+    const ds = { id: 'l', label: 'l', path: 'a.bam', color: '#000', data_type: 'bam_livelift',
+      live_lift: { manifest: '/m.json', haplotypes: ['H#2'], haplotype_labels: {}, settings: { g_split: 20000 }, key: 'k', map_label: 'm' } };
+    expect(serializeDataset(ds).live_lift).toEqual({ manifest: '/m.json', haplotypes: ['H#2'], settings: { g_split: 20000 } });
+    const { useBrowserStore } = await import('../../stores/browserStore');
+    useBrowserStore.setState({ panels: [] });
+    const a = useBrowserStore.getState().addPanel('l');
+    useBrowserStore.getState().splitPanelByLiftHap(a, ['MAT', 'PAT']);
+    const saved = serializeState(useBrowserStore.getState()) as unknown as { panels: Array<{ liftHap?: string }> };
+    expect(saved.panels.map(p => p.liftHap)).toEqual(['MAT', 'PAT']);
+  });
+});

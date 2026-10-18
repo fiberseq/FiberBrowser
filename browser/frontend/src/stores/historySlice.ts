@@ -231,6 +231,8 @@ export interface SerializedDataset {
   derived_layers?: Record<string, unknown>;
   /** A dataset closed while it had a reference of its own (services/panel_genomes.py): given back on reopen. */
   reference?: ClosedDatasetReference;
+  /** A live-lift dataset's map, haplotypes and settings: reopened through the lift route, never as a plain BAM. */
+  live_lift?: { manifest: string; haplotypes: string[]; settings: Record<string, unknown> };
 }
 
 /** A dataset's own reference as Undo gives it back (POST /api/panel_genomes/attach). */
@@ -549,6 +551,8 @@ export function serializeDataset(d: any): SerializedDataset {
     layer_type: d.layer_type ?? null,
     available_layers: d.available_layers ?? {},
     derived_layers: d.derived_layers ?? {},
+    ...(d.live_lift ? { live_lift: { manifest: d.live_lift.manifest, haplotypes: d.live_lift.haplotypes,
+      settings: d.live_lift.settings } } : {}),
   };
 }
 
