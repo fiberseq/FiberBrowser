@@ -136,6 +136,8 @@ async def scan_peaks(
     from services.working_sets import read_load_token
     body = req.model_dump_json() if hasattr(req, "model_dump_json") else req.json()
     scan_ids = list(req.dataset_ids or ([dataset_id] if dataset_id else getattr(state, "dataset_order", []) or []))
+    from services.lift.capability import require_for_ids
+    require_for_ids(state, scan_ids, "peaks")
     # Shared only by a request for the same data (files, generation) under the same settings.
     key = ("scan_peaks", id(state), chrom, start, end, dataset_id, spanning,
            hashlib.sha1(body.encode()).hexdigest(), dataset_identity(state, scan_ids),

@@ -40,6 +40,7 @@ LIFT_ALLOWED: frozenset = frozenset({
 LIFT_PREFIX = "/api/lift/"
 # Feature names for the notice, by route prefix (the rest: "This analysis").
 _FEATURES = (
+    ("/api/quality/impact", "quality_impact"),
     ("/api/datasets/merge", "merge"), ("/api/render", "figure"), ("/api/reads/compile", "figure"),
     ("/api/cluster", "clustering"), ("/api/assign_to_clusters", "clustering"), ("/api/dissolve_cluster", "clustering"),
     ("/api/auto_cull_clusters", "clustering"), ("/api/lab/cluster", "clustering"), ("/api/scan_peaks", "peaks"),

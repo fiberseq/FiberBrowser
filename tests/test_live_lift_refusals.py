@@ -167,6 +167,10 @@ def test_stats_selected_ids_refuse_in_service_and_http(lift_env, extra_only):
     ('/api/insertions/clusters', 'GET', {}), ('/api/insertions/lens', 'GET', {}),
     ('/api/reads/random_window', 'GET', {}), ('/api/reads/top_windows', 'GET', {}),
     ('/api/autozoom', 'POST', {}),
+    ('/api/quality/impact', 'POST', {'filters': [{'layer': '*', 'quality_name': 'nq', 'min_value': 1}]}),
+    ('/api/scan_peaks', 'POST', {}),
+    ('/api/reads/stats', 'POST', {'read_ids_by_dataset': {}}),
+    ('/api/footprint/derived_layers/load', 'POST', {'path': 'synthetic.fiberlayers'}),
     *[(f'/api/variants/{kind}', 'POST', {}) for kind in ('snps', 'alleles', 'svs', 'sv_linkage')],
     ('/api/sv/split', 'POST', {'t': 'D', 'ref': 4000, 'len': 100}),
 ])

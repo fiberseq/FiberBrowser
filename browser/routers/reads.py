@@ -471,6 +471,8 @@ async def quality_filter_impact_endpoint(payload: dict, request: Request, state=
         if isinstance(f, dict) and f.get("enabled", True)
     ]
     dataset_ids = payload.get("dataset_ids") or list(getattr(state, "dataset_order", []) or [])
+    from services.lift.capability import require_for_ids
+    require_for_ids(state, dataset_ids, "quality_impact")
     # Counting loads every read in view; beyond read-level zoom it is skipped.
     if not chrom or end <= start or end - start > QUALITY_IMPACT_MAX_BP:
         return {"success": True, "filters": quality_filter_impact([], filters), "available": {}, "skipped": end - start > QUALITY_IMPACT_MAX_BP}

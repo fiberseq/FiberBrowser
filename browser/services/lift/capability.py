@@ -46,6 +46,7 @@ _FEATURE_NAMES = {
     "merge": "Merging datasets",
     "dense_reads": "This read table",
     "dafc": "DAF-C",
+    "quality_impact": "Quality-filter impact",
 }
 
 
