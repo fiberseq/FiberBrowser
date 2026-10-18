@@ -160,6 +160,7 @@ export function projectLoadedReads(data: ReadsResponse, offset: number, width: n
       // use a fresh server summary rather than cropping a possibly different cluster.
       if (read.sv.some(ev => (ev.t === 'D' || ev.t === 'I') && [ev.ref, ev.ref + (ev.t === 'D' ? ev.len : 1)]
         .some(p => Math.abs(p - start) <= Math.max(50, ev.len * 0.1) || Math.abs(p - end) <= Math.max(50, ev.len * 0.1)))) return;
+      next.sv_evidence = read.sv_evidence ?? read.sv;
       const kept = read.sv.filter(ev => ev.t !== 'SA' && ev.ref < end && ev.ref + (ev.t === 'D' ? ev.len : 1) > start);
       Object.defineProperty(next, 'sv', { configurable: true, enumerable: true, writable: true,
         value: kept.length ? [...kept, ...read.sv.filter(ev => ev.t === 'SA')] : undefined });

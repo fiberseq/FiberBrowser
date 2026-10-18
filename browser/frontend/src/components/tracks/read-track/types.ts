@@ -148,6 +148,8 @@ export interface CompactRead {
   cigar?: CigarEvent[]; // CIGAR events for visualization
   /** SV events of at least the request's min_sv_len overlapping the view (absent when none). */
   sv?: SvEvent[];
+  /** Full allele evidence when display size/view filtering removed events from sv. */
+  sv_evidence?: SvEvent[];
   fire?: [number, number, number][]; // FIRE intervals [start, end, quality] from as/al/aq tags
   /** Named annotation layers from v3 caller (nuc, tf, msp, custom). */
   layers?: Record<string, AnnotationLayer>;

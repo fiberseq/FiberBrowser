@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import auditCases from '../../../../../../tests/data/sv_p0_evidence.json';
 import {
   arcHeight, bodyClipRects, clampMinSvLen, clusterAtBandX, clusterAtCursor, clusterForEvent, eventsMatch, formatSvSize,
   labelFits, readCarriesCluster, readSvDraw, readSvEventAt, rowLabelFontPx, subtractSpans, supportingReadIds,
@@ -221,5 +222,41 @@ describe('faint SV clusters: hit targets and what they are', () => {
     expect(svBandMetrics(24).flagW).toBeLessThan(svBandMetrics(120).flagW);
     expect(svBandMetrics(120).inner).toBeGreaterThan(svBandMetrics(44).inner);
     expect(svBandMetrics(44).inner + svBandMetrics(44).labelRoom + 3).toBe(44);
+  });
+});
+
+// The same anonymous local-evidence snapshots are checked by test_sv_events.py.
+// A display cutoff must never remove allele evidence from highlighting.
+
+describe('P0 audited carrier parity', () => {
+  for (const fixture of auditCases) {
+    for (const cutoff of fixture.name === 'alu' ? [50, 2000] : [50]) {
+      it(`${fixture.name} at ${cutoff} bp: highlights the backend molecule set`, () => {
+        const cluster = { ...fixture.target, id: '', end: fixture.target.ref } as SvCluster;
+        const reads = fixture.reads.map(r => ({
+          ...r, intervals: [],
+          sv: r.sv.filter(e => e.len >= cutoff),
+          sv_evidence: r.sv,
+        })) as CompactRead[];
+        expect(supportingReadIds([...reads, ...reads], cluster, fixture.chrom).sort()).toEqual([...fixture.expected.carriers].sort());
+        expect(supportingReadIds(reads, cluster, fixture.chrom)).toHaveLength(fixture.expected.support);
+      });
+    }
+  }
+
+  it('keeps insertion clip rules aligned with the backend, including hard clips', () => {
+    const c = { ...INS, ref: 1000, len: 10_000 };
+    for (const side of ['L', 'R'] as const) {
+      expect(readCarriesCluster(read('hard', [{ t: 'S', ref: 1050, len: 50, q: 0, side, h: 1 }]), c)).toBe(true);
+      expect(readCarriesCluster(read('short', [{ t: 'S', ref: 1000, len: 49, q: 0, side }]), c)).toBe(false);
+      expect(readCarriesCluster(read('far', [{ t: 'S', ref: 1051, len: 500, q: 0, side }]), c)).toBe(false);
+    }
+  });
+
+  it('can highlight evidence even when no event survives the glyph cutoff', () => {
+    const r = { id: 'clipped', intervals: [], sv_evidence: [{ t: 'S', side: 'R', ref: INS.ref, len: 50, q: 0 }] } as CompactRead;
+    expect(readCarriesCluster(r, INS)).toBe(true);
+    expect(supportingReadIds([r, r], INS)).toEqual(['clipped']);
+    expect(readSvDraw(r, 0, 20000, 2000).clips).toEqual([]);
   });
 });

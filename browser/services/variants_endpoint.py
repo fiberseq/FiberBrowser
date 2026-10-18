@@ -521,7 +521,7 @@ def _sv_records(state, dataset, chrom: str, start: int, end: int, include_duplic
 
 def svs_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = None) -> dict:
     """SV clusters (deletions and insertions of at least ``min_len``) in the view, as the SV band clusters them."""
-    from services.sv_events import extract_sv_events, normalize_min_sv_len, sv_summary_for_reads
+    from services.sv_events import extract_sv_events, normalize_min_sv_len, sv_summary_for_reads, sv_extraction_floor
 
     state = _scoped_state(state, body)
     dataset_id = str(body.get("dataset_id") or "")
@@ -535,7 +535,7 @@ def svs_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = Non
             raise VariantsCancelled()
         item = {"id": read.query_name, "reference_start": int(read.reference_start),
                 "reference_end": int(read.reference_end)}
-        events = extract_sv_events(read, min_len)
+        events = extract_sv_events(read, sv_extraction_floor(min_len))
         if events:
             item["sv"] = events
         compact.append(item)
@@ -543,7 +543,7 @@ def svs_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = Non
     clusters = [c for c in summary["clusters"] if c["len"] >= min_len]
     clusters.sort(key=lambda c: (c["ref"], c["t"]))
     return {"dataset_id": dataset_id, "region": {"chrom": chrom, "start": start, "end": end}, "min_len": min_len,
-            "n_reads": len(compact), "clusters": clusters}
+            "n_reads": len({r["id"] for r in compact}), "clusters": clusters}
 
 
 def sv_linkage_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = None) -> dict:

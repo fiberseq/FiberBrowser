@@ -50,6 +50,7 @@ from services.sv_events import (
     breakpoint_tolerance,
     cluster_sv_events,
     extract_sv_events,
+    sv_extraction_floor,
     insertion_clip_tolerance,
     normalize_min_sv_len,
     sv_summary_for_reads,
@@ -113,7 +114,7 @@ def resolve_cluster(records: Iterable, *, pos: int, tolerance: int, len_min: int
     compact = []
     for item in records:
         read = item[0]
-        events = extract_sv_events(read, floor)
+        events = extract_sv_events(read, sv_extraction_floor(floor))
         if events:
             compact.append({"id": read.query_name, "sv": events})
     clusters, _clips = cluster_sv_events(compact, pos - tolerance, pos + tolerance + 1, floor)
@@ -879,7 +880,7 @@ def _sv_reads(bam_paths, chrom, start, end, floor, *, bam_handle_getter, chrom_m
             continue
         ref_start, ref_end = int(read.reference_start), int(read.reference_end)
         item = {"id": read.query_name, "reference_start": ref_start, "reference_end": ref_end}
-        events = extract_sv_events(read, floor)
+        events = extract_sv_events(read, sv_extraction_floor(floor))
         if events:
             item["sv"] = events
         # Reads without events count too (the reference reads spanning a site).

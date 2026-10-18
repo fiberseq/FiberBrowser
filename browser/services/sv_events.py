@@ -21,8 +21,10 @@ breakpoint (the alignment ends there, the rest of the read is in the clip, a
 supplementary alignment or a hard clip). The allele split, the SV summary's
 support and plugin packs' insertion views all use this one rule.
 
-Extraction is cheap because a read is only walked when its CIGAR string has an
-indel op of at least the floor (a C-level regex scan).
+Evidence is extracted at a fixed 10 bp floor; the requested size only gates
+cluster seeds and drawn glyphs. Each final target is classified independently:
+a QNAME contributes at most once to that target, even if its matching CIGAR
+event originally seeded an adjacent cluster.
 """
 from __future__ import annotations
 
@@ -33,6 +35,8 @@ from typing import Iterable, Optional, Sequence
 
 SV_MIN_LEN_DEFAULT = 50
 SV_MIN_LEN_LOWEST = 10
+# Evidence is independent of the glyph/cluster size cutoff.
+SV_EVIDENCE_FLOOR = SV_MIN_LEN_LOWEST
 SV_MIN_LEN_HIGHEST = 1_000_000
 # Within one read, indel pieces of at least this size ...
 SV_PIECE_MIN = 10
@@ -228,35 +232,20 @@ _PIECE_RE = re.compile(r"(?<!\d)(\d{2,})([ID])")
 
 
 def _could_reach(cigarstring: Optional[str], min_len: int) -> bool:
-    """Whether the read's I/D pieces of >= SV_PIECE_MIN could join into one of
-    ``min_len`` (each type's total reaches it): a C-level scan of the CIGAR
-    string, so most reads are never walked."""
+    """Conservative C-level shortcut: never underestimate a merged span."""
     if not cigarstring:
         return False
     if has_large_indel(cigarstring, min_len):
         return True
-    totals = {"I": 0, "D": 0}
-    for length, op in _PIECE_RE.findall(cigarstring):
-        n = int(length)
-        if n >= SV_PIECE_MIN:
-            totals[op] += n
-    return totals["I"] >= min_len or totals["D"] >= min_len
+    # Even two short pieces may reach the floor through their aligned bridge.
+    # Walk any eligible piece rather than underestimate a merged event's span.
+    return _PIECE_RE.search(cigarstring) is not None
 
 
 def _large_pieces(read, min_len: int, mapper=None):
-    """The read's indel pieces when they could make an event of ``min_len``
-    (one op that long, or pieces that join into one), else None."""
+    """Eligible pieces, without an underestimate based on summed indel bases."""
     if mapper is not None and getattr(mapper, "large_indels", None) is not None:
-        pieces = mapper.large_indels
-        if not pieces:
-            return None
-        d = i = 0
-        for op, _ref, length, _q in pieces:
-            if op == 2:
-                d += length
-            elif op == 1:
-                i += length
-        return pieces if d >= min_len or i >= min_len else None
+        return mapper.large_indels or None
     if not _could_reach(getattr(read, "cigarstring", None), min_len):
         return None
     return _cigar_pieces(read.cigartuples or (), int(read.reference_start))
@@ -525,9 +514,11 @@ def cluster_sv_events(reads: Iterable[dict], start: int, end: int, min_len: int)
     Returns (clusters, clip piles). A cluster is ``{t, ref, len, end, members:
     set(read ids)}``; a pile ``{side, ref, n}``."""
     items = []
+    seen_items = set()
+    evidence_items = set()
     clips = []
     for read in reads:
-        events = read.get("sv")
+        events = read.get("sv_evidence", read.get("sv"))
         if not events:
             continue
         rid = read.get("id")
@@ -535,6 +526,8 @@ def cluster_sv_events(reads: Iterable[dict], start: int, end: int, min_len: int)
             t = ev.get("t")
             if t not in ("D", "I", "S"):
                 continue
+            if t in ("D", "I"):
+                evidence_items.add((t, int(ev["ref"]), int(ev["len"]), rid))
             if int(ev.get("len", 0)) < min_len:
                 continue
             a, b = event_span(ev)
@@ -543,7 +536,10 @@ def cluster_sv_events(reads: Iterable[dict], start: int, end: int, min_len: int)
             if t == "S":
                 clips.append((ev["side"], int(ev["ref"]), rid))
             else:
-                items.append((t, int(ev["ref"]), int(ev["len"]), rid))
+                item = (t, int(ev["ref"]), int(ev["len"]), rid)
+                if item not in seen_items:
+                    seen_items.add(item)
+                    items.append(item)
     clusters: list[dict] = []
     by_type: dict[str, list[dict]] = {"D": [], "I": []}
     tol_bp, tol_frac, len_frac = SV_BREAKPOINT_TOL_BP, SV_BREAKPOINT_TOL_FRAC, SV_LENGTH_TOL_FRAC
@@ -582,7 +578,10 @@ def cluster_sv_events(reads: Iterable[dict], start: int, end: int, min_len: int)
         out.append({
             "t": c["t"], "ref": ref, "len": length,
             "end": ref + length if c["t"] == "D" else ref,
-            "members": c["members"],
+            # Reconcile against the rounded final target, including events originally
+            # put in adjacent clusters. Never retain stale running-median members.
+            "members": {rid for t, r, n, rid in evidence_items
+                        if t == c["t"] and events_match(t, r, n, ref, length)},
         })
     piles: list[dict] = []
     for side, ref, rid in sorted(clips, key=lambda x: (x[0], x[1])):
@@ -603,10 +602,8 @@ def insertion_clip_tolerance(length: int) -> float:
 
 
 def insertion_clip_min(length: int) -> int:
-    """The shortest clip that makes a read an insertion's carrier: the
-    display cache's extraction floor (50 bp) for every insertion, so the SV
-    summary (built from cached events) sees every clip the split and the lens
-    count (Codex review)."""
+    """The historical insertion-carrier clip floor (50 bp), independent of
+    the evidence extraction floor and the requested glyph/seed cutoff."""
     return SV_MIN_LEN_DEFAULT
 
 
@@ -636,7 +633,7 @@ def carrier_evidence(read: dict, t: str, ref: int, length: int, chrom: Optional[
     - ``{'kind': 'clip', 'clip': ev}`` (insertions): a clip at the breakpoint
       (``insertion_clip_at``), with or without an SA segment.
     """
-    events = read.get("sv") or ()
+    events = read.get("sv_evidence", read.get("sv")) or ()
     best = None
     for ev in events:
         if ev.get("t") == t and events_match(t, int(ev["ref"]), int(ev["len"]), ref, length):
@@ -683,7 +680,7 @@ def other_insertion_at(read: dict, ref: int, length: int) -> bool:
     """The read has an insertion at ``ref`` that is not this one (another
     allele): it is not reference sequence there."""
     tol = breakpoint_tolerance(length)
-    return any(ev.get("t") == "I" and abs(int(ev["ref"]) - ref) <= tol for ev in read.get("sv") or ())
+    return any(ev.get("t") == "I" and abs(int(ev["ref"]) - ref) <= tol for ev in read.get("sv_evidence", read.get("sv")) or ())
 
 
 def read_spans(read: dict, a: int, b: int) -> Optional[bool]:
@@ -720,138 +717,87 @@ def classify_allele(read: dict, t: str, ref: int, length: int, margin: int = SV_
     return classify_allele_evidence(read, t, ref, length, margin, chrom)[0]
 
 
-def _span_index(reads: Sequence[dict]):
-    """Alignment bounds as arrays (reads with ``alignment_spans`` kept apart),
-    and each read id's record indices."""
-    import numpy as np
+def prefer_allele_call(previous, allele: int, evidence: Optional[dict]) -> bool:
+    """Molecule reduction shared by summaries, split and lens.
 
-    plain_idx, starts, ends, special = [], [], [], []
-    by_id: dict = {}
-    for i, read in enumerate(reads):
-        by_id.setdefault(read.get("id"), []).append(i)
-        rs, re_ = read.get("reference_start"), read.get("reference_end")
-        if not isinstance(rs, int) or not isinstance(re_, int):
-            continue
-        if read.get("alignment_spans"):
-            special.append(i)
-        else:
-            plain_idx.append(i)
-            starts.append(rs)
-            ends.append(re_)
-    return (np.asarray(starts, dtype=np.int64), np.asarray(ends, dtype=np.int64),
-            set(plain_idx), special, by_id)
+    Carrier > reference > uninformative. For multiple carrier records prefer
+    CIGAR, then SA, then clip, so evidence subtotals are independent of file order.
+    """
+    if previous is None or allele < previous["allele"]:
+        return True
+    rank = {"cigar": 0, "sa": 1, "clip": 2}
+    return (allele == previous["allele"] == 0
+            and rank.get((evidence or {}).get("kind"), 3)
+            < rank.get((previous.get("evidence") or {}).get("kind"), 3))
+
+
+def classify_molecules(entries, *, t: str, ref: int, length: int, margin: int = SV_SPAN_MARGIN,
+                       chrom: Optional[str] = None) -> dict:
+    """Classify (compact read, original item) entries, once per QNAME."""
+    by_name = {}
+    for read, item in entries:
+        allele, evidence = classify_allele_evidence(
+            read, t, ref, length, margin, chrom=read.get("file_chrom", chrom))
+        name = read.get("id")
+        if prefer_allele_call(by_name.get(name), allele, evidence):
+            by_name[name] = {"allele": allele, "evidence": evidence, "record": item}
+    return by_name
 
 
 def sv_summary_for_reads(reads: Sequence[dict], start: int, end: int, min_len: int, *,
                          margin: int = SV_SPAN_MARGIN, scope: str = "all", chrom: Optional[str] = None) -> Optional[dict]:
-    """The ``sv_summary`` payload (SCHEMA.md) for the reads in view, or None.
+    """Classify final targets with the split/lens rule, counting QNAMEs.
 
-    Support counts every carrier of ``carrier_evidence``: CIGAR events, plus a
-    deletion's clip + SA reads (``sa_support``) and an insertion's clipped
-    reads (``clip_support``). Indexed, so a deep view (tens of thousands of
-    reads, dozens of clusters) stays well under a second."""
-    import bisect
+    The index only selects possible carriers/reference records; classification
+    and molecule reduction are shared. No original cluster membership is trusted.
+    """
+    import numpy as np
 
-    with_sv = [read for read in reads if read.get("sv")]
-    if not with_sv:
-        return None
-    clusters, clips = cluster_sv_events(with_sv, start, end, min_len)
+    clusters, clips = cluster_sv_events(reads, start, end, min_len)
     if not clusters and not clips:
         return None
-    # Clip index (insertions) and the reads that can be a deletion's split read.
-    clip_refs: list[int] = []
-    clip_items: list[tuple[int, int, object]] = []
-    ins_items: list[tuple[int, object]] = []
-    sa_candidates = []
-    for read in with_sv:
-        events = read["sv"]
-        has_clip = False
-        has_sa = False
-        for ev in events:
-            t = ev.get("t")
-            if t == "S":
-                has_clip = True
-                clip_items.append((int(ev["ref"]), int(ev.get("len", 0)), read.get("id")))
-            elif t == "SA":
-                has_sa = True
-            elif t == "I":
-                ins_items.append((int(ev["ref"]), read.get("id")))
-        if has_clip and has_sa:
-            for ev in events:
-                if ev.get("t") == "S":
-                    sa_candidates.append((int(ev["ref"]), id(read), read))
-    clip_items.sort(key=lambda item: item[0])
-    clip_refs = [item[0] for item in clip_items]
-    ins_items.sort(key=lambda item: item[0])
-    ins_refs = [item[0] for item in ins_items]
-    sa_candidates.sort(key=lambda item: (item[0], item[1]))
-    sa_refs = [item[0] for item in sa_candidates]
-    span_starts, span_ends, plain, special, by_id = _span_index(reads)
-
-    def spanning(a: int, b: int, members: set) -> int:
-        n = int(((span_starts <= a) & (span_ends >= b)).sum()) if span_starts.size else 0
-        # Records of carriers are not counted twice.
-        for rid in members:
-            for i in by_id.get(rid, ()):
-                if i in plain:
-                    read = reads[i]
-                    if read["reference_start"] <= a and read["reference_end"] >= b:
-                        n -= 1
-        for i in special:
-            if reads[i].get("id") not in members and read_spans(reads[i], a, b):
-                n += 1
-        return n
-
+    starts, ends, plain, special, event_items = [], [], [], [], []
+    for i, read in enumerate(reads):
+        rs, re_ = read.get("reference_start"), read.get("reference_end")
+        if isinstance(rs, int) and isinstance(re_, int):
+            if read.get("alignment_spans"):
+                special.append(i)
+            else:
+                plain.append(i)
+                starts.append(rs)
+                ends.append(re_)
+        for ev in read.get("sv_evidence", read.get("sv")) or ():
+            if ev.get("t") in ("I", "D", "S"):
+                event_items.append((int(ev["ref"]), i))
+    event_items.sort()
+    event_refs = [r for r, _i in event_items]
+    starts, ends, plain = np.asarray(starts), np.asarray(ends), np.asarray(plain, dtype=int)
     out_clusters = []
     for c in clusters:
         t, ref, length, cend = c["t"], c["ref"], c["len"], c["end"]
-        members = set(c["members"])
-        sa_support = 0
-        clip_support = 0
-        if t == "D":
-            # Only reads clipped near one of the breakpoints can be its split reads.
-            tol = breakpoint_tolerance(length)
-            seen_reads: set[int] = set()
-            for point in (ref, cend):
-                lo = bisect.bisect_left(sa_refs, point - tol)
-                hi = bisect.bisect_right(sa_refs, point + tol)
-                for _cref, key, read in sa_candidates[lo:hi]:
-                    if key in seen_reads:
-                        continue
-                    seen_reads.add(key)
-                    rid = read.get("id")
-                    if rid in members:
-                        continue
-                    if read_carries(read, t, ref, length, chrom) == "sa":
-                        members.add(rid)
-                        sa_support += 1
-        elif t == "I":
-            tol = insertion_clip_tolerance(length)
-            floor = insertion_clip_min(length)
-            lo = bisect.bisect_left(clip_refs, ref - tol)
-            hi = bisect.bisect_right(clip_refs, ref + tol)
-            for _cref, clen, rid in clip_items[lo:hi]:
-                if clen >= floor and rid not in members:
-                    members.add(rid)
-                    clip_support += 1
-        # Reads with another insertion at this one's site are not informative
-        # (classify_allele_evidence): left out of the spanning count.
-        not_reference = set(members)
-        if t == "I":
-            tol = breakpoint_tolerance(length)
-            lo = bisect.bisect_left(ins_refs, ref - tol)
-            hi = bisect.bisect_right(ins_refs, ref + tol)
-            not_reference.update(rid for _r, rid in ins_items[lo:hi])
-        informative = len(members) + spanning(ref - margin, cend + margin, not_reference)
+        a, b = ref - margin, cend + margin
+        candidates = set(plain[(starts <= a) & (ends >= b)].tolist())
+        candidates.update(i for i in special if read_spans(reads[i], a, b))
+        # A matching CIGAR length is at most target_length / (1 - length_tol).
+        # Also includes every eligible insertion clip or deletion clip+SA.
+        tol = max(insertion_clip_tolerance(length), breakpoint_tolerance(length / (1 - SV_LENGTH_TOL_FRAC)))
+        for point in (ref, cend) if t == "D" else (ref,):
+            lo = bisect.bisect_left(event_refs, point - tol)
+            hi = bisect.bisect_right(event_refs, point + tol)
+            candidates.update(i for _r, i in event_items[lo:hi])
+        calls = classify_molecules(((reads[i], None) for i in sorted(candidates)),
+                                   t=t, ref=ref, length=length, margin=margin, chrom=chrom)
+        carriers = [call for call in calls.values() if call["allele"] == 0]
         out_clusters.append({
             "id": f"{t}:{ref}:{length}", "t": t, "ref": ref, "len": length, "end": cend,
-            "support": len(members), "informative": informative, "sa_support": sa_support,
-            "clip_support": clip_support,
+            "support": len(carriers), "informative": sum(call["allele"] < 2 for call in calls.values()),
+            "sa_support": sum(call["evidence"]["kind"] == "sa" for call in carriers),
+            "clip_support": sum(call["evidence"]["kind"] == "clip" for call in carriers),
         })
     out_clusters.sort(key=lambda c: (c["ref"], c["t"]))
     return {
         "min_len": int(min_len), "margin": int(margin), "scope": scope,
-        "n_reads": len(reads), "clusters": out_clusters, "clips": clips,
+        "n_reads": len({read.get("id") for read in reads}), "clusters": out_clusters, "clips": clips,
     }
 
 
@@ -866,7 +812,7 @@ def allele_label(t: str, ref: int, length: int, chrom: str) -> str:
 
 
 def finalize_sv_payload(display_reads: Sequence[dict], start: int, end: int, min_len: int) -> list[dict]:
-    """Display reads with ``sv`` cut to the view and the request's threshold.
+    """Filter drawn events, retaining full ``sv_evidence`` for highlighting.
     Cached reads are never mutated: a read whose events change is copied."""
     out = []
     for read in display_reads:
@@ -875,6 +821,8 @@ def finalize_sv_payload(display_reads: Sequence[dict], start: int, end: int, min
             out.append(read)
             continue
         kept = sv_events_in_view(events, start, end, min_len)
+        if kept is None or len(kept) != len(events):
+            read = {**read, "sv_evidence": events}
         if kept is None:
             read = {key: value for key, value in read.items() if key != "sv"}
         elif len(kept) != len(events):
@@ -884,5 +832,5 @@ def finalize_sv_payload(display_reads: Sequence[dict], start: int, end: int, min
 
 
 def sv_extraction_floor(min_len: int) -> int:
-    """The floor a load extracts at: the cache's default, or lower on request."""
-    return min(SV_MIN_LEN_DEFAULT, int(min_len))
+    """Fixed evidence floor, independent of the requested display cutoff."""
+    return SV_EVIDENCE_FLOOR

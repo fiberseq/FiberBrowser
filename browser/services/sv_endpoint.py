@@ -17,7 +17,8 @@ from services.sv_events import (
     SV_MIN_LEN_LOWEST,
     SV_SPAN_MARGIN,
     allele_label,
-    classify_allele_evidence,
+    classify_molecules,
+    sv_extraction_floor,
     extract_sv_events,
     normalize_min_sv_len,
 )
@@ -69,10 +70,8 @@ def _bam_records(state, dataset_id: str, chrom: str, start: int, end: int,
 
 
 def allele_floor(length: int) -> int:
-    """The event floor a split extracts at: the SV itself (lengths within 20%
-    match) and the clips of SA-supported or clipped carriers, which need not be
-    as long as the SV."""
-    return normalize_min_sv_len(min(SV_MIN_LEN_DEFAULT, max(10, int(length) // 2)))
+    """The same evidence floor as summaries and the lens."""
+    return sv_extraction_floor(length)
 
 
 def _compact_record(read, file_chrom: str, floor: int) -> dict:
@@ -90,17 +89,9 @@ def classify_compact(entries, *, t: str, ref: int, length: int, margin: int = SV
                      include_duplicates: bool = False) -> dict:
     """``classify_records`` over compact entries (``_compact_record``); each
     entry's ``record`` is the entry itself (or what ``item`` carried)."""
-    by_name: dict[str, dict] = {}
-    for compact, item in entries:
-        if compact["duplicate"] and not include_duplicates:
-            continue
-        allele, evidence = classify_allele_evidence(compact, t, ref, length, margin, chrom=compact["file_chrom"])
-        name = compact["id"]
-        previous = by_name.get(name)
-        if previous is not None and previous["allele"] <= allele:
-            continue
-        by_name[name] = {"allele": allele, "evidence": evidence, "record": item}
-    return by_name
+    return classify_molecules(
+        ((compact, item) for compact, item in entries if include_duplicates or not compact["duplicate"]),
+        t=t, ref=ref, length=length, margin=margin)
 
 
 def classify_records(records, *, t: str, ref: int, length: int, margin: int = SV_SPAN_MARGIN,

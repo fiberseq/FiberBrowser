@@ -149,13 +149,18 @@ export function eventsMatch(t: 'D' | 'I', ref: number, len: number, cRef: number
   return big <= 0 || Math.abs(len - cLen) <= 0.2 * big;
 }
 
-/** Whether a read carries a cluster's event (CIGAR, or for a deletion a clip + SA segment). */
-export function readCarriesCluster(read: Pick<CompactRead, 'sv'>, cluster: Pick<SvCluster, 't' | 'ref' | 'len'>, chrom?: string): boolean {
-  const events = read.sv ?? [];
+/** Mirrors sv_events.carrier_evidence: evidence is independent of glyph size.
+ * Insertion clips keep the existing >=50 bp floor, on either side/strand.
+ */
+export function readCarriesCluster(read: Pick<CompactRead, 'sv' | 'sv_evidence'>, cluster: Pick<SvCluster, 't' | 'ref' | 'len'>, chrom?: string): boolean {
+  const events = read.sv_evidence ?? read.sv ?? [];
   for (const ev of events) {
     if (ev.t === cluster.t && eventsMatch(cluster.t, ev.ref, ev.len, cluster.ref, cluster.len)) return true;
   }
-  if (cluster.t !== 'D') return false;
+  if (cluster.t === 'I') {
+    const tol = Math.max(20, Math.min(breakpointTolerance(cluster.len), 50));
+    return events.some(ev => ev.t === 'S' && ev.len >= 50 && Math.abs(ev.ref - cluster.ref) <= tol);
+  }
   const end = cluster.ref + cluster.len;
   const tol = breakpointTolerance(cluster.len);
   const clips = events.filter((ev): ev is Extract<SvEvent, { t: 'S' }> => ev.t === 'S');
@@ -173,7 +178,7 @@ export function readCarriesCluster(read: Pick<CompactRead, 'sv'>, cluster: Pick<
 
 /** Ids of the reads (among `reads`) that carry a cluster's event. */
 export function supportingReadIds(reads: CompactRead[], cluster: SvCluster, chrom?: string): string[] {
-  return reads.filter(read => read.sv && readCarriesCluster(read, cluster, chrom)).map(read => read.id);
+  return [...new Set(reads.filter(read => readCarriesCluster(read, cluster, chrom)).map(read => read.id))];
 }
 
 /** Size and independent-read support gates for summary glyphs and their hit targets. */

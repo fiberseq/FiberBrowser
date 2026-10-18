@@ -710,3 +710,40 @@ def test_joined_insertion_pieces_are_one_daf_carrier(tmp_path):
     result, why = daf_aware_consensus(records)
     assert why is None and result["carriers_ct"] == 4 and result["carriers_ga"] == 0
     assert len(result["seq"]) == 103
+
+
+def test_summary_variants_split_and_lens_deduplicate_the_same_molecules(tmp_path, monkeypatch):
+    from services import plasmid_reconcile, sv_endpoint, variants_endpoint
+    from services.sv_events import sv_summary_for_reads, sv_extraction_floor
+    a = _tiny_bam(tmp_path / 'p0-a.bam', [
+        ('seed', 100, [(0, 900), (1, 100), (0, 1000)]),
+        ('clipped', 500, [(0, 500), (4, 60)]),
+        ('plain', 0, [(0, 2000)]), ('conflicting', 0, [(0, 2000)]),
+    ])
+    b = _tiny_bam(tmp_path / 'p0-b.bam', [
+        ('seed', 100, [(0, 900), (1, 100), (0, 1000)]),
+        ('near', 100, [(0, 900), (1, 80), (0, 1000)]),
+        ('conflicting', 100, [(0, 900), (1, 100), (0, 1000)]), ('plain', 0, [(0, 2000)]),
+    ])
+    monkeypatch.setattr(plasmid_reconcile, 'contig_links', lambda *_a, **_k: None)
+    monkeypatch.setattr(variants_endpoint, '_scoped_state', lambda state, body: state)
+    state = _State([a, b])
+    records = []
+    for path in [a, b]:
+        with pysam.AlignmentFile(path) as bam:
+            records.extend((r, 'chrX') for r in bam.fetch('chrX', 0, 2000))
+    compact = [dict(id=r.query_name, reference_start=r.reference_start, reference_end=r.reference_end,
+                    sv=extract_sv_events(r, sv_extraction_floor(50))) for r, _ in records]
+    lens = build_lens([a, b], 'chrX', pos=1000, ref=1000, length=100,
+                      flank=100, consensus=False, loader_kwargs=LOADER)
+    split = sv_endpoint.sv_split_payload(state, dataset_id='d', chrom='chrX', start=0, end=2000,
+                                         t='I', ref=1000, length=100)
+    assert lens['cluster']['carriers'] == split['counts'][0] == 4
+    assert lens['cluster']['reference'] == split['counts'][1] == 1
+    assert {c['id'] for c in lens['carriers']} == {n for n, allele in split['assignments'].items() if allele == 0}
+    for cutoff in [50, 90]:
+        summary = sv_summary_for_reads(compact, 0, 2000, cutoff)
+        variants = variants_endpoint.svs_payload(state, dict(dataset_id='d', chrom='chrX', start=0, end=2000, min_len=cutoff))
+        assert summary['clusters'] == variants['clusters']
+        c = summary['clusters'][0]
+        assert (c['support'], c['informative'], c['clip_support']) == (4, 5, 1)

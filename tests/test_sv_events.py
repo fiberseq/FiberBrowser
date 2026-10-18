@@ -1,6 +1,9 @@
 """Structural-variant events, clusters and allele split (fb-n9-sv)."""
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pysam
 import pytest
 
@@ -555,3 +558,104 @@ def test_supplementary_records_with_calls_are_one_molecule_everywhere(sv_client,
     assert sorted(r["read_id"] for r in rows) == split_names
     for row in rows:
         assert row["ref_start"] == primaries[row["read_id"]].reference_start
+
+
+# P0 audit: the snapshots retain only local CIGAR/clip evidence and alignment
+# bounds from an HG002 Fiber-seq sample, with anonymous IDs and no sequence/tags (see data/README).
+@pytest.mark.parametrize("case", json.loads(
+    (Path(__file__).parent / 'data/sv_p0_evidence.json').read_text()),
+    ids=lambda case: case['name'])
+def test_audited_loci_summary_split_and_display_evidence_agree(case):
+    from services.sv_endpoint import classify_compact
+    from services.sv_events import carrier_evidence
+    target = case['target']
+    reads = case['reads']
+    calls = classify_compact((({**r, 'duplicate': False, 'file_chrom': case['chrom']}, r) for r in reads),
+                             t=target['t'], ref=target['ref'], length=target['len'])
+    expected = case['expected']
+    assert {n for n, c in calls.items() if c['allele'] == 0} == set(expected['carriers'])
+    for cutoff in ([50, 2000] if case['name'] == 'alu' else [50]):
+        summary = sv_summary_for_reads(reads, case['start'], case['end'], cutoff, chrom=case['chrom'])
+        c = next(c for c in summary['clusters'] if all(c[k] == v for k, v in target.items()))
+        assert (c['support'], c['informative'], c['clip_support']) == (
+            expected['support'], expected['informative'], expected['clip_support'])
+        assert c['support'] == sum(c['allele'] == 0 for c in calls.values())
+        assert c['informative'] == sum(c['allele'] < 2 for c in calls.values())
+        display = finalize_sv_payload(reads, case['start'], case['end'], cutoff)
+        assert {r['id'] for r in display if carrier_evidence(r, target['t'], target['ref'], target['len'])} == set(expected['carriers'])
+
+
+def _p0_read(name, ref, length, t='I'):
+    return dict(id=name, reference_start=0, reference_end=4000,
+                sv=[dict(t=t, ref=ref, len=length, q=100)])
+
+
+def test_final_cluster_members_drop_stale_median_members():
+    reads = [_p0_read(str(i), ref, 100) for i, ref in enumerate([1000, 1015, 1025, 1030, 1030])]
+    clusters, _ = cluster_sv_events(reads, 0, 4000, 50)
+    assert len(clusters) == 1 and clusters[0]['ref'] == 1025
+    assert clusters[0]['members'] == {'1', '2', '3', '4'}
+    c = sv_summary_for_reads(reads, 0, 4000, 50)['clusters'][0]
+    assert c['support'] == 4
+    assert c['support'] == sum(classify_allele(r, 'I', c['ref'], c['len']) == 0 for r in reads)
+
+
+def test_final_target_counts_matching_events_from_adjacent_clusters_once_per_qname():
+    reads = [_p0_read('first', 1000, 100), _p0_read('adjacent', 1000, 140)]
+    reads += [_p0_read(str(i), 1001, 120) for i in range(3)]
+    # The 140 bp event seeded a separate cluster before the first median moved.
+    clusters, _ = cluster_sv_events(reads, 0, 4000, 50)
+    c = next(c for c in clusters if c['len'] == 120)
+    assert c['members'] == {r['id'] for r in reads}
+    summary = sv_summary_for_reads(reads + reads, 0, 4000, 50)
+    c = next(c for c in summary['clusters'] if c['len'] == 120)
+    assert c['support'] == c['informative'] == 5
+    assert summary['n_reads'] == 5
+
+
+def test_repeated_qnames_reduce_carriers_and_reference_with_the_split_precedence():
+    from services.sv_endpoint import classify_compact
+    carrier = _p0_read('carrier', 1000, 100)
+    clipped = {**carrier, 'sv': [dict(t='S', ref=1000, len=60, q=0, side='R')]}
+    reference = dict(id='reference', reference_start=0, reference_end=4000)
+    conflicting_reference = {**reference, 'id': 'carrier'}
+    unknown = dict(id='reference', reference_start=999, reference_end=1001)
+    special_reference = {**reference, 'alignment_spans': [(0, 4000)]}
+    reads = [clipped, reference, conflicting_reference, unknown, special_reference, carrier, carrier]
+    for cohort in (reads, list(reversed(reads))):
+        summary = sv_summary_for_reads(cohort, 0, 4000, 50)
+        c = summary['clusters'][0]
+        assert (c['support'], c['informative'], c['clip_support'], summary['n_reads']) == (1, 2, 0, 2)
+        calls = classify_compact((({**r, 'file_chrom': 'chrT', 'duplicate': False}, None) for r in cohort),
+                                 t='I', ref=c['ref'], length=c['len'])
+        assert {n: c['allele'] for n, c in calls.items()} == {'carrier': 0, 'reference': 1}
+        assert calls['carrier']['evidence']['kind'] == 'cigar'
+
+
+@pytest.mark.parametrize('mapper', [False, True])
+@pytest.mark.parametrize('extra', [[], [(0, 100), (2, 20), (0, 100)]])
+def test_merged_deletion_threshold_is_monotonic_and_independent_of_unrelated_events(mapper, extra):
+    from models.domain import CigarCoordMapper
+    read = _seg([(0, 100), (2, 20), (0, 10), (2, 20), (0, 100)] + extra)
+    options = {'mapper': CigarCoordMapper(read.cigartuples, read.reference_start)} if mapper else {}
+    for cutoff in [10, 20, 40, 49, 50]:
+        events = extract_sv_events(read, cutoff, **options)
+        assert next(e for e in events if e['ref'] == 1100)['len'] == 50
+    assert not any(e['ref'] == 1100 for e in extract_sv_events(read, 51, **options) or [])
+
+
+def test_small_matching_event_below_display_cutoff_is_still_carrier_evidence():
+    from services.sv_endpoint import classify_records
+    from services.sv_events import sv_extraction_floor
+    seed = _seg([(0, 1000), (1, 60), (0, 1000)], start=0)
+    near = _seg([(0, 1000), (1, 48), (0, 1000)], start=0)
+    seed.query_name, near.query_name = 'seed', 'near'
+    records = [(r, 'chrT') for r in (seed, near)]
+    reads = [dict(id=r.query_name, reference_start=r.reference_start, reference_end=r.reference_end,
+                  sv=extract_sv_events(r, sv_extraction_floor(50))) for r, _ in records]
+    c = sv_summary_for_reads(reads, 0, 3000, 50)['clusters'][0]
+    assert c['len'] == 60 and c['support'] == 2
+    assert cluster_sv_events(reads, 0, 3000, 50)[0][0]['members'] == {'seed', 'near'}
+    assert sum(c['allele'] == 0 for c in classify_records(records, t='I', ref=1000, length=60).values()) == 2
+    displayed = finalize_sv_payload(reads, 0, 3000, 50)
+    assert 'sv' not in displayed[1] and displayed[1]['sv_evidence'][0]['len'] == 48

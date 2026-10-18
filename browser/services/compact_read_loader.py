@@ -14,6 +14,7 @@ from services.sv_events import (
     SV_MIN_LEN_DEFAULT,
     deletion_spans,
     extract_sv_events,
+    sv_extraction_floor,
     split_compact_read_at_deletions,
 )
 from services.circular_genome import (
@@ -1579,9 +1580,9 @@ def build_compact_reads_from_bam(
 ):
     """Build compact interval reads from a BAM file.
 
-    Every read carries ``sv`` (services/sv_events.py: deletions, insertions and
-    clips of at least ``sv_min_len``, its SA segments; absolute coordinates),
-    and its calls are split at those deletions. ``include_sv_seq`` adds the
+    Every read carries ``sv`` evidence (services/sv_events.py: deletions,
+    insertions and clips at the shared evidence floor, plus SA segments;
+    absolute coordinates). Calls are split at deletions >= ``sv_min_len``. ``include_sv_seq`` adds the
     first bases of each insertion.
 
     ``short_terminal_footprint_bp``: drop a footprint call at either end of a
@@ -2631,13 +2632,13 @@ def _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq=
     the extraction can't read (a test double without a CIGAR string) keeps
     none: SV events never cost a read its row."""
     try:
-        events = extract_sv_events(read, sv_min_len, include_seq=include_sv_seq, mapper=mapper)
+        events = extract_sv_events(read, sv_extraction_floor(sv_min_len), include_seq=include_sv_seq, mapper=mapper)
     except Exception:
         return
     if not events:
         return
     read_data["sv"] = events
-    cuts = [(a - region_start, b - region_start) for a, b in deletion_spans(events)]
+    cuts = [(a - region_start, b - region_start) for a, b in deletion_spans(ev for ev in events if ev.get("len", 0) >= sv_min_len)]
     if cuts:
         split_compact_read_at_deletions(read_data, cuts)
 

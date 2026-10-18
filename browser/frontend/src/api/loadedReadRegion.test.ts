@@ -143,3 +143,14 @@ it('preserves the visible terminal-gap size across deletion-split pieces', () =>
   expect(projectLoadedReads(original, 10, 980, 100)?.reads[0].intervals)
     .toEqual([[0, 190, -790], [390, 790, -790], [790, 980, 200]]);
 });
+
+it('keeps allele evidence when client projection crops a clip outside the new view', () => {
+  const original = data();
+  const r = original.reads[0];
+  readAlignmentBounds.set(r, [0, 100]);
+  r.sv = [{ t: 'S', side: 'R', ref: 10, len: 60, q: 50 }];
+  const cropped = projectLoadedReads(original, 20, 50, 0)!;
+  expect(cropped.reads[0].sv).toBeUndefined();
+  expect(cropped.reads[0].sv_evidence).toEqual(r.sv);
+  expect(r.sv).toHaveLength(1);
+});
