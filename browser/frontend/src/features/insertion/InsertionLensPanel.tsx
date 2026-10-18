@@ -260,6 +260,8 @@ export function InsertionLensPanel() {
   const response = target && loadedResponse?.identity === requestIdentity ? loadedResponse.data : null;
   const currentResponse = useRef(loadedResponse);
   currentResponse.current = response ? loadedResponse : null;
+  const exportController = useRef<AbortController | null>(null);
+  useEffect(() => () => { exportController.current?.abort(); }, [requestIdentity]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -531,13 +533,16 @@ export function InsertionLensPanel() {
   const downloadInserts = async () => {
     if (!target || !response) return;
     const snapshot = loadedResponse;
+    exportController.current?.abort();
+    const controller = new AbortController();
+    exportController.current = controller;
     try {
-      const res = await fetchJson<LensResponse>(`/api/insertions/lens?${lensParams(target, { ...dupParam, include_sequences: 'true', consensus: 'false', max_reference: '0' })}`, { signal: new AbortController().signal });
-      if (currentResponse.current !== snapshot) return;
+      const res = await fetchJson<LensResponse>(`/api/insertions/lens?${lensParams(target, { ...dupParam, include_sequences: 'true', consensus: 'false', max_reference: '0' })}`, { signal: controller.signal });
+      if (controller.signal.aborted || currentResponse.current !== snapshot) return;
       if (!res.success) throw new Error(res.error || 'Could not fetch the inserts');
       downloadTextFile(insertsFasta(res.carriers, response, reversed), `${fileStem}_inserts.fa`, 'text/x-fasta');
     } catch (err) {
-      if (currentResponse.current !== snapshot) return;
+      if (controller.signal.aborted || currentResponse.current !== snapshot) return;
       say(`Could not fetch the inserts: ${String((err as Error)?.message ?? err)}`);
     }
   };

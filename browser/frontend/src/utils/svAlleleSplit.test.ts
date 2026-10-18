@@ -171,6 +171,31 @@ describe('current split counts and historical assignments', () => {
   });
   afterEach(() => { vi.unstubAllGlobals(); useBrowserStore.setState(initial, true); });
 
+  it('retries an initial split when its duplicate setting changes while waiting', async () => {
+    let finish!: (response: Response) => void;
+    const fetchMock = vi.fn().mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }))
+      .mockResolvedValue(new Response(JSON.stringify({ assignments: { current: 0 }, counts: [1, 0, 0], margin: 100 })));
+    vi.stubGlobal('fetch', fetchMock);
+    const pending = splitBySv(TARGET, SV);
+    useBrowserStore.setState({ showDuplicateReads: false });
+    finish(new Response(JSON.stringify({ assignments: { stale: 0 }, counts: [9, 0, 0], margin: 100 })));
+    expect(await pending).toMatchObject({ includeDuplicates: false, counts: [1, 0, 0] });
+    expect(fetchMock.mock.calls.map(call => JSON.parse(call[1].body).include_duplicates)).toEqual([true, false]);
+    expect(useBrowserStore.getState().clusterAssignments.ds).toEqual({ current: 0 });
+  });
+
+  it('rejects an initial split superseded by another target', async () => {
+    let finish!: (response: Response) => void;
+    vi.stubGlobal('fetch', vi.fn().mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }))
+      .mockResolvedValue(new Response(JSON.stringify({ assignments: { current: 0 }, counts: [1, 0, 0], margin: 100 }))));
+    const pending = splitBySv(TARGET, SV);
+    const rejected = expect(pending).rejects.toThrow('superseded');
+    await splitBySv(TARGET, { ...SV, ref: 11000 });
+    finish(new Response(JSON.stringify({ assignments: { stale: 0 }, counts: [9, 0, 0], margin: 100 })));
+    await rejected;
+    expect(useBrowserStore.getState().svSplits.ds.ref).toBe(11000);
+  });
+
   it('retains departed/duplicate assignments while counting only the new response', async () => {
     mockSplit({ carrier: 0, departed: 0, duplicate: 1 });
     await splitBySv(TARGET, SV);

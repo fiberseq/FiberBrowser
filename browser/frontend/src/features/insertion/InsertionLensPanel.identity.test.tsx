@@ -37,7 +37,7 @@ describe('lens actions belong to the current response identity', () => {
   let initial: ReturnType<typeof useBrowserStore.getState>;
   let container: HTMLDivElement;
   let root: Root;
-  let pending: { url: URL; resolve: (r: Response) => void; reject: (e: Error) => void }[];
+  let pending: { url: URL; signal?: AbortSignal | null; resolve: (r: Response) => void; reject: (e: Error) => void }[];
   beforeEach(() => {
     initial = useBrowserStore.getState();
     resetPanelMemory();
@@ -47,8 +47,8 @@ describe('lens actions belong to the current response identity', () => {
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} unobserve() {} });
     pending = [];
-    vi.stubGlobal('fetch', vi.fn((url: string) => new Promise<Response>((resolve, reject) => {
-      pending.push({ url: new URL(url, 'http://x'), resolve, reject });
+    vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
+      pending.push({ url: new URL(url, 'http://x'), signal: init?.signal, resolve, reject });
     })));
     useBrowserStore.setState({
       chrom: 'chr1', start: 0, end: 10000, showDuplicateReads: false,
@@ -128,6 +128,7 @@ describe('lens actions belong to the current response identity', () => {
     expect(pending[1].url.searchParams.get('dataset_id')).toBe('a');
     expect(pending[1].url.searchParams.get('ref')).toBe('1000');
     await act(async () => { setInsertionLensState(target('b', 2000)); });
+    expect(pending[1].signal?.aborted).toBe(true);
     await finish(2, 2000);
     await finish(1, 1000);
     expect(downloadTextFile).not.toHaveBeenCalled();

@@ -14,6 +14,14 @@ const SUMMARY: SvSummary = { min_len: 50, margin: 100, scope: 'all', n_reads: 24
 
 const read = (id: string, sv: CompactRead['sv']): CompactRead => ({ id, intervals: [[0, 100, -100]], sv });
 
+it('describes and inspects retained sub-cutoff CIGAR evidence once per molecule', () => {
+  const c = { ...INS, ref: 1000, end: 1000, len: 60, support: 2, informative: 2 };
+  const seed = read('seed', [{ t: 'I', ref: 1000, len: 60, q: 100 }]);
+  const near: CompactRead = { ...read('near', undefined), sv_evidence: [{ t: 'I', ref: 1000, len: 48, q: 100 }] };
+  expect(describeSvCluster(c, null, [seed, near, near], 'chr1').cigar).toBe('CIGAR 60I in 1 read, 48I in 1');
+  expect(readSvEventAt(near, 1000, 10, 10)?.len).toBe(48);
+});
+
 describe('SV labels', () => {
   it('formats sizes as the owner asked: −1.8 kb, +312', () => {
     expect(formatSvSize('D', 1800)).toBe('−1.8 kb');

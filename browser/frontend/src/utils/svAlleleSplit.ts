@@ -29,7 +29,7 @@ export interface SvSplitTarget {
   viewEnd: number;
 }
 
-export function requestSvSplit(target: SvSplitTarget, sv: Pick<SvCluster, 't' | 'ref' | 'len'>, margin = SV_SPAN_MARGIN, signal?: AbortSignal): Promise<SvSplitResponse> {
+export function requestSvSplit(target: SvSplitTarget, sv: Pick<SvCluster, 't' | 'ref' | 'len'>, margin = SV_SPAN_MARGIN, signal?: AbortSignal, includeDuplicates = Boolean(useBrowserStore.getState().showDuplicateReads)): Promise<SvSplitResponse> {
   return fetchJson<SvSplitResponse>('/api/sv/split', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -37,13 +37,13 @@ export function requestSvSplit(target: SvSplitTarget, sv: Pick<SvCluster, 't' | 
       dataset_id: target.datasetId, chrom: target.chrom, start: Math.floor(target.viewStart), end: Math.ceil(target.viewEnd),
       t: sv.t, ref: sv.ref, len: sv.len, margin,
       // Reads the panel shows: duplicates too when they are on (else they'd get no group).
-      include_duplicates: Boolean(useBrowserStore.getState().showDuplicateReads),
+      include_duplicates: includeDuplicates,
     }),
     signal,
   });
 }
 
-export function svSplitDef(target: SvSplitTarget, sv: Pick<SvCluster, 't' | 'ref' | 'len'>, response: SvSplitResponse): SvSplitDef {
+export function svSplitDef(target: SvSplitTarget, sv: Pick<SvCluster, 't' | 'ref' | 'len'>, response: SvSplitResponse, includeDuplicates = Boolean(useBrowserStore.getState().showDuplicateReads)): SvSplitDef {
   return {
     datasetId: target.datasetId, chrom: target.chrom, t: sv.t, ref: sv.ref, len: sv.len,
     end: sv.t === 'D' ? sv.ref + sv.len : sv.ref,
@@ -51,7 +51,7 @@ export function svSplitDef(target: SvSplitTarget, sv: Pick<SvCluster, 't' | 'ref
     label: svAlleleLabel(sv.t, sv.ref, sv.len, target.chrom),
     counts: response.counts,
     viewStart: target.viewStart, viewEnd: target.viewEnd,
-    includeDuplicates: Boolean(useBrowserStore.getState().showDuplicateReads),
+    includeDuplicates,
   };
 }
 
@@ -71,9 +71,20 @@ export function applySvSplit(stateKey: string, def: SvSplitDef, assignments: Rec
   store.pushSnapshot(`Split by SV allele: ${def.label}`);
 }
 
+const initialRequests = new Map<string, symbol>();
+
 export async function splitBySv(target: SvSplitTarget, sv: Pick<SvCluster, 't' | 'ref' | 'len'>): Promise<SvSplitDef> {
-  const response = await requestSvSplit(target, sv);
-  const def = svSplitDef(target, sv, response);
+  const request = Symbol();
+  initialRequests.set(target.stateKey, request);
+  let response: SvSplitResponse;
+  let includeDuplicates: boolean;
+  do {
+    includeDuplicates = Boolean(useBrowserStore.getState().showDuplicateReads);
+    response = await requestSvSplit(target, sv, SV_SPAN_MARGIN, undefined, includeDuplicates);
+    if (initialRequests.get(target.stateKey) !== request) throw new Error('SV split superseded');
+  } while (includeDuplicates !== Boolean(useBrowserStore.getState().showDuplicateReads));
+  initialRequests.delete(target.stateKey);
+  const def = svSplitDef(target, sv, response, includeDuplicates);
   applySvSplit(target.stateKey, def, response.assignments);
   return def;
 }
@@ -112,6 +123,7 @@ export async function refreshSvSplit(target: SvSplitTarget, def: SvSplitDef, sig
 
 /** "Clear SV split": this panel's groups, names and split go (one undo step); other panels keep theirs. */
 export function clearSvSplit(stateKey: string): void {
+  initialRequests.delete(stateKey);
   const store = useBrowserStore.getState();
   if (!store.svSplits[stateKey]) return;
   store.setClusterAssignments(stateKey, {});

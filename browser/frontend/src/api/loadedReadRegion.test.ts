@@ -1,4 +1,5 @@
-import { readAlignmentBounds, readBinaryBytes, readRegionProjectionSafe, readTerminalGaps } from './readBinary';
+import { decodeReadBinary, readAlignmentBounds, readBinaryBytes, readRegionProjectionSafe, readTerminalGaps } from './readBinary';
+import binaryFixture from './svProjection.fixture.json';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { ReadsResponse } from '../components/tracks/read-track/types';
 import { clearLoadedReadRegions, lookupReadRegion, projectLoadedReads, readRegionGeneration, rememberReadRegion, lookupExactReadResponse, rememberExactReadResponse, setReadRegionBudget, readRegionDiagnostics, releaseReadRegions } from './loadedReadRegion';
@@ -11,6 +12,17 @@ const params = (start = 0, end = 100) => new URLSearchParams({
 const data = (): ReadsResponse => ({ count: 1, total: 1, width: 100,
   total_overlapping: 1, working_count: 1, reads: [{ id: 'a', intervals: [[0, 100, 120]],
     methyl: [10, 30, 80], deam: [[10, 0], [30, 1]], layers: { tf: { intervals: [[20, 40, 20]] } } }] });
+
+it('projects a production FBR1 round trip with unexpanded SV evidence', () => {
+  const bytes = Uint8Array.from(atob(binaryFixture.base64), c => c.charCodeAt(0));
+  const decoded = decodeReadBinary(bytes.buffer);
+  expect(Object.getOwnPropertyDescriptor(decoded.reads[0], 'sv_evidence')?.set).toBeUndefined();
+  const projected = projectLoadedReads(decoded, 200, 600, 0)!;
+  expect(projected.reads[0].sv_evidence).toHaveLength(2);
+  expect(Object.getOwnPropertyDescriptor(projected.reads[0], 'sv_evidence')?.writable).toBe(true);
+  expect(projected.reads[0].sv).toEqual(decoded.reads[0].sv);
+  expect(projectLoadedReads(decoded, 590, 300, 0)).toBeUndefined();
+});
 
 describe('loaded read regions', () => {
   beforeEach(clearLoadedReadRegions);

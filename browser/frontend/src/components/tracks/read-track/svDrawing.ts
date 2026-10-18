@@ -310,10 +310,13 @@ const bp = (n: number) => n.toLocaleString('en-US');
 export function describeSvCluster(c: SvCluster, summary: SvSummary | null, reads: CompactRead[], chrom: string): SvClusterDescription {
   const size = c.len >= 1000 ? `${(c.len / 1000).toFixed(1)} kb` : `${bp(c.len)} bp`;
   const events: { readId: string; event: Extract<SvEvent, { t: 'D' | 'I' }> }[] = [];
+  const seen = new Set<string>();
   for (const read of reads) {
-    for (const ev of read.sv ?? []) {
+    if (seen.has(read.id)) continue;
+    for (const ev of read.sv_evidence ?? read.sv ?? []) {
       if (ev.t === c.t && eventsMatch(c.t, ev.ref, ev.len, c.ref, c.len)) {
         events.push({ readId: read.id, event: ev as Extract<SvEvent, { t: 'D' | 'I' }> });
+        seen.add(read.id);
         break;
       }
     }
@@ -377,10 +380,10 @@ export function clusterAtCursor(summary: SvSummary | null, pos: number, bpPerPx 
 }
 
 /** The SV event of one read nearest a position (within `tolBp`), for the read menu. */
-export function readSvEventAt(read: Pick<CompactRead, 'sv'>, pos: number, tolBp: number, minLen: number): Extract<SvEvent, { t: 'D' | 'I' }> | null {
+export function readSvEventAt(read: Pick<CompactRead, 'sv' | 'sv_evidence'>, pos: number, tolBp: number, minLen: number): Extract<SvEvent, { t: 'D' | 'I' }> | null {
   let best: Extract<SvEvent, { t: 'D' | 'I' }> | null = null;
   let bestDist = Infinity;
-  for (const ev of read.sv ?? []) {
+  for (const ev of read.sv_evidence ?? read.sv ?? []) {
     if ((ev.t !== 'D' && ev.t !== 'I') || ev.len < minLen) continue;
     const end = ev.t === 'D' ? ev.ref + ev.len : ev.ref;
     const dist = pos < ev.ref ? ev.ref - pos : pos > end ? pos - end : 0;
