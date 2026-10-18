@@ -54,6 +54,7 @@ from services.sv_events import (
     insertion_clip_tolerance,
     normalize_min_sv_len,
     sv_summary_for_reads,
+    alignment_evidence,
 )
 
 DEFAULT_FLANK = 1000
@@ -592,8 +593,8 @@ def classify_site(bam_paths, chrom, *, pos: int, tolerance: int = DEFAULT_TOLERA
     excluded = {"other_insert": 0, "not_informative": 0}
     for name, entry in by_name.items():
         read, _file_chrom, path, bam = entry["record"]
-        if entry["allele"] == 0:
-            plan = _carrier_plan(read, entry["evidence"], length)
+        if (entry['evidence'] or {}).get('level') is not None:
+            plan = {**_carrier_plan(read, entry["evidence"], length), 'evidence_level': entry['evidence']['level']}
             carriers_all.append((plan, read, path, bam))
         elif entry["allele"] == 1:
             reference_all.append((read, path, bam))
@@ -699,6 +700,7 @@ def build_lens(
             "id": read.query_name,
             "strand": _strand(read),
             "kind": "cigar" if plan["kind"] == "cigar" else "clip",
+            "evidence_level": plan['evidence_level'],
             "ref": int(plan["ref"]),
             "ref_end": int(plan["ref_end"]),
             "q": int(plan["q"]),
@@ -767,7 +769,11 @@ def build_lens(
             "len": lengths[len(lengths) // 2] if lengths else length,
             "len_lo": lengths[0] if lengths else length,
             "len_hi": lengths[-1] if lengths else length,
-            "carriers": total_carriers,
+            "carriers": sum(p['evidence_level'] == 'confirmed' for p, *_ in carriers_all),
+            "confirmed": sum(p['evidence_level'] == 'confirmed' for p, *_ in carriers_all),
+            "putative": sum(p['evidence_level'] == 'putative' for p, *_ in carriers_all),
+            "ambiguous": sum(p['evidence_level'] == 'ambiguous' for p, *_ in carriers_all),
+            "evidence_total": total_carriers,
             "cigar": counts["cigar"],
             "clipped": counts["clip"] + counts["hard"],
             "hard": counts["hard"],
@@ -879,7 +885,8 @@ def _sv_reads(bam_paths, chrom, start, end, floor, *, bam_handle_getter, chrom_m
         if getattr(read, "is_duplicate", False) and not include_duplicates:
             continue
         ref_start, ref_end = int(read.reference_start), int(read.reference_end)
-        item = {"id": read.query_name, "reference_start": ref_start, "reference_end": ref_end}
+        item = {"id": read.query_name, "reference_start": ref_start, "reference_end": ref_end,
+                **alignment_evidence(read)}
         events = extract_sv_events(read, sv_extraction_floor(floor))
         if events:
             item["sv"] = events

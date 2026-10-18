@@ -21,6 +21,7 @@ from services.sv_events import (
     sv_extraction_floor,
     extract_sv_events,
     normalize_min_sv_len,
+    alignment_evidence,
 )
 
 _SEGMENT_SUFFIX = re.compile(r"_\d+$")
@@ -82,20 +83,21 @@ def _compact_record(read, file_chrom: str, floor: int) -> dict:
         "sv": extract_sv_events(read, floor) or [],
         "duplicate": bool(read.is_duplicate),
         "file_chrom": file_chrom,
+        **alignment_evidence(read),
     }
 
 
 def classify_compact(entries, *, t: str, ref: int, length: int, margin: int = SV_SPAN_MARGIN,
-                     include_duplicates: bool = False) -> dict:
+                     include_duplicates: bool = False, include_putative: bool = False, targets=None) -> dict:
     """``classify_records`` over compact entries (``_compact_record``); each
     entry's ``record`` is the entry itself (or what ``item`` carried)."""
     return classify_molecules(
         ((compact, item) for compact, item in entries if include_duplicates or not compact["duplicate"]),
-        t=t, ref=ref, length=length, margin=margin)
+        t=t, ref=ref, length=length, margin=margin, include_putative=include_putative, targets=targets)
 
 
 def classify_records(records, *, t: str, ref: int, length: int, margin: int = SV_SPAN_MARGIN,
-                     include_duplicates: bool = False) -> dict:
+                     include_duplicates: bool = False, include_putative: bool = False) -> dict:
     """Every primary record as carrier (0), reference (1) or not informative
     (2) for one SV: ``{name: {'allele', 'evidence', 'record'}}``. A name seen
     twice (merged files) keeps its most informative call. The allele split
@@ -108,7 +110,7 @@ def classify_records(records, *, t: str, ref: int, length: int, margin: int = SV
     entries = ((_compact_record(item[0], item[1], floor), item) for item in records
                if include_duplicates or not item[0].is_duplicate)
     return classify_compact(entries, t=t, ref=ref, length=length, margin=margin,
-                            include_duplicates=include_duplicates)
+                            include_duplicates=include_duplicates, include_putative=include_putative)
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +187,8 @@ def scan_view(state, dataset_id: str, chrom: str, start: int, end: int, floor: i
 
 
 def sv_split_payload(state, *, dataset_id: str, chrom: str, start: int, end: int, t: str, ref: int,
-                     length: int, margin: Optional[int] = None, include_duplicates: bool = False) -> dict:
+                     length: int, margin: Optional[int] = None, include_duplicates: bool = False,
+                     include_putative: bool = False) -> dict:
     """Every primary read in ``[start, end)`` as carrier (0), reference (1) or
     not informative (2) for the SV ``t``/``ref``/``length`` (an insertion's
     clipped reads are carriers: sv_events.carrier_evidence)."""
@@ -200,7 +203,7 @@ def sv_split_payload(state, *, dataset_id: str, chrom: str, start: int, end: int
     margin = SV_SPAN_MARGIN if margin is None else max(0, int(margin))
     entries = scan_view(state, dataset_id, chrom, int(start), int(end), allele_floor(length))
     by_name = classify_compact(((c, c) for c in entries), t=t, ref=ref, length=length,
-                               margin=margin, include_duplicates=include_duplicates)
+                               margin=margin, include_duplicates=include_duplicates, include_putative=include_putative)
     assignments: dict[str, int] = {}
     counts = [0, 0, 0]
     by_kind = {"cigar": 0, "sa": 0, "clip": 0}
@@ -214,6 +217,10 @@ def sv_split_payload(state, *, dataset_id: str, chrom: str, start: int, end: int
         "assignments": assignments,
         "counts": counts,
         "carriers_by": by_kind,
+        "evidence_counts": {level: sum((entry['evidence'] or {}).get('level') == level for entry in by_name.values())
+                            for level in ('confirmed', 'putative', 'ambiguous')},
+        "evidence_levels": {name: (entry['evidence'] or {}).get('level') for name, entry in by_name.items()},
+        "include_putative": include_putative,
         "label": allele_label(t, ref, length, chrom),
         "margin": margin,
         "groups": ["carriers", "reference", "not informative"],

@@ -171,6 +171,17 @@ describe('current split counts and historical assignments', () => {
   });
   afterEach(() => { vi.unstubAllGlobals(); useBrowserStore.setState(initial, true); });
 
+  it('sends and retains the evidence policy and labels split panels with evidence counts', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ assignments: { c: 0, p: 0, a: 2 },
+      counts: [2, 0, 1], margin: 100, evidence_counts: { confirmed: 1, putative: 1, ambiguous: 1 } })));
+    vi.stubGlobal('fetch', fetchMock);
+    const def = await splitBySv({ ...TARGET, includePutative: true }, SV);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).include_putative).toBe(true);
+    expect(def.includePutative).toBe(true);
+    expect(useBrowserStore.getState().clusterGroupLabels.ds[0]).toBe('Confirmed + putative');
+    expect(def.evidenceCounts).toEqual({ confirmed: 1, putative: 1, ambiguous: 1 });
+  });
+
   it('retries an initial split when its duplicate setting changes while waiting', async () => {
     let finish!: (response: Response) => void;
     const fetchMock = vi.fn().mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }))

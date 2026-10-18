@@ -1,60 +1,63 @@
-# Read-derived SV evidence (P0 audit corrections)
+# Read-derived SV evidence
 
-Read summaries, Variants/SV, allele splits and the insertion lens extract evidence
-at 10 bp, independently of the requested display/cluster cutoff. The cutoff gates
-cluster seeds and glyphs. It must not hide a shorter matching CIGAR event or a
-carrier clip. Compact payloads retain `sv_evidence` when filtering `sv` for drawing;
-client region projection preserves it too. The frontend carrier helper mirrors
-`sv_events.carrier_evidence`, checked against the same sequence-free Alu/MHC fixtures.
+Read summaries, Variants, splits, highlighting and the insertion lens use a fixed
+10 bp evidence floor, independently of the display/seed cutoff. Deletion cuts in
+chromatin intervals and direct-load cache keys use the display cutoff. Filtered
+payloads retain `sv_evidence`; JSON, FBR1, packed caches and cropped views preserve
+alignment metadata. Boundary crops near retained indels require a fresh summary.
 
-Projection also preserves lazy FBR1 evidence using writable data properties and
-checks retained evidence at cropped boundaries. Initial splits capture duplicate
-settings before requesting, retry changed settings and reject superseded requests.
-Insert exports abort on replacement, target changes and unmount.
+Evidence is classified per molecule (QNAME) per target:
 
-After running-median clustering, CIGAR memberships are reconciled against the
-rounded final targets. Events originally assigned to adjacent seed clusters are
-considered, and stale members are removed. Membership is evaluated per target:
-a QNAME contributes once to each compatible target, as in an individual split or
-lens request. Overlapping target tolerances do not establish exclusive alleles;
-confidence and ambiguous clip membership remain later audit work.
+- **Confirmed:** a matching CIGAR event, or a same-chromosome, same-strand junction
+  with both MAPQs >=20, equal full-query lengths and non-overlapping query
+  intervals. A deletion junction has <=20 unaligned query bases; an insertion
+  junction has a query gap matching the allele length and sequence available
+  across that gap. Query intervals include hard clips in the full-query frame;
+  CIGAR event `q` remains in BAM SEQ coordinates, on both strands.
+- **Putative:** a compatible terminal clip without definitive sequence/junction
+  evidence. Insertion clips retain the 50 bp floor. Mixed soft/hard clips expose
+  only their available soft sequence. Hard clips alone never confirm an insert.
+- **Ambiguous:** clip evidence compatible with multiple nearby seeded alleles.
+  Competition includes 50 bp seed targets even when the display cutoff is higher.
+  Ambiguous evidence never enters the carrier group, including inclusive splits.
 
-Carrier and reference counts both use QNAMEs, including merged BAMs. When records
-of one molecule disagree, carrier wins over reference, which wins over
-uninformative. CIGAR evidence wins over SA, then clip evidence for carrier
-subtotals, regardless of file order. Identical QNAME/position/length seed events
-are deduplicated before calculating medians. Summary and Variants `n_reads` also
-count molecules; other browser read-count fields retain their existing scopes.
+Summary `support`/`confirmed` and `informative` count confirmed molecules and
+confirmed plus reference molecules respectively. `putative` and `ambiguous` are
+separate counts. Variants, summary tooltips and lens show those levels. Default
+highlighting and lens profiles use confirmed evidence. Lens rows carry their
+`evidence_level`; its optional inclusive view adds putative rows. Splits default
+to confirmed only and offer include-putative in Variants and lens; the chosen
+policy and separate counts persist in panel/session state. The lens returns all
+three evidence cohorts, with `evidence_total` describing its capped row pool.
 
-The extraction shortcut no longer rejects joined events by summing only I/D
-bases. This fixes the audit's `20D10M20D` 50 bp threshold disappearance without
-changing the existing approximate joined-event representation.
+Reference requires an aligned block covering both breakpoints and their 100 bp
+margins. Outer alignment bounds cannot establish reference across a deletion or
+skip. Legacy compact evidence without blocks excludes any retained deletion
+crossing that interval. A different insertion at the target is uninformative.
 
-Lens responses/actions belong to their dataset, target, duplicate setting and
-data revision. Stale responses are unavailable during loading/error/seek/clear;
-per-request abort signals prevent reuse of a superseded pending request. A pending
-insert export is discarded if its originating response is replaced. Split
-refresh keeps historical assignments for returning molecules, while its counts
-come only from the latest region/duplicate-setting response.
+Every molecule call retains its complete `evidence_bundle` of compact alignment
+records and original items. The representative prefers confirmed, putative,
+ambiguous, reference, then unknown; CIGAR precedes junction and clip within a
+level. Alternative records remain available independently of grouping. Molecules
+count once per target, including merged files; overlapping target tolerances do
+not establish exclusive alleles.
 
-Unexpected MA molecular-frame header-policy/import failures propagate. Missing
-optional policy imports still use the existing declared-header fallback. A
-runtime failure cannot silently choose SEQ geometry.
+Seeds have a total position/type/length/molecule order, deterministic nearest
+assignment and one median vote per molecule per cluster. Identical targets
+collapse; stranded singleton outliers cannot gain shadow piles through final
+reconciliation. Membership reconciliation uses an in-view position index;
+summaries skip unused memberships and classify the full evidence instead.
 
-The public compact loader propagates `FramePolicyError` with its original cause.
-Direct BAM cache keys and deletion interval cuts use the display cutoff, while
-event extraction continues to use the independent 10 bp evidence floor.
+Initial splits capture settings before waiting, retry changed duplicate settings
+and reject superseded requests. Refresh preserves historical assignments but
+counts only its current region and settings. Lens response identity includes the
+dataset, target, duplicates and data revision; stale actions are unavailable.
+Insert export controllers abort on replacement, target change and unmount.
 
-Seeds have a total position/type/length/molecule order; nearest-target assignment
-uses deterministic ties. Each molecule contributes one median vote per cluster.
-A stranded singleton compatible with a stronger final target cannot become a
-shadow cluster by reconciliation. Identical targets collapse. Reconciliation is
-indexed and restricted to in-view events; summaries skip unused memberships and
-classify full molecule evidence against their final targets.
+The public compact loader propagates `FramePolicyError` with its cause for
+unexpected molecular-frame policy/import failures. Missing optional policy
+imports retain declared-header geometry on both strands.
 
-Carrier evidence otherwise keeps the existing rules: matching CIGAR indels,
-clips plus same-strand SA endpoints for deletions, and nearby soft/hard clips of
-at least 50 bp for insertions. Reference calls still use alignment bounds (or
-provided alignment spans). No supplementary consolidation, sequence validation,
-normalisation, confidence model, export cap change or server-side lens job
-cancellation is introduced here.
+Supplementary-only recovery and exact replacement/normalisation are the next
+implementation steps. No server-side cancellation or complete-export change is
+implied by the evidence levels.

@@ -1707,7 +1707,7 @@ def _clip_part_before(read: dict, frame_end: int) -> Optional[dict]:
         layer_key=None, include_layer_qualities=True)
     if clipped is None:
         return None
-    for key in ("duplicate", "alignment_spans", "sv"):
+    for key in ("duplicate", "alignment_spans", "sv", "aligned_blocks", "sv_segments", "sequence_span"):
         if key in read:
             clipped[key] = read[key]
     if read.get("cigar"):
@@ -2635,6 +2635,8 @@ def _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq=
     the extraction can't read (a test double without a CIGAR string) keeps
     none: SV events never cost a read its row."""
     try:
+        from services.sv_events import alignment_evidence
+        read_data.update(alignment_evidence(read))
         events = extract_sv_events(read, sv_extraction_floor(sv_min_len), include_seq=include_sv_seq, mapper=mapper)
     except Exception:
         return

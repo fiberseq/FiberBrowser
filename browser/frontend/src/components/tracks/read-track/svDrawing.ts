@@ -152,33 +152,50 @@ export function eventsMatch(t: 'D' | 'I', ref: number, len: number, cRef: number
 /** Mirrors sv_events.carrier_evidence: evidence is independent of glyph size.
  * Insertion clips keep the existing >=50 bp floor, on either side/strand.
  */
-export function readCarriesCluster(read: Pick<CompactRead, 'sv' | 'sv_evidence'>, cluster: Pick<SvCluster, 't' | 'ref' | 'len'>, chrom?: string): boolean {
+export function svEvidenceLevel(read: Pick<CompactRead, 'sv' | 'sv_evidence' | 'sv_segments' | 'sequence_span'>,
+  cluster: Pick<SvCluster, 't' | 'ref' | 'len'>, chrom?: string,
+  targets: Pick<SvCluster, 't' | 'ref' | 'len'>[] = []): 'confirmed' | 'putative' | 'ambiguous' | null {
   const events = read.sv_evidence ?? read.sv ?? [];
   for (const ev of events) {
-    if (ev.t === cluster.t && eventsMatch(cluster.t, ev.ref, ev.len, cluster.ref, cluster.len)) return true;
+    if (ev.t === cluster.t && eventsMatch(cluster.t, ev.ref, ev.len, cluster.ref, cluster.len)) return 'confirmed';
   }
-  if (cluster.t === 'I') {
-    const tol = Math.max(20, Math.min(breakpointTolerance(cluster.len), 50));
-    return events.some(ev => ev.t === 'S' && ev.len >= 50 && Math.abs(ev.ref - cluster.ref) <= tol);
-  }
-  const end = cluster.ref + cluster.len;
   const tol = breakpointTolerance(cluster.len);
-  const clips = events.filter((ev): ev is Extract<SvEvent, { t: 'S' }> => ev.t === 'S');
-  const segments = events.filter((ev): ev is Extract<SvEvent, { t: 'SA' }> => ev.t === 'SA');
-  for (const clip of clips) {
-    for (const seg of segments) {
-      if (chrom && seg.chrom !== chrom) continue;
-      if (seg.same_strand === false) continue;  // an inversion's segment
-      if (clip.side === 'R' && Math.abs(clip.ref - cluster.ref) <= tol && Math.abs(seg.pos - end) <= tol) return true;
-      if (clip.side === 'L' && Math.abs(clip.ref - end) <= tol && Math.abs(seg.pos + seg.cigar_ref_len - cluster.ref) <= tol) return true;
+  const segments = read.sv_segments ?? [];
+  for (const left of segments) for (const right of segments) {
+    if (left === right || left.mapq < 20 || right.mapq < 20 || left.strand !== right.strand
+      || left.chrom !== right.chrom || (chrom && left.chrom !== chrom) || left.query_length !== right.query_length) continue;
+    const gap = right.q_start - left.q_end;
+    if (gap < 0 || Math.abs(left.pos + left.cigar_ref_len - cluster.ref) > tol) continue;
+    if (cluster.t === 'D' && gap <= 20 && Math.abs(right.pos - cluster.ref - cluster.len) <= tol) return 'confirmed';
+    if (cluster.t === 'I' && Math.abs(right.pos - cluster.ref) <= tol && eventsMatch('I', cluster.ref, gap, cluster.ref, cluster.len)) {
+      const [a, b] = read.sequence_span ?? [0, 0];
+      if (a <= left.q_end && right.q_start <= b && events.some(ev => ev.t === 'S' && ev.len >= 50
+        && Math.abs(ev.ref - cluster.ref) <= Math.max(20, Math.min(tol, 50)))) return 'confirmed';
     }
   }
-  return false;
+  const clippedAt = (target: Pick<SvCluster, 't' | 'ref' | 'len'>) => events.some(ev => ev.t === 'S' && (
+    target.t === 'I' ? ev.len >= 50 && Math.abs(ev.ref - target.ref) <= Math.max(20, Math.min(breakpointTolerance(target.len), 50))
+      : (ev.side === 'R' && Math.abs(ev.ref - target.ref) <= breakpointTolerance(target.len))
+        || (ev.side === 'L' && Math.abs(ev.ref - target.ref - target.len) <= breakpointTolerance(target.len))));
+  if (!clippedAt(cluster)) return null;
+  return targets.some(t => t.t === cluster.t && (t.ref !== cluster.ref || t.len !== cluster.len) && clippedAt(t)) ? 'ambiguous' : 'putative';
+}
+
+export function readCarriesCluster(read: Pick<CompactRead, 'sv' | 'sv_evidence' | 'sv_segments' | 'sequence_span'>,
+  cluster: Pick<SvCluster, 't' | 'ref' | 'len'>, chrom?: string): boolean {
+  return svEvidenceLevel(read, cluster, chrom) === 'confirmed';
 }
 
 /** Ids of the reads (among `reads`) that carry a cluster's event. */
-export function supportingReadIds(reads: CompactRead[], cluster: SvCluster, chrom?: string): string[] {
-  return [...new Set(reads.filter(read => readCarriesCluster(read, cluster, chrom)).map(read => read.id))];
+export function supportingReadIds(reads: CompactRead[], cluster: SvCluster, chrom?: string,
+  level: 'confirmed' | 'putative' | 'ambiguous' = 'confirmed', targets: SvCluster[] = []): string[] {
+  const levels = new Map<string, 'confirmed' | 'putative' | 'ambiguous'>();
+  const rank = { confirmed: 0, putative: 1, ambiguous: 2 };
+  for (const read of reads) {
+    const evidence = svEvidenceLevel(read, cluster, chrom, targets);
+    if (evidence && (!levels.has(read.id) || rank[evidence] < rank[levels.get(read.id)!])) levels.set(read.id, evidence);
+  }
+  return [...levels].filter(([, value]) => value === level).map(([id]) => id);
 }
 
 /** Size and independent-read support gates for summary glyphs and their hit targets. */
@@ -336,7 +353,8 @@ export function describeSvCluster(c: SvCluster, summary: SvSummary | null, reads
   // Its denominator and scope (audit SV-3): of the reads loaded for drawing, or of every read in view; the split and
   // the insertion lens always count every read in view.
   const scope = summary?.scope === 'loaded' ? 'loaded reads' : 'reads in view';
-  const support = `${c.support.toLocaleString()} of ${c.informative.toLocaleString()} informative ${scope} carry it${extra ? ` (${extra})` : ''}`
+  const support = `${c.support.toLocaleString()} confirmed of ${c.informative.toLocaleString()} informative ${scope}${extra ? ` (${extra})` : ''}`
+    + ` · ${c.putative ?? 0} putative · ${c.ambiguous ?? 0} ambiguous`
     + (summary?.scope === 'loaded' ? ' · the split and the lens count every read in view' : '');
   const op = c.t === 'D' ? 'D' : 'I';
   const counts = new Map<number, number>();

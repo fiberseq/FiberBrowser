@@ -168,9 +168,9 @@ def test_sa_tag_is_parsed_zero_based():
     assert ev[0]["t"] == "S" and ev[0]["side"] == "R"
     assert ev[1:] == [
         {"t": "SA", "chrom": "chr2L", "pos": 11500, "strand": "-", "mapq": 30, "nm": 3, "cigar_ref_len": 2000,
-         "supp": False, "same_strand": False},
+         "supp": False, "same_strand": False, "q_start": 500, "q_end": 2500, "query_length": 2500},
         {"t": "SA", "chrom": "chrX", "pos": 9, "strand": "+", "mapq": 0, "nm": 0, "cigar_ref_len": 5,
-         "supp": False, "same_strand": True},
+         "supp": False, "same_strand": True, "q_start": 0, "q_end": 5, "query_length": 5},
     ]
     assert parse_sa_tag("bad;chr1,1,+,10M,60,0", supplementary=True)[0]["supp"] is True
 
@@ -321,8 +321,8 @@ def test_allele_classification_edge_cases():
     assert classify_allele(carrier, t, ref, length) == 0
     assert classify_allele(reference, t, ref, length) == 1
     assert classify_allele(short_left, t, ref, length) == 2
-    assert classify_allele(other_allele, t, ref, length) == 1  # spans, without this deletion
-    assert classify_allele(split, t, ref, length, chrom="chrA") == 0
+    assert classify_allele(other_allele, t, ref, length) == 2  # deleted bases cannot establish reference
+    assert classify_allele(split, t, ref, length, chrom="chrA") == 2  # no query geometry
     assert classify_allele(no_sa, t, ref, length, chrom="chrA") == 2
     assert classify_allele(wrong_chrom, t, ref, length, chrom="chrA") == 2
     assert classify_allele(no_bounds, t, ref, length) == 2
@@ -483,7 +483,7 @@ def test_inverted_sa_segment_is_not_a_deletion_carrier():
     clip = {"t": "S", "side": "R", "ref": 10_003, "len": 2000, "q": 4000}
     seg = {"t": "SA", "chrom": "chrA", "pos": 11_497, "strand": "-", "mapq": 60, "nm": 0, "cigar_ref_len": 2000, "supp": False}
     base = {"id": "p", "reference_start": 6000, "reference_end": 10_003}
-    assert classify_allele({**base, "sv": [clip, {**seg, "same_strand": True}]}, t, ref, length, chrom="chrA") == 0
+    assert classify_allele({**base, "sv": [clip, {**seg, "same_strand": True}]}, t, ref, length, chrom="chrA") == 2
     assert classify_allele({**base, "sv": [clip, {**seg, "same_strand": False}]}, t, ref, length, chrom="chrA") == 2
 
 
@@ -580,8 +580,10 @@ def test_an_insertion_clip_at_the_breakpoint_is_a_carrier():
     assert carrier_evidence(far, "I", ref, length) is None      # 100 bp away
     assert carrier_evidence(short, "I", ref, length) is None    # a 40 bp clip
     assert carrier_evidence(cigar, "I", ref, length)["kind"] == "cigar"
-    for read in (right, left, hard, cigar):
-        assert classify_allele(read, "I", ref, length) == 0
+    for read in (right, left, hard):
+        assert classify_allele(read, "I", ref, length) == 2
+        assert carrier_evidence(read, "I", ref, length)["level"] == "putative"
+    assert classify_allele(cigar, "I", ref, length) == 0
     assert classify_allele(far, "I", ref, length) == 2
     other = _ins_read("o", 5_000, 15_000, {"t": "I", "ref": 10_005, "len": 3_000, "q": 5_005})
     assert classify_allele(other, "I", ref, length) == 2       # another allele is not reference
@@ -601,12 +603,13 @@ def test_the_summary_counts_an_insertions_clipped_carriers():
     reads += [_ins_read("o", 5_000, 15_000, {"t": "I", "ref": ref, "len": 2_000, "q": 5_000})]
     summary = sv_summary_for_reads(reads, 0, 20_000, 50)
     big = next(c for c in summary["clusters"] if c["t"] == "I" and c["len"] > 5_000)
-    assert big["support"] == 11 and big["clip_support"] == 7 and big["sa_support"] == 0
+    assert big["support"] == 4 and big["clip_support"] == 0 and big["sa_support"] == 0
+    assert big["ambiguous"] == 7 and big["putative"] == 0
     # Carriers + the plain spanning reads; the other allele is not informative.
-    assert big["informative"] == 14
+    assert big["informative"] == 7
     for read in reads:
         allele = classify_allele(read, "I", big["ref"], big["len"])
-        assert allele == (0 if read["id"][0] in "crl" else 1 if read["id"][0] == "n" else 2), read["id"]
+        assert allele == (0 if read["id"][0] == "c" else 1 if read["id"][0] == "n" else 2), read["id"]
 
 
 def test_supplementary_records_with_calls_are_one_molecule_everywhere(sv_client, sv_bam):
@@ -653,17 +656,18 @@ def test_audited_loci_summary_split_and_display_evidence_agree(case):
     reads = case['reads']
     calls = classify_compact((({**r, 'duplicate': False, 'file_chrom': case['chrom']}, r) for r in reads),
                              t=target['t'], ref=target['ref'], length=target['len'])
-    expected = case['expected']
-    assert {n for n, c in calls.items() if c['allele'] == 0} == set(expected['carriers'])
+    expected = case['evidence_expected']
+    assert {n for n, c in calls.items() if c['allele'] == 0} == set(expected['confirmed'])
     for cutoff in ([50, 2000] if case['name'] == 'alu' else [50]):
         summary = sv_summary_for_reads(reads, case['start'], case['end'], cutoff, chrom=case['chrom'])
         c = next(c for c in summary['clusters'] if all(c[k] == v for k, v in target.items()))
         assert (c['support'], c['informative'], c['clip_support']) == (
-            expected['support'], expected['informative'], expected['clip_support'])
+            len(expected['confirmed']), expected['informative'], 0)
+        assert c['putative'] == len(expected['putative']) and c['ambiguous'] == len(expected['ambiguous'])
         assert c['support'] == sum(c['allele'] == 0 for c in calls.values())
         assert c['informative'] == sum(c['allele'] < 2 for c in calls.values())
         display = finalize_sv_payload(reads, case['start'], case['end'], cutoff)
-        assert {r['id'] for r in display if carrier_evidence(r, target['t'], target['ref'], target['len'])} == set(expected['carriers'])
+        assert {r['id'] for r in display if (carrier_evidence(r, target['t'], target['ref'], target['len']) or {}).get('level') == 'confirmed'} == set(expected['confirmed'])
 
 
 def _p0_read(name, ref, length, t='I'):

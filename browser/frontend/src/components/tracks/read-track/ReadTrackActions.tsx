@@ -312,11 +312,15 @@ export function ReadTrackActions(props: ReadTrackActionsProps) {
         }
         break;
       }
-      case 'sv-highlight-supporting': {
+      case 'sv-highlight-supporting':
+      case 'sv-highlight-putative':
+      case 'sv-highlight-ambiguous': {
         const cluster = svTarget?.thisCluster;
         if (!cluster) break;
-        const ids = supportingReadIds(reads, cluster, chrom);
+        const level = action === 'sv-highlight-putative' ? 'putative' : action === 'sv-highlight-ambiguous' ? 'ambiguous' : 'confirmed';
+        const ids = supportingReadIds(reads, cluster, chrom, level, svSummary?.clusters);
         if (ids.length) actions.highlightReads(ids);
+        else actions.clearHighlight();
         store.setSvSelectedCluster(stateKey, cluster.id);
         break;
       }

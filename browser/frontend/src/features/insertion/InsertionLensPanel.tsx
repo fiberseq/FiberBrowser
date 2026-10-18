@@ -261,6 +261,7 @@ export function InsertionLensPanel() {
   const currentResponse = useRef(loadedResponse);
   currentResponse.current = response ? loadedResponse : null;
   const exportController = useRef<AbortController | null>(null);
+  const [includePutative, setIncludePutative] = useState(false);
   useEffect(() => () => { exportController.current?.abort(); }, [requestIdentity]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -409,8 +410,9 @@ export function InsertionLensPanel() {
   const update = (patch: Partial<InsertionLensTarget>) => { if (target) setInsertionLensState({ ...target, ...patch }); };
 
   const layout: LensLayout | null = useMemo(
-    () => (response ? layoutLens(response, anchor, reversed) : null),
-    [response, anchor, reversed],
+    () => (response ? layoutLens({ ...response, carriers: response.carriers.filter(c => !c.evidence_level
+      || c.evidence_level === 'confirmed' || (includePutative && c.evidence_level === 'putative')) }, anchor, reversed) : null),
+    [response, anchor, reversed, includePutative],
   );
   const markColor = useMemo(() => {
     const first = response?.carriers[0]?.read;
@@ -511,7 +513,7 @@ export function InsertionLensPanel() {
     if (!response?.sv || !target || !splitView?.stateKey || !splitView.inView) return;
     try {
       const def = await splitBySv(
-        { stateKey: splitView.stateKey, datasetId: target.datasetId, chrom: viewChrom, viewStart, viewEnd },
+        { stateKey: splitView.stateKey, datasetId: target.datasetId, chrom: viewChrom, viewStart, viewEnd, includePutative },
         { t: 'I', ref: response.sv.ref, len: response.sv.len },
       );
       say(`Grouped by ${def.label}: ${def.counts[0].toLocaleString()} carriers, ${def.counts[1].toLocaleString()} reference, ${def.counts[2].toLocaleString()} not informative (all reads in view)`);
@@ -540,7 +542,8 @@ export function InsertionLensPanel() {
       const res = await fetchJson<LensResponse>(`/api/insertions/lens?${lensParams(target, { ...dupParam, include_sequences: 'true', consensus: 'false', max_reference: '0' })}`, { signal: controller.signal });
       if (controller.signal.aborted || currentResponse.current !== snapshot) return;
       if (!res.success) throw new Error(res.error || 'Could not fetch the inserts');
-      downloadTextFile(insertsFasta(res.carriers, response, reversed), `${fileStem}_inserts.fa`, 'text/x-fasta');
+      downloadTextFile(insertsFasta(res.carriers.filter(c => !c.evidence_level || c.evidence_level === 'confirmed'
+        || (includePutative && c.evidence_level === 'putative')), response, reversed), `${fileStem}_inserts.fa`, 'text/x-fasta');
     } catch (err) {
       if (controller.signal.aborted || currentResponse.current !== snapshot) return;
       say(`Could not fetch the inserts: ${String((err as Error)?.message ?? err)}`);
@@ -594,13 +597,14 @@ export function InsertionLensPanel() {
         <span className="text-ink-secondary" title="Every read at the site, not only the reads loaded for drawing (the SV row above the reads counts those)"> · all reads at the site</span>
       </div>
       <dl className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5">
-        <LensField label="Carriers" testId="insertion-lens-carriers-count"
-          title="Reads carrying the insertion (clipped ones included) of the informative reads: carriers plus reference reads">
+        <LensField label="Confirmed" testId="insertion-lens-carriers-count"
+          title="Sequence or query-collinear junction evidence; denominator includes confirmed and reference molecules">
           {formatShare(cl.carriers, informative, 'informative', { pct: true })}
         </LensField>
+        <LensField label="Other evidence">{cl.putative ?? 0} putative · {cl.ambiguous ?? 0} ambiguous</LensField>
         {clipped > 0 && (
-          <LensField label="Of the carriers" testId="insertion-lens-clipped"
-            title="Reads clipped at the breakpoint carry the insertion too: a soft clip holds part of the insert (drawn from the clip), a hard clip holds none (hatched)">
+          <LensField label="Alignment evidence" testId="insertion-lens-clipped"
+            title="Clips alone are putative or ambiguous; hard clips contain no inserted sequence">
             {(cl.cigar ?? cl.carriers - clipped).toLocaleString()} in the alignment, {clipped.toLocaleString()} clipped
             {(cl.hard ?? 0) > 0 && <>, {cl.hard!.toLocaleString()} hard-clipped (no inserted bases in the record)</>}
           </LensField>
@@ -701,6 +705,7 @@ export function InsertionLensPanel() {
               <span className="mx-1 h-4 w-px bg-slate-300 dark:bg-slate-600" />
               <AnalysisButton onClick={savePng}>Save PNG</AnalysisButton>
               <AnalysisButton onClick={downloadProfiles}>Profiles TSV</AnalysisButton>
+              <label><input type="checkbox" checked={includePutative} onChange={e => setIncludePutative(e.target.checked)} /> Include putative (default: confirmed only)</label>
               <span className="mx-1 h-4 w-px bg-slate-300 dark:bg-slate-600" />
               <AnalysisButton
                 onClick={splitReads}

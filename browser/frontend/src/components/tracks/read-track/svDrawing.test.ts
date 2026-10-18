@@ -3,7 +3,7 @@ import auditCases from '../../../../../../tests/data/sv_p0_evidence.json';
 import {
   arcHeight, bodyClipRects, clampMinSvLen, clusterAtBandX, clusterAtCursor, clusterForEvent, eventsMatch, formatSvSize,
   labelFits, readCarriesCluster, readSvDraw, readSvEventAt, rowLabelFontPx, subtractSpans, supportingReadIds,
-  svAlleleLabel, visibleSvSummary, isMinorCluster, placeSvLabels,
+  svAlleleLabel, svEvidenceLevel, visibleSvSummary, isMinorCluster, placeSvLabels,
   clusterHitSpan, clipPileAtBandX, describeSvCluster, svBandMetrics, SV_MIN_HIT_PX,
 } from './svDrawing';
 import type { CompactRead, SvCluster, SvSummary } from './types';
@@ -109,10 +109,10 @@ describe('clusters', () => {
       { t: 'SA', chrom: 'chrSV', pos: 11_497, strand: '+', mapq: 60, nm: 0, cigar_ref_len: 2000, supp: false }]);
     const other = read('c', [{ t: 'D', ref: 10_000, len: 600, q: 0 }]);
     expect(readCarriesCluster(cigar, DEL)).toBe(true);
-    expect(readCarriesCluster(split, DEL, 'chrSV')).toBe(true);
+    expect(readCarriesCluster(split, DEL, 'chrSV')).toBe(false);
     expect(readCarriesCluster(split, DEL, 'chrX')).toBe(false);
     expect(readCarriesCluster(other, DEL)).toBe(false);
-    expect(supportingReadIds([cigar, split, other, read('d', undefined)], DEL, 'chrSV')).toEqual(['a', 'b']);
+    expect(supportingReadIds([cigar, split, other, read('d', undefined)], DEL, 'chrSV')).toEqual(['a']);
   });
 
   it('picks the cluster at the cursor by support, and under a band pixel', () => {
@@ -142,7 +142,7 @@ describe('SA strand', () => {
   it('an inverted SA segment does not carry a deletion', () => {
     const clip = { t: 'S' as const, side: 'R' as const, ref: 10_004, len: 2000, q: 4000 };
     const seg = { t: 'SA' as const, chrom: 'chrSV', pos: 11_497, strand: '-' as const, mapq: 60, nm: 0, cigar_ref_len: 2000, supp: false };
-    expect(readCarriesCluster(read('a', [clip, { ...seg, same_strand: true }]), DEL, 'chrSV')).toBe(true);
+    expect(readCarriesCluster(read('a', [clip, { ...seg, same_strand: true }]), DEL, 'chrSV')).toBe(false);
     expect(readCarriesCluster(read('b', [clip, { ...seg, same_strand: false }]), DEL, 'chrSV')).toBe(false);
   });
 });
@@ -211,7 +211,7 @@ describe('faint SV clusters: hit targets and what they are', () => {
     expect(d.title).toBe('DEL 60 bp');
     expect(d.where).toBe('chr2L:12,001–12,060 (breakpoints vary by 4 bp)');
     expect(d.sizes).toBe('Sizes 60–61 bp');
-    expect(d.support).toMatch(/^1 of 40 informative (loaded reads|reads in view) carry it/);
+    expect(d.support).toMatch(/^1 confirmed of 40 informative (loaded reads|reads in view)/);
     expect(d.cigar).toBe('CIGAR 60D in 1 read, 61D in 1');
     expect(d.faint).toContain('weak next to the strongest SV in view (1 vs 3,000 reads)');
     expect(d.jitter).toContain('aligner jitter: 1 other deletion cluster of similar size within 8 bp');
@@ -246,8 +246,8 @@ describe('P0 audited carrier parity', () => {
           sv: r.sv.filter(e => e.len >= cutoff),
           sv_evidence: r.sv,
         })) as CompactRead[];
-        expect(supportingReadIds([...reads, ...reads], cluster, fixture.chrom).sort()).toEqual([...fixture.expected.carriers].sort());
-        expect(supportingReadIds(reads, cluster, fixture.chrom)).toHaveLength(fixture.expected.support);
+        expect(supportingReadIds([...reads, ...reads], cluster, fixture.chrom).sort()).toEqual([...fixture.evidence_expected.confirmed].sort());
+        expect(supportingReadIds(reads, cluster, fixture.chrom)).toHaveLength(fixture.evidence_expected.confirmed.length);
       });
     }
   }
@@ -255,7 +255,7 @@ describe('P0 audited carrier parity', () => {
   it('keeps insertion clip rules aligned with the backend, including hard clips', () => {
     const c = { ...INS, ref: 1000, len: 10_000 };
     for (const side of ['L', 'R'] as const) {
-      expect(readCarriesCluster(read('hard', [{ t: 'S', ref: 1050, len: 50, q: 0, side, h: 1 }]), c)).toBe(true);
+      expect(svEvidenceLevel(read('hard', [{ t: 'S', ref: 1050, len: 50, q: 0, side, h: 1 }]), c)).toBe('putative');
       expect(readCarriesCluster(read('short', [{ t: 'S', ref: 1000, len: 49, q: 0, side }]), c)).toBe(false);
       expect(readCarriesCluster(read('far', [{ t: 'S', ref: 1051, len: 500, q: 0, side }]), c)).toBe(false);
     }
@@ -263,8 +263,8 @@ describe('P0 audited carrier parity', () => {
 
   it('can highlight evidence even when no event survives the glyph cutoff', () => {
     const r = { id: 'clipped', intervals: [], sv_evidence: [{ t: 'S', side: 'R', ref: INS.ref, len: 50, q: 0 }] } as CompactRead;
-    expect(readCarriesCluster(r, INS)).toBe(true);
-    expect(supportingReadIds([r, r], INS)).toEqual(['clipped']);
+    expect(svEvidenceLevel(r, INS)).toBe('putative');
+    expect(supportingReadIds([r, r], INS)).toEqual([]);
     expect(readSvDraw(r, 0, 20000, 2000).clips).toEqual([]);
   });
 });

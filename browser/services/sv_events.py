@@ -55,6 +55,7 @@ SV_CLIP_TOL_BP = 20
 # max(20 bp, min(5% of len, 50 bp)) of the insertion (target-site
 # duplications put PacBio clips up to ~30 bp from the CIGAR insertion).
 SV_INS_CLIP_TOL_MAX = 50
+SV_JUNCTION_MIN_MAPQ = 20
 
 _CIGAR_REF_RE = re.compile(r"(\d+)([MIDNSHP=X])")
 
@@ -101,6 +102,43 @@ def cigar_ref_len(cigar: str) -> int:
     return total
 
 
+def segment_geometry(cigar: str) -> dict:
+    """Query interval in reference-oriented full-molecule coordinates, including H."""
+    ops = [(int(n), op) for n, op in _CIGAR_REF_RE.findall(cigar or '')]
+    total = sum(n for n, op in ops if op in 'MISH=X')
+    left = right = 0
+    for n, op in ops:
+        if op not in 'SH':
+            break
+        left += n
+    for n, op in reversed(ops):
+        if op not in 'SH':
+            break
+        right += n
+    return {'q_start': left, 'q_end': total - right, 'query_length': total}
+
+
+def alignment_evidence(read) -> dict:
+    """Small sequence-free alignment metadata shared by every SV consumer."""
+    cigar = getattr(read, 'cigarstring', None) or ''
+    geometry = segment_geometry(cigar)
+    hard_left = sum(n for op, n in (read.cigartuples or [])[:1] if op == 5)
+    segment = {'chrom': read.reference_name, 'pos': int(read.reference_start),
+               'cigar_ref_len': int(read.reference_end) - int(read.reference_start),
+               'strand': '-' if read.is_reverse else '+', 'mapq': int(read.mapping_quality), **geometry}
+    segments = [segment]
+    if read.has_tag('SA'):
+        segments.extend(parse_sa_tag(read.get_tag('SA'), read_reverse=read.is_reverse))
+    blocks = []
+    for a, b in read.get_blocks():
+        if blocks and a == blocks[-1][1]:
+            blocks[-1][1] = b
+        else:
+            blocks.append([a, b])
+    return {'aligned_blocks': blocks, 'sv_segments': segments,
+            'sequence_span': [hard_left, hard_left + int(read.query_length or 0)]}
+
+
 def parse_sa_tag(sa: str, *, supplementary: bool = False, read_reverse: Optional[bool] = None) -> list[dict]:
     """The SA tag's segments as ``t: 'SA'`` events (``pos`` 0-based).
     ``same_strand``: the segment aligns on the read's own strand (a deletion's
@@ -122,6 +160,7 @@ def parse_sa_tag(sa: str, *, supplementary: bool = False, read_reverse: Optional
                 "mapq": int(mapq),
                 "nm": int(nm),
                 "cigar_ref_len": cigar_ref_len(cigar),
+                **segment_geometry(cigar),
                 "supp": bool(supplementary),
                 **({} if read_reverse is None else {"same_strand": (strand == "-") == bool(read_reverse)}),
             })
@@ -665,10 +704,13 @@ def carrier_evidence(read: dict, t: str, ref: int, length: int, chrom: Optional[
             if best is None or d < best[0]:
                 best = (d, ev)
     if best is not None:
-        return {"kind": "cigar", "event": best[1]}
+        return {"kind": "cigar", "event": best[1], "level": "confirmed"}
+    junction = junction_evidence(read, t, ref, length, chrom)
+    if junction is not None:
+        return junction
     if t == "I":
         clip = insertion_clip_at(events, ref, length)
-        return {"kind": "clip", "clip": clip} if clip is not None else None
+        return {"kind": "clip", "clip": clip, "level": "putative"} if clip is not None else None
     if t != "D":
         return None
     end = ref + length
@@ -687,9 +729,44 @@ def carrier_evidence(read: dict, t: str, ref: int, length: int, chrom: Optional[
             seg_start = int(seg["pos"])
             seg_end = seg_start + int(seg.get("cigar_ref_len", 0))
             if clip["side"] == "R" and abs(cref - ref) <= tol and abs(seg_start - end) <= tol:
-                return {"kind": "sa"}
+                return {"kind": "sa", "clip": clip, "level": "putative"}
             if clip["side"] == "L" and abs(cref - end) <= tol and abs(seg_end - ref) <= tol:
-                return {"kind": "sa"}
+                return {"kind": "sa", "clip": clip, "level": "putative"}
+    for clip in clips:
+        if ((clip['side'] == 'R' and abs(int(clip['ref']) - ref) <= tol)
+                or (clip['side'] == 'L' and abs(int(clip['ref']) - end) <= tol)):
+            return {'kind': 'clip', 'clip': clip, 'level': 'putative'}
+    return None
+
+
+def junction_evidence(read: dict, t: str, ref: int, length: int, chrom=None) -> Optional[dict]:
+    """Only high-quality, same-strand, non-overlapping query-collinear junctions confirm."""
+    segments = read.get('sv_segments') or []
+    tol = breakpoint_tolerance(length)
+    for left in segments:
+        if int(left.get('mapq', 0)) < SV_JUNCTION_MIN_MAPQ or 'q_end' not in left:
+            continue
+        for right in segments:
+            if (left is right or int(right.get('mapq', 0)) < SV_JUNCTION_MIN_MAPQ
+                    or left.get('strand') != right.get('strand') or left.get('chrom') != right.get('chrom')
+                    or (chrom is not None and left.get('chrom') != chrom)
+                    or left.get('query_length') != right.get('query_length') or 'q_start' not in right):
+                continue
+            lend = int(left['pos']) + int(left['cigar_ref_len'])
+            rstart = int(right['pos'])
+            qleft, qright = int(left['q_end']), int(right['q_start'])
+            gap = qright - qleft
+            if gap < 0 or abs(lend - ref) > tol:
+                continue
+            if t == 'D' and abs(rstart - ref - length) <= tol and gap <= SV_CLIP_TOL_BP:
+                return {'kind': 'sa', 'level': 'confirmed', 'junction': [left, right]}
+            if t == 'I' and abs(rstart - ref) <= tol and events_match('I', ref, gap, ref, length):
+                # A hard-clipped interval has no sequence in this record.
+                a, b = read.get('sequence_span', [0, 0])
+                if a <= qleft and qright <= b:
+                    clip = insertion_clip_at(read.get('sv_evidence') or read.get('sv') or [], ref, length)
+                    if clip is not None:
+                        return {'kind': 'sa', 'level': 'confirmed', 'clip': clip, 'junction': [left, right]}
     return None
 
 
@@ -712,6 +789,12 @@ def read_spans(read: dict, a: int, b: int) -> Optional[bool]:
     rs, re_ = read.get("reference_start"), read.get("reference_end")
     if not isinstance(rs, int) or not isinstance(re_, int):
         return None
+    if 'aligned_blocks' in read:
+        return any(int(s) <= a and int(e) >= b for s, e in read['aligned_blocks'])
+    # Legacy compact records still expose large deletion gaps as events.
+    if any(ev.get('t') == 'D' and int(ev['ref']) < b and int(ev['ref']) + int(ev['len']) > a
+           for ev in read.get('sv_evidence') or read.get('sv') or []):
+        return False
     spans = read.get("alignment_spans")
     if spans:
         return any(int(s) <= a and int(e) >= b for s, e in spans)
@@ -719,14 +802,25 @@ def read_spans(read: dict, a: int, b: int) -> Optional[bool]:
 
 
 def classify_allele_evidence(read: dict, t: str, ref: int, length: int, margin: int = SV_SPAN_MARGIN,
-                             chrom: Optional[str] = None) -> tuple[int, Optional[dict]]:
+                             chrom: Optional[str] = None, *, targets=(), include_putative=False) -> tuple[int, Optional[dict]]:
     """(allele, evidence): 0 carrier (with ``carrier_evidence``), 1 reference
     (spans both breakpoints +- margin without it), 2 not informative. A read
     with another insertion at an insertion's site is not informative
     (evidence ``{'kind': 'other'}``)."""
     evidence = carrier_evidence(read, t, ref, length, chrom)
     if evidence is not None:
-        return 0, evidence
+        if evidence['level'] == 'putative':
+            compatible = {(t, ref, length)}
+            for target in targets:
+                if target['t'] != t:
+                    continue
+                other = (insertion_clip_at(read.get('sv_evidence') or read.get('sv') or [], target['ref'], target['len'])
+                         if t == 'I' else carrier_evidence(read, t, target['ref'], target['len'], chrom))
+                if other is not None:
+                    compatible.add((target['t'], target['ref'], target['len']))
+            if len(compatible) > 1:
+                evidence = {**evidence, 'level': 'ambiguous', 'targets': sorted(compatible)}
+        return (0 if evidence['level'] == 'confirmed' or (include_putative and evidence['level'] == 'putative') else 2), evidence
     if t == "I" and other_insertion_at(read, ref, length):
         return 2, {"kind": "other"}
     end = ref + length if t == "D" else ref
@@ -756,15 +850,29 @@ def prefer_allele_call(previous, allele: int, evidence: Optional[dict]) -> bool:
 
 
 def classify_molecules(entries, *, t: str, ref: int, length: int, margin: int = SV_SPAN_MARGIN,
-                       chrom: Optional[str] = None) -> dict:
+                       chrom: Optional[str] = None, targets=None, include_putative=False) -> dict:
     """Classify (compact read, original item) entries, once per QNAME."""
-    by_name = {}
+    grouped = {}
     for read, item in entries:
-        allele, evidence = classify_allele_evidence(
-            read, t, ref, length, margin, chrom=read.get("file_chrom", chrom))
-        name = read.get("id")
-        if prefer_allele_call(by_name.get(name), allele, evidence):
-            by_name[name] = {"allele": allele, "evidence": evidence, "record": item}
+        grouped.setdefault(read.get('id'), []).append((read, item))
+    if targets is None:
+        rows = [read for bundle in grouped.values() for read, _ in bundle]
+        targets, _ = cluster_sv_events(rows, 0, 2**63, min(SV_MIN_LEN_DEFAULT, length), reconcile_members=False)
+    by_name = {}
+    for name, bundle in grouped.items():
+        calls = []
+        for read, item in bundle:
+            allele, evidence = classify_allele_evidence(read, t, ref, length, margin,
+                chrom=read.get('file_chrom', chrom), targets=targets, include_putative=include_putative)
+            calls.append({'allele': allele, 'evidence': evidence, 'record': item, 'read': read})
+        def rank(call):
+            ev = call['evidence'] or {}
+            level = ev.get('level')
+            return ({'confirmed': 0, 'putative': 1, 'ambiguous': 2}.get(level, 3 if call['allele'] == 1 else 4),
+                    {'cigar': 0, 'sa': 1, 'clip': 2}.get(ev.get('kind'), 3),
+                    repr(sorted((call['read'].get('sv_evidence') or call['read'].get('sv') or []), key=repr)))
+        winner = calls[0] if len(calls) == 1 else min(calls, key=rank)
+        by_name[name] = {**winner, 'evidence_bundle': calls}
     return by_name
 
 
@@ -780,6 +888,8 @@ def sv_summary_for_reads(reads: Sequence[dict], start: int, end: int, min_len: i
     clusters, clips = cluster_sv_events(reads, start, end, min_len, reconcile_members=False)
     if not clusters and not clips:
         return None
+    competition = clusters if min_len == SV_MIN_LEN_DEFAULT else cluster_sv_events(
+        reads, start, end, SV_MIN_LEN_DEFAULT, reconcile_members=False)[0]
     starts, ends, plain, special, event_items = [], [], [], [], []
     for i, read in enumerate(reads):
         rs, re_ = read.get("reference_start"), read.get("reference_end")
@@ -810,11 +920,14 @@ def sv_summary_for_reads(reads: Sequence[dict], start: int, end: int, min_len: i
             hi = bisect.bisect_right(event_refs, point + tol)
             candidates.update(i for _r, i in event_items[lo:hi])
         calls = classify_molecules(((reads[i], None) for i in sorted(candidates)),
-                                   t=t, ref=ref, length=length, margin=margin, chrom=chrom)
+                                   t=t, ref=ref, length=length, margin=margin, chrom=chrom, targets=competition)
         carriers = [call for call in calls.values() if call["allele"] == 0]
         out_clusters.append({
             "id": f"{t}:{ref}:{length}", "t": t, "ref": ref, "len": length, "end": cend,
             "support": len(carriers), "informative": sum(call["allele"] < 2 for call in calls.values()),
+            "confirmed": len(carriers),
+            "putative": sum((call['evidence'] or {}).get('level') == 'putative' for call in calls.values()),
+            "ambiguous": sum((call['evidence'] or {}).get('level') == 'ambiguous' for call in calls.values()),
             "sa_support": sum(call["evidence"]["kind"] == "sa" for call in carriers),
             "clip_support": sum(call["evidence"]["kind"] == "clip" for call in carriers),
         })

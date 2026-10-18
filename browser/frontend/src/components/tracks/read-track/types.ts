@@ -66,6 +66,12 @@ export type SvEvent =
       /** The segment aligns on the read's own strand (a deletion's split read; an inversion's does not). */
       same_strand?: boolean };
 
+export type SvEvidenceLevel = 'confirmed' | 'putative' | 'ambiguous';
+export interface SvSegment {
+  chrom: string; pos: number; cigar_ref_len: number; strand: '+' | '-'; mapq: number;
+  q_start: number; q_end: number; query_length: number;
+}
+
 /** One SV cluster across the reads in view. */
 export interface SvCluster {
   id: string;
@@ -76,6 +82,9 @@ export interface SvCluster {
   end: number;
   /** Carrier reads. */
   support: number;
+  confirmed?: number;
+  putative?: number;
+  ambiguous?: number;
   /** Carriers plus reads spanning [ref - margin, end + margin] without it. */
   informative: number;
   /** Carriers whose evidence is a clip with an SA segment (deletions). */
@@ -150,6 +159,9 @@ export interface CompactRead {
   sv?: SvEvent[];
   /** Full allele evidence when display size/view filtering removed events from sv. */
   sv_evidence?: SvEvent[];
+  sv_segments?: SvSegment[];
+  aligned_blocks?: [number, number][];
+  sequence_span?: [number, number];
   fire?: [number, number, number][]; // FIRE intervals [start, end, quality] from as/al/aq tags
   /** Named annotation layers from v3 caller (nuc, tf, msp, custom). */
   layers?: Record<string, AnnotationLayer>;

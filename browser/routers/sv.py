@@ -36,6 +36,7 @@ async def post_sv_split(request: Request, state=Depends(get_state)):
             t=str(body.get("t") or ""), ref=_int(body, "ref"), length=_int(body, "len"),
             margin=body.get("margin"),
             include_duplicates=bool(body.get("include_duplicates", False)),
+            include_putative=bool(body.get("include_putative", False)),
         )
     except SvRequestError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=exc.status)

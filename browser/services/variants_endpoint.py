@@ -521,7 +521,7 @@ def _sv_records(state, dataset, chrom: str, start: int, end: int, include_duplic
 
 def svs_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = None) -> dict:
     """SV clusters (deletions and insertions of at least ``min_len``) in the view, as the SV band clusters them."""
-    from services.sv_events import extract_sv_events, normalize_min_sv_len, sv_summary_for_reads, sv_extraction_floor
+    from services.sv_events import extract_sv_events, normalize_min_sv_len, sv_summary_for_reads, sv_extraction_floor, alignment_evidence
 
     state = _scoped_state(state, body)
     dataset_id = str(body.get("dataset_id") or "")
@@ -534,7 +534,7 @@ def svs_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = Non
         if cancelled is not None and n % 500 == 0 and cancelled():
             raise VariantsCancelled()
         item = {"id": read.query_name, "reference_start": int(read.reference_start),
-                "reference_end": int(read.reference_end)}
+                "reference_end": int(read.reference_end), **alignment_evidence(read)}
         events = extract_sv_events(read, sv_extraction_floor(min_len))
         if events:
             item["sv"] = events

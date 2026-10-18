@@ -30,6 +30,8 @@ export interface SvSplitDef {
   viewEnd: number;
   /** Duplicate reads were classified too (the panel showed them). */
   includeDuplicates?: boolean;
+  includePutative?: boolean;
+  evidenceCounts?: { confirmed: number; putative: number; ambiguous: number };
 }
 
 export interface SvSlice {
@@ -99,6 +101,9 @@ export function normalizeSvSplits(raw: unknown): Record<string, SvSplitDef> {
       counts: Array.isArray(d.counts) && d.counts.length === 3 ? d.counts.map(Number) as [number, number, number] : [0, 0, 0],
       viewStart: Number.isFinite(d.viewStart) ? Number(d.viewStart) : ref,
       viewEnd: Number.isFinite(d.viewEnd) ? Number(d.viewEnd) : ref + len,
+      includeDuplicates: Boolean(d.includeDuplicates),
+      includePutative: Boolean(d.includePutative),
+      evidenceCounts: d.evidenceCounts,
     };
   }
   return out;

@@ -121,6 +121,7 @@ export interface AlleleRequest {
 }
 
 export interface SvClusterInView {
+  confirmed?: number; putative?: number; ambiguous?: number;
   id: string;
   t: 'D' | 'I';
   ref: number;

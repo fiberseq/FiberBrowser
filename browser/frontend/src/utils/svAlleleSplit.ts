@@ -19,6 +19,7 @@ export interface SvSplitResponse {
   counts: [number, number, number];
   label: string;
   margin: number;
+  evidence_counts?: { confirmed: number; putative: number; ambiguous: number };
 }
 
 export interface SvSplitTarget {
@@ -27,6 +28,7 @@ export interface SvSplitTarget {
   chrom: string;
   viewStart: number;
   viewEnd: number;
+  includePutative?: boolean;
 }
 
 export function requestSvSplit(target: SvSplitTarget, sv: Pick<SvCluster, 't' | 'ref' | 'len'>, margin = SV_SPAN_MARGIN, signal?: AbortSignal, includeDuplicates = Boolean(useBrowserStore.getState().showDuplicateReads)): Promise<SvSplitResponse> {
@@ -38,6 +40,7 @@ export function requestSvSplit(target: SvSplitTarget, sv: Pick<SvCluster, 't' | 
       t: sv.t, ref: sv.ref, len: sv.len, margin,
       // Reads the panel shows: duplicates too when they are on (else they'd get no group).
       include_duplicates: includeDuplicates,
+      include_putative: Boolean(target.includePutative),
     }),
     signal,
   });
@@ -52,6 +55,8 @@ export function svSplitDef(target: SvSplitTarget, sv: Pick<SvCluster, 't' | 'ref
     counts: response.counts,
     viewStart: target.viewStart, viewEnd: target.viewEnd,
     includeDuplicates,
+    includePutative: Boolean(target.includePutative),
+    evidenceCounts: response.evidence_counts,
   };
 }
 
@@ -67,8 +72,15 @@ export function applySvSplit(stateKey: string, def: SvSplitDef, assignments: Rec
   store.setClusterPatterns({});
   store.setClusterCentroids({}, []);
   store.setClusterPeakRegions([]);
-  store.setSvSplit(stateKey, def, SV_GROUP_LABELS);
+  store.setSvSplit(stateKey, def, evidenceGroupLabels(def));
   store.pushSnapshot(`Split by SV allele: ${def.label}`);
+}
+
+function evidenceGroupLabels(def: SvSplitDef): Record<number, string> {
+  return def.evidenceCounts ? { ...SV_GROUP_LABELS,
+    0: def.includePutative ? 'Confirmed + putative' : 'Confirmed',
+    2: `Not informative (${def.includePutative ? '' : `${def.evidenceCounts.putative} putative, `}${def.evidenceCounts.ambiguous} ambiguous)`,
+  } : SV_GROUP_LABELS;
 }
 
 const initialRequests = new Map<string, symbol>();
@@ -106,7 +118,7 @@ export async function splitIntoPanelsBySv(target: SvSplitTarget, sv: Pick<SvClus
  */
 export async function refreshSvSplit(target: SvSplitTarget, def: SvSplitDef, signal?: AbortSignal): Promise<void> {
   const includeDuplicates = Boolean(useBrowserStore.getState().showDuplicateReads);
-  const response = await requestSvSplit(target, def, def.margin, signal);
+  const response = await requestSvSplit({ ...target, includePutative: def.includePutative }, def, def.margin, signal);
   const store = useBrowserStore.getState();
   if (signal?.aborted || store.svSplits[target.stateKey] !== def
       || Boolean(store.showDuplicateReads) !== includeDuplicates) return;
@@ -115,10 +127,12 @@ export async function refreshSvSplit(target: SvSplitTarget, def: SvSplitDef, sig
   // Counts describe only this response's region and duplicate setting.
   const counts = response.counts;
   store.setClusterAssignments(target.stateKey, merged, { svSplit: true, mirror: false });
-  store.setSvSplit(target.stateKey, {
+  const updated = {
     ...def, counts, viewStart: target.viewStart, viewEnd: target.viewEnd,
     includeDuplicates,
-  }, SV_GROUP_LABELS);
+    evidenceCounts: response.evidence_counts,
+  };
+  store.setSvSplit(target.stateKey, updated, evidenceGroupLabels(updated));
 }
 
 /** "Clear SV split": this panel's groups, names and split go (one undo step); other panels keep theirs. */

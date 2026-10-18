@@ -188,7 +188,8 @@ def test_site_reads_are_split_into_carriers_reference_and_excluded(lens, fixture
     # The read clipped 500 bp away does not reach the site: the lens never sees it.
     assert lens["excluded"] == {"other_insert": 1, "not_informative": 0}
     cluster = lens["cluster"]
-    assert cluster["carriers"] == len(carriers) + len(clipped)
+    assert cluster["carriers"] == len(carriers)
+    assert cluster['ambiguous'] == len(clipped)
     assert (cluster["cigar"], cluster["clipped"], cluster["hard"]) == (len(carriers), len(clipped), 1)
     lengths = [fixture["reads"][c]["len"] for c in carriers]
     assert cluster["len_lo"] == min(lengths) and cluster["len_hi"] == max(lengths)
@@ -332,7 +333,8 @@ def test_find_clusters_lists_the_insertion(fixture):
     big = max(clusters, key=lambda c: c["carriers"])
     carriers = sum(1 for v in fixture["reads"].values() if v["kind"] == "carrier")
     clipped = sum(1 for v in fixture["reads"].values() if v["kind"] == "clip")
-    assert big["carriers"] == carriers + clipped and big["clip_support"] == clipped
+    assert big["carriers"] == carriers and big["clip_support"] == 0
+    assert big["ambiguous"] == clipped
     assert abs(big["ref"] - SITE) <= 5 and 1900 < big["len"] < 2100
     assert any(c["len"] == 300 for c in clusters)
 
@@ -350,7 +352,7 @@ def test_insertion_endpoints(client, fixture):
             "chrom": "chrT", "start": SITE - 1000, "end": SITE + 1000, "dataset_id": dataset["id"], "min_len": 500})
         assert resp.status_code == 200, resp.text
         clusters = resp.json()["clusters"]
-        assert len(clusters) == 1 and clusters[0]["carriers"] == 27 and clusters[0]["clip_support"] == 3
+        assert len(clusters) == 1 and clusters[0]["carriers"] == 24 and clusters[0]["clip_support"] == 0
         resp = client.get("/api/insertions/lens", params={
             "chrom": "chrT", "pos": clusters[0]["ref"], "dataset_id": dataset["id"],
             "ref": clusters[0]["ref"], "length": clusters[0]["len"], "flank": 500,
@@ -394,7 +396,7 @@ def test_read_limits_apply_across_files_and_zero_means_none(fixture):
     # The same reads in two files are one read each (by name, as the allele split counts them).
     both = build_lens([fixture["bam"], fixture["bam"]], "chrT", pos=SITE, len_min=1000, flank=100,
                       max_carriers=10, max_reference=0, consensus=False, loader_kwargs=LOADER)
-    assert len(both["carriers"]) == 10 and both["cluster"]["carriers"] == 27
+    assert len(both["carriers"]) == 10 and both["cluster"]["carriers"] == 24
     assert both["truncated"] == {"carriers": 17, "reference": 16}
     assert both["reference"] == []
     # The cap keeps the kinds' proportions: CIGAR carriers and clipped ones both shown.
@@ -491,16 +493,16 @@ def test_lens_carriers_are_the_split_carriers(client, fixture):
             "t": "I", "ref": sv["ref"], "len": sv["len"], "margin": sv["margin"]}).json()
         carriers = {name for name, allele in split["assignments"].items() if allele == 0}
         reference = {name for name, allele in split["assignments"].items() if allele == 1}
-        assert carriers == {c["id"] for c in lens["carriers"]}
+        assert carriers == {c["id"] for c in lens["carriers"] if c["evidence_level"] == "confirmed"}
         assert reference == {r["id"] for r in lens["reference"]}
-        assert split["counts"][0] == lens["cluster"]["carriers"] == 27
-        assert split["carriers_by"] == {"cigar": 24, "sa": 0, "clip": 3}
+        assert split["counts"][0] == lens["cluster"]["carriers"] == 24
+        assert split["carriers_by"] == {"cigar": 24, "sa": 0, "clip": 0}
         assert split["assignments"]["clip_elsewhere_00"] == 2 and split["assignments"]["other_insert_00"] == 2
         # Opened on the cluster the SV summary reports, the lens has the same reads.
         again = client.get("/api/insertions/lens", params={
             "chrom": "chrT", "pos": SITE, "dataset_id": dataset["id"], "ref": sv["ref"], "length": sv["len"],
             "flank": 200, "consensus": "false", "max_carriers": 1000, "max_reference": 500}).json()
-        assert {c["id"] for c in again["carriers"]} == carriers
+        assert {c["id"] for c in again["carriers"] if c["evidence_level"] == "confirmed"} == carriers
     finally:
         client.delete(f"/api/datasets/{dataset['id']}")
 
@@ -526,8 +528,8 @@ def test_the_split_scan_cache_extends_and_matches_a_fresh_scan(client, fixture):
         sv_endpoint._SCAN_CACHE.clear()
         fresh = client.post("/api/sv/split", json={**body, "start": SITE - 6_000, "end": SITE + 6_000}).json()
         assert panned["assignments"] == fresh["assignments"] and panned["counts"] == fresh["counts"]
-        assert sum(first["counts"]) > 0 and panned["counts"][0] == 27
-        assert set(inside["assignments"]) <= set(panned["assignments"]) and inside["counts"][0] == 27
+        assert sum(first["counts"]) > 0 and panned["counts"][0] == 24
+        assert set(inside["assignments"]) <= set(panned["assignments"]) and inside["counts"][0] == 24
     finally:
         client.delete(f"/api/datasets/{dataset['id']}")
 
@@ -738,12 +740,13 @@ def test_summary_variants_split_and_lens_deduplicate_the_same_molecules(tmp_path
                       flank=100, consensus=False, loader_kwargs=LOADER)
     split = sv_endpoint.sv_split_payload(state, dataset_id='d', chrom='chrX', start=0, end=2000,
                                          t='I', ref=1000, length=100)
-    assert lens['cluster']['carriers'] == split['counts'][0] == 4
+    assert lens['cluster']['carriers'] == split['counts'][0] == 3
     assert lens['cluster']['reference'] == split['counts'][1] == 1
-    assert {c['id'] for c in lens['carriers']} == {n for n, allele in split['assignments'].items() if allele == 0}
+    assert {c['id'] for c in lens['carriers'] if c['evidence_level'] == 'confirmed'} == {n for n, allele in split['assignments'].items() if allele == 0}
     for cutoff in [50, 90]:
         summary = sv_summary_for_reads(compact, 0, 2000, cutoff)
         variants = variants_endpoint.svs_payload(state, dict(dataset_id='d', chrom='chrX', start=0, end=2000, min_len=cutoff))
         assert summary['clusters'] == variants['clusters']
         c = summary['clusters'][0]
-        assert (c['support'], c['informative'], c['clip_support']) == (4, 5, 1)
+        assert (c['support'], c['informative'], c['clip_support']) == (3, 4, 0)
+        assert c['putative'] == 1

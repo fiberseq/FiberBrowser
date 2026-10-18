@@ -1,5 +1,6 @@
 [
   {"chrom": "chr3", "start": 128655390, "end": 128659390, "target": {"t": "I", "ref": 128657390, "len": 2351}, "name": "alu", "expected": {"support": 79, "informative": 79, "clip_support": 38, "carriers": ["alu-0", "alu-1", "alu-3", "alu-4", "alu-5", "alu-6", "alu-7", "alu-8", "alu-9", "alu-10", "alu-11", "alu-12", "alu-13", "alu-14", "alu-15", "alu-16", "alu-17", "alu-18", "alu-19", "alu-20", "alu-21", "alu-22", "alu-23", "alu-24", "alu-25", "alu-26", "alu-27", "alu-28", "alu-29", "alu-30", "alu-31", "alu-32", "alu-33", "alu-34", "alu-35", "alu-36", "alu-37", "alu-38", "alu-39", "alu-40", "alu-41", "alu-42", "alu-43", "alu-44", "alu-45", "alu-46", "alu-47", "alu-48", "alu-49", "alu-50", "alu-51", "alu-52", "alu-53", "alu-54", "alu-55", "alu-56", "alu-57", "alu-58", "alu-59", "alu-60", "alu-61", "alu-62", "alu-63", "alu-64", "alu-65", "alu-66", "alu-67", "alu-68", "alu-69", "alu-70", "alu-71", "alu-72", "alu-73", "alu-74", "alu-75", "alu-76", "alu-78", "alu-79", "alu-80"]},
+   "evidence_expected": {"confirmed": ["alu-1", "alu-10", "alu-12", "alu-16", "alu-19", "alu-20", "alu-22", "alu-23", "alu-25", "alu-26", "alu-27", "alu-29", "alu-30", "alu-31", "alu-32", "alu-34", "alu-36", "alu-37", "alu-38", "alu-39", "alu-40", "alu-41", "alu-42", "alu-43", "alu-44", "alu-45", "alu-46", "alu-47", "alu-48", "alu-49", "alu-50", "alu-51", "alu-52", "alu-53", "alu-54", "alu-55", "alu-56", "alu-57", "alu-58", "alu-7", "alu-9"], "putative": ["alu-0", "alu-11", "alu-13", "alu-14", "alu-15", "alu-17", "alu-18", "alu-21", "alu-24", "alu-28", "alu-3", "alu-33", "alu-35", "alu-4", "alu-5", "alu-59", "alu-6", "alu-60", "alu-61", "alu-62", "alu-63", "alu-64", "alu-65", "alu-66", "alu-67", "alu-68", "alu-69", "alu-70", "alu-71", "alu-72", "alu-73", "alu-74", "alu-75", "alu-76", "alu-78", "alu-79", "alu-8", "alu-80"], "ambiguous": [], "informative": 41},
    "reads": [
     {"id":"alu-0","reference_start":128629174,"reference_end":128657396,"sv":[{"t":"S","side":"R","ref":128657396,"len":1919,"q":28174}]},
     {"id":"alu-1","reference_start":128631856,"reference_end":128663541,"sv":[{"t":"I","ref":128657390,"len":2351,"q":25498}]},
@@ -86,6 +87,7 @@
     {"id":"alu-82","reference_start":128657513,"reference_end":128682186,"sv":[]}
    ]},
   {"chrom": "chr6", "start": 31425879, "end": 31429879, "target": {"t": "I", "ref": 31427879, "len": 795}, "name": "mhc", "expected": {"support": 6, "informative": 78, "clip_support": 0, "carriers": ["mhc-8", "mhc-44", "mhc-49", "mhc-50", "mhc-51", "mhc-61"]},
+   "evidence_expected": {"confirmed": ["mhc-44", "mhc-49", "mhc-50", "mhc-51", "mhc-61", "mhc-8"], "putative": [], "ambiguous": [], "informative": 71},
    "reads": [
     {"id":"mhc-0","reference_start":31398667,"reference_end":31437555,"sv":[{"t":"D","ref":31427696,"len":17,"q":28959},{"t":"D","ref":31429701,"len":11,"q":30924},{"t":"I","ref":31429843,"len":22,"q":31055}]},
     {"id":"mhc-1","reference_start":31399610,"reference_end":31427970,"sv":[]},

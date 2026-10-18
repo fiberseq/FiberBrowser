@@ -53,6 +53,7 @@ export function SvTab({ datasetId: chosen, params, duplicates }: { datasetId: st
   const [clusters, setClusters] = useState<SvClusterInView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [includePutative, setIncludePutative] = useState(false);
   const [linkage, setLinkage] = useState<Record<string, SvLinkage | 'loading' | { error: string }>>({});
   const [refresh, setRefresh] = useState(0);
   // What the listed SVs were found for: while a refresh for another view (or dataset, or setting) is on its way, the
@@ -105,7 +106,7 @@ export function SvTab({ datasetId: chosen, params, duplicates }: { datasetId: st
     if (!thenPanels && p.collapsedBySplitGroup) { setNotice(SV_GROUP_SPLIT_NOTE); return; }
     const stateKey = p.stateKey ?? p.datasetId ?? p.id;
     try {
-      const def = await splitBySv({ stateKey, datasetId, chrom, viewStart: start, viewEnd: end }, c);
+      const def = await splitBySv({ stateKey, datasetId, chrom, viewStart: start, viewEnd: end, includePutative }, c);
       if (thenPanels) {
         useSplitPanelStore.getState().request({ kind: 'frozen', panelId: p.id, title: def.label }, [p.id]);
       } else {
@@ -115,7 +116,7 @@ export function SvTab({ datasetId: chosen, params, duplicates }: { datasetId: st
       setNotice(`Could not split the reads: ${String((err as Error)?.message ?? err)}`);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [datasetId, sourcePanelId, chrom, start, end]);
+  }, [datasetId, sourcePanelId, chrom, start, end, includePutative]);
 
   const loadLinkage = (c: SvClusterInView) => {
     setLinkage(l => ({ ...l, [c.id]: 'loading' }));
@@ -126,6 +127,7 @@ export function SvTab({ datasetId: chosen, params, duplicates }: { datasetId: st
 
   return (
     <div className="px-3 py-2 flex flex-col gap-2 text-[12px]" data-testid="variants-svs">
+      <label><input type="checkbox" checked={includePutative} onChange={e => setIncludePutative(e.target.checked)} /> Include putative evidence in single-SV splits (default: confirmed only)</label>
       <div className="flex items-center gap-2">
         <span className="text-ink-muted flex-1">SVs of {svMinLen.toLocaleString()} bp or more in {chrom}:{Math.round(start).toLocaleString()}–{Math.round(end).toLocaleString()}
           {sourcePanelId && <span data-testid="variants-svs-split-source"> · all reads of the split panels</span>}</span>
@@ -200,7 +202,7 @@ export function SvTab({ datasetId: chosen, params, duplicates }: { datasetId: st
                       <span className="font-medium" data-testid="variants-sv-name">{label}</span>{' '}
                       <span className="text-ink-secondary tabular-nums" data-testid="variants-sv-carriers"
                         title={`${formatShare(c.support, c.informative, 'informative reads carry it')} (all reads in view: carriers plus reads spanning it without it). The SV row above the reads counts the loaded reads only.`}>
-                        {svCarriersText(c.support, c.informative)}
+                        {svCarriersText(c.support, c.informative)} confirmed · {c.putative ?? 0} putative · {c.ambiguous ?? 0} ambiguous
                       </span>
                     </>} />
                   <span className="flex-1" />

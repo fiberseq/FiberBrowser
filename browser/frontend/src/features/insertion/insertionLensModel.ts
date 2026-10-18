@@ -36,6 +36,7 @@ export interface LensStraddle { layer: string; start: number; end: number; size:
 export type LensPartial = 'start' | 'end';
 
 export interface LensEntry {
+  evidence_level?: 'confirmed' | 'putative' | 'ambiguous';
   id: string;
   strand: '+' | '-';
   /** Carriers: a CIGAR insertion, or a read clipped at the breakpoint. */
@@ -72,6 +73,7 @@ export interface LensResponse {
     ref: number; len: number; len_lo: number; len_hi: number;
     /** Every carrier: CIGAR + clipped. */
     carriers: number;
+    confirmed?: number; putative?: number; ambiguous?: number; evidence_total?: number;
     cigar?: number;
     /** Clipped at the breakpoint (hard-clipped included). */
     clipped?: number;
