@@ -184,6 +184,18 @@ def test_omitted_dataset_refuses_lifted_default(lift_env, path, method, body):
     assert response.json()['notice']
 
 
+def test_quality_impact_resolved_mixed_scope(lift_env):
+    client, state, manifest, bam = lift_env
+    _add(client, manifest, bam)
+    state.add_dataset('native', bam)
+    body = dict(chrom=TARGET, start=1000, end=9000, filters=[])
+    for scope in ({}, {'dataset_ids': []}):
+        response = client.post('/api/quality/impact', json={**body, **scope})
+        assert response.status_code == 409 and response.json()['notice']
+    response = client.post('/api/quality/impact', json={**body, 'dataset_ids': ['native']})
+    assert response.status_code == 200, response.text
+
+
 @pytest.mark.parametrize('engine', ['headless', 'numpy', 'figure'])
 def test_render_current_refusal_is_409(lift_env, engine, monkeypatch):
     import services.playwright_render as playwright
