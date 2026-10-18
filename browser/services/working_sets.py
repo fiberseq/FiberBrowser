@@ -599,14 +599,25 @@ def _load_broad_reads(
         else {"short_terminal_footprint_bp": int(short_terminal_footprint_bp)}
     )
     if dataset.data_type == "bam_livelift":
-        # A live-lift dataset: its source records lifted onto this region (services/lift/reads.py), every
-        # row (unsampled, unfiltered): the broad cache, working sets and crops below handle them as reads.
+        # Source records lifted onto this region, with an explicit sampler for
+        # deep display views. Broad rows remain free of display/haplotype rules.
         from services.lift.reads import lifted_reads_for_region
-        return lifted_reads_for_region(dataset, chrom, broad_start, broad_end, dict(
+        from services.read_sampling import SampledReads, Sampler
+        from services.read_pins import current_pins
+        pins = current_pins()
+        sampler = Sampler(sample_level, keep_ids=set(pins) | {re.sub(r'_\d+$', '', p) for p in pins}) if sample_level else None
+        rows = lifted_reads_for_region(dataset, chrom, broad_start, broad_end, dict(
             include_methylation=include_methylation, ml_threshold=ml_threshold, include_layers=include_layers,
             requested_layers=requested_layers, include_layer_qualities=include_layer_qualities,
             infer_legacy_layers=infer_legacy_layers, legacy_nuc_min_size=legacy_nuc_min_size,
-            min_footprints=min_footprints, **terminal_option, **(bam_read_options or {})))
+            min_footprints=min_footprints, **terminal_option, **(bam_read_options or {})), sampler=sampler)
+        if sampler is not None:
+            # Explicit lift sampling records extents on the target, already
+            # absolute; adding broad_start here would shift them a second time.
+            rows = SampledReads(rows, level=sampler.level, estimated=True, skipped_starts=sampler.skipped_starts,
+                                skipped_ends=sampler.skipped_ends, kept_starts=sampler.kept_starts,
+                                kept_ends=sampler.kept_ends)
+        return rows
     if dataset.data_type == "bam":
         from services.read_sampling import SampledReads, Sampler, sampling
         # A sampled display load parses only the reads whose name hash is in
@@ -1042,7 +1053,11 @@ def _read_viewport_bounds(read: dict, viewport_offset: int, region_width: int,
     if read_end <= 0 or read_start >= region_width:
         return None
 
-    return read_start, read_end, read_start <= 0 and read_end >= region_width
+    spanning = read_start <= 0 and read_end >= region_width
+    if read.get("live_lift"):
+        from services.lift.reads import body_spans_view
+        spanning = body_spans_view(read["live_lift"], viewport_offset, viewport_offset + region_width)
+    return read_start, read_end, spanning
 
 
 def _absolute_read_bounds(read: dict) -> Optional[tuple[int, int]]:
@@ -1146,12 +1161,16 @@ def iter_broad_reads_overlapping_viewport(state, all_reads: list[dict], start: i
         yield read
 
 
-def _clip_interval_to_viewport(interval, viewport_offset: int, region_width: int):
+def _clip_interval_to_viewport(interval, viewport_offset: int, region_width: int, *, call=None):
     """Project one absolute interval and keep only the visible span."""
     if len(interval) < 2:
         return None
     start = interval[0] - viewport_offset
     end = interval[1] - viewport_offset
+    if start == end and call is not None:
+        from services.lift.reads import keep_interval
+        if keep_interval(interval, viewport_offset, region_width, call):
+            return start, end, interval[2] if len(interval) > 2 else 0
     if end <= 0 or start >= region_width:
         return None
     clipped_start = max(0, start)
@@ -1209,7 +1228,8 @@ def _project_primary_intervals(read: dict, viewport_offset: int, region_width: i
     qualities = read.get("qualities")
     view_start = viewport_offset
     view_end = viewport_offset + region_width
-    if index_intervals:
+    calls = ((read.get("live_lift") or {}).get("calls") or {}).get("intervals") or ()
+    if index_intervals and not calls:
         intervals, visible_range, positive_prefix = _visible_interval_range(read, view_start, view_end)
     else:
         intervals = read.get("intervals") or []
@@ -1229,7 +1249,9 @@ def _project_primary_intervals(read: dict, viewport_offset: int, region_width: i
         clipped_start = 0 if rel_start < 0 else rel_start
         clipped_end = region_width if rel_end > region_width else rel_end
         if clipped_end <= clipped_start:
-            continue
+            from services.lift.reads import keep_interval
+            if not keep_interval(interval, viewport_offset, region_width, calls[idx] if idx < len(calls) else None):
+                continue
         size = interval[2] if len(interval) > 2 else interval[1] - interval[0]
         adjusted_intervals.append((clipped_start, clipped_end, size))
         if is_positive and qualities is not None and positive_index < len(qualities):
@@ -1265,13 +1287,14 @@ def _project_layer_intervals(
     *,
     include_qualities: bool = True,
     index_intervals: bool = True,
+    calls=(),
 ) -> Optional[dict]:
     intervals = layer.get("intervals") or []
     adjusted_intervals = []
     kept_indices = []
     view_start = viewport_offset
     view_end = viewport_offset + region_width
-    if index_intervals:
+    if index_intervals and not calls:
         intervals, visible_range, _positive_prefix = _visible_interval_range(layer, view_start, view_end)
     else:
         visible_range = range(len(intervals))
@@ -1284,7 +1307,9 @@ def _project_layer_intervals(
         clipped_start = 0 if rel_start < 0 else rel_start
         clipped_end = region_width if rel_end > region_width else rel_end
         if clipped_end <= clipped_start:
-            continue
+            from services.lift.reads import keep_interval
+            if not keep_interval(interval, viewport_offset, region_width, calls[idx] if idx < len(calls) else None):
+                continue
         size = interval[2] if len(interval) > 2 else interval[1] - interval[0]
         adjusted_intervals.append([clipped_start, clipped_end, size])
         kept_indices.append(idx)
@@ -1375,11 +1400,6 @@ def project_broad_read_to_viewport(
     ):
         if identity_key in read:
             adjusted_read[identity_key] = read[identity_key]
-    if "live_lift" in read:
-        # A live-lift row: its segments, connectors and badges and its per-call lists, cut like its intervals.
-        from services.lift.reads import crop_live_lift
-        crop_live_lift(read, adjusted_read, viewport_offset, region_width)
-
     if include_methylation and read.get("methyl"):
         adjusted_read["methyl"] = _project_positions(read["methyl"], viewport_offset, region_width)
     if include_methylation and read.get("methyl_m6a"):
@@ -1400,8 +1420,10 @@ def project_broad_read_to_viewport(
         adjusted_read["qualities"] = adjusted_qualities
     if layer_key_includes(layer_key, "fire", "msp") and read.get("fire"):
         adjusted_fire = []
-        for iv in read["fire"]:
-            clipped = _clip_interval_to_viewport(iv, viewport_offset, region_width)
+        calls = ((read.get("live_lift") or {}).get("calls") or {}).get("fire") or ()
+        for i, iv in enumerate(read["fire"]):
+            clipped = _clip_interval_to_viewport(iv, viewport_offset, region_width,
+                                                 call=calls[i] if i < len(calls) else None)
             if clipped is not None:
                 adjusted_fire.append([clipped[0], clipped[1], clipped[2]])
         if adjusted_fire:
@@ -1413,7 +1435,7 @@ def project_broad_read_to_viewport(
         for layer_name, layer in read["layers"].items():
             if not layer_key_includes(layer_key, layer_name):
                 continue
-            if layer_name == "nuc" and not include_layer_qualities and nuc_layer_duplicates_primary(read):
+            if layer_name == "nuc" and not read.get("live_lift") and not include_layer_qualities and nuc_layer_duplicates_primary(read):
                 derived_layers.append("nuc")
                 continue
             adjusted_layer = _project_layer_intervals(
@@ -1422,9 +1444,10 @@ def project_broad_read_to_viewport(
                 region_width,
                 include_qualities=include_layer_qualities,
                 index_intervals=index_intervals,
+                calls=(((read.get("live_lift") or {}).get("calls") or {}).get(f"layer:{layer_name}") or ()),
             )
             if adjusted_layer is not None:
-                if layer_name == "nuc" and not include_layer_qualities:
+                if layer_name == "nuc" and not read.get("live_lift") and not include_layer_qualities:
                     if positive_primary_intervals is None:
                         positive_primary_intervals = _positive_primary_interval_payload(adjusted_intervals)
                     if adjusted_layer.get("intervals") == positive_primary_intervals:
@@ -1445,13 +1468,21 @@ def project_broad_read_to_viewport(
         for layer in (adjusted_read.get("layers") or {}).values():
             visible_annotations.extend(layer.get("intervals") or [])
         # A live-lift row seen only through a body segment or a badge is still drawn.
-        visible_annotations.extend([s[0], s[1]] for s in (adjusted_read.get("live_lift") or {}).get("segments") or ())
+        from services.lift.reads import clip_geometry
+        geometry = clip_geometry(read.get("live_lift") or {}, viewport_offset, region_width)
+        visible_annotations.extend([s[0], s[1]] for s in geometry.get("segments") or ())
+        visible_annotations.extend([b[0], b[0]] for b in geometry.get("badges") or ())
         if not visible_annotations:
             return None, False
         neutral_start = min(int(iv[0]) for iv in visible_annotations)
         neutral_end = max(int(iv[1]) for iv in visible_annotations)
         adjusted_read["intervals"] = [[neutral_start, neutral_end, 0]]
 
+    if "live_lift" in read:
+        # Crop parallel provenance only after FIRE, layers and the neutral
+        # geometry exist, otherwise their call identities are silently lost.
+        from services.lift.reads import crop_live_lift
+        crop_live_lift(read, adjusted_read, viewport_offset, region_width)
     return adjusted_read, is_spanning
 
 
@@ -2106,7 +2137,8 @@ def _build_working_set(
     from services.read_sampling import sample_level, sampling_info
     low_memory = getattr(state, 'performance', {}).get('effective') == 'low'
     from services.read_sampling import decode_read_scope
-    level = (1 if decode_read_scope.get() is not None else sample_level(state, dataset, chrom, start, end)) if low_memory else 0
+    from services.lift.reads import display_sampling
+    level = (1 if decode_read_scope.get() is not None else sample_level(state, dataset, chrom, start, end)) if low_memory or display_sampling(dataset) else 0
     from services.cluster_sample import cluster_sample_scope
     cluster_sample = cluster_sample_scope.get()
     if cluster_sample is not None:
@@ -2148,6 +2180,9 @@ def _build_working_set(
     if broad_prefetch_multiplier is None:
         broad_prefetch_multiplier = configured_prefetch_multiplier(state)
     broad_multiplier = max(1, int(broad_prefetch_multiplier or 1))
+    if level:
+        from services.read_sampling import bounded_prefetch
+        broad_multiplier = bounded_prefetch(state, dataset, chrom, start, end, broad_multiplier, level)
     if getattr(dataset, "data_type", None) == "bigbed" and not effective_min_footprints:
         broad_multiplier = min(broad_multiplier, 2)
     broad_width = region_width * broad_multiplier

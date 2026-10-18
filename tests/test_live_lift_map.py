@@ -3,13 +3,14 @@ graphlift v0.4's scripts/graphlift_map.py, and query parity with it."""
 import hashlib
 import importlib.util
 import os
+import pwd
 import random
 
 import pytest
 
 from services.lift import graphlift_map
 
-GL = os.path.expanduser("~/pglift_work/pglift_20261017/native/graphlift")
+GL = os.path.join(os.environ.get("PGLIFT_WORK", os.path.join(pwd.getpwuid(os.getuid()).pw_dir, "pglift_work")), "pglift_20261017/native/graphlift")
 V4 = os.path.join(GL, "scratch", "v4")
 MARKER = "# --- end of vendoring header ---\n"
 

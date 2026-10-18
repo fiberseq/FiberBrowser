@@ -2,6 +2,7 @@
 (DESIGN_LIVE_LIFT.md §2.5, §3.2)."""
 import dataclasses
 import os
+import pwd
 import random
 
 import pytest
@@ -9,7 +10,7 @@ import pytest
 from live_lift_fixtures import MAT, PAT, TARGET, write_toy_sidecar
 from services.lift import live_lift as ll
 
-V4 = os.path.expanduser("~/pglift_work/pglift_20261017/native/graphlift/scratch/v4")
+V4 = os.path.join(os.environ.get("PGLIFT_WORK", os.path.join(pwd.getpwuid(os.getuid()).pw_dir, "pglift_work")), "pglift_20261017/native/graphlift/scratch/v4")
 
 
 @pytest.fixture

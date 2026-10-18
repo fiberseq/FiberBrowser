@@ -199,6 +199,7 @@ async def get_coverage(
     dataset_id: Optional[str] = Query(None),
     include_duplicates: bool = Query(False),
     lift_hap: Optional[str] = Query(None, description="Live lift: one haplotype's coverage (a split panel)"),
+    lift_correspondence_only: bool = Query(False, description="Live lift: map correspondence only, without decoding BAM records"),
     state=Depends(get_state),
 ):
     """Return binned read counts across a region (duplicate-flagged molecules
@@ -217,6 +218,7 @@ async def get_coverage(
         dataset_id=dataset_id,
         include_duplicates=include_duplicates,
         lift_hap=lift_hap,
+        lift_correspondence_only=lift_correspondence_only,
     )
 
 

@@ -308,6 +308,7 @@ def load_direct_reads_for_dataset(
     # files, marks), with the direct-only options on the primary loads.
     from services.working_sets import _load_broad_reads, make_layer_key
     from services.read_sampling import sample_level
+    from services.lift.reads import display_sampling
 
     reads = _load_broad_reads(
         dataset=dataset,
@@ -328,7 +329,7 @@ def load_direct_reads_for_dataset(
         ml_threshold=ml_threshold,
         short_terminal_footprint_bp=short_terminal_footprint_bp,
         sample_level=(sample_level(state, dataset, chrom, start, end)
-                      if getattr(state, 'performance', {}).get('effective') == 'low' else 0),
+                      if getattr(state, 'performance', {}).get('effective') == 'low' or display_sampling(dataset) else 0),
         # Spanning is judged by the loaders on the alignment's extent: with
         # terminal gaps hidden, a read's intervals start at its first footprint.
         bam_read_options=dict(
@@ -348,6 +349,10 @@ def load_direct_reads_for_dataset(
             include_duplicates=include_duplicates,
         ),
     )
+    if getattr(dataset, "data_type", None) == "bam_livelift" and spanning_only:
+        # The source loader never applies target spanning. Direct combined
+        # requests must use the same body rule as compact and broad crops.
+        reads = [read for read in reads if is_read_spanning(read, end - start)]
     return reads
 
 
@@ -633,8 +638,9 @@ def _compact_reads_payload(
         # Low memory samples direct loads too (load_direct_reads_for_dataset): the level, and
         # the pinned reads outside the sample that load parses, are part of its identity.
         from services.read_sampling import sample_level as _sample_level
+        from services.lift.reads import display_sampling
         direct_level = (_sample_level(state, dataset, chrom, start, end)
-                        if getattr(state, 'performance', {}).get('effective') == 'low' else 0)
+                        if getattr(state, 'performance', {}).get('effective') == 'low' or display_sampling(dataset) else 0)
         methyl_cache_key = (
             dataset_id,
             chrom,
@@ -808,6 +814,8 @@ def _compact_reads_payload(
             start, end, circular_chrom_size(state, chrom))
 
         def spans(read):
+            if read.get("live_lift"):
+                return is_read_spanning(read, region_width)
             # A wrapped circular view's coordinates aren't the alignment's: its
             # merged intervals decide, as before.
             if view_wraps:
@@ -968,6 +976,10 @@ def _compact_reads_payload(
             min_footprints=effective_min_footprints,
         )
         server_timings["broad_cache_lookup_ms"] = phase_ms(phase_t0)
+        if lifted_dataset:
+            # The shared builder reuses this broad cache itself, with the
+            # display/sample identity, filters and working cap on every hit.
+            broad_reads, broad_key = None, None
         viewport_offset = start - broad_key[2] if broad_key else 0
 
         if broad_reads is None:
@@ -1010,6 +1022,7 @@ def _compact_reads_payload(
                     cluster_assignments,
                     focus_clusters,
                 )
+            sampling_metadata = getattr(working_set, "sampling", None)
             working_set = WorkingSet(
                 reads_to_sample,
                 total_overlapping,
@@ -1018,6 +1031,7 @@ def _compact_reads_payload(
                 start,
                 end,
             )
+            working_set.sampling = sampling_metadata
         else:
             server_timings["broad_cache_hit"] = 1.0
             phase_t0 = time.perf_counter()
@@ -1309,7 +1323,10 @@ def compact_reads_payload_for_request(state, *, pin_ids: Optional[str] = None, *
     load of the view with every other filter as asked.
     """
     from services.read_pins import parse_pin_ids, pinned_reads
-    with pinned_reads(parse_pin_ids(unwrap_query_default(pin_ids, None))):
+    from services.lift.reads import lift_display_hap
+    with pinned_reads(parse_pin_ids(unwrap_query_default(pin_ids, None))), lift_display_hap(
+            unwrap_query_default(kwargs.get("lift_hap"), None),
+            sample=not query_bool(kwargs.get("full_working_set"), False)):
         payload = _compact_reads_payload(state, **kwargs)
     from services.lift.capability import lifted_display_notices
     notices = lifted_display_notices(state, payload.get("dataset_id"),

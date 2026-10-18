@@ -95,6 +95,7 @@ class _SeqRuns:
         self.ref = [r[0] for r in rows]
         self.seq = [r[1] for r in rows]
         self.len = [r[2] for r in rows]
+        self._arrays = None
 
     def seq_at(self, x):
         """SEQ index of the first aligned base at reference ``>= x``."""
@@ -114,9 +115,11 @@ class _SeqRuns:
         """``mol_at`` for many positions at once."""
         if not self.ref:
             return [0] * len(xs)
-        ref = np.asarray(self.ref, dtype=np.int64)
-        seq = np.asarray(self.seq, dtype=np.int64)
-        ln = np.asarray(self.len, dtype=np.int64)
+        # Every annotation group asks about these same CIGAR runs. Materialise
+        # their arrays once per source record, not once per group/placement.
+        if self._arrays is None:
+            self._arrays = tuple(np.asarray(v, dtype=np.int64) for v in (self.ref, self.seq, self.len))
+        ref, seq, ln = self._arrays
         x = np.asarray(xs, dtype=np.int64)
         i = np.searchsorted(ref, x, side="right") - 1
         ii = np.maximum(i, 0)

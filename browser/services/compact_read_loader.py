@@ -1980,7 +1980,7 @@ def _build_compact_reads_from_bam_region(
             records_seen += 1
             if not records_seen & 255:
                 checkpoint()  # a background job whose client went away stops here
-            if load_budget is not None and not load_budget.examine():
+            if load_budget is not None and sampler is None and not load_budget.examine():
                 break
             if profile_bam:
                 profile_counts["records_seen"] += 1
@@ -2018,6 +2018,10 @@ def _build_compact_reads_from_bam_region(
                 if counted:
                     for extent in extents:
                         sampler.kept(*extent)
+            # With explicit live-lift sampling the budget bounds records we
+            # decode, not the cheap skipped records whose extents we counted.
+            if load_budget is not None and sampler is not None and not load_budget.examine():
+                break
             is_duplicate = bool(getattr(read, "is_duplicate", False))
             if is_duplicate and not include_duplicates:
                 if profile_bam:

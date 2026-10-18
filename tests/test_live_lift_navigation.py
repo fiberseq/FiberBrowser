@@ -1,6 +1,7 @@
 """Live-lift navigation tables (DESIGN_LIVE_LIFT.md §5.1): summary, outline
 with drift bound, and exact delta-varint tiles in both directions."""
 import os
+import pwd
 import random
 
 import pytest
@@ -9,7 +10,7 @@ from live_lift_fixtures import MAT, PAT, TARGET, write_toy_sidecar
 from services.lift import live_lift as ll
 from services.lift import navigation as nav
 
-V4 = os.path.expanduser("~/pglift_work/pglift_20261017/native/graphlift/scratch/v4")
+V4 = os.path.join(os.environ.get("PGLIFT_WORK", os.path.join(pwd.getpwuid(os.getuid()).pw_dir, "pglift_work")), "pglift_20261017/native/graphlift/scratch/v4")
 HPRC = os.path.join(V4, "hprc.GRCh38.HG002.chain.graphlift.json")
 
 

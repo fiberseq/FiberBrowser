@@ -52,7 +52,7 @@ def _map_chroms(handle):
 
 def add_live_lift_dataset(state, *, paths: Iterable[str], manifest: str, haplotypes: Iterable[str] = (),
                           settings: Optional[dict] = None, label: Optional[str] = None,
-                          dataset_id: Optional[str] = None) -> dict:
+                          dataset_id: Optional[str] = None, source_fasta: Optional[str] = None) -> dict:
     """Validate and register a live-lift dataset; the payload is the dataset
     add route's (``{success, dataset, warnings}`` or ``{success: False, error}``)
     plus ``validation``."""
@@ -76,14 +76,16 @@ def add_live_lift_dataset(state, *, paths: Iterable[str], manifest: str, haploty
     if index_error:
         return index_error
     try:
-        config = LiveLiftConfig(manifest, list(haplotypes), LiftSettings.from_dict(settings))
+        config = LiveLiftConfig(manifest, list(haplotypes), LiftSettings.from_dict(settings), source_fasta=source_fasta)
     except (LiftSettingsError, ValueError, OSError) as exc:
         return {"success": False, "error": f"Live lift: {exc}"}
     target_sizes = {c.name: c.size for c in (state.chroms or [])} or None
-    validation = validate_live_lift(config.handle, bam_paths, config.haplotypes, target_sizes=target_sizes)
+    validation = validate_live_lift(config.handle, bam_paths, config.haplotypes, target_sizes=target_sizes,
+                                    target_fasta=getattr(state, "fasta", None), source_fasta=config.source_fasta)
     if not validation.ok:
         return {"success": False, "error": "Live lift: " + " ".join(validation.errors), "validation": validation.as_dict()}
     config.haplotypes = list(validation.haplotypes)
+    config.validation = validation.as_dict()
     default_label, base_id = infer_dataset_label_and_id(bam_paths)
     hap_names = "+".join(config.labels()[h] for h in config.haplotypes)
     label = label or f"{default_label} · live lift {hap_names}"
@@ -112,10 +114,19 @@ def update_settings(state, dataset_id: str, settings: Optional[dict] = None,
         return {"success": False, "error": "Not a live-lift dataset."}
     try:
         merged = {**config.settings.as_dict(), **(settings or {})}
-        new = LiveLiftConfig(config.manifest, list(haplotypes) if haplotypes else config.haplotypes,
-                             LiftSettings.from_dict(merged))
+        new = LiveLiftConfig(config.manifest, list(haplotypes) if haplotypes is not None else config.haplotypes,
+                             LiftSettings.from_dict(merged), source_fasta=config.source_fasta)
     except (LiftSettingsError, ValueError) as exc:
         return {"success": False, "error": f"Live lift: {exc}"}
+    from services.lift.validate import validate_live_lift
+    validation = validate_live_lift(new.handle, dataset.paths, new.haplotypes,
+                                    target_sizes={c.name: c.size for c in (state.chroms or [])} or None,
+                                    target_fasta=getattr(state, "fasta", None), source_fasta=new.source_fasta)
+    if not validation.ok:
+        # Validate the candidate before mutating anything: rejected haplotypes
+        # must leave both the dataset and its warm caches under the old key.
+        return {"success": False, "error": "Live lift: " + " ".join(validation.errors), "validation": validation.as_dict()}
+    new.validation = validation.as_dict()
     dataset.live_lift = new
     from services.dataset_registration import invalidate_dataset_caches
     invalidate_dataset_caches(state, dataset_id)
@@ -129,7 +140,7 @@ def session_entry(dataset) -> Optional[dict]:
     if config is None:
         return None
     return {"live_lift": {"manifest": config.manifest, "haplotypes": list(config.haplotypes),
-                          "settings": config.settings.as_dict()}}
+                          "settings": config.settings.as_dict(), "source_fasta": config.source_fasta}}
 
 
 def owns_session_entry(entry: dict) -> bool:
@@ -143,7 +154,7 @@ def restore_from_session(state, entry: dict) -> dict:
     spec = entry.get("live_lift") or {}
     result = add_live_lift_dataset(state, paths=entry.get("paths") or [], manifest=spec.get("manifest"),
                                    haplotypes=spec.get("haplotypes") or (), settings=spec.get("settings"),
-                                   label=entry.get("label"), dataset_id=entry.get("id"))
+                                   label=entry.get("label"), dataset_id=entry.get("id"), source_fasta=spec.get("source_fasta"))
     if not result.get("success"):
         raise RuntimeError(result.get("error") or "live lift failed")
     return result

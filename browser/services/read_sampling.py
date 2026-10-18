@@ -132,9 +132,10 @@ class SampledReads(list):
     """A broad load's kept reads, with the extents of the records it skipped."""
 
     def __init__(self, reads=(), *, level: int = 0, skipped_starts=None, skipped_ends=None,
-                 kept_starts=None, kept_ends=None):
+                 kept_starts=None, kept_ends=None, estimated: bool = False):
         super().__init__(reads)
         self.sample_level = int(level)
+        self.sampling_estimated = bool(estimated)
         as_array = lambda v: np.asarray(v if v is not None else [], dtype=np.int64)  # noqa: E731
         self.skipped_starts = as_array(skipped_starts)
         self.skipped_ends = as_array(skipped_ends)
@@ -165,7 +166,7 @@ def sampling_info(reads, start: int, end: int, kept_overlapping: int, kept_spann
     k_starts, k_ends = getattr(reads, "kept_starts", None), getattr(reads, "kept_ends", None)
     kept = _overlapping(k_starts, k_ends, start, end)
     kept_span = _overlapping(k_starts, k_ends, start, end, spanning=True)
-    return {
+    info = {
         "level": level,
         "fraction": fraction(level),
         "kept": kept,
@@ -175,6 +176,11 @@ def sampling_info(reads, start: int, end: int, kept_overlapping: int, kept_spann
         "loaded": int(kept_overlapping),
         "loaded_spanning": int(kept_spanning),
     }
+    if getattr(reads, "sampling_estimated", False):
+        # Target extents are counted before composing bodies and resolving
+        # primary haplotypes, so the target row counts are estimates.
+        info["estimated"] = True
+    return info
 
 
 def merge_sampling_info(parts) -> Optional[dict]:
@@ -298,6 +304,17 @@ def estimate_reads(bam_path: str, chrom: str, start: int, end: int, *, bam_handl
 
 def estimate_dataset_reads(state, dataset, chrom: str, start: int, end: int) -> Optional[float]:
     """Reads of a BAM dataset expected in ``[start, end)`` (None: unknown)."""
+    if getattr(dataset, "data_type", None) == "bam_livelift":
+        from services.lift.live_lift import LiftRefused, select_pieces, plan_fetch, estimate_lifted_reads
+        config = dataset.live_lift
+        if chrom not in config.handle.map.targets:
+            return 0.0
+        try:
+            selection = select_pieces(config.handle, chrom, start, end, haplotypes=config.haplotypes,
+                                      settings=config.settings, key=config.key())
+            return estimate_lifted_reads(dataset.paths, plan_fetch(selection, config.settings, fetch_range=(start, end)))
+        except LiftRefused:
+            return None
     if dataset is None or getattr(dataset, "data_type", None) != "bam":
         return None
     total = 0.0

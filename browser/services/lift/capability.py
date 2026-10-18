@@ -13,7 +13,7 @@ from typing import Iterable
 
 LIFTED_TYPE = "bam_livelift"
 # What lifted datasets support in this phase (P2a: display).
-SUPPORTED = frozenset({"compact_reads", "compact_all", "coverage", "locate", "tooltip", "settings"})
+SUPPORTED = frozenset({"compact_reads", "compact_all", "coverage", "lift_correspondence_only", "locate", "tooltip", "settings"})
 
 
 class LiveLiftUnsupported(Exception):

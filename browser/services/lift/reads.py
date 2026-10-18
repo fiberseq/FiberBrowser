@@ -40,20 +40,26 @@ def lift_identity(dataset) -> tuple:
 
 
 def lifted_reads_for_region(dataset, chrom: str, start: int, end: int, options: Optional[dict] = None,
-                            counts_out: Optional[dict] = None) -> list:
+                            counts_out: Optional[dict] = None, *, sampler=None) -> list:
     """Lifted rows of ``[start, end)`` on the main genome, relative to
     ``start`` and clipped to it, as the BAM loader returns them; every row (no
     spanning, id, strand, haplotype or cap filter)."""
-    from services.lift.live_lift import load_lifted_rows
+    from services.lift.live_lift import LoadBudget, LiftRefused, load_lifted_rows
 
     config = dataset.live_lift
     handle = config.handle
     if chrom not in handle.map.targets:
         return []
     loader_options = {k: v for k, v in (options or {}).items() if k in _PASSED_OPTIONS and v is not None}
+    budget = LoadBudget()
     load = load_lifted_rows(handle, list(dataset.paths), chrom, int(start), int(end), haplotypes=config.haplotypes,
                             settings=config.settings, dataset_id=dataset.id, loader_options=loader_options,
-                            output_region=(int(start), int(end)))
+                            output_region=(int(start), int(end)), sampler=sampler, budget=budget)
+    if load.truncated:
+        # Never publish or cache a partial cohort as though it were complete.
+        limit = (f"{budget.max_bytes / (1024 * 1024):g} MB" if budget.bytes >= budget.max_bytes
+                 else f"{budget.max_records:,} source records")
+        raise LiftRefused(f"Live lift: this view holds more than {limit}; zoom in")
     if counts_out is not None:
         counts_out.update(load.counts)
     return load.rows
@@ -81,14 +87,20 @@ def clip_geometry(ll: dict, offset: int, width: int) -> dict:
     return out
 
 
-def _kept(intervals, offset, width):
+def keep_interval(interval, offset, width, call=None):
+    """The shared live-lift crop rule: positive spans and identified insertion
+    markers, including at a boundary. Native zero-width intervals stay hidden."""
+    if len(interval) < 2:
+        return False
+    a, b = interval[0] - offset, interval[1] - offset
+    return min(b, width) > max(a, 0) or (a == b and 0 <= a <= width and call is not None)
+
+
+def _kept(intervals, offset, width, calls=()):
     """Indices the broad-cache projection keeps (working_sets._project_*_intervals)."""
     kept = []
     for i, iv in enumerate(intervals or ()):
-        if len(iv) < 2:
-            continue
-        a, b = iv[0] - offset, iv[1] - offset
-        if min(b, width) > max(a, 0):
+        if keep_interval(iv, offset, width, calls[i] if i < len(calls) else None):
             kept.append(i)
     return kept
 
@@ -113,8 +125,11 @@ def crop_live_lift(read: dict, adjusted: dict, offset: int, width: int) -> None:
         for group, values in src.items():
             if group not in present or values is None:
                 continue
-            idx = _kept(groups.get(group), offset, width)
+            idx = _kept(groups.get(group), offset, width, (ll.get("calls") or {}).get(group) or ())
             cut[group] = [values[i] if i < len(values) else None for i in idx]
+            if group == "intervals" and not idx:
+                # A synthesized neutral body/badge interval has no source call.
+                cut[group] = [None] * len(adjusted.get("intervals") or ())
         out[field] = cut
     adjusted["live_lift"] = out
 
@@ -137,15 +152,24 @@ def geometry_intervals(read: dict) -> list:
 # build so the display filter runs on the unfiltered broad rows *before* the
 # working-set cap and its sampling (§3.8 ``prepare_lift_cohort(purpose='display')``).
 _display_hap: ContextVar = ContextVar("live_lift_display_hap", default=None)
+_display_sampling: ContextVar = ContextVar("live_lift_display_sampling", default=False)
 
 
 @contextmanager
-def lift_display_hap(hap: Optional[str]):
+def lift_display_hap(hap: Optional[str], *, sample=None):
     token = _display_hap.set(hap or None)
+    sampling_token = _display_sampling.set(_display_sampling.get() if sample is None else bool(sample))
     try:
         yield
     finally:
         _display_hap.reset(token)
+        _display_sampling.reset(sampling_token)
+
+
+def display_sampling(dataset) -> bool:
+    """Explicit sampling is allowed only inside a lifted display request;
+    analyses and full-working-set loads retain their unsampled contract."""
+    return is_lifted(dataset) and _display_sampling.get()
 
 
 def display_row_filter(dataset):
@@ -204,9 +228,10 @@ def filter_lift_display(reads: Iterable[dict], dataset, hap: Optional[str] = Non
 # ── Coverage ────────────────────────────────────────────────────────────────
 
 def lifted_coverage(dataset, chrom: str, start: int, end: int, bins: int, *, lift_hap: Optional[str] = None,
-                    include_duplicates: bool = False) -> dict:
+                    include_duplicates: bool = False, correspondence_only: bool = False,
+                    rows=None, rows_start: Optional[int] = None) -> dict:
     """Binned coverage over ``[start, end)`` from lifted rows, as the read
-    coverage track counts reads: each row once per bin its body (segments
+    coverage track counts molecules: each molecule once per bin its body (segments
     minus connectors) touches; alternative rows never count. Per haplotype and
     pooled, with ``correspondence``: per bin, the fraction of bases a primary
     piece of that haplotype covers (pooled: of any selected haplotype; the
@@ -226,6 +251,7 @@ def lifted_coverage(dataset, chrom: str, start: int, end: int, bins: int, *, lif
     want = str(lift_hap).upper() if lift_hap else None
     haps = [h for h in config.haplotypes if want is None or h.upper() == want or labels.get(h, "").upper() == want]
     counts = {labels[h]: np.zeros(bins) for h in haps}
+    pooled_counts = np.zeros(bins)
     corr = {labels[h]: np.zeros(bins) for h in haps}
     pooled_corr = np.zeros(bins)
     if chrom in handle.map.targets and haps:
@@ -242,30 +268,46 @@ def lifted_coverage(dataset, chrom: str, start: int, end: int, bins: int, *, lif
         pooled_corr /= np.diff(edges)
         options = {"include_methylation": False, "include_layers": False, "hide_terminal_gaps": False,
                    "include_duplicates": include_duplicates}
-        for row in lifted_reads_for_region(dataset, chrom, start, end, options):
+        if rows is None and not correspondence_only:
+            rows = lifted_reads_for_region(dataset, chrom, start, end, options)
+        origin = start if rows_start is None else rows_start
+        molecules = {}
+        for row in (() if correspondence_only else rows or ()):
             ll = row.get("live_lift") or {}
             label = ll.get("hap_label")
             if ll.get("alt") or label not in counts:
                 continue
-            touched = set()
+            # Overlapping placements/supplementaries of one molecule are one
+            # observation, even when they were projected into separate rows.
+            molecule = ll.get("molecule") or ll.get("row") or row.get("id")
+            touched = molecules.setdefault((label, molecule), set())
             for a, b in _body_spans(ll):
-                i0 = max(0, int(np.searchsorted(edges, a + start, side="right")) - 1)
-                i1 = min(bins - 1, int(np.searchsorted(edges, b + start, side="left")) - 1)
+                i0 = max(0, int(np.searchsorted(edges, a + origin, side="right")) - 1)
+                i1 = min(bins - 1, int(np.searchsorted(edges, b + origin, side="left")) - 1)
                 touched.update(range(i0, i1 + 1))
+        for (label, _molecule), touched in molecules.items():
             for i in touched:
                 counts[label][i] += 1
-    pooled = sum(counts.values()) if counts else np.zeros(bins)
+        pooled_molecules = {}
+        for (_label, molecule), touched in molecules.items():
+            pooled_molecules.setdefault(molecule, set()).update(touched)
+        for touched in pooled_molecules.values():
+            for i in touched:
+                pooled_counts[i] += 1
+    pooled = pooled_counts
     mode = config.settings.pooled_depth
     if mode == "correspondence_normalised" and corr:
         n = sum((c >= 0.5).astype(float) for c in corr.values())
         pooled = np.where(n > 0, pooled / np.maximum(n, 1), pooled)
 
     def depth(values, c):
+        if correspondence_only:
+            return None
         return [None if cc <= 0 else round(float(v), 3) for v, cc in zip(values, c)]
 
     pooled_list = [round(float(v), 3) for v in pooled]
     return {
-        "coverage": pooled_list,
+        "coverage": None if correspondence_only else pooled_list,
         "max": max(pooled_list) if pooled_list else 0,
         "live_lift": {
             "haplotypes": {label: {"depth": depth(counts[label], corr[label]),
@@ -301,6 +343,12 @@ def _body_spans(ll: dict) -> list:
         if s1 > pos:
             out.append((pos, s1))
     return out
+
+
+def body_spans_view(ll: dict, start: int, end: int) -> bool:
+    """Spanning requires continuous body, never a connector's empty envelope.
+    Badges are point cuts, so touching bodies rejoin without losing a base."""
+    return any(a <= start and b >= end for a, b in _merge(_body_spans(ll)))
 
 
 def _add_spans(acc, edges, spans):

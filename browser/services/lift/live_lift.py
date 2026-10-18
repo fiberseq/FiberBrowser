@@ -457,7 +457,9 @@ def plan_fetch(selection: PieceSelection, settings: LiftSettings, fetch_range: O
 
 class LoadBudget:
     """The record and decoded-payload budgets of one lifted load (§3.2):
-    exceeding either stops the load; the result is then ``truncated``."""
+    exceeding either stops the load; the result is then ``truncated``. With
+    explicit sampling, skipped records cost decompression and target-extents
+    accounting only; the record budget bounds the records decoded."""
 
     def __init__(self, max_records: int = MAX_RECORDS, max_bytes: int = MAX_DECODED_BYTES):
         self.max_records, self.max_bytes = int(max_records), int(max_bytes)

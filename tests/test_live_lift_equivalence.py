@@ -11,6 +11,7 @@ pg-lift work data is not on this machine.
 """
 import collections
 import os
+import pwd
 import shutil
 
 import pysam
@@ -19,8 +20,8 @@ import pytest
 from services.compact_read_loader import build_compact_reads_from_bam
 from services.lift import live_lift as ll
 
-WORK = os.path.expanduser("~/pglift_work/pglift_20261017")
-SPIKE = os.path.expanduser("~/pglift_work/pglift_spike_20261016")
+WORK = os.path.join(os.environ.get("PGLIFT_WORK", os.path.join(pwd.getpwuid(os.getuid()).pw_dir, "pglift_work")), "pglift_20261017")
+SPIKE = os.path.join(os.environ.get("PGLIFT_WORK", os.path.join(pwd.getpwuid(os.getuid()).pw_dir, "pglift_work")), "pglift_spike_20261016")
 V4 = os.path.join(WORK, "native", "graphlift", "scratch", "v4")
 ALU_SRC = os.path.join(WORK, "validation_chr1", "work_v2", "alu.MAT", "in.win.bam")
 ALU_OFFSET = 128_560_000          # the toy target is GRCh38 chr3 from this offset

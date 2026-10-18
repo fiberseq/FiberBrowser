@@ -20,6 +20,7 @@ class LiftDatasetRequest(BaseModel):
     haplotypes: list[str] = Field(default_factory=list, description="Haplotype keys or labels (MAT/PAT); empty: all")
     settings: Optional[dict] = None
     label: Optional[str] = None
+    source_fasta: Optional[str] = Field(None, description="Source assembly FASTA for anchor sequence spot checks")
 
 
 class LiftSettingsRequest(BaseModel):
@@ -46,7 +47,8 @@ async def lift_inspect(manifest: str = Query(..., description="graphlift sidecar
 async def lift_add_dataset(req: LiftDatasetRequest, state=Depends(get_state)):
     from services.lift.registration import add_live_lift_dataset
     return await asyncio.to_thread(add_live_lift_dataset, state, paths=req.paths, manifest=req.manifest,
-                                   haplotypes=req.haplotypes, settings=req.settings, label=req.label)
+                                   haplotypes=req.haplotypes, settings=req.settings, label=req.label,
+                                   source_fasta=req.source_fasta)
 
 
 @router.post("/api/lift/datasets/{dataset_id}/settings")

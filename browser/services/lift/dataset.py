@@ -26,9 +26,12 @@ def label_order(label: str) -> tuple:
 class LiveLiftConfig:
     """A lifted dataset's map, haplotypes and advanced settings."""
 
-    def __init__(self, manifest: str, haplotypes: Iterable[str], settings: Optional[LiftSettings] = None):
+    def __init__(self, manifest: str, haplotypes: Iterable[str], settings: Optional[LiftSettings] = None, *,
+                 source_fasta: Optional[str] = None):
         self.manifest = os.path.abspath(os.path.expanduser(manifest))
         self.settings = settings or LiftSettings()
+        self.source_fasta = os.path.abspath(os.path.expanduser(source_fasta)) if source_fasta else None
+        self.validation = None
         labels = self.handle.haplotype_labels
         self.haplotypes = sorted(self.handle.resolve_haplotypes(list(haplotypes) or self.handle.haplotypes),
                                  key=lambda h: label_order(labels.get(h, h)))
@@ -56,11 +59,16 @@ class LiveLiftConfig:
             "settings": self.settings.as_dict(),
             "key": self.key(),
             "source_assembly": _source_assembly(handle),
+            "source_fasta": self.source_fasta,
+            "validation": self.validation,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "LiveLiftConfig":
-        return cls(data["manifest"], data.get("haplotypes") or (), LiftSettings.from_dict(data.get("settings")))
+        config = cls(data["manifest"], data.get("haplotypes") or (), LiftSettings.from_dict(data.get("settings")),
+                     source_fasta=data.get("source_fasta"))
+        config.validation = data.get("validation")
+        return config
 
 
 def _source_assembly(handle) -> str:

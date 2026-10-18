@@ -5,15 +5,19 @@ SAMPLE_A's HG002-aligned reads at the chr3 AluY locus, drawn on GRCh38 through t
 HPRC graphlift map (split into MAT and PAT panels), next to the same molecules'
 native GRCh38 alignments. Runs until Ctrl+C.
 
-    python scripts/live_lift_demo.py [--port 8882] [--fasta ~/.fiberhmm/genomes/hg38.fa] [--build]
+    python scripts/live_lift_demo.py [--port 8883] [--data-root DIR] [--home DIR] [--build]
 
-The frontend must be built from this branch (``--build`` runs ``npm run build`` in
-browser/frontend; ``git checkout -- browser/frontend/dist`` restores the committed
-build afterwards). The server runs with FIBERBROWSER_LIVE_LIFT=1 on localhost
+The existing frontend build is used unless ``--build`` is explicitly requested.
+The child server gets an isolated HOME by default; ``--home`` can name a persistent
+demo directory. The real user's reference FASTA is read without changing HOME.
+The server runs with FIBERBROWSER_LIVE_LIFT=1 on localhost
 without an access token (a demo on this computer only)."""
 import argparse
 import json
 import os
+import pwd
+import shlex
+import tempfile
 import signal
 import subprocess
 import sys
@@ -21,13 +25,12 @@ import time
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-HOME = os.path.expanduser("~")
-HANDOFF = os.path.join(HOME, "pglift_work/demo_data")
-DEFAULTS = {
-    "lift_bam": os.path.join(HANDOFF, "SAMPLE_A.alu_chr3.hg002v1.1.bam"),
-    "native_bam": os.path.join(HANDOFF, "SAMPLE_A.alu_chr3.GRCh38.bam"),
-    "map": os.path.join(HOME, "pglift_work/pglift_20261017/native/graphlift/scratch/v4/hprc.GRCh38.HG002.chain.graphlift.json"),
-}
+REAL_HOME = pwd.getpwuid(os.getuid()).pw_dir
+WORK = os.environ.get("PGLIFT_WORK", os.path.join(REAL_HOME, "pglift_work"))
+HANDOFF = os.environ.get("LIVE_LIFT_DEMO_DATA", os.path.join(
+    REAL_HOME, "pglift_work/demo_data"))
+DEFAULT_MAP = os.path.join(WORK, "pglift_20261017/native/graphlift/scratch/v4/hprc.GRCh38.HG002.chain.graphlift.json")
+DEFAULT_FASTA = os.path.join(REAL_HOME, ".fiberhmm/genomes/hg38.fa")
 VIEW = "chr3:128,650,000-128,670,000"
 
 
@@ -48,27 +51,44 @@ def wait_ready(port: int, proc, timeout: float = 120.0) -> None:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--port", type=int, default=8882)
-    ap.add_argument("--fasta", default=None, help="GRCh38 FASTA (default: ~/.fiberhmm/genomes/hg38.fa if present)")
-    ap.add_argument("--lift-bam", default=DEFAULTS["lift_bam"])
-    ap.add_argument("--native-bam", default=DEFAULTS["native_bam"])
-    ap.add_argument("--map", default=DEFAULTS["map"])
+    ap.add_argument("--port", type=int, default=8883)
+    ap.add_argument("--fasta", default=DEFAULT_FASTA, help="GRCh38 FASTA (default: real user's ~/.fiberhmm/genomes/hg38.fa, read-only)")
+    ap.add_argument("--data-root", default=HANDOFF, help="demo BAM directory (or LIVE_LIFT_DEMO_DATA)")
+    ap.add_argument("--home", default=None, help="child server HOME (default: a new temporary directory)")
+    ap.add_argument("--lift-bam", default=None)
+    ap.add_argument("--native-bam", default=None)
+    ap.add_argument("--map", default=DEFAULT_MAP)
     ap.add_argument("--pooled", action="store_true", help="one pooled panel instead of MAT and PAT panels")
-    ap.add_argument("--build", action="store_true", help="build the frontend first (npm run build)")
+    ap.add_argument("--build", action="store_true", help="optionally rebuild the frontend first; otherwise use the existing build")
     a = ap.parse_args()
-    if a.port in (8885, 8886, 8888):
-        sys.exit("Pick another port (8885, 8886 and 8888 are reserved on this machine).")
+    if a.port in (8882, 8885, 8886, 8888):
+        sys.exit("Pick another port (8882, 8885, 8886 and 8888 are reserved on this machine).")
+    a.data_root = os.path.abspath(os.path.expanduser(a.data_root))
+    a.lift_bam = a.lift_bam or os.path.join(a.data_root, "SAMPLE_A.alu_chr3.hg002v1.1.bam")
+    a.native_bam = a.native_bam or os.path.join(a.data_root, "SAMPLE_A.alu_chr3.GRCh38.bam")
     for name in ("lift_bam", "native_bam", "map"):
+        setattr(a, name, os.path.abspath(os.path.expanduser(getattr(a, name))))
         if not os.path.exists(getattr(a, name)):
             sys.exit(f"Missing {name.replace('_', ' ')}: {getattr(a, name)}")
     if a.build:
         subprocess.run(["npm", "run", "build"], cwd=os.path.join(ROOT, "browser", "frontend"), check=True)
-    fasta = a.fasta or os.path.join(HOME, ".fiberhmm/genomes/hg38.fa")
+    else:
+        print("Using the existing frontend build; --build optionally rebuilds it.", flush=True)
+    a.home = os.path.abspath(os.path.expanduser(a.home)) if a.home else tempfile.mkdtemp(prefix="fiberbrowser-live-lift-")
+    os.makedirs(a.home, exist_ok=True)
+    fasta = os.path.abspath(os.path.expanduser(a.fasta))
     args = [sys.executable, "browser.py", "-b", a.native_bam, "-p", str(a.port), "--no-open", "--no-token"]
     if os.path.exists(fasta):
         args += ["--fasta", fasta]
-    env = dict(os.environ, FIBERBROWSER_LIVE_LIFT="1", FIBERBROWSER_PORT_MIN=str(a.port),
+    env = dict(os.environ, HOME=a.home, FIBERBROWSER_LIVE_LIFT="1", FIBERBROWSER_PORT_MIN=str(a.port),
                FIBERBROWSER_PORT_MAX=str(a.port), FIBERBROWSER_NO_OPEN="1")
+    relaunch = [sys.executable, os.path.abspath(__file__), "--port", str(a.port), "--data-root", a.data_root,
+                "--home", a.home, "--fasta", fasta, "--lift-bam", a.lift_bam, "--native-bam", a.native_bam, "--map", a.map]
+    if a.pooled:
+        relaunch.append("--pooled")
+    if a.build:
+        relaunch.append("--build")
+    print("Relaunch: " + shlex.join(relaunch), flush=True)
     proc = subprocess.Popen(args, cwd=ROOT, env=env)
     try:
         wait_ready(a.port, proc)

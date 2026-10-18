@@ -27,6 +27,9 @@ def filter_reads_by_id_set(reads: Sequence[Mapping[str, Any]], filter_ids: set[s
 
 
 def is_read_spanning(read: Mapping[str, Any], region_width: int) -> bool:
+    if read.get("live_lift"):
+        from services.lift.reads import body_spans_view
+        return body_spans_view(read["live_lift"], 0, region_width)
     intervals = read.get("intervals") or []
     return bool(intervals and intervals[0][0] <= 0 and intervals[-1][1] >= region_width)
 

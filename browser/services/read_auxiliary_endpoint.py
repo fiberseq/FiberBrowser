@@ -479,6 +479,7 @@ def get_coverage_payload(
     dataset_id: Optional[str] = None,
     include_duplicates: bool = False,
     lift_hap: Optional[str] = None,
+    lift_correspondence_only: bool = False,
 ) -> dict:
     original_chrom = chrom
     chrom = state.translate_chrom(chrom)
@@ -519,7 +520,7 @@ def get_coverage_payload(
     # way, but a circular contig's coverage counts wrapped tails.
     from services.signal_evidence import signal_filter_key
     cache_key = (signal_filter_key(state), tuple(_source_identity(d) for d in datasets_to_query), lift_hap,
-                 chrom, start, end, bins,
+                 chrom, start, end, bins, bool(lift_correspondence_only),
                  tuple(query_segments or ()), circular_topology_token(state, chrom), bool(include_duplicates),
                  tuple((d_id, tuple(sorted(l.items()))) for d_id, l in links.items() if l))
 
@@ -538,8 +539,19 @@ def get_coverage_payload(
         # Live-lift datasets: counted from their lifted rows, with correspondence for hatching
         # (services/lift/reads.lifted_coverage); native datasets in the same request add as reads.
         from services.lift.reads import lifted_coverage
-        parts = [lifted_coverage(d, chrom, start, end, bins, lift_hap=lift_hap,
-                                 include_duplicates=bool(include_duplicates)) for d in lifted]
+        parts = []
+        for dataset in lifted:
+            rows, broad_key = (None, None) if lift_correspondence_only or include_duplicates else _cached_lift_rows(
+                state, dataset, chrom, start, end, now)
+            parts.append(lifted_coverage(dataset, chrom, start, end, bins, lift_hap=lift_hap,
+                                         include_duplicates=bool(include_duplicates),
+                                         correspondence_only=bool(lift_correspondence_only), rows=rows,
+                                         rows_start=broad_key[2] if broad_key else None))
+        if lift_correspondence_only:
+            result = {"coverage": None, "max": 0,
+                      "live_lift": parts[0]["live_lift"] if len(parts) == 1 else {"datasets": [p["live_lift"] for p in parts]}}
+            _coverage_cache[cache_key] = (result, now)
+            return result
         result = (compute_binned_read_coverage(native, chrom, start, end, bins, bam_handle_getter=get_bam_handle,
                                                bigbed_handle_getter=get_bigbed_handle, query_segments=query_segments,
                                                circular=is_circular_chrom(state, chrom), contig_links=links,
@@ -574,6 +586,34 @@ def get_coverage_payload(
             break
 
     return result
+
+
+def _cached_lift_rows(state, dataset, chrom, start, end, now):
+    """Reuse display geometry, regardless of its requested annotation groups.
+    Match its load token to today's sources/lift key; a sampled display entry
+    is usable too. Coverage needs bodies only, so expanding/redecoding tags
+    for a second load buys nothing."""
+    from services.working_sets import (find_broad_cache_entry, read_load_token, broad_cache_topology,
+                                       broad_cache_legacy_layer_settings, broad_cache_min_footprints,
+                                       _broad_cache_sync)
+    token = read_load_token(state, chrom)
+    lock, _inflight = _broad_cache_sync(state)
+    with lock:
+        keys = list(getattr(state, "_broad_cache", {}))
+    for key in reversed(keys):
+        if key[:2] != (dataset.id, chrom):
+            continue
+        topology = broad_cache_topology(key)
+        if topology[:len(token)] != token:
+            continue
+        infer, nuc_min = broad_cache_legacy_layer_settings(key)
+        rows, found = find_broad_cache_entry(state, dataset.id, chrom, start, end, False, (), now,
+                                            include_layer_qualities=False, infer_legacy_layers=infer,
+                                            legacy_nuc_min_size=nuc_min, min_footprints=broad_cache_min_footprints(key),
+                                            load_token=topology)
+        if rows is not None:
+            return rows, found
+    return None, None
 
 
 def compile_regions_payload(state, req) -> dict:

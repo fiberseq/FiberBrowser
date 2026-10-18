@@ -140,7 +140,7 @@ class PackedReads(Sequence):
             self.retained_bytes += self._display_index.retained_bytes
         self.retained_bytes += self._selection_budget + retained_size(self._read_ids)
         # Sampled loads also carry the extents of unparsed alignments.
-        for name in ('sample_level', 'skipped_starts', 'skipped_ends', 'kept_starts', 'kept_ends'):
+        for name in ('sample_level', 'sampling_estimated', 'skipped_starts', 'skipped_ends', 'kept_starts', 'kept_ends'):
             if hasattr(reads, name):
                 value = getattr(reads, name)
                 setattr(self, name, value)
