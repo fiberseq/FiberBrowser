@@ -12,6 +12,8 @@ import { usePanOffsetTransform } from '../../hooks/usePanOffsetTransform';
 import { TRACK_BACKGROUND } from './TrackContainerConstants';
 import { primerTargetOverlayVisible } from '../controls/primer-design/primerTargetOverlay';
 import { highlightRegion } from '../../utils/highlightActions';
+import { useLiveLiftAxis } from '../../features/liveLift/useLiveLiftAxis';
+import { liveLiftHaplotypeColor } from '../../features/liveLift/palette';
 
 interface Props {
   width: number;
@@ -96,6 +98,7 @@ export function AxisTrack({ width, height, overrideChrom, overrideStart, overrid
   const start = overrideStart ?? storeStart;
   const end = overrideEnd ?? storeEnd;
   const chrom = overrideChrom ?? storeChrom;
+  const { axis: liveLiftAxis } = useLiveLiftAxis(chrom, start, end, width, isReversed);
   const chromInfo = findChromInfo(chroms, chrom);
   // A contig a plugin pack built: its own readouts.
   const contig = useContigCoordinates(chrom);
@@ -116,13 +119,11 @@ export function AxisTrack({ width, height, overrideChrom, overrideStart, overrid
   const [highlightDrag, setHighlightDrag] = useState(false);
 
   const genomeToScreen = useCallback((pos: number) => {
-    const frac = (pos - start) / (end - start);
-    return isReversed ? (1 - frac) * width : frac * width;
-  }, [start, end, width, isReversed]);
+    return liveLiftAxis.toX(pos);
+  }, [liveLiftAxis]);
   const screenToGenome = useCallback((x: number) => {
-    const frac = x / width;
-    return Math.round(start + (isReversed ? 1 - frac : frac) * (end - start));
-  }, [start, end, width, isReversed]);
+    return Math.round(liveLiftAxis.fromX(x).pos);
+  }, [liveLiftAxis]);
 
   // Mouse handlers for drag-to-zoom
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -236,6 +237,11 @@ export function AxisTrack({ width, height, overrideChrom, overrideStart, overrid
 
     ctx.fillStyle = TRACK_BACKGROUND.axis;
     ctx.fillRect(0, 0, width, height);
+    for (const { x0, x1, ins } of liveLiftAxis.blocks) {
+      ctx.fillStyle = '#e2e8f0'; ctx.fillRect(x0, 0, x1 - x0, height);
+      ctx.fillStyle = liveLiftHaplotypeColor(ins.hap_label); ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
+      if (x1 - x0 > 65) ctx.fillText(ins.label, (x0 + x1) / 2, height - 3, x1 - x0 - 4);
+    }
 
     const size = end - start;
     const step = calculateTickStep(size, width);
@@ -296,8 +302,7 @@ export function AxisTrack({ width, height, overrideChrom, overrideStart, overrid
     const tickBase = useRelative ? relativeTSS! : contig ? contig.tickBase : 0;
     const first = tickBase + Math.ceil((start - tickBase) / effectiveStep) * effectiveStep;
     for (let pos = first; pos < end; pos += effectiveStep) {
-      const frac = (pos - start) / (end - start);
-      const x = isReversed ? (1 - frac) * width : frac * width;
+      const x = genomeToScreen(pos);
 
       // Skip if too close to edges
       if (x < 30 || x > width - 30) continue;

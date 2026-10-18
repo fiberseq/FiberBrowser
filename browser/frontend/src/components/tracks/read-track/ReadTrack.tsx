@@ -19,6 +19,8 @@ import type { FirePeak } from '../../../types';
 import { EMPTY_OBJECT, EMPTY_STRING_ARRAY, EMPTY_NUMBER_ARRAY, SIDEBAR_WIDTH, getClusterColor } from './constants';
 import { makeDataViewportKey, readFilterFitsRequest, useReadTrackData } from './useReadTrackData';
 import { useReadTrackMouse } from './useReadTrackMouse';
+import { useLiveLiftAxis } from '../../../features/liveLift/useLiveLiftAxis';
+import { ExpansionOverlay, DifferenceGuide } from '../../../features/liveLift/ExpansionOverlay';
 import { ReadTrackActions } from './ReadTrackActions';
 import { useReadActionsStore } from '../../../stores/readActionsStore';
 import { drawReadTrack } from './ReadTrackCanvas';
@@ -351,6 +353,7 @@ export function ReadTrack({
   const hasFilter = myFilteredReadIds != null;
   const regionWidth = end - start;
   const sidebarWidth = gutterWidth ?? (hasCluster ? SIDEBAR_WIDTH : 0);
+  const { axis: liveLiftAxis, viewKey: liveLiftView } = useLiveLiftAxis(chrom, start, end, Math.max(1, width - sidebarWidth), isReversed);
 
   const currentDataset = datasets.find(d => d.id === datasetId);
   const isBAM = isBamBacked(currentDataset);
@@ -710,6 +713,7 @@ export function ReadTrack({
     handleMouseLeave, handleWheel,
     handleContextMenu, handleKeyDown, contextTarget, closeContextMenu, selectFootprintAt, selectReadById,
   } = useReadTrackMouse({
+    axis: liveLiftAxis,
     displayReads: hitTestReads, width, height, sidebarWidth, regionWidth, start, end, chrom, datasetId, stateKey,
     datasetLabel, datasetColor,
     hasCluster, myClusterAssignments, myClusterOrder, myClusterFocus, hasClusterFocus, mySelectedClusters,
@@ -1229,6 +1233,7 @@ export function ReadTrack({
 
     const drawStarted = nowMs();
     drawReadTrack({
+      axis: liveLiftAxis,
       canvas,
       displayReads,
       width,
@@ -1333,7 +1338,7 @@ export function ReadTrack({
       const { panOffset: currentPanOffset, panScope: currentPanScope, setPanOffset } = useEphemeralStore.getState();
       if (currentPanOffset !== 0 && currentPanScope === panScope) setPanOffset(0);
     }
-  }, [loading, dataSequence, isDataViewportStale, displayReads, width, renderHeight, regionWidth, chrom, start, end, hasCluster, myClusterAssignments, myClusterOrder, drawLoadingState, hasStaleDisplayReads, fetchFailed, genes, allPeaks, hasFilter, myFilteredReadIds, datasetLabel, datasetColor, sidebarWidth, enabledModTypes, enabledCigarTypes, isBAM, layerType, modificationOverlays, overlayMarks, jupyterReadHighlights, jupyterFootprintColorMap, allJupyterMarkers, hasClusterFocus, myClusterFocus, mySelectedClusters, linkedBoundsStart, linkedHighlightIds, clusterStateConsensus, isReversed, activeColormap, orthogonalTracksForRules, renderFillReadHeight, renderReadRowHeight, readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth, renderReadScrollOffset, selectedReadIds, showCoverageHistogram, maxRegionForReads, selectedFootprints, footprintCrossHighlight, footprintGroups, selectedFamilyGroupId, footprintAnalysisLayer, coverageData, coverageMax, myAnnotationOverlays, annotationColors, enabledAnnotationTypes, annotationOpacityMin, annotationOpacityMax, annotationThresholds, layerColors, isPanning, canvasRenderVersion, consensusView, highlightedConsensusFamilies, nativeLattice, exportInProgress, readHighlightIds, svDisplayEnabled, svMinLen, svBand, svVisibleSummary, zoomedOutBannerShown, liftCorrespondence, liftHap]);
+  }, [loading, dataSequence, isDataViewportStale, displayReads, width, renderHeight, regionWidth, chrom, start, end, hasCluster, myClusterAssignments, myClusterOrder, drawLoadingState, hasStaleDisplayReads, fetchFailed, genes, allPeaks, hasFilter, myFilteredReadIds, datasetLabel, datasetColor, sidebarWidth, enabledModTypes, enabledCigarTypes, isBAM, layerType, modificationOverlays, overlayMarks, jupyterReadHighlights, jupyterFootprintColorMap, allJupyterMarkers, hasClusterFocus, myClusterFocus, mySelectedClusters, linkedBoundsStart, linkedHighlightIds, clusterStateConsensus, isReversed, activeColormap, orthogonalTracksForRules, renderFillReadHeight, renderReadRowHeight, readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth, renderReadScrollOffset, selectedReadIds, showCoverageHistogram, maxRegionForReads, selectedFootprints, footprintCrossHighlight, footprintGroups, selectedFamilyGroupId, footprintAnalysisLayer, coverageData, coverageMax, myAnnotationOverlays, annotationColors, enabledAnnotationTypes, annotationOpacityMin, annotationOpacityMax, annotationThresholds, layerColors, isPanning, canvasRenderVersion, consensusView, highlightedConsensusFamilies, nativeLattice, exportInProgress, readHighlightIds, svDisplayEnabled, svMinLen, svBand, svVisibleSummary, zoomedOutBannerShown, liftCorrespondence, liftHap, liveLiftAxis]);
 
   // What this panel loaded and shows, for Copilot's troubleshooting diagnostics.
   useEffect(() => {
@@ -1540,6 +1545,8 @@ export function ReadTrack({
       data-native-lattice-read-count={nativeLattice?Object.keys(nativeLattice.reads).length:0}
       data-read-track-export-expanded={exportFullReadTracks && (readDisplayMode === 'all' || matchedExportActive) ? 'true' : undefined}
     >
+      <ExpansionOverlay axis={liveLiftAxis} viewKey={liveLiftView} sidebar={sidebarWidth} />
+      <DifferenceGuide axis={liveLiftAxis} viewKey={liveLiftView} chrom={chrom} sidebar={sidebarWidth} />
       {!isDataViewportStale && <ReadSampleNotice datasetId={datasetId} sampling={workingSampling} />}
       {latticeMessage&&<div data-testid={`native-lattice-status-${datasetId}`} className="absolute bottom-0 left-1 z-20 bg-white/90 dark:bg-gray-900/90 text-[11px] text-gray-600 dark:text-gray-300 px-1 pointer-events-none">{latticeMessage}</div>}
       {/* The read count ("584/3,170 visible") is shown in the panel header (readStatusStore). */}

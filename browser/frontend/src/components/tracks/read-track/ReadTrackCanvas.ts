@@ -1,5 +1,8 @@
 import { useBrowserStore } from '../../../stores/browserStore';
-import { drawLiveLiftMarks, drawLiveLiftHaplotypeStripe, liveLiftBodyRects, liveLiftBodySpans } from './liveLiftCanvas';
+import type { LiftAxis } from '../../../features/liveLift/axis';
+import { drawInsertionPayload } from './liveLiftInsertionCanvas';
+import { drawLiveLiftMarks, drawLiveLiftHaplotypeStripe, liveLiftBodyRects, liveLiftBodySpans, liveLiftBadgeGeometry } from './liveLiftCanvas';
+import type { CoverageResponse } from '../../../api/coverage';
 import { getCanvasRenderScale, setupHighDpiCanvas } from '../../../utils/canvasUtils';
 import { buildRuleMatchContext, footprintMatchesRule, ruleTargetsLayer } from '../../../utils/ruleMatching';
 import { buildRuleColorResolver } from '../../../utils/ruleColors';
@@ -43,8 +46,10 @@ interface JupyterMarkerItem {
 }
 
 interface DrawReadsParams {
+  axis?: LiftAxis;
   /** A live-lift panel: map correspondence per bin over the view (hatching on the coverage histogram). */
   liftCorrespondence?: number[] | null;
+  coverageLiveLift?: CoverageResponse['live_lift'] | null;
   /** A split panel identifies its haplotype in the header; pooled panels identify each row with a stripe. */
   liftHap?: string | null;
   genome?: string | null;
@@ -160,7 +165,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
     selectedReadIds, selectedFootprints: allSelectedFootprints, footprintCrossHighlight, footprintGroups,
     selectedFamilyGroupId, footprintAnalysisLayer,
     clusterStateConsensus, hasFilter, myFilteredReadIds,
-    maxRegionForReads, coverageData, coverageMax,
+    maxRegionForReads, coverageData, coverageMax, coverageLiveLift,
     annotationOverlays, annotationColors, enabledAnnotationTypes,
     annotationOpacityMin, annotationOpacityMax, annotationThresholds,
     layerColors,selectedConsensusFamily,selectedConsensusFamilies,relatedConsensusFamilies,consensusViewJobId,nativeLattice,latticeShowHits,latticeStyle,
@@ -183,7 +188,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
   ctx.fillRect(0, 0, width, height);
 
   // Draw dataset label header
-  const headerHeight = datasetLabel ? 16 : 0;
+  const headerHeight = (datasetLabel ? 16 : 0) + (params.axis?.blocks.length ? 24 : 0);
 
   if (datasetLabel) {
     ctx.fillStyle = datasetColor || '#666';
@@ -204,7 +209,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
     const bandScale = (width - sidebarWidth) / regionWidth;
     drawSvBand(ctx, svSummary, {
       top: headerHeight, height: svBandHeight, width, sidebarWidth, viewStart: start,
-      toX: rel => (isReversed ? sidebarWidth + (regionWidth - rel) * bandScale : sidebarWidth + rel * bandScale),
+      toX: rel => sidebarWidth + (params.axis ? params.axis.toX(start + rel) : (isReversed ? regionWidth - rel : rel) * bandScale),
       isReversed, backgroundColor: noReadBackgroundColor,
     });
   }
@@ -238,11 +243,28 @@ export function drawReadTrack(params: DrawReadsParams): void {
         const barH = (coverageData[b] / coverageMax) * plotHeight;
         // Bin b covers the b-th slice of the region; a reversed view draws it from the right.
         const x = sidebarWidth + (isReversed ? plotWidth - (b + 1) * barW : b * barW);
-        ctx.fillRect(x, plotTop + plotHeight - barH, Math.max(1, barW), barH);
+        const spans = params.axis?.spans(start + b * regionWidth / covBins, start + (b + 1) * regionWidth / covBins)
+          .map(s => ({ x: sidebarWidth + s.x, w: s.w })) ?? [{ x, w: barW }];
+        for (const s of spans) ctx.fillRect(s.x, plotTop + plotHeight - barH, Math.max(1, s.w), barH);
       }
       // Baseline
       ctx.fillStyle = ink.rule;
       ctx.fillRect(sidebarWidth, plotTop + plotHeight, plotWidth, 1);
+
+      // Zoomed-out coverage carries its own correspondence: this branch
+      // returns before the ordinary histogram and must hatch even at depth 0.
+      const corr = coverageLiveLift?.hatching
+        ? (liftHap ? coverageLiveLift.haplotypes[liftHap]?.correspondence : coverageLiveLift.pooled.correspondence)
+        : null;
+      if (corr?.length) {
+        if (params.axis?.blocks.length) corr.forEach((fraction, i) => {
+          for (const s of params.axis!.spans(start + i * regionWidth / corr.length, start + (i + 1) * regionWidth / corr.length))
+            drawCorrespondenceHatching(ctx, [fraction], { x: sidebarWidth + s.x, y: plotTop, w: s.w, h: plotHeight, isReversed, dark: ink.dark });
+        });
+        else drawCorrespondenceHatching(ctx, corr, {
+          x: sidebarWidth, y: plotTop, w: plotWidth, h: plotHeight, isReversed, dark: ink.dark,
+        });
+      }
 
       ctx.font = '10px sans-serif';
       ctx.textBaseline = 'middle';
@@ -289,7 +311,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
   );
   const { rowHeight, rowGap, needsScroll, clampedScrollOffset, totalContentHeight, maxScrollOffset } = layout;
   const trackWidth = width - sidebarWidth;
-  const scale = trackWidth / regionWidth;
+  const scale = params.axis?.pxPerBp ?? trackWidth / regionWidth;
 
   // Calculate visible range for virtual scrolling
   const firstVisibleRow = needsScroll ? Math.floor(clampedScrollOffset / (rowHeight + rowGap)) : 0;
@@ -298,9 +320,8 @@ export function drawReadTrack(params: DrawReadsParams): void {
     : n - 1;
 
   // Position helper: converts relative bp position to screen X
-  const toX = (relPos: number) => isReversed
-    ? sidebarWidth + (regionWidth - relPos) * scale
-    : sidebarWidth + relPos * scale;
+  const toX = (relPos: number) => params.axis ? sidebarWidth + params.axis.toX(start + relPos)
+    : isReversed ? sidebarWidth + (regionWidth - relPos) * scale : sidebarWidth + relPos * scale;
 
   // For linked mode: intervals are relative to linkedBoundsStart
   const linkedOffset = (linkedBoundsStart !== undefined)
@@ -529,15 +550,41 @@ export function drawReadTrack(params: DrawReadsParams): void {
   if (showCoverageHistogram && coverageHistogramHeight > 0) {
     drawCoverageHistogram(ctx, displayReads, {
       sidebarWidth, trackWidth, regionWidth, histogramHeight: coverageHistogramHeight, headerHeight: headerHeight + svBandHeight,
-      linkedOffset, isReversed, width, liftCorrespondence,
+      linkedOffset, isReversed, width, liftCorrespondence, axis: params.axis, start,
     });
   }
 
   // Draw reads (in clipped/translated context for panning)
   const liveLiftDark = inkOn(noReadBackgroundColor).dark;
+  let insertionCalls = 0;
+  // Recording the actual visible badge geometry lets the browser smoke test
+  // click the canvas as a user does, even when row sorting or density changes.
+  let badgeTarget: { x: number; y: number; ins_id: string; bp: number } | null = null;
+  if (params.axis?.blocks.length) {
+    for (const b of params.axis.blocks) {
+      ctx.fillStyle = liveLiftDark ? '#1e293b' : '#e2e8f0';
+      ctx.fillRect(sidebarWidth + b.x0, headerHeight, b.x1 - b.x0, height - headerHeight);
+    }
+  }
   for (let i = firstVisibleRow; i <= lastVisibleRow; i++) {
     const read = displayReads[i];
     const y = headerHeight + histogramHeight + i * (rowHeight + rowGap) - (needsScroll ? clampedScrollOffset : 0);
+
+    if (!badgeTarget && read.live_lift) {
+      const ll = read.live_lift;
+      const badge = liveLiftBadgeGeometry(ll, { y, rowHeight: Math.max(1, rowHeight - rowGap), linkedOffset, regionWidth, toX })
+        .find(b => b.badge[2] >= 2000 && b.badge[2] < 3000 && y >= headerHeight && y + rowHeight <= height);
+      const id = badge ? ll.badge_ids?.[ll.badges!.indexOf(badge.badge)] : undefined;
+      if (badge && id) badgeTarget = { x: badge.x, y: y + Math.max(1, rowHeight - rowGap) / 2, ins_id: id, bp: badge.badge[2] };
+    }
+
+    // Every ordinary read layer is clipped out of insertion columns. Native
+    // and non-carrier rows keep a true empty gap, including selection outlines.
+    if (params.axis?.blocks.length) {
+      ctx.save(); ctx.beginPath();
+      for (const span of params.axis.spans(start, end)) ctx.rect(sidebarWidth + span.x, y - 2, span.w, rowHeight + 4);
+      ctx.clip();
+    }
 
     const readExtent = getCompactReadExtent(read);
     // SVs (absolute coordinates: view-relative is ref - start, whatever the linked offset).
@@ -565,7 +612,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
         bodyClip = rects;
       } else if (clippedEnd > clippedStart) {
         const x = isReversed ? toX(clippedEnd) : toX(clippedStart);
-        const w = Math.max(1, (clippedEnd - clippedStart) * scale);
+        const w = Math.max(1, Math.abs(toX(clippedEnd) - toX(clippedStart)));
         ctx.fillStyle = readBackgroundColor;
         ctx.fillRect(x, y, w, Math.max(1, rowHeight - rowGap));
         bodyClip = { x, w };
@@ -663,7 +710,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
         if (visibleEnd < 0 || visibleStart > regionWidth) continue;
 
         const x = isReversed ? toX(drawEnd) : toX(drawStart);
-        const w = Math.max(1, (drawEnd - drawStart) * scale);
+        const w = Math.max(1, Math.abs(toX(drawEnd) - toX(drawStart)));
 
         // Pass the actual primary layer name so target-scoped rules can gate
         // correctly; split TF intervals are handled in the overlay loop.
@@ -1485,17 +1532,19 @@ export function drawReadTrack(params: DrawReadsParams): void {
       const cigarHeight = Math.max(2, rowHeight - rowGap);
 
       for (const event of read.cigar) {
-        if (svEnabled && event.type !== 'M' && event.len >= svMinLen) continue;
+        if (svEnabled && (event.type === 'I' || event.type === 'D') && event.len >= svMinLen) continue;
         const adjustedPos = event.pos + linkedOffset;
         if (adjustedPos < 0 || adjustedPos > regionWidth) continue;
         const x = toX(adjustedPos);
 
-        if (event.type === 'M' && enabledCigarTypes.mismatches) {
-          const base = (event.seq || 'N').toUpperCase() as keyof typeof CIGAR_COLORS;
-          ctx.fillStyle = CIGAR_COLORS[base] || CIGAR_COLORS.N;
+        if ((event.type === 'M' || event.type === 'X') && enabledCigarTypes.mismatches) {
+          const base = (event.base || event.seq || 'N').toUpperCase() as keyof typeof CIGAR_COLORS;
+          ctx.fillStyle = event.allele === 'grch38' ? '#d97706' : CIGAR_COLORS[base] || CIGAR_COLORS.N;
+          ctx.globalAlpha = event.source === 'assembly' && event.allele !== 'grch38' ? .38 : 1;
           const mismatchWidth = Math.max(2, scale);
           // The base spans [pos, pos + 1): its left edge in either direction.
           ctx.fillRect(Math.min(x, toX(adjustedPos + 1)), y, mismatchWidth, cigarHeight);
+          ctx.globalAlpha = 1;
         } else if (event.type === 'I' && enabledCigarTypes.insertions) {
           ctx.fillStyle = CIGAR_COLORS.insertion;
           const insertWidth = Math.max(2, 3);
@@ -1581,7 +1630,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
       const readStartRel = Math.min(...read.intervals.map(iv => iv[0])) + linkedOffset;
       const readEndRel = Math.max(...read.intervals.map(iv => iv[1])) + linkedOffset;
       const readX = isReversed ? toX(readEndRel) : toX(readStartRel);
-      const readW = Math.max(1, (readEndRel - readStartRel) * scale);
+      const readW = Math.max(1, Math.abs(toX(readEndRel) - toX(readStartRel)));
 
       ctx.fillStyle = 'rgba(245, 158, 11, 0.12)';
       ctx.fillRect(readX, y, readW, rowHeight - rowGap);
@@ -1603,7 +1652,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
       const readStartRel = Math.min(...read.intervals.map(iv => iv[0])) + linkedOffset;
       const readEndRel = Math.max(...read.intervals.map(iv => iv[1])) + linkedOffset;
       const readX = isReversed ? toX(readEndRel) : toX(readStartRel);
-      const readW = Math.max(1, (readEndRel - readStartRel) * scale);
+      const readW = Math.max(1, Math.abs(toX(readEndRel) - toX(readStartRel)));
       ctx.strokeStyle = '#ca8a04';
       ctx.lineWidth = 2;
       ctx.setLineDash([]);
@@ -1618,7 +1667,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
       const readStartRel = Math.min(...read.intervals.map(iv => iv[0])) + linkedOffset;
       const readEndRel = Math.max(...read.intervals.map(iv => iv[1])) + linkedOffset;
       const readX = isReversed ? toX(readEndRel) : toX(readStartRel);
-      const readW = Math.max(1, (readEndRel - readStartRel) * scale);
+      const readW = Math.max(1, Math.abs(toX(readEndRel) - toX(readStartRel)));
 
       ctx.fillStyle = highlightColor + '40';
       ctx.fillRect(readX, y, readW, rowHeight - rowGap);
@@ -1636,7 +1685,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
       const readStartRel = Math.min(...read.intervals.map(iv => iv[0])) + linkedOffset;
       const readEndRel = Math.max(...read.intervals.map(iv => iv[1])) + linkedOffset;
       const readX = isReversed ? toX(readEndRel) : toX(readStartRel);
-      const readW = Math.max(1, (readEndRel - readStartRel) * scale);
+      const readW = Math.max(1, Math.abs(toX(readEndRel) - toX(readStartRel)));
 
       ctx.strokeStyle = '#06b6d4';
       ctx.lineWidth = 2;
@@ -1645,10 +1694,28 @@ export function drawReadTrack(params: DrawReadsParams): void {
       ctx.fillStyle = '#06b6d4';
       ctx.fillRect(sidebarWidth, y, 4, rowHeight - rowGap);
     }
+    if (params.axis?.blocks.length) {
+      ctx.restore();
+      for (const block of params.axis.blocks) {
+        const payload = read.live_lift?.insertions?.[block.ins.ins_id];
+        if (!payload || 'too_large' in payload) continue;
+        insertionCalls += drawInsertionPayload(ctx, payload, block.ins.ins_id, params.axis, {
+          y, h: Math.max(1, rowHeight - rowGap), sidebar: sidebarWidth, background: readBackgroundColor,
+          enabled: enabledModTypes, layerColors,
+          color: (_a, _b, size, layer) => getColorHit(block.ins.pos - start, block.ins.pos - start, size, layer).color,
+        });
+      }
+    }
   }
 
+  if (canvas.dataset) {
+    canvas.dataset.liveLiftInsertionCalls = String(insertionCalls);
+    canvas.dataset.liveLiftBadgeTarget = badgeTarget ? JSON.stringify(badgeTarget) : '';
+  }
   const smoothing = activeColormap.displaySmoothing;
-  if (smoothing?.enabled && (smoothing.sigmaX > 0 || smoothing.sigmaY > 0)) {
+  // Smoothing across an inserted boundary would leak target signal into the
+  // native panel's empty columns. Keep the molecular detail sharp while open.
+  if (!params.axis?.blocks.length && smoothing?.enabled && (smoothing.sigmaX > 0 || smoothing.sigmaY > 0)) {
     applyGaussianSmoothing(
       ctx,
       sidebarWidth,
@@ -2021,6 +2088,8 @@ export function drawCoverageHistogram(
     linkedOffset: number;
     isReversed: boolean;
     width: number;
+    axis?: LiftAxis;
+    start?: number;
     /** The ground (the colormap's no-read colour); labels pick their colour to read on it. */
     backgroundColor?: string;
     /** A live-lift panel: per-bin correspondence (0-1) over the view; bins without it are hatched (full where
@@ -2049,13 +2118,22 @@ export function drawCoverageHistogram(
     const bx = isReversed
       ? sidebarWidth + (histBins - 1 - b) * barW
       : sidebarWidth + b * barW;
-    ctx.fillRect(bx, histTop + histH - barH, Math.max(1, barW), barH);
+    const spans = opts.axis ? opts.axis.spans((opts.start ?? 0) + b * regionWidth / histBins,
+      (opts.start ?? 0) + (b + 1) * regionWidth / histBins).map(s => ({ x: sidebarWidth + s.x, w: s.w })) : [{ x: bx, w: barW }];
+    for (const s of spans) ctx.fillRect(s.x, histTop + histH - barH, Math.max(1, s.w), barH);
   }
 
   if (opts.liftCorrespondence && opts.liftCorrespondence.length) {
-    drawCorrespondenceHatching(ctx, opts.liftCorrespondence, {
-      x: sidebarWidth, y: histTop, w: trackWidth, h: histH, isReversed, dark: ink.dark,
-    });
+    if (opts.axis?.blocks.length) {
+      opts.liftCorrespondence.forEach((fraction, i, bins) => {
+        for (const s of opts.axis!.spans((opts.start ?? 0) + i * regionWidth / bins.length,
+          (opts.start ?? 0) + (i + 1) * regionWidth / bins.length)) drawCorrespondenceHatching(ctx, [fraction], {
+          x: sidebarWidth + s.x, y: histTop, w: s.w, h: histH, isReversed, dark: ink.dark,
+        });
+      });
+    } else drawCorrespondenceHatching(ctx, opts.liftCorrespondence, {
+        x: sidebarWidth, y: histTop, w: trackWidth, h: histH, isReversed, dark: ink.dark,
+      });
   }
 
   ctx.fillStyle = ink.muted;

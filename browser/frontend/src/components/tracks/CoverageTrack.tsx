@@ -12,12 +12,15 @@ import { setupHighDpiCanvas, useCanvasRenderVersion } from '../../utils/canvasUt
 import { usePanOffsetTransform } from '../../hooks/usePanOffsetTransform';
 import { drawCoverageHistogram } from './read-track/ReadTrackCanvas';
 import { HoverLabel } from './TrackLabels';
+import { useLiveLiftAxis } from '../../features/liveLift/useLiveLiftAxis';
 
 export function CoverageTrack({ width, height, panel, sidebarWidth = 0 }: {
   width: number; height: number; panel: PanelConfig; sidebarWidth?: number;
 }) {
   const stateKey = panel.stateKey ?? panel.datasetId ?? '';
   const feed = useTrackFeedStore(s => s.byStateKey[stateKey]);
+  const { axis } = useLiveLiftAxis(feed?.chrom ?? '', feed?.start ?? 0, feed?.end ?? 1,
+    Math.max(1, width - sidebarWidth), feed?.isReversed ?? false);
   const background = useBrowserStore(s => s.activeColormap.noReadBackgroundColor ?? s.activeColormap.backgroundColor);
   const canvasRenderVersion = useCanvasRenderVersion();
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -39,8 +42,9 @@ export function CoverageTrack({ width, height, panel, sidebarWidth = 0 }: {
       sidebarWidth, trackWidth: Math.max(1, width - sidebarWidth), regionWidth,
       histogramHeight: height, headerHeight: 0, linkedOffset: offset,
       isReversed: feed!.isReversed, width, backgroundColor: typeof background === 'string' ? background : undefined,
+      axis, start: feed!.start,
     });
-  }, [feed, width, height, sidebarWidth, background, canvasRenderVersion]);
+  }, [feed, width, height, sidebarWidth, background, canvasRenderVersion, axis]);
 
   return (
     <div className="relative" style={{ width, height }} data-copilot-track="coverage" data-testid={`coverage-track-${panel.datasetId ?? ''}`}

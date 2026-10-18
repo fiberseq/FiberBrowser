@@ -8,6 +8,8 @@ import { sameChrom } from '../../utils/chromAliases';
 import { panelGenomeKey } from '../../utils/regionNavigation';
 import { usePanOffsetTransform } from '../../hooks/usePanOffsetTransform';
 import { useClassRegionOutlineStore } from '../../stores/classRegionOutlineStore';
+import { useLiveLiftAxis } from '../../features/liveLift/useLiveLiftAxis';
+import type { LiftAxis } from '../../features/liveLift/axis';
 
 /** Opacity of a highlight's wash, on screen (multiplied in) and in figures. */
 export const HIGHLIGHT_WASH_OPACITY = 0.55;
@@ -24,12 +26,17 @@ export function highlightSpans(
   view: { chrom: string; start: number; end: number; genome: string },
   width: number,
   reversed = false,
+  axis?: LiftAxis,
 ): Array<{ highlight: Highlight; x: number; w: number }> {
   const span = view.end - view.start;
   if (!(span > 0) || width <= 0) return [];
   const out: Array<{ highlight: Highlight; x: number; w: number }> = [];
   for (const h of highlights) {
     if (h.genome !== view.genome || !sameChrom(h.chrom, view.chrom) || h.end <= view.start || h.start >= view.end) continue;
+    if (axis?.blocks.length) {
+      for (const s of axis.spans(Math.max(h.start, view.start), Math.min(h.end, view.end))) out.push({ highlight: h, ...s });
+      continue;
+    }
     let x1 = ((Math.max(h.start, view.start) - view.start) / span) * width;
     let x2 = ((Math.min(h.end, view.end) - view.start) / span) * width;
     if (reversed) [x1, x2] = [width - x2, width - x1];
@@ -74,10 +81,11 @@ export function HighlightBands({ panel, width, gutter, labels = false, guides = 
   const genome = panelGenomeKey(panel, { currentGenome, fastaPath });
   const view = vpo ?? { chrom, start, end };
   const inner = Math.max(0, width - gutter);
+  const { axis } = useLiveLiftAxis(view.chrom, view.start, view.end, inner, isReversed);
   const spans = useMemo(
-    () => highlightSpans(highlights, { ...view, genome }, inner, isReversed),
+    () => highlightSpans(highlights, { ...view, genome }, inner, isReversed, axis),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [highlights, view.chrom, view.start, view.end, genome, inner, isReversed],
+    [highlights, view.chrom, view.start, view.end, genome, inner, isReversed, axis],
   );
   // The region Find classes analyses, on the panels of the datasets it analyses (stores/classRegionOutlineStore).
   const extraOutlines = useAnalysisRegionStore(s => s.outlines);
@@ -96,11 +104,10 @@ export function HighlightBands({ panel, width, gutter, labels = false, guides = 
     if (!(span > 0) || inner <= 0) return [];
     return rule.splitSnps.flatMap(snp => {
       if (!sameChrom(snp.chrom, view.chrom) || snp.pos < Math.floor(view.start) || snp.pos >= Math.ceil(view.end)) return [];
-      const x = ((snp.pos + 0.5 - view.start) / span) * inner;  // the base's centre
-      return [{ snp, x: isReversed ? inner - x : x }];
+      return [{ snp, x: axis.toX(snp.pos + .5) }];
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [guides, rule, view.chrom, view.start, view.end, genome, inner, isReversed]);
+  }, [guides, rule, view.chrom, view.start, view.end, genome, inner, isReversed, axis]);
   // Without highlights here the box stays (empty), so the pan transform is attached from the start.
   return (
     <div
@@ -111,7 +118,7 @@ export function HighlightBands({ panel, width, gutter, labels = false, guides = 
       data-testid="highlight-bands"
     >
       {spans.map(({ highlight, x, w }) => (
-        <div key={highlight.id} className="contents">
+        <div key={`${highlight.id}:${x}`} className="contents">
           <div
             className="absolute inset-y-0"
             style={{ left: x, width: w, backgroundColor: highlight.color, opacity: HIGHLIGHT_WASH_OPACITY, mixBlendMode: 'multiply' }}
