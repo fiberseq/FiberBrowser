@@ -643,7 +643,7 @@ def _compact_reads_payload(
         # Low memory samples direct loads too (load_direct_reads_for_dataset): the level, and
         # the pinned reads outside the sample that load parses, are part of its identity.
         from services.read_sampling import sample_level as _sample_level
-        from services.lift.reads import display_sampling
+        from services.lift.reads import display_sampling, lift_identity
         direct_level = (_sample_level(state, dataset, chrom, start, end)
                         if getattr(state, 'performance', {}).get('effective') == 'low' or display_sampling(dataset) else 0)
         methyl_cache_key = (
@@ -668,6 +668,8 @@ def _compact_reads_payload(
             read_load_token(state, chrom, direct_terminal_bp, sample_level=direct_level),
             sv_floor,
             include_sv_seq,
+            (getattr(getattr(state, "fasta", None), "filename", None), id(getattr(state, "fasta", None))),
+            lift_identity(dataset),
         )
 
         if not hasattr(state, "_methylation_cache"):
@@ -805,7 +807,7 @@ def _compact_reads_payload(
             log_read_diagnostic(f"  Loaded methylation data: {len(all_reads)} reads (cached)")
 
         from services.read_sampling import sampling_info
-        direct_sampling = sampling_info(all_reads, start, end, len(all_reads), 0)
+        sampling_reads = all_reads
         # The quality gates the working-set path applies (cached reads stay raw).
         all_reads = apply_quality_filters_to_reads(
             all_reads,
@@ -840,6 +842,7 @@ def _compact_reads_payload(
 
         total_overlapping = len(all_reads)
         total_spanning = sum(1 for read in all_reads if spans(read))
+        direct_sampling = sampling_info(sampling_reads, start, end, total_overlapping, total_spanning)
         reads_to_sample = [
             read
             for read in all_reads
@@ -863,6 +866,9 @@ def _compact_reads_payload(
             # A focused cluster shows (and profiles) its own reads only, as on the working-set path.
             reads_to_sample = filter_reads_by_cluster_focus(reads_to_sample, cluster_assignments, focus_clusters)
 
+        cap = int(getattr(state, "max_working_reads", 0) or 0)
+        if cap > 0 and len(reads_to_sample) > cap and (not filter_ids or getattr(state, "performance", {}).get("effective") == "low"):
+            reads_to_sample = sample_stable_by_id(reads_to_sample, cap, seed=f"{sample_seed}:working_set:{dataset_id}:{chrom}")
         working_count = len(reads_to_sample)
         direct_projection = None
         if active_consensus and reads_to_sample:
@@ -1555,6 +1561,10 @@ def compact_all_dataset_result(
         total_spanning = working_set.total_spanning
         total_overlapping = working_set.total_overlapping
 
+    if direct:
+        cap = int(getattr(state, "max_working_reads", 0) or 0)
+        if cap > 0 and len(reads) > cap:
+            reads = sample_stable_by_id(reads, cap, seed=f"{sample_seed}:working_set:{dataset_id}:{chrom}")
     total_count = len(reads)
     has_methylation = compact_reads_have_methylation(reads)
 
