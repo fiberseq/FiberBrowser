@@ -76,11 +76,15 @@ imports retain declared-header geometry on both strands.
 
 All eligible primary and supplementary records fetched in the window contribute
 to a molecule bundle. Collection checkpoints cancellation every 256 records,
-applies name sampling/selection budgets before retaining records, and losslessly
+applies name sampling/selection budgets during collection, and losslessly
 spools selected alignments to temporary storage. Only one molecule's raw records
 are materialized at a time. A 64 MiB serialized-record budget per molecule and a
 250,000-molecule index budget fail explicitly rather than returning partial
 evidence. Temporary storage closes on completion, cancellation and budget errors.
+Supplementaries can be spooled provisionally until local-primary eligibility is
+known; a filtered local primary never reaches the sampler through one. Decode
+partitions retain original anchor ordinals and count only their own sampling
+extents, so serial/parallel output order, source occurrences and counts agree.
 A deterministic primary anchor is preferred; if no primary
 is local, a supplementary anchor supplies the row. Distinct primary source
 occurrences retain their existing display identities for consensus overlays;

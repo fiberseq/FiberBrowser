@@ -23,6 +23,12 @@ class MoleculeBudgetError(MemoryError):
     pass
 
 
+class MoleculeBundle(list):
+    def __init__(self, records, source_order):
+        super().__init__(records)
+        self.source_order = source_order
+
+
 def molecule_bundles(records, eligible, *, keep=None, on_skipped=None,
                      raw_budget_bytes=MOLECULE_RAW_BYTES, max_groups=MOLECULE_MAX_GROUPS):
     """Losslessly spool selected records, then materialize one QNAME at a time.
@@ -52,14 +58,17 @@ def molecule_bundles(records, eligible, *, keep=None, on_skipped=None,
             group['primary'] |= not read.is_supplementary
             if not status:
                 continue
-            if group['selected'] is None:
-                group['selected'] = keep(name) if keep is not None else True
+            # A supplementary can precede a filtered local primary. Spool it
+            # provisionally, but never consult the sampler for that rejected
+            # molecule. Most molecules select at their eligible primary here.
+            if group['selected'] is None and not read.is_supplementary:
+                group['selected'] = bool(keep(name)) if keep is not None else True
             extent = (read.reference_start, read.reference_end)
             if not read.is_supplementary:
                 group['primaries'].append(extent)
             elif group['supp'] is None or alignment_order(read) < group['supp'][0]:
                 group['supp'] = (alignment_order(read), extent)
-            if not group['selected']:
+            if group['selected'] is False:
                 continue
             if isinstance(read, pysam.AlignedSegment):
                 header = read.header if header is None else header
@@ -76,15 +85,20 @@ def molecule_bundles(records, eligible, *, keep=None, on_skipped=None,
                 if group['size'] > raw_budget_bytes:
                     raise MoleculeBudgetError('A molecule exceeds the raw alignment budget')
                 group['records'].append(read)
-        for i, group in enumerate(groups.values()):
+        source_order = 0
+        for i, (name, group) in enumerate(groups.items()):
             if not i & 255:
                 checkpoint()
             if group['primary'] and not group['primaries']:
                 continue  # a filtered primary must not be rescued through a supplementary
+            first_order = source_order
+            source_order += len(group['primaries']) or (1 if group['supp'] else 0)
+            if group['selected'] is None:
+                group['selected'] = bool(keep(name)) if keep is not None else True
             if not group['selected']:
                 if on_skipped is not None:
                     for extent in group['primaries'] or ([group['supp'][1]] if group['supp'] else []):
-                        on_skipped(*extent)
+                        on_skipped(name, *extent)
                 continue
             bundle = []
             for entry in group['records']:
@@ -96,16 +110,20 @@ def molecule_bundles(records, eligible, *, keep=None, on_skipped=None,
                     bundle.append(entry)
             if bundle:
                 bundle.sort(key=alignment_order)
-                yield bundle
+                yield MoleculeBundle(bundle, first_order)
 
 
-def molecule_alignments(records, eligible, **collection):
+def molecule_alignments(records, eligible, *, with_source_order=False, **collection):
     for bundle in molecule_bundles(records, eligible, **collection):
         primaries = [read for read in bundle if not read.is_supplementary]
         # Primary source occurrences remain addressable for consensus overlays;
         # supplementary segments never introduce a second row.
-        for anchor in primaries or [bundle[0]]:
-            yield anchor, bundle if any(read.is_supplementary for read in bundle) else [anchor]
+        for i, anchor in enumerate(primaries or [bundle[0]]):
+            evidence = bundle if any(read.is_supplementary for read in bundle) else [anchor]
+            if with_source_order:
+                yield anchor, evidence, bundle.source_order + i + 1
+            else:
+                yield anchor, evidence
 
 
 def segment_key(segment):

@@ -182,9 +182,41 @@ def test_selection_and_molecule_budgets_apply_during_collection():
     # A rejected molecule cannot consume even one byte of the raw-record budget.
     skipped = []
     assert list(molecule_bundles([read], lambda _: True, keep=lambda _: False,
-                                on_skipped=lambda *extent: skipped.append(extent), raw_budget_bytes=1)) == []
+                                on_skipped=lambda _name, *extent: skipped.append(extent), raw_budget_bytes=1)) == []
     assert skipped == [(read.reference_start, read.reference_end)]
     with pytest.raises(MoleculeBudgetError):
         list(molecule_bundles([read], lambda _: True, raw_budget_bytes=1))
     with pytest.raises(MoleculeBudgetError):
         list(molecule_bundles([read], lambda _: True, max_groups=0))
+
+
+@pytest.mark.parametrize('supplementary_first', [False, True])
+def test_a_filtered_local_primary_never_reaches_sampling_through_a_supplementary(supplementary_first):
+    from services.sv_molecules import molecule_bundles
+    primary = _seg([(0, 100)], start=0)
+    supplementary = _seg([(0, 100)], start=1000, supplementary=True)
+    records = [supplementary, primary] if supplementary_first else [primary, supplementary]
+    sampled = []
+    assert list(molecule_bundles(records, lambda r: r.is_supplementary,
+                                keep=lambda name: sampled.append(name) or True)) == []
+    assert sampled == []
+
+
+def test_decode_partitions_count_only_their_own_sampling_extents(regional_bam):
+    from services.read_sampling import Sampler, sampling
+    from services.packed_reads import decode_partition
+    def load(partition):
+        sampler = Sampler(1, only_ids={'joined'})
+        token = decode_partition.set(partition)
+        try:
+            with sampling(sampler):
+                rows = build_compact_reads_from_bam(regional_bam, 'chrT', 0, 3000, spanning_only=False,
+                                                    hide_terminal_gaps=False)
+            return rows, sampler
+        finally:
+            decode_partition.reset(token)
+    serial, expected = load(None)
+    parts = [load((i, 2)) for i in range(2)]
+    assert sorted(r['id'] for rows, _ in parts for r in rows) == sorted(r['id'] for r in serial)
+    for field in ('kept_starts', 'kept_ends', 'skipped_starts', 'skipped_ends'):
+        assert sorted(v for _, sampler in parts for v in getattr(sampler, field)) == sorted(getattr(expected, field))

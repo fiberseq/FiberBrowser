@@ -1973,9 +1973,17 @@ def _build_compact_reads_from_bam_region(
                     return False
             selected_molecules += 1
             return True
-        for read, molecule_records in molecule_alignments(
+        def skipped_molecule(name, start, end):
+            if sampler is None:
+                return
+            if partition is not None:
+                from services.read_sampling import name_hash
+                if name_hash(name) % partition[1] != partition[0]:
+                    return  # each worker counts only its own sampling decisions
+            sampler.skip(start, end)
+        for read, molecule_records, source_order in molecule_alignments(
                 iter_edge_records(bam, actual_chrom, region_start, region_end, fetch_regions), eligible_segment,
-                keep=keep_molecule, on_skipped=sampler.skip if sampler is not None else None):
+                keep=keep_molecule, on_skipped=skipped_molecule, with_source_order=True):
             records_seen += 1
             if not records_seen & 255:
                 checkpoint()  # a background job whose client went away stops here
@@ -2029,7 +2037,7 @@ def _build_compact_reads_from_bam_region(
                     if include_cigar:
                         read_data['cigar'] = extract_cigar_events(read, region_start, region_end)
                     if partition is not None:
-                        read_data['_fiberbrowser_source_order'] = records_seen
+                        read_data['_fiberbrowser_source_order'] = source_order
                     reads.append(read_data)
                     if stream is not None:
                         stream.append(read_data)
@@ -2202,7 +2210,7 @@ def _build_compact_reads_from_bam_region(
                         read_data["_fiberbrowser_terminal_gaps"] = []
                     _profile_add("sv_events", phase_t0)
                     if partition is not None:
-                        read_data['_fiberbrowser_source_order'] = records_seen
+                        read_data['_fiberbrowser_source_order'] = source_order
                     reads.append(read_data)
                     if stream is not None:
                         stream.append(read_data)
@@ -2620,7 +2628,7 @@ def _build_compact_reads_from_bam_region(
                               molecule_records=molecule_records, reference=sv_reference)
             _profile_add("sv_events", phase_t0)
             if partition is not None:
-                read_data['_fiberbrowser_source_order'] = records_seen
+                read_data['_fiberbrowser_source_order'] = source_order
             reads.append(read_data)
             if stream is not None:
                 stream.append(read_data)
