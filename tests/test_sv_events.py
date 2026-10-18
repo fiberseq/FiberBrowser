@@ -74,6 +74,37 @@ def test_direct_endpoint_uses_display_cutoff_for_interval_cuts_and_cache(sv_clie
     assert cutoffs == [50, 100]
 
 
+def test_read_endpoints_forward_conflict_thresholds_without_stale_summary_reuse(sv_client):
+    client, _state = sv_client
+    for endpoint, dataset_arg in [('/api/reads/compact', 'dataset_id'), ('/api/reads/compact_all', 'dataset_ids')]:
+        for enabled in (False, True):
+            result = client.get(endpoint, params={
+                dataset_arg: 'sv', 'chrom': fx.CHROM, 'start': fx.VIEW[0], 'end': fx.VIEW[1],
+                'spanning': False, 'sv_conflict_options': json.dumps(dict(enabled=enabled, max_distance=5000)),
+            })
+            assert result.status_code == 200, result.text
+            payload = result.json()
+            if dataset_arg == 'dataset_ids':
+                payload = payload['datasets']['sv']
+            assert payload['sv_summary']['conflict_options']['enabled'] == enabled
+            assert payload['sv_summary']['conflict_options']['max_distance'] == 5000
+
+
+def test_split_route_forwards_conflicting_opt_in_and_thresholds(sv_client, monkeypatch):
+    from services import sv_endpoint
+    client, _state = sv_client
+    fixture = json.loads((Path(__file__).parent / 'data/sv_conflicts.json').read_text())
+    monkeypatch.setattr(sv_endpoint, 'scan_view', lambda *_: [fixture['cases'][0]['read']])
+    request = dict(dataset_id='sv', chrom='chrT', start=0, end=3000, t='I', ref=1000, len=100)
+    default = client.post('/api/sv/split', json=request).json()
+    assert default['evidence_counts']['conflicting'] == 1 and default['counts'] == [0, 0, 1]
+    selected = client.post('/api/sv/split', json={**request, 'include_conflicting': True}).json()
+    assert selected['counts'] == [1, 0, 0]
+    assert selected['evidence_reasons']['synthetic']['code'] == 'clip_elsewhere'
+    legacy = client.post('/api/sv/split', json={**request, 'conflict_options': {'enabled': False}}).json()
+    assert legacy['counts'] == [1, 0, 0] and legacy['evidence_counts']['putative'] == 1
+
+
 def test_evidence_floor_does_not_cut_chromatin_at_sub_display_deletions():
     from models.domain import CigarCoordMapper
     a = _seg([(0, 100), (2, 15), (0, 100), (2, 60), (0, 100)])

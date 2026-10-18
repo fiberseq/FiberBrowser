@@ -1601,6 +1601,7 @@ def build_sampled_display_working_set(
     profile_include_legacy_profiles: bool = False,
     timings: Optional[dict[str, float]] = None,
     sv_min_len: Optional[int] = None,
+    sv_conflict_options=None,
     full_working_set: bool = False,
 ) -> tuple[WorkingSet, int]:
     """Build a display-sampled working set without projecting every candidate read.
@@ -1864,7 +1865,7 @@ def build_sampled_display_working_set(
         phase_t0 = time.perf_counter()
         sv_summary = sv_summary_for_reads(
             [read for _coverage, _idx, read, _is_spanning in candidates],
-            start, end, int(sv_min_len), chrom=chrom)
+            start, end, int(sv_min_len), chrom=chrom, conflict_options=sv_conflict_options)
         if timings is not None:
             timings["sv_summary_ms"] = (time.perf_counter() - phase_t0) * 1000
 

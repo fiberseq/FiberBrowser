@@ -27,6 +27,7 @@ from services.read_route_helpers import (
     log_read_diagnostic as _log_read_diagnostic,
     query_bool as _query_bool,
     query_int as _query_int,
+    unwrap_query_default,
     should_log_read_request as _should_log_read_request,
 )
 from services.analysis_query import AnalysisReadQuery
@@ -83,6 +84,7 @@ async def get_reads_compact(
     pin_ids: Optional[str] = Query(None, description="Comma-separated read IDs the display sample keeps when they are in view (a read gone to by name)"),
     min_sv_len: int = Query(50, description="Smallest deletion/insertion/clip (bp) reported in each read's `sv` events and the `sv_summary`"),
     include_sv_seq: bool = Query(False, description="Add the first 1,000 inserted bases to each `sv` insertion event"),
+    sv_conflict_options: Optional[str] = Query(None, description="Advanced SV clip conflict thresholds (JSON)"),
     include_sv_summary: bool = Query(True, description="Add `sv_summary`: SV clusters across the reads in view"),
     full_working_set: bool = Query(False, description="Load every read in view: no display sample on deep BAM views (`working_sampling` says when one applies)"),
     viewport_start: Optional[int] = Query(None, description="Visible start when prefetching a containing read span"),
@@ -102,7 +104,6 @@ async def get_reads_compact(
     Display shows a representative sample.
     """
     from services.read_sets import combine_filter
-    from services.read_route_helpers import unwrap_query_default
     try:
         # (called directly in tests: an unset Query is its default)
         filter_ids = combine_filter(state, unwrap_query_default(filter_ids, None), unwrap_query_default(filter_set, None))
@@ -156,6 +157,7 @@ async def get_reads_compact(
         min_sv_len=min_sv_len,
         include_sv_seq=include_sv_seq,
         include_sv_summary=include_sv_summary,
+        sv_conflict_options=unwrap_query_default(sv_conflict_options, None),
         full_working_set=full_working_set,
         viewport_start=unwrap_query_default(viewport_start, None),
         viewport_end=unwrap_query_default(viewport_end, None),
@@ -199,6 +201,7 @@ async def get_reads_compact_all(
     sample_seed: Optional[str] = Query(None, description="Seed for reproducible sampling paths"),
     pin_ids: Optional[str] = Query(None, description="Comma-separated read IDs the display sample keeps when they are in view (a read gone to by name)"),
     min_sv_len: int = Query(50, description="Smallest deletion/insertion/clip (bp) in `sv` events and `sv_summary` (served at no less than 50 here)"),
+    sv_conflict_options: Optional[str] = Query(None, description="Advanced SV clip conflict thresholds (JSON)"),
     include_sv_summary: bool = Query(True, description="Add each dataset's `sv_summary`"),
     request: Request = None,
     state=Depends(get_state)):
@@ -272,6 +275,7 @@ async def get_reads_compact_all(
             sample_seed=sample_seed,
             min_sv_len=min_sv_len,
             include_sv_summary=include_sv_summary,
+            sv_conflict_options=unwrap_query_default(sv_conflict_options, None),
         )
 
     from services.read_pins import parse_pin_ids, pinned_reads

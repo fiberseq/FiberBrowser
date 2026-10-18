@@ -7,7 +7,8 @@ alternate query spans; len counts indel bases, excluding matched bridges.
 Optional reference normalization retains raw anchors and repeat-placement bounds.
 
 CIGAR or high-quality query-collinear junction evidence confirms membership.
-Clips alone are putative; competing targets make clips ambiguous. Aligned blocks
+Clips alone are putative; substantial alignments elsewhere make them conflicting,
+and competing targets make them ambiguous. Aligned blocks
 establish reference. Summaries, splits and lens share the molecule reducer and
 retain complete evidence bundles. See docs/reference/sv-evidence.md.
 """
@@ -18,6 +19,8 @@ import json
 import re
 from functools import lru_cache
 from typing import Iterable, Optional, Sequence
+
+from services.sv_conflicts import clip_conflict, normalize_conflict_options
 
 SV_MIN_LEN_DEFAULT = 50
 SV_MIN_LEN_LOWEST = 10
@@ -808,7 +811,7 @@ def read_spans(read: dict, a: int, b: int) -> Optional[bool]:
 
 
 def classify_allele_evidence(read: dict, t: str, ref: int, length: int, margin: int = SV_SPAN_MARGIN,
-                             chrom: Optional[str] = None, *, targets=(), include_putative=False, include_ambiguous=False,
+                             chrom: Optional[str] = None, *, targets=(), include_putative=False, include_ambiguous=False, include_conflicting=False, conflict_options=None,
                              target_end=None, uncertainty=None) -> tuple[int, Optional[dict]]:
     """(allele, evidence): 0 carrier (with ``carrier_evidence``), 1 reference
     (spans both breakpoints +- margin without it), 2 not informative. A read
@@ -817,6 +820,12 @@ def classify_allele_evidence(read: dict, t: str, ref: int, length: int, margin: 
     evidence = carrier_evidence(read, t, ref, length, chrom, uncertainty=uncertainty)
     if evidence is not None:
         if evidence['level'] == 'putative':
+            lo, hi = uncertainty or (ref, ref)
+            end = target_end if target_end is not None else ref + (length if t == 'D' else 0)
+            reason = clip_conflict(read, evidence['clip'], lo, end + hi - ref, chrom, conflict_options)
+            if reason:
+                evidence = {**evidence, 'level': 'conflicting', 'reason': reason}
+        if evidence['level'] == 'putative':
             compatible = {(t, ref, length)}
             for target in targets:
                 if clip_matches(evidence['clip'], target):
@@ -824,7 +833,8 @@ def classify_allele_evidence(read: dict, t: str, ref: int, length: int, margin: 
             if len(compatible) > 1:
                 evidence = {**evidence, 'level': 'ambiguous', 'targets': sorted(compatible)}
         return (0 if evidence['level'] == 'confirmed' or (include_putative and evidence['level'] == 'putative')
-                     or (include_ambiguous and evidence['level'] == 'ambiguous') else 2), evidence
+                     or (include_ambiguous and evidence['level'] == 'ambiguous')
+                     or (include_conflicting and evidence['level'] == 'conflicting') else 2), evidence
     if t == "I" and other_insertion_at(read, ref, length, uncertainty):
         return 2, {"kind": "other"}
     end = target_end if target_end is not None else ref + length if t == "D" else ref
@@ -841,7 +851,7 @@ def classify_allele(read: dict, t: str, ref: int, length: int, margin: int = SV_
 
 
 def classify_molecules(entries, *, t: str, ref: int, length: int, margin: int = SV_SPAN_MARGIN,
-                       chrom: Optional[str] = None, targets=None, include_putative=True, include_ambiguous=False, target_end=None, uncertainty=None) -> dict:
+                       chrom: Optional[str] = None, targets=None, include_putative=True, include_ambiguous=False, include_conflicting=False, conflict_options=None, target_end=None, uncertainty=None) -> dict:
     """Classify (compact read, original item) entries, once per QNAME."""
     grouped = {}
     for read, item in entries:
@@ -869,12 +879,12 @@ def classify_molecules(entries, *, t: str, ref: int, length: int, margin: int = 
             if segments is not None:
                 read = {**read, 'sv_segments': segments}
             allele, evidence = classify_allele_evidence(read, t, ref, length, margin,
-                chrom=read.get('file_chrom', chrom), targets=targets, include_putative=include_putative, include_ambiguous=include_ambiguous, target_end=target_end, uncertainty=uncertainty)
+                chrom=read.get('file_chrom', chrom), targets=targets, include_putative=include_putative, include_ambiguous=include_ambiguous, include_conflicting=include_conflicting, conflict_options=conflict_options, target_end=target_end, uncertainty=uncertainty)
             calls.append({'allele': allele, 'evidence': evidence, 'record': item, 'read': read})
         def rank(call):
             ev = call['evidence'] or {}
             level = ev.get('level')
-            return ({'confirmed': 0, 'putative': 1, 'ambiguous': 2}.get(level, 3 if call['allele'] == 1 else 4),
+            return ({'confirmed': 0, 'putative': 1, 'conflicting': 2, 'ambiguous': 3}.get(level, 4 if call['allele'] == 1 else 5),
                     {'cigar': 0, 'sa': 1, 'clip': 2}.get(ev.get('kind'), 3),
                     bool(call['read'].get('supplementary')),
                     repr(sorted((call['read'].get('sv_evidence') or call['read'].get('sv') or []), key=repr)))
@@ -884,7 +894,7 @@ def classify_molecules(entries, *, t: str, ref: int, length: int, margin: int = 
 
 
 def sv_summary_for_reads(reads: Sequence[dict], start: int, end: int, min_len: int, *,
-                         margin: int = SV_SPAN_MARGIN, scope: str = "all", chrom: Optional[str] = None) -> Optional[dict]:
+                         margin: int = SV_SPAN_MARGIN, scope: str = "all", chrom: Optional[str] = None, conflict_options=None) -> Optional[dict]:
     """Classify final targets with the split/lens rule, counting QNAMEs.
 
     The index only selects possible carriers/reference records; classification
@@ -944,7 +954,7 @@ def sv_summary_for_reads(reads: Sequence[dict], start: int, end: int, min_len: i
         # A selected segment brings its molecule's other local alignments too.
         candidates.update(j for i in tuple(candidates) for j in molecule_indices[reads[i].get('id')])
         calls = classify_molecules(((reads[i], None) for i in sorted(candidates)),
-                                   t=t, ref=ref, length=length, margin=margin, chrom=chrom, targets=competition, target_end=cend, include_putative=False)
+                                   t=t, ref=ref, length=length, margin=margin, chrom=chrom, targets=competition, target_end=cend, include_putative=False, conflict_options=conflict_options)
         carriers = [call for call in calls.values() if call["allele"] == 0]
         out_clusters.append({
             **{key: c[key] for key in ('ref_len', 'alt_len', 'raw_ref', 'uncertainty') if key in c},
@@ -952,6 +962,7 @@ def sv_summary_for_reads(reads: Sequence[dict], start: int, end: int, min_len: i
             "support": len(carriers), "informative": sum(call["allele"] < 2 for call in calls.values()),
             "confirmed": len(carriers),
             "putative": sum((call['evidence'] or {}).get('level') == 'putative' for call in calls.values()),
+            "conflicting": sum((call['evidence'] or {}).get('level') == 'conflicting' for call in calls.values()),
             "ambiguous": sum((call['evidence'] or {}).get('level') == 'ambiguous' for call in calls.values()),
             "sa_support": sum(call["evidence"]["kind"] == "sa" for call in carriers),
             "clip_support": sum(call["evidence"]["kind"] == "clip" for call in carriers),
@@ -959,6 +970,7 @@ def sv_summary_for_reads(reads: Sequence[dict], start: int, end: int, min_len: i
     out_clusters.sort(key=lambda c: (c["ref"], c["t"]))
     return {
         "min_len": int(min_len), "margin": int(margin), "scope": scope,
+        "conflict_options": normalize_conflict_options(conflict_options),
         "n_reads": len({read.get("id") for read in reads}), "clusters": out_clusters, "clips": clips,
         "evidence_targets": [{key: c[key] for key in ('t', 'ref', 'len', 'uncertainty') if key in c} for c in competition],
     }

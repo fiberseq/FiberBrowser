@@ -38,6 +38,8 @@ async def post_sv_split(request: Request, state=Depends(get_state)):
             include_duplicates=bool(body.get("include_duplicates", False)),
             include_putative=bool(body.get("include_putative", True)),
             include_ambiguous=bool(body.get("include_ambiguous", False)),
+            include_conflicting=bool(body.get("include_conflicting", False)),
+            conflict_options=body.get("conflict_options"),
             target_end=_int(body, 'ref_end') if body.get('ref_end') is not None else None,
         )
     except SvRequestError as exc:

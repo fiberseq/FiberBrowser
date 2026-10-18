@@ -96,7 +96,7 @@ def test_split_offers_confirmed_only_or_including_putative_with_separate_counts(
     inclusive = sv_endpoint.sv_split_payload(None, **kwargs)
     assert strict['counts'] == [1, 0, 1]
     assert inclusive['counts'] == [2, 0, 0]
-    assert strict['evidence_counts'] == inclusive['evidence_counts'] == dict(confirmed=1, putative=1, ambiguous=0)
+    assert strict['evidence_counts'] == inclusive['evidence_counts'] == dict(confirmed=1, putative=1, conflicting=0, ambiguous=0)
 
 
 def test_summary_indexes_junctions_without_a_display_sized_clip():
@@ -171,7 +171,7 @@ def test_ambiguous_split_carriers_require_an_explicit_opt_in(monkeypatch):
     default = sv_endpoint.sv_split_payload(None, **kwargs)
     inclusive = sv_endpoint.sv_split_payload(None, **kwargs, include_ambiguous=True)
     assert default['assignments']['clip'] == 2 and inclusive['assignments']['clip'] == 0
-    assert default['evidence_counts'] == inclusive['evidence_counts'] == dict(confirmed=1, putative=0, ambiguous=1)
+    assert default['evidence_counts'] == inclusive['evidence_counts'] == dict(confirmed=1, putative=0, conflicting=0, ambiguous=1)
 
 
 def test_summary_indexes_the_observed_alleles_equivalent_interval_too():

@@ -41,6 +41,8 @@ import os
 import re
 import threading
 import time
+
+from services.sv_conflicts import normalize_conflict_options
 from services.byte_cache import shared_cache
 from services.sv_alleles import reference_key as _reference_key
 from typing import Any, Callable, Iterable, Optional
@@ -540,7 +542,7 @@ def classify_site(bam_paths, chrom, *, pos: int, tolerance: int = DEFAULT_TOLERA
                   len_min: int = DEFAULT_MIN_LEN, len_max: Optional[int] = None,
                   ref: Optional[int] = None, length: Optional[int] = None, margin: int = SV_SPAN_MARGIN,
                   include_duplicates: bool = False, bam_handle_getter=None, chrom_map=None,
-                  contig_links=None, reference=None) -> dict:
+                  contig_links=None, reference=None, conflict_options=None) -> dict:
     """The insertion at a site and its reads: ``{success, ref, length, margin, carriers:
     [(plan, record, path, handle)], reference: [(record, path, handle)], excluded}``.
 
@@ -574,7 +576,7 @@ def classify_site(bam_paths, chrom, *, pos: int, tolerance: int = DEFAULT_TOLERA
     reach = int(math.ceil(max(margin, insertion_clip_tolerance(length), breakpoint_tolerance(longest)))) + 1
     by_name = classify_records(
         _site_records(bam_paths, chrom, min(ref - reach, pos - tolerance - 1), max(ref + reach, pos + tolerance + 1), **records),
-        t="I", ref=ref, length=length, margin=margin, include_duplicates=include_duplicates, reference=reference,
+        t="I", ref=ref, length=length, margin=margin, include_duplicates=include_duplicates, reference=reference, conflict_options=conflict_options,
     )
 
     carriers_all = []
@@ -583,7 +585,7 @@ def classify_site(bam_paths, chrom, *, pos: int, tolerance: int = DEFAULT_TOLERA
     for name, entry in by_name.items():
         read, _file_chrom, path, bam = entry["record"]
         if (entry['evidence'] or {}).get('level') is not None:
-            plan = {**_carrier_plan(read, entry["evidence"], length), 'evidence_level': entry['evidence']['level'],
+            plan = {**_carrier_plan(read, entry["evidence"], length), 'evidence_level': entry['evidence']['level'], 'evidence_reason': entry['evidence'].get('reason'),
                     'evidence_bundle': [call['read'] for call in entry['evidence_bundle']]}
             carriers_all.append((plan, read, path, bam))
         elif entry["allele"] == 1:
@@ -620,6 +622,7 @@ def build_lens(
     include_duplicates: bool = False,
     daf: bool = False,
     reference=None,
+    conflict_options=None,
 ) -> dict:
     """The lens payload for one insertion across ``bam_paths``.
 
@@ -642,7 +645,7 @@ def build_lens(
     records = dict(bam_handle_getter=bam_handle_getter, chrom_map=chrom_map, contig_links=contig_links)
 
     site = classify_site(bam_paths, chrom, pos=pos, tolerance=tolerance, len_min=len_min, len_max=len_max,
-                         ref=ref, length=length, margin=margin, include_duplicates=include_duplicates, reference=reference, **records)
+                         ref=ref, length=length, margin=margin, include_duplicates=include_duplicates, reference=reference, conflict_options=conflict_options, **records)
     if not site["success"]:
         return site
     ref, length, margin = site["ref"], site["length"], site["margin"]
@@ -693,7 +696,7 @@ def build_lens(
             "id": read.query_name,
             "strand": _strand(read),
             "kind": "cigar" if plan["kind"] == "cigar" else "clip",
-            "evidence_level": plan['evidence_level'],
+            "evidence_level": plan['evidence_level'], "evidence_reason": plan.get('evidence_reason'),
             "evidence_bundle": plan['evidence_bundle'],
             "ref": int(plan["ref"]),
             "ref_end": int(plan["ref_end"]),
@@ -773,6 +776,7 @@ def build_lens(
             "carriers": sum(p['evidence_level'] == 'confirmed' for p, *_ in carriers_all),
             "confirmed": sum(p['evidence_level'] == 'confirmed' for p, *_ in carriers_all),
             "putative": sum(p['evidence_level'] == 'putative' for p, *_ in carriers_all),
+            "conflicting": sum(p['evidence_level'] == 'conflicting' for p, *_ in carriers_all),
             "ambiguous": sum(p['evidence_level'] == 'ambiguous' for p, *_ in carriers_all),
             "evidence_total": total_carriers,
             "cigar": counts["cigar"],
@@ -845,6 +849,7 @@ def find_clusters(
     include_duplicates: bool = False,
     tile_cache=None,
     reference=None,
+    conflict_options=None,
 ) -> list[dict]:
     """Insertions (>= ``min_len``) in ``[start, end)`` as the SV summary
     clusters them, with their clipped carriers counted (``clip_support``).
@@ -864,7 +869,7 @@ def find_clusters(
         compact = [item for _key, item in _sv_reads(bam_paths, chrom, start, end, floor, bam_handle_getter=bam_handle_getter,
                                                    chrom_map=chrom_map, contig_links=contig_links,
                                                    include_duplicates=include_duplicates, reference=reference)]
-    summary = sv_summary_for_reads(compact, start, end, floor, chrom=chrom) or {"clusters": []}
+    summary = sv_summary_for_reads(compact, start, end, floor, chrom=chrom, conflict_options=conflict_options) or {"clusters": []}
     out = []
     for c in summary["clusters"]:
         if c["t"] != "I" or c["len"] < min_len or not (start <= c["ref"] < end):
@@ -1033,7 +1038,7 @@ def _dataset_bam_paths(state, dataset_id):
 
 def insertion_clusters_payload(state, *, chrom: str, start: int, end: int,
                                dataset_id: Optional[str] = None, min_len: int = DEFAULT_MIN_LEN,
-                               tolerance: int = DEFAULT_TOLERANCE) -> dict:
+                               tolerance: int = DEFAULT_TOLERANCE, conflict_options=None) -> dict:
     chrom = state.translate_chrom(chrom)
     dataset_id, paths, error = _dataset_bam_paths(state, dataset_id)
     if error:
@@ -1048,7 +1053,7 @@ def insertion_clusters_payload(state, *, chrom: str, start: int, end: int,
         chrom_map=getattr(state, "chrom_map", None),
         contig_links=contig_links(state, path=paths[0]) if paths else None,
         tile_cache=cluster_tile_cache(),
-        reference=getattr(state, 'fasta', None),
+        reference=getattr(state, 'fasta', None), conflict_options=conflict_options,
     )
     return {"success": True, "dataset_id": dataset_id, "chrom": chrom, "clusters": clusters}
 
@@ -1062,7 +1067,7 @@ def insertion_lens_payload(state, *, chrom: str, pos: int, dataset_id: Optional[
                            max_reference: int = DEFAULT_MAX_REFERENCE,
                            consensus: bool = True, include_sequences: bool = False,
                            ml_threshold: int = 125, layer_names: Optional[list[str]] = None,
-                           include_methylation: bool = True, hide_terminal_gaps: bool = True) -> dict:
+                           include_methylation: bool = True, hide_terminal_gaps: bool = True, conflict_options=None) -> dict:
     from services.compact_read_loader import short_terminal_footprint_bp_for
     from services.signal_evidence import signal_filter_key
     from services.plasmid_reconcile import contig_links
@@ -1092,6 +1097,7 @@ def insertion_lens_payload(state, *, chrom: str, pos: int, dataset_id: Optional[
         len_max, ref, length, bool(include_duplicates), int(flank), int(max_carriers), int(max_reference), bool(consensus),
         bool(include_sequences), repr(sorted(loader_kwargs.items())), daf, signal_filter_key(state),
         _reference_key(getattr(state, 'fasta', None)),
+        repr(sorted(normalize_conflict_options(conflict_options).items())),
     )
     with _cache_lock:
         cached = _cache.get(key) if cacheable else None
@@ -1108,7 +1114,7 @@ def insertion_lens_payload(state, *, chrom: str, pos: int, dataset_id: Optional[
         chrom_map=chrom_map,
         contig_links=links,
         daf=daf,
-        reference=getattr(state, 'fasta', None),
+        reference=getattr(state, 'fasta', None), conflict_options=conflict_options,
     )
     payload["dataset_id"] = dataset_id
     if not cacheable or not payload.get("success"):

@@ -94,7 +94,7 @@ def test_combined_genotypes_default_to_putative_and_label_evidence_separately(sv
     default = _payload(sv_state, **kwargs)
     carrier = next(g for g in default['groups'] if g['kind'] == 'combo')
     assert carrier['count'] == 2 and '1 confirmed, 1 putative' in carrier['label']
-    assert carrier['evidence_counts'] == dict(confirmed=1, putative=1, ambiguous=0)
+    assert carrier['evidence_counts'] == dict(confirmed=1, putative=1, conflicting=0, ambiguous=0)
     assert default['sv_evidence_levels'] == dict(confirmed='confirmed', putative='putative')
     strict = _payload(sv_state, **kwargs, include_putative=False)
     assert next(g for g in strict['groups'] if g['kind'] == 'not-informative')['count'] == 1

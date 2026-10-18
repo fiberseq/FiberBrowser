@@ -422,7 +422,8 @@ def _genotype_payload(state, body, entry, called, matrix, mcands, col_of, candid
             res = sv_split_payload(state, dataset_id=dataset_id, chrom=chrom, start=start, end=end, t=sv["t"],
                                    ref=sv["ref"], length=sv["len"], include_duplicates=params["include_duplicates"],
                                    include_putative=bool(body.get("include_putative", True)),
-                                   include_ambiguous=bool(body.get("include_ambiguous", False)))
+                                   include_ambiguous=bool(body.get("include_ambiguous", False)),
+                                  include_conflicting=bool(body.get("include_conflicting", False)), conflict_options=body.get("conflict_options"))
         except SvRequestError as exc:
             raise VariantsRequestError(str(exc)) from None
         calls.append(res["assignments"])
@@ -441,7 +442,7 @@ def _genotype_payload(state, body, entry, called, matrix, mcands, col_of, candid
     result = snp_scan.genotype_groups(names, letters, columns, partial=bool(body.get("partial", False)),
                                       min_fraction=_float(body.get("min_fraction"), 0.02, 0.0, 0.5),
                                       min_reads=_int(body.get("min_reads"), 3, 1, 1_000_000))
-    rank = {'confirmed': 0, 'putative': 1, 'ambiguous': 2}
+    rank = {'confirmed': 0, 'putative': 1, 'conflicting': 2, 'ambiguous': 3}
     evidence_levels = {}
     for name in names:
         levels = [tiers.get(name) for assignments, tiers in zip(calls, evidence_calls)
@@ -450,13 +451,14 @@ def _genotype_payload(state, body, entry, called, matrix, mcands, col_of, candid
             evidence_levels[name] = max(levels, key=rank.get)
     result['sv_evidence_levels'] = evidence_levels
     result['include_putative'] = bool(body.get('include_putative', True))
+    result['include_conflicting'] = bool(body.get('include_conflicting', False))
     result['include_ambiguous'] = bool(body.get('include_ambiguous', False))
     for group in result['groups']:
         levels = [level for name, level in evidence_levels.items() if result['assignments'].get(name) == group['id']]
         counts = {level: levels.count(level) for level in rank}
         group['evidence_counts'] = counts
-        if group['kind'] == 'combo' and (counts['putative'] or counts['ambiguous']):
-            group['label'] += f" ({counts['confirmed']} confirmed, {counts['putative']} putative, {counts['ambiguous']} ambiguous carriers)"
+        if group['kind'] == 'combo' and (counts['putative'] or counts['conflicting'] or counts['ambiguous']):
+            group['label'] += f" ({counts['confirmed']} confirmed, {counts['putative']} putative, {counts['conflicting']} conflicting, {counts['ambiguous']} ambiguous carriers)"
     result["tags"] = None
     if entry is None:
         result.update({"dataset_id": dataset_id, "region": {"chrom": chrom, "start": start, "end": end},
@@ -555,7 +557,7 @@ def svs_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = Non
         if events:
             item["sv"] = events
         compact.append(item)
-    summary = sv_summary_for_reads(compact, start, end, min_len, chrom=chrom) or {"clusters": []}
+    summary = sv_summary_for_reads(compact, start, end, min_len, chrom=chrom, conflict_options=body.get("conflict_options")) or {"clusters": []}
     clusters = [c for c in summary["clusters"] if c["len"] >= min_len]
     clusters.sort(key=lambda c: (c["ref"], c["t"]))
     return {"dataset_id": dataset_id, "region": {"chrom": chrom, "start": start, "end": end}, "min_len": min_len,
@@ -588,7 +590,8 @@ def sv_linkage_payload(state, body: dict, cancelled: Optional[Callable[[], bool]
     classified = classify_records(records, t=t, ref=ref, length=length,
                                   include_duplicates=params["include_duplicates"], reference=getattr(state, 'fasta', None),
                                   include_putative=bool(body.get("include_putative", True)),
-                                  include_ambiguous=bool(body.get("include_ambiguous", False)))
+                                  include_ambiguous=bool(body.get("include_ambiguous", False)),
+                                  include_conflicting=bool(body.get("include_conflicting", False)), conflict_options=body.get("conflict_options"))
     allele = {name: v["allele"] for name, v in classified.items()}
     counts = {"carriers": sum(1 for a in allele.values() if a == 0),
               "reference": sum(1 for a in allele.values() if a == 1),
@@ -622,7 +625,7 @@ def sv_linkage_payload(state, body: dict, cancelled: Optional[Callable[[], bool]
             "sv": {"t": t, "ref": ref, "len": length}, "counts": counts,
             "carrier_evidence_counts": {level: sum(v['allele'] == 0 and (v['evidence'] or {}).get('level') == level
                                                     for v in classified.values())
-                                        for level in ('confirmed', 'putative', 'ambiguous')},
+                                        for level in ('confirmed', 'putative', 'conflicting', 'ambiguous')},
             "tested": len(rows),
             "linked": sum(1 for r in rows if r["linked"]), "snps": rows[:200],
             "scan_key": scan_key(dataset_id, chrom, start, end, params, entry["key"])}

@@ -35,6 +35,7 @@ async def get_insertion_clusters(
     dataset_id: Optional[str] = Query(None),
     min_len: int = Query(DEFAULT_MIN_LEN, ge=1),
     tolerance: int = Query(DEFAULT_TOLERANCE, ge=0, le=1000),
+    conflict_options: Optional[str] = Query(None),
     request: Request = None,
     state=Depends(get_state),
 ):
@@ -42,13 +43,13 @@ async def get_insertion_clusters(
     Off the read path (services/background_work.py): identical requests share one answer, a
     client that goes away stops it, and the reads' SV events are cached in tiles."""
     from services.background_work import Cancelled, cancelled_response, dataset_identity, run_background
-    key = ("insertion_clusters", id(state), chrom, start, end, dataset_id, min_len, tolerance,
+    key = ("insertion_clusters", id(state), chrom, start, end, dataset_id, min_len, tolerance, conflict_options,
            dataset_identity(state, [dataset_id] if dataset_id else list(getattr(state, "dataset_order", []) or [])),
            repr(getattr(state, "chrom_map", None)))
     try:
         payload = await run_background(
             request, key, insertion_clusters_payload, state, chrom=chrom, start=start, end=end,
-            dataset_id=dataset_id, min_len=min_len, tolerance=tolerance,
+            dataset_id=dataset_id, min_len=min_len, tolerance=tolerance, conflict_options=conflict_options,
         )
     except Cancelled:
         return cancelled_response()
@@ -61,6 +62,7 @@ async def get_insertion_lens(
     pos: int = Query(..., ge=0),
     dataset_id: Optional[str] = Query(None),
     tolerance: int = Query(DEFAULT_TOLERANCE, ge=0, le=1000),
+    conflict_options: Optional[str] = Query(None),
     len_min: int = Query(DEFAULT_MIN_LEN, ge=1),
     len_max: Optional[int] = Query(None, ge=1),
     ref: Optional[int] = Query(None, ge=0),
@@ -87,7 +89,7 @@ async def get_insertion_lens(
         max_carriers=max_carriers, max_reference=max_reference, consensus=consensus,
         include_sequences=include_sequences, ml_threshold=ml_threshold,
         layer_names=parse_optional_csv_list(layer_names), include_methylation=include_methylation,
-        hide_terminal_gaps=hide_terminal_gaps,
+        hide_terminal_gaps=hide_terminal_gaps, conflict_options=conflict_options,
     )
     return ORJSONResponse(payload)
 
