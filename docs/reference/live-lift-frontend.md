@@ -1,8 +1,8 @@
-# Live-lift differences and insertion inspection (P2a2)
+# Live-lift differences and insertion inspection (P2a3)
 
 Everything is gated by the server's live-lift flag and a displayed
 `bam_livelift` dataset. Native sibling panels participate in the shared axis,
-empty insertion columns and selected-site guide.
+insertion columns and selected-site guide. Equivalent parental insertions at the same boundary (within 10% length, or 3 bp) share one column. Each parent draws its own payload at the same bp scale; the longer allele sets the width and a shorter allele has a marked tail. Labels flag differing lengths and boundary alignment. Competing matches remain separate; this does not imply internal sequence alignment.
 
 - `DifferencesStrip.tsx`: debounced, abortable map requests scoped by dataset,
   lift key, haplotype and view; individual glyphs or density bins, per-haplotype
@@ -35,7 +35,7 @@ empty insertion columns and selected-site guide.
 - In-place chromatin payloads exist for **50 bp through 50 kb**. Smaller indels
   remain inspectable; larger blocks are refused with a notice.
 - **Identify** reuses `IdentifyTab` and its job store with one full carrier's
-  insertion sequence from `difference_reads`. It is labelled as read sequence,
+  insertion sequence fetched on demand from `difference_reads?include_sequence=true`. Read indels do not require exact agreement with assembly length. It is labelled as read sequence,
   not an assembly consensus, and is disabled with a reason when no complete
   sequence is available. Job identity includes lift key and insertion ID, so
   equal-length MAT/PAT insertions cannot share the wrong result.
@@ -58,5 +58,4 @@ The read canvas exposes `data-live-lift-insertion-calls` (visible drawn calls)
 and `data-live-lift-badge-target` (actual visible Alu-size badge coordinates).
 The Playwright spec uses these with store state to click a MAT badge and verify
 MAT/PAT/native expansion, drawn insertion footprints, collapse, SNV inspection
-and previous/next navigation. The spec is extended but intentionally not run
-by this frontend task.
+and previous/next navigation, plus successful AluY Identify. Test data paths are supplied through environment variables.

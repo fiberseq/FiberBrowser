@@ -32,7 +32,10 @@ export function normalizeExpansions(raw: unknown): Record<string, LiveLiftExpans
     out[key] = value.filter((e): e is LiveLiftExpansion => e && typeof e.chrom === 'string' && typeof e.ins_id === 'string'
       && Number.isFinite(e.pos) && e.pos >= 0 && Number.isFinite(e.length) && e.length > 0 && e.length <= 50_000
       && !seen.has(e.ins_id) && Boolean(seen.add(e.ins_id)))
-      .map(e => ({ ...e, label: String(e.label ?? ''), hap_label: String(e.hap_label ?? '') }));
+      .map(e => ({ ...e, label: String(e.label ?? ''), hap_label: String(e.hap_label ?? ''),
+        ...(e.alleles === undefined ? {} : { alleles: Array.isArray(e.alleles) ? e.alleles.filter((a: any) => a && typeof a.ins_id === 'string' && typeof a.hap_label === 'string' && Number.isFinite(a.length) && a.length > 0 && a.length <= e.length) : [] }),
+        ...(e.selected_length === undefined ? {} : { selected_length: Number.isFinite(e.selected_length) && e.selected_length > 0 && e.selected_length <= e.length ? e.selected_length : e.length }),
+      }));
   }
   return out;
 }
@@ -43,7 +46,7 @@ registerStoreExtension({
     expandLiveLift: (view: string, ins: LiveLiftExpansion) => {
       if (!(ins.length > 0 && ins.length <= 50_000)) return;
       set(s => ({ liveLiftExpansions: { ...s.liveLiftExpansions,
-        [view]: [...(s.liveLiftExpansions?.[view] ?? []).filter(e => e.ins_id !== ins.ins_id && e.chrom === ins.chrom), ins] } }));
+        [view]: [...(s.liveLiftExpansions?.[view] ?? []).filter(e => e.ins_id !== ins.ins_id && !e.alleles?.some(a => a.ins_id === ins.ins_id) && !ins.alleles?.some(a => a.ins_id === e.ins_id) && e.chrom === ins.chrom), ins] } }));
     },
     collapseLiveLift: (view: string, id: string) => set(s => ({ liveLiftExpansions: { ...s.liveLiftExpansions,
       [view]: (s.liveLiftExpansions?.[view] ?? []).filter(e => e.ins_id !== id) } })),

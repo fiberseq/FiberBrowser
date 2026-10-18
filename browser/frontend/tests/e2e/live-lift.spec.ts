@@ -1,22 +1,18 @@
 /**
- * Live lift (DESIGN_LIVE_LIFT.md P2a): SAMPLE_A's HG002-aligned reads at the chr3 AluY locus drawn on GRCh38 through
+ * Live lift (DESIGN_LIVE_LIFT.md P2a): Source assembly-aligned reads at the chr3 AluY locus drawn on GRCh38 through
  * the HPRC graphlift map, next to the same molecules' native GRCh38 alignments. Opened from the Open menu's "Add live
  * lift…" (server started with FIBERBROWSER_LIVE_LIFT=1), it splits into a MAT and a PAT panel by default; each
  * panel's reads are its haplotype's lifted rows (lift_hap), drawn from their segments, with badges at the AluY.
  *
  * Needs the pg-lift work data (skipped without it): FIBERBROWSER_TEST_LIFT_BAM, FIBERBROWSER_TEST_LIFT_MAP and
- * FIBERBROWSER_TEST_LIFT_NATIVE, or their default paths on the development Mac.
+ * FIBERBROWSER_TEST_LIFT_NATIVE.
  */
 import { test, expect } from './fixtures/server';
 import { existsSync } from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-
-const HANDOFF = path.join(os.homedir(), 'pglift_work/demo_data');
-const LIFT_BAM = process.env.FIBERBROWSER_TEST_LIFT_BAM ?? path.join(HANDOFF, 'SAMPLE_A.alu_chr3.hg002v1.1.bam');
-const NATIVE_BAM = process.env.FIBERBROWSER_TEST_LIFT_NATIVE ?? path.join(HANDOFF, 'SAMPLE_A.alu_chr3.GRCh38.bam');
-const LIFT_MAP = process.env.FIBERBROWSER_TEST_LIFT_MAP
-  ?? path.join(os.homedir(), 'pglift_work/pglift_20261017/native/graphlift/scratch/v4/hprc.GRCh38.HG002.chain.graphlift.json');
+// Private development fixtures are supplied by the runner, never stored here.
+const LIFT_BAM = process.env.FIBERBROWSER_TEST_LIFT_BAM ?? '';
+const NATIVE_BAM = process.env.FIBERBROWSER_TEST_LIFT_NATIVE ?? '';
+const LIFT_MAP = process.env.FIBERBROWSER_TEST_LIFT_MAP ?? '';
 const HAVE_DATA = [LIFT_BAM, NATIVE_BAM, LIFT_MAP].every(p => existsSync(p));
 const VIEW = { chrom: 'chr3', start: 128_650_000, end: 128_670_000 };
 
@@ -25,7 +21,7 @@ test.skip(process.env.FIBERBROWSER_LIVE_LIFT !== '1', 'run with FIBERBROWSER_LIV
 test.use({ fixtureBam: NATIVE_BAM });
 
 test('add a live-lift dataset next to the native BAM: split MAT/PAT panels render lifted rows', async ({ page, server }) => {
-  test.setTimeout(180_000);
+  test.setTimeout(240_000);
   const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
   await page.setViewportSize({ width: 1500, height: 1100 });
@@ -103,9 +99,20 @@ test('add a live-lift dataset next to the native BAM: split MAT/PAT panels rende
   await expect.poll(() => page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().liveLiftExpansions.main?.length)).toBe(1);
   await expect.poll(async () => Number(await matCanvas.getAttribute('data-live-lift-insertion-calls'))).toBeGreaterThan(0);
   await expect.poll(async () => JSON.parse((await matCanvas.getAttribute('data-live-lift-insertion-calls-by-id')) ?? '{}')[target.ins_id] ?? 0).toBeGreaterThan(0);
+  const patPanel = panels.find((p: any) => p.hap === 'PAT')!;
+  const patCanvas = page.locator(`[data-read-track-state-key="${patPanel.stateKey}"] canvas[data-copilot-track="reads"]`);
+  await expect.poll(async () => Number(await patCanvas.getAttribute('data-live-lift-insertion-calls'))).toBeGreaterThan(0);
+  await expect(page.getByTestId('live-lift-expanded-block').first()).toContainText('PAT +2,350 bp');
   const nativePanel = panels.find((p: any) => p.hap === null)!;
   const nativeCanvas = page.locator(`[data-read-track-state-key="${nativePanel.stateKey}"] canvas[data-copilot-track="reads"]`);
   await expect(nativeCanvas).toHaveAttribute('data-live-lift-insertion-calls', '0');
+  // Identify must use a full carrier from the real API, including noisy
+  // carrier lengths. This exercises the actual identification job as well.
+  await page.getByTestId('live-lift-expanded-block').first().getByRole('button', { name: 'Identify', exact: true }).click();
+  const insertionInspection = page.getByTestId('live-lift-diff-popover');
+  await expect(insertionInspection).toBeVisible();
+  await expect(insertionInspection).toContainText('AluY', { timeout: 120_000 });
+  await page.keyboard.press('Escape');
   // The badge opens the insertion directly; the × control closes the shared
   // columns in all three panels. Inspection is a separate strip/secondary action.
   await page.getByTestId('live-lift-expanded-collapse').first().click();

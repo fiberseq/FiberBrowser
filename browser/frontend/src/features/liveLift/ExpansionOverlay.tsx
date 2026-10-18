@@ -20,7 +20,7 @@ export function ExpansionOverlay({ axis, viewKey, sidebar = 0 }: { axis: LiftAxi
       const panel = panels.find(p => p.datasetId === ins.datasetId && (!p.liftHap || p.liftHap === ins.hap_label));
       if (!panel || !ins.datasetId) return;
       const difference: Difference = { id: ins.ins_id, hap: ins.hap_label, hap_label: ins.hap_label, kind: 'insertion', reason: 'source_insertion', source: 'assembly',
-        t_start: ins.pos, t_end: ins.pos, ref_bp: 0, alt_bp: ins.length, chain: null, strand: ins.strand ?? null,
+        t_start: ins.pos, t_end: ins.pos, ref_bp: 0, alt_bp: ins.selected_length ?? ins.length, chain: null, strand: ins.strand ?? null,
         src: ins.src ?? { contig: null, start: null, end: null }, grch38: null, alt: null };
       const selection = { panelId: panel.id, datasetId: ins.datasetId, viewKey, chrom: ins.chrom, difference };
       if (action === 'Identify') useDifferenceSelection.getState().select({ ...selection, action: 'identify' });

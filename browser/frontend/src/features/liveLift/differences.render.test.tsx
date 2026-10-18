@@ -5,7 +5,7 @@ import { DifferencesStrip } from './DifferencesStrip';
 import { getDifferenceReads, getDifferences } from './api';
 import { useBrowserStore } from '../../stores/browserStore';
 import { useLiveLiftStore } from './store';
-import { selectReadDifference, useDifferenceSelection } from './inspectionStore';
+import { expandDifference, selectReadDifference, useDifferenceSelection } from './inspectionStore';
 import { clearDifferenceCache, rememberDifferences } from './differenceCache';
 import { PanelDisplayContext } from '../../hooks/usePanelDisplayStore';
 import { useLiveLiftAxis } from './useLiveLiftAxis';
@@ -142,7 +142,7 @@ describe('badge click and sibling axes', () => {
     expect(useBrowserStore.getState().liveLiftExpansions.main[0].ins_id).toBe(diff.id);
     expect(host.querySelectorAll('[data-testid="live-lift-expanded-block"]')).toHaveLength(2);
     expect(useDifferenceSelection.getState().selection).toBeNull();
-    expect(getDifferences).not.toHaveBeenCalled(); expect(getDifferenceReads).not.toHaveBeenCalled();
+    expect(getDifferences).toHaveBeenCalledWith(expect.objectContaining({ start: diff.t_start, end: diff.t_start + 1 })); expect(getDifferenceReads).not.toHaveBeenCalled();
     click(host.querySelector('[data-testid="live-lift-expanded-collapse"]')!);
     expect(host.querySelectorAll('[data-testid="live-lift-expanded-block"]')).toHaveLength(0);
     act(() => handlers!.handleContextMenu({ currentTarget: canvas, clientX: 501, clientY: 8, preventDefault() {}, stopPropagation() {} } as never));
@@ -183,4 +183,28 @@ describe('badge click and sibling axes', () => {
     expect(useBrowserStore.getState().liveLiftExpansions.main[0]).toMatchObject({ ins_id: diff.id, length: 2353, label: 'HG002 MAT +2,353 bp', src: diff.src });
     expect(useDifferenceSelection.getState().selection).toBeNull();
   });
+});
+
+it('leaves unresolved badges as read navigation without inventing insertion evidence', () => {
+  const badge: any = [500, 'outside_chains', 100, 100, 'R'];
+  const read: any = { id: 'unresolved', live_lift: { hap_label: 'MAT', badges: [badge], badge_ids: [null], insertions: {} } };
+  expect(selectReadDifference(read, badge, 500, { datasetId: dataset.id, stateKey: panel.stateKey!, chrom: 'chr1', start: 0 })).toBe(false);
+  expect(getDifferences).not.toHaveBeenCalled();
+  expect(useDifferenceSelection.getState().selection).toBeNull();
+});
+
+
+it('resolves both parents on expansion and sizes the shared column to the longer allele', async () => {
+  const pat = { ...diff, id: 'PAT:src:100-2456:insertion', hap: 'h2', hap_label: 'PAT', alt_bp: 2356 };
+  vi.mocked(getDifferences).mockResolvedValue(response([diff, pat]));
+  await act(async () => {
+    expandDifference({ panelId: panel.id, datasetId: dataset.id, viewKey: 'main', chrom: 'chr1', difference: diff });
+  });
+  const blocks = useBrowserStore.getState().liveLiftExpansions.main;
+  expect(blocks).toHaveLength(1);
+  expect(blocks[0].length).toBe(2356);
+  expect(blocks[0].selected_length).toBe(2353);
+  expect(blocks[0].alleles?.map(a => a.ins_id)).toEqual([diff.id, pat.id]);
+  expect(blocks[0].label).toContain('lengths differ');
+  expect(vi.mocked(getDifferences).mock.calls[0][0].liftHap).toBeUndefined();
 });

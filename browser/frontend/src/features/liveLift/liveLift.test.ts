@@ -115,7 +115,7 @@ describe('insertion columns on reads and sibling native reads', () => {
     const r = draw([{ ...LIFTED, live_lift: { ...LL, insertions: { [expansion.ins_id]: payload } } }], { width: 1100, axis, isReversed: reversed,
       enabledModTypes: { footprint: true, m6a: true, deam: true } });
     expect(r.fills.some(f => f.fill === readBg && f.x0 === (reversed ? 410 : 640) && f.x1 === (reversed ? 460 : 690))).toBe(true);
-    expect(r.fills.some(f => f.fill === '#6b21a8' && Math.abs(f.x0 - (reversed ? 449.5 : 649.5)) < .01)).toBe(true);
+    expect(r.fills.some(f => f.fill === '#6b21a8' && Math.abs(f.x0 - (reversed ? 449 : 650)) < .01)).toBe(true);
   });
   it('native and non-carrier rows leave the insertion empty and retain aligned bodies on either side', () => {
     const axis = makeAxis(START, START + 1000, 1100, false, [expansion]);

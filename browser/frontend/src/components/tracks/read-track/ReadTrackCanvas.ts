@@ -1,3 +1,4 @@
+import { payloadForExpansion } from '../../../features/liveLift/equivalentInsertions';
 import { useBrowserStore } from '../../../stores/browserStore';
 import type { LiftAxis } from '../../../features/liveLift/axis';
 import { drawInsertionPayload } from './liveLiftInsertionCanvas';
@@ -1704,8 +1705,15 @@ export function drawReadTrack(params: DrawReadsParams): void {
     if (params.axis?.blocks.length) {
       ctx.restore();
       for (const block of params.axis.blocks) {
-        const payload = read.live_lift?.insertions?.[block.ins.ins_id];
-        if (!payload || 'too_large' in payload) continue;
+        const payload = payloadForExpansion(read.live_lift, block.ins);
+        if (!payload) continue;
+        // The shorter allele leaves a marked tail; never stretch its calls.
+        if (payload.length < block.ins.length) {
+          const a = params.axis.toX(0, { ins_id: block.ins.ins_id, offset: payload.length });
+          const b = params.axis.toX(0, { ins_id: block.ins.ins_id, offset: block.ins.length });
+          ctx.save(); ctx.strokeStyle = "#94a3b8"; ctx.setLineDash([2, 2]);
+          ctx.strokeRect(sidebarWidth + Math.min(a, b), y, Math.abs(b - a), Math.max(1, rowHeight - rowGap)); ctx.restore();
+        }
         const calls = drawInsertionPayload(ctx, payload, block.ins.ins_id, params.axis, {
           y, h: Math.max(1, rowHeight - rowGap), sidebar: sidebarWidth, background: readBackgroundColor,
           enabled: enabledModTypes, layerColors,
