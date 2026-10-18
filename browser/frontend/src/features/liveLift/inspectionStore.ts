@@ -90,7 +90,7 @@ export function selectReadDifference(read: CompactRead, badge: LiveLiftBadge | u
   const finish = (difference: Difference) => {
     if (version !== selectionVersion || useBrowserStore.getState().datasets.find(d => d.id === context.datasetId)?.live_lift?.key !== liftKey) return;
     const selection = { datasetId: context.datasetId, panelId: panel.id, viewKey: liveLiftViewKey(panel), chrom: context.chrom, difference };
-    if (action === 'primary' && badge && payload && difference.kind === 'insertion') expandDifference(selection);
+    if (action === 'primary' && badge && difference.source === 'assembly' && difference.kind === 'insertion' && difference.alt_bp >= 50) expandDifference(selection);
     else useDifferenceSelection.getState().select(selection);
   };
   const canonical = findLoadedDifference(context.datasetId, liftKey, context.chrom, query);

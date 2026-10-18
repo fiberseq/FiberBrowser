@@ -959,14 +959,14 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
         from services.lift.differences import row_mismatches
         payload.setdefault("cigar", []).extend(row_mismatches(read, row, ctx, payload["live_lift"]["hap"]))
         payload["cigar"].sort(key=lambda e: (e["pos"], e["type"]))
-    _insertion_payloads(read, row, contig, runs, call_lo, payload, ctx)
+    _insertion_metadata(read, row, contig, runs, call_lo, payload, ctx)
     # Geometry clipped to the region, as intervals are (a broad-cache crop gives the same).
     from services.lift.reads import clip_geometry
     payload["live_lift"] = clip_geometry(payload["live_lift"], 0, width)
     return payload
 
 
-def _insertion_payloads(read, row, contig, runs, call_lo, payload, ctx):
+def _insertion_metadata(read, row, contig, runs, call_lo, payload, ctx):
     """Retain hidden source calls for expansion, isolated from all target geometry.
 
     ``badge_ids`` parallels sorted ``badges`` (null for spans below 50 bp).
@@ -1006,23 +1006,32 @@ def _insertion_payloads(read, row, contig, runs, call_lo, payload, ctx):
         if length > 50_000:
             ll["insertions"][ins_id] = {"length": length, "too_large": True}
             continue
-        local_ctx = copy.copy(ctx)
-        local_ctx.region_start, local_ctx.region_end, local_ctx.width = 0, length, length
-        # The synthetic block is not a target locus; never compare it to hg38.
-        local_ctx.loader_options = dict(ctx.loader_options, include_cigar=False)
-        local = _Row(row.strand, row.alt)
-        local.add_run([_Frag(lo, hi, p._replace(q_start=a, q_end=b, t_start=0, t_end=length))], ctx.settings.rejoin_bp)
-        local.index()
-        _row_geometry(local, contig, runs, local_ctx)
-        hidden = _row_payload(read, local, "insertion", 0, 1, contig, runs, call_lo, local_ctx)
-        keep = ("intervals", "qualities", "layers", "fire", "deam", *_POINT_FIELDS)
-        block = {k: hidden[k] for k in keep if k in hidden}
-        covered = [lo - a, hi - a] if row.strand == "+" else [b - hi, b - lo]
-        # _Frag.T already mirrors bases as length - 1 - offset; covered
-        # and interval endpoints use the separate boundary transform.
-        block.update(pos=badge[0] - ctx.region_start, hap_label=label, src=[contig, a, b], length=length,
-                     mol_bp=mol_bp, orientation=row.strand, covered=covered)
-        ll["insertions"][ins_id] = block
+        requested = ctx.loader_options.get("insertion_ids")
+        if requested is not None and ins_id not in requested:
+            continue
+        ll["insertions"][ins_id] = _insertion_payloads(read, row, contig, runs, call_lo, ctx,
+                                                     p, a, b, lo, hi, length, label, mol_bp, badge)
+
+
+def _insertion_payloads(read, row, contig, runs, call_lo, ctx, p, a, b, lo, hi, length, label, mol_bp, badge):
+    """Compose annotations only for an explicitly requested hidden block."""
+    local_ctx = copy.copy(ctx)
+    local_ctx.region_start, local_ctx.region_end, local_ctx.width = 0, length, length
+    # The synthetic block is not a target locus; never compare it to hg38.
+    local_ctx.loader_options = dict(ctx.loader_options, include_cigar=False)
+    local = _Row(row.strand, row.alt)
+    local.add_run([_Frag(lo, hi, p._replace(q_start=a, q_end=b, t_start=0, t_end=length))], ctx.settings.rejoin_bp)
+    local.index()
+    _row_geometry(local, contig, runs, local_ctx)
+    hidden = _row_payload(read, local, "insertion", 0, 1, contig, runs, call_lo, local_ctx)
+    keep = ("intervals", "qualities", "layers", "fire", "deam", *_POINT_FIELDS)
+    block = {k: hidden[k] for k in keep if k in hidden}
+    covered = [lo - a, hi - a] if row.strand == "+" else [b - hi, b - lo]
+    # _Frag.T already mirrors bases as length - 1 - offset; covered
+    # and interval endpoints use the separate boundary transform.
+    block.update(pos=badge[0] - ctx.region_start, hap_label=label, src=[contig, a, b], length=length,
+                 mol_bp=mol_bp, orientation=row.strand, covered=covered)
+    return block
 
 
 def _infer_legacy(read, layers, payload, parts, mapped, ids, keys, logical, cuts, legacy, row, ctx,

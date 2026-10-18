@@ -1327,7 +1327,7 @@ def _store_direct_reads_cache(cache, key, value, max_reads=100_000):
     cache[key] = value
 
 
-def compact_reads_payload_for_request(state, *, pin_ids: Optional[str] = None, **kwargs) -> dict:
+def compact_reads_payload_for_request(state, *, pin_ids: Optional[str] = None, insertion_ids: Optional[str] = None, **kwargs) -> dict:
     """Build the `/api/reads/compact` payload for one dataset.
 
     When the "Min footprints" filter leaves no read in view, the payload says
@@ -1342,6 +1342,9 @@ def compact_reads_payload_for_request(state, *, pin_ids: Optional[str] = None, *
             unwrap_query_default(kwargs.get("lift_hap"), None),
             sample=not query_bool(kwargs.get("full_working_set"), False)):
         payload = _compact_reads_payload(state, **kwargs)
+    if insertion_ids:
+        from services.lift.reads import enrich_display_insertions
+        payload = enrich_display_insertions(state, payload, insertion_ids, kwargs)
     from services.lift.capability import lifted_display_notices
     notices = lifted_display_notices(state, payload.get("dataset_id"),
                                      include_metaprofile=query_bool(kwargs.get("include_metaprofile"), False))

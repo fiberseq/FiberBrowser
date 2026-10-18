@@ -608,7 +608,7 @@ def _load_broad_reads(
         sampler = Sampler(sample_level, keep_ids=set(pins) | {re.sub(r'_\d+$', '', p) for p in pins}) if sample_level else None
         rows = lifted_reads_for_region(dataset, chrom, broad_start, broad_end, dict(
             include_methylation=include_methylation, ml_threshold=ml_threshold, include_layers=include_layers,
-            requested_layers=requested_layers, include_layer_qualities=include_layer_qualities,
+            insertion_ids=[], requested_layers=requested_layers, include_layer_qualities=include_layer_qualities,
             infer_legacy_layers=infer_legacy_layers, legacy_nuc_min_size=legacy_nuc_min_size,
             min_footprints=min_footprints, **terminal_option, **(bam_read_options or {})), sampler=sampler)
         if sampler is not None:

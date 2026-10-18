@@ -21,7 +21,7 @@ _PASSED_OPTIONS = ("include_methylation", "ml_threshold", "include_layers", "req
                    "include_layer_qualities", "infer_legacy_layers", "legacy_nuc_min_size", "min_footprints",
                    "short_terminal_footprint_bp", "hide_terminal_gaps", "terminal_gap_threshold",
                    "include_duplicates", "sv_min_len", "include_sv_seq", "min_fp_quality", "include_cigar",
-                   "target_fasta", "include_mismatches", "detail_view")
+                   "target_fasta", "include_mismatches", "detail_view", "insertion_ids")
 
 
 def is_lifted(dataset) -> bool:
@@ -70,6 +70,33 @@ def lifted_reads_for_region(dataset, chrom: str, start: int, end: int, options: 
 
 
 # ── Viewport crops ──────────────────────────────────────────────────────────
+
+def enrich_display_insertions(state, payload, insertion_ids, options):
+    """Attach requested blocks to response copies, keeping shared caches lean."""
+    dataset = state.datasets.get(payload.get("dataset_id"))
+    if not is_lifted(dataset) or not payload.get("reads"):
+        return payload
+    ids = set(insertion_ids.split(","))
+    # Only IDs represented by visible rows can trigger additional decoding.
+    ids &= {i for r in payload["reads"] for i in (r.get("live_lift") or {}).get("badge_ids", []) if i}
+    if not ids:
+        return payload
+    chrom, start, end = options["chrom"], options["start"], options["end"]
+    rows = lifted_reads_for_region(dataset, chrom, start, end,
+                                  dict(options, insertion_ids=ids, include_cigar=False,
+                                       requested_layers=options["layer_names"].split(",") if options.get("layer_names") else None))
+    def key(row):
+        ll = row.get("live_lift") or {}
+        return ll.get("molecule"), ll.get("record")
+    blocks = {}
+    for r in rows:
+        blocks.setdefault(key(r), {}).update(r["live_lift"]["insertions"])
+    return {**payload, "reads": [{**r, "live_lift": {**r["live_lift"], "insertions": {
+        i: b for i, b in blocks.get(key(r), {}).items() if i in r["live_lift"].get("badge_ids", [])}}}
+                                if r.get("live_lift") else r for r in payload["reads"]]}
+
+
+
 
 def clip_geometry(ll: dict, offset: int, width: int) -> dict:
     """``live_lift`` body spans, connectors and badges shifted by ``-offset``
@@ -281,7 +308,7 @@ def lifted_coverage(dataset, chrom: str, start: int, end: int, bins: int, *, lif
         _add_spans(pooled_corr, edges, _merge(all_spans))
         pooled_corr /= np.diff(edges)
         options = {"include_methylation": False, "include_layers": False, "hide_terminal_gaps": False,
-                   "include_duplicates": include_duplicates}
+                   "include_duplicates": include_duplicates, "insertion_ids": []}
         if rows is None and not correspondence_only:
             rows = lifted_reads_for_region(dataset, chrom, start, end, options)
         origin = start if rows_start is None else rows_start

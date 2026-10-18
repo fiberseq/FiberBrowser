@@ -59,3 +59,12 @@ and `data-live-lift-badge-target` (actual visible Alu-size badge coordinates).
 The Playwright spec uses these with store state to click a MAT badge and verify
 MAT/PAT/native expansion, drawn insertion footprints, collapse, SNV inspection
 and previous/next navigation, plus successful AluY Identify. Test data paths are supplied through environment variables.
+
+Compact display loads keep badges and insertion SV evidence but omit hidden
+annotation blocks until expansion. The frontend sends `viewport_start` and
+`viewport_end`, plus comma-separated `insertion_ids` for expanded alleles.
+`/api/reads/compact` enriches response copies on demand; shared broad/direct
+caches retain collapsed rows, and collapsing cannot retain a stale block.
+Each shared allele retains its source interval and strand through session
+persistence. Header actions use the enclosing haplotype's allele, falling back
+to a surviving panel for that dataset when the initiating panel is closed.

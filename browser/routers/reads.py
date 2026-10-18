@@ -89,6 +89,7 @@ async def get_reads_compact(
     full_working_set: bool = Query(False, description="Load every read in view: no display sample on deep BAM views (`working_sampling` says when one applies)"),
     viewport_start: Optional[int] = Query(None, description="Visible start when prefetching a containing read span"),
     viewport_end: Optional[int] = Query(None, description="Visible end when prefetching a containing read span"),
+    insertion_ids: Optional[str] = Query(None, description="Expanded live-lift insertion IDs; annotations are composed on demand"),
     prefetch: bool = Query(False, description="Speculative read cache fill; yields to navigation and analyses"),
     prefetch_batch: bool = Query(False, description="Warm annotation dependencies used by the multi-dataset display"),
     prefetch_sample_level: Optional[int] = Query(None, ge=0, le=24, description="Keep the visible view's sampling level while warming its neighbors"),
@@ -163,6 +164,7 @@ async def get_reads_compact(
         full_working_set=full_working_set,
         viewport_start=unwrap_query_default(viewport_start, None),
         viewport_end=unwrap_query_default(viewport_end, None),
+        insertion_ids=unwrap_query_default(insertion_ids, None),
     )
     from services.read_stream import MEDIA_TYPE as STREAM_TYPE, stream_reads_response
     if request is not None and STREAM_TYPE in request.headers.get("accept", ""):

@@ -60,6 +60,29 @@ describe('useReadTrackData loading flag', () => {
     container.remove();
   });
 
+  it('sends visible bounds and refetches requested insertion alleles on expansion', async () => {
+    const { useBrowserStore } = await import('../../../stores/browserStore');
+    const before = useBrowserStore.getState();
+    getCompactReads.mockImplementation(() => new Promise(() => {}));
+    try {
+      await act(async () => {
+        useBrowserStore.setState({ datasets: [{ id: 'ds', data_type: 'bam_livelift', live_lift: { key: 'k' } } as any],
+          panels: [{ id: 'pat', datasetId: 'ds', liftHap: 'PAT' } as any], liveLiftExpansions: {} });
+        root.render(<Probe p={params({ liftHap: 'PAT' })} />);
+      });
+      const queries = () => getCompactReads.mock.calls.map(([q]) => new URLSearchParams(q));
+      expect(queries()[0].get('viewport_start')).toBe('1000');
+      expect(queries()[0].get('viewport_end')).toBe('2000');
+      expect(queries()[0].has('insertion_ids')).toBe(false);
+      await act(async () => useBrowserStore.getState().expandLiveLift('main', { chrom: 'chr1', pos: 1500, ins_id: 'mat', hap_label: 'MAT', length: 100,
+        label: 'shared', datasetId: 'ds', alleles: [{ ins_id: 'mat', hap_label: 'MAT', length: 100 }, { ins_id: 'pat', hap_label: 'PAT', length: 99 }] }));
+      expect(queries().at(-1)?.get('insertion_ids')).toBe('mat,pat');
+      expect(queries().at(-1)?.get('lift_hap')).toBe('PAT');
+    } finally {
+      await act(async () => useBrowserStore.setState({ datasets: before.datasets, panels: before.panels, liveLiftExpansions: before.liveLiftExpansions }));
+    }
+  });
+
   it('shares batch identity across panels and refreshes it when any source changes', async () => {
     const { useBrowserStore } = await import('../../../stores/browserStore');
     const before = useBrowserStore.getState();
