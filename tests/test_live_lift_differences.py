@@ -3,6 +3,8 @@ These tests cross the real BAM decoder, graphlift reader and HTTP crop paths;
 the source MD describes HG002, while the loaded FASTA describes GRCh38.
 """
 import array
+import gzip
+import json
 from copy import deepcopy
 import os
 from pathlib import Path
@@ -180,7 +182,9 @@ def test_read_inspection_md_alleles_chromatin_and_insertions(evidence):
     by_name = {r["id"]: r for r in ins["rows"]}
     assert by_name["hg"]["carries_insertion"] and by_name["hg"]["mol_bp"] == 100
     assert not by_name["partial"]["carries_insertion"] and by_name["partial"]["mol_bp"] == 50
-    assert len(by_name["hg"]["read_bases"]) == 100 and by_name["hg"]["grch38"] == ""
+    assert len(by_name["hg"]["read_bases"]) == 60 and by_name["hg"]["read_bases_length"] == 100
+    assert by_name["hg"]["grch38"] == "" and by_name["hg"]["allele"] == "hg002"
+    assert by_name["partial"]["allele"] == "partial" and by_name["partial"]["strand"] is None
     assert diff.difference_reads(state, ds, TARGET, 12900, 12900)["rows"][0]["chromatin"]["orientation"] == "-"
 
 
@@ -237,6 +241,7 @@ def test_read_deletion_and_missing_md(evidence):
     assert rows["deleted"]["read_bases"] == "" and rows["deleted"]["hg002"] == "C"
     assert rows["deleted"]["allele"] == "deleted"
     assert rows["unknown"]["hg002"] is None
+    assert rows["unknown"]["allele"] == "other"
 
 
 def test_reverse_record_hard_clips_and_cigar_insertion(evidence):
@@ -261,7 +266,87 @@ def test_inspection_molecular_bp_includes_read_insertion_at_gap_end(evidence):
     block = next(iter(row["live_lift"]["insertions"].values()))
     inspected = diff.difference_reads(state, ds, TARGET, 6010, 6010)["rows"][0]
     assert inspected["mol_bp"] == block["mol_bp"] == 105
-    assert inspected["read_bases"] == "A" * 100 + "TTTTT"
+    assert inspected["read_bases"] == "A" * 60 and inspected["read_bases_length"] == 105
+    assert inspected["allele"] == "hg002" and inspected["identity"] == pytest.approx(10000 / 105, abs=.01)
+
+
+@pytest.fixture
+def two_hap_evidence(evidence):
+    """PAT covers MAT's SNV without an assembly difference at that site.
+    Use an actual two-parent map/BAM so inspecting a MAT panel must still
+    fetch PAT's own source interval rather than classify PAT against MAT.
+    """
+    state, ds, tmp = evidence
+    manifest = write_difference_sidecar(tmp / "two-parent-map")
+    data_path = Path(manifest).parent / "toy.t0.chrT.json.gz"
+    with gzip.open(data_path, "rt") as fh:
+        data = json.load(fh)
+    data["blocks"]["2"] = [[1000, 0, 6900]]
+    with gzip.open(data_path, "wt") as fh:
+        json.dump(data, fh)
+    with open(manifest) as fh:
+        data = json.load(fh)
+    data["chains"][2].update(t_start=1000, t_end=7900, q_start=0, q_end=6900,
+                             q_start_forward=0, q_end_forward=6900, aligned=6900)
+    data["nets"]["H#2"] = [[0, 1000, 7900, 2, []]]
+    with open(manifest, "w") as fh:
+        json.dump(data, fh)
+    ds.live_lift = LiveLiftConfig(manifest, [], source_fasta=ds.live_lift.source_fasta)
+    ds.paths = [write_bam(tmp / "two-parent.bam", lambda h: [
+        make_record(h, "mat-alt", MAT, 0, "200M", seq="A" * 100 + "C" + "A" * 99, tags=[("MD", "200")]),
+        make_record(h, "mat-ref", MAT, 0, "200M", seq="A" * 200, tags=[("MD", "100C99")]),
+        *[make_record(h, f"pat-{i}", PAT, 0, "200M", seq="A" * 200, tags=[("MD", "200")]) for i in range(35)]])]
+    return state, ds, tmp
+
+
+@pytest.mark.parametrize("source_fasta", [True, False])
+@pytest.mark.parametrize("selector", ["lift_hap", "item_id"])
+def test_inspection_uses_each_reads_own_haplotype(two_hap_evidence, source_fasta, selector):
+    state, ds, _ = two_hap_evidence
+    if not source_fasta:
+        ds.live_lift.source_fasta = None
+    selection = {selector: "MAT" if selector == "lift_hap" else f"MAT:{MAT}:100-101:snv"}
+    result = diff.difference_reads(state, ds, TARGET, 1100, 1101, **selection)
+    assert result["preferred_hap"] == "MAT"
+    assert [r["hap_label"] for r in result["rows"][:2]] == ["MAT", "MAT"]
+    assert result["summary"] == {"MAT": {"hg002": 1, "grch38": 1}, "PAT": {"same_as_grch38": 35}}
+    pat = [r for r in result["rows"] if r["hap_label"] == "PAT"]
+    assert all(r["read_bases"] == r["hg002"] == r["grch38"] == "A" and r["strand"] is None for r in pat)
+    reverse = diff.difference_reads(state, ds, TARGET, 1100, 1101, lift_hap="PAT")
+    assert reverse["rows"][0]["hap_label"] == "PAT" and reverse["summary"] == result["summary"]
+
+
+def test_insertion_carriage_is_independent_of_sequence_identity(evidence):
+    state, ds, tmp = evidence
+    ds.paths = [write_bam(tmp / "insertion-alleles.bam", lambda h: [
+        make_record(h, "noisy", MAT, 4900, "300M", seq="A" * 100 + "C" * 10 + "A" * 190),
+        make_record(h, "indel", MAT, 4900, "150M5I2D148M", seq="A" * 150 + "TTTTT" + "A" * 148),
+        make_record(h, "tolerance", MAT, 4900, "200M50I100M", seq="A" * 350),
+        make_record(h, "wrong-length", MAT, 4900, "200M51I100M", seq="A" * 351),
+        make_record(h, "deleted", MAT, 4900, "100M100D100M", seq="A" * 200),
+        make_record(h, "skip", MAT, 4900, "100M100N100M", seq="A" * 200),
+        make_record(h, "clipped-end", MAT, 4900, "150M50S", seq="A" * 200),
+        make_record(h, "clipped-start", MAT, 5050, "50S150M", seq="A" * 200)])]
+    result = diff.difference_reads(state, ds, TARGET, 6010, 6010, item_id=f"MAT:{MAT}:5000-5100:insertion")
+    rows = {r["id"]: r for r in result["rows"]}
+    for name in ("noisy", "indel", "tolerance"):
+        assert rows[name]["allele"] == "hg002" and rows[name]["carries_insertion"]
+    assert rows["noisy"]["identity"] == 90 and rows["indel"]["identity"] == pytest.approx(9800 / 105, abs=.01)
+    assert rows["wrong-length"]["allele"] == "no_insertion" and not rows["wrong-length"]["carries_insertion"]
+    assert rows["deleted"]["allele"] == "deleted" and rows["skip"]["allele"] == "no_coverage"
+    for name in ("clipped-end", "clipped-start"):
+        assert rows[name]["allele"] == "partial" and not rows[name]["carries_insertion"]
+    assert all(len(r["read_bases"]) <= 60 and r["read_bases_length"] == r["mol_bp"] and r["strand"] is None for r in rows.values())
+
+
+def test_insertion_boundary_inspects_noninserting_parent(two_hap_evidence):
+    state, ds, tmp = two_hap_evidence
+    ds.paths = [write_bam(tmp / "one-parent-insertion.bam", lambda h: [
+        make_record(h, "mat", MAT, 4900, "300M", seq="A" * 300),
+        make_record(h, "pat", PAT, 4900, "300M", seq="A" * 300)])]
+    rows = {r["id"]: r for r in diff.difference_reads(state, ds, TARGET, 6010, 6010, lift_hap="MAT")["rows"]}
+    assert rows["mat"]["allele"] == "hg002"
+    assert rows["pat"]["allele"] == "no_insertion" and not rows["pat"]["carries_insertion"]
 
 
 def test_read_evidence_helper_cluster_output(evidence):
@@ -307,8 +392,9 @@ def test_http_native_bam_match_flag_gate_and_detail(evidence, monkeypatch):
         assert payload["native_summary"]["min_len"] == 50
         assert payload["native_summary"]["clusters"][0]["source"] == "reads"
         assert client.get("/api/lift/differences", params={**query, "detail_bp": 100}).json()["novel"] == []
-        inspected = client.get("/api/lift/difference_reads", params=dict(dataset_id=did, chrom=TARGET, pos=1100)).json()
-        assert inspected["summary"]["MAT"]["grch38"] == 1
+        inspected = client.get("/api/lift/difference_reads", params=dict(dataset_id=did, chrom=TARGET, pos=1100,
+                               item_id=f"MAT:{MAT}:100-101:snv")).json()
+        assert inspected["summary"]["MAT"]["grch38"] == 1 and inspected["preferred_hap"] == "MAT"
         detailed = client.get("/api/reads/compact", params=dict(dataset_id=did, chrom=TARGET, start=1090, end=1160,
                                                               include_cigar=True)).json()
         assert any(e.get("source") == "assembly" for r in detailed["reads"] for e in r.get("cigar", []))
@@ -346,3 +432,9 @@ def test_real_alu_expansion_smoke():
     assert any(any(iv[2] > 0 for iv in block.get("intervals", []))
                for row in rows if row["live_lift"]["hap_label"] == "MAT"
                for key, block in row["live_lift"]["insertions"].items() if key in {i["id"] for i in ins})
+    inspected = diff.difference_reads(state, ds, "chr3", 128657390, 128657390, item_id=ins[0]["id"])
+    for hap in ("MAT", "PAT"):
+        cohort = [r for r in inspected["rows"] if r["hap_label"] == hap]
+        assert sum(r["allele"] == "hg002" for r in cohort) > len(cohort) / 2
+        assert all(len(r["read_bases"]) <= 60 and r["strand"] is None for r in cohort)
+        assert any(r["identity"] is not None and 0 < r["identity"] <= 100 for r in cohort)

@@ -138,13 +138,17 @@ export function liveLiftBadgeGeometry(ll: LiveLiftRow, o: Omit<LiveLiftMarkOptio
   return badges;
 }
 
-/** A hit names its badge, so a later badge action need not guess from a read-level tooltip. */
+/** Dense maps put tiny ticks inside a labelled insertion's notch. Prefer a
+ * labelled hit, then the nearest notch centre, then the larger molecular span;
+ * array order must never decide which insertion a person opens. */
 export function liveLiftHitAt(ll: LiveLiftRow, x: number, y: number,
   options: Parameters<typeof liveLiftBadgeGeometry>[1]): { badge?: LiveLiftBadge } | null {
   const inside = (r: PixelRect) => x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
-  for (const b of liveLiftBadgeGeometry(ll, options)) {
-    if (inside(b.notch) || (b.label && inside(b.label))) return { badge: b.badge };
-  }
+  const hits = liveLiftBadgeGeometry(ll, options).filter(b => inside(b.notch) || (b.label && inside(b.label)));
+  const labelled = hits.filter(b => b.label);
+  const nearest = (labelled.length ? labelled : hits).sort((a, b) => Math.abs(x - a.x) - Math.abs(x - b.x)
+    || b.badge[2] - a.badge[2])[0];
+  if (nearest) return { badge: nearest.badge };
   const bodies = liveLiftBodyRects(ll, options.linkedOffset, options.regionWidth, options.toX);
   return bodies.some(rect => inside({ ...rect, y: options.y, h: Math.max(1, options.rowHeight) })) ? {} : null;
 }

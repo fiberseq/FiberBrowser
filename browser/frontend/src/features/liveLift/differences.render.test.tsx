@@ -5,7 +5,8 @@ import { DifferencesStrip } from './DifferencesStrip';
 import { getDifferenceReads, getDifferences } from './api';
 import { useBrowserStore } from '../../stores/browserStore';
 import { useLiveLiftStore } from './store';
-import { useDifferenceSelection } from './inspectionStore';
+import { selectReadDifference, useDifferenceSelection } from './inspectionStore';
+import { clearDifferenceCache, rememberDifferences } from './differenceCache';
 import { PanelDisplayContext } from '../../hooks/usePanelDisplayStore';
 import { useLiveLiftAxis } from './useLiveLiftAxis';
 import { ExpansionOverlay } from './ExpansionOverlay';
@@ -28,6 +29,7 @@ let host: HTMLDivElement, root: Root;
 const click = (el: Element) => act(() => el.dispatchEvent(new MouseEvent('click', { bubbles: true })));
 const settle = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(160); }); };
 beforeEach(() => {
+  clearDifferenceCache();
   vi.useFakeTimers(); vi.mocked(getDifferences).mockReset(); vi.mocked(getDifferenceReads).mockReset();
   vi.mocked(getDifferences).mockResolvedValue(response());
   vi.mocked(getDifferenceReads).mockResolvedValue({ dataset_id: 'lift', lift_key: 'key-1', chrom: 'chr1', pos: 500, end: 500, rows: [], summary: {}, capped: false, max_records: 500 });
@@ -82,10 +84,40 @@ describe('differences strip and inspection', () => {
     act(() => document.querySelectorAll('tbody tr')[1].dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
     expect([...useReadActionsStore.getState().highlight!.ids]).toEqual(['r1']);
   });
+  it('shows the selected parent first, an agreeing other-parent summary, and only a haplotype chip without st', async () => {
+    const snv: Difference = { ...diff, id: 'MAT:src:100-101:snv', kind: 'snv', t_end: 501, ref_bp: 1, alt_bp: 1, grch38: 'A', alt: null };
+    const row = { id: 'mat', molecule: 'mat', record: 'record', hap_label: 'MAT', strand: null, supplementary: false,
+      source_pos: { contig: 'src', start: 100, end: 101 }, read_bases: 'C', hg002: 'C', grch38: 'A', allele: 'hg002' as const,
+      chromatin: { state: 'none' as const, layer: null, nearest_m6a_bp: null, orientation: '+' as const } };
+    vi.mocked(getDifferences).mockResolvedValue(response([snv]));
+    vi.mocked(getDifferenceReads).mockResolvedValue({ dataset_id: 'lift', lift_key: 'key-1', chrom: 'chr1', pos: 500, end: 501,
+      rows: [...Array.from({ length: 35 }, (_, i) => ({ ...row, id: `pat-${i}`, molecule: `pat-${i}`, hap_label: 'PAT',
+        read_bases: 'A', hg002: 'A', allele: 'same_as_grch38' as const })), row], summary: {}, capped: false, max_records: 500 });
+    renderStrip(); await settle(); click(host.querySelector('[data-testid="live-lift-diff-item"]')!); await settle();
+    expect(getDifferenceReads).toHaveBeenCalledWith(expect.objectContaining({ itemId: snv.id, liftHap: 'MAT' }), expect.any(AbortSignal));
+    const first = document.querySelector('tbody tr')!;
+    expect(first.getAttribute('data-hap')).toBe('MAT'); expect(first.getAttribute('data-allele')).toBe('hg002');
+    expect(first.children[1].textContent).toBe('● MAT');
+    expect(document.querySelector('[data-testid="live-lift-other-hap-summary"]')?.textContent).toBe('PAT: no difference here, 35 reads agree with GRCh38');
+    expect(document.querySelector('[data-testid="live-lift-misphased"]')).toBeNull();
+    expect(document.querySelector('table')?.textContent).not.toContain('/ ?');
+    expect(document.querySelector('[data-testid="live-lift-diff-popover"]')?.textContent).toContain('GRCh38: A · HG002: C');
+  });
+  it('renders insertion previews with their full length and identity separately from carriage', async () => {
+    vi.mocked(getDifferenceReads).mockResolvedValue({ dataset_id: 'lift', lift_key: 'key-1', chrom: 'chr1', pos: 500, end: 500,
+      rows: [{ id: 'noisy', molecule: 'noisy', record: 'record', hap_label: 'MAT', strand: null, supplementary: false,
+        source_pos: { contig: 'src', start: 100, end: 2453 }, read_bases: 'A'.repeat(60), read_bases_length: 2350,
+        hg002: null, grch38: '', allele: 'hg002', carries_insertion: true, mol_bp: 2350, identity: 97.3,
+        chromatin: { state: 'none', layer: null, nearest_m6a_bp: null, orientation: '+' } }], summary: {}, capped: false, max_records: 500 });
+    renderStrip(); await settle(); click(host.querySelector('[data-testid="live-lift-diff-item"]')!); await settle();
+    expect(document.querySelector('table')?.textContent).toContain('(2,350 bp)');
+    expect(document.querySelector('table')?.textContent).toContain('97.3%');
+  });
 });
 
 describe('badge click and sibling axes', () => {
   it('clicking a badge expands its canonical ID and the native sibling gets the same gap; collapse restores both', () => {
+    rememberDifferences(response());
     let handlers: ReturnType<typeof useReadTrackMouse>;
     const badge: NonNullable<CompactRead['live_lift']>['badges'] = [[500, 'source_insertion', 2353, 2353, 'I']];
     const read: CompactRead = { id: 'r', intervals: [[0, 1000, -1000]], live_lift: { v: 1, hap_label: 'MAT', segments: [[0, 1000, 1, '+', true]],
@@ -109,8 +141,46 @@ describe('badge click and sibling axes', () => {
     act(() => handlers!.handleClick({ currentTarget: canvas, clientX: 501, clientY: 8, shiftKey: false, ctrlKey: false, metaKey: false } as never));
     expect(useBrowserStore.getState().liveLiftExpansions.main[0].ins_id).toBe(diff.id);
     expect(host.querySelectorAll('[data-testid="live-lift-expanded-block"]')).toHaveLength(2);
+    expect(useDifferenceSelection.getState().selection).toBeNull();
     expect(getDifferences).not.toHaveBeenCalled(); expect(getDifferenceReads).not.toHaveBeenCalled();
     click(host.querySelector('[data-testid="live-lift-expanded-collapse"]')!);
     expect(host.querySelectorAll('[data-testid="live-lift-expanded-block"]')).toHaveLength(0);
+    act(() => handlers!.handleContextMenu({ currentTarget: canvas, clientX: 501, clientY: 8, preventDefault() {}, stopPropagation() {} } as never));
+    expect(useDifferenceSelection.getState().selection?.difference).toEqual(diff);
+    expect(host.querySelectorAll('[data-testid="live-lift-expanded-block"]')).toHaveLength(0);
+  });
+  const read: CompactRead = { id: 'tiny', intervals: [], live_lift: { v: 1, hap_label: 'MAT', source: { contig: 'src', start: 0, end: 3000, orientation: 'forward' },
+    segments: [], badges: [[500, 'source_insertion', 1, 1, 'I']], badge_ids: ['MAT:src:100-101:insertion'] } };
+  const canonical: Difference = { ...diff, id: read.live_lift!.badge_ids![0], alt_bp: 1, src: { contig: 'src', start: 100, end: 101 }, grch38: '', alt: 'C' };
+  const selectBadge = () => selectReadDifference(read, read.live_lift!.badges![0], 500, { datasetId: 'lift', stateKey: 'mat-state', chrom: 'chr1', start: 0 });
+  it('uses the strip map item for a badge instead of inventing coordinates and alleles', async () => {
+    vi.mocked(getDifferences).mockResolvedValue(response([canonical]));
+    renderStrip(); await settle(); act(() => { selectBadge(); }); await settle();
+    expect(getDifferences).toHaveBeenCalledTimes(1);
+    expect(useDifferenceSelection.getState().selection?.difference).toEqual(canonical);
+    expect(document.querySelector('[data-testid="live-lift-diff-popover"]')?.textContent).toContain('HG002 src:101–101');
+    expect(document.querySelector('[data-testid="live-lift-diff-popover"]')?.textContent).toContain('GRCh38:  · HG002: C');
+  });
+  it('fetches a small unfiltered window for an unloaded ID and picks that exact item', async () => {
+    vi.mocked(getDifferences).mockResolvedValue(response([{ ...canonical, id: 'neighbour', alt: 'T' }, canonical]));
+    rememberDifferences({ ...response([{ ...canonical, alt: 'old' }]), lift_key: 'old-key' });
+    await act(async () => { expect(selectBadge()).toBe(true); });
+    expect(getDifferences).toHaveBeenCalledWith(expect.objectContaining({ start: 498, end: 503, minBp: 0, liftKey: 'key-1', liftHap: 'MAT' }));
+    expect(useDifferenceSelection.getState().selection?.difference).toEqual(canonical);
+  });
+  it('labels an unmatched badge as a read-only event', async () => {
+    vi.mocked(getDifferences).mockResolvedValue(response([]));
+    renderStrip(); await settle(); await act(async () => { selectBadge(); }); await settle();
+    expect(useDifferenceSelection.getState().selection?.difference.source).toBe('reads');
+    expect(document.querySelector('[data-testid="live-lift-diff-popover"]')?.textContent).toContain('read-only event');
+  });
+  it('expands a payload-backed badge after fetching its canonical map ID without opening a popover', async () => {
+    const carrier: CompactRead = { ...read, live_lift: { ...read.live_lift!, badge_ids: [diff.id],
+      badges: [[500, 'source_insertion', 2000, 2000, 'I']], insertions: { [diff.id]: { pos: 500, length: 2353, mol_bp: 2000,
+        src: ['src', 100, 2453], hap_label: 'MAT', orientation: '+', covered: [353, 2353], intervals: [[400, 500, 100]] } } } };
+    await act(async () => { selectReadDifference(carrier, carrier.live_lift!.badges![0], 500,
+      { datasetId: 'lift', stateKey: 'mat-state', chrom: 'chr1', start: 0 }); });
+    expect(useBrowserStore.getState().liveLiftExpansions.main[0]).toMatchObject({ ins_id: diff.id, length: 2353, label: 'HG002 MAT +2,353 bp', src: diff.src });
+    expect(useDifferenceSelection.getState().selection).toBeNull();
   });
 });

@@ -33,19 +33,28 @@ only when native_dataset_id is supplied; each has ``source:'reads'``.
 GET /api/lift/difference_reads returns::
 
   {dataset_id, lift_key, chrom, pos, end, rows:[Inspection],
-   summary:{hap_label:{allele:count}}, capped:bool, max_records:500}
+   summary:{hap_label:{allele:count}}, preferred_hap:str|null,
+   capped:bool, max_records:500}
 
 Inspection is ``{id,molecule,hap_label,record,supplementary,strand,source_pos:
 {contig,start,end},read_bases:str,hg002:str|null,grch38:str|null,allele,
 chromatin:{state:'nucleosome'|'footprint'|'accessible'|'none',layer:str|null,
 nearest_m6a_bp:int|null,orientation:'+'|'-'},ins_id?:str,carries_insertion?:
-bool,mol_bp?:int}``. ``strand`` is the molecule's st, never the piece strand.
-Alleles are hg002/grch38/other/deleted/no_coverage. Insertion inspection
-(``pos==end``) resolves all map insertions at that boundary, returns actual
-inserted SEQ bases, and measures molecular bp from the source CIGAR. Partial
-carriers are inspected but carries_insertion is true only when the alignment
-spans the entire map interval. Missing target bases leave non-deleted alleles
-as other. Missing MD and source FASTA leave HG002 unknown. A displayed row's
+bool,mol_bp?:int,identity?:float|null,read_bases_length?:int}``. ``strand`` is
+the molecule's st (null without it), never the piece strand. At base differences,
+hg002 means the read matches its own haplotype's distinct assembly allele;
+same_as_grch38 means that haplotype and read both agree with GRCh38. Only a
+distinct haplotype carrying GRCh38 is flagged grch38. Other/deleted/no_coverage
+retain their ordinary meanings. ``lift_hap``/``item_id`` prioritise one
+haplotype's reads without hiding the other haplotype's summary.
+Insertion inspection (``pos==end``) resolves map intervals at that boundary.
+Carriage (hg002) requires full source-span coverage and molecular length within
+max(10%,50 bp); clipped alignments are partial, empty spans deleted, and
+flank-spanning non-carriers no_insertion. Identity is a best-effort percent
+from the source CIGAR, independent of carriage. Inserted read_bases is at most
+60 bases; read_bases_length/mol_bp preserve its full length. Missing target
+bases leave base alleles as other. Missing MD and source FASTA leave HG002
+unknown. A displayed row's
 record key is reused when available, and orientation describes its display.
 """
 from __future__ import annotations
@@ -241,7 +250,8 @@ def differences_for_region(state, dataset, chrom, start, end, *, lift_hap=None, 
     source = pysam.FastaFile(config.source_fasta) if config.source_fasta else None
     try:
         for item in items:
-            item["grch38"] = (fasta_bases(getattr(state, "fasta", None), chrom, item["t_start"], item["t_end"])
+            item["grch38"] = ("" if item["kind"] == "insertion" else
+                              fasta_bases(getattr(state, "fasta", None), chrom, item["t_start"], item["t_end"])
                               if item["kind"] in ("snv", "mnv", "deletion") and item["ref_bp"] <= 50 else None)
             src = item["src"]
             item["alt"] = fasta_bases(source, src["contig"], src["start"], src["end"])
@@ -365,13 +375,23 @@ def _inspection_spans(config, chrom, pos, end, lift_hap):
     """Resolve insertion boundaries explicitly; ordinary point projection has
     no way to recover source bases that have no target correspondence."""
     handle = config.handle
-    haps = set(_haps(config, lift_hap))
+    haps = _haps(config, lift_hap)
     spans = []
     if pos == end:
         for hap in haps:
             for item in _bin_items(config, chrom, pos // BIN_BP, hap):
                 if item["kind"] == "insertion" and item["t_start"] == pos:
                     spans.append(item)
+        # A haplotype without an insertion still has informative reads across
+        # this boundary. Project its adjacent base, then inspect the zero-width
+        # source boundary instead of borrowing the other parent's inserted bases.
+        present = {s["hap"] for s in spans}
+        for span in _inspection_spans(config, chrom, pos, pos + 1, lift_hap):
+            if span["hap"] in present or span["src"]["start"] is None:
+                continue
+            q = span["src"]["end"] if span["strand"] == "-" else span["src"]["start"]
+            span["src"] = dict(span["src"], start=q, end=q)
+            spans.append(span)
     else:
         with handle.lock:
             pieces = handle.map.target_to_source(chrom, pos, end)
@@ -405,12 +425,13 @@ def _record_alleles(record, a, b, source_fasta):
     """
     seq = record.query_sequence or ""
     r, q = record.reference_start, 0
-    bases, covered, deleted = [], 0, 0
+    bases, covered, deleted, inserted, aligned = [], 0, 0, 0, []
     for op, n in record.cigartuples or ():
         if op in (0, 7, 8):
             lo, hi = max(a, r), min(b, r + n)
             if hi > lo:
                 bases.append(seq[q + lo - r:q + hi - r])
+                aligned.append((lo, hi, q + lo - r))
                 covered += hi - lo
             r, q = r + n, q + n
         elif op == 1:
@@ -418,6 +439,7 @@ def _record_alleles(record, a, b, source_fasta):
             # base b lies between the first aligned bases at a and b.
             if a < r <= b:
                 bases.append(seq[q:q + n])
+                inserted += n
             q += n
         elif op in (2, 3):
             if op == 2:
@@ -434,7 +456,13 @@ def _record_alleles(record, a, b, source_fasta):
         ref = "".join(refs[x] for x in range(a, b)) if all(x in refs for x in range(a, b)) else None
     read_bases = "".join(bases).upper()
     overlaps = covered + deleted > 0 if b > a else record.reference_start <= a <= record.reference_end
-    return read_bases, ref, covered, overlaps
+    # The BAM alignment already supplies correspondence, including internal
+    # indels; string equality would call nearly every noisy long carrier other.
+    denominator = covered + deleted + inserted
+    identity = (round(100 * sum(sum(x == y for x, y in zip(seq[qi:qi + hi - lo].upper(), ref[lo - a:hi - a]))
+                                for lo, hi, qi in aligned) / denominator, 2)
+                if ref is not None and seq and denominator else None)
+    return read_bases, ref, covered, overlaps, identity
 
 
 def _chromatin(row, origin, pos, orientation):
@@ -458,7 +486,7 @@ def _chromatin(row, origin, pos, orientation):
                 orientation=orientation)
 
 
-def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None):
+def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=None):
     """Bounded source-record inspection; see the module docstring for JSON.
     An in-memory BAM adapter lets the ordinary display composer decode the
     same <=500 fetched records when a broad cache is absent. No second BAM
@@ -472,7 +500,12 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None):
     from services.read_auxiliary_endpoint import _cached_lift_rows
 
     config = dataset.live_lift
-    spans = _inspection_spans(config, chrom, pos, end, lift_hap)
+    spans = _inspection_spans(config, chrom, pos, end, None)
+    selected = next((d for d in assembly_items_for_region(config, chrom, pos, max(pos + 1, end))
+                     if d["id"] == item_id), None) if item_id else None
+    preferred = selected["hap"] if selected else (next(iter(_haps(config, lift_hap)), None) if lift_hap else None)
+    preferred_label = config.handle.haplotype_labels.get(preferred, preferred)
+    spans.sort(key=lambda s: s["hap"] != preferred)
     if any(s["src"]["end"] - s["src"]["start"] > 50_000 for s in spans):
         from services.lift.live_lift import LiftRefused
         raise LiftRefused("Live lift: this insertion exceeds the 50 kb inspection limit")
@@ -531,7 +564,7 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None):
             display = lifted_reads_for_region(dataset, chrom, view_start, view_end,
                                                dict(include_layers=True, include_methylation=True),
                                                bam_handle_getter=lambda p: adapters.get(p, empty))
-        display = filter_lift_display(display or [], dataset, lift_hap)
+        display = filter_lift_display(display or [], dataset, None)
         by_record = {}
         for row in display:
             ll = row.get("live_lift") or {}
@@ -550,12 +583,21 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None):
                     continue
                 if record.is_supplementary and config.settings.supplementary_display == "hide":
                     continue
-                rb, hg, n_aligned, overlaps = _record_alleles(record, a, b, source)
+                rb, hg, n_aligned, overlaps, identity = _record_alleles(record, a, b, source)
                 if span["strand"] == "-":
                     rb, hg = revcomp(rb), revcomp(hg) if hg is not None else None
                 allele = ("no_coverage" if not overlaps else "deleted" if not rb else
                           "hg002" if hg is not None and ref is not None and rb == hg and hg != ref else
-                          "grch38" if ref is not None and rb == ref else "other")
+                          "same_as_grch38" if hg is not None and ref is not None and rb == hg == ref else
+                          "grch38" if hg is not None and ref is not None and hg != ref and rb == ref else "other")
+                carries = False
+                if pos == end:
+                    full = record.reference_start <= a and record.reference_end >= b
+                    length = b - a
+                    carries = full and length > 0 and bool(rb) and abs(len(rb) - length) <= max(length * .1, 50)
+                    allele = ("no_coverage" if not overlaps else "no_insertion" if length == 0 else
+                              "partial" if not full else "deleted" if not rb else
+                              "hg002" if carries else "no_insertion")
                 st = row.get("strand") or (record.get_tag("st") if record.has_tag("st") else None)
                 item = dict(id=record.query_name, molecule=ll.get("molecule", f"{dataset.id}|{record.query_name}"),
                             hap_label=ll.get("hap_label", span["hap_label"]), record=ll.get("record", record_id),
@@ -563,8 +605,10 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None):
                             read_bases=rb, hg002=hg, grch38=ref, allele=allele,
                             chromatin=_chromatin(row, origin, pos, span["strand"]))
                 if pos == end:
-                    item.update(ins_id=span["id"], carries_insertion=record.reference_start <= a and record.reference_end >= b,
-                                mol_bp=len(rb))
+                    item.update(carries_insertion=carries, mol_bp=len(rb), identity=identity,
+                                read_bases=rb[:60], read_bases_length=len(rb))
+                    if span["kind"] == "insertion":
+                        item["ins_id"] = span["id"]
                     # At an insertion boundary inspect the hidden block's state
                     # at the first covered base, rather than an unrelated call
                     # on the target flank. This also exposes the row's flip.
@@ -572,9 +616,10 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None):
                     if block and not block.get("too_large"):
                         item["chromatin"] = _chromatin(block, 0, block["covered"][0], span["strand"])
                 rows.append(item)
+    rows.sort(key=lambda r: r["hap_label"] != preferred_label)
     summary = {}
     for row in rows:
         counts = summary.setdefault(row["hap_label"], {})
         counts[row["allele"]] = counts.get(row["allele"], 0) + 1
     return dict(dataset_id=dataset.id, lift_key=config.key(), chrom=chrom, pos=pos, end=end, rows=rows,
-                summary=summary, capped=capped, max_records=500)
+                summary=summary, preferred_hap=preferred_label, capped=capped, max_records=500)

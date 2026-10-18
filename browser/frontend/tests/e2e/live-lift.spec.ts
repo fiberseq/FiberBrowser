@@ -92,26 +92,31 @@ test('add a live-lift dataset next to the native BAM: split MAT/PAT panels rende
   await expect.poll(() => matCanvas.getAttribute('data-live-lift-badge-target')).toBeTruthy();
   const target = JSON.parse((await matCanvas.getAttribute('data-live-lift-badge-target'))!);
   expect(target.bp).toBeGreaterThan(2000);
+  expect(target.ins_id).toMatch(/^MAT:.*:insertion$/);
   const scale = await matCanvas.evaluate((c: HTMLCanvasElement) => ({ x: c.getBoundingClientRect().width / c.clientWidth, y: c.getBoundingClientRect().height / c.clientHeight }));
   await matCanvas.click({ position: { x: target.x * scale.x, y: target.y * scale.y } });
-  await expect(page.getByTestId('live-lift-expanded-block')).toHaveCount(3);
+  await expect(page.getByTestId('live-lift-expanded-block')).toHaveCount(3, { timeout: 30_000 });
+  await expect(page.getByTestId('live-lift-diff-popover')).toHaveCount(0);
   for (const block of await page.getByTestId('live-lift-expanded-block').all()) {
     await expect(block).toContainText('HG002 MAT +2,353 bp');
   }
   await expect.poll(() => page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().liveLiftExpansions.main?.length)).toBe(1);
   await expect.poll(async () => Number(await matCanvas.getAttribute('data-live-lift-insertion-calls'))).toBeGreaterThan(0);
+  await expect.poll(async () => JSON.parse((await matCanvas.getAttribute('data-live-lift-insertion-calls-by-id')) ?? '{}')[target.ins_id] ?? 0).toBeGreaterThan(0);
   const nativePanel = panels.find((p: any) => p.hap === null)!;
   const nativeCanvas = page.locator(`[data-read-track-state-key="${nativePanel.stateKey}"] canvas[data-copilot-track="reads"]`);
   await expect(nativeCanvas).toHaveAttribute('data-live-lift-insertion-calls', '0');
-  // Inspection is anchored above the read canvas. Escape closes it without
-  // collapsing; the × control closes the shared columns in all three panels.
-  await page.keyboard.press('Escape');
+  // The badge opens the insertion directly; the × control closes the shared
+  // columns in all three panels. Inspection is a separate strip/secondary action.
   await page.getByTestId('live-lift-expanded-collapse').first().click();
   await expect(page.getByTestId('live-lift-expanded-block')).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().liveLiftExpansions.main?.length)).toBe(0);
 
   const strip = page.locator(`[data-testid="live-lift-diff-strip"][data-panel-id="${mat.id}"]`);
-  const snv = strip.locator('[data-testid="live-lift-diff-item"][data-kind="snv"]').first();
+  // Resolve this known MAT-only SNV at base detail so adjacent 1 bp glyphs do
+  // not mask its mouse target at the original 20 kb scale.
+  await page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().setViewport('chr3', 128_657_405, 128_657_445));
+  const snv = strip.locator('[data-testid="live-lift-diff-item"][data-difference-id="MAT:chr3_MATERNAL:131197059-131197060:snv"]');
   await expect(snv).toBeVisible();
   await snv.click();
   const inspection = page.getByTestId('live-lift-diff-popover');
@@ -120,6 +125,11 @@ test('add a live-lift dataset next to the native BAM: split MAT/PAT panels rende
   await expect(inspection).toContainText('Allele');
   await expect(inspection).toContainText('HG002');
   await expect(inspection).toContainText('GRCh38');
+  await expect(inspection.locator('tbody tr[data-hap="MAT"][data-allele="hg002"]').first()).toBeVisible();
+  await expect(inspection.locator('tbody tr').first()).toHaveAttribute('data-hap', 'MAT');
+  await expect(inspection.getByTestId('live-lift-other-hap-summary')).toContainText(/PAT: no difference here, \d+ reads agree with GRCh38/);
+  await expect(inspection.locator('tbody tr[data-hap="PAT"][data-allele="grch38"]')).toHaveCount(0);
+  await expect(inspection.locator('tbody')).not.toContainText('/ ?');
   await page.keyboard.press('Escape');
 
   const beforeNext = await page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().start);

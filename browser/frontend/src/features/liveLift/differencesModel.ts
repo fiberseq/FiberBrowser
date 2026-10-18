@@ -17,11 +17,17 @@ export function nextDifference(items: Difference[], start: number, end: number, 
   return items.filter(d => differenceSize(d) >= minBp && (direction > 0 ? d.t_start >= end : d.t_end <= start))
     .sort((a, b) => direction * (a.t_start - b.t_start))[0] ?? null;
 }
-export function inspectionModel(rows: DifferenceInspection[]) {
+export function inspectionModel(rows: DifferenceInspection[], preferredHap?: string | null) {
+  const ordered = [...rows].sort((a, b) => Number(b.hap_label === preferredHap) - Number(a.hap_label === preferredHap));
   const summary: Record<string, Record<string, number>> = {};
-  for (const r of rows) { const hap = summary[r.hap_label] ??= {}; hap[r.allele] = (hap[r.allele] ?? 0) + 1; }
-  return { summary, misphased: rows.filter(r => r.allele === 'grch38'),
+  for (const r of ordered) { const hap = summary[r.hap_label] ??= {}; hap[r.allele] = (hap[r.allele] ?? 0) + 1; }
+  return { rows: ordered, summary, misphased: rows.filter(r => r.allele === 'grch38'),
     carriers: rows.filter(r => r.allele === 'hg002' || r.carries_insertion).map(r => r.id) };
+}
+export function haplotypeSummary(alleles: Record<string, number>) {
+  return Object.entries(alleles).map(([allele, n]) => allele === 'same_as_grch38'
+    ? `no difference here, ${n} ${n === 1 ? 'read agrees' : 'reads agree'} with GRCh38`
+    : `${allele.toUpperCase().replace(/_/g, ' ')} ${n}`).join(' · ');
 }
 export function differenceDescription(d: Difference, chrom: string): string {
   const locus = d.src.contig && d.src.start !== null && d.src.end !== null
@@ -29,7 +35,7 @@ export function differenceDescription(d: Difference, chrom: string): string {
     : d.src.contig ? `${d.src.contig} (source position unavailable)` : 'no source correspondence';
   const target = d.t_start === d.t_end ? `${chrom}:${d.t_start.toLocaleString()}|${(d.t_start + 1).toLocaleString()} (insertion boundary)`
     : `${chrom}:${(d.t_start + 1).toLocaleString()}–${d.t_end.toLocaleString()}`;
-  return `${d.hap_label} · ${d.kind.replace(/_/g, ' ')} · ${differenceSize(d).toLocaleString()} bp · ${d.source === 'reads' ? 'read-specific evidence' : 'assembly difference'}\n`
+  return `${d.hap_label} · ${d.kind.replace(/_/g, ' ')} · ${differenceSize(d).toLocaleString()} bp · ${d.source === 'reads' ? 'read-only event' : 'assembly difference'}\n`
     + `GRCh38 ${target}\nHG002 ${locus}\n`
     + `GRCh38: ${d.grch38 ?? 'unknown'} · HG002: ${d.alt ?? 'unknown'}\n`
     + `${BADGE_REASONS[d.reason] ?? d.reason.replace(/_/g, ' ')}`

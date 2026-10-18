@@ -73,7 +73,7 @@ with no primary aligned piece, including target-only gaps; it has null
 source fields and uses target chromosome/start/end in its ID. Inversions
 span the primary minus-strand net region.
 
-`grch38` is populated only for SNVs, MNVs and deletions of at most 50 bp,
+`grch38` is empty for insertions and populated for SNVs, MNVs and deletions of at most 50 bp,
 using the currently loaded target FASTA; it is null without that reference.
 `alt` uses the optional configured `source_fasta`, otherwise null. An empty
 allele is `""`, distinct from unknown/null. The strip never reads BAM records.
@@ -101,6 +101,9 @@ or `min_bp` too, so zooming/filtering does not make known events novel.
 `end` defaults to `pos+1`. Explicit `end=pos` inspects all assembly insertions
 at that boundary. Ordinary inspection spans and source insertion blocks are
 limited to 50 kb (oversized query: 422; oversized insertion: 413).
+Optional `item_id` identifies the canonical strip item. It, or `lift_hap`,
+prioritises that haplotype's records; both parents are inspected against their
+own source intervals so the other parent's agreement is summarised separately.
 
 ```ts
 type Inspection = {
@@ -108,7 +111,8 @@ type Inspection = {
   supplementary: boolean; strand: string | null;
   source_pos: {contig: string; start: number; end: number};
   read_bases: string; hg002: string | null; grch38: string | null;
-  allele: 'hg002' | 'grch38' | 'other' | 'deleted' | 'no_coverage';
+  allele: 'hg002' | 'same_as_grch38' | 'grch38' | 'other' | 'deleted' | 'no_coverage'
+      | 'partial' | 'no_insertion';
   chromatin: {
     state: 'nucleosome' | 'footprint' | 'accessible' | 'none';
     layer: string | null;
@@ -117,12 +121,14 @@ type Inspection = {
   };
   // Present for insertion inspection only:
   ins_id?: string; carries_insertion?: boolean; mol_bp?: number;
+  identity?: number | null; read_bases_length?: number;
 };
 type DifferenceReadsResponse = {
   dataset_id: string; lift_key: string;
   chrom: string; pos: number; end: number;
   rows: Inspection[];
   summary: Record<string, Partial<Record<Inspection['allele'], number>>>;
+  preferred_hap: string | null;
   capped: boolean;
   max_records: 500;
 };
@@ -133,22 +139,38 @@ insertions inside the inspected source interval); `""` represents a deletion.
 `hg002` comes from source FASTA when configured, otherwise SEQ/MD, including
 MD reference bases at mismatches and deletions. Without either it is null.
 All strings follow target display orientation. `hg002` allele means the read
-matches HG002 and HG002 differs from GRCh38. `grch38` flags a read carrying
-the target allele; `other` includes unknown reference comparisons.
+matches its own haplotype's HG002 base and that base differs from GRCh38.
+`same_as_grch38` means this haplotype has no difference and the read agrees.
+`grch38` flags a read carrying the target allele when its own haplotype differs;
+`other` includes unknown reference comparisons.
 `no_coverage` includes skipped source sequence rather than a CIGAR deletion.
 
-`strand` is molecular `st`; it does not flip on a minus piece.
+`strand` is molecular `st`; it does not flip on a minus piece. Without `st` it
+is null and the popover shows only the haplotype chip.
 `chromatin.orientation` describes the display flip. Chromatin comes from
 display rows, reusing a broad cache when available; nearest m6A is an unsigned
 distance at most 50 bp, otherwise null. Insertion inspection reports the
 hidden block's state at its first covered display base. `carries_insertion`
-tests whether the source alignment spans the full map gap; `mol_bp` measures
-actual SEQ bases there, allowing partial carriers. A record projected through
+requires the source alignment to span the full map gap with `mol_bp` within
+10% or 50 bp of its length. The allele is `hg002` for these carriers, `partial`
+for alignments ending inside the insertion, `deleted` for a deletion across it,
+or `no_insertion` for other flank-spanning non-carriers. `mol_bp` measures
+actual SEQ bases there. Insertion `read_bases` is truncated to 60 bases with
+the full length in `read_bases_length`; `identity` is a best-effort percentage
+against the assembly using aligned CIGAR positions and indels, independent
+of carriage. A record projected through
 several primary chains can contribute several inspection rows.
 
 At most 500 distinct source records are fetched across BAMs and windows.
 `capped` is true if another eligible record was encountered. Fallback display
 composition uses these same in-memory records; it cannot fetch another cohort.
+
+Labelled badge clicks expand payload-backed insertions directly; right-click
+the badge or use the strip to inspect. Overlapping labelled boxes resolve by
+nearest notch centre, then greater molecular length; thin ticks can be hit only
+outside labelled boxes. Badge selection reuses a canonical strip item by ID,
+or fetches a small map window if absent. Only unmatched events use synthetic
+read-only evidence. The loaded-item cache includes dataset, lift_key and chrom.
 
 ## Expand-in-place row payload
 

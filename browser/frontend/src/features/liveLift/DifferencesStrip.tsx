@@ -12,6 +12,7 @@ import type { DifferencesResponse } from './differenceTypes';
 import { useLiveLiftAxis } from './useLiveLiftAxis';
 import { DifferencePopover } from './DifferencePopover';
 import { CIGAR_COLORS } from '../../components/tracks/read-track/constants';
+import { rememberDifferences } from './differenceCache';
 const BIN_KINDS = ['snv', 'mnv', 'insertion', 'deletion', 'replacement', 'aligned_bubble', 'inversion', 'no_correspondence'];
 
 export function differencesStripHeight(panel: PanelConfig, dataset: Dataset) {
@@ -46,7 +47,7 @@ export function DifferencesStrip({ panel, dataset, width, gutter = 0 }: {
     if (!enabled) return;
     const controller = new AbortController();
     const timer = setTimeout(() => {
-      void getDifferences(query, controller.signal).then(r => { if (!controller.signal.aborted) setData(r); })
+      void getDifferences(query, controller.signal).then(r => { if (!controller.signal.aborted) { rememberDifferences(r); setData(r); } })
         .catch(e => { if (!controller.signal.aborted) setError(String(e.message ?? e)); });
     }, 140);
     return () => { clearTimeout(timer); controller.abort(); navigation.current?.abort(); };

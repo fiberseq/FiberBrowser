@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { DEFAULT_COLORMAP } from '../../types';
 import { coverageHistogramBins, drawReadTrack } from '../../components/tracks/read-track/ReadTrackCanvas';
 import {
-  formatBadgeBp, liveLiftBodyRects, liveLiftBodySpans, liveLiftSegmentAt,
+  formatBadgeBp, liveLiftBadgeGeometry, liveLiftHitAt, liveLiftBodyRects, liveLiftBodySpans, liveLiftSegmentAt,
 } from '../../components/tracks/read-track/liveLiftCanvas';
 import type { CompactRead, LiveLiftRow } from '../../components/tracks/read-track/types';
 import { makeDataViewportKey } from '../../components/tracks/read-track/useReadTrackData';
@@ -62,7 +62,7 @@ function recordingContext() {
   return { ctx, fills, lines, texts };
 }
 
-const fakeCanvas = (ctx: unknown) => ({ getContext: () => ctx, style: {}, width: 0, height: 0 }) as unknown as HTMLCanvasElement;
+const fakeCanvas = (ctx: unknown) => ({ getContext: () => ctx, style: {}, dataset: {}, width: 0, height: 0 }) as unknown as HTMLCanvasElement;
 const START = 10_000;
 const LL: LiveLiftRow = {
   v: 1, hap_label: 'MAT', hap_source: 'primary',
@@ -80,8 +80,9 @@ const LIFTED: CompactRead = {
 
 function draw(reads: CompactRead[], extra: Record<string, unknown> = {}) {
   const rec = recordingContext();
+  const canvas = fakeCanvas(rec.ctx);
   drawReadTrack({
-    canvas: fakeCanvas(rec.ctx), displayReads: reads, width: 1000, height: 100, regionWidth: 1000,
+    canvas, displayReads: reads, width: 1000, height: 100, regionWidth: 1000,
     chrom: 'chr3', start: START, end: START + 1000, loading: false,
     datasetId: 'd', sidebarWidth: 0, hasCluster: false, myClusterAssignments: {}, myClusterOrder: [],
     hasClusterFocus: false, myClusterFocus: null, mySelectedClusters: null,
@@ -98,7 +99,7 @@ function draw(reads: CompactRead[], extra: Record<string, unknown> = {}) {
     maxRegionForReads: 100_000, svEnabled: false, svMinLen: 50,
     ...extra,
   } as unknown as Parameters<typeof drawReadTrack>[0]);
-  return rec;
+  return { ...rec, canvas };
 }
 
 const readBg = String(DEFAULT_COLORMAP.readBackgroundColor ?? '#f1f5f9').toLowerCase();
@@ -140,6 +141,37 @@ describe('insertion columns on reads and sibling native reads', () => {
 });
 
 describe('live-lift geometry', () => {
+  it.each([false, true])('resolves dense 23/147 bp neighbours at 20 kb / 480 px (reversed=%s)', reversed => {
+    const ll: LiveLiftRow = { ...LL, segments: [[0, 20000, 0, '+', true]], badges: [
+      [7220, 'source_insertion', 1, 1, 'I'], [7243, 'source_insertion', 1, 1, 'I'], [7390, 'source_insertion', 2353, 2353, 'I'],
+    ] };
+    const options = { y: 10, rowHeight: 16, linkedOffset: 0, regionWidth: 20000, toX: (p: number) => (reversed ? 20000 - p : p) * 480 / 20000 };
+    const geometry = liveLiftBadgeGeometry(ll, options), large = geometry[2];
+    // The neighbour's tick can be nearer inside the large insertion's notch:
+    // a labelled box owns this overlap even when the tick was emitted first.
+    const shared = large.x + (reversed ? 2 : -2);
+    expect(liveLiftHitAt(ll, shared, 12, options)?.badge).toBe(ll.badges![2]);
+    expect(liveLiftHitAt(ll, large.x, 12, options)?.badge).toBe(ll.badges![2]);
+    // Away from the labelled box, ticks remain independently inspectable.
+    const thin = geometry[0];
+    if (!reversed) expect(liveLiftHitAt(ll, thin.x, 12, options)?.badge).toBe(ll.badges![0]);
+    const labelled = { ...ll, badges: ll.badges!.map(b => [b[0], b[1], 100, 100, 'I'] as typeof b) };
+    expect(liveLiftHitAt(labelled, geometry[1].x, 12, options)?.badge).toBe(labelled.badges[1]);
+    const tied = { ...ll, badges: [[7390, 'source_insertion', 100, 100, 'I'], ll.badges![2]] as LiveLiftRow['badges'] };
+    expect(liveLiftHitAt(tied, large.x, 12, options)?.badge).toBe(tied.badges![1]);
+  });
+
+  it('publishes a labelled notch resolved to the same payload-backed badge', () => {
+    const id = 'MAT:src:100-2453:insertion';
+    const ll: LiveLiftRow = { ...LL, badges: [[598, 'source_insertion', 1, 1, 'I'], LL.badges![0]], badge_ids: ['tiny', id],
+      insertions: { [id]: { pos: 600, length: 2353, mol_bp: 2353, src: ['src', 100, 2453], hap_label: 'MAT', orientation: '+', covered: [0, 2353], intervals: [] } } };
+    const { canvas } = draw([{ ...LIFTED, live_lift: ll }]);
+    const target = JSON.parse(canvas.dataset.liveLiftBadgeTarget);
+    expect(target.ins_id).toBe(id);
+    const hit = liveLiftHitAt(ll, target.x, target.y, { y: 0, rowHeight: 20, linkedOffset: 0, regionWidth: 1000, toX: p => p });
+    expect(hit?.badge).toBe(ll.badges![1]);
+  });
+
   it('body spans are segments minus connectors', () => {
     expect(liveLiftBodySpans(LL)).toEqual([[0, 300], [310, 600], [700, 1000]]);
     expect(liveLiftBodyRects(LL, 0, 1000, x => x)).toEqual([{ x: 0, w: 300 }, { x: 310, w: 290 }, { x: 700, w: 300 }]);

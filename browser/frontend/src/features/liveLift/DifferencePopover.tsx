@@ -5,7 +5,7 @@ import { useReadActionsStore } from '../../stores/readActionsStore';
 import { useBrowserStore } from '../../stores/browserStore';
 import { getDifferenceReads } from './api';
 import { useDifferenceSelection, expandDifference } from './inspectionStore';
-import { differenceDescription, inspectionModel } from './differencesModel';
+import { differenceDescription, haplotypeSummary, inspectionModel } from './differencesModel';
 import type { DifferenceReadsResponse } from './differenceTypes';
 import { liveLiftHaplotypeColor } from './palette';
 import { IdentifyTab, identifyLens } from '../insertion/IdentifyTab';
@@ -13,7 +13,8 @@ import type { LensResponse } from '../insertion/insertionLensModel';
 import { openSourceView } from './sourceView';
 
 export const LIFT_SPLIT_REASON = 'Split by carrier is unavailable: /api/sv/split does not accept live-lift datasets yet.';
-const bases = (s: string | null) => s === null ? 'unknown' : s === '' ? '∅' : s.length > 60 ? `${s.slice(0, 28)}…${s.slice(-12)} (${s.length.toLocaleString()} bp)` : s;
+const bases = (s: string | null, length = s?.length ?? 0) => s === null ? 'unknown' : s === '' ? '∅'
+  : length > s.length ? `${s}… (${length.toLocaleString()} bp)` : s.length > 60 ? `${s.slice(0, 28)}…${s.slice(-12)} (${s.length.toLocaleString()} bp)` : s;
 
 export function DifferencePopover({ panel, dataset, anchor }: { panel: PanelConfig; dataset: Dataset; anchor: RefObject<HTMLDivElement | null> }) {
   const selection = useDifferenceSelection(s => s.selection);
@@ -29,12 +30,13 @@ export function DifferencePopover({ panel, dataset, anchor }: { panel: PanelConf
     if (!current || !d) return;
     const controller = new AbortController();
     void getDifferenceReads({ datasetId: dataset.id, liftKey: dataset.live_lift?.key ?? '', chrom: current.chrom,
-      pos: d.t_start, end: Math.min(d.t_end, d.t_start + 50_000), liftHap: panel.liftHap }, controller.signal)
+      pos: d.t_start, end: Math.min(d.t_end, d.t_start + 50_000), liftHap: panel.liftHap, itemId: d.source === 'assembly' ? d.id : undefined }, controller.signal)
       .then(r => { if (!controller.signal.aborted) setData(r); })
       .catch(e => { if (!controller.signal.aborted) setError(String(e.message ?? e)); });
     return () => controller.abort();
   }, [current, d, dataset.id, dataset.live_lift?.key, panel.liftHap]);
-  const model = useMemo(() => inspectionModel(data?.rows ?? []), [data]);
+  const preferredHap = data?.preferred_hap ?? d?.hap_label;
+  const model = useMemo(() => inspectionModel(data?.rows ?? [], preferredHap), [data, preferredHap]);
   useEffect(() => {
     if (!current) return;
     // Reuse the read action outline without pinning a cohort (pins would fetch
@@ -58,6 +60,13 @@ export function DifferencePopover({ panel, dataset, anchor }: { panel: PanelConf
     if (lens && current?.action === 'identify') { identifyLens(lens, dataset.id, { key: identifyKey }); setIdentify(true); }
   }, [lens, current?.action, dataset.id, identifyKey]);
   if (!current || !d) return null;
+  // Map geometry is available without a source FASTA. MD-backed inspection can
+  // supply the selected parent's assembly bases later; never use the other
+  // parent's allele to fill a missing map string.
+  const ownAllele = model.rows.find(r => r.hap_label === d.hap_label && r.hg002 !== null
+    && (d.kind !== 'insertion' || r.ins_id === d.id));
+  const described = d.source === 'assembly' && ownAllele
+    ? { ...d, alt: d.alt ?? ownAllele.hg002, grch38: d.grch38 ?? ownAllele.grch38 } : d;
   const rect = anchor.current?.getBoundingClientRect();
   const top = Math.max(8, Math.min(rect?.bottom ?? 80, window.innerHeight - 410));
   return createPortal(<div role="dialog" aria-label="Inspect assembly difference" data-testid="live-lift-diff-popover"
@@ -65,7 +74,7 @@ export function DifferencePopover({ panel, dataset, anchor }: { panel: PanelConf
     style={{ left: Math.max(8, Math.min(rect?.left ?? 8, window.innerWidth - 750)), top, width: Math.min(730, window.innerWidth - 16), maxHeight: Math.max(160, window.innerHeight - top - 12), overflow: 'auto' }}>
     <div className="flex justify-between gap-4"><strong style={{ color: liveLiftHaplotypeColor(d.hap_label, dark) }}>{d.hap_label} · {d.kind.replace(/_/g, ' ')} · {Math.max(d.alt_bp, d.ref_bp).toLocaleString()} bp</strong>
       <button aria-label="Close difference inspection" onClick={() => useDifferenceSelection.getState().select(null)}>×</button></div>
-    <p className="whitespace-pre-line text-[11px] my-2">{differenceDescription(d, current.chrom)}</p>
+    <p className="whitespace-pre-line text-[11px] my-2">{differenceDescription(described, current.chrom)}</p>
     <div className="flex gap-3 my-2 items-center">
       {d.kind === 'insertion' && <span title={d.alt_bp < 50 ? 'Insertion-local read payloads start at 50 bp.' : d.alt_bp > 50_000 ? 'Insertion payload is too large (over 50 kb).' : 'Open the insertion across this view'}>
         <button disabled={d.alt_bp < 50 || d.alt_bp > 50_000} onClick={() => expandDifference(current)}>Expand insertion</button></span>}
@@ -80,17 +89,19 @@ export function DifferencePopover({ panel, dataset, anchor }: { panel: PanelConf
     {(d.kind === 'insertion' || d.kind === 'deletion') && <p className="text-[10px] text-slate-500">{LIFT_SPLIT_REASON}</p>}
     {current.action === 'identify' && data && !lens && <p role="status">Identify unavailable: no full insertion sequence is available from the inspected reads.</p>}
     {identify && lens && <IdentifyTab response={lens} datasetId={dataset.id} identifyKey={identifyKey} reversed={false} visible dark={dark} />}
-    <div className="my-2 flex gap-3 flex-wrap">{Object.entries(model.summary).map(([hap, alleles]) => <span key={hap}>
-      <span style={{ color: liveLiftHaplotypeColor(hap, dark) }}>● {hap}</span>: {Object.entries(alleles).map(([allele, n]) => `${allele.toUpperCase()} ${n}`).join(' · ')}</span>)}</div>
+    <div className="my-2 flex gap-3 flex-wrap">{Object.entries(model.summary).map(([hap, alleles]) => <span key={hap}
+      data-testid={hap !== preferredHap ? 'live-lift-other-hap-summary' : 'live-lift-selected-hap-summary'}>
+      <span style={{ color: liveLiftHaplotypeColor(hap, dark) }}>{hap}</span>: {haplotypeSummary(alleles)}</span>)}</div>
     {model.misphased.length > 0 && <p className="text-amber-700 dark:text-amber-300 font-semibold" data-testid="live-lift-misphased">{model.misphased.length} GRCh38-allele reads · possible mis-phasing / mismapping</p>}
     {!data && <p role="status">{error || 'Loading reads and alleles…'}</p>}
-    {data && <><table className="w-full text-left text-[10px] mt-2"><thead><tr>{['Read', 'Hap / strand', 'Allele', 'Read bases', 'HG002', 'GRCh38', 'Chromatin / nearby m6A'].map(h => <th key={h} className="px-1">{h}</th>)}</tr></thead>
-      <tbody>{data.rows.map((r, i) => <tr key={`${r.id}-${r.record}-${i}`} className={r.allele === 'grch38' ? 'bg-amber-100 dark:bg-amber-950' : 'hover:bg-slate-100 dark:hover:bg-slate-800'}
+    {data && <><table className="w-full text-left text-[10px] mt-2"><thead><tr>{['Read', 'Hap / strand', 'Allele', 'Read bases', 'HG002', 'GRCh38', ...(d.kind === 'insertion' ? ['Identity'] : []), 'Chromatin / nearby m6A'].map(h => <th key={h} className="px-1">{h}</th>)}</tr></thead>
+      <tbody>{model.rows.map((r, i) => <tr key={`${r.id}-${r.record}-${i}`} data-hap={r.hap_label} data-allele={r.allele} className={r.allele === 'grch38' ? 'bg-amber-100 dark:bg-amber-950' : 'hover:bg-slate-100 dark:hover:bg-slate-800'}
         onMouseEnter={() => useReadActionsStore.setState({ highlight: { ids: new Set([r.id]), pulseUntil: null, scrollTo: null, scrolled: new Set(), nonce: Date.now() } })}
         onMouseLeave={() => useReadActionsStore.setState({ highlight: { ids: new Set(model.carriers), pulseUntil: null, scrollTo: null, scrolled: new Set(), nonce: Date.now() } })}>
         <td className="max-w-40 truncate px-1" title={`${r.molecule}\n${r.record}\n${r.source_pos.contig}:${r.source_pos.start}-${r.source_pos.end}`}>{r.molecule}{r.supplementary ? ' · supp' : ''}</td>
-        <td style={{ color: liveLiftHaplotypeColor(r.hap_label, dark) }}>● {r.hap_label} / {r.strand ?? '?'}</td><td>{r.allele.toUpperCase()}</td>
-        <td title={r.read_bases} className="font-mono max-w-28 break-all">{bases(r.read_bases)}</td><td title={r.hg002 ?? undefined} className="font-mono max-w-24 break-all">{bases(r.hg002)}</td><td className="font-mono">{bases(r.grch38)}</td>
+        <td style={{ color: liveLiftHaplotypeColor(r.hap_label, dark) }}>● {r.hap_label}{r.strand ? ` / ${r.strand}` : ''}</td><td>{r.allele.toUpperCase().replace(/_/g, ' ')}</td>
+        <td title={r.read_bases} className="font-mono max-w-28 break-all">{bases(r.read_bases, r.read_bases_length)}</td><td title={r.hg002 ?? undefined} className="font-mono max-w-24 break-all">{bases(r.hg002)}</td><td className="font-mono">{bases(r.grch38)}</td>
+        {d.kind === 'insertion' && <td>{r.identity == null ? '—' : `${r.identity.toFixed(1)}%`}</td>}
         <td>{r.chromatin.state === 'accessible' ? 'MSP / accessible' : r.chromatin.state}{r.chromatin.layer ? ` (${r.chromatin.layer})` : ''}{r.chromatin.nearest_m6a_bp !== null ? ` · m6A ${r.chromatin.nearest_m6a_bp} bp` : ''}</td>
       </tr>)}</tbody></table>{data.capped && <p>Showing at most {data.max_records} source records.</p>}{!data.rows.length && <p>No reads cover this difference.</p>}</>}
   </div>, document.body);

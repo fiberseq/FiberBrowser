@@ -33,6 +33,7 @@ export function liveLiftTooltipLines(read: Pick<CompactRead, 'live_lift' | 'stra
     lines.push(`${formatBadgeBp(molBp)}: ${BADGE_REASONS[kind] ?? kind}${where}`);
   }
   if ((ll.badges ?? []).length > 3) lines.push(`… ${ll.badges!.length - 3} more badges`);
+  if (ll.badges?.length) lines.push('Click a labelled insertion to expand it; right-click its badge to inspect the difference.');
   lines.push('CIGAR detail: muted HG002 assembly differences; normal read mismatches; amber GRCh38-allele markers (possible mis-phasing).');
   return lines;
 }

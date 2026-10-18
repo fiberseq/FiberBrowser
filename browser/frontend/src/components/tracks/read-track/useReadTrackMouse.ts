@@ -527,6 +527,8 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
     const genomePos = Math.round(genomePosAtX(x));
     const hit = getReadHitAtXY(x, y);
     const read = hit?.read ?? null;
+    if (read && hit?.liveLiftBadge && selectReadDifference(read, hit.liveLiftBadge, genomePos,
+      { datasetId, stateKey, chrom, start: linkedBoundsStart ?? start }, 'inspect')) return;
     setContextTarget({
       clientX,
       clientY,
@@ -537,7 +539,7 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
       footprint: read ? getFootprintAtXY(x, y) : null,
       genomePos,
     });
-  }, [sidebarWidth, width, regionWidth, isReversed, start, end, getReadHitAtXY, getFootprintAtXY, panScope, genomePosAtX]);
+  }, [sidebarWidth, width, regionWidth, isReversed, start, end, getReadHitAtXY, getFootprintAtXY, panScope, genomePosAtX, datasetId, stateKey, chrom, linkedBoundsStart]);
   const handleContextMenu = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = (e.clientX - rect.left) * e.currentTarget.clientWidth / rect.width;

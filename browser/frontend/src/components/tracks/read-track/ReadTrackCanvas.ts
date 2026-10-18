@@ -1,7 +1,7 @@
 import { useBrowserStore } from '../../../stores/browserStore';
 import type { LiftAxis } from '../../../features/liveLift/axis';
 import { drawInsertionPayload } from './liveLiftInsertionCanvas';
-import { drawLiveLiftMarks, drawLiveLiftHaplotypeStripe, liveLiftBodyRects, liveLiftBodySpans, liveLiftBadgeGeometry } from './liveLiftCanvas';
+import { drawLiveLiftMarks, drawLiveLiftHaplotypeStripe, liveLiftBodyRects, liveLiftBodySpans, liveLiftBadgeGeometry, liveLiftHitAt } from './liveLiftCanvas';
 import { readBodyExtent } from './readExtent';
 import type { CoverageResponse } from '../../../api/coverage';
 import { getCanvasRenderScale, setupHighDpiCanvas } from '../../../utils/canvasUtils';
@@ -558,6 +558,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
   // Draw reads (in clipped/translated context for panning)
   const liveLiftDark = inkOn(noReadBackgroundColor).dark;
   let insertionCalls = 0;
+  const insertionCallsById: Record<string, number> = {};
   // Recording the actual visible badge geometry lets the browser smoke test
   // click the canvas as a user does, even when row sorting or density changes.
   let badgeTarget: { x: number; y: number; ins_id: string; bp: number } | null = null;
@@ -573,10 +574,15 @@ export function drawReadTrack(params: DrawReadsParams): void {
 
     if (!badgeTarget && read.live_lift) {
       const ll = read.live_lift;
-      const badge = liveLiftBadgeGeometry(ll, { y, rowHeight: Math.max(1, rowHeight - rowGap), linkedOffset, regionWidth, toX })
-        .find(b => b.badge[2] >= 2000 && b.badge[2] < 3000 && y >= headerHeight && y + rowHeight <= height);
+      const options = { y, rowHeight: Math.max(1, rowHeight - rowGap), linkedOffset, regionWidth, toX };
+      const badgeY = y + options.rowHeight / 2;
+      const badge = liveLiftBadgeGeometry(ll, options)
+        .find(b => b.label && b.badge[2] >= 2000 && b.badge[2] < 3000 && y >= headerHeight && y + rowHeight <= height
+          && b.x >= sidebarWidth && b.x < width && liveLiftHitAt(ll, b.x, badgeY, options)?.badge === b.badge
+          && !params.axis?.fromX(b.x - sidebarWidth).ins_id
+          && ll.insertions?.[ll.badge_ids?.[ll.badges!.indexOf(b.badge)] ?? '']);
       const id = badge ? ll.badge_ids?.[ll.badges!.indexOf(badge.badge)] : undefined;
-      if (badge && id) badgeTarget = { x: badge.x, y: y + Math.max(1, rowHeight - rowGap) / 2, ins_id: id, bp: badge.badge[2] };
+      if (badge && id) badgeTarget = { x: badge.x, y: badgeY, ins_id: id, bp: badge.badge[2] };
     }
 
     // Every ordinary read layer is clipped out of insertion columns. Native
@@ -1700,17 +1706,20 @@ export function drawReadTrack(params: DrawReadsParams): void {
       for (const block of params.axis.blocks) {
         const payload = read.live_lift?.insertions?.[block.ins.ins_id];
         if (!payload || 'too_large' in payload) continue;
-        insertionCalls += drawInsertionPayload(ctx, payload, block.ins.ins_id, params.axis, {
+        const calls = drawInsertionPayload(ctx, payload, block.ins.ins_id, params.axis, {
           y, h: Math.max(1, rowHeight - rowGap), sidebar: sidebarWidth, background: readBackgroundColor,
           enabled: enabledModTypes, layerColors,
           color: (_a, _b, size, layer) => getColorHit(block.ins.pos - start, block.ins.pos - start, size, layer).color,
         });
+        insertionCalls += calls;
+        insertionCallsById[block.ins.ins_id] = (insertionCallsById[block.ins.ins_id] ?? 0) + calls;
       }
     }
   }
 
   if (canvas.dataset) {
     canvas.dataset.liveLiftInsertionCalls = String(insertionCalls);
+    canvas.dataset.liveLiftInsertionCallsById = JSON.stringify(insertionCallsById);
     canvas.dataset.liveLiftBadgeTarget = badgeTarget ? JSON.stringify(badgeTarget) : '';
   }
   const smoothing = activeColormap.displaySmoothing;
