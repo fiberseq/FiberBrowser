@@ -4,6 +4,10 @@ With live lift enabled, native BAMs and live-lift MAT/PAT panels can share a
 clustering model. The default panels remain split by haplotype; pooled panels
 use the same cohort. Cluster colours and filters identify lifted rows by
 `analysis_id`; `id` remains the original read name for display and locate.
+Treat cohort IDs as opaque strings. They use a versioned JSON encoding with
+a space in the marker, which cannot occur in a raw SAM QNAME. Sampler scopes
+decode only identities validated against the dataset's provenance and fold
+settings; other names, including pipe-delimited QNAMEs, pass through verbatim.
 
 Preparation runs inside working-set construction, before spanning, ID,
 strand, footprint-count and read-cap filters. Broad caches retain unfiltered
@@ -25,6 +29,8 @@ Features use continuous projected body spans. Connectors, synthetic target
 holes and expanded insertion payloads contribute no accessible intervals.
 Legacy MSPs are inferred within individual continuous segments. Coverage
 requirements and metaprofile denominators use the same body spans.
+Dynamic nearest-centroid assignment compares only sampled positions inside
+the observed body, including when a hole falls inside one clustering peak.
 
 ## Shared molecules
 
@@ -41,6 +47,10 @@ including datasets with no eligible rows. Winners are deterministic: native,
 then dataset ID, then analysis ID. Deduplication occurs once after collecting
 all windows and before extracting features. Distinct alternative or record
 rows can make the number of removed rows exceed the shared-molecule count.
+Fit inputs have a canonical order under both policies, including matched
+views and balanced panel sampling. Equal-frequency accessibility patterns
+receive labels in lexicographic pattern order, across ordinary, columnar and
+matched-view clustering.
 
 Native declarations use `POST /api/lift/provenance/{dataset_id}` with
 `molecule_groups: [[bam_path, group], ...]` and `joint_dedup`. Lifted datasets

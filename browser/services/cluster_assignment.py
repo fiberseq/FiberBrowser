@@ -187,8 +187,7 @@ def cluster_reads(reads_df, peak_regions, n_clusters, start, method="kmeans",
 
         sorted_patterns = sorted(
             pattern_to_reads.keys(),
-            key=lambda p: len(pattern_to_reads[p]),
-            reverse=True,
+            key=lambda p: (-len(pattern_to_reads[p]), p),
         )
 
         max_combinatorial = 50
@@ -368,8 +367,7 @@ def cluster_compact_reads(compact_reads, peak_regions, region_start, n_clusters,
 
         sorted_patterns = sorted(
             pattern_to_reads.keys(),
-            key=lambda p: len(pattern_to_reads[p]),
-            reverse=True,
+            key=lambda p: (-len(pattern_to_reads[p]), p),
         )
 
         max_combinatorial = 50

@@ -121,7 +121,8 @@ class PackedReads(Sequence):
         # decompress the entire neighborhood to discover its overlapping rows.
         self._display_index = ReadDisplayIndex(reads) if display_index else None
         self._bounds = self._display_index.bounds if display_index else _read_bounds_array(reads)
-        self._read_ids = None if display_index else tuple(str(r.get("id", "")) for r in reads)
+        self._read_ids = None if display_index else tuple(str(r.get("analysis_id") or r.get("id", "")) for r in reads)
+        self._qnames = None if display_index else tuple(str(r.get("id", "")) for r in reads)
         blocks = []
         for i in range(0, len(reads), self.block_size):
             checkpoint()
@@ -138,7 +139,7 @@ class PackedReads(Sequence):
                                    for i in range(0, len(reads), self.block_size)), default=0)
         if self._display_index is not None:
             self.retained_bytes += self._display_index.retained_bytes
-        self.retained_bytes += self._selection_budget + retained_size(self._read_ids)
+        self.retained_bytes += self._selection_budget + retained_size((self._read_ids, self._qnames))
         # Sampled loads also carry the extents of unparsed alignments.
         for name in ('sample_level', 'sampling_estimated', 'skipped_starts', 'skipped_ends', 'kept_starts', 'kept_ends'):
             if hasattr(reads, name):
@@ -210,13 +211,22 @@ class PackedReads(Sequence):
 
     def selected(self, ids, *, aliases=False):
         """Expand selected frames only, keeping every physical duplicate in order."""
-        from services.read_selection import read_matches_id_filter
+        from services.read_selection import read_matches_id_filter, read_id_keys
         wanted = set(ids)
+        index = getattr(self, '_display_index', None)
+        qnames = getattr(self, '_qnames', None)
+        if index is not None:
+            identities = (read_id_keys(row) for row in index.metadata)
+        elif qnames is not None:
+            identities = ({cohort, name} for cohort, name in zip(self.read_ids(), qnames))
+        else:
+            # Older in-process objects have only one indexed identity.
+            identities = (read_id_keys(row) for row in self)
         indices = []
-        for i, name in enumerate(self.read_ids()):
+        for i, keys in enumerate(identities):
             if not i & 255:
                 checkpoint()
-            if read_matches_id_filter(name, wanted) if aliases else name in wanted:
+            if any(read_matches_id_filter(key, wanted) for key in keys) if aliases else bool(keys & wanted):
                 indices.append(i)
         return self.take(indices).values()
 
@@ -417,6 +427,7 @@ class PackedReadBuilder:
         self.expanded_reserve = 0
         self.bounds = []
         self.read_ids = []
+        self.qnames = []
 
     def append(self, read):
         self.pending.append(read)
@@ -429,7 +440,8 @@ class PackedReadBuilder:
 
     def flush(self):
         if self.pending:
-            self.read_ids.extend(str(r.get("id", "")) for r in self.pending)
+            self.read_ids.extend(str(r.get("analysis_id") or r.get("id", "")) for r in self.pending)
+            self.qnames.extend(str(r.get("id", "")) for r in self.pending)
             display = packed_display.get()
             if display:
                 # Whole-file blocks already arrive in physical record order.
@@ -457,9 +469,11 @@ class PackedReadBuilder:
         bounds = np.concatenate(self.bounds) if self.bounds else np.empty((0, 2), dtype=np.int64)
         from services.byte_cache import retained_size
         ids = tuple(self.read_ids)
+        qnames = tuple(self.qnames)
         result.__setstate__({'_blocks': tuple(self.blocks), '_length': self.count, '_read_ids': ids,
+                            '_qnames': qnames,
                             '_bounds': bounds,
-                            'retained_bytes': sum(_block_bytes(b) for b in self.blocks) + bounds.nbytes + retained_size(ids) + self.expanded_reserve + 256})
+                            'retained_bytes': sum(_block_bytes(b) for b in self.blocks) + bounds.nbytes + retained_size((ids, qnames)) + self.expanded_reserve + 256})
         return result
 
 

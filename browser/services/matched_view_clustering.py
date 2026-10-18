@@ -220,9 +220,11 @@ def run_matched_views_endpoint(*, state, req) -> Dict[str, Any]:
     from services.lift.joint import prepare_joint_cohort
     joint_rows, joint_report = prepare_joint_cohort(state, [r for *_, cohort in pending for r in cohort],
         {p.dataset_id for view in req.views for p in view.panels})
-    retained = {id(r) for r in joint_rows}
-    for view, panel, peaks, modes, cohort in pending:
-        prefixed = [r for r in cohort if id(r) in retained]
+    retained = {id(r): i for i, r in enumerate(joint_rows)}
+    # Feature extraction groups by panel; preserve canonical panel and row
+    # order rather than reconstructing the request order after joint prep.
+    for view, panel, peaks, modes, cohort in sorted(pending, key=lambda item: (item[0].id, item[1].result_key)):
+        prefixed = sorted((r for r in cohort if id(r) in retained), key=lambda r: retained[id(r)])
         ids = []
         if prefixed:
             raw, prefixed_ids, widths, _ = extract_features_from_compact(
@@ -280,7 +282,7 @@ def run_matched_views_endpoint(*, state, req) -> Dict[str, Any]:
         labels = np.zeros(len(row_read_ids), dtype=np.int32)
         fitted = 0
         offset = 0
-        for view in req.views:
+        for view in sorted(req.views, key=lambda view: view.id):
             indices = [i for i, view_id in enumerate(row_views) if view_id == view.id]
             if not indices:
                 continue

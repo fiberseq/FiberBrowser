@@ -20,11 +20,11 @@ def element_read_ids_for_result(element_info: Optional[dict], result_key: str) -
     prefix = f"{result_key}::"
     filtered = {}
     for elem_idx, read_ids_list in element_info.get("element_read_ids", {}).items():
-        filtered[elem_idx] = [
+        filtered[elem_idx] = sorted(
             read_id[len(prefix):]
             for read_id in read_ids_list
             if read_id.startswith(prefix)
-        ]
+        )
     return filtered
 
 
@@ -62,6 +62,9 @@ def assemble_cluster_all_results(
 
     for result_key in dataset_read_ids.keys():
         ds_assignments, ds_filtered_ids = split_prefixed_assignments(assignments, result_key)
+        # Canonical membership lists also keep ordinary and columnar results
+        # identical when the fitting engine visits rows in a different order.
+        ds_filtered_ids.sort()
 
         dataset = state.get_dataset(result_key) if state is not None and result_key in dataset_id_set else None
         if dataset:

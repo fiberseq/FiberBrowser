@@ -6,8 +6,14 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from collections import defaultdict
 from copy import deepcopy
+import json
 
 _scope = ContextVar("lift_cohort_scope", default=("display", None, None))
+_IDENTITY_PREFIX = "lift-cohort:v1 "  # A space cannot occur in a SAM QNAME.
+
+
+def _encode_identity(parts):
+    return _IDENTITY_PREFIX + json.dumps(parts, separators=(",", ":"), ensure_ascii=True)
 
 
 @contextmanager
@@ -32,33 +38,44 @@ def cohort_key(dataset):
 
 def analysis_id(read, settings):
     ll = read["live_lift"]
-    parts = [ll["molecule"]]
-    if not settings.fold_molecule:
-        parts.append(str(ll["record"]))
-        if not settings.fold_orientation_rows:
-            parts.append(str(ll.get("row_index", 0)))
-    parts.append(str(ll.get("placement", "primary")))
-    return "|".join(parts)
+    # Retain the QNAME as its own JSON component: both names and provenance
+    # groups can contain pipes. Null components encode the folding mode.
+    return _encode_identity([
+        ll["molecule"], read["id"],
+        None if settings.fold_molecule else str(ll["record"]),
+        None if settings.fold_molecule or settings.fold_orientation_rows else int(ll.get("row_index", 0)),
+        str(ll.get("placement", "primary")),
+    ])
 
 
 def raw_qnames(ids, dataset):
     """Only QNAMEs reach Sampler.keep; exact cohort matching happens later.
 
-    The number of right-hand identity components is fixed by the fold mode.
-    QNAME is the final molecule component (SAM QNAMEs cannot contain spaces).
+    Decode only versioned identities for this dataset's provenance and folding
+    mode. Every unrecognized value passes through verbatim, including pipes.
     """
     settings = dataset.live_lift.settings
-    count = 1 if settings.fold_molecule else (2 if settings.fold_orientation_rows else 3)
     out = set()
     groups = settings.molecule_group_map(getattr(dataset, "paths", []), getattr(dataset, "id", ""))
-    prefixes = sorted(set(groups.values()), key=len, reverse=True)
     for value in ids:
         value = str(value)
-        parts = value.rsplit("|", count)
-        molecule = parts[0] if len(parts) == count + 1 else ""
-        prefix = next((g for g in prefixes if molecule.startswith(g + "|")), None)
-        out.add(molecule[len(prefix) + 1:] if prefix is not None else
-                molecule.split("|", 1)[1] if "|" in molecule else value)
+        qname = value
+        if value.startswith(_IDENTITY_PREFIX):
+            try:
+                parts = json.loads(value[len(_IDENTITY_PREFIX):])
+            except (ValueError, RecursionError):
+                parts = None
+            if isinstance(parts, list) and len(parts) == 5:
+                molecule, name, record, orientation, placement = parts
+                valid_record = record is None if settings.fold_molecule else isinstance(record, str) and bool(record)
+                valid_orientation = (orientation is None if settings.fold_molecule or settings.fold_orientation_rows
+                                     else type(orientation) is int and orientation >= 0)
+                if (isinstance(molecule, str) and isinstance(name, str) and name and not any(c.isspace() for c in name)
+                        and isinstance(placement, str) and placement and valid_record and valid_orientation
+                        and any(molecule == group + "|" + name for group in groups.values())
+                        and _encode_identity(parts) == value):
+                    qname = name
+        out.add(qname)
     return out
 
 

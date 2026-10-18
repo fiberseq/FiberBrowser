@@ -132,13 +132,13 @@ class ColumnarPatterns:
             return {}, {}, None, None
         columns = np.concatenate(self.blocks, axis=0)
         self.blocks.clear()
-        patterns, first, inverse, frequencies = np.unique(
-            columns, axis=0, return_index=True, return_inverse=True, return_counts=True)
+        patterns, inverse, frequencies = np.unique(
+            columns, axis=0, return_inverse=True, return_counts=True)
         from services.background_work import checkpoint
         checkpoint()
-        # Stable ties use first occurrence, exactly as the insertion-ordered
-        # native pattern dictionary followed by its stable frequency sort.
-        order = np.lexsort((first, -frequencies))
+        # np.unique sorts patterns lexicographically. Preserve that order for
+        # frequency ties, matching ordinary and matched-view fitting.
+        order = np.argsort(-frequencies, kind='stable')
         kept = order[:50]
         pattern_to_label = {tuple(int(v) for v in patterns[index]): label
                             for label, index in enumerate(kept)}

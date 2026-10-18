@@ -18,14 +18,16 @@ def row(record="r", orientation=0, molecule="group|molecule", supp=False, alt=Fa
 
 @pytest.mark.parametrize("fold_molecule,fold_orientation_rows,expected", [(False, False, 3), (False, True, 2), (True, False, 1), (True, True, 1)])
 def test_fold_identity_and_raw_sampler_names(fold_molecule, fold_orientation_rows, expected):
-    settings = LiftSettings(fold_molecule=fold_molecule, fold_orientation_rows=fold_orientation_rows)
+    settings = LiftSettings(fold_molecule=fold_molecule, fold_orientation_rows=fold_orientation_rows,
+                            molecule_groups=[['source', 'group']])
     source = [row(), row(orientation=1, start=20), row(record="supp", supp=True, start=40)]
     display = prepare_lift_cohort(source, "display", settings)
     cohort = prepare_lift_cohort(source, "analysis", settings)
     assert len(display.rows) == 3
     assert len(cohort.rows) == expected
     assert {r["analysis_id"] for r in display.rows} == {r["analysis_id"] for r in cohort.rows}
-    assert raw_qnames([r["analysis_id"] for r in cohort.rows], SimpleNamespace(live_lift=SimpleNamespace(settings=settings))) == {"molecule"}
+    assert raw_qnames([r["analysis_id"] for r in cohort.rows], SimpleNamespace(
+        id='lifted', paths=['source'], live_lift=SimpleNamespace(settings=settings))) == {"molecule"}
     assert all(read_matches_id_filter(r, {r["analysis_id"]}) for r in display.rows)
     assert "analysis_id" not in source[0]
 

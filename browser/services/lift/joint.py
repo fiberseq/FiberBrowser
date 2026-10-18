@@ -66,7 +66,8 @@ def prepare_joint_cohort(state, reads, dataset_ids=None):
                   rows=len(reads) - len(removed), identity="provenance group + QNAME",
                   pairs=[dict(datasets=list(pair), molecules=n) for pair, n in sorted(pairs.items())])
     kept = [r for r in reads if id(r) not in removed]
-    if policy == "by_molecule":
-        kept.sort(key=lambda r: (is_lifted(datasets.get(r.get("_consensus_dataset_id"))),
-                                 r.get("_consensus_dataset_id", ""), r.get("_original_id", r["id"]), r["id"]))
+    # Seeded fitting and balanced sampling both depend on row order, even
+    # when every copy is retained. The panel prefix breaks ties across views.
+    kept.sort(key=lambda r: (is_lifted(datasets.get(r.get("_consensus_dataset_id"))),
+                             r.get("_consensus_dataset_id", ""), r.get("_original_id", r["id"]), r["id"]))
     return kept, report

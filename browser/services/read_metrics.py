@@ -115,10 +115,11 @@ def read_covers_regions(read: dict, regions: list) -> bool:
     if not targets:
         return True
 
+    body_spans = read_body_spans(read)
     spans = sorted(
         (int(max(iv[0], a)), int(min(iv[1], b)))
-        for iv in intervals for a, b in read_body_spans(read)
-        if len(iv) >= 2 and min(iv[1], b) > max(iv[0], a)
+        for iv in intervals if len(iv) >= 2 for a, b in body_spans
+        if min(iv[1], b) > max(iv[0], a)
     )
     if not spans:
         return False
