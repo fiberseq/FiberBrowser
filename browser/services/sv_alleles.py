@@ -102,9 +102,18 @@ def normalize_allele(event, read, reference):
     if not deleted and not alt:
         return None  # the CIGAR replacement reconstructs reference exactly
     ref_len, alt_len = len(deleted), len(alt)
-    shared = raw_end - raw_ref - ref_len
-    inserted = max(0, event.get('inserted_len', event['len'] if event['t'] == 'I' else 0) - shared)
-    removed = max(0, event.get('deleted_len', event['len'] if event['t'] == 'D' else 0) - shared)
+    prefix = pos - raw_ref
+    suffix = raw_end - raw_ref - ref_len - prefix
+    # Retain only bridge bases surviving on BOTH axes. Trimming can remove
+    # query bridge bases while leaving their reference bases (or conversely),
+    # turning that part of the bridge into an indel in the minimized allele.
+    bridge = 0
+    for piece in event.get('raw_pieces') or []:
+        if piece['t'] in ('M', '=', 'X'):
+            lo = max(0, event['q'] + prefix - piece['q'], raw_ref + prefix - piece['ref'])
+            hi = min(piece['len'], q_end - suffix - piece['q'], raw_end - suffix - piece['ref'])
+            bridge += max(0, hi - lo)
+    inserted, removed = alt_len - bridge, ref_len - bridge
     lo = hi = pos
     normalized_alt = alt
     normalized_ref = deleted

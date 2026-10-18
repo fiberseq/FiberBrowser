@@ -194,3 +194,13 @@ def test_insert_sequence_endpoint_concatenates_merged_i_pieces_without_matched_b
     out = sv_endpoint.sv_insert_seq_payload(SimpleNamespace(fasta=fasta), dataset_id='synthetic', chrom='chrT',
                                            ref=20, read_id=rec.query_name, q=20, length=60)
     assert out['seq'] == 'A' * 30 + 'T' * 30 and out['len'] == 60
+
+
+def test_minimization_counts_bridge_bases_that_become_deleted(tmp_path):
+    ref = 'C' * 100 + 'A' * 110 + 'G' * 100
+    read = _seg([(0, 100), (1, 10), (0, 10), (2, 100), (0, 100)], start=0,
+                seq='C' * 100 + 'A' * 20 + 'G' * 100)
+    event, = extract_sv_events(read, 50, reference=fasta_file(tmp_path, ref))
+    assert (event['t'], event['len'], event['inserted_len'], event['deleted_len']) == ('D', 90, 0, 90)
+    assert haplotype(ref, event) == read.query_sequence
+    assert extract_sv_events(read, 91, reference=fasta_file(tmp_path, ref)) is None
