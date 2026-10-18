@@ -13,6 +13,8 @@ import { openTourTab } from './utils/tourTab';
 import { genomeLoadHasFasta, pickAutoloadGenome, startupGenomeAutoload } from './utils/genomeAutoload';
 import { installPlasmidLinkWatcher } from './utils/plasmidLoader';
 import { SessionLinkHost } from './components/controls/SessionLinkDialog';
+import { LiveLiftDialog } from './features/liveLift/LiveLiftDialog';
+import { LiveLiftSettingsDialog } from './features/liveLift/LiveLiftSettingsDialog';
 import { LinkExpiryBanner } from './components/controls/LinkExpiryBanner';
 import { STARTUP_LINK_REQUEST, isSessionLinkValue, startupLinkOutcome } from './utils/sessionLinks';
 import { UI_THEME, roundedPanels } from './theme/uiTheme';
@@ -397,6 +399,8 @@ function App() {
         <SkipLinks />
         <Browser />
         <SessionLinkHost />
+        <LiveLiftDialog />
+        <LiveLiftSettingsDialog />
         <LinkExpiryBanner />
       </div>
     </ErrorBoundary>

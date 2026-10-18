@@ -145,6 +145,29 @@ def filter_lift_hap(reads: Iterable[dict], hap: Optional[str]) -> list:
     return out
 
 
+def filter_lift_display(reads: Iterable[dict], dataset, hap: Optional[str] = None) -> list:
+    """The rows a lifted panel draws (§2.5: each path filters the flagged rows
+    with its own setting): its haplotype (``hap``), supplementary rows unless
+    ``supplementary_display='hide'``, alternative placements only with
+    ``alternatives``."""
+    config = getattr(dataset, "live_lift", None)
+    rows = filter_lift_hap(reads, hap)
+    if config is None:
+        return rows
+    hide_supp = config.settings.supplementary_display == "hide"
+    show_alt = bool(config.settings.alternatives)
+    out = []
+    for read in rows:
+        ll = read.get("live_lift")
+        if ll is not None:
+            if hide_supp and (ll.get("source") or {}).get("supplementary"):
+                continue
+            if ll.get("alt") and not show_alt:
+                continue
+        out.append(read)
+    return out
+
+
 # ── Coverage ────────────────────────────────────────────────────────────────
 
 def lifted_coverage(dataset, chrom: str, start: int, end: int, bins: int, *, lift_hap: Optional[str] = None,

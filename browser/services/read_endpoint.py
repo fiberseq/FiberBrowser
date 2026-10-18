@@ -494,7 +494,12 @@ def _compact_reads_payload(
         include_sv_summary = False
     else:
         lift_hap = None  # a haplotype rule means nothing to a native dataset
-    from services.lift.reads import filter_lift_hap
+    from services.lift.reads import filter_lift_display
+    lift_dataset = state.datasets.get(dataset_id) if lifted_dataset else None
+
+    def filter_lift_hap(reads, hap):
+        # A lifted panel's rows: its haplotype, and the display settings for supplementary/alternative rows.
+        return filter_lift_display(reads, lift_dataset, hap)
     sv_floor = sv_extraction_floor(min_sv_len)
     from services.read_strand import cached_read_strand, filter_reads_by_strand, normalize_strand, strand_calls, strand_totals
     strand = normalize_strand(unwrap_query_default(strand, None))
@@ -792,8 +797,8 @@ def _compact_reads_payload(
         if strand:
             # A one-strand panel's counts are that strand's reads.
             all_reads = filter_reads_by_strand(all_reads, strand, calls)
-        if lift_hap:
-            # A haplotype split panel's counts are that haplotype's rows.
+        if lifted_dataset:
+            # A haplotype split panel's counts are that haplotype's rows (and the display's settings).
             all_reads = filter_lift_hap(all_reads, lift_hap)
         view_wraps = bool(circular_chrom_size(state, chrom)) and circular_region_wraps(
             start, end, circular_chrom_size(state, chrom))
@@ -932,7 +937,7 @@ def _compact_reads_payload(
         else 0
     )
     # Read filters (IDs, cluster focus, strand) need the full working set before sampling.
-    use_broad_cache = filter_id_set or (focus_clusters and cluster_assignments) or strand or lift_hap
+    use_broad_cache = filter_id_set or (focus_clusters and cluster_assignments) or strand or lifted_dataset
     metaprofile = None
     metaprofile_read_count = 0
 
@@ -987,7 +992,7 @@ def _compact_reads_payload(
                 total_overlapping, total_spanning = strand_totals(
                     working_set.reads, stranded, working_set.total_overlapping, end - start)
                 reads_to_sample = stranded
-            if lift_hap:
+            if lifted_dataset:
                 one_hap = filter_lift_hap(reads_to_sample, lift_hap)
                 total_overlapping, total_spanning = strand_totals(
                     reads_to_sample, one_hap, total_overlapping, end - start)
@@ -1038,7 +1043,7 @@ def _compact_reads_payload(
                 # A one-strand panel's counts are that strand's reads.
                 if strand and cached_read_strand(read, calls) != strand:
                     continue
-                if lift_hap and not filter_lift_hap([read], lift_hap):
+                if lifted_dataset and not filter_lift_hap([read], lift_hap):
                     continue
 
                 total_overlapping_in_viewport += 1
@@ -1500,6 +1505,12 @@ def compact_all_dataset_result(
         total_spanning = working_set.total_spanning
         total_overlapping = working_set.total_overlapping
 
+    dataset = state.datasets.get(dataset_id)
+    from services.lift.capability import is_lifted as _is_lifted
+    if _is_lifted(dataset):
+        # A lifted dataset in the combined request: the display's supplementary/alternative settings.
+        from services.lift.reads import filter_lift_display
+        reads = filter_lift_display(reads, dataset)
     total_count = len(reads)
     has_methylation = compact_reads_have_methylation(reads)
 

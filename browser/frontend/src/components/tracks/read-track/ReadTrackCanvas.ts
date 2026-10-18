@@ -1,4 +1,5 @@
 import { useBrowserStore } from '../../../stores/browserStore';
+import { drawLiveLiftMarks, liveLiftBodyRects, liveLiftBodySpans } from './liveLiftCanvas';
 import { getCanvasRenderScale, setupHighDpiCanvas } from '../../../utils/canvasUtils';
 import { buildRuleMatchContext, footprintMatchesRule, ruleTargetsLayer } from '../../../utils/ruleMatching';
 import { buildRuleColorResolver } from '../../../utils/ruleColors';
@@ -42,6 +43,8 @@ interface JupyterMarkerItem {
 }
 
 interface DrawReadsParams {
+  /** A live-lift panel: map correspondence per bin over the view (hatching on the coverage histogram). */
+  liftCorrespondence?: number[] | null;
   genome?: string | null;
   canvas: HTMLCanvasElement;
   displayReads: CompactRead[];
@@ -160,6 +163,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
     annotationOpacityMin, annotationOpacityMax, annotationThresholds,
     layerColors,selectedConsensusFamily,selectedConsensusFamilies,relatedConsensusFamilies,consensusViewJobId,nativeLattice,latticeShowHits,latticeStyle,
     svEnabled = false, svMinLen = 50, svBandHeight = 0, svSummary = null, coverageFooterHeight = 0,
+    liftCorrespondence = null,
   } = params;
   const selectedFootprints = allSelectedFootprints.filter(fp => fp.genome === undefined || fp.genome === (genome ?? null));
 
@@ -522,7 +526,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
   if (showCoverageHistogram && coverageHistogramHeight > 0) {
     drawCoverageHistogram(ctx, displayReads, {
       sidebarWidth, trackWidth, regionWidth, histogramHeight: coverageHistogramHeight, headerHeight: headerHeight + svBandHeight,
-      linkedOffset, isReversed, width,
+      linkedOffset, isReversed, width, liftCorrespondence,
     });
   }
 
@@ -539,7 +543,13 @@ export function drawReadTrack(params: DrawReadsParams): void {
     // gap hidden by hideTerminalGaps. A deletion breaks it: nothing is drawn
     // in the deleted span.
     let bodyClip: { x: number; w: number } | Array<{ x: number; w: number }> | null = null;
-    if (readExtent) {
+    if (read.live_lift) {
+      // A live-lift row: its body is its segments minus connectors (independent of the SV display).
+      const rects = liveLiftBodyRects(read.live_lift, linkedOffset, regionWidth, toX);
+      ctx.fillStyle = readBackgroundColor;
+      for (const rect of rects) ctx.fillRect(rect.x, y, rect.w, Math.max(1, rowHeight - rowGap));
+      bodyClip = rects.length ? rects : { x: 0, w: 0 };
+    } else if (readExtent) {
       const adjustedStart = readExtent.start + linkedOffset;
       const adjustedEnd = readExtent.end + linkedOffset;
       const clippedStart = Math.max(0, adjustedStart);
@@ -1456,6 +1466,12 @@ export function drawReadTrack(params: DrawReadsParams): void {
         backgroundColor: readBackgroundColor, gapColor: noReadBackgroundColor,
       });
     }
+    if (read.live_lift) {
+      drawLiveLiftMarks(ctx, read.live_lift, {
+        y, rowHeight: Math.max(1, rowHeight - rowGap), linkedOffset, regionWidth, toX, isReversed,
+        backgroundColor: readBackgroundColor,
+      });
+    }
 
     // Draw CIGAR events (small indels: SV display draws those of at least its min size)
     if (isBAM && read.cigar && read.cigar.length > 0) {
@@ -1932,7 +1948,7 @@ export function getCompactReadExtent(read: CompactRead): { start: number; end: n
  * their boundary bin, and one molecule must count once there.
  */
 export function coverageHistogramBins(
-  reads: Pick<CompactRead, 'intervals'>[],
+  reads: Pick<CompactRead, 'intervals' | 'live_lift'>[],
   histBins: number,
   regionWidth: number,
   linkedOffset = 0,
@@ -1941,7 +1957,10 @@ export function coverageHistogramBins(
   const coverageDiff = new Float32Array(histBins + 1);
   for (const read of reads) {
     const ranges: Array<[number, number]> = [];
-    for (const [ivStart, ivEnd] of read.intervals) {
+    // A live-lift row covers its body (segments minus connectors), never its hull across a connector.
+    const spans: Array<[number, number] | [number, number, number]> = read.live_lift
+      ? liveLiftBodySpans(read.live_lift) : read.intervals;
+    for (const [ivStart, ivEnd] of spans) {
       const b0 = Math.max(0, Math.floor((ivStart + linkedOffset) / binSize));
       const b1 = Math.min(histBins, Math.ceil((ivEnd + linkedOffset) / binSize));
       if (b1 > b0) ranges.push([b0, b1]);
@@ -1984,6 +2003,9 @@ export function drawCoverageHistogram(
     width: number;
     /** The ground (the colormap's no-read colour); labels pick their colour to read on it. */
     backgroundColor?: string;
+    /** A live-lift panel: per-bin correspondence (0-1) over the view; bins without it are hatched (full where
+     *  none, light where partial), so "no reads" and "no correspondence" never look alike. */
+    liftCorrespondence?: number[] | null;
   }
 ) {
   const { sidebarWidth, trackWidth, regionWidth, histogramHeight, headerHeight, linkedOffset, isReversed, width } = opts;
@@ -2010,6 +2032,12 @@ export function drawCoverageHistogram(
     ctx.fillRect(bx, histTop + histH - barH, Math.max(1, barW), barH);
   }
 
+  if (opts.liftCorrespondence && opts.liftCorrespondence.length) {
+    drawCorrespondenceHatching(ctx, opts.liftCorrespondence, {
+      x: sidebarWidth, y: histTop, w: trackWidth, h: histH, isReversed, dark: ink.dark,
+    });
+  }
+
   ctx.fillStyle = ink.muted;
   ctx.font = '9px sans-serif';
   ctx.textAlign = 'right';
@@ -2020,6 +2048,37 @@ export function drawCoverageHistogram(
   ctx.moveTo(sidebarWidth, headerHeight + histogramHeight - 1);
   ctx.lineTo(width, headerHeight + histogramHeight - 1);
   ctx.stroke();
+}
+
+/** Hatching over coverage bins with no (full) or partial (light) map correspondence (§3.8, owner 4). */
+export function drawCorrespondenceHatching(
+  ctx: CanvasRenderingContext2D,
+  correspondence: number[],
+  box: { x: number; y: number; w: number; h: number; isReversed: boolean; dark: boolean },
+): void {
+  const n = correspondence.length;
+  const binW = box.w / n;
+  ctx.save();
+  for (let b = 0; b < n; b++) {
+    const c = correspondence[b];
+    if (c >= 0.999) continue;
+    const x0 = box.isReversed ? box.x + (n - 1 - b) * binW : box.x + b * binW;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x0, box.y, Math.max(1, binW), box.h);
+    ctx.clip();
+    ctx.strokeStyle = box.dark ? 'rgba(226, 232, 240, 0.55)' : 'rgba(71, 85, 105, 0.55)';
+    ctx.globalAlpha = c <= 0 ? 1 : 0.4;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let d = -box.h; d < binW + box.h; d += 4) {
+      ctx.moveTo(x0 + d, box.y + box.h);
+      ctx.lineTo(x0 + d + box.h, box.y);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+  ctx.restore();
 }
 
 function applyGaussianSmoothing(

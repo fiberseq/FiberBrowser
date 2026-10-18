@@ -12,6 +12,7 @@ import { registerInsertionLens } from './insertion/register';
 import { registerVariants } from './variants/register';
 import { registerAltAllele } from './altAllele/register';
 import { registerAltAllelePreview } from './altAllele/preview';
+import { registerLiveLift } from './liveLift/register';
 
 let done = false;
 
@@ -27,4 +28,5 @@ export function registerInsertionFeatures(): void {
   registerInsertionLens();
   registerVariants();
   registerAltAllele();
+  registerLiveLift();
 }

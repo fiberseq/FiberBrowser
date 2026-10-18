@@ -93,7 +93,7 @@ def test_validation_refuses_a_wrong_bam(lift_env, tmp_path):
     other = write_bam(tmp_path / "other.bam", lambda h: [make_record(h, "x", "chrZ", 10, "50M")],
                       contigs=(("chrZ", 1000),))
     out = _add(client, manifest, other)
-    assert not out["success"] and "no contig" in out["error"]
+    assert not out["success"] and "none of its" in out["error"]
 
 
 def test_compact_reads_cold_warm_and_direct(lift_env):
@@ -207,3 +207,13 @@ def test_locate_projects_hits_onto_the_main_genome(lift_env):
     assert hits["plus"]["chrom"] == TARGET and hits["plus"]["source_contig"] == MAT
     assert (hits["plus"]["start"], hits["plus"]["end"]) == (3500, 6710)
     assert (hits["minus"]["start"], hits["minus"]["end"]) == (13550, 13800)
+
+
+def test_display_settings_hide_supplementary_rows(lift_env):
+    client, _state, manifest, bam = lift_env
+    did = _add(client, manifest, bam)["dataset"]["id"]
+    shown = _compact(client, did)
+    assert any(r["live_lift"]["source"]["supplementary"] for r in shown["reads"])
+    client.post(f"/api/lift/datasets/{did}/settings", json={"settings": {"supplementary_display": "hide"}})
+    hidden = _compact(client, did)
+    assert hidden["reads"] and not any(r["live_lift"]["source"]["supplementary"] for r in hidden["reads"])

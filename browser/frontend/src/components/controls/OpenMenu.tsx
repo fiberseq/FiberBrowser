@@ -5,6 +5,7 @@ import { openMenuEntries } from '../../utils/openMenu';
 import { shortcutForCommand } from '../../utils/shortcuts';
 import { useMenuKeys } from '../../hooks/useMenuKeys';
 import { CheckCircle, ChevronDown, Dna, FolderOpen, Library, Link, Server } from '../ui/Icons';
+import { useLiveLiftStore } from '../../features/liveLift/store';
 
 type Icon = ComponentType<SVGProps<SVGSVGElement> & { size?: number }>;
 
@@ -41,6 +42,8 @@ export function OpenSplitButton({ compact, loading, onOpenFile, buttonClass }: O
   useBrowserStore(s => s.datasets.length);
   useBrowserStore(s => s.publicMode);
   const onKeyDown = useMenuKeys(open, () => setOpen(false), rootRef);
+  // Live lift (behind the server's flag): another way in, a BAM of another assembly drawn here through a map.
+  const liveLiftOn = useLiveLiftStore(s => s.enabled === true);
   const fileShortcut = shortcutForCommand('open-file');
 
   useEffect(() => {
@@ -129,6 +132,17 @@ export function OpenSplitButton({ compact, loading, onOpenFile, buttonClass }: O
               })}
             </div>
           ))}
+          {liveLiftOn && (
+            <div role="none">
+              <div className="fb-menu-sep" role="separator" />
+              <button type="button" role="menuitem" className="fb-menu-item items-start" data-testid="open-menu-add-live-lift"
+                title="A BAM aligned to another assembly (e.g. HG002), drawn on this genome through a graphlift map"
+                onClick={() => { setOpen(false); useLiveLiftStore.getState().setDialogOpen(true); }}>
+                <Link size={14} aria-hidden="true" className="mt-0.5 flex-shrink-0" />
+                <span>Add live lift…</span>
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

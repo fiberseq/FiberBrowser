@@ -441,9 +441,12 @@ class Dataset:
 
     def to_dict(self):
         from services.background_work import file_identity
+        from services.lift.reads import lift_identity
         import hashlib
         return {
-            "source_identity": hashlib.sha256(repr(file_identity(self.paths)).encode()).hexdigest(),
+            # A live-lift dataset's settings are part of what its reads are (lift_key): client caches follow them.
+            "source_identity": hashlib.sha256(repr((file_identity(self.paths),
+                                                    *(lift_identity(self)))).encode()).hexdigest(),
             "id": self.id,
             "label": self.label,
             "path": self.path,

@@ -1,4 +1,5 @@
 import { DEFAULT_SIGNAL_FILTERS, type SignalFilters, type SignalCounts } from '../utils/signalFilters';
+import { isBamBacked } from '../utils/datasetKinds';
 import { isPublicServerPage } from '../utils/publicServerFlag';
 import type { BrowserState } from './browserStore';
 import type { SortMode, FilterMode, ModificationType, MetaProfileType } from '../types';
@@ -459,7 +460,7 @@ export function createUiSlice(set: (partial: Partial<BrowserState> | ((state: Br
       ) || state.modificationOverlays.some(o => o.type === 'fire' || o.type === 'msp');
     }
     const hasFromBam = state.datasets.some(d =>
-      d.data_type === 'bam' && d.available_layers?.[modType]
+      isBamBacked(d) && d.available_layers?.[modType]
     );
     const hasFromBigBed = state.datasets.some(d =>
       d.data_type === 'bigbed' && d.layer_type === modType
@@ -474,7 +475,7 @@ export function createUiSlice(set: (partial: Partial<BrowserState> | ((state: Br
     const hasLayer = (name: string) => state.datasets.some(d =>
       d.available_layers?.[name] ||
       d.layer_type === name ||
-      (d.data_type === 'bam' && !d.available_layers && (name === 'footprint' || name === 'mod'))
+      (isBamBacked(d) && !d.available_layers && (name === 'footprint' || name === 'mod'))
     );
 
     const has = {

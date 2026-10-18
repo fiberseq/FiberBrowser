@@ -1,4 +1,5 @@
 import { useShallow } from 'zustand/react/shallow';
+import { isBamBacked } from '../../../utils/datasetKinds';
 import { useBrowserStore } from '../../../stores/browserStore';
 import { useConsensusViewStore } from '../../../stores/consensusViewStore';
 import { getCanonicalLayerEntries, getLayerColor, getLayerLabel, getLayerTitle, getNucDisplayLabel, getNucDisplayTitle, isDerivedLayerName } from '../../../utils/layerColors';
@@ -24,7 +25,7 @@ function datasetHasLayer(dataset: any, type: string): boolean {
     return !!(dataset.available_layers?.fire || dataset.available_layers?.msp || dataset.layer_type === 'fire' || dataset.layer_type === 'msp');
   }
   if (dataset.available_layers) return !!dataset.available_layers[type];
-  if (dataset.data_type === 'bam') return type === 'footprint' || type === 'mod';
+  if (isBamBacked(dataset)) return type === 'footprint' || type === 'mod';
   return dataset.layer_type === type;
 }
 

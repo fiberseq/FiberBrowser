@@ -1,4 +1,6 @@
 import { splitAway, splitPinnedAway } from '../../../utils/splitLocus';
+import { useLiftCorrespondence } from '../../../features/liveLift/useLiftCorrespondence';
+import { isBamBacked } from '../../../utils/datasetKinds';
 import { markReadViewDrawn } from '../../../utils/viewIdle';
 import { SplitAwayBanner } from './SplitAwayBanner';
 import { useRef, useEffect, useLayoutEffect, useMemo, useCallback, useState } from 'react';
@@ -15,7 +17,7 @@ import type { Props, CompactRead, ReadsResponse, SvSummary } from './types';
 import type { DatasetProfile, OrthogonalTrackViewportData } from '../../../types/dataset';
 import type { FirePeak } from '../../../types';
 import { EMPTY_OBJECT, EMPTY_STRING_ARRAY, EMPTY_NUMBER_ARRAY, SIDEBAR_WIDTH, getClusterColor } from './constants';
-import { readFilterFitsRequest, useReadTrackData } from './useReadTrackData';
+import { makeDataViewportKey, readFilterFitsRequest, useReadTrackData } from './useReadTrackData';
 import { useReadTrackMouse } from './useReadTrackMouse';
 import { ReadTrackActions } from './ReadTrackActions';
 import { useReadActionsStore } from '../../../stores/readActionsStore';
@@ -118,7 +120,7 @@ const metaprofileLayerKey = (layer: string | null | undefined): string | null =>
 
 export function ReadTrack({
   width, height, datasetId: datasetIdProp, stateKey: stateKeyProp, datasetLabel, datasetColor,
-  overrideChrom, overrideStart, overrideEnd, overrideFilteredIds, panelLabel, readStrand,
+  overrideChrom, overrideStart, overrideEnd, overrideFilteredIds, panelLabel, readStrand, liftHap,
   disableSpanning = false,
   linkedSessionId, linkedRegion,
   linkedBoundsStart, linkedBoundsEnd,
@@ -351,7 +353,7 @@ export function ReadTrack({
   const sidebarWidth = gutterWidth ?? (hasCluster ? SIDEBAR_WIDTH : 0);
 
   const currentDataset = datasets.find(d => d.id === datasetId);
-  const isBAM = currentDataset?.data_type === 'bam';
+  const isBAM = isBamBacked(currentDataset);
   const layerType = currentDataset?.layer_type;
   const layerColors = useMemo(() => {
     const colors: Record<string, string> = {};
@@ -363,7 +365,7 @@ export function ReadTrack({
   const layerAvailableInDataset = (dataset: typeof datasets[number] | undefined, key: string) => {
     const datasetLayers = dataset?.available_layers ?? {};
     const datasetLayerType = dataset?.layer_type;
-    const datasetIsBam = dataset?.data_type === 'bam';
+    const datasetIsBam = isBamBacked(dataset);
     const hasExplicitLayerMap = !!dataset?.available_layers;
     if (datasetLayers[key]) return true;
     if (datasetLayerType === key) return true;
@@ -558,7 +560,7 @@ export function ReadTrack({
     coverageData, coverageMax, coverageReads, dataViewportKey, serverMetaprofile, fulfilledReadFetchCount,
     overlayMarks, svSummary,
   } = useReadTrackData({
-    stateKey, readStrand,
+    stateKey, readStrand, liftHap,
     chrom, start, end, datasetId, spanningOnly, width, isBAM,
     height: Math.max(0, height - (datasetLabel ? 16 : 0) - (showCoverageHistogram ? 30 : 0)),
     needsMethylation, needsLayers, requestedLayers, needsLayerQualities,
@@ -587,9 +589,9 @@ export function ReadTrack({
   // The SV summary band (fb-n9-sv): this view's SV clusters at the min size;
   // no band when nothing in view passes it.
   const svVisibleSummary = useMemo(
-    () => (svDisplayEnabled && isBAM && dataViewportKey === [chrom, start, end, datasetId, linkedSessionId ?? '', linkedRegion ?? '', readStrand ?? ''].join('|')
+    () => (svDisplayEnabled && isBAM && dataViewportKey === makeDataViewportKey(chrom, start, end, datasetId, linkedSessionId, linkedRegion, readStrand, liftHap)
       ? visibleSvSummary(svSummary, svMinLen, svMinSupport) : null),
-    [svDisplayEnabled, isBAM, svSummary, svMinLen, svMinSupport, dataViewportKey, chrom, start, end, datasetId, linkedSessionId, linkedRegion, readStrand],
+    [svDisplayEnabled, isBAM, svSummary, svMinLen, svMinSupport, dataViewportKey, chrom, start, end, datasetId, linkedSessionId, linkedRegion, readStrand, liftHap],
   );
   const svBand = !publishFeed && svVisibleSummary && regionWidth <= maxRegionForReads ? SV_BAND_HEIGHT : 0;
   // A panel's rows start right below the header (the SV and coverage rows are their own tracks).
@@ -599,7 +601,10 @@ export function ReadTrack({
   // Reads left over from the previous view (the new request is still pending,
   // or failed) are drawn by nothing and must not be hit or read either: their
   // intervals would pair with the new chrom/start.
-  const currentDataViewportKey = [chrom, start, end, datasetId, linkedSessionId ?? '', linkedRegion ?? '', readStrand ?? ''].join('|');
+  const currentDataViewportKey = makeDataViewportKey(chrom, start, end, datasetId, linkedSessionId, linkedRegion, readStrand, liftHap);
+  // A live-lift panel: hatching on its coverage histogram where the map has no correspondence.
+  const liftCorrespondence = useLiftCorrespondence(currentDataset, chrom, start, end, liftHap,
+    showCoverageHistogram && regionWidth <= maxRegionForReads);
   const isDataViewportStale = dataViewportKey !== currentDataViewportKey;
 
   // Family-tagged BAMs carry compact `fi`/`fq` dimensions on tf_sr. Keep an
@@ -1293,6 +1298,7 @@ export function ReadTrack({
       annotationThresholds,
       layerColors,
       svEnabled: svDisplayEnabled && isBAM,
+      liftCorrespondence,
       svMinLen,
       svBandHeight: svBand,
       svSummary: svVisibleSummary,
@@ -1326,7 +1332,7 @@ export function ReadTrack({
       const { panOffset: currentPanOffset, panScope: currentPanScope, setPanOffset } = useEphemeralStore.getState();
       if (currentPanOffset !== 0 && currentPanScope === panScope) setPanOffset(0);
     }
-  }, [loading, dataSequence, isDataViewportStale, displayReads, width, renderHeight, regionWidth, chrom, start, end, hasCluster, myClusterAssignments, myClusterOrder, drawLoadingState, hasStaleDisplayReads, fetchFailed, genes, allPeaks, hasFilter, myFilteredReadIds, datasetLabel, datasetColor, sidebarWidth, enabledModTypes, enabledCigarTypes, isBAM, layerType, modificationOverlays, overlayMarks, jupyterReadHighlights, jupyterFootprintColorMap, allJupyterMarkers, hasClusterFocus, myClusterFocus, mySelectedClusters, linkedBoundsStart, linkedHighlightIds, clusterStateConsensus, isReversed, activeColormap, orthogonalTracksForRules, renderFillReadHeight, renderReadRowHeight, readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth, renderReadScrollOffset, selectedReadIds, showCoverageHistogram, maxRegionForReads, selectedFootprints, footprintCrossHighlight, footprintGroups, selectedFamilyGroupId, footprintAnalysisLayer, coverageData, coverageMax, myAnnotationOverlays, annotationColors, enabledAnnotationTypes, annotationOpacityMin, annotationOpacityMax, annotationThresholds, layerColors, isPanning, canvasRenderVersion, consensusView, highlightedConsensusFamilies, nativeLattice, exportInProgress, readHighlightIds, svDisplayEnabled, svMinLen, svBand, svVisibleSummary, zoomedOutBannerShown]);
+  }, [loading, dataSequence, isDataViewportStale, displayReads, width, renderHeight, regionWidth, chrom, start, end, hasCluster, myClusterAssignments, myClusterOrder, drawLoadingState, hasStaleDisplayReads, fetchFailed, genes, allPeaks, hasFilter, myFilteredReadIds, datasetLabel, datasetColor, sidebarWidth, enabledModTypes, enabledCigarTypes, isBAM, layerType, modificationOverlays, overlayMarks, jupyterReadHighlights, jupyterFootprintColorMap, allJupyterMarkers, hasClusterFocus, myClusterFocus, mySelectedClusters, linkedBoundsStart, linkedHighlightIds, clusterStateConsensus, isReversed, activeColormap, orthogonalTracksForRules, renderFillReadHeight, renderReadRowHeight, readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth, renderReadScrollOffset, selectedReadIds, showCoverageHistogram, maxRegionForReads, selectedFootprints, footprintCrossHighlight, footprintGroups, selectedFamilyGroupId, footprintAnalysisLayer, coverageData, coverageMax, myAnnotationOverlays, annotationColors, enabledAnnotationTypes, annotationOpacityMin, annotationOpacityMax, annotationThresholds, layerColors, isPanning, canvasRenderVersion, consensusView, highlightedConsensusFamilies, nativeLattice, exportInProgress, readHighlightIds, svDisplayEnabled, svMinLen, svBand, svVisibleSummary, zoomedOutBannerShown, liftCorrespondence]);
 
   // What this panel loaded and shows, for Copilot's troubleshooting diagnostics.
   useEffect(() => {

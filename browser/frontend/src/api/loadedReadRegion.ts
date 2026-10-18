@@ -64,7 +64,7 @@ export function canProjectReadRegion(params: URLSearchParams): boolean {
     && Number(params.get('terminal_gap_threshold') || 0) === 0
     && params.get('include_cigar') !== 'true'
     && (params.get('include_metaprofile') !== 'true' || params.get('profile_max_reads') === '0')
-    && !['filter_ids', 'filter_set', 'cluster_focus', 'strand', 'fill_gap_size'].some(key => params.has(key))
+    && !['filter_ids', 'filter_set', 'cluster_focus', 'strand', 'lift_hap', 'fill_gap_size'].some(key => params.has(key))
     && Number(params.get('min_footprints') || 0) === 0
     && Number(params.get('min_fp_quality') || 0) === 0;
 }

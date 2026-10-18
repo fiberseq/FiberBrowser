@@ -19,6 +19,8 @@ export interface Props {
   overrideFilteredIds?: Set<string>;
   /** DAF-seq panel shown for one strand only (CT or GA). */
   readStrand?: 'CT' | 'GA' | null;
+  /** Live lift: this panel's haplotype ('MAT'/'PAT'), filtered on the server. */
+  liftHap?: string | null;
   panelLabel?: string;  // Label for the panel (e.g., "Locus X", "Locus Y")
   disableSpanning?: boolean;  // Force spanning off (for split view)
   // Linked session props for DAF-C paired reads
@@ -117,6 +119,34 @@ export interface AnnotationLayer {
   source_layer?: 'tf' | 'tf_sr' | string;
 }
 
+/** A live-lift row's map geometry and provenance (services/lift/compose.py; view-relative like `intervals`). */
+export interface LiveLiftRow {
+  v: number;
+  key?: string;
+  hap?: string;
+  /** 'MAT' / 'PAT' (or the map's haplotype key). */
+  hap_label?: string;
+  /** 'primary': the molecule's haplotype and strand come from its primary record; 'record': this record's own. */
+  hap_source?: 'primary' | 'record';
+  alt?: boolean;
+  placement?: string;
+  molecule?: string;
+  record?: string;
+  row_index?: number;
+  row_count?: number;
+  source?: { contig: string; start: number; end: number; orientation?: string; supplementary?: boolean;
+    sa?: Array<Record<string, unknown>> | null };
+  /** [t0, t1, chain, strand, primary]: one per chain run. */
+  segments: Array<[number, number, number, '+' | '-', boolean]>;
+  /** Target-only gaps of the map (dashed; not deletions of the molecule). */
+  connectors?: Array<[number, number]>;
+  /** [pos, reason, molecular bp, source bp, side, target locus?]. */
+  badges?: Array<[number, string, number, number, string, [string, number, number]?]>;
+  calls?: Record<string, Array<string | null>>;
+  call_parts?: Record<string, Array<[number, number] | null>>;
+  dropped?: { points?: number; events?: number };
+}
+
 export interface CompactRead {
   signal?: import('../../../utils/signalFilters').SignalEvidence;
   id: string;
@@ -128,6 +158,8 @@ export interface CompactRead {
   strand_conflict?: boolean;
   /** A fiberhmm-lift record's provenance: source locus (Yp:Z, contig:POS:strand) and source MAPQ (Yq:i). */
   lift?: { from: string; mapq?: number };
+  /** A live-lift row (DESIGN_LIVE_LIFT.md): drawn from its segments, not its interval hull. */
+  live_lift?: LiveLiftRow;
   intervals: [number, number, number][]; // [start, end, size] - size negative for gaps (primary layer, backward compat)
   /** Legacy union field — populated with whichever modification signal is
    *  primary for this read (m6a preferred, then m5c, then deam positions).

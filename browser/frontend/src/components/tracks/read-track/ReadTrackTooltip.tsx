@@ -5,6 +5,7 @@ import { getClusterColor, getClusterLabel } from './constants';
 import { clusterAssignmentForRead } from './readFilter';
 import { tfFamilyMetadata } from '../../../utils/tfFamilies';
 import { consensusRecordSummary } from '../../../utils/consensusVisual';
+import { LiveLiftTooltipLines } from '../../../features/liveLift/LiveLiftTooltip';
 
 interface ReadTooltipProps {
   hoveredRead: { read: CompactRead; x: number; y: number };
@@ -81,6 +82,7 @@ export function ReadTooltip({
             Lifted from {read.lift.from}{read.lift.mapq != null ? ` · source MAPQ ${read.lift.mapq}` : ''}
           </div>
         )}
+        {read.live_lift && <LiveLiftTooltipLines read={read} />}
         {read.strand_conflict && (
           <div className="text-amber-300" data-testid="read-strand-conflict">
             Strand: {read.strand} (st tag); SEQ marks say {read.strand === 'CT' ? 'GA' : 'CT'}

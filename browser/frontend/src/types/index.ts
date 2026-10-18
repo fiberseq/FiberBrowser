@@ -742,6 +742,8 @@ export interface PanelConfig {
   haplotypeGroup?: string;       // Panels opened together by a haplotype comparison (closed together)
   haplotypeSide?: 1 | 2;         // Which view of a haplotype comparison this panel belongs to (View 1 = chrom1)
   strand?: 'CT' | 'GA';          // DAF-seq: show only this strand's reads (server-filtered)
+  /** Live lift: show only this haplotype's rows ('MAT'/'PAT'; server-filtered, a rule that follows the view). */
+  liftHap?: string;
   siteLocked?: boolean;          // own-view panel that pans/zooms with the main view and other locked panels (stores/siteLock.ts)
   /** Its dataset is on another assembly with a reference of its own (its key: `dm6`, `fasta:…`, `contigs:…`); always navigates on its own. */
   genome?: string;

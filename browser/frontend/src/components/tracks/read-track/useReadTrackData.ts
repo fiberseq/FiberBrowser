@@ -182,7 +182,7 @@ export function keepPinnedReads(sample: CompactRead[], pool: CompactRead[], pinn
   return pool.filter(r => keep.has(r.id));
 }
 
-function makeDataViewportKey(
+export function makeDataViewportKey(
   chrom: string,
   start: number,
   end: number,
@@ -190,15 +190,19 @@ function makeDataViewportKey(
   linkedSessionId?: string,
   linkedRegion?: string,
   readStrand?: string | null,
+  liftHap?: string | null,
 ): string {
-  // The strand is part of what the loaded reads are (switching it makes them stale).
-  return [chrom, start, end, datasetId, linkedSessionId ?? '', linkedRegion ?? '', readStrand ?? ''].join('|');
+  // The strand (and a live-lift panel's haplotype) is part of what the loaded reads are (switching it makes them stale).
+  return [chrom, start, end, datasetId, linkedSessionId ?? '', linkedRegion ?? '', readStrand ?? ''].join('|')
+    + (liftHap ? `|hap:${liftHap}` : '');
 }
 
 interface UseReadTrackDataParams {
   stateKey?: string;
   /** DAF-seq panel shown for one strand (CT or GA); the server filters the reads. */
   readStrand?: 'CT' | 'GA' | null;
+  /** Live-lift panel shown for one haplotype ('MAT'/'PAT'); the server filters the rows (a rule, not ids). */
+  liftHap?: string | null;
   chrom: string;
   start: number;
   end: number;
@@ -278,7 +282,7 @@ interface CompactAllReadsResponse {
 
 export function useReadTrackData(params: UseReadTrackDataParams) {
   const {
-    stateKey, readStrand,
+    stateKey, readStrand, liftHap,
     chrom, start, end, datasetId, spanningOnly, width, height, isBAM,
     needsMethylation, needsLayers, requestedLayers, needsLayerQualities, batchNeedsMethylation, batchRequestedLayers, batchNeedsLayerQualities,
     useServerMetaprofile, serverMetaprofileLayers,
@@ -421,7 +425,7 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
         return;
       }
 
-      const requestViewportKey = makeDataViewportKey(chrom, start, end, datasetId, linkedSessionId, linkedRegion, readStrand);
+      const requestViewportKey = makeDataViewportKey(chrom, start, end, datasetId, linkedSessionId, linkedRegion, readStrand, liftHap);
       const regionWidth = end - start;
       if (regionWidth > maxRegionForReads && !linkedSessionId) {
         setReads([]);
@@ -618,11 +622,12 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
             fetchParams.set('strand', readStrand);
             fetchParams.set('include_methylation', 'true');
           }
+          if (liftHap) fetchParams.set('lift_hap', liftHap);
 
           // A one-strand panel filters on the server per request, which the
           // combined multi-dataset request doesn't do.
           // compact_all serves SV events at the cache floor only (50 bp).
-          const canBatchDatasets = !readStrand && showsMainView && minSvLen >= SV_MIN_LEN_DEFAULT && canBatchReadDatasets(
+          const canBatchDatasets = !readStrand && !liftHap && showsMainView && minSvLen >= SV_MIN_LEN_DEFAULT && canBatchReadDatasets(
             batchDatasetIds.split(',').filter(Boolean).length,
             needsCigar,
             requestFilterKey,
@@ -816,7 +821,7 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
 
     fetchReads();
     return () => { controller.abort(); };
-  }, [chrom, start, end, datasetId, needsMethylation, needsLayers, requestedLayersKey, needsLayerQualities, batchNeedsMethylation, batchRequestedLayersKey, batchNeedsLayerQualities, useServerMetaprofile, serverMetaprofileLayersKey, needsCigar, fillSmallGaps, fillGapSize, hideTerminalGaps, terminalGapThreshold, legacyLayerInference, legacyNucMinSize, showDuplicateReads, isBAM, minFpQuality, minFootprints, spanningOnly, readDisplayMode, downsampleCount, allReadsDisplayCap, backgroundReadCap, height, readRowHeight, readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth, exportMatchedReadFetchCount, hasPushedReads, jupyterPushedReads, requestFilterIdsParam, requestFilterKey, rootClusterFocusReadIdsKey, clusteredReadIdsKey, linkedSessionId, linkedRegion, linkedSortBy, panelLabel, refreshGeneration, maxRegionForReads, sampleSeed, batchDatasetIds, batchSourceIdentity, batchNeedsSvSummary, readStrand, showsMainView, readEndFootprints, pinnedKey, minSvLen, svSummaryEnabled, loadAllReads]);
+  }, [chrom, start, end, datasetId, needsMethylation, needsLayers, requestedLayersKey, needsLayerQualities, batchNeedsMethylation, batchRequestedLayersKey, batchNeedsLayerQualities, useServerMetaprofile, serverMetaprofileLayersKey, needsCigar, fillSmallGaps, fillGapSize, hideTerminalGaps, terminalGapThreshold, legacyLayerInference, legacyNucMinSize, showDuplicateReads, isBAM, minFpQuality, minFootprints, spanningOnly, readDisplayMode, downsampleCount, allReadsDisplayCap, backgroundReadCap, height, readRowHeight, readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth, exportMatchedReadFetchCount, hasPushedReads, jupyterPushedReads, requestFilterIdsParam, requestFilterKey, rootClusterFocusReadIdsKey, clusteredReadIdsKey, linkedSessionId, linkedRegion, linkedSortBy, panelLabel, refreshGeneration, maxRegionForReads, sampleSeed, batchDatasetIds, batchSourceIdentity, batchNeedsSvSummary, readStrand, liftHap, showsMainView, readEndFootprints, pinnedKey, minSvLen, svSummaryEnabled, loadAllReads]);
 
   // Fetch coverage data when zoomed out past maxRegionForReads
   useEffect(() => {

@@ -5,7 +5,7 @@ contigs across files and would hide a disagreement).
 
 | check | result |
 |---|---|
-| source contigs of a selected haplotype present | missing -> refuse that haplotype |
+| source contigs of a selected haplotype present | none present -> refuse that haplotype; some absent -> info |
 | ``size_inferred=false`` | LN must equal the manifest size |
 | ``size_inferred=true`` | LN equal: ok; greater: info (end-clipped path); smaller: refuse |
 | BAMs of one dataset disagree on LN | refuse |
@@ -79,14 +79,15 @@ def validate_live_lift(handle, bam_paths: Iterable[str], haplotypes: Iterable[st
             out.errors.append(f"The BAMs disagree on the length of {name}: "
                               + ", ".join(f"{p}: {ln:,}" for p, ln in sorted(by_path.items())))
     for hap in haplotypes:
-        problems = []
+        problems, absent, present = [], [], 0
         for name in sorted(hap_sources.get(hap, ())):
             src = sources[name]
             size = int(src.get("size") or 0)
             for path, contigs in per_bam.items():
                 if name not in contigs:
-                    problems.append(f"{path} has no contig {name}")
+                    absent.append(name)
                     continue
+                present += 1
                 ln = int(contigs[name])
                 if not src.get("size_inferred"):
                     if ln != size:
@@ -97,6 +98,12 @@ def validate_live_lift(handle, bam_paths: Iterable[str], haplotypes: Iterable[st
                 elif ln < size:
                     problems.append(f"{name} is shorter in {path} ({ln:,} bp) than the map's path ({size:,} bp)")
         label = handle.haplotype_labels.get(hap, hap)
+        if per_bam and not present:
+            problems.append(f"the BAM has none of its {len(hap_sources.get(hap, ()))} source contigs "
+                            f"(e.g. {sorted(hap_sources.get(hap, ()))[0]})")
+        elif absent:
+            out.info.append(f"Haplotype {label}: {len(set(absent))} of its source contigs are not in the BAM "
+                            f"({', '.join(sorted(set(absent))[:4])}{'…' if len(set(absent)) > 4 else ''}).")
         if problems:
             out.errors.append(f"Haplotype {label} ({hap}): " + "; ".join(problems[:6])
                               + (f" (and {len(problems) - 6} more)" if len(problems) > 6 else ""))

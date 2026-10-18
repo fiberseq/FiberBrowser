@@ -79,7 +79,8 @@ export interface Dataset {
   paths?: string[];
   source_identity?: string;
   color: string;
-  data_type?: 'bam' | 'bigbed' | 'unknown';
+  /** 'bam_livelift': BAM records drawn on the main genome through a graphlift map (utils/datasetKinds). */
+  data_type?: 'bam' | 'bigbed' | 'unknown' | 'bam_livelift';
   layer_type?: ModificationType | 'bam';
   available_layers?: Partial<Record<ModificationType, boolean>>;
   companion_layers?: Record<string, string[]>;

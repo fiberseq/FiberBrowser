@@ -212,6 +212,10 @@ export interface PanelSlice {
   setPanelStrand: (panelId: string, strand: 'CT' | 'GA' | null) => void;
   /** DAF-seq: this panel shows CT and a copy next to it shows GA; returns the GA panel's id. */
   splitPanelByStrand: (panelId: string) => string;
+  /** Live lift: one panel per haplotype label (the source panel keeps the first); returns the new panels' ids. */
+  splitPanelByLiftHap: (panelId: string, labels: string[]) => string[];
+  /** Live lift: the dataset's haplotype panels back to one pooled panel. */
+  poolLiftHapPanels: (datasetId: string) => void;
   /** DAF-seq: a copy of this panel showing `strand`, next to it. */
   addStrandPanel: (panelId: string, strand: 'CT' | 'GA') => string;
   /** Panel whose location box should take focus once it renders (a new copy at another locus). */
@@ -1150,6 +1154,44 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
     return id;
   },
 
+  splitPanelByLiftHap: (panelId, labels) => {
+    const source = get().panels.find(p => p.id === panelId);
+    if (!source || source.contentType !== 'dataset' || labels.length === 0) return [];
+    const copies: PanelConfig[] = labels.slice(1).map(label => {
+      const id = generatePanelId();
+      return {
+        ...source, id, stateKey: id, liftHap: label,
+        subTracks: source.subTracks.map(track => ({ ...track })),
+        collapsed: false, regionLabel: undefined,
+        contactRegionGroupId: undefined, contactRegionRole: undefined, genomeRegionGroupId: undefined,
+        haplotypeGroup: undefined, collapsedByContactRegionGroup: undefined, collapsedByHaplotypeGroup: undefined,
+      };
+    });
+    withUndo(get, 'Split by haplotype', () => set(current => {
+      const idx = current.panels.findIndex(p => p.id === panelId);
+      if (idx < 0) return current;
+      const panels = [...current.panels];
+      const src = panels[idx];
+      // Other reads now: the source panel's clusters and filters don't apply.
+      const { stateKey, reset } = isolatePanelState(current, src);
+      panels[idx] = { ...src, liftHap: labels[0], ...(stateKey ? { stateKey } : {}) };
+      panels.splice(idx + 1, 0, ...copies);
+      return { ...reset, panels };
+    }));
+    return copies.map(c => c.id);
+  },
+  poolLiftHapPanels: (datasetId) => withUndo(get, 'Pool haplotypes', () => set(state => {
+    const mine = state.panels.filter(p => p.datasetId === datasetId && p.liftHap);
+    if (mine.length === 0) return state;
+    const keep = mine[0];
+    const drop = new Set(mine.slice(1).map(p => p.id));
+    const { stateKey, reset } = isolatePanelState(state, keep);
+    return {
+      ...reset,
+      panels: state.panels.filter(p => !drop.has(p.id))
+        .map(p => p.id === keep.id ? { ...p, liftHap: undefined, ...(stateKey ? { stateKey } : {}) } : p),
+    };
+  })),
   setPanelViewport: (panelId, start, end) => {
     const state = get();
     const panel = state.panels.find(p => p.id === panelId);

@@ -1,4 +1,5 @@
 import { openRegionPanels } from '../../utils/regionPanels';
+import { isBamBacked } from '../../utils/datasetKinds';
 import { matchedGroupLabel, removeMatchedGroups } from '../../utils/matchedGroupActions';
 import { isScannedRule } from '../../utils/matchedRegions';
 import { crosshairBottomAt, logicalOffset } from '../../utils/scaledCoordinates';
@@ -89,7 +90,7 @@ export function FireTrack({ width, height, scanning, spanningOnly, sidebarWidth 
   // Check if any dataset has footprints (determines default peak mode)
   const hasFootprints = datasets.some(d =>
     d.available_layers?.footprint || d.layer_type === 'footprint' ||
-    (d.data_type === 'bam' && !d.available_layers)
+    (isBamBacked(d) && !d.available_layers)
   );
 
   const [hoverPos, setHoverPos] = useState<number | null>(null);
