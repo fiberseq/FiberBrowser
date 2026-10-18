@@ -5,7 +5,7 @@ SAMPLE_A's HG002-aligned reads at the chr3 AluY locus, drawn on GRCh38 through t
 HPRC graphlift map (split into MAT and PAT panels), next to the same molecules'
 native GRCh38 alignments. Runs until Ctrl+C.
 
-    python scripts/live_lift_demo.py [--port 8883] [--data-root DIR] [--home DIR] [--build]
+    python scripts/live_lift_demo.py [--port 8883] [--data-root DIR] [--home DIR] [--build | --frontend-dist DIR]
 
 The existing frontend build is used unless ``--build`` is explicitly requested.
 The child server gets an isolated HOME by default; ``--home`` can name a persistent
@@ -59,10 +59,14 @@ def main():
     ap.add_argument("--native-bam", default=None)
     ap.add_argument("--map", default=DEFAULT_MAP)
     ap.add_argument("--pooled", action="store_true", help="one pooled panel instead of MAT and PAT panels")
-    ap.add_argument("--build", action="store_true", help="optionally rebuild the frontend first; otherwise use the existing build")
+    ap.add_argument("--build", action="store_true",
+                    help="build the frontend of this branch into --frontend-dist first (never into the checkout's dist)")
+    ap.add_argument("--frontend-dist", default=None,
+                    help="frontend build to serve (FIBERBROWSER_FRONTEND_DIST; default with --build: <home>/frontend-dist, "
+                         "else the checkout's browser/frontend/dist)")
     a = ap.parse_args()
-    if a.port in (8882, 8885, 8886, 8888):
-        sys.exit("Pick another port (8882, 8885, 8886 and 8888 are reserved on this machine).")
+    if a.port in (8885, 8886, 8888):
+        sys.exit("Pick another port (8885, 8886 and 8888 are reserved on this machine).")
     a.data_root = os.path.abspath(os.path.expanduser(a.data_root))
     a.lift_bam = a.lift_bam or os.path.join(a.data_root, "SAMPLE_A.alu_chr3.hg002v1.1.bam")
     a.native_bam = a.native_bam or os.path.join(a.data_root, "SAMPLE_A.alu_chr3.GRCh38.bam")
@@ -70,24 +74,31 @@ def main():
         setattr(a, name, os.path.abspath(os.path.expanduser(getattr(a, name))))
         if not os.path.exists(getattr(a, name)):
             sys.exit(f"Missing {name.replace('_', ' ')}: {getattr(a, name)}")
-    if a.build:
-        subprocess.run(["npm", "run", "build"], cwd=os.path.join(ROOT, "browser", "frontend"), check=True)
-    else:
-        print("Using the existing frontend build; --build optionally rebuilds it.", flush=True)
     a.home = os.path.abspath(os.path.expanduser(a.home)) if a.home else tempfile.mkdtemp(prefix="fiberbrowser-live-lift-")
     os.makedirs(a.home, exist_ok=True)
+    if a.build and not a.frontend_dist:
+        a.frontend_dist = os.path.join(a.home, "frontend-dist")
+    if a.frontend_dist:
+        a.frontend_dist = os.path.abspath(os.path.expanduser(a.frontend_dist))
+    if a.build:
+        # Built outside the checkout: a server already running from browser/frontend/dist keeps its assets.
+        subprocess.run(["npx", "vite", "build", "--outDir", a.frontend_dist, "--emptyOutDir"],
+                       cwd=os.path.join(ROOT, "browser", "frontend"), check=True)
+    elif not a.frontend_dist:
+        print("Using the checkout's frontend build; --build builds this branch into <home>/frontend-dist.", flush=True)
     fasta = os.path.abspath(os.path.expanduser(a.fasta))
     args = [sys.executable, "browser.py", "-b", a.native_bam, "-p", str(a.port), "--no-open", "--no-token"]
     if os.path.exists(fasta):
         args += ["--fasta", fasta]
     env = dict(os.environ, HOME=a.home, FIBERBROWSER_LIVE_LIFT="1", FIBERBROWSER_PORT_MIN=str(a.port),
-               FIBERBROWSER_PORT_MAX=str(a.port), FIBERBROWSER_NO_OPEN="1")
+               FIBERBROWSER_PORT_MAX=str(a.port), FIBERBROWSER_NO_OPEN="1",
+               **({"FIBERBROWSER_FRONTEND_DIST": a.frontend_dist} if a.frontend_dist else {}))
     relaunch = [sys.executable, os.path.abspath(__file__), "--port", str(a.port), "--data-root", a.data_root,
                 "--home", a.home, "--fasta", fasta, "--lift-bam", a.lift_bam, "--native-bam", a.native_bam, "--map", a.map]
     if a.pooled:
         relaunch.append("--pooled")
-    if a.build:
-        relaunch.append("--build")
+    if a.frontend_dist:
+        relaunch += ["--frontend-dist", a.frontend_dist]
     print("Relaunch: " + shlex.join(relaunch), flush=True)
     proc = subprocess.Popen(args, cwd=ROOT, env=env)
     try:
