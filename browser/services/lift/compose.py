@@ -979,21 +979,25 @@ def _insertion_payloads(read, row, contig, runs, call_lo, payload, ctx):
     row reuses the composer so gaps/MSPs, qualities and deletion cuts obey
     exactly the same rules as target calls, without entering the target row.
     """
-    from services.lift.differences import difference_id, insertion_span
+    from services.lift.differences import difference_id, source_only_gap
 
     ll = payload["live_lift"]
     for i in sorted(range(len(row.badges)), key=lambda i: row.badges[i][0]):
         badge = row.badges[i]
         a, b, p = row.badge_sources[i]
-        a, b = insertion_span(ctx.handle, contig, a, b, p.chain)
+        gap = source_only_gap(ctx.handle, contig, a, b, p.chain)
+        if gap is None or badge[1] == "elsewhere":
+            ll["badge_ids"].append(None)
+            continue
+        a, b = gap
         label = ctx.labels.get(p.hap, p.hap)
         ins_id = difference_id(label, contig, a, b, "insertion")
         length = b - a
         ll["badge_ids"].append(ins_id if length >= 50 else None)
         lo, hi = max(a, int(read["reference_start"])), min(b, int(read["reference_end"]))
         mol_bp = runs.mol_between(lo, hi)
-        # A mapping badge is independent evidence that this read carries the
-        # assembly insertion. Elsewhere projections are navigation, not an SV.
+        # Only a source-only map gap establishes an assembly insertion.
+        # Uncovered, replacement and unresolved badges keep their own kinds.
         if badge[1] != "elsewhere" and mol_bp >= int(ctx.loader_options.get("sv_min_len", 50)):
             payload.setdefault("sv", []).append({"t": "I", "ref": badge[0], "len": mol_bp,
                                                   "source": "assembly", "hap": label, "ins_id": ins_id})

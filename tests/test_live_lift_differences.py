@@ -205,7 +205,9 @@ def test_view_only_x_events_sources_and_reference_allele(evidence):
     assert len([e for e in bubble["cigar"] if e["source"] == "assembly"]) == 20
 
 
-def test_large_insertion_payload_is_size_only():
+def test_large_insertion_payload_is_size_only(monkeypatch):
+    # The map authority is tested separately; isolate the expansion size guard.
+    monkeypatch.setattr(diff, "source_only_gap", lambda *args: (100, 60100))
     from services.lift.compose import lift_compact_reads
     pieces = [ll.LiftPiece(0, 1000, 1100, 0, 100, "+", True, "H#1", MAT),
               ll.LiftPiece(0, 1100, 1200, 60100, 60200, "+", True, "H#1", MAT)]

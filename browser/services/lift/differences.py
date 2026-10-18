@@ -76,7 +76,7 @@ def difference_id(label, contig, start, end, kind):
     return f"{label}:{contig}:{start}-{end}:{kind}"
 
 
-def insertion_span(handle, contig, a, b, chain):
+def source_only_gap(handle, contig, a, b, chain):
     """Canonical full map gap for a partial read's badge, else its own span.
     Only source-only gaps are expanded this way: replacement and elsewhere
     badges retain their exact source span rather than claiming a map insertion.
@@ -85,6 +85,8 @@ def insertion_span(handle, contig, a, b, chain):
         with handle.lock:
             c = handle.map.chains[chain]
             size = handle.manifest["sources"][c["source"]]["size"]
+            if handle.manifest["sources"][c["source"]]["name"] != contig:
+                return None
             q0, q1 = (a, b) if c["strand"] == "+" else (size - b, size - a)
             data = handle.map.chain_data(chain)
             i = bisect.bisect_right(data["gq"], q0) - 1
@@ -92,7 +94,11 @@ def insertion_span(handle, contig, a, b, chain):
                 _t, q, dt, dq, _reason = data["gaps"][i]
                 if dt == 0 and dq > 0 and q <= q0 < q1 <= q + dq:
                     return _source_span(handle, c, q, dq)
-    return a, b
+    return None
+
+
+def insertion_span(handle, contig, a, b, chain):
+    return source_only_gap(handle, contig, a, b, chain) or (a, b)
 
 
 def _source_span(handle, c, q, length):
@@ -146,13 +152,13 @@ def _bin_items(config, chrom, bin_index, hap):
             c = handle.map.chains[ci]
             ns, ne = max(ns, c["t_start"]), min(ne, c["t_end"])
             data = handle.map.chain_data(ci)
+            coverage.append((ns, ne))
             # Coverage includes full blocks (not bin-clipped), making uncovered
             # stretches and their IDs stable across adjacent bin queries.
             blocks = []
             for t, q, length in data["blocks"]:
                 lo, hi = max(ns, t), min(ne, t + length)
                 if hi > lo:
-                    coverage.append((lo, hi))
                     blocks.append((lo, hi, q + lo - t))
             if ne <= start or ns >= end:
                 continue
@@ -179,7 +185,11 @@ def _bin_items(config, chrom, bin_index, hap):
                 q0, q1 = _source_span(handle, c, q, dq)
                 out.append(_item(handle, hap, ci, kind, handle.map.reasons[reason], t, t + dt, q0, q1))
         pos = 0
-        for a, b in _merge(coverage) + [[handle.target_size(chrom) or end, handle.target_size(chrom) or end]]:
+        # Unknown chromosome size has no authoritative trailing endpoint.
+        # Emit bounded holes between nets, never a bin-dependent artificial tail.
+        size = handle.target_size(chrom)
+        sentinel = [[size, size]] if size is not None else []
+        for a, b in _merge(coverage) + sentinel:
             if a > pos and a > start and pos < end:
                 item = _item(handle, hap, None, "no_correspondence", "no_correspondence", pos, a, None, None)
                 item["id"] = difference_id(handle.haplotype_labels.get(hap, hap), chrom, pos, a, "no_correspondence")
