@@ -572,7 +572,7 @@ def _chromatin(row, origin, pos, orientation):
                 orientation=orientation)
 
 
-def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=None):
+def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=None, include_sequence=False):
     """Bounded source-record inspection; see the module docstring for JSON.
     An in-memory BAM adapter lets the ordinary display composer decode the
     same <=500 fetched records when a broad cache is absent. No second BAM
@@ -597,6 +597,8 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
         from services.lift.live_lift import LiftRefused
         raise LiftRefused("Live lift: this insertion exceeds the 50 kb inspection limit")
     rows, capped = [], False
+    selected_sequence = None
+    sequence_score = None
     view_start = max(0, pos - 50)
     view_end = min(config.handle.target_size(chrom) or max(pos + 1, end) + 50, max(pos + 1, end) + 50)
     # Broad display caches may be sampled, annotation-free or missing individual
@@ -722,6 +724,12 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
                             read_bases=rb, hg002=hg, alignment_hg002=alignment_hg, grch38=ref, allele=allele,
                             chromatin=_chromatin(row, origin, pos, span["strand"]))
                 if pos == end:
+                    if (include_sequence and carries and span["id"] == item_id and len(rb) <= 50_000):
+                        score = (abs(len(rb) - length), bool(record.is_supplementary), record_id)
+                        if sequence_score is None or score < sequence_score:
+                            sequence_score = score
+                            selected_sequence = dict(sequence=rb, read_id=record.query_name, record=record_id,
+                                                     ins_id=span["id"], orientation=span["strand"], source="reads")
                     item.update(carries_insertion=carries, mol_bp=len(rb), identity=identity,
                                 read_bases=rb[:60], read_bases_length=len(rb))
                     if span["kind"] == "insertion":
@@ -740,4 +748,5 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
         counts[row["allele"]] = counts.get(row["allele"], 0) + 1
     return dict(dataset_id=dataset.id, lift_key=config.key(), chrom=chrom, pos=pos, end=end, rows=rows,
                 summary=summary, preferred_hap=preferred_label, capped=capped, max_records=500,
+                sequence=selected_sequence,
                 hap_status={s["hap_label"]: ("aligned" if s["kind"] == "inspection" else s["kind"]) for s in spans})

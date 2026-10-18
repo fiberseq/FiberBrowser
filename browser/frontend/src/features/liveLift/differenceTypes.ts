@@ -26,4 +26,6 @@ export interface DifferenceReadsResponse {
   dataset_id: string; lift_key: string; chrom: string; pos: number; end: number;
   rows: DifferenceInspection[]; summary: Record<string, Partial<Record<DifferenceInspection['allele'], number>>>; capped: boolean; max_records: number;
   preferred_hap?: string | null;
+  sequence?: { sequence: string; read_id: string; record: string; ins_id: string; orientation: string; source: 'reads' } | null;
+  hap_status?: Record<string, string>;
 }

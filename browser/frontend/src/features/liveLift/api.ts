@@ -16,10 +16,11 @@ export function getDifferences(q: DifferencesQuery, signal?: AbortSignal): Promi
   if (q.detailBp) p.set('detail_bp', String(q.detailBp));
   return fetchJson(`/api/lift/differences?${p}`, { signal });
 }
-export function getDifferenceReads(q: Omit<DifferencesQuery, 'start'> & { pos: number; itemId?: string }, signal?: AbortSignal): Promise<DifferenceReadsResponse> {
+export function getDifferenceReads(q: Omit<DifferencesQuery, 'start'> & { pos: number; itemId?: string; includeSequence?: boolean }, signal?: AbortSignal): Promise<DifferenceReadsResponse> {
   const p = new URLSearchParams({ dataset_id: q.datasetId, lift_key: q.liftKey, chrom: q.chrom, pos: String(q.pos), end: String(q.end) });
   if (q.liftHap) p.set('lift_hap', q.liftHap);
   if (q.itemId) p.set('item_id', q.itemId);
+  if (q.includeSequence) p.set('include_sequence', 'true');
   return fetchJson(`/api/lift/difference_reads?${p}`, { signal });
 }
 

@@ -117,6 +117,7 @@ async def lift_differences(dataset_id: str, chrom: str, start: int = Query(..., 
 async def lift_difference_reads(dataset_id: str, chrom: str, pos: int = Query(..., ge=0),
                                 end: Optional[int] = Query(None, ge=0), lift_hap: Optional[str] = None,
                                 item_id: Optional[str] = None,
+                                include_sequence: bool = False,
                                 state=Depends(get_state)):
     """Inspect lifted read alleles and chromatin; end defaults to pos+1.
     Explicit end=pos inspects a map insertion. At most 500 source records;
@@ -128,4 +129,4 @@ async def lift_difference_reads(dataset_id: str, chrom: str, pos: int = Query(..
     end = pos + 1 if end is None else end
     if end < pos or end - pos > 50_000:
         raise HTTPException(422, "Inspection requires pos <= end <= pos+50000")
-    return await asyncio.to_thread(difference_reads, state, dataset, chrom, pos, end, lift_hap=lift_hap, item_id=item_id)
+    return await asyncio.to_thread(difference_reads, state, dataset, chrom, pos, end, lift_hap=lift_hap, item_id=item_id, include_sequence=include_sequence)

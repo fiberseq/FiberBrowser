@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import type { Dataset, PanelConfig } from '../../types';
 import { useReadActionsStore } from '../../stores/readActionsStore';
@@ -25,15 +25,18 @@ export function DifferencePopover({ panel, dataset, anchor }: { panel: PanelConf
   const [error, setError] = useState('');
   const [identify, setIdentify] = useState(false);
   const [opening, setOpening] = useState(false);
+  const [fetchingSequence, setFetchingSequence] = useState(false);
+  const sequenceRequest = useRef<AbortController | null>(null);
   useEffect(() => {
-    setData(null); setError(''); setIdentify(false);
+    sequenceRequest.current?.abort();
+    setData(null); setError(''); setIdentify(false); setFetchingSequence(false);
     if (!current || !d) return;
     const controller = new AbortController();
     void getDifferenceReads({ datasetId: dataset.id, liftKey: dataset.live_lift?.key ?? '', chrom: current.chrom,
-      pos: d.t_start, end: Math.min(d.t_end, d.t_start + 50_000), liftHap: panel.liftHap, itemId: d.source === 'assembly' ? d.id : undefined }, controller.signal)
+      pos: d.t_start, end: Math.min(d.t_end, d.t_start + 50_000), liftHap: panel.liftHap, itemId: d.source === 'assembly' ? d.id : undefined, includeSequence: current.action === 'identify' }, controller.signal)
       .then(r => { if (!controller.signal.aborted) setData(r); })
       .catch(e => { if (!controller.signal.aborted) setError(String(e.message ?? e)); });
-    return () => controller.abort();
+    return () => { controller.abort(); sequenceRequest.current?.abort(); };
   }, [current, d, dataset.id, dataset.live_lift?.key, panel.liftHap]);
   const preferredHap = data?.preferred_hap ?? d?.hap_label;
   const model = useMemo(() => inspectionModel(data?.rows ?? [], preferredHap), [data, preferredHap]);
@@ -48,7 +51,8 @@ export function DifferencePopover({ panel, dataset, anchor }: { panel: PanelConf
     document.addEventListener('keydown', key, true);
     return () => { document.removeEventListener('keydown', key, true); useReadActionsStore.setState({ highlight: prior }); };
   }, [current, model]);
-  const sequence = data?.rows.find(r => r.ins_id === d?.id && r.carries_insertion && r.read_bases.length === d?.alt_bp)?.read_bases;
+  const candidate = data?.rows.some(r => r.ins_id === d?.id && r.carries_insertion && (r.read_bases_length ?? r.read_bases.length) <= 50_000);
+  const sequence = data?.sequence?.ins_id === d?.id ? data?.sequence?.sequence : undefined;
   const identifyKey = `${dataset.id}|${dataset.live_lift?.key ?? ''}|${current?.chrom ?? ''}|${d?.id ?? ''}`;
   const lens = useMemo<LensResponse | null>(() => !d || !sequence || !current ? null : ({ success: true, dataset_id: dataset.id, chrom: current.chrom, flank: 0,
     site: { pos: d.t_start, tolerance: 0, len_min: d.alt_bp, len_max: d.alt_bp },
@@ -59,6 +63,22 @@ export function DifferencePopover({ panel, dataset, anchor }: { panel: PanelConf
   useEffect(() => {
     if (lens && current?.action === 'identify') { identifyLens(lens, dataset.id, { key: identifyKey }); setIdentify(true); }
   }, [lens, current?.action, dataset.id, identifyKey]);
+  const requestIdentification = async () => {
+    if (!current || !d) return;
+    if (lens) { identifyLens(lens, dataset.id, { key: identifyKey }); setIdentify(true); return; }
+    const controller = new AbortController();
+    sequenceRequest.current?.abort(); sequenceRequest.current = controller;
+    setFetchingSequence(true); setError('');
+    try {
+      const result = await getDifferenceReads({ datasetId: dataset.id, liftKey: dataset.live_lift?.key ?? '',
+        chrom: current.chrom, pos: d.t_start, end: d.t_end, itemId: d.id, includeSequence: true }, controller.signal);
+      if (!controller.signal.aborted) { setData(result); setIdentify(true); }
+    } catch (e) { if (!controller.signal.aborted) setError(String((e as Error).message ?? e)); }
+    finally { if (!controller.signal.aborted) setFetchingSequence(false); }
+  };
+  useEffect(() => {
+    if (identify && lens) identifyLens(lens, dataset.id, { key: identifyKey });
+  }, [identify, lens, dataset.id, identifyKey]);
   if (!current || !d) return null;
   // Map geometry is available without a source FASTA. MD-backed inspection can
   // supply the selected parent's assembly bases later; never use the other
@@ -80,19 +100,20 @@ export function DifferencePopover({ panel, dataset, anchor }: { panel: PanelConf
         <button disabled={d.alt_bp < 50 || d.alt_bp > 50_000} onClick={() => expandDifference(current)}>Expand insertion</button></span>}
       {(d.kind === 'insertion' || d.kind === 'deletion') && <span title={LIFT_SPLIT_REASON}><button disabled>Split by carrier</button></span>}
       {d.kind === 'insertion' && <>
-        <span title={lens ? 'Identify one full carrier’s sequence; this is not an assembly consensus.' : 'No full insertion sequence is available from the inspected reads.'}>
-          <button disabled={!lens} onClick={() => { if (lens) { identifyLens(lens, dataset.id, { key: identifyKey }); setIdentify(true); } }}>Identify</button></span>
+        <span title={candidate ? 'Identify one full carrier’s sequence; this is not an assembly consensus.' : 'No full insertion sequence is available from the inspected reads.'}>
+          <button disabled={!candidate || fetchingSequence} onClick={() => { void requestIdentification(); }}>{fetchingSequence ? 'Loading sequence…' : 'Identify'}</button></span>
         <button disabled={opening || !d.src.contig || d.src.start === null} title="Open the source BAM on its own header-contig reference; locally linked at this insertion"
           onClick={() => { setOpening(true); void openSourceView(current).finally(() => setOpening(false)); }}>{opening ? 'Opening…' : 'Open in HG002 view'}</button>
       </>}
     </div>
     {(d.kind === 'insertion' || d.kind === 'deletion') && <p className="text-[10px] text-slate-500">{LIFT_SPLIT_REASON}</p>}
-    {current.action === 'identify' && data && !lens && <p role="status">Identify unavailable: no full insertion sequence is available from the inspected reads.</p>}
+    {(current.action === 'identify' || identify) && data && !lens && <p role="status">Identify unavailable: no full insertion sequence is available from the inspected reads.</p>}
     {identify && lens && <IdentifyTab response={lens} datasetId={dataset.id} identifyKey={identifyKey} reversed={false} visible dark={dark} />}
     <div className="my-2 flex gap-3 flex-wrap">{Object.entries(model.summary).map(([hap, alleles]) => <span key={hap}
       data-testid={hap !== preferredHap ? 'live-lift-other-hap-summary' : 'live-lift-selected-hap-summary'}>
       <span style={{ color: liveLiftHaplotypeColor(hap, dark) }}>{hap}</span>: {haplotypeSummary(alleles)}</span>)}</div>
     {model.misphased.length > 0 && <p className="text-amber-700 dark:text-amber-300 font-semibold" data-testid="live-lift-misphased">{model.misphased.length} GRCh38-allele reads · possible mis-phasing / mismapping</p>}
+    {data && error && <p role="status">{error}</p>}
     {!data && <p role="status">{error || 'Loading reads and alleles…'}</p>}
     {data && <><table className="w-full text-left text-[10px] mt-2"><thead><tr>{['Read', 'Hap / strand', 'Allele', 'Read bases', 'HG002', 'GRCh38', ...(d.kind === 'insertion' ? ['Identity'] : []), 'Chromatin / nearby m6A'].map(h => <th key={h} className="px-1">{h}</th>)}</tr></thead>
       <tbody>{model.rows.map((r, i) => <tr key={`${r.id}-${r.record}-${i}`} data-hap={r.hap_label} data-allele={r.allele} className={r.allele === 'grch38' ? 'bg-amber-100 dark:bg-amber-950' : 'hover:bg-slate-100 dark:hover:bg-slate-800'}
