@@ -49,10 +49,14 @@ export interface Props {
 }
 
 export interface CigarEvent {
-  type: 'M' | 'I' | 'D';  // Mismatch, Insertion, Deletion
+  type: 'M' | 'X' | 'I' | 'D';  // Native M, lifted X mismatch, insertion, deletion
   pos: number;           // Position relative to region start
   len: number;           // Length in bp
   seq?: string;          // Sequence (for mismatches and insertions)
+  base?: string;
+  ref?: string;
+  source?: 'assembly' | 'reads';
+  allele?: 'grch38';
 }
 
 /**
@@ -121,6 +125,8 @@ export interface AnnotationLayer {
 
 /** A live-lift row's map geometry and provenance (services/lift/compose.py; view-relative like `intervals`). */
 export interface LiveLiftRow {
+  badge_ids?: Array<string | null>;
+  insertions?: Record<string, LiveLiftInsertion | { length: number; too_large: true }>;
   v: number;
   key?: string;
   hap?: string;
@@ -145,6 +151,14 @@ export interface LiveLiftRow {
   calls?: Record<string, Array<string | null>>;
   call_parts?: Record<string, Array<[number, number] | null>>;
   dropped?: { points?: number; events?: number };
+}
+
+export interface LiveLiftInsertion {
+  pos: number; hap_label: string; src: [string, number, number]; length: number; mol_bp: number;
+  orientation: '+' | '-'; covered: [number, number]; intervals: [number, number, number][];
+  layers?: Record<string, AnnotationLayer>; qualities?: number[]; fire?: [number, number, number][];
+  methyl_m6a?: number[]; methyl_m5c?: number[]; deam?: [number, number][];
+  possible_deam_ct?: number[]; possible_deam_ga?: number[];
 }
 
 export interface CompactRead {

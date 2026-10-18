@@ -4,6 +4,7 @@
  * flag: with it off nothing here is offered (a session's lifted dataset is refused by the server with a notice).
  */
 import './types';
+import './persistence';
 import { registerPanelHeaderExtension, type PanelHeaderContext } from '../../components/tracks/panelHeaderExtensions';
 import { MenuItem } from '../../components/tracks/PanelHeader';
 import { useBrowserStore } from '../../stores/browserStore';

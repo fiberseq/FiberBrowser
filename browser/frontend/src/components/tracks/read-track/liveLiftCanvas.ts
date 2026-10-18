@@ -24,6 +24,11 @@ export const LIVE_LIFT_COLORS = {
 
 /** Badge reasons as people read them. */
 export const BADGE_REASONS: Record<string, string> = {
+  substitution: 'bases differ between HG002 and GRCh38',
+  aligned: 'an approximately aligned bubble (may contain indels)',
+  inversion: 'source sequence runs in reverse relative to GRCh38',
+  no_correspondence: 'GRCh38 sequence with no primary HG002 correspondence',
+  read_mismatch: 'a read-specific mismatch (read evidence)',
   source_insertion: 'sequence of the source assembly only (not in this genome)',
   target_insertion: 'sequence of this genome only',
   aligned_indel: 'an indel between the assemblies',

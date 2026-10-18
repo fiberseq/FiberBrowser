@@ -2,6 +2,25 @@
 import type { Dataset } from '../../types';
 import { fetchJson } from '../../api/sharedFetch';
 import { getCoverage, type CoverageResponse } from '../../api/coverage';
+import type { DifferencesResponse, DifferenceReadsResponse } from './differenceTypes';
+
+export interface DifferencesQuery {
+  datasetId: string; liftKey: string; chrom: string; start: number; end: number;
+  liftHap?: string | null; minBp?: number; nativeDatasetId?: string; detailBp?: number;
+}
+export function getDifferences(q: DifferencesQuery, signal?: AbortSignal): Promise<DifferencesResponse> {
+  const p = new URLSearchParams({ dataset_id: q.datasetId, lift_key: q.liftKey, chrom: q.chrom,
+    start: String(Math.max(0, Math.floor(q.start))), end: String(Math.ceil(q.end)), min_bp: String(q.minBp ?? 0) });
+  if (q.liftHap) p.set('lift_hap', q.liftHap);
+  if (q.nativeDatasetId) p.set('native_dataset_id', q.nativeDatasetId);
+  if (q.detailBp) p.set('detail_bp', String(q.detailBp));
+  return fetchJson(`/api/lift/differences?${p}`, { signal });
+}
+export function getDifferenceReads(q: Omit<DifferencesQuery, 'start'> & { pos: number }, signal?: AbortSignal): Promise<DifferenceReadsResponse> {
+  const p = new URLSearchParams({ dataset_id: q.datasetId, lift_key: q.liftKey, chrom: q.chrom, pos: String(q.pos), end: String(q.end) });
+  if (q.liftHap) p.set('lift_hap', q.liftHap);
+  return fetchJson(`/api/lift/difference_reads?${p}`, { signal });
+}
 
 export interface LiftMapInfo {
   manifest: string;
