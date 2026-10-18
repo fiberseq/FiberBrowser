@@ -130,8 +130,8 @@ def test_insertion_calls_partial_carriers_orientation_and_crops(evidence):
     mkey = f"MAT:{MAT}:8000-8100:insertion"
     mb = minus["live_lift"]["insertions"][mkey]
     assert mb["orientation"] == "-" and [60, 90, 30] in mb["intervals"]
-    assert mb["methyl_m6a"] == [90]
-    # Source offset 10 is boundary x=90 in the mirrored call.
+    assert mb["methyl_m6a"] == [89]
+    # Source base offset 10 is base 89, inside the mirrored [60,90) call.
     assert max(iv[1] for iv in mb["intervals"] if iv[2] == 30) == 90
     cropped = clip_geometry(plus["live_lift"], 5000, 20)
     assert cropped["badge_ids"] == [key] and cropped["insertions"][key]["pos"] == 10

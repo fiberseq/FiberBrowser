@@ -44,7 +44,7 @@ export function drawInsertionPayload(ctx: CanvasRenderingContext2D, payload: Liv
     ctx.fillStyle = color;
     for (const p of ps ?? []) {
       if (p < payload.covered[0] || p >= payload.covered[1]) continue;
-      ctx.fillRect(x(p) - .5, y + top, Math.max(1, axis.pxPerBp * .8), height);
+      ctx.fillRect(x(p + .5) - .5, y + top, Math.max(1, axis.pxPerBp * .8), height);
     }
   };
   if (enabled.m6a !== false && enabled.mod !== false) points(payload.methyl_m6a, MOD_COLORS.m6a);

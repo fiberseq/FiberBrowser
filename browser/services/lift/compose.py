@@ -1018,14 +1018,8 @@ def _insertion_payloads(read, row, contig, runs, call_lo, payload, ctx):
         keep = ("intervals", "qualities", "layers", "fire", "deam", *_POINT_FIELDS)
         block = {k: hidden[k] for k in keep if k in hidden}
         covered = [lo - a, hi - a] if row.strand == "+" else [b - hi, b - lo]
-        if row.strand == "-":
-            # Expansion coordinates mirror boundaries x -> length-x, including
-            # point marks, so source offset 10 in a 100 bp block is x=90.
-            for key in _POINT_FIELDS:
-                if key in block:
-                    block[key] = [x + 1 for x in block[key]]
-            if "deam" in block:
-                block["deam"] = [[x + 1, *rest] for x, *rest in block["deam"]]
+        # _Frag.T already mirrors bases as length - 1 - offset; covered
+        # and interval endpoints use the separate boundary transform.
         block.update(pos=badge[0] - ctx.region_start, hap_label=label, src=[contig, a, b], length=length,
                      mol_bp=mol_bp, orientation=row.strand, covered=covered)
         ll["insertions"][ins_id] = block
