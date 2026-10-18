@@ -47,7 +47,7 @@ from services.alt_allele_align import (
     realign,
 )
 
-SCHEMA = "fiberbrowser.alt_allele/1"
+SCHEMA = "fiberbrowser.alt_allele/2"
 ALT_DIR_ENV = "FIBERBROWSER_ALT_ALLELE_DIR"
 DEFAULT_FLANK = 20_000
 MAX_FLANK = 100_000
@@ -227,7 +227,8 @@ def build_alt_allele(bam_paths: list[str], definition: dict, out_dir: str, *, fa
     if not site["success"]:
         raise AltAlleleError(site.get("error") or "No insertion there")
     ref, length = site["ref"], site["length"]
-    carriers = sorted(site["carriers"], key=lambda item: (item[1].query_name, item[2], item[1].reference_start))
+    carriers = sorted((item for item in site["carriers"] if item[0].get('evidence_level') == 'confirmed'),
+                      key=lambda item: (item[1].query_name, item[2], item[1].reference_start))
     if not carriers:
         raise AltAlleleError(f"No carrier of the insertion at {d['chrom']}:{ref:,}")
     full = [(plan, read) for plan, read, _p, _b in carriers if plan["kind"] == "cigar" and plan["len"] > 0]

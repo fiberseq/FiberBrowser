@@ -137,9 +137,9 @@ def test_the_alt_contig_is_flank_consensus_flank(opened, fixture):
     ops = align(alt[3000:3000 + layout["insert_len"]], fixture["te"])
     assert (ops == OP_MATCH).mean() > 0.99
     meta = result["alt_allele"]["meta"]
-    assert meta["carriers"]["total"] == 27 and meta["carriers"]["written"] == 27
-    assert meta["carriers"]["cigar"] == 24 and meta["carriers"]["clip_start"] == 1
-    assert meta["carriers"]["clip_end"] == 1 and meta["carriers"]["hard"] == 1
+    assert meta["carriers"]["total"] == 24 and meta["carriers"]["written"] == 24
+    assert meta["carriers"]["cigar"] == 24 and meta["carriers"]["clip_start"] == 0
+    assert meta["carriers"]["clip_end"] == 0 and meta["carriers"]["hard"] == 0
     assert meta["consensus"]["method"] == "majority"
     assert meta["carriers"]["poorly_aligned"] == 0
 
@@ -185,22 +185,12 @@ def test_insert_and_flank_bases_land_on_their_segments(opened, fixture, strand):
     assert checked >= 10
 
 
-def test_soft_clipped_carriers_hold_their_part_of_the_insert(opened, fixture):
+def test_unconfirmed_clips_are_excluded_from_the_default_alt_allele(opened, fixture):
     state, result = opened
     records, _r, _l = _records(result)
     layout = result["layout"]
     fl, L = layout["insert_start"], layout["insert_len"]
-    start = records["clipped_00"]          # alignment ends at the site; 600 clipped bases = insert start
-    pairs = dict(start.get_aligned_pairs(matches_only=True))
-    q = fixture["reads"]["clipped_00"]["q"]
-    assert abs(pairs[q] - fl) <= 2 and abs(pairs[q + 599] - (fl + 599)) <= 3
-    assert start.reference_end <= fl + 610
-    end = records["clipped_left_00"]       # starts at the site; 700 clipped bases = insert end
-    pairs = dict(end.get_aligned_pairs(matches_only=True))
-    assert abs(pairs[0] - (fl + L - 700)) <= 3 and pairs[700] == fl + L
-    assert end.is_reverse
-    hard = records["hard_right_00"]        # hard-clipped: its flank only, ending at the breakpoint
-    assert hard.reference_end == fl and hard.cigartuples[-1][0] == 5
+    assert not {'clipped_00', 'clipped_left_00', 'hard_right_00'} & set(records)
     assert "other_insert_00" not in records and not any(n.startswith("reference_") for n in records)
 
 

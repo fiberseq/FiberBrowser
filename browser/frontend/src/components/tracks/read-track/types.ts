@@ -68,6 +68,7 @@ export type SvEvent =
 
 export type SvEvidenceLevel = 'confirmed' | 'putative' | 'ambiguous';
 export interface SvSegment {
+  t?: 'SA';
   chrom: string; pos: number; cigar_ref_len: number; strand: '+' | '-'; mapq: number;
   q_start: number; q_end: number; query_length: number;
 }
@@ -162,6 +163,8 @@ export interface CompactRead {
   sv_segments?: SvSegment[];
   aligned_blocks?: [number, number][];
   sequence_span?: [number, number];
+  supplementary?: boolean;
+  sv_alignments?: Omit<CompactRead, 'intervals' | 'sv_alignments'>[];
   fire?: [number, number, number][]; // FIRE intervals [start, end, quality] from as/al/aq tags
   /** Named annotation layers from v3 caller (nuc, tf, msp, custom). */
   layers?: Record<string, AnnotationLayer>;

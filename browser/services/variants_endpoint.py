@@ -511,7 +511,7 @@ def _sv_records(state, dataset, chrom: str, start: int, end: int, include_duplic
             ids = getattr(state, "_variant_read_ids", None)
             if ids is not None and read.query_name not in ids:
                 continue
-            if read.is_unmapped or read.is_secondary or read.is_supplementary:
+            if read.is_unmapped or read.is_secondary:
                 continue
             if read.is_duplicate and not include_duplicates:
                 continue

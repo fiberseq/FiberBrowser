@@ -1947,13 +1947,20 @@ def _build_compact_reads_from_bam_region(
         # (services.graph_lift; per record, so every view agrees).
         from services.graph_lift import lift_hidden_predicate
         lift_hidden = lift_hidden_predicate(bam.header)
-        for read in iter_edge_records(bam, actual_chrom, region_start, region_end, fetch_regions):
+        from services.sv_molecules import molecule_alignments
+        def eligible_segment(record):
+            return (not (record.is_unmapped or record.is_secondary)
+                    and (include_duplicates or not record.is_duplicate)
+                    and (lift_hidden is None or not lift_hidden(record))
+                    and signal_keeps(record_signal(record, signal_provenance)))
+        for read, molecule_records in molecule_alignments(
+                iter_edge_records(bam, actual_chrom, region_start, region_end, fetch_regions), eligible_segment):
             records_seen += 1
             if not records_seen & 255:
                 checkpoint()  # a background job whose client went away stops here
             if profile_bam:
                 profile_counts["records_seen"] += 1
-            if read.is_unmapped or read.is_secondary or read.is_supplementary:
+            if read.is_unmapped or read.is_secondary:
                 if profile_bam:
                     profile_counts["records_unmapped"] += 1
                 continue
@@ -2152,7 +2159,8 @@ def _build_compact_reads_from_bam_region(
                             read_data["cigar"] = cigar_events
                         _profile_add("cigar_parse", phase_t0)
                     phase_t0 = _profile_start()
-                    _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq)
+                    _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq,
+                                      molecule_records=molecule_records)
                     from services.read_binary import binary_read_context
                     if binary_read_context.get():
                         read_data["_fiberbrowser_terminal_gaps"] = []
@@ -2567,7 +2575,8 @@ def _build_compact_reads_from_bam_region(
                 _profile_add("layer_build", phase_t0)
 
             phase_t0 = _profile_start()
-            _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq, mapper=coord_mapper)
+            _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq, mapper=coord_mapper,
+                              molecule_records=molecule_records)
             _profile_add("sv_events", phase_t0)
             if partition is not None:
                 read_data['_fiberbrowser_source_order'] = records_seen
@@ -2630,7 +2639,8 @@ def _build_compact_reads_from_bam_region(
     return reads.finish() if isinstance(reads, PackedReadBuilder) else reads
 
 
-def _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq=False, mapper=None):
+def _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq=False, mapper=None,
+                      molecule_records=None):
     """``sv`` on a compact read, and its calls split at the deletions. A record
     the extraction can't read (a test double without a CIGAR string) keeps
     none: SV events never cost a read its row."""
@@ -2638,6 +2648,16 @@ def _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq=
         from services.sv_events import alignment_evidence
         read_data.update(alignment_evidence(read))
         events = extract_sv_events(read, sv_extraction_floor(sv_min_len), include_seq=include_sv_seq, mapper=mapper)
+        if molecule_records and len(molecule_records) > 1:
+            from services.sv_molecules import consolidate_evidence
+            parts = [dict(id=record.query_name, reference_start=int(record.reference_start),
+                          reference_end=int(record.reference_end), **alignment_evidence(record),
+                          sv=extract_sv_events(record, sv_extraction_floor(sv_min_len), include_seq=include_sv_seq) or [])
+                     for record in molecule_records]
+            combined = consolidate_evidence(parts)
+            for key in ('sv_alignments', 'sv_segments', 'aligned_blocks', 'alignment_spans'):
+                read_data[key] = combined[key]
+            events = combined['sv']
     except Exception:
         return
     if not events:

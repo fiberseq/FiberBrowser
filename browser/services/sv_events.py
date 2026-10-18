@@ -135,7 +135,7 @@ def alignment_evidence(read) -> dict:
             blocks[-1][1] = b
         else:
             blocks.append([a, b])
-    return {'aligned_blocks': blocks, 'sv_segments': segments,
+    return {'aligned_blocks': blocks, 'sv_segments': segments, 'supplementary': bool(read.is_supplementary),
             'sequence_span': [hard_left, hard_left + int(read.query_length or 0)]}
 
 
@@ -854,14 +854,19 @@ def classify_molecules(entries, *, t: str, ref: int, length: int, margin: int = 
     """Classify (compact read, original item) entries, once per QNAME."""
     grouped = {}
     for read, item in entries:
-        grouped.setdefault(read.get('id'), []).append((read, item))
+        for alignment in read.get('sv_alignments') or [read]:
+            grouped.setdefault(read.get('id'), []).append((alignment, item))
     if targets is None:
         rows = [read for bundle in grouped.values() for read, _ in bundle]
         targets, _ = cluster_sv_events(rows, 0, 2**63, min(SV_MIN_LEN_DEFAULT, length), reconcile_members=False)
     by_name = {}
     for name, bundle in grouped.items():
+        from services.sv_molecules import unique_segments
+        segments = unique_segments([read for read, _ in bundle]) if len(bundle) > 1 else None
         calls = []
         for read, item in bundle:
+            if segments is not None:
+                read = {**read, 'sv_segments': segments}
             allele, evidence = classify_allele_evidence(read, t, ref, length, margin,
                 chrom=read.get('file_chrom', chrom), targets=targets, include_putative=include_putative)
             calls.append({'allele': allele, 'evidence': evidence, 'record': item, 'read': read})
@@ -870,6 +875,7 @@ def classify_molecules(entries, *, t: str, ref: int, length: int, margin: int = 
             level = ev.get('level')
             return ({'confirmed': 0, 'putative': 1, 'ambiguous': 2}.get(level, 3 if call['allele'] == 1 else 4),
                     {'cigar': 0, 'sa': 1, 'clip': 2}.get(ev.get('kind'), 3),
+                    bool(call['read'].get('supplementary')),
                     repr(sorted((call['read'].get('sv_evidence') or call['read'].get('sv') or []), key=repr)))
         winner = calls[0] if len(calls) == 1 else min(calls, key=rank)
         by_name[name] = {**winner, 'evidence_bundle': calls}
@@ -891,7 +897,9 @@ def sv_summary_for_reads(reads: Sequence[dict], start: int, end: int, min_len: i
     competition = clusters if min_len == SV_MIN_LEN_DEFAULT else cluster_sv_events(
         reads, start, end, SV_MIN_LEN_DEFAULT, reconcile_members=False)[0]
     starts, ends, plain, special, event_items = [], [], [], [], []
+    molecule_indices = {}
     for i, read in enumerate(reads):
+        molecule_indices.setdefault(read.get('id'), []).append(i)
         rs, re_ = read.get("reference_start"), read.get("reference_end")
         if isinstance(rs, int) and isinstance(re_, int):
             if read.get("alignment_spans"):
@@ -919,6 +927,8 @@ def sv_summary_for_reads(reads: Sequence[dict], start: int, end: int, min_len: i
             lo = bisect.bisect_left(event_refs, point - tol)
             hi = bisect.bisect_right(event_refs, point + tol)
             candidates.update(i for _r, i in event_items[lo:hi])
+        # A selected segment brings its molecule's other local alignments too.
+        candidates.update(j for i in tuple(candidates) for j in molecule_indices[reads[i].get('id')])
         calls = classify_molecules(((reads[i], None) for i in sorted(candidates)),
                                    t=t, ref=ref, length=length, margin=margin, chrom=chrom, targets=competition)
         carriers = [call for call in calls.values() if call["allele"] == 0]

@@ -513,7 +513,7 @@ def _site_records(bam_paths, chrom, start, end, *, bam_handle_getter, chrom_map,
         from services.graph_lift import lift_hidden_predicate
         hidden = lift_hidden_predicate(getattr(bam, "header", None))
         for read in bam.fetch(actual, max(0, int(start)), int(end)):
-            if read.is_unmapped or read.is_secondary or read.is_supplementary:
+            if read.is_unmapped or read.is_secondary:
                 continue
             if hidden is not None and hidden(read):
                 continue
@@ -594,7 +594,8 @@ def classify_site(bam_paths, chrom, *, pos: int, tolerance: int = DEFAULT_TOLERA
     for name, entry in by_name.items():
         read, _file_chrom, path, bam = entry["record"]
         if (entry['evidence'] or {}).get('level') is not None:
-            plan = {**_carrier_plan(read, entry["evidence"], length), 'evidence_level': entry['evidence']['level']}
+            plan = {**_carrier_plan(read, entry["evidence"], length), 'evidence_level': entry['evidence']['level'],
+                    'evidence_bundle': [call['read'] for call in entry['evidence_bundle']]}
             carriers_all.append((plan, read, path, bam))
         elif entry["allele"] == 1:
             reference_all.append((read, path, bam))
@@ -701,6 +702,7 @@ def build_lens(
             "strand": _strand(read),
             "kind": "cigar" if plan["kind"] == "cigar" else "clip",
             "evidence_level": plan['evidence_level'],
+            "evidence_bundle": plan['evidence_bundle'],
             "ref": int(plan["ref"]),
             "ref_end": int(plan["ref_end"]),
             "q": int(plan["q"]),

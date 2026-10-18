@@ -58,6 +58,19 @@ The public compact loader propagates `FramePolicyError` with its cause for
 unexpected molecular-frame policy/import failures. Missing optional policy
 imports retain declared-header geometry on both strands.
 
-Supplementary-only recovery and exact replacement/normalisation are the next
-implementation steps. No server-side cancellation or complete-export change is
-implied by the evidence levels.
+All eligible primary and supplementary records fetched in the window contribute
+to a molecule bundle. A deterministic primary anchor is preferred for the single
+display row; if no primary is local, a supplementary anchor supplies the row.
+Anchor chromatin retains its existing alignment identity. `sv_alignments` preserves
+the other segments' separate CIGAR events, blocks and SEQ availability; evidence
+classification pools their segments without multiplying molecule votes. Reciprocal
+SA descriptions are deduplicated by reference/query geometry, with fetched records
+overriding tag descriptions and conservative MAPQ ties. Secondary, duplicate and
+signal filtering apply before local bundling. Nonlocal SA descriptions never
+fabricate sequence or chromatin. Both strands use the same full-query frame.
+
+Split, Variants and lens include supplementary-only local molecules. Lens rows
+retain `evidence_bundle`; default alternate-allele construction uses confirmed
+molecules, including supplementary-only CIGAR inserts. Exact replacement and
+normalisation are the next implementation step. No server-side cancellation or
+complete-export change is implied by the evidence levels.

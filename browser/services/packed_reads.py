@@ -324,7 +324,7 @@ class ReadDisplayIndex:
             bounds.append((merged[0][0], merged[-1][1]) if merged else empty)
             metadata.append({key: read[key] for key in
                 ('id', 'reference_start', 'reference_end', 'alignment_spans', 'sv',
-                 'aligned_blocks', 'sv_segments', 'sequence_span') if key in read})
+                 'aligned_blocks', 'sv_segments', 'sequence_span', 'sv_alignments', 'supplementary') if key in read})
         self.segments = np.asarray(segments, dtype=np.int64).reshape(-1, 3)
         # The same geometry per group (merged within it), for a request showing only some (see overlapping).
         self.group_segments = np.asarray(group_segments, dtype=np.int64).reshape(-1, 4)

@@ -152,15 +152,28 @@ export function eventsMatch(t: 'D' | 'I', ref: number, len: number, cRef: number
 /** Mirrors sv_events.carrier_evidence: evidence is independent of glyph size.
  * Insertion clips keep the existing >=50 bp floor, on either side/strand.
  */
-export function svEvidenceLevel(read: Pick<CompactRead, 'sv' | 'sv_evidence' | 'sv_segments' | 'sequence_span'>,
+export function svEvidenceLevel(read: Pick<CompactRead, 'sv' | 'sv_evidence' | 'sv_segments' | 'sequence_span' | 'sv_alignments'>,
   cluster: Pick<SvCluster, 't' | 'ref' | 'len'>, chrom?: string,
   targets: Pick<SvCluster, 't' | 'ref' | 'len'>[] = []): 'confirmed' | 'putative' | 'ambiguous' | null {
+  if (read.sv_alignments?.length) {
+    const levels = read.sv_alignments.map(part => svEvidenceLevel({ ...part,
+      sv_segments: read.sv_segments ?? part.sv_segments }, cluster, chrom, targets));
+    return levels.includes('confirmed') ? 'confirmed' : levels.includes('putative') ? 'putative'
+      : levels.includes('ambiguous') ? 'ambiguous' : null;
+  }
   const events = read.sv_evidence ?? read.sv ?? [];
   for (const ev of events) {
     if (ev.t === cluster.t && eventsMatch(cluster.t, ev.ref, ev.len, cluster.ref, cluster.len)) return 'confirmed';
   }
   const tol = breakpointTolerance(cluster.len);
-  const segments = read.sv_segments ?? [];
+  const uniqueSegments = new Map<string, NonNullable<CompactRead['sv_segments']>[number]>();
+  for (const s of read.sv_segments ?? []) {
+    const key = JSON.stringify([s.chrom, s.pos, s.cigar_ref_len, s.strand, s.q_start, s.q_end, s.query_length]);
+    const previous = uniqueSegments.get(key);
+    if (!previous || Number(s.t === 'SA') < Number(previous.t === 'SA')
+      || (s.t === previous.t && s.mapq < previous.mapq)) uniqueSegments.set(key, s);
+  }
+  const segments = [...uniqueSegments.values()];
   for (const left of segments) for (const right of segments) {
     if (left === right || left.mapq < 20 || right.mapq < 20 || left.strand !== right.strand
       || left.chrom !== right.chrom || (chrom && left.chrom !== chrom) || left.query_length !== right.query_length) continue;
@@ -181,7 +194,7 @@ export function svEvidenceLevel(read: Pick<CompactRead, 'sv' | 'sv_evidence' | '
   return targets.some(t => t.t === cluster.t && (t.ref !== cluster.ref || t.len !== cluster.len) && clippedAt(t)) ? 'ambiguous' : 'putative';
 }
 
-export function readCarriesCluster(read: Pick<CompactRead, 'sv' | 'sv_evidence' | 'sv_segments' | 'sequence_span'>,
+export function readCarriesCluster(read: Pick<CompactRead, 'sv' | 'sv_evidence' | 'sv_segments' | 'sequence_span' | 'sv_alignments'>,
   cluster: Pick<SvCluster, 't' | 'ref' | 'len'>, chrom?: string): boolean {
   return svEvidenceLevel(read, cluster, chrom) === 'confirmed';
 }
@@ -191,8 +204,11 @@ export function supportingReadIds(reads: CompactRead[], cluster: SvCluster, chro
   level: 'confirmed' | 'putative' | 'ambiguous' = 'confirmed', targets: SvCluster[] = []): string[] {
   const levels = new Map<string, 'confirmed' | 'putative' | 'ambiguous'>();
   const rank = { confirmed: 0, putative: 1, ambiguous: 2 };
+  const bundles = new Map<string, CompactRead[]>();
+  for (const read of reads) bundles.set(read.id, [...(bundles.get(read.id) ?? []), read]);
   for (const read of reads) {
-    const evidence = svEvidenceLevel(read, cluster, chrom, targets);
+    const segments = bundles.get(read.id)!.flatMap(r => r.sv_segments ?? []);
+    const evidence = svEvidenceLevel({ ...read, sv_segments: segments }, cluster, chrom, targets);
     if (evidence && (!levels.has(read.id) || rank[evidence] < rank[levels.get(read.id)!])) levels.set(read.id, evidence);
   }
   return [...levels].filter(([, value]) => value === level).map(([id]) => id);

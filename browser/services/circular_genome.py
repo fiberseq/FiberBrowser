@@ -247,6 +247,7 @@ _ROW_IDENTITY_KEYS = (
     # Absolute-coordinate SV events (services/sv_events.py): the record's own.
     "sv",
     "aligned_blocks", "sv_segments", "sequence_span",
+    "sv_alignments", "supplementary",
 )
 
 

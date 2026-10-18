@@ -302,8 +302,9 @@ def test_summary_over_fixture(sv_bam):
     assert by_type["D"]["informative"] == 21
     assert abs(by_type["D"]["ref"] - fx.DEL_START) <= 6 and abs(by_type["D"]["len"] - fx.DEL_LEN) <= 10
     assert by_type["I"]["support"] == 9
-    assert summary["clips"] == [{"side": "R", "ref": fx.DEL_START, "n": 3}]
-    assert sv_summary_for_reads(reads, *fx.VIEW, 2001) is None
+    assert summary["clips"] == [{"side": "L", "ref": fx.DEL_START + fx.DEL_LEN, "n": 3},
+                                {"side": "R", "ref": fx.DEL_START, "n": 3}]
+    assert sv_summary_for_reads(reads, *fx.VIEW, 2001)['clusters'] == []
 
 
 def test_allele_classification_edge_cases():

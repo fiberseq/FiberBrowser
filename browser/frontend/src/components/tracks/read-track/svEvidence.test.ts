@@ -35,4 +35,14 @@ describe('SV evidence levels', () => {
     expect(svEvidenceLevel({ ...read, sv_segments: [read.sv_segments[0], { ...read.sv_segments[1], q_start: 0 }] }, deletion)).toBe('putative');
     expect(svEvidenceLevel({ ...read, sv_segments: [read.sv_segments[0], { ...read.sv_segments[1], strand: '-' }] }, deletion)).toBe('putative');
   });
+  it('uses all local alignment evidence once per molecule, including supplementary-only rows', () => {
+    const deletion = { ...target, t: 'D' as const, len: 1000, end: 2000 };
+    const left = { ...clip, sv_segments: [segment(900, 0, 100)] };
+    const right = { ...clip, supplementary: true, sv_segments: [segment(2000, 100, 250)] };
+    expect(supportingReadIds([left, right, right], deletion)).toEqual(['clip']);
+    const merged = { ...left, sv_segments: [...left.sv_segments, ...right.sv_segments], sv_alignments: [left, right] };
+    expect(svEvidenceLevel(merged, deletion)).toBe('confirmed');
+    const only = { ...right, sv: [{ t: 'I' as const, ref: 1000, len: 100, q: 0 }] };
+    expect(supportingReadIds([only, only], target)).toEqual(['clip']);
+  });
 });

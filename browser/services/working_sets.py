@@ -1364,6 +1364,7 @@ def project_broad_read_to_viewport(
         # SV events are in absolute reference coordinates: never shifted.
         "sv",
         "aligned_blocks", "sv_segments", "sequence_span",
+        "sv_alignments", "supplementary",
     ):
         if identity_key in read:
             adjusted_read[identity_key] = read[identity_key]
