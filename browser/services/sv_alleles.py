@@ -102,6 +102,9 @@ def normalize_allele(event, read, reference):
     if not deleted and not alt:
         return None  # the CIGAR replacement reconstructs reference exactly
     ref_len, alt_len = len(deleted), len(alt)
+    shared = raw_end - raw_ref - ref_len
+    inserted = max(0, event.get('inserted_len', event['len'] if event['t'] == 'I' else 0) - shared)
+    removed = max(0, event.get('deleted_len', event['len'] if event['t'] == 'D' else 0) - shared)
     lo = hi = pos
     normalized_alt = alt
     normalized_ref = deleted
@@ -127,7 +130,9 @@ def normalize_allele(event, read, reference):
             normalized_alt = allele
         else:
             normalized_ref = allele
-    return {**event, 'ref': pos, 'ref_end': pos + ref_len, 'ref_len': ref_len, 'alt_len': alt_len,
+    return {**event, 't': 'I' if alt_len >= ref_len else 'D', 'len': max(inserted, removed),
+            'inserted_len': inserted, 'deleted_len': removed, 'net_len': alt_len - ref_len,
+            'ref': pos, 'ref_end': pos + ref_len, 'ref_len': ref_len, 'alt_len': alt_len,
             'raw_ref': raw_ref, 'raw_ref_end': raw_end, 'q_end': q_end,
             'raw_pieces': event.get('raw_pieces') or [dict(t=event['t'], ref=raw_ref, len=event['len'], q=event['q'])],
             'alt_seq': normalized_alt, 'ref_seq': normalized_ref,

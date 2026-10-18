@@ -260,7 +260,9 @@ def extract_sv_events(read, min_len: int = SV_MIN_LEN_DEFAULT, *, include_seq: b
         indels = [ev for ev in _indel_events(pieces) if ev["len"] >= min_len]
         if indels and reference is not None:
             from services.sv_alleles import normalize_allele
-            indels = [normalized for ev in indels if (normalized := normalize_allele(ev, read, reference)) is not None]
+            indels = [normalized for ev in indels
+                      if (normalized := normalize_allele(ev, read, reference)) is not None
+                      and normalized['len'] >= min_len]
         if indels and include_seq:
             seq = read.query_sequence or ""
             for ev in indels:

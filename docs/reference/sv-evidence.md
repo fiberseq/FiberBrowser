@@ -95,7 +95,9 @@ are rotated left through repeat-equivalent placements. `ref` is canonical;
 geometry. `uncertainty` is the inclusive interval of equivalent anchors; complex
 non-equivalent replacements retain their exact ref/alt strings without invented
 repeat equivalence. Replacements reconstructing reference exactly do not seed
-SVs. Missing reference contigs retain raw evidence. Reference changes invalidate
+SVs. Minimization subtracts shared bases from the inserted/deleted counts and
+reapplies the size cutoff, so a replacement reduced to a micro-indel or SNV
+cannot retain its original SV size. Missing reference contigs retain raw evidence. Reference changes invalidate
 read, split and insertion-tile/lens caches. Worker options carry reference paths,
 not open handles.
 

@@ -117,3 +117,18 @@ def test_exact_reference_replacement_is_not_seeded_as_a_variant(tmp_path):
     ref = 'C' * 100 + 'A' * 50 + 'C' * 100
     rec = _seg([(0, 100), (1, 50), (2, 50), (0, 100)], start=0, seq=ref)
     assert extract_sv_events(rec, 50, reference=fasta_file(tmp_path, ref)) is None
+
+
+@pytest.mark.parametrize('alt,expected', [('A' * 49 + 'T', (1, 1, 1)), ('A' * 50 + 'T' * 5, (5, 0, 5))])
+def test_minimized_replacements_recompute_size_and_apply_the_cutoff(tmp_path, alt, expected):
+    from services.sv_alleles import normalize_allele
+    ref = 'C' * 100 + 'A' * 50 + 'G' * 100
+    rec = _seg([(0, 100), (1, len(alt)), (2, 50), (0, 100)], start=0,
+               seq=ref[:100] + alt + ref[150:])
+    fasta = fasta_file(tmp_path, ref)
+    raw, = extract_sv_events(rec, 50)
+    event = normalize_allele(raw, rec, fasta)
+    assert (event['len'], event['ref_len'], event['alt_len']) == expected
+    assert event['inserted_len'] == expected[2] and event['deleted_len'] == expected[1]
+    assert haplotype(ref, event) == rec.query_sequence
+    assert extract_sv_events(rec, 50, reference=fasta) is None
