@@ -54,6 +54,9 @@ def lifted_reads_for_region(dataset, chrom: str, start: int, end: int, options: 
         return []
     loader_options = {k: v for k, v in (options or {}).items() if k in _PASSED_OPTIONS and v is not None}
     loader_options["source_fasta"] = getattr(config, "source_fasta", None)
+    # Thresholds count molecular calls on the prepared target cohort, not
+    # source tag entries (which can be split into several projected parts).
+    loader_options["min_footprints"] = 0
     budget = LoadBudget()
     load = load_lifted_rows(handle, list(dataset.paths), chrom, int(start), int(end), haplotypes=config.haplotypes,
                             settings=config.settings, dataset_id=dataset.id, loader_options=loader_options,
@@ -410,3 +413,25 @@ def _add_spans(acc, edges, spans):
             lo, hi = max(a, edges[i]), min(b, edges[i + 1])
             if hi > lo:
                 acc[i] += hi - lo
+
+
+def realign_call_metadata(before, after):
+    """Keep call IDs/parts parallel after a quality gate removes intervals."""
+    from collections import defaultdict, deque
+    ll = before.get("live_lift")
+    if not ll:
+        return after
+    def groups(read):
+        return {"intervals": read.get("intervals", []), "fire": read.get("fire", []),
+                **{"layer:" + name: layer.get("intervals", []) for name, layer in read.get("layers", {}).items()}}
+    original = groups(before)
+    result = {**ll, "calls": {}, "call_parts": {}}
+    for group, intervals in groups(after).items():
+        indices = defaultdict(deque)
+        for i, iv in enumerate(original.get(group, [])):
+            indices[tuple(iv)].append(i)
+        chosen = [indices[tuple(iv)].popleft() if indices[tuple(iv)] else None for iv in intervals]
+        for field in ("calls", "call_parts"):
+            values = ll.get(field, {}).get(group, [])
+            result[field][group] = [values[i] if i is not None and i < len(values) else None for i in chosen]
+    return {**after, "live_lift": result}

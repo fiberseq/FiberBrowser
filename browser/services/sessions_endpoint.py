@@ -60,6 +60,9 @@ def build_session_export_for_request(state, req, *, now: datetime | None = None,
                 "layer_type": dataset.layer_type,
                 "available_layers": dataset.available_layers,
                 "derived_layers": getattr(dataset, "derived_layers", {}),
+                **({"molecule_groups": [[_portable_path(p), g] for p, g in getattr(dataset, "molecule_groups", [])],
+                    "joint_dedup": getattr(dataset, "joint_dedup", "off")}
+                   if getattr(dataset, "molecule_groups", None) or getattr(dataset, "joint_dedup", "off") != "off" else {}),
                 # A chemistry chosen in the browser (not saved into the file).
                 **_chemistry_override(dataset),
                 # Fields a plugin pack keeps for a dataset of its own (rebuilt from them on import).

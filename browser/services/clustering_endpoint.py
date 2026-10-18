@@ -713,11 +713,11 @@ def run_dissolve_cluster_endpoint(
         assignments_by_dataset=req.current_assignments,
     )
     if dataset_ids is None:
-        return {"results": {}}
+        return {"results": {}, **({"cohorts": _query.cohort_descriptions} if _query and _query.cohort_descriptions else {})}
 
     all_features, all_read_ids, all_assignments = rows
     if not all_features:
-        return {"results": {}}
+        return {"results": {}, **({"cohorts": _query.cohort_descriptions} if _query and _query.cohort_descriptions else {})}
 
     features = np.array(all_features, dtype=np.float32)
     assignments_arr = np.array(all_assignments, dtype=np.int32)
@@ -729,11 +729,11 @@ def run_dissolve_cluster_endpoint(
     )
     if not dissolve_info["changed"] and dissolve_info["reason"] == "no_reads":
         log_clustering_diagnostic(f"  Cluster {dissolve_id} has no reads, nothing to dissolve")
-        return {"results": {}}
+        return {"results": {}, **({"cohorts": _query.cohort_descriptions} if _query and _query.cohort_descriptions else {})}
 
     if not dissolve_info["changed"]:
         log_clustering_diagnostic("  No remaining clusters to reassign to")
-        return {"results": {}}
+        return {"results": {}, **({"cohorts": _query.cohort_descriptions} if _query and _query.cohort_descriptions else {})}
 
     # Reads of the dissolved cluster outside the window go where most of its
     # reads in the window went; every other read keeps its cluster.
@@ -804,11 +804,11 @@ def run_auto_cull_clusters_endpoint(
         assignments_by_dataset=current_assignments,
     )
     if dataset_ids is None:
-        return {"results": {}, "dissolved": []}
+        return {"results": {}, "dissolved": [], **({"cohorts": _query.cohort_descriptions} if _query and _query.cohort_descriptions else {})}
 
     all_features, all_read_ids, all_assignments = rows
     if not all_features:
-        return {"results": {}, "dissolved": []}
+        return {"results": {}, "dissolved": [], **({"cohorts": _query.cohort_descriptions} if _query and _query.cohort_descriptions else {})}
 
     features = np.array(all_features, dtype=np.float32)
     assignments = np.array(all_assignments, dtype=np.int32)
@@ -1441,7 +1441,10 @@ def run_cluster_all_endpoint(
 
     if all_compact:
         from services.lift.joint import prepare_joint_cohort
-        all_compact, joint_report = prepare_joint_cohort(state, all_compact)
+        all_compact, joint_report = prepare_joint_cohort(state, all_compact, dataset_ids)
+        if not any(getattr(state.get_dataset(d), "data_type", None) == "bam_livelift" or
+                   getattr(state.get_dataset(d), "molecule_groups", None) for d in dataset_ids):
+            joint_report = {}  # native cohorts without declarations retain their existing response
         for key in dataset_read_ids:
             dataset_read_ids[key] = [r["_original_id"] for r in all_compact if r.get("_cluster_group") == key]
             if key in dataset_read_stats:

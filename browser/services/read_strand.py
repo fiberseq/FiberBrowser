@@ -108,7 +108,8 @@ def strand_calls(state, dataset_id: Optional[str]) -> dict:
 
 
 def cached_read_strand(read: dict, calls: Optional[dict]) -> Optional[str]:
-    if calls is None or read.get("strand") in STRANDS or read.get("strand") == ST_UNKNOWN:
+    if calls is None or ((read.get("strand") in STRANDS or read.get("strand") == ST_UNKNOWN)
+                         and not read.get("_fiberbrowser_inferred_strand")):
         # A record's own st:Z decides for that record; the per-name cache is
         # only for strands called from marks (records sharing a name can differ).
         return read_strand(read)

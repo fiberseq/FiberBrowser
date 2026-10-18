@@ -554,7 +554,7 @@ def _compact_reads_payload(
     def filter_lift_hap(reads, hap):
         # A lifted panel's rows: its haplotype, and the display settings for supplementary/alternative rows.
         return filter_lift_display(reads, lift_dataset, hap)
-    calls = strand_calls(state, dataset_id) if strand else None
+    calls = strand_calls(state, dataset_id) if strand or lifted_dataset else None
     chrom = query.chrom
     start = query.start
     end = query.end
@@ -815,12 +815,16 @@ def _compact_reads_payload(
             quality_filters_for_display_layers(active_quality_filters(state), layer_key),
         )
 
+        if lifted_dataset:
+            # Prepare molecule properties before strand, spanning, IDs and caps.
+            all_reads = apply_min_footprint_filter(filter_lift_hap(all_reads, lift_hap), dataset, min_footprints)
+            for r in all_reads:
+                call = cached_read_strand(r, calls)
+                if call and r.get("_fiberbrowser_inferred_strand"):
+                    r["strand"] = call
         if strand:
             # A one-strand panel's counts are that strand's reads.
             all_reads = filter_reads_by_strand(all_reads, strand, calls)
-        if lifted_dataset:
-            # A haplotype split panel's counts are that haplotype's rows (and the display's settings).
-            all_reads = filter_lift_hap(all_reads, lift_hap)
         view_wraps = bool(circular_chrom_size(state, chrom)) and circular_region_wraps(
             start, end, circular_chrom_size(state, chrom))
 
@@ -1554,7 +1558,7 @@ def compact_all_dataset_result(
     if _is_lifted(lift_ds):
         # A lifted dataset in the combined request: the display's supplementary/alternative settings.
         from services.lift.reads import filter_lift_display
-        reads = filter_lift_display(reads, lift_ds)
+        reads = apply_min_footprint_filter(filter_lift_display(reads, lift_ds), lift_ds, min_footprints)
     if fill_gap_size and fill_gap_size > 0:
         phase_t0 = time.perf_counter()
         reads = [fill_small_gaps_in_read(read, fill_gap_size) for read in reads]

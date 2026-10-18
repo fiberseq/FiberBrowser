@@ -81,8 +81,8 @@ class AnalysisReadQuery:
         lift_hap_by_dataset: Optional[Mapping[str, str]] = None,
     ) -> "AnalysisReadQuery":
         resolved_dataset_ids = resolve_dataset_ids(state, dataset_ids=dataset_ids, dataset_id=dataset_id)
-        # Live-lift datasets support the display paths only (services/lift/capability.py, default-deny): an
-        # analysis naming one is refused (409); one over "every dataset" leaves them out.
+        # Unsupported capabilities refuse explicit lifted scopes and leave
+        # lifted datasets out of implicit all-dataset scopes (default-deny).
         from services.lift.capability import SUPPORTED, is_lifted, require_for_ids
         normalized_read_ids = _normalize_read_id_map(state, read_ids_by_dataset)
         if read_ids_by_dataset:

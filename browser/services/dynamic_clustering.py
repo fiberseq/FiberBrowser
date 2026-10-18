@@ -184,8 +184,6 @@ def read_peak_overlap_weights(read: dict, peaks: list[list[int]]) -> tuple[int, 
     if not intervals:
         return tuple(0 for _ in peaks)
 
-    read_start_rel = min(int(iv[0]) for iv in intervals if len(iv) >= 2)
-    read_end_rel = max(int(iv[1]) for iv in intervals if len(iv) >= 2)
     weights = []
     for peak_start, peak_end in peaks:
         weights.append(body_overlap(read, int(peak_start), int(peak_end)))
@@ -204,8 +202,6 @@ def read_accessibility_pattern(
     if not intervals:
         return tuple(0 for _ in peaks)
 
-    read_start_rel = intervals[0][0]
-    read_end_rel = intervals[-1][1]
     pattern_bits = []
 
     for peak_start, peak_end in peaks:
@@ -367,8 +363,6 @@ def assign_reads_to_cluster_patterns(
             cluster_counts[UNASSIGNED_CLUSTER_ID] = cluster_counts.get(UNASSIGNED_CLUSTER_ID, 0) + 1
             continue
         spans = [iv for iv in read.get("intervals", []) if len(iv) >= 2]
-        read_lo = min(int(iv[0]) for iv in spans) if spans else 0
-        read_hi = max(int(iv[1]) for iv in spans) if spans else 0
         pattern_bits = []
         for peak_idx, offset, width, is_class in pattern_slices:
             if width <= 0:

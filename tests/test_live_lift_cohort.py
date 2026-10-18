@@ -93,3 +93,51 @@ def test_mixed_metaprofile_denominators_and_dynamic_overlap_ignore_connectors():
     assert np.allclose(profile, 1)
     fast = compute_compact_metaprofile_payload([native, a], 100, ['nuc'])
     assert np.allclose(fast['layers']['nuc'], 1)
+
+
+def test_folded_quality_tracks_and_call_metadata_survive_filtering():
+    from services.read_quality_filters import apply_quality_filters
+    from services.read_selection import count_footprints
+    a, b = row(), row(record='other', start=20)
+    for r, quality in [(a, 50), (b, 250)]:
+        r['layers'] = {'nuc': {'intervals': r['intervals'], 'quality_names': ['nq'], 'qualities': [[quality]]}}
+        r['qualities'] = [quality]
+        r['live_lift']['calls']['layer:nuc'] = ['call']
+        r['live_lift']['call_parts']['layer:nuc'] = [[0, 0]]
+    folded = prepare_lift_cohort([a, b], 'analysis', LiftSettings(fold_molecule=True)).rows[0]
+    assert folded['layers']['nuc']['qualities'] == [[50, 250]]
+    filtered = apply_quality_filters(folded, [{'layer': 'nuc', 'quality_name': 'nq', 'min_value': 100}])
+    assert filtered['live_lift']['calls']['layer:nuc'] == ['other|call']
+    assert folded['live_lift']['calls']['layer:nuc'] == ['r|call', 'other|call']
+
+
+def test_inferred_strand_cache_is_shared_by_molecule_and_separates_libraries():
+    from services.read_strand import cached_read_strand
+    a, b = row(), row(molecule='other|molecule')
+    a['deam'], b['deam'] = [[1, 1]], [[1, 0]]
+    reads = prepare_lift_cohort([a, b], 'analysis', LiftSettings()).rows
+    calls = {}
+    assert [cached_read_strand(r, calls) for r in reads] == ['CT', 'GA']
+    assert calls == {'group|molecule': 'CT', 'other|molecule': 'GA'}
+    reads[0]['strand'] = 'GA'  # another view's inferred marks cannot change the molecule
+    assert cached_read_strand(reads[0], calls) == 'CT'
+    reads[0]['_fiberbrowser_inferred_strand'] = False  # primary st remains authoritative
+    assert cached_read_strand(reads[0], calls) == 'GA'
+
+
+def test_three_orientation_rows_share_folded_features_and_molecule_strand():
+    from services.clustering_features import extract_features_from_compact
+    from services.read_metrics import read_covers_regions
+    from services.read_selection import is_read_spanning
+    rows = [row(orientation=i, start=20*i) for i in range(3)]
+    for r, orientation in zip(rows, ['+', '-', '+']):
+        r['live_lift']['segments'][0][3] = orientation
+        r['strand'] = 'CT'
+    peaks = [[5, 10], [25, 30], [45, 50]]
+    assert not any(read_covers_regions(r, peaks) for r in rows)
+    folded = prepare_lift_cohort(rows, 'analysis', LiftSettings(fold_orientation_rows=True)).rows
+    assert len(folded) == 1 and read_covers_regions(folded[0], peaks)
+    assert folded[0]['strand'] == 'CT' and is_read_spanning(folded[0], 60)
+    features, ids, _, _ = extract_features_from_compact(folded, peaks, 0)
+    assert features.shape[0] == len(ids) == 1 and ids == [folded[0]['analysis_id']]
+    assert features.tolist() == [[1, 1, 1]]

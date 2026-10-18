@@ -39,7 +39,8 @@ def use_columnar_clustering(state, req, query):
         if (not dataset or getattr(dataset, 'data_type', None) != 'bam'
                 or len(getattr(dataset, 'paths', [])) != 1
                 or getattr(dataset, 'derived_layers', None)
-                or getattr(dataset, 'companion_layers', None)):
+                or getattr(dataset, 'companion_layers', None)
+                or getattr(dataset, 'molecule_groups', None)):
             return False
         if _bam_wrap_length_for(dataset.paths[0], query.chrom, False, get_bam_handle,
                                 getattr(state, 'chrom_map', None),

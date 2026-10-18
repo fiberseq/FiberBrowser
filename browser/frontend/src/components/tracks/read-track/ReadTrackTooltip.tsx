@@ -26,12 +26,19 @@ export function ReadTooltip({
   annotationOverlays, annotationColors,
 }: ReadTooltipProps) {
   const read = hoveredRead.read;
-  const footprints = read.intervals.filter(iv => iv[2] > 0);
+  const seenCalls = new Set<string>();
+  const footprints = read.intervals.filter((iv, i) => {
+    if (iv[2] <= 0) return false;
+    const call = read.live_lift?.calls?.intervals?.[i];
+    if (call == null) return true;
+    if (seenCalls.has(call)) return false;
+    seenCalls.add(call); return true;
+  });
   const extent = readBodyExtent(read);
   const readStart = extent?.lo ?? 0;
   const readEnd = extent?.hi ?? 0;
   const readSize = readEnd - readStart;
-  const cluster = clusterAssignmentForRead(myClusterAssignments, read.id);
+  const cluster = clusterAssignmentForRead(myClusterAssignments, read.analysis_id ?? read.id);
   const state = myReadStateDetails?.[read.id];
   const familySummaries = ([
     ['XCR', read.layers?.tf_cross_consensus],

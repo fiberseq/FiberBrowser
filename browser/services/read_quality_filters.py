@@ -72,6 +72,7 @@ def _placeholder_quality_array(layer_name: str, quality_name: str, values) -> bo
 
 def apply_quality_filters(read: dict, quality_filters: Iterable[dict]) -> Optional[dict]:
     """Return a filtered compact read, or None when no intervals survive."""
+    original_read = read
     layers = read.get('layers') or {}
     quality_filters = list(quality_filters or [])
     read = {**read}  # shallow copy so broad-cache reads are not mutated
@@ -219,6 +220,9 @@ def apply_quality_filters(read: dict, quality_filters: Iterable[dict]) -> Option
     if not read.get('intervals'):
         return None
 
+    if read.get("live_lift"):
+        from services.lift.reads import realign_call_metadata
+        return realign_call_metadata(original_read, read)
     return read
 
 

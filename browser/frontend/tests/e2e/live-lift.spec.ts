@@ -146,6 +146,46 @@ test('add a live-lift dataset next to the native BAM: split MAT/PAT panels rende
   await strip.getByTestId('live-lift-diff-prev').click();
   await expect.poll(() => page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().start), { timeout: 30_000 }).not.toBe(beforePrev);
 
+  // Co-cluster native GRCh38 + MAT + PAT in one model. Provenance sharing is
+  // explicit, even though these fixtures contain the same molecular library.
+  await page.evaluate(async view => {
+    const store = (window as any).__FIBERBROWSER_STORE__;
+    store.getState().setViewport(view.chrom, view.start, view.end);
+    for (const dataset of store.getState().datasets.filter((d: any) => ['bam', 'bam_livelift'].includes(d.data_type))) {
+      const response = await fetch(`/api/lift/provenance/${encodeURIComponent(dataset.id)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ molecule_groups: (dataset.paths ?? [dataset.path]).map((p: string) => [p, 'e2e-shared']), joint_dedup: 'off' }),
+      });
+      if (!response.ok) throw new Error(`Provenance: ${response.status}`);
+      const result = await response.json();
+      store.setState((s: any) => ({ datasets: s.datasets.map((d: any) => d.id === dataset.id ? result.dataset : d), refreshGeneration: s.refreshGeneration + 1 }));
+    }
+    const st = store.getState();
+    st.addCustomPeak(128_656_200, 128_656_300, view.chrom);
+    st.addCustomPeak(128_659_000, 128_659_100, view.chrom);
+    const selected = st.getAllPeaks().filter((p: any) => p.isCustom && [128_656_200, 128_659_000].includes(p.start));
+    st.replacePeakSelection(selected.map((p: any) => p.index));
+    st.setClusterMethod('combinatorial');
+    store.setState({ spanningOnly: false, peaksLocked: true, clusterPreparationCount: null, selectedDatasets: new Set() });
+  }, VIEW);
+  await expect.poll(() => page.locator('[data-read-track-loading="true"]').count(), { timeout: 60_000 }).toBe(0);
+  const clustered = page.waitForResponse(r => new URL(r.url()).pathname === '/api/cluster_all', { timeout: 90_000 });
+  await page.getByTestId('cluster-run-button').click();
+  const clusterResponse = await clustered;
+  expect(clusterResponse.status()).toBe(200);
+  const joint = await clusterResponse.json();
+  expect(joint.joint_cohort.shared_molecules).toBeGreaterThan(5);
+  expect(joint.joint_cohort.policy).toBe('off');
+  const sent = clusterResponse.request().postDataJSON();
+  expect(sent.viewports.filter((v: any) => v.lift_hap).map((v: any) => v.lift_hap).sort()).toEqual(['MAT', 'PAT']);
+  for (const panel of panels) {
+    expect(Object.keys(joint.results[panel.stateKey].assignments).length).toBeGreaterThan(5);
+  }
+  for (const canvas of [matCanvas, patCanvas]) {
+    await expect.poll(async () => Number(await canvas.getAttribute('data-live-lift-clustered-rows')), { timeout: 30_000 }).toBeGreaterThan(0);
+  }
+  await page.screenshot({ path: test.info().outputPath('live-lift-co-clustered.png') });
+
   // Pooled is one click away.
   const datasetId = panels.find((p: any) => p.hap)!.dataset;
   await page.evaluate(id => (window as any).__FIBERBROWSER_STORE__.getState().poolLiftHapPanels(id), datasetId);

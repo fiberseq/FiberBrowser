@@ -807,7 +807,7 @@ export function ReadTrack({
   const prevActiveIdsKeyRef = useRef<string>('');
   useEffect(() => {
     if (loading || isDataViewportStale || currentDataSequenceRef.current === 0) return;
-    const ids = displayReads.map(r => r.analysis_id ?? r.id);
+    const ids = Array.from(new Set(displayReads.map(r => r.analysis_id ?? r.id)));
     const idsKey = ids.join('\0');
     if (idsKey !== prevActiveIdsKeyRef.current) {
       prevActiveIdsKeyRef.current = idsKey;

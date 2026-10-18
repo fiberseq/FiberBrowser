@@ -160,7 +160,7 @@ def test_neutral_crop_extent_starts_at_body_after_connector():
 def test_coverage_uses_panel_supplementary_filter(lift_env, monkeypatch, reuse):
     from services.lift import reads
     _client, ds = _dataset(lift_env, settings={'supplementary_display': 'hide'})
-    rows = [{'id': 'supp', 'live_lift': {'hap_label': 'MAT', 'molecule': 'supp',
+    rows = [{'id': 'supp', 'live_lift': {'hap_label': 'MAT', 'molecule': 'supp', 'record': 'supp:0',
              'segments': [[0, 100, 0, '+', True]], 'source': {'supplementary': True}}}]
     monkeypatch.setattr(reads, 'lifted_reads_for_region', lambda *a, **k: rows)
     result = reads.lifted_coverage(ds, TARGET, 2000, 2100, 1, **({'rows': rows} if reuse else {}))
@@ -412,7 +412,7 @@ def test_coverage_excludes_alternatives_and_deduplicates_pooled_haps(lift_env):
     from services.lift.reads import lifted_coverage
     _client, ds = _dataset(lift_env)
     def row(label, alt=False):
-        return {'id': label, 'live_lift': {'hap_label': label, 'molecule': 'one', 'alt': alt,
+        return {'id': label, 'live_lift': {'hap_label': label, 'molecule': 'one', 'record': 'record:0', 'alt': alt,
                                          'segments': [[0, 1000, 0, '+', True]], 'connectors': []}}
     result = lifted_coverage(ds, TARGET, 2000, 3000, 10, rows=[row('MAT'), row('PAT'), row('MAT', True)])
     assert result['max'] == 1

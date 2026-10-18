@@ -218,7 +218,8 @@ def run_matched_views_endpoint(*, state, req) -> Dict[str, Any]:
                 **({"cohort": working_set.lift_cohort} if getattr(working_set, "lift_cohort", None) else {}),
             }
     from services.lift.joint import prepare_joint_cohort
-    joint_rows, joint_report = prepare_joint_cohort(state, [r for *_, cohort in pending for r in cohort])
+    joint_rows, joint_report = prepare_joint_cohort(state, [r for *_, cohort in pending for r in cohort],
+        {p.dataset_id for view in req.views for p in view.panels})
     retained = {id(r) for r in joint_rows}
     for view, panel, peaks, modes, cohort in pending:
         prefixed = [r for r in cohort if id(r) in retained]

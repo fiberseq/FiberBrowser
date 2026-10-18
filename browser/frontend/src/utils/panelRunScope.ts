@@ -22,6 +22,7 @@ type ViewState = {
   chrom: string;
   start: number;
   end: number;
+  datasets?: Array<{ id: string; source_identity?: string; live_lift?: { key: string }; molecule_groups?: [string, string][] }>;
   currentGenome?: string | null;
   fastaPath?: string | null;
 };
@@ -32,12 +33,18 @@ export interface RunView extends Locus {
   stateKey: string;
   /** The panel's reference, exactly (a panel's own, else the main genome's registry id / FASTA). */
   reference: string;
+  analysisIdentity?: string;
 }
 
 const isDataset = (p: PanelConfig) => p.contentType === 'dataset' && !!p.datasetId;
 const keyOf = (p: PanelConfig) => p.stateKey ?? p.datasetId!;
 const referenceOf = (p: PanelConfig | null, s: ViewState) =>
   (p?.genome ? `panel:${p.genome}` : mainReferenceIdentity(s as never));
+const analysisIdentityOf = (p: PanelConfig | null, s: ViewState) => {
+  const dataset = s.datasets?.find(d => d.id === p?.datasetId);
+  return dataset?.live_lift || dataset?.molecule_groups?.length
+    ? JSON.stringify([dataset.live_lift?.key ?? dataset.source_identity, p?.liftHap ?? p?.readSubset?.rule.liftHap]) : undefined;
+};
 const locusOf = (p: PanelConfig | null, s: ViewState): Locus => {
   const v = p?.viewportOverride;
   return v ? { chrom: v.chrom, start: v.start, end: v.end } : { chrom: s.chrom, start: s.start, end: s.end };
@@ -52,7 +59,8 @@ export function captureRunViews(s: ViewState, stateKeys: Iterable<string>): RunV
       out.push({ ...locusOf(null, s), panelId: null, stateKey, reference: referenceOf(null, s) });
       continue;
     }
-    for (const p of panels) out.push({ ...locusOf(p, s), panelId: p.id, stateKey, reference: referenceOf(p, s) });
+    for (const p of panels) out.push({ ...locusOf(p, s), panelId: p.id, stateKey, reference: referenceOf(p, s),
+      ...(analysisIdentityOf(p, s) ? { analysisIdentity: analysisIdentityOf(p, s) } : {}) });
   }
   return out;
 }
@@ -63,6 +71,7 @@ export function runViewsStillCurrent(views: RunView[], s: ViewState, mode: 'exac
     const panel = view.panelId ? s.panels.find(p => p.id === view.panelId) ?? null : null;
     if (view.panelId && (!panel || !isDataset(panel) || keyOf(panel) !== view.stateKey)) return false;
     if (referenceOf(panel, s) !== view.reference) return false;
+    if (view.analysisIdentity !== analysisIdentityOf(panel, s)) return false;
     const now = locusOf(panel, s);
     if (mode === 'panOrZoom') return isPanOrZoom(view, now);
     return now.chrom === view.chrom && now.start === view.start && now.end === view.end;

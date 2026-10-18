@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Iterable
 
 LIFTED_TYPE = "bam_livelift"
-# What lifted datasets support in this phase (P2a: display).
+# Display and prepared-cohort clustering; everything else stays denied.
 SUPPORTED = frozenset({"compact_reads", "compact_all", "coverage", "lift_correspondence_only", "locate", "tooltip", "settings", "differences", "clustering"})
 
 

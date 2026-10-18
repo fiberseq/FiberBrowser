@@ -30,12 +30,12 @@ from services.read_metrics import (
     nuc_layer_duplicates_primary,
     normalize_sample_seed,
 )
-from services.read_selection import is_read_spanning, read_matches_id_filter
+from services.read_selection import is_read_spanning, read_matches_id_filter, count_footprints
 
 
 LayerKey = Optional[tuple[str, ...]]
 WORKING_SET_DIAGNOSTICS_ENV = "FIBERBROWSER_WORKING_SET_DIAGNOSTICS"
-BROAD_CACHE_SCHEMA_VERSION = 5
+BROAD_CACHE_SCHEMA_VERSION = 6
 _BROAD_CACHE_SYNC_INIT_LOCK = threading.Lock()
 
 
@@ -609,7 +609,9 @@ def _load_broad_reads(
         from services.read_sampling import SampledReads, Sampler
         from services.read_pins import current_pins
         pins = current_pins()
-        sampler = Sampler(sample_level, keep_ids=set(pins) | {re.sub(r'_\d+$', '', p) for p in pins}) if sample_level else None
+        from services.read_sampling import decode_read_scope
+        scope = decode_read_scope.get()
+        sampler = Sampler(sample_level or 1, keep_ids=set(pins) | {re.sub(r'_\d+$', '', p) for p in pins}, **(scope or {})) if sample_level or scope is not None else None
         rows = lifted_reads_for_region(dataset, chrom, broad_start, broad_end, dict(
             include_methylation=include_methylation, ml_threshold=ml_threshold, include_layers=include_layers,
             insertion_ids=[], requested_layers=requested_layers, include_layer_qualities=include_layer_qualities,
@@ -1398,7 +1400,7 @@ def project_broad_read_to_viewport(
         "chemical_strand", "daf_strand", "strand", "_original_id",
         "alignment_spans", "signal",
         # st/SEQ strand disagreement and graph-lift provenance (record-level).
-        "strand_conflict", "lift", "analysis_id",
+        "strand_conflict", "lift", "analysis_id", "_fiberbrowser_inferred_strand",
         # SV events are in absolute reference coordinates: never shifted.
         "sv",
     ):
@@ -1521,9 +1523,14 @@ def _viewport_reads_from_broad(
         all_reads = prepared.rows
         if cohort_out is not None:
             cohort_out.update(prepared.description)
+        from services.read_strand import filter_reads_by_strand, strand_calls, cached_read_strand
+        calls = strand_calls(state, dataset.id)
+        for r in all_reads:
+            call = cached_read_strand(r, calls)
+            if call and r.get("_fiberbrowser_inferred_strand"):
+                r["strand"] = call
         if strand:
-            from services.read_strand import filter_reads_by_strand, strand_calls
-            all_reads = filter_reads_by_strand(all_reads, strand, strand_calls(state, dataset.id))
+            all_reads = filter_reads_by_strand(all_reads, strand, calls)
         row_filter = None
     viewport_offset = start - bc_start
     viewport_reads = PackedReadBuilder() if bounded_analysis.get() else []
@@ -1575,7 +1582,7 @@ def _viewport_reads_from_broad(
                 include_layer_qualities=include_layer_qualities,
                 index_intervals=index_intervals,
             )
-            if adjusted_read is not None:
+            if adjusted_read is not None and (not min_footprints or not adjusted_read.get("live_lift") or count_footprints(adjusted_read) >= min_footprints):
                 viewport_reads.append(adjusted_read)
             continue
 
@@ -1602,6 +1609,8 @@ def _viewport_reads_from_broad(
             if adjusted_read is None:
                 continue
 
+        if min_footprints and adjusted_read.get("live_lift") and count_footprints(adjusted_read) < min_footprints:
+            continue
         total_overlapping += 1
         if is_spanning:
             total_spanning += 1
@@ -1691,6 +1700,24 @@ def build_sampled_display_working_set(
     dataset = state.get_dataset(dataset_id)
     if not dataset:
         return WorkingSet([], 0, 0, chrom, start, end), 0
+    from services.lift.reads import is_lifted
+    if is_lifted(dataset):
+        from services.lift.cohort import using_lift_cohort
+        from services.read_metrics import sample_by_coverage, sample_stable_by_id
+        with using_lift_cohort("display"):
+            ws = build_working_set(state, dataset_id, chrom, start, end, spanning=spanning,
+                min_footprints=min_footprints, include_methylation=include_methylation, include_layers=include_layers,
+                requested_layers=requested_layers, include_layer_qualities=include_layer_qualities,
+                quality_filters=quality_filters, infer_legacy_layers=infer_legacy_layers,
+                legacy_nuc_min_size=legacy_nuc_min_size, build_bam_reads=build_bam_reads,
+                build_bigbed_reads=build_bigbed_reads, load_bigbed_marks=load_bigbed_marks,
+                stable_sampler=sample_stable_by_id)
+        count = len(ws.reads)
+        if max_reads and count > max_reads:
+            from copy import copy
+            ws = copy(ws)
+            ws.reads = sample_by_coverage(ws.reads, max_reads, start, end)
+        return ws, count
     effective_min_footprints = (
         int(min_footprints or 0)
         if dataset.available_layers.get("footprint", True)

@@ -15,7 +15,7 @@ export function CohortSettingsFields({ settings: s, onChange, paths, showHaploty
     <p>Display options and analysis options are independent. Counts include the selected records and placements.</p>
     <label className="block">Supplementary records in analyses
       <select className={input} value={s.cohort_supplementaries ?? 'all_records'} onChange={e => change({ cohort_supplementaries: e.target.value as LiftSettings['cohort_supplementaries'] })}>
-        <option value="all_records">All records (including hidden supplementaries)</option>
+        <option value="all_records">All loaded records (including hidden supplementaries)</option>
         <option value="follow_display">Follow display</option><option value="primary_only">Primary records only</option>
       </select>
     </label>

@@ -178,8 +178,12 @@ function sampleReadsForFit(reads: CompactRead[], limit: number, seed: string): C
 export function keepPinnedReads(sample: CompactRead[], pool: CompactRead[], pinnedKey: string): CompactRead[] {
   if (!pinnedKey || sample.length === pool.length) return sample;
   const pins = new Set(pinnedKey.split(','));
-  const kept = new Set(sample);
-  return pool.filter(r => kept.has(r) || readIdKeys(r).some(id => pins.has(id) || pins.has(stripSegmentSuffix(id))));
+  const kept = new Set(sample.map(r => r.analysis_id ?? r.id));
+  const missing = pool.filter(r => !kept.has(r.analysis_id ?? r.id)
+    && readIdKeys(r).some(id => pins.has(id) || pins.has(stripSegmentSuffix(id))));
+  if (!missing.length) return sample;
+  for (const r of missing) kept.add(r.analysis_id ?? r.id);
+  return pool.filter(r => kept.has(r.analysis_id ?? r.id));
 }
 
 export function makeDataViewportKey(

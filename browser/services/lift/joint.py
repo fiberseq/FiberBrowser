@@ -13,7 +13,7 @@ def molecule_identity(dataset, read):
     return f"{group}|{read.get('_display_id') or read.get('_original_id') or read['id']}"
 
 
-def prepare_joint_cohort(state, reads):
+def prepare_joint_cohort(state, reads, dataset_ids=None):
     """Resolve policy only among datasets whose provenance groups are shared.
 
     Keep both copies by default. Unlabelled native BAMs never share molecules.
@@ -25,11 +25,9 @@ def prepare_joint_cohort(state, reads):
     by_molecule = defaultdict(list)
     datasets_by_group = defaultdict(set)
     policies = {}
-    for i, r in enumerate(reads):
-        if i % 256 == 0:
-            checkpoint()
-        ds_id = r.get("_consensus_dataset_id")
-        dataset = state.get_dataset(ds_id)
+    dataset_ids = list(dataset_ids) if dataset_ids is not None else sorted({r.get("_consensus_dataset_id") for r in reads if r.get("_consensus_dataset_id")})
+    datasets = {d: state.get_dataset(d) for d in dataset_ids}
+    for ds_id, dataset in datasets.items():
         if dataset is None:
             continue
         config = getattr(dataset, "live_lift", None)
@@ -39,6 +37,13 @@ def prepare_joint_cohort(state, reads):
             if group:
                 datasets_by_group[group].add(ds_id)
         policies[ds_id] = settings.joint_dedup if settings else getattr(dataset, "joint_dedup", "off")
+    for i, r in enumerate(reads):
+        if i % 256 == 0:
+            checkpoint()
+        ds_id = r.get("_consensus_dataset_id")
+        dataset = datasets.get(ds_id)
+        if dataset is None:
+            continue
         molecule = molecule_identity(dataset, r)
         if molecule:
             by_molecule[molecule].append((ds_id, r))
@@ -60,4 +65,8 @@ def prepare_joint_cohort(state, reads):
     report = dict(policy=policy, shared_molecules=len(shared), removed_rows=len(removed), input_rows=len(reads),
                   rows=len(reads) - len(removed), identity="provenance group + QNAME",
                   pairs=[dict(datasets=list(pair), molecules=n) for pair, n in sorted(pairs.items())])
-    return [r for r in reads if id(r) not in removed], report
+    kept = [r for r in reads if id(r) not in removed]
+    if policy == "by_molecule":
+        kept.sort(key=lambda r: (is_lifted(datasets.get(r.get("_consensus_dataset_id"))),
+                                 r.get("_consensus_dataset_id", ""), r.get("_original_id", r["id"]), r["id"]))
+    return kept, report

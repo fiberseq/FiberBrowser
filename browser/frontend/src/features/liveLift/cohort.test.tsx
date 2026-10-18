@@ -60,3 +60,17 @@ it('advanced cohort policies can be changed independently of display policies', 
     expect(host.textContent).toContain('Both copies are kept by default');
   } finally { await act(async () => root.unmount()); host.remove(); }
 });
+
+
+it('a setting or haplotype change invalidates an in-flight cluster result', async () => {
+  const { captureRunViews, runViewsStillCurrent } = await import('../../utils/panelRunScope');
+  const state: any = { chrom: 'chr1', start: 0, end: 100,
+    panels: [{ id: 'p', datasetId: 'lift', contentType: 'dataset', liftHap: 'MAT' }],
+    datasets: [{ id: 'lift', live_lift: { key: 'old' } }] };
+  const views = captureRunViews(state, ['lift']);
+  expect(runViewsStillCurrent(views, state)).toBe(true);
+  state.datasets[0].live_lift.key = 'new';
+  expect(runViewsStillCurrent(views, state)).toBe(false);
+  state.datasets[0].live_lift.key = 'old'; state.panels[0].liftHap = 'PAT';
+  expect(runViewsStillCurrent(views, state)).toBe(false);
+});
