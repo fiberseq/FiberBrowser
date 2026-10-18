@@ -26,11 +26,6 @@ from services.runtime import copilot_included, get_public_mode
 from utils.chrom import normalize_chrom_name
 
 
-def _live_lift_enabled() -> bool:
-    from services.lift.dataset import live_lift_enabled
-    return live_lift_enabled()
-
-
 router = APIRouter(tags=["genome"])
 
 
@@ -256,7 +251,7 @@ async def get_status(state=Depends(get_state), dafc_state=Depends(get_dafc_state
         "has_fire": state.fire_df is not None,
         "public_mode": get_public_mode(),
         # What this install includes (FiberBrowser.app leaves the Copilot out).
-        "features": {"copilot": copilot_included(), "live_lift": _live_lift_enabled()},
+        "features": {"copilot": copilot_included()},
     }
 
 

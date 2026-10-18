@@ -69,7 +69,7 @@ def test_flag_off_hides_every_route(lift_env, monkeypatch):
     monkeypatch.delenv("FIBERBROWSER_LIVE_LIFT")
     assert client.post("/api/lift/datasets", json={"paths": [bam], "manifest": manifest}).status_code == 404
     assert client.get("/api/lift/inspect", params={"manifest": manifest}).status_code == 404
-    assert client.get("/api/status").json()["features"]["live_lift"] is False
+    assert client.get("/api/lift/enabled").json() == {"enabled": False}
 
 
 def test_add_inspect_and_dataset_payload(lift_env):
@@ -85,7 +85,7 @@ def test_add_inspect_and_dataset_payload(lift_env):
     assert [c["name"] for c in client.get("/api/chroms").json()["chroms"]] == [TARGET]
     listed = client.get("/api/datasets").json()["datasets"]
     assert listed[0]["live_lift"]["key"] == ds["live_lift"]["key"]
-    assert client.get("/api/status").json()["features"]["live_lift"] is True
+    assert client.get("/api/lift/enabled").json() == {"enabled": True}
 
 
 def test_validation_refuses_a_wrong_bam(lift_env, tmp_path):

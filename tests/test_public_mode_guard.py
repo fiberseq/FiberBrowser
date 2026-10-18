@@ -9,6 +9,10 @@ import pytest
 # (browser/services/public_mode_guard.py); test_every_route_is_classified
 # fails until it is.
 PUBLIC_DENIED = {
+    # Live lift: opening a dataset from the host's files, reading a map from them, and its settings (the flag
+    # itself is harmless but is a host feature too).
+    ("GET", "/api/lift/enabled"), ("GET", "/api/lift/inspect"), ("POST", "/api/lift/datasets"),
+    ("POST", "/api/lift/datasets/{dataset_id}/settings"),
     # Cross-region correspondence analyses are local workspace operations.
     ("POST", "/api/cluster-regions"), ("POST", "/api/scan-correspondence"),
     ("GET", "/api/app/performance"), ("POST", "/api/app/performance"),
