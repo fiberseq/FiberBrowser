@@ -175,6 +175,8 @@ export function drawReadTrack(params: DrawReadsParams): void {
     liftCorrespondence = null,
     liftHap,
   } = params;
+  canvas.dataset.liveLiftClusteredRows = String(displayReads.filter(r => r.live_lift && clusterAssignmentForRead(myClusterAssignments, r.analysis_id ?? r.id) !== undefined).length);
+  canvas.dataset.liveLiftClusterIds = JSON.stringify([...new Set(displayReads.filter(r => r.live_lift).map(r => clusterAssignmentForRead(myClusterAssignments, r.analysis_id ?? r.id)).filter(c => c !== undefined))]);
   const selectedFootprints = allSelectedFootprints.filter(fp => fp.genome === undefined || fp.genome === (genome ?? null));
 
   const ctx = setupHighDpiCanvas(canvas, width, height);

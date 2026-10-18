@@ -294,9 +294,10 @@ export function ReadTrack({
   const myClusterFocus = clusterFocus[stateKey] ?? null;
   const mySelectedClusters = selectedClusters[stateKey] ?? null;
   const hasClusterFocus = myClusterFocus !== null && myClusterFocus.size > 0;
+  const liftGrouping = useBrowserStore(s => s.panels.some(p => (p.stateKey ?? p.datasetId) === stateKey && p.liftGroupByHaplotype));
   const clusteredReadIds = useMemo(
-    () => clusteredReadIdSet(myClusterAssignments),
-    [myClusterAssignments],
+    () => liftGrouping ? null : clusteredReadIdSet(myClusterAssignments),
+    [myClusterAssignments, liftGrouping],
   );
   // Resolve the exact visible read IDs from the FRONTEND's authoritative per-node
   // cluster assignments and fetch by ID. The backend can only resolve cluster
@@ -337,14 +338,14 @@ export function ReadTrack({
   const splitReads = useSplitPanelStore(s => s.reads[stateKey]);
   // Away from where it was split its reads aren't classified (utils/splitLocus.ts): a banner says so,
   // or (Show all reads here) every read in view, unfiltered.
-  const splitPanel = useBrowserStore(s => (splitReads ? s.panels.find(p => p.contentType === 'dataset' && p.readSubset && (p.stateKey ?? p.datasetId) === stateKey) : undefined));
+  const splitPanel = useBrowserStore(s => s.panels.find(p => p.contentType === 'dataset' && p.readSubset && (p.stateKey ?? p.datasetId) === stateKey));
   const splitIsAway = splitAway(splitPanel?.readSubset, { chrom, start, end }, splitPanel);
   const splitAllHere = splitIsAway && Boolean(splitPanel?.readSubset?.showAllAway);
   // A split panel on its own contig (an insert-expanded Carriers panel) stays there; it says when its split went away.
   const splitPinned = useBrowserStore(s => splitPinnedAway(splitPanel?.readSubset, splitPanel, s.panels, { chrom: s.chrom, start: s.start, end: s.end }));
   const showSplitAwayBanner = Boolean(splitPanel && ((splitReads && splitIsAway && !splitAllHere) || splitPinned));
-  const subsetFilter = useMemo(() => (splitAllHere ? filteredReadIds[stateKey] : splitReadFilter(splitReads, filteredReadIds[stateKey])),
-    [splitAllHere, splitReads, filteredReadIds, stateKey]);
+  const subsetFilter = useMemo(() => (splitAllHere ? filteredReadIds[stateKey] : splitReadFilter(splitReads, filteredReadIds[stateKey], splitPanel?.readSubset?.rule)),
+    [splitAllHere, splitReads, filteredReadIds, stateKey, splitPanel?.readSubset?.rule]);
   const myFilteredReadIds = overrideFilteredIds ?? subsetFilter;
 
   const hasCluster = Object.keys(myClusterAssignments).length > 0;
@@ -790,7 +791,7 @@ export function ReadTrack({
         return intEnd > visibleStart && intStart < visibleEnd;
       });
       if (isVisible) {
-        visibleIds.add(read.id);
+        visibleIds.add(read.analysis_id ?? read.id);
       }
     }
 
@@ -806,7 +807,7 @@ export function ReadTrack({
   const prevActiveIdsKeyRef = useRef<string>('');
   useEffect(() => {
     if (loading || isDataViewportStale || currentDataSequenceRef.current === 0) return;
-    const ids = displayReads.map(r => r.id);
+    const ids = displayReads.map(r => r.analysis_id ?? r.id);
     const idsKey = ids.join('\0');
     if (idsKey !== prevActiveIdsKeyRef.current) {
       prevActiveIdsKeyRef.current = idsKey;

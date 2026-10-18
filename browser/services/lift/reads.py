@@ -269,18 +269,7 @@ def filter_lift_display(reads: Iterable[dict], dataset, hap: Optional[str] = Non
     rows = filter_lift_hap(reads, hap)
     if config is None:
         return rows
-    hide_supp = config.settings.supplementary_display == "hide"
-    show_alt = bool(config.settings.alternatives)
-    out = []
-    for read in rows:
-        ll = read.get("live_lift")
-        if ll is not None:
-            if hide_supp and (ll.get("source") or {}).get("supplementary"):
-                continue
-            if ll.get("alt") and not show_alt:
-                continue
-        out.append(read)
-    return out
+    return rows
 
 
 # ── Coverage ────────────────────────────────────────────────────────────────

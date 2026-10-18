@@ -112,6 +112,8 @@ def prepare_lift_cohort(rows, purpose, settings, lift_hap=None):
                 supplementary_rows=sum(bool(r["live_lift"].get("source", {}).get("supplementary")) for r in kept),
                 folded=False, excluded_alt=excluded_alt, alternative_rows=sum(bool(r["live_lift"].get("alt")) for r in kept),
                 hap=lift_hap, input_rows=len(kept), purpose=purpose,
+                primary_metadata_fallback_records=len({(r["live_lift"]["molecule"], r["live_lift"]["record"])
+                    for r in kept if r["live_lift"].get("hap_source") == "record"}),
                 cohort_supplementaries=settings.cohort_supplementaries, cohort_alternatives=settings.cohort_alternatives)
     if purpose == "analysis" and (settings.fold_molecule or settings.fold_orientation_rows):
         groups = defaultdict(list)

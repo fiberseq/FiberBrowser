@@ -13,6 +13,7 @@ export interface ComparisonViewPanel {
   /** The panel's own state key: its clusters and filters live under it. */
   stateKey: string;
   strand?: 'CT' | 'GA';
+  liftHap?: string;
 }
 
 export interface ComparisonView {
@@ -27,7 +28,7 @@ export interface ComparisonView {
 }
 
 type ComparisonPanel = Pick<PanelConfig, 'id' | 'contentType' | 'datasetId' | 'stateKey' | 'collapsed'
-  | 'viewportOverride' | 'haplotypeGroup' | 'haplotypeSide' | 'layoutColumn' | 'strand'>;
+  | 'viewportOverride' | 'haplotypeGroup' | 'haplotypeSide' | 'layoutColumn' | 'strand' | 'liftHap'>;
 
 /** A comparison panel's view: its haplotypeSide, else (older sessions) its column. */
 function panelSide(panel: ComparisonPanel): 1 | 2 {
@@ -52,6 +53,7 @@ export function comparisonViews(panels: ComparisonPanel[]): ComparisonView[] {
       datasetId: panel.datasetId,
       stateKey: panel.stateKey ?? panel.datasetId,
       ...(panel.strand ? { strand: panel.strand } : {}),
+      ...(panel.liftHap ? { liftHap: panel.liftHap } : {}),
     });
     bySide.set(side, view);
   }

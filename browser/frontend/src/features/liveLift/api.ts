@@ -43,6 +43,14 @@ export interface LiftSettings {
   alternatives?: boolean;
   supplementary_display?: 'own_rows' | 'hide';
   coverage_hatching?: boolean;
+  cohort_alternatives?: 'exclude' | 'include';
+  cohort_supplementaries?: 'all_records' | 'follow_display' | 'primary_only';
+  fold_molecule?: boolean;
+  fold_orientation_rows?: boolean;
+  joint_dedup?: 'off' | 'by_molecule';
+  molecule_groups?: [string, string][];
+  primary_lookup?: boolean;
+  pooled_depth?: 'raw' | 'correspondence_normalised';
   [key: string]: unknown;
 }
 
@@ -88,4 +96,11 @@ export function liftCoverage(params: { chrom: string; start: number; end: number
   liftHap?: string | null; liftKey?: string; refreshGeneration?: number }, options?: RequestInit): Promise<LiftCorrespondence> {
   return getCoverage(params.chrom, params.start, params.end, params.bins, params.datasetId, options, false,
     { liftHap: params.liftHap, liftKey: params.liftKey, refreshGeneration: params.refreshGeneration, correspondenceOnly: true });
+}
+
+
+export function updateMoleculeProvenance(datasetId: string, molecule_groups: [string, string][], joint_dedup: 'off' | 'by_molecule'): Promise<LiftAddResult> {
+  return fetchJson(`/api/lift/provenance/${encodeURIComponent(datasetId)}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ molecule_groups, joint_dedup }),
+  });
 }

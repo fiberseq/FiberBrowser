@@ -381,7 +381,7 @@ export function useSubTrackDispatch({ onScanPeaks, scanning }: UseSubTrackDispat
             datasetId={dsId}
             stateKey={panel.stateKey}
             readStrand={panel.strand ?? null}
-            liftHap={panel.liftHap ?? null}
+            liftHap={panel.liftHap ?? panel.readSubset?.rule.liftHap ?? null}
             gutterWidth={clusterSidebarWidth}
             publishFeed
             genome={panel.genome}

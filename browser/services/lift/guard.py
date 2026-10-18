@@ -136,6 +136,9 @@ def install_live_lift_guard(app, get_state: Callable) -> None:
                     body = json.loads(await request.body() or b"null")
                 except (ValueError, UnicodeDecodeError):
                     body = None
+        # Rule grouping reads config only; every SNP/SV variant path stays denied.
+        if request.method == _POST and template == "/api/variants/alleles" and isinstance(body, dict) and body.get("source") == "lift_hap":
+            return await call_next(request)
         path_params = {}
         for route in app.router.routes:
             match, child = route.matches(request.scope)

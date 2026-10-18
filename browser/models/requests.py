@@ -217,6 +217,7 @@ class AutoCullRequest(BaseModel):
     cluster_feature_rules: List[Dict[str, Any]] = []
 
 class AssignToClustersRequest(BaseModel):
+    viewports: Optional[List[ClusterViewport]] = None
     lift_hap_by_dataset: Optional[Dict[str, str]] = None
     peak_regions: List[PeakRegion] = []
     # Combinatorial dynamic reassignment uses binary patterns. Non-combinatorial

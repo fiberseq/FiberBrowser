@@ -11,6 +11,7 @@ import { useBrowserStore } from '../../stores/browserStore';
 import { isLiveLift } from '../../utils/datasetKinds';
 import { useLiftSettingsDialog } from './LiveLiftSettingsDialog';
 import { useLiveLiftStore } from './store';
+import { groupLiftPanel, followLiftGroupingRows } from './grouping';
 import { liftHapLabels } from './types';
 import { liveLiftHaplotypeColor } from './palette';
 
@@ -47,6 +48,9 @@ export function useLiveLiftHeader(ctx: PanelHeaderContext) {
           <span data-testid="live-lift-split">Split by haplotype</span>
         </MenuItem>
       ))}
+      {!split && <MenuItem tour="panel-live-lift-group" icon={<span>≡</span>} title="Group loaded cohort rows by haplotype; follows newly loaded rows" onSelect={() => groupLiftPanel(panel.id)}>
+        Group in this panel by haplotype
+      </MenuItem>}
       <MenuItem tour="panel-live-lift-settings" icon={<span>⚙</span>} title="Gap split, window merge, alternatives, supplementaries, hatching"
         onSelect={() => useLiftSettingsDialog.getState().open(panel.datasetId)}>
         <span data-testid="live-lift-settings-item">Live-lift settings…</span>
@@ -82,6 +86,7 @@ export function registerLiveLift(): void {
   if (done) return;
   done = true;
   registerPanelHeaderExtension(useLiveLiftHeader);
+  followLiftGroupingRows();
   void useLiveLiftStore.getState().check();
   const seen = new Set<string>();
   useBrowserStore.subscribe((s, previous) => {

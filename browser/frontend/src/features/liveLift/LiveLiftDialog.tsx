@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import { useBrowserStore } from '../../stores/browserStore';
 import { addLiveLiftDataset, inspectLiftMap, type LiftMapInfo, type LiftSettings } from './api';
 import { useLiveLiftStore } from './store';
+import { CohortSettingsFields } from './CohortSettingsFields';
 
 const input = 'w-full rounded border border-line px-2 py-1 text-[12px] dark:border-white/15 dark:bg-white/5';
 
@@ -26,6 +27,7 @@ export function LiveLiftDialog() {
   const [hatching, setHatching] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [cohortSettings, setCohortSettings] = useState<LiftSettings>({});
 
   useEffect(() => {
     if (!open || !manifest.trim()) { setInfo(null); return; }
@@ -48,6 +50,7 @@ export function LiveLiftDialog() {
     setBusy(true);
     setError(null);
     const settings: LiftSettings = {
+      ...cohortSettings,
       haplotype_mode: mode, g_split: Math.round(gSplitKb * 1000), window_merge: Math.round(mergeKb * 1000),
       alternatives, supplementary_display: supplementaries, coverage_hatching: hatching,
     };
@@ -107,6 +110,8 @@ export function LiveLiftDialog() {
           <LiftSettingsFields gSplitKb={gSplitKb} setGSplitKb={setGSplitKb} mergeKb={mergeKb} setMergeKb={setMergeKb}
             alternatives={alternatives} setAlternatives={setAlternatives} supplementaries={supplementaries}
             setSupplementaries={setSupplementaries} hatching={hatching} setHatching={setHatching} />
+          <CohortSettingsFields settings={cohortSettings} onChange={setCohortSettings}
+            paths={bams.split(/\n|,/).map(p => p.trim()).filter(Boolean)} />
         </details>
         {error && <div className="mb-2 whitespace-pre-wrap text-red-600" data-testid="live-lift-error">{error}</div>}
         <div className="flex justify-end gap-2">

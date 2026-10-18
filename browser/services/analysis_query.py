@@ -52,6 +52,7 @@ class AnalysisReadQuery:
     # DAF-seq panels showing one strand: dataset id -> 'CT' / 'GA'.
     strand_by_dataset: dict[str, str] = field(default_factory=dict)
     lift_hap_by_dataset: dict[str, str] = field(default_factory=dict)
+    cohort_descriptions: dict[str, dict] = field(default_factory=dict, compare=False)
 
     @classmethod
     def from_request(
@@ -199,7 +200,9 @@ class AnalysisReadQuery:
                                      include_layer_qualities=include_layer_qualities, quality_filters=quality_filters,
                                      infer_legacy_layers=infer_legacy_layers, legacy_nuc_min_size=legacy_nuc_min_size,
                                      broad_prefetch_multiplier=broad_prefetch_multiplier, force_reload=force_reload)
-        strand = self.strand_by_dataset.get(dataset_id)
+        if getattr(ws, "lift_cohort", None):
+            self.cohort_descriptions[dataset_id] = ws.lift_cohort
+        strand = strand or self.strand_by_dataset.get(dataset_id)
         if not strand or getattr(state.datasets.get(dataset_id), "data_type", None) == "bam_livelift":
             return ws
         from services.read_strand import filter_reads_by_strand, strand_calls, strand_totals

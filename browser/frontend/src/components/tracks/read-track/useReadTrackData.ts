@@ -20,6 +20,7 @@ import { hydrateDerivedReadLayers } from './derivedLayers';
 import { DEBUG } from '../../../stores/utils';
 import {
   clusterAssignmentForRead,
+  readIdKeys,
   filterReadsByBranchScope,
   filterReadsByReadIdSet,
   stripSegmentSuffix,
@@ -177,11 +178,8 @@ function sampleReadsForFit(reads: CompactRead[], limit: number, seed: string): C
 export function keepPinnedReads(sample: CompactRead[], pool: CompactRead[], pinnedKey: string): CompactRead[] {
   if (!pinnedKey || sample.length === pool.length) return sample;
   const pins = new Set(pinnedKey.split(','));
-  const have = new Set(sample.map(r => r.id));
-  const missing = pool.filter(r => !have.has(r.id) && (pins.has(r.id) || pins.has(stripSegmentSuffix(r.id))));
-  if (missing.length === 0) return sample;
-  const keep = new Set([...have, ...missing.map(r => r.id)]);
-  return pool.filter(r => keep.has(r.id));
+  const kept = new Set(sample);
+  return pool.filter(r => kept.has(r) || readIdKeys(r).some(id => pins.has(id) || pins.has(stripSegmentSuffix(id))));
 }
 
 export function makeDataViewportKey(
@@ -929,7 +927,7 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
       // null: no filter. An empty set is a filter that matches nothing (e.g. the
       // two windows share no molecules), not "no filter".
       if (linkedFilteredIds) {
-        filteredReads = duplicateFilteredReads.filter(read => linkedFilteredIds.has(read.id));
+        filteredReads = filterReadsByReadIdSet(duplicateFilteredReads, linkedFilteredIds);
         if (DEBUG) console.log(`[${panelLabel}] Coordinated filter: ${reads.length} -> ${filteredReads.length} reads`);
       }
 
@@ -941,14 +939,12 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
 
       if (excludeIds && excludeIds.size > 0) {
         filteredReads = filteredReads.filter(r => {
-          if (excludeIds.has(r.id)) return false;
-          const baseId = r.id.replace(/_\d+$/, '');
-          return !excludeIds.has(baseId);
+          return !readIdKeys(r).some(id => excludeIds.has(id) || excludeIds.has(stripSegmentSuffix(id)));
         });
       }
 
       if (hasJupyterFilter && jupyterFilterSet) {
-        filteredReads = filteredReads.filter(r => jupyterFilterSet.has(r.id));
+        filteredReads = filterReadsByReadIdSet(filteredReads, jupyterFilterSet);
       }
 
       if (hasFilter && myFilteredReadIds) {

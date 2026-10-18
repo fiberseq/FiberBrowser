@@ -49,7 +49,7 @@ export async function clusterAllReads(
   extraChroms?: string[],
   sampleSeed?: string,
   clusterFeatureRules?: ClusterFeatureRule[],
-  viewports?: Array<{dataset_id:string;result_key:string;chrom:string;start:number;end:number;read_ids?:string[];strand?:'CT'|'GA';peak_regions?:Array<{start:number;end:number;mode?:string}>}>,
+  viewports?: Array<{dataset_id:string;result_key:string;chrom:string;start:number;end:number;read_ids?:string[];lift_hap?:string;strand?:'CT'|'GA';peak_regions?:Array<{start:number;end:number;mode?:string}>}>,
   /**
    * method 'graph': community resolution (higher gives more, smaller clusters).
    * panelGenome: the run's reference when it is a panel's own (another
@@ -58,6 +58,7 @@ export async function clusterAllReads(
   options?: { resolution?: number; panelGenome?: string | null; preparationSampleCount?: number | null; signal?: AbortSignal },
 ): Promise<{
   results: Record<string, ClusterResponse>;
+  joint_cohort?: { policy: string; shared_molecules: number; removed_rows: number; rows: number };
   cluster_patterns?: Record<number, number[]>;
   cluster_centroids?: Record<number, number[]>;
   cluster_peak_widths?: number[];
@@ -109,6 +110,7 @@ export async function clusterAllReads(
 
 /** One dataset panel of a comparison view; its result comes back under result_key. */
 export interface MatchedViewPanel {
+  lift_hap?: string;
   dataset_id: string;
   result_key: string;
   read_ids?: string[];
@@ -410,6 +412,7 @@ export async function assignToClusters(
     clusterFeatureRules?: ClusterFeatureRule[];
     readIds?: Record<string, string[]>;
     signal?: AbortSignal;
+    viewports?: Array<{ dataset_id: string; result_key: string; chrom: string; start: number; end: number; read_ids?: string[]; lift_hap?: string; strand?: 'CT' | 'GA' }>;
     // Non-combinatorial dynamic reassignment: supply centroids + feature-column
     // widths instead of patterns, and reads are assigned to the nearest centroid.
     centroids?: Record<number, number[]>;
@@ -432,6 +435,7 @@ export async function assignToClusters(
       peak_regions: peakRegions,
       cluster_patterns: clusterPatterns,
       dataset_ids: datasetIds,
+      ...(options?.viewports ? { viewports: options.viewports } : {}),
       subnucleosomal_threshold: subnucleosomalThreshold,
       accessibility_threshold: accessibilityThreshold,
       sample_seed: options?.sampleSeed ?? null,

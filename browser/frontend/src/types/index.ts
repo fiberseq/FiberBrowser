@@ -108,6 +108,7 @@ export interface ClusterPreparationSample {
 }
 
 export interface ClusterResponse {
+  cohort?: { records: number; supplementary_rows: number; folded: boolean; excluded_alt: number; alternative_rows: number; hap?: string | null; rows: number; scope?: string };
   assignments: Record<string, number>;
   cluster_counts: Record<number, number>;
   filtered_read_ids: string[];
@@ -672,6 +673,7 @@ export interface FootprintGroup {
  * whose groups belong to one view). Plugin packs' sources add their own fields (ReadSubsetRule is augmented).
  */
 export interface ReadSubsetRule {
+  liftHap?: string;
   /** patterns, frozen, or a plugin pack's split source (utils/splitPanels.ts registerSplitSourceKind). */
   kind: 'patterns' | 'frozen' | (string & {});
   /** The dataset whose reads the panel shows. */

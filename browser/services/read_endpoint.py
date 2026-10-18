@@ -53,6 +53,7 @@ from services.read_selection import (
     filter_reads_by_min_footprints,
     is_read_spanning,
     read_matches_id_filter,
+    cohort_read_id,
 )
 from services.read_quality_filters import active_quality_filters, apply_quality_filters
 from services.query_params import parse_csv_int_set, parse_csv_set
@@ -1053,10 +1054,10 @@ def _compact_reads_payload(
         else:
             server_timings["broad_cache_hit"] = 1.0
             phase_t0 = time.perf_counter()
-            def matches_cluster(read_id: str) -> bool:
+            def matches_cluster(read) -> bool:
                 if not focus_clusters:
                     return True
-                return cluster_assignments.get(read_id) in focus_clusters
+                return cluster_assignments.get(cohort_read_id(read)) in focus_clusters
 
             reads_to_sample = []
             total_overlapping_in_viewport = 0
@@ -1096,7 +1097,7 @@ def _compact_reads_payload(
                 if filter_id_set and not read_matches_id_filter(read, filter_id_set):
                     continue
 
-                if not matches_cluster(read["id"]):
+                if not matches_cluster(read):
                     continue
 
                 if display_quality_filters and "layers" in adjusted_read:

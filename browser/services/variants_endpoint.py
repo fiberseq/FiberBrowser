@@ -299,6 +299,19 @@ def _columns(entry: dict, matrix: snp_scan.AlleleMatrix, candidates: list[dict])
 def alleles_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = None) -> dict:
     """Group the view's reads by allele (one SNP), by allele combination (several), or by HP tag."""
     state = _scoped_state(state, body)
+    if body.get("source") == "lift_hap":
+        from services.query_params import resolve_dataset_id
+        from services.lift.capability import is_lifted
+        did = resolve_dataset_id(state, body.get("dataset_id"))
+        ds = state.get_dataset(did)
+        if not is_lifted(ds):
+            raise VariantsRequestError("Haplotype grouping requires a live-lift dataset")
+        chrom, start, end = _region(body)
+        labels = list(ds.live_lift.labels().values())
+        return dict(dataset_id=did, region=dict(chrom=chrom, start=start, end=end), source="lift_hap",
+                    mode="lift_hap", assignments={}, n_reads=0, covering=0, threshold=0, distinct=len(labels),
+                    groups=[dict(id=i, key=label, label=label, alleles=[label], count=0, kind="combo") for i, label in enumerate(labels)],
+                    phase=None, tags=None, snps=[], scan_key=ds.live_lift.key())
     dataset_id = _dataset(state, body.get("dataset_id")).id
     chrom, start, end = _region(body)
     params = scan_params(body)

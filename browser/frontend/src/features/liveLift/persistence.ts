@@ -10,7 +10,7 @@ declare module '../../stores/browserStore' {
     collapseLiveLift: (view: string, id: string) => void;
   }
 }
-declare module '../../types' { interface PanelConfig { liveLiftMinBp?: number } }
+declare module '../../types' { interface PanelConfig { liveLiftMinBp?: number; liftGroupByHaplotype?: boolean } }
 
 /** Linked panels share columns; independently pinned loci have their own axis.
  * Default panels (including the native sibling) all belong to the main view. */

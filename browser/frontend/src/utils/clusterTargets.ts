@@ -35,7 +35,7 @@ export type PlanState = Pick<BrowserState, 'panels' | 'datasets' | 'selectedData
 /** One panel's window in a Cluster run (the request's viewport), with the panel it came from. */
 export interface ClusterWindow {
   dataset_id: string; result_key: string; chrom: string; start: number; end: number;
-  read_ids?: string[]; strand?: 'CT' | 'GA'; panel: PanelConfig;
+  read_ids?: string[]; strand?: 'CT' | 'GA'; lift_hap?: string; panel: PanelConfig;
 }
 
 /**
@@ -62,11 +62,11 @@ export function clusterWindows(st: PlanState, datasetIds: string[]): ClusterWind
     // (Away from its locus showing every read here, utils/splitLocus.ts: those reads.)
     // (A panel on a contig of its own, e.g. an insert-expanded Carriers panel, shows its own dataset: with no split
     // reads under its key it clusters as it is; restricting it to none left it nothing to cluster.)
-    if (panel.readSubset && !(panelTraits(panel).ownContig && !split) && !splitShowsAll(panel.readSubset, viewport, panel)) {
+    if (panel.readSubset && !panel.readSubset.rule.liftHap && !panel.liftHap && !(panelTraits(panel).ownContig && !split) && !splitShowsAll(panel.readSubset, viewport, panel)) {
       const own = split && (split.state === 'ready' || split.state === 'frozen') ? split.ids : new Set<string>();
       ids = ids ? ids.filter(id => own.has(id)) : Array.from(own);
     }
-    return { dataset_id: panel.datasetId!, result_key: sk, ...viewport, read_ids: ids, ...(panel.strand ? { strand: panel.strand } : {}), panel };
+    return { dataset_id: panel.datasetId!, result_key: sk, ...viewport, read_ids: ids, ...(panel.strand ? { strand: panel.strand } : {}), ...(panel.liftHap || panel.readSubset?.rule.liftHap ? { lift_hap: panel.liftHap ?? panel.readSubset?.rule.liftHap } : {}), panel };
   }).filter((view, index, all) => all.findIndex(other => other.result_key === view.result_key) === index);
 }
 

@@ -348,7 +348,7 @@ export function setSplitSessionFallback(value: unknown): void {
 
 /** The names to save with a session: every resolved split panel's. */
 export function splitSessionReads(): Record<string, string[]> {
-  const panels = useBrowserStore.getState().panels.filter(p => p.readSubset);
+  const panels = useBrowserStore.getState().panels.filter(p => p.readSubset && !p.readSubset.rule.liftHap);
   const reads = useSplitPanelStore.getState().reads;
   const out: Record<string, string[]> = {};
   for (const p of panels) {
@@ -377,7 +377,7 @@ const inFlight = new Set<string>();
 /** Resolve every split panel whose reads are not known yet (one request per rule and session). */
 export async function resolveSplitPanels(): Promise<void> {
   const generation = useSplitPanelStore.getState().generation;
-  const panels = useBrowserStore.getState().panels.filter(p => p.readSubset);
+  const panels = useBrowserStore.getState().panels.filter(p => p.readSubset && !p.readSubset.rule.liftHap);
   const store = useSplitPanelStore.getState();
   const todo = panels.filter(p => !store.reads[panelKey(p)]);
   const signatures = new Map<string, ReadSubsetRule>();

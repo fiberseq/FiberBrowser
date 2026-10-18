@@ -475,6 +475,7 @@ export function getMatchingRuleId(
 
 export interface CompactReadLike {
   id: string;
+  analysis_id?: string;
   intervals: [number, number, number][];  // [start, end, size]
   /** Per-layer calls (TF, nucleosome, FIRE...) on layered reads. */
   layers?: Record<string, {
@@ -544,7 +545,7 @@ export function computePerClusterEnrichment(
 
   // Process each read
   for (const read of reads) {
-    const cluster = clusterAssignments[read.id];
+    const cluster = clusterAssignments[read.analysis_id ?? read.id];
     if (cluster === undefined) continue;
 
     // For each rule, check if ANY footprint in this read matches

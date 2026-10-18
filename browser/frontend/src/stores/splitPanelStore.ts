@@ -49,7 +49,8 @@ export const useSplitPanelStore = create<SplitPanelStore>(set => ({
 }));
 
 /** The read filter a split panel applies: its reads (none while loading), within the panel's own read filter. */
-export function splitReadFilter(subset: SplitReads | undefined, filter: Set<string> | null | undefined): Set<string> | null | undefined {
+export function splitReadFilter(subset: SplitReads | undefined, filter: Set<string> | null | undefined, rule?: { liftHap?: string }): Set<string> | null | undefined {
+  if (rule?.liftHap) return filter;
   if (!subset) return filter;
   const ids = subset.state === 'loading' || subset.state === 'error' || subset.ids.size === 0 ? new Set([NO_READS]) : subset.ids;
   if (!filter) return ids;

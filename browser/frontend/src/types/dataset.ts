@@ -67,6 +67,8 @@ export interface PlasmidProblem {
 }
 
 export interface Dataset {
+  molecule_groups?: [string, string][];
+  joint_dedup?: 'off' | 'by_molecule';
   id: string;
   /** Its display name: the file stem, or the name the user gave it (one rule for every way of opening it). */
   label: string;

@@ -522,6 +522,8 @@ export function Browser() {
             sampleSeed: analysisSampleSeed,
             clusterFeatureRules,
             readIds: dynamicReadIds,
+            ...(panels.some(p => p.liftHap) ? { viewports: sharedClusterWindows(useBrowserStore.getState(), datasetIds)
+              .map(({ panel: _panel, ...view }) => ({ ...view, read_ids: dynamicReadIds?.[view.dataset_id] ?? view.read_ids })) } : {}),
             signal: controller.signal,
             overlapMode: dynamicOverlapMode,
             ...(useCentroids ? {
@@ -1363,7 +1365,7 @@ export function Browser() {
     // Windows at other loci always go explicitly: each is read at its own
     // peaks, coordinates and genomic context.
     const useExistingChromPath=!runGenome&&!atOtherLoci&&filteredToNothing.length===0&&clusterWindows.length>0&&windowChroms.includes(chrom)
-      &&clusterWindows.every(view=>view.start===start&&view.end===end&&!view.read_ids&&!('strand' in view))
+      &&clusterWindows.every(view=>view.start===start&&view.end===end&&!view.read_ids&&!('strand' in view)&&!view.lift_hap)
       &&datasetIds.every(id=>windowChroms.every(c=>clusterWindows.some(view=>view.dataset_id===id&&view.chrom===c)));
     const extraChroms=useExistingChromPath?windowChroms.filter(value=>value!==chrom):undefined;
 
@@ -1425,6 +1427,7 @@ export function Browser() {
       // Flatten backend results to stateKey -> { readId -> cluster }.
       const resultsByKey: Record<string, Record<string, number>> = {};
       const preparationSamples = { ...now.clusterPreparationSamples };
+      useBrowserStore.setState(s => ({ panels: s.panels.map(p => clusterWindows.some(w => w.result_key === (p.stateKey ?? p.datasetId)) ? { ...p, liftGroupByHaplotype: false } : p) }));
       for (const [resultKey, result] of Object.entries(res.results)) {
         const keys=!isPreview&&useExistingChromPath?clusterWindows.filter(view=>(view.chrom===chrom?view.dataset_id:`${view.dataset_id}_${view.chrom}`)===resultKey).map(view=>view.result_key):[resultKey];
         for (const key of keys.length ? keys : [resultKey]) {
@@ -1463,6 +1466,14 @@ export function Browser() {
         ? `Clustered ${clusteredReads.toLocaleString()} read${clusteredReads === 1 ? '' : 's'}${clusteredPanels.length ? ` in ${clusteredPanels.join(', ')}` : ''} at ${basis.what}`
           + `${basis.unused ? ` (${basis.unused})` : ''}.`
         : 'No reads covered the selected peaks, so nothing was clustered.', clusteredPanelConfigs.map(p => p.id));
+      if (res.joint_cohort && clusteredPanelConfigs.some(p => datasets.find(d => d.id === p.datasetId)?.data_type === 'bam_livelift')) {
+        const joint = res.joint_cohort;
+        report('note', `Joint cohort: ${joint.shared_molecules.toLocaleString()} shared molecules (provenance group + read name); ${joint.policy === 'by_molecule' ? `${joint.removed_rows} duplicate rows removed` : 'native and lifted copies kept'}.`);
+        for (const [key, result] of Object.entries(res.results)) if (result.cohort) {
+          const c = result.cohort;
+          report('note', `${key}: ${Object.keys(result.assignments ?? {}).length} clustered cohort rows; ${c.folded ? 'folding enabled' : 'one row per record/orientation/placement'}. Loaded cohort: ${c.records} records, ${c.supplementary_rows} supplementary rows, ${c.alternative_rows} alternative rows, ${c.excluded_alt} alternatives excluded.`);
+        }
+      }
       for (const note of scopeNotes) report('note', note);
       const performanceNote = performanceSamplingNote(res.results);
       if (performanceNote) report('note', performanceNote);
