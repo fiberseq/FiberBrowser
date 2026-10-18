@@ -843,6 +843,10 @@ def _compact_reads_payload(
         total_overlapping = len(all_reads)
         total_spanning = sum(1 for read in all_reads if spans(read))
         direct_sampling = sampling_info(sampling_reads, start, end, total_overlapping, total_spanning)
+        if lifted_dataset and direct_sampling:
+            from services.lift.reads import scoped_sampling_info
+            direct_sampling = scoped_sampling_info(direct_sampling)
+            total_overlapping, total_spanning = direct_sampling['total'], direct_sampling['total_spanning']
         reads_to_sample = [
             read
             for read in all_reads

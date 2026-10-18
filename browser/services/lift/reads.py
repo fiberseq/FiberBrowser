@@ -96,7 +96,16 @@ def enrich_display_insertions(state, payload, insertion_ids, options):
                                 if r.get("live_lift") else r for r in payload["reads"]]}
 
 
-
+def scoped_sampling_info(info):
+    """Estimate filtered lifted totals from the unsplit sample's measured share."""
+    if not info:
+        return info
+    info = dict(info)
+    for suffix in ("", "_spanning"):
+        info["total" + suffix] = round(info["total" + suffix] * info["loaded" + suffix] / max(1, info["kept" + suffix]))
+        info["kept" + suffix] = info["loaded" + suffix]
+    info["estimated"] = True
+    return info
 
 def clip_geometry(ll: dict, offset: int, width: int) -> dict:
     """``live_lift`` body spans, connectors and badges shifted by ``-offset``

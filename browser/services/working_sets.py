@@ -2316,6 +2316,9 @@ def _build_working_set(
     )
     sampling_metadata = sampling_info(all_reads, start, end, total_overlapping, total_spanning) if level else None
     if sampling_metadata:
+        from services.lift.reads import is_lifted, scoped_sampling_info
+        if is_lifted(dataset):
+            sampling_metadata = scoped_sampling_info(sampling_metadata)
         if decode_read_scope.get() is not None or cluster_sample is not None:
             sampling_metadata['fraction'] = sampling_metadata['kept'] / max(1, sampling_metadata['total'])
         total_overlapping = sampling_metadata['total']
