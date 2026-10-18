@@ -27,6 +27,14 @@ START = 1_000_000
 ROW = 8
 
 
+def test_figure_uses_raw_cigar_pieces_after_normalization_and_preserves_matched_bridges():
+    read = {'sv': [dict(t='D', ref=1, len=40, q=0, raw_pieces=[
+        dict(t='D', ref=100, len=20, q=0), dict(t='M', ref=120, len=10, q=0),
+        dict(t='D', ref=130, len=20, q=10)])]}
+    assert sv.read_draw(read, 90, 200, 40)['deletions'] == [(10, 30, 20), (40, 60, 20)]
+    assert sv.read_draw(read, 90, 200, 41)['deletions'] == []
+
+
 class _Data:
     def __init__(self, payload):
         self.payload = payload

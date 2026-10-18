@@ -494,7 +494,7 @@ export function InsertionLensPanel() {
       const row = rows[Math.floor((e.clientY - rect.top) / ROW_PITCH)];
       if (row) {
         text += ` · ${row.id} (${row.strand})`;
-        if (row.carrier) text += ` · ${describeCarrier(row)}`;
+        if (row.carrier) text += ` · ${row.evidenceLevel ?? 'confirmed'} · ${describeCarrier(row)}`;
       }
     }
     setHover(text);
@@ -580,8 +580,8 @@ export function InsertionLensPanel() {
   };
 
   // ---- render
-  const strands = response ? response.carriers.reduce((acc, c) => { acc[c.strand] += 1; return acc; }, { '+': 0, '-': 0 }) : null;
-  const lowIdentity = response ? response.carriers.filter(c => c.identity !== undefined && c.identity < 0.8).length : 0;
+  const strands = layout ? layout.carrierRows.reduce((acc, c) => { acc[c.strand] += 1; return acc; }, { '+': 0, '-': 0 }) : null;
+  const lowIdentity = layout ? layout.carrierRows.filter(c => c.identity !== undefined && c.identity < 0.8).length : 0;
 
   const cl = response?.cluster;
   const clipped = cl?.clipped ?? 0;
@@ -593,6 +593,7 @@ export function InsertionLensPanel() {
       <div>
         <span className="font-semibold text-ink">{response.chrom}:{cl.ref.toLocaleString()}</span>
         {' · '}+{cl.len.toLocaleString()} bp
+        {(cl.ref_len ?? 0) > 0 && <span> · replaces {cl.ref_len} reference bp with {cl.alt_len} query bp</span>}
         {cl.len_lo !== cl.len_hi && <span className="text-ink-secondary"> (lengths {cl.len_lo.toLocaleString()}–{cl.len_hi.toLocaleString()})</span>}
         <span className="text-ink-secondary" title="Every read at the site, not only the reads loaded for drawing (the SV row above the reads counts those)"> · all reads at the site</span>
       </div>
@@ -619,7 +620,7 @@ export function InsertionLensPanel() {
         {strands && <LensField label="Strands (drawn)" title="Strands of the carriers drawn here">{strands['+']} + · {strands['-']} −</LensField>}
         {response.truncated.carriers > 0 && (
           <LensField label="Drawn" testId="insertion-lens-drawn" title="The lens draws a sample of the carriers; the counts above are of all of them">
-            {formatShare(response.carriers.length, cl.carriers, 'carriers')}
+            {formatShare(layout?.carriers.length ?? 0, cl.carriers + (includePutative ? cl.putative ?? 0 : 0), includePutative ? 'confirmed + putative' : 'confirmed')}
           </LensField>
         )}
       </dl>

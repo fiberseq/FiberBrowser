@@ -76,15 +76,18 @@ export function readSvDraw(read: Pick<CompactRead, 'sv'>, viewStart: number, vie
   const out: ReadSvDraw = { deletions: [], insertions: [], clips: [] };
   for (const ev of events) {
     if (ev.t === 'SA' || ev.len < minLen) continue;
-    if (ev.t === 'D') {
-      if (ev.ref + ev.len <= viewStart || ev.ref >= viewEnd) continue;
-      out.deletions.push({ start: ev.ref - viewStart, end: ev.ref + ev.len - viewStart, len: ev.len });
-    } else if (ev.t === 'I') {
-      if (ev.ref < viewStart || ev.ref > viewEnd) continue;
-      out.insertions.push({ pos: ev.ref - viewStart, len: ev.len, q: ev.q, ref: ev.ref });
-    } else if (ev.t === 'S') {
+    if (ev.t === 'S') {
       if (ev.ref < viewStart || ev.ref > viewEnd) continue;
       out.clips.push({ pos: ev.ref - viewStart, side: ev.side, len: ev.len });
+      continue;
+    }
+    for (const piece of ev.raw_pieces ?? [ev]) {
+      if (piece.t === 'D') {
+        if (piece.ref + piece.len <= viewStart || piece.ref >= viewEnd) continue;
+        out.deletions.push({ start: piece.ref - viewStart, end: piece.ref + piece.len - viewStart, len: piece.len });
+      } else if (piece.t === 'I' && piece.ref >= viewStart && piece.ref <= viewEnd) {
+        out.insertions.push({ pos: piece.ref - viewStart, len: piece.len, q: piece.q, ref: piece.ref });
+      }
     }
   }
   return out;
@@ -201,7 +204,7 @@ export function readCarriesCluster(read: Pick<CompactRead, 'sv' | 'sv_evidence' 
 
 /** Ids of the reads (among `reads`) that carry a cluster's event. */
 export function supportingReadIds(reads: CompactRead[], cluster: SvCluster, chrom?: string,
-  level: 'confirmed' | 'putative' | 'ambiguous' = 'confirmed', targets: SvCluster[] = []): string[] {
+  level: 'confirmed' | 'putative' | 'ambiguous' = 'confirmed', targets: Pick<SvCluster, 't' | 'ref' | 'len'>[] = []): string[] {
   const levels = new Map<string, 'confirmed' | 'putative' | 'ambiguous'>();
   const rank = { confirmed: 0, putative: 1, ambiguous: 2 };
   const bundles = new Map<string, CompactRead[]>();
@@ -357,9 +360,13 @@ export function describeSvCluster(c: SvCluster, summary: SvSummary | null, reads
   const refs = events.map(e => e.event.ref);
   const lens = events.map(e => e.event.len);
   const spread = refs.length > 1 ? Math.max(...refs) - Math.min(...refs) : 0;
-  const where = c.t === 'D'
+  let where = c.t === 'D'
     ? `${chrom}:${bp(c.ref + 1)}–${bp(c.end)}${spread > 0 ? ` (breakpoints vary by ${bp(spread)} bp)` : ''}`
     : `after ${chrom}:${bp(c.ref)}${spread > 0 ? ` (positions vary by ${bp(spread)} bp)` : ''}`;
+  if (c.ref_len !== undefined && c.alt_len !== undefined && c.ref_len > 0 && c.alt_len > 0) {
+    where += ` · replaces ${bp(c.ref_len)} reference bp with ${bp(c.alt_len)} query bp`;
+  }
+  if (c.uncertainty && c.uncertainty[0] !== c.uncertainty[1]) where += ` · equivalent anchors ${bp(c.uncertainty[0])}–${bp(c.uncertainty[1])}`;
   const sizes = lens.length > 1 && Math.min(...lens) !== Math.max(...lens)
     ? `Sizes ${bp(Math.min(...lens))}–${bp(Math.max(...lens))} bp` : '';
   const extra = [
@@ -419,8 +426,9 @@ export function readSvEventAt(read: Pick<CompactRead, 'sv' | 'sv_evidence'>, pos
   let bestDist = Infinity;
   for (const ev of read.sv_evidence ?? read.sv ?? []) {
     if ((ev.t !== 'D' && ev.t !== 'I') || ev.len < minLen) continue;
-    const end = ev.t === 'D' ? ev.ref + ev.len : ev.ref;
-    const dist = pos < ev.ref ? ev.ref - pos : pos > end ? pos - end : 0;
+    const start = ev.raw_ref ?? ev.ref;
+    const end = ev.raw_ref_end ?? (ev.t === 'D' ? ev.ref + ev.len : ev.ref);
+    const dist = pos < start ? start - pos : pos > end ? pos - end : 0;
     if (dist <= tolBp && dist < bestDist) {
       best = ev;
       bestDist = dist;
@@ -435,8 +443,9 @@ export function clusterForEvent(summary: SvSummary | null, ev: Extract<SvEvent, 
     if (c.t === ev.t && eventsMatch(ev.t, ev.ref, ev.len, c.ref, c.len)) return c;
   }
   return {
+    ref_len: ev.ref_len, alt_len: ev.alt_len, raw_ref: ev.raw_ref, uncertainty: ev.uncertainty,
     id: `${ev.t}:${ev.ref}:${ev.len}`, t: ev.t, ref: ev.ref, len: ev.len,
-    end: ev.t === 'D' ? ev.ref + ev.len : ev.ref, support: 1, informative: 1, sa_support: 0, clip_support: 0,
+    end: ev.ref_end ?? (ev.t === 'D' ? ev.ref + ev.len : ev.ref), support: 1, informative: 1, sa_support: 0, clip_support: 0,
   };
 }
 

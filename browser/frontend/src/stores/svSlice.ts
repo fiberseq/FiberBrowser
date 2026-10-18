@@ -95,7 +95,7 @@ export function normalizeSvSplits(raw: unknown): Record<string, SvSplitDef> {
     const len = Number(d.len);
     out[key] = {
       datasetId: String(d.datasetId ?? key), chrom: d.chrom, t: d.t, ref, len,
-      end: d.t === 'D' ? ref + len : ref,
+      end: Number.isFinite(d.end) && Number(d.end) >= ref ? Number(d.end) : d.t === 'D' ? ref + len : ref,
       margin: Number.isFinite(d.margin) ? Number(d.margin) : 100,
       label: String(d.label ?? ''),
       counts: Array.isArray(d.counts) && d.counts.length === 3 ? d.counts.map(Number) as [number, number, number] : [0, 0, 0],

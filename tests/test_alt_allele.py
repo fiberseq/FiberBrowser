@@ -284,13 +284,21 @@ def test_daf_alt_allele_uses_fiberhmms_consensus_and_keeps_deamination_inside(da
     layout = result["layout"]
     fasta = pysam.FastaFile(os.path.join(os.path.dirname(result["dataset"]["path"]), "alt.fa"))
     insert = fasta.fetch(layout["name"])[layout["insert_start"]:layout["insert_end"]]
-    assert insert == daf_fixture["te"]  # the open Cs called C, not the majority's T
+    rotation = (daf_fixture['site'] - layout['ref']) % len(insert)
+    expected = daf_fixture['te']
+    if rotation:
+        expected = expected[-rotation:] + expected[:-rotation]
+    assert insert == expected  # chemistry is preserved when the allele rotates to its canonical anchor
     reads = _build_compact_reads_from_bam_region(result["dataset"]["path"], layout["name"], 0, layout["length"],
                                                  spanning_only=False, include_methylation=True, include_layers=True)
-    half = layout["insert_start"] + daf_fixture["open_half"]
+    open_start = layout['insert_start'] + rotation
+    half = open_start + daf_fixture["open_half"]
     inside = [p for r in reads if r["id"].startswith("ct") for p, *_ in r.get("deam", [])
-              if layout["insert_start"] <= int(p) < half]
-    packed = [p for r in reads for p, *_ in r.get("deam", []) if half <= int(p) < layout["insert_end"]]
+              if open_start <= int(p) < half]
+    # Normalization moves the boundary through repeat-equivalent bases. The
+    # leading rotated prefix can come from the converted observed left flank;
+    # the planted packed part still follows the shifted open interval.
+    packed = [p for r in reads for p, *_ in r.get("deam", []) if half <= int(p) < layout['insert_end']]
     n_open_c = daf_fixture["te"][:daf_fixture["open_half"]].count("C")
     assert len(inside) > 0.6 * 24 * n_open_c   # ~80% of the open Cs deaminated on 24 C->T reads
     assert len(packed) == 0

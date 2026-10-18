@@ -60,6 +60,7 @@ class AltLayout:
     insert_len: int
     flank_left: int
     flank_right: int
+    replaced_len: int = 0
 
     @property
     def name(self) -> str:
@@ -85,7 +86,9 @@ class AltLayout:
     def ref_to_alt(self, g: int) -> int:
         """Alt position of reference position ``g`` (the right flank is offset by the insert)."""
         g = int(g)
-        return g - self.ref_start if g < self.ref else g - self.ref + self.insert_end
+        if g < self.ref:
+            return g - self.ref_start
+        return self.insert_start if g < self.ref + self.replaced_len else g - self.ref - self.replaced_len + self.insert_end
 
     def alt_to_ref(self, a: int) -> int:
         """Reference position of alt position ``a``; inside the insert, the breakpoint ``ref``."""
@@ -94,7 +97,7 @@ class AltLayout:
             return a + self.ref_start
         if a < self.insert_end:
             return self.ref
-        return a - self.insert_end + self.ref
+        return a - self.insert_end + self.ref + self.replaced_len
 
     def describe(self, a: int) -> dict:
         """Both readouts of alt position ``a`` (0-based): its segment, its reference position
@@ -104,10 +107,11 @@ class AltLayout:
             return {"segment": "left", "ref": a + self.ref_start, "insert": None}
         if a < self.insert_end:
             return {"segment": "insert", "ref": None, "insert": a - self.insert_start + 1}
-        return {"segment": "right", "ref": a - self.insert_end + self.ref, "insert": None}
+        return {"segment": "right", "ref": a - self.insert_end + self.ref + self.replaced_len, "insert": None}
 
     def to_dict(self) -> dict:
         return {"chrom": self.chrom, "ref": self.ref, "insert_len": self.insert_len,
+                'replaced_len': self.replaced_len, 'ref_end': self.ref + self.replaced_len,
                 "flank_left": self.flank_left, "flank_right": self.flank_right,
                 "name": self.name, "length": self.length,
                 "insert_start": self.insert_start, "insert_end": self.insert_end}
@@ -293,6 +297,10 @@ def realign(cigar, reference_start: int, query_sequence: str, plan: dict, layout
         if q_cut is None:
             q_cut = qlen
         mid_lo = mid_hi = q_cut
+        if layout.replaced_len:
+            after = _first_query_at_or_after(blocks, ref + layout.replaced_len)
+            if after is not None:
+                mid_hi = max(mid_hi, after)
         # Bases between the last one before ref and the first at/after it (an I at the site).
         before = _last_query_before(blocks, ref)
         if before is not None and before < q_cut:
@@ -306,7 +314,7 @@ def realign(cigar, reference_start: int, query_sequence: str, plan: dict, layout
         if q_wrong is not None:
             mid_lo = min(mid_lo, q_wrong)
         right_blocks = _cut(blocks, mid_hi, qlen)
-        q_wrong = _last_query_before(right_blocks, ref)
+        q_wrong = _last_query_before(right_blocks, ref + layout.replaced_len)
         if q_wrong is not None:
             mid_hi = max(mid_hi, q_wrong)
     left = _strip_edge_gaps(_cut(blocks, 0, mid_lo), trailing=True)
@@ -329,7 +337,9 @@ def realign(cigar, reference_start: int, query_sequence: str, plan: dict, layout
     middle_ops: list[tuple[int, int]] = []
     a_mid_start = None
     insert_bases = 0
-    if kind == KIND_REFERENCE or kind == KIND_HARD or middle is None:
+    align_reference_replacement = kind == KIND_REFERENCE and layout.replaced_len > 0 and mid_len > 0
+    planned = (mid_lo, mid_hi) if middle is None else planned
+    if ((kind == KIND_REFERENCE or middle is None) and not align_reference_replacement) or kind == KIND_HARD:
         if a_left_end is not None and a_right_begin is not None:
             gap = a_right_begin - a_left_end
             if mid_len:
@@ -340,7 +350,7 @@ def realign(cigar, reference_start: int, query_sequence: str, plan: dict, layout
         elif mid_len:
             middle_ops.append((S, mid_len))
     else:
-        if kind == KIND_CIGAR:
+        if kind in (KIND_CIGAR, KIND_REFERENCE):
             t_lo = a_left_end if a_left_end is not None else layout.insert_start
             t_hi = a_right_begin if a_right_begin is not None else layout.insert_end
         elif kind == KIND_CLIP_START:

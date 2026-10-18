@@ -119,8 +119,8 @@ def test_spliced_merged_read_keeps_a_bridge_mismatch_on_both_strands():
         read.cigartuples = [(0, 100), (1, 60), (0, 3), (1, 60), (0, 100)]
         read.set_tag("MD", "101C101")
         event = next(e for e in extract_sv_events(read, 50) if e["t"] == "I")
-        assert event == {"t": "I", "ref": 100, "len": 123, "q": 100}
-        assert insertion_span(read.cigartuples, 0, event["q"], event["len"]) == (103, 2)
+        assert (event["ref"], event["len"], event["alt_len"], event["q"]) == (100, 120, 123, 100)
+        assert insertion_span(read.cigartuples, 0, event["q"], event["alt_len"]) == (103, 2)
         spliced = splice_read(read, event)
         assert spliced.cigarstring == "323M"
         lower = {q: base for q, _r, base in spliced.get_aligned_pairs(with_seq=True) if base and base.islower()}

@@ -74,6 +74,7 @@ export interface LensResponse {
     /** Every carrier: CIGAR + clipped. */
     carriers: number;
     confirmed?: number; putative?: number; ambiguous?: number; evidence_total?: number;
+    ref_len?: number; alt_len?: number;
     cigar?: number;
     /** Clipped at the breakpoint (hard-clipped included). */
     clipped?: number;
@@ -134,6 +135,7 @@ export function consensusMethod(response: Pick<LensResponse, 'consensus' | 'run_
 
 /** An insertion in view, as the SV summary clusters it (/api/insertions/clusters). */
 export interface InsertionCluster {
+  uncertainty?: [number, number];
   id?: string;
   ref: number;
   len: number;
@@ -170,6 +172,7 @@ export interface LensAxis {
 }
 
 export interface LensRowMeta {
+  evidenceLevel?: 'confirmed' | 'putative' | 'ambiguous';
   id: string; strand: '+' | '-'; len: number; identity?: number; carrier: boolean;
   partial?: LensPartial; hard?: boolean; clipLen?: number; sa?: boolean;
 }
@@ -187,8 +190,8 @@ export interface LensLayout {
 export function displayLength(response: LensResponse, anchor: LensAnchor): number {
   const cons = response.consensus?.length ?? 0;
   if (cons > 0) return cons;
-  if (anchor === 'consensus') return response.cluster.len || 0;
-  return response.cluster.len || 0;
+  if (anchor === 'consensus') return response.cluster.alt_len ?? response.cluster.len ?? 0;
+  return response.cluster.alt_len ?? response.cluster.len ?? 0;
 }
 
 /** The anchor actually used: consensus mode falls back to stretch without a consensus. */
@@ -411,6 +414,7 @@ export function layoutLens(response: LensResponse, anchorWanted: LensAnchor, rev
   const flank = response.flank;
   const axis: LensAxis = { flank, displayLen, total: 2 * flank + displayLen, reversed };
   const row = (e: LensEntry, carrier: boolean): LensRowMeta => ({
+    evidenceLevel: e.evidence_level,
     id: e.id, strand: e.strand, len: e.len, identity: e.identity, carrier,
     ...(e.partial ? { partial: e.partial, clipLen: e.clip_len, sa: Boolean(e.sa) } : {}),
     ...(e.hard ? { hard: true } : {}),
@@ -637,7 +641,7 @@ export function lensParams(target: InsertionLensTarget, extra: Record<string, st
 
 /** A lens target for one insertion cluster (the SV summary's, or the lens list's). */
 export function targetForCluster(
-  cluster: Pick<InsertionCluster, 'ref' | 'len'>, datasetId: string, chrom: string, previous?: Partial<InsertionLensTarget>,
+  cluster: Pick<InsertionCluster, 'ref' | 'len' | 'uncertainty'>, datasetId: string, chrom: string, previous?: Partial<InsertionLensTarget>,
 ): InsertionLensTarget {
   return {
     datasetId,
@@ -646,7 +650,7 @@ export function targetForCluster(
     ref: cluster.ref,
     len: cluster.len,
     // Kept for the fallback (a session without ref/len): the cluster's length class.
-    tolerance: 50,
+    tolerance: Math.max(50, (cluster.uncertainty?.[1] ?? cluster.ref) - cluster.ref),
     lenMin: Math.max(1, Math.floor(cluster.len * 0.8)),
     lenMax: Math.ceil(cluster.len * 1.2),
     ...(previous?.genome !== undefined ? { genome: previous.genome } : {}),

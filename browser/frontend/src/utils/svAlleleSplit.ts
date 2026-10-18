@@ -13,6 +13,7 @@ import { SV_SPAN_MARGIN, svAlleleLabel } from '../components/tracks/read-track/s
 import type { SvCluster } from '../components/tracks/read-track/types';
 
 export const SV_GROUP_LABELS: Record<number, string> = { 0: 'Carriers', 1: 'Reference', 2: 'Not informative' };
+type SvSplitAllele = Pick<SvCluster, 't' | 'ref' | 'len'> & Partial<Pick<SvCluster, 'end'>>;
 
 export interface SvSplitResponse {
   assignments: Record<string, number>;
@@ -31,13 +32,14 @@ export interface SvSplitTarget {
   includePutative?: boolean;
 }
 
-export function requestSvSplit(target: SvSplitTarget, sv: Pick<SvCluster, 't' | 'ref' | 'len'>, margin = SV_SPAN_MARGIN, signal?: AbortSignal, includeDuplicates = Boolean(useBrowserStore.getState().showDuplicateReads)): Promise<SvSplitResponse> {
+export function requestSvSplit(target: SvSplitTarget, sv: SvSplitAllele, margin = SV_SPAN_MARGIN, signal?: AbortSignal, includeDuplicates = Boolean(useBrowserStore.getState().showDuplicateReads)): Promise<SvSplitResponse> {
   return fetchJson<SvSplitResponse>('/api/sv/split', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       dataset_id: target.datasetId, chrom: target.chrom, start: Math.floor(target.viewStart), end: Math.ceil(target.viewEnd),
       t: sv.t, ref: sv.ref, len: sv.len, margin,
+      ref_end: sv.end,
       // Reads the panel shows: duplicates too when they are on (else they'd get no group).
       include_duplicates: includeDuplicates,
       include_putative: Boolean(target.includePutative),
@@ -46,10 +48,10 @@ export function requestSvSplit(target: SvSplitTarget, sv: Pick<SvCluster, 't' | 
   });
 }
 
-export function svSplitDef(target: SvSplitTarget, sv: Pick<SvCluster, 't' | 'ref' | 'len'>, response: SvSplitResponse, includeDuplicates = Boolean(useBrowserStore.getState().showDuplicateReads)): SvSplitDef {
+export function svSplitDef(target: SvSplitTarget, sv: SvSplitAllele, response: SvSplitResponse, includeDuplicates = Boolean(useBrowserStore.getState().showDuplicateReads)): SvSplitDef {
   return {
     datasetId: target.datasetId, chrom: target.chrom, t: sv.t, ref: sv.ref, len: sv.len,
-    end: sv.t === 'D' ? sv.ref + sv.len : sv.ref,
+    end: sv.end ?? (sv.t === 'D' ? sv.ref + sv.len : sv.ref),
     margin: response.margin ?? SV_SPAN_MARGIN,
     label: svAlleleLabel(sv.t, sv.ref, sv.len, target.chrom),
     counts: response.counts,
@@ -85,7 +87,7 @@ function evidenceGroupLabels(def: SvSplitDef): Record<number, string> {
 
 const initialRequests = new Map<string, symbol>();
 
-export async function splitBySv(target: SvSplitTarget, sv: Pick<SvCluster, 't' | 'ref' | 'len'>): Promise<SvSplitDef> {
+export async function splitBySv(target: SvSplitTarget, sv: SvSplitAllele): Promise<SvSplitDef> {
   const request = Symbol();
   initialRequests.set(target.stateKey, request);
   let response: SvSplitResponse;
@@ -106,7 +108,7 @@ export async function splitBySv(target: SvSplitTarget, sv: Pick<SvCluster, 't' |
  * panel-count dialog for one panel per group (Carriers / Reference / Not informative; an insertion's
  * Carriers open with the insert expanded, components/controls/SplitPanelsDialog.tsx).
  */
-export async function splitIntoPanelsBySv(target: SvSplitTarget, sv: Pick<SvCluster, 't' | 'ref' | 'len'>, panelId: string): Promise<SvSplitDef> {
+export async function splitIntoPanelsBySv(target: SvSplitTarget, sv: SvSplitAllele, panelId: string): Promise<SvSplitDef> {
   const def = await splitBySv(target, sv);
   useSplitPanelStore.getState().request({ kind: 'frozen', panelId, title: def.label }, [panelId]);
   return def;

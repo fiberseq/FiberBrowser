@@ -59,12 +59,12 @@ describe('Variants › SVs', () => {
     act(() => root.render(<SvTab datasetId="numb" params={DEFAULT_SNP_PARAMS} duplicates={false} />));
     await wait(450);
     expect(qa('variants-sv')).toHaveLength(2);
-    expect(qa('variants-sv-carriers')[0].textContent).toBe('3,267 carriers of 3,600 informative reads · 91% (95% CI 90–92%)');
-    expect(qa('variants-sv-carriers')[1].textContent).toBe('1,795 carriers of 1,799 informative reads · >99% (95% CI 99.4–>99.9%)');
+    expect(qa('variants-sv-carriers')[0].textContent).toBe('3,267 confirmed of 3,600 informative reads · 91% (95% CI 90–92%) · 0 putative · 0 ambiguous');
+    expect(qa('variants-sv-carriers')[1].textContent).toBe('1,795 confirmed of 1,799 informative reads · >99% (95% CI 99.4–>99.9%) · 0 putative · 0 ambiguous');
     expect(q('variants-sv-weak-toggle')!.textContent).toBe(`Show 1 weak call (fewer than ${WEAK_SV_CARRIERS} carriers)`);
     act(() => q('variants-sv-weak-toggle')!.click());
     expect(qa('variants-sv')).toHaveLength(3);
-    expect(qa('variants-sv-carriers')[2].textContent).toContain('1 carrier of 1,799 informative reads · <1%');
+    expect(qa('variants-sv-carriers')[2].textContent).toContain('1 confirmed of 1,799 informative reads · <1%');
     expect((q('variants-sv-require-all-input') as HTMLInputElement).checked).toBe(true);
   });
 

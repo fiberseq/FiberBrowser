@@ -503,19 +503,16 @@ def _sv_records(state, dataset, chrom: str, start: int, end: int, include_duplic
         provenance = signal_header(bam.header)
         from services.graph_lift import lift_hidden_predicate
         hidden = lift_hidden_predicate(bam.header)
-        for read in bam.fetch(actual, max(0, int(start)), int(end)):
-            if not record_keeps_signal(read, provenance):
-                continue
-            if hidden is not None and hidden(read):
-                continue
+        from services.sv_molecules import molecule_bundles
+        def eligible(read):
+            if read.is_unmapped or read.is_secondary or (hidden is not None and hidden(read)):
+                return None
             ids = getattr(state, "_variant_read_ids", None)
             if ids is not None and read.query_name not in ids:
-                continue
-            if read.is_unmapped or read.is_secondary:
-                continue
-            if read.is_duplicate and not include_duplicates:
-                continue
-            out.append((read, actual))
+                return False
+            return record_keeps_signal(read, provenance) and (include_duplicates or not read.is_duplicate)
+        for bundle in molecule_bundles(bam.fetch(actual, max(0, int(start)), int(end)), eligible):
+            out.extend((read, actual) for read in bundle)
     return out
 
 
@@ -535,7 +532,7 @@ def svs_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = Non
             raise VariantsCancelled()
         item = {"id": read.query_name, "reference_start": int(read.reference_start),
                 "reference_end": int(read.reference_end), **alignment_evidence(read)}
-        events = extract_sv_events(read, sv_extraction_floor(min_len))
+        events = extract_sv_events(read, sv_extraction_floor(min_len), reference=getattr(state, 'fasta', None))
         if events:
             item["sv"] = events
         compact.append(item)
@@ -570,7 +567,7 @@ def sv_linkage_payload(state, body: dict, cancelled: Optional[Callable[[], bool]
     mcands = _columns(entry, matrix, candidates)
     records = _sv_records(state, entry["dataset"], chrom, start, end, params["include_duplicates"])
     classified = classify_records(records, t=t, ref=ref, length=length,
-                                  include_duplicates=params["include_duplicates"])
+                                  include_duplicates=params["include_duplicates"], reference=getattr(state, 'fasta', None))
     allele = {name: v["allele"] for name, v in classified.items()}
     counts = {"carriers": sum(1 for a in allele.values() if a == 0),
               "reference": sum(1 for a in allele.values() if a == 1),

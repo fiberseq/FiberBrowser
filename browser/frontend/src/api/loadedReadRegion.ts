@@ -159,7 +159,7 @@ export function projectLoadedReads(data: ReadsResponse, offset: number, width: n
       const start = regionStart + offset, end = start + width;
       // Cluster membership near a clipped breakpoint can change. Such views
       // use a fresh server summary rather than cropping a possibly different cluster.
-      if (evidence.some(ev => (ev.t === 'D' || ev.t === 'I') && [ev.ref, ev.ref + (ev.t === 'D' ? ev.len : 1)]
+      if (evidence.some(ev => (ev.t === 'D' || ev.t === 'I') && [ev.ref, ev.ref_end ?? ev.ref + (ev.t === 'D' ? ev.len : 1), ev.raw_ref ?? ev.ref, ev.raw_ref_end ?? ev.ref]
         .some(p => Math.abs(p - start) <= Math.max(50, ev.len * 0.1) || Math.abs(p - end) <= Math.max(50, ev.len * 0.1)))) return;
       Object.defineProperty(next, 'sv_evidence', { configurable: true, enumerable: true, writable: true, value: evidence });
       const kept = (read.sv ?? []).filter(ev => ev.t !== 'SA' && ev.ref < end && ev.ref + (ev.t === 'D' ? ev.len : 1) > start);

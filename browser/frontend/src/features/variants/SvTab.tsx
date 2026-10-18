@@ -27,7 +27,7 @@ function pct(x: number) { return `${Math.round(x * 100)}%`; }
  * the informative reads carriers).
  */
 export function svCarriersText(carriers: number, informative: number): string {
-  return `${carriers.toLocaleString()} carrier${carriers === 1 ? '' : 's'} of ${informative.toLocaleString()} informative read${informative === 1 ? '' : 's'} · ${formatPctInterval(carriers, informative)}`;
+  return `${carriers.toLocaleString()} confirmed of ${informative.toLocaleString()} informative read${informative === 1 ? '' : 's'} · ${formatPctInterval(carriers, informative)}`;
 }
 
 /** SV calls with fewer carriers than this are weak: folded under "Show weak calls" (audit VAR-4). */
@@ -202,7 +202,7 @@ export function SvTab({ datasetId: chosen, params, duplicates }: { datasetId: st
                       <span className="font-medium" data-testid="variants-sv-name">{label}</span>{' '}
                       <span className="text-ink-secondary tabular-nums" data-testid="variants-sv-carriers"
                         title={`${formatShare(c.support, c.informative, 'informative reads carry it')} (all reads in view: carriers plus reads spanning it without it). The SV row above the reads counts the loaded reads only.`}>
-                        {svCarriersText(c.support, c.informative)} confirmed · {c.putative ?? 0} putative · {c.ambiguous ?? 0} ambiguous
+                        {svCarriersText(c.support, c.informative)} · {c.putative ?? 0} putative · {c.ambiguous ?? 0} ambiguous
                       </span>
                     </>} />
                   <span className="flex-1" />

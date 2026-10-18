@@ -97,3 +97,21 @@ def test_split_offers_confirmed_only_or_including_putative_with_separate_counts(
     assert strict['counts'] == [1, 0, 1]
     assert inclusive['counts'] == [2, 0, 0]
     assert strict['evidence_counts'] == inclusive['evidence_counts'] == dict(confirmed=1, putative=1, ambiguous=0)
+
+
+def test_summary_indexes_junctions_without_a_display_sized_clip():
+    seed = _seg([(0, 100), (2, 1000), (0, 5)], start=0)
+    seed.query_name = 'seed'
+    junction = _seg([(0, 100), (5, 5)], start=0, sa='chrT,1101,+,100H5M,60,0;')
+    junction.query_name = 'junction'
+    rows = [_compact_record(r, 'chrT', 10) for r in (seed, junction)]
+    c = sv_summary_for_reads(rows, 0, 1200, 50, chrom='chrT')['clusters'][0]
+    assert c['support'] == 2 and c['sa_support'] == 1
+
+
+def test_unrelated_cigar_deletion_does_not_make_a_clip_ambiguous():
+    read = dict(id='molecule', sv=[dict(t='S', side='R', ref=1000, len=100, q=0),
+                                    dict(t='D', ref=5000, len=1000, q=100)])
+    targets = [dict(t='D', ref=ref, len=1000) for ref in (1000, 5000)]
+    allele, evidence = classify_allele_evidence(read, 'D', 1000, 1000, targets=targets)
+    assert allele == 2 and evidence['level'] == 'putative'

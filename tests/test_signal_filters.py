@@ -538,7 +538,7 @@ def test_signal_sv_split_and_insertion_caches_filter_before_carrier_sampling(sig
     def lens():
         return insertion_lens_payload(state, chrom="chr1", pos=200, ref=200, length=30, len_min=20,
                                       dataset_id="signal", flank=50, max_carriers=2, consensus=False)
-    assert len(split()) == 8  # duplicates are classified separately by the split
+    assert len(split()) == 9  # raw primary + supplementary records; molecule counts below remain deduplicated
     assert clusters()[0]["carriers"] == 7
     assert lens()["cluster"]["carriers"] == 7
     with signal_filters_for_request({"hideBackground": True}):
@@ -549,7 +549,7 @@ def test_signal_sv_split_and_insertion_caches_filter_before_carrier_sampling(sig
         assert len(filtered["carriers"]) == 2
         assert all(r["id"] not in {"read0", "read6"} for r in filtered["carriers"])
         assert lens() == filtered
-    assert len(split()) == 8
+    assert len(split()) == 9
     assert clusters()[0]["carriers"] == 7
     assert lens()["cluster"]["carriers"] == 7
 

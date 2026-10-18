@@ -614,6 +614,7 @@ def _compact_reads_payload(
         from services.read_sampling import sample_level as _sample_level
         direct_level = (_sample_level(state, dataset, chrom, start, end)
                         if getattr(state, 'performance', {}).get('effective') == 'low' else 0)
+        from services.sv_alleles import reference_identity
         methyl_cache_key = (
             dataset_id,
             chrom,
@@ -635,6 +636,7 @@ def _compact_reads_payload(
             read_load_token(state, chrom, direct_terminal_bp, sample_level=direct_level),
             min_sv_len,
             include_sv_seq,
+            reference_identity(state),
         )
 
         if not hasattr(state, "_methylation_cache"):

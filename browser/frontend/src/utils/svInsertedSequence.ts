@@ -12,14 +12,14 @@ export interface InsertionRef {
   datasetId: string;
   chrom: string;
   readId: string;
-  event: { ref: number; q: number; len: number; seq?: string };
+  event: { ref: number; raw_ref?: number; q: number; len: number; seq?: string };
 }
 
 const cache = new Map<string, Promise<string>>();
 const MAX_CACHED = 200;
 
 function keyOf(r: InsertionRef): string {
-  return [r.datasetId, r.chrom, r.readId, r.event.ref, r.event.q, r.event.len].join('|');
+  return [r.datasetId, r.chrom, r.readId, r.event.raw_ref ?? r.event.ref, r.event.q, r.event.len].join('|');
 }
 
 export function fetchInsertedSequence(r: InsertionRef): Promise<string> {
@@ -27,7 +27,7 @@ export function fetchInsertedSequence(r: InsertionRef): Promise<string> {
   const have = cache.get(key);
   if (have) return have;
   const params = new URLSearchParams({
-    dataset_id: r.datasetId, chrom: r.chrom, ref: String(r.event.ref), read_id: r.readId,
+    dataset_id: r.datasetId, chrom: r.chrom, ref: String(r.event.raw_ref ?? r.event.ref), read_id: r.readId,
     q: String(r.event.q), len: String(r.event.len),
   });
   const promise = fetchJson<{ seq: string }>(`/api/sv/insert_seq?${params}`).then(out => out.seq);

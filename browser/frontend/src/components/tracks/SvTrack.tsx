@@ -143,7 +143,7 @@ export function SvTrack({ width, height, panel, sidebarWidth = 0 }: {
       case 'sv-highlight-ambiguous': {
         if (!cluster) return;
         const level = action === 'sv-highlight-putative' ? 'putative' : action === 'sv-highlight-ambiguous' ? 'ambiguous' : 'confirmed';
-        const ids = supportingReadIds(feed.reads, cluster, feed.chrom, level, feed.sv?.clusters);
+        const ids = supportingReadIds(feed.reads, cluster, feed.chrom, level, feed.sv?.evidence_targets ?? feed.sv?.clusters);
         if (ids.length) useReadActionsStore.getState().highlightReads(ids);
         else useReadActionsStore.getState().clearHighlight();
         useBrowserStore.getState().setSvSelectedCluster(stateKey, cluster.id);

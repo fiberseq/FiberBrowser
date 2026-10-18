@@ -87,17 +87,17 @@ def read_draw(read: dict, start: int, end: int, min_len: int) -> dict:
         t = ev.get('t')
         if t == 'SA' or int(ev.get('len', 0)) < min_len:
             continue
-        ref = int(ev['ref'])
-        if t == 'D':
-            if ref + ev['len'] <= start or ref >= end:
-                continue
-            out['deletions'].append((ref - start, ref + int(ev['len']) - start, int(ev['len'])))
-        elif t == 'I':
-            if start <= ref <= end:
-                out['insertions'].append((ref - start, int(ev['len'])))
-        elif t == 'S':
+        if t == 'S':
+            ref = int(ev['ref'])
             if start <= ref <= end:
                 out['clips'].append((ref - start, ev.get('side'), int(ev['len'])))
+            continue
+        for piece in ev.get('raw_pieces') or [ev]:
+            ref, length = int(piece['ref']), int(piece['len'])
+            if piece['t'] == 'D' and ref + length > start and ref < end:
+                out['deletions'].append((ref - start, ref + length - start, length))
+            elif piece['t'] == 'I' and start <= ref <= end:
+                out['insertions'].append((ref - start, length))
     return out
 
 

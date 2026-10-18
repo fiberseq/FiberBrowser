@@ -35,7 +35,7 @@ from services.read_selection import is_read_spanning, read_matches_id_filter
 
 LayerKey = Optional[tuple[str, ...]]
 WORKING_SET_DIAGNOSTICS_ENV = "FIBERBROWSER_WORKING_SET_DIAGNOSTICS"
-BROAD_CACHE_SCHEMA_VERSION = 5
+BROAD_CACHE_SCHEMA_VERSION = 6
 _BROAD_CACHE_SYNC_INIT_LOCK = threading.Lock()
 
 
@@ -203,7 +203,10 @@ def broad_cache_topology(broad_key: tuple) -> tuple:
 
 def ensure_broad_cache_schema(state) -> None:
     """Drop process-local read caches from older loader behavior after hot reload."""
-    if getattr(state, "_broad_cache_schema_version", None) == BROAD_CACHE_SCHEMA_VERSION:
+    from services.sv_alleles import reference_identity
+    reference = reference_identity(state)
+    if (getattr(state, "_broad_cache_schema_version", None) == BROAD_CACHE_SCHEMA_VERSION
+            and getattr(state, '_sv_reference_identity', (None, None)) == reference):
         return
     if hasattr(state, "_broad_cache"):
         state._broad_cache.clear()
@@ -213,6 +216,7 @@ def ensure_broad_cache_schema(state) -> None:
     if hasattr(state, "_working_set_cache"):
         state._working_set_cache.clear()
     state._broad_cache_schema_version = BROAD_CACHE_SCHEMA_VERSION
+    state._sv_reference_identity = reference
 
 
 def layer_key_has_payload(layer_key: LayerKey) -> bool:

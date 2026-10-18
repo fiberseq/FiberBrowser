@@ -1577,6 +1577,7 @@ def build_compact_reads_from_bam(
     sv_min_len=SV_MIN_LEN_DEFAULT,
     include_sv_seq=False,
     fetch_regions=None,
+    sv_reference=None,
 ):
     """Build compact interval reads from a BAM file.
 
@@ -1618,6 +1619,7 @@ def build_compact_reads_from_bam(
         sv_min_len=sv_min_len,
         include_sv_seq=include_sv_seq,
         fetch_regions=fetch_regions,
+        sv_reference=sv_reference,
     )
     wrap_length = _bam_wrap_length_for(bam_path, chrom, bool(circular), bam_handle_getter, chrom_map, contig_links)
     if wrap_length and fetch_regions is not None:
@@ -1813,6 +1815,7 @@ def _build_compact_reads_from_bam_region(
     sv_min_len=SV_MIN_LEN_DEFAULT,
     include_sv_seq=False,
     fetch_regions=None,
+    sv_reference=None,
 ):
     """Compact reads of the records overlapping one linear BAM region.
 
@@ -1949,10 +1952,12 @@ def _build_compact_reads_from_bam_region(
         lift_hidden = lift_hidden_predicate(bam.header)
         from services.sv_molecules import molecule_alignments
         def eligible_segment(record):
-            return (not (record.is_unmapped or record.is_secondary)
-                    and (include_duplicates or not record.is_duplicate)
-                    and (lift_hidden is None or not lift_hidden(record))
-                    and signal_keeps(record_signal(record, signal_provenance)))
+            if record.is_unmapped or record.is_secondary or (lift_hidden is not None and lift_hidden(record)):
+                return None
+            evidence = record_signal(record, signal_provenance)
+            if signal_window is not None and not record.is_supplementary:
+                signal_window.append(record, evidence)
+            return signal_keeps(evidence) and (include_duplicates or not getattr(record, 'is_duplicate', False))
         for read, molecule_records in molecule_alignments(
                 iter_edge_records(bam, actual_chrom, region_start, region_end, fetch_regions), eligible_segment):
             records_seen += 1
@@ -1971,8 +1976,6 @@ def _build_compact_reads_from_bam_region(
                 if name_hash(read.query_name) % partition[1] != partition[0]:
                     continue
             signal_evidence = record_signal(read, signal_provenance)
-            if signal_window is not None:
-                signal_window.append(read, signal_evidence)
             if not signal_keeps(signal_evidence):
                 continue
             # A sampled display load (services/read_sampling.py): decided on the
@@ -2160,7 +2163,7 @@ def _build_compact_reads_from_bam_region(
                         _profile_add("cigar_parse", phase_t0)
                     phase_t0 = _profile_start()
                     _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq,
-                                      molecule_records=molecule_records)
+                                      molecule_records=molecule_records, reference=sv_reference)
                     from services.read_binary import binary_read_context
                     if binary_read_context.get():
                         read_data["_fiberbrowser_terminal_gaps"] = []
@@ -2322,6 +2325,11 @@ def _build_compact_reads_from_bam_region(
             has_explicit_ma_layers = (
                 bool(ma_layers) or bool(ma_skipped_in_region)
             ) and requested_layer_set is not None
+            # A supplementary-only local alignment may carry whole-molecule
+            # annotation tags whose calls all lie on another segment. Preserve
+            # its local evidence as a neutral row when no quality gate rejects it.
+            evidence_only_segment = bool(read.is_supplementary) and min_footprints <= 0 and min_fp_quality <= 0
+            has_explicit_ma_layers = has_explicit_ma_layers or evidence_only_segment
             # A read whose only ns/nl footprints were read-end stubs stays (as an
             # empty row) wherever its body would have reached.
             stubs_only = bool(terminal_drop) and not footprints and bool(all_footprints)
@@ -2576,7 +2584,7 @@ def _build_compact_reads_from_bam_region(
 
             phase_t0 = _profile_start()
             _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq, mapper=coord_mapper,
-                              molecule_records=molecule_records)
+                              molecule_records=molecule_records, reference=sv_reference)
             _profile_add("sv_events", phase_t0)
             if partition is not None:
                 read_data['_fiberbrowser_source_order'] = records_seen
@@ -2640,19 +2648,21 @@ def _build_compact_reads_from_bam_region(
 
 
 def _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq=False, mapper=None,
-                      molecule_records=None):
+                      molecule_records=None, reference=None):
     """``sv`` on a compact read, and its calls split at the deletions. A record
     the extraction can't read (a test double without a CIGAR string) keeps
     none: SV events never cost a read its row."""
     try:
         from services.sv_events import alignment_evidence
         read_data.update(alignment_evidence(read))
-        events = extract_sv_events(read, sv_extraction_floor(sv_min_len), include_seq=include_sv_seq, mapper=mapper)
+        events = extract_sv_events(read, sv_extraction_floor(sv_min_len), include_seq=include_sv_seq, mapper=mapper,
+                                    reference=reference)
         if molecule_records and len(molecule_records) > 1:
             from services.sv_molecules import consolidate_evidence
             parts = [dict(id=record.query_name, reference_start=int(record.reference_start),
                           reference_end=int(record.reference_end), **alignment_evidence(record),
-                          sv=extract_sv_events(record, sv_extraction_floor(sv_min_len), include_seq=include_sv_seq) or [])
+                          sv=extract_sv_events(record, sv_extraction_floor(sv_min_len), include_seq=include_sv_seq,
+                                               reference=reference) or [])
                      for record in molecule_records]
             combined = consolidate_evidence(parts)
             for key in ('sv_alignments', 'sv_segments', 'aligned_blocks', 'alignment_spans'):
@@ -2660,10 +2670,12 @@ def _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq=
             events = combined['sv']
     except Exception:
         return
-    if not events:
-        return
-    read_data["sv"] = events
-    cuts = [(a - region_start, b - region_start) for a, b in deletion_spans(ev for ev in events if ev.get("len", 0) >= sv_min_len)]
+    if events:
+        read_data["sv"] = events
+    # Cuts belong to the drawn anchor CIGAR, independently of canonical allele
+    # anchors and of other alignments retained in its evidence bundle.
+    from services.sv_events import read_deletion_cuts
+    cuts = [(a - region_start, b - region_start) for a, b in read_deletion_cuts(read, sv_min_len, mapper=mapper)]
     if cuts:
         split_compact_read_at_deletions(read_data, cuts)
 

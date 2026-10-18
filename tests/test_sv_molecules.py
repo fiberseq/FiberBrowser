@@ -82,3 +82,19 @@ def test_lens_can_use_a_supplementary_only_cigar_insertion(regional_bam):
     confirmed = [r for r in lens['carriers'] if r['evidence_level'] == 'confirmed']
     assert [r['id'] for r in confirmed] == ['supp-only']
     assert confirmed[0]['len'] == 100 and len(confirmed[0]['evidence_bundle']) == 2
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_supplementary_only_with_annotations_outside_local_alignment_keeps_a_neutral_row(tmp_path, reverse):
+    import array
+    rec = _seg([(0, 100), (4, 900)], start=1000, reverse=reverse, supplementary=True)
+    rec.set_tag('ns', array.array('i', [500]))
+    rec.set_tag('nl', array.array('i', [50]))
+    path = str(tmp_path / 'evidence-only.bam')
+    with pysam.AlignmentFile(path, 'wb', header=rec.header) as bam:
+        bam.write(rec)
+    pysam.index(path)
+    rows = build_compact_reads_from_bam(path, 'chrT', 900, 1200, spanning_only=False)
+    assert len(rows) == 1 and rows[0]['supplementary'] is True
+    assert rows[0]['intervals'] == [[100, 200, 0]]
+    assert any(event['t'] == 'S' for event in rows[0]['sv'])

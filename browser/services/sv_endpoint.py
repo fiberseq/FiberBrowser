@@ -60,14 +60,16 @@ def _bam_records(state, dataset_id: str, chrom: str, start: int, end: int,
         provenance = signal_header(bam.header)
         from services.graph_lift import lift_hidden_predicate
         hidden = lift_hidden_predicate(bam.header)  # an unrepaired lift's ex-supplementaries, as the read track
-        for read in bam.fetch(actual, max(0, int(start)), int(end)):
+        from services.sv_molecules import molecule_bundles
+        def eligible(read):
             if read.is_unmapped or read.is_secondary:
-                continue
+                return None
             if hidden is not None and hidden(read):
-                continue
-            if not record_keeps_signal(read, provenance):
-                continue
-            yield (read, actual, path, bam) if with_handle else (read, actual)
+                return None
+            return record_keeps_signal(read, provenance)
+        for bundle in molecule_bundles(bam.fetch(actual, max(0, int(start)), int(end)), eligible):
+            for read in bundle:
+                yield (read, actual, path, bam) if with_handle else (read, actual)
 
 
 def allele_floor(length: int) -> int:
@@ -75,12 +77,12 @@ def allele_floor(length: int) -> int:
     return sv_extraction_floor(length)
 
 
-def _compact_record(read, file_chrom: str, floor: int) -> dict:
+def _compact_record(read, file_chrom: str, floor: int, reference=None) -> dict:
     return {
         "id": read.query_name,
         "reference_start": int(read.reference_start),
         "reference_end": int(read.reference_end),
-        "sv": extract_sv_events(read, floor) or [],
+        "sv": extract_sv_events(read, floor, reference=reference) or [],
         "duplicate": bool(read.is_duplicate),
         "file_chrom": file_chrom,
         **alignment_evidence(read),
@@ -88,16 +90,20 @@ def _compact_record(read, file_chrom: str, floor: int) -> dict:
 
 
 def classify_compact(entries, *, t: str, ref: int, length: int, margin: int = SV_SPAN_MARGIN,
-                     include_duplicates: bool = False, include_putative: bool = False, targets=None) -> dict:
+                     include_duplicates: bool = False, include_putative: bool = False, targets=None, target_end=None) -> dict:
     """``classify_records`` over compact entries (``_compact_record``); each
     entry's ``record`` is the entry itself (or what ``item`` carried)."""
+    entries = list(entries)
+    primaries = {c['id'] for c, _ in entries if not c.get('supplementary')}
+    kept_primaries = {c['id'] for c, _ in entries if not c.get('supplementary') and (include_duplicates or not c.get('duplicate'))}
     return classify_molecules(
-        ((compact, item) for compact, item in entries if include_duplicates or not compact["duplicate"]),
-        t=t, ref=ref, length=length, margin=margin, include_putative=include_putative, targets=targets)
+        ((compact, item) for compact, item in entries if (include_duplicates or not compact.get('duplicate'))
+         and (compact['id'] not in primaries or compact['id'] in kept_primaries)),
+        t=t, ref=ref, length=length, margin=margin, include_putative=include_putative, targets=targets, target_end=target_end)
 
 
 def classify_records(records, *, t: str, ref: int, length: int, margin: int = SV_SPAN_MARGIN,
-                     include_duplicates: bool = False, include_putative: bool = False) -> dict:
+                     include_duplicates: bool = False, include_putative: bool = False, reference=None) -> dict:
     """Every primary record as carrier (0), reference (1) or not informative
     (2) for one SV: ``{name: {'allele', 'evidence', 'record'}}``. A name seen
     twice (merged files) keeps its most informative call. The allele split
@@ -107,8 +113,7 @@ def classify_records(records, *, t: str, ref: int, length: int, margin: int = SV
     ``records``: (pysam record, file chromosome, ...) tuples; each tuple is
     kept in ``record``."""
     floor = allele_floor(length)
-    entries = ((_compact_record(item[0], item[1], floor), item) for item in records
-               if include_duplicates or not item[0].is_duplicate)
+    entries = ((_compact_record(item[0], item[1], floor, reference=reference), item) for item in records)
     return classify_compact(entries, t=t, ref=ref, length=length, margin=margin,
                             include_duplicates=include_duplicates, include_putative=include_putative)
 
@@ -139,7 +144,7 @@ def _path_stamps(paths) -> Optional[tuple]:
 def _scan(state, dataset_id: str, chrom: str, start: int, end: int, floor: int) -> list[dict]:
     out = []
     for read, file_chrom, path, _bam in _bam_records(state, dataset_id, chrom, start, end, with_handle=True):
-        entry = _compact_record(read, file_chrom, floor)
+        entry = _compact_record(read, file_chrom, floor, reference=getattr(state, 'fasta', None))
         # A record's identity across scans (merged files may share names and starts).
         entry["_key"] = (path, read.query_name, int(read.reference_start), int(read.flag), read.cigarstring)
         out.append(entry)
@@ -155,7 +160,9 @@ def scan_view(state, dataset_id: str, chrom: str, start: int, end: int, floor: i
     from services.plasmid_reconcile import contig_links
     from services.signal_evidence import signal_filter_key
     links = tuple(repr(contig_links(state, path=path)) for path, _m, _s in stamps)
-    key = (dataset_id, stamps, links, chrom, int(floor), repr(getattr(state, "chrom_map", None)), signal_filter_key(state))
+    from services.sv_alleles import reference_identity
+    key = (dataset_id, stamps, links, chrom, int(floor), repr(getattr(state, "chrom_map", None)), signal_filter_key(state),
+           reference_identity(state))
     with _SCAN_LOCK:
         entry = _SCAN_CACHE.get(key)
         if entry is not None:
@@ -188,7 +195,7 @@ def scan_view(state, dataset_id: str, chrom: str, start: int, end: int, floor: i
 
 def sv_split_payload(state, *, dataset_id: str, chrom: str, start: int, end: int, t: str, ref: int,
                      length: int, margin: Optional[int] = None, include_duplicates: bool = False,
-                     include_putative: bool = False) -> dict:
+                     include_putative: bool = False, target_end=None) -> dict:
     """Every primary read in ``[start, end)`` as carrier (0), reference (1) or
     not informative (2) for the SV ``t``/``ref``/``length`` (an insertion's
     clipped reads are carriers: sv_events.carrier_evidence)."""
@@ -203,7 +210,8 @@ def sv_split_payload(state, *, dataset_id: str, chrom: str, start: int, end: int
     margin = SV_SPAN_MARGIN if margin is None else max(0, int(margin))
     entries = scan_view(state, dataset_id, chrom, int(start), int(end), allele_floor(length))
     by_name = classify_compact(((c, c) for c in entries), t=t, ref=ref, length=length,
-                               margin=margin, include_duplicates=include_duplicates, include_putative=include_putative)
+                               margin=margin, include_duplicates=include_duplicates, include_putative=include_putative,
+                               target_end=target_end)
     assignments: dict[str, int] = {}
     counts = [0, 0, 0]
     by_kind = {"cigar": 0, "sa": 0, "clip": 0}
@@ -252,6 +260,13 @@ def sv_insert_seq_payload(state, *, dataset_id: str, chrom: str, ref: int, read_
     matching = [read for read in candidates if has_insertion(read)] or candidates
     for read in matching:
         seq = read.query_sequence or ""
+        event = next((ev for ev in extract_sv_events(read, SV_MIN_LEN_LOWEST) or []
+                      if ev.get('t') == 'I' and ev['q'] == q and ev['len'] == length and ev.get('raw_pieces')), None)
+        if event is not None:
+            inserted = ''.join(seq[p['q']:p['q'] + p['len']] for p in event['raw_pieces'] if p['t'] == 'I')
+            if len(inserted) == length:
+                return {'read_id': read.query_name, 'q': q, 'len': length, 'seq': inserted,
+                        'strand': '-' if read.is_reverse else '+'}
         if q + length > len(seq):
             continue
         return {"read_id": read.query_name, "q": q, "len": length, "seq": seq[q:q + length],

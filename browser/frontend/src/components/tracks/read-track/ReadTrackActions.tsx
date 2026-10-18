@@ -318,7 +318,7 @@ export function ReadTrackActions(props: ReadTrackActionsProps) {
         const cluster = svTarget?.thisCluster;
         if (!cluster) break;
         const level = action === 'sv-highlight-putative' ? 'putative' : action === 'sv-highlight-ambiguous' ? 'ambiguous' : 'confirmed';
-        const ids = supportingReadIds(reads, cluster, chrom, level, svSummary?.clusters);
+        const ids = supportingReadIds(reads, cluster, chrom, level, svSummary?.evidence_targets ?? svSummary?.clusters);
         if (ids.length) actions.highlightReads(ids);
         else actions.clearHighlight();
         store.setSvSelectedCluster(stateKey, cluster.id);

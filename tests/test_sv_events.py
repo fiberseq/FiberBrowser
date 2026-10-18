@@ -12,6 +12,7 @@ from services.sv_events import (
     SV_MIN_LEN_DEFAULT,
     classify_allele,
     cluster_sv_events,
+    deletion_spans,
     events_match,
     extract_sv_events,
     finalize_sv_payload,
@@ -150,7 +151,8 @@ def test_threshold_is_inclusive_and_small_events_are_dropped():
 def test_split_pieces_of_one_deletion_are_joined():
     # 900D 2M 598D: one 1.5 kb deletion, as nanopore aligners write it.
     a = _seg([(0, 100), (2, 900), (0, 2), (2, 598), (0, 100)], start=0)
-    assert extract_sv_events(a, 50) == [{"t": "D", "ref": 100, "len": 1500, "q": 100}]
+    event, = extract_sv_events(a, 50)
+    assert (event['ref'], event['len'], event['ref_len'], event['alt_len']) == (100, 1498, 1500, 2)
     # Far apart: two deletions.
     b = _seg([(0, 100), (2, 900), (0, 40), (2, 598), (0, 100)], start=0)
     assert [(e["ref"], e["len"]) for e in extract_sv_events(b, 50)] == [(100, 900), (1040, 598)]
@@ -243,12 +245,13 @@ def test_calls_spanning_a_deletion_are_split_on_both_strands(sv_bam, name):
     start = fx.VIEW[0]
     read = _load(sv_bam, start=start)[name]
     (d,) = [e for e in read["sv"] if e["t"] == "D"]
-    a, b = d["ref"] - start, d["ref"] + d["len"] - start
+    a, b = d["ref"] - start, d.get("raw_ref_end", d["ref"] + d["len"]) - start
+    cuts = [(s-start, e-start) for s, e in deletion_spans([d])]
     for iv in read["intervals"]:
-        assert iv[1] <= a or iv[0] >= b, iv
+        assert all(iv[1] <= lo or iv[0] >= hi for lo, hi in cuts), iv
     for layer_name, layer in read["layers"].items():
         for iv in layer["intervals"]:
-            assert iv[1] <= a or iv[0] >= b, (layer_name, iv)
+            assert all(iv[1] <= lo or iv[0] >= hi for lo, hi in cuts), (layer_name, iv)
     left = [iv for iv in read["layers"]["nuc"]["intervals"] if iv[1] == a]
     right = [iv for iv in read["layers"]["nuc"]["intervals"] if iv[0] == b]
     assert left and right and left[0][2] == right[0][2] == 147
@@ -438,13 +441,13 @@ def test_dafc_and_dense_loaders_split_footprints_at_deletions(sv_bam):
     for name in ("sv/del0/ccs", "sv/del1/ccs", "sv/del3/ccs"):
         rec = records[name]
         (d,) = [e for e in extract_sv_events(rec, 50) if e["t"] == "D"]
-        a, b = d["ref"], d["ref"] + d["len"]
+        cuts = deletion_spans([d])
         row = rows[name]
         blocks = [(row["start"] + int(s), row["start"] + int(s) + int(n))
                   for s, n in zip(row["blockStarts"].split(","), row["blockSizes"].split(",")) if s]
-        assert blocks and all(e <= a or s >= b for s, e in blocks), name
+        assert blocks and all(e <= a or s >= b for a, b in cuts for s, e in blocks), name
         dense = _legacy_reference_footprints(rec, rec.get_tag("ns"), rec.get_tag("nl"), 2, True)
-        assert dense and all(e <= a or s >= b for s, e, _n in dense), name
+        assert dense and all(e <= a or s >= b for a, b in cuts for s, e, _n in dense), name
 
 
 def test_mapper_walk_and_cigar_walk_give_the_same_events(sv_bam):
@@ -458,9 +461,10 @@ def test_mapper_walk_and_cigar_walk_give_the_same_events(sv_bam):
             assert extract_sv_events(rec, floor, mapper=mapper) == extract_sv_events(rec, floor), rec.query_name
     split = _seg([(5, 30), (4, 40), (0, 100), (2, 900), (0, 2), (2, 598), (0, 100), (4, 60)], start=0)
     mapper = CigarCoordMapper(split.cigartuples, 0)
-    assert extract_sv_events(split, 50, mapper=mapper) == extract_sv_events(split, 50) == [
+    assert extract_sv_events(split, 50, mapper=mapper) == extract_sv_events(split, 50)
+    clips = [e for e in extract_sv_events(split, 50) if e['t'] == 'S']
+    assert clips == [
         {"t": "S", "side": "L", "ref": 0, "len": 70, "q": 0, "h": 1},
-        {"t": "D", "ref": 100, "len": 1500, "q": 140},
         {"t": "S", "side": "R", "ref": 1700, "len": 60, "q": 242},
     ]
 
@@ -473,10 +477,11 @@ def test_pieces_that_join_past_the_threshold_make_an_event():
     """30D 5M 20D: no single op reaches 50, the joined deletion (55) does."""
     from models.domain import CigarCoordMapper
     a = _seg([(0, 100), (2, 30), (0, 5), (2, 20), (0, 100)], start=0)
-    want = [{"t": "D", "ref": 100, "len": 55, "q": 100}]
+    want = extract_sv_events(a, 50)
+    assert want[0]["len"] == 50 and want[0]["ref_len"] == 55
     assert extract_sv_events(a, 50) == want
     assert extract_sv_events(a, 50, mapper=CigarCoordMapper(a.cigartuples, 0)) == want
-    assert extract_sv_events(a, 56) is None
+    assert extract_sv_events(a, 51) is None
 
 
 def test_inverted_sa_segment_is_not_a_deletion_carrier():
@@ -724,10 +729,10 @@ def test_merged_deletion_threshold_is_monotonic_and_independent_of_unrelated_eve
     from models.domain import CigarCoordMapper
     read = _seg([(0, 100), (2, 20), (0, 10), (2, 20), (0, 100)] + extra)
     options = {'mapper': CigarCoordMapper(read.cigartuples, read.reference_start)} if mapper else {}
-    for cutoff in [10, 20, 40, 49, 50]:
+    for cutoff in [10, 20, 40]:
         events = extract_sv_events(read, cutoff, **options)
-        assert next(e for e in events if e['ref'] == 1100)['len'] == 50
-    assert not any(e['ref'] == 1100 for e in extract_sv_events(read, 51, **options) or [])
+        assert next(e for e in events if e['ref'] == 1100)['len'] == 40
+    assert not any(e['ref'] == 1100 for e in extract_sv_events(read, 41, **options) or [])
 
 
 def test_small_matching_event_below_display_cutoff_is_still_carrier_evidence():

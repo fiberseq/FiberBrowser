@@ -59,8 +59,10 @@ unexpected molecular-frame policy/import failures. Missing optional policy
 imports retain declared-header geometry on both strands.
 
 All eligible primary and supplementary records fetched in the window contribute
-to a molecule bundle. A deterministic primary anchor is preferred for the single
-display row; if no primary is local, a supplementary anchor supplies the row.
+to a molecule bundle. A deterministic primary anchor is preferred; if no primary
+is local, a supplementary anchor supplies the row. Distinct primary source
+occurrences retain their existing display identities for consensus overlays;
+they still contribute once to SV counts and one molecule evidence bundle.
 Anchor chromatin retains its existing alignment identity. `sv_alignments` preserves
 the other segments' separate CIGAR events, blocks and SEQ availability; evidence
 classification pools their segments without multiplying molecule votes. Reciprocal
@@ -68,9 +70,56 @@ SA descriptions are deduplicated by reference/query geometry, with fetched recor
 overriding tag descriptions and conservative MAPQ ties. Secondary, duplicate and
 signal filtering apply before local bundling. Nonlocal SA descriptions never
 fabricate sequence or chromatin. Both strands use the same full-query frame.
+Filtering a local primary cannot rescue that molecule through an unscored
+supplementary; recovery applies when no primary is local. Non-SV signal-window
+statistics retain their existing primary-record scope.
 
 Split, Variants and lens include supplementary-only local molecules. Lens rows
 retain `evidence_bundle`; default alternate-allele construction uses confirmed
-molecules, including supplementary-only CIGAR inserts. Exact replacement and
-normalisation are the next implementation step. No server-side cancellation or
-complete-export change is implied by the evidence levels.
+molecules, including supplementary-only CIGAR inserts.
+
+## Exact alleles and reference normalization
+
+An event's `len` counts its inserted or deleted CIGAR bases (the larger count
+for a mixed replacement), excluding aligned bridges. `ref_len`/`ref_end` describe
+the replaced reference interval; `alt_len` and `q_end` describe its alternate
+query span. `raw_pieces` retains every original I/D and aligned bridge operation
+inside a merged event. Thus `50I10M50I` inserts 100 bp and replaces 10 reference
+bp with 110 query bp; `20D10M20D` deletes 40 bp and replaces 50 reference bp with
+10 query bp. Thresholds use that indel-base count monotonically. Adding unrelated
+indels cannot restore an event above its size threshold.
+
+When a FASTA is available, exact ref/alt strings are minimized and pure indels
+are rotated left through repeat-equivalent placements. `ref` is canonical;
+`raw_ref`, `raw_ref_end`, original `q`/`q_end` and CIGAR pieces retain source
+geometry. `uncertainty` is the inclusive interval of equivalent anchors; complex
+non-equivalent replacements retain their exact ref/alt strings without invented
+repeat equivalence. Replacements reconstructing reference exactly do not seed
+SVs. Missing reference contigs retain raw evidence. Reference changes invalidate
+read, split and insertion-tile/lens caches. Worker options carry reference paths,
+not open handles.
+
+Clustering and highlighting use canonical anchors. A raw in-view CIGAR can seed
+its canonical cluster even when left normalization moves that anchor outside the
+view; raw per-read glyphs remain at their observed positions. Cluster medians
+remain tolerance-based summaries, with per-alignment exact alleles retained.
+The summary sends `evidence_targets` so highlighting uncertainty uses competing
+alleles even when their glyphs are hidden by the display cutoff.
+
+Chromatin cuts use only deleted pieces of the displayed anchor's original CIGAR,
+at the display cutoff. Matched bridges survive, and normalization never moves
+query marks. Lens rows splice the full replacement query span, separately from
+the insertion's size. Alternate-allele right flanks start after the replaced
+reference span; reference reads align their replaced query segment against that
+allele. Insert-sequence lookup concatenates raw I pieces, excluding matched
+bridges, and uses the raw anchor when locating the source record.
+Canonical alternate-allele consensus uses normalized allele sequences. DAF
+consensus retains chemistry calls through pure repeat rotations; if minimizing a
+complex replacement changes its query span, canonical sequence majority is used
+with an explicit fallback reason. The native lens retains observed query axes.
+
+Supplementary-only alignments whose whole-molecule annotation calls lie outside
+the local segment retain a neutral evidence row when no footprint quality or
+minimum-count gate excludes them. This does not fabricate chromatin calls on
+unaligned or hard-clipped bases. Server-side job cancellation, uncapped exports,
+and a persistent cross-window variant catalogue remain outside this change.

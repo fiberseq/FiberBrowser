@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { supportingReadIds, svEvidenceLevel } from './svDrawing';
+import { describeSvCluster, readSvDraw, supportingReadIds, svEvidenceLevel } from './svDrawing';
 import type { CompactRead, SvCluster, SvSegment } from './types';
 
 const target = { id: 'I:1000:100', t: 'I', ref: 1000, end: 1000, len: 100, support: 1, informative: 1, sa_support: 0 } as SvCluster;
@@ -9,6 +9,23 @@ const segment = (pos: number, q_start: number, q_end: number): SvSegment => ({
 });
 
 describe('SV evidence levels', () => {
+  it('draws raw I–M–I and D–M–D pieces and exposes exact replacement spans', () => {
+    const insertion: CompactRead = { id: 'exact', intervals: [], sv: [{ t: 'I', ref: 1000, len: 100, q: 0,
+      ref_len: 10, alt_len: 110, q_end: 110, raw_pieces: [
+        { t: 'I', ref: 1000, len: 50, q: 0 }, { t: 'M', ref: 1000, len: 10, q: 50 }, { t: 'I', ref: 1010, len: 50, q: 60 },
+      ] }] };
+    expect(readSvDraw(insertion, 0, 2000, 100).insertions.map(e => e.len)).toEqual([50, 50]);
+    expect(readSvDraw(insertion, 0, 2000, 101).insertions).toEqual([]);
+    const deletion: CompactRead = { id: 'deleted', intervals: [], sv: [{ t: 'D', ref: 1, len: 40, q: 0,
+      raw_ref: 1000, raw_ref_end: 1050, raw_pieces: [
+        { t: 'D', ref: 1000, len: 20, q: 0 }, { t: 'M', ref: 1020, len: 10, q: 0 }, { t: 'D', ref: 1030, len: 20, q: 10 },
+      ] }] };
+    expect(readSvDraw(deletion, 900, 2000, 40).deletions).toEqual([
+      { start: 100, end: 120, len: 20 }, { start: 130, end: 150, len: 20 },
+    ]);
+    expect(describeSvCluster({ ...target, ref_len: 10, alt_len: 110, uncertainty: [900, 1000] }, null, [], 'chrT').where)
+      .toContain('replaces 10 reference bp with 110 query bp');
+  });
   it('keeps clips putative, multi-allelic clips ambiguous and default highlights confirmed', () => {
     expect(svEvidenceLevel(clip, target)).toBe('putative');
     expect(svEvidenceLevel(clip, target, 'chrT', [target, { ...target, len: 300 }])).toBe('ambiguous');

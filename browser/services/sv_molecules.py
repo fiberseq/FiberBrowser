@@ -8,11 +8,11 @@ EVIDENCE_FIELDS = ('id', 'reference_start', 'reference_end', 'file_chrom', 'sv',
 
 
 def alignment_order(read):
-    return (bool(read.is_supplementary), -int(read.mapping_quality), int(read.reference_start),
-            read.cigarstring or '', bool(read.is_reverse))
+    return (bool(read.is_supplementary), -int(getattr(read, 'mapping_quality', 0) or 0), int(read.reference_start),
+            getattr(read, 'cigarstring', None) or '', bool(read.is_reverse))
 
 
-def molecule_alignments(records, eligible):
+def molecule_bundles(records, eligible):
     """Yield a deterministic local anchor and all eligible local records once per QNAME.
 
     No remote mate/name lookup: SA describes nonlocal segments; fetched records
@@ -20,11 +20,29 @@ def molecule_alignments(records, eligible):
     """
     groups = {}
     for read in records:
-        if eligible(read):
-            groups.setdefault(read.query_name, []).append(read)
-    for bundle in groups.values():
+        status = eligible(read)
+        if status is None:
+            continue  # structurally ineligible, rather than filtered by a user policy
+        group = groups.setdefault(read.query_name, {'primary': False, 'records': []})
+        group['primary'] |= not read.is_supplementary
+        if status:
+            group['records'].append(read)
+    for group in groups.values():
+        bundle = group['records']
+        if not bundle or (group['primary'] and not any(not r.is_supplementary for r in bundle)):
+            continue  # a filtered local primary must not be rescued through an unscored supplementary
         bundle.sort(key=alignment_order)
-        yield bundle[0], bundle
+        yield bundle
+
+
+def molecule_alignments(records, eligible):
+    for bundle in molecule_bundles(records, eligible):
+        primaries = [read for read in bundle if not read.is_supplementary]
+        # Existing source-record identities/occurrences must remain addressable
+        # for consensus overlays. SV reducers still count these rows once per
+        # molecule; supplementary segments never introduce a second row.
+        for anchor in primaries or [bundle[0]]:
+            yield anchor, bundle if any(read.is_supplementary for read in bundle) else [anchor]
 
 
 def segment_key(segment):

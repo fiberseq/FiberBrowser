@@ -63,6 +63,8 @@ def _bam_options(state, bam_path, chrom, kwargs):
     # Read-end footprints under the cutoff are dropped for this workspace's
     # display and analyses alike (Edges / terminal gaps settings).
     kwargs.setdefault("short_terminal_footprint_bp", short_terminal_footprint_bp_for(state))
+    from services.sv_alleles import reference_identity
+    kwargs.setdefault('sv_reference', reference_identity(state)[0])
     from services.read_edge_cache import edge_fetch_regions
     if edge_fetch_regions.get() is not None:
         kwargs['fetch_regions'] = edge_fetch_regions.get()
