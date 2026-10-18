@@ -1,4 +1,5 @@
 """Map previews are bounded; explicit sequence requests page in display order."""
+import pysam
 from test_live_lift_differences import evidence
 from test_live_lift_endpoints import lift_env, _add
 from live_lift_fixtures import TARGET
@@ -39,7 +40,8 @@ def test_map_sequence_pages_and_orientation(evidence, lift_env):
         pieces.append(page['sequence'])
         offset = page['next_offset']
     src = item['src']
-    expected = diff.revcomp(diff.fasta_bases(__import__('pysam').FastaFile(ds.live_lift.source_fasta), src['contig'], src['start'], src['end']))
+    with pysam.FastaFile(ds.live_lift.source_fasta) as source:
+        expected = diff.revcomp(diff.fasta_bases(source, src['contig'], src['start'], src['end']))
     assert ''.join(pieces) == expected
     assert client.get('/api/lift/difference_sequence', params={**params, 'limit': 50001}).status_code == 422
     assert client.get('/api/lift/difference_sequence', params={**params, 'item_id': 'missing'}).status_code == 404

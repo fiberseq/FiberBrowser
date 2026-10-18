@@ -134,7 +134,7 @@ type Inspection = {
     orientation: '+' | '-';
   };
   // Present for insertion inspection only:
-  ins_id?: string; carries_insertion?: boolean; mol_bp?: number;
+  ins_id?: string; alignment_ins_id?: string; carries_insertion?: boolean; mol_bp?: number;
   identity?: number | null; read_bases_length?: number;
 };
 type DifferenceReadsResponse = {
@@ -169,9 +169,13 @@ display rows, reusing only completely annotated caches and decoding the bounded 
 distance at most 50 bp, otherwise null. Insertion inspection reports the
 hidden block's state at its first covered display base. `carries_insertion`
 requires the source alignment to span the full map gap with `mol_bp` within
-10% or 50 bp of its length. The allele is `hg002` for these carriers, `partial`
-for alignments ending inside the insertion, `deleted` for a deletion across it,
-or `no_insertion` for other flank-spanning non-carriers. `mol_bp` measures
+10% or 50 bp of its length. The allele is `hg002` when this carriage matches
+the molecule's own parent; cross-parent carriage stays `other` unless its bases
+match that parent's inserted allele. `partial` describes alignments ending
+inside the insertion, `deleted` a deletion across it, and `no_insertion` an
+empty read span when the own-parent allele is also empty. Other lengths/bases
+are `other`. A read-only CIGAR insertion can carry sequence at a zero-width
+source boundary, independent of a map insertion. `mol_bp` measures
 actual SEQ bases there. Insertion `read_bases` is truncated to 60 bases with
 the full length in `read_bases_length`; `identity` is a best-effort percentage
 against the assembly using aligned CIGAR positions and indels, independent

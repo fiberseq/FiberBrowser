@@ -1,4 +1,4 @@
-# Live-lift differences and insertion inspection (P2a3)
+# Live-lift differences and insertion inspection (P2a4)
 
 Everything is gated by the server's live-lift flag and a displayed
 `bam_livelift` dataset. Native sibling panels participate in the shared axis,

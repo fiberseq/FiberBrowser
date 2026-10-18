@@ -11,10 +11,12 @@ import { openSourceView } from './sourceView';
 vi.mock('./sourceView', () => ({ openSourceView: vi.fn() }));
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-it.each(['PAT', 'native'])('uses PAT from the %s header after the initiating MAT panel closes', async initiating => {
+it.each([{ initiating: 'PAT', closed: false }, { initiating: 'PAT', closed: true }, { initiating: 'native', closed: true }])(
+  'uses PAT from the $initiating header (MAT closed: $closed)', async ({ initiating, closed }) => {
   const pat: any = { id: 'pat', datasetId: 'lift', liftHap: 'PAT' };
   const native: any = { id: 'native', datasetId: 'native' };
-  useBrowserStore.setState({ panels: [pat, native] });
+  const mat: any = { id: 'mat', datasetId: 'lift', liftHap: 'MAT' };
+  useBrowserStore.setState({ panels: closed ? [pat, native] : [mat, pat, native] });
   const expansion = { chrom: 'chr1', pos: 500, ins_id: 'mat-ins', hap_label: 'MAT', length: 100,
     datasetId: 'lift', label: 'shared', src: { contig: 'mat', start: 100, end: 200 }, strand: '+' as const,
     alleles: [{ ins_id: 'pat-ins', hap_label: 'PAT', length: 98, src: { contig: 'pat', start: 300, end: 398 }, strand: '-' as const }] };
