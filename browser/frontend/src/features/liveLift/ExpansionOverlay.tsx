@@ -5,8 +5,9 @@ import { liveLiftHaplotypeColor } from './palette';
 import type { Difference } from './differenceTypes';
 import { openSourceView } from './sourceView';
 import { useLiveLiftStore } from './store';
+import type { PanelConfig } from '../../types';
 
-export function ExpansionOverlay({ axis, viewKey, sidebar = 0 }: { axis: LiftAxis; viewKey: string; sidebar?: number }) {
+export function ExpansionOverlay({ axis, viewKey, sidebar = 0, panel: enclosing }: { axis: LiftAxis; viewKey: string; sidebar?: number; panel?: PanelConfig | null }) {
   const dark = useBrowserStore(s => s.darkMode);
   const panels = useBrowserStore(s => s.panels);
   return <>{axis.blocks.map(({ x0, x1, ins }) => <div key={ins.ins_id} data-testid="live-lift-expanded-block" data-ins-id={ins.ins_id}
@@ -17,11 +18,14 @@ export function ExpansionOverlay({ axis, viewKey, sidebar = 0 }: { axis: LiftAxi
     <button data-testid="live-lift-expanded-collapse" aria-label={`Collapse ${ins.label}`} className="font-bold" onClick={() => useBrowserStore.getState().collapseLiveLift(viewKey, ins.ins_id)}>×</button>
     <strong className="whitespace-nowrap" title={ins.label}>{ins.label}</strong>
     {['Identify', 'Open in HG002 view'].map(action => <button key={action} className="underline whitespace-nowrap" title={action} onClick={() => {
-      const panel = panels.find(p => p.datasetId === ins.datasetId && (!p.liftHap || p.liftHap === ins.hap_label));
+      const panel = (enclosing?.datasetId === ins.datasetId ? enclosing : undefined)
+        ?? panels.find(p => p.datasetId === ins.datasetId && p.liftHap === ins.hap_label)
+        ?? panels.find(p => p.datasetId === ins.datasetId);
       if (!panel || !ins.datasetId) return;
-      const difference: Difference = { id: ins.ins_id, hap: ins.hap_label, hap_label: ins.hap_label, kind: 'insertion', reason: 'source_insertion', source: 'assembly',
-        t_start: ins.pos, t_end: ins.pos, ref_bp: 0, alt_bp: ins.selected_length ?? ins.length, chain: null, strand: ins.strand ?? null,
-        src: ins.src ?? { contig: null, start: null, end: null }, grch38: null, alt: null };
+      const allele = ins.alleles?.find(a => a.hap_label === panel.liftHap);
+      const difference: Difference = { id: allele?.ins_id ?? ins.ins_id, hap: allele?.hap_label ?? ins.hap_label, hap_label: allele?.hap_label ?? ins.hap_label, kind: 'insertion', reason: 'source_insertion', source: 'assembly',
+        t_start: ins.pos, t_end: ins.pos, ref_bp: 0, alt_bp: allele?.length ?? ins.selected_length ?? ins.length, chain: null, strand: allele ? allele.strand ?? null : ins.strand ?? null,
+        src: (allele ? allele.src : ins.src) ?? { contig: null, start: null, end: null }, grch38: null, alt: null };
       const selection = { panelId: panel.id, datasetId: ins.datasetId, viewKey, chrom: ins.chrom, difference };
       if (action === 'Identify') useDifferenceSelection.getState().select({ ...selection, action: 'identify' });
       else void openSourceView(selection);

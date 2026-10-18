@@ -353,7 +353,7 @@ export function ReadTrack({
   const hasFilter = myFilteredReadIds != null;
   const regionWidth = end - start;
   const sidebarWidth = gutterWidth ?? (hasCluster ? SIDEBAR_WIDTH : 0);
-  const { axis: liveLiftAxis, viewKey: liveLiftView } = useLiveLiftAxis(chrom, start, end, Math.max(1, width - sidebarWidth), isReversed);
+  const { axis: liveLiftAxis, viewKey: liveLiftView, panel } = useLiveLiftAxis(chrom, start, end, Math.max(1, width - sidebarWidth), isReversed);
 
   const currentDataset = datasets.find(d => d.id === datasetId);
   const isBAM = isBamBacked(currentDataset);
@@ -1548,7 +1548,7 @@ export function ReadTrack({
       data-native-lattice-read-count={nativeLattice?Object.keys(nativeLattice.reads).length:0}
       data-read-track-export-expanded={exportFullReadTracks && (readDisplayMode === 'all' || matchedExportActive) ? 'true' : undefined}
     >
-      <ExpansionOverlay axis={liveLiftAxis} viewKey={liveLiftView} sidebar={sidebarWidth} />
+      <ExpansionOverlay axis={liveLiftAxis} viewKey={liveLiftView} sidebar={sidebarWidth} panel={panel} />
       <DifferenceGuide axis={liveLiftAxis} viewKey={liveLiftView} chrom={chrom} sidebar={sidebarWidth} />
       {!isDataViewportStale && <ReadSampleNotice datasetId={datasetId} sampling={workingSampling} />}
       {latticeMessage&&<div data-testid={`native-lattice-status-${datasetId}`} className="absolute bottom-0 left-1 z-20 bg-white/90 dark:bg-gray-900/90 text-[11px] text-gray-600 dark:text-gray-300 px-1 pointer-events-none">{latticeMessage}</div>}

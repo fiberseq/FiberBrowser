@@ -48,7 +48,7 @@ export function expandDifference(s: DifferenceSelection): boolean {
     if (!current) return;
     rememberDifferences(response);
     const group = equivalentInsertions(d, response.items);
-    const alleles = group.map(g => ({ ins_id: g.id, hap_label: g.hap_label, length: g.alt_bp }));
+    const alleles = group.map(g => ({ ins_id: g.id, hap_label: g.hap_label, length: g.alt_bp, src: g.src, strand: g.strand }));
     const differs = group.some(g => g.alt_bp !== d.alt_bp);
     const label = `HG002 ${d.hap_label} +${d.alt_bp.toLocaleString()} bp` + (group.length > 1 ? ` · ${group.slice(1).map(g => `${g.hap_label} +${g.alt_bp.toLocaleString()} bp`).join(' · ')}${differs ? ' (lengths differ; boundary aligned)' : ''}` : '');
     state.expandLiveLift(s.viewKey, { ...current, length: Math.max(...group.map(g => g.alt_bp)), selected_length: d.alt_bp, alleles, label });

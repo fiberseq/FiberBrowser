@@ -6,7 +6,7 @@ export interface LiveLiftExpansion {
   src?: { contig: string | null; start: number | null; end: number | null };
   datasetId?: string;
   selected_length?: number;
-  alleles?: Array<{ ins_id: string; hap_label: string; length: number }>;
+  alleles?: Array<{ ins_id: string; hap_label: string; length: number; src?: LiveLiftExpansion['src']; strand?: '+' | '-' | null }>;
   strand?: '+' | '-' | null;
 }
 export interface AxisPosition { pos: number; ins_id?: string; within?: number }
