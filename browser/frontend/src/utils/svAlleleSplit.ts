@@ -94,16 +94,19 @@ export async function splitIntoPanelsBySv(target: SvSplitTarget, sv: Pick<SvClus
  * its groups (reads that left the view keep theirs). Not an undo step.
  */
 export async function refreshSvSplit(target: SvSplitTarget, def: SvSplitDef, signal?: AbortSignal): Promise<void> {
+  const includeDuplicates = Boolean(useBrowserStore.getState().showDuplicateReads);
   const response = await requestSvSplit(target, def, def.margin, signal);
   const store = useBrowserStore.getState();
-  if (store.svSplits[target.stateKey] !== def) return;  // replaced or dropped meanwhile
+  if (signal?.aborted || store.svSplits[target.stateKey] !== def
+      || Boolean(store.showDuplicateReads) !== includeDuplicates) return;
   const merged = { ...(store.clusterAssignments[target.stateKey] ?? {}), ...response.assignments };
-  const counts: [number, number, number] = [0, 0, 0];
-  for (const group of Object.values(merged)) if (group >= 0 && group <= 2) counts[group] += 1;
+  // Retained assignments preserve groups when molecules re-enter the view.
+  // Counts describe only this response's region and duplicate setting.
+  const counts = response.counts;
   store.setClusterAssignments(target.stateKey, merged, { svSplit: true, mirror: false });
   store.setSvSplit(target.stateKey, {
     ...def, counts, viewStart: target.viewStart, viewEnd: target.viewEnd,
-    includeDuplicates: Boolean(store.showDuplicateReads),
+    includeDuplicates,
   }, SV_GROUP_LABELS);
 }
 

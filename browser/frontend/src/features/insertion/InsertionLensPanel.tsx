@@ -250,7 +250,16 @@ export function InsertionLensPanel() {
   })));
   // Kept while the panel is remounted (the row re-laid out when the reference copies open beside it).
   const [tab, setTab] = useRememberedState<Tab>(`${INSERTION_LENS_PANEL}:tab`, () => 'lens');
-  const [response, setResponse] = useState<LensResponse | null>(null);
+  const showDuplicateReads = useBrowserStore(s => Boolean(s.showDuplicateReads));
+  const refreshGeneration = useBrowserStore(s => s.refreshGeneration);
+  const dupParam = { include_duplicates: String(showDuplicateReads) };
+  const fetchKey = target ? lensParams(target, dupParam).toString() : '';
+  const requestIdentity = JSON.stringify([fetchKey, refreshGeneration]);
+  const [loadedResponse, setLoadedResponse] = useState<{ identity: string; data: LensResponse } | null>(null);
+  // Guard during render too: effects run after the new target has rendered.
+  const response = target && loadedResponse?.identity === requestIdentity ? loadedResponse.data : null;
+  const currentResponse = useRef(loadedResponse);
+  currentResponse.current = response ? loadedResponse : null;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -292,7 +301,7 @@ export function InsertionLensPanel() {
     useBrowserStore.setState(s => ({
       panels: s.panels.map(p => (p.contentType === INSERTION_LENS_PANEL ? { ...p, insertionLens: undefined, insertionIdentify: undefined } : p)),
     }));
-    setResponse(null);
+    setLoadedResponse(null);
     setLoading(false);
     setError(null);
     setNotice(null);
@@ -304,13 +313,14 @@ export function InsertionLensPanel() {
   useEffect(() => {
     if (!state || !isSeek(state)) return;
     let cancelled = false;
+    const controller = new AbortController();
     const params = new URLSearchParams({
       chrom: state.chrom, start: String(Math.max(0, Math.round(state.pos - 300))), end: String(Math.round(state.pos + 300)),
       ...(state.genome ? { panel_genome: state.genome } : {}), dataset_id: state.datasetId, min_len: '50',
     });
     setLoading(true);
     setError(null);
-    fetchJson<{ success: boolean; error?: string; clusters: InsertionCluster[] }>(`/api/insertions/clusters?${params}`)
+    fetchJson<{ success: boolean; error?: string; clusters: InsertionCluster[] }>(`/api/insertions/clusters?${params}`, { signal: controller.signal })
       .then(res => {
         if (cancelled) return;
         const best = res.success ? pickCluster(res.clusters, state.pos) : null;
@@ -323,31 +333,31 @@ export function InsertionLensPanel() {
         setInsertionLensState(targetForCluster(best, state.datasetId, state.chrom, state));
       })
       .catch(err => { if (!cancelled) { setLoading(false); setError(String(err?.message ?? err)); } });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; controller.abort(); };
   }, [state]);
 
   // The lens data. Anchor and reverse are view options: no refetch. Duplicates
   // follow the panels' setting, as "Split by this SV" does (same reads).
-  const showDuplicateReads = useBrowserStore(s => Boolean(s.showDuplicateReads));
-  const refreshGeneration = useBrowserStore(s => s.refreshGeneration);
-  const dupParam = { include_duplicates: String(showDuplicateReads) };
-  const fetchKey = target ? lensParams(target, dupParam).toString() : '';
   useEffect(() => {
+    setLoadedResponse(null);
+    setNotice(null);
+    setHover(null);
     if (!target) return;
     let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
-    fetchJson<LensResponse>(`/api/insertions/lens?${fetchKey}`)
+    fetchJson<LensResponse>(`/api/insertions/lens?${fetchKey}`, { signal: controller.signal })
       .then(res => {
         if (cancelled) return;
         setLoading(false);
-        if (!res.success) { setError(res.error || 'Could not load the insertion'); setResponse(null); return; }
-        setResponse(res);
+        if (!res.success) { setError(res.error || 'Could not load the insertion'); return; }
+        setLoadedResponse({ identity: requestIdentity, data: res });
       })
       .catch(err => { if (!cancelled) { setLoading(false); setError(String(err?.message ?? err)); } });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; controller.abort(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchKey, refreshGeneration]);
+  }, [requestIdentity]);
 
   // Insertions in view: asked only while the list is shown, once the view has
   // settled (panning asks nothing), one request per view (shared, and kept for
@@ -520,10 +530,14 @@ export function InsertionLensPanel() {
   };
   const downloadInserts = async () => {
     if (!target || !response) return;
+    const snapshot = loadedResponse;
     try {
-      const res = await fetchJson<LensResponse>(`/api/insertions/lens?${lensParams(target, { ...dupParam, include_sequences: 'true', consensus: 'false', max_reference: '0' })}`);
+      const res = await fetchJson<LensResponse>(`/api/insertions/lens?${lensParams(target, { ...dupParam, include_sequences: 'true', consensus: 'false', max_reference: '0' })}`, { signal: new AbortController().signal });
+      if (currentResponse.current !== snapshot) return;
+      if (!res.success) throw new Error(res.error || 'Could not fetch the inserts');
       downloadTextFile(insertsFasta(res.carriers, response, reversed), `${fileStem}_inserts.fa`, 'text/x-fasta');
     } catch (err) {
+      if (currentResponse.current !== snapshot) return;
       say(`Could not fetch the inserts: ${String((err as Error)?.message ?? err)}`);
     }
   };
