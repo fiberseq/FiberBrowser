@@ -134,8 +134,8 @@ def validate_live_lift(handle, bam_paths: Iterable[str], haplotypes: Iterable[st
 
 def _check_anchors(handle, out, target_fasta, source_fasta):
     """Spot check up to 16 distributed anchor blocks (at least 200 bp).
-    Blocks in chain_data are anchors; inferred aligned/substitution runs live
-    in the separate fills file and must never serve as assembly evidence.
+    Chain blocks merge exact anchors with inferred fills. Subtract every
+    inferred run before sampling exact spans for assembly identity checks.
     A tiny synthetic map can have fewer than 16; report the actual count.
     Neither a pass nor a skipped check claims proof of assembly identity.
     """
@@ -148,9 +148,22 @@ def _check_anchors(handle, out, target_fasta, source_fasta):
         for ci, chain in enumerate(handle.map.chains):
             if chain["haplotype"] not in out.haplotypes:
                 continue
-            for t, q, n, *_rest in handle.map.chain_data(ci)["blocks"]:
-                if n >= 200:
-                    candidates.append((ci, t, q, n))
+            blocks = handle.map.chain_data(ci)["blocks"]
+            inferred = handle.map.inferred_runs(ci, chain["t_start"], chain["t_end"])
+            j = 0
+            for t, q, n, *_rest in blocks:
+                pos = t
+                while j < len(inferred) and inferred[j][0] + inferred[j][1] <= t:
+                    j += 1
+                k = j
+                while k < len(inferred) and inferred[k][0] < t + n:
+                    a, length, _kind = inferred[k]
+                    if a - pos >= 200:
+                        candidates.append((ci, pos, q + pos - t, a - pos))
+                    pos = max(pos, a + length)
+                    k += 1
+                if t + n - pos >= 200:
+                    candidates.append((ci, pos, q + pos - t, t + n - pos))
         if not candidates:
             out.anchors = {"status": "not checked", "message": "Anchor sequences not checked: no anchor blocks >= 200 bp."}
             return

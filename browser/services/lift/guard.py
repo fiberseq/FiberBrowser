@@ -29,6 +29,7 @@ LIFT_ALLOWED: frozenset = frozenset({
     (_GET, "/api/reads/locate"), (_POST, "/api/reads/locate"),
     # Dataset bookkeeping (list, remove, its assembly report).
     (_DELETE, "/api/datasets/{dataset_id}"), (_GET, "/api/datasets/{dataset_id}/assembly"),
+    (_POST, "/api/datasets/{dataset_id}/refresh_capabilities"),
     # Browser-side read order, filter, highlights and selection (client state, no read access).
     (_GET, "/api/jupyter/order"), (_POST, "/api/jupyter/order"), (_DELETE, "/api/jupyter/order"),
     (_GET, "/api/jupyter/browser_order"), (_POST, "/api/jupyter/browser_order"),
