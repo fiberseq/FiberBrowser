@@ -147,6 +147,9 @@ matched-bridge mismatches. Alternate-allele right flanks start after the replace
 reference span; reference reads align their replaced query segment against that
 allele. Insert-sequence lookup concatenates raw I pieces, excluding matched
 bridges, and uses the raw anchor when locating the source record.
+Minimized and older raw event sizes both locate merged inserts; the returned
+length counts the original inserted bases, which can differ from the canonical
+allele size. A size difference never falls back to a bridge-spanning query slice.
 Canonical alternate-allele consensus uses normalized allele sequences. DAF
 consensus rotates each observation before chemistry-aware alignment, retaining
 its original record, query offset and CT/GA strand. Native lens sequences and

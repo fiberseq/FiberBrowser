@@ -237,7 +237,11 @@ def sv_split_payload(state, *, dataset_id: str, chrom: str, start: int, end: int
 
 def sv_insert_seq_payload(state, *, dataset_id: str, chrom: str, ref: int, read_id: str, q: int,
                           length: int) -> dict:
-    """SEQ ``[q, q+length)`` of the primary record ``read_id`` overlapping ``ref``."""
+    """Inserted source pieces at ``q``; length selects the displayed allele.
+
+    A merged/minimized allele can have a different size from its original I
+    pieces. The response length counts the returned bases, excluding M bridges.
+    """
     q = int(q)
     length = int(length)
     if q < 0 or length <= 0 or length > 1_000_000:
@@ -253,19 +257,31 @@ def sv_insert_seq_payload(state, *, dataset_id: str, chrom: str, ref: int, read_
     # that has this insertion, so a name shared across files resolves right.
     candidates = exact or by_base
 
+    lookup = {}
+    def events_for(read):
+        if id(read) not in lookup:
+            # Older raw glyphs remain addressable after allele minimization.
+            lookup[id(read)] = (extract_sv_events(read, SV_MIN_LEN_LOWEST, reference=getattr(state, 'fasta', None)) or [])
+            lookup[id(read)] += extract_sv_events(read, SV_MIN_LEN_LOWEST) or []
+        return lookup[id(read)]
+
     def has_insertion(read) -> bool:
-        events = extract_sv_events(read, SV_MIN_LEN_LOWEST, reference=getattr(state, 'fasta', None)) or []
-        return any(e.get("t") == "I" and e.get("q") == q for e in events)
+        return any(e.get("t") == "I" and e.get("q") == q for e in events_for(read))
 
     matching = [read for read in candidates if has_insertion(read)] or candidates
     for read in matching:
         seq = read.query_sequence or ""
-        event = next((ev for ev in extract_sv_events(read, SV_MIN_LEN_LOWEST, reference=getattr(state, 'fasta', None)) or []
+        event = next((ev for ev in events_for(read)
                       if ev.get('t') == 'I' and ev['q'] == q and ev['len'] == length and ev.get('raw_pieces')), None)
         if event is not None:
-            inserted = ''.join(seq[p['q']:p['q'] + p['len']] for p in event['raw_pieces'] if p['t'] == 'I')
-            if len(inserted) == length:
-                return {'read_id': read.query_name, 'q': q, 'len': length, 'seq': inserted,
+            pieces = [p for p in event['raw_pieces'] if p['t'] == 'I']
+            if any(p['q'] < 0 or p['q'] + p['len'] > len(seq) for p in pieces):
+                continue
+            inserted = ''.join(seq[p['q']:p['q'] + p['len']] for p in pieces)
+            if len(inserted) > 1_000_000:
+                raise SvRequestError('inserted sequence exceeds the export limit')
+            if inserted:
+                return {'read_id': read.query_name, 'q': q, 'len': len(inserted), 'seq': inserted,
                         'strand': '-' if read.is_reverse else '+'}
         if q + length > len(seq):
             continue

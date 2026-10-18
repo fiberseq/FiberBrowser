@@ -204,3 +204,20 @@ def test_minimization_counts_bridge_bases_that_become_deleted(tmp_path):
     assert (event['t'], event['len'], event['inserted_len'], event['deleted_len']) == ('D', 90, 0, 90)
     assert haplotype(ref, event) == read.query_sequence
     assert extract_sv_events(read, 91, reference=fasta_file(tmp_path, ref)) is None
+
+
+@pytest.mark.parametrize('requested_size', [50, 60])
+def test_merged_insert_export_keeps_raw_pieces_after_minimization(tmp_path, monkeypatch, requested_size):
+    from services import sv_endpoint
+    from types import SimpleNamespace
+    ref = 'C' * 20 + 'G' * 5 + 'T' * 10 + 'C' * 20
+    inserted = 'G' * 5 + 'A' * 25 + 'T' * 30
+    seq = 'C' * 20 + inserted[:30] + 'G' * 5 + inserted[30:] + 'C' * 20
+    rec = _seg([(0, 20), (1, 30), (0, 5), (1, 30), (2, 10), (0, 20)], start=0, seq=seq)
+    fasta = fasta_file(tmp_path, ref)
+    event, = extract_sv_events(rec, 50, reference=fasta)
+    assert event['len'] == 50
+    monkeypatch.setattr(sv_endpoint, '_bam_records', lambda *_a, **_k: [(rec, 'chrT')])
+    out = sv_endpoint.sv_insert_seq_payload(SimpleNamespace(fasta=fasta), dataset_id='synthetic', chrom='chrT',
+                                           ref=20, read_id=rec.query_name, q=20, length=requested_size)
+    assert out['seq'] == inserted and out['len'] == 60
