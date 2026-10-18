@@ -75,9 +75,23 @@ span the primary minus-strand net region.
 
 `grch38` is empty for insertions and populated for SNVs, MNVs and deletions of at most 50 bp,
 using the currently loaded target FASTA; it is null without that reference.
-`alt` uses the optional configured `source_fasta`, otherwise null. An empty
+`alt` uses the optional configured `source_fasta`, otherwise null. It previews
+at most 60 bases in target orientation; `alt_truncated` marks a shorter preview.
+`GET /api/lift/difference_sequence` takes `dataset_id`, `chrom`, a position
+inside the event (`pos`), `item_id`, `offset` (default 0) and `limit` (1–50,000).
+It returns `sequence`, `total` and `next_offset`; follow pages to retrieve the
+full assembly allele without unbounded reads or responses. An empty
 allele is `""`, distinct from unknown/null. The strip never reads BAM records.
 Its bounded geometry cache includes `lift_key`, chromosome, 1 Mb bin and hap.
+
+Inspection resolves primary metadata independently of annotation caches, using
+at most 32 SA point fetches; unsuccessful lookups are never globally cached.
+`hg002` and `ins_id` describe the molecule's own parent. `alignment_hg002` and
+`alignment_ins_id` retain the alignment-contig evidence. `carries_insertion`
+reports observed carriage even on a cross-parent supplementary; this alone
+does not establish the own-parent allele or qualify a carrier for Identify.
+Read-only insertion inspection may omit `item_id`; returned rows carry resolved
+IDs, and sequence selection prefers `lift_hap`. Full read sequence remains opt-in.
 
 `min_bp` filters by `max(ref_bp, alt_bp)`. Views wider than `detail_bp`
 return bins plus individual events of at least 1 kb. A bin counts each event

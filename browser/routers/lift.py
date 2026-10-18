@@ -113,6 +113,15 @@ async def lift_differences(dataset_id: str, chrom: str, start: int = Query(..., 
     return await asyncio.to_thread(build)
 
 
+@router.get("/api/lift/difference_sequence")
+async def lift_difference_sequence(dataset_id: str, chrom: str, item_id: str, pos: int = Query(..., ge=0),
+                                   offset: int = Query(0, ge=0), limit: int = Query(50_000, ge=1, le=50_000),
+                                   state=Depends(get_state)):
+    from services.lift.differences import difference_sequence
+    dataset = _difference_dataset(state, dataset_id, chrom)
+    return await asyncio.to_thread(difference_sequence, dataset, chrom, pos, item_id, offset=offset, limit=limit)
+
+
 @router.get("/api/lift/difference_reads")
 async def lift_difference_reads(dataset_id: str, chrom: str, pos: int = Query(..., ge=0),
                                 end: Optional[int] = Query(None, ge=0), lift_hap: Optional[str] = None,

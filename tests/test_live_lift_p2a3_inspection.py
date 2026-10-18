@@ -36,5 +36,25 @@ def test_cross_parent_insertion_keeps_observed_and_expected_separate(two_hap_evi
     assert row['hap_label'] == 'PAT' and row['hg002'] == ''
     assert row['alignment_hg002'] == 'A'*100
     assert row['carries_insertion'] and row['alignment_ins_id'] == key
-    assert row['allele'] == 'other' and row.get('ins_id') is None
+    assert row['allele'] == 'other' and row.get('ins_id') != key
     assert result['sequence'] is None
+
+
+def test_read_only_insertion_sequence_without_map_id(evidence):
+    state, ds, tmp = evidence
+    ds.paths = [write_bam(tmp / 'read-insertion.bam', lambda h: [
+        make_record(h, 'carrier', MAT, 400, '100M80I100M', seq='A'*100+'G'*80+'A'*100,
+                    tags=[('MD', '200')])])]
+    result = diff.difference_reads(state, ds, TARGET, 1500, 1500, lift_hap='MAT', include_sequence=True)
+    row = result['rows'][0]
+    assert row['carries_insertion'] and row['read_bases_length'] == 80
+    assert row['hg002'] == '' and row['allele'] == 'other'
+    assert result['sequence']['ins_id'] == row['ins_id']
+    assert result['sequence']['sequence'] == 'G'*80
+
+
+def test_omitted_insertion_id_prefers_requested_parent(two_hap_evidence):
+    state, ds, tmp = two_hap_evidence
+    ds.paths = [write_bam(tmp / 'carrier.bam', lambda h: [make_record(h, 'carrier', MAT, 4900, '300M', seq='A'*300, tags=[('MD', '300')])])]
+    result = diff.difference_reads(state, ds, TARGET, 6010, 6010, lift_hap='MAT', include_sequence=True)
+    assert result['sequence'] and result['sequence']['ins_id'].startswith('MAT:')

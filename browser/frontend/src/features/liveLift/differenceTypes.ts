@@ -7,6 +7,7 @@ export interface Difference {
   chain: number | null; strand: '+' | '-' | null;
   src: { contig: string | null; start: number | null; end: number | null };
   grch38: string | null; alt: string | null; t?: 'I' | 'D'; ref?: number; len?: number;
+  alt_truncated?: boolean;
   read_support?: { cluster: number; carriers: number };
 }
 export interface DifferenceBin { start: number; end: number; hap: string; hap_label: string; kind: Difference['kind']; count: number; bp: number }

@@ -269,7 +269,11 @@ def differences_for_region(state, dataset, chrom, start, end, *, lift_hap=None, 
                               fasta_bases(getattr(state, "fasta", None), chrom, item["t_start"], item["t_end"])
                               if item["kind"] in ("snv", "mnv", "deletion") and item["ref_bp"] <= 50 else None)
             src = item["src"]
-            item["alt"] = fasta_bases(source, src["contig"], src["start"], src["end"])
+            a, b = src["start"], src["end"]
+            item["alt_truncated"] = a is not None and b - a > 60
+            if a is not None:
+                a, b = (max(a, b - 60), b) if item["strand"] == "-" else (a, min(b, a + 60))
+            item["alt"] = fasta_bases(source, src["contig"], a, b)
             if item["alt"] is not None and item["strand"] == "-":
                 item["alt"] = revcomp(item["alt"])
     finally:
@@ -277,6 +281,33 @@ def differences_for_region(state, dataset, chrom, start, end, *, lift_hap=None, 
             source.close()
     return dict(dataset_id=dataset.id, lift_key=config.key(), chrom=chrom, start=start, end=end,
                 mode="bins" if broad else "items", items=items, bin_bp=bin_bp, bins=bins, novel=[])
+
+
+def difference_sequence(dataset, chrom, pos, item_id, *, offset=0, limit=50_000):
+    """On-demand assembly sequence in bounded, target-oriented pages."""
+    import pysam
+    from fastapi import HTTPException
+    item = next((d for d in assembly_items_for_region(dataset.live_lift, chrom, pos, pos + 1)
+                 if d["id"] == item_id), None)
+    if item is None:
+        raise HTTPException(404, "Assembly difference not found at this position")
+    src = item["src"]
+    if not dataset.live_lift.source_fasta or src["start"] is None:
+        raise HTTPException(409, "Source assembly sequence unavailable")
+    total = src["end"] - src["start"]
+    if offset > total:
+        raise HTTPException(422, "Sequence offset exceeds allele length")
+    stop = min(total, offset + limit)
+    a, b = ((src["end"] - stop, src["end"] - offset) if item["strand"] == "-"
+            else (src["start"] + offset, src["start"] + stop))
+    with pysam.FastaFile(dataset.live_lift.source_fasta) as source:
+        sequence = fasta_bases(source, src["contig"], a, b)
+    if sequence is None:
+        raise HTTPException(409, "Source assembly sequence unavailable")
+    if item["strand"] == "-":
+        sequence = revcomp(sequence)
+    return dict(item_id=item_id, sequence=sequence, offset=offset, total=total,
+                next_offset=stop if stop < total else None, source="assembly", orientation=item["strand"])
 
 
 def annotate_read_evidence(items, sv_clusters):
@@ -525,7 +556,7 @@ def _record_alleles(record, a, b, source_fasta):
         elif op == 1:
             # Same boundary convention as _SeqRuns.mol_between: an I before
             # base b lies between the first aligned bases at a and b.
-            if a < r <= b:
+            if a < r <= b or a == b == r:
                 bases.append(seq[q:q + n])
                 inserted += n
             q += n
@@ -726,7 +757,7 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
                 if pos == end:
                     full = record.reference_start <= a and record.reference_end >= b
                     length = b - a
-                    carries = full and length > 0 and bool(rb) and abs(len(rb) - length) <= max(length * .1, 50)
+                    carries = full and bool(rb) and (length == 0 or abs(len(rb) - length) <= max(length * .1, 50))
                     own_spans = [s for s in spans if s["hap"] == hap]
                     own = own_spans[0] if len(own_spans) == 1 else None
                     allele = ("no_coverage" if not overlaps else "partial" if not full else
@@ -741,8 +772,9 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
                             chromatin=_chromatin(row, origin, pos, span["strand"]))
                 if pos == end:
                     own_carrier = carries and hap == span["hap"]
-                    if (include_sequence and own_carrier and span["id"] == item_id and len(rb) <= 50_000):
-                        score = (abs(len(rb) - length), bool(record.is_supplementary), record_id)
+                    if (include_sequence and own_carrier and (item_id is None or span["id"] == item_id) and len(rb) <= 50_000):
+                        score = (span["hap"] != preferred if preferred else False,
+                                 abs(len(rb) - length), bool(record.is_supplementary), record_id)
                         if sequence_score is None or score < sequence_score:
                             sequence_score = score
                             selected_sequence = dict(sequence=rb, read_id=record.query_name, record=record_id,
@@ -751,7 +783,7 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
                                 read_bases=rb[:60], read_bases_length=len(rb))
                     if span["kind"] == "insertion":
                         item["alignment_ins_id"] = span["id"]
-                    if own and own["kind"] == "insertion":
+                    if own:
                         item["ins_id"] = own["id"]
                     # At an insertion boundary inspect the hidden block's state
                     # at the first covered base, rather than an unrelated call

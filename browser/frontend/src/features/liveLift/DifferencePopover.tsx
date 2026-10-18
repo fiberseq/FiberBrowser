@@ -51,8 +51,9 @@ export function DifferencePopover({ panel, dataset, anchor }: { panel: PanelConf
     document.addEventListener('keydown', key, true);
     return () => { document.removeEventListener('keydown', key, true); useReadActionsStore.setState({ highlight: prior }); };
   }, [current, model]);
-  const candidate = data?.rows.some(r => r.ins_id === d?.id && r.carries_insertion && (r.read_bases_length ?? r.read_bases.length) <= 50_000);
-  const sequence = data?.sequence?.ins_id === d?.id ? data?.sequence?.sequence : undefined;
+  const candidate = data?.rows.find(r => (d?.source === 'reads' ? r.hap_label === preferredHap && r.ins_id : r.ins_id === d?.id)
+    && r.carries_insertion && (!r.alignment_ins_id || r.alignment_ins_id === r.ins_id) && (r.read_bases_length ?? r.read_bases.length) <= 50_000);
+  const sequence = data?.sequence?.ins_id === (d?.source === 'reads' ? candidate?.ins_id : d?.id) ? data?.sequence?.sequence : undefined;
   const identifyKey = `${dataset.id}|${dataset.live_lift?.key ?? ''}|${current?.chrom ?? ''}|${d?.id ?? ''}`;
   const lens = useMemo<LensResponse | null>(() => !d || !sequence || !current ? null : ({ success: true, dataset_id: dataset.id, chrom: current.chrom, flank: 0,
     site: { pos: d.t_start, tolerance: 0, len_min: d.alt_bp, len_max: d.alt_bp },
@@ -71,7 +72,8 @@ export function DifferencePopover({ panel, dataset, anchor }: { panel: PanelConf
     setFetchingSequence(true); setError('');
     try {
       const result = await getDifferenceReads({ datasetId: dataset.id, liftKey: dataset.live_lift?.key ?? '',
-        chrom: current.chrom, pos: d.t_start, end: d.t_end, itemId: d.id, includeSequence: true }, controller.signal);
+        chrom: current.chrom, pos: d.t_start, end: d.t_end, liftHap: panel.liftHap,
+        itemId: d.source === 'assembly' ? d.id : undefined, includeSequence: true }, controller.signal);
       if (!controller.signal.aborted) { setData(result); setIdentify(true); }
     } catch (e) { if (!controller.signal.aborted) setError(String((e as Error).message ?? e)); }
     finally { if (!controller.signal.aborted) setFetchingSequence(false); }

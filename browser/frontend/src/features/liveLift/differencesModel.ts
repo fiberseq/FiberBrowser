@@ -37,7 +37,7 @@ export function differenceDescription(d: Difference, chrom: string): string {
     : `${chrom}:${(d.t_start + 1).toLocaleString()}–${d.t_end.toLocaleString()}`;
   return `${d.hap_label} · ${d.kind.replace(/_/g, ' ')} · ${differenceSize(d).toLocaleString()} bp · ${d.source === 'reads' ? 'read-only event' : 'assembly difference'}\n`
     + `GRCh38 ${target}\nHG002 ${locus}\n`
-    + `GRCh38: ${d.grch38 ?? 'unknown'} · HG002: ${d.alt ?? 'unknown'}\n`
+    + `GRCh38: ${d.grch38 ?? 'unknown'} · HG002: ${d.alt ?? 'unknown'}${d.alt !== null && d.alt_truncated ? `… (${d.alt_bp.toLocaleString()} bp)` : ''}\n`
     + `${BADGE_REASONS[d.reason] ?? d.reason.replace(/_/g, ' ')}`
     + (d.read_support ? `\nmatches ${d.read_support.carriers} native reads' ${d.kind}` : '');
 }
