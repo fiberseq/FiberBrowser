@@ -400,6 +400,10 @@ class Dataset:
         from services.bigbed_read_loader import load_reads_from_bigbed
         from services.dense_bam_loader import load_reads_from_bam
 
+        if self.data_type == 'bam_livelift':
+            # Dense read tables read the source BAM with target coordinates: refused (services/lift/capability).
+            from services.lift.capability import LiveLiftUnsupported
+            raise LiveLiftUnsupported("dense_reads", self.label)
         if self.data_type == 'bam':
             all_reads = []
             for bam_path in self.paths:
@@ -458,6 +462,8 @@ class Dataset:
             "chemistry_metadata": self.chemistry_metadata,
             # Plasmid maps linked to this BAM's contigs (and what did not match).
             **({"plasmid": self.plasmid_report} if getattr(self, "plasmid_report", None) else {}),
+            # A live-lift dataset's map, haplotypes and settings (services/lift/dataset.py).
+            **({"live_lift": self.live_lift.to_dict()} if getattr(self, "live_lift", None) is not None else {}),
             # Fields a plugin pack attaches to a dataset of its own (plugins/packs.py): name -> value.
             **{k: v for k, v in (getattr(self, "pack_fields", None) or {}).items() if v},
         }

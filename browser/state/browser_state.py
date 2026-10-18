@@ -1033,13 +1033,17 @@ class BrowserState:
         """Translate chromosome name to dataset's actual name."""
         return translate_chrom(chrom, self.chrom_map)
     
-    def add_dataset(self, dataset_id: str, path, label: str = None) -> Dataset:
+    def add_dataset(self, dataset_id: str, path, label: str = None, *, data_type: str = None,
+                    configure=None, detect_chroms=None) -> Dataset:
         """Add a new dataset.
         
         Args:
             dataset_id: Unique identifier for the dataset
             path: Single path (str) or list of paths (list)
             label: Optional display label
+            data_type, configure, detect_chroms: a dataset type set rather than detected, a hook run before it
+                is published, and where an empty state's chromosomes come from instead of the BAM header (a
+                live-lift dataset: services/lift/registration.py)
         """
         # Loading a cached drag-and-drop upload counts as using it, and so do
         # the companion/derived-layer files found next to it.
@@ -1054,8 +1058,10 @@ class BrowserState:
             dataset_id,
             path,
             label,
-            detect_bam_chroms=detect_chroms_from_bam,
+            detect_bam_chroms=detect_chroms or detect_chroms_from_bam,
             detect_bigbed_chroms=self._detect_chroms_from_bigbed,
+            data_type=data_type,
+            configure=configure,
         )
         mark_uploads_used(dataset_file_paths(dataset))
         # A plasmid BAM: load the map its header names, and link its contigs to

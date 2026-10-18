@@ -100,6 +100,8 @@ def collect_assigned_feature_rows(
     query: AnalysisReadQuery | None = None,
 ) -> tuple[list[np.ndarray], list[tuple[str, str]], list[int]]:
     """Build feature rows for reads that already have cluster assignments."""
+    from services.lift.capability import require_for_ids
+    require_for_ids(state, dataset_ids, "clustering")
     include_methylation = cluster_modes_need_methylation(peak_modes)
     include_layers = cluster_modes_need_layers(peak_modes)
     requested_layers = cluster_modes_requested_layers(peak_modes)

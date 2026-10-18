@@ -433,5 +433,7 @@ def dataset_identity(state, dataset_ids) -> tuple:
     for dataset_id in dataset_ids or ():
         dataset = state.get_dataset(dataset_id) if hasattr(state, "get_dataset") else None
         paths = list(getattr(dataset, "paths", None) or ([getattr(dataset, "path", None)] if getattr(dataset, "path", None) else []))
-        out.append((str(dataset_id), dataset_generation(state, dataset_id), file_identity(paths)))
+        from services.lift.reads import lift_identity
+        out.append((str(dataset_id), dataset_generation(state, dataset_id), file_identity(paths),
+                    *lift_identity(dataset)))
     return tuple(out)

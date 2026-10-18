@@ -400,7 +400,8 @@ def _source_identity(dataset) -> tuple:
             identity.append((str(path), stat.st_mtime_ns, stat.st_size))
         except (OSError, TypeError, ValueError):
             identity.append((str(path),))
-    return (getattr(dataset, "id", None), getattr(dataset, "data_type", None), tuple(identity))
+    from services.lift.reads import lift_identity
+    return (getattr(dataset, "id", None), getattr(dataset, "data_type", None), tuple(identity), *lift_identity(dataset))
 
 
 def get_fire_payload(state, *, chrom: str, start: int, end: int) -> dict:
@@ -477,6 +478,7 @@ def get_coverage_payload(
     bins: int = 1000,
     dataset_id: Optional[str] = None,
     include_duplicates: bool = False,
+    lift_hap: Optional[str] = None,
 ) -> dict:
     original_chrom = chrom
     chrom = state.translate_chrom(chrom)
@@ -516,7 +518,8 @@ def get_coverage_payload(
     # Topology too: an interior window has the same (no) query segments either
     # way, but a circular contig's coverage counts wrapped tails.
     from services.signal_evidence import signal_filter_key
-    cache_key = (signal_filter_key(state), tuple(_source_identity(d) for d in datasets_to_query), chrom, start, end, bins,
+    cache_key = (signal_filter_key(state), tuple(_source_identity(d) for d in datasets_to_query), lift_hap,
+                 chrom, start, end, bins,
                  tuple(query_segments or ()), circular_topology_token(state, chrom), bool(include_duplicates),
                  tuple((d_id, tuple(sorted(l.items()))) for d_id, l in links.items() if l))
 
@@ -528,6 +531,25 @@ def get_coverage_payload(
             log_coverage_diagnostic(f"  [Coverage] Cache hit (age={now - cached_time:.0f}s)")
             return cached_result
 
+    from services.lift.capability import is_lifted
+    lifted = [d for d in datasets_to_query if is_lifted(d)]
+    native = [d for d in datasets_to_query if not is_lifted(d)]
+    if lifted:
+        # Live-lift datasets: counted from their lifted rows, with correspondence for hatching
+        # (services/lift/reads.lifted_coverage); native datasets in the same request add as reads.
+        from services.lift.reads import lifted_coverage
+        parts = [lifted_coverage(d, chrom, start, end, bins, lift_hap=lift_hap,
+                                 include_duplicates=bool(include_duplicates)) for d in lifted]
+        result = (compute_binned_read_coverage(native, chrom, start, end, bins, bam_handle_getter=get_bam_handle,
+                                               bigbed_handle_getter=get_bigbed_handle, query_segments=query_segments,
+                                               circular=is_circular_chrom(state, chrom), contig_links=links,
+                                               include_duplicates=bool(include_duplicates))
+                  if native else {"coverage": [0] * bins, "max": 0})
+        total = [a + sum(p["coverage"][i] for p in parts) for i, a in enumerate(result["coverage"])]
+        result = {**result, "coverage": total, "max": max(total) if total else 0,
+                  "live_lift": parts[0]["live_lift"] if len(parts) == 1 else {"datasets": [p["live_lift"] for p in parts]}}
+        _coverage_cache[cache_key] = (result, now)
+        return result
     result = compute_binned_read_coverage(
         datasets_to_query,
         chrom,

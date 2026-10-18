@@ -42,6 +42,21 @@ def _fasta_context(ctx, fasta_path):
     describe_fasta_context(ctx, fasta_path)
 
 
+def _lift_entry(dataset):
+    from services.lift.registration import session_entry
+    return session_entry(dataset)
+
+
+def _lift_owns(entry):
+    from services.lift.registration import owns_session_entry
+    return owns_session_entry(entry)
+
+
+def _lift_restore(state, entry):
+    from services.lift.registration import restore_from_session
+    return restore_from_session(state, entry)
+
+
 def register(api: PackAPI) -> None:
     # Alt-allele datasets (an insertion's carriers on its alternate allele). Entries an older lab build marked
     # ``"pack": "lab"`` are claimed here too (the restorer is asked before the marker).
@@ -50,5 +65,9 @@ def register(api: PackAPI) -> None:
     api.dataset_restorer(DatasetRestorer(owns=lambda entry: bool(entry.get("alt_allele")), restore=_alt_restore,
                                          finish=_alt_reattach, label="alt allele"))
     api.fasta_context(_fasta_context)
+    # Live-lift datasets (services/lift): a session keeps their map, haplotypes and settings; they reopen through the
+    # lift path (refused with an "enable live lift" notice while the flag is off), never as plain BAMs.
+    api.dataset_session_entry(_lift_entry)
+    api.dataset_restorer(DatasetRestorer(owns=_lift_owns, restore=_lift_restore, label="live lift"))
     # Sessions saved before references were marked: an alt allele's contig is rebuilt with its dataset.
     api.session_reference_filter(lambda kind, key, source: kind == "panel_genome" and key.startswith("fasta:alt_"))

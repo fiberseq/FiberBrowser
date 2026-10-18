@@ -246,6 +246,8 @@ def _coacc_scope(
         include_layers=layer is not None,
         requested_layers=requested_layers,
     )
+    from services.lift.capability import require_for_ids
+    require_for_ids(state, query.dataset_ids, "coaccessibility")
     width = max(0, int(query.region_width))
     if bin_size > 0:
         actual_bin_size = int(bin_size)

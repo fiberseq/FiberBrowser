@@ -598,6 +598,15 @@ def _load_broad_reads(
         {} if short_terminal_footprint_bp is None
         else {"short_terminal_footprint_bp": int(short_terminal_footprint_bp)}
     )
+    if dataset.data_type == "bam_livelift":
+        # A live-lift dataset: its source records lifted onto this region (services/lift/reads.py), every
+        # row (unsampled, unfiltered): the broad cache, working sets and crops below handle them as reads.
+        from services.lift.reads import lifted_reads_for_region
+        return lifted_reads_for_region(dataset, chrom, broad_start, broad_end, dict(
+            include_methylation=include_methylation, ml_threshold=ml_threshold, include_layers=include_layers,
+            requested_layers=requested_layers, include_layer_qualities=include_layer_qualities,
+            infer_legacy_layers=infer_legacy_layers, legacy_nuc_min_size=legacy_nuc_min_size,
+            min_footprints=min_footprints, **terminal_option, **(bam_read_options or {})))
     if dataset.data_type == "bam":
         from services.read_sampling import SampledReads, Sampler, sampling
         # A sampled display load parses only the reads whose name hash is in
@@ -1009,7 +1018,7 @@ def geometry_filter(layer_key: LayerKey):
         return None
 
     def include(name: str) -> bool:
-        if name == 'intervals':
+        if name in ('intervals', 'live_lift'):
             return True
         if name == 'fire':
             return layer_key_includes(layer_key, 'fire', 'msp')
@@ -1366,6 +1375,10 @@ def project_broad_read_to_viewport(
     ):
         if identity_key in read:
             adjusted_read[identity_key] = read[identity_key]
+    if "live_lift" in read:
+        # A live-lift row: its segments, connectors and badges and its per-call lists, cut like its intervals.
+        from services.lift.reads import crop_live_lift
+        crop_live_lift(read, adjusted_read, viewport_offset, region_width)
 
     if include_methylation and read.get("methyl"):
         adjusted_read["methyl"] = _project_positions(read["methyl"], viewport_offset, region_width)
@@ -1431,6 +1444,8 @@ def project_broad_read_to_viewport(
         visible_annotations = list(adjusted_read.get("fire") or [])
         for layer in (adjusted_read.get("layers") or {}).values():
             visible_annotations.extend(layer.get("intervals") or [])
+        # A live-lift row seen only through a body segment or a badge is still drawn.
+        visible_annotations.extend([s[0], s[1]] for s in (adjusted_read.get("live_lift") or {}).get("segments") or ())
         if not visible_annotations:
             return None, False
         neutral_start = min(int(iv[0]) for iv in visible_annotations)

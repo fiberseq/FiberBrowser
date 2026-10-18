@@ -74,8 +74,18 @@ class AnalysisReadQuery:
         infer_legacy_layers: Optional[bool] = None,
         legacy_nuc_min_size: Optional[int] = None,
         strand_by_dataset: Optional[Mapping[str, str]] = None,
+        capability: str = "analysis",
     ) -> "AnalysisReadQuery":
         resolved_dataset_ids = resolve_dataset_ids(state, dataset_ids=dataset_ids, dataset_id=dataset_id)
+        # Live-lift datasets support the display paths only (services/lift/capability.py, default-deny): an
+        # analysis naming one is refused (409); one over "every dataset" leaves them out.
+        from services.lift.capability import SUPPORTED, is_lifted, require_for_ids
+        if capability not in SUPPORTED:
+            if dataset_ids is None and dataset_id is None:
+                datasets = getattr(state, "datasets", {}) or {}
+                resolved_dataset_ids = [d for d in resolved_dataset_ids if not is_lifted(datasets.get(d))]
+            else:
+                require_for_ids(state, resolved_dataset_ids, capability)
         from services.read_strand import normalize_strand
         strands = {str(k): s for k, v in (strand_by_dataset or {}).items() if (s := normalize_strand(v))}
         if strands:

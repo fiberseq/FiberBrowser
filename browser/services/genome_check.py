@@ -260,6 +260,13 @@ def check_dataset(state, dataset_id: str, *, reference: Optional[dict] = None,
     reference = reference if reference is not None else loaded_reference(state)
     can_load = _can_load_genomes() if can_load is None else can_load
     label = str(getattr(dataset, "label", None) or dataset_id)
+    if getattr(dataset, "data_type", None) == "bam_livelift":
+        # Aligned to another assembly by design and drawn through its map; checked when it was opened
+        # (services/lift/validate.py), never against the main genome's contigs.
+        return {"dataset_id": dataset_id, "label": label, "data_type": "bam_livelift", "status": "match",
+                "severity": "ok", "message": None, "live_lift": True,
+                "reference": {"label": reference["label"], "assembly": reference["assembly"],
+                              "kind": reference["kind"]}}
     header = dataset_header(dataset)
     contigs: list[Contig] = header["contigs"]
     fp = fingerprint(contigs, labels=header["labels"])

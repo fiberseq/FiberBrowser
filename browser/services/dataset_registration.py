@@ -578,26 +578,33 @@ def add_dataset_to_state(
     *,
     detect_bam_chroms: Callable[[str], list],
     detect_bigbed_chroms: Callable[[str], list],
+    data_type: str | None = None,
+    configure: Callable[[Dataset], None] | None = None,
 ) -> Dataset:
     """Add a dataset to BrowserState while preserving legacy side effects.
 
     Slow work first, outside the state lock (services/genome_loading lock order): the file inspection and, when
     the state has no chromosomes yet, the header's. Then, under the lock: a unique id (also against ids reserved
     by other registrations in flight), the dataset published with its order entry, and the chromosomes only if
-    they are still empty (a FASTA or genome loaded meanwhile wins)."""
+    they are still empty (a FASTA or genome loaded meanwhile wins).
+
+    ``data_type``: set instead of detected (a live-lift dataset, ``bam_livelift``); ``configure(dataset)``
+    runs after its layers are configured, before it is published."""
     from services.genome_loading import state_lock
     primary_path, is_bam = validate_dataset_source(path)
     lock = state_lock(state)
     with lock:
         dataset_id = unique_dataset_id(dataset_id, {**state.datasets, **dict.fromkeys(_reserved(state))})
         _reserved(state).add(dataset_id)
-    dataset = Dataset(dataset_id, path, label)
+    dataset = Dataset(dataset_id, path, label, data_type=data_type)
     try:
         try:
             if is_bam:
                 configure_bam_dataset_layers(dataset, primary_path)
             else:
                 configure_bigbed_dataset_layers(state, dataset_id, dataset, primary_path)
+            if configure is not None:
+                configure(dataset)
             detect = detect_bam_chroms if is_bam else detect_bigbed_chroms
             chroms = None if state.chroms else detect(primary_path)
             while True:

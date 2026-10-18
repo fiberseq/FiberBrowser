@@ -404,22 +404,34 @@ class FetchPlan:
     budget_bp: int
 
     def pieces_by_contig(self) -> dict:
-        return {c.contig: c.pieces for c in self.contigs}
+        """Every selected piece by source contig (composition uses them all,
+        also those whose source no window fetches)."""
+        out: dict = {}
+        for p in self.selection.pieces:
+            out.setdefault(p.source, []).append(p)
+        return {contig: sorted(ps, key=lambda p: (p.q_start, p.q_end)) for contig, ps in out.items()}
 
 
-def plan_fetch(selection: PieceSelection, settings: LiftSettings) -> FetchPlan:
+def plan_fetch(selection: PieceSelection, settings: LiftSettings, fetch_range: Optional[tuple] = None) -> FetchPlan:
     """Source windows for a selection (§3.2): per source contig, pieces in
     source order; consecutive pieces of one chain merge whatever the gap,
     others when the source gap is at most ``window_merge``. Refuses (413) more
-    than 64 windows or more source bp than ``max(8 x view, 400 kb)``."""
+    than 64 windows or more source bp than ``max(8 x view, 400 kb)``.
+    ``fetch_range``: target ``(start, end)`` whose records are wanted; only
+    pieces overlapping it make windows (the margin's pieces still compose the
+    records fetched), so a wide output region is not tripled."""
     by_contig: dict = {}
     for p in selection.pieces:
         by_contig.setdefault(p.source, []).append(p)
     contigs, total, n_windows = [], 0, 0
     for contig in sorted(by_contig):
         pieces = sorted(by_contig[contig], key=lambda p: (p.q_start, p.q_end))
+        fetch = pieces if fetch_range is None else [p for p in pieces if p.t_end > fetch_range[0]
+                                                    and p.t_start < fetch_range[1]]
+        if not fetch:
+            continue
         windows, last_chain = [], None
-        for p in pieces:
+        for p in fetch:
             if windows and (p.chain == last_chain or p.q_start - windows[-1][1] <= settings.window_merge):
                 windows[-1][1] = max(windows[-1][1], p.q_end)
             else:
@@ -575,7 +587,8 @@ def decode_source_records(bam_paths: Iterable[str], plan: FetchPlan, *, loader_o
 def load_lifted_rows(handle: LiftMapHandle, bam_paths: Iterable[str], chrom: str, start: int, end: int, *,
                      haplotypes: Iterable[str], settings: LiftSettings, dataset_id: str,
                      loader_options: Optional[dict] = None, budget: Optional[LoadBudget] = None,
-                     bam_handle_getter=None, use_cache: bool = True, sampler=None) -> LiftedLoad:
+                     bam_handle_getter=None, use_cache: bool = True, sampler=None,
+                     output_region: Optional[tuple] = None) -> LiftedLoad:
     """Every lifted row of target view ``[start, end)`` plus its selection
     margin: selection -> plan -> source decode -> primary metadata -> lift.
     Rows are relative to, and clipped to, the selection range
@@ -586,7 +599,11 @@ def load_lifted_rows(handle: LiftMapHandle, bam_paths: Iterable[str], chrom: str
     (``loader_options`` must not ask for read ids or spanning).
     ``haplotypes``: keys or labels (``MAT``/``PAT``); unknown ones raise.
     ``sampler``: the separate sampled path (``decode_source_records``); the
-    load then reports ``counts['sampled']`` and its estimate."""
+    load then reports ``counts['sampled']`` and its estimate.
+    ``output_region``: target ``(start, end)`` the display paths want rows in
+    (relative to its start, clipped to it, rows with nothing there left out),
+    instead of the selection range; only records reaching it are fetched, and
+    the margin still composes them."""
     from services.lift.compose import lift_compact_reads
 
     bam_paths = list(bam_paths)
@@ -594,7 +611,7 @@ def load_lifted_rows(handle: LiftMapHandle, bam_paths: Iterable[str], chrom: str
     key = lift_key(handle, haplotypes, settings)
     selection = select_pieces(handle, chrom, start, end, haplotypes=haplotypes, settings=settings, key=key,
                               use_cache=use_cache)
-    plan = plan_fetch(selection, settings)
+    plan = plan_fetch(selection, settings, fetch_range=output_region)
     budget = budget or LoadBudget()
     counts: dict = {}
     if all("://" not in str(p) for p in bam_paths):
@@ -606,14 +623,25 @@ def load_lifted_rows(handle: LiftMapHandle, bam_paths: Iterable[str], chrom: str
         counts["sampled"] = {"level": int(sampler.level), "estimated": True}
     molecules = resolve_primary_metadata(handle, decoded, settings=settings, counts=counts,
                                          bam_handle_getter=bam_handle_getter)
-    rows = lift_compact_reads(decoded, plan, handle=handle, region_start=selection.start,
-                              region_end=selection.end, settings=settings,
+    r0, r1 = output_region if output_region is not None else (selection.start, selection.end)
+    rows = lift_compact_reads(decoded, plan, handle=handle, region_start=r0,
+                              region_end=r1, settings=settings,
                               key=key, dataset_id=dataset_id, molecules=molecules, counts=counts,
                               loader_options=loader_options,
                               molecule_groups=settings.molecule_group_map(bam_paths, dataset_id))
+    if output_region is not None:
+        rows = [r for r in rows if row_touches_region(r, r1 - r0)]
     counts["records_decoded"] = len(decoded)
     counts["truncated"] = bool(budget.truncated)
-    return LiftedLoad(rows, selection, plan, counts, budget.truncated, key, selection.start, selection.end)
+    return LiftedLoad(rows, selection, plan, counts, budget.truncated, key, r0, r1)
+
+
+def row_touches_region(row: dict, width: int) -> bool:
+    """Whether a lifted row (relative coordinates) has a body segment or a badge in ``[0, width)``."""
+    ll = row.get("live_lift") or {}
+    if any(s[1] > 0 and s[0] < width for s in ll.get("segments") or ()):
+        return True
+    return any(0 <= b[0] <= width for b in ll.get("badges") or ())
 
 
 # ── Primary metadata (§3.5) ─────────────────────────────────────────────────

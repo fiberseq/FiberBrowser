@@ -326,6 +326,29 @@ install_validation_error_handler(app)
 from services.remote_sources.base import RemoteReadError as _RemoteReadError
 
 
+from services.lift.capability import LiveLiftUnsupported as _LiveLiftUnsupported
+from services.lift.live_lift import LiftRefused as _LiftRefused
+from services.lift.registration import LiveLiftDisabled as _LiveLiftDisabled
+
+
+@app.exception_handler(_LiveLiftUnsupported)
+async def _live_lift_unsupported(_request, exc):
+    """An analysis that does not support live-lift datasets (services/lift/capability.py): 409 and one notice."""
+    return _NanSafeJSONResponse({"detail": str(exc), "error": str(exc), "notice": str(exc),
+                                 "live_lift_unsupported": exc.feature}, status_code=409)
+
+
+@app.exception_handler(_LiftRefused)
+async def _live_lift_refused(_request, exc):
+    """A lifted view that cannot be served whole (too many source windows or bp: zoom in)."""
+    return _NanSafeJSONResponse({"detail": str(exc), "error": str(exc), "notice": str(exc)}, status_code=exc.status)
+
+
+@app.exception_handler(_LiveLiftDisabled)
+async def _live_lift_disabled(_request, exc):
+    return _NanSafeJSONResponse({"detail": str(exc), "error": str(exc)}, status_code=404)
+
+
 @app.exception_handler(_RemoteReadError)
 async def _remote_read_error(_request, exc):
     """A remote file's connection broke mid-read: 502 with the reason (the

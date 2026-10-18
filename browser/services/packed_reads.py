@@ -42,6 +42,10 @@ def read_geometry_groups(read):
     """A compact read's geometry by group: its own intervals, its FIRE calls and each annotation layer's."""
     yield 'intervals', read.get('intervals') or []
     yield 'fire', read.get('fire') or []
+    if 'live_lift' in read:
+        # A live-lift row's body segments and badges (services/lift/reads.geometry_intervals).
+        from services.lift.reads import geometry_intervals
+        yield 'live_lift', geometry_intervals(read)
     for name, layer in (read.get('layers') or {}).items():
         yield name, (layer.get('intervals') or []) if isinstance(layer, dict) else []
 

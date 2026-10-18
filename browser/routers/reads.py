@@ -81,6 +81,7 @@ async def get_reads_compact(
     strand: Optional[str] = Query(None, pattern="^(CT|GA|ct|ga|both|BOTH)?$",
                                   description="DAF-seq: only reads from this strand (CT or GA), by their deamination marks"),
     pin_ids: Optional[str] = Query(None, description="Comma-separated read IDs the display sample keeps when they are in view (a read gone to by name)"),
+    lift_hap: Optional[str] = Query(None, description="Live lift: only this haplotype's rows (MAT/PAT or a map haplotype key; a split panel's rule)"),
     min_sv_len: int = Query(50, description="Smallest deletion/insertion/clip (bp) reported in each read's `sv` events and the `sv_summary`"),
     include_sv_seq: bool = Query(False, description="Add the first 1,000 inserted bases to each `sv` insertion event"),
     include_sv_summary: bool = Query(True, description="Add `sv_summary`: SV clusters across the reads in view"),
@@ -153,6 +154,7 @@ async def get_reads_compact(
         sample_seed=sample_seed,
         strand=strand,
         pin_ids=pin_ids,
+        lift_hap=unwrap_query_default(lift_hap, None),
         min_sv_len=min_sv_len,
         include_sv_seq=include_sv_seq,
         include_sv_summary=include_sv_summary,
@@ -216,6 +218,7 @@ async def get_reads_compact_all(
     requested_layers = normalize_requested_layers(layer_names)
     query = AnalysisReadQuery.from_request(
         state,
+        capability="compact_all",
         chrom=chrom,
         start=start,
         end=end,
@@ -242,6 +245,9 @@ async def get_reads_compact_all(
     update_current_viewport(state, chrom, start, end)
     
     def _build_dataset(dataset_id: str, dataset_query, dataset_min_footprints: int):
+        from services.lift.capability import is_lifted
+        # Live-lift datasets: no metaprofile and no SV summary in v1 (services/lift/capability.py).
+        lifted = is_lifted(state.datasets.get(dataset_id))
         return compact_all_dataset_result(
             state=state,
             query=dataset_query,
@@ -261,7 +267,8 @@ async def get_reads_compact_all(
             fill_gap_size=fill_gap_size,
             min_fp_quality=min_fp_quality,
             min_footprints=dataset_min_footprints,
-            include_metaprofile=include_metaprofile if dataset_min_footprints == min_footprints else False,
+            include_metaprofile=(include_metaprofile if dataset_min_footprints == min_footprints else False)
+            and not lifted,
             profile_max_reads=profile_max_reads,
             coverage_sample=coverage_sample,
             hide_terminal_gaps=hide_terminal_gaps,
@@ -271,7 +278,7 @@ async def get_reads_compact_all(
             include_duplicates=include_duplicates,
             sample_seed=sample_seed,
             min_sv_len=min_sv_len,
-            include_sv_summary=include_sv_summary,
+            include_sv_summary=include_sv_summary and not lifted,
         )
 
     from services.read_pins import parse_pin_ids, pinned_reads

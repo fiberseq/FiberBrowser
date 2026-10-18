@@ -207,7 +207,8 @@ def needs_direct_read_load(
     include_sv_seq: bool = False,
 ) -> bool:
     """Return True when the request cannot use the standard working-set path."""
-    is_bam = getattr(dataset, "data_type", None) == "bam"
+    from services.lift.capability import is_bam_backed
+    is_bam = is_bam_backed(dataset)
     needs_bam_data = is_bam and (include_cigar or min_fp_quality > 0)
     return (
         needs_bam_data
@@ -475,6 +476,7 @@ def _compact_reads_payload(
     full_working_set: bool = False,
     viewport_start: Optional[int] = None,
     viewport_end: Optional[int] = None,
+    lift_hap: Optional[str] = None,
 ) -> dict:
     """Build the `/api/reads/compact` payload for one dataset.
 
@@ -484,6 +486,15 @@ def _compact_reads_payload(
     min_sv_len = normalize_min_sv_len(unwrap_query_default(min_sv_len, SV_MIN_LEN_DEFAULT))
     include_sv_seq = query_bool(include_sv_seq, False)
     include_sv_summary = query_bool(include_sv_summary, True)
+    lift_hap = unwrap_query_default(lift_hap, None) or None
+    from services.lift.capability import is_lifted
+    lifted_dataset = is_lifted(state.datasets.get(dataset_id)) if dataset_id else False
+    if lifted_dataset:
+        # A live-lift panel: no SV summary (its connectors are not SVs; capability table §3.10).
+        include_sv_summary = False
+    else:
+        lift_hap = None  # a haplotype rule means nothing to a native dataset
+    from services.lift.reads import filter_lift_hap
     sv_floor = sv_extraction_floor(min_sv_len)
     from services.read_strand import cached_read_strand, filter_reads_by_strand, normalize_strand, strand_calls, strand_totals
     strand = normalize_strand(unwrap_query_default(strand, None))
@@ -506,6 +517,7 @@ def _compact_reads_payload(
     requested_metaprofile_layers = normalize_requested_layers(metaprofile_layers) or requested_layers
     query = AnalysisReadQuery.from_request(
         state,
+        capability="compact_reads",
         chrom=chrom,
         start=start,
         end=end,
@@ -780,6 +792,9 @@ def _compact_reads_payload(
         if strand:
             # A one-strand panel's counts are that strand's reads.
             all_reads = filter_reads_by_strand(all_reads, strand, calls)
+        if lift_hap:
+            # A haplotype split panel's counts are that haplotype's rows.
+            all_reads = filter_lift_hap(all_reads, lift_hap)
         view_wraps = bool(circular_chrom_size(state, chrom)) and circular_region_wraps(
             start, end, circular_chrom_size(state, chrom))
 
@@ -899,6 +914,8 @@ def _compact_reads_payload(
                 not quality_filters_for_display_layers(active_quality_filters(state), layer_key) and not active_consensus
                 and not circular_chrom_size(state, chrom)
                 and layer_key is not None and set(layer_key) <= {'nuc', 'tf', 'footprint'}
+                # The client re-projects from intervals only: live-lift geometry would be left unshifted.
+                and not lifted_dataset
             )
         if direct_sampling:
             payload['working_sampling'] = direct_sampling
@@ -915,7 +932,7 @@ def _compact_reads_payload(
         else 0
     )
     # Read filters (IDs, cluster focus, strand) need the full working set before sampling.
-    use_broad_cache = filter_id_set or (focus_clusters and cluster_assignments) or strand
+    use_broad_cache = filter_id_set or (focus_clusters and cluster_assignments) or strand or lift_hap
     metaprofile = None
     metaprofile_read_count = 0
 
@@ -970,6 +987,11 @@ def _compact_reads_payload(
                 total_overlapping, total_spanning = strand_totals(
                     working_set.reads, stranded, working_set.total_overlapping, end - start)
                 reads_to_sample = stranded
+            if lift_hap:
+                one_hap = filter_lift_hap(reads_to_sample, lift_hap)
+                total_overlapping, total_spanning = strand_totals(
+                    reads_to_sample, one_hap, total_overlapping, end - start)
+                reads_to_sample = one_hap
             if focus_clusters and cluster_assignments:
                 reads_to_sample = filter_reads_by_cluster_focus(
                     reads_to_sample,
@@ -1015,6 +1037,8 @@ def _compact_reads_payload(
 
                 # A one-strand panel's counts are that strand's reads.
                 if strand and cached_read_strand(read, calls) != strand:
+                    continue
+                if lift_hap and not filter_lift_hap([read], lift_hap):
                     continue
 
                 total_overlapping_in_viewport += 1
@@ -1234,6 +1258,8 @@ def _compact_reads_payload(
         payload["_region_reuse_safe"] = (
             not active_quality_filters(state) and not active_consensus
             and not circular_chrom_size(state, chrom)
+            # The client re-projects from intervals only: live-lift geometry would be left unshifted.
+            and not lifted_dataset
         )
     return payload
 

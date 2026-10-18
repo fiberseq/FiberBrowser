@@ -45,6 +45,7 @@ from routers.tracks import router as tracks_router
 from routers.utility import router as utility_router
 from routers.version import router as version_router
 from routers.workspaces import router as workspaces_router
+from routers.lift import router as lift_router
 
 API_ROUTERS = (
     jupyter_router,
@@ -89,6 +90,7 @@ API_ROUTERS = (
     lab_router,
     remote_router,
     session_links_router,
+    lift_router,
 )
 
 

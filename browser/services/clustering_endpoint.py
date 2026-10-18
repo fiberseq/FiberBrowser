@@ -888,6 +888,8 @@ def run_cluster_projection_endpoint(
 
     chrom = state.translate_chrom(chrom)
     dataset_ids = resolve_dataset_ids(state, dataset_ids=req.dataset_ids)
+    from services.lift.capability import require_for_ids
+    require_for_ids(state, dataset_ids, "clustering")  # live-lift datasets: P2b
     if not dataset_ids:
         return {"error": "No datasets"}
     cluster_rule_context = build_cluster_rule_context(state, chrom, start, end)
@@ -1155,6 +1157,8 @@ def run_cluster_all_endpoint(
     from services.cluster_assignment import check_cluster_method
     check_cluster_method(req.method)  # before any reads are loaded
     dataset_ids = resolve_dataset_ids(state, dataset_ids=req.dataset_ids)
+    from services.lift.capability import require_for_ids
+    require_for_ids(state, dataset_ids, "clustering")  # live-lift datasets: P2b
     log_clustering_diagnostic(
         f"Clustering: method={req.method}, k={req.k}, peaks={len(req.peak_regions)}, datasets={dataset_ids}"
     )
@@ -1561,6 +1565,8 @@ def run_assign_to_clusters_endpoint(
     spanning: bool,
 ) -> Dict[str, Any]:
     """Assign viewport reads to stored cluster patterns for dynamic clustering."""
+    from services.lift.capability import require_for_ids
+    require_for_ids(state, req.dataset_ids, "clustering")  # live-lift datasets: P2b
     t0 = time.time()
     sample_seed = normalize_sample_seed(req.sample_seed)
 

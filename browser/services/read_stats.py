@@ -68,6 +68,8 @@ def compute_read_stats(
         sample_seed=request.sample_seed,
         include_methylation=True,
     )
+    from services.lift.capability import require_for_ids
+    require_for_ids(state, query.dataset_ids, "read_stats")
     sample_seed = query.sample_seed
     # The main view's selection, then any selected in panels at another locus
     # (each looked up at its own region); one aggregate over all of them.

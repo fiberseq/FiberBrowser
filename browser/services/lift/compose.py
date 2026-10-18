@@ -937,6 +937,9 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
         "call_parts": call_parts,
         "dropped": dropped,
     }
+    # Geometry clipped to the region, as intervals are (a broad-cache crop gives the same).
+    from services.lift.reads import clip_geometry
+    payload["live_lift"] = clip_geometry(payload["live_lift"], 0, width)
     return payload
 
 

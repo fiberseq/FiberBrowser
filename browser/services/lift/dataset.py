@@ -1,0 +1,62 @@
+"""Live-lift datasets (``data_type='bam_livelift'``, DESIGN_LIVE_LIFT.md §2.1):
+source BAM(s) drawn on the main genome through a graphlift sidecar.
+
+Behind the flag ``FIBERBROWSER_LIVE_LIFT`` (off: the routes answer 404 and
+the frontend shows no entry point; a session holding a lifted dataset says so).
+"""
+from __future__ import annotations
+
+import os
+from typing import Iterable, Optional
+
+from services.lift.live_lift import LiftSettings, lift_key, open_lift_map
+
+FLAG_ENV = "FIBERBROWSER_LIVE_LIFT"
+
+
+def live_lift_enabled() -> bool:
+    return os.environ.get(FLAG_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+class LiveLiftConfig:
+    """A lifted dataset's map, haplotypes and advanced settings."""
+
+    def __init__(self, manifest: str, haplotypes: Iterable[str], settings: Optional[LiftSettings] = None):
+        self.manifest = os.path.abspath(os.path.expanduser(manifest))
+        self.settings = settings or LiftSettings()
+        self.haplotypes = self.handle.resolve_haplotypes(list(haplotypes) or self.handle.haplotypes)
+
+    @property
+    def handle(self):
+        """The shared map handle (reopened when the sidecar changes)."""
+        return open_lift_map(self.manifest)
+
+    def key(self) -> str:
+        return lift_key(self.handle, self.haplotypes, self.settings)
+
+    def labels(self) -> dict:
+        labels = self.handle.haplotype_labels
+        return {hap: labels.get(hap, hap) for hap in self.haplotypes}
+
+    def to_dict(self) -> dict:
+        handle = self.handle
+        return {
+            "manifest": self.manifest,
+            "map_label": os.path.basename(self.manifest),
+            "haplotypes": list(self.haplotypes),
+            "haplotype_labels": self.labels(),
+            "available_haplotypes": {hap: handle.haplotype_labels.get(hap, hap) for hap in handle.haplotypes},
+            "settings": self.settings.as_dict(),
+            "key": self.key(),
+            "source_assembly": _source_assembly(handle),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "LiveLiftConfig":
+        return cls(data["manifest"], data.get("haplotypes") or (), LiftSettings.from_dict(data.get("settings")))
+
+
+def _source_assembly(handle) -> str:
+    graph = handle.manifest.get("graph") or {}
+    name = graph.get("name") if isinstance(graph, dict) else None
+    return name or "source assembly"

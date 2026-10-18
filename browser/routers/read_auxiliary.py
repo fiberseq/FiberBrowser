@@ -198,10 +198,13 @@ async def get_coverage(
     bins: int = Query(1000),
     dataset_id: Optional[str] = Query(None),
     include_duplicates: bool = Query(False),
+    lift_hap: Optional[str] = Query(None, description="Live lift: one haplotype's coverage (a split panel)"),
     state=Depends(get_state),
 ):
     """Return binned read counts across a region (duplicate-flagged molecules
-    only with ``include_duplicates``, as the read panel shows them)."""
+    only with ``include_duplicates``, as the read panel shows them). A live-lift
+    dataset's payload adds ``live_lift``: per-haplotype depth and correspondence
+    (hatching where a bin has no correspondence)."""
     # Reads every alignment in the region (3.3 s for 5 Mb of the E02 DddB BAM):
     # off the event loop.
     return await asyncio.to_thread(
@@ -213,6 +216,7 @@ async def get_coverage(
         bins=bins,
         dataset_id=dataset_id,
         include_duplicates=include_duplicates,
+        lift_hap=lift_hap,
     )
 
 
