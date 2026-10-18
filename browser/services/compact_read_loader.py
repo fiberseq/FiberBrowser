@@ -2192,6 +2192,10 @@ def _build_compact_reads_from_bam_region(
                             read_data["methyl"] = [e[0] for e in deam_events]
                         _profile_add("mark_parse", phase_t0)
                     if include_cigar:
+                        if include_lift_meta:
+                            read_data["_fiberbrowser_sequence"] = read.query_sequence
+                            read_data["_fiberbrowser_md"] = read.get_tag("MD") if read.has_tag("MD") else None
+                            read_data["_fiberbrowser_sequence_lead"] = lift_call_meta[1]
                         phase_t0 = _profile_start()
                         cigar_events = extract_cigar_events(read, region_start, region_end)
                         if cigar_events:
@@ -2515,6 +2519,10 @@ def _build_compact_reads_from_bam_region(
                 _profile_add("mark_parse", phase_t0)
 
             if include_cigar:
+                if include_lift_meta:
+                    read_data["_fiberbrowser_sequence"] = read.query_sequence
+                    read_data["_fiberbrowser_md"] = read.get_tag("MD") if read.has_tag("MD") else None
+                    read_data["_fiberbrowser_sequence_lead"] = lift_call_meta[1]
                 phase_t0 = _profile_start()
                 cigar_events = extract_cigar_events(read, region_start, region_end)
                 if cigar_events:
@@ -2741,7 +2749,10 @@ def lift_meta_fields(read, coord_mapper, call_meta, *, interval_calls=None, fire
     ``_fiberbrowser_primary``: ``{is_supplementary, sa}``;
     ``_fiberbrowser_lift_record``: ``{contig, reverse, length}``;
     ``_fiberbrowser_edge_qualities``: ``{call_id: [lq, rq]}`` of ns/nl calls;
-    ``_fiberbrowser_legacy``: what legacy layer inference after lifting needs."""
+    ``_fiberbrowser_legacy``: what legacy layer inference after lifting needs.
+    Only with include_cigar the loader also retains ``_fiberbrowser_sequence``,
+    ``_fiberbrowser_md`` and ``_fiberbrowser_sequence_lead`` (leading hard-clip
+    length), so live lift can compare view bases with the target FASTA."""
     length, lead, reverse = call_meta
     runs = []
     for q0, q1, offset in zip(coord_mapper._aligned_starts, coord_mapper._aligned_ends,

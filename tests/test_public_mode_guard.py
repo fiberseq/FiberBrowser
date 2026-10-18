@@ -13,6 +13,7 @@ PUBLIC_DENIED = {
     # itself is harmless but is a host feature too).
     ("GET", "/api/lift/enabled"), ("GET", "/api/lift/inspect"), ("POST", "/api/lift/datasets"),
     ("POST", "/api/lift/datasets/{dataset_id}/settings"),
+    ("GET", "/api/lift/differences"), ("GET", "/api/lift/difference_reads"),
     # Cross-region correspondence analyses are local workspace operations.
     ("POST", "/api/cluster-regions"), ("POST", "/api/scan-correspondence"),
     ("GET", "/api/app/performance"), ("POST", "/api/app/performance"),

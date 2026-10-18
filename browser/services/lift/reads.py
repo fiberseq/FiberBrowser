@@ -20,7 +20,8 @@ from typing import Iterable, Optional
 _PASSED_OPTIONS = ("include_methylation", "ml_threshold", "include_layers", "requested_layers",
                    "include_layer_qualities", "infer_legacy_layers", "legacy_nuc_min_size", "min_footprints",
                    "short_terminal_footprint_bp", "hide_terminal_gaps", "terminal_gap_threshold",
-                   "include_duplicates", "sv_min_len", "include_sv_seq", "min_fp_quality")
+                   "include_duplicates", "sv_min_len", "include_sv_seq", "min_fp_quality", "include_cigar",
+                   "target_fasta")
 
 
 def is_lifted(dataset) -> bool:
@@ -40,7 +41,7 @@ def lift_identity(dataset) -> tuple:
 
 
 def lifted_reads_for_region(dataset, chrom: str, start: int, end: int, options: Optional[dict] = None,
-                            counts_out: Optional[dict] = None, *, sampler=None) -> list:
+                            counts_out: Optional[dict] = None, *, sampler=None, bam_handle_getter=None) -> list:
     """Lifted rows of ``[start, end)`` on the main genome, relative to
     ``start`` and clipped to it, as the BAM loader returns them; every row (no
     spanning, id, strand, haplotype or cap filter)."""
@@ -51,10 +52,12 @@ def lifted_reads_for_region(dataset, chrom: str, start: int, end: int, options: 
     if chrom not in handle.map.targets:
         return []
     loader_options = {k: v for k, v in (options or {}).items() if k in _PASSED_OPTIONS and v is not None}
+    loader_options["source_fasta"] = getattr(config, "source_fasta", None)
     budget = LoadBudget()
     load = load_lifted_rows(handle, list(dataset.paths), chrom, int(start), int(end), haplotypes=config.haplotypes,
                             settings=config.settings, dataset_id=dataset.id, loader_options=loader_options,
-                            output_region=(int(start), int(end)), sampler=sampler, budget=budget)
+                            output_region=(int(start), int(end)), sampler=sampler, budget=budget,
+                            bam_handle_getter=bam_handle_getter)
     if load.truncated:
         # Never publish or cache a partial cohort as though it were complete.
         limit = (f"{budget.max_bytes / (1024 * 1024):g} MB" if budget.bytes >= budget.max_bytes
@@ -83,7 +86,12 @@ def clip_geometry(ll: dict, offset: int, width: int) -> dict:
         if b > 0 and a < width:
             cons.append([max(a, 0), min(b, width)])
     out["connectors"] = cons
-    out["badges"] = [[b[0] - offset, *b[1:]] for b in ll.get("badges") or () if 0 <= b[0] - offset <= width]
+    badges, ids = ll.get("badges") or [], ll.get("badge_ids") or []
+    kept = [i for i, b in enumerate(badges) if 0 <= b[0] - offset <= width]
+    out["badges"] = [[badges[i][0] - offset, *badges[i][1:]] for i in kept]
+    out["badge_ids"] = [ids[i] if i < len(ids) else None for i in kept]
+    out["insertions"] = {key: (dict(value, pos=value["pos"] - offset) if "pos" in value else dict(value))
+                         for key, value in (ll.get("insertions") or {}).items() if key in out["badge_ids"]}
     return out
 
 

@@ -333,6 +333,7 @@ def load_direct_reads_for_dataset(
         # Spanning is judged by the loaders on the alignment's extent: with
         # terminal gaps hidden, a read's intervals start at its first footprint.
         bam_read_options=dict(
+            **({"target_fasta": getattr(state, "fasta", None)} if dataset.data_type == "bam_livelift" else {}),
             spanning_only=spanning_only,
             min_fp_quality=min_fp_quality,
             include_cigar=include_cigar,

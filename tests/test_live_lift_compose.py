@@ -103,7 +103,7 @@ def test_minus_row_formulas_insertions_and_edge_swaps(toy):
     # The two insertion-only calls: zero-width markers at B(7350) = 13650, ids kept apart.
     assert pos == [([13650, 13650, 3], "ns:1"), ([13650, 13650, 3], "ns:2"), ([13670, 13790, 120], "ns:0")]
     assert r["qualities"] == [6, 7, 5]
-    assert r["cigar"] == [{"type": "I", "pos": 13650, "len": 5, "seq": "TACGT"}]
+    assert r["cigar"] == [{"type": "I", "pos": 13650, "len": 5, "seq": "TACGT", "source": "reads"}]
     assert r["methyl_m6a"] == [13795]  # T(7204) = 13999 - 204
     nuc = r["layers"]["nuc"]
     assert nuc["intervals"] == [[13670, 13790, 120]]
@@ -115,7 +115,7 @@ def test_minus_deletion_span_and_sv(toy):
     # [7600, 7660) on '-': [T(7659), T(7600)+1) = [13340, 13400).
     assert [e for e in r["sv"] if e["t"] == "D"][0]["ref"] == 13340
     assert [e for e in r["sv"] if e["t"] == "D"][0]["len"] == 60
-    assert {"type": "D", "pos": 13340, "len": 60} in r["cigar"]
+    assert {"type": "D", "pos": 13340, "len": 60, "source": "reads"} in r["cigar"]
 
 
 def test_rejoined_call_shares_id_but_never_spans_the_connector(toy):
@@ -149,7 +149,10 @@ def test_sv_deletion_on_plus_and_no_connectors_in_sv(toy):
     for row in load.rows:
         assert all(e["t"] in ("D", "I", "S") for e in row.get("sv", ()))
     (plus,) = _rows(load, "plus")
-    assert "sv" not in plus  # the connector is not an SV
+    # The source-only gap is assembly insertion evidence; the target-only
+    # connector remains geometry, never a read deletion.
+    assert plus["sv"] == [{"t": "I", "ref": 6010, "len": 100, "source": "assembly", "hap": "MAT",
+                           "ins_id": f"MAT:{MAT}:5000-5100:insertion"}]
 
 
 def test_identity_components(toy):

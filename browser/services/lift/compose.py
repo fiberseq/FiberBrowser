@@ -33,6 +33,8 @@ reverse-complemented, clip sides swap).
 from __future__ import annotations
 
 import bisect
+import copy
+from contextlib import ExitStack
 
 import numpy as np
 
@@ -154,6 +156,7 @@ class _Row:
         self.joinable = []       # joinable[k]: frags k and k+1 rejoin calls
         self.inner = []          # inner[k]: (dq, dt) between frags k, k+1 of one run, else None
         self.badges, self.connectors = [], []
+        self.badge_sources = []  # source spans parallel to badges; never part of analysis geometry
 
     def add_run(self, run, rejoin_bp):
         span = self.frags[-1].span + 1 if self.frags else 0
@@ -262,6 +265,7 @@ class _Ctx:
         self.labels = handle.haplotype_labels if handle is not None else {}
         self.molecule_groups = {}
         self._gap_cache = {}
+        self.loader_options = opts
 
     def count(self, name, n=1):
         self.counts[name] = self.counts.get(name, 0) + n
@@ -322,10 +326,15 @@ def lift_compact_reads(reads, plan, *, handle, region_start, region_end, setting
         by_contig[contig] = (pieces, [p.q_start for p in pieces])
     haps = {p.hap for pieces, _starts in by_contig.values() for p in pieces}
     out = []
-    for i, read in enumerate(reads):
-        if not i & 255:
-            checkpoint()
-        out.extend(_lift_read(read, by_contig, haps, ctx))
+    with ExitStack() as stack:
+        ctx.source_fasta = None
+        if ctx.loader_options.get("include_cigar") and ctx.loader_options.get("source_fasta"):
+            import pysam
+            ctx.source_fasta = stack.enter_context(pysam.FastaFile(ctx.loader_options["source_fasta"]))
+        for i, read in enumerate(reads):
+            if not i & 255:
+                checkpoint()
+            out.extend(_lift_read(read, by_contig, haps, ctx))
     return out
 
 
@@ -433,6 +442,7 @@ def _row_geometry(row, contig, runs, ctx):
         if dq > 0:
             pos = prev.t0 if f.minus else prev.t1
             row.badges.append([pos, ctx.gap_reason(contig, prev.e), runs.mol_between(prev.e, f.s), dq, "I"])
+            row.badge_sources.append((prev.e, f.s, prev.p))
 
 
 def _outside_badges(rows, contig, rs, re_, runs, haps, ctx):
@@ -471,6 +481,7 @@ def _outside_badges(rows, contig, rs, re_, runs, haps, ctx):
             if where[1] is not None:
                 badge.append(where[1])
             row.badges.append(badge)
+            row.badge_sources.append((u0, u1, f.p))
 
 
 # ── Field mapping ───────────────────────────────────────────────────────────
@@ -694,7 +705,7 @@ def _map_cigar(events, row, base, ctx):
                 dropped += 1
                 continue
             if 0 <= hit[1] - rs0 < width:
-                new = dict(ev, pos=hit[1] - rs0)
+                new = dict(ev, pos=hit[1] - rs0, source="reads")
                 if row.strand == "-" and ev.get("seq"):
                     new["seq"] = revcomp(ev["seq"])
                 out.append(new)
@@ -705,8 +716,9 @@ def _map_cigar(events, row, base, ctx):
             for t0, t1, _k in parts:
                 c0, c1 = max(t0 - rs0, 0), min(t1 - rs0, width)
                 if c1 > c0:
-                    out.append(dict(ev, pos=c0, len=c1 - c0))
-        # Mismatches (M/X) are source-relative: not emitted in v1 (§3.6).
+                    out.append(dict(ev, pos=c0, len=c1 - c0, source="reads"))
+        # Native M/X are relative to HG002. row_mismatches compares SEQ/MD
+        # with the loaded target FASTA and emits the target-relative X markers.
     out.sort(key=lambda e: (e["pos"], e.get("type", "")))
     return out, dropped
 
@@ -725,13 +737,13 @@ def _map_sv(events, row, ctx):
             if not parts:
                 dropped += 1
             for t0, t1, _k in parts:
-                out.append(dict(ev, ref=t0, len=t1 - t0))
+                out.append(dict(ev, ref=t0, len=t1 - t0, source="reads"))
             continue
         hit = row.boundary(int(ev["ref"]))
         if hit is None:
             dropped += 1
             continue
-        new = dict(ev, ref=hit[1])
+        new = dict(ev, ref=hit[1], source="reads")
         if row.strand == "-":
             if t == "I" and ev.get("seq"):
                 new["seq"] = revcomp(ev["seq"])
@@ -880,6 +892,10 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
     if "cigar" in read:
         payload["cigar"], d = _map_cigar(read["cigar"], row, base, ctx)
         dropped["events"] += d
+    if ctx.loader_options.get("include_cigar") and ctx.loader_options.get("target_fasta") is not None:
+        from services.lift.differences import row_mismatches
+        payload.setdefault("cigar", []).extend(row_mismatches(read, row, ctx))
+        payload["cigar"].sort(key=lambda e: (e["pos"], e["type"]))
     if "_fiberbrowser_terminal_gaps" in read:
         gaps_t = []
         for a, b in read["_fiberbrowser_terminal_gaps"]:
@@ -936,14 +952,78 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
         "segments": [[s0 - rs0, s1 - rs0, chain, strand, primary] for s0, s1, chain, strand, primary in row.segments],
         "connectors": [[c0 - rs0, c1 - rs0] for c0, c1 in sorted(row.connectors)],
         "badges": [[b[0] - rs0, *b[1:]] for b in sorted(row.badges, key=lambda b: b[0])],
+        "badge_ids": [],
+        "insertions": {},
         "calls": call_ids,
         "call_parts": call_parts,
         "dropped": dropped,
     }
+    _insertion_payloads(read, row, contig, runs, call_lo, payload, ctx)
     # Geometry clipped to the region, as intervals are (a broad-cache crop gives the same).
     from services.lift.reads import clip_geometry
     payload["live_lift"] = clip_geometry(payload["live_lift"], 0, width)
     return payload
+
+
+def _insertion_payloads(read, row, contig, runs, call_lo, payload, ctx):
+    """Retain hidden source calls for expansion, isolated from all target geometry.
+
+    ``badge_ids`` parallels sorted ``badges`` (null for spans below 50 bp).
+    ``insertions[id]`` is ``{pos, hap_label, src:[contig,a,b], length, mol_bp,
+    orientation, covered:[x0,x1], intervals:[[x0,x1,size],...], layers:{...},
+    qualities?, fire?, methyl_m6a?, methyl_m5c?, deam?, possible_deam_*?}``.
+    Positions are insertion-local in target display order; ``pos`` alone is
+    row-relative. ``covered`` allows partial carriers of the same full map gap.
+    Over 50 kb the value is only ``{length, too_large:true}``. The synthetic
+    row reuses the composer so gaps/MSPs, qualities and deletion cuts obey
+    exactly the same rules as target calls, without entering the target row.
+    """
+    from services.lift.differences import difference_id, insertion_span
+
+    ll = payload["live_lift"]
+    for i in sorted(range(len(row.badges)), key=lambda i: row.badges[i][0]):
+        badge = row.badges[i]
+        a, b, p = row.badge_sources[i]
+        a, b = insertion_span(ctx.handle, contig, a, b, p.chain)
+        label = ctx.labels.get(p.hap, p.hap)
+        ins_id = difference_id(label, contig, a, b, "insertion")
+        length = b - a
+        ll["badge_ids"].append(ins_id if length >= 50 else None)
+        lo, hi = max(a, int(read["reference_start"])), min(b, int(read["reference_end"]))
+        mol_bp = runs.mol_between(lo, hi)
+        # A mapping badge is independent evidence that this read carries the
+        # assembly insertion. Elsewhere projections are navigation, not an SV.
+        if badge[1] != "elsewhere" and mol_bp >= int(ctx.loader_options.get("sv_min_len", 50)):
+            payload.setdefault("sv", []).append({"t": "I", "ref": badge[0], "len": mol_bp,
+                                                  "source": "assembly", "hap": label, "ins_id": ins_id})
+        if length < 50:
+            continue
+        if length > 50_000:
+            ll["insertions"][ins_id] = {"length": length, "too_large": True}
+            continue
+        local_ctx = copy.copy(ctx)
+        local_ctx.region_start, local_ctx.region_end, local_ctx.width = 0, length, length
+        # The synthetic block is not a target locus; never compare it to hg38.
+        local_ctx.loader_options = dict(ctx.loader_options, include_cigar=False)
+        local = _Row(row.strand, row.alt)
+        local.add_run([_Frag(lo, hi, p._replace(q_start=a, q_end=b, t_start=0, t_end=length))], ctx.settings.rejoin_bp)
+        local.index()
+        _row_geometry(local, contig, runs, local_ctx)
+        hidden = _row_payload(read, local, "insertion", 0, 1, contig, runs, call_lo, local_ctx)
+        keep = ("intervals", "qualities", "layers", "fire", "deam", *_POINT_FIELDS)
+        block = {k: hidden[k] for k in keep if k in hidden}
+        covered = [lo - a, hi - a] if row.strand == "+" else [b - hi, b - lo]
+        if row.strand == "-":
+            # Expansion coordinates mirror boundaries x -> length-x, including
+            # point marks, so source offset 10 in a 100 bp block is x=90.
+            for key in _POINT_FIELDS:
+                if key in block:
+                    block[key] = [x + 1 for x in block[key]]
+            if "deam" in block:
+                block["deam"] = [[x + 1, *rest] for x, *rest in block["deam"]]
+        block.update(pos=badge[0] - ctx.region_start, hap_label=label, src=[contig, a, b], length=length,
+                     mol_bp=mol_bp, orientation=row.strand, covered=covered)
+        ll["insertions"][ins_id] = block
 
 
 def _infer_legacy(read, layers, payload, parts, mapped, ids, keys, logical, cuts, legacy, row, ctx,

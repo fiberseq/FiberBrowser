@@ -493,7 +493,8 @@ def decoded_size_estimate(read: dict) -> int:
     for layer in (read.get("layers") or {}).values():
         if isinstance(layer, dict):
             n += 2 * len(layer.get("intervals") or ())
-    return 512 + 32 * n
+    sequence_bytes = sum(len(read.get(k) or "") for k in ("_fiberbrowser_sequence", "_fiberbrowser_md"))
+    return 512 + 32 * n + sequence_bytes
 
 
 def estimate_lifted_reads(bam_paths: Iterable[str], plan: FetchPlan, **kwargs) -> Optional[float]:
@@ -564,6 +565,8 @@ def decode_source_records(bam_paths: Iterable[str], plan: FetchPlan, *, loader_o
     from services.read_edge_cache import EdgeFetchUnsupported
 
     options = dict(loader_options or {})
+    for internal in ("target_fasta", "source_fasta", "detail_view"):
+        options.pop(internal, None)
     options.update(_FIXED_LOADER_OPTIONS, include_supplementary=bool(include_supplementary))
     if bam_handle_getter is not None:
         options["bam_handle_getter"] = bam_handle_getter
@@ -608,6 +611,7 @@ def load_lifted_rows(handle: LiftMapHandle, bam_paths: Iterable[str], chrom: str
     the margin still composes them."""
     from services.lift.compose import lift_compact_reads
 
+    loader_options = dict(loader_options or {}, detail_view=(int(start), int(end)))
     bam_paths = list(bam_paths)
     haplotypes = handle.resolve_haplotypes(haplotypes)
     key = lift_key(handle, haplotypes, settings)

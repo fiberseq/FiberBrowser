@@ -82,6 +82,33 @@ def write_toy_sidecar(directory) -> str:
     return path
 
 
+def write_difference_sidecar(directory) -> str:
+    """The toy plus SNV/MNV/aligned interiors and a 100 bp minus insertion.
+    Separate fixture keeps the original v3.1 geometry assertions unchanged.
+    """
+    path = write_toy_sidecar(directory)
+    data_path = os.path.join(directory, "toy.t0.chrT.json.gz")
+    with gzip.open(data_path, "rt") as fh:
+        data = json.load(fh)
+    minus = [[12000, 1000, 900], [12900, 2000, 1000]]
+    data["blocks"]["1"] = minus
+    data["gaps"]["1"] = _gaps(minus, ["source_insertion"])
+    replacement = [[8000, 9100, 200], [8203, 9305, 200]]
+    data["blocks"]["3"] = replacement
+    data["gaps"]["3"] = _gaps(replacement, ["aligned_indel"])
+    with gzip.open(data_path, "wt") as fh:
+        json.dump(data, fh)
+    with open(path) as fh:
+        manifest = json.load(fh)
+    manifest["chains"][1] = _chain("c1", "H#1", 0, "-", minus, SSIZE)
+    manifest["chains"][3] = _chain("c3", "H#1", 0, "+", replacement, SSIZE)
+    with open(path, "w") as fh:
+        json.dump(manifest, fh)
+    with gzip.open(os.path.join(directory, "toy.t0.chrT.fills.json.gz"), "wt") as fh:
+        json.dump({"target": TARGET, "fills": {"0": [[1100, 1, 1], [1110, 3, 1], [1200, 20, 2]]}}, fh)
+    return path
+
+
 def make_record(header, name, contig, pos, cigar, seq_len=None, *, reverse=False, flag=0, tags=(), seq=None):
     rec = pysam.AlignedSegment(header)
     rec.query_name = name
