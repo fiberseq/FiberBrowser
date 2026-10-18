@@ -14,6 +14,19 @@ import {
 import { X } from '../ui/Icons';
 import { splitOpened, splitRowNote } from '../../utils/panelExtensions';
 import { formatShare } from '../../utils/denominators';
+import type { SvSplitDef } from '../../stores/svSlice';
+
+export function SvSplitCounts({ def }: { def: SvSplitDef }) {
+  const evidence = def.evidenceCounts;
+  return <p className="text-[11px] text-ink-secondary" data-testid="split-panels-sv-counts"
+    title="All molecules in view; confirmed plus reference are informative, with weaker evidence counted separately">
+    {evidence ? <>
+      Confirmed: {formatShare(evidence.confirmed, evidence.confirmed + def.counts[1], 'informative reads', { pct: true })}
+      {' · '}{evidence.putative.toLocaleString()} putative · {evidence.ambiguous.toLocaleString()} ambiguous
+    </> : <>Carriers: {formatShare(def.counts[0], def.counts[0] + def.counts[1], 'informative reads', { pct: true })}</>}
+    {' '}(all {(def.counts[0] + def.counts[1] + def.counts[2]).toLocaleString()} reads in view; the SV row counts loaded reads only).
+  </p>;
+}
 
 export function SplitPanelsDialogHost() {
   const pending = useSplitPanelStore(s => s.pending);
@@ -119,13 +132,7 @@ function SplitPanelsDialog() {
                   </li>
                 ))}
               </ul>
-              {svDef && (
-                <p className="text-[11px] text-ink-secondary" data-testid="split-panels-sv-counts"
-                  title="Every read in view (the server classifies them all); the SV row above the reads counts only the reads loaded for drawing">
-                  Carriers: {formatShare(svDef.counts[0], svDef.counts[0] + svDef.counts[1], 'informative reads', { pct: true })}
-                  {' '}(all {(svDef.counts[0] + svDef.counts[1] + svDef.counts[2]).toLocaleString()} reads in view; the SV row counts loaded reads only).
-                </p>
-              )}
+              {svDef && <SvSplitCounts def={svDef} />}
               {notes.map(({ row, note }) => (
                 <p key={row.key} className="text-[11px] font-medium text-violet-700 dark:text-violet-300" data-testid="split-panels-row-note">
                   {row.label}: {note}
