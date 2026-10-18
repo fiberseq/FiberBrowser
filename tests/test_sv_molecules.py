@@ -130,3 +130,61 @@ def test_circular_clipping_preserves_supplementary_bundles():
     clipped = _clip_part_before(read, 50)
     assert clipped['supplementary'] and clipped['sv_alignments'] == read['sv_alignments']
     assert clipped['sv_evidence'] == []
+
+
+def test_collection_bounds_live_raw_records_before_the_first_bundle():
+    import weakref
+    from services.sv_molecules import molecule_bundles
+    class Tracked(pysam.AlignedSegment):
+        pass
+    live = weakref.WeakSet()
+    peak = 0
+    header = _seg([(0, 100)]).header
+    def records():
+        nonlocal peak
+        for i in range(600):
+            read = Tracked(header)
+            read.query_name = f'molecule-{i}'
+            read.query_sequence = 'A' * 100
+            read.reference_id = 0
+            read.reference_start = i
+            read.cigartuples = [(0, 100)]
+            live.add(read)
+            peak = max(peak, len(live))
+            yield read
+    bundles = molecule_bundles(records(), lambda _: True)
+    assert next(bundles)[0].query_name == 'molecule-0'
+    assert peak <= 2  # raw records are serialized immediately, never a regional list
+    bundles.close()
+
+
+def test_collection_checks_cancellation_before_consuming_the_region():
+    import threading
+    from services.background_work import Cancelled, cancel_scope
+    from services.sv_molecules import molecule_bundles
+    token = threading.Event()
+    consumed = 0
+    def records():
+        nonlocal consumed
+        for i in range(1000):
+            consumed += 1
+            if i == 10:
+                token.set()
+            yield _seg([(0, 100)])
+    with cancel_scope(token), pytest.raises(Cancelled):
+        next(molecule_bundles(records(), lambda _: True))
+    assert 10 < consumed <= 257
+
+
+def test_selection_and_molecule_budgets_apply_during_collection():
+    from services.sv_molecules import molecule_bundles, MoleculeBudgetError
+    read = _seg([(0, 10000)])
+    # A rejected molecule cannot consume even one byte of the raw-record budget.
+    skipped = []
+    assert list(molecule_bundles([read], lambda _: True, keep=lambda _: False,
+                                on_skipped=lambda *extent: skipped.append(extent), raw_budget_bytes=1)) == []
+    assert skipped == [(read.reference_start, read.reference_end)]
+    with pytest.raises(MoleculeBudgetError):
+        list(molecule_bundles([read], lambda _: True, raw_budget_bytes=1))
+    with pytest.raises(MoleculeBudgetError):
+        list(molecule_bundles([read], lambda _: True, max_groups=0))

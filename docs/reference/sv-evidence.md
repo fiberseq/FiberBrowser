@@ -66,7 +66,13 @@ unexpected molecular-frame policy/import failures. Missing optional policy
 imports retain declared-header geometry on both strands.
 
 All eligible primary and supplementary records fetched in the window contribute
-to a molecule bundle. A deterministic primary anchor is preferred; if no primary
+to a molecule bundle. Collection checkpoints cancellation every 256 records,
+applies name sampling/selection budgets before retaining records, and losslessly
+spools selected alignments to temporary storage. Only one molecule's raw records
+are materialized at a time. A 64 MiB serialized-record budget per molecule and a
+250,000-molecule index budget fail explicitly rather than returning partial
+evidence. Temporary storage closes on completion, cancellation and budget errors.
+A deterministic primary anchor is preferred; if no primary
 is local, a supplementary anchor supplies the row. Distinct primary source
 occurrences retain their existing display identities for consensus overlays;
 they still contribute once to SV counts and one molecule evidence bundle.
@@ -139,5 +145,5 @@ neutral rows: truncated SEQ cannot prove the whole-molecule annotation frame for
 every layer. They expose CIGAR/segment evidence and no chromatin or modification
 marks; positive footprint quality/count gates exclude these unsafe rows.
 Circular clipping preserves their supplementary status and alignment bundles.
-Server-side job cancellation, uncapped exports,
+Uncapped exports,
 and a persistent cross-window variant catalogue remain outside this change.

@@ -1938,7 +1938,7 @@ def _build_compact_reads_from_bam_region(
         from services.background_work import checkpoint
         from services.read_sampling import active_sampler
         sampler = active_sampler()
-        if sampler is not None and sampler.level <= 0:
+        if sampler is not None and sampler.level <= 0 and sampler.only_ids is None:
             sampler = None
         records_seen = 0
         from services.signal_windows import SignalWindow
@@ -1959,8 +1959,23 @@ def _build_compact_reads_from_bam_region(
             if signal_window is not None and not record.is_supplementary:
                 signal_window.append(record, evidence)
             return signal_keeps(evidence) and (include_duplicates or not getattr(record, 'is_duplicate', False))
+        selected_molecules = 0
+        def keep_molecule(name):
+            nonlocal selected_molecules
+            if partition is not None:
+                from services.read_sampling import name_hash
+                if name_hash(name) % partition[1] != partition[0]:
+                    return False
+            if sampler is not None:
+                if not sampler.keep(name):
+                    return False
+                if sampler.max_records is not None and selected_molecules >= sampler.max_records:
+                    return False
+            selected_molecules += 1
+            return True
         for read, molecule_records in molecule_alignments(
-                iter_edge_records(bam, actual_chrom, region_start, region_end, fetch_regions), eligible_segment):
+                iter_edge_records(bam, actual_chrom, region_start, region_end, fetch_regions), eligible_segment,
+                keep=keep_molecule, on_skipped=sampler.skip if sampler is not None else None):
             records_seen += 1
             if not records_seen & 255:
                 checkpoint()  # a background job whose client went away stops here
@@ -1972,10 +1987,6 @@ def _build_compact_reads_from_bam_region(
                 continue
             if lift_hidden is not None and lift_hidden(read):
                 continue
-            if partition is not None:
-                from services.read_sampling import name_hash
-                if name_hash(read.query_name) % partition[1] != partition[0]:
-                    continue
             signal_evidence = record_signal(read, signal_provenance)
             if not signal_keeps(signal_evidence):
                 continue
@@ -1983,10 +1994,6 @@ def _build_compact_reads_from_bam_region(
             # name after signal eligibility; a skipped read leaves its extent.
             if sampler is not None:
                 counted = include_duplicates or not read.is_duplicate
-                if not sampler.keep(read.query_name):
-                    if counted:
-                        sampler.skip(read.reference_start, read.reference_end)
-                    continue
                 if counted:
                     sampler.kept(read.reference_start, read.reference_end)
             is_duplicate = bool(getattr(read, "is_duplicate", False))
@@ -2623,7 +2630,8 @@ def _build_compact_reads_from_bam_region(
 
     except Exception as exc:
         from services.bam_tags import FramePolicyError
-        if isinstance(exc, FramePolicyError):
+        from services.sv_molecules import MoleculeBudgetError
+        if isinstance(exc, (FramePolicyError, MoleculeBudgetError)):
             raise
         from services.packed_reads import bounded_analysis
         if stream is not None or fetch_regions is not None or bounded_analysis.get():
