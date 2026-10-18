@@ -869,7 +869,7 @@ def find_clusters(
     for c in summary["clusters"]:
         if c["t"] != "I" or c["len"] < min_len or not (start <= c["ref"] < end):
             continue
-        out.append({**c, "carriers": c["support"]})
+        out.append({**c, "carriers": c["support"] + c.get("putative", 0)})
     return out
 
 

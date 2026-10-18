@@ -81,3 +81,20 @@ def test_genotypes_at_distant_svs_and_snps():
     assert _groups(loose) == {"101 G · roo+ · hobo?": 1, f"101 A · roo{M} · hobo?": 1, "101 ? · roo? · hobo+": 1,
                               f"101 G · roo+ · hobo{M}": 1, "Not informative": 1}
     assert loose["covering"] == 1 and loose["placed"] == 4
+
+
+def test_combined_genotypes_default_to_putative_and_label_evidence_separately(sv_state, monkeypatch):
+    from services import sv_endpoint
+    records = [dict(id='confirmed', reference_start=6000, reference_end=18000,
+                    sv=[dict(t='I', ref=10000, len=100, q=4000)]),
+               dict(id='putative', reference_start=6000, reference_end=10000,
+                    sv=[dict(t='S', side='R', ref=10000, len=100, q=4000)])]
+    monkeypatch.setattr(sv_endpoint, 'scan_view', lambda *_: records)
+    kwargs = dict(svs=[dict(t='I', ref=10000, len=100, name='INS')])
+    default = _payload(sv_state, **kwargs)
+    carrier = next(g for g in default['groups'] if g['kind'] == 'combo')
+    assert carrier['count'] == 2 and '1 confirmed, 1 putative' in carrier['label']
+    assert carrier['evidence_counts'] == dict(confirmed=1, putative=1, ambiguous=0)
+    assert default['sv_evidence_levels'] == dict(confirmed='confirmed', putative='putative')
+    strict = _payload(sv_state, **kwargs, include_putative=False)
+    assert next(g for g in strict['groups'] if g['kind'] == 'not-informative')['count'] == 1

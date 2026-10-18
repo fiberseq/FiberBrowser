@@ -1,6 +1,6 @@
 import { validateMatchedState } from '../utils/matchedRegions';
 import { normalizeSignalFilters } from '../utils/signalFilters';
-import { normalizeClusterGroupLabels, normalizeSvSplits } from './svSlice';
+import { normalizeSvCarrierEvidence, normalizeClusterGroupLabels, normalizeSvSplits } from './svSlice';
 import { clampMinSvLen, SV_MIN_LEN_DEFAULT, clampMinSvSupport, SV_MIN_SUPPORT_DEFAULT } from '../components/tracks/read-track/svDrawing';
 import { normalizeFeatureRefs } from './featureStore';
 import { normalizePinnedMotifs } from '../utils/pinnedMotifs';
@@ -281,6 +281,7 @@ export interface SerializedState {
   clusterAssignments: Record<string, Record<string, number>>;
   /** SV allele splits, per state key (stores/svSlice.ts); absent in older snapshots. */
   svSplits?: Record<string, unknown>;
+  svCarrierEvidence?: Record<string, unknown>;
   /** Names a group source gave cluster ids, per state key; absent in older snapshots. */
   clusterGroupLabels?: Record<string, Record<number, string>>;
   /** SV display settings (fb-n9-sv); absent in older snapshots. */
@@ -576,7 +577,7 @@ const DATASET_ID_FIELDS = new Set(['datasetId', 'sourceDatasetId', 'datasetIds',
 const DATASET_KEYED_RECORDS = new Set([
   'selectedClusters', 'clusterAssignments', 'clusterOrder', 'readSortOrder', 'filteredReadIds',
   'readFilterSources', 'clusterFocus', 'readStateDetails', 'readScrollOffsets', 'selectedReadIds',
-  'excludedReadIds', 'svSplits', 'clusterGroupLabels',
+  'excludedReadIds', 'svSplits', 'clusterGroupLabels', 'svCarrierEvidence',
 ]);
 // The same, inside each cluster-tree branch (ClusterTreeNode).
 const CLUSTER_TREE_NODE_KEYED_RECORDS = ['assignments', 'order', 'focus', 'readScope'];
@@ -756,6 +757,7 @@ export function serializeState(state: BrowserState): SerializedState {
     analysisFilterRules: normalizeAnalysisFilterRules(state.analysisFilterRules),
     clusterAssignments: state.clusterAssignments,
     svSplits: state.svSplits ?? {},
+    svCarrierEvidence: state.svCarrierEvidence ?? {},
     clusterGroupLabels: state.clusterGroupLabels ?? {},
     clusterOrder: state.clusterOrder,
     clusterPatterns: state.clusterPatterns,
@@ -1012,6 +1014,7 @@ function deserializeState(
     analysisFilterRules: normalizeAnalysisFilterRules(s.analysisFilterRules),
     clusterAssignments: s.clusterAssignments,
     svSplits: normalizeSvSplits(s.svSplits),
+    svCarrierEvidence: normalizeSvCarrierEvidence(s.svCarrierEvidence),
     clusterGroupLabels: normalizeClusterGroupLabels(s.clusterGroupLabels),
     clusterOrder: s.clusterOrder,
     clusterPatterns: s.clusterPatterns,

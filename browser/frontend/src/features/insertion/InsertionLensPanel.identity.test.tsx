@@ -96,6 +96,19 @@ describe('lens actions belong to the current response identity', () => {
     expect(openAltAllelePanel).toHaveBeenCalledWith(expect.objectContaining({ datasetId: 'b', ref: 2000 }));
   });
 
+  it('defaults to putative, excludes ambiguous, and forwards explicit evidence choices to splitting', async () => {
+    await act(async () => { root.render(<InsertionLensPanel />); });
+    await finish(0, 1000);
+    const input = (label: string) => [...container.querySelectorAll('label')].find(l => l.textContent?.includes(label))!.querySelector('input')!;
+    expect(input('Include putative').checked).toBe(true);
+    expect(input('Include ambiguous').checked).toBe(false);
+    await act(async () => { (actions() as HTMLButtonElement).click(); });
+    expect(splitBySv).toHaveBeenLastCalledWith(expect.objectContaining({ includePutative: true, includeAmbiguous: false }), expect.anything());
+    act(() => { input('Include putative').click(); input('Include ambiguous').click(); });
+    await act(async () => { (actions() as HTMLButtonElement).click(); });
+    expect(splitBySv).toHaveBeenLastCalledWith(expect.objectContaining({ includePutative: false, includeAmbiguous: true }), expect.anything());
+  });
+
   it('ignores late responses, including returning to the same dataset and target', async () => {
     await act(async () => { root.render(<InsertionLensPanel />); });
     await act(async () => { setInsertionLensState(target('b', 2000)); });

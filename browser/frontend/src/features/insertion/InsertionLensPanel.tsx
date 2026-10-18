@@ -97,7 +97,7 @@ function drawHardRows(ctx: CanvasRenderingContext2D, axis: LensAxis, width: numb
   ctx.strokeStyle = HARD_HATCH;
   ctx.lineWidth = 1;
   rows.forEach((row, i) => {
-    if (!row.hard) return;
+    if (!row.hard && row.evidenceLevel !== 'putative' && row.evidenceLevel !== 'ambiguous') return;
     const top = i * ROW_PITCH;
     ctx.save();
     ctx.beginPath();
@@ -261,7 +261,8 @@ export function InsertionLensPanel() {
   const currentResponse = useRef(loadedResponse);
   currentResponse.current = response ? loadedResponse : null;
   const exportController = useRef<AbortController | null>(null);
-  const [includePutative, setIncludePutative] = useState(false);
+  const [includePutative, setIncludePutative] = useState(true);
+  const [includeAmbiguous, setIncludeAmbiguous] = useState(false);
   useEffect(() => () => { exportController.current?.abort(); }, [requestIdentity]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -411,8 +412,8 @@ export function InsertionLensPanel() {
 
   const layout: LensLayout | null = useMemo(
     () => (response ? layoutLens({ ...response, carriers: response.carriers.filter(c => !c.evidence_level
-      || c.evidence_level === 'confirmed' || (includePutative && c.evidence_level === 'putative')) }, anchor, reversed) : null),
-    [response, anchor, reversed, includePutative],
+      || c.evidence_level === 'confirmed' || (includePutative && c.evidence_level === 'putative') || (includeAmbiguous && c.evidence_level === 'ambiguous')) }, anchor, reversed) : null),
+    [response, anchor, reversed, includePutative, includeAmbiguous],
   );
   const markColor = useMemo(() => {
     const first = response?.carriers[0]?.read;
@@ -422,7 +423,7 @@ export function InsertionLensPanel() {
   }, [response]);
   const profiles = useMemo(() => {
     if (!layout) return [];
-    const groups = [{ label: `Carriers (${layout.carriers.length})`, profile: computeLensProfile(layout.carriers, layout.axis.total) }];
+    const groups = [{ label: `Carriers (${layout.carriers.length}; ${layout.carrierRows.filter(r => !r.evidenceLevel || r.evidenceLevel === 'confirmed').length} confirmed, ${layout.carrierRows.filter(r => r.evidenceLevel === 'putative').length} putative, ${layout.carrierRows.filter(r => r.evidenceLevel === 'ambiguous').length} ambiguous)`, profile: computeLensProfile(layout.carriers, layout.axis.total) }];
     if (layout.reference.length) {
       groups.push({ label: `Reference (${layout.reference.length})`, profile: computeLensProfile(layout.reference, layout.axis.total) });
     }
@@ -513,7 +514,7 @@ export function InsertionLensPanel() {
     if (!response?.sv || !target || !splitView?.stateKey || !splitView.inView) return;
     try {
       const def = await splitBySv(
-        { stateKey: splitView.stateKey, datasetId: target.datasetId, chrom: viewChrom, viewStart, viewEnd, includePutative },
+        { stateKey: splitView.stateKey, datasetId: target.datasetId, chrom: viewChrom, viewStart, viewEnd, includePutative, includeAmbiguous },
         { t: 'I', ref: response.sv.ref, len: response.sv.len },
       );
       say(`Grouped by ${def.label}: ${def.counts[0].toLocaleString()} carriers, ${def.counts[1].toLocaleString()} reference, ${def.counts[2].toLocaleString()} not informative (all reads in view)`);
@@ -543,7 +544,7 @@ export function InsertionLensPanel() {
       if (controller.signal.aborted || currentResponse.current !== snapshot) return;
       if (!res.success) throw new Error(res.error || 'Could not fetch the inserts');
       downloadTextFile(insertsFasta(res.carriers.filter(c => !c.evidence_level || c.evidence_level === 'confirmed'
-        || (includePutative && c.evidence_level === 'putative')), response, reversed), `${fileStem}_inserts.fa`, 'text/x-fasta');
+        || (includePutative && c.evidence_level === 'putative') || (includeAmbiguous && c.evidence_level === 'ambiguous')), response, reversed), `${fileStem}_inserts.fa`, 'text/x-fasta');
     } catch (err) {
       if (controller.signal.aborted || currentResponse.current !== snapshot) return;
       say(`Could not fetch the inserts: ${String((err as Error)?.message ?? err)}`);
@@ -620,7 +621,7 @@ export function InsertionLensPanel() {
         {strands && <LensField label="Strands (drawn)" title="Strands of the carriers drawn here">{strands['+']} + · {strands['-']} −</LensField>}
         {response.truncated.carriers > 0 && (
           <LensField label="Drawn" testId="insertion-lens-drawn" title="The lens draws a sample of the carriers; the counts above are of all of them">
-            {formatShare(layout?.carriers.length ?? 0, cl.carriers + (includePutative ? cl.putative ?? 0 : 0), includePutative ? 'confirmed + putative' : 'confirmed')}
+            {formatShare(layout?.carriers.length ?? 0, cl.carriers + (includePutative ? cl.putative ?? 0 : 0) + (includeAmbiguous ? cl.ambiguous ?? 0 : 0), includePutative ? 'confirmed + putative' : 'confirmed')}
           </LensField>
         )}
       </dl>
@@ -706,7 +707,8 @@ export function InsertionLensPanel() {
               <span className="mx-1 h-4 w-px bg-slate-300 dark:bg-slate-600" />
               <AnalysisButton onClick={savePng}>Save PNG</AnalysisButton>
               <AnalysisButton onClick={downloadProfiles}>Profiles TSV</AnalysisButton>
-              <label><input type="checkbox" checked={includePutative} onChange={e => setIncludePutative(e.target.checked)} /> Include putative (default: confirmed only)</label>
+              <label><input type="checkbox" checked={includePutative} onChange={e => setIncludePutative(e.target.checked)} /> Include putative (hatched; uncheck for confirmed only)</label>
+              <label><input type="checkbox" checked={includeAmbiguous} onChange={e => setIncludeAmbiguous(e.target.checked)} /> Include ambiguous</label>
               <span className="mx-1 h-4 w-px bg-slate-300 dark:bg-slate-600" />
               <AnalysisButton
                 onClick={splitReads}
@@ -785,7 +787,7 @@ export function InsertionLensPanel() {
           {clusters && clusters.length > 0 && (
             <table className="w-full text-left tabular-nums">
               <thead className="text-ink-muted">
-                <tr><th className="font-medium">Position</th><th className="font-medium">Length</th><th className="font-medium" title="Reads carrying it (clipped at the breakpoint included) / carriers plus reads spanning the site without it">Carriers</th><th /></tr>
+                <tr><th className="font-medium">Position</th><th className="font-medium">Length</th><th className="font-medium" title="Default carriers include confirmed and putative; ambiguous evidence is separate">Carriers</th><th /></tr>
               </thead>
               <tbody>
                 {clusters.map(c => (
@@ -793,7 +795,7 @@ export function InsertionLensPanel() {
                     <td>{viewChrom}:{c.ref.toLocaleString()}</td>
                     <td>{c.len.toLocaleString()} bp</td>
                     <td>
-                      {c.carriers.toLocaleString()}{c.informative ? <span className="text-ink-muted">/{c.informative.toLocaleString()}</span> : null}
+                      {(c.confirmed ?? c.carriers).toLocaleString()} confirmed · {c.putative ?? 0} putative · {c.ambiguous ?? 0} ambiguous
                       {(c.clip_support ?? 0) > 0 && <span className="text-ink-muted"> ({c.clip_support!.toLocaleString()} clipped)</span>}
                     </td>
                     <td className="text-right py-0.5">

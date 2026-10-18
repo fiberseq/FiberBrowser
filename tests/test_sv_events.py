@@ -661,7 +661,7 @@ def test_audited_loci_summary_split_and_display_evidence_agree(case):
     target = case['target']
     reads = case['reads']
     calls = classify_compact((({**r, 'duplicate': False, 'file_chrom': case['chrom']}, r) for r in reads),
-                             t=target['t'], ref=target['ref'], length=target['len'])
+                             t=target['t'], ref=target['ref'], length=target['len'], include_putative=False)
     expected = case['evidence_expected']
     assert {n for n, c in calls.items() if c['allele'] == 0} == set(expected['confirmed'])
     for cutoff in ([50, 2000] if case['name'] == 'alu' else [50]):

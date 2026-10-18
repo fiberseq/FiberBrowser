@@ -178,8 +178,23 @@ describe('current split counts and historical assignments', () => {
     const def = await splitBySv({ ...TARGET, includePutative: true }, SV);
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).include_putative).toBe(true);
     expect(def.includePutative).toBe(true);
-    expect(useBrowserStore.getState().clusterGroupLabels.ds[0]).toBe('Confirmed + putative');
+    expect(useBrowserStore.getState().clusterGroupLabels.ds[0]).toBe('Confirmed (1) + putative (1)');
     expect(def.evidenceCounts).toEqual({ confirmed: 1, putative: 1, ambiguous: 1 });
+  });
+
+  it('defaults new splits to putative while legacy and explicit saved choices survive refresh', async () => {
+    const fetchMock = mockSplit({ c: 0 });
+    const fresh = await splitBySv(TARGET, SV);
+    expect(fresh.includePutative).toBe(true);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({ include_putative: true, include_ambiguous: false });
+    for (const saved of [undefined, false, true]) {
+      const legacy = normalizeSvSplits({ ds: { ...fresh, includePutative: saved, includeAmbiguous: true } }).ds;
+      useBrowserStore.getState().setSvSplit('ds', legacy);
+      await refreshSvSplit(TARGET, legacy);
+      const body = JSON.parse(String(fetchMock.mock.lastCall?.[1]?.body));
+      expect(body.include_putative).toBe(saved === true);
+      expect(body.include_ambiguous).toBe(true);
+    }
   });
 
   it('retries an initial split when its duplicate setting changes while waiting', async () => {

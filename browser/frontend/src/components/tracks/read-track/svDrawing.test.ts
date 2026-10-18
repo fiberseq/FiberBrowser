@@ -109,10 +109,10 @@ describe('clusters', () => {
       { t: 'SA', chrom: 'chrSV', pos: 11_497, strand: '+', mapq: 60, nm: 0, cigar_ref_len: 2000, supp: false }]);
     const other = read('c', [{ t: 'D', ref: 10_000, len: 600, q: 0 }]);
     expect(readCarriesCluster(cigar, DEL)).toBe(true);
-    expect(readCarriesCluster(split, DEL, 'chrSV')).toBe(false);
-    expect(readCarriesCluster(split, DEL, 'chrX')).toBe(false);
+    expect(readCarriesCluster(split, DEL, 'chrSV')).toBe(true);
+    expect(readCarriesCluster(split, DEL, 'chrX')).toBe(true);
     expect(readCarriesCluster(other, DEL)).toBe(false);
-    expect(supportingReadIds([cigar, split, other, read('d', undefined)], DEL, 'chrSV')).toEqual(['a']);
+    expect(supportingReadIds([cigar, split, other, read('d', undefined)], DEL, 'chrSV')).toEqual(['a', 'b']);
   });
 
   it('picks the cluster at the cursor by support, and under a band pixel', () => {
@@ -139,11 +139,11 @@ describe('clusters', () => {
 });
 
 describe('SA strand', () => {
-  it('an inverted SA segment does not carry a deletion', () => {
+  it('an inverted SA segment cannot confirm a deletion', () => {
     const clip = { t: 'S' as const, side: 'R' as const, ref: 10_004, len: 2000, q: 4000 };
     const seg = { t: 'SA' as const, chrom: 'chrSV', pos: 11_497, strand: '-' as const, mapq: 60, nm: 0, cigar_ref_len: 2000, supp: false };
-    expect(readCarriesCluster(read('a', [clip, { ...seg, same_strand: true }]), DEL, 'chrSV')).toBe(false);
-    expect(readCarriesCluster(read('b', [clip, { ...seg, same_strand: false }]), DEL, 'chrSV')).toBe(false);
+    expect(svEvidenceLevel(read('a', [clip, { ...seg, same_strand: true }]), DEL, 'chrSV')).toBe('putative');
+    expect(svEvidenceLevel(read('b', [clip, { ...seg, same_strand: false }]), DEL, 'chrSV')).toBe('putative');
   });
 });
 
@@ -246,8 +246,8 @@ describe('P0 audited carrier parity', () => {
           sv: r.sv.filter(e => e.len >= cutoff),
           sv_evidence: r.sv,
         })) as CompactRead[];
-        expect(supportingReadIds([...reads, ...reads], cluster, fixture.chrom).sort()).toEqual([...fixture.evidence_expected.confirmed].sort());
-        expect(supportingReadIds(reads, cluster, fixture.chrom)).toHaveLength(fixture.evidence_expected.confirmed.length);
+        expect(supportingReadIds([...reads, ...reads], cluster, fixture.chrom, 'confirmed').sort()).toEqual([...fixture.evidence_expected.confirmed].sort());
+        expect(supportingReadIds(reads, cluster, fixture.chrom).sort()).toEqual([...fixture.evidence_expected.confirmed, ...fixture.evidence_expected.putative].sort());
       });
     }
   }
@@ -264,7 +264,7 @@ describe('P0 audited carrier parity', () => {
   it('can highlight evidence even when no event survives the glyph cutoff', () => {
     const r = { id: 'clipped', intervals: [], sv_evidence: [{ t: 'S', side: 'R', ref: INS.ref, len: 50, q: 0 }] } as CompactRead;
     expect(svEvidenceLevel(r, INS)).toBe('putative');
-    expect(supportingReadIds([r, r], INS)).toEqual([]);
+    expect(supportingReadIds([r, r], INS)).toEqual(['clipped']);
     expect(readSvDraw(r, 0, 20000, 2000).clips).toEqual([]);
   });
 });

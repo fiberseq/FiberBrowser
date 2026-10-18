@@ -68,6 +68,7 @@ const grouping: AlleleGrouping = {
 
 describe('the combined-SV split', () => {
   it('names each panel by its genotype and reads, and knows which insertions all its reads carry', () => {
+    grouping.sv_evidence_levels = { a: 'confirmed', b: 'putative', c: 'confirmed' };
     const split = variantSplitGrouping(grouping, 'numb', 'roo + hobo + jockey');
     expect(split.groups.map(g => g.label)).toEqual(['roo+ · hobo− · jockey+ (2)', 'roo− · hobo+ · jockey− (1)', 'Not informative']);
     expect(split.groups[0].ruleExtras!.carriedInsertions!.map(i => i.name)).toEqual(['roo', 'jockey']);
@@ -77,6 +78,8 @@ describe('the combined-SV split', () => {
     const made = useBrowserStore.getState().panels.filter(p => p.readSubset);
     // Several SVs: the panels stay on the reference; each can expand an insertion its reads all carry.
     expect(made.every(p => !p.altAllele)).toBe(true);
+    expect(made[0].readSubset!.rule.svEvidenceLevels).toEqual({ a: 'confirmed', b: 'putative' });
+    delete grouping.sv_evidence_levels;
     expect(made[0].readSubset!.rule.carriedInsertions!.map(i => [i.name, i.ref])).toEqual([['roo', 9_467_038], ['jockey', 9_487_240]]);
   });
 

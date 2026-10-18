@@ -739,7 +739,11 @@ def test_summary_variants_split_and_lens_deduplicate_the_same_molecules(tmp_path
     lens = build_lens([a, b], 'chrX', pos=1000, ref=1000, length=100,
                       flank=100, consensus=False, loader_kwargs=LOADER)
     split = sv_endpoint.sv_split_payload(state, dataset_id='d', chrom='chrX', start=0, end=2000,
-                                         t='I', ref=1000, length=100)
+                                         t='I', ref=1000, length=100, include_putative=False)
+    inclusive = sv_endpoint.sv_split_payload(state, dataset_id='d', chrom='chrX', start=0, end=2000,
+                                             t='I', ref=1000, length=100)
+    assert inclusive['counts'][0] == 4
+    assert {c['id'] for c in lens['carriers'] if c['evidence_level'] in ('confirmed', 'putative')} == {n for n, allele in inclusive['assignments'].items() if allele == 0}
     assert lens['cluster']['carriers'] == split['counts'][0] == 3
     assert lens['cluster']['reference'] == split['counts'][1] == 1
     assert {c['id'] for c in lens['carriers'] if c['evidence_level'] == 'confirmed'} == {n for n, allele in split['assignments'].items() if allele == 0}

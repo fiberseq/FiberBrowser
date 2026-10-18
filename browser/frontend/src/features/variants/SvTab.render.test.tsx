@@ -59,6 +59,8 @@ describe('Variants › SVs', () => {
     act(() => root.render(<SvTab datasetId="numb" params={DEFAULT_SNP_PARAMS} duplicates={false} />));
     await wait(450);
     expect(qa('variants-sv')).toHaveLength(2);
+    const policy = [...container.querySelectorAll('label')].find(l => l.textContent?.includes('Include putative carriers'))!.querySelector('input')!;
+    expect(policy.checked).toBe(true);
     expect(qa('variants-sv-carriers')[0].textContent).toBe('3,267 confirmed of 3,600 informative reads · 91% (95% CI 90–92%) · 0 putative · 0 ambiguous');
     expect(qa('variants-sv-carriers')[1].textContent).toBe('1,795 confirmed of 1,799 informative reads · >99% (95% CI 99.4–>99.9%) · 0 putative · 0 ambiguous');
     expect(q('variants-sv-weak-toggle')!.textContent).toBe(`Show 1 weak call (fewer than ${WEAK_SV_CARRIERS} carriers)`);

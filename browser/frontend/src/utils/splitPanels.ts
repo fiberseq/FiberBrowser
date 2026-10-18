@@ -188,8 +188,10 @@ export function splitPanelCount(rows: SplitRow[], sources: PanelConfig[]): numbe
 
 /** The rule fields a row of one group keeps (its group's ruleExtras). */
 function ruleExtrasOf(grouping: SplitGrouping, groupKeys: string[]): Partial<ReadSubsetRule> {
-  if (groupKeys.length !== 1) return {};
-  return grouping.groups.find(g => g.key === groupKeys[0])?.ruleExtras ?? {};
+  const extras = groupKeys.length === 1 ? grouping.groups.find(g => g.key === groupKeys[0])?.ruleExtras ?? {} : {};
+  const levels = Object.assign({}, ...grouping.groups.filter(g => groupKeys.includes(g.key))
+    .map(g => g.ruleExtras?.svEvidenceLevels ?? {}));
+  return Object.keys(levels).length ? { ...extras, svEvidenceLevels: levels } : extras;
 }
 
 function idsFor(grouping: SplitGrouping, datasetId: string, groupKeys: string[]): string[] {

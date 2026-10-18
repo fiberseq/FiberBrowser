@@ -808,7 +808,7 @@ def read_spans(read: dict, a: int, b: int) -> Optional[bool]:
 
 
 def classify_allele_evidence(read: dict, t: str, ref: int, length: int, margin: int = SV_SPAN_MARGIN,
-                             chrom: Optional[str] = None, *, targets=(), include_putative=False,
+                             chrom: Optional[str] = None, *, targets=(), include_putative=False, include_ambiguous=False,
                              target_end=None, uncertainty=None) -> tuple[int, Optional[dict]]:
     """(allele, evidence): 0 carrier (with ``carrier_evidence``), 1 reference
     (spans both breakpoints +- margin without it), 2 not informative. A read
@@ -823,7 +823,8 @@ def classify_allele_evidence(read: dict, t: str, ref: int, length: int, margin: 
                     compatible.add((target['t'], target['ref'], target['len']))
             if len(compatible) > 1:
                 evidence = {**evidence, 'level': 'ambiguous', 'targets': sorted(compatible)}
-        return (0 if evidence['level'] == 'confirmed' or (include_putative and evidence['level'] == 'putative') else 2), evidence
+        return (0 if evidence['level'] == 'confirmed' or (include_putative and evidence['level'] == 'putative')
+                     or (include_ambiguous and evidence['level'] == 'ambiguous') else 2), evidence
     if t == "I" and other_insertion_at(read, ref, length, uncertainty):
         return 2, {"kind": "other"}
     end = target_end if target_end is not None else ref + length if t == "D" else ref
@@ -840,7 +841,7 @@ def classify_allele(read: dict, t: str, ref: int, length: int, margin: int = SV_
 
 
 def classify_molecules(entries, *, t: str, ref: int, length: int, margin: int = SV_SPAN_MARGIN,
-                       chrom: Optional[str] = None, targets=None, include_putative=False, target_end=None, uncertainty=None) -> dict:
+                       chrom: Optional[str] = None, targets=None, include_putative=True, include_ambiguous=False, target_end=None, uncertainty=None) -> dict:
     """Classify (compact read, original item) entries, once per QNAME."""
     grouped = {}
     for read, item in entries:
@@ -868,7 +869,7 @@ def classify_molecules(entries, *, t: str, ref: int, length: int, margin: int = 
             if segments is not None:
                 read = {**read, 'sv_segments': segments}
             allele, evidence = classify_allele_evidence(read, t, ref, length, margin,
-                chrom=read.get('file_chrom', chrom), targets=targets, include_putative=include_putative, target_end=target_end, uncertainty=uncertainty)
+                chrom=read.get('file_chrom', chrom), targets=targets, include_putative=include_putative, include_ambiguous=include_ambiguous, target_end=target_end, uncertainty=uncertainty)
             calls.append({'allele': allele, 'evidence': evidence, 'record': item, 'read': read})
         def rank(call):
             ev = call['evidence'] or {}
@@ -896,7 +897,7 @@ def sv_summary_for_reads(reads: Sequence[dict], start: int, end: int, min_len: i
         return None
     competition = clusters if min_len == SV_MIN_LEN_DEFAULT else cluster_sv_events(
         reads, start, end, min(min_len, SV_MIN_LEN_DEFAULT), reconcile_members=False)[0]
-    starts, ends, plain, special, event_items = [], [], [], [], []
+    starts, ends, plain, special, event_items, event_ranges = [], [], [], [], [], []
     molecule_indices = {}
     for i, read in enumerate(reads):
         molecule_indices.setdefault(read.get('id'), []).append(i)
@@ -911,6 +912,9 @@ def sv_summary_for_reads(reads: Sequence[dict], start: int, end: int, min_len: i
         for ev in read.get("sv_evidence", read.get("sv")) or ():
             if ev.get("t") in ("I", "D", "S"):
                 event_items.append((int(ev["ref"]), i))
+                lo, hi = ev.get('uncertainty', (ev['ref'], ev['ref']))
+                if hi > lo:
+                    event_ranges.append((lo, hi, i))
         for segment in read.get('sv_segments') or []:
             if chrom is None or segment.get('chrom') == chrom or segment.get('chrom') == read.get('file_chrom'):
                 event_items.extend(((int(segment['pos']), i),
@@ -918,6 +922,8 @@ def sv_summary_for_reads(reads: Sequence[dict], start: int, end: int, min_len: i
     event_items.sort()
     event_refs = [r for r, _i in event_items]
     starts, ends, plain = np.asarray(starts), np.asarray(ends), np.asarray(plain, dtype=int)
+    range_starts, range_ends, range_rows = (np.asarray(values, dtype=int)
+        for values in zip(*event_ranges)) if event_ranges else (np.array([], dtype=int),) * 3
     out_clusters = []
     for c in clusters:
         t, ref, length, cend = c["t"], c["ref"], c["len"], c["end"]
@@ -928,6 +934,9 @@ def sv_summary_for_reads(reads: Sequence[dict], start: int, end: int, min_len: i
         # A matching CIGAR length is at most target_length / (1 - length_tol).
         # Also includes every eligible insertion clip or deletion clip+SA.
         tol = max(insertion_clip_tolerance(length), breakpoint_tolerance(length / (1 - SV_LENGTH_TOL_FRAC)))
+        # An observed allele can have a distant canonical point while its
+        # equivalent placements overlap this target. Index both interval axes.
+        candidates.update(range_rows[(range_starts <= uhi + tol) & (range_ends >= ulo - tol)].tolist())
         for offset in (0, cend - ref) if t == "D" else (0,):
             lo = bisect.bisect_left(event_refs, ulo + offset - tol)
             hi = bisect.bisect_right(event_refs, uhi + offset + tol)
@@ -935,7 +944,7 @@ def sv_summary_for_reads(reads: Sequence[dict], start: int, end: int, min_len: i
         # A selected segment brings its molecule's other local alignments too.
         candidates.update(j for i in tuple(candidates) for j in molecule_indices[reads[i].get('id')])
         calls = classify_molecules(((reads[i], None) for i in sorted(candidates)),
-                                   t=t, ref=ref, length=length, margin=margin, chrom=chrom, targets=competition, target_end=cend)
+                                   t=t, ref=ref, length=length, margin=margin, chrom=chrom, targets=competition, target_end=cend, include_putative=False)
         carriers = [call for call in calls.values() if call["allele"] == 0]
         out_clusters.append({
             **{key: c[key] for key in ('ref_len', 'alt_len', 'raw_ref', 'uncertainty') if key in c},

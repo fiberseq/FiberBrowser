@@ -21,16 +21,25 @@ Evidence is classified per molecule (QNAME) per target:
   Competition tests the particular supporting clip across insertion and deletion
   targets, including 50 bp seeds hidden by a higher display cutoff. Opposite-end
   clips do not compete with each other.
-  Ambiguous evidence never enters the carrier group, including inclusive splits.
+  Ambiguous evidence stays outside the default carrier group and has a separate
+  explicit opt-in.
 
 Summary `support`/`confirmed` and `informative` count confirmed molecules and
 confirmed plus reference molecules respectively. `putative` and `ambiguous` are
 separate counts. Variants, summary tooltips and lens show those levels. Default
-highlighting and lens profiles use confirmed evidence. Lens rows carry their
-`evidence_level`; its optional inclusive view adds putative rows. Splits default
-to confirmed only and offer include-putative in Variants and lens; the chosen
-policy and separate counts persist in panel/session state. The lens returns all
-three evidence cohorts, with `evidence_total` describing its capped row pool.
+carrier sets include **confirmed + putative** in highlighting, single and combined
+splits, Variants/linkage and lens rows, profiles and insert exports. Confirmed
+only is an option; ambiguous requires a separate explicit opt-in. Putative lens
+rows are hatched, and weaker read highlights/group rows have pale dashed
+evidence markers. Labels count confirmed, putative and ambiguous separately.
+Summary `support` and `informative` retain the evidence-statistic definitions
+above, rather than presenting an inclusive carrier fraction as a genotype.
+Insertion lists use confirmed + putative carrier totals with separate counts.
+Split choices and rendering tiers persist through panel/session/snapshot state;
+refresh uses the saved policy. Legacy saved splits lacking a policy field retain
+their original confirmed-only choice. New unsaved actions use the inclusive
+default. The lens returns all three evidence cohorts, with `evidence_total`
+describing its capped row pool.
 
 Reference requires an aligned block covering both breakpoints, the full interval
 of equivalent placements, and 100 bp flanks. Blocks bridge small CIGAR indels
@@ -89,7 +98,11 @@ statistics retain their existing primary-record scope.
 
 Split, Variants and lens include supplementary-only local molecules. Lens rows
 retain `evidence_bundle`; default alternate-allele construction uses confirmed
-molecules, including supplementary-only CIGAR inserts.
+molecules, including supplementary-only CIGAR inserts. Consensus requires full
+CIGAR insert spans: clipped putative molecules can be true carriers without
+covering the complete alternate sequence, so including them in consensus would
+require additional assembly/alignment assumptions. The same full-insert rule
+applies to lens consensus, independently of its inclusive profile/row default.
 
 ## Exact alleles and reference normalization
 
@@ -108,8 +121,8 @@ are rotated left through repeat-equivalent placements. `ref` is canonical;
 geometry. `uncertainty` is the inclusive interval of equivalent anchors; complex
 non-equivalent replacements retain their exact ref/alt strings without invented
 repeat equivalence. Replacements reconstructing reference exactly do not seed
-SVs. Minimization subtracts shared bases from the inserted/deleted counts and
-reapplies the size cutoff, so a replacement reduced to a micro-indel or SNV
+SVs. Minimization recomputes inserted/deleted counts from the trimmed spans and
+bridges surviving on both reference and query axes, then reapplies the cutoff, so a replacement reduced to a micro-indel or SNV
 cannot retain its original SV size. Missing reference contigs retain raw evidence. Reference changes invalidate
 read, split and insertion-tile/lens caches. Worker options carry reference paths,
 not open handles.

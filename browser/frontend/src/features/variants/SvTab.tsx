@@ -34,8 +34,8 @@ export function svCarriersText(carriers: number, informative: number): string {
 export const WEAK_SV_CARRIERS = 3;
 
 /** The calls listed, and the weak ones folded away (unless shown, or selected). */
-export function splitWeakSvs<T extends { support: number }>(clusters: T[], showWeak: boolean, isSelected: (c: T) => boolean = () => false): { shown: T[]; weak: number } {
-  const weak = clusters.filter(c => c.support < WEAK_SV_CARRIERS && !isSelected(c));
+export function splitWeakSvs<T extends { support: number; putative?: number; ambiguous?: number }>(clusters: T[], showWeak: boolean, isSelected: (c: T) => boolean = () => false, includePutative = true, includeAmbiguous = false): { shown: T[]; weak: number } {
+  const weak = clusters.filter(c => c.support + (includePutative ? c.putative ?? 0 : 0) + (includeAmbiguous ? c.ambiguous ?? 0 : 0) < WEAK_SV_CARRIERS && !isSelected(c));
   return { shown: showWeak ? clusters : clusters.filter(c => !weak.includes(c)), weak: weak.length };
 }
 
@@ -53,9 +53,14 @@ export function SvTab({ datasetId: chosen, params, duplicates }: { datasetId: st
   const [clusters, setClusters] = useState<SvClusterInView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [includePutative, setIncludePutative] = useState(false);
+  const [includePutative, setIncludePutative] = useState(true);
+  const [includeAmbiguous, setIncludeAmbiguous] = useState(false);
   const [linkage, setLinkage] = useState<Record<string, SvLinkage | 'loading' | { error: string }>>({});
   const [refresh, setRefresh] = useState(0);
+  const evidencePolicy = JSON.stringify([includePutative, includeAmbiguous]);
+  const currentEvidencePolicy = useRef(evidencePolicy);
+  currentEvidencePolicy.current = evidencePolicy;
+  useEffect(() => { setLinkage({}); }, [evidencePolicy]);
   // What the listed SVs were found for: while a refresh for another view (or dataset, or setting) is on its way, the
   // rows are of the old view and their actions would act on it under the new one: shown, but greyed and not
   // actionable (round 2, N16).
@@ -95,7 +100,7 @@ export function SvTab({ datasetId: chosen, params, duplicates }: { datasetId: st
   }, [viewKey, refresh]);
 
   // Weak calls (fewer than WEAK_SV_CARRIERS carriers; aligner jitter around a real SV, mostly) fold away unless shown or ticked.
-  const listed = clusters ? splitWeakSvs(clusters, showWeak, isSelected) : { shown: [] as SvClusterInView[], weak: 0 };
+  const listed = clusters ? splitWeakSvs(clusters, showWeak, isSelected, includePutative, includeAmbiguous) : { shown: [] as SvClusterInView[], weak: 0 };
   const panel = () => {
     const { panels } = useBrowserStore.getState();
     return (sourcePanelId ? panels.find(p => p.id === sourcePanelId) : undefined) ?? panelForDataset(panels, datasetId);
@@ -106,7 +111,7 @@ export function SvTab({ datasetId: chosen, params, duplicates }: { datasetId: st
     if (!thenPanels && p.collapsedBySplitGroup) { setNotice(SV_GROUP_SPLIT_NOTE); return; }
     const stateKey = p.stateKey ?? p.datasetId ?? p.id;
     try {
-      const def = await splitBySv({ stateKey, datasetId, chrom, viewStart: start, viewEnd: end, includePutative }, c);
+      const def = await splitBySv({ stateKey, datasetId, chrom, viewStart: start, viewEnd: end, includePutative, includeAmbiguous }, c);
       if (thenPanels) {
         useSplitPanelStore.getState().request({ kind: 'frozen', panelId: p.id, title: def.label }, [p.id]);
       } else {
@@ -116,18 +121,20 @@ export function SvTab({ datasetId: chosen, params, duplicates }: { datasetId: st
       setNotice(`Could not split the reads: ${String((err as Error)?.message ?? err)}`);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [datasetId, sourcePanelId, chrom, start, end, includePutative]);
+  }, [datasetId, sourcePanelId, chrom, start, end, includePutative, includeAmbiguous]);
 
   const loadLinkage = (c: SvClusterInView) => {
+    const policy = evidencePolicy;
     setLinkage(l => ({ ...l, [c.id]: 'loading' }));
-    svLinkage(target, params, duplicates, c)
-      .then(r => { if (currentView.current === viewKey) setLinkage(l => ({ ...l, [c.id]: r })); })
-      .catch(err => { if (currentView.current === viewKey) setLinkage(l => ({ ...l, [c.id]: { error: String((err as Error)?.message ?? err).replace(/^API error \d+: /, '') } })); });
+    svLinkage(target, params, duplicates, c, undefined, { includePutative, includeAmbiguous })
+      .then(r => { if (currentView.current === viewKey && currentEvidencePolicy.current === policy) setLinkage(l => ({ ...l, [c.id]: r })); })
+      .catch(err => { if (currentView.current === viewKey && currentEvidencePolicy.current === policy) setLinkage(l => ({ ...l, [c.id]: { error: String((err as Error)?.message ?? err).replace(/^API error \d+: /, '') } })); });
   };
 
   return (
     <div className="px-3 py-2 flex flex-col gap-2 text-[12px]" data-testid="variants-svs">
-      <label><input type="checkbox" checked={includePutative} onChange={e => setIncludePutative(e.target.checked)} /> Include putative evidence in single-SV splits (default: confirmed only)</label>
+      <label><input type="checkbox" checked={includePutative} onChange={e => setIncludePutative(e.target.checked)} /> Include putative carriers (uncheck for confirmed only)</label>
+      <label><input type="checkbox" checked={includeAmbiguous} onChange={e => setIncludeAmbiguous(e.target.checked)} /> Include ambiguous carriers</label>
       <div className="flex items-center gap-2">
         <span className="text-ink-muted flex-1">SVs of {svMinLen.toLocaleString()} bp or more in {chrom}:{Math.round(start).toLocaleString()}–{Math.round(end).toLocaleString()}
           {sourcePanelId && <span data-testid="variants-svs-split-source"> · all reads of the split panels</span>}</span>
@@ -154,10 +161,10 @@ export function SvTab({ datasetId: chosen, params, duplicates }: { datasetId: st
               ? <>Selected: <span className="font-medium">{svSelectionTitle(selectedSvs)}</span></>
               : <span className="text-ink-muted" title="Tick 2–4 SVs below to group or split the reads by their combined genotype">Tick 2–4 SVs below</span>}
           </span>
-          <AnalysisButton disabled={!canAct} onClick={() => void groupBySelectedSvs(selectedSvs, partial).then(e => setNotice(e ?? `Grouped the reads by ${svSelectionTitle(selectedSvs)}.`))}
+          <AnalysisButton disabled={!canAct} onClick={() => void groupBySelectedSvs(selectedSvs, partial, { includePutative, includeAmbiguous }).then(e => setNotice(e ?? `Grouped the reads by ${svSelectionTitle(selectedSvs)}.`))}
             title={offView.length ? 'The selected SVs are not in this view: Go there first' : undefined}
             data-testid="variants-sv-combo-group">Group in this panel</AnalysisButton>
-          <AnalysisButton variant="soft" theme="rose" disabled={!canAct} onClick={() => void splitBySelectedSvs(selectedSvs, partial).then(e => { if (e) setNotice(e); })}
+          <AnalysisButton variant="soft" theme="rose" disabled={!canAct} onClick={() => void splitBySelectedSvs(selectedSvs, partial, { includePutative, includeAmbiguous }).then(e => { if (e) setNotice(e); })}
             title={offView.length ? 'The selected SVs are not in this view: Go there first' : undefined}
             data-testid="variants-sv-combo-split">Split into panels…</AnalysisButton>
         </div>
@@ -193,7 +200,7 @@ export function SvTab({ datasetId: chosen, params, duplicates }: { datasetId: st
             const link = linkage[c.id];
             const label = svAlleleLabel(c.t, c.ref, c.len, chrom);
             return (
-              <li key={c.id} className="py-1.5" data-testid="variants-sv" data-sv={`${c.t}:${c.ref}:${c.len}`} data-weak={c.support < WEAK_SV_CARRIERS || undefined}>
+              <li key={c.id} className="py-1.5" data-testid="variants-sv" data-sv={`${c.t}:${c.ref}:${c.len}`} data-weak={c.support + (includePutative ? c.putative ?? 0 : 0) + (includeAmbiguous ? c.ambiguous ?? 0 : 0) < WEAK_SV_CARRIERS || undefined}>
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   {/* The whole label (box, name, counts) ticks it, not only the box (audit Top 6 / VAR-2); the buttons stay out of it. */}
                   <CheckboxRow checked={isSelected(c)} onChange={() => toggleSvFeature(c, datasetId, chrom)} testId="variants-sv-select" className="min-w-0" disabled={stale}
@@ -224,7 +231,7 @@ export function SvTab({ datasetId: chosen, params, duplicates }: { datasetId: st
                 {link && typeof link === 'object' && 'snps' in link && (
                   <div className="mt-1 rounded border border-slate-200 p-1.5 dark:border-slate-700" data-testid="variants-sv-linkage-result">
                     <div className="text-ink-muted">
-                      {link.counts.carriers.toLocaleString()} carriers, {link.counts.reference.toLocaleString()} reference reads:
+                      {link.counts.carriers.toLocaleString()} carriers{link.carrier_evidence_counts && <> ({link.carrier_evidence_counts.confirmed} confirmed, {link.carrier_evidence_counts.putative} putative, {link.carrier_evidence_counts.ambiguous} ambiguous)</>}, {link.counts.reference.toLocaleString()} reference reads:
                       {' '}<span className="font-medium text-ink" data-testid="variants-sv-linked">{link.linked.toLocaleString()} of {link.tested.toLocaleString()} SNPs</span>
                       {' '}separate them (minor allele in ≥ 90% of one group and ≤ 10% of the other).
                     </div>

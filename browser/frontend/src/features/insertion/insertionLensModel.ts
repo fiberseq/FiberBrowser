@@ -135,6 +135,7 @@ export function consensusMethod(response: Pick<LensResponse, 'consensus' | 'run_
 
 /** An insertion in view, as the SV summary clusters it (/api/insertions/clusters). */
 export interface InsertionCluster {
+  confirmed?: number; putative?: number; ambiguous?: number;
   uncertainty?: [number, number];
   id?: string;
   ref: number;

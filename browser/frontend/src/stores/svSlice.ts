@@ -31,10 +31,16 @@ export interface SvSplitDef {
   /** Duplicate reads were classified too (the panel showed them). */
   includeDuplicates?: boolean;
   includePutative?: boolean;
+  includeAmbiguous?: boolean;
+  evidenceLevels?: Record<string, 'confirmed' | 'putative' | 'ambiguous' | null>;
   evidenceCounts?: { confirmed: number; putative: number; ambiguous: number };
 }
 
+export type SvCarrierEvidence = Record<string, 'confirmed' | 'putative' | 'ambiguous'>;
+
 export interface SvSlice {
+  svCarrierEvidence: Record<string, SvCarrierEvidence>;
+  setSvCarrierEvidence: (key: string, levels?: SvCarrierEvidence) => void;
   /** Draw SVs of at least svMinLen on reads, and the SV track (a per-panel row: trackRegistry 'sv'). */
   svDisplayEnabled: boolean;
   svMinLen: number;
@@ -59,6 +65,12 @@ export function createSvSlice(set: SetState, _get: () => BrowserState): SvSlice 
     svMinSupport: SV_MIN_SUPPORT_DEFAULT,
     svSelectedCluster: {},
     svSplits: {},
+    svCarrierEvidence: {},
+    setSvCarrierEvidence: (key, levels) => set(state => {
+      const next = { ...state.svCarrierEvidence };
+      if (levels) next[key] = levels; else delete next[key];
+      return { svCarrierEvidence: next };
+    }),
     clusterGroupLabels: {},
     setSvDisplayEnabled: (on) => set({ svDisplayEnabled: Boolean(on) }),
     setSvMinLen: (value) => set({ svMinLen: clampMinSvLen(value) }),
@@ -78,7 +90,11 @@ export function createSvSlice(set: SetState, _get: () => BrowserState): SvSlice 
         delete svSplits[stateKey];
         delete clusterGroupLabels[stateKey];
       }
-      return { svSplits, clusterGroupLabels };
+      const svCarrierEvidence = { ...state.svCarrierEvidence };
+      if (def?.evidenceLevels) svCarrierEvidence[stateKey] = Object.fromEntries(Object.entries(def.evidenceLevels).filter(([, level]) =>
+        level === 'confirmed' || (level === 'putative' && def.includePutative) || (level === 'ambiguous' && def.includeAmbiguous))) as SvCarrierEvidence;
+      else delete svCarrierEvidence[stateKey];
+      return { svSplits, clusterGroupLabels, svCarrierEvidence };
     }),
   };
 }
@@ -102,7 +118,9 @@ export function normalizeSvSplits(raw: unknown): Record<string, SvSplitDef> {
       viewStart: Number.isFinite(d.viewStart) ? Number(d.viewStart) : ref,
       viewEnd: Number.isFinite(d.viewEnd) ? Number(d.viewEnd) : ref + len,
       includeDuplicates: Boolean(d.includeDuplicates),
-      includePutative: Boolean(d.includePutative),
+      includePutative: Boolean(d.includePutative), // absent in old sessions means their original confirmed-only choice
+      includeAmbiguous: Boolean(d.includeAmbiguous),
+      evidenceLevels: d.evidenceLevels,
       evidenceCounts: d.evidenceCounts,
     };
   }
@@ -129,7 +147,7 @@ export function normalizeClusterGroupLabels(raw: unknown): Record<string, Record
  * the view (or another chromosome) is dropped with its groups.
  */
 export function keepSvSplitsInView(
-  state: Pick<BrowserState, 'svSplits' | 'clusterGroupLabels' | 'clusterAssignments' | 'clusterOrder'>,
+  state: Pick<BrowserState, 'svSplits' | 'clusterGroupLabels' | 'clusterAssignments' | 'clusterOrder'> & Partial<Pick<BrowserState, 'svCarrierEvidence'>>,
   partial: Partial<BrowserState>,
   chrom: string,
   start: number,
@@ -144,7 +162,8 @@ export function keepSvSplitsInView(
   }
   if (keys.length === 0) {
     const hadOthers = Object.keys(state.clusterGroupLabels ?? {}).length > 0;
-    return hadOthers && 'clusterAssignments' in partial ? { ...partial, clusterGroupLabels: {} } : partial;
+    return (hadOthers || state.svCarrierEvidence) && 'clusterAssignments' in partial
+      ? { ...partial, clusterGroupLabels: {}, ...(state.svCarrierEvidence ? { svCarrierEvidence: {} } : {}) } : partial;
   }
   const kept: Record<string, SvSplitDef> = {};
   const keptLabels: Record<string, Record<number, string>> = { ...otherLabels };
@@ -156,6 +175,8 @@ export function keepSvSplitsInView(
     }
   }
   const out: Partial<BrowserState> = { ...partial, svSplits: kept, clusterGroupLabels: keptLabels };
+  if (state.svCarrierEvidence) out.svCarrierEvidence = Object.fromEntries(Object.entries(state.svCarrierEvidence)
+    .filter(([key]) => key in kept || (!(key in state.svSplits) && !('clusterAssignments' in partial))));
   const dropped = keys.filter(key => !(key in kept));
   if (dropped.length > 0 && !('clusterAssignments' in partial)) {
     // A path that keeps clusterings (a selected peak still in view) must not
@@ -182,4 +203,11 @@ export function keepSvSplitsInView(
     out.clusterOrder = order;
   }
   return out;
+}
+
+export function normalizeSvCarrierEvidence(raw: unknown): Record<string, SvCarrierEvidence> {
+  if (!raw || typeof raw !== 'object') return {};
+  return Object.fromEntries(Object.entries(raw).filter(([, levels]) => levels && typeof levels === 'object')
+    .map(([key, levels]) => [key, Object.fromEntries(Object.entries(levels as Record<string, unknown>)
+      .filter(([, level]) => level === 'confirmed' || level === 'putative' || level === 'ambiguous'))])) as Record<string, SvCarrierEvidence>;
 }

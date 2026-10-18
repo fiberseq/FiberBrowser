@@ -20,6 +20,7 @@ export interface SvSplitResponse {
   counts: [number, number, number];
   label: string;
   margin: number;
+  evidence_levels?: Record<string, 'confirmed' | 'putative' | 'ambiguous' | null>;
   evidence_counts?: { confirmed: number; putative: number; ambiguous: number };
 }
 
@@ -30,6 +31,7 @@ export interface SvSplitTarget {
   viewStart: number;
   viewEnd: number;
   includePutative?: boolean;
+  includeAmbiguous?: boolean;
 }
 
 export function requestSvSplit(target: SvSplitTarget, sv: SvSplitAllele, margin = SV_SPAN_MARGIN, signal?: AbortSignal, includeDuplicates = Boolean(useBrowserStore.getState().showDuplicateReads)): Promise<SvSplitResponse> {
@@ -42,7 +44,8 @@ export function requestSvSplit(target: SvSplitTarget, sv: SvSplitAllele, margin 
       ref_end: sv.end,
       // Reads the panel shows: duplicates too when they are on (else they'd get no group).
       include_duplicates: includeDuplicates,
-      include_putative: Boolean(target.includePutative),
+      include_putative: target.includePutative ?? true,
+      include_ambiguous: Boolean(target.includeAmbiguous),
     }),
     signal,
   });
@@ -57,8 +60,10 @@ export function svSplitDef(target: SvSplitTarget, sv: SvSplitAllele, response: S
     counts: response.counts,
     viewStart: target.viewStart, viewEnd: target.viewEnd,
     includeDuplicates,
-    includePutative: Boolean(target.includePutative),
+    includePutative: target.includePutative ?? true,
+    includeAmbiguous: Boolean(target.includeAmbiguous),
     evidenceCounts: response.evidence_counts,
+    evidenceLevels: response.evidence_levels,
   };
 }
 
@@ -79,10 +84,14 @@ export function applySvSplit(stateKey: string, def: SvSplitDef, assignments: Rec
 }
 
 function evidenceGroupLabels(def: SvSplitDef): Record<number, string> {
-  return def.evidenceCounts ? { ...SV_GROUP_LABELS,
-    0: def.includePutative ? 'Confirmed + putative' : 'Confirmed',
-    2: `Not informative (${def.includePutative ? '' : `${def.evidenceCounts.putative} putative, `}${def.evidenceCounts.ambiguous} ambiguous)`,
-  } : SV_GROUP_LABELS;
+  if (!def.evidenceCounts) return SV_GROUP_LABELS;
+  const counts = def.evidenceCounts;
+  const excluded = [!def.includePutative ? `${counts.putative} putative` : null,
+    !def.includeAmbiguous ? `${counts.ambiguous} ambiguous` : null].filter(Boolean);
+  return { ...SV_GROUP_LABELS,
+    0: `Confirmed (${counts.confirmed})${def.includePutative ? ` + putative (${counts.putative})` : ''}${def.includeAmbiguous ? ` + ambiguous (${counts.ambiguous})` : ''}`,
+    2: `Not informative${excluded.length ? ` (${excluded.join(', ')})` : ''}`,
+  };
 }
 
 const initialRequests = new Map<string, symbol>();
@@ -120,7 +129,7 @@ export async function splitIntoPanelsBySv(target: SvSplitTarget, sv: SvSplitAlle
  */
 export async function refreshSvSplit(target: SvSplitTarget, def: SvSplitDef, signal?: AbortSignal): Promise<void> {
   const includeDuplicates = Boolean(useBrowserStore.getState().showDuplicateReads);
-  const response = await requestSvSplit({ ...target, includePutative: def.includePutative }, def, def.margin, signal);
+  const response = await requestSvSplit({ ...target, includePutative: Boolean(def.includePutative), includeAmbiguous: Boolean(def.includeAmbiguous) }, def, def.margin, signal);
   const store = useBrowserStore.getState();
   if (signal?.aborted || store.svSplits[target.stateKey] !== def
       || Boolean(store.showDuplicateReads) !== includeDuplicates) return;
@@ -133,6 +142,7 @@ export async function refreshSvSplit(target: SvSplitTarget, def: SvSplitDef, sig
     ...def, counts, viewStart: target.viewStart, viewEnd: target.viewEnd,
     includeDuplicates,
     evidenceCounts: response.evidence_counts,
+    evidenceLevels: response.evidence_levels,
   };
   store.setSvSplit(target.stateKey, updated, evidenceGroupLabels(updated));
 }

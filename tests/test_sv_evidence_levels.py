@@ -92,8 +92,8 @@ def test_split_offers_confirmed_only_or_including_putative_with_separate_counts(
                {**_compact_record(_seg([(0, 100), (4, 100)], start=900), 'chrT', 10), 'id': 'clip'}]
     monkeypatch.setattr(sv_endpoint, 'scan_view', lambda *_: records)
     kwargs = dict(dataset_id='synthetic', chrom='chrT', start=0, end=3000, t='I', ref=1000, length=100)
-    strict = sv_endpoint.sv_split_payload(None, **kwargs)
-    inclusive = sv_endpoint.sv_split_payload(None, **kwargs, include_putative=True)
+    strict = sv_endpoint.sv_split_payload(None, **kwargs, include_putative=False)
+    inclusive = sv_endpoint.sv_split_payload(None, **kwargs)
     assert strict['counts'] == [1, 0, 1]
     assert inclusive['counts'] == [2, 0, 0]
     assert strict['evidence_counts'] == inclusive['evidence_counts'] == dict(confirmed=1, putative=1, ambiguous=0)
@@ -149,7 +149,7 @@ def test_equivalent_anchors_retain_clips_and_reconcile_other_alleles_before_refe
     c, = summary['clusters']
     assert (c['confirmed'], c['putative'], c['informative']) == (1, 1, 1)
     calls = classify_molecules([(r, None) for r in rows], t='I', ref=1000, length=50)
-    assert calls['clip']['evidence']['level'] == 'putative' and calls['clip']['allele'] == 2
+    assert calls['clip']['evidence']['level'] == 'putative' and calls['clip']['allele'] == 0
     # A different allele anywhere in the equivalent interval excludes reference.
     other = dict(id='other', reference_start=0, reference_end=3000, aligned_blocks=[[0, 3000]],
                  sv=[dict(t='I', ref=1700, len=200, q=1700)])
@@ -158,3 +158,29 @@ def test_equivalent_anchors_retain_clips_and_reconcile_other_alleles_before_refe
     # A raw, noncanonical CIGAR placement is reconciled through the interval.
     other['sv'][0]['len'] = 50
     assert classify_allele_evidence(other, 'I', 1000, 50, uncertainty=[1000, 2000])[1]['level'] == 'confirmed'
+
+
+def test_ambiguous_split_carriers_require_an_explicit_opt_in(monkeypatch):
+    from services import sv_endpoint
+    records = [dict(id=f'seed-{n}', reference_start=0, reference_end=3000,
+                    sv=[dict(t='I', ref=1000, len=n, q=1000)]) for n in (100, 300)]
+    records.append(dict(id='clip', reference_start=0, reference_end=1000,
+                        sv=[dict(t='S', side='R', ref=1000, len=100, q=1000)]))
+    monkeypatch.setattr(sv_endpoint, 'scan_view', lambda *_: records)
+    kwargs = dict(dataset_id='synthetic', chrom='chrT', start=0, end=3000, t='I', ref=1000, length=100)
+    default = sv_endpoint.sv_split_payload(None, **kwargs)
+    inclusive = sv_endpoint.sv_split_payload(None, **kwargs, include_ambiguous=True)
+    assert default['assignments']['clip'] == 2 and inclusive['assignments']['clip'] == 0
+    assert default['evidence_counts'] == inclusive['evidence_counts'] == dict(confirmed=1, putative=0, ambiguous=1)
+
+
+def test_summary_indexes_the_observed_alleles_equivalent_interval_too():
+    rows = [dict(id='target', reference_start=1500, reference_end=3000,
+                 sv=[dict(t='D', ref=2000, len=100, q=500, ref_len=100, alt_len=0,
+                          uncertainty=[2000, 2000])]),
+            dict(id='equivalent', reference_start=900, reference_end=1200,
+                 sv=[dict(t='D', ref=1000, len=100, q=100, ref_len=100, alt_len=0,
+                          uncertainty=[1000, 3000])])]
+    summary = sv_summary_for_reads(rows, 0, 5000, 50)
+    target = next(c for c in summary['clusters'] if c['ref'] == 2000)
+    assert target['confirmed'] == 2

@@ -110,8 +110,8 @@ export function SvTrack({ width, height, panel, sidebarWidth = 0 }: {
     }
     store.setSvSelectedCluster(stateKey, cluster.id);
     // Its supporting reads among those drawn: the read highlight (all panels).
-    const ids = supportingReadIds(feed?.reads ?? [], cluster, feed?.chrom);
-    if (ids.length > 0) actions.highlightReads(ids);
+    const ids = supportingReadIds(feed?.reads ?? [], cluster, feed?.chrom, 'carriers', feed?.sv?.evidence_targets ?? feed?.sv?.clusters);
+    if (ids.length > 0) actions.highlightReads(ids, { uncertainIds: supportingReadIds(feed?.reads ?? [], cluster, feed?.chrom, 'putative', feed?.sv?.evidence_targets ?? feed?.sv?.clusters) });
     else actions.clearHighlight();
   };
 
@@ -139,12 +139,14 @@ export function SvTrack({ width, height, panel, sidebarWidth = 0 }: {
         return;
       }
       case 'sv-highlight-supporting':
+      case 'sv-highlight-confirmed':
       case 'sv-highlight-putative':
       case 'sv-highlight-ambiguous': {
         if (!cluster) return;
-        const level = action === 'sv-highlight-putative' ? 'putative' : action === 'sv-highlight-ambiguous' ? 'ambiguous' : 'confirmed';
+        const level = action === 'sv-highlight-putative' ? 'putative' : action === 'sv-highlight-ambiguous' ? 'ambiguous' : action === 'sv-highlight-confirmed' ? 'confirmed' : 'carriers';
         const ids = supportingReadIds(feed.reads, cluster, feed.chrom, level, feed.sv?.evidence_targets ?? feed.sv?.clusters);
-        if (ids.length) useReadActionsStore.getState().highlightReads(ids);
+        if (ids.length) useReadActionsStore.getState().highlightReads(ids, { uncertainIds: level === 'confirmed' ? [] : level === 'carriers'
+          ? supportingReadIds(feed.reads, cluster, feed.chrom, 'putative', feed.sv?.evidence_targets ?? feed.sv?.clusters) : ids });
         else useReadActionsStore.getState().clearHighlight();
         useBrowserStore.getState().setSvSelectedCluster(stateKey, cluster.id);
         return;

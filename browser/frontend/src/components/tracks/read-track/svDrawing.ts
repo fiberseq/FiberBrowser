@@ -213,12 +213,13 @@ export function svEvidenceLevel(read: Pick<CompactRead, 'sv' | 'sv_evidence' | '
 
 export function readCarriesCluster(read: Pick<CompactRead, 'sv' | 'sv_evidence' | 'sv_segments' | 'sequence_span' | 'sv_alignments'>,
   cluster: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty'>, chrom?: string): boolean {
-  return svEvidenceLevel(read, cluster, chrom) === 'confirmed';
+  const level = svEvidenceLevel(read, cluster, chrom);
+  return level === 'confirmed' || level === 'putative';
 }
 
 /** Ids of the reads (among `reads`) that carry a cluster's event. */
 export function supportingReadIds(reads: CompactRead[], cluster: SvCluster, chrom?: string,
-  level: 'confirmed' | 'putative' | 'ambiguous' = 'confirmed', targets: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty'>[] = []): string[] {
+  level: 'carriers' | 'confirmed' | 'putative' | 'ambiguous' = 'carriers', targets: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty'>[] = []): string[] {
   const levels = new Map<string, 'confirmed' | 'putative' | 'ambiguous'>();
   const rank = { confirmed: 0, putative: 1, ambiguous: 2 };
   const bundles = new Map<string, CompactRead[]>();
@@ -228,13 +229,13 @@ export function supportingReadIds(reads: CompactRead[], cluster: SvCluster, chro
     const evidence = svEvidenceLevel({ ...read, sv_segments: segments }, cluster, chrom, targets);
     if (evidence && (!levels.has(read.id) || rank[evidence] < rank[levels.get(read.id)!])) levels.set(read.id, evidence);
   }
-  return [...levels].filter(([, value]) => value === level).map(([id]) => id);
+  return [...levels].filter(([, value]) => level === 'carriers' ? value === 'confirmed' || value === 'putative' : value === level).map(([id]) => id);
 }
 
 /** Size and independent-read support gates for summary glyphs and their hit targets. */
 export function visibleSvSummary(summary: SvSummary | null | undefined, minLen: number, minSupport = SV_MIN_SUPPORT_DEFAULT): SvSummary | null {
   if (!summary) return null;
-  const clusters = summary.clusters.filter(c => c.len >= minLen && c.support >= minSupport);
+  const clusters = summary.clusters.filter(c => c.len >= minLen && c.support + (c.putative ?? 0) >= minSupport);
   const clips = summary.clips.filter(c => c.n >= minSupport);
   if (clusters.length === 0 && clips.length === 0) return null;
   return { ...summary, clusters, clips };

@@ -26,10 +26,11 @@ describe('SV evidence levels', () => {
     expect(describeSvCluster({ ...target, ref_len: 10, alt_len: 110, uncertainty: [900, 1000] }, null, [], 'chrT').where)
       .toContain('replaces 10 reference bp with 110 query bp');
   });
-  it('keeps clips putative, multi-allelic clips ambiguous and default highlights confirmed', () => {
+  it('keeps clips putative, multi-allelic clips ambiguous and default highlights confirmed plus putative', () => {
     expect(svEvidenceLevel(clip, target)).toBe('putative');
     expect(svEvidenceLevel(clip, target, 'chrT', [target, { ...target, len: 300 }])).toBe('ambiguous');
-    expect(supportingReadIds([clip, clip], target)).toEqual([]);
+    expect(supportingReadIds([clip, clip], target)).toEqual(['clip']);
+    expect(supportingReadIds([clip], target, undefined, 'confirmed')).toEqual([]);
     const cigar = { ...clip, sv: undefined, sv_evidence: [{ t: 'I' as const, ref: 1000, len: 100, q: 100 }] };
     expect(supportingReadIds([cigar, cigar], target)).toEqual(['clip']);
   });

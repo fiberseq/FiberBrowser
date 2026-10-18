@@ -96,6 +96,7 @@ interface DrawReadsParams {
   linkedHighlightIds?: Set<string>;
   /** Reads gone to by name or highlighted from the read menu (fb-r4-clicks): a solid outline. */
   readHighlightIds?: Set<string> | null;
+  uncertainSvIds?: Set<string>;
   // Selection
   selectedReadIds: Set<string> | undefined;
   selectedFootprints: SelectedFootprint[];
@@ -151,7 +152,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
     showCoverageHistogram,
     isReversed, activeColormap, genes, allPeaks, orthogonalTracks,
     modificationOverlays, overlayMarks, jupyterReadHighlights, jupyterFootprintColorMap,
-    allJupyterMarkers, linkedBoundsStart, linkedSessionId, linkedHighlightIds, readHighlightIds,
+    allJupyterMarkers, linkedBoundsStart, linkedSessionId, linkedHighlightIds, readHighlightIds, uncertainSvIds,
     selectedReadIds, selectedFootprints: allSelectedFootprints, footprintCrossHighlight, footprintGroups,
     selectedFamilyGroupId, footprintAnalysisLayer,
     clusterStateConsensus, hasFilter, myFilteredReadIds,
@@ -529,6 +530,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
   // Draw reads (in clipped/translated context for panning)
   for (let i = firstVisibleRow; i <= lastVisibleRow; i++) {
     const read = displayReads[i];
+    const svUncertain = uncertainSvIds?.has(read.id) || uncertainSvIds?.has(read.id.replace(/_\d+$/, ''));
     const y = headerHeight + histogramHeight + i * (rowHeight + rowGap) - (needsScroll ? clampedScrollOffset : 0);
 
     const readExtent = getCompactReadExtent(read);
@@ -1581,12 +1583,26 @@ export function drawReadTrack(params: DrawReadsParams): void {
       const readEndRel = Math.max(...read.intervals.map(iv => iv[1])) + linkedOffset;
       const readX = isReversed ? toX(readEndRel) : toX(readStartRel);
       const readW = Math.max(1, (readEndRel - readStartRel) * scale);
-      ctx.strokeStyle = '#ca8a04';
+      const uncertain = svUncertain;
+      ctx.strokeStyle = uncertain ? 'rgba(202, 138, 4, 0.5)' : '#ca8a04';
       ctx.lineWidth = 2;
-      ctx.setLineDash([]);
+      ctx.setLineDash(uncertain ? [3, 3] : []);
       ctx.strokeRect(readX - 1.5, y - 1.5, readW + 3, rowHeight - rowGap + 3);
-      ctx.fillStyle = '#ca8a04';
+      ctx.fillStyle = uncertain ? 'rgba(202, 138, 4, 0.5)' : '#ca8a04';
       ctx.fillRect(sidebarWidth, y, 4, Math.max(1, rowHeight - rowGap));
+      ctx.setLineDash([]);
+    }
+
+    if (hasDrawableExtent && svUncertain) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(124, 58, 237, 0.45)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([2, 2]);
+      ctx.beginPath();
+      ctx.moveTo(sidebarWidth + 5, y);
+      ctx.lineTo(sidebarWidth + 5, y + Math.max(1, rowHeight - rowGap));
+      ctx.stroke();
+      ctx.restore();
     }
 
     // Draw Jupyter highlight background

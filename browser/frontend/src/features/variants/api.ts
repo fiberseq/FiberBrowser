@@ -85,6 +85,7 @@ export interface AlleleGroup {
 }
 
 export interface AlleleGrouping {
+  sv_evidence_levels?: import('../../stores/svSlice').SvCarrierEvidence;
   groups: AlleleGroup[];
   assignments: Record<string, number>;
   n_reads: number;
@@ -109,6 +110,7 @@ export interface AlleleGrouping {
 export type AlleleSource = 'selected' | 'informative' | 'hp';
 
 export interface AlleleRequest {
+  includePutative?: boolean; includeAmbiguous?: boolean;
   source: AlleleSource;
   snps?: string[];
   partial: boolean;
@@ -145,6 +147,7 @@ export interface SvLinkageRow {
 }
 
 export interface SvLinkage {
+  carrier_evidence_counts?: { confirmed: number; putative: number; ambiguous: number };
   sv: { t: 'D' | 'I'; ref: number; len: number };
   counts: { carriers: number; reference: number; not_informative: number };
   tested: number;
@@ -178,6 +181,7 @@ export function groupByAlleles(target: ScanTarget, params: SnpParams, includeDup
     body: body(target, params, includeDuplicates, {
       source: request.source === 'hp' ? 'hp' : 'snps',
       snps: request.source === 'informative' ? 'informative' : request.snps ?? [],
+      include_putative: request.includePutative ?? true, include_ambiguous: Boolean(request.includeAmbiguous),
       partial: request.partial, min_fraction: request.minFraction, auto_phase: request.autoPhase,
       as_combination: Boolean(request.asCombination),
       ...(request.svs?.length ? { svs: request.svs, ...(request.source === 'informative' ? { snps: [] } : {}) } : {}),
@@ -197,8 +201,9 @@ export function svsInView(target: ScanTarget, minLen: number, includeDuplicates:
 }
 
 export function svLinkage(target: ScanTarget, params: SnpParams, includeDuplicates: boolean,
-  sv: Pick<SvClusterInView, 't' | 'ref' | 'len'>, signal?: AbortSignal): Promise<SvLinkage> {
+  sv: Pick<SvClusterInView, 't' | 'ref' | 'len'>, signal?: AbortSignal, policy: { includePutative?: boolean; includeAmbiguous?: boolean } = {}): Promise<SvLinkage> {
   return fetchJson<SvLinkage>(scopedUrl('/api/variants/sv_linkage', target), {
-    ...post, body: body(target, params, includeDuplicates, { t: sv.t, ref: sv.ref, len: sv.len }), signal,
+    ...post, body: body(target, params, includeDuplicates, { t: sv.t, ref: sv.ref, len: sv.len,
+      include_putative: policy.includePutative ?? true, include_ambiguous: Boolean(policy.includeAmbiguous) }), signal,
   });
 }

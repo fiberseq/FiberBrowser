@@ -33,6 +33,7 @@ export type ReadMenuAction =
   | 'sv-split-this-panels'
   | 'sv-split-at-cursor-panels'
   | 'sv-highlight-supporting'
+  | 'sv-highlight-confirmed'
   | 'sv-highlight-putative'
   | 'sv-highlight-ambiguous'
   | 'sv-copy-inserted'
@@ -193,7 +194,8 @@ export function svClusterMenu(sv: SvClusterMenuContext): ReadMenuEntry[] {
           ? { disabled: true, title: sv.splitPanelsBlocked } : { title: splitPanelsTitle() }),
       );
     }
-    entries.push(item('sv-highlight-supporting', 'Highlight confirmed reads', 'pin'),
+    entries.push(item('sv-highlight-supporting', 'Highlight carriers (confirmed + putative)', 'pin'),
+      item('sv-highlight-confirmed', 'Highlight confirmed only', 'pin'),
       item('sv-highlight-putative', 'Highlight putative reads', 'pin'),
       item('sv-highlight-ambiguous', 'Highlight ambiguous reads', 'pin'));
     for (const c of shown()) entries.push(...(c.svClusterItems?.(sv) ?? []));
