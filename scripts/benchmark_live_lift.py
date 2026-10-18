@@ -175,6 +175,28 @@ def navigation_bench(handle, chroms, label, rng):
     return out
 
 
+def matched_native(native_bam, chrom, start, end, names, options):
+    """Warm decode time of a native BAM holding only ``names``'s records over
+    ``[start, end)`` (written to a temporary indexed BAM)."""
+    import pysam
+    from services.compact_read_loader import build_compact_reads_from_bam
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "matched.bam")
+        with pysam.AlignmentFile(native_bam) as src, pysam.AlignmentFile(path, "wb", template=src) as out:
+            for rec in src.fetch(chrom, start, end):
+                if rec.query_name in names:
+                    out.write(rec)
+        pysam.index(path)
+        build_compact_reads_from_bam(path, chrom, start, end, spanning_only=False, **options)  # warm the handle
+        t0 = time.perf_counter()
+        reads = build_compact_reads_from_bam(path, chrom, start, end, spanning_only=False, **options)
+        elapsed = ms(t0)
+        from services.bam_handles import discard_bam_handle
+        discard_bam_handle(path)
+        return elapsed, len(reads)
+
+
 def load_bench(sidecar, src_bam, native_bam, chrom, hap, views, lo, hi, rng):
     from services.compact_read_loader import build_compact_reads_from_bam
     from services.lift.compose import lift_compact_reads
@@ -217,18 +239,23 @@ def load_bench(sidecar, src_bam, native_bam, chrom, hap, views, lo, hi, rng):
         t0 = time.perf_counter()
         native = build_compact_reads_from_bam(native_bam, chrom, sel.start, sel.end, spanning_only=False, **options)
         native_ms = ms(t0)
+        # Matched cohort: the native records of exactly the molecules this lifted load decoded.
+        matched_ms, matched_records = matched_native(native_bam, chrom, sel.start, sel.end,
+                                                     {r["id"] for r in decoded}, options)
         rows.append({"view": [s, e], "pieces": len(sel.pieces), "selection_fresh_ms": fresh,
                      "selection_bincache_cold_ms": cold, "selection_100kb_warm_ms": warm100,
                      "plan_ms": plan_ms, "source_records": len(decoded), "source_decode_ms": decode_ms,
                      "lift_ms": lift_ms, "lifted_rows": len(lifted), "native_records": len(native),
                      "native_decode_ms": native_ms,
                      "lift_over_decode": round(lift_ms / max(decode_ms, 1e-9), 3),
-                     "lifted_over_native": round((decode_ms + lift_ms) / max(native_ms, 1e-9), 3)})
+                     "lifted_over_native": round((decode_ms + lift_ms) / max(native_ms, 1e-9), 3),
+                     "matched_native_records": matched_records, "matched_native_decode_ms": matched_ms,
+                     "lifted_over_matched_native": round((decode_ms + lift_ms) / max(matched_ms, 1e-9), 3)})
         del s100
     summary = {k: {"median": pct([r[k] for r in rows[1:]], 0.5), "p95": pct([r[k] for r in rows[1:]], 0.95)}
                for k in ("selection_fresh_ms", "selection_bincache_cold_ms", "selection_100kb_warm_ms", "plan_ms",
                          "source_decode_ms", "lift_ms", "native_decode_ms", "lift_over_decode",
-                         "lifted_over_native")}
+                         "lifted_over_native", "matched_native_decode_ms", "lifted_over_matched_native")}
     return {"sidecar_open_ms": open_ms, "target_chrom_first_load_ms": chrom_load_ms, "views": rows,
             "summary_excluding_first_view": summary}
 
