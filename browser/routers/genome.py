@@ -25,7 +25,6 @@ from services.primer_config import primer_config_payload
 from services.runtime import copilot_included, get_public_mode
 from utils.chrom import normalize_chrom_name
 
-
 router = APIRouter(tags=["genome"])
 
 
