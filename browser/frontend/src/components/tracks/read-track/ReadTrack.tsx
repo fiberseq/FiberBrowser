@@ -560,7 +560,7 @@ export function ReadTrack({
     reads, totalReads, totalOverlappingReads, totalSpanningReads, loading, hasMethylationData,
     workingReads, hiddenByMinFootprints, workingSampling, warning, fetchFailed,
     displayReads, profileReads, displaySampleCount, fetchSequenceRef, currentDataSequenceRef, dataSequence,
-    coverageData, coverageMax, coverageReads, dataViewportKey, serverMetaprofile, fulfilledReadFetchCount,
+    coverageData, coverageMax, coverageReads, coverageLiveLift, dataViewportKey, serverMetaprofile, fulfilledReadFetchCount,
     overlayMarks, svSummary,
   } = useReadTrackData({
     stateKey, readStrand, liftHap,
@@ -605,9 +605,10 @@ export function ReadTrack({
   // or failed) are drawn by nothing and must not be hit or read either: their
   // intervals would pair with the new chrom/start.
   const currentDataViewportKey = makeDataViewportKey(chrom, start, end, datasetId, linkedSessionId, linkedRegion, readStrand, liftHap);
-  // A live-lift panel: hatching on its coverage histogram where the map has no correspondence.
+  // A live-lift panel: coverage may be a separate feed-driven row; publishFeed
+  // suppresses only the embedded histogram, not its map correspondence.
   const liftCorrespondence = useLiftCorrespondence(currentDataset, chrom, start, end, liftHap,
-    showCoverageHistogram && regionWidth <= maxRegionForReads);
+    storeShowCoverageHistogram && regionWidth <= maxRegionForReads);
   const isDataViewportStale = dataViewportKey !== currentDataViewportKey;
 
   // Family-tagged BAMs carry compact `fi`/`fq` dimensions on tf_sr. Keep an
@@ -1295,6 +1296,7 @@ export function ReadTrack({
       maxRegionForReads,
       coverageData: coverageData ?? undefined,
       coverageMax,
+      coverageLiveLift,
       annotationOverlays: myAnnotationOverlays ?? undefined,
       annotationColors,
       enabledAnnotationTypes,
@@ -1338,7 +1340,7 @@ export function ReadTrack({
       const { panOffset: currentPanOffset, panScope: currentPanScope, setPanOffset } = useEphemeralStore.getState();
       if (currentPanOffset !== 0 && currentPanScope === panScope) setPanOffset(0);
     }
-  }, [loading, dataSequence, isDataViewportStale, displayReads, width, renderHeight, regionWidth, chrom, start, end, hasCluster, myClusterAssignments, myClusterOrder, drawLoadingState, hasStaleDisplayReads, fetchFailed, genes, allPeaks, hasFilter, myFilteredReadIds, datasetLabel, datasetColor, sidebarWidth, enabledModTypes, enabledCigarTypes, isBAM, layerType, modificationOverlays, overlayMarks, jupyterReadHighlights, jupyterFootprintColorMap, allJupyterMarkers, hasClusterFocus, myClusterFocus, mySelectedClusters, linkedBoundsStart, linkedHighlightIds, clusterStateConsensus, isReversed, activeColormap, orthogonalTracksForRules, renderFillReadHeight, renderReadRowHeight, readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth, renderReadScrollOffset, selectedReadIds, showCoverageHistogram, maxRegionForReads, selectedFootprints, footprintCrossHighlight, footprintGroups, selectedFamilyGroupId, footprintAnalysisLayer, coverageData, coverageMax, myAnnotationOverlays, annotationColors, enabledAnnotationTypes, annotationOpacityMin, annotationOpacityMax, annotationThresholds, layerColors, isPanning, canvasRenderVersion, consensusView, highlightedConsensusFamilies, nativeLattice, exportInProgress, readHighlightIds, svDisplayEnabled, svMinLen, svBand, svVisibleSummary, zoomedOutBannerShown, liftCorrespondence, liftHap, liveLiftAxis]);
+  }, [loading, dataSequence, isDataViewportStale, displayReads, width, renderHeight, regionWidth, chrom, start, end, hasCluster, myClusterAssignments, myClusterOrder, drawLoadingState, hasStaleDisplayReads, fetchFailed, genes, allPeaks, hasFilter, myFilteredReadIds, datasetLabel, datasetColor, sidebarWidth, enabledModTypes, enabledCigarTypes, isBAM, layerType, modificationOverlays, overlayMarks, jupyterReadHighlights, jupyterFootprintColorMap, allJupyterMarkers, hasClusterFocus, myClusterFocus, mySelectedClusters, linkedBoundsStart, linkedHighlightIds, clusterStateConsensus, isReversed, activeColormap, orthogonalTracksForRules, renderFillReadHeight, renderReadRowHeight, readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth, renderReadScrollOffset, selectedReadIds, showCoverageHistogram, maxRegionForReads, selectedFootprints, footprintCrossHighlight, footprintGroups, selectedFamilyGroupId, footprintAnalysisLayer, coverageData, coverageMax, coverageLiveLift, myAnnotationOverlays, annotationColors, enabledAnnotationTypes, annotationOpacityMin, annotationOpacityMax, annotationThresholds, layerColors, isPanning, canvasRenderVersion, consensusView, highlightedConsensusFamilies, nativeLattice, exportInProgress, readHighlightIds, svDisplayEnabled, svMinLen, svBand, svVisibleSummary, zoomedOutBannerShown, liftCorrespondence, liftHap, liveLiftAxis]);
 
   // What this panel loaded and shows, for Copilot's troubleshooting diagnostics.
   useEffect(() => {
@@ -1377,6 +1379,7 @@ export function ReadTrack({
       datasetId, chrom, start, end, isReversed, sidebarWidth,
       linkedOffset: linkedBoundsStart !== undefined ? linkedBoundsStart - start : 0,
       reads: feedSnapshot?.reads ?? NO_READS,
+      liftCorrespondence,
       dataChrom: feedSnapshot?.chrom ?? chrom,
       dataStart: feedSnapshot?.start ?? start,
       dataEnd: feedSnapshot?.end ?? end,
@@ -1385,7 +1388,7 @@ export function ReadTrack({
       panScope,
       linked: Boolean(linkedSessionId),
     });
-  }, [stateKey, publishFeed, datasetId, chrom, start, end, isReversed, sidebarWidth, linkedBoundsStart, feedSnapshot, zoomedOutPastReads, panScope, linkedSessionId]);
+  }, [stateKey, publishFeed, datasetId, chrom, start, end, isReversed, sidebarWidth, linkedBoundsStart, feedSnapshot, zoomedOutPastReads, panScope, linkedSessionId, liftCorrespondence]);
   useEffect(() => () => { if (stateKey && publishFeed) useTrackFeedStore.getState().drop(stateKey); }, [stateKey, publishFeed]);
 
   const { text: statusText, title: statusTitle } = formatReadStatus({

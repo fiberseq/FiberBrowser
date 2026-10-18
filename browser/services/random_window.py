@@ -334,6 +334,8 @@ def _search_datasets(state, dataset_id: Optional[str], dataset_ids: Optional[lis
         wanted = state.dataset_order if dataset_ids is None else [d for d in state.dataset_order if d in set(dataset_ids)]
         datasets = [state.get_dataset(d) for d in wanted]
         datasets = [d for d in datasets if d]
+    from services.lift.capability import require_all
+    require_all(datasets, "random_window")  # Classify the resolved scope before dropping unsupported file types.
     return [d for d in datasets if getattr(d, "data_type", None) in ("bam", "bigbed") and (d.paths or [])]
 
 

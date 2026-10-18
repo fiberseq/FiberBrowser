@@ -35,7 +35,11 @@ class VariantsCancelled(RuntimeError):
 
 
 def _dataset(state, dataset_id: str):
+    from services.query_params import resolve_dataset_id
+    from services.lift.capability import require
+    dataset_id = resolve_dataset_id(state, dataset_id)
     dataset = state.get_dataset(dataset_id) if dataset_id else None
+    require(dataset, "variants")
     if dataset is None:
         raise VariantsRequestError(f"Dataset '{dataset_id}' not found", 404)
     if getattr(dataset, "data_type", None) != "bam":
@@ -46,7 +50,9 @@ def _dataset(state, dataset_id: str):
 def _scoped_state(state, body):
     from copy import copy
     from services.panel_genomes import for_datasets
-    scoped = copy(for_datasets(state, [body.get("dataset_id")]))
+    # Resolve and classify before panel scoping, cache lookup or BAM-only validation.
+    dataset = _dataset(state, body.get("dataset_id"))
+    scoped = copy(for_datasets(state, [dataset.id]))
     ids = body.get("read_ids")
     if ids is not None and (not isinstance(ids, list) or not all(isinstance(x, str) for x in ids)):
         raise VariantsRequestError("read_ids must be a list of read names")
@@ -224,7 +230,7 @@ def scan_key(dataset_id: str, chrom: str, start: int, end: int, params: dict, id
 
 def snps_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = None) -> dict:
     state = _scoped_state(state, body)
-    dataset_id = str(body.get("dataset_id") or "")
+    dataset_id = _dataset(state, body.get("dataset_id")).id
     chrom, start, end = _region(body)
     params = scan_params(body)
     t0 = time.perf_counter()
@@ -293,7 +299,7 @@ def _columns(entry: dict, matrix: snp_scan.AlleleMatrix, candidates: list[dict])
 def alleles_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = None) -> dict:
     """Group the view's reads by allele (one SNP), by allele combination (several), or by HP tag."""
     state = _scoped_state(state, body)
-    dataset_id = str(body.get("dataset_id") or "")
+    dataset_id = _dataset(state, body.get("dataset_id")).id
     chrom, start, end = _region(body)
     params = scan_params(body)
     svs = body.get("svs")
@@ -524,7 +530,7 @@ def svs_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = Non
     from services.sv_events import extract_sv_events, normalize_min_sv_len, sv_summary_for_reads
 
     state = _scoped_state(state, body)
-    dataset_id = str(body.get("dataset_id") or "")
+    dataset_id = _dataset(state, body.get("dataset_id")).id
     chrom, start, end = _region(body)
     dataset = _dataset(state, dataset_id)
     min_len = normalize_min_sv_len(body.get("min_len"))
@@ -552,7 +558,7 @@ def sv_linkage_payload(state, body: dict, cancelled: Optional[Callable[[], bool]
     from services.sv_endpoint import classify_records
 
     state = _scoped_state(state, body)
-    dataset_id = str(body.get("dataset_id") or "")
+    dataset_id = _dataset(state, body.get("dataset_id")).id
     chrom, start, end = _region(body)
     params = scan_params(body)
     t = str(body.get("t") or "")

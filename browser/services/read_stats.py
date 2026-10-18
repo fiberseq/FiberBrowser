@@ -70,11 +70,15 @@ def compute_read_stats(
     )
     from services.lift.capability import require_for_ids
     require_for_ids(state, query.dataset_ids, "read_stats")
+    if query.read_ids_by_dataset:
+        require_for_ids(state, query.read_ids_by_dataset.keys(), "read_stats")
     sample_seed = query.sample_seed
     # The main view's selection, then any selected in panels at another locus
     # (each looked up at its own region); one aggregate over all of them.
     scopes = [(query, start, end, query.read_ids_by_dataset)]
     for region in getattr(request, "extra_regions", None) or []:
+        if region.read_ids_by_dataset:
+            require_for_ids(state, region.read_ids_by_dataset.keys(), "read_stats")
         extra = AnalysisReadQuery.from_request(
             state,
             chrom=region.chrom,

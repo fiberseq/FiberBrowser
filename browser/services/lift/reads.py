@@ -71,14 +71,17 @@ def lifted_reads_for_region(dataset, chrom: str, start: int, end: int, options: 
 # ── Viewport crops ──────────────────────────────────────────────────────────
 
 def clip_geometry(ll: dict, offset: int, width: int) -> dict:
-    """``live_lift`` segments, connectors and badges shifted by ``-offset``
-    and kept where they reach ``[0, width]``."""
+    """``live_lift`` body spans, connectors and badges shifted by ``-offset``
+    and kept where they reach ``[0, width]``; connector-only hulls have no body."""
     out = dict(ll)
     segs = []
-    for s0, s1, *rest in ll.get("segments") or ():
-        a, b = s0 - offset, s1 - offset
-        if b > 0 and a < width:
-            segs.append([max(a, 0), min(b, width), *rest])
+    for segment in ll.get("segments") or ():
+        # Subtract connectors before clipping: a viewport wholly in a
+        # target-only gap has no body. Keep the segment/connector encoding
+        # intact when body is visible (the source chain still owns one segment).
+        body = _body_spans({"segments": [segment], "connectors": ll.get("connectors")})
+        if any(b > offset and a < offset + width for a, b in body):
+            segs.append([max(segment[0] - offset, 0), min(segment[1] - offset, width), *segment[2:]])
     out["segments"] = segs
     cons = []
     for c0, c1 in ll.get("connectors") or ():
@@ -149,8 +152,10 @@ def geometry_intervals(read: dict) -> list:
     ll = read.get("live_lift")
     if not ll:
         return []
-    out = [[s[0], s[1]] for s in ll.get("segments") or ()]
-    out += [[b[0], b[0] + 1] for b in ll.get("badges") or ()]
+    out = [[a, b] for a, b in _body_spans(ll)]
+    # Badges are visible on either viewport edge; straddle the point so
+    # compact_read_bounds' half-open overlap test keeps the right edge too.
+    out += [[max(0, b[0] - 1), b[0] + 1] for b in ll.get("badges") or ()]
     return out
 
 
@@ -280,7 +285,7 @@ def lifted_coverage(dataset, chrom: str, start: int, end: int, bins: int, *, lif
             rows = lifted_reads_for_region(dataset, chrom, start, end, options)
         origin = start if rows_start is None else rows_start
         molecules = {}
-        for row in (() if correspondence_only else rows or ()):
+        for row in (() if correspondence_only else filter_lift_display(rows or (), dataset, lift_hap)):
             ll = row.get("live_lift") or {}
             label = ll.get("hap_label")
             if ll.get("alt") or label not in counts:

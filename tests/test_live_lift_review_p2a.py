@@ -130,10 +130,41 @@ def test_connector_only_crop_is_not_spanning():
            'live_lift': {'segments': [[0, 20, 0, '+', True]], 'connectors': [[5, 15]], 'badges': []}}
     cropped, spanning = project_broad_read_to_viewport(row, viewport_offset=7, region_width=5,
                                                        include_methylation=False, layer_key=())
-    assert cropped and not spanning and not is_read_spanning(cropped, 5)
+    assert cropped is None and not spanning
+    from services.packed_reads import ReadDisplayIndex
+    assert list(ReadDisplayIndex([row]).overlapping(7, 12)) == []
     row['live_lift']['connectors'] = []
     row['live_lift']['badges'] = [[10, 'source_insertion', 100, 100, 'I']]
     assert is_read_spanning(row, 20)  # a badge's point cut rejoins
+
+
+def test_right_edge_badge_survives_crop_and_display_index():
+    from services.packed_reads import ReadDisplayIndex
+    row = {'id': 'edge', 'intervals': [], 'live_lift': {'segments': [[10, 20, 0, '+', True]],
+           'connectors': [], 'badges': [[10, 'source_insertion', 100, 100, 'L']]}}
+    cropped, _ = project_broad_read_to_viewport(row, viewport_offset=0, region_width=10,
+                                               include_methylation=False, layer_key=())
+    assert cropped and cropped['live_lift']['badges'][0][0] == 10
+    assert len(list(ReadDisplayIndex([row]).overlapping(0, 10))) == 1
+
+
+def test_neutral_crop_extent_starts_at_body_after_connector():
+    row = {'id': 'uncalled', 'intervals': [], 'live_lift': {'segments': [[0, 20, 0, '+', True]],
+           'connectors': [[5, 15]], 'badges': []}}
+    cropped, _ = project_broad_read_to_viewport(row, viewport_offset=7, region_width=13,
+                                               include_methylation=False, layer_key=())
+    assert cropped['intervals'] == [[8, 13, 0]]
+
+
+@pytest.mark.parametrize('reuse', [False, True])
+def test_coverage_uses_panel_supplementary_filter(lift_env, monkeypatch, reuse):
+    from services.lift import reads
+    _client, ds = _dataset(lift_env, settings={'supplementary_display': 'hide'})
+    rows = [{'id': 'supp', 'live_lift': {'hap_label': 'MAT', 'molecule': 'supp',
+             'segments': [[0, 100, 0, '+', True]], 'source': {'supplementary': True}}}]
+    monkeypatch.setattr(reads, 'lifted_reads_for_region', lambda *a, **k: rows)
+    result = reads.lifted_coverage(ds, TARGET, 2000, 2100, 1, **({'rows': rows} if reuse else {}))
+    assert result['coverage'] == [0]
 
 
 @pytest.mark.parametrize('direct', [False, True])
@@ -223,6 +254,50 @@ def _fasta(path, sequences):
     path.write_text(''.join(f'>{name}\n{sequence}\n' for name, sequence in sequences.items()))
     pysam.faidx(str(path))
     return str(path)
+
+
+def test_session_fingerprints_relink_and_import_identity(lift_env, tmp_path):
+    import shutil
+    from models.requests import SessionExportRequest, SessionImportRequest
+    from services.session_files import check_session_files
+    from services.sessions_endpoint import build_session_export_for_request, import_session_for_request
+    client, state, manifest, bam = lift_env
+    source = _fasta(tmp_path / 'source.fa', {MAT: 'A'*10000, PAT: 'A'*10000})
+    did = _add(client, manifest, bam, source_fasta=source)['dataset']['id']
+    exported = build_session_export_for_request(state, SessionExportRequest(chrom=TARGET, start=1000, end=9000))['session']
+    paths = {str(bam), str(manifest), source}
+    assert paths <= exported['file_fingerprints'].keys()
+    assert {f['path'] for f in check_session_files(exported)['files']} >= paths
+    # Move the inputs, including the manifest's relative sidecar files, so
+    # import can succeed only if every registered source is relinked.
+    moved = tmp_path / 'moved'
+    moved.mkdir()
+    mapping = {}
+    for old in paths:
+        old_path = Path(old)
+        new = moved / old_path.name
+        if old == str(manifest):
+            shutil.move(str(old_path.parent), str(moved / 'map'))
+            new = moved / 'map' / old_path.name
+        else:
+            shutil.move(old, new)
+            suffix = '.bai' if old == str(bam) else '.fai'
+            shutil.move(old + suffix, str(new) + suffix)
+        mapping[old] = str(new)
+    checked = check_session_files(exported, mapping=mapping)
+    assert all(f['status'] != 'missing' for f in checked['files'])
+    from services.lift.registration import restore_from_session
+    state.remove_dataset(did)
+    entry = next(d for d in exported['datasets'] if d['id'] == did)
+    direct = restore_from_session(state, entry, path_mapping=mapping)['dataset']
+    assert direct['paths'] == [mapping[str(bam)]]
+    assert direct['live_lift']['source_fasta'] == mapping[source]
+    imported = import_session_for_request(state, SessionImportRequest(session=exported, path_mapping=mapping))
+    restored = next(d for d in imported['datasets'] if d['id'] == did)
+    assert restored['live_lift']['manifest'] == mapping[str(manifest)]
+    assert state.datasets[did].live_lift.source_fasta == mapping[source]
+    assert restored['source_identity'] == state.datasets[did].to_dict()['source_identity']
+    assert restored['live_lift']['key'] == state.datasets[did].live_lift.key()
 
 
 def test_anchor_checks_and_source_fasta_session(lift_env, tmp_path):

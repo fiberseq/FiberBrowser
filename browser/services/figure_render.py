@@ -167,6 +167,13 @@ def build_figure_envelope(req, state, dafc_state=None) -> dict:
             )
         viewport, frontend, layout = live["viewport"], live["frontend_state"], live["layout"]
 
+    # The current/session source names panels only after resolution. Refuse
+    # here before starting a worker, just as the headless read renderer does.
+    from services.lift.capability import require_for_ids
+    panel_ids = [p.get("datasetId") for p in frontend.get("panels", [])
+                 if isinstance(p, dict) and p.get("contentType") == "dataset" and p.get("datasetId")]
+    if panel_ids:
+        require_for_ids(state, panel_ids, "figure")
     viewport = dict(viewport)
     if req.region:
         viewport["chrom"], viewport["start"], viewport["end"] = parse_region(req.region)

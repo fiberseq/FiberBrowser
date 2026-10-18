@@ -160,6 +160,8 @@ def autozoom_for_request(
     t0 = time.time()
     chrom = state.translate_chrom(chrom)
     dataset_ids = resolve_dataset_ids(state, dataset_ids=req.dataset_ids)
+    from services.lift.capability import require_for_ids
+    require_for_ids(state, dataset_ids, "autozoom")
     if not dataset_ids:
         return {"success": False, "message": "No datasets available"}
 

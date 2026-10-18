@@ -21,6 +21,8 @@ export interface ReadPanelFeed {
   linkedOffset: number;
   /** The reads drawn (the last settled view's; [] while zoomed out). */
   reads: CompactRead[];
+  /** Map correspondence for this view, independent of read sampling/terminal call gaps. */
+  liftCorrespondence?: number[] | null;
   /** The view the reads/SVs above belong to. */
   dataChrom: string;
   dataStart: number;
@@ -43,7 +45,7 @@ interface TrackFeedState {
 
 const SHALLOW_KEYS: (keyof ReadPanelFeed)[] = [
   'datasetId', 'chrom', 'start', 'end', 'isReversed', 'sidebarWidth', 'linkedOffset', 'reads',
-  'dataChrom', 'dataStart', 'dataEnd', 'sv', 'zoomedOut', 'panScope', 'linked',
+  'dataChrom', 'dataStart', 'dataEnd', 'sv', 'zoomedOut', 'panScope', 'linked', 'liftCorrespondence',
 ];
 
 export function sameFeed(a: ReadPanelFeed | undefined, b: ReadPanelFeed): boolean {

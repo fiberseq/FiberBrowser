@@ -1012,6 +1012,8 @@ def _dataset_bam_paths(state, dataset_id):
     dataset = state.get_dataset(dataset_id) if dataset_id else None
     if dataset is None:
         return None, None, "Dataset not found"
+    from services.lift.capability import require
+    require(dataset, "insertion_lens")
     if getattr(dataset, "data_type", None) != "bam":
         return dataset_id, None, "The insertion lens needs a BAM dataset (insertions live in the alignments)"
     paths = list(getattr(dataset, "paths", None) or [getattr(dataset, "path", None)])

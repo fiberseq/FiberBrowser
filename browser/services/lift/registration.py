@@ -147,10 +147,15 @@ def owns_session_entry(entry: dict) -> bool:
     return bool(entry.get("live_lift")) or entry.get("data_type") == "bam_livelift"
 
 
-def restore_from_session(state, entry: dict) -> dict:
+def restore_from_session(state, entry: dict, *, path_mapping: Optional[dict] = None) -> dict:
     """Reopen a session's lifted dataset under its id and label (refused, with
     the "enable live lift" notice, while the flag is off)."""
     require_enabled()
+    # Session import maps the entire entry already; direct restorers can use
+    # the same rule, including manifest/source FASTA rather than just BAMs.
+    if path_mapping:
+        from services.session_files import apply_path_mapping
+        entry = apply_path_mapping(entry, path_mapping)
     spec = entry.get("live_lift") or {}
     result = add_live_lift_dataset(state, paths=entry.get("paths") or [], manifest=spec.get("manifest"),
                                    haplotypes=spec.get("haplotypes") or (), settings=spec.get("settings"),

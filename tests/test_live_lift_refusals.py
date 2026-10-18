@@ -19,7 +19,8 @@ from test_live_lift_endpoints import _add, lift_env  # noqa: F401 - fixture
 from services.lift.guard import LIFT_ALLOWED, LIFT_PREFIX, named_dataset_ids
 
 
-_CARRIERS = {"dataset_id", "dataset_ids", "source_dataset_id", "read_ids_by_dataset", "viewports", "windows"}
+_CARRIERS = {"dataset_id", "dataset_ids", "source_dataset_id", "read_ids_by_dataset", "viewports", "windows",
+             "extra_regions", "read_ids", "cluster_assignments", "cluster_patterns"}
 
 
 def _routes(app):
@@ -131,3 +132,66 @@ def test_services_refuse_without_the_guard(lift_env):
     result = result[1] if isinstance(result, tuple) else result
     assert result["metaprofile"] is None and result["live_lift_notices"]
     assert "sv_summary" not in result or not result["sv_summary"]
+
+
+@pytest.mark.parametrize('carrier', ['read_ids', 'cluster_assignments', 'cluster_patterns'])
+def test_guard_finds_nested_dataset_maps(carrier):
+    from starlette.datastructures import QueryParams
+    assert named_dataset_ids(QueryParams(), {}, {'extra_regions': [{'windows': [{carrier: {'lift': []}}]}]}) == ['lift']
+
+
+@pytest.mark.parametrize('extra_only', [False, True])
+def test_stats_selected_ids_refuse_in_service_and_http(lift_env, extra_only):
+    from models.requests import ReadStatsRequest
+    from services.analysis_query import AnalysisReadQuery
+    from services.lift.capability import LiveLiftUnsupported
+    from services.read_stats import compute_read_stats
+    client, state, manifest, bam = lift_env
+    did = _add(client, manifest, bam)['dataset']['id']
+    native = state.add_dataset('native', bam).id
+    body = {'read_ids_by_dataset': {native: ['plus']}}
+    if extra_only:
+        body['extra_regions'] = [dict(chrom=TARGET, start=1000, end=9000, read_ids_by_dataset={did: ['plus']})]
+    else:
+        body['read_ids_by_dataset'][did] = ['plus']
+        with pytest.raises(LiveLiftUnsupported):
+            AnalysisReadQuery.from_request(state, chrom=TARGET, start=1000, end=9000,
+                                           read_ids_by_dataset={did: ['plus']})
+    with pytest.raises(LiveLiftUnsupported):
+        compute_read_stats(state, TARGET, 1000, 9000, False, ReadStatsRequest(**body))
+    response = client.post('/api/reads/stats', params=dict(chrom=TARGET, start=1000, end=9000), json=body)
+    assert response.status_code == 409 and response.json()['notice']
+
+
+@pytest.mark.parametrize('path,method,body', [
+    ('/api/insertions/clusters', 'GET', {}), ('/api/insertions/lens', 'GET', {}),
+    ('/api/reads/random_window', 'GET', {}), ('/api/reads/top_windows', 'GET', {}),
+    ('/api/autozoom', 'POST', {}),
+    *[(f'/api/variants/{kind}', 'POST', {}) for kind in ('snps', 'alleles', 'svs', 'sv_linkage')],
+    ('/api/sv/split', 'POST', {'t': 'D', 'ref': 4000, 'len': 100}),
+])
+def test_omitted_dataset_refuses_lifted_default(lift_env, path, method, body):
+    client, state, manifest, bam = lift_env
+    did = _add(client, manifest, bam)['dataset']['id']
+    assert state.dataset_order[0] == did
+    region = dict(chrom=TARGET, start=1000, end=9000, pos=4000, span=1000)
+    response = client.request(method, path, params=region, **({'json': {**region, **body}} if method == 'POST' else {}))
+    assert response.status_code == 409, response.text
+    assert response.json()['notice']
+
+
+@pytest.mark.parametrize('engine', ['headless', 'numpy', 'figure'])
+def test_render_current_refusal_is_409(lift_env, engine, monkeypatch):
+    import services.playwright_render as playwright
+    client, state, manifest, bam = lift_env
+    did = _add(client, manifest, bam)['dataset']['id']
+    # A refusal must happen before any renderer/worker starts.
+    monkeypatch.setattr(playwright._WORKER, 'submit', lambda *a, **k: pytest.fail('started a render worker'))
+    state.live_figure_state = {'viewport': dict(chrom=TARGET, start=1000, end=9000), 'layout': None,
+                              'frontend_state': {'panels': [{'id': 'p', 'contentType': 'dataset', 'datasetId': did}]}}
+    body = dict(source='current', chrom=TARGET, start=1000, end=9000, tracks=['reads'], width=600)
+    if engine != 'figure':
+        body['engine'] = engine
+    response = client.post('/api/render/figure' if engine == 'figure' else '/api/render', json=body)
+    assert response.status_code == 409, response.text
+    assert response.json()['notice']

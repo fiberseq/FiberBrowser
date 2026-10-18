@@ -6,6 +6,7 @@ import { clusterAssignmentForRead } from './readFilter';
 import { tfFamilyMetadata } from '../../../utils/tfFamilies';
 import { consensusRecordSummary } from '../../../utils/consensusVisual';
 import { LiveLiftTooltipLines } from '../../../features/liveLift/LiveLiftTooltip';
+import { readBodyExtent } from './readExtent';
 
 interface ReadTooltipProps {
   hoveredRead: { read: CompactRead; x: number; y: number };
@@ -26,9 +27,9 @@ export function ReadTooltip({
 }: ReadTooltipProps) {
   const read = hoveredRead.read;
   const footprints = read.intervals.filter(iv => iv[2] > 0);
-  const allPositions = read.intervals;
-  const readStart = allPositions.length > 0 ? Math.min(...allPositions.map(iv => iv[0])) : 0;
-  const readEnd = allPositions.length > 0 ? Math.max(...allPositions.map(iv => iv[1])) : 0;
+  const extent = readBodyExtent(read);
+  const readStart = extent?.lo ?? 0;
+  const readEnd = extent?.hi ?? 0;
   const readSize = readEnd - readStart;
   const cluster = clusterAssignmentForRead(myClusterAssignments, read.id);
   const state = myReadStateDetails?.[read.id];

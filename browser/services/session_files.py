@@ -79,12 +79,19 @@ def _session_refs(session: dict, keep) -> list[dict]:
         refs.append({"kind": kind, "label": label or _basename(path), "path": path})
 
     for dataset in session.get("datasets", []) or []:
-        if dataset.get("pack") or restorer_for(dataset) is not None:
+        lifted = dataset.get("data_type") == "bam_livelift" or bool(dataset.get("live_lift"))
+        if not lifted and (dataset.get("pack") or restorer_for(dataset) is not None):
             # A plugin pack's dataset: rebuilt from its source dataset (listed itself) on import,
             # or skipped by a build without that pack; its built files need no relinking.
             continue
         for path in dataset.get("paths", []) or []:
             add("dataset", dataset.get("label") or dataset.get("id"), path)
+        if lifted:
+            # A built-in restorer still opens real inputs; unlike derived
+            # plugin datasets these need fingerprints and file relinking.
+            spec = dataset.get("live_lift") or {}
+            add("lift map", dataset.get("label"), spec.get("manifest"))
+            add("reference", "Live lift source FASTA", spec.get("source_fasta"))
         for path in derived_bundle_paths(dataset):
             add("derived layers", dataset.get("label") or dataset.get("id"), path)
     for overlay in session.get("overlays", []) or []:

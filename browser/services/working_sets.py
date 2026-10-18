@@ -1468,9 +1468,9 @@ def project_broad_read_to_viewport(
         for layer in (adjusted_read.get("layers") or {}).values():
             visible_annotations.extend(layer.get("intervals") or [])
         # A live-lift row seen only through a body segment or a badge is still drawn.
-        from services.lift.reads import clip_geometry
+        from services.lift.reads import _body_spans, clip_geometry
         geometry = clip_geometry(read.get("live_lift") or {}, viewport_offset, region_width)
-        visible_annotations.extend([s[0], s[1]] for s in geometry.get("segments") or ())
+        visible_annotations.extend(_body_spans(geometry))
         visible_annotations.extend([b[0], b[0]] for b in geometry.get("badges") or ())
         if not visible_annotations:
             return None, False

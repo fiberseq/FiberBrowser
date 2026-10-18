@@ -80,6 +80,11 @@ class AnalysisReadQuery:
         # Live-lift datasets support the display paths only (services/lift/capability.py, default-deny): an
         # analysis naming one is refused (409); one over "every dataset" leaves them out.
         from services.lift.capability import SUPPORTED, is_lifted, require_for_ids
+        normalized_read_ids = _normalize_read_id_map(state, read_ids_by_dataset)
+        if read_ids_by_dataset:
+            # Selected ids name datasets even when the all-datasets scope
+            # omits lifted panels; never reinterpret their rows as BigBed.
+            require_for_ids(state, normalized_read_ids.keys(), capability)
         if capability not in SUPPORTED:
             if dataset_ids is None and dataset_id is None:
                 datasets = getattr(state, "datasets", {}) or {}
@@ -97,7 +102,7 @@ class AnalysisReadQuery:
             dataset_ids=resolved_dataset_ids,
             spanning=bool(spanning),
             sample_seed=normalize_sample_seed(sample_seed),
-            read_ids_by_dataset=_normalize_read_id_map(state, read_ids_by_dataset),
+            read_ids_by_dataset=normalized_read_ids,
             singleton_read_ids=(
                 None if read_ids is None else [str(read_id) for read_id in read_ids if str(read_id)]
             ),

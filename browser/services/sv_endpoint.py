@@ -33,6 +33,16 @@ class SvRequestError(ValueError):
         self.status = status
 
 
+def _dataset(state, dataset_id):
+    """Resolve the default before BAM validation or cache access, including direct service calls."""
+    from services.query_params import resolve_dataset_id
+    from services.lift.capability import require
+    dataset_id = resolve_dataset_id(state, dataset_id)
+    dataset = state.get_dataset(dataset_id) if dataset_id else None
+    require(dataset, "sv_summary")
+    return dataset_id, dataset
+
+
 def _bam_records(state, dataset_id: str, chrom: str, start: int, end: int,
                  with_handle: bool = False) -> Iterator[tuple]:
     """(record, file chromosome[, path, handle]) of the dataset's primary
@@ -42,7 +52,7 @@ def _bam_records(state, dataset_id: str, chrom: str, start: int, end: int,
     from services.signal_evidence import signal_header, record_keeps_signal
     from utils.chrom import resolve_reference_name
 
-    dataset = state.get_dataset(dataset_id) if dataset_id else None
+    dataset_id, dataset = _dataset(state, dataset_id)
     if dataset is None:
         raise SvRequestError(f"Dataset '{dataset_id}' not found", 404)
     if getattr(dataset, "data_type", None) != "bam":
@@ -155,7 +165,7 @@ def _scan(state, dataset_id: str, chrom: str, start: int, end: int, floor: int) 
 
 def scan_view(state, dataset_id: str, chrom: str, start: int, end: int, floor: int) -> list[dict]:
     """Compact entries of the dataset's primary records overlapping ``[start, end)``."""
-    dataset = state.get_dataset(dataset_id) if dataset_id else None
+    dataset_id, dataset = _dataset(state, dataset_id)
     stamps = _path_stamps(getattr(dataset, "paths", None) or []) if dataset is not None else None
     if stamps is None:
         return _scan(state, dataset_id, chrom, start, end, floor)

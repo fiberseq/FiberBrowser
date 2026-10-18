@@ -5,7 +5,8 @@ The services refuse lifted datasets themselves (``capability.require``,
 that makes the refusal uniform. A request that names a ``bam_livelift``
 dataset (``dataset_id`` / ``dataset_ids`` in the query or the JSON body,
 ``read_ids_by_dataset`` keys, a ``{dataset_id}`` path parameter, or a
-``dataset_id`` inside ``viewports``/``windows``) is answered 409 with
+``dataset_id`` inside ``viewports``/``windows``/``extra_regions``, including
+their dataset-keyed selections) is answered 409 with
 one notice unless its route is on ``LIFT_ALLOWED``: the display paths, the
 lift routes and dataset bookkeeping. Routes added later are therefore closed
 to lifted datasets until someone teaches them (tests/test_live_lift_refusals.py
@@ -48,7 +49,8 @@ _FEATURES = (
     ("/api/dafc", "dafc"), ("/api/meta", "metaprofile"), ("/api/reads/info", "dense_reads"),
     ("/api/reads/image", "dense_reads"), ("/api/reads/regions", "dense_reads"),
 )
-_NESTED = ("viewports", "windows")
+_NESTED = ("viewports", "windows", "extra_regions")
+_DATASET_MAPS = ("read_ids_by_dataset", "read_ids", "cluster_assignments", "cluster_patterns")
 _MAX_BODY = 4 * 1024 * 1024
 
 
@@ -71,21 +73,25 @@ def _split(values: Iterable) -> list:
 
 
 def named_dataset_ids(query_params, path_params: dict, body) -> list:
-    """Every dataset id a request names (query, path, JSON body one level deep)."""
+    """Every dataset id a request names, including nested scopes and dataset-keyed selections."""
     ids = _split(query_params.getlist("dataset_id")) + _split(query_params.getlist("dataset_ids"))
     ids += _split([path_params.get("dataset_id")])
+    return ids + _body_dataset_ids(body)
+
+
+def _body_dataset_ids(body) -> list:
+    ids = []
     if isinstance(body, dict):
         ids += _split([body.get("dataset_id"), body.get("source_dataset_id")])
         raw = body.get("dataset_ids")
         ids += _split(raw if isinstance(raw, list) else [raw])
-        if isinstance(body.get("read_ids_by_dataset"), dict):
-            ids += list(body["read_ids_by_dataset"])
+        for key in _DATASET_MAPS:
+            if isinstance(body.get(key), dict):
+                ids += list(body[key])
         for key in _NESTED:
             for item in body.get(key) or () if isinstance(body.get(key), list) else ():
                 if isinstance(item, dict):
-                    ids += _split([item.get("dataset_id")])
-                    raw = item.get("dataset_ids")
-                    ids += _split(raw if isinstance(raw, list) else [raw])
+                    ids += _body_dataset_ids(item)
     return ids
 
 

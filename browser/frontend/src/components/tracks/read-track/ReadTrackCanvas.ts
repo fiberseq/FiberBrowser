@@ -2,6 +2,7 @@ import { useBrowserStore } from '../../../stores/browserStore';
 import type { LiftAxis } from '../../../features/liveLift/axis';
 import { drawInsertionPayload } from './liveLiftInsertionCanvas';
 import { drawLiveLiftMarks, drawLiveLiftHaplotypeStripe, liveLiftBodyRects, liveLiftBodySpans, liveLiftBadgeGeometry } from './liveLiftCanvas';
+import { readBodyExtent } from './readExtent';
 import type { CoverageResponse } from '../../../api/coverage';
 import { getCanvasRenderScale, setupHighDpiCanvas } from '../../../utils/canvasUtils';
 import { buildRuleMatchContext, footprintMatchesRule, ruleTargetsLayer } from '../../../utils/ruleMatching';
@@ -222,7 +223,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
 
     // The panel's ground (the colormap's, light or dark), and text that reads on it.
     const ink = inkOn(noReadBackgroundColor);
-    if (coverageData && coverageMax && coverageMax > 0) {
+    if (coverageData && ((coverageMax ?? 0) > 0 || coverageLiveLift?.hatching)) {
       // The coverage fills the track: a label row, then the plot down to the
       // bottom (less the zoomed-out banner's line), over the same span the axis
       // and reads use (right of the cluster sidebar).
@@ -240,7 +241,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
       ctx.fillStyle = ink.dark ? 'rgba(147, 178, 230, 0.65)' : 'rgba(100, 140, 200, 0.55)';
       for (let b = 0; b < covBins; b++) {
         if (coverageData[b] === 0) continue;
-        const barH = (coverageData[b] / coverageMax) * plotHeight;
+        const barH = (coverageData[b] / Math.max(1, coverageMax ?? 0)) * plotHeight;
         // Bin b covers the b-th slice of the region; a reversed view draws it from the right.
         const x = sidebarWidth + (isReversed ? plotWidth - (b + 1) * barW : b * barW);
         const spans = params.axis?.spans(start + b * regionWidth / covBins, start + (b + 1) * regionWidth / covBins)
@@ -1622,13 +1623,13 @@ export function drawReadTrack(params: DrawReadsParams): void {
       }
     }
 
-    const hasDrawableExtent = read.intervals.length > 0;
+    const hasDrawableExtent = readExtent !== null;
 
     // Draw linked-molecule visual emphasis. This is intentionally independent
     // from selectedReadIds so it does not alter downstream selected-read stats.
     if (hasDrawableExtent && linkedHighlightIds?.has(read.id)) {
-      const readStartRel = Math.min(...read.intervals.map(iv => iv[0])) + linkedOffset;
-      const readEndRel = Math.max(...read.intervals.map(iv => iv[1])) + linkedOffset;
+      const readStartRel = readExtent!.start + linkedOffset;
+      const readEndRel = readExtent!.end + linkedOffset;
       const readX = isReversed ? toX(readEndRel) : toX(readStartRel);
       const readW = Math.max(1, Math.abs(toX(readEndRel) - toX(readStartRel)));
 
@@ -1649,8 +1650,8 @@ export function drawReadTrack(params: DrawReadsParams): void {
     // and a bar in the gutter (not a data colour; the pulse is an overlay).
     if (hasDrawableExtent && readHighlightIds && readHighlightIds.size > 0
       && (readHighlightIds.has(read.id) || readHighlightIds.has(read.id.replace(/_\d+$/, '')))) {
-      const readStartRel = Math.min(...read.intervals.map(iv => iv[0])) + linkedOffset;
-      const readEndRel = Math.max(...read.intervals.map(iv => iv[1])) + linkedOffset;
+      const readStartRel = readExtent!.start + linkedOffset;
+      const readEndRel = readExtent!.end + linkedOffset;
       const readX = isReversed ? toX(readEndRel) : toX(readStartRel);
       const readW = Math.max(1, Math.abs(toX(readEndRel) - toX(readStartRel)));
       ctx.strokeStyle = '#ca8a04';
@@ -1664,8 +1665,8 @@ export function drawReadTrack(params: DrawReadsParams): void {
     // Draw Jupyter highlight background
     const highlightColor = jupyterReadHighlights.get(read.id);
     if (hasDrawableExtent && highlightColor) {
-      const readStartRel = Math.min(...read.intervals.map(iv => iv[0])) + linkedOffset;
-      const readEndRel = Math.max(...read.intervals.map(iv => iv[1])) + linkedOffset;
+      const readStartRel = readExtent!.start + linkedOffset;
+      const readEndRel = readExtent!.end + linkedOffset;
       const readX = isReversed ? toX(readEndRel) : toX(readStartRel);
       const readW = Math.max(1, Math.abs(toX(readEndRel) - toX(readStartRel)));
 
@@ -1682,8 +1683,8 @@ export function drawReadTrack(params: DrawReadsParams): void {
 
     // Draw selection highlight for shift+click selected read
     if (hasDrawableExtent && selectedReadIds?.has(read.id)) {
-      const readStartRel = Math.min(...read.intervals.map(iv => iv[0])) + linkedOffset;
-      const readEndRel = Math.max(...read.intervals.map(iv => iv[1])) + linkedOffset;
+      const readStartRel = readExtent!.start + linkedOffset;
+      const readEndRel = readExtent!.end + linkedOffset;
       const readX = isReversed ? toX(readEndRel) : toX(readStartRel);
       const readW = Math.max(1, Math.abs(toX(readEndRel) - toX(readStartRel)));
 
@@ -1982,6 +1983,10 @@ export function withReadBodyClip(
 }
 
 export function getCompactReadExtent(read: CompactRead): { start: number; end: number } | null {
+  if (read.live_lift) {
+    const extent = readBodyExtent(read);
+    return extent ? { start: extent.lo, end: extent.hi } : null;
+  }
   let minStart = Infinity;
   let maxEnd = -Infinity;
 

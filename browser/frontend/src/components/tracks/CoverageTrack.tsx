@@ -42,6 +42,7 @@ export function CoverageTrack({ width, height, panel, sidebarWidth = 0 }: {
       sidebarWidth, trackWidth: Math.max(1, width - sidebarWidth), regionWidth,
       histogramHeight: height, headerHeight: 0, linkedOffset: offset,
       isReversed: feed!.isReversed, width, backgroundColor: typeof background === 'string' ? background : undefined,
+      liftCorrespondence: feed!.liftCorrespondence,
       axis, start: feed!.start,
     });
   }, [feed, width, height, sidebarWidth, background, canvasRenderVersion, axis]);

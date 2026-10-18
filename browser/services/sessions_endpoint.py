@@ -749,6 +749,12 @@ def state_import_payload(state, *, viewport: dict, frontend: dict, contact_map=N
     response_datasets = []
     for dataset_id in state.dataset_order:
         dataset = state.datasets[dataset_id]
+        # Match dataset listing/registration, including live_lift and source
+        # identity: restored controls and coverage caches need both immediately.
+        # Older embedded callers still supply the lightweight dataset protocol.
+        if hasattr(dataset, "to_dict"):
+            response_datasets.append(dataset.to_dict())
+            continue
         response_datasets.append({
             "id": dataset.id,
             "label": dataset.label,

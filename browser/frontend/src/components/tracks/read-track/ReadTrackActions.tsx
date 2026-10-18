@@ -21,6 +21,7 @@ import { clusterAtCursor, clusterForEvent, clusterSupportLabel, readSvEventAt, s
 import { clearSvSplit, splitBySv, splitIntoPanelsBySv } from '../../../utils/svAlleleSplit';
 import { copyInsertedSequence } from '../../../utils/svInsertedSequence';
 import type { ReadContextTarget } from './useReadTrackMouse';
+import { readBodyExtent as readExtent } from './readExtent';
 
 const IS_MAC = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
 const HINT_MS = 12_000;
@@ -55,18 +56,6 @@ export interface ReadTrackActionsProps {
   svSummary?: SvSummary | null;
   svEnabled?: boolean;
   svMinLen?: number;
-}
-
-/** A read's drawn extent (view-relative bp) from its intervals. */
-function readExtent(read: CompactRead): { lo: number; hi: number } | null {
-  if (read.intervals.length === 0) return null;
-  let lo = Infinity;
-  let hi = -Infinity;
-  for (const iv of read.intervals) {
-    lo = Math.min(lo, iv[0]);
-    hi = Math.max(hi, iv[1]);
-  }
-  return { lo, hi };
 }
 
 /**
