@@ -254,13 +254,13 @@ def sv_insert_seq_payload(state, *, dataset_id: str, chrom: str, ref: int, read_
     candidates = exact or by_base
 
     def has_insertion(read) -> bool:
-        events = extract_sv_events(read, SV_MIN_LEN_LOWEST) or []
+        events = extract_sv_events(read, SV_MIN_LEN_LOWEST, reference=getattr(state, 'fasta', None)) or []
         return any(e.get("t") == "I" and e.get("q") == q for e in events)
 
     matching = [read for read in candidates if has_insertion(read)] or candidates
     for read in matching:
         seq = read.query_sequence or ""
-        event = next((ev for ev in extract_sv_events(read, SV_MIN_LEN_LOWEST) or []
+        event = next((ev for ev in extract_sv_events(read, SV_MIN_LEN_LOWEST, reference=getattr(state, 'fasta', None)) or []
                       if ev.get('t') == 'I' and ev['q'] == q and ev['len'] == length and ev.get('raw_pieces')), None)
         if event is not None:
             inserted = ''.join(seq[p['q']:p['q'] + p['len']] for p in event['raw_pieces'] if p['t'] == 'I')

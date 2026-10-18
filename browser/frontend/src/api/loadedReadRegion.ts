@@ -162,7 +162,13 @@ export function projectLoadedReads(data: ReadsResponse, offset: number, width: n
       if (evidence.some(ev => (ev.t === 'D' || ev.t === 'I') && [ev.ref, ev.ref_end ?? ev.ref + (ev.t === 'D' ? ev.len : 1), ev.raw_ref ?? ev.ref, ev.raw_ref_end ?? ev.ref]
         .some(p => Math.abs(p - start) <= Math.max(50, ev.len * 0.1) || Math.abs(p - end) <= Math.max(50, ev.len * 0.1)))) return;
       Object.defineProperty(next, 'sv_evidence', { configurable: true, enumerable: true, writable: true, value: evidence });
-      const kept = (read.sv ?? []).filter(ev => ev.t !== 'SA' && ev.ref < end && ev.ref + (ev.t === 'D' ? ev.len : 1) > start);
+      const kept = (read.sv ?? []).filter(ev => {
+        if (ev.t === 'SA') return false;
+        const a = Math.min(ev.ref, ev.raw_ref ?? ev.ref);
+        const b = Math.max(ev.ref_end ?? ev.ref + (ev.t === 'D' ? ev.len : 1),
+          (ev.raw_ref_end ?? ev.raw_ref ?? ev.ref) + 1);
+        return a < end && b > start;
+      });
       Object.defineProperty(next, 'sv', { configurable: true, enumerable: true, writable: true,
         value: kept.length ? [...kept, ...(read.sv ?? []).filter(ev => ev.t === 'SA')] : undefined });
     }

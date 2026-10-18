@@ -118,8 +118,9 @@ alleles even when their glyphs are hidden by the display cutoff.
 
 Chromatin cuts use only deleted pieces of the displayed anchor's original CIGAR,
 at the display cutoff. Matched bridges survive, and normalization never moves
-query marks. Lens rows splice the full replacement query span, separately from
-the insertion's size. Alternate-allele right flanks start after the replaced
+query marks. Lens rows splice the full replacement query span, including boundary
+D operations through `raw_ref_end`. Spliced MD drops those deletions and keeps
+matched-bridge mismatches. Alternate-allele right flanks start after the replaced
 reference span; reference reads align their replaced query segment against that
 allele. Insert-sequence lookup concatenates raw I pieces, excluding matched
 bridges, and uses the raw anchor when locating the source record.

@@ -168,3 +168,29 @@ def test_daf_builders_consense_each_repeat_carrier_in_the_canonical_frame(tmp_pa
     assert meta['consensus']['carriers_ct'] == 5 and meta['consensus']['carriers_ga'] == 6
     assert all(c['seq'] == ref[c['q']:c['q'] + 4] * 25 for c in lens['carriers'])
     assert all(c['knots'][0][0] == 0 and c['knots'][-1][0] == 100 for c in lens['carriers'])
+
+
+@pytest.mark.parametrize('middle', [[(2, 10), (1, 100)], [(1, 100), (2, 10)],
+                                    [(2, 5), (1, 100), (2, 5)]])
+def test_lens_splices_boundary_deletions_and_updates_md(middle):
+    rec = _seg([(0, 100)] + middle + [(0, 100)], start=900)
+    rec.set_tag('MD', '100^AAAAAAAAAA100')
+    event, = extract_sv_events(rec, 50)
+    plan = _carrier_plan(rec, dict(kind='cigar', event=event), 100)
+    assert plan['ref'] == 1000 and plan['ref_end'] == 1010
+    spliced = splice_read(rec, plan)
+    assert spliced.cigarstring == '300M' and spliced.reference_end == 1200
+    assert spliced.get_tag('MD') == '300'
+    assert rec.reference_end == 1110 and rec.get_tag('MD') == '100^AAAAAAAAAA100'
+
+
+def test_insert_sequence_endpoint_concatenates_merged_i_pieces_without_matched_bridges(tmp_path, monkeypatch):
+    from services import sv_endpoint
+    from types import SimpleNamespace
+    seq = 'C' * 20 + 'A' * 30 + 'G' * 5 + 'T' * 30 + 'C' * 20
+    rec = _seg([(0, 20), (1, 30), (0, 5), (1, 30), (0, 20)], start=0, seq=seq)
+    fasta = fasta_file(tmp_path, 'C' * 20 + 'G' * 5 + 'C' * 20)
+    monkeypatch.setattr(sv_endpoint, '_bam_records', lambda *_a, **_k: [(rec, 'chrT')])
+    out = sv_endpoint.sv_insert_seq_payload(SimpleNamespace(fasta=fasta), dataset_id='synthetic', chrom='chrT',
+                                           ref=20, read_id=rec.query_name, q=20, length=60)
+    assert out['seq'] == 'A' * 30 + 'T' * 30 and out['len'] == 60

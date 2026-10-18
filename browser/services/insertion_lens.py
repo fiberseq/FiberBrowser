@@ -141,33 +141,30 @@ def soft_clip_len(read, side: str) -> int:
 # Splicing a carrier
 
 
+def _replacement_ops(cigartuples, reference_start, event):
+    """Complete raw replacement, including zero-query boundary deletions."""
+    q0 = int(event['q'])
+    q1 = int(event.get('q_end', q0 + event['len']))
+    r0 = event.get('raw_ref', event.get('ref'))
+    r1 = event.get('raw_ref_end', event.get('ref_end'))
+    q, ref, first = 0, reference_start, None
+    for i, (op, n) in enumerate(cigartuples):
+        if first is None and q == q0 and (op in (1, 2) if r0 is not None else op == 1) and (r0 is None or ref == r0):
+            first = i
+        q += n if op in (0, 1, 4, 7, 8) else 0
+        ref += n if op in (0, 2, 3, 7, 8) else 0
+        if first is not None and q == q1 and (r1 is None or ref == r1):
+            return first, i + 1
+    raise ValueError('replacement span does not end on CIGAR operation boundaries')
+
+
 def splice_cigar(cigartuples: list[tuple[int, int]], reference_start: int, event: dict) -> list[tuple[int, int]]:
-    """``cigartuples`` with the event's query span (first to last inserted base) as one ``M``."""
-    q_start = int(event["q"])
-    q_end = int(event.get('q_end', q_start + int(event["len"])))
-    out: list[tuple[int, int]] = []
-    q = 0
-    inside = False
-    done = False
-    for op, length in cigartuples:
-        consumes_query = op in (0, 1, 4, 7, 8)
-        if not inside and not done and op == _I and q == q_start:
-            inside = True
-        if inside:
-            if consumes_query:
-                q += length
-            if q >= q_end:
-                if q != q_end:
-                    raise ValueError("insertion span does not end on an operation boundary")
-                _append(out, _M, q_end - q_start)
-                inside = False
-                done = True
-            continue
-        _append(out, op, length)
-        if consumes_query:
-            q += length
-    if not done:
-        raise ValueError("insertion span not found in CIGAR")
+    """Replace the complete raw reference/query interval by aligned query bases."""
+    first, last = _replacement_ops(cigartuples, reference_start, event)
+    out = []
+    for op, n in [*cigartuples[:first], (_M, int(event.get('q_end', event['q'] + event['len'])) - event['q']),
+                  *cigartuples[last:]]:
+        _append(out, op, n)
     return out
 
 
@@ -231,7 +228,7 @@ def _md_string(tokens: list[tuple[str, Any]]) -> str:
     return "".join(parts)
 
 
-def splice_md(md: str, cigartuples: list[tuple[int, int]], event: dict) -> str:
+def splice_md(md: str, cigartuples: list[tuple[int, int]], event: dict, *, reference_start=0) -> str:
     """MD for the spliced alignment (``splice_cigar``).
 
     MD covers the bases of M/=/X and D operations (not N). Inside the merged
@@ -241,38 +238,21 @@ def splice_md(md: str, cigartuples: list[tuple[int, int]], event: dict) -> str:
     deletion). Outside the span the MD is unchanged.
     """
     tokens = _md_tokens(md)
-    q_start = int(event["q"])
-    q_end = int(event.get('q_end', q_start + int(event["len"])))
-    out: list[tuple[str, Any]] = []
+    first, last = _replacement_ops(cigartuples, reference_start, event)
     md_pos = 0
-    q = 0
-    inside = False
-    done = False
-    span_md_lo = None
-    for op, length in cigartuples:
-        if not inside and not done and op == _I and q == q_start:
-            inside = True
-            span_md_lo = md_pos
-            out = _md_clip(tokens, 0, md_pos)
-        md_span = length if op in (0, 2, 7, 8) else 0
-        q_span = length if op in (0, 1, 4, 7, 8) else 0
-        if inside:
+    out = []
+    for i, (op, n) in enumerate(cigartuples):
+        span = n if op in (0, 2, 7, 8) else 0
+        if i == first:
+            out.extend(_md_clip(tokens, 0, md_pos))
+        if first <= i < last:
             if op == _I:
-                out.append(("m", length))
+                out.append(('m', n))
             elif op in (0, 7, 8):
-                out.extend(_md_clip(tokens, md_pos, md_pos + length))
-            # D inside the span: its reference bases are gone; N contributes nothing.
-            md_pos += md_span
-            q += q_span
-            if q >= q_end:
-                inside = False
-                done = True
-                out.extend(_md_clip(tokens, md_pos, None))
-            continue
-        md_pos += md_span
-        q += q_span
-    if not done or span_md_lo is None:
-        raise ValueError("insertion span not found in CIGAR")
+                out.extend(_md_clip(tokens, md_pos, md_pos + n))
+        md_pos += span
+        if i == last - 1:
+            out.extend(_md_clip(tokens, md_pos, None))
     return _md_string(out)
 
 
@@ -282,7 +262,7 @@ def splice_read(read, event: dict):
     spliced.cigartuples = splice_cigar(list(read.cigartuples), read.reference_start, event)
     if read.has_tag("MD"):
         try:
-            md = splice_md(str(read.get_tag("MD")), list(read.cigartuples), event)
+            md = splice_md(str(read.get_tag("MD")), list(read.cigartuples), event, reference_start=read.reference_start)
             spliced.set_tag("MD", md, value_type="Z")
         except Exception:
             spliced.set_tag("MD", None)
@@ -539,6 +519,7 @@ def _carrier_plan(read, evidence: dict, cluster_len: int) -> dict:
         event = evidence["event"]
         query_len = int(event.get('q_end', event['q'] + event['len'])) - int(event['q'])
         ref_end, pieces = insertion_span(read.cigartuples, read.reference_start, event["q"], query_len)
+        ref_end = int(event.get('raw_ref_end', ref_end))
         return {"kind": "cigar", "partial": None, "ref": int(event.get('raw_ref', event["ref"])),
                 "ref_end": ref_end, "q": int(event["q"]), 'allele_len': int(event['len']),
                 'canonical_ref_len': event.get('ref_len', ref_end - int(event.get('raw_ref', event['ref']))),
@@ -686,7 +667,7 @@ def build_lens(
     for plan, read, bam_path, bam in _evenly(carriers_all, max_carriers):
         ins_len = int(plan["len"])
         if plan["kind"] == "cigar":
-            source = splice_read(read, {"q": plan["q"], "len": ins_len})
+            source = splice_read(read, plan)
             origin = plan["ref"]
         elif plan["kind"] == "clip":
             source = splice_clip(read, plan["side"])
