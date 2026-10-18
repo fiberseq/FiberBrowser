@@ -12,10 +12,13 @@ import { liveLiftTooltipLines } from './LiveLiftTooltip';
 import { liveLiftChipText } from './register';
 import { isBamBacked, isLiveLift } from '../../utils/datasetKinds';
 import { liveLiftHaplotypeColor } from './palette';
+import { makeAxis } from './axis';
+import { insertionPayloadRects } from '../../components/tracks/read-track/liveLiftInsertionCanvas';
+import type { LiveLiftInsertion } from '../../components/tracks/read-track/types';
 
 /** A recording 2D context (as svCanvasDraw.test.ts): fills after clipping, horizontal strokes and texts. */
 function recordingContext() {
-  const fills: Array<{ x0: number; x1: number; y: number; h: number; fill: string }> = [];
+  const fills: Array<{ x0: number; x1: number; y: number; h: number; fill: string; alpha: number }> = [];
   const lines: Array<{ x0: number; x1: number; y: number; dashed: boolean }> = [];
   const texts: string[] = [];
   type Clip = Array<[number, number]>;
@@ -44,7 +47,7 @@ function recordingContext() {
       for (const [c0, c1] of clip) {
         const x0 = Math.max(Math.min(x, x + w), c0);
         const x1 = Math.min(Math.max(x, x + w), c1);
-        if (x1 > x0) fills.push({ x0, x1, y, h, fill: String(state.fillStyle).toLowerCase() });
+        if (x1 > x0) fills.push({ x0, x1, y, h, fill: String(state.fillStyle).toLowerCase(), alpha: Number(state.globalAlpha ?? 1) });
       }
     },
     fillText: (text: string) => { texts.push(text); },
@@ -101,6 +104,41 @@ function draw(reads: CompactRead[], extra: Record<string, unknown> = {}) {
 const readBg = String(DEFAULT_COLORMAP.readBackgroundColor ?? '#f1f5f9').toLowerCase();
 const empty = String(DEFAULT_COLORMAP.noReadBackgroundColor ?? DEFAULT_COLORMAP.backgroundColor ?? '#ffffff').toLowerCase();
 
+describe('insertion columns on reads and sibling native reads', () => {
+  const expansion = { chrom: 'chr3', pos: START + 600, length: 100, ins_id: 'MAT:src:0-100:insertion', label: 'HG002 MAT +100 bp', hap_label: 'MAT' };
+  const payload: LiveLiftInsertion = { pos: 600, length: 100, mol_bp: 50, hap_label: 'MAT', src: ['src', 0, 100], orientation: '-', covered: [40, 90], intervals: [[30, 60, 30], [70, 100, 30]], methyl_m6a: [50], deam: [[80, 1]] };
+  it.each([false, true])('draws mirrored payload coordinates as given, within covered only (panel reversed=%s)', reversed => {
+    const axis = makeAxis(START, START + 1000, 1100, reversed, [expansion]);
+    const rects = insertionPayloadRects(payload, expansion.ins_id, axis);
+    expect(rects).toEqual(reversed ? [{ x: 440, w: 20, size: 30 }, { x: 410, w: 20, size: 30 }] : [{ x: 640, w: 20, size: 30 }, { x: 670, w: 20, size: 30 }]);
+    const r = draw([{ ...LIFTED, live_lift: { ...LL, insertions: { [expansion.ins_id]: payload } } }], { width: 1100, axis, isReversed: reversed,
+      enabledModTypes: { footprint: true, m6a: true, deam: true } });
+    expect(r.fills.some(f => f.fill === readBg && f.x0 === (reversed ? 410 : 640) && f.x1 === (reversed ? 460 : 690))).toBe(true);
+    expect(r.fills.some(f => f.fill === '#6b21a8' && Math.abs(f.x0 - (reversed ? 449.5 : 649.5)) < .01)).toBe(true);
+  });
+  it('native and non-carrier rows leave the insertion empty and retain aligned bodies on either side', () => {
+    const axis = makeAxis(START, START + 1000, 1100, false, [expansion]);
+    for (const read of [{ id: 'native', intervals: [[0, 1000, -1000]] } as CompactRead, LIFTED]) {
+      const r = draw([read], { width: 1100, axis });
+      const bodies = r.fills.filter(f => f.fill === readBg);
+      expect(bodies.every(f => f.x1 <= 600 || f.x0 >= 700)).toBe(true);
+      expect(bodies.some(f => f.x0 >= 700)).toBe(true);
+    }
+  });
+  it('mismatch detail draws muted assembly, normal reads and amber GRCh38 allele markers', () => {
+    const read = { ...LIFTED, cigar: [
+      { type: 'X', pos: 100, len: 1, seq: 'C', source: 'assembly' },
+      { type: 'X', pos: 110, len: 1, seq: 'A', source: 'reads' },
+      { type: 'X', pos: 120, len: 1, seq: 'G', source: 'reads', allele: 'grch38' },
+    ] } as CompactRead;
+    const r = draw([read], { enabledCigarTypes: { mismatches: true, insertions: false, deletions: false } });
+    expect(r.fills.some(f => f.x0 === 120 && f.fill === '#d97706')).toBe(true);
+    expect(r.fills.some(f => f.x0 === 100 && f.alpha === .38)).toBe(true);
+    expect(r.fills.some(f => f.x0 === 110 && f.alpha === 1)).toBe(true);
+    expect(r.fills.filter(f => f.x0 === 100 || f.x0 === 110).length).toBeGreaterThanOrEqual(2);
+  });
+});
+
 describe('live-lift geometry', () => {
   it('body spans are segments minus connectors', () => {
     expect(liveLiftBodySpans(LL)).toEqual([[0, 300], [310, 600], [700, 1000]]);
@@ -143,7 +181,7 @@ describe('live-lift rows on the read canvas (SV display off)', () => {
       const read = { ...LIFTED, live_lift: { ...LL, hap_label: hap } };
       const color = liveLiftHaplotypeColor(hap);
       const pooled = draw([read]).fills.filter(f => f.fill === color);
-      expect(pooled).toEqual([{ x0: 0, x1: 3, y: 0, h: 20, fill: color }]);
+      expect(pooled).toEqual([{ x0: 0, x1: 3, y: 0, h: 20, fill: color, alpha: 1 }]);
       expect(draw([read], { liftHap: hap }).fills.some(f => f.fill === color)).toBe(false);
       expect(draw([{ ...read, live_lift: undefined }]).fills.some(f => f.fill === color)).toBe(false);
       const reversed = draw([read], { isReversed: true }).fills.filter(f => f.fill === color);
@@ -173,7 +211,7 @@ describe('tooltip and chip', () => {
     expect(lines).toContain('Molecule strand CT (st, unchanged by the lift)');
     expect(lines.some(l => l.startsWith('1 segment run reversed'))).toBe(true);
     expect(lines.some(l => l.startsWith('+2.4 kb: sequence of the source assembly only'))).toBe(true);
-    expect(lines).toContain('Mismatches not shown (they are against the source assembly)');
+    expect(lines).toContain('CIGAR detail: muted HG002 assembly differences; normal read mismatches; amber GRCh38-allele markers (possible mis-phasing).');
   });
 
   it('chips a lifted panel by haplotype', () => {

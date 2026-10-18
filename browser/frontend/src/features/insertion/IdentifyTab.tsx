@@ -54,11 +54,11 @@ export function lensIdentifyKey(response: Pick<LensResponse, 'chrom' | 'cluster'
 }
 
 /** Start identifying the lens's consensus (the toolbar button and the tab use this). */
-export function identifyLens(response: LensResponse, datasetId: string, opts: { genome?: string | null; force?: boolean; restart?: boolean; libraryId?: string | null } = {}): boolean {
+export function identifyLens(response: LensResponse, datasetId: string, opts: { genome?: string | null; force?: boolean; restart?: boolean; libraryId?: string | null; key?: string } = {}): boolean {
   const seq = response.consensus?.seq;
   if (!seq) return false;
   const genome = opts.genome !== undefined ? opts.genome : insertionReference(datasetId);
-  void startIdentify(lensIdentifyKey(response, datasetId, genome), {
+  void startIdentify(opts.key ?? lensIdentifyKey(response, datasetId, genome), {
     genome, seq, chrom: response.chrom, ref: response.cluster.ref, length: response.cluster.len,
     rmsk: readRmskPref(), libraryId: opts.libraryId ?? null, force: opts.force, restart: opts.restart,
   });
@@ -66,6 +66,9 @@ export function identifyLens(response: LensResponse, datasetId: string, opts: { 
 }
 
 interface Props {
+  /** Live-lift insertions additionally scope jobs by map/settings and haplotype.
+   * Equal target boundaries and lengths do not imply equal source sequences. */
+  identifyKey?: string;
   response: LensResponse;
   datasetId: string;
   genome?: string | null;
@@ -78,10 +81,10 @@ interface Props {
 
 const pct = (v: number) => `${(v * 100).toFixed(0)}%`;
 
-export function IdentifyTab({ response, datasetId, genome = insertionReference(datasetId), reversed, visible, dark, saved, carrierProfile }: Props) {
+export function IdentifyTab({ response, datasetId, genome = insertionReference(datasetId), reversed, visible, dark, saved, carrierProfile, identifyKey }: Props) {
   // Follows the panel's width, also when this tab's body is mounted later (no consensus yet at first).
   const [rootRef, width] = useElementWidth(320, 640);
-  const key = lensIdentifyKey(response, datasetId, genome);
+  const key = identifyKey ?? lensIdentifyKey(response, datasetId, genome);
   const entry = useIdentifyStore(s => s.entries[key]);
   const dfam = useIdentifyStore(s => s.dfam[key]);
   const [library, setLibrary] = useState<LibraryStatus | null>(null);
@@ -144,7 +147,7 @@ export function IdentifyTab({ response, datasetId, genome = insertionReference(d
   };
 
   const run = (force = false) => {
-    identifyLens(response, datasetId, { genome, force, libraryId: library?.active ?? null });
+    identifyLens(response, datasetId, { genome, force, libraryId: library?.active ?? null, key });
   };
 
 

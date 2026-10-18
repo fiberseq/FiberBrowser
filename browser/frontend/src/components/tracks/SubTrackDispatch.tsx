@@ -51,6 +51,9 @@ import { feedHasCoverage, feedHasSv, useTrackFeedStore } from '../../stores/trac
 import { SvTrack } from './SvTrack';
 import { trackRenderers, type PluginTrackArgs } from './trackRenderers';
 import { CoverageTrack } from './CoverageTrack';
+import { DifferencesStrip, differencesStripHeight } from '../../features/liveLift/DifferencesStrip';
+import { useLiveLiftStore } from '../../features/liveLift/store';
+import { liveLiftViewKey } from '../../features/liveLift/persistence';
 
 
 /** How a panel's tracks are laid out where it sits (see TrackContainer). */
@@ -72,6 +75,8 @@ export function useSubTrackDispatch({ onScanPeaks, scanning }: UseSubTrackDispat
   const { useContentVisibility } = useBrowserPerformanceProfile();
   const peakRowHeight = useBrowserStore(s => Math.max(FIRE_HEIGHT, 16 + s.peakRules.filter(r => r.enabled).length * 18));
   const datasets = useBrowserStore(s => s.datasets);
+  const liftEnabled = useLiveLiftStore(s => s.enabled);
+  const liveLiftExpansions = useBrowserStore(s => s.liveLiftExpansions);
   const showConsensusTrack = useConsensusViewStore(s => s.showTrack);
   const orthogonalTracks = useBrowserStore(s => s.orthogonalTracks);
   const compositeTracks = useBrowserStore(s => s.compositeTracks);
@@ -367,10 +372,12 @@ export function useSubTrackDispatch({ onScanPeaks, scanning }: UseSubTrackDispat
       case 'reads':
         if (!dsId) return null;
         trackHeight = readHeight;
-        content = (
+        content = <>
+          {liftEnabled && dataset?.data_type === 'bam_livelift' && <DifferencesStrip panel={panel} dataset={dataset} width={trackWidth} gutter={clusterSidebarWidth} />}
+          {(
           <ReadTrack
             width={trackWidth}
-            height={readHeight}
+            height={Math.max(30, readHeight - (liftEnabled && dataset?.data_type === 'bam_livelift' ? differencesStripHeight(panel, dataset) : 0))}
             datasetId={dsId}
             stateKey={panel.stateKey}
             readStrand={panel.strand ?? null}
@@ -380,7 +387,7 @@ export function useSubTrackDispatch({ onScanPeaks, scanning }: UseSubTrackDispat
             genome={panel.genome}
             {...(vpo ? { overrideChrom: vpo.chrom, overrideStart: vpo.start, overrideEnd: vpo.end, panelLabel: panel.regionLabel, onViewportChange } : {})}
           />
-        );
+        )}</>;
         break;
       // TRACK-KINDS: add cases here (and in calcFixedHeight below); see trackRegistry.ts.
       case 'sv':
@@ -558,6 +565,10 @@ export function useSubTrackDispatch({ onScanPeaks, scanning }: UseSubTrackDispat
     // Render actual track content; layout-only controls appear as hover chrome.
     // Primer track needs overflow:visible for guide lines that extend into tracks below
     const isPrimer = track.type === 'primer';
+    const expanded = liftEnabled && panels.some(p => liveLiftViewKey(p) === liveLiftViewKey(panel) && datasets.some(d => d.id === p.datasetId && d.data_type === 'bam_livelift'))
+      && (liveLiftExpansions?.[liveLiftViewKey(panel)] ?? []).some(e => e.chrom === (vpo?.chrom ?? storeChrom)
+      && e.pos >= (vpo?.start ?? storeStart) && e.pos < (vpo?.end ?? storeEnd));
+    const unaligned = expanded && !['reads', 'axis', 'coverage'].includes(track.type);
     return (
       <div
         key={track.type}
@@ -580,9 +591,10 @@ export function useSubTrackDispatch({ onScanPeaks, scanning }: UseSubTrackDispat
           ...(isPrimer ? { overflow: 'visible', zIndex: 10 } : {}),
         }}
       >
-        {content}
+        {unaligned ? <><div style={{ opacity: .2, pointerEvents: 'none' }}>{content}</div>
+          <span className="absolute inset-x-0 top-0 text-center text-[10px] bg-slate-100/90 dark:bg-slate-800/90" data-testid="live-lift-unaligned-track">Insertion expanded: track not aligned</span></> : content}
         {/* Highlighted regions (toolbar Highlight) over every row; named on the ruler. */}
-        <HighlightBands panel={panel} width={trackWidth} gutter={clusterSidebarWidth} labels={track.type === 'axis'} guides={isReadsTrack} />
+        {!unaligned && <HighlightBands panel={panel} width={trackWidth} gutter={clusterSidebarWidth} labels={track.type === 'axis'} guides={isReadsTrack} />}
         {!exportInProgress && (
           <button
             type="button"
@@ -611,7 +623,7 @@ export function useSubTrackDispatch({ onScanPeaks, scanning }: UseSubTrackDispat
     );
   }, [peakRowHeight, datasets, showConsensusTrack, orthogonalByIndex, orthogonalByPath, catalogById, compositeById, annotationTrackFor, ownViewAnnotation, clusterSidebarWidth, onScanPeaks, scanning, spanningOnly,
       showPrimerTrack, showCaptureTrack, sequenceShown, microcPanelIds, coaccTrackMode, storeChrom, exportFullReadTracks, exportInProgress, startSubTrackResize, panelHasNoReads,
-      toggleSubTrack, showsMainRegion, svDisplayEnabled, showCoverageHistogram, feedRowShown, pluginRow, useContentVisibility]);
+      toggleSubTrack, showsMainRegion, svDisplayEnabled, showCoverageHistogram, feedRowShown, pluginRow, useContentVisibility, liftEnabled, liveLiftExpansions, storeStart, storeEnd, panels]);
 
   const calcFixedHeight = useCallback((panel: PanelConfig, layout?: PanelTrackLayout) => {
     let h = PANEL_HEADER_HEIGHT;

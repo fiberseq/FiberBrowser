@@ -61,7 +61,7 @@ test('add a live-lift dataset next to the native BAM: split MAT/PAT panels rende
   await expect(page.getByTestId('live-lift-chip').filter({ hasText: 'MAT' })).toHaveCount(1);
   await expect(page.getByTestId('live-lift-chip').filter({ hasText: 'PAT' })).toHaveCount(1);
   const panels = await page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().panels
-    .filter((p: any) => p.contentType === 'dataset').map((p: any) => ({ dataset: p.datasetId, hap: p.liftHap ?? null })));
+    .filter((p: any) => p.contentType === 'dataset').map((p: any) => ({ id: p.id, stateKey: p.stateKey ?? p.datasetId, dataset: p.datasetId, hap: p.liftHap ?? null })));
   expect(panels.filter((p: any) => p.hap === null)).toHaveLength(1);   // the native GRCh38 panel
   expect(panels.filter((p: any) => p.hap).map((p: any) => p.hap).sort()).toEqual(['MAT', 'PAT']);
 
@@ -80,6 +80,54 @@ test('add a live-lift dataset next to the native BAM: split MAT/PAT panels rende
   // Read canvases for the native and both lifted panels.
   await expect.poll(() => page.locator('canvas[data-copilot-track="reads"]').count()).toBeGreaterThanOrEqual(3);
   await page.screenshot({ path: test.info().outputPath('live-lift-split.png') });
+
+  // The canvas publishes the geometry it actually drew, so this clicks the
+  // +2.4 kb badge of a visible MAT row, independent of sorting or row density.
+  const mat = panels.find((p: any) => p.hap === 'MAT')!;
+  await page.evaluate(() => {
+    const store = (window as any).__FIBERBROWSER_STORE__;
+    store.setState({ fillReadHeight: false, readRowHeight: 16 });
+  });
+  const matCanvas = page.locator(`[data-read-track-state-key="${mat.stateKey}"] canvas[data-copilot-track="reads"]`);
+  await expect.poll(() => matCanvas.getAttribute('data-live-lift-badge-target')).toBeTruthy();
+  const target = JSON.parse((await matCanvas.getAttribute('data-live-lift-badge-target'))!);
+  expect(target.bp).toBeGreaterThan(2000);
+  const scale = await matCanvas.evaluate((c: HTMLCanvasElement) => ({ x: c.getBoundingClientRect().width / c.clientWidth, y: c.getBoundingClientRect().height / c.clientHeight }));
+  await matCanvas.click({ position: { x: target.x * scale.x, y: target.y * scale.y } });
+  await expect(page.getByTestId('live-lift-expanded-block')).toHaveCount(3);
+  for (const block of await page.getByTestId('live-lift-expanded-block').all()) {
+    await expect(block).toContainText('HG002 MAT +2,353 bp');
+  }
+  await expect.poll(() => page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().liveLiftExpansions.main?.length)).toBe(1);
+  await expect.poll(async () => Number(await matCanvas.getAttribute('data-live-lift-insertion-calls'))).toBeGreaterThan(0);
+  const nativePanel = panels.find((p: any) => p.hap === null)!;
+  const nativeCanvas = page.locator(`[data-read-track-state-key="${nativePanel.stateKey}"] canvas[data-copilot-track="reads"]`);
+  await expect(nativeCanvas).toHaveAttribute('data-live-lift-insertion-calls', '0');
+  // Inspection is anchored above the read canvas. Escape closes it without
+  // collapsing; the × control closes the shared columns in all three panels.
+  await page.keyboard.press('Escape');
+  await page.getByTestId('live-lift-expanded-collapse').first().click();
+  await expect(page.getByTestId('live-lift-expanded-block')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().liveLiftExpansions.main?.length)).toBe(0);
+
+  const strip = page.locator(`[data-testid="live-lift-diff-strip"][data-panel-id="${mat.id}"]`);
+  const snv = strip.locator('[data-testid="live-lift-diff-item"][data-kind="snv"]').first();
+  await expect(snv).toBeVisible();
+  await snv.click();
+  const inspection = page.getByTestId('live-lift-diff-popover');
+  await expect(inspection).toBeVisible();
+  await expect(inspection.locator('tbody tr').first()).toBeVisible({ timeout: 30_000 });
+  await expect(inspection).toContainText('Allele');
+  await expect(inspection).toContainText('HG002');
+  await expect(inspection).toContainText('GRCh38');
+  await page.keyboard.press('Escape');
+
+  const beforeNext = await page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().start);
+  await strip.getByTestId('live-lift-diff-next').click();
+  await expect.poll(() => page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().start), { timeout: 30_000 }).not.toBe(beforeNext);
+  const beforePrev = await page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().start);
+  await strip.getByTestId('live-lift-diff-prev').click();
+  await expect.poll(() => page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().start), { timeout: 30_000 }).not.toBe(beforePrev);
 
   // Pooled is one click away.
   const datasetId = panels.find((p: any) => p.hap)!.dataset;
