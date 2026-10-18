@@ -54,3 +54,15 @@ def test_direct_sampling_counts_filtered_loaded_and_spanning(lift_env, two_hap_e
         info = payload['working_sampling']
         assert info['loaded'] == info['loaded_spanning'] == 1
         assert len(payload['reads']) == 1
+
+
+def test_mismatch_layer_is_explicit_and_limited_to_visible_window(lift_env, two_hap_evidence):
+    client, state, did = setup_dataset(lift_env, two_hap_evidence)
+    state.fasta = two_hap_evidence[0].fasta
+    params = dict(dataset_id=did, chrom=TARGET, start=1050, end=1200, include_cigar=True,
+                  viewport_start=1095, viewport_end=1105, include_mismatches=False)
+    off = client.get('/api/reads/compact', params=params).json()
+    assert not any(e['type'] == 'X' for r in off['reads'] for e in r.get('cigar', []))
+    on = client.get('/api/reads/compact', params={**params, 'include_mismatches': True}).json()
+    events = [e for r in on['reads'] for e in r.get('cigar', []) if e['type'] == 'X']
+    assert events and all(45 <= e['pos'] < 55 for e in events)

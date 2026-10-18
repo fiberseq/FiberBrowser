@@ -29,7 +29,7 @@ def direct_scan_counts(state, query, dataset_id, signal_source):
     with lock:
         candidates = list(getattr(state, '_methylation_cache', {}).items())
     for key, (reads, _) in candidates:
-        if (len(key) != 20 or key[:2] != (dataset_id, query.chrom)
+        if (len(key) not in (20, 25) or (len(key) == 25 and key[21]) or key[:2] != (dataset_id, query.chrom)
                 or not key[2] <= query.start < query.end <= key[3]
                 or key[7] or key[8] or key[11] or key[12] or key[15] or key[16] or key[17] != token):
             continue

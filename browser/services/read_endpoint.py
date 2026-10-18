@@ -656,7 +656,6 @@ def _compact_reads_payload(
             ml_threshold,
             min_fp_quality,
             include_cigar,
-            bool(include_mismatches), viewport_start, viewport_end,
             layer_key,
             bool(include_layer_qualities),
             hide_terminal_gaps,
@@ -670,6 +669,7 @@ def _compact_reads_payload(
             include_sv_seq,
             (getattr(getattr(state, "fasta", None), "filename", None), id(getattr(state, "fasta", None))),
             lift_identity(dataset),
+            bool(include_mismatches), viewport_start, viewport_end,
         )
 
         if not hasattr(state, "_methylation_cache"):
