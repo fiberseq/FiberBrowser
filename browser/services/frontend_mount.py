@@ -12,7 +12,13 @@ from fastapi.staticfiles import StaticFiles
 
 
 def find_frontend_dist(script_dir: str) -> str | None:
-    """Return the built frontend dist directory if it exists."""
+    """Return the built frontend dist directory if it exists.
+
+    ``FIBERBROWSER_FRONTEND_DIST`` names another build (a test or demo build made
+    outside the checkout, so a running server's own dist is never rebuilt under it)."""
+    override = os.environ.get('FIBERBROWSER_FRONTEND_DIST')
+    if override and os.path.exists(os.path.join(override, 'index.html')):
+        return os.path.abspath(override)
     possible_frontend_dirs = (
         os.path.join(script_dir, 'frontend', 'dist'),
         os.path.join(script_dir, '..', 'frontend', 'dist'),
