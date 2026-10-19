@@ -311,3 +311,20 @@ def test_unmapped_query_witnesses_share_the_geometry_storage_budget():
     p = MapPath("outside", "target", "source", (LiftPiece(0, 1000, 1100, 1000, 1100, "+", True, "H#1", "source"),))
     with pytest.raises(ResourceResult, match="projection_runs_cap"):
         compose_alignment(a, p, budget=ProjectionBudget(ProjectionPolicy(max_runs=10)))
+
+
+def test_hypotheses_share_immutable_source_cigar_instead_of_multiplying_storage(monkeypatch):
+    import builtins
+    from services.differences import projection
+    a = replace(alignment(), ref_start=0, cigar=((0, 1),)+((2, 1),)*10_000+((0, 1),), sequence="AT")
+    p = MapPath("affine", "target", "source", (LiftPiece(0, 1000, 21_000, 0, 20_000, "+", True, "H#1", "source"),), ownership="primary", ownership_validated=True)
+    op_ids = {id(op) for op in a.cigar}
+    def no_cigar_copies(value=()):
+        assert id(value) not in op_ids, "source CIGAR storage must not multiply with hypotheses"
+        return builtins.list(value)
+    monkeypatch.setattr(projection, "list", no_cigar_copies, raising=False)
+    t = dict(target_id="deletion", target_type="geometry", ref_start=1001, ref_end=11001, alt_bp=0)
+    result = call_molecule([a], [replace(p, path_id=str(i)) for i in range(64)], t)
+    assert len(result["hypotheses"]) == 64
+    assert result["call"]["assignment"] == "target"
+    assert all(d["projection"]["source_cigar"] is a.cigar for h in result["diagnostics"] for d in h["records"])

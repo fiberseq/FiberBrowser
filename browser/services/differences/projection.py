@@ -359,7 +359,7 @@ def compose_alignment(alignment, path, *, budget=None, walk=None):
                 source_anchor=source_anchor, original_query=[length-b, length-a] if alignment.reverse else [a, b], hard=hard))
     return dict(record_id=alignment.record_id, path_id=path.path_id, chrom=path.chrom,
         source_contig=alignment.contig, source_start=alignment.ref_start, source_end=source_end,
-        source_cigar=[list(x) for x in alignment.cigar], query_length=length,
+        source_cigar=alignment.cigar, query_length=length,
         query_frame="target_oriented_full_molecule", original_query_frame="canonical_molecule",
         sequence_span=[length-hard_left-seq_length, length-hard_left] if minus else [hard_left, hard_left+seq_length],
         alignment_orientation="reverse" if alignment.reverse != minus else "forward",
