@@ -726,26 +726,33 @@ def _map_cigar(events, row, base, ctx):
 
 
 def _map_sv(events, row, ctx):
-    """SV events (absolute coordinates). ``SA`` segments move to
-    ``live_lift.source.sa``; connectors never enter ``sv``."""
+    """Display SV events in absolute target coordinates.
+
+    Source query offsets, clip origins, normalized endpoints and raw CIGAR
+    pieces cannot be interpreted in this frame. Retain only display fields;
+    SA witnesses stay explicitly under live_lift.source.sa. A future guarded
+    adapter must project all evidence fields together before exposing them.
+    """
     out, sa, dropped = [], [], 0
     for ev in events or ():
         t = ev.get("t")
         if t == "SA":
             sa.append(ev)
             continue
+        display = {k: ev[k] for k in ("t", "ref", "len", "side", "h", "seq") if k in ev}
+        display.update(source="reads", method="display_projection", display_only=True)
         if t == "D":
-            parts = row.parts(int(ev["ref"]), int(ev["ref"]) + int(ev["len"]))
+            parts = row.parts(int(ev["ref"]), int(ev["ref"]) + int(ev.get("ref_len", ev["len"])))
             if not parts:
                 dropped += 1
             for t0, t1, _k in parts:
-                out.append(dict(ev, ref=t0, len=t1 - t0, source="reads"))
+                out.append(dict(display, ref=t0, len=t1 - t0))
             continue
         hit = row.boundary(int(ev["ref"]))
         if hit is None:
             dropped += 1
             continue
-        new = dict(ev, ref=hit[1], source="reads")
+        new = dict(display, ref=hit[1])
         if row.strand == "-":
             if t == "I" and ev.get("seq"):
                 new["seq"] = revcomp(ev["seq"])

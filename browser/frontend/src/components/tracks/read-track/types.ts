@@ -65,7 +65,7 @@ export interface CigarEvent {
  * query position in the BAM SEQ frame.
  */
 export interface SvAlleleMetadata {
-  source?: 'assembly' | 'reads'; method?: 'assembly_projection'; display_only?: boolean; difference_id?: string;
+  source?: 'assembly' | 'reads'; method?: 'assembly_projection' | 'display_projection'; display_only?: boolean; difference_id?: string;
   ref_end?: number; ref_len?: number; alt_len?: number; q_end?: number;
   raw_ref?: number; raw_ref_end?: number; uncertainty?: [number, number];
   inserted_len?: number; deleted_len?: number; net_len?: number;

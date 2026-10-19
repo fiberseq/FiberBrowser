@@ -888,7 +888,7 @@ def classify_molecules(entries, *, t: str, ref: int, length: int, margin: int = 
     """Classify (compact read, original item) entries, once per QNAME."""
     grouped = {}
     for read, item in entries:
-        for alignment in read.get('sv_alignments') or [read]:
+        for alignment in ([read] if read.get('live_lift') else read.get('sv_alignments') or [read]):
             grouped.setdefault(read.get('id'), []).append((alignment, item))
     if targets is None:
         rows = [read for bundle in grouped.values() for read, _ in bundle]
