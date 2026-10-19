@@ -138,6 +138,43 @@ def _merge(spans):
     return out
 
 
+def primary_gap_records(handle, chrom, hap):
+    """Raw gaps owned by a winning net interior or its two exact flanks.
+
+    Caller holds handle.lock. Losing chains never establish correspondence.
+    In particular a hole is not a deletion unless the *same* winning chain
+    has that precise raw gap, with no intervening or overlapping net claim.
+    Return (chain, raw gap, recovered_boundary) once per gap.
+    """
+    ti = handle.map.targets.get(chrom)
+    nets = sorted(set((max(ns, handle.map.chains[ci]["t_start"]),
+                       min(ne, handle.map.chains[ci]["t_end"]), ci)
+                      for ns, ne, ci in handle.map.nets.get((hap, ti), ())
+                      if ns < ne))
+    nets = [n for n in nets if n[0] < n[1]]
+    starts = [n[0] for n in nets]
+    # A malformed/ambiguous overlap must not award either chain ownership.
+    conflicts = _merge((b[0], min(a[1], b[1])) for a, b in zip(nets, nets[1:]) if a[1] > b[0])
+    out = []
+    for ci in sorted({n[2] for n in nets}):
+        for gap in handle.map.chain_data(ci)["gaps"]:
+            t, _q, dt, dq, _reason = gap
+            if dt < 0 or dq < 0 or not (dt or dq):
+                continue
+            i = bisect.bisect_right(starts, t) - 1
+            interior = (i >= 0 and nets[i][2] == ci and nets[i][0] <= t < nets[i][1]
+                        and t + dt <= nets[i][1])
+            boundary = (i >= 0 and i + 1 < len(nets) and nets[i][1] == t
+                        and nets[i + 1][0] == t + dt and nets[i][2] == nets[i + 1][2] == ci)
+            if not (interior or boundary):
+                continue
+            lo, hi = (t - 1, t + dt + 1) if boundary else (t, max(t + dt, t + 1))
+            if any(a < hi and b > lo for a, b in conflicts):
+                continue
+            out.append((ci, gap, boundary and not interior))
+    return out
+
+
 def _bin_items(config, chrom, bin_index, hap):
     handle = config.handle
     key = (config.key(), chrom, bin_index, hap)
@@ -181,14 +218,18 @@ def _bin_items(config, chrom, bin_index, hap):
                     q0, q1 = _source_span(handle, c, q + a - lo, b - a)
                     k = "aligned_bubble" if kind == "aligned" else ("snv" if b - a == 1 else "mnv")
                     out.append(_item(handle, hap, ci, k, kind, a, b, q0, q1))
-            for t, q, dt, dq, reason in data["gaps"]:
-                if not (ns <= t < ne) or not (start <= t < end or (dt and t < end and t + dt > start)):
-                    continue
-                if dt < 0 or dq < 0 or not (dt or dq):
-                    continue
-                kind = "replacement" if dt and dq else ("insertion" if dq else "deletion")
-                q0, q1 = _source_span(handle, c, q, dq)
-                out.append(_item(handle, hap, ci, kind, handle.map.reasons[reason], t, t + dt, q0, q1))
+        for ci, (t, q, dt, dq, reason), recovered in primary_gap_records(handle, chrom, hap):
+            coverage.append((t, t + dt))
+            if not (start <= t < end or (dt and t < end and t + dt > start)):
+                continue
+            c = handle.map.chains[ci]
+            kind = "replacement" if dt and dq else ("insertion" if dq else "deletion")
+            q0, q1 = _source_span(handle, c, q, dq)
+            item = _item(handle, hap, ci, kind, handle.map.reasons[reason], t, t + dt, q0, q1)
+            item["sequence_status"] = "unresolved"
+            if recovered:
+                item["aliases"] = [difference_id(item["hap_label"], chrom, t, t + dt, "no_correspondence")]
+            out.append(item)
         pos = 0
         # Unknown chromosome size has no authoritative trailing endpoint.
         # Emit bounded holes between nets, never a bin-dependent artificial tail.
