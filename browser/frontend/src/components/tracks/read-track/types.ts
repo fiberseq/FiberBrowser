@@ -64,16 +64,35 @@ export interface CigarEvent {
  * services/sv_events.py). Absolute 0-based reference coordinates; `q` is a
  * query position in the BAM SEQ frame.
  */
-export type SvEvent =
+export interface SvAlleleMetadata {
+  ref_end?: number; ref_len?: number; alt_len?: number; q_end?: number;
+  raw_ref?: number; raw_ref_end?: number; uncertainty?: [number, number];
+  inserted_len?: number; deleted_len?: number; net_len?: number;
+  alt_seq?: string; ref_seq?: string; normalized?: boolean;
+  raw_pieces?: Array<{ t: 'I' | 'D' | 'M' | '=' | 'X'; ref: number; len: number; q: number }>;
+}
+
+export type SvEvent = (
   | { t: 'D'; ref: number; len: number; q: number }
   | { t: 'I'; ref: number; len: number; q: number; seq?: string }
-  | { t: 'S'; side: 'L' | 'R'; ref: number; len: number; q: number; h?: 1 }
+  | { t: 'S'; side: 'L' | 'R'; ref: number; len: number; q: number; h?: 1;
+      anchor?: Omit<SvSegment, 't' | 'mapq' | 'query_blocks'> }
   | { t: 'SA'; chrom: string; pos: number; strand: '+' | '-'; mapq: number; nm: number; cigar_ref_len: number; supp: boolean;
       /** The segment aligns on the read's own strand (a deletion's split read; an inversion's does not). */
-      same_strand?: boolean };
+      same_strand?: boolean }) & SvAlleleMetadata;
+
+export type SvEvidenceLevel = 'confirmed' | 'putative' | 'conflicting' | 'ambiguous';
+export interface SvSegment {
+  t?: 'SA';
+  chrom: string; pos: number; cigar_ref_len: number; strand: '+' | '-'; mapq: number;
+  q_start: number; q_end: number; query_length: number;
+  /** Full-query M/=/X intervals; internal insertions do not align elsewhere. */
+  query_blocks?: [number, number][];
+}
 
 /** One SV cluster across the reads in view. */
 export interface SvCluster {
+  ref_len?: number; alt_len?: number; raw_ref?: number; uncertainty?: [number, number];
   id: string;
   t: 'D' | 'I';
   ref: number;
@@ -82,6 +101,10 @@ export interface SvCluster {
   end: number;
   /** Carrier reads. */
   support: number;
+  confirmed?: number;
+  putative?: number;
+  conflicting?: number;
+  ambiguous?: number;
   /** Carriers plus reads spanning [ref - margin, end + margin] without it. */
   informative: number;
   /** Carriers whose evidence is a clip with an SA segment (deletions). */
@@ -91,6 +114,8 @@ export interface SvCluster {
 }
 
 export interface SvSummary {
+  conflict_options?: import('../../../utils/svConflicts').SvConflictOptions;
+  evidence_targets?: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty'>[];
   min_len: number;
   margin: number;
   /** 'loaded': a working-read cap truncated the reads in view. */
@@ -197,6 +222,13 @@ export interface CompactRead {
   cigar?: CigarEvent[]; // CIGAR events for visualization
   /** SV events of at least the request's min_sv_len overlapping the view (absent when none). */
   sv?: SvEvent[];
+  /** Full allele evidence when display size/view filtering removed events from sv. */
+  sv_evidence?: SvEvent[];
+  sv_segments?: SvSegment[];
+  aligned_blocks?: [number, number][];
+  sequence_span?: [number, number];
+  supplementary?: boolean;
+  sv_alignments?: Omit<CompactRead, 'intervals' | 'sv_alignments'>[];
   fire?: [number, number, number][]; // FIRE intervals [start, end, quality] from as/al/aq tags
   /** Named annotation layers from v3 caller (nuc, tf, msp, custom). */
   layers?: Record<string, AnnotationLayer>;

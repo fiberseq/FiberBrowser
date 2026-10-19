@@ -35,7 +35,7 @@ function rememberPanelDock(contentType: string, dock: 'side' | 'beside'): void {
 export const PER_PANEL_STATE_KEYS = [
   'clusterAssignments', 'clusterOrder', 'selectedClusters', 'readSortOrder', 'clusterProfiles',
   'filteredReadIds', 'readFilterSources', 'clusterFocus', 'readStateDetails', 'selectedReadIds',
-  'svSplits', 'clusterGroupLabels', 'svSelectedCluster',
+  'svSplits', 'clusterGroupLabels', 'svCarrierEvidence', 'svSelectedCluster',
 ] as const;
 
 /** Undo point before and after a panel-view action. */

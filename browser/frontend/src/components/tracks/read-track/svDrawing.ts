@@ -1,3 +1,4 @@
+import { clipConflict, type SvConflictOptions } from '../../../utils/svConflicts';
 /**
  * Structural-variant display (fb-n9-sv): the pure decisions behind drawing
  * size-aware indels on reads and the SV summary band, so they are testable
@@ -76,15 +77,18 @@ export function readSvDraw(read: Pick<CompactRead, 'sv'>, viewStart: number, vie
   const out: ReadSvDraw = { deletions: [], insertions: [], clips: [] };
   for (const ev of events) {
     if (ev.t === 'SA' || ev.len < minLen) continue;
-    if (ev.t === 'D') {
-      if (ev.ref + ev.len <= viewStart || ev.ref >= viewEnd) continue;
-      out.deletions.push({ start: ev.ref - viewStart, end: ev.ref + ev.len - viewStart, len: ev.len });
-    } else if (ev.t === 'I') {
-      if (ev.ref < viewStart || ev.ref > viewEnd) continue;
-      out.insertions.push({ pos: ev.ref - viewStart, len: ev.len, q: ev.q, ref: ev.ref });
-    } else if (ev.t === 'S') {
+    if (ev.t === 'S') {
       if (ev.ref < viewStart || ev.ref > viewEnd) continue;
       out.clips.push({ pos: ev.ref - viewStart, side: ev.side, len: ev.len });
+      continue;
+    }
+    for (const piece of ev.raw_pieces ?? [ev]) {
+      if (piece.t === 'D') {
+        if (piece.ref + piece.len <= viewStart || piece.ref >= viewEnd) continue;
+        out.deletions.push({ start: piece.ref - viewStart, end: piece.ref + piece.len - viewStart, len: piece.len });
+      } else if (piece.t === 'I' && piece.ref >= viewStart && piece.ref <= viewEnd) {
+        out.insertions.push({ pos: piece.ref - viewStart, len: piece.len, q: piece.q, ref: piece.ref });
+      }
     }
   }
   return out;
@@ -149,37 +153,92 @@ export function eventsMatch(t: 'D' | 'I', ref: number, len: number, cRef: number
   return big <= 0 || Math.abs(len - cLen) <= 0.2 * big;
 }
 
-/** Whether a read carries a cluster's event (CIGAR, or for a deletion a clip + SA segment). */
-export function readCarriesCluster(read: Pick<CompactRead, 'sv'>, cluster: Pick<SvCluster, 't' | 'ref' | 'len'>, chrom?: string): boolean {
-  const events = read.sv ?? [];
-  for (const ev of events) {
-    if (ev.t === cluster.t && eventsMatch(cluster.t, ev.ref, ev.len, cluster.ref, cluster.len)) return true;
+/** Mirrors sv_events.carrier_evidence: evidence is independent of glyph size.
+ * Insertion clips keep the existing >=50 bp floor, on either side/strand.
+ */
+export function svEvidenceLevel(read: Pick<CompactRead, 'sv' | 'sv_evidence' | 'sv_segments' | 'sequence_span' | 'sv_alignments'>,
+  cluster: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty' | 'ref_len'> & Partial<Pick<SvCluster, 'end'>>, chrom?: string,
+  targets: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty'>[] = [], conflictOptions?: SvConflictOptions): 'confirmed' | 'putative' | 'conflicting' | 'ambiguous' | null {
+  if (read.sv_alignments?.length) {
+    const levels = read.sv_alignments.map(part => svEvidenceLevel({ ...part,
+      sv_segments: read.sv_segments ?? part.sv_segments }, cluster, chrom, targets, conflictOptions));
+    return levels.includes('confirmed') ? 'confirmed' : levels.includes('putative') ? 'putative'
+      : levels.includes('conflicting') ? 'conflicting' : levels.includes('ambiguous') ? 'ambiguous' : null;
   }
-  if (cluster.t !== 'D') return false;
-  const end = cluster.ref + cluster.len;
+  const events = read.sv_evidence ?? read.sv ?? [];
+  for (const ev of events) {
+    if (ev.t !== cluster.t) continue;
+    const [lo, hi] = cluster.uncertainty ?? [cluster.ref, cluster.ref];
+    const [elo, ehi] = ev.uncertainty ?? [ev.ref, ev.ref];
+    if (eventsMatch(cluster.t, ev.ref, ev.len, cluster.ref, cluster.len)
+      || (Math.max(lo, elo) <= Math.min(hi, ehi)
+        && eventsMatch(cluster.t, cluster.ref, ev.len, cluster.ref, cluster.len))) return 'confirmed';
+  }
   const tol = breakpointTolerance(cluster.len);
-  const clips = events.filter((ev): ev is Extract<SvEvent, { t: 'S' }> => ev.t === 'S');
-  const segments = events.filter((ev): ev is Extract<SvEvent, { t: 'SA' }> => ev.t === 'SA');
-  for (const clip of clips) {
-    for (const seg of segments) {
-      if (chrom && seg.chrom !== chrom) continue;
-      if (seg.same_strand === false) continue;  // an inversion's segment
-      if (clip.side === 'R' && Math.abs(clip.ref - cluster.ref) <= tol && Math.abs(seg.pos - end) <= tol) return true;
-      if (clip.side === 'L' && Math.abs(clip.ref - end) <= tol && Math.abs(seg.pos + seg.cigar_ref_len - cluster.ref) <= tol) return true;
+  const [lo, hi] = cluster.uncertainty ?? [cluster.ref, cluster.ref];
+  const uniqueSegments = new Map<string, NonNullable<CompactRead['sv_segments']>[number]>();
+  for (const s of read.sv_segments ?? []) {
+    const key = JSON.stringify([s.chrom, s.pos, s.cigar_ref_len, s.strand, s.q_start, s.q_end, s.query_length]);
+    const previous = uniqueSegments.get(key);
+    if (!previous || Number(s.t === 'SA') < Number(previous.t === 'SA')
+      || (s.t === previous.t && s.mapq < previous.mapq)) uniqueSegments.set(key, s);
+  }
+  const segments = [...uniqueSegments.values()];
+  for (const left of segments) for (const right of segments) {
+    if (left === right || left.mapq < 20 || right.mapq < 20 || left.strand !== right.strand
+      || left.chrom !== right.chrom || (chrom && left.chrom !== chrom) || left.query_length !== right.query_length) continue;
+    const gap = right.q_start - left.q_end;
+    if (gap < 0 || (left.pos + left.cigar_ref_len < lo - tol || left.pos + left.cigar_ref_len > hi + tol)) continue;
+    if (cluster.t === 'D' && gap <= 20 && Math.abs(right.pos - left.pos - left.cigar_ref_len - cluster.len) <= tol) return 'confirmed';
+    if (cluster.t === 'I' && Math.abs(right.pos - left.pos - left.cigar_ref_len) <= tol && eventsMatch('I', cluster.ref, gap, cluster.ref, cluster.len)) {
+      const [a, b] = read.sequence_span ?? [0, 0];
+      if (a <= left.q_end && right.q_start <= b && events.some(ev => ev.t === 'S' && !ev.h && ev.len >= 50
+        && ev.ref >= lo - Math.max(20, Math.min(tol, 50)) && ev.ref <= hi + Math.max(20, Math.min(tol, 50)))) return 'confirmed';
     }
   }
-  return false;
+  const clippedAt = (ev: SvEvent, target: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty'>) => {
+    if (ev.t !== 'S') return false;
+    const [a, b] = target.uncertainty ?? [target.ref, target.ref];
+    const tolerance = target.t === 'I' ? Math.max(20, Math.min(breakpointTolerance(target.len), 50)) : breakpointTolerance(target.len);
+    const point = ev.ref - (target.t === 'D' && ev.side === 'L' ? target.len : 0);
+    return (target.t !== 'I' || ev.len >= 50) && point >= a - tolerance && point <= b + tolerance;
+  };
+  // Competition concerns the particular clip supporting this target.
+  const matching = events.filter((ev): ev is Extract<SvEvent, { t: 'S' }> => ev.t === 'S' && clippedAt(ev, cluster)).sort((a, b) =>
+    Math.max(lo - a.ref!, a.ref! - hi, 0) - Math.max(lo - b.ref!, b.ref! - hi, 0));
+  const clip = matching[0];
+  if (!clip) return null;
+  const end = cluster.end ?? cluster.ref + (cluster.ref_len ?? (cluster.t === 'D' ? cluster.len : 0));
+  if (clipConflict(read, clip, lo, end + hi - cluster.ref, chrom, conflictOptions)) return 'conflicting';
+  return targets.some(t => (t.t !== cluster.t || t.ref !== cluster.ref || t.len !== cluster.len)
+    && clippedAt(clip, t)) ? 'ambiguous' : 'putative';
+}
+
+export function readCarriesCluster(read: Pick<CompactRead, 'sv' | 'sv_evidence' | 'sv_segments' | 'sequence_span' | 'sv_alignments'>,
+  cluster: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty' | 'ref_len'> & Partial<Pick<SvCluster, 'end'>>, chrom?: string): boolean {
+  const level = svEvidenceLevel(read, cluster, chrom);
+  return level === 'confirmed' || level === 'putative';
 }
 
 /** Ids of the reads (among `reads`) that carry a cluster's event. */
-export function supportingReadIds(reads: CompactRead[], cluster: SvCluster, chrom?: string): string[] {
-  return reads.filter(read => read.sv && readCarriesCluster(read, cluster, chrom)).map(read => read.id);
+export function supportingReadIds(reads: CompactRead[], cluster: SvCluster, chrom?: string,
+  level: 'carriers' | 'confirmed' | 'putative' | 'conflicting' | 'ambiguous' = 'carriers', targets: Pick<SvCluster, 't' | 'ref' | 'len' | 'uncertainty'>[] = [], conflictOptions?: SvConflictOptions): string[] {
+  const levels = new Map<string, 'confirmed' | 'putative' | 'conflicting' | 'ambiguous'>();
+  const rank = { confirmed: 0, putative: 1, conflicting: 2, ambiguous: 3 };
+  const bundles = new Map<string, CompactRead[]>();
+  for (const read of reads) bundles.set(read.id, [...(bundles.get(read.id) ?? []), read]);
+  for (const read of reads) {
+    const segments = bundles.get(read.id)!.flatMap(r => r.sv_segments ?? []);
+    const evidence = svEvidenceLevel({ ...read, sv_segments: segments }, cluster, chrom, targets, conflictOptions);
+    if (evidence && (!levels.has(read.id) || rank[evidence] < rank[levels.get(read.id)!])) levels.set(read.id, evidence);
+  }
+  return [...levels].filter(([, value]) => level === 'carriers' ? value === 'confirmed' || value === 'putative' : value === level).map(([id]) => id);
 }
 
 /** Size and independent-read support gates for summary glyphs and their hit targets. */
 export function visibleSvSummary(summary: SvSummary | null | undefined, minLen: number, minSupport = SV_MIN_SUPPORT_DEFAULT): SvSummary | null {
   if (!summary) return null;
-  const clusters = summary.clusters.filter(c => c.len >= minLen && c.support >= minSupport);
+  const clusters = summary.clusters.filter(c => c.len >= minLen && c.support + (c.putative ?? 0) >= minSupport);
   const clips = summary.clips.filter(c => c.n >= minSupport);
   if (clusters.length === 0 && clips.length === 0) return null;
   return { ...summary, clusters, clips };
@@ -305,10 +364,13 @@ const bp = (n: number) => n.toLocaleString('en-US');
 export function describeSvCluster(c: SvCluster, summary: SvSummary | null, reads: CompactRead[], chrom: string): SvClusterDescription {
   const size = c.len >= 1000 ? `${(c.len / 1000).toFixed(1)} kb` : `${bp(c.len)} bp`;
   const events: { readId: string; event: Extract<SvEvent, { t: 'D' | 'I' }> }[] = [];
+  const seen = new Set<string>();
   for (const read of reads) {
-    for (const ev of read.sv ?? []) {
+    if (seen.has(read.id)) continue;
+    for (const ev of read.sv_evidence ?? read.sv ?? []) {
       if (ev.t === c.t && eventsMatch(c.t, ev.ref, ev.len, c.ref, c.len)) {
         events.push({ readId: read.id, event: ev as Extract<SvEvent, { t: 'D' | 'I' }> });
+        seen.add(read.id);
         break;
       }
     }
@@ -316,9 +378,13 @@ export function describeSvCluster(c: SvCluster, summary: SvSummary | null, reads
   const refs = events.map(e => e.event.ref);
   const lens = events.map(e => e.event.len);
   const spread = refs.length > 1 ? Math.max(...refs) - Math.min(...refs) : 0;
-  const where = c.t === 'D'
+  let where = c.t === 'D'
     ? `${chrom}:${bp(c.ref + 1)}–${bp(c.end)}${spread > 0 ? ` (breakpoints vary by ${bp(spread)} bp)` : ''}`
     : `after ${chrom}:${bp(c.ref)}${spread > 0 ? ` (positions vary by ${bp(spread)} bp)` : ''}`;
+  if (c.ref_len !== undefined && c.alt_len !== undefined && c.ref_len > 0 && c.alt_len > 0) {
+    where += ` · replaces ${bp(c.ref_len)} reference bp with ${bp(c.alt_len)} query bp`;
+  }
+  if (c.uncertainty && c.uncertainty[0] !== c.uncertainty[1]) where += ` · equivalent anchors ${bp(c.uncertainty[0])}–${bp(c.uncertainty[1])}`;
   const sizes = lens.length > 1 && Math.min(...lens) !== Math.max(...lens)
     ? `Sizes ${bp(Math.min(...lens))}–${bp(Math.max(...lens))} bp` : '';
   const extra = [
@@ -328,7 +394,8 @@ export function describeSvCluster(c: SvCluster, summary: SvSummary | null, reads
   // Its denominator and scope (audit SV-3): of the reads loaded for drawing, or of every read in view; the split and
   // the insertion lens always count every read in view.
   const scope = summary?.scope === 'loaded' ? 'loaded reads' : 'reads in view';
-  const support = `${c.support.toLocaleString()} of ${c.informative.toLocaleString()} informative ${scope} carry it${extra ? ` (${extra})` : ''}`
+  const support = `${c.support.toLocaleString()} confirmed of ${c.informative.toLocaleString()} informative ${scope}${extra ? ` (${extra})` : ''}`
+    + ` · ${c.putative ?? 0} putative · ${c.conflicting ?? 0} conflicting (supporting clip aligns elsewhere) · ${c.ambiguous ?? 0} ambiguous`
     + (summary?.scope === 'loaded' ? ' · the split and the lens count every read in view' : '');
   const op = c.t === 'D' ? 'D' : 'I';
   const counts = new Map<number, number>();
@@ -372,13 +439,14 @@ export function clusterAtCursor(summary: SvSummary | null, pos: number, bpPerPx 
 }
 
 /** The SV event of one read nearest a position (within `tolBp`), for the read menu. */
-export function readSvEventAt(read: Pick<CompactRead, 'sv'>, pos: number, tolBp: number, minLen: number): Extract<SvEvent, { t: 'D' | 'I' }> | null {
+export function readSvEventAt(read: Pick<CompactRead, 'sv' | 'sv_evidence'>, pos: number, tolBp: number, minLen: number): Extract<SvEvent, { t: 'D' | 'I' }> | null {
   let best: Extract<SvEvent, { t: 'D' | 'I' }> | null = null;
   let bestDist = Infinity;
-  for (const ev of read.sv ?? []) {
+  for (const ev of read.sv_evidence ?? read.sv ?? []) {
     if ((ev.t !== 'D' && ev.t !== 'I') || ev.len < minLen) continue;
-    const end = ev.t === 'D' ? ev.ref + ev.len : ev.ref;
-    const dist = pos < ev.ref ? ev.ref - pos : pos > end ? pos - end : 0;
+    const start = ev.raw_ref ?? ev.ref;
+    const end = ev.raw_ref_end ?? (ev.t === 'D' ? ev.ref + ev.len : ev.ref);
+    const dist = pos < start ? start - pos : pos > end ? pos - end : 0;
     if (dist <= tolBp && dist < bestDist) {
       best = ev;
       bestDist = dist;
@@ -393,8 +461,9 @@ export function clusterForEvent(summary: SvSummary | null, ev: Extract<SvEvent, 
     if (c.t === ev.t && eventsMatch(ev.t, ev.ref, ev.len, c.ref, c.len)) return c;
   }
   return {
+    ref_len: ev.ref_len, alt_len: ev.alt_len, raw_ref: ev.raw_ref, uncertainty: ev.uncertainty,
     id: `${ev.t}:${ev.ref}:${ev.len}`, t: ev.t, ref: ev.ref, len: ev.len,
-    end: ev.t === 'D' ? ev.ref + ev.len : ev.ref, support: 1, informative: 1, sa_support: 0, clip_support: 0,
+    end: ev.ref_end ?? (ev.t === 'D' ? ev.ref + ev.len : ev.ref), support: 1, informative: 1, sa_support: 0, clip_support: 0,
   };
 }
 

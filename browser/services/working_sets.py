@@ -203,7 +203,10 @@ def broad_cache_topology(broad_key: tuple) -> tuple:
 
 def ensure_broad_cache_schema(state) -> None:
     """Drop process-local read caches from older loader behavior after hot reload."""
-    if getattr(state, "_broad_cache_schema_version", None) == BROAD_CACHE_SCHEMA_VERSION:
+    from services.sv_alleles import reference_identity
+    reference = reference_identity(state)
+    if (getattr(state, "_broad_cache_schema_version", None) == BROAD_CACHE_SCHEMA_VERSION
+            and getattr(state, '_sv_reference_identity', (None, None)) == reference):
         return
     if hasattr(state, "_broad_cache"):
         state._broad_cache.clear()
@@ -213,6 +216,7 @@ def ensure_broad_cache_schema(state) -> None:
     if hasattr(state, "_working_set_cache"):
         state._working_set_cache.clear()
     state._broad_cache_schema_version = BROAD_CACHE_SCHEMA_VERSION
+    state._sv_reference_identity = reference
 
 
 def layer_key_has_payload(layer_key: LayerKey) -> bool:
@@ -1403,6 +1407,8 @@ def project_broad_read_to_viewport(
         "strand_conflict", "lift", "analysis_id", "_fiberbrowser_inferred_strand",
         # SV events are in absolute reference coordinates: never shifted.
         "sv",
+        "aligned_blocks", "sv_segments", "sequence_span",
+        "sv_alignments", "supplementary",
     ):
         if identity_key in read:
             adjusted_read[identity_key] = read[identity_key]
@@ -1673,6 +1679,7 @@ def build_sampled_display_working_set(
     profile_include_legacy_profiles: bool = False,
     timings: Optional[dict[str, float]] = None,
     sv_min_len: Optional[int] = None,
+    sv_conflict_options=None,
     full_working_set: bool = False,
 ) -> tuple[WorkingSet, int]:
     """Build a display-sampled working set without projecting every candidate read.
@@ -1954,7 +1961,7 @@ def build_sampled_display_working_set(
         phase_t0 = time.perf_counter()
         sv_summary = sv_summary_for_reads(
             [read for _coverage, _idx, read, _is_spanning in candidates],
-            start, end, int(sv_min_len), chrom=chrom)
+            start, end, int(sv_min_len), chrom=chrom, conflict_options=sv_conflict_options)
         if timings is not None:
             timings["sv_summary_ms"] = (time.perf_counter() - phase_t0) * 1000
 

@@ -14,6 +14,7 @@ from services.sv_events import (
     SV_MIN_LEN_DEFAULT,
     deletion_spans,
     extract_sv_events,
+    sv_extraction_floor,
     split_compact_read_at_deletions,
 )
 from services.circular_genome import (
@@ -1581,12 +1582,13 @@ def build_compact_reads_from_bam(
     lift_counts=None,
     load_budget=None,
     sample_bounds=None,
+    sv_reference=None,
 ):
     """Build compact interval reads from a BAM file.
 
-    Every read carries ``sv`` (services/sv_events.py: deletions, insertions and
-    clips of at least ``sv_min_len``, its SA segments; absolute coordinates),
-    and its calls are split at those deletions. ``include_sv_seq`` adds the
+    Every read carries ``sv`` evidence (services/sv_events.py: deletions,
+    insertions and clips at the shared evidence floor, plus SA segments;
+    absolute coordinates). Calls are split at deletions >= ``sv_min_len``. ``include_sv_seq`` adds the
     first bases of each insertion.
 
     ``short_terminal_footprint_bp``: drop a footprint call at either end of a
@@ -1638,6 +1640,7 @@ def build_compact_reads_from_bam(
         lift_counts=lift_counts,
         load_budget=load_budget,
         sample_bounds=sample_bounds,
+        sv_reference=sv_reference,
     )
     wrap_length = _bam_wrap_length_for(bam_path, chrom, bool(circular), bam_handle_getter, chrom_map, contig_links)
     if wrap_length and fetch_regions is not None:
@@ -1727,7 +1730,8 @@ def _clip_part_before(read: dict, frame_end: int) -> Optional[dict]:
         layer_key=None, include_layer_qualities=True)
     if clipped is None:
         return None
-    for key in ("duplicate", "alignment_spans", "sv"):
+    for key in ("duplicate", "alignment_spans", "sv", "sv_evidence", "aligned_blocks", "sv_segments",
+                "sequence_span", "sv_alignments", "supplementary"):
         if key in read:
             clipped[key] = read[key]
     if read.get("cigar"):
@@ -1838,6 +1842,7 @@ def _build_compact_reads_from_bam_region(
     lift_counts=None,
     load_budget=None,
     sample_bounds=None,
+    sv_reference=None,
 ):
     """Compact reads of the records overlapping one linear BAM region.
 
@@ -1960,7 +1965,7 @@ def _build_compact_reads_from_bam_region(
         from services.background_work import checkpoint
         from services.read_sampling import active_sampler
         sampler = active_sampler()
-        if sampler is not None and sampler.level <= 0:
+        if sampler is not None and sampler.level <= 0 and sampler.only_ids is None:
             sampler = None
         records_seen = 0
         from services.signal_windows import SignalWindow
@@ -1976,7 +1981,45 @@ def _build_compact_reads_from_bam_region(
         # (services.graph_lift; per record, so every view agrees).
         from services.graph_lift import lift_hidden_predicate
         lift_hidden = lift_hidden_predicate(bam.header)
-        for read in iter_edge_records(bam, actual_chrom, region_start, region_end, fetch_regions):
+        from services.sv_molecules import molecule_alignments
+        def eligible_segment(record):
+            if record.is_unmapped or record.is_secondary or (lift_hidden is not None and lift_hidden(record)):
+                return None
+            evidence = record_signal(record, signal_provenance)
+            if signal_window is not None and not record.is_supplementary:
+                signal_window.append(record, evidence)
+            return signal_keeps(evidence) and (include_duplicates or not getattr(record, 'is_duplicate', False))
+        selected_molecules = 0
+        def keep_molecule(name):
+            nonlocal selected_molecules
+            if partition is not None:
+                from services.read_sampling import name_hash
+                if name_hash(name) % partition[1] != partition[0]:
+                    return False
+            if sampler is not None:
+                if not sampler.keep(name):
+                    return False
+                if sampler.max_records is not None and selected_molecules >= sampler.max_records:
+                    return False
+            selected_molecules += 1
+            return True
+        def skipped_molecule(name, start, end):
+            if sampler is None:
+                return
+            if partition is not None:
+                from services.read_sampling import name_hash
+                if name_hash(name) % partition[1] != partition[0]:
+                    return  # each worker counts only its own sampling decisions
+            sampler.skip(start, end)
+        records = iter_edge_records(bam, actual_chrom, region_start, region_end, fetch_regions)
+        # Lift composition needs each source record's own calls and molecular
+        # frame. Native SV loading instead collects the complete molecule bundle.
+        record_scoped = include_lift_meta or include_supplementary
+        records = (((record, None, ordinal) for ordinal, record in enumerate(records, 1))
+                   if record_scoped else molecule_alignments(
+                       records, eligible_segment, keep=keep_molecule,
+                       on_skipped=skipped_molecule, with_source_order=True))
+        for read, molecule_records, source_order in records:
             records_seen += 1
             if not records_seen & 255:
                 checkpoint()  # a background job whose client went away stops here
@@ -1984,33 +2027,32 @@ def _build_compact_reads_from_bam_region(
                 break
             if profile_bam:
                 profile_counts["records_seen"] += 1
-            if read.is_unmapped or read.is_secondary or (read.is_supplementary and not include_supplementary):
+            if (read.is_unmapped or read.is_secondary
+                    or (record_scoped and read.is_supplementary and not include_supplementary)):
                 if profile_bam:
                     profile_counts["records_unmapped"] += 1
                 continue
-            if read.is_supplementary and not supplementary_decodable(read):
+            if record_scoped and read.is_supplementary and not supplementary_decodable(read):
                 if lift_counts is not None:
                     lift_counts["hard_clipped_supplementary"] = lift_counts.get("hard_clipped_supplementary", 0) + 1
                 continue
             if lift_hidden is not None and lift_hidden(read):
                 continue
-            if partition is not None:
+            if record_scoped and partition is not None:
                 from services.read_sampling import name_hash
                 if name_hash(read.query_name) % partition[1] != partition[0]:
                     continue
             signal_evidence = record_signal(read, signal_provenance)
-            if signal_window is not None:
-                signal_window.append(read, signal_evidence)
             if not signal_keeps(signal_evidence):
                 continue
             # A sampled display load (services/read_sampling.py): decided on the
             # name after signal eligibility; a skipped read leaves its extent.
             if sampler is not None:
                 # Counted once per molecule: a supplementary shares its primary's name (and fate).
-                counted = (include_duplicates or not read.is_duplicate) and not read.is_supplementary
+                counted = (include_duplicates or not read.is_duplicate) and (not record_scoped or not read.is_supplementary)
                 extents = (sample_bounds(read.reference_start, read.reference_end) if sample_bounds is not None
                            else ((read.reference_start, read.reference_end),))
-                if not sampler.keep(read.query_name):
+                if record_scoped and not sampler.keep(read.query_name):
                     if counted:
                         for extent in extents:
                             sampler.skip(*extent)
@@ -2036,6 +2078,31 @@ def _build_compact_reads_from_bam_region(
                     profile_counts["records_nonspanning"] += 1
                 continue
             lift_call_meta = record_call_meta(read) if include_lift_meta else None
+
+            # Annotation tags on recovered hard-clipped segments may still use
+            # whole-molecule coordinates. The per-layer frame cannot be proven
+            # from truncated SEQ: keep SV evidence without displaced chromatin.
+            if not record_scoped and read.is_supplementary and any(op == 5 for op, _n in read.cigartuples or []):
+                if min_fp_quality > 0 or min_footprints > 0:
+                    continue
+                a, b = max(ref_start, region_start), min(ref_end, region_end)
+                if b > a:
+                    read_data = {'id': read.query_name, 'intervals': [[a - region_start, b - region_start, 0]],
+                                 'no_calls': True,
+                                 **_bam_projection_identity(read, projection_library_id, projection_occurrences)}
+                    if is_duplicate:
+                        read_data['duplicate'] = True
+                    _attach_record_fields(read_data, read)
+                    _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq,
+                                      molecule_records=molecule_records, reference=sv_reference)
+                    if include_cigar:
+                        read_data['cigar'] = extract_cigar_events(read, region_start, region_end)
+                    if partition is not None:
+                        read_data['_fiberbrowser_source_order'] = source_order
+                    reads.append(read_data)
+                    if stream is not None:
+                        stream.append(read_data)
+                continue
 
             phase_t0 = _profile_start()
             ns_tag = None
@@ -2206,13 +2273,14 @@ def _build_compact_reads_from_bam_region(
                         read_data.update(lift_meta_fields(
                             read, CigarCoordMapper(read.cigartuples, ref_start), lift_call_meta,
                             interval_calls=[None] * len(read_data["intervals"])))
-                    _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq)
+                    _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq,
+                                      molecule_records=molecule_records, reference=sv_reference)
                     from services.read_binary import binary_read_context
                     if binary_read_context.get():
                         read_data["_fiberbrowser_terminal_gaps"] = []
                     _profile_add("sv_events", phase_t0)
                     if partition is not None:
-                        read_data['_fiberbrowser_source_order'] = records_seen
+                        read_data['_fiberbrowser_source_order'] = source_order
                     reads.append(read_data)
                     if load_budget is not None:
                         load_budget.account(read_data)
@@ -2371,6 +2439,11 @@ def _build_compact_reads_from_bam_region(
             has_explicit_ma_layers = (
                 bool(ma_layers) or bool(ma_skipped_in_region)
             ) and requested_layer_set is not None
+            # A supplementary-only local alignment may carry whole-molecule
+            # annotation tags whose calls all lie on another segment. Preserve
+            # its local evidence as a neutral row when no quality gate rejects it.
+            evidence_only_segment = bool(read.is_supplementary) and min_footprints <= 0 and min_fp_quality <= 0
+            has_explicit_ma_layers = has_explicit_ma_layers or evidence_only_segment
             # A read whose only ns/nl footprints were read-end stubs stays (as an
             # empty row) wherever its body would have reached.
             stubs_only = bool(terminal_drop) and not footprints and bool(all_footprints)
@@ -2645,10 +2718,11 @@ def _build_compact_reads_from_bam_region(
                     edge_qualities=_footprint_edge_qualities(footprints, lq_qualities, rq_qualities),
                     legacy={"ma_names": sorted(ma_layer_names), "explicit_msp": has_explicit_msp,
                             "fire_qualities_available": fire_qualities_available}))
-            _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq, mapper=coord_mapper)
+            _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq, mapper=coord_mapper,
+                              molecule_records=molecule_records, reference=sv_reference)
             _profile_add("sv_events", phase_t0)
             if partition is not None:
-                read_data['_fiberbrowser_source_order'] = records_seen
+                read_data['_fiberbrowser_source_order'] = source_order
             reads.append(read_data)
             if load_budget is not None:
                 load_budget.account(read_data)
@@ -2659,6 +2733,10 @@ def _build_compact_reads_from_bam_region(
             signal_window.finish()
 
     except Exception as exc:
+        from services.bam_tags import FramePolicyError
+        from services.sv_molecules import MoleculeBudgetError
+        if isinstance(exc, (FramePolicyError, MoleculeBudgetError)):
+            raise
         from services.packed_reads import bounded_analysis
         if stream is not None or fetch_regions is not None or bounded_analysis.get():
             raise
@@ -2805,18 +2883,35 @@ def _footprint_edge_qualities(footprints, lq_qualities, rq_qualities):
     return out
 
 
-def _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq=False, mapper=None):
+def _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq=False, mapper=None,
+                      molecule_records=None, reference=None):
     """``sv`` on a compact read, and its calls split at the deletions. A record
     the extraction can't read (a test double without a CIGAR string) keeps
     none: SV events never cost a read its row."""
     try:
-        events = extract_sv_events(read, sv_min_len, include_seq=include_sv_seq, mapper=mapper)
+        from services.sv_events import alignment_evidence
+        read_data.update(alignment_evidence(read))
+        events = extract_sv_events(read, sv_extraction_floor(sv_min_len), include_seq=include_sv_seq, mapper=mapper,
+                                    reference=reference)
+        if molecule_records and len(molecule_records) > 1:
+            from services.sv_molecules import consolidate_evidence
+            parts = [dict(id=record.query_name, reference_start=int(record.reference_start),
+                          reference_end=int(record.reference_end), **alignment_evidence(record),
+                          sv=extract_sv_events(record, sv_extraction_floor(sv_min_len), include_seq=include_sv_seq,
+                                               reference=reference) or [])
+                     for record in molecule_records]
+            combined = consolidate_evidence(parts)
+            for key in ('sv_alignments', 'sv_segments', 'aligned_blocks', 'alignment_spans'):
+                read_data[key] = combined[key]
+            events = combined['sv']
     except Exception:
         return
-    if not events:
-        return
-    read_data["sv"] = events
-    cuts = [(a - region_start, b - region_start) for a, b in deletion_spans(events)]
+    if events:
+        read_data["sv"] = events
+    # Cuts belong to the drawn anchor CIGAR, independently of canonical allele
+    # anchors and of other alignments retained in its evidence bundle.
+    from services.sv_events import read_deletion_cuts
+    cuts = [(a - region_start, b - region_start) for a, b in read_deletion_cuts(read, sv_min_len, mapper=mapper)]
     if cuts:
         split_compact_read_at_deletions(read_data, cuts)
 

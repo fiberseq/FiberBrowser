@@ -41,7 +41,10 @@ import os
 import re
 import threading
 import time
+
+from services.sv_conflicts import normalize_conflict_options
 from services.byte_cache import shared_cache
+from services.sv_alleles import reference_key as _reference_key
 from typing import Any, Callable, Iterable, Optional
 
 from services.sv_events import (
@@ -50,9 +53,11 @@ from services.sv_events import (
     breakpoint_tolerance,
     cluster_sv_events,
     extract_sv_events,
+    sv_extraction_floor,
     insertion_clip_tolerance,
     normalize_min_sv_len,
     sv_summary_for_reads,
+    alignment_evidence,
 )
 
 DEFAULT_FLANK = 1000
@@ -105,7 +110,7 @@ def insertion_span(cigartuples, reference_start: int, q: int, length: int) -> tu
 
 
 def resolve_cluster(records: Iterable, *, pos: int, tolerance: int, len_min: int,
-                    len_max: Optional[int]) -> Optional[dict]:
+                    len_max: Optional[int], reference=None) -> Optional[dict]:
     """The insertion cluster at a clicked position (sv_events clustering, as
     the SV summary does): of the clusters within ``tolerance`` of ``pos`` and
     in the length range, the one with most carriers, nearest on ties."""
@@ -113,7 +118,7 @@ def resolve_cluster(records: Iterable, *, pos: int, tolerance: int, len_min: int
     compact = []
     for item in records:
         read = item[0]
-        events = extract_sv_events(read, floor)
+        events = extract_sv_events(read, sv_extraction_floor(floor), reference=reference)
         if events:
             compact.append({"id": read.query_name, "sv": events})
     clusters, _clips = cluster_sv_events(compact, pos - tolerance, pos + tolerance + 1, floor)
@@ -138,33 +143,30 @@ def soft_clip_len(read, side: str) -> int:
 # Splicing a carrier
 
 
+def _replacement_ops(cigartuples, reference_start, event):
+    """Complete raw replacement, including zero-query boundary deletions."""
+    q0 = int(event['q'])
+    q1 = int(event.get('q_end', q0 + event['len']))
+    r0 = event.get('raw_ref', event.get('ref'))
+    r1 = event.get('raw_ref_end', event.get('ref_end'))
+    q, ref, first = 0, reference_start, None
+    for i, (op, n) in enumerate(cigartuples):
+        if first is None and q == q0 and (op in (1, 2) if r0 is not None else op == 1) and (r0 is None or ref == r0):
+            first = i
+        q += n if op in (0, 1, 4, 7, 8) else 0
+        ref += n if op in (0, 2, 3, 7, 8) else 0
+        if first is not None and q == q1 and (r1 is None or ref == r1):
+            return first, i + 1
+    raise ValueError('replacement span does not end on CIGAR operation boundaries')
+
+
 def splice_cigar(cigartuples: list[tuple[int, int]], reference_start: int, event: dict) -> list[tuple[int, int]]:
-    """``cigartuples`` with the event's query span (first to last inserted base) as one ``M``."""
-    q_start = int(event["q"])
-    q_end = q_start + int(event["len"])
-    out: list[tuple[int, int]] = []
-    q = 0
-    inside = False
-    done = False
-    for op, length in cigartuples:
-        consumes_query = op in (0, 1, 4, 7, 8)
-        if not inside and not done and op == _I and q == q_start:
-            inside = True
-        if inside:
-            if consumes_query:
-                q += length
-            if q >= q_end:
-                if q != q_end:
-                    raise ValueError("insertion span does not end on an operation boundary")
-                _append(out, _M, q_end - q_start)
-                inside = False
-                done = True
-            continue
-        _append(out, op, length)
-        if consumes_query:
-            q += length
-    if not done:
-        raise ValueError("insertion span not found in CIGAR")
+    """Replace the complete raw reference/query interval by aligned query bases."""
+    first, last = _replacement_ops(cigartuples, reference_start, event)
+    out = []
+    for op, n in [*cigartuples[:first], (_M, int(event.get('q_end', event['q'] + event['len'])) - event['q']),
+                  *cigartuples[last:]]:
+        _append(out, op, n)
     return out
 
 
@@ -228,7 +230,7 @@ def _md_string(tokens: list[tuple[str, Any]]) -> str:
     return "".join(parts)
 
 
-def splice_md(md: str, cigartuples: list[tuple[int, int]], event: dict) -> str:
+def splice_md(md: str, cigartuples: list[tuple[int, int]], event: dict, *, reference_start=0) -> str:
     """MD for the spliced alignment (``splice_cigar``).
 
     MD covers the bases of M/=/X and D operations (not N). Inside the merged
@@ -238,38 +240,21 @@ def splice_md(md: str, cigartuples: list[tuple[int, int]], event: dict) -> str:
     deletion). Outside the span the MD is unchanged.
     """
     tokens = _md_tokens(md)
-    q_start = int(event["q"])
-    q_end = q_start + int(event["len"])
-    out: list[tuple[str, Any]] = []
+    first, last = _replacement_ops(cigartuples, reference_start, event)
     md_pos = 0
-    q = 0
-    inside = False
-    done = False
-    span_md_lo = None
-    for op, length in cigartuples:
-        if not inside and not done and op == _I and q == q_start:
-            inside = True
-            span_md_lo = md_pos
-            out = _md_clip(tokens, 0, md_pos)
-        md_span = length if op in (0, 2, 7, 8) else 0
-        q_span = length if op in (0, 1, 4, 7, 8) else 0
-        if inside:
+    out = []
+    for i, (op, n) in enumerate(cigartuples):
+        span = n if op in (0, 2, 7, 8) else 0
+        if i == first:
+            out.extend(_md_clip(tokens, 0, md_pos))
+        if first <= i < last:
             if op == _I:
-                out.append(("m", length))
+                out.append(('m', n))
             elif op in (0, 7, 8):
-                out.extend(_md_clip(tokens, md_pos, md_pos + length))
-            # D inside the span: its reference bases are gone; N contributes nothing.
-            md_pos += md_span
-            q += q_span
-            if q >= q_end:
-                inside = False
-                done = True
-                out.extend(_md_clip(tokens, md_pos, None))
-            continue
-        md_pos += md_span
-        q += q_span
-    if not done or span_md_lo is None:
-        raise ValueError("insertion span not found in CIGAR")
+                out.extend(_md_clip(tokens, md_pos, md_pos + n))
+        md_pos += span
+        if i == last - 1:
+            out.extend(_md_clip(tokens, md_pos, None))
     return _md_string(out)
 
 
@@ -279,7 +264,7 @@ def splice_read(read, event: dict):
     spliced.cigartuples = splice_cigar(list(read.cigartuples), read.reference_start, event)
     if read.has_tag("MD"):
         try:
-            md = splice_md(str(read.get_tag("MD")), list(read.cigartuples), event)
+            md = splice_md(str(read.get_tag("MD")), list(read.cigartuples), event, reference_start=read.reference_start)
             spliced.set_tag("MD", md, value_type="Z")
         except Exception:
             spliced.set_tag("MD", None)
@@ -495,7 +480,7 @@ def _evenly(items: list, limit: int) -> list:
     return [items[int(i * step)] for i in range(limit)]
 
 
-def _site_records(bam_paths, chrom, start, end, *, bam_handle_getter, chrom_map, contig_links):
+def _site_records(bam_paths, chrom, start, end, *, bam_handle_getter, chrom_map, contig_links, include_duplicates=True):
     """(record, file chromosome, path, handle) of the primary alignments in ``[start, end)``."""
     from utils.chrom import resolve_reference_name
     from services.signal_evidence import signal_header, record_keeps_signal
@@ -510,14 +495,16 @@ def _site_records(bam_paths, chrom, start, end, *, bam_handle_getter, chrom_map,
         provenance = signal_header(bam.header)
         from services.graph_lift import lift_hidden_predicate
         hidden = lift_hidden_predicate(getattr(bam, "header", None))
-        for read in bam.fetch(actual, max(0, int(start)), int(end)):
-            if read.is_unmapped or read.is_secondary or read.is_supplementary:
-                continue
+        from services.sv_molecules import molecule_bundles
+        def eligible(read):
+            if read.is_unmapped or read.is_secondary:
+                return None
             if hidden is not None and hidden(read):
-                continue
-            if not record_keeps_signal(read, provenance):
-                continue
-            yield read, actual, bam_path, bam
+                return None
+            return record_keeps_signal(read, provenance) and (include_duplicates or not getattr(read, 'is_duplicate', False))
+        for bundle in molecule_bundles(bam.fetch(actual, max(0, int(start)), int(end)), eligible):
+            for read in bundle:
+                yield read, actual, bam_path, bam
 
 
 def _empty_read(read) -> dict:
@@ -532,9 +519,14 @@ def _carrier_plan(read, evidence: dict, cluster_len: int) -> dict:
     """How one carrier is drawn: which bases are its insert and where its axis starts."""
     if evidence["kind"] == "cigar":
         event = evidence["event"]
-        ref_end, pieces = insertion_span(read.cigartuples, read.reference_start, event["q"], event["len"])
-        return {"kind": "cigar", "partial": None, "ref": int(event["ref"]), "ref_end": ref_end, "q": int(event["q"]),
-                "len": int(event["len"]), "pieces": pieces}
+        query_len = int(event.get('q_end', event['q'] + event['len'])) - int(event['q'])
+        ref_end, pieces = insertion_span(read.cigartuples, read.reference_start, event["q"], query_len)
+        ref_end = int(event.get('raw_ref_end', ref_end))
+        return {"kind": "cigar", "partial": None, "ref": int(event.get('raw_ref', event["ref"])),
+                "ref_end": ref_end, "q": int(event["q"]), 'allele_len': int(event['len']),
+                'canonical_ref_len': event.get('ref_len', ref_end - int(event.get('raw_ref', event['ref']))),
+                **({'canonical_alt_seq': event['alt_seq']} if event.get('normalized') else {}),
+                "len": query_len, "pieces": pieces}
     clip = evidence["clip"]
     side = clip["side"]
     partial = "start" if side == "R" else "end"
@@ -550,7 +542,7 @@ def classify_site(bam_paths, chrom, *, pos: int, tolerance: int = DEFAULT_TOLERA
                   len_min: int = DEFAULT_MIN_LEN, len_max: Optional[int] = None,
                   ref: Optional[int] = None, length: Optional[int] = None, margin: int = SV_SPAN_MARGIN,
                   include_duplicates: bool = False, bam_handle_getter=None, chrom_map=None,
-                  contig_links=None) -> dict:
+                  contig_links=None, reference=None, conflict_options=None) -> dict:
     """The insertion at a site and its reads: ``{success, ref, length, margin, carriers:
     [(plan, record, path, handle)], reference: [(record, path, handle)], excluded}``.
 
@@ -563,11 +555,12 @@ def classify_site(bam_paths, chrom, *, pos: int, tolerance: int = DEFAULT_TOLERA
 
     if bam_handle_getter is None:
         from services.bam_handles import get_bam_handle as bam_handle_getter
-    records = dict(bam_handle_getter=bam_handle_getter, chrom_map=chrom_map, contig_links=contig_links)
+    records = dict(bam_handle_getter=bam_handle_getter, chrom_map=chrom_map, contig_links=contig_links,
+                   include_duplicates=include_duplicates)
     if ref is None or length is None:
         cluster = resolve_cluster(
             _site_records(bam_paths, chrom, pos - tolerance - 1, pos + tolerance + 1, **records),
-            pos=int(pos), tolerance=int(tolerance), len_min=int(len_min), len_max=len_max,
+            pos=int(pos), tolerance=int(tolerance), len_min=int(len_min), len_max=len_max, reference=reference,
         )
         if cluster is None:
             return {"success": False, "error": (
@@ -582,8 +575,8 @@ def classify_site(bam_paths, chrom, *, pos: int, tolerance: int = DEFAULT_TOLERA
     longest = math.ceil(length / (1 - SV_LENGTH_TOL_FRAC)) + 1
     reach = int(math.ceil(max(margin, insertion_clip_tolerance(length), breakpoint_tolerance(longest)))) + 1
     by_name = classify_records(
-        _site_records(bam_paths, chrom, ref - reach, ref + reach, **records),
-        t="I", ref=ref, length=length, margin=margin, include_duplicates=include_duplicates,
+        _site_records(bam_paths, chrom, min(ref - reach, pos - tolerance - 1), max(ref + reach, pos + tolerance + 1), **records),
+        t="I", ref=ref, length=length, margin=margin, include_duplicates=include_duplicates, reference=reference, conflict_options=conflict_options,
     )
 
     carriers_all = []
@@ -591,8 +584,9 @@ def classify_site(bam_paths, chrom, *, pos: int, tolerance: int = DEFAULT_TOLERA
     excluded = {"other_insert": 0, "not_informative": 0}
     for name, entry in by_name.items():
         read, _file_chrom, path, bam = entry["record"]
-        if entry["allele"] == 0:
-            plan = _carrier_plan(read, entry["evidence"], length)
+        if (entry['evidence'] or {}).get('level') is not None:
+            plan = {**_carrier_plan(read, entry["evidence"], length), 'evidence_level': entry['evidence']['level'], 'evidence_reason': entry['evidence'].get('reason'),
+                    'evidence_bundle': [call['read'] for call in entry['evidence_bundle']]}
             carriers_all.append((plan, read, path, bam))
         elif entry["allele"] == 1:
             reference_all.append((read, path, bam))
@@ -627,6 +621,8 @@ def build_lens(
     contig_links=None,
     include_duplicates: bool = False,
     daf: bool = False,
+    reference=None,
+    conflict_options=None,
 ) -> dict:
     """The lens payload for one insertion across ``bam_paths``.
 
@@ -649,7 +645,7 @@ def build_lens(
     records = dict(bam_handle_getter=bam_handle_getter, chrom_map=chrom_map, contig_links=contig_links)
 
     site = classify_site(bam_paths, chrom, pos=pos, tolerance=tolerance, len_min=len_min, len_max=len_max,
-                         ref=ref, length=length, margin=margin, include_duplicates=include_duplicates, **records)
+                         ref=ref, length=length, margin=margin, include_duplicates=include_duplicates, reference=reference, conflict_options=conflict_options, **records)
     if not site["success"]:
         return site
     ref, length, margin = site["ref"], site["length"], site["margin"]
@@ -665,6 +661,8 @@ def build_lens(
                                         item[1].query_name, item[2]))
     carriers_out: list[dict] = []
     full_seqs: list[str] = []
+    canonical_seqs: list[str] = []
+    daf_compatible = True
     full_records: list[tuple] = []
     full_entries: list[dict] = []
     partial_items: list[tuple[str, str]] = []
@@ -672,7 +670,7 @@ def build_lens(
     for plan, read, bam_path, bam in _evenly(carriers_all, max_carriers):
         ins_len = int(plan["len"])
         if plan["kind"] == "cigar":
-            source = splice_read(read, {"q": plan["q"], "len": ins_len})
+            source = splice_read(read, plan)
             origin = plan["ref"]
         elif plan["kind"] == "clip":
             source = splice_clip(read, plan["side"])
@@ -698,10 +696,13 @@ def build_lens(
             "id": read.query_name,
             "strand": _strand(read),
             "kind": "cigar" if plan["kind"] == "cigar" else "clip",
+            "evidence_level": plan['evidence_level'], "evidence_reason": plan.get('evidence_reason'),
+            "evidence_bundle": plan['evidence_bundle'],
             "ref": int(plan["ref"]),
             "ref_end": int(plan["ref_end"]),
             "q": int(plan["q"]),
             "len": ins_len,
+            "inserted_len": plan.get('allele_len', ins_len),
             # A carrier with no calls in the window still gets its (empty) row.
             "read": split_at_breakpoints(to_lens_local(loaded[0] if loaded else _empty_read(read), flank), ins_len),
         }
@@ -721,8 +722,11 @@ def build_lens(
             if include_sequences:
                 entry["seq"] = insert
             if plan["kind"] == "cigar":
-                full_seqs.append(insert)
-                full_records.append((read, plan["q"], ins_len))
+                full_seqs.append(insert)  # knots remain on the observed query axis
+                canonical = plan.get('canonical_alt_seq', insert)
+                canonical_seqs.append(canonical)
+                daf_compatible &= canonical == insert or (plan['ref_end'] == plan['ref'] and len(canonical) == ins_len)
+                full_records.append((read, plan["q"], ins_len, canonical))
                 full_entries.append(entry)
             else:
                 partial_items.append((insert, plan["partial"]))
@@ -763,10 +767,18 @@ def build_lens(
         "sv": {"t": "I", "ref": ref, "len": length, "margin": margin},
         "cluster": {
             "ref": ref,
-            "len": lengths[len(lengths) // 2] if lengths else length,
+            "len": length,
+            "alt_len": lengths[len(lengths) // 2] if lengths else length,
+            "ref_len": sorted(p['ref_end'] - p['ref'] for p, *_ in carriers_all if p['kind'] == 'cigar')[
+                counts['cigar'] // 2] if counts['cigar'] else 0,
             "len_lo": lengths[0] if lengths else length,
             "len_hi": lengths[-1] if lengths else length,
-            "carriers": total_carriers,
+            "carriers": sum(p['evidence_level'] == 'confirmed' for p, *_ in carriers_all),
+            "confirmed": sum(p['evidence_level'] == 'confirmed' for p, *_ in carriers_all),
+            "putative": sum(p['evidence_level'] == 'putative' for p, *_ in carriers_all),
+            "conflicting": sum(p['evidence_level'] == 'conflicting' for p, *_ in carriers_all),
+            "ambiguous": sum(p['evidence_level'] == 'ambiguous' for p, *_ in carriers_all),
+            "evidence_total": total_carriers,
             "cigar": counts["cigar"],
             "clipped": counts["clip"] + counts["hard"],
             "hard": counts["hard"],
@@ -784,12 +796,15 @@ def build_lens(
         from services.insertion_consensus import consensus_with_knots, partials_to_consensus
         cons_started = time.perf_counter()
         method, why_not, daf_consensus = "majority", None, None
-        if daf:
+        if daf and daf_compatible:
             from services.insertion_consensus import daf_aware_consensus
             daf_consensus, why_not = daf_aware_consensus(full_records)
             if daf_consensus is not None:
                 method = "daf"
-        cons = consensus_with_knots(full_seqs, seq=daf_consensus["seq"] if daf_consensus else None)
+        if daf and not daf_compatible:
+            why_not = 'Canonical allele normalization changes the source query span; using canonical sequence majority'
+        from services.insertion_consensus import build_consensus
+        cons = consensus_with_knots(full_seqs, seq=daf_consensus["seq"] if daf_consensus else build_consensus(canonical_seqs))
         for entry, read_cons in zip(full_entries, cons["reads"]):
             entry["knots"] = read_cons["knots"]
             entry["identity"] = read_cons["identity"]
@@ -833,6 +848,8 @@ def find_clusters(
     contig_links=None,
     include_duplicates: bool = False,
     tile_cache=None,
+    reference=None,
+    conflict_options=None,
 ) -> list[dict]:
     """Insertions (>= ``min_len``) in ``[start, end)`` as the SV summary
     clusters them, with their clipped carriers counted (``clip_support``).
@@ -847,21 +864,21 @@ def find_clusters(
     if tile_cache is not None and bam_paths and all(_file_stamp(p)[0] is not None for p in bam_paths):
         compact = _tiled_sv_reads(bam_paths, chrom, start, end, floor, tile_cache=tile_cache,
                                   bam_handle_getter=bam_handle_getter, chrom_map=chrom_map,
-                                  contig_links=contig_links, include_duplicates=include_duplicates)
+                                  contig_links=contig_links, include_duplicates=include_duplicates, reference=reference)
     else:
         compact = [item for _key, item in _sv_reads(bam_paths, chrom, start, end, floor, bam_handle_getter=bam_handle_getter,
                                                    chrom_map=chrom_map, contig_links=contig_links,
-                                                   include_duplicates=include_duplicates)]
-    summary = sv_summary_for_reads(compact, start, end, floor, chrom=chrom) or {"clusters": []}
+                                                   include_duplicates=include_duplicates, reference=reference)]
+    summary = sv_summary_for_reads(compact, start, end, floor, chrom=chrom, conflict_options=conflict_options) or {"clusters": []}
     out = []
     for c in summary["clusters"]:
         if c["t"] != "I" or c["len"] < min_len or not (start <= c["ref"] < end):
             continue
-        out.append({**c, "carriers": c["support"]})
+        out.append({**c, "carriers": c["support"] + c.get("putative", 0)})
     return out
 
 
-def _sv_reads(bam_paths, chrom, start, end, floor, *, bam_handle_getter, chrom_map, contig_links, include_duplicates):
+def _sv_reads(bam_paths, chrom, start, end, floor, *, bam_handle_getter, chrom_map, contig_links, include_duplicates, reference=None):
     """((file, name, start, end, strand), {id, reference_start, reference_end[, sv]}) per primary
     alignment in ``[start, end)``, in file order."""
     from services.background_work import checkpoint
@@ -871,15 +888,16 @@ def _sv_reads(bam_paths, chrom, start, end, floor, *, bam_handle_getter, chrom_m
     occurrences: dict = {}
     seen = 0
     for read, _chrom, path, _bam in _site_records(bam_paths, chrom, start, end, bam_handle_getter=bam_handle_getter,
-                                                  chrom_map=chrom_map, contig_links=contig_links):
+                                                  chrom_map=chrom_map, contig_links=contig_links, include_duplicates=include_duplicates):
         seen += 1
         if not seen & 255:
             checkpoint()  # the list's client went away
         if getattr(read, "is_duplicate", False) and not include_duplicates:
             continue
         ref_start, ref_end = int(read.reference_start), int(read.reference_end)
-        item = {"id": read.query_name, "reference_start": ref_start, "reference_end": ref_end}
-        events = extract_sv_events(read, floor)
+        item = {"id": read.query_name, "reference_start": ref_start, "reference_end": ref_end,
+                **alignment_evidence(read)}
+        events = extract_sv_events(read, sv_extraction_floor(floor), reference=reference)
         if events:
             item["sv"] = events
         # Reads without events count too (the reference reads spanning a site).
@@ -901,14 +919,14 @@ def cluster_tile_size(span: int) -> int:
 
 
 def _tiled_sv_reads(bam_paths, chrom, start, end, floor, *, tile_cache, bam_handle_getter, chrom_map,
-                    contig_links, include_duplicates) -> list[dict]:
+                    contig_links, include_duplicates, reference=None) -> list[dict]:
     """``_sv_reads`` over ``[start, end)`` from cached tiles; missing tiles are read in
     contiguous runs (one fetch per run, each read's events extracted once)."""
     from services.signal_evidence import signal_filter_key
     size = cluster_tile_size(end - start)
     first, last = max(0, start) // size, max(0, end - 1) // size
     identity = (tuple((p, *_file_stamp(p)) for p in bam_paths), repr(chrom_map), repr(contig_links),
-                chrom, size, int(floor), bool(include_duplicates), signal_filter_key())
+                chrom, size, int(floor), bool(include_duplicates), signal_filter_key(), _reference_key(reference))
     tiles: dict[int, list] = {}
     missing = []
     for t in range(first, last + 1):
@@ -928,7 +946,7 @@ def _tiled_sv_reads(bam_paths, chrom, start, end, floor, *, tile_cache, bam_hand
         fresh: dict[int, list] = {t: [] for t in run}
         for key, item in _sv_reads(bam_paths, chrom, lo, hi, floor, bam_handle_getter=bam_handle_getter,
                                    chrom_map=chrom_map, contig_links=contig_links,
-                                   include_duplicates=include_duplicates):
+                                   include_duplicates=include_duplicates, reference=reference):
             for t in run:
                 if item["reference_end"] > t * size and item["reference_start"] < (t + 1) * size:
                     fresh[t].append((key, item))
@@ -1022,7 +1040,7 @@ def _dataset_bam_paths(state, dataset_id):
 
 def insertion_clusters_payload(state, *, chrom: str, start: int, end: int,
                                dataset_id: Optional[str] = None, min_len: int = DEFAULT_MIN_LEN,
-                               tolerance: int = DEFAULT_TOLERANCE) -> dict:
+                               tolerance: int = DEFAULT_TOLERANCE, conflict_options=None) -> dict:
     chrom = state.translate_chrom(chrom)
     dataset_id, paths, error = _dataset_bam_paths(state, dataset_id)
     if error:
@@ -1037,6 +1055,7 @@ def insertion_clusters_payload(state, *, chrom: str, start: int, end: int,
         chrom_map=getattr(state, "chrom_map", None),
         contig_links=contig_links(state, path=paths[0]) if paths else None,
         tile_cache=cluster_tile_cache(),
+        reference=getattr(state, 'fasta', None), conflict_options=conflict_options,
     )
     return {"success": True, "dataset_id": dataset_id, "chrom": chrom, "clusters": clusters}
 
@@ -1050,7 +1069,7 @@ def insertion_lens_payload(state, *, chrom: str, pos: int, dataset_id: Optional[
                            max_reference: int = DEFAULT_MAX_REFERENCE,
                            consensus: bool = True, include_sequences: bool = False,
                            ml_threshold: int = 125, layer_names: Optional[list[str]] = None,
-                           include_methylation: bool = True, hide_terminal_gaps: bool = True) -> dict:
+                           include_methylation: bool = True, hide_terminal_gaps: bool = True, conflict_options=None) -> dict:
     from services.compact_read_loader import short_terminal_footprint_bp_for
     from services.signal_evidence import signal_filter_key
     from services.plasmid_reconcile import contig_links
@@ -1079,6 +1098,8 @@ def insertion_lens_payload(state, *, chrom: str, pos: int, dataset_id: Optional[
         chrom, int(pos), int(tolerance), int(len_min),
         len_max, ref, length, bool(include_duplicates), int(flank), int(max_carriers), int(max_reference), bool(consensus),
         bool(include_sequences), repr(sorted(loader_kwargs.items())), daf, signal_filter_key(state),
+        _reference_key(getattr(state, 'fasta', None)),
+        repr(sorted(normalize_conflict_options(conflict_options).items())),
     )
     with _cache_lock:
         cached = _cache.get(key) if cacheable else None
@@ -1095,6 +1116,7 @@ def insertion_lens_payload(state, *, chrom: str, pos: int, dataset_id: Optional[
         chrom_map=chrom_map,
         contig_links=links,
         daf=daf,
+        reference=getattr(state, 'fasta', None), conflict_options=conflict_options,
     )
     payload["dataset_id"] = dataset_id
     if not cacheable or not payload.get("success"):

@@ -86,12 +86,12 @@ def _sv_summary_scope(state, working_count: int) -> str:
 
 def _attach_sv(payload: dict, *, summary_reads, display_reads_key: str = "reads",
                chrom: str, start: int, end: int, min_sv_len: int, include_summary: bool,
-               scope: str = "all", precomputed=None) -> dict:
+               scope: str = "all", precomputed=None, conflict_options=None) -> dict:
     """Cut the payload's reads' ``sv`` to the view and add ``sv_summary``."""
     payload[display_reads_key] = finalize_sv_payload(payload.get(display_reads_key) or [], start, end, min_sv_len)
     if include_summary:
         summary = precomputed if precomputed is not None else (
-            sv_summary_for_reads(summary_reads, start, end, min_sv_len, scope=scope, chrom=chrom)
+            sv_summary_for_reads(summary_reads, start, end, min_sv_len, scope=scope, chrom=chrom, conflict_options=conflict_options)
             if summary_reads is not None else None)
         if summary:
             payload["sv_summary"] = summary
@@ -484,6 +484,7 @@ def _compact_reads_payload(
     min_sv_len: int = SV_MIN_LEN_DEFAULT,
     include_sv_seq: bool = False,
     include_sv_summary: bool = True,
+    sv_conflict_options=None,
     full_working_set: bool = False,
     viewport_start: Optional[int] = None,
     viewport_end: Optional[int] = None,
@@ -647,6 +648,7 @@ def _compact_reads_payload(
         from services.lift.reads import display_sampling, lift_identity
         direct_level = (_sample_level(state, dataset, chrom, start, end)
                         if getattr(state, 'performance', {}).get('effective') == 'low' or display_sampling(dataset) else 0)
+        from services.sv_alleles import reference_identity
         methyl_cache_key = (
             dataset_id,
             chrom,
@@ -666,11 +668,12 @@ def _compact_reads_payload(
             include_duplicates,
             direct_min_footprints,
             read_load_token(state, chrom, direct_terminal_bp, sample_level=direct_level),
-            sv_floor,
+            min_sv_len,
             include_sv_seq,
             (getattr(getattr(state, "fasta", None), "filename", None), id(getattr(state, "fasta", None))),
             lift_identity(dataset),
             bool(include_mismatches), viewport_start, viewport_end,
+            reference_identity(state),
         )
 
         if not hasattr(state, "_methylation_cache"):
@@ -688,7 +691,7 @@ def _compact_reads_payload(
                 include_layer_qualities=include_layer_qualities, infer_legacy_layers=infer_legacy_layers,
                 legacy_nuc_min_size=legacy_nuc_min_size, include_duplicates=include_duplicates,
                 min_footprints=direct_min_footprints, short_terminal_footprint_bp=direct_terminal_bp,
-                sv_min_len=sv_floor, include_sv_seq=include_sv_seq,
+                sv_min_len=min_sv_len, include_sv_seq=include_sv_seq,
             )
 
         generation = dataset_generation(state, dataset_id)
@@ -947,7 +950,7 @@ def _compact_reads_payload(
             metaprofile_read_count=metaprofile_read_count,
             profile_max_reads=profile_max_reads if include_metaprofile else None,
         ), summary_reads=None if view_wraps else reads_to_sample, chrom=chrom, start=start, end=end,
-            min_sv_len=min_sv_len, include_summary=include_sv_summary)
+            min_sv_len=min_sv_len, include_summary=include_sv_summary, conflict_options=sv_conflict_options)
         from services.read_binary import binary_read_context
         if binary_read_context.get():
             payload['_region_reuse_safe'] = (
@@ -1194,6 +1197,7 @@ def _compact_reads_payload(
                 profile_requested_layers=requested_metaprofile_layers if include_metaprofile else None,
                 timings=server_timings,
                 sv_min_len=min_sv_len if include_sv_summary else None,
+                sv_conflict_options=sv_conflict_options,
                 full_working_set=full_working_set,
             )
             server_timings["display_working_set_ms"] = phase_ms(phase_t0)
@@ -1298,7 +1302,7 @@ def _compact_reads_payload(
         profile_max_reads=profile_max_reads if include_metaprofile else None,
     ), summary_reads=sv_summary_reads, chrom=chrom, start=start, end=end, min_sv_len=min_sv_len,
         include_summary=include_sv_summary and not sv_wraps, scope=_sv_summary_scope(state, working_count),
-        precomputed=precomputed_sv)
+        precomputed=precomputed_sv, conflict_options=sv_conflict_options)
     if sampling and isinstance(payload, dict):
         # The panel says "N of M reads (sampled)" and offers to load them all.
         payload["working_sampling"] = sampling
@@ -1466,6 +1470,7 @@ def compact_all_dataset_result(
     include_duplicates: bool = False,
     min_sv_len: int = SV_MIN_LEN_DEFAULT,
     include_sv_summary: bool = True,
+    sv_conflict_options=None,
 ):
     """Build one dataset payload for `/api/reads/compact_all`.
 
@@ -1665,7 +1670,7 @@ def compact_all_dataset_result(
     phase_t0 = time.perf_counter()
     _attach_sv(result, summary_reads=None if sv_wraps else reads, chrom=chrom, start=start, end=end,
                min_sv_len=min_sv_len, include_summary=query_bool(include_sv_summary, True) and not sv_wraps,
-               scope=_sv_summary_scope(state, total_count))
+               scope=_sv_summary_scope(state, total_count), conflict_options=sv_conflict_options)
     server_timings["sv_summary_ms"] = phase_ms(phase_t0)
     from services.signal_counts import attach_signal_counts
     phase_t0 = time.perf_counter()

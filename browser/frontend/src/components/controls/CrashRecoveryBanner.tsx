@@ -1,3 +1,4 @@
+import { normalizeSvConflictOptions } from '../../utils/svConflicts';
 import { useReadActionsStore } from '../../stores/readActionsStore';
 import { useEffect, useRef, useState } from 'react';
 import { useBrowserStore } from '../../stores/browserStore';
@@ -375,6 +376,7 @@ export async function restoreSnapshot(saved: SerializedState) {
     enabledCigarTypes: r.enabledCigarTypes,
     svDisplayEnabled: r.svDisplayEnabled ?? true,
     svMinLen: r.svMinLen ?? 50,
+    svConflictOptions: normalizeSvConflictOptions(r.svConflictOptions),
     svMinSupport: clampMinSvSupport(r.svMinSupport ?? SV_MIN_SUPPORT_DEFAULT),
     darkMode: r.darkMode,
     peakSettings: r.peakSettings,

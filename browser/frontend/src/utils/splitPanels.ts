@@ -126,6 +126,7 @@ export async function loadSplitGrouping(source: SplitSource): Promise<SplitGroup
   const panel = s.panels.find(p => p.id === source.panelId);
   const key = panel ? panel.stateKey ?? panel.datasetId ?? panel.id : '';
   const assignments = s.clusterAssignments[key] ?? {};
+  const evidence = s.svCarrierEvidence[key] ?? {};
   const names = s.clusterGroupLabels[key] ?? {};
   const byId = new Map<number, string[]>();
   for (const [read, id] of Object.entries(assignments)) { const list = byId.get(id) ?? []; list.push(read); byId.set(id, list); }
@@ -134,7 +135,9 @@ export async function loadSplitGrouping(source: SplitSource): Promise<SplitGroup
     title: source.title, rule: { kind: 'frozen' },
     groups: [...byId.entries()].sort((a, b) => a[0] - b[0]).map(([id, reads]) => {
       const label = names[id] ?? `Cluster ${id}`;
+      const svEvidenceLevels = Object.fromEntries(reads.filter(read => evidence[read]).map(read => [read, evidence[read]]));
       return { key: String(id), label, count: reads.length, colour: getClusterColor(id),
+        ...(Object.keys(svEvidenceLevels).length ? { ruleExtras: { svEvidenceLevels } } : {}),
         kind: /not informative/i.test(label) ? 'na' as const : 'group' as const, ids: { [ds]: reads } };
     }),
   };
@@ -188,8 +191,10 @@ export function splitPanelCount(rows: SplitRow[], sources: PanelConfig[]): numbe
 
 /** The rule fields a row of one group keeps (its group's ruleExtras). */
 function ruleExtrasOf(grouping: SplitGrouping, groupKeys: string[]): Partial<ReadSubsetRule> {
-  if (groupKeys.length !== 1) return {};
-  return grouping.groups.find(g => g.key === groupKeys[0])?.ruleExtras ?? {};
+  const extras = groupKeys.length === 1 ? grouping.groups.find(g => g.key === groupKeys[0])?.ruleExtras ?? {} : {};
+  const levels = Object.assign({}, ...grouping.groups.filter(g => groupKeys.includes(g.key))
+    .map(g => g.ruleExtras?.svEvidenceLevels ?? {}));
+  return Object.keys(levels).length ? { ...extras, svEvidenceLevels: levels } : extras;
 }
 
 function idsFor(grouping: SplitGrouping, datasetId: string, groupKeys: string[]): string[] {

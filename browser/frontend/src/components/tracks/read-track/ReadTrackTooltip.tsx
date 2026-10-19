@@ -1,5 +1,7 @@
 import { SIGNAL_LABELS } from '../../../utils/signalFilters';
-import type { CompactRead } from './types';
+import type { CompactRead, SvSummary } from './types';
+import { svEvidenceLevel } from './svDrawing';
+import { clipConflict } from '../../../utils/svConflicts';
 import type { ReadStateInfo } from '../../../types/clustering';
 import { getClusterColor, getClusterLabel } from './constants';
 import { clusterAssignmentForRead } from './readFilter';
@@ -18,12 +20,13 @@ interface ReadTooltipProps {
   myReadStateDetails: Record<string, ReadStateInfo> | null;
   annotationOverlays?: Record<string, Array<{ start: number; end: number; type: string; confidence: number }>> | null;
   annotationColors?: Record<string, string>;
+  svSummary?: SvSummary | null;
 }
 
 export function ReadTooltip({
   hoveredRead, width, height, chrom, start,
   myClusterAssignments, myReadStateDetails,
-  annotationOverlays, annotationColors,
+  annotationOverlays, annotationColors, svSummary,
 }: ReadTooltipProps) {
   const read = hoveredRead.read;
   const seenCalls = new Set<string>();
@@ -40,6 +43,19 @@ export function ReadTooltip({
   const readSize = readEnd - readStart;
   const cluster = clusterAssignmentForRead(myClusterAssignments, read.analysis_id ?? read.id);
   const state = myReadStateDetails?.[read.id];
+  const conflictReasons = (svSummary?.clusters ?? []).flatMap(target => {
+    if (svEvidenceLevel(read, target, chrom, svSummary?.evidence_targets, svSummary?.conflict_options) !== 'conflicting') return [];
+    return (read.sv_alignments ?? [read]).flatMap(part => (part.sv_evidence ?? part.sv ?? []).flatMap(clip => {
+      if (clip.t !== 'S') return [];
+      const [lo, hi] = target.uncertainty ?? [target.ref, target.ref];
+      const tol = target.t === 'I' ? Math.max(20, Math.min(target.len * 0.05, 50)) : Math.max(20, target.len * 0.05);
+      const point = clip.ref - (target.t === 'D' && clip.side === 'L' ? target.len : 0);
+      if (point < lo - tol || point > hi + tol) return [];
+      const reason = clipConflict({ ...part, sv_segments: read.sv_segments ?? part.sv_segments }, clip,
+        lo, target.end + hi - target.ref, chrom, svSummary?.conflict_options);
+      return reason ? [reason.message] : [];
+    }));
+  });
   const familySummaries = ([
     ['XCR', read.layers?.tf_cross_consensus],
     ['CR', read.layers?.tf_consensus],
@@ -71,6 +87,7 @@ export function ReadTooltip({
       </div>
       <div className="text-gray-300 text-[11px] space-y-0.5">
         {read.signal && <div data-testid="signal-read-status">{SIGNAL_LABELS[read.signal.status]}</div>}
+        {[...new Set(conflictReasons)].map(reason => <div key={reason} data-testid="sv-read-conflict" className="text-amber-300">Conflicting · {reason}</div>)}
         <div>Footprints: {footprints.length}{read.qualities ? ` (${footprints.length} scored)` : ''}</div>
         {familySummaries.map(summary => (
           <div key={summary.label}>

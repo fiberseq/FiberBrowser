@@ -48,7 +48,7 @@ _ALIGNED_LIST_KEYS = ("annotation_names", "circular_ids")
 _SOURCE_SPAN_KEYS = ("source_intervals", "family_intervals")
 # Fields lifting replaces (everything else of a decoded read is copied).
 _REPLACED = {"intervals", "qualities", "fire", "layers", "deam", "cigar", "sv", "reference_start", "reference_end",
-             "sv_evidence", "aligned_blocks", "sv_segments",
+             "sv_evidence", "aligned_blocks", "sv_segments", "sv_alignments", "sequence_span",
              "alignment_orientation", "alignment_spans", "_fiberbrowser_terminal_gaps", "methyl", "strand",
              "strand_conflict", *_POINT_FIELDS}
 # Below this many intervals a group is mapped with plain Python (numpy setup costs more).

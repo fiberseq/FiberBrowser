@@ -1,6 +1,9 @@
 """Structural-variant events, clusters and allele split (fb-n9-sv)."""
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pysam
 import pytest
 
@@ -9,6 +12,7 @@ from services.sv_events import (
     SV_MIN_LEN_DEFAULT,
     classify_allele,
     cluster_sv_events,
+    deletion_spans,
     events_match,
     extract_sv_events,
     finalize_sv_payload,
@@ -39,6 +43,118 @@ def _seg(cigar, start=1000, *, reverse=False, sa=None, supplementary=False, seq=
     return a
 
 
+def test_frame_policy_error_propagates_through_public_compact_loader(sv_bam, monkeypatch):
+    from services import bam_tags
+
+    def broken(_header):
+        raise RuntimeError('injected frame policy failure')
+
+    monkeypatch.setattr(bam_tags, 'bam_ma_aq_tags_are_molecular', broken)
+    with pytest.raises(bam_tags.FramePolicyError, match='injected frame policy') as error:
+        compact_read_loader.build_compact_reads_from_bam(sv_bam, fx.CHROM, *fx.VIEW, spanning_only=False)
+    assert isinstance(error.value.__cause__, RuntimeError)
+
+
+def test_direct_endpoint_uses_display_cutoff_for_interval_cuts_and_cache(sv_client, monkeypatch):
+    from services import read_endpoint
+    client, _state = sv_client
+    cutoffs = []
+    original = read_endpoint.load_direct_reads_for_dataset
+
+    def capture(*args, **kwargs):
+        cutoffs.append(kwargs['sv_min_len'])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(read_endpoint, 'load_direct_reads_for_dataset', capture)
+    for cutoff in (50, 100):
+        result = client.get('/api/reads/compact', params=dict(
+            dataset_id='sv', chrom=fx.CHROM, start=fx.VIEW[0], end=fx.VIEW[1],
+            include_duplicates=True, min_sv_len=cutoff, spanning=False))
+        assert result.status_code == 200, result.text
+    assert cutoffs == [50, 100]
+
+
+def test_read_endpoints_forward_conflict_thresholds_without_stale_summary_reuse(sv_client):
+    client, _state = sv_client
+    for endpoint, dataset_arg in [('/api/reads/compact', 'dataset_id'), ('/api/reads/compact_all', 'dataset_ids')]:
+        for enabled in (False, True):
+            result = client.get(endpoint, params={
+                dataset_arg: 'sv', 'chrom': fx.CHROM, 'start': fx.VIEW[0], 'end': fx.VIEW[1],
+                'spanning': False, 'sv_conflict_options': json.dumps(dict(enabled=enabled, max_distance=5000)),
+            })
+            assert result.status_code == 200, result.text
+            payload = result.json()
+            if dataset_arg == 'dataset_ids':
+                payload = payload['datasets']['sv']
+            assert payload['sv_summary']['conflict_options']['enabled'] == enabled
+            assert payload['sv_summary']['conflict_options']['max_distance'] == 5000
+
+
+def test_split_route_forwards_conflicting_opt_in_and_thresholds(sv_client, monkeypatch):
+    from services import sv_endpoint
+    client, _state = sv_client
+    fixture = json.loads((Path(__file__).parent / 'data/sv_conflicts.json').read_text())
+    monkeypatch.setattr(sv_endpoint, 'scan_view', lambda *_: [fixture['cases'][0]['read']])
+    request = dict(dataset_id='sv', chrom='chrT', start=0, end=3000, t='I', ref=1000, len=100)
+    default = client.post('/api/sv/split', json=request).json()
+    assert default['evidence_counts']['conflicting'] == 1 and default['counts'] == [0, 0, 1]
+    selected = client.post('/api/sv/split', json={**request, 'include_conflicting': True}).json()
+    assert selected['counts'] == [1, 0, 0]
+    assert selected['evidence_reasons']['synthetic']['code'] == 'clip_elsewhere'
+    legacy = client.post('/api/sv/split', json={**request, 'conflict_options': {'enabled': False}}).json()
+    assert legacy['counts'] == [1, 0, 0] and legacy['evidence_counts']['putative'] == 1
+
+
+def test_evidence_floor_does_not_cut_chromatin_at_sub_display_deletions():
+    from models.domain import CigarCoordMapper
+    a = _seg([(0, 100), (2, 15), (0, 100), (2, 60), (0, 100)])
+    compact = {'id': 'synthetic', 'intervals': [[50, 300, 1]]}
+    compact_read_loader._attach_sv_events(compact, a, 1000, sv_min_len=50,
+                                        mapper=CigarCoordMapper(a.cigartuples, 1000))
+    assert compact['intervals'] == [[50, 215, 1], [275, 300, 1]]
+    assert [ev['len'] for ev in compact['sv']] == [15, 60]
+
+
+def _seed(name, length, ref=1000):
+    return dict(id=name, reference_start=0, reference_end=4000,
+                sv=[dict(t='I', ref=ref, len=length, q=100)])
+
+
+def test_cluster_targets_are_permutation_and_merged_file_order_invariant():
+    import itertools
+    rows = [_seed(str(i), length) for i, length in enumerate([100, 140, 120, 120, 120])]
+    expected = sv_summary_for_reads(rows, 0, 4000, 50)
+    for order in itertools.permutations(rows):
+        assert sv_summary_for_reads(order, 0, 4000, 50) == expected
+    for first, second in ((rows[:2], rows[2:]), (rows[2:], rows[:2])):
+        assert sv_summary_for_reads(first + second + first, 0, 4000, 50)['clusters'] == expected['clusters']
+
+
+def test_singleton_outlier_does_not_gain_a_shadow_cluster_after_reconciliation():
+    rows = [_seed('low', 100), _seed('high', 140)] + [_seed(str(i), 120, 1001) for i in range(6)]
+    clusters, _ = cluster_sv_events(rows, 0, 4000, 50)
+    assert [(c['ref'], c['len'], len(c['members'])) for c in clusters] == [(1001, 120, 8)]
+
+
+def test_shifted_duplicate_molecule_has_one_median_vote():
+    rows = [_seed('duplicate', 100), _seed('other', 120)]
+    expected = cluster_sv_events(rows, 0, 4000, 50)
+    assert cluster_sv_events(rows + [_seed('duplicate', 101)], 0, 4000, 50) == expected
+    assert expected[0][0]['len'] == 110
+
+
+def test_cluster_reconciliation_respects_view_and_summary_skips_unused_members(monkeypatch):
+    from services import sv_events
+    rows = [_seed('in', 100, 1005), _seed('out', 100, 990)]
+    assert cluster_sv_events(rows, 1000, 2000, 50)[0][0]['members'] == {'in'}
+    original = sv_events.cluster_sv_events
+    def checked(*args, **kwargs):
+        assert kwargs['reconcile_members'] is False
+        return original(*args, **kwargs)
+    monkeypatch.setattr(sv_events, 'cluster_sv_events', checked)
+    assert sv_summary_for_reads(rows, 1000, 2000, 50)['clusters'][0]['support'] == 2
+
+
 # ---------------------------------------------------------------------------
 # Extraction
 
@@ -46,12 +162,14 @@ def _seg(cigar, start=1000, *, reverse=False, sa=None, supplementary=False, seq=
 def test_deletion_insertion_and_clips_in_absolute_coordinates():
     a = _seg([(4, 80), (0, 100), (2, 1500), (0, 50), (1, 400), (0, 30), (5, 60)], start=1000)
     ev = extract_sv_events(a, 50)
+    anchor = dict(chrom='chrT', pos=1000, cigar_ref_len=1680, strand='+',
+                  q_start=80, q_end=660, query_length=720)
     assert ev == [
-        {"t": "S", "side": "L", "ref": 1000, "len": 80, "q": 0},
+        {"t": "S", "side": "L", "ref": 1000, "len": 80, "q": 0, "anchor": anchor},
         {"t": "D", "ref": 1100, "len": 1500, "q": 180},
         {"t": "I", "ref": 2650, "len": 400, "q": 230},
         # Right clip 60 bp, all hard: q is where SEQ ends.
-        {"t": "S", "side": "R", "ref": 2680, "len": 60, "q": 660, "h": 1},
+        {"t": "S", "side": "R", "ref": 2680, "len": 60, "q": 660, "h": 1, "anchor": anchor},
     ]
 
 
@@ -66,7 +184,8 @@ def test_threshold_is_inclusive_and_small_events_are_dropped():
 def test_split_pieces_of_one_deletion_are_joined():
     # 900D 2M 598D: one 1.5 kb deletion, as nanopore aligners write it.
     a = _seg([(0, 100), (2, 900), (0, 2), (2, 598), (0, 100)], start=0)
-    assert extract_sv_events(a, 50) == [{"t": "D", "ref": 100, "len": 1500, "q": 100}]
+    event, = extract_sv_events(a, 50)
+    assert (event['ref'], event['len'], event['ref_len'], event['alt_len']) == (100, 1498, 1500, 2)
     # Far apart: two deletions.
     b = _seg([(0, 100), (2, 900), (0, 40), (2, 598), (0, 100)], start=0)
     assert [(e["ref"], e["len"]) for e in extract_sv_events(b, 50)] == [(100, 900), (1040, 598)]
@@ -84,9 +203,9 @@ def test_sa_tag_is_parsed_zero_based():
     assert ev[0]["t"] == "S" and ev[0]["side"] == "R"
     assert ev[1:] == [
         {"t": "SA", "chrom": "chr2L", "pos": 11500, "strand": "-", "mapq": 30, "nm": 3, "cigar_ref_len": 2000,
-         "supp": False, "same_strand": False},
+         "supp": False, "same_strand": False, "q_start": 500, "q_end": 2500, "query_length": 2500, "query_blocks": [[500, 2500]]},
         {"t": "SA", "chrom": "chrX", "pos": 9, "strand": "+", "mapq": 0, "nm": 0, "cigar_ref_len": 5,
-         "supp": False, "same_strand": True},
+         "supp": False, "same_strand": True, "q_start": 0, "q_end": 5, "query_length": 5, "query_blocks": [[0, 5]]},
     ]
     assert parse_sa_tag("bad;chr1,1,+,10M,60,0", supplementary=True)[0]["supp"] is True
 
@@ -159,12 +278,13 @@ def test_calls_spanning_a_deletion_are_split_on_both_strands(sv_bam, name):
     start = fx.VIEW[0]
     read = _load(sv_bam, start=start)[name]
     (d,) = [e for e in read["sv"] if e["t"] == "D"]
-    a, b = d["ref"] - start, d["ref"] + d["len"] - start
+    a, b = d["ref"] - start, d.get("raw_ref_end", d["ref"] + d["len"]) - start
+    cuts = [(s-start, e-start) for s, e in deletion_spans([d])]
     for iv in read["intervals"]:
-        assert iv[1] <= a or iv[0] >= b, iv
+        assert all(iv[1] <= lo or iv[0] >= hi for lo, hi in cuts), iv
     for layer_name, layer in read["layers"].items():
         for iv in layer["intervals"]:
-            assert iv[1] <= a or iv[0] >= b, (layer_name, iv)
+            assert all(iv[1] <= lo or iv[0] >= hi for lo, hi in cuts), (layer_name, iv)
     left = [iv for iv in read["layers"]["nuc"]["intervals"] if iv[1] == a]
     right = [iv for iv in read["layers"]["nuc"]["intervals"] if iv[0] == b]
     assert left and right and left[0][2] == right[0][2] == 147
@@ -218,8 +338,9 @@ def test_summary_over_fixture(sv_bam):
     assert by_type["D"]["informative"] == 21
     assert abs(by_type["D"]["ref"] - fx.DEL_START) <= 6 and abs(by_type["D"]["len"] - fx.DEL_LEN) <= 10
     assert by_type["I"]["support"] == 9
-    assert summary["clips"] == [{"side": "R", "ref": fx.DEL_START, "n": 3}]
-    assert sv_summary_for_reads(reads, *fx.VIEW, 2001) is None
+    assert summary["clips"] == [{"side": "L", "ref": fx.DEL_START + fx.DEL_LEN, "n": 3},
+                                {"side": "R", "ref": fx.DEL_START, "n": 3}]
+    assert sv_summary_for_reads(reads, *fx.VIEW, 2001)['clusters'] == []
 
 
 def test_allele_classification_edge_cases():
@@ -237,8 +358,8 @@ def test_allele_classification_edge_cases():
     assert classify_allele(carrier, t, ref, length) == 0
     assert classify_allele(reference, t, ref, length) == 1
     assert classify_allele(short_left, t, ref, length) == 2
-    assert classify_allele(other_allele, t, ref, length) == 1  # spans, without this deletion
-    assert classify_allele(split, t, ref, length, chrom="chrA") == 0
+    assert classify_allele(other_allele, t, ref, length) == 2  # deleted bases cannot establish reference
+    assert classify_allele(split, t, ref, length, chrom="chrA") == 2  # no query geometry
     assert classify_allele(no_sa, t, ref, length, chrom="chrA") == 2
     assert classify_allele(wrong_chrom, t, ref, length, chrom="chrA") == 2
     assert classify_allele(no_bounds, t, ref, length) == 2
@@ -353,13 +474,13 @@ def test_dafc_and_dense_loaders_split_footprints_at_deletions(sv_bam):
     for name in ("sv/del0/ccs", "sv/del1/ccs", "sv/del3/ccs"):
         rec = records[name]
         (d,) = [e for e in extract_sv_events(rec, 50) if e["t"] == "D"]
-        a, b = d["ref"], d["ref"] + d["len"]
+        cuts = deletion_spans([d])
         row = rows[name]
         blocks = [(row["start"] + int(s), row["start"] + int(s) + int(n))
                   for s, n in zip(row["blockStarts"].split(","), row["blockSizes"].split(",")) if s]
-        assert blocks and all(e <= a or s >= b for s, e in blocks), name
+        assert blocks and all(e <= a or s >= b for a, b in cuts for s, e in blocks), name
         dense = _legacy_reference_footprints(rec, rec.get_tag("ns"), rec.get_tag("nl"), 2, True)
-        assert dense and all(e <= a or s >= b for s, e, _n in dense), name
+        assert dense and all(e <= a or s >= b for a, b in cuts for s, e, _n in dense), name
 
 
 def test_mapper_walk_and_cigar_walk_give_the_same_events(sv_bam):
@@ -373,10 +494,13 @@ def test_mapper_walk_and_cigar_walk_give_the_same_events(sv_bam):
             assert extract_sv_events(rec, floor, mapper=mapper) == extract_sv_events(rec, floor), rec.query_name
     split = _seg([(5, 30), (4, 40), (0, 100), (2, 900), (0, 2), (2, 598), (0, 100), (4, 60)], start=0)
     mapper = CigarCoordMapper(split.cigartuples, 0)
-    assert extract_sv_events(split, 50, mapper=mapper) == extract_sv_events(split, 50) == [
-        {"t": "S", "side": "L", "ref": 0, "len": 70, "q": 0, "h": 1},
-        {"t": "D", "ref": 100, "len": 1500, "q": 140},
-        {"t": "S", "side": "R", "ref": 1700, "len": 60, "q": 242},
+    assert extract_sv_events(split, 50, mapper=mapper) == extract_sv_events(split, 50)
+    clips = [e for e in extract_sv_events(split, 50) if e['t'] == 'S']
+    anchor = dict(chrom='chrT', pos=0, cigar_ref_len=1700, strand='+',
+                  q_start=70, q_end=272, query_length=332)
+    assert clips == [
+        {"t": "S", "side": "L", "ref": 0, "len": 70, "q": 0, "h": 1, "anchor": anchor},
+        {"t": "S", "side": "R", "ref": 1700, "len": 60, "q": 242, "anchor": anchor},
     ]
 
 
@@ -388,10 +512,11 @@ def test_pieces_that_join_past_the_threshold_make_an_event():
     """30D 5M 20D: no single op reaches 50, the joined deletion (55) does."""
     from models.domain import CigarCoordMapper
     a = _seg([(0, 100), (2, 30), (0, 5), (2, 20), (0, 100)], start=0)
-    want = [{"t": "D", "ref": 100, "len": 55, "q": 100}]
+    want = extract_sv_events(a, 50)
+    assert want[0]["len"] == 50 and want[0]["ref_len"] == 55
     assert extract_sv_events(a, 50) == want
     assert extract_sv_events(a, 50, mapper=CigarCoordMapper(a.cigartuples, 0)) == want
-    assert extract_sv_events(a, 56) is None
+    assert extract_sv_events(a, 51) is None
 
 
 def test_inverted_sa_segment_is_not_a_deletion_carrier():
@@ -399,7 +524,7 @@ def test_inverted_sa_segment_is_not_a_deletion_carrier():
     clip = {"t": "S", "side": "R", "ref": 10_003, "len": 2000, "q": 4000}
     seg = {"t": "SA", "chrom": "chrA", "pos": 11_497, "strand": "-", "mapq": 60, "nm": 0, "cigar_ref_len": 2000, "supp": False}
     base = {"id": "p", "reference_start": 6000, "reference_end": 10_003}
-    assert classify_allele({**base, "sv": [clip, {**seg, "same_strand": True}]}, t, ref, length, chrom="chrA") == 0
+    assert classify_allele({**base, "sv": [clip, {**seg, "same_strand": True}]}, t, ref, length, chrom="chrA") == 2
     assert classify_allele({**base, "sv": [clip, {**seg, "same_strand": False}]}, t, ref, length, chrom="chrA") == 2
 
 
@@ -496,8 +621,10 @@ def test_an_insertion_clip_at_the_breakpoint_is_a_carrier():
     assert carrier_evidence(far, "I", ref, length) is None      # 100 bp away
     assert carrier_evidence(short, "I", ref, length) is None    # a 40 bp clip
     assert carrier_evidence(cigar, "I", ref, length)["kind"] == "cigar"
-    for read in (right, left, hard, cigar):
-        assert classify_allele(read, "I", ref, length) == 0
+    for read in (right, left, hard):
+        assert classify_allele(read, "I", ref, length) == 2
+        assert carrier_evidence(read, "I", ref, length)["level"] == "putative"
+    assert classify_allele(cigar, "I", ref, length) == 0
     assert classify_allele(far, "I", ref, length) == 2
     other = _ins_read("o", 5_000, 15_000, {"t": "I", "ref": 10_005, "len": 3_000, "q": 5_005})
     assert classify_allele(other, "I", ref, length) == 2       # another allele is not reference
@@ -517,12 +644,13 @@ def test_the_summary_counts_an_insertions_clipped_carriers():
     reads += [_ins_read("o", 5_000, 15_000, {"t": "I", "ref": ref, "len": 2_000, "q": 5_000})]
     summary = sv_summary_for_reads(reads, 0, 20_000, 50)
     big = next(c for c in summary["clusters"] if c["t"] == "I" and c["len"] > 5_000)
-    assert big["support"] == 11 and big["clip_support"] == 7 and big["sa_support"] == 0
+    assert big["support"] == 4 and big["clip_support"] == 0 and big["sa_support"] == 0
+    assert big["ambiguous"] == 7 and big["putative"] == 0
     # Carriers + the plain spanning reads; the other allele is not informative.
-    assert big["informative"] == 14
+    assert big["informative"] == 7
     for read in reads:
         allele = classify_allele(read, "I", big["ref"], big["len"])
-        assert allele == (0 if read["id"][0] in "crl" else 1 if read["id"][0] == "n" else 2), read["id"]
+        assert allele == (0 if read["id"][0] == "c" else 1 if read["id"][0] == "n" else 2), read["id"]
 
 
 def test_supplementary_records_with_calls_are_one_molecule_everywhere(sv_client, sv_bam):
@@ -555,3 +683,105 @@ def test_supplementary_records_with_calls_are_one_molecule_everywhere(sv_client,
     assert sorted(r["read_id"] for r in rows) == split_names
     for row in rows:
         assert row["ref_start"] == primaries[row["read_id"]].reference_start
+
+
+# P0 audit: the snapshots retain only local CIGAR/clip evidence and alignment
+# bounds from an HG002 Fiber-seq sample, with anonymous IDs and no sequence/tags (see data/README).
+@pytest.mark.parametrize("case", json.loads(
+    (Path(__file__).parent / 'data/sv_p0_evidence.json').read_text()),
+    ids=lambda case: case['name'])
+def test_audited_loci_summary_split_and_display_evidence_agree(case):
+    from services.sv_endpoint import classify_compact
+    from services.sv_events import carrier_evidence
+    target = case['target']
+    reads = case['reads']
+    calls = classify_compact((({**r, 'duplicate': False, 'file_chrom': case['chrom']}, r) for r in reads),
+                             t=target['t'], ref=target['ref'], length=target['len'], include_putative=False)
+    expected = case['evidence_expected']
+    assert {n for n, c in calls.items() if c['allele'] == 0} == set(expected['confirmed'])
+    for cutoff in ([50, 2000] if case['name'] == 'alu' else [50]):
+        summary = sv_summary_for_reads(reads, case['start'], case['end'], cutoff, chrom=case['chrom'])
+        c = next(c for c in summary['clusters'] if all(c[k] == v for k, v in target.items()))
+        assert (c['support'], c['informative'], c['clip_support']) == (
+            len(expected['confirmed']), expected['informative'], 0)
+        assert c['putative'] == len(expected['putative']) and c['ambiguous'] == len(expected['ambiguous'])
+        assert c['support'] == sum(c['allele'] == 0 for c in calls.values())
+        assert c['informative'] == sum(c['allele'] < 2 for c in calls.values())
+        display = finalize_sv_payload(reads, case['start'], case['end'], cutoff)
+        assert {r['id'] for r in display if (carrier_evidence(r, target['t'], target['ref'], target['len']) or {}).get('level') == 'confirmed'} == set(expected['confirmed'])
+
+
+def _p0_read(name, ref, length, t='I'):
+    return dict(id=name, reference_start=0, reference_end=4000,
+                sv=[dict(t=t, ref=ref, len=length, q=100)])
+
+
+def test_final_cluster_members_drop_stale_median_members():
+    reads = [_p0_read(str(i), ref, 100) for i, ref in enumerate([1000, 1015, 1025, 1030, 1030])]
+    clusters, _ = cluster_sv_events(reads, 0, 4000, 50)
+    assert len(clusters) == 1 and clusters[0]['ref'] == 1025
+    assert clusters[0]['members'] == {'1', '2', '3', '4'}
+    c = sv_summary_for_reads(reads, 0, 4000, 50)['clusters'][0]
+    assert c['support'] == 4
+    assert c['support'] == sum(classify_allele(r, 'I', c['ref'], c['len']) == 0 for r in reads)
+
+
+def test_final_target_counts_matching_events_from_adjacent_clusters_once_per_qname():
+    reads = [_p0_read('first', 1000, 100), _p0_read('adjacent', 1000, 140)]
+    reads += [_p0_read(str(i), 1001, 120) for i in range(3)]
+    # The 140 bp event seeded a separate cluster before the first median moved.
+    clusters, _ = cluster_sv_events(reads, 0, 4000, 50)
+    c = next(c for c in clusters if c['len'] == 120)
+    assert c['members'] == {r['id'] for r in reads}
+    summary = sv_summary_for_reads(reads + reads, 0, 4000, 50)
+    c = next(c for c in summary['clusters'] if c['len'] == 120)
+    assert c['support'] == c['informative'] == 5
+    assert summary['n_reads'] == 5
+
+
+def test_repeated_qnames_reduce_carriers_and_reference_with_the_split_precedence():
+    from services.sv_endpoint import classify_compact
+    carrier = _p0_read('carrier', 1000, 100)
+    clipped = {**carrier, 'sv': [dict(t='S', ref=1000, len=60, q=0, side='R')]}
+    reference = dict(id='reference', reference_start=0, reference_end=4000)
+    conflicting_reference = {**reference, 'id': 'carrier'}
+    unknown = dict(id='reference', reference_start=999, reference_end=1001)
+    special_reference = {**reference, 'alignment_spans': [(0, 4000)]}
+    reads = [clipped, reference, conflicting_reference, unknown, special_reference, carrier, carrier]
+    for cohort in (reads, list(reversed(reads))):
+        summary = sv_summary_for_reads(cohort, 0, 4000, 50)
+        c = summary['clusters'][0]
+        assert (c['support'], c['informative'], c['clip_support'], summary['n_reads']) == (1, 2, 0, 2)
+        calls = classify_compact((({**r, 'file_chrom': 'chrT', 'duplicate': False}, None) for r in cohort),
+                                 t='I', ref=c['ref'], length=c['len'])
+        assert {n: c['allele'] for n, c in calls.items()} == {'carrier': 0, 'reference': 1}
+        assert calls['carrier']['evidence']['kind'] == 'cigar'
+
+
+@pytest.mark.parametrize('mapper', [False, True])
+@pytest.mark.parametrize('extra', [[], [(0, 100), (2, 20), (0, 100)]])
+def test_merged_deletion_threshold_is_monotonic_and_independent_of_unrelated_events(mapper, extra):
+    from models.domain import CigarCoordMapper
+    read = _seg([(0, 100), (2, 20), (0, 10), (2, 20), (0, 100)] + extra)
+    options = {'mapper': CigarCoordMapper(read.cigartuples, read.reference_start)} if mapper else {}
+    for cutoff in [10, 20, 40]:
+        events = extract_sv_events(read, cutoff, **options)
+        assert next(e for e in events if e['ref'] == 1100)['len'] == 40
+    assert not any(e['ref'] == 1100 for e in extract_sv_events(read, 41, **options) or [])
+
+
+def test_small_matching_event_below_display_cutoff_is_still_carrier_evidence():
+    from services.sv_endpoint import classify_records
+    from services.sv_events import sv_extraction_floor
+    seed = _seg([(0, 1000), (1, 60), (0, 1000)], start=0)
+    near = _seg([(0, 1000), (1, 48), (0, 1000)], start=0)
+    seed.query_name, near.query_name = 'seed', 'near'
+    records = [(r, 'chrT') for r in (seed, near)]
+    reads = [dict(id=r.query_name, reference_start=r.reference_start, reference_end=r.reference_end,
+                  sv=extract_sv_events(r, sv_extraction_floor(50))) for r, _ in records]
+    c = sv_summary_for_reads(reads, 0, 3000, 50)['clusters'][0]
+    assert c['len'] == 60 and c['support'] == 2
+    assert cluster_sv_events(reads, 0, 3000, 50)[0][0]['members'] == {'seed', 'near'}
+    assert sum(c['allele'] == 0 for c in classify_records(records, t='I', ref=1000, length=60).values()) == 2
+    displayed = finalize_sv_payload(reads, 0, 3000, 50)
+    assert 'sv' not in displayed[1] and displayed[1]['sv_evidence'][0]['len'] == 48

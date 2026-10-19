@@ -1,3 +1,4 @@
+import { normalizeSvConflictOptions } from '../utils/svConflicts';
 import { validateMatchedState } from '../utils/matchedRegions';
 import { normalizeFeatureRefs } from '../stores/featureStore';
 import { useSplitPanelStore } from '../stores/splitPanelStore';
@@ -29,7 +30,7 @@ import { getTracks, type TrackListEntry } from './tracks';
 import { emitTutorialEvent } from '../utils/tutorialEvents';
 import { useRegionCatalogStore } from '../stores/regionCatalogStore';
 import { normalizeHighlights } from '../stores/highlightSlice';
-import { normalizeClusterGroupLabels, normalizeSvSplits } from '../stores/svSlice';
+import { normalizeSvCarrierEvidence, normalizeClusterGroupLabels, normalizeSvSplits } from '../stores/svSlice';
 import { clampMinSvLen, SV_MIN_LEN_DEFAULT, clampMinSvSupport, SV_MIN_SUPPORT_DEFAULT } from '../components/tracks/read-track/svDrawing';
 import { DEFAULT_CLASS_REGION_MODE, isClassRegionMode } from '../utils/classRegion';
 import { CLASS_REGION_RESET_EVENT } from '../utils/analysisCommands';
@@ -45,7 +46,7 @@ export const SESSION_PRE_VIEWPORT_KEYS = [
   'mergeMinFraction', 'mergeMaxSimilarity', 'mergeStrategy', 'mergeThresholds',
   'enabledModTypes', 'enabledMetaProfiles', 'cachedLayerTypes', 'legacyLayerInference', 'legacyNucMinSize', 'clickTargetLayer', 'footprintAnalysisLayer',
   'fillSmallGaps', 'fillGapSize', 'hideTerminalGaps', 'terminalGapThreshold', 'hideShortEndFootprints', 'minFpQuality', 'minFootprints', 'minFootprintsAuto', 'showDuplicateReads', 'signalFilters',
-  'enabledCigarTypes', 'svDisplayEnabled', 'svMinLen', 'svMinSupport', 'isReversed', 'darkMode', 'peakSettings', 'activeColormap', 'fillReadHeight', 'showHiddenTrackStrip',
+  'enabledCigarTypes', 'svDisplayEnabled', 'svMinLen', 'svMinSupport', 'svConflictOptions', 'isReversed', 'darkMode', 'peakSettings', 'activeColormap', 'fillReadHeight', 'showHiddenTrackStrip',
   'readSeparatorMode', 'readSeparatorMinHeight', 'readSeparatorWidth',
   'showReadTooltip', 'showCoverageHistogram', 'maxRegionForReads', 'motifThreshold', 'readRowHeight',
   'readScrollOffsets', 'showGenomeOverview', 'publicMode',
@@ -75,7 +76,7 @@ export const SESSION_POST_VIEWPORT_KEYS = [
   // The merges since the last clustering (Unmerge / Merge again).
   'clusterMergeLog',
   // SV allele splits (the groups' definition) and their group names.
-  'svSplits', 'clusterGroupLabels',
+  'svSplits', 'clusterGroupLabels', 'svCarrierEvidence',
   // Selected features (Cluster / Sort / Filter on features).
   'selectedFeatures',
 ] as const;
@@ -87,7 +88,7 @@ const SESSION_OWNED_ANALYSIS_KEYS = [
   'clusterTreeNodes', 'clusterTreeRootIds', 'activeClusterTreeNodeId',
   'dynamicClustering', 'readSortOrder', 'readStateDetails',
   'clusterFocus', 'selectedClusters', 'filteredReadIds', 'readFilterSources', 'selectedReadIds',
-  'readProjection', 'clusterMergeLog', 'svSplits', 'clusterGroupLabels', 'selectedFeatures',
+  'readProjection', 'clusterMergeLog', 'svSplits', 'clusterGroupLabels', 'svCarrierEvidence', 'selectedFeatures',
   'correspondenceScans',
 ] as const;
 
@@ -429,6 +430,7 @@ export function applyImportedState(result: Record<string, unknown>): void {
     // SV display (fb-n9-sv): a session saved before it gets its defaults, not the open session's.
     if (!('svDisplayEnabled' in batch)) batch.svDisplayEnabled = true;
     batch.svMinLen = clampMinSvLen(batch.svMinLen ?? SV_MIN_LEN_DEFAULT);
+    batch.svConflictOptions = normalizeSvConflictOptions(batch.svConflictOptions);
     batch.svMinSupport = clampMinSvSupport(batch.svMinSupport ?? SV_MIN_SUPPORT_DEFAULT);
     if ('clusterFeatureRules' in batch) {
       batch.clusterFeatureRules = normalizeClusterFeatureRules(batch.clusterFeatureRules);
@@ -614,6 +616,7 @@ export function applyImportedState(result: Record<string, unknown>): void {
       postBatch.transcriptionStateFilters = normalizeTranscriptionStateFilters(postBatch.transcriptionStateFilters);
     }
     if ('clusterMergeLog' in postBatch) postBatch.clusterMergeLog = normalizeMergeLog(postBatch.clusterMergeLog);
+    postBatch.svCarrierEvidence = normalizeSvCarrierEvidence(postBatch.svCarrierEvidence);
     if ('svSplits' in postBatch) postBatch.svSplits = normalizeSvSplits(postBatch.svSplits);
     if ('clusterGroupLabels' in postBatch) postBatch.clusterGroupLabels = normalizeClusterGroupLabels(postBatch.clusterGroupLabels);
     if ('selectedFeatures' in postBatch) postBatch.selectedFeatures = normalizeFeatureRefs(postBatch.selectedFeatures);

@@ -13,6 +13,7 @@ import type { CompactRead, SvSummary } from './types';
 function recordingContext() {
   const fills: Array<{ x0: number; x1: number; y: number; h: number; fill: string }> = [];
   const lines: Array<{ x0: number; x1: number; y: number; stroke: string }> = [];
+  const dashes: number[][] = [];
   const texts: Array<{ text: string; x: number; y: number }> = [];
   type Clip = Array<[number, number]>;
   let clip: Clip = [[-Infinity, Infinity]];
@@ -45,12 +46,13 @@ function recordingContext() {
     measureText: (text: string) => ({ width: String(text).length * 5 }),
     createLinearGradient: () => ({ addColorStop: () => undefined }),
     getLineDash: () => [],
+    setLineDash: (values: number[]) => { dashes.push(values); },
   };
   const ctx = new Proxy(state, {
     get: (target, prop: string) => (prop in methods ? methods[prop] : prop in target ? target[prop] : () => undefined),
     set: (target, prop: string, value) => { target[prop] = value; return true; },
   });
-  return { ctx, fills, lines, texts };
+  return { ctx, fills, lines, texts, dashes };
 }
 
 const fakeCanvas = (ctx: unknown) => ({ getContext: () => ctx, style: {}, width: 0, height: 0 }) as unknown as HTMLCanvasElement;
@@ -185,4 +187,13 @@ describe('zoomed out past the read limit', () => {
     expect(inkOn('#111827').dark).toBe(true);
     expect(inkOn('#ffffff').dark).toBe(false);
   });
+});
+
+it('distinguishes putative carrier highlights with pale dashed evidence markers', () => {
+  const confirmed = draw([REF], { readHighlightIds: new Set(['r']) });
+  const putative = draw([REF], { readHighlightIds: new Set(['r']), uncertainSvIds: new Set(['r']) });
+  expect(confirmed.fills.some(f => f.fill === '#ca8a04')).toBe(true);
+  expect(putative.fills.some(f => f.fill === 'rgba(202, 138, 4, 0.5)')).toBe(true);
+  expect(putative.dashes).toContainEqual([3, 3]);
+  expect(putative.dashes).toContainEqual([2, 2]);
 });

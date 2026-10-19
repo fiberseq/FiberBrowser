@@ -25,10 +25,11 @@ export function SvTooltip({ hover, width, height, datasetId, chrom }: {
         <div className="font-medium">{svAlleleLabel(c.t, c.ref, c.len, chrom)}</div>
         <div className="text-gray-300 text-[11px]">
           {c.t === 'D' ? `${chrom}:${(c.ref + 1).toLocaleString()}-${c.end.toLocaleString()} · ` : ''}
-          {c.support.toLocaleString()} of {c.informative.toLocaleString()} informative reads carry it
+          {c.support.toLocaleString()} confirmed of {c.informative.toLocaleString()} informative reads
           {c.sa_support > 0 ? ` (${c.sa_support} by split reads)` : ''}
           {(c.clip_support ?? 0) > 0 ? ` (${c.clip_support} clipped at the breakpoint)` : ''}
         </div>
+        <div className="text-gray-300 text-[11px]">{c.putative ?? 0} putative · {c.conflicting ?? 0} conflicting (clip aligns elsewhere) · {c.ambiguous ?? 0} ambiguous</div>
         <div className="text-gray-400 text-[11px]">Click: highlight its reads · Right-click: group or split the reads by it</div>
       </div>
     );

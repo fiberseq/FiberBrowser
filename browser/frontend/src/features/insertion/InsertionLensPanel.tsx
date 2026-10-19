@@ -89,7 +89,7 @@ function drawInsertBand(ctx: CanvasRenderingContext2D, axis: LensAxis, width: nu
   ctx.restore();
 }
 
-/** A light hatch over the insert on the rows of hard-clipped carriers (no bases to draw). */
+/** A light hatch over hard clips and every uncertain carrier tier. */
 function drawHardRows(ctx: CanvasRenderingContext2D, axis: LensAxis, width: number, rows: LensRowMeta[]) {
   const x0 = ((axis.reversed ? axis.total - axis.flank - axis.displayLen : axis.flank) / axis.total) * width;
   const x1 = x0 + (axis.displayLen / axis.total) * width;
@@ -97,7 +97,7 @@ function drawHardRows(ctx: CanvasRenderingContext2D, axis: LensAxis, width: numb
   ctx.strokeStyle = HARD_HATCH;
   ctx.lineWidth = 1;
   rows.forEach((row, i) => {
-    if (!row.hard) return;
+    if (!row.hard && row.evidenceLevel !== 'putative' && row.evidenceLevel !== 'ambiguous' && row.evidenceLevel !== 'conflicting') return;
     const top = i * ROW_PITCH;
     ctx.save();
     ctx.beginPath();
@@ -250,7 +250,23 @@ export function InsertionLensPanel() {
   })));
   // Kept while the panel is remounted (the row re-laid out when the reference copies open beside it).
   const [tab, setTab] = useRememberedState<Tab>(`${INSERTION_LENS_PANEL}:tab`, () => 'lens');
-  const [response, setResponse] = useState<LensResponse | null>(null);
+  const showDuplicateReads = useBrowserStore(s => Boolean(s.showDuplicateReads));
+  const refreshGeneration = useBrowserStore(s => s.refreshGeneration);
+  const conflictOptions = useBrowserStore(s => s.svConflictOptions);
+  const conflictOptionsKey = JSON.stringify(conflictOptions);
+  const dupParam = { include_duplicates: String(showDuplicateReads), conflict_options: conflictOptionsKey };
+  const fetchKey = target ? lensParams(target, dupParam).toString() : '';
+  const requestIdentity = JSON.stringify([fetchKey, refreshGeneration]);
+  const [loadedResponse, setLoadedResponse] = useState<{ identity: string; data: LensResponse } | null>(null);
+  // Guard during render too: effects run after the new target has rendered.
+  const response = target && loadedResponse?.identity === requestIdentity ? loadedResponse.data : null;
+  const currentResponse = useRef(loadedResponse);
+  currentResponse.current = response ? loadedResponse : null;
+  const exportController = useRef<AbortController | null>(null);
+  const includePutative = target?.includePutative !== false;
+  const includeConflicting = target?.includeConflicting === true;
+  const includeAmbiguous = target?.includeAmbiguous === true;
+  useEffect(() => () => { exportController.current?.abort(); }, [requestIdentity]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -292,7 +308,7 @@ export function InsertionLensPanel() {
     useBrowserStore.setState(s => ({
       panels: s.panels.map(p => (p.contentType === INSERTION_LENS_PANEL ? { ...p, insertionLens: undefined, insertionIdentify: undefined } : p)),
     }));
-    setResponse(null);
+    setLoadedResponse(null);
     setLoading(false);
     setError(null);
     setNotice(null);
@@ -304,13 +320,15 @@ export function InsertionLensPanel() {
   useEffect(() => {
     if (!state || !isSeek(state)) return;
     let cancelled = false;
+    const controller = new AbortController();
     const params = new URLSearchParams({
+      conflict_options: conflictOptionsKey,
       chrom: state.chrom, start: String(Math.max(0, Math.round(state.pos - 300))), end: String(Math.round(state.pos + 300)),
       ...(state.genome ? { panel_genome: state.genome } : {}), dataset_id: state.datasetId, min_len: '50',
     });
     setLoading(true);
     setError(null);
-    fetchJson<{ success: boolean; error?: string; clusters: InsertionCluster[] }>(`/api/insertions/clusters?${params}`)
+    fetchJson<{ success: boolean; error?: string; clusters: InsertionCluster[] }>(`/api/insertions/clusters?${params}`, { signal: controller.signal })
       .then(res => {
         if (cancelled) return;
         const best = res.success ? pickCluster(res.clusters, state.pos) : null;
@@ -323,31 +341,31 @@ export function InsertionLensPanel() {
         setInsertionLensState(targetForCluster(best, state.datasetId, state.chrom, state));
       })
       .catch(err => { if (!cancelled) { setLoading(false); setError(String(err?.message ?? err)); } });
-    return () => { cancelled = true; };
-  }, [state]);
+    return () => { cancelled = true; controller.abort(); };
+  }, [state, conflictOptionsKey]);
 
   // The lens data. Anchor and reverse are view options: no refetch. Duplicates
   // follow the panels' setting, as "Split by this SV" does (same reads).
-  const showDuplicateReads = useBrowserStore(s => Boolean(s.showDuplicateReads));
-  const refreshGeneration = useBrowserStore(s => s.refreshGeneration);
-  const dupParam = { include_duplicates: String(showDuplicateReads) };
-  const fetchKey = target ? lensParams(target, dupParam).toString() : '';
   useEffect(() => {
+    setLoadedResponse(null);
+    setNotice(null);
+    setHover(null);
     if (!target) return;
     let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
-    fetchJson<LensResponse>(`/api/insertions/lens?${fetchKey}`)
+    fetchJson<LensResponse>(`/api/insertions/lens?${fetchKey}`, { signal: controller.signal })
       .then(res => {
         if (cancelled) return;
         setLoading(false);
-        if (!res.success) { setError(res.error || 'Could not load the insertion'); setResponse(null); return; }
-        setResponse(res);
+        if (!res.success) { setError(res.error || 'Could not load the insertion'); return; }
+        setLoadedResponse({ identity: requestIdentity, data: res });
       })
       .catch(err => { if (!cancelled) { setLoading(false); setError(String(err?.message ?? err)); } });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; controller.abort(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchKey, refreshGeneration]);
+  }, [requestIdentity]);
 
   // Insertions in view: asked only while the list is shown, once the view has
   // settled (panning asks nothing), one request per view (shared, and kept for
@@ -357,6 +375,7 @@ export function InsertionLensPanel() {
     if (!listDatasetId) { setClusterError('Open a BAM or choose one in the Library: insertions live in the alignments.'); return; }
     const span = viewEnd - viewStart;
     const params = new URLSearchParams({
+      conflict_options: conflictOptionsKey,
       chrom: viewChrom, start: String(Math.max(0, Math.round(viewStart))), end: String(Math.round(viewEnd)),
       ...(viewGenome ? { panel_genome: viewGenome } : {}), dataset_id: listDatasetId, min_len: span > 200_000 ? '500' : '50',
     });
@@ -374,7 +393,7 @@ export function InsertionLensPanel() {
       { keep: res => Boolean(res?.success), ttlMs: fresh ? -1 : undefined })
       .then(res => { if (!signal?.aborted) show(res); })
       .catch(err => { if (!signal?.aborted && !isAbortError(err)) setClusterError(String(err?.message ?? err)); });
-  }, [listDatasetId, viewGenome, viewChrom, viewStart, viewEnd, refreshGeneration]);
+  }, [listDatasetId, viewGenome, viewChrom, viewStart, viewEnd, refreshGeneration, conflictOptionsKey]);
 
   const readsReady = useViewReadsReady();
   // Refresh asks again for this view (through the effect, so a view left meanwhile aborts it too).
@@ -394,11 +413,15 @@ export function InsertionLensPanel() {
 
   const anchor: LensAnchor = target?.anchor ?? 'consensus';
   const reversed = Boolean(target?.reversed);
-  const update = (patch: Partial<InsertionLensTarget>) => { if (target) setInsertionLensState({ ...target, ...patch }); };
+  const update = (patch: Partial<InsertionLensTarget>) => useBrowserStore.setState(s => ({
+    panels: s.panels.map(p => p.contentType === INSERTION_LENS_PANEL && p.insertionLens && !isSeek(p.insertionLens)
+      ? { ...p, insertionLens: { ...p.insertionLens, ...patch } } : p),
+  }));
 
   const layout: LensLayout | null = useMemo(
-    () => (response ? layoutLens(response, anchor, reversed) : null),
-    [response, anchor, reversed],
+    () => (response ? layoutLens({ ...response, carriers: response.carriers.filter(c => !c.evidence_level
+      || c.evidence_level === 'confirmed' || (includePutative && c.evidence_level === 'putative') || (includeConflicting && c.evidence_level === 'conflicting') || (includeAmbiguous && c.evidence_level === 'ambiguous')) }, anchor, reversed) : null),
+    [response, anchor, reversed, includePutative, includeAmbiguous, includeConflicting],
   );
   const markColor = useMemo(() => {
     const first = response?.carriers[0]?.read;
@@ -408,7 +431,7 @@ export function InsertionLensPanel() {
   }, [response]);
   const profiles = useMemo(() => {
     if (!layout) return [];
-    const groups = [{ label: `Carriers (${layout.carriers.length})`, profile: computeLensProfile(layout.carriers, layout.axis.total) }];
+    const groups = [{ label: `Carriers (${layout.carriers.length}; ${layout.carrierRows.filter(r => !r.evidenceLevel || r.evidenceLevel === 'confirmed').length} confirmed, ${layout.carrierRows.filter(r => r.evidenceLevel === 'putative').length} putative, ${layout.carrierRows.filter(r => r.evidenceLevel === 'conflicting').length} conflicting, ${layout.carrierRows.filter(r => r.evidenceLevel === 'ambiguous').length} ambiguous)`, profile: computeLensProfile(layout.carriers, layout.axis.total) }];
     if (layout.reference.length) {
       groups.push({ label: `Reference (${layout.reference.length})`, profile: computeLensProfile(layout.reference, layout.axis.total) });
     }
@@ -452,7 +475,7 @@ export function InsertionLensPanel() {
     if (ctx) {
       // drawReadTrack leaves the context scaled to CSS pixels.
       drawInsertBand(ctx, axis, width, height, hatch);
-      if (rows?.some(r => r.hard)) drawHardRows(ctx, axis, width, rows);
+      if (rows?.length) drawHardRows(ctx, axis, width, rows);
     }
   }, [width, response, enabledModTypes, activeColormap]);
 
@@ -480,7 +503,7 @@ export function InsertionLensPanel() {
       const row = rows[Math.floor((e.clientY - rect.top) / ROW_PITCH)];
       if (row) {
         text += ` · ${row.id} (${row.strand})`;
-        if (row.carrier) text += ` · ${describeCarrier(row)}`;
+        if (row.carrier) text += ` · ${row.evidenceLevel ?? 'confirmed'} · ${describeCarrier(row)}`;
       }
     }
     setHover(text);
@@ -499,7 +522,7 @@ export function InsertionLensPanel() {
     if (!response?.sv || !target || !splitView?.stateKey || !splitView.inView) return;
     try {
       const def = await splitBySv(
-        { stateKey: splitView.stateKey, datasetId: target.datasetId, chrom: viewChrom, viewStart, viewEnd },
+        { stateKey: splitView.stateKey, datasetId: target.datasetId, chrom: viewChrom, viewStart, viewEnd, includePutative, includeAmbiguous, includeConflicting },
         { t: 'I', ref: response.sv.ref, len: response.sv.len },
       );
       say(`Grouped by ${def.label}: ${def.counts[0].toLocaleString()} carriers, ${def.counts[1].toLocaleString()} reference, ${def.counts[2].toLocaleString()} not informative (all reads in view)`);
@@ -520,10 +543,18 @@ export function InsertionLensPanel() {
   };
   const downloadInserts = async () => {
     if (!target || !response) return;
+    const snapshot = loadedResponse;
+    exportController.current?.abort();
+    const controller = new AbortController();
+    exportController.current = controller;
     try {
-      const res = await fetchJson<LensResponse>(`/api/insertions/lens?${lensParams(target, { ...dupParam, include_sequences: 'true', consensus: 'false', max_reference: '0' })}`);
-      downloadTextFile(insertsFasta(res.carriers, response, reversed), `${fileStem}_inserts.fa`, 'text/x-fasta');
+      const res = await fetchJson<LensResponse>(`/api/insertions/lens?${lensParams(target, { ...dupParam, include_sequences: 'true', consensus: 'false', max_reference: '0' })}`, { signal: controller.signal });
+      if (controller.signal.aborted || currentResponse.current !== snapshot) return;
+      if (!res.success) throw new Error(res.error || 'Could not fetch the inserts');
+      downloadTextFile(insertsFasta(res.carriers.filter(c => !c.evidence_level || c.evidence_level === 'confirmed'
+        || (includePutative && c.evidence_level === 'putative') || (includeConflicting && c.evidence_level === 'conflicting') || (includeAmbiguous && c.evidence_level === 'ambiguous')), response, reversed), `${fileStem}_inserts.fa`, 'text/x-fasta');
     } catch (err) {
+      if (controller.signal.aborted || currentResponse.current !== snapshot) return;
       say(`Could not fetch the inserts: ${String((err as Error)?.message ?? err)}`);
     }
   };
@@ -558,8 +589,8 @@ export function InsertionLensPanel() {
   };
 
   // ---- render
-  const strands = response ? response.carriers.reduce((acc, c) => { acc[c.strand] += 1; return acc; }, { '+': 0, '-': 0 }) : null;
-  const lowIdentity = response ? response.carriers.filter(c => c.identity !== undefined && c.identity < 0.8).length : 0;
+  const strands = layout ? layout.carrierRows.reduce((acc, c) => { acc[c.strand] += 1; return acc; }, { '+': 0, '-': 0 }) : null;
+  const lowIdentity = layout ? layout.carrierRows.filter(c => c.identity !== undefined && c.identity < 0.8).length : 0;
 
   const cl = response?.cluster;
   const clipped = cl?.clipped ?? 0;
@@ -571,17 +602,19 @@ export function InsertionLensPanel() {
       <div>
         <span className="font-semibold text-ink">{response.chrom}:{cl.ref.toLocaleString()}</span>
         {' · '}+{cl.len.toLocaleString()} bp
+        {(cl.ref_len ?? 0) > 0 && <span> · replaces {cl.ref_len} reference bp with {cl.alt_len} query bp</span>}
         {cl.len_lo !== cl.len_hi && <span className="text-ink-secondary"> (lengths {cl.len_lo.toLocaleString()}–{cl.len_hi.toLocaleString()})</span>}
         <span className="text-ink-secondary" title="Every read at the site, not only the reads loaded for drawing (the SV row above the reads counts those)"> · all reads at the site</span>
       </div>
       <dl className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5">
-        <LensField label="Carriers" testId="insertion-lens-carriers-count"
-          title="Reads carrying the insertion (clipped ones included) of the informative reads: carriers plus reference reads">
+        <LensField label="Confirmed" testId="insertion-lens-carriers-count"
+          title="Sequence or query-collinear junction evidence; denominator includes confirmed and reference molecules">
           {formatShare(cl.carriers, informative, 'informative', { pct: true })}
         </LensField>
+        <LensField label="Other evidence">{cl.putative ?? 0} putative · <span title="Supporting clip aligns elsewhere; excluded by default">{cl.conflicting ?? 0} conflicting</span> · {cl.ambiguous ?? 0} ambiguous</LensField>
         {clipped > 0 && (
-          <LensField label="Of the carriers" testId="insertion-lens-clipped"
-            title="Reads clipped at the breakpoint carry the insertion too: a soft clip holds part of the insert (drawn from the clip), a hard clip holds none (hatched)">
+          <LensField label="Alignment evidence" testId="insertion-lens-clipped"
+            title="Clips alone are putative or ambiguous; hard clips contain no inserted sequence">
             {(cl.cigar ?? cl.carriers - clipped).toLocaleString()} in the alignment, {clipped.toLocaleString()} clipped
             {(cl.hard ?? 0) > 0 && <>, {cl.hard!.toLocaleString()} hard-clipped (no inserted bases in the record)</>}
           </LensField>
@@ -596,7 +629,7 @@ export function InsertionLensPanel() {
         {strands && <LensField label="Strands (drawn)" title="Strands of the carriers drawn here">{strands['+']} + · {strands['-']} −</LensField>}
         {response.truncated.carriers > 0 && (
           <LensField label="Drawn" testId="insertion-lens-drawn" title="The lens draws a sample of the carriers; the counts above are of all of them">
-            {formatShare(response.carriers.length, cl.carriers, 'carriers')}
+            {formatShare(layout?.carriers.length ?? 0, cl.carriers + (includePutative ? cl.putative ?? 0 : 0) + (includeAmbiguous ? cl.ambiguous ?? 0 : 0) + (includeConflicting ? cl.conflicting ?? 0 : 0), ['confirmed', ...(includePutative ? ['putative'] : []), ...(includeConflicting ? ['conflicting'] : []), ...(includeAmbiguous ? ['ambiguous'] : [])].join(' + '))}
           </LensField>
         )}
       </dl>
@@ -682,6 +715,9 @@ export function InsertionLensPanel() {
               <span className="mx-1 h-4 w-px bg-slate-300 dark:bg-slate-600" />
               <AnalysisButton onClick={savePng}>Save PNG</AnalysisButton>
               <AnalysisButton onClick={downloadProfiles}>Profiles TSV</AnalysisButton>
+              <label><input type="checkbox" checked={includePutative} onChange={e => update({ includePutative: e.target.checked })} /> Include putative (hatched; uncheck for confirmed only)</label>
+              <label title="A substantial part of the supporting clip aligns elsewhere"><input type="checkbox" checked={includeConflicting} onChange={e => update({ includeConflicting: e.target.checked })} /> Include conflicting (clip aligns elsewhere)</label>
+              <label><input type="checkbox" checked={includeAmbiguous} onChange={e => update({ includeAmbiguous: e.target.checked })} /> Include ambiguous</label>
               <span className="mx-1 h-4 w-px bg-slate-300 dark:bg-slate-600" />
               <AnalysisButton
                 onClick={splitReads}
@@ -760,7 +796,7 @@ export function InsertionLensPanel() {
           {clusters && clusters.length > 0 && (
             <table className="w-full text-left tabular-nums">
               <thead className="text-ink-muted">
-                <tr><th className="font-medium">Position</th><th className="font-medium">Length</th><th className="font-medium" title="Reads carrying it (clipped at the breakpoint included) / carriers plus reads spanning the site without it">Carriers</th><th /></tr>
+                <tr><th className="font-medium">Position</th><th className="font-medium">Length</th><th className="font-medium" title="Default carriers include confirmed and putative; ambiguous evidence is separate">Carriers</th><th /></tr>
               </thead>
               <tbody>
                 {clusters.map(c => (
@@ -768,7 +804,7 @@ export function InsertionLensPanel() {
                     <td>{viewChrom}:{c.ref.toLocaleString()}</td>
                     <td>{c.len.toLocaleString()} bp</td>
                     <td>
-                      {c.carriers.toLocaleString()}{c.informative ? <span className="text-ink-muted">/{c.informative.toLocaleString()}</span> : null}
+                      {(c.confirmed ?? c.carriers).toLocaleString()} confirmed · {c.putative ?? 0} putative · <span title="Supporting clip aligns elsewhere; excluded by default">{c.conflicting ?? 0} conflicting</span> · {c.ambiguous ?? 0} ambiguous
                       {(c.clip_support ?? 0) > 0 && <span className="text-ink-muted"> ({c.clip_support!.toLocaleString()} clipped)</span>}
                     </td>
                     <td className="text-right py-0.5">

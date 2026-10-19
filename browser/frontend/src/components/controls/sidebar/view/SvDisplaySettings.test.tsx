@@ -70,4 +70,25 @@ describe('SV display settings', () => {
     act(() => applyImportedState({ frontend: { svMinSupport: 1 } }));
     expect(useBrowserStore.getState().svMinSupport).toBe(1);
   });
+
+  it('edits advanced thresholds and persists them through sessions and snapshots', () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    act(() => root.render(<SvDisplaySettings />));
+    const distance = host.querySelector('[aria-label="Max local distance (bp)"]') as HTMLInputElement;
+    expect(distance.value).toBe('100000');
+    act(() => {
+      distance.value = '5000';
+      distance.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+    });
+    expect(useBrowserStore.getState().svConflictOptions.max_distance).toBe(5000);
+    const saved = serializeState(useBrowserStore.getState());
+    expect(saved.svConflictOptions?.max_distance).toBe(5000);
+    act(() => applyImportedState({ frontend: { svConflictOptions: saved.svConflictOptions } }));
+    expect(useBrowserStore.getState().svConflictOptions.max_distance).toBe(5000);
+    act(() => applyImportedState({ frontend: {} }));
+    expect(useBrowserStore.getState().svConflictOptions).toMatchObject({ enabled: true, max_distance: 100000, min_mapq: 20 });
+    act(() => root.unmount());
+  });
 });

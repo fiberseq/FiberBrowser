@@ -1076,13 +1076,15 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
     const clusterAssignments = { ...state.clusterAssignments, [datasetId]: nextAssignments };
     const clusterOrder = { ...state.clusterOrder, [datasetId]: newOrder };
     // Another grouping replaces an SV allele split's groups: its names go too.
-    const dropSvSplit = !options?.svSplit && (datasetId in (state.svSplits ?? {}) || datasetId in (state.clusterGroupLabels ?? {}));
+    const dropSvSplit = !options?.svSplit && (datasetId in (state.svSplits ?? {}) || datasetId in (state.clusterGroupLabels ?? {}) || datasetId in (state.svCarrierEvidence ?? {}));
     const svReset = dropSvSplit ? (() => {
       const svSplits = { ...state.svSplits };
       const clusterGroupLabels = { ...state.clusterGroupLabels };
+      const svCarrierEvidence = { ...state.svCarrierEvidence };
+      delete svCarrierEvidence[datasetId];
       delete svSplits[datasetId];
       delete clusterGroupLabels[datasetId];
-      return { svSplits, clusterGroupLabels };
+      return { svSplits, clusterGroupLabels, svCarrierEvidence };
     })() : {};
     // Tree nodes are immutable snapshots. Navigation/dynamic passes must not
     // mirror their (partial, viewport-specific) results back into the active
@@ -1146,6 +1148,7 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
       activeClusterTreeNodeId: null,
       clusterProfiles: {},
       svSplits: {},
+      svCarrierEvidence: {},
       clusterGroupLabels: {},
     });
     get().pushSnapshot?.('Clear clusters', { kind: 'clustering' });
@@ -1610,11 +1613,12 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
     // (the Carriers never opened expanded with the Clusters panel open; integ/fb40, docking-policy e2e).
     const sameGroups = (key: string) => Boolean(options?.keepSameSvSplits)
       && sameAssignments(node.assignments[key], state.clusterAssignments[key]);
-    const kept = withoutSvSplits(state, [...Object.keys(state.svSplits ?? {}), ...Object.keys(state.clusterGroupLabels ?? {})]
+    const kept = withoutSvSplits(state, [...Object.keys(state.svSplits ?? {}), ...Object.keys(state.clusterGroupLabels ?? {}), ...Object.keys(state.svCarrierEvidence ?? {})]
       .filter(key => !sameGroups(key)));
     set({
       activeClusterTreeNodeId: id,
       svSplits: kept.svSplits,
+      svCarrierEvidence: kept.svCarrierEvidence,
       clusterGroupLabels: kept.clusterGroupLabels,
       clusterAssignments: cloneAssignments(node.assignments),
       clusterOrder: normalizeClusterOrderRecord(node.assignments, node.order),
@@ -2296,16 +2300,18 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
  * its re-classification on pan.
  */
 export function withoutSvSplits(
-  state: Partial<Pick<BrowserState, 'svSplits' | 'clusterGroupLabels'>>,
+  state: Partial<Pick<BrowserState, 'svSplits' | 'clusterGroupLabels' | 'svCarrierEvidence'>>,
   keys: Iterable<string>,
-): Pick<BrowserState, 'svSplits' | 'clusterGroupLabels'> {
+): Pick<BrowserState, 'svSplits' | 'clusterGroupLabels' | 'svCarrierEvidence'> {
   let svSplits = state.svSplits ?? {};
+  let svCarrierEvidence = state.svCarrierEvidence ?? {};
   let clusterGroupLabels = state.clusterGroupLabels ?? {};
   for (const key of keys) {
+    if (key in svCarrierEvidence) { svCarrierEvidence = { ...svCarrierEvidence }; delete svCarrierEvidence[key]; }
     if (key in svSplits) { svSplits = { ...svSplits }; delete svSplits[key]; }
     if (key in clusterGroupLabels) { clusterGroupLabels = { ...clusterGroupLabels }; delete clusterGroupLabels[key]; }
   }
-  return { svSplits, clusterGroupLabels };
+  return { svSplits, clusterGroupLabels, svCarrierEvidence };
 }
 
 /**
@@ -2319,9 +2325,9 @@ export function withoutSvSplits(
  */
 export function restoredClusteringState(
   saved: Pick<SavedCluster, 'chrom' | 'start' | 'end' | 'mergeLog'>,
-  state: Pick<BrowserState, 'clusterAssignments' | 'clusterFocus' | 'selectedClusters' | 'clusterMergeLog' | 'clusterOrder' | 'svSplits' | 'clusterGroupLabels'>,
+  state: Pick<BrowserState, 'clusterAssignments' | 'clusterFocus' | 'selectedClusters' | 'clusterMergeLog' | 'clusterOrder' | 'svSplits' | 'clusterGroupLabels' | 'svCarrierEvidence'>,
   newAssignments: Record<string, Record<string, number>>,
-): Pick<BrowserState, 'clusterFocus' | 'selectedClusters' | 'activeClusterTreeNodeId' | 'clusterCentroids' | 'clusterPeakWidths' | 'restoredClusterViewport' | 'clusterMergeLog' | 'svSplits' | 'clusterGroupLabels'> {
+): Pick<BrowserState, 'clusterFocus' | 'selectedClusters' | 'activeClusterTreeNodeId' | 'clusterCentroids' | 'clusterPeakWidths' | 'restoredClusterViewport' | 'clusterMergeLog' | 'svSplits' | 'clusterGroupLabels' | 'svCarrierEvidence'> {
   const clusterFocus = { ...state.clusterFocus };
   const selectedClusters = { ...state.selectedClusters };
   const replaced: string[] = [];

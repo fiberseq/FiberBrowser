@@ -433,16 +433,20 @@ def _genotype_payload(state, body, entry, called, matrix, mcands, col_of, candid
         snp_letters = snp_scan.allele_letters(matrix, mcands, cols) if cols else [[] for _ in matrix.names]
         row_of = {name: r for r, name in enumerate(matrix.names)}
         matrix_names = list(matrix.names)
-    calls = []
+    calls, evidence_calls = [], []
     for sv in parsed:
         if cancelled is not None and cancelled():
             raise VariantsCancelled()
         try:
             res = sv_split_payload(state, dataset_id=dataset_id, chrom=chrom, start=start, end=end, t=sv["t"],
-                                   ref=sv["ref"], length=sv["len"], include_duplicates=params["include_duplicates"])
+                                   ref=sv["ref"], length=sv["len"], include_duplicates=params["include_duplicates"],
+                                   include_putative=bool(body.get("include_putative", True)),
+                                   include_ambiguous=bool(body.get("include_ambiguous", False)),
+                                  include_conflicting=bool(body.get("include_conflicting", False)), conflict_options=body.get("conflict_options"))
         except SvRequestError as exc:
             raise VariantsRequestError(str(exc)) from None
         calls.append(res["assignments"])
+        evidence_calls.append(res.get("evidence_levels", {}))
     names = list(dict.fromkeys([*matrix_names, *(n for c in calls for n in c)]))
     letters = []
     for name in names:
@@ -457,6 +461,23 @@ def _genotype_payload(state, body, entry, called, matrix, mcands, col_of, candid
     result = snp_scan.genotype_groups(names, letters, columns, partial=bool(body.get("partial", False)),
                                       min_fraction=_float(body.get("min_fraction"), 0.02, 0.0, 0.5),
                                       min_reads=_int(body.get("min_reads"), 3, 1, 1_000_000))
+    rank = {'confirmed': 0, 'putative': 1, 'conflicting': 2, 'ambiguous': 3}
+    evidence_levels = {}
+    for name in names:
+        levels = [tiers.get(name) for assignments, tiers in zip(calls, evidence_calls)
+                  if assignments.get(name) == 0 and tiers.get(name) in rank]
+        if levels:
+            evidence_levels[name] = max(levels, key=rank.get)
+    result['sv_evidence_levels'] = evidence_levels
+    result['include_putative'] = bool(body.get('include_putative', True))
+    result['include_conflicting'] = bool(body.get('include_conflicting', False))
+    result['include_ambiguous'] = bool(body.get('include_ambiguous', False))
+    for group in result['groups']:
+        levels = [level for name, level in evidence_levels.items() if result['assignments'].get(name) == group['id']]
+        counts = {level: levels.count(level) for level in rank}
+        group['evidence_counts'] = counts
+        if group['kind'] == 'combo' and (counts['putative'] or counts['conflicting'] or counts['ambiguous']):
+            group['label'] += f" ({counts['confirmed']} confirmed, {counts['putative']} putative, {counts['conflicting']} conflicting, {counts['ambiguous']} ambiguous carriers)"
     result["tags"] = None
     if entry is None:
         result.update({"dataset_id": dataset_id, "region": {"chrom": chrom, "start": start, "end": end},
@@ -522,25 +543,22 @@ def _sv_records(state, dataset, chrom: str, start: int, end: int, include_duplic
         provenance = signal_header(bam.header)
         from services.graph_lift import lift_hidden_predicate
         hidden = lift_hidden_predicate(bam.header)
-        for read in bam.fetch(actual, max(0, int(start)), int(end)):
-            if not record_keeps_signal(read, provenance):
-                continue
-            if hidden is not None and hidden(read):
-                continue
+        from services.sv_molecules import molecule_bundles
+        def eligible(read):
+            if read.is_unmapped or read.is_secondary or (hidden is not None and hidden(read)):
+                return None
             ids = getattr(state, "_variant_read_ids", None)
             if ids is not None and read.query_name not in ids:
-                continue
-            if read.is_unmapped or read.is_secondary or read.is_supplementary:
-                continue
-            if read.is_duplicate and not include_duplicates:
-                continue
-            out.append((read, actual))
+                return False
+            return record_keeps_signal(read, provenance) and (include_duplicates or not read.is_duplicate)
+        for bundle in molecule_bundles(bam.fetch(actual, max(0, int(start)), int(end)), eligible):
+            out.extend((read, actual) for read in bundle)
     return out
 
 
 def svs_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = None) -> dict:
     """SV clusters (deletions and insertions of at least ``min_len``) in the view, as the SV band clusters them."""
-    from services.sv_events import extract_sv_events, normalize_min_sv_len, sv_summary_for_reads
+    from services.sv_events import extract_sv_events, normalize_min_sv_len, sv_summary_for_reads, sv_extraction_floor, alignment_evidence
 
     state = _scoped_state(state, body)
     dataset_id = _dataset(state, body.get("dataset_id")).id
@@ -553,16 +571,16 @@ def svs_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = Non
         if cancelled is not None and n % 500 == 0 and cancelled():
             raise VariantsCancelled()
         item = {"id": read.query_name, "reference_start": int(read.reference_start),
-                "reference_end": int(read.reference_end)}
-        events = extract_sv_events(read, min_len)
+                "reference_end": int(read.reference_end), **alignment_evidence(read)}
+        events = extract_sv_events(read, sv_extraction_floor(min_len), reference=getattr(state, 'fasta', None))
         if events:
             item["sv"] = events
         compact.append(item)
-    summary = sv_summary_for_reads(compact, start, end, min_len, chrom=chrom) or {"clusters": []}
+    summary = sv_summary_for_reads(compact, start, end, min_len, chrom=chrom, conflict_options=body.get("conflict_options")) or {"clusters": []}
     clusters = [c for c in summary["clusters"] if c["len"] >= min_len]
     clusters.sort(key=lambda c: (c["ref"], c["t"]))
     return {"dataset_id": dataset_id, "region": {"chrom": chrom, "start": start, "end": end}, "min_len": min_len,
-            "n_reads": len(compact), "clusters": clusters}
+            "n_reads": len({r["id"] for r in compact}), "clusters": clusters}
 
 
 def sv_linkage_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = None) -> dict:
@@ -589,7 +607,10 @@ def sv_linkage_payload(state, body: dict, cancelled: Optional[Callable[[], bool]
     mcands = _columns(entry, matrix, candidates)
     records = _sv_records(state, entry["dataset"], chrom, start, end, params["include_duplicates"])
     classified = classify_records(records, t=t, ref=ref, length=length,
-                                  include_duplicates=params["include_duplicates"])
+                                  include_duplicates=params["include_duplicates"], reference=getattr(state, 'fasta', None),
+                                  include_putative=bool(body.get("include_putative", True)),
+                                  include_ambiguous=bool(body.get("include_ambiguous", False)),
+                                  include_conflicting=bool(body.get("include_conflicting", False)), conflict_options=body.get("conflict_options"))
     allele = {name: v["allele"] for name, v in classified.items()}
     counts = {"carriers": sum(1 for a in allele.values() if a == 0),
               "reference": sum(1 for a in allele.values() if a == 1),
@@ -620,6 +641,10 @@ def sv_linkage_payload(state, body: dict, cancelled: Optional[Callable[[], bool]
                      "linked": (f0 >= 0.9 and f1 <= 0.1) or (f0 <= 0.1 and f1 >= 0.9)})
     rows.sort(key=lambda r: (-r["diff"], r["pos"]))
     return {"dataset_id": dataset_id, "region": {"chrom": chrom, "start": start, "end": end},
-            "sv": {"t": t, "ref": ref, "len": length}, "counts": counts, "tested": len(rows),
+            "sv": {"t": t, "ref": ref, "len": length}, "counts": counts,
+            "carrier_evidence_counts": {level: sum(v['allele'] == 0 and (v['evidence'] or {}).get('level') == level
+                                                    for v in classified.values())
+                                        for level in ('confirmed', 'putative', 'conflicting', 'ambiguous')},
+            "tested": len(rows),
             "linked": sum(1 for r in rows if r["linked"]), "snps": rows[:200],
             "scan_key": scan_key(dataset_id, chrom, start, end, params, entry["key"])}

@@ -674,6 +674,7 @@ export interface FootprintGroup {
  */
 export interface ReadSubsetRule {
   liftHap?: string;
+  svEvidenceLevels?: Record<string, 'confirmed' | 'putative' | 'conflicting' | 'ambiguous'>;
   /** patterns, frozen, or a plugin pack's split source (utils/splitPanels.ts registerSplitSourceKind). */
   kind: 'patterns' | 'frozen' | (string & {});
   /** The dataset whose reads the panel shows. */

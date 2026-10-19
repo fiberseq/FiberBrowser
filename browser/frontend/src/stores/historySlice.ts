@@ -1,6 +1,7 @@
+import { normalizeSvConflictOptions, type SvConflictOptions } from '../utils/svConflicts';
 import { validateMatchedState } from '../utils/matchedRegions';
 import { normalizeSignalFilters } from '../utils/signalFilters';
-import { normalizeClusterGroupLabels, normalizeSvSplits } from './svSlice';
+import { normalizeSvCarrierEvidence, normalizeClusterGroupLabels, normalizeSvSplits } from './svSlice';
 import { clampMinSvLen, SV_MIN_LEN_DEFAULT, clampMinSvSupport, SV_MIN_SUPPORT_DEFAULT } from '../components/tracks/read-track/svDrawing';
 import { normalizeFeatureRefs } from './featureStore';
 import { normalizePinnedMotifs } from '../utils/pinnedMotifs';
@@ -283,12 +284,14 @@ export interface SerializedState {
   clusterAssignments: Record<string, Record<string, number>>;
   /** SV allele splits, per state key (stores/svSlice.ts); absent in older snapshots. */
   svSplits?: Record<string, unknown>;
+  svCarrierEvidence?: Record<string, unknown>;
   /** Names a group source gave cluster ids, per state key; absent in older snapshots. */
   clusterGroupLabels?: Record<string, Record<number, string>>;
   /** SV display settings (fb-n9-sv); absent in older snapshots. */
   svDisplayEnabled?: boolean;
   svMinLen?: number;
   svMinSupport?: number;
+  svConflictOptions?: SvConflictOptions;
   /** Retired (fb-n11-tracks): the SV summary is a track row; a true here restores it at its smallest height. */
   svTrackCollapsed?: boolean;
   clusterOrder: Record<string, number[]>;
@@ -580,7 +583,7 @@ const DATASET_ID_FIELDS = new Set(['datasetId', 'sourceDatasetId', 'datasetIds',
 const DATASET_KEYED_RECORDS = new Set([
   'selectedClusters', 'clusterAssignments', 'clusterOrder', 'readSortOrder', 'filteredReadIds',
   'readFilterSources', 'clusterFocus', 'readStateDetails', 'readScrollOffsets', 'selectedReadIds',
-  'excludedReadIds', 'svSplits', 'clusterGroupLabels',
+  'excludedReadIds', 'svSplits', 'clusterGroupLabels', 'svCarrierEvidence',
 ]);
 // The same, inside each cluster-tree branch (ClusterTreeNode).
 const CLUSTER_TREE_NODE_KEYED_RECORDS = ['assignments', 'order', 'focus', 'readScope'];
@@ -760,6 +763,7 @@ export function serializeState(state: BrowserState): SerializedState {
     analysisFilterRules: normalizeAnalysisFilterRules(state.analysisFilterRules),
     clusterAssignments: state.clusterAssignments,
     svSplits: state.svSplits ?? {},
+    svCarrierEvidence: state.svCarrierEvidence ?? {},
     clusterGroupLabels: state.clusterGroupLabels ?? {},
     clusterOrder: state.clusterOrder,
     clusterPatterns: state.clusterPatterns,
@@ -845,6 +849,7 @@ export function serializeState(state: BrowserState): SerializedState {
     svDisplayEnabled: state.svDisplayEnabled,
     svMinLen: state.svMinLen,
     svMinSupport: state.svMinSupport,
+    svConflictOptions: state.svConflictOptions,
     darkMode: state.darkMode,
     peakSettings: { ...state.peakSettings },
     activeColormap: migrateColormap(state.activeColormap as any),
@@ -1016,6 +1021,7 @@ function deserializeState(
     analysisFilterRules: normalizeAnalysisFilterRules(s.analysisFilterRules),
     clusterAssignments: s.clusterAssignments,
     svSplits: normalizeSvSplits(s.svSplits),
+    svCarrierEvidence: normalizeSvCarrierEvidence(s.svCarrierEvidence),
     clusterGroupLabels: normalizeClusterGroupLabels(s.clusterGroupLabels),
     clusterOrder: s.clusterOrder,
     clusterPatterns: s.clusterPatterns,
@@ -1091,6 +1097,7 @@ function deserializeState(
     enabledCigarTypes: s.enabledCigarTypes,
     svDisplayEnabled: s.svDisplayEnabled ?? true,
     svMinLen: clampMinSvLen(s.svMinLen ?? SV_MIN_LEN_DEFAULT),
+    svConflictOptions: normalizeSvConflictOptions(s.svConflictOptions),
     svMinSupport: clampMinSvSupport(s.svMinSupport ?? SV_MIN_SUPPORT_DEFAULT),
     // Theme and UI size are preferences, not steps: undo/redo keep the current ones.
     ...(!currentState && s.darkMode !== undefined ? { darkMode: s.darkMode } : {}),

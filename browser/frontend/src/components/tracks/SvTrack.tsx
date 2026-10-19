@@ -110,8 +110,8 @@ export function SvTrack({ width, height, panel, sidebarWidth = 0 }: {
     }
     store.setSvSelectedCluster(stateKey, cluster.id);
     // Its supporting reads among those drawn: the read highlight (all panels).
-    const ids = supportingReadIds(feed?.reads ?? [], cluster, feed?.chrom);
-    if (ids.length > 0) actions.highlightReads(ids);
+    const ids = supportingReadIds(feed?.reads ?? [], cluster, feed?.chrom, 'carriers', feed?.sv?.evidence_targets ?? feed?.sv?.clusters, feed?.sv?.conflict_options);
+    if (ids.length > 0) actions.highlightReads(ids, { uncertainIds: supportingReadIds(feed?.reads ?? [], cluster, feed?.chrom, 'putative', feed?.sv?.evidence_targets ?? feed?.sv?.clusters, feed?.sv?.conflict_options) });
     else actions.clearHighlight();
   };
 
@@ -138,10 +138,17 @@ export function SvTrack({ width, height, panel, sidebarWidth = 0 }: {
         }
         return;
       }
-      case 'sv-highlight-supporting': {
+      case 'sv-highlight-supporting':
+      case 'sv-highlight-confirmed':
+      case 'sv-highlight-putative':
+      case 'sv-highlight-conflicting':
+      case 'sv-highlight-ambiguous': {
         if (!cluster) return;
-        const ids = supportingReadIds(feed.reads, cluster, feed.chrom);
-        if (ids.length) useReadActionsStore.getState().highlightReads(ids);
+        const level = action === 'sv-highlight-conflicting' ? 'conflicting' : action === 'sv-highlight-putative' ? 'putative' : action === 'sv-highlight-ambiguous' ? 'ambiguous' : action === 'sv-highlight-confirmed' ? 'confirmed' : 'carriers';
+        const ids = supportingReadIds(feed.reads, cluster, feed.chrom, level, feed.sv?.evidence_targets ?? feed.sv?.clusters, feed.sv?.conflict_options);
+        if (ids.length) useReadActionsStore.getState().highlightReads(ids, { uncertainIds: level === 'confirmed' ? [] : level === 'carriers'
+          ? supportingReadIds(feed.reads, cluster, feed.chrom, 'putative', feed.sv?.evidence_targets ?? feed.sv?.clusters, feed.sv?.conflict_options) : ids });
+        else useReadActionsStore.getState().clearHighlight();
         useBrowserStore.getState().setSvSelectedCluster(stateKey, cluster.id);
         return;
       }

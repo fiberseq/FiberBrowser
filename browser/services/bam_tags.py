@@ -470,12 +470,20 @@ def ma_group_frame(value) -> MAGroupFrame:
     return value if isinstance(value, MAGroupFrame) else MAGroupFrame(bool(value), False)
 
 
+class FramePolicyError(RuntimeError):
+    """The annotation coordinate policy could not be determined safely."""
+
+
 def bam_ma_group_frame(header) -> MAGroupFrame:
-    """:class:`MAGroupFrame` of a BAM header (SEQ, no evidence, when it can't be read)."""
+    """Read the header frame; policy/import failures must not silently mirror reads.
+
+    Missing optional FiberHMM helpers have their own declared-header fallback.
+    Unexpected runtime errors propagate rather than changing molecular to SEQ.
+    """
     try:
         return MAGroupFrame.of_header(header)
-    except Exception:
-        return MAGroupFrame(False, False)
+    except Exception as exc:
+        raise FramePolicyError(str(exc)) from exc
 
 
 def ma_group_is_molecular(strand: str, header_molecular: bool, header_evidence: bool = False) -> bool:

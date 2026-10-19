@@ -1,4 +1,5 @@
-import { readAlignmentBounds, readBinaryBytes, readRegionProjectionSafe, readTerminalGaps } from './readBinary';
+import { decodeReadBinary, readAlignmentBounds, readBinaryBytes, readRegionProjectionSafe, readTerminalGaps } from './readBinary';
+import binaryFixture from './svProjection.fixture.json';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { ReadsResponse } from '../components/tracks/read-track/types';
 import { clearLoadedReadRegions, lookupReadRegion, projectLoadedReads, readRegionGeneration, rememberReadRegion, lookupExactReadResponse, rememberExactReadResponse, setReadRegionBudget, readRegionDiagnostics, releaseReadRegions } from './loadedReadRegion';
@@ -11,6 +12,17 @@ const params = (start = 0, end = 100) => new URLSearchParams({
 const data = (): ReadsResponse => ({ count: 1, total: 1, width: 100,
   total_overlapping: 1, working_count: 1, reads: [{ id: 'a', intervals: [[0, 100, 120]],
     methyl: [10, 30, 80], deam: [[10, 0], [30, 1]], layers: { tf: { intervals: [[20, 40, 20]] } } }] });
+
+it('projects a production FBR1 round trip with unexpanded SV evidence', () => {
+  const bytes = Uint8Array.from(atob(binaryFixture.base64), c => c.charCodeAt(0));
+  const decoded = decodeReadBinary(bytes.buffer);
+  expect(Object.getOwnPropertyDescriptor(decoded.reads[0], 'sv_evidence')?.set).toBeUndefined();
+  const projected = projectLoadedReads(decoded, 200, 600, 0)!;
+  expect(projected.reads[0].sv_evidence).toHaveLength(2);
+  expect(Object.getOwnPropertyDescriptor(projected.reads[0], 'sv_evidence')?.writable).toBe(true);
+  expect(projected.reads[0].sv).toEqual(decoded.reads[0].sv);
+  expect(projectLoadedReads(decoded, 590, 300, 0)).toBeUndefined();
+});
 
 describe('loaded read regions', () => {
   beforeEach(clearLoadedReadRegions);
@@ -142,4 +154,26 @@ it('preserves the visible terminal-gap size across deletion-split pieces', () =>
   readTerminalGaps.set(original.reads[0], [[100, 900]]);
   expect(projectLoadedReads(original, 10, 980, 100)?.reads[0].intervals)
     .toEqual([[0, 190, -790], [390, 790, -790], [790, 980, 200]]);
+});
+
+it('keeps allele evidence when client projection crops a clip outside the new view', () => {
+  const original = data();
+  const r = original.reads[0];
+  readAlignmentBounds.set(r, [0, 100]);
+  r.sv = [{ t: 'S', side: 'R', ref: 10, len: 60, q: 50 }];
+  const cropped = projectLoadedReads(original, 20, 50, 0)!;
+  expect(cropped.reads[0].sv).toBeUndefined();
+  expect(cropped.reads[0].sv_evidence).toEqual(r.sv);
+  expect(r.sv).toHaveLength(1);
+});
+
+it('keeps normalized raw glyphs on a safe crop and refreshes merged deletion boundaries', () => {
+  const original = data(); original.width = 1000;
+  const read = original.reads[0]; read.intervals = [[0, 1000, 1000]];
+  readAlignmentBounds.set(read, [0, 1000]); readRegionProjectionSafe.add(original);
+  read.sv = [{ t: 'I', ref: 100, raw_ref: 350, raw_ref_end: 350, ref_end: 100, len: 50, q: 350,
+    raw_pieces: [{ t: 'I', ref: 350, len: 50, q: 350 }] }];
+  expect(projectLoadedReads(original, 200, 400, 0)?.reads[0].sv).toEqual(read.sv);
+  read.sv = [{ t: 'D', ref: 100, ref_end: 170, raw_ref: 100, raw_ref_end: 170, len: 60, q: 100 }];
+  expect(projectLoadedReads(original, 165, 300, 0)).toBeUndefined();
 });

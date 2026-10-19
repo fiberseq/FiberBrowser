@@ -853,3 +853,48 @@ def test_iupac_slice_matches_reference_positions_for_mixed_cigars():
                         for base, p in zip(read.query_sequence, refs)
                         if base in 'RY' and p is not None and lo <= p < hi]
             assert bam_tags.parse_iupac_ry_positions(read, lo, hi) == expected
+
+
+def test_ma_header_runtime_import_failure_is_not_silently_seq(monkeypatch):
+    import builtins
+    import pytest
+    original = builtins.__import__
+
+    def broken(name, *args, **kwargs):
+        if name == 'fiberhmm.io.annotation_frame':
+            raise RuntimeError('injected numba cache import failure')
+        return original(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, '__import__', broken)
+    with pytest.raises(RuntimeError, match='injected numba cache'):
+        bam_tags.bam_ma_group_frame({'CO': ['fiberhmm:coord=molecular']})
+
+
+def test_ma_header_policy_runtime_failure_is_not_silently_seq(monkeypatch):
+    import pytest
+    def broken(header):
+        raise RuntimeError('injected header policy failure')
+    monkeypatch.setattr(bam_tags, 'bam_ma_aq_tags_are_molecular', broken)
+    with pytest.raises(RuntimeError, match='injected header policy'):
+        bam_tags.bam_ma_group_frame({'CO': ['fiberhmm:coord=molecular']})
+
+
+def test_missing_optional_frame_policy_preserves_declared_geometry_on_both_strands(monkeypatch):
+    import builtins
+    original = builtins.__import__
+
+    def missing(name, *args, **kwargs):
+        if name == 'fiberhmm.io.annotation_frame':
+            raise ImportError('optional policy unavailable')
+        return original(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, '__import__', missing)
+    frame = bam_tags.bam_ma_group_frame({'CO': ['fiberhmm:coord=molecular']})
+    assert frame.header_molecular
+    for reverse, interval, qualities in [(False, [0, 3, 3], [[200], [10], [20]]),
+                                          (True, [7, 10, 3], [[200], [20], [10]])]:
+        result = bam_tags.parse_ma_aq_tags_into_layers(
+            '10;nuc+QQQ:1-3', [200, 10, 20], IdentityOffsetMapper(), 100, 110,
+            read_length=10, is_reverse=reverse, tags_are_molecular=frame)
+        assert result['nuc']['intervals'] == [interval]
+        assert result['nuc']['qualities'] == qualities

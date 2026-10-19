@@ -6,6 +6,7 @@ import { useBrowserStore } from '../../stores/browserStore';
 import { svsInView } from './api';
 import { SvTab, WEAK_SV_CARRIERS, splitWeakSvs } from './SvTab';
 import { DEFAULT_SNP_PARAMS } from './api';
+import { applyImportedState, collectFrontendState } from '../../api/session';
 
 vi.mock('./api', async importOriginal => ({ ...(await importOriginal<typeof import('./api')>()), svsInView: vi.fn() }));
 
@@ -37,6 +38,27 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); container.remove(); });
 
 describe('Variants › SVs', () => {
+  it('keeps all three carrier choices through a session import and remount', async () => {
+    useBrowserStore.setState(s => ({ panels: [...s.panels, { id: 'variants', contentType: 'variants' } as never] }));
+    act(() => root.render(<SvTab datasetId="numb" params={DEFAULT_SNP_PARAMS} duplicates={false} />));
+    const input = (label: string) => [...container.querySelectorAll('label')].find(l => l.textContent?.includes(label))!.querySelector('input')!;
+    expect(input('Include putative').checked).toBe(true);
+    expect(input('Include conflicting').checked).toBe(false);
+    expect(input('Include ambiguous').checked).toBe(false);
+    act(() => { input('Include putative').click(); });
+    act(() => { input('Include conflicting').click(); });
+    act(() => { input('Include ambiguous').click(); });
+    expect(useBrowserStore.getState().panels.find(p => p.id === 'variants')?.variants)
+      .toMatchObject({ includePutative: false, includeConflicting: true, includeAmbiguous: true });
+    const saved = JSON.parse(JSON.stringify(collectFrontendState()));
+    act(() => { root.render(null); useBrowserStore.setState({ panels: [] }); });
+    act(() => applyImportedState({ datasets: [], overlays: [], has_fasta: false, frontend: saved,
+      viewport: { chrom: 'chr2L', start: 9462000, end: 9492000 } }));
+    act(() => root.render(<SvTab datasetId="numb" params={DEFAULT_SNP_PARAMS} duplicates={false} />));
+    expect(input('Include putative').checked).toBe(false);
+    expect(input('Include conflicting').checked).toBe(true);
+    expect(input('Include ambiguous').checked).toBe(true);
+  });
   it('the combined-split bar is there before anything is ticked (rows never move), its buttons disabled', async () => {
     act(() => root.render(<SvTab datasetId="numb" params={DEFAULT_SNP_PARAMS} duplicates={false} />));
     await wait(450);
@@ -59,12 +81,14 @@ describe('Variants › SVs', () => {
     act(() => root.render(<SvTab datasetId="numb" params={DEFAULT_SNP_PARAMS} duplicates={false} />));
     await wait(450);
     expect(qa('variants-sv')).toHaveLength(2);
-    expect(qa('variants-sv-carriers')[0].textContent).toBe('3,267 carriers of 3,600 informative reads · 91% (95% CI 90–92%)');
-    expect(qa('variants-sv-carriers')[1].textContent).toBe('1,795 carriers of 1,799 informative reads · >99% (95% CI 99.4–>99.9%)');
+    const policy = [...container.querySelectorAll('label')].find(l => l.textContent?.includes('Include putative carriers'))!.querySelector('input')!;
+    expect(policy.checked).toBe(true);
+    expect(qa('variants-sv-carriers')[0].textContent).toBe('3,267 confirmed of 3,600 informative reads · 91% (95% CI 90–92%) · 0 putative · 0 conflicting · 0 ambiguous');
+    expect(qa('variants-sv-carriers')[1].textContent).toBe('1,795 confirmed of 1,799 informative reads · >99% (95% CI 99.4–>99.9%) · 0 putative · 0 conflicting · 0 ambiguous');
     expect(q('variants-sv-weak-toggle')!.textContent).toBe(`Show 1 weak call (fewer than ${WEAK_SV_CARRIERS} carriers)`);
     act(() => q('variants-sv-weak-toggle')!.click());
     expect(qa('variants-sv')).toHaveLength(3);
-    expect(qa('variants-sv-carriers')[2].textContent).toContain('1 carrier of 1,799 informative reads · <1%');
+    expect(qa('variants-sv-carriers')[2].textContent).toContain('1 confirmed of 1,799 informative reads · <1%');
     expect((q('variants-sv-require-all-input') as HTMLInputElement).checked).toBe(true);
   });
 

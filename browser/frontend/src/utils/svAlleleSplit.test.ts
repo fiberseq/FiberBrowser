@@ -162,3 +162,123 @@ describe('review fixes (fb-n9-sv)', () => {
     expect(def.includeDuplicates).toBe(true);
   });
 });
+
+describe('current split counts and historical assignments', () => {
+  let initial: ReturnType<typeof useBrowserStore.getState>;
+  beforeEach(() => {
+    initial = useBrowserStore.getState();
+    useBrowserStore.setState({ chrom: 'chrSV', start: 8000, end: 16000, showDuplicateReads: true });
+  });
+  afterEach(() => { vi.unstubAllGlobals(); useBrowserStore.setState(initial, true); });
+
+  it('sends and retains the evidence policy and labels split panels with evidence counts', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ assignments: { c: 0, p: 0, a: 2 },
+      counts: [2, 0, 1], margin: 100, evidence_counts: { confirmed: 1, putative: 1, ambiguous: 1 } })));
+    vi.stubGlobal('fetch', fetchMock);
+    const def = await splitBySv({ ...TARGET, includePutative: true }, SV);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).include_putative).toBe(true);
+    expect(def.includePutative).toBe(true);
+    expect(useBrowserStore.getState().clusterGroupLabels.ds[0]).toBe('Confirmed (1) + putative (1)');
+    expect(def.evidenceCounts).toEqual({ confirmed: 1, putative: 1, ambiguous: 1 });
+  });
+
+  it('defaults new splits to putative while legacy and explicit saved choices survive refresh', async () => {
+    const fetchMock = mockSplit({ c: 0 });
+    const fresh = await splitBySv(TARGET, SV);
+    expect(fresh.includePutative).toBe(true);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({ include_putative: true, include_ambiguous: false });
+    for (const saved of [undefined, false, true]) {
+      const legacy = normalizeSvSplits({ ds: { ...fresh, includePutative: saved, includeAmbiguous: true } }).ds;
+      useBrowserStore.getState().setSvSplit('ds', legacy);
+      await refreshSvSplit(TARGET, legacy);
+      const body = JSON.parse(String(fetchMock.mock.lastCall?.[1]?.body));
+      expect(body.include_putative).toBe(saved === true);
+      expect(body.include_ambiguous).toBe(true);
+    }
+  });
+
+  it('preserves saved conflict choices and thresholds, including policies predating this filter', async () => {
+    const fetchMock = mockSplit({ c: 0 });
+    useBrowserStore.getState().setSvConflictOptions({ max_distance: 5000 });
+    const fresh = await splitBySv({ ...TARGET, includeConflicting: true }, SV);
+    expect(fresh).toMatchObject({ includePutative: true, includeConflicting: true, conflictOptions: { enabled: true, max_distance: 5000 } });
+    useBrowserStore.getState().setSvConflictOptions({ max_distance: 9999 });
+    const saved = normalizeSvSplits({ ds: fresh }).ds;
+    useBrowserStore.getState().setSvSplit('ds', saved);
+    await refreshSvSplit(TARGET, saved);
+    expect(JSON.parse(String(fetchMock.mock.lastCall?.[1]?.body))).toMatchObject({
+      include_conflicting: true, conflict_options: { max_distance: 5000 },
+    });
+    const legacy = normalizeSvSplits({ ds: { ...fresh, conflictOptions: undefined, includeConflicting: undefined } }).ds;
+    useBrowserStore.getState().setSvSplit('ds', legacy);
+    await refreshSvSplit(TARGET, legacy);
+    expect(JSON.parse(String(fetchMock.mock.lastCall?.[1]?.body))).toMatchObject({
+      include_putative: true, include_conflicting: false, conflict_options: { enabled: false },
+    });
+  });
+
+  it('retries an initial split when its duplicate setting changes while waiting', async () => {
+    let finish!: (response: Response) => void;
+    const fetchMock = vi.fn().mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }))
+      .mockResolvedValue(new Response(JSON.stringify({ assignments: { current: 0 }, counts: [1, 0, 0], margin: 100 })));
+    vi.stubGlobal('fetch', fetchMock);
+    const pending = splitBySv(TARGET, SV);
+    useBrowserStore.setState({ showDuplicateReads: false });
+    finish(new Response(JSON.stringify({ assignments: { stale: 0 }, counts: [9, 0, 0], margin: 100 })));
+    expect(await pending).toMatchObject({ includeDuplicates: false, counts: [1, 0, 0] });
+    expect(fetchMock.mock.calls.map(call => JSON.parse(call[1].body).include_duplicates)).toEqual([true, false]);
+    expect(useBrowserStore.getState().clusterAssignments.ds).toEqual({ current: 0 });
+  });
+
+  it('rejects an initial split superseded by another target', async () => {
+    let finish!: (response: Response) => void;
+    vi.stubGlobal('fetch', vi.fn().mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }))
+      .mockResolvedValue(new Response(JSON.stringify({ assignments: { current: 0 }, counts: [1, 0, 0], margin: 100 }))));
+    const pending = splitBySv(TARGET, SV);
+    const rejected = expect(pending).rejects.toThrow('superseded');
+    await splitBySv(TARGET, { ...SV, ref: 11000 });
+    finish(new Response(JSON.stringify({ assignments: { stale: 0 }, counts: [9, 0, 0], margin: 100 })));
+    await rejected;
+    expect(useBrowserStore.getState().svSplits.ds.ref).toBe(11000);
+  });
+
+  it('retains departed/duplicate assignments while counting only the new response', async () => {
+    mockSplit({ carrier: 0, departed: 0, duplicate: 1 });
+    await splitBySv(TARGET, SV);
+    useBrowserStore.setState({ showDuplicateReads: false });
+    mockSplit({ carrier: 0, current: 1 });
+    const def = useBrowserStore.getState().svSplits.ds;
+    await refreshSvSplit({ ...TARGET, viewStart: 9000, viewEnd: 17000 }, def);
+    const s = useBrowserStore.getState();
+    expect(s.clusterAssignments.ds).toEqual({ carrier: 0, departed: 0, duplicate: 1, current: 1 });
+    expect(s.svSplits.ds).toMatchObject({ counts: [1, 1, 0], includeDuplicates: false, viewStart: 9000 });
+  });
+
+  it('ignores a refresh whose duplicate setting changes while waiting', async () => {
+    mockSplit({ carrier: 0 });
+    await splitBySv(TARGET, SV);
+    const def = useBrowserStore.getState().svSplits.ds;
+    let finish!: (response: Response) => void;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { finish = resolve; })));
+    const pending = refreshSvSplit(TARGET, def);
+    useBrowserStore.setState({ showDuplicateReads: false });
+    finish(new Response(JSON.stringify({ assignments: { stale: 0 }, counts: [1, 0, 0], margin: 100 })));
+    await pending;
+    expect(useBrowserStore.getState().svSplits.ds).toBe(def);
+    expect(useBrowserStore.getState().clusterAssignments.ds).toEqual({ carrier: 0 });
+  });
+
+  it('ignores an aborted refresh even if its response still resolves', async () => {
+    mockSplit({ carrier: 0 });
+    await splitBySv(TARGET, SV);
+    const def = useBrowserStore.getState().svSplits.ds;
+    const controller = new AbortController();
+    let finish!: (response: Response) => void;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { finish = resolve; })));
+    const pending = refreshSvSplit(TARGET, def, controller.signal);
+    controller.abort();
+    finish(new Response(JSON.stringify({ assignments: { stale: 0 }, counts: [1, 0, 0], margin: 100 })));
+    await pending;
+    expect(useBrowserStore.getState().svSplits.ds).toBe(def);
+  });
+});
