@@ -1,4 +1,8 @@
-# Differences contracts, phase 1
+# Differences contracts
+
+Phase 2 adds [local normalization, matching, diagnostic enrichment and compound
+carriage](DIFFERENCES_MATCHING.md). New results advertise `haplotype:v2`,
+`local-match:v2` and `daf-indel:v2`; historical snapshots retain their versions.
 
 The additive `differences:v1` model describes both `assembly` and `reads`.
 Legacy SV geometry discovery, splitting and inspection remain usable without
@@ -36,7 +40,8 @@ IdentityLedger is JSON/session-persistable. It registers immutable observations
 against stable provisional IDs and preserves frozen target/member/policy
 snapshots. Exact local IDs require full unambiguous canonical strings and a
 normalization namespace. Common reconstruction padding is trimmed before
-hashing. Repeat/compound canonicalization is not supplied by this phase.
+hashing. The separate phase-2 provider supplies bounded repeat/compound
+canonicalization; the low-level identity hasher requires canonical full strings.
 Merge and one-to-many split lineage preserve old IDs; a split never silently
 chooses a descendant or refreshes membership. Normalization changes need new
 identities and explicit lineage. Missing saved sources stay unresolved.
@@ -87,7 +92,9 @@ it does not rename the molecule's chemistry. A StructuralProof must attest two
 observed flanks, compatible query-collinear path, competitor exclusion and
 complete search. Geometry or an expected assembly string alone cannot assign
 an exact allele. These helpers are not a calibrated noisy-read caller and are
-not wired into production allele counts; phase 2 implements that caller.
+not wired into production allele counts. The separate phase-2 likelihood and
+opt-in enrichment provider implement competition without changing these spike
+oracles or the default geometry cohorts. No biological calibration is bundled.
 
 ## Reconstruction resources
 

@@ -18,7 +18,11 @@ export interface DifferencesSession {
   targets: Record<string, { target_type: 'geometry'; identity_state: 'provisional'; frozen: true; snapshot: JsonRecord; policy: JsonRecord; memberships: ImportMembership[] }>;
   imports: Record<string, ImportMembership[]>;
   legacySnapshot: JsonRecord;
-  options: { backgroundCatalogue: boolean; expansionAlignment: 'boundary' | 'homology'; unphasedLane: boolean; analysisScope: 'native_only' | 'lifted_only' | 'combined' };
+  options: { backgroundCatalogue: boolean; expansionAlignment: 'boundary' | 'homology'; unphasedLane: boolean; analysisScope: 'native_only' | 'lifted_only' | 'combined';
+    matchingPolicy: { version: string; anchor_bp: number; anchor_fraction: number; span_bp: number; span_fraction: number;
+      broad_anchor_bp: number; broad_anchor_fraction: number; max_members: number; max_window_bp: number; max_sequence_bp: number };
+    likelihoodPolicy: { version: string; profile_id: string; substitution_rate: number; indel_rate: number;
+      conversion_rate: number; min_log_odds: number; max_noise_fraction: number } };
 }
 
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
@@ -26,10 +30,14 @@ const object = (value: unknown): JsonRecord => value && typeof value === 'object
 
 export function emptyDifferencesSession(): DifferencesSession {
   return { schema_version: DIFFERENCES_SCHEMA,
-    versions: { normalization: 'local:v1', projection: 'guarded:v1', matching: 'candidate:v1', reconciliation: 'independent:v1', daf_likelihood: 'contract:v1' },
+    versions: { normalization: 'haplotype:v2', projection: 'guarded:v1', matching: 'local-match:v2', reconciliation: 'independent:v1', daf_likelihood: 'daf-indel:v2' },
     ledger: { schema_version: DIFFERENCES_SCHEMA, records: {}, seeds: {}, lineage: {}, snapshots: {} },
     targets: {}, imports: {}, legacySnapshot: {},
-    options: { backgroundCatalogue: false, expansionAlignment: 'boundary', unphasedLane: false, analysisScope: 'native_only' } };
+    options: { backgroundCatalogue: false, expansionAlignment: 'boundary', unphasedLane: false, analysisScope: 'native_only',
+      matchingPolicy: { version: 'local-match:v2', anchor_bp: 20, anchor_fraction: .05, span_bp: 20, span_fraction: .20,
+        broad_anchor_bp: 50, broad_anchor_fraction: .20, max_members: 32, max_window_bp: 10_000, max_sequence_bp: 100_000 },
+      likelihoodPolicy: { version: 'daf-indel:v2', profile_id: 'engineering-synthetic:v1', substitution_rate: .01, indel_rate: .02,
+        conversion_rate: .90, min_log_odds: Math.log(100), max_noise_fraction: .20 } } };
 }
 
 /** Trust explicit producer/provenance + saved record membership, never punctuation.
@@ -85,7 +93,10 @@ export function restoreDifferencesSession(saved: JsonRecord | undefined): Differ
   const existing = object(state.differencesSession);
   if (existing.schema_version === DIFFERENCES_SCHEMA) {
     const base = emptyDifferencesSession();
-    return clone({ ...base, ...existing, options: { ...base.options, ...object(existing.options) } }) as DifferencesSession;
+    const options = object(existing.options);
+    return clone({ ...base, ...existing, options: { ...base.options, ...options,
+      matchingPolicy: { ...base.options.matchingPolicy, ...object(options.matchingPolicy) },
+      likelihoodPolicy: { ...base.options.likelihoodPolicy, ...object(options.likelihoodPolicy) } } }) as DifferencesSession;
   }
   const result = emptyDifferencesSession();
   const keys = ['svSplits', 'differenceSplit', 'expandedInsertions', 'liveLiftExpansions', 'panels',

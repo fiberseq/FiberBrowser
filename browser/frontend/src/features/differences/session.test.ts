@@ -91,6 +91,8 @@ it('persists identity lineage through real serialize, hydration, undo/redo and s
   useBrowserStore.getState().pushSnapshot('Frozen historical state');
   const changed = copy(capsule);
   changed.options.unphasedLane = true;
+  changed.options.matchingPolicy.broad_anchor_bp = 75;
+  changed.options.likelihoodPolicy.min_log_odds = Math.log(1000);
   useBrowserStore.setState({ differencesSession: changed });
   useBrowserStore.getState().pushSnapshot('Change display option');
   useBrowserStore.getState().undo();
@@ -101,6 +103,19 @@ it('persists identity lineage through real serialize, hydration, undo/redo and s
   expect(deserializeSavedState(snapshot).differencesSession).toEqual(changed);
   const exported = collectFrontendState();
   expect(exported.differencesSession).toEqual(changed);
+});
+
+it('adds configurable matching defaults without rewriting historical policy versions or targets', () => {
+  const old = restoreDifferencesSession({ svSplits: { dataset: split } });
+  const historical = copy(old) as any;
+  historical.versions.matching = 'candidate:v1';
+  delete historical.options.matchingPolicy;
+  delete historical.options.likelihoodPolicy;
+  const restored = restoreDifferencesSession({ differencesSession: historical });
+  expect(restored.versions.matching).toBe('candidate:v1');
+  expect(restored.targets).toEqual(old.targets);
+  expect(restored.options.matchingPolicy.broad_anchor_bp).toBe(50);
+  expect(restored.options.likelihoodPolicy.profile_id).toBe('engineering-synthetic:v1');
 });
 
 it('actual dataset relocation preserves frozen reference/provenance and historical IDs', () => {

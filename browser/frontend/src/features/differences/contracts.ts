@@ -17,6 +17,14 @@ export interface MoleculeEnvelope {
     molecules: Record<string, MoleculeIdentity>;
     legacy_aliases: Record<string, Record<string, string>>;
   };
+  enrichment?: {
+    enrichment_id: string;
+    snapshot: { target_id: string; revision: number; analysis_scope: 'native_only' };
+    calls_by_molecule: Record<string, MoleculeCall>;
+    search_complete?: boolean;
+    reasons: string[];
+    counts?: Record<string, number>;
+  };
 }
 
 /** Count once at molecule level, then use these memberships for rows/highlights.
@@ -26,4 +34,14 @@ export function fanOutMoleculeCalls(envelope: MoleculeEnvelope, datasetId: strin
   return Object.fromEntries(Object.entries(envelope.membership.rows[datasetId] ?? {})
     .filter(([, molecule]) => envelope.calls_by_molecule[molecule])
     .map(([row, molecule]) => [row, envelope.calls_by_molecule[molecule]]));
+}
+
+/** Explicit revision selection: sequence loading never replaces a geometry
+ * cohort or a historical split implicitly. Missing/refused revisions fail. */
+export function fanOutEnrichedCalls(envelope: MoleculeEnvelope, datasetId: string, enrichmentId: string): Record<string, MoleculeCall> {
+  const enrichment = envelope.enrichment;
+  if (!enrichment || enrichment.enrichment_id !== enrichmentId || !Object.keys(enrichment.calls_by_molecule).length) {
+    throw new Error('Requested allele enrichment is unavailable');
+  }
+  return fanOutMoleculeCalls({ ...envelope, calls_by_molecule: enrichment.calls_by_molecule }, datasetId);
 }
