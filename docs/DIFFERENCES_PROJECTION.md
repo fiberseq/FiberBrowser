@@ -34,7 +34,9 @@ Geometry counts remain visible when sequence assignment is unresolved.
 
 Read bases always come from BAM SEQ. Expected map sequence never fills missing
 or hard-clipped bases. CT/GA chemistry from an actual primary's `st` tag retains
-its provenance; explicit contexts can override it. Unknown chemistry remains
+its provenance; explicit contexts keyed by qualified molecule ID can override
+it. Raw-name context aliases apply only to a unique library in the requested
+scope, with ambiguous aliases counted explicitly. Unknown chemistry remains
 unknown, and the shared uncalibrated likelihood profile gives noisy/DAF calls
 at most putative. Exact deletion carriage can use a validated, query-collinear
 path with both observed flanks and explicit competitor exclusion.
@@ -80,7 +82,8 @@ select the frozen target/revision/scope before row fan-out. They count at the
 molecule level, never at row level. Map observation IDs use verified manifest
 and target-payload content; file stamps remain cache revisions.
 
-Defaults bound 512 enriched records, 2 million input bases, 16,384 generated
+Defaults bound 512 records, 2 million lazily decoded input bases, 131,072 retained
+CIGAR operations, 16,384 generated
 runs, 128 summary targets, 16,384 target/molecule calls, 100 kb reconstructed
 sequences, 16 MiB response bytes and 30 seconds including queue time. Bounded
 molecule spooling, 64 reciprocal SA lookups and existing fetch-window/source-bp

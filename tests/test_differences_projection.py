@@ -262,3 +262,14 @@ def test_independent_conflicting_net_claim_is_unexplored_even_if_selected_winner
     result = call_molecule([alignment(30)], [p], target(0, 30))
     assert result["call"]["assignment"] == "ambiguous" and result["primary_complete"] is False
     assert result["search"]["unexplored"][0]["reason"] == "conflicting_primary_ownership"
+
+
+def test_unmapped_source_tails_remain_query_witnesses_without_invented_conflicts():
+    a = replace(alignment(), ref_start=0, cigar=((0, 300),), sequence="A"*300)
+    p = path(20, 0)
+    projected = compose_alignment(a, p)
+    witnesses = [w for w in projected["unresolved_witnesses"] if w["reason"] == "source_path_outside_selected_map"]
+    assert [(w["source_start"], w["source_end"], w["original_query"]) for w in witnesses] == [(0, 100, [0, 100]), (200, 300, [200, 300])]
+    detail = classify_projection(a, projected, target(20, 0))
+    assert detail["call"]["assignment"] == "target" and detail["call"]["level"] == "confirmed"
+    assert "unresolved_source_witness" in detail["call"]["reasons"]

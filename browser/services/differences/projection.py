@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field, replace
 import time
 import hashlib
 import math
+import bisect
 
 from services.background_work import checkpoint
 from services.reconstruction_budget import ResourceResult
@@ -42,6 +43,7 @@ class ProjectionPolicy:
     max_response_bytes: int = 16 * 1024 * 1024
     max_targets: int = 128
     max_calls: int = 16_384
+    max_cigar_operations: int = 131_072
     deadline_s: float = 30.
     min_mapq: int = 20
     cohort_alternatives: str = "exclude"
@@ -52,7 +54,7 @@ class ProjectionPolicy:
 
     def __post_init__(self):
         if any(type(getattr(self, k)) is not int or getattr(self, k) < 1 for k in
-               ("max_records", "max_runs", "max_input_bases", "max_sequence_bp", "max_response_bytes", "max_targets", "max_calls")):
+               ("max_records", "max_runs", "max_input_bases", "max_sequence_bp", "max_response_bytes", "max_targets", "max_calls", "max_cigar_operations")):
             raise ValueError("positive projection limits required")
         if not math.isfinite(self.deadline_s) or self.deadline_s <= 0 or type(self.min_mapq) is not int or not 0 <= self.min_mapq <= 255:
             raise ValueError("invalid projection quality/deadline")
@@ -66,7 +68,7 @@ class ProjectionBudget:
     def __init__(self, policy=ProjectionPolicy()):
         self.policy = policy
         self.deadline = time.monotonic() + policy.deadline_s
-        self.records = self.bases = self.runs = 0
+        self.records = self.bases = self.runs = self.operations = 0
 
     def check(self):
         checkpoint()
@@ -161,11 +163,13 @@ class MapPath:
                 raise ValueError("noncollinear map choices require separate paths")
 
 
-def _walk(alignment):
+def _walk(alignment, check=checkpoint):
     """CIGAR coordinates in source-reference order, including hard clips."""
     source, query, seq = alignment.ref_start, 0, 0
     aligned, skips, clips = [], [], []
-    for op, n in alignment.cigar:
+    for i, (op, n) in enumerate(alignment.cigar):
+        if not i & 255:
+            check()
         if n <= 0 or op not in range(9):
             raise ValueError("invalid source CIGAR")
         if op in (0, 7, 8):
@@ -224,7 +228,7 @@ def _transition(path, left, right, skips):
     return True
 
 
-def compose_alignment(alignment, path, *, budget=None):
+def compose_alignment(alignment, path, *, budget=None, walk=None):
     """Return observed base blocks, edits and explicit endpoint/SEQ mappings.
 
     No full sequence is needed for geometry. Sequence, when requested, always
@@ -232,14 +236,16 @@ def compose_alignment(alignment, path, *, budget=None):
     """
     budget = budget or ProjectionBudget()
     budget.check()
-    aligned, skips, clips, source_end, length, seq_length = _walk(alignment)
+    aligned, skips, clips, source_end, length, seq_length = walk or _walk(alignment, budget.check)
     minus = path.pieces[0].strand == "-"
     hard_left = alignment.cigar[0][1] if alignment.cigar and alignment.cigar[0][0] == 5 else 0
     runs = []
     if path.source == alignment.contig:
         for p in path.pieces:
             budget.check()
-            for s, e, q, seq in aligned:
+            for i, (s, e, q, seq) in enumerate(aligned):
+                if not i & 255:
+                    budget.check()
                 a, b = max(s, p.q_start), min(e, p.q_end)
                 if a >= b:
                     continue
@@ -255,6 +261,33 @@ def compose_alignment(alignment, path, *, budget=None):
                     original_query=list(canonical), record_id=alignment.record_id))
     runs.sort(key=lambda r: (r["ref_start"], r["q_start"]))
     cuts, components, unresolved = [], [], list(alignment.witnesses)
+    # Aligned source/query tails outside the selected path stay witnesses.
+    # They are not evidence of another target chromosome or a clip conflict.
+    covered = []
+    for a, b in sorted([(p.q_start, p.q_end) for p in path.pieces] +
+                       [(g.source_start, g.source_end) for g in path.gaps if g.source_end > g.source_start]):
+        if covered and a <= covered[-1][1]:
+            covered[-1][1] = max(covered[-1][1], b)
+        else:
+            covered.append([a, b])
+    ends = [b for _, b in covered]
+    for s, e, q, _ in aligned:
+        budget.check()
+        cursor = s
+        for a, b in covered[bisect.bisect_right(ends, s):]:
+            if a >= e:
+                break
+            if a > cursor:
+                x, y = q+cursor-s, q+min(a, e)-s
+                unresolved.append(dict(reason="source_path_outside_selected_map", record_id=alignment.record_id,
+                    source_start=cursor, source_end=min(a, e), original_query=[length-y, length-x] if alignment.reverse else [x, y]))
+            cursor = max(cursor, b)
+            if cursor >= e:
+                break
+        if cursor < e:
+            x, y = q+cursor-s, q+e-s
+            unresolved.append(dict(reason="source_path_outside_selected_map", record_id=alignment.record_id,
+                source_start=cursor, source_end=e, original_query=[length-y, length-x] if alignment.reverse else [x, y]))
     component = []
     for run in runs:
         if component:
@@ -302,6 +335,9 @@ def compose_alignment(alignment, path, *, budget=None):
             mapped_clips.append(dict(ref=next(iter(candidates)), side="R" if left_side == minus else "L",
                 q_start=q0, q_end=q1, hard=hard, origin_record_id=alignment.record_id,
                 source_anchor=source_anchor, query_frame="target_oriented_full_molecule"))
+        else:
+            unresolved.append(dict(reason="clip_anchor_unprojectable", record_id=alignment.record_id,
+                source_anchor=source_anchor, original_query=[length-b, length-a] if alignment.reverse else [a, b], hard=hard))
     return dict(record_id=alignment.record_id, path_id=path.path_id, chrom=path.chrom,
         source_contig=alignment.contig, source_start=alignment.ref_start, source_end=source_end,
         source_cigar=[list(x) for x in alignment.cigar], query_length=length,
@@ -422,6 +458,7 @@ def call_molecule(alignments, paths, target, *, policy=ProjectionPolicy(), budge
     budget = budget or ProjectionBudget(policy)
     search = SearchBudget(policy.search)
     alignments = list({a.record_id: a for a in alignments}.values())
+    walks = {a.record_id: _walk(a, budget.check) for a in alignments}
     if context is None:
         primary_contexts = {(a.chemistry, a.chemistry_provenance) for a in alignments if not a.supplementary and a.chemistry != "unknown"}
         available_contexts = primary_contexts or {(a.chemistry, a.chemistry_provenance) for a in alignments if a.chemistry != "unknown"}
@@ -433,8 +470,8 @@ def call_molecule(alignments, paths, target, *, policy=ProjectionPolicy(), budge
     primary_paths = [p for p in paths if p.ownership == "primary" and p.ownership_validated]
     admissible_paths = [p for p in paths if p.ownership != "secondary" or policy.cohort_alternatives == "include"]
     applicable = [(p, [a for a in alignments if a.contig == p.source and
-                   (any(max(a.ref_start, x.q_start) < min(_walk(a)[3], x.q_end) for x in p.pieces)
-                    or any(a.ref_start < g.source_end and _walk(a)[3] > g.source_start for g in p.gaps))])
+                   (any(max(a.ref_start, x.q_start) < min(walks[a.record_id][3], x.q_end) for x in p.pieces)
+                    or any(a.ref_start < g.source_end and walks[a.record_id][3] > g.source_start for g in p.gaps))])
                   for p in admissible_paths]
     applicable = [(p, aa) for p, aa in applicable if aa and
                   (any(x.t_start <= target["ref_end"] and x.t_end >= target["ref_start"] for x in p.pieces)
@@ -457,11 +494,11 @@ def call_molecule(alignments, paths, target, *, policy=ProjectionPolicy(), budge
                 break
             # Actual reciprocal/fetched records supersede their SA descriptions
             # only when this path can place them. Other witnesses stay unresolved.
-            resolved = [a for a in records if any(max(a.ref_start, p.q_start) < min(_walk(a)[3], p.q_end) for p in path.pieces)]
+            resolved = [a for a in records if any(max(a.ref_start, p.q_start) < min(walks[a.record_id][3], p.q_end) for p in path.pieces)]
             alignment = replace(alignment, witnesses=tuple(w for w in alignment.witnesses if not any(
                 (w.get("chrom"), w.get("pos"), w.get("strand"), w.get("cigar_ref_len")) ==
-                (a.contig, a.ref_start, "-" if a.reverse else "+", _walk(a)[3]-a.ref_start) for a in resolved)))
-            projected = compose_alignment(alignment, path, budget=budget)
+                (a.contig, a.ref_start, "-" if a.reverse else "+", walks[a.record_id][3]-a.ref_start) for a in resolved)))
+            projected = compose_alignment(alignment, path, budget=budget, walk=walks[alignment.record_id])
             for _ in projected["base_blocks"]:
                 if not search.admit("transitions", ownership=path.ownership):
                     complete = False
@@ -525,7 +562,8 @@ def call_molecule(alignments, paths, target, *, policy=ProjectionPolicy(), budge
     result["projection_version"] = PROJECTION_VERSION
     result["available"] = bool(applicable)
     result["unprojectable_witnesses"] = [w for h in diagnostics for d in h["records"]
-        for w in d["projection"]["unresolved_witnesses"] if w.get("reason") == "source_witness_not_projected"]
+        for w in d["projection"]["unresolved_witnesses"] if w.get("reason") in {
+            "source_witness_not_projected", "source_path_outside_selected_map", "clip_anchor_unprojectable"}]
     if not applicable:
         result["unprojectable_witnesses"] = [w for a in alignments for w in a.witnesses]
     if not applicable:

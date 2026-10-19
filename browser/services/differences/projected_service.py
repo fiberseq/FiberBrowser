@@ -82,6 +82,10 @@ def _source_records(dataset, plan, *, include_sequence, include_duplicates, budg
                     occurrences = {}
                     for read in bam.fetch(fetch.contig, a, b):
                         budget.check()
+                        if (read.infer_read_length() or 0) > DEFAULT_LIMITS.max_input_bases:
+                            raise ResourceResult("budget_exceeded", "projection_record_bases")
+                        if sum(read.get_cigar_stats()[1]) > budget.policy.max_cigar_operations:
+                            raise ResourceResult("budget_exceeded", "projection_operations_cap")
                         scanned += 1
                         if scanned > 200_000:
                             raise ResourceResult("budget_exceeded", "projection_scan_records_cap")
@@ -115,20 +119,26 @@ def _source_records(dataset, plan, *, include_sequence, include_duplicates, budg
                     if not eligible(read):
                         continue
                     molecule = MoleculeId("declared_source_library", groups[path], read.query_name)
-                    record = SourceAlignment.from_bam(read, molecule, include_sequence=include_sequence)
+                    if (read.infer_read_length() or 0) > DEFAULT_LIMITS.max_input_bases or sum(read.get_cigar_stats()[1]) > budget.policy.max_cigar_operations:
+                        raise ResourceResult("budget_exceeded", "projection_record_storage", interrupted_molecule=molecule.key)
+                    record = SourceAlignment.from_bam(read, molecule)
                     occurrence = occurrences.get(record.record_sha256, 0)
                     occurrences[record.record_sha256] = occurrence + 1
                     if occurrence:
-                        record = SourceAlignment.from_bam(read, molecule, include_sequence=include_sequence, record_occurrence=occurrence)
+                        record = SourceAlignment.from_bam(read, molecule, record_occurrence=occurrence)
                     if record.record_id in seen:
                         continue
                     try:
                         budget.charge("records", 1, budget.policy.max_records)
-                        budget.charge("bases", _walk(record)[4], budget.policy.max_input_bases)
+                        budget.charge("operations", len(record.cigar), budget.policy.max_cigar_operations)
+                        budget.charge("bases", int(read.query_length or 0) if include_sequence else 0, budget.policy.max_input_bases)
                     except ResourceResult as exc:
                         exc.parameters["interrupted_molecule"] = molecule.key
                         raise
                     seen.add(record.record_id)
+                    if include_sequence:
+                        record = replace(record, sequence=read.query_sequence,
+                                         qualities=tuple(read.query_qualities) if read.query_qualities is not None else ())
                     yield record
         except MoleculeBudgetError as exc:
             raise ResourceResult("budget_exceeded", "projection_molecule_spool") from exc
@@ -204,7 +214,7 @@ def projected_analysis(state, dataset, *, policy=None, **kwargs):
     policy = policy or ProjectionPolicy(cohort_alternatives=dataset.live_lift.settings.cohort_alternatives)
     budget = ProjectionBudget(policy)
     reserved = (2*policy.max_response_bytes + 2048*policy.max_runs +
-                32*policy.max_input_bases + 4096*policy.max_records)
+                32*policy.max_input_bases + 4096*policy.max_records + 256*policy.max_cigar_operations)
     if reserved > min(DEFAULT_LIMITS.job_bytes, DEFAULT_LIMITS.request_bytes//2):
         raise ResourceResult("budget_exceeded", "projection_request_bytes", reserved_bytes=reserved)
     RESERVATIONS.acquire(reserved, False, budget.deadline, budget.check)
@@ -264,6 +274,10 @@ def _projected_analysis(state, dataset, *, chrom, start, end, feature, target=No
             include_sequence=bool(target and target.get("target_type") == "exact"),
             include_duplicates=include_duplicates, budget=budget)
         reasons.extend(native_reasons)
+    context_aliases = {}
+    for key, aa in [*grouped.items(), *native.items()]:
+        context_aliases.setdefault(aa[0].molecule.raw_name, set()).add(key)
+    ambiguous_contexts = {name for name, keys in context_aliases.items() if len(keys) > 1 and name in (contexts or {})}
     if feature == "summary":
         # Discovery retains path membership; clustering is candidate geometry
         # only. Classification below never pools these mutually exclusive paths.
@@ -318,7 +332,9 @@ def _projected_analysis(state, dataset, *, chrom, start, end, feature, target=No
             aa = grouped.get(key) or native[key]
             try:
                 budget.check()
-                raw_context = (contexts or {}).get(aa[0].molecule.raw_name)
+                raw_context = (contexts or {}).get(key)
+                if raw_context is None and len(context_aliases.get(aa[0].molecule.raw_name, ())) == 1:
+                    raw_context = (contexts or {}).get(aa[0].molecule.raw_name)
                 context = DafContext(**raw_context) if raw_context is not None else None
                 detail = call_molecule(grouped.get(key, []), paths, t, policy=policy, budget=budget, context=context,
                     likelihood_policy=likelihood_policy, likelihood_budget=likelihood_budget)
@@ -390,10 +406,11 @@ def _projected_analysis(state, dataset, *, chrom, start, end, feature, target=No
             records=len(records)+sum(map(len, native.values())), molecules=len(set(grouped) | set(native)), source_bp=plan.source_bp,
             search_complete=not reasons and not alternatives_capped and all(v.get("lifted", {}).get("search", {}).get("search_complete", False) for o in output for v in o["calls_by_molecule"].values()),
             primary_calls_complete=all(v["complete"] for o in output for v in o["calls_by_molecule"].values()),
-            sequence_enrichment_complete=(all(d.get("sequence_assessment", {}).get("complete", False)
+            sequence_enrichment_complete=(bool(grouped or native) and not reasons and all(v["complete"] for o in output for v in o["calls_by_molecule"].values()) and all(d.get("sequence_assessment", {}).get("complete", False)
                 for o in output for v in o["calls_by_molecule"].values() for h in v.get("lifted", {}).get("diagnostics", []) for d in h["records"])
                 if target and target.get("target_type") == "exact" else None),
             reasons=sorted(set(reasons)), alternatives_capped=alternatives_capped,
+            ambiguous_context_alias_count=len(ambiguous_contexts),
             unresolved_source_witnesses=sum(len(v.get("lifted", {}).get("unprojectable_witnesses", [])) for o in output for v in o["calls_by_molecule"].values()),
             map_revision=paths[0].map_revision if paths else None, sequence_enriched=bool(target and target.get("target_type") == "exact")))
     if len(json.dumps(payload).encode()) > policy.max_response_bytes:
@@ -420,11 +437,17 @@ def native_bundles(state, dataset_id, chrom, start, end, *, include_sequence, in
                 if not read.is_supplementary:
                     blocked.add(molecule.key)
                 continue
-            a = SourceAlignment.from_bam(read, molecule, include_sequence=include_sequence)
+            if (read.infer_read_length() or 0) > DEFAULT_LIMITS.max_input_bases or sum(read.get_cigar_stats()[1]) > budget.policy.max_cigar_operations:
+                raise ResourceResult("budget_exceeded", "projection_record_storage")
+            a = SourceAlignment.from_bam(read, molecule)
             if a.record_id in seen:
                 continue
             budget.charge("records", 1, budget.policy.max_records)
-            budget.charge("bases", _walk(a)[4], budget.policy.max_input_bases)
+            budget.charge("operations", len(a.cigar), budget.policy.max_cigar_operations)
+            budget.charge("bases", int(read.query_length or 0) if include_sequence else 0, budget.policy.max_input_bases)
+            if include_sequence:
+                a = replace(a, sequence=read.query_sequence,
+                            qualities=tuple(read.query_qualities) if read.query_qualities is not None else ())
             seen.add(a.record_id)
             grouped.setdefault(molecule.key, []).append(a)
     except ResourceResult as exc:

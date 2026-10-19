@@ -230,3 +230,36 @@ def test_off_window_rejected_primary_cannot_be_resurrected_by_supplementary(evid
     kwargs = dict(feature="split", chrom=TARGET, start=5900, end=6500, target=insertion())
     assert projected_analysis(state, ds, **kwargs)["targets"][0]["counts"] == [0, 0, 0]
     assert projected_analysis(state, ds, include_duplicates=True, **kwargs)["targets"][0]["counts"] == [1, 0, 0]
+
+
+def test_sequence_free_scans_do_not_charge_unrequested_full_read_bases(evidence, monkeypatch):
+    monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "1")
+    state, ds, _ = evidence
+    policy = ProjectionPolicy(max_input_bases=1)
+    kwargs = dict(feature="split", chrom=TARGET, start=5900, end=6500, policy=policy)
+    geometry = projected_analysis(state, ds, target=insertion(), **kwargs)
+    assert geometry["targets"][0]["counts"] == [3, 0, 1]
+    exact = {**insertion(), "target_type": "exact", "candidates": {"frozen-insertion": "A"*100, "reference": ""}, "competition_complete": True}
+    refused = projected_analysis(state, ds, target=exact, **kwargs)
+    assert "projection_bases_cap" in refused["scope"]["reasons"]
+    assert refused["scope"]["sequence_enrichment_complete"] is False
+
+
+def test_chemistry_override_aliases_cannot_cross_independent_libraries(evidence, monkeypatch):
+    from shutil import copyfile
+    monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "1")
+    state, ds, directory = evidence
+    other = str(directory / "independent.bam")
+    copyfile(ds.paths[0], other)
+    copyfile(ds.paths[0]+".bai", other+".bai")
+    ds.paths = [*ds.paths, other]
+    t = {**insertion(), "target_type": "exact", "candidates": {"frozen-insertion": "A"*100, "reference": ""}, "competition_complete": True}
+    kwargs = dict(feature="split", chrom=TARGET, start=5900, end=6500, target=t)
+    result = projected_analysis(state, ds, contexts={"hg": {"chemistry": "none", "provenance": "explicit"}}, **kwargs)
+    assert result["scope"]["ambiguous_context_alias_count"] == 1
+    hg = [key for key, m in result["membership"]["molecules"].items() if m["raw_name"] == "hg"]
+    assert len(hg) == 2
+    assert all(result["targets"][0]["calls_by_molecule"][key]["call"]["level"] == "putative" for key in hg)
+    qualified = projected_analysis(state, ds, contexts={hg[0]: {"chemistry": "none", "provenance": "explicit"}}, **kwargs)
+    assert qualified["targets"][0]["calls_by_molecule"][hg[0]]["call"]["level"] == "confirmed"
+    assert qualified["targets"][0]["calls_by_molecule"][hg[1]]["call"]["level"] == "putative"
