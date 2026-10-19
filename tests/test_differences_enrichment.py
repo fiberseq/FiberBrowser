@@ -87,7 +87,9 @@ def test_enrichment_refusal_preserves_geometry_and_returns_unknown(monkeypatch):
     args = setup(monkeypatch, reads)
     envelope = sv_endpoint.sv_split_payload(None, **args)["differences"]
     result = enrich_native(None, envelope, dataset_id="synthetic", chrom="chrT", ref=100, target_end=100,
-                           specification=specification(reads), policy=LikelihoodPolicy(max_pair_cells=10))
+                           specification={**specification(reads), "chemistry_by_name": {
+                               "m1": {"chemistry": "CT", "provenance": "synthetic"}}},
+                           policy=LikelihoodPolicy(max_pair_cells=10))
     assert not result["search_complete"]
     assert result["counts"]["target"] == 0
     assert "likelihood_pair_cells" in result["reasons"]
@@ -130,3 +132,98 @@ def test_shifted_repeat_cigar_requires_an_explicit_common_diagnostic_window(monk
     spec.update(diagnostic_start=100, diagnostic_end=105)
     wide = sv_endpoint.sv_split_payload(None, **args, allele_target=spec)['differences']['enrichment']
     assert wide['counts']['target'] == 1
+
+
+def test_repeat_equivalent_insertion_beyond_geometry_tolerance_cannot_be_reference(monkeypatch):
+    reference = "G" + "A" * 399
+    # These complete haplotypes are identical without using the production normalizer.
+    expected = reference[:100] + "A" * 100 + reference[100:]
+    observed = reference[:200] + "A" * 100 + reference[200:]
+    assert expected == observed
+    reads = [record("repeat-carrier", "200M100I200M", observed)]
+    args = setup(monkeypatch, reads)
+    narrow = sv_endpoint.sv_split_payload(None, **args, allele_target=specification(reads))["differences"]["enrichment"]
+    assert narrow["counts"]["reference"] == 0
+    assert narrow["counts"]["ambiguous"] == 1
+    spec = specification(reads, target=expected[99:301], reference=reference[99:201], competitors={"other": "C" * 202})
+    spec.update(diagnostic_start=99, diagnostic_end=201)
+    wide = sv_endpoint.sv_split_payload(None, **args, allele_target=spec)["differences"]["enrichment"]
+    assert wide["counts"]["target"] == 1
+
+
+@pytest.mark.parametrize("cap", ["records", "bases", "likelihood"])
+def test_cohort_cap_preserves_completed_molecules_and_marks_unvisited(monkeypatch, cap):
+    import services.differences.enrichment as module
+    reads = [record(f"m{i}", "100M100I100M", "G" * 100 + "A" * 100 + "T" * 100) for i in range(3)]
+    args = setup(monkeypatch, reads)
+    env = sv_endpoint.sv_split_payload(None, **args)["differences"]
+    spec = specification(reads)
+    policy = LikelihoodPolicy()
+    if cap == "records":
+        monkeypatch.setattr(module, "DEFAULT_LIMITS", replace(module.DEFAULT_LIMITS, max_inputs=2))
+        reason = "diagnostic_record_cap"
+    elif cap == "bases":
+        monkeypatch.setattr(module, "DEFAULT_LIMITS", replace(module.DEFAULT_LIMITS, max_input_bases=250))
+        reason = "diagnostic_input_bases_cap"
+    else:
+        spec["chemistry_by_name"] = {r.query_name: {"chemistry": "CT", "provenance": "synthetic"} for r in reads}
+        policy = LikelihoodPolicy(max_request_cells=25_000)
+        reason = "likelihood_request_cells"
+    result = enrich_native(None, env, dataset_id="synthetic", chrom="chrT", ref=100, target_end=100,
+                           specification=spec, policy=policy, records=[(r, "chrT") for r in reads])
+    assert result["counts"]["target"] >= 1
+    assert result["counts"]["ambiguous"] == 0
+    assert not result["search_complete"] and reason in result["reasons"]
+    for value in result["calls_by_molecule"].values():
+        if value["call"]["assignment"] == "unknown":
+            assert reason in value["call"]["reasons"]
+
+
+@pytest.mark.parametrize("assignment", ["target", "reference"])
+def test_off_locus_supplementary_is_not_an_unresolved_locus_representation(monkeypatch, assignment):
+    primary = (record("molecule", "100M100I100M", "G" * 100 + "A" * 100 + "T" * 100) if assignment == "target"
+               else record("molecule", "200M", "G" * 200))
+    supplementary = record("molecule", "50S50M", "G" * 100, flag=2048)
+    supplementary.reference_start = 250
+    reads = [primary, supplementary]
+    args = setup(monkeypatch, reads)
+    result = sv_endpoint.sv_split_payload(None, **args, allele_target=specification(reads))["differences"]["enrichment"]
+    call, = result["calls_by_molecule"].values()
+    assert call["call"]["assignment"] == assignment
+    assert call["call"]["level"] == "confirmed"
+    assert len(call["alignments"]) == 2
+    # Overlapping partial paths and observed dissent must still block a definitive call.
+    supplementary.reference_start = 100
+    partial = sv_endpoint.sv_split_payload(None, **args, allele_target=specification(reads))["differences"]["enrichment"]
+    assert partial["counts"]["ambiguous"] == 1
+
+
+def test_shifted_deletion_identifies_missing_diagnostic_geometry(monkeypatch):
+    reads = [record("shifted-deletion", "105M100D95M", "G" * 200)]
+    args = {**setup(monkeypatch, reads), "t": "D"}
+    spec = specification(reads, target="", reference="G" * 100, competitors={"other": "C" * 100})
+    result = sv_endpoint.sv_split_payload(None, **args, allele_target=spec)["differences"]["enrichment"]
+    call, = result["calls_by_molecule"].values()
+    assert "diagnostic_window_misses_geometry" in call["call"]["reasons"]
+
+
+def test_cap_inside_one_molecule_retains_omitted_dissent_uncertainty(monkeypatch):
+    import services.differences.enrichment as module
+    reads = [record("molecule", "100M100I100M", "G" * 100 + "A" * 100 + "T" * 100),
+             record("molecule", "200M", "G" * 200, flag=2048)]
+    args = setup(monkeypatch, reads)
+    env = sv_endpoint.sv_split_payload(None, **args)["differences"]
+    monkeypatch.setattr(module, "DEFAULT_LIMITS", replace(module.DEFAULT_LIMITS, max_inputs=1))
+    result = enrich_native(None, env, dataset_id="synthetic", chrom="chrT", ref=100, target_end=100,
+                           specification=specification(reads), records=[(r, "chrT") for r in reads])
+    assert result["counts"]["ambiguous"] == 1 and not result["search_complete"]
+    call, = result["calls_by_molecule"].values()
+    assert "diagnostic_record_cap" in call["call"]["reasons"]
+
+
+def test_spanning_native_alignment_dissent_is_preserved(monkeypatch):
+    reads = [record("molecule", "100M100I100M", "G" * 100 + "A" * 100 + "T" * 100),
+             record("molecule", "200M", "G" * 200, flag=2048)]
+    args = setup(monkeypatch, reads)
+    result = sv_endpoint.sv_split_payload(None, **args, allele_target=specification(reads))["differences"]["enrichment"]
+    assert result["counts"]["ambiguous"] == 1

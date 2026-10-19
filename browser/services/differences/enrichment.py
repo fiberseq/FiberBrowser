@@ -71,6 +71,40 @@ def observe_interval(read, start, end, *, flank=1, max_bases=100_000):
             "query_interval": query_interval, "qualities": qualities}
 
 
+def _missed_competing_edit(read, start, end, reference, alternate, check):
+    """A narrow string cannot exclude an equivalent edit outside its bounds.
+
+    Without reference bases across the competing span, repeat normalization
+    cannot prove it distinct. Preserve uncertainty even if legacy geometry
+    called this molecule reference. An explicit common window can resolve it.
+    """
+    if reference is None or alternate is None:
+        return False
+    net = len(alternate) - len(reference)
+    if not net:
+        return False
+    r, block = int(read.reference_start), None
+    spans = []
+    for op, length in read.cigartuples or ():
+        check()
+        if op in {1, 2}:
+            if block is None:
+                block = [r, r, 0]
+            block[2] += length if op == 1 else -length
+            if op == 2:
+                r += length
+                block[1] = r
+        else:
+            if block is not None:
+                spans.append(block)
+                block = None
+            if op in {0, 3, 7, 8}:
+                r += length
+    if block is not None:
+        spans.append(block)
+    return any(delta == net and not start <= a <= b <= end for a, b, delta in spans)
+
+
 def enrich_native(state, envelope, *, dataset_id, chrom, ref, target_end, specification,
                   include_duplicates=False, policy=LikelihoodPolicy(), records=None):
     """Opt-in full-target request, including *all* competitors and reference.
@@ -131,13 +165,14 @@ def enrich_native(state, envelope, *, dataset_id, chrom, ref, target_end, specif
                  "representations": [], "complete": False}
              for m in envelope["calls_by_molecule"]}
     results, seen, total_bases, count = {}, set(), 0, 0
+    interrupted, current_molecule = set(), None
     reasons = set()
     budget = LikelihoodBudget(policy)
     fetched = records if records is not None else _bam_records(state, dataset_id, chrom, max(0, diagnostic_start - 1), diagnostic_end + 1,
                                                               with_handle=True, checkpoint_fn=budget.check)
     try:
         for read, file_chrom, *locator in fetched:
-            checkpoint()
+            budget.check()
             if not include_duplicates and read.is_duplicate:
                 continue
             molecule = MoleculeId("legacy_merged_dataset", dataset_id, read.query_name)
@@ -146,8 +181,13 @@ def enrich_native(state, envelope, *, dataset_id, chrom, ref, target_end, specif
             lineage = content_id("native-alignment:v1", [dataset_id, read.to_string()])
             if lineage in seen:
                 continue
+            applicable = (read.reference_end is not None and read.reference_start < diagnostic_end + 1
+                          and read.reference_end > diagnostic_start - 1)
+            current_molecule = molecule.key if applicable else None
             if count >= DEFAULT_LIMITS.max_inputs:
                 reasons.add("diagnostic_record_cap")
+                if applicable:
+                    interrupted.add(molecule.key)
                 break
             seen.add(lineage)
             count += 1
@@ -155,6 +195,8 @@ def enrich_native(state, envelope, *, dataset_id, chrom, ref, target_end, specif
             total_bases += len(obs["sequence"] or '')
             if total_bases > DEFAULT_LIMITS.max_input_bases:
                 reasons.add("diagnostic_input_bases_cap")
+                if applicable:
+                    interrupted.add(molecule.key)
                 break
             try:
                 context = DafContext(**contexts.get(read.query_name, {"chemistry": "unknown", "provenance": "unavailable"}))
@@ -170,7 +212,14 @@ def enrich_native(state, envelope, *, dataset_id, chrom, ref, target_end, specif
             interval = obs["query_interval"]
             witness = witness_id(molecule, lineage, *(interval or (0, 0)), kind="diagnostic_path")
             raw = conditional["call"]
-            if raw['assignment'] == 'reference' and envelope['calls_by_molecule'][molecule.key].get('geometry_group') == 0:
+            missed = applicable and _missed_competing_edit(read, diagnostic_start, diagnostic_end,
+                                                           reference, candidates[target], budget.check)
+            if not applicable:
+                raw = asdict(Call('unavailable', reasons=('alignment_outside_diagnostic_locus',)))
+                conditional['call'] = raw
+            elif ((raw['assignment'] == 'reference' and
+                   (missed or envelope['calls_by_molecule'][molecule.key].get('geometry_group') == 0))
+                  or (raw['assignment'] == 'unknown' and not obs['complete'] and missed)):
                 # A normalized repeat anchor may lie away from the raw CIGAR
                 # operation. Require a larger explicit diagnostic window rather
                 # than turning that missed operation into a reference vote.
@@ -178,23 +227,32 @@ def enrich_native(state, envelope, *, dataset_id, chrom, ref, target_end, specif
                 conditional['call'] = raw
             call = Call(raw["assignment"], raw["level"], raw["allele_id"], raw["method"], tuple(raw["reasons"]),
                         (witness,), (lineage,), ({"ref_start": diagnostic_start, "ref_end": diagnostic_end, "complete": obs["complete"]},))
-            results.setdefault(molecule.key, []).append(Representation(lineage, "native", call))
+            if applicable:
+                results.setdefault(molecule.key, []).append(Representation(lineage, "native", call))
             calls[molecule.key]["alignments"].append({"alignment_id": lineage, "witness_id": witness,
-                "query_interval": interval, "coverage_complete": obs["complete"],
+                "query_interval": interval, "coverage_complete": obs["complete"], "locus_applicable": applicable,
                 "read_bases": (obs["sequence"] or '')[:60], "read_bases_length": len(obs["sequence"] or ''),
                 "competition": conditional})
             if conditional.get("resource"):
                 reasons.add(conditional["resource"]["reason"])
+                if applicable:
+                    interrupted.add(molecule.key)
                 break
+            current_molecule = None
     except ResourceResult as exc:
         reasons.add(exc.reason)
+        if current_molecule is not None:
+            interrupted.add(current_molecule)
     finally:
         if records is None and hasattr(fetched, 'close'):
             fetched.close()
     for molecule, representations in results.items():
-        if reasons:
+        if molecule in interrupted:
             representations.append(Representation("unexplored_diagnostics", "native", Call(reasons=tuple(sorted(reasons)))))
         calls[molecule].update(reconcile_representations(representations, scope="native_only"))
+    for molecule in calls.keys() - results.keys():
+        if reasons:
+            calls[molecule]['call'] = asdict(Call(reasons=tuple(sorted(reasons | {'diagnostic_sequence_not_loaded'}))))
     counts = {assignment: sum(c["call"]["assignment"] == assignment for c in calls.values())
               for assignment in ("target", "reference", "other_allele", "ambiguous", "unknown")}
     counts_by_level = {assignment: {level: sum(c['call']['assignment'] == assignment and c['call']['level'] == level for c in calls.values())
