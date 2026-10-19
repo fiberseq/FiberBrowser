@@ -64,11 +64,11 @@ def diagnostic_assignment(observed, candidates, *, target_id, complete, chemistr
                 and structural_path.competing_paths_excluded and structural_path.search_complete):
             return Call("target", geometry_level, target_id, "structural_path")
         return Call(reasons=('incomplete_structural_proof',))
-    if observed is None or not complete:
+    if observed is None or not complete or any(value is None for value in candidates.values()):
         return Call(reasons=("diagnostic_sequence_unavailable",))
     if chemistry not in {"none", "CT", "GA"}:
         return Call(reasons=("unknown_chemistry",))
-    if any(base not in "ACGT" for base in observed.upper()):
+    if any(base not in "ACGT" for sequence in (observed, *candidates.values()) for base in sequence.upper()):
         return Call(reasons=("ambiguous_bases",))
     observed = observed.upper()
     compatible = []

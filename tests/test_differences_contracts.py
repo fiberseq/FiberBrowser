@@ -113,6 +113,44 @@ def test_representation_truth(other, assignment, reason, complete):
         assert result['call']['level'] == 'putative'
 
 
+@pytest.mark.parametrize('source', ['native', 'lifted'])
+def test_incomplete_viable_representation_cannot_prove_unconditional_agreement(source):
+    copies = [Representation('n', 'native', Call('target', 'confirmed', reasons=('native_diagnostic',)), complete=source != 'native'),
+              Representation('l', 'lifted', Call('target', 'confirmed', reasons=('lifted_diagnostic',)), complete=source != 'lifted')]
+    result = reconcile_representations(copies, scope='combined')
+    assert result['complete'] is False
+    assert result['call']['assignment'] == 'ambiguous'
+    assert set(result['call']['reasons']) >= {'incomplete_representation_scope', 'native_diagnostic', 'lifted_diagnostic'}
+
+
+def test_missing_or_ineligible_copy_preserves_independent_native_call():
+    native = Representation('n', 'native', Call('target', 'confirmed'))
+    for others in ([], [Representation('l', 'lifted', Call('unavailable', reasons=('missing_map',)))],
+                   [Representation('l', 'lifted', Call('reference', 'confirmed'), admissible=False)],
+                   [Representation('l', 'lifted', Call('reference', 'confirmed'), authoritative=False)]):
+        result = reconcile_representations([native, *others], scope='combined')
+        assert result['call']['assignment'] == 'target'
+        assert result['call']['level'] == 'confirmed'
+        assert result['complete'] is False
+
+
+@pytest.mark.parametrize('other,reason', [(Call('reference', 'confirmed', reasons=('reference_diagnostic',)), 'cross_representation_disagreement'),
+                                         (Call(reasons=('partial_window',)), 'unresolved_representation')])
+def test_reconciliation_preserves_constituent_reasons(other, reason):
+    result = reconcile_representations([Representation('n', 'native', Call('target', 'confirmed', reasons=('target_diagnostic',))),
+                                        Representation('l', 'lifted', other)], scope='combined')
+    assert set(result['call']['reasons']) == {reason, 'target_diagnostic', *other.reasons}
+
+
+@pytest.mark.parametrize('chemistry', ['none', 'CT', 'GA'])
+@pytest.mark.parametrize('competitor,reason', [(None, 'diagnostic_sequence_unavailable'), ('ACNT', 'ambiguous_bases')])
+def test_unresolved_competitor_sequence_cannot_exclude_an_allele(chemistry, competitor, reason):
+    result = diagnostic_assignment('ACGT', {'target': 'ACGT', 'reference': competitor},
+                                   target_id='target', complete=True, chemistry=chemistry)
+    assert result.assignment == 'unknown'
+    assert result.reasons == (reason,)
+
+
 def test_physical_evidence_deduplicates_before_qualified_row_fanout():
     a = MoleculeId('sample', 'library-a', 'same|name')
     b = MoleculeId('sample', 'library-b', 'same|name')

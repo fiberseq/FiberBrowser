@@ -99,12 +99,13 @@ class MoleculeEvidence:
 def _reduce(calls, *, disagreement, unresolved):
     witnesses = tuple(sorted({w for c in calls for w in c.witness_ids}))
     alignments = tuple(sorted({a for c in calls for a in c.alignment_ids}))
+    reasons = {r for c in calls for r in c.reasons}
     decisive = [c for c in calls if c.assignment in {"target", "reference", "other_allele"}]
     outcomes = {(c.assignment, c.allele_id) for c in decisive}
     if len(outcomes) > 1:
-        return Call("ambiguous", "ambiguous", reasons=(disagreement,), witness_ids=witnesses, alignment_ids=alignments)
+        return Call("ambiguous", "ambiguous", reasons=tuple(sorted(reasons | {disagreement})), witness_ids=witnesses, alignment_ids=alignments)
     if decisive and len(decisive) != len(calls):
-        return Call("ambiguous", "ambiguous", reasons=(unresolved,), witness_ids=witnesses, alignment_ids=alignments)
+        return Call("ambiguous", "ambiguous", reasons=tuple(sorted(reasons | {unresolved})), witness_ids=witnesses, alignment_ids=alignments)
     if not decisive:
         ambiguous = any(c.assignment == "ambiguous" for c in calls)
         return Call("ambiguous" if ambiguous else "unknown", "ambiguous" if ambiguous else None,
@@ -125,7 +126,13 @@ def reconcile_representations(representations, *, scope="native_only"):
     allowed = {"native"} if scope == "native_only" else {"lifted"} if scope == "lifted_only" else {"native", "lifted"}
     selected = [r for r in representations if r.source in allowed]
     eligible = [r for r in selected if r.authoritative and r.admissible and r.call.assignment != "unavailable"]
-    call = _reduce([r.call for r in eligible], disagreement="cross_representation_disagreement", unresolved="unresolved_representation")
+    calls = [r.call for r in eligible]
+    # An admissible but incompletely assessed placement remains a viable
+    # unresolved outcome. Missing/disabled copies are unavailable instead:
+    # they do not invalidate an independent available call (design §2).
+    if any(not r.complete for r in eligible):
+        calls.append(Call(reasons=("incomplete_representation_scope",)))
+    call = _reduce(calls, disagreement="cross_representation_disagreement", unresolved="unresolved_representation")
     return {"call": asdict(call), "analysis_scope": scope,
             "complete": bool(eligible) and {r.source for r in selected} == allowed and len(eligible) == len(selected) and all(r.complete for r in selected),
             "representations": [asdict(r) for r in selected]}
