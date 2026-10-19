@@ -194,7 +194,7 @@ def primary_gap_records(handle, chrom, hap):
                         and nets[j + 1][0] == t + dt and nets[j][2] == nets[j + 1][2] == ci)
             if not (interior or boundary):
                 continue
-            lo, hi = (t - 1, t + dt + 1) if boundary else (t, max(t + dt, t + 1))
+            lo, hi = t - 1, t + dt + 1  # ownership includes both aligned flanks
             if any(a < hi and b > lo for a, b in conflicts):
                 continue
             out.append((ci, gap, boundary and not interior))
