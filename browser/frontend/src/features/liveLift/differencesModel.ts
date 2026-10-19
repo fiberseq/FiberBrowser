@@ -31,11 +31,13 @@ export function haplotypeSummary(alleles: Record<string, number>) {
 }
 export function differenceDescription(d: Difference, chrom: string): string {
   const locus = d.src.contig && d.src.start !== null && d.src.end !== null
-    ? `${d.src.contig}:${(d.src.start + 1).toLocaleString()}–${d.src.end.toLocaleString()}`
+    ? d.src.start === d.src.end ? `${d.src.contig}:${d.src.start.toLocaleString()}|${(d.src.start + 1).toLocaleString()} (source boundary)`
+      : `${d.src.contig}:${(d.src.start + 1).toLocaleString()}–${d.src.end.toLocaleString()}`
     : d.src.contig ? `${d.src.contig} (source position unavailable)` : 'no source correspondence';
   const target = d.t_start === d.t_end ? `${chrom}:${d.t_start.toLocaleString()}|${(d.t_start + 1).toLocaleString()} (insertion boundary)`
     : `${chrom}:${(d.t_start + 1).toLocaleString()}–${d.t_end.toLocaleString()}`;
-  return `${d.hap_label} · ${d.kind.replace(/_/g, ' ')} · ${differenceSize(d).toLocaleString()} bp · ${d.source === 'reads' ? 'read-only event' : 'assembly difference'}\n`
+  const size = d.kind === 'replacement' ? `${d.ref_bp.toLocaleString()}→${d.alt_bp.toLocaleString()}` : differenceSize(d).toLocaleString();
+  return `${d.hap_label} · ${d.kind.replace(/_/g, ' ')} · ${size} bp · ${d.source === 'reads' ? 'read-only event' : 'assembly difference'}\n`
     + `GRCh38 ${target}\nHG002 ${locus}\n`
     + `GRCh38: ${d.grch38 ?? 'unknown'} · HG002: ${d.alt ?? 'unknown'}${d.alt !== null && d.alt_truncated ? `… (${d.alt_bp.toLocaleString()} bp)` : ''}\n`
     + `${BADGE_REASONS[d.reason] ?? d.reason.replace(/_/g, ' ')}`

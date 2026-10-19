@@ -8,6 +8,8 @@ export interface Difference {
   src: { contig: string | null; start: number | null; end: number | null };
   grch38: string | null; alt: string | null; t?: 'I' | 'D'; ref?: number; len?: number;
   alt_truncated?: boolean;
+  aliases?: string[];
+  sequence_status?: 'unresolved' | 'unavailable' | 'partial' | 'available';
   read_support?: { cluster: number; carriers: number };
 }
 export interface DifferenceBin { start: number; end: number; hap: string; hap_label: string; kind: Difference['kind']; count: number; bp: number }
@@ -23,6 +25,7 @@ export interface DifferenceInspection {
   chromatin: { state: 'nucleosome' | 'footprint' | 'accessible' | 'none'; layer: string | null; nearest_m6a_bp: number | null; orientation: '+' | '-' };
   alignment_hg002?: string | null;
   alignment_ins_id?: string;
+  item_id?: string; ref_bp?: number; alt_bp?: number; full_span?: boolean;
   ins_id?: string; carries_insertion?: boolean; mol_bp?: number; identity?: number | null; read_bases_length?: number;
 }
 export interface DifferenceReadsResponse {

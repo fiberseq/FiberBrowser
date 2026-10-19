@@ -21,6 +21,16 @@ beforeEach(() => {
   usePanelGenomeStore.setState({ genomes: {}, assignments: {}, refresh: vi.fn().mockResolvedValue(undefined) });
 });
 describe('HG002 source view', () => {
+  it.each([0, 1, 100])('links both spans of a replacement/deletion with %i source bases', async alt => {
+    vi.mocked(addDataset).mockResolvedValue({ success: true, dataset: { id: 'src', path: '/source.bam', label: 'source', color: '#000', data_type: 'bam' } });
+    vi.mocked(attachPanelGenome).mockResolvedValue({ success: true, genome: { key: 'contigs:src', chroms: [{ name: 'src', size: 10000 }] } as never });
+    await openSourceView({ ...selection, difference: { ...selection.difference, kind: alt ? 'replacement' : 'deletion',
+      t_end: 2000, ref_bp: 1500, alt_bp: alt, src: { contig: 'src', start: 1000, end: 1000 + alt } } });
+    const panel = useBrowserStore.getState().panels[0];
+    expect(linkedPanelView(panel, { chrom: 'chr1', start: 450, end: 2050 })).toEqual({ chrom: 'src', start: 950, end: 1050 + alt });
+    expect(mainViewForPanel(panel, { chrom: 'src', start: 950, end: 1050 + alt })).toEqual({ chrom: 'chr1', start: 450, end: 2050 });
+    expect(linkedPanelView(panel, { chrom: 'chr1', start: 1000, end: 1200 })).toEqual({ chrom: 'src', start: 1000, end: 1000 + alt });
+  });
   it('opens the source BAM on its own header-contig reference without a FASTA and links locally', async () => {
     vi.mocked(addDataset).mockResolvedValue({ success: true, dataset: { id: 'src', path: '/source.bam', label: 'source', color: '#000', data_type: 'bam' } });
     vi.mocked(attachPanelGenome).mockResolvedValue({ success: true, genome: { key: 'contigs:src', chroms: [{ name: 'src', size: 10000 }] } as never });

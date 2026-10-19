@@ -104,9 +104,11 @@ export function DifferencePopover({ panel, dataset, anchor }: { panel: PanelConf
       {d.kind === 'insertion' && <>
         <span title={candidate ? 'Identify one full carrier’s sequence; this is not an assembly consensus.' : 'No full insertion sequence is available from the inspected reads.'}>
           <button disabled={!candidate || fetchingSequence} onClick={() => { void requestIdentification(); }}>{fetchingSequence ? 'Loading sequence…' : 'Identify'}</button></span>
-        <button disabled={opening || !d.src.contig || d.src.start === null} title="Open the source BAM on its own header-contig reference; locally linked at this insertion"
-          onClick={() => { setOpening(true); void openSourceView(current).finally(() => setOpening(false)); }}>{opening ? 'Opening…' : 'Open in HG002 view'}</button>
       </>}
+      {['insertion', 'deletion', 'replacement'].includes(d.kind) &&
+        <button disabled={opening || !d.src.contig || d.src.start === null} title="Open the source BAM on its own header-contig reference; locally linked at this difference"
+          onClick={() => { setOpening(true); void openSourceView(current).finally(() => setOpening(false)); }}>{opening ? 'Opening…' : 'Open in HG002 view'}</button>
+      }
     </div>
     {(d.kind === 'insertion' || d.kind === 'deletion') && <p className="text-[10px] text-slate-500">{LIFT_SPLIT_REASON}</p>}
     {(current.action === 'identify' || identify) && data && !lens && <p role="status">Identify unavailable: no full insertion sequence is available from the inspected reads.</p>}

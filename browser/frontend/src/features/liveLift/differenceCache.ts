@@ -13,7 +13,7 @@ export function findLoadedDifference(datasetId: string, liftKey: string, chrom: 
   event: { id?: string; hap: string; pos: number; kind: 'insertion' | 'snv' }): Difference | undefined {
   for (const response of loaded) {
     if (response.dataset_id !== datasetId || response.lift_key !== liftKey || response.chrom !== chrom) continue;
-    const item = response.items.find(d => event.id ? d.id === event.id
+    const item = response.items.find(d => event.id ? d.id === event.id || d.aliases?.includes(event.id)
       : d.hap_label === event.hap && (event.kind === 'insertion' ? d.kind === 'insertion' && d.t_start === event.pos
         : (d.kind === 'snv' || d.kind === 'mnv') && d.t_start <= event.pos && d.t_end > event.pos));
     if (item) return item;

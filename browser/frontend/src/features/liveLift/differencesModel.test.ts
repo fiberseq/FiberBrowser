@@ -7,6 +7,12 @@ const diff = (pos: number, size = 1, kind: Difference['kind'] = 'snv'): Differen
   chain: 1, strand: '+', src: { contig: 'src', start: 10, end: 10 + size }, grch38: 'A', alt: 'C',
 });
 describe('difference strip decisions', () => {
+  it('describes replacement spans and zero-width source boundaries without reversed ranges', () => {
+    const replacement = { ...diff(50, 1733, 'replacement'), alt_bp: 1 };
+    expect(differenceDescription(replacement, 'chr1')).toContain('1,733→1 bp');
+    expect(differenceDescription({ ...replacement, kind: 'deletion', alt_bp: 0, src: { contig: 'src', start: 200, end: 200 } }, 'chr1'))
+      .toContain('src:200|201 (source boundary)');
+  });
   it('uses one lane per displayed haplotype', () => {
     expect(differenceLanes(['MAT', 'PAT'])).toEqual(['MAT', 'PAT']);
     expect(differenceLanes(['MAT', 'PAT'], 'PAT')).toEqual(['PAT']);

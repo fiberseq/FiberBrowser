@@ -81,6 +81,10 @@ def difference_id(label, contig, start, end, kind):
     return f"{label}:{contig}:{start}-{end}:{kind}"
 
 
+def item_has_id(item, item_id):
+    return item["id"] == item_id or item_id in item.get("aliases", ())
+
+
 def source_only_gap(handle, contig, a, b, chain):
     """Canonical source-only map gap containing this badge, or None.
     Indexed source coordinates work on both strands; an unmatched source
@@ -311,15 +315,17 @@ def differences_for_region(state, dataset, chrom, start, end, *, lift_hap=None, 
         for item in items:
             item["grch38"] = ("" if item["kind"] == "insertion" else
                               fasta_bases(getattr(state, "fasta", None), chrom, item["t_start"], item["t_end"])
-                              if item["kind"] in ("snv", "mnv", "deletion") and item["ref_bp"] <= 50 else None)
+                              if item["kind"] in ("snv", "mnv", "deletion", "replacement") and item["ref_bp"] <= 50 else None)
             src = item["src"]
             a, b = src["start"], src["end"]
             item["alt_truncated"] = a is not None and b - a > 60
             if a is not None:
                 a, b = (max(a, b - 60), b) if item["strand"] == "-" else (a, min(b, a + 60))
-            item["alt"] = fasta_bases(source, src["contig"], a, b)
+            item["alt"] = "" if item["kind"] == "deletion" else fasta_bases(source, src["contig"], a, b)
             if item["alt"] is not None and item["strand"] == "-":
                 item["alt"] = revcomp(item["alt"])
+            item["sequence_status"] = ("unavailable" if item["alt"] is None else
+                                       "partial" if item["alt_truncated"] else "available")
     finally:
         if source is not None:
             source.close()
@@ -332,11 +338,11 @@ def difference_sequence(dataset, chrom, pos, item_id, *, offset=0, limit=50_000)
     import pysam
     from fastapi import HTTPException
     item = next((d for d in assembly_items_for_region(dataset.live_lift, chrom, pos, pos + 1)
-                 if d["id"] == item_id), None)
+                 if item_has_id(d, item_id)), None)
     if item is None:
         raise HTTPException(404, "Assembly difference not found at this position")
     src = item["src"]
-    if not dataset.live_lift.source_fasta or src["start"] is None:
+    if src["start"] is None or (not dataset.live_lift.source_fasta and item["alt_bp"]):
         raise HTTPException(409, "Source assembly sequence unavailable")
     total = src["end"] - src["start"]
     if offset > total:
@@ -344,13 +350,16 @@ def difference_sequence(dataset, chrom, pos, item_id, *, offset=0, limit=50_000)
     stop = min(total, offset + limit)
     a, b = ((src["end"] - stop, src["end"] - offset) if item["strand"] == "-"
             else (src["start"] + offset, src["start"] + stop))
-    with pysam.FastaFile(dataset.live_lift.source_fasta) as source:
-        sequence = fasta_bases(source, src["contig"], a, b)
+    if total == 0:
+        sequence = ""
+    else:
+        with pysam.FastaFile(dataset.live_lift.source_fasta) as source:
+            sequence = fasta_bases(source, src["contig"], a, b)
     if sequence is None:
         raise HTTPException(409, "Source assembly sequence unavailable")
     if item["strand"] == "-":
         sequence = revcomp(sequence)
-    return dict(item_id=item_id, sequence=sequence, offset=offset, total=total,
+    return dict(item_id=item["id"], sequence=sequence, offset=offset, total=total,
                 next_offset=stop if stop < total else None, source="assembly", orientation=item["strand"])
 
 
@@ -552,13 +561,18 @@ def _inspection_spans(config, chrom, pos, end, lift_hap):
             span["src"] = dict(span["src"], start=q, end=q)
             spans.append(span)
     else:
+        # Gaps have independent ref/alt spans. An interior target point has
+        # no affine source projection, even for a one-base replacement alt.
+        gaps = [d for d in assembly_items_for_region(config, chrom, pos, end, lift_hap=lift_hap)
+                if d["kind"] in ("deletion", "replacement") and d["t_start"] <= pos and d["t_end"] >= end]
+        gap_haps = {d["hap"] for d in gaps}
         with handle.lock:
             pieces = handle.map.target_to_source(chrom, pos, end)
         grouped = {}
         for p in pieces:
             c = handle.map.chains[p.chain]
             hap = c["haplotype"]
-            if not p.primary or hap not in haps:
+            if not p.primary or hap not in haps or hap in gap_haps:
                 continue
             if p.chain in grouped:
                 v = grouped[p.chain]
@@ -566,18 +580,12 @@ def _inspection_spans(config, chrom, pos, end, lift_hap):
                 v["src"]["end"] = max(v["src"]["end"], p.q_end)
             else:
                 grouped[p.chain] = _item(handle, hap, p.chain, "inspection", "inspection", pos, end, p.q_start, p.q_end)
-        spans = list(grouped.values())
-        # A target-only gap has no primary aligned piece, but its adjacent
-        # source records can still be inspected as deleted against GRCh38.
+        spans = gaps + list(grouped.values())
+        # Keep missing correspondence explicit when no raw gap owns it.
         present = {span["hap"] for span in spans}
         for hap in haps:
             if hap not in present:
-                for item in _bin_items(config, chrom, pos // BIN_BP, hap):
-                    if item["kind"] == "deletion" and item["t_start"] <= pos and item["t_end"] >= end:
-                        spans.append(item)
-                        present.add(hap)
-                if hap not in present:
-                    spans.append(_item(handle, hap, None, "no_correspondence", "no_correspondence", pos, end, None, None))
+                spans.append(_item(handle, hap, None, "no_correspondence", "no_correspondence", pos, end, None, None))
     return spans
 
 
@@ -610,7 +618,7 @@ def _record_alleles(record, a, b, source_fasta):
             r += n
         elif op == 4:
             q += n
-    ref = fasta_bases(source_fasta, record.reference_name, a, b)
+    ref = "" if a == b else fasta_bases(source_fasta, record.reference_name, a, b)
     if ref is None and record.has_tag("MD"):
         # pysam reconstructs reference bases from SEQ/MD; lower-case letters
         # are mismatches, normalised here before allele comparison.
@@ -664,15 +672,20 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
     from services.read_auxiliary_endpoint import _cached_lift_rows
 
     config = dataset.live_lift
-    spans = _inspection_spans(config, chrom, pos, end, None)
     selected = next((d for d in assembly_items_for_region(config, chrom, pos, max(pos + 1, end))
-                     if d["id"] == item_id), None) if item_id else None
+                     if item_has_id(d, item_id)), None) if item_id else None
+    if selected is not None:
+        pos, end = selected["t_start"], selected["t_end"]
+    spans = _inspection_spans(config, chrom, pos, end, None)
     preferred = selected["hap"] if selected else (next(iter(_haps(config, lift_hap)), None) if lift_hap else None)
     preferred_label = config.handle.haplotype_labels.get(preferred, preferred)
     spans.sort(key=lambda s: s["hap"] != preferred)
     if any(s["src"]["start"] is not None and s["src"]["end"] - s["src"]["start"] > 50_000 for s in spans):
         from services.lift.live_lift import LiftRefused
-        raise LiftRefused("Live lift: this insertion exceeds the 50 kb inspection limit")
+        raise LiftRefused("Live lift: this alternate span exceeds the 50 kb inspection limit")
+    if end - pos > 50_000:
+        from services.lift.live_lift import LiftRefused
+        raise LiftRefused("Live lift: this reference span exceeds the 50 kb inspection limit")
     rows, capped = [], False
     selected_sequence = None
     sequence_score = None
@@ -759,7 +772,7 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
             src = span["src"]
             value = None
             if src["start"] is not None:
-                value = fasta_bases(source, src["contig"], src["start"], src["end"])
+                value = "" if src["start"] == src["end"] else fasta_bases(source, src["contig"], src["start"], src["end"])
                 if value is not None and span["strand"] == "-":
                     value = revcomp(value)
                 if value is None:
@@ -778,9 +791,11 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
             for span in spans:
                 src = span["src"]
                 a, b = src["start"], src["end"]
-                if a is None or record.reference_name != src["contig"] or not (record.reference_start < max(a + 1, b) and record.reference_end > a):
+                if a is None or record.reference_name != src["contig"]:
                     continue
-                if span["kind"] == "deletion" and not record.reference_start < a < record.reference_end:
+                gap = span["kind"] in ("deletion", "replacement")
+                if not (record.reference_start <= a <= record.reference_end if gap and a == b else
+                        record.reference_start < max(a + 1, b) and record.reference_end > a):
                     continue
                 row = next((r for r in candidates if any(s[3] == span["strand"] for s in r["live_lift"]["segments"])), {})
                 ll = row.get("live_lift") or {}
@@ -799,6 +814,9 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
                           "hg002" if hg is not None and ref is not None and rb == hg and hg != ref else
                           "same_as_grch38" if hg is not None and ref is not None and rb == hg == ref else
                           "grch38" if hg is not None and ref is not None and hg != ref and rb == ref else "other")
+                if gap:
+                    full = record.reference_start < a and record.reference_end > b
+                    allele = ("no_coverage" if not overlaps else "partial" if not full else allele)
                 carries = False
                 if pos == end:
                     full = record.reference_start <= a and record.reference_end >= b
@@ -816,6 +834,9 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
                             supplementary=bool(record.is_supplementary), strand=st, source_pos=dict(src),
                             read_bases=rb, hg002=hg, alignment_hg002=alignment_hg, grch38=ref, allele=allele,
                             chromatin=_chromatin(row, origin, pos, span["strand"]))
+                if gap:
+                    item.update(item_id=span["id"], ref_bp=span["ref_bp"], alt_bp=span["alt_bp"],
+                                full_span=full, mol_bp=len(rb), read_bases=rb[:60], read_bases_length=len(rb))
                 if pos == end:
                     own_carrier = carries and hap == span["hap"]
                     if (include_sequence and own_carrier and (item_id is None or span["id"] == item_id) and len(rb) <= 50_000):

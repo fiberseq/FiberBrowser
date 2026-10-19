@@ -93,7 +93,8 @@ def test_items_alleles_ids_and_uncovered(evidence):
     assert all(i["hap_label"] == "MAT" for i in diff.differences_for_region(state, ds, TARGET, 1000, 20000, lift_hap="MAT")["items"])
     assert all(max(i["ref_bp"], i["alt_bp"]) >= 100 for i in diff.differences_for_region(state, ds, TARGET, 1000, 20000, min_bp=100)["items"])
     ds.live_lift.source_fasta = None
-    assert all(i["alt"] is None for i in diff.differences_for_region(state, ds, TARGET, 1000, 20000)["items"])
+    assert all(i["alt"] == ("" if i["kind"] == "deletion" else None)
+               for i in diff.differences_for_region(state, ds, TARGET, 1000, 20000)["items"])
 
 
 def test_bins_and_cache_identity(evidence, monkeypatch):
