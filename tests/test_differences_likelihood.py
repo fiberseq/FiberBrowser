@@ -88,7 +88,7 @@ def test_preflight_refuses_before_score_allocation_and_aggregate_work_is_shared(
     def forbidden(*args):
         raise AssertionError("alignment entered before preflight")
     monkeypatch.setattr(module, "_score", forbidden)
-    result = run("A" * 100_000, {"target": "A" * 100_000, "reference": ""})
+    result = run("A" * 100_000, {"target": "C" * 100_000, "reference": ""})
     assert result["resource"]["reason"] == "likelihood_pair_cells"
     assert RESERVATIONS.bytes == 0
 
@@ -96,10 +96,10 @@ def test_preflight_refuses_before_score_allocation_and_aggregate_work_is_shared(
 def test_request_caps_and_cancellation_release_reservations():
     policy = LikelihoodPolicy(max_request_cells=100)
     budget = LikelihoodBudget(policy)
-    first = run("AAA", {"target": "AAA", "reference": "CCC"}, policy=policy, budget=budget)
+    first = run("AAA", {"target": "AAA", "reference": "CCC"}, chemistry="CT", policy=policy, budget=budget)
     assert first["call"]["assignment"] == "target"
     for _ in range(3):
-        final = run("AAA", {"target": "AAA", "reference": "CCC"}, policy=policy, budget=budget)
+        final = run("AAA", {"target": "AAA", "reference": "CCC"}, chemistry="CT", policy=policy, budget=budget)
     assert final["resource"]["reason"] == "likelihood_request_cells"
     event = threading.Event()
     event.set()
@@ -148,3 +148,60 @@ def test_prefix_suffix_and_empty_allele_insertions_have_equal_emission_cost():
     empty = _score("A" * 10, "", context, policy, LikelihoodBudget(policy))
     assert prefix == pytest.approx(suffix)
     assert empty == pytest.approx((10 * math.log(policy.indel_rate / 4), 10))
+
+
+def test_exact_long_sequences_skip_alignment_but_keep_limits_and_quality_guards(monkeypatch):
+    import services.differences.likelihood as module
+    monkeypatch.setattr(module, "_score", lambda *args: pytest.fail("exact assignment ran DP"))
+    policy = LikelihoodPolicy(max_pair_cells=1, max_request_cells=1)
+    budget = LikelihoodBudget(policy)
+    for _ in range(20):
+        result = run("A" * 100_000, {"target": "A" * 100_000, "reference": ""}, policy=policy, budget=budget)
+        assert result["call"]["assignment"] == "target" and result["call"]["level"] == "confirmed"
+    assert budget.cells == 0
+    assert run("A" * 100_001, {"target": "A" * 100_001, "reference": ""})["resource"]["reason"] == "likelihood_bases"
+
+
+def test_long_daf_diagnostics_use_certified_band_with_shared_work_budget():
+    policy = LikelihoodPolicy()
+    budget = LikelihoodBudget(policy)
+    for _ in range(20):
+        result = run("A" * 4000, {"target": "A" * 4000, "reference": ""}, chemistry="CT", policy=policy, budget=budget)
+        assert result["call"]["assignment"] == "target"
+    assert 0 < budget.cells < policy.max_request_cells
+
+
+@pytest.mark.parametrize("chemistry,reverse", [("none", False), ("CT", False), ("GA", False), ("CT", True), ("GA", True)])
+def test_banded_scores_equal_independent_full_matrix_oracle(chemistry, reverse):
+    import math
+    import random
+    from services.differences.likelihood import _band, _score
+    rng = random.Random(84834)
+    policy = LikelihoodPolicy()
+    for _ in range(100):
+        observed = "".join(rng.choices("ACGT", k=rng.randrange(12)))
+        expected = "".join(rng.choices("ACGT", k=rng.randrange(12)))
+        # Independent full-matrix likelihood and minimum-noise tie break.
+        donor, converted = ("C", "T") if chemistry == "CT" else ("G", "A")
+        if reverse:
+            donor, converted = donor.translate(str.maketrans("ACGT", "TGCA")), converted.translate(str.maketrans("ACGT", "TGCA"))
+        def probability(e, o):
+            if chemistry != "none" and e == donor:
+                return .1 * (.99 if o == donor else .01/3) + .9 * (.99 if o == converted else .01/3)
+            return .99 if e == o else .01/3
+        matrix = [[(0., 0)] * (len(expected) + 1) for _ in range(len(observed) + 1)]
+        for i in range(1, len(observed) + 1):
+            matrix[i][0] = (i * math.log(policy.indel_rate / 4), i)
+        for j in range(1, len(expected) + 1):
+            matrix[0][j] = (j * math.log(policy.indel_rate), j)
+        for i, o in enumerate(observed, 1):
+            for j, e in enumerate(expected, 1):
+                noise = e != o and not (chemistry != "none" and e == donor and o == converted)
+                options = [(matrix[i-1][j-1][0] + math.log(probability(e, o)), matrix[i-1][j-1][1] + noise),
+                           (matrix[i-1][j][0] + math.log(.02/4), matrix[i-1][j][1] + 1),
+                           (matrix[i][j-1][0] + math.log(.02), matrix[i][j-1][1] + 1)]
+                matrix[i][j] = max(options, key=lambda v: (v[0], -v[1]))
+        context = DafContext(chemistry, "synthetic", reverse_complemented=reverse)
+        budget = LikelihoodBudget(policy)
+        band = _band(observed, expected, context, policy, budget)
+        assert _score(observed, expected, context, policy, budget, band) == pytest.approx(matrix[-1][-1])

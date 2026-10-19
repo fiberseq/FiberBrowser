@@ -53,11 +53,13 @@ class LikelihoodBudget:
         if time.monotonic() >= self.deadline:
             raise ResourceResult("budget_exceeded", "likelihood_deadline")
 
-    def charge(self, pairs):
+    def validate_bases(self, pairs):
         self.check()
-        cells = [(n + 1) * (m + 1) for n, m in pairs]
         if any(max(n, m) > min(self.policy.max_sequence_bp, DEFAULT_LIMITS.max_reconstructed_bases) for n, m in pairs):
             raise ResourceResult("budget_exceeded", "likelihood_bases")
+
+    def charge(self, cells):
+        self.check()
         if any(c > min(self.policy.max_pair_cells, DEFAULT_LIMITS.pair_cells) for c in cells):
             raise ResourceResult("budget_exceeded", "likelihood_pair_cells")
         if self.cells + sum(cells) > min(self.policy.max_request_cells, DEFAULT_LIMITS.request_cells):
@@ -76,32 +78,74 @@ def _emission(expected, observed, quality, context, policy):
         substitution_rate=error)
 
 
-def _score(observed, expected, context, policy, budget):
+def _band(observed, expected, context, policy, budget):
+    """Certify a band containing every optimal global likelihood path.
+
+    A diagonal path with trailing gaps supplies a feasible lower score. Every
+    emission is <= 0 log probability. Excursions beyond the endpoint diagonals
+    require extra insertion/deletion pairs; their gap cost alone excludes paths
+    scoring below that lower bound. This is not a heuristic alignment band.
+    """
+    gap = math.log(policy.indel_rate)
+    insertion = gap - math.log(4)
+    delta = len(observed) - len(expected)
+    mandatory = max(0, delta) * insertion + max(0, -delta) * gap
+    lower = mandatory
+    for i, (o, e) in enumerate(zip(observed, expected)):
+        if not i & 255:
+            budget.check()
+        quality = context.base_qualities[i] if context.base_qualities else None
+        lower += math.log(max(1e-300, _emission(e, o, quality, context, policy)))
+    extra = math.ceil(max(0., mandatory - lower) / -(insertion + gap)) + 1
+    return min(0, delta) - extra, max(0, delta) + extra
+
+
+def _band_cells(n, m, band, budget):
+    low, high = band
+    cells = 0
+    for i in range(n + 1):
+        if not i & 255:
+            budget.check()
+        cells += max(0, min(m, i - low) - max(0, i - high) + 1)
+    return cells
+
+
+def _score(observed, expected, context, policy, budget, band=None):
     """Global maximum-likelihood edit path; two bounded rolling score rows.
 
     This is an indel-aware likelihood score, not a posterior probability.
     A second path cost tracks nonconversion noise for an absolute-fit guard.
     """
     gap = math.log(policy.indel_rate)
-    previous = [(j * gap, j) for j in range(len(expected) + 1)]
+    low, high = band if band is not None else (-len(expected), len(observed))
+    previous_start = 0
+    previous = [(j * gap, j) for j in range(min(len(expected), -low) + 1)]
     donor, converted = ("C", "T") if context.chemistry == "CT" else ("G", "A")
     if context.reverse_complemented:
         donor, converted = donor.translate(str.maketrans("ACGT", "TGCA")), converted.translate(str.maketrans("ACGT", "TGCA"))
     for i, observed_base in enumerate(observed, 1):
         budget.check()
         quality = context.base_qualities[i - 1] if context.base_qualities else None
-        row = [(i * (gap - math.log(4)), i)]
+        start, end = max(0, i - high), min(len(expected), i - low)
+        row = []
         emissions = {base: math.log(max(1e-300, _emission(base, observed_base, quality, context, policy))) for base in "ACGT"}
-        for j, expected_base in enumerate(expected, 1):
+        for j in range(start, end + 1):
             if not j & 255:
                 budget.check()
-            noise = int(expected_base != observed_base and not
-                        (context.chemistry in {"CT", "GA"} and expected_base == donor and observed_base == converted))
-            options = ((previous[j - 1][0] + emissions[expected_base], previous[j - 1][1] + noise),
-                       (previous[j][0] + gap - math.log(4), previous[j][1] + 1),
-                       (row[j - 1][0] + gap, row[j - 1][1] + 1))
+            options = []
+            if j and previous_start <= j - 1 < previous_start + len(previous):
+                expected_base = expected[j - 1]
+                score, noise = previous[j - 1 - previous_start]
+                mismatch = int(expected_base != observed_base and not
+                    (context.chemistry in {"CT", "GA"} and expected_base == donor and observed_base == converted))
+                options.append((score + emissions[expected_base], noise + mismatch))
+            if previous_start <= j < previous_start + len(previous):
+                score, noise = previous[j - previous_start]
+                options.append((score + gap - math.log(4), noise + 1))
+            if row:
+                options.append((row[-1][0] + gap, row[-1][1] + 1))
             row.append(max(options, key=lambda v: (v[0], -v[1])))
-        previous = row
+        previous, previous_start = row, start
     return previous[-1]
 
 
@@ -146,14 +190,35 @@ def compete(observed, candidates, *, target_id, complete, context=None, geometry
     try:
         if len(candidates) > policy.max_candidates:
             raise ResourceResult("budget_exceeded", "likelihood_candidates")
-        budget.charge([(len(observed), len(seq)) for seq in candidates.values()])
+        budget.validate_bases([(len(observed), len(seq)) for seq in candidates.values()])
+        exact_matches = [key for key, sequence in candidates.items() if sequence == observed]
+        if (context.chemistry == "none" and len(exact_matches) == 1
+                and (not context.base_qualities or min(context.base_qualities) >= 20)):
+            best = exact_matches[0]
+            if geometry_level not in {"confirmed", "putative"}:
+                return result(Call(reasons=("geometry_not_admissible",)), complete=True)
+            # Exact identity is a separate assignment method, with no invented
+            # runner-up likelihood or charge for a DP matrix that was not run.
+            score = 0.
+            for i, base_value in enumerate(observed):
+                if not i & 255:
+                    budget.check()
+                quality = context.base_qualities[i] if context.base_qualities else None
+                score += math.log(_emission(base_value, base_value, quality, context, policy))
+            base["scores"] = {best: {"log_likelihood": score, "noise_edits": 0}}
+            assignment = "target" if best == target_id else "reference" if best == "reference" else "other_allele"
+            return result(Call(assignment, geometry_level, best, "exact_sequence"), complete=True,
+                          log_odds=None, scoring="exact_identity")
+        bands = {key: _band(observed, seq, context, policy, budget) for key, seq in candidates.items()}
+        budget.charge([_band_cells(len(observed), len(seq), bands[key], budget) for key, seq in candidates.items()])
         # Python tuples/floats and two rolling rows, with generous overhead.
-        reserved = 1024 * (max(map(len, candidates.values()), default=0) + 1) + 128 * (len(observed) + 1)
+        width = max(min(len(candidates[key]) + 1, high - low + 1) for key, (low, high) in bands.items())
+        reserved = 1024 * width + 128 * (len(observed) + 1)
         if reserved > DEFAULT_LIMITS.job_bytes:
             raise ResourceResult("budget_exceeded", "likelihood_row_bytes")
         RESERVATIONS.acquire(reserved, reserved >= DEFAULT_LIMITS.large_job_bytes, budget.deadline, budget.check)
         try:
-            scores = {key: _score(observed, seq, context, policy, budget) for key, seq in candidates.items()}
+            scores = {key: _score(observed, seq, context, policy, budget, bands[key]) for key, seq in candidates.items()}
         finally:
             RESERVATIONS.release(reserved, reserved >= DEFAULT_LIMITS.large_job_bytes)
     except ResourceResult as exc:
