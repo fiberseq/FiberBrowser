@@ -537,3 +537,27 @@ def test_optional_diploid_projection_budgets(cohort, chrom, start, end, alt_bp, 
         # Missing observed flanks stay explicitly incomplete after optimization.
         if summary["unassessed_projections"]:
             assert not summary["scope"]["search_complete"]
+
+
+@pytest.mark.parametrize('level', ['putative', 'conflicting', 'ambiguous'])
+def test_workspace_projected_counts_honor_evidence_policy(evidence, monkeypatch, level):
+    from services.differences import projected_service as service
+    from services.differences.workspace import inspect, _carrier_molecules
+    monkeypatch.setenv('FIBERBROWSER_LIVE_LIFT', '1')
+    original = service.call_molecule
+    def tiered(*args, **kwargs):
+        detail = original(*args, **kwargs)
+        for field in ('call', 'geometry_call'):
+            if detail[field]['assignment'] == 'target':
+                detail[field]['level'] = level
+        return detail
+    monkeypatch.setattr(service, 'call_molecule', tiered)
+    state, ds, _ = evidence
+    q = dict(chrom=TARGET, start=5900, end=6500, target=insertion())
+    excluded = inspect(state, ds, **q, include_putative=False)
+    included = inspect(state, ds, **q, include_putative=False, **{'include_'+level: True}) if level != 'putative' else inspect(state, ds, **q, include_putative=True)
+    assert excluded['targets'][0]['counts'] == [0, 0, 4]
+    assert included['targets'][0]['counts'] == [3, 0, 1]
+    assert included['targets'][0]['geometry_counts'] == [3, 0, 1]
+    assert not _carrier_molecules(excluded)
+    assert len(_carrier_molecules(included)) == 3

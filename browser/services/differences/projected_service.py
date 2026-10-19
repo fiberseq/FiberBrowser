@@ -16,6 +16,7 @@ from .model import SCHEMA_VERSION, VERSIONS
 from .projection import (MapGap, MapPath, ProjectionBudget, ProjectionPolicy, SourceAlignment,
                          call_molecule, cached_projection, geometry_matches, _walk, _boundary)
 from .alleles import DafContext
+from .call_policy import molecule_group
 
 
 def map_paths(config, chrom, start, end, *, policy, use_cache=True):
@@ -264,7 +265,7 @@ def projected_analysis(state, dataset, *, policy=None, **kwargs):
 
 def _projected_analysis(state, dataset, *, chrom, start, end, feature, target=None,
                        policy=None, include_duplicates=False, contexts=None, use_cache=True,
-                       native_dataset_id=None, analysis_scope="lifted_only", budget):
+                       native_dataset_id=None, analysis_scope="lifted_only", evidence_policy=None, budget):
     """A bounded, loaded cohort with independent summary and split gates."""
     from services.lift.capability import require
     from services.lift.registration import require_enabled
@@ -296,6 +297,7 @@ def _projected_analysis(state, dataset, *, chrom, start, end, feature, target=No
     policy = policy or ProjectionPolicy(cohort_alternatives=dataset.live_lift.settings.cohort_alternatives)
     if feature == "split":
         target = validate_target(target, chrom, start, end, policy)
+    evidence_policy = evidence_policy or dict(include_putative=True)
     records, reasons, interrupted = [], [], set()
     try:
         paths, plan, alternatives_capped = map_paths(dataset.live_lift, chrom, start, end, policy=policy, use_cache=use_cache)
@@ -484,10 +486,10 @@ def _projected_analysis(state, dataset, *, chrom, start, end, feature, target=No
                 reasons.append(exc.reason)
                 calls[key] = {"call": asdict(Call(reasons=(exc.reason,))), "representations": [], "complete": False}
             call = calls[key]["call"]
-            group = 0 if call["assignment"] == "target" and call["level"] in {"confirmed", "putative"} else 1 if call["assignment"] == "reference" else 2
+            group = molecule_group(dict(call=call), "exact", evidence_policy)
             counts[group] += 1
             geometry = calls[key].get("geometry_evidence", {})
-            geometry_group = 0 if geometry.get("assignment") == "target" and geometry.get("level") in {"confirmed", "putative"} else 1 if geometry.get("assignment") == "reference" else 2
+            geometry_group = molecule_group(dict(call=geometry or dict(assignment="unknown")), "geometry", evidence_policy)
             geometry_counts[geometry_group] += 1
             response_bytes += len(json.dumps(calls[key]).encode())
             if response_bytes > policy.max_response_bytes:
@@ -595,6 +597,17 @@ def native_bundles(state, dataset_id, chrom, start, end, *, include_sequence, in
         # records in this or another file may still disagree with every vote.
         interrupted.update(grouped)
     return {k: v for k, v in grouped.items() if k not in blocked}, reasons, interrupted
+
+
+def chemistry_context(contexts, key, bundles):
+    """Qualified context wins; a raw-name alias needs one physical molecule."""
+    from .alleles import DafContext
+    contexts = contexts or {}
+    raw = contexts.get(key)
+    name = bundles[key][0].molecule.raw_name
+    if raw is None and sum(records[0].molecule.raw_name == name for records in bundles.values()) == 1:
+        raw = contexts.get(name)
+    return DafContext(**raw) if raw is not None else None
 
 
 def native_call(alignments, target, *, policy, budget, context, likelihood_budget):

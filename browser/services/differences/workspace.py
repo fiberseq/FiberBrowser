@@ -16,6 +16,7 @@ from services.background_work import checkpoint
 from services.reconstruction_budget import ResourceResult, RESERVATIONS, DEFAULT_LIMITS
 from .model import SCHEMA_VERSION
 from .calls import MoleculeId
+from .call_policy import molecule_group
 from .projected_service import projected_analysis, validate_target
 from .projection import ProjectionPolicy
 
@@ -49,7 +50,8 @@ def inspect(state, dataset, *, chrom, start, end, target, policy=None,
     if dataset.data_type == "bam_livelift":
         result = projected_analysis(state, dataset, chrom=chrom, start=start, end=end, target=target,
             feature="split", policy=projection_policy, include_duplicates=include_duplicates,
-            analysis_scope=analysis_scope or "lifted_only", native_dataset_id=native_dataset_id)
+            analysis_scope=analysis_scope or "lifted_only", native_dataset_id=native_dataset_id,
+            contexts=target.get("chemistry_by_name"), evidence_policy=evidence_policy)
         result["evidence_policy"] = evidence_policy
         result["scope"]["data_revision"] = revision
         return result
@@ -309,6 +311,7 @@ def _native_both_span_calls(state, dataset, *, chrom, start, end, target, policy
     from .projection import ProjectionBudget
     from .likelihood import LikelihoodBudget, LikelihoodPolicy
     from .calls import MembershipIndex
+    from .projected_service import chemistry_context
     budget = ProjectionBudget(policy)
     reserved = 128*1024*1024
     RESERVATIONS.acquire(reserved, False, budget.deadline, budget.check)
@@ -319,22 +322,23 @@ def _native_both_span_calls(state, dataset, *, chrom, start, end, target, policy
         likelihood_budget = LikelihoodBudget(LikelihoodPolicy())
         for key, records in bundles.items():
             budget.check()
-            detail = native_call(records, target, policy=policy, budget=budget, context=None, likelihood_budget=likelihood_budget)
+            detail = native_call(records, target, policy=policy, budget=budget, context=chemistry_context(target.get("chemistry_by_name"), key, bundles), likelihood_budget=likelihood_budget)
             call = detail["call"]
             if key in interrupted:
                 call = dict(assignment="unknown", level=None, method="native_cigar", reasons=reasons, witness_ids=[])
-            group = 0 if call["assignment"] == "target" and (call["level"] == "confirmed" or
-                call["level"] == "putative" and evidence_policy["include_putative"]) else 1 if call["assignment"] == "reference" else 2
+            group = molecule_group(dict(call=call), "exact", evidence_policy)
             counts[group] += 1
-            geometry=detail["geometry_call"]
-            geometry_group=0 if geometry["assignment"]=="target" and (geometry["level"]=="confirmed" or geometry["level"]=="putative" and evidence_policy["include_putative"]) else 1 if geometry["assignment"]=="reference" else 2
+            geometry = detail["geometry_call"]
+            geometry_group = molecule_group(dict(call=geometry), "geometry", evidence_policy)
             if key in interrupted:geometry_group=2
             geometry_counts[geometry_group]+=1
             calls[key] = dict(call=call, complete=detail["complete"] and key not in interrupted,
-                representations=[dict(kind="native", call=call)], geometry_group=geometry_group,
+                representations=[dict(kind="native", call=call)], geometry_group=geometry_group, geometry_evidence=geometry,
                 native=_public_projection(detail), exact_assignment="unknown" if target["target_type"] == "geometry" else call["assignment"])
             for record in records:
-                index.add(dataset.id, record.molecule.raw_name, record.molecule)
+                index.add(dataset.id, record.record_id, record.molecule)
+        for name, molecule in index.payload()["legacy_aliases"].get(dataset.id, {}).items():
+            index.rows[dataset.id][name] = molecule
         return dict(schema_version=SCHEMA_VERSION, analysis_scope="native_only", membership=index.payload(),
             evidence_policy=evidence_policy, policy=asdict(policy), scope=dict(cohort="loaded", search_complete=not reasons, reasons=reasons),
             targets=[dict(target=target, calls_by_molecule=calls, counts=counts, geometry_counts=geometry_counts,
@@ -347,15 +351,8 @@ def _carrier_molecules(result):
     target = result["targets"][0]
     calls = target["calls_by_molecule"]
     policy = result["evidence_policy"]
-    keys = set()
-    for key, value in calls.items():
-        call = value["call"]
-        level = call["level"]
-        allowed = level == "confirmed" or level == "putative" and policy["include_putative"] or level == "conflicting" and policy["include_conflicting"] or level == "ambiguous" and policy["include_ambiguous"]
-        carrier = (value.get("geometry_group") == 0 if target["target"]["target_type"] == "geometry" and "geometry_group" in value else call["assignment"] == "target" and allowed)
-        if carrier:
-            keys.add(key)
-    return keys
+    return {key for key, value in calls.items()
+            if molecule_group(value, target["target"]["target_type"], policy) == 0}
 
 
 def _carrier_keys(result,dataset_id):
