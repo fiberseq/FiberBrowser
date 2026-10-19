@@ -152,3 +152,16 @@ def test_native_putative_lens_respects_frozen_policy_without_expanding_unconfirm
     assert not alternate_blocks(state, ds, **q)['blocks']
     out = lens(state, ds, **q, frozen_calls=calls, consensus=False)
     assert len(out['carriers']) == 1 and out['carriers'][0]['partial'] == 'start'
+
+
+
+def test_observation_preview_survives_unavailable_call_evaluation(tmp_path, monkeypatch):
+    from services.differences.workspace import observations
+    from services.reconstruction_budget import ResourceResult
+    state, ds = native(tmp_path, lambda h: [make_record(h, 'observed', 'chrT', SITE-100, '100M4D100I100M')])
+    def refused(*args, **kwargs):
+        raise ResourceResult('budget_exceeded', 'synthetic_call_budget')
+    monkeypatch.setattr('services.differences.workspace.inspect', refused)
+    block, = observations(state, ds, **query())['blocks']
+    assert len(block['read_bases']) == 60 and block['read_bases_length'] == 100
+    assert block['observation_role'] == 'alternate'

@@ -100,7 +100,7 @@ def inspect(state, dataset, *, chrom, start, end, target, policy=None,
 
 def _query_window(read, target):
     """Observed query slice; retained replacement bridges remain in this slice."""
-    from services.sv_events import extract_sv_events
+    from services.sv_events import extract_sv_events, insertion_clip_min, insertion_clip_tolerance
     from .projection import geometry_matches
     r, a = target["ref_end"]-target["ref_start"], target["alt_bp"]
     for event in (extract_sv_events(read, min_len=10, include_seq=False) or []):
@@ -147,7 +147,6 @@ def _query_window(read, target):
     q, ref = 0, read.reference_start
     candidates = []
     for op, n in read.cigartuples or ():
-        from services.sv_events import insertion_clip_min, insertion_clip_tolerance
         right = q > 0
         anchor = target["ref_start"] if right else target["ref_end"]
         if op == 4 and n >= insertion_clip_min(a) and a > 0 and abs(ref-anchor) <= insertion_clip_tolerance(a):
@@ -203,9 +202,9 @@ def _alternate_blocks(state, dataset, *, chrom, start, end, target, row_ids=None
     if row_ids is not None and len(row_ids) > MAX_ROWS:
         raise ResourceResult("budget_exceeded", "alternate_block_rows")
     selected = set(row_ids) if row_ids is not None else None
-    calls = inspect(state, dataset, chrom=chrom, start=start, end=end,
+    calls = None if inspection else inspect(state, dataset, chrom=chrom, start=start, end=end,
         target=target, include_duplicates=include_duplicates, include_putative=False)
-    carriers = _carrier_molecules(calls)
+    carriers = _carrier_molecules(calls) if calls else set()
     from services.sv_endpoint import _bam_records
     blocks, seen, scanned, total_bytes = [], set(), 0, 0
     deadline = time.monotonic()+30
@@ -222,7 +221,7 @@ def _alternate_blocks(state, dataset, *, chrom, start, end, target, row_ids=None
             scanned += 1
             if scanned > 20_000:
                 raise ResourceResult("budget_exceeded", "alternate_block_scan")
-            molecule, alignment = _record_membership(calls, dataset, path, read) if calls else (None, None)
+            molecule, alignment = _record_membership(calls, dataset, path, read)
             if not inspection and (molecule not in carriers or not _supports_record(calls, molecule, alignment, read, target)):
                 continue
             if selected is not None and read.query_name not in selected and alignment not in selected:
@@ -294,7 +293,7 @@ def _record_membership(snapshot, dataset, path, read):
     groups = {p: labels.get(p) or f"{dataset.id}#{i}" for i, p in enumerate(dataset.paths)}
     physical = MoleculeId('declared_source_library', groups[path], read.query_name)
     alignment = SourceAlignment.from_bam(read, physical).record_id
-    if physical.key in snapshot['membership']['molecules']:
+    if snapshot is None or physical.key in snapshot['membership']['molecules']:
         return physical.key, alignment
     return snapshot['membership']['legacy_aliases'].get(dataset.id, {}).get(read.query_name), alignment
 
