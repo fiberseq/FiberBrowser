@@ -261,6 +261,27 @@ def splice_md(md: str, cigartuples: list[tuple[int, int]], event: dict, *, refer
 def splice_read(read, event: dict):
     """A copy of ``read`` whose chosen insertion is aligned (``I`` -> ``M``)."""
     spliced = copy.copy(read)
+    if event.get('sequence_method') == 'split_alignment':
+        # The junction establishes the whole insert, but the distal part of
+        # this record's clip is reference sequence from another alignment.
+        # Give coordinates only to the insert and the observed primary flank.
+        q, out = 0, []
+        lo, hi = event['q'], event['q'] + event['len']
+        for op, n in read.cigartuples:
+            if op == _S and q <= lo < hi <= q + n:
+                _append(out, _S, lo - q)
+                _append(out, _M, hi - lo)
+                _append(out, _S, q + n - hi)
+            else:
+                _append(out, op, n)
+            if op in (0, 1, 4, 7, 8):
+                q += n
+        spliced.cigartuples = out
+        if event['side'] == 'L':
+            spliced.reference_start = event['ref']
+        if read.has_tag('MD'):
+            spliced.set_tag('MD', _md_pad(str(read.get_tag('MD')), event['len'], event['side']), value_type='Z')
+        return spliced
     spliced.cigartuples = splice_cigar(list(read.cigartuples), read.reference_start, event)
     if read.has_tag("MD"):
         try:
@@ -517,6 +538,15 @@ _KIND_ORDER = {("cigar", None): 0, ("clip", "start"): 1, ("clip", "end"): 2, ("h
 
 def _carrier_plan(read, evidence: dict, cluster_len: int) -> dict:
     """How one carrier is drawn: which bases are its insert and where its axis starts."""
+    if evidence['kind'] == 'sa' and evidence.get('level') == 'confirmed':
+        left, right = evidence['junction']
+        a, b = alignment_evidence(read)['sequence_span']
+        lo, hi = int(left['q_end']), int(right['q_start'])
+        if a <= lo < hi <= b:
+            ref = int(left['pos']) + int(left['cigar_ref_len'])
+            return {'kind': 'cigar', 'sequence_method': 'split_alignment', 'partial': None,
+                    'ref': ref, 'ref_end': int(right['pos']), 'q': lo - a, 'len': hi - lo,
+                    'allele_len': hi - lo, 'pieces': 1, 'side': evidence['clip']['side']}
     if evidence["kind"] == "cigar":
         event = evidence["event"]
         query_len = int(event.get('q_end', event['q'] + event['len'])) - int(event['q'])
