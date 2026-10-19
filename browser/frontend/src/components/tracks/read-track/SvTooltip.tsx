@@ -10,7 +10,7 @@ import type { SvHover } from './useReadTrackMouse';
 export function SvTooltip({ hover, width, height, datasetId, chrom }: {
   hover: SvHover; width: number; height: number; datasetId: string; chrom: string;
 }) {
-  const insertion = hover.kind === 'event' && hover.event.t === 'I'
+  const insertion = hover.kind === 'event' && hover.event.t === 'I' && !hover.read.live_lift
     ? { datasetId, chrom, readId: hover.read.id, event: hover.event }
     : null;
   const bases = useInsertedBases(insertion, 30);
@@ -35,6 +35,14 @@ export function SvTooltip({ hover, width, height, datasetId, chrom }: {
     );
   }
   const ev = hover.event;
+  if (ev.source === 'assembly' && ev.display_only) {
+    const ref = ev.ref_len ?? 0, alt = ev.alt_len ?? 0;
+    return <div className="absolute pointer-events-none bg-gray-900 text-white px-2.5 py-1.5 rounded text-xs shadow-lg z-30 whitespace-nowrap" style={style} data-testid="sv-event-tooltip" data-fb-hover-tip="">
+      <div className="font-medium">Assembly {ref && alt ? 'replacement' : ref ? 'deletion' : 'insertion'} · {ref.toLocaleString()}→{alt.toLocaleString()} bp</div>
+      <div className="text-gray-300 text-[11px]">{chrom}:{ev.ref.toLocaleString()}–{(ev.ref_end ?? ev.ref).toLocaleString()} · read evidence unassessed</div>
+      <div className="text-gray-400 text-[11px]">Click to inspect assembly difference</div>
+    </div>;
+  }
   return (
     <div className="absolute pointer-events-none bg-gray-900 text-white px-2.5 py-1.5 rounded text-xs shadow-lg z-30 whitespace-nowrap" style={style} data-testid="sv-event-tooltip" data-fb-hover-tip="">
       <div className="font-medium">
@@ -47,8 +55,8 @@ export function SvTooltip({ hover, width, height, datasetId, chrom }: {
       </div>
       {ev.t === 'I' && (
         <>
-          <div className="font-mono text-[11px] text-purple-200">{bases ? `${bases}${ev.len > bases.length ? '…' : ''}` : 'loading bases…'}</div>
-          <div className="text-gray-400 text-[11px]">Click to copy the inserted sequence</div>
+          <div className="font-mono text-[11px] text-purple-200">{bases ? `${bases}${ev.len > bases.length ? '…' : ''}` : hover.read.live_lift ? 'sequence unavailable' : 'loading bases…'}</div>
+          {!hover.read.live_lift && <div className="text-gray-400 text-[11px]">Click to copy the inserted sequence</div>}
         </>
       )}
     </div>

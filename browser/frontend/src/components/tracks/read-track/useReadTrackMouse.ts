@@ -236,12 +236,16 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
   /** The SV event of the read at (x, y) within a few pixels. */
   const svEventAtXY = useCallback((x: number, y: number) => {
     if (!svEnabled) return null;
-    const read = getReadHitAtXY(x, y)?.read;
+    if (x < sidebarWidth || x >= width || y < headerHeight + histH || y >= height) return null;
+    const body = getReadHitAtXY(x, y)?.read;
+    const read = body ?? getReadAtY(y);
     if (!read?.sv) return null;
     const bpPerPx = regionWidth / Math.max(1, width - sidebarWidth);
     const event = readSvEventAt(read, genomePosAtX(x), 5 * bpPerPx, svMinLen);
+    // A spanned map marker crosses connector space with no read body there.
+    if (!body && !(event?.source === 'assembly' && event.display_only && event.difference_id)) return null;
     return event ? { read, event } : null;
-  }, [svEnabled, getReadHitAtXY, regionWidth, width, sidebarWidth, genomePosAtX, svMinLen]);
+  }, [svEnabled, getReadHitAtXY, getReadAtY, regionWidth, width, height, headerHeight, histH, sidebarWidth, genomePosAtX, svMinLen]);
 
   // Map pixel (x, y) to a specific footprint interval on a read.
   //

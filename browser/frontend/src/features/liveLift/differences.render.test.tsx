@@ -11,6 +11,7 @@ import { PanelDisplayContext } from '../../hooks/usePanelDisplayStore';
 import { useLiveLiftAxis } from './useLiveLiftAxis';
 import { ExpansionOverlay } from './ExpansionOverlay';
 import { useReadTrackMouse } from '../../components/tracks/read-track/useReadTrackMouse';
+import { SvTooltip } from '../../components/tracks/read-track/SvTooltip';
 import { useReadActionsStore } from '../../stores/readActionsStore';
 import type { Dataset, PanelConfig } from '../../types';
 import type { CompactRead } from '../../components/tracks/read-track/types';
@@ -203,6 +204,35 @@ it.each([0, 1])('opens a map marker with both spans and %i alternate bases', alt
   expect(useDifferenceSelection.getState().selection?.difference).toMatchObject({ id: 'gap', t_start: 500, t_end: 2233, ref_bp: 1733, alt_bp: alt });
   expect(useBrowserStore.getState().liveLiftExpansions.main ?? []).toHaveLength(0);
   expect(getDifferences).not.toHaveBeenCalled();
+});
+
+it('clicks a replacement marker over connector space and describes assembly provenance', () => {
+  const gap = { ...diff, id: 'gap', kind: 'replacement' as const, t_start: 400, t_end: 600, ref_bp: 200, alt_bp: 1,
+    pos: 400, method: 'assembly_projection' as const, display_only: true as const, sequence_status: 'unresolved' as const,
+    read_deviations: 'unassessed' as const, coverage: { source: [0, 1] as [number, number], aligned_bp: 1, mol_bp: 1, left_flank: true, right_flank: true, full: true } };
+  const event = { t: 'D' as const, ref: 400, ref_end: 600, len: 200, q: 0, ref_len: 200, alt_len: 1,
+    source: 'assembly' as const, display_only: true, difference_id: 'gap' };
+  const read: CompactRead = { id: 'r', intervals: [], sv: [event], live_lift: { v: 1, segments: [[0, 1000, 1, '+', true]], connectors: [[400, 600]], gap_observations: [gap] } };
+  let handlers: ReturnType<typeof useReadTrackMouse>;
+  function Mouse() {
+    handlers = useReadTrackMouse({ displayReads: [read], width: 1000, height: 200, sidebarWidth: 0, regionWidth: 1000,
+      start: 0, end: 1000, chrom: 'chr1', datasetId: 'lift', stateKey: 'mat-state', hasCluster: false,
+      myClusterAssignments: {}, myClusterOrder: [], myClusterFocus: null, mySelectedClusters: null, hasClusterFocus: false,
+      isPanning: false, isReversed: false, fillReadHeight: false, storeReadRowHeight: 20, readScrollOffset: 0,
+      readSeparatorMode: 'off', readSeparatorMinHeight: 0, readSeparatorWidth: 0, showReadTooltip: false,
+      showCoverageHistogram: false, svEnabled: true });
+    return null;
+  }
+  act(() => root.render(<Mouse />));
+  const canvas = document.createElement('canvas');
+  Object.defineProperty(canvas, 'clientWidth', { value: 1000 });
+  canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 200 } as DOMRect);
+  act(() => handlers!.handleClick({ currentTarget: canvas, clientX: 500, clientY: 8, shiftKey: false, ctrlKey: false, metaKey: false } as never));
+  expect(useDifferenceSelection.getState().selection?.difference.id).toBe('gap');
+  act(() => root.render(<SvTooltip hover={{ kind: 'event', read, event, x: 500, y: 8 }} width={1000} height={200} datasetId="lift" chrom="chr1" />));
+  expect(host.textContent).toContain('Assembly replacement · 200→1 bp');
+  expect(host.textContent).toContain('read evidence unassessed');
+  expect(host.textContent).not.toContain('loading bases');
 });
 
 

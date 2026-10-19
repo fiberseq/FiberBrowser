@@ -64,7 +64,7 @@ export interface ReadSvDraw {
   /** Deleted spans, view-relative [start, end). */
   deletions: Array<{ start: number; end: number; len: number }>;
   /** Insertion points, view-relative. */
-  insertions: Array<{ pos: number; len: number; q: number; ref: number }>;
+  insertions: Array<{ pos: number; len: number; q?: number; ref: number }>;
   clips: Array<{ pos: number; side: 'L' | 'R'; len: number }>;
 }
 
@@ -80,6 +80,16 @@ export function readSvDraw(read: Pick<CompactRead, 'sv'>, viewStart: number, vie
     if (ev.t === 'S') {
       if (ev.ref < viewStart || ev.ref > viewEnd) continue;
       out.clips.push({ pos: ev.ref - viewStart, side: ev.side, len: ev.len });
+      continue;
+    }
+    if (ev.source === 'assembly' && ev.display_only && ev.ref_len !== undefined && ev.alt_len !== undefined) {
+      const end = ev.ref_end ?? ev.ref + ev.ref_len;
+      if (ev.ref_len > 0 && end > viewStart && ev.ref < viewEnd) {
+        out.deletions.push({ start: ev.ref - viewStart, end: end - viewStart, len: ev.ref_len });
+      }
+      if (ev.alt_len > 0 && ev.ref >= viewStart && ev.ref <= viewEnd) {
+        out.insertions.push({ pos: ev.ref - viewStart, len: ev.ref_len ? ev.alt_len : ev.len, ref: ev.ref });
+      }
       continue;
     }
     for (const piece of ev.raw_pieces ?? [ev]) {
@@ -445,7 +455,7 @@ export function readSvEventAt(read: Pick<CompactRead, 'sv' | 'sv_evidence'>, pos
   for (const ev of read.sv_evidence ?? read.sv ?? []) {
     if ((ev.t !== 'D' && ev.t !== 'I') || ev.len < minLen) continue;
     const start = ev.raw_ref ?? ev.ref;
-    const end = ev.raw_ref_end ?? (ev.t === 'D' ? ev.ref + ev.len : ev.ref);
+    const end = ev.raw_ref_end ?? ev.ref_end ?? (ev.t === 'D' ? ev.ref + ev.len : ev.ref);
     const dist = pos < start ? start - pos : pos > end ? pos - end : 0;
     if (dist <= tolBp && dist < bestDist) {
       best = ev;
