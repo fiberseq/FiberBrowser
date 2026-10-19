@@ -37,8 +37,21 @@ def test_independent_span_and_both_endpoint_negative_controls():
     clusters = [dict(t="D", ref=1000, len=100)]
     assert len(annotate_read_evidence([assembly(1000, 100, 100)], clusters)) == 1
     assert len(annotate_read_evidence([assembly(1000, 200, 100)], clusters)) == 1
-    assert len(annotate_read_evidence([assembly(1000, 1500, 0)], [dict(t="D", ref=1000, len=1200)])) == 1
+    assert len(annotate_read_evidence([assembly(1000, 1500, 0)], [dict(t="D", ref=1000, len=1199)])) == 1
     assert len(annotate_read_evidence([assembly(1000, 0, 100)], clusters)) == 1
+
+
+def test_wider_phase2_search_admits_its_endpoint_limit_as_candidate_only():
+    from services.differences.matching import MatchingPolicy
+    item = assembly(1000, 1500, 0)
+    cluster = dict(t='D', ref=1000, len=1200)
+    # 300 bases is exactly the new 20% broad-search allowance at both ends.
+    # The previous narrow-only adapter rejected this deliberately wider case.
+    assert annotate_read_evidence([item], [cluster]) == []
+    assert item['read_candidates'][0]['candidate_rule'] == 'approximate_search'
+    assert item['equivalence_links'][0]['relation'] == 'candidate'
+    assert len(annotate_read_evidence([item], [cluster],
+               matching_policy=MatchingPolicy(broad_anchor_fraction=.05))) == 1
 
 
 def test_holes_and_bubbles_leave_unmatched_events_unassessed():
