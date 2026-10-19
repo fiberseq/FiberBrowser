@@ -28,12 +28,13 @@ async def post_sv_split(request: Request, state=Depends(get_state)):
     """Classify every read in a region by one SV: carrier, reference or not informative."""
     body = await json_object_body(request)
     from services.background_work import Cancelled, cancelled_response, run_background
-    # Diagnostic DP must stop when the requesting client goes away. Legacy
-    # sequence-free requests retain their existing dispatch and latency path.
+    from services.reconstruction_budget import ResourceResult
+    # Geometry scans and diagnostic DP both stop when the client goes away.
+    # Requests share completed extraction, never policy-specific calls.
     async def compute(function, *args, **kwargs):
         if body.get('allele_target') is not None:
             return await run_background(request, ('sv-allele-enrichment', id(body)), function, *args, **kwargs)
-        return await asyncio.to_thread(function, *args, **kwargs)
+        return await run_background(request, ('sv-geometry-scan', id(body)), function, *args, wait_for_reads=False, **kwargs)
     try:
         payload = await compute(
             sv_split_payload, state,
@@ -53,6 +54,9 @@ async def post_sv_split(request: Request, state=Depends(get_state)):
         )
     except SvRequestError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=exc.status)
+    except ResourceResult as exc:
+        return ORJSONResponse({**exc.payload(), 'detail': f'{exc.status}: {exc.reason}'},
+                              status_code=499 if exc.status == 'cancelled' else 413)
     except Cancelled:
         return cancelled_response()
     return ORJSONResponse(payload)

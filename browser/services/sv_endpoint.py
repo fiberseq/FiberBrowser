@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import os
 import re
-import threading
-from services.byte_cache import shared_cache
 from typing import Iterator, Optional
 
 from services.sv_events import (
@@ -138,12 +136,11 @@ def classify_records(records, *, t: str, ref: int, length: int, margin: int = SV
 # The split's scan of the view, cached: a deep view (24k PacBio reads over
 # 150 kb) takes ~10 s to read from the BAM, and a split is refreshed on every
 # pan. The scan keeps each record's bounds and SV events (not its calls), per
-# dataset, chromosome and event floor; a request overlapping the cached
-# region only reads the part it adds.
+# dataset, chromosome and event floor, with exact region/cohort ownership.
+# Variants and splits share these tiles, never their policy-specific calls.
 
-_SCAN_CACHE = shared_cache('indexes')
-_SCAN_LOCK = threading.Lock()
-_SCAN_MAX_SPAN = 2_000_000
+# Compatibility names for embedding clients; both APIs use this provider.
+from services.sv_evidence import SCAN_CACHE as _SCAN_CACHE, SCAN_LOCK as _SCAN_LOCK
 
 
 def _path_stamps(paths) -> Optional[tuple]:
@@ -153,60 +150,63 @@ def _path_stamps(paths) -> Optional[tuple]:
             st = os.stat(path)
         except OSError:
             return None  # remote or missing: never cached
-        stamps.append((path, st.st_mtime_ns, st.st_size))
+        stamps.append((path, st.st_mtime_ns, st.st_size, st.st_ctime_ns, st.st_ino))
     return tuple(stamps)
 
 
-def _scan(state, dataset_id: str, chrom: str, start: int, end: int, floor: int) -> list[dict]:
+def _scan(state, dataset_id: str, chrom: str, start: int, end: int, floor: int, checkpoint_fn=None) -> list[dict]:
+    import time
+    from services.background_work import checkpoint
+    from services.reconstruction_budget import DEFAULT_LIMITS, RESERVATIONS, ResourceResult
+    deadline = time.monotonic() + DEFAULT_LIMITS.deadline_s
+    def check():
+        (checkpoint_fn or checkpoint)()
+        if time.monotonic() >= deadline:
+            raise ResourceResult('budget_exceeded', 'native_scan_deadline', seconds=DEFAULT_LIMITS.deadline_s)
+    # Raw molecule spooling plus retained compact records share the numerical
+    # process budget. Cache hits allocate no second extraction reservation.
+    size = DEFAULT_LIMITS.job_bytes
+    RESERVATIONS.acquire(size, False, deadline, check)
+    try:
+        return _scan_records(state, dataset_id, chrom, start, end, floor, check)
+    finally:
+        RESERVATIONS.release(size, False)
+
+
+def _scan_records(state, dataset_id, chrom, start, end, floor, check):
     out = []
-    for read, file_chrom, path, _bam in _bam_records(state, dataset_id, chrom, start, end, with_handle=True):
+    from services import sv_evidence
+    from services.byte_cache import retained_size
+    from services.reconstruction_budget import ResourceResult
+    retained = 0
+    for read, file_chrom, path, _bam in _bam_records(state, dataset_id, chrom, start, end, with_handle=True, checkpoint_fn=check):
+        check()
+        if len(out) >= sv_evidence.SCAN_MAX_RECORDS:
+            raise ResourceResult('budget_exceeded', 'native_scan_records', max_records=sv_evidence.SCAN_MAX_RECORDS)
         entry = _compact_record(read, file_chrom, floor, reference=getattr(state, 'fasta', None))
         # A record's identity across scans (merged files may share names and starts).
         entry["_key"] = (path, read.query_name, int(read.reference_start), int(read.flag), read.cigarstring)
+        retained += retained_size(entry) + 16
+        if retained > sv_evidence.SCAN_MAX_BYTES:
+            raise ResourceResult('budget_exceeded', 'native_scan_bytes', max_bytes=sv_evidence.SCAN_MAX_BYTES)
         out.append(entry)
     return out
 
 
-def scan_view(state, dataset_id: str, chrom: str, start: int, end: int, floor: int) -> list[dict]:
+def scan_view(state, dataset_id: str, chrom: str, start: int, end: int, floor: int, *, cancelled=None) -> list[dict]:
     """Compact entries of the dataset's primary records overlapping ``[start, end)``."""
     dataset_id, dataset = _dataset(state, dataset_id)
+    from services.sv_evidence import scan_region, select_cohort, ScanCancelled
+    from services.background_work import checkpoint
+    def check():
+        checkpoint()
+        if cancelled is not None and cancelled():
+            raise ScanCancelled()
+    scanner = _scan if cancelled is None else lambda *args: _scan(*args, checkpoint_fn=check)
     stamps = _path_stamps(getattr(dataset, "paths", None) or []) if dataset is not None else None
-    if stamps is None:
-        return _scan(state, dataset_id, chrom, start, end, floor)
-    from services.plasmid_reconcile import contig_links
-    from services.signal_evidence import signal_filter_key
-    links = tuple(repr(contig_links(state, path=path)) for path, _m, _s in stamps)
-    from services.sv_alleles import reference_identity
-    key = (dataset_id, stamps, links, chrom, int(floor), repr(getattr(state, "chrom_map", None)), signal_filter_key(state),
-           reference_identity(state))
-    with _SCAN_LOCK:
-        entry = _SCAN_CACHE.get(key)
-        if entry is not None:
-            _SCAN_CACHE.move_to_end(key)
-    if entry is not None and entry["lo"] <= start and end <= entry["hi"]:
-        return [c for c in entry["entries"] if c["reference_end"] > start and c["reference_start"] < end]
-    if (entry is not None and start <= entry["hi"] and end >= entry["lo"]
-            and max(end, entry["hi"]) - min(start, entry["lo"]) <= _SCAN_MAX_SPAN):
-        # Read only what the request adds; a record in both parts is kept once.
-        added = []
-        if start < entry["lo"]:
-            added += _scan(state, dataset_id, chrom, start, entry["lo"], floor)
-        if end > entry["hi"]:
-            added += _scan(state, dataset_id, chrom, entry["hi"], end, floor)
-        seen = {c["_key"] for c in entry["entries"]}
-        merged = list(entry["entries"])
-        for c in added:
-            k = c["_key"]
-            if k not in seen:
-                seen.add(k)
-                merged.append(c)
-        entry = {"lo": min(start, entry["lo"]), "hi": max(end, entry["hi"]), "entries": merged}
-    else:
-        entry = {"lo": int(start), "hi": int(end), "entries": _scan(state, dataset_id, chrom, start, end, floor)}
-    with _SCAN_LOCK:
-        _SCAN_CACHE[key] = entry
-        _SCAN_CACHE.move_to_end(key)
-    return [c for c in entry["entries"] if c["reference_end"] > start and c["reference_start"] < end]
+    entries = scan_region(state, dataset, dataset_id, chrom, start, end, floor,
+                          stamps=stamps, scanner=scanner, check=check)
+    return select_cohort(entries, read_ids=getattr(state, '_variant_read_ids', None))
 
 
 def sv_split_payload(state, *, dataset_id: str, chrom: str, start: int, end: int, t: str, ref: int,

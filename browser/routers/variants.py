@@ -28,13 +28,21 @@ async def _run(request: Request, fn, state, body: dict):
         gone.set()
 
     watcher = asyncio.create_task(_watch())
+    from services.background_work import cancel_scope, Cancelled
+    from services.reconstruction_budget import ResourceResult
+    def compute():
+        with cancel_scope(gone):
+            return fn(state, body, gone.is_set)
     try:
-        payload = await asyncio.to_thread(fn, state, body, gone.is_set)
+        payload = await asyncio.to_thread(compute)
     except VariantsRequestError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=exc.status)
-    except VariantsCancelled:
+    except (VariantsCancelled, Cancelled):
         return JSONResponse({"detail": "cancelled"}, status_code=499)
+    except ResourceResult as exc:
+        return ORJSONResponse({**exc.payload(), 'detail': f'{exc.status}: {exc.reason}'}, status_code=413)
     finally:
+        gone.set()
         watcher.cancel()
     return ORJSONResponse(payload)
 

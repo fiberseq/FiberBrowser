@@ -525,57 +525,34 @@ def clear_cache() -> None:
 # ---------------------------------------------------------------------------
 # SVs in view, and how an SV's carriers line up with the SNP alleles
 
-def _sv_records(state, dataset, chrom: str, start: int, end: int, include_duplicates: bool) -> list[tuple]:
-    from services.bam_handles import get_bam_handle
-    from services.signal_evidence import record_keeps_signal, signal_header
-    from services.plasmid_reconcile import contig_links
-    from utils.chrom import resolve_reference_name
-
-    out = []
-    for path in dataset.paths:
-        bam = get_bam_handle(path)
-        if bam is None:
-            continue
-        actual = resolve_reference_name(chrom, bam.references, getattr(state, "chrom_map", None) or {},
-                                        links=contig_links(state, path=path))
-        if actual is None:
-            continue
-        provenance = signal_header(bam.header)
-        from services.graph_lift import lift_hidden_predicate
-        hidden = lift_hidden_predicate(bam.header)
-        from services.sv_molecules import molecule_bundles
-        def eligible(read):
-            if read.is_unmapped or read.is_secondary or (hidden is not None and hidden(read)):
-                return None
-            ids = getattr(state, "_variant_read_ids", None)
-            if ids is not None and read.query_name not in ids:
-                return False
-            return record_keeps_signal(read, provenance) and (include_duplicates or not read.is_duplicate)
-        for bundle in molecule_bundles(bam.fetch(actual, max(0, int(start)), int(end)), eligible):
-            out.extend((read, actual) for read in bundle)
-    return out
+def _sv_compact(state, dataset_id, chrom, start, end, floor, include_duplicates, cancelled=None):
+    from services import sv_endpoint
+    from services.sv_evidence import select_cohort
+    # The provider checks the server cancel scope during collection and spool
+    # replay as well as on warm hits. Explicit callers keep their old callback.
+    if cancelled is not None and cancelled():
+        raise VariantsCancelled()
+    from services.sv_evidence import ScanCancelled
+    try:
+        compact = sv_endpoint.scan_view(state, dataset_id, chrom, start, end, floor, cancelled=cancelled)
+    except ScanCancelled:
+        raise VariantsCancelled() from None
+    if cancelled is not None and cancelled():
+        raise VariantsCancelled()
+    return select_cohort(compact, include_duplicates=include_duplicates)
 
 
 def svs_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = None) -> dict:
     """SV clusters (deletions and insertions of at least ``min_len``) in the view, as the SV band clusters them."""
-    from services.sv_events import extract_sv_events, normalize_min_sv_len, sv_summary_for_reads, sv_extraction_floor, alignment_evidence
+    from services.sv_events import normalize_min_sv_len, sv_summary_for_reads, sv_extraction_floor
 
     state = _scoped_state(state, body)
     dataset_id = _dataset(state, body.get("dataset_id")).id
     chrom, start, end = _region(body)
-    dataset = _dataset(state, dataset_id)
     min_len = normalize_min_sv_len(body.get("min_len"))
     include_duplicates = bool(body.get("include_duplicates", False))
-    compact = []
-    for n, (read, _c) in enumerate(_sv_records(state, dataset, chrom, start, end, include_duplicates)):
-        if cancelled is not None and n % 500 == 0 and cancelled():
-            raise VariantsCancelled()
-        item = {"id": read.query_name, "reference_start": int(read.reference_start),
-                "reference_end": int(read.reference_end), **alignment_evidence(read)}
-        events = extract_sv_events(read, sv_extraction_floor(min_len), reference=getattr(state, 'fasta', None))
-        if events:
-            item["sv"] = events
-        compact.append(item)
+    compact = _sv_compact(state, dataset_id, chrom, start, end, sv_extraction_floor(min_len),
+                          include_duplicates, cancelled)
     summary = sv_summary_for_reads(compact, start, end, min_len, chrom=chrom, conflict_options=body.get("conflict_options")) or {"clusters": []}
     clusters = [c for c in summary["clusters"] if c["len"] >= min_len]
     clusters.sort(key=lambda c: (c["ref"], c["t"]))
@@ -586,7 +563,7 @@ def svs_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = Non
 def sv_linkage_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = None) -> dict:
     """An SV's carriers vs its reference reads at each informative SNP: the minor allele's fraction in each, and
     how many SNPs separate them (>= 0.9 in one, <= 0.1 in the other)."""
-    from services.sv_endpoint import classify_records
+    from services.sv_endpoint import classify_compact, allele_floor
 
     state = _scoped_state(state, body)
     dataset_id = _dataset(state, body.get("dataset_id")).id
@@ -605,9 +582,9 @@ def sv_linkage_payload(state, body: dict, cancelled: Optional[Callable[[], bool]
     matrix = _matrix(state, entry, candidates, params, cancelled)
     col_of = {sid: j for j, sid in enumerate(matrix.ids)}
     mcands = _columns(entry, matrix, candidates)
-    records = _sv_records(state, entry["dataset"], chrom, start, end, params["include_duplicates"])
-    classified = classify_records(records, t=t, ref=ref, length=length,
-                                  include_duplicates=params["include_duplicates"], reference=getattr(state, 'fasta', None),
+    compact = _sv_compact(state, dataset_id, chrom, start, end, allele_floor(length), params["include_duplicates"], cancelled)
+    classified = classify_compact(((c, c) for c in compact), t=t, ref=ref, length=length,
+                                  include_duplicates=params["include_duplicates"],
                                   include_putative=bool(body.get("include_putative", True)),
                                   include_ambiguous=bool(body.get("include_ambiguous", False)),
                                   include_conflicting=bool(body.get("include_conflicting", False)), conflict_options=body.get("conflict_options"))
