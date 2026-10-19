@@ -41,5 +41,6 @@ export function differenceDescription(d: Difference, chrom: string): string {
     + `GRCh38 ${target}\nHG002 ${locus}\n`
     + `GRCh38: ${d.grch38 ?? 'unknown'} · HG002: ${d.alt ?? 'unknown'}${d.alt !== null && d.alt_truncated ? `… (${d.alt_bp.toLocaleString()} bp)` : ''}\n`
     + `${BADGE_REASONS[d.reason] ?? d.reason.replace(/_/g, ' ')}`
-    + (d.read_support ? `\nmatches ${d.read_support.carriers} native reads' ${d.kind}` : '');
+    + (d.read_support ? `\nGeometry candidate: ${d.read_support.carriers} native reads' ${d.kind} (sequence comparison unassessed)` : '')
+    + ((d.read_candidates?.length ?? 0) > 1 ? ` · ${d.read_candidates!.length} candidate clusters; counts not combined` : '');
 }

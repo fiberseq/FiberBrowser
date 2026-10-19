@@ -125,7 +125,7 @@ export function DifferencesStrip({ panel, dataset, width, gutter = 0 }: {
           </g>;
         })}
       </g>)}
-      {(data?.novel ?? []).map((d, i) => <path key={i} d={`M${gutter + axis.toX(d.ref)} 1v12`} stroke="#9333ea" strokeDasharray="2 2"><title>{`Read-only ${d.t === 'I' ? 'insertion' : 'deletion'} · ${d.len} bp · ${d.support ?? '?'} native reads`}</title></path>)}
+      {(data?.novel ?? []).map((d, i) => <path key={i} d={`M${gutter + axis.toX(d.ref)} 1v12`} stroke="#9333ea" strokeDasharray="2 2"><title>{`Read ${d.t === 'I' ? 'insertion' : 'deletion'} · ${d.len} bp · ${d.support ?? '?'} native reads · assembly comparison unassessed${d.novelty_reasons?.length ? ` (${d.novelty_reasons.join(', ').replace(/_/g, ' ')})` : ''}`}</title></path>)}
     </svg>
     <DifferencePopover panel={panel} dataset={dataset} anchor={anchor} />
   </div>;

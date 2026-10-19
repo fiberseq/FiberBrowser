@@ -34,7 +34,7 @@ describe('difference strip decisions', () => {
     const text = differenceDescription({ ...diff(50, 2353, 'insertion'), reason: 'source_insertion', read_support: { carriers: 7, cluster: 0 } }, 'chr1');
     expect(text).toContain('GRCh38 chr1:'); expect(text).toContain('HG002 src:');
     expect(text).toContain('GRCh38: A · HG002: C'); expect(text).toContain('sequence of the source assembly only');
-    expect(text).toContain("matches 7 native reads' insertion");
+    expect(text).toContain("Geometry candidate: 7 native reads' insertion (sequence comparison unassessed)");
   });
   it('previous/next searches beyond edges and respects each minimum-size filter', () => {
     const ds = [diff(10, 1000, 'insertion'), diff(45), diff(120), diff(130, 10), diff(160, 50), diff(220, 1000)];

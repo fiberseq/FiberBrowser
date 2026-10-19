@@ -80,7 +80,8 @@ async def lift_differences(dataset_id: str, chrom: str, start: int = Query(..., 
     """Assembly strip; exact JSON schema is in services.lift.differences.
     Optional native_dataset_id attaches the existing display SV summary at a
     50 bp floor as ``native_summary`` and matches its indexed clusters to
-    assembly items (``read_support``); unmatched clusters become ``novel``.
+    assembly items (``read_candidates``). The legacy ``novel`` array contains
+    unmatched read events with explicitly unassessed assembly comparison.
     """
     dataset = _difference_dataset(state, dataset_id, chrom)
     if end <= start:
@@ -104,10 +105,10 @@ async def lift_differences(dataset_id: str, chrom: str, start: int = Query(..., 
             payload["native_summary"] = summary
             all_items = assembly_items_for_region(dataset.live_lift, chrom, start, end, lift_hap=lift_hap)
             payload["novel"] = annotate_read_evidence(all_items, summary["clusters"])
-            support = {i["id"]: i["read_support"] for i in all_items if "read_support" in i}
+            support = {i["id"]: {k: i[k] for k in ("read_support", "read_candidates")} for i in all_items if "read_support" in i}
             for item in payload["items"]:
                 if item["id"] in support:
-                    item["read_support"] = support[item["id"]]
+                    item.update(support[item["id"]])
         return payload
 
     return await asyncio.to_thread(build)

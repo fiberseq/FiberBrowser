@@ -14,7 +14,10 @@ GET /api/lift/differences returns::
 Difference is ``{id, hap, hap_label, kind, reason, source:'assembly',
 t_start, t_end, ref_bp, alt_bp, chain:int|null, strand:'+'|'-'|null,
 src:{contig,start,end}, grch38:str|null, alt:str|null, t?, ref?, len?,
-read_support?:{cluster:int, carriers:int}}``. ``t/ref/len`` are the native
+read_support?:{cluster:int, carriers:int}, read_candidates?:[Candidate]}``.
+Candidate links retain both spans and uncertainty with relation=candidate,
+method=geometry_only and sequence_comparison=unassessed. The legacy support
+pointer names the first candidate; counts are never unioned. ``t/ref/len`` are the native
 SV schema for insertions/deletions only. Coordinates are absolute, zero
 based, half open; insertion target spans have zero width. Source coordinates
 are always forward, while allele strings are in target display orientation.
@@ -27,8 +30,9 @@ counted once in the bin containing its leftmost visible position; bp totals
 are the complete events' sizes, ``bp=sum(max(ref_bp,alt_bp))``. At views wider
 than ``detail_bp`` (default 250000), bins replace small individual items;
 events >=1000 bp remain in items AND are counted in bins. ``min_bp`` applies
-before either aggregation. ``novel`` holds unmatched read-evidence clusters
-only when native_dataset_id is supplied; each has ``source:'reads'``.
+before either aggregation. The legacy ``novel`` field holds unmatched read
+events only when native_dataset_id is supplied; each has ``source:'reads'``,
+``novelty:'unassessed'`` and reasons, never a claim of assembly-relative novelty.
 
 GET /api/lift/difference_reads returns::
 
@@ -364,25 +368,67 @@ def difference_sequence(dataset, chrom, pos, item_id, *, offset=0, limit=50_000)
 
 
 def annotate_read_evidence(items, sv_clusters):
-    """Annotate assembly items in place; return unmatched read-only clusters.
-    Accepts cluster_sv_events' clusters (members set) or the display summary's
-    clusters (support count). A cluster can support both haplotypes. Extra
-    provenance keys never enter events_match's breakpoint/length comparison.
+    """Legacy geometry candidates, never exact support or a novelty decision.
+
+    Keep every compatible cluster/occurrence link and both edit spans. The
+    old read_support field is the first candidate only; its count must not
+    be unioned with other clusters or promoted to sequence-allele carriage.
+    Full normalization/compound comparison is deliberately still unassessed.
     """
-    from services.sv_events import events_match
+    from services.sv_events import breakpoint_tolerance, SV_LENGTH_TOL_FRAC
+
+    def shape(value, assembly=False):
+        if assembly and "t_start" in value:
+            return value["t_start"], value["ref_bp"], value["alt_bp"]
+        t, length = value.get("t"), value.get("len", 0)
+        return value.get("ref", 0), value.get("ref_len", length if t == "D" else 0), value.get("alt_len", length if t == "I" else 0)
+
+    def candidate(item, cluster):
+        p, r, a = shape(item, True)
+        cp, cr, ca = shape(cluster)
+        if (a - r) * (ca - cr) < 0:
+            return False
+        tol = breakpoint_tolerance(max(r, a, cr, ca))
+        lo, hi = cluster.get("uncertainty", (cp, cp))
+        return (lo - tol <= p <= hi + tol and lo + cr - tol <= p + r <= hi + cr + tol
+                and abs(r - cr) <= max(20, SV_LENGTH_TOL_FRAC * max(r, cr))
+                and abs(a - ca) <= max(20, SV_LENGTH_TOL_FRAC * max(a, ca)))
+
     matched = set()
     for item in items:
-        if item.get("t") not in ("I", "D"):
+        item.pop("read_support", None)
+        item.pop("read_candidates", None)
+        if (item.get("kind") not in ("insertion", "deletion", "replacement")
+                and (item.get("kind") is not None or item.get("t") not in ("I", "D"))):
             continue
+        links = []
         for i, c in enumerate(sv_clusters):
-            if c.get("source", "reads") != "reads" or c.get("t") != item["t"]:
+            if c.get("source", "reads") != "reads" or c.get("t") not in ("I", "D"):
                 continue
-            if events_match(item["t"], item["ref"], item["len"], c["ref"], c["len"]):
-                item["read_support"] = {"cluster": i, "carriers": c.get("support", len(c.get("members", ())))}
+            if candidate(item, c):
+                p, r, a = shape(item, True)
+                cp, cr, ca = shape(c)
+                links.append(dict(cluster=i, carriers=c.get("support", len(c.get("members", ()))),
+                                  relation="candidate", method="geometry_only", sequence_comparison="unassessed",
+                                  assembly_span=dict(start=p, end=p + r, ref_bp=r, alt_bp=a),
+                                  read_span=dict(start=cp, end=cp + cr, ref_bp=cr, alt_bp=ca),
+                                  uncertainty=list(c.get("uncertainty", (cp, cp)))))
                 matched.add(i)
-                break
-    return [{**{k: v for k, v in c.items() if k != "members"}, "source": "reads"}
-            for i, c in enumerate(sv_clusters) if i not in matched and c.get("source", "reads") == "reads"]
+        if links:
+            item["read_candidates"] = links
+            item["read_support"] = {k: links[0][k] for k in ("cluster", "carriers")}
+    unmatched = []
+    for i, c in enumerate(sv_clusters):
+        if i in matched or c.get("source", "reads") != "reads":
+            continue
+        p, r, _a = shape(c)
+        lo, hi = c.get("uncertainty", (p, p))
+        reasons = {d["kind"] for d in items if d.get("kind") in ("no_correspondence", "aligned_bubble")
+                   and d["t_start"] <= hi + r and d["t_end"] >= lo}
+        reasons.add("incomplete_assembly_comparison")
+        unmatched.append({**{k: v for k, v in c.items() if k != "members"}, "source": "reads",
+                          "novelty": "unassessed", "novelty_reasons": sorted(reasons)})
+    return unmatched
 
 
 def md_reference(md, runs):

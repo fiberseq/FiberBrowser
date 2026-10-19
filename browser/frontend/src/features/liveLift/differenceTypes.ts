@@ -11,12 +11,16 @@ export interface Difference {
   aliases?: string[];
   sequence_status?: 'unresolved' | 'unavailable' | 'partial' | 'available';
   read_support?: { cluster: number; carriers: number };
+  read_candidates?: Array<{ cluster: number; carriers: number; relation: 'candidate'; method: 'geometry_only';
+    sequence_comparison: 'unassessed'; assembly_span: { start: number; end: number; ref_bp: number; alt_bp: number };
+    read_span: { start: number; end: number; ref_bp: number; alt_bp: number }; uncertainty: [number, number] }>;
 }
 export interface DifferenceBin { start: number; end: number; hap: string; hap_label: string; kind: Difference['kind']; count: number; bp: number }
 export interface DifferencesResponse {
   dataset_id: string; lift_key: string; chrom: string; start: number; end: number; mode: 'items' | 'bins';
   items: Difference[]; bins: DifferenceBin[]; bin_bp: number | null;
-  novel: Array<{ source: 'reads'; t: 'I' | 'D'; ref: number; len: number; support?: number }>;
+  novel: Array<{ source: 'reads'; t: 'I' | 'D'; ref: number; len: number; support?: number;
+    novelty?: 'unassessed'; novelty_reasons?: string[] }>;
 }
 export interface DifferenceInspection {
   id: string; molecule: string; hap_label: string; record: string; supplementary: boolean; strand: string | null;
