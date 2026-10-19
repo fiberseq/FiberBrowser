@@ -190,6 +190,7 @@ export interface LiveLiftRow {
 }
 
 export interface LiveLiftInsertion {
+  kind?: 'insertion' | 'replacement'; t_start?: number; t_end?: number; ref_bp?: number; alt_bp?: number;
   pos: number; hap_label: string; src: [string, number, number]; length: number; mol_bp: number;
   orientation: '+' | '-'; covered: [number, number]; intervals: [number, number, number][];
   layers?: Record<string, AnnotationLayer>; qualities?: number[]; fire?: [number, number, number][];

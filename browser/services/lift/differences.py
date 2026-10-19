@@ -91,7 +91,8 @@ def item_has_id(item, item_id):
 
 
 def source_only_gap(handle, contig, a, b, chain):
-    """Canonical source-only map gap containing this badge, or None.
+    """Canonical owned alternate span containing this badge, or None.
+    The historical helper name also covers replacements with source bases.
     Indexed source coordinates work on both strands; an unmatched source
     span never establishes an assembly insertion.
     """
@@ -105,9 +106,12 @@ def source_only_gap(handle, contig, a, b, chain):
             data = handle.map.chain_data(chain)
             i = bisect.bisect_right(data["gq"], q0) - 1
             if i >= 0:
-                _t, q, dt, dq, _reason = data["gaps"][i]
-                if dt == 0 and dq > 0 and q <= q0 < q1 <= q + dq:
-                    return _source_span(handle, c, q, dq)
+                t, q, dt, dq, _reason = data["gaps"][i]
+                if dq > 0 and q <= q0 < q1 <= q + dq:
+                    chrom = handle.manifest["targets"][c["target"]]["name"]
+                    if any(ci == chain and g == data["gaps"][i] for ci, g, _ in
+                           primary_gaps_for_region(handle, chrom, c["haplotype"], t, t + max(dt, 1))):
+                        return _source_span(handle, c, q, dq)
     return None
 
 
@@ -856,7 +860,8 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
             empty = _Records(next(iter(adapters.values())).bam, [])
             display = lifted_reads_for_region(dataset, chrom, view_start, view_end,
                                                dict(include_layers=True, include_methylation=True,
-                                                    insertion_ids=[s["id"] for s in spans] if pos == end else []),
+                                                    insertion_ids=[s["id"] for s in spans
+                                                                   if s["kind"] in ("insertion", "replacement")]),
                                                bam_handle_getter=lambda p: adapters.get(p, empty),
                                                primary_metadata=molecules)
         display = filter_lift_display(display or [], dataset, None)
@@ -921,16 +926,19 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
                         overlaps = False
                     allele = ("no_coverage" if not overlaps else "partial" if not full else allele)
                 carries = False
-                if pos == end:
-                    full = record.reference_start <= a and record.reference_end >= b
+                alternate = pos == end or span["kind"] == "replacement"
+                if alternate:
+                    if pos == end:
+                        full = record.reference_start <= a and record.reference_end >= b
                     length = b - a
                     carries = full and bool(rb) and (length == 0 or abs(len(rb) - length) <= max(length * .1, 50))
                     own_spans = [s for s in spans if s["hap"] == hap]
                     own = own_spans[0] if len(own_spans) == 1 else None
-                    allele = ("no_coverage" if not overlaps else "partial" if not full else
-                              "unknown" if hg is None else
-                              "no_insertion" if not rb and not hg else "deleted" if not rb else
-                              "hg002" if carries and (hap == span["hap"] or rb == hg) and bool(hg) else "other")
+                    if pos == end:
+                        allele = ("no_coverage" if not overlaps else "partial" if not full else
+                                  "unknown" if hg is None else
+                                  "no_insertion" if not rb and not hg else "deleted" if not rb else
+                                  "hg002" if carries and (hap == span["hap"] or rb == hg) and bool(hg) else "other")
                 st = meta.get("strand") if meta else (record.get_tag("st") if record.has_tag("st") else None)
                 item = dict(id=record.query_name, molecule=ll.get("molecule", f"{dataset.id}|{record.query_name}"),
                             hap_label=config.handle.haplotype_labels.get(hap, hap), record=ll.get("record", record_id),
@@ -942,9 +950,11 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
                     item.update(item_id=span["id"], ref_bp=span["ref_bp"], alt_bp=span["alt_bp"],
                                 full_span=full, left_flank=left_flank, right_flank=right_flank,
                                 mol_bp=len(rb), read_bases=rb[:60], read_bases_length=len(rb))
-                if pos == end:
+                if alternate:
                     own_carrier = carries and hap == span["hap"]
-                    if (include_sequence and own_carrier and (item_id is None or span["id"] == item_id) and len(rb) <= 50_000):
+                    if (include_sequence and own_carrier
+                            and (item_id is None or span["id"] == (selected["id"] if selected else item_id))
+                            and len(rb) <= 50_000):
                         score = (span["hap"] != preferred if preferred else False,
                                  abs(len(rb) - length), bool(record.is_supplementary), record_id)
                         if sequence_score is None or score < sequence_score:
@@ -953,7 +963,7 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
                                                      ins_id=span["id"], orientation=span["strand"], source="reads")
                     item.update(carries_insertion=carries, mol_bp=len(rb), identity=identity,
                                 read_bases=rb[:60], read_bases_length=len(rb))
-                    if span["kind"] == "insertion":
+                    if span["kind"] in ("insertion", "replacement"):
                         item["alignment_ins_id"] = span["id"]
                     if own:
                         item["ins_id"] = own["id"]

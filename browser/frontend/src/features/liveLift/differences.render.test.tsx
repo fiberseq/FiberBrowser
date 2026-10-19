@@ -10,6 +10,7 @@ import { clearDifferenceCache, rememberDifferences } from './differenceCache';
 import { PanelDisplayContext } from '../../hooks/usePanelDisplayStore';
 import { useLiveLiftAxis } from './useLiveLiftAxis';
 import { ExpansionOverlay } from './ExpansionOverlay';
+import { makeAxis } from './axis';
 import { useReadTrackMouse } from '../../components/tracks/read-track/useReadTrackMouse';
 import { SvTooltip } from '../../components/tracks/read-track/SvTooltip';
 import { useReadActionsStore } from '../../stores/readActionsStore';
@@ -191,6 +192,22 @@ it('leaves unresolved badges as read navigation without inventing insertion evid
   expect(selectReadDifference(read, badge, 500, { datasetId: dataset.id, stateKey: panel.stateKey!, chrom: 'chr1', start: 0 })).toBe(false);
   expect(getDifferences).not.toHaveBeenCalled();
   expect(useDifferenceSelection.getState().selection).toBeNull();
+});
+
+it('expands a replacement badge and retains its reference span through header actions', async () => {
+  const replacement: Difference = { ...diff, id: 'MAT:src:100-892:replacement', kind: 'replacement',
+    t_end: 504, ref_bp: 4, alt_bp: 792, src: { contig: 'src', start: 100, end: 892 } };
+  vi.mocked(getDifferences).mockResolvedValue(response([replacement]));
+  const read: CompactRead = { id: 'replacement', intervals: [], live_lift: { v: 1, hap_label: 'MAT',
+    segments: [], badges: [[500, 'aligned_indel', 790, 792, 'I']], badge_ids: [replacement.id], insertions: {} } };
+  await act(async () => { expect(selectReadDifference(read, read.live_lift!.badges![0], 500,
+    { datasetId: 'lift', stateKey: 'mat-state', chrom: 'chr1', start: 0 })).toBe(true); });
+  const expansion = useBrowserStore.getState().liveLiftExpansions.main[0];
+  expect(expansion).toMatchObject({ kind: 'replacement', t_end: 504, ref_bp: 4, length: 792, ins_id: replacement.id });
+  act(() => root.render(<ExpansionOverlay panel={panel} axis={makeAxis(0, 1000, 1000, false, [expansion])} viewKey="main" />));
+  click([...host.querySelectorAll('button')].find(b => b.textContent === 'Identify')!);
+  expect(useDifferenceSelection.getState().selection?.difference).toMatchObject({ kind: 'replacement',
+    t_start: 500, t_end: 504, ref_bp: 4, alt_bp: 792, id: replacement.id });
 });
 
 it.each([0, 1])('opens a map marker with both spans and %i alternate bases', alt => {

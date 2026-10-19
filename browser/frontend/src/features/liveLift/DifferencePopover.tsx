@@ -86,7 +86,7 @@ export function DifferencePopover({ panel, dataset, anchor }: { panel: PanelConf
   // supply the selected parent's assembly bases later; never use the other
   // parent's allele to fill a missing map string.
   const ownAllele = model.rows.find(r => r.hap_label === d.hap_label && r.hg002 !== null
-    && (d.kind !== 'insertion' || r.ins_id === d.id));
+    && (!['insertion', 'replacement'].includes(d.kind) || r.ins_id === d.id));
   const described = d.source === 'assembly' && ownAllele
     ? { ...d, alt: d.alt ?? ownAllele.hg002, grch38: d.grch38 ?? ownAllele.grch38 } : d;
   const rect = anchor.current?.getBoundingClientRect();
@@ -98,10 +98,10 @@ export function DifferencePopover({ panel, dataset, anchor }: { panel: PanelConf
       <button aria-label="Close difference inspection" onClick={() => useDifferenceSelection.getState().select(null)}>×</button></div>
     <p className="whitespace-pre-line text-[11px] my-2">{differenceDescription(described, current.chrom)}</p>
     <div className="flex gap-3 my-2 items-center">
-      {d.kind === 'insertion' && <span title={d.alt_bp < 50 ? 'Insertion-local read payloads start at 50 bp.' : d.alt_bp > 50_000 ? 'Insertion payload is too large (over 50 kb).' : 'Open the insertion across this view'}>
-        <button disabled={d.alt_bp < 50 || d.alt_bp > 50_000} onClick={() => expandDifference(current)}>Expand insertion</button></span>}
+      {(d.kind === 'insertion' || d.kind === 'replacement') && <span title={d.alt_bp < 50 ? 'Insertion-local read payloads start at 50 bp.' : d.alt_bp > 50_000 ? 'Insertion payload is too large (over 50 kb).' : 'Open the insertion across this view'}>
+        <button disabled={d.alt_bp < 50 || d.alt_bp > 50_000} onClick={() => expandDifference(current)}>{d.kind === 'replacement' ? 'Expand alternate' : 'Expand insertion'}</button></span>}
       {(d.kind === 'insertion' || d.kind === 'deletion') && <span title={LIFT_SPLIT_REASON}><button disabled>Split by carrier</button></span>}
-      {d.kind === 'insertion' && <>
+      {(d.kind === 'insertion' || d.kind === 'replacement') && <>
         <span title={candidate ? 'Identify one full carrier’s sequence; this is not an assembly consensus.' : 'No full insertion sequence is available from the inspected reads.'}>
           <button disabled={!candidate || fetchingSequence} onClick={() => { void requestIdentification(); }}>{fetchingSequence ? 'Loading sequence…' : 'Identify'}</button></span>
       </>}
@@ -126,7 +126,7 @@ export function DifferencePopover({ panel, dataset, anchor }: { panel: PanelConf
         <td className="max-w-40 truncate px-1" title={`${r.molecule}\n${r.record}\n${r.source_pos.contig}:${r.source_pos.start}-${r.source_pos.end}`}>{r.molecule}{r.supplementary ? ' · supp' : ''}</td>
         <td style={{ color: liveLiftHaplotypeColor(r.hap_label, dark) }}>● {r.hap_label}{r.strand ? ` / ${r.strand}` : ''}</td><td>{r.allele.toUpperCase().replace(/_/g, ' ')}</td>
         <td title={r.read_bases} className="font-mono max-w-28 break-all">{bases(r.read_bases, r.read_bases_length)}</td><td title={r.hg002 ?? undefined} className="font-mono max-w-24 break-all">{bases(r.hg002)}</td><td className="font-mono">{bases(r.grch38)}</td>
-        {d.kind === 'insertion' && <td>{r.identity == null ? '—' : `${r.identity.toFixed(1)}%`}</td>}
+        {(d.kind === 'insertion' || d.kind === 'replacement') && <td>{r.identity == null ? '—' : `${r.identity.toFixed(1)}%`}</td>}
         <td>{r.chromatin.state === 'accessible' ? 'MSP / accessible' : r.chromatin.state}{r.chromatin.layer ? ` (${r.chromatin.layer})` : ''}{r.chromatin.nearest_m6a_bp !== null ? ` · m6A ${r.chromatin.nearest_m6a_bp} bp` : ''}</td>
       </tr>)}</tbody></table>{data.capped && <p>Showing at most {data.max_records} source records.</p>}{!data.rows.length && <p>No reads cover this difference.</p>}</>}
   </div>, document.body);

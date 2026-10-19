@@ -7,7 +7,8 @@ import type { LiveLiftRow } from '../../components/tracks/read-track/types';
 export function equivalentInsertions(selected: Difference, items: Difference[]) {
   const byHap = new Map<string, Difference[]>();
   for (const d of items) {
-    if (d.kind !== 'insertion' || d.t_start !== selected.t_start || d.alt_bp > 50_000
+    if (!['insertion', 'replacement'].includes(d.kind) || d.kind !== selected.kind
+      || d.t_start !== selected.t_start || d.t_end !== selected.t_end || d.alt_bp > 50_000
       || Math.abs(d.alt_bp - selected.alt_bp) > Math.max(3, selected.alt_bp * .1)) continue;
     const group = byHap.get(d.hap_label) ?? [];
     if (!group.some(g => g.id === d.id)) group.push(d);

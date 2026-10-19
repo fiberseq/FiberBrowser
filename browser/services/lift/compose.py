@@ -1052,7 +1052,7 @@ def _assembly_gap_metadata(read, row, contig, runs, payload, ctx):
                           ref_len=item["ref_bp"], alt_len=item["alt_bp"], source="assembly",
                           method="assembly_projection", display_only=True, hap=item["hap_label"],
                           difference_id=item["id"], kind=item["kind"], coverage=obs["coverage"])
-            if item["kind"] == "insertion":
+            if item["alt_bp"] >= 50:
                 marker["ins_id"] = item["id"]
             payload.setdefault("sv", []).append(marker)
     payload["live_lift"]["gap_observations"] = observations
@@ -1085,7 +1085,9 @@ def _insertion_metadata(read, row, contig, runs, call_lo, payload, ctx):
             continue
         a, b = gap
         label = ctx.labels.get(p.hap, p.hap)
-        ins_id = difference_id(label, contig, a, b, "insertion")
+        observed = next((g for g in ll.get("gap_observations", ()) if g["chain"] == p.chain
+                         and (g["src"]["start"], g["src"]["end"]) == (a, b)), None)
+        ins_id = observed["id"] if observed else difference_id(label, contig, a, b, "insertion")
         length = b - a
         ll["badge_ids"].append(ins_id if length >= 50 else None)
         lo, hi = max(a, int(read["reference_start"])), min(b, int(read["reference_end"]))
@@ -1100,6 +1102,8 @@ def _insertion_metadata(read, row, contig, runs, call_lo, payload, ctx):
             continue
         ll["insertions"][ins_id] = _insertion_payloads(read, row, contig, runs, call_lo, ctx,
                                                      p, a, b, lo, hi, length, label, mol_bp, badge)
+        if observed:
+            ll["insertions"][ins_id].update({key: observed[key] for key in ("kind", "t_start", "t_end", "ref_bp", "alt_bp")})
 
 
 def _insertion_payloads(read, row, contig, runs, call_lo, ctx, p, a, b, lo, hi, length, label, mol_bp, badge):

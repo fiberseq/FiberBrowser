@@ -23,8 +23,8 @@ export function ExpansionOverlay({ axis, viewKey, sidebar = 0, panel: enclosing 
         ?? panels.find(p => p.datasetId === ins.datasetId);
       if (!panel || !ins.datasetId) return;
       const allele = ins.alleles?.find(a => a.hap_label === panel.liftHap);
-      const difference: Difference = { id: allele?.ins_id ?? ins.ins_id, hap: allele?.hap_label ?? ins.hap_label, hap_label: allele?.hap_label ?? ins.hap_label, kind: 'insertion', reason: 'source_insertion', source: 'assembly',
-        t_start: ins.pos, t_end: ins.pos, ref_bp: 0, alt_bp: allele?.length ?? ins.selected_length ?? ins.length, chain: null, strand: allele ? allele.strand ?? null : ins.strand ?? null,
+      const difference: Difference = { id: allele?.ins_id ?? ins.ins_id, hap: allele?.hap_label ?? ins.hap_label, hap_label: allele?.hap_label ?? ins.hap_label, kind: allele?.kind ?? ins.kind ?? 'insertion', reason: 'alternate_block', source: 'assembly',
+        t_start: ins.pos, t_end: allele?.t_end ?? ins.t_end ?? ins.pos, ref_bp: allele?.ref_bp ?? ins.ref_bp ?? 0, alt_bp: allele?.length ?? ins.selected_length ?? ins.length, chain: null, strand: allele ? allele.strand ?? null : ins.strand ?? null,
         src: (allele ? allele.src : ins.src) ?? { contig: null, start: null, end: null }, grch38: null, alt: null };
       const selection = { panelId: panel.id, datasetId: ins.datasetId, viewKey, chrom: ins.chrom, difference };
       if (action === 'Identify') useDifferenceSelection.getState().select({ ...selection, action: 'identify' });

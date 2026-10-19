@@ -11,9 +11,10 @@ vi.mock('./api', async original => ({ ...await original<any>(), getDifferenceRea
 vi.mock('../insertion/IdentifyTab', () => ({ IdentifyTab: () => <div>Identification result</div>, identifyLens: vi.fn() }));
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-it.each(['assembly', 'reads'])('fetches one full %s carrier on Identify and retains the panel haplotype', async source => {
+it.each([['assembly', 'insertion'], ['reads', 'insertion'], ['assembly', 'replacement']])('fetches one full %s %s carrier on Identify and retains the panel haplotype', async (source, kind) => {
   vi.clearAllMocks();
   const d: any = { id: 'MAT:src:100-200:insertion', hap: 'h1', hap_label: 'MAT', kind: 'insertion', source, reason: 'source_insertion', t_start: 500, t_end: 500, ref_bp: 0, alt_bp: 100, strand: '+', src: { contig: 'src', start: 100, end: 200 }, grch38: '', alt: null };
+  if (kind === 'replacement') Object.assign(d, { kind, id: 'MAT:src:100-200:replacement', t_end: 504, ref_bp: 4 });
   const dataset: any = { id: 'lift', label: 'Lift', path: 'source.bam', data_type: 'bam_livelift', live_lift: { key: 'key' } };
   const panel: any = { id: 'mat', datasetId: 'lift', liftHap: 'MAT', subTracks: [], linkGroup: null, contentType: 'dataset', collapsed: false };
   useBrowserStore.setState({ datasets: [dataset], panels: [panel] });

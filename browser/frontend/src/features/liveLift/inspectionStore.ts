@@ -34,7 +34,7 @@ export function expandDifference(s: DifferenceSelection): boolean {
   const d = s.difference;
   const panel = useBrowserStore.getState().panels.find(p => p.id === s.panelId);
   const stateKey = panel?.stateKey ?? panel?.datasetId ?? s.panelId;
-  if (d.kind !== 'insertion') return false;
+  if (d.kind !== 'insertion' && d.kind !== 'replacement') return false;
   if (d.alt_bp < 50) {
     // Small indels remain inspectable, but the compact-row contract carries
     // insertion-local chromatin only from 50 bp. Do not open an empty fake carrier.
@@ -48,7 +48,7 @@ export function expandDifference(s: DifferenceSelection): boolean {
   }
   useBrowserStore.getState().expandLiveLift(s.viewKey, { chrom: s.chrom, pos: d.t_start, ins_id: d.id,
     length: d.alt_bp, label: `HG002 ${d.hap_label} +${d.alt_bp.toLocaleString()} bp`, hap_label: d.hap_label,
-    src: d.src, datasetId: s.datasetId, strand: d.strand });
+    src: d.src, datasetId: s.datasetId, strand: d.strand, kind: d.kind, t_end: d.t_end, ref_bp: d.ref_bp });
   // Resolve both parents from map evidence even when a split strip has only
   // loaded its own lane. A collapsed/superseded block cannot be reopened by
   // this asynchronous enrichment.
@@ -61,7 +61,8 @@ export function expandDifference(s: DifferenceSelection): boolean {
     if (!current) return;
     rememberDifferences(response);
     const group = equivalentInsertions(d, response.items);
-    const alleles = group.map(g => ({ ins_id: g.id, hap_label: g.hap_label, length: g.alt_bp, src: g.src, strand: g.strand }));
+    const alleles = group.map(g => ({ ins_id: g.id, hap_label: g.hap_label, length: g.alt_bp, src: g.src, strand: g.strand,
+      kind: g.kind as 'insertion' | 'replacement', t_end: g.t_end, ref_bp: g.ref_bp }));
     const differs = group.some(g => g.alt_bp !== d.alt_bp);
     const label = `HG002 ${d.hap_label} +${d.alt_bp.toLocaleString()} bp` + (group.length > 1 ? ` · ${group.slice(1).map(g => `${g.hap_label} +${g.alt_bp.toLocaleString()} bp`).join(' · ')}${differs ? ' (lengths differ; boundary aligned)' : ''}` : '');
     state.expandLiveLift(s.viewKey, { ...current, length: Math.max(...group.map(g => g.alt_bp)), selected_length: d.alt_bp, alleles, label });
@@ -79,13 +80,14 @@ export function selectReadDifference(read: CompactRead, badge: LiveLiftBadge | u
   const ll = read.live_lift;
   const index = badge ? ll.badges?.indexOf(badge) ?? -1 : -1;
   const id = ll.badge_ids?.[index] ?? undefined;
-  // Unresolved/replacement/elsewhere badges are not insertion evidence.
+  // Unresolved/elsewhere badges cannot establish an alternate block.
   if (badge && !id) return false;
   const payload = id ? ll.insertions?.[id] : undefined;
   const event = read.cigar?.find(e => e.type === 'X' && e.pos + context.start === pos);
   if (!id && !event && !badge) return false;
   const hap = ll.hap_label ?? ll.hap ?? '';
-  const fallback: Difference = { id: id ?? `${hap}:site:${pos}`, hap: ll.hap ?? hap, hap_label: hap,
+  const gap = ll.gap_observations?.find(g => g.id === id);
+  const fallback: Difference = gap ? { ...gap, grch38: null, alt: null } : { id: id ?? `${hap}:site:${pos}`, hap: ll.hap ?? hap, hap_label: hap,
     kind: badge ? 'insertion' : 'snv', reason: badge?.[1] ?? (event?.source === 'reads' && !event.allele ? 'read_mismatch' : 'substitution'),
     source: 'reads',
     t_start: badge ? context.start + badge[0] : context.start + event!.pos,
@@ -103,7 +105,8 @@ export function selectReadDifference(read: CompactRead, badge: LiveLiftBadge | u
   const finish = (difference: Difference) => {
     if (version !== selectionVersion || useBrowserStore.getState().datasets.find(d => d.id === context.datasetId)?.live_lift?.key !== liftKey) return;
     const selection = { datasetId: context.datasetId, panelId: panel.id, viewKey: liveLiftViewKey(panel), chrom: context.chrom, difference };
-    if (action === 'primary' && badge && difference.source === 'assembly' && difference.kind === 'insertion' && difference.alt_bp >= 50) expandDifference(selection);
+    if (action === 'primary' && badge && difference.source === 'assembly'
+      && (difference.kind === 'insertion' || difference.kind === 'replacement') && difference.alt_bp >= 50) expandDifference(selection);
     else useDifferenceSelection.getState().select(selection);
   };
   const canonical = findLoadedDifference(context.datasetId, liftKey, context.chrom, query);

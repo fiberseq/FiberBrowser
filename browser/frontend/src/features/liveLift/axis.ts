@@ -5,8 +5,10 @@ export interface LiveLiftExpansion {
   chrom: string; pos: number; ins_id: string; length: number; label: string; hap_label: string;
   src?: { contig: string | null; start: number | null; end: number | null };
   datasetId?: string;
+  kind?: 'insertion' | 'replacement'; t_end?: number; ref_bp?: number;
   selected_length?: number;
-  alleles?: Array<{ ins_id: string; hap_label: string; length: number; src?: LiveLiftExpansion['src']; strand?: '+' | '-' | null }>;
+  alleles?: Array<{ ins_id: string; hap_label: string; length: number; src?: LiveLiftExpansion['src']; strand?: '+' | '-' | null;
+    kind?: 'insertion' | 'replacement'; t_end?: number; ref_bp?: number }>;
   strand?: '+' | '-' | null;
 }
 export interface AxisPosition { pos: number; ins_id?: string; within?: number }

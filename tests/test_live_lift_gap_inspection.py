@@ -116,3 +116,35 @@ def test_length_distinct_assembly_match_without_target_fasta(tmp_path):
     ds = SimpleNamespace(id="gap", paths=[bam], data_type="bam_livelift", live_lift=config)
     row, = diff.difference_reads(SimpleNamespace(fasta=None, datasets={ds.id: ds}), ds, TARGET, 1100, 1300)["rows"]
     assert row["allele"] == "hg002" and row["read_bases_length"] == 1
+
+
+@pytest.mark.parametrize("strand", ["+", "-"])
+@pytest.mark.parametrize("dq", [788, 792])
+def test_replacement_alternate_block_and_identify_keep_both_spans(tmp_path, strand, dq):
+    import array
+    from services.lift.reads import lifted_reads_for_region
+    config = gap_map(tmp_path, 4, dq, strand)
+    a, b = (200, 200 + dq) if strand == "+" else (SSIZE - 200 - dq, SSIZE - 200)
+    bam = write_bam(tmp_path / "source.bam", lambda h: [
+        make_record(h, "carrier", MAT, a - 50, f"{dq + 100}M", seq="A" * (dq + 100), tags=[
+            ("MD", str(dq + 100)), ("ns", array.array("I", [60])), ("nl", array.array("I", [30]))]),
+        make_record(h, "partial", MAT, a - 20, "100M", seq="A" * 100, tags=[("MD", "100")]),
+    ])
+    ds = SimpleNamespace(id="replacement", paths=[bam], data_type="bam_livelift", live_lift=config)
+    item, = [d for d in diff.assembly_items_for_region(config, TARGET, 1100, 1104) if d["kind"] == "replacement"]
+    rows = lifted_reads_for_region(ds, TARGET, 1000, 1250, dict(hide_terminal_gaps=False))
+    row = next(r for r in rows if r["id"] == "carrier")
+    assert row["live_lift"]["badge_ids"] == [item["id"]]
+    block = row["live_lift"]["insertions"][item["id"]]
+    assert (block["kind"], block["t_start"], block["t_end"], block["ref_bp"], block["length"]) == ("replacement", 1100, 1104, 4, dq)
+    assert block["covered"] == [0, dq]
+    assert [10, 40, 30] in block["intervals"] if strand == "+" else [dq - 40, dq - 10, 30] in block["intervals"]
+    result = diff.difference_reads(SimpleNamespace(fasta=None, datasets={ds.id: ds}), ds, TARGET, 1100, 1104,
+                                   item_id=item["id"], include_sequence=True)
+    assert result["sequence"]["sequence"] == ("A" if strand == "+" else "T") * dq
+    assert result["sequence"]["ins_id"] == item["id"]
+    carrier = next(r for r in result["rows"] if r["id"] == "carrier")
+    assert carrier["carries_insertion"] and carrier["ins_id"] == item["id"] and carrier["full_span"]
+    assert carrier["read_bases_length"] == dq and len(carrier["read_bases"]) == 60
+    partial = next(r for r in result["rows"] if r["id"] == "partial")
+    assert not partial["carries_insertion"] and not partial["full_span"]
