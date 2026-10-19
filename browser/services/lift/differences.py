@@ -154,6 +154,13 @@ def primary_gap_records(handle, chrom, hap):
     has that precise raw gap, with no intervening or overlapping net claim.
     Return (chain, raw gap, recovered_boundary) once per gap.
     """
+    cache = getattr(handle, "_primary_gap_cache", None)
+    if cache is None:
+        # The registry replaces the handle when its fingerprint changes.
+        handle._primary_gap_cache = cache = {}
+    key = (chrom, hap)
+    if key in cache:
+        return cache[key][0]
     ti = handle.map.targets.get(chrom)
     nets = sorted(set((max(ns, handle.map.chains[ci]["t_start"]),
                        min(ne, handle.map.chains[ci]["t_end"]), ci)
@@ -175,8 +182,8 @@ def primary_gap_records(handle, chrom, hap):
             if dt < 0 or dq < 0 or not (dt or dq):
                 continue
             i = bisect.bisect_right(starts, t) - 1
-            interior = (i >= 0 and nets[i][2] == ci and nets[i][0] <= t < nets[i][1]
-                        and t + dt <= nets[i][1])
+            interior = (i >= 0 and nets[i][2] == ci and nets[i][0] < t
+                        and t + dt < nets[i][1])
             boundary = (i >= 0 and i + 1 < len(nets) and nets[i][1] == t
                         and nets[i + 1][0] == t + dt and nets[i][2] == nets[i + 1][2] == ci)
             if not (interior or boundary):
@@ -185,7 +192,24 @@ def primary_gap_records(handle, chrom, hap):
             if any(a < hi and b > lo for a, b in conflicts):
                 continue
             out.append((ci, gap, boundary and not interior))
+    out.sort(key=lambda record: record[1][0])
+    starts, ends, furthest = [], [], -1
+    for _ci, (t, _q, dt, _dq, _reason), _boundary in out:
+        starts.append(t)
+        furthest = max(furthest, t + max(dt, 1))
+        ends.append(furthest)
+    coverage = _merge([(ns, ne) for ns, ne, _ci in nets] +
+                      [(g[0], g[0] + g[2]) for _ci, g, _boundary in out if g[2]])
+    cache[key] = (out, starts, ends, coverage)
     return out
+
+
+def primary_gaps_for_region(handle, chrom, hap, start, end):
+    """Indexed owned gaps overlapping a half-open target view; caller holds lock."""
+    records = primary_gap_records(handle, chrom, hap)
+    _, starts, ends, _ = handle._primary_gap_cache[(chrom, hap)]
+    lo, hi = bisect.bisect_right(ends, start), bisect.bisect_left(starts, end)
+    return [r for r in records[lo:hi] if r[1][0] + max(r[1][2], 1) > start]
 
 
 def _bin_items(config, chrom, bin_index, hap):
@@ -197,8 +221,10 @@ def _bin_items(config, chrom, bin_index, hap):
             return _CACHE[key]
     start = bin_index * BIN_BP
     end = min(start + BIN_BP, handle.target_size(chrom) or start + BIN_BP)
-    out, coverage = [], []
+    out = []
     with handle.lock:
+        gaps = primary_gaps_for_region(handle, chrom, hap, start, end)
+        coverage = handle._primary_gap_cache[(chrom, hap)][3]
         ti = handle.map.targets.get(chrom)
         # Nets are the authority for primary status, including a gap whose
         # two flanking blocks might be outside a tiny requested viewport.
@@ -206,22 +232,26 @@ def _bin_items(config, chrom, bin_index, hap):
         for ns, ne, ci in nets:
             c = handle.map.chains[ci]
             ns, ne = max(ns, c["t_start"]), min(ne, c["t_end"])
+            if ne <= start or ns >= end:
+                continue
             data = handle.map.chain_data(ci)
-            coverage.append((ns, ne))
             # Coverage includes full blocks (not bin-clipped), making uncovered
             # stretches and their IDs stable across adjacent bin queries.
             blocks = []
-            for t, q, length in data["blocks"]:
+            lo_index = bisect.bisect_right(data["bt"], max(ns, start))
+            hi_index = bisect.bisect_left(data["bt"], min(ne, end)) + 1
+            for t, q, length in data["blocks"][lo_index:hi_index]:
                 lo, hi = max(ns, t), min(ne, t + length)
                 if hi > lo:
                     blocks.append((lo, hi, q + lo - t))
-            if ne <= start or ns >= end:
-                continue
             if c["strand"] == "-" and blocks:
-                qs = [_source_span(handle, c, q, hi - lo) for lo, hi, q in blocks]
+                # Preserve the full inversion ID independently of bin clipping.
+                full = [(max(ns, t), min(ne, t + n), q + max(ns, t) - t)
+                        for t, q, n in data["blocks"] if t < ne and t + n > ns]
+                qs = [_source_span(handle, c, q, hi - lo) for lo, hi, q in full]
                 out.append(_item(handle, hap, ci, "inversion", "inversion", ns, ne,
                                  min(q[0] for q in qs), max(q[1] for q in qs)))
-            for t, length, kind in handle.map.inferred_runs(ci, ns, ne):
+            for t, length, kind in handle.map.inferred_runs(ci, max(ns, start), min(ne, end)):
                 if kind not in ("substitution", "aligned"):
                     continue
                 for lo, hi, q in blocks:
@@ -231,10 +261,7 @@ def _bin_items(config, chrom, bin_index, hap):
                     q0, q1 = _source_span(handle, c, q + a - lo, b - a)
                     k = "aligned_bubble" if kind == "aligned" else ("snv" if b - a == 1 else "mnv")
                     out.append(_item(handle, hap, ci, k, kind, a, b, q0, q1))
-        for ci, (t, q, dt, dq, reason), recovered in primary_gap_records(handle, chrom, hap):
-            coverage.append((t, t + dt))
-            if not (start <= t < end or (dt and t < end and t + dt > start)):
-                continue
+        for ci, (t, q, dt, dq, reason), recovered in gaps:
             c = handle.map.chains[ci]
             kind = "replacement" if dt and dq else ("insertion" if dq else "deletion")
             q0, q1 = _source_span(handle, c, q, dq)
@@ -248,7 +275,7 @@ def _bin_items(config, chrom, bin_index, hap):
         # Emit bounded holes between nets, never a bin-dependent artificial tail.
         size = handle.target_size(chrom)
         sentinel = [[size, size]] if size is not None else []
-        for a, b in _merge(coverage) + sentinel:
+        for a, b in coverage + sentinel:
             if a > pos and a > start and pos < end:
                 item = _item(handle, hap, None, "no_correspondence", "no_correspondence", pos, a, None, None)
                 item["id"] = difference_id(handle.haplotype_labels.get(hap, hap), chrom, pos, a, "no_correspondence")

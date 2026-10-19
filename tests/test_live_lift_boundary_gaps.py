@@ -74,6 +74,36 @@ def test_gap_crossing_cache_bin_keeps_id_and_bin_count(tmp_path):
     assert sum(b["count"] for b in payload["bins"] if b["kind"] == "replacement") == 1
 
 
+@pytest.mark.parametrize("dt,dq", [(200, 0), (0, 80)])
+@pytest.mark.parametrize("edge", ["left", "right"])
+def test_net_switch_edge_requires_both_winning_flanks(tmp_path, dt, dq, edge):
+    claims = ([[0, 1000, 1100, 1, []], [0, 1100, 1400 + dt, 0, []]] if edge == "left" else
+              [[0, 1000, 1100 + dt, 0, []], [0, 1100 + dt, 1400 + dt, 1, []]])
+    config = gap_map(tmp_path, dt, dq, claims=claims)
+    with config.handle.lock:
+        assert diff.primary_gap_records(config.handle, TARGET, "H#1") == []
+
+
+def test_bin_scan_bounds_inferred_work_and_reuses_gap_index(tmp_path, monkeypatch):
+    config = gap_map(tmp_path, t=999900, split=False)
+    handle = config.handle
+    original = handle.map.inferred_runs
+    calls = []
+    def inferred(ci, a, b):
+        calls.append((a, b))
+        assert 0 <= a < b <= 1000000
+        return original(ci, a, b)
+    monkeypatch.setattr(handle.map, "inferred_runs", inferred)
+    diff._bin_items(config, TARGET, 0, "H#1")
+    assert calls
+    with handle.lock:
+        first = diff.primary_gap_records(handle, TARGET, "H#1")
+        def unexpected(_ci):
+            pytest.fail("warm ownership lookup rescanned chain payload")
+        monkeypatch.setattr(handle.map, "chain_data", unexpected)
+        assert diff.primary_gap_records(handle, TARGET, "H#1") is first
+
+
 def test_real_owned_boundary_gaps():
     """Optional local cohort; expected spans come directly from raw nets/gaps."""
     manifest = os.environ.get("FIBERBROWSER_TEST_LIFT_MAP")
