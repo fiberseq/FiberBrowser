@@ -399,6 +399,16 @@ def test_partial_supplementary_remains_viable_dissent_without_exclusion_proof():
     assert "unresolved_representation" in result["call"]["reasons"]
 
 
+@pytest.mark.parametrize("exact", [False, True])
+def test_native_adapter_labels_structural_and_geometry_calls_without_assembly(exact):
+    from services.differences.projected_service import native_call
+    a = replace(alignment(sequence=False), contig="target", ref_start=1000, cigar=((0, 50), (2, 20), (0, 50)))
+    result = native_call([a], target(20, 0, exact), policy=ProjectionPolicy(),
+        budget=ProjectionBudget(), context=None, likelihood_budget=None)
+    assert result["call"]["assignment"] == "target"
+    assert result["call"]["method"] == result["geometry_call"]["method"] == "native_cigar"
+
+
 def test_unmapped_query_witnesses_share_the_geometry_storage_budget():
     a = replace(alignment(), ref_start=0, cigar=((0, 1),)*100, sequence="A"*100)
     p = MapPath("outside", "target", "source", (LiftPiece(0, 1000, 1100, 1000, 1100, "+", True, "H#1", "source"),))

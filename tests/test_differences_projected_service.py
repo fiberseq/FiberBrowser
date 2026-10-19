@@ -82,8 +82,12 @@ def test_combined_requires_provenance_and_reconciles_before_counting(evidence, m
     state.dataset_order = ["native", "lift"]
     kwargs = dict(feature="split", chrom=TARGET, start=5900, end=6500, target=insertion(),
                   analysis_scope="combined", native_dataset_id="native")
-    separate = projected_analysis(state, ds, **kwargs)
-    assert separate["targets"][0]["counts"] == [3, 1, 1]
+    with pytest.raises(ValueError, match="shared molecule_groups"):
+        projected_analysis(state, ds, **kwargs)
+    ds.live_lift.settings = replace(ds.live_lift.settings, molecule_groups=((ds.paths[0], "source-only"),))
+    native.molecule_groups = [(native_path, "native-only")]
+    with pytest.raises(ValueError, match="shared molecule_groups"):
+        projected_analysis(state, ds, **kwargs)
     ds.live_lift.settings = replace(ds.live_lift.settings, molecule_groups=((ds.paths[0], "shared"),))
     native.molecule_groups = [(native_path, "shared")]
     combined = projected_analysis(state, ds, **kwargs)
@@ -212,6 +216,8 @@ def test_missing_map_preserves_the_independent_native_call(evidence, monkeypatch
     native = SimpleNamespace(id="native", data_type="bam", paths=[native_path], molecule_groups=[])
     state.datasets["native"] = native
     state.get_dataset = state.datasets.get
+    ds.live_lift.settings = replace(ds.live_lift.settings, molecule_groups=((ds.paths[0], "shared"),))
+    native.molecule_groups = [(native_path, "shared")]
     Path(ds.live_lift.manifest).unlink()
     result = projected_analysis(state, ds, feature="split", chrom=TARGET, start=5900, end=6500,
         target=insertion(), analysis_scope="combined", native_dataset_id="native")

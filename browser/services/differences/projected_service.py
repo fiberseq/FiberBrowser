@@ -265,6 +265,16 @@ def _projected_analysis(state, dataset, *, chrom, start, end, feature, target=No
         raise ValueError("native_only uses the independent native SV service")
     if analysis_scope == "combined" and not native_dataset_id:
         raise ValueError("combined scope requires an independent native dataset")
+    if analysis_scope == "combined":
+        native_dataset = state.datasets.get(native_dataset_id)
+        if native_dataset is None or native_dataset.data_type != "bam":
+            raise ValueError("native_dataset_id must name a native BAM")
+        source_labels = dict(dataset.live_lift.settings.molecule_groups)
+        native_labels = dict(getattr(native_dataset, "molecule_groups", ()) or ())
+        source_groups = {source_labels.get(p) for p in dataset.paths}
+        native_groups = {native_labels.get(p) for p in native_dataset.paths}
+        if not source_groups or None in source_groups or None in native_groups or source_groups != native_groups:
+            raise ValueError("combined scope requires shared molecule_groups for every source and native BAM")
     if analysis_scope == "lifted_only" and native_dataset_id:
         raise ValueError("native_dataset_id requires combined scope")
     if type(start) is not int or type(end) is not int or not 0 <= start < end or end-start > 2_000_000:
@@ -566,7 +576,9 @@ def native_call(alignments, target, *, policy, budget, context, likelihood_budge
     result = call_molecule(alignments, [path], target, policy=policy, budget=budget,
                           context=context, likelihood_budget=likelihood_budget)
     # Provenance is explicit even though the coordinate-walk implementation is shared.
-    result["call"]["method"] = "native_cigar" if target["target_type"] == "geometry" else result["call"]["method"]
+    for key in ("call", "geometry_call"):
+        if result[key]["method"] == "assembly_projection":
+            result[key]["method"] = "native_cigar"
     result["source"] = "reads"
     result["representation"] = "native"
     return result
