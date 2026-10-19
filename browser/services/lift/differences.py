@@ -439,15 +439,19 @@ def difference_sequence(dataset, chrom, pos, item_id, *, offset=0, limit=50_000,
                 next_offset=stop if stop < total else None, source="assembly", allele=allele, orientation=item["strand"])
 
 
-def annotate_read_evidence(items, sv_clusters):
+def annotate_read_evidence(items, sv_clusters, *, matching_policy=None):
     """Legacy geometry candidates, never exact support or a novelty decision.
 
     Keep every compatible cluster/occurrence link and both edit spans. The
     old read_support field is the first candidate only; its count must not
     be unioned with other clusters or promoted to sequence-allele carriage.
-    Full normalization/compound comparison is deliberately still unassessed.
+    Full normalization/compound comparison uses the typed shared provider when
+    complete sequence is requested. This light adapter stays sequence-free.
     """
-    from services.sv_events import breakpoint_tolerance, SV_LENGTH_TOL_FRAC
+    from services.differences.matching import Edit, MatchingPolicy, candidate_relation
+    from services.differences.model import EquivalenceLink
+    from dataclasses import asdict
+    policy = matching_policy or MatchingPolicy()
 
     def shape(value, assembly=False):
         if assembly and "t_start" in value:
@@ -455,29 +459,35 @@ def annotate_read_evidence(items, sv_clusters):
         t, length = value.get("t"), value.get("len", 0)
         return value.get("ref", 0), value.get("ref_len", length if t == "D" else 0), value.get("alt_len", length if t == "I" else 0)
 
-    def candidate(item, cluster):
-        p, r, a = shape(item, True)
+    indexed = []
+    for i, cluster in enumerate(sv_clusters):
+        if cluster.get('source', 'reads') != 'reads' or cluster.get('t') not in ('I', 'D'):
+            continue
         cp, cr, ca = shape(cluster)
-        if (a - r) * (ca - cr) < 0:
-            return False
-        tol = breakpoint_tolerance(max(r, a, cr, ca))
-        lo, hi = cluster.get("uncertainty", (cp, cp))
-        return (lo - tol <= p <= hi + tol and lo + cr - tol <= p + r <= hi + cr + tol
-                and abs(r - cr) <= max(20, SV_LENGTH_TOL_FRAC * max(r, cr))
-                and abs(a - ca) <= max(20, SV_LENGTH_TOL_FRAC * max(a, ca)))
+        # Historical uncertainty may be a measurement CI. It is not a proven
+        # repeat-equivalence interval and cannot expand normalized identity.
+        indexed.append((cp, i, Edit('legacy-read', 'legacy-reference', 'region', cp, cp + cr, ca, 'reads')))
+    indexed.sort(key=lambda entry: entry[:2])
+    starts = [p for p, _, _ in indexed]
+    largest = max((max(e.ref_bp, e.alt_bp) for _, _, e in indexed), default=0)
 
     matched = set()
     for item in items:
         item.pop("read_support", None)
         item.pop("read_candidates", None)
+        item.pop("equivalence_links", None)
         if (item.get("kind") not in ("insertion", "deletion", "replacement")
                 and (item.get("kind") is not None or item.get("t") not in ("I", "D"))):
             continue
         links = []
-        for i, c in enumerate(sv_clusters):
-            if c.get("source", "reads") != "reads" or c.get("t") not in ("I", "D"):
-                continue
-            if candidate(item, c):
+        p, r, a = shape(item, True)
+        left = Edit('legacy-assembly', 'legacy-reference', 'region', p, p + r, a, 'assembly')
+        tolerance = max(policy.broad_anchor_bp, policy.broad_anchor_fraction * max(r, a, largest))
+        candidates = indexed[bisect.bisect_left(starts, p - tolerance):bisect.bisect_right(starts, p + tolerance)]
+        for _cp, i, right in sorted(candidates, key=lambda entry: entry[1]):
+            c = sv_clusters[i]
+            method = candidate_relation(left, right, policy)
+            if method:
                 p, r, a = shape(item, True)
                 cp, cr, ca = shape(c)
                 links.append(dict(cluster=i, carriers=c.get("support", len(c.get("members", ()))),
@@ -485,10 +495,16 @@ def annotate_read_evidence(items, sv_clusters):
                                   assembly_span=dict(start=p, end=p + r, ref_bp=r, alt_bp=a),
                                   read_span=dict(start=cp, end=cp + cr, ref_bp=cr, alt_bp=ca),
                                   uncertainty=list(c.get("uncertainty", (cp, cp)))))
+                links[-1]["candidate_policy"] = policy.version
+                links[-1]["candidate_rule"] = method
                 matched.add(i)
         if links:
             item["read_candidates"] = links
             item["read_support"] = {k: links[0][k] for k in ("cluster", "carriers")}
+            item["equivalence_links"] = [asdict(EquivalenceLink(
+                ((item.get("id", "legacy-assembly"),), ("legacy-cluster:" + str(link["cluster"]),)), "candidate",
+                policy_versions={"matching": policy.version},
+                reasons=(link["candidate_rule"], "sequence_unavailable", "legacy_cluster_scope"))) for link in links]
     unmatched = []
     for i, c in enumerate(sv_clusters):
         if i in matched or c.get("source", "reads") != "reads":
