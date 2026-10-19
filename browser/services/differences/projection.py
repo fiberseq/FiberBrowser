@@ -51,6 +51,10 @@ class ProjectionPolicy:
     conflict_min_overlap: int = 500
     conflict_min_fraction: float = .5
     conflict_max_distance: int = 100_000
+    geometry_anchor_bp: int = 20
+    geometry_anchor_fraction: float = .05
+    geometry_span_bp: int = 20
+    geometry_span_fraction: float = .20
 
     def __post_init__(self):
         if any(type(getattr(self, k)) is not int or getattr(self, k) < 1 for k in
@@ -62,6 +66,9 @@ class ProjectionPolicy:
             raise ValueError("invalid alternative placement policy")
         if self.conflict_min_overlap < 1 or not 0 <= self.conflict_min_fraction <= 1 or self.conflict_max_distance < 0:
             raise ValueError("invalid compatible-query conflict policy")
+        if any(type(v) is not int or v < 0 for v in (self.geometry_anchor_bp, self.geometry_span_bp)) or any(
+                not math.isfinite(v) or not 0 <= v <= 1 for v in (self.geometry_anchor_fraction, self.geometry_span_fraction)):
+            raise ValueError("invalid geometry tolerances")
 
 
 class ProjectionBudget:
@@ -376,11 +383,21 @@ def _slice_observed(alignment, projected, start, end):
     return None, (), None, False
 
 
-def classify_projection(alignment, projected, target, *, context=None, likelihood_policy=None, likelihood_budget=None, min_mapq=20, diagnostic_halo_bp=10_000):
+def classify_projection(alignment, projected, target, *, context=None, likelihood_policy=None, likelihood_budget=None, min_mapq=20, diagnostic_halo_bp=10_000, geometry_policy=None):
     """One call inside one path. Geometry and sequence calls stay independent."""
     start, end, alt_bp = target["ref_start"], target["ref_end"], target["alt_bp"]
     target_id = target["target_id"]
-    matching = [e for e in projected["edits"] if (e["ref_start"], e["ref_end"], e["alt_bp"]) == (start, end, alt_bp)]
+    policy = geometry_policy or ProjectionPolicy()
+    def geometry_matches(e):
+        r, a = e["ref_end"]-e["ref_start"], e["alt_bp"]
+        size = max(end-start, alt_bp, r, a)
+        anchor = max(policy.geometry_anchor_bp, policy.geometry_anchor_fraction*size)
+        delta, expected_delta = a-r, alt_bp-(end-start)
+        same_direction = not expected_delta or delta*expected_delta > 0
+        return (same_direction and abs(e["ref_start"]-start) <= anchor and abs(e["ref_end"]-end) <= anchor
+                and abs(r-(end-start)) <= max(policy.geometry_span_bp, policy.geometry_span_fraction*max(r, end-start))
+                and abs(a-alt_bp) <= max(policy.geometry_span_bp, policy.geometry_span_fraction*max(a, alt_bp)))
+    matching = [e for e in projected["edits"] if geometry_matches(e)]
     flanks = any(any(r["ref_start"] <= start-1 < r["ref_end"] for r in c) and
                  any(r["ref_start"] <= end < r["ref_end"] for r in c) for c in projected["components"])
     relevant = [e for e in projected["edits"] if
@@ -402,7 +419,8 @@ def classify_projection(alignment, projected, target, *, context=None, likelihoo
             reverse_complemented=projected["alignment_orientation"] == "reverse", base_qualities=qualities)
         # A deletion is structurally diagnostic even without BAM SEQ, but a
         # competing empty allele at this boundary is never silently excluded.
-        structural = (matching and flanks and alt_bp == 0 and end > start and competition_complete
+        structural = (any((e["ref_start"], e["ref_end"], e["alt_bp"]) == (start, end, 0) for e in matching)
+                      and flanks and alt_bp == 0 and end > start and competition_complete
                       and (diagnostic_start, diagnostic_end) == (start, end)
                       and candidates.get(target_id) == "" and all(v is not None and v != "" for k, v in candidates.items() if k != target_id))
         if structural:
@@ -507,7 +525,7 @@ def call_molecule(alignments, paths, target, *, policy=ProjectionPolicy(), budge
                 break
             detail = classify_projection(alignment, projected, target, context=context,
                 likelihood_policy=likelihood_policy, likelihood_budget=likelihood_budget, min_mapq=policy.min_mapq,
-                diagnostic_halo_bp=policy.search.max_compound_window_bp)
+                diagnostic_halo_bp=policy.search.max_compound_window_bp, geometry_policy=policy)
             projected_records.append(projected)
             record_details.append(detail)
             # Off-locus records are witnesses, not unresolved locus placements.

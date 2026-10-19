@@ -31,6 +31,10 @@ competition or sequence cannot prove an exact assignment. An optional
 window; candidate strings then include its retained flanks. A displaced
 plausible edit outside the diagnostic window cannot prove reference.
 Geometry counts remain visible when sequence assignment is unresolved.
+Geometry uses configurable narrow defaults (both endpoints: max(20 bp, 5% of
+the larger span); each ref/alt span: max(20 bp, 20%)) and compatible net direction.
+Zero tolerances request strict geometry. These tolerances never establish an
+exact sequence allele or permit a replacement to prove an empty deletion allele.
 
 Read bases always come from BAM SEQ. Expected map sequence never fills missing
 or hard-clipped bases. CT/GA chemistry from an actual primary's `st` tag retains

@@ -273,3 +273,19 @@ def test_unmapped_source_tails_remain_query_witnesses_without_invented_conflicts
     detail = classify_projection(a, projected, target(20, 0))
     assert detail["call"]["assignment"] == "target" and detail["call"]["level"] == "confirmed"
     assert "unresolved_source_witness" in detail["call"]["reasons"]
+
+
+def test_geometry_tolerance_is_saved_policy_and_cannot_promote_a_deletion_allele():
+    p = path(0, 100)
+    a = replace(alignment(100), cigar=((0, 50), (2, 1), (0, 149)), sequence="G"*50+"A"*99+"T"*50)
+    projected = compose_alignment(a, p)
+    assert classify_projection(a, projected, target(0, 100))["call"]["assignment"] == "target"
+    strict = ProjectionPolicy(geometry_anchor_bp=0, geometry_anchor_fraction=0, geometry_span_bp=0, geometry_span_fraction=0)
+    assert classify_projection(a, projected, target(0, 100), geometry_policy=strict)["call"]["assignment"] == "unknown"
+    # A one-base replacement may share deletion geometry. Missing SEQ cannot
+    # use that tolerance as structural proof of the empty exact alternate.
+    p = path(200, 1)
+    a = alignment(1, sequence=False)
+    detail = classify_projection(a, compose_alignment(a, p), target(200, 0, True))
+    assert detail["geometry_evidence"]["assignment"] == "target"
+    assert detail["call"]["assignment"] == "unknown"
