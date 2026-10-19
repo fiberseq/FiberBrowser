@@ -67,6 +67,7 @@ def test_inside_gap_fetch_crop_and_split_keep_display_without_depth(tmp_path, dt
         plan = plan_fetch(selection, config.settings, fetch_range=(start, end))
         assert plan.contigs and 0 < plan.source_bp <= plan.budget_bp
     broad, = lifted_reads_for_region(ds, TARGET, 1000, 1200 + dt)
+    assert len(broad["live_lift"]["badges"]) == bool(dq)
     direct, = lifted_reads_for_region(ds, TARGET, start, end)
     exact, = lifted_reads_for_region(ds, TARGET, 1100, 1100 + dt)
     assert exact["live_lift"]["connectors"] == [[0, dt]]

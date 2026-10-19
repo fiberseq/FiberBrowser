@@ -467,6 +467,9 @@ def _outside_badges(rows, contig, rs, re_, runs, haps, ctx):
     frags = sorted(((f.s, f.e, row, f) for row in rows for f in row.frags), key=lambda x: (x[0], x[1]))
     inner = set()
     for row in rows:
+        # Owned edits across g_split already have an inner display badge,
+        # although their call runs intentionally remain separate.
+        inner.update((a, b) for a, b, _p in row.badge_sources)
         for k, gap in enumerate(row.inner):
             if gap is not None:
                 inner.add((row.frags[k].e, row.frags[k + 1].s))
