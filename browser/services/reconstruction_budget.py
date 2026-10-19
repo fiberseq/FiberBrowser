@@ -129,6 +129,27 @@ class WorkBudget:
             raise ResourceResult('budget_exceeded', 'wavefront_allocation', cells=cells, reserved_bytes=reserved)
         return score, states
 
+    def native_stage(self, pairs):
+        """Preflight a native mapping stage after its actual backbone exists.
+
+        A preceding DAF stage retains its different scoring/kernel. Remaining
+        native knots may use the bounded native alternative without discarding
+        any prior work or resetting the request's cell counter.
+        """
+        if self.algorithm == 'weighted_wavefront:v1':
+            return
+        remaining = self.limits.request_cells - self.cells
+        if remaining <= 0:
+            raise ResourceResult('budget_exceeded', 'request_cells', cells=self.cells)
+        check = WorkBudget(replace(self.limits, request_cells=remaining))
+        try:
+            for pair in pairs:
+                check.pair(*pair)
+        except ResourceResult:
+            for n, m, _width in pairs:
+                self.wavefront(n, m)
+            self.algorithm = 'weighted_wavefront:v1'
+
 
 class Reservations:
     def __init__(self, limits=DEFAULT_LIMITS):

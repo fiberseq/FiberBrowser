@@ -817,6 +817,7 @@ def build_lens(
             "status": "complete",
             "budget_version": "reconstruction:v1",
             "alignment_algorithm": reconstruction['alignment_algorithm'],
+            "alignment_algorithms": reconstruction['alignment_algorithms'],
             "sampling": {"policy": "evenly_by_record_key" if daf_consensus else "evenly_by_length",
                          "input_count": len(full_seqs), "max_reads": 200 if daf_consensus else 32},
             "seq": cons["seq"],

@@ -133,6 +133,11 @@ long tails and cap exhaustion. Lens/alternate metadata records the algorithm,
 and derived cache keys include its producer policy. DAF's distinct scoring
 continues through its own guarded kernel. The bundled 7.5 kb SV demo passes
 under the original 100-million-cell request ceiling with this alternative.
+After DAF consensus has produced its actual backbone, native full/partial knot
+mapping is preflighted against the remaining request budget. It can use the
+native alternative while DAF keeps its original kernel/scoring. No spent work
+is reset. Stage-specific algorithm provenance is returned. This preserves the
+regional native Alu consensus and all carrier rows without relaxing ceilings.
 
 Workers use spawn and pipes, with no listening service. The parent checks
 server cancellation every 20 ms, kills/reaps a running compiled kernel or

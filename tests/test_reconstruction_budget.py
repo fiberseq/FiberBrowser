@@ -38,6 +38,17 @@ def test_aggregate_work_is_charged_across_rounds_and_reads():
     assert budget.cells == 902
 
 
+def test_native_mapping_stage_retains_prior_daf_work_and_uses_remaining_budget():
+    budget = WorkBudget(replace(DEFAULT_LIMITS, request_cells=10_000))
+    budget.pair(50, 50, 48)  # independently calculated 4,947 DAF-stage cells
+    assert budget.cells == 4947
+    budget.native_stage([(50, 50, 48), (50, 50, 48)])
+    assert budget.algorithm == 'weighted_wavefront:v1'
+    assert budget.cells == 4947  # choosing an algorithm cannot reset spent work
+    _score, remaining = budget.wavefront(50, 50)
+    assert remaining == 5053
+
+
 def test_process_reservation_large_job_queue_and_cancelled_waiter():
     manager = Reservations(replace(DEFAULT_LIMITS, max_queued=1))
     manager.acquire(512, True, time.monotonic() + 2, lambda: None)

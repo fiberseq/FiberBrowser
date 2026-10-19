@@ -108,3 +108,23 @@ def test_large_ordinary_consensus_uses_explicit_bounded_alternative():
     result = consensus_with_knots(reads)
     assert result['alignment_algorithm'] == 'weighted_wavefront:v1'
     assert result['seq'] == truth and len(result['reads']) == 24
+
+
+def test_daf_consensus_and_native_knots_share_one_budget_without_changing_daf_scoring():
+    from dataclasses import replace
+    from services.insertion_consensus import fiberhmm_insert_consensus
+    from services.reconstruction_budget import DEFAULT_LIMITS, isolated
+    if fiberhmm_insert_consensus() is None:
+        pytest.skip('DAF-aware FiberHMM consensus is unavailable')
+    truth = 'ACGT' * 100
+    full = [truth] * 16
+    values = [(('synthetic-' + str(i), 0, 0, 0), 0, truth, i % 2, False) for i in range(16)]
+    # Independent cell arithmetic: the three DAF rounds fit, adding native
+    # matrix knots would exceed 3.3M. Exact matching wavefront knots still fit.
+    assert 3 * 16 * 401 * 117 < 3_300_000 < 3 * 16 * 401 * 117 + 32 * 401 * 109
+    result = isolated('services.insertion_consensus', '_lens_reconstruction',
+                      (full, full, [(truth, 'start')] * 16, values, None), {},
+                      lengths=[400] * 48, limits=replace(DEFAULT_LIMITS, request_cells=3_300_000))
+    assert result['method'] == 'daf' and result['full']['seq'] == truth
+    assert result['alignment_algorithms'] == {'consensus': 'daf-banded:v1', 'full_and_partial_knots': 'weighted_wavefront:v1'}
+    assert all(row['identity'] == 1 and row['knots'][-1] == [400, 400] for row in result['full']['reads'] + result['partials'])

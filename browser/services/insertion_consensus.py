@@ -474,15 +474,21 @@ def partials_to_consensus(partials, seq, *, knot_step=32):
 
 
 def _lens_reconstruction(full, canonical, partials, daf_values, why):
+    from services.reconstruction_budget import current_budget
     daf_info, method = None, 'majority'
     if daf_values:
         daf_info, why = _daf_from_carriers(daf_values)
         if daf_info is not None:
             method = 'daf'
     sequence = daf_info['seq'] if daf_info else _build_consensus(canonical)
+    consensus_algorithm = 'daf-banded:v1' if daf_info else current_budget().algorithm
+    pairs = _planned(full, sequence)
+    pairs += [(len(s), min(len(s), len(sequence)), band_width(len(s), min(len(s), len(sequence)))) for s, _ in partials]
+    current_budget().native_stage(pairs)
     result = _consensus_with_knots(full, seq=sequence)
     return {'full': result, 'partials': _partials_to_consensus(partials, sequence),
-            'daf': daf_info, 'method': method, 'fallback': why, 'alignment_algorithm': result['alignment_algorithm']}
+            'daf': daf_info, 'method': method, 'fallback': why, 'alignment_algorithm': result['alignment_algorithm'],
+            'alignment_algorithms': {'consensus': consensus_algorithm, 'full_and_partial_knots': result['alignment_algorithm']}}
 
 
 def reconstruct_lens(full, canonical, partials, *, records=(), daf=False, daf_compatible=True):
@@ -494,8 +500,7 @@ def reconstruct_lens(full, canonical, partials, *, records=(), daf=False, daf_co
         why = 'Canonical allele normalization changes the source query span; using canonical sequence majority'
     ordered = sorted(canonical, key=len)
     backbone = ordered[len(ordered) // 2] if ordered else ''
-    pairs = _planned(full, backbone)
-    pairs += [(len(s), min(len(s), len(backbone)), band_width(len(s), min(len(s), len(backbone)))) for s, _ in partials]
+    pairs = []
     if values:
         ns = [len(v[2]) for v in values]
         median = sorted(ns)[len(ns) // 2]
@@ -503,6 +508,8 @@ def reconstruct_lens(full, canonical, partials, *, records=(), daf=False, daf_co
         pairs += [(len(v[2]), median, 48 + abs(len(v[2]) - median) + max(len(v[2]), median) // 40) for v in used] * 3
     else:
         pairs += _planned(_evenly(ordered, 32), backbone, repeats=2)
+        pairs += _planned(full, backbone)
+        pairs += [(len(s), min(len(s), len(backbone)), band_width(len(s), min(len(s), len(backbone)))) for s, _ in partials]
     lengths = [len(s) for s in full + canonical] + [len(s) for s, _ in partials]
     return isolated(__name__, '_lens_reconstruction', (full, canonical, partials, values, why), {},
                     lengths=lengths, pairs=pairs, large=True, allow_wavefront=not bool(values))
