@@ -173,6 +173,10 @@ class Reservations:
         self.bytes = self.large = self.queued = 0
 
     def acquire(self, size, large, deadline, checkpoint):
+        # Idle numerical workers must yield to real allocations. Their memory
+        # stays charged until they are reaped, even when no request owns them.
+        if self is globals().get('RESERVATIONS') and size and self.bytes + size > self.limits.process_bytes:
+            close_warm_worker()
         with self.condition:
             if size > self.limits.process_bytes:
                 raise ResourceResult("budget_exceeded", "process_bytes", bytes=size)
@@ -226,7 +230,7 @@ def _warm_worker(connection):
     """One numerical worker, no listener; discard job values between requests."""
     import gc
     try:
-        while connection.poll(60):
+        while True:
             job = connection.recv()
             _worker(connection, *job, close=False)
             del job
@@ -239,6 +243,8 @@ def _warm_worker(connection):
 
 _warm_lock = threading.Lock()
 _warm_idle = None
+_warm_timer = None
+WARM_IDLE_SECONDS = 60.0
 
 
 def _reap(process, connection):
@@ -253,9 +259,12 @@ def _reap(process, connection):
 
 def close_warm_worker():
     """Reclaim the idle worker and its retained memory reservation."""
-    global _warm_idle
+    global _warm_idle, _warm_timer
     with _warm_lock:
         idle, _warm_idle = _warm_idle, None
+        if _warm_timer is not None:
+            _warm_timer.cancel()
+            _warm_timer = None
     if idle is not None:
         process, connection, size = idle
         _reap(process, connection)
@@ -263,9 +272,12 @@ def close_warm_worker():
 
 
 def _take_warm(size):
-    global _warm_idle
+    global _warm_idle, _warm_timer
     with _warm_lock:
         idle, _warm_idle = _warm_idle, None
+        if _warm_timer is not None:
+            _warm_timer.cancel()
+            _warm_timer = None
     if idle is not None:
         process, connection, reserved = idle
         if reserved == size and process.is_alive():
@@ -275,11 +287,27 @@ def _take_warm(size):
     return None
 
 
+def _expire_warm(expected):
+    global _warm_idle, _warm_timer
+    with _warm_lock:
+        if _warm_idle is not expected:
+            return
+        _warm_idle, _warm_timer = None, None
+    process, connection, size = expected
+    _reap(process, connection)
+    RESERVATIONS.release(size, False)
+
+
 def _keep_warm(process, connection, size):
-    global _warm_idle
+    global _warm_idle, _warm_timer
     with _warm_lock:
         old = _warm_idle
+        if _warm_timer is not None:
+            _warm_timer.cancel()
         _warm_idle = process, connection, size
+        _warm_timer = threading.Timer(WARM_IDLE_SECONDS, _expire_warm, args=(_warm_idle,))
+        _warm_timer.daemon = True
+        _warm_timer.start()
     if old is not None:
         old_process, old_connection, reserved = old
         _reap(old_process, old_connection)

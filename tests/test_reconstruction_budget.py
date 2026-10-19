@@ -164,3 +164,31 @@ def test_worker_setup_failure_releases_reserved_bytes(monkeypatch):
     with pytest.raises(ResourceResult, match='worker_setup_failed'):
         isolated('builtins', 'sum', ([],), {}, lengths=[])
     assert RESERVATIONS.bytes == 0 and RESERVATIONS.large == 0
+
+
+def test_idle_timeout_reaps_worker_and_releases_real_reservation(monkeypatch):
+    monkeypatch.setattr('services.reconstruction_budget.WARM_IDLE_SECONDS', .05)
+    isolated('os', 'getpid', (), {}, lengths=[], reuse_worker=True)
+    deadline = time.monotonic() + 2
+    while RESERVATIONS.bytes and time.monotonic() < deadline:
+        time.sleep(.01)
+    assert RESERVATIONS.bytes == 0
+    assert not multiprocessing.active_children()
+
+
+def test_active_reuse_cannot_be_killed_by_its_previous_idle_timer(monkeypatch):
+    monkeypatch.setattr('services.reconstruction_budget.WARM_IDLE_SECONDS', .1)
+    first = isolated('os', 'getpid', (), {}, lengths=[], reuse_worker=True)
+    isolated('time', 'sleep', (.2,), {}, lengths=[], reuse_worker=True)
+    assert isolated('os', 'getpid', (), {}, lengths=[], reuse_worker=True) == first
+
+
+def test_other_allocations_reclaim_idle_workers_before_queueing(monkeypatch):
+    isolated('os', 'getpid', (), {}, lengths=[], reuse_worker=True)
+    size = DEFAULT_LIMITS.request_bytes
+    monkeypatch.setattr(RESERVATIONS, 'limits', replace(DEFAULT_LIMITS, process_bytes=768 * 1024**2))
+    RESERVATIONS.acquire(size, False, time.monotonic() + 1, lambda: None)
+    assert RESERVATIONS.bytes == size
+    assert not multiprocessing.active_children()
+    RESERVATIONS.release(size, False)
+    assert RESERVATIONS.bytes == RESERVATIONS.large == RESERVATIONS.queued == 0
