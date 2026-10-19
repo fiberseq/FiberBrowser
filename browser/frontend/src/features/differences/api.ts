@@ -56,8 +56,14 @@ export async function enrichNativeRows(reads: CompactRead[], q: Omit<WorkspaceQu
     const view = Object.keys(state.liveLiftExpansions).find(key => state.liveLiftExpansions[key]?.includes(c));
     const fullLength = Math.max(c.length, ...(response.blocks ?? []).map(b => b.length));
     if (view && fullLength <= 50_000 && fullLength > c.length) state.expandLiveLift(view, { ...c, selected_length: c.selected_length ?? c.length, length: fullLength });
+    const byRow = new Map<string, AlternateBlock[]>();
+    for (const block of response.blocks ?? []) {
+      const key = JSON.stringify([block.row_id, block.record_id]);
+      const matches = byRow.get(key) ?? [];
+      matches.push(block); byRow.set(key, matches);
+    }
     result = result.map(r => {
-      const matching = response.blocks?.filter(b => b.row_id === r.id && b.record_id === r.record_sha256 && (!r.analysis_id || b.alignment_id === r.analysis_id)) ?? [];
+      const matching = (byRow.get(JSON.stringify([r.id, r.record_sha256])) ?? []).filter(b => !r.analysis_id || b.alignment_id === r.analysis_id);
       return matching.length === 1 ? { ...r, alternate_blocks: { ...r.alternate_blocks, [c.ins_id]: matching[0] } } : r;
     });
   }
