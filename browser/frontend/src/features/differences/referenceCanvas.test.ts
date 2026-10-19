@@ -45,3 +45,13 @@ it.each([false,true])('matches authored final pixels through expand, reverse and
     }else{expect(r.at(895,5)).toEqual([255,0,0,255]);expect(r.at(518,25)).toEqual([0,0,0,0]);}
   }
 });
+it.each([false,true])('snaps alternate-interior reference gestures to a finite boundary (reverse=%s)',reversed=>{
+  const root=document.createElement('div'),canvas=document.createElement('canvas');root.appendChild(canvas);canvas.style.width='1792px';
+  const axis=makeAxis(0,1000,1792,reversed,[{chrom:'chr1',pos:504,length:792,ins_id:'allele',label:'',hap_label:''}]);
+  setReferenceSurface(root,{axis,start:0,end:1000,width:1792,gutter:0});
+  for(const offset of [1,396,791]){
+    const x=referenceCanvasX(canvas,axis.toX(0,{ins_id:'allele',offset}));
+    expect(x).toBeCloseTo((reversed?496:504)*1.792);
+    expect(Number.isFinite(Math.max(0,Math.min(1792,x)))).toBe(true);
+  }
+});

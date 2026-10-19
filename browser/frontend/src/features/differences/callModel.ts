@@ -2,12 +2,16 @@ import type { MoleculeCall } from './contracts';
 import type { EvidencePolicy, WorkspaceCalls } from './api';
 
 export function moleculeGroup(call: MoleculeCall, type: 'geometry' | 'exact', policy: EvidencePolicy): 0 | 1 | 2 {
-  const level = call.call.level;
+  const geometry = type === 'geometry' ? call.geometry_evidence : undefined;
+  const evidence = geometry?.assignment ? { ...call.call, ...geometry } : call.call;
+  const level = geometry?.level ?? evidence.level;
   const allowed = level === 'confirmed' || level === 'putative' && policy.include_putative
     || level === 'conflicting' && policy.include_conflicting || level === 'ambiguous' && policy.include_ambiguous;
-  if (type === 'geometry' && call.geometry_group !== undefined) return call.geometry_group as 0 | 1 | 2;
-  if (call.call.assignment === 'target' && allowed) return 0;
-  if (call.call.assignment === 'reference') return 1;
+  if (type === 'geometry' && !geometry?.assignment && call.geometry_group !== undefined) {
+    return call.geometry_group === 0 && !allowed ? 2 : call.geometry_group as 0 | 1 | 2;
+  }
+  if (evidence.assignment === 'target' && allowed) return 0;
+  if (evidence.assignment === 'reference') return 1;
   return 2;
 }
 export function workspaceAssignments(result: WorkspaceCalls, datasetId: string, policy: EvidencePolicy) {

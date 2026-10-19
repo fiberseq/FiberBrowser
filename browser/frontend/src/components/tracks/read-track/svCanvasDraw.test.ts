@@ -197,3 +197,27 @@ it('distinguishes putative carrier highlights with pale dashed evidence markers'
   expect(putative.dashes).toContainEqual([3, 3]);
   expect(putative.dashes).toContainEqual([2, 2]);
 });
+
+it('supports legacy names and explicit row identities with scoped matching',()=>{
+  const row={...REF,analysis_id:'qualified-row'};
+  expect(draw([row],{readHighlightIds:new Set(['r'])}).fills.some(f=>f.fill==='#ca8a04')).toBe(true);
+  expect(draw([row],{readHighlightIds:new Set(['qualified-row']),readHighlightMode:'rows'}).fills.some(f=>f.fill==='#ca8a04')).toBe(true);
+  expect(draw([row],{readHighlightIds:new Set(['r']),readHighlightMode:'rows'}).fills.some(f=>f.fill==='#ca8a04')).toBe(false);
+});
+it.each([false,true])('connects replacement breakpoints to their corresponding column edges (reverse=%s)',async isReversed=>{
+  const {makeAxis}=await import('../../../features/differences/axis');
+  const expansion={chrom:'chrSV',pos:START+504,ref_start:START+500,t_end:START+504,length:100,ins_id:'alternate',label:'',hap_label:''};
+  const axis=makeAxis(START,START+1000,1100,isReversed,[expansion]);
+  const row={...REF,alternate_blocks:{alternate:{pos:START+504,length:100,mol_bp:100,covered:[0,100],intervals:[],hap_label:'',orientation:'+',src:['source',0,100],
+    observed_ref_start:START+498,observed_ref_end:START+508}}} as CompactRead;
+  const out=draw([row],{axis,width:1100,isReversed});
+  const endpoints=(a:number,b:number)=>[Math.min(a,b),Math.max(a,b)];
+  const left=endpoints(axis.toX(START+498),axis.toX(0,{ins_id:'alternate',offset:0}));
+  const right=endpoints(axis.toX(START+508),axis.toX(0,{ins_id:'alternate',offset:100}));
+  expect(out.lines.some(l=>l.x0===left[0]&&l.x1===left[1]&&l.stroke==='#94a3b8')).toBe(true);
+  expect(out.lines.some(l=>l.x0===right[0]&&l.x1===right[1]&&l.stroke==='#94a3b8')).toBe(true);
+  // The four reference bases of a small replacement are absent from its body.
+  const rowFills=out.fills.filter(f=>f.fill===readBg&&f.y>=24&&f.h<=20);
+  const hole=endpoints(axis.toX(START+499),axis.toX(START+503));
+  expect(rowFills.some(f=>f.x0<hole[1]&&f.x1>hole[0])).toBe(false);
+});

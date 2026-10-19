@@ -6,6 +6,7 @@ export interface MoleculeCall {
     level: 'confirmed' | 'putative' | 'conflicting' | 'ambiguous' | null;
     method: string; reasons: string[]; witness_ids: string[]; allele_id?: string | null };
   geometry_group?: number;
+  geometry_evidence?: { assignment?: MoleculeCall['call']['assignment']; level?: MoleculeCall['call']['level'] };
   representations: unknown[];
   complete: boolean;
 }

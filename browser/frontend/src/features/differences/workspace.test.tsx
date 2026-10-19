@@ -85,3 +85,23 @@ it('retains an explicit exact target in saved intent as well as the active split
   const roundtrip=deserializeSavedState(JSON.parse(JSON.stringify(serializeState(useBrowserStore.getState()))));
   expect(Object.values(roundtrip.differencesSession!.targets).find(t=>t.snapshot.target?.target_type==='exact')).toEqual(saved);
 });
+it('keeps saved columns across chromosomes and reference scopes through a session round-trip',()=>{
+  const state=useBrowserStore.getState();
+  const base={chrom:'chr1',pos:500,ins_id:'one',length:100,label:'',hap_label:''};
+  state.expandLiveLift('main',base);
+  state.expandLiveLift('main',{...base,chrom:'chr2',ins_id:'two'});
+  state.expandLiveLift('main',{...base,referenceScope:'other-reference'});
+  expect(useBrowserStore.getState().liveLiftExpansions.main).toHaveLength(3);
+  const saved=deserializeSavedState(JSON.parse(JSON.stringify(serializeState(useBrowserStore.getState()))));
+  expect(saved.liveLiftExpansions?.main).toHaveLength(3);
+  state.expandLiveLift('main',{...base,length:200});
+  expect(useBrowserStore.getState().liveLiftExpansions.main).toHaveLength(3);
+});
+it.each(['putative','conflicting','ambiguous'] as const)('applies %s policy to geometry counts and rows',level=>{
+  const result=structuredClone(response);
+  result.targets[0].calls_by_molecule.m={...call,geometry_group:2,
+    geometry_evidence:{assignment:'target',level},call:{...call.call,level}} as any;
+  const policy={...response.evidence_policy,include_putative:false};
+  expect(workspaceAssignments(result,'native',policy).counts).toEqual([0,0,1]);
+  expect(workspaceAssignments(result,'native',{...policy,[`include_${level}`]:true})).toMatchObject({counts:[1,0,0],rows:{row1:0,row2:0}});
+});

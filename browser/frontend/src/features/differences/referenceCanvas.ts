@@ -88,7 +88,8 @@ export function referenceCanvasX(canvas: HTMLElement | null, x: number): number 
   const gutter=width===s.width?s.gutter:0;
   const ratio=(s.width-s.gutter)/Math.max(1,width-gutter);
   const p=s.axis.fromX((x-gutter)*ratio);
-  if(p.ins_id) return Number.NaN;
+  // Alternate interiors have no reference bases; reference gestures snap to
+  // their anchor so drag/click state always stays finite.
   const forward=s.axis.toX(s.start)<s.axis.toX(s.end);
   return gutter+(forward?p.pos-s.start:s.end-p.pos)/(s.end-s.start)*(width-gutter);
 }

@@ -108,6 +108,7 @@ interface DrawReadsParams {
   linkedHighlightIds?: Set<string>;
   /** Reads gone to by name or highlighted from the read menu (fb-r4-clicks): a solid outline. */
   readHighlightIds?: Set<string> | null;
+  readHighlightMode?: 'rows' | 'names';
   uncertainSvIds?: Set<string>;
   // Selection
   selectedReadIds: Set<string> | undefined;
@@ -576,6 +577,9 @@ export function drawReadTrack(params: DrawReadsParams): void {
   }
   for (let i = firstVisibleRow; i <= lastVisibleRow; i++) {
     const read = displayReads[i];
+    const readHighlighted = params.readHighlightMode === 'rows'
+      ? readHighlightIds?.has(read.analysis_id ?? read.id)
+      : readHighlightIds?.has(read.analysis_id ?? read.id) || readHighlightIds?.has(read.id) || readHighlightIds?.has(read.id.replace(/_\d+$/, ''));
     const svUncertain = uncertainSvIds?.has(read.id) || uncertainSvIds?.has(read.id.replace(/_\d+$/, ''));
     const y = headerHeight + histogramHeight + i * (rowHeight + rowGap) - (needsScroll ? clampedScrollOffset : 0);
 
@@ -620,8 +624,15 @@ export function drawReadTrack(params: DrawReadsParams): void {
       const adjustedEnd = readExtent.end + linkedOffset;
       const clippedStart = Math.max(0, adjustedStart);
       const clippedEnd = Math.min(regionWidth, adjustedEnd);
-      if (readSv && readSv.deletions.length > 0 && clippedEnd > clippedStart) {
-        const rects = bodyClipRects({ start: adjustedStart, end: adjustedEnd }, readSv.deletions, regionWidth, toX);
+      const deletions = [...(readSv?.deletions ?? [])];
+      for (const block of params.axis?.blocks ?? []) {
+        const payload = read.alternate_blocks?.[block.ins.ins_id];
+        if (payload?.observed_ref_start !== undefined && payload.observed_ref_end !== undefined && payload.observed_ref_end > payload.observed_ref_start) {
+          deletions.push({start:payload.observed_ref_start-start,end:payload.observed_ref_end-start,len:payload.observed_ref_end-payload.observed_ref_start});
+        }
+      }
+      if (deletions.length > 0 && clippedEnd > clippedStart) {
+        const rects = bodyClipRects({ start: adjustedStart, end: adjustedEnd }, deletions, regionWidth, toX);
         ctx.fillStyle = readBackgroundColor;
         for (const rect of rects) ctx.fillRect(rect.x, y, rect.w, Math.max(1, rowHeight - rowGap));
         bodyClip = rects;
@@ -1662,8 +1673,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
 
     // A read gone to by name, or highlighted from the read menu: a solid outline
     // and a bar in the gutter (not a data colour; the pulse is an overlay).
-    if (hasDrawableExtent && readHighlightIds && readHighlightIds.size > 0
-      && (readHighlightIds.has(read.analysis_id ?? read.id) || !read.analysis_id && readHighlightIds.has(read.id.replace(/_\d+$/, '')))) {
+    if (hasDrawableExtent && readHighlighted) {
       const readStartRel = readExtent!.start + linkedOffset;
       const readEndRel = readExtent!.end + linkedOffset;
       const readX = isReversed ? toX(readEndRel) : toX(readStartRel);
@@ -1728,8 +1738,12 @@ export function drawReadTrack(params: DrawReadsParams): void {
       for (const block of params.axis.blocks) {
         const payload = read.alternate_blocks?.[block.ins.ins_id] ?? payloadForExpansion(read.live_lift, block.ins);
         if (!payload) continue;
-        if(payload.observed_ref_end!==undefined && payload.observed_ref_end!==block.ins.pos){
-          const own=params.axis.toX(payload.observed_ref_end),anchor=params.axis.toX(0,{ins_id:block.ins.ins_id,offset:0});
+        for (const [observed, expected, offset] of [
+          [payload.observed_ref_start, block.ins.ref_start ?? block.ins.pos, 0],
+          [payload.observed_ref_end, block.ins.t_end ?? block.ins.pos, block.ins.length],
+        ]) {
+          if (observed === undefined || observed === expected) continue;
+          const own=params.axis.toX(observed),anchor=params.axis.toX(0,{ins_id:block.ins.ins_id,offset:offset!});
           ctx.save();ctx.strokeStyle='#94a3b8';ctx.setLineDash([2,2]);ctx.beginPath();ctx.moveTo(sidebarWidth+own,y+(rowHeight-rowGap)/2);ctx.lineTo(sidebarWidth+anchor,y+(rowHeight-rowGap)/2);ctx.stroke();ctx.restore();
         }
         // The shorter allele leaves a marked tail; never stretch its calls.
@@ -1744,7 +1758,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
           enabled: enabledModTypes, layerColors,
           color: (_a, _b, size, layer) => getColorHit(block.ins.pos - start, block.ins.pos - start, size, layer).color,
         });
-        if (readHighlightIds?.has(read.analysis_id ?? read.id) || selectedReadIds?.has(read.id) || linkedHighlightIds?.has(read.id)) {
+        if (readHighlighted || selectedReadIds?.has(read.id) || linkedHighlightIds?.has(read.id)) {
           const a=params.axis.toX(0,{ins_id:block.ins.ins_id,offset:payload.covered[0]});
           const b=params.axis.toX(0,{ins_id:block.ins.ins_id,offset:payload.covered[1]});
           ctx.save();ctx.strokeStyle=selectedReadIds?.has(read.id)?'#06b6d4':'#ca8a04';ctx.lineWidth=2;
