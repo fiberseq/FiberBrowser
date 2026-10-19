@@ -162,7 +162,12 @@ def primary_gap_records(handle, chrom, hap):
     nets = [n for n in nets if n[0] < n[1]]
     starts = [n[0] for n in nets]
     # A malformed/ambiguous overlap must not award either chain ownership.
-    conflicts = _merge((b[0], min(a[1], b[1])) for a, b in zip(nets, nets[1:]) if a[1] > b[0])
+    overlaps, furthest_end = [], -1
+    for ns, ne, _ci in nets:
+        if ns < furthest_end:
+            overlaps.append((ns, min(ne, furthest_end)))
+        furthest_end = max(furthest_end, ne)
+    conflicts = _merge(overlaps)
     out = []
     for ci in sorted({n[2] for n in nets}):
         for gap in handle.map.chain_data(ci)["gaps"]:

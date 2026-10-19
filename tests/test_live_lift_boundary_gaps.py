@@ -55,6 +55,8 @@ def test_owned_gap_geometry_and_tiny_views(tmp_path, dt, dq, strand, split):
     [[0, 1000, 1100, 0, []], [0, 1150, 1250, 1, []], [0, 1300, 1400, 0, []]],
     [[0, 1000, 1200, 0, []], [0, 1200, 1400, 1, [0]]],  # gap crosses a winner
     [[0, 1000, 1400, 0, []], [0, 1150, 1250, 1, []]],  # conflicting claim
+    [[0, 1000, 1400, 1, []], [0, 1020, 1030, 1, []],
+     [0, 1050, 1100, 0, []], [0, 1300, 1350, 0, []]],  # nested claims cannot hide an outer winner
 ])
 def test_other_winners_and_holes_are_not_gap_evidence(tmp_path, claims):
     config = gap_map(tmp_path, claims=claims)
