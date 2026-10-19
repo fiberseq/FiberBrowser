@@ -266,6 +266,7 @@ class _Ctx:
         self.labels = handle.haplotype_labels if handle is not None else {}
         self.molecule_groups = {}
         self._gap_cache = {}
+        self._owned_gap_items = None
         self.loader_options = opts
 
     def count(self, name, n=1):
@@ -961,11 +962,80 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
         from services.lift.differences import row_mismatches
         payload.setdefault("cigar", []).extend(row_mismatches(read, row, ctx, payload["live_lift"]["hap"]))
         payload["cigar"].sort(key=lambda e: (e["pos"], e["type"]))
+    _assembly_gap_metadata(read, row, contig, runs, payload, ctx)
     _insertion_metadata(read, row, contig, runs, call_lo, payload, ctx)
     # Geometry clipped to the region, as intervals are (a broad-cache crop gives the same).
     from services.lift.reads import clip_geometry
     payload["live_lift"] = clip_geometry(payload["live_lift"], 0, width)
     return payload
+
+
+def _assembly_gap_metadata(read, row, contig, runs, payload, ctx):
+    """Map observations at the evidence floor, separate from read SV evidence.
+
+    These describe expected assembly geometry and observed source coverage.
+    They do not compose read deviations/cancellation or certify an allele.
+    Absolute target/source endpoints survive cropping; pos is view-relative.
+    """
+    from services.lift.differences import primary_gap_records, _item, _source_span
+    from services.sv_events import SV_EVIDENCE_FLOOR
+
+    if ctx.handle is None or ctx.loader_options.get("_insertion_local") or row.alt:
+        return
+    if ctx._owned_gap_items is None:
+        grouped = {}
+        haps = {p.hap for p in ctx.selection.pieces if p.primary}
+        with ctx.handle.lock:
+            for hap in haps:
+                for ci, (t, q, dt, dq, reason), _ in primary_gap_records(ctx.handle, ctx.selection.chrom, hap):
+                    if max(dt, dq) < SV_EVIDENCE_FLOOR or t > ctx.selection.end or t + dt < ctx.selection.start:
+                        continue
+                    c = ctx.handle.map.chains[ci]
+                    a, b = _source_span(ctx.handle, c, q, dq)
+                    kind = "replacement" if dt and dq else "insertion" if dq else "deletion"
+                    grouped.setdefault(ci, []).append(_item(ctx.handle, hap, ci, kind, ctx.handle.map.reasons[reason], t, t + dt, a, b))
+        ctx._owned_gap_items = grouped
+    observations = []
+    rs, re = int(read["reference_start"]), int(read["reference_end"])
+    for ci in sorted({f.p.chain for f in row.frags}):
+        for item in ctx._owned_gap_items.get(ci, ()):
+            a, b = item["src"]["start"], item["src"]["end"]
+            if item["src"]["contig"] != contig or re < a or rs > b:
+                continue
+            lo, hi = max(rs, a), min(re, b)
+            aligned = sum(max(0, min(hi, r + n) - max(lo, r)) for r, n in zip(runs.ref, runs.len))
+            left = any(r <= a - 1 < r + n for r, n in zip(runs.ref, runs.len))
+            right = any(r <= b < r + n for r, n in zip(runs.ref, runs.len))
+            mol_bp = runs.mol_between(lo, hi)
+            covered = [lo - a, hi - a] if item["strand"] == "+" else [b - hi, b - lo]
+            obs = dict(item, pos=item["t_start"] - ctx.region_start, method="assembly_projection",
+                       display_only=True, sequence_status="unresolved", read_deviations="unassessed",
+                       coverage=dict(source=covered, aligned_bp=aligned, mol_bp=mol_bp,
+                                     left_flank=left, right_flank=right,
+                                     full=left and right and aligned == b - a))
+            observations.append(obs)
+            # The glyph uses the native mixed-edit geometry, without entering
+            # sv_evidence. Partial source insertions retain observed lengths.
+            if item["kind"] == "insertion":
+                length = mol_bp
+                if length < SV_EVIDENCE_FLOOR:
+                    continue
+                t = "I"
+            else:
+                if not (left and right):
+                    continue
+                length = max(item["ref_bp"], item["alt_bp"])
+                t = "I" if item["alt_bp"] >= item["ref_bp"] else "D"
+            marker = dict(t=t, ref=item["t_start"], ref_end=item["t_end"], len=length,
+                          ref_len=item["ref_bp"], alt_len=item["alt_bp"], source="assembly",
+                          method="assembly_projection", display_only=True, hap=item["hap_label"],
+                          difference_id=item["id"], kind=item["kind"], coverage=obs["coverage"])
+            if item["kind"] == "insertion":
+                marker["ins_id"] = item["id"]
+            payload.setdefault("sv", []).append(marker)
+    payload["live_lift"]["gap_observations"] = observations
+    if payload.get("sv"):
+        payload["sv"].sort(key=lambda e: (e.get("ref", 0), e.get("t", "")))
 
 
 def _insertion_metadata(read, row, contig, runs, call_lo, payload, ctx):
@@ -998,11 +1068,6 @@ def _insertion_metadata(read, row, contig, runs, call_lo, payload, ctx):
         ll["badge_ids"].append(ins_id if length >= 50 else None)
         lo, hi = max(a, int(read["reference_start"])), min(b, int(read["reference_end"]))
         mol_bp = runs.mol_between(lo, hi)
-        # Only a source-only map gap establishes an assembly insertion.
-        # Uncovered, replacement and unresolved badges keep their own kinds.
-        if badge[1] != "elsewhere" and mol_bp >= int(ctx.loader_options.get("sv_min_len", 50)):
-            payload.setdefault("sv", []).append({"t": "I", "ref": badge[0], "len": mol_bp,
-                                                  "source": "assembly", "hap": label, "ins_id": ins_id})
         if length < 50:
             continue
         if length > 50_000:
@@ -1020,7 +1085,7 @@ def _insertion_payloads(read, row, contig, runs, call_lo, ctx, p, a, b, lo, hi, 
     local_ctx = copy.copy(ctx)
     local_ctx.region_start, local_ctx.region_end, local_ctx.width = 0, length, length
     # The synthetic block is not a target locus; never compare it to hg38.
-    local_ctx.loader_options = dict(ctx.loader_options, include_cigar=False)
+    local_ctx.loader_options = dict(ctx.loader_options, include_cigar=False, _insertion_local=True)
     local = _Row(row.strand, row.alt)
     local.add_run([_Frag(lo, hi, p._replace(q_start=a, q_end=b, t_start=0, t_end=length))], ctx.settings.rejoin_bp)
     local.index()

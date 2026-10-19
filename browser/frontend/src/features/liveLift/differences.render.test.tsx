@@ -5,7 +5,7 @@ import { DifferencesStrip } from './DifferencesStrip';
 import { getDifferenceReads, getDifferences } from './api';
 import { useBrowserStore } from '../../stores/browserStore';
 import { useLiveLiftStore } from './store';
-import { expandDifference, selectReadDifference, useDifferenceSelection } from './inspectionStore';
+import { expandDifference, selectMapGap, selectReadDifference, useDifferenceSelection } from './inspectionStore';
 import { clearDifferenceCache, rememberDifferences } from './differenceCache';
 import { PanelDisplayContext } from '../../hooks/usePanelDisplayStore';
 import { useLiveLiftAxis } from './useLiveLiftAxis';
@@ -190,6 +190,19 @@ it('leaves unresolved badges as read navigation without inventing insertion evid
   expect(selectReadDifference(read, badge, 500, { datasetId: dataset.id, stateKey: panel.stateKey!, chrom: 'chr1', start: 0 })).toBe(false);
   expect(getDifferences).not.toHaveBeenCalled();
   expect(useDifferenceSelection.getState().selection).toBeNull();
+});
+
+it.each([0, 1])('opens a map marker with both spans and %i alternate bases', alt => {
+  const gap = { ...diff, id: 'gap', kind: alt ? 'replacement' as const : 'deletion' as const,
+    t_end: 2233, ref_bp: 1733, alt_bp: alt, src: { contig: 'src', start: 100, end: 100 + alt },
+    pos: 500, method: 'assembly_projection' as const, display_only: true as const,
+    sequence_status: 'unresolved' as const, read_deviations: 'unassessed' as const,
+    coverage: { source: [0, alt] as [number, number], aligned_bp: alt, mol_bp: alt, left_flank: true, right_flank: true, full: true } };
+  const read = { id: 'carrier', live_lift: { segments: [], gap_observations: [gap] } } as CompactRead;
+  expect(selectMapGap(read, 'gap', { datasetId: 'lift', stateKey: 'mat-state', chrom: 'chr1' })).toBe(true);
+  expect(useDifferenceSelection.getState().selection?.difference).toMatchObject({ id: 'gap', t_start: 500, t_end: 2233, ref_bp: 1733, alt_bp: alt });
+  expect(useBrowserStore.getState().liveLiftExpansions.main ?? []).toHaveLength(0);
+  expect(getDifferences).not.toHaveBeenCalled();
 });
 
 

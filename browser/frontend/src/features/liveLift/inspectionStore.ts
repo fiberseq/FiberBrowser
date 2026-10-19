@@ -17,6 +17,19 @@ export const useDifferenceSelection = create<{
   selection: DifferenceSelection | null; select: (selection: DifferenceSelection | null) => void;
 }>(set => ({ selection: null, select: selection => { selectionVersion++; set({ selection }); } }));
 
+/** A map marker carries its exact map link and both spans, including a
+ * replacement's one-base alternate. It never opens a native SV action. */
+export function selectMapGap(read: CompactRead, id: string | undefined,
+  context: { datasetId: string; stateKey: string; chrom: string }): boolean {
+  if (!useLiveLiftStore.getState().enabled || !id) return false;
+  const gap = read.live_lift?.gap_observations?.find(g => g.id === id);
+  const panel = useBrowserStore.getState().panels.find(p => p.datasetId === context.datasetId && (p.stateKey ?? p.datasetId) === context.stateKey);
+  if (!gap || !panel) return false;
+  useDifferenceSelection.getState().select({ datasetId: context.datasetId, panelId: panel.id,
+    chrom: context.chrom, viewKey: liveLiftViewKey(panel), difference: { ...gap, grch38: null, alt: null } });
+  return true;
+}
+
 export function expandDifference(s: DifferenceSelection): boolean {
   const d = s.difference;
   const panel = useBrowserStore.getState().panels.find(p => p.id === s.panelId);

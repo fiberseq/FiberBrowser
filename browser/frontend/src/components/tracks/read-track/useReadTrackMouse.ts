@@ -20,7 +20,7 @@ import { beginPointerDrag, clearDocumentSelection, endPointerDrag } from '../../
 import { maybeShowReadActionsHint } from '../../../stores/readActionsStore';
 import { liveLiftHitAt, type LiveLiftBadge } from './liveLiftCanvas';
 import type { LiftAxis } from '../../../features/liveLift/axis';
-import { selectReadDifference } from '../../../features/liveLift/inspectionStore';
+import { selectMapGap, selectReadDifference } from '../../../features/liveLift/inspectionStore';
 
 const IS_MAC = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
 
@@ -529,6 +529,8 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
     const read = hit?.read ?? null;
     if (read && hit?.liveLiftBadge && selectReadDifference(read, hit.liveLiftBadge, genomePos,
       { datasetId, stateKey, chrom, start: linkedBoundsStart ?? start }, 'inspect')) return;
+    const mapHit = svEventAtXY(x, y);
+    if (mapHit && selectMapGap(mapHit.read, mapHit.event.difference_id, { datasetId, stateKey, chrom })) return;
     setContextTarget({
       clientX,
       clientY,
@@ -539,7 +541,7 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
       footprint: read ? getFootprintAtXY(x, y) : null,
       genomePos,
     });
-  }, [sidebarWidth, width, regionWidth, isReversed, start, end, getReadHitAtXY, getFootprintAtXY, panScope, genomePosAtX, datasetId, stateKey, chrom, linkedBoundsStart]);
+  }, [sidebarWidth, width, regionWidth, isReversed, start, end, getReadHitAtXY, getFootprintAtXY, panScope, genomePosAtX, datasetId, stateKey, chrom, linkedBoundsStart, svEventAtXY]);
   const handleContextMenu = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = (e.clientX - rect.left) * e.currentTarget.clientWidth / rect.width;
@@ -595,6 +597,7 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
         mismatch ? origin + mismatch.pos : genomePosAtX(x), { datasetId, stateKey, chrom, start: origin })) return;
       // A click on an insertion's flag copies its inserted bases.
       const hit = svEventAtXY(x, y);
+      if (hit && selectMapGap(hit.read, hit.event.difference_id, { datasetId, stateKey, chrom })) return;
       if (hit && hit.event.t === 'I') {
         void copyInsertedSequence({ datasetId, chrom, readId: hit.read.id, event: hit.event, stateKey });
       }

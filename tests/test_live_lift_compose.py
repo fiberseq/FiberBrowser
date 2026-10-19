@@ -149,10 +149,12 @@ def test_sv_deletion_on_plus_and_no_connectors_in_sv(toy):
     for row in load.rows:
         assert all(e["t"] in ("D", "I", "S") for e in row.get("sv", ()))
     (plus,) = _rows(load, "plus")
-    # The source-only gap is assembly insertion evidence; the target-only
-    # connector remains geometry, never a read deletion.
-    assert plus["sv"] == [{"t": "I", "ref": 6010, "len": 100, "source": "assembly", "hap": "MAT",
-                           "ins_id": f"MAT:{MAT}:5000-5100:insertion"}]
+    # Both map gap shapes have display markers at the fixed evidence floor;
+    # neither supplies authoritative CIGAR read evidence.
+    assert [(e["t"], e["ref"], e["len"], e["source"]) for e in plus["sv"]] == [
+        ("D", 4000, 10, "assembly"), ("I", 6010, 100, "assembly")]
+    assert all(e["display_only"] and e["method"] == "assembly_projection" for e in plus["sv"])
+    assert plus["sv"][1]["ins_id"] == f"MAT:{MAT}:5000-5100:insertion"
 
 
 def test_identity_components(toy):

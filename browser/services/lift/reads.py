@@ -140,6 +140,10 @@ def clip_geometry(ll: dict, offset: int, width: int) -> dict:
     out["badge_ids"] = [ids[i] if i < len(ids) else None for i in kept]
     out["insertions"] = {key: (dict(value, pos=value["pos"] - offset) if "pos" in value else dict(value))
                          for key, value in (ll.get("insertions") or {}).items() if key in out["badge_ids"]}
+    if "gap_observations" in ll:
+        out["gap_observations"] = [dict(g, pos=g["pos"] - offset) for g in ll["gap_observations"]
+                                   if (offset <= g["pos"] <= offset + width if not g["ref_bp"] else
+                                       g["pos"] < offset + width and g["pos"] + g["ref_bp"] > offset)]
     return out
 
 

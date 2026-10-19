@@ -559,6 +559,8 @@ def cluster_sv_events(reads: Iterable[dict], start: int, end: int, min_len: int,
     evidence_items = set()
     clips = []
     for read in reads:
+        if read.get("live_lift"):
+            continue  # map display observations are not native read evidence
         events = read.get("sv_evidence", read.get("sv"))
         if not events:
             continue
@@ -710,6 +712,8 @@ def carrier_evidence(read: dict, t: str, ref: int, length: int, chrom: Optional[
     - ``{'kind': 'clip', 'clip': ev}`` (insertions): a clip at the breakpoint
       (``insertion_clip_at``), with or without an SA segment.
     """
+    if read.get("live_lift"):
+        return None  # authoritative projection remains capability-gated
     events = read.get("sv_evidence", read.get("sv")) or ()
     best = None
     for ev in events:
@@ -844,6 +848,8 @@ def classify_allele_evidence(read: dict, t: str, ref: int, length: int, margin: 
     (spans both breakpoints +- margin without it), 2 not informative. A read
     with another insertion at an insertion's site is not informative
     (evidence ``{'kind': 'other'}``)."""
+    if read.get("live_lift"):
+        return 2, None
     evidence = carrier_evidence(read, t, ref, length, chrom, uncertainty=uncertainty)
     if evidence is not None:
         if evidence['level'] == 'putative':

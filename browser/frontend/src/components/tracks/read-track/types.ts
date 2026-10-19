@@ -65,6 +65,7 @@ export interface CigarEvent {
  * query position in the BAM SEQ frame.
  */
 export interface SvAlleleMetadata {
+  source?: 'assembly' | 'reads'; method?: 'assembly_projection'; display_only?: boolean; difference_id?: string;
   ref_end?: number; ref_len?: number; alt_len?: number; q_end?: number;
   raw_ref?: number; raw_ref_end?: number; uncertainty?: [number, number];
   inserted_len?: number; deleted_len?: number; net_len?: number;
@@ -150,6 +151,14 @@ export interface AnnotationLayer {
 
 /** A live-lift row's map geometry and provenance (services/lift/compose.py; view-relative like `intervals`). */
 export interface LiveLiftRow {
+  /** Absolute map spans plus view-relative pos; display observations, never sv_evidence. */
+  gap_observations?: Array<{
+    id: string; hap: string; hap_label: string; kind: 'insertion' | 'deletion' | 'replacement'; reason: string;
+    source: 'assembly'; t_start: number; t_end: number; ref_bp: number; alt_bp: number; chain: number; strand: '+' | '-';
+    src: { contig: string; start: number; end: number }; pos: number;
+    method: 'assembly_projection'; display_only: true; sequence_status: 'unresolved'; read_deviations: 'unassessed';
+    coverage: { source: [number, number]; aligned_bp: number; mol_bp: number; left_flank: boolean; right_flank: boolean; full: boolean };
+  }>;
   /** Canonical insertion IDs parallel to badges, retained while collapsed (null for small/unresolved spans). */
   badge_ids?: Array<string | null>;
   /** Insertion-local annotations fetched for expanded IDs; usually empty on collapsed rows. */

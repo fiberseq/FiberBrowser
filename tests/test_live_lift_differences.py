@@ -154,17 +154,17 @@ def test_hidden_payload_never_changes_coverage_or_footprint_count(evidence):
     assert lifted_coverage(ds, TARGET, 1000, 14000, 30, rows=rows) == lifted_coverage(ds, TARGET, 1000, 14000, 30, rows=without)
 
 
-def test_assembly_sv_reuses_carrier_helpers(evidence):
+def test_assembly_markers_are_display_only(evidence):
     state, ds, _ = evidence
     from services.sv_events import carrier_evidence, classify_allele, cluster_sv_events, sv_events_in_view, read_deletion_cuts
     rows = lifted_reads_for_region(ds, TARGET, 1000, 7000)
     row = next(r for r in rows if r["id"] == "hg")
-    assert carrier_evidence(row, "I", 6010, 100, TARGET)
-    assert classify_allele(row, "I", 6010, 100, chrom=TARGET) == 0
+    assert carrier_evidence(row, "I", 6010, 100, TARGET) is None
+    assert classify_allele(row, "I", 6010, 100, chrom=TARGET) == 2
     clusters, _ = cluster_sv_events(rows, 1000, 7000, 50)
-    assert any(c["t"] == "I" and c["ref"] == 6010 for c in clusters)
+    assert clusters == []
     assert sv_events_in_view(row["sv"], 6000, 6020, 50)[0]["source"] == "assembly"
-    assert not any(ev["t"] == "D" for ev in row["sv"])
+    assert all(ev["display_only"] for ev in row["sv"] if ev["source"] == "assembly")
     assert read_deletion_cuts(row) == []
 
 
