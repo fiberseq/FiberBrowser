@@ -2,6 +2,8 @@
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from services import sv_endpoint
 
 
@@ -30,3 +32,28 @@ def test_native_versioned_adapter_preserves_geometry_without_map_or_sequence(mon
     assert len(envelope['calls_by_molecule']) == 4
     assert len(envelope['membership']['rows']['synthetic-dataset']) == 4
     assert envelope['target']['target_type'] == 'geometry'
+
+
+@pytest.mark.parametrize('include_duplicates', [False, True])
+def test_default_dataset_and_duplicate_memberships_match_classified_molecules(monkeypatch, include_duplicates):
+    rows = [
+        {'id': 'kept', 'row_id': 'kept-row', 'reference_start': 0, 'reference_end': 300, 'sv': []},
+        {'id': 'duplicate', 'row_id': 'duplicate-row', 'duplicate': True, 'reference_start': 0, 'reference_end': 300, 'sv': []},
+        # A supplementary nonduplicate cannot revive a duplicate-only primary.
+        {'id': 'duplicate', 'row_id': 'supplementary-row', 'supplementary': True, 'reference_start': 0, 'reference_end': 300, 'sv': []},
+    ]
+    dataset = SimpleNamespace(data_type='bam', paths=[])
+    state = SimpleNamespace(datasets={'synthetic-dataset': dataset}, dataset_order=['synthetic-dataset'],
+                            get_dataset=lambda key: dataset if key == 'synthetic-dataset' else None)
+    monkeypatch.setattr(sv_endpoint, '_scan', lambda *a, **k: rows)
+    result = sv_endpoint.sv_split_payload(state, dataset_id='', chrom='chrT', start=0, end=300,
+                                         t='I', ref=100, length=100, margin=20,
+                                         payload_version=2, include_duplicates=include_duplicates)
+    envelope = result['differences']
+    calls = envelope['calls_by_molecule']
+    membership = envelope['membership']['rows']['synthetic-dataset']
+    assert {c['molecule_id']['library_id'] for c in calls.values()} == {'synthetic-dataset'}
+    assert {c['molecule_id']['raw_name'] for c in calls.values()} == ({'kept', 'duplicate'} if include_duplicates else {'kept'})
+    assert set(membership) == ({'kept-row', 'duplicate-row', 'supplementary-row'} if include_duplicates else {'kept-row'})
+    assert set(membership.values()) == set(calls)
+    assert envelope['geometry_counts'] == result['counts']

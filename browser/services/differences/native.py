@@ -11,13 +11,15 @@ from .model import AlleleTarget, Geometry, ResultScope, SCHEMA_VERSION, Span
 
 
 def native_geometry_envelope(by_name, entries, *, dataset_id, chrom, start, end, t, ref, length,
-                             target_end=None, policy=None):
+                             target_end=None, policy=None, include_duplicates=False):
     geometry = Geometry(Span(chrom, ref, target_end if target_end is not None else ref + length if t == "D" else ref),
                         length if t == "I" else 0, "insertion" if t == "I" and target_end in (None, ref) else "deletion" if t == "D" else "replacement")
     target = AlleleTarget(content_id("frozen-geometry:v1", [dataset_id, geometry.payload()]), 1, "geometry",
                          "unresolved_reference:" + dataset_id, geometry)
     index, calls = MembershipIndex(), {}
     for row in entries:
+        if row['id'] not in by_name or (row.get('duplicate') and not include_duplicates):
+            continue
         molecule = MoleculeId("legacy_merged_dataset", dataset_id, row["id"])
         index.add(dataset_id, row.get("row_id", row["id"]), molecule, analysis_id=row.get("analysis_id"))
     for name, entry in by_name.items():

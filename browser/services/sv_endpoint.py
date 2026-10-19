@@ -220,6 +220,8 @@ def sv_split_payload(state, *, dataset_id: str, chrom: str, start: int, end: int
     if length <= 0:
         raise SvRequestError("len must be positive")
     margin = SV_SPAN_MARGIN if margin is None else max(0, int(margin))
+    from services.query_params import resolve_dataset_id
+    dataset_id = resolve_dataset_id(state, dataset_id)
     entries = scan_view(state, dataset_id, chrom, int(start), int(end), allele_floor(length))
     by_name = classify_compact(((c, c) for c in entries), t=t, ref=ref, length=length,
                                margin=margin, include_duplicates=include_duplicates, include_putative=include_putative, include_ambiguous=include_ambiguous, include_conflicting=include_conflicting, conflict_options=conflict_options,
@@ -252,7 +254,7 @@ def sv_split_payload(state, *, dataset_id: str, chrom: str, start: int, end: int
         from services.sv_conflicts import normalize_conflict_options
         payload["differences"] = native_geometry_envelope(
             by_name, entries, dataset_id=dataset_id, chrom=chrom, start=start, end=end,
-            t=t, ref=ref, length=length, target_end=target_end,
+            t=t, ref=ref, length=length, target_end=target_end, include_duplicates=include_duplicates,
             policy={"include_duplicates": include_duplicates, "include_putative": include_putative,
                     "include_ambiguous": include_ambiguous, "include_conflicting": include_conflicting,
                     "conflict_options": normalize_conflict_options(conflict_options)})
