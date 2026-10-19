@@ -941,6 +941,10 @@ function deserializeState(
   s = withoutMissingPackState(s);
   const differences = restoreDifferencesSession(s as unknown as Record<string, unknown>);
   s = { ...s, ...restoreHistoricalMembership(s, differences) };
+  const svSplits = normalizeSvSplits(s.svSplits);
+  for (const [key, def] of Object.entries(svSplits)) {
+    if (!s.differencesSession || differences.targets[key]?.frozen) def.frozenImport = true;
+  }
   applyCoaccSettings(s.coaccSettings);
   applyExcludedReads(s.excludedReadIds);
 
@@ -1028,7 +1032,7 @@ function deserializeState(
     analysisSortRules: normalizeAnalysisSortRules(s.analysisSortRules),
     analysisFilterRules: normalizeAnalysisFilterRules(s.analysisFilterRules),
     clusterAssignments: s.clusterAssignments,
-    svSplits: normalizeSvSplits(s.svSplits),
+    svSplits,
     differencesSession: differences,
     svCarrierEvidence: normalizeSvCarrierEvidence(s.svCarrierEvidence),
     clusterGroupLabels: normalizeClusterGroupLabels(s.clusterGroupLabels),

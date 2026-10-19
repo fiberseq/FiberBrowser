@@ -3,7 +3,7 @@ import { useBrowserStore } from '../../stores/browserStore';
 import { deserializeSavedState, remapDatasetIds, serializeState } from '../../stores/historySlice';
 import { applyImportedState, collectFrontendState } from '../../api/session';
 import { refreshSvSplit } from '../../utils/svAlleleSplit';
-import { importMembership, legacyDifferencesState, restoreDifferencesSession } from './session';
+import { importMembership, legacyDifferencesState, restoreDifferencesSession, restoreHistoricalMembership } from './session';
 import { DIFFERENCES_SCHEMA, fanOutMoleculeCalls, type MoleculeEnvelope } from './contracts';
 
 // Generated with the authentic pre-P2c recipe: molecule|record|row|placement.
@@ -124,6 +124,47 @@ it('actual session import keeps an unresolved split frozen without an automatic 
   await refreshSvSplit({ stateKey: 'dataset', datasetId: 'dataset', chrom: 'chrT', viewStart: 10, viewEnd: 200 }, state.svSplits.dataset);
   expect(fetcher).not.toHaveBeenCalled();
   fetcher.mockRestore();
+});
+
+it('old crash-recovery snapshots freeze legacy splits through repeated hydration and refresh', async () => {
+  const saved = copy(serializeState(useBrowserStore.getState())) as any;
+  delete saved.differencesSession;
+  saved.svSplits = { dataset: split };
+  saved.clusterAssignments = { dataset: { [oldId]: 0 } };
+  const fetcher = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('historical split must not fetch'));
+  try {
+    for (let round = 0; round < 2; round++) {
+      useBrowserStore.setState(deserializeSavedState(saved));
+      const state = useBrowserStore.getState();
+      expect(state.svSplits.dataset.frozenImport).toBe(true);
+      await refreshSvSplit({ stateKey: 'dataset', datasetId: 'dataset', chrom: 'chrT', viewStart: 10, viewEnd: 200 }, state.svSplits.dataset);
+      Object.assign(saved, copy(serializeState(state)));
+    }
+    expect(fetcher).not.toHaveBeenCalled();
+  } finally { fetcher.mockRestore(); }
+});
+
+it('includes evidence-only historical membership in frozen target snapshots', () => {
+  const session = restoreDifferencesSession({ svSplits: { dataset: split },
+    svCarrierEvidence: { dataset: { [oldId]: { level: 'confirmed' } } }, differencesImportMetadata: { dataset: known } });
+  expect(session.imports.dataset).toEqual([importMembership(oldId, known)]);
+  expect(session.targets.dataset.memberships).toEqual(session.imports.dataset);
+});
+
+it.each(['clusterAssignments', 'svCarrierEvidence'])('checks %s collisions before migrating any membership field', field => {
+  const current = importMembership(oldId, known).currentId!;
+  const saved = { svSplits: { dataset: split }, differencesImportMetadata: { dataset: known },
+    selectedReadIds: { dataset: [oldId] }, clusterAssignments: { dataset: { [oldId]: 0 } },
+    svCarrierEvidence: { dataset: { [oldId]: { level: 'confirmed' } } } };
+  (saved[field as 'clusterAssignments'] as any).dataset[current] = field === 'clusterAssignments' ? 1 : { level: 'putative' };
+  const session = restoreDifferencesSession(saved);
+  const restored = restoreHistoricalMembership(saved, session);
+  expect(restored.selectedReadIds).toEqual(saved.selectedReadIds);
+  expect(restored.clusterAssignments).toEqual(saved.clusterAssignments);
+  expect(restored.svCarrierEvidence).toEqual(saved.svCarrierEvidence);
+  expect(session.imports.dataset.every(m => m.status === 'unresolved_import')).toBe(true);
+  expect(session.targets.dataset.memberships).toEqual(session.imports.dataset);
+  expect(session.legacySnapshot.selectedReadIds).toEqual(saved.selectedReadIds);
 });
 
 it('hydrates established historical selections/assignments into nonempty current identities, cold and warm', () => {

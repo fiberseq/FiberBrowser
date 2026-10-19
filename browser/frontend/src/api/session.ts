@@ -622,8 +622,10 @@ export function applyImportedState(result: Record<string, unknown>): void {
     const differences = restoreDifferencesSession(frontend);
     postBatch.differencesSession = differences;
     Object.assign(postBatch, restoreHistoricalMembership(postBatch, differences));
-    if (!frontend.differencesSession && postBatch.svSplits) {
-      for (const def of Object.values(postBatch.svSplits as Record<string, { frozenImport?: boolean }>)) def.frozenImport = true;
+    if (postBatch.svSplits) {
+      for (const [key, def] of Object.entries(postBatch.svSplits as Record<string, { frozenImport?: boolean }>)) {
+        if (!frontend.differencesSession || differences.targets[key]?.frozen) def.frozenImport = true;
+      }
     }
     if ('clusterGroupLabels' in postBatch) postBatch.clusterGroupLabels = normalizeClusterGroupLabels(postBatch.clusterGroupLabels);
     if ('selectedFeatures' in postBatch) postBatch.selectedFeatures = normalizeFeatureRefs(postBatch.selectedFeatures);

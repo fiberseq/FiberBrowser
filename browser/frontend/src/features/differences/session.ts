@@ -96,8 +96,10 @@ export function restoreDifferencesSession(saved: JsonRecord | undefined): Differ
   const metadata = object(state.differencesImportMetadata);
   const assignments = object(state.clusterAssignments);
   const selected = object(state.selectedReadIds);
-  for (const dataset of new Set([...Object.keys(assignments), ...Object.keys(selected)])) {
-    const ids = new Set([...Object.keys(object(assignments[dataset])), ...(Array.isArray(selected[dataset]) ? selected[dataset].filter((x: unknown) => typeof x === 'string') : [])]);
+  const evidence = object(state.svCarrierEvidence);
+  for (const dataset of new Set([...Object.keys(assignments), ...Object.keys(selected), ...Object.keys(evidence)])) {
+    const ids = new Set([...Object.keys(object(assignments[dataset])), ...Object.keys(object(evidence[dataset])),
+      ...(Array.isArray(selected[dataset]) ? selected[dataset].filter((x: unknown) => typeof x === 'string') : [])]);
     result.imports[dataset] = [...ids].map(id => importMembership(id, object(metadata[dataset])));
   }
   const definitions = { ...object(state.differenceSplit), ...object(state.svSplits) };
@@ -121,26 +123,37 @@ export function legacyDifferencesState(session: DifferencesSession): JsonRecord 
  * IDs and policy/membership snapshots remain reversible in the capsule. */
 export function restoreHistoricalMembership(state: JsonRecord, session: DifferencesSession): JsonRecord {
   const result: JsonRecord = {};
+  const aliasesByDataset = new Map<string, Map<string, string>>();
+  // Decide once for all fields. A later evidence collision must not leave
+  // selections or assignments already rebound to current identities.
+  for (const [dataset, imports] of Object.entries(session.imports)) {
+    const aliases = new Map(imports.filter(m => m.status === 'resolved' && m.currentId).map(m => [m.originalId, m.currentId!]));
+    const collision = ['clusterAssignments', 'svCarrierEvidence'].some(field => {
+      const mapped = new Map<string, string>();
+      for (const [id, value] of Object.entries(object(object(state[field])[dataset]))) {
+        const current = aliases.get(id) ?? id;
+        const encoded = JSON.stringify(value);
+        if (mapped.has(current) && mapped.get(current) !== encoded) return true;
+        mapped.set(current, encoded);
+      }
+      return false;
+    });
+    if (collision) {
+      session.imports[dataset] = imports.map(m => ({ ...m, status: 'unresolved_import', reason: 'conflicting_historical_assignments' }));
+      aliases.clear();
+    }
+    if (session.targets[dataset]) session.targets[dataset].memberships = clone(session.imports[dataset]);
+    aliasesByDataset.set(dataset, aliases);
+  }
   for (const field of ['clusterAssignments', 'selectedReadIds', 'svCarrierEvidence']) {
     if (!state[field]) continue;
     const datasets = { ...object(state[field]) };
-    for (const [dataset, imports] of Object.entries(session.imports)) {
-      const aliases = new Map(imports.filter(m => m.status === 'resolved' && m.currentId).map(m => [m.originalId, m.currentId!]));
+    for (const [dataset, aliases] of aliasesByDataset) {
       if (!aliases.size || datasets[dataset] === undefined) continue;
       const value = datasets[dataset];
       if (Array.isArray(value)) datasets[dataset] = [...new Set(value.map(id => aliases.get(id) ?? id))];
       else {
-        const entries = Object.entries(object(value));
-        const mapped = new Map<string, unknown>();
-        let collision = false;
-        for (const [id, assignment] of entries) {
-          const current = aliases.get(id) ?? id;
-          if (mapped.has(current) && mapped.get(current) !== assignment) collision = true;
-          mapped.set(current, assignment);
-        }
-        // Conflicting historical assignments stay frozen; no strongest winner.
-        if (!collision) datasets[dataset] = Object.fromEntries(mapped);
-        else session.imports[dataset] = imports.map(m => ({ ...m, status: 'unresolved_import', reason: 'conflicting_historical_assignments' }));
+        datasets[dataset] = Object.fromEntries(Object.entries(object(value)).map(([id, assignment]) => [aliases.get(id) ?? id, assignment]));
       }
     }
     result[field] = datasets;
