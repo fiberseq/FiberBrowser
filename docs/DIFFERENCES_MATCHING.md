@@ -30,7 +30,7 @@ versus replacement encoding.
 | Independent ref/alt span allowances | max(20 bp, 20% respective larger span) |
 | Near-pure replacement | net, larger and smaller span differences each <= max(20 bp, 20% larger span) |
 | Wider approximate **search**, both ends | max(50 bp, 20% larger span) |
-| Ordered compound | 32 adjacent members, 10 kb reference window |
+| Ordered compound | 32 adjacent members, 10 kb member span (excluding reference halo) |
 | Reconstructed sequence per side | 100 kb |
 | Observations / representations / pairs / links | 4,096 / 4,096 / 16,384 / 4,096 |
 | Deadline / response | 30 s / 16 MiB |
@@ -38,6 +38,11 @@ versus replacement encoding.
 Input sequence also obeys the shared 2-million-base limit. Caps, unavailable
 sequence, unsupported topology and insufficient halo stay explicit. There is
 no all-subset search. Measurement uncertainty is not proven repeat equivalence.
+Both sides' single edits are admitted before compound expansion. Distant edits
+outside compound scope do not make the search incomplete. Index bounds include
+every configured narrow and broad anchor rule. The shared deadline covers
+reference-provider boundaries, reconstruction and repeat normalization; providers
+must themselves bound blocking I/O. Invalid ordered paths emit no compound links.
 
 Compounds retain ordered adjacent edits on one explicit path, hypothesis and
 phase occurrence, including reference bridges. Overlapping edits remain
@@ -79,11 +84,21 @@ an independently validated profile with its calibration identity. Complete
 undeaminated string matches use a separate `exact_sequence` method, subject to
 geometry tiers and competition. Expected assembly strings provide no read votes.
 
-DP preflights all competitors and charges one shared request before allocation.
+Unique high-quality undeaminated equality bypasses DP after sequence/candidate
+limits and cancellation checks. It returns an exact identity score with no
+invented runner-up odds. No cells are charged for an alignment that did not run.
+
+Likelihood DP uses a certified band: a feasible path supplies a score lower
+bound, and mandatory gap costs exclude excursions that cannot equal that score.
+Thus the band retains the global optimum rather than substituting a heuristic
+alignment. DP preflights all competitors' actual band cells and charges one shared request before allocation.
 Rolling rows reserve bytes through the phase-1 process resource manager. Extra
 conservative limits are 2 million cells/pair and 10 million/request. Deadline
 and cancellation checks occur each row and every 256 columns. Refusal returns
 unknown with resource parameters, never a partially scored winner.
+Long or divergent pairs can still exceed these configurable ceilings. Molecule
+conversion rates override the policy rate; an omitted molecule rate uses the
+policy default. Prefix and interior insertions use the same base emission cost.
 
 ## Lazy native API
 
@@ -111,8 +126,11 @@ not a canonical allele ID. Normalization separately supplies verified IDs.
 
 Optional `diagnostic_start`/`diagnostic_end` contain the geometry span and allow
 common windows covering displaced raw edits. Candidate/reference strings then
-span that window. A narrow window missing a known geometry carrier's operation
-returns `diagnostic_window_misses_geometry`, never a reference vote.
+span that window. A narrow window missing a plausible competing edit returns
+`diagnostic_window_misses_geometry`, even beyond legacy geometry tolerances.
+Without reference across that edit, equivalence cannot be excluded and no
+reference vote is justified. Deletions removing a boundary flank use this reason
+too. An explicit common window can establish the allele assignment.
 
 The adapter fetches the target neighborhood and requested cohort, walks CIGAR,
 requires observed adjacent flanks/continuity, and preserves original query and
@@ -122,6 +140,10 @@ decode is requested. Row previews are <=60 bases with full observed lengths;
 full internal observations drive calls. Duplicate policy, existing geometry
 conflicts and qualified molecule membership survive. Historical merged-file
 provenance remains an explicit compatibility assumption.
+Off-locus bundle alignments remain inspectable but do not veto a complete locus
+call; overlapping partial paths and dissent remain unresolved. Cohort caps mark
+the envelope and unvisited molecules, preserving completed molecules. A cap
+inside one molecule still marks that molecule's unexplored locus evidence.
 
 Counts are separate by assignment and evidence tier. Result revisions include
 target, competition, policy, cohort and actual record-content witnesses. The
@@ -145,6 +167,8 @@ gates or unresolved candidates yield `unassessed(reason)`; no assembly yields
 `reads_only`. Assembly-relative novelty never suppresses discovery or implies
 population novelty. Sessions save matching/likelihood options independently of
 lift, while retaining historical versions, frozen targets and memberships.
+New matching/likelihood policies use `local-match:v3` / `daf-indel:v3` and
+enrichment identities use revision 3; normalization identities remain unchanged.
 
 Independent tests author edited strings and molecule counts without production
 extraction as the oracle. Held-out seeded controls include 30 repeat positives,

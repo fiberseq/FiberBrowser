@@ -118,6 +118,16 @@ it('adds configurable matching defaults without rewriting historical policy vers
   expect(restored.options.likelihoodPolicy.profile_id).toBe('engineering-synthetic:v1');
 });
 
+it('preserves saved v2 scoring policies while new sessions use the repaired versions', () => {
+  const current = restoreDifferencesSession({});
+  expect(current.versions.matching).toBe('local-match:v3');
+  expect(current.options.likelihoodPolicy.version).toBe('daf-indel:v3');
+  const historical = copy(current);
+  historical.versions.matching = historical.options.matchingPolicy.version = 'local-match:v2';
+  historical.versions.daf_likelihood = historical.options.likelihoodPolicy.version = 'daf-indel:v2';
+  expect(restoreDifferencesSession({ differencesSession: historical })).toEqual(historical);
+});
+
 it('actual dataset relocation preserves frozen reference/provenance and historical IDs', () => {
   const capsule = restoreDifferencesSession({ svSplits: { dataset: split },
     selectedReadIds: { dataset: [oldId] }, differencesImportMetadata: { dataset: known } });

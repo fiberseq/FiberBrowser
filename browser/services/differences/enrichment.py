@@ -159,7 +159,7 @@ def enrich_native(state, envelope, *, dataset_id, chrom, ref, target_end, specif
                 "chrom": chrom, "analysis_scope": "native_only"}
     # Identity also includes the frozen qualified cohort. No sequence result is
     # cached under this ID; changed BAM/reference cache revisions cannot replay it.
-    request_id = content_id("enrichment-request:v2", [snapshot, contexts, asdict(policy), envelope['scope'], envelope['policy'],
+    request_id = content_id("enrichment-request:v3", [snapshot, contexts, asdict(policy), envelope['scope'], envelope['policy'],
                                               sorted(envelope['calls_by_molecule'])])
     calls = {m: {"call": asdict(Call(reasons=("diagnostic_sequence_not_loaded",))), "alignments": [],
                  "representations": [], "complete": False}
@@ -258,7 +258,7 @@ def enrich_native(state, envelope, *, dataset_id, chrom, ref, target_end, specif
     counts_by_level = {assignment: {level: sum(c['call']['assignment'] == assignment and c['call']['level'] == level for c in calls.values())
                                    for level in ('confirmed', 'putative', 'ambiguous', 'conflicting', None)}
                        for assignment in counts}
-    enrichment_id = content_id('enrichment:v2', [request_id, sorted(seen), sorted(reasons),
+    enrichment_id = content_id('enrichment:v3', [request_id, sorted(seen), sorted(reasons),
                                                {m: c['call'] for m, c in calls.items()}])
     result = {"enrichment_id": enrichment_id, "snapshot": snapshot, "calls_by_molecule": calls,
               "request_id": request_id, "complete": not reasons and competition_complete and counts['unknown'] == 0,

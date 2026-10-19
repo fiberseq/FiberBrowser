@@ -10,8 +10,8 @@ from typing import Literal
 
 SCHEMA_VERSION = "differences:v1"
 VERSIONS = {"normalization": "haplotype:v2", "projection": "guarded:v1",
-            "matching": "local-match:v2", "reconciliation": "independent:v1",
-            "daf_likelihood": "daf-indel:v2"}
+            "matching": "local-match:v3", "reconciliation": "independent:v1",
+            "daf_likelihood": "daf-indel:v3"}
 
 
 @dataclass(frozen=True)

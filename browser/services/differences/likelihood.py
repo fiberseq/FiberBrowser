@@ -14,7 +14,7 @@ from services.reconstruction_budget import DEFAULT_LIMITS, RESERVATIONS, Resourc
 from .alleles import DafContext, transition_probability
 from .calls import Call
 
-LIKELIHOOD_VERSION = "daf-indel:v2"
+LIKELIHOOD_VERSION = "daf-indel:v3"
 
 
 @dataclass(frozen=True)

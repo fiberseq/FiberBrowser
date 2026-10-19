@@ -18,7 +18,7 @@ from .identity import content_id, exact_local_allele_id
 from .model import EquivalenceLink, Phase, Span
 
 NORMALIZATION_VERSION = "haplotype:v2"
-MATCHING_VERSION = "local-match:v2"
+MATCHING_VERSION = "local-match:v3"
 _LOCAL = {"insertion", "deletion", "replacement", "snv", "mnv", "inversion"}
 
 
