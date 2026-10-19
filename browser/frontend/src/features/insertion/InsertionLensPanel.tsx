@@ -258,7 +258,7 @@ export function InsertionLensPanel() {
   const conflictOptionsKey = JSON.stringify(conflictOptions);
   const dupParam = { include_duplicates: String(showDuplicateReads), conflict_options: conflictOptionsKey };
   const fetchKey = target ? lensParams(target, dupParam).toString() : '';
-  const requestIdentity = JSON.stringify(target?.workspace ? [target.workspace] : [fetchKey, refreshGeneration]);
+  const requestIdentity = JSON.stringify(target?.workspace ? [target.workspace, target.flank, refreshGeneration] : [fetchKey, refreshGeneration]);
   const [loadedResponse, setLoadedResponse] = useState<{ identity: string; data: LensResponse } | null>(null);
   // Guard during render too: effects run after the new target has rendered.
   const response = target && loadedResponse?.identity === requestIdentity ? loadedResponse.data : null;
@@ -359,7 +359,7 @@ export function InsertionLensPanel() {
     setError(null);
     const request = target.workspace ? fetchJson<LensResponse>('/api/differences/lens', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
-      body: JSON.stringify({ ...target.workspace.query, frozen_calls: target.workspace.calls }),
+      body: JSON.stringify({ ...target.workspace.query, frozen_calls: target.workspace.calls, flank: target.flank }),
     }) : fetchJson<LensResponse>(`/api/insertions/lens?${fetchKey}`, { signal: controller.signal });
     request
       .then(res => {
@@ -574,7 +574,7 @@ export function InsertionLensPanel() {
     try {
       const res = await (target.workspace ? fetchJson<LensResponse>('/api/differences/lens', {
         method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,
-        body:JSON.stringify({...target.workspace.query,frozen_calls:target.workspace.calls,include_sequences:true,consensus:false}),
+        body:JSON.stringify({...target.workspace.query,frozen_calls:target.workspace.calls,include_sequences:true,consensus:false,flank:target.flank,max_reference:0}),
       }) : fetchJson<LensResponse>(`/api/insertions/lens?${lensParams(target, { ...dupParam, include_sequences: 'true', consensus: 'false', max_reference: '0' })}`, { signal: controller.signal }));
       if (controller.signal.aborted || currentResponse.current !== snapshot) return;
       if (!res.success) throw new Error(res.error || 'Could not fetch the inserts');

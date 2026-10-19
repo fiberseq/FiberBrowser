@@ -439,7 +439,69 @@ def _source_query_window(read, a, b):
     return (left, right) if left is not None and right is not None and left <= right else None
 
 
-def lens(state, dataset, *, chrom, start, end, target, frozen_calls=None, include_sequences=False, consensus=True, **options):
+def _lifted_lens_records(dataset, selected, members, target, check):
+    """Decode frozen winning projection cuts, independent of display filters.
+
+    Public diagnostics retain SEQ intervals, record digests and path ownership;
+    no assembly-item lookup or source boundary re-anchoring is necessary.
+    """
+    from services.bam_handles import get_bam_handle
+    from .projection import SourceAlignment, geometry_matches
+    wanted = {}
+    for molecule in members:
+        value = selected['calls_by_molecule'][molecule]
+        detail = value.get('lifted') or {}
+        hypotheses = {h['hypothesis_id']: h for h in detail.get('hypotheses', [])}
+        for diagnostic in detail.get('diagnostics', []):
+            h = hypotheses.get(diagnostic['hypothesis_id'], {})
+            if detail.get('primary_complete') and h.get('ownership') != 'primary':
+                continue
+            for item in diagnostic['records']:
+                projection = item['projection']
+                call = item.get('geometry_evidence', item['call']) if target['target_type'] == 'geometry' else item['call']
+                role = call['assignment']
+                if role == 'target':
+                    windows = [(e['seq_q'], e.get('seq_reverse', False)) for e in projection['edits']
+                               if geometry_matches(e, target, ProjectionPolicy()) and e.get('complete')]
+                elif role == 'reference':
+                    windows = []
+                    for coverage in call.get('coverage', []):
+                        interval = coverage.get('query_interval')
+                        if (coverage.get('complete') or coverage.get('observed_flanks') == 2) and interval:
+                            # Query intervals are full-molecule and target oriented.
+                            hard = projection['sequence_span'][0]
+                            minus = projection['alignment_orientation'] == 'reverse'
+                            q0, q1 = interval
+                            bounds = [projection['query_length']-q1-hard, projection['query_length']-q0-hard] if minus else [q0-hard,q1-hard]
+                            windows.append((bounds, minus))
+                else:
+                    continue
+                if windows:
+                    wanted.setdefault((projection['source_contig'], projection['source_start']), {})[projection['record_id']] = (molecule, windows, role)
+    groups = dataset.live_lift.settings.molecule_group_map(dataset.paths, dataset.id)
+    scanned, seen = 0, set()
+    for path in dataset.paths:
+        bam = get_bam_handle(path)
+        if bam is None: continue
+        for (contig, start), records in wanted.items():
+            check()
+            if contig not in bam.references: continue
+            for read in bam.fetch(contig, start, start+1):
+                check()
+                scanned += 1
+                if scanned > 200_000:
+                    raise ResourceResult('budget_exceeded', 'lens_scan')
+                if read.reference_start != start: continue
+                molecule = MoleculeId('declared_source_library', groups[path], read.query_name)
+                alignment = SourceAlignment.from_bam(read, molecule)
+                if alignment.record_id not in records or alignment.record_id in seen: continue
+                seen.add(alignment.record_id)
+                key, windows, role = records[alignment.record_id]
+                for (q0, q1), reverse in windows:
+                    yield key, read, bam, path, q0, q1, reverse, role
+
+
+def lens(state, dataset, *, chrom, start, end, target, frozen_calls=None, include_sequences=False, consensus=True, flank=0, max_reference=MAX_ROWS, **options):
     """Detailed workspace from a frozen call snapshot, including budgeted consensus.
 
     No display filter or global duplicate/phase setting reclassifies this cohort.
@@ -465,21 +527,28 @@ def lens(state, dataset, *, chrom, start, end, target, frozen_calls=None, includ
     selected = frozen_calls["targets"][0]
     if selected["target"] != target or dataset.id not in frozen_calls["membership"]["rows"]:
         raise ValueError("lens snapshot target/dataset mismatch")
-    aliases = _carrier_keys(frozen_calls, dataset.id)
-    expected_carriers=_carrier_molecules(frozen_calls)
-    if len(aliases) > MAX_ROWS:
+    flank = max(0, min(int(flank), 5000))
+    max_reference = max(0, min(int(max_reference), MAX_ROWS))
+    expected_carriers = _carrier_molecules(frozen_calls)
+    expected_reference = {key for key, value in selected['calls_by_molecule'].items()
+                          if molecule_group(value, target['target_type'], frozen_calls['evidence_policy']) == 1}
+    if len(expected_carriers) > MAX_ROWS:
         raise ResourceResult("budget_exceeded", "lens_cohort_rows")
-    inputs, total_bases = {}, 0
+    inputs, references, total_bases, decoded_bases = {}, {}, 0, 0
     deadline = time.monotonic()+30
-    def accept(name, observed, record, bam, path, q0, q1, reverse=False, partial=None):
-        nonlocal total_bases
+    def check_lens():
         checkpoint()
         if time.monotonic() > deadline:
             raise ResourceResult("budget_exceeded", "lens_deadline")
-        molecule = aliases.get(name)
-        if molecule is None or not observed:
+    def accept(molecule, observed, record, bam, path, q0, q1, reverse=False, partial=None, reference=False):
+        nonlocal total_bases, decoded_bases
+        checkpoint()
+        if time.monotonic() > deadline:
+            raise ResourceResult("budget_exceeded", "lens_deadline")
+        if molecule is None or (not observed and not reference):
             return
-        existing=inputs.get(molecule)
+        if reference and (molecule in references or len(references) >= max_reference): return
+        existing=inputs.get(molecule) if not reference else None
         if existing and (not existing[0].get("partial") or partial):return
         if existing:total_bases-=len(existing[1])
         if len(observed) > 50_000 or total_bases+len(observed) > DEFAULT_LIMITS.max_input_bases:
@@ -488,10 +557,23 @@ def lens(state, dataset, *, chrom, start, end, target, frozen_calls=None, includ
             raise ResourceResult("budget_exceeded", "lens_record_bases")
         if record.is_duplicate and not frozen_calls["evidence_policy"]["include_duplicates"]:
             return
-        data = _query_annotations(record, bam, path, q0, q1, None)
         n = len(observed)
-        if reverse:
-            _transform_annotations(data, reverse_length=n)
+        # Retain observed flanks on the same query axis as the alternate. The
+        # sequence/consensus input still contains only the alternate itself.
+        lo, hi = max(0, q0-flank), min(record.query_length, q1+flank)
+        decoded_bases += hi-lo
+        if decoded_bases > DEFAULT_LIMITS.max_input_bases:
+            raise ResourceResult('budget_exceeded', 'lens_annotation_bases')
+        data = _query_annotations(record, bam, path, lo, hi, None) if hi > lo else dict(intervals=[])
+        _transform_annotations(data, offset=(q1-hi if reverse else lo-q0),
+                               reverse_length=hi-lo if reverse else None)
+        from services.insertion_lens import split_at_breakpoints
+        data = split_at_breakpoints(data, 0 if reference else n)
+        name = record.query_name
+        if reference:
+            references[molecule] = dict(id=name, molecule_id=molecule, strand='-' if record.is_reverse != reverse else '+',
+                ref=target['ref_start'], ref_end=target['ref_end'], len=0, read=data)
+            return
         total_bases += n
         level = selected["calls_by_molecule"][molecule]["call"]["level"]
         inputs[molecule] = (dict(id=name, strand="-" if record.is_reverse != reverse else "+",
@@ -504,32 +586,29 @@ def lens(state, dataset, *, chrom, start, end, target, frozen_calls=None, includ
             for n, (record, _, path, bam) in enumerate(_bam_records(state, dataset.id, chrom, start, end, with_handle=True, checkpoint_fn=checkpoint)):
                 if n >= 20_000:
                     raise ResourceResult("budget_exceeded", "lens_scan")
-                if record.query_name not in aliases:
+                molecule, alignment = _record_membership(frozen_calls, dataset, path, record)
+                if molecule in expected_reference:
+                    window = _source_query_window(record, target['ref_start'], target['ref_start'])
+                    if window is not None:
+                        accept(molecule, '', record, bam, path, window[0], window[0], reference=True)
+                if molecule not in expected_carriers or not _supports_record(frozen_calls, molecule, alignment, record, target):
                     continue
                 w = _query_window(record, target)
                 if w is not None:
-                    accept(record.query_name, (record.query_sequence or "")[w[0]:w[1]], record, bam, path, w[0], w[1], partial=w[7] if w[4]=="partial" else None)
+                    accept(molecule, (record.query_sequence or "")[w[0]:w[1]], record, bam, path, w[0], w[1], partial=w[7] if w[4]=="partial" else None)
         elif dataset.data_type == "bam_livelift":
-            from services.lift.capability import require
-            from services.lift.differences import difference_reads, revcomp
-            require(dataset, "difference_lens")
-            def observe(item, observed, record, bam, path, span):
-                if item["id"] not in aliases or not item.get("carries_insertion"):
-                    return
-                from .projection import geometry_matches
-                if not geometry_matches(dict(ref_start=span["t_start"], ref_end=span["t_end"], alt_bp=span["alt_bp"]), target, ProjectionPolicy()):
-                    return
-                window = _source_query_window(record, span["src"]["start"], span["src"]["end"])
-                if not window:
-                    return
-                q0, q1 = window
-                raw = (record.query_sequence or "")[q0:q1]
-                reverse = span["strand"] == "-"
-                if (revcomp(raw) if reverse else raw) != observed:
-                    return
-                accept(item["id"], observed, record, bam, path, q0, q1, reverse)
-            difference_reads(state, dataset, chrom, target["ref_start"], target["ref_end"],
-                item_id=target["target_id"], observation_sink=observe)
+            from .projection import revcomp
+            for molecule, record, bam, path, q0, q1, reverse, role in _lifted_lens_records(
+                    dataset, selected, expected_carriers | expected_reference, target, check_lens):
+                if not 0 <= q0 <= q1 <= len(record.query_sequence or ''):
+                    continue
+                if role == 'reference' and molecule in expected_reference:
+                    # The reference track has no alternate interior.
+                    anchor = q1 if reverse else q0
+                    accept(molecule, '', record, bam, path, anchor, anchor, reverse, reference=True)
+                elif role == 'target' and molecule in expected_carriers:
+                    raw = (record.query_sequence or '')[q0:q1]
+                    accept(molecule, revcomp(raw) if reverse else raw, record, bam, path, q0, q1, reverse)
         else:
             raise ValueError("a BAM-backed source is required")
         # Match the independent native lens order; stable read inputs cannot
@@ -541,17 +620,18 @@ def lens(state, dataset, *, chrom, start, end, target, frozen_calls=None, includ
         counts = selected["counts"]
         levels={level:sum(selected["calls_by_molecule"][key]["call"]["level"]==level for key in expected_carriers)
                 for level in ("confirmed","putative","conflicting","ambiguous")}
-        payload = dict(success=True, dataset_id=dataset.id, chrom=chrom, flank=0,
+        payload = dict(success=True, dataset_id=dataset.id, chrom=chrom, flank=flank,
             site=dict(pos=target["ref_start"], tolerance=0, len_min=target["alt_bp"], len_max=target["alt_bp"]),
             cluster=dict(ref=target["ref_start"], len=target["alt_bp"], ref_len=target["ref_end"]-target["ref_start"],
                 alt_len=max(map(len, sequences), default=target["alt_bp"]), len_lo=min(map(len, sequences), default=target["alt_bp"]),
                 len_hi=max(map(len, sequences), default=target["alt_bp"]), carriers=levels["confirmed"], reference=counts[1],
                 **levels,cigar=sum(e.get("kind")=="cigar" for e in entries),clipped=sum(e.get("kind")=="clip" for e in entries),evidence_total=len(expected_carriers)),
-            carriers=entries, reference=[], excluded=dict(other_insert=0, not_informative=counts[2]),
-            truncated=dict(carriers=len(expected_carriers)-len(entries), reference=counts[1]),
+            carriers=entries, reference=list(references.values()), excluded=dict(other_insert=0, not_informative=counts[2]),
+            truncated=dict(carriers=len(expected_carriers)-len(entries), reference=len(expected_reference)-len(references)),
             difference_scope=dict(target=target, evidence_policy=frozen_calls["evidence_policy"],
-                analysis_scope=frozen_calls["analysis_scope"], complete=len(entries)==len(expected_carriers),
-                reason=None if len(entries)==len(expected_carriers) else "full_observed_alternate_unavailable"))
+                analysis_scope=frozen_calls["analysis_scope"], complete=len(entries)==len(expected_carriers) and len(references)==min(max_reference,len(expected_reference)),
+                reason="full_observed_alternate_unavailable" if len(entries)!=len(expected_carriers) else
+                    "reference_observation_unavailable" if len(references)!=min(max_reference,len(expected_reference)) else None))
         if include_sequences:
             for entry, value in zip(entries, sequences):
                 entry["seq"] = value

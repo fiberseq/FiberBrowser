@@ -24,6 +24,8 @@ class WorkspaceRequest(BaseModel):
     layer_options: Optional[dict] = None
     include_sequences: bool = False
     consensus: bool = True
+    flank: int = Field(0, ge=0, le=5000)
+    max_reference: int = Field(500, ge=0, le=500)
     frozen_calls: Optional[dict] = None
     record_id: Optional[str] = None
     offset: int = Field(0, ge=0)
@@ -51,7 +53,7 @@ async def _workspace(req, request, state, operation):
             include_conflicting=req.include_conflicting, include_ambiguous=req.include_ambiguous,
             analysis_scope=req.analysis_scope, native_dataset_id=req.native_dataset_id)
     elif operation == "lens":
-        options.update(frozen_calls=req.frozen_calls, include_sequences=req.include_sequences, consensus=req.consensus)
+        options.update(frozen_calls=req.frozen_calls, include_sequences=req.include_sequences, consensus=req.consensus, flank=req.flank, max_reference=req.max_reference)
     else:
         options.update(row_ids=req.row_ids, layers=req.layers, layer_options=req.layer_options)
         if operation == "sequence":
