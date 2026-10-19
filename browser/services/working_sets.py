@@ -1480,15 +1480,16 @@ def project_broad_read_to_viewport(
         for layer in (adjusted_read.get("layers") or {}).values():
             visible_annotations.extend(layer.get("intervals") or [])
         # A live-lift row seen only through a body segment or a badge is still drawn.
-        from services.lift.reads import _body_spans, clip_geometry
+        from services.lift.reads import _body_spans, clip_geometry, geometry_intervals
         geometry = clip_geometry(read.get("live_lift") or {}, viewport_offset, region_width)
         visible_annotations.extend(_body_spans(geometry))
         visible_annotations.extend([b[0], b[0]] for b in geometry.get("badges") or ())
-        if not visible_annotations:
+        if visible_annotations:
+            neutral_start = min(int(iv[0]) for iv in visible_annotations)
+            neutral_end = max(int(iv[1]) for iv in visible_annotations)
+            adjusted_read["intervals"] = [[neutral_start, neutral_end, 0]]
+        elif not geometry_intervals({"live_lift": geometry}):
             return None, False
-        neutral_start = min(int(iv[0]) for iv in visible_annotations)
-        neutral_end = max(int(iv[1]) for iv in visible_annotations)
-        adjusted_read["intervals"] = [[neutral_start, neutral_end, 0]]
 
     if "live_lift" in read:
         # Crop parallel provenance only after FIRE, layers and the neutral

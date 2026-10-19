@@ -23,7 +23,13 @@ registerViewLink({
     const source = (p: number, right: boolean) => p < l.pos ? l.start + p - l.pos
       : p > targetEnd ? l.end + p - targetEnd : right ? l.end : l.start;
     const a = source(main.start, false), b = source(main.end, true);
-    return { chrom: l.contig, start: Math.max(0, l.reversed ? l.start + l.end - b : a), end: l.reversed ? l.start + l.end - a : b };
+    const lo = l.reversed ? l.start + l.end - b : a;
+    const hi = l.reversed ? l.start + l.end - a : b;
+    const size = usePanelGenomeStore.getState().genomes[panel.genome ?? '']?.chroms.find(c => c.name === l.contig)?.size;
+    // The allele remains a boundary; its panel needs a nonempty neighborhood
+    // for fetching reads when the target view lies entirely in a deletion.
+    return { chrom: l.contig, start: Math.max(0, lo === hi ? lo - 1000 : lo),
+      end: Math.min(size ?? Infinity, lo === hi ? hi + 1000 : hi) };
   },
   toMain: (panel, next) => {
     if (!useLiveLiftStore.getState().enabled) return undefined;

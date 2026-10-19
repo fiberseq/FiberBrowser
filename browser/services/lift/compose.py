@@ -435,9 +435,23 @@ def _row_geometry(row, contig, runs, ctx):
         p = run[0].p
         row.segments.append([min(f.t0 for f in run), max(f.t1 for f in run), p.chain, p.strand, p.primary])
     for k, gap in enumerate(row.inner):
+        prev, f = row.frags[k], row.frags[k + 1]
+        if (gap is None and ctx.handle is not None and prev.p.primary and f.p.primary
+                and prev.p.chain == f.p.chain and prev.p.strand == f.p.strand):
+            # g_split remains a display-run boundary. Preserve the exact owned
+            # edit across it without rejoining calls or alternative placements.
+            from services.lift.differences import primary_gaps_for_region, _source_span
+            t = f.t1 if f.minus else prev.t1
+            dt = prev.t0 - f.t1 if f.minus else f.t0 - prev.t1
+            with ctx.handle.lock:
+                for ci, (gt, q, gdt, dq, _reason), _ in primary_gaps_for_region(
+                        ctx.handle, ctx.selection.chrom, prev.p.hap, t, t + max(dt, 1)):
+                    if (ci == prev.p.chain and (gt, gdt) == (t, dt)
+                            and _source_span(ctx.handle, ctx.handle.map.chains[ci], q, dq) == (prev.e, f.s)):
+                        gap = (dq, dt)
+                        break
         if gap is None:
             continue
-        prev, f = row.frags[k], row.frags[k + 1]
         dq, dt = gap
         if dt > 0:
             row.connectors.append([f.t1, prev.t0] if f.minus else [prev.t1, f.t0])
@@ -984,7 +998,7 @@ def _assembly_gap_metadata(read, row, contig, runs, payload, ctx):
     They do not compose read deviations/cancellation or certify an allele.
     Absolute target/source endpoints survive cropping; pos is view-relative.
     """
-    from services.lift.differences import primary_gap_records, _item, _source_span
+    from services.lift.differences import primary_gaps_for_region, _item, _source_span
     from services.sv_events import SV_EVIDENCE_FLOOR
 
     if ctx.handle is None or ctx.loader_options.get("_insertion_local") or row.alt:
@@ -994,7 +1008,8 @@ def _assembly_gap_metadata(read, row, contig, runs, payload, ctx):
         haps = {p.hap for p in ctx.selection.pieces if p.primary}
         with ctx.handle.lock:
             for hap in haps:
-                for ci, (t, q, dt, dq, reason), _ in primary_gap_records(ctx.handle, ctx.selection.chrom, hap):
+                for ci, (t, q, dt, dq, reason), _ in primary_gaps_for_region(
+                        ctx.handle, ctx.selection.chrom, hap, ctx.selection.start, ctx.selection.end + 1):
                     if max(dt, dq) < SV_EVIDENCE_FLOOR or t > ctx.selection.end or t + dt < ctx.selection.start:
                         continue
                     c = ctx.handle.map.chains[ci]

@@ -184,8 +184,9 @@ def primary_gap_records(handle, chrom, hap):
             i = bisect.bisect_right(starts, t) - 1
             interior = (i >= 0 and nets[i][2] == ci and nets[i][0] < t
                         and t + dt < nets[i][1])
-            boundary = (i >= 0 and i + 1 < len(nets) and nets[i][1] == t
-                        and nets[i + 1][0] == t + dt and nets[i][2] == nets[i + 1][2] == ci)
+            j = bisect.bisect_left(starts, t) - 1
+            boundary = (j >= 0 and j + 1 < len(nets) and nets[j][1] == t
+                        and nets[j + 1][0] == t + dt and nets[j][2] == nets[j + 1][2] == ci)
             if not (interior or boundary):
                 continue
             lo, hi = (t - 1, t + dt + 1) if boundary else (t, max(t + dt, t + 1))

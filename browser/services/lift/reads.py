@@ -202,6 +202,9 @@ def geometry_intervals(read: dict) -> list:
     if not ll:
         return []
     out = [[a, b] for a, b in _body_spans(ll)]
+    # Display extents include empty map connectors; coverage still uses bodies.
+    out += [list(c) for c in ll.get("connectors") or ()]
+    out += [[g["pos"], g["pos"] + g["ref_bp"]] for g in ll.get("gap_observations") or () if g["ref_bp"]]
     # Badges are visible on either viewport edge; straddle the point so
     # compact_read_bounds' half-open overlap test keeps the right edge too.
     out += [[max(0, b[0] - 1), b[0] + 1] for b in ll.get("badges") or ()]

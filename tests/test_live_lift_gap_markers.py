@@ -6,6 +6,8 @@ import pytest
 from live_lift_fixtures import MAT, TARGET, SSIZE, make_record, write_bam
 from test_live_lift_boundary_gaps import gap_map
 from services.lift.reads import lifted_reads_for_region, clip_geometry
+from services.lift.reads import geometry_intervals
+from services.lift.live_lift import LiftSettings, select_pieces, plan_fetch, row_touches_region
 from services.sv_events import carrier_evidence, classify_allele, cluster_sv_events
 
 
@@ -48,3 +50,35 @@ def test_partial_replacement_keeps_coverage_without_a_spanned_marker(tmp_path):
     assert observation["coverage"]["source"] == [0, 30]
     assert not observation["coverage"]["full"] and not observation["coverage"]["right_flank"]
     assert not any(ev.get("source") == "assembly" for ev in row.get("sv", []))
+
+
+@pytest.mark.parametrize("dt,dq", [(1500, 0), (1500, 80), (100000, 0)])
+@pytest.mark.parametrize("strand", ["+", "-"])
+def test_inside_gap_fetch_crop_and_split_keep_display_without_depth(tmp_path, dt, dq, strand):
+    config = gap_map(tmp_path, dt, dq, strand)
+    config.settings = LiftSettings(g_split=1000)
+    a = 200 if strand == "+" else SSIZE - 200 - dq
+    bam = write_bam(tmp_path / "source.bam", lambda h: [make_record(h, "spanning", MAT, a - 50, f"{100 + dq}M")], contigs=((MAT, SSIZE),))
+    ds = SimpleNamespace(id="gap", paths=[bam], data_type="bam_livelift", live_lift=config)
+    start, end = 1100 + dt // 3, 1100 + 2 * dt // 3
+    for cached in (False, True):
+        selection = select_pieces(config.handle, TARGET, start, end, haplotypes=config.haplotypes,
+                                  settings=config.settings, key=config.key(), use_cache=cached)
+        plan = plan_fetch(selection, config.settings, fetch_range=(start, end))
+        assert plan.contigs and 0 < plan.source_bp <= plan.budget_bp
+    broad, = lifted_reads_for_region(ds, TARGET, 1000, 1200 + dt)
+    direct, = lifted_reads_for_region(ds, TARGET, start, end)
+    exact, = lifted_reads_for_region(ds, TARGET, 1100, 1100 + dt)
+    assert exact["live_lift"]["connectors"] == [[0, dt]]
+    from services.working_sets import project_broad_read_to_viewport
+    projected, _ = project_broad_read_to_viewport(broad, viewport_offset=start - 1000, region_width=end - start,
+                                                include_methylation=True, layer_key=None)
+    assert projected is not None
+    cropped = projected["live_lift"]
+    assert cropped == direct["live_lift"]
+    assert cropped["connectors"] == [[0, end - start]]
+    assert len(cropped["gap_observations"]) == 1
+    assert row_touches_region(direct, end - start)
+    assert any(b > start - 1000 and a < end - 1000 for a, b in geometry_intervals(broad))
+    from services.lift.reads import _body_spans
+    assert _body_spans(cropped) == []

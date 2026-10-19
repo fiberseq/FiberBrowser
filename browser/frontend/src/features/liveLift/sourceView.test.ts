@@ -29,7 +29,21 @@ describe('HG002 source view', () => {
     const panel = useBrowserStore.getState().panels[0];
     expect(linkedPanelView(panel, { chrom: 'chr1', start: 450, end: 2050 })).toEqual({ chrom: 'src', start: 950, end: 1050 + alt });
     expect(mainViewForPanel(panel, { chrom: 'src', start: 950, end: 1050 + alt })).toEqual({ chrom: 'chr1', start: 450, end: 2050 });
-    expect(linkedPanelView(panel, { chrom: 'chr1', start: 1000, end: 1200 })).toEqual({ chrom: 'src', start: 1000, end: 1000 + alt });
+    const expected = { chrom: 'src', start: alt ? 1000 : 0, end: alt ? 1000 + alt : 2000 };
+    expect(linkedPanelView(panel, { chrom: 'chr1', start: 1000, end: 1200 })).toEqual(expected);
+    useBrowserStore.getState().setViewport('chr1', 1000, 1200);
+    expect(useBrowserStore.getState().panels[0].viewportOverride).toEqual(expected);
+  });
+  it.each(['+', '-'] as const)('keeps a deletion source boundary loadable through navigation on %s strand', async strand => {
+    vi.mocked(addDataset).mockResolvedValue({ success: true, dataset: { id: 'src', path: '/source.bam', label: 'source', color: '#000', data_type: 'bam' } });
+    const genome = { key: 'contigs:src', chroms: [{ name: 'src', size: 1500 }] } as never;
+    vi.mocked(attachPanelGenome).mockResolvedValue({ success: true, genome });
+    await openSourceView({ ...selection, difference: { ...selection.difference, strand, kind: 'deletion', t_end: 2000,
+      ref_bp: 1500, alt_bp: 0, src: { contig: 'src', start: 1000, end: 1000 } } });
+    usePanelGenomeStore.setState({ genomes: { 'contigs:src': genome } });
+    useBrowserStore.getState().setViewport('chr1', 1000, 1200);
+    expect(useBrowserStore.getState().panels[0].viewportOverride).toEqual({ chrom: 'src', start: 0, end: 1500 });
+    expect(useBrowserStore.getState().panels[0].liveLiftSource).toMatchObject({ start: 1000, end: 1000 });
   });
   it('opens the source BAM on its own header-contig reference without a FASTA and links locally', async () => {
     vi.mocked(addDataset).mockResolvedValue({ success: true, dataset: { id: 'src', path: '/source.bam', label: 'source', color: '#000', data_type: 'bam' } });

@@ -244,6 +244,7 @@ class PieceSelection:
     view_end: int
     pieces: list          # LiftPiece, sorted by (t_start, chain)
     alternatives_capped: int = 0
+    gap_flanks: list = dataclasses.field(default_factory=list)  # bounded fetch pieces for owned edits
 
 
 def margin_for(view_bp: int, settings: LiftSettings) -> int:
@@ -270,9 +271,10 @@ def _merge_contiguous(pieces: list) -> list:
     for p in sorted(pieces, key=lambda x: (x.chain, x.t_start)):
         if out:
             q = out[-1]
-            if (q.chain == p.chain and q.primary == p.primary and q.strand == p.strand and q.t_end == p.t_start
-                    and ((p.strand == "+" and q.q_end == p.q_start) or (p.strand == "-" and p.q_end == q.q_start))):
-                out[-1] = q._replace(t_end=p.t_end, q_start=min(q.q_start, p.q_start), q_end=max(q.q_end, p.q_end))
+            if (q.chain == p.chain and q.primary == p.primary and q.strand == p.strand and q.t_end >= p.t_start
+                    and ((p.strand == "+" and q.q_start - q.t_start == p.q_start - p.t_start)
+                         or (p.strand == "-" and q.q_end + q.t_start == p.q_end + p.t_start))):
+                out[-1] = q._replace(t_end=max(q.t_end, p.t_end), q_start=min(q.q_start, p.q_start), q_end=max(q.q_end, p.q_end))
                 continue
         out.append(p)
     return out
@@ -346,8 +348,20 @@ def select_pieces(handle: LiftMapHandle, chrom: str, start: int, end: int, *, ha
         keep = set(alt_chains[:MAX_ALTERNATIVE_CHAINS])
         capped = max(0, len(alt_chains) - MAX_ALTERNATIVE_CHAINS)
         pieces += [p for p in raw if not p.primary and p.chain in keep]
+    # An owned gap can initiate a fetch even when neither aligned flank is
+    # within the selection margin. Only its winning chain supplies flanks.
+    from services.lift.differences import primary_gaps_for_region
+    gap_flanks = []
+    with handle.lock:
+        for hap in sorted(haps):
+            for ci, (t, _q, dt, _dq, _reason), _ in primary_gaps_for_region(handle, chrom, hap, start, end):
+                for a, b in ((max(0, t - 1000), t), (t + dt, t + dt + 1000)):
+                    flank = _as_lift_pieces(handle, handle.map.target_to_source(chrom, a, b))
+                    gap_flanks.extend(p for p in flank if p.primary and p.chain == ci
+                                      and (p.t_end == t or p.t_start == t + dt))
+    pieces = _merge_contiguous(set(pieces + gap_flanks))
     pieces.sort(key=lambda p: (p.t_start, p.chain, not p.primary))
-    return PieceSelection(chrom, qs, qe, start, end, pieces, capped)
+    return PieceSelection(chrom, qs, qe, start, end, pieces, capped, gap_flanks)
 
 
 # ── Fetch plan and budgets ──────────────────────────────────────────────────
@@ -418,8 +432,8 @@ def plan_fetch(selection: PieceSelection, settings: LiftSettings, fetch_range: O
     others when the source gap is at most ``window_merge``. Refuses (413) more
     than 64 windows or more source bp than ``max(8 x view, 400 kb)``.
     ``fetch_range``: target ``(start, end)`` whose records are wanted; only
-    pieces overlapping it make windows (the margin's pieces still compose the
-    records fetched), so a wide output region is not tripled."""
+    pieces overlapping it or bounded owned-gap flanks make windows (the
+    margin's pieces still compose the records fetched)."""
     by_contig: dict = {}
     for p in selection.pieces:
         by_contig.setdefault(p.source, []).append(p)
@@ -428,6 +442,8 @@ def plan_fetch(selection: PieceSelection, settings: LiftSettings, fetch_range: O
         pieces = sorted(by_contig[contig], key=lambda p: (p.q_start, p.q_end))
         fetch = pieces if fetch_range is None else [p for p in pieces if p.t_end > fetch_range[0]
                                                     and p.t_start < fetch_range[1]]
+        fetch = sorted(set(fetch + [p for p in selection.gap_flanks if p.source == contig]),
+                       key=lambda p: (p.q_start, p.q_end))
         if not fetch:
             continue
         windows, last_chain = [], None
@@ -649,7 +665,10 @@ def row_touches_region(row: dict, width: int) -> bool:
     ll = row.get("live_lift") or {}
     if any(s[1] > 0 and s[0] < width for s in ll.get("segments") or ()):
         return True
-    return any(0 <= b[0] <= width for b in ll.get("badges") or ())
+    return (any(b > 0 and a < width for a, b in ll.get("connectors") or ())
+            or any(g["pos"] < width and g["pos"] + g["ref_bp"] > 0
+                   for g in ll.get("gap_observations") or ())
+            or any(0 <= b[0] <= width for b in ll.get("badges") or ()))
 
 
 # ── Primary metadata (§3.5) ─────────────────────────────────────────────────
