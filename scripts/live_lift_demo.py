@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Start a local FiberBrowser with the live-lift demo loaded (DESIGN_LIVE_LIFT.md P2a).
 
-SAMPLE_A's HG002-aligned reads at the chr3 AluY locus, drawn on GRCh38 through the
+HG002-aligned reads at the chr3 AluY locus, drawn on GRCh38 through the
 HPRC graphlift map (split into MAT and PAT panels), next to the same molecules'
 native GRCh38 alignments. Runs until Ctrl+C.
 
@@ -68,8 +68,8 @@ def main():
     if a.port in (8885, 8886, 8888):
         sys.exit("Pick another port (8885, 8886 and 8888 are reserved on this machine).")
     a.data_root = os.path.abspath(os.path.expanduser(a.data_root))
-    a.lift_bam = a.lift_bam or os.path.join(a.data_root, "SAMPLE_A.alu_chr3.hg002v1.1.bam")
-    a.native_bam = a.native_bam or os.path.join(a.data_root, "SAMPLE_A.alu_chr3.GRCh38.bam")
+    a.lift_bam = a.lift_bam or os.path.join(a.data_root, "sample.alu_chr3.hg002v1.1.bam")
+    a.native_bam = a.native_bam or os.path.join(a.data_root, "sample.alu_chr3.GRCh38.bam")
     for name in ("lift_bam", "native_bam", "map"):
         setattr(a, name, os.path.abspath(os.path.expanduser(getattr(a, name))))
         if not os.path.exists(getattr(a, name)):

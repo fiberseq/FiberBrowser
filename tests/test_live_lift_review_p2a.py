@@ -440,7 +440,7 @@ def test_launcher_isolates_child_home_and_prints_explicit_relaunch(tmp_path, mon
     assert not module.DEFAULT_FASTA.startswith(os.environ['HOME'])
     data = tmp_path / 'demo data'
     data.mkdir()
-    for name in ('SAMPLE_A.alu_chr3.hg002v1.1.bam', 'SAMPLE_A.alu_chr3.GRCh38.bam', 'map.json', 'target.fa'):
+    for name in ('sample.alu_chr3.hg002v1.1.bam', 'sample.alu_chr3.GRCh38.bam', 'map.json', 'target.fa'):
         (data / name).touch()
     home = tmp_path / 'server home'
     seen = {}

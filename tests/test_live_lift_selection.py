@@ -83,7 +83,7 @@ def test_every_setting_changes_lift_key(toy):
                    cohort_alternatives="include", supplementary_display="hide",
                    cohort_supplementaries="primary_only", fold_molecule=True, fold_orientation_rows=True,
                    joint_dedup="by_molecule", coverage_hatching=False, pooled_depth="correspondence_normalised",
-                   primary_lookup=False, molecule_groups={"a.bam": "SAMPLE_A"})
+                   primary_lookup=False, molecule_groups={"a.bam": "sample"})
     assert set(changed) == {f.name for f in dataclasses.fields(ll.LiftSettings)}
     keys = {ll.lift_key(toy, toy.haplotypes, dataclasses.replace(base, **{name: value}))
             for name, value in changed.items()}

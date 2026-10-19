@@ -165,8 +165,8 @@ def test_identity_components(toy):
     assert ll_["record"] == f"{r['record_sha256']}:{r['alignment_occurrence']}"
     assert (ll_["row_index"], ll_["row_count"], ll_["placement"]) == (0, 1, "0")
     assert "analysis_id" not in r  # assigned per fold mode in P2
-    grouped = _load(toy, ll.LiftSettings(molecule_groups={toy[1]: "SAMPLE_A"}))
-    assert _rows(grouped, "plus")[0]["live_lift"]["molecule"] == "SAMPLE_A|plus"
+    grouped = _load(toy, ll.LiftSettings(molecule_groups={toy[1]: "sample"}))
+    assert _rows(grouped, "plus")[0]["live_lift"]["molecule"] == "sample|plus"
     assert not any(k.startswith("_fiberbrowser_") for row in load.rows for k in row)
 
 
