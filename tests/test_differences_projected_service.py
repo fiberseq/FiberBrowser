@@ -365,3 +365,25 @@ def test_unresolved_map_gap_on_off_locus_primary_does_not_veto_target(evidence, 
     only, = result["targets"][0]["calls_by_molecule"].values()
     assert only["call"]["level"] == "confirmed"
     assert any(r["projection"]["partial_gaps"] for h in only["lifted"]["diagnostics"] for r in h["records"])
+
+
+def test_conflicting_raw_gap_ownership_reaches_projection_paths(tmp_path):
+    from test_live_lift_boundary_gaps import gap_map
+    from services.differences.projected_service import map_paths
+    config = gap_map(tmp_path, claims=[[0, 1000, 1400, 0, []], [0, 1150, 1250, 1, []]])
+    paths, _, _ = map_paths(config, TARGET, 1050, 1350, policy=ProjectionPolicy())
+    primary = next(p for p in paths if p.pieces[0].chain == 0)
+    assert primary.ownership_witnesses == ({"start": 1150, "end": 1250, "chain": 1},)
+    assert primary.gaps == ()
+
+
+def test_actual_bam_repeated_skips_do_not_become_exact_deletions(evidence, monkeypatch):
+    monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "1")
+    state, ds, directory = evidence
+    ds.paths = [write_bam(directory / "reference-skips.bam", lambda h: [
+        make_record(h, "skip", MAT, 500, "50M200N50M"),
+        make_record(h, "skip", MAT, 500, "50M200N50M", flag=2048)])]
+    t = dict(target_id="skip", target_type="exact", chrom=TARGET, ref_start=1550, ref_end=1750, alt_bp=0,
+        candidates={"skip": "", "reference": "A"*200}, competition_complete=True)
+    result = projected_analysis(state, ds, feature="split", chrom=TARGET, start=1400, end=1900, target=t)
+    assert result["targets"][0]["counts"] == [0, 0, 1]

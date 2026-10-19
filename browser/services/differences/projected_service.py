@@ -51,9 +51,17 @@ def map_paths(config, chrom, start, end, *, policy, use_cache=True):
                 a, b = _source_span(handle, chain, q, dq)
                 gaps.append(MapGap(content_id("map-cut:v1", [namespace, ci, t, q, dt, dq]),
                                    a, b, t, t+dt, str(reason)))
-            claims = tuple(dict(start=a, end=b, chain=other) for a, b, other in
+            hull_start, hull_end = min(p.t_start for p in pieces), max(p.t_end for p in pieces)
+            claims = {(a, b, other) for a, b, other in
                 handle.map.nets.get((chain["haplotype"], handle.map.targets[chrom]), ())
-                if primary and other != ci and any(a < p.t_end and b > p.t_start for p in pieces))
+                if primary and other != ci and a < hull_end and b > hull_start}
+            if primary:
+                # Owned gaps deliberately exclude these raw cuts. Keep their
+                # independent competing-net evidence through the adapter.
+                for owner, gap, competing in handle._primary_gap_cache[(chrom, chain["haplotype"])][4]:
+                    if owner == ci and gap[0] < selection.end and gap[0]+max(gap[2], 1) > selection.start:
+                        claims.update((c["start"], c["end"], c["chain"]) for c in competing)
+            claims = tuple(dict(start=a, end=b, chain=other) for a, b, other in sorted(claims))
             paths.append(MapPath(content_id("map-path:v1", [namespace, ci, primary]), chrom,
                 pieces[0].source, tuple(pieces), tuple(gaps), "primary" if primary else "secondary",
                 handle.fingerprint, ownership_validated=primary, map_content_id=namespace, ownership_witnesses=claims))

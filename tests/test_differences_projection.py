@@ -353,6 +353,52 @@ def test_joint_deletion_cannot_erase_another_viable_source_placement():
     assert "unresolved_representation" in result["call"]["reasons"]
 
 
+@pytest.mark.parametrize("copies", [1, 2, 3])
+def test_repeated_reference_skips_never_supply_split_deletion_endpoints(copies):
+    a = replace(alignment(sequence=False), ref_start=0, cigar=((0, 50), (3, 200), (0, 50)))
+    t = dict(target_id="skip", target_type="exact", ref_start=1050, ref_end=1250, alt_bp=0,
+        candidates={"skip": "", "reference": "C"*200}, competition_complete=True)
+    records = [replace(a, record_id=str(i), supplementary=bool(i)) for i in range(copies)]
+    result = call_molecule(records, [affine_path()], t)
+    assert result["call"]["assignment"] == result["geometry_call"]["assignment"] == "unknown"
+
+
+@pytest.mark.parametrize("alt_bp", [0, 1, 3])
+@pytest.mark.parametrize("minus", [False, True])
+def test_split_junction_requires_real_endpoints_and_retains_replacement_query_gap(alt_bp, minus):
+    p = path(200, alt_bp, minus)
+    left = replace(alignment(sequence=False), record_id="left", cigar=((0, 50), (4, 50+alt_bp)))
+    right = replace(left, record_id="right", supplementary=True, ref_start=150+alt_bp,
+        cigar=((4, 50+alt_bp), (0, 50)))
+    if minus:
+        left, right = replace(right, supplementary=False), replace(left, supplementary=True)
+    result = call_molecule([left, right], [p], target(200, alt_bp))
+    assert result["call"]["assignment"] == "target"
+    # A query gap alone supplies no replacement allele sequence.
+    if alt_bp:
+        assert call_molecule([left, right], [p], target(200, alt_bp, True))["call"]["assignment"] == "unknown"
+
+
+def test_adjacent_primary_path_does_not_compete_for_positive_span_target():
+    p = affine_path()
+    adjacent = replace(p, path_id="adjacent", pieces=(p.pieces[0]._replace(t_start=900, t_end=1050, q_start=600, q_end=750),))
+    carrier = replace(alignment(sequence=False), ref_start=0, cigar=((0, 50), (2, 50), (0, 100)))
+    abutting = replace(carrier, record_id="adjacent-record", supplementary=True, ref_start=600, cigar=((0, 150), (4, 50)))
+    t = dict(target_id="deletion", target_type="geometry", ref_start=1050, ref_end=1100, alt_bp=0)
+    result = call_molecule([carrier, abutting], [p, adjacent], t)
+    assert result["call"]["assignment"] == "target" and result["primary_complete"]
+
+
+def test_partial_supplementary_remains_viable_dissent_without_exclusion_proof():
+    p = affine_path()
+    primary = replace(alignment(sequence=False), ref_start=0, cigar=((0, 50), (2, 50), (0, 100)))
+    partial = replace(primary, record_id="partial", supplementary=True, cigar=((0, 55), (4, 95)))
+    t = dict(target_id="deletion", target_type="geometry", ref_start=1050, ref_end=1100, alt_bp=0)
+    result = call_molecule([primary, partial], [p], t)
+    assert result["call"]["assignment"] == "ambiguous"
+    assert "unresolved_representation" in result["call"]["reasons"]
+
+
 def test_unmapped_query_witnesses_share_the_geometry_storage_budget():
     a = replace(alignment(), ref_start=0, cigar=((0, 1),)*100, sequence="A"*100)
     p = MapPath("outside", "target", "source", (LiftPiece(0, 1000, 1100, 1000, 1100, "+", True, "H#1", "source"),))

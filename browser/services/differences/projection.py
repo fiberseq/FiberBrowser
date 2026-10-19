@@ -512,8 +512,11 @@ def call_molecule(alignments, paths, target, *, policy=ProjectionPolicy(), budge
                    (any(max(a.ref_start, x.q_start) < min(walks[a.record_id][3], x.q_end) for x in p.pieces)
                     or any(a.ref_start < g.source_end and walks[a.record_id][3] > g.source_start for g in p.gaps))])
                   for p in admissible_paths]
+    def touches_target(a, b):
+        start, end = target["ref_start"], target["ref_end"]
+        return a <= start < b if start == end else a < end and b > start
     applicable = [(p, aa) for p, aa in applicable if aa and
-                  (any(x.t_start <= target["ref_end"] and x.t_end >= target["ref_start"] for x in p.pieces)
+                  (any(touches_target(x.t_start, x.t_end) for x in p.pieces)
                    or any(g.ref_start <= target["ref_end"] and g.ref_end >= target["ref_start"] for g in p.gaps))]
     # Process primary paths first. Display ordering cannot spend their budget.
     applicable.sort(key=lambda v: (v[0].ownership != "primary", v[0].path_id))
@@ -654,7 +657,8 @@ def _query_conflict(details, target, policy):
 
 
 def _joint_deletion(records, target, min_mapq):
-    if target["alt_bp"] or target["ref_end"] <= target["ref_start"]:
+    # A split query gap establishes replacement geometry, not its sequence.
+    if target["ref_end"] <= target["ref_start"] or (target["alt_bp"] and target.get("target_type") == "exact"):
         return None
     start, end = target["ref_start"], target["ref_end"]
     for left in records:
@@ -665,14 +669,21 @@ def _joint_deletion(records, target, min_mapq):
                 left["alignment_orientation"] != right["alignment_orientation"] or
                 left["path_id"] != right["path_id"]):
                 continue
-            for a in left["base_blocks"]:
-                for b in right["base_blocks"]:
+            for a in left["base_blocks"][-1:]:
+                for b in right["base_blocks"][:1]:
                     # Frame reflection is explicit in the runs. Negative or
                     # overlapping query gaps cannot prove a deletion junction.
-                    if a["ref_end"] == start and b["ref_start"] == end and a["q_end"] == b["q_start"]:
+                    # Internal blocks (including either side of N) and map
+                    # window edges are never actual split-alignment endpoints.
+                    terminal_left = left["source_start"] if a["seq_reverse"] else left["source_end"]
+                    terminal_right = right["source_end"] if b["seq_reverse"] else right["source_start"]
+                    if (a["source_exit"] == terminal_left and b["source_entry"] == terminal_right and
+                        a["ref_end"] == start and b["ref_start"] == end and
+                        b["q_start"]-a["q_end"] == target["alt_bp"]):
                         if target.get("target_type", "geometry") == "exact" and not (target.get("competition_complete") is True and
                             target.get("candidates", {}).get(target["target_id"]) == "" and all(v is not None and v != "" for k, v in target["candidates"].items() if k != target["target_id"])):
                             continue
+                        reason = "validated_split_replacement_path" if target["alt_bp"] else "validated_split_deletion_path"
                         return Call("target", "confirmed", target["target_id"], "assembly_projection",
-                            ("validated_split_deletion_path",), alignment_ids=(left["record_id"], right["record_id"]))
+                            (reason,), alignment_ids=(left["record_id"], right["record_id"]))
     return None
