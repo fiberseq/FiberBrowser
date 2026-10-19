@@ -542,7 +542,9 @@ def call_molecule(alignments, paths, target, *, policy=ProjectionPolicy(), budge
             record_details.append(detail)
             # Off-locus records are witnesses, not unresolved locus placements.
             if (projected["ref_start"] is not None and projected["ref_start"] <= target["ref_end"] and
-                    projected["ref_end"] >= target["ref_start"]) or projected["partial_gaps"]:
+                    projected["ref_end"] >= target["ref_start"]) or any(
+                        g["ref_start"] <= target["ref_end"] and g["ref_end"] >= target["ref_start"]
+                        for g in projected["partial_gaps"]):
                 calls.append(Call(**detail["call"]))
                 geometry_calls.append(Call(**detail["geometry_evidence"]))
         # Each record is independently classified. Supplementary flanks can

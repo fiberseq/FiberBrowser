@@ -351,3 +351,17 @@ def test_projection_deadline_includes_later_sequence_scoring(evidence, monkeypat
     target = {**insertion(), "target_type": "exact", "candidates": {"frozen-insertion": "A"*100, "reference": ""}, "competition_complete": True}
     projected_analysis(state, ds, feature="split", chrom=TARGET, start=5900, end=6500, target=target)
     assert observed
+
+
+def test_unresolved_map_gap_on_off_locus_primary_does_not_veto_target(evidence, monkeypatch):
+    monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "1")
+    state, ds, directory = evidence
+    ds.paths = [write_bam(directory / "off-locus-partial-gap.bam", lambda h: [
+        make_record(h, "m", MAT, 2990, "5M20N5M590S", tags=[("SA", f"{MAT},4801,+,100S500M,60,0;")]),
+        make_record(h, "m", MAT, 4800, "100S500M", flag=2048, tags=[("SA", f"{MAT},2991,+,5M20N5M590S,60,0;")])])]
+    result = projected_analysis(state, ds, feature="split", chrom=TARGET, start=5900, end=6500, target=insertion())
+    assert result["scope"]["records"] == 2
+    assert result["targets"][0]["counts"] == [1, 0, 0]
+    only, = result["targets"][0]["calls_by_molecule"].values()
+    assert only["call"]["level"] == "confirmed"
+    assert any(r["projection"]["partial_gaps"] for h in only["lifted"]["diagnostics"] for r in h["records"])
