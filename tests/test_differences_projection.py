@@ -428,6 +428,18 @@ def test_adjacent_match_and_mismatch_cigar_ops_share_one_affine_geometry_run():
     assert (projected["base_blocks"][0]["ref_start"], projected["base_blocks"][0]["ref_end"]) == (1000, 1500)
 
 
+@pytest.mark.parametrize("insertion", [False, True])
+def test_contig_origin_does_not_substitute_base_zero_for_an_unobserved_left_flank(insertion):
+    p = affine_path()
+    p = replace(p, pieces=(p.pieces[0]._replace(t_start=0, t_end=500),))
+    a = replace(alignment(sequence=False), ref_start=0, cigar=((1 if insertion else 2, 20), (0, 100)))
+    t = dict(target_id="edge", target_type="geometry", ref_start=0, ref_end=0 if insertion else 20,
+        alt_bp=20 if insertion else 0)
+    result = call_molecule([a], [p], t)
+    assert result["call"]["assignment"] == "unknown"
+    assert "missing_observed_flanks" in result["call"]["reasons"]
+
+
 def test_hypotheses_share_immutable_source_cigar_instead_of_multiplying_storage(monkeypatch):
     import builtins
     from services.differences import projection
