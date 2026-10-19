@@ -62,7 +62,8 @@ Identity is a best-effort percent
 from the source CIGAR, independent of carriage. Inserted read_bases is at most
 60 bases; read_bases_length/mol_bp preserve its full length. include_sequence
 returns one full oriented carrier for item_id on demand (at most 50 kb). Missing target
-bases leave base alleles as other. Missing MD and source FASTA leave HG002
+bases leave base alleles unknown; a length-distinct assembly match can still
+be identified geometrically. Missing MD and source FASTA leave HG002
 unknown (allele=unknown). Cross-parent rows keep alignment_hg002 separately. A displayed row's
 record key is reused when available, and orientation describes its display.
 """
@@ -908,6 +909,7 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
                 hap = meta.get("hap") or span["hap"]
                 hg = alignment_hg if hap == span["hap"] else expected.get(hap)
                 allele = ("no_coverage" if not overlaps else "deleted" if not rb else "unknown" if hg is None else
+                          ("hg002" if rb == hg and len(hg) != end - pos else "unknown") if ref is None else
                           "hg002" if hg is not None and ref is not None and rb == hg and hg != ref else
                           "same_as_grch38" if hg is not None and ref is not None and rb == hg == ref else
                           "grch38" if hg is not None and ref is not None and hg != ref and rb == ref else "other")
@@ -933,7 +935,8 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
                 item = dict(id=record.query_name, molecule=ll.get("molecule", f"{dataset.id}|{record.query_name}"),
                             hap_label=config.handle.haplotype_labels.get(hap, hap), record=ll.get("record", record_id),
                             supplementary=bool(record.is_supplementary), strand=st, source_pos=dict(src),
-                            read_bases=rb, hg002=hg, alignment_hg002=alignment_hg, grch38=ref, allele=allele,
+                            read_bases=rb[:60], read_bases_length=len(rb), hg002=hg,
+                            alignment_hg002=alignment_hg, grch38=ref, allele=allele,
                             chromatin=_chromatin(row, origin, pos, span["strand"]))
                 if gap:
                     item.update(item_id=span["id"], ref_bp=span["ref_bp"], alt_bp=span["alt_bp"],

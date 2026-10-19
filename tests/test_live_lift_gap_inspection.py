@@ -1,14 +1,18 @@
 """Inspection follows independent reference and alternate spans, including empty alts."""
 from types import SimpleNamespace
+import gzip
+import json
+from pathlib import Path
 
 import pysam
 import pytest
 from fastapi import HTTPException
 
-from live_lift_fixtures import MAT, TARGET, SSIZE, make_record, write_bam
+from live_lift_fixtures import MAT, TARGET, SSIZE, make_record, write_bam, write_difference_sidecar
 from test_live_lift_boundary_gaps import gap_map
 from test_live_lift_differences import _fasta
 from services.lift import differences as diff
+from services.lift.dataset import LiveLiftConfig
 
 
 @pytest.mark.parametrize("dt,dq", [(1500, 0), (1142, 0), (1733, 1)])
@@ -79,3 +83,36 @@ def test_source_hull_without_aligned_boundary_flanks_is_not_full_inspection(tmp_
     rows = {row["id"]: row for row in result["rows"]}
     assert rows["unobserved"]["allele"] == "no_coverage" and not rows["unobserved"]["full_span"]
     assert rows["one-flank"]["allele"] == "partial" and not rows["one-flank"]["full_span"]
+
+
+@pytest.mark.parametrize("count", [1, 501])
+@pytest.mark.parametrize("with_reference", [False, True])
+def test_mnv_inspection_bounds_every_preview_after_classification(tmp_path, count, with_reference):
+    manifest = Path(write_difference_sidecar(tmp_path / "map"))
+    with gzip.open(manifest.parent / "toy.t0.chrT.fills.json.gz", "wt") as fh:
+        json.dump({"target": TARGET, "fills": {"0": [[1200, 200, 1]]}}, fh)
+    config = LiveLiftConfig(str(manifest), [])
+    bam = write_bam(tmp_path / "source.bam", lambda h: [
+        *[make_record(h, f"full-{i}", MAT, 0, "1000M", seq="A" * 1000, tags=[("MD", "1000")]) for i in range(count)],
+        make_record(h, "partial", MAT, 250, "100M", seq="A" * 100, tags=[("MD", "100")]),
+    ])
+    ds = SimpleNamespace(id="mnv", paths=[bam], data_type="bam_livelift", live_lift=config)
+    target = _fasta(tmp_path / "target.fa", [(TARGET, "C" * 20000)])
+    with pysam.FastaFile(target) as fasta:
+        state = SimpleNamespace(fasta=fasta if with_reference else None, datasets={ds.id: ds})
+        item, = [d for d in diff.assembly_items_for_region(config, TARGET, 1200, 1400) if d["kind"] == "mnv"]
+        result = diff.difference_reads(state, ds, TARGET, 1200, 1400, item_id=item["id"])
+    assert result["capped"] == (count > 500)
+    assert len(result["rows"]) == min(count + 1, 500)
+    for row in result["rows"]:
+        assert row["read_bases"] == "A" * 60
+        assert row["read_bases_length"] == (100 if row["id"] == "partial" else 200)
+        assert row["allele"] == ("hg002" if with_reference and row["id"] != "partial" else "unknown")
+
+
+def test_length_distinct_assembly_match_without_target_fasta(tmp_path):
+    config = gap_map(tmp_path, 200, 1)
+    bam = write_bam(tmp_path / "source.bam", lambda h: [make_record(h, "full", MAT, 150, "101M", tags=[("MD", "101")])])
+    ds = SimpleNamespace(id="gap", paths=[bam], data_type="bam_livelift", live_lift=config)
+    row, = diff.difference_reads(SimpleNamespace(fasta=None, datasets={ds.id: ds}), ds, TARGET, 1100, 1300)["rows"]
+    assert row["allele"] == "hg002" and row["read_bases_length"] == 1

@@ -231,7 +231,7 @@ def test_record_cap_and_missing_target_reference(evidence):
     state.fasta = None
     result = diff.difference_reads(state, ds, TARGET, 1100, 1101)
     assert result["capped"] and result["max_records"] == 500 and len(result["rows"]) == 500
-    assert all(r["grch38"] is None and r["allele"] == "other" for r in result["rows"])
+    assert all(r["grch38"] is None and r["allele"] == "unknown" for r in result["rows"])
 
 
 def test_read_deletion_and_missing_md(evidence):
