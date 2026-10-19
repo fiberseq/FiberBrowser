@@ -15,6 +15,53 @@ from services.reconstruction_budget import ResourceResult
 MOLECULE = MoleculeId("synthetic", "library", "molecule")
 
 
+def affine_path():
+    return MapPath("affine", "target", "source",
+        (LiftPiece(0, 1000, 1500, 0, 500, "+", True, "H#1", "source"),),
+        ownership="primary", ownership_validated=True)
+
+
+@pytest.mark.parametrize("offset,deleted,inserted", [(-1, 50, 0), (1, 50, 0), (-1, 52, 0), (7, 90, 2)])
+def test_tolerant_deletions_use_observed_edit_flanks(offset, deleted, inserted):
+    length = 88 if deleted == 90 else 50
+    a = replace(alignment(sequence=False), ref_start=0,
+        cigar=((0, 100+offset), *(((1, inserted),) if inserted else ()), (2, deleted), (0, 100)))
+    t = dict(target_id="deletion", target_type="geometry", ref_start=1100, ref_end=1100+length, alt_bp=0)
+    result = call_molecule([a], [affine_path()], t)
+    assert result["call"]["assignment"] == "target"
+    assert result["call"]["level"] == "confirmed"
+    # Tolerance never supplies exact structural proof at another boundary.
+    exact = {**t, "target_type": "exact", "candidates": {"deletion": "", "reference": "C"*length}, "competition_complete": True}
+    assert call_molecule([a], [affine_path()], exact)["call"]["assignment"] == "unknown"
+
+
+@pytest.mark.parametrize("op", [1, 2])
+def test_reference_geometry_tolerates_subfloor_noise_inside_retained_span(op):
+    a = replace(alignment(sequence=False), ref_start=0, cigar=((0, 150), (op, 1), (0, 200)))
+    t = dict(target_id="deletion", target_type="geometry", ref_start=1100, ref_end=1250, alt_bp=0)
+    assert call_molecule([a], [affine_path()], t)["call"]["assignment"] == "reference"
+
+
+@pytest.mark.parametrize("exact", [False, True])
+@pytest.mark.parametrize("shift,strict", [(25, False), (1, True)])
+def test_displaced_plausible_edit_cannot_be_confirmed_reference(exact, shift, strict):
+    a = replace(alignment(sequence=False), ref_start=0, cigar=((0, 100+shift), (1, 30), (0, 200)))
+    t = dict(target_id="insertion", target_type="exact" if exact else "geometry", ref_start=1100, ref_end=1100, alt_bp=30,
+        candidates={"insertion": "A"*30, "reference": ""}, competition_complete=True)
+    policy = ProjectionPolicy(geometry_anchor_bp=0, geometry_anchor_fraction=0, geometry_span_bp=0, geometry_span_fraction=0) if strict else ProjectionPolicy()
+    result = call_molecule([a], [affine_path()], t, policy=policy)
+    assert result["call"]["assignment"] in {"unknown", "ambiguous"}
+    assert result["geometry_call"]["assignment"] in {"unknown", "ambiguous"}
+
+
+@pytest.mark.parametrize("insertion", [False, True])
+def test_nearly_cancelled_map_edit_is_not_an_sv_carrier(insertion):
+    p = path(0, 20) if insertion else path(20, 0)
+    a = replace(alignment(sequence=False), cigar=((0, 50), (2 if insertion else 1, 19), (0, 51 if insertion else 50)))
+    result = call_molecule([a], [p], target(0, 20) if insertion else target(20, 0))
+    assert result["call"]["assignment"] != "target"
+
+
 def path(dt=20, dq=0, minus=False, *, ownership="primary", identity="path"):
     # The independently authored target is G*50 + C*dt + T*50;
     # source is G*50 + A*dq + T*50 in target orientation.

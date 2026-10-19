@@ -406,15 +406,28 @@ def classify_projection(alignment, projected, target, *, context=None, likelihoo
         anchor = max(policy.geometry_anchor_bp, policy.geometry_anchor_fraction*size)
         delta, expected_delta = a-r, alt_bp-(end-start)
         same_direction = not expected_delta or delta*expected_delta > 0
-        return (same_direction and abs(e["ref_start"]-start) <= anchor and abs(e["ref_end"]-end) <= anchor
+        delta_matches = not expected_delta or (
+            abs(delta) >= max(10, .5*abs(expected_delta)) and
+            abs(delta-expected_delta) <= max(policy.geometry_span_bp, policy.geometry_span_fraction*abs(expected_delta)))
+        return (same_direction and delta_matches and abs(e["ref_start"]-start) <= anchor and abs(e["ref_end"]-end) <= anchor
                 and abs(r-(end-start)) <= max(policy.geometry_span_bp, policy.geometry_span_fraction*max(r, end-start))
                 and abs(a-alt_bp) <= max(policy.geometry_span_bp, policy.geometry_span_fraction*max(a, alt_bp)))
     matching = [e for e in projected["edits"] if geometry_matches(e)]
-    flanks = any(any(r["ref_start"] <= start-1 < r["ref_end"] for r in c) and
-                 any(r["ref_start"] <= end < r["ref_end"] for r in c) for c in projected["components"])
+    def observed_flanks(a, b):
+        return any(any(r["ref_start"] <= a-1 < r["ref_end"] for r in c) and
+                   any(r["ref_start"] <= b < r["ref_end"] for r in c) for c in projected["components"])
+    flanks = observed_flanks(start, end)
+    matched_flanks = any(observed_flanks(e["ref_start"], e["ref_end"]) for e in matching)
+    def plausible(e):
+        size = max(end-start, alt_bp, e["ref_end"]-e["ref_start"], e["alt_bp"])
+        return (size >= 10 and max(e["ref_end"]-e["ref_start"], e["alt_bp"]) >= 10 and
+                abs(e["ref_start"]-start) <= diagnostic_halo_bp and
+                abs(e["alt_bp"]-alt_bp) <= max(20, .2*size) and
+                abs(e["ref_end"]-e["ref_start"]-(end-start)) <= max(20, .2*size))
     relevant = [e for e in projected["edits"] if
-                (e["ref_start"] <= end and e["ref_end"] >= start)]
-    geometry = Call("target", "confirmed", target_id, "assembly_projection") if matching and flanks else (
+                max(e["ref_end"]-e["ref_start"], e["alt_bp"]) >= 10 and
+                ((e["ref_start"] <= end and e["ref_end"] >= start) or plausible(e))]
+    geometry = Call("target", "confirmed", target_id, "assembly_projection") if matched_flanks else (
         Call("reference", "confirmed", "reference", "assembly_projection") if flanks and not relevant else
         Call(reasons=("competing_composed_edit" if flanks else "missing_observed_flanks",)))
     if alignment.mapq < min_mapq:
@@ -451,11 +464,7 @@ def classify_projection(alignment, projected, target, *, context=None, likelihoo
             # repeat/compound edit cannot become a reference exclusion proof.
             for e in projected["edits"]:
                 outside = e["ref_start"] < diagnostic_start or e["ref_end"] > diagnostic_end
-                size = max(end-start, alt_bp, e["ref_end"]-e["ref_start"], e["alt_bp"])
-                plausible = (abs(e["ref_start"]-start) <= diagnostic_halo_bp and
-                    abs(e["alt_bp"]-alt_bp) <= max(20, .2*size) and
-                    abs(e["ref_end"]-e["ref_start"]-(end-start)) <= max(20, .2*size))
-                if outside and plausible:
+                if outside and plausible(e):
                     call = Call("ambiguous", "ambiguous", reasons=("diagnostic_window_misses_geometry",))
                     break
     if projected["unresolved_witnesses"]:
