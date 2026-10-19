@@ -1,5 +1,13 @@
 # Read-derived SV evidence
 
+Live-lift datasets remain refused for read-evidence SV analyses, including
+carrier splits, Variants and the insertion lens. Their display rows discard
+source-frame `sv_evidence`, `aligned_blocks`, `sv_segments`, `sv_alignments`
+and `sequence_span`; projected display glyphs and assembly insertion badges do
+not establish a target-coordinate molecule evidence bundle. Enabling these
+analyses requires authoritative projection and source-aware reconciliation.
+Native BAM evidence remains usable without an assembly or a lift map.
+
 Read summaries, Variants, splits, highlighting and the insertion lens use a fixed
 10 bp evidence floor, independently of the display/seed cutoff. Deletion cuts in
 chromatin intervals and direct-load cache keys use the display cutoff. Filtered

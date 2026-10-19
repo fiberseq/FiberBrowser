@@ -249,9 +249,14 @@ These badges also add row `sv` events at the request's SV length floor:
 
 `ref` is absolute target position, `len` is this record's `mol_bp`. Existing
 lifted CIGAR/SV events carry `source: "reads"`. Assembly insertions never
-create deletion cuts. SV helpers accept the extra keys without changes;
-they remain source-agnostic and use their existing length tolerance (partial
-carriers differing by more than 20% may be uninformative for an allele split).
+create deletion cuts. These events are display geometry; read-evidence SV
+analyses (including carrier splits and the insertion lens) remain refused for
+`bam_livelift`. Source-frame `sv_evidence`, `aligned_blocks`, `sv_segments`,
+`sv_alignments` and `sequence_span` are discarded during composition. A future
+unified model must project authoritative evidence and preserve its source
+through clustering before enabling those analyses. Native SV helpers retain
+their existing length tolerance (partial carriers differing by more than 20%
+may be uninformative for an allele split).
 `read_deletion_cuts` itself is a pysam helper; the composer cuts compact row
 geometry only at events whose `t == "D"`.
 

@@ -559,7 +559,7 @@ def _tiny_bam(path, records, ref_len=20_000):
 class _State:
     def __init__(self, paths):
         self.chrom_map = {}
-        self._ds = type("D", (), {"paths": paths, "data_type": "bam"})()
+        self._ds = type("D", (), {"id": "d", "paths": paths, "data_type": "bam"})()
 
     def get_dataset(self, _dataset_id):
         return self._ds
