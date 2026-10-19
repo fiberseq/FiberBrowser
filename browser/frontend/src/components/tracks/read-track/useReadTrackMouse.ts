@@ -18,7 +18,7 @@ import { panelGenomeChroms } from '../../../stores/panelGenomeStore';
 import { FOOTPRINT_ANALYSIS_TAB_STORAGE_KEY } from '../../controls/footprint-analysis/constants';
 import { beginPointerDrag, clearDocumentSelection, endPointerDrag } from '../../../utils/pointerDrag';
 import { maybeShowReadActionsHint } from '../../../stores/readActionsStore';
-import { liveLiftHitAt, type LiveLiftBadge } from './liveLiftCanvas';
+import { liveLiftHitAt, liveLiftMapEventAt, type LiveLiftBadge } from './liveLiftCanvas';
 import type { LiftAxis } from '../../../features/liveLift/axis';
 import { selectMapGap, selectReadDifference } from '../../../features/liveLift/inspectionStore';
 
@@ -235,17 +235,19 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
   }, [width, sidebarWidth, regionWidth, isReversed, start, end, params.axis]);
   /** The SV event of the read at (x, y) within a few pixels. */
   const svEventAtXY = useCallback((x: number, y: number) => {
-    if (!svEnabled) return null;
     if (x < sidebarWidth || x >= width || y < headerHeight + histH || y >= height) return null;
     const body = getReadHitAtXY(x, y)?.read;
     const read = body ?? getReadAtY(y);
-    if (!read?.sv) return null;
+    if (!read) return null;
     const bpPerPx = regionWidth / Math.max(1, width - sidebarWidth);
+    const mapEvent = liveLiftMapEventAt(read.live_lift, genomePosAtX(x) - (linkedBoundsStart ?? start), 5 * bpPerPx);
+    if (mapEvent) return { read, event: mapEvent };
+    if (!svEnabled || !read.sv) return null;
     const event = readSvEventAt(read, genomePosAtX(x), 5 * bpPerPx, svMinLen);
     // A spanned map marker crosses connector space with no read body there.
     if (!body && !(event?.source === 'assembly' && event.display_only && event.difference_id)) return null;
     return event ? { read, event } : null;
-  }, [svEnabled, getReadHitAtXY, getReadAtY, regionWidth, width, height, headerHeight, histH, sidebarWidth, genomePosAtX, svMinLen]);
+  }, [svEnabled, getReadHitAtXY, getReadAtY, regionWidth, width, height, headerHeight, histH, sidebarWidth, genomePosAtX, svMinLen, linkedBoundsStart, start]);
 
   // Map pixel (x, y) to a specific footprint interval on a read.
   //

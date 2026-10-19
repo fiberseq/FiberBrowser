@@ -134,7 +134,7 @@ def test_connector_only_crop_is_not_spanning():
     assert not cropped['intervals'] and not is_read_spanning(cropped, 5)
     assert cropped['live_lift']['connectors'] == [[0, 5]]
     from services.packed_reads import ReadDisplayIndex
-    assert list(ReadDisplayIndex([row]).overlapping(7, 12)) == [0]
+    assert [index for index, *_ in ReadDisplayIndex([row]).overlapping(7, 12)] == [0]
     row['live_lift']['connectors'] = []
     row['live_lift']['badges'] = [[10, 'source_insertion', 100, 100, 'I']]
     assert is_read_spanning(row, 20)  # a badge's point cut rejoins

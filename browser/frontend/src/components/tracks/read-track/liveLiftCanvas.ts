@@ -6,7 +6,7 @@
  * source assembly, a dissimilar bubble, a part mapped elsewhere) a notch with its molecular bp, and a segment on a
  * '-' piece (the source runs reversed here) gets a chevron edge. Coordinates are view-relative like `intervals`.
  */
-import type { CompactRead, LiveLiftRow } from './types';
+import type { CompactRead, LiveLiftRow, SvEvent } from './types';
 import { labelFits, rowLabelFontPx } from './svDrawing';
 import { liveLiftHaplotypeColor } from '../../../features/liveLift/palette';
 
@@ -151,6 +151,25 @@ export function liveLiftHitAt(ll: LiveLiftRow, x: number, y: number,
   if (nearest) return { badge: nearest.badge };
   const bodies = liveLiftBodyRects(ll, options.linkedOffset, options.regionWidth, options.toX);
   return bodies.some(rect => inside({ ...rect, y: options.y, h: Math.max(1, options.rowHeight) })) ? {} : null;
+}
+
+/** Map-marker interaction uses the same row-relative frame as its connectors
+ * and badges, independently of native SV visibility and display thresholds. */
+export function liveLiftMapEventAt(ll: LiveLiftRow | undefined, pos: number, tolBp: number): Extract<SvEvent, { t: 'D' | 'I' }> | null {
+  let best: Extract<SvEvent, { t: 'D' | 'I' }> | null = null;
+  let distance = Infinity;
+  for (const g of ll?.gap_observations ?? []) {
+    if (Math.max(g.ref_bp, g.alt_bp) < 10) continue;
+    if (g.kind === 'insertion' ? g.coverage.mol_bp < 10 : !g.coverage.full) continue;
+    const d = Math.max(g.pos - pos, pos - g.pos - g.ref_bp, 0);
+    if (d > tolBp || d >= distance) continue;
+    distance = d;
+    best = { t: g.alt_bp >= g.ref_bp ? 'I' : 'D', ref: g.t_start, ref_end: g.t_end, q: 0,
+      len: g.kind === 'insertion' ? g.coverage.mol_bp : Math.max(g.ref_bp, g.alt_bp),
+      ref_len: g.ref_bp, alt_len: g.alt_bp, source: 'assembly', display_only: true,
+      difference_id: g.id, method: 'assembly_projection' };
+  }
+  return best;
 }
 
 /** Only pooled rows need the parental identity at their leftmost visible body edge (also in a reversed panel). */

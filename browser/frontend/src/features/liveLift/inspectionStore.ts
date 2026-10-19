@@ -25,8 +25,20 @@ export function selectMapGap(read: CompactRead, id: string | undefined,
   const gap = read.live_lift?.gap_observations?.find(g => g.id === id);
   const panel = useBrowserStore.getState().panels.find(p => p.datasetId === context.datasetId && (p.stateKey ?? p.datasetId) === context.stateKey);
   if (!gap || !panel) return false;
+  const liftKey = useBrowserStore.getState().datasets.find(d => d.id === context.datasetId)?.live_lift?.key ?? '';
+  const query = { id, hap: gap.hap_label, pos: gap.t_start, kind: 'insertion' as const };
+  const canonical = findLoadedDifference(context.datasetId, liftKey, context.chrom, query);
   useDifferenceSelection.getState().select({ datasetId: context.datasetId, panelId: panel.id,
-    chrom: context.chrom, viewKey: liveLiftViewKey(panel), difference: { ...gap, grch38: null, alt: null } });
+    chrom: context.chrom, viewKey: liveLiftViewKey(panel), difference: canonical ?? { ...gap, grch38: null, alt: null } });
+  const version = selectionVersion;
+  if (!canonical) void getDifferences({ datasetId: context.datasetId, liftKey, chrom: context.chrom,
+    start: gap.t_start, end: gap.t_start + 1, minBp: 0, liftHap: gap.hap_label }).then(response => {
+    if (version !== selectionVersion || useBrowserStore.getState().datasets.find(d => d.id === context.datasetId)?.live_lift?.key !== liftKey) return;
+    rememberDifferences(response);
+    const difference = findLoadedDifference(context.datasetId, liftKey, context.chrom, query);
+    const current = useDifferenceSelection.getState().selection;
+    if (difference && current) useDifferenceSelection.getState().select({ ...current, difference });
+  }).catch(() => { /* Geometry inspection remains available without sequence. */ });
   return true;
 }
 

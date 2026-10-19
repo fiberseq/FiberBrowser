@@ -1034,7 +1034,7 @@ def _assembly_gap_metadata(read, row, contig, runs, payload, ctx):
                        display_only=True, sequence_status="unresolved", read_deviations="unassessed",
                        coverage=dict(source=covered, aligned_bp=aligned, mol_bp=mol_bp,
                                      left_flank=left, right_flank=right,
-                                     full=left and right and aligned == b - a))
+                                     full=left and right))
             observations.append(obs)
             # The glyph uses the native mixed-edit geometry, without entering
             # sv_evidence. Partial source insertions retain observed lengths.

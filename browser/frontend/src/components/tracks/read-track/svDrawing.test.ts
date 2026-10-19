@@ -48,13 +48,12 @@ describe('SV labels', () => {
 });
 
 describe('what a read draws', () => {
-  it.each([1, 300])('retains both map replacement spans when the alternate is %i bp', alt => {
+  it.each([1, 300])('leaves map replacement glyphs to live lift when the alternate is %i bp', alt => {
     const ev = { t: alt > 200 ? 'I' as const : 'D' as const, ref: 1000, ref_end: 1200, len: Math.max(200, alt), q: 0,
       source: 'assembly' as const, display_only: true, ref_len: 200, alt_len: alt };
     const row = read('map', [ev]);
-    expect(readSvDraw(row, 900, 1500, 50)).toEqual({ deletions: [{ start: 100, end: 300, len: 200 }],
-      insertions: [{ pos: 100, len: alt, ref: 1000 }], clips: [] });
-    expect(readSvEventAt(row, 1150, 1, 50)).toBe(ev);
+    expect(readSvDraw(row, 900, 1500, 50)).toEqual({ deletions: [], insertions: [], clips: [] });
+    expect(readSvEventAt(row, 1150, 1, 50)).toBeNull();
     expect(readSvEventAt(row, 1250, 1, 50)).toBeNull();
   });
   const r = read('r', [

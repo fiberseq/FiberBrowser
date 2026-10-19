@@ -82,3 +82,14 @@ def test_inside_gap_fetch_crop_and_split_keep_display_without_depth(tmp_path, dt
     assert any(b > start - 1000 and a < end - 1000 for a, b in geometry_intervals(broad))
     from services.lift.reads import _body_spans
     assert _body_spans(cropped) == []
+
+
+def test_internal_read_deletion_keeps_full_flank_coverage(tmp_path):
+    config = gap_map(tmp_path, 4, 792)
+    bam = write_bam(tmp_path / "source.bam", lambda h: [make_record(h, "noisy", MAT, 150, "100M1D791M")])
+    ds = SimpleNamespace(id="gap", paths=[bam], data_type="bam_livelift", live_lift=config)
+    row, = lifted_reads_for_region(ds, TARGET, 1000, 1250)
+    obs, = row["live_lift"]["gap_observations"]
+    assert obs["coverage"]["aligned_bp"] == 791
+    assert obs["coverage"]["mol_bp"] == 791
+    assert obs["coverage"]["full"] and obs["read_deviations"] == "unassessed"

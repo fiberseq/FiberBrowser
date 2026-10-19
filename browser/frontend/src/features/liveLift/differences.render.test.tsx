@@ -220,36 +220,60 @@ it.each([0, 1])('opens a map marker with both spans and %i alternate bases', alt
   expect(selectMapGap(read, 'gap', { datasetId: 'lift', stateKey: 'mat-state', chrom: 'chr1' })).toBe(true);
   expect(useDifferenceSelection.getState().selection?.difference).toMatchObject({ id: 'gap', t_start: 500, t_end: 2233, ref_bp: 1733, alt_bp: alt });
   expect(useBrowserStore.getState().liveLiftExpansions.main ?? []).toHaveLength(0);
-  expect(getDifferences).not.toHaveBeenCalled();
+  expect(getDifferences).toHaveBeenCalledWith(expect.objectContaining({ start: 500, end: 501, minBp: 0 }));
 });
 
-it('clicks a replacement marker over connector space and describes assembly provenance', () => {
-  const gap = { ...diff, id: 'gap', kind: 'replacement' as const, t_start: 400, t_end: 600, ref_bp: 200, alt_bp: 1,
-    pos: 400, method: 'assembly_projection' as const, display_only: true as const, sequence_status: 'unresolved' as const,
+it.each([false, true].flatMap(svEnabled => [20, 200].flatMap(refBp => [false, true].map(reversed => ({ svEnabled, refBp, reversed })))))('clicks a $refBp bp map marker with svEnabled=$svEnabled, reversed=$reversed', ({ svEnabled, refBp, reversed }) => {
+  const gap = { ...diff, id: 'gap', kind: 'replacement' as const, t_start: 400, t_end: 400 + refBp, ref_bp: refBp, alt_bp: 1,
+    pos: 300, method: 'assembly_projection' as const, display_only: true as const, sequence_status: 'unresolved' as const,
     read_deviations: 'unassessed' as const, coverage: { source: [0, 1] as [number, number], aligned_bp: 1, mol_bp: 1, left_flank: true, right_flank: true, full: true } };
-  const event = { t: 'D' as const, ref: 400, ref_end: 600, len: 200, q: 0, ref_len: 200, alt_len: 1,
+  const event = { t: 'D' as const, ref: 400, ref_end: 400 + refBp, len: refBp, q: 0, ref_len: refBp, alt_len: 1,
     source: 'assembly' as const, display_only: true, difference_id: 'gap' };
-  const read: CompactRead = { id: 'r', intervals: [], sv: [event], live_lift: { v: 1, segments: [[0, 1000, 1, '+', true]], connectors: [[400, 600]], gap_observations: [gap] } };
+  const read: CompactRead = { id: 'r', intervals: [], sv: [event], live_lift: { v: 1, segments: [[0, 1000, 1, '+', true]], connectors: [[300, 300 + refBp]], gap_observations: [gap] } };
   let handlers: ReturnType<typeof useReadTrackMouse>;
   function Mouse() {
     handlers = useReadTrackMouse({ displayReads: [read], width: 1000, height: 200, sidebarWidth: 0, regionWidth: 1000,
       start: 0, end: 1000, chrom: 'chr1', datasetId: 'lift', stateKey: 'mat-state', hasCluster: false,
       myClusterAssignments: {}, myClusterOrder: [], myClusterFocus: null, mySelectedClusters: null, hasClusterFocus: false,
-      isPanning: false, isReversed: false, fillReadHeight: false, storeReadRowHeight: 20, readScrollOffset: 0,
+      isPanning: false, isReversed: reversed, fillReadHeight: false, storeReadRowHeight: 20, readScrollOffset: 0,
       readSeparatorMode: 'off', readSeparatorMinHeight: 0, readSeparatorWidth: 0, showReadTooltip: false,
-      showCoverageHistogram: false, svEnabled: true });
+      showCoverageHistogram: false, svEnabled, svMinLen: 1000, linkedBoundsStart: 100 });
     return null;
   }
   act(() => root.render(<Mouse />));
   const canvas = document.createElement('canvas');
   Object.defineProperty(canvas, 'clientWidth', { value: 1000 });
   canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 200 } as DOMRect);
-  act(() => handlers!.handleClick({ currentTarget: canvas, clientX: 500, clientY: 8, shiftKey: false, ctrlKey: false, metaKey: false } as never));
+  const x = reversed ? 600 - refBp / 2 : 400 + refBp / 2;
+  act(() => handlers!.handleClick({ currentTarget: canvas, clientX: x, clientY: 8, shiftKey: false, ctrlKey: false, metaKey: false } as never));
   expect(useDifferenceSelection.getState().selection?.difference.id).toBe('gap');
   act(() => root.render(<SvTooltip hover={{ kind: 'event', read, event, x: 500, y: 8 }} width={1000} height={200} datasetId="lift" chrom="chr1" />));
-  expect(host.textContent).toContain('Assembly replacement · 200→1 bp');
+  expect(host.textContent).toContain(`Assembly replacement · ${refBp}→1 bp`);
   expect(host.textContent).toContain('read evidence unassessed');
   expect(host.textContent).not.toContain('loading bases');
+});
+
+it('preserves loaded map sequences and fills an unloaded marker without overwriting a later selection', async () => {
+  const gap: any = { ...diff, id: 'gap', kind: 'deletion', t_end: 520, ref_bp: 20, alt_bp: 0,
+    pos: 500, coverage: { full: true } };
+  const canonical = { ...gap, grch38: 'C'.repeat(20), alt: '' };
+  const read = { id: 'r', live_lift: { gap_observations: [gap] } } as CompactRead;
+  const context = { datasetId: 'lift', stateKey: 'mat-state', chrom: 'chr1' };
+  rememberDifferences(response([canonical]));
+  selectMapGap(read, 'gap', context);
+  expect(useDifferenceSelection.getState().selection?.difference).toEqual(canonical);
+  expect(getDifferences).not.toHaveBeenCalled();
+  clearDifferenceCache();
+  vi.mocked(getDifferences).mockResolvedValue(response([canonical]));
+  await act(async () => { selectMapGap(read, 'gap', context); });
+  expect(useDifferenceSelection.getState().selection?.difference.alt).toBe('');
+  clearDifferenceCache();
+  let finish!: (r: DifferencesResponse) => void;
+  vi.mocked(getDifferences).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  selectMapGap(read, 'gap', context);
+  useDifferenceSelection.getState().select(null);
+  await act(async () => finish(response([canonical])));
+  expect(useDifferenceSelection.getState().selection).toBeNull();
 });
 
 
