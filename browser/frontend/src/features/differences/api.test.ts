@@ -19,3 +19,16 @@ it('enriches every requested row across the server row budget', async () => {
   expect(vi.mocked(fetchJson).mock.calls.map(c => JSON.parse(c[1]!.body as string).row_ids.length)).toEqual([500,1]);
   expect(result.every(r => r.alternate_blocks?.alternate)).toBe(true);
 });
+
+
+it('keeps identical records in separate declared libraries attached to their own row', async () => {
+  vi.mocked(fetchJson).mockResolvedValue({complete:true,blocks:[
+    {row_id:'shared',record_id:'same-sam',alignment_id:'library-one',length:100},
+    {row_id:'shared',record_id:'same-sam',alignment_id:'library-two',length:100},
+  ]});
+  const rows=[{id:'shared',record_sha256:'same-sam',analysis_id:'library-one',intervals:[]},
+    {id:'shared',record_sha256:'same-sam',analysis_id:'library-two',intervals:[]}] as CompactRead[];
+  const result=await enrichNativeRows(rows,{dataset_id:'native',chrom:'chr1',start:0,end:1000},
+    [{ins_id:'alternate',chrom:'chr1',pos:500,length:100,label:'',hap_label:''}],[],false);
+  expect(result.map(r=>(r.alternate_blocks?.alternate as any)?.alignment_id)).toEqual(['library-one','library-two']);
+});

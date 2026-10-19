@@ -673,6 +673,9 @@ def _load_broad_reads(
                     all_reads.extend(reads)
             if pooled is not None:
                 all_reads = pooled
+        if getattr(dataset, "molecule_groups", None):
+            from services.differences.native import qualified_display_rows
+            all_reads = qualified_display_rows(all_reads, dataset)
         if sampler is not None:
             all_reads = SampledReads(all_reads, level=sampler.level, skipped_starts=sampler.skipped_starts,
                                      skipped_ends=sampler.skipped_ends, kept_starts=sampler.kept_starts,
@@ -1401,7 +1404,7 @@ def project_broad_read_to_viewport(
     for identity_key in (
         "library_id", "source_path", "record_sha256", "alignment_occurrence",
         "reference_start", "reference_end", "alignment_orientation",
-        "chemical_strand", "daf_strand", "strand", "_original_id",
+        "chemical_strand", "daf_strand", "strand", "_original_id", "_display_id",
         "alignment_spans", "signal",
         # st/SEQ strand disagreement and graph-lift provenance (record-level).
         "strand_conflict", "lift", "analysis_id", "_fiberbrowser_inferred_strand",

@@ -178,8 +178,8 @@ export function drawReadTrack(params: DrawReadsParams): void {
     liftHap,
   } = params;
   if (canvas.dataset) {
-    canvas.dataset.liveLiftClusteredRows = String(displayReads.filter(r => r.live_lift && clusterAssignmentForRead(myClusterAssignments, r.analysis_id ?? r.id) !== undefined).length);
-    canvas.dataset.liveLiftClusterIds = JSON.stringify([...new Set(displayReads.filter(r => r.live_lift).map(r => clusterAssignmentForRead(myClusterAssignments, r.analysis_id ?? r.id)).filter(c => c !== undefined))]);
+    canvas.dataset.liveLiftClusteredRows = String(displayReads.filter(r => r.live_lift && clusterAssignmentForRead(myClusterAssignments, r) !== undefined).length);
+    canvas.dataset.liveLiftClusterIds = JSON.stringify([...new Set(displayReads.filter(r => r.live_lift).map(r => clusterAssignmentForRead(myClusterAssignments, r)).filter(c => c !== undefined))]);
   }
   const selectedFootprints = allSelectedFootprints.filter(fp => fp.genome === undefined || fp.genome === (genome ?? null));
 
@@ -344,7 +344,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
     for (let i = 0; i < n; i++) {
       const read = displayReads[i];
       const y = headerHeight + histogramHeight + i * (rowHeight + rowGap) - (needsScroll ? clampedScrollOffset : 0);
-      const cluster = clusterAssignmentForRead(myClusterAssignments, read.analysis_id ?? read.id);
+      const cluster = clusterAssignmentForRead(myClusterAssignments, read);
       if (cluster !== undefined) {
         const actualY = headerHeight + histogramHeight + i * (rowHeight + rowGap);
         if (!clusterBounds.has(cluster)) {

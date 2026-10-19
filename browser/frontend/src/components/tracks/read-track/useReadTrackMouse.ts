@@ -170,7 +170,7 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
     for (let i = 0; i < n; i++) {
       const read = displayReads[i];
       const rowY = headerHeight + histH + i * (rowHeight + rowGap) - scrollAdjust;
-      const cluster = clusterAssignmentForRead(myClusterAssignments, read.analysis_id ?? read.id);
+      const cluster = clusterAssignmentForRead(myClusterAssignments, read);
       if (cluster !== undefined) {
         if (!bounds.has(cluster)) {
           bounds.set(cluster, { startY: rowY, endY: rowY + rowHeight });

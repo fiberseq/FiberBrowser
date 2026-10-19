@@ -299,7 +299,7 @@ def _record_membership(snapshot, dataset, path, read):
     return snapshot['membership']['legacy_aliases'].get(dataset.id, {}).get(read.query_name), alignment
 
 
-def _supports_record(snapshot, molecule, alignment, read, target):
+def _supports_record(snapshot, molecule, alignment, read, target, *, confirmed_only=True):
     """A member molecule does not make every one of its records a witness."""
     value = snapshot['targets'][0]['calls_by_molecule'][molecule]
     call = value.get('geometry_evidence') if target['target_type'] == 'geometry' else value['call']
@@ -315,8 +315,9 @@ def _supports_record(snapshot, molecule, alignment, read, target):
     r, a = target['ref_end']-target['ref_start'], target['alt_bp']
     group, evidence = classify_allele_evidence(_compact_record(read, read.reference_name, 10),
         'I' if a >= r else 'D', target['ref_start'], max(r, a),
-        chrom=read.reference_name, include_putative=False, target_end=target['ref_end'])
-    return group == 0 and evidence and evidence.get('level') == 'confirmed'
+        chrom=read.reference_name, target_end=target['ref_end'], **({} if confirmed_only else
+            {k: snapshot['evidence_policy'][k] for k in ('include_putative', 'include_conflicting', 'include_ambiguous')}))
+    return group == 0 and evidence and (not confirmed_only or evidence.get('level') == 'confirmed')
 
 
 def alternate_blocks(state, dataset, **kwargs):
@@ -392,7 +393,9 @@ def _native_both_span_calls(state, dataset, *, chrom, start, end, target, policy
             counts[group] += 1
             geometry = detail["geometry_call"]
             geometry_group = molecule_group(dict(call=geometry), "geometry", evidence_policy)
-            if key in interrupted:geometry_group=2
+            if key in interrupted:
+                geometry_group = 2
+                geometry = call
             geometry_counts[geometry_group]+=1
             calls[key] = dict(call=call, complete=detail["complete"] and key not in interrupted,
                 representations=[dict(kind="native", call=call)], geometry_group=geometry_group, geometry_evidence=geometry,
@@ -469,8 +472,8 @@ def _lifted_lens_records(dataset, selected, members, target, check):
                         interval = coverage.get('query_interval')
                         if (coverage.get('complete') or coverage.get('observed_flanks') == 2) and interval:
                             # Query intervals are full-molecule and target oriented.
-                            hard = projection['sequence_span'][0]
-                            minus = projection['alignment_orientation'] == 'reverse'
+                            minus = (projection['alignment_orientation'] == 'reverse') != projection['source_reverse']
+                            hard = projection['query_length']-projection['sequence_span'][1] if minus else projection['sequence_span'][0]
                             q0, q1 = interval
                             bounds = [projection['query_length']-q1-hard, projection['query_length']-q0-hard] if minus else [q0-hard,q1-hard]
                             windows.append((bounds, minus))
@@ -572,11 +575,11 @@ def lens(state, dataset, *, chrom, start, end, target, frozen_calls=None, includ
         name = record.query_name
         if reference:
             references[molecule] = dict(id=name, molecule_id=molecule, strand='-' if record.is_reverse != reverse else '+',
-                ref=target['ref_start'], ref_end=target['ref_end'], len=0, read=data)
+                ref=target['ref_start'], ref_end=target['ref_end'], q=q0, len=0, read=data)
             return
         total_bases += n
         level = selected["calls_by_molecule"][molecule]["call"]["level"]
-        inputs[molecule] = (dict(id=name, strand="-" if record.is_reverse != reverse else "+",
+        inputs[molecule] = (dict(id=name, molecule_id=molecule, strand="-" if record.is_reverse != reverse else "+",
             **(dict(partial=partial,kind="clip") if partial else dict(kind="cigar")), evidence_level=level, ref=target["ref_start"], ref_end=target["ref_end"], q=q0, len=n, read=data), observed, (record, q0, q1-q0, observed), reverse)
     reserved = 128*1024*1024
     RESERVATIONS.acquire(reserved, False, deadline, checkpoint)
@@ -591,7 +594,7 @@ def lens(state, dataset, *, chrom, start, end, target, frozen_calls=None, includ
                     window = _source_query_window(record, target['ref_start'], target['ref_start'])
                     if window is not None:
                         accept(molecule, '', record, bam, path, window[0], window[0], reference=True)
-                if molecule not in expected_carriers or not _supports_record(frozen_calls, molecule, alignment, record, target):
+                if molecule not in expected_carriers or not _supports_record(frozen_calls, molecule, alignment, record, target, confirmed_only=False):
                     continue
                 w = _query_window(record, target)
                 if w is not None:

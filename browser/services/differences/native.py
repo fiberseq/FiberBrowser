@@ -41,3 +41,29 @@ def native_geometry_envelope(by_name, entries, *, dataset_id, chrom, start, end,
             "policy": policy or {}, "identity_assumption": "legacy_merged_dataset",
             "geometry_counts": [sum(c["geometry_group"] == n for c in calls.values()) for n in range(3)],
             "exact_counts": {"target": 0, "reference": 0, "unknown": len(calls)}}
+
+
+def qualified_display_rows(rows, dataset):
+    """Disambiguate duplicate names across explicitly declared native libraries.
+
+    Single-library datasets retain their existing name-based display contract. This
+    adapter uses already decoded SAM digests and never reopens BAM records.
+    """
+    from pathlib import Path
+    labels = dict(getattr(dataset, 'molecule_groups', ()) or ())
+    if not labels:
+        return rows
+    groups = {str(Path(path).expanduser().resolve()): labels.get(path) or f'{dataset.id}#{i}'
+              for i, path in enumerate(dataset.paths)}
+    if len(set(groups.values())) < 2:
+        return rows
+    result = []
+    for row in rows:
+        library = groups.get(row.get('library_id'))
+        if library is None or not row.get('record_sha256'):
+            result.append(row)
+            continue
+        molecule = MoleculeId('declared_source_library', library, row['id'])
+        identity = content_id('alignment-record:v1', [molecule.key, row['record_sha256'], row.get('alignment_occurrence', 0)])
+        result.append({**row, 'analysis_id': identity, '_display_id': row['id']})
+    return result

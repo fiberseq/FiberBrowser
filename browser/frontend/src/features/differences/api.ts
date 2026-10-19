@@ -25,7 +25,7 @@ export interface WorkspaceCalls {
 }
 export interface AlternateBlock extends LiveLiftInsertion {
   observation_role?: 'alternate' | 'reference' | 'other';
-  column_id: string; target_revision: number; row_id: string; record_id: string;
+  alignment_id?: string; column_id: string; target_revision: number; row_id: string; record_id: string;
   read_bases: string; read_bases_length: number; coverage: 'full' | 'partial';
 }
 export interface BlocksResponse { blocks?: AlternateBlock[]; complete?: boolean; status?: string; reason?: string }
@@ -57,7 +57,7 @@ export async function enrichNativeRows(reads: CompactRead[], q: Omit<WorkspaceQu
     const fullLength = Math.max(c.length, ...(response.blocks ?? []).map(b => b.length));
     if (view && fullLength <= 50_000 && fullLength > c.length) state.expandLiveLift(view, { ...c, selected_length: c.selected_length ?? c.length, length: fullLength });
     result = result.map(r => {
-      const matching = response.blocks?.filter(b => b.row_id === r.id && b.record_id === r.record_sha256) ?? [];
+      const matching = response.blocks?.filter(b => b.row_id === r.id && b.record_id === r.record_sha256 && (!r.analysis_id || b.alignment_id === r.analysis_id)) ?? [];
       return matching.length === 1 ? { ...r, alternate_blocks: { ...r.alternate_blocks, [c.ins_id]: matching[0] } } : r;
     });
   }

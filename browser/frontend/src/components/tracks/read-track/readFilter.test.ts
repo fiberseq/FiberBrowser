@@ -71,3 +71,11 @@ describe('filterReadsByBranchScope', () => {
     expect(filterReadsByBranchScope(reads, true, null)).toEqual([]);
   });
 });
+
+
+it('preserves legacy native SV assignments while preferring qualified record calls',()=>{
+  const row={id:'shared',analysis_id:'alignment-record:v1:qualified'};
+  expect(clusterAssignmentForRead({shared:1},row)).toBe(1);
+  expect(clusterAssignmentForRead({shared:1,[row.analysis_id]:0},row)).toBe(0);
+  expect(clusterAssignmentForRead({shared:1},{...row,live_lift:{}})).toBeUndefined();
+});

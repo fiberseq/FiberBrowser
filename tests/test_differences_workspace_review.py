@@ -34,6 +34,16 @@ def test_replacement_duplicate_names_use_qualified_membership(tmp_path):
     assert 'shared' not in rows
     assert 'shared' not in out['membership']['legacy_aliases'][ds.id]
 
+    from services.working_sets import _load_broad_reads
+    from services.compact_read_loader import _build_compact_reads_from_bam_region
+    display = _load_broad_reads(dataset=ds, dataset_id=ds.id, chrom='chrT',
+        broad_start=SITE-200, broad_end=SITE+300, broad_width=500,
+        include_methylation=False, layer_key=(), include_layer_qualities=False,
+        build_bam_reads=_build_compact_reads_from_bam_region,
+        build_bigbed_reads=lambda *a, **k: [], load_bigbed_marks=lambda *a, **k: [])
+    assert len(display) == 2
+    assert {rows[row['analysis_id']] for row in display} == set(rows.values())
+
 
 @pytest.mark.parametrize('chemistry,base,observed', [('none', 'A', 'A'), ('CT', 'C', 'T'), ('GA', 'G', 'A')])
 @pytest.mark.parametrize('reverse', [False, True])
@@ -121,3 +131,24 @@ def test_replacement_clip_windows_use_the_corresponding_boundary_and_minimum():
     assert _query_window(r, q)[:5] == (0, 80, 420, 500, 'partial')
     r.cigarstring = '1S100M'
     assert _query_window(r, q) is None
+
+
+
+def test_interrupted_native_replacement_cannot_reenter_geometry_cohort(tmp_path):
+    state, ds = native(tmp_path, lambda h: [
+        make_record(h, 'one', 'chrT', SITE-100, '100M4D100I100M'),
+        make_record(h, 'two', 'chrT', SITE-100, '100M4D100I100M')])
+    result = inspect(state, ds, **query(), policy={'max_records': 1})
+    assert not _carrier_molecules(result)
+    assert result['targets'][0]['counts'][0] == result['targets'][0]['geometry_counts'][0] == 0
+
+
+def test_native_putative_lens_respects_frozen_policy_without_expanding_unconfirmed_clip(tmp_path):
+    from services.differences.workspace import lens, alternate_blocks
+    state, ds = native(tmp_path, lambda h: [make_record(h, 'partial', 'chrT', SITE-200, '200M80S')])
+    q = query(ref=0)
+    calls = inspect(state, ds, **q)
+    assert calls['targets'][0]['counts'] == [1,0,0]
+    assert not alternate_blocks(state, ds, **q)['blocks']
+    out = lens(state, ds, **q, frozen_calls=calls, consensus=False)
+    assert len(out['carriers']) == 1 and out['carriers'][0]['partial'] == 'start'

@@ -1,6 +1,7 @@
 export interface ReadWithId {
   id: string;
   analysis_id?: string;
+  live_lift?: unknown;
 }
 
 export function stripSegmentSuffix(readId: string): string {
@@ -9,9 +10,11 @@ export function stripSegmentSuffix(readId: string): string {
 
 export function clusterAssignmentForRead(
   assignments: Record<string, number>,
-  readId: string,
+  read: string | ReadWithId,
 ): number | undefined {
-  return assignments[readId] ?? assignments[stripSegmentSuffix(readId)];
+  const readId = typeof read === 'string' ? read : read.analysis_id ?? read.id;
+  return assignments[readId] ?? assignments[stripSegmentSuffix(readId)]
+    ?? (typeof read !== 'string' && !read.live_lift ? assignments[read.id] : undefined);
 }
 
 export function clusteredReadIdSet(

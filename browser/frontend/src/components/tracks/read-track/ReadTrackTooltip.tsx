@@ -41,7 +41,7 @@ export function ReadTooltip({
   const readStart = extent?.lo ?? 0;
   const readEnd = extent?.hi ?? 0;
   const readSize = readEnd - readStart;
-  const cluster = clusterAssignmentForRead(myClusterAssignments, read.analysis_id ?? read.id);
+  const cluster = clusterAssignmentForRead(myClusterAssignments, read);
   const state = myReadStateDetails?.[read.id];
   const conflictReasons = (svSummary?.clusters ?? []).flatMap(target => {
     if (svEvidenceLevel(read, target, chrom, svSummary?.evidence_targets, svSummary?.conflict_options) !== 'conflicting') return [];

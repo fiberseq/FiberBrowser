@@ -985,7 +985,7 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
 
       if (hasClusterFocus && myClusterFocus) {
         filteredReads = filteredReads.filter(r => {
-          const cluster = clusterAssignmentForRead(myClusterAssignments, r.analysis_id ?? r.id);
+          const cluster = clusterAssignmentForRead(myClusterAssignments, r);
           return cluster !== undefined && myClusterFocus.has(cluster);
         });
       }
@@ -1002,8 +1002,8 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
         const clusterOrderMap = new Map(myClusterOrder.map((c, i) => [c, i]));
         const readOrderMap = new Map(myReadSortOrder.map((id, i) => [id, i]));
         sorted = [...filteredReads].sort((a, b) => {
-          const ca = clusterAssignmentForRead(myClusterAssignments, a.analysis_id ?? a.id) ?? 999;
-          const cb = clusterAssignmentForRead(myClusterAssignments, b.analysis_id ?? b.id) ?? 999;
+          const ca = clusterAssignmentForRead(myClusterAssignments, a) ?? 999;
+          const cb = clusterAssignmentForRead(myClusterAssignments, b) ?? 999;
           const clusterDiff = (clusterOrderMap.get(ca) ?? 999) - (clusterOrderMap.get(cb) ?? 999);
           if (clusterDiff !== 0) return clusterDiff;
           return (readOrderMap.get(a.id) ?? 999999) - (readOrderMap.get(b.id) ?? 999999);
@@ -1016,16 +1016,16 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
       } else if (hasCluster && myClusterOrder.length > 0) {
         const orderMap = new Map(myClusterOrder.map((c, i) => [c, i]));
         sorted = [...filteredReads].sort((a, b) => {
-          const ca = clusterAssignmentForRead(myClusterAssignments, a.analysis_id ?? a.id) ?? 999;
-          const cb = clusterAssignmentForRead(myClusterAssignments, b.analysis_id ?? b.id) ?? 999;
+          const ca = clusterAssignmentForRead(myClusterAssignments, a) ?? 999;
+          const cb = clusterAssignmentForRead(myClusterAssignments, b) ?? 999;
           const posA = orderMap.get(ca) ?? 999;
           const posB = orderMap.get(cb) ?? 999;
           return posA - posB;
         });
       } else if (hasCluster) {
         sorted = [...filteredReads].sort((a, b) => {
-          const ca = clusterAssignmentForRead(myClusterAssignments, a.analysis_id ?? a.id) ?? 999;
-          const cb = clusterAssignmentForRead(myClusterAssignments, b.analysis_id ?? b.id) ?? 999;
+          const ca = clusterAssignmentForRead(myClusterAssignments, a) ?? 999;
+          const cb = clusterAssignmentForRead(myClusterAssignments, b) ?? 999;
           return ca - cb;
         });
       }
