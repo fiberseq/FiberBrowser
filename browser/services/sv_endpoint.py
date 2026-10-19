@@ -205,10 +205,12 @@ def scan_view(state, dataset_id: str, chrom: str, start: int, end: int, floor: i
 
 def sv_split_payload(state, *, dataset_id: str, chrom: str, start: int, end: int, t: str, ref: int,
                      length: int, margin: Optional[int] = None, include_duplicates: bool = False,
-                     include_putative: bool = True, include_ambiguous: bool = False, include_conflicting: bool = False, conflict_options=None, target_end=None) -> dict:
+                     include_putative: bool = True, include_ambiguous: bool = False, include_conflicting: bool = False, conflict_options=None, target_end=None, payload_version=1) -> dict:
     """Every primary read in ``[start, end)`` as carrier (0), reference (1) or
     not informative (2) for the SV ``t``/``ref``/``length`` (an insertion's
     clipped reads are carriers: sv_events.carrier_evidence)."""
+    if payload_version not in (1, 2):
+        raise SvRequestError("payload_version must be 1 or 2")
     if t not in ("D", "I"):
         raise SvRequestError("t must be 'D' or 'I'")
     if int(end) <= int(start):
@@ -231,7 +233,7 @@ def sv_split_payload(state, *, dataset_id: str, chrom: str, start: int, end: int
         counts[allele] += 1
         if allele == 0:
             by_kind[entry["evidence"]["kind"]] += 1
-    return {
+    payload = {
         "assignments": assignments,
         "counts": counts,
         "carriers_by": by_kind,
@@ -245,6 +247,16 @@ def sv_split_payload(state, *, dataset_id: str, chrom: str, start: int, end: int
         "margin": margin,
         "groups": ["carriers", "reference", "not informative"],
     }
+    if payload_version == 2:
+        from services.differences.native import native_geometry_envelope
+        from services.sv_conflicts import normalize_conflict_options
+        payload["differences"] = native_geometry_envelope(
+            by_name, entries, dataset_id=dataset_id, chrom=chrom, start=start, end=end,
+            t=t, ref=ref, length=length, target_end=target_end,
+            policy={"include_duplicates": include_duplicates, "include_putative": include_putative,
+                    "include_ambiguous": include_ambiguous, "include_conflicting": include_conflicting,
+                    "conflict_options": normalize_conflict_options(conflict_options)})
+    return payload
 
 
 def sv_insert_seq_payload(state, *, dataset_id: str, chrom: str, ref: int, read_id: str, q: int,

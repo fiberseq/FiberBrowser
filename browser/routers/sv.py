@@ -41,6 +41,7 @@ async def post_sv_split(request: Request, state=Depends(get_state)):
             include_conflicting=bool(body.get("include_conflicting", False)),
             conflict_options=body.get("conflict_options"),
             target_end=_int(body, 'ref_end') if body.get('ref_end') is not None else None,
+            payload_version=_int(body, 'payload_version', 1),
         )
     except SvRequestError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=exc.status)
