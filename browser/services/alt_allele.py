@@ -34,7 +34,7 @@ import tempfile
 import threading
 import time
 from typing import Any, Optional
-from services.reconstruction_budget import budgeted_request
+from services.reconstruction_budget import budgeted_request, request_provenance
 
 from services.alt_allele_align import (
     KIND_CIGAR,
@@ -127,7 +127,7 @@ def _cache_key(paths: list[str], definition: dict, daf: bool, reference_id: str,
     the reference the flanks come from (its key and its FASTA file's stamp: a FASTA replaced
     at the same path is another reference) and the plasmid links that choose the contig."""
     reference = [reference_id, *(_stamps([fasta_path])[0] if fasta_path and "://" not in str(fasta_path) else [fasta_path])]
-    blob = json.dumps({"schema": SCHEMA, "budget_version": "reconstruction:v1", "files": _stamps(paths), "def": definition, "daf": daf,
+    blob = json.dumps({"schema": SCHEMA, "budget_version": "reconstruction:v1", "alignment_policy": "native-banded-wavefront:v1", "files": _stamps(paths), "def": definition, "daf": daf,
                        "reference": reference, "links": repr(sorted((contig_links or {}).items()))}, sort_keys=True)
     return hashlib.sha1(blob.encode()).hexdigest()[:20]
 
@@ -347,6 +347,7 @@ def build_alt_allele(bam_paths: list[str], definition: dict, out_dir: str, *, fa
             "layout": layout.to_dict(),
             "sv": {"t": "I", "ref": ref, "len": length},
             "consensus": {"method": method, "length": len(consensus),
+                          "alignment_algorithms": request_provenance(),
                           **({"fallback": fallback} if daf and fallback else {}),
                           **({k: daf_info[k] for k in ("confident_fraction", "carriers_ct", "carriers_ga")}
                              if daf_info else {})},

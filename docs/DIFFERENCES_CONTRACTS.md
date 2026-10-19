@@ -107,6 +107,7 @@ separate versions.
 | reconstructed sequence | 100 kb |
 | serialized result | 16 MiB |
 | request deadline, including queue | 30 seconds |
+| bounded native alternative | ≤10 kb inputs, ≤4 million wavefront states/pair |
 
 The estimator uses the actual band, including alternate-panel offset widening
 and the external DAF kernel's wider formula. It reserves at least twice the
@@ -120,6 +121,18 @@ the policy also exposes a 16 MiB threshold for future finer scheduling. Majority
 sampling remains at 32 reads; the existing DAF default remains at 200, with
 sampling provenance reported. Resource refusal does not silently resample or
 substitute a read as consensus.
+
+When the native matrix work exceeds its budget, a bounded weighted-wavefront
+alternative preserves the +1/-1/-1 objective and the original scaled band.
+Its remaining-length lower bound avoids quadratic exploration of unavoidable
+long clip tails. Actual visited states charge the same request budget; trace
+capacity is preflighted separately against cell/byte limits. Exhaustion returns
+no partial path. Inputs above 10 kb do not enter this alternative. Independent
+string-score oracles cover unrestricted and scaled-band scores, coordinates,
+long tails and cap exhaustion. Lens/alternate metadata records the algorithm,
+and derived cache keys include its producer policy. DAF's distinct scoring
+continues through its own guarded kernel. The bundled 7.5 kb SV demo passes
+under the original 100-million-cell request ceiling with this alternative.
 
 Workers use spawn and pipes, with no listening service. The parent checks
 server cancellation every 20 ms, kills/reaps a running compiled kernel or

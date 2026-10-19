@@ -142,7 +142,19 @@ def align(a: str | np.ndarray, b: str | np.ndarray, w: Optional[int] = None) -> 
     width = int(w if w is not None else band_width(n, m))
     budget = current_budget()
     if budget is None:
-        return isolated(__name__, 'align', (a, b, w), {}, lengths=[n, m], pairs=[(n, m, width)], large=True)
+        return isolated(__name__, 'align', (a, b, w), {}, lengths=[n, m], pairs=[(n, m, width)], large=True, allow_wavefront=True)
+    if budget.algorithm == 'weighted_wavefront:v1':
+        from services.weighted_wavefront import weighted_wavefront
+        from services.reconstruction_budget import ResourceResult
+        score, states = budget.wavefront(n, m)
+        ea = encode(a) if isinstance(a, str) else a
+        eb = encode(b) if isinstance(b, str) else b
+        ops, status, used = weighted_wavefront(ea, eb, score, states, width)
+        budget.cells += used
+        if status:
+            raise ResourceResult('budget_exceeded', 'wavefront_states', states=used, score=score, n=n, m=m,
+                                 alignment_algorithm=budget.algorithm)
+        return ops
     budget.pair(n, m, width)
     ea = encode(a) if isinstance(a, str) else a
     eb = encode(b) if isinstance(b, str) else b
@@ -398,7 +410,8 @@ def _consensus_with_knots(
         return {"knots": knots, "identity": round(identity, 4)}
 
     reads = [one(insert) for insert in inserts]
-    return {"seq": seq, "reads": reads}
+    from services.reconstruction_budget import current_budget
+    return {"seq": seq, "reads": reads, "alignment_algorithm": current_budget().algorithm}
 
 
 def _partials_to_consensus(partials: list[tuple[str, str]], seq: str, *, knot_step: int = 32) -> list[dict]:
@@ -438,7 +451,7 @@ def build_consensus(inserts: list[str], *, max_reads: int = 32, rounds: int = 2)
     backbone = ordered[len(ordered) // 2] if ordered else ''
     sample = _evenly(ordered, max_reads)
     return isolated(__name__, '_build_consensus', (inserts,), {'max_reads': max_reads, 'rounds': rounds},
-                    lengths=[len(s) for s in inserts], pairs=_planned(sample, backbone, repeats=max(1, rounds)), large=True)
+                    lengths=[len(s) for s in inserts], pairs=_planned(sample, backbone, repeats=max(1, rounds)), large=True, allow_wavefront=True)
 
 
 def consensus_with_knots(inserts, *, max_reads=32, knot_step=32, seq=None):
@@ -450,14 +463,14 @@ def consensus_with_knots(inserts, *, max_reads=32, knot_step=32, seq=None):
         pairs += _planned(_evenly(ordered, max_reads), backbone, repeats=2)
     return isolated(__name__, '_consensus_with_knots', (inserts,),
                     {'max_reads': max_reads, 'knot_step': knot_step, 'seq': seq},
-                    lengths=[len(s) for s in inserts] + ([len(seq)] if seq is not None else []), pairs=pairs, large=True)
+                    lengths=[len(s) for s in inserts] + ([len(seq)] if seq is not None else []), pairs=pairs, large=True, allow_wavefront=True)
 
 
 def partials_to_consensus(partials, seq, *, knot_step=32):
     from services.reconstruction_budget import isolated
     pairs = [(len(s), min(len(s), len(seq)), band_width(len(s), min(len(s), len(seq)))) for s, _ in partials]
     return isolated(__name__, '_partials_to_consensus', (partials, seq), {'knot_step': knot_step},
-                    lengths=[len(s) for s, _ in partials] + [len(seq)], pairs=pairs, large=True)
+                    lengths=[len(s) for s, _ in partials] + [len(seq)], pairs=pairs, large=True, allow_wavefront=True)
 
 
 def _lens_reconstruction(full, canonical, partials, daf_values, why):
@@ -469,7 +482,7 @@ def _lens_reconstruction(full, canonical, partials, daf_values, why):
     sequence = daf_info['seq'] if daf_info else _build_consensus(canonical)
     result = _consensus_with_knots(full, seq=sequence)
     return {'full': result, 'partials': _partials_to_consensus(partials, sequence),
-            'daf': daf_info, 'method': method, 'fallback': why}
+            'daf': daf_info, 'method': method, 'fallback': why, 'alignment_algorithm': result['alignment_algorithm']}
 
 
 def reconstruct_lens(full, canonical, partials, *, records=(), daf=False, daf_compatible=True):
@@ -492,4 +505,4 @@ def reconstruct_lens(full, canonical, partials, *, records=(), daf=False, daf_co
         pairs += _planned(_evenly(ordered, 32), backbone, repeats=2)
     lengths = [len(s) for s in full + canonical] + [len(s) for s, _ in partials]
     return isolated(__name__, '_lens_reconstruction', (full, canonical, partials, values, why), {},
-                    lengths=lengths, pairs=pairs, large=True)
+                    lengths=lengths, pairs=pairs, large=True, allow_wavefront=not bool(values))

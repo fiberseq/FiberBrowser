@@ -254,8 +254,16 @@ def align_middle(query: str, target: str, offset: int = 0) -> list[tuple[int, in
 def realign_batch(jobs, layout, alt_seq):
     """One killable, allocation-accounted request for all carrier middles."""
     from services.reconstruction_budget import isolated
+    from services.insertion_consensus import band_width
+    pairs = []
+    for _cigar, _start, plan, _sequence in jobs:
+        n = int(plan.get('len') or 0)
+        if n and plan.get('kind') != KIND_REFERENCE:
+            m = min(n, layout.insert_len) if plan.get('kind') in (KIND_CLIP_START, KIND_CLIP_END) else layout.insert_len
+            pairs.append((n, m, band_width(n, m)))
     return isolated(__name__, '_realign_batch', (jobs, layout, alt_seq), {},
-                    lengths=[len(job[3]) for job in jobs] + [len(alt_seq)], large=True)
+                    lengths=[len(job[3]) for job in jobs] + [len(alt_seq)], pairs=pairs,
+                    large=True, allow_wavefront=True)
 
 
 def _realign_batch(jobs, layout, alt_seq):

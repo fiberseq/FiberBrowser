@@ -816,6 +816,7 @@ def build_lens(
         payload["consensus"] = {
             "status": "complete",
             "budget_version": "reconstruction:v1",
+            "alignment_algorithm": reconstruction['alignment_algorithm'],
             "sampling": {"policy": "evenly_by_record_key" if daf_consensus else "evenly_by_length",
                          "input_count": len(full_seqs), "max_reads": 200 if daf_consensus else 32},
             "seq": cons["seq"],
@@ -1098,7 +1099,7 @@ def insertion_lens_payload(state, *, chrom: str, pos: int, dataset_id: Optional[
     # Remote files have no local stamp to notice a new version by: not cached.
     cacheable = all(stamp[1] is not None for stamp in stamps)
     key = (
-        "reconstruction:v1", dataset_id, stamps, repr(chrom_map), repr(links),
+        "reconstruction:v1", "native-banded-wavefront:v1", dataset_id, stamps, repr(chrom_map), repr(links),
         chrom, int(pos), int(tolerance), int(len_min),
         len_max, ref, length, bool(include_duplicates), int(flank), int(max_carriers), int(max_reference), bool(consensus),
         bool(include_sequences), repr(sorted(loader_kwargs.items())), daf, signal_filter_key(state),

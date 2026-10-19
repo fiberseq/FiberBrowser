@@ -20,7 +20,7 @@ def test_actual_estimator_and_fail_before_allocation(monkeypatch):
     monkeypatch.setattr(multiprocessing, 'get_context', forbidden)
     for fn in (lambda: align('A' * 100_000, 'C' * 100_000),
                lambda: build_consensus(['A' * 100_000] * 2),
-               lambda: build_consensus(['A' * 6000] * 32),  # aggregate two-round work
+               lambda: build_consensus(['A' * 11000, 'C' * 11000] * 16),  # aggregate two-round work, beyond the bounded alternative
                lambda: consensus_with_knots(['A' * 100_000], seq='A' * 100_000),
                lambda: partials_to_consensus([('A' * 100_000, 'start')], 'C' * 100_000)):
         with pytest.raises(ResourceResult) as error:

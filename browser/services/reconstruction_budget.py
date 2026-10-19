@@ -34,6 +34,8 @@ class Limits:
     max_input_bases: int = 2_000_000
     max_reconstructed_bases: int = 100_000
     max_response_bytes: int = 16 * MIB
+    wavefront_max_bases: int = 10_000
+    wavefront_pair_states: int = 4_000_000
     deadline_s: float = 30.0
 
     def __post_init__(self):
@@ -88,6 +90,7 @@ def budgeted_request(function):
 class WorkBudget:
     def __init__(self, limits=DEFAULT_LIMITS):
         self.limits, self.cells = limits, 0
+        self.algorithm = 'banded:v1'
 
     def pair(self, n, m, w):
         estimate = estimate_alignment(n, m, w)
@@ -99,6 +102,32 @@ class WorkBudget:
             raise ResourceResult("budget_exceeded", "reconstructed_bases", bases=max(n, m))
         self.cells += estimate["cells"]
         return estimate
+
+    def wavefront(self, n, m):
+        if max(n, m) > self.limits.wavefront_max_bases:
+            raise ResourceResult('budget_exceeded', 'wavefront_bases', bases=max(n, m))
+        states = min(self.limits.wavefront_pair_states, self.limits.pair_cells, self.limits.request_cells - self.cells)
+        delta = abs(n - m)
+        # Exact upper bound across score rows: the mandatory length-changing
+        # diagonals plus two extra diagonals per six units of excess cost.
+        def count(score):
+            q, r = divmod(score, 6)
+            return (score + 1) * (delta + 1) + 6 * q * (q - 1) + 2 * q * (r + 1)
+        low, high = 0, int((6 * max(0, states)) ** .5) + 1
+        while low < high:
+            mid = (low + high + 1) // 2
+            if count(mid) <= states:
+                low = mid
+            else:
+                high = mid - 1
+        score = low
+        cells = (score + 1) * (delta + 2 * (score // 6) + 1)
+        reserved = 10 * cells + 128 * (n + m + 2)
+        if states < delta + 1:
+            raise ResourceResult('budget_exceeded', 'wavefront_states', states=states, score=score, n=n, m=m)
+        if cells > self.limits.pair_cells or reserved > self.limits.job_bytes:
+            raise ResourceResult('budget_exceeded', 'wavefront_allocation', cells=cells, reserved_bytes=reserved)
+        return score, states
 
 
 class Reservations:
@@ -137,11 +166,13 @@ class Reservations:
 RESERVATIONS = Reservations()
 
 
-def _worker(connection, module, name, args, kwargs, limits):
-    _current.set(WorkBudget(limits))
+def _worker(connection, module, name, args, kwargs, limits, algorithm):
+    budget = WorkBudget(limits)
+    budget.algorithm = algorithm
+    _current.set(budget)
     try:
         result = getattr(importlib.import_module(module), name)(*args, **kwargs)
-        encoded = pickle.dumps(("ok", result, _current.get().cells), protocol=5)
+        encoded = pickle.dumps(("ok", result, budget.cells, budget.algorithm), protocol=5)
         if len(encoded) > limits.max_response_bytes:
             raise ResourceResult("budget_exceeded", "response_bytes", bytes=len(encoded))
         connection.send_bytes(encoded)
@@ -153,7 +184,7 @@ def _worker(connection, module, name, args, kwargs, limits):
         connection.close()
 
 
-def isolated(module, name, args, kwargs, *, lengths, pairs=(), limits=DEFAULT_LIMITS, large=False):
+def isolated(module, name, args, kwargs, *, lengths, pairs=(), limits=DEFAULT_LIMITS, large=False, allow_wavefront=False):
     """Call an internal, importable function with a shared request reservation.
 
     Inputs are trusted internal values, never executable client payloads.
@@ -173,7 +204,17 @@ def isolated(module, name, args, kwargs, *, lengths, pairs=(), limits=DEFAULT_LI
             raise ResourceResult('budget_exceeded', 'request_cells', cells=request['cells'])
         limits = replace(limits, request_cells=remaining)
     preflight = WorkBudget(limits)
-    estimates = [preflight.pair(*pair) for pair in pairs]
+    algorithm = 'banded:v1'
+    try:
+        estimates = [preflight.pair(*pair) for pair in pairs]
+    except ResourceResult:
+        if not allow_wavefront or not pairs:
+            raise
+        alternative = WorkBudget(limits)
+        for n, m, _w in pairs:
+            alternative.wavefront(n, m)
+        algorithm, estimates = 'weighted_wavefront:v1', []
+        large = True
     large = large or any(e["reserved_bytes"] >= limits.large_job_bytes for e in estimates)
     # Reserve the full configurable request allowance, covering inputs, worker
     # overhead and retained outputs even when the polished backbone changes.
@@ -190,7 +231,7 @@ def isolated(module, name, args, kwargs, *, lengths, pairs=(), limits=DEFAULT_LI
     try:
         parent, child = multiprocessing.get_context("spawn").Pipe(duplex=False)
         process = multiprocessing.get_context("spawn").Process(
-            target=_worker, args=(child, module, name, args, kwargs, limits), daemon=True)
+            target=_worker, args=(child, module, name, args, kwargs, limits, algorithm), daemon=True)
         check()
         process.start()
         child.close()
@@ -214,6 +255,7 @@ def isolated(module, name, args, kwargs, *, lengths, pairs=(), limits=DEFAULT_LI
                     raise ResourceResult("unavailable", "worker_failed", detail=result)
                 if request is not None:
                     request['cells'] += message[2]
+                    request.setdefault('algorithms', set()).add(message[3])
                 return result
             if not process.is_alive():
                 raise ResourceResult("unavailable", "worker_exited", exitcode=process.exitcode)
@@ -234,3 +276,8 @@ def isolated(module, name, args, kwargs, *, lengths, pairs=(), limits=DEFAULT_LI
 
 def current_budget():
     return _current.get()
+
+
+def request_provenance():
+    request = _parent_request.get()
+    return sorted(request.get('algorithms', set())) if request else []
