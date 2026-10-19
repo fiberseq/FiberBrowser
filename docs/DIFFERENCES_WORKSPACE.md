@@ -103,5 +103,7 @@ allele consensus.
 
 Workspace requests retain the 50 kb full-inspection limit, 500 observation rows,
 2 Mb request window, 16 MiB response ceiling and existing numerical budgets.
-Full session/API migration, scope-safe scan consolidation, biological calibration
-and broader reconstruction performance work remain separate gates.
+Session/API compatibility, shared native scans, recovery actions and browser
+validation are described in [Differences migration](DIFFERENCES_MIGRATION.md).
+Biological calibration and broader reconstruction performance remain separate
+acceptance gates.
