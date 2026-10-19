@@ -87,6 +87,18 @@ describe('lens actions belong to the current response identity', () => {
   const finish = async (index: number, ref: number) => {
     await act(async () => { pending[index].resolve(new Response(JSON.stringify(response(ref)))); });
   };
+  it('forwards workspace flanks and reloads when the flank selector changes', async () => {
+    const workspace:any={query:{dataset_id:'a',chrom:'chr1',start:0,end:10000,target:{}},calls:{targets:[],evidence_policy:{include_putative:true,include_conflicting:false,include_ambiguous:false,include_duplicates:false}}};
+    act(()=>setInsertionLensState({...target('a',1000),workspace}));
+    await act(async()=>root.render(<InsertionLensPanel/>));
+    const body=()=>JSON.parse((vi.mocked(fetch).mock.calls.at(-1)![1] as RequestInit).body as string);
+    expect(body().flank).toBe(500);
+    await finish(0,1000);
+    const selector=[...container.querySelectorAll('select')].find(el=>[...el.options].some(o=>o.value==='1000'))!;
+    await act(async()=>{selector.value='1000';selector.dispatchEvent(new Event('change',{bubbles:true}));});
+    expect(pending).toHaveLength(2);
+    expect(body()).toMatchObject({flank:1000,frozen_calls:workspace.calls});
+  });
   it('saves footprint grouping and reverses the lens without refetching or changing its cohort', async () => {
     await act(async () => { root.render(<InsertionLensPanel />); });
     await finish(0, 1000);
