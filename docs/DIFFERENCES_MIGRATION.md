@@ -55,13 +55,17 @@ generation, file/reference revisions, contig reconciliation, signal eligibility,
 provenance configuration and extraction limits. File locators/stamps invalidate
 cache entries; they do not become permanent observation or allele identities.
 
-Tiles own the exact requested region with a zero halo and a loaded-cohort
-scope. A primary in a larger view can change supplementary eligibility, so
-arbitrary crop/extension reuse is unsafe. Two consumers share an extraction
-only when those raw scopes agree. Different selections can safely filter the
-same unselected superset. No discovery-completeness or whole-genome claim
-follows from a cache hit. Broader halo/tile reconciliation remains a possible
-optimization with its own eligibility proof.
+Returned tiles own the requested region with a zero halo and a loaded-cohort
+scope. Signal-filtered bundles require exact region scopes: a rejected primary
+in a larger view can suppress a supplementary that a narrow fetch retains.
+With no signal filter, all eligible nonhidden records are retained, which
+permits bounded crop/extension reuse before request-specific cohort filtering.
+Sequence-free compaction also reuses records only with identical path, CIGAR,
+flag, MAPQ, query availability and SA inputs; reference-normalized identities
+include a complete SAM digest and do not reuse sequence-free compaction. A
+shared deadline covers all added windows and merge work. Different selections
+can safely filter the same unselected superset. No discovery-completeness or
+whole-genome claim follows from a cache hit.
 
 The byte LRU retains only complete results. Native extraction additionally
 reserves 256 MiB against the shared process budget and defaults to a 2 Mb view,

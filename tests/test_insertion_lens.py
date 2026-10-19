@@ -537,8 +537,8 @@ def test_the_split_scan_cache_extends_and_matches_a_fresh_scan(client, fixture):
     try:
         sv_endpoint._SCAN_CACHE.clear()
         first = client.post("/api/sv/split", json={**body, "start": SITE - 12_000, "end": SITE - 2_000}).json()
-        # A new region owns its complete molecule eligibility. Reusing just
-        # an extension/crop could lose a filtered primary's suppression proof.
+        # Without a signal filter every fetched eligible record is retained,
+        # so overlap reuse does not lose rejected-primary suppression context.
         calls = []
         real = sv_endpoint._scan
         sv_endpoint._scan = lambda *a, **k: calls.append(a[3:5]) or real(*a, **k)
@@ -548,7 +548,7 @@ def test_the_split_scan_cache_extends_and_matches_a_fresh_scan(client, fixture):
             again = client.post("/api/sv/split", json={**body, "start": SITE - 6_000, "end": SITE + 6_000}).json()
         finally:
             sv_endpoint._scan = real
-        assert calls == [(SITE - 6_000, SITE + 6_000), (SITE - 1_000, SITE + 1_000)]
+        assert calls == [(SITE - 2_000, SITE + 6_000)]
         assert again == panned
         sv_endpoint._SCAN_CACHE.clear()
         fresh = client.post("/api/sv/split", json={**body, "start": SITE - 6_000, "end": SITE + 6_000}).json()
@@ -608,7 +608,7 @@ def test_the_scan_cache_keeps_same_named_records_of_merged_files(tmp_path, monke
     calls = []
     monkeypatch.setattr(plasmid_reconcile, "contig_links", lambda *_a, **k: calls.append(k) or {"linked": True})
     sv_endpoint.scan_view(state, "d", "chrX", 100, 400, 50)
-    assert len(sv_endpoint._SCAN_CACHE) == 3  # two regions plus the new contig-link revision
+    assert len(sv_endpoint._SCAN_CACHE) == 2
 
 
 def test_the_lens_fetches_far_enough_for_a_longer_matching_allele(tmp_path):

@@ -183,10 +183,20 @@ def _scan_records(state, dataset_id, chrom, start, end, floor, check):
         check()
         if len(out) >= sv_evidence.SCAN_MAX_RECORDS:
             raise ResourceResult('budget_exceeded', 'native_scan_records', max_records=sv_evidence.SCAN_MAX_RECORDS)
-        entry = _compact_record(read, file_chrom, floor, reference=getattr(state, 'fasta', None))
-        # A record's identity across scans (merged files may share names and starts).
-        entry["_key"] = (path, read.query_name, int(read.reference_start), int(read.flag), read.cigarstring)
-        retained += retained_size(entry) + 16
+        # All sequence-free geometry inputs participate in reuse identity.
+        # A reference-normalized record additionally retains its complete SAM
+        # digest so sequence-distinct records with identical CIGAR cannot merge.
+        key = (path, read.query_name, int(read.reference_start), int(read.flag), read.cigarstring,
+               int(read.mapping_quality), int(read.query_length), read.get_tag('SA') if read.has_tag('SA') else None)
+        if getattr(state, 'fasta', None) is not None:
+            import hashlib
+            key += (hashlib.sha256(read.to_string().encode()).hexdigest(),)
+        entry = sv_evidence.reusable_record(key)
+        if entry is None:
+            entry = _compact_record(read, file_chrom, floor, reference=getattr(state, 'fasta', None))
+            entry['_key'] = key
+            entry['_scan_bytes'] = retained_size(entry) + 128
+        retained += entry['_scan_bytes']
         if retained > sv_evidence.SCAN_MAX_BYTES:
             raise ResourceResult('budget_exceeded', 'native_scan_bytes', max_bytes=sv_evidence.SCAN_MAX_BYTES)
         out.append(entry)
@@ -198,11 +208,16 @@ def scan_view(state, dataset_id: str, chrom: str, start: int, end: int, floor: i
     dataset_id, dataset = _dataset(state, dataset_id)
     from services.sv_evidence import scan_region, select_cohort, ScanCancelled
     from services.background_work import checkpoint
+    import time
+    from services.reconstruction_budget import DEFAULT_LIMITS, ResourceResult
+    deadline = time.monotonic() + DEFAULT_LIMITS.deadline_s
     def check():
         checkpoint()
         if cancelled is not None and cancelled():
             raise ScanCancelled()
-    scanner = _scan if cancelled is None else lambda *args: _scan(*args, checkpoint_fn=check)
+        if time.monotonic() >= deadline:
+            raise ResourceResult('budget_exceeded', 'native_scan_deadline', seconds=DEFAULT_LIMITS.deadline_s)
+    scanner = lambda *args: _scan(*args, checkpoint_fn=check)
     stamps = _path_stamps(getattr(dataset, "paths", None) or []) if dataset is not None else None
     entries = scan_region(state, dataset, dataset_id, chrom, start, end, floor,
                           stamps=stamps, scanner=scanner, check=check)

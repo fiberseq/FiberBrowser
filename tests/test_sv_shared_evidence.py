@@ -172,7 +172,9 @@ def test_exact_regions_preserve_primary_eligibility_that_a_broad_crop_cannot(tmp
     # narrower loaded cohort that primary is absent, so the actual supplementary
     # remains inspectable. Cropping the already-suppressed broad result loses it.
     monkeypatch.setattr('services.signal_evidence.record_keeps_signal', lambda read, _provenance: not read.is_duplicate)
+    monkeypatch.setattr('services.signal_evidence.signal_filter_key', lambda *args: (True, False, False, False))
     evidence.SCAN_CACHE.clear()
+
     assert sv.scan_view(state, 'native', 'chrT', 0, 1500, 10) == []
     narrow = sv.scan_view(state, 'native', 'chrT', 900, 1500, 10)
     assert len(narrow) == 1 and narrow[0]['supplementary']
@@ -181,6 +183,21 @@ def test_exact_regions_preserve_primary_eligibility_that_a_broad_crop_cannot(tmp
     assert sv.scan_view(state, 'native', 'chrT', 900, 1500, 10) == narrow
     assert sv.scan_view(state, 'native', 'chrT', 0, 1500, 10) == []
     evidence.SCAN_CACHE.clear()
+
+
+def test_positive_eligibility_reuses_compaction(cohort, monkeypatch):
+    state, _ = cohort
+    original = sv._compact_record
+    decoded = []
+    def compact(*args, **kwargs):
+        decoded.append(1)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(sv, '_compact_record', compact)
+    sv.scan_view(state, 'native', 'chrT', 900, 1400, 10)
+    first = len(decoded)
+    sv.scan_view(state, 'native', 'chrT', 950, 1450, 10)
+    assert len(decoded) == first  # overlapping records need no second extraction
+    assert split(state)['counts'] == [1, 1, 0]
 
 
 @pytest.mark.parametrize('seed', [901, 1547, 6091])

@@ -9,17 +9,34 @@ locators, not permanent observation or allele identities.
 from __future__ import annotations
 
 import threading
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from services.background_work import checkpoint
 from services.byte_cache import shared_cache
 
-EXTRACTION_VERSION = 'native-sv-scan:v2'
+EXTRACTION_VERSION = 'native-sv-scan:v3'
 NORMALIZATION_VERSION = 'cigar-replacements:v1'
 SCAN_MAX_SPAN = 2_000_000
 SCAN_MAX_RECORDS = 100_000
 SCAN_MAX_BYTES = 128 * 1024 * 1024
 SCAN_CACHE = shared_cache('indexes')
 SCAN_LOCK = threading.Lock()
+_records = ContextVar('native_scan_records', default=None)
+
+
+def reusable_record(key):
+    records = _records.get()
+    return records.get(key) if records is not None else None
+
+
+@contextmanager
+def reuse_records(entries):
+    token = _records.set({c['_key']: c for c in entries})
+    try:
+        yield
+    finally:
+        _records.reset(token)
 
 
 class ScanCancelled(RuntimeError):
@@ -45,20 +62,22 @@ def scope_key(state, dataset, dataset_id, chrom, floor, stamps):
 
 
 def scan_region(state, dataset, dataset_id, chrom, start, end, floor, *, stamps, scanner, check=checkpoint):
-    """Publish complete, bounded view tiles with explicit zero-halo ownership.
+    """Reuse positive eligibility; filtered molecules require exact view scopes.
 
-    Molecule eligibility can depend on a primary elsewhere in the fetched
-    view. A cropped/extended scan is therefore not generally the same cohort.
-    Share only identical region/halo scopes; never assemble eligibility from
-    separately spooled fragments. Classification/normalization still sees each
-    record's full CIGAR, including edits outside the core.
+    With no signal filter the producer retains every nonhidden eligible record,
+    so extraction is independent of which primary lies in the fetched region.
+    Duplicate/name selection is still applied after cropping. Signal-filtered
+    bundles can suppress a supplementary through a rejected local primary and
+    must never be reconstructed by cropping or joining separately spooled views.
     """
     check()
     if end - start > SCAN_MAX_SPAN:
         from services.reconstruction_budget import ResourceResult
         raise ResourceResult('budget_exceeded', 'native_scan_region', max_span=SCAN_MAX_SPAN)
-    key = None if stamps is None else (scope_key(state, dataset, dataset_id, chrom, floor, stamps),
-                                       int(start), int(end), 'halo:0;cohort:loaded')
+    from services.signal_evidence import signal_filter_key
+    independent = not any(signal_filter_key(state))
+    ownership = ('positive-eligibility',) if independent else (int(start), int(end), 'halo:0;cohort:loaded')
+    key = None if stamps is None else (scope_key(state, dataset, dataset_id, chrom, floor, stamps), *ownership)
     if key is not None:
         with SCAN_LOCK:
             entry = SCAN_CACHE.get(key)
@@ -66,14 +85,58 @@ def scan_region(state, dataset, dataset_id, chrom, start, end, floor, *, stamps,
                 SCAN_CACHE.move_to_end(key)
         if entry is not None:
             check()
-            return list(entry)
-    result = scanner(state, dataset_id, chrom, start, end, floor)
+            if not independent:
+                return list(entry['entries'])
+            if entry['lo'] <= start and end <= entry['hi']:
+                return _crop(entry['entries'], start, end, check)
+    else:
+        entry = None
+    extending = (independent and entry is not None and start <= entry['hi'] and end >= entry['lo']
+                 and max(end, entry['hi']) - min(start, entry['lo']) <= SCAN_MAX_SPAN)
+    if extending:
+        from services.byte_cache import retained_size
+        from services.reconstruction_budget import ResourceResult
+        added = []
+        # Sequence-free geometry can reuse immutable compact records. Reference
+        # normalization may inspect SEQ, so that mode only reuses region scans.
+        known = entry['entries'] if getattr(state, 'fasta', None) is None and not getattr(state, 'fasta_path', None) else []
+        with reuse_records(known):
+            if start < entry['lo']:
+                check()
+                added += scanner(state, dataset_id, chrom, start, entry['lo'], floor)
+            if end > entry['hi']:
+                check()
+                added += scanner(state, dataset_id, chrom, entry['hi'], end, floor)
+        seen = {c['_key'] for c in entry['entries']}
+        result = list(entry['entries'])
+        for i, c in enumerate(added):
+            if not i & 255:
+                check()
+            if c['_key'] not in seen:
+                seen.add(c['_key']); result.append(c)
+        if len(result) > SCAN_MAX_RECORDS or retained_size(result) > SCAN_MAX_BYTES:
+            raise ResourceResult('budget_exceeded', 'native_scan_merge', max_records=SCAN_MAX_RECORDS, max_bytes=SCAN_MAX_BYTES)
+        lo, hi = min(start, entry['lo']), max(end, entry['hi'])
+    else:
+        result = scanner(state, dataset_id, chrom, start, end, floor)
+        lo, hi = int(start), int(end)
     check()
     if key is not None and end - start <= SCAN_MAX_SPAN:
         with SCAN_LOCK:
-            SCAN_CACHE[key] = result
+            SCAN_CACHE[key] = dict(lo=lo, hi=hi, entries=result)
             SCAN_CACHE.move_to_end(key)
-    return list(result)
+    return _crop(result, start, end, check) if independent else list(result)
+
+
+def _crop(entries, start, end, check):
+    result = []
+    for i, c in enumerate(entries):
+        if not i & 255:
+            check()
+        if c['reference_end'] > start and c['reference_start'] < end:
+            result.append(c)
+    check()
+    return result
 
 
 def select_cohort(entries, *, read_ids=None, include_duplicates=True):
