@@ -24,7 +24,7 @@ export interface WorkspaceCalls {
   status?: string; reason?: string;
 }
 export interface AlternateBlock extends LiveLiftInsertion {
-  observation_role?: 'alternate' | 'reference';
+  observation_role?: 'alternate' | 'reference' | 'other';
   column_id: string; target_revision: number; row_id: string; record_id: string;
   read_bases: string; read_bases_length: number; coverage: 'full' | 'partial';
 }
@@ -44,8 +44,13 @@ export async function enrichNativeRows(reads: CompactRead[], q: Omit<WorkspaceQu
     if (signal?.aborted) return reads;
     const target: FrozenTarget = { target_id: c.ins_id, revision: c.targetRevision ?? 1, target_type: 'geometry', chrom: q.chrom,
       ref_start: c.ref_start ?? c.pos, ref_end: c.t_end ?? c.pos, alt_bp: c.selected_length ?? c.length };
-    const ids = [...new Set(reads.map(r => r.id))].slice(0, 500);
-    const response = await getAlternateBlocks({ ...q, target, layer_options:layerOptions }, ids, layers, includeDuplicates, signal);
+    const ids = [...new Set(reads.map(r => r.id))];
+    const batches: BlocksResponse[] = [];
+    for (let i=0; i<ids.length; i+=500) {
+      batches.push(await getAlternateBlocks({ ...q, target, layer_options:layerOptions }, ids.slice(i,i+500), layers, includeDuplicates, signal));
+      if (signal?.aborted) return reads;
+    }
+    const response: BlocksResponse = { complete: batches.every(b => b.complete), blocks: batches.flatMap(b => b.blocks ?? []) };
     if (signal?.aborted || !response.complete) continue;
     const state = useBrowserStore.getState();
     const view = Object.keys(state.liveLiftExpansions).find(key => state.liveLiftExpansions[key]?.includes(c));

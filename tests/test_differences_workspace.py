@@ -210,7 +210,8 @@ def test_partial_block_bounds_straddles_and_logical_ids_share_the_alternate_fram
     ds=SimpleNamespace(id='native',data_type='bam',paths=[path])
     state=SimpleNamespace(datasets={ds.id:ds},get_dataset=lambda _:ds,translate_chrom=lambda c:c,fasta=None)
     monkeypatch.setattr('services.differences.workspace._query_annotations',lambda *a,**k:dict(intervals=[[0,20,20]],layers={'tf':dict(intervals=[[0,20,20]],source_intervals=[[0,60,60]],family_intervals=[[0,55,55]])}))
-    block=alternate_blocks(state,ds,chrom='chrT',start=SITE-100,end=SITE+200,target=target(100))['blocks'][0]
+    from services.differences.workspace import observations
+    block=observations(state,ds,chrom='chrT',start=SITE-100,end=SITE+200,target=target(100))['blocks'][0]
     assert block['covered']==[50,100]
     assert block['layers']['tf']['intervals']==[[50,70,20]]
     assert block['layers']['tf']['source_intervals']==[[50,110,60]]

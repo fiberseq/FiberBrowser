@@ -76,3 +76,48 @@ def test_policy_applies_to_geometry_before_group_shortcut(level):
                  geometry_evidence=dict(assignment='target', level=level))
     assert molecule_group(value, 'geometry', {}) == 2
     assert molecule_group(value, 'geometry', {'include_'+level: True}) == 0
+
+
+def test_nonmatching_insertion_is_other_observation_including_sequence_page(tmp_path):
+    from services.differences.workspace import observations, sequence
+    state, ds = native(tmp_path, lambda h: [make_record(h, 'other', 'chrT', SITE-100,
+                       '100M200I100M', seq='A'*400)])
+    q = query(ref=0)
+    block, = observations(state, ds, **q)['blocks']
+    assert block['observation_role'] == 'other'
+    page = sequence(state, ds, **q, row_ids=['other'], record_id=block['record_id'])
+    assert page['observation_role'] == 'other' and page['sequence'] == 'A'*200
+
+
+def test_expanded_blocks_use_confirmed_exact_calls_and_supporting_records(tmp_path):
+    from services.differences.workspace import alternate_blocks
+    state, ds = native(tmp_path, lambda h: [
+        make_record(h, 'carrier', 'chrT', SITE-100, '100M500I100M', seq='A'*700),
+        make_record(h, 'nearby', 'chrT', SITE-130, '100M25D5M500I100M', seq='A'*705),
+        make_record(h, 'competing', 'chrT', SITE-100, '100M500I100M', seq='C'*700),
+        make_record(h, 'clip', 'chrT', SITE, '1S200M'),
+        make_record(h, 'reference', 'chrT', SITE-150, '300M'),
+        make_record(h, 'reference', 'chrT', SITE, '80S100M', flag=2048)])
+    q = query(alt=500, ref=0)
+    q['target'].update(target_type='exact', candidates={'alternate': 'A'*500, 'competitor': 'C'*500, 'reference': ''},
+        competition_complete=True, chemistry_by_name={name: dict(chemistry='none', provenance='synthetic')
+            for name in ('carrier', 'nearby', 'competing', 'clip', 'reference')})
+    calls = inspect(state, ds, **q, include_putative=False)
+    expected = _carrier_molecules(calls)
+    blocks = alternate_blocks(state, ds, **q)['blocks']
+    assert {b['row_id'] for b in blocks} == {'carrier', 'nearby'}
+    assert {b['molecule_id'] for b in blocks} == expected
+    assert all(b['seq_q'][1]-b['seq_q'][0] == 500 for b in blocks)
+
+
+def test_replacement_clip_windows_use_the_corresponding_boundary_and_minimum():
+    import pysam
+    from services.differences.workspace import _query_window
+    q = query(alt=500, ref=35)['target']
+    r = pysam.AlignedSegment()
+    r.reference_start, r.cigarstring = SITE-100, '100M80S'
+    assert _query_window(r, q)[:5] == (100, 180, 0, 500, 'partial')
+    r.reference_start, r.cigarstring = SITE+35, '80S100M'
+    assert _query_window(r, q)[:5] == (0, 80, 420, 500, 'partial')
+    r.cigarstring = '1S100M'
+    assert _query_window(r, q) is None

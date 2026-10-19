@@ -112,6 +112,28 @@ def _query_window(read, target):
             lo, hi = event["q"], event.get("q_end", event["q"]+geometry["alt_bp"])
             if hi > lo or target["alt_bp"] == 0 and hi == lo:
                 return lo, hi, 0, hi-lo, "full", geometry["ref_start"], geometry["ref_end"], None
+    # Clustering may merge an unrelated nearby deletion across a short M
+    # bridge. Retain the original contiguous I/D runs as independent slices.
+    q, ref, run = 0, read.reference_start, None
+    raw = []
+    for op, n in [*(read.cigartuples or ()), (6, 0)]:
+        if op in (1, 2):
+            if run is None:
+                run = [ref, ref, q, q]
+            if op == 1:
+                q += n
+            else:
+                ref += n
+            run[1], run[3] = ref, q
+        else:
+            if run is not None:
+                raw.append(run)
+                run = None
+            if op in (0, 4, 7, 8): q += n
+            if op in (0, 3, 7, 8): ref += n
+    for lo, hi, q0, q1 in raw:
+        if geometry_matches(dict(ref_start=lo, ref_end=hi, alt_bp=q1-q0), target, ProjectionPolicy()):
+            return q0, q1, 0, q1-q0, "full", lo, hi, None
     if target["ref_start"] == target["ref_end"] and read.has_tag("SA"):
         from services.sv_endpoint import _compact_record
         from services.sv_events import carrier_evidence
@@ -125,8 +147,10 @@ def _query_window(read, target):
     q, ref = 0, read.reference_start
     candidates = []
     for op, n in read.cigartuples or ():
-        if op == 4 and n and a > 0 and abs(ref-target["ref_end"]) <= max(20, .05*a):
-            right = q > 0
+        from services.sv_events import insertion_clip_min, insertion_clip_tolerance
+        right = q > 0
+        anchor = target["ref_start"] if right else target["ref_end"]
+        if op == 4 and n >= insertion_clip_min(a) and a > 0 and abs(ref-anchor) <= insertion_clip_tolerance(a):
             size = min(n, a)
             lo = q if right else q+n-size
             candidates.append((lo, lo+size, 0 if right else a-size, a, "partial", ref, ref, "start" if right else "end"))
@@ -179,6 +203,9 @@ def _alternate_blocks(state, dataset, *, chrom, start, end, target, row_ids=None
     if row_ids is not None and len(row_ids) > MAX_ROWS:
         raise ResourceResult("budget_exceeded", "alternate_block_rows")
     selected = set(row_ids) if row_ids is not None else None
+    calls = inspect(state, dataset, chrom=chrom, start=start, end=end,
+        target=target, include_duplicates=include_duplicates, include_putative=False)
+    carriers = _carrier_molecules(calls)
     from services.sv_endpoint import _bam_records
     blocks, seen, scanned, total_bytes = [], set(), 0, 0
     deadline = time.monotonic()+30
@@ -195,7 +222,10 @@ def _alternate_blocks(state, dataset, *, chrom, start, end, target, row_ids=None
             scanned += 1
             if scanned > 20_000:
                 raise ResourceResult("budget_exceeded", "alternate_block_scan")
-            if selected is not None and read.query_name not in selected:
+            molecule, alignment = _record_membership(calls, dataset, path, read) if calls else (None, None)
+            if not inspection and (molecule not in carriers or not _supports_record(calls, molecule, alignment, read, target)):
+                continue
+            if selected is not None and read.query_name not in selected and alignment not in selected:
                 continue
             if read.is_duplicate and not include_duplicates:
                 continue
@@ -224,7 +254,7 @@ def _alternate_blocks(state, dataset, *, chrom, start, end, target, row_ids=None
             sequence = (read.query_sequence or "")[q0:q1]
             block.update(source="reads", column_id=target["target_id"], target_revision=target["revision"],
                 record_id=record, row_id=read.query_name,
-                molecule_id=MoleculeId('legacy_merged_dataset',dataset.id,read.query_name).key,
+                molecule_id=molecule, alignment_id=alignment,
                 kind="replacement" if target["ref_end"] > target["ref_start"] and target["alt_bp"] else "deletion" if target["ref_end"] > target["ref_start"] else "insertion",
                 t_start=target["ref_start"], t_end=target["ref_end"], ref_bp=target["ref_end"]-target["ref_start"], alt_bp=target["alt_bp"],
                 pos=target["ref_end"], observed_ref_start=window[5], observed_ref_end=window[6], hap_label="", src=[read.reference_name, q0, q1], seq_q=[q0, q1],
@@ -255,6 +285,38 @@ def _alternate_blocks(state, dataset, *, chrom, start, end, target, row_ids=None
                     layout_version=LAYOUT_VERSION)
     finally:
         RESERVATIONS.release(reserved, False)
+
+
+def _record_membership(snapshot, dataset, path, read):
+    """Resolve physical library/record identity before considering raw aliases."""
+    from .projection import SourceAlignment
+    labels = dict(getattr(dataset, 'molecule_groups', ()) or ())
+    groups = {p: labels.get(p) or f"{dataset.id}#{i}" for i, p in enumerate(dataset.paths)}
+    physical = MoleculeId('declared_source_library', groups[path], read.query_name)
+    alignment = SourceAlignment.from_bam(read, physical).record_id
+    if physical.key in snapshot['membership']['molecules']:
+        return physical.key, alignment
+    return snapshot['membership']['legacy_aliases'].get(dataset.id, {}).get(read.query_name), alignment
+
+
+def _supports_record(snapshot, molecule, alignment, read, target):
+    """A member molecule does not make every one of its records a witness."""
+    value = snapshot['targets'][0]['calls_by_molecule'][molecule]
+    call = value.get('geometry_evidence') if target['target_type'] == 'geometry' else value['call']
+    ids = (call or {}).get('alignment_ids')
+    if ids:
+        from .identity import content_id
+        legacy = content_id('native-alignment:v1', [next(iter(snapshot['membership']['rows'])), read.to_string()])
+        return alignment in ids or legacy in ids
+    # Legacy SV calls have no alignment IDs. Ask that producer about this
+    # record, and allow confirmed witnesses only inside expanded columns.
+    from services.sv_endpoint import _compact_record
+    from services.sv_events import classify_allele_evidence
+    r, a = target['ref_end']-target['ref_start'], target['alt_bp']
+    group, evidence = classify_allele_evidence(_compact_record(read, read.reference_name, 10),
+        'I' if a >= r else 'D', target['ref_start'], max(r, a),
+        chrom=read.reference_name, include_putative=False, target_end=target['ref_end'])
+    return group == 0 and evidence and evidence.get('level') == 'confirmed'
 
 
 def alternate_blocks(state, dataset, **kwargs):
@@ -534,7 +596,15 @@ def _observation_window(read,target):
     window=_source_query_window(read,target["ref_start"],target["ref_end"])
     if window is None:return None
     a,b=window
-    return a,b,0,b-a,"full",target["ref_start"],target["ref_end"],None,"reference"
+    # Spanning flanks alone do not establish the intervening reference path.
+    ref, edited = read.reference_start, False
+    for op, n in read.cigartuples or ():
+        if op == 1 and target["ref_start"] <= ref <= target["ref_end"]:
+            edited = True
+        if op in (2, 3, 8) and ref < target["ref_end"] and ref+n > target["ref_start"]:
+            edited = True
+        if op in (0, 2, 3, 7, 8): ref += n
+    return a,b,0,b-a,"full",target["ref_start"],target["ref_end"],None,"other" if edited else "reference"
 
 
 def observations(state,dataset,**kwargs):
