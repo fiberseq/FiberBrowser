@@ -3,7 +3,7 @@ import { useBrowserStore } from '../../stores/browserStore';
 import { deserializeSavedState, remapDatasetIds, serializeState } from '../../stores/historySlice';
 import { applyImportedState, collectFrontendState } from '../../api/session';
 import { refreshSvSplit } from '../../utils/svAlleleSplit';
-import { importMembership, legacyDifferencesState, restoreDifferencesSession, restoreHistoricalMembership } from './session';
+import { importMembership, legacyDifferencesState, restoreDifferencesSession, restoreHistoricalMembership, previewHistoricalRelink } from './session';
 import { DIFFERENCES_SCHEMA, fanOutMoleculeCalls, type MoleculeEnvelope } from './contracts';
 
 // Generated with the authentic pre-P2c recipe: molecule|record|row|placement.
@@ -228,4 +228,46 @@ it('fans one molecule call to qualified row/analysis identities without crossing
       unrelated: { 'same-name': 'b' } }, molecules: {}, legacy_aliases: {} } } as MoleculeEnvelope;
   expect(Object.keys(fanOutMoleculeCalls(envelope, 'dataset'))).toEqual(['row-1', 'analysis-1', 'row-2']);
   expect(fanOutMoleculeCalls(envelope, 'unrelated')).toEqual({});
+});
+
+it.each(['svSplits', 'differenceSplit'])('hydrates the %s parent into one row, frozen groups and saved columns, cold and warm', parent => {
+  const frontend = { [parent]: { dataset: split }, selectedReadIds: { dataset: [oldId] },
+    clusterAssignments: { dataset: { [oldId]: 0 } }, differencesImportMetadata: { dataset: known },
+    panels: [{ id: 'panel', datasetId: 'dataset', contentType: 'dataset', liftHap: 'phase-a', subTracks: [
+      { type: 'reads', visible: true }, { type: 'sv', visible: true },
+      { type: 'differences', visible: false, heightOverride: 71 }, { type: 'difference', visible: true },
+    ] }], expandedInsertions: { main: [{ chrom: 'chrT', pos: 100, id: 'saved-map-id', length: 100,
+      label: 'historical column', hap_label: 'phase-a', map_id: 'immutable-map', datasetId: 'dataset' }] } };
+  let saved: any = frontend;
+  for (let round = 0; round < 2; round++) {
+    applyImportedState({ datasets: [], overlays: [], has_fasta: false, viewport: { chrom: 'chrT', start: 0, end: 300 }, frontend: saved });
+    const state = useBrowserStore.getState();
+    expect(state.svSplits.dataset).toMatchObject({ frozenImport: true, includePutative: false, conflictOptions: { enabled: false } });
+    expect(state.clusterAssignments.dataset).toEqual({ [importMembership(oldId, known).currentId!]: 0 });
+    expect(state.panels[0].subTracks.filter(t => t.type === 'sv')).toEqual([{ type: 'sv', visible: false, heightOverride: 71 }]);
+    expect(state.panels[0].liftHap).toBe('phase-a');
+    expect(state.liveLiftExpansions.main[0]).toMatchObject({ ins_id: 'saved-map-id', length: 100, map_id: 'immutable-map' });
+    saved = copy(collectFrontendState());
+    const crash = deserializeSavedState(saved);
+    expect(crash.svSplits?.dataset.frozenImport).toBe(true);
+    expect(crash.liveLiftExpansions).toEqual(state.liveLiftExpansions);
+  }
+  expect(useBrowserStore.getState().differencesSession.legacySnapshot[parent]).toEqual(frontend[parent]);
+});
+
+it('relinks only after a preview, retaining policies, snapshots and unresolved raw pipe names', () => {
+  const state = { svSplits: { dataset: split }, selectedReadIds: { dataset: [oldId, 'ordinary|pipe'] },
+    clusterAssignments: { dataset: { [oldId]: 0, 'ordinary|pipe': 2 } },
+    filteredReadIds: { dataset: [oldId], unrelated: null }, readSortOrder: { dataset: [oldId, 'ordinary|pipe'] } };
+  const session = restoreDifferencesSession(state);
+  const before = copy(session);
+  const proposed = previewHistoricalRelink(state, session, 'dataset', known);
+  expect(session).toEqual(before);
+  expect(proposed.session.imports.dataset.map(m => m.status)).toEqual(['resolved', 'unresolved_import']);
+  expect(proposed.changes).toEqual({ added: 1, removed: 1, changed: 0, retained: 1 });
+  expect(proposed.restored.filteredReadIds.unrelated).toBeNull();
+  expect(proposed.restored.readSortOrder.dataset).toEqual([importMembership(oldId, known).currentId!, 'ordinary|pipe']);
+  expect(proposed.session.legacySnapshot).toEqual(session.legacySnapshot);
+  expect(proposed.session.targets.dataset.policy).toEqual(session.targets.dataset.policy);
+  expect(proposed.session.targets.dataset.snapshot).toEqual(split);
 });

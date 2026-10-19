@@ -2,7 +2,8 @@ import { normalizeSvConflictOptions, type SvConflictOptions } from '../utils/svC
 import { validateMatchedState } from '../utils/matchedRegions';
 import { normalizeSignalFilters } from '../utils/signalFilters';
 import { normalizeSvCarrierEvidence, normalizeClusterGroupLabels, normalizeSvSplits } from './svSlice';
-import { restoreDifferencesSession, restoreHistoricalMembership, type DifferencesSession } from '../features/differences/session';
+import { restoreDifferencesSession, restoreHistoricalMembership, legacySplitDefinitions, type DifferencesSession } from '../features/differences/session';
+import '../features/differences/persistence';
 import { clampMinSvLen, SV_MIN_LEN_DEFAULT, clampMinSvSupport, SV_MIN_SUPPORT_DEFAULT } from '../components/tracks/read-track/svDrawing';
 import { normalizeFeatureRefs } from './featureStore';
 import { normalizePinnedMotifs } from '../utils/pinnedMotifs';
@@ -941,7 +942,7 @@ function deserializeState(
   s = withoutMissingPackState(s);
   const differences = restoreDifferencesSession(s as unknown as Record<string, unknown>);
   s = { ...s, ...restoreHistoricalMembership(s, differences) };
-  const svSplits = normalizeSvSplits(s.svSplits);
+  const svSplits = normalizeSvSplits(legacySplitDefinitions(s as unknown as Record<string, unknown>));
   for (const [key, def] of Object.entries(svSplits)) {
     if (!s.differencesSession || differences.targets[key]?.frozen) def.frozenImport = true;
   }

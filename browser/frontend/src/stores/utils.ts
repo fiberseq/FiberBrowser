@@ -755,6 +755,26 @@ export function dropUnknownTracks(subTracks: SubTrackConfig[]): SubTrackConfig[]
   return subTracks.filter(st => !st || typeof st.type !== 'string' || isKnownTrackType(st.type));
 }
 
+/** The two parent track names share one canvas row. Hidden choices dominate
+ * duplicate defaults; explicit size/collapse settings survive canonicalization.
+ * The session capsule retains every original row for reversible recovery. */
+export function migrateDifferenceTracks(subTracks: SubTrackConfig[]): SubTrackConfig[] {
+  const aliases = new Set(['sv', 'difference', 'differences']);
+  const rows = subTracks.filter(t => t && aliases.has(t.type));
+  if (!rows.length || rows.length === 1 && rows[0].type === 'sv') return subTracks;
+  const canonical = rows.find(t => t.type === 'sv') ?? rows[0];
+  const combined = { ...Object.assign({}, ...rows.slice().reverse()), ...canonical, type: 'sv' as const,
+    visible: rows.every(t => t.visible !== false) };
+  if (canonical.heightOverride == null) combined.heightOverride = rows.find(t => t.heightOverride != null)?.heightOverride;
+  let added = false;
+  return subTracks.flatMap(t => {
+    if (!t || !aliases.has(t.type)) return [t];
+    if (added) return [];
+    added = true;
+    return [combined];
+  });
+}
+
 /** Sub-tracks for genome-only mode (no dataset loaded). */
 export function createGenomeSubTracks(
   _orthogonalTracks: { index: number }[] = [],
@@ -838,12 +858,13 @@ export function ensureBuiltinSubTracks(subTracks: SubTrackConfig[]): SubTrackCon
 export function migratePanelTracks<T extends { subTracks?: SubTrackConfig[]; contentType?: string }>(panels: T[], svTrackCollapsed = false): T[] {
   return panels.map(panel => {
     if (!panel || !Array.isArray(panel.subTracks)) return panel;
-    if (!panel.subTracks.some(t => t?.type === 'reads')) {
+    const migrated = migrateDifferenceTracks(panel.subTracks);
+    if (!migrated.some(t => t?.type === 'reads')) {
       // Rows of a plugin pack this build doesn't have go (their kind isn't known here).
-      const known = dropUnknownTracks(panel.subTracks);
-      return known.length === panel.subTracks.length ? panel : { ...panel, subTracks: known };
+      const known = dropUnknownTracks(migrated);
+      return known.length === panel.subTracks.length && known.every((t, i) => t === panel.subTracks![i]) ? panel : { ...panel, subTracks: known };
     }
-    let subTracks = ensureBuiltinSubTracks(dropUnknownTracks(panel.subTracks));
+    let subTracks = ensureBuiltinSubTracks(dropUnknownTracks(migrated));
     if (svTrackCollapsed) {
       subTracks = subTracks.map(t => (t.type === 'sv' && t.heightOverride == null ? { ...t, heightOverride: SV_COLLAPSED_MIGRATION_HEIGHT } : t));
     }

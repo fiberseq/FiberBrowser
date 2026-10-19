@@ -10,6 +10,7 @@ import type { DifferenceSelection } from '../liveLift/inspectionStore';
 import { DEFAULT_EVIDENCE_POLICY, inspectDifference, type EvidencePolicy, type WorkspaceCalls, type WorkspaceQuery } from './api';
 import { frozenTarget } from './selection';
 import { workspaceAssignments } from './callModel';
+import { membershipChanges } from './session';
 
 export function MoleculeCalls({ selection, native = false }: { selection: DifferenceSelection; native?: boolean }) {
   const target = useMemo(() => frozenTarget(selection), [selection]);
@@ -41,6 +42,8 @@ export function MoleculeCalls({ selection, native = false }: { selection: Differ
   const snapshot = result?.targets[0];
   const groups = result && snapshot ? workspaceAssignments(result, selection.datasetId, policy) : null;
   const saved = useBrowserStore(s => s.svSplits[panel?.stateKey ?? selection.datasetId]);
+  const assignments = useBrowserStore(s => s.clusterAssignments[panel?.stateKey ?? selection.datasetId]);
+  const changes = groups ? membershipChanges(assignments ?? {}, groups.rows) : null;
   const highlight = () => {
     if (!groups) return;
     highlightMolecules(result!,new Set(Object.keys(groups.groups).filter(id=>groups.groups[id]===0)));
@@ -75,7 +78,12 @@ export function MoleculeCalls({ selection, native = false }: { selection: Differ
       <button onClick={highlight}>Highlight carriers</button>{' '}
       <button onClick={() => saved ? setPreview(true) : split()}>{saved ? 'Preview recompute' : 'Split by carrier'}</button>
       {preview && <div role="status">Saved {saved?.counts.join('/')} → proposed {groups.counts.join('/')} (carriers/reference/not informative).
+        <p>Row membership: +{changes?.added} / −{changes?.removed} / {changes?.changed} changed groups.</p>
         <p>Target {saved?.differenceSnapshot?.target.target_id ?? 'historical geometry'} → {target.target_id}; revision {target.revision}. Current inspector policy replaces the saved policy only when applied.</p>
+        <details><summary>Old and proposed policy</summary><pre>{JSON.stringify({ saved: saved?.differenceSnapshot?.policy ?? {
+          include_putative: saved?.includePutative ?? false, include_conflicting: saved?.includeConflicting ?? false,
+          include_ambiguous: saved?.includeAmbiguous ?? false, include_duplicates: saved?.includeDuplicates ?? false,
+          conflict_options: saved?.conflictOptions }, proposed: policy }, null, 2)}</pre></details>
         <button onClick={split}>Apply recomputed split</button><button onClick={() => setPreview(false)}>Keep saved split</button></div>}
       <table className="w-full text-left"><thead><tr><th>Molecule</th><th>Final call / geometry</th><th>Representations and dissent</th></tr></thead>
         <tbody>{Object.entries(snapshot.calls_by_molecule).slice(0, 500).map(([id, call]) => <tr key={id}

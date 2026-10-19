@@ -97,6 +97,26 @@ it('keeps saved columns across chromosomes and reference scopes through a sessio
   state.expandLiveLift('main',{...base,length:200});
   expect(useBrowserStore.getState().liveLiftExpansions.main).toHaveLength(3);
 });
+it('restores an exact selected target and missing-source geometry through eviction, hydration and undo',()=>{
+  const originalSession=useBrowserStore.getState().differencesSession;
+  selectNativeDifference(cluster,'native','chr1',panel.id);
+  const selection={...useDifferenceSelection.getState().selection!,target:{...response.targets[0].target,target_type:'exact' as const,
+    revision:7,candidates:{reference:'CCCC',alternate:'A'.repeat(792)}}};
+  useDifferenceSelection.getState().select(selection);
+  useBrowserStore.getState().pushSnapshot('Selected exact target');
+  const serialized=JSON.parse(JSON.stringify(serializeState(useBrowserStore.getState())));
+  useDifferenceSelection.getState().select(null);
+  useBrowserStore.getState().pushSnapshot('Closed selection');
+  useBrowserStore.getState().undo();
+  expect(useDifferenceSelection.getState().selection).toEqual(selection);
+  useBrowserStore.setState({...deserializeSavedState(serialized),datasets:[],panels:[]});
+  expect(useDifferenceSelection.getState().selection).toEqual(selection);
+  expect(useDifferenceSelection.getState().selection?.target?.revision).toBe(7);
+  // The removed source cannot be silently replaced by the next active one.
+  useBrowserStore.setState({datasets:[{id:'other',data_type:'bam',label:'Other',path:'other.bam',color:'#000'}]});
+  expect(useDifferenceSelection.getState().selection?.datasetId).toBe('native');
+  useBrowserStore.setState({differencesSession:originalSession});
+});
 it.each(['putative','conflicting','ambiguous'] as const)('applies %s policy to geometry counts and rows',level=>{
   const result=structuredClone(response);
   result.targets[0].calls_by_molecule.m={...call,geometry_group:2,

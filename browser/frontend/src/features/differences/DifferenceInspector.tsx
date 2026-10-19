@@ -4,6 +4,7 @@ import { useBrowserStore } from '../../stores/browserStore';
 import { useDifferenceSelection } from '../liveLift/inspectionStore';
 import { AssemblyInspection } from './AssemblyInspection';
 import { NativeInspector } from './NativeInspector';
+import { SavedDifferences } from './SavedDifferences';
 
 const Hosted=createContext(false);
 type Props={panel:PanelConfig;dataset:Dataset;anchor:RefObject<HTMLDivElement|null>};
@@ -24,7 +25,7 @@ export function DifferenceInspectorRoot({children}:{children:ReactNode}){
   const dataset=useBrowserStore(s=>s.datasets.find(d=>d.id===selection?.datasetId));
   const panel=useBrowserStore(s=>s.panels.find(p=>p.id===selection?.panelId));
   const anchor=useRef<HTMLDivElement|null>(null);
-  return <Hosted.Provider value={true}>{children}<div ref={anchor}/>
+  return <Hosted.Provider value={true}>{children}<div ref={anchor}/><SavedDifferences/>
     {selection&&selection.inspect!==false&&(dataset?<InspectorContent dataset={dataset} panel={panel??{id:selection.panelId,datasetId:dataset.id} as PanelConfig} anchor={anchor}/>
       :<div role="dialog" aria-label="Unresolved difference" className="fixed z-[100] top-16 left-4 p-3 bg-white dark:bg-slate-900 border rounded">
         <p>Source unavailable · cached {selection.difference.kind} {selection.difference.ref_bp}→{selection.difference.alt_bp} bp</p>

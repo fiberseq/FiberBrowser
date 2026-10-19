@@ -17,7 +17,26 @@ export interface DifferenceSelection { datasetId: string; panelId: string; viewK
 let selectionVersion = 0;
 export const useDifferenceSelection = create<{
   selection: DifferenceSelection | null; select: (selection: DifferenceSelection | null) => void;
-}>(set => ({ selection: null, select: selection => { selectionVersion++; set({ selection }); } }));
+}>(set => ({ selection: null, select: selection => {
+  selectionVersion++; set({ selection });
+  useBrowserStore.setState(s => ({ differencesSession: { ...s.differencesSession,
+    selectionSnapshot: selection ? JSON.parse(JSON.stringify(selection)) : null } }));
+} }));
+
+/** Restore the frozen selection, including unavailable sources and exact target
+ * revisions. Never resolve an ID by the nearest visible geometry or dataset. */
+export function restoreDifferenceSelection() {
+  const saved = useBrowserStore.getState().differencesSession.selectionSnapshot;
+  const valid = saved && typeof saved.datasetId === 'string' && typeof saved.panelId === 'string'
+    && typeof saved.chrom === 'string' && typeof saved.viewKey === 'string' && typeof saved.difference?.id === 'string'
+    && Number.isFinite(saved.difference.t_start) && Number.isFinite(saved.difference.t_end)
+    && Number.isFinite(saved.difference.ref_bp) && Number.isFinite(saved.difference.alt_bp);
+  selectionVersion++;
+  useDifferenceSelection.setState({ selection: valid ? JSON.parse(JSON.stringify(saved)) as DifferenceSelection : null });
+}
+useBrowserStore.subscribe((state, previous) => {
+  if (state.differencesSession.selectionSnapshot !== previous.differencesSession.selectionSnapshot) restoreDifferenceSelection();
+});
 
 /** A map marker carries its exact map link and both spans, including a
  * replacement's one-base alternate. It never opens a native SV action. */

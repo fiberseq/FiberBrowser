@@ -35,7 +35,7 @@ import { clampMinSvLen, SV_MIN_LEN_DEFAULT, clampMinSvSupport, SV_MIN_SUPPORT_DE
 import { DEFAULT_CLASS_REGION_MODE, isClassRegionMode } from '../utils/classRegion';
 import { CLASS_REGION_RESET_EVENT } from '../utils/analysisCommands';
 import { normalizeSignalFilters } from '../utils/signalFilters';
-import { restoreDifferencesSession, restoreHistoricalMembership } from '../features/differences/session';
+import { restoreDifferencesSession, restoreHistoricalMembership, legacySplitDefinitions } from '../features/differences/session';
 
 export { deserializeSets } from '../stores/hydration';
 
@@ -618,7 +618,7 @@ export function applyImportedState(result: Record<string, unknown>): void {
     }
     if ('clusterMergeLog' in postBatch) postBatch.clusterMergeLog = normalizeMergeLog(postBatch.clusterMergeLog);
     postBatch.svCarrierEvidence = normalizeSvCarrierEvidence(postBatch.svCarrierEvidence);
-    if ('svSplits' in postBatch) postBatch.svSplits = normalizeSvSplits(postBatch.svSplits);
+    postBatch.svSplits = normalizeSvSplits(legacySplitDefinitions(frontend));
     const differences = restoreDifferencesSession(frontend);
     postBatch.differencesSession = differences;
     Object.assign(postBatch, restoreHistoricalMembership(postBatch, differences));

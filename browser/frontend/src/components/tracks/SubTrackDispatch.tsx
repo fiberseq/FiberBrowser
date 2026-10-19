@@ -52,7 +52,7 @@ import { feedHasCoverage, feedHasSv, useTrackFeedStore } from '../../stores/trac
 import { SvTrack } from './SvTrack';
 import { trackRenderers, type PluginTrackArgs } from './trackRenderers';
 import { CoverageTrack } from './CoverageTrack';
-import { DifferencesStrip, differencesStripHeight } from '../../features/liveLift/DifferencesStrip';
+import { DifferenceLanes } from '../../features/differences/DifferenceLanes';
 import { useLiveLiftStore } from '../../features/liveLift/store';
 import { liveLiftViewKey } from '../../features/liveLift/persistence';
 
@@ -393,7 +393,7 @@ export function useSubTrackDispatch({ onScanPeaks, scanning }: UseSubTrackDispat
         if (!dsId || (dataset?.data_type !== 'bam_livelift' && (!svDisplayEnabled || !feedRowShown(panel, 1)))) return null;
         trackHeight = rowHeight(track);
         content = liftEnabled && dataset?.data_type === 'bam_livelift'
-          ? <DifferencesStrip panel={panel} dataset={dataset} width={trackWidth} height={trackHeight} gutter={clusterSidebarWidth} />
+          ? <DifferenceLanes panel={panel} dataset={dataset} width={trackWidth} height={trackHeight} gutter={clusterSidebarWidth} />
           : <SvTrack width={trackWidth} height={trackHeight} panel={panel} sidebarWidth={clusterSidebarWidth} />;
         break;
       case 'coverage':

@@ -40,6 +40,21 @@ export function normalizeExpansions(raw: unknown): Record<string, LiveLiftExpans
   }
   return out;
 }
+
+/** Known older column fields are aliases, never an inferred allele or source.
+ * Entries lacking complete geometry remain in the reversible session capsule. */
+export function restoreExpansionState(saved: Record<string, unknown> = {}): Record<string, LiveLiftExpansion[]> {
+  const current = normalizeExpansions(saved.liveLiftExpansions);
+  const legacy: Record<string, unknown[]> = {};
+  if (saved.expandedInsertions && typeof saved.expandedInsertions === 'object') {
+    for (const [view, entries] of Object.entries(saved.expandedInsertions)) {
+      if (Array.isArray(entries)) legacy[view] = entries.map(e => e && typeof e === 'object' ? { ...e, ins_id: e.ins_id ?? e.id } : e);
+    }
+  }
+  const out = { ...legacy };
+  for (const [view, entries] of Object.entries(current)) out[view] = [...entries, ...(legacy[view] ?? [])];
+  return normalizeExpansions(out);
+}
 registerStoreExtension({
   id: 'liveLift', keys: ['liveLiftExpansions'],
   create: set => ({
@@ -54,7 +69,7 @@ registerStoreExtension({
       [view]: (s.liveLiftExpansions?.[view] ?? []).filter(e => e.ins_id !== id) } })),
   }),
   serialize: s => ({ liveLiftExpansions: s.liveLiftExpansions ?? {} }),
-  restoreSnapshot: saved => ({ liveLiftExpansions: normalizeExpansions(saved.liveLiftExpansions) }),
-  importSession: frontend => ({ liveLiftExpansions: normalizeExpansions(frontend?.liveLiftExpansions) }),
-  onSessionImport: () => { void import('./selectionStore').then(m => m.useDifferenceSelection.getState().select(null)); },
+  restoreSnapshot: saved => ({ liveLiftExpansions: restoreExpansionState(saved) }),
+  importSession: frontend => ({ liveLiftExpansions: restoreExpansionState(frontend) }),
+  onSessionImport: () => { void import('./selectionStore').then(m => m.restoreDifferenceSelection()); },
 });
