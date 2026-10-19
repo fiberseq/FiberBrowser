@@ -94,8 +94,8 @@ def test_alternative_allocation_and_request_state_limits_cannot_bypass_limits():
     from dataclasses import replace
     from services.reconstruction_budget import DEFAULT_LIMITS, ResourceResult, WorkBudget, isolated
     budget = WorkBudget(replace(DEFAULT_LIMITS, wavefront_pair_states=100_000_000))
-    with pytest.raises(ResourceResult, match='wavefront_allocation'):
-        budget.wavefront(1000, 1000)
+    score, _ = budget.wavefront(1000, 1000)
+    assert (score + 1) * (2 * (score // 6) + 1) <= DEFAULT_LIMITS.pair_cells
     with pytest.raises(ResourceResult, match='wavefront_states'):
         isolated('services.insertion_consensus', 'align', ('A' * 100, 'C' * 100), {}, lengths=[100, 100],
                  pairs=[(100, 100, 50)], limits=replace(DEFAULT_LIMITS, request_cells=10), allow_wavefront=True)

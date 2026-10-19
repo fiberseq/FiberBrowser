@@ -143,6 +143,7 @@ def align(a: str | np.ndarray, b: str | np.ndarray, w: Optional[int] = None) -> 
     budget = current_budget()
     if budget is None:
         return isolated(__name__, 'align', (a, b, w), {}, lengths=[n, m], pairs=[(n, m, width)], large=True, allow_wavefront=True)
+    budget.native_stage([(n, m, width)])
     if budget.algorithm == 'weighted_wavefront:v1':
         from services.weighted_wavefront import weighted_wavefront
         from services.reconstruction_budget import ResourceResult
@@ -480,6 +481,10 @@ def _lens_reconstruction(full, canonical, partials, daf_values, why):
         daf_info, why = _daf_from_carriers(daf_values)
         if daf_info is not None:
             method = 'daf'
+    if not daf_info:
+        ordered = sorted((s for s in canonical if s), key=len)
+        backbone = ordered[len(ordered) // 2] if ordered else ''
+        current_budget().native_stage(_planned(_evenly(ordered, 32), backbone, repeats=2))
     sequence = daf_info['seq'] if daf_info else _build_consensus(canonical)
     consensus_algorithm = 'daf-banded:v1' if daf_info else current_budget().algorithm
     pairs = _planned(full, sequence)
@@ -512,4 +517,5 @@ def reconstruct_lens(full, canonical, partials, *, records=(), daf=False, daf_co
         pairs += [(len(s), min(len(s), len(backbone)), band_width(len(s), min(len(s), len(backbone)))) for s, _ in partials]
     lengths = [len(s) for s in full + canonical] + [len(s) for s, _ in partials]
     return isolated(__name__, '_lens_reconstruction', (full, canonical, partials, values, why), {},
-                    lengths=lengths, pairs=pairs, large=True, allow_wavefront=not bool(values))
+                    lengths=lengths, input_count=max(len(full), len(canonical)) + len(partials),
+                    pairs=pairs, large=True, allow_wavefront=not bool(values))

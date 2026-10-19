@@ -104,6 +104,11 @@ class WorkBudget:
         return estimate
 
     def wavefront(self, n, m):
+        """Bound the next allocation; the kernel charges actual visited states.
+
+        Reserving every pair's worst case as spent work would reject ordinary
+        identical cohorts. Sequential calls share the remaining actual budget.
+        """
         if max(n, m) > self.limits.wavefront_max_bases:
             raise ResourceResult('budget_exceeded', 'wavefront_bases', bases=max(n, m))
         states = min(self.limits.wavefront_pair_states, self.limits.pair_cells, self.limits.request_cells - self.cells)
@@ -113,21 +118,29 @@ class WorkBudget:
         def count(score):
             q, r = divmod(score, 6)
             return (score + 1) * (delta + 1) + 6 * q * (q - 1) + 2 * q * (r + 1)
+        def allocation(score):
+            cells = (score + 1) * (delta + 2 * (score // 6) + 1)
+            return cells, 10 * cells + 128 * (n + m + 2)
+        if states < delta + 1:
+            raise ResourceResult('budget_exceeded', 'wavefront_states', states=states, n=n, m=m)
+        cells, reserved = allocation(0)
+        if cells > self.limits.pair_cells or reserved > self.limits.job_bytes:
+            raise ResourceResult('budget_exceeded', 'wavefront_allocation', cells=cells, reserved_bytes=reserved)
         low, high = 0, int((6 * max(0, states)) ** .5) + 1
         while low < high:
             mid = (low + high + 1) // 2
-            if count(mid) <= states:
+            cells, reserved = allocation(mid)
+            if count(mid) <= states and cells <= self.limits.pair_cells and reserved <= self.limits.job_bytes:
                 low = mid
             else:
                 high = mid - 1
         score = low
-        cells = (score + 1) * (delta + 2 * (score // 6) + 1)
-        reserved = 10 * cells + 128 * (n + m + 2)
-        if states < delta + 1:
-            raise ResourceResult('budget_exceeded', 'wavefront_states', states=states, score=score, n=n, m=m)
-        if cells > self.limits.pair_cells or reserved > self.limits.job_bytes:
-            raise ResourceResult('budget_exceeded', 'wavefront_allocation', cells=cells, reserved_bytes=reserved)
         return score, states
+
+    def plan_wavefront(self, n, m):
+        self.wavefront(n, m)
+        # Only this lower bound is unavoidable before sequences are aligned.
+        self.cells += abs(n - m) + 1
 
     def native_stage(self, pairs):
         """Preflight a native mapping stage after its actual backbone exists.
@@ -146,8 +159,9 @@ class WorkBudget:
             for pair in pairs:
                 check.pair(*pair)
         except ResourceResult:
+            alternative = WorkBudget(replace(self.limits, request_cells=remaining))
             for n, m, _width in pairs:
-                self.wavefront(n, m)
+                alternative.plan_wavefront(n, m)
             self.algorithm = 'weighted_wavefront:v1'
 
 
@@ -205,7 +219,7 @@ def _worker(connection, module, name, args, kwargs, limits, algorithm):
         connection.close()
 
 
-def isolated(module, name, args, kwargs, *, lengths, pairs=(), limits=DEFAULT_LIMITS, large=False, allow_wavefront=False):
+def isolated(module, name, args, kwargs, *, lengths, pairs=(), limits=DEFAULT_LIMITS, large=False, allow_wavefront=False, input_count=None):
     """Call an internal, importable function with a shared request reservation.
 
     Inputs are trusted internal values, never executable client payloads.
@@ -214,8 +228,9 @@ def isolated(module, name, args, kwargs, *, lengths, pairs=(), limits=DEFAULT_LI
     """
     if _current.get() is not None:
         return getattr(importlib.import_module(module), name)(*args, **kwargs)
-    if len(lengths) > limits.max_inputs or sum(lengths) > limits.max_input_bases:
-        raise ResourceResult("budget_exceeded", "input_scope", inputs=len(lengths), bases=sum(lengths))
+    inputs = len(lengths) if input_count is None else input_count
+    if inputs > limits.max_inputs or sum(lengths) > limits.max_input_bases:
+        raise ResourceResult("budget_exceeded", "input_scope", inputs=inputs, bases=sum(lengths))
     if lengths and max(lengths) > limits.max_reconstructed_bases:
         raise ResourceResult("budget_exceeded", "reconstructed_bases", bases=max(lengths))
     request = _parent_request.get()
@@ -233,7 +248,7 @@ def isolated(module, name, args, kwargs, *, lengths, pairs=(), limits=DEFAULT_LI
             raise
         alternative = WorkBudget(limits)
         for n, m, _w in pairs:
-            alternative.wavefront(n, m)
+            alternative.plan_wavefront(n, m)
         algorithm, estimates = 'weighted_wavefront:v1', []
         large = True
     large = large or any(e["reserved_bytes"] >= limits.large_job_bytes for e in estimates)

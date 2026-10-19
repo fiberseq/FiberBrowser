@@ -256,11 +256,18 @@ def realign_batch(jobs, layout, alt_seq):
     from services.reconstruction_budget import isolated
     from services.insertion_consensus import band_width
     pairs = []
-    for _cigar, _start, plan, _sequence in jobs:
-        n = int(plan.get('len') or 0)
-        if n and plan.get('kind') != KIND_REFERENCE:
-            m = min(n, layout.insert_len) if plan.get('kind') in (KIND_CLIP_START, KIND_CLIP_END) else layout.insert_len
-            pairs.append((n, m, band_width(n, m)))
+    def collect(query, target, offset=0):
+        n, m = len(query), len(target)
+        if n and m:
+            pairs.append((n, m, band_width(n, m) + max(0, int(offset))))
+        return []
+    for cigar, start, plan, sequence in jobs:
+        try:
+            # Use the actual geometry, including jitter, adjacent indels,
+            # clip distal ends and reference reads spanning replacements.
+            realign(cigar, start, sequence, plan, layout, alt_seq, aligner=collect)
+        except (ValueError, IndexError):
+            pass  # the worker also leaves an invalid individual carrier out
     return isolated(__name__, '_realign_batch', (jobs, layout, alt_seq), {},
                     lengths=[len(job[3]) for job in jobs] + [len(alt_seq)], pairs=pairs,
                     large=True, allow_wavefront=True)
