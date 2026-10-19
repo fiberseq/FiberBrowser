@@ -355,6 +355,7 @@ def _projected_analysis(state, dataset, *, chrom, start, end, feature, target=No
             membership.rows[did][name] = molecule_key
     likelihood_policy = LikelihoodPolicy()
     likelihood_budget = LikelihoodBudget(likelihood_policy)
+    likelihood_budget.deadline = min(likelihood_budget.deadline, budget.deadline)
     calls_used = response_bytes = 0
     for t in targets:
         calls, counts, geometry_counts = {}, [0, 0, 0], [0, 0, 0]
@@ -448,9 +449,11 @@ def _projected_analysis(state, dataset, *, chrom, start, end, feature, target=No
             ambiguous_context_alias_count=len(ambiguous_contexts),
             unresolved_source_witnesses=sum(len(v.get("lifted", {}).get("unprojectable_witnesses", [])) for o in output for v in o["calls_by_molecule"].values()),
             map_revision=paths[0].map_revision if paths else None, sequence_enriched=bool(target and target.get("target_type") == "exact")))
+    budget.check()
     if len(json.dumps(payload).encode()) > policy.max_response_bytes:
         return dict(schema_version=SCHEMA_VERSION, status="budget_exceeded", reason="projection_response_bytes",
                     scope={**payload["scope"], "search_complete": False}, targets=[])
+    budget.check()
     return payload
 
 

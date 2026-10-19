@@ -335,3 +335,19 @@ def test_cancelled_map_insertion_is_complete_reference_discovery(evidence, monke
     result = projected_analysis(state, ds, feature="summary", chrom=TARGET, start=5900, end=6500)
     assert result["targets"] == [] and result["unassessed_projections"] == []
     assert result["scope"]["search_complete"] is True
+
+
+def test_projection_deadline_includes_later_sequence_scoring(evidence, monkeypatch):
+    monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "1")
+    from services.differences import projected_service
+    state, ds, _ = evidence
+    original = projected_service.call_molecule
+    observed = []
+    def checked(*a, **kwargs):
+        assert kwargs["likelihood_budget"].deadline <= kwargs["budget"].deadline
+        observed.append(True)
+        return original(*a, **kwargs)
+    monkeypatch.setattr(projected_service, "call_molecule", checked)
+    target = {**insertion(), "target_type": "exact", "candidates": {"frozen-insertion": "A"*100, "reference": ""}, "competition_complete": True}
+    projected_analysis(state, ds, feature="split", chrom=TARGET, start=5900, end=6500, target=target)
+    assert observed
