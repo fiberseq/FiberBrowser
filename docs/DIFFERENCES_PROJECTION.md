@@ -90,7 +90,8 @@ Defaults bound 512 records, 2 million lazily decoded input bases, 131,072 retain
 CIGAR operations, 16,384 generated
 runs, 128 summary targets, 16,384 target/molecule calls, 100 kb reconstructed
 sequences, 16 MiB response bytes and 30 seconds including queue time. Bounded
-molecule spooling, 64 reciprocal SA lookups and existing fetch-window/source-bp
+molecule spooling (64 MiB raw source/request, 16 MiB/molecule, a server ceiling
+of 256 MiB/request), 64 reciprocal SA lookups and existing fetch-window/source-bp
 limits apply. Linear storage reserves process-wide memory before I/O; shared
 likelihood budgets reserve numerical work separately. Cancellation propagates
 from HTTP disconnect through source scans, path search and scoring, releasing

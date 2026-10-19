@@ -289,3 +289,17 @@ def test_geometry_tolerance_is_saved_policy_and_cannot_promote_a_deletion_allele
     detail = classify_projection(a, compose_alignment(a, p), target(200, 0, True))
     assert detail["geometry_evidence"]["assignment"] == "target"
     assert detail["call"]["assignment"] == "unknown"
+
+
+def test_joint_deletion_cannot_erase_another_viable_source_placement():
+    p = path(200, 0)
+    left = replace(alignment(), record_id="left", cigar=((0, 50), (4, 50)), sequence="G"*50+"N"*50)
+    right = replace(alignment(), record_id="right", supplementary=True, ref_start=150,
+        cigar=((4, 50), (0, 50)), sequence="N"*50+"T"*50)
+    alternative = replace(left, record_id="other-placement", ref_start=130,
+        cigar=((4, 20), (0, 20), (4, 60)), sequence="N"*100)
+    assert call_molecule([left, right], [p], target(200, 0, True))["call"]["assignment"] == "target"
+    result = call_molecule([left, right, alternative], [p], target(200, 0, True))
+    assert result["call"]["assignment"] == "ambiguous"
+    assert result["geometry_call"]["assignment"] == "ambiguous"
+    assert "unresolved_representation" in result["call"]["reasons"]

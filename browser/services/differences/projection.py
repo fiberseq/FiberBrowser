@@ -44,6 +44,7 @@ class ProjectionPolicy:
     max_targets: int = 128
     max_calls: int = 16_384
     max_cigar_operations: int = 131_072
+    max_spool_bytes: int = 64 * 1024 * 1024
     deadline_s: float = 30.
     min_mapq: int = 20
     cohort_alternatives: str = "exclude"
@@ -58,7 +59,7 @@ class ProjectionPolicy:
 
     def __post_init__(self):
         if any(type(getattr(self, k)) is not int or getattr(self, k) < 1 for k in
-               ("max_records", "max_runs", "max_input_bases", "max_sequence_bp", "max_response_bytes", "max_targets", "max_calls", "max_cigar_operations")):
+               ("max_records", "max_runs", "max_input_bases", "max_sequence_bp", "max_response_bytes", "max_targets", "max_calls", "max_cigar_operations", "max_spool_bytes")):
             raise ValueError("positive projection limits required")
         if not math.isfinite(self.deadline_s) or self.deadline_s <= 0 or type(self.min_mapq) is not int or not 0 <= self.min_mapq <= 255:
             raise ValueError("invalid projection quality/deadline")
@@ -75,7 +76,7 @@ class ProjectionBudget:
     def __init__(self, policy=ProjectionPolicy()):
         self.policy = policy
         self.deadline = time.monotonic() + policy.deadline_s
-        self.records = self.bases = self.runs = self.operations = 0
+        self.records = self.bases = self.runs = self.operations = self.spool_bytes = 0
 
     def check(self):
         checkpoint()
@@ -537,11 +538,14 @@ def call_molecule(alignments, paths, target, *, policy=ProjectionPolicy(), budge
         # coexist only when actual query frames, orientation and quality agree.
         joint = _joint_deletion(projected_records, target, policy.min_mapq)
         if joint is not None and not any(c.assignment in {"target", "reference", "other_allele"} for c in calls):
+            participants = set(joint.alignment_ids)
+            remainder = [c for c in calls if set(c.alignment_ids) - participants]
             calls = [replace(joint, witness_ids=tuple(sorted({w for c in calls for w in c.witness_ids})),
-                             coverage=tuple(v for c in calls for v in c.coverage))]
+                             coverage=tuple(v for c in calls for v in c.coverage)), *remainder]
         geometry_joint = _joint_deletion(projected_records, {**target, "target_type": "geometry"}, policy.min_mapq)
         if geometry_joint is not None and not any(c.assignment in {"target", "reference", "other_allele"} for c in geometry_calls):
-            geometry_calls = [geometry_joint]
+            participants = set(geometry_joint.alignment_ids)
+            geometry_calls = [geometry_joint, *[c for c in geometry_calls if set(c.alignment_ids) - participants]]
         if policy.conflicts_enabled:
             conflict = _query_conflict(record_details, target, policy)
             if conflict:

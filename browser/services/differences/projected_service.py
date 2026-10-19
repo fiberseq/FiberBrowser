@@ -90,12 +90,14 @@ def _source_records(dataset, plan, *, include_sequence, include_duplicates, budg
                         if scanned > 200_000:
                             raise ResourceResult("budget_exceeded", "projection_scan_records_cap")
                         import hashlib
-                        sha = hashlib.sha256(read.to_string().encode()).hexdigest()
+                        sam = read.to_string().encode()
+                        sha = hashlib.sha256(sam).hexdigest()
                         occurrence = occurrences.get(sha, 0)
                         occurrences[sha] = occurrence + 1
                         key = (sha, occurrence)
                         if key in raw_seen:
                             continue
+                        budget.charge("spool_bytes", len(sam), min(budget.policy.max_spool_bytes, DEFAULT_LIMITS.request_bytes//2))
                         raw_seen.add(key)
                         yield read
 
@@ -110,7 +112,8 @@ def _source_records(dataset, plan, *, include_sequence, include_duplicates, budg
             return (include_duplicates or not read.is_duplicate) and record_keeps_signal(read, signal)
 
         try:
-            for bundle in molecule_bundles(raw_records(), eligible):
+            for bundle in molecule_bundles(raw_records(), eligible,
+                    raw_budget_bytes=min(16*1024*1024, budget.policy.max_spool_bytes)):
                 occurrences = {}
                 hydrated = _hydrate_bundle(bam, bundle, config, budget)
                 if any(not r.is_supplementary and eligible(r) is False for r in hydrated):

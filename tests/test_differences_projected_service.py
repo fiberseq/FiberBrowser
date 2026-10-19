@@ -263,3 +263,13 @@ def test_chemistry_override_aliases_cannot_cross_independent_libraries(evidence,
     qualified = projected_analysis(state, ds, contexts={hg[0]: {"chemistry": "none", "provenance": "explicit"}}, **kwargs)
     assert qualified["targets"][0]["calls_by_molecule"][hg[0]]["call"]["level"] == "confirmed"
     assert qualified["targets"][0]["calls_by_molecule"][hg[1]]["call"]["level"] == "putative"
+
+
+def test_raw_source_spool_cap_is_explicit_before_retaining_any_cohort(evidence, monkeypatch):
+    monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "1")
+    state, ds, _ = evidence
+    result = projected_analysis(state, ds, feature="split", chrom=TARGET, start=5900, end=6500,
+        target=insertion(), policy=ProjectionPolicy(max_spool_bytes=1))
+    assert result["scope"]["records"] == 0 and result["scope"]["search_complete"] is False
+    assert "projection_spool_bytes_cap" in result["scope"]["reasons"]
+    assert result["targets"][0]["counts"] == [0, 0, 0]
