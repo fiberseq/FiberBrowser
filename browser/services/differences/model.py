@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Literal
 
 SCHEMA_VERSION = "differences:v1"
-VERSIONS = {"normalization": "haplotype:v2", "projection": "guarded:v1",
+VERSIONS = {"normalization": "haplotype:v2", "projection": "read-map:v1",
             "matching": "local-match:v3", "reconciliation": "independent:v1",
             "daf_likelihood": "daf-indel:v3"}
 

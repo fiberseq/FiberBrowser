@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from state.dependencies import get_state
@@ -147,6 +147,71 @@ async def lift_difference_reads(dataset_id: str, chrom: str, pos: int = Query(..
 class MoleculeProvenanceRequest(BaseModel):
     molecule_groups: list[list[str]] = Field(default_factory=list)
     joint_dedup: str = "off"
+
+
+class DifferenceAnalysisRequest(BaseModel):
+    dataset_id: str
+    chrom: str
+    start: int = Field(ge=0)
+    end: int = Field(ge=0)
+    target: Optional[dict] = None
+    analysis_scope: str = "lifted_only"
+    native_dataset_id: Optional[str] = None
+    include_duplicates: bool = False
+    projection_policy: Optional[dict] = None
+    contexts: Optional[dict] = None
+
+
+async def _projected_analysis(req, feature, request, state):
+    from services.background_work import Cancelled, cancelled_response, dataset_identity, run_background
+    from services.differences.identity import content_id
+    from services.differences.projection import ProjectionPolicy
+    from services.differences.projected_service import projected_analysis
+    from services.differences.policy import SearchPolicy
+    from services.reconstruction_budget import ResourceResult
+    try:
+        dataset = _difference_dataset(state, req.dataset_id, req.chrom)
+    except OSError as exc:
+        from services.lift.capability import is_lifted
+        dataset = state.datasets.get(req.dataset_id)
+        if req.analysis_scope != "combined" or not req.native_dataset_id or not is_lifted(dataset):
+            raise HTTPException(409, "Lift map unavailable") from exc
+    try:
+        options = dict(req.projection_policy or {})
+        if "search" in options:
+            options["search"] = SearchPolicy(**options["search"])
+        options.setdefault("cohort_alternatives", dataset.live_lift.settings.cohort_alternatives)
+        policy = ProjectionPolicy(**options)
+        ids = [req.dataset_id, *([req.native_dataset_id] if req.native_dataset_id else [])]
+        try:
+            identity = dataset_identity(state, ids)
+        except OSError:
+            from services.background_work import file_identity
+            identity = (dataset_identity(state, [req.native_dataset_id]),
+                        "map_unavailable", file_identity(dataset.paths), repr(dataset.live_lift.settings))
+        key = ("difference_"+feature, id(state), policy.version, content_id("request", req.model_dump()), identity)
+        return await run_background(request, key, projected_analysis, state, dataset,
+            chrom=req.chrom, start=req.start, end=req.end, feature=feature, target=req.target,
+            policy=policy, include_duplicates=req.include_duplicates, contexts=req.contexts,
+            native_dataset_id=req.native_dataset_id, analysis_scope=req.analysis_scope)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except ResourceResult as exc:
+        return {**exc.payload(), "targets": []}
+    except Cancelled:
+        return cancelled_response()
+
+
+@router.post("/api/lift/analysis/summary")
+async def lift_difference_summary(req: DifferenceAnalysisRequest, request: Request, state=Depends(get_state)):
+    """Composed read discovery at the fixed 10 bp floor, one molecule per target."""
+    return await _projected_analysis(req, "summary", request, state)
+
+
+@router.post("/api/lift/analysis/split")
+async def lift_difference_split(req: DifferenceAnalysisRequest, request: Request, state=Depends(get_state)):
+    """Frozen geometry/exact target calls and qualified row fan-out for splits/highlights."""
+    return await _projected_analysis(req, "split", request, state)
 
 
 @router.post("/api/lift/provenance/{dataset_id}")

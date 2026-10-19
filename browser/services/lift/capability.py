@@ -1,6 +1,6 @@
 """Live-lift capabilities, checked inside services (DESIGN_LIVE_LIFT.md §3.10).
 
-A ``bam_livelift`` dataset supports display and prepared-cohort clustering (compact reads,
+A ``bam_livelift`` dataset supports display, versioned difference analysis and prepared-cohort clustering (compact reads,
 ``compact_all``, coverage, locate, tooltips). Every other analysis refuses it
 with ``LiveLiftUnsupported`` (HTTP 409 and one notice), default-deny: a
 service that has not been taught about lifted datasets calls ``require`` (or
@@ -12,8 +12,11 @@ from __future__ import annotations
 from typing import Iterable
 
 LIFTED_TYPE = "bam_livelift"
-# Display and prepared-cohort clustering; everything else stays denied.
+# Display and prepared-cohort clustering. Versioned analysis gates follow below.
 SUPPORTED = frozenset({"compact_reads", "compact_all", "coverage", "lift_correspondence_only", "locate", "tooltip", "settings", "differences", "clustering"})
+# Independent v2 adapters; legacy summary/Variants/lens remain default-deny.
+# Enabling either does not authorize source BAM scans in target coordinates.
+SUPPORTED = SUPPORTED | {"difference_summary", "difference_split"}
 
 
 class LiveLiftUnsupported(Exception):
