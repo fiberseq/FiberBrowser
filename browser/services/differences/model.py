@@ -9,9 +9,9 @@ from dataclasses import asdict, dataclass, field
 from typing import Literal
 
 SCHEMA_VERSION = "differences:v1"
-VERSIONS = {"normalization": "local:v1", "projection": "guarded:v1",
-            "matching": "candidate:v1", "reconciliation": "independent:v1",
-            "daf_likelihood": "contract:v1"}
+VERSIONS = {"normalization": "haplotype:v2", "projection": "guarded:v1",
+            "matching": "local-match:v2", "reconciliation": "independent:v1",
+            "daf_likelihood": "daf-indel:v2"}
 
 
 @dataclass(frozen=True)

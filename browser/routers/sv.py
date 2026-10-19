@@ -27,8 +27,15 @@ def _int(body: dict, key: str, default=None):
 async def post_sv_split(request: Request, state=Depends(get_state)):
     """Classify every read in a region by one SV: carrier, reference or not informative."""
     body = await json_object_body(request)
+    from services.background_work import Cancelled, cancelled_response, run_background
+    # Diagnostic DP must stop when the requesting client goes away. Legacy
+    # sequence-free requests retain their existing dispatch and latency path.
+    async def compute(function, *args, **kwargs):
+        if body.get('allele_target') is not None:
+            return await run_background(request, ('sv-allele-enrichment', id(body)), function, *args, **kwargs)
+        return await asyncio.to_thread(function, *args, **kwargs)
     try:
-        payload = await asyncio.to_thread(
+        payload = await compute(
             sv_split_payload, state,
             dataset_id=str(body.get("dataset_id") or ""),
             chrom=str(body.get("chrom") or ""),
@@ -42,9 +49,12 @@ async def post_sv_split(request: Request, state=Depends(get_state)):
             conflict_options=body.get("conflict_options"),
             target_end=_int(body, 'ref_end') if body.get('ref_end') is not None else None,
             payload_version=_int(body, 'payload_version', 1),
+            allele_target=body.get('allele_target'),
         )
     except SvRequestError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=exc.status)
+    except Cancelled:
+        return cancelled_response()
     return ORJSONResponse(payload)
 
 

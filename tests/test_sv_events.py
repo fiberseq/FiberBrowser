@@ -105,6 +105,27 @@ def test_split_route_forwards_conflicting_opt_in_and_thresholds(sv_client, monke
     assert legacy['counts'] == [1, 0, 0] and legacy['evidence_counts']['putative'] == 1
 
 
+def test_split_route_enrichment_is_opt_in_cancellable_and_native(sv_client, monkeypatch):
+    from services import sv_endpoint
+    from services.background_work import Cancelled
+    client, _state = sv_client
+    read = _seg([(0, 100), (1, 100), (0, 100)], start=0, seq='G' * 100 + 'A' * 100 + 'T' * 100)
+    monkeypatch.setattr(sv_endpoint, 'scan_view', lambda *_: [sv_endpoint._compact_record(read, 'chrT', 10)])
+    monkeypatch.setattr(sv_endpoint, '_bam_records', lambda *args, **kwargs: iter([(read, 'chrT')]))
+    request = dict(dataset_id='sv', chrom='chrT', start=0, end=300, t='I', ref=100, len=100, payload_version=2,
+        allele_target=dict(target_id='target', revision=1, reference='', candidates={'target': 'A' * 100},
+                           competition_complete=True, chemistry_by_name={'r': {'chemistry': 'none', 'provenance': 'synthetic'}}))
+    response = client.post('/api/sv/split', json=request)
+    assert response.status_code == 200, response.text
+    assert response.json()['differences']['enrichment']['counts']['target'] == 1
+    def cancelled(*args, **kwargs):
+        raise Cancelled()
+    monkeypatch.setattr(sv_endpoint, 'sv_split_payload', cancelled)
+    # The router holds the imported service; exercise its cancellation boundary.
+    monkeypatch.setattr('routers.sv.sv_split_payload', cancelled)
+    assert client.post('/api/sv/split', json=request).status_code == 499
+
+
 def test_evidence_floor_does_not_cut_chromatin_at_sub_display_deletions():
     from models.domain import CigarCoordMapper
     a = _seg([(0, 100), (2, 15), (0, 100), (2, 60), (0, 100)])
