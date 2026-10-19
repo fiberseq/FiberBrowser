@@ -621,7 +621,7 @@ export function applyImportedState(result: Record<string, unknown>): void {
     postBatch.svSplits = normalizeSvSplits(legacySplitDefinitions(frontend));
     const differences = restoreDifferencesSession(frontend);
     postBatch.differencesSession = differences;
-    Object.assign(postBatch, restoreHistoricalMembership(postBatch, differences));
+    Object.assign(postBatch, restoreHistoricalMembership({ ...postBatch, datasets: store.getState().datasets, panels: store.getState().panels }, differences));
     if (postBatch.svSplits) {
       for (const [key, def] of Object.entries(postBatch.svSplits as Record<string, { frozenImport?: boolean }>)) {
         if (!frontend.differencesSession || differences.targets[key]?.frozen) def.frozenImport = true;

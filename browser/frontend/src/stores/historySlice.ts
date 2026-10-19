@@ -223,6 +223,7 @@ export function seedHistoryBaseline(
  */
 /** Minimal dataset info stored in snapshots for crash recovery. */
 export interface SerializedDataset {
+  molecule_groups?: [string, string][];
   id: string;
   label: string;
   paths: string[];
@@ -552,6 +553,7 @@ export function serializeDataset(d: any): SerializedDataset {
     label: d.label,
     paths: d.paths || (d.path ? [d.path] : []),
     ...(d.source_identity ? { source_identity: d.source_identity } : {}),
+    ...(d.molecule_groups ? { molecule_groups: d.molecule_groups.map((p: [string, string]) => [p[0], p[1]] as [string, string]) } : {}),
     color: d.color,
     data_type: d.data_type,
     layer_type: d.layer_type ?? null,

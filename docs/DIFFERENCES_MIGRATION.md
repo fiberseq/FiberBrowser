@@ -25,6 +25,10 @@ Saved differences offers two explicit recovery actions:
   Apply updates selections, assignments, evidence, filters and ordering in one
   transaction. Original snapshots, counts and policies remain available through
   export, crash recovery and undo/redo. A stale preview cannot apply.
+  An explicit reopened-source binding can connect an old scope to a new runtime
+  dataset/panel key only with matching declared libraries. Lifted historical
+  row identities require a lifted source. Missing or changed provenance makes
+  that binding unresolved while retaining its cached membership and origin.
 - Recompute previews native geometry counts and added, removed and changed
   membership using the saved target, region, duplicate and evidence/conflict
   policy. Applying freezes the new membership and retains the historical

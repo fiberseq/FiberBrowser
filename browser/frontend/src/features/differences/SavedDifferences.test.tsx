@@ -87,3 +87,41 @@ it('keeps a removed source unresolved and disables its legacy recompute', async 
   expect(host.textContent).toContain('Source unavailable');
   expect(useBrowserStore.getState().clusterAssignments.dataset).toEqual({ [original]: 0 });
 });
+
+it('freezes the current saved target when a preview starts before React commits a new render', async () => {
+  vi.mocked(requestSvSplit).mockResolvedValue({ assignments: { current: 0 }, counts: [1, 0, 0], label: 'new counts', margin: 20 });
+  await act(async () => {
+    const session = structuredClone(useBrowserStore.getState().differencesSession);
+    session.targets.dataset.snapshot.ref = 150;
+    session.targets.dataset.snapshot.end = 150;
+    useBrowserStore.setState({ differencesSession: session });
+    button('Preview recompute with saved policy').click();
+  });
+  expect(requestSvSplit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ ref: 150, end: 150 }), 20, expect.any(AbortSignal), false);
+  await act(async () => button('Apply recomputed membership').click());
+  expect(useBrowserStore.getState().svSplits.dataset).toMatchObject({ ref: 150, end: 150, frozenImport: true });
+});
+
+it('previews an explicit reopened source binding and restores its memberships without replacing the historical snapshot', async () => {
+  act(() => useBrowserStore.setState({ datasets: [{ id: 'reopened', label: 'Reopened source', data_type: 'bam_livelift', path: 'relocated.bam',
+    molecule_groups: [['relocated.bam', 'library']], color: '#000' }], panels: [{ id: 'panel', datasetId: 'reopened', stateKey: 'rows' } as any] }));
+  await enterMetadata();
+  await act(async () => {
+    const select = host.querySelector<HTMLSelectElement>('select[aria-label="Reopened source scope"]')!;
+    select.value = JSON.stringify({ stateKey: 'rows', datasetId: 'reopened' });
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await act(async () => button('Preview relink').click());
+  expect(host.textContent).toContain('Runtime scope: rows');
+  expect(useBrowserStore.getState().clusterAssignments.rows).toBeUndefined();
+  await act(async () => button('Apply membership relink').click());
+  const current = importMembership(original, metadata).currentId!;
+  expect(useBrowserStore.getState().clusterAssignments.rows).toEqual({ [current]: 0 });
+  expect(useBrowserStore.getState().svSplits.rows).toMatchObject({ datasetId: 'reopened', ref: 100, frozenImport: true });
+  expect(useBrowserStore.getState().differencesSession.targets.dataset.snapshot).toEqual(split);
+  const serialized = collectFrontendState();
+  expect((serialized.datasets as any[])[0].molecule_groups).toEqual([['relocated.bam', 'library']]);
+  const crash = deserializeSavedState(serialized as any);
+  expect(crash.clusterAssignments?.rows).toEqual({ [current]: 0 });
+  expect(crash.differencesSession?.imports.dataset[0].status).toBe('resolved');
+});

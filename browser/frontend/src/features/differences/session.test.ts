@@ -271,3 +271,32 @@ it('relinks only after a preview, retaining policies, snapshots and unresolved r
   expect(proposed.session.targets.dataset.policy).toEqual(session.targets.dataset.policy);
   expect(proposed.session.targets.dataset.snapshot).toEqual(split);
 });
+
+it('explicitly binds reopened source scopes only with matching declared provenance and preserves frozen origin', () => {
+  const source = { svSplits: { dataset: split }, clusterAssignments: { dataset: { [oldId]: 0 } },
+    selectedReadIds: { dataset: [oldId] } };
+  const capsule = restoreDifferencesSession(source);
+  const runtime = { ...source, datasets: [{ id: 'reopened', data_type: 'bam_livelift', molecule_groups: [['relocated.bam', 'library-a']] }],
+    panels: [{ id: 'panel', datasetId: 'reopened', stateKey: 'rows' }] };
+  const binding = { datasetId: 'reopened', stateKey: 'rows' };
+  const proposal = previewHistoricalRelink(runtime, capsule, 'dataset', known, binding);
+  const current = importMembership(oldId, known).currentId!;
+  expect(proposal.restored.clusterAssignments.rows).toEqual({ [current]: 0 });
+  expect(proposal.restored.selectedReadIds.rows).toEqual([current]);
+  expect(proposal.restored.svSplits.rows).toMatchObject({ datasetId: 'reopened', ref: split.ref, frozenImport: true });
+  expect(proposal.session.targets.dataset.snapshot).toEqual(split);
+  expect(proposal.session.legacySnapshot).toEqual(capsule.legacySnapshot);
+  expect(proposal.session.bindings?.dataset).toMatchObject({ ...binding, libraryIds: ['library-a'], producer: known.producer });
+  const warm = restoreDifferencesSession({ differencesSession: copy(proposal.session) });
+  const restored = restoreHistoricalMembership({ ...runtime, ...proposal.restored }, warm);
+  expect(restored.clusterAssignments.rows).toEqual({ [current]: 0 });
+  const absent = copy(warm);
+  const missing = restoreHistoricalMembership({ ...runtime, ...restored, datasets: [] }, absent);
+  expect(missing.clusterAssignments.rows).toEqual({ [current]: 0 });
+  expect(absent.imports.dataset[0]).toMatchObject({ status: 'unresolved_import', reason: 'unavailable_bound_source' });
+  expect(absent.targets.dataset.snapshot).toEqual(split);
+  expect(() => previewHistoricalRelink({ ...runtime, datasets: [{ id: 'reopened', molecule_groups: [['different.bam', 'unrelated']] }] }, capsule, 'dataset', known, binding)).toThrow(/provenance/);
+  expect(() => previewHistoricalRelink({ ...runtime, datasets: [{ ...runtime.datasets[0], data_type: 'bam' }] }, capsule, 'dataset', known, binding)).toThrow(/provenance/);
+  expect(() => previewHistoricalRelink({ ...runtime, clusterAssignments: { rows: { unrelated: 0 } } }, capsule, 'dataset', known, binding)).toThrow(/unrelated membership/);
+  expect(() => previewHistoricalRelink(runtime, capsule, 'dataset', {}, binding)).toThrow(/provenance/);
+});

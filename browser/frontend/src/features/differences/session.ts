@@ -9,6 +9,7 @@ export interface ImportMembership {
   currentId?: string;
   reason?: string;
 }
+export interface ImportBinding { stateKey: string; datasetId: string; libraryIds: string[]; producer: string }
 export interface DifferencesSession {
   schema_version: typeof DIFFERENCES_SCHEMA;
   versions: Record<string, string>;
@@ -16,6 +17,7 @@ export interface DifferencesSession {
   targets: Record<string, { target_type: 'geometry' | 'exact'; identity_state: 'provisional' | 'exact'; frozen: true; snapshot: JsonRecord; policy: JsonRecord; memberships: ImportMembership[] }>;
   imports: Record<string, ImportMembership[]>;
   selectionSnapshot?: JsonRecord | null;
+  bindings?: Record<string, ImportBinding>;
   legacySnapshot: JsonRecord;
   options: { backgroundCatalogue: boolean; expansionAlignment: 'boundary' | 'homology'; unphasedLane: boolean; analysisScope: 'native_only' | 'lifted_only' | 'combined';
     projectionPolicy: { version: string; cohort_alternatives: 'include' | 'exclude'; min_mapq: number;
@@ -136,6 +138,17 @@ export function legacyDifferencesState(session: DifferencesSession): JsonRecord 
   return clone(session.legacySnapshot);
 }
 
+export function declaredLibraries(dataset: JsonRecord): string[] {
+  const groups = dataset.molecule_groups ?? dataset.live_lift?.settings?.molecule_groups;
+  return Array.isArray(groups) ? [...new Set<string>(groups.filter((p: any) => Array.isArray(p) && typeof p[1] === 'string' && p[1]).map((p: any) => p[1]))] : [];
+}
+export function bindingAvailable(state: JsonRecord, binding: ImportBinding): boolean {
+  const dataset = Array.isArray(state.datasets) ? state.datasets.find((d: any) => d.id === binding.datasetId) : undefined;
+  return Boolean(dataset && binding.libraryIds.length && binding.libraryIds.every(id => declaredLibraries(dataset).includes(id))
+    && (binding.producer !== 'live-lift:pre-P2c' || dataset.data_type === 'bam_livelift')
+    && (binding.stateKey === binding.datasetId || state.panels?.some((p: any) => (p.stateKey ?? p.datasetId) === binding.stateKey && p.datasetId === binding.datasetId)));
+}
+
 /** Apply only established identities, within their saved dataset scope. Original
  * IDs and policy/membership snapshots remain reversible in the capsule. */
 export function restoreHistoricalMembership(state: JsonRecord, session: DifferencesSession): JsonRecord {
@@ -144,10 +157,16 @@ export function restoreHistoricalMembership(state: JsonRecord, session: Differen
   // Decide once for all fields. A later evidence collision must not leave
   // selections or assignments already rebound to current identities.
   for (const [dataset, imports] of Object.entries(session.imports)) {
+    const binding = session.bindings?.[dataset];
+    const active = binding?.stateKey ?? dataset;
     const aliases = new Map(imports.filter(m => m.status === 'resolved' && m.currentId).map(m => [m.originalId, m.currentId!]));
+    if (binding && !bindingAvailable(state, binding)) {
+      session.imports[dataset] = imports.map(m => ({ ...m, status: 'unresolved_import', reason: 'unavailable_bound_source' }));
+      aliases.clear();
+    }
     const collision = ['clusterAssignments', 'svCarrierEvidence'].some(field => {
       const mapped = new Map<string, string>();
-      for (const [id, value] of Object.entries(object(object(state[field])[dataset]))) {
+      for (const [id, value] of Object.entries(object(object(state[field])[active] ?? object(state[field])[dataset]))) {
         const current = aliases.get(id) ?? id;
         const encoded = JSON.stringify(value);
         if (mapped.has(current) && mapped.get(current) !== encoded) return true;
@@ -160,7 +179,7 @@ export function restoreHistoricalMembership(state: JsonRecord, session: Differen
       aliases.clear();
     }
     if (session.targets[dataset]) session.targets[dataset].memberships = clone(session.imports[dataset]);
-    aliasesByDataset.set(dataset, aliases);
+    aliasesByDataset.set(active, aliases);
   }
   for (const field of ['clusterAssignments', 'selectedReadIds', 'svCarrierEvidence', 'filteredReadIds', 'readSortOrder']) {
     if (!state[field]) continue;
@@ -196,13 +215,40 @@ export function membershipChanges(before: Record<string, number>, after: Record<
 /** Deliberate relink uses the same verified decoder as initial import. It does
  * not replace target/policy snapshots, bind a missing dataset, or read a cache.
  * The caller previews and atomically applies this proposal against its base. */
-export function previewHistoricalRelink(state: JsonRecord, session: DifferencesSession, dataset: string, metadata: JsonRecord) {
+export function previewHistoricalRelink(state: JsonRecord, session: DifferencesSession, dataset: string, metadata: JsonRecord,
+  requestedBinding?: Pick<ImportBinding, 'stateKey' | 'datasetId'>) {
   if (!session.imports[dataset]) throw new Error('No saved membership for this scope');
   const next = clone(session);
-  next.imports[dataset] = next.imports[dataset].map(m => m.status === 'resolved' ? m : importMembership(m.originalId, metadata));
-  const restored = restoreHistoricalMembership(state, next);
-  const before = object(object(state.clusterAssignments)[dataset]);
-  const after = object(object(restored.clusterAssignments ?? state.clusterAssignments)[dataset]);
+  next.imports[dataset] = next.imports[dataset].map(m => m.status === 'resolved' && !requestedBinding ? m : importMembership(m.originalId, metadata));
+  const input = clone(state);
+  if (requestedBinding) {
+    const producer = session.bindings?.[dataset]?.producer ?? session.legacySnapshot.differencesImportMetadata?.[dataset]?.producer;
+    if (producer && producer !== metadata.producer) throw new Error('Historical producer does not match the saved provenance');
+    const members = next.imports[dataset].filter(m => m.status === 'resolved');
+    const libraryIds = [...new Set(members.flatMap(m => m.molecule ? [m.molecule.library_id] : []))];
+    const binding: ImportBinding = { ...requestedBinding, libraryIds, producer: String(metadata.producer ?? '') };
+    if (!members.length || !bindingAvailable(state, binding)) throw new Error('Relinking requires matching declared library provenance in the chosen source');
+    if (Object.entries(next.bindings ?? {}).some(([key, b]) => key !== dataset && b.stateKey === binding.stateKey)) throw new Error('Another saved scope already uses this runtime scope');
+    const known = new Set(next.imports[dataset].flatMap(m => [m.originalId, ...(m.currentId ? [m.currentId] : [])]));
+    const active = object(object(state.clusterAssignments)[binding.stateKey]);
+    if (binding.stateKey !== dataset && Object.keys(active).some(id => !known.has(id))) throw new Error('The runtime scope contains unrelated membership; choose a separate panel');
+    next.bindings = { ...next.bindings, [dataset]: binding };
+    for (const field of ['clusterAssignments', 'selectedReadIds', 'svCarrierEvidence', 'filteredReadIds', 'readSortOrder']) {
+      if (input[field]?.[binding.stateKey] === undefined && input[field]?.[dataset] !== undefined) input[field][binding.stateKey] = clone(input[field][dataset]);
+    }
+    const def = object(state.svSplits)[dataset] ?? next.targets[dataset]?.snapshot;
+    if (def?.t === 'I' || def?.t === 'D') input.svSplits = { ...object(state.svSplits), [binding.stateKey]: { ...clone(def), datasetId: binding.datasetId, frozenImport: true } };
+    const labels = object(state.clusterGroupLabels)[dataset];
+    if (labels) input.clusterGroupLabels = { ...object(state.clusterGroupLabels), [binding.stateKey]: clone(labels) };
+  }
+  const restored = restoreHistoricalMembership(input, next);
+  if (requestedBinding) {
+    if (input.svSplits) restored.svSplits = input.svSplits;
+    if (input.clusterGroupLabels) restored.clusterGroupLabels = input.clusterGroupLabels;
+  }
+  const active = next.bindings?.[dataset]?.stateKey ?? dataset;
+  const before = object(object(state.clusterAssignments)[active]);
+  const after = object(object(restored.clusterAssignments ?? state.clusterAssignments)[active]);
   return { session: next, restored, changes: membershipChanges(before, after),
     resolved: next.imports[dataset].filter(m => m.status === 'resolved').length,
     unresolved: next.imports[dataset].filter(m => m.status === 'unresolved_import').length };
