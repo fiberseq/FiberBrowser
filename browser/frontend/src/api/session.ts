@@ -35,6 +35,7 @@ import { clampMinSvLen, SV_MIN_LEN_DEFAULT, clampMinSvSupport, SV_MIN_SUPPORT_DE
 import { DEFAULT_CLASS_REGION_MODE, isClassRegionMode } from '../utils/classRegion';
 import { CLASS_REGION_RESET_EVENT } from '../utils/analysisCommands';
 import { normalizeSignalFilters } from '../utils/signalFilters';
+import { restoreDifferencesSession, restoreHistoricalMembership } from '../features/differences/session';
 
 export { deserializeSets } from '../stores/hydration';
 
@@ -76,7 +77,7 @@ export const SESSION_POST_VIEWPORT_KEYS = [
   // The merges since the last clustering (Unmerge / Merge again).
   'clusterMergeLog',
   // SV allele splits (the groups' definition) and their group names.
-  'svSplits', 'clusterGroupLabels', 'svCarrierEvidence',
+  'svSplits', 'clusterGroupLabels', 'svCarrierEvidence', 'differencesSession',
   // Selected features (Cluster / Sort / Filter on features).
   'selectedFeatures',
 ] as const;
@@ -88,7 +89,7 @@ const SESSION_OWNED_ANALYSIS_KEYS = [
   'clusterTreeNodes', 'clusterTreeRootIds', 'activeClusterTreeNodeId',
   'dynamicClustering', 'readSortOrder', 'readStateDetails',
   'clusterFocus', 'selectedClusters', 'filteredReadIds', 'readFilterSources', 'selectedReadIds',
-  'readProjection', 'clusterMergeLog', 'svSplits', 'clusterGroupLabels', 'svCarrierEvidence', 'selectedFeatures',
+  'readProjection', 'clusterMergeLog', 'svSplits', 'clusterGroupLabels', 'svCarrierEvidence', 'differencesSession', 'selectedFeatures',
   'correspondenceScans',
 ] as const;
 
@@ -618,6 +619,12 @@ export function applyImportedState(result: Record<string, unknown>): void {
     if ('clusterMergeLog' in postBatch) postBatch.clusterMergeLog = normalizeMergeLog(postBatch.clusterMergeLog);
     postBatch.svCarrierEvidence = normalizeSvCarrierEvidence(postBatch.svCarrierEvidence);
     if ('svSplits' in postBatch) postBatch.svSplits = normalizeSvSplits(postBatch.svSplits);
+    const differences = restoreDifferencesSession(frontend);
+    postBatch.differencesSession = differences;
+    Object.assign(postBatch, restoreHistoricalMembership(postBatch, differences));
+    if (!frontend.differencesSession && postBatch.svSplits) {
+      for (const def of Object.values(postBatch.svSplits as Record<string, { frozenImport?: boolean }>)) def.frozenImport = true;
+    }
     if ('clusterGroupLabels' in postBatch) postBatch.clusterGroupLabels = normalizeClusterGroupLabels(postBatch.clusterGroupLabels);
     if ('selectedFeatures' in postBatch) postBatch.selectedFeatures = normalizeFeatureRefs(postBatch.selectedFeatures);
     // Navigation also reset the dismissed analysis panels restored above.

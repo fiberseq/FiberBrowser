@@ -139,6 +139,7 @@ export async function splitIntoPanelsBySv(target: SvSplitTarget, sv: SvSplitAlle
  * its groups (reads that left the view keep theirs). Not an undo step.
  */
 export async function refreshSvSplit(target: SvSplitTarget, def: SvSplitDef, signal?: AbortSignal): Promise<void> {
+  if (def.frozenImport) return;
   const includeDuplicates = Boolean(useBrowserStore.getState().showDuplicateReads);
   const response = await requestSvSplit({ ...target, includePutative: Boolean(def.includePutative), includeAmbiguous: Boolean(def.includeAmbiguous), includeConflicting: Boolean(def.includeConflicting), conflictOptions: def.conflictOptions ?? normalizeSvConflictOptions({ enabled: false }) }, def, def.margin, signal);
   const store = useBrowserStore.getState();

@@ -2,6 +2,7 @@ import { normalizeSvConflictOptions, type SvConflictOptions } from '../utils/svC
 import { validateMatchedState } from '../utils/matchedRegions';
 import { normalizeSignalFilters } from '../utils/signalFilters';
 import { normalizeSvCarrierEvidence, normalizeClusterGroupLabels, normalizeSvSplits } from './svSlice';
+import { restoreDifferencesSession, restoreHistoricalMembership, type DifferencesSession } from '../features/differences/session';
 import { clampMinSvLen, SV_MIN_LEN_DEFAULT, clampMinSvSupport, SV_MIN_SUPPORT_DEFAULT } from '../components/tracks/read-track/svDrawing';
 import { normalizeFeatureRefs } from './featureStore';
 import { normalizePinnedMotifs } from '../utils/pinnedMotifs';
@@ -284,6 +285,7 @@ export interface SerializedState {
   clusterAssignments: Record<string, Record<string, number>>;
   /** SV allele splits, per state key (stores/svSlice.ts); absent in older snapshots. */
   svSplits?: Record<string, unknown>;
+  differencesSession?: DifferencesSession;
   svCarrierEvidence?: Record<string, unknown>;
   /** Names a group source gave cluster ids, per state key; absent in older snapshots. */
   clusterGroupLabels?: Record<string, Record<number, string>>;
@@ -763,6 +765,7 @@ export function serializeState(state: BrowserState): SerializedState {
     analysisFilterRules: normalizeAnalysisFilterRules(state.analysisFilterRules),
     clusterAssignments: state.clusterAssignments,
     svSplits: state.svSplits ?? {},
+    differencesSession: state.differencesSession,
     svCarrierEvidence: state.svCarrierEvidence ?? {},
     clusterGroupLabels: state.clusterGroupLabels ?? {},
     clusterOrder: state.clusterOrder,
@@ -933,6 +936,8 @@ function deserializeState(
 ): Partial<BrowserState> {
   // Saved by a build with plugin packs this one doesn't have: their panels (and what only they showed) left out.
   s = withoutMissingPackState(s);
+  const differences = restoreDifferencesSession(s as unknown as Record<string, unknown>);
+  s = { ...s, ...restoreHistoricalMembership(s, differences) };
   applyCoaccSettings(s.coaccSettings);
   applyExcludedReads(s.excludedReadIds);
 
@@ -1021,6 +1026,7 @@ function deserializeState(
     analysisFilterRules: normalizeAnalysisFilterRules(s.analysisFilterRules),
     clusterAssignments: s.clusterAssignments,
     svSplits: normalizeSvSplits(s.svSplits),
+    differencesSession: differences,
     svCarrierEvidence: normalizeSvCarrierEvidence(s.svCarrierEvidence),
     clusterGroupLabels: normalizeClusterGroupLabels(s.clusterGroupLabels),
     clusterOrder: s.clusterOrder,

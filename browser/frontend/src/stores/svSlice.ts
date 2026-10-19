@@ -1,5 +1,6 @@
 import { normalizeSvConflictOptions, DEFAULT_SV_CONFLICT_OPTIONS, type SvConflictOptions, type SvConflictReason } from '../utils/svConflicts';
 import type { BrowserState } from './browserStore';
+import { emptyDifferencesSession, type DifferencesSession } from '../features/differences/session';
 import { clampMinSvLen, SV_MIN_LEN_DEFAULT, clampMinSvSupport, SV_MIN_SUPPORT_DEFAULT } from '../components/tracks/read-track/svDrawing';
 
 /**
@@ -15,6 +16,8 @@ import { clampMinSvLen, SV_MIN_LEN_DEFAULT, clampMinSvSupport, SV_MIN_SUPPORT_DE
  * names a key's groups where the cluster id alone would say "Cluster 1".
  */
 export interface SvSplitDef {
+  /** Imported membership/target remains frozen until a deliberate recompute. */
+  frozenImport?: boolean;
   datasetId: string;
   chrom: string;
   t: 'D' | 'I';
@@ -43,6 +46,7 @@ export interface SvSplitDef {
 export type SvCarrierEvidence = Record<string, 'confirmed' | 'putative' | 'conflicting' | 'ambiguous'>;
 
 export interface SvSlice {
+  differencesSession: DifferencesSession;
   svCarrierEvidence: Record<string, SvCarrierEvidence>;
   setSvCarrierEvidence: (key: string, levels?: SvCarrierEvidence) => void;
   /** Draw SVs of at least svMinLen on reads, and the SV track (a per-panel row: trackRegistry 'sv'). */
@@ -66,6 +70,7 @@ type SetState = (partial: Partial<BrowserState> | ((state: BrowserState) => Part
 
 export function createSvSlice(set: SetState, _get: () => BrowserState): SvSlice {
   return {
+    differencesSession: emptyDifferencesSession(),
     svDisplayEnabled: true,
     svMinLen: SV_MIN_LEN_DEFAULT,
     svMinSupport: SV_MIN_SUPPORT_DEFAULT,
@@ -118,6 +123,7 @@ export function normalizeSvSplits(raw: unknown): Record<string, SvSplitDef> {
     const ref = Number(d.ref);
     const len = Number(d.len);
     out[key] = {
+      ...(d.frozenImport ? { frozenImport: true } : {}),
       datasetId: String(d.datasetId ?? key), chrom: d.chrom, t: d.t, ref, len,
       end: Number.isFinite(d.end) && Number(d.end) >= ref ? Number(d.end) : d.t === 'D' ? ref + len : ref,
       margin: Number.isFinite(d.margin) ? Number(d.margin) : 100,
