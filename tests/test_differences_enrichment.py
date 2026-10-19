@@ -151,16 +151,16 @@ def test_repeat_equivalent_insertion_beyond_geometry_tolerance_cannot_be_referen
     assert wide["counts"]["target"] == 1
 
 
-@pytest.mark.parametrize("cap", ["records", "bases", "likelihood"])
-def test_cohort_cap_preserves_completed_molecules_and_marks_unvisited(monkeypatch, cap):
+@pytest.mark.parametrize("cap,limit", [("records", 2), ("records", 512), ("bases", 2), ("likelihood", 2)])
+def test_cohort_cap_preserves_completed_molecules_and_marks_unvisited(monkeypatch, cap, limit):
     import services.differences.enrichment as module
-    reads = [record(f"m{i}", "100M100I100M", "G" * 100 + "A" * 100 + "T" * 100) for i in range(3)]
+    reads = [record(f"m{i}", "100M100I100M", "G" * 100 + "A" * 100 + "T" * 100) for i in range(limit + 1)]
     args = setup(monkeypatch, reads)
     env = sv_endpoint.sv_split_payload(None, **args)["differences"]
     spec = specification(reads)
     policy = LikelihoodPolicy()
     if cap == "records":
-        monkeypatch.setattr(module, "DEFAULT_LIMITS", replace(module.DEFAULT_LIMITS, max_inputs=2))
+        monkeypatch.setattr(module, "DEFAULT_LIMITS", replace(module.DEFAULT_LIMITS, max_inputs=limit))
         reason = "diagnostic_record_cap"
     elif cap == "bases":
         monkeypatch.setattr(module, "DEFAULT_LIMITS", replace(module.DEFAULT_LIMITS, max_input_bases=250))
@@ -172,6 +172,9 @@ def test_cohort_cap_preserves_completed_molecules_and_marks_unvisited(monkeypatc
     result = enrich_native(None, env, dataset_id="synthetic", chrom="chrT", ref=100, target_end=100,
                            specification=spec, policy=policy, records=[(r, "chrT") for r in reads])
     assert result["counts"]["target"] >= 1
+    if cap == "records":
+        assert result["counts"]["target"] == limit
+        assert result["counts"]["unknown"] == 1
     assert result["counts"]["ambiguous"] == 0
     assert not result["search_complete"] and reason in result["reasons"]
     for value in result["calls_by_molecule"].values():

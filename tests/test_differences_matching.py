@@ -303,3 +303,15 @@ def test_normalization_checks_deadline_inside_repeat_walk(monkeypatch):
                          window_provider=lambda *args: window, policy=MatchingPolicy(deadline_s=.01))
     assert not result["search_complete"] and "deadline" in result["reasons"]
     assert result["explored"]["pairs"] == 0
+
+
+def test_invalid_common_reconstruction_window_never_emits_a_link():
+    window = ReferenceWindow("reference-content", "chrT", 0, "G" * 100 + "T" * 100, 200)
+    calls = []
+    def provider(*args):
+        calls.append(args)
+        # Individual normalizations succeed; the common comparison is invalid.
+        return window if len(calls) <= 2 else ReferenceWindow("reference-content", "chrT", 150, "T" * 50, 200)
+    result = match_edits([edit("a", 100, 100, "A" * 100)], [edit("b", 100, 100, "A" * 100)], window_provider=provider)
+    assert result["links"] == [] and not result["search_complete"]
+    assert "unassessed_representation: overlap or missing reference halo" in result["reasons"]
