@@ -456,3 +456,84 @@ def test_native_record_cap_marks_loaded_molecules_with_unscanned_copies(evidence
         include_sequence=False, include_duplicates=False, budget=ProjectionBudget(ProjectionPolicy(max_records=1)))
     assert len(grouped) == 1 and set(grouped) <= interrupted
     assert reasons == ["projection_records_cap"]
+
+
+def test_summary_reuses_projection_budget_across_discovery_and_multiple_targets(evidence, monkeypatch):
+    monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "1")
+    state, ds, directory = evidence
+    ds.paths = [write_bam(directory / "two-targets.bam", lambda h: [make_record(h, "m", MAT, 4800, "400M50I200M")])]
+    result = projected_analysis(state, ds, feature="summary", chrom=TARGET, start=5900, end=6500,
+        policy=ProjectionPolicy(max_runs=4))
+    assert len(result["targets"]) == 2
+    assert result["scope"]["search_complete"] and result["scope"]["primary_calls_complete"]
+    assert all(o["counts"] == [1, 0, 0] for o in result["targets"])
+
+
+def test_summary_clusters_tolerant_geometry_without_claiming_sequence_identity(evidence, monkeypatch):
+    monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "1")
+    state, ds, directory = evidence
+    ds.paths = [write_bam(directory / "nearby-geometry.bam", lambda h: [
+        make_record(h, "m", MAT, 4800, "600M"), make_record(h, "n", MAT, 4800, "250M1I350M")])]
+    kwargs = dict(feature="summary", chrom=TARGET, start=5900, end=6500)
+    result = projected_analysis(state, ds, **kwargs)
+    assert len(result["targets"]) == 1
+    assert result["targets"][0]["counts"] == [2, 0, 0]
+    assert result["targets"][0]["sequence_unresolved_count"] == 2
+    assert len(result["targets"][0]["target"]["geometry_members"]) == 2
+    strict = ProjectionPolicy(geometry_anchor_bp=0, geometry_anchor_fraction=0, geometry_span_bp=0, geometry_span_fraction=0)
+    assert len(projected_analysis(state, ds, policy=strict, **kwargs)["targets"]) == 2
+
+
+def test_public_diagnostics_omit_full_read_walks_and_leave_cached_observations_intact(evidence, monkeypatch):
+    from services.differences.projected_service import _public_projection
+    from services.differences.projection import call_molecule
+    from test_differences_projection import alignment, path, target
+    a, p, t = alignment(100), path(0, 100), target(0, 100, True)
+    detail = call_molecule([a], [p], t)
+    public = _public_projection(detail)
+    projection = public["diagnostics"][0]["records"][0]["projection"]
+    assert not {"base_blocks", "components", "source_cigar"} & projection.keys()
+    assert detail["diagnostics"][0]["records"][0]["projection"]["edits"][0]["observed"] == "A"*100
+    assert projection["edits"][0]["read_bases"] == "A"*60
+
+
+@pytest.mark.parametrize("cohort,chrom,start,end,alt_bp", [
+    ("mhc", "chr6", 31243847, 31245347, 0),
+    ("mhc", "chr6", 31225506, 31226648, 0),
+    ("mhc", "chr6", 31324406, 31326139, 1),
+    ("mhc", "chr6", 31329621, 31329625, 792),
+    ("chr1_win", "chr1", 21388449, 21388673, 4),
+    ("alu_chr3", "chr3", 128657390, 128657390, 2353),
+])
+def test_optional_diploid_projection_budgets(cohort, chrom, start, end, alt_bp, monkeypatch):
+    """Local BAM pairs are supplied explicitly; CI uses synthetic controls above."""
+    import json
+    import os
+    from services.lift.dataset import LiveLiftConfig
+    manifest = os.environ.get("FIBERBROWSER_TEST_LIFT_MAP")
+    pairs = json.loads(os.environ.get("FIBERBROWSER_TEST_PROJECTED_BAMS", "{}"))
+    if not manifest or cohort not in pairs:
+        pytest.skip("Set map and paired projection BAM fixtures for diploid resource gates")
+    monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "1")
+    source, native = pairs[cohort]["source"], pairs[cohort]["native"]
+    config = LiveLiftConfig(manifest, [])
+    config.settings = replace(config.settings, molecule_groups=((source, "shared"),))
+    ds = SimpleNamespace(id="source", data_type="bam_livelift", paths=[source], live_lift=config)
+    native_ds = SimpleNamespace(id="native", data_type="bam", paths=[native], molecule_groups=[(native, "shared")])
+    state = SimpleNamespace(fasta=None, datasets={"source": ds, "native": native_ds})
+    state.get_dataset = state.datasets.get
+    t = dict(target_id="frozen-geometry", target_type="geometry", chrom=chrom, ref_start=start, ref_end=end, alt_bp=alt_bp)
+    kwargs = dict(chrom=chrom, start=start-100, end=end+100)
+    for scope in ("lifted_only", "combined"):
+        result = projected_analysis(state, ds, feature="split", target=t, analysis_scope=scope,
+            native_dataset_id="native" if scope == "combined" else None, **kwargs)
+        assert result.get("status") != "budget_exceeded"
+        assert result["scope"]["search_complete"], result["scope"]
+        assert sum(result["targets"][0]["counts"]) == result["scope"]["molecules"]
+    if cohort in {"alu_chr3", "chr1_win"}:
+        summary = projected_analysis(state, ds, feature="summary", **kwargs)
+        assert summary["targets"] and summary["scope"]["primary_calls_complete"]
+        assert not any("cap" in r for r in summary["scope"]["reasons"])
+        # Missing observed flanks stay explicitly incomplete after optimization.
+        if summary["unassessed_projections"]:
+            assert not summary["scope"]["search_complete"]

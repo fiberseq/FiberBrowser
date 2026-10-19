@@ -14,7 +14,7 @@ from .identity import content_id, digest_file
 from .likelihood import LikelihoodBudget, LikelihoodPolicy
 from .model import SCHEMA_VERSION, VERSIONS
 from .projection import (MapGap, MapPath, ProjectionBudget, ProjectionPolicy, SourceAlignment,
-                         call_molecule, compose_alignment, _walk, _boundary)
+                         call_molecule, cached_projection, geometry_matches, _walk, _boundary)
 from .alleles import DafContext
 
 
@@ -215,14 +215,27 @@ def _load_supplementaries(config):
 
 
 def _public_projection(detail):
-    """No full observations in ordinary responses, including nested diagnostics."""
+    """Compact copied diagnostics; request-local projection evidence stays intact."""
+    diagnostics = []
     for record in detail.get("diagnostics", []):
+        records = []
         for d in record["records"]:
+            projected = {k: v for k, v in d["projection"].items() if k not in {"base_blocks", "components", "source_cigar", "edits"}}
+            edits = []
             for edit in d["projection"]["edits"]:
-                sequence = edit.pop("observed", None)
-                edit["read_bases"] = sequence[:60] if sequence is not None else None
-                edit["read_bases_length"] = len(sequence) if sequence is not None else edit["alt_bp"]
-    return detail
+                # Subfloor sequencing noise belongs to the internal walk. The
+                # public call and diagnostic slice retain its aggregate effect.
+                if max(edit["ref_end"]-edit["ref_start"], edit["alt_bp"]) < 10:
+                    continue
+                sequence = edit.get("observed")
+                edits.append({**{k: v for k, v in edit.items() if k != "observed"},
+                    "read_bases": sequence[:60] if sequence is not None else None,
+                    "read_bases_length": len(sequence) if sequence is not None else edit["alt_bp"]})
+            projected.update(edits=edits, base_block_count=len(d["projection"]["base_blocks"]),
+                source_cigar_operations=len(d["projection"]["source_cigar"]))
+            records.append({**d, "projection": projected})
+        diagnostics.append({**record, "records": records})
+    return {**detail, "diagnostics": diagnostics}
 
 
 def projected_analysis(state, dataset, *, policy=None, **kwargs):
@@ -273,7 +286,8 @@ def _projected_analysis(state, dataset, *, chrom, start, end, feature, target=No
         native_labels = dict(getattr(native_dataset, "molecule_groups", ()) or ())
         source_groups = {source_labels.get(p) for p in dataset.paths}
         native_groups = {native_labels.get(p) for p in native_dataset.paths}
-        if not source_groups or None in source_groups or None in native_groups or source_groups != native_groups:
+        if (not source_groups or any(not label for label in source_groups | native_groups) or
+                source_groups != native_groups):
             raise ValueError("combined scope requires shared molecule_groups for every source and native BAM")
     if analysis_scope == "lifted_only" and native_dataset_id:
         raise ValueError("native_dataset_id requires combined scope")
@@ -334,7 +348,7 @@ def _projected_analysis(state, dataset, *, chrom, start, end, feature, target=No
                 for p in candidate_paths:
                     if p.source != a.contig:
                         continue
-                    projected = compose_alignment(a, p, budget=budget)
+                    projected = cached_projection(a, p, budget)
                     missing = _unassessed_discovery(a, p, projected, start, end, budget)
                     if missing:
                         unassessed.append(dict(record_id=a.record_id, molecule_id=a.molecule.key,
@@ -348,8 +362,21 @@ def _projected_analysis(state, dataset, *, chrom, start, end, feature, target=No
                         if not start <= e["ref_start"] < end and not (e["ref_start"] < end and e["ref_end"] > start):
                             continue
                         key = (e["ref_start"], e["ref_end"], e["alt_bp"])
-                        geometries[key] = dict(target_id=content_id("projected-geometry:v1", [namespace, chrom, *key]),
+                        candidate = dict(target_id=content_id("projected-geometry:v1", [namespace, chrom, *key]),
                             revision=1, target_type="geometry", chrom=chrom, ref_start=key[0], ref_end=key[1], alt_bp=key[2])
+                        # Geometry candidates share work, not exact allele IDs
+                        # or evidence across alternative paths. Every member
+                        # must match every other member: no tolerance chaining.
+                        cluster = next((g for g in geometries.values() if all(
+                            geometry_matches(candidate, member, policy) and geometry_matches(member, candidate, policy)
+                            for member in g.get("geometry_members", [g]))), None)
+                        if cluster is not None:
+                            member = {k: candidate[k] for k in ("ref_start", "ref_end", "alt_bp")}
+                            members = cluster.setdefault("geometry_members", [{k: cluster[k] for k in member}])
+                            if member not in members:
+                                members.append(member)
+                            continue
+                        geometries[key] = candidate
                         if len(geometries) > policy.max_targets:
                             del geometries[key]
                             raise ResourceResult("budget_exceeded", "projection_targets_cap")

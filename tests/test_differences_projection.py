@@ -320,7 +320,7 @@ def test_unmapped_source_tails_remain_query_witnesses_without_invented_conflicts
     assert [(w["source_start"], w["source_end"], w["original_query"]) for w in witnesses] == [(0, 100, [0, 100]), (200, 300, [200, 300])]
     detail = classify_projection(a, projected, target(20, 0))
     assert detail["call"]["assignment"] == "target" and detail["call"]["level"] == "confirmed"
-    assert "unresolved_source_witness" in detail["call"]["reasons"]
+    assert "unresolved_source_witness" not in detail["call"]["reasons"]
 
 
 def test_geometry_tolerance_is_saved_policy_and_cannot_promote_a_deletion_allele():
@@ -409,11 +409,23 @@ def test_native_adapter_labels_structural_and_geometry_calls_without_assembly(ex
     assert result["call"]["method"] == result["geometry_call"]["method"] == "native_cigar"
 
 
-def test_unmapped_query_witnesses_share_the_geometry_storage_budget():
+def test_unmapped_query_tails_are_aggregated_before_geometry_storage_accounting():
     a = replace(alignment(), ref_start=0, cigar=((0, 1),)*100, sequence="A"*100)
     p = MapPath("outside", "target", "source", (LiftPiece(0, 1000, 1100, 1000, 1100, "+", True, "H#1", "source"),))
-    with pytest.raises(ResourceResult, match="projection_runs_cap"):
-        compose_alignment(a, p, budget=ProjectionBudget(ProjectionPolicy(max_runs=10)))
+    budget = ProjectionBudget(ProjectionPolicy(max_runs=10))
+    projected = compose_alignment(a, p, budget=budget)
+    assert len(projected["unresolved_witnesses"]) == 1
+    assert projected["unresolved_witnesses"][0]["original_query"] == [0, 100]
+    assert budget.runs == 0
+
+
+def test_adjacent_match_and_mismatch_cigar_ops_share_one_affine_geometry_run():
+    a = replace(alignment(sequence=False), ref_start=0, cigar=((7, 1), (8, 1))*250)
+    budget = ProjectionBudget(ProjectionPolicy(max_runs=1))
+    projected = compose_alignment(a, affine_path(), budget=budget)
+    assert len(projected["base_blocks"]) == budget.runs == 1
+    assert projected["edits"] == []
+    assert (projected["base_blocks"][0]["ref_start"], projected["base_blocks"][0]["ref_end"]) == (1000, 1500)
 
 
 def test_hypotheses_share_immutable_source_cigar_instead_of_multiplying_storage(monkeypatch):

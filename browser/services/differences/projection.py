@@ -37,13 +37,13 @@ class ProjectionPolicy:
     version: str = PROJECTION_VERSION
     search: SearchPolicy = field(default_factory=SearchPolicy)
     max_records: int = 512
-    max_runs: int = 16_384
+    max_runs: int = 32_768
     max_input_bases: int = 2_000_000
     max_sequence_bp: int = 100_000
     max_response_bytes: int = 16 * 1024 * 1024
     max_targets: int = 128
     max_calls: int = 16_384
-    max_cigar_operations: int = 131_072
+    max_cigar_operations: int = 262_144
     max_spool_bytes: int = 64 * 1024 * 1024
     deadline_s: float = 30.
     min_mapq: int = 20
@@ -185,7 +185,15 @@ def _walk(alignment, check=checkpoint):
         if n <= 0 or op not in range(9):
             raise ValueError("invalid source CIGAR")
         if op in (0, 7, 8):
-            aligned.append((source, source + n, query, seq))
+            # =/X and M have identical coordinate walks. Preserve the bases
+            # in SEQ, while avoiding a geometry run for every substitution.
+            if aligned and aligned[-1][1] == source and (
+                aligned[-1][2]+aligned[-1][1]-aligned[-1][0] == query and
+                aligned[-1][3]+aligned[-1][1]-aligned[-1][0] == seq):
+                a, _, q0, sq0 = aligned[-1]
+                aligned[-1] = (a, source+n, q0, sq0)
+            else:
+                aligned.append((source, source + n, query, seq))
         if op == 3:
             skips.append((source, source + n))
         if op in (4, 5):
@@ -240,6 +248,19 @@ def _transition(path, left, right, skips):
     return True
 
 
+def cached_projection(alignment, path, budget, *, walk=None):
+    """Request-local immutable composition, shared by discovery and all targets."""
+    cache = getattr(budget, "projections", None)
+    if cache is None:
+        budget.projections = cache = {}
+    # Native identity paths can have the same ID but different coordinate spans.
+    key = (alignment.record_id, path.path_id, path.pieces, path.gaps)
+    if key not in cache:
+        cache[key] = compose_alignment(alignment, path, budget=budget, walk=walk)
+    budget.check()
+    return cache[key]
+
+
 def compose_alignment(alignment, path, *, budget=None, walk=None):
     """Return observed base blocks, edits and explicit endpoint/SEQ mappings.
 
@@ -275,9 +296,23 @@ def compose_alignment(alignment, path, *, budget=None, walk=None):
     if len(alignment.witnesses) > budget.policy.max_runs:
         raise ResourceResult("budget_exceeded", "projection_source_witnesses")
     cuts, components, unresolved = [], [], list(alignment.witnesses)
+    outside = {}
     def retain_unresolved(value):
-        budget.charge("runs", 1, budget.policy.max_runs)
-        unresolved.append(value)
+        if value["reason"] == "source_path_outside_selected_map":
+            # Aggregate each unmapped source interval once. Sequencing indels
+            # outside this map window must not multiply storage/work charges.
+            key = bisect.bisect_right(ends, value["source_start"])
+            if key in outside:
+                previous = outside[key]
+                previous["source_end"] = value["source_end"]
+                previous["original_query"] = [min(previous["original_query"][0], value["original_query"][0]),
+                                              max(previous["original_query"][1], value["original_query"][1])]
+            else:
+                outside[key] = value
+                unresolved.append(value)
+        else:
+            budget.charge("runs", 1, budget.policy.max_runs)
+            unresolved.append(value)
     # Aligned source/query tails outside the selected path stay witnesses.
     # They are not evidence of another target chromosome or a clip conflict.
     covered = []
@@ -395,24 +430,28 @@ def _slice_observed(alignment, projected, start, end):
     return None, (), None, False
 
 
+def geometry_matches(e, target, policy):
+    """Geometry eligibility only; never establishes exact sequence identity."""
+    start, end, alt_bp = target["ref_start"], target["ref_end"], target["alt_bp"]
+    r, a = e["ref_end"]-e["ref_start"], e["alt_bp"]
+    size = max(end-start, alt_bp, r, a)
+    anchor = max(policy.geometry_anchor_bp, policy.geometry_anchor_fraction*size)
+    delta, expected_delta = a-r, alt_bp-(end-start)
+    same_direction = not expected_delta or delta*expected_delta > 0
+    delta_matches = not expected_delta or (
+        abs(delta) >= max(10, .5*abs(expected_delta)) and
+        abs(delta-expected_delta) <= max(policy.geometry_span_bp, policy.geometry_span_fraction*abs(expected_delta)))
+    return (same_direction and delta_matches and abs(e["ref_start"]-start) <= anchor and abs(e["ref_end"]-end) <= anchor
+            and abs(r-(end-start)) <= max(policy.geometry_span_bp, policy.geometry_span_fraction*max(r, end-start))
+            and abs(a-alt_bp) <= max(policy.geometry_span_bp, policy.geometry_span_fraction*max(a, alt_bp)))
+
+
 def classify_projection(alignment, projected, target, *, context=None, likelihood_policy=None, likelihood_budget=None, min_mapq=20, diagnostic_halo_bp=10_000, geometry_policy=None):
     """One call inside one path. Geometry and sequence calls stay independent."""
     start, end, alt_bp = target["ref_start"], target["ref_end"], target["alt_bp"]
     target_id = target["target_id"]
     policy = geometry_policy or ProjectionPolicy()
-    def geometry_matches(e):
-        r, a = e["ref_end"]-e["ref_start"], e["alt_bp"]
-        size = max(end-start, alt_bp, r, a)
-        anchor = max(policy.geometry_anchor_bp, policy.geometry_anchor_fraction*size)
-        delta, expected_delta = a-r, alt_bp-(end-start)
-        same_direction = not expected_delta or delta*expected_delta > 0
-        delta_matches = not expected_delta or (
-            abs(delta) >= max(10, .5*abs(expected_delta)) and
-            abs(delta-expected_delta) <= max(policy.geometry_span_bp, policy.geometry_span_fraction*abs(expected_delta)))
-        return (same_direction and delta_matches and abs(e["ref_start"]-start) <= anchor and abs(e["ref_end"]-end) <= anchor
-                and abs(r-(end-start)) <= max(policy.geometry_span_bp, policy.geometry_span_fraction*max(r, end-start))
-                and abs(a-alt_bp) <= max(policy.geometry_span_bp, policy.geometry_span_fraction*max(a, alt_bp)))
-    matching = [e for e in projected["edits"] if geometry_matches(e)]
+    matching = [e for e in projected["edits"] if geometry_matches(e, target, policy)]
     def observed_flanks(a, b):
         return any(any(r["ref_start"] <= a-1 < r["ref_end"] for r in c) and
                    any(r["ref_start"] <= b < r["ref_end"] for r in c) for c in projected["components"])
@@ -467,7 +506,7 @@ def classify_projection(alignment, projected, target, *, context=None, likelihoo
                 if outside and plausible(e):
                     call = Call("ambiguous", "ambiguous", reasons=("diagnostic_window_misses_geometry",))
                     break
-    if projected["unresolved_witnesses"]:
+    if any(w["reason"] != "source_path_outside_selected_map" for w in projected["unresolved_witnesses"]):
         # Missing target correspondence is not an elsewhere conflict. Keep an
         # explicit unresolved conflict assessment rather than fabricate one.
         call = replace(call, reasons=tuple(sorted(set(call.reasons) | {"unresolved_source_witness"})))
@@ -537,10 +576,13 @@ def call_molecule(alignments, paths, target, *, policy=ProjectionPolicy(), budge
             # Actual reciprocal/fetched records supersede their SA descriptions
             # only when this path can place them. Other witnesses stay unresolved.
             resolved = [a for a in records if any(max(a.ref_start, p.q_start) < min(walks[a.record_id][3], p.q_end) for p in path.pieces)]
-            alignment = replace(alignment, witnesses=tuple(w for w in alignment.witnesses if not any(
+            witnesses = tuple(w for w in alignment.witnesses if not any(
                 (w.get("chrom"), w.get("pos"), w.get("strand"), w.get("cigar_ref_len")) ==
-                (a.contig, a.ref_start, "-" if a.reverse else "+", walks[a.record_id][3]-a.ref_start) for a in resolved)))
-            projected = compose_alignment(alignment, path, budget=budget, walk=walks[alignment.record_id])
+                (a.contig, a.ref_start, "-" if a.reverse else "+", walks[a.record_id][3]-a.ref_start) for a in resolved))
+            projected = cached_projection(alignment, path, budget, walk=walks[alignment.record_id])
+            if witnesses != alignment.witnesses:
+                projected = {**projected, "unresolved_witnesses": [w for w in projected["unresolved_witnesses"]
+                    if w not in alignment.witnesses or w in witnesses]}
             for _ in projected["base_blocks"]:
                 if not search.admit("transitions", ownership=path.ownership):
                     complete = False
