@@ -11,6 +11,7 @@ from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from dataclasses import replace
 from functools import wraps
+import atexit
 import importlib
 import multiprocessing
 import pickle
@@ -201,10 +202,10 @@ class Reservations:
 RESERVATIONS = Reservations()
 
 
-def _worker(connection, module, name, args, kwargs, limits, algorithm):
+def _worker(connection, module, name, args, kwargs, limits, algorithm, *, close=True):
     budget = WorkBudget(limits)
     budget.algorithm = algorithm
-    _current.set(budget)
+    token = _current.set(budget)
     try:
         result = getattr(importlib.import_module(module), name)(*args, **kwargs)
         encoded = pickle.dumps(("ok", result, budget.cells, budget.algorithm), protocol=5)
@@ -216,10 +217,79 @@ def _worker(connection, module, name, args, kwargs, limits, algorithm):
     except BaseException as exc:
         connection.send(("error", type(exc).__name__ + ": " + str(exc)))
     finally:
+        _current.reset(token)
+        if close:
+            connection.close()
+
+
+def _warm_worker(connection):
+    """One numerical worker, no listener; discard job values between requests."""
+    import gc
+    try:
+        while connection.poll(60):
+            job = connection.recv()
+            _worker(connection, *job, close=False)
+            del job
+            gc.collect()
+    except (EOFError, OSError):
+        pass
+    finally:
         connection.close()
 
 
-def isolated(module, name, args, kwargs, *, lengths, pairs=(), limits=DEFAULT_LIMITS, large=False, allow_wavefront=False, input_count=None):
+_warm_lock = threading.Lock()
+_warm_idle = None
+
+
+def _reap(process, connection):
+    if process is not None and process.pid is not None:
+        if process.is_alive():
+            process.kill()
+        process.join()
+        process.close()
+    if connection is not None:
+        connection.close()
+
+
+def close_warm_worker():
+    """Reclaim the idle worker and its retained memory reservation."""
+    global _warm_idle
+    with _warm_lock:
+        idle, _warm_idle = _warm_idle, None
+    if idle is not None:
+        process, connection, size = idle
+        _reap(process, connection)
+        RESERVATIONS.release(size, False)
+
+
+def _take_warm(size):
+    global _warm_idle
+    with _warm_lock:
+        idle, _warm_idle = _warm_idle, None
+    if idle is not None:
+        process, connection, reserved = idle
+        if reserved == size and process.is_alive():
+            return process, connection
+        _reap(process, connection)
+        RESERVATIONS.release(reserved, False)
+    return None
+
+
+def _keep_warm(process, connection, size):
+    global _warm_idle
+    with _warm_lock:
+        old = _warm_idle
+        _warm_idle = process, connection, size
+    if old is not None:
+        old_process, old_connection, reserved = old
+        _reap(old_process, old_connection)
+        RESERVATIONS.release(reserved, False)
+
+
+atexit.register(close_warm_worker)
+
+
+def isolated(module, name, args, kwargs, *, lengths, pairs=(), limits=DEFAULT_LIMITS, large=False, allow_wavefront=False, input_count=None, reuse_worker=False):
     """Call an internal, importable function with a shared request reservation.
 
     Inputs are trusted internal values, never executable client payloads.
@@ -262,15 +332,29 @@ def isolated(module, name, args, kwargs, *, lengths, pairs=(), limits=DEFAULT_LI
             checkpoint(allow_pause=False)
         except Cancelled:
             raise ResourceResult("cancelled", "server_cancelled") from None
-    RESERVATIONS.acquire(size, large, deadline, check)
     parent = child = process = None
+    acquired, retained, success = False, False, False
     try:
-        parent, child = multiprocessing.get_context("spawn").Pipe(duplex=False)
-        process = multiprocessing.get_context("spawn").Process(
-            target=_worker, args=(child, module, name, args, kwargs, limits, algorithm), daemon=True)
-        check()
-        process.start()
-        child.close()
+        warm = _take_warm(size) if reuse_worker else None
+        if not reuse_worker:
+            close_warm_worker()
+        if warm is not None:
+            process, parent = warm
+            retained = True
+        # An idle worker keeps its entire byte reservation, but releases its
+        # active large-job slot. Reuse transfers that reservation to this job.
+        RESERVATIONS.acquire(0 if retained else size, large, deadline, check)
+        acquired = True
+        if process is None:
+            context = multiprocessing.get_context('spawn')
+            parent, child = context.Pipe(duplex=reuse_worker)
+            process = context.Process(target=_warm_worker if reuse_worker else _worker,
+                args=(child,) if reuse_worker else (child, module, name, args, kwargs, limits, algorithm), daemon=True)
+            check()
+            process.start()
+            child.close()
+        if reuse_worker:
+            parent.send((module, name, args, kwargs, limits, algorithm))
         while True:
             check()
             if time.monotonic() >= deadline:
@@ -292,22 +376,24 @@ def isolated(module, name, args, kwargs, *, lengths, pairs=(), limits=DEFAULT_LI
                 if request is not None:
                     request['cells'] += message[2]
                     request.setdefault('algorithms', set()).add(message[3])
+                success = True
                 return result
             if not process.is_alive():
                 raise ResourceResult("unavailable", "worker_exited", exitcode=process.exitcode)
     except (OSError, RuntimeError) as exc:
         raise ResourceResult('unavailable', 'worker_setup_failed', detail=str(exc)) from None
     finally:
-        if process is not None and process.pid is not None:
-            if process.is_alive():
-                process.kill()
-            process.join()
-            process.close()
-        if parent is not None:
-            parent.close()
+        if success and reuse_worker:
+            _keep_warm(process, parent, size)
+            RESERVATIONS.release(0, large)
+        else:
+            _reap(process, parent)
+            if acquired:
+                RESERVATIONS.release(size, large)
+            elif retained:
+                RESERVATIONS.release(size, False)
         if child is not None:
             child.close()
-        RESERVATIONS.release(size, large)
 
 
 def current_budget():

@@ -5,7 +5,14 @@ import pytest
 
 from services import insertion_consensus as consensus
 from services.alt_allele_align import AltLayout, KIND_CIGAR, KIND_REFERENCE, realign_batch
-from services.reconstruction_budget import DEFAULT_LIMITS, ResourceResult, WorkBudget, _current
+from services.reconstruction_budget import DEFAULT_LIMITS, ResourceResult, WorkBudget, _current, close_warm_worker
+
+
+@pytest.fixture(autouse=True)
+def reclaim_idle_worker():
+    close_warm_worker()
+    yield
+    close_warm_worker()
 
 
 @pytest.mark.parametrize('replacement', [False, True])

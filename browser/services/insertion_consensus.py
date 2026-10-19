@@ -518,4 +518,4 @@ def reconstruct_lens(full, canonical, partials, *, records=(), daf=False, daf_co
     lengths = [len(s) for s in full + canonical] + [len(s) for s, _ in partials]
     return isolated(__name__, '_lens_reconstruction', (full, canonical, partials, values, why), {},
                     lengths=lengths, input_count=max(len(full), len(canonical)) + len(partials),
-                    pairs=pairs, large=True, allow_wavefront=not bool(values))
+                    pairs=pairs, large=True, allow_wavefront=not bool(values), reuse_worker=True)

@@ -147,6 +147,16 @@ supported banded allocation contract before entering its compiled kernel.
 Spawn/compilation overhead is included in the deadline. A worker cannot be
 reused after abort and retain an allocation.
 
+Uncached lens requests may reuse one idle numerical worker through its pipe.
+Each job gets fresh work counters, limits and algorithm state; input/result
+values are discarded between jobs. The idle worker retains its full request
+byte reservation and releases the active large-job slot. It exits after
+60 seconds without work; the parent reclaims that reservation on the next
+access, explicit cleanup or shutdown. One-shot jobs evict the idle worker.
+Aborts, deadlines and failures always kill/reap it and release the reservation.
+This avoids repeated interpreter/JIT initialization without an unaccounted
+worker pool or a listening service.
+
 Refusal returns `budget_exceeded`, `cancelled` or `unavailable`, with reason,
 parameters, resource version and `complete: false`. Lens geometry, previews
 and chromatin remain inspectable via `consensus_resource`; Identify and

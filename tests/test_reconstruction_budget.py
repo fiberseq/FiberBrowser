@@ -8,7 +8,14 @@ import pytest
 from services.background_work import cancel_scope
 from services.insertion_consensus import align, band_width, build_consensus, consensus_with_knots, partials_to_consensus
 from services.reconstruction_budget import (DEFAULT_LIMITS, RESERVATIONS, Limits, Reservations,
-    ResourceResult, WorkBudget, estimate_alignment, isolated)
+    ResourceResult, WorkBudget, close_warm_worker, estimate_alignment, isolated)
+
+
+@pytest.fixture(autouse=True)
+def reclaim_idle_reconstruction_worker():
+    close_warm_worker()
+    yield
+    close_warm_worker()
 
 
 def test_actual_estimator_and_fail_before_allocation(monkeypatch):
@@ -84,14 +91,46 @@ def test_process_bytes_are_reserved_and_released_after_success_and_deadline():
     assert not multiprocessing.active_children()
 
 
-def test_server_abort_kills_running_compiled_kernel_and_reclaims_reservation(tmp_path, request):
+def test_warm_worker_reuses_only_the_process_and_keeps_memory_reserved():
+    first = isolated('os', 'getpid', (), {}, lengths=[], reuse_worker=True)
+    assert RESERVATIONS.bytes == DEFAULT_LIMITS.request_bytes and RESERVATIONS.large == 0
+    second = isolated('os', 'getpid', (), {}, lengths=[], reuse_worker=True)
+    assert first == second
+    with pytest.raises(ResourceResult, match='deadline'):
+        isolated('time', 'sleep', (5,), {}, lengths=[], reuse_worker=True,
+                 limits=replace(DEFAULT_LIMITS, deadline_s=.1))
+    assert RESERVATIONS.bytes == RESERVATIONS.large == 0
+    assert not multiprocessing.active_children()
+
+
+def test_warm_worker_discards_results_and_resets_limits_and_work_between_jobs():
+    limits = replace(DEFAULT_LIMITS, request_cells=1000)
+    for _ in range(3):
+        result = isolated('reconstruction_workers', 'charge_budget', (), {}, lengths=[], reuse_worker=True, limits=limits)
+        assert result == (451, 'banded:v1')
+    with pytest.raises(ResourceResult, match='request_cells'):
+        isolated('reconstruction_workers', 'charge_budget', (), {}, lengths=[], reuse_worker=True,
+                 limits=replace(limits, request_cells=100))
+    assert RESERVATIONS.bytes == 0
+
+
+def test_one_shot_work_reclaims_the_idle_worker_reservation():
+    isolated('os', 'getpid', (), {}, lengths=[], reuse_worker=True)
+    assert isolated('builtins', 'sum', ([1, 2],), {}, lengths=[]) == 3
+    assert RESERVATIONS.bytes == 0 and not multiprocessing.active_children()
+
+
+@pytest.mark.parametrize('reuse_worker', [False, True])
+def test_server_abort_kills_running_compiled_kernel_and_reclaims_reservation(tmp_path, request, reuse_worker):
+    if reuse_worker:
+        isolated('os', 'getpid', (), {}, lengths=[], reuse_worker=True)
     marker = tmp_path / 'kernel-ready'
     event = threading.Event()
     outcome = []
     def work():
         with cancel_scope(event):
             try:
-                isolated('reconstruction_workers', 'compiled_work', (str(marker),), {}, lengths=[])
+                isolated('reconstruction_workers', 'compiled_work', (str(marker),), {}, lengths=[], reuse_worker=reuse_worker)
             except ResourceResult as e:
                 outcome.append(e.status)
     thread = threading.Thread(target=work)

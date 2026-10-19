@@ -15,3 +15,10 @@ def compiled_work(marker):
     spin(1)  # compilation completes before reporting that the kernel is ready
     Path(marker).write_text('ready')
     return spin(100_000_000_000)
+
+
+def charge_budget():
+    from services.reconstruction_budget import current_budget
+    budget = current_budget()
+    budget.pair(10, 10, 20)
+    return budget.cells, budget.algorithm
