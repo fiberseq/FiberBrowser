@@ -130,9 +130,11 @@ def test_connector_only_crop_is_not_spanning():
            'live_lift': {'segments': [[0, 20, 0, '+', True]], 'connectors': [[5, 15]], 'badges': []}}
     cropped, spanning = project_broad_read_to_viewport(row, viewport_offset=7, region_width=5,
                                                        include_methylation=False, layer_key=())
-    assert cropped is None and not spanning
+    assert cropped is not None and not spanning
+    assert not cropped['intervals'] and not is_read_spanning(cropped, 5)
+    assert cropped['live_lift']['connectors'] == [[0, 5]]
     from services.packed_reads import ReadDisplayIndex
-    assert list(ReadDisplayIndex([row]).overlapping(7, 12)) == []
+    assert list(ReadDisplayIndex([row]).overlapping(7, 12)) == [0]
     row['live_lift']['connectors'] = []
     row['live_lift']['badges'] = [[10, 'source_insertion', 100, 100, 'I']]
     assert is_read_spanning(row, 20)  # a badge's point cut rejoins

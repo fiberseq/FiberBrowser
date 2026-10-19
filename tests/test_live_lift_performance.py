@@ -10,6 +10,10 @@ from services.lift.reads import lifted_reads_for_region
 def test_gap_lookup_uses_index(evidence, monkeypatch):
     _, ds, _ = evidence
     handle = ds.live_lift.handle
+    # Ownership is built once per immutable map handle; badge lookups after
+    # that build must use the source and owned-target indexes.
+    with handle.lock:
+        diff.primary_gap_records(handle, TARGET, "H#1")
     original = handle.map.chain_data
 
     class IndexedOnly(list):
