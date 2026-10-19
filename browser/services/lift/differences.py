@@ -448,7 +448,7 @@ def annotate_read_evidence(items, sv_clusters, *, matching_policy=None):
     Full normalization/compound comparison uses the typed shared provider when
     complete sequence is requested. This light adapter stays sequence-free.
     """
-    from services.differences.matching import Edit, MatchingPolicy, candidate_relation
+    from services.differences.matching import Edit, MatchingPolicy, candidate_relation, candidate_radius
     from services.differences.model import EquivalenceLink
     from dataclasses import asdict
     policy = matching_policy or MatchingPolicy()
@@ -482,7 +482,7 @@ def annotate_read_evidence(items, sv_clusters, *, matching_policy=None):
         links = []
         p, r, a = shape(item, True)
         left = Edit('legacy-assembly', 'legacy-reference', 'region', p, p + r, a, 'assembly')
-        tolerance = max(policy.broad_anchor_bp, policy.broad_anchor_fraction * max(r, a, largest))
+        tolerance = candidate_radius(policy, max(r, a, largest))
         candidates = indexed[bisect.bisect_left(starts, p - tolerance):bisect.bisect_right(starts, p + tolerance)]
         for _cp, i, right in sorted(candidates, key=lambda entry: entry[1]):
             c = sv_clusters[i]

@@ -130,8 +130,8 @@ def test_caps_missing_sequence_and_unsupported_topology_are_explicit():
     assert not match_edits([a], [b], policy=MatchingPolicy(max_observations=1))["search_complete"]
     result = match_edits([replace(a, kind="breakend")], [b], window_provider=lambda *args: window)
     assert not result["search_complete"] and "unassessed_representation" in result["reasons"]
-    with pytest.raises(ResourceResult, match="compound_window"):
-        reconstruct([a], window, MatchingPolicy(max_window_bp=10))
+    with pytest.raises(ResourceResult, match="reference_bases"):
+        reconstruct([a], window, MatchingPolicy(max_sequence_bp=10))
 
 
 def test_explicit_raw_order_and_bounded_path_caps():
@@ -202,3 +202,104 @@ def test_held_out_candidate_controls_separate_geometry_yield_from_exact_precisio
         assert control["links"]  # same-size geometry is deliberately permissive
         distinct += sum(l["relation"] == "exact" for l in control["links"])
     assert (exact, distinct, nominated) == (30, 0, 30)
+
+
+@pytest.mark.parametrize("policy", [MatchingPolicy(anchor_bp=100), MatchingPolicy(anchor_fraction=1.2),
+                                    MatchingPolicy(broad_anchor_bp=150), MatchingPolicy(broad_anchor_fraction=1.5)])
+def test_indexes_cover_exhaustive_candidate_policy_oracle(policy):
+    from services.lift.differences import annotate_read_evidence
+    left = edit("left", 200, 200, length=100)
+    right = [edit(f"right-{i}", i, i, length=100, source="assembly") for i in range(0, 401, 25)]
+    expected = {r.observation_id for r in right if candidate_relation(left, r, policy)}
+    result = match_edits([left], right, policy=policy)
+    assert {link["endpoints"][1][0] for link in result["links"]} == expected
+    items = [dict(id="assembly", kind="insertion", t_start=200, t_end=200, ref_bp=0, alt_bp=100)]
+    clusters = [dict(t="I", ref=r.start, len=100) for r in right]
+    annotate_read_evidence(items, clusters, matching_policy=policy)
+    assert {right[link["cluster"]].observation_id for link in items[0]["read_candidates"]} == expected
+
+
+def test_singletons_from_both_sides_survive_compound_representation_cap():
+    left = [edit(f"left-{i}", i * 10 + 1, i * 10 + 1, length=100, path_id="path") for i in range(20)]
+    right = [edit("right", 1, 1, length=100, source="assembly")]
+    result = match_edits(left, right, policy=MatchingPolicy(max_representations=25))
+    assert any(link["endpoints"] == (("left-0",), ("right",)) for link in result["links"])
+    assert not result["search_complete"] and "representations_cap" in result["reasons"]
+
+
+def test_distant_variants_are_outside_compound_scope_not_a_truncated_search():
+    left = [edit("a", 1000, 1000, length=100, path_id="path"),
+            edit("b", 11001, 11001, length=100, path_id="path")]
+    result = match_edits(left, [])
+    assert result["search_complete"] and result["reasons"] == []
+    scope = ComparisonScope(("assembly",), ("1",), True, True, True, True, result["search_complete"], True)
+    assert novelty(result["links"], scope)["status"] == "novel_relative_to_assembly"
+
+
+def test_large_reference_halo_does_not_spend_compound_span_budget():
+    window = ReferenceWindow("reference-content", "chrT", 0, "G" + "A" * 14998 + "T", 15000)
+    a = edit("a", 100, 100, "C", path_id="path")
+    assert reconstruct([a], window)[0] == window.sequence[:100] + "C" + window.sequence[100:]
+    b = edit("b", 200, 200, "C", path_id="path")
+    assert reconstruct([a, b], window)[0].count("C") == 2
+    with pytest.raises(ResourceResult, match="compound_window"):
+        reconstruct([a, replace(b, start=14000, end=14000)], window)
+
+
+@pytest.mark.parametrize("with_reference", [False, True])
+def test_unordered_coincident_insertions_never_emit_compounds(with_reference):
+    members = [edit("a", 1, 1, "A" * 50, path_id="path"), edit("b", 1, 1, "C" * 50, path_id="path")]
+    whole = edit("whole", 1, 1, "A" * 50 + "C" * 50, source="assembly")
+    window = ReferenceWindow("reference-content", "chrT", 0, "GT", 2)
+    result = match_edits(members, [whole], window_provider=(lambda *args: window) if with_reference else None)
+    assert result["compounds"] == []
+    assert not result["links"]
+    assert not result["search_complete"]
+    ordered = [replace(e, operation_order=i) for i, e in enumerate(members)]
+    valid = match_edits(ordered, [whole], window_provider=(lambda *args: window) if with_reference else None)
+    assert valid["compounds"] and valid["links"]
+
+
+def test_retained_bridge_does_not_hide_compound_insertion_candidate():
+    reference = "G" + "A" * 399 + "T"
+    window = ReferenceWindow("reference-content", "chrT", 0, reference, len(reference))
+    members = [edit("a", 100, 100, "A" * 150, path_id="path"), edit("b", 200, 200, "A" * 150, path_id="path")]
+    whole = edit("whole", 100, 100, "A" * 300, source="assembly")
+    # Independently constructed haplotypes retain the 100-base reference bridge.
+    assert reference[:100] + "A" * 150 + reference[100:200] + "A" * 150 + reference[200:] == reference[:100] + "A" * 300 + reference[100:]
+    candidate = match_edits(members, [whole])
+    assert any(link["endpoints"][0] == ("a", "b") for link in candidate["links"])
+    exact = match_edits(members, [whole], window_provider=lambda *args: window)
+    assert any(link["relation"] == "exact" and link["endpoints"][0] == ("a", "b") for link in exact["links"])
+
+
+def test_normalization_obeys_deadline_before_pair_enumeration(monkeypatch):
+    import services.differences.matching as matching
+    ticks = [0.]
+    monkeypatch.setattr(matching.time, "monotonic", lambda: ticks[0])
+    reference = "G" + "A" * 9998 + "T"
+    window = ReferenceWindow("reference-content", "chrT", 0, reference, len(reference))
+    calls = []
+    def provider(*args):
+        calls.append(args)
+        ticks[0] += .02
+        return window
+    result = match_edits([edit("left", 100, 100, "A")],
+                         [edit(f"right-{i}", 100 + i, 100 + i, "A") for i in range(80)],
+                         window_provider=provider, policy=MatchingPolicy(deadline_s=.01))
+    assert not result["search_complete"] and "deadline" in result["reasons"]
+    assert len(calls) == 1
+
+
+def test_normalization_checks_deadline_inside_repeat_walk(monkeypatch):
+    import services.differences.matching as matching
+    ticks = [0.]
+    monkeypatch.setattr(matching.time, "monotonic", lambda: ticks[0])
+    def checkpoint():
+        ticks[0] += .001
+    monkeypatch.setattr(matching, "checkpoint", checkpoint)
+    window = ReferenceWindow("reference-content", "chrT", 0, "G" + "A" * 9998 + "T", 10000)
+    result = match_edits([edit("left", 100, 100, "A")], [edit("right", 200, 200, "A")],
+                         window_provider=lambda *args: window, policy=MatchingPolicy(deadline_s=.01))
+    assert not result["search_complete"] and "deadline" in result["reasons"]
+    assert result["explored"]["pairs"] == 0

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
 from dataclasses import asdict, dataclass, field
+from itertools import zip_longest
 import json
 import time
 
@@ -68,6 +69,7 @@ class Edit:
     sequence_complete: bool = False
     operation_order: int | None = None
     inversion_exact: bool = False
+    retained_bridge_bp: int = 0
 
     def __post_init__(self):
         if (not all((self.observation_id, self.reference_id, self.contig))
@@ -136,24 +138,32 @@ def compound_allele(members):
         tuple('-' if e.kind == 'inversion' else '+' for e in members))
 
 
-def canonicalize(window, changed):
+def canonicalize(window, changed, *, checkpoint_fn=checkpoint):
     """Trim common flanks, then prove/rotate all pure-indel placements.
 
     General replacements are compared as full changed haplotypes. Two encodings
     of the same changed string consequently have the same minimized allele.
     A repeat running out of the supplied halo cannot acquire a global hash.
     """
+    checkpoint_fn()
     reference, alternate = window.sequence.upper(), changed.upper()
-    if any(b not in "ACGT" for b in reference + alternate):
-        raise ValueError("unambiguous full haplotypes required")
+    for sequence in (reference, alternate):
+        for offset in range(0, len(sequence), 256):
+            checkpoint_fn()
+            if any(b not in "ACGT" for b in sequence[offset:offset + 256]):
+                raise ValueError("unambiguous full haplotypes required")
     pos = window.start
     suffix = 0
     while suffix < min(len(reference), len(alternate)) and reference[-suffix - 1] == alternate[-suffix - 1]:
+        if not suffix & 255:
+            checkpoint_fn()
         suffix += 1
     if suffix:
         reference, alternate = reference[:-suffix], alternate[:-suffix]
     prefix = 0
     while prefix < min(len(reference), len(alternate)) and reference[prefix] == alternate[prefix]:
+        if not prefix & 255:
+            checkpoint_fn()
         prefix += 1
     reference, alternate, pos = reference[prefix:], alternate[prefix:], pos + prefix
     lo = hi = pos
@@ -161,11 +171,15 @@ def canonicalize(window, changed):
     if bool(reference) != bool(alternate):
         allele = alternate or reference
         while pos > window.start and window.sequence[pos - window.start - 1].upper() == allele[-1]:
+            if not pos & 255:
+                checkpoint_fn()
             allele = allele[-1] + allele[:-1]
             pos -= 1
         lo = hi = pos
         rotated = allele
         while hi + len(reference) < window.end and window.sequence[hi + len(reference) - window.start].upper() == rotated[0]:
+            if not hi & 255:
+                checkpoint_fn()
             rotated = rotated[1:] + rotated[0]
             hi += 1
         complete = ((lo > window.start or window.start == 0)
@@ -174,6 +188,7 @@ def canonicalize(window, changed):
             alternate = allele
         else:
             reference = allele
+    checkpoint_fn()
     exact = (exact_local_allele_id(window.reference_id, window.contig, pos, reference, alternate,
                                   normalization=NORMALIZATION_VERSION) if complete and (reference or alternate) else None)
     return CanonicalAllele(pos, reference, alternate, (lo, hi), complete, exact)
@@ -196,7 +211,10 @@ def candidate_relation(left, right, policy=MatchingPolicy()):
         return None
     if phase_relation(left.phase, right.phase) == "incompatible":
         return None
-    r, a, s, b = left.ref_bp, left.alt_bp, right.ref_bp, right.alt_bp
+    # Retained bridges are unchanged sequence, not inserted/deleted material.
+    # This only nominates a pair; full reconstruction still includes bridges.
+    r, a = left.ref_bp - left.retained_bridge_bp, left.alt_bp - left.retained_bridge_bp
+    s, b = right.ref_bp - right.retained_bridge_bp, right.alt_bp - right.retained_bridge_bp
     maximum = max(r, a, s, b)
     if not maximum or not max(r, a) or not max(s, b):
         return None  # reference reconstruction is not a difference allele
@@ -217,27 +235,29 @@ def candidate_relation(left, right, policy=MatchingPolicy()):
     return None
 
 
-def reconstruct(edits, window, policy=MatchingPolicy()):
+def reconstruct(edits, window, policy=MatchingPolicy(), *, checkpoint_fn=checkpoint):
     """Compose a single compatible ordered path, retaining reference bridges."""
     edits = tuple(sorted(edits, key=lambda e: (e.start, e.end, e.operation_order if e.operation_order is not None else -1, e.observation_id)))
     if not edits or len(edits) > policy.max_members:
         raise ResourceResult("budget_exceeded", "compound_members")
-    if (window.end - window.start > policy.max_window_bp
-            or len(window.sequence) > policy.max_sequence_bp):
+    checkpoint_fn()
+    if len(edits) > 1 and edits[-1].end - edits[0].start > policy.max_window_bp:
         raise ResourceResult("budget_exceeded", "compound_window")
+    if len(window.sequence) > policy.max_sequence_bp:
+        raise ResourceResult("budget_exceeded", "reference_bases")
     if len(edits) > 1:
         if not edits[0].path_id or any((e.path_id, e.hypothesis_id, e.phase) !=
                                      (edits[0].path_id, edits[0].hypothesis_id, edits[0].phase) for e in edits):
             raise ValueError("unassessed_representation: incompatible paths or phase")
         for a, b in zip(edits, edits[1:]):
-            if a.start == a.end == b.start == b.end and (a.operation_order is None or b.operation_order is None or a.operation_order == b.operation_order):
+            if _ambiguous_order(a, b):
                 raise ValueError("unassessed_representation: ambiguous edit order")
     size = len(window.sequence) + sum(e.alt_bp - e.ref_bp for e in edits)
     if size > policy.max_sequence_bp:
         raise ResourceResult("budget_exceeded", "reconstructed_bases")
     cursor, parts = window.start, []
     for e in edits:
-        checkpoint()
+        checkpoint_fn()
         if (e.reference_id, e.contig) != (window.reference_id, window.contig) or not cursor <= e.start <= e.end <= window.end:
             raise ValueError("unassessed_representation: overlap or missing reference halo")
         if e.kind not in _LOCAL:
@@ -253,7 +273,7 @@ def reconstruct(edits, window, policy=MatchingPolicy()):
         cursor = e.end
     parts.append(window.sequence[cursor - window.start:])
     changed = "".join(parts).upper()
-    return changed, canonicalize(window, changed)
+    return changed, canonicalize(window, changed, checkpoint_fn=checkpoint_fn)
 
 
 class _Search:
@@ -261,12 +281,15 @@ class _Search:
         self.policy, self.deadline = policy, time.monotonic() + policy.deadline_s
         self.counts = dict(representations=0, pairs=0, links=0)
         self.reasons = set()
+        self.links, self.compounds, self.compared = [], {}, set()
 
-    def admit(self, kind):
+    def check(self):
         checkpoint()
         if time.monotonic() >= self.deadline:
-            self.reasons.add("deadline")
-            return False
+            raise ResourceResult("budget_exceeded", "deadline")
+
+    def admit(self, kind):
+        self.check()
         if self.counts[kind] >= getattr(self.policy, "max_" + kind):
             self.reasons.add(kind + "_cap")
             return False
@@ -274,31 +297,56 @@ class _Search:
         return True
 
 
-def _representations(edits, search):
-    out, groups = [], {}
-    for e in sorted(edits, key=lambda e: (e.start, e.end, e.operation_order if e.operation_order is not None else -1, e.observation_id)):
-        if not search.admit("representations"):
-            break
-        out.append((e,))
+def _edit_order(e):
+    return e.start, e.end, e.operation_order if e.operation_order is not None else -1, e.observation_id
+
+
+def _ambiguous_order(a, b):
+    return (a.start == a.end == b.start == b.end and
+            (a.operation_order is None or b.operation_order is None or a.operation_order == b.operation_order))
+
+
+def _compounds(edits, search):
+    groups = {}
+    for e in edits:
         if e.path_id:
             key = (e.reference_id, e.contig, e.path_id, e.hypothesis_id, e.phase)
             groups.setdefault(key, []).append(e)
     for group in groups.values():
         for i in range(len(group)):
             for j in range(i + 1, min(len(group), i + search.policy.max_members)):
+                search.check()
                 if group[j].start < group[j - 1].end:
                     search.reasons.add("overlapping_path_edits")
                     break
                 if group[j].end - group[i].start > search.policy.max_window_bp:
-                    search.reasons.add('compound_window_cap')
                     break
-                if not search.admit("representations"):
-                    return out
-                out.append(tuple(group[i:j + 1]))
+                if _ambiguous_order(group[j - 1], group[j]):
+                    search.reasons.add("unassessed_representation: ambiguous edit order")
+                    break
+                yield tuple(group[i:j + 1])
             if (i + search.policy.max_members < len(group)
                     and group[i + search.policy.max_members].end - group[i].start <= search.policy.max_window_bp):
                 search.reasons.add("compound_members_cap")
-    return out
+
+
+def _representations(left, right, search):
+    """Reserve singletons on both sides before fairly admitting compounds."""
+    lhs, rhs = [], []
+    ordered = sorted(left, key=_edit_order), sorted(right, key=_edit_order)
+    for pair in zip_longest(*ordered):
+        for e, out in zip(pair, (lhs, rhs)):
+            if e is not None:
+                if not search.admit("representations"):
+                    return lhs, rhs
+                out.append((e,))
+    for pair in zip_longest(*(_compounds(es, search) for es in ordered)):
+        for members, out in zip(pair, (lhs, rhs)):
+            if members is not None:
+                if not search.admit("representations"):
+                    return lhs, rhs
+                out.append(members)
+    return lhs, rhs
 
 
 def _shape(edits):
@@ -307,6 +355,7 @@ def _shape(edits):
     return Edit(content_id("representation:v1", [e.observation_id for e in edits]), first.reference_id,
                 first.contig, first.start, last.end, alt_bp, first.source, phase=first.phase,
                 equivalent_anchors=first.equivalent_anchors if len(edits) == 1 else None,
+                retained_bridge_bp=sum(b.start - a.end for a, b in zip(edits, edits[1:])),
                 kind=first.kind if len(edits) == 1 else "replacement")
 
 
@@ -319,23 +368,33 @@ def match_edits(left, right, *, window_provider=None, policy=MatchingPolicy()):
     """
     left, right = list(left), list(right)
     search = _Search(policy)
+    try:
+        return _match_edits(left, right, window_provider, policy, search)
+    except ResourceResult as exc:
+        search.reasons.add(exc.reason)
+        return _matching_result(left, right, search)
+
+
+def _match_edits(left, right, window_provider, policy, search):
     if len(left) + len(right) > policy.max_observations:
         return {"links": [], "search_complete": False, "reasons": ["observations_cap"], "policy": asdict(policy)}
     if sum(len(e.alt or '') for e in left + right) > DEFAULT_LIMITS.max_input_bases:
         return {"links": [], "search_complete": False, "reasons": ["input_bases_cap"], "policy": asdict(policy)}
     if len({e.observation_id for e in left + right}) != len(left + right):
         raise ValueError("matching requires unique observation IDs")
-    lhs, rhs = _representations(left, search), _representations(right, search)
+    lhs, rhs = _representations(left, right, search)
     def normalized_shape(es):
+        search.check()
         shape = _shape(es)
         if shape.kind not in _LOCAL:
             search.reasons.add("unassessed_representation")
             return shape
         if window_provider:
             window = window_provider(shape.reference_id, shape.contig, shape.start, shape.end)
+            search.check()
             if window:
                 try:
-                    _, canonical = reconstruct(es, window, policy)
+                    _, canonical = reconstruct(es, window, policy, checkpoint_fn=search.check)
                     if not canonical.normalization_complete:
                         search.reasons.add("normalization_halo_incomplete")
                     return Edit(shape.observation_id, shape.reference_id, shape.contig, canonical.start,
@@ -343,16 +402,27 @@ def match_edits(left, right, *, window_provider=None, policy=MatchingPolicy()):
                                 kind="replacement", phase=shape.phase,
                                 equivalent_anchors=canonical.equivalent_anchors)
                 except (ValueError, ResourceResult) as exc:
+                    if isinstance(exc, ResourceResult) and exc.reason == "deadline":
+                        raise
                     search.reasons.add(exc.reason if isinstance(exc, ResourceResult) else str(exc))
+                    if isinstance(exc, ValueError) and str(exc).startswith("unassessed_representation:"):
+                        return None
         return shape
-    indexed = sorted([(normalized_shape(es), es) for es in rhs], key=lambda x: (x[0].start, x[0].observation_id))
+    indexed = []
+    for es in rhs:
+        shape = normalized_shape(es)
+        if shape is not None:
+            indexed.append((shape, es))
+    indexed.sort(key=lambda x: (x[0].start, x[0].observation_id))
     starts = [s.start for s, _ in indexed]
     max_span = max((max(s.ref_bp, s.alt_bp) for s, _ in indexed), default=0)
     max_anchor = max((max(abs(s.start - v) for v in s.equivalent_anchors) for s, _ in indexed if s.equivalent_anchors), default=0)
-    links, compared, response_bytes, compounds = [], set(), 4096, {}
+    links, compared, response_bytes, compounds = search.links, search.compared, 4096, search.compounds
     for members in lhs:
         shape = normalized_shape(members)
-        radius = max(policy.broad_anchor_bp, policy.broad_anchor_fraction * max(max_span, shape.ref_bp, shape.alt_bp))
+        if shape is None:
+            continue
+        radius = candidate_radius(policy, max(max_span, shape.ref_bp, shape.alt_bp))
         lo, hi = shape.equivalent_anchors or (shape.start, shape.start)
         for other, other_members in indexed[bisect_left(starts, lo - radius - max_anchor):bisect_right(starts, hi + radius + max_anchor)]:
             if not search.admit("pairs"):
@@ -368,10 +438,11 @@ def match_edits(left, right, *, window_provider=None, policy=MatchingPolicy()):
                 window = window_provider(shape.reference_id, shape.contig,
                                          min(members[0].start, other_members[0].start),
                                          max(members[-1].end, other_members[-1].end))
+                search.check()
                 if window is not None:
                     try:
-                        a, ca = reconstruct(members, window, policy)
-                        b, cb = reconstruct(other_members, window, policy)
+                        a, ca = reconstruct(members, window, policy, checkpoint_fn=search.check)
+                        b, cb = reconstruct(other_members, window, policy, checkpoint_fn=search.check)
                         relation = "exact" if a == b else "candidate"
                         reasons.append("full_haplotype_equality" if a == b else "distinct_haplotypes")
                         span = Span(window.contig, window.start, window.end)
@@ -383,8 +454,12 @@ def match_edits(left, right, *, window_provider=None, policy=MatchingPolicy()):
                                   "changed_digest": content_id("haplotype:v1", a) if a == b else None}
                         scores = {"full_sequence_equal": a == b, "compared_bp": max(len(a), len(b))}
                     except (ValueError, ResourceResult) as exc:
+                        if isinstance(exc, ResourceResult) and exc.reason == "deadline":
+                            raise
                         reasons.append(exc.reason if isinstance(exc, ResourceResult) else str(exc))
                         search.reasons.add(reasons[-1])
+                        if isinstance(exc, ValueError) and str(exc).startswith("unassessed_representation:"):
+                            continue
                 else:
                     reasons.append("sequence_unavailable")
             else:
@@ -408,8 +483,20 @@ def match_edits(left, right, *, window_provider=None, policy=MatchingPolicy()):
                     compounds[compound.representation_id] = asdict(compound)
         if search.reasons & {"pairs_cap", "links_cap", "deadline", "response_bytes_cap"}:
             break
-    result = {"links": links, "compounds": list(compounds.values()), "search_complete": not search.reasons, "reasons": sorted(search.reasons),
-            "unassessed_observations": sorted({e.observation_id for e in left + right} - compared),
+    return _matching_result(left, right, search)
+
+
+def candidate_radius(policy, maximum):
+    """Upper bound covering every enabled anchor nomination rule."""
+    return max(policy.anchor_bp, policy.anchor_fraction * maximum,
+               policy.broad_anchor_bp, policy.broad_anchor_fraction * maximum)
+
+
+def _matching_result(left, right, search):
+    policy = search.policy
+    result = {"links": search.links, "compounds": list(search.compounds.values()),
+            "search_complete": not search.reasons, "reasons": sorted(search.reasons),
+            "unassessed_observations": sorted({e.observation_id for e in left + right} - search.compared),
             "explored": search.counts, "policy": asdict(policy)}
     if len(json.dumps(result).encode()) > min(policy.max_response_bytes, DEFAULT_LIMITS.max_response_bytes):
         return {'links': [], 'compounds': [], 'search_complete': False, 'reasons': ['response_bytes_cap'],
