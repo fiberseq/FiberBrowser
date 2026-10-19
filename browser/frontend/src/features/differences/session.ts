@@ -19,6 +19,8 @@ export interface DifferencesSession {
   imports: Record<string, ImportMembership[]>;
   legacySnapshot: JsonRecord;
   options: { backgroundCatalogue: boolean; expansionAlignment: 'boundary' | 'homology'; unphasedLane: boolean; analysisScope: 'native_only' | 'lifted_only' | 'combined';
+    projectionPolicy: { version: string; cohort_alternatives: 'include' | 'exclude'; min_mapq: number;
+      search: { version: string; max_hypotheses: number; max_path_states: number; max_transitions: number } };
     matchingPolicy: { version: string; anchor_bp: number; anchor_fraction: number; span_bp: number; span_fraction: number;
       broad_anchor_bp: number; broad_anchor_fraction: number; max_members: number; max_window_bp: number; max_sequence_bp: number };
     likelihoodPolicy: { version: string; profile_id: string; substitution_rate: number; indel_rate: number;
@@ -30,10 +32,12 @@ const object = (value: unknown): JsonRecord => value && typeof value === 'object
 
 export function emptyDifferencesSession(): DifferencesSession {
   return { schema_version: DIFFERENCES_SCHEMA,
-    versions: { normalization: 'haplotype:v2', projection: 'guarded:v1', matching: 'local-match:v3', reconciliation: 'independent:v1', daf_likelihood: 'daf-indel:v3' },
+    versions: { normalization: 'haplotype:v2', projection: 'read-map:v1', matching: 'local-match:v3', reconciliation: 'independent:v1', daf_likelihood: 'daf-indel:v3' },
     ledger: { schema_version: DIFFERENCES_SCHEMA, records: {}, seeds: {}, lineage: {}, snapshots: {} },
     targets: {}, imports: {}, legacySnapshot: {},
     options: { backgroundCatalogue: false, expansionAlignment: 'boundary', unphasedLane: false, analysisScope: 'native_only',
+      projectionPolicy: { version: 'read-map:v1', cohort_alternatives: 'exclude', min_mapq: 20,
+        search: { version: 'hypothesis:v1', max_hypotheses: 64, max_path_states: 4096, max_transitions: 16384 } },
       matchingPolicy: { version: 'local-match:v3', anchor_bp: 20, anchor_fraction: .05, span_bp: 20, span_fraction: .20,
         broad_anchor_bp: 50, broad_anchor_fraction: .20, max_members: 32, max_window_bp: 10_000, max_sequence_bp: 100_000 },
       likelihoodPolicy: { version: 'daf-indel:v3', profile_id: 'engineering-synthetic:v1', substitution_rate: .01, indel_rate: .02,
@@ -95,6 +99,8 @@ export function restoreDifferencesSession(saved: JsonRecord | undefined): Differ
     const base = emptyDifferencesSession();
     const options = object(existing.options);
     return clone({ ...base, ...existing, options: { ...base.options, ...options,
+      projectionPolicy: { ...base.options.projectionPolicy, ...object(options.projectionPolicy),
+        search: { ...base.options.projectionPolicy.search, ...object(object(options.projectionPolicy).search) } },
       matchingPolicy: { ...base.options.matchingPolicy, ...object(options.matchingPolicy) },
       likelihoodPolicy: { ...base.options.likelihoodPolicy, ...object(options.likelihoodPolicy) } } }) as DifferencesSession;
   }

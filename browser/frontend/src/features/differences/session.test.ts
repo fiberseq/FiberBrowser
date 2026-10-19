@@ -22,6 +22,17 @@ beforeEach(() => {
     _historyStack: [], _historyPointer: -1, _lastRestoreTime: 0 });
 });
 
+it('round trips projection placement/cap choices independently of lift and preserves saved versions', () => {
+  const initial = restoreDifferencesSession(undefined);
+  initial.options.projectionPolicy.cohort_alternatives = 'include';
+  initial.options.projectionPolicy.search.max_hypotheses = 2;
+  initial.versions.projection = 'guarded:v1';
+  const restored = restoreDifferencesSession({ differencesSession: copy(initial), liveLiftEnabled: false });
+  expect(restored.options.projectionPolicy).toEqual(initial.options.projectionPolicy);
+  expect(restored.versions.projection).toBe('guarded:v1');
+  expect(restoreDifferencesSession({ differencesSession: { ...initial, options: {} } }).options.projectionPolicy.search.max_transitions).toBe(16384);
+});
+
 describe('conservative historical membership', () => {
   it.each([[false, false], [false, true], [true, false], [true, true]])('verifies authentic folded identities (molecule=%s, orientation=%s)', (molecule, orientation) => {
     const components = [`${record.provenanceGroup}|${record.rawName}`];

@@ -45,3 +45,24 @@ export function fanOutEnrichedCalls(envelope: MoleculeEnvelope, datasetId: strin
   }
   return fanOutMoleculeCalls({ ...envelope, calls_by_molecule: enrichment.calls_by_molecule }, datasetId);
 }
+
+export interface ProjectedEnvelope {
+  schema_version: typeof DIFFERENCES_SCHEMA;
+  analysis_scope: 'lifted_only' | 'combined';
+  membership: MoleculeEnvelope['membership'];
+  targets: { target: { target_id: string; revision: number; target_type: 'geometry' | 'exact' };
+    calls_by_molecule: Record<string, MoleculeCall>; counts: number[]; geometry_counts: number[] }[];
+  status?: string;
+}
+
+/** Explicit frozen target/revision/scope selection precedes split/highlight fan-out.
+ * Placement rows never add votes. Incomplete calls retain their own uncertainty;
+ * refused or stale envelopes cannot replace a saved cohort. */
+export function fanOutProjectedCalls(envelope: ProjectedEnvelope, datasetId: string,
+  selection: { targetId: string; revision: number; analysisScope: ProjectedEnvelope['analysis_scope'] }): Record<string, MoleculeCall> {
+  if (envelope.status || envelope.analysis_scope !== selection.analysisScope) throw new Error('Projected analysis is unavailable');
+  const target = envelope.targets.find(t => t.target.target_id === selection.targetId && t.target.revision === selection.revision);
+  if (!target) throw new Error('Requested frozen target is unavailable');
+  return fanOutMoleculeCalls({ schema_version: envelope.schema_version, membership: envelope.membership,
+    calls_by_molecule: target.calls_by_molecule }, datasetId);
+}
