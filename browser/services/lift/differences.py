@@ -791,7 +791,7 @@ def _chromatin(row, origin, pos, orientation):
                 orientation=orientation)
 
 
-def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=None, include_sequence=False):
+def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=None, include_sequence=False, observation_sink=None):
     """Bounded source-record inspection; see the module docstring for JSON.
     An in-memory BAM adapter lets the ordinary display composer decode the
     same <=500 fetched records when a broad cache is absent. Primary metadata
@@ -922,6 +922,9 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
             expected.setdefault(span["hap"], []).append(value)
         expected = {hap: values[0] if len(values) == 1 else None for hap, values in expected.items()}
         for path, record, record_id in fetched:
+            if len(rows) >= 500:
+                capped = True
+                break
             candidates = by_record.get((path, record_id), [])
             for span in spans:
                 src = span["src"]
@@ -972,7 +975,8 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
                                   "no_insertion" if not rb and not hg else "deleted" if not rb else
                                   "hg002" if carries and (hap == span["hap"] or rb == hg) and bool(hg) else "other")
                 st = meta.get("strand") if meta else (record.get_tag("st") if record.has_tag("st") else None)
-                item = dict(id=record.query_name, molecule=ll.get("molecule", f"{dataset.id}|{record.query_name}"),
+                from services.lift.cohort import analysis_id
+                item = dict(row_id=analysis_id(row,config.settings) if ll else None,id=record.query_name, molecule=ll.get("molecule", f"{dataset.id}|{record.query_name}"),
                             hap_label=config.handle.haplotype_labels.get(hap, hap), record=ll.get("record", record_id),
                             supplementary=bool(record.is_supplementary), strand=st, source_pos=dict(src),
                             read_bases=rb[:60], read_bases_length=len(rb), hg002=hg,
@@ -1006,6 +1010,15 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
                     block = (ll.get("insertions") or {}).get(span["id"])
                     if block and not block.get("too_large"):
                         item["chromatin"] = _chromatin(block, 0, block["covered"][0], span["strand"])
+                if observation_sink is not None and alternate and full and hap == span["hap"]:
+                    observation_sink(item, rb, record, adapters[path].bam, path, span)
+                for field in ("hg002", "alignment_hg002", "grch38"):
+                    if item.get(field) is not None:
+                        item[field+"_length"] = len(item[field])
+                        item[field] = item[field][:1000]
+                if len(rows) >= 500:
+                    capped = True
+                    break
                 rows.append(item)
     rows.sort(key=lambda r: r["hap_label"] != preferred_label)
     summary = {}

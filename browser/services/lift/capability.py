@@ -16,7 +16,7 @@ LIFTED_TYPE = "bam_livelift"
 SUPPORTED = frozenset({"compact_reads", "compact_all", "coverage", "lift_correspondence_only", "locate", "tooltip", "settings", "differences", "clustering"})
 # Independent v2 adapters; legacy summary/Variants/lens remain default-deny.
 # Enabling either does not authorize source BAM scans in target coordinates.
-SUPPORTED = SUPPORTED | {"difference_summary", "difference_split"}
+SUPPORTED = SUPPORTED | {"difference_summary", "difference_split", "difference_lens"}
 
 
 class LiveLiftUnsupported(Exception):

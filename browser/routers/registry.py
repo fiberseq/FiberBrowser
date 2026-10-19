@@ -46,6 +46,7 @@ from routers.utility import router as utility_router
 from routers.version import router as version_router
 from routers.workspaces import router as workspaces_router
 from routers.lift import router as lift_router
+from routers.differences import router as differences_router
 
 API_ROUTERS = (
     jupyter_router,
@@ -91,6 +92,7 @@ API_ROUTERS = (
     remote_router,
     session_links_router,
     lift_router,
+    differences_router,
 )
 
 
