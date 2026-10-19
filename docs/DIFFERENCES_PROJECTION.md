@@ -117,3 +117,6 @@ canvas, Variants and lens convergence require their separate consumer gates.
 Unsupported noncollinear multi-chain paths stay unresolved rather than being
 joined by a hull. No biological calibration or general release-performance
 certification follows from synthetic correctness gates.
+
+These live-lift routes also retain the existing public-server boundary: the
+public-mode guard refuses them, as it does the other host live-lift routes.

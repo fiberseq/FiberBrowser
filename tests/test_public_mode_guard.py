@@ -15,6 +15,7 @@ PUBLIC_DENIED = {
     ("POST", "/api/lift/datasets/{dataset_id}/settings"),
     ("GET", "/api/lift/differences"), ("GET", "/api/lift/difference_reads"),
     ("GET", "/api/lift/difference_sequence"), ("POST", "/api/lift/provenance/{dataset_id}"),
+    ("POST", "/api/lift/analysis/summary"), ("POST", "/api/lift/analysis/split"),
     # Cross-region correspondence analyses are local workspace operations.
     ("POST", "/api/cluster-regions"), ("POST", "/api/scan-correspondence"),
     ("GET", "/api/app/performance"), ("POST", "/api/app/performance"),
@@ -215,6 +216,7 @@ def test_allowlist_has_no_stale_entries(standalone_app):
     ("GET", "/api/no_such_route"),
     ("GET", "/api/lift/difference_sequence?dataset_id=missing&chrom=chrT&item_id=test&pos=0"),
     ("POST", "/api/lift/provenance/missing"),
+    ("POST", "/api/lift/analysis/summary"), ("POST", "/api/lift/analysis/split"),
     ("POST", "/api/plugins/anything/run"),
 ])
 def test_public_mode_denies(client, public, method, path):
