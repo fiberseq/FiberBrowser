@@ -658,7 +658,10 @@ export function remapDatasetIds<T>(value: T, idMap: Record<string, string>): T {
   if (!value || typeof value !== 'object') return value;
   const out: Record<string, unknown> = {};
   for (const [field, x] of Object.entries(value as Record<string, unknown>)) {
-    if (field === 'datasets') out[field] = mapDatasets(x);
+    // Saved content/provenance identities and reversible historical snapshots
+    // are not the reopened dataset's locator. Keep them for deliberate relink.
+    if (field === 'differencesSession') out[field] = x;
+    else if (field === 'datasets') out[field] = mapDatasets(x);
     else if (DATASET_KEYED_RECORDS.has(field)) out[field] = mapKeys(x);
     else if (field === 'clusterWindowPeaks' && x && typeof x === 'object' && !Array.isArray(x)) {
       out[field] = mapWindowPeaks(x);

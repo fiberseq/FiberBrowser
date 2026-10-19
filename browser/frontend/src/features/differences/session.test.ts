@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useBrowserStore } from '../../stores/browserStore';
-import { deserializeSavedState, serializeState } from '../../stores/historySlice';
+import { deserializeSavedState, remapDatasetIds, serializeState } from '../../stores/historySlice';
 import { applyImportedState, collectFrontendState } from '../../api/session';
 import { refreshSvSplit } from '../../utils/svAlleleSplit';
 import { importMembership, legacyDifferencesState, restoreDifferencesSession } from './session';
@@ -93,6 +93,16 @@ it('persists identity lineage through real serialize, hydration, undo/redo and s
   expect(deserializeSavedState(snapshot).differencesSession).toEqual(changed);
   const exported = collectFrontendState();
   expect(exported.differencesSession).toEqual(changed);
+});
+
+it('actual dataset relocation preserves frozen reference/provenance and historical IDs', () => {
+  const capsule = restoreDifferencesSession({ svSplits: { dataset: split },
+    selectedReadIds: { dataset: [oldId] }, differencesImportMetadata: { dataset: known } });
+  capsule.ledger.snapshots.parent = { datasetId: 'dataset', reference_id: 'reference-content', members: [oldId] };
+  const moved = remapDatasetIds({ differencesSession: capsule, panels: [{ datasetId: 'dataset' }] }, { dataset: 'reopened' });
+  expect(moved.panels[0].datasetId).toBe('reopened');
+  expect(moved.differencesSession).toEqual(capsule);
+  expect(moved.differencesSession.ledger.snapshots.parent.datasetId).toBe('dataset');
 });
 
 it('actual session import keeps an unresolved split frozen without an automatic network recompute', async () => {
