@@ -56,6 +56,8 @@ class ProjectionPolicy:
     geometry_anchor_fraction: float = .05
     geometry_span_bp: int = 20
     geometry_span_fraction: float = .20
+    map_margin_bp: int = 20_000
+    source_window_merge_bp: int = 50_000
 
     def __post_init__(self):
         if any(type(getattr(self, k)) is not int or getattr(self, k) < 1 for k in
@@ -70,6 +72,8 @@ class ProjectionPolicy:
         if any(type(v) is not int or v < 0 for v in (self.geometry_anchor_bp, self.geometry_span_bp)) or any(
                 not math.isfinite(v) or not 0 <= v <= 1 for v in (self.geometry_anchor_fraction, self.geometry_span_fraction)):
             raise ValueError("invalid geometry tolerances")
+        if type(self.map_margin_bp) is not int or not 1000 <= self.map_margin_bp <= 1_000_000 or type(self.source_window_merge_bp) is not int or not 0 <= self.source_window_merge_bp <= 1_000_000:
+            raise ValueError("invalid analysis map/fetch margins")
 
 
 class ProjectionBudget:

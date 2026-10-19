@@ -22,7 +22,8 @@ def map_paths(config, chrom, start, end, *, policy, use_cache=True):
     """Selection is analysis policy scoped, independent of display toggles."""
     from services.lift import live_lift as ll
     from services.lift.differences import primary_gaps_for_region, _source_span
-    settings = replace(config.settings,
+    settings = replace(config.settings, alternatives=False, g_split=policy.map_margin_bp,
+                       window_merge=policy.source_window_merge_bp,
                        cohort_alternatives=policy.cohort_alternatives)
     selection = ll.select_pieces(config.handle, chrom, start, end, haplotypes=config.haplotypes,
                                  settings=settings, key=config.key(), use_cache=use_cache)
@@ -105,7 +106,7 @@ def _source_records(dataset, plan, *, include_sequence, include_duplicates, budg
             budget.check()
             if read.is_unmapped or read.is_secondary or (hidden is not None and hidden(read)):
                 return None
-            if config.settings.cohort_supplementaries == "primary_only" and read.is_supplementary:
+            if not _load_supplementaries(config) and read.is_supplementary:
                 return None
             # A rejected primary is retained as a bundle tombstone so an
             # eligible supplementary cannot resurrect its excluded molecule.
@@ -153,7 +154,7 @@ def _hydrate_bundle(bam, bundle, config, budget):
     A tag without its actual record remains a source/query witness. Unmatched
     or unprojectable tags supply neither target chromosomes nor conflict votes.
     """
-    if not config.settings.primary_lookup or config.settings.cohort_supplementaries == "primary_only":
+    if not config.settings.primary_lookup or not _load_supplementaries(config):
         return bundle
     found = list(bundle)
     keys = {(r.reference_name, r.reference_start, r.cigarstring, r.is_reverse) for r in bundle}
@@ -190,6 +191,11 @@ def _hydrate_bundle(bam, bundle, config, budget):
                 found.append(candidate)
                 break
     return found
+
+
+def _load_supplementaries(config):
+    mode = config.settings.cohort_supplementaries
+    return mode == "all_records" or (mode == "follow_display" and config.settings.supplementary_display != "hide")
 
 
 def _public_projection(detail):
@@ -312,9 +318,21 @@ def _projected_analysis(state, dataset, *, chrom, start, end, feature, target=No
         targets = [target]
     output = []
     membership = MembershipIndex()
+    display_pieces = None
+    if records and dataset.live_lift.settings.alternatives:
+        # Presentation row identities may include additional map choices. This
+        # geometry-only lookup neither fetches reads nor changes analysis scope.
+        from services.lift.live_lift import select_pieces
+        config = dataset.live_lift
+        selection = select_pieces(config.handle, chrom, start, end, haplotypes=config.haplotypes,
+            settings=config.settings, key=config.key(), use_cache=use_cache)
+        display_pieces = {}
+        for p in selection.pieces:
+            display_pieces.setdefault(p.source, []).append(p)
+        display_pieces = {s: sorted(ps, key=lambda p: (p.q_start, p.q_end)) for s, ps in display_pieces.items()}
     for a in records:
         membership.add(dataset.id, a.record_id, a.molecule)
-        add_display_memberships(membership, dataset, a, plan)
+        add_display_memberships(membership, dataset, a, plan, display_pieces)
     for aa in native.values():
         for a in aa:
             membership.add(native_dataset_id, a.record_id, a.molecule)
@@ -482,11 +500,11 @@ def native_path(alignments, chrom):
         ownership="primary", ownership_validated=True)
 
 
-def add_display_memberships(index, dataset, alignment, plan):
+def add_display_memberships(index, dataset, alignment, plan, display_pieces=None):
     """Reuse row partition/identity recipes, without chromatin decode or calls."""
     from services.lift.compose import _read_rows, _placement
     from services.lift.cohort import analysis_id
-    pieces = plan.pieces_by_contig().get(alignment.contig, [])
+    pieces = (display_pieces if display_pieces is not None else plan.pieces_by_contig()).get(alignment.contig, [])
     numbered = {}
     for row in _read_rows(dict(reference_start=alignment.ref_start, reference_end=_walk(alignment)[3]),
                           (pieces, [p.q_start for p in pieces]), dataset.live_lift.settings):

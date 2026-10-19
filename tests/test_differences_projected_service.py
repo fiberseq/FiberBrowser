@@ -273,3 +273,31 @@ def test_raw_source_spool_cap_is_explicit_before_retaining_any_cohort(evidence, 
     assert result["scope"]["records"] == 0 and result["scope"]["search_complete"] is False
     assert "projection_spool_bytes_cap" in result["scope"]["reasons"]
     assert result["targets"][0]["counts"] == [0, 0, 0]
+
+
+def test_display_alternatives_and_run_splitting_do_not_change_analysis_cohort(evidence, monkeypatch):
+    monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "1")
+    state, ds, directory = evidence
+    import pysam
+    with pysam.AlignmentFile(ds.paths[0], "rb") as bam:
+        reads = list(bam.fetch())
+    ds.paths = [write_bam(directory / "alternatives.bam", lambda h: [*reads, make_record(h, "secondary-only", MAT, 9650, "100M")])]
+    kwargs = dict(feature="split", chrom=TARGET, start=1000, end=7000, target=insertion())
+    baseline = projected_analysis(state, ds, **kwargs)
+    ds.live_lift.settings = replace(ds.live_lift.settings, alternatives=True, g_split=1_000_000, window_merge=0)
+    changed = projected_analysis(state, ds, **kwargs)
+    assert baseline["targets"][0]["counts"] == changed["targets"][0]["counts"]
+    assert baseline["targets"][0]["calls_by_molecule"] == changed["targets"][0]["calls_by_molecule"]
+    assert baseline["scope"] == changed["scope"]
+
+
+def test_supplementary_follow_display_is_an_explicit_cohort_policy(evidence, monkeypatch):
+    monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "1")
+    state, ds, directory = evidence
+    ds.paths = [write_bam(directory / "supplementary.bam", lambda h: [
+        make_record(h, "supplementary", MAT, 4800, "600M", flag=2048)])]
+    ds.live_lift.settings = replace(ds.live_lift.settings, supplementary_display="hide", cohort_supplementaries="all_records")
+    kwargs = dict(feature="split", chrom=TARGET, start=5900, end=6500, target=insertion())
+    assert projected_analysis(state, ds, **kwargs)["targets"][0]["counts"] == [1, 0, 0]
+    ds.live_lift.settings = replace(ds.live_lift.settings, cohort_supplementaries="follow_display")
+    assert projected_analysis(state, ds, **kwargs)["targets"][0]["counts"] == [0, 0, 0]

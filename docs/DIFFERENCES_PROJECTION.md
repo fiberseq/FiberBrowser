@@ -63,6 +63,12 @@ cannot fabricate target-chromosome conflicts. Only an actual compatible,
 quality-qualified placement explaining enough supporting query elsewhere can
 give a conflicting tier. Secondary map diagnostics do not veto unique complete
 primary-net ownership; tied/incomplete ownership uses coequal reconciliation.
+Analysis selection ignores display alternative/run-splitting controls. Its saved
+`map_margin_bp` (default 20 kb, also subject to the view/minimum margin) and
+`source_window_merge_bp` (default 50 kb) control analysis fetching. Additional
+display row identities use a geometry-only lookup without fetching new cohort
+members. Supplementaries follow the saved cohort policy; `all_records` stays
+independent of display, while explicit `follow_display` retains that opt-in.
 
 Every capped hypothesis/path/transition search retains explicit unexplored
 outcomes. Agreement among retained primary/coequal outcomes cannot confirm a
