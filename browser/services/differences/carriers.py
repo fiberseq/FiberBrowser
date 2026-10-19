@@ -82,7 +82,8 @@ def whole_target_calls(evidence, *, target_id, scope="native_only", search_by_re
                     call = Call("target", "confirmed" if any(c.level == "confirmed" for c in complete) else "putative",
                                 target_id, "structural_path",
                                 witness_ids=tuple(sorted({w for c in complete for w in c.witness_ids})),
-                                alignment_ids=tuple(sorted({a for c in complete for a in c.alignment_ids})))
+                                alignment_ids=tuple(sorted({a for c in complete for a in c.alignment_ids})),
+                                coverage=tuple(v for c in complete for v in c.coverage))
                 conditional.append(Hypothesis(hid, call, ownership=paths[0][0].ownership))
             reduced = reconcile_hypotheses(conditional,
                 primary_complete=(primary_complete_by_representation or {}).get(identity, False),

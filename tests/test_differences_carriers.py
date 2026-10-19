@@ -70,3 +70,13 @@ def test_unphased_occurrence_union_keeps_one_vote_and_no_inferred_phase():
     assert set(result["m1"]["occurrences"]) == {"maternal", "paternal"}
     different = phase_union({'maternal': {'m1': call}, 'paternal': {'m1': replace(call, allele_id='different')}})
     assert different['m1']['carrier_vote'] == 0
+
+
+def test_whole_target_reduction_retains_component_bridge_and_flank_coverage():
+    entry = proof()
+    a = Call("target", "confirmed", "whole-target", "structural_path", coverage=({"ref_start": 1, "ref_end": 2},))
+    b = replace(a, coverage=({"ref_start": 3, "ref_end": 4},))
+    bridge = replace(a, coverage=({"ref_start": 2, "ref_end": 3},))
+    entry = replace(entry, component_calls=(("A", a), ("B", b)), bridge_and_flank_call=bridge)
+    result = whole_target_calls([entry], target_id="whole-target")
+    assert result["m1"]["call"]["coverage"] == a.coverage + b.coverage + bridge.coverage
