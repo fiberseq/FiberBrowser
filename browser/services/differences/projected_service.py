@@ -75,6 +75,8 @@ def _source_records(dataset, plan, *, include_sequence, include_duplicates, budg
     from services.sv_molecules import molecule_bundles, MoleculeBudgetError
     config = dataset.live_lift
     groups = config.settings.molecule_group_map(dataset.paths, dataset.id)
+    budget.source_complete_paths = set()
+    budget.source_complete_molecules = {p: set() for p in dataset.paths}
     seen = set()
     for path in dataset.paths:
         budget.check()
@@ -126,6 +128,7 @@ def _source_records(dataset, plan, *, include_sequence, include_duplicates, budg
                 occurrences = {}
                 hydrated = _hydrate_bundle(bam, bundle, config, budget)
                 if any(not r.is_supplementary and eligible(r) is False for r in hydrated):
+                    budget.source_complete_molecules[path].add(MoleculeId("declared_source_library", groups[path], bundle[0].query_name).key)
                     continue
                 for read in hydrated:
                     if not eligible(read):
@@ -155,6 +158,8 @@ def _source_records(dataset, plan, *, include_sequence, include_duplicates, budg
                         record = replace(record, sequence=read.query_sequence,
                                          qualities=tuple(read.query_qualities) if read.query_qualities is not None else ())
                     yield record
+                budget.source_complete_molecules[path].add(MoleculeId("declared_source_library", groups[path], bundle[0].query_name).key)
+            budget.source_complete_paths.add(path)
         except MoleculeBudgetError as exc:
             raise ResourceResult("budget_exceeded", "projection_molecule_spool") from exc
 
@@ -285,6 +290,14 @@ def _projected_analysis(state, dataset, *, chrom, start, end, feature, target=No
         reasons.append(exc.reason)
         if exc.parameters.get("interrupted_molecule"):
             interrupted.add(exc.parameters["interrupted_molecule"])
+        # A complete bundle in this file says nothing about its remaining
+        # copies in another file sharing the declared physical library.
+        groups = dataset.live_lift.settings.molecule_group_map(dataset.paths, dataset.id)
+        complete_paths = getattr(budget, "source_complete_paths", set())
+        complete_molecules = getattr(budget, "source_complete_molecules", {})
+        interrupted.update(a.molecule.key for a in records if any(
+            groups[p] == a.molecule.library_id and p not in complete_paths and
+            a.molecule.key not in complete_molecules.get(p, ()) for p in dataset.paths))
     grouped = {}
     for a in records:
         grouped.setdefault(a.molecule.key, []).append(a)
@@ -420,7 +433,14 @@ def _projected_analysis(state, dataset, *, chrom, start, end, feature, target=No
                         geometry_representations.append(representations[-1])
                 final = reconcile_representations(representations, scope=analysis_scope)
                 geometry_final = reconcile_representations(geometry_representations, scope=analysis_scope)
-                calls[key] = {**final, "geometry_evidence": geometry_final["call"], "lifted": _public_projection(detail)}
+                eligible = [r for r in representations if r.admissible and r.authoritative and r.call.assignment != "unavailable"]
+                sequence_resolved = (t["target_type"] == "exact" and bool(eligible) and
+                    final["call"]["assignment"] in {"target", "reference", "other_allele"} and all(
+                        r.complete and (r.call.method in {"exact_sequence", "sequence_likelihood"} or
+                            set(r.call.reasons) & {"validated_deletion_path", "validated_split_deletion_path"})
+                        for r in eligible))
+                calls[key] = {**final, "sequence_resolved": bool(sequence_resolved),
+                    "geometry_evidence": geometry_final["call"], "lifted": _public_projection(detail)}
                 if native_detail is not None:
                     calls[key]["native"] = _public_projection(native_detail)
             except ResourceResult as exc:
@@ -437,11 +457,13 @@ def _projected_analysis(state, dataset, *, chrom, start, end, feature, target=No
                 return dict(schema_version=SCHEMA_VERSION, status="budget_exceeded", reason="projection_response_bytes",
                             scope=dict(search_complete=False, reasons=["projection_response_bytes"]), targets=[])
         output.append(dict(target=t, calls_by_molecule=calls, counts=counts,
-            geometry_counts=geometry_counts, sequence_unresolved_count=sum(v["call"]["assignment"] in {"unknown", "ambiguous"} for v in calls.values()),
+            geometry_counts=geometry_counts, sequence_unresolved_count=sum(not v.get("sequence_resolved", False) for v in calls.values()),
             groups=["carriers", "reference", "not informative"],
             row_assignments={d: membership.fan_out(d, {k: v["call"] for k, v in calls.items()})
                              for d in [dataset.id, *([native_dataset_id] if native_dataset_id else [])]}))
         if calls_used >= policy.max_calls:
+            if calls_used < len(targets)*len(set(grouped) | set(native)):
+                reasons.append("projection_calls_cap")
             break
     payload = dict(schema_version=SCHEMA_VERSION, feature=feature, analysis_scope=analysis_scope,
         versions={**VERSIONS, "projection": policy.version}, policy=asdict(policy), targets=output,
@@ -449,7 +471,8 @@ def _projected_analysis(state, dataset, *, chrom, start, end, feature, target=No
         membership=membership.payload(), scope=dict(chrom=chrom, start=start, end=end, cohort="loaded",
             records=len(records)+sum(map(len, native.values())), molecules=len(set(grouped) | set(native)), source_bp=plan.source_bp,
             search_complete=not reasons and not alternatives_capped and all(v.get("lifted", {}).get("search", {}).get("search_complete", False) for o in output for v in o["calls_by_molecule"].values()),
-            primary_calls_complete=all(v["complete"] for o in output for v in o["calls_by_molecule"].values()),
+            primary_calls_complete=(calls_used == len(targets)*len(set(grouped) | set(native)) and
+                all(v["complete"] for o in output for v in o["calls_by_molecule"].values())),
             sequence_enrichment_complete=(bool(grouped or native) and not reasons and all(v["complete"] for o in output for v in o["calls_by_molecule"].values()) and all(d.get("sequence_assessment", {}).get("complete", False)
                 for o in output for v in o["calls_by_molecule"].values() for h in v.get("lifted", {}).get("diagnostics", []) for d in h["records"])
                 if target and target.get("target_type") == "exact" else None),
@@ -531,6 +554,9 @@ def native_bundles(state, dataset_id, chrom, start, end, *, include_sequence, in
         reasons.append(exc.reason)
         if current_molecule:
             interrupted.add(current_molecule)
+        # Coordinate iteration does not complete a molecule bundle. Later
+        # records in this or another file may still disagree with every vote.
+        interrupted.update(grouped)
     return {k: v for k, v in grouped.items() if k not in blocked}, reasons, interrupted
 
 

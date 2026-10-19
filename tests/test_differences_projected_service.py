@@ -387,3 +387,66 @@ def test_actual_bam_repeated_skips_do_not_become_exact_deletions(evidence, monke
         candidates={"skip": "", "reference": "A"*200}, competition_complete=True)
     result = projected_analysis(state, ds, feature="split", chrom=TARGET, start=1400, end=1900, target=t)
     assert result["targets"][0]["counts"] == [0, 0, 1]
+
+
+def test_shared_library_cap_cannot_hide_a_later_file_dissent(evidence, monkeypatch):
+    monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "1")
+    state, ds, directory = evidence
+    first = write_bam(directory / "first.bam", lambda h: [make_record(h, "m", MAT, 4800, "600M")])
+    second = write_bam(directory / "second.bam", lambda h: [
+        make_record(h, "x", MAT, 4800, "600M"), make_record(h, "m", MAT, 4801, "199M100D301M100S")])
+    ds.paths = [first, second]
+    ds.live_lift.settings = replace(ds.live_lift.settings, molecule_groups=((first, "shared"), (second, "shared")))
+    kwargs = dict(feature="split", chrom=TARGET, start=5900, end=6500, target=insertion())
+    full = projected_analysis(state, ds, **kwargs)
+    key = full["membership"]["legacy_aliases"][ds.id]["m"]
+    assert full["targets"][0]["calls_by_molecule"][key]["call"]["assignment"] == "ambiguous"
+    capped = projected_analysis(state, ds, policy=ProjectionPolicy(max_records=1), **kwargs)
+    call = capped["targets"][0]["calls_by_molecule"][key]
+    assert call["call"]["assignment"] == "ambiguous" and not call["complete"]
+    assert capped["scope"]["primary_calls_complete"] is False
+
+
+def test_exact_call_limit_boundary_reports_pending_targets(evidence, monkeypatch):
+    monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "1")
+    state, ds, directory = evidence
+    ds.paths = [write_bam(directory / "two-edits.bam", lambda h: [make_record(h, "m", MAT, 4800, "400M50I200M")])]
+    kwargs = dict(feature="summary", chrom=TARGET, start=5900, end=6500)
+    full = projected_analysis(state, ds, **kwargs)
+    assert len(full["targets"]) == 2 and full["scope"]["search_complete"]
+    capped = projected_analysis(state, ds, policy=ProjectionPolicy(max_calls=1), **kwargs)
+    assert len(capped["targets"]) == 1
+    assert not capped["scope"]["search_complete"] and not capped["scope"]["primary_calls_complete"]
+    assert "projection_calls_cap" in capped["scope"]["reasons"]
+    exact = projected_analysis(state, ds, policy=ProjectionPolicy(max_calls=2), **kwargs)
+    assert exact["scope"]["search_complete"] and exact["scope"]["primary_calls_complete"]
+
+
+def test_sequence_unresolved_counts_geometry_independently_of_enrichment(evidence, monkeypatch):
+    monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "1")
+    state, ds, _ = evidence
+    kwargs = dict(feature="split", chrom=TARGET, start=5900, end=6500)
+    geometry = projected_analysis(state, ds, target=insertion(), **kwargs)["targets"][0]
+    assert geometry["geometry_counts"] == [3, 0, 1]
+    assert geometry["sequence_unresolved_count"] == 4
+    t = {**insertion(), "target_type": "exact", "candidates": {"frozen-insertion": "A"*100, "reference": ""}, "competition_complete": True}
+    exact = projected_analysis(state, ds, target=t,
+        contexts={n: {"chemistry": "none", "provenance": "synthetic"} for n in ("hg", "ref", "private")}, **kwargs)["targets"][0]
+    assert exact["geometry_counts"] == geometry["geometry_counts"]
+    assert exact["sequence_unresolved_count"] == 1
+
+
+def test_native_record_cap_marks_loaded_molecules_with_unscanned_copies(evidence):
+    from services.differences.projected_service import native_bundles
+    from services.differences.projection import ProjectionBudget
+    state, _, directory = evidence
+    first = write_bam(directory / "native-first.bam", lambda h: [make_record(h, "m", TARGET, 5900, "110M100I390M")], contigs=((TARGET, 20_000),))
+    second = write_bam(directory / "native-second.bam", lambda h: [
+        make_record(h, "x", TARGET, 5900, "500M"), make_record(h, "m", TARGET, 5901, "500M100S")], contigs=((TARGET, 20_000),))
+    state.datasets["native"] = SimpleNamespace(id="native", data_type="bam", paths=[first, second],
+        molecule_groups=[(first, "shared"), (second, "shared")])
+    state.get_dataset = state.datasets.get
+    grouped, reasons, interrupted = native_bundles(state, "native", TARGET, 5900, 6500,
+        include_sequence=False, include_duplicates=False, budget=ProjectionBudget(ProjectionPolicy(max_records=1)))
+    assert len(grouped) == 1 and set(grouped) <= interrupted
+    assert reasons == ["projection_records_cap"]
