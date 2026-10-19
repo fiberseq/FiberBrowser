@@ -132,8 +132,10 @@ def test_native_deletion_inspection_preserves_empty_and_reference_observations(t
     rows={b['row_id']:b for b in observations(state,ds,**q)['blocks']}
     assert rows['deletion']['read_bases']=='' and rows['deletion']['read_bases_length']==0
     assert rows['reference']['read_bases_length']==100 and len(rows['reference']['read_bases'])==60
+    assert rows['deletion']['observation_role']=='alternate' and rows['reference']['observation_role']=='reference'
     page=sequence(state,ds,**q,row_ids=['deletion'],record_id=rows['deletion']['record_id'])
     assert page['complete'] and page['sequence']=='' and page['length']==0
+    assert page['observation_role']=='alternate'
 
 
 def test_native_block_cache_is_separate_revisioned_and_immutable(native,monkeypatch):
@@ -199,3 +201,37 @@ def test_long_left_clip_keeps_suffix_semantics_when_truncated_to_target_length(t
     window=_query_window(read,target(100))
     assert window[:5]==(50,150,0,100,'partial')
     assert window[7]=='end'
+
+
+def test_partial_block_bounds_straddles_and_logical_ids_share_the_alternate_frame(tmp_path, monkeypatch):
+    from live_lift_fixtures import write_bam, make_record
+    from services.differences.identity import content_id
+    path=write_bam(tmp_path/'partial.bam',lambda h:[make_record(h,'partial','chrT',SITE,'50S100M',seq='A'*150)],contigs=(('chrT',30000),))
+    ds=SimpleNamespace(id='native',data_type='bam',paths=[path])
+    state=SimpleNamespace(datasets={ds.id:ds},get_dataset=lambda _:ds,translate_chrom=lambda c:c,fasta=None)
+    monkeypatch.setattr('services.differences.workspace._query_annotations',lambda *a,**k:dict(intervals=[[0,20,20]],layers={'tf':dict(intervals=[[0,20,20]],source_intervals=[[0,60,60]],family_intervals=[[0,55,55]])}))
+    block=alternate_blocks(state,ds,chrom='chrT',start=SITE-100,end=SITE+200,target=target(100))['blocks'][0]
+    assert block['covered']==[50,100]
+    assert block['layers']['tf']['intervals']==[[50,70,20]]
+    assert block['layers']['tf']['source_intervals']==[[50,110,60]]
+    assert block['layers']['tf']['family_intervals']==[[50,105,55]]
+    logical=content_id('observed-call:v1',[block['record_id'],'layer:tf',0,60,60])
+    assert block['calls']['layer:tf']==[logical]
+    assert dict(call_id=logical,layer='layer:tf',start=50,end=110) in block['straddles']
+
+
+def test_reflected_annotation_metadata_keeps_edge_qualities_and_full_bounds():
+    import copy
+    from services.differences.workspace import _transform_annotations
+    data=dict(intervals=[[10,30,20]],possible_deam_ct=[12],deam=[[13,1]],layers={
+        'tf':dict(intervals=[[10,30,20]],source_intervals=[[-5,35,40]],family_intervals=[[0,40,40]],quality_names=['el','er'],qualities=[[11],[22]]),
+        'nuc_sr':dict(intervals=[[40,70,30]],quality_names=['q1','q2'],qualities=[[33],[44]])})
+    original=copy.deepcopy(data)
+    _transform_annotations(data,reverse_length=100)
+    assert data['intervals']==[[70,90,20]] and data['possible_deam_ct']==[87] and data['deam']==[[86,1]]
+    assert data['layers']['tf']['source_intervals']==[[65,105,40]]
+    assert data['layers']['tf']['family_intervals']==[[60,100,40]]
+    assert data['layers']['tf']['qualities']==[[22],[11]]
+    assert data['layers']['nuc_sr']['qualities']==[[44],[33]]
+    _transform_annotations(data,reverse_length=100)
+    assert data==original

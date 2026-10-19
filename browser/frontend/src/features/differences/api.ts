@@ -24,6 +24,7 @@ export interface WorkspaceCalls {
   status?: string; reason?: string;
 }
 export interface AlternateBlock extends LiveLiftInsertion {
+  observation_role?: 'alternate' | 'reference';
   column_id: string; target_revision: number; row_id: string; record_id: string;
   read_bases: string; read_bases_length: number; coverage: 'full' | 'partial';
 }

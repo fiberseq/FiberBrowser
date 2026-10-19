@@ -36,7 +36,7 @@ export function NativeInspector({ selection, panel: _panel, dataset, anchor }: {
   }, []);
   const [sequenceRequest, setSequenceRequest] = useState<AlternateBlock | null>(null);
   useEffect(() => {
-    if(selection.action === 'identify' && blocks?.length && !sequenceRequest) setSequenceRequest(blocks.find(b => b.coverage==='full') ?? null);
+    if(selection.action === 'identify' && blocks?.length && !sequenceRequest) setSequenceRequest(blocks.find(b => b.coverage==='full' && b.observation_role==='alternate' && b.read_bases_length>0) ?? null);
   },[blocks,selection.action,sequenceRequest]);
   useEffect(() => {
     if (!sequenceRequest) return;
@@ -49,11 +49,11 @@ export function NativeInspector({ selection, panel: _panel, dataset, anchor }: {
       .catch(e => { if (!controller.signal.aborted) setError(String(e.message ?? e)); });
     return () => controller.abort();
   }, [q, sequenceRequest, selection.evidencePolicy]);
-  const lens = useMemo<LensResponse | null>(() => sequence === null ? null : ({ success: true, chrom: selection.chrom, flank: 0,
+  const lens = useMemo<LensResponse | null>(() => sequence === null || sequenceRequest?.observation_role!=='alternate' ? null : ({ success: true, chrom: selection.chrom, flank: 0,
     site: { pos: d.t_start, tolerance: 0, len_min: d.alt_bp, len_max: d.alt_bp }, cluster: { ref: d.t_start, len: d.alt_bp, len_lo: d.alt_bp, len_hi: d.alt_bp, carriers: 1, reference: 0 },
     carriers: [], reference: [], excluded: { other_insert: 0, not_informative: 0 }, truncated: { carriers: 0, reference: 0 },
     consensus: { seq: sequence, length: sequence.length, n_reads: 1, seconds: 0, method_label: 'one observed read' },
-  }), [sequence, selection.chrom, d]);
+  }), [sequence, sequenceRequest, selection.chrom, d]);
   const identifyKey = `${dataset.id}|${d.id}|${target.revision}|${sequenceRequest?.record_id ?? ''}`;
   useEffect(() => { if (identify && lens) identifyLens(lens, dataset.id, { key: identifyKey }); }, [identify, lens, dataset.id, identifyKey]);
   const rect = anchor.current?.getBoundingClientRect();
@@ -72,10 +72,10 @@ export function NativeInspector({ selection, panel: _panel, dataset, anchor }: {
     {error && <p role="status">{error}</p>}
     {blocks && <table className="w-full text-left"><thead><tr><th>Read / record</th><th>Observed bases</th><th>Coverage / chromatin</th><th>Sequence</th></tr></thead>
       <tbody>{blocks.map(b => <tr key={b.record_id}><td>{b.row_id} · {b.record_id.slice(0, 8)}</td><td className="font-mono break-all">{b.read_bases}{b.read_bases_length > 60 && '…'} ({b.read_bases_length} bp)</td>
-        <td>{b.coverage} · {b.intervals?.length ?? 0} calls · {b.methyl_m6a?.length ?? 0} m6A</td>
+        <td>{b.coverage} · {b.observation_role ?? 'unresolved observation'} · {b.intervals?.length ?? 0} calls · {b.methyl_m6a?.length ?? 0} m6A</td>
         <td><button disabled={b.coverage !== 'full'} onClick={() => { setSequence(null); setSequenceRequest(b); }}>Load full observed sequence</button></td></tr>)}</tbody></table>}
-    {sequence !== null && <><p className="font-mono break-all">{sequence.slice(0, 60)}{sequence.length > 60 && '…'} · {sequence.length} bp · one observed read</p>
-      <button disabled={!sequence.length || !expandableAltBlock(d)} onClick={() => setIdentify(true)}>Identify observed alternate</button></>}
+    {sequence !== null && <><p className="font-mono break-all">{sequence.slice(0, 60)}{sequence.length > 60 && '…'} · {sequence.length} bp · one observed {sequenceRequest?.observation_role ?? 'unresolved'} read</p>
+      <button disabled={!lens || !sequence.length || !expandableAltBlock(d)} onClick={() => setIdentify(true)}>Identify observed alternate</button></>}
     {identify && lens && <IdentifyTab response={lens} datasetId={dataset.id} identifyKey={identifyKey} reversed={false} visible dark={false} />}
   </div>, document.body);
 }

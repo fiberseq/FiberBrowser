@@ -218,16 +218,7 @@ def _alternate_blocks(state, dataset, *, chrom, start, end, target, row_ids=None
             data = _query_annotations(read, bam, path, q0, q1, layers, layer_options) if q1 > q0 else dict(intervals=[])
             block = {k: data[k] for k in ("intervals", "layers", "qualities", "fire", "methyl_m6a", "methyl_m5c", "deam", "possible_deam_ct", "possible_deam_ga") if k in data}
             # Partial end observations are boundary-aligned; no proportional stretching.
-            for field in ("intervals", "fire"):
-                if field in block:
-                    block[field] = [[x+offset, y+offset, *rest] for x, y, *rest in block[field]]
-            for layer in block.get("layers", {}).values():
-                layer["intervals"] = [[x+offset, y+offset, *rest] for x, y, *rest in layer.get("intervals", [])]
-            for field in ("methyl_m6a", "methyl_m5c", "possible_deam_ct", "possible_deam_ga"):
-                if field in block:
-                    block[field] = [x+offset for x in block[field]]
-            if "deam" in block:
-                block["deam"] = [[x+offset, k] for x, k in block["deam"]]
+            _transform_annotations(block, offset=offset)
             sequence = (read.query_sequence or "")[q0:q1]
             block.update(source="reads", column_id=target["target_id"], target_revision=target["revision"],
                 record_id=record, row_id=read.query_name,
@@ -237,6 +228,7 @@ def _alternate_blocks(state, dataset, *, chrom, start, end, target, row_ids=None
                 pos=target["ref_end"], observed_ref_start=window[5], observed_ref_end=window[6], hap_label="", src=[read.reference_name, q0, q1], seq_q=[q0, q1],
                 length=length, mol_bp=q1-q0, orientation="+", read_orientation="-" if read.is_reverse else "+",
                 covered=[offset, offset+q1-q0], coverage=coverage,
+                observation_role=window[8] if len(window)>8 else "alternate",
                 read_bases=sequence[:60], read_bases_length=len(sequence),
                 layout_version=LAYOUT_VERSION, unaligned_interior=True)
             from .identity import content_id
@@ -304,6 +296,7 @@ def sequence(state, dataset, *, chrom, start, end, target, row_ids=None, layers=
         if len(observed) != window[1]-window[0]:
             raise ResourceResult("unavailable", "observed_sequence_unavailable")
         return dict(source="reads", provenance="one observed read", target_id=target["target_id"],
+            observation_role=window[8] if len(window)>8 else "alternate",
             revision=target["revision"], record_id=record_id, sequence=observed[offset:offset+limit],
             offset=offset, length=len(observed), complete=offset == 0 and limit >= len(observed),
             next_offset=min(len(observed), offset+limit) if offset+limit < len(observed) else None)
@@ -439,16 +432,7 @@ def lens(state, dataset, *, chrom, start, end, target, frozen_calls=None, includ
         data = _query_annotations(record, bam, path, q0, q1, None)
         n = len(observed)
         if reverse:
-            for key in ("intervals", "fire"):
-                if key in data:
-                    data[key] = [[n-b, n-a, *tail] for a, b, *tail in data[key]]
-            for layer in data.get("layers", {}).values():
-                layer["intervals"] = [[n-b, n-a, *tail] for a, b, *tail in layer.get("intervals", [])]
-            for key in ("methyl_m6a", "methyl_m5c", "possible_deam_ct", "possible_deam_ga"):
-                if key in data:
-                    data[key] = [n-1-p for p in data[key]]
-            if "deam" in data:
-                data["deam"] = [[n-1-p, k] for p, k in data["deam"]]
+            _transform_annotations(data, reverse_length=n)
         total_bases += n
         level = selected["calls_by_molecule"][molecule]["call"]["level"]
         inputs[molecule] = (dict(id=name, strand="-" if record.is_reverse != reverse else "+",
@@ -553,10 +537,42 @@ def _observation_window(read,target):
     window=_source_query_window(read,target["ref_start"],target["ref_end"])
     if window is None:return None
     a,b=window
-    return a,b,0,b-a,"full",target["ref_start"],target["ref_end"],None
+    return a,b,0,b-a,"full",target["ref_start"],target["ref_end"],None,"reference"
 
 
 def observations(state,dataset,**kwargs):
     if max(kwargs["target"]["ref_end"]-kwargs["target"]["ref_start"],kwargs["target"]["alt_bp"])>50_000:
         raise ResourceResult("budget_exceeded","observation_span")
     return alternate_blocks(state,dataset,inspection=True,**kwargs)
+
+
+def _transform_annotations(data, *, offset=0, reverse_length=None):
+    """Move all observed annotation geometry together, preserving call indexing.
+
+    Unclipped source/family bounds must share the displayed interval's frame;
+    edge-quality channels follow their physical edge through reflection.
+    """
+    def intervals(values):
+        return [[a+offset, b+offset, *tail] if reverse_length is None else
+                [reverse_length-b+offset, reverse_length-a+offset, *tail]
+                for a, b, *tail in values]
+    def point(value):
+        return value+offset if reverse_length is None else reverse_length-1-value+offset
+    for key in ("intervals", "fire"):
+        if key in data:
+            data[key] = intervals(data[key])
+    for name, layer in data.get("layers", {}).items():
+        for key in ("intervals", "source_intervals", "family_intervals"):
+            if layer.get(key) is not None:
+                layer[key] = intervals(layer[key])
+        if reverse_length is not None and layer.get("qualities") is not None:
+            from services.lift.compose import _swap_pairs
+            qualities = layer["qualities"]
+            for left, right in _swap_pairs(layer.get("quality_names"), name):
+                if left < len(qualities) and right < len(qualities):
+                    qualities[left], qualities[right] = qualities[right], qualities[left]
+    for key in ("methyl_m6a", "methyl_m5c", "possible_deam_ct", "possible_deam_ga"):
+        if key in data:
+            data[key] = [point(value) for value in data[key]]
+    if "deam" in data:
+        data["deam"] = [[point(value), kind] for value, kind in data["deam"]]

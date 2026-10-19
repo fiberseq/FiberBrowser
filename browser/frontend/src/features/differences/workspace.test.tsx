@@ -8,12 +8,15 @@ import { useDifferenceAxis } from './useDifferenceAxis';
 import { expandDifference, useDifferenceSelection } from '../liveLift/inspectionStore';
 import { selectNativeDifference } from './selection';
 import { MoleculeCalls } from './MoleculeCalls';
-import { inspectDifference, type WorkspaceCalls } from './api';
+import { inspectDifference, getAlternateBlocks, type WorkspaceCalls } from './api';
+import { NativeInspector } from './NativeInspector';
+import { identifyLens } from '../insertion/IdentifyTab';
 import { workspaceAssignments } from './callModel';
 import { applyFrozenDifferenceSplit } from './splits';
 import { refreshSvSplit } from '../../utils/svAlleleSplit';
 import { serializeState, deserializeSavedState } from '../../stores/historySlice';
 vi.mock('./api',async original=>({...await original<any>(),inspectDifference:vi.fn(),getAlternateBlocks:vi.fn()}));
+vi.mock('../insertion/IdentifyTab',()=>({IdentifyTab:()=>null,identifyLens:vi.fn()}));
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT=true;
 const cluster={id:'geometry',t:'I' as const,ref:500,end:504,len:792,ref_len:4,alt_len:792};
 const panel:any={id:'native-panel',datasetId:'native',stateKey:'rows',contentType:'dataset',subTracks:[],linkGroup:null};
@@ -26,7 +29,22 @@ beforeEach(()=>{useBrowserStore.setState({chrom:'chr1',start:0,end:1000,panels:[
   useLiveLiftStore.setState({enabled:false});vi.mocked(inspectDifference).mockResolvedValue(response);
   host=document.createElement('div');document.body.appendChild(host);root=createRoot(host);
 });
-afterEach(()=>{act(()=>root.unmount());host.remove();useDifferenceSelection.getState().select(null);vi.clearAllMocks();});
+afterEach(()=>{act(()=>root.unmount());host.remove();useDifferenceSelection.getState().select(null);vi.clearAllMocks();vi.unstubAllGlobals();});
+it('automatically identifies a qualified alternate observation rather than a preceding replacement reference',async()=>{
+  selectNativeDifference(cluster,'native','chr1',panel.id);
+  const selection={...useDifferenceSelection.getState().selection!,action:'identify' as const};
+  vi.mocked(getAlternateBlocks).mockResolvedValue({complete:true,blocks:[
+    {row_id:'reference',record_id:'ref',coverage:'full',observation_role:'reference',read_bases:'CCCC',read_bases_length:4},
+    {row_id:'observed',record_id:'alt',coverage:'full',observation_role:'alternate',read_bases:'A'.repeat(60),read_bases_length:792},
+  ] as any});
+  const fetch=vi.fn(async()=>new Response(JSON.stringify({sequence:'A'.repeat(792),complete:true})));
+  vi.stubGlobal('fetch',fetch);
+  await act(async()=>root.render(<NativeInspector selection={selection} panel={panel} dataset={useBrowserStore.getState().datasets[0]} anchor={{current:host}}/>));
+  expect(fetch).toHaveBeenCalledTimes(1);
+  const request=JSON.parse((fetch.mock.calls[0] as any)[1].body);
+  expect(request).toMatchObject({row_ids:['observed'],record_id:'alt',limit:50000});
+  expect(identifyLens).toHaveBeenCalledWith(expect.objectContaining({consensus:expect.objectContaining({seq:'A'.repeat(792),n_reads:1})}),'native',expect.anything());
+});
 it('expands a replacement at ref_end without lift or a source panel, preserving reference scope and reversal',()=>{
   selectNativeDifference(cluster,'native','chr1',panel.id);
   expect(expandDifference(useDifferenceSelection.getState().selection!)).toBe(true);

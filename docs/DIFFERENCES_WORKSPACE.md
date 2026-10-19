@@ -71,6 +71,11 @@ explicit, record-qualified page (at most 50 kb); empty and missing sequence are
 different results. Assembly sequence pages retain their existing independent
 reference/alternate endpoints.
 
+Observations explicitly label reference versus alternate sequence; these roles
+do not supply exact allele votes. Native Identify requires an available full
+alternate observation. Unclipped footprint bounds and edge-quality channels
+follow their intervals through partial-block offsets and map reflection.
+
 `POST /api/differences/lens` opens the detailed lens from a frozen call snapshot.
 It does not reclassify under current display settings. Full and partial observed
 inputs retain their own axes; one molecule supplies at most one consensus input.
