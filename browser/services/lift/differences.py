@@ -317,9 +317,10 @@ def differences_for_region(state, dataset, chrom, start, end, *, lift_hap=None, 
     source = pysam.FastaFile(config.source_fasta) if config.source_fasta else None
     try:
         for item in items:
+            item["ref_truncated"] = item["ref_bp"] > 60
             item["grch38"] = ("" if item["kind"] == "insertion" else
-                              fasta_bases(getattr(state, "fasta", None), chrom, item["t_start"], item["t_end"])
-                              if item["kind"] in ("snv", "mnv", "deletion", "replacement") and item["ref_bp"] <= 50 else None)
+                              fasta_bases(getattr(state, "fasta", None), chrom, item["t_start"], min(item["t_end"], item["t_start"] + 60))
+                              if item["kind"] in ("snv", "mnv", "deletion", "replacement") else None)
             src = item["src"]
             a, b = src["start"], src["end"]
             item["alt_truncated"] = a is not None and b - a > 60
@@ -328,8 +329,13 @@ def differences_for_region(state, dataset, chrom, start, end, *, lift_hap=None, 
             item["alt"] = "" if item["kind"] == "deletion" else fasta_bases(source, src["contig"], a, b)
             if item["alt"] is not None and item["strand"] == "-":
                 item["alt"] = revcomp(item["alt"])
-            item["sequence_status"] = ("unavailable" if item["alt"] is None else
-                                       "partial" if item["alt_truncated"] else "available")
+            item["alt_sequence_status"] = ("unavailable" if item["alt"] is None else
+                                           "partial" if item["alt_truncated"] else "available")
+            item["ref_sequence_status"] = ("unavailable" if item["grch38"] is None else
+                                           "partial" if item["ref_truncated"] else "available")
+            statuses = (item["ref_sequence_status"], item["alt_sequence_status"])
+            item["sequence_status"] = ("available" if statuses == ("available", "available") else
+                                       "unavailable" if statuses == ("unavailable", "unavailable") else "partial")
     finally:
         if source is not None:
             source.close()
@@ -337,14 +343,26 @@ def differences_for_region(state, dataset, chrom, start, end, *, lift_hap=None, 
                 mode="bins" if broad else "items", items=items, bin_bp=bin_bp, bins=bins, novel=[])
 
 
-def difference_sequence(dataset, chrom, pos, item_id, *, offset=0, limit=50_000):
-    """On-demand assembly sequence in bounded, target-oriented pages."""
+def difference_sequence(dataset, chrom, pos, item_id, *, offset=0, limit=50_000, allele="alternate", reference=None):
+    """On-demand reference or alternate sequence in bounded target-oriented pages."""
     import pysam
     from fastapi import HTTPException
     item = next((d for d in assembly_items_for_region(dataset.live_lift, chrom, pos, pos + 1)
                  if item_has_id(d, item_id)), None)
     if item is None:
         raise HTTPException(404, "Assembly difference not found at this position")
+    if allele not in ("reference", "alternate"):
+        raise HTTPException(422, "allele must be reference or alternate")
+    if allele == "reference":
+        total = item["ref_bp"]
+        if offset > total:
+            raise HTTPException(422, "Sequence offset exceeds allele length")
+        stop = min(total, offset + limit)
+        sequence = "" if total == 0 else fasta_bases(reference, chrom, item["t_start"] + offset, item["t_start"] + stop)
+        if sequence is None:
+            raise HTTPException(409, "Target reference sequence unavailable")
+        return dict(item_id=item["id"], sequence=sequence, offset=offset, total=total,
+                    next_offset=stop if stop < total else None, source="reference", allele=allele, orientation="+")
     src = item["src"]
     if src["start"] is None or (not dataset.live_lift.source_fasta and item["alt_bp"]):
         raise HTTPException(409, "Source assembly sequence unavailable")
@@ -364,7 +382,7 @@ def difference_sequence(dataset, chrom, pos, item_id, *, offset=0, limit=50_000)
     if item["strand"] == "-":
         sequence = revcomp(sequence)
     return dict(item_id=item["id"], sequence=sequence, offset=offset, total=total,
-                next_offset=stop if stop < total else None, source="assembly", orientation=item["strand"])
+                next_offset=stop if stop < total else None, source="assembly", allele=allele, orientation=item["strand"])
 
 
 def annotate_read_evidence(items, sv_clusters):

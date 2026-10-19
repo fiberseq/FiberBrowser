@@ -8,6 +8,9 @@ export interface Difference {
   src: { contig: string | null; start: number | null; end: number | null };
   grch38: string | null; alt: string | null; t?: 'I' | 'D'; ref?: number; len?: number;
   alt_truncated?: boolean;
+  ref_truncated?: boolean;
+  ref_sequence_status?: 'unavailable' | 'partial' | 'available';
+  alt_sequence_status?: 'unavailable' | 'partial' | 'available';
   aliases?: string[];
   sequence_status?: 'unresolved' | 'unavailable' | 'partial' | 'available';
   read_support?: { cluster: number; carriers: number };

@@ -50,6 +50,9 @@ def test_gap_inspection_spans_partial_reads_and_aliases(tmp_path, dt, dq, strand
             seq = diff.difference_sequence(ds, TARGET, 1101, item["aliases"][0])
             assert seq["item_id"] == item["id"] and seq["total"] == dq
             assert seq["sequence"] == ("A" if strand == "+" else "T") * dq
+        ref_page = diff.difference_sequence(ds, TARGET, 1101, item["aliases"][0], allele="reference", reference=fasta, offset=dt - 10, limit=20)
+        assert ref_page["sequence"] == "C" * 10 and ref_page["total"] == dt
+        assert ref_page["orientation"] == "+" and ref_page["next_offset"] is None
 
 
 def test_replacement_reference_preview_and_bounded_alt_pages(tmp_path):

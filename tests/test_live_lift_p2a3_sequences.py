@@ -45,3 +45,8 @@ def test_map_sequence_pages_and_orientation(evidence, lift_env):
     assert ''.join(pieces) == expected
     assert client.get('/api/lift/difference_sequence', params={**params, 'limit': 50001}).status_code == 422
     assert client.get('/api/lift/difference_sequence', params={**params, 'item_id': 'missing'}).status_code == 404
+    reference = client.get('/api/lift/difference_sequence', params={**params, 'allele': 'reference'})
+    assert reference.status_code == 200, reference.text
+    assert reference.json()['sequence'] == 'A' * 59 and reference.json()['orientation'] == '+'
+    assert reference.json()['source'] == 'reference'
+    assert client.get('/api/lift/difference_sequence', params={**params, 'allele': 'invalid'}).status_code == 422

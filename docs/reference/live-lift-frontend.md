@@ -23,7 +23,8 @@ insertion columns and selected-site guide. Equivalent parental insertions at the
   the same axis. Expansion/collapse does not reload compact reads.
 - `sourceView.ts`: opens the original BAM on its source contig, retaining an
   existing source reference or using the BAM-header contig reference without a
-  FASTA. A ViewLink anchors the insertion and its immediate flanks; it does not
+  FASTA. A ViewLink anchors both spans of an insertion, deletion or replacement
+  and their immediate flanks, including zero-width source boundaries; it does not
   claim a chromosome-wide graphlift conversion. If source registration fails,
   matched native insertion evidence can open the existing alt-allele expansion.
 
@@ -60,7 +61,7 @@ The Playwright spec uses these with store state to click a MAT badge and verify
 MAT/PAT/native expansion, drawn insertion footprints, collapse, SNV inspection
 and previous/next navigation, plus successful AluY Identify. Test data paths are supplied through environment variables.
 
-Compact display loads keep badges and insertion SV evidence but omit hidden
+Compact display loads keep badges and map gap display observations but omit hidden
 annotation blocks until expansion. The frontend sends `viewport_start` and
 `viewport_end`, plus comma-separated `insertion_ids` for expanded alleles.
 `/api/reads/compact` enriches response copies on demand; shared broad/direct
@@ -68,3 +69,13 @@ caches retain collapsed rows, and collapsing cannot retain a stale block.
 Each shared allele retains its source interval and strand through session
 persistence. Header actions use the enclosing haplotype's allele, falling back
 to a surviving panel for that dataset when the initiating panel is closed.
+
+Map gap observations and linked SV markers include both edit spans, source
+coverage and `method: 'assembly_projection'`, with `display_only: true`.
+They start at the fixed 10 bp floor independently of the displayed SV cutoff.
+Deletion/replacement marker actions open assembly inspection using the map
+link. Native SV classification and clustering ignore lifted rows. Source
+query offsets, clip origins and normalized source endpoints are omitted from
+projected display SV events until a guarded evidence adapter can transform
+them together. Matching tooltips describe geometry candidates and unassessed
+sequence comparison; unmatched read events do not assert novelty.

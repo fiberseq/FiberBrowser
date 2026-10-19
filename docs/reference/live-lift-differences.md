@@ -28,12 +28,19 @@ type Difference = {
   src: {contig: string | null; start: number | null; end: number | null};
   grch38: string | null;
   alt: string | null;
+  aliases?: string[];
+  ref_truncated?: boolean; alt_truncated?: boolean;
+  ref_sequence_status?: 'available' | 'partial' | 'unavailable';
+  alt_sequence_status?: 'available' | 'partial' | 'unavailable';
   // Present only for insertion/deletion; native SV schema.
   t?: 'I' | 'D';
   ref?: number;
   len?: number;
   read_support?: {cluster: number; carriers: number};
+  read_candidates?: {cluster: number; carriers: number; relation: 'candidate'; method: 'geometry_only';
+    sequence_comparison: 'unassessed'; assembly_span: EditSpan; read_span: EditSpan; uncertainty: [number, number]}[];
 };
+type EditSpan = {start: number; end: number; ref_bp: number; alt_bp: number};
 type DifferenceBin = {
   start: number; end: number;
   hap: string; hap_label: string; kind: Difference['kind'];
@@ -60,6 +67,7 @@ type ReadCluster = {
   id?: string; t: 'I' | 'D'; ref: number; len: number; end: number;
   source: 'reads'; support?: number; informative?: number;
   sa_support?: number; clip_support?: number;
+  novelty?: 'unassessed'; novelty_reasons?: string[];
 };
 ```
 
@@ -69,18 +77,33 @@ target display orientation. Insertions have `t_start == t_end`; deletions
 have `alt_bp == 0`; replacements have both lengths positive. `reason` retains
 the manifest gap reason. An `aligned_bubble` is approximate correspondence,
 not a list of called variants. `no_correspondence` describes target sequence
-outside the primary net coverage. Deletions and replacements retain their own kinds; it has null
+outside the primary net coverage; it has null
 source fields and uses target chromosome/start/end in its ID. Inversions
 span the primary minus-strand net region.
 
-`grch38` is empty for insertions and populated for SNVs, MNVs and deletions of at most 50 bp,
-using the currently loaded target FASTA; it is null without that reference.
-`alt` uses the optional configured `source_fasta`, otherwise null. It previews
-at most 60 bases in target orientation; `alt_truncated` marks a shorter preview.
+Raw gaps also belong to the exact two primary net boundaries when both
+flanks have the same winning chain and no intervening claim exists. Such
+gaps retain their deletion/replacement kind, both spans and original reason;
+their target span counts as correspondence. Other holes remain unresolved.
+Recovered gaps expose the old target-coordinate hole ID in `aliases`;
+inspection and sequence endpoints accept either ID.
+
+`grch38` previews at most 60 target FASTA bases for SNVs, MNVs, deletions and
+replacements; `ref_truncated` marks longer reference spans. It is empty for
+insertions and null without the reference. `alt` uses the optional
+`source_fasta`, otherwise null, except that a deletion's alternate is always
+the known empty string. Alternate previews contain at most 60 bases in
+target orientation; `alt_truncated` marks longer alleles. Per-side sequence
+statuses describe these previews, and `sequence_status` is available only
+when both sides are fully available; a known empty side cannot resolve a
+missing sequence on the other side.
 `GET /api/lift/difference_sequence` takes `dataset_id`, `chrom`, a position
-inside the event (`pos`), `item_id`, `offset` (default 0) and `limit` (1–50,000).
+inside the event (`pos`), `item_id`, `offset` (default 0), `limit` (1–50,000)
+and `allele` (`alternate`, the default, or `reference`).
 It returns `sequence`, `total` and `next_offset`; follow pages to retrieve the
-full assembly allele without unbounded reads or responses. An empty
+full allele without unbounded reads or responses. Reference pages use the
+loaded target FASTA in forward orientation; alternate pages use the source
+FASTA in target orientation. An empty
 allele is `""`, distinct from unknown/null. The strip never reads BAM records.
 Its bounded geometry cache includes `lift_key`, chromosome, 1 Mb bin and hap.
 
@@ -104,9 +127,15 @@ Optional `native_dataset_id` uses that native BAM dataset's existing display
 SV summary for the same view, at a 50 bp floor. `native_summary` retains its
 scope (including any display cohort cap). `read_support.cluster` is the
 zero-based index into `native_summary.clusters`; `carriers` is its support
-count. Matching uses `sv_events.events_match`. `novel` contains unmatched
-read-evidence clusters; matching considers assembly events hidden by binning
-or `min_bp` too, so zooming/filtering does not make known events novel.
+count. This legacy pointer names the first candidate. `read_candidates` keeps
+all compatible clusters for every phased occurrence, preserving both spans
+and anchor uncertainty. These are geometry candidates with unassessed
+sequence comparison; their counts are not combined. Matching checks both
+ends and independent lengths, including replacements. It considers events
+hidden by binning or `min_bp` too. The legacy `novel` array contains unmatched
+events with `novelty: 'unassessed'` and reasons such as `no_correspondence`,
+`aligned_bubble` and `incomplete_assembly_comparison`. No assembly-relative
+novelty is established by this matcher.
 
 ## Read inspection
 
@@ -182,6 +211,13 @@ against the assembly using aligned CIGAR positions and indels, independent
 of carriage. A record projected through
 several primary chains can contribute several inspection rows. Each parent independently resolves aligned, deleted or no-correspondence status. Deletion carriers must span their zero-width source boundary.
 
+Deletion/replacement selection inspects the complete edit, even from an
+interior point or old hole ID. Replacement alternates are inspected through
+their actual source span, independently of reference length. Gap rows retain
+`item_id`, `ref_bp`, `alt_bp`, `full_span`, `mol_bp` and bounded
+`read_bases_length`; reads missing either flank are partial. Both inspected
+spans are limited to 50 kb. This inspection does not enable SV analysis.
+
 `include_sequence=true` with the selected `item_id` returns one full, oriented carrier in `sequence`, at most 50 kb. It selects the full carrier closest to the assembly length, allowing read indels; ordinary inspections keep only previews. No complete eligible carrier returns null.
 
 At most 500 distinct source records are fetched across BAMs and windows.
@@ -241,24 +277,32 @@ ordinary composer. Crops retain matching badge IDs/blocks and shift only
 `pos`. Hidden content never enters the row's target intervals, layers or
 marks, so target coverage, analyses and footprint counts remain unchanged.
 
-These badges also add row `sv` events at the request's SV length floor:
+All owned map gap shapes with `max(ref_bp, alt_bp) >= 10` retain
+`live_lift.gap_observations`, independently of the display cutoff. Each has
+the canonical map ID, reason, both absolute target/source spans,
+`method: 'assembly_projection'`, `display_only: true` and source coverage
+(covered interval, aligned/molecular bp, both observed flanks and completeness).
+Read deviations and sequence comparison remain unassessed. Spanned deletions
+and replacements also add display SV markers; partial insertions retain their
+observed molecular length. For example:
 
 ```json
-{"t":"I","ref":6010,"len":100,"source":"assembly","hap":"MAT","ins_id":"MAT:chrS_MATERNAL:5000-5100:insertion"}
+{"t":"D","ref":1100,"ref_end":2833,"len":1733,"ref_len":1733,"alt_len":1,"source":"assembly","method":"assembly_projection","display_only":true,"kind":"replacement","difference_id":"MAT:chrS_MATERNAL:200-201:replacement"}
 ```
 
-`ref` is absolute target position, `len` is this record's `mol_bp`. Existing
-lifted CIGAR/SV events carry `source: "reads"`. Assembly insertions never
-create deletion cuts. These events are display geometry; read-evidence SV
+`ref` is absolute target position; `ref_end`, `ref_len` and `alt_len` retain
+independent edit spans. Insertions also keep `ins_id`. Source CIGAR glyphs
+carry `source: "reads"`, `method: "display_projection"` and
+`display_only: true`, omitting unprojected query offsets, clip origins and
+normalized/raw source geometry. These events are display geometry; read-evidence SV
 analyses (including carrier splits and the insertion lens) remain refused for
 `bam_livelift`. Source-frame `sv_evidence`, `aligned_blocks`, `sv_segments`,
 `sv_alignments` and `sequence_span` are discarded during composition. A future
 unified model must project authoritative evidence and preserve its source
-through clustering before enabling those analyses. Native SV helpers retain
-their existing length tolerance (partial carriers differing by more than 20%
-may be uninformative for an allele split).
+through clustering before enabling those analyses. Native classification and
+clustering ignore lifted rows, including nested source alignment bundles.
 `read_deletion_cuts` itself is a pysam helper; the composer cuts compact row
-geometry only at events whose `t == "D"`.
+geometry only at projected source deletions before adding map display markers.
 
 ## Mismatch detail on compact reads
 

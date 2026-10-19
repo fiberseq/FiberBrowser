@@ -39,7 +39,7 @@ export function differenceDescription(d: Difference, chrom: string): string {
   const size = d.kind === 'replacement' ? `${d.ref_bp.toLocaleString()}→${d.alt_bp.toLocaleString()}` : differenceSize(d).toLocaleString();
   return `${d.hap_label} · ${d.kind.replace(/_/g, ' ')} · ${size} bp · ${d.source === 'reads' ? 'read-only event' : 'assembly difference'}\n`
     + `GRCh38 ${target}\nHG002 ${locus}\n`
-    + `GRCh38: ${d.grch38 ?? 'unknown'} · HG002: ${d.alt ?? 'unknown'}${d.alt !== null && d.alt_truncated ? `… (${d.alt_bp.toLocaleString()} bp)` : ''}\n`
+    + `GRCh38: ${d.grch38 ?? 'unknown'}${d.grch38 !== null && d.ref_truncated ? `… (${d.ref_bp.toLocaleString()} bp)` : ''} · HG002: ${d.alt ?? 'unknown'}${d.alt !== null && d.alt_truncated ? `… (${d.alt_bp.toLocaleString()} bp)` : ''}\n`
     + `${BADGE_REASONS[d.reason] ?? d.reason.replace(/_/g, ' ')}`
     + (d.read_support ? `\nGeometry candidate: ${d.read_support.carriers} native reads' ${d.kind} (sequence comparison unassessed)` : '')
     + ((d.read_candidates?.length ?? 0) > 1 ? ` · ${d.read_candidates!.length} candidate clusters; counts not combined` : '');
