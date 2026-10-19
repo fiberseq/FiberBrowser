@@ -22,7 +22,7 @@ export function inspectionModel(rows: DifferenceInspection[], preferredHap?: str
   const summary: Record<string, Record<string, number>> = {};
   for (const r of ordered) { const hap = summary[r.hap_label] ??= {}; hap[r.allele] = (hap[r.allele] ?? 0) + 1; }
   return { rows: ordered, summary, misphased: rows.filter(r => r.allele === 'grch38'),
-    carriers: rows.filter(r => r.allele === 'hg002' || r.carries_insertion).map(r => r.id) };
+    carriers: rows.filter(r => r.allele === 'hg002' || r.carries_insertion || r.carries_deletion).map(r => r.id) };
 }
 export function haplotypeSummary(alleles: Record<string, number>) {
   return Object.entries(alleles).map(([allele, n]) => allele === 'same_as_grch38'

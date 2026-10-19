@@ -44,6 +44,9 @@ def test_gap_inspection_spans_partial_reads_and_aliases(tmp_path, dt, dq, strand
         assert rows["right"]["allele"] == "partial" and not rows["right"]["full_span"]
         if not dq:
             assert rows["left"]["allele"] == "partial"
+            fixture = json.loads((Path(__file__).parent / 'data' / 'deletion_inspection.json').read_text())
+            for expected in fixture:
+                assert {key: rows[expected['id']].get(key) for key in expected} == expected
         assert result["hap_status"] == {"MAT": item["kind"]}
         assert result["sequence"] is None  # no insertion Identify sequence fabricated
         if dq and not with_fasta:

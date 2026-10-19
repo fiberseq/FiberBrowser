@@ -1,0 +1,5 @@
+[
+  {"id": "full", "hap_label": "MAT", "allele": "deleted", "read_bases": "", "hg002": "", "read_bases_length": 0, "full_span": true, "carries_deletion": true},
+  {"id": "left", "hap_label": "MAT", "allele": "partial", "full_span": false, "carries_deletion": false},
+  {"id": "right", "hap_label": "MAT", "allele": "partial", "full_span": false, "carries_deletion": false}
+]

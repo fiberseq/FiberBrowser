@@ -34,6 +34,7 @@ export interface DifferenceInspection {
   alignment_ins_id?: string;
   item_id?: string; ref_bp?: number; alt_bp?: number; full_span?: boolean;
   ins_id?: string; carries_insertion?: boolean; mol_bp?: number; identity?: number | null; read_bases_length?: number;
+  carries_deletion?: boolean;
 }
 export interface DifferenceReadsResponse {
   dataset_id: string; lift_key: string; chrom: string; pos: number; end: number;

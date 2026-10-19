@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { differenceDescription, differenceGlyph, differenceLanes, inspectionModel, nextDifference, stripModel } from './differencesModel';
 import type { Difference, DifferenceInspection, DifferencesResponse } from './differenceTypes';
+import deletionInspection from '../../../../../tests/data/deletion_inspection.json';
 const diff = (pos: number, size = 1, kind: Difference['kind'] = 'snv'): Difference => ({
   id: `MAT:src:${pos}-${pos + size}:${kind}`, hap: 'h1', hap_label: 'MAT', kind, reason: 'aligned_indel', source: 'assembly',
   t_start: pos, t_end: kind === 'insertion' ? pos : pos + size, ref_bp: kind === 'insertion' ? 0 : size, alt_bp: size,
@@ -48,6 +49,10 @@ describe('difference strip decisions', () => {
   });
 });
 describe('inspection table model', () => {
+  it('highlights an empty deletion cohort from explicit geometry membership', () => {
+    expect(inspectionModel(deletionInspection as DifferenceInspection[]).carriers).toEqual(['full']);
+    expect(inspectionModel([{ ...deletionInspection[0], carries_deletion: false }] as DifferenceInspection[]).carriers).toEqual([]);
+  });
   it('groups alleles per haplotype, calls out GRCh38 reads, and highlights carriers', () => {
     const rows = [
       { id: 'a', hap_label: 'MAT', allele: 'hg002' }, { id: 'b', hap_label: 'MAT', allele: 'grch38' },

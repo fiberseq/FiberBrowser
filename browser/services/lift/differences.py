@@ -965,6 +965,7 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
                 if gap:
                     item.update(item_id=span["id"], ref_bp=span["ref_bp"], alt_bp=span["alt_bp"],
                                 full_span=full, left_flank=left_flank, right_flank=right_flank,
+                                carries_deletion=bool(span['kind'] == 'deletion' and full and not rb and hap == span['hap']),
                                 mol_bp=len(rb), read_bases=rb[:60], read_bases_length=len(rb))
                 if alternate:
                     own_carrier = carries and hap == span["hap"]
