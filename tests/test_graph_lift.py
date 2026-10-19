@@ -410,8 +410,8 @@ def test_variant_and_sv_readers_skip_hidden_records(tmp_path, monkeypatch):
     dataset = state.get_dataset("reads")
     assert len(_load(path, 2_500, 3_500)) == 1
     assert [r.reference_start for r in variants_endpoint._records(state, dataset, "chr1", 2_500, 3_500)] == [1_000]
-    sv = variants_endpoint._sv_records(state, dataset, "chr1", 2_500, 3_500, False)
-    assert [r.reference_start for r, _ in sv] == [1_000]
+    sv = variants_endpoint._sv_compact(state, dataset.id, "chr1", 2_500, 3_500, 10, False)
+    assert [r['reference_start'] for r in sv] == [1_000]
     rows = list(sv_endpoint._bam_records(state, "reads", "chr1", 2_500, 3_500))
     assert [r.reference_start for r, _ in rows] == [1_000]
 

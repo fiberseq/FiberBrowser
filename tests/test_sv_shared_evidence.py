@@ -157,6 +157,32 @@ def test_region_refusal_precedes_decoding(cohort, monkeypatch):
         sv.scan_view(state, 'native', 'chrT', 0, evidence.SCAN_MAX_SPAN + 1, 10)
 
 
+def test_exact_regions_preserve_primary_eligibility_that_a_broad_crop_cannot(tmp_path, monkeypatch):
+    path = tmp_path / 'eligibility.bam'
+    with pysam.AlignmentFile(path, 'wb', header={'HD': {'SO': 'coordinate'}, 'SQ': [{'SN': 'chrT', 'LN': 10000}]}) as bam:
+        for start, flag, cigar, length in [(100, 1024, '100M', 100), (1000, 2048, '200M100I200M', 500)]:
+            read = pysam.AlignedSegment(bam.header)
+            read.query_name, read.reference_id, read.reference_start, read.flag = 'molecule', 0, start, flag
+            read.cigarstring, read.query_sequence, read.mapping_quality = cigar, 'A'*length, 60
+            bam.write(read)
+    pysam.index(str(path))
+    dataset = SimpleNamespace(id='native', data_type='bam', paths=[str(path)])
+    state = SimpleNamespace(get_dataset=lambda _: dataset, datasets={'native': dataset}, dataset_order=['native'])
+    # A rejected signal primary suppresses the whole fetched molecule. In the
+    # narrower loaded cohort that primary is absent, so the actual supplementary
+    # remains inspectable. Cropping the already-suppressed broad result loses it.
+    monkeypatch.setattr('services.signal_evidence.record_keeps_signal', lambda read, _provenance: not read.is_duplicate)
+    evidence.SCAN_CACHE.clear()
+    assert sv.scan_view(state, 'native', 'chrT', 0, 1500, 10) == []
+    narrow = sv.scan_view(state, 'native', 'chrT', 900, 1500, 10)
+    assert len(narrow) == 1 and narrow[0]['supplementary']
+    assert narrow[0]['sv'][0]['ref'] == 1200
+    evidence.SCAN_CACHE.clear()
+    assert sv.scan_view(state, 'native', 'chrT', 900, 1500, 10) == narrow
+    assert sv.scan_view(state, 'native', 'chrT', 0, 1500, 10) == []
+    evidence.SCAN_CACHE.clear()
+
+
 @pytest.mark.parametrize('seed', [901, 1547, 6091])
 def test_heldout_authored_molecule_counts_survive_consumer_order_and_eviction(tmp_path, seed):
     import random
