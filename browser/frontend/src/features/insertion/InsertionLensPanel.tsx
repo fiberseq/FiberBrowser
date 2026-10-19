@@ -695,6 +695,9 @@ export function InsertionLensPanel() {
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-ink-muted mr-1">
                 Consensus{response.consensus ? ` ${response.consensus.length.toLocaleString()} bp` : ''}
+                {response.consensus_resource && <span role="status" data-testid="insertion-lens-resource">
+                  {' · '}{response.consensus_resource.status.replace(/_/g, ' ')} ({response.consensus_resource.reason.replace(/_/g, ' ')})
+                </span>}
                 {response.consensus && (
                   <span title={consensusMethod(response).title} data-testid="insertion-lens-consensus-method"
                     className={response.consensus.fallback ? 'text-amber-600 dark:text-amber-400' : undefined}>

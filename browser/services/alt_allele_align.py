@@ -251,6 +251,26 @@ def align_middle(query: str, target: str, offset: int = 0) -> list[tuple[int, in
     return _ops_to_cigar(align(query, target, band_width(len(query), len(target)) + max(0, int(offset))))
 
 
+def realign_batch(jobs, layout, alt_seq):
+    """One killable, allocation-accounted request for all carrier middles."""
+    from services.reconstruction_budget import isolated
+    return isolated(__name__, '_realign_batch', (jobs, layout, alt_seq), {},
+                    lengths=[len(job[3]) for job in jobs] + [len(alt_seq)], large=True)
+
+
+def _realign_batch(jobs, layout, alt_seq):
+    from services.reconstruction_budget import ResourceResult
+    results = []
+    for cigar, start, plan, sequence in jobs:
+        try:
+            results.append(realign(cigar, start, sequence, plan, layout, alt_seq))
+        except ResourceResult:
+            raise  # never cache a resource-refused carrier as a complete build
+        except (ValueError, IndexError):
+            results.append(None)
+    return results
+
+
 # ---------------------------------------------------------------------------
 # One read
 

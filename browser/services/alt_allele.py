@@ -34,6 +34,7 @@ import tempfile
 import threading
 import time
 from typing import Any, Optional
+from services.reconstruction_budget import budgeted_request
 
 from services.alt_allele_align import (
     KIND_CIGAR,
@@ -126,7 +127,7 @@ def _cache_key(paths: list[str], definition: dict, daf: bool, reference_id: str,
     the reference the flanks come from (its key and its FASTA file's stamp: a FASTA replaced
     at the same path is another reference) and the plasmid links that choose the contig."""
     reference = [reference_id, *(_stamps([fasta_path])[0] if fasta_path and "://" not in str(fasta_path) else [fasta_path])]
-    blob = json.dumps({"schema": SCHEMA, "files": _stamps(paths), "def": definition, "daf": daf,
+    blob = json.dumps({"schema": SCHEMA, "budget_version": "reconstruction:v1", "files": _stamps(paths), "def": definition, "daf": daf,
                        "reference": reference, "links": repr(sorted((contig_links or {}).items()))}, sort_keys=True)
     return hashlib.sha1(blob.encode()).hexdigest()[:20]
 
@@ -207,6 +208,7 @@ def _reference_length(fasta, bam, chrom: str, chrom_map=None) -> Optional[int]:
     return int(bam.get_reference_length(name)) if name is not None else None
 
 
+@budgeted_request
 def build_alt_allele(bam_paths: list[str], definition: dict, out_dir: str, *, fasta=None, daf: bool = False,
                      chrom_map=None, contig_links=None, bam_handle_getter=None, label: str = "",
                      source_genome: Optional[str] = None) -> dict:
@@ -272,24 +274,12 @@ def build_alt_allele(bam_paths: list[str], definition: dict, out_dir: str, *, fa
         jobs += [(KIND_REFERENCE, {"kind": KIND_REFERENCE}, read)
                  for read, _p, _b in _evenly(reference_reads, DEFAULT_MAX_REFERENCE)]
 
-    def one(job):
-        kind, plan, read = job
-        try:
-            res = realign(read.cigartuples, read.reference_start, read.query_sequence or "",
-                          {**plan, "kind": kind}, layout, alt_seq)
-        except Exception:
-            return None
-        return (kind, read, res) if res is not None else None
-
-    if len(jobs) > 16:
-        # The banded aligner releases the GIL (numba nogil).
-        from concurrent.futures import ThreadPoolExecutor
-        from services.background_work import auxiliary_worker_count, configure_worker_threads
-        workers = auxiliary_worker_count(max(1, min(8, (os.cpu_count() or 2) - 1)))
-        with ThreadPoolExecutor(max_workers=workers, initializer=configure_worker_threads) as pool:
-            results = list(pool.map(one, jobs))
-    else:
-        results = [one(job) for job in jobs]
+    from services.alt_allele_align import realign_batch
+    plans = [(read.cigartuples, read.reference_start, {**plan, 'kind': kind}, read.query_sequence or '')
+             for kind, plan, read in jobs]
+    alignments = realign_batch(plans, layout, alt_seq)
+    results = [(kind, read, res) if res is not None else None
+               for (kind, _plan, read), res in zip(jobs, alignments)]
 
     os.makedirs(out_dir, exist_ok=True)
     tmp = tempfile.mkdtemp(prefix=".build-", dir=out_dir)

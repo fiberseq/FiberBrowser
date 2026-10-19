@@ -24,7 +24,6 @@ Browser runs has it (``daf_aware_consensus``), and the majority vote otherwise
 
 from __future__ import annotations
 
-import os
 from collections import Counter
 from typing import Optional
 
@@ -52,7 +51,7 @@ def encode(seq: str) -> np.ndarray:
     return _ENCODE[np.frombuffer(seq.encode("ascii", "replace"), dtype=np.uint8)]
 
 
-@_njit(cache=False, nogil=True)
+@_njit(cache=True, nogil=True)
 def _banded_align(a, b, w):  # pragma: no cover - compiled
     """Global alignment of ``a`` against ``b`` in a band of half-width ``w``
     around the scaled diagonal. Returns the forward op array (OP_*)."""
@@ -138,6 +137,13 @@ def band_width(len_a: int, len_b: int) -> int:
 
 def align(a: str | np.ndarray, b: str | np.ndarray, w: Optional[int] = None) -> np.ndarray:
     """Forward op array aligning ``a`` (a read's insert) to ``b`` (a backbone)."""
+    from services.reconstruction_budget import current_budget, isolated
+    n, m = len(a), len(b)
+    width = int(w if w is not None else band_width(n, m))
+    budget = current_budget()
+    if budget is None:
+        return isolated(__name__, 'align', (a, b, w), {}, lengths=[n, m], pairs=[(n, m, width)], large=True)
+    budget.pair(n, m, width)
     ea = encode(a) if isinstance(a, str) else a
     eb = encode(b) if isinstance(b, str) else b
     if ea.shape[0] == 0 or eb.shape[0] == 0:
@@ -209,7 +215,7 @@ def _evenly(items: list, limit: int) -> list:
     return [items[int(i * step)] for i in range(limit)]
 
 
-def build_consensus(inserts: list[str], *, max_reads: int = 32, rounds: int = 2) -> str:
+def _build_consensus(inserts: list[str], *, max_reads: int = 32, rounds: int = 2) -> str:
     """Star consensus of ``inserts`` (all in the same orientation)."""
     inserts = [seq for seq in inserts if seq]
     if not inserts:
@@ -306,6 +312,19 @@ def daf_aware_consensus(records: list, module=None) -> tuple[Optional[dict], Opt
     share of consensus columns called at FiberHMM's quality floor (Phred 20), not a
     per-base confidence."""
     module = module or fiberhmm_insert_consensus()
+    values, why = _collect_daf(records, module)
+    if values is None:
+        return None, why
+    from services.reconstruction_budget import isolated
+    lengths = [len(value[2]) for value in values]
+    median = sorted(lengths)[len(lengths) // 2]
+    used = _evenly(sorted(values, key=lambda value: value[0]), 200)
+    pairs = [(len(v[2]), median, 48 + abs(len(v[2]) - median) + max(len(v[2]), median) // 40)
+             for v in used] * 3
+    return isolated(__name__, '_daf_from_carriers', (values,), {}, lengths=lengths, pairs=pairs, large=True)
+
+
+def _collect_daf(records, module):
     if module is None:
         return None, "the FiberHMM this Browser runs has no DAF-aware insert consensus (it is older than 3.0)"
     if not records:
@@ -330,17 +349,40 @@ def daf_aware_consensus(records: list, module=None) -> tuple[Optional[dict], Opt
     if len(carriers) < 2:
         return None, ("FiberHMM could not tell the deamination strand of enough carriers (it reads it from the "
                       "MD tag or MM/ML marks)")
-    consensus = module.build_consensus(carriers)
+    return [(c.key, c.query_start, c.seq, c.strand, c.duplicate) for c in carriers], None
+
+
+def _daf_from_carriers(values):
+    from services.reconstruction_budget import ResourceResult, current_budget
+    module = fiberhmm_insert_consensus()
+    if module is None:
+        return None, 'DAF-aware consensus is unavailable'
+    # Only the supported banded allocation contract can enter this adapter.
+    import inspect
+    kernel = getattr(module, '_banded_align', None)
+    source = inspect.getsource(getattr(kernel, 'py_func', kernel)) if kernel else ''
+    if not all(part in source for part in ('width = 2 * w + 1', 'dtype=np.int32', 'dtype=np.uint8', '(n + 1, width)')):
+        raise ResourceResult('unavailable', 'unsupported_daf_allocation_contract')
+    def budgeted_align(read, cons, strand):
+        w = 48 + abs(len(read) - len(cons)) + max(len(read), len(cons)) // 40
+        current_budget().pair(len(read), len(cons), w)
+        return kernel(read, cons, w, strand)
+    module.align = budgeted_align
+    carriers = [module.Carrier(*value) for value in values]
+    consensus = module.build_consensus(carriers, max_reads=200, rounds=3)
     if consensus is None or not consensus.sequence:
-        return None, "FiberHMM built no consensus from these carriers"
-    n_ct = sum(1 for c in carriers if c.strand == module.STRAND_CT)
+        return None, 'FiberHMM built no consensus from these carriers'
+    used = _evenly(sorted(carriers, key=lambda c: c.key), 200)
+    n_ct = sum(1 for c in used if c.strand == module.STRAND_CT)
     quality = np.asarray(consensus.quality, dtype=float)
-    return {"seq": consensus.sequence,
-            "confident_fraction": round(float(np.mean(quality >= module.MIN_QUALITY)) if quality.size else 0.0, 4),
-            "carriers_ct": n_ct, "carriers_ga": len(carriers) - n_ct}, None
+    return {'seq': consensus.sequence,
+            'confident_fraction': round(float(np.mean(quality >= module.MIN_QUALITY)) if quality.size else 0.0, 4),
+            'carriers_ct': n_ct, 'carriers_ga': len(used) - n_ct,
+            'input_count': len(carriers), 'used_count': len(used),
+            'sampling': 'evenly_by_record_key', 'max_reads': 200, 'rounds': 3}, None
 
 
-def consensus_with_knots(
+def _consensus_with_knots(
     inserts: list[str], *, max_reads: int = 32, knot_step: int = 32, seq: Optional[str] = None,
 ) -> dict:
     """``{seq, reads: [{knots, identity}]}`` for ``inserts`` (order kept); ``seq``: a consensus
@@ -355,19 +397,11 @@ def consensus_with_knots(
         knots, identity = read_to_consensus_knots(align(ea, eb), ea, eb, step=knot_step)
         return {"knots": knots, "identity": round(identity, 4)}
 
-    if len(inserts) > 8:
-        # The compiled kernel releases the GIL, so threads run alignments in parallel.
-        from concurrent.futures import ThreadPoolExecutor
-        from services.background_work import auxiliary_worker_count, configure_worker_threads
-        workers = auxiliary_worker_count(max(1, min(8, (os.cpu_count() or 2) - 1)))
-        with ThreadPoolExecutor(max_workers=workers, initializer=configure_worker_threads) as pool:
-            reads = list(pool.map(one, inserts))
-    else:
-        reads = [one(insert) for insert in inserts]
+    reads = [one(insert) for insert in inserts]
     return {"seq": seq, "reads": reads}
 
 
-def partials_to_consensus(partials: list[tuple[str, str]], seq: str, *, knot_step: int = 32) -> list[dict]:
+def _partials_to_consensus(partials: list[tuple[str, str]], seq: str, *, knot_step: int = 32) -> list[dict]:
     """Knots and identity of partial inserts (from reads clipped at the
     insertion) against the consensus ``seq``.
 
@@ -391,10 +425,71 @@ def partials_to_consensus(partials: list[tuple[str, str]], seq: str, *, knot_ste
         knots, identity = read_to_consensus_knots(align(ea, eb), ea, eb, step=knot_step)
         return {"knots": [[a, b + offset] for a, b in knots], "identity": round(identity, 4)}
 
-    if len(partials) > 8:
-        from concurrent.futures import ThreadPoolExecutor
-        from services.background_work import auxiliary_worker_count, configure_worker_threads
-        workers = auxiliary_worker_count(max(1, min(8, (os.cpu_count() or 2) - 1)))
-        with ThreadPoolExecutor(max_workers=workers, initializer=configure_worker_threads) as pool:
-            return list(pool.map(one, partials))
     return [one(item) for item in partials]
+
+
+def _planned(inserts, backbone, *, repeats=1):
+    return [(len(s), len(backbone), band_width(len(s), len(backbone))) for s in inserts] * repeats
+
+
+def build_consensus(inserts: list[str], *, max_reads: int = 32, rounds: int = 2) -> str:
+    from services.reconstruction_budget import isolated
+    ordered = sorted((s for s in inserts if s), key=len)
+    backbone = ordered[len(ordered) // 2] if ordered else ''
+    sample = _evenly(ordered, max_reads)
+    return isolated(__name__, '_build_consensus', (inserts,), {'max_reads': max_reads, 'rounds': rounds},
+                    lengths=[len(s) for s in inserts], pairs=_planned(sample, backbone, repeats=max(1, rounds)), large=True)
+
+
+def consensus_with_knots(inserts, *, max_reads=32, knot_step=32, seq=None):
+    from services.reconstruction_budget import isolated
+    ordered = sorted((s for s in inserts if s), key=len)
+    backbone = seq if seq is not None else ordered[len(ordered) // 2] if ordered else ''
+    pairs = _planned(inserts, backbone)
+    if seq is None:
+        pairs += _planned(_evenly(ordered, max_reads), backbone, repeats=2)
+    return isolated(__name__, '_consensus_with_knots', (inserts,),
+                    {'max_reads': max_reads, 'knot_step': knot_step, 'seq': seq},
+                    lengths=[len(s) for s in inserts] + ([len(seq)] if seq is not None else []), pairs=pairs, large=True)
+
+
+def partials_to_consensus(partials, seq, *, knot_step=32):
+    from services.reconstruction_budget import isolated
+    pairs = [(len(s), min(len(s), len(seq)), band_width(len(s), min(len(s), len(seq)))) for s, _ in partials]
+    return isolated(__name__, '_partials_to_consensus', (partials, seq), {'knot_step': knot_step},
+                    lengths=[len(s) for s, _ in partials] + [len(seq)], pairs=pairs, large=True)
+
+
+def _lens_reconstruction(full, canonical, partials, daf_values, why):
+    daf_info, method = None, 'majority'
+    if daf_values:
+        daf_info, why = _daf_from_carriers(daf_values)
+        if daf_info is not None:
+            method = 'daf'
+    sequence = daf_info['seq'] if daf_info else _build_consensus(canonical)
+    result = _consensus_with_knots(full, seq=sequence)
+    return {'full': result, 'partials': _partials_to_consensus(partials, sequence),
+            'daf': daf_info, 'method': method, 'fallback': why}
+
+
+def reconstruct_lens(full, canonical, partials, *, records=(), daf=False, daf_compatible=True):
+    from services.reconstruction_budget import isolated
+    values, why = None, None
+    if daf and daf_compatible:
+        values, why = _collect_daf(records, fiberhmm_insert_consensus())
+    if daf and not daf_compatible:
+        why = 'Canonical allele normalization changes the source query span; using canonical sequence majority'
+    ordered = sorted(canonical, key=len)
+    backbone = ordered[len(ordered) // 2] if ordered else ''
+    pairs = _planned(full, backbone)
+    pairs += [(len(s), min(len(s), len(backbone)), band_width(len(s), min(len(s), len(backbone)))) for s, _ in partials]
+    if values:
+        ns = [len(v[2]) for v in values]
+        median = sorted(ns)[len(ns) // 2]
+        used = _evenly(sorted(values, key=lambda value: value[0]), 200)
+        pairs += [(len(v[2]), median, 48 + abs(len(v[2]) - median) + max(len(v[2]), median) // 40) for v in used] * 3
+    else:
+        pairs += _planned(_evenly(ordered, 32), backbone, repeats=2)
+    lengths = [len(s) for s in full + canonical] + [len(s) for s, _ in partials]
+    return isolated(__name__, '_lens_reconstruction', (full, canonical, partials, values, why), {},
+                    lengths=lengths, pairs=pairs, large=True)

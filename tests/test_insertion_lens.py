@@ -45,6 +45,28 @@ def lens(fixture):
     return build_lens([fixture["bam"]], "chrT", pos=SITE, len_min=1000, flank=FLANK, loader_kwargs=LOADER)
 
 
+def test_resource_refusal_retains_ordinary_inspection_and_is_not_cached(fixture, monkeypatch):
+    from services import insertion_consensus, insertion_lens
+    from services.reconstruction_budget import ResourceResult
+    def refuse(*args, **kwargs):
+        raise ResourceResult('budget_exceeded', 'alignment_pair', cells=30_000_000)
+    monkeypatch.setattr(insertion_consensus, 'reconstruct_lens', refuse)
+    result = build_lens([fixture['bam']], 'chrT', pos=SITE, len_min=1000, flank=FLANK, loader_kwargs=LOADER)
+    ordinary = build_lens([fixture['bam']], 'chrT', pos=SITE, len_min=1000, flank=FLANK, loader_kwargs=LOADER, consensus=False)
+    assert result['success'] and result['consensus_resource']['status'] == 'budget_exceeded'
+    assert 'consensus' not in result
+    assert result['carriers'] == ordinary['carriers'] and result['reference'] == ordinary['reference']
+    # Exercise the actual cache admission path with a real file stamp.
+    from types import SimpleNamespace
+    state = SimpleNamespace(translate_chrom=lambda c: c, get_dataset=lambda _: SimpleNamespace(), fasta=None)
+    monkeypatch.setattr(insertion_lens, '_dataset_bam_paths', lambda *_: ('synthetic', [fixture['bam']], None))
+    monkeypatch.setattr(insertion_lens, 'build_lens', lambda *a, **k: dict(result))
+    monkeypatch.setattr('services.plasmid_reconcile.contig_links', lambda *a, **k: None)
+    before = len(insertion_lens._cache)
+    insertion_lens.insertion_lens_payload(state, chrom='chrT', pos=SITE)
+    assert len(insertion_lens._cache) == before
+
+
 def _local_expected(intervals, q0, lo, hi):
     """Truth (query start, length) -> lens-local [s, e) clipped to [lo, hi)."""
     out = []

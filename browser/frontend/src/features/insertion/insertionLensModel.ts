@@ -100,6 +100,13 @@ export interface LensResponse {
     /** A DAF dataset that got the majority vote: why the DAF-aware consensus was not used. */
     fallback?: string;
   };
+  consensus_resource?: {
+    status: 'budget_exceeded' | 'cancelled' | 'partial' | 'unavailable';
+    reason: string;
+    complete: false;
+    parameters: Record<string, unknown>;
+    budget_version: string;
+  };
   /** What the run that called the BAM reports for this insertion (qc/<BAM>.insert_consensus.json). */
   run_consensus?: {
     path: string; used: boolean; carriers?: number | null; carriers_ct?: number | null; carriers_ga?: number | null;

@@ -72,6 +72,18 @@ describe('lens actions belong to the current response identity', () => {
     resetPreviewsForTests(false);
     useBrowserStore.setState(initial, true);
   });
+
+  it('shows a resource refusal while keeping ordinary inspection and disabling consensus actions', async () => {
+    await act(async () => { root.render(<InsertionLensPanel />); });
+    const data = response(1000);
+    delete data.consensus;
+    data.consensus_resource = { status: 'budget_exceeded', reason: 'alignment_pair', parameters: { cells: 30_000_000 },
+      complete: false, budget_version: 'reconstruction:v1' };
+    await act(async () => { pending[0].resolve(new Response(JSON.stringify(data))); });
+    expect(container.querySelector('[data-testid="insertion-lens-resource"]')?.textContent).toContain('budget exceeded');
+    expect((container.querySelector('[data-testid="insertion-lens-identify"]') as HTMLButtonElement).disabled).toBe(true);
+    expect(container.textContent).toContain('All inserts FASTA');
+  });
   const finish = async (index: number, ref: number) => {
     await act(async () => { pending[index].resolve(new Response(JSON.stringify(response(ref)))); });
   };

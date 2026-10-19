@@ -77,20 +77,31 @@ async def get_insertion_lens(
     layer_names: Optional[str] = Query(None),
     include_methylation: bool = Query(True),
     hide_terminal_gaps: bool = Query(True),
+    request: Request = None,
     state=Depends(get_state),
 ):
     """One insertion's carriers (CIGAR and clipped) and spanning reference reads in
     insertion-local coordinates. ``ref``/``length``: the SV cluster (as "Split by
     this SV" takes it); without them the cluster is found at ``pos``."""
-    payload = await asyncio.to_thread(
-        insertion_lens_payload, state, chrom=chrom, pos=pos, dataset_id=dataset_id,
-        tolerance=tolerance, len_min=len_min, len_max=len_max, ref=ref, length=length,
-        include_duplicates=include_duplicates, flank=flank,
-        max_carriers=max_carriers, max_reference=max_reference, consensus=consensus,
-        include_sequences=include_sequences, ml_threshold=ml_threshold,
-        layer_names=parse_optional_csv_list(layer_names), include_methylation=include_methylation,
-        hide_terminal_gaps=hide_terminal_gaps, conflict_options=conflict_options,
-    )
+    from services.background_work import Cancelled, cancelled_response, dataset_identity, run_background
+    from services.sv_alleles import reference_identity
+    key = ('insertion_lens', id(state), chrom, pos, dataset_id, tolerance, len_min, len_max,
+           ref, length, include_duplicates, flank, max_carriers, max_reference, consensus,
+           include_sequences, ml_threshold, layer_names, include_methylation, hide_terminal_gaps,
+           conflict_options, reference_identity(state), repr(getattr(state, 'chrom_map', None)),
+           dataset_identity(state, [dataset_id] if dataset_id else list(getattr(state, 'dataset_order', []) or [])))
+    try:
+        payload = await run_background(
+            request, key, insertion_lens_payload, state, chrom=chrom, pos=pos, dataset_id=dataset_id,
+            tolerance=tolerance, len_min=len_min, len_max=len_max, ref=ref, length=length,
+            include_duplicates=include_duplicates, flank=flank,
+            max_carriers=max_carriers, max_reference=max_reference, consensus=consensus,
+            include_sequences=include_sequences, ml_threshold=ml_threshold,
+            layer_names=parse_optional_csv_list(layer_names), include_methylation=include_methylation,
+            hide_terminal_gaps=hide_terminal_gaps, conflict_options=conflict_options,
+        )
+    except Cancelled:
+        return cancelled_response()
     return ORJSONResponse(payload)
 
 
@@ -107,7 +118,7 @@ class AltAlleleRequest(BaseModel):
 
 
 @router.post("/api/alt_allele/open")
-async def open_alt_allele_endpoint(req: AltAlleleRequest, state=Depends(get_state)):
+async def open_alt_allele_endpoint(req: AltAlleleRequest, request: Request = None, state=Depends(get_state)):
     """An insertion's carriers re-aligned onto its alternate allele (reference flank + insert
     consensus + reference flank), opened as a dataset with that contig as its own reference.
     Built once per definition (cached on disk); ``built`` says whether this call built it."""
@@ -126,8 +137,18 @@ async def open_alt_allele_endpoint(req: AltAlleleRequest, state=Depends(get_stat
             return open_alt_allele(state, req.dataset_id, req.model_dump())
         except (AltAlleleError, KeyError, ValueError) as exc:
             return {"success": False, "error": str(exc)}
+        except ResourceResult as exc:
+            return {"success": False, "error": exc.reason, "resource": exc.payload()}
 
-    return ORJSONResponse(await asyncio.to_thread(run))
+    from services.reconstruction_budget import ResourceResult
+    from services.background_work import Cancelled, cancelled_response, dataset_identity, run_background
+    from services.sv_alleles import reference_identity
+    try:
+        key = ('alt_allele', id(state), repr(req.model_dump()), reference_identity(state),
+               dataset_identity(state, [req.dataset_id] if req.dataset_id else list(getattr(state, 'dataset_order', []) or [])))
+        return ORJSONResponse(await run_background(request, key, run))
+    except Cancelled:
+        return cancelled_response()
 
 
 # ---------------------------------------------------------------------------

@@ -793,27 +793,31 @@ def build_lens(
         },
     }
     if consensus and full_seqs:
-        from services.insertion_consensus import consensus_with_knots, partials_to_consensus
+        from services.insertion_consensus import reconstruct_lens
+        from services.reconstruction_budget import ResourceResult
         cons_started = time.perf_counter()
-        method, why_not, daf_consensus = "majority", None, None
-        if daf and daf_compatible:
-            from services.insertion_consensus import daf_aware_consensus
-            daf_consensus, why_not = daf_aware_consensus(full_records)
-            if daf_consensus is not None:
-                method = "daf"
-        if daf and not daf_compatible:
-            why_not = 'Canonical allele normalization changes the source query span; using canonical sequence majority'
-        from services.insertion_consensus import build_consensus
-        cons = consensus_with_knots(full_seqs, seq=daf_consensus["seq"] if daf_consensus else build_consensus(canonical_seqs))
+        try:
+            reconstruction = reconstruct_lens(full_seqs, canonical_seqs, partial_items,
+                                               records=full_records, daf=daf, daf_compatible=daf_compatible)
+        except ResourceResult as exc:
+            payload['consensus_resource'] = exc.payload()
+            payload['seconds'] = round(time.perf_counter() - started, 3)
+            return payload  # ordinary geometry, previews and chromatin remain available
+        cons, daf_consensus = reconstruction['full'], reconstruction['daf']
+        method, why_not = reconstruction['method'], reconstruction['fallback']
         for entry, read_cons in zip(full_entries, cons["reads"]):
             entry["knots"] = read_cons["knots"]
             entry["identity"] = read_cons["identity"]
         if partial_items and cons["seq"]:
-            for entry, read_cons in zip(partial_entries, partials_to_consensus(partial_items, cons["seq"])):
+            for entry, read_cons in zip(partial_entries, reconstruction['partials']):
                 entry["knots"] = read_cons["knots"]
                 entry["identity"] = read_cons["identity"]
         from services.insertion_consensus import METHOD_LABELS
         payload["consensus"] = {
+            "status": "complete",
+            "budget_version": "reconstruction:v1",
+            "sampling": {"policy": "evenly_by_record_key" if daf_consensus else "evenly_by_length",
+                         "input_count": len(full_seqs), "max_reads": 200 if daf_consensus else 32},
             "seq": cons["seq"],
             "length": len(cons["seq"]),
             "n_reads": (daf_consensus["carriers_ct"] + daf_consensus["carriers_ga"]) if daf_consensus
@@ -1094,7 +1098,7 @@ def insertion_lens_payload(state, *, chrom: str, pos: int, dataset_id: Optional[
     # Remote files have no local stamp to notice a new version by: not cached.
     cacheable = all(stamp[1] is not None for stamp in stamps)
     key = (
-        dataset_id, stamps, repr(chrom_map), repr(links),
+        "reconstruction:v1", dataset_id, stamps, repr(chrom_map), repr(links),
         chrom, int(pos), int(tolerance), int(len_min),
         len_max, ref, length, bool(include_duplicates), int(flank), int(max_carriers), int(max_reference), bool(consensus),
         bool(include_sequences), repr(sorted(loader_kwargs.items())), daf, signal_filter_key(state),
@@ -1119,7 +1123,7 @@ def insertion_lens_payload(state, *, chrom: str, pos: int, dataset_id: Optional[
         reference=getattr(state, 'fasta', None), conflict_options=conflict_options,
     )
     payload["dataset_id"] = dataset_id
-    if not cacheable or not payload.get("success"):
+    if not cacheable or not payload.get("success") or payload.get("consensus_resource"):
         return payload
     with _cache_lock:
         _cache[key] = payload
