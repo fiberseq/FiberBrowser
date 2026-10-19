@@ -66,6 +66,27 @@ def test_other_winners_and_holes_are_not_gap_evidence(tmp_path, claims):
     assert not any(i["kind"] in ("deletion", "replacement") for i in items)
 
 
+@pytest.mark.parametrize('strand', ['+', '-'])
+@pytest.mark.parametrize('dt,dq', [(200, 0), (200, 37), (201, 1)])
+def test_conflicting_gap_retains_full_unresolved_geometry_across_bins(tmp_path, strand, dt, dq):
+    t = 999900
+    claims = [[0, t - 100, t + dt + 100, 0, []], [0, t + 50, t + 150, 1, []]]
+    config = gap_map(tmp_path, dt, dq, strand, t, claims=claims)
+    left = diff.assembly_items_for_region(config, TARGET, t, t + 1)
+    right = diff.assembly_items_for_region(config, TARGET, t + dt - 1, t + dt)
+    unresolved = [i for i in left if i['reason'] == 'conflicting_map_ownership']
+    assert len(unresolved) == 1
+    item, = unresolved
+    assert item in right
+    assert (item['t_start'], item['t_end'], item['ref_bp'], item['alt_bp']) == (t, t + dt, dt, dq)
+    assert item['ownership_status'] == 'unresolved' and item['sequence_status'] == 'unresolved'
+    assert item['kind'] == 'no_correspondence' and 't' not in item
+    assert item['raw_gap'] == {'chain': 0, 't': t, 'q': 200, 'dt': dt, 'dq': dq, 'reason': 'too_big'}
+    assert item['competing_claims'] == [{'start': t + 50, 'end': t + 150, 'chain': 1}]
+    with config.handle.lock:
+        assert not diff.primary_gaps_for_region(config.handle, TARGET, 'H#1', t, t + dt)
+
+
 def test_gap_crossing_cache_bin_keeps_id_and_bin_count(tmp_path):
     config = gap_map(tmp_path, 201, 1, t=999900)
     left = diff.assembly_items_for_region(config, TARGET, 999999, 1000000)

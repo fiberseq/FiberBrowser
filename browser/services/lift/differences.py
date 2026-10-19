@@ -180,8 +180,9 @@ def primary_gap_records(handle, chrom, hap):
             overlaps.append((ns, min(ne, furthest_end)))
         furthest_end = max(furthest_end, ne)
     conflicts = _merge(overlaps)
-    out = []
+    out, unresolved = [], []
     for ci in sorted({n[2] for n in nets}):
+        own = [(a, b) for a, b, chain in nets if chain == ci]
         for gap in handle.map.chain_data(ci)["gaps"]:
             t, _q, dt, dq, _reason = gap
             if dt < 0 or dq < 0 or not (dt or dq):
@@ -192,10 +193,17 @@ def primary_gap_records(handle, chrom, hap):
             j = bisect.bisect_left(starts, t) - 1
             boundary = (j >= 0 and j + 1 < len(nets) and nets[j][1] == t
                         and nets[j + 1][0] == t + dt and nets[j][2] == nets[j + 1][2] == ci)
-            if not (interior or boundary):
-                continue
             lo, hi = t - 1, t + dt + 1  # ownership includes both aligned flanks
-            if any(a < hi and b > lo for a, b in conflicts):
+            conflicted = any(a < hi and b > lo for a, b in conflicts)
+            if not (interior or boundary) or conflicted:
+                # Keep the exact raw gap when both prospective flanks belong
+                # to this chain but intervening/overlapping claims veto it.
+                # It is inspectable uncertainty, never a smaller inferred SV.
+                if any(a < t <= b for a, b in own) and any(a <= t + dt < b for a, b in own):
+                    claims = [{'start': a, 'end': b, 'chain': chain} for a, b, chain in nets
+                              if chain != ci and a < hi and b > lo]
+                    if claims or conflicted:
+                        unresolved.append((ci, gap, claims))
                 continue
             out.append((ci, gap, boundary and not interior))
     out.sort(key=lambda record: record[1][0])
@@ -206,14 +214,14 @@ def primary_gap_records(handle, chrom, hap):
         ends.append(furthest)
     coverage = _merge([(ns, ne) for ns, ne, _ci in nets] +
                       [(g[0], g[0] + g[2]) for _ci, g, _boundary in out if g[2]])
-    cache[key] = (out, starts, ends, coverage)
+    cache[key] = (out, starts, ends, coverage, unresolved)
     return out
 
 
 def primary_gaps_for_region(handle, chrom, hap, start, end):
     """Indexed owned gaps overlapping a half-open target view; caller holds lock."""
     records = primary_gap_records(handle, chrom, hap)
-    _, starts, ends, _ = handle._primary_gap_cache[(chrom, hap)]
+    _, starts, ends, _, _unresolved = handle._primary_gap_cache[(chrom, hap)]
     lo, hi = bisect.bisect_right(ends, start), bisect.bisect_left(starts, end)
     return [r for r in records[lo:hi] if r[1][0] + max(r[1][2], 1) > start]
 
@@ -231,6 +239,14 @@ def _bin_items(config, chrom, bin_index, hap):
     with handle.lock:
         gaps = primary_gaps_for_region(handle, chrom, hap, start, end)
         coverage = handle._primary_gap_cache[(chrom, hap)][3]
+        for ci, (t, q, dt, dq, reason), claims in handle._primary_gap_cache[(chrom, hap)][4]:
+            if t >= end or t + max(dt, 1) <= start:
+                continue
+            q0, q1 = _source_span(handle, handle.map.chains[ci], q, dq)
+            item = _item(handle, hap, ci, 'no_correspondence', 'conflicting_map_ownership', t, t + dt, q0, q1)
+            item.update(ownership_status='unresolved', sequence_status='unresolved', competing_claims=claims,
+                        raw_gap=dict(chain=ci, t=t, q=q, dt=dt, dq=dq, reason=handle.map.reasons[reason]))
+            out.append(item)
         ti = handle.map.targets.get(chrom)
         # Nets are the authority for primary status, including a gap whose
         # two flanking blocks might be outside a tiny requested viewport.
