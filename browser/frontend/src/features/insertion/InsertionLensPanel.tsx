@@ -1,3 +1,5 @@
+import { applyFrozenDifferenceSplit } from '../differences/splits';
+import { footprintGroups, type FootprintGrouping } from '../differences/footprintGroups';
 /**
  * The insertion lens: carrier reads of one insertion drawn in insertion-local
  * coordinates (left flank | insert | right flank), with per-group profiles,
@@ -256,16 +258,16 @@ export function InsertionLensPanel() {
   const conflictOptionsKey = JSON.stringify(conflictOptions);
   const dupParam = { include_duplicates: String(showDuplicateReads), conflict_options: conflictOptionsKey };
   const fetchKey = target ? lensParams(target, dupParam).toString() : '';
-  const requestIdentity = JSON.stringify([fetchKey, refreshGeneration]);
+  const requestIdentity = JSON.stringify(target?.workspace ? [target.workspace] : [fetchKey, refreshGeneration]);
   const [loadedResponse, setLoadedResponse] = useState<{ identity: string; data: LensResponse } | null>(null);
   // Guard during render too: effects run after the new target has rendered.
   const response = target && loadedResponse?.identity === requestIdentity ? loadedResponse.data : null;
   const currentResponse = useRef(loadedResponse);
   currentResponse.current = response ? loadedResponse : null;
   const exportController = useRef<AbortController | null>(null);
-  const includePutative = target?.includePutative !== false;
-  const includeConflicting = target?.includeConflicting === true;
-  const includeAmbiguous = target?.includeAmbiguous === true;
+  const includePutative = target?.workspace?.calls.evidence_policy.include_putative ?? target?.includePutative !== false;
+  const includeConflicting = target?.workspace?.calls.evidence_policy.include_conflicting ?? target?.includeConflicting === true;
+  const includeAmbiguous = target?.workspace?.calls.evidence_policy.include_ambiguous ?? target?.includeAmbiguous === true;
   useEffect(() => () => { exportController.current?.abort(); }, [requestIdentity]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -355,11 +357,15 @@ export function InsertionLensPanel() {
     const controller = new AbortController();
     setLoading(true);
     setError(null);
-    fetchJson<LensResponse>(`/api/insertions/lens?${fetchKey}`, { signal: controller.signal })
+    const request = target.workspace ? fetchJson<LensResponse>('/api/differences/lens', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+      body: JSON.stringify({ ...target.workspace.query, frozen_calls: target.workspace.calls }),
+    }) : fetchJson<LensResponse>(`/api/insertions/lens?${fetchKey}`, { signal: controller.signal });
+    request
       .then(res => {
         if (cancelled) return;
         setLoading(false);
-        if (!res.success) { setError(res.error || 'Could not load the insertion'); return; }
+        if (!res.success) { setError(res.error || (res as any).reason || 'Could not load the insertion'); return; }
         setLoadedResponse({ identity: requestIdentity, data: res });
       })
       .catch(err => { if (!cancelled) { setLoading(false); setError(String(err?.message ?? err)); } });
@@ -418,11 +424,19 @@ export function InsertionLensPanel() {
       ? { ...p, insertionLens: { ...p.insertionLens, ...patch } } : p),
   }));
 
-  const layout: LensLayout | null = useMemo(
+  const rawLayout: LensLayout | null = useMemo(
     () => (response ? layoutLens({ ...response, carriers: response.carriers.filter(c => !c.evidence_level
       || c.evidence_level === 'confirmed' || (includePutative && c.evidence_level === 'putative') || (includeConflicting && c.evidence_level === 'conflicting') || (includeAmbiguous && c.evidence_level === 'ambiguous')) }, anchor, reversed) : null),
     [response, anchor, reversed, includePutative, includeAmbiguous, includeConflicting],
   );
+  const patternGroups = useMemo(() => rawLayout ? footprintGroups(rawLayout, target?.footprintGrouping ?? 'none', target?.footprintSites ?? 4) : [],
+    [rawLayout, target?.footprintGrouping, target?.footprintSites]);
+  const layout = useMemo(() => {
+    if (!rawLayout || !patternGroups.length) return rawLayout;
+    const order = patternGroups.flatMap(group => group.indices);
+    return { ...rawLayout, carriers: order.map(i => rawLayout.carriers[i]), carrierRows: order.map(i => rawLayout.carrierRows[i]),
+      carrierCoverage: order.map(i => rawLayout.carrierCoverage?.[i] ?? []) };
+  }, [rawLayout, patternGroups]);
   const markColor = useMemo(() => {
     const first = response?.carriers[0]?.read;
     if (first?.methyl_m6a) return MOD_COLORS.m6a;
@@ -435,8 +449,12 @@ export function InsertionLensPanel() {
     if (layout.reference.length) {
       groups.push({ label: `Reference (${layout.reference.length})`, profile: computeLensProfile(layout.reference, layout.axis.total) });
     }
+    for (const group of patternGroups) groups.push({
+      label: `${target?.footprintGrouping === 'msp' ? 'MSP' : 'Nucleosome'} ${group.pattern} (${group.indices.length})`,
+      profile: computeLensProfile(group.indices.map(i => rawLayout!.carriers[i]), layout.axis.total),
+    });
     return groups;
-  }, [layout]);
+  }, [layout, rawLayout, patternGroups, target?.footprintGrouping]);
 
   // ---- canvases
   // The reads fill the panel's width and follow it (drawer, side dock, full view), also after the
@@ -511,15 +529,21 @@ export function InsertionLensPanel() {
 
   // ---- split the main view's reads by this insertion (the same reads as the lens's groups)
   const splitView = useMemo(() => {
-    if (!response?.sv || !target) return null;
+    if (!response || !target || (!response.sv && !target.workspace)) return null;
     const store = useBrowserStore.getState();
     const panel = store.panels.find(p => p.contentType === 'dataset' && p.datasetId === target.datasetId && !p.collapsed);
-    const inView = viewChrom === response.chrom && viewStart <= response.sv.ref && response.sv.ref <= viewEnd;
+    const ref = target.workspace?.query.target.ref_start ?? response.sv!.ref;
+    const inView = viewChrom === response.chrom && viewStart <= ref && ref <= viewEnd;
     return { stateKey: panel ? (panel.stateKey ?? panel.datasetId ?? target.datasetId) : null, inView };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [response, target, viewChrom, viewStart, viewEnd, datasets]);
   const splitReads = async () => {
-    if (!response?.sv || !target || !splitView?.stateKey || !splitView.inView) return;
+    if (!response || !target || !splitView?.stateKey || !splitView.inView) return;
+    if(target.workspace) {
+      applyFrozenDifferenceSplit(splitView.stateKey,target.workspace.query,target.workspace.calls);
+      say('Applied the frozen target, evidence policy and molecule memberships.'); return;
+    }
+    if(!response.sv) return;
     try {
       const def = await splitBySv(
         { stateKey: splitView.stateKey, datasetId: target.datasetId, chrom: viewChrom, viewStart, viewEnd, includePutative, includeAmbiguous, includeConflicting },
@@ -548,7 +572,10 @@ export function InsertionLensPanel() {
     const controller = new AbortController();
     exportController.current = controller;
     try {
-      const res = await fetchJson<LensResponse>(`/api/insertions/lens?${lensParams(target, { ...dupParam, include_sequences: 'true', consensus: 'false', max_reference: '0' })}`, { signal: controller.signal });
+      const res = await (target.workspace ? fetchJson<LensResponse>('/api/differences/lens', {
+        method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,
+        body:JSON.stringify({...target.workspace.query,frozen_calls:target.workspace.calls,include_sequences:true,consensus:false}),
+      }) : fetchJson<LensResponse>(`/api/insertions/lens?${lensParams(target, { ...dupParam, include_sequences: 'true', consensus: 'false', max_reference: '0' })}`, { signal: controller.signal }));
       if (controller.signal.aborted || currentResponse.current !== snapshot) return;
       if (!res.success) throw new Error(res.error || 'Could not fetch the inserts');
       downloadTextFile(insertsFasta(res.carriers.filter(c => !c.evidence_level || c.evidence_level === 'confirmed'
@@ -718,10 +745,21 @@ export function InsertionLensPanel() {
               <span className="mx-1 h-4 w-px bg-slate-300 dark:bg-slate-600" />
               <AnalysisButton onClick={savePng}>Save PNG</AnalysisButton>
               <AnalysisButton onClick={downloadProfiles}>Profiles TSV</AnalysisButton>
-              <label><input type="checkbox" checked={includePutative} onChange={e => update({ includePutative: e.target.checked })} /> Include putative (hatched; uncheck for confirmed only)</label>
-              <label title="A substantial part of the supporting clip aligns elsewhere"><input type="checkbox" checked={includeConflicting} onChange={e => update({ includeConflicting: e.target.checked })} /> Include conflicting (clip aligns elsewhere)</label>
-              <label><input type="checkbox" checked={includeAmbiguous} onChange={e => update({ includeAmbiguous: e.target.checked })} /> Include ambiguous</label>
+              <label><input type="checkbox" checked={includePutative} disabled={Boolean(target?.workspace)} onChange={e => update({ includePutative: e.target.checked })} /> Include putative (hatched; uncheck for confirmed only)</label>
+              <label title="A substantial part of the supporting clip aligns elsewhere"><input type="checkbox" checked={includeConflicting} disabled={Boolean(target?.workspace)} onChange={e => update({ includeConflicting: e.target.checked })} /> Include conflicting (clip aligns elsewhere)</label>
+              <label><input type="checkbox" checked={includeAmbiguous} disabled={Boolean(target?.workspace)} onChange={e => update({ includeAmbiguous: e.target.checked })} /> Include ambiguous</label>
               <span className="mx-1 h-4 w-px bg-slate-300 dark:bg-slate-600" />
+              <AnalysisSelect label="Footprint groups" value={target.footprintGrouping ?? 'none'}
+                onChange={value => update({ footprintGrouping: value as FootprintGrouping })}
+                options={[{ value: 'none', label: 'Off' }, { value: 'nuc', label: 'Nucleosome pattern' }, { value: 'msp', label: 'MSP pattern' }]} />
+              {target.footprintGrouping && target.footprintGrouping !== 'none' && <>
+                <AnalysisSelect label="Alternate probes" value={target.footprintSites ?? 4}
+                  onChange={value => update({ footprintSites: Number(value) })}
+                  options={[{ value: 2, label: '2' }, { value: 4, label: '4' }]} />
+                <span className="text-ink-muted" data-testid="lens-footprint-groups">
+                  {patternGroups.length} patterns · 1 footprint, 0 observed absence, ? unavailable; probes run left to right on the alternate
+                </span>
+              </>}
               <AnalysisButton
                 onClick={splitReads}
                 disabled={!splitView?.stateKey || !splitView.inView}
@@ -730,7 +768,7 @@ export function InsertionLensPanel() {
                   : 'Colour the reads in view in the dataset\'s panel: carriers (the lens\'s carriers, clipped ones included), reference, not informative'}
                 data-testid="insertion-lens-split"
               >Group in this panel by this insertion</AnalysisButton>
-              {previews && <AnalysisButton
+              {previews && <AnalysisButton disabled={Boolean(target.workspace)}
                 onClick={() => {
                   const sv = response.sv;
                   setNotice('Building the alternate allele (the first time takes a while for thousands of carriers)…');

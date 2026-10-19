@@ -1663,7 +1663,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
     // A read gone to by name, or highlighted from the read menu: a solid outline
     // and a bar in the gutter (not a data colour; the pulse is an overlay).
     if (hasDrawableExtent && readHighlightIds && readHighlightIds.size > 0
-      && (readHighlightIds.has(read.id) || readHighlightIds.has(read.id.replace(/_\d+$/, '')))) {
+      && (readHighlightIds.has(read.analysis_id ?? read.id) || !read.analysis_id && readHighlightIds.has(read.id.replace(/_\d+$/, '')))) {
       const readStartRel = readExtent!.start + linkedOffset;
       const readEndRel = readExtent!.end + linkedOffset;
       const readX = isReversed ? toX(readEndRel) : toX(readStartRel);
@@ -1726,8 +1726,12 @@ export function drawReadTrack(params: DrawReadsParams): void {
     if (params.axis?.blocks.length) {
       ctx.restore();
       for (const block of params.axis.blocks) {
-        const payload = payloadForExpansion(read.live_lift, block.ins);
+        const payload = read.alternate_blocks?.[block.ins.ins_id] ?? payloadForExpansion(read.live_lift, block.ins);
         if (!payload) continue;
+        if(payload.observed_ref_end!==undefined && payload.observed_ref_end!==block.ins.pos){
+          const own=params.axis.toX(payload.observed_ref_end),anchor=params.axis.toX(0,{ins_id:block.ins.ins_id,offset:0});
+          ctx.save();ctx.strokeStyle='#94a3b8';ctx.setLineDash([2,2]);ctx.beginPath();ctx.moveTo(sidebarWidth+own,y+(rowHeight-rowGap)/2);ctx.lineTo(sidebarWidth+anchor,y+(rowHeight-rowGap)/2);ctx.stroke();ctx.restore();
+        }
         // The shorter allele leaves a marked tail; never stretch its calls.
         if (payload.length < block.ins.length) {
           const a = params.axis.toX(0, { ins_id: block.ins.ins_id, offset: payload.length });
@@ -1740,6 +1744,12 @@ export function drawReadTrack(params: DrawReadsParams): void {
           enabled: enabledModTypes, layerColors,
           color: (_a, _b, size, layer) => getColorHit(block.ins.pos - start, block.ins.pos - start, size, layer).color,
         });
+        if (readHighlightIds?.has(read.analysis_id ?? read.id) || selectedReadIds?.has(read.id) || linkedHighlightIds?.has(read.id)) {
+          const a=params.axis.toX(0,{ins_id:block.ins.ins_id,offset:payload.covered[0]});
+          const b=params.axis.toX(0,{ins_id:block.ins.ins_id,offset:payload.covered[1]});
+          ctx.save();ctx.strokeStyle=selectedReadIds?.has(read.id)?'#06b6d4':'#ca8a04';ctx.lineWidth=2;
+          ctx.strokeRect(sidebarWidth+Math.min(a,b),y-1,Math.abs(b-a),Math.max(1,rowHeight-rowGap)+2);ctx.restore();
+        }
         insertionCalls += calls;
         insertionCallsById[block.ins.ins_id] = (insertionCallsById[block.ins.ins_id] ?? 0) + calls;
       }

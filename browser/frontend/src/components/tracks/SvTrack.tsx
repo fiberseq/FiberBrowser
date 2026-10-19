@@ -1,3 +1,6 @@
+import { DifferenceTable } from '../../features/differences/DifferenceTable';
+import { nativeDifference, selectNativeDifference } from '../../features/differences/selection';
+import { DifferencePopover } from '../../features/liveLift/DifferencePopover';
 /**
  * The SV track (fb-n9-sv summary; its own row since fb-n11-tracks): the SV
  * clusters of the panel's reads in view, as deletion arcs, insertion flags and
@@ -26,6 +29,7 @@ import {
 } from './read-track/svDrawing';
 import { runReadMenuContribution, SPLIT_IN_SPLIT, svClusterHints, svClusterMenu } from './read-track/readMenuModel';
 import type { SvCluster, SvSummary } from './read-track/types';
+import { useDifferenceAxis } from '../../features/differences/useDifferenceAxis';
 import { TRACK_BACKGROUND } from './TrackContainerConstants';
 
 /** x/y: track px; cx/cy: client px (the tooltip is fixed, over the reads below). */
@@ -52,6 +56,9 @@ export function SvTrack({ width, height, panel, sidebarWidth = 0 }: {
   const selectedSvs = useBrowserStore(useShallow(s => (svSelection ? svSelection.selected(s.selectedFeatures, datasetId) : NO_FEATURES)));
   const canvasRenderVersion = useCanvasRenderVersion();
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const inspectorAnchor = useRef<HTMLDivElement>(null);
+  const dataset = useBrowserStore(s => s.datasets.find(d => d.id === datasetId));
+  const [showTable, setShowTable] = useState(false);
   const [hover, setHover] = useState<Hover | null>(null);
   const summary = feedHasSv(feed) ? feed!.sv : null;
   const metrics = svBandMetrics(height);
@@ -59,10 +66,9 @@ export function SvTrack({ width, height, panel, sidebarWidth = 0 }: {
   const viewStart = feed?.start ?? 0;
   const regionWidth = Math.max(1, (feed?.end ?? 1) - viewStart);
   const isReversed = Boolean(feed?.isReversed);
-  const toX = useCallback((rel: number) => {
-    const scale = (width - sidebarWidth) / regionWidth;
-    return isReversed ? sidebarWidth + (regionWidth - rel) * scale : sidebarWidth + rel * scale;
-  }, [width, sidebarWidth, regionWidth, isReversed]);
+  const { axis } = useDifferenceAxis(feed?.chrom ?? '', viewStart, viewStart + regionWidth,
+    Math.max(1, width - sidebarWidth), isReversed);
+  const toX = useCallback((rel: number) => sidebarWidth + axis.toX(viewStart + rel), [axis, sidebarWidth, viewStart]);
   usePanOffsetTransform(canvasRef, { scope: feed?.panScope ?? 'main' });
 
   useEffect(() => {
@@ -221,6 +227,7 @@ export function SvTrack({ width, height, panel, sidebarWidth = 0 }: {
         if ((e.shiftKey || e.key === ' ') && svSelection && feed) svSelection.toggle(keyCluster, datasetId, feed.chrom);
         else highlight(keyCluster);
         break;
+      case 'i': if (keyCluster && feed) { handled(); selectNativeDifference(keyCluster, datasetId, feed.chrom, panel.id); } break;
       case 'ContextMenu': case 'F10': {
         if (e.key === 'F10' && !e.shiftKey) return;
         handled();
@@ -238,7 +245,7 @@ export function SvTrack({ width, height, panel, sidebarWidth = 0 }: {
 
   return (
     <div className="relative focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-violet-500" style={{ width, height }}
-      data-copilot-track="sv" data-testid={`sv-track-${datasetId}`}
+      ref={inspectorAnchor} data-copilot-track="sv" data-testid={`sv-track-${datasetId}`}
       data-sv-clusters={summary?.clusters.length ?? 0} data-figure-fill={TRACK_BACKGROUND.signal}
       tabIndex={inView.length ? 0 : -1} role="group" onKeyDown={onKeyDown}
       onBlur={e => { if (keyIndex != null && !e.currentTarget.contains(e.relatedTarget as Node)) { setKeyIndex(null); if (!menuOpen) setHover(null); } }}
@@ -249,6 +256,11 @@ export function SvTrack({ width, height, panel, sidebarWidth = 0 }: {
           {svAlleleLabel(keyCluster.t, keyCluster.ref, keyCluster.len, feed?.chrom ?? '')}, {keyCluster.support.toLocaleString()} of {keyCluster.informative.toLocaleString()} informative reads carry it
         </span>
       )}
+      <button className="absolute right-1 top-0 z-10 text-[10px]" aria-expanded={showTable} onClick={()=>setShowTable(v=>!v)}>Table</button>
+      {showTable && feed && <div className="absolute left-0 right-0 top-full z-40 max-h-64 overflow-auto bg-white dark:bg-slate-900 border p-2">
+        <DifferenceTable chrom={feed.chrom} items={inView.map(c=>nativeDifference(c,feed.chrom))}
+          inspect={d=>{const c=inView.find(c=>c.id===d.id);if(c)selectNativeDifference(c,datasetId,feed.chrom,panel.id);}}/>
+      </div>}
       <canvas
         ref={canvasRef}
         width={width}
@@ -278,9 +290,15 @@ export function SvTrack({ width, height, panel, sidebarWidth = 0 }: {
             return;
           }
           highlight(hit?.kind === 'cluster' ? hit.cluster : null);
+          if (hit?.kind === 'cluster' && feed) selectNativeDifference(hit.cluster, datasetId, feed.chrom, panel.id, false);
+        }}
+        onDoubleClick={e => {
+          const hit = hitAt(local(e).x);
+          if (hit?.kind === 'cluster' && feed) selectNativeDifference(hit.cluster, datasetId, feed.chrom, panel.id);
         }}
         onContextMenu={onContextMenu}
       />
+      {dataset && <DifferencePopover panel={panel} dataset={dataset} anchor={inspectorAnchor} />}
       {hover && !menuOpen && !exportInProgress && feed && (
         <SvHoverTip hover={hover} summary={summary} datasetId={datasetId} feedReads={feed.reads} chrom={feed.chrom} />
       )}

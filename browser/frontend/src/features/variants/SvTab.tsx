@@ -1,3 +1,4 @@
+import { selectNativeDifference } from '../differences/selection';
 import { svScanTarget, svSourcePanel, variantScanIdentity } from './scanTarget';
 /**
  * The Variants panel's SVs tab: the deletion and insertion clusters in view (as the SV band clusters them), with the
@@ -219,6 +220,7 @@ export function SvTab({ datasetId: chosen, params, duplicates }: { datasetId: st
                   <span className="flex-1" />
                   <AnalysisButton disabled={stale} onClick={() => void splitHere(c, false)} title="Colour this dataset's reads in view by allele, in its read panel: carriers, reference, not informative">Group in this panel</AnalysisButton>
                   <AnalysisButton disabled={stale} onClick={() => void splitHere(c, true)} title="One read panel per allele group (carriers, reference…)">Split into panels…</AnalysisButton>
+                  <AnalysisButton disabled={stale} onClick={() => selectNativeDifference(c, datasetId, chrom, panel()?.id)}>Inspect difference</AnalysisButton>
                   {c.t === 'I' && (
                     <AnalysisButton variant="soft" theme="violet" data-testid="variants-sv-lens" disabled={stale}
                       onClick={() => openInsertionLens(targetForCluster(c, datasetId, chrom))}>

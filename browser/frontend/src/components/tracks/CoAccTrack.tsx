@@ -1,3 +1,5 @@
+import { useCanvasRenderVersion } from '../../utils/canvasUtils';
+import { referenceCanvasX } from '../../features/differences/referenceCanvas';
 import { clusterWindows } from '../../utils/clusterTargets';
 import { useSplitPanelStore } from '../../stores/splitPanelStore';
 import { logicalOffset } from '../../utils/scaledCoordinates';
@@ -75,6 +77,7 @@ export function CoAccTrack({ width, height, sidebarWidth = 0, panelId }: CoAccTr
     setCoaccV4cViewpoint: s.setCoaccV4cViewpoint,
   })));
 
+  const canvasRenderVersion = useCanvasRenderVersion();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [loading, setLoading] = useState(false);
   const [showLoading, setShowLoading] = useState(false);
@@ -371,7 +374,7 @@ export function CoAccTrack({ width, height, sidebarWidth = 0, panelId }: CoAccTr
       if (heatmapImageRef.current === img) heatmapImageRef.current = null;
       finishLoading();
     };
-  }, [stripUrl, safeTrackWidth, height, coaccTrackMode, clearCanvas, clearHeatmapRequest, finishLoading, scheduleLoadingIndicator]);
+  }, [canvasRenderVersion, stripUrl, safeTrackWidth, height, coaccTrackMode, clearCanvas, clearHeatmapRequest, finishLoading, scheduleLoadingIndicator]);
 
   // ── Render arcs ──
   useEffect(() => {
@@ -408,7 +411,7 @@ export function CoAccTrack({ width, height, sidebarWidth = 0, panelId }: CoAccTr
       ctx.stroke();
     }
     ctx.globalAlpha = 1;
-  }, [arcs, coaccTrackMode, safeTrackWidth, height, start, regionWidth]);
+  }, [canvasRenderVersion, arcs, coaccTrackMode, safeTrackWidth, height, start, regionWidth]);
 
   // ── Render virtual 4C ──
   useEffect(() => {
@@ -468,14 +471,14 @@ export function CoAccTrack({ width, height, sidebarWidth = 0, panelId }: CoAccTr
     ctx.lineTo(vpX, height);
     ctx.stroke();
     ctx.setLineDash([]);
-  }, [sliceData, coaccTrackMode, safeTrackWidth, height]);
+  }, [canvasRenderVersion, sliceData, coaccTrackMode, safeTrackWidth, height]);
 
   // ── Click handler for virtual 4C: set viewpoint ──
   const handleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (coaccTrackMode !== 'virtual4c') return;
     if (safeTrackWidth <= 0) return;
     const rect = e.currentTarget.getBoundingClientRect();
-    const x = logicalOffset(e.clientX - rect.left, e.currentTarget.clientWidth, rect.width);
+    const x = referenceCanvasX(canvasRef.current, logicalOffset(e.clientX - rect.left, e.currentTarget.clientWidth, rect.width));
     // The canvas is mirrored in a reversed view (below): its left edge is the region's end.
     const frac = x / safeTrackWidth;
     const pos = start + (isReversed ? 1 - frac : frac) * regionWidth;
@@ -531,6 +534,7 @@ export function CoAccTrack({ width, height, sidebarWidth = 0, panelId }: CoAccTr
       )}
       <canvas
         ref={canvasRef}
+        data-reference-forward="true"
         width={safeTrackWidth}
         height={height}
         style={{

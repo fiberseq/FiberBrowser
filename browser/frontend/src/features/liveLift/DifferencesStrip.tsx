@@ -1,3 +1,8 @@
+import { fetchJson } from '../../api/sharedFetch';
+import type { WorkspaceCalls } from '../differences/api';
+import { setupHighDpiCanvas } from '../../utils/canvasUtils';
+import { usePanOffsetTransform } from '../../hooks/usePanOffsetTransform';
+import { DifferenceTable } from '../differences/DifferenceTable';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Dataset, PanelConfig } from '../../types';
 import { useBrowserStore } from '../../stores/browserStore';
@@ -20,8 +25,8 @@ export function differencesStripHeight(panel: PanelConfig, dataset: Dataset) {
 }
 /** This is map evidence, independent of the sampled read cohort and SV view.
  * Abort on every key change, including settings (lift_key) and haplotype. */
-export function DifferencesStrip({ panel, dataset, width, gutter = 0 }: {
-  panel: PanelConfig; dataset: Dataset; width: number; gutter?: number;
+export function DifferencesStrip({ panel, dataset, width, gutter = 0, height }: {
+  panel: PanelConfig; dataset: Dataset; width: number; gutter?: number; height?: number;
 }) {
   const enabled = useLiveLiftStore(s => s.enabled);
   const chrom = useBrowserStore(s => panel.viewportOverride?.chrom ?? s.chrom);
@@ -32,26 +37,30 @@ export function DifferencesStrip({ panel, dataset, width, gutter = 0 }: {
   const native = useBrowserStore(s => s.panels.filter(p => !p.genome && p.datasetId).map(p => s.datasets.find(d => d.id === p.datasetId))
     .find(d => d?.data_type === 'bam')?.id);
   const minBp = panel.liveLiftMinBp ?? 0;
+  const sources=panel.differenceSources??{assembly:true,reads:false};
   const liftKey = dataset.live_lift?.key ?? '';
   const { axis, viewKey } = useLiveLiftAxis(chrom, start, end, Math.max(1, width - gutter), reversed);
-  const lanes = differenceLanes(liftHapLabels(dataset.live_lift), panel.liftHap);
+  const lanes = [...(sources.assembly?differenceLanes(liftHapLabels(dataset.live_lift), panel.liftHap):[]),...(sources.reads?['Reads']:[])];
   const [data, setData] = useState<DifferencesResponse | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const navigation = useRef<AbortController | null>(null);
   const anchor = useRef<HTMLDivElement>(null);
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const [table, setTable] = useState(false);
+  usePanOffsetTransform(canvas, { scope: viewKey });
   const query = useMemo(() => ({ datasetId: dataset.id, liftKey, chrom, start, end, liftHap: panel.liftHap,
-    minBp, nativeDatasetId: native }), [dataset.id, liftKey, chrom, start, end, panel.liftHap, minBp, native]);
+    minBp }), [dataset.id, liftKey, chrom, start, end, panel.liftHap, minBp, native]);
   useEffect(() => {
     setData(null); setError(''); setBusy(false); navigation.current?.abort();
-    if (!enabled) return;
+    if (!enabled || !sources.assembly) return;
     const controller = new AbortController();
     const timer = setTimeout(() => {
       void getDifferences(query, controller.signal).then(r => { if (!controller.signal.aborted) { rememberDifferences(r); setData(r); } })
         .catch(e => { if (!controller.signal.aborted) setError(String(e.message ?? e)); });
     }, 140);
     return () => { clearTimeout(timer); controller.abort(); navigation.current?.abort(); };
-  }, [query, enabled]);
+  }, [query, enabled, sources.assembly]);
   const navigate = async (direction: -1 | 1) => {
     navigation.current?.abort();
     const controller = new AbortController(); navigation.current = controller;
@@ -81,52 +90,80 @@ export function DifferencesStrip({ panel, dataset, width, gutter = 0 }: {
     } catch (e) { if (!controller.signal.aborted) setError(String((e as Error).message)); }
     finally { if (!controller.signal.aborted) setBusy(false); }
   };
+  const [readItems,setReadItems]=useState<import('./differenceTypes').Difference[]>([]);
+  const [readScope,setReadScope]=useState('');
+  useEffect(()=>{
+    setReadItems([]);setReadScope('');if(!sources.reads||!enabled)return;
+    const controller=new AbortController();
+    const timer=setTimeout(()=>{void fetchJson<WorkspaceCalls>('/api/lift/analysis/summary',{
+      method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,
+      body:JSON.stringify({dataset_id:dataset.id,chrom,start:Math.floor(start),end:Math.ceil(end),analysis_scope:'lifted_only'}),
+    }).then(r=>{if(controller.signal.aborted)return;
+      setReadScope(r.status?`${r.status}: ${r.reason}`:r.scope.search_complete?'Read discovery complete in loaded cohort':'Read discovery partial');
+      setReadItems((r.targets??[]).map(({target:t})=>({id:t.target_id,target:t,hap:'',hap_label:'Reads',source:'reads',
+        kind:t.ref_end>t.ref_start?(t.alt_bp?'replacement':'deletion'):'insertion',reason:'composed_geometry',t_start:t.ref_start,t_end:t.ref_end,ref_bp:t.ref_end-t.ref_start,alt_bp:t.alt_bp,
+        src:{contig:null,start:null,end:null},chain:null,strand:null,grch38:null,alt:null})));
+    }).catch(e=>{if(!controller.signal.aborted)setReadScope(String(e.message??e));});},140);
+    return()=>{clearTimeout(timer);controller.abort();};
+  },[dataset.id,liftKey,chrom,start,end,sources.reads,enabled]);
+  const model = useMemo(() => {
+    const assembly=sources.assembly&&data?stripModel(data,minBp):{items:[],bins:[]};
+    return {bins:assembly.bins,items:[...assembly.items,...readItems.filter(d=>Math.max(d.ref_bp,d.alt_bp)>=minBp)]};
+  }, [data,minBp,sources.assembly,readItems]);
+  const bandHeight = Math.max(20, (height ?? differencesStripHeight(panel, dataset)) - 24);
+  const laneHeight = bandHeight / Math.max(1, lanes.length);
+  useEffect(() => {
+    if (!canvas.current) return;
+    const ctx = setupHighDpiCanvas(canvas.current, width, bandHeight);
+    if (!ctx) return;
+    ctx.clearRect(0, 0, width, bandHeight);
+    for (let i = 0; i < lanes.length; i++) {
+      const hap = lanes[i], y = i*laneHeight;
+      ctx.fillStyle = liveLiftHaplotypeColor(hap, dark); ctx.strokeStyle = ctx.fillStyle;
+      ctx.font = '9px sans-serif'; ctx.fillText(hap, gutter+2, y+10);
+      for (const b of model.bins.filter(b => b.hap_label === hap)) {
+        ctx.globalAlpha = Math.min(.95, .2+Math.log2(b.count+1)*.15);
+        for (const span of axis.spans(Math.max(start, b.start), Math.min(end, b.end)))
+          ctx.fillRect(gutter+span.x, y+BIN_KINDS.indexOf(b.kind)*Math.max(1,laneHeight/10), Math.max(1, span.w), 2);
+      }
+      ctx.globalAlpha = 1;
+      for (const d of model.items.filter(d => d.hap_label === hap)) {
+        const g = differenceGlyph(d), x = gutter+axis.toX(d.t_start), z = gutter+axis.toX(d.t_end);
+        const left = Math.min(x,z), w = Math.max(3,Math.abs(z-x));
+        ctx.beginPath();
+        if (g.shape === 'wedge') { ctx.moveTo(x-4,y+2); ctx.lineTo(x+4,y+2); ctx.lineTo(x,y+laneHeight-3); ctx.closePath(); ctx.fill(); }
+        else if (g.shape === 'bracket') { ctx.moveTo(left,y+laneHeight-3); ctx.lineTo(left,y+4); ctx.lineTo(left+w,y+4); ctx.lineTo(left+w,y+laneHeight-3); ctx.stroke(); }
+        else { for (const span of axis.spans(d.t_start, Math.max(d.t_start+1,d.t_end))) ctx.fillRect(gutter+span.x,y+3,Math.max(2,span.w),Math.max(2,laneHeight-6)); }
+      }
+    }
+  }, [axis, width, bandHeight, laneHeight, model, lanes.join(','), gutter, dark, start, end]);
   if (!enabled) return null;
-  const model = data ? stripModel(data, minBp) : { items: [], bins: [] };
+  const inspect = (d: import('./differenceTypes').Difference) => useDifferenceSelection.getState().select({
+    panelId: panel.id, datasetId: dataset.id, viewKey, chrom, difference: d, target:d.target });
   return <div ref={anchor} data-testid="live-lift-diff-strip" data-panel-id={panel.id}
-    className="relative border-b border-slate-300 bg-slate-50 dark:bg-slate-900 dark:border-slate-700 text-[10px]" style={{ height: differencesStripHeight(panel, dataset), width }}>
-    <div className="flex items-center gap-2 h-6 px-2">
-      <strong className="text-slate-700 dark:text-slate-200">Differences vs GRCh38</strong>
-      <button data-testid="live-lift-diff-prev" title="Previous difference beyond the view" disabled={busy} onClick={() => void navigate(-1)}>◀</button>
-      <button data-testid="live-lift-diff-next" title="Next difference beyond the view" disabled={busy} onClick={() => void navigate(1)}>▶</button>
+    className="relative text-[10px] bg-slate-50 dark:bg-slate-900" style={{ height: height ?? differencesStripHeight(panel, dataset), width }}>
+    <div className="flex gap-2 items-center h-6 px-2">
+      <strong>Differences</strong>
+      {(['assembly','reads'] as const).map(source=><label key={source}><input type="checkbox" checked={sources[source]} onChange={e=>useBrowserStore.setState(s=>({panels:s.panels.map(p=>p.id===panel.id?{...p,differenceSources:{...sources,[source]:e.target.checked}}:p)}))}/>{source}</label>)}
+      <button data-testid="live-lift-diff-prev" disabled={busy} onClick={() => void navigate(-1)}>◀</button>
+      <button data-testid="live-lift-diff-next" disabled={busy} onClick={() => void navigate(1)}>▶</button>
       <select aria-label="Minimum difference size" value={minBp} onChange={e => useBrowserStore.setState(s => ({
         panels: s.panels.map(p => p.id === panel.id ? { ...p, liveLiftMinBp: Number(e.target.value) } : p),
-      }))} className="bg-transparent">
-        {MIN_SIZES.map(n => <option key={n} value={n}>{n === 0 ? 'All sizes' : n === 1000 ? '≥1 kb' : `≥${n} bp`}</option>)}
-      </select>
-      <span className="truncate text-slate-500" role={error ? 'status' : undefined}>{error || (busy ? 'Finding difference…' : data ? data.mode === 'bins' ? 'Density per kind' : 'Click to inspect · insertions open in place' : 'Loading…')}</span>
+      }))}>{MIN_SIZES.map(n => <option key={n} value={n}>{n ? `≥${n} bp` : 'All sizes'}</option>)}</select>
+      <button aria-expanded={table} onClick={() => setTable(t => !t)}>Table</button>
+      <span role={error ? 'status' : undefined}>{error || (busy ? 'Finding difference…' : readScope || (data ? data.mode==='bins'?'Density; zoom for individual differences':'Double-click to inspect · map discovery':'Loading…'))}</span>
     </div>
-    <svg width={width} height={lanes.length * 20} className="block" aria-label="Assembly differences">
-      <defs><pattern id={`hatch-${panel.id}`} width="5" height="5" patternUnits="userSpaceOnUse"><path d="M0 5L5 0" stroke="currentColor" strokeWidth="1" /></pattern></defs>
-      {lanes.map((hap, i) => <g key={hap} transform={`translate(${gutter},${i * 20})`} style={{ color: liveLiftHaplotypeColor(hap, dark) }}>
-        <line x1="0" x2={width - gutter} y1="17" y2="17" stroke="currentColor" opacity=".15" />
-        <text x="2" y="12" fontSize="9" fill="currentColor">{hap}</text>
-        {model.bins.filter(b => b.hap_label === hap).map((b, j) => axis.spans(Math.max(start, b.start), Math.min(end, b.end)).map((span, k) => <rect key={`${j}-${k}`} x={span.x} y={1 + BIN_KINDS.indexOf(b.kind) * 2}
-          width={Math.max(1, span.w)} height="2" fill="currentColor" opacity={Math.min(.95, .2 + Math.log2(b.count + 1) * .15)}>
-          <title>{`${hap} · ${b.kind.replace(/_/g, ' ')} · ${b.count} differences · ${b.bp.toLocaleString()} bp`}</title></rect>))}
-        {model.items.filter(d => d.hap_label === hap).map(d => {
-          const g = differenceGlyph(d), x = axis.toX(d.t_start), z = axis.toX(d.t_end);
-          const left = Math.min(x, z), w = Math.max(3, Math.abs(z - x));
-          const base = (d.alt ?? d.grch38)?.[0];
-          const color = g.shape === 'tick' && base ? CIGAR_COLORS[base as keyof typeof CIGAR_COLORS] ?? 'currentColor' : d.kind === 'no_correspondence' ? '#94a3b8' : 'currentColor';
-          return <g key={d.id} data-testid="live-lift-diff-item" data-kind={d.kind} data-difference-id={d.id} role="button" tabIndex={0} aria-label={differenceDescription(d, chrom)}
-            className="cursor-pointer" onClick={() => {
-              const selection = { panelId: panel.id, datasetId: dataset.id, viewKey, chrom, difference: d };
-              useDifferenceSelection.getState().select(selection); if (d.kind === 'insertion') expandDifference(selection);
-            }} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') e.currentTarget.dispatchEvent(new MouseEvent('click', { bubbles: true })); }}>
-            <title>{differenceDescription(d, chrom)}</title>
-            <rect x={left - 4} y="0" width={Math.max(9, w + 8)} height="20" fill="transparent" />
-            {g.shape === 'wedge' ? <path d={`M${x - g.width / 2} 2H${x + g.width / 2}L${x} 15Z`} fill={color} />
-              : g.shape === 'bracket' ? <path d={`M${left} 14V5H${left + w}V14`} stroke={color} fill="none" strokeWidth="2" />
-              : g.shape === 'chevron' ? <><rect x={left} y="5" width={w} height="7" fill={color} opacity=".35" /><text x={left + w / 2} y="12" fill={color} textAnchor="middle">❮❮</text></>
-              : g.shape === 'hatch' ? <rect x={left} y="3" width={w} height="12" fill={`url(#hatch-${panel.id})`} stroke={color} />
-              : <rect x={left} y="2" width={w} height="13" fill={color} />}
-            {g.label && <text x={x + g.width / 2 + 2} y="12" fontSize="10" fill="currentColor">{g.label}</text>}
-          </g>;
-        })}
-      </g>)}
-      {(data?.novel ?? []).map((d, i) => <path key={i} d={`M${gutter + axis.toX(d.ref)} 1v12`} stroke="#9333ea" strokeDasharray="2 2"><title>{`Read ${d.t === 'I' ? 'insertion' : 'deletion'} · ${d.len} bp · ${d.support ?? '?'} native reads · assembly comparison unassessed${d.novelty_reasons?.length ? ` (${d.novelty_reasons.join(', ').replace(/_/g, ' ')})` : ''}`}</title></path>)}
-    </svg>
+    <canvas ref={canvas} width={width} height={bandHeight} aria-label="Assembly differences" />
+    {model.items.map(d => {
+      const x=axis.toX(d.t_start), z=axis.toX(d.t_end), i=lanes.indexOf(d.hap_label);
+      return <button key={d.id} data-testid="live-lift-diff-item" data-kind={d.kind} data-difference-id={d.id}
+        aria-label={differenceDescription(d, chrom)} title={differenceDescription(d, chrom)}
+        className="absolute bg-transparent focus:ring-1 focus:ring-violet-500"
+        style={{ left: gutter+Math.min(x,z)-4, top:24+i*laneHeight, width:Math.max(9,Math.abs(z-x)+8), height:laneHeight }}
+        onClick={() => useDifferenceSelection.getState().select({panelId:panel.id,datasetId:dataset.id,viewKey,chrom,difference:d,target:d.target,inspect:false})}
+        onDoubleClick={() => inspect(d)} onKeyDown={e => { if(e.key==='Enter') inspect(d); }} />;
+    })}
+    {table && <div className="absolute left-0 right-0 top-full z-40 bg-white dark:bg-slate-900 max-h-64 overflow-auto border p-2"><DifferenceTable items={model.items} chrom={chrom} inspect={inspect} /></div>}
     <DifferencePopover panel={panel} dataset={dataset} anchor={anchor} />
   </div>;
 }

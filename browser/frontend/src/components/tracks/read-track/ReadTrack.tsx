@@ -529,7 +529,7 @@ export function ReadTrack({
   // reads gone to by name stay in the display sample (pins).
   const excludedFromMenu = useReadActionsStore(s => s.excludedReadIds[stateKey]);
   const pinnedReadIds = useReadActionsStore(s => s.pinnedReadIds);
-  const readHighlightIds = useReadActionsStore(s => s.highlight?.ids ?? null);
+  const readHighlightIds = useReadActionsStore(s => s.highlight?.scopedRows ? s.highlight.scopedRows[datasetId] ?? null : s.highlight?.ids ?? null);
   const highlightUncertainIds = useReadActionsStore(s => s.highlight?.uncertainIds);
   const svCarrierEvidence = useBrowserStore(s => s.svCarrierEvidence[stateKey]);
   const splitSvEvidence = splitPanel?.readSubset?.rule.svEvidenceLevels;

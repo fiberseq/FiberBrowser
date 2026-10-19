@@ -1,6 +1,7 @@
 /** JSON contracts in services/lift/differences.py. Alleles are target-oriented;
  * insertion payload coordinates are already mirrored by the composer. */
 export interface Difference {
+  target?: import('../differences/api').FrozenTarget;
   id: string; hap: string; hap_label: string;
   kind: 'snv' | 'mnv' | 'aligned_bubble' | 'insertion' | 'deletion' | 'replacement' | 'inversion' | 'no_correspondence';
   reason: string; source: 'assembly' | 'reads'; t_start: number; t_end: number; ref_bp: number; alt_bp: number;
@@ -26,6 +27,7 @@ export interface DifferencesResponse {
     novelty?: 'unassessed'; novelty_reasons?: string[] }>;
 }
 export interface DifferenceInspection {
+  row_id?: string | null;
   id: string; molecule: string; hap_label: string; record: string; supplementary: boolean; strand: string | null;
   source_pos: { contig: string; start: number; end: number }; read_bases: string; hg002: string | null; grch38: string | null;
   allele: 'hg002' | 'same_as_grch38' | 'grch38' | 'other' | 'deleted' | 'no_coverage' | 'partial' | 'no_insertion' | 'unknown';
@@ -35,6 +37,7 @@ export interface DifferenceInspection {
   item_id?: string; ref_bp?: number; alt_bp?: number; full_span?: boolean;
   ins_id?: string; carries_insertion?: boolean; mol_bp?: number; identity?: number | null; read_bases_length?: number;
   carries_deletion?: boolean;
+  hg002_length?: number; alignment_hg002_length?: number; grch38_length?: number;
 }
 export interface DifferenceReadsResponse {
   dataset_id: string; lift_key: string; chrom: string; pos: number; end: number;

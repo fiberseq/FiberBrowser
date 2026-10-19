@@ -206,7 +206,7 @@ registerTrackKind({
   menu: () => [openPanelItem('primer-design', 'Primers panel')],
 });
 registerTrackKind({
-  type: 'sv', label: 'SVs', defaultHeight: 44, minHeight: 24, maxHeight: 240, builtin: true,
+  type: 'sv', label: 'Differences', defaultHeight: 44, minHeight: 24, maxHeight: 240, builtin: true,
   settingId: 'view.sv-display',
 });
 registerTrackKind({

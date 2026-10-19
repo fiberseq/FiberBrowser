@@ -1,3 +1,7 @@
+import { ReferenceImage } from '../../features/differences/ReferenceImage';
+import { referenceDisplayX } from '../../features/differences/referenceCanvas';
+import { useCanvasRenderVersion } from '../../utils/canvasUtils';
+import { referenceCanvasX } from '../../features/differences/referenceCanvas';
 import { logicalOffset } from '../../utils/scaledCoordinates';
 import { setupHighDpiCanvas } from '../../utils/canvasUtils';
 // ============================================================================
@@ -57,6 +61,7 @@ export function MicroCTrack({
   onViewportChange,
   panelId,
 }: MicroCTrackProps) {
+  const canvasRenderVersion = useCanvasRenderVersion();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { chrom: storeChrom, start: storeStart, end: storeEnd, setViewport, getAllPeaks, selectedPeaks, isReversed, darkMode } = useBrowserStore(useShallow(s => ({
     chrom: s.chrom, start: s.start, end: s.end, setViewport: s.setViewport, getAllPeaks: s.getAllPeaks, selectedPeaks: s.selectedPeaks, isReversed: s.isReversed, darkMode: s.darkMode,
@@ -462,7 +467,7 @@ export function MicroCTrack({
     ctx.moveTo(sidebarWidth, baselineY);
     ctx.lineTo(width, baselineY);
     ctx.stroke();
-  }, [arcs, width, height, start, end, sidebarWidth, trackWidth, arcDisplayMode, arcNormalization, isReversed, darkMode]);
+  }, [canvasRenderVersion, arcs, width, height, start, end, sidebarWidth, trackWidth, arcDisplayMode, arcNormalization, isReversed, darkMode]);
 
   // Handle click on arc to zoom to the contact region
   const handleArcClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -470,7 +475,7 @@ export function MicroCTrack({
     if (!canvas || microcTrackMode !== 'arc' || arcs.length === 0) return;
 
     const rect = canvas.getBoundingClientRect();
-    const clickX = logicalOffset(e.clientX - rect.left, canvas.clientWidth, rect.width);
+    const clickX = referenceCanvasX(canvasRef.current, logicalOffset(e.clientX - rect.left, canvas.clientWidth, rect.width));
     const clickY = logicalOffset(e.clientY - rect.top, canvas.clientHeight, rect.height);
 
     const closest = findClosestArc(arcs, { x: clickX, y: clickY }, {
@@ -494,7 +499,7 @@ export function MicroCTrack({
       if (onViewportChange) onViewportChange(Math.round(newStart), Math.round(newEnd));
       else setViewport(chrom, Math.round(newStart), Math.round(newEnd));
     }
-  }, [arcs, height, start, end, chrom, setViewport, onViewportChange, sidebarWidth, trackWidth, isReversed, arcNormalization]);
+  }, [canvasRenderVersion, arcs, height, start, end, chrom, setViewport, onViewportChange, sidebarWidth, trackWidth, isReversed, arcNormalization]);
 
   // Handle mouse move on arc canvas to show tooltip
   const handleArcMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -506,7 +511,7 @@ export function MicroCTrack({
     }
 
     const rect = canvas.getBoundingClientRect();
-    const mouseX = logicalOffset(e.clientX - rect.left, canvas.clientWidth, rect.width);
+    const mouseX = referenceCanvasX(canvasRef.current, logicalOffset(e.clientX - rect.left, canvas.clientWidth, rect.width));
     const mouseY = logicalOffset(e.clientY - rect.top, canvas.clientHeight, rect.height);
 
     const closest = findClosestArc(arcs, { x: mouseX, y: mouseY }, {
@@ -527,7 +532,7 @@ export function MicroCTrack({
       setHoveredArc(null);
       setHoverPosition(null);
     }
-  }, [arcs, height, start, end, sidebarWidth, trackWidth, isReversed, arcNormalization]);
+  }, [canvasRenderVersion, arcs, height, start, end, sidebarWidth, trackWidth, isReversed, arcNormalization]);
 
   const handleArcMouseLeave = useCallback(() => {
     setHoveredArc(null);
@@ -703,7 +708,7 @@ export function MicroCTrack({
       ? `Virtual 4C${oeLabel}: ${activeViewpoint.label}${smoothLabel}${threshLabel} (dbl-click to reset)`
       : `Virtual 4C${oeLabel}${smoothLabel}${threshLabel} (click peak to set viewpoint)`;
     ctx.fillText(viewpointLabel, 5, 12);
-  }, [virtual4cData, width, height, start, end, sidebarWidth, trackWidth, activeViewpoint, v4cNormalization, v4cSmoothing, v4cMinCount, isReversed, darkMode]);
+  }, [canvasRenderVersion, virtual4cData, width, height, start, end, sidebarWidth, trackWidth, activeViewpoint, v4cNormalization, v4cSmoothing, v4cMinCount, isReversed, darkMode]);
 
   // Render APA heatmap on canvas
   const renderAPA = useCallback(() => {
@@ -812,7 +817,7 @@ export function MicroCTrack({
   const handleMatrixMouseDown = useCallback((e: React.MouseEvent) => {
     if (!matrixRef.current) return;
     const rect = matrixRef.current.getBoundingClientRect();
-    const x = clampTrackX(logicalOffset(e.clientX - rect.left, width, rect.width), sidebarWidth, width);
+    const x = clampTrackX(referenceCanvasX(matrixRef.current, logicalOffset(e.clientX - rect.left, width, rect.width)), sidebarWidth, width);
     setDragStart(x);
     setDragCurrent(x);
   }, [sidebarWidth, width]);
@@ -820,7 +825,7 @@ export function MicroCTrack({
   const handleMatrixMouseMove = useCallback((e: React.MouseEvent) => {
     if (dragStart === null || !matrixRef.current) return;
     const rect = matrixRef.current.getBoundingClientRect();
-    const x = clampTrackX(logicalOffset(e.clientX - rect.left, width, rect.width), sidebarWidth, width);
+    const x = clampTrackX(referenceCanvasX(matrixRef.current, logicalOffset(e.clientX - rect.left, width, rect.width)), sidebarWidth, width);
     setDragCurrent(x);
   }, [dragStart, sidebarWidth, width]);
 
@@ -902,28 +907,8 @@ export function MicroCTrack({
         {/* Always render the image if URL exists - use onLoad/onError to track loading */}
         {/* key prop forces new img element when URL changes, ensuring onLoad fires */}
         {matrixImageUrl && (
-          <img
-            key={`${matrixImageUrl}:${matrixFetchId}`}
-            src={matrixImageUrl}
-            alt="Contact matrix strip"
-            draggable={false}
-            onLoad={() => setLoading(false)}
-            onError={() => setLoading(false)}
-            style={{
-              position: 'absolute',
-              left: sidebarWidth,
-              top: 0,
-              width: trackWidth,
-              height,
-              display: 'block',
-              imageRendering: 'auto',
-              pointerEvents: 'none',
-              opacity: loading ? 0 : 1,
-              transition: 'opacity 0.15s',
-              // The server draws it forward; mirror it like the other tracks in a reversed view.
-              transform: isReversed ? 'scaleX(-1)' : undefined,
-            }}
-          />
+          <ReferenceImage key={`${matrixImageUrl}:${matrixFetchId}`} src={matrixImageUrl} width={trackWidth} height={height}
+            reversed={isReversed} left={sidebarWidth} onLoad={()=>setLoading(false)} onError={()=>setLoading(false)} />
         )}
         {/* Loading overlay */}
         {loading && (
@@ -936,8 +921,8 @@ export function MicroCTrack({
           <div
             className="absolute top-0 bottom-0 bg-blue-500/30 border-x-2 border-blue-500"
             style={{
-              left: selectionLeft,
-              width: selectionWidth,
+              left: Math.min(referenceDisplayX(matrixRef.current,selectionLeft),referenceDisplayX(matrixRef.current,selectionLeft+selectionWidth)),
+              width: Math.abs(referenceDisplayX(matrixRef.current,selectionLeft+selectionWidth)-referenceDisplayX(matrixRef.current,selectionLeft)),
             }}
           />
         )}
@@ -946,8 +931,8 @@ export function MicroCTrack({
           <div
             className="absolute top-0 bottom-0 border-x-2 border-green-500 pointer-events-none"
             style={{
-              left: focusOverlay.left,
-              width: focusOverlay.width,
+              left: Math.min(referenceDisplayX(matrixRef.current,focusOverlay.left),referenceDisplayX(matrixRef.current,focusOverlay.left+focusOverlay.width)),
+              width: Math.abs(referenceDisplayX(matrixRef.current,focusOverlay.left+focusOverlay.width)-referenceDisplayX(matrixRef.current,focusOverlay.left)),
             }}
           />
         )}

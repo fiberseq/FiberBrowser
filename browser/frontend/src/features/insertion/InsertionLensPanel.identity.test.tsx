@@ -87,6 +87,19 @@ describe('lens actions belong to the current response identity', () => {
   const finish = async (index: number, ref: number) => {
     await act(async () => { pending[index].resolve(new Response(JSON.stringify(response(ref)))); });
   };
+  it('saves footprint grouping and reverses the lens without refetching or changing its cohort', async () => {
+    await act(async () => { root.render(<InsertionLensPanel />); });
+    await finish(0, 1000);
+    const grouping = [...container.querySelectorAll('select')].find(el => [...el.options].some(o => o.value === 'nuc'))!;
+    await act(async () => { grouping.value = 'nuc'; grouping.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(container.querySelector('[data-testid="lens-footprint-groups"]')?.textContent).toContain('0 patterns');
+    expect(pending).toHaveLength(1);
+    const saved = useBrowserStore.getState().panels.find(p => p.contentType === 'insertion-lens')!.insertionLens as InsertionLensTarget;
+    expect(saved.footprintGrouping).toBe('nuc');
+    await act(async () => { setInsertionLensState({ ...saved, reversed: true }); });
+    expect(pending).toHaveLength(1);
+    expect((useBrowserStore.getState().panels.find(p => p.contentType === 'insertion-lens')!.insertionLens as InsertionLensTarget).footprintGrouping).toBe('nuc');
+  });
   const actions = () => container.querySelector('[data-testid="insertion-lens-split"]');
 
   it('makes old actions unavailable while another dataset loads and uses only its new coordinates', async () => {

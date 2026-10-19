@@ -1,3 +1,4 @@
+import { enrichNativeRows } from '../../../features/differences/api';
 import { keepsSignal } from '../../../utils/signalFilters';
 import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { useBrowserStore } from '../../../stores/browserStore';
@@ -316,9 +317,10 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
   const insertionIds = useBrowserStore(s => {
     const panel = s.panels.find(p => p.datasetId === datasetId && (p.stateKey ?? p.datasetId) === (stateKey ?? datasetId));
     return (s.liveLiftExpansions?.[liveLiftViewKey(panel)] ?? [])
-      .filter(e => e.datasetId === datasetId && e.chrom === chrom && e.pos >= start && e.pos <= end)
+      .filter(e => (e.datasetId === datasetId || e.associate_native && s.datasets.find(d=>d.id===datasetId)?.data_type==='bam') && e.chrom === chrom && e.pos >= start && e.pos <= end)
       .flatMap(e => e.alleles?.map(a => a.ins_id) ?? [e.ins_id]).sort().join(',');
   });
+  const associationRevision=useBrowserStore(s=>JSON.stringify(Object.values(s.liveLiftExpansions??{}).flat().map(c=>[c.ins_id,c.associate_native])));
   useEffect(() => {
     useBrowserStore.getState().setSignalCounts(stateKey ?? datasetId, null);
     return () => { useBrowserStore.getState().setSignalCounts(stateKey ?? datasetId, null); };
@@ -759,7 +761,17 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
             }, 75);
           }
           if (DEBUG) console.log(`[FETCH ${datasetId}] Data arrived: seq=${thisSequence}, reads=${(data.reads || []).length}, fetchSeq=${fetchSequenceRef.current}`);
-          const nextReads = hydrateDerivedReadLayers(data.reads || []);
+          let nextReads = hydrateDerivedReadLayers(data.reads || []);
+          if (isBAM && insertionIds && useBrowserStore.getState().datasets.find(d => d.id === datasetId)?.data_type === 'bam') {
+            const current = useBrowserStore.getState();
+            const panel = current.panels.find(p => p.datasetId === datasetId && (p.stateKey ?? p.datasetId) === (stateKey ?? datasetId));
+            const columns = (current.liveLiftExpansions?.[liveLiftViewKey(panel)] ?? []).filter(c => (c.source === 'reads' && c.datasetId === datasetId || c.associate_native) && c.chrom === chrom);
+            try {
+              nextReads = await enrichNativeRows(nextReads, { dataset_id: datasetId, chrom, start: Math.floor(start), end: Math.ceil(end) },
+                columns, requestedLayers, showDuplicateReads, controller.signal, {min_fp_quality:minFpQuality,infer_legacy_layers:legacyLayerInference,legacy_nuc_min_size:legacyNucMinSize});
+            } catch (error) { if (controller.signal.aborted) return; console.warn('Alternate block enrichment unavailable', error); }
+            if (controller.signal.aborted || fetchSequenceRef.current !== thisSequence) return;
+          }
           const nextDisplayCount = data.display_count ?? data.count ?? nextReads.length;
           const nextWorkingCount = data.working_count ?? nextDisplayCount;
           const nextInScopeCount = data.total_in_scope ?? data.total ?? nextWorkingCount;
@@ -841,7 +853,7 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
 
     fetchReads();
     return () => { controller.abort(); };
-  }, [chrom, start, end, datasetId, needsMethylation, needsLayers, requestedLayersKey, needsLayerQualities, batchNeedsMethylation, batchRequestedLayersKey, batchNeedsLayerQualities, useServerMetaprofile, serverMetaprofileLayersKey, needsCigar, needsMismatches, fillSmallGaps, fillGapSize, hideTerminalGaps, terminalGapThreshold, legacyLayerInference, legacyNucMinSize, showDuplicateReads, isBAM, minFpQuality, minFootprints, spanningOnly, readDisplayMode, downsampleCount, allReadsDisplayCap, backgroundReadCap, height, readRowHeight, readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth, exportMatchedReadFetchCount, hasPushedReads, jupyterPushedReads, requestFilterIdsParam, requestFilterKey, rootClusterFocusReadIdsKey, clusteredReadIdsKey, linkedSessionId, linkedRegion, linkedSortBy, panelLabel, refreshGeneration, maxRegionForReads, sampleSeed, batchDatasetIds, batchSourceIdentity, batchNeedsSvSummary, readStrand, liftHap, showsMainView, readEndFootprints, pinnedKey, minSvLen, svSummaryEnabled, conflictOptionsKey, loadAllReads, insertionIds]);
+  }, [chrom, start, end, datasetId, needsMethylation, needsLayers, requestedLayersKey, needsLayerQualities, batchNeedsMethylation, batchRequestedLayersKey, batchNeedsLayerQualities, useServerMetaprofile, serverMetaprofileLayersKey, needsCigar, needsMismatches, fillSmallGaps, fillGapSize, hideTerminalGaps, terminalGapThreshold, legacyLayerInference, legacyNucMinSize, showDuplicateReads, isBAM, minFpQuality, minFootprints, spanningOnly, readDisplayMode, downsampleCount, allReadsDisplayCap, backgroundReadCap, height, readRowHeight, readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth, exportMatchedReadFetchCount, hasPushedReads, jupyterPushedReads, requestFilterIdsParam, requestFilterKey, rootClusterFocusReadIdsKey, clusteredReadIdsKey, linkedSessionId, linkedRegion, linkedSortBy, panelLabel, refreshGeneration, maxRegionForReads, sampleSeed, batchDatasetIds, batchSourceIdentity, batchNeedsSvSummary, readStrand, liftHap, showsMainView, readEndFootprints, pinnedKey, minSvLen, svSummaryEnabled, conflictOptionsKey, loadAllReads, insertionIds, associationRevision]);
 
   // Fetch coverage data when zoomed out past maxRegionForReads
   useEffect(() => {

@@ -159,6 +159,9 @@ export interface InsertionCluster {
 
 /** What the lens shows; kept on the lens panel's PanelConfig (saved with sessions). */
 export interface InsertionLensTarget {
+  footprintGrouping?: import('../differences/footprintGroups').FootprintGrouping;
+  footprintSites?: number;
+  workspace?: { query: import('../differences/api').WorkspaceQuery; calls: import('../differences/api').WorkspaceCalls };
   includePutative?: boolean;
   includeConflicting?: boolean;
   includeAmbiguous?: boolean;
@@ -197,6 +200,8 @@ export interface LensLayout {
   carriers: CompactRead[];
   reference: CompactRead[];
   carrierRows: LensRowMeta[];
+  /** Observed alternate coverage; annotation intervals themselves are not coverage. */
+  carrierCoverage?: [number, number][][];
   referenceRows: LensRowMeta[];
 }
 
@@ -408,10 +413,10 @@ export function mapLensRead(entry: LensEntry, axis: LensAxis, anchor: LensAnchor
     out.qualities = follow(read.qualities as number[], primary.origin);
   }
   if (read.fire) out.fire = mapIntervals(read.fire as number[][], mapper).intervals;
-  for (const field of ['methyl', 'methyl_m6a', 'methyl_m5c'] as const) {
+  for (const field of ['methyl', 'methyl_m6a', 'methyl_m5c', 'possible_deam_ct', 'possible_deam_ga'] as const) {
     if (read[field]) out[field] = mapPoints(read[field] as number[], mapper);
   }
-  for (const field of ['deam', 'possible_deam_ct', 'possible_deam_ga'] as const) {
+  for (const field of ['deam'] as const) {
     if (read[field]) out[field] = mapPairs(read[field] as unknown as number[][], mapper);
   }
   if (read.layers) {
@@ -439,6 +444,7 @@ export function layoutLens(response: LensResponse, anchorWanted: LensAnchor, rev
     carriers: response.carriers.map(e => mapLensRead(e, axis, anchor)),
     reference: response.reference.map(e => mapLensRead(e, axis, anchor)),
     carrierRows: response.carriers.map(e => row(e, true)),
+    carrierCoverage: response.carriers.map(e => e.hard ? [] : makeReadMapper(e.len, axis, anchor, e.knots, e.partial).interval(0, e.len)),
     referenceRows: response.reference.map(e => row(e, false)),
   };
 }

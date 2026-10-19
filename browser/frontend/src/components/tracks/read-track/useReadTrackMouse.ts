@@ -1,3 +1,6 @@
+import { useDifferenceSelection } from '../../../features/liveLift/inspectionStore';
+import { liveLiftViewKey } from '../../../features/liveLift/persistence';
+import { selectNativeDifference } from '../../../features/differences/selection';
 import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { useBrowserStore } from '../../../stores/browserStore';
 import { useConsensusViewStore } from '../../../stores/consensusViewStore';
@@ -208,7 +211,9 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
     if (!read) return null;
     const block = params.axis?.fromX(x - sidebarWidth);
     if (block?.ins_id) {
-      const payload = read.live_lift?.insertions?.[block.ins_id];
+      const column=params.axis?.blocks.find(b=>b.ins.ins_id===block.ins_id)?.ins;
+      const allele=column?.alleles?.find(a=>a.hap_label===read.live_lift?.hap_label)?.ins_id ?? block.ins_id;
+      const payload = read.alternate_blocks?.[block.ins_id] ?? read.live_lift?.insertions?.[allele];
       return payload && !('too_large' in payload) && block.within! >= payload.covered[0] && block.within! < payload.covered[1] ? { read } : null;
     }
     if (!read.live_lift) return { read };
@@ -242,7 +247,7 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
     const bpPerPx = regionWidth / Math.max(1, width - sidebarWidth);
     const mapEvent = liveLiftMapEventAt(read.live_lift, genomePosAtX(x) - (linkedBoundsStart ?? start), 5 * bpPerPx);
     if (mapEvent) return { read, event: mapEvent };
-    if (!svEnabled || !read.sv) return null;
+    if (params.axis?.fromX(x-sidebarWidth).ins_id || !svEnabled || !read.sv) return null;
     const event = readSvEventAt(read, genomePosAtX(x), 5 * bpPerPx, svMinLen);
     // A spanned map marker crosses connector space with no read body there.
     if (!body && !(event?.source === 'assembly' && event.display_only && event.difference_id)) return null;
@@ -434,6 +439,24 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
   /** Select the footprint at (x, y) and open Footprints (⌘/Ctrl-click, or the menu). */
   const selectFootprintAt = useCallback((x: number, y: number): boolean => {
     // Linked-session intervals are relative to the session's bounds, not the view.
+    const alternate=params.axis?.fromX(x-sidebarWidth);
+    if(alternate?.ins_id){
+      const read=getReadHitAtXY(x,y)?.read;
+      const column=params.axis!.blocks.find(b=>b.ins.ins_id===alternate.ins_id)?.ins;
+      const id=column?.alleles?.find(a=>a.hap_label===read?.live_lift?.hap_label)?.ins_id ?? alternate.ins_id;
+      const payload=read?.alternate_blocks?.[alternate.ins_id] ?? read?.live_lift?.insertions?.[id];
+      if(!read||!column||!payload||'too_large' in payload)return false;
+      const hit=findFootprintHit({...read,...payload},{relPos:alternate.within!,bpTolerance:3/params.axis!.pxPerBp,enabledModTypes:useBrowserStore.getState().enabledModTypes as Record<string,boolean>});
+      if(!hit)return false;
+      const panel=useBrowserStore.getState().panels.find(p=>p.datasetId===datasetId&&(p.stateKey??p.datasetId)===stateKey);
+      if(!panel)return false;
+      useDifferenceSelection.getState().select({datasetId:column.datasetId??datasetId,panelId:panel.id,viewKey:liveLiftViewKey(panel),chrom,
+        difference:{id:column.ins_id,hap:'',hap_label:column.hap_label,kind:column.kind??'insertion',source:column.source??'assembly',reason:'alternate_block',
+          t_start:column.ref_start??column.pos-(column.ref_bp??0),t_end:column.t_end??column.pos,ref_bp:column.ref_bp??0,alt_bp:column.selected_length??column.length,
+          chain:null,strand:column.strand??null,src:column.src??{contig:null,start:null,end:null},grch38:null,alt:null},
+        alternateHit:{readId:read.analysis_id??read.id,layer:hit.layer,start:hit.interval[0],end:hit.interval[1],offset:alternate.within!}});
+      return true;
+    }
     const origin = linkedBoundsStart ?? start;
     // Native/manual string family IDs use the shared consensus inspector, not
     // the legacy numeric-ID Cart. The read's original interval remains intact.
@@ -604,6 +627,13 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
       // A click on an insertion's flag copies its inserted bases.
       const hit = svEventAtXY(x, y);
       if (hit && selectMapGap(hit.read, hit.event.difference_id, { datasetId, stateKey, chrom })) return;
+      if (hit && (hit.event.t === 'I' || hit.event.t === 'D') && e.detail >= 2) {
+        const event = hit.event;
+        selectNativeDifference({ id: `native:${chrom}:${event.ref}:${event.ref_end ?? event.ref}:${event.len}`, t: event.t,
+          ref: event.ref, end: event.ref_end ?? event.ref + (event.t === 'D' ? event.len : 0), len: event.len,
+          ref_len: event.ref_len, alt_len: event.alt_len }, datasetId, chrom);
+        return;
+      }
       if (hit && hit.event.t === 'I') {
         void copyInsertedSequence({ datasetId, chrom, readId: hit.read.id, event: hit.event, stateKey });
       }

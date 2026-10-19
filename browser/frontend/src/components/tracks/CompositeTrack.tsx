@@ -1,3 +1,4 @@
+import { referenceCanvasX } from '../../features/differences/referenceCanvas';
 import { logicalOffset } from '../../utils/scaledCoordinates';
 import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
@@ -85,7 +86,7 @@ function CompositeTrackInner({
     if (!isDragging) return;
     const onMove = (e: MouseEvent) => {
       if (!canvasRectRef.current) return;
-      const x = logicalOffset(e.clientX - canvasRectRef.current.left, width, canvasRectRef.current.width);
+      const x = referenceCanvasX(canvasRef.current, logicalOffset(e.clientX - canvasRectRef.current.left, width, canvasRectRef.current.width));
       setDragEndX(Math.max(0, Math.min(width, x)));
     };
     const onUp = (e: MouseEvent) => {
@@ -93,7 +94,7 @@ function CompositeTrackInner({
         setIsDragging(false); setDragStartX(null); setDragEndX(null);
         return;
       }
-      const x = logicalOffset(e.clientX - canvasRectRef.current.left, width, canvasRectRef.current.width);
+      const x = referenceCanvasX(canvasRef.current, logicalOffset(e.clientX - canvasRectRef.current.left, width, canvasRectRef.current.width));
       const clamped = Math.max(0, Math.min(width, x));
       const left = Math.min(dragStartX, clamped);
       const right = Math.max(dragStartX, clamped);
@@ -336,7 +337,7 @@ function CompositeTrackInner({
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     canvasRectRef.current = rect;
-    const x = logicalOffset(e.clientX - rect.left, e.currentTarget.clientWidth, rect.width);
+    const x = referenceCanvasX(canvasRef.current, logicalOffset(e.clientX - rect.left, e.currentTarget.clientWidth, rect.width));
     setIsDragging(true); setDragStartX(x); setDragEndX(x);
     e.preventDefault();
   }, []);

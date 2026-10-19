@@ -27,6 +27,7 @@ it.each([['assembly', 'insertion'], ['reads', 'insertion'], ['assembly', 'replac
   const root = createRoot(host);
   try {
     await act(async () => { root.render(<DifferencePopover panel={panel} dataset={dataset} anchor={{ current: host }} />); });
+    await act(async()=>{[...document.querySelectorAll('button')].find(b=>b.textContent==='Load observed bases and chromatin')!.click();});
     const identify = [...document.querySelectorAll('button')].find(b => b.textContent === 'Identify')!;
     expect(identify.disabled).toBe(false);
     expect(getDifferenceReads).toHaveBeenCalledTimes(1);

@@ -1,3 +1,4 @@
+import { ReferenceAxisSurface } from '../../features/differences/ReferenceAxisSurface';
 import { logicalOffset } from '../../utils/scaledCoordinates';
 import { HighlightBands } from './HighlightBands';
 import { useCallback, useMemo, useRef } from 'react';
@@ -372,12 +373,10 @@ export function useSubTrackDispatch({ onScanPeaks, scanning }: UseSubTrackDispat
       case 'reads':
         if (!dsId) return null;
         trackHeight = readHeight;
-        content = <>
-          {liftEnabled && dataset?.data_type === 'bam_livelift' && <DifferencesStrip panel={panel} dataset={dataset} width={trackWidth} gutter={clusterSidebarWidth} />}
-          {(
+        content = (
           <ReadTrack
             width={trackWidth}
-            height={Math.max(30, readHeight - (liftEnabled && dataset?.data_type === 'bam_livelift' ? differencesStripHeight(panel, dataset) : 0))}
+            height={readHeight}
             datasetId={dsId}
             stateKey={panel.stateKey}
             readStrand={panel.strand ?? null}
@@ -387,13 +386,15 @@ export function useSubTrackDispatch({ onScanPeaks, scanning }: UseSubTrackDispat
             genome={panel.genome}
             {...(vpo ? { overrideChrom: vpo.chrom, overrideStart: vpo.start, overrideEnd: vpo.end, panelLabel: panel.regionLabel, onViewportChange } : {})}
           />
-        )}</>;
+        );
         break;
       // TRACK-KINDS: add cases here (and in calcFixedHeight below); see trackRegistry.ts.
       case 'sv':
-        if (!dsId || !svDisplayEnabled || !feedRowShown(panel, 1)) return null;
+        if (!dsId || (dataset?.data_type !== 'bam_livelift' && (!svDisplayEnabled || !feedRowShown(panel, 1)))) return null;
         trackHeight = rowHeight(track);
-        content = <SvTrack width={trackWidth} height={trackHeight} panel={panel} sidebarWidth={clusterSidebarWidth} />;
+        content = liftEnabled && dataset?.data_type === 'bam_livelift'
+          ? <DifferencesStrip panel={panel} dataset={dataset} width={trackWidth} height={trackHeight} gutter={clusterSidebarWidth} />
+          : <SvTrack width={trackWidth} height={trackHeight} panel={panel} sidebarWidth={clusterSidebarWidth} />;
         break;
       case 'coverage':
         if (!dsId || !showCoverageHistogram || !feedRowShown(panel, 2)) return null;
@@ -565,10 +566,7 @@ export function useSubTrackDispatch({ onScanPeaks, scanning }: UseSubTrackDispat
     // Render actual track content; layout-only controls appear as hover chrome.
     // Primer track needs overflow:visible for guide lines that extend into tracks below
     const isPrimer = track.type === 'primer';
-    const expanded = liftEnabled && panels.some(p => liveLiftViewKey(p) === liveLiftViewKey(panel) && datasets.some(d => d.id === p.datasetId && d.data_type === 'bam_livelift'))
-      && (liveLiftExpansions?.[liveLiftViewKey(panel)] ?? []).some(e => e.chrom === (vpo?.chrom ?? storeChrom)
-      && e.pos >= (vpo?.start ?? storeStart) && e.pos < (vpo?.end ?? storeEnd));
-    const unaligned = expanded && !['reads', 'axis', 'coverage'].includes(track.type);
+    const projectReference = !['reads', 'axis', 'coverage', 'sv'].includes(track.type);
     return (
       <div
         key={track.type}
@@ -591,10 +589,9 @@ export function useSubTrackDispatch({ onScanPeaks, scanning }: UseSubTrackDispat
           ...(isPrimer ? { overflow: 'visible', zIndex: 10 } : {}),
         }}
       >
-        {unaligned ? <><div style={{ opacity: .2, pointerEvents: 'none' }}>{content}</div>
-          <span className="absolute inset-x-0 top-0 text-center text-[10px] bg-slate-100/90 dark:bg-slate-800/90" data-testid="live-lift-unaligned-track">Insertion expanded: track not aligned</span></> : content}
-        {/* Highlighted regions (toolbar Highlight) over every row; named on the ruler. */}
-        {!unaligned && <HighlightBands panel={panel} width={trackWidth} gutter={clusterSidebarWidth} labels={track.type === 'axis'} guides={isReadsTrack} />}
+        {projectReference ? <ReferenceAxisSurface width={trackWidth} gutter={clusterSidebarWidth}
+          view={{chrom:vpo?.chrom ?? storeChrom,start:vpo?.start ?? storeStart,end:vpo?.end ?? storeEnd}}>{content}</ReferenceAxisSurface> : content}
+        <HighlightBands panel={panel} width={trackWidth} gutter={clusterSidebarWidth} labels={track.type === 'axis'} guides={isReadsTrack} />
         {!exportInProgress && (
           <button
             type="button"
@@ -639,7 +636,7 @@ export function useSubTrackDispatch({ onScanPeaks, scanning }: UseSubTrackDispat
         case 'coacc': if (coaccTrackMode) h += rowHeight(t, COACC_HEIGHT); break;
         case 'capture': if (showCaptureTrack) h += rowHeight(t, CAPTURE_HEIGHT); break;
         case 'primer': if (showPrimerTrack) h += rowHeight(t, PRIMER_HEIGHT); break;
-        case 'sv': if (panel.datasetId && svDisplayEnabled && feedRowShown(panel, 1)) h += rowHeight(t); break;
+        case 'sv': if (panel.datasetId && (datasets.find(d => d.id === panel.datasetId)?.data_type === 'bam_livelift' || svDisplayEnabled && feedRowShown(panel, 1))) h += rowHeight(t); break;
         case 'coverage': if (panel.datasetId && showCoverageHistogram && feedRowShown(panel, 2)) h += rowHeight(t); break;
         case 'sequence': if (sequenceShown(panel)) h += rowHeight(t, SEQUENCE_HEIGHT); break;
         case 'gene': h += rowHeight(t, GENE_HEIGHT); break;

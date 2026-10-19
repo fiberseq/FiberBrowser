@@ -1,3 +1,4 @@
+import { referenceCanvasX } from '../../features/differences/referenceCanvas';
 import { openRegionPanels } from '../../utils/regionPanels';
 import { isBamBacked } from '../../utils/datasetKinds';
 import { matchedGroupLabel, removeMatchedGroups } from '../../utils/matchedGroupActions';
@@ -359,7 +360,7 @@ export function FireTrack({ width, height, scanning, spanningOnly, sidebarWidth 
 
   const handleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
-    const clickX = logicalOffset(e.clientX - rect.left, e.currentTarget.clientWidth, rect.width);
+    const clickX = referenceCanvasX(canvasRef.current, logicalOffset(e.clientX - rect.left, e.currentTarget.clientWidth, rect.width));
     const clickY = logicalOffset(e.clientY - rect.top, e.currentTarget.clientHeight, rect.height);
     const clickPos = screenToGenome(clickX);
 
@@ -423,7 +424,7 @@ export function FireTrack({ width, height, scanning, spanningOnly, sidebarWidth 
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
-    const x = logicalOffset(e.clientX - rect.left, e.currentTarget.clientWidth, rect.width);
+    const x = referenceCanvasX(canvasRef.current, logicalOffset(e.clientX - rect.left, e.currentTarget.clientWidth, rect.width));
     const genomePos = screenToGenome(x);
     const y = logicalOffset(e.clientY - rect.top, e.currentTarget.clientHeight, rect.height);
     const row = Math.floor((y - 14) / Math.max(1, Math.floor((height - 16) / numRows)));

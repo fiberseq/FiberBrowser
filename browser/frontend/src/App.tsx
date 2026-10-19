@@ -1,3 +1,4 @@
+import { DifferenceInspectorRoot } from './features/differences/DifferenceInspector';
 import { useEffect, Component, ReactNode, ErrorInfo } from 'react';
 import { SkipLinks } from './components/ui/SkipLinks';
 import { Browser } from './components/Browser';
@@ -397,7 +398,7 @@ function App() {
       <div className="w-full h-full">
         {/* First in the tab order: jump past the toolbar to the reads or the side panels (N13). */}
         <SkipLinks />
-        <Browser />
+        <DifferenceInspectorRoot><Browser /></DifferenceInspectorRoot>
         <SessionLinkHost />
         <LiveLiftDialog />
         <LiveLiftSettingsDialog />

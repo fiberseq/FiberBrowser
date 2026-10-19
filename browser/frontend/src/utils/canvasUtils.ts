@@ -1,3 +1,4 @@
+import { projectReferenceContext } from '../features/differences/referenceCanvas';
 import { type DependencyList, useEffect, useSyncExternalStore } from 'react';
 import { getBrowserPerformanceProfile } from './performanceProfile';
 import { wrapForVectorCapture } from './vectorCapture';
@@ -89,7 +90,7 @@ export function setupHighDpiCanvas(
 
   // During an SVG/PDF export, also record the drawing (after the scale, so
   // the record is in logical coordinates).
-  return wrapForVectorCapture(canvas, ctx);
+  return projectReferenceContext(canvas, wrapForVectorCapture(canvas, ctx), width, height);
 }
 
 /**

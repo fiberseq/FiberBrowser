@@ -18,6 +18,13 @@ import { clampMinSvLen, SV_MIN_LEN_DEFAULT, clampMinSvSupport, SV_MIN_SUPPORT_DE
 export interface SvSplitDef {
   /** Imported membership/target remains frozen until a deliberate recompute. */
   frozenImport?: boolean;
+  differenceSnapshot?: {
+    target: import('../features/differences/api').FrozenTarget;
+    policy: import('../features/differences/api').EvidencePolicy;
+    analysisScope: string; producerPolicy?: unknown; scope: Record<string, unknown>;
+    membership: import('../features/differences/contracts').MoleculeEnvelope['membership'];
+    callsByMolecule: Record<string, import('../features/differences/contracts').MoleculeCall>; frozen: true;
+  };
   datasetId: string;
   chrom: string;
   t: 'D' | 'I';
@@ -124,6 +131,7 @@ export function normalizeSvSplits(raw: unknown): Record<string, SvSplitDef> {
     const len = Number(d.len);
     out[key] = {
       ...(d.frozenImport ? { frozenImport: true } : {}),
+      ...(d.differenceSnapshot ? { differenceSnapshot: d.differenceSnapshot } : {}),
       datasetId: String(d.datasetId ?? key), chrom: d.chrom, t: d.t, ref, len,
       end: Number.isFinite(d.end) && Number(d.end) >= ref ? Number(d.end) : d.t === 'D' ? ref + len : ref,
       margin: Number.isFinite(d.margin) ? Number(d.margin) : 100,

@@ -28,8 +28,16 @@ const diff: Difference = { id: 'MAT:src:100-2453:insertion', hap: 'h1', hap_labe
   t_start: 500, t_end: 500, ref_bp: 0, alt_bp: 2353, chain: 1, strand: '+', src: { contig: 'src', start: 100, end: 2453 }, grch38: '', alt: null };
 const response = (items = [diff]): DifferencesResponse => ({ dataset_id: 'lift', lift_key: 'key-1', chrom: 'chr1', start: 0, end: 1000, mode: 'items', items, bins: [], bin_bp: null, novel: [] });
 let host: HTMLDivElement, root: Root;
-const click = (el: Element) => act(() => el.dispatchEvent(new MouseEvent('click', { bubbles: true })));
-const settle = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(160); }); };
+const click = (el: Element) => act(() => {
+  el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  if(el.getAttribute('data-testid')==='live-lift-diff-item') {
+    el.dispatchEvent(new MouseEvent('dblclick', {bubbles:true}));
+  }
+});
+const settle = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(160); });
+  const load=[...document.querySelectorAll('button')].find(b=>b.textContent==='Load observed bases and chromatin');
+  if(load) await act(async()=>{load.click();await vi.advanceTimersByTimeAsync(0);});
+};
 beforeEach(() => {
   clearDifferenceCache();
   vi.useFakeTimers(); vi.mocked(getDifferences).mockReset(); vi.mocked(getDifferenceReads).mockReset();
@@ -55,11 +63,12 @@ describe('differences strip and inspection', () => {
   });
   it('renders pooled MAT/PAT lanes and an expandable +2.4 kb item', async () => {
     renderStrip({ ...panel, liftHap: undefined }); await settle();
-    expect(host.textContent).toContain('MAT'); expect(host.textContent).toContain('PAT'); expect(host.textContent).toContain('+2.4 kb');
+    expect(host.querySelectorAll('[data-difference-id]')).toHaveLength(1);
     click(host.querySelector('[data-testid="live-lift-diff-item"]')!);
     await settle();
+    click([...document.querySelectorAll('button')].find(b => b.textContent === 'Expand insertion')!);
     expect(useBrowserStore.getState().liveLiftExpansions.main[0].length).toBe(2353);
-    expect(document.querySelector('[data-testid="live-lift-diff-popover"]')?.textContent).toContain('Split by carrier is unavailable');
+    expect(document.querySelector('[data-testid="live-lift-diff-popover"]')?.textContent).toContain('Load molecule calls');
     act(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
     expect(document.querySelector('[data-testid="live-lift-diff-popover"]')).toBeNull();
   });
@@ -81,7 +90,7 @@ describe('differences strip and inspection', () => {
     renderStrip(); await settle(); click(host.querySelector('[data-testid="live-lift-diff-item"]')!); await settle();
     expect(document.querySelector('[data-testid="live-lift-misphased"]')?.textContent).toContain('1 GRCh38-allele');
     expect(document.querySelector('table')?.textContent).toContain('nucleosome (nuc) · m6A 4 bp');
-    expect([...useReadActionsStore.getState().highlight!.ids]).toEqual(['r0']);
+    expect(useReadActionsStore.getState().highlight).toBeNull();
     expect(useReadActionsStore.getState().pinnedReadIds).toEqual([]);
     act(() => document.querySelectorAll('tbody tr')[1].dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
     expect([...useReadActionsStore.getState().highlight!.ids]).toEqual(['r1']);
@@ -181,7 +190,7 @@ describe('badge click and sibling axes', () => {
       badges: [[500, 'source_insertion', 2000, 2000, 'I']], insertions: {} } };
     await act(async () => { selectReadDifference(carrier, carrier.live_lift!.badges![0], 500,
       { datasetId: 'lift', stateKey: 'mat-state', chrom: 'chr1', start: 0 }); });
-    expect(useBrowserStore.getState().liveLiftExpansions.main[0]).toMatchObject({ ins_id: diff.id, length: 2353, label: 'HG002 MAT +2,353 bp', src: diff.src });
+    expect(useBrowserStore.getState().liveLiftExpansions.main[0]).toMatchObject({ ins_id: diff.id, length: 2353, label: 'Assembly MAT · 0→2,353 bp', src: diff.src });
     expect(useDifferenceSelection.getState().selection).toBeNull();
   });
 });
@@ -290,4 +299,25 @@ it('resolves both parents on expansion and sizes the shared column to the longer
   expect(blocks[0].alleles?.map(a => a.ins_id)).toEqual([diff.id, pat.id]);
   expect(blocks[0].label).toContain('lengths differ');
   expect(vi.mocked(getDifferences).mock.calls[0][0].liftHap).toBeUndefined();
+});
+
+it.each([false,true])('inspects a native alternate-local footprint without genomic coordinates (reverse=%s)', reversed => {
+  const np={...native,stateKey:'native-state'};
+  useBrowserStore.setState({panels:[np],datasets:[{id:'native',data_type:'bam',label:'Native',path:'fixture.bam',color:'#000'}],enabledModTypes:{tf:true,footprint:true} as never});
+  useLiveLiftStore.setState({enabled:false});
+  const expansion:any={chrom:'chr1',pos:504,ref_start:500,t_end:504,ref_bp:4,kind:'replacement',length:100,ins_id:'native-alt',label:'native',hap_label:'',source:'reads',datasetId:'native'};
+  const axis=makeAxis(0,1000,1100,reversed,[expansion]);
+  const read:any={id:'native-carrier',intervals:[[0,1000,-1000]],alternate_blocks:{'native-alt':{pos:504,hap_label:'',src:['chr1',100,200],length:100,mol_bp:100,orientation:'+',covered:[0,100],intervals:[[10,20,10]],layers:{tf:{intervals:[[12,18,6]]}}}}};
+  let handlers:ReturnType<typeof useReadTrackMouse>;
+  function Hook(){handlers=useReadTrackMouse({axis,width:1100,height:100,start:0,end:1000,chrom:'chr1',datasetId:'native',stateKey:'native-state',isReversed:reversed,
+    displayReads:[read],n:1,layout:{rowHeight:10,rowGap:0,scrollAdjust:0},sidebarWidth:0,regionWidth:1000,headerHeight:0,histH:0,hasCluster:false,
+    myClusterAssignments:{},myClusterOrder:[],svEnabled:false,svMinLen:50,panScope:'main',fillReadHeight:false,storeReadRowHeight:20,readScrollOffset:0,readSeparatorMode:'off',readSeparatorMinHeight:0,readSeparatorWidth:0,showCoverageHistogram:false,setHoveredRead(){},setTooltipPos(){},setHoveredSv(){},setContextMenu(){},
+  } as never);return <canvas width={1100} height={100}/>;}
+  act(()=>root.render(<Hook/>));
+  const canvas=host.querySelector('canvas')!;
+  Object.defineProperty(canvas,'clientWidth',{value:1100});Object.defineProperty(canvas,'clientHeight',{value:100});
+  canvas.getBoundingClientRect=()=>({left:0,top:0,width:1100,height:100,right:1100,bottom:100,x:0,y:0,toJSON:()=>({})});
+  const x=axis.toX(0,{ins_id:'native-alt',offset:15});
+  act(()=>handlers!.handleClick({currentTarget:host.querySelector('canvas'),clientX:x,clientY:28,metaKey:true,ctrlKey:false,shiftKey:false,preventDefault(){},stopPropagation(){}} as never));
+  expect(useDifferenceSelection.getState().selection).toMatchObject({datasetId:'native',difference:{source:'reads',kind:'replacement',t_start:500,t_end:504,ref_bp:4},alternateHit:{readId:'native-carrier',layer:'tf',start:12,end:18,offset:15}});
 });

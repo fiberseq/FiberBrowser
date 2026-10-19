@@ -15,7 +15,7 @@ export interface DifferencesSession {
   schema_version: typeof DIFFERENCES_SCHEMA;
   versions: Record<string, string>;
   ledger: { schema_version: typeof DIFFERENCES_SCHEMA; records: JsonRecord; seeds: JsonRecord; lineage: JsonRecord; snapshots: JsonRecord };
-  targets: Record<string, { target_type: 'geometry'; identity_state: 'provisional'; frozen: true; snapshot: JsonRecord; policy: JsonRecord; memberships: ImportMembership[] }>;
+  targets: Record<string, { target_type: 'geometry' | 'exact'; identity_state: 'provisional' | 'exact'; frozen: true; snapshot: JsonRecord; policy: JsonRecord; memberships: ImportMembership[] }>;
   imports: Record<string, ImportMembership[]>;
   legacySnapshot: JsonRecord;
   options: { backgroundCatalogue: boolean; expansionAlignment: 'boundary' | 'homology'; unphasedLane: boolean; analysisScope: 'native_only' | 'lifted_only' | 'combined';

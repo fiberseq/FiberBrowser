@@ -190,6 +190,7 @@ export interface LiveLiftRow {
 }
 
 export interface LiveLiftInsertion {
+  observed_ref_start?: number; observed_ref_end?: number;
   kind?: 'insertion' | 'replacement'; t_start?: number; t_end?: number; ref_bp?: number; alt_bp?: number;
   pos: number; hap_label: string; src: [string, number, number]; length: number; mol_bp: number;
   orientation: '+' | '-'; covered: [number, number]; intervals: [number, number, number][];
@@ -199,6 +200,9 @@ export interface LiveLiftInsertion {
 }
 
 export interface CompactRead {
+  /** Observed alternate-local annotations; independent of map metadata/coverage. */
+  alternate_blocks?: Record<string, LiveLiftInsertion>;
+  record_sha256?: string;
   signal?: import('../../../utils/signalFilters').SignalEvidence;
   id: string;
   analysis_id?: string;

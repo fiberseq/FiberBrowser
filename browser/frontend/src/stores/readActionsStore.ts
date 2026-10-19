@@ -20,6 +20,7 @@ export const READ_ACTIONS_HINT_KEY = 'fiberbrowser_read_actions_hint_v1';
 
 export interface ReadHighlight {
   ids: Set<string>;
+  scopedRows?: Record<string, Set<string>>;
   /** Weaker SV evidence uses a pale dashed outline. */
   uncertainIds?: Set<string>;
   /** Until when it pulses (epoch ms); null: a steady outline until cleared. */

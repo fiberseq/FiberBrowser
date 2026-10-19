@@ -66,15 +66,15 @@ describe('expansion sessions and panel minimum size', () => {
     expect(extension.importSession?.(saved, useBrowserStore.getState()).liveLiftExpansions).toEqual({ main: [ins()] });
     expect(extension.importSession?.(undefined, useBrowserStore.getState()).liveLiftExpansions).toEqual({});
   });
-  it('clears on chromosome departure, including independently pinned views', () => {
+  it('retains saved columns across chromosome departure, including pinned views', () => {
     useBrowserStore.setState({ panels: [{ id: 'own', linkGroup: null, viewportOverride: { chrom: 'chr1', start: 0, end: 100 } } as PanelConfig] });
     useBrowserStore.getState().expandLiveLift('main', ins());
     useBrowserStore.getState().expandLiveLift('panel:own', ins());
     useBrowserStore.setState({ chrom: 'chr2' });
-    expect(useBrowserStore.getState().liveLiftExpansions.main).toEqual([]);
+    expect(useBrowserStore.getState().liveLiftExpansions.main).toHaveLength(1);
     expect(useBrowserStore.getState().liveLiftExpansions['panel:own']).toHaveLength(1);
     useBrowserStore.setState({ panels: [{ id: 'own', linkGroup: null, viewportOverride: { chrom: 'chr2', start: 0, end: 100 } } as PanelConfig] });
-    expect(useBrowserStore.getState().liveLiftExpansions['panel:own']).toEqual([]);
+    expect(useBrowserStore.getState().liveLiftExpansions['panel:own']).toHaveLength(1);
   });
   it('validates untrusted session expansions', () => {
     expect(normalizeExpansions({ main: [ins(), ins(), ins(40, -1), ins(30, 50001), null] })).toEqual({ main: [ins()] });

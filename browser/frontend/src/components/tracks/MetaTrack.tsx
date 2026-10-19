@@ -1,3 +1,4 @@
+import { referenceCanvasX } from '../../features/differences/referenceCanvas';
 import { logicalOffset } from '../../utils/scaledCoordinates';
 import { useRef, useEffect, useState, useCallback } from 'react';
 import { usePanelDisplayStore as useBrowserStore } from '../../hooks/usePanelDisplayStore';
@@ -92,7 +93,7 @@ export function MetaTrack({ width, height, datasetId: datasetIdProp, profileKey,
     
     const handleDocumentMouseMove = (e: MouseEvent) => {
       if (!canvasRectRef.current) return;
-      const x = logicalOffset(e.clientX - canvasRectRef.current.left, width, canvasRectRef.current.width);
+      const x = referenceCanvasX(canvasRef.current, logicalOffset(e.clientX - canvasRectRef.current.left, width, canvasRectRef.current.width));
       // Clamp to canvas bounds for visual feedback
       const clampedX = Math.max(0, Math.min(width, x));
       setDragEndX(clampedX);
@@ -106,7 +107,7 @@ export function MetaTrack({ width, height, datasetId: datasetIdProp, profileKey,
         return;
       }
       
-      const x = logicalOffset(e.clientX - canvasRectRef.current.left, width, canvasRectRef.current.width);
+      const x = referenceCanvasX(canvasRef.current, logicalOffset(e.clientX - canvasRectRef.current.left, width, canvasRectRef.current.width));
       const clampedX = Math.max(0, Math.min(width, x));
       
       const left = Math.min(dragStartX, clampedX);
@@ -254,7 +255,7 @@ export function MetaTrack({ width, height, datasetId: datasetIdProp, profileKey,
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     canvasRectRef.current = rect;
-    const x = logicalOffset(e.clientX - rect.left, e.currentTarget.clientWidth, rect.width);
+    const x = referenceCanvasX(canvasRef.current, logicalOffset(e.clientX - rect.left, e.currentTarget.clientWidth, rect.width));
     setIsDragging(true);
     setDragStartX(x);
     setDragEndX(x);

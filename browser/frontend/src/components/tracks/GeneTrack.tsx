@@ -1,3 +1,4 @@
+import { referenceCanvasX } from '../../features/differences/referenceCanvas';
 import { sameChrom } from '../../utils/chromAliases';
 import { logicalOffset } from '../../utils/scaledCoordinates';
 import { useRef, useEffect, useMemo, useState, useCallback } from 'react';
@@ -231,7 +232,7 @@ export function GeneTrack({ width, height, overrideChrom, overrideStart, overrid
     if (!enableSelection) return;
 
     const rect = e.currentTarget.getBoundingClientRect();
-    const x = logicalOffset(e.clientX - rect.left, e.currentTarget.clientWidth, rect.width);
+    const x = referenceCanvasX(canvasRef.current, logicalOffset(e.clientX - rect.left, e.currentTarget.clientWidth, rect.width));
     const y = logicalOffset(e.clientY - rect.top, e.currentTarget.clientHeight, rect.height);
 
     const gene = getGeneAtPosition(x, y);
@@ -272,7 +273,7 @@ export function GeneTrack({ width, height, overrideChrom, overrideStart, overrid
     if (!enableSelection) return;
 
     const rect = e.currentTarget.getBoundingClientRect();
-    const x = logicalOffset(e.clientX - rect.left, e.currentTarget.clientWidth, rect.width);
+    const x = referenceCanvasX(canvasRef.current, logicalOffset(e.clientX - rect.left, e.currentTarget.clientWidth, rect.width));
     const y = logicalOffset(e.clientY - rect.top, e.currentTarget.clientHeight, rect.height);
 
     const gene = getGeneAtPosition(x, y);
