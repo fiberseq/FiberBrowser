@@ -69,6 +69,7 @@ def test_source_deletion_cancels_map_insertion_and_retains_reference(minus):
     a = replace(a, sequence="G"*50+"T"*50 if not minus else revcomp("G"*50+"T"*50))
     projected = compose_alignment(a, path(0, 30, minus))
     assert projected["edits"] == []
+    assert projected["partial_gaps"] == []
     assert classify_projection(a, projected, target(0, 30))["call"]["assignment"] == "reference"
     assert classify_projection(a, projected, target(0, 30, True), context=DafContext("none", "oracle"))["call"]["assignment"] == "reference"
 
@@ -303,3 +304,10 @@ def test_joint_deletion_cannot_erase_another_viable_source_placement():
     assert result["call"]["assignment"] == "ambiguous"
     assert result["geometry_call"]["assignment"] == "ambiguous"
     assert "unresolved_representation" in result["call"]["reasons"]
+
+
+def test_unmapped_query_witnesses_share_the_geometry_storage_budget():
+    a = replace(alignment(), ref_start=0, cigar=((0, 1),)*100, sequence="A"*100)
+    p = MapPath("outside", "target", "source", (LiftPiece(0, 1000, 1100, 1000, 1100, "+", True, "H#1", "source"),))
+    with pytest.raises(ResourceResult, match="projection_runs_cap"):
+        compose_alignment(a, p, budget=ProjectionBudget(ProjectionPolicy(max_runs=10)))

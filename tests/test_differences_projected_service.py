@@ -301,3 +301,37 @@ def test_supplementary_follow_display_is_an_explicit_cohort_policy(evidence, mon
     assert projected_analysis(state, ds, **kwargs)["targets"][0]["counts"] == [1, 0, 0]
     ds.live_lift.settings = replace(ds.live_lift.settings, cohort_supplementaries="follow_display")
     assert projected_analysis(state, ds, **kwargs)["targets"][0]["counts"] == [0, 0, 0]
+
+
+def test_discovery_keeps_unassessed_raw_edits_instead_of_complete_empty_results(evidence, monkeypatch):
+    monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "1")
+    state, ds, directory = evidence
+    ds.paths = [write_bam(directory / "unresolved-edit.bam", lambda h: [
+        make_record(h, "large-deletion", MAT, 0, "50M7000D50M")])]
+    result = projected_analysis(state, ds, feature="summary", chrom=TARGET, start=2000, end=2100)
+    assert result["targets"] == []
+    assert result["scope"]["search_complete"] is False
+    assert result["scope"]["reasons"] == ["unassessed_projection"]
+    assert result["unassessed_projections"]
+    assert "raw_edit_missing_projected_flanks" in result["unassessed_projections"][0]["reasons"]
+
+
+def test_source_witness_count_refuses_before_materializing_large_sa_sets(evidence, monkeypatch):
+    monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "1")
+    state, ds, directory = evidence
+    ds.paths = [write_bam(directory / "many-source-witnesses.bam", lambda h: [
+        make_record(h, "m", MAT, 4800, "600M", tags=[("SA", "elsewhere,1,+,100M,60,0;"*5)])])]
+    result = projected_analysis(state, ds, feature="split", chrom=TARGET, start=5900, end=6500,
+        target=insertion(), policy=ProjectionPolicy(max_runs=1))
+    assert result["scope"]["records"] == 0
+    assert "projection_source_witnesses" in result["scope"]["reasons"]
+
+
+def test_cancelled_map_insertion_is_complete_reference_discovery(evidence, monkeypatch):
+    monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "1")
+    state, ds, directory = evidence
+    ds.paths = [write_bam(directory / "cancelled-insertion.bam", lambda h: [
+        make_record(h, "reference", MAT, 0, "5000M100D1000M")])]
+    result = projected_analysis(state, ds, feature="summary", chrom=TARGET, start=5900, end=6500)
+    assert result["targets"] == [] and result["unassessed_projections"] == []
+    assert result["scope"]["search_complete"] is True

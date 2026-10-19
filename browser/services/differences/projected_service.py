@@ -14,7 +14,7 @@ from .identity import content_id, digest_file
 from .likelihood import LikelihoodBudget, LikelihoodPolicy
 from .model import SCHEMA_VERSION, VERSIONS
 from .projection import (MapGap, MapPath, ProjectionBudget, ProjectionPolicy, SourceAlignment,
-                         call_molecule, compose_alignment, _walk)
+                         call_molecule, compose_alignment, _walk, _boundary)
 from .alleles import DafContext
 
 
@@ -125,6 +125,8 @@ def _source_records(dataset, plan, *, include_sequence, include_duplicates, budg
                     molecule = MoleculeId("declared_source_library", groups[path], read.query_name)
                     if (read.infer_read_length() or 0) > DEFAULT_LIMITS.max_input_bases or sum(read.get_cigar_stats()[1]) > budget.policy.max_cigar_operations:
                         raise ResourceResult("budget_exceeded", "projection_record_storage", interrupted_molecule=molecule.key)
+                    if read.has_tag("SA") and read.get_tag("SA").count(";") > budget.policy.max_runs:
+                        raise ResourceResult("budget_exceeded", "projection_source_witnesses", interrupted_molecule=molecule.key)
                     record = SourceAlignment.from_bam(read, molecule)
                     occurrence = occurrences.get(record.record_sha256, 0)
                     occurrences[record.record_sha256] = occurrence + 1
@@ -135,6 +137,7 @@ def _source_records(dataset, plan, *, include_sequence, include_duplicates, budg
                     try:
                         budget.charge("records", 1, budget.policy.max_records)
                         budget.charge("operations", len(record.cigar), budget.policy.max_cigar_operations)
+                        budget.charge("runs", len(record.witnesses), budget.policy.max_runs)
                         budget.charge("bases", int(read.query_length or 0) if include_sequence else 0, budget.policy.max_input_bases)
                     except ResourceResult as exc:
                         exc.parameters["interrupted_molecule"] = molecule.key
@@ -287,6 +290,7 @@ def _projected_analysis(state, dataset, *, chrom, start, end, feature, target=No
     for key, aa in [*grouped.items(), *native.items()]:
         context_aliases.setdefault(aa[0].molecule.raw_name, set()).add(key)
     ambiguous_contexts = {name for name, keys in context_aliases.items() if len(keys) > 1 and name in (contexts or {})}
+    unassessed = []
     if feature == "summary":
         # Discovery retains path membership; clustering is candidate geometry
         # only. Classification below never pools these mutually exclusive paths.
@@ -300,6 +304,13 @@ def _projected_analysis(state, dataset, *, chrom, start, end, feature, target=No
                     if p.source != a.contig:
                         continue
                     projected = compose_alignment(a, p, budget=budget)
+                    missing = _unassessed_discovery(a, p, projected, start, end, budget)
+                    if missing:
+                        unassessed.append(dict(record_id=a.record_id, molecule_id=a.molecule.key,
+                            path_id=p.path_id, source_contig=a.contig, source_start=a.ref_start,
+                            source_cigar=[list(c) for c in a.cigar[:60]], source_cigar_operations=len(a.cigar),
+                            source_cigar_complete=len(a.cigar) <= 60, reasons=missing,
+                            witnesses=projected["unresolved_witnesses"]))
                     for e in projected["edits"]:
                         if max(e["ref_end"]-e["ref_start"], e["alt_bp"]) < 10:
                             continue
@@ -314,6 +325,8 @@ def _projected_analysis(state, dataset, *, chrom, start, end, feature, target=No
         except ResourceResult as exc:
             reasons.append(exc.reason)
         targets = list(geometries.values())
+        if unassessed:
+            reasons.append("unassessed_projection")
     else:
         targets = [target]
     output = []
@@ -423,6 +436,7 @@ def _projected_analysis(state, dataset, *, chrom, start, end, feature, target=No
             break
     payload = dict(schema_version=SCHEMA_VERSION, feature=feature, analysis_scope=analysis_scope,
         versions={**VERSIONS, "projection": policy.version}, policy=asdict(policy), targets=output,
+        unassessed_projections=unassessed,
         membership=membership.payload(), scope=dict(chrom=chrom, start=start, end=end, cohort="loaded",
             records=len(records)+sum(map(len, native.values())), molecules=len(set(grouped) | set(native)), source_bp=plan.source_bp,
             search_complete=not reasons and not alternatives_capped and all(v.get("lifted", {}).get("search", {}).get("search_complete", False) for o in output for v in o["calls_by_molecule"].values()),
@@ -438,6 +452,34 @@ def _projected_analysis(state, dataset, *, chrom, start, end, feature, target=No
         return dict(schema_version=SCHEMA_VERSION, status="budget_exceeded", reason="projection_response_bytes",
                     scope={**payload["scope"], "search_complete": False}, targets=[])
     return payload
+
+
+def _unassessed_discovery(alignment, path, projected, start, end, budget):
+    """Never call discovery complete after omitting a raw edit's map/flank proof."""
+    missing = []
+    overlaps = lambda a, b: (start <= a < end if a == b else a < end and b > start)
+    if any(overlaps(g["ref_start"], g["ref_end"]) for g in projected["partial_gaps"]):
+        missing.append("partial_map_gap")
+    pos = alignment.ref_start
+    for i, (op, length) in enumerate(alignment.cigar):
+        if not i & 255:
+            budget.check()
+        if op in (1, 2) and length >= 10:
+            stop = pos+length if op == 2 else pos
+            accounted = any(e["source_ref_start"] <= pos <= stop <= e["source_ref_end"] for e in projected["edits"])
+            left = any(r["source_start"] <= pos-1 < r["source_end"] for r in projected["base_blocks"])
+            right = any(r["source_start"] <= stop < r["source_end"] for r in projected["base_blocks"])
+            if not accounted and not (left and right):
+                for piece in path.pieces:
+                    a, b = max(pos, piece.q_start), min(stop, piece.q_end)
+                    if ((op == 1 and piece.q_start <= pos <= piece.q_end) or (op == 2 and a < b)):
+                        x, y = sorted((_boundary(piece, a), _boundary(piece, b)))
+                        if overlaps(x, y):
+                            missing.append("raw_edit_missing_projected_flanks")
+                            break
+        if op in (0, 2, 3, 7, 8):
+            pos += length
+    return sorted(set(missing))
 
 
 def native_bundles(state, dataset_id, chrom, start, end, *, include_sequence, include_duplicates, budget):
@@ -460,11 +502,14 @@ def native_bundles(state, dataset_id, chrom, start, end, *, include_sequence, in
                 continue
             if (read.infer_read_length() or 0) > DEFAULT_LIMITS.max_input_bases or sum(read.get_cigar_stats()[1]) > budget.policy.max_cigar_operations:
                 raise ResourceResult("budget_exceeded", "projection_record_storage")
+            if read.has_tag("SA") and read.get_tag("SA").count(";") > budget.policy.max_runs:
+                raise ResourceResult("budget_exceeded", "projection_source_witnesses")
             a = SourceAlignment.from_bam(read, molecule)
             if a.record_id in seen:
                 continue
             budget.charge("records", 1, budget.policy.max_records)
             budget.charge("operations", len(a.cigar), budget.policy.max_cigar_operations)
+            budget.charge("runs", len(a.witnesses), budget.policy.max_runs)
             budget.charge("bases", int(read.query_length or 0) if include_sequence else 0, budget.policy.max_input_bases)
             if include_sequence:
                 a = replace(a, sequence=read.query_sequence,

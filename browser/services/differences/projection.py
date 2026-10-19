@@ -272,7 +272,12 @@ def compose_alignment(alignment, path, *, budget=None, walk=None):
                     source_entry=b if minus else a, source_exit=a if minus else b,
                     original_query=list(canonical), record_id=alignment.record_id))
     runs.sort(key=lambda r: (r["ref_start"], r["q_start"]))
+    if len(alignment.witnesses) > budget.policy.max_runs:
+        raise ResourceResult("budget_exceeded", "projection_source_witnesses")
     cuts, components, unresolved = [], [], list(alignment.witnesses)
+    def retain_unresolved(value):
+        budget.charge("runs", 1, budget.policy.max_runs)
+        unresolved.append(value)
     # Aligned source/query tails outside the selected path stay witnesses.
     # They are not evidence of another target chromosome or a clip conflict.
     covered = []
@@ -291,14 +296,14 @@ def compose_alignment(alignment, path, *, budget=None, walk=None):
                 break
             if a > cursor:
                 x, y = q+cursor-s, q+min(a, e)-s
-                unresolved.append(dict(reason="source_path_outside_selected_map", record_id=alignment.record_id,
+                retain_unresolved(dict(reason="source_path_outside_selected_map", record_id=alignment.record_id,
                     source_start=cursor, source_end=min(a, e), original_query=[length-y, length-x] if alignment.reverse else [x, y]))
             cursor = max(cursor, b)
             if cursor >= e:
                 break
         if cursor < e:
             x, y = q+cursor-s, q+e-s
-            unresolved.append(dict(reason="source_path_outside_selected_map", record_id=alignment.record_id,
+            retain_unresolved(dict(reason="source_path_outside_selected_map", record_id=alignment.record_id,
                 source_start=cursor, source_end=e, original_query=[length-y, length-x] if alignment.reverse else [x, y]))
     component = []
     for run in runs:
@@ -334,7 +339,9 @@ def compose_alignment(alignment, path, *, budget=None, walk=None):
         components.append(component)
     # Partial and insertion-only paths have viable placement but no invented flanks.
     partial = [asdict(g) for g in path.gaps if g.source_start < source_end and g.source_end > alignment.ref_start
-               and not any(g.observation_id in c["map_observation_ids"] for c in cuts)]
+               and not any(g.observation_id in c["map_observation_ids"] for c in cuts)
+               and not any(any(r["source_start"] <= g.source_start-1 < r["source_end"] for r in c)
+                           and any(r["source_start"] <= g.source_end < r["source_end"] for r in c) for c in components)]
     mapped_clips = []
     first_aligned = min((x[2] for x in aligned), default=length)
     for a, b, hard in clips:
@@ -348,7 +355,7 @@ def compose_alignment(alignment, path, *, budget=None, walk=None):
                 q_start=q0, q_end=q1, hard=hard, origin_record_id=alignment.record_id,
                 source_anchor=source_anchor, query_frame="target_oriented_full_molecule"))
         else:
-            unresolved.append(dict(reason="clip_anchor_unprojectable", record_id=alignment.record_id,
+            retain_unresolved(dict(reason="clip_anchor_unprojectable", record_id=alignment.record_id,
                 source_anchor=source_anchor, original_query=[length-b, length-a] if alignment.reverse else [a, b], hard=hard))
     return dict(record_id=alignment.record_id, path_id=path.path_id, chrom=path.chrom,
         source_contig=alignment.contig, source_start=alignment.ref_start, source_end=source_end,

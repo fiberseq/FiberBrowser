@@ -53,6 +53,10 @@ Map D/I/replacements can compose with or cancel source operations. Ordered
 base blocks, edit cuts and connected components remain separate; a hull,
 reference skip or unresolved map hole supplies no junction/reference bridge.
 Insertion-only and one-flank observations remain partial.
+Summary retains `unassessed_projections` and incomplete discovery when an
+intersecting raw read edit lacks projected flanks, or an owned map gap has only
+partial read coverage. An omitted large/noncollinear edit is not a complete
+empty discovery result.
 
 Classification occurs inside each joint map choice. Actual supplementary
 records can form a deletion junction only with compatible path, orientation,
