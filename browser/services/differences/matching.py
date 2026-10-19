@@ -67,6 +67,7 @@ class Edit:
     equivalent_anchors: tuple[int, int] | None = None
     sequence_complete: bool = False
     operation_order: int | None = None
+    inversion_exact: bool = False
 
     def __post_init__(self):
         if (not all((self.observation_id, self.reference_id, self.contig))
@@ -242,7 +243,7 @@ def reconstruct(edits, window, policy=MatchingPolicy()):
         if e.kind not in _LOCAL:
             raise ValueError("unassessed_representation: unsupported topology")
         alt = e.alt
-        if e.kind == "inversion" and alt is None:
+        if e.kind == "inversion" and alt is None and e.inversion_exact:
             alt = window.sequence[e.start - window.start:e.end - window.start].translate(str.maketrans("ACGTacgt", "TGCAtgca"))[::-1]
         elif not e.sequence_complete:
             raise ValueError("sequence_unavailable")

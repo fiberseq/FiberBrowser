@@ -89,11 +89,16 @@ def test_repeat_rotation_is_proven_before_search_and_incomplete_halos_refuse_has
 
 def test_general_replacement_padding_and_local_inversion_have_same_canonical_allele():
     window = ReferenceWindow("reference-content", "chrT", 0, "AACCGGTT", 8)
-    a = edit("inv", 1, 5, length=4, kind="inversion")  # ACCG -> CGGT
+    # This authored operation is an exact inversion recipe. A map marker with
+    # unavailable source bases cannot make that sequence claim automatically.
+    a = edit("inv", 1, 5, length=4, kind="inversion", inversion_exact=True)  # ACCG -> CGGT
     b = edit("replacement", 1, 5, "CGGT", source="assembly")
     assert reconstruct([a], window)[0] == "ACGGTGTT"
     result = match_edits([a], [b], window_provider=lambda *args: window)
     assert result["links"][0]["relation"] == "exact"
+    unresolved = match_edits([replace(a, inversion_exact=False)], [b], window_provider=lambda *args: window)
+    assert not any(link['relation'] == 'exact' for link in unresolved['links'])
+    assert 'sequence_unavailable' in unresolved['reasons']
     assert canonicalize(window, "ACGGTGTT").exact_allele_id == reconstruct([b], window)[1].exact_allele_id
     padded = edit("padded", 0, 6, "ACGGTG")
     assert reconstruct([padded], window)[1].exact_allele_id == reconstruct([b], window)[1].exact_allele_id

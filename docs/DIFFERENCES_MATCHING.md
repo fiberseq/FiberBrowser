@@ -45,6 +45,8 @@ unassessed; coincident insertions require raw operation order. Two 50-base
 deletions around a 15-base bridge equal a 115-to-15 replacement only when its
 alternate is the actual bridge. Local inversions can reconstruct the same
 haplotype as replacements. Nonlocal breakends/bubbles remain unassessed.
+An inversion needs complete source bases or an explicitly validated exact
+inversion recipe; a map inversion marker cannot synthesize missing sequence.
 
 Typed `EquivalenceLink` results contain endpoint sets, member roles, recipe,
 window, versions, phase relation and reasons. Many clusters can link to many
