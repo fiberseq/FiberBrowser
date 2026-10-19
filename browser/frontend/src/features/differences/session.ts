@@ -63,12 +63,16 @@ export function importMembership(originalId: string, metadata: JsonRecord): Impo
     return [JSON.stringify(molecule), molecule];
   }));
   if (molecules.size === 1) {
-    const record = candidates[0];
-    const parts = [`${record.provenanceGroup}|${record.rawName}`, record.rawName,
-      fold.molecule ? null : record.recordId, fold.molecule || fold.orientation ? null : record.rowIndex, record.placement];
-    const encoded = JSON.stringify(parts).replace(/[\u007f-\uffff]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
+    const identities = new Set(candidates.map((record: any) => {
+      const parts = [`${record.provenanceGroup}|${record.rawName}`, record.rawName,
+        fold.molecule ? null : record.recordId, fold.molecule || fold.orientation ? null : record.rowIndex, record.placement];
+      return JSON.stringify(parts).replace(/[\u007f-\uffff]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
+    }));
+    if (producer !== 'raw-qname:v1' && identities.size !== 1) {
+      return { status: 'unresolved_import', originalId, reason: 'ambiguous_record_membership' };
+    }
     return { status: 'resolved', originalId, molecule: [...molecules.values()][0],
-      currentId: producer === 'raw-qname:v1' ? originalId : `lift-cohort:v1 ${encoded}` };
+      currentId: producer === 'raw-qname:v1' ? originalId : `lift-cohort:v1 ${[...identities][0]}` };
   }
   return { status: 'unresolved_import', originalId, reason: molecules.size > 1 ? 'ambiguous_provenance' : 'missing_trustworthy_membership' };
 }

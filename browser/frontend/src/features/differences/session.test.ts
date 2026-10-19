@@ -41,6 +41,14 @@ describe('conservative historical membership', () => {
     }
     expect(importMembership(oldId, { ...known, records: [record, { ...record, libraryId: 'independent-library' }] }).status).toBe('unresolved_import');
   });
+  it('retains unresolved placement membership even when colliding encodings share one molecule', () => {
+    const a = { ...record, recordId: 'record|2', rowIndex: 3, placement: 'primary' };
+    const b = { ...record, recordId: 'record', rowIndex: 2, placement: '3|primary' };
+    const encode = (r: typeof a) => `${r.provenanceGroup}|${r.rawName}|${r.recordId}|${r.rowIndex}|${r.placement}`;
+    expect(encode(a)).toBe(encode(b));
+    expect(importMembership(encode(a), { ...known, records: [a, b] }))
+      .toEqual({ status: 'unresolved_import', originalId: encode(a), reason: 'ambiguous_record_membership' });
+  });
   it.each(['ordinary|pipe|name', oldId, 'lift-cohort:v1-looking'])('known raw QNAME stays verbatim: %s', rawName => {
     expect(importMembership(rawName, { producer: 'raw-qname:v1', records: [{ ...record, rawName }] }))
       .toMatchObject({ status: 'resolved', molecule: { raw_name: rawName } });
