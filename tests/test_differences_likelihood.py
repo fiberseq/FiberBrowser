@@ -123,3 +123,28 @@ def test_held_out_noisy_competition_reports_engineering_not_biological_calibrati
         assert result["call"]["level"] == "putative"
         assert result["policy"]["calibration_id"] is None
     assert correct == 24
+
+
+def test_conversion_policy_is_default_and_molecule_rate_overrides_it():
+    candidates = {"target": "CCCG", "reference": "AAAA"}
+    def score(policy_rate, context_rate=None):
+        context = DafContext("CT", "synthetic", conversion_rate=context_rate)
+        result = compete("TTTG", candidates, target_id="target", complete=True,
+                         context=context, policy=LikelihoodPolicy(conversion_rate=policy_rate))
+        return result["scores"]["target"]["log_likelihood"]
+    assert score(.99) > score(.01)
+    assert score(.99, .4) == score(.01, .4)
+    assert run("TTTG", candidates, chemistry="CT", policy=LikelihoodPolicy(conversion_rate=.99))["scores"] != run(
+        "TTTG", candidates, chemistry="CT", policy=LikelihoodPolicy(conversion_rate=.01))["scores"]
+
+
+def test_prefix_suffix_and_empty_allele_insertions_have_equal_emission_cost():
+    import math
+    from services.differences.likelihood import _score
+    policy = LikelihoodPolicy()
+    context = DafContext("none", "synthetic")
+    prefix = _score("A" * 10 + "G", "G", context, policy, LikelihoodBudget(policy))
+    suffix = _score("G" + "A" * 10, "G", context, policy, LikelihoodBudget(policy))
+    empty = _score("A" * 10, "", context, policy, LikelihoodBudget(policy))
+    assert prefix == pytest.approx(suffix)
+    assert empty == pytest.approx((10 * math.log(policy.indel_rate / 4), 10))

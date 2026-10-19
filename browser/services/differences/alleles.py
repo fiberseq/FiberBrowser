@@ -16,7 +16,7 @@ class DafContext:
     chemistry: str  # molecule chemistry; never swapped by target orientation
     provenance: str
     reverse_complemented: bool = False
-    conversion_rate: float = 0.9
+    conversion_rate: float | None = None
     substitution_rate: float = 0.01
     base_qualities: tuple[int, ...] = ()
     likelihood_version: str = 'contract:v1'

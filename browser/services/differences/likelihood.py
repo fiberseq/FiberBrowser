@@ -71,7 +71,8 @@ def _emission(expected, observed, quality, context, policy):
     if context.chemistry == "none":
         return 1 - error if expected == observed else error / 3
     return transition_probability(expected, observed, chemistry=context.chemistry,
-        reverse_complemented=context.reverse_complemented, conversion_rate=context.conversion_rate,
+        reverse_complemented=context.reverse_complemented,
+        conversion_rate=policy.conversion_rate if context.conversion_rate is None else context.conversion_rate,
         substitution_rate=error)
 
 
@@ -89,7 +90,7 @@ def _score(observed, expected, context, policy, budget):
     for i, observed_base in enumerate(observed, 1):
         budget.check()
         quality = context.base_qualities[i - 1] if context.base_qualities else None
-        row = [(i * gap, i)]
+        row = [(i * (gap - math.log(4)), i)]
         emissions = {base: math.log(max(1e-300, _emission(base, observed_base, quality, context, policy))) for base in "ACGT"}
         for j, expected_base in enumerate(expected, 1):
             if not j & 255:
@@ -120,7 +121,8 @@ def compete(observed, candidates, *, target_id, complete, context=None, geometry
     Scores, runner-up separation and calibration provenance remain inspectable.
     """
     context = context or DafContext("unknown", "unavailable")
-    if (not isinstance(context.conversion_rate, (int, float)) or not 0 <= context.conversion_rate <= 1
+    if ((context.conversion_rate is not None and
+         (not isinstance(context.conversion_rate, (int, float)) or not 0 <= context.conversion_rate <= 1))
             or not isinstance(context.substitution_rate, (int, float)) or not 0 <= context.substitution_rate < 1):
         raise ValueError("invalid molecule conversion/noise rates")
     budget = budget or LikelihoodBudget(policy)
