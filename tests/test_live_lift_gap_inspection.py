@@ -65,3 +65,17 @@ def test_replacement_reference_preview_and_bounded_alt_pages(tmp_path):
     assert item["grch38"] == "CCC" and item["alt"] == "A" * 60
     assert item["alt_truncated"] and item["sequence_status"] == "partial"
     assert diff.difference_sequence(ds, TARGET, 1100, item["id"], offset=60, limit=10)["sequence"] == "A" * 10
+
+
+@pytest.mark.parametrize("op", ["D", "N"])
+def test_source_hull_without_aligned_boundary_flanks_is_not_full_inspection(tmp_path, op):
+    config = gap_map(tmp_path, 200, 0)
+    bam = write_bam(tmp_path / "source.bam", lambda h: [
+        make_record(h, "unobserved", MAT, 150, f"40M20{op}40M"),
+        make_record(h, "one-flank", MAT, 150, f"50M10{op}40M"),
+    ], contigs=((MAT, SSIZE),))
+    ds = SimpleNamespace(id="gap", paths=[bam], data_type="bam_livelift", live_lift=config)
+    result = diff.difference_reads(SimpleNamespace(fasta=None, datasets={ds.id: ds}), ds, TARGET, 1100, 1300)
+    rows = {row["id"]: row for row in result["rows"]}
+    assert rows["unobserved"]["allele"] == "no_coverage" and not rows["unobserved"]["full_span"]
+    assert rows["one-flank"]["allele"] == "partial" and not rows["one-flank"]["full_span"]

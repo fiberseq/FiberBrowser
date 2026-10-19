@@ -884,7 +884,11 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
                           "same_as_grch38" if hg is not None and ref is not None and rb == hg == ref else
                           "grch38" if hg is not None and ref is not None and hg != ref and rb == ref else "other")
                 if gap:
-                    full = record.reference_start < a and record.reference_end > b
+                    left_flank = bool(a > 0 and record.get_overlap(a - 1, a))
+                    right_flank = bool(record.get_overlap(b, b + 1))
+                    full = left_flank and right_flank
+                    if a == b and not (left_flank or right_flank):
+                        overlaps = False
                     allele = ("no_coverage" if not overlaps else "partial" if not full else allele)
                 carries = False
                 if pos == end:
@@ -905,7 +909,8 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
                             chromatin=_chromatin(row, origin, pos, span["strand"]))
                 if gap:
                     item.update(item_id=span["id"], ref_bp=span["ref_bp"], alt_bp=span["alt_bp"],
-                                full_span=full, mol_bp=len(rb), read_bases=rb[:60], read_bases_length=len(rb))
+                                full_span=full, left_flank=left_flank, right_flank=right_flank,
+                                mol_bp=len(rb), read_bases=rb[:60], read_bases_length=len(rb))
                 if pos == end:
                     own_carrier = carries and hap == span["hap"]
                     if (include_sequence and own_carrier and (item_id is None or span["id"] == item_id) and len(rb) <= 50_000):
