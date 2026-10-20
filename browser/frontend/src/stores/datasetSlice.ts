@@ -434,7 +434,10 @@ export function createDatasetSlice(set: (partial: Partial<BrowserState> | ((stat
       : state.enabledModTypes;
 
     return {
-      datasets: [...state.datasets, dataset],
+      // Once per ID: a dataset the page already has (taken from the server while its own open was on its way) is
+      // updated, never listed twice.
+      datasets: state.datasets.some(d => d.id === dataset.id)
+        ? state.datasets.map(d => (d.id === dataset.id ? dataset : d)) : [...state.datasets, dataset],
       slotOrder: newSlotOrder,
       panels: placedPanels,
       downsampleCount: state.downsampleCount,

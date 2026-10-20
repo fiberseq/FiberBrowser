@@ -8,6 +8,8 @@ import { getChromosomes, getGenomes, loadGenome, loadFasta } from './api/referen
 import { getGenomeCheck } from './api/genomeCheck';
 import { getStatus } from './api/status';
 import { fetchApiResponse } from './api/sharedFetch';
+import { useServerDatasetsStore } from './stores/serverDatasetsStore';
+import { adoptServerDatasetsIfEmpty } from './utils/adoptServerDatasets';
 import { registerAnalysisPanel } from './plugins';
 import { PythonPluginPanel } from './components/controls/PythonPluginPanel';
 import { openTourTab } from './utils/tourTab';
@@ -374,10 +376,20 @@ function App() {
     // reload must not be mistaken for the page that just closed.
     const tabId = Math.random().toString(36).slice(2, 12);
     const heartbeat = () => {
-      fetchApiResponse(`/api/tabs/heartbeat?tab=${tabId}`, { method: 'POST' }).catch(() => {});
+      fetchApiResponse(`/api/tabs/heartbeat?tab=${tabId}`, { method: 'POST' })
+        .then(r => (r.ok ? r.json() : null))
+        // The loaded datasets' key: a dataset added on the server (another tab, a script) is noticed.
+        .then(body => {
+          useServerDatasetsStore.getState().setKey(body?.datasets);
+          void adoptServerDatasetsIfEmpty();
+        })
+        .catch(() => {});
     };
     heartbeat();
     const heartbeatTimer = window.setInterval(heartbeat, 10_000);
+    // Coming back to the tab checks in at once (background tabs' timers are slowed).
+    const onVisible = () => { if (document.visibilityState === 'visible') heartbeat(); };
+    document.addEventListener('visibilitychange', onVisible);
 
     const handleUnload = () => {
       // Mark that we're unloading — if we come back (reload), we'll cancel
@@ -388,6 +400,7 @@ function App() {
     window.addEventListener('beforeunload', handleUnload);
     return () => {
       window.clearInterval(heartbeatTimer);
+      document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('beforeunload', handleUnload);
     };
   }, [publicMode]);

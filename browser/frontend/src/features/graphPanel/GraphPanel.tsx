@@ -20,6 +20,7 @@ import { buildScene, COMPACT_LANE_PX, describeSceneHit, planScene, sceneHitAt, s
 import { type LinearView, canFollow, defaultCompared, defaultTarget, effectiveViewport, initialGraphView, initiatorView, restoreProblem, retargetFor, selectableBindings, togglePath, GRAPH_MAX_PATHS } from './state';
 import { useGraphStatusStore } from './statusStore';
 import { usePanelContentHeightStore } from '../../stores/panelContentHeightStore';
+import { useServerDatasetsStore } from '../../stores/serverDatasetsStore';
 import { genomeKeyFor } from '../../utils/regionNavigation';
 import { startTrace, type GraphTrace } from './timings';
 import type { GraphApiError, GraphReadBinding, GraphReadSettings, GraphReadsResponse, GraphRegistration, GraphSubgraphResponse, GraphViewState } from './types';
@@ -219,6 +220,9 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   // reads of the bound paths' source windows, requested once the topology says what those windows are.
   const readSettings = state?.reads ?? DEFAULT_READS;
   const datasetKey = useBrowserStore(s => s.datasets.map(d => d.id).join(','));
+  // The server's datasets (from the tab heartbeat): one added there after this page opened (a script, another tab)
+  // binds too.
+  const serverDatasets = useServerDatasetsStore(s => s.key);
   const datasetLabels = useBrowserStore(useShallow(s => Object.fromEntries(s.datasets.map(d => [d.id, d.label ?? d.id]))));
   const [readBindings, setReadBindings] = useState<GraphReadBinding[]>([]);
   useEffect(() => {
@@ -226,7 +230,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     const controller = new AbortController();
     getReadBindings(reg.id, controller.signal).then(setReadBindings).catch(() => { if (!controller.signal.aborted) setReadBindings([]); });
     return () => controller.abort();
-  }, [reg?.id, datasetKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [reg?.id, datasetKey, serverDatasets]); // eslint-disable-line react-hooks/exhaustive-deps
   const activeBindings = useMemo(() => (readSettings.show ? readBindings.filter(b => Object.keys(b.paths).length
     && (readSettings.datasets == null || readSettings.datasets.includes(b.dataset_id))) : []), [readBindings, readSettings]);
   const [reads, setReads] = useState<{ response: GraphReadsResponse | null; loading: boolean; error: GraphApiError | null; forStart?: number; key?: string }>({ response: null, loading: false, error: null });
@@ -489,7 +493,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     const sx = x - sceneOffset;
     const readHit = readHitsRef.current.find(h => sx >= h.x0 && sx <= h.x1 && y >= h.y0 && y <= h.y1);
     if (readHit) {
-      setCursor({ x, y, text: describeReadHit(readHit, sx, id => datasetLabels[id] ?? id, key => laneLabelOf(key), readLayers), cursorX: null });
+      setCursor({ x, y, text: describeReadHit(readHit, sx, id => datasetLabels[id] ?? readBindings.find(b => b.dataset_id === id)?.label ?? id, key => laneLabelOf(key), readLayers), cursorX: null });
       return;
     }
     const hit = sceneHitAt(scene, sx, y);

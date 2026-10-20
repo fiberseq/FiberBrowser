@@ -37,9 +37,20 @@ def _live_tabs(now: float) -> list[str]:
     return [tab for tab, seen in _tab_last_seen.items() if seen >= horizon]
 
 
+def datasets_key(state) -> str:
+    """A short key of the server's loaded datasets (IDs and files): it changes when one is added, removed or
+    replaced, also by another tab or a script, so an open page can notice without listing them."""
+    import hashlib
+
+    items = sorted((str(d_id), tuple(str(p) for p in (getattr(d, "paths", None) or ())))
+                   for d_id, d in list((getattr(state, "datasets", None) or {}).items()))
+    return hashlib.sha1(repr(items).encode()).hexdigest()[:12]
+
+
 @router.post("/api/tabs/heartbeat")
-async def tab_heartbeat(request: Request, tab: str = Query(..., max_length=64)):
-    """An open browser tab checking in; keeps the server alive."""
+async def tab_heartbeat(request: Request, tab: str = Query(..., max_length=64), state=Depends(get_state)):
+    """An open browser tab checking in; keeps the server alive. ``datasets``: the loaded datasets' key (a page
+    compares it with the last one it saw)."""
     import time
 
     refusal = lifecycle_refusal(request)
@@ -48,7 +59,7 @@ async def tab_heartbeat(request: Request, tab: str = Query(..., max_length=64)):
     if tab in _closed_tabs:  # a report sent just before the page closed
         return {"ok": False}
     _tab_last_seen[tab] = time.monotonic()
-    return {"ok": True}
+    return {"ok": True, "datasets": datasets_key(state)}
 
 
 @router.get("/api/shutdown", operation_id="shutdown_get")
