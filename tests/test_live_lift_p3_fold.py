@@ -328,3 +328,55 @@ def test_hard_clipped_modifications_match_the_soft_clipped_record(tmp_path, scop
     assert marks.get("methyl_m6a") and marks.get("methyl_m5c")           # both kinds reach the row
     assert {f: hard.get(f) for f in marks} == marks
     assert counts["hard_clipped_scoped"][scope] == 1 and "hard_clip_mods_dropped" not in counts
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("mm", ["C+m,0;", "C-m,0;", "G-m,0;", "G+m,0;", "C+m,1;", "C-m,0,0;", "A+a,0;", "N+m,3;", "N+m,4;"])
+def test_stored_seq_modification_check_agrees_with_htslib(tmp_path, reverse, mm):
+    import pysam
+    from services.compact_read_loader import _mods_fit_stored_seq
+    def records(h):
+        return [make_record(h, "mol", MAT, 2000, "2H4M", reverse=reverse, flag=2048, seq="CCAA",
+                            tags=[("MM", mm), ("ML", _u8([200] * (mm.count(",") )))])]
+    with pysam.AlignmentFile(write_bam(tmp_path / "v.bam", records)) as f:
+        read = next(f.fetch())
+        assert _mods_fit_stored_seq(read) == (read.modified_bases is not None)
+
+
+def test_minus_strand_modifications_on_a_hard_clipped_record_are_kept(tmp_path):
+    # 'C-m' counts C bases of the stored SEQ (htslib); the call stays at reference 2000.
+    def records(h):
+        return [make_record(h, "mol", MAT, 2000, "20H100M", flag=2048,
+                            tags=[("ns", _u32([10])), ("nl", _u32([20])), ("MM", "C-m,0;"), ("ML", _u8([250]))])]
+    from services.compact_read_loader import build_compact_reads_from_bam
+    counts = {}
+    (read,) = build_compact_reads_from_bam(write_bam(tmp_path / "m.bam", records), MAT, 0, 10_000,
+                                           spanning_only=False, include_lift_meta=True, infer_legacy_layers=False,
+                                           include_supplementary=True, include_methylation=True, lift_counts=counts)
+    marks = [p for f in ("methyl", "methyl_m5c", "methyl_m6a") for p in read.get(f) or ()]
+    assert 2000 in marks and "hard_clip_mods_dropped" not in counts
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_any_base_modifications_survive_whole_scope_padding(tmp_path, reverse):
+    """``N+m`` counts every base, so the pad at the molecule's 5' end must be skipped."""
+    sites = [25, 46]                                  # molecular positions inside the aligned part
+    def variant(clip):
+        # The clip sits at the molecule's 5' end: SEQ left on forward, SEQ right on reverse.
+        cigar = (f"{LEFT}{clip}100M" if not reverse else f"100M{LEFT}{clip}")
+        offset = 0 if clip == "S" else LEFT
+        first = sites[0] - offset
+        mm = f"N+m,{first},{sites[1] - sites[0] - 1};"
+        seq = _MOLECULE if clip == "S" else (_MOLECULE[LEFT:] if not reverse else _MOLECULE[:100])
+        seq = seq[::-1].translate(_REVCOMP) if reverse else seq
+        if reverse and clip == "S":
+            seq = _MOLECULE[::-1].translate(_REVCOMP)
+        tags = [("ns", _u32([30, 95])), ("nl", _u32([20, 20])), ("MM", mm), ("ML", _u8([250, 240]))]
+        return lambda h: [make_record(h, "mol", MAT, 2000, cigar, reverse=reverse, flag=2048, tags=tags, seq=seq)]
+    soft, _ = _lifted_mods(tmp_path, "soft", variant("S"))
+    hard, counts = _lifted_mods(tmp_path, "hard", variant("H"))
+    fields = ("methyl", "methyl_m6a", "methyl_m5c")
+    marks = {f: soft.get(f) for f in fields if soft.get(f)}
+    assert marks and sum(len(v) for v in marks.values()) >= 2
+    assert {f: hard.get(f) for f in marks} == marks
+    assert counts["hard_clipped_scoped"]["whole"] == 1 and "hard_clip_mods_dropped" not in counts

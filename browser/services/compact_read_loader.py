@@ -2874,8 +2874,9 @@ def _mods_fit_stored_seq(read) -> bool:
         if len(head) < 2:
             continue
         base, strand = head[0].upper(), head[1]
-        target = base if strand == "+" else base.translate(_COMPLEMENT)
-        available = len(molecule) if base == "N" else molecule.upper().count(target)
+        # htslib counts the named base in the read's original orientation for
+        # either strand ('-' says only which strand carries the modification).
+        available = len(molecule) if base == "N" else molecule.upper().count(base)
         try:
             needed = sum(int(v) + 1 for v in fields[1:] if v != "")
         except ValueError:
@@ -2940,7 +2941,35 @@ def scope_hard_clipped_supplementary(read, counts: Optional[dict] = None):
         for tag in ("MN", "Mn"):
             if copy.has_tag(tag):
                 copy.set_tag(tag, len(copy.query_sequence), value_type="i")
+        for tag in ("MM", "Mm"):
+            if copy.has_tag(tag):
+                # The pad at the molecule's 5' end: the SEQ's right one on a reverse record.
+                copy.set_tag(tag, _pad_any_base_mm(str(copy.get_tag(tag)), right if read.is_reverse else left),
+                             value_type="Z")
     return copy
+
+
+def _pad_any_base_mm(mm: str, pad5: int) -> str:
+    """MM after padding the stored SEQ with ``N``: groups of base ``N`` (any
+    base) count the pad too, so their first skip count moves past the
+    ``pad5`` bases at the molecule's 5' end, and an implicit ('.') group
+    becomes explicit ('?'): the padded bases were never assessed. Groups of a
+    named base never see an ``N`` and stay as they are."""
+    out = []
+    for group in mm.split(";"):
+        if not group:
+            continue
+        fields = group.split(",")
+        head = fields[0]
+        if head[:1].upper() == "N":
+            mode = head[-1] if head[-1] in "?." else ""
+            head = (head[:-1] if mode else head) + "?"
+            calls = fields[1:]
+            if calls and calls[0] != "":
+                calls[0] = str(int(calls[0]) + pad5)
+            fields = [head, *calls]
+        out.append(",".join(fields))
+    return "".join(g + ";" for g in out)
 
 
 def record_call_meta(read) -> tuple:
