@@ -202,7 +202,10 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
 
   const response = query.response;
   const compression: Compression = state?.layoutSettings.compression ?? 'log';
-  const laneHeight = state?.layoutSettings.laneHeight ?? GRAPH_LANE_HEIGHT;
+  // Lanes grow with the panel body (28–40 px): thicker tubes when there is room, the saved height a minimum.
+  const minLane = state?.layoutSettings.laneHeight ?? GRAPH_LANE_HEIGHT;
+  const rowsWanted = Math.max(1, response?.result.paths.length ?? state?.selectedPathKeys.length ?? 1);
+  const laneHeight = Math.max(minLane, Math.min(40, Math.floor((bodyHeight - GRAPH_RULER_HEIGHT - STATUS_HEIGHT - 12) / rowsWanted) - GRAPH_LANE_GAP));
   const layoutMsRef = useRef(0);
   // The joint layout model: once per response (its identities depend only on the response).
   const model = useMemo(() => {

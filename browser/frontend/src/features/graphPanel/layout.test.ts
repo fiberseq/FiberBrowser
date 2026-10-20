@@ -302,6 +302,46 @@ describe('Gate C: deterministic pans', () => {
   }
 });
 
+describe('wire reductions (graphlift: indexed matches, trimmed walks)', () => {
+  it('indexed matches give the same layout as identity matches', () => {
+    const t = alu10k.topology as any;
+    const index = new Map<string, [number, number]>();
+    t.paths.forEach((p: any, pi: number) => p.occurrences.forEach((o: any, oi: number) => index.set(o.id, [pi, oi])));
+    const indexed = { ...t, direct_matches: [], direct_match_index: t.direct_matches.map((m: any) =>
+      [index.get(m.source_occurrence)![0], index.get(m.source_occurrence)![1], index.get(m.target_occurrence)![1], m.reverse ? 1 : 0]) };
+    const a = model(alu10k), b = buildLayout(indexed as GraphTopology, alu10k.bindings as unknown as GraphBinding[]);
+    expect(b.chain).toEqual(a.chain);
+  });
+  it('a walk cut by the frame budget ends in a budget open end; the omitted target is a block', () => {
+    const t = JSON.parse(JSON.stringify(alu10k.topology));
+    const target = t.paths[0], mat = t.paths[1];
+    const keepT = 20, keepM = 25;
+    const cutAt = target.occurrences[keepT].path_span.start;
+    target.occurrences = target.occurrences.slice(0, keepT);
+    mat.occurrences = mat.occurrences.slice(0, keepM);
+    const ids = new Set(t.paths.flatMap((p: any) => p.occurrences.map((o: any) => o.id)));
+    t.direct_matches = t.direct_matches.filter((m: any) => ids.has(m.source_occurrence) && ids.has(m.target_occurrence));
+    t.summaries = [{ binding: 'target', target: t.interval, source: { start: cutAt, end: 102_396 }, reason: 'wire_limit' },
+      { binding: 'mat', target: t.interval, source: { start: 0, end: 1 }, reason: 'wire_limit' }];
+    t.complete = false;
+    const m = buildLayout(t, alu10k.bindings as unknown as GraphBinding[]);
+    expect(m.chain.at(-1)).toMatchObject({ kind: 'junction', gap: { kind: 'wire_limit', span: { start: cutAt, end: 102_395 } } });
+    expect(m.openEnds.some(e => e.path === 'mat' && e.reason === 'budget')).toBe(true);
+    const s = scene(m);
+    const h = hitsOf(s, 'gap').at(-1)!;
+    expect(describeSceneHit(h, mid(h)[0], m)).toContain('wire limit');
+  });
+  it('a lane with nothing extracted says why', () => {
+    const t = JSON.parse(JSON.stringify(alu800.topology));
+    t.paths[2].occurrences = [];
+    t.direct_matches = t.direct_matches.filter((m: any) => m.source_binding !== 'pat');
+    t.summaries = [{ binding: 'pat', target: t.interval, source: null, reason: 'selected_node_limit' }];
+    const m = buildLayout(t, alu800.bindings as unknown as GraphBinding[]);
+    expect(m.laneNotes).toEqual({ pat: 'selected node limit' });
+    expect(scene(m).prims.some(p => p.t === 'text' && p.text.startsWith('selected node limit'))).toBe(true);
+  });
+});
+
 describe('scene transforms', () => {
   it('a reversed panel mirrors the finished scene once; coordinates and hits round-trip', () => {
     const m = model(alu800);
@@ -393,7 +433,11 @@ describe('continuity rules (Phase B reviews), on the joint layout', () => {
       [o('a1', '1', 0, 100), o('a3', '3', 100, 100)], [m('t1', 'a1'), m('t3', 'a3')], { start: 0, end: 300 },
       [{ span: { start: 0, end: 150 }, kind: 'covered', fragment: 'T#a' }, { span: { start: 150, end: 300 }, kind: 'covered', fragment: 'T#b' }]), []);
     expect(groups(two.chain)).toEqual([]);
-    expect(two.chain.filter(i => i.kind === 'junction')).toHaveLength(1);
+    // The fragments' junction (with the stretch its coverage claims but its walk lacks), and the uncovered tail:
+    // omitted sequence is drawn as such, never squeezed away.
+    expect(two.chain.filter((i): i is JunctionItem => i.kind === 'junction').map(j => [j.target, j.gap?.kind ?? null])).toEqual([
+      [{ start: 100, end: 150 }, 'omitted'], [{ start: 250, end: 300 }, 'omitted'],
+    ]);
   });
   it('a local inversion is unresolved (Gate D), never a plain substitution', () => {
     const inv = buildLayout(topo([o('t1', '1', 0, 100), o('t2', '2', 100, 100), o('t3', '3', 200, 100), o('t4', '4', 300, 100)],

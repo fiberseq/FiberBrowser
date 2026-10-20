@@ -121,7 +121,7 @@ export interface OpenEnd {
   side: 'left' | 'right';
   /** Target coordinate where the path's verified walk stops. */
   at: number;
-  reason: 'fragment_terminal' | 'unplaced' | 'broken' | 'window_clip';
+  reason: 'fragment_terminal' | 'unplaced' | 'broken' | 'window_clip' | 'budget';
   /** Unplaced bp beyond the stop (a run with no anchor on that side). */
   bp: number;
   source: Span | null;
@@ -140,6 +140,8 @@ export interface LayoutModel {
   rows: LayoutRow[];
   chain: Item[];
   openEnds: OpenEnd[];
+  /** A lane with nothing placed and why (not extracted, budget, no correspondence). */
+  laneNotes: Record<string, string>;
   complete: boolean;
   correspondenceComplete: boolean;
   summaries: string[];
@@ -630,9 +632,14 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
     return { start: targetOccs[p].path_span.start, end: targetOccs[q - 1].path_span.end };
   };
 
-  // Direct matches per path visit.
+  // Direct matches per path visit (either wire form).
   const matches = new Map<string, Map<string, { i: number; reverse: boolean }[]>>();
-  for (const m of topology.direct_matches ?? []) {
+  const listed = (topology.direct_matches ?? []).slice();
+  for (const [p, s, t, r] of topology.direct_match_index ?? []) {
+    const src = topology.paths[p]?.occurrences[s], tgt = targetOccs[t];
+    if (src && tgt) listed.push({ target_occurrence: tgt.id, source_occurrence: src.id, source_binding: topology.paths[p].binding, reverse: r === 1, provenance: 'direct_named_walk' });
+  }
+  for (const m of listed) {
     const i = tIndex.get(m.target_occurrence);
     if (i === undefined) continue;
     let perPath = matches.get(m.source_binding);
@@ -745,6 +752,26 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
   // The top-level chain: segments, with junction items (gaps, fragment boundaries) between and at the window edges.
   const coverage = targetPath?.coverage ?? [];
   const gaps = coverage.filter(c => c.fragment == null && c.span.end > c.span.start);
+  // Covered target sequence the response leaves out (a walk or frame budget): explicit, never squeezed away.
+  const budgetReason = (span: Span) => {
+    const s = (topology.summaries ?? []).find(x => x.binding === topology.target && x.source && (x.source as Span).start < span.end && span.start < (x.source as Span).end);
+    return String(s?.reason ?? 'omitted');
+  };
+  {
+    const visited = targetOccs.map(visitPiece).sort((a, b) => a.start - b.start);
+    for (const c of coverage) {
+      if (c.fragment == null) continue;
+      const span = { start: Math.max(c.span.start, window.start), end: Math.min(c.span.end, window.end) };
+      let at = span.start;
+      for (const v of visited) {
+        if (v.end <= at || v.start >= span.end) continue;
+        if (v.start > at) gaps.push({ span: { start: at, end: v.start }, kind: budgetReason({ start: at, end: v.start }), fragment: null });
+        at = Math.max(at, v.end);
+      }
+      if (at < span.end) gaps.push({ span: { start: at, end: span.end }, kind: budgetReason({ start: at, end: span.end }), fragment: null });
+    }
+    gaps.sort((a, b) => a.span.start - b.span.start);
+  }
   const chain: Item[] = [];
   const gapBetween = (lo: number, hi: number) => gaps.find(c => c.span.start >= lo && c.span.end <= hi) ?? null;
   const solutionOf = new Map(level.solutions.map(s => [s.key, s]));
@@ -808,13 +835,36 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
   };
   walk(chain);
   for (const e of openEnds) if (e.reason === 'unplaced' && e.bp > 0) unplaced += 1;
+  // Walks the response cut short (budget summaries on that path): their last placed visit is an open end.
+  const budgetCut = new Set(['wire_limit', 'walk_limit', 'selected_node_limit', 'portion_visit_or_step_limit', 'unexpected_early_endmarker']);
+  const laneNotes: Record<string, string> = {};
+  for (const path of topology.paths) {
+    if (path.binding === topology.target) continue;
+    const cut = (topology.summaries ?? []).filter(s => s.binding === path.binding && budgetCut.has(String(s.reason)));
+    const n = anchorCounts[path.binding] ?? 0;
+    if (cut.length && n) {
+      const ends = openEnds.filter(e => e.path === path.binding && e.side === 'right' && e.reason !== 'broken');
+      // The walk's last stretch here is the budget's cut, whatever was left unplaced before it.
+      for (const e of ends) if (e.reason !== 'fragment_terminal') e.reason = 'budget';
+      if (!ends.length) {
+        const member = members.find(x => x.key === path.binding)!;
+        const last = member.anchors[member.anchors.length - 1];
+        openEnds.push({ path: path.binding, side: 'right', at: targetOccs[last.i].path_span.end, reason: 'budget', bp: 0, source: null });
+      }
+    }
+    if (!n) {
+      const why = cut[0]?.reason ?? (topology.summaries ?? []).find(s => s.binding === path.binding)?.reason
+        ?? (path.occurrences.length ? 'no direct match to the target here' : 'nothing extracted here');
+      laneNotes[path.binding] = String(why).replace(/_/g, ' ');
+    }
+  }
   const summaries = (topology.summaries ?? []).map(s => summaryText(s as Record<string, unknown>));
   for (const path of topology.paths) {
     for (const s of path.plan?.summaries ?? []) summaries.push(summaryText({ binding: path.binding, ...(s as Record<string, unknown>) }));
   }
   const visits = topology.paths.reduce((t, p) => t + p.occurrences.length, 0);
   return {
-    interval: window, target: topology.target, chain, openEnds,
+    interval: window, target: topology.target, chain, openEnds, laneNotes,
     rows: topology.paths.map(p => ({
       key: p.binding, label: laneLabel(byKey.get(p.binding), p.binding), title: laneTitle(byKey.get(p.binding), p.binding),
       role: p.binding === topology.target ? 'target' as const : 'alternate' as const,

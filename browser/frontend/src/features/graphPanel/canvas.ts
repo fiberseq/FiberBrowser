@@ -255,6 +255,13 @@ function drawPrim(ctx: CanvasRenderingContext2D, p: Prim): void {
       }
       return;
     }
+    case 'tick': {
+      ctx.fillStyle = p.color;
+      ctx.globalAlpha = 0.85;
+      ctx.fillRect(p.x - 0.75, p.y, 1.5, p.h);
+      ctx.globalAlpha = 1;
+      return;
+    }
     case 'cluster': {
       ctx.fillStyle = 'rgba(217,119,6,0.10)';
       roundRect(ctx, p.x0, p.y, p.x1 - p.x0, p.h, 3);

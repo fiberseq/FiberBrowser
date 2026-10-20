@@ -62,6 +62,7 @@ export type Prim =
   | { t: 'mark'; x: number; y: number; h: number }
   | { t: 'cap'; x: number; y: number; r: number; color: string }
   | { t: 'dots'; x0: number; x1: number; y: number; color: string }
+  | { t: 'tick'; x: number; y: number; h: number; color: string }
   | { t: 'cluster'; x0: number; x1: number; y: number; h: number }
   | { t: 'frame'; x0: number; x1: number; y0: number; y1: number; color: string; dashed: boolean };
 
@@ -208,7 +209,7 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
     return { ...r, color: opts.colors[r.key] ?? '#475569', top, center: top + opts.laneHeight / 2, height: opts.laneHeight };
   });
   const rowOf = new Map(rows.map(r => [r.key, r]));
-  const stripe = Math.max(2, Math.min(4, Math.floor((opts.laneHeight - 10) / Math.max(1, lanes.length))));
+  const stripe = Math.max(2, Math.min(6, Math.floor((opts.laneHeight - 12) / Math.max(1, lanes.length))));
   const colorOf = (k: string) => opts.colors[k] ?? '#475569';
 
   // Crowded: compact curve zones first; cluster only when the bubbles' fixed pixels would still crowd out the
@@ -238,13 +239,15 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
   };
   const backboneSlots = slotsIn(model.target, lanes);
 
+  /** Node boundaries inside a run, at least 5 px apart (and from its ends): legible cuts, not a barcode. */
   const nodeEdges = (visits: Visit[], x0: number, w: number, bp: number) => {
     const out: number[] = [];
     if (bp <= 0) return out;
-    let acc = 0;
+    let acc = 0, last = x0;
     for (let i = 0; i < visits.length - 1; i++) {
       acc += visits[i].bp;
-      out.push(x0 + (acc / bp) * w);
+      const x = x0 + (acc / bp) * w;
+      if (x - last >= 5 && x0 + w - x >= 5) { out.push(x); last = x; }
     }
     return out;
   };
@@ -450,7 +453,7 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
       const dx = x + 2 + f * Math.max(0, w - 4);
       for (const a of it.alts) for (const k of familyCarriers(a, lanes)) {
         const row = rowOf.get(k);
-        if (row && k !== model.target) overlay.push({ t: 'dots', x0: dx, x1: dx, y: row.center, color: colorOf(k) });
+        if (row && k !== model.target) overlay.push({ t: 'tick', x: dx, y: row.center - 4, h: 8, color: colorOf(k) });
       }
     }
     if (w > 46) overlay.push({ t: 'text', x: x + w / 2, y: y - 3, text: `${cl.variants} variants`, color: '#64748b', align: 'center', size: 9, bold: false });
@@ -469,13 +472,18 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
     const x = xForTarget(targetMap.slice().sort((p, q) => p.x0 - q.x0), e.at, e.side === 'left' ? 'end' : 'start');
     if (x == null) continue;
     prims.push({ t: 'cap', x, y: s.y + s.h / 2, r: s.h / 2 + 0.5, color: s.color });
-    if (e.reason === 'unplaced' && e.bp > 0) {
+    if ((e.reason === 'unplaced' || e.reason === 'budget') && e.bp > 0) {
       const x1 = e.side === 'left' ? x - 14 : x + 14;
       overlay.push({ t: 'dots', x0: Math.min(x, x1), x1: Math.max(x, x1), y: s.y + s.h / 2, color: s.color });
     }
     hits.push({ x0: x - 8, x1: x + 8, y0: s.y - 4, y1: s.y + s.h + 4, cursor: false, payload: { kind: 'end', end: e } });
   }
 
+  // A lane with nothing placed says why, in its own row.
+  for (const [key, note] of Object.entries(model.laneNotes)) {
+    const row = rowOf.get(key);
+    if (row) overlay.push({ t: 'text', x: dataLeft + 8, y: row.center + 3, text: `${note} — nothing placed in this view`, color: '#94a3b8', align: 'left', size: 10, bold: false });
+  }
   targetMap.sort((a, b) => a.x0 - b.x0);
   const lastRow = rows[rows.length - 1];
   const scene: Scene = {
@@ -602,7 +610,7 @@ function mirror(scene: Scene): Scene {
       case 'stripe': case 'gap': case 'cluster': case 'frame': case 'dots': return flip(p);
       case 'curve': return { ...p, x0: fx(p.x0), x1: fx(p.x1) };
       case 'text': return { ...p, x: fx(p.x), align: p.align === 'left' ? 'right' : p.align === 'right' ? 'left' : 'center' };
-      case 'mark': case 'cap': return { ...p, x: fx(p.x) };
+      case 'mark': case 'cap': case 'tick': return { ...p, x: fx(p.x) };
     }
   });
   const hits = scene.hits.map(h => flip(h));
@@ -677,6 +685,7 @@ export function describeSceneHit(hit: SceneHit, x: number, model: LayoutModel, r
       const e = p.end;
       if (e.reason === 'unplaced') return `${label(e.path)} · ${formatBpShort(e.bp)} beyond ${where(e.at)} not placed on the target (no named flank on that side)`;
       if (e.reason === 'fragment_terminal') return `${label(e.path)} · its fragment ${e.side === 'left' ? 'starts' : 'ends'} at target ${where(e.at)}`;
+      if (e.reason === 'budget') return `${label(e.path)} · the response's budget cut its walk after target ${where(e.at)}${e.bp ? ` (${formatBpShort(e.bp)} beyond, unplaced)` : ''} · zoom in for the rest`;
       return `${label(e.path)} · its walk breaks at target ${where(e.at)} (no continuous named walk across)`;
     }
   }

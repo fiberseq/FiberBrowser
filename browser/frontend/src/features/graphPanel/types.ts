@@ -105,6 +105,9 @@ export interface GraphTopology {
   edges: { from: string; to: string }[];
   paths: GraphPathResult[];
   direct_matches: GraphDirectMatch[];
+  /** The same matches by position, when the helper's frame budget needed it: [path index, source occurrence index,
+   * target occurrence index, reverse 0/1] (graphlift GRAPH_HELPER.md). */
+  direct_match_index?: [number, number, number, number][];
   target_queries: unknown[];
   summaries: GraphSummary[];
   complete: boolean;
