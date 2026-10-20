@@ -237,10 +237,11 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   // with other panels it takes this, not an equal share of the column (plugin sizeToContent). It only grows for one
   // selection of paths, so panning never makes the panels below jump back and forth.
   const natural = GRAPH_RULER_HEIGHT + STATUS_HEIGHT + 12 + compactSpace + fullRows * (Math.max(minLane, NATURAL_LANE) + GRAPH_LANE_GAP);
-  const naturalRef = useRef<{ key: string; height: number }>({ key: '', height: 0 });
+  // Before the first plan of a selection the estimate (every lane full) is provisional: the first plan sets it.
+  const naturalRef = useRef<{ key: string; height: number; planned: boolean }>({ key: '', height: 0, planned: false });
   const selectionKey = (state?.selectedPathKeys ?? []).join(',');
-  if (naturalRef.current.key !== selectionKey) naturalRef.current = { key: selectionKey, height: natural };
-  else if (natural > naturalRef.current.height) naturalRef.current = { key: selectionKey, height: natural };
+  if (naturalRef.current.key !== selectionKey || (plan && !naturalRef.current.planned)) naturalRef.current = { key: selectionKey, height: natural, planned: Boolean(plan) };
+  else if (natural > naturalRef.current.height) naturalRef.current = { ...naturalRef.current, height: natural };
   const naturalHeight = naturalRef.current.height;
   useEffect(() => {
     if (!panelId) return;
@@ -372,7 +373,32 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       else setCursor(null);
     }
   };
-  const onPointerUp = () => { drag.current = null; };
+  // A click (no drag) on a difference, a slot, a summary or an open end pins its description, with a zoom to it.
+  const [pinned, setPinned] = useState<{ x: number; y: number; text: string; span: { start: number; end: number } | null } | null>(null);
+  const onPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const click = drag.current && !drag.current.moved;
+    drag.current = null;
+    if (!click || !scene || !model) return;
+    const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
+    const zoom = rect.width > 0 && width > 0 ? rect.width / width : 1;
+    const x = (e.clientX - rect.left) / zoom, y = (e.clientY - rect.top) / zoom;
+    const hit = sceneHitAt(scene, x - sceneOffset, y);
+    const p = hit?.payload;
+    if (!hit || !p || p.kind === 'run' || p.kind === 'filler') { setPinned(null); return; }
+    const span = p.kind === 'allele' || p.kind === 'base' || p.kind === 'slot' || p.kind === 'complex'
+      ? (p.group.kind === 'group' ? p.group.target ?? hit.within?.group.target ?? null : p.group.target)
+      : p.kind === 'cluster' ? p.cluster.target : p.kind === 'gap' ? (p.gap ?? p.junction.gap)?.span ?? p.junction.target : null;
+    setPinned({ x, y, text: describeSceneHit(hit, x - sceneOffset, model, reversed), span });
+  };
+  useEffect(() => { setPinned(null); }, [response]);
+  /** Zoom to a pinned difference: a window a few times its size (at least 200 bp), where small ones are bubbles. */
+  const zoomTo = (span: { start: number; end: number }) => {
+    if (!target) return;
+    const len = Math.max(200, (span.end - span.start) * 3);
+    const mid = (span.start + span.end) / 2;
+    commitViewport(clampViewport({ contig: target.path.contig, start: Math.round(mid - len / 2), end: Math.round(mid + len / 2) }, target.size, target.size_inferred), true);
+    setPinned(null);
+  };
   /** Where x is across the data area (mirrored when reversed): the zoomed window keeps the anchor there. The new
    * layout is nonlinear too, so this is close, not exact (exact anchoring is the Phase F navigation adapter). */
   const screenFraction = (x: number) => {
@@ -558,7 +584,17 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         {cursor?.cursorX != null && (
           <div data-testid="graph-cursor" className="pointer-events-none absolute top-0" style={{ left: cursor.cursorX, width: 1, height: canvasHeight, background: 'rgba(100,100,100,0.45)' }} />
         )}
-        {cursor && (
+        {pinned && (
+          <div data-testid="graph-pinned" className="absolute z-20 max-w-[480px] rounded border border-gray-300 bg-white px-2 py-1 text-[11px] text-gray-800 shadow dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+            style={{ left: Math.max(0, Math.min(pinned.x + 8, width - 360)), top: Math.min(pinned.y + 10, Math.max(0, canvasHeight - 40)) }}>
+            <div className="whitespace-normal">{pinned.text}</div>
+            <div className="mt-1 flex justify-end gap-2">
+              {pinned.span && <button type="button" data-testid="graph-pinned-zoom" className="text-slate-700 underline dark:text-slate-200" onClick={() => zoomTo(pinned.span!)}>Zoom to it</button>}
+              <button type="button" data-testid="graph-pinned-close" className="text-gray-500 underline" onClick={() => setPinned(null)}>Close</button>
+            </div>
+          </div>
+        )}
+        {cursor && !pinned && (
           <div data-testid="graph-tooltip" className="pointer-events-none absolute z-10 whitespace-nowrap rounded bg-gray-800 px-1.5 py-0.5 text-[11px] text-white"
             style={{ left: Math.min(cursor.x + 10, Math.max(0, width - 260)), top: Math.min(cursor.y + 12, canvasHeight - 4) }}>{cursor.text}</div>
         )}

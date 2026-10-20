@@ -26,27 +26,40 @@ export const usePanelContentHeightStore = create<PanelContentHeightState>(set =>
 }));
 
 /**
- * Heights of a stacked column's panels: a size-to-content panel takes its natural height plus `chrome` (header),
- * at most `maxShare` of the column; the others share what is left equally (at least `minOther` each when possible).
+ * Heights of a stacked column's panels, always summing to at most `total`: a size-to-content panel takes its
+ * natural height plus `chrome` (header), at most `maxShare` of the column; the others share what is left equally,
+ * at least `minOther` each when the column allows. When even that does not fit, the sized panels shrink first, and a
+ * column too short for every panel's chrome falls back to equal shares.
  */
 export function stackHeights(total: number, natural: (number | null)[], chrome: number, maxShare = 0.5, minOther = 160): number[] {
   const n = natural.length;
-  if (n <= 1) return [total];
-  const fixed = natural.map(h => (h == null ? null : Math.max(chrome + 40, Math.min(Math.floor(total * maxShare), h + chrome))));
-  const flexible = fixed.filter(h => h == null).length;
+  const room = Math.max(0, Math.floor(total));
+  if (n <= 1) return [room];
+  const equal = () => { const h = Math.floor(room / n); return natural.map(() => h); };
+  // Too short for every header: equal shares (each panel scrolls inside itself).
+  if (room < n * chrome) return equal();
+  const want = natural.map(h => (h == null ? null : Math.max(chrome, Math.min(Math.floor(room * maxShare), Math.round(h) + chrome))));
+  const flexible = want.filter(h => h == null).length;
+  const sized = want.reduce((t: number, h) => t + (h ?? 0), 0);
   if (!flexible) {
-    // Every panel sizes to its content: they keep their heights, the last takes the rest.
-    const used = fixed.slice(0, -1).reduce((t: number, h) => t + (h ?? 0), 0);
-    return fixed.map((h, i) => (i === n - 1 ? Math.max(h ?? 0, total - used) : h ?? 0));
+    // Every panel sizes to its content: they keep their heights (shrunk in proportion if they overflow, never below
+    // their header), and the last takes what is left.
+    const f = sized > room ? room / sized : 1;
+    const out = want.map(h => Math.max(chrome, Math.floor((h ?? 0) * f)));
+    const used = out.slice(0, -1).reduce((t, h) => t + h, 0);
+    out[n - 1] = Math.max(chrome, room - used);
+    return out.reduce((t, h) => t + h, 0) <= room ? out : equal();
   }
-  let used = fixed.reduce((t: number, h) => t + (h ?? 0), 0);
-  // Never squeeze the flexible panels below their minimum: shrink the fixed ones instead.
-  if (total - used < flexible * minOther && used > 0) {
-    const room = Math.max(0, total - flexible * minOther);
-    const f = Math.min(1, room / used);
-    for (let i = 0; i < n; i++) if (fixed[i] != null) fixed[i] = Math.floor(fixed[i]! * f);
-    used = fixed.reduce((t: number, h) => t + (h ?? 0), 0);
+  // The flexible panels keep at least minOther each (or an equal share of a short column): the sized ones give way.
+  const floorOther = Math.min(minOther, Math.floor((room - (n - flexible) * chrome) / flexible));
+  let fixed = want.slice();
+  if (room - sized < flexible * floorOther) {
+    const budget = Math.max(0, room - flexible * floorOther);
+    const f = sized > 0 ? budget / sized : 1;
+    fixed = want.map(h => (h == null ? null : Math.max(Math.min(chrome, Math.floor(budget / Math.max(1, n - flexible))), Math.floor(h * f))));
   }
-  const share = Math.floor((total - used) / flexible);
-  return fixed.map(h => h ?? share);
+  const used = fixed.reduce((t: number, h) => t + (h ?? 0), 0);
+  const share = Math.floor(Math.max(0, room - used) / flexible);
+  const out = fixed.map(h => h ?? share);
+  return out.reduce((t, h) => t + h, 0) <= room ? out : equal();
 }

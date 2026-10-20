@@ -11,9 +11,16 @@ describe('size-to-content panels in a stacked column', () => {
     expect(stackHeights(800, [170, null, null], 24)).toEqual([194, 303, 303]);
     // Never more than half the column; never below its header and a little.
     expect(stackHeights(800, [null, 2000], 24)).toEqual([400, 400]);
-    expect(stackHeights(800, [null, 0], 24)).toEqual([736, 64]);
+    expect(stackHeights(800, [null, 0], 24)).toEqual([776, 24]);
     // No room: the flexible panel keeps its minimum, the sized ones shrink.
     expect(stackHeights(300, [null, 200], 24, 0.9, 160)).toEqual([160, 140]);
+    // Never more than the column (review D1 #7), never a panel without its header while the column has room for them.
+    for (const [total, natural] of [[300, [170, 170, 170]], [100, [null, 170, 170]], [0, [null, 170]], [75, [170, null, 170]], [500, [null, null, 170, 170]]] as const) {
+      const out = stackHeights(total, natural as (number | null)[], 24);
+      expect(out.reduce((t, h) => t + h, 0)).toBeLessThanOrEqual(total);
+      if (total >= natural.length * 24) expect(Math.min(...out)).toBeGreaterThanOrEqual(24);
+    }
+    expect(stackHeights(300, [170, 170, 170], 24)).toEqual([100, 100, 100]);
     // Nothing reported yet: equal shares.
     expect(stackHeights(800, [null, null], 24)).toEqual([400, 400]);
     expect(stackHeights(500, [null], 24)).toEqual([500]);

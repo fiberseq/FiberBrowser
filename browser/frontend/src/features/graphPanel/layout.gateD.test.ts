@@ -176,27 +176,47 @@ function roundTrips(s: Scene) {
   return checked;
 }
 
-/** Through the hits: every sequence hit's inverse goes forward to an x whose inverse is the same base. */
-function hitRoundTrips(s: Scene) {
+/**
+ * Through the hits: on every stripe of every sequence hit (a run's carriers, an allele's tube, a mark), the inverse is
+ * that path's own occurrence and offset; its forward transform lands where the inverse is the same base again.
+ * Nothing is skipped except points another (inner) hit covers and empty alleles (connectors).
+ */
+function hitRoundTrips(s: Scene, m: LayoutModel) {
   let checked = 0;
+  const owns = new Map(m.rows.map(r => [r.key, new Set<string>()]));
+  const occs = (m as any).__occ as Map<string, Set<string>> | undefined;
   for (const h of s.hits) {
     if (h.payload.kind !== 'run' && h.payload.kind !== 'allele') continue;
-    const [x, y] = mid(h);
-    if (sceneHitAt(s, x, y) !== h) continue;
-    const inv = sceneInverse(s, x, y);
-    if (!inv || (inv.kind !== 'target' && inv.kind !== 'allele') || !inv.occurrence) continue;
-    const lane = h.payload.kind === 'run' ? h.payload.host : h.payload.lane;
-    const owner = h.payload.kind === 'run' ? h.payload.run.id : h.payload.allele.id;
-    const back = xForOccurrence(s, inv.occurrence, inv.offset, lane, owner);
-    if (back == null) continue;   // a family member's base: drawn in the lead's tube
-    const again = sceneInverse(s, back, y);
-    expect(again && 'occurrence' in again ? [again.occurrence, again.offset] : null).toEqual([inv.occurrence, inv.offset]);
-    if (inv.kind === 'target') {
-      // The occurrence transform and the target map agree on target-backed sequence.
-      const t = targetAtX(s.targetMap, back);
-      expect(t && !t.boundary ? Math.abs(t.pos - inv.pos) : 0).toBeLessThanOrEqual(1);
+    if (h.payload.kind === 'allele' && h.payload.allele.bp === 0) continue;
+    const x = (h.x0 + h.x1) / 2;
+    const points = (h.payload.stripes?.length ? h.payload.stripes.map(st => ({ key: st.key, y: (st.y0 + st.y1) / 2 })) : [{ key: null as string | null, y: (h.y0 + h.y1) / 2 }]);
+    for (const { key, y } of points) {
+      if (sceneHitAt(s, x, y) !== h) continue;
+      const inv = sceneInverse(s, x, y);
+      expect(inv && (inv.kind === 'target' || inv.kind === 'allele')).toBe(true);
+      if (!inv || (inv.kind !== 'target' && inv.kind !== 'allele')) continue;
+      const path = inv.kind === 'target' ? inv.carrier?.path ?? m.target : inv.path;
+      const occurrence = inv.kind === 'target' ? inv.carrier?.occurrence ?? inv.occurrence : inv.occurrence;
+      const offset = inv.kind === 'target' ? inv.carrier?.offset ?? inv.offset : inv.offset;
+      expect(occurrence).toBeTruthy();
+      if (key) expect(path).toBe(key);
+      if (occs) expect(occs.get(path)?.has(occurrence!)).toBe(true);
+      const lane = h.payload.kind === 'run' ? h.payload.host : h.payload.allele.carriers[0];
+      const owner = h.payload.kind === 'run' ? h.payload.run.id : h.payload.allele.id;
+      const back = xForOccurrence(s, occurrence!, offset, lane, owner);
+      // A mark has no tube of its own: its inverse is its first base, with no forward placement.
+      if (back == null) { expect(h.payload.kind).toBe('allele'); continue; }
+      const again = sceneInverse(s, back, y)!;
+      const againOcc = again.kind === 'target' ? again.carrier?.occurrence ?? again.occurrence : again.kind === 'allele' ? again.occurrence : null;
+      const againOff = again.kind === 'target' ? again.carrier?.offset ?? again.offset : again.kind === 'allele' ? again.offset : null;
+      expect([againOcc, againOff]).toEqual([occurrence, offset]);
+      if (inv.kind === 'target') {
+        const t = targetAtX(s.targetMap, back);
+        expect(t && !t.boundary ? Math.abs(t.pos - inv.pos) : 0).toBeLessThanOrEqual(1);
+      }
+      owns.get(path)?.add(occurrence!);
+      checked += 1;
     }
-    checked += 1;
   }
   return checked;
 }
@@ -211,9 +231,11 @@ describe('Gate D: occurrence transforms and reverse hit round trips', () => {
     for (const reversed of [false, true]) {
       for (const smallBp of [0, 50]) {
         it(`${name}: ${reversed ? 'reversed panel' : 'forward'}, ${smallBp ? 'marks' : 'bubbles'}`, () => {
-          const s = scene(model(f), { reversed, smallBp });
+          const m = model(f);
+          (m as any).__occ = new Map((f.topology as any).paths.map((p: any) => [p.binding, new Set(p.occurrences.map((o: any) => o.id))]));
+          const s = scene(m, { reversed, smallBp });
           expect(roundTrips(s)).toBeGreaterThan(0);
-          expect(hitRoundTrips(s)).toBeGreaterThan(0);
+          expect(hitRoundTrips(s, m)).toBeGreaterThan(0);
         });
       }
     }

@@ -68,6 +68,8 @@ export interface RunItem {
   carriers: string[];
   /** Target coordinates (target-backed runs). */
   target: Span | null;
+  /** Each carrier's own visit at each of `visits` (its occurrence of that node; the host's are `visits`). */
+  byCarrier?: Record<string, (Visit | null)[]>;
 }
 
 export type AlleleStatus = 'ok' | 'unresolved' | 'complex' | 'junction';
@@ -81,6 +83,8 @@ export interface AltAllele {
   status: AlleleStatus;
   /** Each carrier's source span (an empty span at the boundary for a deletion). */
   source: { path: string; span: Span }[];
+  /** Each carrier's own walk (the same nodes, its own occurrences); `visits` is the lead's. */
+  byCarrier?: Record<string, Visit[]>;
   reason?: string;
   /** A relative inversion: the allele walks the base allele's sequence in the opposite orientation (Gate D). */
   inverted?: boolean;
@@ -245,6 +249,8 @@ interface Backbone {
   key(seg: number, p: number): string;
   /** The base allele's carriers outside any member (the target, or the lead allele's own carriers). */
   own: string[];
+  /** An own carrier's visit at backbone visit i (the host's own is `visits[i]`). */
+  ownVisit?: (carrier: string, i: number) => Visit | null;
 }
 
 interface Anchor { j: number; i: number }
@@ -271,6 +277,7 @@ interface MemberSolution {
   /** Anchor index at each backbone visit (-1: none). */
   anchorAt: Int32Array;
   candidates: Candidate[];
+  visits: Visit[];
 }
 
 function signature(visits: Visit[]): string {
@@ -354,7 +361,7 @@ function solveLevel(input: LevelInput, buildFamilies: (g: GroupItem) => void): L
       }
       runOf[k] = run;
     }
-    solutions.push({ key: m.key, anchors: m.anchors, runOf, anchorAt, candidates });
+    solutions.push({ key: m.key, anchors: m.anchors, runOf, anchorAt, candidates, visits: m.visits });
   }
 
   // -------------------------------------------------- groups by equal flank keys, per segment
@@ -507,6 +514,7 @@ function solveLevel(input: LevelInput, buildFamilies: (g: GroupItem) => void): L
           carriers: list.map(x => x.path), visits: c.visits, bp: c.visits.reduce((t, v) => t + v.bp, 0),
           status: c.status, reason: c.reason, source: list.map(x => ({ path: x.path, span: x.source })),
           ...(c.inverted ? { inverted: true } : {}),
+          ...(list.length > 1 ? { byCarrier: Object.fromEntries(list.map(x => [x.path, x.visits])) } : {}),
         };
       }).sort((a, b) => byLane(a.carriers[0], b.carriers[0]));
     } else {
@@ -549,15 +557,29 @@ function solveLevel(input: LevelInput, buildFamilies: (g: GroupItem) => void): L
       for (const s of solutions) if (s.anchorAt[i] >= 0) out.push(s.key);
       return out.sort(byLane);
     };
+    let runIdx: number[] = [];
+    const solutionOf = new Map(solutions.map(x => [x.key, x]));
     const flush = () => {
       if (!run.length) return;
       const spans = run.map(v => v.target).filter((t): t is Span => t != null);
+      // Each carrier's own visit of every host visit here: an anchor's path visit, or an own carrier's.
+      const byCarrier: Record<string, (Visit | null)[]> = {};
+      for (const c of runCarriers) {
+        if (c === bb.host) continue;
+        const sol = solutionOf.get(c);
+        byCarrier[c] = runIdx.map(i => {
+          if (sol) { const k = sol.anchorAt[i]; return k >= 0 ? sol.visits[sol.anchors[k].j] ?? null : null; }
+          return bb.ownVisit?.(c, i) ?? null;
+        });
+      }
       items.push({
         kind: 'run', id: `${input.idPrefix}r${stableId(`${bb.key(seg, runStart)}`)}`, host: bb.host, visits: run,
         bp: run.reduce((t, v) => t + v.bp, 0), carriers: runCarriers,
         target: spans.length ? { start: spans[0].start, end: spans[spans.length - 1].end } : null,
+        ...(Object.keys(byCarrier).length ? { byCarrier } : {}),
       });
       run = [];
+      runIdx = [];
     };
     const sorted = groups.slice().sort((a, b) => a.p - b.p || (a.q - a.p) - (b.q - b.p));
     let g = 0;
@@ -583,6 +605,7 @@ function solveLevel(input: LevelInput, buildFamilies: (g: GroupItem) => void): L
       if (run.length && carriers.join(',') !== runCarriers.join(',')) { flush(); runStart = i; }
       if (!run.length) { runCarriers = carriers; runStart = i; }
       run.push(bb.visits[i]);
+      runIdx.push(i);
       i += 1;
     }
     flush();
@@ -786,23 +809,11 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
       }
       if (b.i <= a.i) return 'target order reversed';
       // Visits matched in the opposite orientation inside the span: a relative inversion (Gate D), not a
-      // substitution. Placed when those matches run against target order (one per visit, each target visit once)
-      // and carry at least half the allele's bp; anything less consistent stays an unresolved local inversion.
-      let invBp = 0, allBp = 0, last = Infinity, consistent = true, any = false;
-      const used = new Set<number>();
-      for (let j = a.j + 1; j < b.j; j++) {
-        allBp += visits[j].bp;
-        const opposite = (perPath.get(visits[j].occ.id) ?? []).filter((m: { reverse: boolean; i: number }) => m.reverse !== reverse && m.i > a.i && m.i < b.i);
-        if (!opposite.length) continue;
-        any = true;
-        const fit = opposite.filter((m: { i: number }) => m.i < last && !used.has(m.i));
-        if (fit.length !== 1) { consistent = false; continue; }
-        last = fit[0].i;
-        used.add(last);
-        invBp += visits[j].bp;
-      }
-      if (!any) return null;
-      return consistent && invBp * 2 >= allBp ? INVERSION : 'a local inversion';
+      // substitution (inversionVerdict).
+      const between = visits.slice(a.j + 1, b.j);
+      const baseBp = tVisits.slice(a.i + 1, b.i).reduce((t, v) => t + v.bp, 0);
+      return inversionVerdict(between, k => (perPath.get(between[k].occ.id) ?? [])
+        .filter((m: { reverse: boolean; i: number }) => m.reverse !== reverse && m.i > a.i && m.i < b.i).map((m: { i: number }) => m.i), baseBp);
     };
     members.push({ key: path.binding, visits, anchors, continuous });
     // Open ends: the walk before the first anchor and after the last.
@@ -933,6 +944,18 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
         }
       }
       walk(it.base.chain);
+      // Inversions inside a family's tube (its sub-bubbles are within their allele, so only these are counted).
+      for (const a of it.alts) if (a.family) countInversions(a.family.chain);
+    }
+  };
+  const countInversions = (items: Item[]) => {
+    for (const it of items) {
+      if (it.kind !== 'group') continue;
+      for (const a of it.alts) {
+        if (a.inverted && a.status === 'ok') inversions += 1;
+        if (a.family) countInversions(a.family.chain);
+      }
+      countInversions(it.base.chain);
     }
   };
   walk(chain);
@@ -968,7 +991,18 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
   }
   const visits = topology.paths.reduce((t, p) => t + p.occurrences.length, 0);
   let repeats = 0;
-  for (const list of memberVisits.values()) for (const v of list) if (v.repeat) repeats += 1;
+  for (const [path, list] of memberVisits) {
+    const over = new Map<string, number>();
+    for (const v of list) {
+      if (!v.repeat) continue;
+      repeats += 1;
+      if (v.repeat.count > MAX_REPEAT_VISITS) over.set(v.occ.node, v.repeat.count);
+    }
+    // More visits of one node than are unrolled: a local summary (the copies stay sequence in their allele).
+    for (const [node, count] of over) {
+      summaries.push(`${laneLabel(byKey.get(path), path)} walks node ${node} ${count} times here: visits beyond ${MAX_REPEAT_VISITS} are not unrolled (no return arcs)`);
+    }
+  }
   return {
     interval: window, target: topology.target, chain, openEnds, laneNotes,
     rows: topology.paths.map(p => ({
@@ -982,6 +1016,32 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
       unresolved: level.counts.unresolved, unplaced, anchors: anchorCounts,
     },
   };
+}
+
+// ---------------------------------------------------------------------------------------------------- inversions
+
+/**
+ * The relative-orientation verdict for the visits a path walks between two anchors: null (no visit matches the base
+ * in the opposite orientation), INVERSION (placed: those matches run against base order, one per visit and each
+ * base visit once, and carry at least half of both the allele's and the base's bp), or an unresolved local
+ * inversion. `opposite(k)` lists the base indices visit k matches in the opposite orientation.
+ */
+export function inversionVerdict(between: Visit[], opposite: (k: number) => number[], baseBp: number): string | null {
+  let invBp = 0, allBp = 0, last = Infinity, consistent = true, any = false;
+  const used = new Set<number>();
+  between.forEach((v, k) => {
+    allBp += v.bp;
+    const opp = opposite(k);
+    if (!opp.length) return;
+    any = true;
+    const fit = opp.filter(i => i < last && !used.has(i));
+    if (fit.length !== 1) { consistent = false; return; }
+    last = fit[0];
+    used.add(last);
+    invBp += v.bp;
+  });
+  if (!any) return null;
+  return consistent && invBp * 2 >= allBp && invBp * 2 >= baseBp ? INVERSION : 'a local inversion';
 }
 
 // ---------------------------------------------------------------------------------------------------- repeats
@@ -1033,7 +1093,8 @@ function annotateRepeats(visits: Visit[], anchors: Anchor[], host: GraphOccurren
  */
 function alignFamilies(group: GroupItem, lanes: string[], counter: { n: number }): void {
   if (group.depth + 1 >= MAX_DEPTH || group.alts.length < 2) return;
-  const remaining = group.alts.filter(a => a.status === 'ok' && a.visits.length > 0);
+  // Inverted alleles are drawn as their own reversed walk, never aligned into a family tube.
+  const remaining = group.alts.filter(a => a.status === 'ok' && a.visits.length > 0 && !a.inverted);
   const kept: AltAllele[] = group.alts.filter(a => !remaining.includes(a));
   while (remaining.length) {
     const lead = remaining.shift()!;
@@ -1065,20 +1126,45 @@ function alignFamilies(group: GroupItem, lanes: string[], counter: { n: number }
     const backbone: Backbone = {
       host: lead.carriers[0], visits: lead.visits, segments: [{ from: 0, to: n, fragment: lead.id }], segOf: new Int32Array(n),
       own: lead.carriers.slice(),
+      ownVisit: (c, i) => lead.byCarrier?.[c]?.[i] ?? null,
       key: (_seg, p) => (p < n ? `${lead.id}|${lead.visits[p].occ.id}|0` : `${lead.id}|end`),
     };
     const level = solveLevel({
       backbone, depth: group.depth + 1, targetSpan: null, lanes, idPrefix: `${lead.id}/`,
       members: members.map(m => ({
         key: memberKey(m.allele), visits: m.allele.visits, anchors: m.anchors,
-        continuous: (a, b) => (b.i <= a.i ? 'order reversed' : null),
+        continuous: (a, b) => {
+          if (b.i <= a.i) return 'order reversed';
+          // A member walking some of the lead's nodes in the opposite orientation there: an inversion inside the
+          // family (placed or unresolved), never a substitution or a mark.
+          const between = m.allele.visits.slice(a.j + 1, b.j);
+          const baseBp = lead.visits.slice(a.i + 1, b.i).reduce((t, v) => t + v.bp, 0);
+          return inversionVerdict(between, k => {
+            const v = between[k];
+            const out: number[] = [];
+            for (let i = a.i + 1; i < b.i; i++) {
+              const l = lead.visits[i];
+              if (l.occ.node === v.occ.node && l.reverse !== v.reverse) out.push(i);
+            }
+            return out;
+          }, baseBp);
+        },
       })),
     }, () => undefined);
     counter.n += level.counts.groups;
     // Member alleles with several carriers: their other carriers ride with the first everywhere.
     const expand = (items: Item[]) => {
       for (const it of items) {
-        if (it.kind === 'run') it.carriers = expandCarriers(it.carriers, members.map(m => m.allele), lanes);
+        if (it.kind === 'run') {
+          it.carriers = expandCarriers(it.carriers, members.map(m => m.allele), lanes);
+          for (const { allele } of members) {
+            const first = it.byCarrier?.[allele.carriers[0]];
+            if (!first || !allele.byCarrier) continue;
+            for (const c of allele.carriers.slice(1)) {
+              it.byCarrier![c] = first.map(v => (v ? allele.byCarrier![c]?.[allele.visits.indexOf(v)] ?? null : null));
+            }
+          }
+        }
         else if (it.kind === 'group') {
           it.base.carriers = expandCarriers(it.base.carriers, members.map(m => m.allele), lanes);
           it.unavailable = expandCarriers(it.unavailable, members.map(m => m.allele), lanes);

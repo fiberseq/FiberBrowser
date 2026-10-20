@@ -56,6 +56,7 @@ import { BarChart, X } from './ui/Icons';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useAppCommand } from '../hooks/useAppCommand';
 import { useUrlSync } from '../hooks/useUrlSync';
+import { useUrlPanel } from '../hooks/useUrlPanel';
 import { useJupyterPolling } from '../hooks/useJupyterPolling';
 import { useDafcPolling } from '../hooks/useDafcPolling';
 import { useDafcStatusBootstrap } from '../hooks/useDafcStatusBootstrap';
@@ -206,6 +207,7 @@ export function Browser() {
 
   // --- Extracted hooks ---
   const { handleCopyLink, linkCopied, initialPositionSet, suppressViewportSnapshotKey } = useUrlSync();
+  useUrlPanel();
   useJupyterPolling();
   useTourTabAutostart();
   useDafcPolling();
