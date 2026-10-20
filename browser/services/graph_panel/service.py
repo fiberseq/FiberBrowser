@@ -108,6 +108,9 @@ def _bad(message: str, code: str = "invalid_request", status: int = 422, **extra
 
 def validate_query(reg: Registration, body: dict) -> dict:
     """Check a subgraph request against the registration before it reaches a worker; return the helper request."""
+    for name in ("revisions", "interval", "limits"):
+        if body.get(name) is not None and not isinstance(body.get(name), dict):
+            raise _bad(f"{name} must be an object")
     revisions = body.get("revisions") or {}
     stale = [k for k in ("package", "graph", "db", "maps") if revisions.get(k) != reg.revisions[k]]
     if stale:

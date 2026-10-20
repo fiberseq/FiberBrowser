@@ -461,13 +461,12 @@ def test_panels_are_served_round_robin(helper, package, env):
         later = [asyncio.ensure_future(submit(pool, reg, q("ok", n=name), name, panel=panel))
                  for name, panel in (("b1", "B"), ("a2", "A"), ("c1", "C"))]
         await first
-        results = await asyncio.gather(*later)
-        order = [r["result"]["echo"]["n"] for r in sorted(results, key=lambda r: r["timings"]["queue_ms"])]
-        assert set(order) == {"b1", "a2", "c1"}
+        await asyncio.gather(*later)
         await pool.close()
     run(go())
-    queried = [c.split()[2] for c in commands(env) if " query " in c]
-    assert len(queried) == 4
+    # Dispatch order: A was just served, so it waits behind B (queued first) and goes before C.
+    served = [c.split()[3] for c in commands(env) if " query " in c]
+    assert served == ["first", "b1", "a2", "c1"]
 
 
 def test_another_package_takes_an_idle_slot(helper, package, env, tmp_path):
@@ -562,3 +561,144 @@ def test_incomplete_results_are_cached_briefly(helper, package, env):
     cache.put(b"k3", {"complete": True}, 40)
     cache.put(b"k4", {"complete": True}, 40)
     assert cache.bytes <= 100 and cache.get(b"k1") is None   # least recently used goes first
+
+
+# ----------------------------------------------------------------------------- review regressions (Phase B review 1)
+
+def test_cancel_before_dispatch_releases_the_worker_slot(helper, package, env):
+    """A job cancelled before its task's first step must not keep its reserved worker (both slots were lost)."""
+    async def go():
+        pool = GraphPool(lambda: helper, queue_expiry_s=0.3)
+        reg = make_reg(package)
+        for i in range(2):
+            task = asyncio.ensure_future(submit(pool, reg, q("ok", n=i), f"c{i}", panel=f"c{i}"))
+            await asyncio.sleep(0)
+            pool.cancel(f"c{i}")
+            await asyncio.gather(task, return_exceptions=True)
+            await asyncio.sleep(0)
+        assert not pool.reserved and not pool.workers
+        third = await submit(pool, reg, q("ok", n=3), "third", panel="t")
+        assert third["status"] == "ok"
+        await pool.close()
+    run(go())
+
+
+def test_a_kill_interrupted_by_cancellation_still_reaps(helper, package, env):
+    """kill() teardown is its own task: cancelling a caller mid-reap leaves later callers and close() working."""
+    async def go():
+        pool = GraphPool(lambda: helper, deadline_s=0.2)
+        reg = make_reg(package)
+        task = asyncio.ensure_future(submit(pool, reg, q("stall"), "r1"))
+        while not pool.workers or pool.workers[0].state != "busy":
+            await asyncio.sleep(0.005)
+        worker = pool.workers[0]
+        original = worker._reap
+        entered, gate = asyncio.Event(), asyncio.Event()
+
+        async def slow_reap():
+            entered.set()
+            await gate.wait()
+            await original()
+        worker._reap = slow_reap
+        await entered.wait()               # the deadline is inside kill(), reaping
+        pool.cancel("r1")                  # its caller is cancelled now
+        await asyncio.gather(task, return_exceptions=True)
+        closing = asyncio.ensure_future(pool.close())
+        await asyncio.sleep(0.05)
+        gate.set()
+        await asyncio.wait_for(closing, 3)
+        assert worker._exited.is_set() and not pid_alive(worker.pid)
+    run(go())
+
+
+def test_evicted_helpers_hold_their_slot_until_reaped(helper, package, env, monkeypatch, tmp_path):
+    monkeypatch.setenv("FAKE_GRAPH_SLOW_SHUTDOWN_MS", "500")
+    others = []
+    for i in range(4):
+        pkg = tmp_path / f"pkg{i}"
+        pkg.mkdir()
+        revs = {k: f"{i}{k[0]}".ljust(64, "x") for k in REVS}
+        (pkg / "manifest.json").write_text(json.dumps({"revisions": revs}))
+        others.append(make_reg(pkg, f"g{i}", revs))
+
+    async def go():
+        pool = GraphPool(lambda: helper, queue_expiry_s=5.0)
+        peak = 0
+
+        async def sample():
+            nonlocal peak
+            while True:
+                peak = max(peak, len(LIVE_PIDS))
+                await asyncio.sleep(0.01)
+        sampler = asyncio.ensure_future(sample())
+        for i, reg in enumerate(others):
+            assert (await submit(pool, reg, q("ok"), f"r{i}", panel=f"p{i}"))["status"] == "ok"
+        sampler.cancel()
+        assert peak <= 2, f"{peak} helpers alive at once"
+        await pool.close()
+    run(go())
+
+
+def test_a_reply_for_other_revisions_is_refused_and_not_cached(helper, package, env):
+    async def go():
+        pool = GraphPool(lambda: helper)
+        reg = make_reg(package)
+        with pytest.raises(JobError) as exc:
+            await submit(pool, reg, q("wrong_revision"), "r1")
+        assert exc.value.code == "protocol_revision"
+        assert pool.cache.stats()["entries"] == 0
+        await pool.close()
+    run(go())
+
+
+def test_a_changed_package_is_refused_before_the_cache(helper, package, env, tmp_path):
+    from services.graph_panel.registration import Registry
+    registry = Registry(str(tmp_path / "reg.json"))
+    (package / "graph.db").write_bytes(b"db")
+
+    async def go():
+        reg = registry.register(helper, str(package))
+        pool = GraphPool(lambda: helper, check_registration=registry.check_unchanged)
+        assert (await submit(pool, reg, q("ok"), "before"))["status"] == "ok"
+        assert (await submit(pool, reg, q("ok"), "cached"))["cached"] is True
+        (package / "graph.db").write_bytes(b"changed")
+        for rid, fields in (("cached-after", q("ok")), ("new-after", q("ok", n=2))):
+            with pytest.raises(JobError) as exc:
+                await submit(pool, reg, fields, rid)
+            assert exc.value.code == "package_changed" and exc.value.status == 409
+        assert pool.cache.stats()["entries"] == 0
+        await pool.close()
+    run(go())
+
+
+def test_a_same_size_rewrite_with_its_mtime_restored_is_not_remembered(helper, package, env, tmp_path):
+    from services.graph_panel.registration import Registry
+    (package / "graph.db").write_bytes(b"abcd")
+    first = Registry(str(tmp_path / "reg.json"))
+    first.register(helper, str(package))
+    st = os.stat(package / "graph.db")
+    time.sleep(0.02)
+    (package / "graph.db").write_bytes(b"wxyz")
+    os.utime(package / "graph.db", ns=(st.st_atime_ns, st.st_mtime_ns))
+    again = Registry(str(tmp_path / "reg.json"))
+    again.ensure_loaded(helper)
+    assert [r["verification"] for r in again.list()] == ["verified"]
+
+
+def test_a_cached_answer_still_supersedes_the_panels_queued_request(helper, package, env):
+    async def go():
+        pool = GraphPool(lambda: helper, max_workers=1, queue_expiry_s=5.0)
+        reg = make_reg(package)
+        await submit(pool, reg, q("ok"), "warm", panel="W")
+        busy = asyncio.ensure_future(submit(pool, reg, q("sleep:300"), "busy", panel="B"))
+        await asyncio.sleep(0.05)
+        old = asyncio.ensure_future(submit(pool, reg, q("ok", n=1), "old", panel="P"))
+        await asyncio.sleep(0.02)
+        new = await submit(pool, reg, q("ok"), "new", panel="P")
+        assert new["cached"] is True
+        with pytest.raises(JobError) as exc:
+            await old
+        assert exc.value.code == "superseded"
+        await busy
+        await pool.close()
+    run(go())

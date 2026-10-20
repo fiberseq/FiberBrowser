@@ -164,6 +164,7 @@ class GraphPool:
         self.closing = False
         self.background: set[asyncio.Task] = set()
         self.tasks: set[asyncio.Task] = set()
+        self.retiring: set[HelperWorker] = set()
         self.counters: collections.Counter = collections.Counter()
         self._monitor: Optional[asyncio.Task] = None
         self._expiry_handle: Optional[asyncio.TimerHandle] = None
@@ -177,15 +178,25 @@ class GraphPool:
             raise JobError("shutdown", "the graph service is shutting down", retryable=True)
         if request_id in self.requests:
             raise JobError("duplicate_request", f"request {request_id!r} is already pending", retryable=False, status=409)
+        if self.check_registration is not None:
+            # Every request, before the cache or a shared job: a package edited since verification is refused, and
+            # whatever was derived from it (cache entries, workers) is dropped.
+            try:
+                self.check_registration(reg)
+            except Exception as exc:
+                await self.forget_registration(reg.id)
+                raise JobError(getattr(exc, "code", "package_changed"), str(getattr(exc, "message", exc)),
+                               retryable=False, status=getattr(exc, "status", 409)) from None
         key = orjson.dumps([reg.id, reg.revisions, kind, fields], option=orjson.OPT_SORT_KEYS)
         now = self.loop.time()
+        # A newer request of the panel replaces its queued ones even when the cache answers it.
+        self._supersede(panel_id)
         if kind == "query" and use_cache:
             cached = self.cache.get(key)
             if cached is not None:
                 self.counters["cache_hits"] += 1
                 return {"request_id": request_id, "panel_id": panel_id, "generation": generation, "status": "ok",
                         "cached": True, "result": cached, "timings": {"queue_ms": 0.0, "total_ms": 0.0}}
-        self._supersede(panel_id)
         sub = Subscriber(request_id, panel_id, generation, self.loop.create_future(), now)
         job = self.jobs.get(key)
         if job is not None and job.state in ("queued", "running"):
@@ -229,6 +240,22 @@ class GraphPool:
                 job.task.cancel()
         return True
 
+    async def forget_registration(self, reg_id: str) -> None:
+        """Drop a registration's cached results, queued and running jobs and its helpers (its package changed)."""
+        prefix = orjson.dumps([reg_id])[:-1]
+        for key in [k for k in self.cache.items if k.startswith(prefix)]:
+            self.cache._drop(key)
+        for job in [j for j in list(self.jobs.values()) if j.reg.id == reg_id]:
+            if job.state == "queued":
+                self._unqueue(job)
+            if job.task is not None and not job.task.done():
+                job.task.cancel()
+            self._fail_job(job, JobError("package_changed", "the graph package changed since it was verified",
+                                         retryable=False, status=409))
+        for w in [w for w in self.workers if w.registration_id == reg_id]:
+            self.workers.remove(w)
+            self._retire(w, kill=True)
+
     def stats(self) -> dict:
         return {
             "max_workers": self.max_workers,
@@ -264,14 +291,15 @@ class GraphPool:
         self.queues.clear()
         self.jobs.clear()
         await asyncio.gather(*(w.shutdown() for w in list(self.workers)), return_exceptions=True)
-        for w in list(self.workers):
-            await w.kill("shutdown")
-        self.workers.clear()
         for task in list(self.background):
             try:
                 await task
             except (asyncio.CancelledError, Exception):
                 pass
+        for w in [*self.workers, *self.retiring]:
+            await w.kill("shutdown")
+        self.workers.clear()
+        self.retiring.clear()
         if self._monitor is not None:
             self._monitor.cancel()
             try:
@@ -323,13 +351,35 @@ class GraphPool:
                             retryable=True))
                         sub.future.add_done_callback(_consume)
 
+    def _retire(self, worker: HelperWorker, kill: bool = False) -> None:
+        """Shut a worker down (or kill it) in the background. Until it is reaped it still holds a process slot and
+        counts toward the aggregate memory limit."""
+        self.retiring.add(worker)
+
+        async def go():
+            try:
+                if kill:
+                    await worker.kill("retired")
+                else:
+                    await worker.shutdown()
+            finally:
+                if worker.proc is not None and not worker._exited.is_set():
+                    await worker.kill("retired")   # whatever happened above: reaped before the slot frees
+                self.retiring.discard(worker)
+                if not self.closing:
+                    self._pump()
+        self._spawn_bg(go())
+
+    def _slots_used(self) -> int:
+        return len(self.workers) + len(self.retiring)
+
     def _prune(self) -> None:
         keep = []
         for w in self.workers:
             if w.state in ("dead",) and id(w) not in self.reserved:
                 continue
             if w.state in ("retiring", "retired") and id(w) not in self.reserved:
-                self._spawn_bg(w.shutdown())
+                self._retire(w)
                 continue
             keep.append(w)
         self.workers = keep
@@ -339,14 +389,16 @@ class GraphPool:
         for w in self.workers:
             if w.registration_id == reg.id and w.state == "idle" and id(w) not in self.reserved:
                 return w
-        if len(self.workers) >= self.max_workers:
+        if self._slots_used() >= self.max_workers:
             victim = next((w for w in sorted(self.workers, key=lambda w: w.last_used)
                            if w.state == "idle" and id(w) not in self.reserved and w.registration_id != reg.id), None)
             if victim is None:
                 return None
             self.workers.remove(victim)
             self.counters["evicted_other_package"] += 1
-            self._spawn_bg(victim.shutdown())
+            self._retire(victim)
+            # Its slot frees once it is reaped (the pump runs again then).
+            return None
         helper = self.helper_path()
         if not helper:
             return None
@@ -397,7 +449,7 @@ class GraphPool:
                 job.worker = worker
                 job.task = self.loop.create_task(self._run(job, worker))
                 self.tasks.add(job.task)
-                job.task.add_done_callback(self.tasks.discard)
+                job.task.add_done_callback(lambda task, job=job, worker=worker: self._job_done(task, job, worker))
                 progressed = True
                 break
         if self.queues:
@@ -435,6 +487,19 @@ class GraphPool:
         task = self.loop.create_task(coro)
         self.background.add(task)
         task.add_done_callback(self.background.discard)
+
+    def _job_done(self, task: asyncio.Task, job: Job, worker: HelperWorker) -> None:
+        """Runs however the job task ended, even cancelled before its first step (then _run's finally never ran)."""
+        self.tasks.discard(task)
+        if id(worker) in self.reserved:
+            self.reserved.discard(id(worker))
+            if worker.state == "new" and worker in self.workers:
+                self.workers.remove(worker)   # never started: nothing to reap
+            if job.state != "done":
+                job.state = "done"
+                self._forget(job)
+            if not self.closing:
+                self._pump()
 
     async def _run(self, job: Job, worker: HelperWorker) -> None:
         dispatched = self.loop.time()
@@ -514,7 +579,7 @@ class GraphPool:
     async def _watch_memory(self) -> None:
         try:
             while not self.closing and any(w.alive for w in self.workers):
-                alive = [w for w in self.workers if w.alive and w.state != "starting"]
+                alive = [w for w in [*self.workers, *self.retiring] if w.alive and w.state != "starting"]
                 samples = await asyncio.gather(*(asyncio.to_thread(w.rss) for w in alive))
                 total = 0
                 for w, rss in zip(alive, samples):
@@ -528,7 +593,7 @@ class GraphPool:
                         self.counters["memory_recycled"] += 1
                         if w in self.workers:
                             self.workers.remove(w)
-                        self._spawn_bg(w.shutdown())
+                        self._retire(w)
                 if total > self.aggregate_rss:
                     living = [(rss, w) for w, rss in zip(alive, samples) if rss is not None and w.alive]
                     if living:

@@ -192,6 +192,9 @@ def test_register_query_and_cancel_through_the_api(app_client, package, graph_en
     ({"limits": {"no_such_limit": 5}}, 422, "invalid_request"),
     ({"request_id": "bad id with spaces"}, 422, "invalid_request"),
     ({"registration_id": "gmissing"}, 404, "unknown_registration"),
+    ({"revisions": ["bad"]}, 422, "invalid_request"),
+    ({"interval": "bad"}, 422, "invalid_request"),
+    ({"limits": [1]}, 422, "invalid_request"),
 ])
 def test_requests_are_refused_before_any_helper_job(app_client, package, graph_env, over, status, code):
     reg = app_client.post("/api/graph/registrations", json={"package": str(package)}).json()["registration"]

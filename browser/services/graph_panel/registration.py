@@ -74,7 +74,8 @@ def _fingerprint(package_dir: str) -> dict:
         for name in files:
             path = os.path.join(root, name)
             st = os.stat(path)
-            out[os.path.relpath(path, package_dir)] = (st.st_size, st.st_mtime_ns)
+            # ctime changes on any write and cannot be set back (unlike mtime); device and inode catch a replaced file.
+            out[os.path.relpath(path, package_dir)] = (st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino, st.st_dev)
     return out
 
 

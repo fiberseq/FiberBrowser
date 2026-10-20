@@ -87,8 +87,9 @@ def serve(package):
         (length,) = struct.unpack(">I", header)
         cmd = json.loads(read_exact(length))
         kind, job, gen = cmd["type"], cmd["job_id"], cmd["generation"]
-        log(f"{kind} {job}")
+        log(f"{kind} {job} {(cmd.get('request') or {}).get('n', '')}")
         if kind == "shutdown":
+            time.sleep(int(os.environ.get("FAKE_GRAPH_SLOW_SHUTDOWN_MS", "0")) / 1000)
             out(envelope("bye", job, gen, revisions))
             return
         if kind == "catalog":
@@ -165,6 +166,9 @@ def serve(package):
                 sys.stdout.buffer.flush()
                 done += 1
                 continue
+            elif name == "wrong_revision":
+                out(envelope("topology", job, gen, {**revisions, "db": "0" * 64}, result=result))
+                time.sleep(30)
             elif name == "error":
                 out(envelope("error", job, gen, revisions, error={"code": arg or "invalid_request", "message": "fake"}))
                 done += 1

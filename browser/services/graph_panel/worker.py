@@ -150,6 +150,7 @@ class HelperWorker:
         self._reader: Optional[asyncio.Task] = None
         self._stderr_task: Optional[asyncio.Task] = None
         self._exited = asyncio.Event()
+        self._teardown: Optional[asyncio.Task] = None
 
     # ------------------------------------------------------------------ lifecycle
     @property
@@ -241,6 +242,10 @@ class HelperWorker:
                     self.pending[frame.job_id] = entry   # kill() fails it after reaping
                     await self.kill("protocol_generation", detail=f"job {frame.job_id} answered generation {frame.generation}")
                     return
+                if frame.revisions != self.revisions:
+                    self.pending[frame.job_id] = entry   # kill() fails it after reaping
+                    await self.kill("protocol_revision", detail=f"job {frame.job_id} answered for other package revisions")
+                    return
                 self.terminal_frames += 1
                 if not future.done():
                     future.set_result(frame)
@@ -277,36 +282,42 @@ class HelperWorker:
             pass
 
     async def kill(self, reason: str, detail: str = "") -> None:
-        """Kill and reap the process; every waiting job fails with ``reason``. Idempotent."""
-        if self.state == "dead":
-            if self.proc is not None and not self._exited.is_set():
-                await self._exited.wait()
-            return
+        """Kill and reap the process; every waiting job fails with ``reason``. Idempotent.
+
+        The teardown runs as one task of its own that every caller awaits (shielded): a caller cancelled while it
+        waits (a deadline, a shutdown) never leaves a half-dead worker that later callers wait on forever."""
+        if self._teardown is None:
+            self._teardown = asyncio.ensure_future(self._do_kill(reason, detail))
+        await asyncio.shield(self._teardown)
+
+    async def _do_kill(self, reason: str, detail: str) -> None:
         self.state = "dead"
-        self.death_reason = reason
+        self.death_reason = self.death_reason if self.death_reason == "shutdown" else reason
         failure = WorkerFailure(reason, detail or reason)
         pending = list(self.pending.values())
         self.pending.clear()
-        if self.proc is not None:
-            try:
-                self.proc.kill()
-            except ProcessLookupError:
-                pass
-            await self._reap()
-        # Waiters learn of the failure only once the process is gone (reaped).
-        for future, _ in pending:
-            if not future.done():
-                future.set_exception(failure)
-                # Waiters that already gave up (a deadline) never read it: mark it read.
-                future.add_done_callback(_consume)
-        current = asyncio.current_task()
-        for task in (self._reader, self._stderr_task):
-            if task is not None and task is not current and not task.done():
-                task.cancel()
+        try:
+            if self.proc is not None:
                 try:
-                    await task
-                except (asyncio.CancelledError, Exception):
+                    self.proc.kill()
+                except ProcessLookupError:
                     pass
+                await self._reap()
+        finally:
+            self._exited.set()
+            # Waiters learn of the failure only once the process is gone (reaped).
+            for future, _ in pending:
+                if not future.done():
+                    future.set_exception(failure)
+                    # Waiters that already gave up (a deadline) never read it: mark it read.
+                    future.add_done_callback(_consume)
+            for task in (self._reader, self._stderr_task):
+                if task is not None and not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except (asyncio.CancelledError, Exception):
+                        pass
 
     async def shutdown(self, timeout_s: float = 1.0) -> None:
         """Ask an idle helper to exit (``shutdown`` → ``bye``); kill it otherwise or on any delay."""
