@@ -13,8 +13,19 @@ export function clusterAssignmentForRead(
   read: string | ReadWithId,
 ): number | undefined {
   const readId = typeof read === 'string' ? read : read.analysis_id ?? read.id;
-  return assignments[readId] ?? assignments[stripSegmentSuffix(readId)]
+  const own = assignments[readId] ?? assignments[stripSegmentSuffix(readId)]
     ?? (typeof read !== 'string' && !read.live_lift ? assignments[read.id] : undefined);
+  if (own !== undefined || typeof read === 'string') return own;
+  // A display row with folded supplementaries (supplementary_display='fold') is coloured by its primary member's
+  // cluster (its own analysis_id), else by the first member that has one.
+  for (const id of foldedIds(read)) if (assignments[id] !== undefined) return assignments[id];
+  return undefined;
+}
+
+/** Cohort identities of the records folded into a display row (live_lift.folded.analysis_ids). */
+export function foldedIds(read: ReadWithId): string[] {
+  const folded = (read.live_lift as { folded?: { analysis_ids?: unknown } } | undefined)?.folded;
+  return Array.isArray(folded?.analysis_ids) ? folded!.analysis_ids.filter((id): id is string => typeof id === 'string') : [];
 }
 
 export function clusteredReadIdSet(
@@ -53,5 +64,8 @@ export function filterReadsByBranchScope<T extends ReadWithId>(
 
 /** A QNAME is a display label; analysis identity can represent several rows. */
 export function readIdKeys(read: ReadWithId): string[] {
-  return read.analysis_id ? [read.id, read.analysis_id] : [read.id];
+  const keys = read.analysis_id ? [read.id, read.analysis_id] : [read.id];
+  // A folded row is kept by any member's identity, as on the server (read_id_keys).
+  for (const id of foldedIds(read)) if (!keys.includes(id)) keys.push(id);
+  return keys;
 }

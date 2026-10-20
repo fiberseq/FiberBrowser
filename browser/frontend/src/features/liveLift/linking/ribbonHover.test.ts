@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { linearX, ribbonGeometry, type GapRow, type PieceRow } from './ribbon';
+import { makeAxis } from '../../differences/axis';
 import { hoverScope, hoveredRows, moleculeKey, nativeLibrary, rowMoleculeKey } from './hover';
 import { liveLiftHitAt } from '../../../components/tracks/read-track/liveLiftCanvas';
 import type { CompactRead } from '../../../components/tracks/read-track/types';
@@ -43,6 +44,26 @@ describe('ribbon geometry', () => {
     const q = g.shapes.filter(s => s.kind === 'uncovered_source').map(s => [s.points[0][0], s.points[1][0]]);
     expect(t).toEqual([[0, 200], [500, 1000]]);
     expect(q).toEqual([[0, 300], [600, 1000]]);
+  });
+  it('keeps an expanded insertion column outside the stretches around it, and puts the wedge on it', () => {
+    for (const reversed of [false, true]) {
+      // 1,000 bp view + a 100 bp expanded insertion at 300, 1,100 px: 1 px per bp.
+      const axis = makeAxis(0, 1000, 1100, reversed, [{ chrom: 'c', pos: 300, ins_id: 'i', length: 100, label: '', hap_label: 'MAT' }]);
+      const topEdge = (a: number, b: number): [number, number] => {
+        const sp = axis.spans(a, b); const last = sp[sp.length - 1];
+        return [axis.toX(a), reversed ? last.x : last.x + last.w];
+      };
+      const block = axis.blocks[0];
+      const g = ribbonGeometry({ ...base, topX: axis.toX, topEdge, topPoint: t => (t === 300 ? [block.x0, block.x1] : [axis.toX(t), axis.toX(t)]),
+        pieces: [[0, 300, 0, 300, '+', 0, false, S, 'H#1'], [300, 1000, 400, 1100, '+', 0, false, S, 'H#1']],
+        gaps: [[0, 300, 300, 300, 400, 'source_insertion']], source: { start: 0, end: 1100 } });
+      const [left, right] = g.shapes.filter(s => s.kind === 'primary');
+      const ends = (s: typeof left) => [s.points[0][0], s.points[1][0]];
+      expect(ends(left)).toEqual(reversed ? [1100, 800] : [0, 300]);       // ends at the column's near side
+      expect(ends(right)).toEqual(reversed ? [700, 0] : [400, 1100]);      // starts after it
+      const wedge = g.shapes.find(s => s.kind === 'source_insertion')!;
+      expect([wedge.points[0][0], wedge.points[1][0]].sort((a, b) => a - b)).toEqual([block.x0, block.x1]);
+    }
   });
   it('follows each edge\'s orientation', () => {
     const reversedBottom = linearX(0, 1000, 1000, true);

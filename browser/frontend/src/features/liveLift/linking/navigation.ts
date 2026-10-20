@@ -190,7 +190,7 @@ export function ensureSummary(datasetId: string, key: string): Promise<LiftSumma
   const s = stateFor(datasetId, key);
   if (s.summary) return Promise.resolve(s.summary);
   if (s.summaryLoading) return s.summaryLoading;
-  s.summaryLoading = (fetcher.json(`/api/lift/summary?${q({ dataset_id: datasetId })}`) as Promise<LiftSummary>)
+  s.summaryLoading = (fetcher.json(`/api/lift/summary?${q({ dataset_id: datasetId, key })}`) as Promise<LiftSummary>)
     .then(summary => {
       if (states.get(datasetId) !== s) return null;
       s.summary = summary;
@@ -205,10 +205,11 @@ function requestOutline(s: NavState, side: 0 | 1, name: string): void {
   const map = side ? s.sourceOutlines : s.targetOutlines;
   if (map.has(name)) return;
   map.set(name, 'loading');
-  const params: Record<string, string> = side ? { dataset_id: s.datasetId, source: name } : { dataset_id: s.datasetId, chrom: name };
+  const params: Record<string, string> = side ? { dataset_id: s.datasetId, source: name, key: s.key } : { dataset_id: s.datasetId, chrom: name, key: s.key };
   void (fetcher.json(`/api/lift/outline?${q(params)}`) as Promise<{ rows: OutlineRow[] }>)
     .then(r => { if (states.get(s.datasetId) === s) { map.set(name, indexOutline(r.rows, side)); notify(s.datasetId); } })
-    .catch(() => { if (states.get(s.datasetId) === s) map.set(name, 'failed'); });
+    // A failure is news too: waiters stop waiting, and a pending correction settles on what there is.
+    .catch(() => { if (states.get(s.datasetId) === s) { map.set(name, 'failed'); notify(s.datasetId); } });
 }
 
 const tileKey = (side: 0 | 1, contig: string, tile: number) => `${side}|${contig}|${tile}`;
@@ -217,14 +218,14 @@ function requestTile(s: NavState, side: 0 | 1, contig: string, tile: number): vo
   const k = tileKey(side, contig, tile);
   if (s.tiles.has(k)) return;
   s.tiles.set(k, 'loading');
-  void fetcher.bytes(`/api/lift/tiles?${q({ dataset_id: s.datasetId, side: side ? 'source' : 'target', contig, tile })}`)
+  void fetcher.bytes(`/api/lift/tiles?${q({ dataset_id: s.datasetId, side: side ? 'source' : 'target', contig, tile, key: s.key })}`)
     .then(bytes => {
       if (states.get(s.datasetId) !== s) return;
       s.tiles.set(k, decodeTile(bytes, s.summary?.tile_bp));
       while (s.tiles.size > TILE_LRU) s.tiles.delete(s.tiles.keys().next().value!);
       notify(s.datasetId);
     })
-    .catch(() => { if (states.get(s.datasetId) === s) s.tiles.set(k, 'failed'); });
+    .catch(() => { if (states.get(s.datasetId) === s) { s.tiles.set(k, 'failed'); notify(s.datasetId); } });
 }
 
 /** Load what a view needs ahead of time (the outline, and its tiles when the view is small enough to be exact). */

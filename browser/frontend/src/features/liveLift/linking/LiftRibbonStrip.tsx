@@ -68,7 +68,7 @@ export function LiftRibbonStrip({ panel, width, height, sidebarWidth }: { panel:
     const controller = new AbortController();
     const bpPerPx = (end - start) / Math.max(1, box?.width ?? dataW);
     const params = new URLSearchParams({ dataset_id: dataset.id, chrom, start: String(Math.max(0, Math.floor(start))),
-      end: String(Math.ceil(end)), hap: link.hap, min_bp: String(Math.max(0, Math.floor(bpPerPx / 2))) });
+      end: String(Math.ceil(end)), hap: link.hap, key: dataset.live_lift.key, min_bp: String(Math.max(0, Math.floor(bpPerPx / 2))) });
     const timer = setTimeout(() => {
       fetch(`/api/lift/pieces?${params}`, { signal: controller.signal })
         .then(async r => { if (!r.ok) throw new Error(r.status === 413 ? 'Zoom in to see the ribbon' : `ribbon: ${r.status}`); return r.json(); })
@@ -83,8 +83,19 @@ export function LiftRibbonStrip({ panel, width, height, sidebarWidth }: { panel:
     const axis = makeAxis(start, end, box.width, liftReversed,
       expansions.filter(e => e.chrom === chrom && (e.referenceScope ?? 'main-reference') === (liftPanel?.genome ?? 'main-reference')));
     const topX = (t: number) => box.left + axis.toX(t);
+    // Exclusive ends use the near side of an expanded column there, as the reads' bodies do (axis.spans).
+    const topEdge = (a: number, b: number): [number, number] => {
+      const sp = axis.spans(a, b);
+      if (!sp.length) return [topX(a), topX(a)];
+      const last = sp[sp.length - 1];
+      return [topX(a), box.left + (liftReversed ? last.x : last.x + last.w)];
+    };
+    const topPoint = (t: number): [number, number] => {
+      const block = axis.blocks.find(b => b.ins.pos === t);
+      return block ? [box.left + block.x0, box.left + block.x1] : [topX(t), topX(t)];
+    };
     const bottomX = linearX(view.start, view.end, dataW, sourceReversed, sidebarWidth);
-    return ribbonGeometry({ pieces: pieces.pieces, gaps: pieces.gaps, topX, bottomX, contig: view.chrom, height,
+    return ribbonGeometry({ pieces: pieces.pieces, gaps: pieces.gaps, topX, topEdge, topPoint, bottomX, contig: view.chrom, height,
       target: { start, end }, source: { start: view.start, end: view.end } });
   }, [pieces, view, box, chrom, start, end, liftReversed, expansions, liftPanel?.genome, dataW, sourceReversed, sidebarWidth, height]);
 

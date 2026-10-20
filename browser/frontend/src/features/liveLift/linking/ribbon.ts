@@ -29,6 +29,11 @@ export interface RibbonInput {
   gaps: GapRow[];
   /** Target position -> px on the top edge (the lifted panel's axis, expansions and reversal included). */
   topX: (t: number) => number;
+  /** px of a target span's two ends `[at a, at b]` (an expanded insertion at either end stays outside it); default
+   * `[topX(a), topX(b)]`. */
+  topEdge?: (a: number, b: number) => [number, number];
+  /** px range of a target point (an expanded insertion's column there), default `[topX(t), topX(t)]`. */
+  topPoint?: (t: number) => [number, number];
   /** Forward source position -> px on the bottom edge (the source panel's view and orientation). */
   bottomX: (q: number) => number;
   /** The source contig the source panel shows. */
@@ -68,6 +73,8 @@ function complement(lo: number, hi: number, covered: Array<[number, number]>): A
 export function ribbonGeometry(input: RibbonInput): RibbonGeometry {
   const { pieces, gaps, topX, bottomX, contig, height: H } = input;
   const minPx = input.minPx ?? 1;
+  const topEdge = input.topEdge ?? ((a: number, b: number) => [topX(a), topX(b)] as [number, number]);
+  const topPoint = input.topPoint ?? ((t: number) => [topX(t), topX(t)] as [number, number]);
   const shapes: RibbonShape[] = [];
   const elsewhere = new Set<string>();
   let elsewhereCount = 0;
@@ -79,7 +86,7 @@ export function ribbonGeometry(input: RibbonInput): RibbonGeometry {
   for (const [t0, t1, q0, q1, strand, chain, alt, source] of ordered) {
     if (source !== contig) { elsewhereCount++; elsewhere.add(source); continue; }
     const minus = strand === '-';
-    const x0 = topX(t0), x1 = topX(t1);
+    const [x0, x1] = topEdge(t0, t1);
     // '+': t0 <-> q0; '-': t0 <-> q1 (the ribbon crosses).
     const b0 = bottomX(minus ? q1 : q0), b1 = bottomX(minus ? q0 : q1);
     shapes.push({ kind: alt ? 'alternative' : 'primary', minus, chain,
@@ -89,11 +96,12 @@ export function ribbonGeometry(input: RibbonInput): RibbonGeometry {
   for (const [chain, t0, t1, q0, q1, reason] of gaps) {
     if (chainSource.get(chain) !== contig) continue;
     const minus = chainMinus.get(chain) ?? false;
-    const x0 = topX(t0), x1 = topX(t1);
+    const [x0, x1] = t1 > t0 ? topEdge(t0, t1) : topPoint(t0);
     const b0 = bottomX(minus ? q1 : q0), b1 = bottomX(minus ? q0 : q1);
     const dt = t1 - t0, dq = q1 - q0;
     if (dt === 0 && dq > 0) {
-      shapes.push({ kind: 'source_insertion', chain, minus, points: [[x0, 0], [b1, H], [b0, H]],
+      // At an expanded insertion the wedge's top is the inserted column itself.
+      shapes.push({ kind: 'source_insertion', chain, minus, points: x1 !== x0 ? [[x0, 0], [x1, 0], [b1, H], [b0, H]] : [[x0, 0], [b1, H], [b0, H]],
         title: `${fmt(dq)} bp only in ${contig} (an insertion relative to the target; ${reason.replace(/_/g, ' ')})` });
     } else if (dq === 0 && dt > 0) {
       shapes.push({ kind: 'target_insertion', chain, minus, points: [[x0, 0], [x1, 0], [b0, H]],
@@ -105,7 +113,7 @@ export function ribbonGeometry(input: RibbonInput): RibbonGeometry {
   }
   const primary = pieces.filter(p => !p[6]);
   const band = (kind: 'uncovered_target' | 'uncovered_source', a: number, b: number, x: (v: number) => number, top: boolean) => {
-    const xa = x(a), xb = x(b);
+    const [xa, xb] = top ? topEdge(a, b) : [x(a), x(b)];
     if (Math.abs(xb - xa) < minPx) return;
     const y0 = top ? 0 : H - 4, y1 = top ? 4 : H;
     shapes.push({ kind, points: [[xa, y0], [xb, y0], [xb, y1], [xa, y1]],

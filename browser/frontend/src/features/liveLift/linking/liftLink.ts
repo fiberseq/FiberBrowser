@@ -118,8 +118,9 @@ export const liftViewLink = {
     // Nothing loaded yet: the main view follows once it is (the source panel keeps the user's move).
     if (out.status === 'pending') { schedule(panel, gen, next.chrom, 'main'); return null; }
     if (out.status === 'none') { pending.delete(panel.id); return null; }
-    // Approximate: the main view goes there now; the exact tile then corrects this panel to match it.
-    if (out.mapping.exact) pending.delete(panel.id); else schedule(panel, gen, out.mapping.chrom, 'panel');
+    // Approximate: the main view goes there now. This panel's span is the user's: the exact tile then moves the
+    // main view to match it (never this panel to match the approximate main view).
+    if (out.mapping.exact) pending.delete(panel.id); else schedule(panel, gen, next.chrom, 'main');
     return { chrom: out.mapping.chrom, start: out.mapping.start, end: out.mapping.end };
   },
 };
@@ -153,9 +154,9 @@ export function applyCorrections(datasetId?: string): void {
       pending.delete(panelId);
       if (out.status === 'none') continue;
       const m = out.mapping;
-      if (m.chrom === st.chrom && m.start === st.start && m.end === st.end) continue;
+      if (m.chrom === st.chrom && m.start === st.start && m.end === st.end) { if (!m.exact) schedule(panel, generation.get(panelId)!, v.chrom, 'main'); continue; }
       withLinkedPanelMoving(panelId, () => st.setViewport(m.chrom, m.start, m.end));
-      if (!m.exact) schedule(panel, generation.get(panelId)!, m.chrom, 'panel');
+      if (!m.exact) schedule(panel, generation.get(panelId)!, v.chrom, 'main');
     }
   }
 }
@@ -245,7 +246,15 @@ export async function openLinkedSourceView(liftPanelId: string, hapLabel?: strin
         panels,
       };
     });
-    if (!mapping.exact) schedule(useBrowserStore.getState().panels.find(p => p.id === id)!, bump(id), main.chrom, 'panel');
+    // The main view may have moved while the source BAM and its reference opened: the panel then follows the view
+    // there now (it was installed at the view it was opened from).
+    const now = useBrowserStore.getState();
+    const moved = now.chrom !== main.chrom || now.start !== main.start || now.end !== main.end;
+    const installed = now.panels.find(p => p.id === id);
+    if (installed && (moved || !mapping.exact)) {
+      schedule(installed, bump(id), now.chrom, 'panel');
+      queueMicrotask(() => applyCorrections(dataset.id));
+    }
     publishCandidates(id, mapping);
     useBrowserStore.getState().pushSnapshot(`Open ${label} source view`, { kind: 'layout' });
     return id;

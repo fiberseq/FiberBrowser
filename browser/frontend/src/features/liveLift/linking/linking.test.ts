@@ -237,4 +237,18 @@ describe('liftViewLink', () => {
     expect(main()).toEqual({ chrom: 'chrT', start: 5000, end: 7000 });
     expect(pendingCorrection('src')).toBeUndefined();
   });
+  it('a source-panel move on a cold cache keeps the span the user moved to; the tile corrects the main view', async () => {
+    resetNavigation(); holdTiles = true; installFetcher();
+    useBrowserStore.setState({ chrom: 'chrT', start: 2000, end: 3000, panels: [liftPanel, sourcePanel()] });
+    useBrowserStore.getState().setViewport('chrT', 2000, 3001);
+    await flush(); useBrowserStore.getState().setViewport('chrT', 2000, 3000); await flush();
+    // Source outline: the panel's move maps approximately at first.
+    useBrowserStore.getState().setPanelViewport('src', 3990, 6091); await flush();
+    useBrowserStore.getState().setPanelViewport('src', 3990, 6090);
+    expect(pendingCorrection('src')?.kind).toBe('main');
+    for (const d of deferred.splice(0)) d.resolve();
+    for (let i = 0; i < 4; i++) await flush();
+    expect(src().viewportOverride).toEqual({ chrom: MAT, start: 3990, end: 6090 });
+    expect(main()).toEqual({ chrom: 'chrT', start: 5000, end: 7000 });
+  });
 });
