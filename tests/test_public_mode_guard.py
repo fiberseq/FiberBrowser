@@ -16,6 +16,10 @@ PUBLIC_DENIED = {
     ("GET", "/api/lift/differences"), ("GET", "/api/lift/difference_reads"),
     ("GET", "/api/lift/difference_sequence"), ("POST", "/api/lift/provenance/{dataset_id}"),
     ("POST", "/api/lift/analysis/summary"), ("POST", "/api/lift/analysis/split"),
+    # map suggestions search the host's folders near a BAM path; the navigation tables (summary, outline, tiles,
+    # ribbon pieces) read a live-lift dataset's map from the host, like its differences
+    ("GET", "/api/lift/maps"), ("GET", "/api/lift/summary"), ("GET", "/api/lift/outline"),
+    ("GET", "/api/lift/tiles"), ("GET", "/api/lift/pieces"),
     ("POST", "/api/differences/inspect"), ("POST", "/api/differences/alternate-blocks"),
     ("POST", "/api/differences/sequence"), ("POST", "/api/differences/lens"),
     ("POST", "/api/differences/observations"),
