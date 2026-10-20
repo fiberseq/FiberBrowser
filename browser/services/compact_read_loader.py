@@ -1928,6 +1928,11 @@ def _build_compact_reads_from_bam_region(
 
     reads_without_tags = 0
     reads_with_tags = 0
+    # Record iterators hold their file's reader lock (services/file_handles.py)
+    # until closed. An early break or an exception must close them here, in this
+    # thread: left to the garbage collector, another thread would try to release
+    # the lock, fail, and leave the file locked for every later reader.
+    open_iterators = []
 
     try:
         phase_t0 = _profile_start()
@@ -2015,6 +2020,7 @@ def _build_compact_reads_from_bam_region(
                     return  # each worker counts only its own sampling decisions
             sampler.skip(start, end)
         records = iter_edge_records(bam, actual_chrom, region_start, region_end, fetch_regions)
+        open_iterators.append(records)
         # Lift composition needs each source record's own calls and molecular
         # frame. Native SV loading instead collects the complete molecule bundle.
         record_scoped = include_lift_meta or include_supplementary
@@ -2022,6 +2028,7 @@ def _build_compact_reads_from_bam_region(
                    if record_scoped else molecule_alignments(
                        records, eligible_segment, keep=keep_molecule,
                        on_skipped=skipped_molecule, with_source_order=True))
+        open_iterators.append(records)
         for read, molecule_records, source_order in records:
             records_seen += 1
             if not records_seen & 255:
@@ -2762,6 +2769,11 @@ def _build_compact_reads_from_bam_region(
                 f"({redact(str(exc)) or type(exc).__name__}): the network or the server may be down. "
                 "Check it, then reload the region."
             ) from None
+    finally:
+        for iterator in reversed(open_iterators):
+            close = getattr(iterator, "close", None)
+            if close is not None:
+                close()
 
     if diagnose_bam and (reads_with_tags == 0 or reads_without_tags > 0):
         log_bam_diagnostic(f"BAM compact reads for {chrom}:{region_start}-{region_end}:")
