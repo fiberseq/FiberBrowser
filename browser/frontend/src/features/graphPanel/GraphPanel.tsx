@@ -24,7 +24,7 @@ import { genomeKeyFor } from '../../utils/regionNavigation';
 import { startTrace, type GraphTrace } from './timings';
 import type { GraphApiError, GraphReadBinding, GraphReadSettings, GraphReadsResponse, GraphRegistration, GraphSubgraphResponse, GraphViewState } from './types';
 import { MAX_READ_PRIMITIVES, packMolecules, placeReads, placementIndex, type PackedLane, type PlacedMolecule } from './readGeometry';
-import { bandHeight, describeReadHit, drawReadBandLabels, drawReads, READ_ROW_GAP, READ_ROW_HEIGHT, type ReadHit, type ReadLayers } from './readCanvas';
+import { bandHeight, describeReadHit, drawReadBandLabels, drawReads, effectiveReadLayers, emptyDrawStats, READ_ROW_GAP, READ_ROW_HEIGHT, type ReadDrawStats, type ReadHit, type ReadLayers } from './readCanvas';
 import { chromatinStyle } from './chromatinStyle';
 
 const DEBOUNCE_MS = 100;
@@ -35,7 +35,8 @@ declare global {
   interface Window {
     /** e2e only (with __FIBERBROWSER_E2E_EXPOSE_STORE): each graph panel's last scene, to locate its geometry. */
     __FIBERBROWSER_GRAPH_SCENES__?: Record<string, { scene: Scene; model: LayoutModel; offset: number;
-      reads?: { molecules: PlacedMolecule[]; lanes: Record<string, { rows: number; hidden: number }>; hits: ReadHit[]; placeMs?: number; drawMs?: number; serverMs?: number } }>;
+      reads?: { molecules: PlacedMolecule[]; lanes: Record<string, { rows: number; hidden: number }>; hits: ReadHit[]; placeMs?: number; drawMs?: number; serverMs?: number;
+        drawn?: ReadDrawStats; layers?: ReadLayers } }>;
   }
 }
 const STATUS_HEIGHT = 18;
@@ -262,8 +263,12 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     return () => window.clearTimeout(timer);
   }, [readsKey]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => readsInflightRef.current?.abort(), []);
-  const readLayers: ReadLayers = { nuc: readSettings.layers?.nuc ?? true, tf: readSettings.layers?.tf ?? true,
-    msp: readSettings.layers?.msp ?? true, m6a: readSettings.layers?.m6a ?? true };
+  // The toolbar's Layers row (the read tracks' own toggles) decides what the read bands draw; the panel's Reads
+  // menu can only hide more. Toggling a layer redraws from the loaded reads, no refetch.
+  const enabledModTypes = useBrowserStore(s => s.enabledModTypes) as Record<string, boolean | undefined>;
+  const globalLayers = useMemo(() => effectiveReadLayers(enabledModTypes), [enabledModTypes]);
+  const readLayers: ReadLayers = useMemo(() => effectiveReadLayers(enabledModTypes, readSettings.layers),
+    [enabledModTypes, readSettings.layers]);
   const readRowHeight = readSettings.rowHeight ?? READ_ROW_HEIGHT;
   const rowsPerLane = readSettings.maxRowsPerLane ?? DEFAULT_ROWS_PER_LANE;
   const activeDatasetIds = useMemo(() => new Set(activeBindings.map(b => b.dataset_id)), [activeBindings]);
@@ -343,6 +348,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   }, [baseScene, bands]); // eslint-disable-line react-hooks/exhaustive-deps
   const readHitsRef = useRef<ReadHit[]>([]);
   const readDrawMsRef = useRef(0);
+  const readDrawStatsRef = useRef<ReadDrawStats>(emptyDrawStats());
   // Its natural body height (full lanes of NATURAL_LANE px, compact rows, the ruler and the status line): stacked
   // with other panels it takes this, not an equal share of the column (plugin sizeToContent). It only grows for one
   // selection of paths, so panning never makes the panels below jump back and forth.
@@ -395,8 +401,10 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       ctx.translate(sceneOffset, 0);
       drawScene(ctx, scene);
       const tr = performance.now();
+      const drawStats = emptyDrawStats();
       readHitsRef.current = readLayout ? drawReads(ctx, scene, readLayout.lanes, style, readLayers, laneColors, readRowHeight, READ_ROW_GAP,
-        readsStale ? 0.45 : 1) : [];
+        readsStale ? 0.45 : 1, drawStats) : [];
+      readDrawStatsRef.current = drawStats;
       readDrawMsRef.current = performance.now() - tr;
       ctx.restore();
       // The read bands' compact labels stay in the gutter.
@@ -420,7 +428,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       if (window.__FIBERBROWSER_E2E_EXPOSE_STORE && panelId) {
         (window.__FIBERBROWSER_GRAPH_SCENES__ ??= {})[panelId] = { scene, model, offset: sceneOffset,
           ...(readLayout ? { reads: { molecules: readLayout.placed.molecules, hits: readHitsRef.current,
-            placeMs: readLayout.ms, drawMs: readDrawMsRef.current, serverMs: reads.response?.timings.total_ms,
+            placeMs: readLayout.ms, drawMs: readDrawMsRef.current, serverMs: reads.response?.timings.total_ms, drawn: readDrawStatsRef.current, layers: readLayers,
             lanes: Object.fromEntries([...readLayout.lanes].map(([k, l]) => [k, { rows: l.rows.length, hidden: l.hidden }])) } } : {}) };
       }
     } else {
@@ -432,7 +440,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         if (trace.paintedAt === undefined) { trace.paintedAt = performance.now(); trace.outcome = trace.outcome ?? 'painted'; }
       });
     }
-  }, [scene, transform, width, canvasHeight, renderVersion, sceneOffset, readLayout, style, readSettings, readsStale]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [scene, transform, width, canvasHeight, renderVersion, sceneOffset, readLayout, style, readSettings, readsStale, readLayers]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------------------------------------------------------------- navigation
   const commitViewport = useCallback((next: GraphViewport, detach = false, linearAtStart?: LinearView | null) => {
@@ -481,7 +489,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     const sx = x - sceneOffset;
     const readHit = readHitsRef.current.find(h => sx >= h.x0 && sx <= h.x1 && y >= h.y0 && y <= h.y1);
     if (readHit) {
-      setCursor({ x, y, text: describeReadHit(readHit, sx, id => datasetLabels[id] ?? id, key => laneLabelOf(key)), cursorX: null });
+      setCursor({ x, y, text: describeReadHit(readHit, sx, id => datasetLabels[id] ?? id, key => laneLabelOf(key), readLayers), cursorX: null });
       return;
     }
     const hit = sceneHitAt(scene, sx, y);
@@ -599,8 +607,10 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     {
       const bound = readBindings.filter(b => Object.keys(b.paths).length);
       const shownIds = new Set(activeBindings.map(b => b.dataset_id));
+      // A layer the toolbar's Layers row has off is off here too: the item says so instead of a second switch.
       const layerItem = (key: keyof ReadLayers, label: string) => ({ kind: 'item' as const, action: `rl:${key}`, icon: readLayers[key] ? 'eye' : 'eye-off',
-        label: `${readLayers[key] ? '✓ ' : ''}${label}` });
+        disabled: !globalLayers[key], label: `${readLayers[key] ? '✓ ' : ''}${label}`,
+        title: globalLayers[key] ? 'Hide or show this layer in this graph panel only' : 'Off in the toolbar\'s Layers row (it applies to every read view)' });
       entries.push({ kind: 'submenu', id: 'reads', icon: 'reads', label: bound.length ? `Reads: ${readSettings.show ? `${shownIds.size} of ${bound.length} datasets` : 'hidden'}` : 'Reads: no dataset binds',
         entries: [
           { kind: 'item' as const, action: 'reads:toggle', icon: readSettings.show ? 'eye' : 'eye-off', disabled: !bound.length,
@@ -662,7 +672,8 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       else if (action.startsWith('reads:rows:')) next = { ...current, maxRowsPerLane: Number(action.slice('reads:rows:'.length)) };
       else if (action.startsWith('rl:')) {
         const key = action.slice(3) as keyof ReadLayers;
-        next = { ...current, layers: { ...readLayers, [key]: !readLayers[key] } };
+        const own = current.layers ?? {};
+        next = { ...current, layers: { ...own, [key]: own[key] === false } };
       }
       setGraphView(panelId, { ...state, reads: next });
       return;

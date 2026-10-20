@@ -13,7 +13,8 @@ import tandemDup from './__fixtures__/gateD/tandem_dup.topology.json';
 import { buildLayout, type LayoutModel } from './layout';
 import { buildScene, placementAt, targetAtX, type Scene } from './scene';
 import { packMolecules, placeRead, placeReads, placementIndex, type CallPiece, type PlacedMolecule } from './readGeometry';
-import { bandHeight, describeReadHit, drawReads, READ_ROW_GAP } from './readCanvas';
+import { bandHeight, describeReadHit, drawReads, effectiveReadLayers, emptyDrawStats, READ_ROW_GAP } from './readCanvas';
+import { useBrowserStore } from '../../stores/browserStore';
 import { chromatinStyle } from './chromatinStyle';
 import { DEFAULT_COLORMAP } from '../../types';
 import type { GraphBinding, GraphRead, GraphReadLayer, GraphTopology, Span } from './types';
@@ -254,6 +255,51 @@ describe('Gate E: repeats, summaries and packing', () => {
     expect(text).toContain('nucleosome 350 bp at 94,850-95,200 (MA0:0)');
     expect(text).toContain('supplementary');
     expect(text).toMatch(/drawn in \d+ pieces/);
+  });
+});
+
+describe('graph read bands follow the toolbar Layers row', () => {
+  const ctx = () => new Proxy({}, { get: () => () => {}, set: () => true }) as unknown as CanvasRenderingContext2D;
+  const drawWith = (layers: ReturnType<typeof effectiveReadLayers>) => {
+    const m = model(alu10k);
+    const molecule = place(scene(m), alu10k, read('mat', 94_700, 95_300, { nuc: [[94_850, 95_200]], m6a: [94_860, 94_900, 95_250] }));
+    const lanes = packMolecules([molecule], 10);
+    const sc = scene(m, { bands: { mat: bandHeight(lanes.get('mat')) } });
+    const stats = emptyDrawStats();
+    const hits = drawReads(ctx(), sc, lanes, chromatinStyle(DEFAULT_COLORMAP), layers, COLORS, undefined, undefined, 1, stats);
+    return { stats, hits, molecule };
+  };
+
+  it('reads the store toggles the way the read track does (aliases included)', () => {
+    expect(effectiveReadLayers({ nuc: true, footprint: true, tf: true, fire: false, msp: false, m6a: false, mod: false }))
+      .toEqual({ nuc: true, tf: true, msp: false, m6a: false });
+    expect(effectiveReadLayers({ m6a: false, mod: true }).m6a).toBe(true);
+    expect(effectiveReadLayers({ fire: false, msp: true }).msp).toBe(true);
+    expect(effectiveReadLayers({ fire: true }).msp).toBe(true);
+    expect(effectiveReadLayers({ nuc: true, footprint: false }).nuc).toBe(false);
+    expect(effectiveReadLayers({}).nuc).toBe(true);   // nuc defaults on, as on the read track
+    expect(effectiveReadLayers({}).tf).toBe(false);
+    // The panel's own menu can only hide more, never show a layer the toolbar has off.
+    expect(effectiveReadLayers({ m6a: false }, { m6a: true }).m6a).toBe(false);
+    expect(effectiveReadLayers({ m6a: true }, { m6a: false }).m6a).toBe(false);
+    expect(effectiveReadLayers({ m6a: true }, {}).m6a).toBe(true);
+  });
+
+  it('the store default (m6A and Accessibility off) draws no m6A and no MSP; turning m6A on draws its ticks', () => {
+    const initial = useBrowserStore.getState().enabledModTypes as Record<string, boolean>;
+    const off = drawWith(effectiveReadLayers(initial));
+    expect(off.stats.m6a).toBe(0);
+    expect(off.stats.m6aDensity).toBe(0);
+    expect(off.stats.msp).toBe(0);
+    expect(off.stats.nuc).toBeGreaterThan(0);
+    const on = drawWith(effectiveReadLayers({ ...initial, m6a: true }));
+    expect(on.stats.m6a).toBe(3);
+    const noNuc = drawWith(effectiveReadLayers({ ...initial, nuc: false }));
+    expect(noNuc.stats.nuc).toBe(0);
+    // A hidden layer is not named under the pointer either.
+    const nuc = noNuc.molecule.calls.find(c => c.layer === 'nuc')!;
+    expect(describeReadHit(noNuc.hits[0], (nuc.x0 + nuc.x1) / 2, () => 'Demo', () => 'MAT', effectiveReadLayers({ nuc: false })))
+      .not.toContain('nucleosome');
   });
 });
 

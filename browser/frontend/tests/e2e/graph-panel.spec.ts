@@ -460,6 +460,22 @@ test('reads of a live-lift dataset drawn along their graph walk (HPRC package, G
     }, id);
     await page.mouse.move(box.x + hit.x, box.y + hit.y);
     await expect(page.getByTestId('graph-tooltip')).toContainText(/nucleosome [\d,]+ bp at [\d,]+-[\d,]+/);
+    // The read bands follow the toolbar's Layers row (the read tracks' own toggles), with no refetch: m6A on draws
+    // ticks, m6A off draws none.
+    const drawn = () => page.evaluate((pid) => (window as any).__FIBERBROWSER_GRAPH_SCENES__[pid as string].reads?.drawn ?? null, id);
+    const m6a = page.getByTestId('layer-checkbox-m6a');
+    await expect(m6a).toBeVisible({ timeout: 15_000 });
+    let readRequests = 0;
+    const countReads = (r: { url(): string }) => { if (r.url().includes('/api/graph/reads')) readRequests++; };
+    page.on('request', countReads);
+    await m6a.setChecked(true);
+    await expect.poll(async () => ((await drawn())?.m6a ?? 0) + ((await drawn())?.m6aDensity ?? 0), { timeout: 10_000 }).toBeGreaterThan(0);
+    await m6a.setChecked(false);
+    await expect.poll(async () => { const d = await drawn(); return d ? d.m6a + d.m6aDensity : -1; }, { timeout: 10_000 }).toBe(0);
+    expect((await drawn()).nuc).toBeGreaterThan(0);
+    await expect(graph).toHaveAttribute('data-graph-reads-loading', 'false');
+    page.off('request', countReads);
+    expect(readRequests).toBe(0);   // redrawn from the loaded reads
     // Reversal mirrors the walk; every call piece keeps its identity, size and source span.
     await store(page, 'setPanelReversed', id, true);
     await expect.poll(async () => (await geometry()).identities.join('\n'), { timeout: 20_000 }).toBe(g.identities.join('\n'));

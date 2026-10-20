@@ -17,6 +17,33 @@ export const READ_INSERTION_MIN_BP = 10;
 
 export interface ReadLayers { nuc: boolean; tf: boolean; msp: boolean; m6a: boolean }
 
+/**
+ * The layers a graph read band draws: the toolbar's Layers row (the store's `enabledModTypes`, read the way the
+ * read track reads it) and, under it, the panel's own Reads menu. Nucleosomes follow Nuc (and its legacy
+ * Footprint alias, written together with it); MSPs follow Accessibility (FIRE, or its legacy MSP key); TF follows
+ * TF; m6A follows m6A (or its legacy `mod` alias). A layer the graph payload does not carry (5mC, deamination, ...)
+ * is simply never drawn.
+ */
+export function effectiveReadLayers(enabled: Record<string, boolean | undefined> | null | undefined,
+  panel?: Partial<ReadLayers> | null): ReadLayers {
+  const g = enabled ?? {};
+  const global: ReadLayers = {
+    nuc: (g.nuc ?? true) && (g.footprint ?? true),
+    msp: Boolean(g.fire || g.msp),
+    tf: Boolean(g.tf),
+    m6a: Boolean(g.m6a || g.mod),
+  };
+  return { nuc: global.nuc && panel?.nuc !== false, msp: global.msp && panel?.msp !== false,
+    tf: global.tf && panel?.tf !== false, m6a: global.m6a && panel?.m6a !== false };
+}
+
+/** What one draw put on the canvas, per layer (e2e and tests read it). */
+export interface ReadDrawStats { nuc: number; tf: number; msp: number; m6a: number; m6aDensity: number }
+
+export function emptyDrawStats(): ReadDrawStats {
+  return { nuc: 0, tf: 0, msp: 0, m6a: 0, m6aDensity: 0 };
+}
+
 export interface ReadHit { x0: number; x1: number; y0: number; y1: number; molecule: PlacedMolecule }
 
 /** A molecule's body as merged screen runs (touching pieces joined). */
@@ -58,7 +85,8 @@ function drawCall(ctx: CanvasRenderingContext2D, c: CallPiece, y: number, h: num
 /** Draw every placed molecule; returns their hit rows. `colors`: lane key -> haplotype ink; `alpha`: the whole
  * band's opacity (reads of the previous window kept while the next load is in flight are dimmed). */
 export function drawReads(ctx: CanvasRenderingContext2D, scene: Scene, lanes: Map<string, PackedLane>, style: ChromatinStyle,
-  layers: ReadLayers, colors: Record<string, string>, rowHeight = READ_ROW_HEIGHT, gap = READ_ROW_GAP, alpha = 1): ReadHit[] {
+  layers: ReadLayers, colors: Record<string, string>, rowHeight = READ_ROW_HEIGHT, gap = READ_ROW_GAP, alpha = 1,
+  stats?: ReadDrawStats): ReadHit[] {
   const hits: ReadHit[] = [];
   const pxPerBpOf = (m: PlacedMolecule) => {
     const bp = m.body.reduce((t, b) => t + (b.s1 - b.s0), 0);
@@ -96,12 +124,13 @@ export function drawReads(ctx: CanvasRenderingContext2D, scene: Scene, lanes: Ma
         ctx.clip();
         for (const layer of ['nuc', 'tf', 'msp'] as const) {
           if (!layers[layer]) continue;
-          for (const c of m.calls) if (c.layer === layer) drawCall(ctx, c, y, rowHeight, style, pxPerBp, alpha);
+          for (const c of m.calls) if (c.layer === layer) { drawCall(ctx, c, y, rowHeight, style, pxPerBp, alpha); if (stats) stats[layer]++; }
         }
         if (layers.m6a) {
           ctx.fillStyle = style.m6a;
           const w = Math.max(1, Math.min(2, pxPerBp * 0.8));
           for (const p of m.m6a) ctx.fillRect(p.x - w / 2, y, w, rowHeight);
+          if (stats) { stats.m6a += m.m6a.length; stats.m6aDensity += m.density.length; }
           for (const d of m.density) {
             // Density: m6A per bp in the bin, as the tick colour's opacity (marks over budget).
             ctx.globalAlpha = alpha * Math.max(0.06, Math.min(0.85, (d.count / Math.max(1, d.bp)) * 3));
@@ -164,11 +193,13 @@ export function drawReadBandLabels(ctx: CanvasRenderingContext2D, scene: Scene, 
 const where = (n: number) => n.toLocaleString('en-US');
 
 /** Hover text of a molecule row at x: the record, then the call or mark under the pointer (whole size, identity). */
-export function describeReadHit(hit: ReadHit, x: number, datasetLabel: (id: string) => string, laneLabel: (key: string) => string): string {
+export function describeReadHit(hit: ReadHit, x: number, datasetLabel: (id: string) => string, laneLabel: (key: string) => string,
+  layers?: ReadLayers): string {
   const m = hit.molecule, r = m.read;
   const head = `${r.q} · ${datasetLabel(r.d)}${r.lib ? ` (library ${r.lib + 1})` : ''} · ${laneLabel(r.b)} ${r.c}:${where(r.s)}-${where(r.e)} · strand ${r.st}${r.sup ? ' · supplementary' : ''}`;
   const near = (a: number, b: number) => x >= a - 0.5 && x <= b + 0.5;
-  const call = ['msp', 'tf', 'nuc'].map(l => m.calls.find(c => c.layer === l && near(c.x0, c.x1))).find(Boolean);
+  // Only calls of a drawn layer are named (a hidden layer is not under the pointer).
+  const call = (['msp', 'tf', 'nuc'] as const).filter(l => !layers || layers[l]).map(l => m.calls.find(c => c.layer === l && near(c.x0, c.x1))).find(Boolean);
   if (call) {
     const name = call.layer === 'nuc' ? 'nucleosome' : call.layer === 'tf' ? 'TF footprint' : call.inferred ? 'MSP (inferred from nucleosome gaps)' : 'MSP';
     const q = Object.entries(call.qualities).map(([k, v]) => `${k} ${v}`).join(', ');
