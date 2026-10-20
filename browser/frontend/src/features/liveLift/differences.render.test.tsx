@@ -52,6 +52,27 @@ afterEach(() => { act(() => root.unmount()); host.remove(); vi.useRealTimers(); 
 const renderStrip = (p = panel) => act(() => root.render(<PanelDisplayContext.Provider value={p.id}><DifferencesStrip panel={p} dataset={dataset} width={1000} /></PanelDisplayContext.Provider>));
 
 describe('differences strip and inspection', () => {
+  it('selects an assembly SNV without decoding reads, then explicitly inspects and loads its observations', async () => {
+    const snv: Difference = { ...diff, id: 'assembly-snv', kind: 'snv', t_end: 501, ref_bp: 1, alt_bp: 1 };
+    vi.mocked(getDifferences).mockResolvedValue(response([snv]));
+    renderStrip(); await settle();
+    const item = host.querySelector('[data-testid="live-lift-diff-item"]')!;
+    act(() => item.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(useDifferenceSelection.getState().selection).toMatchObject({ difference: { id: snv.id }, inspect: false });
+    expect(document.querySelector('[data-testid="live-lift-diff-popover"]')).toBeNull();
+    expect(getDifferenceReads).not.toHaveBeenCalled();
+
+    act(() => item.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+    await act(async () => { await vi.advanceTimersByTimeAsync(160); });
+    const inspection = document.querySelector('[data-testid="live-lift-diff-popover"]')!;
+    expect(inspection).not.toBeNull();
+    expect(getDifferenceReads).not.toHaveBeenCalled();
+    const load = [...inspection.querySelectorAll('button')].find(b => b.textContent === 'Load observed bases and chromatin')!;
+    await act(async () => { load.click(); await vi.advanceTimersByTimeAsync(0); });
+    expect(getDifferenceReads).toHaveBeenCalledTimes(1);
+    expect(getDifferenceReads).toHaveBeenCalledWith(expect.objectContaining({ itemId: snv.id, liftHap: 'MAT', includeSequence: false }), expect.any(AbortSignal));
+  });
+
   it('is flag gated and debounces the dataset, lift key, haplotype and view', async () => {
     useLiveLiftStore.setState({ enabled: false }); renderStrip(); await settle();
     expect(host.querySelector('[data-testid="live-lift-diff-strip"]')).toBeNull(); expect(getDifferences).not.toHaveBeenCalled();
@@ -127,6 +148,35 @@ describe('differences strip and inspection', () => {
 });
 
 describe('badge click and sibling axes', () => {
+  it('labels all shared columns by assembly spans and retains the clicked parent for Identify', async () => {
+    const pat: Difference = { ...diff, id: 'PAT:pat-src:200-2550:insertion', hap: 'h2', hap_label: 'PAT',
+      alt_bp: 2350, src: { contig: 'pat-src', start: 200, end: 2550 } };
+    const patPanel: PanelConfig = { ...panel, id: 'pat', liftHap: 'PAT', stateKey: 'pat-state' };
+    useBrowserStore.setState({ panels: [native, panel, patPanel] });
+    vi.mocked(getDifferences).mockResolvedValue(response([diff, pat]));
+    await act(async () => { expandDifference({ datasetId: dataset.id, panelId: panel.id, viewKey: 'main', chrom: 'chr1', difference: diff }); });
+    const expansion = useBrowserStore.getState().liveLiftExpansions.main[0];
+    expect(expansion).toMatchObject({ selected_length: 2353, length: 2353, alleles: [
+      { ins_id: diff.id, length: 2353 }, { ins_id: pat.id, length: 2350 },
+    ] });
+    const axis = makeAxis(0, 1000, 1000, false, [expansion]);
+    act(() => root.render(<>{[native, panel, patPanel].map(p => <div key={p.id} data-panel={p.id}>
+      <ExpansionOverlay axis={axis} viewKey="main" panel={p} />
+    </div>)}</>));
+    const blocks = host.querySelectorAll('[data-testid="live-lift-expanded-block"]');
+    expect(blocks).toHaveLength(3);
+    for (const block of blocks) {
+      expect(block.textContent).toContain('Assembly MAT · 0→2,353 bp');
+      expect(block.textContent).toContain('PAT +2,350 bp (lengths differ; boundary aligned)');
+    }
+    const identify = [...host.querySelector('[data-panel="pat"]')!.querySelectorAll('button')].find(b => b.textContent === 'Identify')!;
+    click(identify);
+    expect(useDifferenceSelection.getState().selection).toMatchObject({ panelId: patPanel.id, action: 'identify',
+      difference: { id: pat.id, hap_label: 'PAT', alt_bp: 2350, src: pat.src } });
+    click(host.querySelector('[data-testid="live-lift-expanded-collapse"]')!);
+    expect(useBrowserStore.getState().liveLiftExpansions.main).toHaveLength(0);
+  });
+
   it('clicking a collapsed badge expands its canonical ID and the native sibling gets the same gap; collapse restores both', () => {
     rememberDifferences(response());
     let handlers: ReturnType<typeof useReadTrackMouse>;

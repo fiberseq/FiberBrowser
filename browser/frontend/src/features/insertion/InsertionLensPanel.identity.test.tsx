@@ -13,6 +13,7 @@ import { splitBySv } from '../../utils/svAlleleSplit';
 import { identifyLens } from './IdentifyTab';
 import { openAltAllelePanel } from '../altAllele/altAllelePanel';
 import { downloadTextFile } from '../../utils/analysisExport';
+import { drawReadTrack } from '../../components/tracks/read-track/ReadTrackCanvas';
 import { applyImportedState, collectFrontendState } from '../../api/session';
 
 vi.mock('../../components/tracks/read-track/ReadTrackCanvas', () => ({ drawReadTrack: vi.fn() }));
@@ -113,6 +114,34 @@ describe('lens actions belong to the current response identity', () => {
     expect((useBrowserStore.getState().panels.find(p => p.contentType === 'insertion-lens')!.insertionLens as InsertionLensTarget).footprintGrouping).toBe('nuc');
   });
   const actions = () => container.querySelector('[data-testid="insertion-lens-split"]');
+
+  it('keeps ambiguous clips out of the default drawn/split cohort without changing confirmed counts on opt-in', async () => {
+    await act(async () => { root.render(<InsertionLensPanel />); });
+    const data = response(1000);
+    data.cluster = { ...data.cluster, carriers: 24, confirmed: 24, putative: 0, conflicting: 0,
+      ambiguous: 3, evidence_total: 27, cigar: 24, clipped: 3, hard: 1, reference: 16 };
+    data.carriers = Array.from({ length: 27 }, (_, i) => ({ id: `synthetic-${i}`, strand: '+' as const,
+      kind: i < 24 ? 'cigar' as const : 'clip' as const, evidence_level: i < 24 ? 'confirmed' as const : 'ambiguous' as const,
+      ref: 1000, ref_end: 1000, len: 100, read: { id: `synthetic-${i}`, intervals: [] } }));
+    // Capture the same rows passed to the production renderer, without a
+    // browser canvas, rather than asserting only a mocked split flag.
+    await act(async () => { pending[0].resolve(new Response(JSON.stringify(data))); });
+    const drawnCarriers = () => vi.mocked(drawReadTrack).mock.calls
+      .filter(([q]) => q.canvas === container.querySelector('[data-testid="insertion-lens-carriers"]')).at(-1)?.[0].displayReads;
+    expect(drawnCarriers()).toHaveLength(24);
+    const count = () => container.querySelector('[data-testid="insertion-lens-carriers-count"]')?.textContent;
+    expect(count()).toBe('24 of 40 informative (60%)');
+    await act(async () => { (actions() as HTMLButtonElement).click(); });
+    expect(splitBySv).toHaveBeenLastCalledWith(expect.objectContaining({ includePutative: true, includeConflicting: false, includeAmbiguous: false }), expect.anything());
+
+    const ambiguous = [...container.querySelectorAll('label')].find(l => l.textContent?.includes('Include ambiguous'))!.querySelector('input')!;
+    await act(async () => { ambiguous.click(); });
+    expect(drawnCarriers()).toHaveLength(27);
+    expect(count()).toBe('24 of 40 informative (60%)');
+    expect(pending).toHaveLength(1);
+    await act(async () => { (actions() as HTMLButtonElement).click(); });
+    expect(splitBySv).toHaveBeenLastCalledWith(expect.objectContaining({ includePutative: true, includeConflicting: false, includeAmbiguous: true }), expect.anything());
+  });
 
   it('makes old actions unavailable while another dataset loads and uses only its new coordinates', async () => {
     await act(async () => { root.render(<InsertionLensPanel />); });

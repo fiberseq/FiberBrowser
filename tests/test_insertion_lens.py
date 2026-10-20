@@ -779,3 +779,36 @@ def test_summary_variants_split_and_lens_deduplicate_the_same_molecules(tmp_path
         c = summary['clusters'][0]
         assert (c['support'], c['informative'], c['clip_support']) == (3, 4, 0)
         assert c['putative'] == 1
+
+
+def test_e2e_insertion_cohort_keeps_competing_clips_ambiguous_until_opted_in(fixture):
+    """The e2e fixture has two insertion sizes; clips alone cannot choose one."""
+    from services import sv_endpoint
+    from services.sv_events import sv_summary_for_reads
+
+    state = _State([fixture['bam']])
+    reads = sv_endpoint.scan_view(state, 'd', 'chrT', 11000, 19000, 10)
+    summary = sv_summary_for_reads(reads, 11000, 19000, 50, chrom='chrT')
+    target = next(c for c in summary['clusters'] if c['t'] == 'I' and c['len'] > 1500)
+    assert {k: target[k] for k in ('support', 'informative', 'clip_support', 'putative', 'conflicting', 'ambiguous')} == {
+        'support': 24, 'informative': 40, 'clip_support': 0, 'putative': 0, 'conflicting': 0, 'ambiguous': 3,
+    }
+    lens = build_lens([fixture['bam']], 'chrT', pos=SITE, ref=target['ref'], length=target['len'],
+                      consensus=False, loader_kwargs=LOADER)
+    expected_carriers = {name for name, truth in fixture['reads'].items() if truth['kind'] == 'carrier'}
+    expected_clips = {name for name, truth in fixture['reads'].items() if truth['kind'] == 'clip'}
+    expected_reference = {name for name, truth in fixture['reads'].items() if truth['kind'] == 'reference'}
+    assert len(expected_carriers) == 24 and len(expected_clips) == 3 and len(expected_reference) == 16
+    assert {c['id'] for c in lens['carriers'] if c['evidence_level'] == 'confirmed'} == expected_carriers
+    assert {c['id'] for c in lens['carriers'] if c['evidence_level'] == 'ambiguous'} == expected_clips
+    assert lens['cluster']['carriers'] == 24 and lens['cluster']['evidence_total'] == 27
+    assert {c['id'] for c in lens['reference']} == expected_reference
+    kwargs = dict(dataset_id='d', chrom='chrT', start=11000, end=19000,
+                  t='I', ref=target['ref'], length=target['len'])
+    default = sv_endpoint.sv_split_payload(state, **kwargs)
+    inclusive = sv_endpoint.sv_split_payload(state, **kwargs, include_ambiguous=True)
+    assert default['counts'] == [24, 16, 5] and inclusive['counts'] == [27, 16, 2]
+    assert {name for name, group in default['assignments'].items() if group == 0} == expected_carriers
+    assert {name for name, group in inclusive['assignments'].items() if group == 0} == expected_carriers | expected_clips
+    assert all(default['assignments'][name] == 2 for name in expected_clips)
+    assert default['evidence_counts'] == inclusive['evidence_counts'] == dict(confirmed=24, putative=0, conflicting=0, ambiguous=3)

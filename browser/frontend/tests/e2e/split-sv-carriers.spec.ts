@@ -131,9 +131,11 @@ test.describe('an SV split into panels: the Carriers with the insert expanded', 
     await menu.getByRole('menuitem', { name: 'Split into panels by this SV' }).click();
     const dialog = page.getByTestId('split-panels-dialog');
     await expect(dialog.getByTestId('split-panels-row').first()).toBeVisible({ timeout: 30_000 });
-    await expect(dialog.getByTestId('split-panels-row').filter({ hasText: 'Carriers' })).toHaveCount(1);
+    // New splits retain the confirmed + putative policy in their group/panel labels.
+    const carrierLabel = 'Confirmed (9) + putative (0)';
+    await expect(dialog.getByTestId('split-panels-row').filter({ hasText: carrierLabel })).toHaveCount(1);
     // Before it opens, the dialog says the Carriers open expanded, on their own coordinates, and what its counts are of.
-    await expect(dialog.getByTestId('split-panels-row-note')).toHaveText('Carriers: expanded insertion, own coordinates');
+    await expect(dialog.getByTestId('split-panels-row-note')).toHaveText(`${carrierLabel}: expanded insertion, own coordinates`);
     await expect(dialog.getByTestId('split-panels-sv-counts')).toContainText('informative reads');
     await expect(dialog.getByTestId('split-panels-intro')).toContainText('Preview shown behind');
     await dialog.getByTestId('split-panels-open').click();
@@ -141,7 +143,7 @@ test.describe('an SV split into panels: the Carriers with the insert expanded', 
     // The Carriers panel opens with the insert expanded.
     await expect.poll(() => store(page, s => s.panels.some((p: any) => p.readSubset && p.altAllele)), { timeout: 90_000 }).toBe(true);
     // The split panels' titles lead with their group; the expanded one says it is pinned to the insertion.
-    await expect.poll(() => page.getByTestId('panel-header-title').allTextContents()).toEqual(expect.arrayContaining(['Carriers', 'Reference']));
+    await expect.poll(() => page.getByTestId('panel-header-title').allTextContents()).toEqual(expect.arrayContaining([carrierLabel, 'Reference']));
     await expect(page.getByTestId('alt-allele-chip')).toContainText('Pinned to insertion');
     const alt = await store(page, s => {
       const p = s.panels.find((x: any) => x.readSubset && x.altAllele);

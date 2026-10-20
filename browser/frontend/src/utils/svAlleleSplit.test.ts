@@ -4,7 +4,9 @@ import { keepSvSplitsInView, normalizeClusterGroupLabels, normalizeSvSplits } fr
 import { getClusterLabel } from '../components/tracks/read-track/constants';
 import { SESSION_POST_VIEWPORT_KEYS } from '../api/session';
 import { PER_PANEL_STATE_KEYS } from '../stores/panelSlice';
-import { refreshSvSplit, splitBySv } from './svAlleleSplit';
+import { refreshSvSplit, splitBySv, splitIntoPanelsBySv } from './svAlleleSplit';
+import { useSplitPanelStore } from '../stores/splitPanelStore';
+import { loadSplitGrouping, openSplitPanels, splitRows } from './splitPanels';
 
 const TARGET = { stateKey: 'ds', datasetId: 'ds', chrom: 'chrSV', viewStart: 8_000, viewEnd: 16_000 };
 const SV = { t: 'D' as const, ref: 10_000, len: 1503 };
@@ -170,6 +172,37 @@ describe('current split counts and historical assignments', () => {
     useBrowserStore.setState({ chrom: 'chrSV', start: 8000, end: 16000, showDuplicateReads: true });
   });
   afterEach(() => { vi.unstubAllGlobals(); useBrowserStore.setState(initial, true); });
+
+  it('carries evidence labels and memberships through the panel preview and opened panels', async () => {
+    const savedSplitState = useSplitPanelStore.getState();
+    const source = { id: 'source', contentType: 'dataset' as const, datasetId: 'ds', subTracks: [], collapsed: false };
+    useBrowserStore.setState({ panels: [source] });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      assignments: { confirmed: 0, putative: 0, reference: 1, conflicting: 2, ambiguous: 2 },
+      counts: [2, 1, 2], margin: 100,
+      evidence_counts: { confirmed: 1, putative: 1, conflicting: 1, ambiguous: 1 },
+      evidence_levels: { confirmed: 'confirmed', putative: 'putative', conflicting: 'conflicting', ambiguous: 'ambiguous' },
+    }))));
+    try {
+      await splitIntoPanelsBySv(TARGET, SV, source.id);
+      const pending = useSplitPanelStore.getState().pending!;
+      const grouping = await loadSplitGrouping(pending.source);
+      const rows = splitRows(grouping);
+      expect(rows.filter(r => r.checked).map(r => [r.label, r.count])).toEqual([
+        ['Confirmed (1) + putative (1)', 2], ['Reference', 1],
+      ]);
+      expect(rows.find(r => r.kind === 'na')).toMatchObject({ count: 2, checked: false });
+      expect(openSplitPanels(grouping, rows, [source])).toHaveProperty('groupId');
+      const panels = useBrowserStore.getState().panels.filter(p => p.readSubset);
+      expect(panels).toHaveLength(2);
+      const carriers = panels.find(p => p.readSubset!.rule.groupKeys.includes('0'))!;
+      expect(carriers.readSubset).toMatchObject({ count: 2, rule: {
+        readIds: ['confirmed', 'putative'], svEvidenceLevels: { confirmed: 'confirmed', putative: 'putative' },
+      } });
+      expect(carriers.readSubset!.label).toContain('Confirmed (1) + putative (1)');
+      expect(useBrowserStore.getState().panels.find(p => p.id === source.id)?.collapsed).toBe(true);
+    } finally { useSplitPanelStore.setState(savedSplitState, true); }
+  });
 
   it('sends and retains the evidence policy and labels split panels with evidence counts', async () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ assignments: { c: 0, p: 0, a: 2 },
