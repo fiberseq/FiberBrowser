@@ -20,4 +20,18 @@ describe('linked source views in sessions', () => {
     expect(panel.viewportOverride).toEqual(source.viewportOverride);
     expect(panel.subTracks.map(t => t.type)).toContain(LIFT_RIBBON_TRACK);
   });
+  it('a restored expansion leaves a linked source panel at its saved view', async () => {
+    const { useLiveLiftStore } = await import('../store');
+    useLiveLiftStore.setState({ enabled: true });
+    registerLiftLinkingUi();
+    const saved = { chrom: 'chr3_MATERNAL', start: 100, end: 200 };
+    const source = { id: 'src', contentType: 'dataset', datasetId: 'native', collapsed: false, linkGroup: null, genome: 'contigs:native',
+      subTracks: [], viewportOverride: saved,
+      liftLink: { id: 'L', datasetId: 'lift', liftPanelId: 'mat', hap: 'HG002#2', hapLabel: 'MAT', contig: 'chr3_MATERNAL', flip: false, chain: null } } as PanelConfig;
+    useBrowserStore.setState({ panels: [] , liveLiftExpansions: {} });
+    // A session restore: the panel and the expansion of an insertion with a source span arrive together.
+    useBrowserStore.setState({ panels: [source], liveLiftExpansions: { main: [{ chrom: 'chr3', pos: 5, ins_id: 'MAT:x:insertion', length: 2400, label: '', hap_label: 'MAT',
+      datasetId: 'lift', src: { contig: 'chr3_MATERNAL', start: 9000, end: 11400 } }] } } as never);
+    expect(useBrowserStore.getState().panels[0].viewportOverride).toEqual(saved);
+  });
 });

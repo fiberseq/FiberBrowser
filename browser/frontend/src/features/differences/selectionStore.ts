@@ -173,6 +173,10 @@ export function selectReadDifference(read: CompactRead, badge: LiveLiftBadge | u
         .find(e => e.ins_id === difference.id || e.alleles?.some(a => a.ins_id === difference.id));
       if (open) useBrowserStore.getState().collapseLiveLift(selection.viewKey, open.ins_id);
       else expandDifference(selection);
+    } else if (!badge) {
+      // A mismatch: its carrier reads are highlighted, as a plain click on the Differences row does.
+      void Promise.all([import('./differenceActions'), import('../../stores/trackFeedStore')]).then(([m, feeds]) =>
+        m.highlightCarriers(selection, feeds.useTrackFeedStore.getState().byStateKey[context.stateKey]?.reads?.length ?? 0));
     }
   };
   const canonical = findLoadedDifference(context.datasetId, liftKey, context.chrom, query);

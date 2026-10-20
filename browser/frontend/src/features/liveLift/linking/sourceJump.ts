@@ -24,16 +24,21 @@ export async function showInSourceView(s: DifferenceSelection): Promise<void> {
  * An insertion expanded in a lifted panel's view shows its inserted bases in that haplotype's linked source panel
  * (the plain click on an insertion expands it; P3's insertion jump follows the expansion).
  */
+const expansionKeys = (expansions: Record<string, Array<{ ins_id: string }>> | undefined) =>
+  new Set(Object.entries(expansions ?? {}).flatMap(([view, list]) => list.map(e => `${view}|${e.ins_id}`)));
+
 export function followExpansions(): void {
-  let seen = new Set<string>();
+  let seen = expansionKeys(useBrowserStore.getState().liveLiftExpansions);
   useBrowserStore.subscribe((state, previous) => {
     if (state.liveLiftExpansions === previous.liveLiftExpansions) return;
+    // A restore (session, undo) brings expansions and panels back together: the saved source views stay as saved.
+    const restoring = state.panels !== previous.panels;
     const now = new Set<string>();
     for (const [view, list] of Object.entries(state.liveLiftExpansions ?? {})) {
       for (const e of list) {
         const key = `${view}|${e.ins_id}`;
         now.add(key);
-        if (seen.has(key) || !useLiveLiftStore.getState().enabled || !e.datasetId) continue;
+        if (restoring || seen.has(key) || !useLiveLiftStore.getState().enabled || !e.datasetId) continue;
         const own = e.alleles?.length ? e.alleles : [{ hap_label: e.hap_label, src: e.src }];
         for (const allele of own) jumpLinkedSourcesTo(e.datasetId, allele.hap_label, allele.src);
       }
