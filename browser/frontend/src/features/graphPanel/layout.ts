@@ -393,15 +393,24 @@ function solveLevel(input: LevelInput, buildFamilies: (g: GroupItem) => void): L
       const comps = new Map<number, Proto[]>();
       groups.forEach((g, k) => { const r = find(k); const l = comps.get(r) ?? []; l.push(g); comps.set(r, l); });
       const blocks = [...comps.values()].filter(l => l.length > 1).map(l => ({
-        p: Math.min(...l.map(g => g.p)), q: Math.max(...l.map(g => g.q)), members: l,
-      })).sort((x, y) => x.p - y.p);
+        p: Math.min(...l.map(g => g.p)), q: Math.max(...l.map(g => g.q)), inside: [] as Proto[],
+      })).sort((x, y) => x.p - y.p || y.q - x.q);
+      // One ordered pass: each group joins the block that contains it, found by binary search on block starts and
+      // a backwards walk bounded by the running maximum end (blocks overlapping each other merge next round).
+      const maxQ: number[] = [];
+      blocks.forEach((bk, n) => { maxQ[n] = Math.max(bk.q, n ? maxQ[n - 1] : -Infinity); });
       const absorbed = new Set<Proto>();
-      const complexes: Proto[] = blocks.map(bk => {
-        const inside = groups.filter(g => bk.members.includes(g)
-          || (g.p >= bk.p && g.q <= bk.q && !(g.p === g.q && (g.p === bk.p || g.p === bk.q))));
-        inside.forEach(g => absorbed.add(g));
-        return { seg, p: bk.p, q: bk.q, cands: [], type: 'complex' as const, collapsed: inside.flatMap(g => g.collapsed ?? g.cands), reason: 'crossing intervals' };
-      });
+      for (const g of groups) {
+        let lo = 0, hi = blocks.length;
+        while (lo < hi) { const m = (lo + hi) >> 1; if (blocks[m].p <= g.p) lo = m + 1; else hi = m; }
+        for (let n = lo - 1; n >= 0 && maxQ[n] >= g.q; n--) {
+          const bk = blocks[n];
+          const zeroAtEdge = g.p === g.q && (g.p === bk.p || g.p === bk.q);
+          if (g.q <= bk.q && !zeroAtEdge) { bk.inside.push(g); absorbed.add(g); break; }
+        }
+      }
+      const complexes: Proto[] = blocks.map(bk => ({ seg, p: bk.p, q: bk.q, cands: [], type: 'complex' as const,
+        collapsed: bk.inside.flatMap(g => g.collapsed ?? g.cands), reason: 'crossing intervals' }));
       groups = [...groups.filter(g => !absorbed.has(g)), ...complexes];
     }
     return groups;

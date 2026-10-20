@@ -206,4 +206,69 @@ describe('Gate C review regressions', () => {
     const expected = budget(560, 'log') * s.scale + slot(150) + slot(1) + budget(400, 'log') * s.scale;
     expect(layoutWidth(parent, s.scale, 'log', k)).toBeCloseTo(Math.max(k.min, expected) + 2 * k.curve, 6);
   });
+
+  it('an overflow cluster still counts and marks every nested variant (Codex r2-1)', () => {
+    const t: Walk = [], a: Walk = [], b: Walk = [];
+    for (let i = 0; i < 40; i++) {
+      t.push([`s${i}`, 200], [`d${i}`, 20], [`e${i}`, 20]);
+      a.push([`s${i}`, 200]);
+      b.push([`s${i}`, 200], [`d${i}`, 20], [`big${i}`, 300], [`e${i}`, 20]);
+    }
+    for (const w of [t, a, b]) w.push(['tail', 200]);
+    const m = buildLayout(topo([['ref', t], ['mat', a], ['pat', b]]), []);
+    const s = scene(m, 420);
+    const clusters = s.hits.filter(h => h.payload.kind === 'cluster').map(h => (h.payload as any).cluster);
+    expect(clusters.length).toBeGreaterThan(0);
+    const per = clusters.reduce((acc: Record<string, number>, c: any) => { for (const [k, n] of Object.entries(c.perPath)) acc[k] = (acc[k] ?? 0) + (n as number); return acc; }, {});
+    const inClusters = clusters.reduce((n: number, c: any) => n + c.items.filter((i: any) => i.kind === 'group').length, 0);
+    expect(per.pat).toBe(per.mat);
+    expect(per.pat).toBe(inClusters);
+    expect(clusters.every((c: any) => c.major > 0)).toBe(true);
+    // A tick per member in its lane: PAT's 300 bp insertions tall, MAT's 40 bp deletions short.
+    expect(s.prims.filter(p => p.t === 'tick' && p.h === 14).length).toBe(inClusters);
+    expect(s.prims.filter(p => p.t === 'tick').length).toBe(2 * inClusters);
+  });
+
+  it('many fragment junctions never zero the sequence or overflow (Codex r2-2)', () => {
+    const t = topo([['ref', nodes(60)], ['alt', nodes(60)]]);
+    // Sixty adjacent target fragments of 100 bp.
+    const ref = t.paths[0] as any;
+    ref.occurrences.forEach((o: any, i: number) => { o.fragment = `ref#f${i}`; });
+    ref.coverage = ref.occurrences.map((o: any) => ({ span: { ...o.path_span }, kind: 'covered', fragment: o.fragment, left_end: 'fragment_terminal', right_end: 'fragment_terminal' }));
+    const m = buildLayout(t, []);
+    const s = scene(m, 420);
+    expect(s.scale).toBeGreaterThan(0);
+    expect(s.hits.filter(h => h.payload.kind === 'run').length).toBeGreaterThan(0);
+    expect(Math.max(...s.blocks.map(b => b.x1))).toBeLessThanOrEqual(s.dataLeft + s.dataWidth + 1e-6);
+  });
+
+  it('a family sub-allele inverts with the enclosing target boundary (Codex r2-3)', () => {
+    const a = fixture(alu800), s = scene(a);
+    const subs = s.hits.filter(h => h.within && h.payload.kind === 'allele' && h.payload.allele.bp > 0);
+    expect(subs.length).toBeGreaterThan(0);
+    for (const h of subs) {
+      const inv = sceneInverse(s, (h.x0 + h.x1) / 2, (h.y0 + h.y1) / 2);
+      expect(inv).toMatchObject({ kind: 'allele', boundary: 97_395 });
+    }
+  });
+
+  it('crossing collapse cost grows linearly (Codex 9, r2-4)', () => {
+    const times: number[] = [];
+    for (const n of [650, 1300, 2600]) {
+      const t: Walk = [], a: Walk = [], b: Walk = [];
+      for (let i = 0; i < n; i++) {
+        const block: Walk = Array.from({ length: 5 }, (_, j) => [String(5 * i + j + 1), 1]);
+        t.push(...block); a.push(block[0], block[3], block[4]); b.push(block[0], block[1], block[4]);
+      }
+      const top = topo([['ref', t], ['mat', a], ['pat', b]]);
+      buildLayout(top, []);
+      const t0 = performance.now();
+      const m = buildLayout(top, []);
+      times.push(performance.now() - t0);
+      expect(m.stats.complex).toBe(n);
+    }
+    console.log('CROSSING_COST_MS', JSON.stringify(times.map(x => +x.toFixed(1))));
+    // Quadrupling the components may not cost more than ~10x (quadratic would be ~16x).
+    expect(times[2] / Math.max(1, times[0])).toBeLessThan(10);
+  });
 });

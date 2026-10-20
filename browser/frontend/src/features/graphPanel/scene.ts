@@ -34,7 +34,7 @@ export interface SceneOptions {
 }
 
 /** Fixed pixels of a bubble: its minimum content slot and the curve zone either side. Compact when crowded. */
-export interface Metrics { min: number; curve: number }
+export interface Metrics { min: number; curve: number; /** an empty junction (touching fragments), default 4 */ empty?: number }
 export const ROOMY: Metrics = { min: 12, curve: 9 };
 export const COMPACT: Metrics = { min: 8, curve: 5 };
 export const MIN_SLOT_PX = ROOMY.min;
@@ -93,7 +93,11 @@ export interface ClusterItem {
   target: Span;
   bp: number;
   variants: number;
+  /** Variants of 100 bp or more inside (only an overflowing view clusters them). */
+  major: number;
   perPath: Record<string, number>;
+  /** Every member variant (nested and family ones too): its target position and carriers. */
+  members: { at: number; carriers: string[]; bp: number }[];
 }
 
 export interface SceneRow { key: string; label: string; title: string; role: 'target' | 'alternate'; color: string; top: number; center: number; height: number }
@@ -138,7 +142,7 @@ function groupContent(g: GroupItem, scale: number, c: Compression, k: Metrics = 
 function junctionContent(j: JunctionItem, scale: number, c: Compression, k: Metrics = ROOMY): number {
   let w = j.gaps.reduce((t, g) => t + budget(g.span.end - g.span.start, c) * scale, 0);
   for (const a of j.alts) w = Math.max(w, budget(a.bp, c) * scale);
-  return Math.max(j.gaps.length || j.alts.some(a => a.bp > 0) ? k.min * Math.max(1, j.gaps.length) : 4, w);
+  return Math.max(j.gaps.length || j.alts.some(a => a.bp > 0) ? k.min * Math.max(1, j.gaps.length) : (k.empty ?? 4), w);
 }
 
 /** An item's width at a scale (tests: budgets and child-once accounting). */
@@ -189,10 +193,28 @@ function clusterChain(chain: Item[], distance: number, anySize = false): TopItem
     if (groups.length >= 2) {
       const spans = pending.map(it => (it.kind === 'run' ? it.target : it.kind === 'group' ? it.target : null)).filter((s): s is Span => s != null);
       const target = { start: Math.min(...spans.map(s => s.start)), end: Math.max(...spans.map(s => s.end)) };
+      // Every variant inside, nested children and family sub-bubbles included: nothing is hidden by a cluster.
       const perPath: Record<string, number> = {};
-      for (const g of groups) for (const a of g.alts) for (const c of familyCarriers(a, [])) perPath[c] = (perPath[c] ?? 0) + 1;
+      const members: ClusterItem['members'] = [];
+      let major = 0;
+      const visit = (g: GroupItem, at: number) => {
+        const here = g.target?.start ?? at;
+        for (const a of g.alts) {
+          const carriers = a.carriers;
+          members.push({ at: here, carriers, bp: Math.max(a.bp, g.base.bp) });
+          if (Math.max(a.bp, g.base.bp) >= MAJOR_BP) major += 1;
+          for (const c of carriers) perPath[c] = (perPath[c] ?? 0) + 1;
+          for (const m of a.family?.members ?? []) {
+            members.push({ at: here, carriers: m.carriers, bp: Math.max(m.bp, g.base.bp) });
+            for (const c of m.carriers) perPath[c] = (perPath[c] ?? 0) + 1;
+          }
+          for (const it of a.family?.chain ?? []) if (it.kind === 'group') visit(it, here);
+        }
+        for (const it of g.base.chain) if (it.kind === 'group') visit(it, here);
+      };
+      for (const g of groups) visit(g, g.target?.start ?? target.start);
       out.push({ kind: 'cluster', id: `c${groups[0].id}~${groups[groups.length - 1].id}`, items: pending, target,
-        bp: target.end - target.start, variants: groups.length, perPath });
+        bp: target.end - target.start, variants: members.length, major, perPath, members });
     } else out.push(...pending);
     out.push(...tail);
     pending = [];
@@ -225,7 +247,7 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
   // Crowded: compact curve zones first; cluster only when the bubbles' fixed pixels would still crowd out the
   // sequence.
   let top: TopItem[] = model.chain;
-  const k: Metrics = contentWidth(top, 0, c, ROOMY) > dataWidth * 0.6 ? COMPACT : ROOMY;
+  let k: Metrics = contentWidth(top, 0, c, ROOMY) > dataWidth * 0.6 ? COMPACT : ROOMY;
   const span = model.interval.end - model.interval.start;
   for (let distance = 32; contentWidth(top, 0, c, k) > dataWidth * 0.6 && distance <= 2 * span; distance *= 2) {
     top = clusterChain(model.chain, distance);
@@ -234,6 +256,13 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
   // every cluster lists its members.
   for (let distance = 32; contentWidth(top, 0, c, k) > dataWidth * 0.9 && distance <= 2 * span; distance *= 2) {
     top = clusterChain(model.chain, distance, true);
+  }
+  // Last resort (e.g. many fragment junctions): shrink every fixed pixel in proportion, so sequence always keeps
+  // some width and nothing runs past the data area.
+  const fixed = contentWidth(top, 0, c, k);
+  if (fixed > dataWidth * 0.7) {
+    const f = (dataWidth * 0.7) / fixed;
+    k = { min: k.min * f, curve: k.curve * f, empty: (k.empty ?? 4) * f };
   }
   const clusters = top.filter(t => t.kind === 'cluster').length;
   const scale = solveScale(top, dataWidth, c, k);
@@ -488,16 +517,18 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
     prims.push({ t: 'tube', x0: x, x1: x + w, y, h, slots: all, present, nodes: [], style: 'seq', breaks: [], outline: '#cbd5e1' });
     prims.push({ t: 'cluster', x0: x, x1: x + w, y: y - 2, h: h + 4 });
     // One dot per variant, in its carriers' lanes, at its relative target position.
-    for (const it of cl.items) {
-      if (it.kind !== 'group' || !it.target) continue;
-      const f = cl.bp > 0 ? (it.target.start - cl.target.start) / cl.bp : 0.5;
-      const dx = x + 2 + f * Math.max(0, w - 4);
-      for (const a of it.alts) for (const k of familyCarriers(a, lanes)) {
+    // One tick per member variant (nested ones too), in its carriers' lanes, at its relative target position; a
+    // variant of 100 bp or more gets a taller tick.
+    for (const mv of cl.members) {
+      const f = cl.bp > 0 ? (mv.at - cl.target.start) / cl.bp : 0.5;
+      const dx = x + 2 + Math.max(0, Math.min(1, f)) * Math.max(0, w - 4);
+      for (const k of mv.carriers) {
         const row = rowOf.get(k);
-        if (row && k !== model.target) overlay.push({ t: 'tick', x: dx, y: row.center - 4, h: 8, color: colorOf(k) });
+        const tall = mv.bp >= MAJOR_BP;
+        if (row && k !== model.target) overlay.push({ t: 'tick', x: dx, y: row.center - (tall ? 7 : 4), h: tall ? 14 : 8, color: colorOf(k) });
       }
     }
-    if (w > 46) overlay.push({ t: 'text', x: x + w / 2, y: y - 3, text: `${cl.variants} variants`, color: '#64748b', align: 'center', size: 9, bold: false });
+    if (w > 46) overlay.push({ t: 'text', x: x + w / 2, y: y - 3, text: `${cl.variants} variants`, color: cl.major ? '#b45309' : '#64748b', align: 'center', size: 9, bold: cl.major > 0 });
     targetMap.push({ x0: x, x1: x + w, t0: cl.target.start, t1: cl.target.end, kind: 'cluster' });
     const lastRow = rows[rows.length - 1];
     hits.push({ x0: x, x1: x + w, y0: rows[0].top, y1: lastRow.top + lastRow.height, cursor: true, payload: { kind: 'cluster', cluster: cl } });
@@ -601,7 +632,9 @@ export function sceneInverse(scene: Scene, x: number, y: number): SceneInverse |
     const raw = (x - h.x0) / Math.max(1e-6, h.x1 - h.x0);
     return scene.reversed ? 1 - raw : raw;
   };
-  const boundaryOf = (g: GroupItem | JunctionItem) => (g.kind === 'group' ? (g.target ? g.target.start : null) : g.target.start);
+  // Inside a family the inner groups have no target span: the enclosing group's boundary is the target position.
+  const boundaryOf = (g: GroupItem | JunctionItem) => (g.kind === 'group'
+    ? (g.target ? g.target.start : (top.within?.group.target?.start ?? null)) : g.target.start);
   const p = top.payload;
   switch (p.kind) {
     case 'run': {
@@ -630,7 +663,7 @@ export function sceneInverse(scene: Scene, x: number, y: number): SceneInverse |
       return { kind: 'allele', path: p.lane, occurrence: at?.visit.occ.id ?? null, offset: at ? occurrenceOffset(at.visit, at.offset) : 0, boundary, group: p.group.id };
     }
     case 'filler': return { kind: 'connector', group: p.group.id, boundary: boundaryOf(p.group) };
-    case 'slot': return { kind: 'connector', group: p.group.id, boundary: p.boundary };
+    case 'slot': return { kind: 'connector', group: p.group.id, boundary: p.boundary ?? boundaryOf(p.group) };
     case 'base': {
       const t = targetAtX(scene.targetMap, x);
       return t && !t.boundary ? { kind: 'target', occurrence: '', offset: 0, pos: t.pos } : { kind: 'connector', group: p.group.id, boundary: p.group.target?.start ?? null };
@@ -754,7 +787,8 @@ function describeOwn(hit: SceneHit, x: number, model: LayoutModel, reversed: boo
     case 'cluster': {
       const cl = p.cluster;
       const per = Object.entries(cl.perPath).map(([k, n]) => `${label(k)} ${n}`).join(', ');
-      return `${cl.variants} small variants in target ${where(cl.target.start)}-${where(cl.target.end)} (${formatBpShort(cl.bp)}) · ${per} · zoom in to separate them`;
+      const size = cl.major ? `variants (${cl.major} of 100 bp or more)` : 'small variants';
+      return `${cl.variants} ${size} in target ${where(cl.target.start)}-${where(cl.target.end)} (${formatBpShort(cl.bp)}) · ${per} · zoom in to separate them`;
     }
     case 'end': {
       const e = p.end;
