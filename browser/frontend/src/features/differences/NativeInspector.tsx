@@ -7,10 +7,11 @@ import { expandableAltBlock } from './capabilities';
 import { frozenTarget } from './selection';
 import { getAlternateBlocks, type AlternateBlock, type WorkspaceQuery } from './api';
 import { MoleculeCalls } from './MoleculeCalls';
+import { useAutoLoadBound } from './autoLoad';
 import { IdentifyTab, identifyLens } from '../insertion/IdentifyTab';
 import type { LensResponse } from '../insertion/insertionLensModel';
 
-export function NativeInspector({ selection, panel: _panel, dataset, anchor }: {
+export function NativeInspector({ selection, panel, dataset, anchor }: {
   selection: DifferenceSelection; panel: PanelConfig; dataset: Dataset; anchor: RefObject<HTMLDivElement | null>;
 }) {
   const d = selection.difference;
@@ -18,7 +19,10 @@ export function NativeInspector({ selection, panel: _panel, dataset, anchor }: {
   const [blocks, setBlocks] = useState<AlternateBlock[] | null>(null);
   const [sequence, setSequence] = useState<string | null>(null);
   const [identify, setIdentify] = useState(false);
-  const [load, setLoad] = useState(selection.action === 'identify' ? 1 : 0);
+  // Observed bases and chromatin load on open within the auto-load bound; beyond it, "Load" says why it waits.
+  const bound = useAutoLoadBound(panel);
+  const [load, setLoad] = useState(selection.action === 'identify' || bound.auto ? 1 : 0);
+  useEffect(() => { if (bound.auto) setLoad(n => n || 1); }, [bound.auto]);
   const [error, setError] = useState('');
   const q = useMemo<WorkspaceQuery>(() => ({ dataset_id: dataset.id, chrom: selection.chrom,
     start: Math.max(0, d.t_start-1000), end: d.t_end+1000, target }), [dataset.id, selection.chrom, d, target]);
@@ -66,7 +70,8 @@ export function NativeInspector({ selection, panel: _panel, dataset, anchor }: {
     <p>Reference [{d.t_start}, {d.t_end}) · alternate {d.alt_bp} bp · net {d.alt_bp-d.ref_bp} bp</p>
     <p>Boundary aligned · unaligned interior · observed bases retain their own offsets.</p>
     {expandableAltBlock(d) && <><button onClick={() => expandDifference(selection)}>Expand alternate</button>{' '}
-      </>}<button onClick={() => setLoad(n => n+1)}>Load observed bases and chromatin</button>
+      </>}{load ? <button onClick={() => setLoad(n => n+1)}>Reload observed bases and chromatin</button>
+      : <p data-testid="difference-load-reason">{bound.reason}{' '}<button onClick={() => setLoad(1)}>Load observed bases and chromatin</button></p>}
     {selection.alternateHit && <p>Alternate-local {selection.alternateHit.layer ?? 'footprint'} [{selection.alternateHit.start}, {selection.alternateHit.end}) · read {selection.alternateHit.readId}</p>}
     <MoleculeCalls selection={selection} native />
     {error && <p role="status">{error}</p>}

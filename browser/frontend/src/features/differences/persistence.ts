@@ -33,7 +33,7 @@ export function normalizeExpansions(raw: unknown): Record<string, LiveLiftExpans
       && Number.isFinite(e.pos) && e.pos >= 0 && Number.isFinite(e.length) && e.length > 0 && e.length <= 50_000
       && !seen.has(JSON.stringify([e.referenceScope ?? 'main-reference',e.chrom,e.ins_id])) && Boolean(seen.add(JSON.stringify([e.referenceScope ?? 'main-reference',e.chrom,e.ins_id]))))
       .map(e => ({ ...e, ...(e.kind === 'replacement' && !e.anchor_convention && e.t_end !== undefined
-        ? { pos: e.t_end, ref_start: e.pos, anchor_convention: 'ref_end' as const } : {}), label: String(e.label ?? ''), hap_label: String(e.hap_label ?? ''),
+        ? { pos: e.t_end, ref_start: e.pos, anchor_convention: 'ref_end' as const } : {}), label: String(e.label ?? ''), hap_label: String(e.hap_label ?? ''), ...(e.detail !== undefined && typeof e.detail !== 'string' ? { detail: undefined } : {}),
         ...(e.alleles === undefined ? {} : { alleles: Array.isArray(e.alleles) ? e.alleles.filter((a: any) => a && typeof a.ins_id === 'string' && typeof a.hap_label === 'string' && Number.isFinite(a.length) && a.length > 0 && a.length <= e.length) : [] }),
         ...(e.selected_length === undefined ? {} : { selected_length: Number.isFinite(e.selected_length) && e.selected_length > 0 && e.selected_length <= e.length ? e.selected_length : e.length }),
       }));

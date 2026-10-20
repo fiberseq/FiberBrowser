@@ -3,6 +3,8 @@
  * up at the same fraction in differently sized sibling panels. */
 export interface DifferenceExpansion {
   chrom: string; pos: number; ins_id: string; length: number; label: string; hap_label: string;
+  /** The full description for the tooltip and inspector ("Assembly MAT · ref 0 → alt 2,353 bp"); `label` stays short ("MAT +2.4 kb"). */
+  detail?: string;
   src?: { contig: string | null; start: number | null; end: number | null };
   datasetId?: string;
   source?: 'assembly' | 'reads';

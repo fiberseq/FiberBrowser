@@ -290,10 +290,7 @@ export function SvTrack({ width, height, panel, sidebarWidth = 0 }: {
             return;
           }
           highlight(hit?.kind === 'cluster' ? hit.cluster : null);
-          if (hit?.kind === 'cluster' && feed) selectNativeDifference(hit.cluster, datasetId, feed.chrom, panel.id, false);
-        }}
-        onDoubleClick={e => {
-          const hit = hitAt(local(e).x);
+          // A click on an SV opens its inspector (its reads' observations load within the auto-load bound).
           if (hit?.kind === 'cluster' && feed) selectNativeDifference(hit.cluster, datasetId, feed.chrom, panel.id);
         }}
         onContextMenu={onContextMenu}

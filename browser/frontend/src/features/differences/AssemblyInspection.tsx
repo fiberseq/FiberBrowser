@@ -1,5 +1,6 @@
 import { expandableAltBlock } from './capabilities';
 import { MoleculeCalls } from './MoleculeCalls';
+import { useAutoLoadBound } from './autoLoad';
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import type { Dataset, PanelConfig } from '../../types';
@@ -23,7 +24,10 @@ export function AssemblyInspection({ panel, dataset, anchor }: { panel: PanelCon
   const current = selection?.panelId === panel.id && selection.inspect !== false ? selection : null;
   const d = current?.difference;
   const dark = useBrowserStore(s => s.darkMode);
-  const [readRequested, setReadRequested] = useState(current?.action === 'identify');
+  // Observations load on open within the auto-load bound; beyond it, "Load" says why it waits.
+  const bound = useAutoLoadBound(panel);
+  const [readRequested, setReadRequested] = useState(current?.action === 'identify' || bound.auto);
+  useEffect(() => { if (bound.auto) setReadRequested(true); }, [bound.auto]);
   const [data, setData] = useState<DifferenceReadsResponse | null>(null);
   const [error, setError] = useState('');
   const [identify, setIdentify] = useState(false);
@@ -49,6 +53,7 @@ export function AssemblyInspection({ panel, dataset, anchor }: { panel: PanelCon
     // reads again on expand). Preserve the user's previous highlight on close.
     const prior = useReadActionsStore.getState().highlight;
     const put = () => useReadActionsStore.setState({ highlight: { ids: new Set(model.carriers), pulseUntil: null, scrollTo: null, scrolled: new Set(), nonce: Date.now() } });
+    if (model.carriers.length) put();
 
     const key = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); useDifferenceSelection.getState().select(null); } };
     document.addEventListener('keydown', key, true);
@@ -116,7 +121,8 @@ export function AssemblyInspection({ panel, dataset, anchor }: { panel: PanelCon
     <p>Assembly observation · {d.sequence_status ?? 'unresolved'} sequence · provisional identity · assembly comparison unassessed</p>
     <p>Reference [{d.t_start}, {d.t_end}) · {d.ref_bp} bp → alternate {d.alt_bp} bp · net {d.alt_bp-d.ref_bp} bp</p>
     <MoleculeCalls selection={current} />
-    <button onClick={() => setReadRequested(true)}>Load observed bases and chromatin</button>
+    {!readRequested && <p data-testid="difference-load-reason">{bound.reason}{' '}
+      <button onClick={() => setReadRequested(true)}>Load observed bases and chromatin</button></p>}
     {(current.action === 'identify' || identify) && data && !lens && <p role="status">Identify unavailable: no full insertion sequence is available from the inspected reads.</p>}
     {identify && lens && <IdentifyTab response={lens} datasetId={dataset.id} identifyKey={identifyKey} reversed={false} visible dark={dark} />}
     <div className="my-2 flex gap-3 flex-wrap">{Object.entries(model.summary).map(([hap, alleles]) => <span key={hap}

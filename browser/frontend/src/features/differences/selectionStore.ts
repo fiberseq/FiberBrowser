@@ -63,6 +63,21 @@ export function selectMapGap(read: CompactRead, id: string | undefined,
   return true;
 }
 
+/** "+2.4 kb", "−1.2 kb", "+80 bp": the net change in length, short enough for a column header. */
+export function formatNetBp(net: number): string {
+  const size = Math.abs(net);
+  const text = size >= 10_000 ? `${Math.round(size / 1000)} kb` : size >= 1000 ? `${(size / 1000).toFixed(1)} kb` : `${size} bp`;
+  return net > 0 ? `+${text}` : net < 0 ? `−${text}` : `±${text}`;
+}
+/** An expanded column's label: its parent (or "Reads") and net size. */
+export function expansionLabel(d: Pick<Difference, 'source' | 'hap_label' | 'ref_bp' | 'alt_bp'>): string {
+  return `${d.source === 'reads' ? 'Reads' : d.hap_label} ${formatNetBp(d.alt_bp - d.ref_bp)}`;
+}
+/** The column's full description (tooltip and inspector): source and both allele spans. */
+export function expansionDetail(d: Pick<Difference, 'source' | 'hap_label' | 'ref_bp' | 'alt_bp'>): string {
+  return `${d.source === 'reads' ? 'Read geometry (estimated)' : `Assembly ${d.hap_label}`} · ref ${d.ref_bp.toLocaleString()} → alt ${d.alt_bp.toLocaleString()} bp`;
+}
+
 export function expandDifference(s: DifferenceSelection): boolean {
   const d = s.difference;
   const panel = useBrowserStore.getState().panels.find(p => p.id === s.panelId);
@@ -86,7 +101,7 @@ export function expandDifference(s: DifferenceSelection): boolean {
   if (!expandableAltBlock(d)) return false;
   useBrowserStore.getState().expandLiveLift(s.viewKey, { chrom: s.chrom, pos: d.t_end, ins_id: d.id,
     estimated: d.source === 'reads', source: d.source, referenceScope: panel?.genome ?? 'main-reference', targetRevision: 1, ref_start: d.t_start, anchor_convention: 'ref_end',
-    length: d.alt_bp, label: `${d.source === 'reads' ? 'Read geometry (estimated)' : `Assembly ${d.hap_label}`} · ${d.ref_bp}→${d.alt_bp.toLocaleString()} bp`, hap_label: d.hap_label,
+    length: d.alt_bp, label: expansionLabel(d), detail: expansionDetail(d), hap_label: d.hap_label,
     src: d.src, datasetId: s.datasetId, strand: d.strand, kind: d.kind, t_end: d.t_end, ref_bp: d.ref_bp });
   if (d.source === 'reads') return true;
   // Resolve both parents from map evidence even when a split strip has only
@@ -104,8 +119,11 @@ export function expandDifference(s: DifferenceSelection): boolean {
     const alleles = group.map(g => ({ ins_id: g.id, hap_label: g.hap_label, length: g.alt_bp, src: g.src, strand: g.strand,
       kind: g.kind as 'insertion' | 'replacement', t_end: g.t_end, ref_bp: g.ref_bp }));
     const differs = group.some(g => g.alt_bp !== d.alt_bp);
-    const label = `Assembly ${d.hap_label} · ${d.ref_bp}→${d.alt_bp.toLocaleString()} bp` + (group.length > 1 ? ` · ${group.slice(1).map(g => `${g.hap_label} +${g.alt_bp.toLocaleString()} bp`).join(' · ')}${differs ? ' (lengths differ; boundary aligned)' : ''}` : '');
-    state.expandLiveLift(s.viewKey, { ...current, length: Math.max(...group.map(g => g.alt_bp)), selected_length: d.alt_bp, alleles, label });
+    const others = group.slice(1);
+    const label = [expansionLabel(d), ...others.map(expansionLabel)].join(' · ');
+    const detail = [expansionDetail(d), ...others.map(g => `${g.hap_label} ref ${g.ref_bp.toLocaleString()} → alt ${g.alt_bp.toLocaleString()} bp`)].join(' · ')
+      + (differs ? ' (lengths differ; boundary aligned)' : '');
+    state.expandLiveLift(s.viewKey, { ...current, length: Math.max(...group.map(g => g.alt_bp)), selected_length: d.alt_bp, alleles, label, detail });
   }).catch(() => { /* The selected insertion remains usable if enrichment fails. */ });
   return true;
 }
@@ -145,9 +163,11 @@ export function selectReadDifference(read: CompactRead, badge: LiveLiftBadge | u
   const finish = (difference: Difference) => {
     if (version !== selectionVersion || useBrowserStore.getState().datasets.find(d => d.id === context.datasetId)?.live_lift?.key !== liftKey) return;
     const selection = { datasetId: context.datasetId, panelId: panel.id, viewKey: liveLiftViewKey(panel), chrom: context.chrom, difference };
+    // A click on a difference opens its inspector (observations load within the auto-load bound);
+    // an assembly insertion's badge also opens the insertion across the view.
+    useDifferenceSelection.getState().select(selection);
     if (action === 'primary' && badge && difference.source === 'assembly'
       && (difference.kind === 'insertion' || difference.kind === 'replacement') && difference.alt_bp >= 50) expandDifference(selection);
-    else useDifferenceSelection.getState().select(selection);
   };
   const canonical = findLoadedDifference(context.datasetId, liftKey, context.chrom, query);
   if (canonical) finish(canonical);

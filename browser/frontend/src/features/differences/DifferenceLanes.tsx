@@ -151,17 +151,21 @@ export function DifferenceLanes({ panel, dataset, width, gutter = 0, height }: {
         panels: s.panels.map(p => p.id === panel.id ? { ...p, liveLiftMinBp: Number(e.target.value) } : p),
       }))}>{MIN_SIZES.map(n => <option key={n} value={n}>{n ? `≥${n} bp` : 'All sizes'}</option>)}</select>
       <button aria-expanded={table} onClick={() => setTable(t => !t)}>Table</button>
-      <span role={error ? 'status' : undefined}>{error || (busy ? 'Finding difference…' : readScope || (data ? data.mode==='bins'?'Density; zoom for individual differences':'Double-click to inspect · map discovery':'Loading…'))}</span>
+      <span role={error ? 'status' : undefined}>{error || (busy ? 'Finding difference…' : readScope || (data ? data.mode==='bins'?'Density; zoom for individual differences':'Click a difference to inspect it · map discovery':'Loading…'))}</span>
     </div>
     <canvas ref={canvas} width={width} height={bandHeight} aria-label="Assembly differences" />
     {model.items.map(d => {
       const x=axis.toX(d.t_start), z=axis.toX(d.t_end), i=lanes.indexOf(d.hap_label);
       return <button key={d.id} data-testid="live-lift-diff-item" data-kind={d.kind} data-difference-id={d.id}
         aria-label={differenceDescription(d, chrom)} title={differenceDescription(d, chrom)}
-        className="absolute bg-transparent focus:ring-1 focus:ring-violet-500"
+        // Above the row's resize grip (z-20), which would otherwise take clicks on the bottom lane.
+        className="absolute z-30 cursor-pointer bg-transparent focus:ring-1 focus:ring-violet-500"
         style={{ left: gutter+Math.min(x,z)-4, top:24+i*laneHeight, width:Math.max(9,Math.abs(z-x)+8), height:laneHeight }}
-        onClick={() => useDifferenceSelection.getState().select({panelId:panel.id,datasetId:dataset.id,viewKey,chrom,difference:d,target:d.target,inspect:false})}
-        onDoubleClick={() => inspect(d)} onKeyDown={e => { if(e.key==='Enter') inspect(d); }} />;
+        // A click opens the inspector; Shift/⌘/Ctrl-click only selects (the guide line, no inspector).
+        onClick={e => e.shiftKey || e.metaKey || e.ctrlKey
+          ? useDifferenceSelection.getState().select({panelId:panel.id,datasetId:dataset.id,viewKey,chrom,difference:d,target:d.target,inspect:false})
+          : inspect(d)}
+        onKeyDown={e => { if(e.key==='Enter') inspect(d); }} />;
     })}
     {table && <div className="absolute left-0 right-0 top-full z-40 bg-white dark:bg-slate-900 max-h-64 overflow-auto border p-2"><DifferenceTable items={model.items} chrom={chrom} inspect={inspect} /></div>}
     <DifferencePopover panel={panel} dataset={dataset} anchor={anchor} />

@@ -91,19 +91,28 @@ test('add a live-lift dataset next to the native BAM: split MAT/PAT panels rende
   expect(target.ins_id).toMatch(/^MAT:.*:insertion$/);
   const scale = await matCanvas.evaluate((c: HTMLCanvasElement) => ({ x: c.getBoundingClientRect().width / c.clientWidth, y: c.getBoundingClientRect().height / c.clientHeight }));
   await matCanvas.click({ position: { x: target.x * scale.x, y: target.y * scale.y } });
+  // One click on the badge opens the insertion across all three panels and its inspector, whose
+  // per-read observations load by themselves (the cohort is within the auto-load bound).
   await expect(page.getByTestId('live-lift-expanded-block')).toHaveCount(3, { timeout: 30_000 });
-  await expect(page.getByTestId('live-lift-diff-popover')).toHaveCount(0);
+  const badgeInspection = page.getByTestId('live-lift-diff-popover');
+  await expect(badgeInspection).toBeVisible();
+  await expect(badgeInspection.locator('tbody tr').first()).toBeVisible({ timeout: 30_000 });
+  await expect(badgeInspection.getByRole('button', { name: 'Load observed bases and chromatin', exact: true })).toHaveCount(0);
+  await page.screenshot({ path: test.info().outputPath('live-lift-inspector-aluy.png') });
   for (const block of await page.getByTestId('live-lift-expanded-block').all()) {
-    // Shared columns label their assembly source and both allele spans.
-    await expect(block).toContainText('Assembly MAT · 0→2,353 bp');
+    // Shared columns carry a short label; the tooltip has the source and both allele spans.
+    await expect(block.getByTestId('live-lift-expanded-label')).toContainText('MAT +2.4 kb');
+    await expect(block.getByTestId('live-lift-expanded-label')).toHaveAttribute('title', /^Assembly MAT · ref 0 → alt 2,353 bp/);
   }
+  await page.keyboard.press('Escape');
+  await expect(badgeInspection).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().liveLiftExpansions.main?.length)).toBe(1);
   await expect.poll(async () => Number(await matCanvas.getAttribute('data-live-lift-insertion-calls'))).toBeGreaterThan(0);
   await expect.poll(async () => JSON.parse((await matCanvas.getAttribute('data-live-lift-insertion-calls-by-id')) ?? '{}')[target.ins_id] ?? 0).toBeGreaterThan(0);
   const patPanel = panels.find((p: any) => p.hap === 'PAT')!;
   const patCanvas = page.locator(`[data-read-track-state-key="${patPanel.stateKey}"] canvas[data-copilot-track="reads"]`);
   await expect.poll(async () => Number(await patCanvas.getAttribute('data-live-lift-insertion-calls'))).toBeGreaterThan(0);
-  await expect(page.getByTestId('live-lift-expanded-block').first()).toContainText('PAT +2,350 bp');
+  await expect(page.getByTestId('live-lift-expanded-block').first()).toContainText('PAT +2.4 kb');
   const nativePanel = panels.find((p: any) => p.hap === null)!;
   const nativeCanvas = page.locator(`[data-read-track-state-key="${nativePanel.stateKey}"] canvas[data-copilot-track="reads"]`);
   await expect(nativeCanvas).toHaveAttribute('data-live-lift-insertion-calls', '0');
@@ -114,8 +123,7 @@ test('add a live-lift dataset next to the native BAM: split MAT/PAT panels rende
   await expect(insertionInspection).toBeVisible();
   await expect(insertionInspection).toContainText('AluY', { timeout: 120_000 });
   await page.keyboard.press('Escape');
-  // The badge opens the insertion directly; the × control closes the shared
-  // columns in all three panels. Inspection is a separate strip/secondary action.
+  // The × control closes the shared columns in all three panels.
   await page.getByTestId('live-lift-expanded-collapse').first().click();
   await expect(page.getByTestId('live-lift-expanded-block')).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().liveLiftExpansions.main?.length)).toBe(0);
@@ -126,14 +134,12 @@ test('add a live-lift dataset next to the native BAM: split MAT/PAT panels rende
   await page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().setViewport('chr3', 128_657_405, 128_657_445));
   const snv = strip.locator('[data-testid="live-lift-diff-item"][data-difference-id="MAT:chr3_MATERNAL:131197059-131197060:snv"]');
   await expect(snv).toBeVisible();
-  await snv.click();
+  // Shift-click only selects; a plain click opens the inspector with the reads' observations loaded.
+  await snv.click({ modifiers: ['Shift'] });
   await expect(page.getByTestId('live-lift-diff-popover')).toHaveCount(0);
-  // Single click selects; double click inspects. Assembly browsing decodes
-  // read observations only after an explicit request.
-  await snv.dblclick();
+  await snv.click();
   const inspection = page.getByTestId('live-lift-diff-popover');
   await expect(inspection).toBeVisible();
-  await inspection.getByRole('button', { name: 'Load observed bases and chromatin', exact: true }).click();
   await expect(inspection.locator('tbody tr').first()).toBeVisible({ timeout: 30_000 });
   await expect(inspection).toContainText('Allele');
   await expect(inspection).toContainText('HG002');

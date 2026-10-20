@@ -5,12 +5,18 @@ session alias). Native BAMs retain their independent geometry summary, clip
 piles, keyboard navigation, combination selection and carrier actions without
 an assembly. Assembly lanes work without read discovery; the saved reads source
 option explicitly requests composed discovery. The navigation table and read
-markers share the inspector. Single click selects; double click or Inspect
-opens inspection. On the native canvas, `i` inspects the keyboard-focused event.
+markers share the inspector. A click on a difference (a Differences item, an
+SV in the row, or a read's badge) opens the inspector; Shift/⌘/Ctrl-click only
+selects it. A click on an assembly insertion's badge also expands the insertion
+across the view. Expanded columns carry a short label (`MAT +2.4 kb`); the
+tooltip and inspector give the source and both spans (`Assembly MAT · ref 0 →
+alt 2,353 bp`). On the native canvas, `i` inspects the keyboard-focused event.
 
 The inspector has a single application host, including when a source panel is
-closed. Assembly sequence/geometry inspection does not decode reads until an
-observed-bases or molecule-call action is requested. Source alignment
+closed. It loads the per-read observed bases and chromatin by itself when the
+panel has at most 2,000 reads in view; beyond that, or when the view is past
+the read limit, it waits for "Load observed bases and chromatin" and says why.
+Molecule calls stay an explicit request. Source alignment
 observations and final molecule calls are separate tables. Unknown sequence,
 geometry support, other alleles, dissent, unresolved source placement and partial
 discovery remain explicit. Exact targets can be supplied as frozen snapshots;

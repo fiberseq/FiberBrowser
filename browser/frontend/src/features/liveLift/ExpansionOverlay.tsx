@@ -16,7 +16,7 @@ export function ExpansionOverlay({ axis, viewKey, sidebar = 0, panel: enclosing 
     <div className="absolute top-0 flex items-center gap-2 px-1 h-6 bg-slate-100 dark:bg-slate-800 rounded shadow-sm"
       style={{ left: x0 > 250 ? undefined : 0, right: x0 > 250 ? 0 : undefined }}>
     <button data-testid="live-lift-expanded-collapse" aria-label={`Collapse ${ins.label}`} className="font-bold" onClick={() => useBrowserStore.getState().collapseLiveLift(viewKey, ins.ins_id)}>×</button>
-    <strong className="whitespace-nowrap" title={ins.label}>{ins.label}</strong>
+    <strong className="whitespace-nowrap" title={ins.detail ?? ins.label} data-testid="live-lift-expanded-label">{ins.label}</strong>
     {ins.source !== 'reads' && <button onClick={()=>useBrowserStore.getState().expandLiveLift(viewKey,{...ins,associate_native:!ins.associate_native})} title="Associate native observations for layout using geometry; this does not establish allele equivalence">{ins.associate_native?'Unlink native layout':'Associate native layout'}</button>}
     {(ins.source === 'reads' ? ['Identify'] : ['Identify', 'Open in HG002 view']).map(action => <button key={action} className="underline whitespace-nowrap" title={action} onClick={() => {
       const panel = (enclosing?.datasetId === ins.datasetId ? enclosing : undefined)
