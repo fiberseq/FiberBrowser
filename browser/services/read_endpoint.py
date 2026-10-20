@@ -928,6 +928,7 @@ def _compact_reads_payload(
         )
 
         payload = _attach_sv(compact_reads_response_payload(
+            multi_library=len(getattr(dataset, "paths", None) or ()) > 1,
             display_reads=display_reads,
             width=region_width,
             dataset_id=dataset_id,
@@ -1282,6 +1283,7 @@ def _compact_reads_payload(
         log_read_request(f"  /api/reads/compact: sampled {sampling['kept']:,} of {sampling['total']:,} reads "
                          f"(level {sampling['level']})", elapsed)
     payload = _attach_sv(compact_reads_response_payload(
+        multi_library=len(getattr(dataset, "paths", None) or ()) > 1,
         display_reads=display_reads,
         width=region_width,
         dataset_id=dataset_id,

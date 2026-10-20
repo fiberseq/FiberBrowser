@@ -133,3 +133,40 @@ def test_rows_carry_their_library_index(env, tmp_path):
     libs = {(read["live_lift"]["library"], read["live_lift"]["molecule"].split("|")[0]) for read in r["reads"]}
     assert {lib for lib, _ in libs} == {0, 1}
     assert len({group for _, group in libs}) == 2
+
+
+def test_requests_name_their_lift_key_and_stale_ones_are_refused(env):
+    client, manifest, bam = env
+    did = _add(client, manifest, bam)
+    key = client.get("/api/lift/summary", params={"dataset_id": did}).json()["key"]
+    ok = client.get("/api/lift/tiles", params={"dataset_id": did, "side": "target", "contig": TARGET, "tile": 0, "key": key})
+    assert ok.status_code == 200 and "immutable" in ok.headers["cache-control"]
+    assert "no-cache" in client.get("/api/lift/tiles", params={"dataset_id": did, "side": "target", "contig": TARGET, "tile": 0}).headers["cache-control"]
+    client.post(f"/api/lift/datasets/{did}/settings", json={"haplotypes": ["MAT"]})
+    for path, extra in (("summary", {}), ("outline", {"chrom": TARGET}), ("tiles", {"side": "target", "contig": TARGET, "tile": 0}),
+                        ("pieces", {"chrom": TARGET, "start": 0, "end": 10})):
+        assert client.get(f"/api/lift/{path}", params={"dataset_id": did, "key": key, **extra}).status_code == 409
+
+
+def test_ribbon_coarsening_terminates_when_pieces_cannot_merge(env, monkeypatch):
+    client, manifest, bam = env
+    did = _add(client, manifest, bam, haplotypes=["MAT"])
+    monkeypatch.setattr(nav, "MAX_RIBBON_PIECES", 1)       # three MAT chains: merging never gets to one
+    out = client.get("/api/lift/pieces", params={"dataset_id": did, "chrom": TARGET, "start": 0, "end": 20_000}).json()
+    assert out["truncated"] is True and len(out["pieces"]) == 1
+    assert out["pieces"][0][5] == 0                            # the longest stretch is kept
+
+
+def test_multi_file_rows_keep_their_file_when_one_file_fills_the_view(env, tmp_path):
+    """A linked source panel matches molecules by file: rows keep library_id whenever the dataset has several files."""
+    client, manifest, bam = env
+    u32 = lambda v: array.array("I", v)  # noqa: E731
+    far = write_bam(tmp_path / "far.bam", lambda h: [make_record(h, "far", MAT, 9000, "500M",
+                                                                   tags=[("ns", u32([10, 200, 300])), ("nl", u32([50, 50, 50]))])])
+    out = client.post("/api/datasets/add", json={"paths": [bam, far]}).json()
+    assert out.get("success"), out
+    did = out["dataset"]["id"]
+    r = client.get("/api/reads/compact", params=dict(chrom=MAT, start=2000, end=6000, dataset_id=did, max_reads=5000,
+                                                     include_layers="true", full_working_set="true")).json()
+    assert r["reads"] and all(read.get("library_id") for read in r["reads"])
+    assert {read["library_id"].rsplit("/", 1)[-1] for read in r["reads"]} == {"src.bam"}

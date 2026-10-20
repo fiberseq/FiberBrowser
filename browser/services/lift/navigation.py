@@ -474,7 +474,14 @@ def served_pieces(config, chrom: str, start: int, end: int, *, hap: str = None, 
               for p in raw if p.primary or p.chain in keep_alt]
     bp = max(0, int(min_bp))
     pieces = _coarsen(pieces, bp)
+    truncated = False
+    span = max(1, end - start)
     while len(pieces) > MAX_RIBBON_PIECES:
+        if bp >= span:
+            # Merging can no longer shrink the list (distinct chains never merge): keep the longest pieces.
+            pieces = sorted(sorted(pieces, key=lambda p: (p[0] - p[1], p[0], p[5]))[:MAX_RIBBON_PIECES], key=lambda p: (p[0], p[5]))
+            truncated = True
+            break
         bp = max(1, bp) * 2
         pieces = _coarsen(pieces, bp)
     gaps = []
@@ -487,4 +494,4 @@ def served_pieces(config, chrom: str, start: int, end: int, *, hap: str = None, 
                 gaps.append([ci, t, t + dt, q0, q1, handle.map.reasons[reason]])
     gaps.sort(key=lambda g: (g[1], g[0]))
     return {"key": key, "chrom": chrom, "start": start, "end": end, "pieces": pieces, "gaps": gaps[:MAX_RIBBON_PIECES],
-            "min_bp": bp, "alternatives_capped": capped, "alternatives": bool(alternatives)}
+            "min_bp": bp, "alternatives_capped": capped, "alternatives": bool(alternatives), "truncated": truncated}

@@ -64,7 +64,11 @@ def _strip_projection_identity(read: CompactRead, keep: frozenset = frozenset())
             if key not in _PROJECTION_IDENTITY_KEYS or key in keep}
 
 
-def _identity_keys_to_keep(display_reads: Sequence[CompactRead]) -> frozenset:
+def _identity_keys_to_keep(display_reads: Sequence[CompactRead], multi_library: bool = False) -> frozenset:
+    # A dataset of several files keeps each row's file even when the rows in view
+    # all came from one: a linked live-lift panel tells molecules apart by it.
+    if multi_library:
+        return _LATTICE_IDENTITY_KEYS
     libraries = set()
     for read in display_reads:
         if isinstance(read, dict) and read.get("library_id") is not None:
@@ -96,9 +100,11 @@ def compact_reads_response_payload(
     metaprofile: Optional[Mapping[str, object]] = None,
     metaprofile_read_count: Optional[int] = None,
     profile_max_reads: Optional[int] = None,
+    multi_library: bool = False,
 ) -> dict:
-    """Build the common compact-read response schema used by read endpoints."""
-    keep = _identity_keys_to_keep(display_reads)
+    """Build the common compact-read response schema used by read endpoints.
+    ``multi_library``: the dataset has several files (rows keep ``library_id``)."""
+    keep = _identity_keys_to_keep(display_reads, multi_library)
     reads = [_strip_projection_identity(read, keep) for read in display_reads]
     payload = {
         **compact_read_count_fields(
