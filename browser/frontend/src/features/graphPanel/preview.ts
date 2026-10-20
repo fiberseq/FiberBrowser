@@ -42,6 +42,8 @@ export interface PreviewLane {
   complete: boolean;
   uncoveredBp: number;
   visits: number;
+  /** Placed visits whose connection is not one continuous same-orientation walk (left unresolved). */
+  transitions: number;
 }
 
 export interface GraphPreview {
@@ -130,7 +132,7 @@ export function buildPreview(topology: GraphTopology, bindings: GraphBinding[]):
     const lane: PreviewLane = {
       key: path.binding, label: laneLabel(binding, path.binding), title: laneTitle(binding, path.binding),
       role: isTarget ? 'target' : 'alternate', pieces: [], unplaced: [], complete: path.complete,
-      uncoveredBp: 0, visits: path.occurrences.length,
+      uncoveredBp: 0, transitions: 0, visits: path.occurrences.length,
     };
     if (isTarget) {
       for (const o of path.occurrences) {
@@ -141,21 +143,41 @@ export function buildPreview(topology: GraphTopology, bindings: GraphBinding[]):
       lane.pieces.push(...gaps.pieces);
       lane.uncoveredBp = gaps.bp;
     } else {
-      // Walk the alternate in its own order, placing matched visits and collecting the runs between them.
+      // Walk the alternate in its own order, placing matched visits and collecting the runs between them. An event
+      // between two placed visits (insertion, deletion, divergent stretch) is asserted only when the alternate is one
+      // continuous walk from the first to the second (same fragment, each visit starting where the last ended), both
+      // keep the same relative orientation, and the second follows the first along the target in that orientation.
+      // Anything else (a coverage gap, a fragment change, an inversion breakpoint, a repeat) is an unresolved
+      // transition: its run is listed as unplaced and no target stretch is called deleted.
       let previous: PreviewPiece | null = null;
+      let previousOcc: GraphOccurrence | null = null;
       let run: GraphOccurrence[] = [];
-      const flushRun = (next: PreviewPiece | null) => {
-        if (!run.length) return;
+      const continuous = (from: GraphOccurrence, through: GraphOccurrence[], to: GraphOccurrence) => {
+        const walk = [from, ...through, to];
+        for (let i = 1; i < walk.length; i++) {
+          if (walk[i].fragment !== walk[i - 1].fragment || walk[i].path_span.start !== walk[i - 1].path_span.end) return false;
+          // Only a whole visit can sit between two others; a clipped middle means the window cut the walk.
+          if (i < walk.length - 1 && (walk[i].clip.start !== 0 || walk[i].clip.end !== walk[i].path_span.end - walk[i].path_span.start)) return false;
+        }
+        return true;
+      };
+      const ordered = (a: PreviewPiece, b: PreviewPiece) => (a.reverse === b.reverse) && (a.reverse ? b.end <= a.start : b.start >= a.end);
+      const between = (a: PreviewPiece, b: PreviewPiece) => (a.reverse ? { start: b.end, end: a.start } : { start: a.end, end: b.start });
+      const flushRun = (next: PreviewPiece | null, nextOcc: GraphOccurrence | null) => {
         const runBp = run.reduce((n, o) => n + (o.clip.end - o.clip.start), 0);
         const pieces = run.map(visitPiece);
-        const source = { start: Math.min(...pieces.map(p => p.start)), end: Math.max(...pieces.map(p => p.end)) };
-        if (previous && next) {
-          const between = gapBetween(previous, next);
-          if (between == null) lane.unplaced.push({ bp: runBp, source });
-          else if (between.end > between.start) lane.pieces.push({ kind: 'divergent', ...between, bp: runBp, source });
-          else lane.pieces.push({ kind: 'insertion', start: between.start, end: between.start, bp: runBp, source });
+        const source = run.length ? { start: Math.min(...pieces.map(p => p.start)), end: Math.max(...pieces.map(p => p.end)) } : null;
+        if (previous && next && previousOcc && nextOcc && continuous(previousOcc, run, nextOcc) && ordered(previous, next)) {
+          const gap = between(previous, next);
+          if (run.length) {
+            if (gap.end > gap.start) lane.pieces.push({ kind: 'divergent', ...gap, bp: runBp, source: source! });
+            else lane.pieces.push({ kind: 'insertion', start: gap.start, end: gap.start, bp: runBp, source: source! });
+          } else if (gap.end > gap.start) {
+            lane.pieces.push({ kind: 'deletion', ...gap, bp: gap.end - gap.start });
+          }
         } else {
-          lane.unplaced.push({ bp: runBp, source });
+          if (source) lane.unplaced.push({ bp: runBp, source });
+          if (previous && next) lane.transitions += 1;
         }
         run = [];
       };
@@ -166,19 +188,17 @@ export function buildPreview(topology: GraphTopology, bindings: GraphBinding[]):
           const span = placeOnTarget(o, t, found[0].reverse, window);
           if (span) {
             const piece: PreviewPiece = { kind: 'node', ...span, bp: o.clip.end - o.clip.start, reverse: found[0].reverse, node: o.node, occurrence: o.id };
-            if (run.length) flushRun(piece);
-            else if (previous) {
-              const between = gapBetween(previous, piece);
-              if (between && between.end > between.start) lane.pieces.push({ kind: 'deletion', ...between, bp: between.end - between.start });
-            }
+            if (previous) flushRun(piece, o);
+            else if (run.length) flushRun(null, null);
             lane.pieces.push(piece);
             previous = piece;
+            previousOcc = o;
             continue;
           }
         }
         run.push(o);
       }
-      flushRun(null);
+      if (run.length) flushRun(null, null);
       lane.uncoveredBp = coverageGaps(path.coverage, null).bp;
     }
     lanes.push(lane);

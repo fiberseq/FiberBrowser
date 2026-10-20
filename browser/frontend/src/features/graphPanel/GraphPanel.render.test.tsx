@@ -94,7 +94,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock);
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   useGraphStatusStore.setState({ status: available, loading: false, error: null });
-  useBrowserStore.setState({ chrom: 'chr3', start: 90_000, end: 100_000, panels: [] });
+  useBrowserStore.setState({ chrom: 'chr3', start: 90_000, end: 100_000, panels: [], currentGenome: 'hg38' } as any);
   clearGraphTraces();
   host = document.createElement('div');
   document.body.appendChild(host);

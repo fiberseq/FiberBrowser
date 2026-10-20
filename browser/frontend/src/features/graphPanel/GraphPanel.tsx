@@ -16,6 +16,7 @@ import { clampViewport, formatBp, formatLocus, fromX, makeTransform, panViewport
 import { buildPreview, laneLabel } from './preview';
 import { canFollow, defaultCompared, defaultTarget, effectiveViewport, initialGraphView, initiatorView, restoreProblem, retargetFor, selectableBindings, togglePath, GRAPH_MAX_PATHS } from './state';
 import { useGraphStatusStore } from './statusStore';
+import { genomeKeyFor } from '../../utils/regionNavigation';
 import { startTrace, type GraphTrace } from './timings';
 import type { GraphApiError, GraphRegistration, GraphSubgraphResponse, GraphViewState } from './types';
 
@@ -74,7 +75,8 @@ interface QueryState {
 export function GraphPanel({ panelId, width: widthProp, height: heightProp }: AnalysisPanelProps) {
   const panel = useBrowserStore(s => (panelId ? s.panels.find(p => p.id === panelId) : undefined));
   const panels = useBrowserStore(s => s.panels);
-  const main = useBrowserStore(useShallow(s => ({ chrom: s.chrom, start: s.start, end: s.end })));
+  // The main view and its reference (registry id, else FASTA name): following needs the target's assembly.
+  const main = useBrowserStore(useShallow(s => ({ chrom: s.chrom, start: s.start, end: s.end, reference: genomeKeyFor(null, s) })));
   const dark = useBrowserStore(s => s.darkMode);
   const status = useGraphStatusStore(s => s.status);
   const statusError = useGraphStatusStore(s => s.error);
@@ -118,6 +120,16 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     if (next) setGraphView(panelId, next);
   }, [panelId, state, reg, problem, panels, main]);
   const viewport = state && target && !problem ? effectiveViewport(state, target, panels, main) : null;
+  // Following: remember where it is, so a closed (or switched) initiator leaves the panel where it was, on its own.
+  const lastFollowed = useRef<GraphViewport | null>(null);
+  const following = Boolean(state?.linkMode === 'follow' && target && canFollow(target, state ? initiatorView(state, panels, main) : null)
+    && (!state?.initiatingReferenceId || state.initiatingReferenceId === initiatorView(state, panels, main)?.reference));
+  if (following && viewport) lastFollowed.current = viewport;
+  useEffect(() => {
+    if (!panelId || !state || state.linkMode !== 'follow' || following || !lastFollowed.current) return;
+    if (reg && retargetFor(reg, state, initiatorView(state, panels, main))) return;   // another contig of the package: retargets
+    setGraphView(panelId, { ...state, linkMode: 'independent', targetViewport: lastFollowed.current, initiatingPanelId: null, initiatingReferenceId: null });
+  }, [panelId, state, following, reg, panels, main]);
   const reversed = Boolean(panel?.reversed);
   const transform = useMemo(() => (viewport ? makeTransform(viewport, GRAPH_GUTTER, width - GRAPH_GUTTER - 6, reversed) : null),
     [viewport?.start, viewport?.end, width, reversed]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -280,14 +292,16 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   const [prompt, setPrompt] = useState<'goto' | 'register' | null>(null);
   const [locusText, setLocusText] = useState('');
   const [locusError, setLocusError] = useState<string | null>(null);
-  const followable = useMemo(() => panels.filter(p => p.contentType === 'dataset' && p.viewportOverride && target && canFollow(target, p.viewportOverride)), [panels, target]);
+  const followable = useMemo(() => panels.filter(p => p.contentType === 'dataset' && p.viewportOverride && target
+    && canFollow(target, { ...p.viewportOverride, reference: p.genome || main.reference })), [panels, target, main.reference]);
   const entries: ContextMenuEntry[] = [];
   if (state && reg && target) {
     const mainOk = canFollow(target, main);
     entries.push({ kind: 'heading', label: `${target.assembly} · ${target.path.contig}` });
     entries.push({ kind: 'item', action: 'follow:main', icon: 'target', disabled: !mainOk,
       label: `${state.linkMode === 'follow' && state.initiatingPanelId == null ? '✓ ' : ''}Follow the main view`,
-      title: mainOk ? `Show the centre of the main view (${main.chrom}), at most 50 kb` : `The main view is not on ${target.path.contig}` });
+      title: mainOk ? `Show the centre of the main view (${main.chrom}), at most 50 kb`
+        : `Only a view of ${target.path.contig} on ${target.reference} can be followed (the main view: ${main.chrom} on ${main.reference || 'an unnamed reference'})` });
     for (const p of followable) {
       entries.push({ kind: 'item', action: `follow:${p.id}`, icon: 'target',
         label: `${state.linkMode === 'follow' && state.initiatingPanelId === p.id ? '✓ ' : ''}Follow ${p.title || p.regionLabel || 'its panel'} (${formatLocus({ contig: p.viewportOverride!.chrom, start: p.viewportOverride!.start, end: p.viewportOverride!.end })})` });
@@ -327,7 +341,9 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     if (action === 'independent') { setGraphView(panelId, { ...state, linkMode: 'independent', targetViewport: viewport ?? state.targetViewport, initiatingPanelId: null, initiatingReferenceId: null }); return; }
     if (action.startsWith('follow:')) {
       const id = action.slice('follow:'.length);
-      setGraphView(panelId, { ...state, linkMode: 'follow', initiatingPanelId: id === 'main' ? null : id, initiatingReferenceId: target.reference });
+      const initiating = id === 'main' ? null : id;
+      const linear = initiatorView({ ...state, initiatingPanelId: initiating }, panels, main);
+      setGraphView(panelId, { ...state, linkMode: 'follow', initiatingPanelId: initiating, initiatingReferenceId: linear?.reference ?? null });
       return;
     }
     if (action.startsWith('path:')) { setGraphView(panelId, togglePath(state, action.slice(5))); return; }
@@ -393,7 +409,8 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         ? [`${preview.lanes.length} paths`, `${preview.nodes} nodes`, `${preview.visits} visits`,
           preview.complete ? 'complete' : 'partial', preview.correspondenceComplete ? null : 'correspondence partly inferred',
           ...preview.summaries.slice(0, 2), preview.lanes.some(l => l.unplaced.length) ? `${preview.lanes.reduce((n, l) => n + l.unplaced.length, 0)} unplaced runs` : null,
-          response?.cached ? 'cached' : response?.timings.total_ms != null ? `${Math.round(response.timings.total_ms)} ms` : null,
+          preview.lanes.some(l => l.transitions) ? `${preview.lanes.reduce((n, l) => n + l.transitions, 0)} unresolved transitions` : null,
+          response?.cached ? 'cached' : response?.timings.total_ms != null ? `${response.timings.total_ms < 10 ? response.timings.total_ms.toFixed(1) : Math.round(response.timings.total_ms)} ms` : null,
         ].filter(Boolean).join(' · ')
         : 'Loading the topology…';
     body = (

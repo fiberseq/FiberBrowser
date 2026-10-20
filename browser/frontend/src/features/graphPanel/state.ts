@@ -10,7 +10,34 @@ import type { GraphBinding, GraphRegistration, GraphViewState } from './types';
 export const GRAPH_MAX_PATHS = 4;
 export const DEFAULT_CONTEXT_BP = 100;
 
-export interface LinearView { chrom: string; start: number; end: number }
+/** A linear panel's view and the reference it is on (its genome key: registry id or FASTA name; null: unknown). */
+export interface LinearView { chrom: string; start: number; end: number; reference?: string | null }
+
+/** Names of one assembly (lower case). A FASTA named after an assembly ("GRCh38_chr3.fa") counts as that assembly. */
+const ASSEMBLY_ALIASES: string[][] = [
+  ['grch38', 'hg38'], ['grch37', 'hg19'], ['chm13', 't2t-chm13', 'chm13v2', 'hs1'], ['dm6', 'bdgp6'],
+  ['mm10', 'grcm38'], ['mm39', 'grcm39'],
+];
+
+function normaliseReference(name: string): string {
+  let n = name.trim().toLowerCase().replace(/^fasta:/, '');
+  n = n.split(/[\\/]/).pop() ?? n;
+  return n.replace(/(\.gz)?$/, '').replace(/\.(fa|fasta|fna|2bit)$/, '');
+}
+
+/**
+ * Whether a linear panel's reference is the graph target's assembly: the same name, or a known alias of it, or a
+ * FASTA whose name carries one as a word. Contig names alone never decide it (DESIGN §6: no numerical copying
+ * between assemblies).
+ */
+export function referenceMatches(target: Pick<GraphBinding, 'reference' | 'assembly'>, genome: string | null | undefined): boolean {
+  if (!genome) return false;
+  const g = normaliseReference(genome);
+  const refs = [target.reference, target.assembly].filter(Boolean).map(r => normaliseReference(String(r)));
+  if (refs.includes(g)) return true;
+  const words = new Set(g.split(/[^a-z0-9-]+/).filter(Boolean));
+  return ASSEMBLY_ALIASES.some(group => refs.some(r => group.includes(r)) && group.some(name => words.has(name) || g === name));
+}
 
 /** The bindings a target can be compared with: those the package has a map to from it (correspondence), and any
  * already selected. */
@@ -27,7 +54,8 @@ export function retargetFor(reg: GraphRegistration, state: GraphViewState, linea
   if (current && current.path.contig === linear.chrom) return null;
   const next = defaultTarget(reg, linear);
   if (!next || next.path.contig !== linear.chrom || next.key === state.targetBinding) return null;
-  return { ...state, targetBinding: next.key, targetReferenceId: next.reference, initiatingReferenceId: next.reference,
+  if (!referenceMatches(next, linear.reference)) return null;
+  return { ...state, targetBinding: next.key, targetReferenceId: next.reference, initiatingReferenceId: linear.reference ?? null,
     selectedPathKeys: [next.key, ...defaultCompared(reg, next.key)] };
 }
 
@@ -44,7 +72,7 @@ export function defaultCompared(reg: GraphRegistration, target: string): string[
 
 /** Whether a linear view is on this target's contig (the only case following is offered). */
 export function canFollow(target: GraphBinding | null | undefined, linear: LinearView | null | undefined): boolean {
-  return Boolean(target && linear && linear.chrom === target.path.contig);
+  return Boolean(target && linear && linear.chrom === target.path.contig && referenceMatches(target, linear.reference));
 }
 
 function firstCovered(target: GraphBinding): GraphViewport {
@@ -70,7 +98,7 @@ export function initialGraphView(reg: GraphRegistration | null, main: LinearView
     targetBinding: target?.key ?? null,
     targetReferenceId: target?.reference ?? null,
     initiatingPanelId: follow ? initiatingPanelId : null,
-    initiatingReferenceId: follow ? (target?.reference ?? null) : null,
+    initiatingReferenceId: follow ? (main?.reference ?? null) : null,
     selectedPathKeys: selected,
     targetViewport: viewport,
     linkMode: follow ? 'follow' : 'independent',
@@ -83,7 +111,8 @@ export function initiatorView(state: GraphViewState, panels: readonly PanelConfi
   if (state.initiatingPanelId == null) return main;
   const panel = panels.find(p => p.id === state.initiatingPanelId);
   if (!panel) return null;   // closed: the graph panel keeps its last viewport (DESIGN §6)
-  return panel.viewportOverride ?? main;
+  const reference = panel.genome || main.reference || null;
+  return panel.viewportOverride ? { ...panel.viewportOverride, reference } : { ...main, reference };
 }
 
 /** The target viewport this panel shows now. */
@@ -91,7 +120,9 @@ export function effectiveViewport(state: GraphViewState, target: GraphBinding | 
   if (!target) return null;
   if (state.linkMode === 'follow') {
     const linear = initiatorView(state, panels, main);
-    if (linear && canFollow(target, linear)) return followViewport(linear, target.size, target.size_inferred);
+    // The reference it started following must still be the one shown (a genome switched under it detaches it).
+    const same = !state.initiatingReferenceId || state.initiatingReferenceId === (linear?.reference ?? null);
+    if (linear && same && canFollow(target, linear)) return followViewport(linear, target.size, target.size_inferred);
   }
   return state.targetViewport ? clampViewport(state.targetViewport, target.size, target.size_inferred) : null;
 }

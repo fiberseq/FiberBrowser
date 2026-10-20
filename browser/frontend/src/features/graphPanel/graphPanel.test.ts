@@ -150,6 +150,31 @@ describe('thin topology preview', () => {
     expect(laneLabel(b('mat', 'chr3_MATERNAL'), 'mat')).toBe('MAT');
   });
 
+  it('no event is asserted across a coverage gap, a fragment change or an inversion breakpoint (review 1)', () => {
+    const o = (id: string, node: string, start: number, len: number, fragment = 'f', reverse = false) =>
+      ({ id, node, fragment, handle: node, reverse, path_span: { start, end: start + len }, clip: { start: 0, end: len } });
+    const m = (t: string, a: string, reverse = false) => ({ target_occurrence: t, source_occurrence: a, source_binding: 'alt', reverse, provenance: 'direct_named_walk' });
+    const topo = (targets: any[], alts: any[], matches: any[], win = { start: 0, end: 300 }): GraphTopology => ({
+      target: 'target', interval: win, nodes: [], edges: [], target_queries: [], summaries: [], complete: false, correspondence_complete: false, timings: {},
+      direct_matches: matches,
+      paths: [{ binding: 'target', windows: [win], coverage: [], occurrences: targets, complete: true, plan: null },
+              { binding: 'alt', windows: [], coverage: [], occurrences: alts, complete: false, plan: null }] } as unknown as GraphTopology);
+    const gap = buildPreview(topo([o('t1', '1', 0, 100), o('t2', '2', 100, 50), o('t3', '3', 150, 100)],
+      [o('a1', '1', 0, 100, 'f1'), o('a3', '3', 200, 100, 'f2')], [m('t1', 'a1'), m('t3', 'a3')]), []).lanes[1];
+    expect(gap.pieces.filter(p => p.kind !== 'node')).toEqual([]);
+    expect(gap.transitions).toBe(1);
+    const inv = buildPreview(topo([o('t1', '1', 0, 100), o('t2', '2', 100, 100), o('t3', '3', 200, 100), o('t4', '4', 300, 100)],
+      [o('a1', '1', 0, 100), o('a3', '3', 100, 100, 'f', true), o('a2', '2', 200, 100, 'f', true), o('a4', '4', 300, 100)],
+      [m('t1', 'a1'), m('t3', 'a3', true), m('t2', 'a2', true), m('t4', 'a4')], { start: 0, end: 400 }), []).lanes[1];
+    expect(inv.pieces.filter(p => p.kind === 'deletion')).toEqual([]);
+    expect(inv.pieces.filter(p => p.kind === 'node').map(p => [p.node, p.start, p.reverse])).toEqual([['1', 0, false], ['3', 200, true], ['2', 100, true], ['4', 300, false]]);
+    expect(inv.transitions).toBe(2);
+    // A same-fragment, same-orientation walk that skips target sequence is still a deletion.
+    const del = buildPreview(topo([o('t1', '1', 0, 100), o('t2', '2', 100, 50), o('t3', '3', 150, 100)],
+      [o('a1', '1', 0, 100), o('a3', '3', 100, 100)], [m('t1', 'a1'), m('t3', 'a3')]), []).lanes[1];
+    expect(del.pieces.find(p => p.kind === 'deletion')).toMatchObject({ start: 100, end: 150, bp: 50 });
+  });
+
   it('gaps between placed pieces work in either direction and refuse overlaps', () => {
     const p = (start: number, end: number) => ({ kind: 'node' as const, start, end, bp: end - start });
     expect(gapBetween(p(0, 10), p(15, 20))).toEqual({ start: 10, end: 15 });
@@ -163,7 +188,7 @@ describe('graph view state and links', () => {
   const target = aluBindings.find(b => b.key === 'target')!;
 
   it('a new panel follows the main view only on the target contig', () => {
-    const following = initialGraphView(reg, { chrom: 'chr3', start: 90_000, end: 100_000 });
+    const following = initialGraphView(reg, { chrom: 'chr3', start: 90_000, end: 100_000, reference: 'GRCh38_chr3.fa' });
     expect(following.linkMode).toBe('follow');
     expect(following.selectedPathKeys).toEqual(['target', 'mat', 'pat']);
     expect(following.targetViewport).toEqual({ contig: 'chr3', start: 90_000, end: 100_000 });
@@ -171,11 +196,16 @@ describe('graph view state and links', () => {
     const elsewhere = initialGraphView(reg, { chrom: 'chr19', start: 0, end: 5000 });
     expect(elsewhere.linkMode).toBe('independent');
     expect(elsewhere.targetViewport).toEqual({ contig: 'chr3', start: 0, end: 10_000 });
-    expect(canFollow(target, { chrom: 'chr3_MATERNAL', start: 0, end: 1 })).toBe(false);
+    expect(canFollow(target, { chrom: 'chr3_MATERNAL', start: 0, end: 1, reference: 'hg38' })).toBe(false);
+    // The same contig name on another assembly is never followed (no coordinates copied between assemblies).
+    expect(canFollow(target, { chrom: 'chr3', start: 0, end: 1, reference: 'a-different-assembly' })).toBe(false);
+    expect(canFollow(target, { chrom: 'chr3', start: 0, end: 1, reference: null })).toBe(false);
+    expect(canFollow(target, { chrom: 'chr3', start: 0, end: 1, reference: 'hg38' })).toBe(true);
+    expect(initialGraphView(reg, { chrom: 'chr3', start: 0, end: 5000, reference: 'dm6' }).linkMode).toBe('independent');
   });
 
   it('two panels keep independent initiating viewports', () => {
-    const main = { chrom: 'chr3', start: 90_000, end: 100_000 };
+    const main = { chrom: 'chr3', start: 90_000, end: 100_000, reference: 'hg38' };
     const own: PanelConfig = { id: 'p-own', contentType: 'dataset', datasetId: null, subTracks: [], collapsed: false, linkGroup: null, layoutRow: 0,
       viewportOverride: { chrom: 'chr3', start: 150_000, end: 151_000 } };
     const a = initialGraphView(reg, main);
@@ -185,10 +215,17 @@ describe('graph view state and links', () => {
     expect(effectiveViewport(b, target, [own], main)).toEqual({ contig: 'chr3', start: 150_000, end: 151_000 });
     expect(effectiveViewport(c, target, [own], main)).toEqual({ contig: 'chr3', start: 5000, end: 6000 });
     // The main view moves: only the panel following it changes.
-    const moved = { chrom: 'chr3', start: 120_000, end: 130_000 };
+    const moved = { chrom: 'chr3', start: 120_000, end: 130_000, reference: 'hg38' };
     expect(effectiveViewport(a, target, [own], moved)?.start).toBe(120_000);
     expect(effectiveViewport(b, target, [own], moved)?.start).toBe(150_000);
     expect(effectiveViewport(c, target, [own], moved)?.start).toBe(5000);
+    // A panel of its own on another assembly is not followed even on a contig of the same name.
+    const other = { ...own, id: 'p-other', genome: 'a-different-assembly' };
+    expect(effectiveViewport({ ...b, initiatingPanelId: 'p-other', initiatingReferenceId: null }, target, [other], main))
+      .toEqual(b.targetViewport);
+    // A followed reference switched under it: not followed any more.
+    expect(effectiveViewport({ ...a, initiatingReferenceId: 'hg38' }, target, [own], { ...moved, reference: 'GRCh38.fa' }))
+      .toEqual(a.targetViewport);
     // Its initiating panel closed: it keeps its last saved viewport.
     expect(effectiveViewport({ ...b, targetViewport: { contig: 'chr3', start: 1, end: 2001 } }, target, [], moved)).toEqual({ contig: 'chr3', start: 1, end: 2001 });
   });
@@ -218,16 +255,17 @@ describe('a package with several targets (one per chromosome)', () => {
   };
 
   it('opens on the main view\'s contig with that target\'s mapped paths only, and follows onto another contig', () => {
-    const state = initialGraphView(multi, { chrom: 'chr3', start: 500, end: 9500 });
+    const state = initialGraphView(multi, { chrom: 'chr3', start: 500, end: 9500, reference: 'REF' });
     expect(state.targetBinding).toBe('ref_chr3');
     expect(state.selectedPathKeys).toEqual(['ref_chr3', 'h1_chr3', 'h2_chr3']);
     expect(selectableBindings(multi, 'ref_chr3').map(x => x.key)).toEqual(['h1_chr3', 'h2_chr3']);
-    expect(retargetFor(multi, state, { chrom: 'chr3', start: 0, end: 10 })).toBeNull();
-    const moved = retargetFor(multi, state, { chrom: 'chr1', start: 100, end: 200 })!;
+    expect(retargetFor(multi, state, { chrom: 'chr3', start: 0, end: 10, reference: 'REF' })).toBeNull();
+    const moved = retargetFor(multi, state, { chrom: 'chr1', start: 100, end: 200, reference: 'REF' })!;
+    expect(retargetFor(multi, state, { chrom: 'chr1', start: 100, end: 200, reference: 'OTHER' })).toBeNull();
     expect(moved.targetBinding).toBe('ref_chr1');
     expect(moved.selectedPathKeys).toEqual(['ref_chr1', 'h1_chr1', 'h2_chr1']);
-    expect(retargetFor(multi, state, { chrom: 'chr9', start: 0, end: 10 })).toBeNull();
-    expect(retargetFor(multi, { ...state, linkMode: 'independent' }, { chrom: 'chr1', start: 0, end: 10 })).toBeNull();
+    expect(retargetFor(multi, state, { chrom: 'chr9', start: 0, end: 10, reference: 'REF' })).toBeNull();
+    expect(retargetFor(multi, { ...state, linkMode: 'independent' }, { chrom: 'chr1', start: 0, end: 10, reference: 'REF' })).toBeNull();
   });
 });
 
