@@ -609,7 +609,7 @@ export function targetAtX(map: TargetMapEntry[], x: number): { pos: number; boun
     if (x < lo || x > hi) continue;
     if (m.kind === 'slot') return { pos: m.t0, boundary: true, kind: 'slot' };
     const f = hi > lo ? (x - m.x0) / (m.x1 - m.x0) : 0;
-    return { pos: Math.min(m.t1 - 1, Math.max(m.t0, Math.floor(m.t0 + f * (m.t1 - m.t0)))), boundary: false, kind: m.kind };
+    return { pos: Math.min(m.t1 - 1, Math.max(m.t0, Math.floor(m.t0 + f * (m.t1 - m.t0) + 1e-6))), boundary: false, kind: m.kind };
   }
   return null;
 }
