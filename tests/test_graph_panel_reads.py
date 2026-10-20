@@ -279,3 +279,14 @@ def test_native_dataset_binds_to_the_target_path_by_contig_and_size(env):
     ds = types.SimpleNamespace(id="w", paths=[str(wrong)], data_type="bam")
     paths, problems = gr._native_paths(env.state, ds, env.reg)
     assert paths == {} and problems
+
+
+def test_loader_filter_omissions_are_reported(env):
+    # A record the source loader leaves out (its signal filters) is counted, not silently missing.
+    dropped = write_bam(env.tmp / "dropped.bam", lambda h: [
+        make_record(h, "kept", MAT, 1000, "1000M", tags=[("ns", _u32([100, 500])), ("nl", _u32([200, 200]))]),
+        make_record(h, "dropped", MAT, 1200, "1000M", tags=[("ns", _u32([100])), ("nl", _u32([200]))], seq="A" * 1000)])
+    did = _add_lifted(env, paths=[dropped], dataset_id="dropped")
+    out = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 0, "end": 3000}]}]).json()
+    assert [r["q"] for r in out["reads"]] == ["kept"]
+    assert out["report"]["omitted"] == {"loader_filters": 1}

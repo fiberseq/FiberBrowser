@@ -185,21 +185,25 @@ def merge_windows(windows: Iterable) -> list:
     return out
 
 
-def estimate(dataset, contig: str, windows: list) -> Optional[float]:
-    """Records the windows hold (an index walk over record headers, no tag decoding): the molecule count's upper
-    bound that picks the sampling level before any call is decoded."""
+def window_records(dataset, contig: str, windows: list) -> Optional[set]:
+    """The records the windows hold, by an index walk over record headers (no tag decoding): ``{(library, QNAME,
+    start, flag)}``. Their count is the molecule count's upper bound that picks the sampling level before any call
+    is decoded; the names give how many records the loader's own filters then left out."""
     import pysam
-    total = 0
-    for path in dataset.paths:
+    out = set()
+    for lib, path in enumerate(dataset.paths):
         try:
             with pysam.AlignmentFile(path, "rb") as bam:
                 if contig not in bam.references:
                     continue
                 for a, b in windows:
-                    total += bam.count(contig, a, b)
+                    for rec in bam.fetch(contig, a, b):
+                        if rec.is_unmapped or rec.is_secondary or rec.is_qcfail or rec.is_duplicate:
+                            continue
+                        out.add((lib, rec.query_name, rec.reference_start, rec.flag))
         except (OSError, ValueError):
             return None
-    return float(total)
+    return out
 
 
 def _abs_layer(layer: Optional[dict], ids, parts, origin: int, name: str) -> Optional[dict]:
@@ -396,12 +400,14 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
     # One sampling level for the request: expected molecules at most the cap, before any decoding.
     estimated = 0.0
     known = True
+    listed: list = []
     for dataset, _binding, contig, windows, _size in jobs:
-        e = estimate(dataset, contig, windows)
-        if e is None:
+        recs = window_records(dataset, contig, windows)
+        listed.append(recs)
+        if recs is None:
             known = False
         else:
-            estimated += e
+            estimated += len(recs)
     level = 0
     if known and estimated > max_molecules:
         level = min(MAX_LEVEL, int(math.ceil(math.log2(estimated / max_molecules))))
@@ -433,6 +439,14 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
     # One path after another: decoding is Python-bound, so threads would not overlap it.
     results = [run(j) for j in jobs]
     cached_all = all(r[4] for r in results) if results else True
+    # Records the loader's own filters (signal, footprint, hard-clip scope) left out: listed and kept by the sample,
+    # yet not decoded. Reported, never silent.
+    from services.read_sampling import keeps as _keeps
+    filtered = 0
+    for recs, (got_decoded, _t, c, lvl, _h) in zip(listed, results):
+        if recs is not None:
+            expected = sum(1 for _lib, q, _s, _f in recs if _keeps(q, lvl))
+            filtered += max(0, expected - int(c.get("records_decoded", 0)) - int(c.get("hard_clipped_supplementary", 0)))
     truncated = any(r[1] for r in results)
     for got, _trunc, c, lvl, _hit in results:
         level = max(level, lvl)
@@ -488,9 +502,9 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
                      "molecules_capped": capped, "max_molecules": max_molecules},
         "m6a_density_reads": density_reads, "calls_omitted_reads": sum(1 for r in reads if r.get("calls_omitted")),
         "truncated": truncated,
-        "omitted": {k: counts[k] for k in ("hard_clipped_supplementary", "supplementary_hidden", "record_collisions",
-                                           "records_without_correspondence", "sampled_out_after_retry")
-                    if counts.get(k)},
+        "omitted": {**{k: counts[k] for k in ("hard_clipped_supplementary", "supplementary_hidden", "record_collisions",
+                                              "records_without_correspondence", "sampled_out_after_retry")
+                       if counts.get(k)}, **({"loader_filters": filtered} if filtered else {})},
         "shared_qnames": shared_qnames,
         "hard_clipped_scoped": counts.get("hard_clipped_scoped"),
     }

@@ -798,6 +798,15 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   );
 }
 
+const OMISSION_LABELS: Record<string, string> = {
+  hard_clipped_supplementary: 'hard-clipped supplementaries (tags not scoped to their bases)',
+  supplementary_hidden: 'supplementaries (hidden by the dataset setting)',
+  record_collisions: 'duplicate records',
+  records_without_correspondence: 'records off the paths',
+  sampled_out_after_retry: 'sampled out (payload limit)',
+  loader_filters: 'left out by the read filters',
+};
+
 /** The status line's reads part: records drawn, molecules, sampling and every omission (never silent). */
 function readsSummary(reads: { response: GraphReadsResponse | null; loading: boolean; error: GraphApiError | null },
   layout: { placed: { molecules: PlacedMolecule[]; offLane: number; unplacedBp: number; empty: number }; lanes: Map<string, PackedLane> } | null): string | null {
@@ -813,7 +822,7 @@ function readsSummary(reads: { response: GraphReadsResponse | null; loading: boo
   if (rep.truncated) parts.push('payload limit reached');
   if (rep.m6a_density_reads) parts.push(`m6A as density on ${rep.m6a_density_reads}`);
   if (rep.calls_omitted_reads) parts.push(`calls omitted on ${rep.calls_omitted_reads} (mark budget)`);
-  const omitted = Object.entries(rep.omitted ?? {}).map(([k, v]) => `${v} ${k.replace(/_/g, ' ')}`);
+  const omitted = Object.entries(rep.omitted ?? {}).map(([k, v]) => `${v} ${OMISSION_LABELS[k] ?? k.replace(/_/g, ' ')}`);
   if (omitted.length) parts.push(`omitted: ${omitted.join(', ')}`);
   if (rep.shared_qnames) parts.push(`${rep.shared_qnames} QNAMEs in two libraries (kept apart)`);
   if (layout?.placed.unplacedBp) parts.push(`${layout.placed.unplacedBp.toLocaleString('en-US')} read bp not drawn (summarised geometry)`);
