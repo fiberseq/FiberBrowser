@@ -89,6 +89,8 @@ def serve(package):
         kind, job, gen = cmd["type"], cmd["job_id"], cmd["generation"]
         log(f"{kind} {job} {(cmd.get('request') or {}).get('n', '')}")
         if kind == "shutdown":
+            if os.environ.get("FAKE_GRAPH_DIE_ON_SHUTDOWN") == "1":
+                sys.exit(4)
             time.sleep(int(os.environ.get("FAKE_GRAPH_SLOW_SHUTDOWN_MS", "0")) / 1000)
             out(envelope("bye", job, gen, revisions))
             return

@@ -268,8 +268,13 @@ class Registry:
         except OSError:
             now = None
         if now != reg.fingerprint:
-            raise RegistrationError("package_changed",
-                                    "the graph package changed or disappeared since it was verified; register it again", 409)
+            # It is no longer offered: listed under the registration errors until registered (verified) again.
+            message = "the graph package changed or disappeared since it was verified; register it again"
+            with self._lock:
+                if self._items.get(reg.id) is reg:
+                    del self._items[reg.id]
+                    self._errors[reg.package_dir] = message
+            raise RegistrationError("package_changed", message, 409)
 
     def list(self) -> list[dict]:
         with self._lock:

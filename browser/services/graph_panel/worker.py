@@ -347,14 +347,14 @@ class HelperWorker:
             if frame.type != "bye":
                 raise WorkerFailure("protocol", f"shutdown answered {frame.type!r}")
             await asyncio.wait_for(self.proc.wait(), timeout_s)
-            self.state = "dead"
             self.death_reason = "shutdown"
-            await self._reap()
-            if self._reader is not None and not self._reader.done():
-                self._reader.cancel()
-        except (asyncio.TimeoutError, WorkerFailure, OSError, ConnectionError):
-            self.state = "busy"  # let kill() run its full path
+            # The full teardown (reap, close pipes, end the reader and the stderr drain): one path for every exit.
             await self.kill("shutdown")
+        except (asyncio.TimeoutError, WorkerFailure, OSError, ConnectionError):
+            await self.kill("shutdown")
+        except asyncio.CancelledError:
+            await self.kill("shutdown")
+            raise
 
     # ------------------------------------------------------------------ jobs
     async def call(self, kind: str, fields: dict, deadline_s: float = DISPATCH_DEADLINE_S):
@@ -400,7 +400,7 @@ class HelperWorker:
         return frame
 
     def rss(self) -> Optional[int]:
-        if not self.alive or self.pid is None:
+        if self.pid is None or self._exited.is_set():   # any process not yet reaped, retiring ones included
             return None
         value = read_rss_bytes(self.pid)
         if value is not None:

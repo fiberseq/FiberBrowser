@@ -702,3 +702,119 @@ def test_a_cached_answer_still_supersedes_the_panels_queued_request(helper, pack
         await busy
         await pool.close()
     run(go())
+
+
+# ----------------------------------------------------------------------------- review regressions (Phase B review 2)
+
+def test_a_successor_keeps_its_reservation_and_no_second_process_starts_while_one_is_reaped(helper, package, env, tmp_path):
+    other_pkg = tmp_path / "other"
+    other_pkg.mkdir()
+    revs2 = {k: "o" * 64 for k in REVS}
+    (other_pkg / "manifest.json").write_text(json.dumps({"revisions": revs2}))
+
+    async def go():
+        pool = GraphPool(lambda: helper, max_workers=1, queue_expiry_s=5.0, deadline_s=0.15)
+        reg = make_reg(package)
+        first = asyncio.ensure_future(submit(pool, reg, q("sleep:40"), "first", panel="A"))
+        while not pool.workers or pool.workers[0].state != "busy":
+            await asyncio.sleep(0.002)
+        worker = pool.workers[0]
+        original = worker._reap
+        entered, gate = asyncio.Event(), asyncio.Event()
+
+        async def slow_reap():
+            entered.set()
+            await gate.wait()
+            await original()
+        worker._reap = slow_reap
+        second = asyncio.ensure_future(submit(pool, reg, q("stall"), "second", panel="B"))
+        await first
+        await asyncio.sleep(0.02)
+        assert pool.reserved.get(id(worker)) is not None      # the successor ("second") owns it now
+        await entered.wait()                                   # its deadline is reaping the worker
+        third = asyncio.ensure_future(submit(pool, make_reg(other_pkg, "gother", revs2), q("ok"), "third", panel="C"))
+        await asyncio.sleep(0.2)
+        assert len(LIVE_PIDS) <= 1 and not third.done()        # waits for the slot, no second process
+        gate.set()
+        assert (await asyncio.wait_for(third, 3))["status"] == "ok"
+        await asyncio.gather(second, return_exceptions=True)
+        await pool.close()
+    run(go())
+
+
+def test_retiring_helpers_count_toward_the_aggregate_memory_limit(helper, package, env, monkeypatch, tmp_path):
+    monkeypatch.setenv("FAKE_GRAPH_SLOW_SHUTDOWN_MS", "800")
+    other_pkg = tmp_path / "other"
+    other_pkg.mkdir()
+    revs2 = {k: "o" * 64 for k in REVS}
+    (other_pkg / "manifest.json").write_text(json.dumps({"revisions": revs2}))
+    real_rss = HelperWorker.rss
+    monkeypatch.setattr(HelperWorker, "rss", lambda self: (8 << 30) if self.state == "retiring" else real_rss(self))
+
+    async def go():
+        pool = GraphPool(lambda: helper, max_workers=1, queue_expiry_s=5.0, aggregate_rss=4 << 30, monitor_interval_s=0.02)
+        await submit(pool, make_reg(package), q("ok"), "a", panel="A")
+        b = await submit(pool, make_reg(other_pkg, "gother", revs2), q("ok"), "b", panel="B")
+        assert b["status"] == "ok"
+        assert pool.counters["memory_aggregate_killed"] >= 1   # the evicted helper, still shutting down, was sampled
+        await pool.close()
+    run(go())
+
+
+# ----------------------------------------------------------------------------- review regressions (agy review 1)
+
+def test_a_helper_that_dies_on_shutdown_ends_dead_and_reaped(helper, package, env, monkeypatch):
+    monkeypatch.setenv("FAKE_GRAPH_DIE_ON_SHUTDOWN", "1")
+
+    async def go():
+        w = HelperWorker(helper, str(package), "gtest", epoch=1)
+        await w.start()
+        pid = w.pid
+        await w.shutdown()
+        assert w.state == "dead" and not w.alive and w._exited.is_set() and not pid_alive(pid)
+        assert w._reader.done() and w._stderr_task.done()
+    run(go())
+
+
+def test_the_aggregate_limit_counts_only_what_still_runs(helper, package, env, monkeypatch, tmp_path):
+    """A worker killed for its own job limit is not counted again: the healthy one survives."""
+    other_pkg = tmp_path / "other"
+    other_pkg.mkdir()
+    revs2 = {k: "o" * 64 for k in REVS}
+    (other_pkg / "manifest.json").write_text(json.dumps({"revisions": revs2}))
+    sizes = {}
+    monkeypatch.setattr(HelperWorker, "rss", lambda self: sizes.get(self.registration_id))
+
+    async def go():
+        pool = GraphPool(lambda: helper, job_rss=1500 << 20, aggregate_rss=2000 << 20, monitor_interval_s=0.02)
+        await submit(pool, make_reg(other_pkg, "gother", revs2), q("ok"), "warm", panel="W")   # healthy idle, 900 MiB
+        sizes.update({"gother": 900 << 20, "gtest": 1600 << 20})
+        with pytest.raises(JobError) as exc:
+            await submit(pool, make_reg(package), q("stall"), "big", panel="B")
+        assert exc.value.code == "memory"
+        await asyncio.sleep(0.1)
+        assert pool.counters["memory_killed"] == 1 and pool.counters.get("memory_aggregate_killed", 0) == 0
+        assert any(w.registration_id == "gother" and w.state == "idle" for w in pool.workers)
+        await pool.close()
+    run(go())
+
+
+def test_a_shared_queued_job_moves_to_a_remaining_panel_and_reports_shared(helper, package, env):
+    async def go():
+        pool = GraphPool(lambda: helper, max_workers=1, queue_expiry_s=5.0)
+        reg = make_reg(package)
+        busy = asyncio.ensure_future(submit(pool, reg, q("sleep:300"), "busy", panel="Z"))
+        await asyncio.sleep(0.15)
+        a = asyncio.ensure_future(submit(pool, reg, q("ok", n="shared"), "a", panel="PA"))
+        b = asyncio.ensure_future(submit(pool, reg, q("ok", n="shared"), "b", panel="PB"))
+        await asyncio.sleep(0.02)
+        a2 = asyncio.ensure_future(submit(pool, reg, q("ok", n="a-new"), "a2", panel="PA"))   # supersedes PA's
+        await asyncio.sleep(0.02)
+        assert [j.panel_id for j in pool.queues.get("PB", [])] == ["PB"]
+        with pytest.raises(JobError):
+            await a
+        rb, ra2 = await b, await a2
+        assert rb["timings"]["shared"] is True and ra2["result"]["echo"]["n"] == "a-new"
+        await busy
+        await pool.close()
+    run(go())

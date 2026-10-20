@@ -87,9 +87,15 @@ if GRAPH_HELPER:
     if not os.access(GRAPH_HELPER, os.X_OK):
         raise SystemExit(f"FiberBrowser.spec: the graph helper {GRAPH_HELPER} is not an executable")
     binaries.append((GRAPH_HELPER, "graph-helper"))
-    _graph_notices = Path(GRAPH_HELPER).resolve().parent.parent / "THIRD_PARTY_NOTICES.txt"
-    if _graph_notices.is_file():
+    # Its licence notices: the companion wheel's (beside bin/), next to the executable, or FB_GRAPH_NOTICES.
+    _helper_dir = Path(GRAPH_HELPER).resolve().parent
+    _graph_notices = next((p for p in (Path(os.environ.get("FB_GRAPH_NOTICES", "") or "/nonexistent"),
+                                       _helper_dir.parent / "THIRD_PARTY_NOTICES.txt", _helper_dir / "THIRD_PARTY_NOTICES.txt")
+                           if p.is_file()), None)
+    if _graph_notices is not None:
         datas.append((str(_graph_notices), "graph-helper"))
+    elif os.environ.get("FB_REQUIRE_GRAPH_HELPER") == "1":
+        raise SystemExit("FiberBrowser.spec: no THIRD_PARTY_NOTICES.txt for the graph helper (set FB_GRAPH_NOTICES)")
 elif os.environ.get("FB_REQUIRE_GRAPH_HELPER") == "1":
     raise SystemExit("FiberBrowser.spec: FB_REQUIRE_GRAPH_HELPER=1 but no graph helper (FB_GRAPH_HELPER or fiberbrowser-graph-native)")
 # Its Python module is not needed in the app (the executable is found in graph-helper/).

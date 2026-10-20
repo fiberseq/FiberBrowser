@@ -149,9 +149,11 @@ def validate_query(reg: Registration, body: dict) -> dict:
                "context_bp": context, "snarls": snarls}
     limits = body.get("limits")
     if limits:
-        if not isinstance(limits, dict) or any(k not in LIMIT_KEYS or not isinstance(v, int) or v <= 0
+        if not isinstance(limits, dict) or any(k not in LIMIT_KEYS or not isinstance(v, int) or isinstance(v, bool) or v <= 0
                                                for k, v in limits.items()):
-            raise _bad("limits may only lower the helper's named limits")
+            raise _bad("limits may only lower the helper's named limits (positive integers)")
+        if "wire_bytes" in limits and limits["wire_bytes"] < 1024:
+            raise _bad("wire_bytes is at least 1024")
         request["limits"] = dict(sorted(limits.items()))
     return request
 

@@ -195,6 +195,8 @@ def test_register_query_and_cancel_through_the_api(app_client, package, graph_en
     ({"revisions": ["bad"]}, 422, "invalid_request"),
     ({"interval": "bad"}, 422, "invalid_request"),
     ({"limits": [1]}, 422, "invalid_request"),
+    ({"limits": {"nodes": True}}, 422, "invalid_request"),
+    ({"limits": {"wire_bytes": 10}}, 422, "invalid_request"),
 ])
 def test_requests_are_refused_before_any_helper_job(app_client, package, graph_env, over, status, code):
     reg = app_client.post("/api/graph/registrations", json={"package": str(package)}).json()["registration"]
@@ -216,6 +218,9 @@ def test_a_package_that_fails_verification_or_changes_is_refused(app_client, pac
     (package / "graph.db").write_bytes(b"changed after verification")
     r = app_client.post("/api/graph/subgraph", json=body(reg))
     assert r.status_code == 409 and r.json()["error"]["code"] == "package_changed"
+    # No longer offered: listed as a registration error until registered again.
+    status = app_client.get("/api/graph/status").json()
+    assert status["registrations"] == [] and "changed" in status["registration_errors"][0]["error"]
     r = app_client.post("/api/graph/registrations", json={"package": str(package / 'nope')})
     assert r.status_code == 404
 
