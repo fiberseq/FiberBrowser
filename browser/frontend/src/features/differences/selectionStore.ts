@@ -153,7 +153,9 @@ export function selectReadDifference(read: CompactRead, badge: LiveLiftBadge | u
     ref_bp: badge ? 0 : 1, alt_bp: payload?.length ?? badge?.[3] ?? 1, chain: null,
     strand: payload && !('too_large' in payload) ? payload.orientation : null,
     src: payload && !('too_large' in payload) ? { contig: payload.src[0], start: payload.src[1], end: payload.src[2] }
-      : { contig: ll.source?.contig ?? null, start: null, end: null }, grch38: event?.ref ?? null, alt: null };
+      : { contig: ll.source?.contig ?? null, start: null, end: null }, grch38: event?.ref ?? null,
+    // A read's own mismatch: its base is the edit's alternate (the carriers are the rows that show it).
+    alt: !badge && event?.base ? event.base : null };
   const liftKey = st.datasets.find(d => d.id === context.datasetId)?.live_lift?.key ?? '';
   const query = { id, hap, pos: fallback.t_start, kind: badge ? 'insertion' as const : 'snv' as const };
   // A new click or strip selection while fetching supersedes the old

@@ -616,11 +616,21 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
     const y = (e.clientY - rect.top) * e.currentTarget.clientHeight / rect.height;
 
     if (x >= sidebarWidth) {
+      const origin = linkedBoundsStart ?? start;
+      // A drawn mismatch under the pointer (live-lift reads select it as a difference).
+      const mismatchAt = (read: CompactRead | undefined) => useBrowserStore.getState().enabledCigarTypes.mismatches ? read?.cigar?.find(e => {
+        if (e.type !== 'X') return false;
+        const px = sidebarWidth + (params.axis ? params.axis.toX(origin + e.pos)
+          : (isReversed ? end - origin - e.pos : origin + e.pos - start) * (width - sidebarWidth) / regionWidth);
+        return Math.abs(px - x) <= Math.max(3, params.axis?.pxPerBp ?? 1);
+      }) : undefined;
       if (isFootprintClick(e)) {
-        // ⌘/Ctrl-click on an insertion badge inspects it (as on the Differences row); elsewhere it picks a footprint.
-        const badgeHit = getReadHitAtXY(x, y);
-        if (badgeHit?.liveLiftBadge && selectReadDifference(badgeHit.read, badgeHit.liveLiftBadge, genomePosAtX(x),
-          { datasetId, stateKey, chrom, start: linkedBoundsStart ?? start }, 'inspect')) return;
+        // ⌘/Ctrl-click on an insertion badge or a lifted read's mismatch inspects it (as on the Differences row);
+        // elsewhere (and on native reads) it picks a footprint.
+        const hit = getReadHitAtXY(x, y);
+        const hitMismatch = hit && !hit.liveLiftBadge && hit.read.live_lift ? mismatchAt(hit.read) : undefined;
+        if (hit && (hit.liveLiftBadge || hitMismatch) && selectReadDifference(hit.read, hit.liveLiftBadge,
+          hitMismatch ? origin + hitMismatch.pos : genomePosAtX(x), { datasetId, stateKey, chrom, start: origin }, 'inspect')) return;
         selectFootprintAt(x, y);
         return;
       }
@@ -630,13 +640,7 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
         return;
       }
       const lifted = getReadHitAtXY(x, y);
-      const origin = linkedBoundsStart ?? start;
-      const mismatch = useBrowserStore.getState().enabledCigarTypes.mismatches ? lifted?.read.cigar?.find(e => {
-        if (e.type !== 'X') return false;
-        const px = sidebarWidth + (params.axis ? params.axis.toX(origin + e.pos)
-          : (isReversed ? end - origin - e.pos : origin + e.pos - start) * (width - sidebarWidth) / regionWidth);
-        return Math.abs(px - x) <= Math.max(3, params.axis?.pxPerBp ?? 1);
-      }) : undefined;
+      const mismatch = mismatchAt(lifted?.read);
       if (lifted && (lifted.liveLiftBadge || mismatch) && selectReadDifference(lifted.read, lifted.liveLiftBadge,
         mismatch ? origin + mismatch.pos : genomePosAtX(x), { datasetId, stateKey, chrom, start: origin },
         e.metaKey || e.ctrlKey ? 'inspect' : 'primary')) return;
