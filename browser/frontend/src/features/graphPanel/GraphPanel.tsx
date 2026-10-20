@@ -341,6 +341,13 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     }
   };
   const onPointerUp = () => { drag.current = null; };
+  /** Where x is across the data area (mirrored when reversed): the zoomed window keeps the anchor there. The new
+   * layout is nonlinear too, so this is close, not exact (exact anchoring is the Phase F navigation adapter). */
+  const screenFraction = (x: number) => {
+    const t = transform!;
+    const f = Math.max(0, Math.min(1, (x - t.left) / Math.max(1, t.width)));
+    return t.reversed ? 1 - f : f;
+  };
   /** A zoom anchor: the target position under x on the scene (an insertion's boundary), else the average scale. */
   const anchorAt = (x: number) => {
     const t = scene ? targetAtX(scene.targetMap, x - sceneOffset) : null;
@@ -351,15 +358,15 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     e.preventDefault();
     const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
     const zoom = rect.width > 0 && width > 0 ? rect.width / width : 1;
-    const anchor = anchorAt((e.clientX - rect.left) / zoom);
-    commitViewport(zoomViewport(viewport, e.deltaY > 0 ? 1.25 : 0.8, anchor, target.size, target.size_inferred), true);
+    const px = (e.clientX - rect.left) / zoom;
+    commitViewport(zoomViewport(viewport, e.deltaY > 0 ? 1.25 : 0.8, anchorAt(px), target.size, target.size_inferred, screenFraction(px)), true);
   };
   const onDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!transform || !viewport || !target) return;
     const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
     const zoom = rect.width > 0 && width > 0 ? rect.width / width : 1;
-    const anchor = anchorAt((e.clientX - rect.left) / zoom);
-    commitViewport(zoomViewport(viewport, e.shiftKey ? 2 : 0.5, anchor, target.size, target.size_inferred), true);
+    const px = (e.clientX - rect.left) / zoom;
+    commitViewport(zoomViewport(viewport, e.shiftKey ? 2 : 0.5, anchorAt(px), target.size, target.size_inferred, screenFraction(px)), true);
   };
 
   // ---------------------------------------------------------------- menu

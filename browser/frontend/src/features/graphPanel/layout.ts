@@ -31,6 +31,8 @@
  */
 import type { GraphBinding, GraphCoverage, GraphOccurrence, GraphTopology, Span } from './types';
 
+/** Continuity problems that do not break a path's walk. */
+const NON_BREAKING = new Set(['a local inversion']);
 /** At most this many target visits per node are candidates for one path visit (design: four visits per node). */
 const MAX_CANDIDATES_PER_VISIT = 4;
 /** Nesting depth kept; deeper groups are summarized into their depth-3 ancestor. */
@@ -100,8 +102,10 @@ export interface GroupItem {
 export interface JunctionItem {
   kind: 'junction';
   id: string;
-  /** Target sequence missing between the segments (a graph gap), or null for touching fragments. */
+  /** The first missing target stretch between the segments (a graph gap), or null for touching fragments. */
   gap: GraphCoverage | null;
+  /** Every missing stretch here, in order (graph gaps, budget omissions): the whole coverage partition. */
+  gaps: GraphCoverage[];
   /** Its target span (gap span, or the junction coordinate as an empty span). */
   target: Span;
   leftEnd: string;
@@ -307,14 +311,21 @@ function solveLevel(input: LevelInput, buildFamilies: (g: GroupItem) => void): L
         const between = m.visits.slice(a.j + 1, b.j);
         const sa = a.i < 0 ? 0 : bb.segOf[a.i], sb = b.i >= n ? bb.segments.length - 1 : bb.segOf[b.i];
         const problem = m.continuous(a, b);
+        // A discontinuous walk (fragment change, gap in the walk, window cut) breaks the path's run: it does not
+        // walk any enclosing base allele across it. A local inversion is continuous (Gate D draws it).
+        const breaking = problem != null && !NON_BREAKING.has(problem);
         if (sa === sb) {
           if (b.i === a.i + 1 && b.j === a.j + 1 && !problem) {
             // shared step
+          } else if (b.i === a.i + 1 && b.j === a.j + 1) {
+            // Adjacent on both sides but not one walk: open ends, never an empty "insertion".
+            run += 1;
           } else {
             const fallback = a.j >= 0 && a.j < m.visits.length
               ? (m.visits[a.j].reverse ? m.visits[a.j].occ.path_span.start : m.visits[a.j].occ.path_span.end) : 0;
             candidates.push({ path: m.key, seg: sa, p: a.i + 1, q: b.i, visits: between,
               status: problem ? 'unresolved' : 'ok', reason: problem ?? undefined, source: sourceSpanOf(between, fallback) });
+            if (breaking) run += 1;
           }
         } else if (sb === sa + 1 && a.i === bb.segments[sa].to - 1 && b.i === bb.segments[sb].from && !problem) {
           // Walks on across the junction between consecutive segments.
@@ -358,36 +369,45 @@ function solveLevel(input: LevelInput, buildFamilies: (g: GroupItem) => void): L
   }
   const crosses = (a: { p: number; q: number }, b: { p: number; q: number }) =>
     (a.p < b.p && b.p < a.q && a.q < b.q) || (b.p < a.p && a.p < b.q && b.q < a.q);
-  const finalPerSeg = new Map<number, Proto[]>();
-  for (const [seg, list] of perSeg) {
+  /**
+   * Crossing components by one sorted sweep (union-find over intervals still open at each start), each collapsed to
+   * its minimal enclosing span with everything inside it; repeated only while a new complex block crosses another
+   * group. Validated groups outside every block are kept.
+   */
+  function collapseCrossings(seg: number, list: Proto[]): Proto[] {
     let groups = list.slice();
-    for (let changed = true; changed;) {
-      changed = false;
-      groups.sort((a, b) => a.p - b.p || b.q - a.q);
-      outer:
-      for (let x = 0; x < groups.length; x++) {
-        for (let y = x + 1; y < groups.length && groups[y].p < groups[x].q; y++) {
-          if (!crosses(groups[x], groups[y])) continue;
-          // The minimal enclosing component, absorbing everything inside it (or crossing it), repeatedly.
-          let lo = Math.min(groups[x].p, groups[y].p), hi = Math.max(groups[x].q, groups[y].q);
-          let members: Proto[] = [];
-          for (let grow = true; grow;) {
-            grow = false;
-            members = groups.filter(g => (g.p >= lo && g.q <= hi && !(g.p === g.q && (g.p === lo || g.p === hi))) || crosses(g, { p: lo, q: hi }));
-            const nlo = Math.min(lo, ...members.map(g => g.p)), nhi = Math.max(hi, ...members.map(g => g.q));
-            if (nlo !== lo || nhi !== hi) { lo = nlo; hi = nhi; grow = true; }
-          }
-          const collapsed = members.flatMap(g => g.collapsed ?? g.cands);
-          const complex: Proto = { seg, p: lo, q: hi, cands: [], type: 'complex', collapsed, reason: 'crossing intervals' };
-          groups = groups.filter(g => !members.includes(g));
-          groups.push(complex);
-          changed = true;
-          break outer;
-        }
+    for (let round = 0; round < 64; round++) {
+      groups.sort((x, y) => x.p - y.p || y.q - x.q);
+      const parent = groups.map((_, k) => k);
+      const find = (k: number): number => (parent[k] === k ? k : (parent[k] = find(parent[k])));
+      let active: number[] = [];
+      let unions = 0;
+      for (let k = 0; k < groups.length; k++) {
+        const g = groups[k];
+        if (g.p === g.q) continue;
+        active = active.filter(o => groups[o].q > g.p);
+        for (const o of active) if (crosses(groups[o], g) && find(o) !== find(k)) { parent[find(o)] = find(k); unions += 1; }
+        active.push(k);
       }
+      if (!unions) return groups;
+      const comps = new Map<number, Proto[]>();
+      groups.forEach((g, k) => { const r = find(k); const l = comps.get(r) ?? []; l.push(g); comps.set(r, l); });
+      const blocks = [...comps.values()].filter(l => l.length > 1).map(l => ({
+        p: Math.min(...l.map(g => g.p)), q: Math.max(...l.map(g => g.q)), members: l,
+      })).sort((x, y) => x.p - y.p);
+      const absorbed = new Set<Proto>();
+      const complexes: Proto[] = blocks.map(bk => {
+        const inside = groups.filter(g => bk.members.includes(g)
+          || (g.p >= bk.p && g.q <= bk.q && !(g.p === g.q && (g.p === bk.p || g.p === bk.q))));
+        inside.forEach(g => absorbed.add(g));
+        return { seg, p: bk.p, q: bk.q, cands: [], type: 'complex' as const, collapsed: inside.flatMap(g => g.collapsed ?? g.cands), reason: 'crossing intervals' };
+      });
+      groups = [...groups.filter(g => !absorbed.has(g)), ...complexes];
     }
-    finalPerSeg.set(seg, groups);
+    return groups;
   }
+  const finalPerSeg = new Map<number, Proto[]>();
+  for (const [seg, list] of perSeg) finalPerSeg.set(seg, collapseCrossings(seg, list));
 
   // -------------------------------------------------- statuses: base traversal per path
   // Per path and boundary b (0..n): 1 on the base there, 2 inside one of its own candidates, 0 absent; and the
@@ -399,9 +419,22 @@ function solveLevel(input: LevelInput, buildFamilies: (g: GroupItem) => void): L
     const state = new Int8Array(n + 1), runAt = new Int32Array(n + 1).fill(-1);
     const anchorIdx = (i: number) => (i >= 0 && i < n ? s.anchorAt[i]
       : i === -1 ? (s.anchors[0]?.i === -1 ? 0 : -1) : (s.anchors[s.anchors.length - 1]?.i === n ? s.anchors.length - 1 : -1));
+    // Own positive candidates starting / ending at each boundary (the path enters or leaves its allele there).
+    const starts = new Uint8Array(n + 1), ends = new Uint8Array(n + 1);
+    for (const c of s.candidates) {
+      if (c.status === 'junction' || c.q <= c.p) continue;
+      starts[c.p] = 1;
+      ends[c.q] = 1;
+    }
     for (let b = 0; b <= n; b++) {
-      const k = anchorIdx(b - 1) >= 0 ? anchorIdx(b - 1) : anchorIdx(b);
-      if (k >= 0) { state[b] = 1; runAt[b] = s.runOf[k]; }
+      const left = anchorIdx(b - 1), right = anchorIdx(b);
+      // Through b on the base: present on both sides of it, one connected run (its own allele next to b counts as
+      // a side: junction order puts a zero-span group before a positive one starting there).
+      const both = left >= 0 && right >= 0 && s.runOf[left] === s.runOf[right];
+      if (both || (left >= 0 && starts[b]) || (right >= 0 && ends[b])) {
+        state[b] = 1;
+        runAt[b] = s.runOf[left >= 0 ? left : right];
+      }
     }
     for (const c of s.candidates) {
       if (c.status === 'junction') continue;
@@ -541,13 +574,20 @@ function solveLevel(input: LevelInput, buildFamilies: (g: GroupItem) => void): L
     const stack: Proto[] = [];
     for (const pr of sorted) {
       const zero = pr.p === pr.q;
-      while (stack.length) {
-        const top = stack[stack.length - 1];
-        const inside = zero ? top.p < pr.p && pr.p < top.q : top.p <= pr.p && pr.q <= top.q && !(top.p === pr.p && top.q === pr.q);
-        if (inside) break;
-        stack.pop();
+      let parent: Proto | undefined;
+      if (zero) {
+        // An insertion never pops an interval it sits at the endpoint of (later children still nest in it): drop
+        // only intervals that end at or before it, then take the innermost one strictly around it.
+        while (stack.length && stack[stack.length - 1].q <= pr.p) stack.pop();
+        for (let k = stack.length - 1; k >= 0; k--) if (stack[k].p < pr.p && pr.p < stack[k].q) { parent = stack[k]; break; }
+      } else {
+        while (stack.length) {
+          const top = stack[stack.length - 1];
+          if (top.p <= pr.p && pr.q <= top.q && !(top.p === pr.p && top.q === pr.q)) break;
+          stack.pop();
+        }
+        parent = stack[stack.length - 1];
       }
-      const parent = stack[stack.length - 1];
       if (parent) {
         const d = (depthOf.get(parent) ?? 0) + 1;
         if (d >= MAX_DEPTH) {
@@ -678,13 +718,18 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
     const frame = colinearChain(unique);
     const pairs = frame.slice();
     let f = 0;
+    const resolved: { a: number; b: number }[] = [];
     cands.forEach((c, j) => {
       if (c.length < 2 || c.length > MAX_CANDIDATES_PER_VISIT) return;
       while (f < frame.length && frame[f].a < j) f += 1;
       const prev = frame[f - 1], next = frame[f];
       const fits = c.filter(i => (!prev || i > prev.b) && (!next || i < next.b));
-      if (fits.length === 1) pairs.push({ a: j, b: fits[0] });
+      if (fits.length === 1) resolved.push({ a: j, b: fits[0] });
     });
+    // Two repeat visits resolving onto one target visit (a duplicated copy) are both left unplaced.
+    const resolvedClaims = new Map<number, number>();
+    for (const r of resolved) resolvedClaims.set(r.b, (resolvedClaims.get(r.b) ?? 0) + 1);
+    for (const r of resolved) if (resolvedClaims.get(r.b) === 1) pairs.push(r);
     pairs.sort((x, y) => x.a - y.a || y.b - x.b);
     const anchors = colinearChain(pairs).map(p => ({ j: p.a, i: p.b }));
     anchorCounts[path.binding] = anchors.length;
@@ -731,8 +776,11 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
       for (let k = 1; k < anchors.length; k++) {
         const a = anchors[k - 1], b = anchors[k];
         const sa = segOf[a.i], sb = segOf[b.i];
-        const junctionOk = sb === sa + 1 && a.i === segs[sa].to - 1 && b.i === segs[sb].from && !continuous(a, b);
-        if (sa !== sb && !junctionOk) {
+        const problem = continuous(a, b);
+        const junctionOk = sb === sa + 1 && a.i === segs[sa].to - 1 && b.i === segs[sb].from && !problem;
+        // Across segments without a junction walk, or adjacent visits that are not one walk: each side ends.
+        const adjacentBreak = sa === sb && b.i === a.i + 1 && b.j === a.j + 1 && problem != null && !NON_BREAKING.has(problem);
+        if ((sa !== sb && !junctionOk) || adjacentBreak) {
           const bp = visits.slice(a.j + 1, b.j).reduce((t, v) => t + v.bp, 0);
           openEnds.push({ path: path.binding, side: 'right', at: targetOccs[a.i].path_span.end, reason: 'broken', bp, source: bp ? sourceSpanOf(visits.slice(a.j + 1, b.j), 0) : null });
           openEnds.push({ path: path.binding, side: 'left', at: targetOccs[b.i].path_span.start, reason: 'broken', bp: 0, source: null });
@@ -773,24 +821,25 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
     gaps.sort((a, b) => a.span.start - b.span.start);
   }
   const chain: Item[] = [];
-  const gapBetween = (lo: number, hi: number) => gaps.find(c => c.span.start >= lo && c.span.end <= hi) ?? null;
+  const gapsBetween = (lo: number, hi: number) => gaps.filter(c => c.span.start >= lo && c.span.end <= hi);
+  const span = (list: GraphCoverage[], fallback: Span) => (list.length ? { start: list[0].span.start, end: list[list.length - 1].span.end } : fallback);
   const solutionOf = new Map(level.solutions.map(s => [s.key, s]));
   if (segs.length === 0) {
-    const g = gaps[0] ?? null;
-    chain.push({ kind: 'junction', id: 'jempty', gap: g, target: g?.span ?? window, leftEnd: 'unavailable', rightEnd: 'unavailable', alts: [], passing: [], stops: [], starts: [] });
+    chain.push({ kind: 'junction', id: 'jempty', gap: gaps[0] ?? null, gaps, target: span(gaps, window), leftEnd: 'unavailable', rightEnd: 'unavailable', alts: [], passing: [], stops: [], starts: [] });
   }
   segs.forEach((s, k) => {
     const startAt = targetOccs[s.from].path_span.start;
     if (k === 0) {
-      const lead = gapBetween(window.start, Math.max(window.start, startAt));
-      if (lead) chain.push({ kind: 'junction', id: `jl${stableId(backbone.key(0, s.from))}`, gap: lead, target: lead.span, leftEnd: 'unavailable', rightEnd: s.leftEnd, alts: [], passing: [], stops: [], starts: [] });
+      const lead = gapsBetween(window.start, Math.max(window.start, startAt));
+      if (lead.length) chain.push({ kind: 'junction', id: `jl${stableId(backbone.key(0, s.from))}`, gap: lead[0], gaps: lead, target: span(lead, window), leftEnd: 'unavailable', rightEnd: s.leftEnd, alts: [], passing: [], stops: [], starts: [] });
     }
     chain.push(...level.chains[k]);
     const endAt = targetOccs[s.to - 1].path_span.end;
     const next = segs[k + 1];
     if (next) {
       const nextAt = targetOccs[next.from].path_span.start;
-      const gap = gapBetween(endAt, nextAt);
+      const between = gapsBetween(endAt, nextAt);
+      const gap = between[0] ?? null;
       const crossing = junctions.get(k) ?? [];
       const bySig = new Map<string, Candidate[]>();
       for (const c of crossing) {
@@ -809,10 +858,10 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
       const passing = [topology.target, ...[...solutionOf.keys()].filter(key => !crossingPaths.has(key))];
       const stops = [...solutionOf.values()].filter(x => !crossingPaths.has(x.key) && x.anchorAt[s.to - 1] >= 0).map(x => x.key);
       const starts = [...solutionOf.values()].filter(x => !crossingPaths.has(x.key) && x.anchorAt[next.from] >= 0).map(x => x.key);
-      chain.push({ kind: 'junction', id, gap, target: gap?.span ?? { start: endAt, end: nextAt }, leftEnd: s.rightEnd, rightEnd: next.leftEnd, alts, passing, stops, starts });
+      chain.push({ kind: 'junction', id, gap, gaps: between, target: span(between, { start: endAt, end: nextAt }), leftEnd: s.rightEnd, rightEnd: next.leftEnd, alts, passing, stops, starts });
     } else {
-      const trail = gapBetween(Math.min(endAt, window.end), window.end);
-      if (trail) chain.push({ kind: 'junction', id: `jr${stableId(backbone.key(k, s.to))}`, gap: trail, target: trail.span, leftEnd: s.rightEnd, rightEnd: 'unavailable', alts: [], passing: [], stops: [], starts: [] });
+      const trail = gapsBetween(Math.min(endAt, window.end), window.end);
+      if (trail.length) chain.push({ kind: 'junction', id: `jr${stableId(backbone.key(k, s.to))}`, gap: trail[0], gaps: trail, target: span(trail, window), leftEnd: s.rightEnd, rightEnd: 'unavailable', alts: [], passing: [], stops: [], starts: [] });
     }
   });
 
@@ -835,6 +884,8 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
   };
   walk(chain);
   for (const e of openEnds) if (e.reason === 'unplaced' && e.bp > 0) unplaced += 1;
+  // Open ends sit on drawn target geometry: a flank-margin or window-clipped anchor ends at the window edge.
+  for (const e of openEnds) e.at = Math.max(window.start, Math.min(window.end, e.at));
   // Walks the response cut short (budget summaries on that path): their last placed visit is an open end.
   const budgetCut = new Set(['wire_limit', 'walk_limit', 'selected_node_limit', 'portion_visit_or_step_limit', 'unexpected_early_endmarker']);
   const laneNotes: Record<string, string> = {};
@@ -849,7 +900,7 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
       if (!ends.length) {
         const member = members.find(x => x.key === path.binding)!;
         const last = member.anchors[member.anchors.length - 1];
-        openEnds.push({ path: path.binding, side: 'right', at: targetOccs[last.i].path_span.end, reason: 'budget', bp: 0, source: null });
+        openEnds.push({ path: path.binding, side: 'right', at: Math.max(window.start, Math.min(window.end, targetOccs[last.i].path_span.end)), reason: 'budget', bp: 0, source: null });
       }
     }
     if (!n) {

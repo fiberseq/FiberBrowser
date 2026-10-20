@@ -17,7 +17,7 @@
  *   maps to its boundary only, never to a made-up target interval. A reversed panel mirrors the finished scene.
  */
 import { familyCarriers, type AltAllele, type GroupItem, type Item, type JunctionItem, type LayoutModel, type OpenEnd, type RunItem, type Visit } from './layout';
-import type { Span } from './types';
+import type { GraphCoverage, Span } from './types';
 
 export type Compression = 'log' | 'linear';
 
@@ -71,12 +71,17 @@ export type HitPayload =
   | { kind: 'allele'; group: GroupItem | JunctionItem; allele: AltAllele; lane: string; visit: Visit | null; offset: number }
   | { kind: 'base'; group: GroupItem; lane: string }
   | { kind: 'slot'; group: GroupItem; boundary: number | null }
-  | { kind: 'gap'; junction: JunctionItem }
+  | { kind: 'filler'; group: GroupItem | JunctionItem; allele: AltAllele; lane: string }
+  | { kind: 'gap'; junction: JunctionItem; gap?: GraphCoverage }
   | { kind: 'complex'; group: GroupItem }
   | { kind: 'cluster'; cluster: ClusterItem }
   | { kind: 'end'; end: OpenEnd };
 
-export interface SceneHit { x0: number; x1: number; y0: number; y1: number; payload: HitPayload; cursor: boolean }
+export interface SceneHit {
+  x0: number; x1: number; y0: number; y1: number; payload: HitPayload; cursor: boolean;
+  /** Inside an allele family's tube: the enclosing group and family lead (hover names the allele first). */
+  within?: { group: GroupItem; allele: AltAllele };
+}
 
 /** Piecewise map between target coordinates and x: a slot (t0 === t1) is an insertion boundary. */
 export interface TargetMapEntry { x0: number; x1: number; t0: number; t1: number; kind: 'seq' | 'slot' | 'gap' | 'cluster' }
@@ -131,9 +136,9 @@ function groupContent(g: GroupItem, scale: number, c: Compression, k: Metrics = 
 }
 
 function junctionContent(j: JunctionItem, scale: number, c: Compression, k: Metrics = ROOMY): number {
-  let w = j.gap ? budget(j.gap.span.end - j.gap.span.start, c) * scale : 0;
+  let w = j.gaps.reduce((t, g) => t + budget(g.span.end - g.span.start, c) * scale, 0);
   for (const a of j.alts) w = Math.max(w, budget(a.bp, c) * scale);
-  return Math.max(j.gap || j.alts.some(a => a.bp > 0) ? k.min : 4, w);
+  return Math.max(j.gaps.length || j.alts.some(a => a.bp > 0) ? k.min * Math.max(1, j.gaps.length) : 4, w);
 }
 
 /** An item's width at a scale (tests: budgets and child-once accounting). */
@@ -162,15 +167,20 @@ function solveScale(items: TopItem[], available: number, c: Compression, k: Metr
   return lo;
 }
 
+/** The longest allele anywhere inside a group (nested children and family sub-bubbles included). */
 function maxAlleleBp(g: GroupItem): number {
-  return Math.max(g.base.bp, ...g.alts.map(a => a.bp));
+  let m = Math.max(g.base.bp, ...g.alts.map(a => a.bp));
+  const inner = (items: Item[]) => { for (const it of items) if (it.kind === 'group') m = Math.max(m, maxAlleleBp(it)); };
+  inner(g.base.chain);
+  for (const a of g.alts) if (a.family) inner(a.family.chain);
+  return m;
 }
 
 /** Merge consecutive small top-level bubbles (separated by runs shorter than `distance` bp) into clusters. */
-function clusterChain(chain: Item[], distance: number): TopItem[] {
+function clusterChain(chain: Item[], distance: number, anySize = false): TopItem[] {
   const out: TopItem[] = [];
   let pending: Item[] = [];
-  const small = (it: Item) => it.kind === 'group' && it.type === 'bubble' && maxAlleleBp(it) < MAJOR_BP;
+  const small = (it: Item) => it.kind === 'group' && (anySize || (it.type === 'bubble' && maxAlleleBp(it) < MAJOR_BP));
   const flush = () => {
     // Trailing runs are not part of a cluster.
     const tail: Item[] = [];
@@ -216,8 +226,14 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
   // sequence.
   let top: TopItem[] = model.chain;
   const k: Metrics = contentWidth(top, 0, c, ROOMY) > dataWidth * 0.6 ? COMPACT : ROOMY;
-  for (let distance = 32; contentWidth(top, 0, c, k) > dataWidth * 0.6 && distance <= 2 * (model.interval.end - model.interval.start); distance *= 2) {
+  const span = model.interval.end - model.interval.start;
+  for (let distance = 32; contentWidth(top, 0, c, k) > dataWidth * 0.6 && distance <= 2 * span; distance *= 2) {
     top = clusterChain(model.chain, distance);
+  }
+  // Still overflowing (many large bubbles): cluster bubbles of any size rather than ever zeroing sequence widths;
+  // every cluster lists its members.
+  for (let distance = 32; contentWidth(top, 0, c, k) > dataWidth * 0.9 && distance <= 2 * span; distance *= 2) {
+    top = clusterChain(model.chain, distance, true);
   }
   const clusters = top.filter(t => t.kind === 'cluster').length;
   const scale = solveScale(top, dataWidth, c, k);
@@ -225,7 +241,10 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
 
   const prims: Prim[] = [];
   const overlay: Prim[] = [];
-  const hits: SceneHit[] = [];
+  const hitList: SceneHit[] = [];
+  let within: SceneHit['within'];
+  // Hits are pushed outermost first: a later (inner, narrower) hit wins at a point.
+  const hits = { push: (h: SceneHit) => { hitList.push(within ? { ...h, within } : h); } };
   const targetMap: TargetMapEntry[] = [];
   const blocks: Scene['blocks'] = [];
 
@@ -313,6 +332,8 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
     const baseW = contentWidth(g.base.chain, scale, c, k);
     // Base allele: its chain in the host tube, the base carriers' stripes through the curve zones and filler.
     if (baseW > 0) {
+      // The group's own hit first: its base sequence and nested children (pushed after) win where they are.
+      hits.push({ x0: gx0, x1: gx1, y0: hostRow.top, y1: hostRow.top + hostRow.height, cursor: false, payload: { kind: 'base', group: g, lane: host } });
       straight(gx0, cx0, slots, g.base.carriers, 'edge');
       placeChain(g.base.chain, cx0, host, slots, onTarget, depth + 1);
       straight(cx0 + baseW, cx1, slots, g.base.carriers, 'connector');
@@ -361,8 +382,27 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
         prims.push({ t: 'curve', x0: gx0, y0: hs.y + hs.h / 2, x1: cx0, y1: as.y + as.h / 2, color: as.color, w: as.h, dashed });
         prims.push({ t: 'curve', x0: cx1, y0: as.y + as.h / 2, x1: gx1, y1: hs.y + hs.h / 2, color: as.color, w: as.h, dashed });
       }
+      // Lane hits first (sequence, then filler as connector); a family's own runs and sub-bubbles win inside.
+      const seqEnd = a.bp > 0 ? cx0 + Math.max(1, aw) : cx0;
+      if (a.bp > 0) hits.push({ x0: cx0, x1: seqEnd, y0: row.top, y1: row.top + row.height, cursor: false,
+        payload: { kind: 'allele', group: g, allele: a, lane, visit: null, offset: 0 } });
+      else hits.push({ x0: cx0, x1: cx1, y0: row.top, y1: row.top + row.height, cursor: false,
+        payload: { kind: 'allele', group: g, allele: a, lane, visit: null, offset: 0 } });
+      if (a.bp > 0 && cx1 > seqEnd) hits.push({ x0: seqEnd, x1: cx1, y0: row.top, y1: row.top + row.height, cursor: false,
+        payload: { kind: 'filler', group: g, allele: a, lane } });
+      for (const m of a.family?.members ?? []) {
+        const mrow = rowOf.get(m.carriers[0]);
+        if (!mrow) continue;
+        hits.push({ x0: cx0, x1: seqEnd, y0: mrow.top, y1: mrow.top + mrow.height, cursor: false,
+          payload: { kind: 'allele', group: g, allele: m, lane: m.carriers[0], visit: null, offset: 0 } });
+        if (cx1 > seqEnd) hits.push({ x0: seqEnd, x1: cx1, y0: mrow.top, y1: mrow.top + mrow.height, cursor: false,
+          payload: { kind: 'filler', group: g, allele: m, lane: m.carriers[0] } });
+      }
       if (a.family) {
+        const outer = within;
+        within = outer ?? { group: g, allele: a };
         placeChain(a.family.chain, cx0, lane, own, false, depth + 1);
+        within = outer;
       } else if (a.bp > 0) {
         tube(cx0, aw, own, carriers, a.visits, a.bp, dashed ? 'unresolved' : 'seq');
       }
@@ -373,8 +413,6 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
         overlay.push({ t: 'text', x: (cx0 + Math.max(cx0 + aw, Math.min(cx1, cx0 + 60))) / 2, y: tubeTop - 3, text: label,
           color: colorOf(lane), align: 'center', size: 9, bold: g.base.bp === 0 && a.bp > 0 });
       }
-      hits.push({ x0: cx0, x1: Math.max(cx0 + aw, cx1), y0: row.top, y1: row.top + row.height, cursor: false,
-        payload: { kind: 'allele', group: g, allele: a, lane, visit: null, offset: 0 } });
       // Family members: their own lane says what they carry here (their shared stretches run in the lead's tube).
       for (const m of a.family?.members ?? []) {
         const mrow = rowOf.get(m.carriers[0]);
@@ -384,13 +422,7 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
           overlay.push({ t: 'text', x: (cx0 + Math.max(cx0 + aw, Math.min(cx1, cx0 + 60))) / 2, y: mrow.center - stripe - 2, text: mlabel,
             color: colorOf(m.carriers[0]), align: 'center', size: 9, bold: g.base.bp === 0 && m.bp > 0 });
         }
-        hits.push({ x0: cx0, x1: Math.max(cx0 + aw, cx1), y0: mrow.top, y1: mrow.top + mrow.height, cursor: false,
-          payload: { kind: 'allele', group: g, allele: m, lane: m.carriers[0], visit: null, offset: 0 } });
       }
-    }
-    // Base carriers in the host lane, and every other lane at this group: what they walk here.
-    if (baseW > 0) {
-      hits.push({ x0: gx0, x1: gx1, y0: hostRow.top, y1: hostRow.top + hostRow.height, cursor: false, payload: { kind: 'base', group: g, lane: host } });
     }
   }
 
@@ -399,12 +431,21 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
     const hostRow = rowOf.get(model.target)!;
     const all = [...slots.values()];
     const y = Math.min(...all.map(s => s.y)) - 2, h = all.reduce((t, s) => t + s.h, 0) + 4;
-    if (j.gap) {
-      const gw = budget(j.gap.span.end - j.gap.span.start, c) * scale;
-      const gx = cx0 + Math.max(0, (cx1 - cx0 - gw) / 2);
-      prims.push({ t: 'gap', x0: gx, x1: gx + Math.max(gw, 2), y, h });
-      targetMap.push({ x0: gx, x1: gx + Math.max(gw, 2), t0: j.gap.span.start, t1: j.gap.span.end, kind: 'gap' });
-      if (w > 60) overlay.push({ t: 'text', x: (gx0 + gx1) / 2, y: y - 3, text: `${j.gap.kind === 'graph_gap' ? 'gap' : j.gap.kind.replace(/_/g, ' ')} ${formatBpShort(j.gap.span.end - j.gap.span.start)}`, color: '#64748b', align: 'center', size: 9, bold: false });
+    hits.push({ x0: gx0, x1: gx1, y0: hostRow.top, y1: hostRow.top + hostRow.height, cursor: false, payload: { kind: 'gap', junction: j } });
+    if (j.gaps.length) {
+      // Each missing stretch in order, in proportion to its budget (at least a minimum each).
+      const widths = j.gaps.map(g => Math.max(k.min, budget(g.span.end - g.span.start, c) * scale));
+      const total = widths.reduce((t, x) => t + x, 0);
+      const f = total > 0 ? Math.min(1, (cx1 - cx0) / total) : 1;
+      let gx = cx0 + Math.max(0, (cx1 - cx0 - total * f) / 2);
+      j.gaps.forEach((g, n) => {
+        const gw = Math.max(2, widths[n] * f);
+        prims.push({ t: 'gap', x0: gx, x1: gx + gw, y, h });
+        targetMap.push({ x0: gx, x1: gx + gw, t0: g.span.start, t1: g.span.end, kind: 'gap' });
+        if (gw > 54) overlay.push({ t: 'text', x: gx + gw / 2, y: y - 3, text: `${g.kind === 'graph_gap' ? 'gap' : g.kind.replace(/_/g, ' ')} ${formatBpShort(g.span.end - g.span.start)}`, color: '#64748b', align: 'center', size: 9, bold: false });
+        hits.push({ x0: gx, x1: gx + gw, y0: hostRow.top, y1: hostRow.top + hostRow.height, cursor: false, payload: { kind: 'gap', junction: j, gap: g } });
+        gx += gw;
+      });
     }
     if (j.leftEnd === 'fragment_terminal') prims.push({ t: 'mark', x: gx0 + 1, y, h });
     if (j.rightEnd === 'fragment_terminal') prims.push({ t: 'mark', x: gx1 - 1, y, h });
@@ -421,7 +462,8 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
         tube(cx0, aw, own, a.carriers, a.visits, a.bp, 'seq');
         straight(cx0 + aw, cx1, own, a.carriers, 'connector');
         const row = rowOf.get(lane)!;
-        hits.push({ x0: cx0, x1: cx1, y0: row.top, y1: row.top + row.height, cursor: false, payload: { kind: 'allele', group: j, allele: a, lane, visit: null, offset: 0 } });
+        hits.push({ x0: cx0, x1: cx0 + Math.max(1, aw), y0: row.top, y1: row.top + row.height, cursor: false, payload: { kind: 'allele', group: j, allele: a, lane, visit: null, offset: 0 } });
+        if (cx1 > cx0 + aw + 1) hits.push({ x0: cx0 + Math.max(1, aw), x1: cx1, y0: row.top, y1: row.top + row.height, cursor: false, payload: { kind: 'filler', group: j, allele: a, lane } });
         if (cx1 - cx0 > 40) overlay.push({ t: 'text', x: cx0 + Math.min(aw, cx1 - cx0) / 2, y: Math.min(...[...own.values()].map(s => s.y)) - 3, text: `+${formatBpShort(a.bp)}`, color: colorOf(lane), align: 'center', size: 9, bold: true });
       } else {
         // Walks on with nothing of its own here: a dashed connector (continuous, no target sequence).
@@ -435,7 +477,6 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
         if (s) prims.push({ t: 'cap', x: cx, y: s.y + s.h / 2, r: s.h / 2 + 0.5, color: s.color });
       }
     }
-    hits.push({ x0: gx0, x1: gx1, y0: hostRow.top, y1: hostRow.top + hostRow.height, cursor: false, payload: { kind: 'gap', junction: j } });
   }
 
   function placeCluster(cl: ClusterItem, x: number, w: number, slots: Map<string, Slot>) {
@@ -465,11 +506,12 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
   placeChain(top, dataLeft, model.target, backboneSlots, true, 0);
 
   // Open ends: caps where a path's verified walk stops; an unplaced run beyond gets a short dotted lead.
+  targetMap.sort((p, q) => p.x0 - q.x0);
   for (const e of model.openEnds) {
     const s = backboneSlots.get(e.path);
     if (!s) continue;
     // A walk starting at `at` starts where base `at` does (after any slot there); one ending there, before it.
-    const x = xForTarget(targetMap.slice().sort((p, q) => p.x0 - q.x0), e.at, e.side === 'left' ? 'end' : 'start');
+    const x = xForTarget(targetMap, e.at, e.side === 'left' ? 'end' : 'start');
     if (x == null) continue;
     prims.push({ t: 'cap', x, y: s.y + s.h / 2, r: s.h / 2 + 0.5, color: s.color });
     if ((e.reason === 'unplaced' || e.reason === 'budget') && e.bp > 0) {
@@ -488,7 +530,7 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
   const lastRow = rows[rows.length - 1];
   const scene: Scene = {
     width: opts.width, height: (lastRow ? lastRow.top + lastRow.height : opts.rulerHeight) + opts.laneGap,
-    dataLeft, dataWidth, scale, rows, prims: [...prims, ...overlay], hits, targetMap, clusters, metrics: k, blocks, reversed: opts.reversed,
+    dataLeft, dataWidth, scale, rows, prims: [...prims, ...overlay], hits: hitList, targetMap, clusters, metrics: k, blocks, reversed: opts.reversed,
   };
   return opts.reversed ? mirror(scene) : scene;
 }
@@ -559,35 +601,52 @@ export function sceneInverse(scene: Scene, x: number, y: number): SceneInverse |
     const raw = (x - h.x0) / Math.max(1e-6, h.x1 - h.x0);
     return scene.reversed ? 1 - raw : raw;
   };
+  const boundaryOf = (g: GroupItem | JunctionItem) => (g.kind === 'group' ? (g.target ? g.target.start : null) : g.target.start);
   const p = top.payload;
   switch (p.kind) {
     case 'run': {
       const at = locate(p.run.visits, p.run.bp, f(top));
       if (!at) return null;
-      if (at.visit.target) return { kind: 'target', occurrence: at.visit.occ.id, offset: at.offset, pos: Math.min(at.visit.target.end - 1, at.visit.target.start + at.offset) };
-      return { kind: 'allele', path: p.host, occurrence: at.visit.occ.id, offset: at.offset, boundary: null, group: p.run.id };
+      const offset = occurrenceOffset(at.visit, at.offset);
+      if (at.visit.target) return { kind: 'target', occurrence: at.visit.occ.id, offset, pos: Math.min(at.visit.target.end - 1, at.visit.target.start + at.offset) };
+      return { kind: 'allele', path: p.host, occurrence: at.visit.occ.id, offset, boundary: top.within ? boundaryOf(top.within.group) : null,
+        group: top.within?.group.id ?? p.run.id };
     }
     case 'allele': {
-      const boundary = p.group.kind === 'group' ? (p.group.target ? p.group.target.start : null) : p.group.target.start;
-      // A family lead's tube: the run underneath gives the exact visit.
-      const run = [...stack].reverse().find(h => h.payload.kind === 'run');
-      if (run && run.payload.kind === 'run') {
-        const at = locate(run.payload.run.visits, run.payload.run.bp, f(run));
-        return { kind: 'allele', path: p.lane, occurrence: at?.visit.occ.id ?? null, offset: at?.offset ?? 0, boundary, group: p.group.id };
+      const boundary = boundaryOf(p.group);
+      if (p.allele.bp === 0) return { kind: 'connector', group: p.group.id, boundary };
+      if (!p.allele.family && !top.within && p.group.kind === 'group' && p.group.alts.every(a => a !== p.allele)) {
+        // A family member: its shared stretches are the lead's runs in the lead's lane at this x.
+        const lead = p.group.alts.find(a => a.family?.members.includes(p.allele));
+        const run = lead && scene.hits.find(h => h.payload.kind === 'run' && h.payload.host === lead.carriers[0] && x >= h.x0 && x <= h.x1);
+        if (run && run.payload.kind === 'run' && run.payload.run.carriers.includes(p.lane)) {
+          const at = locate(run.payload.run.visits, run.payload.run.bp, f(run));
+          const mine = at && p.allele.visits.find(v => v.occ.node === at.visit.occ.node);
+          if (at && mine) return { kind: 'allele', path: p.lane, occurrence: mine.occ.id, offset: occurrenceOffset(mine, at.offset), boundary, group: p.group.id };
+        }
+        return { kind: 'allele', path: p.lane, occurrence: null, offset: 0, boundary, group: p.group.id };
       }
-      const at = p.allele.family ? null : locate(p.allele.visits, p.allele.bp, f(top));
-      return { kind: 'allele', path: p.lane, occurrence: at?.visit.occ.id ?? null, offset: at?.offset ?? 0, boundary, group: p.group.id };
+      const at = locate(p.allele.visits, p.allele.bp, f(top));
+      return { kind: 'allele', path: p.lane, occurrence: at?.visit.occ.id ?? null, offset: at ? occurrenceOffset(at.visit, at.offset) : 0, boundary, group: p.group.id };
     }
+    case 'filler': return { kind: 'connector', group: p.group.id, boundary: boundaryOf(p.group) };
     case 'slot': return { kind: 'connector', group: p.group.id, boundary: p.boundary };
     case 'base': {
       const t = targetAtX(scene.targetMap, x);
       return t && !t.boundary ? { kind: 'target', occurrence: '', offset: 0, pos: t.pos } : { kind: 'connector', group: p.group.id, boundary: p.group.target?.start ?? null };
     }
-    case 'gap': return { kind: 'gap', span: p.junction.target };
+    case 'gap': return { kind: 'gap', span: (p.gap ?? p.junction.gap)?.span ?? p.junction.target };
     case 'complex': return { kind: 'summary', id: p.group.id, span: p.group.target };
     case 'cluster': return { kind: 'summary', id: p.cluster.id, span: p.cluster.target };
     case 'end': return { kind: 'summary', id: `${p.end.path}:${p.end.side}`, span: null };
   }
+  return null;
+}
+
+/** An offset inside a drawn piece of a visit, as an offset in the whole visit (path-forward). */
+function occurrenceOffset(v: Visit, offset: number): number {
+  const start = v.target ? v.target.start - v.occ.path_span.start : v.occ.clip.start;
+  return start + offset;
 }
 
 /** Hit test (the last match wins: overlays and narrow parts are pushed later). */
@@ -623,6 +682,16 @@ function mirror(scene: Scene): Scene {
 const where = (n: number) => n.toLocaleString('en-US');
 
 export function describeSceneHit(hit: SceneHit, x: number, model: LayoutModel, reversed = false): string {
+  const own = describeOwn(hit, x, model, reversed);
+  if (!hit.within) return own;
+  // Inside a family's tube: name the allele this lane carries here first.
+  const lane = hit.payload.kind === 'run' ? hit.payload.host : 'lane' in hit.payload ? hit.payload.lane : hit.within.allele.carriers[0];
+  const allele = [hit.within.allele, ...(hit.within.allele.family?.members ?? [])].find(a => a.carriers.includes(lane)) ?? hit.within.allele;
+  const outer = describeOwn({ ...hit, within: undefined, payload: { kind: 'allele', group: hit.within.group, allele, lane, visit: null, offset: 0 } }, x, model, reversed);
+  return `${outer} · here: ${own}`;
+}
+
+function describeOwn(hit: SceneHit, x: number, model: LayoutModel, reversed: boolean): string | never {
   const label = (k: string) => model.rows.find(r => r.key === k)?.label ?? k;
   const p = hit.payload;
   switch (p.kind) {
@@ -659,6 +728,11 @@ export function describeSceneHit(hit: SceneHit, x: number, model: LayoutModel, r
       const span = g.target ? ` (target ${where(g.target.start)}-${where(g.target.end)})` : '';
       return `${g.base.carriers.map(label).join(', ')} ${formatBpShort(g.base.bp)}${span} · alternatives ${alts}${unavailable}`;
     }
+    case 'filler': {
+      const g = p.group;
+      const at = g.kind === 'group' ? (g.target ? ` at target ${where(g.target.start)}` : '') : ` at the junction ${where(g.target.start)}`;
+      return `${label(p.lane)} · connector space${at}: its ${formatBpShort(p.allele.bp)} allele is shorter than the slot (no sequence here)`;
+    }
     case 'slot': {
       const g = p.group;
       const alts = g.alts.map(a => `${familyCarriers(a, model.rows.map(r => r.key)).map(label).join('+')} +${formatBpShort(a.bp)}`).join(', ');
@@ -667,7 +741,8 @@ export function describeSceneHit(hit: SceneHit, x: number, model: LayoutModel, r
     case 'gap': {
       const j = p.junction;
       const crossing = j.alts.map(a => `${a.carriers.map(label).join('+')}${a.bp ? ` +${formatBpShort(a.bp)}` : ''}`).join(', ');
-      const gap = j.gap ? `${j.gap.kind.replace(/_/g, ' ')} ${where(j.gap.span.start)}-${where(j.gap.span.end)} (${formatBpShort(j.gap.span.end - j.gap.span.start)})` : `fragment junction at ${where(j.target.start)}`;
+      const g0 = p.gap ?? j.gap;
+      const gap = g0 ? `${g0.kind.replace(/_/g, ' ')} ${where(g0.span.start)}-${where(g0.span.end)} (${formatBpShort(g0.span.end - g0.span.start)})` : `fragment junction at ${where(j.target.start)}`;
       return `${label(model.target)} · ${gap}${crossing ? ` · walking on: ${crossing}` : ''}${j.passing.length > 1 ? ` · no named continuity for ${j.passing.filter(k => k !== model.target).map(label).join(', ') || 'others'}` : ''}`;
     }
     case 'complex': {

@@ -182,6 +182,10 @@ async def subgraph(body: dict) -> dict:
     except RegistrationError as exc:
         raise _bad(exc.message, exc.code, exc.status) from None
     request = validate_query(reg, body)
+    # Only a helper that lists the feature gets flank_bp (an older helper refuses the unknown field); the layout
+    # then simply has no flank anchors at the window edges.
+    if "flank_bp" in request and "flank_bp" not in ((status.handshake or {}).get("features") or []):
+        del request["flank_bp"]
     rid = check_request_id(body.get("request_id"))
     panel_id = str(body.get("panel_id") or rid)[:128]
     generation = body.get("generation", 0)

@@ -68,9 +68,10 @@ export function panViewport(view: GraphViewport, deltaBp: number, size: number |
   return clampViewport({ ...view, start: view.start + d, end: view.end + d }, size, sizeInferred);
 }
 
-export function zoomViewport(view: GraphViewport, factor: number, anchor: number, size: number | null, sizeInferred = false): GraphViewport {
+/** Zoom about `anchor`, keeping it at screen fraction `fraction` (default: its linear fraction of the window). */
+export function zoomViewport(view: GraphViewport, factor: number, anchor: number, size: number | null, sizeInferred = false, fraction?: number): GraphViewport {
   const width = (view.end - view.start) * factor;
-  const f = (anchor - view.start) / Math.max(1, view.end - view.start);
+  const f = fraction ?? (anchor - view.start) / Math.max(1, view.end - view.start);
   const start = anchor - f * width;
   return clampViewport({ ...view, start, end: start + width }, size, sizeInferred);
 }

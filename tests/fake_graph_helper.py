@@ -9,6 +9,7 @@ frames, stalls, a blocked stdout, a stderr flood, memory growth. Each query's
   FAKE_GRAPH_NO_READ=1   stop reading stdin after startup (the supervisor's write blocks)
   FAKE_GRAPH_JOBS        jobs per process (advertised; exit cleanly after that many)
   FAKE_GRAPH_LOG         append one line per command (pid, type, job id) to this file
+  FAKE_GRAPH_FEATURES    comma-separated handshake features (default flank_bp); "none" omits the list (an older helper)
 
 ``serve --package DIR`` reports DIR/manifest.json's revisions; ``handshake`` and
 ``verify --package DIR`` behave like the real helper's.
@@ -38,7 +39,12 @@ def handshake(jobs):
     return {"producer": "fake-graph-helper 0", "build_target": "test", "db_schemas": ["GBZ-base version 4"],
             "package_schemas": [1], "map_schemas": [2], "limits": {"target_bp": 50000, "paths": 4},
             "topology_bytes": 4 << 20, "sequence_bytes": 128 << 10, "jobs_per_process": jobs,
-            "dispatch_deadline_ms": 1000, "startup_deadline_ms": 2000}
+            "dispatch_deadline_ms": 1000, "startup_deadline_ms": 2000, **features()}
+
+
+def features():
+    raw = os.environ.get("FAKE_GRAPH_FEATURES", "flank_bp")
+    return {} if raw == "none" else {"features": [f for f in raw.split(",") if f]}
 
 
 def read_exact(n):

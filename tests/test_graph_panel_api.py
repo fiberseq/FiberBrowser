@@ -305,3 +305,16 @@ def test_the_macos_app_copy_is_found_in_graph_helper(monkeypatch, fake_helper, t
     status = helper_mod.resolve(environ={})
     assert status.available and status.source == "bundled" and status.path.endswith("graph-helper/fiberbrowser-graph")
     helper_mod.clear_cache()
+
+
+def test_flank_bp_only_reaches_a_helper_that_lists_it(monkeypatch, standalone_app, graph_env, package):
+    """An older helper (no handshake features) would refuse the unknown field: the request goes without it."""
+    from starlette.testclient import TestClient
+    from conftest import auth_headers
+    monkeypatch.setenv("FAKE_GRAPH_FEATURES", "none")
+    service.reset_for_tests()
+    with TestClient(standalone_app, headers=auth_headers()) as client:
+        reg = client.post("/api/graph/registrations", json={"package": str(package)}).json()["registration"]
+        out = client.post("/api/graph/subgraph", json=body(reg, flank_bp=1)).json()
+        assert "flank_bp" not in out["result"]["echo"]
+    assert not LIVE_PIDS
