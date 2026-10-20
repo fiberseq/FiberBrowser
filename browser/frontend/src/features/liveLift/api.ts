@@ -107,3 +107,13 @@ export function updateMoleculeProvenance(datasetId: string, molecule_groups: [st
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ molecule_groups, joint_dedup }),
   });
 }
+
+
+export interface LiftMapSuggestion {
+  manifest: string; where: string; haplotypes?: string[]; targets?: number;
+  shared_contigs?: number | null; matches_bam?: boolean | null; error?: string;
+}
+/** Lift maps next to a BAM, in the Library, or already in use, with whether the BAM's contigs are their sources. */
+export function suggestLiftMaps(near: string): Promise<{ near: string; maps: LiftMapSuggestion[]; help: string }> {
+  return fetchJson(`/api/lift/maps?near=${encodeURIComponent(near)}`);
+}

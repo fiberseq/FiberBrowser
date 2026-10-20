@@ -5,7 +5,7 @@
  */
 import { useEffect, useState } from 'react';
 import { useBrowserStore } from '../../stores/browserStore';
-import { addLiveLiftDataset, inspectLiftMap, type LiftMapInfo, type LiftSettings, type SupplementaryDisplay } from './api';
+import { addLiveLiftDataset, inspectLiftMap, suggestLiftMaps, type LiftMapInfo, type LiftMapSuggestion, type LiftSettings, type SupplementaryDisplay } from './api';
 import { useLiveLiftStore } from './store';
 import { CohortSettingsFields } from './CohortSettingsFields';
 
@@ -28,6 +28,22 @@ export function LiveLiftDialog() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [cohortSettings, setCohortSettings] = useState<LiftSettings>({});
+  const prefill = useLiveLiftStore(s => s.prefillBams);
+  const [suggestions, setSuggestions] = useState<{ maps: LiftMapSuggestion[]; help: string } | null>(null);
+
+  // Opened on a loaded BAM: it is the source, and maps found near it (or in the Library) are offered.
+  useEffect(() => {
+    if (!open || !prefill?.length) { setSuggestions(null); return; }
+    setBams(prefill.join('\n'));
+    let live = true;
+    suggestLiftMaps(prefill[0]).then(r => {
+      if (!live) return;
+      setSuggestions(r);
+      const best = r.maps.find(m => m.matches_bam && !m.error);
+      if (best) setManifest(m => m || best.manifest);
+    }).catch(() => { if (live) setSuggestions({ maps: [], help: '' }); });
+    return () => { live = false; };
+  }, [open, prefill]);
 
   useEffect(() => {
     if (!open || !manifest.trim()) { setInfo(null); return; }
@@ -82,6 +98,22 @@ export function LiveLiftDialog() {
         <label className="mb-2 block">Source BAM file(s), one per line
           <textarea className={input} rows={2} value={bams} onChange={e => setBams(e.target.value)} data-testid="live-lift-bams" />
         </label>
+        {suggestions && (
+          <div className="mb-2" data-testid="live-lift-map-suggestions">
+            {suggestions.maps.length ? <>
+              <div className="mb-1 text-ink-secondary">Maps found</div>
+              {suggestions.maps.map(m => (
+                <button key={m.manifest} type="button" disabled={Boolean(m.error)} data-testid="live-lift-map-suggestion"
+                  className={`mb-1 block w-full truncate rounded border px-2 py-1 text-left ${manifest === m.manifest ? 'border-blue-500' : 'border-line dark:border-white/15'}`}
+                  title={m.error ?? m.manifest} onClick={() => setManifest(m.manifest)}>
+                  {m.manifest.split(/[\\/]/).pop()} <span className="text-ink-secondary">· {m.where}
+                    {m.haplotypes ? ` · ${m.haplotypes.join(', ')}` : ''}
+                    {m.matches_bam === false ? ' · the BAM\'s contigs are not this map\'s sources' : m.matches_bam ? ' · matches the BAM' : ''}
+                    {m.error ? ' · unreadable' : ''}</span>
+                </button>))}
+            </> : <p className="text-ink-secondary" data-testid="live-lift-map-help">No lift map was found next to this BAM or in the Library. {suggestions.help}</p>}
+          </div>
+        )}
         <label className="mb-2 block">Graphlift map (.graphlift.json)
           <input className={input} value={manifest} onChange={e => setManifest(e.target.value)} data-testid="live-lift-manifest" />
         </label>

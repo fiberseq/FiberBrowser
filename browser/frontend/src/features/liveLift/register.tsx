@@ -53,13 +53,29 @@ export function useLiveLiftHeader(ctx: PanelHeaderContext) {
         Group in this panel by haplotype
       </MenuItem>}
       <LiftedPanelLinkItems ctx={ctx} />
-      <MenuItem tour="panel-live-lift-settings" icon={<span>⚙</span>} title="Gap split, window merge, alternatives, supplementaries, hatching"
+      <MenuItem tour="panel-live-lift-settings" icon={<span>⚙</span>} title="Gap split, window merge, alternatives, supplementaries, hatching; the Differences row (sources, size, insertions on reads)"
         onSelect={() => useLiftSettingsDialog.getState().open(panel.datasetId)}>
         <span data-testid="live-lift-settings-item">Live-lift settings…</span>
       </MenuItem>
     </>
   );
   return { chipTexts: [text], chips, menu, wantsMenu: true, menuTitle: 'live lift' };
+}
+
+/** A loaded native BAM's "…" menu: view it on another assembly through a lift map (behind the flag). */
+export function useNativeBamLiftEntry(ctx: PanelHeaderContext) {
+  const enabled = useLiveLiftStore(s => s.enabled);
+  const { panel, dataset } = ctx;
+  if (!enabled || !dataset || dataset.data_type !== 'bam' || panel.liftLink || !panel.datasetId) return null;
+  const paths = dataset.paths?.length ? dataset.paths : [dataset.path];
+  const menu = (
+    <MenuItem tour="panel-live-lift-from-bam" icon={<span>⇄</span>}
+      title="Draw this BAM on another genome through a graphlift map (no realignment); maps found next to the BAM or in the Library are offered"
+      onSelect={() => useLiveLiftStore.getState().openFor(paths)}>
+      <span data-testid="live-lift-from-bam">View on another assembly (live lift)…</span>
+    </MenuItem>
+  );
+  return { menu, wantsMenu: true };
 }
 
 /**
@@ -88,6 +104,7 @@ export function registerLiveLift(): void {
   if (done) return;
   done = true;
   registerPanelHeaderExtension(useLiveLiftHeader);
+  registerPanelHeaderExtension(useNativeBamLiftEntry);
   registerLiftLinkingUi();
   followLiftGroupingRows();
   void useLiveLiftStore.getState().check();

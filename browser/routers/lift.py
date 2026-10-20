@@ -43,6 +43,13 @@ async def lift_inspect(manifest: str = Query(..., description="graphlift sidecar
         return {"success": False, "error": f"Cannot read the map: {exc}"}
 
 
+@router.get("/api/lift/maps")
+async def lift_map_suggestions(near: str = Query("", description="a BAM whose neighbourhood to search"), state=Depends(get_state)):
+    """Lift maps a BAM could be viewed through, with whether its contigs are the map's sources."""
+    from services.lift.suggest import suggest_maps
+    return await asyncio.to_thread(suggest_maps, state, near)
+
+
 @router.post("/api/lift/datasets")
 async def lift_add_dataset(req: LiftDatasetRequest, state=Depends(get_state)):
     from services.lift.registration import add_live_lift_dataset

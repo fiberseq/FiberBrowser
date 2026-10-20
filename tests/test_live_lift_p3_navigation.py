@@ -170,3 +170,27 @@ def test_multi_file_rows_keep_their_file_when_one_file_fills_the_view(env, tmp_p
                                                      include_layers="true", full_working_set="true")).json()
     assert r["reads"] and all(read.get("library_id") for read in r["reads"])
     assert {read["library_id"].rsplit("/", 1)[-1] for read in r["reads"]} == {"src.bam"}
+
+
+def test_map_suggestions_next_to_a_bam_say_whether_its_contigs_match(env, tmp_path, monkeypatch):
+    client, manifest, bam = env
+    import shutil, os
+    monkeypatch.setenv("FIBERBROWSER_LIBRARY", str(tmp_path / "library.json"))
+    here = tmp_path / "data"
+    here.mkdir()
+    shutil.copytree(os.path.dirname(manifest), here / "map")
+    local = str(here / "map" / os.path.basename(manifest))
+    near_map = here / ("toy" + ".graphlift.json")
+    shutil.copy(local, near_map)
+    for f in os.listdir(here / "map"):
+        if f != os.path.basename(manifest):
+            shutil.copy(here / "map" / f, here / f)
+    moved = write_bam(here / "s.bam", _records)
+    out = client.get("/api/lift/maps", params={"near": moved}).json()
+    first = out["maps"][0]
+    assert first["where"] == "next to the BAM" and first["matches_bam"] is True and first["haplotypes"] == ["MAT", "PAT"]
+    other = write_bam(here / "other.bam", lambda h: [], contigs=(("chrZ", 1000),))
+    assert client.get("/api/lift/maps", params={"near": other}).json()["maps"][0]["matches_bam"] is False
+    assert "graphlift map" in out["help"]
+    monkeypatch.delenv("FIBERBROWSER_LIVE_LIFT")
+    assert client.get("/api/lift/maps", params={"near": moved}).status_code == 404
