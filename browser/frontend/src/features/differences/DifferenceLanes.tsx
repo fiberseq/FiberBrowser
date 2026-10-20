@@ -142,16 +142,21 @@ export function DifferenceLanes({ panel, dataset, width, gutter = 0, height }: {
     panelId: panel.id, datasetId: dataset.id, viewKey, chrom, difference: d, target:d.target });
   return <div ref={anchor} data-testid="live-lift-diff-strip" data-panel-id={panel.id}
     className="relative text-[10px] bg-slate-50 dark:bg-slate-900" style={{ height: height ?? differenceLanesHeight(panel, dataset), width }}>
-    <div className="flex gap-2 items-center h-6 px-2">
-      <strong>Differences</strong>
-      {(['assembly','reads'] as const).map(source=><label key={source}><input type="checkbox" checked={sources[source]} onChange={e=>useBrowserStore.setState(s=>({panels:s.panels.map(p=>p.id===panel.id?{...p,differenceSources:{...sources,[source]:e.target.checked}}:p)}))}/>{source}</label>)}
-      <button data-testid="live-lift-diff-prev" disabled={busy} onClick={() => void navigate(-1)}>◀</button>
-      <button data-testid="live-lift-diff-next" disabled={busy} onClick={() => void navigate(1)}>▶</button>
-      <select aria-label="Minimum difference size" value={minBp} onChange={e => useBrowserStore.setState(s => ({
+    {/* One 24 px row (the lanes start under it): controls never wrap or shrink; the status text truncates and
+        narrow panels shorten the title (owner feedback: the toggles were clipped in a 3-panel layout). */}
+    <div className="flex gap-1.5 items-center h-6 px-2 whitespace-nowrap overflow-hidden" data-testid="live-lift-diff-header">
+      <strong className="flex-shrink-0" title="Differences">{width < 420 ? 'Diffs' : 'Differences'}</strong>
+      {(['assembly','reads'] as const).map(source=><label key={source} className="inline-flex flex-shrink-0 items-center gap-0.5" data-testid={`live-lift-diff-source-${source}`}
+        title={source === 'assembly' ? 'Assembly differences from the map' : 'Read-supported edits'}>
+        <input type="checkbox" className="h-3 w-3 m-0" checked={sources[source]} onChange={e=>useBrowserStore.setState(s=>({panels:s.panels.map(p=>p.id===panel.id?{...p,differenceSources:{...sources,[source]:e.target.checked}}:p)}))}/>{source}</label>)}
+      <button className="flex-shrink-0" data-testid="live-lift-diff-prev" disabled={busy} onClick={() => void navigate(-1)}>◀</button>
+      <button className="flex-shrink-0" data-testid="live-lift-diff-next" disabled={busy} onClick={() => void navigate(1)}>▶</button>
+      <select className="flex-shrink-0 max-w-[5.5rem] text-[10px]" aria-label="Minimum difference size" value={minBp} onChange={e => useBrowserStore.setState(s => ({
         panels: s.panels.map(p => p.id === panel.id ? { ...p, liveLiftMinBp: Number(e.target.value) } : p),
       }))}>{MIN_SIZES.map(n => <option key={n} value={n}>{n ? `≥${n} bp` : 'All sizes'}</option>)}</select>
-      <button aria-expanded={table} onClick={() => setTable(t => !t)}>Table</button>
-      <span role={error ? 'status' : undefined}>{error || (busy ? 'Finding difference…' : readScope || (data ? data.mode==='bins'?'Density; zoom for individual differences':'Click a difference to inspect it · map discovery':'Loading…'))}</span>
+      <button className="flex-shrink-0" aria-expanded={table} onClick={() => setTable(t => !t)}>Table</button>
+      <span className="min-w-0 truncate text-slate-500 dark:text-slate-400" role={error ? 'status' : undefined}
+        title={error || (busy ? 'Finding difference…' : readScope || (data ? data.mode==='bins'?'Density; zoom for individual differences':'Click a difference to inspect it · map discovery':'Loading…'))}>{error || (busy ? 'Finding difference…' : readScope || (data ? data.mode==='bins'?'Density; zoom for individual differences':'Click a difference to inspect it · map discovery':'Loading…'))}</span>
     </div>
     <canvas ref={canvas} width={width} height={bandHeight} aria-label="Assembly differences" />
     {model.items.map(d => {

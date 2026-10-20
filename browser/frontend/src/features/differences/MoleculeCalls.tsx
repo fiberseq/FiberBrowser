@@ -56,8 +56,8 @@ export function MoleculeCalls({ selection, native = false }: { selection: Differ
   if (!supported) return <p>Read carriage for this topology is unavailable. Assembly geometry remains inspectable.</p>;
   return <section aria-label="Molecule calls" className="mt-2 border-t pt-2">
     <p>{target.target_type === 'geometry' ? 'Frozen geometry target · exact sequence carriage remains separate' : 'Frozen exact allele target'} · revision {target.revision}</p>
-    <div className="flex gap-2 flex-wrap">
-      {(['include_putative', 'include_conflicting', 'include_ambiguous', 'include_duplicates'] as const).map(key => <label key={key}>
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+      {(['include_putative', 'include_conflicting', 'include_ambiguous', 'include_duplicates'] as const).map(key => <label key={key} className="inline-flex items-center gap-1 whitespace-nowrap">
         <input type="checkbox" checked={policy[key]} onChange={e => setPolicy(p => ({ ...p, [key]: e.target.checked }))} /> {key.replace('include_', '').replace(/_/g, ' ')}
       </label>)}
       {!native && <><select aria-label="Read analysis scope" value={scope} onChange={e => setScope(e.target.value as WorkspaceQuery['analysis_scope'])}>

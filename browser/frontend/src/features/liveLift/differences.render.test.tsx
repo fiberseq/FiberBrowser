@@ -83,6 +83,23 @@ describe('differences strip and inspection', () => {
     expect(getDifferenceReads).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps its header on one row at panel widths: toggles never wrap, the status truncates, narrow panels shorten the title', async () => {
+    for (const width of [1000, 380]) {
+      act(() => root.render(<PanelDisplayContext.Provider value={panel.id}><DifferencesStrip panel={panel} dataset={dataset} width={width} /></PanelDisplayContext.Provider>));
+      await settle();
+      const header = host.querySelector('[data-testid="live-lift-diff-header"]')!;
+      expect(header.className).toContain('whitespace-nowrap');
+      expect(header.className).toContain('overflow-hidden');
+      for (const source of ['assembly', 'reads']) {
+        const label = header.querySelector(`[data-testid="live-lift-diff-source-${source}"]`)!;
+        expect(label.className).toContain('flex-shrink-0');
+        expect(label.textContent).toBe(source);
+      }
+      const status = header.querySelector('span.truncate')!;
+      expect(status.getAttribute('title')).toBe(status.textContent);
+      expect(header.querySelector('strong')!.textContent).toBe(width < 420 ? 'Diffs' : 'Differences');
+    }
+  });
   it('is flag gated and debounces the dataset, lift key, haplotype and view', async () => {
     useLiveLiftStore.setState({ enabled: false }); renderStrip(); await settle();
     expect(host.querySelector('[data-testid="live-lift-diff-strip"]')).toBeNull(); expect(getDifferences).not.toHaveBeenCalled();
