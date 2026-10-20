@@ -394,7 +394,7 @@ export function placeReads(all: GraphRead[], index: PlacementIndex, maxPrimitive
       const n = m.calls.length + m.m6a.length + m.density.length;
       if (spent || primitives + n > maxPrimitives) {
         spent = true;
-        if (n || r.m6a?.length || callsOf(r)) { m.calls = []; m.m6a = []; m.density = []; m.marksHidden = true; marksHidden++; }
+        if (n || r.m6a?.length || r.m6a_density?.length || callsOf(r)) { m.calls = []; m.m6a = []; m.density = []; m.marksHidden = true; marksHidden++; }
       } else primitives += n;
       molecules.push(m);
     }
