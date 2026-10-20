@@ -50,17 +50,29 @@ def shared_cache_diagnostics():
                 if any(c.budget_group == group for c in list(_shared.values()))]
 
 
-def retained_size(value, seen=None) -> int:
+def _seen_in(identity, base) -> bool:
+    for seen in base:
+        if identity in seen:
+            return True
+    return False
+
+
+def retained_size(value, seen=None, _base=()) -> int:
     """Estimate resident bytes; arrays are exact, large Python sequences sampled.
 
     Counting shared objects more than once across entries is conservative. A
     bounded sample avoids walking millions of marks on every cache insertion.
     This is a retention budget, not a bound on a running request's RSS.
+
+    Each sample of a large sequence walks with its own seen set on top of the
+    sets of its ancestors (``_base``), as though it had a copy of them: the
+    ancestors' sets do not change while it walks, and copying them per sample
+    made a walk quadratic in the objects already seen.
     """
     if seen is None:
         seen = set()
     identity = id(value)
-    if identity in seen:
+    if identity in seen or (_base and _seen_in(identity, _base)):
         return 0
     seen.add(identity)
     # Exact builtins have no owned containers or custom retention metadata.
@@ -75,23 +87,35 @@ def retained_size(value, seen=None) -> int:
     elif isinstance(value, (list, tuple, set, frozenset)):
         if isinstance(value, (list, tuple)) and len(value) > 64:
             # Samples have independent seen sets. An atomic sample cannot add
-            # descendants, so its size needs no copied set or recursive call.
+            # descendants, so its size needs no new set or recursive call.
             total = 0
+            sample_base = _base + (seen,)
             for i in range(64):
                 item = value[i * (len(value) - 1) // 63]
                 if type(item) in _ATOMIC_TYPES:
-                    if id(item) not in seen:
+                    identity = id(item)
+                    if identity not in seen and not (_base and _seen_in(identity, _base)):
                         total += sys.getsizeof(item)
                 else:
-                    total += retained_size(item, seen.copy())
+                    total += retained_size(item, set(), sample_base)
             return size + int(total * len(value) / 64)
         items = value
     else:
         if hasattr(value, 'nbytes'):
             # A view owns its underlying allocation through base.
-            size += retained_size(value.base, seen) if getattr(value, 'base', None) is not None else 0
+            size += retained_size(value.base, seen, _base) if getattr(value, 'base', None) is not None else 0
         elif hasattr(value, '__dict__'):
-            size += retained_size(vars(value), seen)
+            size += retained_size(vars(value), seen, _base)
+        return size
+    if _base:
+        for item in items:
+            if type(item) in _ATOMIC_TYPES:
+                identity = id(item)
+                if identity not in seen and not _seen_in(identity, _base):
+                    seen.add(identity)
+                    size += sys.getsizeof(item)
+            else:
+                size += retained_size(item, seen, _base)
         return size
     for item in items:
         if type(item) in _ATOMIC_TYPES:

@@ -32,6 +32,7 @@ from contextvars import ContextVar
 
 decode_read_scope = ContextVar('decode_read_scope', default=None)
 prefetch_sample_level = ContextVar('prefetch_sample_level', default=None)
+from collections import OrderedDict
 from contextlib import contextmanager
 from typing import Optional
 
@@ -302,6 +303,26 @@ def estimate_reads(bam_path: str, chrom: str, start: int, end: int, *, bam_handl
     return max(0.0, (hi - lo) / bytes_per_read)
 
 
+_LIFTED_ESTIMATES: "OrderedDict[tuple, Optional[float]]" = OrderedDict()
+_LIFTED_ESTIMATES_MAX = 4096
+
+
+def clear_lifted_estimates() -> None:
+    with _bai_lock:
+        _LIFTED_ESTIMATES.clear()
+
+
+def _index_signature(path: str) -> Optional[tuple]:
+    index = _bai_path(path)
+    if index is None:
+        return None
+    try:
+        st = os.stat(index)
+    except OSError:
+        return None
+    return index, st.st_mtime_ns, st.st_size
+
+
 def estimate_dataset_reads(state, dataset, chrom: str, start: int, end: int) -> Optional[float]:
     """Reads of a BAM dataset expected in ``[start, end)`` (None: unknown)."""
     if getattr(dataset, "data_type", None) == "bam_livelift":
@@ -309,12 +330,26 @@ def estimate_dataset_reads(state, dataset, chrom: str, start: int, end: int) -> 
         config = dataset.live_lift
         if chrom not in config.handle.map.targets:
             return 0.0
+        # A lifted estimate selects pieces and plans a fetch: the display's
+        # sample level asks for a dozen of them on every request. It depends
+        # only on the lift identity, the files' indexes and the range.
+        key = (config.key(), tuple(map(str, dataset.paths)), tuple(_index_signature(str(p)) for p in dataset.paths),
+               chrom, int(start), int(end))
+        with _bai_lock:
+            if key in _LIFTED_ESTIMATES:
+                _LIFTED_ESTIMATES.move_to_end(key)
+                return _LIFTED_ESTIMATES[key]
         try:
             selection = select_pieces(config.handle, chrom, start, end, haplotypes=config.haplotypes,
                                       settings=config.settings, key=config.key())
-            return estimate_lifted_reads(dataset.paths, plan_fetch(selection, config.settings, fetch_range=(start, end)))
+            value = estimate_lifted_reads(dataset.paths, plan_fetch(selection, config.settings, fetch_range=(start, end)))
         except LiftRefused:
-            return None
+            value = None
+        with _bai_lock:
+            _LIFTED_ESTIMATES[key] = value
+            while len(_LIFTED_ESTIMATES) > _LIFTED_ESTIMATES_MAX:
+                _LIFTED_ESTIMATES.popitem(last=False)
+        return value
     if dataset is None or getattr(dataset, "data_type", None) != "bam":
         return None
     total = 0.0

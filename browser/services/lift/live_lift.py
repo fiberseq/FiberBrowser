@@ -310,9 +310,35 @@ def _bin_pieces(handle: LiftMapHandle, key: str, chrom: str, b: int) -> list:
     return pieces
 
 
+_FLANK_CACHE: "OrderedDict[tuple, list]" = OrderedDict()
+_FLANK_CACHE_MAX = 4096
+
+
+def _flank_pieces(handle: LiftMapHandle, key: str, chrom: str, a: int, b: int) -> list:
+    """``target_to_source`` pieces of one owned gap's 1 kb flank, cached under
+    ``(lift_key, chrom, a, b)``: every selection overlapping the gap asks for
+    the same flanks (a pan, the sampler's estimates, each haplotype panel).
+    The caller holds ``handle.lock``; the list is shared and never mutated."""
+    ck = (key, chrom, a, b)
+    with _BIN_CACHE_LOCK:
+        hit = _FLANK_CACHE.get(ck)
+        if hit is not None:
+            _FLANK_CACHE.move_to_end(ck)
+            return hit
+    pieces = _as_lift_pieces(handle, handle.map.target_to_source(chrom, a, b))
+    with _BIN_CACHE_LOCK:
+        _FLANK_CACHE[ck] = pieces
+        while len(_FLANK_CACHE) > _FLANK_CACHE_MAX:
+            _FLANK_CACHE.popitem(last=False)
+    return pieces
+
+
 def clear_selection_cache() -> None:
     with _BIN_CACHE_LOCK:
         _BIN_CACHE.clear()
+        _FLANK_CACHE.clear()
+    from services.read_sampling import clear_lifted_estimates
+    clear_lifted_estimates()
 
 
 def select_pieces(handle: LiftMapHandle, chrom: str, start: int, end: int, *, haplotypes: Iterable[str],
@@ -356,7 +382,8 @@ def select_pieces(handle: LiftMapHandle, chrom: str, start: int, end: int, *, ha
         for hap in sorted(haps):
             for ci, (t, _q, dt, _dq, _reason), _ in primary_gaps_for_region(handle, chrom, hap, start, end):
                 for a, b in ((max(0, t - 1000), t), (t + dt, t + dt + 1000)):
-                    flank = _as_lift_pieces(handle, handle.map.target_to_source(chrom, a, b))
+                    flank = (_flank_pieces(handle, key, chrom, a, b) if use_cache
+                             else _as_lift_pieces(handle, handle.map.target_to_source(chrom, a, b)))
                     gap_flanks.extend(p for p in flank if p.primary and p.chain == ci
                                       and (p.t_end == t or p.t_start == t + dt))
     pieces = _merge_contiguous(set(pieces + gap_flanks))

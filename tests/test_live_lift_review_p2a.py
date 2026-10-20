@@ -230,9 +230,14 @@ def test_dataset_estimate_uses_target_fetch_plan(lift_env, monkeypatch):
     monkeypatch.setattr(ll, 'estimate_lifted_reads', estimate)
     assert estimate_dataset_reads(lift_env[1], ds, TARGET, 1000, 19000) == 123
     assert set(seen) == {MAT, PAT}
+    # Memoized per lift identity, index and range (the sample level asks for a dozen per request).
+    seen.clear()
+    assert estimate_dataset_reads(lift_env[1], ds, TARGET, 1000, 19000) == 123
+    assert seen == []
     def refuse(*a, **k):
         raise ll.LiftRefused('budget')
     monkeypatch.setattr(ll, 'plan_fetch', refuse)
+    ll.clear_selection_cache()
     assert estimate_dataset_reads(lift_env[1], ds, TARGET, 1000, 19000) is None
 
 
