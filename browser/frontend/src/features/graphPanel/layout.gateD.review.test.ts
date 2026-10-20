@@ -157,4 +157,47 @@ describe('Gate D review fixes', () => {
     const arcs = scene(m).prims.filter((p): p is Extract<Prim, { t: 'arc' }> => p.t === 'arc');
     expect(arcs.map(a => a.tier)).toEqual([0, 1, 2]);
   });
+
+  // ------------------------------------------------------------------ round 2
+  const COLORS4 = { ...COLORS, alt: '#0f766e' };
+  const scene4 = (m: LayoutModel, smallBp = 0) => buildScene(m, {
+    width: 1200, gutter: 52, rightPad: 6, rulerHeight: 30, laneHeight: 34, laneGap: 4, compression: 'log', reversed: false, colors: COLORS4, smallBp,
+  });
+
+  it('r2 #1: a small insertion family with a difference inside stays a bubble; the inner difference keeps its hit', () => {
+    const m = build(fromWalks({ L: 1000, A: 12, B: 2, C: 12, X: 2, R: 1000 }, { ref: ['L', 'R'], mat: ['L', 'A', 'B', 'C', 'R'], pat: ['L', 'A', 'X', 'C', 'R'] }));
+    const nested = groups(m.chain).find(g => g.depth === 1)!;
+    expect(nested).toBeTruthy();
+    const s = scene(m, 50);
+    expect(s.hits.filter(h => h.payload.kind === 'allele').map(h => (h.payload.kind === 'allele' ? h.payload.group.id : ''))).toContain(nested.id);
+  });
+
+  it('r2 #2: an expanded carrier of a family sub-allele resolves to its own occurrence', () => {
+    const m = build(fromWalks({ L: 1000, A: 120, B: 10, C: 110, X: 10, R: 1000 }, { ref: ['L', 'R'], mat: ['L', 'A', 'B', 'C', 'R'], pat: ['L', 'A', 'X', 'C', 'R'], alt: ['L', 'A', 'X', 'C', 'R'] }));
+    for (const smallBp of [0, 50]) {
+      const s = scene4(m, smallBp);
+      // Bubbles: the sub-allele's tube, with a stripe per carrier. Marks: one mark per carrier (ALT's own).
+      const h = s.hits.find(x => x.payload.kind === 'allele' && x.within && x.payload.allele.carriers.includes('alt')
+        && (x.payload.lane === 'alt' || Boolean(x.payload.stripes?.some(st => st.key === 'alt'))))!;
+      expect(h).toBeTruthy();
+      if (h.payload.kind !== 'allele') continue;
+      const st = h.payload.stripes?.find(x => x.key === 'alt');
+      const y = st ? (st.y0 + st.y1) / 2 : (h.y0 + h.y1) / 2;
+      expect(sceneInverse(s, (h.x0 + h.x1) / 2, y)).toMatchObject({ kind: 'allele', path: 'alt', occurrence: 'alt.2' });
+    }
+  });
+
+  it('r2 #3: the base stripes of a folded difference inside a family are their paths\' own occurrences', () => {
+    const m = build(fromWalks({ L: 1000, A: 120, B: 10, C: 110, X: 10, R: 1000 }, { ref: ['L', 'R'], mat: ['L', 'A', 'B', 'C', 'R'], pat: ['L', 'A', 'B', 'C', 'R'], alt: ['L', 'A', 'X', 'C', 'R'] }));
+    const s = scene4(m, 50);
+    const h = s.hits.find(x => x.payload.kind === 'base' && x.within)!;
+    expect(h).toBeTruthy();
+    if (h.payload.kind !== 'base') return;
+    for (const key of ['mat', 'pat']) {
+      const st = h.payload.stripes!.find(x => x.key === key)!;
+      const x = (h.x0 + h.x1) / 2, y = (st.y0 + st.y1) / 2;
+      expect(sceneHitAt(s, x, y)).toBe(h);
+      expect(sceneInverse(s, x, y)).toMatchObject({ kind: 'allele', path: key, occurrence: `${key}.2` });
+    }
+  });
 });

@@ -108,7 +108,7 @@ export type Prim =
 export type HitPayload =
   | { kind: 'run'; run: RunItem; host: string; visit: Visit; offset: number; stripes?: Stripe[] }
   | { kind: 'allele'; group: GroupItem | JunctionItem; allele: AltAllele; lane: string; visit: Visit | null; offset: number; stripes?: Stripe[] }
-  | { kind: 'base'; group: GroupItem; lane: string }
+  | { kind: 'base'; group: GroupItem; lane: string; stripes?: Stripe[] }
   | { kind: 'slot'; group: GroupItem; boundary: number | null }
   | { kind: 'filler'; group: GroupItem | JunctionItem; allele: AltAllele; lane: string }
   | { kind: 'gap'; junction: JunctionItem; gap?: GraphCoverage }
@@ -191,7 +191,8 @@ function everyAllele(g: GroupItem, out: AltAllele[] = []): AltAllele[] {
 export function isSmallDifference(g: GroupItem, small: number): boolean {
   if (small <= 0 || g.type !== 'bubble' || !g.alts.length) return false;
   if (maxAlleleBp(g) >= small) return false;
-  return everyAllele(g).every(a => a.status === 'ok' && !a.inverted);
+  // A family with differences inside it stays a bubble: its inner differences then show as marks on its tube.
+  return everyAllele(g).every(a => a.status === 'ok' && !a.inverted && !a.family?.chain.some(it => it.kind === 'group'));
 }
 
 const foldCache = new WeakMap<Item[], Map<number, ChainItem[]>>();
@@ -619,7 +620,7 @@ export function buildScene(model: LayoutModel, opts: SceneOptions & { plan?: Sce
         visits.push(...bvs);
         placeVisits(bvs, x0, x1 - x0, bp, host, g.id, false, bmap);
         if (g.base.bp > 0) {
-          hits.push({ x0, x1, y0: row.top, y1: row.top + row.height, cursor: false, payload: { kind: 'base', group: g, lane: host } });
+          hits.push({ x0, x1, y0: row.top, y1: row.top + row.height, cursor: false, payload: { kind: 'base', group: g, lane: host, stripes: stripesOf(slots, g.base.carriers) } });
           if (onTarget) {
             let a = 0;
             for (const v of bvs) {
@@ -1051,7 +1052,19 @@ export function sceneInverse(scene: Scene, x: number, y: number): SceneInverse |
     case 'filler': return { kind: 'connector', group: p.group.id, boundary: boundaryOf(p.group) };
     case 'slot': return { kind: 'connector', group: p.group.id, boundary: p.boundary ?? boundaryOf(p.group) };
     case 'base': {
+      // A folded difference's base sequence: the stripe's own occurrence (the host's, or another carrier's).
+      const host = placementAt(scene, x, p.group.id, p.lane, p.lane);
       const t = targetAtX(scene.targetMap, x);
+      if (host) {
+        const path = p.stripes?.find(st => y >= st.y0 && y <= st.y1)?.key ?? p.lane;
+        const mine = path !== p.lane ? placementAt(scene, x, p.group.id, p.lane, path) : null;
+        if (p.group.target && t && !t.boundary) {
+          return { kind: 'target', occurrence: host.place.occ, offset: host.offset, pos: t.pos,
+            ...(mine ? { carrier: { path, occurrence: mine.place.occ, offset: mine.offset } } : {}) };
+        }
+        const use = mine ?? host;
+        return { kind: 'allele', path: mine ? path : p.lane, occurrence: use.place.occ, offset: use.offset, boundary: boundaryOf(p.group), group: top.within?.group.id ?? p.group.id };
+      }
       return t && !t.boundary ? { kind: 'target', occurrence: '', offset: 0, pos: t.pos } : { kind: 'connector', group: p.group.id, boundary: boundaryOf(p.group) };
     }
     case 'gap': return { kind: 'gap', span: (p.gap ?? p.junction.gap)?.span ?? p.junction.target };

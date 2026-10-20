@@ -240,7 +240,9 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   // Before the first plan of a selection the estimate (every lane full) is provisional: the first plan sets it.
   const naturalRef = useRef<{ key: string; height: number; planned: boolean }>({ key: '', height: 0, planned: false });
   const selectionKey = (state?.selectedPathKeys ?? []).join(',');
-  if (naturalRef.current.key !== selectionKey || (plan && !naturalRef.current.planned)) naturalRef.current = { key: selectionKey, height: natural, planned: Boolean(plan) };
+  // A plan counts for this selection only once its response is this selection's (not the previous one's).
+  const planned = Boolean(plan) && (response?.result.paths.map(p => p.binding).join(',') ?? '') === selectionKey;
+  if (naturalRef.current.key !== selectionKey || (planned && !naturalRef.current.planned)) naturalRef.current = { key: selectionKey, height: natural, planned };
   else if (natural > naturalRef.current.height) naturalRef.current = { ...naturalRef.current, height: natural };
   const naturalHeight = naturalRef.current.height;
   useEffect(() => {

@@ -1168,7 +1168,19 @@ function alignFamilies(group: GroupItem, lanes: string[], counter: { n: number }
         else if (it.kind === 'group') {
           it.base.carriers = expandCarriers(it.base.carriers, members.map(m => m.allele), lanes);
           it.unavailable = expandCarriers(it.unavailable, members.map(m => m.allele), lanes);
-          for (const a of it.alts) a.carriers = expandCarriers(a.carriers, members.map(m => m.allele), lanes);
+          for (const a of it.alts) {
+            const before = a.carriers;
+            a.carriers = expandCarriers(a.carriers, members.map(m => m.allele), lanes);
+            // An expanded carrier's own walk here: the same slice of its whole member allele's walk.
+            for (const c of a.carriers) {
+              if (before.includes(c) || !a.visits.length) continue;
+              const owner = members.find(m => m.allele.carriers.includes(c) && before.includes(m.allele.carriers[0]))?.allele;
+              const from = owner ? owner.visits.indexOf(a.visits[0]) : -1;
+              const walk = owner?.byCarrier?.[c];
+              if (from < 0 || !walk) continue;
+              (a.byCarrier ??= { [a.carriers[0]]: a.visits })[c] = walk.slice(from, from + a.visits.length);
+            }
+          }
           expand(it.base.chain);
         }
       }
