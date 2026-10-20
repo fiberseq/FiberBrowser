@@ -130,6 +130,9 @@ def prepare_lift_cohort(rows, purpose, settings, lift_hap=None):
         kept.append({**read, "analysis_id": analysis_id(read, settings),
                      **({"strand": strands[ll["molecule"]], "_fiberbrowser_inferred_strand": ll["molecule"] not in authoritative} if ll["molecule"] in strands else {})})
     mapping = {r["analysis_id"]: r["analysis_id"] for r in kept}
+    folded_display = 0
+    if purpose == "display" and settings.supplementary_display == "fold":
+        kept, folded_display = fold_display_supplementaries(kept)
     desc = dict(records=len({(r["live_lift"]["molecule"], r["live_lift"]["record"]) for r in kept}),
                 supplementary_rows=sum(bool(r["live_lift"].get("source", {}).get("supplementary")) for r in kept),
                 folded=False, excluded_alt=excluded_alt, alternative_rows=sum(bool(r["live_lift"].get("alt")) for r in kept),
@@ -143,6 +146,7 @@ def prepare_lift_cohort(rows, purpose, settings, lift_hap=None):
             groups[read["analysis_id"]].append(read)
         kept = [_fold(group) for _, group in sorted(groups.items())]
         desc["folded"] = True
+    desc["folded_display_rows"] = folded_display
     desc["rows"] = len(kept)
     return PreparedCohort(kept, mapping, desc)
 
@@ -160,6 +164,119 @@ def _fold(rows):
                                       r.get("reference_start", 0), r["analysis_id"],
                                       r["live_lift"]["record"], r["live_lift"].get("row_index", 0)))
     rows = arbitrate_molecular_placements(rows)
+    out = _merge_rows(rows)
+    ll = out["live_lift"]
+    from services.read_selection import read_body_spans
+    ll["segments"] = [[a, b, 0, "+", True] for a, b in _merge(s for r in rows for s in read_body_spans(r))]
+    ll["connectors"] = []
+    ll["insertions"] = {}
+    return out
+
+
+def _is_supplementary(row):
+    return bool((row["live_lift"].get("source") or {}).get("supplementary"))
+
+
+def _target_gap(a, b):
+    return max(0, b.get("reference_start", 0) - a.get("reference_end", 0),
+               a.get("reference_start", 0) - b.get("reference_end", 0))
+
+
+def fold_display_supplementaries(rows):
+    """``supplementary_display='fold'`` (§2.3, P3): a molecule's supplementary
+    rows are drawn on its primary record's row. Each supplementary row joins
+    the primary row nearest it on the target (overlapping first, then the
+    lower target start); a molecule with no primary row loaded folds its
+    supplementaries onto the lowest one. Alternative rows never fold.
+
+    Returns ``(rows, number of folded rows)``. A folded row keeps the anchor's
+    ``analysis_id`` and lists every member's in ``live_lift.folded``; analysis
+    cohorts are unaffected (display only)."""
+    by_molecule = defaultdict(list)
+    for r in rows:
+        if not r["live_lift"].get("alt"):
+            by_molecule[r["live_lift"]["molecule"]].append(r)
+    attach = {}          # id(anchor row) -> member rows (anchor first)
+    consumed = set()
+    for members in by_molecule.values():
+        supps = [r for r in members if _is_supplementary(r)]
+        if not supps:
+            continue
+        prims = [r for r in members if not _is_supplementary(r)]
+        if prims:
+            for supp in supps:
+                best = min(prims, key=lambda p: (_target_gap(p, supp), p.get("reference_start", 0), p["analysis_id"]))
+                attach.setdefault(id(best), [best]).append(supp)
+                consumed.add(id(supp))
+        else:
+            ordered = sorted(supps, key=lambda r: (r.get("reference_start", 0), r["analysis_id"]))
+            if len(ordered) > 1:
+                attach[id(ordered[0])] = ordered
+                consumed.update(id(r) for r in ordered[1:])
+    if not attach:
+        return rows, 0
+    out = []
+    for r in rows:
+        if id(r) in consumed:
+            continue
+        out.append(_fold_display_row(attach[id(r)]) if id(r) in attach else r)
+    return out, len(attach)
+
+
+def _fold_display_row(members):
+    """Merge one anchor row and its supplementary rows for display: overlapping
+    molecular bases are arbitrated as in ``fold_molecule``, but each member's
+    segments keep their chain, strand and primary flag (clipped to what it
+    keeps), and connectors, badges, insertion payloads and map observations
+    stay drawn."""
+    anchor = members[0]
+    masks = _placement_masks(members)
+    clipped = []
+    for i, row in enumerate(members):
+        if masks is None or not row["live_lift"].get("molecular_spans"):
+            clipped.append(deepcopy(row))
+            continue
+        keep = masks.get(i)
+        if not keep:
+            continue
+        c = _clip_row(row, keep)
+        ll = c["live_lift"]
+        ll["segments"] = [[max(a, x), min(b, y), *rest] for a, b, *rest in row["live_lift"].get("segments", [])
+                          for x, y in keep if min(b, y) > max(a, x)]
+        lo, hi = keep[0][0], keep[-1][1]
+        ll["connectors"] = [list(cn) for cn in row["live_lift"].get("connectors", []) if lo <= cn[0] and cn[1] <= hi]
+        clipped.append(c)
+    if not clipped:
+        clipped = [deepcopy(anchor)]
+    if clipped[0]["live_lift"]["record"] != anchor["live_lift"]["record"]:
+        clipped.insert(0, {**deepcopy(anchor), "intervals": [], "fire": [], "layers": {},
+                           "live_lift": {**deepcopy(anchor["live_lift"]), "segments": [], "connectors": [],
+                                         "badges": [], "badge_ids": [], "calls": {}, "call_parts": {}}})
+    out = _merge_rows(clipped)
+    ll = out["live_lift"]
+    order = sorted(range(len(ll["badges"])), key=lambda i: ll["badges"][i][0])
+    ids = ll["badge_ids"]
+    ll["badges"] = [ll["badges"][i] for i in order]
+    ll["badge_ids"] = [ids[i] if i < len(ids) else None for i in order]
+    ll["segments"] = sorted(ll["segments"], key=lambda s: (s[0], s[1]))
+    ll["connectors"] = sorted(ll["connectors"])
+    ll["molecular_spans"] = sorted(ll.get("molecular_spans", []))
+    ll["insertions"] = {k: v for r in clipped for k, v in (r["live_lift"].get("insertions") or {}).items()}
+    if any("gap_observations" in r["live_lift"] for r in clipped):
+        ll["gap_observations"] = [g for r in clipped for g in r["live_lift"].get("gap_observations", [])]
+    out["analysis_id"] = anchor["analysis_id"]
+    ll["folded"] = {"records": len({r["live_lift"]["record"] for r in members}),
+                    "analysis_ids": [r["analysis_id"] for r in members],
+                    "supplementary_rows": sum(_is_supplementary(r) for r in members)}
+    return out
+
+
+def _merge_rows(rows):
+    """One row with every member's annotations: intervals, fire and layers with
+    record-qualified call IDs (identical local IDs of two records never
+    collapse), concatenated geometry lists, marks, alignment spans and hull."""
+    from services.lift.reads import _merge
+    from services.background_work import checkpoint
     out = deepcopy(rows[0])
     ll = out["live_lift"]
     ll["records"] = sorted({r["live_lift"]["record"] for r in rows})
@@ -229,10 +346,6 @@ def _fold(rows):
     out["reference_end"] = max(r.get("reference_end", 0) for r in rows)
     if len({r.get("alignment_orientation") for r in rows}) > 1:
         out["alignment_orientation"] = None
-    from services.read_selection import read_body_spans
-    ll["segments"] = [[a, b, 0, "+", True] for a, b in _merge(s for r in rows for s in read_body_spans(r))]
-    ll["connectors"] = []
-    ll["insertions"] = {}
     return out
 
 
@@ -259,6 +372,24 @@ def arbitrate_molecular_placements(rows):
     from services.lift.reads import _merge
     from services.background_work import checkpoint
     from services.read_selection import read_body_spans
+    allowed = _placement_masks(rows)
+    if allowed is None:
+        return rows  # compatibility for synthetic/older rows without the map
+    result = []
+    for i, row in enumerate(rows):
+        masks = allowed.get(i)
+        if not masks:
+            continue
+        result.append(_clip_row(row, masks))
+    return result or rows[:1]
+
+
+def _placement_masks(rows):
+    """``{row index: merged target spans it keeps}`` under the arbitration
+    order (primary record, primary chain, target), or None without molecular
+    spans."""
+    from services.lift.reads import _merge
+    from services.background_work import checkpoint
     placements = []
     for i, row in enumerate(rows):
         ll = row["live_lift"]
@@ -266,7 +397,7 @@ def arbitrate_molecular_placements(rows):
             placements.append((bool(ll.get("source", {}).get("supplementary")), not primary,
                                a, ll["record"], ll.get("row_index", 0), i, b, m, step))
     if not placements:
-        return rows  # compatibility for synthetic/older rows without the map
+        return None
     occupied, allowed = [], defaultdict(list)
     for n, (_, _, a, _, _, i, b, m, step) in enumerate(sorted(placements)):
         if n % 256 == 0:
@@ -277,13 +408,7 @@ def arbitrate_molecular_placements(rows):
             ta = a + (x - m if step == 1 else m - y + 1)
             allowed[i].append([ta, ta + y - x])
         occupied = _merge([*occupied, [lo, hi]])
-    result = []
-    for i, row in enumerate(rows):
-        masks = _merge(allowed[i])
-        if not masks:
-            continue
-        result.append(_clip_row(row, masks))
-    return result or rows[:1]
+    return {i: _merge(spans) for i, spans in allowed.items()}
 
 
 def _clip_row(row, masks):

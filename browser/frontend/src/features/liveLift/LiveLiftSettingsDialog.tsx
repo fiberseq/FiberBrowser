@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { create } from 'zustand';
 import { useBrowserStore } from '../../stores/browserStore';
-import { updateLiftSettings, updateMoleculeProvenance, type LiftSettings } from './api';
+import { updateLiftSettings, updateMoleculeProvenance, type LiftSettings, type SupplementaryDisplay } from './api';
 import { CohortSettingsFields, MoleculeProvenanceFields } from './CohortSettingsFields';
 import { LiftSettingsFields } from './LiveLiftDialog';
 
@@ -19,7 +19,7 @@ export function LiveLiftSettingsDialog() {
   const [gSplitKb, setGSplitKb] = useState(10);
   const [mergeKb, setMergeKb] = useState(50);
   const [alternatives, setAlternatives] = useState(false);
-  const [supplementaries, setSupplementaries] = useState<'own_rows' | 'hide'>('own_rows');
+  const [supplementaries, setSupplementaries] = useState<SupplementaryDisplay>('own_rows');
   const [hatching, setHatching] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [advanced, setAdvanced] = useState<LiftSettings>({});
@@ -30,7 +30,7 @@ export function LiveLiftSettingsDialog() {
     setGSplitKb(Number(s.g_split ?? 10_000) / 1000);
     setMergeKb(Number(s.window_merge ?? 50_000) / 1000);
     setAlternatives(Boolean(s.alternatives));
-    setSupplementaries((s.supplementary_display as 'own_rows' | 'hide') ?? 'own_rows');
+    setSupplementaries((s.supplementary_display as SupplementaryDisplay) ?? 'own_rows');
     setHatching(s.coverage_hatching !== false);
     setError(null);
     setAdvanced(s);

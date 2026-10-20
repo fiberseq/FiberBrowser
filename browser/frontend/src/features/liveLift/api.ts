@@ -34,6 +34,9 @@ export interface LiftMapInfo {
   error?: string;
 }
 
+/** own_rows: a row per record; fold: on the primary record's row (P3); hide. */
+export type SupplementaryDisplay = 'own_rows' | 'fold' | 'hide';
+
 /** The advanced settings shown in the browser (services/lift/live_lift.LiftSettings; all in lift_key). */
 export interface LiftSettings {
   haplotype_mode?: 'split' | 'pooled';
@@ -41,7 +44,7 @@ export interface LiftSettings {
   window_merge?: number;
   rejoin_bp?: number;
   alternatives?: boolean;
-  supplementary_display?: 'own_rows' | 'hide';
+  supplementary_display?: SupplementaryDisplay;
   coverage_hatching?: boolean;
   cohort_alternatives?: 'exclude' | 'include';
   cohort_supplementaries?: 'all_records' | 'follow_display' | 'primary_only';

@@ -5,7 +5,7 @@
  */
 import { useEffect, useState } from 'react';
 import { useBrowserStore } from '../../stores/browserStore';
-import { addLiveLiftDataset, inspectLiftMap, type LiftMapInfo, type LiftSettings } from './api';
+import { addLiveLiftDataset, inspectLiftMap, type LiftMapInfo, type LiftSettings, type SupplementaryDisplay } from './api';
 import { useLiveLiftStore } from './store';
 import { CohortSettingsFields } from './CohortSettingsFields';
 
@@ -23,7 +23,7 @@ export function LiveLiftDialog() {
   const [gSplitKb, setGSplitKb] = useState(10);
   const [mergeKb, setMergeKb] = useState(50);
   const [alternatives, setAlternatives] = useState(false);
-  const [supplementaries, setSupplementaries] = useState<'own_rows' | 'hide'>('own_rows');
+  const [supplementaries, setSupplementaries] = useState<SupplementaryDisplay>('own_rows');
   const [hatching, setHatching] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -128,7 +128,7 @@ export interface LiftSettingsFieldsProps {
   gSplitKb: number; setGSplitKb: (v: number) => void;
   mergeKb: number; setMergeKb: (v: number) => void;
   alternatives: boolean; setAlternatives: (v: boolean) => void;
-  supplementaries: 'own_rows' | 'hide'; setSupplementaries: (v: 'own_rows' | 'hide') => void;
+  supplementaries: SupplementaryDisplay; setSupplementaries: (v: SupplementaryDisplay) => void;
   hatching: boolean; setHatching: (v: boolean) => void;
 }
 
@@ -148,8 +148,9 @@ export function LiftSettingsFields(p: LiftSettingsFieldsProps) {
         onChange={e => p.setAlternatives(e.target.checked)} /> Show alternative placements (up to 16 chains; dashed rows)</label>
       <label>Supplementary alignments
         <select className={input} value={p.supplementaries}
-          onChange={e => p.setSupplementaries(e.target.value as 'own_rows' | 'hide')}>
+          onChange={e => p.setSupplementaries(e.target.value as SupplementaryDisplay)}>
           <option value="own_rows">Own rows</option>
+          <option value="fold">On the primary's row</option>
           <option value="hide">Hide</option>
         </select>
       </label>

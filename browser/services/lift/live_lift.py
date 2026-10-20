@@ -22,7 +22,7 @@ from services.lift.graphlift_map import LiftMap
 # ── Settings ────────────────────────────────────────────────────────────────
 
 HAPLOTYPE_MODES = ("split", "pooled")
-SUPPLEMENTARY_DISPLAY = ("own_rows", "hide")          # "fold" is P3
+SUPPLEMENTARY_DISPLAY = ("own_rows", "hide", "fold")  # fold: on the primary's row (P3)
 COHORT_SUPPLEMENTARIES = ("all_records", "follow_display", "primary_only")
 COHORT_ALTERNATIVES = ("exclude", "include")
 JOINT_DEDUP = ("off", "by_molecule")

@@ -16,7 +16,13 @@ def base_read_id(read_id: str) -> str:
 def read_id_keys(read):
     """Display identity and cohort identity; never infer molecule sharing from QNAME."""
     if isinstance(read, Mapping):
-        return {str(v) for v in (read.get("id"), read.get("analysis_id")) if v is not None}
+        keys = {str(v) for v in (read.get("id"), read.get("analysis_id")) if v is not None}
+        # A display row folded from several records (supplementary_display='fold')
+        # answers to each member's cohort identity.
+        folded = (read.get("live_lift") or {}).get("folded") if isinstance(read.get("live_lift"), Mapping) else None
+        if folded:
+            keys.update(str(v) for v in folded.get("analysis_ids") or () if v is not None)
+        return keys
     return {str(read)}
 
 

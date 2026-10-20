@@ -95,7 +95,7 @@ def test_settings_validation():
     with pytest.raises(ll.LiftSettingsError):
         ll.LiftSettings(g_split=10)
     with pytest.raises(ll.LiftSettingsError):
-        ll.LiftSettings(supplementary_display="fold")
+        ll.LiftSettings(supplementary_display="stacked")
     with pytest.raises(ll.LiftSettingsError):
         ll.LiftSettings.from_dict({"nonsense": 1})
     assert ll.LiftSettings.from_dict(ll.LiftSettings().as_dict()) == ll.LiftSettings()
