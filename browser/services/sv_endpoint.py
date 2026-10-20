@@ -108,11 +108,15 @@ def classify_compact(entries, *, t: str, ref: int, length: int, margin: int = SV
     """``classify_records`` over compact entries (``_compact_record``); each
     entry's ``record`` is the entry itself (or what ``item`` carried)."""
     entries = list(entries)
-    primaries = {c['id'] for c, _ in entries if not c.get('supplementary')}
-    kept_primaries = {c['id'] for c, _ in entries if not c.get('supplementary') and (include_duplicates or not c.get('duplicate'))}
+    # Duplicate eligibility belongs to each source file. Merge QNAME calls
+    # only after this decision, matching native BAM spooling and select_cohort.
+    def molecule(c):
+        return (c.get('_key', (None,))[0], c['id'])
+    primaries = {molecule(c) for c, _ in entries if not c.get('supplementary')}
+    kept_primaries = {molecule(c) for c, _ in entries if not c.get('supplementary') and (include_duplicates or not c.get('duplicate'))}
     return classify_molecules(
         ((compact, item) for compact, item in entries if (include_duplicates or not compact.get('duplicate'))
-         and (compact['id'] not in primaries or compact['id'] in kept_primaries)),
+         and (molecule(compact) not in primaries or molecule(compact) in kept_primaries)),
         t=t, ref=ref, length=length, margin=margin, include_putative=include_putative, include_ambiguous=include_ambiguous, include_conflicting=include_conflicting, conflict_options=conflict_options, targets=targets, target_end=target_end)
 
 

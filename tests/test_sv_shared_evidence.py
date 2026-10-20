@@ -254,6 +254,30 @@ def test_size_hints_are_bounded_versioned_and_bypassed_for_normalized_records(co
     assert not bounded and bounded.retained_bytes == 0
 
 
+def test_duplicate_primary_in_another_file_cannot_suppress_a_supplementary_carrier(tmp_path):
+    from live_lift_fixtures import make_record, write_bam
+    from services.differences.workspace import inspect
+    first = write_bam(tmp_path / 'first.bam', lambda h: [
+        make_record(h, 'shared', 'chrT', 1000, '400M', flag=1024),
+        make_record(h, 'alternate', 'chrT', 1000, '200M100I200M'),
+        make_record(h, 'reference', 'chrT', 1000, '400M')], contigs=(('chrT', 10000),))
+    second = write_bam(tmp_path / 'second.bam', lambda h: [
+        make_record(h, 'shared', 'chrT', 1000, '200M100I200M', flag=2048)], contigs=(('chrT', 10000),))
+    dataset = SimpleNamespace(id='native', data_type='bam', paths=[first, second])
+    state = SimpleNamespace(datasets={'native': dataset}, get_dataset=lambda _: dataset)
+    evidence.SCAN_CACHE.clear()
+    body = dict(dataset_id='native', chrom='chrT', start=900, end=1500, min_len=50)
+    assert variants.svs_payload(state, body)['clusters'][0]['support'] == 2
+    expected = {'alternate': 0, 'shared': 0, 'reference': 1}
+    for duplicates in (False, True):
+        assert split(state, include_duplicates=duplicates)['assignments'] == expected
+    compact = variants._sv_compact(state, 'native', 'chrT', 900, 1500, 10, False, None)
+    assert {k: v['allele'] for k, v in sv.classify_compact(((c, c) for c in compact), t='I', ref=1200, length=100).items()} == expected
+    result = inspect(state, dataset, chrom='chrT', start=900, end=1500,
+        target=dict(target_id='insertion', target_type='geometry', chrom='chrT', ref_start=1200, ref_end=1200, alt_bp=100))
+    assert result['targets'][0]['counts'] == [2, 1, 0]
+
+
 @pytest.mark.parametrize('seed', [901, 1547, 6091])
 def test_heldout_authored_molecule_counts_survive_consumer_order_and_eviction(tmp_path, seed):
     import random
