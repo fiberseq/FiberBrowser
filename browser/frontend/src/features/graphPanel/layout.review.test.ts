@@ -9,7 +9,7 @@ import snpDel from './__fixtures__/gateC/snp_del.topology.json';
 import fragmentGap from './__fixtures__/gateC/fragment_gap.topology.json';
 import repeatVisit from './__fixtures__/gateC/repeat_visit.topology.json';
 import { buildLayout, type GroupItem, type Item, type JunctionItem, type LayoutModel } from './layout';
-import { budget, buildScene, layoutWidth, sceneHitAt, sceneInverse, xForTarget, type Scene } from './scene';
+import { budget, buildScene, layoutWidth, sceneHitAt, sceneInverse, targetAtX, xForTarget, type Scene } from './scene';
 import type { GraphBinding, GraphTopology } from './types';
 
 const scene = (m: LayoutModel, width = 1200) => buildScene(m, {
@@ -270,5 +270,46 @@ describe('Gate C review regressions', () => {
     console.log('CROSSING_COST_MS', JSON.stringify(times.map(x => +x.toFixed(1))));
     // Quadrupling the components may not cost more than ~10x (quadratic would be ~16x).
     expect(times[2] / Math.max(1, times[0])).toBeLessThan(10);
+  });
+
+  it('squeezed gaps keep their own place: target map entries never overlap and round-trip (Codex r3-1)', () => {
+    const t: Walk = [], a: Walk = [];
+    for (let i = 0; i < 60; i++) { t.push([`s${i}`, 2], [`x${i}`, 1], [`e${i}`, 2]); a.push([`s${i}`, 2], [`y${i}`, 1], [`e${i}`, 2]); }
+    const topoG = topo([['ref', t], ['alt', a]]);
+    // Sixty target fragments (one substitution each) with a 1 bp graph gap between consecutive ones.
+    const ref = topoG.paths[0] as any;
+    let at = 0;
+    ref.coverage = [];
+    ref.occurrences.forEach((o: any, i: number) => {
+      const len = o.path_span.end - o.path_span.start;
+      const frag = Math.floor(i / 3);
+      if (i > 0 && i % 3 === 0) {
+        ref.coverage.push({ span: { start: at, end: at + 1 }, kind: 'graph_gap', fragment: null, left_end: 'unavailable', right_end: 'unavailable' });
+        at += 1;
+      }
+      if (i % 3 === 0) ref.coverage.push({ span: { start: at, end: at + 5 }, kind: 'covered', fragment: `ref#f${frag}`, left_end: 'fragment_terminal', right_end: 'fragment_terminal' });
+      o.path_span = { start: at, end: at + len };
+      o.fragment = `ref#f${frag}`;
+      at += len;
+    });
+    topoG.interval = { start: 0, end: at };
+    const s = scene(buildLayout(topoG, []), 420);
+    const map = s.targetMap.filter(e => e.x1 > e.x0).slice().sort((p, q) => p.x0 - q.x0);
+    for (let i = 1; i < map.length; i++) expect(map[i].x0).toBeGreaterThanOrEqual(map[i - 1].x1 - 1e-6);
+    for (const e of map.filter(x => x.kind === 'seq')) {
+      const x = xForTarget(s.targetMap, e.t0, 'end')! + 1e-9;
+      expect(targetAtX(s.targetMap, x)).toMatchObject({ pos: e.t0, boundary: false });
+    }
+  });
+
+  it('a family base connector carries the enclosing insertion boundary (Codex r3-2)', () => {
+    const a = fixture(alu800), s = scene(a);
+    const bases = s.hits.filter(h => h.within && h.payload.kind === 'base');
+    for (const h of bases) {
+      for (const f of [0.02, 0.5, 0.98]) {
+        const inv = sceneInverse(s, h.x0 + f * (h.x1 - h.x0), (h.y0 + h.y1) / 2);
+        if (inv?.kind === 'connector') expect(inv.boundary).toBe(97_395);
+      }
+    }
   });
 });

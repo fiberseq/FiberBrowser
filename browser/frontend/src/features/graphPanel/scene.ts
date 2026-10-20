@@ -140,9 +140,10 @@ function groupContent(g: GroupItem, scale: number, c: Compression, k: Metrics = 
 }
 
 function junctionContent(j: JunctionItem, scale: number, c: Compression, k: Metrics = ROOMY): number {
-  let w = j.gaps.reduce((t, g) => t + budget(g.span.end - g.span.start, c) * scale, 0);
+  // Each gap its own width (at least the minimum slot): the same widths placement draws and maps.
+  let w = j.gaps.reduce((t, g) => t + Math.max(k.min, budget(g.span.end - g.span.start, c) * scale), 0);
   for (const a of j.alts) w = Math.max(w, budget(a.bp, c) * scale);
-  return Math.max(j.gaps.length || j.alts.some(a => a.bp > 0) ? k.min * Math.max(1, j.gaps.length) : (k.empty ?? 4), w);
+  return Math.max(j.gaps.length || j.alts.some(a => a.bp > 0) ? k.min : (k.empty ?? 4), w);
 }
 
 /** An item's width at a scale (tests: budgets and child-once accounting). */
@@ -206,6 +207,7 @@ function clusterChain(chain: Item[], distance: number, anySize = false): TopItem
           for (const c of carriers) perPath[c] = (perPath[c] ?? 0) + 1;
           for (const m of a.family?.members ?? []) {
             members.push({ at: here, carriers: m.carriers, bp: Math.max(m.bp, g.base.bp) });
+            if (Math.max(m.bp, g.base.bp) >= MAJOR_BP) major += 1;
             for (const c of m.carriers) perPath[c] = (perPath[c] ?? 0) + 1;
           }
           for (const it of a.family?.chain ?? []) if (it.kind === 'group') visit(it, here);
@@ -468,7 +470,7 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
       const f = total > 0 ? Math.min(1, (cx1 - cx0) / total) : 1;
       let gx = cx0 + Math.max(0, (cx1 - cx0 - total * f) / 2);
       j.gaps.forEach((g, n) => {
-        const gw = Math.max(2, widths[n] * f);
+        const gw = widths[n] * f;
         prims.push({ t: 'gap', x0: gx, x1: gx + gw, y, h });
         targetMap.push({ x0: gx, x1: gx + gw, t0: g.span.start, t1: g.span.end, kind: 'gap' });
         if (gw > 54) overlay.push({ t: 'text', x: gx + gw / 2, y: y - 3, text: `${g.kind === 'graph_gap' ? 'gap' : g.kind.replace(/_/g, ' ')} ${formatBpShort(g.span.end - g.span.start)}`, color: '#64748b', align: 'center', size: 9, bold: false });
@@ -666,7 +668,7 @@ export function sceneInverse(scene: Scene, x: number, y: number): SceneInverse |
     case 'slot': return { kind: 'connector', group: p.group.id, boundary: p.boundary ?? boundaryOf(p.group) };
     case 'base': {
       const t = targetAtX(scene.targetMap, x);
-      return t && !t.boundary ? { kind: 'target', occurrence: '', offset: 0, pos: t.pos } : { kind: 'connector', group: p.group.id, boundary: p.group.target?.start ?? null };
+      return t && !t.boundary ? { kind: 'target', occurrence: '', offset: 0, pos: t.pos } : { kind: 'connector', group: p.group.id, boundary: boundaryOf(p.group) };
     }
     case 'gap': return { kind: 'gap', span: (p.gap ?? p.junction.gap)?.span ?? p.junction.target };
     case 'complex': return { kind: 'summary', id: p.group.id, span: p.group.target };
