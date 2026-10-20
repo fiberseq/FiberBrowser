@@ -4,6 +4,18 @@ import {drawReadTrack} from '../../src/components/tracks/read-track/ReadTrackCan
 import {makeAxis} from '../../src/features/differences/axis';
 import {referenceCanvasX,setReferenceSurface} from '../../src/features/differences/referenceCanvas';
 import type {CompactRead} from '../../src/components/tracks/read-track/types';
+import { createElement, useEffect } from 'react';
+import { createRoot } from 'react-dom/client';
+import { useBrowserStore } from '../../src/stores/browserStore';
+import { serializeState } from '../../src/stores/historySlice';
+import { deserializeSets } from '../../src/stores/hydration';
+import { DifferenceInspectorRoot } from '../../src/features/differences/DifferenceInspector';
+import { restoreDifferencesSession, restoreHistoricalMembership } from '../../src/features/differences/session';
+import { selectNativeDifference } from '../../src/features/differences/selection';
+import { useDifferenceSelection } from '../../src/features/differences/selectionStore';
+import { useLiveLiftStore } from '../../src/features/liveLift/store';
+import { useDifferenceAxis } from '../../src/features/differences/useDifferenceAxis';
+import { PanelDisplayContext } from '../../src/hooks/usePanelDisplayStore';
 const START=10000;function draw(reads: CompactRead[], extra: Record<string, unknown> = {}) {
   const canvas=document.createElement('canvas');canvas.style.width='1100px';document.getElementById('canvas')!.replaceChildren(canvas);const rec={canvas,ctx:canvas.getContext('2d')!};
   drawReadTrack({
@@ -61,4 +73,61 @@ const START=10000;function draw(reads: CompactRead[], extra: Record<string, unkn
    result.expectedHit=(reversed?496:504)*1.792;
  }
  return result;
+};
+
+// Exercise real components and store/hydration logic. The runner supplies only
+// authored API responses, so this harness needs no server or local data files.
+const app = document.createElement('div'); document.body.appendChild(app);
+const root = createRoot(app);
+const panel = { id: 'native-panel', datasetId: 'reopened', stateKey: 'rows', contentType: 'dataset', subTracks: [], linkGroup: null };
+const metadata = { producer: 'live-lift:pre-P2c', folding: { molecule: false, orientation: false }, records: [
+  { rawName: 'synthetic', provenanceGroup: 'library-a', libraryId: 'library-a', recordId: 'record', rowIndex: 0, placement: 'primary' },
+] };
+let reopened: any;
+function Viewport() {
+  const start = useBrowserStore(s => s.start), end = useBrowserStore(s => s.end);
+  const { axis } = useDifferenceAxis('chrSV', start, end, 1792, false);
+  useEffect(() => { (window as any).offline.axis = axis.blocks.map(b => [b.x0, b.x1]); }, [axis]);
+  return createElement('div', null,
+    createElement('output', { 'data-testid': 'viewport' }, `${start}–${end}`),
+    createElement('button', { onClick: () => useBrowserStore.setState({ start: start+100, end: end+100 }) }, 'Pan viewport'));
+}
+function mount() {
+  root.render(createElement(DifferenceInspectorRoot, null,
+    createElement(PanelDisplayContext.Provider, { value: panel.id }, createElement(Viewport))));
+}
+function seed(source: Record<string, any>, lifted: boolean) {
+  reopened = { id: 'reopened', data_type: lifted ? 'bam_livelift' : 'bam', label: 'Synthetic source', path: 'synthetic.bam', color: '#000',
+    molecule_groups: lifted ? [] : [['synthetic.bam', 'library-a']],
+    ...(lifted ? { live_lift: { settings: { molecule_groups: [['synthetic.bam', 'library-a']], fold_molecule: false, fold_orientation_rows: false } } } : {}) };
+  useDifferenceSelection.getState().select(null);
+  useLiveLiftStore.setState({ enabled: false });
+  useBrowserStore.setState({ ...useBrowserStore.getInitialState(), ...source,
+    chrom: 'chrSV', start: 10000, end: 11000, datasets: [reopened], panels: [panel as any],
+    differencesSession: restoreDifferencesSession(source), _historyStack: [], _historyPointer: -1 });
+  mount();
+}
+(window as any).offline = {
+  axis: [], metadata,
+  mountNative() {
+    seed({}, false);
+    selectNativeDifference({ id: 'alternate', t: 'I', ref: 10500, end: 10504, len: 792, ref_len: 4, alt_len: 792 }, 'reopened', 'chrSV', panel.id);
+  },
+  mountRecovery(lifted: boolean) {
+    const id = lifted ? 'library-a|synthetic|record|0|primary' : 'synthetic';
+    seed({ svSplits: { historical: { datasetId: 'historical', chrom: 'chrSV', t: 'I', ref: 10500, end: 10500, len: 100,
+      viewStart: 10000, viewEnd: 11000, margin: 20, counts: [1, 0, 0] } },
+      clusterAssignments: { historical: { [id]: 0 }, rows: {} }, selectedReadIds: { historical: [id], rows: [] },
+      filteredReadIds: { historical: [id], rows: null }, readSortOrder: { historical: [id], rows: [] },
+      svCarrierEvidence: { historical: { [id]: 'confirmed' }, rows: {} } }, lifted);
+    return { ...metadata, producer: lifted ? metadata.producer : 'raw-qname:v1' };
+  },
+  availability(available: boolean) {
+    const state = serializeState(useBrowserStore.getState());
+    const datasets = available ? [reopened] : [];
+    const restored = restoreHistoricalMembership({ ...state, datasets }, useBrowserStore.getState().differencesSession);
+    deserializeSets(restored);
+    useBrowserStore.setState({ ...restored, datasets });
+  },
+  snapshot: () => serializeState(useBrowserStore.getState()),
 };
