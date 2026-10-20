@@ -643,9 +643,12 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
 }
 
 function bubbleSummary(model: LayoutModel): string | null {
-  const { insertions, deletions, substitutions } = model.stats;
-  const parts = [insertions ? `${insertions} ins` : null, deletions ? `${deletions} del` : null, substitutions ? `${substitutions} sub` : null].filter(Boolean);
-  return parts.length ? `${insertions + deletions + substitutions} alleles (${parts.join(', ')})` : 'no differences';
+  const { insertions, deletions, substitutions, inversions, repeats } = model.stats;
+  const parts = [insertions ? `${insertions} ins` : null, deletions ? `${deletions} del` : null, substitutions ? `${substitutions} sub` : null,
+    inversions ? `${inversions} inv` : null].filter(Boolean);
+  const total = insertions + deletions + substitutions + inversions;
+  const alleles = parts.length ? `${total} alleles (${parts.join(', ')})` : 'no differences';
+  return repeats ? `${alleles} · ${repeats} repeat visit${repeats === 1 ? '' : 's'}` : alleles;
 }
 
 export default GraphPanel;
