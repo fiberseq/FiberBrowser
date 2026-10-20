@@ -13,10 +13,9 @@ export const DEFAULT_CONTEXT_BP = 100;
 /** A linear panel's view and the reference it is on (its genome key: registry id or FASTA name; null: unknown). */
 export interface LinearView { chrom: string; start: number; end: number; reference?: string | null }
 
-/** Names of one assembly (lower case). A FASTA named after an assembly ("GRCh38_chr3.fa") counts as that assembly. */
+/** Names of one assembly (lower case). A FASTA named after exactly one assembly ("GRCh38_chr3.fa") counts as it. */
 const ASSEMBLY_ALIASES: string[][] = [
-  ['grch38', 'hg38'], ['grch37', 'hg19'], ['chm13', 't2t-chm13', 'chm13v2', 'hs1'], ['dm6', 'bdgp6'],
-  ['mm10', 'grcm38'], ['mm39', 'grcm39'],
+  ['grch38', 'hg38'], ['grch37', 'hg19'], ['chm13', 'chm13v2', 'hs1'], ['dm6', 'bdgp6'], ['mm10', 'grcm38'], ['mm39', 'grcm39'],
 ];
 
 function normaliseReference(name: string): string {
@@ -26,17 +25,24 @@ function normaliseReference(name: string): string {
 }
 
 /**
- * Whether a linear panel's reference is the graph target's assembly: the same name, or a known alias of it, or a
- * FASTA whose name carries one as a word. Contig names alone never decide it (DESIGN §6: no numerical copying
- * between assemblies).
+ * Whether a linear panel's reference is the graph target's assembly: the same name, or a FASTA/registry name whose
+ * words name that one assembly (by a known alias) and no other. "hg38_to_hg19.fa" names two: it matches neither.
+ * Contig names alone never decide it (DESIGN §6: no numerical copying between assemblies).
  */
 export function referenceMatches(target: Pick<GraphBinding, 'reference' | 'assembly'>, genome: string | null | undefined): boolean {
   if (!genome) return false;
   const g = normaliseReference(genome);
   const refs = [target.reference, target.assembly].filter(Boolean).map(r => normaliseReference(String(r)));
   if (refs.includes(g)) return true;
-  const words = new Set(g.split(/[^a-z0-9-]+/).filter(Boolean));
-  return ASSEMBLY_ALIASES.some(group => refs.some(r => group.includes(r)) && group.some(name => words.has(name) || g === name));
+  const theirs = assembliesNamed(g);
+  if (theirs.length !== 1) return false;
+  return refs.some(r => { const ours = assembliesNamed(r); return ours.length === 1 && ours[0] === theirs[0]; });
+}
+
+/** The alias groups a (normalised) name names: as a whole, or by its words. */
+function assembliesNamed(name: string): string[][] {
+  const words = new Set(name.split(/[^a-z0-9]+/).filter(Boolean));
+  return ASSEMBLY_ALIASES.filter(group => group.includes(name) || group.some(n => words.has(n)));
 }
 
 /** The bindings a target can be compared with: those the package has a map to from it (correspondence), and any
@@ -62,7 +68,8 @@ export function retargetFor(reg: GraphRegistration, state: GraphViewState, linea
 /** The target a new panel shows: a map target on the main view's contig when there is one, else the first map's. */
 export function defaultTarget(reg: GraphRegistration, main: LinearView | null = null): GraphBinding | null {
   const targets = [...new Set(reg.maps.map(m => m.target))].map(k => reg.bindings.find(b => b.key === k)).filter((b): b is GraphBinding => Boolean(b));
-  return (main && targets.find(b => b.path.contig === main.chrom)) ?? targets[0] ?? reg.bindings[0] ?? null;
+  return (main && targets.find(b => b.path.contig === main.chrom && referenceMatches(b, main.reference)))
+    ?? (main && targets.find(b => b.path.contig === main.chrom)) ?? targets[0] ?? reg.bindings[0] ?? null;
 }
 
 /** The paths compared by default: the target's map sources (they have correspondence), at most three. */
@@ -70,7 +77,8 @@ export function defaultCompared(reg: GraphRegistration, target: string): string[
   return [...new Set(reg.maps.filter(m => m.target === target).map(m => m.source))].slice(0, GRAPH_MAX_PATHS - 1);
 }
 
-/** Whether a linear view is on this target's contig (the only case following is offered). */
+
+/** Whether a linear view is on this target's contig and reference (the only case following is offered). */
 export function canFollow(target: GraphBinding | null | undefined, linear: LinearView | null | undefined): boolean {
   return Boolean(target && linear && linear.chrom === target.path.contig && referenceMatches(target, linear.reference));
 }

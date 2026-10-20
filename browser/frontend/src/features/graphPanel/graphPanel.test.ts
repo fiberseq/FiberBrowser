@@ -154,10 +154,10 @@ describe('thin topology preview', () => {
     const o = (id: string, node: string, start: number, len: number, fragment = 'f', reverse = false) =>
       ({ id, node, fragment, handle: node, reverse, path_span: { start, end: start + len }, clip: { start: 0, end: len } });
     const m = (t: string, a: string, reverse = false) => ({ target_occurrence: t, source_occurrence: a, source_binding: 'alt', reverse, provenance: 'direct_named_walk' });
-    const topo = (targets: any[], alts: any[], matches: any[], win = { start: 0, end: 300 }): GraphTopology => ({
+    const topo = (targets: any[], alts: any[], matches: any[], win = { start: 0, end: 300 }, targetCoverage?: any[]): GraphTopology => ({
       target: 'target', interval: win, nodes: [], edges: [], target_queries: [], summaries: [], complete: false, correspondence_complete: false, timings: {},
       direct_matches: matches,
-      paths: [{ binding: 'target', windows: [win], coverage: [], occurrences: targets, complete: true, plan: null },
+      paths: [{ binding: 'target', windows: [win], coverage: targetCoverage ?? [{ span: win, kind: 'covered' }], occurrences: targets, complete: true, plan: null },
               { binding: 'alt', windows: [], coverage: [], occurrences: alts, complete: false, plan: null }] } as unknown as GraphTopology);
     const gap = buildPreview(topo([o('t1', '1', 0, 100), o('t2', '2', 100, 50), o('t3', '3', 150, 100)],
       [o('a1', '1', 0, 100, 'f1'), o('a3', '3', 200, 100, 'f2')], [m('t1', 'a1'), m('t3', 'a3')]), []).lanes[1];
@@ -173,6 +173,29 @@ describe('thin topology preview', () => {
     const del = buildPreview(topo([o('t1', '1', 0, 100), o('t2', '2', 100, 50), o('t3', '3', 150, 100)],
       [o('a1', '1', 0, 100), o('a3', '3', 100, 100)], [m('t1', 'a1'), m('t3', 'a3')]), []).lanes[1];
     expect(del.pieces.find(p => p.kind === 'deletion')).toMatchObject({ start: 100, end: 150, bp: 50 });
+    // Review 2: visits the window clips are not a continuous walk; a stretch without named target sequence is no
+    // deletion either.
+    const clip = (x: any, a: number, b: number) => ({ ...x, clip: { start: a, end: b } });
+    const clipped = buildPreview(topo([clip(o('t1', '1', 0, 200), 0, 50), clip(o('t1b', '1', 0, 200), 150, 200)],
+      [clip(o('a1', '1', 0, 200), 0, 50), clip(o('a1b', '1', 200, 200), 150, 200)], [m('t1', 'a1'), m('t1b', 'a1b')], { start: 0, end: 400 }), []).lanes[1];
+    expect(clipped.pieces.filter(p => p.kind === 'deletion')).toEqual([]);
+    const targetGap = buildPreview(topo([o('t1', '1', 0, 100), o('t3', '3', 150, 100)],
+      [o('a1', '1', 0, 100), o('a3', '3', 100, 100)], [m('t1', 'a1'), m('t3', 'a3')], { start: 0, end: 300 },
+      [{ span: { start: 0, end: 100 }, kind: 'covered' }, { span: { start: 100, end: 150 }, kind: 'gap' }, { span: { start: 150, end: 300 }, kind: 'covered' }]), []).lanes[1];
+    expect(targetGap.pieces.filter(p => p.kind === 'deletion')).toEqual([]);
+    expect(targetGap.transitions).toBe(1);
+    // agy review 1: a matched visit reaching outside the view still anchors (its visible part drawn, true length
+    // of what is drawn), and two visits of one path on the same target visit (a duplication) are not placed.
+    const ctx = topo([clip(o('t1', '1', 900, 200), 100, 200), o('t2', '2', 1100, 100)],
+      [o('a1', '1', 900, 200), o('ins', '9', 1100, 300), o('a2', '2', 1400, 100)], [m('t1', 'a1'), m('t2', 'a2')], { start: 1000, end: 1200 });
+    const lane = buildPreview(ctx, []).lanes[1];
+    expect(lane.pieces.find(p => p.kind === 'insertion')).toMatchObject({ start: 1100, bp: 300 });
+    expect(lane.pieces.find(p => p.node === '1')).toMatchObject({ start: 1000, end: 1100, bp: 100 });
+    expect(lane.unplaced).toEqual([]);
+    const dup = buildPreview(topo([o('t1', '1', 0, 500)], [o('a1', '1', 0, 500), o('a2', '1', 500, 500)],
+      [m('t1', 'a1'), m('t1', 'a2')], { start: 0, end: 500 }), []).lanes[1];
+    expect(dup.pieces.filter(p => p.kind === 'node')).toEqual([]);
+    expect(dup.unplaced.map(u => u.bp)).toEqual([1000]);
   });
 
   it('gaps between placed pieces work in either direction and refuse overlaps', () => {
@@ -201,6 +224,9 @@ describe('graph view state and links', () => {
     expect(canFollow(target, { chrom: 'chr3', start: 0, end: 1, reference: 'a-different-assembly' })).toBe(false);
     expect(canFollow(target, { chrom: 'chr3', start: 0, end: 1, reference: null })).toBe(false);
     expect(canFollow(target, { chrom: 'chr3', start: 0, end: 1, reference: 'hg38' })).toBe(true);
+    expect(canFollow(target, { chrom: 'chr3', start: 0, end: 1, reference: 'hg38-chr3.fa' })).toBe(true);
+    expect(canFollow(target, { chrom: 'chr3', start: 0, end: 1, reference: 'hg38_to_hg19.fa' })).toBe(false);
+    expect(canFollow(target, { chrom: 'chr3', start: 0, end: 1, reference: 'hg19' })).toBe(false);
     expect(initialGraphView(reg, { chrom: 'chr3', start: 0, end: 5000, reference: 'dm6' }).linkMode).toBe('independent');
   });
 

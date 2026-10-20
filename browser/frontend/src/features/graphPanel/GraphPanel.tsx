@@ -14,7 +14,7 @@ import { cancelSubgraph, querySubgraph, GraphRequestError } from './api';
 import { describeHit, drawLanes, drawRuler, GRAPH_GUTTER, GRAPH_LANE_GAP, hitAt, laneColor, laneTop, type HitRegion } from './canvas';
 import { clampViewport, formatBp, formatLocus, fromX, makeTransform, panViewport, parseLocus, zoomViewport, bpScale, type GraphViewport } from './coordinates';
 import { buildPreview, laneLabel } from './preview';
-import { canFollow, defaultCompared, defaultTarget, effectiveViewport, initialGraphView, initiatorView, restoreProblem, retargetFor, selectableBindings, togglePath, GRAPH_MAX_PATHS } from './state';
+import { type LinearView, canFollow, defaultCompared, defaultTarget, effectiveViewport, initialGraphView, initiatorView, restoreProblem, retargetFor, selectableBindings, togglePath, GRAPH_MAX_PATHS } from './state';
 import { useGraphStatusStore } from './statusStore';
 import { genomeKeyFor } from '../../utils/regionNavigation';
 import { startTrace, type GraphTrace } from './timings';
@@ -77,7 +77,6 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   const panels = useBrowserStore(s => s.panels);
   // The main view and its reference (registry id, else FASTA name): following needs the target's assembly.
   const main = useBrowserStore(useShallow(s => ({ chrom: s.chrom, start: s.start, end: s.end, reference: genomeKeyFor(null, s) })));
-  const dark = useBrowserStore(s => s.darkMode);
   const status = useGraphStatusStore(s => s.status);
   const statusError = useGraphStatusStore(s => s.error);
   const loadStatus = useGraphStatusStore(s => s.load);
@@ -126,10 +125,12 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     && (!state?.initiatingReferenceId || state.initiatingReferenceId === initiatorView(state, panels, main)?.reference));
   if (following && viewport) lastFollowed.current = viewport;
   useEffect(() => {
-    if (!panelId || !state || state.linkMode !== 'follow' || following || !lastFollowed.current) return;
+    if (!panelId || !state || !status || state.linkMode !== 'follow' || following || problem) return;
     if (reg && retargetFor(reg, state, initiatorView(state, panels, main))) return;   // another contig of the package: retargets
-    setGraphView(panelId, { ...state, linkMode: 'independent', targetViewport: lastFollowed.current, initiatingPanelId: null, initiatingReferenceId: null });
-  }, [panelId, state, following, reg, panels, main]);
+    // Not (or no longer) followable, also a restored state on another reference: on its own where it was.
+    setGraphView(panelId, { ...state, linkMode: 'independent', targetViewport: lastFollowed.current ?? state.targetViewport,
+      initiatingPanelId: null, initiatingReferenceId: null });
+  }, [panelId, state, status, following, reg, problem, panels, main]);
   const reversed = Boolean(panel?.reversed);
   const transform = useMemo(() => (viewport ? makeTransform(viewport, GRAPH_GUTTER, width - GRAPH_GUTTER - 6, reversed) : null),
     [viewport?.start, viewport?.end, width, reversed]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -224,27 +225,32 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   }, [preview, transform, width, canvasHeight, renderVersion, laneHeight]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------------------------------------------------------------- navigation
-  const commitViewport = useCallback((next: GraphViewport, detach = false) => {
+  const commitViewport = useCallback((next: GraphViewport, detach = false, linearAtStart?: LinearView | null) => {
     if (!panelId || !state || !target) return;
-    if (state.linkMode === 'follow' && !detach) {
-      // Following: the graph moves its initiating panel (in that panel's own frame), and follows it back.
-      const linear = initiatorView(state, useBrowserStore.getState().panels, main);
-      if (!linear) return;
-      const delta = next.start - (viewport?.start ?? next.start);
+    if (state.linkMode === 'follow' && following && !detach) {
+      // Following: the graph moves its initiating panel (in that panel's own frame) by the same bp, keeping that
+      // panel's width, and follows it back. A drag measures from where the initiator was when it began, so moves
+      // arriving before a re-render do not add up.
+      const linear = linearAtStart ?? initiatorView(state, useBrowserStore.getState().panels, main);
+      const base = linearAtStart ? (drag.current?.view ?? viewport) : viewport;
+      if (!linear || !base) return;
+      const width = linear.end - linear.start;
+      const start = Math.max(0, linear.start + (next.start - base.start));
       const store = useBrowserStore.getState();
-      if (state.initiatingPanelId == null) store.setViewport(linear.chrom, Math.max(0, linear.start + delta), Math.max(1, linear.end + delta));
-      else store.navigatePanelOwnView(state.initiatingPanelId, linear.chrom, Math.max(0, linear.start + delta), Math.max(1, linear.end + delta));
+      if (state.initiatingPanelId == null) store.setViewport(linear.chrom, start, start + width);
+      else store.navigatePanelOwnView(state.initiatingPanelId, linear.chrom, start, start + width);
       return;
     }
     setGraphView(panelId, { ...state, linkMode: 'independent', targetViewport: next, initiatingPanelId: null, initiatingReferenceId: null });
-  }, [panelId, state, target, main, viewport]);
+  }, [panelId, state, target, main, viewport, following]);
 
-  const drag = useRef<{ x: number; view: GraphViewport; moved: boolean } | null>(null);
+  const drag = useRef<{ x: number; view: GraphViewport; moved: boolean; linear: LinearView | null } | null>(null);
   const [cursor, setCursor] = useState<{ x: number; y: number; text: string; cursorX: number | null } | null>(null);
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (e.button !== 0 || !viewport) return;
     (e.target as HTMLCanvasElement).setPointerCapture?.(e.pointerId);
-    drag.current = { x: e.clientX, view: viewport, moved: false };
+    drag.current = { x: e.clientX, view: viewport, moved: false,
+      linear: state ? initiatorView(state, useBrowserStore.getState().panels, main) : null };
   };
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
@@ -255,7 +261,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       if (Math.abs(dx) > 2) drag.current.moved = true;
       if (drag.current.moved) {
         const deltaBp = (reversed ? dx : -dx) / bpScale(transform);
-        commitViewport(panViewport(drag.current.view, deltaBp, target.size, target.size_inferred));
+        commitViewport(panViewport(drag.current.view, deltaBp, target.size, target.size_inferred), false, drag.current.linear);
       }
       return;
     }

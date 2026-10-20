@@ -197,6 +197,28 @@ describe('GraphPanel', () => {
     expect(intervals().slice(2)).toEqual([['ga', 120_000, 130_000]]);
   });
 
+  it('a restored following panel over another reference navigates on its own and never moves that view', async () => {
+    const saved = { ...initialGraphView(registration, { chrom: 'chr3', start: 90_000, end: 100_000, reference: 'hg38' }) };
+    expect(saved.linkMode).toBe('follow');
+    useBrowserStore.setState({ currentGenome: 'hg19', chrom: 'chr3', start: 200_000, end: 210_000, panels: [graphPanel('g1', saved)] } as any);
+    await act(async () => root.render(<GraphPanel panelId="g1" width={900} height={300} />));
+    await settle(150);
+    const state = useBrowserStore.getState().panels[0].graphView!;
+    expect(state.linkMode).toBe('independent');
+    expect(state.targetViewport).toEqual(saved.targetViewport);
+    expect(subgraphBodies().map(b => b.interval.start)).toEqual([90_000]);
+    // Dragging pans the graph panel only.
+    const canvas = host.querySelector('canvas[data-testid="graph-panel-canvas"]') as HTMLCanvasElement;
+    vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, width: 900, height: 140, right: 900, bottom: 140, x: 0, y: 0, toJSON() {} } as DOMRect);
+    await act(async () => {
+      canvas.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: 500, clientY: 60 }));
+      canvas.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: 400, clientY: 60 }));
+      canvas.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, clientX: 400, clientY: 60 }));
+    });
+    expect(useBrowserStore.getState().start).toBe(200_000);
+    expect(useBrowserStore.getState().panels[0].graphView!.targetViewport!.start).toBeGreaterThan(90_000);
+  });
+
   it('a stale saved panel asks for nothing and offers the current package', async () => {
     const saved = { ...initialGraphView(registration, null), graphRevision: 'x'.repeat(64) };
     useBrowserStore.setState({ panels: [graphPanel('g1', saved)] });
