@@ -280,6 +280,12 @@ async def lifespan(app: FastAPI):
     yield
     for manager in tab_managers:
         manager.stop_gc()
+    # Graph panel helpers (services/graph_panel/pool.py): shut down or killed, and reaped.
+    from services.graph_panel.service import shutdown as shutdown_graph_helpers
+    try:
+        await shutdown_graph_helpers()
+    except Exception as exc:
+        print(f"  [graph] helper shutdown failed: {exc}")
     from services.file_handles import handles
     handles.discard()
     # Cluster connections: stop the remote helpers and local forwards (a

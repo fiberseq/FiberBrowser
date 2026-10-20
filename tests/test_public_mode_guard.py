@@ -19,6 +19,10 @@ PUBLIC_DENIED = {
     ("POST", "/api/differences/inspect"), ("POST", "/api/differences/alternate-blocks"),
     ("POST", "/api/differences/sequence"), ("POST", "/api/differences/lens"),
     ("POST", "/api/differences/observations"),
+    # Graph panel: helper status, host graph packages and their queries (routers/graph_panel.py)
+    ("GET", "/api/graph/status"), ("GET", "/api/graph/registrations"), ("POST", "/api/graph/registrations"),
+    ("GET", "/api/graph/registrations/{registration_id}/paths"), ("POST", "/api/graph/subgraph"),
+    ("DELETE", "/api/graph/requests/{request_id}"),
     # Cross-region correspondence analyses are local workspace operations.
     ("POST", "/api/cluster-regions"), ("POST", "/api/scan-correspondence"),
     ("GET", "/api/app/performance"), ("POST", "/api/app/performance"),
@@ -223,6 +227,10 @@ def test_allowlist_has_no_stale_entries(standalone_app):
     ("POST", "/api/differences/inspect"), ("POST", "/api/differences/alternate-blocks"),
     ("POST", "/api/differences/sequence"), ("POST", "/api/differences/lens"),
     ("POST", "/api/differences/observations"),
+    # Graph panel: helper status, host graph packages and their queries (routers/graph_panel.py)
+    ("GET", "/api/graph/status"), ("GET", "/api/graph/registrations"), ("POST", "/api/graph/registrations"),
+    ("GET", "/api/graph/registrations/{registration_id}/paths"), ("POST", "/api/graph/subgraph"),
+    ("DELETE", "/api/graph/requests/{request_id}"),
     ("POST", "/api/plugins/anything/run"),
 ])
 def test_public_mode_denies(client, public, method, path):
