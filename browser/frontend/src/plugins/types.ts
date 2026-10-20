@@ -32,4 +32,10 @@ export interface AnalysisPanelPlugin {
   /** 'scroll' (default): the host scrolls the body. 'fill': the body is exactly the panel's height and the panel
    * scrolls inside itself (a canvas that sizes itself to its body: the graph view). */
   bodyLayout?: 'scroll' | 'fill';
+  /** Stacked with other panels in a column, take the natural height the panel reports
+   * (stores/panelContentHeightStore.ts) rather than an equal share. */
+  sizeToContent?: boolean;
+  /** Where a newly opened panel goes: 'stack-below-reads' stacks it under the first reads (or genome) panel of the
+   * top row, at its natural height, unless the user pinned this kind of panel to the side. Default: beside. */
+  opens?: 'beside' | 'stack-below-reads';
 }

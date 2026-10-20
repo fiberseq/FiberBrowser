@@ -24,7 +24,7 @@ export function registerGraphPanel(): void {
     label: 'Graph view',
     summary: 'Up to four paths of a prepared pangenome graph package (a target and the haplotypes compared with it), drawn on the target\'s own ruler, with no BAM needed.',
     limitations: [
-      'This first version draws each compared path\'s directly matched nodes over the target and marks the rest as insertions, deletions or divergent stretches; the joint bubble layout comes later.',
+      'Paths are drawn as a selected-path tube map: shared sequence once, small differences as marks on the tube, larger ones as bubbles; not every graph allele.',
       'Reads are not drawn on the graph yet.',
       'At most 50 kb of the target and four paths (the target included) at a time.',
       'The graph helper (the fiberbrowser-graph-native companion package, or the macOS app) and a package made by fiberbrowser-graph prepare are needed.',
@@ -46,6 +46,9 @@ export function registerGraphPanel(): void {
     hostOnly: true,
     minUsableWidth: 280,
     bodyLayout: 'fill',
+    // A tube map a few lanes tall: under the reads at its natural height, not a tall column beside them.
+    sizeToContent: true,
+    opens: 'stack-below-reads',
     preview: GRAPH_VIEW_PREVIEW,
     sessionKeys: ['panels[].graphView'],
     apiEndpoints: ['/api/graph/status', '/api/graph/subgraph', '/api/graph/requests/{id}'],

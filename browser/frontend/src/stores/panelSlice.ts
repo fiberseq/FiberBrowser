@@ -434,7 +434,19 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
     // Clear dismissed state when explicitly opening
     const newDismissed = new Set(state.dismissedPanelTypes);
     newDismissed.delete(type);
-    return { panels: [...state.panels, panel], dismissedPanelTypes: newDismissed };
+    let panels = [...state.panels, panel];
+    // A short panel (the graph view) opens stacked under the top row's first reads or genome panel, at its natural
+    // height, not as a tall column beside the reads.
+    if (plugin.opens === 'stack-below-reads' && !panel.dock) {
+      const reads = state.panels.find(p => p.contentType === 'dataset' && !p.collapsed && (p.layoutRow ?? 0) === 0);
+      if (reads) {
+        // Under the last panel already stacked there (a second graph view goes under the first).
+        const column = reads.layoutColumn;
+        const stacked = column == null ? [reads] : state.panels.filter(p => (p.layoutRow ?? 0) === 0 && p.layoutColumn === column && !p.collapsed);
+        panels = stackBelow(panels, panel.id, stacked[stacked.length - 1].id);
+      }
+    }
+    return { panels, dismissedPanelTypes: newDismissed };
   }),
   closeAnalysisPanel: (id) => set(state => {
     const panel = state.panels.find(p => p.id === id);

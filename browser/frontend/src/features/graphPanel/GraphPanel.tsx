@@ -16,9 +16,10 @@ import { cancelSubgraph, querySubgraph, GraphRequestError } from './api';
 import { drawRuler, drawScene, GRAPH_GUTTER, GRAPH_LANE_GAP, GRAPH_LANE_HEIGHT, GRAPH_RIGHT_PAD, GRAPH_RULER_HEIGHT, laneColor, laneTop } from './canvas';
 import { clampViewport, formatBp, formatLocus, fromX, makeTransform, panViewport, parseLocus, zoomViewport, bpScale, type GraphViewport } from './coordinates';
 import { buildLayout, laneLabel, type LayoutModel } from './layout';
-import { buildScene, describeSceneHit, sceneHitAt, sceneInverse, targetAtX, type Compression, type Scene } from './scene';
+import { buildScene, describeSceneHit, sceneHitAt, sceneInverse, smallDifferenceBp, targetAtX, type Compression, type Scene } from './scene';
 import { type LinearView, canFollow, defaultCompared, defaultTarget, effectiveViewport, initialGraphView, initiatorView, restoreProblem, retargetFor, selectableBindings, togglePath, GRAPH_MAX_PATHS } from './state';
 import { useGraphStatusStore } from './statusStore';
+import { usePanelContentHeightStore } from '../../stores/panelContentHeightStore';
 import { genomeKeyFor } from '../../utils/regionNavigation';
 import { startTrace, type GraphTrace } from './timings';
 import type { GraphApiError, GraphRegistration, GraphSubgraphResponse, GraphViewState } from './types';
@@ -34,6 +35,8 @@ declare global {
   }
 }
 const STATUS_HEIGHT = 18;
+/** Lane height of the panel's natural (content) size. */
+const NATURAL_LANE = 34;
 
 function setGraphView(panelId: string, next: GraphViewState): void {
   useBrowserStore.setState(s => ({ panels: s.panels.map(p => (p.id === panelId ? { ...p, graphView: next } : p)) }));
@@ -202,10 +205,21 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
 
   const response = query.response;
   const compression: Compression = state?.layoutSettings.compression ?? 'log';
+  const smallMode = state?.layoutSettings.smallDifferences ?? 'marks';
+  const drawnSpan = response ? response.result.interval.end - response.result.interval.start : 0;
+  const smallBp = smallDifferenceBp(drawnSpan, width - GRAPH_GUTTER - GRAPH_RIGHT_PAD, smallMode);
   // Lanes grow with the panel body (28–40 px): thicker tubes when there is room, the saved height a minimum.
   const minLane = state?.layoutSettings.laneHeight ?? GRAPH_LANE_HEIGHT;
   const rowsWanted = Math.max(1, response?.result.paths.length ?? state?.selectedPathKeys.length ?? 1);
   const laneHeight = Math.max(minLane, Math.min(40, Math.floor((bodyHeight - GRAPH_RULER_HEIGHT - STATUS_HEIGHT - 12) / rowsWanted) - GRAPH_LANE_GAP));
+  // Its natural body height (lanes of NATURAL_LANE px, the ruler and the status line): stacked with other panels it
+  // takes this, not an equal share of the column (plugin sizeToContent).
+  const naturalHeight = GRAPH_RULER_HEIGHT + STATUS_HEIGHT + 12 + rowsWanted * (Math.max(minLane, NATURAL_LANE) + GRAPH_LANE_GAP);
+  useEffect(() => {
+    if (!panelId) return;
+    usePanelContentHeightStore.getState().report(panelId, naturalHeight);
+  }, [panelId, naturalHeight]);
+  useEffect(() => () => { if (panelId) usePanelContentHeightStore.getState().report(panelId, null); }, [panelId]);
   const layoutMsRef = useRef(0);
   // The joint layout model: once per response (its identities depend only on the response).
   const model = useMemo(() => {
@@ -222,10 +236,10 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     const colors: Record<string, string> = {};
     for (const r of model.rows) colors[r.key] = laneColor(r);
     const out = buildScene(model, { width, gutter: GRAPH_GUTTER, rightPad: GRAPH_RIGHT_PAD, rulerHeight: GRAPH_RULER_HEIGHT,
-      laneHeight, laneGap: GRAPH_LANE_GAP, compression, reversed, colors });
+      laneHeight, laneGap: GRAPH_LANE_GAP, compression, reversed, colors, smallBp });
     layoutMsRef.current += performance.now() - t0;
     return out;
-  }, [model, width, laneHeight, compression, reversed]);
+  }, [model, width, laneHeight, compression, reversed, smallBp]);
   // Mark layout on the trace of the response it came from.
   const lastTraceRef = useRef<GraphTrace | null>(null);
   useEffect(() => {
@@ -406,6 +420,13 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         { kind: 'item' as const, action: 'cmp:linear', icon: 'settings', label: `${compression === 'linear' ? '✓ ' : ''}True bp`,
           title: 'Every base the same width; insertions still get their own slot' },
       ] });
+    entries.push({ kind: 'submenu', id: 'small', icon: 'settings', label: `Show small differences as: ${smallMode}`,
+      entries: [
+        { kind: 'item' as const, action: 'small:marks', icon: 'settings', label: `${smallMode === 'marks' ? '✓ ' : ''}Marks on the shared tube`,
+          title: `SNPs and indels below ${smallBp || smallDifferenceBp(50_000, 1000)} bp (scaled with zoom) are ticks, notches and carets on the path's stripe; zoomed in, they become bubbles` },
+        { kind: 'item' as const, action: 'small:bubbles', icon: 'settings', label: `${smallMode === 'bubbles' ? '✓ ' : ''}Bubbles`,
+          title: 'Every difference branches into its path\'s lane' },
+      ] });
     entries.push({ kind: 'submenu', id: 'context', icon: 'settings', label: `Graph context: ${state.layoutSettings.contextBp} bp`,
       entries: [0, 100, 500, 2000].map(bp => ({ kind: 'item' as const, action: `ctx:${bp}`, icon: 'settings',
         label: `${state.layoutSettings.contextBp === bp ? '✓ ' : ''}${bp} bp` })) });
@@ -437,6 +458,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     }
     if (action.startsWith('path:')) { setGraphView(panelId, togglePath(state, action.slice(5))); return; }
     if (action.startsWith('cmp:')) { setGraphView(panelId, { ...state, layoutSettings: { ...state.layoutSettings, compression: action.slice(4) as Compression } }); return; }
+    if (action.startsWith('small:')) { setGraphView(panelId, { ...state, layoutSettings: { ...state.layoutSettings, smallDifferences: action.slice(6) as 'marks' | 'bubbles' } }); return; }
     if (action.startsWith('ctx:')) { setGraphView(panelId, { ...state, layoutSettings: { ...state.layoutSettings, contextBp: Number(action.slice(4)) } }); return; }
     if (action.startsWith('reg:')) {
       const next = regs.find(r => r.id === action.slice(4));
@@ -536,7 +558,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       data-graph-loading={query.loading ? 'true' : 'false'} data-graph-generation={query.generation}
       data-graph-link={state?.linkMode ?? ''} data-graph-lanes={model?.rows.map(l => l.key).join(',') ?? ''}
       data-graph-complete={model ? String(model.complete) : ''} data-graph-error={query.error?.code ?? ''}
-      data-graph-bubbles={model ? model.stats.groups : ''} data-graph-compression={compression}
+      data-graph-bubbles={model ? model.stats.groups : ''} data-graph-compression={compression} data-graph-small-bp={smallBp}
       className="relative h-full min-h-0 w-full overflow-auto bg-white dark:bg-dark-bg"
       style={{ height: bodyHeight }}
       onContextMenu={e => { if (!(e.target instanceof HTMLCanvasElement)) { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY }); } }}>

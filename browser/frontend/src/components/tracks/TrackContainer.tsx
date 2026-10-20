@@ -45,6 +45,7 @@ import { runAppCommand } from '../../utils/appCommands';
 import { launchOfferHidesWelcome, useLaunchUiStore } from '../../utils/launchSession';
 import { useOpeningStore } from '../../stores/openingStore';
 import { OpeningPanels } from './OpeningPanels';
+import { stackHeights, usePanelContentHeightStore } from '../../stores/panelContentHeightStore';
 import { PanelIcon } from '../ui/panelIcons';
 import { panelFrameStyle, panelGap, roundedPanels } from '../../theme/uiTheme';
 
@@ -372,6 +373,7 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
   const datasets = useBrowserStore(s => s.datasets);
+  const contentHeights = usePanelContentHeightStore(s => s.heights);
   // Not while the launch offer is being decided or a session is being restored (no flash over a dataset).
   const launchOfferUp = useLaunchUiStore(launchOfferHidesWelcome);
   // A dataset being opened shows its placeholder panel, not the Welcome card over it.
@@ -1326,6 +1328,11 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
                 const cw = colWidths[colIdx] ?? Math.floor(dimensions.width / columns.length);
                 const stackCount = col.panels.length;
                 const panelH = Math.floor((bodyHeight - gap * stackCount) / stackCount);
+                // A size-to-content panel (the graph view) takes its natural height; the others share the rest.
+                const stackH = stackCount > 1 && col.panels.some(p => p.contentType !== 'dataset' && getAnalysisPanel(p.contentType)?.sizeToContent)
+                  ? stackHeights(bodyHeight - gap * stackCount, col.panels.map(p => (p.contentType !== 'dataset' && getAnalysisPanel(p.contentType)?.sizeToContent
+                    ? contentHeights[p.id] ?? null : null)), PANEL_HEADER_HEIGHT)
+                  : null;
                 // Beside a panel with its own locus bar, show the main view's
                 // location in a bar of the same height so the tracks line up.
                 const rowHasLocusBar = columns.length > 1
@@ -1337,7 +1344,7 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
                         const globalIdx = panels.indexOf(panel);
                         const isFirst = colIdx === 0 && stackIdx === 0 && group.rowIndex === rowGroups[0]?.rowIndex;
                         const trackLayout = { hideAxis: rulerRepeatsAbove(col.panels, stackIdx, regionOfPanel, p => panelReversed(reversedState, p.id)) };
-                        return renderPanel(panel, globalIdx, cw, panelH, isFirst, rowHasLocusBar && panel.contentType === 'dataset', trackLayout,
+                        return renderPanel(panel, globalIdx, cw, stackH?.[stackIdx] ?? panelH, isFirst, rowHasLocusBar && panel.contentType === 'dataset', trackLayout,
                           stackIdx > 0 ? headerInsets[colIdx] : 0);
                       })}
                       {/* Stack indicator: horizontal line at bottom of this column */}
