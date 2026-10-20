@@ -35,11 +35,11 @@ export function bandHeight(lane: PackedLane | undefined, rowHeight = READ_ROW_HE
   return lane.rows.length * (rowHeight + gap) + gap;
 }
 
-function drawCall(ctx: CanvasRenderingContext2D, c: CallPiece, y: number, h: number, style: ChromatinStyle, pxPerBp: number) {
+function drawCall(ctx: CanvasRenderingContext2D, c: CallPiece, y: number, h: number, style: ChromatinStyle, pxPerBp: number, alpha = 1) {
   const s = style.call(c.layer, c.call[2], c.qualities);
   if (!s) return;
   const x = c.x0, w = Math.max(0.75, c.x1 - c.x0);
-  ctx.globalAlpha = s.opacity;
+  ctx.globalAlpha = s.opacity * alpha;
   ctx.fillStyle = s.color;
   ctx.fillRect(x, y, w, h);
   // Edge ambiguity (colormap setting): soft draws a faint band out to the liberal edge, loose a crisp one. Only an
@@ -48,16 +48,17 @@ function drawCall(ctx: CanvasRenderingContext2D, c: CallPiece, y: number, h: num
   if (edgeOn && style.edgeMode !== 'strict') {
     const left = c.edgeL !== undefined ? style.edgeGapBp(c.edgeL) * pxPerBp : 0;
     const right = c.edgeR !== undefined ? style.edgeGapBp(c.edgeR) * pxPerBp : 0;
-    ctx.globalAlpha = s.opacity * (style.edgeMode === 'soft' ? 0.35 : 1);
+    ctx.globalAlpha = s.opacity * alpha * (style.edgeMode === 'soft' ? 0.35 : 1);
     if (left > 0.25) ctx.fillRect(x - left, y, left, h);
     if (right > 0.25) ctx.fillRect(x + w, y, right, h);
   }
-  ctx.globalAlpha = 1;
+  ctx.globalAlpha = alpha;
 }
 
-/** Draw every placed molecule; returns their hit rows. `colors`: lane key -> haplotype ink. */
+/** Draw every placed molecule; returns their hit rows. `colors`: lane key -> haplotype ink; `alpha`: the whole
+ * band's opacity (reads of the previous window kept while the next load is in flight are dimmed). */
 export function drawReads(ctx: CanvasRenderingContext2D, scene: Scene, lanes: Map<string, PackedLane>, style: ChromatinStyle,
-  layers: ReadLayers, colors: Record<string, string>, rowHeight = READ_ROW_HEIGHT, gap = READ_ROW_GAP): ReadHit[] {
+  layers: ReadLayers, colors: Record<string, string>, rowHeight = READ_ROW_HEIGHT, gap = READ_ROW_GAP, alpha = 1): ReadHit[] {
   const hits: ReadHit[] = [];
   const pxPerBpOf = (m: PlacedMolecule) => {
     const bp = m.body.reduce((t, b) => t + (b.s1 - b.s0), 0);
@@ -76,11 +77,12 @@ export function drawReads(ctx: CanvasRenderingContext2D, scene: Scene, lanes: Ma
         // The walk through connector space and undrawn bp: dashed, never body.
         // Connector space (a bypassed allele, the curve where a branch leaves): a faint solid line; bp the scene
         // summarised (cluster, complex region): the live-lift dashed connector.
+        ctx.globalAlpha = alpha;
         ctx.save();
         ctx.lineWidth = 1;
         for (const c of m.connectors) {
-          if (c.kind === 'unplaced') { ctx.strokeStyle = LIVE_LIFT_COLORS.connector; ctx.globalAlpha = 0.8; ctx.setLineDash([2, 2]); }
-          else { ctx.strokeStyle = '#94a3b8'; ctx.globalAlpha = 0.55; ctx.setLineDash([]); }
+          if (c.kind === 'unplaced') { ctx.strokeStyle = LIVE_LIFT_COLORS.connector; ctx.globalAlpha = 0.8 * alpha; ctx.setLineDash([2, 2]); }
+          else { ctx.strokeStyle = '#94a3b8'; ctx.globalAlpha = 0.55 * alpha; ctx.setLineDash([]); }
           ctx.beginPath(); ctx.moveTo(c.x0, mid + 0.5); ctx.lineTo(c.x1, mid + 0.5); ctx.stroke();
         }
         ctx.restore();
@@ -94,7 +96,7 @@ export function drawReads(ctx: CanvasRenderingContext2D, scene: Scene, lanes: Ma
         ctx.clip();
         for (const layer of ['nuc', 'tf', 'msp'] as const) {
           if (!layers[layer]) continue;
-          for (const c of m.calls) if (c.layer === layer) drawCall(ctx, c, y, rowHeight, style, pxPerBp);
+          for (const c of m.calls) if (c.layer === layer) drawCall(ctx, c, y, rowHeight, style, pxPerBp, alpha);
         }
         if (layers.m6a) {
           ctx.fillStyle = style.m6a;
@@ -102,10 +104,10 @@ export function drawReads(ctx: CanvasRenderingContext2D, scene: Scene, lanes: Ma
           for (const p of m.m6a) ctx.fillRect(p.x - w / 2, y, w, rowHeight);
           for (const d of m.density) {
             // Density: m6A per bp in the bin, as the tick colour's opacity (marks over budget).
-            ctx.globalAlpha = Math.max(0.06, Math.min(0.85, (d.count / Math.max(1, d.bp)) * 3));
+            ctx.globalAlpha = alpha * Math.max(0.06, Math.min(0.85, (d.count / Math.max(1, d.bp)) * 3));
             ctx.fillRect(d.x0, y, Math.max(0.5, d.x1 - d.x0), rowHeight);
           }
-          ctx.globalAlpha = 1;
+          ctx.globalAlpha = alpha;
         }
         ctx.restore();
         // CIGAR holes inside drawn geometry, where at least a pixel: a deletion is a dark line, a skip (N) dashed.
@@ -132,6 +134,7 @@ export function drawReads(ctx: CanvasRenderingContext2D, scene: Scene, lanes: Ma
           ctx.restore();
         }
         hits.push({ x0: m.extent![0], x1: m.extent![1], y0: y - gap / 2, y1: y + rowHeight + gap / 2, molecule: m });
+        ctx.globalAlpha = 1;
       }
     });
   }

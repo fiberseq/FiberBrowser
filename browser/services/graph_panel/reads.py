@@ -193,26 +193,36 @@ def merge_windows(windows: Iterable) -> list:
     return out
 
 
-def window_records(dataset, contig: str, windows: list) -> Optional[dict]:
-    """The records the windows hold, from an index walk over record headers (no tag decoding):
-    ``{(library, QNAME, start, flag): end}``. Their count bounds the molecules (the sampling level is chosen from it
-    before any call is decoded), their extent is the composition region (records whole), and their names say how
-    many records the loader's own filters then left out."""
+def window_records(dataset, contig: str, windows: list) -> Optional[list]:
+    """The physical records the windows hold, from an index walk over record headers (no tag decoding):
+    ``[(library, QNAME, start, flag, end)]``, each once (a record over two windows is listed by the first). Their
+    count bounds the molecules (the sampling level is chosen from it before any call is decoded), their extent is
+    the composition region (records whole), and they say how many records the loader's own filters left out."""
     import pysam
-    out: dict = {}
+    out: list = []
     for lib, path in enumerate(dataset.paths):
         try:
             with pysam.AlignmentFile(path, "rb") as bam:
                 if contig not in bam.references:
                     continue
-                for a, b in windows:
+                for k, (a, b) in enumerate(windows):
                     for rec in bam.fetch(contig, a, b):
                         if rec.is_unmapped or rec.is_secondary or rec.is_qcfail or rec.is_duplicate:
                             continue
-                        out[(lib, rec.query_name, rec.reference_start, rec.flag)] = rec.reference_end or rec.reference_start
+                        end = rec.reference_end or rec.reference_start + 1
+                        if any(rec.reference_start < wb and end > wa for wa, wb in windows[:k]):
+                            continue
+                        out.append((lib, rec.query_name, rec.reference_start, rec.flag, end))
         except (OSError, ValueError):
             return None
     return out
+
+
+def contig_length(dataset, contig: str) -> Optional[int]:
+    """The source contig's length from the BAM header(s): the authoritative bound of a composition region (a
+    graph binding's size can be an inferred lower bound)."""
+    sizes = {int(ln) for p in dataset.paths for c, ln in _bam_lengths(p).items() if c == contig}
+    return max(sizes) if sizes else None
 
 
 def _abs_layer(layer: Optional[dict], ids, parts, origin: int, name: str, keep) -> Optional[dict]:
@@ -251,9 +261,10 @@ def compact_row(row: dict, origin: int, dataset_id: str, binding: str, windows: 
     def inside(p):
         return any(wa <= p < wb for wa, wb in wins)
 
-    # CIGAR events (the loader's include_cigar list, mapped by the composer): insertions with their molecular
-    # length, deletions (a hole with a D is a deletion; a hole without one is a skip, N), soft clips.
-    ins, dels, clips = [], [], []
+    # CIGAR events (the loader's include_cigar list, mapped by the composer): insertions with their length and
+    # deletions (where a coverage hole has no D it is a skip, N). Soft clips have no path bp; the loader lists none
+    # and the molecular coordinates of the coverage runs already account for them.
+    ins, dels = [], []
     events = row.get("cigar")
     if events is not None:
         for e in events:
@@ -262,8 +273,6 @@ def compact_row(row: dict, origin: int, dataset_id: str, binding: str, windows: 
                 ins.append([pos, ln, 0])
             elif t == "D":
                 dels.append([pos, ln])
-            elif t == "S":
-                clips.append([pos, ln, e.get("side") or ""])
     else:  # no event list: insertions from the coverage runs' molecular jumps
         for (a0, a1, m0, step), (_b0, _b1, n0, _s) in zip(cov, cov[1:]):
             expected = m0 + step * (a1 - a0)
@@ -279,8 +288,6 @@ def compact_row(row: dict, origin: int, dataset_id: str, binding: str, windows: 
         "sup": bool(src.get("supplementary")), "s": int(src.get("start", 0)), "e": int(src.get("end", 0)),
         "cov": cov, "ins": ins, "dl": dels,
     }
-    if clips:
-        out["clips"] = clips
     for name in _LAYERS:
         layer = _abs_layer(layers.get(name), calls.get(f"layer:{name}"), parts.get(f"layer:{name}"), origin, name, keep)
         if layer is not None:
@@ -455,10 +462,8 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
     for dataset, _binding, contig, windows, _size in jobs:
         recs = window_records(dataset, contig, windows)
         if recs is not None and not _settings(dataset).load_supplementaries:
-            sup = [k for k in recs if k[3] & 0x800]
-            not_loaded += len(sup)
-            for k in sup:
-                del recs[k]
+            not_loaded += sum(1 for k in recs if k[3] & 0x800)
+            recs = [k for k in recs if not k[3] & 0x800]
         listed.append(recs)
         if recs is None:
             known = False
@@ -473,9 +478,12 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
 
     def run(job, recs, lvl):
         dataset, binding, contig, windows, size = job
-        kept = [(k, end) for k, end in (recs or {}).items() if keeps(k[1], lvl)]
-        # The region holds the windows and every record they fetch whole (no call clipped before composing).
-        region = (min([windows[0][0], *(k[2] for k, _e in kept)]), max([windows[-1][1], *(e for _k, e in kept)]))
+        kept = [k for k in recs or () if keeps(k[1], lvl)]
+        # The region holds the windows and every record they fetch whole, a base beyond either end (so a terminal
+        # insertion's boundary is inside it): no call is clipped before composing. It is bounded by the BAM's own
+        # contig length, never by a graph binding's possibly inferred size.
+        size = contig_length(dataset, contig) or size
+        region = (max(0, min([windows[0][0], *(k[2] for k in kept)]) - 1), min(size, max([windows[-1][1], *(k[4] for k in kept)]) + 1))
         key = (dataset.id, dataset_revision(dataset), binding["key"], contig, tuple(map(tuple, windows)), lvl, region,
                tuple(sorted(LOADER_OPTIONS.items())))
         part: dict = {}
@@ -500,6 +508,7 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
     counts: dict = {}
     reads: list = []
     filtered = 0
+    over_budget = total_bytes > max_bytes   # even at the sparsest level: enforced below, reported
     for recs, ((got, _trunc, _nbytes, c), _hit) in zip(listed, results):
         for k, v in c.items():
             if isinstance(v, (int, float)) and not isinstance(v, bool):
@@ -518,6 +527,23 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
     if not_loaded:
         counts["supplementary_not_loaded"] = not_loaded
     molecules = sorted({(r["d"], r["lib"], r["q"]) for r in reads}, key=lambda m: (name_hash(str(m[2])), m))
+    payload_dropped = 0
+    if over_budget:
+        # Whole molecules in hash order while their decoded size fits the request's budget; the rest are left out.
+        size_of: dict = {}
+        for r in reads:   # the decoded-size estimate of live_lift.decoded_size_estimate: a row plus 32 B per entry
+            m = (r["d"], r["lib"], r["q"])
+            size_of[m] = size_of.get(m, 0) + 512 + 32 * (marks_of(r) + len(r["cov"]) + len(r["ins"]) + len(r["dl"]))
+        fit, used = set(), 0
+        for m in molecules:
+            if used + size_of[m] > max_bytes:
+                continue
+            fit.add(m)
+            used += size_of[m]
+        payload_dropped = len(molecules) - len(fit)
+        reads = [r for r in reads if (r["d"], r["lib"], r["q"]) in fit]
+        molecules = [m for m in molecules if m in fit]
+        truncated = True
     capped = 0
     if len(molecules) > max_molecules:
         keep = set(molecules[:max_molecules])
@@ -562,6 +588,8 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
                                       "record_collisions", "records_without_correspondence") if counts.get(k)}
     if filtered:
         omitted["loader_filters"] = filtered
+    if payload_dropped:
+        omitted["payload_limit"] = payload_dropped
     report = {
         "molecules": len(molecules), "records": len(reads), "marks": marks,
         "sampling": {"level": level, "fraction": 1.0 / (1 << level), "estimated": estimated if known else None,

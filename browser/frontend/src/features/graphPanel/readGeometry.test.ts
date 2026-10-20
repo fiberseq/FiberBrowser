@@ -278,6 +278,11 @@ describe('Gate E: review round 1', () => {
     expect(r.holes.every(h => h.kind === 'N')).toBe(true);
   });
 
+  it('a coverage hole that is part deletion, part skip splits into a D and an N part', () => {
+    const r = place(sc, alu10k, { ...read('mat', 95_000, 95_420, { holes: [{ start: 95_200, end: 95_250 }] }), dl: [[95_200, 10]] });
+    expect(r.visits.flatMap(v => v.holes)).toEqual([{ start: 95_200, end: 95_210, kind: 'D' }, { start: 95_210, end: 95_250, kind: 'N' }]);
+  });
+
   it('pieces continuing each other on one tube merge; a call keeps its own edges on the merged piece', () => {
     const marks = scene(m, { smallBp: 50 });   // the AluY small differences as marks: long contiguous tubes
     const r = place(marks, alu10k, read('target', 93_000, 96_000, { nuc: [[93_100, 95_900]], lq: [7], rq: [9] }));
@@ -293,10 +298,13 @@ describe('Gate E: review round 1', () => {
   it('unplaced bp count prefixes, suffixes and wholly undrawn reads inside the drawn range, not bp beyond it', () => {
     const narrow = scene(m, { width: 520 });
     const idx = placementIndex(narrow, topo(alu10k));
-    const [lo, hi] = idx.drawnRange.get('target')!;
-    const whole = placeReads([read('target', lo + 10, hi - 10)], idx);
+    const [w] = idx.domain.get('target')!;
+    const whole = placeReads([read('target', w.start, w.end)], idx);
     expect(whole.unplacedBp).toBeGreaterThan(0);   // clusters inside the walk
-    const outside = placeRead(read('target', hi + 100, hi + 300), idx);
+    // Everything drawn in the wide scene: nothing unplaced, the walk's ends included.
+    const all = placeRead(read('target', w.start, w.end), placementIndex(sc, topo(alu10k)));
+    expect(all.unplacedBp).toBe(0);
+    const outside = placeRead(read('target', w.end + 100, w.end + 300), idx);
     expect(outside.unplacedBp).toBe(0);
   });
 
@@ -306,11 +314,11 @@ describe('Gate E: review round 1', () => {
     const idx = placementIndex(sc, topo(alu10k));
     const plenty = placeReads(reads, idx);
     expect(plenty.m6aAsDensity).toBe(false);
-    const dense = placeReads(reads, idx, plenty.primitives - 1);
+    const dense = placeReads(reads, idx, 4 * 2_900, 10);   // under what the reads carry: m6A goes to density first
     expect(dense.m6aAsDensity).toBe(true);
     expect(dense.molecules.every(x => x.m6a.length === 0 && x.density.length > 0)).toBe(true);
     expect(dense.primitives).toBeLessThan(plenty.primitives / 2);
-    const tight = placeReads(reads, idx, 40);
+    const tight = placeReads(reads, idx, 40, 10);
     expect(tight.marksHidden).toBeGreaterThan(0);
     expect(tight.primitives).toBeLessThanOrEqual(40);
     expect(tight.molecules.every(x => x.body.length > 0)).toBe(true);

@@ -368,3 +368,54 @@ def test_supplementaries_the_dataset_does_not_load_are_reported(env):
                       dataset_id="nosup")
     out = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 5900, "end": 6300}]}]).json()
     assert not out["reads"] and out["report"]["omitted"].get("supplementary_not_loaded") == 1
+
+
+
+# ── Review round 2 (Codex) ──────────────────────────────────────────────────
+
+def test_region_is_bounded_by_the_bam_contig_not_an_inferred_graph_size(env):
+    # The graph knows MAT only to 5,000 bp (an inferred size); the source contig is 10,000 bp.
+    with open(env.manifest) as fh:
+        manifest = json.load(fh)
+    manifest["sources"][0]["fragments"] = [{"name": "H#1#chrS[0]", "offset": 0, "len": 5000}]
+    with open(env.manifest, "w") as fh:
+        json.dump(manifest, fh)
+    ll.clear_selection_cache()
+    env.reg.bindings[1].update(size=5000, size_inferred=True, fragments=[{"origin": 0, "end": 5000, "indexed": True}])
+    bam = write_bam(env.tmp / "edge.bam", lambda h: [
+        make_record(h, "edge", MAT, 4500, "1000M", tags=[("ns", _u32([0, 700])), ("nl", _u32([300, 300]))])])
+    did = _add_lifted(env, paths=[bam], dataset_id="edge")
+    (r,) = _by_q(_reads(env, [did], [{"binding": "mat", "windows": [{"start": 4900, "end": 4950}]}]).json())["edge"]
+    assert r["msp"]["iv"] == [[4800, 5200, 400]] and r["cov"][0][:2] == [4500, 5500]
+
+
+def test_records_sharing_name_start_and_flag_are_each_listed(env):
+    bam = write_bam(env.tmp / "twin.bam", lambda h: [
+        make_record(h, "twin", MAT, 1000, "500M", tags=[("ns", _u32([10, 300])), ("nl", _u32([100, 100]))]),
+        make_record(h, "twin", MAT, 1000, "2500M", tags=[("ns", _u32([10, 2000])), ("nl", _u32([100, 100]))])])
+    did = _add_lifted(env, paths=[bam], dataset_id="twin")
+    recs = gr.window_records(env.state.datasets[did], MAT, [[900, 1200]])
+    assert sorted(r[4] for r in recs) == [1500, 3500]
+    out = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 900, "end": 1200}]}]).json()
+    assert sorted(r["cov"][-1][1] for r in out["reads"]) == [1500, 3500]
+    assert any(r.get("msp") and r["msp"]["iv"] == [[1110, 3000, 1890]] for r in out["reads"])
+
+
+def test_payload_over_budget_at_the_sparsest_level_is_enforced_and_reported(env, monkeypatch):
+    did = _add_lifted(env)
+    paths = [{"binding": "mat", "windows": [{"start": 0, "end": 3000}]}]
+    full = _reads(env, [did], paths).json()["report"]
+    monkeypatch.setattr(gr, "MAX_LEVEL", 0)
+    monkeypatch.setattr(gr, "MAX_DECODED_BYTES", max(1, full["decoded_bytes"] // 3))
+    gr.clear_cache()
+    out = _reads(env, [did], paths).json()
+    assert out["report"]["truncated"] is True and out["report"]["omitted"]["payload_limit"] >= 1
+    assert out["report"]["molecules"] < full["molecules"]
+
+
+def test_a_terminal_insertion_at_the_far_end_is_kept(env):
+    bam = write_bam(env.tmp / "tail.bam", lambda h: [
+        make_record(h, "tail", MAT, 2000, "200M20I", tags=[("ns", _u32([30, 120])), ("nl", _u32([50, 50]))])])
+    did = _add_lifted(env, paths=[bam], dataset_id="tail")
+    (r,) = _by_q(_reads(env, [did], [{"binding": "mat", "windows": [{"start": 1900, "end": 2300}]}]).json())["tail"]
+    assert [i[:2] for i in r["ins"]] == [[2200, 20]]

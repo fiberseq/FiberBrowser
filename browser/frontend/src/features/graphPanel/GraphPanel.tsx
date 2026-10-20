@@ -23,7 +23,7 @@ import { usePanelContentHeightStore } from '../../stores/panelContentHeightStore
 import { genomeKeyFor } from '../../utils/regionNavigation';
 import { startTrace, type GraphTrace } from './timings';
 import type { GraphApiError, GraphReadBinding, GraphReadSettings, GraphReadsResponse, GraphRegistration, GraphSubgraphResponse, GraphViewState } from './types';
-import { packMolecules, placeReads, placementIndex, type PackedLane, type PlacedMolecule } from './readGeometry';
+import { MAX_READ_PRIMITIVES, packMolecules, placeReads, placementIndex, type PackedLane, type PlacedMolecule } from './readGeometry';
 import { bandHeight, describeReadHit, drawReadBandLabels, drawReads, READ_ROW_GAP, READ_ROW_HEIGHT, type ReadHit, type ReadLayers } from './readCanvas';
 import { chromatinStyle } from './chromatinStyle';
 
@@ -323,8 +323,10 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   const readLayout = useMemo(() => {
     if (!baseScene || !response || !readsShown) return null;
     const t0 = performance.now();
-    const index = placementIndex(baseScene, response.result);
-    const placed = placeReads(readsShown.reads.filter(r => activeDatasetIds.has(r.d)), index);
+    const index = placementIndex(baseScene, response.result, FLANK_BP);
+    const span = response.result.interval.end - response.result.interval.start;
+    const placed = placeReads(readsShown.reads.filter(r => activeDatasetIds.has(r.d)), index, MAX_READ_PRIMITIVES,
+      span / Math.max(1, baseScene.dataWidth));
     const lanes = packMolecules(placed.molecules, rowsPerLane);
     return { placed, lanes, ms: performance.now() - t0 };
   }, [baseScene, response, readsShown, activeDatasetIds, rowsPerLane]);
@@ -393,9 +395,8 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       ctx.translate(sceneOffset, 0);
       drawScene(ctx, scene);
       const tr = performance.now();
-      if (readsStale) ctx.globalAlpha = 0.45;
-      readHitsRef.current = readLayout ? drawReads(ctx, scene, readLayout.lanes, style, readLayers, laneColors, readRowHeight, READ_ROW_GAP) : [];
-      ctx.globalAlpha = 1;
+      readHitsRef.current = readLayout ? drawReads(ctx, scene, readLayout.lanes, style, readLayers, laneColors, readRowHeight, READ_ROW_GAP,
+        readsStale ? 0.45 : 1) : [];
       readDrawMsRef.current = performance.now() - tr;
       ctx.restore();
       // The read bands' compact labels stay in the gutter.
