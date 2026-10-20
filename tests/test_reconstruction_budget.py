@@ -192,3 +192,32 @@ def test_other_allocations_reclaim_idle_workers_before_queueing(monkeypatch):
     assert not multiprocessing.active_children()
     RESERVATIONS.release(size, False)
     assert RESERVATIONS.bytes == RESERVATIONS.large == RESERVATIONS.queued == 0
+
+
+def test_queued_allocation_reclaims_worker_that_becomes_idle_after_queueing():
+    size = DEFAULT_LIMITS.request_bytes
+    RESERVATIONS.acquire(size, False, time.monotonic()+2, lambda: None)
+    outcome = []
+    def work():
+        try:
+            isolated('time', 'sleep', (.2,), {}, lengths=[], reuse_worker=True)
+            outcome.append('complete')
+        except ResourceResult as exc:
+            outcome.append(exc.payload())
+    thread = threading.Thread(target=work)
+    thread.start()
+    try:
+        deadline = time.monotonic()+5
+        while RESERVATIONS.bytes < 2*size and thread.is_alive() and time.monotonic() < deadline:
+            time.sleep(.005)
+        assert RESERVATIONS.bytes == 2*size
+        RESERVATIONS.acquire(DEFAULT_LIMITS.job_bytes, False, time.monotonic()+2, lambda: None)
+        RESERVATIONS.release(DEFAULT_LIMITS.job_bytes, False)
+        thread.join(2)
+        assert outcome == ['complete'] and not thread.is_alive()
+        assert RESERVATIONS.bytes == size and not multiprocessing.active_children()
+    finally:
+        thread.join(5)
+        close_warm_worker()
+        RESERVATIONS.release(size, False)
+    assert RESERVATIONS.bytes == RESERVATIONS.large == RESERVATIONS.queued == 0

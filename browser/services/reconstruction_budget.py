@@ -173,19 +173,21 @@ class Reservations:
         self.bytes = self.large = self.queued = 0
 
     def acquire(self, size, large, deadline, checkpoint):
-        # Idle numerical workers must yield to real allocations. Their memory
-        # stays charged until they are reaped, even when no request owns them.
-        if self is globals().get('RESERVATIONS') and size and self.bytes + size > self.limits.process_bytes:
-            close_warm_worker()
         with self.condition:
             if size > self.limits.process_bytes:
                 raise ResourceResult("budget_exceeded", "process_bytes", bytes=size)
             if self.queued >= self.limits.max_queued:
                 raise ResourceResult("budget_exceeded", "queue_full", queued=self.queued)
             self.queued += 1
-            try:
-                while True:
-                    checkpoint()
+        try:
+            while True:
+                checkpoint()
+                # Retry pressure reclamation after every wait: an active worker
+                # may have become idle since this allocation entered the queue.
+                # Reap outside the condition, which worker completion also needs.
+                if self is globals().get('RESERVATIONS') and size and self.bytes + size > self.limits.process_bytes:
+                    close_warm_worker()
+                with self.condition:
                     if time.monotonic() >= deadline:
                         raise ResourceResult("budget_exceeded", "deadline", seconds=self.limits.deadline_s)
                     if self.bytes + size <= self.limits.process_bytes and not (large and self.large):
@@ -193,7 +195,8 @@ class Reservations:
                         self.large += int(large)
                         return
                     self.condition.wait(0.02)
-            finally:
+        finally:
+            with self.condition:
                 self.queued -= 1
 
     def release(self, size, large):
