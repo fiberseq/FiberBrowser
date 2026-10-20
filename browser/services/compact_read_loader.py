@@ -1605,9 +1605,12 @@ def build_compact_reads_from_bam(
     the record's own, for consensus identity).
 
     Live lift (services/lift) decodes source records with:
-    ``include_supplementary``: also soft-clipped supplementary records (a
-    hard-clipped one carrying annotation tags is skipped and counted in
-    ``lift_counts['hard_clipped_supplementary']``);
+    ``include_supplementary``: also supplementary records. A hard-clipped one
+    follows the per-record annotation-scope rule
+    (``scope_hard_clipped_supplementary``): tags on its stored SEQ decode as
+    they are, whole-molecule tags decode on the record with its clips restored
+    as unknown bases, and an undecidable record is skipped and counted in
+    ``lift_counts['hard_clipped_supplementary']``;
     ``include_lift_meta``: internal per-read fields for lifting
     (``lift_meta_fields``); also turns the shared SignalWindow off;
     ``load_budget``: an object whose ``examine()`` is asked before each record
@@ -2032,10 +2035,10 @@ def _build_compact_reads_from_bam_region(
                 if profile_bam:
                     profile_counts["records_unmapped"] += 1
                 continue
-            if record_scoped and read.is_supplementary and not supplementary_decodable(read):
-                if lift_counts is not None:
-                    lift_counts["hard_clipped_supplementary"] = lift_counts.get("hard_clipped_supplementary", 0) + 1
-                continue
+            if record_scoped and read.is_supplementary:
+                read = scope_hard_clipped_supplementary(read, lift_counts)
+                if read is None:
+                    continue
             if lift_hidden is not None and lift_hidden(read):
                 continue
             if record_scoped and partition is not None:
@@ -2797,6 +2800,135 @@ def supplementary_decodable(read) -> bool:
     if not any(op == 5 for op, _length in (read.cigartuples or ())):
         return True
     return not any(read.has_tag(tag) for tag in _ANNOTATION_TAGS)
+
+
+def _hard_clip_lengths(read) -> tuple:
+    cigar = read.cigartuples or ()
+    left = int(cigar[0][1]) if cigar and cigar[0][0] == 5 else 0
+    right = int(cigar[-1][1]) if len(cigar) > 1 and cigar[-1][0] == 5 else 0
+    return left, right
+
+
+def annotation_scope(read, partial: int, total: int) -> Optional[str]:
+    """``'partial'`` (the record's stored SEQ), ``'whole'`` (the molecule),
+    ``'none'`` (no footprint tags) or None (undecidable) for a hard-clipped
+    record's footprint tags. Vendored from FiberHMM's lift
+    (``fiberhmm.io.graph_lift.annotation_scope``), so the browser decides each
+    record exactly as ``fiberhmm-lift`` does.
+
+    MA's (else Ma's) read length decides; legacy tags follow it. A record with
+    legacy tags only: partial when every interval fits its stored SEQ, whole
+    when one does not but all fit the molecule."""
+    for tag in ("MA", "Ma"):
+        if read.has_tag(tag):
+            try:
+                length = int(str(read.get_tag(tag)).split(";", 1)[0])
+            except ValueError:
+                return None
+            return "partial" if length == partial else "whole" if length == total else None
+    ends = []
+    for start_tag, size_tag in (("ns", "nl"), ("as", "al")):
+        if read.has_tag(start_tag) and read.has_tag(size_tag):
+            ends += [int(s) + int(n) for s, n in zip(read.get_tag(start_tag), read.get_tag(size_tag))]
+        elif read.has_tag(start_tag) or read.has_tag(size_tag):
+            return None
+    if not ends:
+        return "none"
+    if max(ends) <= partial:
+        return "partial"
+    return "whole" if max(ends) <= total else None
+
+
+_MOD_TAG_NAMES = ("MM", "ML", "Mm", "Ml", "MN", "Mn")
+_COMPLEMENT = str.maketrans("ACGTN", "TGCAN")
+
+
+def _mods_fit_stored_seq(read) -> bool:
+    """Whether the record's MM/ML describe its stored SEQ: MN (when present)
+    equals the stored length, and every MM group's skip counts fit the bases
+    the stored SEQ has (FiberHMM's "valid on the stored SEQ")."""
+    seq = read.query_sequence or ""
+    for tag in ("MN", "Mn"):
+        if read.has_tag(tag):
+            try:
+                return int(read.get_tag(tag)) == len(seq)
+            except (TypeError, ValueError):
+                return False
+    mm = read.get_tag("MM") if read.has_tag("MM") else read.get_tag("Mm") if read.has_tag("Mm") else ""
+    molecule = seq[::-1].translate(_COMPLEMENT) if read.is_reverse else seq
+    for group in str(mm).split(";"):
+        fields = group.split(",")
+        head = fields[0]
+        if len(head) < 2:
+            continue
+        base, strand = head[0].upper(), head[1]
+        target = base if strand == "+" else base.translate(_COMPLEMENT)
+        available = len(molecule) if base == "N" else molecule.upper().count(target)
+        try:
+            needed = sum(int(v) + 1 for v in fields[1:] if v != "")
+        except ValueError:
+            return False
+        if needed > available:
+            return False
+    return True
+
+
+def scope_hard_clipped_supplementary(read, counts: Optional[dict] = None):
+    """A supplementary record ready for record-scoped (live-lift) decoding, or
+    None when it must be hidden (counted in ``counts['hard_clipped_supplementary']``).
+
+    Soft-clipped records pass unchanged. A hard-clipped one follows
+    :func:`annotation_scope`: ``partial``/``none`` decode as they are (the
+    loader's frame handling is the stored SEQ's, and call metadata adds the
+    leading clip); ``whole`` tags describe the molecule, so they decode on a
+    copy whose hard clips become soft clips of unknown bases (``N``), which is
+    exactly the soft-clipped record's layout. Modification calls are kept only
+    when they describe the stored SEQ (no ``N`` counts as a modifiable base, so
+    they stay valid after padding); otherwise they are dropped and counted in
+    ``counts['hard_clip_mods_dropped']``. ``counts['hard_clipped_scoped']``
+    tallies the scopes of the records kept."""
+    left, right = _hard_clip_lengths(read)
+    if not (left or right):
+        return read
+    seq = read.query_sequence or ""
+    partial = len(seq) or int(read.query_length or 0)
+    total = left + partial + right
+    scope = annotation_scope(read, partial, total)
+    if scope is None or (scope == "whole" and not seq):
+        if counts is not None:
+            counts["hard_clipped_supplementary"] = counts.get("hard_clipped_supplementary", 0) + 1
+        return None
+    has_mods = read.has_tag("MM") or read.has_tag("Mm")
+    drop_mods = has_mods and not _mods_fit_stored_seq(read)
+    if counts is not None:
+        scoped = counts.setdefault("hard_clipped_scoped", {"partial": 0, "whole": 0, "none": 0})
+        scoped[scope] = scoped.get(scope, 0) + 1
+    if scope != "whole" and not drop_mods:
+        return read
+    import array as _array
+    import pysam
+    copy = pysam.AlignedSegment.fromstring(read.to_string(), read.header)
+    if drop_mods:
+        for tag in _MOD_TAG_NAMES:
+            if copy.has_tag(tag):
+                copy.set_tag(tag, None)
+        if counts is not None:
+            counts["hard_clip_mods_dropped"] = counts.get("hard_clip_mods_dropped", 0) + 1
+    if scope == "whole":
+        quals = copy.query_qualities
+        cigar = list(copy.cigartuples)
+        if left:
+            cigar[0] = (4, left)
+        if right:
+            cigar[-1] = (4, right)
+        copy.cigartuples = cigar
+        copy.query_sequence = "N" * left + seq + "N" * right
+        if quals is not None:
+            copy.query_qualities = _array.array("B", [0] * left + list(quals) + [0] * right)
+        for tag in ("MN", "Mn"):
+            if copy.has_tag(tag):
+                copy.set_tag(tag, len(copy.query_sequence), value_type="i")
+    return copy
 
 
 def record_call_meta(read) -> tuple:

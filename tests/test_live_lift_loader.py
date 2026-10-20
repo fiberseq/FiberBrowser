@@ -36,6 +36,9 @@ def bam(tmp_path):
             make_record(h, "supp_hard_tags", MAT, 3100, "20H80M", flag=2048,
                         tags=[("ns", _u32([30])), ("nl", _u32([20]))]),
             make_record(h, "supp_hard_plain", MAT, 3200, "20H80M", flag=2048),
+            # Calls past the whole molecule (100 bp): the annotation scope is undecidable.
+            make_record(h, "supp_hard_bad", MAT, 3300, "20H80M", flag=2048,
+                        tags=[("ns", _u32([90])), ("nl", _u32([20]))]),
         ]
     return write_bam(tmp_path / "src.bam", records)
 
@@ -71,13 +74,15 @@ def test_ma_layer_calls_reverse_record_molecular_spans(bam):
     assert r["_fiberbrowser_aligned_runs"] == [[2000, 99, 100]]
 
 
-def test_supplementaries_only_on_request_and_hard_clips_with_tags_hidden(bam):
+def test_supplementaries_only_on_request_and_hard_clips_follow_the_scope_rule(bam):
     assert "supp_soft" not in _by_id(_load(bam))
     counts = {}
     reads = _by_id(_load(bam, include_supplementary=True, lift_counts=counts))
     assert reads["supp_soft"]["_fiberbrowser_primary"] == {"is_supplementary": True, "sa": f"{MAT},5001,+,80M20S,60,0;"}
-    assert "supp_hard_tags" not in reads and "supp_hard_plain" in reads
-    assert counts == {"hard_clipped_supplementary": 1}
+    # Stored-SEQ (partial) tags decode; an undecidable record is hidden and counted.
+    assert "supp_hard_tags" in reads and "supp_hard_plain" in reads and "supp_hard_bad" not in reads
+    assert counts == {"hard_clipped_supplementary": 1,
+                      "hard_clipped_scoped": {"partial": 1, "whole": 0, "none": 1}}
 
 
 def test_no_lift_meta_by_default(bam):
