@@ -5,8 +5,8 @@
 import { describe, expect, it } from 'vitest';
 import inv40 from './__fixtures__/gateD/inv40.topology.json';
 import alu10k from './__fixtures__/gateC/alu_10k.topology.json';
-import { buildLayout, type GroupItem, type Item, type LayoutModel } from './layout';
-import { buildScene, placementAt, sceneHitAt, sceneInverse, xForOccurrence, type Prim, type Scene, type SceneHit } from './scene';
+import { buildLayout, inversionVerdict, INVERSION, type GroupItem, type Item, type LayoutModel } from './layout';
+import { buildScene, placementAt, sceneHitAt, sceneInverse, targetAtX, xForOccurrence, type Prim, type Scene, type SceneHit } from './scene';
 import type { GraphBinding, GraphTopology } from './types';
 
 const COLORS = { ref: '#334155', mat: '#c2410c', pat: '#1d4ed8', target: '#334155' };
@@ -218,5 +218,74 @@ describe('Gate D review fixes', () => {
       expect(pat.length).toBe(2);
       for (const h of pat) expect(sceneHitAt(s, (h.x0 + h.x1) / 2, (h.y0 + h.y1) / 2)).toBe(h);
     }
+  });
+
+  // ------------------------------------------------------------------ agy (retry)
+  const COLORS5 = { ...COLORS4, hap3: '#7c3aed', hap4: '#db2777' };
+  const scene5 = (m: LayoutModel, smallBp = 0) => buildScene(m, {
+    width: 1200, gutter: 52, rightPad: 6, rulerHeight: 30, laneHeight: 34, laneGap: 4, compression: 'log', reversed: false, colors: COLORS5, smallBp,
+  });
+  const alts = (m: LayoutModel, path: string) => groups(m.chain).flatMap(g => g.alts.filter(a => a.carriers.includes(path)).map(a => ({ g, a })));
+
+  it('agy 1: the claimant choice never steals an anchor a resolved repeat or a contiguous step needs', () => {
+    // 1a: an extra B before A (A is in the target twice): an insertion of B, A shared, no deletion.
+    const a = build(fromWalks({ L: 100, A: 1000, B: 50, R: 100, Q: 100 }, { ref: ['L', 'A', 'B', 'R', 'Q', 'A'], mat: ['L', 'B', 'A', 'B', 'R', 'Q', 'A'] }));
+    expect(alts(a, 'mat').map(({ g, a: al }) => [g.target, g.base.bp, al.bp])).toEqual([[{ start: 100, end: 100 }, 0, 50]]);
+    // 1b: an extra M before R, then R's second copy deleted: R is anchored to its first copy.
+    const b = build(fromWalks({ L: 100, R: 200, M: 50, Q: 100 }, { ref: ['L', 'R', 'M', 'R', 'Q'], mat: ['L', 'M', 'R', 'M', 'Q'] }));
+    expect(alts(b, 'mat').map(({ g, a: al }) => [g.target, al.bp])).toEqual([[{ start: 100, end: 100 }, 50], [{ start: 350, end: 550 }, 0]]);
+    // 2d: an inverted copy of N that also matches N's reverse visit keeps the inversion (the anchor stays with the
+    // contiguous original).
+    const d = build(fromWalks({ L: 300, N: 150, X: 100, R: 300 }, { ref: ['L', 'N', 'X', '-N', 'R'], mat: ['L', '-X', '-N', '-N', 'R'] }));
+    expect(d.stats).toMatchObject({ inversions: 1, unresolved: 0, insertions: 0 });
+    // A tandem copy is still the later visit.
+    const t = build(fromWalks({ L: 300, R: 200, Z: 300 }, { ref: ['L', 'R', 'Z'], mat: ['L', 'R', 'R', 'Z'] }));
+    expect(alts(t, 'mat')[0].a.visits.map(v => v.occ.id)).toEqual(['mat.2']);
+  });
+
+  it('agy 2: repeats inside an inversion; same-orientation matches are no evidence', () => {
+    const m = build(fromWalks({ L: 300, N: 50, X: 200, R: 300 }, { ref: ['L', 'N', 'X', 'N', 'R'], mat: ['L', '-N', '-X', '-N', 'R'] }));
+    expect(m.stats).toMatchObject({ inversions: 1, unresolved: 0 });
+    const v = { occ: { id: 'v', node: 'N' }, bp: 50, target: null, reverse: false } as any;
+    expect(inversionVerdict([v], () => [1], 100)).toBe(INVERSION);
+    expect(inversionVerdict([v], () => [1], 100, () => true)).toBeNull();
+  });
+
+  it('agy 3/4: every carrier of a coalesced family sub-allele and of a mark has a forward transform; a mark-only run has its slots', () => {
+    const f = build(fromWalks({ L: 1000, A: 120, B: 10, C: 110, X: 10, D: 30, R: 1000 }, {
+      ref: ['L', 'R'], mat: ['L', 'A', 'B', 'C', 'R'], pat: ['L', 'A', 'X', 'C', 'D', 'R'], hap3: ['L', 'A', 'X', 'C', 'R'], hap4: ['L', 'A', 'X', 'C', 'R'],
+    }));
+    for (const smallBp of [0, 50]) {
+      const s = scene5(f, smallBp);
+      for (const [key, occ] of [['pat', 'pat.2'], ['hap3', 'hap3.2'], ['hap4', 'hap4.2']]) {
+        const x = xForOccurrence(s, occ, 5);
+        expect(x).not.toBeNull();
+        const at = placementAt(s, x!, undefined, undefined, key)!;
+        expect([at.place.occ, at.offset]).toEqual([occ, 5]);
+      }
+    }
+    // Member rows over a folded difference: the member's own occurrence (PAT shares B with the lead, ALT has X).
+    const g = build(fromWalks({ L: 1000, A: 120, B: 10, C: 110, X: 10, D: 30, R: 1000 }, {
+      ref: ['L', 'R'], mat: ['L', 'A', 'B', 'C', 'R'], pat: ['L', 'A', 'B', 'C', 'D', 'R'], alt: ['L', 'A', 'X', 'C', 'R'],
+    }));
+    const gs = scene4(g, 50);
+    const base = gs.hits.find(h => h.payload.kind === 'base' && h.within)!;
+    const row = gs.rows.find(r => r.key === 'pat')!;
+    const inv = sceneInverse(gs, (base.x0 + base.x1) / 2, row.center);
+    expect(inv).toMatchObject({ kind: 'allele', path: 'pat', occurrence: 'pat.2' });
+    // A run of insertion marks only (between two deletions): its slot covers its width on the target map.
+    const z = build(fromWalks({ L: 800, D1: 300, I: 5, D2: 300, R: 800 }, { ref: ['L', 'D1', 'D2', 'R'], mat: ['L', 'D2', 'R'], pat: ['L', 'D1', 'I', 'D2', 'R'], alt: ['L', 'D1', 'R'] }));
+    const zs = scene4(z, 50);
+    const block = zs.blocks.find(b => b.kind === 'marked')!;
+    expect(block).toBeTruthy();
+    expect(targetAtX(zs.targetMap, block.x0 + 0.5)).toMatchObject({ boundary: true, pos: 1100 });
+    const tube = zs.prims.find((p): p is Extract<Prim, { t: 'tube' }> => p.t === 'tube' && Math.abs(p.x0 - block.x0) < 1e-6)!;
+    expect(tube.present.length).toBeGreaterThan(0);
+  });
+
+  it('agy 5: a deletion\'s source boundary follows the path\'s direction, not a visit\'s handle sign', () => {
+    const m = build(fromWalks({ L: 100, D: 50, R: 100 }, { ref: ['-L', 'D', 'R'], mat: ['-L', 'R'] }));
+    const [del] = alts(m, 'mat');
+    expect(del.a.source).toEqual([{ path: 'mat', span: { start: 100, end: 100 } }]);
   });
 });

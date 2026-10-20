@@ -454,7 +454,7 @@ export function buildScene(model: LayoutModel, opts: SceneOptions & { plan?: Sce
    * (its offsets run with the host's when it walks the node the same way, against them when not).
    */
   const placeVisits = (visits: Visit[], x0: number, w: number, bp: number, lane: string, owner: string, flip = false,
-    byCarrier?: Record<string, (Visit | null | undefined)[]>) => {
+    byCarrier?: Record<string, (Visit | null | undefined)[]>, hostPath = lane) => {
     if (bp <= 0 || w <= 0) return;
     let acc = 0;
     visits.forEach((v, t) => {
@@ -463,10 +463,10 @@ export function buildScene(model: LayoutModel, opts: SceneOptions & { plan?: Sce
       const [px0, px1] = flip ? [x0 + x0 + w - b, x0 + x0 + w - a] : [a, b];
       const start = v.target ? v.target.start - v.occ.path_span.start : v.occ.clip.start;
       const dir: 1 | -1 = (Boolean(v.backward) !== flip) ? -1 : 1;
-      occurrences.push({ occ: v.occ.id, node: v.occ.node, lane, owner, x0: px0, x1: px1, start, end: start + v.bp, dir, path: lane });
+      occurrences.push({ occ: v.occ.id, node: v.occ.node, lane, owner, x0: px0, x1: px1, start, end: start + v.bp, dir, path: hostPath });
       for (const [path, list] of Object.entries(byCarrier ?? {})) {
         const mv = list[t];
-        if (!mv || path === lane || mv.occ.node !== v.occ.node) continue;
+        if (!mv || path === hostPath || mv.occ.node !== v.occ.node) continue;
         const len = mv.occ.path_span.end - mv.occ.path_span.start;
         const same = mv.occ.reverse === v.occ.reverse;
         const [ms, me] = same ? [start, start + v.bp] : [len - (start + v.bp), len - start];
@@ -595,10 +595,15 @@ export function buildScene(model: LayoutModel, opts: SceneOptions & { plan?: Sce
     const markHits: SceneHit[] = [];
     const marks: Prim[] = [];
     let acc = 0;
-    const xAt = (bp: number) => (m.bp > 0 ? x + (bp / m.bp) * w : x + w / 2);
+    // Host sequence in proportion; a run of insertion marks only (no host bp) gives each slot an equal share.
+    const zeroParts = Math.max(1, m.parts.length);
+    let zeroAt = 0;
+    const xAt = (bp: number) => (m.bp > 0 ? x + (bp / m.bp) * w : x + (zeroAt / zeroParts) * w);
     for (const part of m.parts) {
       const bp = part.kind === 'run' ? part.bp : part.base.bp;
-      const x0 = xAt(acc), x1 = xAt(acc + bp);
+      const x0 = xAt(acc);
+      if (m.bp <= 0) zeroAt += 1;
+      const x1 = xAt(acc + bp);
       if (part.kind === 'run') {
         segments.push({ x0, x1, present: part.carriers });
         visits.push(...part.visits);
@@ -641,6 +646,9 @@ export function buildScene(model: LayoutModel, opts: SceneOptions & { plan?: Sce
             for (const key of a.carriers) {
               const sl = slots.get(key);
               if (!sl) continue;
+              // The carrier's own walk of this allele, over the mark (its forward transform).
+              const own = key === a.carriers[0] ? a.visits : a.byCarrier?.[key];
+              if (own && a.bp > 0) placeVisits(own, cx - half, 2 * half, a.bp, host, a.id, false, undefined, key);
               const side = sideOf(key);
               marks.push({ t: 'vmark', x0: cx - half, x1: cx + half, y: sl.y, h: sl.h, ty0, ty1, side, color: sl.color, kind });
               const hx = Math.max(4, half);
@@ -1023,6 +1031,12 @@ export function sceneInverse(scene: Scene, x: number, y: number): SceneInverse |
         // A family member: its shared stretches are the lead's runs in the lead's lane at this x; the member's own
         // occurrence of that node, at the same drawn position.
         const lead = p.group.alts.find(a => a.family?.members.includes(p.allele));
+        // Over a folded difference in the lead's tube: that difference's base placements.
+        const base = lead && scene.hits.find(h => h.payload.kind === 'base' && h.payload.lane === lead.carriers[0] && x >= h.x0 && x <= h.x1);
+        if (base && base.payload.kind === 'base') {
+          const own = placementAt(scene, x, base.payload.group.id, lead!.carriers[0], p.lane);
+          if (own) return { kind: 'allele', path: p.lane, occurrence: own.place.occ, offset: own.offset, boundary, group: p.group.id };
+        }
         const run = lead && scene.hits.find(h => h.payload.kind === 'run' && h.payload.host === lead.carriers[0] && x >= h.x0 && x <= h.x1);
         if (run && run.payload.kind === 'run' && run.payload.run.carriers.includes(p.lane)) {
           // Its own occurrence on its stripe of the lead's tube (the run keeps every carrier's visits).
@@ -1044,7 +1058,7 @@ export function sceneInverse(scene: Scene, x: number, y: number): SceneInverse |
       // The carrier: the stripe under the pointer in the allele's tube, else the lane (a mark is on its carrier's
       // stripe); each carrier's own occurrences.
       const path = p.stripes?.find(st => y >= st.y0 && y <= st.y1)?.key ?? p.lane;
-      const at = placementAt(scene, x, p.allele.id, p.allele.carriers[0], path);
+      const at = placementAt(scene, x, p.allele.id, undefined, path);
       if (at) return { kind: 'allele', path, occurrence: at.place.occ, offset: at.offset, boundary, group: p.group.id };
       // A mark (no tube of its own): the carrier's first base of its allele.
       const own = path === p.allele.carriers[0] ? p.allele.visits : p.allele.byCarrier?.[path] ?? [];

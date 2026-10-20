@@ -201,7 +201,7 @@ function hitRoundTrips(s: Scene, m: LayoutModel) {
       expect(occurrence).toBeTruthy();
       if (key) expect(path).toBe(key);
       if (occs) expect(occs.get(path)?.has(occurrence!)).toBe(true);
-      const lane = h.payload.kind === 'run' ? h.payload.host : h.payload.allele.carriers[0];
+      const lane = h.payload.kind === 'run' ? h.payload.host : undefined;
       const owner = h.payload.kind === 'run' ? h.payload.run.id : h.payload.allele.id;
       const back = xForOccurrence(s, occurrence!, offset, lane, owner);
       // A mark has no tube of its own: its inverse is its first base, with no forward placement.

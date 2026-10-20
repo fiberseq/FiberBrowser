@@ -343,7 +343,7 @@ function solveLevel(input: LevelInput, buildFamilies: (g: GroupItem) => void): L
             run += 1;
           } else {
             const fallback = a.j >= 0 && a.j < m.visits.length
-              ? (m.visits[a.j].reverse ? m.visits[a.j].occ.path_span.start : m.visits[a.j].occ.path_span.end) : 0;
+              ? (m.visits[a.j].backward ? m.visits[a.j].occ.path_span.start : m.visits[a.j].occ.path_span.end) : 0;
             const inverted = problem === INVERSION;
             candidates.push({ path: m.key, seg: sa, p: a.i + 1, q: b.i, visits: between,
               status: problem && !inverted ? 'unresolved' : 'ok', reason: problem && !inverted ? problem : undefined,
@@ -770,13 +770,6 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
     cands.forEach((c, j) => { if (c.length === 1) unique.push({ a: j, b: c[0] }); });
     unique.sort((x, y) => x.a - y.a || y.b - x.b);
     const frame = colinearChain(unique);
-    for (let k = 0; k < frame.length; k++) {
-      const list = claimants.get(frame[k].b)!;
-      if (list.length < 2) continue;
-      const lo = k > 0 ? frame[k - 1].a : -1;
-      const earliest = list.find(j => j > lo && j < frame[k].a);
-      if (earliest !== undefined) frame[k] = { a: earliest, b: frame[k].b };
-    }
     const pairs = frame.slice();
     let f = 0;
     const resolved: { a: number; b: number }[] = [];
@@ -792,7 +785,23 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
     for (const r of resolved) resolvedClaims.set(r.b, (resolvedClaims.get(r.b) ?? 0) + 1);
     for (const r of resolved) if (resolvedClaims.get(r.b) === 1) pairs.push(r);
     pairs.sort((x, y) => x.a - y.a || y.b - x.b);
-    const anchors = colinearChain(pairs).map(p => ({ j: p.a, i: p.b }));
+    const chain = colinearChain(pairs);
+    // A target visit several path visits claim: after repeat resolution, take the claimant (between its chain
+    // neighbours, so the chain stays colinear) that makes the most contiguous shared steps with them; on a tie the
+    // earliest (a tandem copy is then the later visit). Never one that would cut a step already contiguous.
+    for (let k = 0; k < chain.length; k++) {
+      const list = claimants.get(chain[k].b);
+      if (!list || list.length < 2) continue;
+      const prev = chain[k - 1], next = chain[k + 1], b = chain[k].b;
+      const score = (j: number) => (prev && j === prev.a + 1 && b === prev.b + 1 ? 1 : 0) + (next && next.a === j + 1 && next.b === b + 1 ? 1 : 0);
+      let best = chain[k].a;
+      for (const j of list) {
+        if ((prev && j <= prev.a) || (next && j >= next.a)) continue;
+        if (score(j) > score(best) || (score(j) === score(best) && j < best)) best = j;
+      }
+      chain[k] = { a: best, b };
+    }
+    const anchors = chain.map(p => ({ j: p.a, i: p.b }));
     anchorCounts[path.binding] = anchors.length;
     annotateRepeats(visits, anchors, targetOccs);
     const continuous = (a: Anchor, b: Anchor): string | null => {
@@ -812,8 +821,9 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
       // substitution (inversionVerdict).
       const between = visits.slice(a.j + 1, b.j);
       const baseBp = tVisits.slice(a.i + 1, b.i).reduce((t, v) => t + v.bp, 0);
-      return inversionVerdict(between, k => (perPath.get(between[k].occ.id) ?? [])
-        .filter((m: { reverse: boolean; i: number }) => m.reverse !== reverse && m.i > a.i && m.i < b.i).map((m: { i: number }) => m.i), baseBp);
+      const inRange = (k: number) => (perPath.get(between[k].occ.id) ?? []).filter((m: { i: number }) => m.i > a.i && m.i < b.i);
+      return inversionVerdict(between, k => inRange(k).filter((m: { reverse: boolean }) => m.reverse !== reverse).map((m: { i: number }) => m.i), baseBp,
+        k => inRange(k).some((m: { reverse: boolean }) => m.reverse === reverse));
     };
     members.push({ key: path.binding, visits, anchors, continuous });
     // Open ends: the walk before the first anchor and after the last.
@@ -1026,17 +1036,21 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
  * base visit once, and carry at least half of both the allele's and the base's bp), or an unresolved local
  * inversion. `opposite(k)` lists the base indices visit k matches in the opposite orientation.
  */
-export function inversionVerdict(between: Visit[], opposite: (k: number) => number[], baseBp: number): string | null {
+export function inversionVerdict(between: Visit[], opposite: (k: number) => number[], baseBp: number, same?: (k: number) => boolean): string | null {
   let invBp = 0, allBp = 0, last = Infinity, consistent = true, any = false;
   const used = new Set<number>();
   between.forEach((v, k) => {
     allBp += v.bp;
+    // A visit that also matches the base in its own orientation there (a palindromic or repeated node) is no
+    // evidence either way.
+    if (same?.(k)) return;
     const opp = opposite(k);
     if (!opp.length) return;
     any = true;
+    // Against base order: of several copies still free (a repeat inside the inversion), the highest.
     const fit = opp.filter(i => i < last && !used.has(i));
-    if (fit.length !== 1) { consistent = false; return; }
-    last = fit[0];
+    if (!fit.length || opp.length > MAX_CANDIDATES_PER_VISIT) { consistent = false; return; }
+    last = Math.max(...fit);
     used.add(last);
     invBp += v.bp;
   });
@@ -1147,7 +1161,11 @@ function alignFamilies(group: GroupItem, lanes: string[], counter: { n: number }
               if (l.occ.node === v.occ.node && l.reverse !== v.reverse) out.push(i);
             }
             return out;
-          }, baseBp);
+          }, baseBp, k => {
+            const v = between[k];
+            for (let i = a.i + 1; i < b.i; i++) if (lead.visits[i].occ.node === v.occ.node && lead.visits[i].reverse === v.reverse) return true;
+            return false;
+          });
         },
       })),
     }, () => undefined);
@@ -1175,7 +1193,7 @@ function alignFamilies(group: GroupItem, lanes: string[], counter: { n: number }
             for (const c of a.carriers) {
               if (before.includes(c) || !a.visits.length) continue;
               const owner = members.find(m => m.allele.carriers.includes(c) && before.includes(m.allele.carriers[0]))?.allele;
-              const from = owner ? owner.visits.indexOf(a.visits[0]) : -1;
+              const from = owner ? owner.visits.indexOf((a.byCarrier?.[owner.carriers[0]] ?? a.visits)[0]) : -1;
               const walk = owner?.byCarrier?.[c];
               if (from < 0 || !walk) continue;
               (a.byCarrier ??= { [a.carriers[0]]: a.visits })[c] = walk.slice(from, from + a.visits.length);
