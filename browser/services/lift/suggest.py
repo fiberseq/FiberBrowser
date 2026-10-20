@@ -4,12 +4,15 @@ the Library, and those of the live-lift datasets already open. Each says
 whether the BAM's contigs are the map's source contigs."""
 from __future__ import annotations
 
-import glob
 import os
 from typing import Iterable, Optional
 
 SUFFIX = ".graphlift.json"
 MAX_SUGGESTIONS = 20
+# A folder next to a BAM can be large or on a slow network share: each scan
+# reads at most this many entries, and at most this many subfolders.
+MAX_DIR_ENTRIES = 2000
+MAX_SUBFOLDERS = 64
 
 
 def _bam_contigs(path: str) -> Optional[set]:
@@ -21,13 +24,41 @@ def _bam_contigs(path: str) -> Optional[set]:
         return None
 
 
+def _entries(folder: str, want) -> list:
+    """Paths of the first MAX_DIR_ENTRIES entries of ``folder`` that ``want``
+    accepts, sorted (unreadable: none)."""
+    out = []
+    try:
+        with os.scandir(folder) as it:
+            for i, entry in enumerate(it):
+                if i >= MAX_DIR_ENTRIES:
+                    break
+                try:
+                    if want(entry):
+                        out.append(entry.path)
+                except OSError:
+                    continue
+    except OSError:
+        return []
+    return sorted(out)
+
+
+def _maps_in(folder: str) -> list:
+    return _entries(folder, lambda e: e.name.endswith(SUFFIX) and e.is_file())
+
+
 def _candidates(state, near: str) -> Iterable[tuple[str, str]]:
+    """Candidate maps, nearest first, scanned lazily: the caller stops reading
+    (and scanning) once it has enough."""
     folder = os.path.dirname(os.path.abspath(os.path.expanduser(near)))
-    for where, pattern in (("next to the BAM", os.path.join(folder, "*" + SUFFIX)),
-                           ("in its parent folder", os.path.join(os.path.dirname(folder), "*" + SUFFIX)),
-                           ("in a subfolder", os.path.join(folder, "*", "*" + SUFFIX))):
-        for path in sorted(glob.glob(pattern)):
-            yield path, where
+    for path in _maps_in(folder):
+        yield path, "next to the BAM"
+    for path in _maps_in(os.path.dirname(folder)):
+        yield path, "in its parent folder"
+    subfolders = _entries(folder, lambda e: not e.name.startswith(".") and e.is_dir(follow_symlinks=False))
+    for sub in subfolders[:MAX_SUBFOLDERS]:
+        for path in _maps_in(sub):
+            yield path, "in a subfolder"
     try:
         from services import library_store
         # Read-only: no lock (nothing is written), so a suggestion never touches the Library's files.
@@ -51,8 +82,10 @@ def suggest_maps(state, near: str) -> dict:
     contigs = _bam_contigs(os.path.expanduser(near)) if near else None
     out, seen = [], set()
     for path, where in _candidates(state, near):
+        if len(out) >= MAX_SUGGESTIONS:
+            break
         real = os.path.realpath(path)
-        if real in seen or len(out) >= MAX_SUGGESTIONS:
+        if real in seen:
             continue
         seen.add(real)
         try:

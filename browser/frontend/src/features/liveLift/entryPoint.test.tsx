@@ -53,4 +53,25 @@ describe('viewing a loaded BAM on another assembly', () => {
     await flush();
     expect(document.querySelector('[data-testid="live-lift-map-help"]')?.textContent).toContain('A graphlift map relates');
   });
+  it('opening from another BAM selects that BAM\'s map; a map the user typed stays', async () => {
+    vi.mocked(suggestLiftMaps).mockImplementation(async near => ({ near, help: '', maps: [
+      { manifest: near.startsWith('/a') ? '/a.graphlift.json' : '/b.graphlift.json', where: 'next to the BAM', matches_bam: true }] }));
+    act(() => root.render(<LiveLiftDialog />));
+    const manifest = () => (document.querySelector('[data-testid="live-lift-manifest"]') as HTMLInputElement).value;
+    act(() => useLiveLiftStore.getState().openFor(['/a.bam']));
+    await flush();
+    expect(manifest()).toBe('/a.graphlift.json');
+    act(() => useLiveLiftStore.getState().setDialogOpen(false));
+    act(() => useLiveLiftStore.getState().openFor(['/b.bam']));
+    await flush();
+    expect(manifest()).toBe('/b.graphlift.json');
+    // A typed map is the user's choice.
+    const input = document.querySelector('[data-testid="live-lift-manifest"]') as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+    act(() => { setter.call(input, '/mine.graphlift.json'); input.dispatchEvent(new Event('input', { bubbles: true })); });
+    act(() => useLiveLiftStore.getState().setDialogOpen(false));
+    act(() => useLiveLiftStore.getState().openFor(['/a.bam']));
+    await flush();
+    expect(manifest()).toBe('/mine.graphlift.json');
+  });
 });

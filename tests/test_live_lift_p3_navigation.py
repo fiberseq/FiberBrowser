@@ -195,3 +195,29 @@ def test_map_suggestions_next_to_a_bam_say_whether_its_contigs_match(env, tmp_pa
     assert "graphlift map" in out["help"]
     monkeypatch.delenv("FIBERBROWSER_LIVE_LIFT")
     assert client.get("/api/lift/maps", params={"near": moved}).status_code == 404
+
+
+def test_map_suggestions_stop_scanning_at_the_cap(env, tmp_path, monkeypatch):
+    client, manifest, _bam = env
+    import os
+    import shutil
+    from services.lift import suggest
+    monkeypatch.setenv("FIBERBROWSER_LIBRARY", str(tmp_path / "library.json"))
+    here = tmp_path / "many"
+    here.mkdir()
+    for f in os.listdir(os.path.dirname(manifest)):
+        shutil.copy(os.path.join(os.path.dirname(manifest), f), here / f)
+    for i in range(suggest.MAX_SUGGESTIONS + 5):
+        shutil.copy(manifest, here / f"m{i:02d}.graphlift.json")
+    for i in range(3):
+        (here / f"sub{i}").mkdir()
+    bam = write_bam(here / "s.bam", _records)
+    scanned = []
+    real = os.scandir
+    monkeypatch.setattr(suggest.os, "scandir", lambda folder: (scanned.append(str(folder)), real(folder))[1])
+    out = client.get("/api/lift/maps", params={"near": bam}).json()
+    assert len(out["maps"]) == suggest.MAX_SUGGESTIONS
+    assert all(m["where"] == "next to the BAM" for m in out["maps"])
+    # Enough maps next to the BAM: neither its parent folder nor its subfolders are read.
+    assert scanned == [str(here)]
+

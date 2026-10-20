@@ -3,7 +3,7 @@
  * relates it to this genome, the haplotypes, and the display settings. The new dataset opens split into one panel per
  * haplotype unless "Pooled" is chosen (a rule per panel, so the panels follow the view).
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useBrowserStore } from '../../stores/browserStore';
 import { addLiveLiftDataset, inspectLiftMap, suggestLiftMaps, type LiftMapInfo, type LiftMapSuggestion, type LiftSettings, type SupplementaryDisplay } from './api';
 import { useLiveLiftStore } from './store';
@@ -31,6 +31,8 @@ export function LiveLiftDialog() {
   const prefill = useLiveLiftStore(s => s.prefillBams);
   const [suggestions, setSuggestions] = useState<{ maps: LiftMapSuggestion[]; help: string } | null>(null);
 
+  // The map this dialog chose itself for a previous BAM: replaced when another BAM opens it (a typed one stays).
+  const suggestedManifest = useRef<string | null>(null);
   // Opened on a loaded BAM: it is the source, and maps found near it (or in the Library) are offered.
   useEffect(() => {
     if (!open || !prefill?.length) { setSuggestions(null); return; }
@@ -39,8 +41,13 @@ export function LiveLiftDialog() {
     suggestLiftMaps(prefill[0]).then(r => {
       if (!live) return;
       setSuggestions(r);
-      const best = r.maps.find(m => m.matches_bam && !m.error);
-      if (best) setManifest(m => m || best.manifest);
+      const best = r.maps.find(m => m.matches_bam && !m.error)?.manifest ?? '';
+      setManifest(m => {
+        const ours = !m || m === suggestedManifest.current;
+        if (!ours) return m;
+        suggestedManifest.current = best || null;
+        return best;
+      });
     }).catch(() => { if (live) setSuggestions({ maps: [], help: '' }); });
     return () => { live = false; };
   }, [open, prefill]);
