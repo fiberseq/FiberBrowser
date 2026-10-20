@@ -5,6 +5,11 @@ export type AnalysisPanelGroup = 'analysis' | 'view' | 'tracks' | 'tools';
 
 export interface AnalysisPanelProps {
   isFullView?: boolean;
+  /** The panel's id (several panels of a non-singleton type each know their own config). */
+  panelId?: string;
+  /** The panel body's usable size in CSS px (below the header). */
+  width?: number;
+  height?: number;
 }
 
 export interface AnalysisPanelPlugin {
@@ -24,4 +29,7 @@ export interface AnalysisPanelPlugin {
   apiEndpoints?: string[];                      // primary backend/Jupyter endpoints backing the panel
   settingsTargets?: string[];                   // settings/provenance sections that feed the panel
   preview?: string;                             // a Preview feature's id (utils/previewFeatures): its launchers hidden while previews are off
+  /** 'scroll' (default): the host scrolls the body. 'fill': the body is exactly the panel's height and the panel
+   * scrolls inside itself (a canvas that sizes itself to its body: the graph view). */
+  bodyLayout?: 'scroll' | 'fill';
 }

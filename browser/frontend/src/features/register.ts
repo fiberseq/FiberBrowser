@@ -13,6 +13,7 @@ import { registerVariants } from './variants/register';
 import { registerAltAllele } from './altAllele/register';
 import { registerAltAllelePreview } from './altAllele/preview';
 import { registerLiveLift } from './liveLift/register';
+import { registerGraphPanel } from './graphPanel/register';
 
 let done = false;
 
@@ -29,4 +30,5 @@ export function registerInsertionFeatures(): void {
   registerVariants();
   registerAltAllele();
   registerLiveLift();
+  registerGraphPanel();
 }

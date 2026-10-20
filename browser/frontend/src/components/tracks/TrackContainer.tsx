@@ -2,6 +2,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { PanelDisplayContext, panelReversed, usePanelDisplayStore } from '../../hooks/usePanelDisplayStore';
 import { logicalOffset } from '../../utils/scaledCoordinates';
 import React, { Suspense, useRef, useEffect, useLayoutEffect, useState, useCallback, useMemo } from 'react';
+import { crosshairSegments, excludedRects, overlapsExcluded, type CrosshairSegment } from '../../utils/crosshairSegments';
 import { useBrowserStore } from '../../stores/browserStore';
 import { useEphemeralStore } from '../../stores/ephemeralStore';
 import type { PanelConfig } from '../../types';
@@ -445,6 +446,23 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
     const below = ruler ? ruler.getBoundingClientRect().bottom : panel.getBoundingClientRect().top + (PANEL_HEADER_HEIGHT + AXIS_HEIGHT) * zoom;
     setCrosshairLabelTop((below - box.top) / zoom + c.scrollTop + 2);
   }, [crosshairLabelShown]);
+  // The crosshair is cut around panels with coordinates of their own (utils/crosshairSegments.ts); null: none here.
+  const stripHeightRef = useRef(0);
+  const [crosshairCuts, setCrosshairCuts] = useState<{ segments: CrosshairSegment[]; labelHidden: boolean } | null>(null);
+  const crosshairShown = crosshairX !== null;
+  useLayoutEffect(() => {
+    const c = containerRef.current;
+    if (!crosshairShown || !c) { setCrosshairCuts(null); return; }
+    const excluded = excludedRects(c);
+    if (!excluded.length) { setCrosshairCuts(null); return; }
+    const top = stripHeightRef.current;
+    const bottom = crosshairBottom ?? c.scrollHeight;
+    const segments = crosshairSegments(crosshairX!, top, bottom, excluded);
+    const labelTop = crosshairLabelTop ?? top;
+    const labelLeft = Math.min(crosshairX! + 8, c.offsetWidth - 120);
+    const labelHidden = overlapsExcluded({ left: labelLeft, right: labelLeft + 120, top: labelTop, bottom: labelTop + 20 }, excluded);
+    setCrosshairCuts({ segments, labelHidden });
+  }, [crosshairShown, crosshairX, crosshairBottom, crosshairLabelTop]);
   const panels = useBrowserStore(s => s.panels);
   const fullViewPanelId = useBrowserStore(s => s.fullViewPanelId);
   const showHiddenTrackStrip = useBrowserStore(s => s.showHiddenTrackStrip);
@@ -761,6 +779,7 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
           className="flex flex-col"
           data-panel-content-type={panel.contentType}
           data-analysis-panel-id={panel.id}
+          {...(plugin?.bodyLayout === 'fill' ? { 'data-crosshair-exclude': 'true' } : {})}
           style={{
             width: panelWidth,
             height: panelHeight,
@@ -783,7 +802,7 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
             onClose={() => useBrowserStore.getState().closeAnalysisPanel(panel.id)}
           />
           </div>
-          <div style={{ height: panelHeight - PANEL_HEADER_HEIGHT, overflow: 'auto' }} className="bg-white dark:bg-dark-bg">
+          <div style={{ height: panelHeight - PANEL_HEADER_HEIGHT, overflow: plugin?.bodyLayout === 'fill' ? 'hidden' : 'auto', minHeight: 0 }} className="bg-white dark:bg-dark-bg">
             {tooNarrow && (
               <div data-testid="panel-too-narrow" className="flex h-full flex-col items-center justify-center gap-2 p-2 text-center text-[11px] text-gray-500 dark:text-gray-400">
                 <span className="font-medium text-gray-700 dark:text-gray-200">{label}</span>
@@ -804,9 +823,12 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
               if (!plugin) return null;
               const PanelComponent = plugin.component;
               return (
-                <Suspense fallback={<div className="p-4 text-sm text-gray-400">Loading...</div>}>
-                  <PanelComponent isFullView={isFullView} />
-                </Suspense>
+                <PanelDisplayContext.Provider value={panel.id}>
+                  <Suspense fallback={<div className="p-4 text-sm text-gray-400">Loading...</div>}>
+                    <PanelComponent isFullView={isFullView} panelId={panel.id} width={panelWidth}
+                      height={Math.max(0, panelHeight - PANEL_HEADER_HEIGHT)} />
+                  </Suspense>
+                </PanelDisplayContext.Provider>
               );
             })()}
             </div>
@@ -889,6 +911,7 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
   const expandedBarTotal = expandedRowCount * ROW_COLLAPSE_BAR_HEIGHT;
   const isRenderMode = typeof window !== 'undefined' && !!window.__FIBERBROWSER_RENDER_MODE;
   const stripHeight = isRenderMode || railMode ? 0 : analysisStripCollapsed ? ANALYSIS_STRIP_COLLAPSED_HEIGHT : ANALYSIS_STRIP_HEIGHT;
+  stripHeightRef.current = stripHeight;
   const reservedHeight = stripHeight + collapsedBarTotal + expandedBarTotal + (hasMinimized ? MINIMIZED_BAR_HEIGHT : 0) + gap;
   const rowHeight = expandedRowCount > 0
     ? Math.max(200, Math.floor((dimensions.height - reservedHeight) / expandedRowCount))
@@ -989,19 +1012,25 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
       {/* Crosshair overlay: the full height of the panels, below the analysis strip (it drew over its chips, audit L5) */}
       {crosshairX !== null && (
         <>
-          <div
-            className="absolute pointer-events-none z-20"
-            data-testid="ruler-crosshair"
-            style={{
-              left: crosshairX,
-              top: stripHeight,
-              // Down to the bottom of the panels under the pointer (audit L8), else the container's.
-              ...(crosshairBottom != null ? { height: Math.max(0, crosshairBottom - stripHeight) } : { bottom: 0 }),
-              width: 1,
-              backgroundColor: 'rgba(100, 100, 100, 0.4)',
-            }}
-          />
-          {crosshairLabel && (
+          {crosshairCuts == null ? (
+            <div
+              className="absolute pointer-events-none z-20"
+              data-testid="ruler-crosshair"
+              style={{
+                left: crosshairX,
+                top: stripHeight,
+                // Down to the bottom of the panels under the pointer (audit L8), else the container's.
+                ...(crosshairBottom != null ? { height: Math.max(0, crosshairBottom - stripHeight) } : { bottom: 0 }),
+                width: 1,
+                backgroundColor: 'rgba(100, 100, 100, 0.4)',
+              }}
+            />
+          ) : crosshairCuts.segments.map((seg, i) => (
+            // Cut where it would cross a panel with coordinates of its own (the graph view).
+            <div key={i} className="absolute pointer-events-none z-20" data-testid="ruler-crosshair"
+              style={{ left: crosshairX, top: seg.top, height: Math.max(0, seg.bottom - seg.top), width: 1, backgroundColor: 'rgba(100, 100, 100, 0.4)' }} />
+          ))}
+          {crosshairLabel && !crosshairCuts?.labelHidden && (
             <div
               data-testid="ruler-crosshair-label"
               className="absolute pointer-events-none z-20 bg-gray-800 text-white text-[13px] px-1.5 py-0.5 rounded whitespace-nowrap"
