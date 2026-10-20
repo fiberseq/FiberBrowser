@@ -18,6 +18,9 @@ from services.graph_panel.registration import Registration, RegistrationError, R
 MAX_TARGET_BP = 50_000
 MAX_PATHS = 4
 MAX_CONTEXT_BP = 2_000
+# Named visits walked beyond each window edge, so the joint layout can anchor an event exactly at the edge
+# (graphlift GRAPH_HELPER.md `flank_bp`).
+MAX_FLANK_BP = 1_000
 DEFAULT_CONTEXT_BP = 100
 LIMIT_KEYS = ("target_bp", "paths", "source_bp", "source_portions", "target_portions", "nodes", "edges", "visits",
               "wire_bytes", "context_bp", "candidates", "walk_steps")
@@ -147,6 +150,11 @@ def validate_query(reg: Registration, body: dict) -> dict:
         raise _bad("snarls must be none or contained")
     request = {"target": target, "interval": {"start": start, "end": end}, "selected": selected,
                "context_bp": context, "snarls": snarls}
+    flank = body.get("flank_bp", 0)
+    if not isinstance(flank, int) or isinstance(flank, bool) or not 0 <= flank <= MAX_FLANK_BP:
+        raise _bad(f"flank_bp must be 0–{MAX_FLANK_BP}")
+    if flank:
+        request["flank_bp"] = flank
     limits = body.get("limits")
     if limits:
         if not isinstance(limits, dict) or any(k not in LIMIT_KEYS or not isinstance(v, int) or isinstance(v, bool) or v <= 0

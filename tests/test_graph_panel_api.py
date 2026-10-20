@@ -168,6 +168,9 @@ def test_register_query_and_cancel_through_the_api(app_client, package, graph_en
     assert out["timings"]["startup_ms"] is not None and out["cached"] is False
     again = app_client.post("/api/graph/subgraph", json=body(reg, request_id="req-2", generation=2)).json()
     assert again["cached"] is True and again["generation"] == 2
+    # A flank margin is passed on (and is part of the cache identity).
+    flanked = app_client.post("/api/graph/subgraph", json=body(reg, request_id="req-3", generation=3, flank_bp=1)).json()
+    assert flanked["result"]["echo"]["flank_bp"] == 1 and flanked["cached"] is False
 
     paths = app_client.get(f"/api/graph/registrations/{reg['id']}/paths").json()
     assert paths["total"] == 1 and [b["key"] for b in paths["bindings"]] == ["target", "alt"]
@@ -188,6 +191,9 @@ def test_register_query_and_cancel_through_the_api(app_client, package, graph_en
     ({"interval": {"start": 200, "end": 100}}, 422, "invalid_request"),
     ({"context_bp": 5000}, 422, "invalid_request"),
     ({"snarls": "all"}, 422, "invalid_request"),
+    ({"flank_bp": 1001}, 422, "invalid_request"),
+    ({"flank_bp": -1}, 422, "invalid_request"),
+    ({"flank_bp": True}, 422, "invalid_request"),
     ({"limits": {"nodes": -1}}, 422, "invalid_request"),
     ({"limits": {"no_such_limit": 5}}, 422, "invalid_request"),
     ({"request_id": "bad id with spaces"}, 422, "invalid_request"),

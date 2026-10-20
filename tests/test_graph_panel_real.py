@@ -92,6 +92,21 @@ def test_alu_insertion_is_one_boundary_with_both_alleles(client):
     assert len(ids) == len(set(ids)) and all(isinstance(i, str) for i in ids)
 
 
+def test_window_edge_at_the_alu_boundary_has_named_flanks(client):
+    """A window starting or ending exactly at 97,395 still has both flank visits (645, 669) with flank_bp."""
+    reg = register(client, "alu")
+    for rid, start, end in (("edge-r", 97_395, 98_395), ("edge-l", 96_395, 97_395)):
+        result = query(client, reg, rid, start, end, flank_bp=1).json()["result"]
+        assert result["complete"] is True and result["interval"] == {"start": start, "end": end}
+        for p in result["paths"]:
+            nodes = [o["node"] for o in p["occurrences"]]
+            assert "645" in nodes and "669" in nodes, (p["binding"], nodes[:3], nodes[-3:])
+        target = {o["node"]: o["id"] for o in result["paths"][0]["occurrences"]}
+        for key in ("mat", "pat"):
+            matched = {m["target_occurrence"] for m in result["direct_matches"] if m["source_binding"] == key}
+            assert target["645"] in matched and target["669"] in matched
+
+
 def test_refusals_happen_before_the_helper(client):
     reg = register(client, "alu")
     r = query(client, reg, "big", 0, 100_000)
