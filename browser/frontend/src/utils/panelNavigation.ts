@@ -24,7 +24,9 @@ import type { PanelConfig } from '../types';
 export type NavigationMode = 'linked' | 'perPanel';
 export interface Locus { chrom: string; start: number; end: number }
 
-const GROUP_FIELDS = ['haplotypeGroup', 'contactRegionGroupId', 'genomeRegionGroupId', 'linkedSessionId'] as const;
+// A live-lift source panel (`liftLink`, features/liveLift/linking) follows the main view through the lift map, so it
+// leaves its reference's link group (DESIGN_LIVE_LIFT.md §5.1).
+const GROUP_FIELDS = ['haplotypeGroup', 'contactRegionGroupId', 'genomeRegionGroupId', 'linkedSessionId', 'liftLink'] as const;
 
 /** A panel opened by a comparison or region view (they keep their own locus whatever the mode). */
 export function inComparisonGroup(panel: PanelConfig): boolean {

@@ -182,6 +182,11 @@ export interface PanelSlice {
   addPanel: (datasetId: string) => string;
   removePanel: (panelId: string) => void;
   setPanelReversed: (panelId: string, reversed: boolean) => void;
+  /**
+   * A linked panel's view set by its link (a lift map's exact correction, a jump to a source insertion): only that
+   * panel's own view. It maps nothing back to the main view, moves no link-group peers and records no undo step.
+   */
+  setPanelViewportFromLink: (panelId: string, view: { chrom: string; start: number; end: number }) => void;
   duplicatePanel: (panelId: string) => string;
 
   // Panel config
@@ -777,6 +782,12 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
   setPanelReversed: (panelId, reversed) => withUndo(get, 'Reverse panel', () => set(state => ({
     panels: state.panels.map(p => p.id === panelId ? { ...p, reversed } : p),
   }))),
+  setPanelViewportFromLink: (panelId, view) => set(state => {
+    const panel = state.panels.find(p => p.id === panelId);
+    const v = panel?.viewportOverride;
+    if (!panel || !v || (v.chrom === view.chrom && v.start === view.start && v.end === view.end)) return state;
+    return { panels: state.panels.map(p => p.id === panelId ? { ...p, viewportOverride: { chrom: view.chrom, start: view.start, end: view.end } } : p) };
+  }),
   duplicatePanel: (panelId) => {
     const state = get();
     const source = state.panels.find(p => p.id === panelId);
