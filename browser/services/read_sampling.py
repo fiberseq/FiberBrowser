@@ -345,6 +345,9 @@ def estimate_dataset_reads(state, dataset, chrom: str, start: int, end: int) -> 
             value = estimate_lifted_reads(dataset.paths, plan_fetch(selection, config.settings, fetch_range=(start, end)))
         except LiftRefused:
             value = None
+        if value is None:
+            # Unknown (an unreadable file, a refused plan): never remembered, so a recovered file is estimated again.
+            return None
         with _bai_lock:
             _LIFTED_ESTIMATES[key] = value
             while len(_LIFTED_ESTIMATES) > _LIFTED_ESTIMATES_MAX:

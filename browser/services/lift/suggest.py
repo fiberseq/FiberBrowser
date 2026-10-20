@@ -81,8 +81,12 @@ def suggest_maps(state, near: str) -> dict:
     require_enabled()
     contigs = _bam_contigs(os.path.expanduser(near)) if near else None
     out, seen = [], set()
-    for path, where in _candidates(state, near):
-        if len(out) >= MAX_SUGGESTIONS:
+    candidates = iter(_candidates(state, near))
+    # The cap is checked before the next candidate is asked for: that may scan another folder.
+    while len(out) < MAX_SUGGESTIONS:
+        try:
+            path, where = next(candidates)
+        except StopIteration:
             break
         real = os.path.realpath(path)
         if real in seen:

@@ -207,7 +207,7 @@ def test_map_suggestions_stop_scanning_at_the_cap(env, tmp_path, monkeypatch):
     here.mkdir()
     for f in os.listdir(os.path.dirname(manifest)):
         shutil.copy(os.path.join(os.path.dirname(manifest), f), here / f)
-    for i in range(suggest.MAX_SUGGESTIONS + 5):
+    for i in range(suggest.MAX_SUGGESTIONS):  # exactly the cap: nothing more is scanned
         shutil.copy(manifest, here / f"m{i:02d}.graphlift.json")
     for i in range(3):
         (here / f"sub{i}").mkdir()

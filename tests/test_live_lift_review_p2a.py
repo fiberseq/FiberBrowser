@@ -236,9 +236,13 @@ def test_dataset_estimate_uses_target_fetch_plan(lift_env, monkeypatch):
     assert seen == []
     def refuse(*a, **k):
         raise ll.LiftRefused('budget')
+    plan_fetch = ll.plan_fetch
     monkeypatch.setattr(ll, 'plan_fetch', refuse)
     ll.clear_selection_cache()
     assert estimate_dataset_reads(lift_env[1], ds, TARGET, 1000, 19000) is None
+    # An unknown estimate is not remembered: once the plan is possible again it is estimated.
+    monkeypatch.setattr(ll, 'plan_fetch', plan_fetch)
+    assert estimate_dataset_reads(lift_env[1], ds, TARGET, 1000, 19000) == 123
 
 
 def test_validation_checks_each_bam_and_settings_atomically(lift_env, tmp_path):
