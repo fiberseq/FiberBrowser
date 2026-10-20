@@ -131,6 +131,9 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
   // Hover tooltip state
   const [hoveredRead, setHoveredRead] = useState<{read: CompactRead; x: number; y: number; liveLiftBadge?: LiveLiftBadge} | null>(null);
   const [hoveredSv, setHoveredSv] = useState<SvHover | null>(null);
+  // The read under the pointer whether or not tooltips are on (a live-lift link's shared hover, §5.3).
+  const [pointerRead, setPointerReadState] = useState<CompactRead | null>(null);
+  const setPointerRead = useCallback((read: CompactRead | null) => setPointerReadState(prev => (prev === read ? prev : read)), []);
 
   // Pan drag tracking. The drag belongs to the track it started on: that
   // track's own document listeners (attached on mousedown, removed on mouseup)
@@ -678,8 +681,10 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
       setHoverY(null);
       const svHit = !isPanning && x >= sidebarWidth ? svEventAtXY(x, y) : null;
       setHoveredSv(svHit ? { kind: 'event', read: svHit.read, event: svHit.event, x, y } : null);
+      const pointed = !isPanning && x >= sidebarWidth ? getReadHitAtXY(x, y) : null;
+      setPointerRead(pointed?.read ?? null);
       if (showReadTooltip && !isPanning && x >= sidebarWidth) {
-        const hit = getReadHitAtXY(x, y);
+        const hit = pointed;
         if (hit) {
           setHoveredRead({ ...hit, x, y });
         } else {
@@ -689,7 +694,7 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
         setHoveredRead(null);
       }
     }
-  }, [dragCluster, hasCluster, sidebarWidth, getClusterAtY, getReadHitAtXY, isPanning, showReadTooltip, svEventAtXY]);
+  }, [dragCluster, hasCluster, sidebarWidth, getClusterAtY, getReadHitAtXY, isPanning, showReadTooltip, svEventAtXY, setPointerRead]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (dragCluster !== null && hoverCluster !== null && dragCluster !== hoverCluster) {
@@ -716,7 +721,8 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
     setHoverCluster(null);
     setHoverY(null);
     setHoveredRead(null);
-  }, []);
+    setPointerRead(null);
+  }, [setPointerRead]);
 
   // Wheel handler for vertical zoom and scroll
   const handleWheel = useCallback((e: React.WheelEvent<HTMLCanvasElement>) => {
@@ -758,6 +764,7 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
     selectedReadIds,
     hoveredRead,
     hoveredSv,
+    pointerRead,
     handleMouseDown,
     handleClick,
     handleContextMenu,

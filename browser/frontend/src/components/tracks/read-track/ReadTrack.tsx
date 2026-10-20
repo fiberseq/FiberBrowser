@@ -721,7 +721,7 @@ export function ReadTrack({
   // --- Mouse interaction hook ---
   const {
     dragCluster, dragY, hoverCluster, hoverY,
-    selectedReadIds, hoveredRead, hoveredSv,
+    selectedReadIds, hoveredRead, hoveredSv, pointerRead,
     handleMouseDown, handleClick, handleMouseMove, handleMouseUp,
     handleMouseLeave, handleWheel,
     handleContextMenu, handleKeyDown, contextTarget, closeContextMenu, selectFootprintAt, selectReadById,
@@ -739,7 +739,7 @@ export function ReadTrack({
 
   // A live-lift panel and its linked source panel outline the molecule under the pointer in both (§5.3).
   const hoverPanelId = useContext(PanelDisplayContext);
-  const liftHoverRows = useLiftHoverRows(hoverPanelId, displayReads, isPanning ? null : hoveredRead?.read ?? null, chrom, linkedBoundsStart ?? start);
+  const liftHoverRows = useLiftHoverRows(hoverPanelId, displayReads, isPanning ? null : pointerRead, chrom, linkedBoundsStart ?? start);
 
   // Cluster counts shown in tooltips should match the full cluster assignment,
   // not just the currently rendered/sample-limited rows.
