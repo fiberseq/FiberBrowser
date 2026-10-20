@@ -12,8 +12,10 @@ identities, never MAT/PAT names:
   BAM has the target contig at the binding's size and the main reference does
   too.
 
-**Composition.** Every bound (dataset, path) decodes its topology windows once
-(``live_lift.decode_source_records``: the lifted loader options, hard-clip scope,
+**Composition.** Every bound (dataset, path) decodes the records of its topology windows
+it has not decoded before (a per-record cache: a record is composed whole, so its
+composition does not depend on the window or sampling level that fetched it; a pan
+decodes only its new records) with ``live_lift.decode_source_records`` (the lifted loader options, hard-clip scope,
 duplicates, supplementary records) and composes them with ``lift_compact_reads``
 through one identity piece over the source contig. Whole calls, call identities
 (``call_id``, ``call_parts``), the explicit-channel precedence and legacy
@@ -195,7 +197,7 @@ def merge_windows(windows: Iterable) -> list:
 
 def window_records(dataset, contig: str, windows: list) -> Optional[list]:
     """The physical records the windows hold, from an index walk over record headers (no tag decoding):
-    ``[(library, QNAME, start, flag, end)]``, each once (a record over two windows is listed by the first). Their
+    ``[(library, QNAME, start, flag, end, hard_clipped)]``, each once (a record over two windows is listed by the first). Their
     count bounds the molecules (the sampling level is chosen from it before any call is decoded), their extent is
     the composition region (records whole), and they say how many records the loader's own filters left out."""
     import pysam
@@ -212,7 +214,8 @@ def window_records(dataset, contig: str, windows: list) -> Optional[list]:
                         end = rec.reference_end or rec.reference_start + 1
                         if any(rec.reference_start < wb and end > wa for wa, wb in windows[:k]):
                             continue
-                        out.append((lib, rec.query_name, rec.reference_start, rec.flag, end))
+                        hard = any(op == 5 for op, _n in (rec.cigartuples or ()))
+                        out.append((lib, rec.query_name, rec.reference_start, rec.flag, end, hard))
         except (OSError, ValueError):
             return None
     return out
@@ -315,67 +318,149 @@ def m6a_density(read: dict, bin_bp: int) -> None:
         read["m6a_density"] = [[b, b + bin_bp, n] for b, n in sorted(bins.items())]
 
 
-def _decode(dataset, contig: str, size: int, windows: list, binding: str, level: int, counts: dict,
-            region: Optional[tuple] = None):
-    """Decoded and composed rows of one (dataset, path) at a sampling level: ``(reads, truncated, decoded bytes)``.
-    Records overlapping ``windows`` are fetched and composed whole over ``region`` (their extent)."""
+def compact_full(row: dict, origin: int, dataset_id: str, binding: str) -> dict:
+    """A composed row in absolute source coordinates with every call and mark (no window clip)."""
+    return compact_row(row, origin, dataset_id, binding, None)
+
+
+def clip_to_windows(read: dict, windows: list) -> dict:
+    """A cached whole read as the request's wire form: only calls touching ``windows`` (their own bounds kept) and
+    m6A inside them (a new dict; the cached one is never changed)."""
+    def keep(a, b):
+        return any(a < wb and b > wa for wa, wb in windows)
+
+    out = {k: v for k, v in read.items() if k not in _LAYERS and k != "m6a"}
+    for name in _LAYERS:
+        layer = read.get(name)
+        if not layer:
+            continue
+        idx = [i for i, iv in enumerate(layer["iv"]) if keep(iv[0], iv[1])]
+        if not idx:
+            continue
+        if len(idx) == len(layer["iv"]):
+            out[name] = layer
+            continue
+        out[name] = {k: ([v[i] for i in idx] if isinstance(v, list) else v) for k, v in layer.items()}
+    m6a = [p for p in read.get("m6a") or () if any(wa <= p < wb for wa, wb in windows)]
+    if m6a:
+        out["m6a"] = m6a
+    return out
+
+
+# ── Per-record cache ────────────────────────────────────────────────────────
+#
+# A record's composition depends only on the record (it is composed whole, in source coordinates, through an
+# identity piece), never on the window that fetched it or the sampling level that kept it. So a pan decodes only
+# the records it has not seen; the rest come from here and are clipped to the request's windows. Each entry is
+# the record's composed reads (whole), its decoded-size estimate and, for a record that composed to nothing, why.
+
+_RECORDS: "OrderedDict[tuple, tuple]" = OrderedDict()
+_RECORDS_LOCK = threading.Lock()
+_RECORDS_MAX_BYTES = 96 * 1024 * 1024
+_records_bytes = 0
+
+
+def _entry_bytes(reads: tuple) -> int:
+    return 256 + sum(512 + 32 * (marks_of(r) + len(r["cov"]) + len(r["ins"]) + len(r.get("dl") or ())) for r in reads)
+
+
+def _records_get(keys) -> dict:
+    out = {}
+    with _RECORDS_LOCK:
+        for k in keys:
+            hit = _RECORDS.get(k)
+            if hit is not None:
+                _RECORDS.move_to_end(k)
+                out[k] = hit
+    return out
+
+
+def _records_put(items: dict) -> None:
+    global _records_bytes
+    with _RECORDS_LOCK:
+        for k, v in items.items():
+            old = _RECORDS.pop(k, None)
+            if old is not None:
+                _records_bytes -= old[3]
+            _RECORDS[k] = v
+            _records_bytes += v[3]
+        while _records_bytes > _RECORDS_MAX_BYTES and _RECORDS:
+            _k, old = _RECORDS.popitem(last=False)
+            _records_bytes -= old[3]
+
+
+def clear_cache() -> None:
+    global _records_bytes
+    with _RECORDS_LOCK:
+        _RECORDS.clear()
+        _records_bytes = 0
+
+
+def _record_key(base: tuple, rec: tuple) -> tuple:
+    """A listed record's cache key: the (dataset, revision, path, contig) base and (library, QNAME, start, end,
+    flag)."""
+    lib, qname, start, flag, end = rec[:5]
+    return base + (lib, qname, start, end, flag)
+
+
+def _decode_records(dataset, contig: str, size: int, windows: list, binding: str, missing: list, region: tuple,
+                    base: tuple) -> tuple:
+    """Decode and compose the ``missing`` listed records (only them: by QNAME, over their own spans inside the
+    windows) and cache each: ``(entries, truncated, scoped counts)``. A record of the batch that composed to nothing
+    is cached with its reason: a hard-clipped supplementary whose tags cannot be scoped, a record the loader's
+    filters left out, or one with no correspondence. Nothing is cached for records a truncated batch never reached."""
     from services.lift.compose import lift_compact_reads
-    from services.lift.live_lift import LiftSettings, LoadBudget, decode_source_records
+    from services.lift.live_lift import LoadBudget, decode_source_records, decoded_size_estimate
     from services.read_sampling import Sampler
 
-    settings = dataset.live_lift.settings if getattr(dataset, "live_lift", None) is not None else LiftSettings()
-    plan = _Plan(contig, size, windows, binding, region)
+    settings = _settings(dataset)
+    spans = merge_windows((max(r[2], wa), min(r[4], wb)) for r in missing for wa, wb in windows
+                          if r[2] < wb and r[4] > wa)
+    if not spans:  # zero-length records: their start inside a window
+        spans = merge_windows((r[2], r[2] + 1) for r in missing)
+    plan = _Plan(contig, size, spans, binding, region)
     budget = LoadBudget(max_bytes=MAX_DECODED_BYTES)
-    sampler = Sampler(level) if level > 0 else None
+    counts: dict = {}
+    sampler = Sampler(0, only_ids=frozenset(r[1] for r in missing), exact_ids=True)
     decoded = decode_source_records(list(dataset.paths), plan, loader_options=LOADER_OPTIONS, budget=budget,
                                     counts=counts, sampler=sampler, include_supplementary=settings.load_supplementaries)
     a, b = plan.region
     rows = lift_compact_reads(decoded, plan, handle=None, region_start=a, region_end=b, settings=settings,
                               key=f"graph:{binding}", dataset_id=dataset.id, counts=counts,
-                              loader_options=LOADER_OPTIONS,
-                              molecule_groups={p: dataset.id for p in dataset.paths})
-    hide_supplementary = getattr(settings, "supplementary_display", "own_rows") == "hide"
-    out, seen = [], set()
+                              loader_options=LOADER_OPTIONS, molecule_groups={p: dataset.id for p in dataset.paths})
+    lib_of = {p: i for i, p in enumerate(dataset.paths)}
+
+    def ident(lib, qname, start, end, sup):
+        return (lib, qname, int(start), int(end), bool(sup))
+
+    nbytes: dict = {}
+    for read in decoded:
+        k = ident(lib_of.get(read.get("source_path"), 0), read.get("id"), read.get("reference_start", 0),
+                  read.get("reference_end", 0), (read.get("_fiberbrowser_primary") or {}).get("is_supplementary"))
+        nbytes[k] = nbytes.get(k, 0) + decoded_size_estimate(read)
+    composed: dict = {}
     for row in rows:
-        ll = row.get("live_lift") or {}
-        if hide_supplementary and (ll.get("source") or {}).get("supplementary"):
-            counts["supplementary_hidden"] = counts.get("supplementary_hidden", 0) + 1
-            continue
-        read = compact_row(row, a, dataset.id, binding, windows)
-        if read["k"] in seen:
-            counts["record_collisions"] = counts.get("record_collisions", 0) + 1
-            continue
-        seen.add(read["k"])
-        out.append(read)
-    counts["records_decoded"] = counts.get("records_decoded", 0) + len(decoded)
-    return out, bool(budget.truncated), int(budget.bytes)
-
-
-# ── Cache ───────────────────────────────────────────────────────────────────
-
-_CACHE: "OrderedDict[tuple, tuple]" = OrderedDict()
-_CACHE_LOCK = threading.Lock()
-_CACHE_MAX = 48
-
-
-def _cached(key, build):
-    """A decoded (dataset, path, windows, level) result: shared and never mutated (requests copy before reducing)."""
-    with _CACHE_LOCK:
-        hit = _CACHE.get(key)
-        if hit is not None:
-            _CACHE.move_to_end(key)
-            return hit, True
-    value = build()
-    with _CACHE_LOCK:
-        _CACHE[key] = value
-        while len(_CACHE) > _CACHE_MAX:
-            _CACHE.popitem(last=False)
-    return value, False
-
-
-def clear_cache() -> None:
-    with _CACHE_LOCK:
-        _CACHE.clear()
+        read = compact_full(row, a, dataset.id, binding)
+        composed.setdefault(ident(read["lib"], read["q"], read["s"], read["e"], read["sup"]), []).append(read)
+    entries: dict = {}
+    hard_left = int(counts.get("hard_clipped_supplementary", 0))
+    for rec in missing:
+        lib, qname, start, flag, end, hard = rec
+        k = ident(lib, qname, start, end, flag & 0x800)
+        got = tuple(composed.get(k, ()))
+        reason = None
+        if not got:
+            if k in nbytes:
+                reason = "records_without_correspondence"
+            elif hard and flag & 0x800 and hard_left > 0:
+                reason, hard_left = "hard_clipped_supplementary", hard_left - 1
+            elif budget.truncated:
+                continue   # never reached: decoded again by a later request
+            else:
+                reason = "loader_filters"
+        entries[_record_key(base, rec)] = (got, nbytes.get(k, 0), reason, _entry_bytes(got))
+    _records_put(entries)
+    return entries, bool(budget.truncated), counts.get("hard_clipped_scoped")
 
 
 # ── Request ─────────────────────────────────────────────────────────────────
@@ -459,6 +544,7 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
     known = True
     listed: list = []
     not_loaded = 0
+    t_list = time.perf_counter()
     for dataset, _binding, contig, windows, _size in jobs:
         recs = window_records(dataset, contig, windows)
         if recs is not None and not _settings(dataset).load_supplementaries:
@@ -469,63 +555,93 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
             known = False
         else:
             estimated += len({(k[0], k[1]) for k in recs})
+    list_ms = (time.perf_counter() - t_list) * 1000
     level = 0
     if known and estimated > max_molecules:
         level = min(MAX_LEVEL, int(math.ceil(math.log2(estimated / max_molecules))))
     if isinstance(limits.get("level"), int) and limits["level"] > level:
         level = min(MAX_LEVEL, limits["level"])
     max_bytes = MAX_DECODED_BYTES
+    decode_ms = 0.0
+    decoded_records = 0
+    scoped: dict = {}
 
     def run(job, recs, lvl):
+        """The job's kept records at ``lvl`` as cache entries, decoding the ones not cached yet: ``([(listed
+        record, entry)], truncated, all cached)``."""
+        nonlocal decode_ms, decoded_records
         dataset, binding, contig, windows, size = job
         kept = [k for k in recs or () if keeps(k[1], lvl)]
-        # The region holds the windows and every record they fetch whole, a base beyond either end (so a terminal
-        # insertion's boundary is inside it): no call is clipped before composing. It is bounded by the BAM's own
-        # contig length, never by a graph binding's possibly inferred size.
-        size = contig_length(dataset, contig) or size
-        # One base past the contig end too (coordinates only: the identity piece maps it, no base is read there), so
-        # a terminal insertion at the contig's very end is inside the region.
-        region = (max(0, min([windows[0][0], *(k[2] for k in kept)]) - 1), min(size + 1, max([windows[-1][1], *(k[4] for k in kept)]) + 1))
-        key = (dataset.id, dataset_revision(dataset), binding["key"], contig, tuple(map(tuple, windows)), lvl, region,
-               tuple(sorted(LOADER_OPTIONS.items())))
-        part: dict = {}
+        base = (dataset.id, dataset_revision(dataset), binding["key"], contig, tuple(sorted(LOADER_OPTIONS.items())))
+        keys = [_record_key(base, k) for k in kept]
+        have = _records_get(keys)
+        missing, seen = [], set()
+        for k, key in zip(kept, keys):
+            if key not in have and key not in seen:
+                seen.add(key)
+                missing.append(k)
+        truncated = False
+        if missing:
+            # The region holds the windows and every record they fetch whole, a base beyond either end (so a
+            # terminal insertion's boundary is inside it): no call is clipped before composing. It is bounded by
+            # the BAM's own contig length (one base past it: coordinates only), never by a graph binding's possibly
+            # inferred size.
+            size = contig_length(dataset, contig) or size
+            region = (max(0, min([windows[0][0], *(k[2] for k in missing)]) - 1),
+                      min(size + 1, max([windows[-1][1], *(k[4] for k in missing)]) + 1))
+            t = time.perf_counter()
+            got, truncated, sc = _decode_records(dataset, contig, size + 1, windows, binding["key"], missing, region, base)
+            decode_ms += (time.perf_counter() - t) * 1000
+            decoded_records += len(got)
+            for kk, vv in (sc or {}).items():
+                scoped[kk] = scoped.get(kk, 0) + vv
+            have.update(got)
+        return [(k, have[key]) for k, key in zip(kept, keys) if key in have], truncated, not missing
 
-        def build():
-            got, trunc, nbytes = _decode(dataset, contig, size + 1, windows, binding["key"], lvl, part, region)
-            return got, trunc, nbytes, dict(part)
-
-        return _cached(key, build)
-
-    # One level for the whole request: sparser (by QNAME hash) until every path's decoded reads fit the request's
-    # payload budget together. One path after another: decoding is Python-bound.
+    # One level for the whole request: sparser (by QNAME hash) until every path's reads fit the request's payload
+    # budget together. A sparser level is a subset of the records already decoded: only the first pass decodes.
     while True:
         results = [run(j, recs, level) for j, recs in zip(jobs, listed)]
-        total_bytes = sum(r[0][2] for r in results)
-        truncated = any(r[0][1] for r in results)
+        total_bytes = 0
+        for got, _t, _c in results:
+            seen_keys = set()
+            for rec, entry in got:
+                if id(entry) not in seen_keys:
+                    seen_keys.add(id(entry))
+                    total_bytes += entry[1]
+        truncated = any(r[1] for r in results)
         if (total_bytes > max_bytes or truncated) and level < MAX_LEVEL:
             level += 1
             continue
         break
-    cached_all = all(hit for _r, hit in results)
+    cached_all = all(r[2] for r in results)
     counts: dict = {}
     reads: list = []
     filtered = 0
+    hide = {j[0].id: getattr(_settings(j[0]), "supplementary_display", "own_rows") == "hide" for j in jobs}
     over_budget = total_bytes > max_bytes   # even at the sparsest level: enforced below, reported
-    for recs, ((got, _trunc, _nbytes, c), _hit) in zip(listed, results):
-        for k, v in c.items():
-            if isinstance(v, (int, float)) and not isinstance(v, bool):
-                counts[k] = counts.get(k, 0) + v
-            elif isinstance(v, dict):  # e.g. hard_clipped_scoped: {partial, whole, none}
-                into = counts.setdefault(k, {})
-                for kk, vv in v.items():
-                    if isinstance(vv, (int, float)) and not isinstance(vv, bool):
-                        into[kk] = into.get(kk, 0) + vv
-        if recs is not None:
-            # Records the loader's own filters (signal, footprints, hard-clip scope) left out: listed and in the
-            # sample, yet not decoded.
-            expected = sum(1 for k in recs if keeps(k[1], level))
-            filtered += max(0, expected - int(c.get("records_decoded", 0)) - int(c.get("hard_clipped_supplementary", 0)))
-        reads.extend(dict(r) for r in got)   # copies: the cached result is never changed by this request
+    for job, (got, _t, _c) in zip(jobs, results):
+        dataset, _binding, _contig, windows, _size = job
+        done, seen = set(), set()
+        for rec, (rows, _nb, reason, _eb) in got:
+            if id(rows) in done and rows:
+                continue
+            done.add(id(rows))
+            if reason == "loader_filters":
+                filtered += 1
+                continue
+            if reason:
+                counts[reason] = counts.get(reason, 0) + 1
+                continue
+            for r in rows:
+                if r["sup"] and hide[dataset.id]:
+                    counts["supplementary_hidden"] = counts.get("supplementary_hidden", 0) + 1
+                    continue
+                if r["k"] in seen:
+                    counts["record_collisions"] = counts.get("record_collisions", 0) + 1
+                    continue
+                seen.add(r["k"])
+                reads.append(clip_to_windows(r, windows))   # copies: the cached read is never changed
     if not_loaded:
         counts["supplementary_not_loaded"] = not_loaded
     molecules = sorted({(r["d"], r["lib"], r["q"]) for r in reads}, key=lambda m: (name_hash(str(m[2])), m))
@@ -600,9 +716,10 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
         "calls_omitted_reads": sum(1 for r in reads if r.get("calls_omitted")),
         "truncated": truncated, "decoded_bytes": total_bytes,
         "omitted": omitted, "shared_qnames": shared_qnames,
-        "hard_clipped_scoped": counts.get("hard_clipped_scoped"),
+        "hard_clipped_scoped": scoped or None,   # of the records this request decoded
     }
     return {"reads": reads, "report": report, "cached": cached_all,
             "bindings": [{"dataset_id": j[0].id, "binding": j[1]["key"], "contig": j[2],
                           "windows": [{"start": a, "end": b} for a, b in j[3]]} for j in jobs],
-            "timings": {"total_ms": round((time.perf_counter() - t0) * 1000, 1)}}
+            "timings": {"total_ms": round((time.perf_counter() - t0) * 1000, 1), "list_ms": round(list_ms, 1),
+                        "decode_ms": round(decode_ms, 1), "records_decoded": decoded_records}}

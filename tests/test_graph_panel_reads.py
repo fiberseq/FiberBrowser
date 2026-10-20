@@ -428,3 +428,41 @@ def test_a_terminal_insertion_at_the_contig_end_is_kept(env):
     did = _add_lifted(env, paths=[bam], dataset_id="end")
     (r,) = _by_q(_reads(env, [did], [{"binding": "mat", "windows": [{"start": SSIZE - 300, "end": SSIZE}]}]).json())["end"]
     assert [i[:2] for i in r["ins"]] == [[SSIZE, 20]] and r["cov"][-1][1] == SSIZE
+
+
+def test_a_pan_decodes_only_new_records_and_matches_a_cold_load(env):
+    """The per-record cache (Phase F): a record is composed whole, so a pan decodes only the records it has not
+    seen; the payload equals a cold load of the same windows (calls clipped to the windows, never changed)."""
+    many = write_bam(env.tmp / "pan.bam", lambda h: [
+        make_record(h, f"p{i:03d}", MAT, 100 + i * 60, "700M", tags=[("ns", _u32([50, 300])), ("nl", _u32([150, 150])),
+                                                                     ("MM", "A+a,0,3;"), ("ML", _u8([255, 255]))],
+                    seq="A" * 700) for i in range(60)])
+    did = _add_lifted(env, paths=[many], dataset_id="pan")
+    first = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 0, "end": 2000}]}]).json()
+    panned = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 500, "end": 2500}]}]).json()
+    new = {r["q"] for r in panned["reads"]} - {r["q"] for r in first["reads"]}
+    assert new and panned["timings"]["records_decoded"] == len(new)
+    again = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 500, "end": 2500}]}]).json()
+    assert again["cached"] is True and again["timings"]["records_decoded"] == 0
+    gr.clear_cache()
+    cold = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 500, "end": 2500}]}]).json()
+    strip = lambda o: (o["reads"], {k: v for k, v in o["report"].items() if k != "hard_clipped_scoped"})  # noqa: E731
+    assert strip(panned) == strip(cold)
+    # Calls are clipped to the request's windows; the cached whole read keeps them for a later window.
+    assert all(iv[0] < 2500 and iv[1] > 500 for r in cold["reads"] for n in ("nuc", "msp") for iv in (r.get(n) or {}).get("iv", []))
+    assert all(500 <= p < 2500 for r in cold["reads"] for p in r.get("m6a", []))
+
+
+def test_omissions_of_cached_records_are_reported_again(env):
+    did = _add_lifted(env)
+    paths = [{"binding": "mat", "windows": [{"start": 0, "end": 7000}]}]
+    first = _reads(env, [did], paths).json()
+    second = _reads(env, [did], paths).json()
+    assert second["cached"] is True and second["report"]["omitted"] == first["report"]["omitted"]
+    assert second["reads"] == first["reads"]
+    # A loader-filter omission is remembered with its record, not decoded again.
+    monkey = write_bam(env.tmp / "filt.bam", lambda h: [make_record(h, "bare", MAT, 100, "300M")])
+    did2 = _add_lifted(env, paths=[monkey], dataset_id="filt")
+    a = _reads(env, [did2], [{"binding": "mat", "windows": [{"start": 0, "end": 500}]}]).json()
+    b = _reads(env, [did2], [{"binding": "mat", "windows": [{"start": 0, "end": 500}]}]).json()
+    assert a["report"]["omitted"] == b["report"]["omitted"] and b["timings"]["records_decoded"] == 0

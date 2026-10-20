@@ -239,7 +239,8 @@ export interface GraphReadsResponse {
   report: GraphReadsReport;
   cached: boolean;
   bindings: { dataset_id: string; binding: string; contig: string; windows: Span[] }[];
-  timings: { total_ms: number };
+  /** list_ms: the windows' record headers; decode_ms/records_decoded: the records not cached yet. */
+  timings: { total_ms: number; list_ms?: number; decode_ms?: number; records_decoded?: number };
   request_id: string;
   generation: number;
 }
