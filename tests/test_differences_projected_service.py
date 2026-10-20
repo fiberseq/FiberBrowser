@@ -25,6 +25,7 @@ def test_composed_summary_split_count_and_cold_warm_direct_parity(evidence, monk
     entry = next(e for e in summary["targets"] if e["target"]["ref_start"] == 6010)
     split = projected_analysis(state, ds, feature="split", target=entry["target"], **kwargs)
     assert entry["counts"] == split["targets"][0]["counts"] == [3, 0, 1]
+    assert sorted(c['geometry_group'] for c in split['targets'][0]['calls_by_molecule'].values()) == [0, 0, 0, 2]
     for direct in (False, True):
         again = projected_analysis(state, ds, feature="split", target=entry["target"], use_cache=not direct, **kwargs)
         assert again == split

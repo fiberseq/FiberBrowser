@@ -73,6 +73,7 @@ def inspect(state, dataset, *, chrom, start, end, target, policy=None,
         payload_version=2, **evidence_policy)
     envelope = native["differences"]
     calls = envelope["calls_by_molecule"]
+    scope = {**envelope["scope"], "data_revision": revision}
     if target["target_type"] == "exact":
         # The diagnostic producer is selected explicitly, leaving geometry intact.
         from .enrichment import enrich_native
@@ -81,7 +82,16 @@ def inspect(state, dataset, *, chrom, start, end, target, policy=None,
             specification={**target, "reference": target.get("candidates", {}).get("reference"),
                 "candidates": {k: v for k, v in target.get("candidates", {}).items() if k != "reference"}},
             include_duplicates=include_duplicates)
-        calls = enriched["calls_by_molecule"]
+        from dataclasses import asdict
+        from .calls import Call
+        reasons = enriched.get("reasons", [])
+        # Even an exhausted response retains its frozen geometry and cohort,
+        # while sequence calls explicitly remain unknown/incomplete.
+        calls = {m: {**c, **enriched["calls_by_molecule"].get(m, dict(
+            call=asdict(Call(reasons=tuple(reasons or ["diagnostic_sequence_not_loaded"]))), complete=False))}
+            for m, c in calls.items()}
+        scope.update(search_complete=scope.get("search_complete", True) and enriched.get("search_complete", False),
+            reasons=sorted(set(scope.get("reasons", [])) | set(reasons)))
     counts=native["counts"]
     if target["target_type"]=="exact":
         counts=[0,0,0]
@@ -92,7 +102,7 @@ def inspect(state, dataset, *, chrom, start, end, target, policy=None,
             group=0 if call["assignment"]=="target" and allowed else 1 if call["assignment"]=="reference" else 2
             counts[group]+=1
     return dict(schema_version=SCHEMA_VERSION, analysis_scope="native_only", membership=envelope["membership"],
-        evidence_policy=evidence_policy, policy=envelope["policy"], scope={**envelope["scope"], "data_revision": revision},
+        evidence_policy=evidence_policy, policy=envelope["policy"], scope=scope,
         identity_assumption=envelope["identity_assumption"], targets=[dict(target=target,
             calls_by_molecule=calls, counts=counts, geometry_counts=envelope["geometry_counts"],
             sequence_unresolved_count=len(calls) if target["target_type"]=="geometry" else sum(c["call"]["assignment"] not in {"target","reference","other_allele"} for c in calls.values()))])

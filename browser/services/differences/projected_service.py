@@ -490,6 +490,7 @@ def _projected_analysis(state, dataset, *, chrom, start, end, feature, target=No
             counts[group] += 1
             geometry = calls[key].get("geometry_evidence", {})
             geometry_group = molecule_group(dict(call=geometry or dict(assignment="unknown")), "geometry", evidence_policy)
+            calls[key]["geometry_group"] = geometry_group
             geometry_counts[geometry_group] += 1
             response_bytes += len(json.dumps(calls[key]).encode())
             if response_bytes > policy.max_response_bytes:

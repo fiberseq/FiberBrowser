@@ -24,6 +24,27 @@ def query(alt=100, ref=4, **target):
         ref_start=SITE, ref_end=SITE+ref, alt_bp=alt, **target))
 
 
+@pytest.mark.parametrize('ref,alt,cigar', [(0, 100, '100M100I100M'), (100, 0, '100M100D100M')])
+def test_exact_indels_preserve_geometry_identity_and_diagnostic_caps(tmp_path, monkeypatch, ref, alt, cigar):
+    state, ds = native(tmp_path, lambda h: [make_record(h, 'carrier', 'chrT', SITE-100, cigar)])
+    q = query(ref=ref, alt=alt)
+    geometry = inspect(state, ds, **q)
+    q['target'].update(target_type='exact', candidates={'alternate': 'A'*alt, 'reference': 'A'*ref}, competition_complete=True)
+    exact = inspect(state, ds, **q)
+    for m, c in geometry['targets'][0]['calls_by_molecule'].items():
+        enriched = exact['targets'][0]['calls_by_molecule'][m]
+        for field in ('geometry_group', 'geometry_evidence', 'molecule_id', 'target_id', 'target_revision'):
+            assert enriched[field] == c[field]
+    for reason in ('diagnostic_record_cap', 'diagnostic_input_bases_cap', 'response_bytes_cap'):
+        monkeypatch.setattr('services.differences.enrichment.enrich_native', lambda *a, **k: dict(
+            calls_by_molecule={}, reasons=[reason], search_complete=False))
+        capped = inspect(state, ds, **q)
+        assert capped['scope']['search_complete'] is False
+        assert reason in capped['scope']['reasons']
+        assert set(capped['targets'][0]['calls_by_molecule']) == set(geometry['targets'][0]['calls_by_molecule'])
+        assert capped['targets'][0]['counts'] == [0, 0, 1]
+
+
 def test_replacement_duplicate_names_use_qualified_membership(tmp_path):
     state, ds = native(tmp_path, lambda h: [make_record(h, 'shared', 'chrT', SITE-100,
                        '100M4D100I100M')], libraries=2)
