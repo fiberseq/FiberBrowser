@@ -86,7 +86,12 @@ export function drawReads(ctx: CanvasRenderingContext2D, scene: Scene, lanes: Ma
         ctx.restore();
         ctx.fillStyle = style.body;
         for (const b of m.body) ctx.fillRect(b.x0, y, Math.max(0.5, b.x1 - b.x0), rowHeight);
-        // Calls clipped to the body (never into a hole or connector space), drawn nucleosomes first.
+        // Calls, their edge bands and marks are clipped to the drawn body: never into a hole, connector space or
+        // geometry the scene summarised. Nucleosomes first.
+        ctx.save();
+        ctx.beginPath();
+        for (const b of m.body) ctx.rect(b.x0, y - 0.5, Math.max(0.5, b.x1 - b.x0), rowHeight + 1);
+        ctx.clip();
         for (const layer of ['nuc', 'tf', 'msp'] as const) {
           if (!layers[layer]) continue;
           for (const c of m.calls) if (c.layer === layer) drawCall(ctx, c, y, rowHeight, style, pxPerBp);
@@ -102,12 +107,13 @@ export function drawReads(ctx: CanvasRenderingContext2D, scene: Scene, lanes: Ma
           }
           ctx.globalAlpha = 1;
         }
-        // CIGAR deletions inside drawn geometry: a dark line through the body where it is at least a pixel.
-        ctx.fillStyle = '#475569';
+        ctx.restore();
+        // CIGAR holes inside drawn geometry, where at least a pixel: a deletion is a dark line, a skip (N) dashed.
         for (const h of m.holes) {
           if (h.x1 - h.x0 < 1) continue;
-          ctx.fillStyle = '#ffffff'; ctx.fillRect(h.x0, y, h.x1 - h.x0, rowHeight);
-          ctx.fillStyle = '#475569'; ctx.fillRect(h.x0, mid - 0.5, h.x1 - h.x0, 1);
+          if (h.kind === 'D') { ctx.fillStyle = '#475569'; ctx.fillRect(h.x0, mid - 0.5, h.x1 - h.x0, 1); continue; }
+          ctx.save(); ctx.strokeStyle = '#94a3b8'; ctx.lineWidth = 1; ctx.setLineDash([2, 2]);
+          ctx.beginPath(); ctx.moveTo(h.x0, mid + 0.5); ctx.lineTo(h.x1, mid + 0.5); ctx.stroke(); ctx.restore();
         }
         // Read insertions (no path bp): a caret above the row at the source boundary.
         ctx.fillStyle = LIVE_LIFT_COLORS.badge;
@@ -169,7 +175,8 @@ export function describeReadHit(hit: ReadHit, x: number, datasetLabel: (id: stri
   const ins = m.ins.find(i => Math.abs(i.x - x) <= 2 && i.len >= READ_INSERTION_MIN_BP);
   if (ins) return `${head} — read insertion of ${where(ins.len)} bp at ${r.c}:${where(ins.pos)} (no path sequence)`;
   const hole = m.holes.find(h => near(h.x0, h.x1));
-  if (hole) return `${head} — deletion of ${where(hole.s1 - hole.s0)} bp in the read`;
+  if (hole) return `${head} — ${hole.kind === 'D' ? 'deletion' : 'skipped (N)'} of ${where(hole.s1 - hole.s0)} bp in the read`;
+  if (m.marksHidden) return `${head} — calls and m6A not drawn (the panel's mark budget; fewer rows or a smaller window shows them)`;
   const c = m.connectors.find(k => near(k.x0, k.x1));
   if (c) return `${head} — ${c.kind === 'unplaced' ? 'walks sequence not drawn here (summarised or clustered)' : 'walks on (connector space, no sequence)'}`;
   return head;

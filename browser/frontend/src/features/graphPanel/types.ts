@@ -196,6 +196,10 @@ export interface GraphRead {
   cov: [number, number, number, number][];
   /** Read insertions (CIGAR I): [source boundary, length, molecular start]; no path bp. */
   ins: [number, number, number][];
+  /** CIGAR deletions [source start, length]: a coverage hole with one is a deletion, without one a skip (N). */
+  dl?: [number, number][];
+  /** Soft clips [source boundary, length, side]. */
+  clips?: [number, number, string][];
   nuc?: GraphReadLayer;
   tf?: GraphReadLayer;
   msp?: GraphReadLayer;
@@ -222,7 +226,9 @@ export interface GraphReadsReport {
   marks: number;
   sampling: { level: number; fraction: number; estimated: number | null; molecules_capped: number; max_molecules: number };
   m6a_density_reads: number;
+  m6a_density_bp?: number | null;
   calls_omitted_reads: number;
+  decoded_bytes?: number;
   truncated: boolean;
   omitted: Record<string, number>;
   shared_qnames: number;

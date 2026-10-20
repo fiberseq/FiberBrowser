@@ -29,7 +29,7 @@ const scene = (m: LayoutModel, opts: { width?: number; reversed?: boolean; small
 
 let serial = 0;
 /** A read on path `b` over [s, e), its coverage cut by `holes` (CIGAR D), with insertions and layers. */
-function read(b: string, s: number, e: number, o: { holes?: Span[]; ins?: [number, number][]; nuc?: [number, number][]; msp?: [number, number][];
+function read(b: string, s: number, e: number, o: { holes?: Span[]; skips?: boolean; ins?: [number, number][]; nuc?: [number, number][]; msp?: [number, number][];
   lq?: number[]; rq?: number[]; m6a?: number[]; sup?: boolean; q?: string; d?: string; lib?: number } = {}): GraphRead {
   const cov: [number, number, number, number][] = [];
   let at = s, m = 0;
@@ -43,6 +43,7 @@ function read(b: string, s: number, e: number, o: { holes?: Span[]; ins?: [numbe
   const q = o.q ?? `read${++serial}`;
   return { k: `${o.d ?? 'ds'}|${o.lib ?? 0}|${q}|r`, d: o.d ?? 'ds', lib: o.lib ?? 0, q, rec: 'r', b, c: b, st: '+', sup: Boolean(o.sup), s, e, cov,
     ins: (o.ins ?? []).map(([p, l]) => [p, l, 0] as [number, number, number]),
+    dl: o.skips ? [] : (o.holes ?? []).map(h => [h.start, h.end - h.start] as [number, number]),
     nuc: layer(o.nuc, 'MA0', { nq: (o.nuc ?? []).map(() => 200), lq: o.lq, rq: o.rq }), msp: layer(o.msp, 'MA1'), m6a: o.m6a };
 }
 
@@ -122,7 +123,7 @@ describe('Gate E: CIGAR events inside a node', () => {
     const del = place(sc, alu10k, read('mat', 95_000, 95_420, { holes: [{ start: 95_200, end: 95_230 }], nuc: [[95_150, 95_300]], msp: [[95_300, 95_400]] }));
     expect(del.visits.map(v => v.occ)).toEqual(plain.visits.map(v => v.occ));   // no new occurrence at the hole
     const v = del.visits.find(x => x.occ === occ.id)!;
-    expect(v.holes).toEqual([{ start: 95_200, end: 95_230 }]);
+    expect(v.holes).toEqual([{ start: 95_200, end: 95_230, kind: 'D' }]);
     expect(v.slices.length).toBe(2);
     const nuc = del.calls.filter(c => c.layer === 'nuc');
     expect(nuc.map(c => [c.s0, c.s1])).toEqual([[95_150, 95_200], [95_230, 95_300]]);
@@ -266,6 +267,76 @@ describe('Gate E: chromatin styles', () => {
     const weak = style.call('msp', 120, { aq: 50 })!;
     expect(fire.opacity).toBeGreaterThan(weak.opacity);
     expect(style.m6a).toBe('#6b21a8');
+  });
+});
+
+describe('Gate E: review round 1', () => {
+  const m = model(alu10k), sc = scene(m);
+  it('a hole with no D event is a skip (N), drawn and described apart from a deletion', () => {
+    const r = place(sc, alu10k, read('mat', 95_000, 95_420, { holes: [{ start: 95_200, end: 95_260 }], skips: true }));
+    expect(r.visits.flatMap(v => v.holes)).toEqual([{ start: 95_200, end: 95_260, kind: 'N' }]);
+    expect(r.holes.every(h => h.kind === 'N')).toBe(true);
+  });
+
+  it('pieces continuing each other on one tube merge; a call keeps its own edges on the merged piece', () => {
+    const marks = scene(m, { smallBp: 50 });   // the AluY small differences as marks: long contiguous tubes
+    const r = place(marks, alu10k, read('target', 93_000, 96_000, { nuc: [[93_100, 95_900]], lq: [7], rq: [9] }));
+    const raw = topo(alu10k).paths.find(p => p.binding === 'target')!.occurrences.filter(o => o.path_span.end > 93_100 && o.path_span.start < 95_900).length;
+    const nuc = r.calls.filter(c => c.layer === 'nuc');
+    expect(nuc.length).toBeLessThan(raw);
+    const byX = [...nuc].sort((a, b) => a.x0 - b.x0);
+    expect(byX[0].edgeL).toBe(7);
+    expect(byX[byX.length - 1].edgeR).toBe(9);
+    expect(nuc.reduce((t, c) => t + c.s1 - c.s0, 0)).toBe(2_800);
+  });
+
+  it('unplaced bp count prefixes, suffixes and wholly undrawn reads inside the drawn range, not bp beyond it', () => {
+    const narrow = scene(m, { width: 520 });
+    const idx = placementIndex(narrow, topo(alu10k));
+    const [lo, hi] = idx.drawnRange.get('target')!;
+    const whole = placeReads([read('target', lo + 10, hi - 10)], idx);
+    expect(whole.unplacedBp).toBeGreaterThan(0);   // clusters inside the walk
+    const outside = placeRead(read('target', hi + 100, hi + 300), idx);
+    expect(outside.unplacedBp).toBe(0);
+  });
+
+  it('past the primitive budget m6A becomes density, then trailing molecules keep their bodies only', () => {
+    const ticks = Array.from({ length: 2_900 }, (_, i) => 93_050 + i);   // one per base: many per pixel
+    const reads = Array.from({ length: 4 }, (_, i) => read('target', 93_000, 96_000, { q: `m${i}`, nuc: [[93_100, 93_400], [93_500, 93_800]], m6a: ticks }));
+    const idx = placementIndex(sc, topo(alu10k));
+    const plenty = placeReads(reads, idx);
+    expect(plenty.m6aAsDensity).toBe(false);
+    const dense = placeReads(reads, idx, plenty.primitives - 1);
+    expect(dense.m6aAsDensity).toBe(true);
+    expect(dense.molecules.every(x => x.m6a.length === 0 && x.density.length > 0)).toBe(true);
+    expect(dense.primitives).toBeLessThan(plenty.primitives / 2);
+    const tight = placeReads(reads, idx, 40);
+    expect(tight.marksHidden).toBeGreaterThan(0);
+    expect(tight.primitives).toBeLessThanOrEqual(40);
+    expect(tight.molecules.every(x => x.body.length > 0)).toBe(true);
+  });
+
+  it('quality-gated nucleosome rules match on the call\'s qualities', () => {
+    const cm = { ...DEFAULT_COLORMAP, rules: [{ id: 'q', name: 'Q', color: '#ff0000', opacity: 1, sizeMin: 1, sizeMax: null, targetLayers: [],
+      conditions: [], qualityGates: [{ qualityName: 'nq', minValue: 200 }], enabled: true }, ...DEFAULT_COLORMAP.rules] } as typeof DEFAULT_COLORMAP;
+    const style = chromatinStyle(cm);
+    expect(style.call('nuc', 150, { nq: 250 })!.color.toLowerCase()).toBe('#ff0000');
+    expect(style.call('nuc', 150, { nq: 100 })!.color.toLowerCase()).toBe('#33a040');
+  });
+
+  it('calls are drawn inside a clip of the molecule body (edge bands never reach connector space)', () => {
+    const molecule = place(sc, alu10k, read('target', 97_000, 97_800, { nuc: [[97_200, 97_390]], lq: [0], rq: [0] }));
+    const lanes = packMolecules([molecule], 10);
+    const banded = scene(m, { bands: { target: bandHeight(lanes.get('target')) } });
+    const rects: number[][] = [];
+    let clips = 0;
+    const ctx = new Proxy({}, { get: (_t, k) => (k === 'rect' ? (...a: number[]) => rects.push(a) : k === 'clip' ? () => { clips++; } : () => {}), set: () => true }) as unknown as CanvasRenderingContext2D;
+    const soft = chromatinStyle({ ...DEFAULT_COLORMAP, edgeAmbiguity: { mode: 'soft', applyNuc: true, applyTf: true, maxGapBp: 30 } } as typeof DEFAULT_COLORMAP);
+    drawReads(ctx, banded, lanes, soft, { nuc: true, tf: true, msp: true, m6a: true }, COLORS);
+    expect(clips).toBe(1);
+    const ins = slot(banded, 97_395);
+    // The clip rectangles are the body pieces: none inside the insertion slot.
+    expect(rects.every(([x, , w]) => x + w <= Math.min(ins.x0, ins.x1) + 1e-6 || x >= Math.max(ins.x0, ins.x1) - 1e-6)).toBe(true);
   });
 });
 

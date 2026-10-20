@@ -290,3 +290,81 @@ def test_loader_filter_omissions_are_reported(env):
     out = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 0, "end": 3000}]}]).json()
     assert [r["q"] for r in out["reads"]] == ["kept"]
     assert out["report"]["omitted"] == {"loader_filters": 1}
+
+
+# ── Review round 1 (Codex) ──────────────────────────────────────────────────
+
+def test_small_windows_keep_whole_calls_and_inferred_msps(env):
+    did = _add_lifted(env)
+    # Inside the inferred MSP between the nucleosomes: the MSP is still inferred, with its own bounds.
+    (inner,) = _by_q(_reads(env, [did], [{"binding": "mat", "windows": [{"start": 1400, "end": 1450}]}]).json())["legacy"]
+    assert inner["msp"]["iv"] == [[1300, 1500, 500]] and inner["msp"]["inferred"] is True
+    assert "nuc" not in inner      # no nucleosome touches the window
+    # A window cutting a nucleosome sends it whole: its own boundaries, never the window's.
+    (edge,) = _by_q(_reads(env, [did], [{"binding": "mat", "windows": [{"start": 1250, "end": 1260}]}]).json())["legacy"]
+    assert edge["nuc"]["iv"] == [[1100, 1300, 200]]
+    assert edge["cov"][0][:2] == [1000, 1500]           # coverage is the record's own
+
+
+def test_cached_results_are_never_changed_by_a_request(env):
+    did = _add_lifted(env)
+    paths = [{"binding": "mat", "windows": [{"start": 0, "end": 3000}]}]
+    before = _by_q(_reads(env, [did], paths).json())["legacy"][0]
+    squeezed = _reads(env, [did], paths, limits={"marks": 1}).json()
+    assert squeezed["report"]["m6a_density_reads"] + squeezed["report"]["calls_omitted_reads"] >= 1
+    after = _by_q(_reads(env, [did], paths).json())["legacy"][0]
+    assert after == before
+
+
+def test_payload_budget_is_for_the_whole_request(env, monkeypatch):
+    many = write_bam(env.tmp / "both.bam", lambda h: [
+        make_record(h, f"{c[-4:]}{i:03d}", c, 100 + i * 5, "800M", tags=[("ns", _u32([50, 300])), ("nl", _u32([150, 150]))])
+        for c in (MAT, PAT) for i in range(40)])
+    did = _add_lifted(env, paths=[many], dataset_id="both")
+    paths = [{"binding": "mat", "windows": [{"start": 0, "end": 1200}]}, {"binding": "pat", "windows": [{"start": 0, "end": 1200}]}]
+    full = _reads(env, [did], paths).json()["report"]
+    assert full["sampling"]["level"] == 0
+    # A budget each path fits alone but not both together: the request samples sparser.
+    monkeypatch.setattr(gr, "MAX_DECODED_BYTES", int(full["decoded_bytes"] * 0.7))
+    gr.clear_cache()
+    rep = _reads(env, [did], paths).json()["report"]
+    assert rep["sampling"]["level"] >= 1 and rep["decoded_bytes"] <= gr.MAX_DECODED_BYTES
+
+
+def test_typed_cigar_events(env):
+    bam = write_bam(env.tmp / "cigar.bam", lambda h: [
+        make_record(h, "lead_ins", MAT, 1000, "20I200M", tags=[("ns", _u32([30, 120])), ("nl", _u32([50, 50]))]),
+        make_record(h, "tail_ins", MAT, 2000, "200M20I", tags=[("ns", _u32([30, 120])), ("nl", _u32([50, 50]))]),
+        make_record(h, "skip", MAT, 3000, "50M50N50M", tags=[("ns", _u32([10, 60])), ("nl", _u32([30, 30]))]),
+        make_record(h, "dele", MAT, 4000, "50M50D50M", tags=[("ns", _u32([10, 60])), ("nl", _u32([30, 30]))])])
+    did = _add_lifted(env, paths=[bam], dataset_id="cigar")
+    reads = _by_q(_reads(env, [did], [{"binding": "mat", "windows": [{"start": 900, "end": 4300}]}]).json())
+    assert [i[:2] for i in reads["lead_ins"][0]["ins"]] == [[1000, 20]]
+    assert [i[:2] for i in reads["tail_ins"][0]["ins"]] == [[2200, 20]]
+    # A hole with a D event is a deletion; a hole without one is a skip (N).
+    assert [c[:2] for c in reads["skip"][0]["cov"]] == [[3000, 3050], [3100, 3150]] and reads["skip"][0]["dl"] == []
+    assert reads["dele"][0]["dl"] == [[4050, 50]]
+
+
+def test_unverifiable_bindings_are_refused(env):
+    did = _add_lifted(env)
+    with open(env.manifest) as fh:
+        manifest = json.load(fh)
+    for src in manifest["sources"]:
+        src.pop("fragments")
+    with open(env.manifest, "w") as fh:
+        json.dump(manifest, fh)
+    ll.clear_selection_cache()
+    from services.lift.live_lift import open_lift_map
+    handle = open_lift_map(env.manifest)
+    ds = types.SimpleNamespace(id="x", paths=[env.bam], live_lift=types.SimpleNamespace(handle=handle))
+    paths, problems = gr._lifted_paths(ds, env.reg)
+    assert paths == {} and any("no fragment list" in p for p in problems)
+    assert did
+
+
+def test_supplementaries_the_dataset_does_not_load_are_reported(env):
+    did = _add_lifted(env, settings={"supplementary_display": "hide", "cohort_supplementaries": "primary_only"},
+                      dataset_id="nosup")
+    out = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 5900, "end": 6300}]}]).json()
+    assert not out["reads"] and out["report"]["omitted"].get("supplementary_not_loaded") == 1

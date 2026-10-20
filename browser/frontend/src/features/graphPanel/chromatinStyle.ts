@@ -48,7 +48,8 @@ export function chromatinStyle(colormap: Colormap, layerColors?: Record<string, 
     if (layer === 'nuc') {
       // The primary (nucleosome) stream: the first matching rule, else grey; layer-targeted rules gate it.
       for (const rule of rules) {
-        if (footprintMatchesRule(0, size, size, rule, ctx, 'nuc')) {
+        const gated = (rule.qualityGates?.length ?? 0) > 0;
+        if (footprintMatchesRule(0, size, size, rule, ctx, 'nuc', gated ? q : undefined)) {
           return { color: resolvers.get(rule)!(size), opacity: clamp01(rule.opacity) * layerOpacity('nuc', 1) };
         }
       }

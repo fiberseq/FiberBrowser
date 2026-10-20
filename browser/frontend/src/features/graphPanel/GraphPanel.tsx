@@ -228,7 +228,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   }, [reg?.id, datasetKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const activeBindings = useMemo(() => (readSettings.show ? readBindings.filter(b => Object.keys(b.paths).length
     && (readSettings.datasets == null || readSettings.datasets.includes(b.dataset_id))) : []), [readBindings, readSettings]);
-  const [reads, setReads] = useState<{ response: GraphReadsResponse | null; loading: boolean; error: GraphApiError | null; forStart?: number }>({ response: null, loading: false, error: null });
+  const [reads, setReads] = useState<{ response: GraphReadsResponse | null; loading: boolean; error: GraphApiError | null; forStart?: number; key?: string }>({ response: null, loading: false, error: null });
   const readsGenRef = useRef(0);
   const readsInflightRef = useRef<AbortController | null>(null);
   const readPaths = response && activeBindings.length
@@ -246,15 +246,17 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       readsInflightRef.current = controller;
       const generation = ++readsGenRef.current;
       const forStart = response?.result.interval.start;
+      const key = readsKey;
       setReads(r => ({ ...r, loading: true }));
       queryReads({ registrationId: reg.id, revisions: reg.revisions, panelId, generation,
         requestId: `${panelId.replace(/[^A-Za-z0-9._:-]/g, '_').slice(-40)}-r${generation}`,
         datasets: activeBindings.map(b => ({ dataset_id: b.dataset_id, revision: b.revision })), paths: readPaths }, controller.signal)
-        .then(out => { if (generation === readsGenRef.current) setReads({ response: out, loading: false, error: null, forStart }); })
+        .then(out => { if (generation === readsGenRef.current) setReads({ response: out, loading: false, error: null, forStart, key }); })
         .catch(err => {
           if (controller.signal.aborted || generation !== readsGenRef.current) return;
           const error: GraphApiError = err instanceof GraphRequestError ? err.error : { code: 'network', message: String(err?.message ?? err), retryable: true };
-          setReads(r => ({ ...r, loading: false, error }));
+          // A failed load leaves no reads of another window on screen.
+          setReads({ response: null, loading: false, error });
         });
     }, READS_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
@@ -314,14 +316,18 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     return out;
   }, [model, plan, width, laneHeight, compression, reversed, smallBp, laneColors]);
   // Molecules along the walk (their x is the scene's occurrence transforms; bands only add height under lanes).
+  // Reads are drawn for the window they were loaded for; while the next window's load is in flight the last ones
+  // stay, dimmed (they are placed by source coordinate, so where they show they are right; the new edges fill in).
+  const readsStale = Boolean(reads.response && reads.key !== readsKey);
+  const readsShown = reads.response && (!readsStale || reads.loading) ? reads.response : null;
   const readLayout = useMemo(() => {
-    if (!baseScene || !response || !reads.response) return null;
+    if (!baseScene || !response || !readsShown) return null;
     const t0 = performance.now();
     const index = placementIndex(baseScene, response.result);
-    const placed = placeReads(reads.response.reads.filter(r => activeDatasetIds.has(r.d)), index);
+    const placed = placeReads(readsShown.reads.filter(r => activeDatasetIds.has(r.d)), index);
     const lanes = packMolecules(placed.molecules, rowsPerLane);
     return { placed, lanes, ms: performance.now() - t0 };
-  }, [baseScene, response, reads.response, activeDatasetIds, rowsPerLane]);
+  }, [baseScene, response, readsShown, activeDatasetIds, rowsPerLane]);
   const bands = useMemo(() => {
     if (!readLayout) return null;
     const out: Record<string, number> = {};
@@ -387,7 +393,9 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       ctx.translate(sceneOffset, 0);
       drawScene(ctx, scene);
       const tr = performance.now();
+      if (readsStale) ctx.globalAlpha = 0.45;
       readHitsRef.current = readLayout ? drawReads(ctx, scene, readLayout.lanes, style, readLayers, laneColors, readRowHeight, READ_ROW_GAP) : [];
+      ctx.globalAlpha = 1;
       readDrawMsRef.current = performance.now() - tr;
       ctx.restore();
       // The read bands' compact labels stay in the gutter.
@@ -423,7 +431,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         if (trace.paintedAt === undefined) { trace.paintedAt = performance.now(); trace.outcome = trace.outcome ?? 'painted'; }
       });
     }
-  }, [scene, transform, width, canvasHeight, renderVersion, sceneOffset, readLayout, style, readSettings]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [scene, transform, width, canvasHeight, renderVersion, sceneOffset, readLayout, style, readSettings, readsStale]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------------------------------------------------------------- navigation
   const commitViewport = useCallback((next: GraphViewport, detach = false, linearAtStart?: LinearView | null) => {
@@ -809,7 +817,8 @@ const OMISSION_LABELS: Record<string, string> = {
 
 /** The status line's reads part: records drawn, molecules, sampling and every omission (never silent). */
 function readsSummary(reads: { response: GraphReadsResponse | null; loading: boolean; error: GraphApiError | null },
-  layout: { placed: { molecules: PlacedMolecule[]; offLane: number; unplacedBp: number; empty: number }; lanes: Map<string, PackedLane> } | null): string | null {
+  layout: { placed: { molecules: PlacedMolecule[]; offLane: number; unplacedBp: number; empty: number; m6aAsDensity: boolean; marksHidden: number };
+    lanes: Map<string, PackedLane> } | null): string | null {
   if (reads.error) return `reads: ${reads.error.message}`;
   if (!reads.response) return reads.loading ? 'loading reads…' : null;
   const rep = reads.response.report;
@@ -825,6 +834,10 @@ function readsSummary(reads: { response: GraphReadsResponse | null; loading: boo
   const omitted = Object.entries(rep.omitted ?? {}).map(([k, v]) => `${v} ${OMISSION_LABELS[k] ?? k.replace(/_/g, ' ')}`);
   if (omitted.length) parts.push(`omitted: ${omitted.join(', ')}`);
   if (rep.shared_qnames) parts.push(`${rep.shared_qnames} QNAMEs in two libraries (kept apart)`);
+  if (layout?.placed.m6aAsDensity) parts.push('m6A as density (mark budget)');
+  if (layout?.placed.marksHidden) parts.push(`calls not drawn on ${layout.placed.marksHidden} (mark budget)`);
+  if (layout?.placed.empty) parts.push(`${layout.placed.empty} with nothing in the drawn walk`);
+  if (layout?.placed.offLane) parts.push(`${layout.placed.offLane} on paths not shown`);
   if (layout?.placed.unplacedBp) parts.push(`${layout.placed.unplacedBp.toLocaleString('en-US')} read bp not drawn (summarised geometry)`);
   return parts.join(', ');
 }
