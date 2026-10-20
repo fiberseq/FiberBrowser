@@ -258,3 +258,73 @@ def test_whole_molecule_modifications_with_unsized_mm_are_dropped(tmp_path):
         out = scope_hard_clipped_supplementary(read, counts)
     assert out is not None and not out.has_tag("MM")
     assert counts == {"hard_clipped_scoped": {"partial": 1, "whole": 0, "none": 0}, "hard_clip_mods_dropped": 1}
+
+
+# ── Hard-clip scope: modification calls ─────────────────────────────────────
+
+_MOLECULE = ("ACGTTACCAGTACGATCCAGTA" * 6)[:120]      # mixed bases: a frame shift moves calls
+_REVCOMP = str.maketrans("ACGT", "TGCA")
+
+
+def _encode_mm(molecule, calls):
+    """MM/ML of ``calls`` (``{(base, code): {molecular position: probability}}``) on
+    the molecule-oriented sequence ``molecule``."""
+    groups, ml = [], []
+    for (base, code), sites in calls.items():
+        positions = [i for i, b in enumerate(molecule) if b == base]
+        deltas, last = [], -1
+        for k, p in enumerate(positions):
+            if p in sites:
+                deltas.append(sum(1 for q in positions if last < q < p))
+                ml.append(sites[p])
+                last = p
+        groups.append(f"{base}+{code}," + ",".join(map(str, deltas)) + ";")
+    return "".join(groups), _u8(ml)
+
+
+def _mod_variant(clip, scope, reverse, mn):
+    full = _MOLECULE[::-1].translate(_REVCOMP) if reverse else _MOLECULE    # SEQ, reference orientation
+    left = LEFT
+    stored = full if clip == "soft" else full[left:left + 100]
+    stored_molecule = stored[::-1].translate(_REVCOMP) if reverse else stored
+    # Molecular offset of the stored bases (the molecule's 5' clip: right on reverse, here 0).
+    offset = 0 if clip == "soft" else (0 if reverse else left)
+    # Calls at molecular positions of the aligned part only, on C (5mC) and A (6mA).
+    want = {}
+    aligned = range(0, 100) if reverse else range(left, 120)
+    for base, code in (("C", "m"), ("A", "a")):
+        sites = [i for i in aligned if _MOLECULE[i] == base][1::3]
+        want[(base, code)] = {i - offset: 100 + 7 * n for n, i in enumerate(sites)}
+    mm, ml = _encode_mm(stored_molecule, want)
+    whole = clip == "soft" or scope == "whole"
+    starts = [30, 95] if whole else [30 - LEFT, 95 - LEFT]
+    tags = [("ns", _u32(starts)), ("nl", _u32([20, 20])), ("MM", mm), ("ML", ml)]
+    if mn:
+        tags.append(("MN", len(stored), "i"))
+    cigar = f"{LEFT}{'S' if clip == 'soft' else 'H'}100M"
+    return lambda h: [make_record(h, "mol", MAT, 2000, cigar, reverse=reverse, flag=2048, tags=tags, seq=stored)]
+
+
+def _lifted_mods(tmp_path, name, records):
+    ll.clear_selection_cache()
+    ll.clear_primary_cache()
+    handle = ll.open_lift_map(write_toy_sidecar(tmp_path / f"map_{name}"))
+    bam = write_bam(tmp_path / f"{name}.bam", records)
+    load = ll.load_lifted_rows(handle, [bam], TARGET, 2500, 3500, haplotypes=handle.haplotypes,
+                               settings=ll.LiftSettings(primary_lookup=False), dataset_id="ds",
+                               loader_options=dict(include_methylation=True))
+    (row,) = [r for r in load.rows if r["id"] == "mol"]
+    return row, load.counts
+
+
+@pytest.mark.parametrize("mn", [False, True])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("scope", ["partial", "whole"])
+def test_hard_clipped_modifications_match_the_soft_clipped_record(tmp_path, scope, reverse, mn):
+    soft, _ = _lifted_mods(tmp_path, "soft", _mod_variant("soft", scope, reverse, mn))
+    hard, counts = _lifted_mods(tmp_path, "hard", _mod_variant("hard", scope, reverse, mn))
+    fields = ("methyl", "methyl_m6a", "methyl_m5c", "methyl_probs", "methyl_m6a_probs", "methyl_m5c_probs")
+    marks = {f: soft.get(f) for f in fields if soft.get(f) is not None}
+    assert marks.get("methyl_m6a") and marks.get("methyl_m5c")           # both kinds reach the row
+    assert {f: hard.get(f) for f in marks} == marks
+    assert counts["hard_clipped_scoped"][scope] == 1 and "hard_clip_mods_dropped" not in counts
