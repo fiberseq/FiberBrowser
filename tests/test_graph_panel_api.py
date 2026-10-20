@@ -277,3 +277,17 @@ def test_a_remembered_package_skips_reverification_only_while_its_files_are_unch
     fourth = Registry(str(graph_env / "registry.json"))
     fourth.ensure_loaded(fake_helper)
     assert [r["verification"] for r in fourth.list()] == ["verified"]
+
+
+def test_the_macos_app_copy_is_found_in_graph_helper(monkeypatch, fake_helper, tmp_path):
+    """FiberBrowser.spec collects the helper into graph-helper/ under the frozen app's _MEIPASS."""
+    frameworks = tmp_path / "Frameworks"
+    (frameworks / "graph-helper").mkdir(parents=True)
+    os.symlink(fake_helper, frameworks / "graph-helper" / "fiberbrowser-graph")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(frameworks), raising=False)
+    monkeypatch.setattr(helper_mod, "_companion_candidate", lambda: (None, None))
+    helper_mod.clear_cache()
+    status = helper_mod.resolve(environ={})
+    assert status.available and status.source == "bundled" and status.path.endswith("graph-helper/fiberbrowser-graph")
+    helper_mod.clear_cache()

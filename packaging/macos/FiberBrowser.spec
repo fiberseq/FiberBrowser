@@ -75,6 +75,26 @@ for package in ("pysam", "pyjaspar") + tuple(
     binaries += pkg_binaries
     hiddenimports += pkg_hidden
 
+# The graph view's native helper (fiberbrowser-graph, DESIGN_GRAPH_PANEL.md §2): FB_GRAPH_HELPER, else the
+# fiberbrowser-graph-native companion package installed in the build venv. Collected into graph-helper/
+# (services/graph_panel/helper.py finds it there); build_app.sh signs and smoke-tests it. FB_REQUIRE_GRAPH_HELPER=1
+# makes a build without one fail.
+GRAPH_HELPER = os.environ.get("FB_GRAPH_HELPER", "").strip()
+if not GRAPH_HELPER and importlib.util.find_spec("fiberbrowser_graph_native") is not None:
+    import fiberbrowser_graph_native
+    GRAPH_HELPER = str(fiberbrowser_graph_native.helper_path())
+if GRAPH_HELPER:
+    if not os.access(GRAPH_HELPER, os.X_OK):
+        raise SystemExit(f"FiberBrowser.spec: the graph helper {GRAPH_HELPER} is not an executable")
+    binaries.append((GRAPH_HELPER, "graph-helper"))
+    _graph_notices = Path(GRAPH_HELPER).resolve().parent.parent / "THIRD_PARTY_NOTICES.txt"
+    if _graph_notices.is_file():
+        datas.append((str(_graph_notices), "graph-helper"))
+elif os.environ.get("FB_REQUIRE_GRAPH_HELPER") == "1":
+    raise SystemExit("FiberBrowser.spec: FB_REQUIRE_GRAPH_HELPER=1 but no graph helper (FB_GRAPH_HELPER or fiberbrowser-graph-native)")
+# Its Python module is not needed in the app (the executable is found in graph-helper/).
+GRAPH_EXCLUDES = ["fiberbrowser_graph_native"]
+
 a = Analysis(  # noqa: F821
     [str(SPEC_DIR / "fiberbrowser_app.py")],
     pathex=[str(BACKEND)],
@@ -82,7 +102,7 @@ a = Analysis(  # noqa: F821
     datas=datas,
     hiddenimports=hiddenimports,
     excludes=["tkinter", "matplotlib", "IPython", "jupyter", "notebook", "pytest", "torch",
-              "mlx", "mlx_lm", "transformers"],
+              "mlx", "mlx_lm", "transformers"] + GRAPH_EXCLUDES,
     module_collection_mode={"fiberhmm": "pyz+py"},
     noarchive=False,
 )

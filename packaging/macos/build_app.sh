@@ -49,6 +49,9 @@
 #   FB_UPDATE_URL       an update manifest address baked into the app (https://, file:// or a path); default: the
 #                       channel's GitHub releases (docs/updates.md)
 #   FB_UPDATE_REPO      the channel's GitHub repository (owner/name) instead of the flavour's default
+#   FB_GRAPH_NATIVE_WHEEL  a fiberbrowser-graph-native wheel (packaging/graph-native/build_wheel.py) to install in the
+#                       build venv; FiberBrowser.spec then bundles its graph helper (graph view). FB_GRAPH_HELPER names
+#                       a helper executable directly instead. FB_REQUIRE_GRAPH_HELPER=1: fail the build without one
 set -euo pipefail
 
 MINIMAP2_VERSION=2.31
@@ -148,6 +151,11 @@ pip_install -q --force-reinstall --no-deps "${FB_FIBERBROWSER:-$ROOT}"
 # --no-copilot); it remains available in the pip install. A current s3fs, as the
 # Windows image pins it: left free, pip settles a new boto3 by taking s3fs 0.4 (2020).
 pip_install -q "${FB_FIBERBROWSER:-$ROOT}[primers,contact-maps,s3,umap]" "s3fs>=2024.1" "pywebview>=5.0" "pyinstaller>=6.10"
+# The graph view's native helper (its companion wheel; FiberBrowser.spec collects the executable).
+if [ -n "${FB_GRAPH_NATIVE_WHEEL:-}" ]; then
+  [ -f "$FB_GRAPH_NATIVE_WHEEL" ] || die "FB_GRAPH_NATIVE_WHEEL=$FB_GRAPH_NATIVE_WHEEL does not exist"
+  pip_install -q --force-reinstall --no-deps "$FB_GRAPH_NATIVE_WHEEL"
+fi
 # The installed FiberBrowser must be of the flavour asked for (FB_FIBERBROWSER may name another tree or wheel).
 # (-I, from the venv: the installed package, never a checkout in the current directory or on PYTHONPATH.)
 BUILT_FLAVOR="$(cd "$VENV" && "$VENV/bin/python" -I -c 'from fiberbrowser._paths import build_flavor; print(build_flavor())')" \
@@ -369,13 +377,31 @@ for depth, kind, path in sorted(rows, reverse=True):
 PY
 count=0
 while IFS=$'\t' read -r kind path; do
-  if [ "$kind" = "exe" ]; then sign --entitlements "$ENTITLEMENTS" "$path"; else sign "$path"; fi
+  # The graph helper (Rust, no JIT) is signed with the hardened runtime and no entitlements.
+  if [ "$(basename "$path")" = "fiberbrowser-graph" ]; then sign "$path"
+  elif [ "$kind" = "exe" ]; then sign --entitlements "$ENTITLEMENTS" "$path"; else sign "$path"; fi
   count=$((count + 1))
 done < "$BUILD/macho.txt"
 find "$APP/Contents" -type d -name "*.framework" -depth | while read -r framework; do sign "$framework"; done
 sign --entitlements "$ENTITLEMENTS" "$APP"
 echo "  signed $count nested binaries and the app"
 codesign --verify --deep --strict --verbose=1 "$APP" 2>&1 | tail -2
+# The bundled graph helper: signed in place, and it still answers its framed handshake (services/graph_panel/helper.py).
+GRAPH_IN_APP="$(find "$APP/Contents" -type f -name fiberbrowser-graph -path '*graph-helper*' | head -1)"
+if [ -n "$GRAPH_IN_APP" ]; then
+  codesign --verify --strict --verbose=1 "$GRAPH_IN_APP" 2>&1 | tail -1
+  "$VENV/bin/python" - "$GRAPH_IN_APP" <<'PY' || die "the bundled graph helper does not answer its handshake"
+import json, struct, subprocess, sys
+out = subprocess.run([sys.argv[1], "handshake"], capture_output=True, timeout=10, check=True).stdout
+frame = json.loads(out[4:4 + struct.unpack(">I", out[:4])[0]])
+assert frame["protocol"] == 1 and frame["type"] == "ready", frame
+print("  graph helper:", frame["handshake"]["producer"], frame["handshake"]["build_target"])
+PY
+elif [ "${FB_REQUIRE_GRAPH_HELPER:-0}" = 1 ]; then
+  die "FB_REQUIRE_GRAPH_HELPER=1 but the app has no graph helper"
+else
+  echo "  (no graph helper bundled: the graph view will say how to install it)"
+fi
 
 # --- 7. notarize the app ---------------------------------------------------------------
 NOTARY_ARGS=(--keychain-profile "$NOTARY_PROFILE")

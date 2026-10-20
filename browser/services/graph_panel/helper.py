@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import subprocess
 import struct
+import sys
 import threading
 from dataclasses import dataclass, field
 from typing import Optional
@@ -56,12 +57,17 @@ class HelperStatus:
 
 
 def _bundled_candidates() -> list[str]:
+    """The macOS app's copy: PyInstaller collects it into ``graph-helper/`` (packaging/macos/FiberBrowser.spec), and
+    a helper placed in ``Contents/Helpers`` is found as well."""
     dirs: list[str] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if getattr(sys, "frozen", False) and meipass:
+        dirs.append(os.path.join(meipass, "graph-helper"))
     try:
         from fiberbrowser._paths import bundle_bin_dirs
-        dirs = [str(d) for d in bundle_bin_dirs()]
+        dirs += [str(d) for d in bundle_bin_dirs()]
     except Exception:
-        dirs = []
+        pass
     return [os.path.join(d, HELPER_NAME) for d in dirs]
 
 
