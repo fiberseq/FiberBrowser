@@ -27,8 +27,7 @@ import urllib.request
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REAL_HOME = pwd.getpwuid(os.getuid()).pw_dir
 WORK = os.environ.get("PGLIFT_WORK", os.path.join(REAL_HOME, "pglift_work"))
-HANDOFF = os.environ.get("LIVE_LIFT_DEMO_DATA", os.path.join(
-    REAL_HOME, "pglift_work/demo_data"))
+HANDOFF = os.environ.get("LIVE_LIFT_DEMO_DATA", os.path.join(WORK, "demo_data"))
 DEFAULT_MAP = os.path.join(WORK, "pglift_20261017/native/graphlift/scratch/v4/hprc.GRCh38.HG002.chain.graphlift.json")
 DEFAULT_FASTA = os.path.join(REAL_HOME, ".fiberhmm/genomes/hg38.fa")
 VIEW = "chr3:128,650,000-128,670,000"
