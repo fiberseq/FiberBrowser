@@ -13,7 +13,7 @@ import { useLiftSettingsDialog } from './LiveLiftSettingsDialog';
 import { useLiveLiftStore } from './store';
 import { groupLiftPanel, followLiftGroupingRows } from './grouping';
 import { liftHapLabels } from './types';
-import { liveLiftHaplotypeColor } from './palette';
+import { liveLiftHaplotypeColor, registerHaplotypeLabels } from './palette';
 import { LiftedPanelLinkItems, registerLiftLinkingUi } from './linking/register';
 
 export function liveLiftChipText(ctx: Pick<PanelHeaderContext, 'panel' | 'dataset'>): string | null {
@@ -94,6 +94,8 @@ export function registerLiveLift(): void {
   const seen = new Set<string>();
   useBrowserStore.subscribe((s, previous) => {
     if (s.datasets === previous.datasets && s.panels === previous.panels) return;
+    // Haplotypes other than MAT/PAT take their colours in each map's order (palette.ts).
+    if (s.datasets !== previous.datasets) for (const d of s.datasets) if (isLiveLift(d)) registerHaplotypeLabels(liftHapLabels(d.live_lift));
     if (!s.datasets.some(d => isLiveLift(d) && !seen.has(d.id))) return;
     queueMicrotask(() => autoSplitNewLiftedDatasets(seen));
   });
