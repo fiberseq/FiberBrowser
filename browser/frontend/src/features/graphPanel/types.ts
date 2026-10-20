@@ -159,6 +159,92 @@ export interface GraphViewState {
     /** smallDifferences: `marks` (default: SNPs and short indels as marks on the shared tube, scaled with zoom) or
      * `bubbles` (every difference branches). */
     smallDifferences?: 'marks' | 'bubbles' };
+  /** Reads drawn along the paths (Gate E); absent: shown, every binding dataset. */
+  reads?: GraphReadSettings;
+}
+
+// ---------------------------------------------------------------------------------------------------- reads (Gate E)
+
+/** A composed call layer of a read, in absolute source coordinates of its path (services/graph_panel/reads.py). */
+export interface GraphReadLayer {
+  /** [start, end, whole call size]. */
+  iv: [number, number, number][];
+  /** The call's record-local identity (null: an inferred mark, e.g. a legacy MSP). */
+  id: (string | null)[];
+  /** Logical identity across the decoder's pieces: [molecular start, group]. */
+  part: ([number, number] | null)[];
+  nq?: number[]; lq?: number[]; rq?: number[]; aq?: number[]; tq?: number[]; el?: number[]; er?: number[]; q0?: number[];
+  inferred?: boolean;
+}
+
+export interface GraphRead {
+  /** `${dataset}|${library}|${QNAME}|${record}`: one record of one molecule. */
+  k: string;
+  d: string;
+  lib: number;
+  q: string;
+  rec: string;
+  /** The package path (binding key) it is aligned to, and the BAM contig. */
+  b: string;
+  c: string;
+  /** Molecular strand of the record (never changes under reversal). */
+  st: '+' | '-';
+  sup: boolean;
+  s: number;
+  e: number;
+  /** Aligned coverage slices [start, end, molecular start, step]: holes between them are CIGAR deletions/skips. */
+  cov: [number, number, number, number][];
+  /** Read insertions (CIGAR I): [source boundary, length, molecular start]; no path bp. */
+  ins: [number, number, number][];
+  nuc?: GraphReadLayer;
+  tf?: GraphReadLayer;
+  msp?: GraphReadLayer;
+  m6a?: number[];
+  /** m6A as counts per bin when the request's mark budget was spent: [start, end, count]. */
+  m6a_density?: [number, number, number][];
+  calls_omitted?: boolean;
+}
+
+export interface GraphReadBinding {
+  dataset_id: string;
+  label: string;
+  kind: 'lifted' | 'native';
+  revision: string;
+  /** Package binding key -> BAM contig. */
+  paths: Record<string, string>;
+  problems: string[];
+  libraries: number;
+}
+
+export interface GraphReadsReport {
+  molecules: number;
+  records: number;
+  marks: number;
+  sampling: { level: number; fraction: number; estimated: number | null; molecules_capped: number; max_molecules: number };
+  m6a_density_reads: number;
+  calls_omitted_reads: number;
+  truncated: boolean;
+  omitted: Record<string, number>;
+  shared_qnames: number;
+}
+
+export interface GraphReadsResponse {
+  reads: GraphRead[];
+  report: GraphReadsReport;
+  cached: boolean;
+  bindings: { dataset_id: string; binding: string; contig: string; windows: Span[] }[];
+  timings: { total_ms: number };
+  request_id: string;
+  generation: number;
+}
+
+/** A panel's reads settings: which bound datasets (null: every one that binds), the layers drawn, row height. */
+export interface GraphReadSettings {
+  show: boolean;
+  datasets: string[] | null;
+  layers?: { nuc?: boolean; msp?: boolean; m6a?: boolean; tf?: boolean };
+  rowHeight?: number;
+  maxRowsPerLane?: number;
 }
 
 declare module '../../types' {

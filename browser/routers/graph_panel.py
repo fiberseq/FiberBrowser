@@ -12,11 +12,13 @@ from __future__ import annotations
 import asyncio
 from typing import Optional
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 import orjson
+
+from state.dependencies import get_state
 
 router = APIRouter(tags=["graph panel"])
 
@@ -101,3 +103,88 @@ async def graph_subgraph(request: Request):
 async def graph_cancel(request_id: str):
     from services.graph_panel import service
     return {"request_id": request_id, "cancelled": service.cancel(request_id)}
+
+
+def _reads_error(exc) -> JSONResponse:
+    return JSONResponse({"status": "error", "error": exc.payload()}, status_code=exc.status)
+
+
+def _registration(reg_id):
+    from services.graph_panel import service
+    from services.graph_panel.reads import ReadsError
+    from services.graph_panel.registration import RegistrationError
+    try:
+        return service.registry().get(str(reg_id or ""))
+    except RegistrationError as exc:
+        raise ReadsError(exc.code, exc.message, exc.status) from None
+
+
+@router.get("/api/graph/read_bindings")
+async def graph_read_bindings(registration_id: str, state=Depends(get_state)):
+    """Loaded datasets and the package paths each binds to (explicit identities, DESIGN §5)."""
+    from services.graph_panel import service
+    from services.graph_panel import reads as graph_reads
+    await service.ensure_ready()
+    try:
+        reg = _registration(registration_id)
+        bindings = await asyncio.to_thread(graph_reads.read_bindings, state, reg)
+    except graph_reads.ReadsError as exc:
+        return _reads_error(exc)
+    return {"registration_id": reg.id, "bindings": bindings}
+
+
+@router.post("/api/graph/reads")
+async def graph_reads_route(request: Request, state=Depends(get_state)):
+    """Molecules of bound datasets on the selected paths' source windows (Gate E): composed calls in source
+    coordinates, sampled and budgeted, every omission reported. A client that leaves cancels the load."""
+    import threading
+
+    from services.background_work import Cancelled, cancel_scope, interactive_read
+    from services.client_disconnect import wait_for_disconnect
+    from services.graph_panel import service
+    from services.graph_panel import reads as graph_reads
+    try:
+        body = orjson.loads(await request.body())
+    except orjson.JSONDecodeError:
+        body = None
+    if not isinstance(body, dict):
+        return JSONResponse({"status": "error", "error": {"code": "invalid_request", "message": "body must be a JSON object",
+                                                          "retryable": False}}, status_code=422)
+    await service.ensure_ready()
+    try:
+        reg = _registration(body.get("registration_id"))
+        revisions = body.get("revisions") or {}
+        stale = [k for k in ("package", "graph", "db", "maps") if revisions.get(k) != reg.revisions[k]]
+        if stale:
+            raise graph_reads.ReadsError("stale_revision", f"the request names other {', '.join(stale)} revisions",
+                                         409, current=reg.revisions)
+    except graph_reads.ReadsError as exc:
+        return _reads_error(exc)
+    cancel = threading.Event()
+
+    def run():
+        with cancel_scope(cancel), interactive_read():
+            return graph_reads.load(state, reg, body)
+
+    work = asyncio.ensure_future(asyncio.to_thread(run))
+    gone = asyncio.ensure_future(wait_for_disconnect(request))
+    try:
+        done, _ = await asyncio.wait({work, gone}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        gone.cancel()
+    if work not in done:
+        cancel.set()
+        try:
+            await work
+        except (Cancelled, Exception):
+            pass
+        return Response(status_code=499)
+    try:
+        payload = work.result()
+    except graph_reads.ReadsError as exc:
+        return _reads_error(exc)
+    except Cancelled:
+        return Response(status_code=499)
+    payload.update(request_id=body.get("request_id"), panel_id=body.get("panel_id"), generation=body.get("generation"),
+                   registration_id=reg.id, revisions=reg.revisions)
+    return Response(orjson.dumps(payload), media_type="application/json")

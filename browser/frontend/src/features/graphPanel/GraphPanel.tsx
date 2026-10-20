@@ -12,7 +12,7 @@ import { useBrowserStore } from '../../stores/browserStore';
 import type { AnalysisPanelProps } from '../../plugins/types';
 import { ReadContextMenu, type ContextMenuEntry } from '../../components/tracks/read-track/ReadContextMenu';
 import { setupHighDpiCanvas, useCanvasRenderVersion } from '../../utils/canvasUtils';
-import { cancelSubgraph, querySubgraph, GraphRequestError } from './api';
+import { cancelSubgraph, getReadBindings, querySubgraph, queryReads, GraphRequestError } from './api';
 import { drawRuler, drawScene, GRAPH_GUTTER, GRAPH_LANE_GAP, GRAPH_LANE_HEIGHT, GRAPH_RIGHT_PAD, GRAPH_RULER_HEIGHT, laneColor, laneTop } from './canvas';
 import { clampViewport, formatBp, formatLocus, fromX, makeTransform, panViewport, parseLocus, zoomViewport, bpScale, type GraphViewport } from './coordinates';
 import { buildLayout, laneLabel, type LayoutModel } from './layout';
@@ -22,7 +22,10 @@ import { useGraphStatusStore } from './statusStore';
 import { usePanelContentHeightStore } from '../../stores/panelContentHeightStore';
 import { genomeKeyFor } from '../../utils/regionNavigation';
 import { startTrace, type GraphTrace } from './timings';
-import type { GraphApiError, GraphRegistration, GraphSubgraphResponse, GraphViewState } from './types';
+import type { GraphApiError, GraphReadBinding, GraphReadSettings, GraphReadsResponse, GraphRegistration, GraphSubgraphResponse, GraphViewState } from './types';
+import { packMolecules, placeReads, placementIndex, type PackedLane, type PlacedMolecule } from './readGeometry';
+import { bandHeight, describeReadHit, drawReadBandLabels, drawReads, READ_ROW_GAP, READ_ROW_HEIGHT, type ReadHit, type ReadLayers } from './readCanvas';
+import { chromatinStyle } from './chromatinStyle';
 
 const DEBOUNCE_MS = 100;
 /** Named visits walked beyond each window edge, so an event exactly at an edge has its flank (graphlift flank_bp). */
@@ -31,12 +34,17 @@ const FLANK_BP = 1;
 declare global {
   interface Window {
     /** e2e only (with __FIBERBROWSER_E2E_EXPOSE_STORE): each graph panel's last scene, to locate its geometry. */
-    __FIBERBROWSER_GRAPH_SCENES__?: Record<string, { scene: Scene; model: LayoutModel; offset: number }>;
+    __FIBERBROWSER_GRAPH_SCENES__?: Record<string, { scene: Scene; model: LayoutModel; offset: number;
+      reads?: { molecules: PlacedMolecule[]; lanes: Record<string, { rows: number; hidden: number }>; hits: ReadHit[]; placeMs?: number; drawMs?: number; serverMs?: number } }>;
   }
 }
 const STATUS_HEIGHT = 18;
 /** Lane height of the panel's natural (content) size. */
 const NATURAL_LANE = 34;
+const DEFAULT_READS: GraphReadSettings = { show: true, datasets: null };
+const READS_DEBOUNCE_MS = 0;   // the topology request is already debounced
+/** Rows per lane's read band by default (each row a record; the request holds at most 300 molecules). */
+const DEFAULT_ROWS_PER_LANE = 40;
 
 function setGraphView(panelId: string, next: GraphViewState): void {
   useBrowserStore.setState(s => ({ panels: s.panels.map(p => (p.id === panelId ? { ...p, graphView: next } : p)) }));
@@ -204,6 +212,62 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   }, []);
 
   const response = query.response;
+
+  // ---------------------------------------------------------------- reads (Gate E)
+  // Which loaded datasets bind to this package's paths (explicit identities, checked by the server), and the
+  // reads of the bound paths' source windows, requested once the topology says what those windows are.
+  const readSettings = state?.reads ?? DEFAULT_READS;
+  const datasetKey = useBrowserStore(s => s.datasets.map(d => d.id).join(','));
+  const datasetLabels = useBrowserStore(useShallow(s => Object.fromEntries(s.datasets.map(d => [d.id, d.label ?? d.id]))));
+  const [readBindings, setReadBindings] = useState<GraphReadBinding[]>([]);
+  useEffect(() => {
+    if (!reg) { setReadBindings([]); return; }
+    const controller = new AbortController();
+    getReadBindings(reg.id, controller.signal).then(setReadBindings).catch(() => { if (!controller.signal.aborted) setReadBindings([]); });
+    return () => controller.abort();
+  }, [reg?.id, datasetKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const activeBindings = useMemo(() => (readSettings.show ? readBindings.filter(b => Object.keys(b.paths).length
+    && (readSettings.datasets == null || readSettings.datasets.includes(b.dataset_id))) : []), [readBindings, readSettings]);
+  const [reads, setReads] = useState<{ response: GraphReadsResponse | null; loading: boolean; error: GraphApiError | null; forStart?: number }>({ response: null, loading: false, error: null });
+  const readsGenRef = useRef(0);
+  const readsInflightRef = useRef<AbortController | null>(null);
+  const readPaths = response && activeBindings.length
+    ? response.result.paths.filter(p => activeBindings.some(b => p.binding in b.paths) && p.windows.length)
+      .map(p => ({ binding: p.binding, windows: p.windows }))
+    : [];
+  const readsKey = reg && response && readPaths.length
+    ? JSON.stringify([reg.id, reg.revisions.package, readPaths, activeBindings.map(b => [b.dataset_id, b.revision])])
+    : null;
+  useEffect(() => {
+    if (!readsKey || !reg || !panelId) { if (!readsKey) setReads(r => (r.response || r.loading ? { response: null, loading: false, error: null } : r)); return; }
+    const timer = window.setTimeout(() => {
+      readsInflightRef.current?.abort();
+      const controller = new AbortController();
+      readsInflightRef.current = controller;
+      const generation = ++readsGenRef.current;
+      const forStart = response?.result.interval.start;
+      setReads(r => ({ ...r, loading: true }));
+      queryReads({ registrationId: reg.id, revisions: reg.revisions, panelId, generation,
+        requestId: `${panelId.replace(/[^A-Za-z0-9._:-]/g, '_').slice(-40)}-r${generation}`,
+        datasets: activeBindings.map(b => ({ dataset_id: b.dataset_id, revision: b.revision })), paths: readPaths }, controller.signal)
+        .then(out => { if (generation === readsGenRef.current) setReads({ response: out, loading: false, error: null, forStart }); })
+        .catch(err => {
+          if (controller.signal.aborted || generation !== readsGenRef.current) return;
+          const error: GraphApiError = err instanceof GraphRequestError ? err.error : { code: 'network', message: String(err?.message ?? err), retryable: true };
+          setReads(r => ({ ...r, loading: false, error }));
+        });
+    }, READS_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [readsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => readsInflightRef.current?.abort(), []);
+  const readLayers: ReadLayers = { nuc: readSettings.layers?.nuc ?? true, tf: readSettings.layers?.tf ?? true,
+    msp: readSettings.layers?.msp ?? true, m6a: readSettings.layers?.m6a ?? true };
+  const readRowHeight = readSettings.rowHeight ?? READ_ROW_HEIGHT;
+  const rowsPerLane = readSettings.maxRowsPerLane ?? DEFAULT_ROWS_PER_LANE;
+  const activeDatasetIds = useMemo(() => new Set(activeBindings.map(b => b.dataset_id)), [activeBindings]);
+  const colormap = useBrowserStore(s => s.activeColormap);
+  const style = useMemo(() => chromatinStyle(colormap), [colormap]);
+
   const compression: Compression = state?.layoutSettings.compression ?? 'log';
   const smallMode = state?.layoutSettings.smallDifferences ?? 'marks';
   const drawnSpan = response ? response.result.interval.end - response.result.interval.start : 0;
@@ -232,11 +296,50 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   const fullRows = plan && model ? Math.max(1, model.rows.filter(r => plan.drawnLanes.has(r.key)).length) : rowsWanted;
   const compactRows = rowsWanted - fullRows;
   const compactSpace = compactRows * (COMPACT_LANE_PX + GRAPH_LANE_GAP);
-  const laneHeight = Math.max(minLane, Math.min(40, Math.floor((bodyHeight - GRAPH_RULER_HEIGHT - STATUS_HEIGHT - 12 - compactSpace) / fullRows) - GRAPH_LANE_GAP));
+  // With reads the lanes keep their natural thickness: the body's extra height goes to the read bands.
+  const laneHeight = activeBindings.length ? Math.max(minLane, NATURAL_LANE - 4)
+    : Math.max(minLane, Math.min(40, Math.floor((bodyHeight - GRAPH_RULER_HEIGHT - STATUS_HEIGHT - 12 - compactSpace) / fullRows) - GRAPH_LANE_GAP));
+  // Its scene: per plan, lane height and reversal.
+  const laneColors = useMemo(() => {
+    const colors: Record<string, string> = {};
+    for (const r of model?.rows ?? []) colors[r.key] = laneColor(r);
+    return colors;
+  }, [model]);
+  const baseScene = useMemo(() => {
+    if (!model || !plan) return null;
+    const t0 = performance.now();
+    const out = buildScene(model, { width, gutter: GRAPH_GUTTER, rightPad: GRAPH_RIGHT_PAD, rulerHeight: GRAPH_RULER_HEIGHT,
+      laneHeight, laneGap: GRAPH_LANE_GAP, compression, reversed, colors: laneColors, smallBp, plan });
+    layoutMsRef.current += performance.now() - t0;
+    return out;
+  }, [model, plan, width, laneHeight, compression, reversed, smallBp, laneColors]);
+  // Molecules along the walk (their x is the scene's occurrence transforms; bands only add height under lanes).
+  const readLayout = useMemo(() => {
+    if (!baseScene || !response || !reads.response) return null;
+    const t0 = performance.now();
+    const index = placementIndex(baseScene, response.result);
+    const placed = placeReads(reads.response.reads.filter(r => activeDatasetIds.has(r.d)), index);
+    const lanes = packMolecules(placed.molecules, rowsPerLane);
+    return { placed, lanes, ms: performance.now() - t0 };
+  }, [baseScene, response, reads.response, activeDatasetIds, rowsPerLane]);
+  const bands = useMemo(() => {
+    if (!readLayout) return null;
+    const out: Record<string, number> = {};
+    for (const [k, lane] of readLayout.lanes) out[k] = bandHeight(lane, readRowHeight, READ_ROW_GAP);
+    return out;
+  }, [readLayout, readRowHeight]);
+  const scene = useMemo(() => {
+    if (!baseScene || !bands || !Object.values(bands).some(Boolean) || !model || !plan) return baseScene;
+    return buildScene(model, { width, gutter: GRAPH_GUTTER, rightPad: GRAPH_RIGHT_PAD, rulerHeight: GRAPH_RULER_HEIGHT,
+      laneHeight, laneGap: GRAPH_LANE_GAP, compression, reversed, colors: laneColors, smallBp, plan, bands });
+  }, [baseScene, bands]); // eslint-disable-line react-hooks/exhaustive-deps
+  const readHitsRef = useRef<ReadHit[]>([]);
+  const readDrawMsRef = useRef(0);
   // Its natural body height (full lanes of NATURAL_LANE px, compact rows, the ruler and the status line): stacked
   // with other panels it takes this, not an equal share of the column (plugin sizeToContent). It only grows for one
   // selection of paths, so panning never makes the panels below jump back and forth.
-  const natural = GRAPH_RULER_HEIGHT + STATUS_HEIGHT + 12 + compactSpace + fullRows * (Math.max(minLane, NATURAL_LANE) + GRAPH_LANE_GAP);
+  const bandSpace = bands ? Object.values(bands).reduce((t, h) => t + (h ? h + GRAPH_LANE_GAP : 0), 0) : 0;
+  const natural = GRAPH_RULER_HEIGHT + STATUS_HEIGHT + 12 + compactSpace + bandSpace + fullRows * (Math.max(minLane, NATURAL_LANE) + GRAPH_LANE_GAP);
   // Before the first plan of a selection the estimate (every lane full) is provisional: the first plan sets it.
   const naturalRef = useRef<{ key: string; height: number; planned: boolean }>({ key: '', height: 0, planned: false });
   const selectionKey = (state?.selectedPathKeys ?? []).join(',');
@@ -250,17 +353,6 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     usePanelContentHeightStore.getState().report(panelId, naturalHeight);
   }, [panelId, naturalHeight]);
   useEffect(() => () => { if (panelId) usePanelContentHeightStore.getState().report(panelId, null); }, [panelId]);
-  // Its scene: per plan, lane height and reversal.
-  const scene = useMemo(() => {
-    if (!model || !plan) return null;
-    const t0 = performance.now();
-    const colors: Record<string, string> = {};
-    for (const r of model.rows) colors[r.key] = laneColor(r);
-    const out = buildScene(model, { width, gutter: GRAPH_GUTTER, rightPad: GRAPH_RIGHT_PAD, rulerHeight: GRAPH_RULER_HEIGHT,
-      laneHeight, laneGap: GRAPH_LANE_GAP, compression, reversed, colors, smallBp, plan });
-    layoutMsRef.current += performance.now() - t0;
-    return out;
-  }, [model, plan, width, laneHeight, compression, reversed, smallBp]);
   // Mark layout on the trace of the response it came from.
   const lastTraceRef = useRef<GraphTrace | null>(null);
   useEffect(() => {
@@ -269,6 +361,8 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     if (trace && trace.laidOutAt === undefined) { trace.laidOutAt = performance.now(); trace.layoutMs = layoutMsRef.current; }
     lastTraceRef.current = trace;
   }, [model]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const laneLabelOf = (key: string) => model?.rows.find(r => r.key === key)?.label ?? key;
 
   // ---------------------------------------------------------------- drawing
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -292,7 +386,19 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       ctx.clip();
       ctx.translate(sceneOffset, 0);
       drawScene(ctx, scene);
+      const tr = performance.now();
+      readHitsRef.current = readLayout ? drawReads(ctx, scene, readLayout.lanes, style, readLayers, laneColors, readRowHeight, READ_ROW_GAP) : [];
+      readDrawMsRef.current = performance.now() - tr;
       ctx.restore();
+      // The read bands' compact labels stay in the gutter.
+      if (readLayout) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, GRAPH_RULER_HEIGHT, GRAPH_GUTTER - 2, canvasHeight);
+        ctx.clip();
+        drawReadBandLabels(ctx, scene, readLayout.lanes, laneColors);
+        ctx.restore();
+      }
       // Gutter labels stay put.
       ctx.save();
       ctx.beginPath();
@@ -303,7 +409,10 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       const shifted = sceneOffset ? { ...scene, targetMap: scene.targetMap.map(m => ({ ...m, x0: m.x0 + sceneOffset, x1: m.x1 + sceneOffset })) } : scene;
       drawRuler(ctx, shifted, viewport, width, reversed);
       if (window.__FIBERBROWSER_E2E_EXPOSE_STORE && panelId) {
-        (window.__FIBERBROWSER_GRAPH_SCENES__ ??= {})[panelId] = { scene, model, offset: sceneOffset };
+        (window.__FIBERBROWSER_GRAPH_SCENES__ ??= {})[panelId] = { scene, model, offset: sceneOffset,
+          ...(readLayout ? { reads: { molecules: readLayout.placed.molecules, hits: readHitsRef.current,
+            placeMs: readLayout.ms, drawMs: readDrawMsRef.current, serverMs: reads.response?.timings.total_ms,
+            lanes: Object.fromEntries([...readLayout.lanes].map(([k, l]) => [k, { rows: l.rows.length, hidden: l.hidden }])) } } : {}) };
       }
     } else {
       drawRuler(ctx, null, viewport, width, reversed);
@@ -314,7 +423,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         if (trace.paintedAt === undefined) { trace.paintedAt = performance.now(); trace.outcome = trace.outcome ?? 'painted'; }
       });
     }
-  }, [scene, transform, width, canvasHeight, renderVersion, sceneOffset]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [scene, transform, width, canvasHeight, renderVersion, sceneOffset, readLayout, style, readSettings]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------------------------------------------------------------- navigation
   const commitViewport = useCallback((next: GraphViewport, detach = false, linearAtStart?: LinearView | null) => {
@@ -361,6 +470,11 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     const inData = x >= transform.left && x <= transform.left + transform.width;
     if (!scene || !model || !inData || y < 0 || y > canvasHeight) { setCursor(null); return; }
     const sx = x - sceneOffset;
+    const readHit = readHitsRef.current.find(h => sx >= h.x0 && sx <= h.x1 && y >= h.y0 && y <= h.y1);
+    if (readHit) {
+      setCursor({ x, y, text: describeReadHit(readHit, sx, id => datasetLabels[id] ?? id, key => laneLabelOf(key)), cursorX: null });
+      return;
+    }
     const hit = sceneHitAt(scene, sx, y);
     if (hit) {
       // Only target-backed geometry has a target cursor: an insertion reports its boundary and length, never a
@@ -473,6 +587,26 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         { kind: 'item' as const, action: 'small:bubbles', icon: 'settings', label: `${smallMode === 'bubbles' ? '✓ ' : ''}Bubbles`,
           title: 'Every difference branches into its path\'s lane' },
       ] });
+    {
+      const bound = readBindings.filter(b => Object.keys(b.paths).length);
+      const shownIds = new Set(activeBindings.map(b => b.dataset_id));
+      const layerItem = (key: keyof ReadLayers, label: string) => ({ kind: 'item' as const, action: `rl:${key}`, icon: readLayers[key] ? 'eye' : 'eye-off',
+        label: `${readLayers[key] ? '✓ ' : ''}${label}` });
+      entries.push({ kind: 'submenu', id: 'reads', icon: 'reads', label: bound.length ? `Reads: ${readSettings.show ? `${shownIds.size} of ${bound.length} datasets` : 'hidden'}` : 'Reads: no dataset binds',
+        entries: [
+          { kind: 'item' as const, action: 'reads:toggle', icon: readSettings.show ? 'eye' : 'eye-off', disabled: !bound.length,
+            label: `${readSettings.show ? '✓ ' : ''}Show reads on the paths`,
+            title: 'Molecules of loaded datasets whose assembly is a path of this graph, drawn along their walk' },
+          ...bound.map(b => ({ kind: 'item' as const, action: `reads:ds:${b.dataset_id}`, icon: shownIds.has(b.dataset_id) ? 'eye' : 'eye-off',
+            label: `${shownIds.has(b.dataset_id) ? '✓ ' : ''}${b.label}`,
+            title: `${b.kind === 'lifted' ? 'Live-lift dataset' : 'Dataset on the target'}: ${Object.entries(b.paths).filter(([k]) => state.selectedPathKeys.includes(k)).map(([k, c]) => `${laneLabelOf(k)} ← ${c}`).join(', ') || 'no selected path'}${b.problems.length ? ` · not bound: ${b.problems.join('; ')}` : ''}` })),
+          ...readBindings.filter(b => b.problems.length && !Object.keys(b.paths).length).map(b => ({ kind: 'item' as const, action: `reads:none:${b.dataset_id}`,
+            icon: 'eye-off', disabled: true, label: `${b.label}: not a path of this graph`, title: b.problems.join('; ') })),
+          layerItem('nuc', 'Nucleosomes'), layerItem('msp', 'MSPs / FIRE'), layerItem('tf', 'TF footprints'), layerItem('m6a', 'm6A'),
+          ...[5, 7, 10].map(h => ({ kind: 'item' as const, action: `reads:h:${h}`, icon: 'settings', label: `${readRowHeight === h ? '✓ ' : ''}Rows ${h} px` })),
+          ...[20, 40, 100].map(n => ({ kind: 'item' as const, action: `reads:rows:${n}`, icon: 'settings', label: `${rowsPerLane === n ? '✓ ' : ''}At most ${n} rows per path` })),
+        ] });
+    }
     entries.push({ kind: 'submenu', id: 'context', icon: 'settings', label: `Graph context: ${state.layoutSettings.contextBp} bp`,
       entries: [0, 100, 500, 2000].map(bp => ({ kind: 'item' as const, action: `ctx:${bp}`, icon: 'settings',
         label: `${state.layoutSettings.contextBp === bp ? '✓ ' : ''}${bp} bp` })) });
@@ -505,6 +639,25 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     if (action.startsWith('path:')) { setGraphView(panelId, togglePath(state, action.slice(5))); return; }
     if (action.startsWith('cmp:')) { setGraphView(panelId, { ...state, layoutSettings: { ...state.layoutSettings, compression: action.slice(4) as Compression } }); return; }
     if (action.startsWith('small:')) { setGraphView(panelId, { ...state, layoutSettings: { ...state.layoutSettings, smallDifferences: action.slice(6) as 'marks' | 'bubbles' } }); return; }
+    if (action.startsWith('reads:') || action.startsWith('rl:')) {
+      const current = state.reads ?? DEFAULT_READS;
+      let next: GraphReadSettings = current;
+      if (action === 'reads:toggle') next = { ...current, show: !current.show };
+      else if (action.startsWith('reads:ds:')) {
+        const id = action.slice('reads:ds:'.length);
+        const bound = readBindings.filter(b => Object.keys(b.paths).length).map(b => b.dataset_id);
+        const shown = new Set(current.datasets ?? bound);
+        if (shown.has(id)) shown.delete(id); else shown.add(id);
+        next = { ...current, show: true, datasets: bound.every(d => shown.has(d)) ? null : bound.filter(d => shown.has(d)) };
+      } else if (action.startsWith('reads:h:')) next = { ...current, rowHeight: Number(action.slice('reads:h:'.length)) };
+      else if (action.startsWith('reads:rows:')) next = { ...current, maxRowsPerLane: Number(action.slice('reads:rows:'.length)) };
+      else if (action.startsWith('rl:')) {
+        const key = action.slice(3) as keyof ReadLayers;
+        next = { ...current, layers: { ...readLayers, [key]: !readLayers[key] } };
+      }
+      setGraphView(panelId, { ...state, reads: next });
+      return;
+    }
     if (action.startsWith('ctx:')) { setGraphView(panelId, { ...state, layoutSettings: { ...state.layoutSettings, contextBp: Number(action.slice(4)) } }); return; }
     if (action.startsWith('reg:')) {
       const next = regs.find(r => r.id === action.slice(4));
@@ -571,6 +724,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
           model.stats.unplaced ? `${model.stats.unplaced} unplaced runs` : null,
           model.stats.unresolved ? `${model.stats.unresolved} unresolved` : null,
           ...model.summaries.slice(0, 2),
+          readsSummary(reads, readLayout),
           response?.cached ? 'cached' : response?.timings.total_ms != null ? `${response.timings.total_ms < 10 ? response.timings.total_ms.toFixed(1) : Math.round(response.timings.total_ms)} ms` : null,
         ].filter(Boolean).join(' · ')
         : 'Loading the topology…';
@@ -614,7 +768,9 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       data-graph-loading={query.loading ? 'true' : 'false'} data-graph-generation={query.generation}
       data-graph-link={state?.linkMode ?? ''} data-graph-lanes={model?.rows.map(l => l.key).join(',') ?? ''}
       data-graph-complete={model ? String(model.complete) : ''} data-graph-error={query.error?.code ?? ''}
-      data-graph-bubbles={model ? model.stats.groups : ''} data-graph-compression={compression} data-graph-small-bp={smallBp}
+      data-graph-bubbles={model ? model.stats.groups : ''}
+      data-graph-reads={readLayout ? [...readLayout.lanes.values()].reduce((t, l) => t + l.rows.reduce((u, r) => u + r.length, 0), 0) : ''}
+      data-graph-reads-loading={reads.loading ? 'true' : 'false'} data-graph-reads-start={reads.forStart ?? ''} data-graph-compression={compression} data-graph-small-bp={smallBp}
       className="relative h-full min-h-0 w-full overflow-auto bg-white dark:bg-dark-bg"
       style={{ height: bodyHeight }}
       onContextMenu={e => { if (!(e.target instanceof HTMLCanvasElement)) { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY }); } }}>
@@ -640,6 +796,28 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       )}
     </div>
   );
+}
+
+/** The status line's reads part: records drawn, molecules, sampling and every omission (never silent). */
+function readsSummary(reads: { response: GraphReadsResponse | null; loading: boolean; error: GraphApiError | null },
+  layout: { placed: { molecules: PlacedMolecule[]; offLane: number; unplacedBp: number; empty: number }; lanes: Map<string, PackedLane> } | null): string | null {
+  if (reads.error) return `reads: ${reads.error.message}`;
+  if (!reads.response) return reads.loading ? 'loading reads…' : null;
+  const rep = reads.response.report;
+  const drawn = layout ? [...layout.lanes.values()].reduce((t, l) => t + l.rows.reduce((u, r) => u + r.length, 0), 0) : 0;
+  const hidden = layout ? [...layout.lanes.values()].reduce((t, l) => t + l.hidden, 0) : 0;
+  const parts = [`${drawn} reads (${rep.molecules} molecules)`];
+  if (rep.sampling.level) parts.push(`sampled 1/${1 << rep.sampling.level}`);
+  if (rep.sampling.molecules_capped) parts.push(`${rep.sampling.molecules_capped} molecules over the ${rep.sampling.max_molecules} cap`);
+  if (hidden) parts.push(`${hidden} past the row limit`);
+  if (rep.truncated) parts.push('payload limit reached');
+  if (rep.m6a_density_reads) parts.push(`m6A as density on ${rep.m6a_density_reads}`);
+  if (rep.calls_omitted_reads) parts.push(`calls omitted on ${rep.calls_omitted_reads} (mark budget)`);
+  const omitted = Object.entries(rep.omitted ?? {}).map(([k, v]) => `${v} ${k.replace(/_/g, ' ')}`);
+  if (omitted.length) parts.push(`omitted: ${omitted.join(', ')}`);
+  if (rep.shared_qnames) parts.push(`${rep.shared_qnames} QNAMEs in two libraries (kept apart)`);
+  if (layout?.placed.unplacedBp) parts.push(`${layout.placed.unplacedBp.toLocaleString('en-US')} read bp not drawn (summarised geometry)`);
+  return parts.join(', ');
 }
 
 function bubbleSummary(model: LayoutModel): string | null {

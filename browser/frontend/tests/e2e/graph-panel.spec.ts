@@ -8,7 +8,8 @@
  * - Navigation-to-topology traces measured in the browser (FIBERBROWSER_GRAPH_MEASURE_OUT writes them).
  * - Shutdown leaves no helper process.
  * - With the pg-lift work data and the HPRC package (optional): an expanded linear insertion leaves the graph panel
- *   unchanged; measured HPRC navigation traces.
+ *   unchanged; measured HPRC navigation traces; reads of a live-lift dataset drawn along the MAT/PAT walks (Gate E),
+ *   with their navigation-to-reads traces.
  *
  * Needs FIBERBROWSER_TEST_GRAPH_HELPER (the fiberbrowser-graph executable) and FIBERBROWSER_TEST_GRAPH_PACKAGES
  * (prepared packages, ':'-separated; one named `alu`), and FIBERBROWSER_TEST_FASTA with chr3 (no hg38 download).
@@ -368,6 +369,9 @@ test('an expanded linear insertion leaves the graph panel unchanged (HPRC packag
     await expect(page.getByTestId('live-lift-chip')).toHaveCount(2, { timeout: 60_000 });
     await expect.poll(() => page.locator('[data-read-track-loading="true"]').count(), { timeout: 120_000 }).toBe(0);
     await page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.setState({ fillReadHeight: false, readRowHeight: 16 }));
+    // The lifted molecules are drawn on the graph too (Gate E): wait for them before the reference picture.
+    await expect.poll(async () => Number(await graph.getAttribute('data-graph-reads') || 0), { timeout: 60_000 }).toBeGreaterThan(0);
+    await expect(graph).toHaveAttribute('data-graph-reads-loading', 'false', { timeout: 60_000 });
     const matKey = await page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().panels.find((p: any) => p.liftHap === 'MAT')?.stateKey
       ?? (window as any).__FIBERBROWSER_STORE__.getState().panels.find((p: any) => p.liftHap === 'MAT')?.datasetId);
     const matCanvas = page.locator(`[data-read-track-state-key="${matKey}"] canvas[data-copilot-track="reads"]`);
@@ -391,6 +395,119 @@ test('an expanded linear insertion leaves the graph panel unchanged (HPRC packag
   } finally {
     await stopServer(server);
     if (MEASURE_OUT) writeFileSync(`${MEASURE_OUT}.lift.json`, JSON.stringify(measurements, null, 1));
+  }
+});
+
+test('reads of a live-lift dataset drawn along their graph walk (HPRC package, Gate E)', async ({ page }) => {
+  test.skip(!HAVE_LIFT || process.env.FIBERBROWSER_LIVE_LIFT !== '1', 'needs the pg-lift work data, the HPRC package and FIBERBROWSER_LIVE_LIFT=1');
+  test.setTimeout(480_000);
+  const server = await graphServer([HPRC]);
+  try {
+    const errors = await preparePage(page);
+    await page.goto(`${server.baseUrl}/?chr=chr3&start=128650000&end=128660000`);
+    await expect.poll(() => page.evaluate(() => (window as any).__FIBERBROWSER_STORE__?.getState().chroms.length ?? 0), { timeout: 120_000 }).toBeGreaterThan(0);
+    await page.getByTestId('open-menu-button').click();
+    await page.getByTestId('open-menu-add-live-lift').click();
+    await page.getByTestId('live-lift-bams').fill(LIFT_BAM);
+    await page.getByTestId('live-lift-manifest').fill(LIFT_MAP);
+    await expect(page.getByTestId('live-lift-haplotypes')).toContainText('MAT');
+    await page.getByTestId('live-lift-add').click();
+    await expect(page.getByTestId('live-lift-chip')).toHaveCount(2, { timeout: 60_000 });
+    const graph = await openGraphPanel(page);
+    await expect(graph).toHaveAttribute('data-graph-lanes', 'grch38_chr3,pat_chr3,mat_chr3', { timeout: 120_000 });
+    await settled(graph, 128_650_000, 120_000);
+    await expect.poll(async () => Number(await graph.getAttribute('data-graph-reads') || 0), { timeout: 90_000 }).toBeGreaterThan(20);
+    await expect(graph).toHaveAttribute('data-graph-reads-loading', 'false');
+    const id = await graph.getAttribute('data-graph-panel-id');
+    const geometry = () => page.evaluate((pid) => {
+      const e = (window as any).__FIBERBROWSER_GRAPH_SCENES__[pid as string];
+      const slot = e.scene.targetMap.find((t: any) => t.kind === 'slot' && Math.abs(t.x1 - t.x0) > 100);
+      const mols = e.reads.molecules;
+      const inSlot = (p: any) => slot && Math.min(p.x0, p.x1) >= Math.min(slot.x0, slot.x1) - 0.5 && Math.max(p.x0, p.x1) <= Math.max(slot.x0, slot.x1) + 0.5;
+      return {
+        lanes: Object.keys(e.reads.lanes).sort(),
+        slot: slot ? [slot.t0, Math.round(Math.abs(slot.x1 - slot.x0))] : null,
+        // Molecules walking the AluY: body inside the insertion slot, the source-only sequence.
+        inSlot: Object.fromEntries(['mat_chr3', 'pat_chr3'].map(l => [l, mols.filter((m: any) => m.lane === l && m.body.some(inSlot)).length])),
+        // Nothing of a molecule is drawn in its own connector space.
+        crossing: mols.reduce((t: number, m: any) => t + m.connectors.filter((c: any) => c.x1 - c.x0 > 2).reduce((u: number, c: any) =>
+          u + [...m.body, ...m.calls].filter((p: any) => p.x0 > c.x0 + 0.5 && p.x1 < c.x1 - 0.5).length, 0), 0),
+        // Every piece of a call keeps the whole call: size and identity agree across its pieces.
+        split: mols.reduce((t: number, m: any) => {
+          const by = new Map<string, Set<string>>();
+          for (const c of m.calls) { const k = `${c.layer}:${c.index}`; (by.get(k) ?? by.set(k, new Set()).get(k)!).add(`${c.id}|${c.call.join(',')}`); }
+          return t + [...by.values()].filter(s => s.size > 1).length;
+        }, 0),
+        calls: mols.reduce((t: number, m: any) => t + m.calls.length, 0),
+        identities: mols.flatMap((m: any) => m.calls.map((c: any) => `${m.read.k}|${c.layer}|${c.id}|${c.s0}|${c.s1}|${c.call[2]}`)).sort(),
+      };
+    }, id);
+    const g = await geometry();
+    expect(g.lanes).toEqual(['mat_chr3', 'pat_chr3']);
+    expect(g.slot).not.toBeNull();   // the AluY insertion slot, one slot for MAT and PAT
+    expect(g.inSlot.mat_chr3).toBeGreaterThan(5);
+    expect(g.inSlot.pat_chr3).toBeGreaterThan(5);
+    expect(g.crossing).toBe(0);
+    expect(g.split).toBe(0);
+    expect(g.calls).toBeGreaterThan(1000);
+    // Hover names the molecule and the whole call under the pointer.
+    const box = (await graph.getByTestId('graph-panel-canvas').boundingBox())!;
+    const hit = await page.evaluate((pid) => {
+      const e = (window as any).__FIBERBROWSER_GRAPH_SCENES__[pid as string];
+      const h = e.reads.hits.find((x: any) => x.molecule.calls.some((c: any) => c.layer === 'nuc' && c.x1 - c.x0 > 4));
+      const c = h.molecule.calls.find((x: any) => x.layer === 'nuc' && x.x1 - x.x0 > 4);
+      return { x: (c.x0 + c.x1) / 2 + e.offset, y: (h.y0 + h.y1) / 2 };
+    }, id);
+    await page.mouse.move(box.x + hit.x, box.y + hit.y);
+    await expect(page.getByTestId('graph-tooltip')).toContainText(/nucleosome [\d,]+ bp at [\d,]+-[\d,]+/);
+    // Reversal mirrors the walk; every call piece keeps its identity, size and source span.
+    await store(page, 'setPanelReversed', id, true);
+    await expect.poll(async () => (await geometry()).identities.join('\n'), { timeout: 20_000 }).toBe(g.identities.join('\n'));
+    await store(page, 'setPanelReversed', id, false);
+    // The right-click menu turns reads off and on (rows show only data; options live in the menu).
+    await graph.getByTestId('graph-panel-canvas').click({ button: 'right', position: { x: 200, y: 20 } });
+    await page.getByTestId('graph-panel-menu').getByText(/^Reads:/).click();
+    await page.getByText('✓ Show reads on the paths').click();
+    await expect(graph).toHaveAttribute('data-graph-reads', '', { timeout: 10_000 });
+    await graph.getByTestId('graph-panel-canvas').click({ button: 'right', position: { x: 200, y: 20 } });
+    await page.getByTestId('graph-panel-menu').getByText(/^Reads:/).click();
+    await page.getByText('Show reads on the paths').click();
+    await expect.poll(async () => Number(await graph.getAttribute('data-graph-reads') || 0), { timeout: 60_000 }).toBeGreaterThan(20);
+    await expect(page.getByTestId('graph-panel-status')).toContainText(/\d+ reads \(\d+ molecules\)/);
+    if (process.env.FIBERBROWSER_GRAPH_SCREENSHOT_DIR) {
+      const dir = process.env.FIBERBROWSER_GRAPH_SCREENSHOT_DIR;
+      await page.evaluate((pid) => (window as any).__FIBERBROWSER_STORE__.setState({ fullViewPanelId: pid }), await graph.evaluate(el => el.closest('[data-analysis-panel-id]')?.getAttribute('data-analysis-panel-id')));
+      await page.waitForTimeout(1200);
+      await page.mouse.move(5, 5);
+      const host = page.locator('[data-analysis-panel-id]').filter({ has: graph });
+      await host.screenshot({ path: path.join(dir, 'graph-reads-aluy-light.png') });
+      await store(page, 'toggleDarkMode');
+      await page.waitForTimeout(400);
+      await host.screenshot({ path: path.join(dir, 'graph-reads-aluy-dark.png') });
+      await page.screenshot({ path: path.join(dir, 'graph-reads-aluy-dark-page.png') });
+      await store(page, 'toggleDarkMode');
+      await page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.setState({ fullViewPanelId: null }));
+    }
+    // Navigation to reads: pans of a quarter width, twice (the second pass warm), measured to the reads of the
+    // new window being drawn.
+    if (MEASURE_OUT) {
+      const traces: number[] = [];
+      for (let pass = 0; pass < 2; pass++) {
+        for (let i = 1; i <= 6; i++) {
+          const start = 128_650_000 + i * 2_500;
+          const t0 = await page.evaluate(([s]) => { (window as any).__FIBERBROWSER_STORE__.getState().setViewport('chr3', s, s + 10_000); return performance.now(); }, [start]);
+          await expect(graph).toHaveAttribute('data-graph-reads-start', String(start), { timeout: 30_000 });
+          await expect(graph).toHaveAttribute('data-graph-reads-loading', 'false', { timeout: 30_000 });
+          traces.push(await page.evaluate(([a]) => performance.now() - a, [t0]));
+        }
+      }
+      const summary = { n: traces.length, p50: percentile(traces, 50), p95: percentile(traces, 95), max: Math.max(...traces) };
+      console.log('nav-to-reads', JSON.stringify(summary));
+      writeFileSync(`${MEASURE_OUT}.reads.json`, JSON.stringify({ traces, summary }, null, 1));
+    }
+    expect(errors).toEqual([]);
+  } finally {
+    await stopServer(server);
   }
 });
 

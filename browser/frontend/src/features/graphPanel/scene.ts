@@ -34,6 +34,8 @@ export interface SceneOptions {
   /** Draw a bubble whose every allele is shorter than this (bp) as marks on the shared tube; 0 or absent: bubbles
    * (see smallDifferenceBp). Inversions and unresolved alleles are always bubbles. */
   smallBp?: number;
+  /** Extra height under a lane for its molecules (Gate E read bands), px by lane key. */
+  bands?: Record<string, number>;
 }
 
 /** A marked run: consecutive runs and small differences on one host tube, drawn as one tube with marks. */
@@ -151,7 +153,9 @@ export interface ClusterItem {
   members: { at: number; carriers: string[]; bp: number }[];
 }
 
-export interface SceneRow { key: string; label: string; title: string; role: 'target' | 'alternate'; color: string; top: number; center: number; height: number }
+export interface SceneRow { key: string; label: string; title: string; role: 'target' | 'alternate'; color: string; top: number; center: number; height: number;
+  /** The lane's read band (its molecules), right under it: top y and height (0: none). */
+  bandTop: number; bandHeight: number }
 
 export interface Scene {
   width: number;
@@ -427,10 +431,20 @@ export function buildScene(model: LayoutModel, opts: SceneOptions & { plan?: Sce
   let rowTop = opts.rulerHeight + opts.laneGap;
   const rows: SceneRow[] = model.rows.map(r => {
     const height = drawnLanes.has(r.key) ? opts.laneHeight : Math.min(opts.laneHeight, COMPACT_LANE_PX);
-    const row = { ...r, color: opts.colors[r.key] ?? '#475569', top: rowTop, center: rowTop + height / 2, height };
+    const row = { ...r, color: opts.colors[r.key] ?? '#475569', top: rowTop, center: rowTop + height / 2, height, bandTop: 0, bandHeight: 0 };
     rowTop += height + opts.laneGap;
     return row;
   });
+  // Read bands under the lanes, one per path in lane order (so no bubble's branch crosses molecules).
+  let bandTop = rowTop + (opts.bands && Object.values(opts.bands).some(Boolean) ? 2 : 0);
+  for (const row of rows) {
+    const band = Math.max(0, Math.round(opts.bands?.[row.key] ?? 0));
+    if (!band) continue;
+    row.bandTop = bandTop;
+    row.bandHeight = band;
+    bandTop += band + opts.laneGap;
+  }
+  const contentBottom = bandTop;
   const rowOf = new Map(rows.map(r => [r.key, r]));
   const stripe = Math.max(2, Math.min(6, Math.floor((opts.laneHeight - 12) / Math.max(1, lanes.length))));
   const colorOf = (k: string) => opts.colors[k] ?? '#475569';
@@ -922,7 +936,7 @@ export function buildScene(model: LayoutModel, opts: SceneOptions & { plan?: Sce
   targetMap.sort((a, b) => a.x0 - b.x0);
   const lastRow = rows[rows.length - 1];
   const scene: Scene = {
-    width: opts.width, height: (lastRow ? lastRow.top + lastRow.height : opts.rulerHeight) + opts.laneGap,
+    width: opts.width, height: rows.some(r => r.bandHeight) ? contentBottom : (lastRow ? lastRow.top + lastRow.height : opts.rulerHeight) + opts.laneGap,
     dataLeft, dataWidth, scale, rows, prims: [...prims, ...overlay], hits: hitList, targetMap, occurrences, clusters, metrics: k, blocks, reversed: opts.reversed,
   };
   return opts.reversed ? mirror(scene) : scene;

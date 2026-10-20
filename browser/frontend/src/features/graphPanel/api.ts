@@ -1,5 +1,5 @@
 /** Graph panel endpoints (routers/graph_panel.py). Queries name a registration and its revisions, never a path. */
-import type { GraphApiError, GraphRegistration, GraphStatus, GraphSubgraphResponse, GraphRevisions, Span } from './types';
+import type { GraphApiError, GraphReadBinding, GraphReadsResponse, GraphRegistration, GraphStatus, GraphSubgraphResponse, GraphRevisions, Span } from './types';
 
 export class GraphRequestError extends Error {
   constructor(public status: number, public error: GraphApiError) {
@@ -59,4 +59,30 @@ export function querySubgraph(q: SubgraphQuery, signal?: AbortSignal): Promise<G
 export function cancelSubgraph(requestId: string): void {
   void fetch(`/api/graph/requests/${encodeURIComponent(requestId)}`, { method: 'DELETE', credentials: 'include', keepalive: true })
     .catch(() => { /* the server may be gone */ });
+}
+
+/** Loaded datasets and the package paths each binds to through explicit identities. */
+export async function getReadBindings(registrationId: string, signal?: AbortSignal): Promise<GraphReadBinding[]> {
+  const out = await call<{ bindings: GraphReadBinding[] }>(`/api/graph/read_bindings?registration_id=${encodeURIComponent(registrationId)}`, { signal });
+  return out.bindings;
+}
+
+export interface ReadsQuery {
+  registrationId: string;
+  revisions: GraphRevisions;
+  requestId: string;
+  panelId: string;
+  generation: number;
+  datasets: { dataset_id: string; revision: string }[];
+  /** Each selected path's source windows (the topology response's `paths[].windows`). */
+  paths: { binding: string; windows: Span[] }[];
+  limits?: { molecules?: number; marks?: number; level?: number };
+}
+
+export function queryReads(q: ReadsQuery, signal?: AbortSignal): Promise<GraphReadsResponse> {
+  return call('/api/graph/reads', {
+    method: 'POST', signal,
+    body: JSON.stringify({ registration_id: q.registrationId, revisions: q.revisions, request_id: q.requestId,
+      panel_id: q.panelId, generation: q.generation, datasets: q.datasets, paths: q.paths, ...(q.limits ? { limits: q.limits } : {}) }),
+  });
 }
