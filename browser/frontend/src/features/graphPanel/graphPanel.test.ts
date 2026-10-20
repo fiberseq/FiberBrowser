@@ -196,6 +196,18 @@ describe('thin topology preview', () => {
       [m('t1', 'a1'), m('t1', 'a2')], { start: 0, end: 500 }), []).lanes[1];
     expect(dup.pieces.filter(p => p.kind === 'node')).toEqual([]);
     expect(dup.unplaced.map(u => u.bp)).toEqual([1000]);
+    // Review 3: two adjacent target fragments are never joined by an event, and an invalid connection is listed even
+    // when its anchors lie outside the view.
+    const twoFragments = topo([{ ...o('t1', '1', 0, 100), fragment: 'T#a' }, { ...o('t3', '3', 150, 100), fragment: 'T#b' }],
+      [o('a1', '1', 0, 100), o('a3', '3', 100, 100)], [m('t1', 'a1'), m('t3', 'a3')], { start: 0, end: 300 },
+      [{ span: { start: 0, end: 150 }, kind: 'covered', fragment: 'T#a' }, { span: { start: 150, end: 300 }, kind: 'covered', fragment: 'T#b' }]);
+    const tf = buildPreview(twoFragments, []).lanes[1];
+    expect(tf.pieces.filter(p => p.kind !== 'node')).toEqual([]);
+    expect(tf.transitions).toBe(1);
+    const reversedOutside = buildPreview(topo([clip(o('t1', '1', 0, 200), 150, 200), clip(o('t2', '2', 200, 100), 0, 100)],
+      [o('a2', '2', 0, 100), o('x', '9', 100, 50), o('a1', '1', 150, 200)], [m('t2', 'a2'), m('t1', 'a1')], { start: 150, end: 300 }), []).lanes[1];
+    expect(reversedOutside.unplaced.map(u => u.bp)).toEqual([50]);
+    expect(reversedOutside.transitions).toBe(1);
   });
 
   it('gaps between placed pieces work in either direction and refuse overlaps', () => {

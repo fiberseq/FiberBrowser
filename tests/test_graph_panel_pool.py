@@ -818,3 +818,27 @@ def test_a_shared_queued_job_moves_to_a_remaining_panel_and_reports_shared(helpe
         await busy
         await pool.close()
     run(go())
+
+
+# ----------------------------------------------------------------------------- review regressions (Phase B review 3)
+
+def test_a_package_changed_while_a_job_waits_is_refused_on_a_warm_worker(helper, package, env, tmp_path):
+    from services.graph_panel.registration import Registry
+    registry = Registry(str(tmp_path / "reg.json"))
+    (package / "graph.db").write_bytes(b"db")
+
+    async def go():
+        reg = registry.register(helper, str(package))
+        pool = GraphPool(lambda: helper, max_workers=1, queue_expiry_s=5.0, check_registration=registry.check_unchanged)
+        busy = asyncio.ensure_future(submit(pool, reg, q("sleep:300"), "busy", panel="A"))
+        await asyncio.sleep(0.1)
+        queued = asyncio.ensure_future(submit(pool, reg, q("ok", n="late"), "late", panel="B"))
+        await asyncio.sleep(0.02)
+        (package / "graph.db").write_bytes(b"changed while queued")
+        await busy
+        with pytest.raises(JobError) as exc:
+            await queued
+        assert exc.value.code == "package_changed"
+        assert pool.cache.stats()["entries"] == 0 and registry.list() == []
+        await pool.close()
+    run(go())

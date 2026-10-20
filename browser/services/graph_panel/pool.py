@@ -256,7 +256,7 @@ class GraphPool:
         for job in [j for j in list(self.jobs.values()) if j.reg.id == reg_id]:
             if job.state == "queued":
                 self._unqueue(job)
-            if job.task is not None and not job.task.done():
+            if job.task is not None and not job.task.done() and job.task is not asyncio.current_task():
                 job.task.cancel()
             self._fail_job(job, JobError("package_changed", "the graph package changed since it was verified",
                                          retryable=False, status=409))
@@ -547,6 +547,14 @@ class GraphPool:
                     await worker.kill("stale_package")
                     raise JobError("stale_revision", "the helper opened a package with other revisions than were registered",
                                    retryable=False, status=409)
+            if self.check_registration is not None and startup_ms is None:
+                # A warm worker too: the package may have changed while this job was queued.
+                try:
+                    self.check_registration(job.reg)
+                except Exception as exc:
+                    await self.forget_registration(job.reg.id)
+                    raise JobError(getattr(exc, "code", "package_changed"), str(getattr(exc, "message", exc)),
+                                   retryable=False, status=getattr(exc, "status", 409)) from None
             sent = self.loop.time()
             frame = await worker.call(job.kind, job.fields, self.deadline_s)
             received = self.loop.time()

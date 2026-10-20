@@ -29,6 +29,8 @@ export interface PreviewPiece {
   occurrence?: string;
   /** The alternate's source span for runs (insertion/divergent/unplaced). */
   source?: Span;
+  /** A placed visit's target fragment (events never join two). */
+  targetFragment?: string;
 }
 
 export interface PreviewLane {
@@ -118,8 +120,8 @@ export function buildPreview(topology: GraphTopology, bindings: GraphBinding[]):
   // A target stretch an event spans must be named target sequence of one covered portion (one fragment), wholly
   // inside the requested window; a boundary (empty stretch) must lie within or at the edge of one.
   const covered = (targetPath?.coverage ?? []).filter(c => c.kind === 'covered');
-  const targetCovered = (span: Span) => span.start >= window.start && span.end <= window.end
-    && covered.some(c => span.start >= c.span.start && span.end <= c.span.end);
+  const targetCovered = (span: Span, fragment: string) => span.start >= window.start && span.end <= window.end
+    && covered.some(c => (c.fragment == null || c.fragment === fragment) && span.start >= c.span.start && span.end <= c.span.end);
   // Direct matches per alternate visit (several: a repeat, not placed).
   const matches = new Map<string, { target: string; reverse: boolean }[]>();
   // How many visits of one compared path match each target visit: more than one (a duplication) is not placed.
@@ -180,16 +182,19 @@ export function buildPreview(topology: GraphTopology, bindings: GraphBinding[]):
         const pieces = run.map(visitPiece);
         const source = run.length ? { start: Math.min(...pieces.map(p => p.start)), end: Math.max(...pieces.map(p => p.end)) } : null;
         const gap = previous && next ? between(previous, next) : null;
-        // Wholly outside the view (anchored by visits beyond it): not this window's business.
+        // Both bounding visits on one target fragment, the alternate one continuous same-orientation walk between.
+        const sameFragment = Boolean(previous && next && previous.targetFragment && previous.targetFragment === next.targetFragment);
+        const valid = Boolean(previous && next && previousOcc && nextOcc && sameFragment && continuous(previousOcc, run, nextOcc)
+          && ordered(previous, next));
+        // A valid event wholly outside the view (anchored by visits beyond it) is not this window's business.
         const outside = gap && (gap.end > gap.start ? gap.end <= window.start || gap.start >= window.end
           : gap.start < window.start || gap.start > window.end);
-        const shown = gap ? (gap.end > gap.start ? clipTo(gap, window) : gap) : null;
-        if (outside && previous && next) {
+        if (valid && outside) {
           run = [];
           return;
         }
-        if (previous && next && previousOcc && nextOcc && shown && continuous(previousOcc, run, nextOcc) && ordered(previous, next)
-            && targetCovered(shown)) {
+        const shown = gap ? (gap.end > gap.start ? clipTo(gap, window) : gap) : null;
+        if (valid && shown && targetCovered(shown, previous!.targetFragment!)) {
           if (run.length) {
             if (gap!.end > gap!.start) lane.pieces.push({ kind: 'divergent', ...shown, bp: runBp, source: source! });
             else lane.pieces.push({ kind: 'insertion', start: gap!.start, end: gap!.start, bp: runBp, source: source! });
@@ -208,7 +213,7 @@ export function buildPreview(topology: GraphTopology, bindings: GraphBinding[]):
           const t = targetOcc.get(found[0].target)!;
           // The anchor is the whole placed visit, inside the view or not; only its visible part is drawn.
           const anchor: PreviewPiece = { kind: 'node', ...placeOnTarget(o, t, found[0].reverse), bp: o.clip.end - o.clip.start,
-            reverse: found[0].reverse, node: o.node, occurrence: o.id };
+            reverse: found[0].reverse, node: o.node, occurrence: o.id, targetFragment: t.fragment };
           if (previous) flushRun(anchor, o);
           else if (run.length) flushRun(null, null);
           const drawn = clipTo(anchor, window);
