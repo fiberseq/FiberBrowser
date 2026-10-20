@@ -14,6 +14,7 @@ from contextvars import ContextVar
 
 from services.background_work import checkpoint
 from services.byte_cache import shared_cache
+from services.byte_cache import retained_size
 
 EXTRACTION_VERSION = 'native-sv-scan:v3'
 NORMALIZATION_VERSION = 'cigar-replacements:v1'
@@ -22,12 +23,41 @@ SCAN_MAX_RECORDS = 100_000
 SCAN_MAX_BYTES = 128 * 1024 * 1024
 SCAN_CACHE = shared_cache('indexes')
 SCAN_LOCK = threading.Lock()
+SIZE_HINT_BYTES = 4 * 1024 * 1024
+SIZE_HINT_CACHE = shared_cache('indexes')
+SIZE_HINT_CACHE.resize(SIZE_HINT_BYTES)
+SIZE_HINT_LOCK = threading.Lock()
 _records = ContextVar('native_scan_records', default=None)
 
 
 def reusable_record(key):
     records = _records.get()
     return records.get(key) if records is not None else None
+
+
+def compact_bytes(entry, floor, *, reusable):
+    """Reuse geometry-derived estimates even when a whole tile cannot fit.
+
+    Hints contain no evidence or calls. Sequence/reference-normalized records
+    are measured afresh; sequence-free geometry is fully identified by the
+    producer, floor, file contig and complete compact-record key.
+    """
+    key = (EXTRACTION_VERSION, NORMALIZATION_VERSION, int(floor),
+           entry['file_chrom'], entry['_key']) if reusable else None
+    if key is not None:
+        with SIZE_HINT_LOCK:
+            size = SIZE_HINT_CACHE.get(key)
+            if size is not None:
+                SIZE_HINT_CACHE.move_to_end(key)
+                return size
+    size = retained_size(entry) + 128  # includes the subsequently added hint
+    if key is not None:
+        with SIZE_HINT_LOCK:
+            # Shared host configuration may lower this limit, never enlarge it.
+            if SIZE_HINT_CACHE.max_bytes > SIZE_HINT_BYTES:
+                SIZE_HINT_CACHE.resize(SIZE_HINT_BYTES)
+            SIZE_HINT_CACHE[key] = size
+    return size
 
 
 @contextmanager

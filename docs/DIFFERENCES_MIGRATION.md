@@ -67,6 +67,12 @@ shared deadline covers all added windows and merge work. Different selections
 can safely filter the same unselected superset. No discovery-completeness or
 whole-genome claim follows from a cache hit.
 
+An additional byte LRU retains only sequence-free record-size estimates when a
+complete view is too large to cache. It is capped at 4 MiB within the existing
+shared index budget, keyed by producer, floor, file contig and full geometry
+identity. Normalized records are measured afresh. A hint changes neither calls
+nor extraction/merge limits; even a repeated oversized view must pass them.
+
 The byte LRU retains only complete results. Native extraction additionally
 reserves 256 MiB against the shared process budget and defaults to a 2 Mb view,
 100,000 compact records, 128 MiB retained compact data and a 30-second deadline.

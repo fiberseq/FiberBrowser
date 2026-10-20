@@ -176,7 +176,6 @@ def _scan(state, dataset_id: str, chrom: str, start: int, end: int, floor: int, 
 def _scan_records(state, dataset_id, chrom, start, end, floor, check):
     out = []
     from services import sv_evidence
-    from services.byte_cache import retained_size
     from services.reconstruction_budget import ResourceResult
     retained = 0
     for read, file_chrom, path, _bam in _bam_records(state, dataset_id, chrom, start, end, with_handle=True, checkpoint_fn=check):
@@ -195,7 +194,8 @@ def _scan_records(state, dataset_id, chrom, start, end, floor, check):
         if entry is None:
             entry = _compact_record(read, file_chrom, floor, reference=getattr(state, 'fasta', None))
             entry['_key'] = key
-            entry['_scan_bytes'] = retained_size(entry) + 128
+            entry['_scan_bytes'] = sv_evidence.compact_bytes(entry, floor,
+                reusable=getattr(state, 'fasta', None) is None and not getattr(state, 'fasta_path', None))
         retained += entry['_scan_bytes']
         if retained > sv_evidence.SCAN_MAX_BYTES:
             raise ResourceResult('budget_exceeded', 'native_scan_bytes', max_bytes=sv_evidence.SCAN_MAX_BYTES)

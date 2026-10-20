@@ -28,8 +28,10 @@ def cohort(tmp_path):
     state = SimpleNamespace(datasets={'native': dataset}, dataset_order=['native'],
                             get_dataset=lambda key: dataset if key == 'native' else None)
     evidence.SCAN_CACHE.clear()
+    evidence.SIZE_HINT_CACHE.clear()
     yield state, dataset
     evidence.SCAN_CACHE.clear()
+    evidence.SIZE_HINT_CACHE.clear()
 
 
 def split(state, **kwargs):
@@ -198,6 +200,58 @@ def test_positive_eligibility_reuses_compaction(cohort, monkeypatch):
     sv.scan_view(state, 'native', 'chrT', 950, 1450, 10)
     assert len(decoded) == first  # overlapping records need no second extraction
     assert split(state)['counts'] == [1, 1, 0]
+
+
+def test_oversized_tiles_reuse_estimates_without_reusing_evidence_or_weakening_limits(cohort, monkeypatch):
+    from services.reconstruction_budget import ResourceResult
+    state, _ = cohort
+    estimates, decodes = [], []
+    original_size, original_compact = evidence.retained_size, sv._compact_record
+    def measure(entry):
+        estimates.append(entry['_key'])
+        return original_size(entry)
+    def compact(*args, **kwargs):
+        decodes.append(1)
+        return original_compact(*args, **kwargs)
+    monkeypatch.setattr(evidence, 'retained_size', measure)
+    monkeypatch.setattr(sv, '_compact_record', compact)
+    monkeypatch.setattr(evidence.SCAN_CACHE, 'max_bytes', 0)
+    expected = split(state)
+    assert len(estimates) == len(decodes) == 4 and not evidence.SCAN_CACHE
+    assert split(state) == expected
+    assert len(estimates) == 4 and len(decodes) == 8
+    # A different floor measures different extraction rather than borrowing sizes.
+    sv.scan_view(state, 'native', 'chrT', 900, 1500, 50)
+    assert len(estimates) == 8
+    monkeypatch.setattr(evidence, 'SCAN_MAX_BYTES', 1)
+    with pytest.raises(ResourceResult, match='native_scan_bytes'):
+        split(state)
+    assert not evidence.SCAN_CACHE
+
+
+def test_size_hints_are_bounded_versioned_and_bypassed_for_normalized_records(cohort, monkeypatch):
+    from services.byte_cache import ByteCache
+    state, _ = cohort
+    entry = sv.scan_view(state, 'native', 'chrT', 900, 1500, 10)[0].copy()
+    entry.pop('_scan_bytes')
+    evidence.SIZE_HINT_CACHE.clear()
+    estimates, original = [], evidence.retained_size
+    def measure(value):
+        estimates.append(1)
+        return original(value)
+    monkeypatch.setattr(evidence, 'retained_size', measure)
+    first = evidence.compact_bytes(entry, 10, reusable=True)
+    assert evidence.compact_bytes(entry, 10, reusable=True) == first
+    assert len(estimates) == 1
+    monkeypatch.setattr(evidence, 'NORMALIZATION_VERSION', 'synthetic-next-normalizer')
+    assert evidence.compact_bytes(entry, 10, reusable=True) == first
+    for _ in range(2):
+        assert evidence.compact_bytes(entry, 10, reusable=False) == first
+    assert len(estimates) == 4
+    bounded = ByteCache(1)
+    monkeypatch.setattr(evidence, 'SIZE_HINT_CACHE', bounded)
+    assert evidence.compact_bytes(entry, 10, reusable=True) == first
+    assert not bounded and bounded.retained_bytes == 0
 
 
 @pytest.mark.parametrize('seed', [901, 1547, 6091])
