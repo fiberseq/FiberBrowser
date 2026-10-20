@@ -303,6 +303,27 @@ def _part_order(seg, c0, c1, i, k, width):
     return order
 
 
+def _expand(ei, r, a, b, k0, n, soff, F, RS0, WID, E_seg, E_i):
+    """Parts ``(segment, c0, c1, i, k)`` of intervals ``ei`` (``[a, b)`` on
+    row ``r``) through fragments ``k0 .. k0 + n - 1``, clipped (row.parts)."""
+    rep = np.repeat(np.arange(len(ei), dtype=np.int64), n)
+    first_rep = np.zeros(len(ei) + 1, dtype=np.int64)
+    np.cumsum(n, out=first_rep[1:])
+    kl = k0[rep] + (np.arange(len(rep), dtype=np.int64) - first_rep[rep])
+    g = F.sidx[soff[rep] + kl]
+    a2 = np.maximum(a[rep], F.s[g])
+    b2 = np.minimum(b[rep], F.e[g])
+    minus = F.minus[g]
+    t0 = np.where(minus, F.te[g] - (b2 - F.qs[g]), F.ts[g] + (a2 - F.qs[g]))
+    t1 = np.where(minus, F.te[g] - (a2 - F.qs[g]), F.ts[g] + (b2 - F.qs[g]))
+    rr = r[rep]
+    c0 = np.maximum(t0 - RS0[rr], 0)
+    c1 = np.minimum(t1 - RS0[rr], WID[rr])
+    keep = np.flatnonzero(c1 > c0)
+    src = ei[rep[keep]]
+    return E_seg[src], c0[keep], c1[keep], E_i[src], kl[keep]
+
+
 def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts, small):
     """``groups`` of every disjoint row: ``_map_group`` + ``_call_identity``."""
     RS0, WID = F.row_rs0, F.row_width
@@ -397,22 +418,18 @@ def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts, small):
     k0 = np.where((k >= 0) & (F.e[F.sidx[np.clip(soff + np.maximum(k, 0), 0, last)]] > a), k, k + 1)
     k1 = np.searchsorted(F.skey, r * _SHIFT + b, side="left") - 1 - soff
     n = np.maximum(k1 - k0 + 1, 0)
-    rep = np.repeat(np.arange(len(ei), dtype=np.int64), n)
-    first_rep = np.zeros(len(ei) + 1, dtype=np.int64)
-    np.cumsum(n, out=first_rep[1:])
-    kl = k0[rep] + (np.arange(len(rep), dtype=np.int64) - first_rep[rep])
-    g = F.sidx[soff[rep] + kl]
-    a2 = np.maximum(a[rep], F.s[g])
-    b2 = np.minimum(b[rep], F.e[g])
-    minus = F.minus[g]
-    t0 = np.where(minus, F.te[g] - (b2 - F.qs[g]), F.ts[g] + (a2 - F.qs[g]))
-    t1 = np.where(minus, F.te[g] - (a2 - F.qs[g]), F.ts[g] + (b2 - F.qs[g]))
-    rr = r[rep]
-    c0 = np.maximum(t0 - RS0[rr], 0)
-    c1 = np.minimum(t1 - RS0[rr], WID[rr])
-    keep = np.flatnonzero(c1 > c0)
-    src = ei[rep[keep]]
-    cols = [E_seg[src], c0[keep], c1[keep], E_i[src], kl[keep]]
+    # (interval, fragment) candidates, a slice of intervals at a time so that
+    # intervals crossing many fragments never expand past the batch budget.
+    cut = np.cumsum(n)
+    pieces, lo = [], 0
+    while lo < len(ei):
+        hi = int(np.searchsorted(cut, (cut[lo - 1] if lo else 0) + CHUNK_ELEMENTS, side="right"))
+        hi = max(hi, lo + 1)
+        pieces.append(_expand(ei[lo:hi], r[lo:hi], a[lo:hi], b[lo:hi], k0[lo:hi], n[lo:hi], soff[lo:hi], F,
+                              RS0, WID, E_seg, E_i))
+        lo = hi
+    cols = ([np.concatenate([p[j] for p in pieces]) for j in range(5)] if pieces
+            else [np.zeros(0, dtype=np.int64) for _ in range(5)])
     if extra:
         ex = np.asarray(extra, dtype=np.int64).reshape(-1, 5)
         cols = [np.concatenate([c, ex[:, j]]) for j, c in enumerate(cols)]
@@ -642,6 +659,8 @@ def _map_point_fields(items, rows, row_read, F, base, ctx, fields, small):
     if not _small(x):
         return
     x += base[_ints((row_read[s[0]] for s in segs), nseg)][E_seg]
+    if not _small(x):  # absolute positions too: composite keys need them below 2**40
+        return
     xkey = (E_seg << 40) | x if nseg < (1 << 23) and int(x.min()) >= 0 else None
     if xkey is not None and bool((xkey[1:] >= xkey[:-1]).all()):
         # Marks ascend within each list (as decoded): find each fragment's

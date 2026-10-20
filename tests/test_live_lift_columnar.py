@@ -184,6 +184,32 @@ def test_unusual_values_take_the_per_row_path(monkeypatch, updates):
     _both(monkeypatch, [_one(**updates)], [piece])
 
 
+def test_marks_near_the_key_range_take_the_per_row_path(monkeypatch):
+    """Positions are checked after the decode base is added: a mark at 2**40 must not share a composite
+    key with the next list's mark at 0."""
+    piece = ll.LiftPiece(0, 0, 100, 0, 100, "+", True, "H#1", "src")
+    reads = [_one(id="a", _fiberbrowser_source_base=1, methyl_m6a=[(1 << 40) - 1]), _one(id="b", methyl_m6a=[0])]
+    rows = _both(monkeypatch, reads, [piece])
+    assert [r["live_lift"]["dropped"]["points"] for r in rows] == [1, 0]
+    _both(monkeypatch, [_one(_fiberbrowser_source_base=(1 << 40) - 1, methyl_m6a=[1], methyl_m5c=[1 - (1 << 40)])],
+          [piece])
+
+
+def test_intervals_across_many_fragments(monkeypatch):
+    """An interval crossing many fragments maps to one part per fragment, also when the expansion runs in
+    slices (small batch budget)."""
+    from services.lift import compose_columns
+
+    monkeypatch.setattr(compose_columns, "CHUNK_ELEMENTS", 40)
+    pieces = [ll.LiftPiece(0, 10 * k, 10 * k + 10, 20 * k, 20 * k + 10, "+", True, "H#1", "src") for k in range(64)]
+    ivs = [[3 * j, 3 * j + 900, 900] for j in range(30)]
+    read = _one(reference_end=1280, intervals=ivs, qualities=[], _fiberbrowser_calls={},
+                _fiberbrowser_aligned_runs=[[0, 0, 1280]],
+                _fiberbrowser_lift_record={"contig": "src", "reverse": False, "length": 1280})
+    rows = _both(monkeypatch, [read] * 3, pieces, start=0, end=640)
+    assert sum(len(r["intervals"]) for r in rows) > 1000
+
+
 def test_cancellation_reaches_the_hidden_blocks(monkeypatch):
     """A load cancelled while hidden insertion blocks are composed stops, as it did when they were
     composed row by row."""
