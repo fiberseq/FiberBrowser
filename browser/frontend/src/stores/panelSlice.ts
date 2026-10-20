@@ -207,6 +207,8 @@ export interface PanelSlice {
   setPanelViewport: (panelId: string, start: number, end: number) => void;
   setPanelIndependent: (panelId: string, independent: boolean) => void;
   navigatePanel: (panelId: string, chrom: string, start: number, end: number) => void;
+  /** navigatePanel without moving the main view through a view link. */
+  navigatePanelOwnView: (panelId: string, chrom: string, start: number, end: number) => void;
   /**
    * Copy a dataset panel next to itself with its own navigation; returns the
    * copy's id. `linked` (the header's +): it moves with the main view until
@@ -1041,7 +1043,18 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
       } : p),
     };
   })),
-  navigatePanel: (panelId, chrom, start, end) => withUndo(get, `Panel to ${chrom}:${Math.max(0, Math.floor(start)).toLocaleString()}`, () => set(state => {
+  navigatePanel: (panelId, chrom, start, end) => {
+    get().navigatePanelOwnView(panelId, chrom, start, end);
+    // A linked panel (utils/panelExtensions.ts view links) takes the main view with it, as its pans do.
+    const state = get();
+    const panel = state.panels.find(p => p.id === panelId);
+    const v = panel?.viewportOverride;
+    const mapped = panel && v ? mainViewForPanel(panel, v) ?? null : null;
+    if (mapped && !(mapped.chrom === state.chrom && mapped.start === state.start && mapped.end === state.end)) {
+      withLinkedPanelMoving(panelId, () => get().setViewport(mapped.chrom, mapped.start, mapped.end));
+    }
+  },
+  navigatePanelOwnView: (panelId, chrom, start, end) => withUndo(get, `Panel to ${chrom}:${Math.max(0, Math.floor(start)).toLocaleString()}`, () => set(state => {
     const panel = state.panels.find(p => p.id === panelId);
     if (!panel) return state;
     const s0 = Math.max(0, Math.floor(start));

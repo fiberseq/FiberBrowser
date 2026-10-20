@@ -31,9 +31,12 @@ export const useLiftHover = create<{ hover: LiftHover | null; set: (h: LiftHover
   clear: panelId => set(s => (s.hover?.panelId === panelId ? { hover: null } : s)),
 }));
 
+const sameSpan = (a?: LiftHover['target'], b?: LiftHover['target']) =>
+  a === b || (!!a && !!b && a.chrom === b.chrom && a.start === b.start && a.end === b.end);
 function sameHover(a: LiftHover | null, b: LiftHover | null): boolean {
   if (!a || !b) return a === b;
-  return a.key === b.key && a.panelId === b.panelId;
+  // Another row of the same molecule (a supplementary, another orientation) moves the ribbon's line.
+  return a.key === b.key && a.panelId === b.panelId && sameSpan(a.target, b.target) && sameSpan(a.source, b.source);
 }
 
 export const moleculeKey = (datasetId: string, library: number, qname: string) => `${datasetId}\u0000${library}\u0000${qname}`;

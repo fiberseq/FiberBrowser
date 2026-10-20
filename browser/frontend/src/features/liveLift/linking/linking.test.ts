@@ -251,4 +251,29 @@ describe('liftViewLink', () => {
     expect(src().viewportOverride).toEqual({ chrom: MAT, start: 3990, end: 6090 });
     expect(main()).toEqual({ chrom: 'chrT', start: 5000, end: 7000 });
   });
+  it('the panel\'s own locus box or contig switch takes the main view with it', () => {
+    useBrowserStore.getState().navigatePanel('src', MAT, 3990, 6090);
+    expect(main()).toEqual({ chrom: 'chrT', start: 5000, end: 7000 });
+    expect(src().viewportOverride).toEqual({ chrom: MAT, start: 3990, end: 6090 });
+  });
+  it('choosing another correspondence before its tile arrives is corrected when it does', async () => {
+    resetNavigation(); holdTiles = true; installFetcher();
+    useBrowserStore.setState({ chrom: 'chrT', start: 5000, end: 7000, panels: [liftPanel, sourcePanel()] });
+    useBrowserStore.getState().setViewport('chrT', 5000, 7001); await flush();
+    useBrowserStore.getState().setViewport('chrT', 5000, 7000); await flush();
+    (await import('./liftLink')).chooseLinkChain('src', 0);
+    expect(pendingCorrection('src')?.kind).toBe('panel');
+    for (const d of deferred.splice(0)) d.resolve();
+    for (let i = 0; i < 4; i++) await flush();
+    expect(src().viewportOverride).toEqual({ chrom: MAT, start: 3990, end: 6090 });
+  });
+  it('a difference shared by both parents jumps each parent\'s linked panel to its own allele', async () => {
+    const { showInSourceView } = await import('./sourceJump');
+    await showInSourceView({ datasetId: 'lift', panelId: 'mat', viewKey: 'main', chrom: 'chrT',
+      difference: { id: 'x', hap_label: 'MAT+PAT', kind: 'insertion', src: { contig: PAT, start: 0, end: 10 },
+        alleles: [{ hap_label: 'MAT', src: { contig: MAT, start: 2000, end: 2400 } }] } as never });
+    const v = src().viewportOverride!;
+    expect(v.chrom).toBe(MAT);
+    expect(v.start <= 2000 && v.end >= 2400).toBe(true);
+  });
 });

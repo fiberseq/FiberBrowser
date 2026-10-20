@@ -327,8 +327,25 @@ export function mapSpan(datasetId: string, key: string, direction: 'toSource' | 
   if (!hits.size) {
     // Nothing of the view maps (a target-only stretch, or the edge of a chain): its nearest correspondence keeps
     // the same width, so a pan out of the gap continues smoothly.
-    if (outline === 'failed') return { status: 'none' };
     const centre = span.start + width / 2;
+    // With the exact tile loaded, the gap's exact flanking piece decides (and the mapping is exact).
+    const tile = wantExact ? s.tiles.get(tileKey(side, span.chrom, Math.floor(centre / summary.tile_bp))) : undefined;
+    if (tile && typeof tile === 'object') {
+      let best: { i: number; d: number } | null = null;
+      for (let i = 0; i < tile.start.length; i++) {
+        if (!allowed(tile.chain[i])) continue;
+        const d = centre < tile.start[i] ? tile.start[i] - centre : centre >= tile.end[i] ? centre - tile.end[i] + 1 : 0;
+        if (!best || d < best.d) best = { i, d };
+      }
+      if (best && best.d <= Math.max(width, OUTLINE_GAP_BP)) {
+        const i = best.i, minusRun = tile.minus[i];
+        const at = Math.min(Math.max(Math.round(centre), tile.start[i]), tile.end[i] - 1);
+        const [h] = tileLookup({ ...tile, start: [tile.start[i]], end: [tile.end[i]], other: [tile.other[i]], chain: [tile.chain[i]], minus: [minusRun], reach: [tile.end[i]] }, at);
+        const mid = h.pos + (minusRun ? -(centre - at) : centre - at);
+        return { status: 'mapped', mapping: finish(summary, direction, tile.chain[i], minusRun, mid - width / 2, mid + width / 2, true, []) };
+      }
+    }
+    if (outline === 'failed') return { status: 'none' };
     let best: { row: OutlineRow; d: number } | null = null;
     for (const row of outline.rows) {
       if (!allowed(row[5])) continue;

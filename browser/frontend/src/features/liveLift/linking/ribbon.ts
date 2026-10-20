@@ -6,8 +6,8 @@
 
 /** `/api/lift/pieces` rows: `[t_start, t_end, q_start, q_end, strand, chain, alt, source, hap]` (forward source). */
 export type PieceRow = [number, number, number, number, '+' | '-', number, boolean, string, string];
-/** `[chain, t_start, t_end, q_start, q_end, reason]`. */
-export type GapRow = [number, number, number, number, number, string];
+/** `[chain, t_start, t_end, q_start, q_end, reason, source?, strand?]`. */
+export type GapRow = [number, number, number, number, number, string, string?, ('+' | '-')?];
 export interface LiftPiecesResponse {
   key: string; chrom: string; start: number; end: number; pieces: PieceRow[]; gaps: GapRow[];
   min_bp: number; alternatives_capped: number; alternatives: boolean;
@@ -93,9 +93,12 @@ export function ribbonGeometry(input: RibbonInput): RibbonGeometry {
       points: [[x0, 0], [x1, 0], [b1, H], [b0, H]],
       title: `${alt ? 'Alternative' : 'Primary'} correspondence${minus ? ' (reverse strand)' : ''}: target ${fmt(t0)}–${fmt(t1)} ↔ ${source}:${fmt(q0)}–${fmt(q1)}` });
   }
-  for (const [chain, t0, t1, q0, q1, reason] of gaps) {
-    if (chainSource.get(chain) !== contig) continue;
-    const minus = chainMinus.get(chain) ?? false;
+  const gapCovered: Array<[number, number]> = [], gapSourceCovered: Array<[number, number]> = [];
+  for (const [chain, t0, t1, q0, q1, reason, gapSource, gapStrand] of gaps) {
+    // A gap names its chain's contig and strand: a view inside a deletion has no piece of that chain to tell.
+    if ((gapSource ?? chainSource.get(chain)) !== contig) continue;
+    const minus = gapStrand ? gapStrand === '-' : chainMinus.get(chain) ?? false;
+    gapCovered.push([t0, t1]); gapSourceCovered.push([q0, q1]);
     const [x0, x1] = t1 > t0 ? topEdge(t0, t1) : topPoint(t0);
     const b0 = bottomX(minus ? q1 : q0), b1 = bottomX(minus ? q0 : q1);
     const dt = t1 - t0, dq = q1 - q0;
@@ -119,9 +122,10 @@ export function ribbonGeometry(input: RibbonInput): RibbonGeometry {
     shapes.push({ kind, points: [[xa, y0], [xb, y0], [xb, y1], [xa, y1]],
       title: top ? `No ${contig} correspondence: target ${fmt(a)}–${fmt(b)}` : `${contig}:${fmt(a)}–${fmt(b)} has no correspondence on this target view` });
   };
-  for (const [a, b] of complement(input.target.start, input.target.end, union(primary.map(p => [p[0], p[1]] as [number, number]))))
+  // A gap's own wedge already says what its span is: the bands mark only stretches with no correspondence at all.
+  for (const [a, b] of complement(input.target.start, input.target.end, union([...primary.map(p => [p[0], p[1]] as [number, number]), ...gapCovered])))
     band('uncovered_target', a, b, topX, true);
-  const onContig = primary.filter(p => p[7] === contig).map(p => [p[2], p[3]] as [number, number]);
+  const onContig = [...primary.filter(p => p[7] === contig).map(p => [p[2], p[3]] as [number, number]), ...gapSourceCovered];
   for (const [a, b] of complement(input.source.start, input.source.end, union(onContig)))
     band('uncovered_source', a, b, bottomX, false);
   return { shapes, elsewhere: elsewhereCount, elsewhereContigs: [...elsewhere].sort() };

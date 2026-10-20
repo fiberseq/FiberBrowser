@@ -60,16 +60,22 @@ export async function highlightCarriers(s: DifferenceSelection, readsInView: num
   useDifferenceSelection.getState().select({ ...s, inspect: false });
   highlightRequest?.abort();
   const actions = useReadActionsStore.getState();
+  // A previous difference's carriers never stay outlined under this one's selection.
+  actions.clearHighlight();
   const dataset = useBrowserStore.getState().datasets.find(x => x.id === s.datasetId);
   if (dataset?.data_type !== 'bam_livelift' || readsInView > AUTO_LOAD_MAX_READS) return;
   const controller = new AbortController();
   highlightRequest = controller;
   const d = s.difference;
+  // Only a haplotype of the dataset scopes the request and the carriers (a read-supported edit's lane is "Reads").
+  const info = dataset.live_lift;
+  const hap = info && info.haplotypes.some(h => (info.haplotype_labels?.[h] ?? h) === d.hap_label) ? d.hap_label : undefined;
   try {
-    const r = await getDifferenceReads({ datasetId: s.datasetId, liftKey: dataset.live_lift?.key ?? '', chrom: s.chrom,
-      pos: d.t_start, end: Math.max(d.t_start, d.t_end), liftHap: d.hap_label || undefined, itemId: d.id }, controller.signal);
+    const r = await getDifferenceReads({ datasetId: s.datasetId, liftKey: info?.key ?? '', chrom: s.chrom,
+      pos: d.t_start, end: Math.max(d.t_start, d.t_end), liftHap: hap, itemId: d.id }, controller.signal);
     if (controller.signal.aborted) return;
-    const ids = r.rows.filter(row => row.allele === 'hg002' || row.carries_insertion || row.carries_deletion).map(row => row.id);
+    const ids = r.rows.filter(row => (!hap || row.hap_label === hap)
+      && (row.allele === 'hg002' || row.carries_insertion || row.carries_deletion)).map(row => row.id);
     if (ids.length) actions.highlightReads([...new Set(ids)]);
     else actions.clearHighlight();
   } catch { /* the selection's guide line remains */ }

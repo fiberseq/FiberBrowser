@@ -96,6 +96,7 @@ def test_ribbon_pieces_gaps_alternatives_and_coarsening(env):
     minus = [p for p in out["pieces"] if p[5] == 1]
     assert minus == [[12000, 14000, 7000, 9000, "-", 1, False, MAT, "H#1"]]
     reasons = {(g[0], g[1], g[2], g[3], g[4]): g[5] for g in out["gaps"]}
+    assert all(g[6] == MAT and g[7] == "+" for g in out["gaps"] if g[0] == 0)
     assert reasons[(0, 4000, 4010, 3000, 3000)] == "target_insertion"
     assert reasons[(0, 6010, 6010, 5000, 5100)] == "source_insertion"
     assert not any(p[6] for p in out["pieces"]) and out["alternatives"] is False

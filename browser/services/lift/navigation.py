@@ -441,7 +441,7 @@ def served_pieces(config, chrom: str, start: int, end: int, *, hap: str = None, 
     """Ribbon data for target ``[start, end)``: pieces
     ``[t_start, t_end, q_start, q_end, strand, chain, alt, source, hap]``
     (forward source coordinates, clipped to the window) and the primary
-    chains' raw gaps ``[chain, t_start, t_end, q_start, q_end, reason]``.
+    chains' raw gaps ``[chain, t_start, t_end, q_start, q_end, reason, source, strand]``.
     Alternatives (the 16 best chains, as for display) only with
     ``alternatives`` (default: the dataset's display setting)."""
     from services.lift.live_lift import BIN_BP, MAX_ALTERNATIVE_CHAINS, _bin_pieces, clip_piece, _merge_contiguous
@@ -490,8 +490,10 @@ def served_pieces(config, chrom: str, start: int, end: int, *, hap: str = None, 
             for ci, (t, q, dt, dq, reason), _claims in primary_gaps_for_region(handle, chrom, h, start, end):
                 if max(dt, dq) <= bp:
                     continue
-                q0, q1 = _source_span(handle, handle.map.chains[ci], q, dq)
-                gaps.append([ci, t, t + dt, q0, q1, handle.map.reasons[reason]])
+                c = handle.map.chains[ci]
+                q0, q1 = _source_span(handle, c, q, dq)
+                gaps.append([ci, t, t + dt, q0, q1, handle.map.reasons[reason],
+                             handle.manifest["sources"][c["source"]]["name"], c["strand"]])
     gaps.sort(key=lambda g: (g[1], g[0]))
     return {"key": key, "chrom": chrom, "start": start, "end": end, "pieces": pieces, "gaps": gaps[:MAX_RIBBON_PIECES],
             "min_bp": bp, "alternatives_capped": capped, "alternatives": bool(alternatives), "truncated": truncated}

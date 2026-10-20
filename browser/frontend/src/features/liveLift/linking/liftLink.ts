@@ -195,7 +195,10 @@ export async function openLinkedSourceView(liftPanelId: string, hapLabel?: strin
   if (!hap) return null;
   const label = dataset.live_lift.haplotype_labels?.[hap] ?? hap;
   const existing = linkedSourcePanels(dataset.id, hap)[0];
-  if (existing) return existing.id;
+  if (existing) {
+    if (existing.liftLink!.liftPanelId !== liftPanelId) updateLink(existing.id, { liftPanelId });
+    return existing.id;
+  }
   const key = dataset.live_lift.key;
   try {
     const summary = await ensureSummary(dataset.id, key);
@@ -280,7 +283,10 @@ export function chooseLinkChain(panelId: string, chain: number | null): void {
   const next = { ...panel, liftLink: link };
   const out = sourceViewFor(next, { chrom: st.chrom, start: st.start, end: st.end });
   const minus = out && out !== 'pending' ? out.mapping.minus : panel.liftLink.flip;
-  bump(panelId);
+  const gen = bump(panelId);
+  // Not loaded yet, or only approximately: the arriving tables correct it, as after a main-view move.
+  if (out === 'pending' || (out && !out.mapping.exact)) schedule(next, gen, st.chrom, 'panel');
+  else pending.delete(panelId);
   useBrowserStore.setState(s => ({ panels: s.panels.map(p => p.id === panelId ? {
     ...p, liftLink: { ...link, flip: minus },
     ...(out && out !== 'pending' ? { viewportOverride: out.span } : {}),
@@ -307,10 +313,37 @@ export function jumpLinkedSource(panelId: string, src: { contig: string; start: 
   return true;
 }
 
+/**
+ * The lifted panel a link pairs with, after "Pool haplotypes" or "Split by haplotype" replaced it: its haplotype's
+ * split panel, else the dataset's pooled one (null: none open).
+ */
+export function liftPanelFor(link: LiftLinkConfig, panels: PanelConfig[]): PanelConfig | null {
+  const mine = panels.filter(p => p.contentType === 'dataset' && p.datasetId === link.datasetId && !p.liftLink);
+  const current = mine.find(p => p.id === link.liftPanelId);
+  if (current && (!current.liftHap || current.liftHap === link.hapLabel)) return current;
+  return mine.find(p => p.liftHap === link.hapLabel) ?? mine.find(p => !p.liftHap) ?? null;
+}
+
+function retargetLinks(): void {
+  const st = useBrowserStore.getState();
+  const fixes: Array<[string, string]> = [];
+  for (const p of st.panels) {
+    if (!p.liftLink) continue;
+    const target = liftPanelFor(p.liftLink, st.panels);
+    if (target && target.id !== p.liftLink.liftPanelId) fixes.push([p.id, target.id]);
+  }
+  if (!fixes.length) return;
+  useBrowserStore.setState(s => ({ panels: s.panels.map(p => {
+    const fix = fixes.find(([id]) => id === p.id);
+    return fix && p.liftLink ? { ...p, liftLink: { ...p.liftLink, liftPanelId: fix[1] } } : p;
+  }) }));
+}
+
 let registered = false;
 export function registerLiftLinking(): void {
   if (registered) return;
   registered = true;
   registerViewLink(liftViewLink);
+  useBrowserStore.subscribe((s, prev) => { if (s.panels !== prev.panels && s.panels.some(p => p.liftLink)) queueMicrotask(retargetLinks); });
   onNavigationData(id => queueMicrotask(() => applyCorrections(id)));
 }

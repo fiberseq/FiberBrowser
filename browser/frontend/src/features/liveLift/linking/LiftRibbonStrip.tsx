@@ -103,7 +103,10 @@ export function LiftRibbonStrip({ panel, width, height, sidebarWidth }: { panel:
   const hoverLine = useMemo(() => {
     if (!hover || hover.datasetId !== link.datasetId || !view || !box || !key) return null;
     let t: number | null = null, q: number | null = null;
-    const own = hover.panelId === link.liftPanelId || hover.target ? 'target' : 'source';
+    // Only this link's two panels: a molecule hovered in another haplotype's panel draws nothing here.
+    const own = hover.panelId === link.liftPanelId ? 'target' : hover.panelId === panel.id ? 'source' : null;
+    if (!own) return null;
+    if (own === 'target' && hover.source && hover.source.chrom !== view.chrom) return null;
     if (own === 'target' && hover.target?.chrom === chrom) {
       const lo = Math.max(hover.target.start, start), hi = Math.min(hover.target.end, end);
       if (hi <= lo) return null;
@@ -121,7 +124,7 @@ export function LiftRibbonStrip({ panel, width, height, sidebarWidth }: { panel:
     const axis = makeAxis(start, end, box.width, liftReversed,
       expansions.filter(e => e.chrom === chrom && (e.referenceScope ?? 'main-reference') === (liftPanel?.genome ?? 'main-reference')));
     return { top: box.left + axis.toX(t), bottom: linearX(view.start, view.end, dataW, sourceReversed, sidebarWidth)(q) };
-  }, [hover, link.datasetId, link.liftPanelId, link.hap, link.chain, view, box, key, chrom, start, end, liftReversed, expansions, liftPanel?.genome, dataW, sourceReversed, sidebarWidth]);
+  }, [hover, panel.id, link.datasetId, link.liftPanelId, link.hap, link.chain, view, box, key, chrom, start, end, liftReversed, expansions, liftPanel?.genome, dataW, sourceReversed, sidebarWidth]);
 
   const hapColour = liveLiftHaplotypeColor(link.hapLabel, dark);
   const minusColour = MINUS_COLOUR[dark ? 'dark' : 'light'];

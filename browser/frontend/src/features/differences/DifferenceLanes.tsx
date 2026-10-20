@@ -26,7 +26,9 @@ import { rememberDifferences } from '../liveLift/differenceCache';
 const BIN_KINDS = ['snv', 'mnv', 'insertion', 'deletion', 'replacement', 'aligned_bubble', 'inversion', 'no_correspondence'];
 
 export function differenceLanesHeight(panel: PanelConfig, dataset: Dataset) {
-  return 24 + differenceLanes(liftHapLabels(dataset.live_lift), panel.liftHap).length * 20;
+  const sources = panel.differenceSources ?? { assembly: true, reads: false };
+  const lanes = (sources.assembly ? differenceLanes(liftHapLabels(dataset.live_lift), panel.liftHap).length : 0) + (sources.reads ? 1 : 0);
+  return 24 + Math.max(1, lanes) * 20;
 }
 /** This is map evidence, independent of the sampled read cohort and SV view.
  * Abort on every key change, including settings (lift_key) and haplotype. */
@@ -145,6 +147,8 @@ export function DifferenceLanes({ panel, dataset, width, gutter = 0, height }: {
     }
   }, [axis, width, bandHeight, laneHeight, model, lanes.join(','), gutter, dark, start, end]);
   if (!enabled) return null;
+  const statusText = error || (busy ? 'Finding difference…' : readScope || (data ? data.mode === 'bins'
+    ? 'Density; zoom for individual differences' : 'Click a difference to expand or highlight it; ⌘-click to inspect' : 'Loading…'));
   const selectionOf = (d: import('../liveLift/differenceTypes').Difference): DifferenceSelection => ({
     panelId: panel.id, datasetId: dataset.id, viewKey, chrom, difference: d, target: d.target });
   const inspect = (d: import('../liveLift/differenceTypes').Difference) => useDifferenceSelection.getState().select(selectionOf(d));
@@ -183,17 +187,19 @@ export function DifferenceLanes({ panel, dataset, width, gutter = 0, height }: {
         insertions on reads) are in its right-click menu and the Live-lift settings. */}
     <div className="flex gap-1 items-center h-6 px-2 whitespace-nowrap overflow-hidden" data-testid="live-lift-diff-header">
       <span className="flex-shrink-0 font-semibold text-slate-600 dark:text-slate-300" data-testid="live-lift-diff-label"
-        title={`Differences between ${panel.liftHap ?? 'the haplotypes'} and this genome. ${status}. Right-click for sources, size, table and insertions on reads.`}>
+        title={`Differences between ${panel.liftHap ?? 'the haplotypes'} and this genome. ${statusText}. Right-click for sources, size, table and insertions on reads.`}>
         Differences</span>
       <button className="flex-shrink-0 px-0.5 text-slate-500 hover:text-slate-800 dark:hover:text-slate-100" data-testid="live-lift-diff-prev" disabled={busy}
         title="Previous difference" aria-label="Previous difference" onClick={() => void navigate(-1)}>◀</button>
       <button className="flex-shrink-0 px-0.5 text-slate-500 hover:text-slate-800 dark:hover:text-slate-100" data-testid="live-lift-diff-next" disabled={busy}
         title="Next difference" aria-label="Next difference" onClick={() => void navigate(1)}>▶</button>
-      {(error || busy) && <span className="min-w-0 truncate text-slate-500 dark:text-slate-400" role={error ? 'status' : undefined} title={error || (busy ? 'Finding difference…' : readScope || (data ? data.mode==='bins'?'Density; zoom for individual differences':'Click a difference to inspect it · map discovery':'Loading…'))}>{error || (busy ? 'Finding difference…' : readScope || (data ? data.mode==='bins'?'Density; zoom for individual differences':'Click a difference to inspect it · map discovery':'Loading…'))}</span>}
+      {(error || busy) && <span className="min-w-0 truncate text-slate-500 dark:text-slate-400" role={error ? 'status' : undefined} title={statusText}>{statusText}</span>}
     </div>
     <canvas ref={canvas} width={width} height={bandHeight} aria-label="Assembly differences" />
     {model.items.map(d => {
-      const x=axis.toX(d.t_start), z=axis.toX(d.t_end), i=lanes.indexOf(d.hap_label);
+      // An expanded insertion's marker covers its column (a click there collapses it).
+      const block = axis.blocks.find(b => b.ins.ins_id === d.id || b.ins.alleles?.some(a => a.ins_id === d.id));
+      const x = block ? block.x0 : axis.toX(d.t_start), z = block ? block.x1 : axis.toX(d.t_end), i = lanes.indexOf(d.hap_label);
       return <button key={d.id} data-testid="live-lift-diff-item" data-kind={d.kind} data-difference-id={d.id}
         aria-label={differenceDescription(d, chrom)} title={`${differenceDescription(d, chrom)}\n${differenceHint(d)}`}
         // Above the row's resize grip (z-20), which would otherwise take clicks on the bottom lane.

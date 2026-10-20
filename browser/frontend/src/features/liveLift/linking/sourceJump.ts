@@ -15,7 +15,12 @@ export function jumpLinkedSourcesTo(datasetId: string, hap: string | undefined, 
 }
 
 export async function showInSourceView(s: DifferenceSelection): Promise<void> {
-  if (jumpLinkedSourcesTo(s.datasetId, s.difference.hap_label, s.difference.src)) return;
+  // A difference shared by both parents ("MAT+PAT") jumps each parent's linked panel to its own allele.
+  const alleles = (s.difference as { alleles?: Array<{ hap_label: string; src?: typeof s.difference.src }> }).alleles;
+  const own = alleles?.length ? alleles : [{ hap_label: s.difference.hap_label, src: s.difference.src }];
+  let moved = false;
+  for (const a of own) moved = jumpLinkedSourcesTo(s.datasetId, a.hap_label, a.src) || moved;
+  if (moved) return;
   const { openSourceView } = await import('../sourceView');
   await openSourceView(s);
 }
