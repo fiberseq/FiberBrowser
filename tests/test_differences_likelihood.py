@@ -10,6 +10,16 @@ from services.differences.likelihood import LikelihoodBudget, LikelihoodPolicy, 
 from services.reconstruction_budget import RESERVATIONS
 
 
+@pytest.fixture(autouse=True)
+def isolated_reservation_accounting():
+    # Other suites legitimately retain a charged numerical worker. These tests
+    # assert zero outstanding reservations for their own sequence likelihoods.
+    from services.reconstruction_budget import close_warm_worker
+    close_warm_worker()
+    yield
+    close_warm_worker()
+
+
 def run(observed, candidates, *, chemistry="none", **kwargs):
     return compete(observed, candidates, target_id="target", complete=True,
                    context=DafContext(chemistry, "synthetic-observation"), **kwargs)
