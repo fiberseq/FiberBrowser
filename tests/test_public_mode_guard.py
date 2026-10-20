@@ -27,6 +27,8 @@ PUBLIC_DENIED = {
     ("GET", "/api/graph/status"), ("GET", "/api/graph/registrations"), ("POST", "/api/graph/registrations"),
     ("GET", "/api/graph/registrations/{registration_id}/paths"), ("POST", "/api/graph/subgraph"),
     ("DELETE", "/api/graph/requests/{request_id}"),
+    # its reads: host BAMs of loaded datasets on the host package's paths
+    ("GET", "/api/graph/read_bindings"), ("POST", "/api/graph/reads"),
     # Cross-region correspondence analyses are local workspace operations.
     ("POST", "/api/cluster-regions"), ("POST", "/api/scan-correspondence"),
     ("GET", "/api/app/performance"), ("POST", "/api/app/performance"),
@@ -235,6 +237,8 @@ def test_allowlist_has_no_stale_entries(standalone_app):
     ("GET", "/api/graph/status"), ("GET", "/api/graph/registrations"), ("POST", "/api/graph/registrations"),
     ("GET", "/api/graph/registrations/{registration_id}/paths"), ("POST", "/api/graph/subgraph"),
     ("DELETE", "/api/graph/requests/{request_id}"),
+    # its reads: host BAMs of loaded datasets on the host package's paths
+    ("GET", "/api/graph/read_bindings"), ("POST", "/api/graph/reads"),
     ("POST", "/api/plugins/anything/run"),
 ])
 def test_public_mode_denies(client, public, method, path):
