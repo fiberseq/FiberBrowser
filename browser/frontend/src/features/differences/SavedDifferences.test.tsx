@@ -10,9 +10,9 @@ import { restoreDifferencesSession, importMembership } from './session';
 
 vi.mock('../../utils/svAlleleSplit', async original => ({ ...await original<any>(), requestSvSplit: vi.fn() }));
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-const original = 'provenance|raw|record|0|primary';
+const original = 'library|raw|record|0|primary';
 const metadata = { producer: 'live-lift:pre-P2c', folding: { molecule: false, orientation: false }, records: [
-  { rawName: 'raw', provenanceGroup: 'provenance', libraryId: 'library', recordId: 'record', rowIndex: 0, placement: 'primary' },
+  { rawName: 'raw', provenanceGroup: 'library', libraryId: 'library', recordId: 'record', rowIndex: 0, placement: 'primary' },
 ] };
 const split = { datasetId: 'dataset', chrom: 'chrT', t: 'I', ref: 100, len: 100, end: 100,
   counts: [1, 0, 0], margin: 20, viewStart: 0, viewEnd: 300, label: 'saved geometry' };
@@ -104,7 +104,8 @@ it('freezes the current saved target when a preview starts before React commits 
 
 it('previews an explicit reopened source binding and restores its memberships without replacing the historical snapshot', async () => {
   act(() => useBrowserStore.setState({ datasets: [{ id: 'reopened', label: 'Reopened source', data_type: 'bam_livelift', path: 'relocated.bam',
-    molecule_groups: [['relocated.bam', 'library']], color: '#000' }], panels: [{ id: 'panel', datasetId: 'reopened', stateKey: 'rows' } as any] }));
+    molecule_groups: [], live_lift: { settings: { molecule_groups: [['relocated.bam', 'library']], fold_molecule: false, fold_orientation_rows: false } },
+    color: '#000' } as any], panels: [{ id: 'panel', datasetId: 'reopened', stateKey: 'rows' } as any] }));
   await enterMetadata();
   await act(async () => {
     const select = host.querySelector<HTMLSelectElement>('select[aria-label="Reopened source scope"]')!;
@@ -120,7 +121,7 @@ it('previews an explicit reopened source binding and restores its memberships wi
   expect(useBrowserStore.getState().svSplits.rows).toMatchObject({ datasetId: 'reopened', ref: 100, frozenImport: true });
   expect(useBrowserStore.getState().differencesSession.targets.dataset.snapshot).toEqual(split);
   const serialized = collectFrontendState();
-  expect((serialized.datasets as any[])[0].molecule_groups).toEqual([['relocated.bam', 'library']]);
+  expect((serialized.datasets as any[])[0].molecule_groups).toEqual([]);
   const crash = deserializeSavedState(serialized as any);
   expect(crash.clusterAssignments?.rows).toEqual({ [current]: 0 });
   expect(crash.differencesSession?.imports.dataset[0].status).toBe('resolved');

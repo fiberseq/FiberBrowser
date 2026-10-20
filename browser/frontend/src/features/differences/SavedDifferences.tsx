@@ -32,7 +32,8 @@ export function SavedDifferences() {
   const targets = Object.entries(session.targets).filter(([, t]) => t.snapshot.t === 'I' || t.snapshot.t === 'D');
   const lineage = Object.entries(session.ledger.lineage);
   if (!scopes.length && !targets.length && !lineage.length) return null;
-  const unresolved = Object.values(session.imports).flat().filter(m => m.status === 'unresolved_import').length;
+  const unavailable = (key: string) => Boolean(session.bindings?.[key] && !bindingAvailable({ datasets, panels }, session.bindings[key]));
+  const unresolved = Object.entries(session.imports).reduce((n, [key, members]) => n + members.filter(m => unavailable(key) || m.status === 'unresolved_import').length, 0);
   const selected = scopes.includes(scope) ? scope : scopes[0];
   const runtimeScopes = [...new Map(datasets.flatMap(d => [{ stateKey: d.id, datasetId: d.id },
     ...panels.filter(p => p.datasetId === d.id).map(p => ({ stateKey: p.stateKey ?? d.id, datasetId: d.id }))])
@@ -41,7 +42,7 @@ export function SavedDifferences() {
     pending.current?.abort();
     setError(''); setRecompute(null);
     try {
-      const parsed = JSON.parse(metadata);
+      const parsed = JSON.parse(metadata.trim() || '{}');
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Membership metadata must be an object');
       const current = useBrowserStore.getState();
       setRelink({ base: signature(), proposal: previewHistoricalRelink(serializeState(current), current.differencesSession, selected, parsed,
@@ -102,7 +103,7 @@ export function SavedDifferences() {
         <label>Saved membership scope <select value={selected} onChange={e => { setScope(e.target.value); setRelink(null); setMetadata(''); setBindingKey(''); }}>
           {scopes.map(key => <option key={key}>{key}</option>)}
         </select></label>
-        <p>{session.imports[selected].filter(m => m.status === 'unresolved_import').length} unresolved · original identities retained.</p>
+        <p>{session.imports[selected].filter(m => unavailable(selected) || m.status === 'unresolved_import').length} unresolved · original identities retained.</p>
         <details><summary>Relink from trustworthy producer metadata</summary>
           <p>Supply producer, folding and record membership from the saved source. Names containing pipes are preserved verbatim; missing or conflicting provenance stays unresolved.</p>
           <label>Reopened source scope <select aria-label="Reopened source scope" value={bindingKey} onChange={e => { setBindingKey(e.target.value); setRelink(null); }}>

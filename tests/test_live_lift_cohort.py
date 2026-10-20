@@ -143,3 +143,14 @@ def test_three_orientation_rows_share_folded_features_and_molecule_strand():
     features, ids, _, _ = extract_features_from_compact(folded, peaks, 0)
     assert features.shape[0] == len(ids) == 1 and ids == [folded[0]['analysis_id']]
     assert features.tolist() == [[1, 1, 1]]
+def test_historical_relink_fixture_matches_backend_identity_producer():
+    import json
+    from pathlib import Path
+    from services.lift.cohort import analysis_id
+    from services.lift.live_lift import LiftSettings
+    fixture = json.loads((Path(__file__).parent / 'data' / 'differences_relink_identity.json').read_text())
+    record = fixture['metadata']['records'][0]
+    row = dict(id=record['rawName'], live_lift=dict(molecule=record['provenanceGroup']+'|'+record['rawName'],
+        record=record['recordId'], row_index=record['rowIndex'], placement=record['placement']))
+    assert analysis_id(row, LiftSettings()) == fixture['current']
+

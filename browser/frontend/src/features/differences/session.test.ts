@@ -3,8 +3,9 @@ import { useBrowserStore } from '../../stores/browserStore';
 import { deserializeSavedState, remapDatasetIds, serializeState } from '../../stores/historySlice';
 import { applyImportedState, collectFrontendState } from '../../api/session';
 import { refreshSvSplit } from '../../utils/svAlleleSplit';
-import { importMembership, legacyDifferencesState, restoreDifferencesSession, restoreHistoricalMembership, previewHistoricalRelink } from './session';
+import { bindingAvailable, declaredLibraries, importMembership, legacyDifferencesState, restoreDifferencesSession, restoreHistoricalMembership, previewHistoricalRelink } from './session';
 import { DIFFERENCES_SCHEMA, fanOutMoleculeCalls, type MoleculeEnvelope } from './contracts';
+import relinkIdentity from '../../../../../tests/data/differences_relink_identity.json';
 
 // Generated with the authentic pre-P2c recipe: molecule|record|row|placement.
 // Names and provenance deliberately contain pipes; there is no punctuation decoder.
@@ -276,27 +277,90 @@ it('explicitly binds reopened source scopes only with matching declared provenan
   const source = { svSplits: { dataset: split }, clusterAssignments: { dataset: { [oldId]: 0 } },
     selectedReadIds: { dataset: [oldId] } };
   const capsule = restoreDifferencesSession(source);
-  const runtime = { ...source, datasets: [{ id: 'reopened', data_type: 'bam_livelift', molecule_groups: [['relocated.bam', 'library-a']] }],
+  const compatible = relinkIdentity.metadata;
+  const historical = relinkIdentity.historical;
+  source.clusterAssignments.dataset = { [historical]: 0 };
+  source.selectedReadIds.dataset = [historical];
+  const saved = restoreDifferencesSession(source);
+  const runtime = { ...source, datasets: [{ id: 'reopened', data_type: 'bam_livelift', molecule_groups: [],
+    live_lift: { settings: { molecule_groups: [['relocated.bam', 'library-a']], fold_molecule: false, fold_orientation_rows: false } } }],
     panels: [{ id: 'panel', datasetId: 'reopened', stateKey: 'rows' }] };
   const binding = { datasetId: 'reopened', stateKey: 'rows' };
-  const proposal = previewHistoricalRelink(runtime, capsule, 'dataset', known, binding);
-  const current = importMembership(oldId, known).currentId!;
+  const proposal = previewHistoricalRelink(runtime, saved, 'dataset', compatible, binding);
+  // Exact JSON from the backend cohort.analysis_id recipe, including pipes in QNAME.
+  const current = relinkIdentity.current;
   expect(proposal.restored.clusterAssignments.rows).toEqual({ [current]: 0 });
   expect(proposal.restored.selectedReadIds.rows).toEqual([current]);
   expect(proposal.restored.svSplits.rows).toMatchObject({ datasetId: 'reopened', ref: split.ref, frozenImport: true });
   expect(proposal.session.targets.dataset.snapshot).toEqual(split);
-  expect(proposal.session.legacySnapshot).toEqual(capsule.legacySnapshot);
+  expect(proposal.session.legacySnapshot).toEqual(saved.legacySnapshot);
   expect(proposal.session.bindings?.dataset).toMatchObject({ ...binding, libraryIds: ['library-a'], producer: known.producer });
   const warm = restoreDifferencesSession({ differencesSession: copy(proposal.session) });
   const restored = restoreHistoricalMembership({ ...runtime, ...proposal.restored }, warm);
   expect(restored.clusterAssignments.rows).toEqual({ [current]: 0 });
   const absent = copy(warm);
   const missing = restoreHistoricalMembership({ ...runtime, ...restored, datasets: [] }, absent);
-  expect(missing.clusterAssignments.rows).toEqual({ [current]: 0 });
-  expect(absent.imports.dataset[0]).toMatchObject({ status: 'unresolved_import', reason: 'unavailable_bound_source' });
+  expect(missing.clusterAssignments.rows).toBeUndefined();
+  expect(missing.selectedReadIds.rows).toBeUndefined();
+  expect(missing.svSplits.rows).toBeUndefined();
+  expect(absent.imports.dataset[0]).toMatchObject({ status: 'resolved', currentId: current });
   expect(absent.targets.dataset.snapshot).toEqual(split);
+  const recovered = previewHistoricalRelink({ ...runtime, ...missing }, absent, 'dataset', {});
+  expect(recovered.resolved).toBe(1);
+  expect(recovered.restored.clusterAssignments.rows).toEqual({ [current]: 0 });
   expect(() => previewHistoricalRelink({ ...runtime, datasets: [{ id: 'reopened', molecule_groups: [['different.bam', 'unrelated']] }] }, capsule, 'dataset', known, binding)).toThrow(/provenance/);
   expect(() => previewHistoricalRelink({ ...runtime, datasets: [{ ...runtime.datasets[0], data_type: 'bam' }] }, capsule, 'dataset', known, binding)).toThrow(/provenance/);
-  expect(() => previewHistoricalRelink({ ...runtime, clusterAssignments: { rows: { unrelated: 0 } } }, capsule, 'dataset', known, binding)).toThrow(/unrelated membership/);
+  expect(() => previewHistoricalRelink({ ...runtime, clusterAssignments: { rows: { unrelated: 0 } } }, saved, 'dataset', compatible, binding)).toThrow(/unrelated membership/);
   expect(() => previewHistoricalRelink(runtime, capsule, 'dataset', {}, binding)).toThrow(/provenance/);
+});
+
+it('reads lifted provenance from the serialized lifted settings', () => {
+  expect(declaredLibraries({ data_type: 'bam_livelift', molecule_groups: [],
+    live_lift: { settings: { molecule_groups: [['synthetic.bam', 'library-a']] } } })).toEqual(['library-a']);
+});
+
+const recoverySource = () => {
+  const metadata = { ...known, records: [{ ...record, provenanceGroup: 'library-a' }] };
+  const id = 'library-a|synthetic|molecule|record-digest|2|primary';
+  const source = { svSplits: { dataset: split }, clusterAssignments: { dataset: { [id]: 0 } },
+    selectedReadIds: { dataset: [id] }, filteredReadIds: { dataset: [id] }, readSortOrder: { dataset: [id] },
+    svCarrierEvidence: { dataset: { [id]: 'confirmed' } } };
+  const runtime = { ...source, datasets: [{ id: 'reopened', data_type: 'bam_livelift', molecule_groups: [],
+    live_lift: { settings: { molecule_groups: [['synthetic.bam', 'library-a']], fold_molecule: false, fold_orientation_rows: false } } }],
+    panels: [{ datasetId: 'reopened', stateKey: 'rows' }],
+    clusterAssignments: { ...source.clusterAssignments, rows: {} }, selectedReadIds: { ...source.selectedReadIds, rows: [] },
+    filteredReadIds: { ...source.filteredReadIds, rows: null }, readSortOrder: { ...source.readSortOrder, rows: [] },
+    svCarrierEvidence: { ...source.svCarrierEvidence, rows: {} } };
+  return { metadata, source, runtime, binding: { datasetId: 'reopened', stateKey: 'rows' } };
+};
+
+it('installs a complete frozen cohort over initialized defaults and rejects conflicts atomically', () => {
+  const { metadata, source, runtime, binding } = recoverySource();
+  const session = restoreDifferencesSession(source), before = copy(runtime);
+  const result = previewHistoricalRelink(runtime, session, 'dataset', metadata, binding);
+  const current = importMembership(Object.keys(source.clusterAssignments.dataset)[0], metadata).currentId!;
+  expect(result.restored.clusterAssignments.rows).toEqual({ [current]: 0 });
+  for (const field of ['selectedReadIds', 'filteredReadIds', 'readSortOrder']) expect(result.restored[field].rows).toEqual([current]);
+  expect(result.restored.svCarrierEvidence.rows).toEqual({ [current]: 'confirmed' });
+  expect(runtime).toEqual(before);
+  for (const field of ['clusterAssignments', 'svCarrierEvidence', 'selectedReadIds', 'filteredReadIds', 'readSortOrder']) {
+    const value = field === 'clusterAssignments' ? { [current]: 1 } : field === 'svCarrierEvidence' ? { [current]: 'putative' } : ['unrelated'];
+    expect(() => previewHistoricalRelink({ ...runtime, [field]: { ...runtime[field as keyof typeof runtime] as object, rows: value } }, session, 'dataset', metadata, binding)).toThrow(/membership/);
+  }
+  expect(() => previewHistoricalRelink({ ...runtime, svSplits: { ...source.svSplits, rows: { ...split, ref: 900 } } }, session, 'dataset', metadata, binding)).toThrow(/target/);
+});
+
+it.each(['fold_molecule', 'fold_orientation_rows', 'provenance'])('refuses incompatible runtime %s identities and withholds already bound cohorts', setting => {
+  const { metadata, source, runtime, binding } = recoverySource();
+  const session = restoreDifferencesSession(source);
+  const result = previewHistoricalRelink(runtime, session, 'dataset', metadata, binding);
+  const changed = copy(runtime);
+  if (setting === 'provenance') changed.datasets[0].live_lift.settings.molecule_groups = [['synthetic.bam', 'other-library']];
+  else changed.datasets[0].live_lift.settings[setting as 'fold_molecule'] = true;
+  expect(() => previewHistoricalRelink(changed, session, 'dataset', metadata, binding)).toThrow(/provenance|identity/);
+  expect(bindingAvailable(changed, result.session.bindings!.dataset)).toBe(false);
+  const unavailable = restoreHistoricalMembership({ ...changed, ...result.restored }, result.session);
+  expect(unavailable.clusterAssignments.rows).toBeUndefined();
+  expect(unavailable.svSplits.rows).toBeUndefined();
+  expect(result.session.imports.dataset[0].status).toBe('resolved');
 });

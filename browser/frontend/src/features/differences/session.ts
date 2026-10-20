@@ -9,7 +9,8 @@ export interface ImportMembership {
   currentId?: string;
   reason?: string;
 }
-export interface ImportBinding { stateKey: string; datasetId: string; libraryIds: string[]; producer: string }
+export interface ImportBinding { stateKey: string; datasetId: string; libraryIds: string[]; producer: string;
+  folding?: { molecule: boolean; orientation: boolean }; provenanceGroups?: string[] }
 export interface DifferencesSession {
   schema_version: typeof DIFFERENCES_SCHEMA;
   versions: Record<string, string>;
@@ -139,14 +140,25 @@ export function legacyDifferencesState(session: DifferencesSession): JsonRecord 
 }
 
 export function declaredLibraries(dataset: JsonRecord): string[] {
-  const groups = dataset.molecule_groups ?? dataset.live_lift?.settings?.molecule_groups;
+  const groups = dataset.data_type === 'bam_livelift' ? dataset.live_lift?.settings?.molecule_groups : dataset.molecule_groups;
   return Array.isArray(groups) ? [...new Set<string>(groups.filter((p: any) => Array.isArray(p) && typeof p[1] === 'string' && p[1]).map((p: any) => p[1]))] : [];
 }
 export function bindingAvailable(state: JsonRecord, binding: ImportBinding): boolean {
   const dataset = Array.isArray(state.datasets) ? state.datasets.find((d: any) => d.id === binding.datasetId) : undefined;
   return Boolean(dataset && binding.libraryIds.length && binding.libraryIds.every(id => declaredLibraries(dataset).includes(id))
-    && (binding.producer !== 'live-lift:pre-P2c' || dataset.data_type === 'bam_livelift')
+    && (binding.producer === 'raw-qname:v1' ? dataset.data_type === 'bam' : binding.producer === 'live-lift:pre-P2c'
+      && dataset.data_type === 'bam_livelift' && binding.folding && binding.provenanceGroups?.length
+      && binding.provenanceGroups.every(id => declaredLibraries(dataset).includes(id))
+      && binding.folding.molecule === Boolean(dataset.live_lift?.settings?.fold_molecule)
+      && binding.folding.orientation === Boolean(dataset.live_lift?.settings?.fold_orientation_rows))
     && (binding.stateKey === binding.datasetId || state.panels?.some((p: any) => (p.stateKey ?? p.datasetId) === binding.stateKey && p.datasetId === binding.datasetId)));
+}
+
+const membershipFields = ['clusterAssignments', 'selectedReadIds', 'svCarrierEvidence', 'filteredReadIds', 'readSortOrder'];
+function translateMembership(value: any, aliases: Map<string, string>): any {
+  if (value == null) return value;
+  return Array.isArray(value) ? [...new Set(value.map(id => aliases.get(id) ?? id))]
+    : Object.fromEntries(Object.entries(object(value)).map(([id, assignment]) => [aliases.get(id) ?? id, assignment]));
 }
 
 /** Apply only established identities, within their saved dataset scope. Original
@@ -154,6 +166,7 @@ export function bindingAvailable(state: JsonRecord, binding: ImportBinding): boo
 export function restoreHistoricalMembership(state: JsonRecord, session: DifferencesSession): JsonRecord {
   const result: JsonRecord = {};
   const aliasesByDataset = new Map<string, Map<string, string>>();
+  const unavailable = new Map<string, Set<string>>();
   // Decide once for all fields. A later evidence collision must not leave
   // selections or assignments already rebound to current identities.
   for (const [dataset, imports] of Object.entries(session.imports)) {
@@ -161,7 +174,9 @@ export function restoreHistoricalMembership(state: JsonRecord, session: Differen
     const active = binding?.stateKey ?? dataset;
     const aliases = new Map(imports.filter(m => m.status === 'resolved' && m.currentId).map(m => [m.originalId, m.currentId!]));
     if (binding && !bindingAvailable(state, binding)) {
-      session.imports[dataset] = imports.map(m => ({ ...m, status: 'unresolved_import', reason: 'unavailable_bound_source' }));
+      // Availability is transient. Keep the verified producer evidence intact so
+      // the existing binding can recover without re-entering its metadata.
+      unavailable.set(active, new Set(imports.flatMap(m => [m.originalId, ...(m.currentId ? [m.currentId] : [])])));
       aliases.clear();
     }
     const collision = ['clusterAssignments', 'svCarrierEvidence'].some(field => {
@@ -181,19 +196,27 @@ export function restoreHistoricalMembership(state: JsonRecord, session: Differen
     if (session.targets[dataset]) session.targets[dataset].memberships = clone(session.imports[dataset]);
     aliasesByDataset.set(active, aliases);
   }
-  for (const field of ['clusterAssignments', 'selectedReadIds', 'svCarrierEvidence', 'filteredReadIds', 'readSortOrder']) {
+  for (const field of membershipFields) {
     if (!state[field]) continue;
     const datasets = { ...object(state[field]) };
+    for (const [key, ids] of unavailable) {
+      const value = datasets[key];
+      if (value == null) continue;
+      const kept = Array.isArray(value) ? value.filter(id => !ids.has(id))
+        : Object.fromEntries(Object.entries(object(value)).filter(([id]) => !ids.has(id)));
+      if (Object.keys(kept).length) datasets[key] = kept;
+      else delete datasets[key];
+    }
     for (const [dataset, aliases] of aliasesByDataset) {
       if (!aliases.size || datasets[dataset] === undefined) continue;
-      const value = datasets[dataset];
-      if (value === null) continue;
-      if (Array.isArray(value)) datasets[dataset] = [...new Set(value.map(id => aliases.get(id) ?? id))];
-      else {
-        datasets[dataset] = Object.fromEntries(Object.entries(object(value)).map(([id, assignment]) => [aliases.get(id) ?? id, assignment]));
-      }
+      datasets[dataset] = translateMembership(datasets[dataset], aliases);
     }
     result[field] = datasets;
+  }
+  for (const field of ['svSplits', 'clusterGroupLabels']) {
+    if (!state[field]) continue;
+    result[field] = { ...object(state[field]) };
+    for (const key of unavailable.keys()) delete result[field][key];
   }
   return result;
 }
@@ -219,30 +242,54 @@ export function previewHistoricalRelink(state: JsonRecord, session: DifferencesS
   requestedBinding?: Pick<ImportBinding, 'stateKey' | 'datasetId'>) {
   if (!session.imports[dataset]) throw new Error('No saved membership for this scope');
   const next = clone(session);
-  next.imports[dataset] = next.imports[dataset].map(m => m.status === 'resolved' && !requestedBinding ? m : importMembership(m.originalId, metadata));
+  next.imports[dataset] = next.imports[dataset].map(m => m.status === 'resolved' ? m : importMembership(m.originalId, metadata));
   const input = clone(state);
-  if (requestedBinding) {
+  const destination = requestedBinding ?? next.bindings?.[dataset];
+  if (destination) {
     const producer = session.bindings?.[dataset]?.producer ?? session.legacySnapshot.differencesImportMetadata?.[dataset]?.producer;
-    if (producer && producer !== metadata.producer) throw new Error('Historical producer does not match the saved provenance');
+    if (metadata.producer && producer && producer !== metadata.producer) throw new Error('Historical producer does not match the saved provenance');
     const members = next.imports[dataset].filter(m => m.status === 'resolved');
     const libraryIds = [...new Set(members.flatMap(m => m.molecule ? [m.molecule.library_id] : []))];
-    const binding: ImportBinding = { ...requestedBinding, libraryIds, producer: String(metadata.producer ?? '') };
-    if (!members.length || !bindingAvailable(state, binding)) throw new Error('Relinking requires matching declared library provenance in the chosen source');
+    const binding: ImportBinding = requestedBinding ? { ...requestedBinding, libraryIds, producer: String(metadata.producer ?? producer ?? ''),
+      folding: clone(metadata.folding ?? session.bindings?.[dataset]?.folding ?? {}),
+      provenanceGroups: [...new Set(members.flatMap(m => m.molecule ? [m.molecule.provenance_group] : []))] } : next.bindings![dataset];
+    if (!members.length || !bindingAvailable(state, binding)
+      || binding.producer === 'live-lift:pre-P2c' && members.some(m => m.molecule?.provenance_group !== m.molecule?.library_id)) {
+      throw new Error('Relinking requires matching declared library provenance and runtime identity settings in the chosen source');
+    }
     if (Object.entries(next.bindings ?? {}).some(([key, b]) => key !== dataset && b.stateKey === binding.stateKey)) throw new Error('Another saved scope already uses this runtime scope');
-    const known = new Set(next.imports[dataset].flatMap(m => [m.originalId, ...(m.currentId ? [m.currentId] : [])]));
-    const active = object(object(state.clusterAssignments)[binding.stateKey]);
-    if (binding.stateKey !== dataset && Object.keys(active).some(id => !known.has(id))) throw new Error('The runtime scope contains unrelated membership; choose a separate panel');
     next.bindings = { ...next.bindings, [dataset]: binding };
-    for (const field of ['clusterAssignments', 'selectedReadIds', 'svCarrierEvidence', 'filteredReadIds', 'readSortOrder']) {
-      if (input[field]?.[binding.stateKey] === undefined && input[field]?.[dataset] !== undefined) input[field][binding.stateKey] = clone(input[field][dataset]);
+    const aliases = new Map(members.map(m => [m.originalId, m.currentId!]));
+    const currentIds = new Set(aliases.values());
+    for (const field of membershipFields) {
+      const historical = object(state[field])[dataset] ?? object(next.legacySnapshot[field])[dataset];
+      const seen = new Map<string, string>();
+      for (const [id, value] of Object.entries(object(historical))) {
+        const current = aliases.get(id) ?? id, encoded = JSON.stringify(value);
+        if (seen.has(current) && seen.get(current) !== encoded) throw new Error('Conflicting historical membership');
+        seen.set(current, encoded);
+      }
+      const translated = translateMembership(historical, aliases);
+      const proposed = translated == null ? translated : Array.isArray(translated) ? translated.filter(id => currentIds.has(id))
+        : Object.fromEntries(Object.entries(object(translated)).filter(([id]) => currentIds.has(id)));
+      const active = translateMembership(object(state[field])[binding.stateKey], aliases);
+      const conflict = Array.isArray(active) ? active.some(id => !Array.isArray(proposed) || !proposed.includes(id))
+        : Object.entries(object(active)).some(([id, value]) => JSON.stringify(object(proposed)[id]) !== JSON.stringify(value));
+      if (binding.stateKey !== dataset && conflict) throw new Error('The runtime scope contains unrelated membership or conflicting membership; choose a separate panel');
+      if (proposed !== undefined) input[field] = { ...object(input[field]), [binding.stateKey]: clone(proposed) };
     }
     const def = object(state.svSplits)[dataset] ?? next.targets[dataset]?.snapshot;
+    const activeDef = object(state.svSplits)[binding.stateKey];
+    const canonicalDef = (value: any) => { const { frozenImport, datasetId, ...rest } = object(value); return rest; };
+    if (binding.stateKey !== dataset && activeDef && JSON.stringify(canonicalDef(activeDef)) !== JSON.stringify(canonicalDef(def))) {
+      throw new Error('The runtime scope contains a different target; choose a separate panel');
+    }
     if (def?.t === 'I' || def?.t === 'D') input.svSplits = { ...object(state.svSplits), [binding.stateKey]: { ...clone(def), datasetId: binding.datasetId, frozenImport: true } };
     const labels = object(state.clusterGroupLabels)[dataset];
     if (labels) input.clusterGroupLabels = { ...object(state.clusterGroupLabels), [binding.stateKey]: clone(labels) };
   }
   const restored = restoreHistoricalMembership(input, next);
-  if (requestedBinding) {
+  if (destination) {
     if (input.svSplits) restored.svSplits = input.svSplits;
     if (input.clusterGroupLabels) restored.clusterGroupLabels = input.clusterGroupLabels;
   }
