@@ -13,6 +13,7 @@ import { create } from 'zustand';
 import { addDataset } from '../../../api/datasets';
 import { attachPanelGenome } from '../../../api/panelGenomes';
 import { useBrowserStore } from '../../../stores/browserStore';
+import { serializeState } from '../../../stores/historySlice';
 import { usePanelGenomeStore } from '../../../stores/panelGenomeStore';
 import { createDefaultSubTracks, generatePanelId } from '../../../stores/utils';
 import { registerViewLink, withLinkedPanelMoving, type Span } from '../../../utils/panelExtensions';
@@ -40,7 +41,11 @@ function publishCandidates(panelId: string, mapping: SpanMapping) {
 // ── Generations and corrections ─────────────────────────────────────────────
 
 const generation = new Map<string, number>();
-interface Correction { gen: number; linkId: string; chrom: string; datasetId: string; kind: 'panel' | 'main' }
+interface Correction {
+  gen: number; linkId: string; chrom: string; datasetId: string; kind: 'panel' | 'main';
+  /** Undo history when it was scheduled: the step the move that scheduled it adds (at most one) absorbs it. */
+  history: { length: number; at: number };
+}
 const pending = new Map<string, Correction>();
 
 function bump(panelId: string): number {
@@ -94,7 +99,11 @@ export function sourceViewFor(panel: PanelConfig, main: Span): { span: Span; map
 }
 
 function schedule(panel: PanelConfig, gen: number, chrom: string, kind: Correction['kind']) {
-  pending.set(panel.id, { gen, linkId: panel.liftLink!.id, chrom, datasetId: panel.liftLink!.datasetId, kind });
+  const prior = pending.get(panel.id);
+  // A move rescheduled by its own approximate correction keeps the original move's history mark.
+  const history = prior && prior.gen === gen ? prior.history
+    : { length: useBrowserStore.getState()._historyStack?.length ?? 0, at: Date.now() };
+  pending.set(panel.id, { gen, linkId: panel.liftLink!.id, chrom, datasetId: panel.liftLink!.datasetId, kind, history });
 }
 
 export const liftViewLink = {
@@ -129,6 +138,17 @@ function updateLink(panelId: string, patch: Partial<LiftLinkConfig>) {
   useBrowserStore.setState(s => ({ panels: s.panels.map(p => p.id === panelId && p.liftLink ? { ...p, liftLink: { ...p.liftLink, ...patch } } : p) }));
 }
 
+/** A main-view correction belongs to the move that scheduled it: when that move's undo step is still the latest
+ * (nothing else was recorded or undone since), the corrected view replaces the step's state, so Undo/Redo keep the
+ * panel and the main view together. */
+function foldCorrection(c: Correction): void {
+  const st = useBrowserStore.getState();
+  const stack = st._historyStack ?? [];
+  const current = stack[st._historyPointer];
+  if (!current || st._historyPointer !== stack.length - 1 || stack.length > c.history.length + 1 || current.timestamp < c.history.at) return;
+  st.foldIntoCurrentSnapshot?.(serializeState(st));
+}
+
 /** Apply what the navigation data that just arrived lets a linked panel correct (at most once per scheduled move). */
 export function applyCorrections(datasetId?: string): void {
   for (const [panelId, c] of [...pending]) {
@@ -156,6 +176,7 @@ export function applyCorrections(datasetId?: string): void {
       const m = out.mapping;
       if (m.chrom === st.chrom && m.start === st.start && m.end === st.end) { if (!m.exact) schedule(panel, generation.get(panelId)!, v.chrom, 'main'); continue; }
       withLinkedPanelMoving(panelId, () => st.setViewport(m.chrom, m.start, m.end));
+      foldCorrection(c);
       if (!m.exact) schedule(panel, generation.get(panelId)!, v.chrom, 'main');
     }
   }

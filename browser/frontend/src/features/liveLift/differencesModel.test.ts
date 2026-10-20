@@ -64,3 +64,16 @@ describe('inspection table model', () => {
     expect(m.misphased.map(r => r.id)).toEqual(['b']); expect(m.carriers).toEqual(['a', 'd']);
   });
 });
+
+describe('carrier highlights from an inspection', () => {
+  it('scope to the carriers\' display rows and judge a read-supported edit by its bases', async () => {
+    const { carrierHighlight } = await import('./differencesModel');
+    const rows = [{ id: 'q', row_id: 'lift|0|q|mat', hap_label: 'MAT', allele: 'other', read_bases: 'G' },
+      { id: 'r', row_id: 'lift|0|r|mat', hap_label: 'MAT', allele: 'hg002', read_bases: 'A' }] as DifferenceInspection[];
+    const m = inspectionModel(rows, 'MAT', { source: 'reads', kind: 'snv', alt: 'G' });
+    expect(m.carriers).toEqual(['q']);
+    expect(carrierHighlight(m.carrierRows, 'lift')).toEqual({ ids: ['q'], scopedRows: { lift: new Set(['lift|0|q|mat']) } });
+    expect(inspectionModel(rows, 'MAT').carriers).toEqual(['r']);
+    expect(carrierHighlight([{ id: 'x' }] as DifferenceInspection[], 'lift')).toEqual({ ids: ['x'] });
+  });
+});

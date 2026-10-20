@@ -33,6 +33,8 @@ export function LiveLiftDialog() {
 
   // The map this dialog chose itself for a previous BAM: replaced when another BAM opens it (a typed one stays).
   const suggestedManifest = useRef<string | null>(null);
+  const manifestNow = useRef(manifest);
+  manifestNow.current = manifest;
   // Opened on a loaded BAM: it is the source, and maps found near it (or in the Library) are offered.
   useEffect(() => {
     if (!open || !prefill?.length) { setSuggestions(null); return; }
@@ -42,12 +44,11 @@ export function LiveLiftDialog() {
       if (!live) return;
       setSuggestions(r);
       const best = r.maps.find(m => m.matches_bam && !m.error)?.manifest ?? '';
-      setManifest(m => {
-        const ours = !m || m === suggestedManifest.current;
-        if (!ours) return m;
-        suggestedManifest.current = best || null;
-        return best;
-      });
+      // Decided outside the state updater (React may run an updater twice).
+      const current = manifestNow.current;
+      if (current && current !== suggestedManifest.current) return;
+      suggestedManifest.current = best || null;
+      setManifest(best);
     }).catch(() => { if (live) setSuggestions({ maps: [], help: '' }); });
     return () => { live = false; };
   }, [open, prefill]);

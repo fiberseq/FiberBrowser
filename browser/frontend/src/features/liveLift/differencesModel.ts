@@ -17,12 +17,31 @@ export function nextDifference(items: Difference[], start: number, end: number, 
   return items.filter(d => differenceSize(d) >= minBp && (direction > 0 ? d.t_start >= end : d.t_end <= start))
     .sort((a, b) => direction * (a.t_start - b.t_start))[0] ?? null;
 }
-export function inspectionModel(rows: DifferenceInspection[], preferredHap?: string | null) {
+/** Whether an inspected row carries the difference: an assembly difference's carriers have its assembly allele; a
+ * read-supported edit (no assembly allele: its alternate is what the reads show) is carried by rows with its bases. */
+export function carriesDifference(d: Pick<Difference, 'source' | 'kind' | 'alt'> | null | undefined,
+  row: Pick<DifferenceInspection, 'allele' | 'read_bases' | 'carries_insertion' | 'carries_deletion'>): boolean {
+  if (d?.source !== 'reads') return row.allele === 'hg002' || !!row.carries_insertion || !!row.carries_deletion;
+  if (d.kind === 'deletion') return row.allele === 'deleted' || !!row.carries_deletion;
+  if (d.alt) return (row.read_bases ?? '').toUpperCase() === d.alt.toUpperCase();
+  return row.allele === 'other' || row.allele === 'grch38';
+}
+
+/** Carrier rows as a read highlight: their display rows (analysis ids) in `datasetId` when every row has one, so
+ * the same QNAME in another dataset or library is not outlined; their names otherwise. */
+export function carrierHighlight(rows: Pick<DifferenceInspection, 'id' | 'row_id'>[], datasetId: string): { ids: string[]; scopedRows?: Record<string, Set<string>> } {
+  const ids = [...new Set(rows.map(r => r.id))];
+  return rows.length && rows.every(r => r.row_id) ? { ids, scopedRows: { [datasetId]: new Set(rows.map(r => r.row_id!)) } } : { ids };
+}
+
+export function inspectionModel(rows: DifferenceInspection[], preferredHap?: string | null,
+  difference?: Pick<Difference, 'source' | 'kind' | 'alt'> | null) {
   const ordered = [...rows].sort((a, b) => Number(b.hap_label === preferredHap) - Number(a.hap_label === preferredHap));
   const summary: Record<string, Record<string, number>> = {};
   for (const r of ordered) { const hap = summary[r.hap_label] ??= {}; hap[r.allele] = (hap[r.allele] ?? 0) + 1; }
+  const carrierRows = rows.filter(r => carriesDifference(difference, r));
   return { rows: ordered, summary, misphased: rows.filter(r => r.allele === 'grch38'),
-    carriers: rows.filter(r => r.allele === 'hg002' || r.carries_insertion || r.carries_deletion).map(r => r.id) };
+    carriers: carrierRows.map(r => r.id), carrierRows };
 }
 export function haplotypeSummary(alleles: Record<string, number>) {
   return Object.entries(alleles).map(([allele, n]) => allele === 'same_as_grch38'

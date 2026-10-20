@@ -8,7 +8,7 @@ import { useReadActionsStore } from '../../stores/readActionsStore';
 import { useBrowserStore } from '../../stores/browserStore';
 import { getDifferenceReads } from '../liveLift/api';
 import { useDifferenceSelection, expandDifference } from '../liveLift/inspectionStore';
-import { differenceDescription, haplotypeSummary, inspectionModel } from '../liveLift/differencesModel';
+import { carrierHighlight, differenceDescription, haplotypeSummary, inspectionModel } from '../liveLift/differencesModel';
 import type { DifferenceReadsResponse } from '../liveLift/differenceTypes';
 import { liveLiftHaplotypeColor } from '../liveLift/palette';
 import { IdentifyTab, identifyLens } from '../insertion/IdentifyTab';
@@ -46,19 +46,21 @@ export function AssemblyInspection({ panel, dataset, anchor }: { panel: PanelCon
     return () => { controller.abort(); sequenceRequest.current?.abort(); };
   }, [current, d, dataset.id, dataset.live_lift?.key, panel.liftHap, readRequested]);
   const preferredHap = data?.preferred_hap ?? d?.hap_label;
-  const model = useMemo(() => inspectionModel(data?.rows ?? [], preferredHap), [data, preferredHap]);
+  const model = useMemo(() => inspectionModel(data?.rows ?? [], preferredHap, d), [data, preferredHap, d]);
   useEffect(() => {
     if (!current) return;
     // Reuse the read action outline without pinning a cohort (pins would fetch
     // reads again on expand). Preserve the user's previous highlight on close.
     const prior = useReadActionsStore.getState().highlight;
-    const put = () => useReadActionsStore.setState({ highlight: { ids: new Set(model.carriers), pulseUntil: null, scrollTo: null, scrolled: new Set(), nonce: Date.now() } });
+    const { ids, scopedRows } = carrierHighlight(model.carrierRows, dataset.id);
+    const put = () => useReadActionsStore.setState({ highlight: { ids: new Set(ids), ...(scopedRows ? { scopedRows } : {}),
+      pulseUntil: null, scrollTo: null, scrolled: new Set(), nonce: Date.now() } });
     if (model.carriers.length) put();
 
     const key = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); useDifferenceSelection.getState().select(null); } };
     document.addEventListener('keydown', key, true);
     return () => { document.removeEventListener('keydown', key, true); useReadActionsStore.setState({ highlight: prior }); };
-  }, [current, model, readRequested]);
+  }, [current, model, readRequested, dataset.id]);
   const candidate = data?.rows.find(r => (d?.source === 'reads' ? r.hap_label === preferredHap && r.ins_id : r.ins_id === d?.id)
     && r.carries_insertion && (!r.alignment_ins_id || r.alignment_ins_id === r.ins_id) && (r.read_bases_length ?? r.read_bases.length) <= 50_000);
   const sequence = data?.sequence?.ins_id === (d?.source === 'reads' ? candidate?.ins_id : d?.id) ? data?.sequence?.sequence : undefined;

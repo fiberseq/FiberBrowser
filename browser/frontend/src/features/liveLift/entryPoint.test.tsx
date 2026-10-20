@@ -1,4 +1,4 @@
-import { act } from 'react';
+import { act, StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useLiveLiftStore } from './store';
@@ -56,7 +56,7 @@ describe('viewing a loaded BAM on another assembly', () => {
   it('opening from another BAM selects that BAM\'s map; a map the user typed stays', async () => {
     vi.mocked(suggestLiftMaps).mockImplementation(async near => ({ near, help: '', maps: [
       { manifest: near.startsWith('/a') ? '/a.graphlift.json' : '/b.graphlift.json', where: 'next to the BAM', matches_bam: true }] }));
-    act(() => root.render(<LiveLiftDialog />));
+    act(() => root.render(<StrictMode><LiveLiftDialog /></StrictMode>));  // as the app mounts it
     const manifest = () => (document.querySelector('[data-testid="live-lift-manifest"]') as HTMLInputElement).value;
     act(() => useLiveLiftStore.getState().openFor(['/a.bam']));
     await flush();

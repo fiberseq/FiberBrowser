@@ -336,7 +336,8 @@ export function mapSpan(datasetId: string, key: string, direction: 'toSource' | 
     if (wantExact) for (let t = Math.max(0, Math.floor((centre - reach) / summary.tile_bp)); t <= Math.floor((centre + reach) / summary.tile_bp); t++) {
       const loaded = s.tiles.get(tileKey(side, span.chrom, t));
       if (loaded && typeof loaded === 'object') near.push(loaded);
-      else if (loaded !== 'failed') { complete = false; if (loaded === undefined) requestTile(s, side, span.chrom, t); }
+      // A tile that failed may hold the nearer flank: the mapping stays approximate (the outline decides).
+      else { complete = false; if (loaded === undefined) requestTile(s, side, span.chrom, t); }
     }
     if (complete && near.length) {
       let best: { tile: (typeof near)[number]; i: number; d: number } | null = null;

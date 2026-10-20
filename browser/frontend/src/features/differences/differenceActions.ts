@@ -15,7 +15,9 @@ import { fetchJson } from '../../api/sharedFetch';
 import { useBrowserStore } from '../../stores/browserStore';
 import { useReadActionsStore } from '../../stores/readActionsStore';
 import type { ContextMenuEntry } from '../../components/tracks/read-track/ReadContextMenu';
-import type { Difference, DifferenceInspection } from '../liveLift/differenceTypes';
+import type { Difference } from '../liveLift/differenceTypes';
+import { carrierHighlight, carriesDifference } from '../liveLift/differencesModel';
+export { carriesDifference };
 import { getDifferenceReads } from '../liveLift/api';
 import { expandDifference, useDifferenceSelection, type DifferenceSelection } from './selectionStore';
 import { expandableAltBlock } from './capabilities';
@@ -76,19 +78,9 @@ export async function highlightCarriers(s: DifferenceSelection, readsInView: num
     if (controller.signal.aborted) return;
     const rows = r.rows.filter(row => (!hap || row.hap_label === hap) && carriesDifference(d, row));
     if (!rows.length) { actions.clearHighlight(); return; }
-    // Rows are this dataset's display rows (analysis ids): the same QNAME in another dataset or library is not one.
-    const scoped = rows.every(row => row.row_id) ? { [s.datasetId]: new Set(rows.map(row => row.row_id!)) } : undefined;
-    actions.highlightReads([...new Set(rows.map(row => row.id))], { scopedRows: scoped });
+    const { ids, scopedRows } = carrierHighlight(rows, s.datasetId);
+    actions.highlightReads(ids, { scopedRows });
   } catch { /* the selection's guide line remains */ }
-}
-
-/** Whether an inspected row carries the difference: an assembly difference's carriers have its assembly allele; a
- * read-supported edit (no assembly allele: its alternate is what the reads show) is carried by rows with its bases. */
-export function carriesDifference(d: Pick<Difference, 'source' | 'kind' | 'alt'>, row: Pick<DifferenceInspection, 'allele' | 'read_bases' | 'carries_insertion' | 'carries_deletion'>): boolean {
-  if (d.source !== 'reads') return row.allele === 'hg002' || !!row.carries_insertion || !!row.carries_deletion;
-  if (d.kind === 'deletion') return row.allele === 'deleted' || !!row.carries_deletion;
-  if (d.alt) return (row.read_bases ?? '').toUpperCase() === d.alt.toUpperCase();
-  return row.allele === 'other' || row.allele === 'grch38';
 }
 
 /** The plain/⌘/Shift click on a difference marker. `select`: Shift-click (the row's own selection). */
