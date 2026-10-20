@@ -1,3 +1,4 @@
+import { useTrackMenuStore } from '../../stores/trackMenuStore';
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -31,6 +32,8 @@ const diff: Difference = { id: 'MAT:src:100-2453:insertion', hap: 'h1', hap_labe
 const response = (items = [diff]): DifferencesResponse => ({ dataset_id: 'lift', lift_key: 'key-1', chrom: 'chr1', start: 0, end: 1000, mode: 'items', items, bins: [], bin_bp: null, novel: [] });
 let host: HTMLDivElement, root: Root;
 const click = (el: Element) => act(() => { el.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+// ⌘/Ctrl-click opens the inspector (a plain click expands an insertion or highlights carriers).
+const inspectClick = (el: Element) => act(() => { el.dispatchEvent(new MouseEvent('click', { bubbles: true, metaKey: true })); });
 const settle = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(160); }); };
 /** The panel's reads in view: within the auto-load bound unless `n` exceeds it. */
 const feed = (n = 40, stateKey = 'mat-state') => useTrackFeedStore.getState().publish(stateKey, { datasetId: 'lift', chrom: 'chr1', start: 0, end: 1000,
@@ -51,7 +54,7 @@ afterEach(() => { act(() => root.unmount()); host.remove(); vi.useRealTimers(); 
 const renderStrip = (p = panel) => act(() => root.render(<PanelDisplayContext.Provider value={p.id}><DifferencesStrip panel={p} dataset={dataset} width={1000} /></PanelDisplayContext.Provider>));
 
 describe('differences strip and inspection', () => {
-  it('a click opens the inspector and loads its observations; Shift-click only selects', async () => {
+  it('⌘-click opens the inspector and loads its observations; a plain or Shift-click only selects', async () => {
     const snv: Difference = { ...diff, id: 'assembly-snv', kind: 'snv', t_end: 501, ref_bp: 1, alt_bp: 1 };
     vi.mocked(getDifferences).mockResolvedValue(response([snv]));
     renderStrip(); await settle();
@@ -60,8 +63,13 @@ describe('differences strip and inspection', () => {
     expect(useDifferenceSelection.getState().selection).toMatchObject({ difference: { id: snv.id }, inspect: false });
     expect(document.querySelector('[data-testid="live-lift-diff-popover"]')).toBeNull();
     expect(getDifferenceReads).not.toHaveBeenCalled();
-
+    // A plain click on an SNV highlights its carriers (one lightweight observation load), without the inspector.
     click(item); await settle();
+    expect(document.querySelector('[data-testid="live-lift-diff-popover"]')).toBeNull();
+    expect(useDifferenceSelection.getState().selection).toMatchObject({ difference: { id: snv.id }, inspect: false });
+    vi.mocked(getDifferenceReads).mockClear();
+
+    inspectClick(item); await settle();
     const inspection = document.querySelector('[data-testid="live-lift-diff-popover"]')!;
     expect(inspection).not.toBeNull();
     expect(getDifferenceReads).toHaveBeenCalledTimes(1);
@@ -74,7 +82,7 @@ describe('differences strip and inspection', () => {
     const snv: Difference = { ...diff, id: 'assembly-snv', kind: 'snv', t_end: 501, ref_bp: 1, alt_bp: 1 };
     vi.mocked(getDifferences).mockResolvedValue(response([snv]));
     renderStrip(); await settle();
-    click(host.querySelector('[data-testid="live-lift-diff-item"]')!); await settle();
+    inspectClick(host.querySelector('[data-testid="live-lift-diff-item"]')!); await settle();
     const inspection = document.querySelector('[data-testid="live-lift-diff-popover"]')!;
     expect(getDifferenceReads).not.toHaveBeenCalled();
     expect(inspection.querySelector('[data-testid="difference-load-reason"]')?.textContent).toContain(`${(AUTO_LOAD_MAX_READS + 1).toLocaleString()} reads in view`);
@@ -83,22 +91,27 @@ describe('differences strip and inspection', () => {
     expect(getDifferenceReads).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps its header on one row at panel widths: toggles never wrap, the status truncates, narrow panels shorten the title', async () => {
-    for (const width of [1000, 380]) {
-      act(() => root.render(<PanelDisplayContext.Provider value={panel.id}><DifferencesStrip panel={panel} dataset={dataset} width={width} /></PanelDisplayContext.Provider>));
-      await settle();
-      const header = host.querySelector('[data-testid="live-lift-diff-header"]')!;
-      expect(header.className).toContain('whitespace-nowrap');
-      expect(header.className).toContain('overflow-hidden');
-      for (const source of ['assembly', 'reads']) {
-        const label = header.querySelector(`[data-testid="live-lift-diff-source-${source}"]`)!;
-        expect(label.className).toContain('flex-shrink-0');
-        expect(label.textContent).toBe(source);
-      }
-      const status = header.querySelector('span.truncate')!;
-      expect(status.getAttribute('title')).toBe(status.textContent);
-      expect(header.querySelector('strong')!.textContent).toBe(width < 420 ? 'Diffs' : 'Differences');
-    }
+  it('keeps its row like other tracks: a label and arrows, the options in its right-click menu', async () => {
+    renderStrip(); await settle();
+    const header = host.querySelector('[data-testid="live-lift-diff-header"]')!;
+    expect(header.querySelectorAll('input, select')).toHaveLength(0);
+    expect(header.querySelector('[data-testid="live-lift-diff-label"]')!.getAttribute('title')).toContain('Right-click');
+    expect(host.querySelector('[data-testid="live-lift-diff-item"]')!.getAttribute('title')).toContain('click: expand · ⌘-click / right-click: inspect');
+    act(() => host.querySelector('[data-testid="live-lift-diff-strip"]')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 5, clientY: 5 })));
+    const menu = useTrackMenuStore.getState().menu!;
+    const labels = (menu.own ?? []).flatMap(e => e.kind === 'item' || e.kind === 'submenu' || e.kind === 'heading' ? [e.label] : []);
+    expect(labels).toEqual(expect.arrayContaining(['Differences row', '✓ Assembly differences (the map)', 'Show the table', 'Live-lift settings…']));
+    expect(labels.some(l => l.startsWith('Insertions on reads: ticks'))).toBe(true);
+    act(() => menu.onOwn!('opt:reads'));
+    expect(useBrowserStore.getState().panels.find(p => p.id === panel.id)?.differenceSources).toEqual({ assembly: true, reads: true });
+    act(() => menu.onOwn!('opt:min:50'));
+    expect(useBrowserStore.getState().panels.find(p => p.id === panel.id)?.liveLiftMinBp).toBe(50);
+    act(() => menu.onOwn!('opt:badges:labels'));
+    expect(useBrowserStore.getState().differencesSession.options.readBadges).toBe('labels');
+    // On a marker the menu starts with the difference's own actions.
+    act(() => host.querySelector('[data-testid="live-lift-diff-item"]')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 5, clientY: 5 })));
+    const marker = (useTrackMenuStore.getState().menu!.own ?? []).flatMap(e => e.kind === 'item' ? [e.label] : []);
+    expect(marker.slice(0, 3)).toEqual(['Inspect…', 'Expand insertion', 'Split by carrier…']);
   });
   it('is flag gated and debounces the dataset, lift key, haplotype and view', async () => {
     useLiveLiftStore.setState({ enabled: false }); renderStrip(); await settle();
@@ -112,10 +125,15 @@ describe('differences strip and inspection', () => {
   it('renders pooled MAT/PAT lanes and an expandable +2.4 kb item', async () => {
     renderStrip({ ...panel, liftHap: undefined }); await settle();
     expect(host.querySelectorAll('[data-difference-id]')).toHaveLength(1);
+    // A plain click on an insertion expands it in place (no inspector); a second one collapses it.
     click(host.querySelector('[data-testid="live-lift-diff-item"]')!);
     await settle();
-    click([...document.querySelectorAll('button')].find(b => b.textContent === 'Expand insertion')!);
     expect(useBrowserStore.getState().liveLiftExpansions.main[0].length).toBe(2353);
+    expect(document.querySelector('[data-testid="live-lift-diff-popover"]')).toBeNull();
+    click(host.querySelector('[data-testid="live-lift-diff-item"]')!);
+    expect(useBrowserStore.getState().liveLiftExpansions.main).toHaveLength(0);
+    inspectClick(host.querySelector('[data-testid="live-lift-diff-item"]')!);
+    await settle();
     expect(document.querySelector('[data-testid="live-lift-diff-popover"]')?.textContent).toContain('Load molecule calls');
     act(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
     expect(document.querySelector('[data-testid="live-lift-diff-popover"]')).toBeNull();
@@ -135,7 +153,7 @@ describe('differences strip and inspection', () => {
         chromatin: { state: 'nucleosome', layer: 'nuc', nearest_m6a_bp: 4, orientation: '+' } })) as never,
       summary: {}, capped: false, max_records: 500 });
     vi.mocked(getDifferences).mockResolvedValue(response([{ ...diff, id: 'snv', kind: 'snv', t_end: 501, ref_bp: 1, alt_bp: 1 }]));
-    renderStrip(); await settle(); click(host.querySelector('[data-testid="live-lift-diff-item"]')!); await settle();
+    renderStrip(); await settle(); inspectClick(host.querySelector('[data-testid="live-lift-diff-item"]')!); await settle();
     expect(document.querySelector('[data-testid="live-lift-misphased"]')?.textContent).toContain('1 GRCh38-allele');
     expect(document.querySelector('table')?.textContent).toContain('nucleosome (nuc) · m6A 4 bp');
     // The carriers are outlined (not pinned: no second read fetch).
@@ -153,7 +171,7 @@ describe('differences strip and inspection', () => {
     vi.mocked(getDifferenceReads).mockResolvedValue({ dataset_id: 'lift', lift_key: 'key-1', chrom: 'chr1', pos: 500, end: 501,
       rows: [...Array.from({ length: 35 }, (_, i) => ({ ...row, id: `pat-${i}`, molecule: `pat-${i}`, hap_label: 'PAT',
         read_bases: 'A', hg002: 'A', allele: 'same_as_grch38' as const })), row], summary: {}, capped: false, max_records: 500 });
-    renderStrip(); await settle(); click(host.querySelector('[data-testid="live-lift-diff-item"]')!); await settle();
+    renderStrip(); await settle(); inspectClick(host.querySelector('[data-testid="live-lift-diff-item"]')!); await settle();
     expect(getDifferenceReads).toHaveBeenCalledWith(expect.objectContaining({ itemId: snv.id, liftHap: 'MAT' }), expect.any(AbortSignal));
     const first = document.querySelector('tbody tr')!;
     expect(first.getAttribute('data-hap')).toBe('MAT'); expect(first.getAttribute('data-allele')).toBe('hg002');
@@ -169,7 +187,7 @@ describe('differences strip and inspection', () => {
         source_pos: { contig: 'src', start: 100, end: 2453 }, read_bases: 'A'.repeat(60), read_bases_length: 2350,
         hg002: null, grch38: '', allele: 'hg002', carries_insertion: true, mol_bp: 2350, identity: 97.3,
         chromatin: { state: 'none', layer: null, nearest_m6a_bp: null, orientation: '+' } }], summary: {}, capped: false, max_records: 500 });
-    renderStrip(); await settle(); click(host.querySelector('[data-testid="live-lift-diff-item"]')!); await settle();
+    renderStrip(); await settle(); inspectClick(host.querySelector('[data-testid="live-lift-diff-item"]')!); await settle();
     expect(document.querySelector('table')?.textContent).toContain('(2,350 bp)');
     expect(document.querySelector('table')?.textContent).toContain('97.3%');
   });
@@ -231,8 +249,11 @@ describe('badge click and sibling axes', () => {
     act(() => handlers!.handleClick({ currentTarget: canvas, clientX: 501, clientY: 8, shiftKey: false, ctrlKey: false, metaKey: false } as never));
     expect(useBrowserStore.getState().liveLiftExpansions.main[0].ins_id).toBe(diff.id);
     expect(host.querySelectorAll('[data-testid="live-lift-expanded-block"]')).toHaveLength(2);
-    // The same click opens the insertion's inspector.
-    expect(useDifferenceSelection.getState().selection).toMatchObject({ difference: { id: diff.id } });
+    // A plain click only expands (the inspector is ⌘-click or right-click).
+    expect(useDifferenceSelection.getState().selection).toMatchObject({ difference: { id: diff.id }, inspect: false });
+    // ⌘/Ctrl-click on the badge (now beside its column) inspects it.
+    const x = 1 + makeAxis(0, 1000, 1000, false, useBrowserStore.getState().liveLiftExpansions.main).toX(500);
+    act(() => handlers!.handleClick({ currentTarget: canvas, clientX: x, clientY: 24 + 8, shiftKey: false, ctrlKey: true, metaKey: true } as never));   // under the column labels
     expect(useDifferenceSelection.getState().selection?.inspect).not.toBe(false);
     expect(getDifferences).toHaveBeenCalledWith(expect.objectContaining({ start: diff.t_start, end: diff.t_start + 1 })); expect(getDifferenceReads).not.toHaveBeenCalled();
     click(host.querySelector('[data-testid="live-lift-expanded-collapse"]')!);
@@ -244,7 +265,7 @@ describe('badge click and sibling axes', () => {
   const read: CompactRead = { id: 'tiny', intervals: [], live_lift: { v: 1, hap_label: 'MAT', source: { contig: 'src', start: 0, end: 3000, orientation: 'forward' },
     segments: [], badges: [[500, 'source_insertion', 1, 1, 'I']], badge_ids: ['MAT:src:100-101:insertion'] } };
   const canonical: Difference = { ...diff, id: read.live_lift!.badge_ids![0], alt_bp: 1, src: { contig: 'src', start: 100, end: 101 }, grch38: '', alt: 'C' };
-  const selectBadge = () => selectReadDifference(read, read.live_lift!.badges![0], 500, { datasetId: 'lift', stateKey: 'mat-state', chrom: 'chr1', start: 0 });
+  const selectBadge = () => selectReadDifference(read, read.live_lift!.badges![0], 500, { datasetId: 'lift', stateKey: 'mat-state', chrom: 'chr1', start: 0 }, 'inspect');
   it('uses the strip map item for a badge instead of inventing coordinates and alleles', async () => {
     vi.mocked(getDifferences).mockResolvedValue(response([canonical]));
     renderStrip(); await settle(); act(() => { selectBadge(); }); await settle();

@@ -9,16 +9,16 @@ import { registerTrackKind } from '../../../components/tracks/trackRegistry';
 import { registerTrackRenderer } from '../../../components/tracks/trackRenderers';
 import { declareContribution } from '../../../plugins/packRegistry';
 import { useBrowserStore } from '../../../stores/browserStore';
-import { useDifferenceSelection } from '../../differences/selectionStore';
 import { liveLiftHaplotypeColor } from '../palette';
 import { liftHapLabels } from '../types';
 import { useLiveLiftStore } from '../store';
 import { LIFT_RIBBON_HEIGHT, LiftRibbonStrip } from './LiftRibbonStrip';
 import {
-  LIFT_RIBBON_TRACK, chooseLinkChain, jumpLinkedSource, linkedSourcePanels, openLinkedSourceView, registerLiftLinking,
+  LIFT_RIBBON_TRACK, chooseLinkChain, openLinkedSourceView, registerLiftLinking,
   toggleLinkFlip, useLiftLinkCandidates,
 } from './liftLink';
 import { loadedSummary } from './navigation';
+import { followExpansions } from './sourceJump';
 
 /** The "…" items of a lifted panel: open (or show) its haplotype's linked source view. */
 export function LiftedPanelLinkItems({ ctx }: { ctx: PanelHeaderContext }) {
@@ -90,22 +90,6 @@ function useLinkedSourceHeader(ctx: PanelHeaderContext) {
   return { chipTexts: [text], chips, menu, wantsMenu: true, menuTitle: 'linked source view' };
 }
 
-/** Clicking an insertion in a lifted panel shows its inserted bases in that haplotype's linked source panel. */
-function followInsertionClicks() {
-  let last: unknown = null;
-  useDifferenceSelection.subscribe(({ selection }) => {
-    if (selection === last) return;
-    last = selection;
-    const d = selection?.difference;
-    if (!selection || !d || !useLiveLiftStore.getState().enabled) return;
-    if (d.kind !== 'insertion' && d.kind !== 'replacement') return;
-    if (!d.src?.contig || d.src.start == null || d.src.end == null) return;
-    for (const panel of linkedSourcePanels(selection.datasetId, d.hap_label)) {
-      jumpLinkedSource(panel.id, { contig: d.src.contig, start: d.src.start, end: d.src.end });
-    }
-  });
-}
-
 let done = false;
 export function registerLiftLinkingUi(): void {
   if (done) return;
@@ -123,5 +107,5 @@ export function registerLiftLinkingUi(): void {
     render: ({ panel, width, height, sidebarWidth }) => <LiftRibbonStrip panel={panel} width={width} height={height} sidebarWidth={sidebarWidth} />,
   });
   registerPanelHeaderExtension(useLinkedSourceHeader);
-  followInsertionClicks();
+  followExpansions();
 }

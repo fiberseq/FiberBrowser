@@ -5,12 +5,36 @@ session alias). Native BAMs retain their independent geometry summary, clip
 piles, keyboard navigation, combination selection and carrier actions without
 an assembly. Assembly lanes work without read discovery; the saved reads source
 option explicitly requests composed discovery. The navigation table and read
-markers share the inspector. A click on a difference (a Differences item, an
-SV in the row, or a read's badge) opens the inspector; Shift/⌘/Ctrl-click only
-selects it. A click on an assembly insertion's badge also expands the insertion
-across the view. Expanded columns carry a short label (`MAT +2.4 kb`); the
-tooltip and inspector give the source and both spans (`Assembly MAT · ref 0 →
-alt 2,353 bp`). On the native canvas, `i` inspects the keyboard-focused event.
+markers share the inspector.
+
+Clicks on a difference work the same way on the Differences row, on the
+native SV row and on a read's badge:
+
+| Action | Insertion or replacement | SNV, deletion, other |
+|---|---|---|
+| Click | Expands it in place across the panels; a second click (or the column's ×) collapses it | Highlights its carrier reads |
+| Shift-click | Selects it (on the native SV row it also joins the feature selection) | Same |
+| ⌘/Ctrl-click, or right-click → Inspect… | Opens the inspector | Same |
+
+A marker's tooltip names these shortcuts (`click: expand · ⌘-click /
+right-click: inspect`). The right-click menu on a difference also offers
+Expand/Collapse, Highlight carrier reads, Split by carrier… (in the
+inspector), Show in the source view, and Copy sequence.
+
+The Differences row itself shows only its label, the ◀ ▶ arrows and the
+lanes. Its options are in its right-click menu and in the **Differences row**
+section of the Live-lift settings:
+- the sources shown (assembly differences, read-supported edits);
+- the minimum size;
+- the table;
+- **Insertions on reads**: Off, Ticks (the default) or Ticks with size.
+
+Ticks always keep a visible minimum size. Size labels need rows of at least
+7 px.
+
+Expanded columns carry a short label (`MAT +2.4 kb`); the tooltip and
+inspector give the source and both spans (`Assembly MAT · ref 0 → alt 2,353
+bp`). On the native canvas, `i` inspects the keyboard-focused event.
 
 The inspector has a single application host, including when a source panel is
 closed. It loads the per-read observed bases and chromatin by itself when the

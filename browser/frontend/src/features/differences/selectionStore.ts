@@ -163,11 +163,17 @@ export function selectReadDifference(read: CompactRead, badge: LiveLiftBadge | u
   const finish = (difference: Difference) => {
     if (version !== selectionVersion || useBrowserStore.getState().datasets.find(d => d.id === context.datasetId)?.live_lift?.key !== liftKey) return;
     const selection = { datasetId: context.datasetId, panelId: panel.id, viewKey: liveLiftViewKey(panel), chrom: context.chrom, difference };
-    // A click on a difference opens its inspector (observations load within the auto-load bound);
-    // an assembly insertion's badge also opens the insertion across the view.
-    useDifferenceSelection.getState().select(selection);
-    if (action === 'primary' && badge && difference.source === 'assembly'
-      && (difference.kind === 'insertion' || difference.kind === 'replacement') && difference.alt_bp >= 50) expandDifference(selection);
+    // ⌘/Ctrl-click or right-click: the inspector (observations load within the auto-load bound). A plain click on an
+    // assembly insertion's badge expands (or collapses) it across the view; on another difference it selects it
+    // (its guide line) without the inspector (differenceActions.ts).
+    if (action === 'inspect') { useDifferenceSelection.getState().select(selection); return; }
+    useDifferenceSelection.getState().select({ ...selection, inspect: false });
+    if (badge && difference.source === 'assembly' && (difference.kind === 'insertion' || difference.kind === 'replacement') && difference.alt_bp >= 50) {
+      const open = (useBrowserStore.getState().liveLiftExpansions?.[selection.viewKey] ?? [])
+        .find(e => e.ins_id === difference.id || e.alleles?.some(a => a.ins_id === difference.id));
+      if (open) useBrowserStore.getState().collapseLiveLift(selection.viewKey, open.ins_id);
+      else expandDifference(selection);
+    }
   };
   const canonical = findLoadedDifference(context.datasetId, liftKey, context.chrom, query);
   if (canonical) finish(canonical);

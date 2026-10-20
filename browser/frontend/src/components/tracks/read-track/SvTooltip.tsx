@@ -30,7 +30,7 @@ export function SvTooltip({ hover, width, height, datasetId, chrom }: {
           {(c.clip_support ?? 0) > 0 ? ` (${c.clip_support} clipped at the breakpoint)` : ''}
         </div>
         <div className="text-gray-300 text-[11px]">{c.putative ?? 0} putative · {c.conflicting ?? 0} conflicting (clip aligns elsewhere) · {c.ambiguous ?? 0} ambiguous</div>
-        <div className="text-gray-400 text-[11px]">Click: highlight its reads · Right-click: group or split the reads by it</div>
+        <div className="text-gray-400 text-[11px]">{c.t === 'I' ? 'Click: expand and highlight its reads' : 'Click: highlight its reads'} · ⌘-click: inspect · Right-click: inspect, group or split the reads by it</div>
       </div>
     );
   }

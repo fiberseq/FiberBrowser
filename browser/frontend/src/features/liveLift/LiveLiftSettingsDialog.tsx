@@ -1,4 +1,7 @@
 /** A lifted dataset's display settings after it was opened (each is part of its lift_key: caches start over). */
+import { MIN_SIZES } from './differencesModel';
+import { READ_BADGE_MODES, readBadgeMode, setDifferenceRowOptions, setReadBadgeMode } from '../differences/displayOptions';
+import type { LiveLiftBadgeMode } from '../../components/tracks/read-track/liveLiftCanvas';
 import { useEffect, useState } from 'react';
 import { create } from 'zustand';
 import { useBrowserStore } from '../../stores/browserStore';
@@ -23,6 +26,11 @@ export function LiveLiftSettingsDialog() {
   const [hatching, setHatching] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [advanced, setAdvanced] = useState<LiftSettings>({});
+  // The Differences row (browser display options, not part of the dataset's lift settings).
+  const firstPanel = useBrowserStore(st => st.panels.find(p => p.datasetId === datasetId));
+  const [rowSources, setRowSources] = useState({ assembly: true, reads: false });
+  const [rowMinBp, setRowMinBp] = useState(0);
+  const [badges, setBadges] = useState<LiveLiftBadgeMode>('ticks');
   const nativeDatasets = useBrowserStore(s => s.datasets).filter(d => d.data_type === 'bam');
   const [nativeProvenance, setNativeProvenance] = useState<Record<string, { groups: [string, string][]; policy: 'off' | 'by_molecule' }>>({});
   useEffect(() => {
@@ -35,9 +43,16 @@ export function LiveLiftSettingsDialog() {
     setError(null);
     setAdvanced(s);
     setNativeProvenance({});
+    setRowSources(firstPanel?.differenceSources ?? { assembly: true, reads: false });
+    setRowMinBp(firstPanel?.liveLiftMinBp ?? 0);
+    setBadges(readBadgeMode(useBrowserStore.getState()));
   }, [datasetId]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!datasetId || !dataset) return null;
   const save = async () => {
+    for (const p of useBrowserStore.getState().panels.filter(p => p.datasetId === datasetId)) {
+      setDifferenceRowOptions(p.id, { sources: rowSources, minBp: rowMinBp });
+    }
+    setReadBadgeMode(badges);
     const r = await updateLiftSettings(datasetId, {
       ...advanced,
       g_split: Math.round(gSplitKb * 1000), window_merge: Math.round(mergeKb * 1000), alternatives,
@@ -76,6 +91,22 @@ export function LiveLiftSettingsDialog() {
         <LiftSettingsFields gSplitKb={gSplitKb} setGSplitKb={setGSplitKb} mergeKb={mergeKb} setMergeKb={setMergeKb}
           alternatives={alternatives} setAlternatives={setAlternatives} supplementaries={supplementaries}
           setSupplementaries={setSupplementaries} hatching={hatching} setHatching={setHatching} />
+        <fieldset className="mt-3 border-t pt-2" data-testid="live-lift-settings-differences">
+          <legend className="font-medium">Differences row</legend>
+          <p className="text-ink-secondary">Also in the row's right-click menu.</p>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <label className="inline-flex items-center gap-1 whitespace-nowrap"><input type="checkbox" checked={rowSources.assembly}
+              onChange={e => setRowSources(v => ({ ...v, assembly: e.target.checked }))} /> Assembly differences (the map)</label>
+            <label className="inline-flex items-center gap-1 whitespace-nowrap"><input type="checkbox" checked={rowSources.reads}
+              onChange={e => setRowSources(v => ({ ...v, reads: e.target.checked }))} /> Read-supported edits</label>
+            <label className="inline-flex items-center gap-1 whitespace-nowrap">Minimum size
+              <select value={rowMinBp} onChange={e => setRowMinBp(Number(e.target.value))}>
+                {MIN_SIZES.map(n => <option key={n} value={n}>{n ? `≥${n} bp` : 'All sizes'}</option>)}</select></label>
+            <label className="inline-flex items-center gap-1 whitespace-nowrap">Insertions on reads
+              <select data-testid="live-lift-settings-read-badges" value={badges} onChange={e => setBadges(e.target.value as LiveLiftBadgeMode)}>
+                {READ_BADGE_MODES.map(m => <option key={m.mode} value={m.mode} title={m.title}>{m.label}</option>)}</select></label>
+          </div>
+        </fieldset>
         <details className="mt-3"><summary className="cursor-pointer">Advanced</summary>
           <CohortSettingsFields settings={advanced} onChange={setAdvanced} showHaplotypeMode paths={dataset.paths ?? [dataset.path]} />
           {nativeDatasets.map(d => {

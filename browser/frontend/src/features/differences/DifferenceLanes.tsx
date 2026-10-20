@@ -12,7 +12,12 @@ import { useLiveLiftStore } from '../liveLift/store';
 import { liveLiftHaplotypeColor } from '../liveLift/palette';
 import { liftHapLabels } from '../liveLift/types';
 import { differenceDescription, differenceGlyph, differenceLanes, MIN_SIZES, nextDifference, stripModel } from '../liveLift/differencesModel';
-import { expandDifference, useDifferenceSelection } from '../liveLift/inspectionStore';
+import { useDifferenceSelection, type DifferenceSelection } from '../liveLift/inspectionStore';
+import { clickDifference, differenceHint, differenceMenuEntries, runDifferenceMenuAction } from './differenceActions';
+import { READ_BADGE_MODES, readBadgeMode, setDifferenceRowOptions, setReadBadgeMode } from './displayOptions';
+import { useTrackMenuStore } from '../../stores/trackMenuStore';
+import { useTrackFeedStore } from '../../stores/trackFeedStore';
+import type { ContextMenuEntry } from '../../components/tracks/read-track/ReadContextMenu';
 import type { DifferencesResponse } from '../liveLift/differenceTypes';
 import { useLiveLiftAxis } from '../liveLift/useLiveLiftAxis';
 import { DifferencePopover } from '../liveLift/DifferencePopover';
@@ -48,6 +53,8 @@ export function DifferenceLanes({ panel, dataset, width, gutter = 0, height }: {
   const anchor = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [table, setTable] = useState(false);
+  const badges = useBrowserStore(s => readBadgeMode(s));
+  const readsInView = useTrackFeedStore(s => s.byStateKey[panel.stateKey ?? panel.datasetId ?? '']?.reads?.length ?? 0);
   usePanOffsetTransform(canvas, { scope: viewKey });
   const query = useMemo(() => ({ datasetId: dataset.id, liftKey, chrom, start, end, liftHap: panel.liftHap,
     minBp }), [dataset.id, liftKey, chrom, start, end, panel.liftHap, minBp, native]);
@@ -138,38 +145,63 @@ export function DifferenceLanes({ panel, dataset, width, gutter = 0, height }: {
     }
   }, [axis, width, bandHeight, laneHeight, model, lanes.join(','), gutter, dark, start, end]);
   if (!enabled) return null;
-  const inspect = (d: import('../liveLift/differenceTypes').Difference) => useDifferenceSelection.getState().select({
-    panelId: panel.id, datasetId: dataset.id, viewKey, chrom, difference: d, target:d.target });
+  const selectionOf = (d: import('../liveLift/differenceTypes').Difference): DifferenceSelection => ({
+    panelId: panel.id, datasetId: dataset.id, viewKey, chrom, difference: d, target: d.target });
+  const inspect = (d: import('../liveLift/differenceTypes').Difference) => useDifferenceSelection.getState().select(selectionOf(d));
+  // The row's right-click menu: the difference's actions (on a marker), then the row's options.
+  const openMenu = (e: React.MouseEvent, d?: import('../liveLift/differenceTypes').Difference) => {
+    e.preventDefault(); e.stopPropagation();
+    const check = (on: boolean) => (on ? '✓ ' : '\u2003');
+    const own: ContextMenuEntry[] = [
+      ...(d ? [...differenceMenuEntries(selectionOf(d)), { kind: 'separator' as const }] : []),
+      { kind: 'heading', label: 'Differences row' },
+      { kind: 'item', action: 'opt:assembly', label: `${check(sources.assembly)}Assembly differences (the map)`, icon: 'layers' },
+      { kind: 'item', action: 'opt:reads', label: `${check(sources.reads)}Read-supported edits`, icon: 'reads' },
+      { kind: 'submenu', id: 'diff-min', label: `Minimum size: ${minBp ? `≥${minBp} bp` : 'all'}`, icon: 'search',
+        entries: MIN_SIZES.map(n => ({ kind: 'item' as const, action: `opt:min:${n}`, label: `${check(minBp === n)}${n ? `≥${n} bp` : 'All sizes'}`, icon: 'search' })) },
+      { kind: 'item', action: 'opt:table', label: table ? 'Hide the table' : 'Show the table', icon: 'layers' },
+      { kind: 'submenu', id: 'diff-badges', label: `Insertions on reads: ${READ_BADGE_MODES.find(m => m.mode === badges)!.label.toLowerCase()}`, icon: 'reads',
+        entries: READ_BADGE_MODES.map(m => ({ kind: 'item' as const, action: `opt:badges:${m.mode}`, label: `${check(badges === m.mode)}${m.label}`, icon: 'reads', title: m.title })) },
+      { kind: 'item', action: 'opt:settings', label: 'Live-lift settings…', icon: 'settings' },
+    ];
+    useTrackMenuStore.getState().openMenu({ panelId: panel.id, type: 'sv', x: e.clientX, y: e.clientY, own, title: 'Differences',
+      onOwn: action => {
+        if (d && action.startsWith('diff:')) { void runDifferenceMenuAction(action, selectionOf(d), readsInView); return; }
+        if (action === 'opt:assembly' || action === 'opt:reads') {
+          const key = action === 'opt:assembly' ? 'assembly' : 'reads';
+          setDifferenceRowOptions(panel.id, { sources: { ...sources, [key]: !sources[key] } });
+        } else if (action.startsWith('opt:min:')) setDifferenceRowOptions(panel.id, { minBp: Number(action.slice(8)) });
+        else if (action === 'opt:table') setTable(t => !t);
+        else if (action.startsWith('opt:badges:')) setReadBadgeMode(action.slice(11) as typeof badges);
+        else if (action === 'opt:settings') void import('../liveLift/LiveLiftSettingsDialog').then(m => m.useLiftSettingsDialog.getState().open(dataset.id));
+      } });
+  };
   return <div ref={anchor} data-testid="live-lift-diff-strip" data-panel-id={panel.id}
-    className="relative text-[10px] bg-slate-50 dark:bg-slate-900" style={{ height: height ?? differenceLanesHeight(panel, dataset), width }}>
-    {/* One 24 px row (the lanes start under it): controls never wrap or shrink; the status text truncates and
-        narrow panels shorten the title (owner feedback: the toggles were clipped in a 3-panel layout). */}
-    <div className="flex gap-1.5 items-center h-6 px-2 whitespace-nowrap overflow-hidden" data-testid="live-lift-diff-header">
-      <strong className="flex-shrink-0" title="Differences">{width < 420 ? 'Diffs' : 'Differences'}</strong>
-      {(['assembly','reads'] as const).map(source=><label key={source} className="inline-flex flex-shrink-0 items-center gap-0.5" data-testid={`live-lift-diff-source-${source}`}
-        title={source === 'assembly' ? 'Assembly differences from the map' : 'Read-supported edits'}>
-        <input type="checkbox" className="h-3 w-3 m-0" checked={sources[source]} onChange={e=>useBrowserStore.setState(s=>({panels:s.panels.map(p=>p.id===panel.id?{...p,differenceSources:{...sources,[source]:e.target.checked}}:p)}))}/>{source}</label>)}
-      <button className="flex-shrink-0" data-testid="live-lift-diff-prev" disabled={busy} onClick={() => void navigate(-1)}>◀</button>
-      <button className="flex-shrink-0" data-testid="live-lift-diff-next" disabled={busy} onClick={() => void navigate(1)}>▶</button>
-      <select className="flex-shrink-0 max-w-[5.5rem] text-[10px]" aria-label="Minimum difference size" value={minBp} onChange={e => useBrowserStore.setState(s => ({
-        panels: s.panels.map(p => p.id === panel.id ? { ...p, liveLiftMinBp: Number(e.target.value) } : p),
-      }))}>{MIN_SIZES.map(n => <option key={n} value={n}>{n ? `≥${n} bp` : 'All sizes'}</option>)}</select>
-      <button className="flex-shrink-0" aria-expanded={table} onClick={() => setTable(t => !t)}>Table</button>
-      <span className="min-w-0 truncate text-slate-500 dark:text-slate-400" role={error ? 'status' : undefined}
-        title={error || (busy ? 'Finding difference…' : readScope || (data ? data.mode==='bins'?'Density; zoom for individual differences':'Click a difference to inspect it · map discovery':'Loading…'))}>{error || (busy ? 'Finding difference…' : readScope || (data ? data.mode==='bins'?'Density; zoom for individual differences':'Click a difference to inspect it · map discovery':'Loading…'))}</span>
+    className="relative text-[10px] bg-slate-50 dark:bg-slate-900" style={{ height: height ?? differenceLanesHeight(panel, dataset), width }}
+    onContextMenu={e => openMenu(e)}>
+    {/* Like FiberBrowser's other rows: a compact label and the prev/next arrows; the options (sources, size, table,
+        insertions on reads) are in its right-click menu and the Live-lift settings. */}
+    <div className="flex gap-1 items-center h-6 px-2 whitespace-nowrap overflow-hidden" data-testid="live-lift-diff-header">
+      <span className="flex-shrink-0 font-semibold text-slate-600 dark:text-slate-300" data-testid="live-lift-diff-label"
+        title={`Differences between ${panel.liftHap ?? 'the haplotypes'} and this genome. ${status}. Right-click for sources, size, table and insertions on reads.`}>
+        Differences</span>
+      <button className="flex-shrink-0 px-0.5 text-slate-500 hover:text-slate-800 dark:hover:text-slate-100" data-testid="live-lift-diff-prev" disabled={busy}
+        title="Previous difference" aria-label="Previous difference" onClick={() => void navigate(-1)}>◀</button>
+      <button className="flex-shrink-0 px-0.5 text-slate-500 hover:text-slate-800 dark:hover:text-slate-100" data-testid="live-lift-diff-next" disabled={busy}
+        title="Next difference" aria-label="Next difference" onClick={() => void navigate(1)}>▶</button>
+      {(error || busy) && <span className="min-w-0 truncate text-slate-500 dark:text-slate-400" role={error ? 'status' : undefined} title={error || (busy ? 'Finding difference…' : readScope || (data ? data.mode==='bins'?'Density; zoom for individual differences':'Click a difference to inspect it · map discovery':'Loading…'))}>{error || (busy ? 'Finding difference…' : readScope || (data ? data.mode==='bins'?'Density; zoom for individual differences':'Click a difference to inspect it · map discovery':'Loading…'))}</span>}
     </div>
     <canvas ref={canvas} width={width} height={bandHeight} aria-label="Assembly differences" />
     {model.items.map(d => {
       const x=axis.toX(d.t_start), z=axis.toX(d.t_end), i=lanes.indexOf(d.hap_label);
       return <button key={d.id} data-testid="live-lift-diff-item" data-kind={d.kind} data-difference-id={d.id}
-        aria-label={differenceDescription(d, chrom)} title={differenceDescription(d, chrom)}
+        aria-label={differenceDescription(d, chrom)} title={`${differenceDescription(d, chrom)}\n${differenceHint(d)}`}
         // Above the row's resize grip (z-20), which would otherwise take clicks on the bottom lane.
         className="absolute z-30 cursor-pointer bg-transparent focus:ring-1 focus:ring-violet-500"
         style={{ left: gutter+Math.min(x,z)-4, top:24+i*laneHeight, width:Math.max(9,Math.abs(z-x)+8), height:laneHeight }}
-        // A click opens the inspector; Shift/⌘/Ctrl-click only selects (the guide line, no inspector).
-        onClick={e => e.shiftKey || e.metaKey || e.ctrlKey
-          ? useDifferenceSelection.getState().select({panelId:panel.id,datasetId:dataset.id,viewKey,chrom,difference:d,target:d.target,inspect:false})
-          : inspect(d)}
+        // Click: expand an insertion / highlight carriers; Shift: select; ⌘/Ctrl or right-click: inspect (differenceActions).
+        onClick={e => clickDifference(e, selectionOf(d), readsInView)}
+        onContextMenu={e => openMenu(e, d)}
         onKeyDown={e => { if(e.key==='Enter') inspect(d); }} />;
     })}
     {table && <div className="absolute left-0 right-0 top-full z-40 bg-white dark:bg-slate-900 max-h-64 overflow-auto border p-2"><DifferenceTable items={model.items} chrom={chrom} inspect={inspect} /></div>}
