@@ -317,6 +317,8 @@ it('explicitly binds reopened source scopes only with matching declared provenan
 it('reads lifted provenance from the serialized lifted settings', () => {
   expect(declaredLibraries({ data_type: 'bam_livelift', molecule_groups: [],
     live_lift: { settings: { molecule_groups: [['synthetic.bam', 'library-a']] } } })).toEqual(['library-a']);
+  expect(declaredLibraries({ data_type: 'bam_livelift', path: 'reopened.bam', molecule_groups: [],
+    live_lift: { settings: { molecule_groups: [['old-file.bam', 'library-a']] } } })).toEqual([]);
 });
 
 const recoverySource = () => {
@@ -363,4 +365,14 @@ it.each(['fold_molecule', 'fold_orientation_rows', 'provenance'])('refuses incom
   expect(unavailable.clusterAssignments.rows).toBeUndefined();
   expect(unavailable.svSplits.rows).toBeUndefined();
   expect(result.session.imports.dataset[0].status).toBe('resolved');
+});
+
+it('rejects saved provenance groups that differ from the runtime group even with the same library', () => {
+  const { metadata, source, runtime, binding } = recoverySource();
+  const historical = Object.keys(source.clusterAssignments.dataset)[0].replace('library-a|', 'another-group|');
+  const saved = { clusterAssignments: { dataset: { [historical]: 0 } } };
+  const incompatible = { ...metadata, records: metadata.records.map(r => ({ ...r, provenanceGroup: 'another-group' })) };
+  const session = restoreDifferencesSession(saved);
+  expect(() => previewHistoricalRelink({ ...runtime, ...saved }, session, 'dataset', incompatible, binding)).toThrow(/identity/);
+  expect(session.imports.dataset[0].status).toBe('unresolved_import');
 });

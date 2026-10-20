@@ -141,7 +141,9 @@ export function legacyDifferencesState(session: DifferencesSession): JsonRecord 
 
 export function declaredLibraries(dataset: JsonRecord): string[] {
   const groups = dataset.data_type === 'bam_livelift' ? dataset.live_lift?.settings?.molecule_groups : dataset.molecule_groups;
-  return Array.isArray(groups) ? [...new Set<string>(groups.filter((p: any) => Array.isArray(p) && typeof p[1] === 'string' && p[1]).map((p: any) => p[1]))] : [];
+  const paths = Array.isArray(dataset.paths) ? dataset.paths : typeof dataset.path === 'string' ? [dataset.path] : undefined;
+  return Array.isArray(groups) ? [...new Set<string>(groups.filter((p: any) => Array.isArray(p) && typeof p[1] === 'string' && p[1]
+    && (!paths || paths.includes(p[0]))).map((p: any) => p[1]))] : [];
 }
 export function bindingAvailable(state: JsonRecord, binding: ImportBinding): boolean {
   const dataset = Array.isArray(state.datasets) ? state.datasets.find((d: any) => d.id === binding.datasetId) : undefined;
