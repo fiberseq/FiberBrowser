@@ -21,6 +21,8 @@ export interface DifferencesSession {
   bindings?: Record<string, ImportBinding>;
   legacySnapshot: JsonRecord;
   options: { backgroundCatalogue: boolean; expansionAlignment: 'boundary' | 'homology'; unphasedLane: boolean; analysisScope: 'native_only' | 'lifted_only' | 'combined';
+    /** Per-read insertion badges on lifted rows: none, ticks without text (default), or labelled ticks. */
+    readBadges?: 'off' | 'ticks' | 'labels';
     projectionPolicy: { version: string; cohort_alternatives: 'include' | 'exclude'; min_mapq: number;
       search: { version: string; max_hypotheses: number; max_path_states: number; max_transitions: number } };
     matchingPolicy: { version: string; anchor_bp: number; anchor_fraction: number; span_bp: number; span_fraction: number;
@@ -37,7 +39,7 @@ export function emptyDifferencesSession(): DifferencesSession {
     versions: { normalization: 'haplotype:v2', projection: 'read-map:v1', matching: 'local-match:v3', reconciliation: 'independent:v1', daf_likelihood: 'daf-indel:v3' },
     ledger: { schema_version: DIFFERENCES_SCHEMA, records: {}, seeds: {}, lineage: {}, snapshots: {} },
     targets: {}, imports: {}, legacySnapshot: {},
-    options: { backgroundCatalogue: false, expansionAlignment: 'boundary', unphasedLane: false, analysisScope: 'native_only',
+    options: { backgroundCatalogue: false, expansionAlignment: 'boundary', unphasedLane: false, analysisScope: 'native_only', readBadges: 'ticks',
       projectionPolicy: { version: 'read-map:v1', cohort_alternatives: 'exclude', min_mapq: 20,
         search: { version: 'hypothesis:v1', max_hypotheses: 64, max_path_states: 4096, max_transitions: 16384 } },
       matchingPolicy: { version: 'local-match:v3', anchor_bp: 20, anchor_fraction: .05, span_bp: 20, span_fraction: .20,

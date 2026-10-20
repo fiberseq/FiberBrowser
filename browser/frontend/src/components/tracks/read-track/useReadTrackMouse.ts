@@ -64,6 +64,7 @@ export interface FootprintHit {
 
 interface UseReadTrackMouseParams {
   axis?: LiftAxis;
+  liveLiftBadgeMode?: import('./liveLiftCanvas').LiveLiftBadgeMode;
   displayReads: CompactRead[];
   width: number;
   height: number;
@@ -212,6 +213,22 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
   const getReadHitAtXY = useCallback((x: number, y: number): { read: CompactRead; liveLiftBadge?: LiveLiftBadge } | null => {
     const read = getReadAtY(y);
     if (!read) return null;
+    const { rowHeight, rowGap, scrollAdjust } = layout;
+    const index = Math.floor((y - headerHeight - histH + scrollAdjust) / (rowHeight + rowGap));
+    const scale = (width - sidebarWidth) / regionWidth;
+    const liftOptions = {
+      badgeMode: params.liveLiftBadgeMode,
+      y: headerHeight + histH + index * (rowHeight + rowGap) - scrollAdjust,
+      rowHeight: Math.max(1, rowHeight - rowGap),
+      linkedOffset: linkedBoundsStart !== undefined ? linkedBoundsStart - start : 0,
+      regionWidth,
+      toX: (rel: number) => sidebarWidth + (params.axis ? params.axis.toX(start + rel) : (isReversed ? regionWidth - rel : rel) * scale),
+    };
+    // A badge at an expanded column's edge is the badge, not the column (its notch straddles the edge).
+    if (read.live_lift && params.axis?.blocks.length) {
+      const edge = liveLiftHitAt(read.live_lift, x, y, liftOptions);
+      if (edge?.badge) return { read, liveLiftBadge: edge.badge };
+    }
     const block = params.axis?.fromX(x - sidebarWidth);
     if (block?.ins_id) {
       const column=params.axis?.blocks.find(b=>b.ins.ins_id===block.ins_id)?.ins;
@@ -221,18 +238,9 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
     }
     if (!read.live_lift) return { read };
     if (x < sidebarWidth || x >= width || y < headerHeight + histH || y >= height) return null;
-    const { rowHeight, rowGap, scrollAdjust } = layout;
-    const index = Math.floor((y - headerHeight - histH + scrollAdjust) / (rowHeight + rowGap));
-    const scale = (width - sidebarWidth) / regionWidth;
-    const hit = liveLiftHitAt(read.live_lift, x, y, {
-      y: headerHeight + histH + index * (rowHeight + rowGap) - scrollAdjust,
-      rowHeight: Math.max(1, rowHeight - rowGap),
-      linkedOffset: linkedBoundsStart !== undefined ? linkedBoundsStart - start : 0,
-      regionWidth,
-      toX: rel => sidebarWidth + (params.axis ? params.axis.toX(start + rel) : (isReversed ? regionWidth - rel : rel) * scale),
-    });
+    const hit = liveLiftHitAt(read.live_lift, x, y, liftOptions);
     return hit ? { read, liveLiftBadge: hit.badge } : null;
-  }, [getReadAtY, sidebarWidth, width, height, headerHeight, histH, layout, regionWidth, linkedBoundsStart, start, isReversed, params.axis]);
+  }, [getReadAtY, sidebarWidth, width, height, headerHeight, histH, layout, regionWidth, linkedBoundsStart, start, isReversed, params.axis, params.liveLiftBadgeMode]);
 
   // --- SV events on reads (fb-n9-sv); the SV summary is its own track (SvTrack) ---
   const genomePosAtX = useCallback((x: number) => {
@@ -609,6 +617,10 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
 
     if (x >= sidebarWidth) {
       if (isFootprintClick(e)) {
+        // ⌘/Ctrl-click on an insertion badge inspects it (as on the Differences row); elsewhere it picks a footprint.
+        const badgeHit = getReadHitAtXY(x, y);
+        if (badgeHit?.liveLiftBadge && selectReadDifference(badgeHit.read, badgeHit.liveLiftBadge, genomePosAtX(x),
+          { datasetId, stateKey, chrom, start: linkedBoundsStart ?? start }, 'inspect')) return;
         selectFootprintAt(x, y);
         return;
       }
@@ -626,7 +638,8 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
         return Math.abs(px - x) <= Math.max(3, params.axis?.pxPerBp ?? 1);
       }) : undefined;
       if (lifted && (lifted.liveLiftBadge || mismatch) && selectReadDifference(lifted.read, lifted.liveLiftBadge,
-        mismatch ? origin + mismatch.pos : genomePosAtX(x), { datasetId, stateKey, chrom, start: origin })) return;
+        mismatch ? origin + mismatch.pos : genomePosAtX(x), { datasetId, stateKey, chrom, start: origin },
+        e.metaKey || e.ctrlKey ? 'inspect' : 'primary')) return;
       // A click on an insertion's flag copies its inserted bases.
       const hit = svEventAtXY(x, y);
       if (hit && selectMapGap(hit.read, hit.event.difference_id, { datasetId, stateKey, chrom })) return;

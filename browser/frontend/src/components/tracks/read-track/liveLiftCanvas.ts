@@ -103,7 +103,13 @@ export interface LiveLiftMarkOptions {
   isReversed: boolean;
   /** Behind badge labels. */
   backgroundColor: string;
+  /** Per-read insertion badges (Differences options): none, a tick without text (default), or ticks with their size. */
+  badgeMode?: LiveLiftBadgeMode;
 }
+
+export type LiveLiftBadgeMode = 'off' | 'ticks' | 'labels';
+/** The smallest drawn badge, whatever the row height (rows a few px tall still show where an insertion is). */
+export const BADGE_MIN_NOTCH = { w: 6, h: 4 } as const;
 
 export type LiveLiftBadge = NonNullable<LiveLiftRow['badges']>[number];
 interface PixelRect { x: number; y: number; w: number; h: number }
@@ -122,7 +128,10 @@ export interface LiveLiftBadgeGeometry {
 export function liveLiftBadgeGeometry(ll: LiveLiftRow, o: Omit<LiveLiftMarkOptions, 'backgroundColor' | 'isReversed'>): LiveLiftBadgeGeometry[] {
   const { y, rowHeight, linkedOffset, regionWidth, toX } = o;
   const h = Math.max(2, rowHeight);
-  const fontPx = rowLabelFontPx(rowHeight);
+  const mode = o.badgeMode ?? 'labels';
+  if (mode === 'off') return [];
+  // Labels need rows of at least 7 px (rowLabelFontPx); thinner rows keep their tick.
+  const fontPx = mode === 'labels' ? rowLabelFontPx(rowHeight) : 0;
   const badges: LiveLiftBadgeGeometry[] = [];
   for (const badge of ll.badges ?? []) {
     const [pos, kind, molBp] = badge;
@@ -131,7 +140,7 @@ export function liveLiftBadgeGeometry(ll: LiveLiftRow, o: Omit<LiveLiftMarkOptio
     const text = formatBadgeBp(molBp);
     const labelled = (molBp >= BADGE_LABEL_MIN_BP || kind === 'elsewhere')
       && fontPx > 0 && labelFits(text, 60, fontPx * 0.56);
-    badges.push({ badge, x, notch: { x: x - 3, y, w: 6, h },
+    badges.push({ badge, x, notch: { x: x - BADGE_MIN_NOTCH.w / 2, y, w: BADGE_MIN_NOTCH.w, h: Math.max(BADGE_MIN_NOTCH.h, h) },
       label: labelled ? { x: x + 3, y: y + rowHeight / 2 - fontPx / 2 - 1,
         w: text.length * fontPx * 0.56 + 4, h: fontPx + 2, text, fontPx } : null });
   }
@@ -239,13 +248,18 @@ export function drawLiveLiftMarks(ctx: Ctx, ll: LiveLiftRow, o: LiveLiftMarkOpti
       ctx.globalAlpha = 1;
       continue;
     }
+    // A notch of fixed minimum size, outlined in the row's ground so it stays visible on dense, thin rows.
+    const notchH = Math.max(3, Math.min(5, h / 2));
     ctx.beginPath();
     ctx.moveTo(x - 3, y);
     ctx.lineTo(x + 3, y);
-    ctx.lineTo(x, y + Math.min(5, h / 2));
+    ctx.lineTo(x, y + notchH);
     ctx.closePath();
+    ctx.strokeStyle = o.backgroundColor;
+    ctx.lineWidth = 1;
+    ctx.stroke();
     ctx.fill();
-    ctx.fillRect(x - 0.5, y, 1, h);
+    ctx.fillRect(x - 0.5, y, 1, Math.max(BADGE_MIN_NOTCH.h, h));
     if (label) {
       ctx.font = `${label.fontPx}px system-ui, sans-serif`;
       ctx.textBaseline = 'middle';

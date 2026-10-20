@@ -108,6 +108,8 @@ interface DrawReadsParams {
   linkedHighlightIds?: Set<string>;
   /** Rows of the molecule hovered in a live-lift panel or its linked source panel (features/liveLift/linking/hover). */
   liftHoverRows?: Set<CompactRead>;
+  /** Per-read insertion badges of lifted rows (features/differences/displayOptions). */
+  liveLiftBadgeMode?: import('./liveLiftCanvas').LiveLiftBadgeMode;
   /** Reads gone to by name or highlighted from the read menu (fb-r4-clicks): a solid outline. */
   readHighlightIds?: Set<string> | null;
   readHighlightMode?: 'rows' | 'names';
@@ -167,7 +169,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
     showCoverageHistogram,
     isReversed, activeColormap, genes, allPeaks, orthogonalTracks,
     modificationOverlays, overlayMarks, jupyterReadHighlights, jupyterFootprintColorMap,
-    allJupyterMarkers, linkedBoundsStart, linkedSessionId, linkedHighlightIds, liftHoverRows, readHighlightIds, uncertainSvIds,
+    allJupyterMarkers, linkedBoundsStart, linkedSessionId, linkedHighlightIds, liftHoverRows, liveLiftBadgeMode, readHighlightIds, uncertainSvIds,
     selectedReadIds, selectedFootprints: allSelectedFootprints, footprintCrossHighlight, footprintGroups,
     selectedFamilyGroupId, footprintAnalysisLayer,
     clusterStateConsensus, hasFilter, myFilteredReadIds,
@@ -572,6 +574,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
   // Recording the actual visible badge geometry lets the browser smoke test
   // click the canvas as a user does, even when row sorting or density changes.
   let badgeTarget: { x: number; y: number; ins_id: string; bp: number } | null = null;
+  let liveLiftBadgesDrawn = 0, liveLiftBadgeLabels = 0;
   if (params.axis?.blocks.length) {
     for (const b of params.axis.blocks) {
       ctx.fillStyle = liveLiftDark ? '#1e293b' : '#e2e8f0';
@@ -588,11 +591,11 @@ export function drawReadTrack(params: DrawReadsParams): void {
 
     if (!badgeTarget && read.live_lift) {
       const ll = read.live_lift;
-      const options = { y, rowHeight: Math.max(1, rowHeight - rowGap), linkedOffset, regionWidth, toX };
+      const options = { y, rowHeight: Math.max(1, rowHeight - rowGap), linkedOffset, regionWidth, toX, badgeMode: liveLiftBadgeMode };
       const badgeY = y + options.rowHeight / 2;
       // Collapsed rows retain IDs; insertion annotations load only after expansion.
       const badge = liveLiftBadgeGeometry(ll, options)
-        .find(b => b.label && b.badge[2] >= 2000 && b.badge[2] < 3000 && y >= headerHeight && y + rowHeight <= height
+        .find(b => b.badge[2] >= 2000 && b.badge[2] < 3000 && y >= headerHeight && y + rowHeight <= height
           && b.x >= sidebarWidth && b.x < width && liveLiftHitAt(ll, b.x, badgeY, options)?.badge === b.badge
           && !params.axis?.fromX(b.x - sidebarWidth).ins_id
           && ll.badge_ids?.[ll.badges!.indexOf(b.badge)]);
@@ -1549,8 +1552,14 @@ export function drawReadTrack(params: DrawReadsParams): void {
     if (read.live_lift) {
       drawLiveLiftMarks(ctx, read.live_lift, {
         y, rowHeight: Math.max(1, rowHeight - rowGap), linkedOffset, regionWidth, toX, isReversed,
-        backgroundColor: readBackgroundColor,
+        backgroundColor: readBackgroundColor, badgeMode: liveLiftBadgeMode,
       });
+      if (liveLiftBadgeMode !== 'off') {
+        const drawn = liveLiftBadgeGeometry(read.live_lift, { y, rowHeight: Math.max(1, rowHeight - rowGap), linkedOffset, regionWidth, toX, badgeMode: liveLiftBadgeMode })
+          .filter(b => b.badge[2] >= 50);
+        liveLiftBadgesDrawn += drawn.length;
+        liveLiftBadgeLabels += drawn.filter(b => b.label).length;
+      }
       drawLiveLiftHaplotypeStripe(ctx, read.live_lift, {
         y, rowHeight: Math.max(1, rowHeight - rowGap), linkedOffset, regionWidth, toX,
       }, liftHap, liveLiftDark);
@@ -1791,6 +1800,9 @@ export function drawReadTrack(params: DrawReadsParams): void {
     canvas.dataset.liveLiftInsertionCalls = String(insertionCalls);
     canvas.dataset.liveLiftInsertionCallsById = JSON.stringify(insertionCallsById);
     canvas.dataset.liveLiftBadgeTarget = badgeTarget ? JSON.stringify(badgeTarget) : '';
+    canvas.dataset.liveLiftBadges = String(liveLiftBadgesDrawn);
+    canvas.dataset.liveLiftBadgeLabels = String(liveLiftBadgeLabels);
+    canvas.dataset.readRowHeight = String(rowHeight);
   }
   const smoothing = activeColormap.displaySmoothing;
   // Smoothing across an inserted boundary would leak target signal into the

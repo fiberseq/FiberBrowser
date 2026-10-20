@@ -6,6 +6,7 @@ import { SplitAwayBanner } from './SplitAwayBanner';
 import { useRef, useEffect, useLayoutEffect, useMemo, useCallback, useState, useContext } from 'react';
 import { PanelDisplayContext } from '../../../hooks/usePanelDisplayStore';
 import { useLiftHoverRows } from '../../../features/liveLift/linking/hover';
+import { readBadgeMode } from '../../../features/differences/displayOptions';
 import { usePanelDisplayStore as useBrowserStore } from '../../../hooks/usePanelDisplayStore';
 import { annotationViewportKey, type ReadAnnotation } from '../../../stores/annotationSlice';
 import { useConsensusViewStore } from '../../../stores/consensusViewStore';
@@ -717,6 +718,7 @@ export function ReadTrack({
   ]);
 
   const hitTestReads = isDataViewportStale ? NO_READS : displayReads;
+  const liveLiftBadgeMode = useBrowserStore(s => readBadgeMode(s));
 
   // --- Mouse interaction hook ---
   const {
@@ -726,7 +728,7 @@ export function ReadTrack({
     handleMouseLeave, handleWheel,
     handleContextMenu, handleKeyDown, contextTarget, closeContextMenu, selectFootprintAt, selectReadById,
   } = useReadTrackMouse({
-    axis: liveLiftAxis,
+    axis: liveLiftAxis, liveLiftBadgeMode,
     displayReads: hitTestReads, width, height, sidebarWidth, regionWidth, start, end, chrom, datasetId, stateKey,
     datasetLabel, datasetColor,
     hasCluster, myClusterAssignments, myClusterOrder, myClusterFocus, hasClusterFocus, mySelectedClusters,
@@ -1300,6 +1302,7 @@ export function ReadTrack({
       linkedSessionId,
       linkedHighlightIds,
       liftHoverRows: exportInProgress ? undefined : liftHoverRows,
+      liveLiftBadgeMode,
       readHighlightIds: exportInProgress ? null : readHighlightIds,
       readHighlightMode,
       uncertainSvIds,
@@ -1359,7 +1362,7 @@ export function ReadTrack({
       const { panOffset: currentPanOffset, panScope: currentPanScope, setPanOffset } = useEphemeralStore.getState();
       if (currentPanOffset !== 0 && currentPanScope === panScope) setPanOffset(0);
     }
-  }, [loading, dataSequence, isDataViewportStale, displayReads, width, renderHeight, regionWidth, chrom, start, end, hasCluster, myClusterAssignments, myClusterOrder, drawLoadingState, hasStaleDisplayReads, fetchFailed, genes, allPeaks, hasFilter, myFilteredReadIds, datasetLabel, datasetColor, sidebarWidth, enabledModTypes, enabledCigarTypes, isBAM, layerType, modificationOverlays, overlayMarks, jupyterReadHighlights, jupyterFootprintColorMap, allJupyterMarkers, hasClusterFocus, myClusterFocus, mySelectedClusters, linkedBoundsStart, linkedHighlightIds, liftHoverRows, clusterStateConsensus, isReversed, activeColormap, orthogonalTracksForRules, renderFillReadHeight, renderReadRowHeight, readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth, renderReadScrollOffset, selectedReadIds, showCoverageHistogram, maxRegionForReads, selectedFootprints, footprintCrossHighlight, footprintGroups, selectedFamilyGroupId, footprintAnalysisLayer, coverageData, coverageMax, coverageLiveLift, myAnnotationOverlays, annotationColors, enabledAnnotationTypes, annotationOpacityMin, annotationOpacityMax, annotationThresholds, layerColors, isPanning, canvasRenderVersion, consensusView, highlightedConsensusFamilies, nativeLattice, exportInProgress, readHighlightMode, readHighlightIds, uncertainSvIds, svDisplayEnabled, svMinLen, svBand, svVisibleSummary, zoomedOutBannerShown, liftCorrespondence, liftHap, liveLiftAxis]);
+  }, [loading, dataSequence, isDataViewportStale, displayReads, width, renderHeight, regionWidth, chrom, start, end, hasCluster, myClusterAssignments, myClusterOrder, drawLoadingState, hasStaleDisplayReads, fetchFailed, genes, allPeaks, hasFilter, myFilteredReadIds, datasetLabel, datasetColor, sidebarWidth, enabledModTypes, enabledCigarTypes, isBAM, layerType, modificationOverlays, overlayMarks, jupyterReadHighlights, jupyterFootprintColorMap, allJupyterMarkers, hasClusterFocus, myClusterFocus, mySelectedClusters, linkedBoundsStart, linkedHighlightIds, liftHoverRows, liveLiftBadgeMode, clusterStateConsensus, isReversed, activeColormap, orthogonalTracksForRules, renderFillReadHeight, renderReadRowHeight, readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth, renderReadScrollOffset, selectedReadIds, showCoverageHistogram, maxRegionForReads, selectedFootprints, footprintCrossHighlight, footprintGroups, selectedFamilyGroupId, footprintAnalysisLayer, coverageData, coverageMax, coverageLiveLift, myAnnotationOverlays, annotationColors, enabledAnnotationTypes, annotationOpacityMin, annotationOpacityMax, annotationThresholds, layerColors, isPanning, canvasRenderVersion, consensusView, highlightedConsensusFamilies, nativeLattice, exportInProgress, readHighlightMode, readHighlightIds, uncertainSvIds, svDisplayEnabled, svMinLen, svBand, svVisibleSummary, zoomedOutBannerShown, liftCorrespondence, liftHap, liveLiftAxis]);
 
   // What this panel loaded and shows, for Copilot's troubleshooting diagnostics.
   useEffect(() => {
