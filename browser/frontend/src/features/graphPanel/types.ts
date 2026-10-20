@@ -155,7 +155,10 @@ export interface GraphViewState {
   targetViewport: { contig: string; start: number; end: number } | null;
   linkMode: GraphLinkMode;
   /** compression: `log` (schematic, DESIGN §4 g(L)) or `linear` (true bp; insertions still get their slot). */
-  layoutSettings: { contextBp: number; laneHeight: number; compression?: 'log' | 'linear' };
+  layoutSettings: { contextBp: number; laneHeight: number; compression?: 'log' | 'linear';
+    /** smallDifferences: `marks` (default: SNPs and short indels as marks on the shared tube, scaled with zoom) or
+     * `bubbles` (every difference branches). */
+    smallDifferences?: 'marks' | 'bubbles' };
 }
 
 declare module '../../types' {

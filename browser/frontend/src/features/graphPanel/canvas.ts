@@ -132,25 +132,41 @@ function drawPrim(ctx: CanvasRenderingContext2D, p: Prim): void {
       ctx.save();
       roundRect(ctx, p.x0, p.y - pad, w, p.h + 2 * pad, 3);
       ctx.clip();
-      for (const s of p.slots) {
-        if (p.present.includes(s.key)) {
-          ctx.globalAlpha = p.style === 'unresolved' ? 0.45 : 0.92;
-          ctx.fillStyle = s.color;
-        } else {
-          ctx.globalAlpha = 1;
-          ctx.fillStyle = '#f1f5f9';
+      for (const seg of p.segments ?? [{ x0: p.x0, x1: p.x1, present: p.present }]) {
+        for (const s of p.slots) {
+          if (seg.present.includes(s.key)) {
+            ctx.globalAlpha = p.style === 'unresolved' ? 0.45 : 0.92;
+            ctx.fillStyle = s.color;
+          } else {
+            ctx.globalAlpha = 1;
+            ctx.fillStyle = '#f1f5f9';
+          }
+          // Segments meet without a hairline seam.
+          ctx.fillRect(seg.x0, s.y, seg.x1 - seg.x0 + 0.35, s.h);
         }
-        ctx.fillRect(p.x0, s.y, w, s.h);
       }
       ctx.globalAlpha = 1;
       // Node boundaries: thin cuts across the stripes.
-      ctx.strokeStyle = 'rgba(255,255,255,0.95)';
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+      ctx.lineWidth = 0.75;
       for (const x of p.nodes) {
         ctx.beginPath();
         ctx.moveTo(x, p.y - pad);
         ctx.lineTo(x, p.y + p.h + pad);
         ctx.stroke();
+      }
+      // Walked against the target (an inverted allele): white chevrons pointing left.
+      if (p.arrows && w > 10) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+        ctx.lineWidth = 1.25;
+        const cy = p.y + p.h / 2, r = Math.min(3, p.h / 2 + 0.5);
+        for (let x = p.x0 + 7; x < p.x1 - 4; x += 12) {
+          ctx.beginPath();
+          ctx.moveTo(x + r * p.arrows * -1, cy - r);
+          ctx.lineTo(x, cy);
+          ctx.lineTo(x + r * p.arrows * -1, cy + r);
+          ctx.stroke();
+        }
       }
       // A compressed run: a break mark.
       for (const x of p.breaks) {
@@ -262,6 +278,29 @@ function drawPrim(ctx: CanvasRenderingContext2D, p: Prim): void {
       ctx.globalAlpha = 1;
       return;
     }
+    case 'arc': {
+      // A repeat visit's return arc: dashed, up (or down) to the host occurrence it repeats; higher tiers bow more.
+      ctx.strokeStyle = p.color;
+      ctx.globalAlpha = 0.75;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 2]);
+      const lift = 6 + p.tier * 5;
+      ctx.beginPath();
+      ctx.moveTo(p.x0, p.y0);
+      ctx.bezierCurveTo(p.x0, p.y0 - lift, p.x1, p.y1 + lift, p.x1, p.y1);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x1, p.y1 + 1, 1.6, 0, Math.PI * 2);
+      ctx.fill();
+      return;
+    }
+    case 'vmark': {
+      drawMark(ctx, p);
+      return;
+    }
     case 'cluster': {
       ctx.fillStyle = 'rgba(217,119,6,0.10)';
       roundRect(ctx, p.x0, p.y, p.x1 - p.x0, p.h, 3);
@@ -287,6 +326,69 @@ function drawPrim(ctx: CanvasRenderingContext2D, p: Prim): void {
       return;
     }
   }
+}
+
+/** A darker shade of a #rrggbb ink (marks on its own stripe). */
+function shade(hex: string, f = 0.55): string {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return '#1f2937';
+  const n = parseInt(m[1], 16);
+  const ch = (v: number) => Math.round(v * f).toString(16).padStart(2, '0');
+  return `#${ch((n >> 16) & 255)}${ch((n >> 8) & 255)}${ch(n & 255)}`;
+}
+
+/**
+ * A small difference on a stripe. Substitution: a dark tick across the stripe and a pin out of the tube. Deletion:
+ * a gap in the stripe and a short bracket outside. Insertion: a dark cut through the stripe and a caret pointing in.
+ */
+function drawMark(ctx: CanvasRenderingContext2D, p: Extract<Prim, { t: 'vmark' }>): void {
+  const cx = (p.x0 + p.x1) / 2;
+  const dark = shade(p.color);
+  const up = p.side === 'up';
+  const edge = up ? p.ty0 : p.ty1;
+  const out = up ? -1 : 1;
+  ctx.save();
+  if (p.kind === 'del') {
+    const w = Math.max(2, p.x1 - p.x0);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(cx - w / 2, p.y, w, p.h);
+    ctx.fillStyle = dark;
+    ctx.fillRect(cx - w / 2 - 0.75, p.y, 0.75, p.h);
+    ctx.fillRect(cx + w / 2, p.y, 0.75, p.h);
+    // Bracket outside: ⊓ / ⊔ over the removed bases.
+    ctx.fillStyle = p.color;
+    const bw = Math.max(4, w + 2);
+    ctx.fillRect(cx - bw / 2, edge + out * 4 - (up ? 1.5 : 0), bw, 1.5);
+    ctx.fillRect(cx - bw / 2, Math.min(edge, edge + out * 4), 1.25, 4);
+    ctx.fillRect(cx + bw / 2 - 1.25, Math.min(edge, edge + out * 4), 1.25, 4);
+  } else if (p.kind === 'ins') {
+    ctx.fillStyle = dark;
+    ctx.fillRect(cx - 0.75, p.y, 1.5, p.h);
+    // Caret pointing into the tube.
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.moveTo(cx, edge + out * 0.5);
+    ctx.lineTo(cx - 3.2, edge + out * 5.5);
+    ctx.lineTo(cx + 3.2, edge + out * 5.5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 0.75;
+    ctx.stroke();
+  } else {
+    const w = Math.max(1.75, Math.min(4, p.x1 - p.x0));
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(cx - w / 2 - 0.6, p.y, w + 1.2, p.h);
+    ctx.fillStyle = dark;
+    ctx.fillRect(cx - w / 2, p.y, w, p.h);
+    // Pin: a short stem and a dot outside the tube.
+    ctx.fillStyle = p.color;
+    ctx.fillRect(cx - 0.6, Math.min(edge, edge + out * 4), 1.2, 4);
+    ctx.beginPath();
+    ctx.arc(cx, edge + out * 5.2, 1.7, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 /** The scene's lanes: the compact label in the gutter, then the data (clipped to the data area). */

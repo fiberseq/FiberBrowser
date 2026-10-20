@@ -16,7 +16,7 @@
  * - **Coordinates.** Target-backed geometry maps to true target coordinates (ruler ticks, cursor); an insertion slot
  *   maps to its boundary only, never to a made-up target interval. A reversed panel mirrors the finished scene.
  */
-import { familyCarriers, type AltAllele, type GroupItem, type Item, type JunctionItem, type LayoutModel, type OpenEnd, type RunItem, type Visit } from './layout';
+import { familyCarriers, MAX_REPEAT_VISITS, type AltAllele, type GroupItem, type Item, type JunctionItem, type LayoutModel, type OpenEnd, type RunItem, type Visit } from './layout';
 import type { GraphCoverage, Span } from './types';
 
 export type Compression = 'log' | 'linear';
@@ -31,10 +31,39 @@ export interface SceneOptions {
   compression: Compression;
   reversed: boolean;
   colors: Record<string, string>;
+  /** Draw a bubble whose every allele is shorter than this (bp) as marks on the shared tube; 0 or absent: bubbles
+   * (see smallDifferenceBp). Inversions and unresolved alleles are always bubbles. */
+  smallBp?: number;
+}
+
+/** A marked run: consecutive runs and small differences on one host tube, drawn as one tube with marks. */
+export interface MarkedItem {
+  kind: 'marked';
+  id: string;
+  host: string;
+  parts: (RunItem | GroupItem)[];
+  /** Host sequence bp (runs plus the small groups' base alleles). */
+  bp: number;
+  target: Span | null;
+}
+
+/**
+ * The small-difference threshold for a view: about four pixels' worth of bp at the window's average density,
+ * 10–50 bp; zoomed in below 2.5 bp/px every difference is a bubble again (bubbles mode: always 0).
+ */
+export function smallDifferenceBp(spanBp: number, dataWidth: number, mode: 'marks' | 'bubbles' = 'marks'): number {
+  if (mode === 'bubbles' || dataWidth <= 0) return 0;
+  const bpPerPx = spanBp / dataWidth;
+  if (bpPerPx < 2.5) return 0;
+  return Math.round(Math.max(10, Math.min(50, 4 * bpPerPx)));
 }
 
 /** Fixed pixels of a bubble: its minimum content slot and the curve zone either side. Compact when crowded. */
-export interface Metrics { min: number; curve: number; /** an empty junction (touching fragments), default 4 */ empty?: number }
+export interface Metrics {
+  min: number; curve: number; /** an empty junction (touching fragments), default 4 */ empty?: number;
+  /** Small differences (every allele below this many bp) are marks on the shared tube, not bubbles; 0: all bubbles. */
+  small?: number;
+}
 export const ROOMY: Metrics = { min: 12, curve: 9 };
 export const COMPACT: Metrics = { min: 8, curve: 5 };
 export const MIN_SLOT_PX = ROOMY.min;
@@ -54,7 +83,17 @@ export interface Slot { key: string; y: number; h: number; color: string }
 
 export type Prim =
   | { t: 'tube'; x0: number; x1: number; y: number; h: number; slots: Slot[]; present: string[]; nodes: number[];
-      style: 'seq' | 'unresolved'; breaks: number[]; outline: string }
+      style: 'seq' | 'unresolved'; breaks: number[]; outline: string;
+      /** A marked run: which stripes are present along it (overrides `present` there). */
+      segments?: { x0: number; x1: number; present: string[] }[];
+      /** Chevrons along it: -1, walked against the target (an inverted allele). */
+      arrows?: -1 | 1 }
+  /** A repeat visit's return arc, back to the host occurrence it repeats (dashed, one of four tiers). */
+  | { t: 'arc'; x0: number; y0: number; x1: number; y1: number; color: string; tier: number }
+  /** A small difference on a tube stripe: a tick (substitution), notch (deletion) or caret (insertion), with a pin
+   * outside the tube on the stripe's nearer side. */
+  | { t: 'vmark'; x0: number; x1: number; y: number; h: number; ty0: number; ty1: number; side: 'up' | 'down';
+      color: string; kind: 'sub' | 'del' | 'ins' }
   | { t: 'stripe'; x0: number; x1: number; y: number; h: number; color: string; style: 'edge' | 'connector' | 'dashed' }
   | { t: 'curve'; x0: number; y0: number; x1: number; y1: number; color: string; w: number; dashed: boolean }
   | { t: 'text'; x: number; y: number; text: string; color: string; align: 'left' | 'center' | 'right'; size: number; bold: boolean }
@@ -83,13 +122,20 @@ export interface SceneHit {
   within?: { group: GroupItem; allele: AltAllele };
 }
 
+/**
+ * Where one drawn visit is (the occurrence transform): `[start, end)` path-forward offsets of the visit drawn over
+ * `[x0, x1]`, increasing with x when `dir` is 1, decreasing when -1 (a minus comparison, an inverted allele, a
+ * mirrored panel). `owner` is the run or allele drawing it, `lane` the lane it is in.
+ */
+export interface OccurrencePlacement { occ: string; node: string; lane: string; owner: string; x0: number; x1: number; start: number; end: number; dir: 1 | -1 }
+
 /** Piecewise map between target coordinates and x: a slot (t0 === t1) is an insertion boundary. */
 export interface TargetMapEntry { x0: number; x1: number; t0: number; t1: number; kind: 'seq' | 'slot' | 'gap' | 'cluster' }
 
 export interface ClusterItem {
   kind: 'cluster';
   id: string;
-  items: Item[];
+  items: ChainItem[];
   target: Span;
   bp: number;
   variants: number;
@@ -112,6 +158,8 @@ export interface Scene {
   prims: Prim[];
   hits: SceneHit[];
   targetMap: TargetMapEntry[];
+  /** The occurrence transforms of every drawn visit (inverse and forward hit lookups). */
+  occurrences: OccurrencePlacement[];
   clusters: number;
   metrics: Metrics;
   /** Top-level block identities in draw order (pan determinism). */
@@ -121,7 +169,59 @@ export interface Scene {
 
 // ---------------------------------------------------------------------------------------------------- widths
 
-type TopItem = Item | ClusterItem;
+type TopItem = Item | ClusterItem | MarkedItem;
+type ChainItem = Item | MarkedItem;
+
+/** Every allele of a group, family members and nested ones included. */
+function everyAllele(g: GroupItem, out: AltAllele[] = []): AltAllele[] {
+  for (const a of g.alts) {
+    out.push(a, ...(a.family?.members ?? []));
+    for (const it of a.family?.chain ?? []) if (it.kind === 'group') everyAllele(it, out);
+  }
+  for (const it of g.base.chain) if (it.kind === 'group') everyAllele(it, out);
+  return out;
+}
+
+/** A difference drawn as marks: a validated bubble whose alleles are all below the threshold, none inverted. */
+export function isSmallDifference(g: GroupItem, small: number): boolean {
+  if (small <= 0 || g.type !== 'bubble' || !g.alts.length) return false;
+  if (maxAlleleBp(g) >= small) return false;
+  return everyAllele(g).every(a => a.status === 'ok' && !a.inverted);
+}
+
+const foldCache = new WeakMap<Item[], Map<number, ChainItem[]>>();
+
+/** Runs and small differences in a row become one marked run (a mark does not branch, so it does not end the run). */
+export function foldMarks(items: Item[], small: number): ChainItem[] {
+  if (!small || small <= 0) return items;
+  let byT = foldCache.get(items);
+  if (!byT) { byT = new Map(); foldCache.set(items, byT); }
+  const hit = byT.get(small);
+  if (hit) return hit;
+  const out: ChainItem[] = [];
+  let pending: (RunItem | GroupItem)[] = [];
+  let marks = 0;
+  const flush = () => {
+    if (marks) {
+      const spans = pending.map(p => p.target).filter((t): t is Span => t != null);
+      out.push({
+        kind: 'marked', id: `m${pending.find(p => p.kind === 'group')!.id}`, host: pending[0].host, parts: pending,
+        bp: pending.reduce((t, p) => t + (p.kind === 'run' ? p.bp : p.base.bp), 0),
+        target: spans.length ? { start: Math.min(...spans.map(x => x.start)), end: Math.max(...spans.map(x => x.end)) } : null,
+      });
+    } else out.push(...pending);
+    pending = [];
+    marks = 0;
+  };
+  for (const it of items) {
+    if (it.kind === 'run') pending.push(it);
+    else if (it.kind === 'group' && isSmallDifference(it, small)) { pending.push(it); marks += 1; }
+    else { flush(); out.push(it); }
+  }
+  flush();
+  byT.set(small, out);
+  return out;
+}
 
 function contentWidth(items: TopItem[], scale: number, c: Compression, k: Metrics = ROOMY): number {
   let w = 0;
@@ -129,14 +229,26 @@ function contentWidth(items: TopItem[], scale: number, c: Compression, k: Metric
   return w;
 }
 
-function alleleWidth(a: AltAllele, scale: number, c: Compression, k: Metrics = ROOMY): number {
-  return a.family ? contentWidth(a.family.chain, scale, c, k) : budget(a.bp, c) * scale;
+/** A nested chain's width: folded the same way placement folds it. */
+function chainWidth(items: Item[], scale: number, c: Compression, k: Metrics = ROOMY): number {
+  return contentWidth(foldMarks(items, k.small ?? 0), scale, c, k);
 }
 
+function alleleWidth(a: AltAllele, scale: number, c: Compression, k: Metrics = ROOMY): number {
+  if (a.family) return chainWidth(a.family.chain, scale, c, k);
+  const w = budget(a.bp, c) * scale;
+  // An inversion's tube fills its (minimum) slot, so its chevrons and strand-flip connectors read.
+  return a.inverted && a.bp > 0 ? Math.max(w, k.min * INVERSION_SLOTS) : w;
+}
+
+/** An inverted allele's slot is at least this many minimum slots wide (room for its chevrons and crossing). */
+const INVERSION_SLOTS = 2.5;
+
 function groupContent(g: GroupItem, scale: number, c: Compression, k: Metrics = ROOMY): number {
-  let w = contentWidth(g.base.chain, scale, c, k);
+  let w = chainWidth(g.base.chain, scale, c, k);
   for (const a of g.alts) w = Math.max(w, alleleWidth(a, scale, c, k));
-  return Math.max(k.min, w);
+  const min = g.alts.some(a => a.inverted && a.bp > 0) ? k.min * INVERSION_SLOTS : k.min;
+  return Math.max(min, w);
 }
 
 function junctionContent(j: JunctionItem, scale: number, c: Compression, k: Metrics = ROOMY): number {
@@ -147,13 +259,17 @@ function junctionContent(j: JunctionItem, scale: number, c: Compression, k: Metr
 }
 
 /** An item's width at a scale (tests: budgets and child-once accounting). */
-export function layoutWidth(it: Item | ClusterItem, scale: number, c: Compression, k: Metrics = ROOMY): number {
+export function layoutWidth(it: TopItem, scale: number, c: Compression, k: Metrics = ROOMY): number {
   return itemWidth(it, scale, c, k);
 }
+
+/** A marked run made only of insertions (no host sequence) still takes a few pixels. */
+const MARK_ONLY_PX = 3;
 
 function itemWidth(it: TopItem, scale: number, c: Compression, k: Metrics = ROOMY): number {
   switch (it.kind) {
     case 'run': return budget(it.bp, c) * scale;
+    case 'marked': return it.bp > 0 ? budget(it.bp, c) * scale : MARK_ONLY_PX;
     case 'group': return groupContent(it, scale, c, k) + 2 * k.curve;
     case 'junction': return junctionContent(it, scale, c, k) + 2 * k.curve;
     case 'cluster': return Math.max(k.min, budget(it.bp, c) * scale);
@@ -182,17 +298,20 @@ function maxAlleleBp(g: GroupItem): number {
 }
 
 /** Merge consecutive small top-level bubbles (separated by runs shorter than `distance` bp) into clusters. */
-function clusterChain(chain: Item[], distance: number, anySize = false): TopItem[] {
+function clusterChain(chain: ChainItem[], distance: number, anySize = false): TopItem[] {
   const out: TopItem[] = [];
-  let pending: Item[] = [];
-  const small = (it: Item) => it.kind === 'group' && (anySize || (it.type === 'bubble' && maxAlleleBp(it) < MAJOR_BP));
+  let pending: ChainItem[] = [];
+  const small = (it: ChainItem) => it.kind === 'group' && (anySize || (it.type === 'bubble' && maxAlleleBp(it) < MAJOR_BP));
+  const runLike = (it: ChainItem) => it.kind === 'run' || it.kind === 'marked';
   const flush = () => {
     // Trailing runs are not part of a cluster.
-    const tail: Item[] = [];
-    while (pending.length && pending[pending.length - 1].kind === 'run') tail.unshift(pending.pop()!);
-    const groups = pending.filter((it): it is GroupItem => it.kind === 'group');
-    if (groups.length >= 2) {
-      const spans = pending.map(it => (it.kind === 'run' ? it.target : it.kind === 'group' ? it.target : null)).filter((s): s is Span => s != null);
+    const tail: ChainItem[] = [];
+    while (pending.length && runLike(pending[pending.length - 1])) tail.unshift(pending.pop()!);
+    // A marked run's small differences are members too.
+    const groups = pending.flatMap((it): GroupItem[] => (it.kind === 'group' ? [it]
+      : it.kind === 'marked' ? it.parts.filter((p): p is GroupItem => p.kind === 'group') : []));
+    if (pending.some(it => it.kind === 'group') && groups.length >= 2) {
+      const spans = pending.map(it => (it.kind === 'run' || it.kind === 'group' || it.kind === 'marked' ? it.target : null)).filter((s): s is Span => s != null);
       const target = { start: Math.min(...spans.map(s => s.start)), end: Math.max(...spans.map(s => s.end)) };
       // Every variant inside, nested children and family sub-bubbles included: nothing is hidden by a cluster.
       const perPath: Record<string, number> = {};
@@ -223,7 +342,7 @@ function clusterChain(chain: Item[], distance: number, anySize = false): TopItem
   };
   for (const it of chain) {
     if (small(it)) { pending.push(it); continue; }
-    if (it.kind === 'run' && pending.length && it.bp < distance) { pending.push(it); continue; }
+    if (runLike(it) && pending.length && (it as RunItem | MarkedItem).bp < distance) { pending.push(it); continue; }
     flush();
     out.push(it);
   }
@@ -248,23 +367,27 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
 
   // Crowded: compact curve zones first; cluster only when the bubbles' fixed pixels would still crowd out the
   // sequence.
-  let top: TopItem[] = model.chain;
-  let k: Metrics = contentWidth(top, 0, c, ROOMY) > dataWidth * 0.6 ? COMPACT : ROOMY;
+  // Small differences first become marks on the shared tube (no fixed pixels of their own).
+  const small = Math.max(0, opts.smallBp ?? 0);
+  const folded = foldMarks(model.chain, small);
+  let top: TopItem[] = folded;
+  const withSmall = (m: Metrics): Metrics => (small > 0 ? { ...m, small } : m);
+  let k: Metrics = withSmall(contentWidth(top, 0, c, withSmall(ROOMY)) > dataWidth * 0.6 ? COMPACT : ROOMY);
   const span = model.interval.end - model.interval.start;
   for (let distance = 32; contentWidth(top, 0, c, k) > dataWidth * 0.6 && distance <= 2 * span; distance *= 2) {
-    top = clusterChain(model.chain, distance);
+    top = clusterChain(folded, distance);
   }
   // Still overflowing (many large bubbles): cluster bubbles of any size rather than ever zeroing sequence widths;
   // every cluster lists its members.
   for (let distance = 32; contentWidth(top, 0, c, k) > dataWidth * 0.9 && distance <= 2 * span; distance *= 2) {
-    top = clusterChain(model.chain, distance, true);
+    top = clusterChain(folded, distance, true);
   }
   // Last resort (e.g. many fragment junctions): shrink every fixed pixel in proportion, so sequence always keeps
   // some width and nothing runs past the data area.
   const fixed = contentWidth(top, 0, c, k);
   if (fixed > dataWidth * 0.7) {
     const f = (dataWidth * 0.7) / fixed;
-    k = { min: k.min * f, curve: k.curve * f, empty: (k.empty ?? 4) * f };
+    k = withSmall({ min: k.min * f, curve: k.curve * f, empty: (k.empty ?? 4) * f });
   }
   const clusters = top.filter(t => t.kind === 'cluster').length;
   const scale = solveScale(top, dataWidth, c, k);
@@ -277,7 +400,25 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
   // Hits are pushed outermost first: a later (inner, narrower) hit wins at a point.
   const hits = { push: (h: SceneHit) => { hitList.push(within ? { ...h, within } : h); } };
   const targetMap: TargetMapEntry[] = [];
+  const occurrences: OccurrencePlacement[] = [];
+  /** Repeat visits drawn in an allele, resolved to return arcs once every host occurrence is placed. */
+  const pendingArcs: { x: number; y: number; of: string; lane: string; color: string; tier: number }[] = [];
   const blocks: Scene['blocks'] = [];
+
+  /** Record where visits are drawn over [x0, x0 + w] (in order; `flip`: right to left). */
+  const placeVisits = (visits: Visit[], x0: number, w: number, bp: number, lane: string, owner: string, flip = false) => {
+    if (bp <= 0 || w <= 0) return;
+    let acc = 0;
+    for (const v of visits) {
+      if (v.bp <= 0) continue;
+      const a = x0 + (acc / bp) * w, b = x0 + ((acc + v.bp) / bp) * w;
+      const [px0, px1] = flip ? [x0 + x0 + w - b, x0 + x0 + w - a] : [a, b];
+      const start = v.target ? v.target.start - v.occ.path_span.start : v.occ.clip.start;
+      const dir: 1 | -1 = (Boolean(v.backward) !== flip) ? -1 : 1;
+      occurrences.push({ occ: v.occ.id, node: v.occ.node, lane, owner, x0: px0, x1: px1, start, end: start + v.bp, dir });
+      acc += v.bp;
+    }
+  };
 
   /** Slot y positions of a tube in a lane, for these carriers (lane order). */
   const slotsIn = (lane: string, carriers: string[]): Map<string, Slot> => {
@@ -289,7 +430,7 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
   };
   const backboneSlots = slotsIn(model.target, lanes);
 
-  /** Node boundaries inside a run, at least 5 px apart (and from its ends): legible cuts, not a barcode. */
+  /** Node boundaries inside a run, at least 16 px apart (5 px from its ends): legible cuts, not a barcode. */
   const nodeEdges = (visits: Visit[], x0: number, w: number, bp: number) => {
     const out: number[] = [];
     if (bp <= 0) return out;
@@ -297,18 +438,18 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
     for (let i = 0; i < visits.length - 1; i++) {
       acc += visits[i].bp;
       const x = x0 + (acc / bp) * w;
-      if (x - last >= 5 && x0 + w - x >= 5) { out.push(x); last = x; }
+      if (x - last >= (out.length ? 16 : 5) && x0 + w - x >= 5) { out.push(x); last = x; }
     }
     return out;
   };
 
-  const tube = (x0: number, w: number, slots: Map<string, Slot>, present: string[], visits: Visit[], bp: number, style: 'seq' | 'unresolved') => {
+  const tube = (x0: number, w: number, slots: Map<string, Slot>, present: string[], visits: Visit[], bp: number, style: 'seq' | 'unresolved', arrows?: -1, label = true) => {
     if (w <= 0.01) return;
     const all = [...slots.values()];
     const y = Math.min(...all.map(s => s.y)), h = all.reduce((t, s) => t + s.h, 0);
-    const breaks = c === 'log' && bp > 200 && w > 26 ? [x0 + w / 2] : [];
-    prims.push({ t: 'tube', x0, x1: x0 + w, y, h, slots: all, present, nodes: w > 4 ? nodeEdges(visits, x0, w, bp) : [], style, breaks, outline: '#cbd5e1' });
-    if (c === 'log' && bp > 200 && w > 54) {
+    const breaks = c === 'log' && bp > 200 && w > 26 && !arrows ? [x0 + w / 2] : [];
+    prims.push({ t: 'tube', x0, x1: x0 + w, y, h, slots: all, present, nodes: w > 4 ? nodeEdges(visits, x0, w, bp) : [], style, breaks, outline: '#cbd5e1', ...(arrows ? { arrows } : {}) });
+    if (label && c === 'log' && bp > 200 && w > 54) {
       overlay.push({ t: 'text', x: x0 + w / 2, y: y - 3, text: formatBpShort(bp), color: '#94a3b8', align: 'center', size: 9, bold: false });
     }
   };
@@ -327,10 +468,13 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
   /** Lay a chain out from x in a host tube; returns its width. `onTarget`: the host is the target backbone. */
   const placeChain = (items: TopItem[], x: number, host: string, slots: Map<string, Slot>, onTarget: boolean, depth: number): number => {
     const start = x;
-    for (const it of items) {
+    // Nested chains (a base allele's, a family's) fold their small differences the way their widths did.
+    const list: TopItem[] = depth === 0 ? items : foldMarks(items as Item[], small);
+    for (const it of list) {
       const w = itemWidth(it, scale, c, k);
       if (depth === 0) blocks.push({ id: it.id, kind: it.kind === 'group' ? `${it.kind}:${it.type}` : it.kind, x0: x, x1: x + w });
       if (it.kind === 'run') placeRun(it, x, w, host, slots, onTarget);
+      else if (it.kind === 'marked') placeMarked(it, x, w, host, slots, onTarget);
       else if (it.kind === 'group') placeGroup(it, x, w, host, slots, onTarget, depth);
       else if (it.kind === 'junction') placeJunction(it, x, w, slots);
       else placeCluster(it, x, w, slots);
@@ -342,6 +486,7 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
   function placeRun(run: RunItem, x: number, w: number, host: string, slots: Map<string, Slot>, onTarget: boolean) {
     if (w <= 0.01) return;
     tube(x, w, slots, run.carriers, run.visits, run.bp, 'seq');
+    placeVisits(run.visits, x, w, run.bp, host, run.id);
     const row = rowOf.get(host)!;
     hits.push({ x0: x, x1: x + w, y0: row.top, y1: row.top + row.height, cursor: onTarget,
       payload: { kind: 'run', run, host, visit: run.visits[0], offset: 0 } });
@@ -357,10 +502,103 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
     }
   }
 
+  /** The host's sequence (target visits, at the top level) of a small group's base allele, nested children too. */
+  const baseVisits = (g: GroupItem, out: Visit[] = []): Visit[] => {
+    for (const it of g.base.chain) {
+      if (it.kind === 'run') out.push(...it.visits);
+      else if (it.kind === 'group') baseVisits(it, out);
+    }
+    return out;
+  };
+
+  /**
+   * A marked run: one tube through runs and small differences, each part in proportion to its host bp. A small
+   * difference is a mark on each carrier's stripe — a tick (substitution), a notch (deletion) or a caret
+   * (insertion) — with a pin outside the tube on the stripe's nearer side; its hit (at least 8 px) wins over the run.
+   */
+  function placeMarked(m: MarkedItem, x: number, w: number, host: string, slots: Map<string, Slot>, onTarget: boolean) {
+    const row = rowOf.get(host)!;
+    const all = [...slots.values()];
+    const ty0 = Math.min(...all.map(s => s.y)) - 1.5, ty1 = Math.max(...all.map(s => s.y + s.h)) + 1.5;
+    const index = new Map(all.map((s, i) => [s.key, i]));
+    const sideOf = (key: string): 'up' | 'down' => ((index.get(key) ?? 0) * 2 <= all.length - 1 ? 'up' : 'down');
+    const segments: { x0: number; x1: number; present: string[] }[] = [];
+    const visits: Visit[] = [];
+    const markHits: SceneHit[] = [];
+    const marks: Prim[] = [];
+    let acc = 0;
+    const xAt = (bp: number) => (m.bp > 0 ? x + (bp / m.bp) * w : x + w / 2);
+    for (const part of m.parts) {
+      const bp = part.kind === 'run' ? part.bp : part.base.bp;
+      const x0 = xAt(acc), x1 = xAt(acc + bp);
+      if (part.kind === 'run') {
+        segments.push({ x0, x1, present: part.carriers });
+        visits.push(...part.visits);
+        placeVisits(part.visits, x0, x1 - x0, bp, host, part.id);
+        hits.push({ x0, x1, y0: row.top, y1: row.top + row.height, cursor: onTarget, payload: { kind: 'run', run: part, host, visit: part.visits[0], offset: 0 } });
+        if (onTarget) {
+          let a = 0;
+          for (const v of part.visits) {
+            if (v.target && v.bp > 0) targetMap.push({ x0: x0 + (a / bp) * (x1 - x0), x1: x0 + ((a + v.bp) / bp) * (x1 - x0), t0: v.target.start, t1: v.target.end, kind: 'seq' });
+            a += v.bp;
+          }
+        }
+      } else {
+        const g = part;
+        const alleles = g.alts.flatMap(a => [a, ...(a.family?.members ?? [])]);
+        const present = lanes.filter(key => g.base.carriers.includes(key) || alleles.some(a => a.carriers.includes(key)));
+        const bvs = baseVisits(g);
+        if (x1 > x0) segments.push({ x0, x1, present });
+        visits.push(...bvs);
+        placeVisits(bvs, x0, x1 - x0, bp, host, g.id);
+        if (g.base.bp > 0) {
+          hits.push({ x0, x1, y0: row.top, y1: row.top + row.height, cursor: false, payload: { kind: 'base', group: g, lane: host } });
+          if (onTarget) {
+            let a = 0;
+            for (const v of bvs) {
+              if (v.target && v.bp > 0) targetMap.push({ x0: x0 + (a / bp) * (x1 - x0), x1: x0 + ((a + v.bp) / bp) * (x1 - x0), t0: v.target.start, t1: v.target.end, kind: 'seq' });
+              a += v.bp;
+            }
+          }
+        } else {
+          hits.push({ x0: x0 - 2, x1: x1 + 2, y0: row.top, y1: row.top + row.height, cursor: false, payload: { kind: 'slot', group: g, boundary: g.target ? g.target.start : null } });
+          if (onTarget && g.target) targetMap.push({ x0, x1, t0: g.target.start, t1: g.target.start, kind: 'slot' });
+        }
+        const cx = (x0 + x1) / 2;
+        const half = Math.max(1, (x1 - x0) / 2);
+        for (const a of alleles) {
+          const kind: 'sub' | 'del' | 'ins' = g.base.bp === 0 ? 'ins' : a.bp === 0 ? 'del' : 'sub';
+          for (const key of a.carriers) {
+            const s = slots.get(key);
+            if (!s) continue;
+            const side = sideOf(key);
+            marks.push({ t: 'vmark', x0: cx - half, x1: cx + half, y: s.y, h: s.h, ty0, ty1, side, color: s.color, kind });
+            const hx = Math.max(4, half);
+            markHits.push({ x0: cx - hx, x1: cx + hx, y0: side === 'up' ? ty0 - 8 : s.y - 1, y1: side === 'down' ? ty1 + 8 : s.y + s.h + 1,
+              cursor: false, payload: { kind: 'allele', group: g, allele: a, lane: key, visit: null, offset: 0 } });
+          }
+        }
+      }
+      acc += bp;
+    }
+    if (w > 0.01) {
+      const breaks = c === 'log' && m.bp > 200 && w > 26 ? [x + w / 2] : [];
+      prims.push({ t: 'tube', x0: x, x1: x + w, y: ty0 + 1.5, h: ty1 - ty0 - 3, slots: all, present: lanes.filter(key => segments.some(sg => sg.present.includes(key))),
+        nodes: w > 4 ? nodeEdges(visits, x, w, m.bp) : [], style: 'seq', breaks, outline: '#cbd5e1', segments });
+      // Its length label only where no mark pin sits under it.
+      const lx = x + w / 2;
+      if (c === 'log' && m.bp > 200 && w > 54 && !marks.some(p => p.t === 'vmark' && p.side === 'up' && Math.abs((p.x0 + p.x1) / 2 - lx) < 26)) {
+        overlay.push({ t: 'text', x: lx, y: ty0 - 2, text: formatBpShort(m.bp), color: '#94a3b8', align: 'center', size: 9, bold: false });
+      }
+    }
+    prims.push(...marks);
+    for (const h of markHits) hits.push(h);
+  }
+
   function placeGroup(g: GroupItem, x: number, w: number, host: string, slots: Map<string, Slot>, onTarget: boolean, depth: number) {
     const gx0 = x, gx1 = x + w, cx0 = gx0 + CURVE, cx1 = gx1 - CURVE;
     const hostRow = rowOf.get(host)!;
-    const baseW = contentWidth(g.base.chain, scale, c, k);
+    const baseW = chainWidth(g.base.chain, scale, c, k);
     // Base allele: its chain in the host tube, the base carriers' stripes through the curve zones and filler.
     if (baseW > 0) {
       // The group's own hit first: its base sequence and nested children (pushed after) win where they are.
@@ -407,9 +645,16 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
       const own = slotsIn(lane, carriers);
       const aw = alleleWidth(a, scale, c, k);
       const dashed = a.status !== 'ok';
+      const inverted = Boolean(a.inverted) && !a.family && a.bp > 0;
       for (const k of carriers) {
         const hs = slots.get(k), as = own.get(k)!;
         if (!hs) continue;
+        if (inverted) {
+          // Strand-flip connectors: in to the allele's far end, walked right to left, out from its near end.
+          prims.push({ t: 'curve', x0: gx0, y0: hs.y + hs.h / 2, x1: cx0 + aw, y1: as.y + as.h / 2, color: as.color, w: as.h, dashed });
+          prims.push({ t: 'curve', x0: cx0, y0: as.y + as.h / 2, x1: gx1, y1: hs.y + hs.h / 2, color: as.color, w: as.h, dashed });
+          continue;
+        }
         prims.push({ t: 'curve', x0: gx0, y0: hs.y + hs.h / 2, x1: cx0, y1: as.y + as.h / 2, color: as.color, w: as.h, dashed });
         prims.push({ t: 'curve', x0: cx1, y0: as.y + as.h / 2, x1: gx1, y1: hs.y + hs.h / 2, color: as.color, w: as.h, dashed });
       }
@@ -435,9 +680,21 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
         placeChain(a.family.chain, cx0, lane, own, false, depth + 1);
         within = outer;
       } else if (a.bp > 0) {
-        tube(cx0, aw, own, carriers, a.visits, a.bp, dashed ? 'unresolved' : 'seq');
+        tube(cx0, aw, own, carriers, a.visits, a.bp, dashed ? 'unresolved' : 'seq', inverted ? -1 : undefined, !inverted);
+        placeVisits(a.visits, cx0, aw, a.bp, lane, a.id, inverted);
+        // Repeat visits: a return arc each (at most four tiers) back to the host occurrence they repeat.
+        const tubeY = Math.min(...[...own.values()].map(sl => sl.y));
+        let acc = 0;
+        for (const v of a.visits) {
+          if (v.repeat && v.repeat.n <= MAX_REPEAT_VISITS && v.bp > 0) {
+            const mid = (acc + v.bp / 2) / a.bp;
+            const x = inverted ? cx0 + aw - mid * aw : cx0 + mid * aw;
+            pendingArcs.push({ x, y: tubeY - 1, of: v.repeat.of, lane: host, color: colorOf(lane), tier: Math.min(3, Math.max(0, v.repeat.n - 2)) });
+          }
+          acc += v.bp;
+        }
       }
-      straight(cx0 + aw, cx1, own, carriers, a.bp > 0 ? 'connector' : (dashed ? 'dashed' : 'connector'));
+      if (!inverted) straight(cx0 + aw, cx1, own, carriers, a.bp > 0 ? 'connector' : (dashed ? 'dashed' : 'connector'));
       const label = alleleLabel(g, a);
       const tubeTop = Math.min(...[...own.values()].map(s => s.y));
       if (label && (cx1 - cx0) >= label.length * 5.2) {
@@ -491,6 +748,7 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
           prims.push({ t: 'curve', x0: cx1, y0: as.y + as.h / 2, x1: gx1, y1: hs.y + hs.h / 2, color: as.color, w: as.h, dashed: false });
         }
         tube(cx0, aw, own, a.carriers, a.visits, a.bp, 'seq');
+        placeVisits(a.visits, cx0, aw, a.bp, lane, a.id);
         straight(cx0 + aw, cx1, own, a.carriers, 'connector');
         const row = rowOf.get(lane)!;
         hits.push({ x0: cx0, x1: cx0 + Math.max(1, aw), y0: row.top, y1: row.top + row.height, cursor: false, payload: { kind: 'allele', group: j, allele: a, lane, visit: null, offset: 0 } });
@@ -512,7 +770,10 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
 
   function placeCluster(cl: ClusterItem, x: number, w: number, slots: Map<string, Slot>) {
     const carriers = new Set<string>();
-    for (const it of cl.items) if (it.kind === 'run') it.carriers.forEach(k => carriers.add(k));
+    for (const it of cl.items) {
+      if (it.kind === 'run') it.carriers.forEach(k => carriers.add(k));
+      else if (it.kind === 'marked') for (const p of it.parts) if (p.kind === 'run') p.carriers.forEach(k => carriers.add(k));
+    }
     const present = lanes.filter(k => carriers.has(k));
     const all = [...slots.values()];
     const y = Math.min(...all.map(s => s.y)), h = all.reduce((t, s) => t + s.h, 0);
@@ -537,6 +798,14 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
   }
 
   placeChain(top, dataLeft, model.target, backboneSlots, true, 0);
+  // Return arcs: from each drawn repeat visit back to the host occurrence it repeats (when that is drawn).
+  for (const arc of pendingArcs) {
+    const to = occurrences.find(o => o.occ === arc.of && o.lane === arc.lane);
+    const hostSlots = arc.lane === model.target ? backboneSlots : null;
+    if (!to || !hostSlots) continue;
+    const bottom = Math.max(...[...hostSlots.values()].map(sl => sl.y + sl.h)) + 1.5;
+    overlay.push({ t: 'arc', x0: arc.x, y0: arc.y, x1: (to.x0 + to.x1) / 2, y1: bottom, color: arc.color, tier: arc.tier });
+  }
 
   // Open ends: caps where a path's verified walk stops; an unplaced run beyond gets a short dotted lead.
   targetMap.sort((p, q) => p.x0 - q.x0);
@@ -563,13 +832,21 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
   const lastRow = rows[rows.length - 1];
   const scene: Scene = {
     width: opts.width, height: (lastRow ? lastRow.top + lastRow.height : opts.rulerHeight) + opts.laneGap,
-    dataLeft, dataWidth, scale, rows, prims: [...prims, ...overlay], hits: hitList, targetMap, clusters, metrics: k, blocks, reversed: opts.reversed,
+    dataLeft, dataWidth, scale, rows, prims: [...prims, ...overlay], hits: hitList, targetMap, occurrences, clusters, metrics: k, blocks, reversed: opts.reversed,
   };
   return opts.reversed ? mirror(scene) : scene;
 }
 
+/** "×3" when an allele repeats a node this path also walks on the host (its highest visit count). */
+function repeatTag(a: AltAllele): string {
+  const n = Math.max(0, ...a.visits.map(v => v.repeat?.count ?? 0));
+  return n > 1 ? ` · repeat ×${n}` : '';
+}
+
 function alleleLabel(g: GroupItem, a: AltAllele): string | null {
   if (a.status === 'unresolved') return `${formatBpShort(a.bp)} ?`;
+  if (a.inverted) return `inv ${formatBpShort(a.bp)}`;
+  if (g.base.bp === 0 && a.visits.some(v => v.repeat)) return `+${formatBpShort(a.bp)}${repeatTag(a)}`;
   if (g.base.bp === 0) return `+${formatBpShort(a.bp)}`;
   if (a.bp === 0) return `−${formatBpShort(g.base.bp)}`;
   if (a.bp >= 10 || g.base.bp >= 10) return `${formatBpShort(a.bp)}/${formatBpShort(g.base.bp)}`;
@@ -640,29 +917,42 @@ export function sceneInverse(scene: Scene, x: number, y: number): SceneInverse |
   const p = top.payload;
   switch (p.kind) {
     case 'run': {
-      const at = locate(p.run.visits, p.run.bp, f(top));
-      if (!at) return null;
-      const offset = occurrenceOffset(at.visit, at.offset);
-      if (at.visit.target) return { kind: 'target', occurrence: at.visit.occ.id, offset, pos: Math.min(at.visit.target.end - 1, at.visit.target.start + at.offset) };
-      return { kind: 'allele', path: p.host, occurrence: at.visit.occ.id, offset, boundary: top.within ? boundaryOf(top.within.group) : null,
+      const at = placementAt(scene, x, p.run.id, p.host);
+      const visit = at ? p.run.visits.find(v => v.occ.id === at.place.occ) : undefined;
+      if (!at || !visit) return null;
+      if (visit.target) return { kind: 'target', occurrence: visit.occ.id, offset: at.offset, pos: visit.occ.path_span.start + at.offset };
+      return { kind: 'allele', path: p.host, occurrence: visit.occ.id, offset: at.offset, boundary: top.within ? boundaryOf(top.within.group) : null,
         group: top.within?.group.id ?? p.run.id };
     }
     case 'allele': {
       const boundary = boundaryOf(p.group);
       if (p.allele.bp === 0) return { kind: 'connector', group: p.group.id, boundary };
       if (!p.allele.family && !top.within && p.group.kind === 'group' && p.group.alts.every(a => a !== p.allele)) {
-        // A family member: its shared stretches are the lead's runs in the lead's lane at this x.
+        // A family member: its shared stretches are the lead's runs in the lead's lane at this x; the member's own
+        // occurrence of that node, at the same drawn position.
         const lead = p.group.alts.find(a => a.family?.members.includes(p.allele));
         const run = lead && scene.hits.find(h => h.payload.kind === 'run' && h.payload.host === lead.carriers[0] && x >= h.x0 && x <= h.x1);
         if (run && run.payload.kind === 'run' && run.payload.run.carriers.includes(p.lane)) {
-          const at = locate(run.payload.run.visits, run.payload.run.bp, f(run));
-          const mine = at && p.allele.visits.find(v => v.occ.node === at.visit.occ.node);
-          if (at && mine) return { kind: 'allele', path: p.lane, occurrence: mine.occ.id, offset: occurrenceOffset(mine, at.offset), boundary, group: p.group.id };
+          const at = placementAt(scene, x, run.payload.run.id, lead!.carriers[0]);
+          const leadVisit = at && run.payload.run.visits.find(v => v.occ.id === at.place.occ);
+          const mine = leadVisit && p.allele.visits.find(v => v.occ.node === leadVisit.occ.node);
+          if (at && leadVisit && mine && p.lane === p.allele.carriers[0]) {
+            const u = at.place.dir === 1 ? at.offset - at.place.start : at.place.end - 1 - at.offset;
+            const dir = Boolean(mine.backward) === Boolean(leadVisit.backward) ? at.place.dir : -at.place.dir;
+            const len = mine.occ.clip.end - mine.occ.clip.start;
+            const uu = Math.max(0, Math.min(len - 1, u));
+            return { kind: 'allele', path: p.lane, occurrence: mine.occ.id, offset: dir === 1 ? mine.occ.clip.start + uu : mine.occ.clip.end - 1 - uu, boundary, group: p.group.id };
+          }
         }
         return { kind: 'allele', path: p.lane, occurrence: null, offset: 0, boundary, group: p.group.id };
       }
-      const at = locate(p.allele.visits, p.allele.bp, f(top));
-      return { kind: 'allele', path: p.lane, occurrence: at?.visit.occ.id ?? null, offset: at ? occurrenceOffset(at.visit, at.offset) : 0, boundary, group: p.group.id };
+      // The allele's visits are its lead carrier's occurrences: another carrier of the same walk has its own.
+      if (p.lane !== p.allele.carriers[0]) return { kind: 'allele', path: p.lane, occurrence: null, offset: 0, boundary, group: p.group.id };
+      const at = placementAt(scene, x, p.allele.id, p.lane);
+      if (at) return { kind: 'allele', path: p.lane, occurrence: at.place.occ, offset: at.offset, boundary, group: p.group.id };
+      // A mark (no tube of its own): the allele's first base.
+      const first = p.allele.visits.find(v => v.bp > 0);
+      return { kind: 'allele', path: p.lane, occurrence: first?.occ.id ?? null, offset: first ? (first.backward ? first.occ.clip.end - 1 : first.occ.clip.start) : 0, boundary, group: p.group.id };
     }
     case 'filler': return { kind: 'connector', group: p.group.id, boundary: boundaryOf(p.group) };
     case 'slot': return { kind: 'connector', group: p.group.id, boundary: p.boundary ?? boundaryOf(p.group) };
@@ -678,10 +968,28 @@ export function sceneInverse(scene: Scene, x: number, y: number): SceneInverse |
   return null;
 }
 
-/** An offset inside a drawn piece of a visit, as an offset in the whole visit (path-forward). */
-function occurrenceOffset(v: Visit, offset: number): number {
-  const start = v.target ? v.target.start - v.occ.path_span.start : v.occ.clip.start;
-  return start + offset;
+/** The drawn visit of `owner` (in `lane`) under x, and the path-forward offset in that occurrence. */
+export function placementAt(scene: Scene, x: number, owner?: string, lane?: string): { place: OccurrencePlacement; offset: number } | null {
+  for (const o of scene.occurrences) {
+    if ((owner && o.owner !== owner) || (lane && o.lane !== lane)) continue;
+    if (x < o.x0 || x > o.x1) continue;
+    const span = o.end - o.start;
+    const f = (x - o.x0) / Math.max(1e-9, o.x1 - o.x0);
+    const u = Math.min(span - 1, Math.max(0, Math.floor(f * span + 1e-6)));
+    return { place: o, offset: o.dir === 1 ? o.start + u : o.end - 1 - u };
+  }
+  return null;
+}
+
+/** The forward occurrence transform: x at the centre of an occurrence's base (path-forward `offset`), or null. */
+export function xForOccurrence(scene: Scene, occ: string, offset: number, lane?: string, owner?: string): number | null {
+  for (const o of scene.occurrences) {
+    if (o.occ !== occ || (lane && o.lane !== lane) || (owner && o.owner !== owner)) continue;
+    if (offset < o.start || offset >= o.end) continue;
+    const u = o.dir === 1 ? offset - o.start : o.end - 1 - offset;
+    return o.x0 + ((u + 0.5) / (o.end - o.start)) * (o.x1 - o.x0);
+  }
+  return null;
 }
 
 /** Hit test (the last match wins: overlays and narrow parts are pushed later). */
@@ -700,16 +1008,18 @@ function mirror(scene: Scene): Scene {
   const flip = <T extends { x0: number; x1: number }>(o: T): T => ({ ...o, x0: fx(o.x1), x1: fx(o.x0) });
   const prims = scene.prims.map((p): Prim => {
     switch (p.t) {
-      case 'tube': return { ...flip(p), nodes: p.nodes.map(fx), breaks: p.breaks.map(fx) };
+      case 'tube': return { ...flip(p), nodes: p.nodes.map(fx), breaks: p.breaks.map(fx), segments: p.segments?.map(sg => flip(sg)) };
+      case 'vmark': return flip(p);
       case 'stripe': case 'gap': case 'cluster': case 'frame': case 'dots': return flip(p);
-      case 'curve': return { ...p, x0: fx(p.x0), x1: fx(p.x1) };
+      case 'curve': case 'arc': return { ...p, x0: fx(p.x0), x1: fx(p.x1) };
       case 'text': return { ...p, x: fx(p.x), align: p.align === 'left' ? 'right' : p.align === 'right' ? 'left' : 'center' };
       case 'mark': case 'cap': case 'tick': return { ...p, x: fx(p.x) };
     }
   });
   const hits = scene.hits.map(h => flip(h));
   const targetMap = scene.targetMap.map(m => ({ ...m, x0: fx(m.x0), x1: fx(m.x1) })).sort((a, b) => Math.min(a.x0, a.x1) - Math.min(b.x0, b.x1));
-  return { ...scene, prims, hits, targetMap, blocks: scene.blocks.map(b => flip(b)) };
+  const occurrences = scene.occurrences.map(o => ({ ...o, x0: fx(o.x1), x1: fx(o.x0), dir: (o.dir === 1 ? -1 : 1) as 1 | -1 }));
+  return { ...scene, prims, hits, targetMap, occurrences, blocks: scene.blocks.map(b => flip(b)) };
 }
 
 // ---------------------------------------------------------------------------------------------------- hover text
@@ -751,9 +1061,15 @@ function describeOwn(hit: SceneHit, x: number, model: LayoutModel, reversed: boo
       const span = g.target;
       const status = a.status === 'unresolved' ? ` · unresolved (${a.reason})` : '';
       const lens = a.family ? ` · ${[a, ...a.family.members].map(m => `${m.carriers.map(label).join('+')} ${formatBpShort(m.bp)}`).join(', ')}` : '';
-      if (g.base.bp === 0 && span) return `${label(a.carriers[0])} · insertion of ${formatBpShort(a.bp)} at target boundary ${where(span.start)}${lens} · source ${src}${status}`;
+      const reps = a.visits.filter(v => v.repeat);
+      const repeat = reps.length
+        ? ` · ${reps.length === 1 ? 'a repeat visit' : `${reps.length} repeat visits`} of node${new Set(reps.map(v => v.occ.node)).size > 1 ? 's' : ''} ${[...new Set(reps.map(v => v.occ.node))].slice(0, 3).join(', ')} (${reps.map(v => `visit ${v.repeat!.n} of ${v.repeat!.count}`).slice(0, 4).join(', ')}${reps.length > 4 ? ', …' : ''})`
+        : '';
+      if (a.inverted && span) return `${carriers} · inversion of ${formatBpShort(a.bp)}: walks target ${where(span.start)}-${where(span.end)} (${formatBpShort(g.base.bp)}) in reverse${lens} · source ${src}${status}`;
+      if (a.inverted) return `${carriers} · inversion of ${formatBpShort(a.bp)} in place of ${formatBpShort(g.base.bp)} of ${label(g.host)} · source ${src}${status}`;
+      if (g.base.bp === 0 && span) return `${label(a.carriers[0])} · insertion of ${formatBpShort(a.bp)} at target boundary ${where(span.start)}${lens}${repeat} · source ${src}${status}`;
       if (a.bp === 0 && span) return `${carriers} · deletion of ${formatBpShort(g.base.bp)} (target ${where(span.start)}-${where(span.end)})${status}`;
-      if (span) return `${carriers} · ${formatBpShort(a.bp)} in place of target ${where(span.start)}-${where(span.end)} (${formatBpShort(g.base.bp)})${lens} · source ${src}${status}`;
+      if (span) return `${carriers} · ${formatBpShort(a.bp)} in place of target ${where(span.start)}-${where(span.end)} (${formatBpShort(g.base.bp)})${lens}${repeat} · source ${src}${status}`;
       return `${carriers} · ${formatBpShort(a.bp)} in place of ${formatBpShort(g.base.bp)} of ${label(g.host)} · source ${src}${status}`;
     }
     case 'base': {

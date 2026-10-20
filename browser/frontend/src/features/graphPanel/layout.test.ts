@@ -439,24 +439,33 @@ describe('continuity rules (Phase B reviews), on the joint layout', () => {
       [{ start: 100, end: 150 }, 'omitted'], [{ start: 250, end: 300 }, 'omitted'],
     ]);
   });
-  it('a local inversion is unresolved (Gate D), never a plain substitution', () => {
+  it('a local inversion is placed as an inverted allele (Gate D), never a plain substitution', () => {
     const inv = buildLayout(topo([o('t1', '1', 0, 100), o('t2', '2', 100, 100), o('t3', '3', 200, 100), o('t4', '4', 300, 100)],
       [o('a1', '1', 0, 100), o('a3', '3', 100, 100, 'f', true), o('a2', '2', 200, 100, 'f', true), o('a4', '4', 300, 100)],
       [m('t1', 'a1'), m('t3', 'a3', true), m('t2', 'a2', true), m('t4', 'a4')], { start: 0, end: 400 }), []);
-    expect(events(inv)).toEqual([{ type: 'bubble', target: { start: 100, end: 300 }, bp: 200, base: 200, status: 'unresolved' }]);
-    expect(inv.stats.substitutions).toBe(0);
+    expect(events(inv)).toEqual([{ type: 'bubble', target: { start: 100, end: 300 }, bp: 200, base: 200, status: 'ok' }]);
+    expect(groups(inv.chain)[0].alts[0].inverted).toBe(true);
+    expect(inv.stats).toMatchObject({ substitutions: 0, inversions: 1, unresolved: 0 });
     const s = scene(inv);
     const h = s.hits.find(x => x.payload.kind === 'allele')!;
-    expect(describeSceneHit(h, mid(h)[0], inv)).toContain('unresolved (a local inversion)');
+    expect(describeSceneHit(h, mid(h)[0], inv)).toContain('inversion of 200 bp');
+    // Matches against target order that do not fit one reversed run stay an unresolved local inversion.
+    const mixed = buildLayout(topo([o('t1', '1', 0, 100), o('t2', '2', 100, 100), o('t3', '3', 200, 100), o('t4', '4', 300, 100)],
+      [o('a1', '1', 0, 100), o('a2', '2', 100, 100, 'f', true), o('a3', '3', 200, 100, 'f', true), o('a4', '4', 300, 100)],
+      [m('t1', 'a1'), m('t3', 'a3', true), m('t2', 'a2', true), m('t4', 'a4')], { start: 0, end: 400 }), []);
+    expect(events(mixed)).toEqual([{ type: 'bubble', target: { start: 100, end: 300 }, bp: 200, base: 200, status: 'unresolved' }]);
+    expect(mixed.stats).toMatchObject({ inversions: 0, unresolved: 1, substitutions: 0 });
   });
-  it('anchors outside the view place an edge insertion; a duplicated visit is not placed', () => {
+  it('anchors outside the view place an edge insertion; a duplicated visit is a repeat of its anchored copy', () => {
     const ctx = buildLayout(topo([clip(o('t1', '1', 900, 200), 100, 200), o('t2', '2', 1100, 100)],
       [o('a1', '1', 900, 200), o('ins', '9', 1100, 300), o('a2', '2', 1400, 100)], [m('t1', 'a1'), m('t2', 'a2')], { start: 1000, end: 1200 }), []);
     expect(events(ctx)).toEqual([{ type: 'bubble', target: { start: 1100, end: 1100 }, bp: 300, base: 0, status: 'ok' }]);
     expect(ctx.chain[0]).toMatchObject({ kind: 'run', bp: 100, target: { start: 1000, end: 1100 } });
     const dup = buildLayout(topo([o('t1', '1', 0, 500)], [o('a1', '1', 0, 500), o('a2', '1', 500, 500)],
       [m('t1', 'a1'), m('t1', 'a2')], { start: 0, end: 500 }), []);
-    expect(dup.stats.anchors.alt).toBe(0);
-    expect(dup.openEnds.map(e => [e.reason, e.bp])).toEqual([['unplaced', 1000]]);
+    // The earliest copy is the anchor; the second visit of node 1 is its repeat (beyond the last flank: unplaced).
+    expect(dup.stats.anchors.alt).toBe(1);
+    expect(dup.stats.repeats).toBe(1);
+    expect(dup.openEnds.map(e => [e.side, e.reason, e.bp])).toEqual([['right', 'unplaced', 500]]);
   });
 });

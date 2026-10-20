@@ -31,8 +31,10 @@
  */
 import type { GraphBinding, GraphCoverage, GraphOccurrence, GraphTopology, Span } from './types';
 
+/** A continuity verdict meaning "a relative inversion, placed" (not a problem). */
+export const INVERSION = 'an inversion';
 /** Continuity problems that do not break a path's walk. */
-const NON_BREAKING = new Set(['a local inversion']);
+const NON_BREAKING = new Set(['a local inversion', INVERSION]);
 /** At most this many target visits per node are candidates for one path visit (design: four visits per node). */
 const MAX_CANDIDATES_PER_VISIT = 4;
 /** Nesting depth kept; deeper groups are summarized into their depth-3 ancestor. */
@@ -48,6 +50,11 @@ export interface Visit {
   target: Span | null;
   /** The orientation relative to the path's baseline comparison (path visits). */
   reverse: boolean;
+  /** Listed (and drawn left to right) against the path's own direction: path visits of a minus comparison. */
+  backward?: boolean;
+  /** A repeat visit: this path already walks the same node on the host (an earlier or later copy), at `of` (the
+   * host occurrence), its `n`-th of `count` visits of the node in this view (Gate D unrolling). */
+  repeat?: { of: string; n: number; count: number };
 }
 
 export interface RunItem {
@@ -75,6 +82,8 @@ export interface AltAllele {
   /** Each carrier's source span (an empty span at the boundary for a deletion). */
   source: { path: string; span: Span }[];
   reason?: string;
+  /** A relative inversion: the allele walks the base allele's sequence in the opposite orientation (Gate D). */
+  inverted?: boolean;
   /** Alleles aligned on this one (shared stretches drawn once); `chain` covers this allele's visits. */
   family?: { members: AltAllele[]; chain: Item[] };
 }
@@ -152,6 +161,8 @@ export interface LayoutModel {
   stats: {
     nodes: number; edges: number; visits: number;
     groups: number; insertions: number; deletions: number; substitutions: number; complex: number;
+    /** Placed relative inversions (Gate D); repeat visits unrolled (non-anchor visits of an anchored node). */
+    inversions: number; repeats: number;
     unresolved: number; unplaced: number; anchors: Record<string, number>;
   };
 }
@@ -247,7 +258,10 @@ interface Candidate {
   status: AlleleStatus;
   reason?: string;
   source: Span;
+  inverted?: boolean;
 }
+
+
 
 interface MemberSolution {
   key: string;
@@ -317,14 +331,16 @@ function solveLevel(input: LevelInput, buildFamilies: (g: GroupItem) => void): L
         if (sa === sb) {
           if (b.i === a.i + 1 && b.j === a.j + 1 && !problem) {
             // shared step
-          } else if (b.i === a.i + 1 && b.j === a.j + 1) {
+          } else if (b.i === a.i + 1 && b.j === a.j + 1 && problem !== INVERSION) {
             // Adjacent on both sides but not one walk: open ends, never an empty "insertion".
             run += 1;
           } else {
             const fallback = a.j >= 0 && a.j < m.visits.length
               ? (m.visits[a.j].reverse ? m.visits[a.j].occ.path_span.start : m.visits[a.j].occ.path_span.end) : 0;
+            const inverted = problem === INVERSION;
             candidates.push({ path: m.key, seg: sa, p: a.i + 1, q: b.i, visits: between,
-              status: problem ? 'unresolved' : 'ok', reason: problem ?? undefined, source: sourceSpanOf(between, fallback) });
+              status: problem && !inverted ? 'unresolved' : 'ok', reason: problem && !inverted ? problem : undefined,
+              source: sourceSpanOf(between, fallback), inverted: inverted || undefined });
             if (breaking) run += 1;
           }
         } else if (sb === sa + 1 && a.i === bb.segments[sa].to - 1 && b.i === bb.segments[sb].from && !problem) {
@@ -477,7 +493,7 @@ function solveLevel(input: LevelInput, buildFamilies: (g: GroupItem) => void): L
     if (pr.type === 'bubble') {
       const bySig = new Map<string, Candidate[]>();
       for (const c of pr.cands) {
-        const sig = `${c.status}|${signature(c.visits)}`;
+        const sig = `${c.status}|${c.inverted ? 'inv|' : ''}${signature(c.visits)}`;
         const list = bySig.get(sig) ?? [];
         list.push(c);
         bySig.set(sig, list);
@@ -490,6 +506,7 @@ function solveLevel(input: LevelInput, buildFamilies: (g: GroupItem) => void): L
           id: `${id}.${stableId(`${list.map(x => x.path).join('+')}|${signature(c.visits)}`)}`,
           carriers: list.map(x => x.path), visits: c.visits, bp: c.visits.reduce((t, v) => t + v.bp, 0),
           status: c.status, reason: c.reason, source: list.map(x => ({ path: x.path, span: x.source })),
+          ...(c.inverted ? { inverted: true } : {}),
         };
       }).sort((a, b) => byLane(a.carriers[0], b.carriers[0]));
     } else {
@@ -712,7 +729,8 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
     }
     const reverse = minus > plus;
     const ordered = reverse ? path.occurrences.slice().reverse() : path.occurrences.slice();
-    const visits: Visit[] = ordered.map(o => ({ occ: o, bp: o.clip.end - o.clip.start, target: null, reverse: o.reverse !== reverse }));
+    const visits: Visit[] = ordered.map(o => ({ occ: o, bp: o.clip.end - o.clip.start, target: null, reverse: o.reverse !== reverse,
+      ...(reverse ? { backward: true } : {}) }));
     memberVisits.set(path.binding, visits);
     // Candidates of the baseline parity. A visit with one candidate that no other visit also claims is unique; the
     // colinear chain of unique pairs is the frame. A repeat visit (several candidates, at most four) is placed only
@@ -720,11 +738,22 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
     // duplication) are not placed. Unplaced visits stay part of a run (an allele or an open end), never dropped.
     const cands: number[][] = visits.map(v => (perPath.get(v.occ.id) ?? [])
       .filter((m: { reverse: boolean }) => m.reverse === reverse).map((m: { i: number }) => m.i));
-    const claims = new Map<number, number>();
-    cands.forEach(c => { if (c.length === 1) claims.set(c[0], (claims.get(c[0]) ?? 0) + 1); });
+    // A target visit claimed by several path visits (a tandem or nearby repeat walked more often than the target
+    // walks it) takes the earliest colinear claimant; the other copies stay in the walk as repeat visits of it
+    // (insertions), unrolled by occurrence rather than left unplaced.
+    const claimants = new Map<number, number[]>();
+    cands.forEach((c, j) => { if (c.length === 1) { const l = claimants.get(c[0]) ?? []; l.push(j); claimants.set(c[0], l); } });
     const unique: { a: number; b: number }[] = [];
-    cands.forEach((c, j) => { if (c.length === 1 && claims.get(c[0]) === 1) unique.push({ a: j, b: c[0] }); });
+    cands.forEach((c, j) => { if (c.length === 1) unique.push({ a: j, b: c[0] }); });
+    unique.sort((x, y) => x.a - y.a || y.b - x.b);
     const frame = colinearChain(unique);
+    for (let k = 0; k < frame.length; k++) {
+      const list = claimants.get(frame[k].b)!;
+      if (list.length < 2) continue;
+      const lo = k > 0 ? frame[k - 1].a : -1;
+      const earliest = list.find(j => j > lo && j < frame[k].a);
+      if (earliest !== undefined) frame[k] = { a: earliest, b: frame[k].b };
+    }
     const pairs = frame.slice();
     let f = 0;
     const resolved: { a: number; b: number }[] = [];
@@ -742,6 +771,7 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
     pairs.sort((x, y) => x.a - y.a || y.b - x.b);
     const anchors = colinearChain(pairs).map(p => ({ j: p.a, i: p.b }));
     anchorCounts[path.binding] = anchors.length;
+    annotateRepeats(visits, anchors, targetOccs);
     const continuous = (a: Anchor, b: Anchor): string | null => {
       const va = visits[a.j], vb = visits[b.j];
       // The window may cut a visit: then the walk between the two is not all here.
@@ -755,11 +785,24 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
         if (j < b.j && (y.clip.start !== 0 || y.clip.end !== visitLength(y))) return 'the walk leaves the extracted window';
       }
       if (b.i <= a.i) return 'target order reversed';
-      // Visits matched in the opposite orientation inside the span: a local inversion (Gate D), not a substitution.
+      // Visits matched in the opposite orientation inside the span: a relative inversion (Gate D), not a
+      // substitution. Placed when those matches run against target order (one per visit, each target visit once)
+      // and carry at least half the allele's bp; anything less consistent stays an unresolved local inversion.
+      let invBp = 0, allBp = 0, last = Infinity, consistent = true, any = false;
+      const used = new Set<number>();
       for (let j = a.j + 1; j < b.j; j++) {
-        for (const m of perPath.get(visits[j].occ.id) ?? []) if (m.reverse !== reverse && m.i > a.i && m.i < b.i) return 'a local inversion';
+        allBp += visits[j].bp;
+        const opposite = (perPath.get(visits[j].occ.id) ?? []).filter((m: { reverse: boolean; i: number }) => m.reverse !== reverse && m.i > a.i && m.i < b.i);
+        if (!opposite.length) continue;
+        any = true;
+        const fit = opposite.filter((m: { i: number }) => m.i < last && !used.has(m.i));
+        if (fit.length !== 1) { consistent = false; continue; }
+        last = fit[0].i;
+        used.add(last);
+        invBp += visits[j].bp;
       }
-      return null;
+      if (!any) return null;
+      return consistent && invBp * 2 >= allBp ? INVERSION : 'a local inversion';
     };
     members.push({ key: path.binding, visits, anchors, continuous });
     // Open ends: the walk before the first anchor and after the last.
@@ -875,7 +918,7 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
   });
 
   // Statistics and summaries.
-  let insertions = 0, deletions = 0, substitutions = 0, unplaced = 0;
+  let insertions = 0, deletions = 0, substitutions = 0, inversions = 0, unplaced = 0;
   const walk = (items: Item[]) => {
     for (const it of items) {
       if (it.kind !== 'group') continue;
@@ -883,7 +926,8 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
         // Each distinct allele once, family members included (their sub-bubbles are within their own allele).
         for (const a of it.alts.flatMap(x => [x, ...(x.family?.members ?? [])])) {
           if (a.status !== 'ok') continue;
-          if (it.base.bp === 0 && a.bp > 0) insertions += 1;
+          if (a.inverted) inversions += 1;
+          else if (it.base.bp === 0 && a.bp > 0) insertions += 1;
           else if (a.bp === 0) deletions += 1;
           else substitutions += 1;
         }
@@ -923,6 +967,8 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
     for (const s of path.plan?.summaries ?? []) summaries.push(summaryText({ binding: path.binding, ...(s as Record<string, unknown>) }));
   }
   const visits = topology.paths.reduce((t, p) => t + p.occurrences.length, 0);
+  let repeats = 0;
+  for (const list of memberVisits.values()) for (const v of list) if (v.repeat) repeats += 1;
   return {
     interval: window, target: topology.target, chain, openEnds, laneNotes,
     rows: topology.paths.map(p => ({
@@ -932,10 +978,50 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
     complete: topology.complete, correspondenceComplete: topology.correspondence_complete, summaries,
     stats: {
       nodes: topology.nodes.length, edges: topology.edges.length, visits,
-      groups: level.counts.groups + familyCounter.n, insertions, deletions, substitutions, complex: level.counts.complex,
+      groups: level.counts.groups + familyCounter.n, insertions, deletions, substitutions, inversions, repeats, complex: level.counts.complex,
       unresolved: level.counts.unresolved, unplaced, anchors: anchorCounts,
     },
   };
+}
+
+// ---------------------------------------------------------------------------------------------------- repeats
+
+/** At most this many visits of one node per path are unrolled with return arcs (design: four). */
+export const MAX_REPEAT_VISITS = 4;
+
+/**
+ * Unrolling repeats by occurrence: a path visit that is not an anchor but walks a node this path also walks as an
+ * anchor (a tandem copy, a repeat inside an insertion) is a repeat visit of that anchored host occurrence — the
+ * nearest one along the path. Every visit of such a node is numbered (n of count), anchors included.
+ */
+function annotateRepeats(visits: Visit[], anchors: Anchor[], host: GraphOccurrence[]): void {
+  const anchoredAt = new Map<string, { j: number; i: number }[]>();
+  for (const a of anchors) {
+    if (a.j < 0 || a.j >= visits.length || a.i < 0 || a.i >= host.length) continue;
+    const node = visits[a.j].occ.node;
+    const list = anchoredAt.get(node) ?? [];
+    list.push(a);
+    anchoredAt.set(node, list);
+  }
+  if (!anchoredAt.size) return;
+  const byNode = new Map<string, number[]>();
+  visits.forEach((v, j) => {
+    if (!anchoredAt.has(v.occ.node)) return;
+    const list = byNode.get(v.occ.node) ?? [];
+    list.push(j);
+    byNode.set(v.occ.node, list);
+  });
+  const anchorJ = new Set(anchors.map(a => a.j));
+  for (const [node, js] of byNode) {
+    if (js.length < 2) continue;
+    const anchored = anchoredAt.get(node)!;
+    js.forEach((j, n) => {
+      if (anchorJ.has(j)) return;
+      let best = anchored[0];
+      for (const a of anchored) if (Math.abs(a.j - j) < Math.abs(best.j - j)) best = a;
+      visits[j].repeat = { of: host[best.i].id, n: n + 1, count: js.length };
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------------------------------- families
