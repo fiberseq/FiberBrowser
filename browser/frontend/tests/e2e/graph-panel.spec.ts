@@ -434,6 +434,18 @@ test('HPRC navigation-to-topology traces (measurement only)', async ({ page }) =
       out[label] = await measure(page, graph, label, windows, chrom === 'chr3' ? undefined : typedLocus(page, graph));
       console.log(JSON.stringify((out[label] as any).summary));
     }
+    // MHC and chr19 at 10 kb (the panel navigates on its own by now).
+    if (process.env.FIBERBROWSER_GRAPH_SCREENSHOT_DIR) {
+      const dir = process.env.FIBERBROWSER_GRAPH_SCREENSHOT_DIR;
+      const host = page.locator('[data-analysis-panel-id]').filter({ has: graph });
+      for (const [name, chrom, start] of [['graph-mhc-light.png', 'chr6', 29_000_000], ['graph-chr19-light.png', 'chr19', 43_017_556]] as const) {
+        await typedLocus(page, graph)(chrom, start, start + 10_000);
+        await settled(graph, start, 60_000);
+        await page.mouse.move(5, 5);
+        await page.waitForTimeout(300);
+        await host.screenshot({ path: path.join(dir, name) });
+      }
+    }
   } finally {
     await stopServer(server);
     writeFileSync(`${MEASURE_OUT}.hprc.json`, JSON.stringify(out, null, 1));

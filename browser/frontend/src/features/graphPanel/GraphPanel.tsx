@@ -16,7 +16,7 @@ import { cancelSubgraph, querySubgraph, GraphRequestError } from './api';
 import { drawRuler, drawScene, GRAPH_GUTTER, GRAPH_LANE_GAP, GRAPH_LANE_HEIGHT, GRAPH_RIGHT_PAD, GRAPH_RULER_HEIGHT, laneColor, laneTop } from './canvas';
 import { clampViewport, formatBp, formatLocus, fromX, makeTransform, panViewport, parseLocus, zoomViewport, bpScale, type GraphViewport } from './coordinates';
 import { buildLayout, laneLabel, type LayoutModel } from './layout';
-import { buildScene, describeSceneHit, sceneHitAt, sceneInverse, smallDifferenceBp, targetAtX, type Compression, type Scene } from './scene';
+import { buildScene, COMPACT_LANE_PX, describeSceneHit, planScene, sceneHitAt, sceneInverse, smallDifferenceBp, targetAtX, type Compression, type Scene } from './scene';
 import { type LinearView, canFollow, defaultCompared, defaultTarget, effectiveViewport, initialGraphView, initiatorView, restoreProblem, retargetFor, selectableBindings, togglePath, GRAPH_MAX_PATHS } from './state';
 import { useGraphStatusStore } from './statusStore';
 import { usePanelContentHeightStore } from '../../stores/panelContentHeightStore';
@@ -208,18 +208,6 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   const smallMode = state?.layoutSettings.smallDifferences ?? 'marks';
   const drawnSpan = response ? response.result.interval.end - response.result.interval.start : 0;
   const smallBp = smallDifferenceBp(drawnSpan, width - GRAPH_GUTTER - GRAPH_RIGHT_PAD, smallMode);
-  // Lanes grow with the panel body (28–40 px): thicker tubes when there is room, the saved height a minimum.
-  const minLane = state?.layoutSettings.laneHeight ?? GRAPH_LANE_HEIGHT;
-  const rowsWanted = Math.max(1, response?.result.paths.length ?? state?.selectedPathKeys.length ?? 1);
-  const laneHeight = Math.max(minLane, Math.min(40, Math.floor((bodyHeight - GRAPH_RULER_HEIGHT - STATUS_HEIGHT - 12) / rowsWanted) - GRAPH_LANE_GAP));
-  // Its natural body height (lanes of NATURAL_LANE px, the ruler and the status line): stacked with other panels it
-  // takes this, not an equal share of the column (plugin sizeToContent).
-  const naturalHeight = GRAPH_RULER_HEIGHT + STATUS_HEIGHT + 12 + rowsWanted * (Math.max(minLane, NATURAL_LANE) + GRAPH_LANE_GAP);
-  useEffect(() => {
-    if (!panelId) return;
-    usePanelContentHeightStore.getState().report(panelId, naturalHeight);
-  }, [panelId, naturalHeight]);
-  useEffect(() => () => { if (panelId) usePanelContentHeightStore.getState().report(panelId, null); }, [panelId]);
   const layoutMsRef = useRef(0);
   // The joint layout model: once per response (its identities depend only on the response).
   const model = useMemo(() => {
@@ -229,17 +217,47 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     layoutMsRef.current = performance.now() - t0;
     return m;
   }, [response, reg]);
-  // Its scene: per width, compression and reversal.
-  const scene = useMemo(() => {
+  // The scene's plan (marks, clusters, scale, which lanes draw something of their own): per width and settings.
+  const plan = useMemo(() => {
     if (!model) return null;
+    const t0 = performance.now();
+    const out = planScene(model, { width, gutter: GRAPH_GUTTER, rightPad: GRAPH_RIGHT_PAD, compression, smallBp });
+    layoutMsRef.current += performance.now() - t0;
+    return out;
+  }, [model, width, compression, smallBp]);
+  // Lanes grow with the panel body (28–40 px): thicker tubes when there is room, the saved height a minimum. A lane
+  // with nothing of its own drawn (its differences all marks on the shared tube) is a compact label row.
+  const minLane = state?.layoutSettings.laneHeight ?? GRAPH_LANE_HEIGHT;
+  const rowsWanted = Math.max(1, response?.result.paths.length ?? state?.selectedPathKeys.length ?? 1);
+  const fullRows = plan && model ? Math.max(1, model.rows.filter(r => plan.drawnLanes.has(r.key)).length) : rowsWanted;
+  const compactRows = rowsWanted - fullRows;
+  const compactSpace = compactRows * (COMPACT_LANE_PX + GRAPH_LANE_GAP);
+  const laneHeight = Math.max(minLane, Math.min(40, Math.floor((bodyHeight - GRAPH_RULER_HEIGHT - STATUS_HEIGHT - 12 - compactSpace) / fullRows) - GRAPH_LANE_GAP));
+  // Its natural body height (full lanes of NATURAL_LANE px, compact rows, the ruler and the status line): stacked
+  // with other panels it takes this, not an equal share of the column (plugin sizeToContent). It only grows for one
+  // selection of paths, so panning never makes the panels below jump back and forth.
+  const natural = GRAPH_RULER_HEIGHT + STATUS_HEIGHT + 12 + compactSpace + fullRows * (Math.max(minLane, NATURAL_LANE) + GRAPH_LANE_GAP);
+  const naturalRef = useRef<{ key: string; height: number }>({ key: '', height: 0 });
+  const selectionKey = (state?.selectedPathKeys ?? []).join(',');
+  if (naturalRef.current.key !== selectionKey) naturalRef.current = { key: selectionKey, height: natural };
+  else if (natural > naturalRef.current.height) naturalRef.current = { key: selectionKey, height: natural };
+  const naturalHeight = naturalRef.current.height;
+  useEffect(() => {
+    if (!panelId) return;
+    usePanelContentHeightStore.getState().report(panelId, naturalHeight);
+  }, [panelId, naturalHeight]);
+  useEffect(() => () => { if (panelId) usePanelContentHeightStore.getState().report(panelId, null); }, [panelId]);
+  // Its scene: per plan, lane height and reversal.
+  const scene = useMemo(() => {
+    if (!model || !plan) return null;
     const t0 = performance.now();
     const colors: Record<string, string> = {};
     for (const r of model.rows) colors[r.key] = laneColor(r);
     const out = buildScene(model, { width, gutter: GRAPH_GUTTER, rightPad: GRAPH_RIGHT_PAD, rulerHeight: GRAPH_RULER_HEIGHT,
-      laneHeight, laneGap: GRAPH_LANE_GAP, compression, reversed, colors, smallBp });
+      laneHeight, laneGap: GRAPH_LANE_GAP, compression, reversed, colors, smallBp, plan });
     layoutMsRef.current += performance.now() - t0;
     return out;
-  }, [model, width, laneHeight, compression, reversed, smallBp]);
+  }, [model, plan, width, laneHeight, compression, reversed, smallBp]);
   // Mark layout on the trace of the response it came from.
   const lastTraceRef = useRef<GraphTrace | null>(null);
   useEffect(() => {

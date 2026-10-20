@@ -352,22 +352,21 @@ function clusterChain(chain: ChainItem[], distance: number, anySize = false): To
 
 // ---------------------------------------------------------------------------------------------------- placement
 
-export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
-  const lanes = model.rows.map(r => r.key);
-  const dataLeft = opts.gutter;
+/** A lane with nothing of its own drawn in it (every difference of that path is a mark on the shared tube). */
+export const COMPACT_LANE_PX = 14;
+
+/**
+ * What a scene will hold before any geometry: small differences folded into marks, clusters when crowded, the
+ * scale, and the lanes that draw something of their own (the others are compact label rows). The panel plans first
+ * to size its lanes and its natural height; buildScene places the plan.
+ */
+export interface ScenePlan { top: TopItem[]; k: Metrics; scale: number; clusters: number; drawnLanes: Set<string>; dataWidth: number }
+
+export function planScene(model: LayoutModel, opts: Pick<SceneOptions, 'width' | 'gutter' | 'rightPad' | 'compression' | 'smallBp'>): ScenePlan {
   const dataWidth = Math.max(40, opts.width - opts.gutter - opts.rightPad);
   const c = opts.compression;
-  const rows: SceneRow[] = model.rows.map((r, i) => {
-    const top = opts.rulerHeight + opts.laneGap + i * (opts.laneHeight + opts.laneGap);
-    return { ...r, color: opts.colors[r.key] ?? '#475569', top, center: top + opts.laneHeight / 2, height: opts.laneHeight };
-  });
-  const rowOf = new Map(rows.map(r => [r.key, r]));
-  const stripe = Math.max(2, Math.min(6, Math.floor((opts.laneHeight - 12) / Math.max(1, lanes.length))));
-  const colorOf = (k: string) => opts.colors[k] ?? '#475569';
-
   // Crowded: compact curve zones first; cluster only when the bubbles' fixed pixels would still crowd out the
-  // sequence.
-  // Small differences first become marks on the shared tube (no fixed pixels of their own).
+  // sequence. Small differences first become marks on the shared tube (no fixed pixels of their own).
   const small = Math.max(0, opts.smallBp ?? 0);
   const folded = foldMarks(model.chain, small);
   let top: TopItem[] = folded;
@@ -389,8 +388,46 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
     const f = (dataWidth * 0.7) / fixed;
     k = withSmall({ min: k.min * f, curve: k.curve * f, empty: (k.empty ?? 4) * f });
   }
-  const clusters = top.filter(t => t.kind === 'cluster').length;
-  const scale = solveScale(top, dataWidth, c, k);
+  // Lanes drawing something of their own: an allele's lead lane (bubbles, bypasses, complex members), a junction
+  // allele, a cluster's ticks, a lane note.
+  const drawnLanes = new Set<string>([model.target, ...Object.keys(model.laneNotes)]);
+  const walk = (items: TopItem[]) => {
+    for (const it of items) {
+      if (it.kind === 'group') {
+        for (const a of it.alts) {
+          drawnLanes.add(a.carriers[0]);
+          if (a.family) walk(foldMarks(a.family.chain, small));
+        }
+        walk(foldMarks(it.base.chain, small));
+      } else if (it.kind === 'junction') {
+        for (const a of it.alts) if (a.bp > 0) drawnLanes.add(a.carriers[0]);
+      } else if (it.kind === 'cluster') {
+        for (const key of Object.keys(it.perPath)) drawnLanes.add(key);
+      }
+    }
+  };
+  walk(top);
+  return { top, k, scale: solveScale(top, dataWidth, c, k), clusters: top.filter(t => t.kind === 'cluster').length, drawnLanes, dataWidth };
+}
+
+export function buildScene(model: LayoutModel, opts: SceneOptions & { plan?: ScenePlan }): Scene {
+  const lanes = model.rows.map(r => r.key);
+  const dataLeft = opts.gutter;
+  const c = opts.compression;
+  const plan = opts.plan ?? planScene(model, opts);
+  const { top, k, scale, clusters, drawnLanes, dataWidth } = plan;
+  const small = k.small ?? 0;
+  // Rows: lanes with something of their own drawn full height, the others compact label rows.
+  let rowTop = opts.rulerHeight + opts.laneGap;
+  const rows: SceneRow[] = model.rows.map(r => {
+    const height = drawnLanes.has(r.key) ? opts.laneHeight : Math.min(opts.laneHeight, COMPACT_LANE_PX);
+    const row = { ...r, color: opts.colors[r.key] ?? '#475569', top: rowTop, center: rowTop + height / 2, height };
+    rowTop += height + opts.laneGap;
+    return row;
+  });
+  const rowOf = new Map(rows.map(r => [r.key, r]));
+  const stripe = Math.max(2, Math.min(6, Math.floor((opts.laneHeight - 12) / Math.max(1, lanes.length))));
+  const colorOf = (k: string) => opts.colors[k] ?? '#475569';
   const CURVE = k.curve;
 
   const prims: Prim[] = [];
@@ -485,7 +522,8 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
 
   function placeRun(run: RunItem, x: number, w: number, host: string, slots: Map<string, Slot>, onTarget: boolean) {
     if (w <= 0.01) return;
-    tube(x, w, slots, run.carriers, run.visits, run.bp, 'seq');
+    // Length labels on the target backbone only: inside an allele its own label gives the length.
+    tube(x, w, slots, run.carriers, run.visits, run.bp, 'seq', undefined, onTarget);
     placeVisits(run.visits, x, w, run.bp, host, run.id);
     const row = rowOf.get(host)!;
     hits.push({ x0: x, x1: x + w, y0: row.top, y1: row.top + row.height, cursor: onTarget,
@@ -587,7 +625,7 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
         nodes: w > 4 ? nodeEdges(visits, x, w, m.bp) : [], style: 'seq', breaks, outline: '#cbd5e1', segments });
       // Its length label only where no mark pin sits under it.
       const lx = x + w / 2;
-      if (c === 'log' && m.bp > 200 && w > 54 && !marks.some(p => p.t === 'vmark' && p.side === 'up' && Math.abs((p.x0 + p.x1) / 2 - lx) < 26)) {
+      if (onTarget && c === 'log' && m.bp > 200 && w > 54 && !marks.some(p => p.t === 'vmark' && p.side === 'up' && Math.abs((p.x0 + p.x1) / 2 - lx) < 26)) {
         overlay.push({ t: 'text', x: lx, y: ty0 - 2, text: formatBpShort(m.bp), color: '#94a3b8', align: 'center', size: 9, bold: false });
       }
     }
@@ -697,19 +735,19 @@ export function buildScene(model: LayoutModel, opts: SceneOptions): Scene {
       if (!inverted) straight(cx0 + aw, cx1, own, carriers, a.bp > 0 ? 'connector' : (dashed ? 'dashed' : 'connector'));
       const label = alleleLabel(g, a);
       const tubeTop = Math.min(...[...own.values()].map(s => s.y));
-      if (label && (cx1 - cx0) >= label.length * 5.2) {
-        overlay.push({ t: 'text', x: (cx0 + Math.max(cx0 + aw, Math.min(cx1, cx0 + 60))) / 2, y: tubeTop - 3, text: label,
-          color: colorOf(lane), align: 'center', size: 9, bold: g.base.bp === 0 && a.bp > 0 });
-      }
-      // Family members: their own lane says what they carry here (their shared stretches run in the lead's tube).
-      for (const m of a.family?.members ?? []) {
-        const mrow = rowOf.get(m.carriers[0]);
-        if (!mrow) continue;
-        const mlabel = alleleLabel(g, m);
-        if (mlabel && (cx1 - cx0) >= mlabel.length * 5.2) {
-          overlay.push({ t: 'text', x: (cx0 + Math.max(cx0 + aw, Math.min(cx1, cx0 + 60))) / 2, y: mrow.center - stripe - 2, text: mlabel,
-            color: colorOf(m.carriers[0]), align: 'center', size: 9, bold: g.base.bp === 0 && m.bp > 0 });
-        }
+      // The lead's label, then each family member's in its own colour (their shared stretches run in this tube).
+      const texts = [label ? { text: label, color: colorOf(lane), bold: g.base.bp === 0 && a.bp > 0 } : null,
+        ...(a.family?.members ?? []).map(m => { const t = alleleLabel(g, m); return t ? { text: t, color: colorOf(m.carriers[0]), bold: g.base.bp === 0 && m.bp > 0 } : null; })]
+        .filter((t): t is { text: string; color: string; bold: boolean } => t != null);
+      const widths = texts.map(t => t.text.length * 5.2);
+      const total = widths.reduce((t, w) => t + w, 0) + 10 * Math.max(0, texts.length - 1);
+      if (texts.length && (cx1 - cx0) >= total) {
+        const center = (cx0 + Math.max(cx0 + aw, Math.min(cx1, cx0 + 60 * texts.length))) / 2;
+        let tx = center - total / 2;
+        texts.forEach((t, n) => {
+          overlay.push({ t: 'text', x: tx + widths[n] / 2, y: tubeTop - 3, text: t.text, color: t.color, align: 'center', size: 9, bold: t.bold });
+          tx += widths[n] + 10;
+        });
       }
     }
   }

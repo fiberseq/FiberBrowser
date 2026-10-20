@@ -16,6 +16,7 @@ import { setReferenceSurface } from '../differences/referenceCanvas';
 import { makeAxis } from '../differences/axis';
 import { initialGraphView } from './state';
 import { clearGraphTraces, graphTraces } from './timings';
+import { usePanelContentHeightStore } from '../../stores/panelContentHeightStore';
 import type { GraphBinding, GraphRegistration, GraphStatus } from './types';
 import type { PanelConfig } from '../../types';
 
@@ -165,6 +166,35 @@ describe('GraphPanel', () => {
     const trace = graphTraces().at(-1)!;
     expect(trace.respondedAt).toBeGreaterThanOrEqual(trace.dispatchedAt);
     expect(trace.server?.dispatch_ms).toBe(1.2);
+  });
+
+  it('small differences: marks by default (zoom-scaled), bubbles from the right-click menu; it reports its natural height', async () => {
+    useBrowserStore.setState({ panels: [graphPanel('g1')], start: 92_395, end: 102_395 });
+    await act(async () => root.render(<GraphPanel panelId="g1" width={900} height={600} />));
+    await settle(150);
+    await answerAll();
+    const panel = host.querySelector('[data-testid="graph-panel"]')!;
+    expect(Number(panel.getAttribute('data-graph-small-bp'))).toBe(48);   // 10 kb over 840 px: 4 px of bp
+    // Natural height: ruler, status line, the target lane full and compact rows for paths whose differences are all
+    // marks (the Alu's lead lane is full) — far less than the 600 px body it was given.
+    const natural = usePanelContentHeightStore.getState().heights.g1;
+    expect(natural).toBeGreaterThan(100);
+    expect(natural).toBeLessThan(200);
+    const canvas = host.querySelector('canvas[data-testid="graph-panel-canvas"]') as HTMLCanvasElement;
+    await act(async () => { canvas.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 50, clientY: 20 })); });
+    const menu = document.querySelector('[data-testid="graph-panel-menu"]')!;
+    expect(menu.textContent).toContain('Show small differences as: marks');
+    const open = [...menu.querySelectorAll('*')].find(el => el.textContent?.startsWith('Show small differences as')) as HTMLElement;
+    await act(async () => { open.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true })); open.click(); });
+    await settle(0);
+    const bubbles = [...document.querySelectorAll('[data-testid="graph-panel-menu"] *')].find(el => el.textContent === 'Bubbles') as HTMLElement;
+    expect(bubbles).toBeTruthy();
+    await act(async () => { bubbles.click(); });
+    await settle(0);
+    expect(useBrowserStore.getState().panels[0].graphView!.layoutSettings.smallDifferences).toBe('bubbles');
+    expect(panel.getAttribute('data-graph-small-bp')).toBe('0');
+    // No new topology request: it is a drawing setting.
+    expect(subgraphBodies()).toHaveLength(1);
   });
 
   it('a newer navigation aborts the running request and cancels its subscriber on the server', async () => {
