@@ -419,3 +419,12 @@ def test_a_terminal_insertion_at_the_far_end_is_kept(env):
     did = _add_lifted(env, paths=[bam], dataset_id="tail")
     (r,) = _by_q(_reads(env, [did], [{"binding": "mat", "windows": [{"start": 1900, "end": 2300}]}]).json())["tail"]
     assert [i[:2] for i in r["ins"]] == [[2200, 20]]
+
+
+
+def test_a_terminal_insertion_at_the_contig_end_is_kept(env):
+    bam = write_bam(env.tmp / "end.bam", lambda h: [
+        make_record(h, "end", MAT, SSIZE - 200, "200M20I", tags=[("ns", _u32([30, 120])), ("nl", _u32([50, 50]))])])
+    did = _add_lifted(env, paths=[bam], dataset_id="end")
+    (r,) = _by_q(_reads(env, [did], [{"binding": "mat", "windows": [{"start": SSIZE - 300, "end": SSIZE}]}]).json())["end"]
+    assert [i[:2] for i in r["ins"]] == [[SSIZE, 20]] and r["cov"][-1][1] == SSIZE

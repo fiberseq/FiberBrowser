@@ -483,13 +483,15 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
         # insertion's boundary is inside it): no call is clipped before composing. It is bounded by the BAM's own
         # contig length, never by a graph binding's possibly inferred size.
         size = contig_length(dataset, contig) or size
-        region = (max(0, min([windows[0][0], *(k[2] for k in kept)]) - 1), min(size, max([windows[-1][1], *(k[4] for k in kept)]) + 1))
+        # One base past the contig end too (coordinates only: the identity piece maps it, no base is read there), so
+        # a terminal insertion at the contig's very end is inside the region.
+        region = (max(0, min([windows[0][0], *(k[2] for k in kept)]) - 1), min(size + 1, max([windows[-1][1], *(k[4] for k in kept)]) + 1))
         key = (dataset.id, dataset_revision(dataset), binding["key"], contig, tuple(map(tuple, windows)), lvl, region,
                tuple(sorted(LOADER_OPTIONS.items())))
         part: dict = {}
 
         def build():
-            got, trunc, nbytes = _decode(dataset, contig, size, windows, binding["key"], lvl, part, region)
+            got, trunc, nbytes = _decode(dataset, contig, size + 1, windows, binding["key"], lvl, part, region)
             return got, trunc, nbytes, dict(part)
 
         return _cached(key, build)

@@ -348,5 +348,43 @@ describe('Gate E: review round 1', () => {
   });
 });
 
+describe('Gate E: review round 3', () => {
+  const m = model(alu10k), sc = scene(m);
+  it('an occurrence wholly inside a hole keeps the hole and its kind', () => {
+    // MAT's 1 bp SNP node at 94,908 and its neighbours: a deletion over [94,905, 94,912) covers it whole.
+    const r = place(sc, alu10k, { ...read('mat', 94_800, 95_000, { holes: [{ start: 94_905, end: 94_912 }] }) });
+    const v = r.visits.find(x => x.span.start === 94_908 && x.span.end === 94_909)!;
+    expect(v.slices).toEqual([]);
+    expect(v.holes).toEqual([{ start: 94_908, end: 94_909, kind: 'D' }]);
+  });
+
+  it('once the mark budget is spent no later molecule places marks; overflow from amplified pieces retries with density', () => {
+    const ticks = Array.from({ length: 2_900 }, (_, i) => 93_050 + i);
+    const reads = Array.from({ length: 6 }, (_, i) => read('target', 93_000, 96_000, { q: `m${i}`, nuc: [[93_100, 93_400]], m6a: ticks }));
+    const idx = placementIndex(sc, topo(alu10k));
+    const spent = placeReads(reads, idx, 10, 10);
+    expect(spent.marksHidden).toBe(6);
+    expect(spent.molecules.every(x => x.calls.length === 0 && x.m6a.length === 0)).toBe(true);
+    // Budget above what the reads carry, below what ticks place: the density pass keeps every molecule's marks.
+    const carried = 6 * (1 + 2_900);
+    const fits = placeReads(reads, idx, carried + 10, 10);
+    expect(fits.marksHidden).toBe(0);
+  });
+});
+
+describe('Gate E: agy review', () => {
+  it('a drawn hole joins its slices without a connector; connectors span only the screen gap', () => {
+    const m = model(alu10k), sc = scene(m, { width: 6000 });   // wide: a 30 bp hole is several pixels
+    const r = place(sc, alu10k, read('mat', 95_000, 95_420, { holes: [{ start: 95_200, end: 95_230 }] }));
+    const hole = r.holes.find(h => h.s0 === 95_200)!;
+    expect(hole.x1 - hole.x0).toBeGreaterThan(1.5);
+    expect(r.connectors.some(c => c.x0 < hole.x1 && c.x1 > hole.x0)).toBe(false);
+    // Into an inverted allele (drawn right to left): the connector stops at the allele's body.
+    const iv = model(inv40), isc = scene(iv);
+    const ir = place(isc, inv40, read('mat', 850, 1000));
+    for (const c of ir.connectors) for (const b of ir.body) expect(c.x1 <= b.x0 + 1e-6 || c.x0 >= b.x1 - 1e-6).toBe(true);
+  });
+});
+
 // Keep the type import used (PlacedMolecule is the shape drawReads takes).
 export type { PlacedMolecule };

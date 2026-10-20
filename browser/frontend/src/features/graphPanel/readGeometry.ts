@@ -199,9 +199,10 @@ export function placeRead(read: GraphRead, index: PlacementIndex, lane = read.b,
     // Holes: kept for the visit record, and drawn where a placement draws them.
     const holes: ReadHole[] = [];
     if (keepVisits || parts.length) {
+      // Inside the record's alignment every uncovered base is a hole, also an occurrence it covers not at all.
       let at = span.start;
       for (const sl of slices) { if (sl.start > at) holes.push(...splitHole({ start: at, end: sl.start })); at = sl.end; }
-      if (at < span.end && slices.length) holes.push(...splitHole({ start: at, end: span.end }));
+      if (at < span.end) holes.push(...splitHole({ start: at, end: span.end }));
     }
     if (keepVisits) {
       // A read insertion belongs to the visit its boundary opens (a terminal one to the last visit).
@@ -242,12 +243,16 @@ export function placeRead(read: GraphRead, index: PlacementIndex, lane = read.b,
   // Connectors: wherever consecutive drawn slices of the walk are apart on screen (not touching or overlapping,
   // as a small difference's widened mark does). Aligned bases between them are bp the scene did not draw (a
   // cluster or a summary inside the walk); otherwise it is connector space (or a hole).
+  // A connector spans only the screen gap between the two slices (never across either's body, e.g. into an
+  // allele drawn right to left), and none where a drawn hole already joins them.
+  const holeBp = (a0: number, b0: number) => out.holes.reduce((t, h) => t + Math.max(0, Math.min(h.s1, b0) - Math.max(h.s0, a0)), 0);
   for (let k = 1; k < rawBody.length; k++) {
     const a = rawBody[k - 1], b = rawBody[k];
     if (b.x0 <= a.x1 + 1.5 && a.x0 <= b.x1 + 1.5) continue;
     const between = intersect(cov, { start: a.s1, end: b.s0 }).reduce((t, c) => t + c.end - c.start, 0);
-    const xa = a.dir === 1 ? a.x1 : a.x0, xb = b.dir === 1 ? b.x0 : b.x1;
-    out.connectors.push({ x0: Math.min(xa, xb), x1: Math.max(xa, xb), kind: between > 0 ? 'unplaced' : 'connector' });
+    if (!between && b.s0 > a.s1 && holeBp(a.s1, b.s0) >= b.s0 - a.s1) continue;
+    const [x0, x1] = a.x1 <= b.x0 ? [a.x1, b.x0] : [b.x1, a.x0];
+    out.connectors.push({ x0, x1, kind: between > 0 ? 'unplaced' : 'connector' });
   }
   out.body = mergeRuns(rawBody, () => true);
   if (out.body.length) {
@@ -363,34 +368,47 @@ export const MAX_READ_PRIMITIVES = 100_000;
  * marks are placed: past it (estimated from the calls and m6A each read carries), m6A is placed as per-pixel density
  * bins; molecules then take their calls in the response's (hash) order while the budget lasts, and the rest keep
  * their bodies only (`marksHidden`). `bpPerPx`: the view's average density (density bin size). */
-export function placeReads(reads: GraphRead[], index: PlacementIndex, maxPrimitives = MAX_READ_PRIMITIVES, bpPerPx = 1): {
+export function placeReads(all: GraphRead[], index: PlacementIndex, maxPrimitives = MAX_READ_PRIMITIVES, bpPerPx = 1): {
   molecules: PlacedMolecule[]; offLane: number; unplacedBp: number; empty: number; primitives: number; m6aAsDensity: boolean; marksHidden: number } {
-  const molecules: PlacedMolecule[] = [];
-  let offLane = 0, unplacedBp = 0, empty = 0;
+  // Reads on paths the scene does not draw are counted, never estimated or placed.
+  const reads = all.filter(r => index.occurrences.has(r.b));
+  const offLaneReads = all.length - reads.length;
   const callsOf = (r: GraphRead) => (r.nuc?.iv.length ?? 0) + (r.tf?.iv.length ?? 0) + (r.msp?.iv.length ?? 0);
-  const estimate = reads.reduce((t, r) => t + callsOf(r) + (r.m6a?.length ?? 0) + (r.m6a_density?.length ?? 0), 0);
-  const m6aAsDensity = estimate > maxPrimitives;
-  // Density bins as fine as the budget allows: at least a pixel, coarser when the reads' pixels would not fit.
-  let m6aBinBp: number | undefined;
-  if (m6aAsDensity) {
+  const binFor = () => {
+    // Density bins as fine as the budget allows: at least a pixel, coarser when the reads' pixels would not fit.
     const calls = reads.reduce((t, r) => t + callsOf(r), 0);
     const room = Math.max(1, 0.9 * maxPrimitives - calls);
     const px = reads.reduce((t, r) => t + ((r.m6a?.length ?? 0) > 0 ? (r.e - r.s) / Math.max(1e-9, bpPerPx) : 0), 0);
-    m6aBinBp = Math.max(1, Math.ceil(bpPerPx * Math.max(1, px / room)));
+    return Math.max(1, Math.ceil(bpPerPx * Math.max(1, px / room)));
+  };
+  const pass = (m6aBinBp: number | undefined) => {
+    const molecules: PlacedMolecule[] = [];
+    let unplacedBp = 0, empty = 0, primitives = 0, marksHidden = 0, spent = false;
+    const offLane = offLaneReads;
+    for (const r of reads) {
+      // Marks are placed only until the budget is spent: the first molecule whose marks do not fit ends it, and
+      // every later one places its body alone (deterministic: the response's hash order).
+      const m = placeRead(r, index, r.b, { calls: !spent, m6aBinBp, visits: false });
+      unplacedBp += m.unplacedBp;
+      if (!m.body.length) { empty++; continue; }
+      const n = m.calls.length + m.m6a.length + m.density.length;
+      if (spent || primitives + n > maxPrimitives) {
+        spent = true;
+        if (n || r.m6a?.length || callsOf(r)) { m.calls = []; m.m6a = []; m.density = []; m.marksHidden = true; marksHidden++; }
+      } else primitives += n;
+      molecules.push(m);
+    }
+    return { molecules, offLane, unplacedBp, empty, primitives, marksHidden };
+  };
+  // m6A as density when the reads carry more marks than the budget; or when placing them as ticks overflowed
+  // (calls split over many nodes amplify), a second pass with density bins.
+  const carried = reads.reduce((t, r) => t + callsOf(r) + (r.m6a?.length ?? 0) + (r.m6a_density?.length ?? 0), 0);
+  const hasM6a = reads.some(r => r.m6a?.length);
+  let m6aAsDensity = carried > maxPrimitives && hasM6a;
+  let out = pass(m6aAsDensity ? binFor() : undefined);
+  if (out.marksHidden && !m6aAsDensity && hasM6a) {
+    m6aAsDensity = true;
+    out = pass(binFor());
   }
-  let primitives = 0, marksHidden = 0;
-  for (const r of reads) {
-    if (!index.occurrences.has(r.b)) { offLane++; continue; }
-    // Marks are placed only while the budget lasts: once it is spent, later molecules place their bodies alone.
-    const calls = primitives < maxPrimitives;
-    const m = placeRead(r, index, r.b, { calls, m6aBinBp, visits: false });
-    unplacedBp += m.unplacedBp;
-    if (!m.body.length) { empty++; continue; }
-    const n = m.calls.length + m.m6a.length + m.density.length;
-    if (!calls || primitives + n > maxPrimitives) {
-      m.calls = []; m.m6a = []; m.density = []; m.marksHidden = true; marksHidden++;
-    } else primitives += n;
-    molecules.push(m);
-  }
-  return { molecules, offLane, unplacedBp, empty, primitives, m6aAsDensity, marksHidden };
+  return { ...out, m6aAsDensity };
 }
