@@ -156,7 +156,8 @@ def test_register_query_and_cancel_through_the_api(app_client, package, graph_en
     assert reg["bindings"][1]["size_inferred"] is True
     # Remembered as a locator for the next start.
     saved = json.loads((graph_env / "registry.json").read_text())
-    assert saved["packages"] == [os.path.realpath(package)]
+    assert [e["dir"] for e in saved["packages"]] == [os.path.realpath(package)]
+    assert saved["packages"][0]["package"] == REVS["package"] and reg["verification"] == "verified"
 
     r = app_client.post("/api/graph/subgraph", json=body(reg))
     assert r.status_code == 200, r.text
@@ -253,3 +254,26 @@ def test_lifespan_shutdown_reaps_a_busy_helper(standalone_app, graph_env, packag
     for pid in pids:
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)
+
+
+def test_a_remembered_package_skips_reverification_only_while_its_files_are_unchanged(graph_env, package, fake_helper):
+    from services.graph_panel.registration import Registry
+    first = Registry(str(graph_env / "registry.json"))
+    first.ensure_loaded(fake_helper)
+    reg = first.register(fake_helper, str(package))
+    assert reg.verification == "verified"
+    # A marker the fake helper's verify rejects: a remembered, unchanged package is not verified again.
+    (package / "BAD").write_text("x")
+    os.utime(package / "BAD", ns=(0, 0))
+    second = Registry(str(graph_env / "registry.json"))
+    second.ensure_loaded(fake_helper)
+    assert second.errors() and "verification" in second.errors()[0]["error"]   # the new file changed the fingerprint
+    (package / "BAD").unlink()
+    third = Registry(str(graph_env / "registry.json"))
+    third.ensure_loaded(fake_helper)
+    assert [r["verification"] for r in third.list()] == ["remembered"]
+    time.sleep(0.01)
+    (package / "graph.db").write_bytes(b"db2")
+    fourth = Registry(str(graph_env / "registry.json"))
+    fourth.ensure_loaded(fake_helper)
+    assert [r["verification"] for r in fourth.list()] == ["verified"]

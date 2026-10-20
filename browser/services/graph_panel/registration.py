@@ -49,6 +49,7 @@ class Registration:
     verified_at: float
     fingerprint: dict = field(repr=False, default_factory=dict)
     verify_ms: float = 0.0
+    verification: str = "verified"     # verified (full digest check now) | remembered (same files as a past check)
 
     def binding(self, key: str) -> Optional[dict]:
         return next((b for b in self.bindings if b.get("key") == key), None)
@@ -58,7 +59,7 @@ class Registration:
             "id": self.id, "label": os.path.basename(os.path.normpath(self.package_dir)),
             "revisions": self.revisions, "producer": self.producer, "build_target": self.build_target,
             "bindings": self.bindings, "maps": self.maps, "verified_at": self.verified_at,
-            "verify_ms": round(self.verify_ms, 1),
+            "verify_ms": round(self.verify_ms, 1), "verification": self.verification,
         }
 
 
@@ -123,16 +124,8 @@ def verify_package(helper_path: str, package_dir: str, timeout_s: float = VERIFY
     return (time.perf_counter() - t0) * 1000.0
 
 
-def build_registration(helper_path: str, package_dir: str) -> Registration:
-    package_dir = os.path.realpath(os.path.expanduser(package_dir))
-    if not os.path.isdir(package_dir):
-        raise RegistrationError("not_a_package", f"{package_dir} is not a directory", 404)
-    read_manifest(package_dir)
-    before = _fingerprint(package_dir)
-    verify_ms = verify_package(helper_path, package_dir)
-    after = _fingerprint(package_dir)
-    if before != after:
-        raise RegistrationError("package_changed", "the package changed while it was being verified", 409)
+def _from_manifest(package_dir: str, fingerprint: dict, verify_ms: float, verified_at: float,
+                   verification: str) -> Registration:
     manifest = read_manifest(package_dir)
     revisions = {k: manifest["revisions"][k] for k in ("package", "graph", "db", "maps")}
     bindings = [_binding_summary(b) for b in manifest.get("bindings") or []]
@@ -140,65 +133,110 @@ def build_registration(helper_path: str, package_dir: str) -> Registration:
     return Registration(
         id="g" + revisions["package"][:16], package_dir=package_dir, revisions=revisions, bindings=bindings, maps=maps,
         producer=str(manifest.get("producer") or ""), build_target=str(manifest.get("build_target") or ""),
-        verified_at=time.time(), fingerprint=after, verify_ms=verify_ms)
+        verified_at=verified_at, fingerprint=fingerprint, verify_ms=verify_ms, verification=verification)
+
+
+def build_registration(helper_path: str, package_dir: str, remembered: Optional[dict] = None) -> Registration:
+    """Register a package: the helper's full digest check, unless ``remembered`` (a previous verification of this
+    directory) has the same package revision and every file the same size and mtime."""
+    package_dir = os.path.realpath(os.path.expanduser(package_dir))
+    if not os.path.isdir(package_dir):
+        raise RegistrationError("not_a_package", f"{package_dir} is not a directory", 404)
+    manifest = read_manifest(package_dir)
+    before = _fingerprint(package_dir)
+    if remembered and remembered.get("package") == manifest["revisions"]["package"] \
+            and _jsonable(before) == remembered.get("fingerprint"):
+        return _from_manifest(package_dir, before, 0.0, float(remembered.get("verified_at") or time.time()), "remembered")
+    verify_ms = verify_package(helper_path, package_dir)
+    after = _fingerprint(package_dir)
+    if before != after:
+        raise RegistrationError("package_changed", "the package changed while it was being verified", 409)
+    return _from_manifest(package_dir, after, verify_ms, time.time(), "verified")
+
+
+def _jsonable(fingerprint: dict) -> dict:
+    return {k: list(v) for k, v in sorted(fingerprint.items())}
 
 
 class Registry:
-    """Thread-safe registration table; persistence holds locators only."""
+    """Thread-safe registration table. The file remembers each package's locator and the fingerprint of its last
+    full verification (never package contents)."""
 
     def __init__(self, path: Optional[str] = None):
         self.path = path or registry_file()
         self._lock = threading.Lock()
         self._items: dict[str, Registration] = {}
         self._errors: dict[str, str] = {}
-        self._loaded = False
+        self._loaded = threading.Event()
+        self._loading = False
 
-    def _load_locators(self) -> list[str]:
+    def _saved(self) -> dict[str, dict]:
+        try:
+            with open(self.path) as handle:
+                saved = json.load(handle)
+        except (OSError, ValueError):
+            return {}
+        out: dict[str, dict] = {}
+        for entry in saved.get("packages", []) if isinstance(saved, dict) else []:
+            if isinstance(entry, str):
+                out[os.path.realpath(os.path.expanduser(entry))] = {}
+            elif isinstance(entry, dict) and isinstance(entry.get("dir"), str):
+                out[os.path.realpath(os.path.expanduser(entry["dir"]))] = entry
+        return out
+
+    def _load_locators(self) -> list[tuple[str, dict]]:
+        saved = self._saved()
         dirs: list[str] = []
         env = (os.environ.get(ENV_PACKAGES) or "").strip()
         if env:
             dirs += [d for d in env.split(os.pathsep) if d.strip()]
-        try:
-            with open(self.path) as handle:
-                saved = json.load(handle)
-            dirs += [str(d) for d in saved.get("packages", []) if isinstance(d, str)]
-        except (OSError, ValueError, AttributeError):
-            pass
+        dirs += list(saved)
         seen, out = set(), []
         for d in dirs:
             real = os.path.realpath(os.path.expanduser(d))
             if real not in seen:
                 seen.add(real)
-                out.append(real)
+                out.append((real, saved.get(real) or {}))
         return out
 
     def _save(self) -> None:
-        packages = sorted({r.package_dir for r in self._items.values()})
+        entries = [{"dir": r.package_dir, "package": r.revisions["package"], "verified_at": r.verified_at,
+                    "fingerprint": _jsonable(r.fingerprint)} for r in sorted(self._items.values(), key=lambda r: r.package_dir)]
         try:
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
             tmp = f"{self.path}.tmp{os.getpid()}"
             with open(tmp, "w") as handle:
-                json.dump({"packages": packages}, handle, indent=1)
+                json.dump({"packages": entries}, handle, indent=1)
             os.replace(tmp, self.path)
         except OSError:
             pass
 
     def ensure_loaded(self, helper_path: Optional[str]) -> None:
-        """Verify remembered/env packages once a helper exists (each failure is listed, not fatal)."""
+        """Register remembered/env packages once a helper exists (each failure is listed, not fatal). Callers that
+        arrive while another thread loads wait for it, so nobody sees a half-loaded table."""
+        if not helper_path or self._loaded.is_set():
+            return
         with self._lock:
-            if self._loaded or not helper_path:
-                return
-            self._loaded = True
-            locators = self._load_locators()
-        for d in locators:
-            try:
-                reg = build_registration(helper_path, d)
-            except RegistrationError as exc:
+            loader = not self._loading
+            self._loading = True
+        if not loader:
+            self._loaded.wait(VERIFY_TIMEOUT_S)
+            return
+        try:
+            for d, remembered in self._load_locators():
+                try:
+                    reg = build_registration(helper_path, d, remembered)
+                except RegistrationError as exc:
+                    with self._lock:
+                        self._errors[d] = exc.message
+                    continue
                 with self._lock:
-                    self._errors[d] = exc.message
-                continue
+                    self._items[reg.id] = reg
             with self._lock:
-                self._items[reg.id] = reg
+                if self._items:
+                    self._save()
+        finally:
+            self._loaded.set()
 
     def register(self, helper_path: str, package_dir: str) -> Registration:
         reg = build_registration(helper_path, package_dir)
