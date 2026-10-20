@@ -265,6 +265,7 @@ class _Ctx:
         self.include_layers = include
         self.labels = handle.haplotype_labels if handle is not None else {}
         self.molecule_groups = {}
+        self.library_index = {}
         self._gap_cache = {}
         self._owned_gap_items = None
         self.loader_options = opts
@@ -322,6 +323,9 @@ def lift_compact_reads(reads, plan, *, handle, region_start, region_end, setting
 
     ctx = _Ctx(handle, plan, region_start, region_end, settings, key, dataset_id, molecules, counts, loader_options)
     ctx.molecule_groups = dict(molecule_groups or {})
+    # Library index of each source BAM (dataset path order): a linked source panel
+    # opening the same files tells its rows' molecules apart by it (P3 hover).
+    ctx.library_index = {path: i for i, path in enumerate(ctx.molecule_groups)}
     by_contig = {}
     for contig, pieces in plan.pieces_by_contig().items():
         pieces = sorted(pieces, key=lambda p: (p.q_start, p.q_end))
@@ -965,6 +969,7 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
         "alt": row.alt,
         "placement": placement,
         "molecule": molecule,
+        "library": ctx.library_index.get(read.get("source_path"), 0),
         "record": record,
         "row_index": idx,
         "row_count": count,

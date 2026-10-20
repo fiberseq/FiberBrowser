@@ -22,7 +22,8 @@ from __future__ import annotations
 
 import bisect
 import json
-from collections import defaultdict
+import threading
+from collections import OrderedDict, defaultdict
 
 TILE_BP = 1_000_000
 OUTLINE_GAP = 2_000
@@ -305,3 +306,185 @@ def tile_lookup(tile: dict, x: int) -> list:
             out.append((tile["chain"][i], tile["other"][i] + (length - 1 - d if tile["minus"][i] else d)))
         i -= 1
     return out
+
+
+# ── Served tables (routers/lift.py; P3 linked panels) ───────────────────────
+#
+# Everything is scoped by the dataset's selected haplotypes: a MAT source panel
+# must never map through a PAT chain. Chain indexes are the summary's row
+# indexes (the summary lists every chain, with ``selected`` flags), so outline
+# and tile rows resolve to (target, source contig, haplotype) on the client.
+
+_SERVED_LOCK = threading.Lock()
+_OUTLINE_CACHE: "OrderedDict[tuple, list]" = OrderedDict()
+_TILE_CACHE: "OrderedDict[tuple, bytes]" = OrderedDict()
+_OUTLINE_CACHE_MAX = 64
+_TILE_CACHE_MAX = 512
+MAX_RIBBON_PIECES = 4_000
+
+
+def _cached(cache, limit, key, build):
+    with _SERVED_LOCK:
+        if key in cache:
+            cache.move_to_end(key)
+            return cache[key]
+    value = build()
+    with _SERVED_LOCK:
+        cache[key] = value
+        while len(cache) > limit:
+            cache.popitem(last=False)
+    return value
+
+
+def clear_served_caches() -> None:
+    with _SERVED_LOCK:
+        _OUTLINE_CACHE.clear()
+        _TILE_CACHE.clear()
+
+
+def served_summary(config) -> dict:
+    """``chains``: :func:`map_summary` rows (index = chain); ``selected``: per
+    chain, whether its haplotype is one of the dataset's; ``sources``: source
+    contig -> haplotype key of the selected haplotypes."""
+    handle = config.handle
+    haps = set(config.haplotypes)
+    rows = map_summary(handle)
+    labels = config.labels()
+    return {"key": config.key(), "chains": rows, "selected": [r[7] in haps for r in rows],
+            "haplotypes": list(config.haplotypes), "labels": labels,
+            "sources": {src: hap for src, hap in handle.source_haplotype.items() if hap in haps},
+            "targets": {t["name"]: t.get("size") for t in handle.manifest["targets"]},
+            "outline_gap": OUTLINE_GAP, "outline_max_drift": OUTLINE_MAX_DRIFT, "tile_bp": TILE_BP}
+
+
+def _target_outline(handle, chrom: str) -> list:
+    """Every haplotype's outline rows of a target chromosome (cached per map)."""
+    return _cached(_OUTLINE_CACHE, _OUTLINE_CACHE_MAX, (handle.fingerprint, chrom), lambda: outline(handle, chrom))
+
+
+def served_outline(config, *, chrom: str = None, source: str = None) -> dict:
+    """Outline rows of a target chromosome (``chrom``) or of one source contig
+    over every target it maps to (``source``), selected haplotypes only.
+    Source rows also carry their target name (row index 7)."""
+    handle = config.handle
+    haps = set(config.haplotypes)
+    chains = handle.map.chains
+    sources = handle.manifest["sources"]
+    targets = handle.manifest["targets"]
+    if chrom is not None:
+        if chrom not in handle.map.targets:
+            raise KeyError(chrom)
+        rows = [r for r in _target_outline(handle, chrom) if chains[r[5]]["haplotype"] in haps]
+        return {"key": config.key(), "chrom": chrom, "rows": rows}
+    if source not in handle.source_haplotype or handle.source_haplotype[source] not in haps:
+        raise KeyError(source)
+    names = sorted({targets[c["target"]]["name"] for c in chains if sources[c["source"]]["name"] == source})
+    rows = []
+    for name in names:
+        for r in _target_outline(handle, name):
+            if sources[chains[r[5]]["source"]]["name"] == source:
+                rows.append([*r, name])
+    rows.sort(key=lambda r: (r[2], r[5]))
+    return {"key": config.key(), "source": source, "rows": rows}
+
+
+def served_tile(config, side: str, contig: str, tile: int) -> bytes:
+    """One exact tile (``side`` 'target' or 'source'), selected haplotypes only."""
+    from services.lift.live_lift import _as_lift_pieces
+    handle = config.handle
+    haps = tuple(sorted(config.haplotypes))
+    if side == "target":
+        if contig not in handle.map.targets:
+            raise KeyError(contig)
+
+        def build():
+            with handle.lock:
+                raw = handle.map.target_to_source(contig, tile * TILE_BP, (tile + 1) * TILE_BP)
+            pieces = [p for p in _as_lift_pieces(handle, raw) if p.primary and p.hap in haps]
+            return encode_tile(tile_runs(pieces, 0, tile), 0, tile)
+    elif side == "source":
+        if handle.source_haplotype.get(contig) not in haps:
+            raise KeyError(contig)
+
+        def build():
+            return source_tile(handle, contig, tile, set(haps))
+    else:
+        raise ValueError("side must be 'target' or 'source'")
+    return _cached(_TILE_CACHE, _TILE_CACHE_MAX, (handle.fingerprint, side, contig, int(tile), haps), build)
+
+
+def _coarsen(pieces: list, min_bp: int) -> list:
+    """Merge consecutive pieces of one chain (same flags) whose target and
+    source gaps are both at most ``min_bp`` (sub-pixel at the ribbon's scale)."""
+    if min_bp <= 0:
+        return pieces
+    out = []
+    last = {}
+    for p in sorted(pieces, key=lambda p: (p[5], p[6], p[0])):
+        k = (p[5], p[6], p[4])
+        q = last.get(k)
+        if q is not None:
+            dt = p[0] - q[1]
+            dq = (p[2] - q[3]) if p[4] == "+" else (q[2] - p[3])
+            if 0 <= dt <= min_bp and 0 <= dq <= min_bp:
+                q[1] = p[1]
+                q[2], q[3] = min(q[2], p[2]), max(q[3], p[3])
+                continue
+        q = list(p)
+        out.append(q)
+        last[k] = q
+    return sorted(out, key=lambda p: (p[0], p[5]))
+
+
+def served_pieces(config, chrom: str, start: int, end: int, *, hap: str = None, alternatives: bool = None,
+                  min_bp: int = 0) -> dict:
+    """Ribbon data for target ``[start, end)``: pieces
+    ``[t_start, t_end, q_start, q_end, strand, chain, alt, source, hap]``
+    (forward source coordinates, clipped to the window) and the primary
+    chains' raw gaps ``[chain, t_start, t_end, q_start, q_end, reason]``.
+    Alternatives (the 16 best chains, as for display) only with
+    ``alternatives`` (default: the dataset's display setting)."""
+    from services.lift.live_lift import BIN_BP, MAX_ALTERNATIVE_CHAINS, _bin_pieces, clip_piece, _merge_contiguous
+    from services.lift.differences import primary_gaps_for_region, _source_span
+    handle = config.handle
+    if chrom not in handle.map.targets:
+        raise KeyError(chrom)
+    haps = set(config.haplotypes)
+    if hap is not None:
+        wanted = set(handle.resolve_haplotypes([hap]))
+        if not wanted <= haps:
+            raise KeyError(hap)
+        haps = wanted
+    alternatives = config.settings.alternatives if alternatives is None else bool(alternatives)
+    key = config.key()
+    raw = []
+    for b in range(start // BIN_BP, (max(end, start + 1) - 1) // BIN_BP + 1):
+        for p in _bin_pieces(handle, key, chrom, b):
+            c = clip_piece(p, start, end)
+            if c is not None and c.hap in haps:
+                raw.append(c)
+    raw = _merge_contiguous(raw)
+    keep_alt = set()
+    alt_chains = sorted({p.chain for p in raw if not p.primary}, key=lambda ci: handle.chain_rank[ci])
+    capped = 0
+    if alternatives:
+        keep_alt = set(alt_chains[:MAX_ALTERNATIVE_CHAINS])
+        capped = max(0, len(alt_chains) - MAX_ALTERNATIVE_CHAINS)
+    pieces = [[p.t_start, p.t_end, p.q_start, p.q_end, p.strand, p.chain, not p.primary, p.source, p.hap]
+              for p in raw if p.primary or p.chain in keep_alt]
+    bp = max(0, int(min_bp))
+    pieces = _coarsen(pieces, bp)
+    while len(pieces) > MAX_RIBBON_PIECES:
+        bp = max(1, bp) * 2
+        pieces = _coarsen(pieces, bp)
+    gaps = []
+    with handle.lock:
+        for h in sorted(haps):
+            for ci, (t, q, dt, dq, reason), _claims in primary_gaps_for_region(handle, chrom, h, start, end):
+                if max(dt, dq) <= bp:
+                    continue
+                q0, q1 = _source_span(handle, handle.map.chains[ci], q, dq)
+                gaps.append([ci, t, t + dt, q0, q1, handle.map.reasons[reason]])
+    gaps.sort(key=lambda g: (g[1], g[0]))
+    return {"key": key, "chrom": chrom, "start": start, "end": end, "pieces": pieces, "gaps": gaps[:MAX_RIBBON_PIECES],
+            "min_bp": bp, "alternatives_capped": capped, "alternatives": bool(alternatives)}

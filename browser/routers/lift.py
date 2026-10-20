@@ -57,6 +57,92 @@ async def lift_update_settings(dataset_id: str, req: LiftSettingsRequest, state=
     return update_settings(state, dataset_id, req.settings, req.haplotypes)
 
 
+def _navigation_config(state, dataset_id):
+    from services.lift.registration import require_enabled
+    from services.lift.capability import is_lifted
+    require_enabled()
+    dataset = state.datasets.get(dataset_id)
+    if dataset is None:
+        raise HTTPException(404, "Dataset not found")
+    if not is_lifted(dataset):
+        raise HTTPException(409, "Navigation tables require a live-lift dataset")
+    try:
+        return dataset.live_lift
+    except OSError as exc:
+        raise HTTPException(409, f"Lift map unavailable: {exc}") from exc
+
+
+@router.get("/api/lift/summary")
+async def lift_summary(dataset_id: str, state=Depends(get_state)):
+    """Map summary (§5.1): one row per chain ``[target, t_start, t_end, source,
+    q_start, q_end, strand, hap, primary_span_bp, aligned_bp]`` (row index =
+    chain index) with ``selected`` flags for the dataset's haplotypes."""
+    from services.lift.navigation import served_summary
+    config = _navigation_config(state, dataset_id)
+    try:
+        return await asyncio.to_thread(served_summary, config)
+    except OSError as exc:
+        raise HTTPException(409, f"Lift map unavailable: {exc}") from exc
+
+
+@router.get("/api/lift/outline")
+async def lift_outline(dataset_id: str, chrom: Optional[str] = None, source: Optional[str] = None,
+                       state=Depends(get_state)):
+    """Coarse outline (§5.1) of a target chromosome (``chrom``) or of one
+    source contig (``source``): ``[t_start, t_end, q_start, q_end, strand,
+    chain, max_drift]`` (source rows add the target name), selected
+    haplotypes only."""
+    from services.lift.navigation import served_outline
+    if (chrom is None) == (source is None):
+        raise HTTPException(422, "Give exactly one of chrom or source")
+    config = _navigation_config(state, dataset_id)
+    try:
+        return await asyncio.to_thread(served_outline, config, chrom=chrom, source=source)
+    except KeyError:
+        raise HTTPException(404, "Not in this dataset's lift map") from None
+    except OSError as exc:
+        raise HTTPException(409, f"Lift map unavailable: {exc}") from exc
+
+
+@router.get("/api/lift/tiles")
+async def lift_tile(dataset_id: str, side: str = Query(..., pattern="^(target|source)$"), contig: str = Query(...),
+                    tile: int = Query(..., ge=0), state=Depends(get_state)):
+    """One exact 1 Mb navigation tile (delta-varint, services/lift/navigation.py)."""
+    from fastapi.responses import Response
+    from services.lift.navigation import served_tile
+    config = _navigation_config(state, dataset_id)
+    try:
+        blob = await asyncio.to_thread(served_tile, config, side, contig, tile)
+    except KeyError:
+        raise HTTPException(404, "Not in this dataset's lift map") from None
+    except OSError as exc:
+        raise HTTPException(409, f"Lift map unavailable: {exc}") from exc
+    return Response(blob, media_type="application/octet-stream",
+                    headers={"Cache-Control": "private, max-age=3600", "X-Lift-Key": config.key()})
+
+
+@router.get("/api/lift/pieces")
+async def lift_pieces(dataset_id: str, chrom: str, start: int = Query(..., ge=0), end: int = Query(..., ge=1),
+                      hap: Optional[str] = None, alternatives: Optional[bool] = None,
+                      min_bp: int = Query(0, ge=0), state=Depends(get_state)):
+    """Ribbon data (§5.2): pieces and primary-chain gaps of a target window."""
+    from services.lift.navigation import served_pieces
+    if end <= start:
+        raise HTTPException(422, "end must be greater than start")
+    if end - start > 50_000_000:
+        raise HTTPException(413, "Zoom in to draw the lift ribbon")
+    config = _navigation_config(state, dataset_id)
+    try:
+        return await asyncio.to_thread(served_pieces, config, chrom, start, end, hap=hap,
+                                       alternatives=alternatives, min_bp=min_bp)
+    except KeyError:
+        raise HTTPException(404, "Not in this dataset's lift map") from None
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(409, f"Lift map unavailable: {exc}") from exc
+
+
 def _difference_dataset(state, dataset_id, chrom):
     from services.lift.registration import require_enabled
     from services.lift.capability import is_lifted, require
