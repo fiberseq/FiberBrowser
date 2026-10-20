@@ -264,7 +264,7 @@ export function previewHistoricalRelink(state: JsonRecord, session: DifferencesS
     const aliases = new Map(members.map(m => [m.originalId, m.currentId!]));
     const currentIds = new Set(aliases.values());
     for (const field of membershipFields) {
-      const historical = object(state[field])[dataset] ?? object(next.legacySnapshot[field])[dataset];
+      const historical = object(next.legacySnapshot[field])[dataset] ?? object(state[field])[dataset];
       const seen = new Map<string, string>();
       for (const [id, value] of Object.entries(object(historical))) {
         const current = aliases.get(id) ?? id, encoded = JSON.stringify(value);
@@ -280,7 +280,7 @@ export function previewHistoricalRelink(state: JsonRecord, session: DifferencesS
       if (binding.stateKey !== dataset && conflict) throw new Error('The runtime scope contains unrelated membership or conflicting membership; choose a separate panel');
       if (proposed !== undefined) input[field] = { ...object(input[field]), [binding.stateKey]: clone(proposed) };
     }
-    const def = object(state.svSplits)[dataset] ?? next.targets[dataset]?.snapshot;
+    const def = next.targets[dataset]?.snapshot ?? object(state.svSplits)[dataset];
     const activeDef = object(state.svSplits)[binding.stateKey];
     const canonicalDef = (value: any) => { const { frozenImport, datasetId, ...rest } = object(value); return rest; };
     if (binding.stateKey !== dataset && activeDef && JSON.stringify(canonicalDef(activeDef)) !== JSON.stringify(canonicalDef(def))) {

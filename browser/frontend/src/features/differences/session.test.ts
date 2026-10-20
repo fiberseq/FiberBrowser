@@ -345,6 +345,12 @@ it('installs a complete frozen cohort over initialized defaults and rejects conf
   for (const field of ['selectedReadIds', 'filteredReadIds', 'readSortOrder']) expect(result.restored[field].rows).toEqual([current]);
   expect(result.restored.svCarrierEvidence.rows).toEqual({ [current]: 'confirmed' });
   expect(runtime).toEqual(before);
+  const clearedSource = copy(runtime);
+  clearedSource.clusterAssignments.dataset = {};
+  clearedSource.selectedReadIds.dataset = [];
+  const recovered = previewHistoricalRelink(clearedSource, session, 'dataset', metadata, binding);
+  expect(recovered.restored.clusterAssignments.rows).toEqual({ [current]: 0 });
+  expect(recovered.restored.selectedReadIds.rows).toEqual([current]);
   for (const field of ['clusterAssignments', 'svCarrierEvidence', 'selectedReadIds', 'filteredReadIds', 'readSortOrder']) {
     const value = field === 'clusterAssignments' ? { [current]: 1 } : field === 'svCarrierEvidence' ? { [current]: 'putative' } : ['unrelated'];
     expect(() => previewHistoricalRelink({ ...runtime, [field]: { ...runtime[field as keyof typeof runtime] as object, rows: value } }, session, 'dataset', metadata, binding)).toThrow(/membership/);
