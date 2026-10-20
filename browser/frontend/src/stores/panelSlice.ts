@@ -38,6 +38,8 @@ export const PER_PANEL_STATE_KEYS = [
   'svSplits', 'clusterGroupLabels', 'svCarrierEvidence', 'svSelectedCluster',
 ] as const;
 
+const panelNavigationLabel = (chrom: string, start: number) => `Panel to ${chrom}:${Math.max(0, Math.floor(start)).toLocaleString()}`;
+
 /** Undo point before and after a panel-view action. */
 function withUndo(get: () => BrowserState, label: string, apply: () => void, coalesceKey?: string) {
   seedHistoryBaseline(get(), 'Before ' + label.charAt(0).toLowerCase() + label.slice(1), 'layout');
@@ -290,6 +292,28 @@ export interface PanelSlice {
 // ============================================================
 
 export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state: BrowserState) => Partial<BrowserState>)) => void, get: () => BrowserState): PanelSlice {
+  /** A panel's own view to a locus (navigatePanel without the undo step or a view link). */
+  const movePanelOwnView = (panelId: string, chrom: string, start: number, end: number) => set(state => {
+    const panel = state.panels.find(p => p.id === panelId);
+    if (!panel) return state;
+    const s0 = Math.max(0, Math.floor(start));
+    const next = { chrom, start: s0, end: Math.max(s0 + 3, Math.floor(end)) };
+    // Its reference's link group goes with it ("Linked navigation", panels on another assembly).
+    const peers = new Set(linkGroupPeers(state.panels, panel, state.navigationMode));
+    // A jump elsewhere leaves the panel's clusters and filters behind (the
+    // main view does the same when it jumps).
+    let cleared: Partial<BrowserState> = {};
+    for (const p of state.panels) {
+      if (!peers.has(p.id) || (p.viewportOverride && isPanOrZoom(p.viewportOverride, next))) continue;
+      cleared = { ...cleared, ...clearPanelState({ ...state, ...cleared } as BrowserState, panelKey(p)) };
+    }
+    return {
+      ...cleared,
+      // Stays in its haplotype comparison (closed together with it).
+      panels: state.panels.map(p => peers.has(p.id) ? { ...p, viewportOverride: { ...next }, linkGroup: null } : p),
+      lastMovedPanels: recordPanelMove(state.lastMovedPanels, panel, next),
+    };
+  });
   const seedLayoutHistory = () => {
     const state = get();
     if ((state._historyStack?.length ?? 0) === 0) {
@@ -1043,9 +1067,9 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
       } : p),
     };
   })),
-  navigatePanel: (panelId, chrom, start, end) => {
-    get().navigatePanelOwnView(panelId, chrom, start, end);
-    // A linked panel (utils/panelExtensions.ts view links) takes the main view with it, as its pans do.
+  navigatePanel: (panelId, chrom, start, end) => withUndo(get, panelNavigationLabel(chrom, start), () => {
+    movePanelOwnView(panelId, chrom, start, end);
+    // A linked panel (utils/panelExtensions.ts view links) takes the main view with it, as its pans do: one undo step.
     const state = get();
     const panel = state.panels.find(p => p.id === panelId);
     const v = panel?.viewportOverride;
@@ -1053,28 +1077,8 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
     if (mapped && !(mapped.chrom === state.chrom && mapped.start === state.start && mapped.end === state.end)) {
       withLinkedPanelMoving(panelId, () => get().setViewport(mapped.chrom, mapped.start, mapped.end));
     }
-  },
-  navigatePanelOwnView: (panelId, chrom, start, end) => withUndo(get, `Panel to ${chrom}:${Math.max(0, Math.floor(start)).toLocaleString()}`, () => set(state => {
-    const panel = state.panels.find(p => p.id === panelId);
-    if (!panel) return state;
-    const s0 = Math.max(0, Math.floor(start));
-    const next = { chrom, start: s0, end: Math.max(s0 + 3, Math.floor(end)) };
-    // Its reference's link group goes with it ("Linked navigation", panels on another assembly).
-    const peers = new Set(linkGroupPeers(state.panels, panel, state.navigationMode));
-    // A jump elsewhere leaves the panel's clusters and filters behind (the
-    // main view does the same when it jumps).
-    let cleared: Partial<BrowserState> = {};
-    for (const p of state.panels) {
-      if (!peers.has(p.id) || (p.viewportOverride && isPanOrZoom(p.viewportOverride, next))) continue;
-      cleared = { ...cleared, ...clearPanelState({ ...state, ...cleared } as BrowserState, panelKey(p)) };
-    }
-    return {
-      ...cleared,
-      // Stays in its haplotype comparison (closed together with it).
-      panels: state.panels.map(p => peers.has(p.id) ? { ...p, viewportOverride: { ...next }, linkGroup: null } : p),
-      lastMovedPanels: recordPanelMove(state.lastMovedPanels, panel, next),
-    };
-  })),
+  }),
+  navigatePanelOwnView: (panelId, chrom, start, end) => withUndo(get, panelNavigationLabel(chrom, start), () => movePanelOwnView(panelId, chrom, start, end)),
   openPanelAtSite: (panelId, options) => {
     const state = get();
     const source = state.panels.find(p => p.id === panelId);

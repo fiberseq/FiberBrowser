@@ -328,17 +328,25 @@ export function mapSpan(datasetId: string, key: string, direction: 'toSource' | 
     // Nothing of the view maps (a target-only stretch, or the edge of a chain): its nearest correspondence keeps
     // the same width, so a pan out of the gap continues smoothly.
     const centre = span.start + width / 2;
-    // With the exact tile loaded, the gap's exact flanking piece decides (and the mapping is exact).
-    const tile = wantExact ? s.tiles.get(tileKey(side, span.chrom, Math.floor(centre / summary.tile_bp))) : undefined;
-    if (tile && typeof tile === 'object') {
-      let best: { i: number; d: number } | null = null;
-      for (let i = 0; i < tile.start.length; i++) {
+    // With the exact tiles within reach loaded (a gap can cross a tile boundary: its nearer flank can be in the
+    // neighbouring tile), the gap's exact flanking piece decides and the mapping is exact.
+    const reach = Math.max(width, OUTLINE_GAP_BP);
+    const near: DecodedTile[] = [];
+    let complete = wantExact;
+    if (wantExact) for (let t = Math.max(0, Math.floor((centre - reach) / summary.tile_bp)); t <= Math.floor((centre + reach) / summary.tile_bp); t++) {
+      const loaded = s.tiles.get(tileKey(side, span.chrom, t));
+      if (loaded && typeof loaded === 'object') near.push(loaded);
+      else if (loaded !== 'failed') { complete = false; if (loaded === undefined) requestTile(s, side, span.chrom, t); }
+    }
+    if (complete && near.length) {
+      let best: { tile: (typeof near)[number]; i: number; d: number } | null = null;
+      for (const tile of near) for (let i = 0; i < tile.start.length; i++) {
         if (!allowed(tile.chain[i])) continue;
         const d = centre < tile.start[i] ? tile.start[i] - centre : centre >= tile.end[i] ? centre - tile.end[i] + 1 : 0;
-        if (!best || d < best.d) best = { i, d };
+        if (!best || d < best.d) best = { tile, i, d };
       }
-      if (best && best.d <= Math.max(width, OUTLINE_GAP_BP)) {
-        const i = best.i, minusRun = tile.minus[i];
+      if (best && best.d <= reach) {
+        const { tile, i } = best, minusRun = tile.minus[i];
         const at = Math.min(Math.max(Math.round(centre), tile.start[i]), tile.end[i] - 1);
         const [h] = tileLookup({ ...tile, start: [tile.start[i]], end: [tile.end[i]], other: [tile.other[i]], chain: [tile.chain[i]], minus: [minusRun], reach: [tile.end[i]] }, at);
         const mid = h.pos + (minusRun ? -(centre - at) : centre - at);
