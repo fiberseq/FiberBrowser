@@ -34,8 +34,10 @@ export function splitGroupName(subset: NonNullable<PanelConfig['readSubset']>): 
     group = group.slice(locus.length + 3);
     context = locus;
   }
+  // Only a lone trailing count is a read count: an evidence label carries its own tier counts
+  // ("Confirmed (9) + putative (0)") and stays whole.
   const count = group.match(/^(.*\S)\s+\((\d[\d,]*)\)$/);
-  if (count) group = count[1];
+  if (count && !count[1].includes('(')) group = count[1];
   return { group, context };
 }
 
