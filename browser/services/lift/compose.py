@@ -29,6 +29,14 @@ cut at the read's deletions, as the native decoder does.
 The molecule's strand (``st``) never changes; on ``-`` rows only the
 presentation flips (left/right edge qualities swap, insertion sequence is
 reverse-complemented, clip sides swap).
+
+Speed: ``lift_compact_reads`` first builds every read's rows, then maps the
+intervals, calls, marks and molecular spans of all rows of the window at once
+(``compose_columns``), then assembles each row's payload; the hidden
+insertion blocks follow in one more columnar pass. The per-row functions here
+(``_map_group``, ``_call_identity``, ``_map_points``, ``_molecular_spans``,
+``_logical``/``_gaps``) define the output and handle whatever the columnar
+pass leaves to them; it reproduces them exactly.
 """
 from __future__ import annotations
 
@@ -37,6 +45,8 @@ import copy
 from contextlib import ExitStack
 
 import numpy as np
+
+from services.lift.compose_columns import LazyParts, precompute
 
 _COMPLEMENT = str.maketrans("ACGTNRYKMSWBDHVacgtnrykmswbdhv", "TGCANYRMKSWVHDBtgcanyrmkswvhdb")
 # Left/right quality tracks that trade places when intervals reverse (bam_tags.parse_ma_aq_tags_into_layers).
@@ -99,6 +109,7 @@ class _SeqRuns:
         self.seq = [r[1] for r in rows]
         self.len = [r[2] for r in rows]
         self._arrays = None
+        self._ascending = None
 
     def seq_at(self, x):
         """SEQ index of the first aligned base at reference ``>= x``."""
@@ -135,6 +146,27 @@ class _SeqRuns:
             out = self.length - 1 - out
         return out.tolist()
 
+    def _disjoint(self):
+        if self._ascending is None:
+            ref, ln = self.ref, self.len
+            self._ascending = all(n >= 0 for n in ln) and all(ref[i] + ln[i] <= ref[i + 1] for i in range(len(ref) - 1))
+        return self._ascending
+
+    def coverage(self, lo, hi, x, y):
+        """``(aligned bases in [lo, hi), whether x is aligned, whether y is aligned)``."""
+        ref, ln = self.ref, self.len
+        if not self._disjoint():
+            return (sum(max(0, min(hi, r + n) - max(lo, r)) for r, n in zip(ref, ln)),
+                    any(r <= x < r + n for r, n in zip(ref, ln)), any(r <= y < r + n for r, n in zip(ref, ln)))
+        aligned = 0
+        i = max(bisect.bisect_right(ref, lo) - 1, 0)
+        while i < len(ref) and ref[i] < hi:
+            aligned += max(0, min(hi, ref[i] + ln[i]) - max(lo, ref[i]))
+            i += 1
+        i = bisect.bisect_right(ref, x) - 1
+        j = bisect.bisect_right(ref, y) - 1
+        return aligned, i >= 0 and x < ref[i] + ln[i], j >= 0 and y < ref[j] + ln[j]
+
     def mol_between(self, a, b):
         """Molecular bases (aligned or inserted) between source boundaries ``a <= b``."""
         return max(0, self.seq_at(b) - self.seq_at(a)) if self.ref else 0
@@ -158,6 +190,7 @@ class _Row:
         self.inner = []          # inner[k]: (dq, dt) between frags k, k+1 of one run, else None
         self.badges, self.connectors = [], []
         self.badge_sources = []  # source spans parallel to badges; never part of analysis geometry
+        self._pre = None         # compose_columns.RowColumns for rows of a lifted window
 
     def add_run(self, run, rejoin_bp):
         span = self.frags[-1].span + 1 if self.frags else 0
@@ -267,7 +300,10 @@ class _Ctx:
         self.molecule_groups = {}
         self.library_index = {}
         self._gap_cache = {}
+        self._source_gaps = {}
         self._owned_gap_items = None
+        self._owned_gap_ranges = {}
+        self.pending_insertions = None  # hidden blocks to compose after the window's rows (lift_compact_reads)
         self.loader_options = opts
 
     def count(self, name, n=1):
@@ -283,6 +319,15 @@ class _Ctx:
                 with self.handle.lock:  # gap_span may load another target's file
                     hit = self.handle.map.gap_span(contig, pos)[0]
             self._gap_cache[key] = hit
+        return hit
+
+    def source_only_gap(self, contig, a, b, chain):
+        """``differences.source_only_gap``, memoised for the load (the map does not change)."""
+        key = (contig, a, b, chain)
+        hit = self._source_gaps.get(key, self)
+        if hit is self:
+            from services.lift.differences import source_only_gap
+            hit = self._source_gaps[key] = source_only_gap(self.handle, contig, a, b, chain)
         return hit
 
     def projections(self, contig, a, b, haps):
@@ -329,27 +374,49 @@ def lift_compact_reads(reads, plan, *, handle, region_start, region_end, setting
     by_contig = {}
     for contig, pieces in plan.pieces_by_contig().items():
         pieces = sorted(pieces, key=lambda p: (p.q_start, p.q_end))
-        by_contig[contig] = (pieces, [p.q_start for p in pieces])
-    haps = {p.hap for pieces, _starts in by_contig.values() for p in pieces}
+        reach, top = [], None
+        for p in pieces:  # running maximum of q_end: pieces before a read's start skip at once
+            top = p.q_end if top is None or p.q_end > top else top
+            reach.append(top)
+        by_contig[contig] = (pieces, [p.q_start for p in pieces], reach)
+    haps = {p.hap for pieces, _starts, _reach in by_contig.values() for p in pieces}
     out = []
     with ExitStack() as stack:
         ctx.source_fasta = None
         if ctx.loader_options.get("include_cigar") and ctx.loader_options.get("source_fasta"):
             import pysam
             ctx.source_fasta = stack.enter_context(pysam.FastaFile(ctx.loader_options["source_fasta"]))
+        # Rows and their geometry first, for every read; then the window's
+        # intervals, calls, marks and molecular spans in one columnar pass
+        # (compose_columns); then each row's payload.
+        items = []
         for i, read in enumerate(reads):
             if not i & 255:
                 checkpoint()
-            out.extend(_lift_read(read, by_contig, haps, ctx))
+            item = _read_geometry(read, by_contig, haps, ctx)
+            if item is not None:
+                items.append(item)
+        checkpoint()
+        precompute(items, ctx, point_fields=_POINT_FIELDS, rest_parts=_rest_parts, small_group=_SMALL_GROUP)
+        ctx.pending_insertions = []
+        for i, (read, rows, runs) in enumerate(items):
+            if not i & 255:
+                checkpoint()
+            out.extend(_read_payloads(read, rows, runs, ctx))
+        _compose_pending_insertions(ctx)
     return out
 
 
 def _read_rows(read, indexed, settings):
-    """A read's rows: primary fragments, then one row set per alternative chain."""
-    pieces, starts = indexed
+    """A read's rows: primary fragments, then one row set per alternative chain.
+    ``indexed``: ``(pieces, their q_starts[, running max of q_end])``, pieces
+    sorted by ``(q_start, q_end)``."""
+    pieces, starts = indexed[0], indexed[1]
     rs, re_ = int(read["reference_start"]), int(read["reference_end"])
+    # Pieces ending at or before the read's start contribute nothing.
+    first = bisect.bisect_right(indexed[2], rs) if len(indexed) > 2 else 0
     primary_frags, alt_frags = [], {}
-    for p in pieces[:bisect.bisect_left(starts, re_)]:
+    for p in pieces[first:bisect.bisect_left(starts, re_)]:
         s, e = max(p.q_start, rs), min(p.q_end, re_)
         if e > s:
             (primary_frags if p.primary else alt_frags.setdefault(p.chain, [])).append(_Frag(s, e, p))
@@ -381,14 +448,21 @@ def project_aligned_runs(read, pieces, settings, *, alternatives=False):
 
 
 def _lift_read(read, by_contig, haps, ctx):
+    item = _read_geometry(read, by_contig, haps, ctx)
+    return [] if item is None else _read_payloads(*item, ctx)
+
+
+def _read_geometry(read, by_contig, haps, ctx):
+    """``(read, rows, runs)`` with each row's geometry, or None (counted) for
+    a read with no fragment in the selected pieces."""
     rec = read.get("_fiberbrowser_lift_record") or {}
     contig = rec.get("contig")
     runs = _SeqRuns(read.get("_fiberbrowser_aligned_runs"), rec)
     rs, re_ = int(read["reference_start"]), int(read["reference_end"])
-    rows = _read_rows(read, by_contig.get(contig) or ([], []), ctx.settings)
+    rows = _read_rows(read, by_contig.get(contig) or ([], [], []), ctx.settings)
     if not rows:
         ctx.count("records_without_correspondence")
-        return []
+        return None
     for row in rows:
         row.index()
         _row_geometry(row, contig, runs, ctx)
@@ -396,13 +470,18 @@ def _lift_read(read, by_contig, haps, ctx):
     key = (read.get("library_id") or read.get("source_path") or "", read.get("id"))
     if key not in ctx.molecules and (read.get("_fiberbrowser_primary") or {}).get("is_supplementary"):
         ctx.count("hap_from_record")
+    return read, rows, runs
+
+
+def _read_payloads(read, rows, runs, ctx):
+    contig = (read.get("_fiberbrowser_lift_record") or {}).get("contig")
     # Row numbering is per placement (primary, or each alternative chain).
     numbering, per_placement = [], {}
     for row in rows:
         placement = _placement(row)
         numbering.append((placement, per_placement.get(placement, 0)))
         per_placement[placement] = per_placement.get(placement, 0) + 1
-    call_lo = _call_starts(read)
+    call_lo = _LazyCallStarts(read)
     return [_row_payload(read, row, placement, idx, per_placement[placement], contig, runs, call_lo, ctx)
             for row, (placement, idx) in zip(rows, numbering)]
 
@@ -411,6 +490,20 @@ def _placement(row):
     if row.alt:
         return f"alt{row.frags[0].p.chain}"
     return str(next((f.p.chain for f in row.frags if f.p.primary), row.frags[0].p.chain))
+
+
+class _LazyCallStarts:
+    """``_call_starts(read)``, computed on first use (the columnar pass needs
+    it only for rows and groups it leaves to the per-row functions)."""
+    __slots__ = ("read", "value")
+
+    def __init__(self, read):
+        self.read, self.value = read, None
+
+    def get(self, group, default=None):
+        if self.value is None:
+            self.value = _call_starts(self.read)
+        return self.value.get(group, default)
 
 
 def _call_starts(read):
@@ -566,23 +659,35 @@ def _map_group(ivs, calls, row, base, runs, ctx):
             c1 = np.minimum(t1 - rs0, width)
             keep = c1 > c0
             out = list(zip(c0[keep].tolist(), c1[keep].tolist(), idx[keep].tolist(), kk[idx[keep]].tolist()))
-        rest = np.flatnonzero(todo & ~fast).tolist()
+        # The rest one by one; an interval overlapping none of the fragments
+        # has no parts (row.parts) unless it may be an insertion-only marker.
+        starts, ends = np.asarray(row.starts, dtype=np.int64), np.asarray(row.ends, dtype=np.int64)
+        nxt = np.minimum(k + 1, len(starts) - 1)
+        overlaps = ((k >= 0) & (ends[kk] > a)) | ((k + 1 < len(starts)) & (starts[nxt] < b))
+        rest = np.flatnonzero(todo & ~fast & (slow | overlaps)).tolist()
     else:
         rest = [i for i, iv in enumerate(ivs) if not (len(iv) > 2 and iv[2] < 0)]
     for i in rest:
-        ai, bi = base + int(ivs[i][0]), base + int(ivs[i][1])
-        call = calls[i] if calls is not None and i < len(calls) else None
-        # An insertion-only call decodes to the one reference base after its insertion.
-        if call is not None and bi - ai == 1 and not runs.has_aligned(int(call[1]), int(call[2])):
-            hit = row.boundary(ai)
-            if hit is not None and 0 <= hit[1] - rs0 <= width:
-                out.append((hit[1] - rs0, hit[1] - rs0, i, hit[0]))
-            continue
-        for t0, t1, k in row.parts(ai, bi):
-            c0, c1 = max(t0 - rs0, 0), min(t1 - rs0, width)
-            if c1 > c0:
-                out.append((c0, c1, i, k))
+        out += _rest_parts(i, ivs, calls, row, base, runs, rs0, width)
     out.sort()
+    return out
+
+
+def _rest_parts(i, ivs, calls, row, base, runs, rs0, width):
+    """``_map_group``'s parts of interval ``i`` outside the one-fragment case."""
+    ai, bi = base + int(ivs[i][0]), base + int(ivs[i][1])
+    call = calls[i] if calls is not None and i < len(calls) else None
+    # An insertion-only call decodes to the one reference base after its insertion.
+    if call is not None and bi - ai == 1 and not runs.has_aligned(int(call[1]), int(call[2])):
+        hit = row.boundary(ai)
+        if hit is not None and 0 <= hit[1] - rs0 <= width:
+            return [(hit[1] - rs0, hit[1] - rs0, i, hit[0])]
+        return []
+    out = []
+    for t0, t1, k in row.parts(ai, bi):
+        c0, c1 = max(t0 - rs0, 0), min(t1 - rs0, width)
+        if c1 > c0:
+            out.append((c0, c1, i, k))
     return out
 
 
@@ -622,6 +727,22 @@ def _call_identity(calls, ivs, parts, row, base, runs, lo):
     return ids, keys
 
 
+def _group(name, ivs, calls, row, base, runs, ctx, lo):
+    """``(parts, mapped, ids, keys)`` of one interval group: ``_map_group``,
+    its intervals ``[t0, t1, *rest]`` and ``_call_identity``; from the
+    window's columnar pass when it covered the group."""
+    pre = row._pre
+    if pre is not None:
+        hit = pre.groups.get(name)
+        if hit is not None:
+            return hit
+    parts = _map_group(ivs, calls, row, base, runs, ctx)
+    src = ivs or []
+    mapped = [[t0, t1, *src[i][2:]] for t0, t1, i, _k in parts]
+    ids, keys = _call_identity(calls, src, parts, row, base, runs, lo.get(name, {}))
+    return parts, mapped, ids, keys
+
+
 def _swap_pairs(names, layer_name):
     pairs = list(_EDGE_PAIRS)
     if layer_name in _SR_LAYERS:
@@ -632,14 +753,17 @@ def _swap_pairs(names, layer_name):
 
 def _map_layer(name, layer, row, base, runs, ctx, lo, ids_out, parts_out):
     calls = layer.get("_fiberbrowser_calls")
-    parts = _map_group(layer.get("intervals"), calls, row, base, runs, ctx)
     src = layer.get("intervals") or []
+    parts, mapped, ids, keys = _group(f"layer:{name}", layer.get("intervals"), calls, row, base, runs, ctx, lo)
     out = {key: value for key, value in layer.items()
            if key not in ("intervals", "qualities", "_fiberbrowser_calls", *_ALIGNED_LIST_KEYS, *_SOURCE_SPAN_KEYS)}
-    out["intervals"] = [[t0, t1, *src[i][2:]] for t0, t1, i, _k in parts]
+    out["intervals"] = mapped
     qualities = layer.get("qualities")
     if qualities is not None:
-        tracks = [[track[i] if i < len(track) else 0 for _t0, _t1, i, _k in parts] for track in qualities]
+        index = parts.index() if isinstance(parts, LazyParts) else [part[2] for part in parts]
+        top = max(index) if index else -1
+        tracks = [list(map(track.__getitem__, index)) if top < len(track) else
+                  [track[i] if i < len(track) else 0 for i in index] for track in qualities]
         if row.strand == "-":
             for a, b in _swap_pairs(layer.get("quality_names"), name):
                 if a < len(tracks) and b < len(tracks):
@@ -654,7 +778,7 @@ def _map_layer(name, layer, row, base, runs, ctx, lo, ids_out, parts_out):
         if values:
             out[key] = [_map_source_span(values[i] if i < len(values) else src[i], (t0, t1), row, base, ctx)
                         for t0, t1, i, _k in parts]
-    ids_out[f"layer:{name}"], parts_out[f"layer:{name}"] = _call_identity(calls, src, parts, row, base, runs, lo)
+    ids_out[f"layer:{name}"], parts_out[f"layer:{name}"] = ids, keys
     return out
 
 
@@ -868,50 +992,54 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
     # Top-level footprints: positive (and neutral size-0) intervals; gaps rebuilt per span.
     ivs = read.get("intervals") or []
     iv_calls = calls.get("intervals")
-    parts = _map_group(ivs, iv_calls, row, base, runs, ctx)
-    quals = read.get("qualities") or []
-    rank, n = {}, 0
-    for i, iv in enumerate(ivs):
-        if len(iv) > 2 and iv[2] > 0:
-            rank[i] = n
-            n += 1
+    parts, mapped, ids, keys = _group("intervals", ivs, iv_calls, row, base, runs, ctx, call_lo)
     spans = _spans(row, ctx)
-    mapped = [[t0, t1, *ivs[i][2:]] for t0, t1, i, _k in parts]
-    ids, keys = _call_identity(iv_calls, ivs, parts, row, base, runs, call_lo.get("intervals", {}))
-    logical = _logical(parts, mapped, ids, row.frags)
-    gaps = _gaps(logical, spans, cuts, ctx.hide_terminal_gaps, width)
-    combined = mapped + gaps
-    order = sorted(range(len(combined)), key=lambda j: (combined[j][0], combined[j][1], j))
-    payload["intervals"] = [combined[j] for j in order]
-    np_ = len(parts)
-    call_ids["intervals"] = [ids[j] if j < np_ else None for j in order]
-    call_parts["intervals"] = [keys[j] if j < np_ else None for j in order]
-    if quals:
-        payload["qualities"] = [quals[rank[parts[j][2]]] for j in order
-                                if j < np_ and parts[j][2] in rank and rank[parts[j][2]] < len(quals)]
+    logical = None
+    top = row._pre.intervals if row._pre is not None and not cuts else None
+    if top is not None:  # laid out by the window's columnar pass (compose_columns._top_level)
+        payload["intervals"], call_ids["intervals"], call_parts["intervals"], quals_out = top
+        if quals_out is not None:
+            payload["qualities"] = quals_out
+    else:
+        quals = read.get("qualities") or []
+        rank, n = {}, 0
+        for i, iv in enumerate(ivs):
+            if len(iv) > 2 and iv[2] > 0:
+                rank[i] = n
+                n += 1
+        logical = _logical(parts, mapped, ids, row.frags)
+        gaps = _gaps(logical, spans, cuts, ctx.hide_terminal_gaps, width)
+        combined = mapped + gaps
+        order = sorted(range(len(combined)), key=lambda j: (combined[j][0], combined[j][1], j))
+        payload["intervals"] = [combined[j] for j in order]
+        np_ = len(parts)
+        call_ids["intervals"] = [ids[j] if j < np_ else None for j in order]
+        call_parts["intervals"] = [keys[j] if j < np_ else None for j in order]
+        if quals:
+            payload["qualities"] = [quals[rank[parts[j][2]]] for j in order
+                                    if j < np_ and parts[j][2] in rank and rank[parts[j][2]] < len(quals)]
 
     if read.get("fire") is not None:
-        fire_calls = calls.get("fire")
-        fparts = _map_group(read["fire"], fire_calls, row, base, runs, ctx)
-        payload["fire"] = [[t0, t1, *read["fire"][i][2:]] for t0, t1, i, _k in fparts]
-        call_ids["fire"], call_parts["fire"] = _call_identity(fire_calls, read["fire"], fparts, row, base, runs,
-                                                              call_lo.get("fire", {}))
+        _fparts, payload["fire"], call_ids["fire"], call_parts["fire"] = _group(
+            "fire", read["fire"], calls.get("fire"), row, base, runs, ctx, call_lo)
 
     layers = {}
     for name, layer in (read.get("layers") or {}).items():
         if isinstance(layer, dict):
-            layers[name] = _map_layer(name, layer, row, base, runs, ctx, call_lo.get(f"layer:{name}", {}),
-                                      call_ids, call_parts)
+            layers[name] = _map_layer(name, layer, row, base, runs, ctx, call_lo, call_ids, call_parts)
     legacy = read.get("_fiberbrowser_legacy")
     if ctx.infer_legacy and ctx.include_layers and legacy is not None:
-        _infer_legacy(read, layers, payload, parts, mapped, ids, keys, logical, cuts, legacy, row, ctx,
-                      call_ids, call_parts)
+        _infer_legacy(read, layers, payload, parts, mapped, ids, keys,
+                      logical if logical is not None else (lambda: _logical(parts, mapped, ids, row.frags)),
+                      cuts, legacy, row, ctx, call_ids, call_parts)
     if read.get("layers") is not None or layers:
         payload["layers"] = layers
 
+    pre_points = row._pre.points if row._pre is not None else {}
     for key in _POINT_FIELDS:
         if key in read:
-            payload[key], d = _map_points(read[key], row, base, ctx)
+            hit = pre_points.get(key)
+            payload[key], d = hit if hit is not None else _map_points(read[key], row, base, ctx)
             dropped["points"] += d
     if "deam" in read:
         payload["deam"], d = _map_points(read["deam"], row, base, ctx, pairs=True)
@@ -928,6 +1056,7 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
             gaps_t += [[t0, t1] for t0, t1, _k in row.parts(int(a), int(b))]
         payload["_fiberbrowser_terminal_gaps"] = sorted(gaps_t)
 
+    clipped_spans = row._pre.molecular_spans if row._pre is not None else None
     hull0 = min(s[0] for s in row.segments)
     hull1 = max(s[1] for s in row.segments)
     payload["reference_start"], payload["reference_end"] = hull0, hull1
@@ -976,7 +1105,7 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
         "source": {"contig": contig, "start": int(read["reference_start"]), "end": int(read["reference_end"]),
                    "orientation": read.get("alignment_orientation"),
                    "supplementary": bool(prim.get("is_supplementary")), "sa": sa or None},
-        "molecular_spans": _molecular_spans(row, runs, rs0),
+        "molecular_spans": clipped_spans if clipped_spans is not None else _molecular_spans(row, runs, rs0),
         "segments": [[s0 - rs0, s1 - rs0, chain, strand, primary] for s0, s1, chain, strand, primary in row.segments],
         "connectors": [[c0 - rs0, c1 - rs0] for c0, c1 in sorted(row.connectors)],
         "badges": [[b[0] - rs0, *b[1:]] for b in sorted(row.badges, key=lambda b: b[0])],
@@ -995,7 +1124,7 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
     _insertion_metadata(read, row, contig, runs, call_lo, payload, ctx)
     # Geometry clipped to the region, as intervals are (a broad-cache crop gives the same).
     from services.lift.reads import clip_geometry
-    payload["live_lift"] = clip_geometry(payload["live_lift"], 0, width)
+    payload["live_lift"] = clip_geometry(payload["live_lift"], 0, width, spans_clipped=clipped_spans is not None)
     return payload
 
 
@@ -1028,14 +1157,12 @@ def _assembly_gap_metadata(read, row, contig, runs, payload, ctx):
     observations = []
     rs, re = int(read["reference_start"]), int(read["reference_end"])
     for ci in sorted({f.p.chain for f in row.frags}):
-        for item in ctx._owned_gap_items.get(ci, ()):
+        for item in _owned_gaps_near(ctx, ci, contig, rs, re):
             a, b = item["src"]["start"], item["src"]["end"]
             if item["src"]["contig"] != contig or re < a or rs > b:
                 continue
             lo, hi = max(rs, a), min(re, b)
-            aligned = sum(max(0, min(hi, r + n) - max(lo, r)) for r, n in zip(runs.ref, runs.len))
-            left = any(r <= a - 1 < r + n for r, n in zip(runs.ref, runs.len))
-            right = any(r <= b < r + n for r, n in zip(runs.ref, runs.len))
+            aligned, left, right = runs.coverage(lo, hi, a - 1, b)
             mol_bp = runs.mol_between(lo, hi)
             covered = [lo - a, hi - a] if item["strand"] == "+" else [b - hi, b - lo]
             obs = dict(item, pos=item["t_start"] - ctx.region_start, method="assembly_projection",
@@ -1068,6 +1195,34 @@ def _assembly_gap_metadata(read, row, contig, runs, payload, ctx):
         payload["sv"].sort(key=lambda e: (e.get("ref", 0), e.get("t", "")))
 
 
+def _owned_gaps_near(ctx, ci, contig, rs, re):
+    """The owned gap items of chain ``ci`` (in their order) that may meet
+    source ``[rs, re]`` on ``contig``: a superset of the overlapping ones,
+    found by bisection when the chain's items are disjoint and ascending in
+    source (else all of them)."""
+    items = ctx._owned_gap_items.get(ci, ())
+    if len(items) < 8:
+        return items
+    index = ctx._owned_gap_ranges.get(ci)
+    if index is None:
+        order = sorted(range(len(items)), key=lambda j: (items[j]["src"]["start"], items[j]["src"]["end"]))
+        starts = [items[j]["src"]["start"] for j in order]
+        ends = [items[j]["src"]["end"] for j in order]
+        ok = (all(items[j]["src"]["contig"] == items[order[0]]["src"]["contig"] for j in order)
+              and all(ends[x] <= starts[x + 1] for x in range(len(order) - 1)))
+        index = ctx._owned_gap_ranges[ci] = (order, starts, ends, items[order[0]]["src"]["contig"]) if ok else False
+    if index is False:
+        return items
+    order, starts, ends, gap_contig = index
+    if gap_contig != contig:
+        return ()
+    lo = bisect.bisect_left(ends, rs)        # first item with end >= rs
+    hi = bisect.bisect_right(starts, re)     # items with start <= re
+    if hi - lo == len(order):
+        return items
+    return [items[j] for j in sorted(order[lo:hi])]
+
+
 def _insertion_metadata(read, row, contig, runs, call_lo, payload, ctx):
     """Retain hidden source calls for expansion, isolated from all target geometry.
 
@@ -1081,13 +1236,13 @@ def _insertion_metadata(read, row, contig, runs, call_lo, payload, ctx):
     row reuses the composer so gaps/MSPs, qualities and deletion cuts obey
     exactly the same rules as target calls, without entering the target row.
     """
-    from services.lift.differences import difference_id, source_only_gap
+    from services.lift.differences import difference_id
 
     ll = payload["live_lift"]
     for i in sorted(range(len(row.badges)), key=lambda i: row.badges[i][0]):
         badge = row.badges[i]
         a, b, p = row.badge_sources[i]
-        gap = source_only_gap(ctx.handle, contig, a, b, p.chain)
+        gap = ctx.source_only_gap(contig, a, b, p.chain)
         if gap is None or badge[1] == "elsewhere":
             ll["badge_ids"].append(None)
             continue
@@ -1108,22 +1263,67 @@ def _insertion_metadata(read, row, contig, runs, call_lo, payload, ctx):
         requested = ctx.loader_options.get("insertion_ids")
         if requested is not None and ins_id not in requested:
             continue
-        ll["insertions"][ins_id] = _insertion_payloads(read, row, contig, runs, call_lo, ctx,
-                                                     p, a, b, lo, hi, length, label, mol_bp, badge)
+        args = (read, row, contig, runs, call_lo, ctx, p, a, b, lo, hi, length, label, mol_bp, badge)
+        if ctx.pending_insertions is not None:
+            # Composed with the window's other hidden blocks in one columnar
+            # pass (_compose_pending_insertions); the slot keeps its place.
+            ll["insertions"][ins_id] = {}
+            ctx.pending_insertions.append((payload, ins_id, observed, args))
+            continue
+        ll["insertions"][ins_id] = _insertion_payloads(*args)
         if observed:
-            ll["insertions"][ins_id].update({key: observed[key] for key in ("kind", "t_start", "t_end", "ref_bp", "alt_bp")})
+            ll["insertions"][ins_id].update(_observed_fields(observed))
 
 
-def _insertion_payloads(read, row, contig, runs, call_lo, ctx, p, a, b, lo, hi, length, label, mol_bp, badge):
-    """Compose annotations only for an explicitly requested hidden block."""
+def _observed_fields(observed):
+    return {key: observed[key] for key in ("kind", "t_start", "t_end", "ref_bp", "alt_bp")}
+
+
+def _compose_pending_insertions(ctx):
+    """Compose the hidden blocks ``_insertion_metadata`` deferred, all in one
+    columnar pass (each block is its own frame ``[0, length)``), and put each
+    where it would have been: in its row's clipped ``insertions`` (as
+    ``clip_geometry`` copies it), if the row kept that badge."""
+    jobs, ctx.pending_insertions = ctx.pending_insertions, None
+    if not jobs:
+        return
+    from services.background_work import checkpoint
+
+    checkpoint()
+    hidden = [_insertion_row(*args) for _payload, _ins_id, _observed, args in jobs]
+    precompute([(args[0], [local], args[3]) for (_p, _i, _o, args), (_c, local) in zip(jobs, hidden)], ctx,
+               point_fields=_POINT_FIELDS, rest_parts=_rest_parts, small_group=_SMALL_GROUP,
+               regions=[(0, args[11]) for _p, _i, _o, args in jobs])
+    for (payload, ins_id, observed, args), local in zip(jobs, hidden):
+        block = _insertion_payloads(*args, local=local)
+        if observed:
+            block.update(_observed_fields(observed))
+        kept = payload["live_lift"]["insertions"]
+        if ins_id in kept:
+            kept[ins_id] = dict(block, pos=block["pos"])
+
+
+def _insertion_row(read, row, contig, runs, call_lo, ctx, p, a, b, lo, hi, length, label, mol_bp, badge):
+    """``(local ctx, synthetic row)`` of a hidden block: the read's source
+    ``[lo, hi)`` inside the insertion, in the block's own frame ``[0, length)``."""
     local_ctx = copy.copy(ctx)
     local_ctx.region_start, local_ctx.region_end, local_ctx.width = 0, length, length
     # The synthetic block is not a target locus; never compare it to hg38.
     local_ctx.loader_options = dict(ctx.loader_options, include_cigar=False, _insertion_local=True)
+    local_ctx.pending_insertions = None
     local = _Row(row.strand, row.alt)
     local.add_run([_Frag(lo, hi, p._replace(q_start=a, q_end=b, t_start=0, t_end=length))], ctx.settings.rejoin_bp)
     local.index()
     _row_geometry(local, contig, runs, local_ctx)
+    return local_ctx, local
+
+
+def _insertion_payloads(read, row, contig, runs, call_lo, ctx, p, a, b, lo, hi, length, label, mol_bp, badge,
+                        local=None):
+    """Compose annotations only for an explicitly requested hidden block
+    (``local``: its ``_insertion_row``, when already built)."""
+    local_ctx, local = local or _insertion_row(read, row, contig, runs, call_lo, ctx, p, a, b, lo, hi, length,
+                                               label, mol_bp, badge)
     hidden = _row_payload(read, local, "insertion", 0, 1, contig, runs, call_lo, local_ctx)
     keep = ("intervals", "qualities", "layers", "fire", "deam", *_POINT_FIELDS)
     block = {k: hidden[k] for k in keep if k in hidden}
@@ -1182,6 +1382,8 @@ def _infer_legacy(read, layers, payload, parts, mapped, ids, keys, logical, cuts
             call_ids[f"layer:{name}"] = [ids[j] for j in sel]
             call_parts[f"layer:{name}"] = [keys[j] for j in sel]
     if infer_msp:
+        if callable(logical):
+            logical = logical()
         msp = []
         for span in sorted(logical):
             for iv in generate_msp_from_nuc_gaps(logical[span], min_nuc_size=ctx.nuc_min_size):

@@ -110,9 +110,11 @@ def scoped_sampling_info(info):
     info["estimated"] = True
     return info
 
-def clip_geometry(ll: dict, offset: int, width: int) -> dict:
+def clip_geometry(ll: dict, offset: int, width: int, *, spans_clipped: bool = False) -> dict:
     """``live_lift`` body spans, connectors and badges shifted by ``-offset``
-    and kept where they reach ``[0, width]``; connector-only hulls have no body."""
+    and kept where they reach ``[0, width]``; connector-only hulls have no body.
+    ``spans_clipped``: ``molecular_spans`` are already shifted and clipped
+    (the composer clips them in its columnar pass) and are kept as they are."""
     out = dict(ll)
     segs = []
     for segment in ll.get("segments") or ():
@@ -123,7 +125,7 @@ def clip_geometry(ll: dict, offset: int, width: int) -> dict:
         if any(b > offset and a < offset + width for a, b in body):
             segs.append([max(segment[0] - offset, 0), min(segment[1] - offset, width), *segment[2:]])
     out["segments"] = segs
-    if "molecular_spans" in ll:
+    if "molecular_spans" in ll and not spans_clipped:
         out["molecular_spans"] = [[max(a, offset) - offset, min(b, offset + width) - offset,
                                    m + (max(a, offset) - a) * step, step, primary]
                                   for a, b, m, step, primary in ll["molecular_spans"]
