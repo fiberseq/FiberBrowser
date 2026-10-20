@@ -152,5 +152,8 @@ def test_historical_relink_fixture_matches_backend_identity_producer():
     record = fixture['metadata']['records'][0]
     row = dict(id=record['rawName'], live_lift=dict(molecule=record['provenanceGroup']+'|'+record['rawName'],
         record=record['recordId'], row_index=record['rowIndex'], placement=record['placement']))
-    assert analysis_id(row, LiftSettings()) == fixture['current']
-
+    settings = LiftSettings(molecule_groups=(('synthetic.bam', record['libraryId']),))
+    dataset = SimpleNamespace(id='reopened', data_type='bam_livelift', paths=['synthetic.bam'], live_lift=SimpleNamespace(settings=settings))
+    assert settings.molecule_group_map(dataset.paths, dataset.id)['synthetic.bam'] == record['provenanceGroup']
+    assert analysis_id(row, settings) == fixture['current']
+    assert raw_qnames([fixture['current']], dataset) == {record['rawName']}
