@@ -1,71 +1,107 @@
 /**
- * Drawing the graph panel: its own ruler (true target coordinates) and the thin topology preview's lanes. Every
- * position goes through the panel's GraphTransform; the canvas is set up in screen coordinates, so no linear
- * panel's insertion expansion, highlight or pan offset reaches it.
+ * Drawing the graph panel: its own ruler (true target coordinates through the scene's target map) and the joint
+ * layout scene (scene.ts). The canvas is set up in screen coordinates, so no linear panel's insertion expansion,
+ * highlight or pan offset reaches it. Like FiberBrowser's other track canvases it stays light in both themes; the
+ * haplotype inks are the live-lift palette's (MAT orange, PAT blue, further paths their own colours).
  */
 import { liveLiftHaplotypeColor } from '../liveLift/palette';
 import { TRACK_BACKGROUND } from '../../components/tracks/TrackContainerConstants';
-import { formatBp, ticks, toX, type GraphTransform, type GraphViewport } from './coordinates';
-import type { GraphPreview, PreviewLane, PreviewPiece } from './preview';
+import { formatBp, type GraphViewport } from './coordinates';
+import type { LayoutRow } from './layout';
+import { xForTarget, type Prim, type Scene } from './scene';
 
 export const GRAPH_GUTTER = 52;
 export const GRAPH_RULER_HEIGHT = 30;
 export const GRAPH_LANE_HEIGHT = 28;
 export const GRAPH_LANE_GAP = 4;
+export const GRAPH_RIGHT_PAD = 6;
 const TARGET_INK = '#334155';
 
-export interface HitRegion {
-  x0: number; x1: number; y0: number; y1: number;
-  lane: PreviewLane;
-  piece: PreviewPiece;
-}
-
-export function laneColor(lane: PreviewLane, dark = false): string {
-  return lane.role === 'target' ? (dark ? '#cbd5e1' : TARGET_INK) : liveLiftHaplotypeColor(lane.label, dark);
+export function laneColor(row: Pick<LayoutRow, 'role' | 'label'>, dark = false): string {
+  return row.role === 'target' ? (dark ? '#cbd5e1' : TARGET_INK) : liveLiftHaplotypeColor(row.label, dark);
 }
 
 export function laneTop(index: number, laneHeight = GRAPH_LANE_HEIGHT): number {
   return GRAPH_RULER_HEIGHT + GRAPH_LANE_GAP + index * (laneHeight + GRAPH_LANE_GAP);
 }
 
-export function drawRuler(ctx: CanvasRenderingContext2D, t: GraphTransform, view: GraphViewport, width: number): void {
+/** Round tick positions about every `spacing` px of the window's average density. */
+function tickStep(bp: number, width: number, spacing = 90): number {
+  const target = Math.max(1, Math.min(10, Math.floor(width / spacing)));
+  const raw = bp / target;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(Math.max(1, raw))));
+  const n = raw / magnitude;
+  return (n <= 1.5 ? 1 : n <= 3 ? 2 : n <= 7 ? 5 : 10) * magnitude;
+}
+
+export function drawRuler(ctx: CanvasRenderingContext2D, scene: Scene | null, view: GraphViewport, width: number, reversed: boolean): void {
   ctx.fillStyle = TRACK_BACKGROUND.axis;
   ctx.fillRect(0, 0, width, GRAPH_RULER_HEIGHT);
-  ctx.strokeStyle = '#ccc';
+  ctx.strokeStyle = '#d4d4d8';
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(t.left, GRAPH_RULER_HEIGHT - 0.5);
-  ctx.lineTo(t.left + t.width, GRAPH_RULER_HEIGHT - 0.5);
+  ctx.moveTo(GRAPH_GUTTER, GRAPH_RULER_HEIGHT - 0.5);
+  ctx.lineTo(width - GRAPH_RIGHT_PAD, GRAPH_RULER_HEIGHT - 0.5);
   ctx.stroke();
-  const region = `${view.contig}:${view.start.toLocaleString('en-US')}-${view.end.toLocaleString('en-US')}${t.reversed ? " ◄ 3'→5'" : ''}`;
+  const region = `${view.contig}:${view.start.toLocaleString('en-US')}-${view.end.toLocaleString('en-US')}${reversed ? " ◄ 3'→5'" : ''}`;
   const size = formatBp(view.end - view.start);
   ctx.font = 'bold 10px sans-serif';
-  const regionRight = t.left + 4 + ctx.measureText(region).width;
+  const regionRight = GRAPH_GUTTER + 4 + ctx.measureText(region).width;
   ctx.font = '9px sans-serif';
   const sizeLeft = width - 4 - ctx.measureText(size).width;
-  ctx.fillStyle = '#666';
-  ctx.textAlign = 'center';
-  for (const pos of ticks(t).positions) {
-    const x = toX(t, pos);
-    if (x < t.left + 4 || x > t.left + t.width - 4) continue;
-    ctx.beginPath();
-    ctx.moveTo(x, GRAPH_RULER_HEIGHT - 6);
-    ctx.lineTo(x, GRAPH_RULER_HEIGHT - 1);
-    ctx.stroke();
-    const label = pos.toLocaleString('en-US');
-    const half = ctx.measureText(label).width / 2;
-    if (x - half < regionRight + 6 || x + half > sizeLeft - 6) continue;
-    ctx.fillText(label, x, GRAPH_RULER_HEIGHT - 10);
+  if (scene) {
+    // Compressed stretches and insertion slots: a light band on the ruler where its scale is schematic.
+    for (const m of scene.targetMap) {
+      if (m.kind !== 'slot' && m.kind !== 'gap') continue;
+      ctx.fillStyle = m.kind === 'slot' ? 'rgba(148,163,184,0.18)' : 'rgba(148,163,184,0.28)';
+      ctx.fillRect(Math.min(m.x0, m.x1), GRAPH_RULER_HEIGHT - 5, Math.abs(m.x1 - m.x0), 4);
+    }
+    const step = tickStep(view.end - view.start, scene.dataWidth);
+    ctx.fillStyle = '#666';
+    ctx.textAlign = 'center';
+    let lastRight = -Infinity, lastLeft = Infinity;
+    for (let pos = Math.ceil(view.start / step) * step; pos < view.end; pos += step) {
+      const x = xForTarget(scene.targetMap, pos, 'end', scene.reversed);
+      if (x == null || x < GRAPH_GUTTER + 2 || x > width - GRAPH_RIGHT_PAD - 2) continue;
+      ctx.strokeStyle = '#a1a1aa';
+      ctx.beginPath();
+      ctx.moveTo(x, GRAPH_RULER_HEIGHT - 6);
+      ctx.lineTo(x, GRAPH_RULER_HEIGHT - 1);
+      ctx.stroke();
+      const label = pos.toLocaleString('en-US');
+      const half = ctx.measureText(label).width / 2;
+      if (x - half < regionRight + 6 || x + half > sizeLeft - 6) continue;
+      // Compression can pack ticks: skip a label that would touch the last one.
+      if (!reversed ? x - half < lastRight + 8 : x + half > lastLeft - 8) continue;
+      ctx.fillText(label, x, GRAPH_RULER_HEIGHT - 10);
+      lastRight = x + half;
+      lastLeft = x - half;
+    }
   }
   ctx.textAlign = 'left';
   ctx.fillStyle = '#333';
   ctx.font = 'bold 10px sans-serif';
-  ctx.fillText(region, t.left + 4, 12);
+  ctx.fillText(region, GRAPH_GUTTER + 4, 12);
   ctx.textAlign = 'right';
   ctx.font = '9px sans-serif';
   ctx.fillStyle = '#666';
   ctx.fillText(size, width - 4, 12);
   ctx.textAlign = 'left';
+}
+
+function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
+  const rr = Math.max(0, Math.min(r, w / 2, h / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.lineTo(x + w - rr, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+  ctx.lineTo(x + w, y + h - rr);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+  ctx.lineTo(x + rr, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+  ctx.lineTo(x, y + rr);
+  ctx.quadraticCurveTo(x, y, x + rr, y);
+  ctx.closePath();
 }
 
 function hatch(ctx: CanvasRenderingContext2D, x0: number, y0: number, w: number, h: number, color: string): void {
@@ -84,150 +120,195 @@ function hatch(ctx: CanvasRenderingContext2D, x0: number, y0: number, w: number,
   ctx.restore();
 }
 
-/** Draw every lane; returns the hit regions (CSS px) for hover. */
-export function drawLanes(ctx: CanvasRenderingContext2D, preview: GraphPreview, t: GraphTransform, width: number,
-                          laneHeight = GRAPH_LANE_HEIGHT, dark = false): HitRegion[] {
-  const hits: HitRegion[] = [];
-  preview.lanes.forEach((lane, index) => {
-    const top = laneTop(index, laneHeight);
-    const mid = top + laneHeight / 2;
-    const color = laneColor(lane, dark);
+function drawPrim(ctx: CanvasRenderingContext2D, p: Prim): void {
+  switch (p.t) {
+    case 'tube': {
+      const w = p.x1 - p.x0;
+      const pad = 1.5;
+      // The node body: a soft outlined tube; inside, one stripe per path walking it.
+      ctx.fillStyle = '#ffffff';
+      roundRect(ctx, p.x0, p.y - pad, w, p.h + 2 * pad, 3);
+      ctx.fill();
+      ctx.save();
+      roundRect(ctx, p.x0, p.y - pad, w, p.h + 2 * pad, 3);
+      ctx.clip();
+      for (const s of p.slots) {
+        if (p.present.includes(s.key)) {
+          ctx.globalAlpha = p.style === 'unresolved' ? 0.45 : 0.92;
+          ctx.fillStyle = s.color;
+        } else {
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = '#f1f5f9';
+        }
+        ctx.fillRect(p.x0, s.y, w, s.h);
+      }
+      ctx.globalAlpha = 1;
+      // Node boundaries: thin cuts across the stripes.
+      ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+      ctx.lineWidth = 1;
+      for (const x of p.nodes) {
+        ctx.beginPath();
+        ctx.moveTo(x, p.y - pad);
+        ctx.lineTo(x, p.y + p.h + pad);
+        ctx.stroke();
+      }
+      // A compressed run: a break mark.
+      for (const x of p.breaks) {
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.moveTo(x - 3, p.y + p.h + pad);
+        ctx.lineTo(x + 0.5, p.y - pad);
+        ctx.lineTo(x + 3.5, p.y - pad);
+        ctx.lineTo(x, p.y + p.h + pad);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+      ctx.strokeStyle = p.style === 'unresolved' ? '#94a3b8' : p.outline;
+      ctx.lineWidth = 1;
+      if (p.style === 'unresolved') ctx.setLineDash([3, 2]);
+      roundRect(ctx, p.x0 + 0.5, p.y - pad + 0.5, Math.max(0, w - 1), p.h + 2 * pad - 1, 3);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      return;
+    }
+    case 'stripe': {
+      ctx.fillStyle = p.color;
+      if (p.style === 'edge') {
+        ctx.globalAlpha = 0.92;
+        ctx.fillRect(p.x0, p.y, p.x1 - p.x0, p.h);
+        ctx.globalAlpha = 1;
+      } else if (p.style === 'connector') {
+        ctx.globalAlpha = 0.55;
+        ctx.fillRect(p.x0, p.y, p.x1 - p.x0, p.h);
+        ctx.globalAlpha = 1;
+      } else {
+        ctx.globalAlpha = 0.7;
+        for (let x = p.x0; x < p.x1; x += 5) ctx.fillRect(x, p.y, Math.min(3, p.x1 - x), p.h);
+        ctx.globalAlpha = 1;
+      }
+      return;
+    }
+    case 'curve': {
+      const mid = (p.x0 + p.x1) / 2;
+      ctx.strokeStyle = p.color;
+      ctx.globalAlpha = 0.9;
+      ctx.lineWidth = p.w;
+      ctx.lineCap = 'butt';
+      if (p.dashed) ctx.setLineDash([3, 2]);
+      ctx.beginPath();
+      ctx.moveTo(p.x0, p.y0);
+      ctx.bezierCurveTo(mid, p.y0, mid, p.y1, p.x1, p.y1);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+      return;
+    }
+    case 'text': {
+      ctx.font = `${p.bold ? 'bold ' : ''}${p.size}px sans-serif`;
+      ctx.textAlign = p.align;
+      // A light halo keeps labels legible over stripes.
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+      ctx.strokeText(p.text, p.x, p.y);
+      ctx.fillStyle = p.color;
+      ctx.fillText(p.text, p.x, p.y);
+      ctx.textAlign = 'left';
+      return;
+    }
+    case 'gap': {
+      ctx.fillStyle = '#f8fafc';
+      ctx.fillRect(p.x0, p.y, p.x1 - p.x0, p.h);
+      hatch(ctx, p.x0, p.y, p.x1 - p.x0, p.h, '#cbd5e1');
+      ctx.strokeStyle = '#94a3b8';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(p.x0 + 0.5, p.y + 0.5, Math.max(0, p.x1 - p.x0 - 1), p.h - 1);
+      return;
+    }
+    case 'mark': {
+      ctx.fillStyle = TARGET_INK;
+      ctx.fillRect(p.x - 1, p.y - 2, 2, p.h + 4);
+      return;
+    }
+    case 'cap': {
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      return;
+    }
+    case 'dots': {
+      ctx.fillStyle = p.color;
+      if (p.x1 - p.x0 < 1) {
+        ctx.beginPath();
+        ctx.arc(p.x0, p.y, 2.25, 0, Math.PI * 2);
+        ctx.fill();
+        return;
+      }
+      for (let x = p.x0; x <= p.x1; x += 4) {
+        ctx.beginPath();
+        ctx.arc(x, p.y, 1.1, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      return;
+    }
+    case 'cluster': {
+      ctx.fillStyle = 'rgba(217,119,6,0.10)';
+      roundRect(ctx, p.x0, p.y, p.x1 - p.x0, p.h, 3);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(217,119,6,0.55)';
+      ctx.setLineDash([2, 2]);
+      ctx.lineWidth = 1;
+      roundRect(ctx, p.x0 + 0.5, p.y + 0.5, p.x1 - p.x0 - 1, p.h - 1, 3);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      return;
+    }
+    case 'frame': {
+      ctx.strokeStyle = p.color;
+      ctx.lineWidth = 1.25;
+      if (p.dashed) ctx.setLineDash([4, 3]);
+      roundRect(ctx, p.x0 + 0.5, p.y0 + 0.5, p.x1 - p.x0 - 1, p.y1 - p.y0 - 1, 5);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(217,119,6,0.05)';
+      roundRect(ctx, p.x0, p.y0, p.x1 - p.x0, p.y1 - p.y0, 5);
+      ctx.fill();
+      return;
+    }
+  }
+}
+
+/** The scene's lanes: the compact label in the gutter, then the data (clipped to the data area). */
+export function drawScene(ctx: CanvasRenderingContext2D, scene: Scene): void {
+  for (const row of scene.rows) {
     ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, top - GRAPH_LANE_GAP / 2, width, laneHeight + GRAPH_LANE_GAP);
-    // Compact label in the gutter: the data starts right of it.
-    ctx.fillStyle = color;
+    ctx.fillRect(0, row.top - GRAPH_LANE_GAP / 2, scene.width, row.height + GRAPH_LANE_GAP);
+    if (row.role === 'alternate') {
+      // A faint lane guide, so alleles read as belonging to their path.
+      ctx.strokeStyle = '#f1f5f9';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(scene.dataLeft, row.center + 0.5);
+      ctx.lineTo(scene.dataLeft + scene.dataWidth, row.center + 0.5);
+      ctx.stroke();
+    }
+    // Compact label: a colour key and the path's short name.
+    ctx.fillStyle = row.color;
+    ctx.beginPath();
+    ctx.arc(9, row.center, 3, 0, Math.PI * 2);
+    ctx.fill();
     ctx.font = 'bold 10px sans-serif';
     ctx.textAlign = 'left';
-    ctx.fillText(lane.label, 6, mid + 3.5, GRAPH_GUTTER - 10);
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(t.left, top - 2, t.width, laneHeight + 4);
-    ctx.clip();
-    // The lane's spine.
-    ctx.strokeStyle = '#e2e8f0';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(t.left, mid + 0.5);
-    ctx.lineTo(t.left + t.width, mid + 0.5);
-    ctx.stroke();
-    let shade = 0;
-    const markers: PreviewPiece[] = [];
-    for (const piece of lane.pieces) {
-      if (piece.kind === 'insertion') { markers.push(piece); continue; }
-      const a = toX(t, piece.start), b = toX(t, piece.end);
-      const x0 = Math.min(a, b), w = Math.max(1, Math.abs(b - a));
-      if (piece.kind === 'node') {
-        ctx.globalAlpha = shade++ % 2 ? 0.72 : 0.92;
-        ctx.fillStyle = color;
-        ctx.fillRect(x0, mid - 5, w, 10);
-        ctx.globalAlpha = 1;
-        if (piece.reverse && w >= 6) {
-          // Opposite orientation to the target: chevrons pointing back.
-          ctx.strokeStyle = '#ffffff';
-          ctx.lineWidth = 1;
-          for (let x = x0 + 4; x < x0 + w - 2; x += 8) {
-            const dir = t.reversed ? 1 : -1;
-            ctx.beginPath();
-            ctx.moveTo(x - dir * 2, mid - 3);
-            ctx.lineTo(x + dir * 2, mid);
-            ctx.lineTo(x - dir * 2, mid + 3);
-            ctx.stroke();
-          }
-        }
-        hits.push({ x0, x1: x0 + w, y0: mid - 6, y1: mid + 6, lane, piece });
-      } else if (piece.kind === 'unavailable') {
-        ctx.fillStyle = '#f1f5f9';
-        ctx.fillRect(x0, mid - 6, w, 12);
-        hatch(ctx, x0, mid - 6, w, 12, '#94a3b8');
-        hits.push({ x0, x1: x0 + w, y0: mid - 6, y1: mid + 6, lane, piece });
-      } else if (piece.kind === 'deletion') {
-        // The alternate skips this target stretch: a bypass arc over it.
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 1.25;
-        ctx.beginPath();
-        ctx.moveTo(x0, mid - 5);
-        ctx.quadraticCurveTo(x0 + w / 2, top + 1, x0 + w, mid - 5);
-        ctx.stroke();
-        if (w > 44) {
-          ctx.fillStyle = color;
-          ctx.font = '9px sans-serif';
-          ctx.textAlign = 'center';
-          ctx.fillText(`−${formatBp(piece.bp)}`, x0 + w / 2, mid + 12);
-          ctx.textAlign = 'left';
-        }
-        hits.push({ x0, x1: x0 + w, y0: top, y1: top + laneHeight, lane, piece });
-      } else if (piece.kind === 'divergent') {
-        ctx.strokeStyle = color;
-        ctx.setLineDash([3, 2]);
-        ctx.lineWidth = 1;
-        ctx.strokeRect(x0 + 0.5, mid - 5.5, Math.max(1, w - 1), 11);
-        ctx.setLineDash([]);
-        if (w > 60) {
-          ctx.fillStyle = color;
-          ctx.font = '9px sans-serif';
-          ctx.textAlign = 'center';
-          ctx.fillText(`${formatBp(piece.bp)} / ${formatBp(piece.end - piece.start)}`, x0 + w / 2, mid + 3);
-          ctx.textAlign = 'left';
-        }
-        hits.push({ x0, x1: x0 + w, y0: mid - 6, y1: mid + 6, lane, piece });
-      }
-    }
-    ctx.restore();
-    // Insertions last, over everything: a wedge at the boundary and the true length (a label that would overlap
-    // the previous one is left out; hovering the wedge still says it).
-    let labelRight = -Infinity;
-    markers.sort((a, b) => toX(t, a.start) - toX(t, b.start));
-    for (const piece of markers) {
-      const x = toX(t, piece.start);
-      if (x < t.left - 1 || x > t.left + t.width + 1) continue;
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.moveTo(x - 5, top + 1);
-      ctx.lineTo(x + 5, top + 1);
-      ctx.lineTo(x, mid - 1);
-      ctx.closePath();
-      ctx.fill();
-      ctx.fillRect(x - 0.75, mid - 6, 1.5, 12);
-      const label = `+${formatBp(piece.bp)}`;
-      ctx.font = 'bold 9px sans-serif';
-      const lw = ctx.measureText(label).width;
-      const right = x + 7 + lw < t.left + t.width;
-      const x0 = right ? x + 7 : x - 7 - lw;
-      if (x0 > labelRight + 3) {
-        ctx.textAlign = right ? 'left' : 'right';
-        ctx.fillText(label, right ? x + 7 : x - 7, top + 9);
-        ctx.textAlign = 'left';
-        labelRight = x0 + lw;
-      }
-      hits.push({ x0: x - 6, x1: x + 6, y0: top, y1: top + laneHeight, lane, piece });
-    }
-  });
-  return hits;
-}
-
-export function hitAt(hits: HitRegion[], x: number, y: number): HitRegion | null {
-  // Insertions are pushed last and are narrow: prefer the last match.
-  for (let i = hits.length - 1; i >= 0; i--) {
-    const h = hits[i];
-    if (x >= h.x0 && x <= h.x1 && y >= h.y0 && y <= h.y1) return h;
+    ctx.fillText(row.label, 16, row.center + 3.5, GRAPH_GUTTER - 20);
   }
-  return null;
-}
-
-export function describeHit(hit: HitRegion): string {
-  const p = hit.piece;
-  const where = (n: number) => n.toLocaleString('en-US');
-  switch (p.kind) {
-    case 'node':
-      return `${hit.lane.label} · node ${p.node}${p.reverse ? ' (reverse)' : ''} · ${where(p.start)}-${where(p.end)} on the target`;
-    case 'insertion':
-      return `${hit.lane.label} · insertion of ${formatBp(p.bp)} at target boundary ${where(p.start)}`
-        + (p.source ? ` · source ${where(p.source.start)}-${where(p.source.end)}` : '');
-    case 'deletion':
-      return `${hit.lane.label} · skips ${formatBp(p.bp)} of the target (${where(p.start)}-${where(p.end)})`;
-    case 'divergent':
-      return `${hit.lane.label} · ${formatBp(p.bp)} of its own in place of target ${where(p.start)}-${where(p.end)} (${formatBp(p.end - p.start)})`;
-    case 'unavailable':
-      return `${hit.lane.label} · no named sequence ${where(p.start)}-${where(p.end)}`;
-  }
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(scene.dataLeft - 1, GRAPH_RULER_HEIGHT, scene.dataWidth + 2, scene.height - GRAPH_RULER_HEIGHT);
+  ctx.clip();
+  for (const p of scene.prims) drawPrim(ctx, p);
+  ctx.restore();
 }

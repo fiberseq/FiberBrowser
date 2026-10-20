@@ -1,5 +1,5 @@
 /**
- * The graph panel's pure parts: its own coordinates, the thin topology preview on real toy-graph responses
+ * The graph panel's pure parts: its own coordinates (the joint layout is layout.test.ts) on real toy-graph responses
  * (graphlift's alu and flip packages, captured from the native helper), saved state and link rules, and the
  * crosshair cut around it.
  */
@@ -10,7 +10,7 @@ import {
   clampViewport, followViewport, fromX, makeTransform, panViewport, parseLocus, ticks, toX, zoomViewport,
   GRAPH_MAX_TARGET_BP,
 } from './coordinates';
-import { buildPreview, gapBetween, laneLabel } from './preview';
+import { laneLabel } from './layout';
 import { canFollow, effectiveViewport, initialGraphView, restoreProblem, retargetFor, selectableBindings, togglePath, isGraphViewState } from './state';
 import { crosshairSegments, overlapsExcluded } from '../../utils/crosshairSegments';
 import type { GraphBinding, GraphRegistration, GraphTopology } from './types';
@@ -68,80 +68,7 @@ describe('graph coordinates', () => {
   });
 });
 
-describe('thin topology preview', () => {
-  it('Alu: MAT and PAT insert 2,353 and 2,350 bp at the same target boundary 97,395', () => {
-    const preview = buildPreview(aluTopology, aluBindings);
-    expect(preview.lanes.map(l => [l.key, l.label, l.role])).toEqual([
-      ['target', 'target', 'target'], ['mat', 'MAT', 'alternate'], ['pat', 'PAT', 'alternate'],
-    ]);
-    expect(preview.complete).toBe(true);
-    const target = preview.lanes[0];
-    // The target lane is its named walk, clipped to the window, with no gaps.
-    const nodes = target.pieces.filter(p => p.kind === 'node');
-    expect(nodes[0].start).toBe(97_300);
-    expect(nodes[nodes.length - 1].end).toBe(97_500);
-    for (let i = 1; i < nodes.length; i++) expect(nodes[i].start).toBe(nodes[i - 1].end);
-    expect(nodes.slice(0, 2).map(n => n.node)).toEqual(['645', '669']);
-    for (const [lane, bp, source] of [[preview.lanes[1], 2353, [94_676, 97_029]], [preview.lanes[2], 2350, [95_686, 98_036]]] as const) {
-      const inserts = lane.pieces.filter(p => p.kind === 'insertion');
-      expect(inserts).toHaveLength(1);
-      expect(inserts[0].start).toBe(97_395);
-      expect(inserts[0].end).toBe(97_395);
-      expect(inserts[0].bp).toBe(bp);
-      expect([inserts[0].source!.start, inserts[0].source!.end]).toEqual(source);
-      // Its matched flank nodes are drawn over the target's.
-      const placed = lane.pieces.filter(p => p.kind === 'node').map(p => p.node);
-      expect(placed).toContain('645');
-      expect(placed).toContain('669');
-      expect(lane.unplaced).toEqual([]);
-    }
-  });
-
-  it('flip: a whole minus comparison is drawn reverse, in place, without invented runs', () => {
-    const preview = buildPreview(flipTopology, flipBindings);
-    expect(preview.complete).toBe(true);
-    for (const lane of preview.lanes.slice(1)) {
-      const nodes = lane.pieces.filter(p => p.kind === 'node');
-      expect(nodes.length).toBeGreaterThan(0);
-      expect(nodes.every(p => p.reverse)).toBe(true);
-      for (const n of nodes) {
-        expect(n.start).toBeGreaterThanOrEqual(flipTopology.interval.start);
-        expect(n.end).toBeLessThanOrEqual(flipTopology.interval.end);
-      }
-    }
-  });
-
-  it('a skipped target stretch is a deletion; a repeat match and an edge run stay unplaced', () => {
-    const occ = (id: string, node: string, start: number, len: number, clip = [0, len]) =>
-      ({ id, fragment: 'f', node, handle: node, reverse: false, path_span: { start, end: start + len }, clip: { start: clip[0], end: clip[1] } });
-    const topo: GraphTopology = {
-      target: 'target', interval: { start: 0, end: 300 }, nodes: [], edges: [], target_queries: [], summaries: [{ reason: 'wire_limit', span: { start: 250, end: 300 } }],
-      complete: false, correspondence_complete: false, timings: {},
-      paths: [
-        { binding: 'target', windows: [], coverage: [{ span: { start: 0, end: 250 }, kind: 'covered' }, { span: { start: 250, end: 300 }, kind: 'unavailable' }],
-          occurrences: [occ('t1', '1', 0, 100), occ('t2', '2', 100, 50), occ('t3', '3', 150, 100)], plan: null, complete: false },
-        { binding: 'alt', windows: [], coverage: [{ span: { start: 0, end: 220 }, kind: 'covered' }],
-          occurrences: [occ('a0', '9', 0, 20), occ('a1', '1', 20, 100), occ('a3', '3', 120, 100)], plan: null, complete: true },
-      ],
-      direct_matches: [
-        { target_occurrence: 't1', source_occurrence: 'a1', source_binding: 'alt', reverse: false, provenance: 'direct_named_walk' },
-        { target_occurrence: 't3', source_occurrence: 'a3', source_binding: 'alt', reverse: false, provenance: 'direct_named_walk' },
-      ],
-    };
-    const preview = buildPreview(topo, []);
-    const alt = preview.lanes[1];
-    expect(alt.pieces.find(p => p.kind === 'deletion')).toMatchObject({ start: 100, end: 150, bp: 50 });
-    expect(alt.unplaced).toEqual([{ bp: 20, source: { start: 0, end: 20 } }]);
-    expect(preview.lanes[0].pieces.find(p => p.kind === 'unavailable')).toMatchObject({ start: 250, end: 300 });
-    expect(preview.complete).toBe(false);
-    expect(preview.summaries[0]).toContain('wire limit');
-    // A visit matched to two target visits (a repeat) is not placed.
-    topo.direct_matches.push({ target_occurrence: 't2', source_occurrence: 'a3', source_binding: 'alt', reverse: false, provenance: 'direct_named_walk' });
-    const repeat = buildPreview(topo, []).lanes[1];
-    expect(repeat.pieces.filter(p => p.kind === 'node').map(p => p.node)).toEqual(['1']);
-    expect(repeat.unplaced.map(u => u.bp)).toEqual([20, 100]);
-  });
-
+describe('lane labels', () => {
   it('lane labels drop a per-chromosome suffix only when it is the path\'s own contig', () => {
     const b = (key: string, contig: string) => ({ key, path: { sample: 'S', haplotype: '1', contig } } as GraphBinding);
     expect(laneLabel(b('pat_chr3', 'chr3'), 'pat_chr3')).toBe('PAT');
@@ -150,72 +77,6 @@ describe('thin topology preview', () => {
     expect(laneLabel(b('mat', 'chr3_MATERNAL'), 'mat')).toBe('MAT');
   });
 
-  it('no event is asserted across a coverage gap, a fragment change or an inversion breakpoint (review 1)', () => {
-    const o = (id: string, node: string, start: number, len: number, fragment = 'f', reverse = false) =>
-      ({ id, node, fragment, handle: node, reverse, path_span: { start, end: start + len }, clip: { start: 0, end: len } });
-    const m = (t: string, a: string, reverse = false) => ({ target_occurrence: t, source_occurrence: a, source_binding: 'alt', reverse, provenance: 'direct_named_walk' });
-    const topo = (targets: any[], alts: any[], matches: any[], win = { start: 0, end: 300 }, targetCoverage?: any[]): GraphTopology => ({
-      target: 'target', interval: win, nodes: [], edges: [], target_queries: [], summaries: [], complete: false, correspondence_complete: false, timings: {},
-      direct_matches: matches,
-      paths: [{ binding: 'target', windows: [win], coverage: targetCoverage ?? [{ span: win, kind: 'covered' }], occurrences: targets, complete: true, plan: null },
-              { binding: 'alt', windows: [], coverage: [], occurrences: alts, complete: false, plan: null }] } as unknown as GraphTopology);
-    const gap = buildPreview(topo([o('t1', '1', 0, 100), o('t2', '2', 100, 50), o('t3', '3', 150, 100)],
-      [o('a1', '1', 0, 100, 'f1'), o('a3', '3', 200, 100, 'f2')], [m('t1', 'a1'), m('t3', 'a3')]), []).lanes[1];
-    expect(gap.pieces.filter(p => p.kind !== 'node')).toEqual([]);
-    expect(gap.transitions).toBe(1);
-    const inv = buildPreview(topo([o('t1', '1', 0, 100), o('t2', '2', 100, 100), o('t3', '3', 200, 100), o('t4', '4', 300, 100)],
-      [o('a1', '1', 0, 100), o('a3', '3', 100, 100, 'f', true), o('a2', '2', 200, 100, 'f', true), o('a4', '4', 300, 100)],
-      [m('t1', 'a1'), m('t3', 'a3', true), m('t2', 'a2', true), m('t4', 'a4')], { start: 0, end: 400 }), []).lanes[1];
-    expect(inv.pieces.filter(p => p.kind === 'deletion')).toEqual([]);
-    expect(inv.pieces.filter(p => p.kind === 'node').map(p => [p.node, p.start, p.reverse])).toEqual([['1', 0, false], ['3', 200, true], ['2', 100, true], ['4', 300, false]]);
-    expect(inv.transitions).toBe(2);
-    // A same-fragment, same-orientation walk that skips target sequence is still a deletion.
-    const del = buildPreview(topo([o('t1', '1', 0, 100), o('t2', '2', 100, 50), o('t3', '3', 150, 100)],
-      [o('a1', '1', 0, 100), o('a3', '3', 100, 100)], [m('t1', 'a1'), m('t3', 'a3')]), []).lanes[1];
-    expect(del.pieces.find(p => p.kind === 'deletion')).toMatchObject({ start: 100, end: 150, bp: 50 });
-    // Review 2: visits the window clips are not a continuous walk; a stretch without named target sequence is no
-    // deletion either.
-    const clip = (x: any, a: number, b: number) => ({ ...x, clip: { start: a, end: b } });
-    const clipped = buildPreview(topo([clip(o('t1', '1', 0, 200), 0, 50), clip(o('t1b', '1', 0, 200), 150, 200)],
-      [clip(o('a1', '1', 0, 200), 0, 50), clip(o('a1b', '1', 200, 200), 150, 200)], [m('t1', 'a1'), m('t1b', 'a1b')], { start: 0, end: 400 }), []).lanes[1];
-    expect(clipped.pieces.filter(p => p.kind === 'deletion')).toEqual([]);
-    const targetGap = buildPreview(topo([o('t1', '1', 0, 100), o('t3', '3', 150, 100)],
-      [o('a1', '1', 0, 100), o('a3', '3', 100, 100)], [m('t1', 'a1'), m('t3', 'a3')], { start: 0, end: 300 },
-      [{ span: { start: 0, end: 100 }, kind: 'covered' }, { span: { start: 100, end: 150 }, kind: 'gap' }, { span: { start: 150, end: 300 }, kind: 'covered' }]), []).lanes[1];
-    expect(targetGap.pieces.filter(p => p.kind === 'deletion')).toEqual([]);
-    expect(targetGap.transitions).toBe(1);
-    // agy review 1: a matched visit reaching outside the view still anchors (its visible part drawn, true length
-    // of what is drawn), and two visits of one path on the same target visit (a duplication) are not placed.
-    const ctx = topo([clip(o('t1', '1', 900, 200), 100, 200), o('t2', '2', 1100, 100)],
-      [o('a1', '1', 900, 200), o('ins', '9', 1100, 300), o('a2', '2', 1400, 100)], [m('t1', 'a1'), m('t2', 'a2')], { start: 1000, end: 1200 });
-    const lane = buildPreview(ctx, []).lanes[1];
-    expect(lane.pieces.find(p => p.kind === 'insertion')).toMatchObject({ start: 1100, bp: 300 });
-    expect(lane.pieces.find(p => p.node === '1')).toMatchObject({ start: 1000, end: 1100, bp: 100 });
-    expect(lane.unplaced).toEqual([]);
-    const dup = buildPreview(topo([o('t1', '1', 0, 500)], [o('a1', '1', 0, 500), o('a2', '1', 500, 500)],
-      [m('t1', 'a1'), m('t1', 'a2')], { start: 0, end: 500 }), []).lanes[1];
-    expect(dup.pieces.filter(p => p.kind === 'node')).toEqual([]);
-    expect(dup.unplaced.map(u => u.bp)).toEqual([1000]);
-    // Review 3: two adjacent target fragments are never joined by an event, and an invalid connection is listed even
-    // when its anchors lie outside the view.
-    const twoFragments = topo([{ ...o('t1', '1', 0, 100), fragment: 'T#a' }, { ...o('t3', '3', 150, 100), fragment: 'T#b' }],
-      [o('a1', '1', 0, 100), o('a3', '3', 100, 100)], [m('t1', 'a1'), m('t3', 'a3')], { start: 0, end: 300 },
-      [{ span: { start: 0, end: 150 }, kind: 'covered', fragment: 'T#a' }, { span: { start: 150, end: 300 }, kind: 'covered', fragment: 'T#b' }]);
-    const tf = buildPreview(twoFragments, []).lanes[1];
-    expect(tf.pieces.filter(p => p.kind !== 'node')).toEqual([]);
-    expect(tf.transitions).toBe(1);
-    const reversedOutside = buildPreview(topo([clip(o('t1', '1', 0, 200), 150, 200), clip(o('t2', '2', 200, 100), 0, 100)],
-      [o('a2', '2', 0, 100), o('x', '9', 100, 50), o('a1', '1', 150, 200)], [m('t2', 'a2'), m('t1', 'a1')], { start: 150, end: 300 }), []).lanes[1];
-    expect(reversedOutside.unplaced.map(u => u.bp)).toEqual([50]);
-    expect(reversedOutside.transitions).toBe(1);
-  });
-
-  it('gaps between placed pieces work in either direction and refuse overlaps', () => {
-    const p = (start: number, end: number) => ({ kind: 'node' as const, start, end, bp: end - start });
-    expect(gapBetween(p(0, 10), p(15, 20))).toEqual({ start: 10, end: 15 });
-    expect(gapBetween(p(15, 20), p(0, 10))).toEqual({ start: 10, end: 15 });
-    expect(gapBetween(p(0, 10), p(5, 20))).toBeNull();
-  });
 });
 
 describe('graph view state and links', () => {

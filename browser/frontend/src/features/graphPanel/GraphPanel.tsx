@@ -1,8 +1,10 @@
 /**
- * The graph-view panel (DESIGN_GRAPH_PANEL.md §1, Gate B): a target backbone and up to three compared paths from a
- * registered graph package, drawn by the thin topology preview (preview.ts) on the panel's own ruler and
- * coordinates. It needs no BAM and no live lift; it never takes the linear panels' insertion expansion, highlights,
- * pan offset or crosshair. Options are in its right-click menu; its rows show only data and a compact label.
+ * The graph-view panel (DESIGN_GRAPH_PANEL.md §§1, 4): a target backbone and up to three compared paths from a
+ * registered graph package, drawn as the joint selected-path bubble layout (layout.ts → scene.ts → canvas.ts) on
+ * the panel's own ruler and coordinates: shared sequence once, as one tube with a stripe per path; alleles branch
+ * into their path's lane and rejoin; an insertion takes one slot shared by the paths carrying it. It needs no BAM
+ * and no live lift; it never takes the linear panels' insertion expansion, highlights, pan offset or crosshair.
+ * Options are in its right-click menu; its rows show only data and a compact label.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
@@ -11,9 +13,10 @@ import type { AnalysisPanelProps } from '../../plugins/types';
 import { ReadContextMenu, type ContextMenuEntry } from '../../components/tracks/read-track/ReadContextMenu';
 import { setupHighDpiCanvas, useCanvasRenderVersion } from '../../utils/canvasUtils';
 import { cancelSubgraph, querySubgraph, GraphRequestError } from './api';
-import { describeHit, drawLanes, drawRuler, GRAPH_GUTTER, GRAPH_LANE_GAP, hitAt, laneColor, laneTop, type HitRegion } from './canvas';
+import { drawRuler, drawScene, GRAPH_GUTTER, GRAPH_LANE_GAP, GRAPH_LANE_HEIGHT, GRAPH_RIGHT_PAD, GRAPH_RULER_HEIGHT, laneColor, laneTop } from './canvas';
 import { clampViewport, formatBp, formatLocus, fromX, makeTransform, panViewport, parseLocus, zoomViewport, bpScale, type GraphViewport } from './coordinates';
-import { buildPreview, laneLabel } from './preview';
+import { buildLayout, laneLabel, type LayoutModel } from './layout';
+import { buildScene, describeSceneHit, sceneHitAt, sceneInverse, targetAtX, type Compression, type Scene } from './scene';
 import { type LinearView, canFollow, defaultCompared, defaultTarget, effectiveViewport, initialGraphView, initiatorView, restoreProblem, retargetFor, selectableBindings, togglePath, GRAPH_MAX_PATHS } from './state';
 import { useGraphStatusStore } from './statusStore';
 import { genomeKeyFor } from '../../utils/regionNavigation';
@@ -21,6 +24,15 @@ import { startTrace, type GraphTrace } from './timings';
 import type { GraphApiError, GraphRegistration, GraphSubgraphResponse, GraphViewState } from './types';
 
 const DEBOUNCE_MS = 100;
+/** Named visits walked beyond each window edge, so an event exactly at an edge has its flank (graphlift flank_bp). */
+const FLANK_BP = 1;
+
+declare global {
+  interface Window {
+    /** e2e only (with __FIBERBROWSER_E2E_EXPOSE_STORE): each graph panel's last scene, to locate its geometry. */
+    __FIBERBROWSER_GRAPH_SCENES__?: Record<string, { scene: Scene; model: LayoutModel; offset: number }>;
+  }
+}
 const STATUS_HEIGHT = 18;
 
 function setGraphView(panelId: string, next: GraphViewState): void {
@@ -163,7 +175,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       querySubgraph({
         registrationId: reg.id, revisions: reg.revisions, requestId, panelId, generation, target: target.key,
         interval: { start: viewport.start, end: viewport.end }, selected: state.selectedPathKeys,
-        contextBp: state.layoutSettings.contextBp,
+        contextBp: state.layoutSettings.contextBp, flankBp: FLANK_BP,
       }, controller.signal).then(response => {
         if (generation !== generationRef.current) return;
         trace.respondedAt = performance.now();
@@ -189,22 +201,45 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   }, []);
 
   const response = query.response;
-  const preview = useMemo(() => (response && reg ? buildPreview(response.result, reg.bindings) : null), [response, reg]);
+  const compression: Compression = state?.layoutSettings.compression ?? 'log';
+  const laneHeight = state?.layoutSettings.laneHeight ?? GRAPH_LANE_HEIGHT;
+  const layoutMsRef = useRef(0);
+  // The joint layout model: once per response (its identities depend only on the response).
+  const model = useMemo(() => {
+    if (!response || !reg) return null;
+    const t0 = performance.now();
+    const m = buildLayout(response.result, reg.bindings);
+    layoutMsRef.current = performance.now() - t0;
+    return m;
+  }, [response, reg]);
+  // Its scene: per width, compression and reversal.
+  const scene = useMemo(() => {
+    if (!model) return null;
+    const t0 = performance.now();
+    const colors: Record<string, string> = {};
+    for (const r of model.rows) colors[r.key] = laneColor(r);
+    const out = buildScene(model, { width, gutter: GRAPH_GUTTER, rightPad: GRAPH_RIGHT_PAD, rulerHeight: GRAPH_RULER_HEIGHT,
+      laneHeight, laneGap: GRAPH_LANE_GAP, compression, reversed, colors });
+    layoutMsRef.current += performance.now() - t0;
+    return out;
+  }, [model, width, laneHeight, compression, reversed]);
   // Mark layout on the trace of the response it came from.
   const lastTraceRef = useRef<GraphTrace | null>(null);
   useEffect(() => {
     if (!response) return;
     const trace = (window.__FIBERBROWSER_GRAPH_TRACES__ ?? []).find(t => t.panelId === panelId && t.generation === query.generation) ?? null;
-    if (trace && trace.laidOutAt === undefined) trace.laidOutAt = performance.now();
+    if (trace && trace.laidOutAt === undefined) { trace.laidOutAt = performance.now(); trace.layoutMs = layoutMsRef.current; }
     lastTraceRef.current = trace;
-  }, [preview]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [model]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------------------------------------------------------------- drawing
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const hitsRef = useRef<HitRegion[]>([]);
-  const laneHeight = state?.layoutSettings.laneHeight ?? 28;
-  const laneCount = preview?.lanes.length ?? state?.selectedPathKeys.length ?? 0;
-  const canvasHeight = laneTop(laneCount, laneHeight) + GRAPH_LANE_GAP;
+  const laneCount = model?.rows.length ?? state?.selectedPathKeys.length ?? 0;
+  const canvasHeight = scene?.height ?? laneTop(laneCount, laneHeight) + GRAPH_LANE_GAP;
+  // While a pan's new response is on its way, the last scene slides with the viewport (its average scale).
+  const drawn = response?.result.interval ?? null;
+  const sceneOffset = scene && viewport && drawn && transform
+    ? (reversed ? -1 : 1) * (drawn.start - viewport.start) * bpScale(transform) : 0;
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !transform || !viewport) return;
@@ -212,17 +247,36 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     if (!ctx) return;
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, width, canvasHeight);
-    drawRuler(ctx, transform, viewport, width);
-    // The last response's pieces are target coordinates: drawn through the current transform they move with a pan
-    // until the next response fills the rest.
-    hitsRef.current = preview ? drawLanes(ctx, preview, transform, width, laneHeight, false) : [];
+    if (scene && model) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(GRAPH_GUTTER - 1, 0, width - GRAPH_GUTTER - GRAPH_RIGHT_PAD + 2, canvasHeight);
+      ctx.clip();
+      ctx.translate(sceneOffset, 0);
+      drawScene(ctx, scene);
+      ctx.restore();
+      // Gutter labels stay put.
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, GRAPH_RULER_HEIGHT, GRAPH_GUTTER - 2, canvasHeight);
+      ctx.clip();
+      drawScene(ctx, { ...scene, prims: [] });
+      ctx.restore();
+      const shifted = sceneOffset ? { ...scene, targetMap: scene.targetMap.map(m => ({ ...m, x0: m.x0 + sceneOffset, x1: m.x1 + sceneOffset })) } : scene;
+      drawRuler(ctx, shifted, viewport, width, reversed);
+      if (window.__FIBERBROWSER_E2E_EXPOSE_STORE && panelId) {
+        (window.__FIBERBROWSER_GRAPH_SCENES__ ??= {})[panelId] = { scene, model, offset: sceneOffset };
+      }
+    } else {
+      drawRuler(ctx, null, viewport, width, reversed);
+    }
     const trace = lastTraceRef.current;
-    if (trace && trace.paintedAt === undefined && preview) {
+    if (trace && trace.paintedAt === undefined && scene) {
       requestAnimationFrame(() => {
         if (trace.paintedAt === undefined) { trace.paintedAt = performance.now(); trace.outcome = trace.outcome ?? 'painted'; }
       });
     }
-  }, [preview, transform, width, canvasHeight, renderVersion, laneHeight]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [scene, transform, width, canvasHeight, renderVersion, sceneOffset]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------------------------------------------------------------- navigation
   const commitViewport = useCallback((next: GraphViewport, detach = false, linearAtStart?: LinearView | null) => {
@@ -266,30 +320,42 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       return;
     }
     if (!transform) return;
-    const hit = hitAt(hitsRef.current, x, y);
     const inData = x >= transform.left && x <= transform.left + transform.width;
+    if (!scene || !model || !inData || y < 0 || y > canvasHeight) { setCursor(null); return; }
+    const sx = x - sceneOffset;
+    const hit = sceneHitAt(scene, sx, y);
     if (hit) {
-      // An insertion reports its boundary and length, never a made-up target base.
-      const cursorX = hit.piece.kind === 'insertion' ? null : x;
-      setCursor({ x, y, text: describeHit(hit), cursorX });
-    } else if (inData && y >= 0 && y <= canvasHeight) {
-      setCursor({ x, y, text: `${viewport?.contig}:${Math.floor(fromX(transform, x)).toLocaleString('en-US')}`, cursorX: x });
-    } else setCursor(null);
+      // Only target-backed geometry has a target cursor: an insertion reports its boundary and length, never a
+      // made-up target base.
+      const inv = sceneInverse(scene, sx, y);
+      const cursorX = hit.cursor && inv?.kind === 'target' ? x : null;
+      setCursor({ x, y, text: describeSceneHit(hit, sx, model, reversed), cursorX });
+    } else {
+      const t = targetAtX(scene.targetMap, sx);
+      if (t && !t.boundary) setCursor({ x, y, text: `${viewport?.contig}:${t.pos.toLocaleString('en-US')}`, cursorX: x });
+      else if (t) setCursor({ x, y, text: `Insertion slot at target boundary ${t.pos.toLocaleString('en-US')} (no target sequence)`, cursorX: null });
+      else setCursor(null);
+    }
   };
   const onPointerUp = () => { drag.current = null; };
+  /** A zoom anchor: the target position under x on the scene (an insertion's boundary), else the average scale. */
+  const anchorAt = (x: number) => {
+    const t = scene ? targetAtX(scene.targetMap, x - sceneOffset) : null;
+    return t ? t.pos : fromX(transform!, x);
+  };
   const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
     if (!(e.ctrlKey || e.metaKey) || !transform || !viewport || !target) return;
     e.preventDefault();
     const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
     const zoom = rect.width > 0 && width > 0 ? rect.width / width : 1;
-    const anchor = fromX(transform, (e.clientX - rect.left) / zoom);
+    const anchor = anchorAt((e.clientX - rect.left) / zoom);
     commitViewport(zoomViewport(viewport, e.deltaY > 0 ? 1.25 : 0.8, anchor, target.size, target.size_inferred), true);
   };
   const onDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!transform || !viewport || !target) return;
     const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
     const zoom = rect.width > 0 && width > 0 ? rect.width / width : 1;
-    const anchor = fromX(transform, (e.clientX - rect.left) / zoom);
+    const anchor = anchorAt((e.clientX - rect.left) / zoom);
     commitViewport(zoomViewport(viewport, e.shiftKey ? 2 : 0.5, anchor, target.size, target.size_inferred), true);
   };
 
@@ -323,6 +389,13 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
           label: `${on ? '✓ ' : ''}${laneLabel(b, b.key)} · ${b.assembly}`,
           title: `${b.path.sample}#${b.path.haplotype}#${b.path.contig}` };
       }) });
+    entries.push({ kind: 'submenu', id: 'compression', icon: 'settings', label: `Widths: ${compression === 'log' ? 'schematic' : 'true bp'}`,
+      entries: [
+        { kind: 'item' as const, action: 'cmp:log', icon: 'settings', label: `${compression === 'log' ? '✓ ' : ''}Schematic (long runs compressed)`,
+          title: 'Runs over 200 bp take 200 + 100·log2(L/200) units; break marks and labels give true lengths' },
+        { kind: 'item' as const, action: 'cmp:linear', icon: 'settings', label: `${compression === 'linear' ? '✓ ' : ''}True bp`,
+          title: 'Every base the same width; insertions still get their own slot' },
+      ] });
     entries.push({ kind: 'submenu', id: 'context', icon: 'settings', label: `Graph context: ${state.layoutSettings.contextBp} bp`,
       entries: [0, 100, 500, 2000].map(bp => ({ kind: 'item' as const, action: `ctx:${bp}`, icon: 'settings',
         label: `${state.layoutSettings.contextBp === bp ? '✓ ' : ''}${bp} bp` })) });
@@ -353,6 +426,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       return;
     }
     if (action.startsWith('path:')) { setGraphView(panelId, togglePath(state, action.slice(5))); return; }
+    if (action.startsWith('cmp:')) { setGraphView(panelId, { ...state, layoutSettings: { ...state.layoutSettings, compression: action.slice(4) as Compression } }); return; }
     if (action.startsWith('ctx:')) { setGraphView(panelId, { ...state, layoutSettings: { ...state.layoutSettings, contextBp: Number(action.slice(4)) } }); return; }
     if (action.startsWith('reg:')) {
       const next = regs.find(r => r.id === action.slice(4));
@@ -411,11 +485,14 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   } else {
     const statusText = query.error
       ? `${query.error.retryable ? 'Retry' : 'Refused'}: ${query.error.message}`
-      : preview
-        ? [`${preview.lanes.length} paths`, `${preview.nodes} nodes`, `${preview.visits} visits`,
-          preview.complete ? 'complete' : 'partial', preview.correspondenceComplete ? null : 'correspondence partly inferred',
-          ...preview.summaries.slice(0, 2), preview.lanes.some(l => l.unplaced.length) ? `${preview.lanes.reduce((n, l) => n + l.unplaced.length, 0)} unplaced runs` : null,
-          preview.lanes.some(l => l.transitions) ? `${preview.lanes.reduce((n, l) => n + l.transitions, 0)} unresolved transitions` : null,
+      : model
+        ? [`${model.rows.length} paths`, `${model.stats.nodes} nodes`, `${model.stats.visits} visits`,
+          model.complete ? 'complete' : 'partial', model.correspondenceComplete ? null : 'correspondence partly inferred',
+          bubbleSummary(model), model.stats.complex ? `${model.stats.complex} complex` : null,
+          scene?.clusters ? `${scene.clusters} clustered (zoom in)` : null,
+          model.stats.unplaced ? `${model.stats.unplaced} unplaced runs` : null,
+          model.stats.unresolved ? `${model.stats.unresolved} unresolved` : null,
+          ...model.summaries.slice(0, 2),
           response?.cached ? 'cached' : response?.timings.total_ms != null ? `${response.timings.total_ms < 10 ? response.timings.total_ms.toFixed(1) : Math.round(response.timings.total_ms)} ms` : null,
         ].filter(Boolean).join(' · ')
         : 'Loading the topology…';
@@ -427,7 +504,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
           onPointerLeave={() => { if (!drag.current) setCursor(null); }} onWheel={onWheel} onDoubleClick={onDoubleClick}
           onContextMenu={e => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY }); }} />
         {/* Lane labels' accessible names (the canvas draws them). */}
-        <div className="sr-only">{preview?.lanes.map(l => <span key={l.key} data-testid="graph-lane-label" title={l.title} style={{ color: laneColor(l) }}>{l.label}</span>)}</div>
+        <div className="sr-only">{model?.rows.map(l => <span key={l.key} data-testid="graph-lane-label" title={l.title} style={{ color: laneColor(l) }}>{l.label}</span>)}</div>
         {cursor?.cursorX != null && (
           <div data-testid="graph-cursor" className="pointer-events-none absolute top-0" style={{ left: cursor.cursorX, width: 1, height: canvasHeight, background: 'rgba(100,100,100,0.45)' }} />
         )}
@@ -437,7 +514,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         )}
         <div data-testid="graph-panel-status" title={statusText}
           className={`truncate px-1 text-[10px] ${query.error ? 'text-red-600' : 'text-gray-500 dark:text-gray-400'}`} style={{ height: STATUS_HEIGHT, lineHeight: `${STATUS_HEIGHT}px` }}>
-          {query.loading && preview ? '… ' : ''}{statusText}
+          {query.loading && model ? '… ' : ''}{statusText}
         </div>
       </div>
     );
@@ -447,8 +524,9 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       data-graph-start={viewport?.start ?? ''} data-graph-end={viewport?.end ?? ''}
       data-graph-drawn-start={response?.result.interval.start ?? ''} data-graph-drawn-end={response?.result.interval.end ?? ''}
       data-graph-loading={query.loading ? 'true' : 'false'} data-graph-generation={query.generation}
-      data-graph-link={state?.linkMode ?? ''} data-graph-lanes={preview?.lanes.map(l => l.key).join(',') ?? ''}
-      data-graph-complete={preview ? String(preview.complete) : ''} data-graph-error={query.error?.code ?? ''}
+      data-graph-link={state?.linkMode ?? ''} data-graph-lanes={model?.rows.map(l => l.key).join(',') ?? ''}
+      data-graph-complete={model ? String(model.complete) : ''} data-graph-error={query.error?.code ?? ''}
+      data-graph-bubbles={model ? model.stats.groups : ''} data-graph-compression={compression}
       className="relative h-full min-h-0 w-full overflow-auto bg-white dark:bg-dark-bg"
       style={{ height: bodyHeight }}
       onContextMenu={e => { if (!(e.target instanceof HTMLCanvasElement)) { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY }); } }}>
@@ -474,6 +552,12 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       )}
     </div>
   );
+}
+
+function bubbleSummary(model: LayoutModel): string | null {
+  const { insertions, deletions, substitutions } = model.stats;
+  const parts = [insertions ? `${insertions} ins` : null, deletions ? `${deletions} del` : null, substitutions ? `${substitutions} sub` : null].filter(Boolean);
+  return parts.length ? `${insertions + deletions + substitutions} alleles (${parts.join(', ')})` : 'no differences';
 }
 
 export default GraphPanel;

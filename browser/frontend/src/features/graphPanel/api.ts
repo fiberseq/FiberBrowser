@@ -40,6 +40,8 @@ export interface SubgraphQuery {
   interval: Span;
   selected: string[];
   contextBp: number;
+  /** Named visits walked beyond each window edge (anchors for events exactly at an edge). */
+  flankBp?: number;
 }
 
 export function querySubgraph(q: SubgraphQuery, signal?: AbortSignal): Promise<GraphSubgraphResponse> {
@@ -48,7 +50,7 @@ export function querySubgraph(q: SubgraphQuery, signal?: AbortSignal): Promise<G
     body: JSON.stringify({
       registration_id: q.registrationId, revisions: q.revisions, request_id: q.requestId, panel_id: q.panelId,
       generation: q.generation, target: q.target, interval: q.interval, selected: q.selected, context_bp: q.contextBp,
-      snarls: 'none',
+      snarls: 'none', ...(q.flankBp ? { flank_bp: q.flankBp } : {}),
     }),
   });
 }

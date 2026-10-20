@@ -12,6 +12,8 @@ export interface GraphTrace {
   dispatchedAt: number;
   respondedAt?: number;
   laidOutAt?: number;
+  /** The joint layout's own compute time (model + scene), ms. */
+  layoutMs?: number;
   paintedAt?: number;
   /** Server-side: queue, helper dispatch → frame, total; bytes; cache hit. */
   server?: { queue_ms?: number; dispatch_ms?: number; total_ms?: number; startup_ms?: number | null; frame_bytes?: number };

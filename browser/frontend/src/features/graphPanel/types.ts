@@ -151,7 +151,8 @@ export interface GraphViewState {
   selectedPathKeys: string[];
   targetViewport: { contig: string; start: number; end: number } | null;
   linkMode: GraphLinkMode;
-  layoutSettings: { contextBp: number; laneHeight: number };
+  /** compression: `log` (schematic, DESIGN §4 g(L)) or `linear` (true bp; insertions still get their slot). */
+  layoutSettings: { contextBp: number; laneHeight: number; compression?: 'log' | 'linear' };
 }
 
 declare module '../../types' {

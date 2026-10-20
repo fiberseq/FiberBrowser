@@ -33,8 +33,30 @@ const HAVE_GRAPH = Boolean(HELPER && existsSync(HELPER) && ALU && existsSync(ALU
 
 test.skip(!HAVE_GRAPH, 'set FIBERBROWSER_TEST_GRAPH_HELPER, FIBERBROWSER_TEST_GRAPH_PACKAGES (with alu) and FIBERBROWSER_TEST_FASTA');
 
-const GUTTER = 52;
 const laneTop = (i: number) => 30 + 4 + i * (28 + 4);
+
+/**
+ * Where something is in a graph panel's joint layout (CSS px inside its canvas), from the scene the panel exposes
+ * to e2e runs: an allele of a lane at a target boundary, or a target position on target-backed geometry.
+ */
+async function locate(page: Page, panel: Locator, what: { allele: string; boundary: number } | { target: number }) {
+  const id = await panel.getAttribute('data-graph-panel-id');
+  return page.evaluate(([pid, w]) => {
+    const entry = (window as any).__FIBERBROWSER_GRAPH_SCENES__?.[pid as string];
+    if (!entry) return null;
+    const { scene, offset } = entry;
+    const q = w as any;
+    if (q.allele) {
+      const hit = scene.hits.filter((h: any) => h.payload.kind === 'allele' && h.payload.lane === q.allele
+        && h.payload.group.target?.start === q.boundary && h.payload.group.target?.end === q.boundary).at(-1);
+      return hit ? { x: (hit.x0 + hit.x1) / 2 + offset, y: (hit.y0 + hit.y1) / 2 } : null;
+    }
+    const m = scene.targetMap.find((e: any) => e.kind === 'seq' && e.t0 <= q.target && q.target < e.t1);
+    if (!m) return null;
+    const row = scene.rows[0];
+    return { x: m.x0 + ((q.target + 0.5 - m.t0) / (m.t1 - m.t0)) * (m.x1 - m.x0) + offset, y: row.center };
+  }, [id, what] as const);
+}
 
 async function graphServer(packages: string[], bam: string | null = null, extraEnv: Record<string, string> = {}): Promise<ServerProcess> {
   const scratch = mkdtempSync(path.join(os.tmpdir(), 'fiberbrowser-graph-e2e-'));
@@ -132,13 +154,14 @@ async function measure(page: Page, panel: Locator, label: string, windows: Array
     debounce_ms: t.dispatchedAt - t.navigatedAt,
     request_ms: t.respondedAt - t.dispatchedAt,
     layout_ms: t.laidOutAt - t.respondedAt,
+    layout_compute_ms: t.layoutMs,
     paint_ms: t.paintedAt - t.laidOutAt,
     server_total_ms: t.server?.total_ms, helper_dispatch_ms: t.server?.dispatch_ms, queue_ms: t.server?.queue_ms,
     startup_ms: t.server?.startup_ms ?? null, frame_bytes: t.server?.frame_bytes,
   }));
   const pick = (k: string) => rows.map((r: any) => r[k]).filter((v: any) => typeof v === 'number' && Number.isFinite(v));
   const summary: Record<string, unknown> = { label, samples: rows.length };
-  for (const k of ['navigation_to_paint_ms', 'debounce_ms', 'request_ms', 'layout_ms', 'paint_ms', 'server_total_ms', 'helper_dispatch_ms']) {
+  for (const k of ['navigation_to_paint_ms', 'debounce_ms', 'request_ms', 'layout_ms', 'layout_compute_ms', 'paint_ms', 'server_total_ms', 'helper_dispatch_ms']) {
     const v = pick(k);
     summary[k] = { p50: percentile(v, 50), p95: percentile(v, 95), max: Math.max(...v) };
   }
@@ -190,15 +213,19 @@ test('graph-only panel: no BAM, the real helper, its own ruler, resize, no linea
     const box = (await canvas.boundingBox())!;
     const cssWidth = await canvas.evaluate((c: HTMLCanvasElement) => c.clientWidth);
     const scale = box.width / cssWidth;
-    const xAt = (pos: number) => box.x + (GUTTER + ((pos - 97_300) / 200) * (cssWidth - GUTTER - 6)) * scale;
-    for (const [lane, bp] of [[1, '2,353'], [2, '2,350']] as const) {
-      await page.mouse.move(xAt(97_395), box.y + (laneTop(lane) + 5) * scale);
+    // One slot at 97,395 (the joint layout): each lane says its own insertion there, with no target cursor.
+    await expect(graph).toHaveAttribute('data-graph-bubbles', /\d+/);
+    for (const [lane, bp] of [['mat', '2,353'], ['pat', '2,350']] as const) {
+      const at = await locate(page, graph, { allele: lane, boundary: 97_395 });
+      expect(at).not.toBeNull();
+      await page.mouse.move(box.x + at!.x * scale, box.y + at!.y * scale);
       await expect(graph.getByTestId('graph-tooltip')).toContainText(`insertion of ${bp} bp at target boundary 97,395`);
       await expect(graph.getByTestId('graph-cursor')).toHaveCount(0);
     }
     // A target node: the graph's own cursor and a true target coordinate.
-    await page.mouse.move(xAt(97_350), box.y + (laneTop(0) + 14) * scale);
-    await expect(graph.getByTestId('graph-tooltip')).toContainText('on the target');
+    const node = (await locate(page, graph, { target: 97_350 }))!;
+    await page.mouse.move(box.x + node.x * scale, box.y + node.y * scale);
+    await expect(graph.getByTestId('graph-tooltip')).toContainText('97,350 on the target');
     await expect(graph.getByTestId('graph-cursor')).toHaveCount(1);
     await page.mouse.move(5, 5);
     await expect(graph.getByTestId('graph-tooltip')).toHaveCount(0);
@@ -380,10 +407,25 @@ test('HPRC navigation-to-topology traces (measurement only)', async ({ page }) =
     const graph = await openGraphPanel(page);
     await settled(graph, 128_650_000, 180_000);
     out.first_open_ms = Date.now() - t0;
+    // The AluY locus in both themes (the graph canvas stays light, like every track canvas).
+    if (process.env.FIBERBROWSER_GRAPH_SCREENSHOT_DIR) {
+      await page.mouse.move(5, 5);
+      await page.waitForTimeout(300);
+      const dir = process.env.FIBERBROWSER_GRAPH_SCREENSHOT_DIR;
+      const host = page.locator('[data-analysis-panel-id]').filter({ has: graph });
+      await host.screenshot({ path: path.join(dir, 'graph-aluy-light.png') });
+      await store(page, 'toggleDarkMode');
+      await page.waitForTimeout(400);
+      await host.screenshot({ path: path.join(dir, 'graph-aluy-dark.png') });
+      await page.screenshot({ path: path.join(dir, 'graph-aluy-dark-page.png') });
+      await store(page, 'toggleDarkMode');
+      await page.waitForTimeout(200);
+    }
     const loci: Array<[string, string, number, number]> = [
       ['AluY_10kb', 'chr3', 128_650_000, 10_000], ['AluY_50kb', 'chr3', 128_635_000, 50_000],
       ['MHC_10kb', 'chr6', 29_000_000, 10_000], ['MHC_50kb', 'chr6', 29_000_000, 50_000],
-      ['chr19_10kb', 'chr19', 43_017_556, 10_000], ['chr21_10kb', 'chr21', 10_371_898, 10_000],
+      ['chr19_10kb', 'chr19', 43_017_556, 10_000], ['chr19_50kb', 'chr19', 43_017_556, 50_000],
+      ['chr21_10kb', 'chr21', 10_371_898, 10_000], ['chr21_50kb', 'chr21', 10_371_898, 50_000],
     ];
     for (const [label, chrom, start, width] of loci) {
       // Pans of a quarter width from the locus, twice over (the second pass is warm).
