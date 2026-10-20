@@ -225,4 +225,16 @@ describe('liftViewLink', () => {
     useLiveLiftStore.setState({ enabled: false });
     expect(liftViewLink.toPanel(src(), { chrom: 'chrT', start: 0, end: 10 })).toBeUndefined();
   });
+  it('a restored link with no navigation data loads summary, outline and tile, then ends exact without moving main', async () => {
+    resetNavigation(); holdTiles = false; installFetcher();
+    useBrowserStore.setState({ chrom: 'chrT', start: 2000, end: 3000, panels: [liftPanel, sourcePanel()] });
+    const before = src().viewportOverride;
+    useBrowserStore.getState().setViewport('chrT', 5000, 7000);
+    expect(src().viewportOverride).toEqual(before);                    // nothing loaded: it stays
+    expect(pendingCorrection('src')?.kind).toBe('panel');
+    for (let i = 0; i < 5; i++) await flush();
+    expect(src().viewportOverride).toEqual({ chrom: MAT, start: 3990, end: 6090 });
+    expect(main()).toEqual({ chrom: 'chrT', start: 5000, end: 7000 });
+    expect(pendingCorrection('src')).toBeUndefined();
+  });
 });

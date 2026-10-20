@@ -106,6 +106,8 @@ interface DrawReadsParams {
   linkedBoundsStart?: number;
   linkedSessionId?: string;
   linkedHighlightIds?: Set<string>;
+  /** Rows of the molecule hovered in a live-lift panel or its linked source panel (features/liveLift/linking/hover). */
+  liftHoverRows?: Set<CompactRead>;
   /** Reads gone to by name or highlighted from the read menu (fb-r4-clicks): a solid outline. */
   readHighlightIds?: Set<string> | null;
   readHighlightMode?: 'rows' | 'names';
@@ -165,7 +167,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
     showCoverageHistogram,
     isReversed, activeColormap, genes, allPeaks, orthogonalTracks,
     modificationOverlays, overlayMarks, jupyterReadHighlights, jupyterFootprintColorMap,
-    allJupyterMarkers, linkedBoundsStart, linkedSessionId, linkedHighlightIds, readHighlightIds, uncertainSvIds,
+    allJupyterMarkers, linkedBoundsStart, linkedSessionId, linkedHighlightIds, liftHoverRows, readHighlightIds, uncertainSvIds,
     selectedReadIds, selectedFootprints: allSelectedFootprints, footprintCrossHighlight, footprintGroups,
     selectedFamilyGroupId, footprintAnalysisLayer,
     clusterStateConsensus, hasFilter, myFilteredReadIds,
@@ -179,6 +181,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
   } = params;
   if (canvas.dataset) {
     canvas.dataset.liveLiftClusteredRows = String(displayReads.filter(r => r.live_lift && clusterAssignmentForRead(myClusterAssignments, r) !== undefined).length);
+    canvas.dataset.liftHoverRows = String(liftHoverRows?.size ?? 0);
     canvas.dataset.liveLiftClusterIds = JSON.stringify([...new Set(displayReads.filter(r => r.live_lift).map(r => clusterAssignmentForRead(myClusterAssignments, r)).filter(c => c !== undefined))]);
   }
   const selectedFootprints = allSelectedFootprints.filter(fp => fp.genome === undefined || fp.genome === (genome ?? null));
@@ -1669,6 +1672,20 @@ export function drawReadTrack(params: DrawReadsParams): void {
 
       ctx.fillStyle = '#f59e0b';
       ctx.fillRect(sidebarWidth, y, 3, rowHeight - rowGap);
+    }
+
+    // The molecule hovered in a live-lift panel or its linked source panel: an outline in both panels.
+    if (hasDrawableExtent && liftHoverRows?.has(read)) {
+      const a = readExtent!.start + linkedOffset, b = readExtent!.end + linkedOffset;
+      const readX = isReversed ? toX(b) : toX(a);
+      const readW = Math.max(1, Math.abs(toX(b) - toX(a)));
+      ctx.save();
+      ctx.strokeStyle = '#0891b2';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(readX - 1, y - 1, readW + 2, rowHeight - rowGap + 2);
+      ctx.fillStyle = '#0891b2';
+      ctx.fillRect(sidebarWidth, y, 3, Math.max(1, rowHeight - rowGap));
+      ctx.restore();
     }
 
     // A read gone to by name, or highlighted from the read menu: a solid outline
