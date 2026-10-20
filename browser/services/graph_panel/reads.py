@@ -508,8 +508,11 @@ def validate(state, reg, body: dict) -> list:
     for d in datasets:
         dataset_id = str(d.get("dataset_id"))
         bound = known.get(dataset_id)
-        if bound is None:
-            raise _bad(f"dataset {dataset_id!r} is not loaded or binds to no path of this graph", "unknown_dataset", 404)
+        if bound is None or not bound["paths"]:
+            # Not loaded, or its files went missing (a moved BAM): never an empty "no reads here".
+            why = "; ".join((bound or {}).get("problems") or ())
+            raise _bad(f"dataset {dataset_id!r} is not loaded or binds to no path of this graph{': ' + why if why else ''}",
+                       "unknown_dataset", 404, problems=(bound or {}).get("problems") or [])
         if d.get("revision") and d["revision"] != bound["revision"]:
             raise _bad(f"dataset {dataset_id!r} changed since it was bound", "stale_revision", 409,
                        current=bound["revision"])

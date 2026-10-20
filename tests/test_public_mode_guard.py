@@ -29,6 +29,8 @@ PUBLIC_DENIED = {
     ("DELETE", "/api/graph/requests/{request_id}"),
     # its reads: host BAMs of loaded datasets on the host package's paths
     ("GET", "/api/graph/read_bindings"), ("POST", "/api/graph/reads"),
+    # its inspection: host package sequence and host live-lift maps (canonical differences)
+    ("POST", "/api/graph/sequence"), ("POST", "/api/graph/differences"),
     # Cross-region correspondence analyses are local workspace operations.
     ("POST", "/api/cluster-regions"), ("POST", "/api/scan-correspondence"),
     ("GET", "/api/app/performance"), ("POST", "/api/app/performance"),
@@ -239,6 +241,8 @@ def test_allowlist_has_no_stale_entries(standalone_app):
     ("DELETE", "/api/graph/requests/{request_id}"),
     # its reads: host BAMs of loaded datasets on the host package's paths
     ("GET", "/api/graph/read_bindings"), ("POST", "/api/graph/reads"),
+    # its inspection: host package sequence and host live-lift maps (canonical differences)
+    ("POST", "/api/graph/sequence"), ("POST", "/api/graph/differences"),
     ("POST", "/api/plugins/anything/run"),
 ])
 def test_public_mode_denies(client, public, method, path):

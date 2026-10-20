@@ -143,3 +143,49 @@ def test_real_helper_exits_when_its_stdin_closes():
     proc.stdout.read(struct.unpack(">I", header)[0])
     proc.stdin.close()
     assert proc.wait(timeout=5) is not None
+
+
+def test_sequence_of_a_path_interval_and_its_limits(client):
+    """Phase F inspection: an allele's bases from the package (the helper's sequence command), bounded."""
+    reg = register(client, "alu")
+    body = {"registration_id": reg["id"], "revisions": reg["revisions"], "binding": "mat",
+            "interval": {"start": 94_676, "end": 94_736}}
+    r = client.post("/api/graph/sequence", json=body)
+    assert r.status_code == 200, r.text
+    seq = r.json()["result"]
+    text = "".join(p["sequence"] for p in seq["pieces"])
+    assert len(text) == 60 and set(text) <= set("ACGTN") and seq["complete"] is True
+    assert seq["coverage"][0]["kind"] == "covered"
+    assert client.post("/api/graph/sequence", json={**body, "interval": {"start": 0, "end": 60_001}}).status_code == 413
+    stale = {**body, "revisions": {**reg["revisions"], "graph": "other"}}
+    assert client.post("/api/graph/sequence", json=stale).status_code == 409
+    assert client.post("/api/graph/sequence", json={**body, "binding": "nope"}).status_code == 422
+
+
+def _copy_package(tmp_path, name):
+    import shutil
+    dst = tmp_path / f"{name}-copy"
+    shutil.copytree(package(name), dst)
+    return str(dst)
+
+
+@pytest.mark.parametrize("missing", ["graph.db", "map0"])
+def test_a_missing_db_or_map_is_reported_not_queried(client, tmp_path, missing):
+    """Phase F: a registered package whose DB or a map went missing answers with a clear package error (the panel
+    shows it with its relink form and frozen coordinates); it is never queried as if complete."""
+    import shutil
+    pkg = _copy_package(tmp_path, "alu")
+    r = client.post("/api/graph/registrations", json={"package": pkg})
+    assert r.status_code == 200, r.text
+    reg = r.json()["registration"]
+    target = os.path.join(pkg, missing)
+    shutil.rmtree(target) if os.path.isdir(target) else os.remove(target)
+    out = query(client, reg, "gone-1", 97_000, 98_000)
+    assert out.status_code in (409, 410, 422, 503), out.text
+    err = out.json()["error"]
+    assert err["code"] and err["message"] and err["retryable"] is False
+    assert err["code"] == "package_changed"
+    # The status no longer lists it as usable; it names the package and why (the panel's relink form).
+    status = client.get("/api/graph/status").json()
+    assert reg["id"] not in [r["id"] for r in status["registrations"]]
+    assert any(e["package"] == pkg and "register it again" in e["error"] for e in status["registration_errors"])

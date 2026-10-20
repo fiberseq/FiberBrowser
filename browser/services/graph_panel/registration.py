@@ -130,7 +130,10 @@ def _from_manifest(package_dir: str, fingerprint: dict, verify_ms: float, verifi
     manifest = read_manifest(package_dir)
     revisions = {k: manifest["revisions"][k] for k in ("package", "graph", "db", "maps")}
     bindings = [_binding_summary(b) for b in manifest.get("bindings") or []]
-    maps = [{"target": m.get("target"), "source": m.get("source")} for m in manifest.get("maps") or []]
+    # Each map's manifest digest: a live-lift dataset whose map file has it uses the very same map (graph
+    # differences reuse its canonical differences only then).
+    maps = [{"target": m.get("target"), "source": m.get("source"),
+             "manifest_sha256": ((m.get("manifest") or {}).get("sha256") or None)} for m in manifest.get("maps") or []]
     return Registration(
         id="g" + revisions["package"][:16], package_dir=package_dir, revisions=revisions, bindings=bindings, maps=maps,
         producer=str(manifest.get("producer") or ""), build_target=str(manifest.get("build_target") or ""),
