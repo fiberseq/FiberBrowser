@@ -8,6 +8,8 @@ import type { ReadsResponse } from '../components/tracks/read-track/types';
 interface Span { start: number; end: number }
 interface Plan {
   dataset: string;
+  /** The dataset, and a split live-lift panel's haplotype: each such panel pans its own rows. */
+  key: string;
   scope: string;
   params: URLSearchParams;
   generation: number;
@@ -33,6 +35,23 @@ function scopeOf(params: URLSearchParams): string {
   return `${readRegionGeneration()}:${key}`;
 }
 
+/** One plan per panel kind: the MAT and PAT panels of a live-lift dataset (same dataset id) would otherwise cancel
+ * each other's plan on every request, so neither would ever prefetch its neighbours. */
+function planKey(params: URLSearchParams): string {
+  const dataset = params.get('dataset_id') || '';
+  const hap = params.get('lift_hap');
+  return hap ? `${dataset}\u0000${hap}` : dataset;
+}
+
+function keyOfDataset(key: string, datasetId: string): boolean {
+  return key === datasetId || key.startsWith(`${datasetId}\u0000`);
+}
+
+function cancelPlan(key: string): void {
+  plans.get(key)?.controller.abort();
+  plans.delete(key);
+}
+
 function spanOf(params: URLSearchParams): Span {
   return { start: Number(params.get('start')), end: Number(params.get('end')) };
 }
@@ -47,10 +66,9 @@ export function setReadPrefetchMargin(fraction: number, multiplier = 10): void {
 
 /** Closing a panel or changing its data releases unfinished work. A pan does not. */
 export function cancelReadPrefetch(datasetId: string): void {
-  plans.get(datasetId)?.controller.abort();
-  plans.delete(datasetId);
+  for (const key of [...plans.keys()]) if (keyOfDataset(key, datasetId)) cancelPlan(key);
   if (marginFraction === 0) {
-    warmed.delete(datasetId);
+    for (const key of [...warmed.keys()]) if (keyOfDataset(key, datasetId)) warmed.delete(key);
     releaseReadRegions(datasetId);
     clearReadBinaryExpansions();
   }
@@ -58,14 +76,14 @@ export function cancelReadPrefetch(datasetId: string): void {
 
 /** Keep a neighborhood's progress through local pans; discard obsolete jobs on jumps. */
 export function prepareReadNavigation(params: URLSearchParams): void {
-  const dataset = params.get('dataset_id') || '';
-  const plan = plans.get(dataset);
+  const key = planKey(params);
+  const plan = plans.get(key);
   if (!plan) return;
   const next = spanOf(params), width = plan.anchor.end - plan.anchor.start;
   const distance = Math.max(next.start - plan.latest.end, plan.latest.start - next.end, 0);
   if (plan.scope !== scopeOf(params) || distance > width * serverMultiplier
     || next.end - next.start > width * 4 || next.end - next.start < width / 4) {
-    cancelReadPrefetch(dataset);
+    cancelPlan(key);
   } else {
     plan.latest = next;
   }
@@ -88,7 +106,7 @@ function nextSpan(plan: Plan): Span | undefined {
   const margin = Math.ceil((latest.end - latest.start) * (serverMultiplier - 1) / 2);
   const first = Math.floor((Math.max(0, latest.start - margin) - origin) / step);
   const last = Math.max(first, Math.ceil((latest.end + margin - origin - tileWidth) / step));
-  const completed = warmed.get(plan.dataset) ?? [];
+  const completed = warmed.get(plan.key) ?? [];
   const candidates: Span[] = [];
   for (let index = first; index <= last; index++) {
     const start = Math.max(0, origin + index * step);
@@ -102,7 +120,7 @@ function nextSpan(plan: Plan): Span | undefined {
 }
 
 function valid(plan: Plan): boolean {
-  return !plan.controller.signal.aborted && plan.generation === readRegionGeneration() && plans.get(plan.dataset) === plan;
+  return !plan.controller.signal.aborted && plan.generation === readRegionGeneration() && plans.get(plan.key) === plan;
 }
 
 function schedule(plan: Plan): void {
@@ -144,8 +162,8 @@ function schedule(plan: Plan): void {
         rememberReadRegion(params, data, bytes, plan.generation, true);
         if (!hasReadRegionSpan(plan.params, span.start, span.end)) return;
       } else {
-        const previous = warmed.get(plan.dataset) ?? [];
-        warmed.set(plan.dataset, [...previous, { ...span, scope: plan.scope, sampleLevel: plan.sampleLevel }].slice(-64));
+        const previous = warmed.get(plan.key) ?? [];
+        warmed.set(plan.key, [...previous, { ...span, scope: plan.scope, sampleLevel: plan.sampleLevel }].slice(-64));
       }
       complete = true;
       plan.failures = 0;
@@ -169,19 +187,20 @@ export function prefetchReadRegion(params: URLSearchParams, generation: number, 
     || ['filter_ids', 'filter_set', 'cluster_focus', 'strand', 'fill_gap_size'].some(key => params.has(key))) return;
   prepareReadNavigation(params);
   const dataset = params.get('dataset_id') || '';
-  let plan = plans.get(dataset);
+  const key = planKey(params);
+  let plan = plans.get(key);
   const sampleLevel = data.working_sampling?.level ?? 0;
   if (plan && plan.sampleLevel !== sampleLevel) {
-    cancelReadPrefetch(dataset);
-    warmed.delete(dataset);
+    cancelPlan(key);
+    warmed.delete(key);
     plan = undefined;
   }
   if (!plan) {
-    plan = { dataset, scope: scopeOf(params), params: new URLSearchParams(params), generation,
+    plan = { dataset, key, scope: scopeOf(params), params: new URLSearchParams(params), generation,
       controller: new AbortController(), anchor: span, latest: span,
       projectable: canProjectReadRegion(params) && hasReadRegionSpan(params, span.start, span.end),
       queued: false, running: false, failures: 0, sampleLevel };
-    plans.set(dataset, plan);
+    plans.set(key, plan);
   }
   const current = plan;
   if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => requestAnimationFrame(() => schedule(current)));

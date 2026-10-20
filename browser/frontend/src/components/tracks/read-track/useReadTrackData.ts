@@ -30,6 +30,7 @@ import type { ReadDisplayMode, ReadSeparatorMode } from '../../../stores/uiSlice
 import { logPerfTiming, nowMs } from '../../../utils/perfDebug';
 import { computeReadRowGap } from './layout';
 import { getBrowserPerformanceProfile } from '../../../utils/performanceProfile';
+import { batchReadDatasets } from '../../../utils/datasetKinds';
 
 /** The lift identity, haplotype and refresh also identify coverage: the same region can now mean other molecules. */
 export function coverageRequestKey(datasetId: string, chrom: string, start: number, end: number, bins: number,
@@ -330,9 +331,9 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
   // The read-end footprint setting the server has confirmed: part of each read
   // URL, so a request made before the server switched is never reused after.
   const readEndFootprints = useBrowserStore(s => (s.appliedHideShortEndFootprints ? 'hide' : 'show'));
-  const batchDatasetIds = useBrowserStore(s => s.datasets.map(d => d.id).filter(Boolean).sort().join(','));
-  const batchSourceIdentity = useBrowserStore(s => JSON.stringify(s.datasets
-    .filter(d => d.id).map(d => [d.id, d.source_identity ?? d.paths ?? d.path ?? d.id])
+  const batchDatasetIds = useBrowserStore(s => batchReadDatasets(s.datasets, datasetId).map(d => d.id).sort().join(','));
+  const batchSourceIdentity = useBrowserStore(s => JSON.stringify(batchReadDatasets(s.datasets, datasetId)
+    .map(d => [d.id, d.source_identity ?? d.paths ?? d.path ?? d.id])
     .sort(([a], [b]) => String(a).localeCompare(String(b)))));
   const batchNeedsSvSummary = useBrowserStore(s => s.svDisplayEnabled && s.datasets.some(d => d.data_type === 'bam'));
   // A panel at its own locus (a copy elsewhere) fetches only its dataset: the

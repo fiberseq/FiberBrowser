@@ -300,3 +300,56 @@ it('preserves an unfinished nearby fill through pans and cancels it on a distant
     vi.unstubAllGlobals();
   }
 });
+
+it('keeps one fill per live-lift haplotype panel of the same dataset, and cancels both on panel close', async () => {
+  const { getCompactReads, setReadPrefetchMargin, cancelReadPrefetch } = await import('./readOperations');
+  const { clearLoadedReadRegions } = await import('./loadedReadRegion');
+  const { markReadViewDrawn } = await import('../utils/viewIdle');
+  clearLoadedReadRegions();
+  setReadPrefetchMargin(1, 20);
+  vi.useFakeTimers();
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => frames.push(callback));
+  const fills: Array<{ query: URLSearchParams; signal: AbortSignal; finish: () => void }> = [];
+  const fetch = vi.fn((url: string, options: RequestInit) => {
+    const query = new URL(url, 'http://localhost').searchParams;
+    if (query.get('prefetch') === 'true') return new Promise<Response>((resolve, reject) => {
+      fills.push({ query, signal: options.signal!, finish: () => resolve({ ok: true, json: async () => ({ reads: [] }) } as Response) });
+      options.signal!.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+    });
+    return Promise.resolve({ ok: true, json: async () => ({ reads: [{ id: `${query.get('lift_hap')}:${query.get('start')}` }] }) } as Response);
+  });
+  vi.stubGlobal('fetch', fetch);
+  const params = (hap: string, start: number) => new URLSearchParams({ dataset_id: 'lifted', lift_hap: hap, chrom: 'chr1',
+    start: String(start), end: String(start + 100), max_reads: '500' });
+  const paint = () => { markReadViewDrawn(); while (frames.length) frames.shift()!(0); };
+  try {
+    // Both panels load their view, then pan together: neither request cancels the other panel's fill.
+    await Promise.all([getCompactReads(params('MAT', 10000)), getCompactReads(params('PAT', 10000))]);
+    paint();
+    await vi.advanceTimersByTimeAsync(1500);
+    await Promise.all([getCompactReads(params('MAT', 10050)), getCompactReads(params('PAT', 10050))]);
+    paint();
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(fills.length).toBeGreaterThan(0);
+    expect(fills.some(f => f.signal.aborted)).toBe(false);
+    // The queue runs one fill at a time: finishing each lets the other panel's next tile go.
+    for (let i = 0; i < 4 && i < fills.length; i++) {
+      fills[i].finish();
+      await vi.advanceTimersByTimeAsync(1500);
+    }
+    expect(fills.some(f => f.signal.aborted)).toBe(false);
+    expect(new Set(fills.map(f => f.query.get('lift_hap')))).toEqual(new Set(['MAT', 'PAT']));
+    const open = fills.filter((_f, i) => i >= 4);
+    expect(open.length).toBeGreaterThan(0);
+    cancelReadPrefetch('lifted');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(open.every(f => f.signal.aborted)).toBe(true);
+  } finally {
+    setReadPrefetchMargin(0.5);
+    await vi.advanceTimersByTimeAsync(1);
+    clearLoadedReadRegions();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+});
