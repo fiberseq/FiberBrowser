@@ -34,10 +34,13 @@ class WorkspaceRequest(BaseModel):
 
 
 async def _workspace(req, request, state, operation):
-    from services.background_work import Cancelled, cancelled_response, dataset_identity, run_background
+    from services.background_work import Cancelled, cancelled_response, run_background
     from services.differences.identity import content_id
     from services.differences import workspace
     from services.reconstruction_budget import ResourceResult
+    from services.panel_genomes import for_datasets
+    dataset_ids = [req.dataset_id, *([req.native_dataset_id] if req.native_dataset_id else [])]
+    state = for_datasets(state, dataset_ids)
     dataset = state.datasets.get(req.dataset_id)
     if dataset is None:
         raise HTTPException(404, "Dataset not found")
@@ -59,7 +62,7 @@ async def _workspace(req, request, state, operation):
         if operation == "sequence":
             options.update(record_id=req.record_id, offset=req.offset, limit=req.limit)
     try:
-        identity = dataset_identity(state, [req.dataset_id, *([req.native_dataset_id] if req.native_dataset_id else [])])
+        identity = workspace._workspace_revision(state, dataset_ids)
         key = ("difference_workspace:v1", operation, id(state), identity, content_id("request", req.model_dump()))
         result=await run_background(request, key, getattr(workspace, operation), state, dataset, **options)
         import json

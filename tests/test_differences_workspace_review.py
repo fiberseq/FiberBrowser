@@ -45,6 +45,25 @@ def test_exact_indels_preserve_geometry_identity_and_diagnostic_caps(tmp_path, m
         assert capped['targets'][0]['counts'] == [0, 0, 1]
 
 
+def test_workspace_revision_and_alternate_cache_follow_reference_mapping_and_chemistry(tmp_path, monkeypatch):
+    from services.differences import workspace
+    state, ds = native(tmp_path, lambda h: [])
+    links = {}
+    monkeypatch.setattr('services.plasmid_reconcile.contig_links', lambda *a, **k: dict(links))
+    calls = []
+    monkeypatch.setattr(workspace, '_alternate_blocks', lambda *a, **k: calls.append(1) or dict(complete=True, blocks=[]))
+    workspace._BLOCK_CACHE.clear()
+    revisions = []
+    for change in (lambda: None, lambda: setattr(state, 'fasta_path', 'synthetic-reference.fa'),
+                   lambda: setattr(state, 'chrom_map', {'chrT': 'mapped'}),
+                   lambda: links.update(contig='chrT'), lambda: setattr(ds, 'consensus_chemistry', 'CT')):
+        change()
+        revisions.append(workspace._workspace_revision(state, [ds.id]))
+        workspace.alternate_blocks(state, ds, **query())
+        workspace.alternate_blocks(state, ds, **query())
+    assert len(set(revisions)) == len(calls) == 5
+
+
 def test_replacement_duplicate_names_use_qualified_membership(tmp_path):
     state, ds = native(tmp_path, lambda h: [make_record(h, 'shared', 'chrT', SITE-100,
                        '100M4D100I100M')], libraries=2)

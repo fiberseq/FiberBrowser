@@ -178,6 +178,7 @@ def _scan(state, dataset_id: str, chrom: str, start: int, end: int, floor: int, 
 
 
 def _scan_records(state, dataset_id, chrom, start, end, floor, check):
+    reference = getattr(state, 'fasta', None) or getattr(state, 'fasta_path', None)
     out = []
     from services import sv_evidence
     from services.reconstruction_budget import ResourceResult
@@ -191,12 +192,12 @@ def _scan_records(state, dataset_id, chrom, start, end, floor, check):
         # digest so sequence-distinct records with identical CIGAR cannot merge.
         key = (path, read.query_name, int(read.reference_start), int(read.flag), read.cigarstring,
                int(read.mapping_quality), int(read.query_length), read.get_tag('SA') if read.has_tag('SA') else None)
-        if getattr(state, 'fasta', None) is not None:
+        if reference is not None:
             import hashlib
             key += (hashlib.sha256(read.to_string().encode()).hexdigest(),)
         entry = sv_evidence.reusable_record(key)
         if entry is None:
-            entry = _compact_record(read, file_chrom, floor, reference=getattr(state, 'fasta', None))
+            entry = _compact_record(read, file_chrom, floor, reference=reference)
             entry['_key'] = key
             entry['_scan_bytes'] = sv_evidence.compact_bytes(entry, floor,
                 reusable=getattr(state, 'fasta', None) is None and not getattr(state, 'fasta_path', None))

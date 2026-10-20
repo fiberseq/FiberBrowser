@@ -330,11 +330,9 @@ def _supports_record(snapshot, molecule, alignment, read, target, *, confirmed_o
 
 
 def alternate_blocks(state, dataset, **kwargs):
-    from services.background_work import dataset_identity
     from .identity import content_id
-    from services.signal_evidence import signal_filter_key
     # Separate from geometry, display, sequence and reconstruction caches.
-    key=("alternate-blocks:v1", dataset_identity(state,[dataset.id]), signal_filter_key(state),
+    key=("alternate-blocks:v2", _workspace_revision(state, [dataset.id]),
          content_id("alternate-request",kwargs))
     cached=_BLOCK_CACHE.get(key)
     if cached is not None:
@@ -679,7 +677,16 @@ def _workspace_revision(state, dataset_ids):
     from services.background_work import dataset_identity
     from services.signal_evidence import signal_filter_key
     from .identity import content_id
-    return content_id("workspace-data-revision:v1", [dataset_identity(state,dataset_ids),signal_filter_key(state)])
+    from services.sv_alleles import reference_identity
+    from services.plasmid_reconcile import contig_links
+    contexts = []
+    for dataset_id in dataset_ids:
+        dataset = getattr(state, 'datasets', {}).get(dataset_id)
+        paths = getattr(dataset, 'paths', [])
+        contexts.append([dataset_id, getattr(dataset, 'consensus_chemistry', None),
+            contig_links(state, dataset_id=dataset_id), [contig_links(state, path=p) for p in paths]])
+    return content_id("workspace-data-revision:v2", [dataset_identity(state,dataset_ids),signal_filter_key(state),
+        reference_identity(state), getattr(state, 'chrom_map', None), contexts])
 
 
 def _observation_window(read,target):

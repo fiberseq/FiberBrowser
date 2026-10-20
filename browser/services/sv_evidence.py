@@ -24,7 +24,7 @@ SCAN_MAX_BYTES = 128 * 1024 * 1024
 SCAN_CACHE = shared_cache('indexes')
 SCAN_LOCK = threading.Lock()
 SIZE_HINT_BYTES = 4 * 1024 * 1024
-SIZE_HINT_CACHE = shared_cache('indexes')
+SIZE_HINT_CACHE = shared_cache('sv_size_hints', default_bytes=SIZE_HINT_BYTES)
 SIZE_HINT_CACHE.resize(SIZE_HINT_BYTES)
 SIZE_HINT_LOCK = threading.Lock()
 _records = ContextVar('native_scan_records', default=None)

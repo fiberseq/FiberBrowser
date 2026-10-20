@@ -278,6 +278,37 @@ def test_duplicate_primary_in_another_file_cannot_suppress_a_supplementary_carri
     assert result['targets'][0]['counts'] == [2, 1, 0]
 
 
+def test_path_only_reference_and_open_handle_share_normalized_extraction(tmp_path):
+    from live_lift_fixtures import make_record, write_bam
+    fasta = tmp_path / 'reference.fa'
+    sequence = 'C'*100 + 'A'*50 + 'C'*850
+    fasta.write_text('>chrT\n'+sequence+'\n')
+    pysam.faidx(str(fasta))
+    path = write_bam(tmp_path / 'deletion.bam', lambda h: [make_record(h, 'deletion', 'chrT', 100,
+        '20M20D60M', seq=sequence[100:120]+sequence[140:200])], contigs=(('chrT', 1000),))
+    ds = SimpleNamespace(id='native', data_type='bam', paths=[path])
+    state = SimpleNamespace(datasets={'native': ds}, get_dataset=lambda _: ds, fasta=None, fasta_path=str(fasta))
+    evidence.SCAN_CACHE.clear()
+    first = sv.scan_view(state, 'native', 'chrT', 90, 210, 10)
+    assert first[0]['sv'][0]['ref'] == 100  # homopolymer's left edge, authored independently
+    with pysam.FastaFile(fasta) as handle:
+        state.fasta = handle
+        assert sv.scan_view(state, 'native', 'chrT', 90, 210, 10) == first
+
+
+def test_size_hints_cannot_evict_native_scan_tiles(monkeypatch):
+    from services import byte_cache
+    evidence.SCAN_CACHE.clear()
+    evidence.SIZE_HINT_CACHE.clear()
+    monkeypatch.setitem(byte_cache._shared_budgets, 'indexes', 4096)
+    evidence.SCAN_CACHE['tile'] = b'x'*2000
+    for i in range(100):
+        evidence.SIZE_HINT_CACHE[('hint', i)] = 100
+    assert evidence.SCAN_CACHE.get('tile') == b'x'*2000
+    evidence.SCAN_CACHE.clear()
+    evidence.SIZE_HINT_CACHE.clear()
+
+
 @pytest.mark.parametrize('seed', [901, 1547, 6091])
 def test_heldout_authored_molecule_counts_survive_consumer_order_and_eviction(tmp_path, seed):
     import random
