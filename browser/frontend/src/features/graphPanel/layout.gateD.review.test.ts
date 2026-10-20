@@ -59,7 +59,7 @@ describe('Gate D review fixes', () => {
     const s = scene(m, 50);
     expect(vmarks(s).map(p => [p.color, p.kind]).sort()).toEqual([[COLORS.pat, 'sub'], [COLORS.mat, 'del']].sort());
     const hits = s.hits.filter(h => h.payload.kind === 'allele');
-    expect(hits.map(h => h.payload.kind === 'allele' ? [h.payload.group.id, h.payload.lane] : null).sort()).toEqual([[del.id, 'mat'], [sub.id, 'pat']].sort());
+    expect([...new Set(hits.map(h => h.payload.kind === 'allele' ? `${h.payload.group.id}|${h.payload.lane}` : ''))].sort()).toEqual([`${del.id}|mat`, `${sub.id}|pat`].sort());
     // PAT's mark sits inside MAT's deleted span, at its own position.
     const delMark = vmarks(s).find(p => p.color === COLORS.mat)!, subMark = vmarks(s).find(p => p.color === COLORS.pat)!;
     expect(subMark.x0).toBeGreaterThanOrEqual(delMark.x0 - 1e-6);
@@ -71,8 +71,9 @@ describe('Gate D review fixes', () => {
     const snp = build(fromWalks({ L: 800, A: 1, B: 1, R: 800 }, { ref: ['L', 'A', 'R'], mat: ['L', 'B', 'R'], pat: ['L', 'B', 'R'] }));
     const s = scene(snp, 50);
     const marks = s.hits.filter(h => h.payload.kind === 'allele');
+    // Each mark is two hit regions (its stripe and its pin): both resolve to that carrier's occurrence.
     expect(marks.map(h => { const [x, y] = mid(h); const inv = sceneInverse(s, x, y); return inv?.kind === 'allele' ? [inv.path, inv.occurrence] : null; }).sort())
-      .toEqual([['mat', 'mat.1'], ['pat', 'pat.1']]);
+      .toEqual([['mat', 'mat.1'], ['mat', 'mat.1'], ['pat', 'pat.1'], ['pat', 'pat.1']]);
     // On the shared target tube, each stripe is its own path's visit of the node (and the target position).
     const run = s.hits.find(h => h.payload.kind === 'run' && h.payload.run.visits[0].occ.node === 'L')!;
     for (const key of ['ref', 'mat', 'pat']) {
@@ -198,6 +199,24 @@ describe('Gate D review fixes', () => {
       const x = (h.x0 + h.x1) / 2, y = (st.y0 + st.y1) / 2;
       expect(sceneHitAt(s, x, y)).toBe(h);
       expect(sceneInverse(s, x, y)).toMatchObject({ kind: 'allele', path: key, occurrence: `${key}.2` });
+    }
+  });
+
+  it('r3: a mark\'s hit never covers another carrier\'s unchanged stripe', () => {
+    const m = build(fromWalks({ L: 1000, A: 120, B: 10, C: 110, X: 10, R: 1000 }, { ref: ['L', 'R'], mat: ['L', 'A', 'B', 'C', 'R'], pat: ['L', 'A', 'X', 'C', 'R'], alt: ['L', 'A', 'B', 'C', 'R'] }));
+    for (const reversed of [false, true]) {
+      const s = buildScene(m, { width: 1200, gutter: 52, rightPad: 6, rulerHeight: 30, laneHeight: 34, laneGap: 4, compression: 'log', reversed, colors: COLORS4, smallBp: 50 });
+      const base = s.hits.find(x => x.payload.kind === 'base' && x.within)!;
+      if (base.payload.kind !== 'base') continue;
+      for (const key of ['mat', 'alt']) {
+        const st = base.payload.stripes!.find(x => x.key === key)!;
+        const x = (base.x0 + base.x1) / 2, y = (st.y0 + st.y1) / 2;
+        expect(sceneInverse(s, x, y)).toMatchObject({ kind: 'allele', path: key, occurrence: `${key}.2` });
+      }
+      // PAT's own stripe and its pin are PAT's allele.
+      const pat = s.hits.filter(x => x.payload.kind === 'allele' && x.payload.lane === 'pat' && x.within);
+      expect(pat.length).toBe(2);
+      for (const h of pat) expect(sceneHitAt(s, (h.x0 + h.x1) / 2, (h.y0 + h.y1) / 2)).toBe(h);
     }
   });
 });

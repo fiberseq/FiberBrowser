@@ -644,8 +644,10 @@ export function buildScene(model: LayoutModel, opts: SceneOptions & { plan?: Sce
               const side = sideOf(key);
               marks.push({ t: 'vmark', x0: cx - half, x1: cx + half, y: sl.y, h: sl.h, ty0, ty1, side, color: sl.color, kind });
               const hx = Math.max(4, half);
-              markHits.push({ x0: cx - hx, x1: cx + hx, y0: side === 'up' ? ty0 - 8 : sl.y - 1, y1: side === 'down' ? ty1 + 8 : sl.y + sl.h + 1,
-                cursor: false, payload: { kind: 'allele', group: gg, allele: a, lane: key, visit: null, offset: 0 } });
+              // Two regions, never over another carrier's stripe: the mark on its own stripe, and its pin outside.
+              const payload = { kind: 'allele' as const, group: gg, allele: a, lane: key, visit: null, offset: 0 };
+              markHits.push({ x0: cx - hx, x1: cx + hx, y0: sl.y, y1: sl.y + sl.h, cursor: false, payload });
+              markHits.push({ x0: cx - hx, x1: cx + hx, y0: side === 'up' ? ty0 - 8 : ty1, y1: side === 'up' ? ty0 : ty1 + 8, cursor: false, payload });
             }
           }
           if (gg.base.bp <= 0) return;
