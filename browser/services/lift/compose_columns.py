@@ -40,6 +40,9 @@ import numpy as np
 
 _SHIFT = 1 << 40
 _first = itemgetter(0)
+# Intervals, calls and marks (times the rows that map them) per batch: bounds
+# the temporary arrays; larger windows run as several batches.
+CHUNK_ELEMENTS = 1 << 16
 
 
 class RowColumns:
@@ -97,6 +100,12 @@ def _all_ints(values) -> bool:
 
 def _ints(values, n=None):
     return np.fromiter(values, dtype=np.int64, count=-1 if n is None else n)
+
+
+def _small(a) -> bool:
+    """All values within ``(-2**40, 2**40)``: composite keys and int64
+    arithmetic on them are exact."""
+    return not len(a) or (int(a.min()) > -_SHIFT and int(a.max()) < _SHIFT)
 
 
 # ── Runs (per read) ─────────────────────────────────────────────────────────
@@ -294,7 +303,7 @@ def _part_order(seg, c0, c1, i, k, width):
     return order
 
 
-def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts):
+def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts, small):
     """``groups`` of every disjoint row: ``_map_group`` + ``_call_identity``."""
     RS0, WID = F.row_rs0, F.row_width
     units_by_read = [_read_units(it[0]) for it in items]
@@ -308,8 +317,21 @@ def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts):
     for u in live:
         u.start = total
         total += len(u.ivs)
-    vals = _ints(chain.from_iterable(chain.from_iterable(u.ivs for u in live)), 3 * total).reshape(-1, 3)
+    try:
+        vals = _ints(chain.from_iterable(chain.from_iterable(u.ivs for u in live)), 3 * total).reshape(-1, 3)
+    except OverflowError:  # beyond int64: the per-row path
+        return
     UA, UB, USZ = vals[:, 0], vals[:, 1], vals[:, 2]
+    if not (_small(UA) and _small(UB)):
+        return
+    # A small group (Python path in _map_group) with an empty interval of
+    # non-negative size fails there (span_of gives None): keep that behaviour.
+    empty = np.flatnonzero((UB <= UA) & (USZ >= 0))
+    if len(empty):
+        starts = np.fromiter((u.start for u in live), dtype=np.int64, count=len(live))
+        for j in np.unique(np.searchsorted(starts, empty, side="right") - 1).tolist():
+            if len(live[j].ivs) <= small:
+                live[j].ok = False
     UHAS = np.zeros(total, dtype=bool)
     UFIRST = UA.copy()
     UIDS = []
@@ -613,10 +635,13 @@ def _map_point_fields(items, rows, row_read, F, base, ctx, fields, small):
     seg_row = _ints((s[0] for s in segs), nseg)
     seg_len = _ints((s[1] for s in segs), nseg)
     E_seg = np.repeat(np.arange(nseg, dtype=np.int64), seg_len)
-    x = _ints(chain.from_iterable(flat), len(E_seg))
-    x += base[_ints((row_read[s[0]] for s in segs), nseg)][E_seg]
-    if int(x.max()) >= _SHIFT:
+    try:
+        x = _ints(chain.from_iterable(flat), len(E_seg))
+    except OverflowError:  # beyond int64: the per-row path
         return
+    if not _small(x):
+        return
+    x += base[_ints((row_read[s[0]] for s in segs), nseg)][E_seg]
     xkey = (E_seg << 40) | x if nseg < (1 << 23) and int(x.min()) >= 0 else None
     if xkey is not None and bool((xkey[1:] >= xkey[:-1]).all()):
         # Marks ascend within each list (as decoded): find each fragment's
@@ -712,7 +737,36 @@ def precompute(items, ctx, *, point_fields, rest_parts, small_group, regions=Non
     """Attach ``row._pre`` (a ``RowColumns``) to every row of ``items``
     (``[(read, rows, runs), ...]``, one per read with rows). Rows are relative
     to and clipped to ``ctx``'s region, or to ``regions[d] = (start, width)``
-    of item ``d`` (the hidden insertion blocks, each its own frame)."""
+    of item ``d`` (the hidden insertion blocks, each its own frame). Runs in
+    batches of about ``CHUNK_ELEMENTS`` intervals and marks; checks for
+    cancellation before each."""
+    from services.background_work import checkpoint
+
+    lo = 0
+    while lo < len(items):
+        hi, load = lo, 0
+        while hi < len(items) and (hi == lo or load < CHUNK_ELEMENTS):
+            load += _load(items[hi][0], point_fields) * len(items[hi][1])
+            hi += 1
+        checkpoint()
+        _precompute(items[lo:hi], ctx, point_fields, rest_parts, small_group,
+                    regions[lo:hi] if regions is not None else None)
+        lo = hi
+
+
+def _load(read, point_fields):
+    n = len(read.get("intervals") or ()) + len(read.get("fire") or ())
+    for layer in (read.get("layers") or {}).values():
+        if isinstance(layer, dict):
+            n += len(layer.get("intervals") or ())
+    for key in point_fields:
+        values = read.get(key)
+        if isinstance(values, list):
+            n += len(values)
+    return n
+
+
+def _precompute(items, ctx, point_fields, rest_parts, small_group, regions):
     rows, row_read = [], []
     for d, (_read, read_rows, _runs) in enumerate(items):
         for row in read_rows:
@@ -725,14 +779,20 @@ def precompute(items, ctx, *, point_fields, rest_parts, small_group, regions=Non
         rs0, width = [ctx.region_start] * len(rows), [ctx.width] * len(rows)
     else:
         rs0, width = [regions[d][0] for d in row_read], [regions[d][1] for d in row_read]
-    R = _Runs([it[2] for it in items])
+    try:
+        R = _Runs([it[2] for it in items])
+        F = _Frags(rows)
+        base = _ints((int(it[0]["_fiberbrowser_source_base"]) for it in items), len(items))
+        F.row_rs0, F.row_width = _ints(rs0, len(rows)), _ints(width, len(rows))
+    except OverflowError:  # beyond int64: every row takes the per-row path
+        return
     if len(R.ref) and (int(R.ref.min()) < 0 or max(int(R.ref.max()), int((R.ref + R.len).max())) >= _SHIFT):
         return  # composite keys need [0, 2**40): all rows take the per-row path
-    F = _Frags(rows)
+    if not all(_small(a) for a in (R.seq, R.len, R.length, F.s, F.e, F.qs, F.ts, F.te, F.t0, F.t1, base,
+                                    F.row_rs0, F.row_width)):
+        return
     F.rs0, F.width = rs0, width
-    F.row_rs0, F.row_width = _ints(rs0, len(rows)), _ints(width, len(rows))
     F.max_width = max(width)
-    base = _ints((int(it[0]["_fiberbrowser_source_base"]) for it in items), len(items))
     _molecular_spans(rows, row_read, F, R)
-    _map_units(items, rows, row_read, F, R, base, ctx, rest_parts)
+    _map_units(items, rows, row_read, F, R, base, ctx, rest_parts, small_group)
     _map_point_fields(items, rows, row_read, F, base, ctx, point_fields, small_group)

@@ -128,3 +128,80 @@ def test_columnar_pass_matches_per_row_composition(seed, monkeypatch):
         composed += len(columnar)
         _same(columnar, per_row)
     assert composed > 50
+
+
+def test_columnar_pass_matches_in_small_batches(monkeypatch):
+    """Windows run as several batches when large; batch edges change nothing."""
+    from services.lift import compose_columns
+
+    monkeypatch.setattr(compose_columns, "CHUNK_ELEMENTS", 37)
+    test_columnar_pass_matches_per_row_composition(7, monkeypatch)
+
+
+def _one(**updates):
+    read = {"id": "r", "reference_start": 0, "reference_end": 140, "intervals": [[10, 20, 10]], "qualities": [42],
+            "alignment_orientation": "forward", "library_id": "lib", "source_path": "a.bam",
+            "record_sha256": "s", "alignment_occurrence": 0, "_fiberbrowser_source_base": 0,
+            "_fiberbrowser_aligned_runs": [[0, 0, 140]],
+            "_fiberbrowser_lift_record": {"contig": "src", "reverse": False, "length": 140},
+            "_fiberbrowser_primary": {"is_supplementary": False, "sa": None},
+            "_fiberbrowser_calls": {"intervals": [["c", 10, 20]]}}
+    read.update(updates)
+    return read
+
+
+def _compose(reads, pieces, start=0, end=100, **opts):
+    sel = ll.PieceSelection("tgt", start, end, start, end, pieces)
+    return compose.lift_compact_reads(copy.deepcopy(reads), ll.FetchPlan(sel, [], 0, 0), handle=None,
+                                      region_start=start, region_end=end, key="k", dataset_id="d", molecules={},
+                                      settings=ll.LiftSettings(), loader_options=opts)
+
+
+def _both(monkeypatch, reads, pieces, **kw):
+    def run():
+        try:
+            return _compose(reads, pieces, **kw)
+        except Exception as exc:  # noqa: BLE001 - the per-row path's own failures must match too
+            return ("raises", type(exc).__name__)
+    columnar = run()
+    with monkeypatch.context() as m:
+        m.setattr(compose, "precompute", lambda *a, **k: None)
+        per_row = run()
+    _same(columnar, per_row)
+    return columnar
+
+
+@pytest.mark.parametrize("updates", [
+    {"intervals": [[10, 10, 0]]},              # empty interval in a small group: the per-row path fails
+    {"methyl_m6a": [2 ** 64]},                 # beyond int64: per-row path
+    {"intervals": [[2 ** 64, 2 ** 64 + 2, 2]]},
+    {"intervals": [[10, 20, 2 ** 64]]},
+    {"intervals": [[10, 20, 1.5]]},            # not ints: per-row path
+    {"methyl_m6a": [12, 13.0, True]},
+])
+def test_unusual_values_take_the_per_row_path(monkeypatch, updates):
+    piece = ll.LiftPiece(0, 0, 100, 0, 100, "+", True, "H#1", "src")
+    _both(monkeypatch, [_one(**updates)], [piece])
+
+
+def test_cancellation_reaches_the_hidden_blocks(monkeypatch):
+    """A load cancelled while hidden insertion blocks are composed stops, as it did when they were
+    composed row by row."""
+    import threading
+
+    from services.background_work import Cancelled, cancel_scope
+    from services.lift import differences
+
+    pieces = [ll.LiftPiece(0, 0, 20, 0, 20, "+", True, "H#1", "src"),
+              ll.LiftPiece(0, 20, 40, 120, 140, "+", True, "H#1", "src")]
+    token = threading.Event()
+    original = compose._insertion_payloads
+
+    def cancelling(*args, **kwargs):
+        token.set()
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(differences, "source_only_gap", lambda *a: (20, 120))
+    monkeypatch.setattr(compose, "_insertion_payloads", cancelling)
+    with cancel_scope(token), pytest.raises(Cancelled):
+        _compose([_one()] * 512, pieces, 0, 40)

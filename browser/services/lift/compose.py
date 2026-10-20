@@ -396,7 +396,6 @@ def lift_compact_reads(reads, plan, *, handle, region_start, region_end, setting
             item = _read_geometry(read, by_contig, haps, ctx)
             if item is not None:
                 items.append(item)
-        checkpoint()
         precompute(items, ctx, point_fields=_POINT_FIELDS, rest_parts=_rest_parts, small_group=_SMALL_GROUP)
         ctx.pending_insertions = []
         for i, (read, rows, runs) in enumerate(items):
@@ -1289,12 +1288,17 @@ def _compose_pending_insertions(ctx):
         return
     from services.background_work import checkpoint
 
-    checkpoint()
-    hidden = [_insertion_row(*args) for _payload, _ins_id, _observed, args in jobs]
+    hidden = []
+    for j, (_payload, _ins_id, _observed, args) in enumerate(jobs):
+        if not j & 255:
+            checkpoint()
+        hidden.append(_insertion_row(*args))
     precompute([(args[0], [local], args[3]) for (_p, _i, _o, args), (_c, local) in zip(jobs, hidden)], ctx,
                point_fields=_POINT_FIELDS, rest_parts=_rest_parts, small_group=_SMALL_GROUP,
                regions=[(0, args[11]) for _p, _i, _o, args in jobs])
-    for (payload, ins_id, observed, args), local in zip(jobs, hidden):
+    for j, ((payload, ins_id, observed, args), local) in enumerate(zip(jobs, hidden)):
+        if not j & 255:
+            checkpoint()
         block = _insertion_payloads(*args, local=local)
         if observed:
             block.update(_observed_fields(observed))
