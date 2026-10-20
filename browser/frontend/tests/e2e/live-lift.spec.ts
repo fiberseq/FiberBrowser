@@ -91,9 +91,18 @@ test('add a live-lift dataset next to the native BAM: split MAT/PAT panels rende
   expect(target.ins_id).toMatch(/^MAT:.*:insertion$/);
   const scale = await matCanvas.evaluate((c: HTMLCanvasElement) => ({ x: c.getBoundingClientRect().width / c.clientWidth, y: c.getBoundingClientRect().height / c.clientHeight }));
   await matCanvas.click({ position: { x: target.x * scale.x, y: target.y * scale.y } });
-  // One click on the badge opens the insertion across all three panels and its inspector, whose
-  // per-read observations load by themselves (the cohort is within the auto-load bound).
+  // A plain click on the badge expands the insertion across all three panels (no inspector).
   await expect(page.getByTestId('live-lift-expanded-block')).toHaveCount(3, { timeout: 30_000 });
+  await expect(page.getByTestId('live-lift-diff-popover')).toHaveCount(0);
+  // ⌘/Ctrl-click opens its inspector, whose per-read observations load by themselves (the cohort is within the
+  // auto-load bound). The badge is now beside its expanded column: find it again.
+  const before = JSON.stringify(target);
+  await expect.poll(async () => {
+    const t = await matCanvas.getAttribute('data-live-lift-badge-target');
+    return Boolean(t) && JSON.stringify(JSON.parse(t!)) !== before;
+  }, { timeout: 30_000 }).toBe(true);
+  const opened = JSON.parse((await matCanvas.getAttribute('data-live-lift-badge-target'))!);
+  await matCanvas.click({ position: { x: opened.x * scale.x, y: opened.y * scale.y }, modifiers: ['ControlOrMeta'] });
   const badgeInspection = page.getByTestId('live-lift-diff-popover');
   await expect(badgeInspection).toBeVisible();
   await expect(badgeInspection.locator('tbody tr').first()).toBeVisible({ timeout: 30_000 });
@@ -134,10 +143,13 @@ test('add a live-lift dataset next to the native BAM: split MAT/PAT panels rende
   await page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().setViewport('chr3', 128_657_405, 128_657_445));
   const snv = strip.locator('[data-testid="live-lift-diff-item"][data-difference-id="MAT:chr3_MATERNAL:131197059-131197060:snv"]');
   await expect(snv).toBeVisible();
-  // Shift-click only selects; a plain click opens the inspector with the reads' observations loaded.
+  // Shift-click only selects, a plain click highlights the carriers; ⌘/Ctrl-click opens the inspector with the
+  // reads' observations loaded.
   await snv.click({ modifiers: ['Shift'] });
   await expect(page.getByTestId('live-lift-diff-popover')).toHaveCount(0);
   await snv.click();
+  await expect(page.getByTestId('live-lift-diff-popover')).toHaveCount(0);
+  await snv.click({ modifiers: ['ControlOrMeta'] });
   const inspection = page.getByTestId('live-lift-diff-popover');
   await expect(inspection).toBeVisible();
   await expect(inspection.locator('tbody tr').first()).toBeVisible({ timeout: 30_000 });
@@ -297,15 +309,19 @@ test('open a linked source view: panels move together through the map, the ribbo
   // Clicking the AluY badge in the MAT panel shows its inserted bases in the source panel (the main view stays).
   const before = await store(`return { main: s.getState().start, src: s.getState().panels.find(p => p.id === a).viewportOverride }`, linked.id) as any;
   const badge = JSON.parse((await matCanvas.getAttribute('data-live-lift-badge-target'))!);
+  // A plain click expands the insertion; the expansion shows its inserted bases in the linked source panel.
   await matCanvas.click({ position: { x: badge.x * scale.x, y: badge.y * scale.y } });
-  await expect(page.getByTestId('live-lift-diff-popover')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('live-lift-expanded-block').first()).toBeVisible({ timeout: 30_000 });
   await expect.poll(async () => JSON.stringify((await store(`return s.getState().panels.find(p => p.id === a).viewportOverride`, linked.id))), { timeout: 15_000 })
     .not.toBe(JSON.stringify(before.src));
   const jumped = await store(`return s.getState().panels.find(p => p.id === a).viewportOverride`, linked.id) as any;
-  const selection = await store(`return s.getState().differencesSession.selectionSnapshot`) as any;
-  expect(selection.difference.src.contig).toBe('chr3_MATERNAL');
-  expect(jumped.start).toBeLessThanOrEqual(selection.difference.src.start);
-  expect(jumped.end).toBeGreaterThanOrEqual(selection.difference.src.end);
+  const expansion = await store(`return s.getState().liveLiftExpansions.main[0]`) as any;
+  const src = (expansion.alleles?.find((a: any) => a.hap_label === 'MAT') ?? expansion).src;
+  expect(src.contig).toBe('chr3_MATERNAL');
+  expect(jumped.start).toBeLessThanOrEqual(src.start);
+  expect(jumped.end).toBeGreaterThanOrEqual(src.end);
+  await page.screenshot({ path: test.info().outputPath('live-lift-linked-expanded.png') });
+  await page.getByTestId('live-lift-expanded-collapse').first().click();
   expect(await store(`return s.getState().start`)).toBe(before.main);
   await page.keyboard.press('Escape');
 
@@ -315,4 +331,106 @@ test('open a linked source view: panels move together through the map, the ribbo
   await expect.poll(() => store(`return s.getState().panels.find(p => p.id === a).liftLink.flip`, linked.id)).toBe(true);
   await expect(page.getByTestId('lift-link-chip')).toContainText('reversed');
   expect(errors).toEqual([]);
+});
+
+test.describe('insertion badges on retina displays', () => {
+  test.use({ deviceScaleFactor: 2 });
+  test('MAT and PAT reads both mark the AluY at DPR 2 and several widths; labels follow the row height', async ({ page, server }) => {
+    test.setTimeout(240_000);
+    const errors: string[] = [];
+    page.on('pageerror', e => errors.push(e.message));
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.addInitScript(() => {
+      (window as any).__FIBERBROWSER_E2E_EXPOSE_STORE = true;
+      (window as any).__FIBERBROWSER_E2E_DISABLE_GENOME_AUTOLOAD = true;
+      localStorage.clear();
+      sessionStorage.clear();
+    });
+    await page.goto(`${server.baseUrl}/?chr=${VIEW.chrom}&start=${VIEW.start}&end=${VIEW.end}`);
+    await expect.poll(() => page.locator('[data-read-track-loading="true"]').count(), { timeout: 60_000 }).toBe(0);
+    await page.getByTestId('open-menu-button').click();
+    await page.getByTestId('open-menu-add-live-lift').click();
+    await page.getByTestId('live-lift-bams').fill(LIFT_BAM);
+    await page.getByTestId('live-lift-manifest').fill(LIFT_MAP);
+    await expect(page.getByTestId('live-lift-haplotypes')).toContainText('PAT');
+    await page.getByTestId('live-lift-add').click();
+    await expect(page.getByTestId('live-lift-chip')).toHaveCount(2, { timeout: 30_000 });
+    const keys = await page.evaluate(() => Object.fromEntries((window as any).__FIBERBROWSER_STORE__.getState().panels
+      .filter((p: any) => p.liftHap).map((p: any) => [p.liftHap, p.stateKey ?? p.datasetId])));
+    const canvas = (hap: string) => page.locator(`[data-read-track-state-key="${keys[hap]}"] canvas[data-copilot-track="reads"]`);
+    const setMode = (mode: string) => page.evaluate(m => (window as any).__FIBERBROWSER_STORE__.setState((s: any) => ({
+      differencesSession: { ...s.differencesSession, options: { ...s.differencesSession.options, readBadges: m } } })), mode);
+    const results: any[] = [];
+    for (const [width, height] of [[1280, 900], [1440, 900], [1728, 900], [1728, 970], [1728, 1080]]) {
+      await page.setViewportSize({ width, height });
+      await expect.poll(() => page.locator('[data-read-track-loading="true"]').count(), { timeout: 60_000 }).toBe(0);
+      for (const mode of ['labels', 'ticks']) {
+        await setMode(mode);
+        await page.waitForTimeout(400);
+        for (const hap of ['MAT', 'PAT']) {
+          const c = canvas(hap);
+          await expect.poll(async () => Number(await c.getAttribute('data-live-lift-badges')), { timeout: 30_000 }).toBeGreaterThan(0);
+          const row = Number(await c.getAttribute('data-read-row-height'));
+          const labels = Number(await c.getAttribute('data-live-lift-badge-labels'));
+          results.push({ width, height, mode, hap, rowHeight: row, badges: Number(await c.getAttribute('data-live-lift-badges')), labels });
+          // Ticks are never labelled; labels need rows of 7 px (MAT has more rows than PAT, so at some window heights
+          // only PAT's rows are tall enough: the owner's "no +2.4 kb on MAT" report).
+          if (mode === 'ticks') expect(labels).toBe(0);
+          if (mode === 'labels' && row < 7) expect(labels).toBe(0);
+          if (mode === 'labels' && row >= 8) expect(labels).toBeGreaterThan(0);
+        }
+        await page.screenshot({ path: test.info().outputPath(`live-lift-badges-${width}x${height}-${mode}.png`) });
+      }
+    }
+    await test.info().attach('badges.json', { body: JSON.stringify(results, null, 1), contentType: 'application/json' });
+    console.log('BADGES', JSON.stringify(results));
+    expect(errors).toEqual([]);
+  });
+});
+
+test('the Differences row: compact header, options in its right-click menu and the settings dialog', async ({ page, server }) => {
+  test.setTimeout(180_000);
+  await page.setViewportSize({ width: 1600, height: 1100 });
+  await page.addInitScript(() => {
+    (window as any).__FIBERBROWSER_E2E_EXPOSE_STORE = true;
+    (window as any).__FIBERBROWSER_E2E_DISABLE_GENOME_AUTOLOAD = true;
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+  await page.goto(`${server.baseUrl}/?chr=${VIEW.chrom}&start=${VIEW.start}&end=${VIEW.end}`);
+  await expect.poll(() => page.locator('[data-read-track-loading="true"]').count(), { timeout: 60_000 }).toBe(0);
+  // The entry point on a loaded BAM: the dialog opens with it as the source.
+  await expect.poll(() => page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().panels.some((p: any) => p.contentType === 'dataset')), { timeout: 30_000 }).toBe(true);
+  const nativeId = await page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().panels.find((p: any) => p.contentType === 'dataset').id);
+  await page.getByTestId(`panel-actions-${nativeId}`).click();
+  await page.getByTestId('live-lift-from-bam').click();
+  await expect(page.getByTestId('live-lift-dialog')).toBeVisible();
+  await expect(page.getByTestId('live-lift-bams')).toHaveValue(NATIVE_BAM);
+  await expect(page.getByTestId('live-lift-map-suggestions')).toBeVisible();
+  await page.getByTestId('live-lift-bams').fill(LIFT_BAM);
+  await page.getByTestId('live-lift-manifest').fill(LIFT_MAP);
+  await expect(page.getByTestId('live-lift-haplotypes')).toContainText('PAT');
+  await page.getByTestId('live-lift-add').click();
+  await expect(page.getByTestId('live-lift-chip')).toHaveCount(2, { timeout: 30_000 });
+  const header = page.getByTestId('live-lift-diff-header').first();
+  await expect(header).toBeVisible({ timeout: 30_000 });
+  await expect(header.locator('input, select')).toHaveCount(0);
+  await page.screenshot({ path: test.info().outputPath('live-lift-diff-row-1600.png') });
+  // Right-click the row: its options.
+  await page.getByTestId('live-lift-diff-strip').first().click({ button: 'right', position: { x: 300, y: 30 } });
+  const menu = page.getByTestId('track-context-menu');
+  await expect(menu).toBeVisible();
+  await expect(menu).toContainText('Assembly differences (the map)');
+  await expect(menu).toContainText('Insertions on reads');
+  await page.screenshot({ path: test.info().outputPath('live-lift-diff-row-menu.png') });
+  await menu.getByRole('menuitem', { name: /Read-supported edits/ }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().panels.filter((p: any) => p.liftHap)
+    .some((p: any) => p.differenceSources?.reads))).toBe(true);
+  // The same options in the Live-lift settings.
+  await page.getByTestId('live-lift-diff-strip').first().click({ button: 'right', position: { x: 300, y: 30 } });
+  await page.getByTestId('track-context-menu').getByRole('menuitem', { name: 'Live-lift settings…' }).click();
+  await expect(page.getByTestId('live-lift-settings-differences')).toBeVisible();
+  await page.getByTestId('live-lift-settings-read-badges').selectOption('off');
+  await page.getByTestId('live-lift-settings-save').click();
+  await expect.poll(() => page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().differencesSession.options.readBadges)).toBe('off');
 });
