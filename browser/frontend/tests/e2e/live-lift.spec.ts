@@ -205,3 +205,114 @@ test('add a live-lift dataset next to the native BAM: split MAT/PAT panels rende
   await expect(page.getByTestId('live-lift-chip')).toContainText('MAT+PAT');
   expect(errors).toEqual([]);
 });
+
+test('open a linked source view: panels move together through the map, the ribbon, shared hover, insertion jump', async ({ page, server }) => {
+  test.setTimeout(240_000);
+  const errors: string[] = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.setViewportSize({ width: 1500, height: 1200 });
+  await page.addInitScript(() => {
+    (window as any).__FIBERBROWSER_E2E_EXPOSE_STORE = true;
+    (window as any).__FIBERBROWSER_E2E_DISABLE_GENOME_AUTOLOAD = true;
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+  const store = (fn: string, arg?: unknown) => page.evaluate(([f, a]) => new Function('s', 'a', f)((window as any).__FIBERBROWSER_STORE__, a), [fn, arg] as const);
+  await page.goto(`${server.baseUrl}/?chr=${VIEW.chrom}&start=${VIEW.start}&end=${VIEW.end}`);
+  await expect.poll(() => page.locator('[data-read-track-loading="true"]').count(), { timeout: 60_000 }).toBe(0);
+  await page.getByTestId('open-menu-button').click();
+  await page.getByTestId('open-menu-add-live-lift').click();
+  await page.getByTestId('live-lift-bams').fill(LIFT_BAM);
+  await page.getByTestId('live-lift-manifest').fill(LIFT_MAP);
+  await expect(page.getByTestId('live-lift-haplotypes')).toContainText('MAT');
+  await page.getByTestId('live-lift-add').click();
+  await expect(page.getByTestId('live-lift-chip')).toHaveCount(2, { timeout: 30_000 });
+  const mat = await store(`return s.getState().panels.find(p => p.liftHap === 'MAT')`) as any;
+
+  // "Open source view" in the MAT panel's "…" menu: the source BAM on HG002 MAT coordinates, under the MAT panel.
+  await page.getByTestId(`panel-actions-${mat.id}`).click();
+  await page.getByTestId('live-lift-open-source-MAT').click();
+  await expect(page.getByTestId('lift-link-chip')).toHaveCount(1, { timeout: 60_000 });
+  const linked = await store(`return s.getState().panels.find(p => p.liftLink)`) as any;
+  expect(linked.liftLink).toMatchObject({ liftPanelId: mat.id, hapLabel: 'MAT' });
+  expect(linked.genome).toBeTruthy();                                  // its own (BAM-header) reference
+  expect(linked.viewportOverride.chrom).toBe('chr3_MATERNAL');
+  expect(linked.layoutColumn).toBe((await store(`return s.getState().panels.find(p => p.id === a)`, mat.id) as any).layoutColumn);
+  // The AluY is a MAT insertion: the source view is wider than the target view by about its length.
+  const width0 = linked.viewportOverride.end - linked.viewportOverride.start;
+  expect(width0 - (VIEW.end - VIEW.start)).toBeGreaterThan(2000);
+  expect(width0 - (VIEW.end - VIEW.start)).toBeLessThan(3000);
+
+  const ribbon = page.locator(`[data-testid="lift-ribbon"][data-panel-id="${linked.id}"]`);
+  await expect(ribbon).toBeVisible();
+  await expect.poll(async () => JSON.parse((await ribbon.getAttribute('data-ribbon-shapes')) ?? '{}').primary ?? 0, { timeout: 30_000 }).toBeGreaterThan(0);
+  const shapes = JSON.parse((await ribbon.getAttribute('data-ribbon-shapes'))!);
+  expect(shapes.source_insertion).toBeGreaterThanOrEqual(1);          // the AluY wedge
+  await expect(ribbon.locator('path[data-ribbon-kind="source_insertion"]').first()).toBeVisible();
+  await expect.poll(() => page.locator('[data-read-track-loading="true"]').count(), { timeout: 60_000 }).toBe(0);
+  const srcCanvas = page.locator(`[data-read-track-state-key="${linked.stateKey}"] canvas[data-copilot-track="reads"]`);
+  await expect(srcCanvas).toBeVisible({ timeout: 30_000 });
+  await page.screenshot({ path: test.info().outputPath('live-lift-linked-aluy.png') });
+  await ribbon.screenshot({ path: test.info().outputPath('live-lift-ribbon-aluy.png') });
+
+  // Main view → source panel (exact through the tiles), and the main view doesn't move back.
+  await store(`s.getState().setViewport('chr3', a.start + 5000, a.end + 5000)`, VIEW);
+  await expect.poll(async () => ((await store(`return s.getState().panels.find(p => p.id === a).viewportOverride.start`, linked.id)) as number)
+    - linked.viewportOverride.start, { timeout: 15_000 }).toBeGreaterThan(4000);
+  expect(await store(`return s.getState().start`)).toBe(VIEW.start + 5000);
+  // Source panel → main view; the source panel keeps exactly the view it moved to.
+  const moved = await store(`const p = s.getState().panels.find(p => p.id === a); return p.viewportOverride`, linked.id) as any;
+  await store(`s.getState().setPanelViewport(a.id, a.start - 2000, a.end - 2000)`, { id: linked.id, ...moved });
+  await expect.poll(() => store(`return s.getState().start`), { timeout: 15_000 }).toBeLessThan(VIEW.start + 4000);
+  await page.waitForTimeout(500);
+  expect(await store(`return s.getState().panels.find(p => p.id === a).viewportOverride`, linked.id)).toEqual({ chrom: 'chr3_MATERNAL', start: moved.start - 2000, end: moved.end - 2000 });
+  // Back to the AluY.
+  await store(`s.getState().setViewport(a.chrom, a.start, a.end)`, VIEW);
+  await expect.poll(async () => ((await store(`return s.getState().panels.find(p => p.id === a).viewportOverride`, linked.id)) as any).end
+    - ((await store(`return s.getState().panels.find(p => p.id === a).viewportOverride`, linked.id)) as any).start, { timeout: 15_000 }).toBe(width0);
+  await expect.poll(() => page.locator('[data-read-track-loading="true"]').count(), { timeout: 60_000 }).toBe(0);
+
+  // Hovering a lifted molecule outlines it in both panels and lines it in the ribbon.
+  await store(`s.setState({ fillReadHeight: false, readRowHeight: 16 })`);
+  const matCanvas = page.locator(`[data-read-track-state-key="${mat.stateKey ?? mat.datasetId}"] canvas[data-copilot-track="reads"]`);
+  await expect.poll(() => matCanvas.getAttribute('data-live-lift-badge-target'), { timeout: 30_000 }).toBeTruthy();
+  const scale = await matCanvas.evaluate((c: HTMLCanvasElement) => ({ x: c.getBoundingClientRect().width / c.clientWidth, y: c.getBoundingClientRect().height / c.clientHeight }));
+  // Each panel draws a sample of its reads: walk down the MAT rows until one is also drawn in the source panel.
+  await store(`s.setState({ fillReadHeight: false, readRowHeight: 5 })`);
+  await page.waitForTimeout(500);
+  const box = (await matCanvas.boundingBox())!;
+  let both = false;
+  for (let y = box.y + 20; y < box.y + box.height - 2 && !both; y += 3) {
+    await page.mouse.move(box.x + box.width * 0.55, y);
+    await page.waitForTimeout(60);
+    both = Number(await matCanvas.getAttribute('data-lift-hover-rows')) > 0 && Number(await srcCanvas.getAttribute('data-lift-hover-rows')) > 0;
+  }
+  expect(both).toBe(true);
+  await expect(ribbon.getByTestId('lift-ribbon-hover-line')).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('live-lift-linked-hover.png') });
+  await page.mouse.move(5, 5);
+  await store(`s.setState({ fillReadHeight: false, readRowHeight: 16 })`);
+  await page.waitForTimeout(500);
+
+  // Clicking the AluY badge in the MAT panel shows its inserted bases in the source panel (the main view stays).
+  const before = await store(`return { main: s.getState().start, src: s.getState().panels.find(p => p.id === a).viewportOverride }`, linked.id) as any;
+  const badge = JSON.parse((await matCanvas.getAttribute('data-live-lift-badge-target'))!);
+  await matCanvas.click({ position: { x: badge.x * scale.x, y: badge.y * scale.y } });
+  await expect(page.getByTestId('live-lift-diff-popover')).toBeVisible({ timeout: 30_000 });
+  await expect.poll(async () => JSON.stringify((await store(`return s.getState().panels.find(p => p.id === a).viewportOverride`, linked.id))), { timeout: 15_000 })
+    .not.toBe(JSON.stringify(before.src));
+  const jumped = await store(`return s.getState().panels.find(p => p.id === a).viewportOverride`, linked.id) as any;
+  const selection = await store(`return s.getState().differencesSession.selectionSnapshot`) as any;
+  expect(selection.difference.src.contig).toBe('chr3_MATERNAL');
+  expect(jumped.start).toBeLessThanOrEqual(selection.difference.src.start);
+  expect(jumped.end).toBeGreaterThanOrEqual(selection.difference.src.end);
+  expect(await store(`return s.getState().start`)).toBe(before.main);
+  await page.keyboard.press('Escape');
+
+  // Orientation: reversing the source panel relative to the lifted one is the user's choice, and is kept.
+  await page.getByTestId(`panel-actions-${linked.id}`).click();
+  await page.getByTestId('lift-link-flip').click();
+  await expect.poll(() => store(`return s.getState().panels.find(p => p.id === a).liftLink.flip`, linked.id)).toBe(true);
+  await expect(page.getByTestId('lift-link-chip')).toContainText('reversed');
+  expect(errors).toEqual([]);
+});

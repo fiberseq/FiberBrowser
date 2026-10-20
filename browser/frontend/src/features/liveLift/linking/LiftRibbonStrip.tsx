@@ -88,20 +88,29 @@ export function LiftRibbonStrip({ panel, width, height, sidebarWidth }: { panel:
       target: { start, end }, source: { start: view.start, end: view.end } });
   }, [pieces, view, box, chrom, start, end, liftReversed, expansions, liftPanel?.genome, dataW, sourceReversed, sidebarWidth, height]);
 
-  // The hovered molecule: a line from its target extent to its source extent.
+  // The hovered molecule: a line between corresponding points of it (its visible middle on one side, mapped).
   const hoverLine = useMemo(() => {
-    if (!hover || hover.datasetId !== link.datasetId || !view || !box) return null;
-    let target = hover.target, source = hover.source;
-    if (!target && source && source.chrom === view.chrom && key) {
-      const m = mapSpan(link.datasetId, key, 'toTarget', source);
-      if (m.status === 'mapped' && m.mapping.chrom === chrom) target = m.mapping;
+    if (!hover || hover.datasetId !== link.datasetId || !view || !box || !key) return null;
+    let t: number | null = null, q: number | null = null;
+    const own = hover.panelId === link.liftPanelId || hover.target ? 'target' : 'source';
+    if (own === 'target' && hover.target?.chrom === chrom) {
+      const lo = Math.max(hover.target.start, start), hi = Math.min(hover.target.end, end);
+      if (hi <= lo) return null;
+      t = Math.floor((lo + hi) / 2);
+      const m = mapSpan(link.datasetId, key, 'toSource', { chrom, start: t, end: t + 1 }, { hap: link.hap, preferChain: link.chain ?? null });
+      if (m.status === 'mapped' && m.mapping.chrom === view.chrom) q = m.mapping.start;
+    } else if (hover.source?.chrom === view.chrom) {
+      const lo = Math.max(hover.source.start, view.start), hi = Math.min(hover.source.end, view.end);
+      if (hi <= lo) return null;
+      q = Math.floor((lo + hi) / 2);
+      const m = mapSpan(link.datasetId, key, 'toTarget', { chrom: view.chrom, start: q, end: q + 1 }, { preferChain: link.chain ?? null });
+      if (m.status === 'mapped' && m.mapping.chrom === chrom) t = m.mapping.start;
     }
-    if (!target || !source || target.chrom !== chrom || source.chrom !== view.chrom) return null;
-    const axis = makeAxis(start, end, box.width, liftReversed, []);
-    const top = box.left + axis.toX((target.start + target.end) / 2);
-    const bottom = linearX(view.start, view.end, dataW, sourceReversed, sidebarWidth)((source.start + source.end) / 2);
-    return { top, bottom };
-  }, [hover, link.datasetId, view, box, key, chrom, start, end, liftReversed, dataW, sourceReversed, sidebarWidth]);
+    if (t == null || q == null) return null;
+    const axis = makeAxis(start, end, box.width, liftReversed,
+      expansions.filter(e => e.chrom === chrom && (e.referenceScope ?? 'main-reference') === (liftPanel?.genome ?? 'main-reference')));
+    return { top: box.left + axis.toX(t), bottom: linearX(view.start, view.end, dataW, sourceReversed, sidebarWidth)(q) };
+  }, [hover, link.datasetId, link.liftPanelId, link.hap, link.chain, view, box, key, chrom, start, end, liftReversed, expansions, liftPanel?.genome, dataW, sourceReversed, sidebarWidth]);
 
   const hapColour = liveLiftHaplotypeColor(link.hapLabel, dark);
   const minusColour = MINUS_COLOUR[dark ? 'dark' : 'light'];
