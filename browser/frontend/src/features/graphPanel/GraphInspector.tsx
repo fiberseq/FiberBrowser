@@ -44,7 +44,7 @@ const WHAT: Record<string, string> = {
 function Placement({ sel, reg, p, ambiguous }: { sel: GraphSelection; reg: GraphRegistration | null; p: SourcePlacement; ambiguous: boolean }) {
   const panels = useBrowserStore(s => s.panels);
   void panels;   // re-render when panels open or close (source panels)
-  const targets = sourcePanelsFor(p.path, sel.panelId);
+  const targets = sourcePanelsFor(p.path, sel.panelId, sel.registrationId);
   return (
     <li className="flex flex-wrap items-center gap-2" data-testid="graph-inspector-placement" data-path={p.path}
       data-start={p.span.start} data-end={p.span.end}>

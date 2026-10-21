@@ -353,9 +353,11 @@ describe('Gate F review round 1', () => {
     expect(sourcePanelsFor('mat', 'mine')).toEqual([]);
     useGraphReadsStore.setState({ byPanel: { mine: { drawn: ['lift'], bindings: [binding], registrationId: 'A' } } });
     expect(sourcePanelsFor('mat', 'mine').map(t => t.panelId)).toEqual(['S']);
-    // The same panel now on another package: its bindings do not speak for this selection.
+    // The same panel now on another package: its bindings do not speak for this selection (registration A).
     useBrowserStore.setState({ panels: panels('B') } as never);
-    expect(sourcePanelsFor('mat', 'mine')).toEqual([]);
+    useGraphReadsStore.setState({ byPanel: { mine: { drawn: ['lift'], bindings: [binding], registrationId: 'B' } } });
+    expect(sourcePanelsFor('mat', 'mine', 'A')).toEqual([]);
+    expect(sourcePanelsFor('mat', 'mine', 'B').map(t => t.panelId)).toEqual(['S']);
     useGraphReadsStore.setState({ byPanel: {} });
     useBrowserStore.setState({ panels: [] } as never);
   });

@@ -731,7 +731,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       menuPlacements.forEach((pl, i) => {
         const many = (byPath.get(pl.path)?.length ?? 0) > 1;
         const what = `${laneLabelOf(pl.path)} ${pl.span.start.toLocaleString('en-US')}-${pl.span.end.toLocaleString('en-US')}${pl.note ? ` (${pl.note})` : ''}`;
-        for (const t of sourcePanelsFor(pl.path, panelId!)) sub.push({ kind: 'item', action: `src:panel:${i}:${t.panelId}`, icon: 'target', label: `${what} → ${t.label}` });
+        for (const t of sourcePanelsFor(pl.path, panelId!, reg.id)) sub.push({ kind: 'item', action: `src:panel:${i}:${t.panelId}`, icon: 'target', label: `${what} → ${t.label}` });
         sub.push({ kind: 'item', action: `src:path:${i}`, icon: 'panel:graph-view', label: `${what} → a graph view on the path`,
           title: many ? 'More than one placement of this sequence on the path: each is listed' : 'Its own coordinates; no BAM needed' });
       });
@@ -827,8 +827,8 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         const [, how, idx, into] = action.split(':');
         const pl = menuPlacements[Number(idx)];
         if (!pl) return;
-        const t = how === 'panel' ? sourcePanelsFor(pl.path, panelId!).find(x => x.panelId === into) ?? null : null;
-        showSourceSpan(panelId, pl, t);
+        const t = how === 'panel' ? sourcePanelsFor(pl.path, panelId!, sel.registrationId).find(x => x.panelId === into) ?? null : null;
+        showSourceSpan(panelId, pl, t, sel.registrationId);
         return;
       }
     }

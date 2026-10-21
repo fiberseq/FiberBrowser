@@ -113,11 +113,11 @@ export interface SourceTarget { kind: 'panel'; panelId: string; contig: string; 
  * the selection came from count (its registration's path key; another package's same-named path is another
  * assembly); its graph panel closed, there are none (the path view is still offered).
  */
-export function sourcePanelsFor(path: string, fromPanelId: string): SourceTarget[] {
+export function sourcePanelsFor(path: string, fromPanelId: string, registrationId?: string | null): SourceTarget[] {
   const s = useBrowserStore.getState();
   const own = useGraphReadsStore.getState().byPanel[fromPanelId];
-  const reg = s.panels.find(p => p.id === fromPanelId)?.graphView?.registrationId ?? null;
-  // The panel may show another package now: its bindings then say nothing about this selection's paths.
+  // The selection's registration (else the panel's): bindings verified for another package say nothing about it.
+  const reg = registrationId ?? s.panels.find(p => p.id === fromPanelId)?.graphView?.registrationId ?? null;
   const bindings = own && own.registrationId != null && own.registrationId === reg ? own.bindings : [];
   const out: SourceTarget[] = [];
   for (const b of bindings) {
@@ -146,9 +146,11 @@ export function showSourceSpan(fromPanelId: string, placement: SourcePlacement, 
     s.navigatePanelOwnView(into.panelId, into.contig, win.start, win.end);
     return into.panelId;
   }
-  // The graph panel it came from may be closed: the selection's registration still opens the path view.
-  const from = s.panels.find(p => p.id === fromPanelId)?.graphView
-    ?? (registrationId ? initialGraphView(registration(registrationId), null) : null);
+  // The graph panel it came from may be closed or show another package now: the selection's registration opens the
+  // path view (the panel's own settings only when it still shows that registration).
+  const live = s.panels.find(p => p.id === fromPanelId)?.graphView;
+  const from = live && (!registrationId || live.registrationId === registrationId) ? live
+    : (registrationId ? initialGraphView(registration(registrationId), null) : null);
   const reg = registration(from?.registrationId);
   const binding = reg?.bindings.find(b => b.key === placement.path);
   if (!from || !reg || !binding) return null;
