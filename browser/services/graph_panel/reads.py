@@ -64,8 +64,9 @@ LOADER_OPTIONS = dict(include_methylation=True, ml_threshold=125, include_layers
                       hide_terminal_gaps=True, include_cigar=True, include_duplicates=False, sv_min_len=50)
 _LAYERS = ("nuc", "tf", "msp")
 # The cached rows' wire form: 2 adds the identities (aid, rk, hap) and the map's molecule groups (graph primary G0);
-# 3 the DAF strand of DAF-seq records (G8; 5: its evidence by mark, resolved per molecule).
-WIRE_VERSION = 5
+# 3 the DAF strand of DAF-seq records (G8; 5: its evidence by mark, resolved per molecule; 6: marks by contig and
+# absolute source position, so records cached by decodes at other origins compare alike).
+WIRE_VERSION = 6
 
 
 class ReadsError(Exception):
@@ -333,8 +334,10 @@ def compact_row(row: dict, origin: int, dataset_id: str, binding: str, windows: 
     explicit = row.get("strand")
     if explicit in ("CT", "GA", ".") and not row.get("_fiberbrowser_inferred_strand"):
         out["_dsx"] = explicit
-    # (Each mark by identity: records of one molecule that overlap repeat marks, which count once, as linear.)
-    marks = [list(e) for e in row.get("deam") or () if isinstance(e, (list, tuple)) and len(e) > 1 and e[1] in (0, 1)]
+    # (Each mark by identity, its contig and absolute source position: records of one molecule that overlap repeat
+    # marks, which count once, as linear; records cached by decodes at other origins compare alike (graph features).)
+    marks = [[src.get("contig"), int(e[0]) + origin, int(e[1])] for e in row.get("deam") or ()
+             if isinstance(e, (list, tuple)) and len(e) > 1 and e[1] in (0, 1)]
     if marks:
         out["_dse"] = marks
     return out
@@ -358,8 +361,8 @@ def resolve_molecule_strands(reads: list, evidence_only: Optional[list] = None) 
         call = next((r["_dsx"] for r in rows_sorted if r.get("_dsx")), None)
         if call is None:
             marks = {tuple(e) for r in evidence for e in r.get("_dse") or ()}
-            ct = sum(1 for e in marks if e[1] == 1)
-            ga = sum(1 for e in marks if e[1] == 0)
+            ct = sum(1 for e in marks if e[-1] == 1)
+            ga = sum(1 for e in marks if e[-1] == 0)
             call = None if ct == ga else ("CT" if ct > ga else "GA")
         elif call == ".":
             call = None

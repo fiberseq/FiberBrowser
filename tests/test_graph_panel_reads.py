@@ -774,3 +774,39 @@ def test_a_molecules_strand_is_resolved_as_linear_cohorts_resolve_it(env):
     shown = [dict(base, k="1", rec="a", sup=False, _dse=[[10, 1]])]
     gr.resolve_molecule_strands(shown, evidence_only=[dict(base, k="2", rec="b", sup=True, _dse=[[50, 0], [60, 0], [70, 0]])])
     assert shown[0]["ds"] == "GA"
+
+
+def test_strand_evidence_is_independent_of_the_decode_origin(env):
+    """Graph features review (Codex and agy, step 1): a record's marks are cached at their contig and absolute source
+    position, so a molecule's strand is the same whether its records were decoded together or by separate windows
+    (a pan): overlapping records' repeated marks count once, and distinct marks never collide."""
+    def seq(n, marks):
+        out = list("C" * n)
+        for off, base in marks:
+            out[off] = base
+        return "".join(out)
+    tags = [("ns", _u32([50])), ("nl", _u32([150]))]
+    daf = write_bam(env.tmp / "origin.bam", lambda h: [
+        # 3 G>A (R) and 2 C>T (Y) on the primary; the supplementary repeats the 2 C>T: G>A.
+        make_record(h, "ov", MAT, 1000, "600M", tags=tags, seq=seq(600, [(10, "R"), (20, "R"), (30, "R"), (300, "Y"), (400, "Y")])),
+        make_record(h, "ov", MAT, 1200, "600M", flag=2048, tags=tags, seq=seq(600, [(100, "Y"), (200, "Y")])),
+        # 2 C>T and 2 G>A on the primary, 1 more C>T on a supplementary elsewhere: C>T.
+        make_record(h, "col", MAT, 3000, "500M", tags=tags, seq=seq(500, [(100, "Y"), (200, "Y"), (300, "R"), (400, "R")])),
+        make_record(h, "col", MAT, 4000, "500M", flag=2048, tags=tags, seq=seq(500, [(100, "Y")]))])
+    did = _add_lifted(env, paths=[daf], dataset_id="origin")
+
+    def strands(*windows):
+        out = None
+        for w in windows:
+            out = _reads(env, [did], [{"binding": "mat", "windows": [{"start": w[0], "end": w[1]}]}]).json()
+        return {(r["q"], r["sup"]): r.get("ds") for r in out["reads"]}
+    gr.clear_cache()
+    cold = strands((900, 4600))
+    assert cold[("ov", False)] == cold[("ov", True)] == "GA"
+    assert cold[("col", False)] == cold[("col", True)] == "CT"
+    gr.clear_cache()
+    panned = strands((1000, 1150), (1150, 1900))      # the primary cached first, its supplementary at another origin
+    assert panned[("ov", False)] == panned[("ov", True)] == "GA"
+    gr.clear_cache()
+    panned = strands((3900, 4600), (2900, 4600))      # the supplementary first
+    assert panned[("col", False)] == panned[("col", True)] == "CT"
