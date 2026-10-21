@@ -115,3 +115,32 @@ def test_a_model_is_never_assigned_with_other_settings_or_samples(state, change)
     model = fc.run(state, req)["model"]
     with pytest.raises(ValueError, match="cluster again"):
         fc.run(state, req.model_copy(update=change), model=model)
+
+
+def test_a_folded_molecule_on_two_paths_of_one_dataset_is_fitted_once(monkeypatch):
+    """Review round 1 (G4): under fold_molecule a molecule with records on two haplotypes of one dataset has one
+    analysis_id in both windows; the primary record's row is kept and the other left out before the fit."""
+    from services.lift.cohort import _encode_identity
+    base = BrowserState(None)
+    base.datasets = {"d": SimpleNamespace(data_type="bam")}
+    base.dataset_order = ["d"]
+    folded = _encode_identity(["lib|m1", "m1", None, None, "primary"])
+
+    def working(self, dataset_id, chrom, start, end, *args, **kwargs):
+        from services.lift.cohort import _scope
+        hap = _scope.get()[1]   # the window's haplotype rule (cohort scope)
+        sup = hap == "B"
+        body = [[0, end - start, 0, "+", True]]
+        rows = [dict(id="m1", analysis_id=folded, intervals=[[0, end - start, 0 if sup else 147]],
+                     live_lift={"source": {"supplementary": sup}, "segments": body}),
+                dict(id=f"x{hap}", analysis_id=_encode_identity([f"lib|x{hap}", f"x{hap}", None, None, "primary"]),
+                     intervals=[[0, end - start, 0]], live_lift={"source": {"supplementary": False}, "segments": body})]
+        return WorkingSet(rows, total_overlapping=2, total_spanning=2, chrom=chrom, start=start, end=end)
+
+    monkeypatch.setattr(BrowserState, "build_working_set", working)
+    req = fc.RegionClusterRequest(viewports=[window("A", lift_hap="A"), window("B", lift_hap="B")],
+                                  peak_regions=[PeakRegion(start=0, end=100)], method="combinatorial", k=2)
+    out = fc.run(base, req)
+    assert folded in out["results"]["A"]["assignments"] and folded not in out["results"]["B"]["assignments"]
+    assert out["joint_cohort"]["shared_molecules_within_dataset"] == 1
+    assert out["results"]["B"]["analysis_read_count"] == 1

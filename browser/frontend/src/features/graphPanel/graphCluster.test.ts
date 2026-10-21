@@ -10,8 +10,8 @@ import { useGraphStatusStore } from './statusStore';
 import { useGraphBindingsStore } from './bindingsStore';
 import { popOut, setPanelViewMode } from './hostMode';
 import { registerGraphPanel } from './register';
-import { assignWithGraphRun, commitGraphRun, destinationAssignments, graphClusterPlan, graphRequestBody, stableId } from './graphCluster';
-import { deserializeSavedState, serializeState } from '../../stores/historySlice';
+import { assignWithGraphRun, commitGraphRun, destinationAssignments, graphClusterPlan, graphRequestBody, runGraphCluster, stableId } from './graphCluster';
+import { deserializeSavedState, remapDatasetIds, serializeState } from '../../stores/historySlice';
 import { useGraphSettings } from './handoff';
 import { clusterSelectionKeys } from '../../utils/clusterMatchedRun';
 import { clusterRunPlan } from '../../utils/clusterTargets';
@@ -267,5 +267,103 @@ describe('G5: the durable run', () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(calls).toEqual(['/api/graph/cluster/assign']);
     expect(JSON.stringify(useBrowserStore.getState().clusterAssignments)).toBe(before);
+  });
+});
+
+
+describe('review round 1 (G4/G5)', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+  const response = (p: ReturnType<typeof plan>, labels: Record<string, Record<string, number>>) => ({
+    results: Object.fromEntries(p.observations.map(o => [o.id, { assignments: labels[o.binding ?? 'linear'] ?? {} }])),
+    label_ids: {}, names: {}, stages: [{ stage: 1 }], columns: { shared: [], carrier_sets: [], left_out: {}, dropped: [], refinements: [] },
+    window_separation_nmi: null, matched: null, settings: {}, revisions: REG.revisions, options: {}, timings: {},
+  }) as never;
+
+  it('with the host targeted, popping out a member keeps it in the run', () => {
+    seed(split());
+    setPanelViewMode('mat', 'graph');
+    useBrowserStore.setState({ selectedDatasets: new Set(['mat']) });
+    const before = body();
+    expect(JSON.parse(before).observations).toHaveLength(2);
+    popOut('mat', ['pat']);
+    expect(body()).toBe(before);
+  });
+
+  it('a graph subcluster labels the parent\'s linear rows of the same record, never Unassigned', () => {
+    seed(split());
+    setPanelViewMode('mat', 'graph');
+    const linear = aid('m1', 'r:0', 2, '212');
+    useBrowserStore.setState({ clusterAssignments: { 'k-mat': { [linear]: 0 } } });
+    useBrowserStore.getState().captureActiveClusterTreeNode({ name: 'All reads' });
+    useBrowserStore.setState({ selectedClusters: { 'k-mat': new Set([0]) } });
+    const p = plan();
+    commitGraphRun(useBrowserStore.getState(), p, response(p, { mat: { [aid('m1')]: 5 } }));
+    const live = useBrowserStore.getState().clusterAssignments['k-mat'];
+    expect(live[linear]).toBe(5);
+    expect(clusterAssignmentForRead(live, { id: 'm1', analysis_id: linear, live_lift: {} })).toBe(5);
+  });
+
+  it('a response that lands after a move to another chromosome is refused', async () => {
+    seed(split());
+    setPanelViewMode('mat', 'graph');
+    let release!: (r: Response) => void;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { release = resolve; })));
+    const run = runGraphCluster(useBrowserStore.getState(), { kind: 'peaks', regions: PEAKS } as never, () => {});
+    useBrowserStore.setState({ chrom: 'chr5' });
+    release(new Response(JSON.stringify({ results: {}, label_ids: {}, names: {}, stages: [], columns: { shared: [], carrier_sets: [], left_out: {}, dropped: [], refinements: [] } }), { status: 200 }));
+    await expect(run).rejects.toThrow(/changed while clustering/);
+    expect(useBrowserStore.getState().clusterMatchedRun).toBeNull();
+  });
+
+  it('dynamic assignment: only on the run\'s own branch, each destination in its own scope, later panels too', async () => {
+    seed([...split(), panel('mat2', { liftHap: 'MAT', stateKey: 'k-mat2' })]);
+    setPanelViewMode('mat', 'graph');
+    useBrowserStore.setState({ filteredReadIds: { 'k-mat2': new Set(['m1']) } });
+    const p = plan();
+    commitGraphRun(useBrowserStore.getState(), p, response(p, { mat: { [aid('m1')]: 0 } }));
+    const fetched: string[] = [];
+    const mat = p.observations.find(o => o.binding === 'mat')!.id;
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      fetched.push(url);
+      return new Response(JSON.stringify({ results: { [mat]: { assignments: { [aid('m1')]: 0, [aid('m9')]: 1 } } } }), { status: 200 });
+    }));
+    // Another branch active: nothing is asked or written.
+    const node = useBrowserStore.getState().activeClusterTreeNodeId;
+    useBrowserStore.setState({ activeClusterTreeNodeId: 'other' });
+    expect(await assignWithGraphRun(useBrowserStore.getState().clusterMatchedRun!)).toBe(0);
+    expect(fetched).toEqual([]);
+    useBrowserStore.setState({ activeClusterTreeNodeId: node });
+    // A panel opened later on the MAT path (no filter) receives labels too; the narrow one only its own reads.
+    useBrowserStore.setState(s => ({ panels: [...s.panels, panel('mat3', { liftHap: 'MAT', stateKey: 'k-mat3' })] }));
+    await assignWithGraphRun(useBrowserStore.getState().clusterMatchedRun!);
+    const s = useBrowserStore.getState();
+    const rk = (q: string) => recordKey(aid(q))!;
+    expect(s.clusterAssignments['k-mat2']).toEqual({ [rk('m1')]: 0 });
+    expect(s.clusterAssignments['k-mat'][rk('m9')]).toBe(1);
+    expect(s.clusterAssignments['k-mat3']).toEqual({ [rk('m1')]: 0, [rk('m9')]: 1 });
+  });
+
+  it('selection sync never reaches a linked source panel or another assembly\'s panel of the dataset', () => {
+    seed(split());
+    setPanelViewMode('mat', 'graph');
+    const p = plan();
+    commitGraphRun(useBrowserStore.getState(), p, response(p, { mat: { [aid('m1')]: 0 } }));
+    const s = useBrowserStore.getState();
+    const extra = { ...s, panels: [...s.panels, panel('src', { liftHap: 'MAT', stateKey: 'k-src', genome: 'hg002', liftLink: { sourcePanelId: 'mat' } as never }),
+      panel('far', { liftHap: 'MAT', stateKey: 'k-far', viewportOverride: { chrom: 'chr9', start: 1, end: 2 } })] };
+    const keys = clusterSelectionKeys(extra, 'k-mat');
+    expect(keys).not.toContain('k-src');
+    expect(keys).not.toContain('k-far');
+  });
+
+  it('dataset id remapping renames a graph run\'s observations', () => {
+    seed(split());
+    setPanelViewMode('mat', 'graph');
+    const p = plan();
+    commitGraphRun(useBrowserStore.getState(), p, response(p, { mat: { [aid('m1')]: 0 } }));
+    const saved = remapDatasetIds(serializeState(useBrowserStore.getState()), { d: 'd2' });
+    const run = (saved as any).clusterMatchedRun;
+    expect(run.graph.observations.every((o: any) => o.dataset_id === 'd2')).toBe(true);
+    expect(run.graph.observations.map((o: any) => o.id)).toEqual(p.observations.map(o => o.id));
   });
 });

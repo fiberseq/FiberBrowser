@@ -60,6 +60,18 @@ def _record_key(value):
     return _encode_record(parts[:3])
 
 
+def folded_identity(value) -> bool:
+    """Whether a cohort identity is a folded molecule's (``fold_molecule``: no record), which two paths of one
+    dataset can share."""
+    if not isinstance(value, str) or not value.startswith(_IDENTITY_PREFIX):
+        return False
+    try:
+        parts = json.loads(value[len(_IDENTITY_PREFIX):])
+    except (ValueError, RecursionError):
+        return False
+    return isinstance(parts, list) and len(parts) == 5 and parts[2] is None
+
+
 def record_qname(value):
     """The QNAME a record key names (None: not a record key)."""
     value = str(value)

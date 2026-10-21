@@ -233,6 +233,16 @@ def test_mixed_runs_are_permutation_invariant_and_the_model_reproduces_labels(he
     stale = dict(model, settings={**model["settings"], "subnucleosomal_threshold": 80})
     with pytest.raises(analysis.GraphRunError, match="cluster again"):
         _graph(alu_state, {**_body([MAT, PAT, NAT]), "run": stale}, mode="assign")
+    # So is a changed cohort policy of an observation's dataset (review G5: rows and values depend on it).
+    from dataclasses import replace
+    cfg = alu_state.datasets["lifted"].live_lift
+    before = cfg.settings
+    cfg.settings = replace(before, cohort_supplementaries="primary_only" if before.cohort_supplementaries != "primary_only" else "all_records")
+    try:
+        with pytest.raises(analysis.GraphRunError, match="cluster again"):
+            _graph(alu_state, {**_body([MAT, PAT, NAT], method="kmeans"), "run": model}, mode="assign")
+    finally:
+        cfg.settings = before
 
 
 def test_refinement_within_carriers_keeps_non_carriers_labels(helper_env, alu_state):

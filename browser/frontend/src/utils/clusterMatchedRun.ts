@@ -32,6 +32,8 @@ export interface GraphRunDefinition {
   labelIds: Record<string, number>;
   settings: Record<string, unknown>;
   columns?: unknown;
+  /** The target binding's contig (the reference a linear panel of the run's observations is on). */
+  targetContig?: string;
 }
 
 export interface ClusterMatchedRun {
@@ -47,23 +49,34 @@ export interface ClusterMatchedRun {
   /** A graph run: its definition and model; `windows` are then its observations (one column each in the charts). */
   graph?: GraphRunDefinition;
   /** A graph run's destinations: every panel that received an observation's labels (pop-outs add none). */
-  destinations?: { stateKey: string; observations: string[]; panelId: string }[];
+  destinations?: { stateKey: string; observations: string[]; panelId: string; scope?: string[] | null }[];
   /** Names of refined clusters (C<parent>.<j>). */
   names?: Record<number, string>;
+  /** A graph run: the cluster tree node its labels are (dynamic assignment applies only while it is active). */
+  treeNodeId?: string | null;
+}
+
+/** Whether a panel shows an observation's rows: its dataset, haplotype and strand, on the main reference (not a
+ * linked source panel, an alternative allele, another assembly). */
+export function observationShownBy(o: GraphRunObservation, p: PanelConfig): boolean {
+  if (p.contentType !== 'dataset' || p.datasetId !== o.dataset_id || p.genome || p.liftLink || p.altAllele) return false;
+  if ((o.strand ?? null) !== (p.strand ?? null)) return false;
+  const hap = (p.liftHap ?? p.readSubset?.rule.liftHap ?? '').toUpperCase();
+  return o.kind === 'linear' ? (o.lift_hap ?? '').toUpperCase() === hap : !hap || (o.hap ?? '').toUpperCase() === hap;
 }
 
 /** The state keys a graph run's labels apply to now: its destinations, and any panel since opened on one of its
  * observations (a member popped out later, a new haplotype panel), so selection and focus sync reach them. */
-export function graphRunStateKeys(run: ClusterMatchedRun, panels: readonly PanelConfig[]): string[] {
+export function graphRunStateKeys(run: ClusterMatchedRun, panels: readonly PanelConfig[], mainChrom?: string): string[] {
   const keys = new Set((run.destinations ?? []).map(d => d.stateKey));
   const obs = run.graph?.observations ?? [];
+  const contig = run.graph?.targetContig;
   for (const p of panels) {
     if (p.contentType !== 'dataset' || !p.datasetId) continue;
-    const hap = (p.liftHap ?? p.readSubset?.rule.liftHap ?? '').toUpperCase();
-    if (obs.some(o => o.dataset_id === p.datasetId && (o.strand ?? null) === (p.strand ?? null)
-      && (o.kind === 'linear' ? (o.lift_hap ?? '').toUpperCase() === hap : !hap || (o.hap ?? '').toUpperCase() === hap))) {
-      keys.add(p.stateKey ?? p.datasetId);
-    }
+    // On the run's target contig (its own view, else the main view's).
+    const chrom = p.viewportOverride?.chrom ?? mainChrom;
+    if (contig && chrom && chrom !== contig) continue;
+    if (obs.some(o => observationShownBy(o, p))) keys.add(p.stateKey ?? p.datasetId);
   }
   return [...keys];
 }
@@ -81,7 +94,7 @@ export function currentMatchedRun(run: ClusterMatchedRun | null, live: BrowserSt
 export function clusterSelectionKeys(state: Pick<BrowserState, 'clusterMatchedRun' | 'clusterAssignments'> & { panels?: PanelConfig[] }, key: string): string[] {
   const run = currentMatchedRun(state.clusterMatchedRun, state.clusterAssignments);
   if (run?.destinations) {
-    const keys = graphRunStateKeys(run, state.panels ?? []);
+    const keys = graphRunStateKeys(run, state.panels ?? [], (state as { chrom?: string }).chrom);
     return keys.includes(key) ? keys : [key];
   }
   return run?.windows.some(w => w.stateKey === key)

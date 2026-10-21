@@ -583,7 +583,8 @@ export function datasetChangesBetween(stack: Snapshot[], from: number, to: numbe
 // A dataset's own-contigs reference key (services/panel_genomes.py): `contigs:<dataset id>`.
 const CONTIGS_KEY = 'contigs:';
 // Fields whose string values are dataset ids or per-dataset state keys.
-const DATASET_ID_FIELDS = new Set(['datasetId', 'sourceDatasetId', 'datasetIds', 'stateKey', 'stateKeys']);
+// (`dataset_id`: a graph run's observations, ClusterMatchedRun.graph, in the server's spelling.)
+const DATASET_ID_FIELDS = new Set(['datasetId', 'sourceDatasetId', 'datasetIds', 'stateKey', 'stateKeys', 'dataset_id']);
 // Top-level records keyed by a dataset's state key (its id, or `<id>:…`).
 const DATASET_KEYED_RECORDS = new Set([
   'selectedClusters', 'clusterAssignments', 'clusterOrder', 'readSortOrder', 'filteredReadIds',

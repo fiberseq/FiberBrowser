@@ -363,11 +363,28 @@ def _settings_of(body: dict) -> dict:
                 resolution=float(body.get("resolution", 1.0)), balance_windows=bool(body.get("balance_windows", True)))
 
 
-def _digest(spec, features, oids, settings) -> str:
-    """The stage's geometry and extraction settings: a reconstruction must match it exactly."""
+def observation_snapshot(state, spec) -> dict:
+    """What determines an observation's rows and values besides the run's settings (§3.5, review G5): its dataset's
+    files and lift identity (revision), its cohort settings (lifted) and the loader options. A durable model is only
+    assigned while these are unchanged."""
+    from services.graph_panel.reads import _settings, dataset_revision
+    opts = _loader_options(state)
+    out = {}
+    for o in spec["observations"]:
+        ds = state.datasets.get(o["dataset_id"])
+        lifted = ds is not None and getattr(ds, "live_lift", None) is not None
+        out[o["id"]] = {"dataset_revision": dataset_revision(ds) if ds is not None else None,
+                        "cohort": _settings(ds).as_dict() if lifted else None, "loader": opts}
+    return out
+
+
+def _digest(spec, features, oids, settings, observed=None) -> str:
+    """The stage's geometry, extraction settings and its observations' snapshots: a reconstruction must match it
+    exactly."""
     snap = {k: settings.get(k) for k in ("method", "subnucleosomal_threshold", "accessibility_threshold",
                                          "cluster_feature_rules", "k", "resolution", "balance_windows")}
-    payload = [gc.geometry_digest(features, oids), snap, _modes(spec, features), spec["target"]]
+    payload = [gc.geometry_digest(features, oids), snap, _modes(spec, features), spec["target"],
+               {o: (observed or {}).get(o) for o in oids}]
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
 
@@ -397,6 +414,7 @@ def run(state, reg, body: dict, tiles: dict, spec: Optional[dict] = None) -> dic
     spec = spec or parse(state, reg, body)
     settings = _settings_of(body)
     regions, plan = build_geometry(spec, tiles)
+    observed = observation_snapshot(state, spec)
     t_cols = time.perf_counter()
     cache: dict = {}
     first, oids, sets_from = _first_stage(plan)
@@ -407,7 +425,7 @@ def run(state, reg, body: dict, tiles: dict, spec: Optional[dict] = None) -> dic
     labels = copy.deepcopy(stage1)
     stages = [{"stage": 1, "observations": oids, "features": [f.public() for f in first],
                "samples": [list(f.samples) for f in first], "model": out1.get("model"),
-               "digest": _digest(spec, first, oids, settings), **({"set": 0} if sets_from else {})}]
+               "digest": _digest(spec, first, oids, settings, observed), **({"set": 0} if sets_from else {})}]
     refinements = []
     if plan.carrier_sets and spec["options"]["carrier_features"] == "refine":
         for z, cs in enumerate(plan.carrier_sets):
@@ -438,7 +456,7 @@ def run(state, reg, body: dict, tiles: dict, spec: Optional[dict] = None) -> dic
                 stages.append({"stage": 2, "set": z, "parent": parent, "carriers": sorted(ids),
                                "features": [f.public() for f in cs["features"]],
                                "samples": [list(f.samples) for f in cs["features"]], "model": out2.get("model"),
-                               "digest": _digest(spec, cs["features"], sorted(ids), settings)})
+                               "digest": _digest(spec, cs["features"], sorted(ids), settings, observed)})
                 refinements.append({"set": z, "parent": parent, "rows": changed})
     # Integer ids: stage-1 labels keep theirs; refined labels follow in order, named C<parent>.<j>.
     base_ids = sorted({int(lab) for per in stage1.values() for lab in per.values()})
@@ -494,10 +512,11 @@ def assign(state, reg, body: dict, tiles: dict, spec: Optional[dict] = None) -> 
     # Every eligible row is assigned (no sample cap): rows the fit's cap left out get labels too.
     settings = {**_settings_of(settings), "max_reads": None}
     regions, plan = build_geometry(spec, tiles)
+    observed = observation_snapshot(state, spec)
     cache: dict = {}
     s1 = run_def["stages"][0]
     first, oids, sets_from = _first_stage(plan)
-    if s1.get("digest") != _digest(spec, first, oids, settings) or s1.get("observations") != oids:
+    if s1.get("digest") != _digest(spec, first, oids, settings, observed) or s1.get("observations") != oids:
         raise GraphRunError("settings or geometry changed: cluster again", "stale_model", 409)
     views, sources = _windows(spec, first, oids)
     out1 = engine(state, _request(spec, first, views, settings), sources=sources, row_cache=cache,
@@ -514,7 +533,7 @@ def assign(state, reg, body: dict, tiles: dict, spec: Optional[dict] = None) -> 
         ids = {c: v for c, v in ids.items() if v}
         if not ids:
             continue
-        if st.get("digest") != _digest(spec, cs["features"], st.get("carriers") or [], settings):
+        if st.get("digest") != _digest(spec, cs["features"], st.get("carriers") or [], settings, observed):
             raise GraphRunError("settings or geometry changed: cluster again", "stale_model", 409)
         views2, sources2 = _windows(spec, cs["features"], sorted(ids), read_ids=ids)
         if not views2:

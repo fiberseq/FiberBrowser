@@ -143,7 +143,7 @@ def run(state, req, *, sources=None, model=None, row_cache=None):
         aliases = {'accessibility': 'msp', 'fire': 'msp', 'tf_layer': 'tf', 'tf_density': 'tf', 'nuc_layer': 'nuc'}
         layers = sorted({aliases.get(m, m) for m in modes if m != 'off' and m not in METHYLATION_CLUSTER_MODES})
     groups, stats, ids, metadata = {}, {}, {}, {}
-    pending = []
+    pending, loaded = [], []
     from services.lift.capability import require_for_ids
     require_for_ids(base, [v.dataset_id for v in req.viewports], "clustering")
     if sources and rule_modes:
@@ -196,11 +196,6 @@ def run(state, req, *, sources=None, model=None, row_cache=None):
                     spans.append((min(b.genomic[0] for b in blocks)-v.start, max(b.genomic[1] for b in blocks)-v.start))
         own = filter_reads_covering_regions(own, spans)
         covering = len(own)
-        if query is not None:
-            own = query.cap_reads(own, namespace='cluster_regions', label=v.result_key)
-        elif req.max_reads and len(own) > req.max_reads:
-            from services.read_metrics import sample_stable_by_id
-            own = sample_stable_by_id(own, req.max_reads, seed=f"{seed}:cluster_regions:{v.result_key}")
         timings.add('working_sets', started)
         hulls = [(min((b.genomic[0] for b in v.blocks if b.feature == i), default=v.start)-v.start,
                   max((b.genomic[1] for b in v.blocks if b.feature == i), default=v.start+1)-v.start) for i in range(len(lengths))]
@@ -208,17 +203,51 @@ def run(state, req, *, sources=None, model=None, row_cache=None):
         context = build_cluster_rule_context(wstate, chrom, v.start, v.end) if source is None else {}
         groups[v.result_key] = (hulls, v.start, context, mapped)
         stats[v.result_key] = dict(eligible_read_count=eligible, peak_covering_read_count=covering, analysis_read_count=len(own))
-        # Prefixed by window; the cohort identity (analysis_id) when the row has one, else its id.
-        pending.append((v, [prefix_compact_read({**r, '_cluster_group': v.result_key,
-                        '_consensus_dataset_id': v.dataset_id, '_consensus_chrom': chrom}, v.result_key) for r in own]))
+        loaded.append((v, own, query, chrom))
         metadata[v.result_key] = dict(genome=v.genome, chrom=chrom, reverse=v.reverse,
             blocks=[b.model_dump() for b in v.blocks], columns=mapped,
             **({'cohort': working.lift_cohort} if getattr(working, 'lift_cohort', None) else {}))
+    # One row per folded molecule within a dataset (§3.4 item 8): under fold_molecule a molecule with records on two
+    # paths (windows) of one dataset has one analysis_id in both; the primary record's row is kept (then the one
+    # covering more bases, then the first window), before any sampling or fit.
+    from services.lift.cohort import folded_identity
+    by_identity: dict = {}
+    for wi, (v, own, _q, _c) in enumerate(loaded):
+        for r in own:
+            if folded_identity(r.get('analysis_id')):
+                by_identity.setdefault((v.dataset_id, r['analysis_id']), []).append((wi, r))
+    dropped_rows, arbitrated = set(), 0
+    for hits in by_identity.values():
+        if len({wi for wi, _r in hits}) < 2:
+            continue
+        def rank(hit):
+            wi, r = hit
+            sup = bool(((r.get('live_lift') or {}).get('source') or {}).get('supplementary'))
+            from services.read_selection import read_body_spans
+            return (sup, -sum(b - a for a, b in read_body_spans(r)), wi)
+        keep = min(hits, key=rank)
+        for hit in hits:
+            if hit is not keep:
+                dropped_rows.add(id(hit[1]))
+        arbitrated += 1
+    for v, own, query, chrom in loaded:
+        own = [r for r in own if id(r) not in dropped_rows]
+        if query is not None:
+            own = query.cap_reads(own, namespace='cluster_regions', label=v.result_key)
+        elif req.max_reads and len(own) > req.max_reads:
+            from services.read_metrics import sample_stable_by_id
+            own = sample_stable_by_id(own, req.max_reads, seed=f"{seed}:cluster_regions:{v.result_key}")
+        stats[v.result_key]['analysis_read_count'] = len(own)
+        # Prefixed by window; the cohort identity (analysis_id) when the row has one, else its id.
+        pending.append((v, [prefix_compact_read({**r, '_cluster_group': v.result_key,
+                        '_consensus_dataset_id': v.dataset_id, '_consensus_chrom': chrom}, v.result_key) for r in own]))
     # Shared molecules first (G0, §3.4 item 7): the joint cohort removes and re-sorts rows, so the fit indices,
     # window rows, result ids, counts and metrics are all derived from the rows it keeps, regrouped in window order.
     from services.lift.joint import prepare_joint_cohort
     joint_rows, joint_report = prepare_joint_cohort(base, [r for _v, rows in pending for r in rows],
                                                     {v.dataset_id for v in req.viewports})
+    if arbitrated:
+        joint_report = {**(joint_report or {}), 'shared_molecules_within_dataset': arbitrated}
     retained = {id(r): i for i, r in enumerate(joint_rows)}
     reads, rows_by_window, row_windows, row_genomes = [], [], [], []
     for v, rows in pending:

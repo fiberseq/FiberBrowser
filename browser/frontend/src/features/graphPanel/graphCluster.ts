@@ -24,7 +24,7 @@ import type { BrowserState } from '../../stores/browserStore';
 import type { PanelConfig } from '../../types';
 import { clusterWindows, type ClusterBasis, type ClusterTargetPlan, type PlanState } from '../../utils/clusterTargets';
 import { registerClusterBasisRunner, registerClusterPlanTransform } from '../../utils/clusterRunExtensions';
-import type { ClusterMatchedRun, GraphRunObservation } from '../../utils/clusterMatchedRun';
+import { graphRunStateKeys, observationShownBy, type ClusterMatchedRun, type GraphRunObservation } from '../../utils/clusterMatchedRun';
 import { sameChrom } from '../../utils/chromAliases';
 import { getDatasetDisplayLabel } from '../../utils/datasetLabels';
 import { idSetHas, qnameOfId, recordKey } from '../../utils/recordKeys';
@@ -32,7 +32,7 @@ import { seedHistoryBaseline } from '../../stores/historySlice';
 import { useRunResultStore } from '../../stores/runResultStore';
 import { sortStateStillCurrent } from '../../utils/sortScope';
 import { UNASSIGNED_CLUSTER_ID } from '../../components/tracks/read-track/constants';
-import { isHost, hostOf } from './hostMode';
+import { isHost, hostOf, membersOf } from './hostMode';
 import { hostShowsGraph } from './hostHeader';
 import { useGraphBindingsStore } from './bindingsStore';
 import { useGraphStatusStore } from './statusStore';
@@ -96,8 +96,16 @@ export function graphClusterPlan(st: PlanState, basis: Basis): GraphClusterPlan 
   if (!onTarget.length) return null;
   const regions = onTarget.map(p => ({ start: p.start, end: p.end, mode: p.mode || 'accessibility' }))
     .sort((a, b) => a.start - b.start || a.end - b.end);
-  const datasetIds = getTargetDatasetIds(st.selectedDatasets, st.panels, st.datasets);
-  const windows = clusterWindows(st, datasetIds);
+  // A targeted host targets every member, folded or popped out (review G4: revealing a member must keep it in the
+  // run); clusterWindows alone inherits the host's selection only while a member is folded.
+  let selected = st.selectedDatasets;
+  if (explicit) {
+    selected = new Set(st.selectedDatasets);
+    for (const h of hosts) if (st.selectedDatasets.has(h.id)) for (const m of membersOf(st.panels, h)) selected.add(m.panel.id);
+  }
+  const planState = selected === st.selectedDatasets ? st : { ...st, selectedDatasets: selected };
+  const datasetIds = getTargetDatasetIds(selected, st.panels, st.datasets);
+  const windows = clusterWindows(planState, datasetIds);
   const bindings = useGraphBindingsStore.getState().byDataset;
   const sources = new Set(registration.maps.filter(m => m.target === target).map(m => m.source));
   const observations = new Map<string, GraphObservationSpec & { scopes: (string[] | null)[] }>();
@@ -196,6 +204,14 @@ const wire = (o: GraphObservationSpec) => {
   return rest;
 };
 
+/** What a run's commit checks has not changed since it started (review G4: a response must not land on another
+ * locus, reference, dataset set or graph). */
+function runIdentity(s: BrowserState, plan: Pick<GraphClusterPlan, 'host' | 'registration' | 'target'>): string {
+  const host = s.panels.find(p => p.id === plan.host.id);
+  return JSON.stringify([s.chrom, s.currentGenome ?? null, s.datasets.map(d => d.id).sort(), host ? hostDrawsGraph(host) : false,
+    host?.graphView?.registrationId ?? null, host?.graphView?.targetBinding ?? null, plan.registration.revisions.package]);
+}
+
 export function graphRequestBody(s: BrowserState, plan: Pick<GraphClusterPlan, 'registration' | 'target' | 'regions' | 'observations'>) {
   return {
     registration_id: plan.registration.id, revisions: plan.registration.revisions, target: plan.target,
@@ -213,9 +229,12 @@ export async function runGraphCluster(s: BrowserState, basis: ClusterBasis,
   if (!plan) throw new Error('No graph host is drawing its graph here: cluster again.');
   if (plan.refusal) throw new Error(plan.refusal);
   const runNumber = useRunResultStore.getState().runs.cluster;
+  const identity = runIdentity(s, plan);
   const response = await post<GraphClusterResponse>('/api/graph/cluster', graphRequestBody(s, plan));
   const now = useBrowserStore.getState();
   if (runNumber !== useRunResultStore.getState().runs.cluster) return;
+  if (runIdentity(now, plan) !== identity)
+    throw new Error('The view, its datasets or the graph changed while clustering. Cluster again here.');
   if (plan.destinations.some(d => !sortStateStillCurrent(s, now, d.stateKey)) || now.activeClusterTreeNodeId !== s.activeClusterTreeNodeId)
     throw new Error('The filters, branch or clusters changed while clustering. Cluster again here.');
   commitGraphRun(s, plan, response);
@@ -254,8 +273,19 @@ export function commitGraphRun(s: BrowserState, plan: GraphClusterPlan, response
     ? s.selectedClusters[d.stateKey] : s.clusterFocus[d.stateKey] ?? [])]))].sort((a, b) => a - b);
   if (sourceClusterIds.length) {
     if (!now.activeClusterTreeNodeId) now.captureActiveClusterTreeNode({ name: 'All reads' });
-    now.commitSubcluster(finalBy, { sourceClusterIds, sourceLabel: `from ${sourceClusterIds.map(c => `C${c}`).join('+')}`,
-      name: 'Subcluster on graph columns', readScope: Object.fromEntries(Object.keys(finalBy).map(k => [k, Object.keys(finalBy[k])])) });
+    // The parent's rows by their own identities too (review G4): a linear run's analysis_id of a record the graph run
+    // labelled takes that record's label, so commitSubcluster never shadows it with Unassigned.
+    const withParentIds: Record<string, Record<string, number>> = {};
+    for (const [key, labels] of Object.entries(finalBy)) {
+      const out = { ...labels };
+      for (const id of Object.keys(now.clusterAssignments[key] ?? {})) {
+        const label = labels[recordKey(id) ?? id];
+        if (label !== undefined) out[id] = label;
+      }
+      withParentIds[key] = out;
+    }
+    now.commitSubcluster(withParentIds, { sourceClusterIds, sourceLabel: `from ${sourceClusterIds.map(c => `C${c}`).join('+')}`,
+      name: 'Subcluster on graph columns', readScope: Object.fromEntries(Object.keys(withParentIds).map(k => [k, Object.keys(withParentIds[k])])) });
   } else {
     for (const [key, value] of Object.entries(stage1By)) now.setClusterAssignments(key, value);
     if (now.activeClusterTreeNodeId) now.syncActiveClusterTreeNode(); else now.captureActiveClusterTreeNode({ name: 'All reads' });
@@ -295,9 +325,10 @@ export function commitGraphRun(s: BrowserState, plan: GraphClusterPlan, response
       columns: { shared: response.columns.shared, carrier_sets: response.columns.carrier_sets, dropped: response.columns.dropped,
         left_out: response.columns.left_out },
     },
-    destinations: plan.destinations.map(d => ({ stateKey: d.stateKey, observations: d.observations, panelId: d.panelId })),
+    destinations: plan.destinations.map(d => ({ stateKey: d.stateKey, observations: d.observations, panelId: d.panelId, scope: d.scope })),
     names,
   };
+  run.graph!.targetContig = plan.targetContig;
   const c = response.columns;
   const leftOut = [...Object.entries(c.left_out ?? {}).map(([oid, why]) => `${obsLabel.get(oid)?.label ?? oid}: ${why}`),
     ...plan.leftOut.map(l => `${l.reason}`)];
@@ -309,6 +340,8 @@ export function commitGraphRun(s: BrowserState, plan: GraphClusterPlan, response
     + (leftOut.length ? `Left out: ${leftOut.join('; ')}. ` : '')
     + (plan.offContig ? `${plan.offContig} selected region${plan.offContig === 1 ? ' is' : 's are'} not on the graph's target and were not used. ` : '')
     + 'Each path is fitted once; pop-outs and other panels of the same path show the same labels.';
+  // The tree node its labels are (dynamic assignment applies only while it is the active node).
+  run.treeNodeId = useBrowserStore.getState().activeClusterTreeNodeId ?? null;
   useBrowserStore.setState({ clusterMatchedRun: run });
   useBrowserStore.getState().pushSnapshot('Cluster on graph columns');
 }
@@ -320,6 +353,12 @@ export function commitGraphRun(s: BrowserState, plan: GraphClusterPlan, response
 export async function assignWithGraphRun(run: ClusterMatchedRun, signal?: AbortSignal): Promise<number | string> {
   const g = run.graph;
   if (!g || !run.destinations) return 0;
+  const current = () => {
+    const st = useBrowserStore.getState();
+    return st.clusterMatchedRun === run && (st.activeClusterTreeNodeId ?? null) === (run.treeNodeId ?? null);
+  };
+  // Only the run's own tree node (review G5): another branch's labels never take this model's.
+  if (!current()) return 0;
   let response: { results: Record<string, { assignments?: Record<string, number> }> };
   try {
     response = await post('/api/graph/cluster/assign', {
@@ -329,24 +368,32 @@ export async function assignWithGraphRun(run: ClusterMatchedRun, signal?: AbortS
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
-  if (signal?.aborted) return 0;
+  if (signal?.aborted || !current()) return 0;
   const st = useBrowserStore.getState();
-  if (st.clusterMatchedRun !== run) return 0;
+  // Each destination within its own scope; a panel opened since on one of the run's observations (a member popped
+  // out later, a new haplotype panel) within its own read filter.
+  const known = new Set(run.destinations.map(d => d.stateKey));
+  const later = graphRunStateKeys(run, st.panels, st.chrom).filter(k => !known.has(k)).flatMap(stateKey => {
+    const p = st.panels.find(q => (q.stateKey ?? q.datasetId) === stateKey);
+    const obs = p ? g.observations.filter(o => observationShownBy(o, p)).map(o => o.id) : [];
+    const filter = st.filteredReadIds[stateKey];
+    return obs.length ? [{ stateKey, observations: obs, panelId: p!.id, scope: filter ? [...filter] : null }] : [];
+  });
   let added = 0;
-  for (const d of run.destinations) {
-    const dest = { ...d, scope: null as string[] | null };
-    const obs = g.observations.filter(o => d.observations.includes(o.id));
-    dest.scope = obs.some(o => !o.read_ids) ? null : [...new Set(obs.flatMap(o => o.read_ids ?? []))];
-    const labels = destinationAssignments(dest, response.results);
+  const touched: string[] = [];
+  for (const d of [...run.destinations, ...later]) {
+    const labels = destinationAssignments({ ...d, scope: d.scope ?? null }, response.results);
     const live = st.clusterAssignments[d.stateKey] ?? {};
     const fresh = Object.fromEntries(Object.entries(labels).filter(([id, c]) => live[id] === undefined && c !== UNASSIGNED_CLUSTER_ID));
     if (!Object.keys(fresh).length) continue;
     added += Object.keys(fresh).length;
+    touched.push(d.stateKey);
     st.setClusterAssignments(d.stateKey, fresh, { mirror: false, merge: true });
   }
   if (added) {
     const now = useBrowserStore.getState();
-    useBrowserStore.setState({ clusterMatchedRun: { ...run, panelAssignments: Object.fromEntries(run.destinations.map(d => [d.stateKey, now.clusterAssignments[d.stateKey] ?? {}])) } });
+    useBrowserStore.setState({ clusterMatchedRun: { ...run, panelAssignments: { ...run.panelAssignments,
+      ...Object.fromEntries([...run.destinations.map(d => d.stateKey), ...touched].map(k => [k, now.clusterAssignments[k] ?? {}])) } } });
   }
   return added;
 }
@@ -401,8 +448,9 @@ function startGraphDynamicAssignment(): void {
     timer = setTimeout(() => {
       controller?.abort();
       controller = new AbortController();
-      const now = useBrowserStore.getState().clusterMatchedRun;
-      if (now?.graph) void assignWithGraphRun(now, controller.signal);
+      const st = useBrowserStore.getState();
+      const now = st.clusterMatchedRun;
+      if (now?.graph && (st.activeClusterTreeNodeId ?? null) === (now.treeNodeId ?? null)) void assignWithGraphRun(now, controller.signal);
     }, 400);
   });
 }
