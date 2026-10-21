@@ -96,10 +96,15 @@ export function autoSplitNewLiftedDatasets(seen: Set<string>): void {
     const labels = liftHapLabels(dataset.live_lift);
     // Only newly created panels carry an explicit split intent without a haplotype yet. A restored older panel
     // without that intent is already a view the user saved; its dataset's default must not rearrange it.
-    if (mine.some(p => p.liftHap) || mine[0].liftHaplotypeMode !== 'split' || labels.length < 2) continue;
+    if (mine.some(p => p.liftHap) || mine[0].liftHaplotypeMode !== 'split' || !labels.length) continue;
     // Graph primary (DESIGN_GRAPH_PRIMARY §5.2): "Open as" (else the browser default). Graph: split as today, then
     // the first haplotype panel becomes the host with its siblings folded in, once a package is known to bind it.
     const view = liftedOpenView(dataset.id);
+    // One haplotype (a strain against its reference, G8): nothing to split; graph mode opens on its panel.
+    if (labels.length < 2) {
+      if (view === 'graph') notePendingGraphOpen(dataset.id);
+      continue;
+    }
     if (view === 'pooled') continue;
     state.splitPanelByLiftHap(mine[0].id, labels);
     if (view === 'graph') notePendingGraphOpen(dataset.id);

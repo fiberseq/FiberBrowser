@@ -323,6 +323,23 @@ describe('G6: zoom hand-off (§7)', () => {
     await new Promise(r => setTimeout(r, 0));
     expect(get('mat').viewMode).toBeUndefined();
   });
+
+  it('G8: a single-haplotype lifted dataset opens as a graph on its one panel (no haplotype to split by)', async () => {
+    seed([panel('only', { liftHaplotypeMode: 'split' })]);
+    notePendingGraphOpen('d');
+    await new Promise(r => setTimeout(r, 0));
+    expect(isHost(get('only'))).toBe(true);
+    expect(get('only').graphView!.members![0]).toMatchObject({ panelId: 'only' });
+    // Acted on before the bindings arrived (renamed): left as it is.
+    seed([panel('only2', { liftHaplotypeMode: 'split' })]);
+    useGraphBindingsStore.setState({ loading: true });
+    notePendingGraphOpen('d');
+    useBrowserStore.setState(s => ({ panels: s.panels.map(p => ({ ...p, title: 'renamed' })) }));
+    useGraphBindingsStore.setState({ loading: false });
+    const { settlePendingGraphOpens } = await import('./openAsGraph');
+    settlePendingGraphOpens();
+    expect(get('only2').viewMode).toBeUndefined();
+  });
 });
 
 describe('G3: sub-bands read each member\'s own state through record keys', () => {

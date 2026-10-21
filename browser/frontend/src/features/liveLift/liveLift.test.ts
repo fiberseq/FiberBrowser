@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { DEFAULT_COLORMAP } from '../../types';
 import { coverageHistogramBins, drawReadTrack } from '../../components/tracks/read-track/ReadTrackCanvas';
 import {
@@ -312,6 +312,21 @@ describe('split by default', () => {
     useBrowserStore.getState().poolLiftHapPanels('lift');
     autoSplitNewLiftedDatasets(seen);
     expect(useBrowserStore.getState().panels.map(p => p.liftHap)).toEqual([undefined]);
+  });
+
+  it('G8: one haplotype (a strain against its reference): no split; it waits to open as a graph', async () => {
+    const { autoSplitNewLiftedDatasets } = await import('./register');
+    const open = await import('../graphPanel/openAsGraph');
+    const spy = vi.spyOn(open, 'notePendingGraphOpen').mockImplementation(() => undefined);
+    const { useBrowserStore } = await import('../../stores/browserStore');
+    const live = { haplotypes: ['S#1'], haplotype_labels: { 'S#1': 'strainA' }, settings: { haplotype_mode: 'split' } };
+    useBrowserStore.setState({ datasets: [{ id: 'one', label: 'o', path: 'x.bam', color: '#000', data_type: 'bam_livelift', live_lift: live } as never],
+      panels: [] });
+    useBrowserStore.getState().addPanel('one');
+    autoSplitNewLiftedDatasets(new Set());
+    expect(useBrowserStore.getState().panels.map(p => p.liftHap)).toEqual([undefined]);
+    expect(spy).toHaveBeenCalledWith('one');
+    spy.mockRestore();
   });
 });
 

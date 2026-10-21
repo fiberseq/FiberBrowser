@@ -40,7 +40,9 @@ export function settlePendingGraphOpens(): void {
     }
     pending.delete(datasetId);
     // Untouched since the split (moved, renamed, hidden, navigated: left as the user has it; the header offers it).
-    const untouched = signature(datasetId) === split && mine.length > 1 && mine.every(p => p.liftHap && !p.collapsed && !isHost(p) && !p.graphMemberOf);
+    // (One haplotype: its one panel, which has no haplotype of its own to split by, G8.)
+    const untouched = signature(datasetId) === split && mine.length >= 1 && (mine.length === 1 || mine.every(p => p.liftHap))
+      && mine.every(p => !p.collapsed && !isHost(p) && !p.graphMemberOf);
     if (!untouched) continue;
     const next = enterGraph(s.panels, mine[0].id, bound, panelView(mine[0]));
     if (!next) continue;
