@@ -380,7 +380,10 @@ test('an expanded linear insertion leaves the graph panel unchanged (HPRC packag
     await settled(graph, 128_650_000, 60_000);
     await page.mouse.move(5, 5);
     const canvas = graph.getByTestId('graph-panel-canvas');
-    const before = await canvas.screenshot();
+    // The canvas's own pixels (an element screenshot of a canvas taller than the window is stitched while scrolling,
+    // so its text can rasterise differently between two shots of one drawing).
+    const pixels = () => canvas.evaluate((c: HTMLCanvasElement) => c.toDataURL());
+    const before = await pixels();
     const startBefore = await graph.getAttribute('data-graph-start');
     const target = JSON.parse((await matCanvas.getAttribute('data-live-lift-badge-target'))!);
     const s = await matCanvas.evaluate((c: HTMLCanvasElement) => ({ x: c.getBoundingClientRect().width / c.clientWidth, y: c.getBoundingClientRect().height / c.clientHeight }));
@@ -390,7 +393,7 @@ test('an expanded linear insertion leaves the graph panel unchanged (HPRC packag
     await page.waitForTimeout(800);
     await page.screenshot({ path: test.info().outputPath('graph-with-expanded-linear-insertion.png') });
     expect(await graph.getAttribute('data-graph-start')).toBe(startBefore);
-    expect((await canvas.screenshot()).equals(before)).toBe(true);
+    expect(await pixels()).toBe(before);
     await page.getByTestId('live-lift-expanded-collapse').first().click();
     expect(errors).toEqual([]);
   } finally {

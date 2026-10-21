@@ -55,7 +55,6 @@ MAX_PINS = 2000
 MAX_MARKS = 100_000
 MAX_DECODED_BYTES = 32 * 1024 * 1024   # the ceiling of a request's decoded-bytes budget (Standard/High)
 LOW_DECODED_BYTES = 8 * 1024 * 1024    # Low memory
-MIN_SHARED_BYTES = 2 * 1024 * 1024     # a request's floor while other loads share the budget
 MAX_STRIP_BINS = 4000
 MAX_SOURCE_BP = 400_000
 MAX_WINDOWS = 64
@@ -418,9 +417,9 @@ _active_loads = 0
 
 class _SharedBytes:
     """The decoded-bytes budget shared across concurrent read loads (every host's request): one allocator, so the
-    loads' allowances together never pass the budget. A load reserves a share of what is free (the budget over the
-    loads running, at least ``MIN_SHARED_BYTES``, never more than is free) and waits while less than that floor is
-    free; it releases its share when it ends."""
+    loads running together never hold more than the budget. Each load gets the whole budget, and a load waits
+    (cancellably) while another holds it: its sample never depends on what else is loading, so the same request
+    draws the same reads every time."""
 
     def __init__(self, total: int):
         self.total = int(total)
@@ -430,20 +429,18 @@ class _SharedBytes:
     def __enter__(self):
         global _shared_in_use, _active_loads
         from services.background_work import checkpoint
-        floor = min(self.total, MIN_SHARED_BYTES)
         with _SHARED:
             _active_loads += 1
             try:
-                while self.total - _shared_in_use < floor:
+                while _shared_in_use > 0:   # another load holds the budget
                     _SHARED.wait(0.05)
                     checkpoint()   # a load whose client left stops waiting
             except BaseException:
                 _active_loads -= 1
                 _SHARED.notify_all()
                 raise
-            free = self.total - _shared_in_use
             self.concurrent = _active_loads
-            self.share = min(free, max(floor, self.total // max(1, _active_loads)))
+            self.share = self.total
             _shared_in_use += self.share
         return self
 

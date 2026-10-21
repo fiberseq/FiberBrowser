@@ -621,8 +621,8 @@ def test_density_strip_counts_rows_before_the_cap_and_the_mark_budget(env, monke
 
 
 def test_concurrent_loads_share_the_decoded_bytes_budget():
-    """One allocator: the allowances of loads running together never pass the budget; a load waits while less than
-    the floor is free, and gets what is free when the others end (Codex G7 review)."""
+    """One allocator: loads running together never hold more than the budget (Codex G7 review); each load gets the
+    whole budget, so its sample never depends on what else is loading, and the others wait."""
     import threading
     import time
     total = 32 * 1024 * 1024

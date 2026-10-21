@@ -371,6 +371,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   const rowsPerLane = readSettings.maxRowsPerLane ?? DEFAULT_ROWS_PER_LANE;
   // A host fills its body height with rows by default (§6.1); a set row count (or a standalone panel) keeps it.
   const fillHeight = hostMode && readSettings.maxRowsPerLane == null;
+  // What fill height depends on (only then: a panel with a set row count is not re-packed when its body resizes).
   const activeDatasetIds = useMemo(() => new Set(activeBindings.map(b => b.dataset_id)), [activeBindings]);
   // The reads this panel draws and its bindings, for the shared molecule hover and "Show source span".
   // Only datasets with reads on a path this panel shows count as drawn here.
@@ -481,6 +482,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     return out;
   }, [bandMembers, clusterAssignmentsAll, clusterOrderAll, clusterFocusAll, filteredAll, sortAll, excludedAll, activeBranch]);
   const bandSort = state?.bandSort ?? 'position';
+  const fillKey = fillHeight ? `${bodyHeight}|${readRowHeight}|${laneHeight}|${compactSpace}|${fullRows}` : '';
   const readLayout = useMemo(() => {
     if (!baseScene || !response || !readsShown) return null;
     const t0 = performance.now();
@@ -521,7 +523,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       lanes = packMolecules(placed.molecules, rowsPerLane);
     }
     return { placed, lanes, strips, ms: performance.now() - t0 };
-  }, [baseScene, response, readsShown, activeDatasetIds, rowsPerLane, hostMode, bandMembers, memberStates, bandSort, fillHeight, bodyHeight, readRowHeight, laneHeight, compactSpace, fullRows]);
+  }, [baseScene, response, readsShown, activeDatasetIds, rowsPerLane, hostMode, bandMembers, memberStates, bandSort, fillKey]); // eslint-disable-line react-hooks/exhaustive-deps
   // The rows each member shows here ("Reads shown" scopes, exports): the host and its folded members (a revealed
   // member's own read track publishes its rows).
   useEffect(() => {
