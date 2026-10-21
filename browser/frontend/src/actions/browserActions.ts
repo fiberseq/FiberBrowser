@@ -37,7 +37,7 @@ import { findTopLocus, isTopLocusStep } from '../utils/topLoci';
 import { runUiCluster, runUiScan } from '../utils/clusterRunner';
 import { invalidateFilterRequests, isCurrentFilterRequest, nextFilterRequest } from '../utils/filterRequests';
 import { isCurrentSortRequest, nextSortRequest } from '../utils/sortRequests';
-import { resolveSortRequestScope, sortRounds } from '../utils/sortScope';
+import { liftHapsForRound, resolveSortRequestScope, sortRounds } from '../utils/sortScope';
 import { registerBackendMotifTrack, registerTrack, removeTrackAtIndex, setTrackNameFilter } from '../utils/trackLoader';
 import { CLUSTER_RULE_MODE_PREFIX } from '../types';
 import { sameChrom } from '../utils/chromAliases';
@@ -1627,6 +1627,7 @@ export async function executeBrowserAction(
           readIds: Object.keys(scope.readIds).length > 0 ? scope.readIds : undefined,
           clusterAssignments: Object.keys(scope.clusterAssignments).length > 0 ? scope.clusterAssignments : undefined,
           sampleSeed: store.analysisSampleSeed,
+          liftHapByDataset: liftHapsForRound(round, store.panels),
         });
         const staleSort = staleRuleResult(kind, requestSeq, { chrom, start, end });
         if (staleSort) return `${type}: ${staleSort}`;

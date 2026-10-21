@@ -225,6 +225,8 @@ export async function sortReads(
     };
     /** A panel on another assembly: its reference's key (genes and chromosomes are that reference's). */
     panelGenome?: string | null;
+    /** Live lift: a split panel's haplotype by dataset (absent: every haplotype of the dataset). */
+    liftHapByDataset?: Record<string, string>;
     signal?: AbortSignal;
   }
 ): Promise<{ results: Record<string, SortReadsResult>; error?: string }> {
@@ -252,6 +254,7 @@ export async function sortReads(
       ...(opts?.geneIds && { gene_ids: opts.geneIds }),
       ...(opts?.readIds && { read_ids: opts.readIds }),
       ...(opts?.clusterAssignments && { cluster_assignments: opts.clusterAssignments }),
+      ...(opts?.liftHapByDataset && { lift_hap_by_dataset: opts.liftHapByDataset }),
       ...(opts?.projection && {
         projection: {
           peak_regions: opts.projection.peakRegions,

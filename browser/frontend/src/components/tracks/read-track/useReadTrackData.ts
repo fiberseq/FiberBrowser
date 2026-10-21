@@ -1,4 +1,4 @@
-import { qnameOfId } from '../../../utils/recordKeys';
+import { orderIndex, qnameOfId } from '../../../utils/recordKeys';
 import { enrichNativeRows } from '../../../features/differences/api';
 import { keepsSignal } from '../../../utils/signalFilters';
 import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
@@ -22,6 +22,7 @@ import { hydrateDerivedReadLayers } from './derivedLayers';
 import { DEBUG } from '../../../stores/utils';
 import {
   clusterAssignmentForRead,
+  sortRankOf,
   readIdKeys,
   filterReadsByBranchScope,
   filterReadsByReadIdSet,
@@ -1008,19 +1009,17 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
         });
       } else if (myReadSortOrder.length > 0 && hasCluster && myClusterOrder.length > 0) {
         const clusterOrderMap = new Map(myClusterOrder.map((c, i) => [c, i]));
-        const readOrderMap = new Map(myReadSortOrder.map((id, i) => [id, i]));
+        const readOrderMap = orderIndex(myReadSortOrder);
         sorted = [...filteredReads].sort((a, b) => {
           const ca = clusterAssignmentForRead(myClusterAssignments, a) ?? 999;
           const cb = clusterAssignmentForRead(myClusterAssignments, b) ?? 999;
           const clusterDiff = (clusterOrderMap.get(ca) ?? 999) - (clusterOrderMap.get(cb) ?? 999);
           if (clusterDiff !== 0) return clusterDiff;
-          return (readOrderMap.get(a.id) ?? 999999) - (readOrderMap.get(b.id) ?? 999999);
+          return sortRankOf(readOrderMap, a) - sortRankOf(readOrderMap, b);
         });
       } else if (myReadSortOrder.length > 0) {
-        const readOrderMap = new Map(myReadSortOrder.map((id, i) => [id, i]));
-        sorted = [...filteredReads].sort((a, b) => {
-          return (readOrderMap.get(a.id) ?? 999999) - (readOrderMap.get(b.id) ?? 999999);
-        });
+        const readOrderMap = orderIndex(myReadSortOrder);
+        sorted = [...filteredReads].sort((a, b) => sortRankOf(readOrderMap, a) - sortRankOf(readOrderMap, b));
       } else if (hasCluster && myClusterOrder.length > 0) {
         const orderMap = new Map(myClusterOrder.map((c, i) => [c, i]));
         sorted = [...filteredReads].sort((a, b) => {

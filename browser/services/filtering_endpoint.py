@@ -13,6 +13,7 @@ from services.circular_genome import circular_query_segments_for_region
 from services.filter_diagnostics import log_filtering_diagnostic
 from services.fire_tracks import compute_fire_track
 from services.read_metrics import compute_fp_metrics, compute_rule_metric, get_layer_intervals
+from services.read_selection import cohort_read_id
 from services.read_sorting import sort_similarity_for_dataset
 from services.transcription_state import (
     evaluate_read_states,
@@ -29,7 +30,8 @@ def _empty_filter_response(sample_seed: str) -> dict:
 
 
 def _all_filter_response(reads: list[dict], sample_seed: str) -> dict:
-    read_ids = [read["id"] for read in reads]
+    # Lifted rows answer by their cohort identity (one record's rows share a QNAME); native rows by their id.
+    read_ids = [cohort_read_id(read) for read in reads]
     return {
         "read_ids": read_ids,
         "total": len(reads),
@@ -145,6 +147,8 @@ def filter_reads_for_request(
         sample_seed=req.sample_seed,
         include_layers=bool(req.layer),
         requested_layers=_requested_layers(req.layer),
+        capability="filter",
+        lift_hap_by_dataset=req.lift_hap_by_dataset,
     )
     sample_seed = query.sample_seed
     if not query.dataset_ids:
@@ -166,7 +170,7 @@ def filter_reads_for_request(
     )
 
     filtered_ids = [
-        read["id"]
+        cohort_read_id(read)
         for read in working_set.reads
         if _read_passes_accessibility_filter(
             read,
@@ -526,6 +530,8 @@ def filter_reads_by_analysis_rule_for_request(
         sample_seed=req.sample_seed,
         include_layers=bool(req.layer) or bool(req.transcription_state),
         requested_layers=_requested_layers(req.layer),
+        capability="filter",
+        lift_hap_by_dataset=req.lift_hap_by_dataset,
     )
     if not query.dataset_ids:
         return {"results": {}, "sample_seed": query.sample_seed}
@@ -561,7 +567,7 @@ def filter_reads_by_analysis_rule_for_request(
                 transcription_genes=transcription_genes,
             )
             if _metric_passes_filter(metric, req.operator, threshold):
-                filtered_ids.append(read["id"])
+                filtered_ids.append(cohort_read_id(read))
 
         results[dataset_id] = {
             "read_ids": filtered_ids,
@@ -588,7 +594,7 @@ def _sort_dataset_reads(
     has_clusters = bool(cluster_assignments)
     metric_scope = scope_windows
     read_metrics = {
-        read["id"]: _compute_sort_metric(
+        cohort_read_id(read): _compute_sort_metric(
             read,
             start=start,
             end=end,
@@ -681,7 +687,7 @@ def _apply_linked_sort_order(
             continue
 
         for read in working_set.reads:
-            read_id = read["id"]
+            read_id = cohort_read_id(read)
             cluster = cluster_assignments.get(read_id)
             if cluster is None:
                 continue
@@ -758,6 +764,8 @@ def sort_reads_for_request(
         include_layers=bool(req.layer) or bool(req.transcription_state),
         requested_layers=_requested_layers(req.layer),
         read_ids_by_dataset=req.read_ids,
+        capability="sort",
+        lift_hap_by_dataset=req.lift_hap_by_dataset,
     )
     if not query.dataset_ids:
         return {"results": {}}

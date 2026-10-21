@@ -67,6 +67,8 @@ def compute_read_stats(
         read_ids_by_dataset=request.read_ids_by_dataset,
         sample_seed=request.sample_seed,
         include_methylation=True,
+        capability="read_stats",
+        lift_hap_by_dataset=getattr(request, "lift_hap_by_dataset", None),
     )
     from services.lift.capability import require_for_ids
     require_for_ids(state, query.dataset_ids, "read_stats")
@@ -88,6 +90,8 @@ def compute_read_stats(
             read_ids_by_dataset=region.read_ids_by_dataset,
             sample_seed=request.sample_seed,
             include_methylation=True,
+            capability="read_stats",
+            lift_hap_by_dataset=getattr(request, "lift_hap_by_dataset", None),
         )
         scopes.append((extra, region.start, region.end, extra.read_ids_by_dataset))
     scopes, requested_total, truncated = _cap_scopes(scopes, MAX_READ_STATS_IDS)
@@ -126,7 +130,7 @@ def compute_read_stats(
     aggregate["n_datasets"] = len(dataset_ids)
 
     any_bam = any(
-        state.get_dataset(ds_id) and state.get_dataset(ds_id).data_type == "bam"
+        state.get_dataset(ds_id) and state.get_dataset(ds_id).data_type in ("bam", "bam_livelift")
         for ds_id in dataset_ids
     )
 
@@ -161,6 +165,7 @@ def _collect_scope(
         requested_ids = list(dict.fromkeys(read_ids))
         wanted = set(requested_ids)
         is_bam = dataset.data_type == "bam"
+        is_lifted = dataset.data_type == "bam_livelift"
 
         # Scope the working set to the selected IDs so backend caps do not
         # sample selected reads out before per-read stats are computed.
@@ -176,7 +181,13 @@ def _collect_scope(
             broad_prefetch_multiplier=READ_STATS_PREFETCH_MULTIPLIER if is_bam else None,
         )
 
-        if is_bam:
+        if is_lifted:
+            _collect_lifted_read_stats(
+                dataset=dataset, dataset_id=dataset_id, requested_ids=requested_ids, wanted=wanted, ws=ws,
+                per_read=per_read, all_fp_sizes=all_fp_sizes, all_acc_pcts=all_acc_pcts, all_lengths=all_lengths,
+                all_mapqs=all_mapqs, all_methyl_pcts=all_methyl_pcts, strand_counts=strand_counts,
+            )
+        elif is_bam:
             from services.plasmid_reconcile import contig_links
             _collect_bam_read_stats(
                 dataset=dataset,
@@ -344,6 +355,123 @@ def _collect_bam_read_stats(
                     all_methyl_pcts.append(methyl_pct)
         except Exception as exc:
             log_read_stats_diagnostic(f"[read_stats] Error fetching from BAM {bam_path}: {exc}")
+
+
+def _lift_row_rank(row) -> tuple:
+    """A lifted record's displayed row first: primary record, primary placement, lowest row index."""
+    ll = row.get("live_lift") or {}
+    return (bool((ll.get("source") or {}).get("supplementary")), bool(ll.get("alt")), int(ll.get("row_index", 0) or 0),
+            str(ll.get("record", "")))
+
+
+def _lifted_source_record(dataset, row, handles: dict):
+    """The source BAM record a lifted row was composed from (its own assembly), or None."""
+    ll = row.get("live_lift") or {}
+    src = ll.get("source") or {}
+    contig, s0, s1 = src.get("contig"), src.get("start"), src.get("end")
+    if contig is None or s0 is None or s1 is None:
+        return None, None
+    supp = bool(src.get("supplementary"))
+    for bam_path in getattr(dataset, "paths", None) or ():
+        if bam_path not in handles:
+            bam = get_bam_handle(bam_path)
+            from services.signal_evidence import signal_header
+            handles[bam_path] = (bam, signal_header(getattr(bam, "header", None)) if bam is not None else None)
+        bam, provenance = handles[bam_path]
+        if bam is None or contig not in (getattr(bam, "references", None) or ()):
+            continue
+        try:
+            for rec in bam.fetch(contig, int(s0), int(s1)):
+                if (rec.query_name == row["id"] and rec.reference_start == int(s0) and not rec.is_unmapped
+                        and not rec.is_secondary and bool(rec.is_supplementary) == supp):
+                    return rec, provenance
+        except (ValueError, OSError) as exc:
+            log_read_stats_diagnostic(f"[read_stats] Error fetching lifted source {contig}:{s0}-{s1}: {exc}")
+    return None, None
+
+
+def _collect_lifted_read_stats(
+    *, dataset, dataset_id: str, requested_ids: list, wanted: set, ws, per_read: list, all_fp_sizes: list,
+    all_acc_pcts: list, all_lengths: list, all_mapqs: list, all_methyl_pcts: list, strand_counts: dict,
+) -> None:
+    """Stats for lifted reads (graph features): footprints, accessibility and marks from the lifted rows on target
+    coordinates (every row of the record), alignment fields (MAPQ, NM, length, CIGAR, bounds) from the record's own
+    source BAM record, whose bounds are on the sample's assembly (``ref_contig``, ``coordinates: "source"``)."""
+    from services.read_selection import base_read_id, read_id_keys
+    by_key: dict = {}
+    for row in ws.reads:
+        for key in read_id_keys(row):
+            by_key.setdefault(key, []).append(row)
+    handles: dict = {}
+    for rid in requested_ids:
+        rows = by_key.get(rid) or by_key.get(base_read_id(rid))
+        if not rows:
+            continue
+        row = min(rows, key=_lift_row_rank)
+        ll = row.get("live_lift") or {}
+        record = (ll.get("molecule"), ll.get("record"))
+        same = [r for r in rows if ((r.get("live_lift") or {}).get("molecule"), (r.get("live_lift") or {}).get("record")) == record]
+        intervals = sorted((iv for r in same for iv in (r.get("intervals") or [])), key=lambda iv: (iv[0], iv[1]))
+        marks = [m for r in same for m in (r.get("methyl") or [])]
+        wanted.discard(rid)
+        interval_stats = _summarize_intervals(intervals)
+        methyl_count = len(marks) if any(r.get("methyl") is not None for r in same) else None
+        methyl_pct = (methyl_count / interval_stats["total_span_bp"] * 100 if interval_stats["total_span_bp"] > 0 else 0.0
+                      ) if methyl_count is not None else None
+        rec, provenance = _lifted_source_record(dataset, row, handles)
+        src = ll.get("source") or {}
+        orientation = src.get("orientation")
+        strand = orientation if orientation in ("+", "-") else ("-" if rec is not None and rec.is_reverse else "+")
+        nm = None
+        if rec is not None:
+            try:
+                nm = rec.get_tag("NM")
+            except (KeyError, ValueError):
+                nm = None
+        signal = None
+        if rec is not None:
+            from services.signal_evidence import record_signal
+            signal = record_signal(rec, provenance)
+        read_length = (rec.query_length or rec.infer_read_length() or 0) if rec is not None else 0
+        aligned_span = (rec.reference_length or 0) if rec is not None else int(src.get("end", 0)) - int(src.get("start", 0))
+        mapq = rec.mapping_quality if rec is not None else None
+        single = len(requested_ids) == 1 and rec is not None and rec.cigartuples
+        per_read.append({
+            "read_id": rid,
+            "dataset_id": dataset_id,
+            "signal": signal,
+            "mapq": mapq,
+            "strand": strand,
+            "read_length": read_length,
+            "aligned_span": aligned_span,
+            "nm": nm,
+            "footprint_count": interval_stats["fp_count"],
+            "nucleosome_count": interval_stats["nuc_count"],
+            "subnuc_count": interval_stats["subnuc_count"],
+            "avg_footprint_size": round(interval_stats["avg_fp_size"], 1),
+            "median_footprint_size": round(interval_stats["median_fp_size"], 1),
+            "accessibility_pct": round(interval_stats["acc_pct"], 1),
+            "methyl_count": methyl_count,
+            "methyl_pct": round(methyl_pct, 1) if methyl_pct is not None else None,
+            "cigar_string": rec.cigarstring if single else None,
+            "cigar_ops": _summarize_cigar(rec.cigartuples) if single else None,
+            "ref_start": rec.reference_start if rec is not None else src.get("start"),
+            "ref_end": rec.reference_end if rec is not None else src.get("end"),
+            "ref_contig": src.get("contig"),
+            "coordinates": "source",
+            "lifted": True,
+            # Read-relative positions are on the source record; lifted rows are drawn on target coordinates.
+            "fp_intervals": None,
+            "methyl_pos": None,
+        })
+        all_fp_sizes.extend(interval_stats["fp_sizes"])
+        all_acc_pcts.append(interval_stats["acc_pct"])
+        all_lengths.append(read_length)
+        if mapq is not None:
+            all_mapqs.append(mapq)
+        strand_counts[strand] = strand_counts.get(strand, 0) + 1
+        if methyl_pct is not None:
+            all_methyl_pcts.append(methyl_pct)
 
 
 def _collect_bigbed_read_stats(

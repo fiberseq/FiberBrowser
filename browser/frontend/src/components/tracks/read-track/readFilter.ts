@@ -1,5 +1,12 @@
 import { recordKey } from '../../../utils/recordKeys';
 
+/** A read's place in a sort order (`orderIndex` of it): its cohort identity (lifted rows; the server's sort names
+ * them so), else its id, else its record key (an order written in the graph view); unsorted reads last. */
+export function sortRankOf(index: ReadonlyMap<string, number>, read: ReadWithId): number {
+  return (read.analysis_id !== undefined ? index.get(read.analysis_id) : undefined) ?? index.get(read.id)
+    ?? (read.analysis_id ? index.get(recordKey(read.analysis_id) ?? '') : undefined) ?? 999999;
+}
+
 export interface ReadWithId {
   id: string;
   analysis_id?: string;

@@ -302,6 +302,8 @@ class FilterRequest(BaseModel):
     filter_mode: str = "either"
     layer: Optional[str] = None
     sample_seed: Optional[str] = None
+    # Live lift: a split panel's haplotype (dataset id -> MAT/PAT or a map haplotype key); absent: every haplotype.
+    lift_hap_by_dataset: Optional[Dict[str, str]] = None
 
 class ProjectionSortSettings(BaseModel):
     peak_regions: List[PeakRegion] = []
@@ -332,6 +334,8 @@ class SortReadsRequest(BaseModel):
     # sort_by="projection": the features of the Projection tab's map (its
     # peaks, cluster rules and threshold); None uses the stored clustering's.
     projection: Optional[ProjectionSortSettings] = None
+    # Live lift: a split panel's haplotype (dataset id -> MAT/PAT or a map haplotype key); absent: every haplotype.
+    lift_hap_by_dataset: Optional[Dict[str, str]] = None
 
 
 class AnalysisFilterRequest(BaseModel):
@@ -346,6 +350,8 @@ class AnalysisFilterRequest(BaseModel):
     transcription_state: Optional[TranscriptionStateKind] = None
     gene_ids: List[str] = []
     sample_seed: Optional[str] = None
+    # Live lift: a split panel's haplotype (dataset id -> MAT/PAT or a map haplotype key); absent: every haplotype.
+    lift_hap_by_dataset: Optional[Dict[str, str]] = None
 
 class TranscriptionStateFilterRequest(BaseModel):
     """Filter reads by transcription state criteria."""
@@ -381,6 +387,8 @@ class ReadStatsRegion(BaseModel):
 class ReadStatsRequest(BaseModel):
     read_ids_by_dataset: Dict[str, List[str]]
     sample_seed: Optional[str] = None
+    # Live lift: a split panel's haplotype (dataset id -> MAT/PAT or a map haplotype key); absent: every haplotype.
+    lift_hap_by_dataset: Optional[Dict[str, str]] = None
     extra_regions: List[ReadStatsRegion] = []
 
 class LiveFigureState(BaseModel):

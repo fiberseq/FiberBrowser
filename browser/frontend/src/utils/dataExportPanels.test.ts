@@ -264,21 +264,34 @@ describe('graph primary G8: lifted reads in exports', () => {
     expect(String(msg)).toContain('on its source assembly (chr19_MATERNAL, chr19_PATERNAL)');
   });
 
-  it('agy G8 review: the read table is not offered for lifted reads alone, and says when it leaves some out', () => {
+  it('graph features: the read table is offered for lifted reads alone and says their bounds are on the source assembly', () => {
     const entry = getDataExport('read-table')!;
     expect(entryAvailability(entry, { state: s(), readScope: 'shown' } as never)).toMatchObject({ ok: true });
     useBrowserStore.setState({ activeReadIds: { lift: ['lift-cohort:v1 ["g|q1","q1","r",0,"primary"]'] } } as never);
-    expect(entryAvailability(entry, { state: s(), readScope: 'shown' } as never).ok).toBe(false);
+    const avail = entryAvailability(entry, { state: s(), readScope: 'shown' } as never);
+    expect(avail.ok).toBe(true);
+    expect(String((avail as { detail?: string }).detail)).toContain('source assembly');
   });
 
-  it('read table: lifted datasets are left out of the Read Stats request', async () => {
+  it('graph features: the read table asks Read Stats for lifted datasets too, with their labels by cohort identity', async () => {
+    const aid = 'lift-cohort:v1 ["g|q1","q1","r",0,"primary"]';
     const bodies: any[] = [];
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
-      bodies.push(JSON.parse(String(init?.body ?? '{}')));
-      return json({ per_read: [], aggregate: {}, is_bam: true });
+      const body = JSON.parse(String(init?.body ?? '{}'));
+      bodies.push(body);
+      return json({ per_read: (body.read_ids_by_dataset.lift ?? []).map((id: string) => ({ read_id: id, dataset_id: 'lift',
+        ref_start: 10, ref_end: 20, ref_contig: 'chrS_MATERNAL' })), aggregate: {}, is_bam: true });
     }));
-    await buildReadTable(s(), readScopeGroups(s(), 'shown'));
+    useBrowserStore.setState({ activeReadIds: { lift: [aid] },
+      clusterAssignments: { lift: { 'lift-record:v1 ["g|q1","q1","r"]': 2 } } } as never);
+    const table = await buildReadTable(s(), readScopeGroups(s(), 'shown'));
     expect(bodies.length).toBe(1);
-    expect(Object.keys(bodies[0].read_ids_by_dataset)).toEqual(['napa']);
+    expect(Object.keys(bodies[0].read_ids_by_dataset).sort()).toEqual(['lift', 'napa'].filter(k => k in bodies[0].read_ids_by_dataset).sort());
+    expect(bodies[0].read_ids_by_dataset.lift).toEqual([aid]);
+    const line = table.tsv.split('\n').find(l => l.includes('chrS_MATERNAL'))!;
+    const cols = table.tsv.split('\n')[0].split('\t');
+    const vals = line.split('\t');
+    expect(vals[cols.indexOf('ref_contig')]).toBe('chrS_MATERNAL');
+    expect(vals[cols.indexOf('cluster')]).toBe('2');
   });
 });

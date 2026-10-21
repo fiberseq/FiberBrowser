@@ -31,6 +31,10 @@ LIFT_ALLOWED: frozenset = frozenset({
     (_POST, "/api/cluster_all"), (_POST, "/api/cluster_matched_views"),
     (_POST, "/api/cluster_projection"), (_POST, "/api/assign_to_clusters"),
     (_POST, "/api/dissolve_cluster"), (_POST, "/api/auto_cull_clusters"),
+    # Toolbar Sort/Filter and Read Stats on the analysis cohort (graph features; capability "sort", "filter",
+    # "read_stats"). Transcription-state filters and every other analysis stay closed.
+    (_POST, "/api/sort_reads"), (_POST, "/api/filter"), (_POST, "/api/filter_by_analysis_rule"),
+    (_POST, "/api/reads/stats"),
     # Dataset bookkeeping (list, remove, its assembly report).
     (_DELETE, "/api/datasets/{dataset_id}"), (_GET, "/api/datasets/{dataset_id}/assembly"),
     (_POST, "/api/datasets/{dataset_id}/refresh_capabilities"),

@@ -29,6 +29,10 @@ export interface PerReadStats {
   cigar_ops: CigarOp[] | null;
   ref_start: number | null;
   ref_end: number | null;
+  /** A lifted read: its alignment bounds are on the sample's own assembly, on this contig (coordinates 'source'). */
+  ref_contig?: string | null;
+  coordinates?: 'source';
+  lifted?: boolean;
   fp_intervals: [number, number, number][] | null;  // [start, end, size] read-relative
   methyl_pos: number[] | null;  // read-relative positions
 }

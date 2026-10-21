@@ -102,9 +102,12 @@ On every band: **Select** (Shift-click), **Highlight**, the read menu
 applies as its panel does. DAF-seq panels that show one strand (CT or GA) show
 only that strand's reads in their band too.
 
-The toolbar's **Sort** and **Filter** run on native panels shown as panels
-(not folded into a graph). Lifted datasets do not take them, in graph mode or
-linear; pop a native panel out to sort or filter it, and its band follows.
+The toolbar's **Sort** and **Filter** run on every panel in view, lifted or
+native, including the haplotypes folded into a graph: each band takes its
+panel's order or filter, and a popped-out haplotype shows the same one. They
+are worked out on the reference's coordinates, so sequence that only a
+haplotype carries (an insertion) does not count towards a footprint or
+accessibility rule. A haplotype panel (MAT or PAT) is sorted on its own reads.
 
 ### Clustering
 
@@ -137,8 +140,11 @@ that come into view are given labels from the same run.
 - **BAM subset** writes the reads' records with every tag. For a lifted
   dataset, the records come from the sample's own assembly (the BAM you
   opened), on its contigs; the export says which.
-- **Read Stats** and the **read table** describe native datasets. Reads of
-  lifted datasets are left out, and the panel says how many.
+- **Read Stats** and the **read table** describe lifted reads too. Footprints,
+  accessibility and modifications are counted on the reference, as the reads
+  are drawn; MAPQ, NM, length and CIGAR come from each read's own record, and
+  its start and end are on the sample's own assembly (the read table's
+  `ref_contig` column names that contig).
 
 ## Zooming out
 
@@ -188,9 +194,8 @@ computer without the graph package shows the panel with **View as linear**.
 | **View as graph** is greyed out | Its tooltip says why: no package is registered, or no package path matches the dataset (sample, haplotype, contig and size). |
 | A band is missing | The panel is not on this graph's paths, or it was removed from the graph. Check **Add panel to this graph**. |
 | The panel keeps showing linear | The view is wider than the hand-off width, **Stay linear** is on, or most of the window is unresolved; the bar under the header says which. |
-| Sort or Filter does nothing on a band | They run on native panels shown as panels; lifted datasets do not take them. |
+| Sort or Filter does nothing on a band | The rule counts only reference positions: a region inside an insertion has none. Choose a region on the reference. |
 | Fewer reads than in the linear view | The band is sampled or past its rows: its label and the status line give the counts. Choose a higher **Performance mode**, or fix a row count in the **Reads** menu. |
-| Read Stats leaves reads out | Lifted datasets are not described by Read Stats; export them as a BAM subset. |
 
 See also [Haplotype comparison](haplotype-comparison.md) for comparing two
 haplotypes of a phased reference without a graph, and

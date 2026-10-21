@@ -92,6 +92,21 @@ export function sortRounds(datasetIds: string[], keyMap: Record<string, string[]
   return rounds;
 }
 
+/**
+ * A round's split lifted panels' haplotypes by dataset (graph features): a round has one state key per dataset, so a
+ * MAT or PAT panel sorts only its own haplotype's rows. Pooled lifted panels and native panels send none.
+ */
+export function liftHapsForRound(round: Record<string, string>,
+  panels: readonly { datasetId?: string | null; stateKey?: string | null; liftHap?: string | null; readSubset?: { rule: { liftHap?: string | null } } | null }[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [dsId, key] of Object.entries(round)) {
+    const p = panels.find(q => q.datasetId === dsId && (q.stateKey ?? q.datasetId) === key);
+    const hap = p?.liftHap ?? p?.readSubset?.rule.liftHap;
+    if (hap) out[dsId] = hap;
+  }
+  return out;
+}
+
 /** One sort request's view: a region on a reference, the panels showing it, its peaks and rule windows. */
 export interface SortViewGroup extends FilterRegionGroup {
   /** The peaks of this view (its reference and chromosome; at another locus, inside it). */

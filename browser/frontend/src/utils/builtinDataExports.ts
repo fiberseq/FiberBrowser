@@ -96,11 +96,10 @@ export function registerBuiltinDataExports(): void {
     available: (ctx) => {
       const scope = scopeAvailability(ctx);
       if (!scope.ok) return scope;
-      // Lifted datasets are not described (Read Stats reads native alignments).
+      // Lifted datasets are described too: their alignment bounds are on the sample's own assembly (ref_contig).
       const groups = readScopeGroups(ctx.state, ctx.readScope);
-      const lifted = groups.filter(g => ctx.state.datasets.find(d => d.id === g.datasetId)?.data_type === 'bam_livelift');
-      if (lifted.length === groups.length) return no('These reads are from lifted datasets: the read table describes native alignments');
-      return lifted.length ? { ok: true, detail: [scope.detail, 'lifted datasets are left out'].filter(Boolean).join('; ') } : scope;
+      const lifted = groups.some(g => ctx.state.datasets.find(d => d.id === g.datasetId)?.data_type === 'bam_livelift');
+      return lifted ? { ok: true, detail: [scope.detail, 'lifted reads\' alignment bounds on their source assembly'].filter(Boolean).join('; ') } : scope;
     },
     run: ({ state, readScope }) => downloadReadTable(state, readScopeGroups(state, readScope), readScopeSlug(readScope)),
   });

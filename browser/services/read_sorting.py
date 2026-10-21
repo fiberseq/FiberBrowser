@@ -146,15 +146,18 @@ def sort_similarity_for_dataset(
             from scipy.spatial.distance import pdist
 
             chrom_t = state.translate_chrom(chrom)
-            working_set = state.build_working_set(
-                ds_id,
-                chrom_t,
-                start,
-                end,
-                spanning,
-                read_ids=read_ids,
-                sample_seed=sample_seed,
-            )
+            # A lifted dataset's rows in its analysis cohort, keyed as its clustering is (cohort identities).
+            from services.lift.cohort import using_lift_cohort
+            with using_lift_cohort("analysis"):
+                working_set = state.build_working_set(
+                    ds_id,
+                    chrom_t,
+                    start,
+                    end,
+                    spanning,
+                    read_ids=read_ids,
+                    sample_seed=sample_seed,
+                )
             if working_set.reads:
                 rel_peaks = [(p["start"] - start, p["end"] - start) for p in peak_regions]
                 # The same features the clustering was built from: each peak's

@@ -17,6 +17,9 @@ SUPPORTED = frozenset({"compact_reads", "compact_all", "coverage", "lift_corresp
 # Independent v2 adapters; legacy summary/Variants/lens remain default-deny.
 # Enabling either does not authorize source BAM scans in target coordinates.
 SUPPORTED = SUPPORTED | {"difference_summary", "difference_split", "difference_lens"}
+# Toolbar Sort and Filter and Read Stats (graph features): lifted rows in their analysis cohort, on target coordinates;
+# Read Stats takes alignment fields from each row's own source record (services/read_stats.py).
+SUPPORTED = SUPPORTED | {"sort", "filter", "read_stats"}
 
 
 class LiveLiftUnsupported(Exception):

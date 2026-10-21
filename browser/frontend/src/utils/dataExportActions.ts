@@ -4,7 +4,8 @@
  * made one way wherever it is asked for.
  */
 import type { BrowserState } from '../stores/browserStore';
-import { qnameOfId } from './recordKeys';
+import { qnameOfId, recordKey } from './recordKeys';
+import { clusterAssignmentForRead } from '../components/tracks/read-track/readFilter';
 import { exportSession } from '../api/session';
 import { getCompactReadsAll } from '../api/readOperations';
 import { fetchReadStats, type PerReadStats } from '../api/readStats';
@@ -439,7 +440,7 @@ export async function copyReadNames(groups: ReadScopeGroup[]): Promise<number> {
 }
 
 export const READ_TABLE_COLUMNS = [
-  'read_id', 'dataset_id', 'reference', 'chrom', 'cluster', 'aligned_span', 'read_length', 'ref_start', 'ref_end', 'strand', 'mapq',
+  'read_id', 'dataset_id', 'reference', 'chrom', 'cluster', 'aligned_span', 'read_length', 'ref_start', 'ref_end', 'ref_contig', 'strand', 'mapq',
   'footprint_count', 'nucleosome_count', 'subnuc_count', 'avg_footprint_size', 'median_footprint_size',
   'accessibility_pct', 'methyl_count', 'methyl_pct', 'viewer_order',
 ] as const;
@@ -453,11 +454,9 @@ export const READ_TABLE_COLUMNS = [
 export async function buildReadTable(
   state: BrowserState,
   groups: ReadScopeGroup[],
-): Promise<{ tsv: string; rows: number; truncated: boolean; total: number; leftOut: number }> {
-  // Lifted datasets are left out (Read Stats reads native alignments; the server refuses lifted ones).
-  const lifted = new Set(state.datasets.filter(d => d.data_type === 'bam_livelift').map(d => d.id));
-  const leftOut = groups.filter(g => lifted.has(g.datasetId)).reduce((n, g) => n + g.readIds.length, 0);
-  groups = groups.filter(g => !lifted.has(g.datasetId));
+): Promise<{ tsv: string; rows: number; truncated: boolean; total: number }> {
+  // Lifted datasets are described too (graph features): their ref_start/ref_end are on the sample's own assembly,
+  // on ref_contig (empty for native reads, whose bounds are on chrom).
   const total = groups.reduce((n, g) => n + g.readIds.length, 0);
   let budget = MAX_READ_STATS_READS;
   const regions = new Map<string, { chrom: string; start: number; end: number; genome?: string; groups: ReadScopeGroup[] }>();
@@ -490,23 +489,24 @@ export async function buildReadTable(
           ...r,
           chrom: region.chrom,
           reference: genomeKeyFor(region.genome, state),
-          cluster: state.clusterAssignments[g.stateKey]?.[readId] ?? '',
+          // A lifted row's label is under its cohort identity or its record key (a graph run): the read track's rule.
+          cluster: clusterAssignmentForRead(state.clusterAssignments[g.stateKey] ?? {},
+            recordKey(readId) ? { id: qnameOfId(readId), analysis_id: readId, live_lift: true } : readId) ?? '',
           viewer_order: ++order,
         };
         rows.push(READ_TABLE_COLUMNS.map(c => values[c] ?? ''));
       }
     }
   }
-  return { tsv: formatTsv(rows), rows: rows.length - 1, truncated: total > MAX_READ_STATS_READS, total, leftOut };
+  return { tsv: formatTsv(rows), rows: rows.length - 1, truncated: total > MAX_READ_STATS_READS, total };
 }
 
 export async function downloadReadTable(state: BrowserState, groups: ReadScopeGroup[], slug: string): Promise<string> {
   const table = await buildReadTable(state, groups);
   downloadTextFile(table.tsv, `reads_${slug}_${placesFileStem(groups, state)}_${exportTimestamp()}.tsv`, TSV);
-  const note = table.leftOut ? `; ${table.leftOut.toLocaleString()} read${table.leftOut === 1 ? '' : 's'} of lifted datasets left out` : '';
-  return (table.truncated
+  return table.truncated
     ? `Saved the first ${table.rows.toLocaleString()} of ${table.total.toLocaleString()} reads (at most ${MAX_READ_STATS_READS.toLocaleString()} at a time)`
-    : `Saved ${table.rows.toLocaleString()} reads`) + note;
+    : `Saved ${table.rows.toLocaleString()} reads`;
 }
 
 /** One BAM per dataset and region (POST /api/reads/export_bam; a lifted dataset's reads on its source assembly:

@@ -141,10 +141,11 @@ def test_guard_finds_nested_dataset_maps(carrier):
 
 
 @pytest.mark.parametrize('extra_only', [False, True])
-def test_stats_selected_ids_refuse_in_service_and_http(lift_env, extra_only):
+def test_stats_selected_ids_are_served_for_lifted_datasets(lift_env, extra_only):
+    """Read Stats takes lifted datasets (graph features): the service and the route answer, in the main region and in
+    an extra region alike (tests/test_lift_sort_filter_stats.py checks the statistics)."""
     from models.requests import ReadStatsRequest
     from services.analysis_query import AnalysisReadQuery
-    from services.lift.capability import LiveLiftUnsupported
     from services.read_stats import compute_read_stats
     client, state, manifest, bam = lift_env
     did = _add(client, manifest, bam)['dataset']['id']
@@ -154,13 +155,21 @@ def test_stats_selected_ids_refuse_in_service_and_http(lift_env, extra_only):
         body['extra_regions'] = [dict(chrom=TARGET, start=1000, end=9000, read_ids_by_dataset={did: ['plus']})]
     else:
         body['read_ids_by_dataset'][did] = ['plus']
-        with pytest.raises(LiveLiftUnsupported):
-            AnalysisReadQuery.from_request(state, chrom=TARGET, start=1000, end=9000,
-                                           read_ids_by_dataset={did: ['plus']})
-    with pytest.raises(LiveLiftUnsupported):
-        compute_read_stats(state, TARGET, 1000, 9000, False, ReadStatsRequest(**body))
+        AnalysisReadQuery.from_request(state, chrom=TARGET, start=1000, end=9000, capability='read_stats',
+                                       read_ids_by_dataset={did: ['plus']})
+    out = compute_read_stats(state, TARGET, 1000, 9000, False, ReadStatsRequest(**body))
+    assert [e['dataset_id'] for e in out['per_read']] == [did]
     response = client.post('/api/reads/stats', params=dict(chrom=TARGET, start=1000, end=9000), json=body)
-    assert response.status_code == 409 and response.json()['notice']
+    assert response.status_code == 200 and response.json()['found_count'] == 1
+
+
+def test_analysis_capability_still_refuses_lifted_ids(lift_env):
+    from services.analysis_query import AnalysisReadQuery
+    from services.lift.capability import LiveLiftUnsupported
+    client, state, manifest, bam = lift_env
+    did = _add(client, manifest, bam)['dataset']['id']
+    with pytest.raises(LiveLiftUnsupported):
+        AnalysisReadQuery.from_request(state, chrom=TARGET, start=1000, end=9000, read_ids_by_dataset={did: ['plus']})
 
 
 @pytest.mark.parametrize('path,method,body', [
@@ -169,7 +178,6 @@ def test_stats_selected_ids_refuse_in_service_and_http(lift_env, extra_only):
     ('/api/autozoom', 'POST', {}),
     ('/api/quality/impact', 'POST', {'filters': [{'layer': '*', 'quality_name': 'nq', 'min_value': 1}]}),
     ('/api/scan_peaks', 'POST', {}),
-    ('/api/reads/stats', 'POST', {'read_ids_by_dataset': {}}),
     ('/api/footprint/derived_layers/load', 'POST', {'path': 'synthetic.fiberlayers'}),
     *[(f'/api/variants/{kind}', 'POST', {}) for kind in ('snps', 'alleles', 'svs', 'sv_linkage')],
     ('/api/sv/split', 'POST', {'t': 'D', 'ref': 4000, 'len': 100}),

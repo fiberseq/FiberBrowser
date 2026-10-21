@@ -66,6 +66,7 @@ import { useAnnotationFetch } from '../hooks/useAnnotationFetch';
 import { useSplitPanelStore } from '../stores/splitPanelStore';
 import { beginRun, setRunResult } from '../stores/runResultStore';
 import { formatShare } from '../utils/denominators';
+import { foldedInShownGraph } from '../stores/graphMembership';
 import { clusterRunHeadline, clusterRunPlan, clusterWindows as sharedClusterWindows, panelTargetLabel, selectedClusterPeakRegions, type ClusterWindow } from '../utils/clusterTargets';
 import { splitShowsAll } from '../utils/splitLocus';
 import { resolveSplitPanels } from '../utils/splitPanels';
@@ -81,7 +82,7 @@ import { normalizeAnalysisRuleScope, normalizeTranscriptionStateRuleKind, resolv
 import { filterRegionGroups, groupStillShown } from '../utils/filterScopes';
 import { logPerfTiming, nowMs } from '../utils/perfDebug';
 import { clusterBranchDynamicScopeKey, isClusterBranchAtViewport } from '../utils/clusterBranches';
-import { resolveSortRequestScope, selectedPeakWindowsForSort, sortRounds, sortViewGroups, mergeScopedSortOrder, sortStateStillCurrent, sortMovesVisibleReads } from '../utils/sortScope';
+import { liftHapsForRound, resolveSortRequestScope, selectedPeakWindowsForSort, sortRounds, sortViewGroups, mergeScopedSortOrder, sortStateStillCurrent, sortMovesVisibleReads } from '../utils/sortScope';
 import { clusterChartRunPeaks } from './controls/cluster-detail/clusterChartScope';
 import { sameChrom } from '../utils/chromAliases';
 import { formatCoordinates } from '../utils/coordinates';
@@ -1641,8 +1642,9 @@ export function Browser() {
       return false;
     };
 
-    // Only shown read panels are targets; a split's collapsed source stays untouched.
-    const targetPanels = panels.filter(p => !p.collapsed);
+    // Only shown read panels are targets; a split's collapsed source stays untouched. A member folded into a shown
+    // graph counts as shown (its sub-band is in the host's graph; the band orders its rows by this sort).
+    const targetPanels = panels.filter(p => !p.collapsed || foldedInShownGraph(p, panels));
     const keyMap = getStateKeyMap(selectedDatasets, targetPanels, []);
     const datasetIds = Object.keys(keyMap);
     // Each target panel is sorted at its own locus and reference.
@@ -1765,7 +1767,10 @@ export function Browser() {
             // request, not the same reads sorted twice.
             if (roundIds.every(id => full[id] !== undefined && new Set(full[id]).size === sortReadIds[id].length)) continue;
           }
+          // A split lifted panel sorts its own haplotype's rows (one state key per dataset in a round).
+          const liftHapByDataset = liftHapsForRound(round, targetPanels);
           const res = await sortReads(group.chrom, group.start, group.end, spanningOnly, roundIds, backendSortBy, {
+            ...(Object.keys(liftHapByDataset).length ? { liftHapByDataset } : {}),
             rule: sortRulePayload ?? (rule ? {
               size_min: rule.sizeMin, size_max: rule.sizeMax, conditions: rule.conditions,
               quality_gates: qualityGatesPayload(rule.qualityGates),

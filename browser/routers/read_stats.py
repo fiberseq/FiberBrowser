@@ -39,6 +39,8 @@ def _read_stats(*, chrom, start, end, spanning, request, state):
         spanning=spanning,
         read_ids_by_dataset=request.read_ids_by_dataset,
         sample_seed=request.sample_seed,
+        capability="read_stats",
+        lift_hap_by_dataset=request.lift_hap_by_dataset,
     )
     request.read_ids_by_dataset = query.read_ids_by_dataset
     return compute_read_stats(
