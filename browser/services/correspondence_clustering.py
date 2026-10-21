@@ -1,5 +1,6 @@
 """Joint clustering in oriented, gap-free coordinates, with a reference per window."""
 from collections import Counter
+import json
 import time
 
 import numpy as np
@@ -80,15 +81,19 @@ def settings_snapshot(req) -> dict:
                 cluster_feature_rules=req.cluster_feature_rules or [], method=req.method)
 
 
-def pattern_bits(X, widths, modes, rules, accessibility_threshold):
-    """Combinatorial pattern bits of feature rows, as cluster_compact_reads computes them."""
+def pattern_bits(X, widths, modes, rules, accessibility_threshold, missing=None):
+    """Combinatorial pattern bits of feature rows, as cluster_compact_reads computes them: -1 for a feature the
+    row's window lacks (``missing``: one set of feature indices per row)."""
     from services.clustering_features import class_aware_pattern_slices
     slices = class_aware_pattern_slices(widths, modes, rules)
     out = []
-    for row in X:
+    for i, row in enumerate(X):
         bits = []
-        for _p, offset, pw, is_class in slices:
-            if pw > 0:
+        lacks = missing[i] if missing else ()
+        for p_idx, offset, pw, is_class in slices:
+            if p_idx in lacks:
+                bits.append(-1)
+            elif pw > 0:
                 bits.append(1 if row[offset:offset + pw].mean() > (0.5 if is_class else accessibility_threshold) else 0)
             else:
                 bits.append(0)
@@ -96,14 +101,14 @@ def pattern_bits(X, widths, modes, rules, accessibility_threshold):
     return out
 
 
-def assign_with_model(X, read_ids, widths, modes, model, snapshot):
+def assign_with_model(X, read_ids, widths, modes, model, snapshot, missing=None):
     """Labels of feature rows under a fitted model: combinatorial patterns (exact, else the nearest kept pattern), or
     the nearest fitted centre."""
     if model.get('cluster_patterns'):
         from services.dynamic_clustering import match_pattern_to_cluster
         table = {tuple(int(b) for b in bits): int(label) for label, bits in model['cluster_patterns'].items()}
         bits = pattern_bits(X, widths, modes, snapshot.get('cluster_feature_rules') or [],
-                            snapshot['accessibility_threshold'])
+                            snapshot['accessibility_threshold'], missing)
         return {rid: (table[b] if b in table else match_pattern_to_cluster(b, table)) for rid, b in zip(read_ids, bits)}
     centres = model.get('centroids') or {}
     if not centres:
@@ -233,8 +238,13 @@ def run(state, req, *, sources=None, model=None, row_cache=None):
     features, centres = {}, {}
     if model is not None:
         # Dynamic assignment (§3.5): the persisted model on the persisted geometry, with the run's settings snapshot.
+        # A model whose samples, feature lengths or extraction settings differ is refused, never reinterpreted.
         from services.clustering_features import extract_features_grouped
         assignments, patterns = {}, None
+        same = (model.get('samples') == positions and model.get('lengths') == lengths
+                and json.dumps(model.get('settings'), sort_keys=True) == json.dumps(snapshot, sort_keys=True))
+        if not same:
+            raise ValueError('settings or geometry changed: cluster again')
         if reads:
             X, rids, widths, used = extract_features_grouped(
                 reads, [(0, n) for n in lengths], 0, groups, step=10,
@@ -243,7 +253,11 @@ def run(state, req, *, sources=None, model=None, row_cache=None):
             if model.get('peak_widths') is not None and list(widths) != list(model['peak_widths']):
                 raise ValueError('settings or geometry changed: cluster again')
             if len(rids):
-                assignments = assign_with_model(np.asarray(X), rids, widths, used, model, snapshot)
+                lacks = {v.result_key: {i for i in req.member_specific_features if not any(b.feature == i for b in v.blocks)}
+                         for v in req.viewports}
+                group_of = {r['id']: r.get('_cluster_group') for r in reads}
+                missing = [lacks.get(group_of.get(rid), set()) for rid in rids]
+                assignments = assign_with_model(np.asarray(X), rids, widths, used, model, snapshot, missing)
     else:
         assignments, _, _, patterns = cluster_compact_reads(reads, [(0, n) for n in lengths], 0, req.k,
             method=req.method, peak_modes=modes, random_state=random_state, cluster_feature_rules=req.cluster_feature_rules,

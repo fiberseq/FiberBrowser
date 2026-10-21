@@ -198,7 +198,9 @@ def test_insertion_continues_the_parent_grid_and_shares_nodes_between_carriers()
     q = path("q", [occ("q1", "a", (0, 23), (0, 23)), occ("q2", "i1", (23, 35), (0, 12)), occ("qx", "x", (35, 36), (0, 1)),
                    occ("q3", "i2", (36, 44), (0, 8)), occ("q4", "b", (44, 61), (0, 17))])
     rc = columns({"p": [topo(nodes, [t, p])], "q": [topo(nodes, [t, q])]}, 0, 40, [("P", "p"), ("Q", "q")])
-    [ins] = rc.features
+    ins, private = rc.features
+    # Q's private node inside the shared insertion is a feature of its own (Q's block; 1 bp, no sampled position).
+    assert private.nodes == ["x"] and private.blocks == {"Q": [(0, 1, 35, 36, False)]} and not private.samples
     assert ins.kind == "insertion" and ins.length == 20 and ins.anchor == (22, 23)
     # Boundary 23: offsets ≡ (10 − 23 mod 10) mod 10 = 7 (mod 10).
     assert ins.samples == [7, 17]
@@ -234,3 +236,68 @@ def test_cells_and_tile_intervals_are_fixed():
     assert gc.tile_interval(0, 5_000) == (0, 5_000)
     with pytest.raises(ValueError):
         columns({}, 0, gc.MAX_FEATURE_BP + 1, [])
+
+
+# ── Review round 1 (G2): order independence, private sequence, open ends, copies, carrier-only regions ─────────
+
+def _pq(order):
+    nodes = {"a": 23, "b": 17, "i1": 12, "i2": 30, "x": 31}
+    t = path("target", [occ("t1", "a", (0, 23), (0, 23)), occ("t2", "b", (23, 40), (0, 17))])
+    p = path("p", [occ("p1", "a", (0, 23), (0, 23)), occ("p2", "i1", (23, 35), (0, 12)), occ("p3", "i2", (35, 65), (0, 30)),
+                   occ("p4", "b", (65, 82), (0, 17))])
+    q = path("q", [occ("q1", "a", (0, 23), (0, 23)), occ("q2", "i1", (23, 35), (0, 12)), occ("qx", "x", (35, 66), (0, 31)),
+                   occ("q3", "i2", (66, 96), (0, 30)), occ("q4", "b", (96, 113), (0, 17))])
+    res = {"p": [topo(nodes, [t, p])], "q": [topo(nodes, [t, q])]}
+    obs = [("L", None), ("P", "p"), ("Q", "q")]
+    obs = obs if order else list(reversed(obs))
+    allres = [r for rs in res.values() for r in rs]
+    return gc.region_columns(0, 0, 40, "target", gc.merge_occurrences(allres, "target"), [gc.Observation(i, b) for i, b in obs],
+                             {b: gc.merge_occurrences(rs, b) for b, rs in res.items()}, {b: {0: rs[0]} for b, rs in res.items()},
+                             binding_order=["target", "p", "q"])
+
+
+def test_insertion_frames_follow_the_package_binding_order_not_the_request():
+    one, two = _pq(True), _pq(False)
+    key = lambda rc: [(f.nodes, f.length, f.samples, f.blocks, f.carriers) for f in rc.features]
+    assert key(one) == key(two)
+    shared, private = one.features
+    assert shared.nodes == ["i1", "i2"] and shared.carriers == ["P", "Q"]
+    # Q's 31 private bases are a feature carried by Q alone, on the grid continued along Q's walk (12 bases in).
+    assert private.nodes == ["x"] and private.carriers == ["Q"] and private.samples == [5, 15, 25]
+    plan = gc.stage_plan([one], ["L", "P", "Q"], carrier_min_samples=1)
+    assert [cs["carriers"] for cs in plan.carrier_sets] == [["P", "Q"], ["Q"]]
+
+
+def test_stage_plan_never_changes_the_region_columns():
+    rc = _pq(True)
+    before = [(f.samples, f.carriers) for f in rc.features]
+    gc.stage_plan([rc], ["L", "P"], carrier_min_samples=1)
+    again = gc.stage_plan([rc], ["L", "P", "Q"], carrier_min_samples=1)
+    assert [(f.samples, f.carriers) for f in rc.features] == before
+    assert [cs["carriers"] for cs in again.carrier_sets] == [["P", "Q"], ["Q"]]
+
+
+def test_runs_across_a_gap_or_with_uncarried_bases_are_not_insertions():
+    nodes = {"a": 23, "b": 17, "i1": 12, "i2": 12}
+    t = path("target", [occ("t1", "a", (0, 23), (0, 23)), occ("t2", "b", (23, 40), (0, 17))])
+    gap = path("p", [occ("p1", "a", (0, 23), (0, 23)), occ("p2", "i1", (23, 35), (0, 12)),
+                     occ("p3", "i2", (500, 512), (0, 12)), occ("p4", "b", (512, 529), (0, 17))])
+    assert not columns({"p": [topo(nodes, [t, gap])]}, 0, 40, [("P", "p")]).features
+    clipped = path("p", [occ("p1", "a", (0, 23), (0, 10)), occ("p2", "i1", (23, 35), (0, 6)), occ("p4", "b", (35, 52), (5, 17))])
+    assert not columns({"p": [topo(nodes, [t, clipped])]}, 0, 40, [("P", "p")]).features
+
+
+def test_a_region_only_carrier_specific_keeps_its_carrier_features_beside_shared_regions():
+    nodes = {"l": 40, "r": 40, "s": 40}
+    t = path("target", [occ("t1", "l", (0, 40), (0, 40)), occ("t2", "r", (40, 80), (0, 40)), occ("t3", "s", (100, 140), (0, 40))])
+    p = path("p", [occ("p1", "l", (0, 40), (0, 40)), occ("p3", "s", (100, 140), (0, 40))],
+             plan=plan(owned(0, 40), owned(40, 80, kind="target_insertion"), owned(80, 140)))
+    q = path("q", [occ("q2", "r", (40, 80), (0, 40)), occ("q3", "s", (100, 140), (0, 40))],
+             plan=plan(owned(0, 40, kind="target_insertion"), owned(40, 140)))
+    res = {"p": [topo(nodes, [t, p])], "q": [topo(nodes, [t, q])]}
+    halves = columns(res, 0, 80, [("P", "p"), ("Q", "q")])
+    both = columns(res, 100, 140, [("P", "p"), ("Q", "q")])
+    plan_ = gc.stage_plan([halves, both], ["P", "Q"])
+    assert [f.kind for f in plan_.shared] == ["target"] and plan_.shared[0].region == both.region
+    assert sorted(cs["carriers"][0] for cs in plan_.carrier_sets) == ["P", "Q"]
+    assert any(d["reason"] == "no position every path carries" for d in plan_.report["dropped"])

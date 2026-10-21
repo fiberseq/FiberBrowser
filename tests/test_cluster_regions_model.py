@@ -93,3 +93,25 @@ def test_a_model_of_other_widths_is_refused(state):
     narrower = req.model_copy(update={"sample_positions": [[0, 10, 20]]})
     with pytest.raises(ValueError, match="cluster again"):
         fc.run(state, narrower, model=model)
+
+
+def test_model_assignment_keeps_missing_features_missing(state):
+    """Review round 1 (G2): a window lacking a member-specific feature has -1 there in the fit; assigning with the
+    model must give it -1 too, never a closed 0 that moves it into a carrier's cluster."""
+    a = window("ref")
+    b = window("car", blocks=[fc.FrameBlock(feature=0, frame=(0, 100), genomic=(100, 200)),
+                              fc.FrameBlock(feature=1, frame=(0, 40), genomic=(220, 260))])
+    req = fc.RegionClusterRequest(viewports=[a, b], peak_regions=[PeakRegion(start=0, end=100), PeakRegion(start=0, end=40)],
+                                  member_specific_features=[1], method="combinatorial", k=4)
+    out = fc.run(state, req)
+    again = fc.run(state, req, model=out["model"])
+    for key in ("ref", "car"):
+        assert again["results"][key]["assignments"] == out["results"][key]["assignments"]
+
+
+@pytest.mark.parametrize("change", [{"subnucleosomal_threshold": 40}, {"sample_positions": [list(range(5, 100, 10))]}])
+def test_a_model_is_never_assigned_with_other_settings_or_samples(state, change):
+    req = fc.RegionClusterRequest(viewports=[window("a")], peak_regions=[PeakRegion(start=0, end=100)], method="kmeans", k=2)
+    model = fc.run(state, req)["model"]
+    with pytest.raises(ValueError, match="cluster again"):
+        fc.run(state, req.model_copy(update=change), model=model)

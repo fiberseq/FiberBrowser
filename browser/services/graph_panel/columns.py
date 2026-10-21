@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Iterable, Optional
 
 CELL_BP = 10_000
@@ -273,7 +273,8 @@ class RegionColumns:
 
 def region_columns(region: int, start: int, end: int, target: str, target_occs: dict[str, Occ],
                    observations: list[Observation], path_occs: dict[str, dict[str, Occ]],
-                   tile_results: dict[str, dict[int, dict]], *, insertions: bool = True) -> RegionColumns:
+                   tile_results: dict[str, dict[int, dict]], *, insertions: bool = True,
+                   binding_order: Optional[list[str]] = None) -> RegionColumns:
     """A region's features (shared target feature, non-target runs, deleted stretches) with every observation's
     blocks, from the merged occurrences of the cells the region meets. ``path_occs[binding]`` and
     ``tile_results[binding][cell]`` hold each graph observation's path; linear observations carry the target walk
@@ -337,16 +338,24 @@ def region_columns(region: int, start: int, end: int, target: str, target_occs: 
 
     features: list[Feature] = []
     if insertions:
-        features.extend(_insertion_features(region, start, end, target, t_visits, observations, path_occs, report))
+        features.extend(_insertion_features(region, start, end, target, t_visits, observations, path_occs, report,
+                                            binding_order))
     return RegionColumns(region, start, end, features, report, carried, [c is not None for c in cols])
 
 
-def _insertion_features(region, start, end, target, t_visits, observations, path_occs, report) -> list[Feature]:
+def _insertion_features(region, start, end, target, t_visits, observations, path_occs, report,
+                        binding_order=None) -> list[Feature]:
+    """Non-target node runs between two target anchors inside the region, partitioned into features: paths are
+    read in the package's binding order (never the request's), each run is split into maximal stretches of nodes
+    that already belong to a feature (its carrier joins it) and stretches of new nodes (a new feature, framed along
+    this path's walk), so a carrier's private nodes inside a shared insertion become their own feature."""
     target_nodes = set(t_visits)
-    feats: list[dict] = []    # {nodes: set, canon: [Occ], carriers: {obs id: [Occ]}, anchor}
-    for ob in observations:
-        if ob.binding is None or ob.binding == target:
-            continue
+    rank = {b: i for i, b in enumerate(binding_order or ())}
+    ordered = sorted((ob for ob in observations if ob.binding is not None and ob.binding != target),
+                     key=lambda ob: (rank.get(ob.binding, len(rank)), ob.binding, ob.id))
+    feats: list[dict] = []    # {nodes, canon: [Occ], skip, carriers: {obs id: [Occ]}, anchor}
+    owner: dict[str, int] = {}
+    for ob in ordered:
         occs = sorted((path_occs.get(ob.binding) or {}).values(), key=lambda q: (q.span[0], q.span[1]))
         vis = visits(path_occs.get(ob.binding) or {})
         i = 0
@@ -361,8 +370,12 @@ def _insertion_features(region, start, end, target, t_visits, observations, path
             left = occs[i - 1] if i > 0 else None
             right = occs[j] if j < len(occs) else None
             i = j
-            if left is None or right is None or left.span[1] != run[0].span[0] or run[-1].span[1] != right.span[0]:
-                continue   # an open end: not a run between two target anchors in this extraction
+            walk = [left, *run, right]
+            # Between two target anchors in this extraction: contiguous visits, every run base carried (§2.3: the
+            # unclipped path_span authorises nothing beyond the clips).
+            if left is None or right is None or any(a.span[1] != b.span[0] for a, b in zip(walk, walk[1:])) \
+                    or any(q.clips != [(0, q.length)] for q in run):
+                continue
             tl, tr = _flank_target(left, True, t_visits), _flank_target(right, False, t_visits)
             if tl is None or tr is None:
                 continue
@@ -372,35 +385,42 @@ def _insertion_features(region, start, end, target, t_visits, observations, path
             if any(len(vis[q.node]) != 1 for q in run):
                 report["repeats"][ob.id] = report["repeats"].get(ob.id, 0) + 1
                 continue
-            nodes = {q.node for q in run}
-            hit = next((f for f in feats if f["nodes"] & nodes), None)
-            if hit is None:
-                feats.append({"nodes": nodes, "canon": run, "carriers": {ob.id: run}, "anchor": (lo, hi)})
-            else:
-                hit["carriers"].setdefault(ob.id, run)
+            offset = 0
+            k = 0
+            while k < len(run):
+                fid = owner.get(run[k].node)
+                m = k
+                while m < len(run) and owner.get(run[m].node) == fid:
+                    m += 1
+                group = run[k:m]
+                if fid is None:
+                    fid = len(feats)
+                    feats.append({"canon": group, "skip": offset, "carriers": {}, "anchor": (lo, hi)})
+                    for q in group:
+                        owner[q.node] = fid
+                feats[fid]["carriers"].setdefault(ob.id, []).extend(group)
+                offset += sum(q.length for q in group)
+                k = m
     out = []
-    ids = [ob.id for ob in observations]
+    ids = sorted(ob.id for ob in observations)
     for f in feats:
         frame: list[tuple[str, int, bool]] = [(q.node, o, q.reverse) for q in f["canon"] for o in q.walk_offsets()]
         index = {(n, o): u for u, (n, o, _r) in enumerate(frame)}
         canon_rev = {n: r for n, _o, r in frame}
         lo, hi = f["anchor"]
-        boundary = hi
-        phase = (GRID_BP - (boundary - start) % GRID_BP) % GRID_BP
-        samples = _grid(0, len(frame), phase)
+        # The parent's 10 bp grid continued across the boundary (§2.5), counted along the creating path's walk of
+        # the whole insertion (this feature starts ``skip`` bases into it).
+        phase = (GRID_BP - (hi - start) % GRID_BP) % GRID_BP
+        samples = _grid(0, len(frame), (phase - f["skip"]) % GRID_BP)
+        sample_set = set(samples)
         blocks, carriers = {}, []
         for oid in ids:
             run = f["carriers"].get(oid)
             if not run:
                 continue
-            pts = []
-            for q in run:
-                for o in q.walk_offsets():
-                    u = index.get((q.node, o))
-                    if u is not None:
-                        pts.append((u, q.pos(o), q.reverse != canon_rev[q.node]))
-            pts.sort()
-            if any(p[0] in set(samples) for p in pts):
+            pts = sorted((index[(q.node, o)], q.pos(o), q.reverse != canon_rev[q.node])
+                         for q in run for o in q.walk_offsets() if (q.node, o) in index)
+            if any(p[0] in sample_set for p in pts):
                 carriers.append(oid)
             blocks[oid] = _runs(pts)
         out.append(Feature("insertion", region, len(frame), samples, blocks, carriers,
@@ -418,7 +438,7 @@ def _flank_target(occ: Occ, left: bool, t_visits: dict) -> Optional[int]:
     p = occ.span[1] - 1 if left else occ.span[0]
     o = occ.offset(p)
     t = hits[0]
-    if not (0 <= o < t.length):
+    if not (0 <= o < t.length) or not occ.carries(o) or not t.carries(o):
         return None
     return t.pos(o)
 
@@ -449,7 +469,7 @@ def stage_plan(regions: list[RegionColumns], observation_ids: list[str], *, carr
     features group by identical carriers into carrier sets, in a deterministic order (stage 2)."""
     left_out: dict = {}
     participants = []
-    for oid in observation_ids:
+    for oid in sorted(observation_ids):
         lacking = [r.region for r in regions
                    if not any(u in r.carried.get(oid, {}) for u in _grid(0, r.end - r.start) if r.walk[u])]
         if lacking:
@@ -463,20 +483,23 @@ def stage_plan(regions: list[RegionColumns], observation_ids: list[str], *, carr
     dropped = []
     pset = set(participants)
     for r in regions:
-        for f in [*r.target_features(participants), *r.features]:
-            carriers = [c for c in f.carriers if c in pset]
+        # (Copies: a region's columns are reusable across plans, never changed by one.)
+        for f in [*r.target_features(participants), *(replace(f) for f in r.features)]:
+            carriers = sorted(c for c in f.carriers if c in pset)
             if f.kind == "target":
-                if not f.samples:
-                    raise ValueError(f"Region {r.region + 1} has no position every path carries")
-                shared.append(f)
+                if f.samples:
+                    shared.append(f)
+                else:
+                    # Nothing every path carries here (e.g. two paths carrying different halves): its carrier-only
+                    # parts still refine, and the other regions' shared features fit as usual.
+                    dropped.append({**f.public(), "reason": "no position every path carries"})
                 continue
             if not carriers:
                 continue
             if set(carriers) == pset:
                 samples = _carried_samples(f, participants)
                 if samples:
-                    f.samples, f.carriers = samples, carriers
-                    shared.append(f)
+                    shared.append(replace(f, samples=samples, carriers=carriers))
                 else:
                     dropped.append({**f.public(), "reason": "no sampled position every path carries"})
                 continue
@@ -488,8 +511,7 @@ def stage_plan(regions: list[RegionColumns], observation_ids: list[str], *, carr
                 dropped.append({**f.public(), "samples": len(samples),
                                 "reason": f"{len(samples)} sampled position(s); at least {carrier_min_samples} needed"})
                 continue
-            f.samples, f.carriers = samples, carriers
-            by_set.setdefault(tuple(sorted(carriers)), []).append(f)
+            by_set.setdefault(tuple(carriers), []).append(replace(f, samples=samples, carriers=carriers))
     order = sorted(by_set.items(), key=lambda kv: (kv[0], min((f.region, f.kind, tuple(f.anchor or f.span or (0, 0)))
                                                               for f in kv[1])))
     sets = [{"carriers": list(k), "features": fs} for k, fs in order]
