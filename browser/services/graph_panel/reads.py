@@ -67,8 +67,8 @@ _LAYERS = ("nuc", "tf", "msp")
 # The cached rows' wire form: 2 adds the identities (aid, rk, hap) and the map's molecule groups (graph primary G0);
 # 3 the DAF strand of DAF-seq records (G8; 5: its evidence by mark, resolved per molecule; 6: marks by contig and
 # absolute source position, so records cached by decodes at other origins compare alike; 7: a supplementary's
-# primary's explicit call).
-WIRE_VERSION = 7
+# primary's explicit call; 8: soft clips).
+WIRE_VERSION = 8
 
 
 class ReadsError(Exception):
@@ -592,7 +592,8 @@ def density_strip(reads: list, windows: list, bin_bp: int) -> dict:
 
 def _entry_bytes(reads: tuple) -> int:
     # (DAF strand evidence, _dse, is counted too: thousands of marks on a deaminated read.)
-    return 256 + sum(512 + 32 * (marks_of(r) + len(r["cov"]) + len(r["ins"]) + len(r.get("dl") or ()) + len(r.get("_dse") or ()))
+    return 256 + sum(512 + 32 * (marks_of(r) + len(r["cov"]) + len(r["ins"]) + len(r.get("dl") or ()) + len(r.get("_dse") or ())
+                                 + len(r.get("clips") or ()))
                      for r in reads)
 
 
@@ -703,10 +704,17 @@ def _decode_records(dataset, contig: str, size: int, windows: list, binding: str
         return (lib, qname, int(start), int(end), bool(sup))
 
     nbytes: dict = {}
+    # Soft (and hard) clips, as linear read tracks show them (the loader's SV events of type S: source boundary,
+    # length, side; graph features item 5), on the rows whose coverage reaches the boundary.
+    clips_of: dict = {}
     for read in decoded:
         k = ident(lib_of.get(read.get("source_path"), 0), read.get("id"), read.get("reference_start", 0),
                   read.get("reference_end", 0), (read.get("_fiberbrowser_primary") or {}).get("is_supplementary"))
         nbytes[k] = nbytes.get(k, 0) + decoded_size_estimate(read)
+        clips = [[int(ev["ref"]), int(ev["len"]), "L" if ev.get("side") == "L" else "R"] for ev in read.get("sv") or ()
+                 if isinstance(ev, dict) and ev.get("t") == "S" and isinstance(ev.get("ref"), int) and int(ev.get("len") or 0) > 0]
+        if clips:
+            clips_of.setdefault(k, []).extend(clips)
     composed: dict = {}
     lifted = getattr(dataset, "live_lift", None) is not None
     # A supplementary record with no strand call of its own takes its primary's explicit call (st:Z), found as linear
@@ -734,6 +742,10 @@ def _decode_records(dataset, contig: str, size: int, windows: list, binding: str
         k = ident(read["lib"], read["q"], read["s"], read["e"], read["sup"])
         if read["sup"] and "_dsx" not in read and k in prim_strand:
             read["_dsx"] = prim_strand[k]
+        mine = [c for c in clips_of.get(k, ()) if read["s"] <= c[0] <= read["e"]
+                and any(c0 <= c[0] <= c1 for c0, c1, *_ in read["cov"])]
+        if mine:
+            read["clips"] = mine
         composed.setdefault(k, []).append(read)
     entries: dict = {}
     hard_left = int(counts.get("hard_clipped_supplementary", 0))

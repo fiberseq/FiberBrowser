@@ -894,3 +894,16 @@ def test_a_supplementary_alone_takes_its_primarys_explicit_strand(env):
     alone = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 2900, "end": 3500}]}]).json()
     assert [r.get("ds") for r in alone["reads"] if r["q"] == "expl"] == ["CT"]
     assert not any(k.startswith("_ds") for r in alone["reads"] for k in r)
+
+
+def test_graph_rows_carry_their_soft_clips(env):
+    """Graph features, item 5: a record's soft clips (the loader's SV events of type S) are on its graph row, at the
+    source boundary with their length and side, as the read tracks draw them."""
+    bam = write_bam(env.tmp / "clips.bam", lambda h: [
+        make_record(h, "clp", MAT, 1000, "80S400M60S", tags=[("ns", _u32([50])), ("nl", _u32([150]))]),
+        make_record(h, "none", MAT, 2000, "400M", tags=[("ns", _u32([50])), ("nl", _u32([150]))])])
+    did = _add_lifted(env, paths=[bam], dataset_id="clips")
+    out = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 0, "end": 3000}]}]).json()
+    by = {r["q"]: r for r in out["reads"]}
+    assert by["clp"]["clips"] == [[1000, 80, "L"], [1400, 60, "R"]]
+    assert "clips" not in by["none"]

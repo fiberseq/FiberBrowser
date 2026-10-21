@@ -365,8 +365,11 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   // menu can only hide more. Toggling a layer redraws from the loaded reads, no refetch.
   const enabledModTypes = useBrowserStore(s => s.enabledModTypes) as Record<string, boolean | undefined>;
   const globalLayers = useMemo(() => effectiveReadLayers(enabledModTypes), [enabledModTypes]);
-  const readLayers: ReadLayers = useMemo(() => effectiveReadLayers(enabledModTypes, readSettings.layers),
-    [enabledModTypes, readSettings.layers]);
+  // Soft clips follow the read tracks' SV display toggle and minimum length (graph features).
+  const svDisplayEnabled = useBrowserStore(s => s.svDisplayEnabled);
+  const svMinLen = useBrowserStore(s => s.svMinLen);
+  const readLayers: ReadLayers = useMemo(() => ({ ...effectiveReadLayers(enabledModTypes, readSettings.layers),
+    clipsMinLen: svDisplayEnabled ? svMinLen : null }), [enabledModTypes, readSettings.layers, svDisplayEnabled, svMinLen]);
   const readRowHeight = readSettings.rowHeight ?? READ_ROW_HEIGHT;
   const rowsPerLane = readSettings.maxRowsPerLane ?? DEFAULT_ROWS_PER_LANE;
   // A host fills its body height with rows by default (§6.1); a set row count (or a standalone panel) keeps it.
@@ -1252,7 +1255,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       else if (action === 'reads:rows:fill') { const { maxRowsPerLane: _m, ...rest } = current; next = rest; }
       else if (action.startsWith('reads:rows:')) next = { ...current, maxRowsPerLane: Number(action.slice('reads:rows:'.length)) };
       else if (action.startsWith('rl:')) {
-        const key = action.slice(3) as keyof ReadLayers;
+        const key = action.slice(3) as 'nuc' | 'tf' | 'msp' | 'm6a';
         const own = current.layers ?? {};
         next = { ...current, layers: { ...own, [key]: own[key] === false } };
       }

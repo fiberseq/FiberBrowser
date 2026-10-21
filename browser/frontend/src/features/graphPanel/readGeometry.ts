@@ -54,6 +54,9 @@ export interface PlacedMolecule {
   m6a: { x: number; pos: number }[];
   density: { x0: number; x1: number; count: number; bp: number }[];
   ins: { x: number; pos: number; len: number }[];
+  /** Soft (and hard) clips at the record's ends (graph features): the boundary's x, the clipped length, and the
+   * screen direction the clipped sequence lies in (-1 left, 1 right; the path may be drawn right to left). */
+  clips?: { x: number; pos: number; len: number; dir: 1 | -1 }[];
   holes: { x0: number; x1: number; s0: number; s1: number; kind: 'D' | 'N' }[];
   /** Between consecutive body pieces of the walk: connector space ('connector') or bp the scene did not draw ('unplaced'). */
   connectors: { x0: number; x1: number; kind: 'connector' | 'unplaced' }[];
@@ -327,6 +330,14 @@ export function placeRead(read: GraphRead, index: PlacementIndex, lane = read.b,
     const d = (k < drawn.length && drawn[k].s1 === pos ? drawn[k] : null) ?? at(pos);
     if (!d) continue;
     out.ins.push({ x: xAtOffset(d.p, pos - d.vs), pos, len });
+  }
+  for (const [pos, len, side] of read.clips ?? []) {
+    // A left clip at the record's first aligned base (the slice starting there), a right one after its last (the
+    // slice ending there).
+    const k = first(pos - 1);
+    const d = side === 'R' ? ((k < drawn.length && drawn[k].s1 === pos ? drawn[k] : null) ?? at(pos - 1)) : at(pos);
+    if (!d) continue;
+    (out.clips ??= []).push({ x: xAtOffset(d.p, pos - d.vs), pos, len, dir: ((side === 'L' ? -1 : 1) * d.p.dir) as 1 | -1 });
   }
   return out;
 }

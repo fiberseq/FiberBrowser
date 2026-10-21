@@ -7,6 +7,9 @@
  */
 import { LIVE_LIFT_COLORS } from '../../components/tracks/read-track/liveLiftCanvas';
 import { getClusterColor, getClusterLabel } from '../../components/tracks/read-track/constants';
+import { SV_COLORS } from '../../components/tracks/read-track/svDrawing';
+
+const SV_CLIP_COLOR = SV_COLORS.clip;
 import type { HostLane } from './memberBands';
 import type { ChromatinStyle } from './chromatinStyle';
 import type { CallPiece, PackedLane, PlacedMolecule } from './readGeometry';
@@ -17,7 +20,9 @@ export const READ_ROW_GAP = 2;
 /** Read insertions drawn as carets from this many bp (1–4 bp HiFi indels would be noise at panel scale). */
 export const READ_INSERTION_MIN_BP = 10;
 
-export interface ReadLayers { nuc: boolean; tf: boolean; msp: boolean; m6a: boolean }
+export interface ReadLayers { nuc: boolean; tf: boolean; msp: boolean; m6a: boolean;
+  /** Soft clips of at least this length, as the read tracks' SV display draws them (null or absent: off). */
+  clipsMinLen?: number | null }
 
 /**
  * The layers a graph read band draws: the toolbar's Layers row (the store's `enabledModTypes`, read the way the
@@ -41,7 +46,7 @@ export function effectiveReadLayers(enabled: Record<string, boolean | undefined>
 }
 
 /** What one draw put on the canvas, per layer (e2e and tests read it). */
-export interface ReadDrawStats { nuc: number; tf: number; msp: number; m6a: number; m6aDensity: number; outlined?: number }
+export interface ReadDrawStats { nuc: number; tf: number; msp: number; m6a: number; m6aDensity: number; outlined?: number; clips?: number }
 
 export function emptyDrawStats(): ReadDrawStats {
   return { nuc: 0, tf: 0, msp: 0, m6a: 0, m6aDensity: 0 };
@@ -162,6 +167,17 @@ export function drawReads(ctx: CanvasRenderingContext2D, scene: Scene, lanes: Ma
           if (h.kind === 'D') { ctx.fillStyle = '#475569'; ctx.fillRect(h.x0, mid - 0.5, h.x1 - h.x0, 1); continue; }
           ctx.save(); ctx.strokeStyle = '#94a3b8'; ctx.lineWidth = 1; ctx.setLineDash([2, 2]);
           ctx.beginPath(); ctx.moveTo(h.x0, mid + 0.5); ctx.lineTo(h.x1, mid + 0.5); ctx.stroke(); ctx.restore();
+        }
+        // Soft clips (the read tracks' SV display): a bar at the boundary with a tick toward the clipped side.
+        if (layers.clipsMinLen != null && m.clips) {
+          ctx.save(); ctx.strokeStyle = SV_CLIP_COLOR; ctx.lineWidth = 1.5; ctx.beginPath();
+          for (const c of m.clips) {
+            if (c.len < layers.clipsMinLen) continue;
+            ctx.moveTo(c.x, y); ctx.lineTo(c.x, y + rowHeight);
+            if (rowHeight >= 4) { ctx.moveTo(c.x, mid); ctx.lineTo(c.x + c.dir * 4, mid); }
+            if (stats) stats.clips = (stats.clips ?? 0) + 1;
+          }
+          ctx.stroke(); ctx.restore();
         }
         // Read insertions (no path bp): a caret above the row at the source boundary.
         ctx.fillStyle = LIVE_LIFT_COLORS.badge;

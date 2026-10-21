@@ -435,3 +435,33 @@ describe('Gate E: agy review', () => {
 
 // Keep the type import used (PlacedMolecule is the shape drawReads takes).
 export type { PlacedMolecule };
+
+describe('graph features item 5: soft clips', () => {
+  it('a clip is placed at its boundary, pointing to the clipped side (reversed view too); the SV toggle draws it', () => {
+    for (const reversed of [false, true]) {
+      const m = model(alu10k), sc = scene(m, { reversed });
+      const r = { ...read('target', 93_000, 94_000), clips: [[93_000, 80, 'L'], [94_000, 60, 'R']] as [number, number, string][] };
+      const p = place(sc, alu10k, r);
+      expect(p.clips).toHaveLength(2);
+      const [l, rr] = p.clips!;
+      const [x0, x1] = p.extent!;
+      expect(Math.min(Math.abs(l.x - x0), Math.abs(l.x - x1))).toBeLessThan(1.5);
+      expect(Math.min(Math.abs(rr.x - x0), Math.abs(rr.x - x1))).toBeLessThan(1.5);
+      // The left clip points away from the body, the right one too, whichever way the path is drawn.
+      expect(l.dir).toBe(reversed ? 1 : -1);
+      expect(rr.dir).toBe(reversed ? -1 : 1);
+      const lanes = packMolecules([p], 5);
+      const banded = scene(m, { reversed, bands: { target: bandHeight(lanes.get('target')) } });
+      const ctx = new Proxy({}, { get: (_t, k) => (typeof k === 'symbol' ? undefined : () => ({ width: 1 })), set: () => true }) as unknown as CanvasRenderingContext2D;
+      const style = chromatinStyle(DEFAULT_COLORMAP as never);
+      const on = emptyDrawStats(), off = emptyDrawStats();
+      drawReads(ctx, banded, lanes, style, { ...effectiveReadLayers({}), clipsMinLen: 50 }, COLORS, 7, READ_ROW_GAP, 1, on);
+      drawReads(ctx, banded, lanes, style, { ...effectiveReadLayers({}), clipsMinLen: null }, COLORS, 7, READ_ROW_GAP, 1, off);
+      expect(on.clips).toBe(2);
+      expect(off.clips ?? 0).toBe(0);
+      const shortOnly = emptyDrawStats();
+      drawReads(ctx, banded, lanes, style, { ...effectiveReadLayers({}), clipsMinLen: 70 }, COLORS, 7, READ_ROW_GAP, 1, shortOnly);
+      expect(shortOnly.clips).toBe(1);
+    }
+  });
+});

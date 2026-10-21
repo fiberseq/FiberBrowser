@@ -100,7 +100,9 @@ On every band: **Select** (Shift-click), **Highlight**, the read menu
 (right-click: **Keep only selected**, **Exclude selected**, **Copy name**,
 **Pop out**), and the panel's own filters, orders and clusters, which each band
 applies as its panel does. DAF-seq panels that show one strand (CT or GA) show
-only that strand's reads in their band too.
+only that strand's reads in their band too. Soft-clipped read ends are marked
+as in the read tracks (a bar with a tick toward the clipped sequence), with the
+same **SV display** switch and minimum length.
 
 The toolbar's **Sort** and **Filter** run on every panel in view, lifted or
 native, including the haplotypes folded into a graph: each band takes its
