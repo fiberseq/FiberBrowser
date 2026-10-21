@@ -14,7 +14,7 @@ import { assignWithGraphRun, commitGraphRun, destinationAssignments, graphCluste
 import { deserializeSavedState, remapDatasetIds, serializeState } from '../../stores/historySlice';
 import { useGraphSettings } from './handoff';
 import { clusterSelectionKeys } from '../../utils/clusterMatchedRun';
-import { clusterRunPlan } from '../../utils/clusterTargets';
+import { clusterRunPlan, clusterWindows } from '../../utils/clusterTargets';
 import { recordKey } from '../../utils/recordKeys';
 import { clusterAssignmentForRead } from '../../components/tracks/read-track/readFilter';
 import { addGraphRegion, runOutlines } from './runOutlines';
@@ -365,5 +365,49 @@ describe('review round 1 (G4/G5)', () => {
     const run = (saved as any).clusterMatchedRun;
     expect(run.graph.observations.every((o: any) => o.dataset_id === 'd2')).toBe(true);
     expect(run.graph.observations.map((o: any) => o.id)).toEqual(p.observations.map(o => o.id));
+  });
+});
+
+
+describe('review round 2 (G4/G5)', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+  const response = (p: ReturnType<typeof plan>, labels: Record<string, Record<string, number>>) => ({
+    results: Object.fromEntries(p.observations.map(o => [o.id, { assignments: labels[o.binding ?? 'linear'] ?? {} }])),
+    label_ids: {}, names: {}, stages: [{ stage: 1 }], columns: { shared: [], carrier_sets: [], left_out: {}, dropped: [], refinements: [] },
+    window_separation_nmi: null, matched: null, settings: {}, revisions: REG.revisions, options: {}, timings: {},
+  }) as never;
+
+  it('a response after a cohort change (settings saved: refresh generation) is refused', async () => {
+    seed(split());
+    setPanelViewMode('mat', 'graph');
+    let release!: (r: Response) => void;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { release = resolve; })));
+    const run = runGraphCluster(useBrowserStore.getState(), { kind: 'peaks', regions: PEAKS } as never, () => {});
+    useBrowserStore.setState(st => ({ refreshGeneration: (st.refreshGeneration ?? 0) + 1 }));
+    release(new Response(JSON.stringify({ results: {} }), { status: 200 }));
+    await expect(run).rejects.toThrow(/changed while clustering/);
+  });
+
+  it('a kept read (QNAME) inside a selected graph cluster (record keys) stays in the next run\'s scope', () => {
+    seed(split());
+    setPanelViewMode('mat', 'graph');
+    const p = plan();
+    commitGraphRun(useBrowserStore.getState(), p, response(p, { mat: { [aid('m1')]: 0, [aid('m2')]: 0 } }));
+    useBrowserStore.setState({ filteredReadIds: { 'k-mat': new Set(['m1']) }, selectedClusters: { 'k-mat': new Set([0]) } });
+    const w = clusterWindows(useBrowserStore.getState(), ['d']).find(x => x.result_key === 'k-mat')!;
+    expect(w.read_ids).toEqual([recordKey(aid('m1'))]);
+  });
+
+  it('an independently clustered panel of the same path never joins the run\'s selection sync', () => {
+    seed(split());
+    setPanelViewMode('mat', 'graph');
+    const p = plan();
+    commitGraphRun(useBrowserStore.getState(), p, response(p, { mat: { [aid('m1')]: 0 } }));
+    const s = useBrowserStore.getState();
+    const later = { ...s, panels: [...s.panels, panel('own', { liftHap: 'MAT', stateKey: 'k-own' }), panel('same', { liftHap: 'MAT', stateKey: 'k-same' })],
+      clusterAssignments: { ...s.clusterAssignments, 'k-own': { [aid('m1', 'r:0', 1, '17')]: 1 }, 'k-same': { [aid('m1', 'r:0', 1, '17')]: 0 } } };
+    const keys = clusterSelectionKeys(later, 'k-mat');
+    expect(keys).toContain('k-same');
+    expect(keys).not.toContain('k-own');
   });
 });

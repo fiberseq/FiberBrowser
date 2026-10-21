@@ -1,5 +1,6 @@
 import type { BrowserState } from '../stores/browserStore';
 import type { PanelConfig } from '../types';
+import { recordKey } from './recordKeys';
 
 /** A graph run's observation (features/graphPanel/graphCluster.ts): one (dataset, package path) fitted once. */
 export interface GraphRunObservation {
@@ -67,7 +68,8 @@ export function observationShownBy(o: GraphRunObservation, p: PanelConfig): bool
 
 /** The state keys a graph run's labels apply to now: its destinations, and any panel since opened on one of its
  * observations (a member popped out later, a new haplotype panel), so selection and focus sync reach them. */
-export function graphRunStateKeys(run: ClusterMatchedRun, panels: readonly PanelConfig[], mainChrom?: string): string[] {
+export function graphRunStateKeys(run: ClusterMatchedRun, panels: readonly PanelConfig[], mainChrom?: string,
+  live?: Readonly<Record<string, Readonly<Record<string, number>>>>): string[] {
   const keys = new Set((run.destinations ?? []).map(d => d.stateKey));
   const obs = run.graph?.observations ?? [];
   const contig = run.graph?.targetContig;
@@ -76,9 +78,35 @@ export function graphRunStateKeys(run: ClusterMatchedRun, panels: readonly Panel
     // On the run's target contig (its own view, else the main view's).
     const chrom = p.viewportOverride?.chrom ?? mainChrom;
     if (contig && chrom && chrom !== contig) continue;
-    if (obs.some(o => observationShownBy(o, p))) keys.add(p.stateKey ?? p.datasetId);
+    if (!obs.some(o => observationShownBy(o, p))) continue;
+    const key = p.stateKey ?? p.datasetId;
+    // A later panel joins only while its labels are this run's (review G5): an independently clustered panel of the
+    // same path keeps its own clusters, selection and focus.
+    if (!keys.has(key) && !compatibleLabels(run, live?.[key])) continue;
+    keys.add(key);
   }
   return [...keys];
+}
+
+const runLabelIndex = new WeakMap<object, Map<string, number>>();
+
+/** Whether a panel's labels agree with a graph run's for every record both label (none: compatible). */
+function compatibleLabels(run: ClusterMatchedRun, labels: Readonly<Record<string, number>> | undefined): boolean {
+  if (!labels) return true;
+  let index = runLabelIndex.get(run);
+  if (!index) {
+    index = new Map();
+    for (const [key, map] of Object.entries(run.panelAssignments ?? {})) {
+      void key;
+      for (const [id, c] of Object.entries(map ?? {})) index.set(recordKey(id) ?? id, c);
+    }
+    runLabelIndex.set(run, index);
+  }
+  for (const [id, c] of Object.entries(labels)) {
+    const want = index.get(recordKey(id) ?? id);
+    if (want === undefined || want !== c) return false;
+  }
+  return true;
 }
 
 /** A saved comparison stops driving charts as soon as its displayed assignments change. */
@@ -94,7 +122,7 @@ export function currentMatchedRun(run: ClusterMatchedRun | null, live: BrowserSt
 export function clusterSelectionKeys(state: Pick<BrowserState, 'clusterMatchedRun' | 'clusterAssignments'> & { panels?: PanelConfig[] }, key: string): string[] {
   const run = currentMatchedRun(state.clusterMatchedRun, state.clusterAssignments);
   if (run?.destinations) {
-    const keys = graphRunStateKeys(run, state.panels ?? [], (state as { chrom?: string }).chrom);
+    const keys = graphRunStateKeys(run, state.panels ?? [], (state as { chrom?: string }).chrom, state.clusterAssignments);
     return keys.includes(key) ? keys : [key];
   }
   return run?.windows.some(w => w.stateKey === key)

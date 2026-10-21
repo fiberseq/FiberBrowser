@@ -171,3 +171,19 @@ def test_more_than_fifty_patterns_reassign_by_the_fits_weighted_rule(monkeypatch
     assert len(out["model"]["cluster_patterns"]) == 50
     again = fc.run(base, req, model=out["model"])
     assert again["results"]["w"]["assignments"] == out["results"]["w"]["assignments"]
+
+
+
+def test_an_observations_snapshot_names_the_quality_filters(monkeypatch):
+    """Review round 2 (G5): feature values depend on the active quality filters (native rows too), so a durable
+    model is refused once they change."""
+    from services.graph_panel import analysis
+    import services.read_quality_filters as qf
+    st = SimpleNamespace(datasets={"n": SimpleNamespace(data_type="bam", paths=[], live_lift=None, id="n")})
+    spec = {"observations": [{"id": "o", "dataset_id": "n"}]}
+    monkeypatch.setattr(analysis, "_loader_options", lambda state: {"x": 1})
+    monkeypatch.setattr("services.graph_panel.reads.dataset_revision", lambda ds: "r")
+    monkeypatch.setattr(qf, "active_quality_filters", lambda state: [])
+    before = analysis.observation_snapshot(st, spec)
+    monkeypatch.setattr(qf, "active_quality_filters", lambda state: [{"layer": "msp", "field": "aq", "min": 100}])
+    assert analysis.observation_snapshot(st, spec) != before

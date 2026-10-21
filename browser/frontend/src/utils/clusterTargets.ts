@@ -25,6 +25,7 @@ import { panelTitle } from './panelTitle';
 import { useSplitPanelStore } from '../stores/splitPanelStore';
 import { splitShowsAll } from './splitLocus';
 import { foldedInShownGraph } from '../stores/graphMembership';
+import { idSetHas, qnameOfId, recordKey } from './recordKeys';
 
 export type ClusterPeak = { start: number; end: number; mode?: string; chrom?: string; genome?: string; match?: MatchedRegionInfo };
 
@@ -65,7 +66,8 @@ export function clusterWindows(st: PlanState, datasetIds: string[]): ClusterWind
     // No filter is null; an applied filter that matched nothing is an empty set (that panel has nothing to cluster).
     const filter = st.filteredReadIds[sk];
     // Inside a cluster subset, only its reads that pass the filter.
-    let ids = subset && assignments ? Object.keys(assignments).filter(id => subset.has(assignments[id]) && (!filter || filter.has(id)))
+    // (Identity-aware: a graph run's labels are record keys, a kept read is its QNAME; idSetHas matches either.)
+    let ids = subset && assignments ? Object.keys(assignments).filter(id => subset.has(assignments[id]) && (!filter || idSetHas(filter, [id, qnameOfId(id)], recordKey(id))))
       : filter ? Array.from(filter) : undefined;
     // A split panel (Split into panels) clusters only its own reads; all targeted split panels cluster together.
     const split = panel.readSubset ? useSplitPanelStore.getState().reads[sk] : undefined;
@@ -74,7 +76,7 @@ export function clusterWindows(st: PlanState, datasetIds: string[]): ClusterWind
     // reads under its key it clusters as it is; restricting it to none left it nothing to cluster.)
     if (panel.readSubset && !panel.readSubset.rule.liftHap && !panel.liftHap && !(panelTraits(panel).ownContig && !split) && !splitShowsAll(panel.readSubset, viewport, panel)) {
       const own = split && (split.state === 'ready' || split.state === 'frozen') ? split.ids : new Set<string>();
-      ids = ids ? ids.filter(id => own.has(id)) : Array.from(own);
+      ids = ids ? ids.filter(id => idSetHas(own, [id, qnameOfId(id)], recordKey(id))) : Array.from(own);
     }
     return { dataset_id: panel.datasetId!, result_key: sk, ...viewport, read_ids: ids, ...(panel.strand ? { strand: panel.strand } : {}), ...(panel.liftHap || panel.readSubset?.rule.liftHap ? { lift_hap: panel.liftHap ?? panel.readSubset?.rule.liftHap } : {}), panel };
   }).filter((view, index, all) => all.findIndex(other => other.result_key === view.result_key) === index);

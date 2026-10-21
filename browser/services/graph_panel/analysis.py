@@ -368,7 +368,8 @@ def observation_snapshot(state, spec) -> dict:
     files and lift identity (revision), its cohort settings (lifted) and the loader options. A durable model is only
     assigned while these are unchanged."""
     from services.graph_panel.reads import _settings, dataset_revision
-    opts = _loader_options(state)
+    from services.read_quality_filters import active_quality_filters
+    opts = {**_loader_options(state), "quality_filters": repr(active_quality_filters(state))}
     out = {}
     for o in spec["observations"]:
         ds = state.datasets.get(o["dataset_id"])

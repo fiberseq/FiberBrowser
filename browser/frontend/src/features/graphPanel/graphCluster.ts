@@ -208,8 +208,14 @@ const wire = (o: GraphObservationSpec) => {
  * locus, reference, dataset set or graph). */
 function runIdentity(s: BrowserState, plan: Pick<GraphClusterPlan, 'host' | 'registration' | 'target'>): string {
   const host = s.panels.find(p => p.id === plan.host.id);
-  return JSON.stringify([s.chrom, s.currentGenome ?? null, s.datasets.map(d => d.id).sort(), host ? hostDrawsGraph(host) : false,
-    host?.graphView?.registrationId ?? null, host?.graphView?.targetBinding ?? null, plan.registration.revisions.package]);
+  // Datasets with their revisions and settings (a cohort change: refreshGeneration), and the registration as it is
+  // registered now (a refreshed package under the same id).
+  const bindings = useGraphBindingsStore.getState().byDataset;
+  const reg = useGraphStatusStore.getState().status?.registrations.find(r => r.id === plan.registration.id);
+  return JSON.stringify([s.chrom, s.currentGenome ?? null, s.refreshGeneration ?? 0,
+    s.datasets.map(d => [d.id, bindings[d.id]?.map(b => b.binding.revision) ?? null, JSON.stringify(d)]).sort(),
+    host ? hostDrawsGraph(host) : false, host?.graphView?.registrationId ?? null, host?.graphView?.targetBinding ?? null,
+    reg?.revisions ?? null]);
 }
 
 export function graphRequestBody(s: BrowserState, plan: Pick<GraphClusterPlan, 'registration' | 'target' | 'regions' | 'observations'>) {
@@ -373,7 +379,7 @@ export async function assignWithGraphRun(run: ClusterMatchedRun, signal?: AbortS
   // Each destination within its own scope; a panel opened since on one of the run's observations (a member popped
   // out later, a new haplotype panel) within its own read filter.
   const known = new Set(run.destinations.map(d => d.stateKey));
-  const later = graphRunStateKeys(run, st.panels, st.chrom).filter(k => !known.has(k)).flatMap(stateKey => {
+  const later = graphRunStateKeys(run, st.panels, st.chrom, st.clusterAssignments).filter(k => !known.has(k)).flatMap(stateKey => {
     const p = st.panels.find(q => (q.stateKey ?? q.datasetId) === stateKey);
     const obs = p ? g.observations.filter(o => observationShownBy(o, p)).map(o => o.id) : [];
     const filter = st.filteredReadIds[stateKey];
