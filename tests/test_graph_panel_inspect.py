@@ -91,3 +91,39 @@ def test_a_missing_bam_binds_to_nothing_and_says_why(env):  # noqa: F811
                                                      "datasets": [{"dataset_id": did}],
                                                      "paths": [{"binding": "mat", "windows": [{"start": 0, "end": 1000}]}]})
     assert out.status_code == 404 and out.json()["error"]["code"] == "unknown_dataset"
+
+
+def test_a_fly_strain_binds_by_its_path_identity_with_no_mat_pat(env):  # noqa: F811
+    """dm6 plus a generic strain (Gate F): a strain on haplotype 0 binds through its explicit path identity; nothing
+    reads MAT/PAT from names."""
+    import json
+    from live_lift_fixtures import SSIZE
+    with open(env.manifest) as fh:
+        manifest = json.load(fh)
+    manifest["sources"][0]["path"] = "DGRP-399#0#chrS"
+    manifest["sources"][0]["fragments"] = [{"name": "DGRP-399#0#chrS[0]", "offset": 0, "len": SSIZE}]
+    manifest["sources"][1]["path"] = "w1118#0#chrS"
+    manifest["sources"][1]["fragments"] = [{"name": "w1118#0#chrS[0]", "offset": 0, "len": SSIZE}]
+    fly = env.tmp / "fly_map.json"
+    with open(fly, "w") as fh:
+        json.dump(manifest, fh)
+    for b, (sample, key) in zip(env.reg.bindings, [("dm6", "dm6_chrT"), ("DGRP-399", "dgrp399"), ("w1118", "w1118")]):
+        b["path"]["sample"] = sample
+        b["path"]["haplotype"] = "0"
+        b["key"] = key
+        b["assembly"] = b["reference"] = sample
+    env.reg.maps[:] = [{"target": "dm6_chrT", "source": "dgrp399"}, {"target": "dm6_chrT", "source": "w1118"}]
+    out = env.client.post("/api/lift/datasets", json={"paths": [env.bam], "manifest": str(fly), "dataset_id": "fly"}).json()
+    assert out["success"], out
+    rows = env.client.get("/api/graph/read_bindings", params={"registration_id": "g1"}).json()["bindings"]
+    (b,) = [x for x in rows if x["dataset_id"] == out["dataset"]["id"]]
+    assert set(b["paths"]) == {"dgrp399", "w1118"} and not b["problems"]
+    got = _reads_req(env, out["dataset"]["id"], "dgrp399")
+    assert got.status_code == 200 and got.json()["reads"] and all(r["b"] == "dgrp399" for r in got.json()["reads"])
+
+
+def _reads_req(env, did, binding):
+    return env.client.post("/api/graph/reads", json={"registration_id": "g1", "revisions": env.reg.revisions,
+                                                      "request_id": "r", "panel_id": "p", "generation": 1,
+                                                      "datasets": [{"dataset_id": did}],
+                                                      "paths": [{"binding": binding, "windows": [{"start": 0, "end": 3000}]}]})

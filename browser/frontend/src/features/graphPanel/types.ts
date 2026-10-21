@@ -29,7 +29,8 @@ export interface GraphRegistration {
   producer: string;
   build_target: string;
   bindings: GraphBinding[];
-  maps: { target: string; source: string }[];
+  /** manifest_sha256: the map manifest's digest (a live-lift dataset on the very same map reuses its differences). */
+  maps: { target: string; source: string; manifest_sha256?: string | null }[];
 }
 
 export interface GraphHelperInfo {
@@ -158,7 +159,9 @@ export interface GraphViewState {
   layoutSettings: { contextBp: number; laneHeight: number; compression?: 'log' | 'linear';
     /** smallDifferences: `marks` (default: SNPs and short indels as marks on the shared tube, scaled with zoom) or
      * `bubbles` (every difference branches). */
-    smallDifferences?: 'marks' | 'bubbles' };
+    smallDifferences?: 'marks' | 'bubbles';
+    /** Insertions expanded with a plain click (layout group IDs): drawn at true bp in the schematic view. */
+    expanded?: string[] };
   /** Reads drawn along the paths (Gate E); absent: shown, every binding dataset. */
   reads?: GraphReadSettings;
 }
@@ -252,6 +255,8 @@ export interface GraphReadSettings {
   layers?: { nuc?: boolean; msp?: boolean; m6a?: boolean; tf?: boolean };
   rowHeight?: number;
   maxRowsPerLane?: number;
+  /** The datasets (and their revisions) whose reads this view drew: saved with the session, checked on restore. */
+  bound?: { dataset_id: string; revision: string }[];
 }
 
 declare module '../../types' {

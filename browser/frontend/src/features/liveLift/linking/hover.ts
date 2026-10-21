@@ -13,6 +13,7 @@ import { useBrowserStore } from '../../../stores/browserStore';
 import { readBodyExtent } from '../../../components/tracks/read-track/readExtent';
 import type { CompactRead } from '../../../components/tracks/read-track/types';
 import type { Dataset, PanelConfig } from '../../../types';
+import { graphDrawnDatasets, useGraphReadsStore } from '../../graphPanel/graphReadsStore';
 
 export interface LiftHover {
   key: string;
@@ -56,19 +57,28 @@ export function nativeLibrary(read: CompactRead, lifted: Dataset): number {
 }
 
 /**
- * Which lifted dataset a panel shares hovers with: its own (a lifted panel with a linked source panel open), or its
- * link's (a linked source panel). Null: the panel takes no part.
+ * Which dataset a panel shares hovers with: its own (a lifted panel with a linked source panel open, or one a graph
+ * panel draws reads of), or its link's (a linked source panel). A native BAM panel takes part when a graph panel
+ * draws that dataset's reads (its native read binding: the same dataset, library and QNAME, never a name match
+ * across files); it is keyed like a source panel of its own files. Null: the panel takes no part.
+ * `graphDrawn`: datasets whose molecules an open graph panel draws (features/graphPanel/graphReadsStore.ts).
  */
-export function hoverScope(panel: PanelConfig | undefined, panels: PanelConfig[], datasets: Dataset[]): { lifted: Dataset; role: 'lift' | 'source' } | null {
+export function hoverScope(panel: PanelConfig | undefined, panels: PanelConfig[], datasets: Dataset[],
+  graphDrawn: ReadonlySet<string> = NO_GRAPH): { lifted: Dataset; role: 'lift' | 'source' } | null {
   if (!panel) return null;
   if (panel.liftLink) {
     const lifted = datasets.find(d => d.id === panel.liftLink!.datasetId);
     return lifted ? { lifted, role: 'source' } : null;
   }
   const own = datasets.find(d => d.id === panel.datasetId);
-  if (own?.data_type !== 'bam_livelift') return null;
-  return panels.some(p => p.liftLink?.datasetId === own.id) ? { lifted: own, role: 'lift' } : null;
+  if (!own) return null;
+  if (own.data_type === 'bam_livelift') {
+    return panels.some(p => p.liftLink?.datasetId === own.id) || graphDrawn.has(own.id) ? { lifted: own, role: 'lift' } : null;
+  }
+  return own.data_type === 'bam' && graphDrawn.has(own.id) ? { lifted: own, role: 'source' } : null;
 }
+
+const NO_GRAPH: ReadonlySet<string> = new Set();
 
 /** A row's molecule key in its panel's role (null: it can't be matched). */
 export function rowMoleculeKey(read: CompactRead, scope: { lifted: Dataset; role: 'lift' | 'source' }): string | null {
@@ -100,8 +110,10 @@ export function hoveredRows(reads: readonly CompactRead[], scope: { lifted: Data
  */
 export function useLiftHoverRows(panelId: string | null, reads: readonly CompactRead[], hovered: CompactRead | null,
   chrom: string, origin: number): Set<CompactRead> | undefined {
+  const graphByPanel = useGraphReadsStore(s => s.byPanel);
   const scope = useBrowserStore(useShallow(s => {
-    const sc = hoverScope(s.panels.find(p => p.id === panelId), s.panels, s.datasets);
+    const open = new Set(s.panels.map(p => p.id));
+    const sc = hoverScope(s.panels.find(p => p.id === panelId), s.panels, s.datasets, graphDrawnDatasets(graphByPanel, open));
     return { lifted: sc?.lifted, role: sc?.role };
   }));
   const active = scope.lifted && scope.role ? { lifted: scope.lifted, role: scope.role } : null;

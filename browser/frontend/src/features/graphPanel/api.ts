@@ -86,3 +86,35 @@ export function queryReads(q: ReadsQuery, signal?: AbortSignal): Promise<GraphRe
       panel_id: q.panelId, generation: q.generation, datasets: q.datasets, paths: q.paths, ...(q.limits ? { limits: q.limits } : {}) }),
   });
 }
+
+export interface GraphSequenceResult {
+  binding: string;
+  coverage: { span: Span; kind: string }[];
+  pieces: { span: Span; sequence: string }[];
+  complete: boolean;
+}
+
+/** A path interval's bases from the package (at most 60,000 bp). */
+export async function getGraphSequence(registrationId: string, revisions: GraphRevisions, binding: string, interval: Span,
+  signal?: AbortSignal): Promise<GraphSequenceResult> {
+  const out = await call<{ result: GraphSequenceResult }>('/api/graph/sequence', { method: 'POST', signal,
+    body: JSON.stringify({ registration_id: registrationId, revisions, binding, interval }) });
+  return out.result;
+}
+
+export interface GraphCanonicalMatch { dataset_id: string; label: string; id: string; revision: string; kind: string;
+  hap_label?: string; ref_bp: number; alt_bp: number; t_start: number; t_end: number }
+export interface GraphCanonicalResponse {
+  matches: GraphCanonicalMatch[];
+  rejected: { dataset_id: string; label: string; reason: string; message: string; id?: string }[];
+  map: { target: string; source: string; manifest_sha256: string | null } | null;
+  reason?: string;
+}
+
+/** A graph allele's canonical live-lift difference (exact map, boundary and placement only). */
+export function getGraphCanonical(q: { registrationId: string; revisions: GraphRevisions; target: string; path: string;
+  targetSpan: Span; sourceSpan: Span }, signal?: AbortSignal): Promise<GraphCanonicalResponse> {
+  return call('/api/graph/differences', { method: 'POST', signal, body: JSON.stringify({
+    registration_id: q.registrationId, revisions: q.revisions, target: q.target, path: q.path,
+    target_span: q.targetSpan, source_span: q.sourceSpan }) });
+}

@@ -36,6 +36,8 @@ export interface SceneOptions {
   smallBp?: number;
   /** Extra height under a lane for its molecules (Gate E read bands), px by lane key. */
   bands?: Record<string, number>;
+  /** Group IDs drawn at true bp (expanded insertions; Gate F). */
+  expanded?: ReadonlySet<string>;
 }
 
 /** A marked run: consecutive runs and small differences on one host tube, drawn as one tube with marks. */
@@ -65,6 +67,8 @@ export interface Metrics {
   min: number; curve: number; /** an empty junction (touching fragments), default 4 */ empty?: number;
   /** Small differences (every allele below this many bp) are marks on the shared tube, not bubbles; 0: all bubbles. */
   small?: number;
+  /** Groups drawn at true bp (an insertion the user expanded with a plain click; schematic compression elsewhere). */
+  expanded?: ReadonlySet<string>;
 }
 export const ROOMY: Metrics = { min: 12, curve: 9 };
 export const COMPACT: Metrics = { min: 8, curve: 5 };
@@ -254,7 +258,11 @@ function alleleWidth(a: AltAllele, scale: number, c: Compression, k: Metrics = R
 /** An inverted allele's slot is at least this many minimum slots wide (room for its chevrons and crossing). */
 const INVERSION_SLOTS = 2.5;
 
-function groupContent(g: GroupItem, scale: number, c: Compression, k: Metrics = ROOMY): number {
+/** A group's compression: true bp when it is expanded. */
+const groupCompression = (g: GroupItem, c: Compression, k: Metrics): Compression => (k.expanded?.has(g.id) ? 'linear' : c);
+
+function groupContent(g: GroupItem, scale: number, c0: Compression, k: Metrics = ROOMY): number {
+  const c = groupCompression(g, c0, k);
   let w = chainWidth(g.base.chain, scale, c, k);
   for (const a of g.alts) w = Math.max(w, alleleWidth(a, scale, c, k));
   const min = g.alts.some(a => a.inverted && a.bp > 0) ? k.min * INVERSION_SLOTS : k.min;
@@ -372,7 +380,7 @@ export const COMPACT_LANE_PX = 14;
  */
 export interface ScenePlan { top: TopItem[]; k: Metrics; scale: number; clusters: number; drawnLanes: Set<string>; dataWidth: number }
 
-export function planScene(model: LayoutModel, opts: Pick<SceneOptions, 'width' | 'gutter' | 'rightPad' | 'compression' | 'smallBp'>): ScenePlan {
+export function planScene(model: LayoutModel, opts: Pick<SceneOptions, 'width' | 'gutter' | 'rightPad' | 'compression' | 'smallBp' | 'expanded'>): ScenePlan {
   const dataWidth = Math.max(40, opts.width - opts.gutter - opts.rightPad);
   const c = opts.compression;
   // Crowded: compact curve zones first; cluster only when the bubbles' fixed pixels would still crowd out the
@@ -380,7 +388,8 @@ export function planScene(model: LayoutModel, opts: Pick<SceneOptions, 'width' |
   const small = Math.max(0, opts.smallBp ?? 0);
   const folded = foldMarks(model.chain, small);
   let top: TopItem[] = folded;
-  const withSmall = (m: Metrics): Metrics => (small > 0 ? { ...m, small } : m);
+  const expanded = opts.expanded && opts.expanded.size ? opts.expanded : undefined;
+  const withSmall = (m: Metrics): Metrics => ({ ...m, ...(small > 0 ? { small } : {}), ...(expanded ? { expanded } : {}) });
   let k: Metrics = withSmall(contentWidth(top, 0, c, withSmall(ROOMY)) > dataWidth * 0.6 ? COMPACT : ROOMY);
   const span = model.interval.end - model.interval.start;
   for (let distance = 32; contentWidth(top, 0, c, k) > dataWidth * 0.6 && distance <= 2 * span; distance *= 2) {
@@ -423,7 +432,7 @@ export function planScene(model: LayoutModel, opts: Pick<SceneOptions, 'width' |
 export function buildScene(model: LayoutModel, opts: SceneOptions & { plan?: ScenePlan }): Scene {
   const lanes = model.rows.map(r => r.key);
   const dataLeft = opts.gutter;
-  const c = opts.compression;
+  let c = opts.compression;   // an expanded group draws at true bp (placeGroup)
   const plan = opts.plan ?? planScene(model, opts);
   const { top, k, scale, clusters, drawnLanes, dataWidth } = plan;
   const small = k.small ?? 0;
@@ -701,6 +710,13 @@ export function buildScene(model: LayoutModel, opts: SceneOptions & { plan?: Sce
   }
 
   function placeGroup(g: GroupItem, x: number, w: number, host: string, slots: Map<string, Slot>, onTarget: boolean, depth: number) {
+    // An expanded group (and everything inside it) is laid out at true bp, as its width was computed.
+    const outer = c;
+    c = groupCompression(g, c, k);
+    try { placeGroupBody(g, x, w, host, slots, onTarget, depth); } finally { c = outer; }
+  }
+
+  function placeGroupBody(g: GroupItem, x: number, w: number, host: string, slots: Map<string, Slot>, onTarget: boolean, depth: number) {
     const gx0 = x, gx1 = x + w, cx0 = gx0 + CURVE, cx1 = gx1 - CURVE;
     const hostRow = rowOf.get(host)!;
     const baseW = chainWidth(g.base.chain, scale, c, k);

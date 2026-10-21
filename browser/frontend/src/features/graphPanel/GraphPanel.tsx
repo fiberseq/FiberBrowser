@@ -27,6 +27,12 @@ import type { GraphApiError, GraphReadBinding, GraphReadSettings, GraphReadsResp
 import { MAX_READ_PRIMITIVES, packMolecules, placeReads, placementIndex, type PackedLane, type PlacedMolecule } from './readGeometry';
 import { bandHeight, describeReadHit, drawReadBandLabels, drawReads, effectiveReadLayers, emptyDrawStats, READ_ROW_GAP, READ_ROW_HEIGHT, type ReadDrawStats, type ReadHit, type ReadLayers } from './readCanvas';
 import { chromatinStyle } from './chromatinStyle';
+import { isInsertionGroup, hitGroup, placementsByPath, selectionForHit, sourcePlacements, focusWindow, type GraphSelection, type SourcePlacement } from './inspection';
+import { selectGraph } from './selectionStore';
+import { bumpNavigation, navigateGraph, navigationToken, showSourceSpan, sourcePanelsFor, tokenCurrent, type NavigationToken } from './navigation';
+import { useGraphReadsStore } from './graphReadsStore';
+import { moleculeKey, useLiftHover } from '../liveLift/linking/hover';
+import { xForTarget } from './scene';
 
 const DEBOUNCE_MS = 100;
 /** Named visits walked beyond each window edge, so an event exactly at an edge has its flank (graphlift flank_bp). */
@@ -37,7 +43,7 @@ declare global {
     /** e2e only (with __FIBERBROWSER_E2E_EXPOSE_STORE): each graph panel's last scene, to locate its geometry. */
     __FIBERBROWSER_GRAPH_SCENES__?: Record<string, { scene: Scene; model: LayoutModel; offset: number;
       reads?: { molecules: PlacedMolecule[]; lanes: Record<string, { rows: number; hidden: number }>; hits: ReadHit[]; placeMs?: number; drawMs?: number; serverMs?: number;
-        drawn?: ReadDrawStats; layers?: ReadLayers } }>;
+        drawn?: ReadDrawStats; layers?: ReadLayers; hovered?: number; hoverKey?: string | null } }>;
   }
 }
 const STATUS_HEIGHT = 18;
@@ -231,8 +237,13 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     getReadBindings(reg.id, controller.signal).then(setReadBindings).catch(() => { if (!controller.signal.aborted) setReadBindings([]); });
     return () => controller.abort();
   }, [reg?.id, datasetKey, serverDatasets]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A read binding saved with the view names its dataset revision (files and map): a dataset that changed since is
+  // not drawn until it is chosen again in the Reads menu (restore never re-binds another revision silently).
+  const changedBindings = useMemo(() => readBindings.filter(b => readSettings.bound?.some(x => x.dataset_id === b.dataset_id && x.revision !== b.revision)),
+    [readBindings, readSettings.bound]);
   const activeBindings = useMemo(() => (readSettings.show ? readBindings.filter(b => Object.keys(b.paths).length
-    && (readSettings.datasets == null || readSettings.datasets.includes(b.dataset_id))) : []), [readBindings, readSettings]);
+    && !changedBindings.includes(b)
+    && (readSettings.datasets == null || readSettings.datasets.includes(b.dataset_id))) : []), [readBindings, readSettings, changedBindings]);
   const [reads, setReads] = useState<{ response: GraphReadsResponse | null; loading: boolean; error: GraphApiError | null; forStart?: number; key?: string }>({ response: null, loading: false, error: null });
   const readsGenRef = useRef(0);
   const readsInflightRef = useRef<AbortController | null>(null);
@@ -267,6 +278,15 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     return () => window.clearTimeout(timer);
   }, [readsKey]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => readsInflightRef.current?.abort(), []);
+  // Remember which dataset revisions this view drew (saved with it; a restore checks them first).
+  useEffect(() => {
+    if (!panelId || !state || !reads.response || reads.key !== readsKey) return;
+    const have = state.reads?.bound ?? [];
+    const add = activeBindings.filter(b => !have.some(x => x.dataset_id === b.dataset_id && x.revision === b.revision));
+    if (!add.length) return;
+    const bound = [...have.filter(x => !add.some(b => b.dataset_id === x.dataset_id)), ...add.map(b => ({ dataset_id: b.dataset_id, revision: b.revision }))];
+    setGraphView(panelId, { ...state, reads: { ...(state.reads ?? DEFAULT_READS), bound } });
+  }, [reads.response]); // eslint-disable-line react-hooks/exhaustive-deps
   // The toolbar's Layers row (the read tracks' own toggles) decides what the read bands draw; the panel's Reads
   // menu can only hide more. Toggling a layer redraws from the loaded reads, no refetch.
   const enabledModTypes = useBrowserStore(s => s.enabledModTypes) as Record<string, boolean | undefined>;
@@ -276,10 +296,24 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   const readRowHeight = readSettings.rowHeight ?? READ_ROW_HEIGHT;
   const rowsPerLane = readSettings.maxRowsPerLane ?? DEFAULT_ROWS_PER_LANE;
   const activeDatasetIds = useMemo(() => new Set(activeBindings.map(b => b.dataset_id)), [activeBindings]);
+  // The reads this panel draws and its bindings, for the shared molecule hover and "Show source span".
+  const drawnIdsKey = [...activeDatasetIds].sort().join(',');
+  const anyDrawn = Boolean(reads.response);
+  useEffect(() => {
+    if (!panelId) return;
+    useGraphReadsStore.getState().publish(panelId, anyDrawn ? (drawnIdsKey ? drawnIdsKey.split(',') : []) : [], readBindings);
+  }, [panelId, drawnIdsKey, anyDrawn, readBindings]);
+  useEffect(() => () => { if (panelId) { useGraphReadsStore.getState().clear(panelId); useLiftHover.getState().clear(panelId); } }, [panelId]);
+  // The molecule hovered here or in a lifted / source / native panel of the same files (moleculeKey: dataset,
+  // library, QNAME): its rows are outlined in every view.
+  const hoverKey = useLiftHover(s => s.hover?.key ?? null);
   const colormap = useBrowserStore(s => s.activeColormap);
   const style = useMemo(() => chromatinStyle(colormap), [colormap]);
 
   const compression: Compression = state?.layoutSettings.compression ?? 'log';
+  // Insertions a plain click expanded: drawn at true bp inside the schematic view (by layout group ID).
+  const expandedKey = (state?.layoutSettings.expanded ?? []).join(',');
+  const expanded = useMemo(() => new Set(expandedKey ? expandedKey.split(',') : []), [expandedKey]);
   const smallMode = state?.layoutSettings.smallDifferences ?? 'marks';
   const drawnSpan = response ? response.result.interval.end - response.result.interval.start : 0;
   const smallBp = smallDifferenceBp(drawnSpan, width - GRAPH_GUTTER - GRAPH_RIGHT_PAD, smallMode);
@@ -296,10 +330,10 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   const plan = useMemo(() => {
     if (!model) return null;
     const t0 = performance.now();
-    const out = planScene(model, { width, gutter: GRAPH_GUTTER, rightPad: GRAPH_RIGHT_PAD, compression, smallBp });
+    const out = planScene(model, { width, gutter: GRAPH_GUTTER, rightPad: GRAPH_RIGHT_PAD, compression, smallBp, expanded });
     layoutMsRef.current += performance.now() - t0;
     return out;
-  }, [model, width, compression, smallBp]);
+  }, [model, width, compression, smallBp, expanded]);
   // Lanes grow with the panel body (28–40 px): thicker tubes when there is room, the saved height a minimum. A lane
   // with nothing of its own drawn (its differences all marks on the shared tube) is a compact label row.
   const minLane = state?.layoutSettings.laneHeight ?? GRAPH_LANE_HEIGHT;
@@ -320,10 +354,10 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     if (!model || !plan) return null;
     const t0 = performance.now();
     const out = buildScene(model, { width, gutter: GRAPH_GUTTER, rightPad: GRAPH_RIGHT_PAD, rulerHeight: GRAPH_RULER_HEIGHT,
-      laneHeight, laneGap: GRAPH_LANE_GAP, compression, reversed, colors: laneColors, smallBp, plan });
+      laneHeight, laneGap: GRAPH_LANE_GAP, compression, reversed, colors: laneColors, smallBp, plan, expanded });
     layoutMsRef.current += performance.now() - t0;
     return out;
-  }, [model, plan, width, laneHeight, compression, reversed, smallBp, laneColors]);
+  }, [model, plan, width, laneHeight, compression, reversed, smallBp, laneColors, expanded]);
   // Molecules along the walk (their x is the scene's occurrence transforms; bands only add height under lanes).
   // Reads are drawn for the window they were loaded for; while the next window's load is in flight the last ones
   // stay, dimmed (they are placed by source coordinate, so where they show they are right; the new edges fill in).
@@ -348,11 +382,12 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   const scene = useMemo(() => {
     if (!baseScene || !bands || !Object.values(bands).some(Boolean) || !model || !plan) return baseScene;
     return buildScene(model, { width, gutter: GRAPH_GUTTER, rightPad: GRAPH_RIGHT_PAD, rulerHeight: GRAPH_RULER_HEIGHT,
-      laneHeight, laneGap: GRAPH_LANE_GAP, compression, reversed, colors: laneColors, smallBp, plan, bands });
+      laneHeight, laneGap: GRAPH_LANE_GAP, compression, reversed, colors: laneColors, smallBp, plan, bands, expanded });
   }, [baseScene, bands]); // eslint-disable-line react-hooks/exhaustive-deps
   const readHitsRef = useRef<ReadHit[]>([]);
   const readDrawMsRef = useRef(0);
   const readDrawStatsRef = useRef<ReadDrawStats>(emptyDrawStats());
+  const hoveredRowsRef = useRef(0);
   // Its natural body height (full lanes of NATURAL_LANE px, compact rows, the ruler and the status line): stacked
   // with other panels it takes this, not an equal share of the column (plugin sizeToContent). It only grows for one
   // selection of paths, so panning never makes the panels below jump back and forth.
@@ -409,6 +444,20 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       readHitsRef.current = readLayout ? drawReads(ctx, scene, readLayout.lanes, style, readLayers, laneColors, readRowHeight, READ_ROW_GAP,
         readsStale ? 0.45 : 1, drawStats) : [];
       readDrawStatsRef.current = drawStats;
+      let hoveredRows = 0;
+      if (hoverKey) {
+        ctx.save();
+        ctx.strokeStyle = '#0f172a';
+        ctx.lineWidth = 1.5;
+        for (const h of readHitsRef.current) {
+          const r = h.molecule.read;
+          if (moleculeKey(r.d, r.lib, r.q) !== hoverKey) continue;
+          hoveredRows++;
+          ctx.strokeRect(h.x0 - 1, h.y0 + 0.5, h.x1 - h.x0 + 2, h.y1 - h.y0 - 1);
+        }
+        ctx.restore();
+      }
+      hoveredRowsRef.current = hoveredRows;
       readDrawMsRef.current = performance.now() - tr;
       ctx.restore();
       // The read bands' compact labels stay in the gutter.
@@ -432,7 +481,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       if (window.__FIBERBROWSER_E2E_EXPOSE_STORE && panelId) {
         (window.__FIBERBROWSER_GRAPH_SCENES__ ??= {})[panelId] = { scene, model, offset: sceneOffset,
           ...(readLayout ? { reads: { molecules: readLayout.placed.molecules, hits: readHitsRef.current,
-            placeMs: readLayout.ms, drawMs: readDrawMsRef.current, serverMs: reads.response?.timings.total_ms, drawn: readDrawStatsRef.current, layers: readLayers,
+            placeMs: readLayout.ms, drawMs: readDrawMsRef.current, serverMs: reads.response?.timings.total_ms, drawn: readDrawStatsRef.current, layers: readLayers, hovered: hoveredRowsRef.current, hoverKey,
             lanes: Object.fromEntries([...readLayout.lanes].map(([k, l]) => [k, { rows: l.rows.length, hidden: l.hidden }])) } } : {}) };
       }
     } else {
@@ -444,11 +493,12 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         if (trace.paintedAt === undefined) { trace.paintedAt = performance.now(); trace.outcome = trace.outcome ?? 'painted'; }
       });
     }
-  }, [scene, transform, width, canvasHeight, renderVersion, sceneOffset, readLayout, style, readSettings, readsStale, readLayers]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [scene, transform, width, canvasHeight, renderVersion, sceneOffset, readLayout, style, readSettings, readsStale, readLayers, hoverKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------------------------------------------------------------- navigation
   const commitViewport = useCallback((next: GraphViewport, detach = false, linearAtStart?: LinearView | null) => {
     if (!panelId || !state || !target) return;
+    bumpNavigation(panelId);   // any correction computed before this move is stale now
     if (state.linkMode === 'follow' && following && !detach) {
       // Following: the graph moves its initiating panel (in that panel's own frame) by the same bp, keeping that
       // panel's width, and follows it back. A drag measures from where the initiator was when it began, so moves
@@ -492,6 +542,11 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     if (!scene || !model || !inData || y < 0 || y > canvasHeight) { setCursor(null); return; }
     const sx = x - sceneOffset;
     const readHit = readHitsRef.current.find(h => sx >= h.x0 && sx <= h.x1 && y >= h.y0 && y <= h.y1);
+    if (readHit && panelId) {
+      const r = readHit.molecule.read;
+      useLiftHover.getState().set({ key: moleculeKey(r.d, r.lib, r.q), datasetId: r.d, panelId,
+        source: { chrom: r.c, start: r.s, end: r.e } });
+    } else if (panelId) useLiftHover.getState().clear(panelId);
     if (readHit) {
       setCursor({ x, y, text: describeReadHit(readHit, sx, id => datasetLabels[id] ?? readBindings.find(b => b.dataset_id === id)?.label ?? id, key => laneLabelOf(key), readLayers), cursorX: null });
       return;
@@ -510,8 +565,34 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       else setCursor(null);
     }
   };
-  // A click (no drag) on a difference, a slot, a summary or an open end pins its description, with a zoom to it.
-  const [pinned, setPinned] = useState<{ x: number; y: number; text: string; span: { start: number; end: number } | null } | null>(null);
+  // ---------------------------------------------------------------- selection and inspection (Gate F)
+  // A plain click on an insertion expands it (true bp inside the schematic view; again: collapses); on anything else
+  // it selects it. ⌘/Ctrl-click opens the inspector; right-click offers Inspect and the source actions in the menu.
+  const graphSelection = useBrowserStore(s => s.graphSelection);
+  const drawnMolecules = readLayout?.placed.molecules;
+  const readsAt = useCallback((spans: { path: string; span: { start: number; end: number } }[]) => {
+    if (!drawnMolecules || !activeBindings.length) return null;
+    const keys = new Set<string>();
+    for (const m of drawnMolecules) {
+      const r = m.read;
+      if (spans.some(s => s.path === r.b && r.s < Math.max(s.span.end, s.span.start + 1) && r.e > s.span.start)) keys.add(moleculeKey(r.d, r.lib, r.q));
+    }
+    return { datasetIds: [...activeDatasetIds], molecules: keys.size };
+  }, [drawnMolecules, activeBindings, activeDatasetIds]);
+  const selectionAt = (x: number, y: number): { sel: GraphSelection; hit: NonNullable<ReturnType<typeof sceneHitAt>> } | null => {
+    if (!scene || !model || !reg || !state || !panelId) return null;
+    const hit = sceneHitAt(scene, x - sceneOffset, y);
+    if (!hit) return null;
+    const sel = selectionForHit(hit, { panelId, reg, state, model, readsAt }, y);
+    if (!sel) return null;
+    return { sel: { ...sel, placements: sourcePlacements(sel, response?.result ?? null) }, hit };
+  };
+  const toggleExpanded = (groupId: string) => {
+    if (!panelId || !state) return;
+    const now = state.layoutSettings.expanded ?? [];
+    const next = now.includes(groupId) ? now.filter(id => id !== groupId) : [...now, groupId].slice(-16);
+    setGraphView(panelId, { ...state, layoutSettings: { ...state.layoutSettings, expanded: next } });
+  };
   const onPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const click = drag.current && !drag.current.moved;
     drag.current = null;
@@ -519,22 +600,56 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
     const zoom = rect.width > 0 && width > 0 ? rect.width / width : 1;
     const x = (e.clientX - rect.left) / zoom, y = (e.clientY - rect.top) / zoom;
-    const hit = sceneHitAt(scene, x - sceneOffset, y);
-    const p = hit?.payload;
-    if (!hit || !p || p.kind === 'run' || p.kind === 'filler') { setPinned(null); return; }
-    const span = p.kind === 'allele' || p.kind === 'base' || p.kind === 'slot' || p.kind === 'complex'
-      ? (p.group.kind === 'group' ? p.group.target ?? hit.within?.group.target ?? null : p.group.target)
-      : p.kind === 'cluster' ? p.cluster.target : p.kind === 'gap' ? (p.gap ?? p.junction.gap)?.span ?? p.junction.target : null;
-    setPinned({ x, y, text: describeSceneHit(hit, x - sceneOffset, model, reversed), span });
+    const found = selectionAt(x, y);
+    if (!found) { if (graphSelection?.panelId === panelId) selectGraph(null); return; }
+    if (e.metaKey || e.ctrlKey) { selectGraph(found.sel, true); return; }
+    const group = hitGroup(found.hit);
+    if (isInsertionGroup(group)) {
+      if (compression === 'linear' && target && group.target) {
+        // Already at true bp: focus it instead.
+        commitViewport(clampViewport({ contig: target.path.contig, ...focusWindow(group.target, target.size) }, target.size, target.size_inferred), true);
+      } else toggleExpanded(group.id);
+      selectGraph(found.sel, false);
+      return;
+    }
+    selectGraph(found.sel, false);
   };
-  useEffect(() => { setPinned(null); }, [response]);
-  /** Zoom to a pinned difference: a window a few times its size (at least 200 bp), where small ones are bubbles. */
-  const zoomTo = (span: { start: number; end: number }) => {
-    if (!target) return;
-    const len = Math.max(200, (span.end - span.start) * 3);
-    const mid = (span.start + span.end) / 2;
-    commitViewport(clampViewport({ contig: target.path.contig, start: Math.round(mid - len / 2), end: Math.round(mid + len / 2) }, target.size, target.size_inferred), true);
-    setPinned(null);
+  // The selected locus' extent on the scene (a faint frame; the inspector has the details).
+  const selectedExtent = useMemo(() => {
+    if (!scene || !graphSelection || graphSelection.panelId !== panelId) return null;
+    let x0 = Infinity, x1 = -Infinity;
+    for (const h of scene.hits) {
+      const g = (h.payload as { group?: { id: string } }).group?.id ?? (h.payload as { run?: { id: string } }).run?.id
+        ?? (h.payload as { junction?: { id: string } }).junction?.id ?? (h.payload as { cluster?: { id: string } }).cluster?.id;
+      if (g === graphSelection.locusKey) { x0 = Math.min(x0, h.x0); x1 = Math.max(x1, h.x1); }
+    }
+    return x1 > x0 ? { x0, x1 } : null;
+  }, [scene, graphSelection, panelId]);
+  // Anchored zoom: once the new window's scene is drawn, the anchor's target base goes back under the pointer (the
+  // layout is nonlinear, so the average-scale zoom is close, not exact). Applied only while its navigation token is
+  // current: any newer move, link change or package change drops it; the correction itself schedules none.
+  const correction = useRef<{ token: NavigationToken; anchor: number; px: number } | null>(null);
+  useEffect(() => {
+    const c = correction.current;
+    if (!c || !scene || !response || !viewport || !state || !panelId || !target) return;
+    if (response.result.interval.start !== viewport.start || response.result.interval.end !== viewport.end) return;
+    correction.current = null;
+    if (!tokenCurrent(c.token, state, viewport)) return;
+    const x = xForTarget(scene.targetMap, c.anchor, 'start', reversed);
+    if (x == null || !transform) return;
+    const dx = c.px - x;
+    if (Math.abs(dx) < 2) return;
+    const deltaBp = Math.round((reversed ? dx : -dx) / Math.max(1e-9, bpScale(transform)));
+    if (!deltaBp) return;
+    commitViewport(panViewport(viewport, deltaBp, target.size, target.size_inferred), true);
+  }, [scene]); // eslint-disable-line react-hooks/exhaustive-deps
+  const zoomAround = (px: number, factor: number) => {
+    if (!transform || !viewport || !target || !panelId || !state) return;
+    const anchor = anchorAt(px);
+    const next = zoomViewport(viewport, factor, anchor, target.size, target.size_inferred, screenFraction(px));
+    commitViewport(next, true);
+    const after = useBrowserStore.getState().panels.find(p => p.id === panelId)?.graphView;
+    correction.current = after ? { token: navigationToken(panelId, after, clampViewport(next, target.size, target.size_inferred)), anchor, px } : null;
   };
   /** Where x is across the data area (mirrored when reversed): the zoomed window keeps the anchor there. The new
    * layout is nonlinear too, so this is close, not exact (exact anchoring is the Phase F navigation adapter). */
@@ -554,24 +669,56 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
     const zoom = rect.width > 0 && width > 0 ? rect.width / width : 1;
     const px = (e.clientX - rect.left) / zoom;
-    commitViewport(zoomViewport(viewport, e.deltaY > 0 ? 1.25 : 0.8, anchorAt(px), target.size, target.size_inferred, screenFraction(px)), true);
+    zoomAround(px, e.deltaY > 0 ? 1.25 : 0.8);
   };
   const onDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!transform || !viewport || !target) return;
     const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
     const zoom = rect.width > 0 && width > 0 ? rect.width / width : 1;
     const px = (e.clientX - rect.left) / zoom;
-    commitViewport(zoomViewport(viewport, e.shiftKey ? 2 : 0.5, anchorAt(px), target.size, target.size_inferred, screenFraction(px)), true);
+    zoomAround(px, e.shiftKey ? 2 : 0.5);
   };
 
   // ---------------------------------------------------------------- menu
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; sel?: GraphSelection; group?: string | null } | null>(null);
+  const WHAT_LABEL: Record<string, string> = { insertion: 'Insertion', deletion: 'Deletion', substitution: 'Substitution',
+    inversion: 'Inversion', complex: 'Complex region', junction: 'Fragment junction', sequence: 'Sequence', gap: 'Graph gap',
+    cluster: 'Clustered differences', 'open end': 'Open end' };
   const [prompt, setPrompt] = useState<'goto' | 'register' | null>(null);
   const [locusText, setLocusText] = useState('');
   const [locusError, setLocusError] = useState<string | null>(null);
   const followable = useMemo(() => panels.filter(p => p.contentType === 'dataset' && p.viewportOverride && target
     && canFollow(target, { ...p.viewportOverride, reference: p.genome || main.reference })), [panels, target, main.reference]);
   const entries: ContextMenuEntry[] = [];
+  // What is under the pointer first (Inspect, expand, focus, source spans), the panel's settings below.
+  const menuPlacements: SourcePlacement[] = menu?.sel?.placements ?? [];
+  if (menu?.sel && state && reg && target) {
+    const sel = menu.sel;
+    const where = sel.target ? (sel.target.end === sel.target.start ? `boundary ${sel.target.start.toLocaleString('en-US')}`
+      : `${sel.target.start.toLocaleString('en-US')}-${sel.target.end.toLocaleString('en-US')}`) : 'no target sequence';
+    entries.push({ kind: 'heading', label: `${WHAT_LABEL[sel.what] ?? sel.what} · ${where}` });
+    entries.push({ kind: 'item', action: 'sel:inspect', icon: 'search', label: 'Inspect', title: 'Paths, both coordinate frames, lengths, sequence and evidence (also ⌘/Ctrl-click)' });
+    if (menu.group) {
+      const open = (state.layoutSettings.expanded ?? []).includes(menu.group);
+      entries.push({ kind: 'item', action: 'sel:expand', icon: 'layers', label: open ? 'Collapse the insertion' : 'Expand the insertion (true bp)',
+        title: 'Also a plain click on it' });
+    }
+    if (sel.target) entries.push({ kind: 'item', action: 'sel:focus', icon: 'target', label: `Focus the target ${sel.target.end === sel.target.start ? 'boundary' : 'span'}` });
+    if (menuPlacements.length) {
+      const byPath = placementsByPath(menuPlacements);
+      const sub: { kind: "item"; action: string; icon: string; label: string; title?: string }[] = [];
+      menuPlacements.forEach((pl, i) => {
+        const many = (byPath.get(pl.path)?.length ?? 0) > 1;
+        const what = `${laneLabelOf(pl.path)} ${pl.span.start.toLocaleString('en-US')}-${pl.span.end.toLocaleString('en-US')}${pl.note ? ` (${pl.note})` : ''}`;
+        for (const t of sourcePanelsFor(pl.path)) sub.push({ kind: 'item', action: `src:panel:${i}:${t.panelId}`, icon: 'target', label: `${what} → ${t.label}` });
+        sub.push({ kind: 'item', action: `src:path:${i}`, icon: 'panel:graph-view', label: `${what} → a graph view on the path`,
+          title: many ? 'More than one placement of this sequence on the path: each is listed' : 'Its own coordinates; no BAM needed' });
+      });
+      const ambiguous = [...byPath.values()].some(v => v.length > 1);
+      entries.push({ kind: 'submenu', id: 'source', icon: 'target', label: ambiguous ? 'Show source span (choose a placement)' : 'Show source span', entries: sub });
+    }
+    entries.push({ kind: 'separator' });
+  }
   if (state && reg && target) {
     const mainOk = canFollow(target, main);
     entries.push({ kind: 'heading', label: `${target.assembly} · ${target.path.contig}` });
@@ -621,7 +768,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
             label: `${readSettings.show ? '✓ ' : ''}Show reads on the paths`,
             title: 'Molecules of loaded datasets whose assembly is a path of this graph, drawn along their walk' },
           ...bound.map(b => ({ kind: 'item' as const, action: `reads:ds:${b.dataset_id}`, icon: shownIds.has(b.dataset_id) ? 'eye' : 'eye-off',
-            label: `${shownIds.has(b.dataset_id) ? '✓ ' : ''}${b.label}`,
+            label: `${shownIds.has(b.dataset_id) ? '✓ ' : ''}${b.label}${changedBindings.includes(b) ? ' (changed since saved: choose to bind it again)' : ''}`,
             title: `${b.kind === 'lifted' ? 'Live-lift dataset' : 'Dataset on the target'}: ${Object.entries(b.paths).filter(([k]) => state.selectedPathKeys.includes(k)).map(([k, c]) => `${laneLabelOf(k)} ← ${c}`).join(', ') || 'no selected path'}${b.problems.length ? ` · not bound: ${b.problems.join('; ')}` : ''}` })),
           ...readBindings.filter(b => b.problems.length && !Object.keys(b.paths).length).map(b => ({ kind: 'item' as const, action: `reads:none:${b.dataset_id}`,
             icon: 'eye-off', disabled: true, label: `${b.label}: not a path of this graph`, title: b.problems.join('; ') })),
@@ -644,7 +791,26 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   }
   entries.push({ kind: 'item', action: 'register', icon: 'library', label: 'Register a graph package…' });
   const onMenuAction = (action: string) => {
+    const at = menu;
     setMenu(null);
+    if (at?.sel && panelId && state && target) {
+      const sel = at.sel;
+      if (action === 'sel:inspect') { selectGraph(sel, true); return; }
+      if (action === 'sel:expand' && at.group) { toggleExpanded(at.group); selectGraph(sel, false); return; }
+      if (action === 'sel:focus' && sel.target) {
+        navigateGraph(panelId, { contig: target.path.contig, ...focusWindow(sel.target, target.size) });
+        selectGraph(sel, false);
+        return;
+      }
+      if (action.startsWith('src:')) {
+        const [, how, idx, into] = action.split(':');
+        const pl = menuPlacements[Number(idx)];
+        if (!pl) return;
+        const t = how === 'panel' ? sourcePanelsFor(pl.path).find(x => x.panelId === into) ?? null : null;
+        showSourceSpan(panelId, pl, t);
+        return;
+      }
+    }
     if (!panelId) return;
     if (action === 'register') { setPrompt('register'); return; }
     if (!state || !reg || !target) return;
@@ -668,6 +834,13 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       if (action === 'reads:toggle') next = { ...current, show: !current.show };
       else if (action.startsWith('reads:ds:')) {
         const id = action.slice('reads:ds:'.length);
+        // Chosen again: its current revision is the one bound from now on.
+        const fresh = readBindings.find(b => b.dataset_id === id);
+        if (fresh && changedBindings.includes(fresh)) {
+          next = { ...current, show: true, bound: (current.bound ?? []).map(x => (x.dataset_id === id ? { dataset_id: id, revision: fresh.revision } : x)) };
+          setGraphView(panelId, { ...state, reads: next });
+          return;
+        }
         const bound = readBindings.filter(b => Object.keys(b.paths).length).map(b => b.dataset_id);
         const shown = new Set(current.datasets ?? bound);
         if (shown.has(id)) shown.delete(id); else shown.add(id);
@@ -720,7 +893,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         <button type="button" className="rounded px-2 py-0.5 text-[11px] text-slate-700 underline dark:text-slate-200" onClick={() => void loadStatus(true)}>Check again</button>
       </Message>
     );
-  } else if (!regs.length) {
+  } else if (!regs.length && !state?.registrationId) {
     body = (
       <Message testId="graph-panel-empty" title="No graph package registered">
         <span className="max-w-md">Register a folder made by <code>fiberbrowser-graph prepare</code>; it is verified before use.</span>
@@ -728,11 +901,22 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       </Message>
     );
   } else if (problem) {
+    // Restored (or its package went missing): nothing is re-resolved. The saved target and paths stay frozen here,
+    // with the package's own error when the server has one, and a relink.
+    const errors = status.registration_errors ?? [];
+    const saved = state?.targetViewport;
     body = (
       <Message testId="graph-panel-stale" title="Graph package unavailable">
         <span>{problem}</span>
-        <button type="button" className="rounded px-2 py-0.5 text-[11px] text-slate-700 underline dark:text-slate-200"
-          onClick={() => setGraphView(panelId, initialGraphView(regs[0], main))}>Use {regs[0].label}</button>
+        {saved && <span data-testid="graph-panel-frozen">Saved view, frozen: {state?.targetBinding} {formatLocus(saved)} · {state?.selectedPathKeys.length ?? 0} paths</span>}
+        {errors.map(e => (
+          <span key={e.package} data-testid="graph-panel-registration-error" className="max-w-md text-[10px] text-gray-500">{e.package}: {e.error}{' '}
+            <button type="button" className="text-slate-700 underline dark:text-slate-200" data-testid="graph-panel-relink"
+              onClick={() => void useGraphStatusStore.getState().register(e.package)}>Register again</button></span>
+        ))}
+        <RegisterForm compact />
+        {regs.length > 0 && <button type="button" className="rounded px-2 py-0.5 text-[11px] text-slate-700 underline dark:text-slate-200"
+          onClick={() => setGraphView(panelId, initialGraphView(regs[0], main))}>Use {regs[0].label} instead</button>}
       </Message>
     );
   } else if (!state || !viewport || !transform) {
@@ -749,6 +933,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
           model.stats.unresolved ? `${model.stats.unresolved} unresolved` : null,
           ...model.summaries.slice(0, 2),
           readsSummary(reads, readLayout),
+          changedBindings.length ? `not drawn: ${changedBindings.map(b => b.label).join(', ')} changed since this view was saved (Reads menu binds it again)` : null,
           response?.cached ? 'cached' : response?.timings.total_ms != null ? `${response.timings.total_ms < 10 ? response.timings.total_ms.toFixed(1) : Math.round(response.timings.total_ms)} ms` : null,
         ].filter(Boolean).join(' · ')
         : 'Loading the topology…';
@@ -757,24 +942,25 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         <canvas ref={canvasRef} data-testid="graph-panel-canvas" data-copilot-track="graph"
           style={{ display: 'block', width, height: canvasHeight, touchAction: 'none', cursor: drag.current ? 'grabbing' : 'grab' }}
           onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}
-          onPointerLeave={() => { if (!drag.current) setCursor(null); }} onWheel={onWheel} onDoubleClick={onDoubleClick}
-          onContextMenu={e => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY }); }} />
+          onPointerLeave={() => { if (!drag.current) setCursor(null); if (panelId) useLiftHover.getState().clear(panelId); }} onWheel={onWheel} onDoubleClick={onDoubleClick}
+          onContextMenu={e => {
+            e.preventDefault();
+            const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
+            const zoom = rect.width > 0 && width > 0 ? rect.width / width : 1;
+            const found = selectionAt((e.clientX - rect.left) / zoom, (e.clientY - rect.top) / zoom);
+            const group = found ? hitGroup(found.hit) : null;
+            setMenu({ x: e.clientX, y: e.clientY, sel: found?.sel, group: isInsertionGroup(group) ? group.id : null });
+          }} />
         {/* Lane labels' accessible names (the canvas draws them). */}
         <div className="sr-only">{model?.rows.map(l => <span key={l.key} data-testid="graph-lane-label" title={l.title} style={{ color: laneColor(l) }}>{l.label}</span>)}</div>
         {cursor?.cursorX != null && (
           <div data-testid="graph-cursor" className="pointer-events-none absolute top-0" style={{ left: cursor.cursorX, width: 1, height: canvasHeight, background: 'rgba(100,100,100,0.45)' }} />
         )}
-        {pinned && (
-          <div data-testid="graph-pinned" className="absolute z-20 max-w-[480px] rounded border border-gray-300 bg-white px-2 py-1 text-[11px] text-gray-800 shadow dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-            style={{ left: Math.max(0, Math.min(pinned.x + 8, width - 360)), top: Math.min(pinned.y + 10, Math.max(0, canvasHeight - 40)) }}>
-            <div className="whitespace-normal">{pinned.text}</div>
-            <div className="mt-1 flex justify-end gap-2">
-              {pinned.span && <button type="button" data-testid="graph-pinned-zoom" className="text-slate-700 underline dark:text-slate-200" onClick={() => zoomTo(pinned.span!)}>Zoom to it</button>}
-              <button type="button" data-testid="graph-pinned-close" className="text-gray-500 underline" onClick={() => setPinned(null)}>Close</button>
-            </div>
-          </div>
+        {selectedExtent && (
+          <div data-testid="graph-selected" data-locus={graphSelection?.locusKey ?? ''} className="pointer-events-none absolute rounded-sm border border-dashed border-stone-500"
+            style={{ left: selectedExtent.x0 + sceneOffset - 1, width: selectedExtent.x1 - selectedExtent.x0 + 2, top: GRAPH_RULER_HEIGHT, height: canvasHeight - GRAPH_RULER_HEIGHT - 1 }} />
         )}
-        {cursor && !pinned && (
+        {cursor && (
           <div data-testid="graph-tooltip" className="pointer-events-none absolute z-10 whitespace-nowrap rounded bg-gray-800 px-1.5 py-0.5 text-[11px] text-white"
             style={{ left: Math.min(cursor.x + 10, Math.max(0, width - 260)), top: Math.min(cursor.y + 12, canvasHeight - 4) }}>{cursor.text}</div>
         )}
@@ -795,6 +981,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       data-graph-bubbles={model ? model.stats.groups : ''}
       data-graph-reads={readLayout ? [...readLayout.lanes.values()].reduce((t, l) => t + l.rows.reduce((u, r) => u + r.length, 0), 0) : ''}
       data-graph-reads-loading={reads.loading ? 'true' : 'false'} data-graph-reads-start={reads.forStart ?? ''} data-graph-compression={compression} data-graph-small-bp={smallBp}
+      data-graph-expanded={expandedKey} data-graph-selected={graphSelection?.panelId === panelId ? graphSelection.locusKey : ''}
       className="relative h-full min-h-0 w-full overflow-auto bg-white dark:bg-dark-bg"
       style={{ height: bodyHeight }}
       onContextMenu={e => { if (!(e.target instanceof HTMLCanvasElement)) { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY }); } }}>

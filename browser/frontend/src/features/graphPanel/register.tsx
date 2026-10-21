@@ -25,12 +25,12 @@ export function registerGraphPanel(): void {
     summary: 'Up to four paths of a prepared pangenome graph package (a target and the haplotypes compared with it), drawn on the target\'s own ruler, with no BAM needed.',
     limitations: [
       'Paths are drawn as a selected-path tube map: shared sequence once, small differences as marks on the tube, larger ones as bubbles; not every graph allele.',
-      'Reads are not drawn on the graph yet.',
+      'Reads are drawn for datasets bound to a path by explicit identity (a live-lift map of the same path, or a BAM on the target).',
       'At most 50 kb of the target and four paths (the target included) at a time.',
       'The graph helper (the fiberbrowser-graph-native companion package, or the macOS app) and a package made by fiberbrowser-graph prepare are needed.',
     ],
     inUse: state => Boolean(state.panels?.some(p => p.contentType === GRAPH_VIEW_PANEL)),
-    graduation: 'It graduates with the joint layout, molecules on the graph and every platform\'s helper (Gates C–G).',
+    graduation: 'It graduates with every platform\'s helper and the release replay (Gate G).',
   });
   registerAnalysisPanel({
     contentType: GRAPH_VIEW_PANEL,
@@ -50,8 +50,9 @@ export function registerGraphPanel(): void {
     sizeToContent: true,
     opens: 'stack-below-reads',
     preview: GRAPH_VIEW_PREVIEW,
-    sessionKeys: ['panels[].graphView'],
-    apiEndpoints: ['/api/graph/status', '/api/graph/subgraph', '/api/graph/requests/{id}'],
+    sessionKeys: ['panels[].graphView', 'graphSelection', 'graphInspect'],
+    apiEndpoints: ['/api/graph/status', '/api/graph/subgraph', '/api/graph/requests/{id}', '/api/graph/read_bindings',
+      '/api/graph/reads', '/api/graph/sequence', '/api/graph/differences'],
   });
   declareContribution('panelFields', 'graphView');
 }

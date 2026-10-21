@@ -584,3 +584,231 @@ test('HPRC navigation-to-topology traces (measurement only)', async ({ page }) =
     writeFileSync(`${MEASURE_OUT}.hprc.json`, JSON.stringify(out, null, 1));
   }
 });
+
+/** A scene hit's centre (CSS px in the canvas) by payload kind and target boundary. */
+async function hitAt(page: Page, panel: Locator, kind: string, boundary: number) {
+  const id = await panel.getAttribute('data-graph-panel-id');
+  return page.evaluate(([pid, k, b]) => {
+    const e = (window as any).__FIBERBROWSER_GRAPH_SCENES__?.[pid as string];
+    const h = e?.scene.hits.filter((x: any) => x.payload.kind === k && (x.payload.boundary === b || x.payload.group?.target?.start === b)).at(-1);
+    return h ? { x: (h.x0 + h.x1) / 2 + e.offset, y: (h.y0 + h.y1) / 2, w: h.x1 - h.x0 } : null;
+  }, [id, kind, boundary] as const);
+}
+
+async function canvasPoint(panel: Locator, at: { x: number; y: number }) {
+  const canvas = panel.getByTestId('graph-panel-canvas');
+  const box = (await canvas.boundingBox())!;
+  const css = await canvas.evaluate((c: HTMLCanvasElement) => c.clientWidth);
+  const s = box.width / css;
+  return { x: box.x + at.x * s, y: box.y + at.y * s };
+}
+
+test('Gate F: graph-only inspection, expansion, focus, source span and restore with live lift off', async ({ page }) => {
+  test.setTimeout(240_000);
+  const server = await graphServer([ALU], null, { FIBERBROWSER_LIVE_LIFT: '0' });
+  try {
+    const errors = await preparePage(page);
+    await page.goto(`${server.baseUrl}/?chr=chr3&start=92395&end=102395`);
+    await expect.poll(() => page.evaluate(() => (window as any).__FIBERBROWSER_STORE__?.getState().chroms.length ?? 0), { timeout: 60_000 }).toBeGreaterThan(0);
+    expect((await (await page.request.get(`${server.baseUrl}/api/lift/enabled`)).json()).enabled).toBe(false);
+    const graph = await openGraphPanel(page);
+    await expect(graph).toHaveAttribute('data-graph-lanes', 'target,mat,pat', { timeout: 30_000 });
+    await settled(graph, 92_395);
+    const canvas = graph.getByTestId('graph-panel-canvas');
+
+    // A plain click on the AluY slot expands it (true bp); it never opens the inspector.
+    const slot = (await hitAt(page, graph, 'slot', 97_395))!;
+    await page.mouse.click(...Object.values(await canvasPoint(graph, slot)) as [number, number]);
+    await expect(graph).not.toHaveAttribute('data-graph-expanded', '');
+    await expect(page.getByTestId('graph-inspector')).toHaveCount(0);
+    await expect.poll(async () => (await hitAt(page, graph, 'slot', 97_395))?.w ?? 0).toBeGreaterThan(slot.w);
+    await page.screenshot({ path: test.info().outputPath('gateF-expanded.png') });
+
+    // ⌘/Ctrl-click: the inspector, with no dataset: both alleles, both frames, no read binding, no canonical reuse.
+    const wide = (await hitAt(page, graph, 'slot', 97_395))!;
+    const pt = await canvasPoint(graph, wide);
+    await page.keyboard.down('ControlOrMeta');
+    await page.mouse.click(pt.x, pt.y);
+    await page.keyboard.up('ControlOrMeta');
+    const inspector = page.getByTestId('graph-inspector');
+    await expect(inspector).toBeVisible();
+    await expect(inspector).toHaveAttribute('data-what', 'insertion');
+    await expect(inspector).toHaveAttribute('data-kind', 'graph-difference');
+    await expect(inspector.getByTestId('graph-inspector-alleles')).toContainText('2,353 bp');
+    await expect(inspector.getByTestId('graph-inspector-alleles')).toContainText('2,350 bp');
+    await expect(inspector.getByTestId('graph-inspector-reads')).toContainText('No read binding');
+    await expect(inspector.getByTestId('graph-inspector-canonical')).toContainText('No canonical live-lift difference');
+    await inspector.getByTestId('graph-inspector-load-sequence').first().click();
+    await expect.poll(async () => ((await inspector.getByTestId('graph-inspector-bases').first().textContent()) ?? '').length).toBeGreaterThan(100);
+    await page.screenshot({ path: test.info().outputPath('gateF-inspector.png') });
+
+    // Focus the insertion boundary: following the main view, the main view moves (its own frame) and the graph follows.
+    await inspector.getByTestId('graph-inspector-focus').click();
+    await expect.poll(async () => {
+      const [a, b] = [Number(await graph.getAttribute('data-graph-start')), Number(await graph.getAttribute('data-graph-end'))];
+      return a < 97_395 && b > 97_395 && b - a <= 8_000;
+    }).toBe(true);
+    await expect(graph).toHaveAttribute('data-graph-link', 'follow');
+    await expect.poll(() => page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().start)).toBe(Number(await graph.getAttribute('data-graph-start')));
+    await settled(graph, Number(await graph.getAttribute('data-graph-start')));
+
+    // Right-click: Inspect, Collapse, Focus and the source span, in the menu (rows show only data).
+    const now = (await hitAt(page, graph, 'slot', 97_395))!;
+    const rp = await canvasPoint(graph, now);
+    await page.mouse.click(rp.x, rp.y, { button: 'right' });
+    const menu = page.getByTestId('graph-panel-menu');
+    await expect(menu.getByText('Inspect', { exact: true })).toBeVisible();
+    await expect(menu.getByText('Collapse the insertion')).toBeVisible();
+    await menu.getByText(/^Show source span/).click();
+    // No source panel of these files: a graph view on the MAT path itself, its span holding the inserted bases.
+    await page.getByText(/^MAT 94,676-97,029 .*a graph view on the path/).click();
+    await expect(page.getByTestId('graph-panel')).toHaveCount(2);
+    const pathView = page.getByTestId('graph-panel').nth(1);
+    await expect(pathView).toHaveAttribute('data-graph-lanes', 'mat', { timeout: 30_000 });
+    expect(Number(await pathView.getAttribute('data-graph-start'))).toBeLessThanOrEqual(94_676);
+    expect(Number(await pathView.getAttribute('data-graph-end'))).toBeGreaterThanOrEqual(97_029);
+    await expect(pathView).toHaveAttribute('data-graph-link', 'independent');
+
+    // Closing the graph panel the selection came from: the inspection stays usable (frozen data, no actions on it).
+    const pathPanelId = await pathView.getAttribute('data-graph-panel-id');
+    await store(page, 'closeAnalysisPanel', pathPanelId);
+    await expect(page.getByTestId('graph-panel')).toHaveCount(1);
+    await expect(inspector).toBeVisible();
+
+    // Restore at other package revisions: the panel says so, keeps its saved view frozen, and the inspector does
+    // not re-resolve the selection.
+    const id = await graph.getAttribute('data-graph-panel-id');
+    const saved = await page.evaluate((pid) => JSON.parse(JSON.stringify((window as any).__FIBERBROWSER_STORE__.getState().panels.find((p: any) => p.id === pid).graphView)), id);
+    await page.evaluate(([pid, gv]) => {
+      const s = (window as any).__FIBERBROWSER_STORE__;
+      const sel = s.getState().graphSelection;
+      s.setState({ panels: s.getState().panels.map((p: any) => p.id === pid ? { ...p, graphView: { ...(gv as any), linkMode: 'independent', packageRevision: 'stale' } } : p),
+        graphSelection: { ...sel, revisions: { ...sel.revisions, package: 'stale' } }, graphInspect: true });
+    }, [id, saved] as const);
+    await expect(graph.getByTestId('graph-panel-stale')).toBeVisible();
+    await expect(graph.getByTestId('graph-panel-frozen')).toContainText('target chr3:');
+    await expect(inspector).toHaveAttribute('data-problem', /changed since it was selected/);
+    await expect(inspector.getByTestId('graph-inspector-focus')).toHaveCount(0);
+    // The same revisions again: live.
+    await page.evaluate(([pid, gv]) => {
+      const s = (window as any).__FIBERBROWSER_STORE__;
+      s.setState({ panels: s.getState().panels.map((p: any) => p.id === pid ? { ...p, graphView: gv } : p) });
+    }, [id, saved] as const);
+    await expect(graph.getByTestId('graph-panel-stale')).toHaveCount(0);
+    await expect(graph).toHaveAttribute('data-graph-lanes', 'target,mat,pat', { timeout: 30_000 });
+    await page.getByTestId('graph-inspector-close').click();
+    await expect(inspector).toHaveCount(0);
+    expect(errors).toEqual([]);
+  } finally {
+    await stopServer(server);
+  }
+});
+
+test('Gate F: graph-plus-lifted-only and three-view molecule hover, canonical reuse, source panel and initiator closure (HPRC)', async ({ page }) => {
+  test.skip(!HAVE_LIFT || process.env.FIBERBROWSER_LIVE_LIFT !== '1', 'needs the pg-lift work data, the HPRC package and FIBERBROWSER_LIVE_LIFT=1');
+  test.setTimeout(480_000);
+  const server = await graphServer([HPRC]);
+  try {
+    const errors = await preparePage(page);
+    await page.goto(`${server.baseUrl}/?chr=chr3&start=128650000&end=128660000`);
+    await expect.poll(() => page.evaluate(() => (window as any).__FIBERBROWSER_STORE__?.getState().chroms.length ?? 0), { timeout: 120_000 }).toBeGreaterThan(0);
+    await page.getByTestId('open-menu-button').click();
+    await page.getByTestId('open-menu-add-live-lift').click();
+    await page.getByTestId('live-lift-bams').fill(LIFT_BAM);
+    await page.getByTestId('live-lift-manifest').fill(LIFT_MAP);
+    await expect(page.getByTestId('live-lift-haplotypes')).toContainText('MAT');
+    await page.getByTestId('live-lift-add').click();
+    await expect(page.getByTestId('live-lift-chip')).toHaveCount(2, { timeout: 60_000 });
+    const graph = await openGraphPanel(page);
+    await expect(graph).toHaveAttribute('data-graph-lanes', 'grch38_chr3,pat_chr3,mat_chr3', { timeout: 120_000 });
+    await settled(graph, 128_650_000, 120_000);
+    await expect.poll(async () => Number(await graph.getAttribute('data-graph-reads') || 0), { timeout: 90_000 }).toBeGreaterThan(20);
+    await expect(graph).toHaveAttribute('data-graph-reads-loading', 'false');
+    await expect.poll(() => page.locator('[data-read-track-loading="true"]').count(), { timeout: 60_000 }).toBe(0);
+    const id = await graph.getAttribute('data-graph-panel-id');
+    const hap = await page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().panels.find((p: any) => p.liftHap === 'PAT'));
+    const hapCanvas = page.locator(`[data-read-track-state-key="${hap.stateKey ?? hap.datasetId}"] canvas[data-copilot-track="reads"]`);
+
+    // Graph-plus-lifted-only: no source panel is open; hovering graph molecules outlines the lifted PAT panel's rows.
+    const hits = await page.evaluate((pid) => (window as any).__FIBERBROWSER_GRAPH_SCENES__[pid as string].reads.hits
+      .filter((h: any) => h.molecule.read.b === 'pat_chr3').map((h: any) => ({ x: (h.x0 + h.x1) / 2, y: (h.y0 + h.y1) / 2 })), id);
+    const offset = await page.evaluate((pid) => (window as any).__FIBERBROWSER_GRAPH_SCENES__[pid as string].offset, id);
+    let shared = false;
+    for (const h of hits.slice(0, 60)) {
+      const p = await canvasPoint(graph, { x: h.x + offset, y: h.y });
+      if (p.y > 990) continue;   // below the window: not hoverable
+      await page.mouse.move(p.x, p.y);
+      await page.waitForTimeout(80);
+      if (Number(await hapCanvas.getAttribute('data-lift-hover-rows')) > 0) { shared = true; break; }
+    }
+    expect(shared).toBe(true);
+    expect(await page.evaluate((pid) => (window as any).__FIBERBROWSER_GRAPH_SCENES__[pid as string].reads.hovered, id)).toBeGreaterThan(0);
+    await page.mouse.move(5, 5);
+
+    // Open PAT's linked source view: three views share the hover (graph ↔ lifted ↔ source).
+    await page.getByTestId(`panel-actions-${hap.id}`).click();
+    await page.getByTestId('live-lift-open-source-PAT').click();
+    await expect(page.getByTestId('lift-link-chip')).toHaveCount(1, { timeout: 60_000 });
+    const linked = await page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().panels.find((p: any) => p.liftLink));
+    await expect.poll(() => page.locator('[data-read-track-loading="true"]').count(), { timeout: 60_000 }).toBe(0);
+    const srcCanvas = page.locator(`[data-read-track-state-key="${linked.stateKey}"] canvas[data-copilot-track="reads"]`);
+    let three = false;
+    const hits2 = await page.evaluate((pid) => (window as any).__FIBERBROWSER_GRAPH_SCENES__[pid as string].reads.hits
+      .filter((h: any) => h.molecule.read.b === 'pat_chr3').map((h: any) => ({ x: (h.x0 + h.x1) / 2, y: (h.y0 + h.y1) / 2 })), id);
+    const offset2 = await page.evaluate((pid) => (window as any).__FIBERBROWSER_GRAPH_SCENES__[pid as string].offset, id);
+    for (const h of hits2.slice(0, 80)) {
+      const p = await canvasPoint(graph, { x: h.x + offset2, y: h.y });
+      if (p.y > 990) continue;
+      await page.mouse.move(p.x, p.y);
+      await page.waitForTimeout(80);
+      if (Number(await hapCanvas.getAttribute('data-lift-hover-rows')) > 0 && Number(await srcCanvas.getAttribute('data-lift-hover-rows')) > 0) { three = true; break; }
+    }
+    expect(three).toBe(true);
+    await page.screenshot({ path: test.info().outputPath('gateF-three-view-hover.png') });
+    await page.mouse.move(5, 5);
+
+    // The canonical difference is reused: the dataset's map is the package's map, same boundary and placement.
+    const slot = await page.evaluate((pid) => {
+      const e = (window as any).__FIBERBROWSER_GRAPH_SCENES__[pid as string];
+      const h = e.scene.hits.filter((x: any) => x.payload.kind === 'slot' && x.x1 - x.x0 > 60).at(-1);
+      return h ? { x: (h.x0 + h.x1) / 2 + e.offset, y: (h.y0 + h.y1) / 2, b: h.payload.boundary } : null;
+    }, id);
+    expect(slot).not.toBeNull();
+    const sp = await canvasPoint(graph, slot!);
+    await page.keyboard.down('ControlOrMeta');
+    await page.mouse.click(sp.x, sp.y);
+    await page.keyboard.up('ControlOrMeta');
+    const inspector = page.getByTestId('graph-inspector');
+    await expect(inspector).toHaveAttribute('data-what', 'insertion');
+    await expect(inspector).not.toHaveAttribute('data-canonical', '', { timeout: 30_000 });
+    await expect(inspector.getByTestId('graph-inspector-reads')).toContainText(/\d+ molecules of/);
+
+    // Show source span in the open source panel: it moves to the PAT insertion's own span (the inserted bases).
+    const target = inspector.getByTestId('graph-inspector-placement').filter({ hasText: 'PAT' }).first();
+    const [s0, s1] = [Number(await target.getAttribute('data-start')), Number(await target.getAttribute('data-end'))];
+    await target.getByTestId('graph-inspector-show-source').click();
+    await expect.poll(async () => {
+      const v = await page.evaluate((lid) => (window as any).__FIBERBROWSER_STORE__.getState().panels.find((p: any) => p.id === lid)?.viewportOverride, linked.id);
+      return Boolean(v && v.start <= s0 && v.end >= s1);
+    }, { timeout: 20_000 }).toBe(true);
+
+    // Closing the source panel: graph inspection and navigation stay usable.
+    await store(page, 'removePanel', linked.id);
+    await expect(page.getByTestId('lift-link-chip')).toHaveCount(0, { timeout: 20_000 });
+    await expect(inspector).toBeVisible();
+    await expect(inspector.getByTestId('graph-inspector-focus')).toBeVisible();
+
+    // Following a panel with a view of its own (the initiator), then closing it: the graph stays where it was, on its own.
+    await page.evaluate((mid) => (window as any).__FIBERBROWSER_STORE__.getState().navigatePanelOwnView(mid, 'chr3', 128_651_000, 128_661_000), hap.id);
+    await graph.getByTestId('graph-panel-canvas').click({ button: 'right', position: { x: 120, y: 12 } });
+    await page.getByTestId('graph-panel-menu').getByText(/^Follow .*128,651,000/).click();
+    await expect(graph).toHaveAttribute('data-graph-start', '128651000', { timeout: 20_000 });
+    await store(page, 'removePanel', hap.id);
+    await expect(graph).toHaveAttribute('data-graph-link', 'independent', { timeout: 20_000 });
+    await expect(graph).toHaveAttribute('data-graph-start', '128651000');
+    await page.getByTestId('graph-inspector-close').click();
+    expect(errors).toEqual([]);
+  } finally {
+    await stopServer(server);
+  }
+});
