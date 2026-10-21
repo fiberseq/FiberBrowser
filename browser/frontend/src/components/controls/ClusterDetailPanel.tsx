@@ -312,7 +312,8 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
   const datasetIds = useMemo(() => {
     // A joint fit has its own cluster IDs. The folded source panel may still
     // hold the earlier split, which must not enter its counts or profiles.
-    const runKeys = new Set(matchedRun?.windows.map(w => w.stateKey));
+    // (A graph run: every destination panel, folded members and pop-outs too.)
+    const runKeys = new Set([...(matchedRun?.windows.map(w => w.stateKey) ?? []), ...(matchedRun?.destinations ?? []).map(d => d.stateKey)]);
     const keys = targetStateKeys.some(key => runKeys.has(key))
       ? targetStateKeys.filter(key => runKeys.has(key)) : targetStateKeys;
     return keys.filter(sk =>
