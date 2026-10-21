@@ -100,7 +100,9 @@ export function GraphInspector({ selection: sel }: { selection: GraphSelection }
   const graphOpen = useBrowserStore(s => s.panels.some(p => p.id === sel.panelId));
   // Read bindings of the selection's own graph panel only (its registration's paths): another panel's bindings,
   // perhaps of another package, never vouch for its read rows.
-  const bindings = useGraphReadsStore(s => s.byPanel[sel.panelId]?.bindings) ?? NO_BINDINGS;
+  // Only while that panel still shows the selection's registration (a reused panel on another package does not count).
+  const own = useGraphReadsStore(s => s.byPanel[sel.panelId]);
+  const bindings = own && own.registrationId === sel.registrationId ? own.bindings : NO_BINDINGS;
   const revisions = useMemo(() => Object.fromEntries(bindings.map(b => [b.dataset_id, b.revision])), [bindings]);
 
   // Canonical difference (graph differences with one allele placement): the server's exact match only.
@@ -130,7 +132,9 @@ export function GraphInspector({ selection: sel }: { selection: GraphSelection }
   // Read rows hold only while their bindings do: every dataset still bound, at the revision it was counted at.
   const readsGone = sel.reads && sel.reads.datasetIds.length ? (() => {
     if (!graphOpen) return 'its graph panel is closed';
-    const missing = sel.reads.datasetIds.filter(id => !bindings.some(b => b.dataset_id === id));
+    // Bound to one of the selection's own paths, not just loaded.
+    const paths = new Set([...sel.alleles.flatMap(a => a.paths), ...(sel.occurrence ? [sel.occurrence.path] : []), ...(sel.base?.paths ?? [])]);
+    const missing = sel.reads.datasetIds.filter(id => !bindings.some(b => b.dataset_id === id && Object.keys(b.paths).some(k => paths.has(k))));
     if (missing.length) return `${missing.length === 1 ? 'its dataset is' : 'its datasets are'} not bound to this graph now`;
     // A count saved without the revisions it was made at cannot be vouched for.
     const changed = sel.reads.datasetIds.filter(id => !sel.reads!.revisions?.[id] || revisions[id] !== sel.reads!.revisions[id]);

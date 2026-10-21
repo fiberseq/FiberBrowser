@@ -115,7 +115,10 @@ export interface SourceTarget { kind: 'panel'; panelId: string; contig: string; 
  */
 export function sourcePanelsFor(path: string, fromPanelId: string): SourceTarget[] {
   const s = useBrowserStore.getState();
-  const bindings = useGraphReadsStore.getState().byPanel[fromPanelId]?.bindings ?? [];
+  const own = useGraphReadsStore.getState().byPanel[fromPanelId];
+  const reg = s.panels.find(p => p.id === fromPanelId)?.graphView?.registrationId ?? null;
+  // The panel may show another package now: its bindings then say nothing about this selection's paths.
+  const bindings = own && own.registrationId != null && own.registrationId === reg ? own.bindings : [];
   const out: SourceTarget[] = [];
   for (const b of bindings) {
     const contig = b.paths[path];

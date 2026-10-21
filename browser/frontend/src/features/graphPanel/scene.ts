@@ -212,10 +212,14 @@ export function foldMarks(items: Item[], small: number, expanded?: ReadonlySet<s
   let byT = foldCache.get(items);
   if (!byT) { byT = new Map(); foldCache.set(items, byT); }
   // Only this chain's own expanded groups are part of the key (so the cache stays bounded by the chain's groups).
-  const mine = expanded && expanded.size ? items.filter(it => it.kind === 'group' && expanded.has(it.id)).map(it => it.id).sort() : [];
+  // Only expansions that change this chain's folding are part of the key: its own groups that would fold.
+  const mine = expanded && expanded.size
+    ? items.filter(it => it.kind === 'group' && expanded.has(it.id) && isSmallDifference(it, small)).map(it => it.id).sort() : [];
   const cacheKey = `${small}|${mine.join(',')}`;
   const hit = byT.get(cacheKey);
   if (hit) return hit;
+  // Bounded per chain (the oldest entry goes first).
+  if (byT.size >= 32) byT.delete(byT.keys().next().value as string);
   const out: ChainItem[] = [];
   let pending: (RunItem | GroupItem)[] = [];
   let marks = 0;

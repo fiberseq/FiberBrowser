@@ -614,7 +614,8 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
                 done.add(key)
                 out.append((k, have[key]))
         # Identities a truncated batch never reached (still uncached): left out of this answer and reported.
-        return out, truncated, not missing, len(set(keys)) - len(out)
+        reached = {key for _k, key in zip(kept, keys) if key in have}
+        return out, truncated, not missing, sum(n for key, n in listed_n.items() if key not in reached)
 
     # One level for the whole request: sparser (by QNAME hash) until every path's reads fit the request's payload
     # budget together. A sparser level is a subset of the records already decoded: only the first pass decodes.

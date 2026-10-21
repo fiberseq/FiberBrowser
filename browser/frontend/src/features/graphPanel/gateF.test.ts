@@ -341,16 +341,21 @@ describe('Gate F review round 1', () => {
     expect(scene.hits.some(h => h.payload.kind === 'slot' && h.payload.group.id === id)).toBe(true);
   });
 
-  it('source panels come only from the selection\'s own graph panel bindings', async () => {
+  it('source panels come only from the selection\'s own graph panel bindings, for its registration', async () => {
     const { sourcePanelsFor } = await import('./navigation');
     const { useGraphReadsStore } = await import('./graphReadsStore');
-    useBrowserStore.setState({ panels: [{ id: 'S', contentType: 'dataset', datasetId: 'lift',
-      liftLink: { id: 'k', datasetId: 'lift', liftPanelId: 'L', hap: 'h', hapLabel: 'MAT', contig: 'c_MAT', flip: false } }] } as never);
+    const panels = (reg: string) => [{ id: 'S', contentType: 'dataset', datasetId: 'lift',
+      liftLink: { id: 'k', datasetId: 'lift', liftPanelId: 'L', hap: 'h', hapLabel: 'MAT', contig: 'c_MAT', flip: false } },
+      { id: 'mine', contentType: 'graph-view', datasetId: null, graphView: { registrationId: reg } }];
+    useBrowserStore.setState({ panels: panels('A') } as never);
     const binding = { dataset_id: 'lift', label: 'L', kind: 'lifted' as const, revision: 'r', paths: { mat: 'c_MAT' }, problems: [], libraries: 1 };
-    useGraphReadsStore.setState({ byPanel: { other: { drawn: ['lift'], bindings: [binding] } } });
+    useGraphReadsStore.setState({ byPanel: { other: { drawn: ['lift'], bindings: [binding], registrationId: 'A' } } });
     expect(sourcePanelsFor('mat', 'mine')).toEqual([]);
-    useGraphReadsStore.setState({ byPanel: { mine: { drawn: ['lift'], bindings: [binding] } } });
+    useGraphReadsStore.setState({ byPanel: { mine: { drawn: ['lift'], bindings: [binding], registrationId: 'A' } } });
     expect(sourcePanelsFor('mat', 'mine').map(t => t.panelId)).toEqual(['S']);
+    // The same panel now on another package: its bindings do not speak for this selection.
+    useBrowserStore.setState({ panels: panels('B') } as never);
+    expect(sourcePanelsFor('mat', 'mine')).toEqual([]);
     useGraphReadsStore.setState({ byPanel: {} });
     useBrowserStore.setState({ panels: [] } as never);
   });

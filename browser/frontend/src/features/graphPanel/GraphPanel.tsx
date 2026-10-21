@@ -312,8 +312,8 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   const anyDrawn = Boolean(reads.response);
   useEffect(() => {
     if (!panelId) return;
-    useGraphReadsStore.getState().publish(panelId, anyDrawn ? (drawnIdsKey ? drawnIdsKey.split(',') : []) : [], readBindings);
-  }, [panelId, drawnIdsKey, anyDrawn, readBindings]);
+    useGraphReadsStore.getState().publish(panelId, anyDrawn ? (drawnIdsKey ? drawnIdsKey.split(',') : []) : [], readBindings, reg?.id ?? null);
+  }, [panelId, drawnIdsKey, anyDrawn, readBindings, reg?.id]);
   useEffect(() => () => { if (panelId) { useGraphReadsStore.getState().clear(panelId); useLiftHover.getState().clear(panelId); } }, [panelId]);
   // The molecule hovered here or in a lifted / source / native panel of the same files (moleculeKey: dataset,
   // library, QNAME): its rows are outlined in every view.
