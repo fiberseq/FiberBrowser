@@ -92,7 +92,9 @@ export function applyShown(panels: PanelConfig[], hostId: string, shown: 'graph'
       return { ...rest, collapsed: false, graphHandoff: hostId,
         ...(host?.viewportOverride ? { viewportOverride: { ...host.viewportOverride } } : {}) };
     }
-    if (shown === 'graph' && p.graphHandoff === hostId) {
+    // Back to the graph: the members it revealed fold again, unless the user moved one elsewhere meanwhile.
+    if (shown === 'graph' && p.graphHandoff === hostId
+      && JSON.stringify(p.viewportOverride ?? null) === JSON.stringify(host?.viewportOverride ?? null)) {
       const { graphHandoff: _h, ...rest } = p;
       return { ...rest, collapsed: true, collapsedByGraphGroup: hostId };
     }

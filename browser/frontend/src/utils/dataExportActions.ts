@@ -4,6 +4,7 @@
  * made one way wherever it is asked for.
  */
 import type { BrowserState } from '../stores/browserStore';
+import { qnameOfId } from './recordKeys';
 import { exportSession } from '../api/session';
 import { getCompactReadsAll } from '../api/readOperations';
 import { fetchReadStats, type PerReadStats } from '../api/readStats';
@@ -418,7 +419,8 @@ export async function downloadWorkingSetTsv(state: BrowserState): Promise<string
 
 /** One read name per line (each once), as samtools view -N and most tools take them. */
 export function formatReadNames(groups: ReadScopeGroup[]): string {
-  const names = [...new Set(groups.flatMap(g => g.readIds))];
+  // Cohort identities and record keys (lifted rows, graph rows) are written as the QNAME they name.
+  const names = [...new Set(groups.flatMap(g => g.readIds).map(qnameOfId))];
   return names.length ? names.join('\n') + '\n' : '';
 }
 

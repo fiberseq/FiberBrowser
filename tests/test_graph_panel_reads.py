@@ -553,5 +553,6 @@ def test_pinned_qnames_survive_sampling_and_the_cap(env):
     out = [f"p{i:03d}" for i in range(120) if f"p{i:03d}" not in sampled][:5]
     pinned = _reads(env, [did], paths, limits={"molecules": 20}, pins=out).json()
     got = {r["q"] for r in pinned["reads"]}
-    assert set(out) <= got and pinned["report"]["molecules"] <= 20 and pinned["report"]["pinned"] == 5
+    # Pinned molecules come on top of the cap (the rest still fill it).
+    assert set(out) <= got and pinned["report"]["molecules"] <= 25 and pinned["report"]["pinned"] == 5
     assert _reads(env, [did], paths, pins=[1]).status_code == 422

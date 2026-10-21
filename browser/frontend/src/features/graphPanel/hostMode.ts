@@ -259,7 +259,8 @@ export function moveHostMembers(panels: PanelConfig[], hostId: string, prev: { c
   const same = (v?: { chrom: string; start: number; end: number }) => Boolean(v && v.chrom === prev.chrom && v.start === prev.start && v.end === prev.end);
   let changed = false;
   const out = panels.map(p => {
-    if (p.graphMemberOf !== hostId || !same(p.viewportOverride)) return p;
+    // Folded members always (their bands are the host's window); revealed ones while they are in step.
+    if (p.graphMemberOf !== hostId || !p.viewportOverride || !(p.collapsedByGraphGroup === hostId || same(p.viewportOverride))) return p;
     changed = true;
     return { ...p, viewportOverride: { ...next } };
   });

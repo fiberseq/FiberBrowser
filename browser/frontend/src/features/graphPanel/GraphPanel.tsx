@@ -290,6 +290,9 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   const selectedForPins = useBrowserStore(s => s.selectedReadIds);
   const pinnedGlobal = useReadActionsStore(s => s.pinnedReadIds);
   const highlightForPins = useReadActionsStore(s => s.highlight);
+  const branchForPins = useBrowserStore(s => (s.activeClusterTreeNodeId ? s.clusterTreeNodes[s.activeClusterTreeNodeId] : null));
+  const focusForPins = useBrowserStore(s => s.clusterFocus);
+  const assignmentsForPins = useBrowserStore(s => s.clusterAssignments);
   const pins = useMemo(() => {
     if (!hostMode) return [] as string[];
     const out = new Set<string>(pinnedGlobal.map(qnameOfId));
@@ -298,9 +301,13 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       const sk = panelKeyOf(p);
       for (const id of selectedForPins[sk] ?? []) out.add(qnameOfId(id));
       for (const id of filteredForPins[sk] ?? []) out.add(qnameOfId(id));
+      // A cluster focus or child branch scopes the member to its reads: those are kept too.
+      const scope = branchScopesPanel(branchForPins, sk) || (focusForPins[sk]?.size ?? 0) > 0
+        ? readIdSetForClusterRenderScope(assignmentsForPins[sk], focusForPins[sk], true) : null;
+      for (const id of scope ?? []) out.add(qnameOfId(id));
     }
     return [...out].sort().slice(0, MAX_GRAPH_PINS);
-  }, [hostMode, members, selectedForPins, filteredForPins, pinnedGlobal, highlightForPins]);
+  }, [hostMode, members, selectedForPins, filteredForPins, pinnedGlobal, highlightForPins, branchForPins, focusForPins, assignmentsForPins]);
   const pinsKey = pins.join('\u0000');
   const readsKey = reg && response && readPaths.length
     ? JSON.stringify([reg.id, reg.revisions.package, readPaths, activeBindings.map(b => [b.dataset_id, b.revision]), pinsKey])
@@ -475,11 +482,14 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   // The rows each member shows here ("Reads shown" scopes, exports): the host and its folded members (a revealed
   // member's own read track publishes its rows).
   useEffect(() => {
-    if (!hostMode || !readLayout || readsStale) return;
+    if (!hostMode || readsStale) return;
+    // No reads drawn (off, failed, nothing bound): nothing is shown here, so the lists empty.
     const byMember = new Map<string, Set<string>>();
+    if (readLayout) {
     for (const lane of readLayout.lanes.values()) {
       const l = lane as HostLane;
       l.rows.forEach((row, i) => { const id = l.rowMember?.[i]; if (!id) return; const set = byMember.get(id) ?? byMember.set(id, new Set()).get(id)!; for (const m of row) set.add(m.read.aid ?? m.read.q); });
+    }
     }
     const store = useBrowserStore.getState();
     for (const m of bandMembers) {
@@ -487,7 +497,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       if (!p || (p.id !== panelId && !p.collapsedByGraphGroup)) continue;
       const ids = [...(byMember.get(m.panelId) ?? [])];
       const prev = store.activeReadIds[m.stateKey];
-      if (!prev || prev.length !== ids.length || prev.some((x, i) => x !== ids[i])) store.setActiveReadIds(m.stateKey, ids);
+      if ((!prev && ids.length) || (prev && (prev.length !== ids.length || prev.some((x, i) => x !== ids[i])))) store.setActiveReadIds(m.stateKey, ids);
     }
   }, [hostMode, readLayout, readsStale, bandMembers]); // eslint-disable-line react-hooks/exhaustive-deps
   // Selected (each member's QNAME set) and highlighted ("Highlight in all panels": QNAME, cohort id or record key).

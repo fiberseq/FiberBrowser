@@ -730,11 +730,13 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
         molecules = [m for m in molecules if m in fit]
         truncated = True
     capped = 0
-    if len(molecules) > max_molecules:
-        keep = set(molecules[:max_molecules])
-        capped = len(molecules) - max_molecules
+    # Pinned molecules (first in this order) never count against the cap: the rest fill it.
+    cap = max_molecules + sum(1 for m in molecules if m[2] in pins)
+    if len(molecules) > cap:
+        keep = set(molecules[:cap])
+        capped = len(molecules) - cap
         reads = [r for r in reads if (r["d"], r["lib"], r["q"]) in keep]
-        molecules = molecules[:max_molecules]
+        molecules = molecules[:cap]
     # QNAMEs in more than one library of a dataset: kept apart by library.
     libs: dict = {}
     for d, lib, q in molecules:
