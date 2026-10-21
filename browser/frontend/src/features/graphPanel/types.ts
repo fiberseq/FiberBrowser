@@ -234,6 +234,8 @@ export interface GraphRead {
   /** m6A as counts per bin when the request's mark budget was spent: [start, end, count]. */
   m6a_density?: [number, number, number][];
   calls_omitted?: boolean;
+  /** A DAF-seq record's strand (CT / GA: its st:Z tag, else its deamination marks); absent: none (G8). */
+  ds?: 'CT' | 'GA';
 }
 
 export interface GraphReadBinding {

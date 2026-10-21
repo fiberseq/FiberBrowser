@@ -23,6 +23,8 @@ export interface BandMember {
   liftHap: string | null;
   /** The package path it is bound to; null: every path its dataset binds. */
   binding: string | null;
+  /** A DAF-seq panel showing one strand (CT / GA): only that strand's records; null or absent: every record. */
+  strand?: 'CT' | 'GA' | null;
   label: string;
   color: string;
 }
@@ -62,6 +64,7 @@ export function routeRead(r: GraphRead, m: BandMember): boolean {
   if (r.d !== m.datasetId) return false;
   if (m.binding && r.b !== m.binding) return false;
   if (m.liftHap && (r.hap ?? '').toUpperCase() !== m.liftHap.toUpperCase()) return false;
+  if (m.strand && r.ds !== m.strand) return false;
   return true;
 }
 

@@ -79,3 +79,15 @@ describe('disclosure', () => {
     expect(bandSampled({ ...band, level: 0 })).toBe(false);
   });
 });
+
+describe('G8: DAF strand on graph rows', () => {
+  it('a one-strand member takes only its strand\'s records', async () => {
+    const { routeRead } = await import('./memberBands');
+    const r = (ds?: 'CT' | 'GA') => ({ k: 'd|0|q|r', d: 'd', lib: 0, q: 'q', rec: 'r', b: 'mat', c: '', st: '+', sup: false, s: 0, e: 1, cov: [], ins: [], hap: 'MAT', ds }) as GraphRead;
+    const M: BandMember = { panelId: 'm', stateKey: 'k', datasetId: 'd', liftHap: 'MAT', binding: null, label: 'MAT', color: '#000', strand: 'CT' };
+    expect(routeRead(r('CT'), M)).toBe(true);
+    expect(routeRead(r('GA'), M)).toBe(false);
+    expect(routeRead(r(), M)).toBe(false);
+    expect(routeRead(r('GA'), { ...M, strand: null })).toBe(true);
+  });
+});

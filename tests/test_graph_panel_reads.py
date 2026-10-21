@@ -653,3 +653,16 @@ def test_a_lifted_bam_subset_is_written_on_the_source_assembly(env):
                                                           "read_ids": ["legacy"]}).status_code == 409
     assert env.client.post("/api/lift/export_bam", json={"dataset_id": "nope", "chrom": TARGET, "start": 0, "end": 10,
                                                          "read_ids": ["legacy"]}).status_code == 404
+
+
+def test_graph_rows_carry_the_daf_strand(env):
+    """Graph primary G8: a DAF-seq record's strand (its st:Z tag, else its deamination marks) is on its graph row
+    (``ds``), so a one-strand member shows only its strand; other records carry none."""
+    daf = write_bam(env.tmp / "daf.bam", lambda h: [
+        make_record(h, "ct1", MAT, 100, "500M", tags=[("ns", _u32([50])), ("nl", _u32([150])), ("st", "CT")]),
+        make_record(h, "ga1", MAT, 200, "500M", tags=[("ns", _u32([50])), ("nl", _u32([150])), ("st", "GA")]),
+        make_record(h, "plain", MAT, 300, "500M", tags=[("ns", _u32([50])), ("nl", _u32([150]))])])
+    did = _add_lifted(env, paths=[daf], dataset_id="daf")
+    out = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 0, "end": 1500}]}]).json()
+    got = {r["q"]: r.get("ds") for r in out["reads"]}
+    assert got == {"ct1": "CT", "ga1": "GA", "plain": None}

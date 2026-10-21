@@ -64,8 +64,9 @@ MAX_LEVEL = 8
 LOADER_OPTIONS = dict(include_methylation=True, ml_threshold=125, include_layers=True, include_layer_qualities=True,
                       hide_terminal_gaps=True, include_cigar=True, include_duplicates=False, sv_min_len=50)
 _LAYERS = ("nuc", "tf", "msp")
-# The cached rows' wire form: 2 adds the identities (aid, rk, hap) and the map's molecule groups (graph primary G0).
-WIRE_VERSION = 2
+# The cached rows' wire form: 2 adds the identities (aid, rk, hap) and the map's molecule groups (graph primary G0);
+# 3 the DAF strand (ds: CT / GA) of DAF-seq records (G8).
+WIRE_VERSION = 3
 
 
 class ReadsError(Exception):
@@ -327,6 +328,12 @@ def compact_row(row: dict, origin: int, dataset_id: str, binding: str, windows: 
     m6a = [p for p in m6a if inside(p)]
     if m6a:
         out["m6a"] = m6a
+    # A DAF-seq record's strand (CT / GA: its st:Z tag, else its deamination marks), as linear rows read it, so a
+    # one-strand member's sub-band shows only its strand (G8).
+    from services.read_strand import read_strand
+    daf = read_strand(row)
+    if daf:
+        out["ds"] = daf
     return out
 
 

@@ -449,7 +449,8 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       // is the member's path at the host's target, which a pan onto another contig changes.
       void member;
       return { panelId: p.id, stateKey: panelKeyOf(p), datasetId: p.datasetId!, liftHap: hap, binding: null,
-        label: name, color: datasetColors[p.datasetId!] ?? '#4b5563' };
+        strand: p.strand === 'CT' || p.strand === 'GA' ? p.strand : null,
+        label: p.strand === 'CT' || p.strand === 'GA' ? `${name} · ${p.strand}` : name, color: datasetColors[p.datasetId!] ?? '#4b5563' };
     });
   }, [hostMode, members, datasetLabels, datasetColors]);
   const clusterAssignmentsAll = useBrowserStore(s => s.clusterAssignments);
