@@ -556,7 +556,9 @@ def density_strip(reads: list, windows: list, bin_bp: int) -> dict:
 
 
 def _entry_bytes(reads: tuple) -> int:
-    return 256 + sum(512 + 32 * (marks_of(r) + len(r["cov"]) + len(r["ins"]) + len(r.get("dl") or ())) for r in reads)
+    # (DAF strand evidence, _dse, is counted too: thousands of marks on a deaminated read.)
+    return 256 + sum(512 + 32 * (marks_of(r) + len(r["cov"]) + len(r["ins"]) + len(r.get("dl") or ()) + len(r.get("_dse") or ()))
+                     for r in reads)
 
 
 def _records_get(keys) -> dict:
