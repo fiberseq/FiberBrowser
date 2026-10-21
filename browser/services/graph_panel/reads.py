@@ -42,6 +42,7 @@ call — so a band that draws fewer rows than it has molecules still shows them.
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import os
 import threading
@@ -343,12 +344,29 @@ def compact_row(row: dict, origin: int, dataset_id: str, binding: str, windows: 
     return out
 
 
-def resolve_molecule_strands(reads: list, evidence_only: Optional[list] = None) -> None:
+def _strand_molecule(r: dict) -> str:
+    """The key linear views cache a molecule's strand under (read_strand.cached_read_strand): a lifted row's
+    molecule (its cohort identity's first part), a native row's QNAME."""
+    aid = r.get("aid")
+    if isinstance(aid, str) and aid.startswith("lift-cohort:v1 "):
+        try:
+            parts = json.loads(aid[len("lift-cohort:v1 "):])
+            if isinstance(parts, list) and parts and isinstance(parts[0], str):
+                return parts[0]
+        except (ValueError, RecursionError):
+            pass
+    return str(r.get("q"))
+
+
+def resolve_molecule_strands(reads: list, evidence_only: Optional[list] = None, calls_of=None) -> None:
     """Each molecule's DAF strand on every one of its rows (``ds``), as linear cohorts resolve it
     (lift/cohort.py prepare_lift_cohort): the first explicit call in primary-first order (an explicit '.' means
     none), else the majority of the molecule's distinct marks (a tie: none). ``evidence_only``: rows not drawn
-    (hidden supplementaries) whose evidence still counts. The internal evidence fields are removed. ``reads`` are
-    the response's copies."""
+    (hidden supplementaries) whose evidence still counts. ``calls_of(dataset_id)``: the session's cross-window
+    strand cache (read_strand.strand_calls), shared with linear views: a strand called from marks is the cached
+    one when the molecule was called before (in another window, a wider one, or a linear view), so a supplementary
+    whose primary is outside the window keeps its molecule's strand; a new call from marks is cached (graph
+    features, item 7). The internal evidence fields are removed. ``reads`` are the response's copies."""
     by_molecule: dict = {}
     for r in reads:
         by_molecule.setdefault((r["d"], r["lib"], r["q"]), []).append(r)
@@ -364,6 +382,14 @@ def resolve_molecule_strands(reads: list, evidence_only: Optional[list] = None) 
             ct = sum(1 for e in marks if e[-1] == 1)
             ga = sum(1 for e in marks if e[-1] == 0)
             call = None if ct == ga else ("CT" if ct > ga else "GA")
+            calls = calls_of(m[0]) if calls_of is not None else None
+            if calls is not None:
+                mol = _strand_molecule(rows[0])
+                known = calls.get(mol)
+                if known is not None:
+                    call = known
+                elif call is not None:
+                    calls[mol] = call
         elif call == ".":
             call = None
         for r in rows:
@@ -941,7 +967,9 @@ def _load(state, reg, body: dict, *, max_molecules: int, max_marks: int, max_byt
     if not_loaded:
         counts["supplementary_not_loaded"] = not_loaded
     # A molecule's DAF strand, as the linear rows resolve it (Codex G8 review): on the response's copies.
-    resolve_molecule_strands(reads, evidence_only=[dict(r) for r in hidden_rows])
+    from services.read_strand import strand_calls
+    resolve_molecule_strands(reads, evidence_only=[dict(r) for r in hidden_rows],
+                             calls_of=lambda dataset_id: strand_calls(state, dataset_id))
     # Density strips (§6.2 L2): every row decoded at the band's level, before the cap and the mark budget.
     strips = []
     span_bp = sum(b - a for j in jobs for a, b in j[3]) / max(1, len(jobs))

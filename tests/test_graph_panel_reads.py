@@ -833,3 +833,49 @@ def test_the_sparsest_level_draws_the_same_reads_within_budget_on_repeat(env, mo
         again = _reads(env, [did], paths).json()
         assert sorted(r["q"] for r in again["reads"]) == q1
         assert again["report"]["decoded_bytes"] <= first["report"]["decoded_bytes"]
+
+
+def test_a_supplementary_keeps_its_molecules_strand_from_another_window(env):
+    """Graph features, item 7 (agy G8 review): a supplementary with no strand evidence of its own, whose primary is
+    outside the window, takes the strand its molecule was called with before (the session's cross-window strand
+    cache, shared with linear views), as a linear row does."""
+    def seq(n, marks):
+        out = list("C" * n)
+        for off, base in marks:
+            out[off] = base
+        return "".join(out)
+    tags = [("ns", _u32([50])), ("nl", _u32([150]))]
+    daf = write_bam(env.tmp / "far.bam", lambda h: [
+        make_record(h, "far", MAT, 100, "500M", tags=tags, seq=seq(500, [(10, "Y"), (20, "Y"), (30, "Y")])),
+        make_record(h, "far", MAT, 3000, "400M", flag=2048, tags=tags)])
+    did = _add_lifted(env, paths=[daf], dataset_id="far")
+    gr.clear_cache()
+    env.state._read_strand_calls = {}
+    alone = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 2900, "end": 3500}]}]).json()
+    assert [r.get("ds") for r in alone["reads"] if r["q"] == "far"] == [None]      # never called: no strand
+    whole = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 0, "end": 3500}]}]).json()
+    assert [r.get("ds") for r in whole["reads"] if r["q"] == "far"] == ["CT", "CT"]
+    gr.clear_cache()
+    again = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 2900, "end": 3500}]}]).json()
+    assert [r.get("ds") for r in again["reads"] if r["q"] == "far"] == ["CT"]      # the molecule's call, cached
+    # The cache is the linear views' (keyed by molecule): a linear lifted view of the molecule called it the same.
+    (key,) = [k for k in env.state._read_strand_calls[did]]
+    assert key.endswith("|far") and env.state._read_strand_calls[did][key] == "CT"
+
+
+def test_a_cross_haplotype_supplementary_is_on_its_own_contigs_band(env):
+    """Graph features, item 7 (thin report MED 1): a MAT supplementary of a PAT molecule is drawn on the MAT path,
+    in the MAT haplotype's band (its own contig's), where its coordinates are; its primary is on PAT."""
+    bam = write_bam(env.tmp / "xhap.bam", lambda h: [
+        make_record(h, "split", MAT, 2000, "20S100M", flag=2048, tags=[("ns", _u32([30])), ("nl", _u32([50])),
+                                                                     ("SA", f"{PAT},2001,+,100M20S,60,0;")]),
+        make_record(h, "split", PAT, 2000, "100M20S", tags=[("ns", _u32([30])), ("nl", _u32([50]))])])
+    did = _add_lifted(env, paths=[bam], dataset_id="xhap")
+    out = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 0, "end": 10_000}]},
+                              {"binding": "pat", "windows": [{"start": 0, "end": 10_000}]}]).json()
+    split = {(r["b"], r["sup"]): r for r in out["reads"] if r["q"] == "split"}
+    assert split[("mat", True)]["hap"].upper() == "MAT" and split[("mat", True)]["c"] == MAT
+    assert split[("pat", False)]["hap"].upper() == "PAT"
+    # One molecule: the same record key family, so selection and hover reach both rows.
+    assert split[("mat", True)]["rk"] != split[("pat", False)]["rk"]
+    assert split[("mat", True)]["aid"].split('"')[1] == split[("pat", False)]["aid"].split('"')[1]
