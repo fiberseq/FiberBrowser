@@ -5,6 +5,7 @@
  * outlines say what the fit used, whatever the layout packs.
  */
 import type { ClusterMatchedRun } from '../../utils/clusterMatchedRun';
+import { useBrowserStore } from '../../stores/browserStore';
 import { xForTarget, type Scene } from './scene';
 
 export interface RunOutline { x0: number; x1: number; y0: number; y1: number; kind: 'region' | 'carrier' }
@@ -62,4 +63,13 @@ export function drawRunOutlines(ctx: CanvasRenderingContext2D, outlines: RunOutl
     ctx.strokeRect(o.x0 + 0.5, o.y0 + 0.5, Math.max(1, o.x1 - o.x0 - 1), o.y1 - o.y0 - 1);
   }
   ctx.restore();
+}
+
+/** A region drawn on a host's graph (Alt/Option-drag): a custom peak on the target contig, selected. */
+export function addGraphRegion(start: number, end: number, contig: string): void {
+  const st = useBrowserStore.getState();
+  st.addCustomPeak(start, end, contig);
+  const ruleId = useBrowserStore.getState().getCustomRuleId();
+  const peak = useBrowserStore.getState().getAllPeaks().find(p => p.ruleId === ruleId && p.start === start && p.end === end);
+  if (peak && !useBrowserStore.getState().selectedPeaks.has(peak.index)) useBrowserStore.getState().togglePeakSelection(peak.index);
 }

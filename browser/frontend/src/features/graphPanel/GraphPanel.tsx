@@ -25,7 +25,7 @@ import { genomeKeyFor } from '../../utils/regionNavigation';
 import { startTrace, type GraphTrace } from './timings';
 import type { GraphApiError, GraphReadBinding, GraphReadSettings, GraphReadsResponse, GraphRegistration, GraphSubgraphResponse, GraphViewState } from './types';
 import { MAX_READ_PRIMITIVES, packMolecules, placeReads, placementIndex, type PackedLane, type PlacedMolecule } from './readGeometry';
-import { drawRunOutlines, runOutlines } from './runOutlines';
+import { addGraphRegion, drawRunOutlines, runOutlines } from './runOutlines';
 import { bandHeight, describeReadHit, drawReadBandLabels, drawReads, effectiveReadLayers, emptyDrawStats, READ_ROW_GAP, READ_ROW_HEIGHT, type ReadDrawStats, type ReadHit, type ReadLayers } from './readCanvas';
 import { chromatinStyle } from './chromatinStyle';
 import { isInsertionGroup, hitGroup, placementsByPath, selectionForHit, sourcePlacements, focusWindow, type GraphSelection, type SourcePlacement } from './inspection';
@@ -555,6 +555,10 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   // ---------------------------------------------------------------- drawing
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const graphRun = useBrowserStore(s => s.clusterMatchedRun);
+  // Region drawing (Alt/Option-drag, below): its start and the span drawn so far.
+  const regionDraw = useRef<{ t0: number; x0: number } | null>(null);
+  const [regionPreview, setRegionPreview] = useState<{ x0: number; x1: number } | null>(null);
+
   const outlines = useMemo(() => (hostMode ? runOutlines(graphRun, scene ?? null, state?.registrationId ?? null,
     state?.targetBinding ?? null, reversed) : []), [hostMode, graphRun, scene, state?.registrationId, state?.targetBinding, reversed]);
   const laneCount = model?.rows.length ?? state?.selectedPathKeys.length ?? 0;
@@ -579,6 +583,13 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       drawScene(ctx, scene);
       // A graph run's regions (host mode): outlined across the lanes, carrier-only parts on their carriers' lanes.
       drawRunOutlines(ctx, outlines);
+      if (regionPreview) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(37, 99, 235, 0.12)';
+        const a = Math.min(regionPreview.x0, regionPreview.x1) - sceneOffset, b = Math.max(regionPreview.x0, regionPreview.x1) - sceneOffset;
+        ctx.fillRect(a, 0, Math.max(1, b - a), canvasHeight);
+        ctx.restore();
+      }
       const tr = performance.now();
       const drawStats = emptyDrawStats();
       readHitsRef.current = readLayout ? drawReads(ctx, scene, readLayout.lanes, style, readLayers, laneColors, readRowHeight, READ_ROW_GAP,
@@ -635,7 +646,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         if (trace.paintedAt === undefined) { trace.paintedAt = performance.now(); trace.outcome = trace.outcome ?? 'painted'; }
       });
     }
-  }, [scene, transform, width, canvasHeight, renderVersion, sceneOffset, readLayout, style, readSettings, readsStale, readLayers, hoverKey, decoration, outlines]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [scene, transform, width, canvasHeight, renderVersion, sceneOffset, readLayout, style, readSettings, readsStale, readLayers, hoverKey, decoration, outlines, regionPreview]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------------------------------------------------------------- navigation
   const commitViewport = useCallback((next: GraphViewport, detach = false, linearAtStart?: LinearView | null) => {
@@ -673,9 +684,23 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
 
   const drag = useRef<{ x: number; view: GraphViewport; moved: boolean; linear: LinearView | null } | null>(null);
   const [cursor, setCursor] = useState<{ x: number; y: number; text: string; cursorX: number | null } | null>(null);
+  // Region drawing (graph primary G2, DESIGN_GRAPH_PRIMARY §2.5): Alt/Option-drag on a host's graph draws a target
+  // span; it becomes a selected peak (the custom peak rule), so Cluster runs on it in graph columns and in linear
+  // panels alike.
+  const targetAt = (clientX: number, el: HTMLCanvasElement) => {
+    const rect = el.getBoundingClientRect();
+    const zoom = rect.width > 0 && width > 0 ? rect.width / width : 1;
+    const x = (clientX - rect.left) / zoom;
+    const t = scene ? targetAtX(scene.targetMap, x - sceneOffset) : null;
+    return t ? { x, t: t.pos } : null;
+  };
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (e.button !== 0 || !viewport) return;
     (e.target as HTMLCanvasElement).setPointerCapture?.(e.pointerId);
+    if (hostMode && e.altKey) {
+      const at = targetAt(e.clientX, e.target as HTMLCanvasElement);
+      if (at) { regionDraw.current = { t0: at.t, x0: at.x }; setRegionPreview({ x0: at.x, x1: at.x }); return; }
+    }
     drag.current = { x: e.clientX, view: hostMode && hostView ? { contig: hostView.chrom, start: hostView.start, end: hostView.end } : viewport, moved: false,
       linear: state ? initiatorView(state, useBrowserStore.getState().panels, main) : null };
   };
@@ -683,6 +708,10 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
     const zoom = rect.width > 0 && width > 0 ? rect.width / width : 1;
     const x = (e.clientX - rect.left) / zoom, y = (e.clientY - rect.top) / zoom;
+    if (regionDraw.current) {
+      setRegionPreview({ x0: regionDraw.current.x0, x1: x });
+      return;
+    }
     if (drag.current && transform && target) {
       const dx = (e.clientX - drag.current.x) / zoom;
       if (Math.abs(dx) > 2) drag.current.moved = true;
@@ -771,6 +800,14 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     }
   };
   const onPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (regionDraw.current) {
+      const at = targetAt(e.clientX, e.target as HTMLCanvasElement);
+      const t0 = regionDraw.current.t0;
+      regionDraw.current = null;
+      setRegionPreview(null);
+      if (at && Math.abs(at.t - t0) >= 10 && target) addGraphRegion(Math.min(t0, at.t), Math.max(t0, at.t), target.path.contig);
+      return;
+    }
     const click = drag.current && !drag.current.moved;
     drag.current = null;
     if (!click || !scene || !model) return;

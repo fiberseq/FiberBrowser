@@ -17,7 +17,7 @@ import { clusterSelectionKeys } from '../../utils/clusterMatchedRun';
 import { clusterRunPlan } from '../../utils/clusterTargets';
 import { recordKey } from '../../utils/recordKeys';
 import { clusterAssignmentForRead } from '../../components/tracks/read-track/readFilter';
-import { runOutlines } from './runOutlines';
+import { addGraphRegion, runOutlines } from './runOutlines';
 import { requestFilterParamFromSets } from '../../components/tracks/read-track/useReadTrackData';
 import type { GraphBinding, GraphReadBinding, GraphRegistration } from './types';
 import type { PanelConfig } from '../../types';
@@ -113,6 +113,7 @@ describe('G4: canonical observations', () => {
   it('the Cluster plan names the graph run while the host draws its graph, and is linear after the hand-off', () => {
     seed(split());
     setPanelViewMode('mat', 'graph');
+    const original = useBrowserStore.getState().getAllPeaks;
     useBrowserStore.setState({ selectedPeaks: new Set([0]), getAllPeaks: () => [{ index: 0, start: 128_655_000, end: 128_655_100, chrom: 'chr3' }] } as never);
     const run = clusterRunPlan(useBrowserStore.getState());
     expect(run.basis.kind).toBe('graph');
@@ -121,6 +122,7 @@ describe('G4: canonical observations', () => {
     useBrowserStore.setState(s => ({ panels: s.panels.map(p => p.id === 'mat'
       ? { ...p, graphView: { ...p.graphView!, handoff: { shown: 'linear' } } } : p) }));
     expect(clusterRunPlan(useBrowserStore.getState()).basis.kind).toBe('peaks');
+    useBrowserStore.setState({ getAllPeaks: original, selectedPeaks: new Set() });
   });
 });
 
@@ -181,6 +183,17 @@ describe('G4: fan-out and refinement', () => {
     // Undo: one step back to before the run.
     useBrowserStore.getState().undo();
     expect(useBrowserStore.getState().clusterMatchedRun).toBeNull();
+  });
+
+  it('a region drawn on the graph is a selected peak on the target, which the graph run clusters on', () => {
+    seed(split());
+    setPanelViewMode('mat', 'graph');
+    addGraphRegion(128_657_300, 128_657_500, 'chr3');
+    const s = useBrowserStore.getState();
+    const peak = s.getAllPeaks().find(p => p.start === 128_657_300 && p.end === 128_657_500)!;
+    expect(peak).toBeTruthy();
+    expect(s.selectedPeaks.has(peak.index)).toBe(true);
+    expect(clusterRunPlan(s).basis.kind).toBe('graph');
   });
 
   it('outlines the run\'s regions on the host\'s target lane', () => {

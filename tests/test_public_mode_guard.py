@@ -31,6 +31,8 @@ PUBLIC_DENIED = {
     ("GET", "/api/graph/read_bindings"), ("POST", "/api/graph/reads"),
     # its inspection: host package sequence and host live-lift maps (canonical differences)
     ("POST", "/api/graph/sequence"), ("POST", "/api/graph/differences"),
+    # its clustering on graph columns, and dynamic assignment with a run's model (local workspace operations)
+    ("POST", "/api/graph/cluster"), ("POST", "/api/graph/cluster/assign"),
     # Cross-region correspondence analyses are local workspace operations.
     ("POST", "/api/cluster-regions"), ("POST", "/api/scan-correspondence"),
     ("GET", "/api/app/performance"), ("POST", "/api/app/performance"),
@@ -243,6 +245,8 @@ def test_allowlist_has_no_stale_entries(standalone_app):
     ("GET", "/api/graph/read_bindings"), ("POST", "/api/graph/reads"),
     # its inspection: host package sequence and host live-lift maps (canonical differences)
     ("POST", "/api/graph/sequence"), ("POST", "/api/graph/differences"),
+    # its clustering on graph columns, and dynamic assignment with a run's model (local workspace operations)
+    ("POST", "/api/graph/cluster"), ("POST", "/api/graph/cluster/assign"),
     ("POST", "/api/plugins/anything/run"),
 ])
 def test_public_mode_denies(client, public, method, path):
