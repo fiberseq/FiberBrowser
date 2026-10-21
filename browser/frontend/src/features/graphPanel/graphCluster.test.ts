@@ -507,3 +507,41 @@ describe('final review (agy G5)', () => {
     expect(useBrowserStore.getState().clusterTreeNodes[node].assignments['k-mat'][recordKey(aid('m2'))!]).toBe(1);
   });
 });
+
+describe('G7 step 0: a graph run survives navigation within its package', () => {
+  function committed(targetContig = 'chr3') {
+    seed(split());
+    setPanelViewMode('mat', 'graph');
+    const p = plan();
+    const mat = p.observations.find(o => o.binding === 'mat')!.id;
+    commitGraphRun(useBrowserStore.getState(), p, { results: { [mat]: { assignments: { [aid('m1')]: 0, [aid('m2')]: 1 } } },
+      label_ids: {}, names: {}, stages: [{ stage: 1 }], columns: { shared: [], carrier_sets: [], left_out: {}, dropped: [], refinements: [] },
+      window_separation_nmi: null, matched: null, settings: {}, revisions: REG.revisions, options: {}, timings: {} } as never);
+    expect(useBrowserStore.getState().clusterMatchedRun!.graph!.targetContig ?? targetContig).toBe(targetContig);
+  }
+  const labels = () => useBrowserStore.getState().clusterAssignments['k-mat'] ?? {};
+
+  it('keeps its labels when the view pans away from its regions (no peak selected or in view)', () => {
+    committed();
+    expect(Object.keys(labels())).toHaveLength(2);
+    useBrowserStore.setState({ selectedPeaks: new Set(), clusterPeakRegions: [] } as never);
+    useBrowserStore.getState().setViewport('chr3', 128_700_000, 128_710_000);
+    expect(Object.keys(labels())).toHaveLength(2);
+    useBrowserStore.getState().setViewport('chr3', 128_600_000, 128_640_000);
+    expect(Object.keys(labels())).toHaveLength(2);
+    expect(useBrowserStore.getState().clusterMatchedRun!.graph).toBeTruthy();
+  });
+
+  it('keeps its labels with peaks locked', () => {
+    committed();
+    useBrowserStore.setState({ peaksLocked: true } as never);
+    useBrowserStore.getState().setViewport('chr3', 128_700_000, 128_710_000);
+    expect(Object.keys(labels())).toHaveLength(2);
+  });
+
+  it('is cleared by leaving the contig, as every run is', () => {
+    committed();
+    useBrowserStore.getState().setViewport('chr4', 1_000, 11_000);
+    expect(Object.keys(labels())).toHaveLength(0);
+  });
+});

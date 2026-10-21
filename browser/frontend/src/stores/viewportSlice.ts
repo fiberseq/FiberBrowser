@@ -10,6 +10,19 @@ import { findChromInfo } from '../utils/chromAliases';
 import { isPanOrZoom, moveLikewise, siteLockSuppressed } from './siteLock';
 import { hasViewLinks, linkedPanelMoving, linkedPanelView } from '../utils/panelExtensions';
 import { PER_PANEL_STATE_KEYS } from './panelSlice';
+import { currentMatchedRun } from '../utils/clusterMatchedRun';
+
+/**
+ * A current graph cluster run (DESIGN_GRAPH_PRIMARY §3.5) whose package's target is on this contig. Its regions are
+ * graph columns fixed by the run, not by the view, so pans and zooms within the package keep it (the linear rules
+ * below would clear it once its peaks leave the view or peaks are locked). Leaving the contig clears it as usual.
+ */
+export function graphRunSurvivesMove(state: BrowserState, chrom: string): boolean {
+  const run = currentMatchedRun(state.clusterMatchedRun, state.clusterAssignments);
+  if (!run?.graph) return false;
+  const contig = run.graph.targetContig ?? run.graph.target?.split('#').pop();
+  return !contig || contig === chrom;
+}
 
 /**
  * setViewport moves the main view. Panels with their own view keep their
@@ -366,7 +379,7 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
       }
     }
 
-    const preserveDynamic = hasDynamic && hasPatterns && hasPeakRegions && peaksVisible;
+    const preserveDynamic = (hasDynamic && hasPatterns && hasPeakRegions && peaksVisible) || graphRunSurvivesMove(state, chrom);
 
     if (preserveDynamic) {
       if (DEBUG_VIEWPORT) console.log(`[setViewport] PATH: preserveDynamic -> keeping clustering state`);
