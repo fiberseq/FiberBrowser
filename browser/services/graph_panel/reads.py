@@ -393,8 +393,10 @@ def resolve_molecule_strands(reads: list, evidence_only: Optional[list] = None, 
                     calls[mol] = call
         elif call == ".":
             call = None
-        else:
-            # An explicit call is the molecule's in every window: cached for windows without its record.
+        elif rows[0].get("aid"):
+            # An explicit call is the lifted molecule's in every window: cached (by its provenance-qualified molecule)
+            # for windows without its record. Native rows keep their per-record tags (linear's rule; a QNAME is
+            # not a molecule across libraries: Codex review, group A round 2).
             calls = calls_of(m[0]) if calls_of is not None else None
             if calls is not None:
                 calls[_strand_molecule(rows[0])] = call

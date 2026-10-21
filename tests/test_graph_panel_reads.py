@@ -907,3 +907,16 @@ def test_graph_rows_carry_their_soft_clips(env):
     by = {r["q"]: r for r in out["reads"]}
     assert by["clp"]["clips"] == [[1000, 80, "L"], [1400, 60, "R"]]
     assert "clips" not in by["none"]
+
+
+def test_explicit_calls_of_native_rows_never_enter_the_strand_cache():
+    """Codex review (group A round 2): a native row's explicit st:Z stays its own record's; caching it under its QNAME
+    would move another library's record of that name between strand bands."""
+    calls = {}
+    native = [dict(d="n", lib=0, q="dup", k="n|0|dup|a", rec="a", sup=False, _dsx="CT")]
+    gr.resolve_molecule_strands(native, calls_of=lambda _d: calls)
+    assert native[0]["ds"] == "CT" and calls == {}
+    lifted = [dict(d="l", lib=0, q="m", k="l|0|m|a", rec="a", sup=False, _dsx="GA",
+                   aid='lift-cohort:v1 ["g|m","m","a",0,"primary"]')]
+    gr.resolve_molecule_strands(lifted, calls_of=lambda _d: calls)
+    assert calls == {"g|m": "GA"}
