@@ -79,7 +79,12 @@ export function SessionRestoreHost() {
         }
       }
       if (check && (check.missing > 0 || check.changed > 0)) {
-        return new Promise<SessionRestoreOutcome>(resolve => setPending({ session, check: check!, resolve }));
+        // A newer restore supersedes one still waiting in the relink dialog: the older one is settled (not restored),
+        // never left pending (its count would block other work for good).
+        return new Promise<SessionRestoreOutcome>(resolve => setPending(prev => {
+          prev?.resolve({ restored: false });
+          return { session, check: check!, resolve };
+        }));
       }
       return restore(session);
     });

@@ -375,3 +375,34 @@ describe('dataset adoption waits for a session restore', () => {
     expect(sessionRestoresInFlight()).toBe(0);
   });
 });
+
+describe('Gate F review round 2', () => {
+  it('target base and occurrence offset come from one inverse, forward and reversed', () => {
+    for (const reversed of [false, true]) {
+      const topology = (alu10k as Fixture).topology as GraphTopology;
+      const bindings = (alu10k as Fixture).bindings as GraphBinding[];
+      const model = buildLayout(topology, bindings);
+      const scene = buildScene(model, { width: 1400, gutter: 52, rightPad: 6, rulerHeight: 30, laneHeight: 28, laneGap: 4,
+        compression: 'log', reversed, colors: {}, smallBp: 0 });
+      const reg = registration(bindings);
+      const state = { ...initialGraphView(reg, null), targetBinding: 'target' } as GraphViewState;
+      const runs = scene.hits.filter(h => h.payload.kind === 'run' && !h.within && (h.payload as { host: string }).host === 'target');
+      let checked = 0;
+      for (const h of runs.slice(0, 8)) {
+        const y = (h.y0 + h.y1) / 2;
+        for (const f of [0.1, 0.37, 0.5, 0.83]) {
+          const x = h.x0 + f * (h.x1 - h.x0);
+          const sel = selectionForHit(h, { panelId: 'g', reg, state, model, scene }, y, x)!;
+          if (!sel.target || sel.occurrence?.path !== 'target') continue;
+          const occ = topology.paths.find(p => p.binding === 'target')!.occurrences.find(o => o.id === sel.occurrence!.id)!;
+          expect(sel.target.start).toBe(occ.path_span.start + sel.occurrence.offset);
+          // The target base is inside the clicked occurrence's piece.
+          expect(sel.target.start).toBeGreaterThanOrEqual(sel.occurrence.span.start);
+          expect(sel.target.start).toBeLessThan(sel.occurrence.span.end);
+          checked++;
+        }
+      }
+      expect(checked).toBeGreaterThan(4);
+    }
+  });
+});

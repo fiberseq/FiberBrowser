@@ -18,7 +18,7 @@ import { clampViewport, formatBp, formatLocus, fromX, makeTransform, panViewport
 import { buildLayout, laneLabel, type LayoutModel } from './layout';
 import { buildScene, COMPACT_LANE_PX, describeSceneHit, planScene, sceneHitAt, sceneInverse, smallDifferenceBp, targetAtX, type Compression, type Scene } from './scene';
 import { type LinearView, canFollow, defaultCompared, defaultTarget, effectiveViewport, initialGraphView, initiatorView, restoreProblem, retargetFor, selectableBindings, togglePath, GRAPH_MAX_PATHS } from './state';
-import { useGraphStatusStore } from './statusStore';
+import { onPackageError, useGraphStatusStore } from './statusStore';
 import { usePanelContentHeightStore } from '../../stores/panelContentHeightStore';
 import { useServerDatasetsStore } from '../../stores/serverDatasetsStore';
 import { genomeKeyFor } from '../../utils/regionNavigation';
@@ -211,10 +211,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         setQuery(q => ({ ...q, loading: false, error, generation }));
         // The package changed, went missing or is no longer registered: refresh the status, so the panel shows
         // the unavailable view (with its relink) instead of the last topology.
-        if (['package_changed', 'unknown_registration', 'stale_revision'].includes(error.code)) {
-          setQuery({ response: null, loading: false, error, generation });
-          void useGraphStatusStore.getState().load(true);
-        }
+        if (onPackageError(error.code)) setQuery({ response: null, loading: false, error, generation });
       });
     }, DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
@@ -281,7 +278,10 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
           const error: GraphApiError = err instanceof GraphRequestError ? err.error : { code: 'network', message: String(err?.message ?? err), retryable: true };
           // A failed load leaves no reads of another window on screen.
           setReads({ response: null, loading: false, error });
-          if (error.code === 'stale_revision' || error.code === 'unknown_dataset') setBindingsToken(n => n + 1);
+          // A dataset revision the server no longer has: read the bindings again. The package itself changed or
+          // went missing: the status, so the panel shows it unavailable (shared with every graph route).
+          if (error.code === 'unknown_dataset' || error.code === 'stale_dataset_revision') setBindingsToken(n => n + 1);
+          if (onPackageError(error.code)) setQuery(q => ({ ...q, response: null }));
         });
     }, READS_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
@@ -1037,6 +1037,8 @@ const OMISSION_LABELS: Record<string, string> = {
   records_without_correspondence: 'records off the paths',
   sampled_out_after_retry: 'sampled out (payload limit)',
   loader_filters: 'left out by the read filters',
+  payload_limit: 'molecules over the payload limit',
+  records_not_reached: 'records not decoded (payload limit)',
 };
 
 /** The status line's reads part: records drawn, molecules, sampling and every omission (never silent). */

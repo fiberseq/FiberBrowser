@@ -37,20 +37,42 @@ def _live_tabs(now: float) -> list[str]:
     return [tab for tab, seen in _tab_last_seen.items() if seen >= horizon]
 
 
+_REVISIONS: dict = {}
+_REVISION_TTL_S = 30.0
+
+
+def _dataset_revision(d) -> str:
+    """A dataset's revision (files and live-lift identity: map, settings), recomputed at most every 30 s per
+    dataset object: it stats files and map payloads, too much for every tab's heartbeat."""
+    import time
+
+    now = time.monotonic()
+    # A re-configured live lift is a new config object (services/lift/registration.update_settings): a new key.
+    key = (str(getattr(d, "id", "")), id(d), id(getattr(d, "live_lift", None)), tuple(getattr(d, "paths", None) or ()))
+    hit = _REVISIONS.get(key)
+    if hit and now - hit[0] < _REVISION_TTL_S:
+        return hit[1]
+    try:
+        from services.graph_panel.reads import dataset_revision
+        rev = dataset_revision(d)
+    except Exception:  # noqa: BLE001 - a dataset whose files went missing still has a key
+        rev = "?"
+    _REVISIONS[key] = (now, rev)
+    if len(_REVISIONS) > 512:
+        for k in sorted(_REVISIONS, key=lambda k: _REVISIONS[k][0])[:256]:
+            _REVISIONS.pop(k, None)
+    return rev
+
+
 def datasets_key(state) -> str:
     """A short key of the server's loaded datasets: IDs, files and each dataset's revision (its files' size and
-    mtime and its live-lift identity: map and settings). It changes when a dataset is added, removed, replaced or
-    re-configured, also by another tab or a script, so an open page can notice without listing them."""
+    mtime and its live-lift identity: map and settings; at most 30 s old). It changes when a dataset is added,
+    removed, replaced or re-configured, also by another tab or a script, so an open page can notice without listing
+    them. A re-configured live lift (a new config object) or other files are picked up at once; a file rewritten in
+    place within 30 s."""
     import hashlib
 
-    def revision(d) -> str:
-        try:
-            from services.graph_panel.reads import dataset_revision
-            return dataset_revision(d)
-        except Exception:  # noqa: BLE001 - a dataset whose files went missing still has a key
-            return "?"
-
-    items = sorted((str(d_id), tuple(str(p) for p in (getattr(d, "paths", None) or ())), revision(d))
+    items = sorted((str(d_id), tuple(str(p) for p in (getattr(d, "paths", None) or ())), _dataset_revision(d))
                    for d_id, d in list((getattr(state, "datasets", None) or {}).items()))
     return hashlib.sha1(repr(items).encode()).hexdigest()[:12]
 
@@ -67,7 +89,9 @@ async def tab_heartbeat(request: Request, tab: str = Query(..., max_length=64), 
     if tab in _closed_tabs:  # a report sent just before the page closed
         return {"ok": False}
     _tab_last_seen[tab] = time.monotonic()
-    return {"ok": True, "datasets": datasets_key(state)}
+    import asyncio
+    # Off the event loop: a revision stats files (at most every 30 s per dataset).
+    return {"ok": True, "datasets": await asyncio.to_thread(datasets_key, state)}
 
 
 @router.get("/api/shutdown", operation_id="shutdown_get")

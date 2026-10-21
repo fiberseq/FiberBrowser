@@ -483,8 +483,21 @@ def test_a_truncated_batch_never_caches_part_of_an_identity(env, monkeypatch):
     monkeypatch.setattr(gr, "MAX_DECODED_BYTES", 600)
     cut = _reads(env, [did], paths).json()
     assert cut["report"]["truncated"] is True
-    assert len(cut["reads"]) + cut["report"]["omitted"].get("payload_limit", 0) >= 1
+    assert len(cut["reads"]) + cut["report"]["omitted"].get("records_not_reached", 0) + cut["report"]["omitted"].get("payload_limit", 0) >= 1
     monkeypatch.setattr(gr, "MAX_DECODED_BYTES", 8 * 1024 * 1024)
     again = _reads(env, [did], paths).json()
     assert len(again["reads"]) == 2 and again["report"]["truncated"] is False
     assert sorted(r["k"] for r in again["reads"]) == sorted(r["k"] for r in full["reads"])
+
+
+def test_a_changed_dataset_revision_is_its_own_refusal(env):
+    """A dataset revision the server no longer has is refused as such (the panel re-reads its bindings), not as a
+    package revision change."""
+    did = _add_lifted(env)
+    r = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 0, "end": 3000}]}])
+    assert r.status_code == 200
+    body = {"registration_id": "g1", "revisions": env.reg.revisions, "request_id": "r1", "panel_id": "p", "generation": 1,
+            "datasets": [{"dataset_id": did, "revision": "0" * 16}],
+            "paths": [{"binding": "mat", "windows": [{"start": 0, "end": 3000}]}]}
+    out = env.client.post("/api/graph/reads", json=body)
+    assert out.status_code == 409 and out.json()["error"]["code"] == "stale_dataset_revision"

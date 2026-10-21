@@ -13,6 +13,17 @@ interface GraphStatusState {
 
 let inflight: Promise<void> | null = null;
 
+/** Errors saying the package changed, went missing or is no longer registered (any graph route). */
+export const PACKAGE_ERRORS = ['package_changed', 'unknown_registration', 'stale_revision'];
+
+/** After such an error, from any request: the status is read again, so every panel and inspector of that package
+ * shows it unavailable (with its relink) instead of trusting what it last had. */
+export function onPackageError(code: string | null | undefined): boolean {
+  if (!code || !PACKAGE_ERRORS.includes(code)) return false;
+  void useGraphStatusStore.getState().load(true);
+  return true;
+}
+
 export const useGraphStatusStore = create<GraphStatusState>((set, get) => ({
   status: null,
   loading: false,

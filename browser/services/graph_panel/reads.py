@@ -465,7 +465,7 @@ def _decode_records(dataset, contig: str, size: int, windows: list, binding: str
         partial = max(0, n - len(got)) if got else 0
         entries[key] = (got, nbytes.get(k, 0), reason, _entry_bytes(got), partial if reason is None else max(0, n - 1))
     _records_put(entries)
-    return entries, bool(budget.truncated), counts.get("hard_clipped_scoped")
+    return entries, bool(budget.truncated), counts.get("hard_clipped_scoped"), len(decoded)
 
 
 # ── Request ─────────────────────────────────────────────────────────────────
@@ -519,7 +519,7 @@ def validate(state, reg, body: dict) -> list:
             raise _bad(f"dataset {dataset_id!r} is not loaded or binds to no path of this graph{': ' + why if why else ''}",
                        "unknown_dataset", 404, problems=(bound or {}).get("problems") or [])
         if d.get("revision") and d["revision"] != bound["revision"]:
-            raise _bad(f"dataset {dataset_id!r} changed since it was bound", "stale_revision", 409,
+            raise _bad(f"dataset {dataset_id!r} changed since it was bound", "stale_dataset_revision", 409,
                        current=bound["revision"])
         dataset = state.datasets[dataset_id]
         for key, contig in bound["paths"].items():
@@ -601,10 +601,10 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
             region = (max(0, min([windows[0][0], *(k[2] for k in missing)]) - 1),
                       min(size + 1, max([windows[-1][1], *(k[4] for k in missing)]) + 1))
             t = time.perf_counter()
-            got, truncated, sc = _decode_records(dataset, contig, size + 1, windows, binding["key"], missing, region, base,
-                                                 listed_n)
+            got, truncated, sc, n_decoded = _decode_records(dataset, contig, size + 1, windows, binding["key"], missing,
+                                                            region, base, listed_n)
             decode_ms += (time.perf_counter() - t) * 1000
-            decoded_records += len(got)
+            decoded_records += n_decoded
             for kk, vv in (sc or {}).items():
                 scoped[kk] = scoped.get(kk, 0) + vv
             have.update(got)
@@ -721,8 +721,10 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
                                       "record_collisions", "records_without_correspondence") if counts.get(k)}
     if filtered:
         omitted["loader_filters"] = filtered
-    if payload_dropped or unreached:
-        omitted["payload_limit"] = payload_dropped + unreached
+    if payload_dropped:
+        omitted["payload_limit"] = payload_dropped           # molecules
+    if unreached:
+        omitted["records_not_reached"] = unreached           # record identities a truncated decode never reached
     report = {
         "molecules": len(molecules), "records": len(reads), "marks": marks,
         "sampling": {"level": level, "fraction": 1.0 / (1 << level), "estimated": estimated if known else None,

@@ -10,7 +10,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useBrowserStore } from '../../stores/browserStore';
 import { liveLiftHaplotypeColor } from '../liveLift/palette';
-import { getGraphCanonical, getGraphSequence, type GraphCanonicalResponse, type GraphSequenceResult } from './api';
+import { getGraphCanonical, getGraphSequence, GraphRequestError, type GraphCanonicalResponse, type GraphSequenceResult } from './api';
+import { onPackageError } from './statusStore';
 import { canonicalProblem, focusWindow, placementsByPath, selectionProblem, type GraphSelection, type SourcePlacement } from './inspection';
 import { laneLabel } from './layout';
 import { navigateGraph, showSourceSpan, sourcePanelsFor } from './navigation';
@@ -20,6 +21,7 @@ import { useGraphStatusStore } from './statusStore';
 import type { GraphRegistration } from './types';
 
 const SEQUENCE_PREVIEW = 600;
+const NO_BINDINGS: never[] = [];
 const n = (v: number) => v.toLocaleString('en-US');
 const spanText = (s: { start: number; end: number }) => (s.end === s.start ? `boundary ${n(s.start)}` : `${n(s.start)}–${n(s.end)} (${n(s.end - s.start)} bp)`);
 
@@ -68,7 +70,9 @@ function SequenceRow({ sel, reg, path, span }: { sel: GraphSelection; reg: Graph
   const load = () => {
     setBusy(true);
     getGraphSequence(reg.id, reg.revisions, path, { start: span.start, end: Math.min(span.end, span.start + 60_000) })
-      .then(r => { setSeq(r); setError(null); }).catch(e => setError(String(e?.message ?? e))).finally(() => setBusy(false));
+      .then(r => { setSeq(r); setError(null); })
+      .catch(e => { onPackageError(e instanceof GraphRequestError ? e.error.code : null); setError(String(e?.message ?? e)); })
+      .finally(() => setBusy(false));
   };
   const text = seq ? seq.pieces.map(p => p.sequence).join('') : '';
   return (
@@ -94,8 +98,9 @@ export function GraphInspector({ selection: sel }: { selection: GraphSelection }
   const reg = problem ? null : regs.find(r => r.id === sel.registrationId) ?? null;
   const dark = useBrowserStore(s => Boolean((s as { darkMode?: boolean }).darkMode));
   const graphOpen = useBrowserStore(s => s.panels.some(p => p.id === sel.panelId));
-  const byPanel = useGraphReadsStore(s => s.byPanel);
-  const bindings = useMemo(() => Object.values(byPanel).flatMap(v => v.bindings), [byPanel]);
+  // Read bindings of the selection's own graph panel only (its registration's paths): another panel's bindings,
+  // perhaps of another package, never vouch for its read rows.
+  const bindings = useGraphReadsStore(s => s.byPanel[sel.panelId]?.bindings) ?? NO_BINDINGS;
   const revisions = useMemo(() => Object.fromEntries(bindings.map(b => [b.dataset_id, b.revision])), [bindings]);
 
   // Canonical difference (graph differences with one allele placement): the server's exact match only.
@@ -112,7 +117,11 @@ export function GraphInspector({ selection: sel }: { selection: GraphSelection }
       .then(rs => setCanonical({ for: askKey, error: null, response: {
         matches: rs.flatMap(r => r.matches), rejected: rs.flatMap(r => r.rejected), map: rs[0]?.map ?? null,
         reason: rs.map(r => r.reason).filter(Boolean).join('; ') || undefined } }))
-      .catch(e => { if (!controller.signal.aborted) setCanonical({ for: askKey, error: String(e?.message ?? e), response: null }); });
+      .catch(e => {
+        if (controller.signal.aborted) return;
+        onPackageError(e instanceof GraphRequestError ? e.error.code : null);
+        setCanonical({ for: askKey, error: String(e?.message ?? e), response: null });
+      });
     return () => controller.abort();
   }, [askKey, reg?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const matches = canonical?.for === askKey ? canonical.response?.matches ?? [] : [];
@@ -120,10 +129,12 @@ export function GraphInspector({ selection: sel }: { selection: GraphSelection }
 
   // Read rows hold only while their bindings do: every dataset still bound, at the revision it was counted at.
   const readsGone = sel.reads && sel.reads.datasetIds.length ? (() => {
+    if (!graphOpen) return 'its graph panel is closed';
     const missing = sel.reads.datasetIds.filter(id => !bindings.some(b => b.dataset_id === id));
     if (missing.length) return `${missing.length === 1 ? 'its dataset is' : 'its datasets are'} not bound to this graph now`;
-    const changed = sel.reads.datasetIds.filter(id => sel.reads!.revisions?.[id] && revisions[id] !== sel.reads!.revisions[id]);
-    return changed.length ? 'its dataset changed since (other files or map)' : null;
+    // A count saved without the revisions it was made at cannot be vouched for.
+    const changed = sel.reads.datasetIds.filter(id => !sel.reads!.revisions?.[id] || revisions[id] !== sel.reads!.revisions[id]);
+    return changed.length ? 'its dataset changed since, or the saved count names no revision' : null;
   })() : null;
   const placements = sel.placements ?? [];
   const byPath = placementsByPath(placements);

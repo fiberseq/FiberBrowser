@@ -14,7 +14,7 @@
  */
 import type { AltAllele, GroupItem, JunctionItem, LayoutModel, Visit } from './layout';
 import { visitPiece } from './layout';
-import { placementAt, targetAtX, type HitPayload, type Scene, type SceneHit } from './scene';
+import { placementAt, type HitPayload, type Scene, type SceneHit } from './scene';
 import type { GraphRegistration, GraphTopology, GraphViewState, Span } from './types';
 
 export type GraphSelectionKind = 'graph-difference' | 'graph-locus';
@@ -147,8 +147,12 @@ function runAt(p: Extract<HitPayload, { kind: 'run' }>, path: string, scene: Sce
   const at = placementAt(scene, x, p.run.id, undefined, path) ?? placementAt(scene, x, p.run.id);
   const pool = [...p.run.visits, ...Object.values(p.run.byCarrier ?? {}).flat().filter((v): v is Visit => Boolean(v))];
   const visit = (at && pool.find(v => v.occ.id === at.place.occ)) || fallback;
-  const t = targetAtX(scene.targetMap, x);
-  return { visit, offset: at ? at.offset : 0, target: t && !t.boundary ? t.pos : null };
+  // The target base from the same occurrence inverse: the host's own visit under x on a target-backed run (its
+  // path is the target, so its path offset is the target coordinate). Never a separately rounded screen inverse.
+  const hostAt = placementAt(scene, x, p.run.id, undefined, p.host) ?? (path === p.host ? at : null);
+  const hostVisit = hostAt ? pool.find(v => v.occ.id === hostAt.place.occ) : null;
+  const target = hostAt && hostVisit?.target ? hostVisit.occ.path_span.start + hostAt.offset : null;
+  return { visit, offset: at ? at.offset : 0, target };
 }
 
 function provenanceOf(alleles: GraphAlleleInfo[], model: LayoutModel): GraphSelection['provenance'] {

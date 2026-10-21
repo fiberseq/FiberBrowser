@@ -211,7 +211,9 @@ export function foldMarks(items: Item[], small: number, expanded?: ReadonlySet<s
   if (!small || small <= 0) return items;
   let byT = foldCache.get(items);
   if (!byT) { byT = new Map(); foldCache.set(items, byT); }
-  const cacheKey = `${small}|${expanded && expanded.size ? [...expanded].sort().join(',') : ''}`;
+  // Only this chain's own expanded groups are part of the key (so the cache stays bounded by the chain's groups).
+  const mine = expanded && expanded.size ? items.filter(it => it.kind === 'group' && expanded.has(it.id)).map(it => it.id).sort() : [];
+  const cacheKey = `${small}|${mine.join(',')}`;
   const hit = byT.get(cacheKey);
   if (hit) return hit;
   const out: ChainItem[] = [];
