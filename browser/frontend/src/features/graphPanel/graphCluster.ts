@@ -1,0 +1,399 @@
+/**
+ * Cluster on graph columns (DESIGN_GRAPH_PRIMARY §3.4–3.5; graph primary G4/G5).
+ *
+ * When a graph host is drawing its graph, the toolbar's Cluster (every dataset panel in view, narrowed by "Applies
+ * to") clusters on graph node columns at the selected peaks' target spans:
+ *
+ * - **Canonical observations.** The run's panels are grouped by (dataset, package path, strand, dataset revision):
+ *   a lifted dataset's haplotype is one graph observation whichever panels show it — the host, a folded member, a
+ *   popped-out member, a linear lifted panel elsewhere — and a native dataset on the target is one linear observation.
+ *   Each observation is fitted once (`POST /api/graph/cluster`), with the union of its destinations' read scopes.
+ * - **Destinations.** Every panel showing an observation receives its labels, intersected with its own read scope and
+ *   keyed by record key (a lifted row's molecule, QNAME and record), so a graph row and the linear rows of the same
+ *   record read the same label. Pop-outs add no observations: revealing or folding a member never changes the fit.
+ * - **Stages.** Stage 1 on the shared features; carrier-only features (an insertion only some paths carry, a deleted
+ *   stretch) refine each cluster's carriers into C<i>.<j> in one child tree node (`refineWithinCarriers`):
+ *   non-carriers keep their stage-1 label.
+ * - **The durable run** (`ClusterMatchedRun.graph`): regions, options, observations and destinations, the staged
+ *   model as fitted with its settings snapshot and package revisions, saved in history and sessions. Dynamic
+ *   assignment (`POST /api/graph/cluster/assign`) labels rows the fit did not (e.g. beyond the sample cap) with
+ *   that model; the server refuses a changed geometry or snapshot ("settings or geometry changed: cluster again").
+ */
+import { useBrowserStore, getTargetDatasetIds } from '../../stores/browserStore';
+import type { BrowserState } from '../../stores/browserStore';
+import type { PanelConfig } from '../../types';
+import { clusterWindows, type ClusterBasis, type ClusterTargetPlan, type PlanState } from '../../utils/clusterTargets';
+import { registerClusterBasisRunner, registerClusterPlanTransform } from '../../utils/clusterRunExtensions';
+import type { ClusterMatchedRun, GraphRunObservation } from '../../utils/clusterMatchedRun';
+import { sameChrom } from '../../utils/chromAliases';
+import { getDatasetDisplayLabel } from '../../utils/datasetLabels';
+import { idSetHas, qnameOfId, recordKey } from '../../utils/recordKeys';
+import { seedHistoryBaseline } from '../../stores/historySlice';
+import { useRunResultStore } from '../../stores/runResultStore';
+import { sortStateStillCurrent } from '../../utils/sortScope';
+import { UNASSIGNED_CLUSTER_ID } from '../../components/tracks/read-track/constants';
+import { isHost, hostOf } from './hostMode';
+import { hostShowsGraph } from './hostHeader';
+import { useGraphBindingsStore } from './bindingsStore';
+import { useGraphStatusStore } from './statusStore';
+import type { GraphRegistration, GraphRevisions } from './types';
+
+export type GraphObservationSpec = GraphRunObservation;
+
+export interface GraphDestination { stateKey: string; observations: string[]; panelId: string; scope: string[] | null }
+
+export interface GraphClusterPlan {
+  host: PanelConfig;
+  registration: GraphRegistration;
+  target: string;
+  targetContig: string;
+  regions: { start: number; end: number; mode: string }[];
+  observations: GraphObservationSpec[];
+  destinations: GraphDestination[];
+  leftOut: { panelId: string; reason: string }[];
+  offContig: number;
+  refusal: string | null;
+}
+
+/** A stable short hash (FNV-1a, 52 bits) of a JSON value: observation ids that never depend on panel order. */
+export function stableId(value: unknown): string {
+  const text = JSON.stringify(value);
+  let h1 = 0x811c9dc5, h2 = 0x01000193;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193) >>> 0;
+    h2 = Math.imul(h2 ^ c, 0x5bd1e995) >>> 0;
+  }
+  return `${h1.toString(16).padStart(8, '0')}${(h2 & 0xfffff).toString(16).padStart(5, '0')}`;
+}
+
+/** Whether a host draws its graph now (shown, not handed off to linear). */
+export function hostDrawsGraph(p: PanelConfig): boolean {
+  return isHost(p) && !p.collapsed && hostShowsGraph(p) && Boolean(p.graphView?.registrationId && p.graphView?.targetBinding);
+}
+
+type Basis = Pick<ClusterBasis, 'kind' | 'regions'>;
+
+/**
+ * The graph run the Cluster button would start (null: no host drawing its graph is in the run, or the basis is not
+ * regions on its target; the run is then linear as before).
+ */
+export function graphClusterPlan(st: PlanState, basis: Basis): GraphClusterPlan | null {
+  // ('graph': the plan transform's own basis, as the runner receives it.)
+  if (basis.kind !== 'peaks' && basis.kind !== 'feature-regions' && (basis.kind as string) !== 'graph') return null;
+  const explicit = st.selectedDatasets.size > 0;
+  const hosts = st.panels.filter(p => hostDrawsGraph(p) && (!explicit || st.selectedDatasets.has(p.id)
+    || st.panels.some(m => m.graphMemberOf === p.id && st.selectedDatasets.has(m.id))));
+  const host = hosts[0];
+  if (!host) return null;
+  const gv = host.graphView!;
+  const registration = useGraphStatusStore.getState().status?.registrations.find(r => r.id === gv.registrationId);
+  if (!registration) return null;
+  const target = gv.targetBinding!;
+  const targetContig = registration.bindings.find(b => b.key === target)?.path.contig;
+  if (!targetContig) return null;
+  const onTarget = basis.regions.filter(p => sameChrom(p.chrom ?? st.chrom, targetContig) && !p.genome);
+  if (!onTarget.length) return null;
+  const regions = onTarget.map(p => ({ start: p.start, end: p.end, mode: p.mode || 'accessibility' }))
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+  const datasetIds = getTargetDatasetIds(st.selectedDatasets, st.panels, st.datasets);
+  const windows = clusterWindows(st, datasetIds);
+  const bindings = useGraphBindingsStore.getState().byDataset;
+  const sources = new Set(registration.maps.filter(m => m.target === target).map(m => m.source));
+  const observations = new Map<string, GraphObservationSpec & { scopes: (string[] | null)[] }>();
+  const destinations: GraphDestination[] = [];
+  const leftOut: { panelId: string; reason: string }[] = [];
+  for (const w of windows) {
+    const panel = w.panel;
+    const ds = st.datasets.find(d => d.id === w.dataset_id);
+    const name = ds ? getDatasetDisplayLabel(ds) : w.dataset_id;
+    const bound = (bindings[w.dataset_id] ?? []).find(b => b.registration.id === registration.id)?.binding;
+    const ids: string[] = [];
+    const add = (spec: Omit<GraphObservationSpec, 'id'>) => {
+      const id = `obs-${stableId([spec.dataset_id, spec.kind, spec.binding ?? null, spec.lift_hap ?? null, spec.strand ?? null,
+        bound?.revision ?? null])}`;
+      const have = observations.get(id);
+      if (have) have.scopes.push(w.read_ids ?? null);
+      else observations.set(id, { ...spec, id, scopes: [w.read_ids ?? null] });
+      ids.push(id);
+    };
+    if (bound?.kind === 'lifted') {
+      const hap = (w.lift_hap ?? '').toUpperCase();
+      const keys = Object.keys(bound.paths).filter(k => sources.has(k) && (!hap || (bound.haps?.[k] ?? '').toUpperCase() === hap)).sort();
+      if (!keys.length) { leftOut.push({ panelId: panel.id, reason: 'its haplotype has no path compared with this graph\'s target' }); continue; }
+      for (const k of keys) add({ dataset_id: w.dataset_id, kind: 'graph', binding: k, ...(bound.haps?.[k] ? { hap: bound.haps[k] } : {}),
+        ...(w.strand ? { strand: w.strand } : {}),
+        label: `${bound.haps?.[k] ?? k} · ${name}` });
+    } else if (!panel.genome && sameChrom(w.chrom, targetContig) && !panel.altAllele && !panel.liftLink) {
+      // A native dataset (or a lifted one no package binds) on the target: identity blocks on target-aliased columns.
+      add({ dataset_id: w.dataset_id, kind: 'linear', chrom: targetContig, genome: null,
+        ...(w.lift_hap ? { lift_hap: w.lift_hap } : {}), ...(w.strand ? { strand: w.strand } : {}),
+        label: `${w.lift_hap ? `${w.lift_hap} · ` : ''}${name}` });
+    } else {
+      leftOut.push({ panelId: panel.id, reason: 'not on the graph\'s target or one of its paths' });
+      continue;
+    }
+    destinations.push({ stateKey: w.result_key, observations: ids, panelId: panel.id, scope: w.read_ids ?? null });
+  }
+  const obs = [...observations.values()].map(({ scopes, ...o }) => {
+    // The union of the destinations' id scopes (one fit per row); any destination with every read: every read.
+    if (scopes.some(s => s === null)) return o;
+    return { ...o, read_ids: [...new Set(scopes.flat() as string[])].sort() };
+  }).sort((a, b) => a.id.localeCompare(b.id));
+  const refusal = !obs.length ? 'No panel in this run shows reads on the graph\'s target or paths.'
+    : obs.some(o => o.read_ids && !o.read_ids.length) ? null : null;
+  return { host, registration, target, targetContig, regions, observations: obs, destinations, leftOut,
+    offContig: basis.regions.length - onTarget.length, refusal };
+}
+
+// ── Fan-out ──────────────────────────────────────────────────────────────────
+
+/** A destination's labels: its observations' rows inside its own read scope, keyed by record key (lifted) or id. */
+export function destinationAssignments(dest: GraphDestination, results: Record<string, { assignments?: Record<string, number> }>): Record<string, number> {
+  const scope = dest.scope ? new Set(dest.scope) : null;
+  const out: Record<string, number> = {};
+  for (const oid of dest.observations) {
+    for (const [id, label] of Object.entries(results[oid]?.assignments ?? {})) {
+      const rk = recordKey(id);
+      if (scope && !idSetHas(scope, [id, qnameOfId(id)], rk)) continue;
+      out[rk ?? id] = label;
+    }
+  }
+  return out;
+}
+
+// ── The run ──────────────────────────────────────────────────────────────────
+
+interface GraphClusterResponse {
+  results: Record<string, { assignments?: Record<string, number>; stage1?: Record<string, number>; left_out?: string;
+    eligible_read_count?: number; peak_covering_read_count?: number; analysis_read_count?: number }>;
+  label_ids: Record<string, number>;
+  names: Record<string, string>;
+  stages: unknown[];
+  columns: { shared: { kind: string; length: number; samples: number; label: string }[];
+    carrier_sets: { carriers: string[]; features: { kind: string; length: number; samples: number; label: string }[] }[];
+    left_out: Record<string, string>; dropped: { kind: string; reason: string }[]; refinements: unknown[] };
+  window_separation_nmi: number | null;
+  matched: { lengths: number[]; balanced: boolean; balanced_fit_reads: number; fit_reads: number } | null;
+  settings: Record<string, unknown>;
+  revisions: GraphRevisions;
+  options: Record<string, unknown>;
+  timings: Record<string, number>;
+}
+
+async function post<T>(url: string, body: unknown): Promise<T> {
+  const response = await fetch(url, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body) });
+  const text = await response.text();
+  let json: any = null;
+  try { json = text ? JSON.parse(text) : null; } catch { json = null; }
+  if (!response.ok) throw new Error(json?.error?.message ?? json?.detail ?? (text.slice(0, 200) || response.statusText));
+  return json as T;
+}
+
+const wire = (o: GraphObservationSpec) => {
+  const { label: _label, hap: _hap, ...rest } = o;
+  return rest;
+};
+
+export function graphRequestBody(s: BrowserState, plan: Pick<GraphClusterPlan, 'registration' | 'target' | 'regions' | 'observations'>) {
+  return {
+    registration_id: plan.registration.id, revisions: plan.registration.revisions, target: plan.target,
+    regions: plan.regions, observations: plan.observations.map(wire),
+    method: s.clusterMethod, k: s.clusterK, max_reads: s.analysisSampleCount ?? null, sample_seed: s.analysisSampleSeed,
+    subnucleosomal_threshold: s.subnucleosomalThreshold, accessibility_threshold: s.accessibilityThreshold,
+    cluster_feature_rules: s.clusterFeatureRules, resolution: s.clusterResolution, balance_windows: true,
+    options: { carrier_features: 'refine', repeat_columns: 'exclude', coverage_rule: 'require_all' },
+  };
+}
+
+export async function runGraphCluster(s: BrowserState, basis: ClusterBasis,
+  report: (tone: 'error' | 'note' | 'done', text: string, panelIds?: string[]) => void): Promise<void> {
+  const plan = graphClusterPlan(s, basis);
+  if (!plan) throw new Error('No graph host is drawing its graph here: cluster again.');
+  if (plan.refusal) throw new Error(plan.refusal);
+  const runNumber = useRunResultStore.getState().runs.cluster;
+  const response = await post<GraphClusterResponse>('/api/graph/cluster', graphRequestBody(s, plan));
+  const now = useBrowserStore.getState();
+  if (runNumber !== useRunResultStore.getState().runs.cluster) return;
+  if (plan.destinations.some(d => !sortStateStillCurrent(s, now, d.stateKey)) || now.activeClusterTreeNodeId !== s.activeClusterTreeNodeId)
+    throw new Error('The filters, branch or clusters changed while clustering. Cluster again here.');
+  commitGraphRun(s, plan, response);
+  const total = Object.values(response.results).reduce((n, r) => n + Object.keys(r.assignments ?? {}).length, 0);
+  const names = Object.keys(response.names ?? {}).length;
+  const left = Object.keys(response.columns.left_out ?? {}).length + plan.leftOut.length;
+  const shared = response.columns.shared.length;
+  const text = total
+    ? `Clustered ${total.toLocaleString()} reads of ${plan.observations.length} path${plan.observations.length === 1 ? '' : 's'} on graph columns (${shared} shared feature${shared === 1 ? '' : 's'}${names ? `, ${names} refined within carriers` : ''}).`
+      + (left ? ` ${left} left out; see Cluster detail.` : '')
+    : 'No reads covered the selected regions on every path. Check the regions and filters.';
+  report(!total ? 'error' : left ? 'note' : 'done', text, plan.destinations.map(d => d.panelId));
+}
+
+/** Write a graph run's labels to every destination, as one undo step, and record the durable run. */
+export function commitGraphRun(s: BrowserState, plan: GraphClusterPlan, response: GraphClusterResponse): void {
+  const now = useBrowserStore.getState();
+  seedHistoryBaseline(now, 'Before clustering', 'clustering');
+  const stage1Results = Object.fromEntries(Object.entries(response.results).map(([k, r]) => [k, { assignments: r.stage1 ?? r.assignments }]));
+  const finalBy: Record<string, Record<string, number>> = {};
+  const stage1By: Record<string, Record<string, number>> = {};
+  for (const d of plan.destinations) {
+    finalBy[d.stateKey] = { ...(finalBy[d.stateKey] ?? {}), ...destinationAssignments(d, response.results) };
+    stage1By[d.stateKey] = { ...(stage1By[d.stateKey] ?? {}), ...destinationAssignments(d, stage1Results) };
+  }
+  const refined = Object.keys(response.names ?? {}).length > 0;
+  const sourceClusterIds = [...new Set(plan.destinations.flatMap(d => [...(s.selectedClusters[d.stateKey]?.size
+    ? s.selectedClusters[d.stateKey] : s.clusterFocus[d.stateKey] ?? [])]))].sort((a, b) => a - b);
+  if (sourceClusterIds.length) {
+    if (!now.activeClusterTreeNodeId) now.captureActiveClusterTreeNode({ name: 'All reads' });
+    now.commitSubcluster(finalBy, { sourceClusterIds, sourceLabel: `from ${sourceClusterIds.map(c => `C${c}`).join('+')}`,
+      name: 'Subcluster on graph columns', readScope: Object.fromEntries(Object.keys(finalBy).map(k => [k, Object.keys(finalBy[k])])) });
+  } else {
+    for (const [key, value] of Object.entries(stage1By)) now.setClusterAssignments(key, value);
+    if (now.activeClusterTreeNodeId) now.syncActiveClusterTreeNode(); else now.captureActiveClusterTreeNode({ name: 'All reads' });
+    if (refined) {
+      const changed: Record<string, Record<string, number>> = {};
+      for (const [key, value] of Object.entries(finalBy)) {
+        changed[key] = Object.fromEntries(Object.entries(value).filter(([id, c]) => stage1By[key]?.[id] !== c));
+      }
+      useBrowserStore.getState().refineWithinCarriers(changed, { name: 'Refined within carriers',
+        sourceLabel: 'carrier-only graph features' });
+    }
+  }
+  const after = useBrowserStore.getState();
+  after.setDynamicClustering(false);
+  after.setClusterPatterns({}); after.setClusterCentroids({}, []); after.setClusterWindowPeaks(null); after.setClusterPeakRegions([]);
+  const names = Object.fromEntries(Object.entries(response.names ?? {}).map(([k, v]) => [Number(k), v]));
+  if (Object.keys(names).length) {
+    useBrowserStore.setState(st => ({ clusterGroupLabels: { ...st.clusterGroupLabels,
+      ...Object.fromEntries(Object.keys(finalBy).map(k => [k, names])) } }));
+  }
+  const live = useBrowserStore.getState().clusterAssignments;
+  const obsLabel = new Map(plan.observations.map(o => [o.id, o]));
+  const firstDest = (oid: string) => plan.destinations.find(d => d.observations.includes(oid));
+  const assignments = Object.fromEntries(Object.entries(response.results).map(([k, r]) => [k, r.assignments ?? {}]));
+  const run: ClusterMatchedRun = {
+    groups: ['graph'],
+    windows: plan.observations.map(o => ({ key: o.id, stateKey: firstDest(o.id)?.stateKey ?? o.id, panelId: firstDest(o.id)?.panelId ?? '',
+      datasetId: o.dataset_id, label: obsLabel.get(o.id)!.label, genome: null })),
+    assignments,
+    panelAssignments: Object.fromEntries(Object.keys(finalBy).map(k => [k, live[k] ?? {}])),
+    windowNmi: response.window_separation_nmi, referenceNmi: null,
+    balancedFitReads: response.matched?.balanced_fit_reads ?? 0, lengths: response.matched?.lengths ?? [],
+    graph: {
+      schema: 1, registrationId: plan.registration.id, revisions: response.revisions, target: plan.target,
+      hostPanelId: plan.host.id, regions: plan.regions, options: response.options, observations: plan.observations,
+      stages: response.stages, labelIds: response.label_ids, settings: response.settings,
+      columns: { shared: response.columns.shared, carrier_sets: response.columns.carrier_sets, dropped: response.columns.dropped,
+        left_out: response.columns.left_out },
+    },
+    destinations: plan.destinations.map(d => ({ stateKey: d.stateKey, observations: d.observations, panelId: d.panelId })),
+    names,
+  };
+  const c = response.columns;
+  const leftOut = [...Object.entries(c.left_out ?? {}).map(([oid, why]) => `${obsLabel.get(oid)?.label ?? oid}: ${why}`),
+    ...plan.leftOut.map(l => `${l.reason}`)];
+  run.details = `Clustered on graph node columns at ${plan.regions.length} region${plan.regions.length === 1 ? '' : 's'} of ${plan.target}: `
+    + `${c.shared.map(f => `${f.kind === 'target' ? 'target' : f.kind} ${f.label} (${f.samples} samples)`).join('; ')}. `
+    + (c.carrier_sets.length ? `Refined within carriers on ${c.carrier_sets.map(cs => `${cs.features.map(f => `${f.kind} ${f.label}`).join(', ')} (${cs.carriers.map(o => obsLabel.get(o)?.label ?? o).join(', ')})`).join('; ')}; non-carriers keep their labels. ` : '')
+    + (c.dropped?.length ? `${c.dropped.length} small path-specific part${c.dropped.length === 1 ? '' : 's'} not used. ` : '')
+    + (leftOut.length ? `Left out: ${leftOut.join('; ')}. ` : '')
+    + (plan.offContig ? `${plan.offContig} selected region${plan.offContig === 1 ? ' is' : 's are'} not on the graph's target and were not used. ` : '')
+    + 'Each path is fitted once; pop-outs and other panels of the same path show the same labels.';
+  useBrowserStore.setState({ clusterMatchedRun: run });
+  useBrowserStore.getState().pushSnapshot('Cluster on graph columns');
+}
+
+// ── Dynamic assignment with the durable model (G5) ─────────────────────────────
+
+/** Label rows of the run's observations that have no label yet, with the run's model (never refitting). Existing
+ * labels never change. Returns the number of rows labelled, or an error message. */
+export async function assignWithGraphRun(run: ClusterMatchedRun, signal?: AbortSignal): Promise<number | string> {
+  const g = run.graph;
+  if (!g || !run.destinations) return 0;
+  let response: { results: Record<string, { assignments?: Record<string, number> }> };
+  try {
+    response = await post('/api/graph/cluster/assign', {
+      registration_id: g.registrationId, revisions: g.revisions, target: g.target, regions: g.regions,
+      observations: g.observations.map(wire), options: g.options,
+      run: { stages: g.stages, label_ids: g.labelIds, settings: g.settings, revisions: g.revisions } });
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  if (signal?.aborted) return 0;
+  const st = useBrowserStore.getState();
+  if (st.clusterMatchedRun !== run) return 0;
+  let added = 0;
+  for (const d of run.destinations) {
+    const dest = { ...d, scope: null as string[] | null };
+    const obs = g.observations.filter(o => d.observations.includes(o.id));
+    dest.scope = obs.some(o => !o.read_ids) ? null : [...new Set(obs.flatMap(o => o.read_ids ?? []))];
+    const labels = destinationAssignments(dest, response.results);
+    const live = st.clusterAssignments[d.stateKey] ?? {};
+    const fresh = Object.fromEntries(Object.entries(labels).filter(([id, c]) => live[id] === undefined && c !== UNASSIGNED_CLUSTER_ID));
+    if (!Object.keys(fresh).length) continue;
+    added += Object.keys(fresh).length;
+    st.setClusterAssignments(d.stateKey, fresh, { mirror: false, merge: true });
+  }
+  if (added) {
+    const now = useBrowserStore.getState();
+    useBrowserStore.setState({ clusterMatchedRun: { ...run, panelAssignments: Object.fromEntries(run.destinations.map(d => [d.stateKey, now.clusterAssignments[d.stateKey] ?? {}])) } });
+  }
+  return added;
+}
+
+// ── Registration ─────────────────────────────────────────────────────────────
+
+function transformPlan(st: PlanState, plan: ClusterTargetPlan): ClusterTargetPlan {
+  const g = graphClusterPlan(st, plan.basis);
+  if (!g) return plan;
+  const inRun = new Set(g.destinations.map(d => d.panelId));
+  const outIds = new Map(g.leftOut.map(l => [l.panelId, l.reason]));
+  const rows = plan.rows.map(r => {
+    const panel = st.panels.find(p => p.id === r.panelId);
+    const viaHost = panel && hostOf(st.panels, panel)?.id === g.host.id;
+    if (inRun.has(r.panelId) || (viaHost && !outIds.has(r.panelId))) return { ...r, inRun: true, reason: null, shortReason: null };
+    if (outIds.has(r.panelId)) return { ...r, inRun: false, reason: outIds.get(r.panelId)!, shortReason: 'not on the graph' };
+    return r;
+  });
+  const n = g.observations.length;
+  const what = `${g.regions.length} region${g.regions.length === 1 ? '' : 's'} on graph columns`;
+  const headline = `Cluster at ${what} · ${n} path${n === 1 ? '' : 's'} fitted once`;
+  const notes = [...plan.notes.filter(x => !x.includes('left out')),
+    ...(g.leftOut.length ? [`${g.leftOut.length} panel${g.leftOut.length === 1 ? '' : 's'} left out: not on the graph`] : []),
+    ...(g.offContig ? [`${g.offContig} region${g.offContig === 1 ? '' : 's'} not on the graph's target`] : [])];
+  return { ...plan, rows, refusal: g.refusal, basis: { ...plan.basis, kind: 'graph' as ClusterBasis['kind'], what },
+    headline, notes, summary: [headline, ...notes].join(' · '),
+    chip: `Panels: ${rows.filter(r => r.inRun).length} panels · ${n} path${n === 1 ? '' : 's'}${g.leftOut.length ? ` · ${g.leftOut.length} left out` : ''}` };
+}
+
+let registered = false;
+
+export function registerGraphClustering(): void {
+  if (registered) return;
+  registered = true;
+  registerClusterPlanTransform(transformPlan);
+  registerClusterBasisRunner('graph', runGraphCluster);
+  startGraphDynamicAssignment();
+}
+
+/** After a pan or a change of the analysis sample, rows of the current graph run's observations that have no label
+ * yet are assigned with its model (debounced; one request in flight). */
+function startGraphDynamicAssignment(): void {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let controller: AbortController | null = null;
+  useBrowserStore.subscribe((s, prev) => {
+    const run = s.clusterMatchedRun;
+    if (!run?.graph) return;
+    const moved = s.start !== prev.start || s.end !== prev.end || s.chrom !== prev.chrom
+      || s.analysisSampleCount !== prev.analysisSampleCount;
+    if (!moved) return;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      controller?.abort();
+      controller = new AbortController();
+      const now = useBrowserStore.getState().clusterMatchedRun;
+      if (now?.graph) void assignWithGraphRun(now, controller.signal);
+    }, 400);
+  });
+}

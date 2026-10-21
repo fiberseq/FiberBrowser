@@ -269,3 +269,47 @@ async def graph_sequence_route(request: Request):
     result = body_out.get("result") if isinstance(body_out, dict) else None
     return {"registration_id": reg.id, "revisions": reg.revisions, "binding": binding["key"],
             "interval": {"start": a, "end": b}, "result": result}
+
+
+async def _graph_cluster(request: Request, state, mode: str):
+    """Graph clustering (DESIGN_GRAPH_PRIMARY §2.4–2.6, §3.4–3.5): node columns from fixed tiles, every canonical
+    observation fitted once (``mode='fit'``), or a run's staged model assigned on its persisted geometry
+    (``mode='assign'``)."""
+    from services.graph_panel import service
+    from services.graph_panel import reads as graph_reads
+    from services.graph_panel.analysis import GraphRunError, handle
+    body = await _json_body(request)
+    if body is None:
+        return JSONResponse({"status": "error", "error": {"code": "invalid_request", "message": "body must be a JSON object",
+                                                          "retryable": False}}, status_code=422)
+    status = await service.ensure_ready()
+    if not status.available:
+        return JSONResponse({"status": "error", "error": {"code": "helper_unavailable", "message": "Graph helper unavailable",
+                                                          "retryable": False}}, status_code=503)
+    try:
+        reg = _registration(body.get("registration_id"))
+        _checked(body, reg)
+        from services.lift.capability import require_for_ids
+        require_for_ids(state, [o.get("dataset_id") for o in body.get("observations") or [] if isinstance(o, dict)],
+                        "clustering")
+        out = await handle(state, reg, body, mode=mode)
+    except graph_reads.ReadsError as exc:
+        return _reads_error(exc)
+    except GraphRunError as exc:
+        return JSONResponse({"status": "error", "error": {"code": exc.code, "message": str(exc), "retryable": False}},
+                            status_code=exc.status)
+    except (ValueError, KeyError, TypeError) as exc:
+        return JSONResponse({"status": "error", "error": {"code": "invalid_request", "message": str(exc), "retryable": False}},
+                            status_code=422)
+    out.update(registration_id=reg.id)
+    return Response(orjson.dumps(out, option=orjson.OPT_NON_STR_KEYS | orjson.OPT_SERIALIZE_NUMPY), media_type="application/json")
+
+
+@router.post("/api/graph/cluster")
+async def graph_cluster_route(request: Request, state=Depends(get_state)):
+    return await _graph_cluster(request, state, "fit")
+
+
+@router.post("/api/graph/cluster/assign")
+async def graph_cluster_assign_route(request: Request, state=Depends(get_state)):
+    return await _graph_cluster(request, state, "assign")

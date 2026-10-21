@@ -12,6 +12,7 @@ import { GraphHostBody, hostShowsGraph, useGraphModeHeader } from './hostHeader'
 import { startHandoffController } from './handoff';
 import { useGraphBindingsStore } from './bindingsStore';
 import { settlePendingGraphOpens } from './openAsGraph';
+import { registerGraphClustering } from './graphCluster';
 import { declareContribution } from '../../plugins/packRegistry';
 import { registerPreviewFeature } from '../../utils/previewFeatures';
 import { GraphView } from '../icons';
@@ -60,7 +61,7 @@ export function registerGraphPanel(): void {
     preview: GRAPH_VIEW_PREVIEW,
     sessionKeys: ['panels[].graphView', 'graphSelection', 'graphInspect'],
     apiEndpoints: ['/api/graph/status', '/api/graph/subgraph', '/api/graph/requests/{id}', '/api/graph/read_bindings',
-      '/api/graph/reads', '/api/graph/sequence', '/api/graph/differences'],
+      '/api/graph/reads', '/api/graph/sequence', '/api/graph/differences', '/api/graph/cluster', '/api/graph/cluster/assign'],
   });
   declareContribution('panelFields', 'graphView');
   for (const field of ['viewMode', 'graphMemberOf', 'collapsedByGraphGroup', 'graphHandoff']) declareContribution('panelFields', field);
@@ -82,6 +83,8 @@ function registerGraphMode(): void {
     return { ...panel, graphView: { ...gv, schema: 2, role: panel.contentType === 'dataset' ? 'host' : 'standalone' } };
   });
   startHandoffController();
+  // Cluster on graph columns when a host draws its graph (DESIGN_GRAPH_PRIMARY §3.4; graph primary G4/G5).
+  registerGraphClustering();
   useBrowserStore.subscribe((s, prev) => {
     if (s.panels !== prev.panels) {
       // Members whose host closed (or a session without it): shown again, out of the graph (D8).

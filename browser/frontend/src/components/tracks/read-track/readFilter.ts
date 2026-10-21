@@ -21,6 +21,10 @@ export function clusterAssignmentForRead(
   // A display row with folded supplementaries (supplementary_display='fold') is coloured by its primary member's
   // cluster (its own analysis_id), else by the first member that has one.
   for (const id of foldedIds(read)) if (assignments[id] !== undefined) return assignments[id];
+  // A graph run writes its labels under record keys (DESIGN_GRAPH_PRIMARY §3.1): a linear row of the same record
+  // (its own chain placement and row index) reads its record's label.
+  const rk = recordKey(read.analysis_id);
+  if (rk && assignments[rk] !== undefined) return assignments[rk];
   return undefined;
 }
 

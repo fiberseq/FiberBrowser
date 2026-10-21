@@ -1,3 +1,4 @@
+import { qnameOfId } from '../../../utils/recordKeys';
 import { enrichNativeRows } from '../../../features/differences/api';
 import { keepsSignal } from '../../../utils/signalFilters';
 import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
@@ -103,7 +104,13 @@ export function normalizeRequestReadIds(
   values?: Set<string> | null,
 ): Set<string> | null {
   if (!values || values.size === 0) return null;
-  return new Set(Array.from(values, value => String(value).replace(/_\d+$/, '')));
+  // A lifted row's cohort identity or record key (JSON, with commas) cannot travel in comma-separated filter_ids:
+  // the server would split it and match nothing, so the panel drew no reads. Its QNAME pre-filters on the server;
+  // the exact identity is matched here (filterReadsByReadIdSet, readIdKeys).
+  return new Set(Array.from(values, value => {
+    const text = String(value);
+    return text.startsWith('lift-cohort:v1 ') || text.startsWith('lift-record:v1 ') ? qnameOfId(text) : text.replace(/_\d+$/, '');
+  }));
 }
 
 export function clusterCohortNeedsFullPool(

@@ -6,7 +6,7 @@
  * line (never body). Each band row is a molecule's record; rows show only data, the band a compact count.
  */
 import { LIVE_LIFT_COLORS } from '../../components/tracks/read-track/liveLiftCanvas';
-import { getClusterColor } from '../../components/tracks/read-track/constants';
+import { getClusterColor, getClusterLabel } from '../../components/tracks/read-track/constants';
 import type { HostLane } from './memberBands';
 import type { ChromatinStyle } from './chromatinStyle';
 import type { CallPiece, PackedLane, PlacedMolecule } from './readGeometry';
@@ -222,6 +222,18 @@ export function drawReadBandLabels(ctx: CanvasRenderingContext2D, scene: Scene, 
   }
 }
 
+/** A member group's molecules per cluster, in cluster order (null: not clustered). */
+export function clusterCounts(lane: HostLane, startRow: number, rowCount: number): string | null {
+  const counts = new Map<number, number>();
+  for (let i = startRow; i < startRow + rowCount; i++) {
+    const c = lane.rowCluster[i];
+    if (c == null) return null;
+    counts.set(c, (counts.get(c) ?? 0) + lane.rows[i].length);
+  }
+  if (!counts.size) return null;
+  return [...counts].map(([c, n]) => `${c < 0 ? '–' : getClusterLabel(c, true)} ${n}`).join(' · ');
+}
+
 /** Host mode: each member sub-band's label in the gutter — its dataset colour down the rows it holds, the member's
  * name and how many records it shows (and how many more did not fit). */
 export function drawHostBandLabels(ctx: CanvasRenderingContext2D, scene: Scene, lanes: Map<string, HostLane>,
@@ -243,6 +255,9 @@ export function drawHostBandLabels(ctx: CanvasRenderingContext2D, scene: Scene, 
         ctx.font = '9px sans-serif';
         ctx.fillStyle = '#64748b';
         ctx.fillText(`${shown} read${shown === 1 ? '' : 's'}${g.hidden ? ` +${g.hidden}` : ''}`, 8, top + 19);
+        // Per-cluster counts (the compare step, DESIGN_GRAPH_PRIMARY §3.3): "C0 24 · C1 3".
+        const counts = clusterCounts(lane, g.startRow, g.rowCount);
+        if (counts && h >= 30) ctx.fillText(counts, 8, top + 29);
       }
     }
   }

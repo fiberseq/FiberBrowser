@@ -545,6 +545,9 @@ export interface ClusterSlice {
   // mutated, so going back up the tree restores it intact. resultsByKey maps
   // stateKey -> { readId -> new sub-cluster id } from the backend.
   commitSubcluster: (resultsByKey: Record<string, Record<string, number>>, options?: { sourceClusterIds?: number[]; sourceLabel?: string; name?: string; readScope?: Record<string, string[]> }) => string | null;
+  /** Graph primary §2.6 `refineWithinCarriers`: one child node of the active node in which the given reads take
+   * their refined labels and every other read keeps its parent label (shown, never sent to Unassigned). */
+  refineWithinCarriers: (resultsByKey: Record<string, Record<string, number>>, options: { name: string; sourceLabel: string }) => string | null;
   /** keepSameSvSplits: the Clusters panel's automatic re-apply of the root after a split into panels cleared the
    * active branch; a branch the user picks always drops SV splits. */
   applyClusterTreeNode: (id: string, options?: { keepSameSvSplits?: boolean }) => void;
@@ -1598,6 +1601,36 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
       clusterAssignments: cloneAssignments(childAssignments),
       clusterOrder: normalizeClusterOrderRecord(childAssignments, {}),
       clusterFocus: deserializeClusterFocus(childFocus),
+    }));
+    return id;
+  },
+
+  refineWithinCarriers: (resultsByKey, options) => {
+    const state = get();
+    const parentId = state.activeClusterTreeNodeId;
+    const parent = parentId ? state.clusterTreeNodes[parentId] : null;
+    if (!parent) return null;
+    const childAssignments: Record<string, Record<string, number>> = {};
+    for (const sk of new Set([...Object.keys(parent.assignments), ...Object.keys(resultsByKey)])) {
+      const merged: Record<string, number> = { ...(parent.assignments[sk] ?? {}) };
+      for (const [id, cluster] of Object.entries(resultsByKey[sk] ?? {})) merged[id] = cluster;
+      if (Object.keys(merged).length) childAssignments[sk] = merged;
+    }
+    if (!Object.keys(childAssignments).length) return null;
+    const id = crypto.randomUUID();
+    const node: ClusterTreeNode = {
+      ...buildClusterTreeNodeFromState(state, { id, parentId, name: options.name, sourceClusterIds: [], sourceLabel: options.sourceLabel }),
+      assignments: cloneAssignments(childAssignments),
+      order: normalizeClusterOrderRecord(childAssignments, {}),
+      focus: {},
+    };
+    set(current => ({
+      clusterTreeNodes: { ...current.clusterTreeNodes, [id]: node },
+      activeClusterTreeNodeId: id,
+      selectedClusters: {},
+      clusterAssignments: cloneAssignments(childAssignments),
+      clusterOrder: normalizeClusterOrderRecord(childAssignments, {}),
+      clusterFocus: {},
     }));
     return id;
   },

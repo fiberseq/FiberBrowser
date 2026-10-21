@@ -25,6 +25,7 @@ import { genomeKeyFor } from '../../utils/regionNavigation';
 import { startTrace, type GraphTrace } from './timings';
 import type { GraphApiError, GraphReadBinding, GraphReadSettings, GraphReadsResponse, GraphRegistration, GraphSubgraphResponse, GraphViewState } from './types';
 import { MAX_READ_PRIMITIVES, packMolecules, placeReads, placementIndex, type PackedLane, type PlacedMolecule } from './readGeometry';
+import { drawRunOutlines, runOutlines } from './runOutlines';
 import { bandHeight, describeReadHit, drawReadBandLabels, drawReads, effectiveReadLayers, emptyDrawStats, READ_ROW_GAP, READ_ROW_HEIGHT, type ReadDrawStats, type ReadHit, type ReadLayers } from './readCanvas';
 import { chromatinStyle } from './chromatinStyle';
 import { isInsertionGroup, hitGroup, placementsByPath, selectionForHit, sourcePlacements, focusWindow, type GraphSelection, type SourcePlacement } from './inspection';
@@ -553,6 +554,9 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
 
   // ---------------------------------------------------------------- drawing
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const graphRun = useBrowserStore(s => s.clusterMatchedRun);
+  const outlines = useMemo(() => (hostMode ? runOutlines(graphRun, scene ?? null, state?.registrationId ?? null,
+    state?.targetBinding ?? null, reversed) : []), [hostMode, graphRun, scene, state?.registrationId, state?.targetBinding, reversed]);
   const laneCount = model?.rows.length ?? state?.selectedPathKeys.length ?? 0;
   const canvasHeight = scene?.height ?? laneTop(laneCount, laneHeight) + GRAPH_LANE_GAP;
   // While a pan's new response is on its way, the last scene slides with the viewport (its average scale).
@@ -573,6 +577,8 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       ctx.clip();
       ctx.translate(sceneOffset, 0);
       drawScene(ctx, scene);
+      // A graph run's regions (host mode): outlined across the lanes, carrier-only parts on their carriers' lanes.
+      drawRunOutlines(ctx, outlines);
       const tr = performance.now();
       const drawStats = emptyDrawStats();
       readHitsRef.current = readLayout ? drawReads(ctx, scene, readLayout.lanes, style, readLayers, laneColors, readRowHeight, READ_ROW_GAP,
@@ -629,7 +635,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         if (trace.paintedAt === undefined) { trace.paintedAt = performance.now(); trace.outcome = trace.outcome ?? 'painted'; }
       });
     }
-  }, [scene, transform, width, canvasHeight, renderVersion, sceneOffset, readLayout, style, readSettings, readsStale, readLayers, hoverKey, decoration]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [scene, transform, width, canvasHeight, renderVersion, sceneOffset, readLayout, style, readSettings, readsStale, readLayers, hoverKey, decoration, outlines]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------------------------------------------------------------- navigation
   const commitViewport = useCallback((next: GraphViewport, detach = false, linearAtStart?: LinearView | null) => {
