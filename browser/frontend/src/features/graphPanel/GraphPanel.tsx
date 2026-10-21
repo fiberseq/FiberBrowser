@@ -454,7 +454,11 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       // Rows route by dataset and haplotype (a lifted member) or dataset (native, on the target): the saved path key
       // is the member's path at the host's target, which a pan onto another contig changes.
       void member;
-      return { panelId: p.id, stateKey: panelKeyOf(p), datasetId: p.datasetId!, liftHap: hap, binding: null,
+      // A pooled member leaves the haplotypes its dataset's haplotype members show to them (a popped-out
+      // haplotype of a pooled host is not drawn twice on its lane; agy G8 review).
+      const excludeHaps = hap ? [] : members.filter(x => x.panel.id !== p.id && x.panel.datasetId === p.datasetId && x.panel.liftHap)
+        .map(x => x.panel.liftHap!.toUpperCase());
+      return { panelId: p.id, stateKey: panelKeyOf(p), datasetId: p.datasetId!, liftHap: hap, binding: null, excludeHaps,
         strand: p.strand === 'CT' || p.strand === 'GA' ? p.strand : null,
         label: p.strand === 'CT' || p.strand === 'GA' ? `${name} · ${p.strand}` : name, color: datasetColors[p.datasetId!] ?? '#4b5563' };
     });

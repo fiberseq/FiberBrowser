@@ -453,9 +453,10 @@ export const READ_TABLE_COLUMNS = [
 export async function buildReadTable(
   state: BrowserState,
   groups: ReadScopeGroup[],
-): Promise<{ tsv: string; rows: number; truncated: boolean; total: number }> {
+): Promise<{ tsv: string; rows: number; truncated: boolean; total: number; leftOut: number }> {
   // Lifted datasets are left out (Read Stats reads native alignments; the server refuses lifted ones).
   const lifted = new Set(state.datasets.filter(d => d.data_type === 'bam_livelift').map(d => d.id));
+  const leftOut = groups.filter(g => lifted.has(g.datasetId)).reduce((n, g) => n + g.readIds.length, 0);
   groups = groups.filter(g => !lifted.has(g.datasetId));
   const total = groups.reduce((n, g) => n + g.readIds.length, 0);
   let budget = MAX_READ_STATS_READS;
@@ -496,15 +497,16 @@ export async function buildReadTable(
       }
     }
   }
-  return { tsv: formatTsv(rows), rows: rows.length - 1, truncated: total > MAX_READ_STATS_READS, total };
+  return { tsv: formatTsv(rows), rows: rows.length - 1, truncated: total > MAX_READ_STATS_READS, total, leftOut };
 }
 
 export async function downloadReadTable(state: BrowserState, groups: ReadScopeGroup[], slug: string): Promise<string> {
   const table = await buildReadTable(state, groups);
   downloadTextFile(table.tsv, `reads_${slug}_${placesFileStem(groups, state)}_${exportTimestamp()}.tsv`, TSV);
-  return table.truncated
+  const note = table.leftOut ? `; ${table.leftOut.toLocaleString()} read${table.leftOut === 1 ? '' : 's'} of lifted datasets left out` : '';
+  return (table.truncated
     ? `Saved the first ${table.rows.toLocaleString()} of ${table.total.toLocaleString()} reads (at most ${MAX_READ_STATS_READS.toLocaleString()} at a time)`
-    : `Saved ${table.rows.toLocaleString()} reads`;
+    : `Saved ${table.rows.toLocaleString()} reads`) + note;
 }
 
 /** One BAM per dataset and region (POST /api/reads/export_bam; a lifted dataset's reads on its source assembly:

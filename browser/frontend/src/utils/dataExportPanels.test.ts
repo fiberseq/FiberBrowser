@@ -264,6 +264,13 @@ describe('graph primary G8: lifted reads in exports', () => {
     expect(String(msg)).toContain('on its source assembly (chr19_MATERNAL, chr19_PATERNAL)');
   });
 
+  it('agy G8 review: the read table is not offered for lifted reads alone, and says when it leaves some out', () => {
+    const entry = getDataExport('read-table')!;
+    expect(entryAvailability(entry, { state: s(), readScope: 'shown' } as never)).toMatchObject({ ok: true });
+    useBrowserStore.setState({ activeReadIds: { lift: ['lift-cohort:v1 ["g|q1","q1","r",0,"primary"]'] } } as never);
+    expect(entryAvailability(entry, { state: s(), readScope: 'shown' } as never).ok).toBe(false);
+  });
+
   it('read table: lifted datasets are left out of the Read Stats request', async () => {
     const bodies: any[] = [];
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {

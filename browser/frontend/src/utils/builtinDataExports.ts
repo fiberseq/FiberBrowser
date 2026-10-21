@@ -93,7 +93,15 @@ export function registerBuiltinDataExports(): void {
     id: 'read-table', group: 'reads', order: 20, usesReadScope: true,
     title: 'Read table', format: 'TSV',
     description: `Per read: dataset, cluster, span, strand, MAPQ, footprints, accessibility, modifications, display order (up to ${MAX_READ_STATS_READS.toLocaleString()} reads).`,
-    available: scopeAvailability,
+    available: (ctx) => {
+      const scope = scopeAvailability(ctx);
+      if (!scope.ok) return scope;
+      // Lifted datasets are not described (Read Stats reads native alignments).
+      const groups = readScopeGroups(ctx.state, ctx.readScope);
+      const lifted = groups.filter(g => ctx.state.datasets.find(d => d.id === g.datasetId)?.data_type === 'bam_livelift');
+      if (lifted.length === groups.length) return no('These reads are from lifted datasets: the read table describes native alignments');
+      return lifted.length ? { ok: true, detail: [scope.detail, 'lifted datasets are left out'].filter(Boolean).join('; ') } : scope;
+    },
     run: ({ state, readScope }) => downloadReadTable(state, readScopeGroups(state, readScope), readScopeSlug(readScope)),
   });
   registerDataExport({

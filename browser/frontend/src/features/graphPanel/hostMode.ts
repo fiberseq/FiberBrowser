@@ -207,7 +207,9 @@ export function poppable(panels: readonly PanelConfig[], host: PanelConfig): { f
     const bound = graphBindingFor(host.datasetId);
     const haps = bound?.binding.haps ?? {};
     const shown = new Set(host.graphView?.selectedPathKeys ?? []);
-    for (const [binding, hap] of Object.entries(haps)) {
+    // One haplotype (a strain against its reference): its one panel is it; nothing to pop out (agy G8 review).
+    const distinct = new Set(Object.values(haps).map(h => h.toUpperCase()));
+    for (const [binding, hap] of distinct.size > 1 ? Object.entries(haps) : []) {
       if (!shown.has(binding)) continue;
       const has = members.some(m => m.panel.datasetId === host.datasetId && m.panel.id !== host.id
         && (m.member.binding === binding || (m.panel.liftHap ?? '').toUpperCase() === hap.toUpperCase()));

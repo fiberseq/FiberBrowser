@@ -91,3 +91,15 @@ describe('G8: DAF strand on graph rows', () => {
     expect(routeRead(r('GA'), { ...M, strand: null })).toBe(true);
   });
 });
+
+describe('agy G8 review: a pooled host and its popped-out haplotype', () => {
+  it('a haplotype shown by its own member is not drawn again in the pooled member\'s band', async () => {
+    const { routeRead } = await import('./memberBands');
+    const r = { k: 'd|0|q|r', d: 'd', lib: 0, q: 'q', rec: 'r', b: 'pat', c: '', st: '+', sup: false, s: 0, e: 1, cov: [], ins: [], hap: 'PAT' } as GraphRead;
+    const pooled: BandMember = { panelId: 'h', stateKey: 'h', datasetId: 'd', liftHap: null, binding: null, label: 'pooled', color: '#000', excludeHaps: ['PAT'] };
+    const pat: BandMember = { panelId: 'p', stateKey: 'p', datasetId: 'd', liftHap: 'PAT', binding: null, label: 'PAT', color: '#000' };
+    expect(routeRead(r, pooled)).toBe(false);
+    expect(routeRead(r, pat)).toBe(true);
+    expect(routeRead({ ...r, hap: 'MAT' }, pooled)).toBe(true);
+  });
+});

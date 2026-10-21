@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { onScreenStateKeys } from '../../utils/exportReadScopes';
+import { foldedInShownGraph } from '../../stores/graphMembership';
 import { useShallow } from 'zustand/react/shallow';
 import { useBrowserStore } from '../../stores/browserStore';
 import { fetchReadStats, type ReadStatsRegion, type ReadStatsResponse } from '../../api/readStats';
@@ -123,21 +125,20 @@ export function ReadStatsPanel({ isFullView }: Props) {
   // minimized, not in a collapsed row, not behind a maximized dataset panel.
   const collapsedRows = useBrowserStore(s => s.collapsedRows);
   const fullViewPanelId = useBrowserStore(s => s.fullViewPanelId);
-  const panelStateKeys = useMemo(() => {
-    const datasetPanels = panels.filter(p => p.contentType === 'dataset' && p.datasetId);
-    const maximized = datasetPanels.find(p => p.id === fullViewPanelId);
-    const onScreen = maximized
-      ? [maximized]
-      : datasetPanels.filter(p => !p.collapsed && !collapsedRows.has(p.layoutRow ?? 0));
-    return [...new Set(onScreen.map(p => p.stateKey ?? p.datasetId!))];
-  }, [panels, collapsedRows, fullViewPanelId]);
+  // (A member folded into a shown graph is on screen: its reads are in the host's band, at the host's locus.)
+  const panelStateKeys = useMemo(() => onScreenStateKeys({ panels, collapsedRows, fullViewPanelId } as never),
+    [panels, collapsedRows, fullViewPanelId]);
+  const locusPanel = useCallback((sk: string) => {
+    const own = panels.find(p => p.contentType === 'dataset' && (p.stateKey ?? p.datasetId) === sk);
+    return own?.collapsed ? foldedInShownGraph(own, panels) ?? own : own;
+  }, [panels]);
   // Panels of one dataset at one locus show the same reads.
   const identityOf = useCallback((sk: string) => {
-    const panel = panels.find(p => p.contentType === 'dataset' && (p.stateKey ?? p.datasetId) === sk);
+    const panel = locusPanel(sk);
     const v = panel?.viewportOverride;
     const at = v && (v.chrom !== chrom || v.start !== start || v.end !== end) ? `${v.chrom}:${v.start}-${v.end}` : 'main';
     return `${stateKeyToDatasetId[sk] || sk}@${at}`;
-  }, [panels, stateKeyToDatasetId, chrom, start, end]);
+  }, [locusPanel, stateKeyToDatasetId, chrom, start, end]);
 
   // The selection per panel, in the panel's read order.
   const selectedByKey = useMemo(() => {
@@ -195,7 +196,7 @@ export function ReadStatsPanel({ isFullView }: Props) {
         for (const id of orderedIds) set.add(id);
         continue;
       }
-      const panel = panels.find(p => p.contentType === 'dataset' && (p.stateKey ?? p.datasetId) === sk);
+      const panel = locusPanel(sk);
       const v = panel?.viewportOverride;
       const elsewhere = v && (v.chrom !== chrom || v.start !== start || v.end !== end) ? v : null;
       let target = result;
@@ -215,7 +216,7 @@ export function ReadStatsPanel({ isFullView }: Props) {
     }
     return { ...capRequest(result, [...regions.values()]), liftedLeftOut: [...lifted.values()].reduce((n, s) => n + s.size, 0),
       liftedDatasets: [...lifted.keys()] };
-  }, [scopeIds, stateKeyToDatasetId, panels, chrom, start, end, liftedIds]);
+  }, [scopeIds, stateKeyToDatasetId, locusPanel, chrom, start, end, liftedIds]);
   const readIdsByDataset = scoped.main;
   const extraRegions = scoped.regions;
   const scopeTotal = scoped.total;

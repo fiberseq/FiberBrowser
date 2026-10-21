@@ -155,7 +155,7 @@ this width), and comes back when less than 30% is unresolved. The bar then says
 
 ![Past 50 kb: the panel is linear and the haplotypes are beside it](../images/graph/graph-mode-handoff.png)
 
-- **Stay linear** (on the bar, or in the header menu) keeps the panel linear
+- **Stay linear** (on the bar, or in the graph's right-click menu) keeps the panel linear
   until **Resume graph**.
 - **Linear above …** in the graph's menu sets the width (50, 30 or 20 kb), and
   turns the "most of the window is unresolved" rule off or on.
