@@ -110,11 +110,15 @@ def _reads_error(exc) -> JSONResponse:
 
 
 def _registration(reg_id):
+    """The registration, refused (409 package_changed, and no longer offered) when its package's files changed or
+    disappeared since verification: reads, differences and sequence never answer for a package that is gone."""
     from services.graph_panel import service
     from services.graph_panel.reads import ReadsError
     from services.graph_panel.registration import RegistrationError
     try:
-        return service.registry().get(str(reg_id or ""))
+        reg = service.registry().get(str(reg_id or ""))
+        service.registry().check_unchanged(reg)
+        return reg
     except RegistrationError as exc:
         raise ReadsError(exc.code, exc.message, exc.status) from None
 

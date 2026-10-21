@@ -18,7 +18,7 @@ import { genomeKeyFor } from '../../utils/regionNavigation';
 import { clampViewport, type GraphViewport } from './coordinates';
 import { useGraphReadsStore } from './graphReadsStore';
 import { sourceWindow, type SourcePlacement } from './inspection';
-import { canFollow, initiatorView, type LinearView } from './state';
+import { canFollow, initialGraphView, initiatorView, type LinearView } from './state';
 import { useGraphStatusStore } from './statusStore';
 import type { GraphRegistration, GraphViewState } from './types';
 
@@ -109,11 +109,13 @@ export interface SourceTarget { kind: 'panel'; panelId: string; contig: string; 
 
 /**
  * The linear panels that show a placement's path from the same files: a live-lift source panel (`liftLink`) of a
- * dataset whose read binding maps the path to a BAM contig, on that contig. Bindings come from the graph panels.
+ * dataset whose read binding maps the path to a BAM contig, on that contig. Only the bindings of the graph panel
+ * the selection came from count (its registration's path key; another package's same-named path is another
+ * assembly); its graph panel closed, there are none (the path view is still offered).
  */
-export function sourcePanelsFor(path: string): SourceTarget[] {
+export function sourcePanelsFor(path: string, fromPanelId: string): SourceTarget[] {
   const s = useBrowserStore.getState();
-  const bindings = Object.values(useGraphReadsStore.getState().byPanel).flatMap(v => v.bindings);
+  const bindings = useGraphReadsStore.getState().byPanel[fromPanelId]?.bindings ?? [];
   const out: SourceTarget[] = [];
   for (const b of bindings) {
     const contig = b.paths[path];
@@ -133,14 +135,17 @@ export function sourcePanelsFor(path: string): SourceTarget[] {
  * Show a placement's source sequence: in `into` (a source panel from sourcePanelsFor) when given, else in a new
  * graph view on the path itself. Returns the panel it is shown in.
  */
-export function showSourceSpan(fromPanelId: string, placement: SourcePlacement, into?: SourceTarget | null): string | null {
+export function showSourceSpan(fromPanelId: string, placement: SourcePlacement, into?: SourceTarget | null,
+  registrationId?: string): string | null {
   const win = sourceWindow(placement.span);
   const s = useBrowserStore.getState();
   if (into) {
     s.navigatePanelOwnView(into.panelId, into.contig, win.start, win.end);
     return into.panelId;
   }
-  const from = s.panels.find(p => p.id === fromPanelId)?.graphView;
+  // The graph panel it came from may be closed: the selection's registration still opens the path view.
+  const from = s.panels.find(p => p.id === fromPanelId)?.graphView
+    ?? (registrationId ? initialGraphView(registration(registrationId), null) : null);
   const reg = registration(from?.registrationId);
   const binding = reg?.bindings.find(b => b.key === placement.path);
   if (!from || !reg || !binding) return null;

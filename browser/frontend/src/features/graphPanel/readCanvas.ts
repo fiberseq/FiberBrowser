@@ -19,8 +19,8 @@ export interface ReadLayers { nuc: boolean; tf: boolean; msp: boolean; m6a: bool
 
 /**
  * The layers a graph read band draws: the toolbar's Layers row (the store's `enabledModTypes`, read the way the
- * read track reads it) and, under it, the panel's own Reads menu. Nucleosomes follow Nuc (and its legacy
- * Footprint alias, written together with it); MSPs follow Accessibility (FIRE, or its legacy MSP key); TF follows
+ * read track reads it) and, under it, the panel's own Reads menu. Nucleosomes follow Nuc (as the read track's for
+ * reads with a nuc layer, which graph reads always have); MSPs follow Accessibility (FIRE, or its legacy MSP key); TF follows
  * TF; m6A follows m6A (or its legacy `mod` alias). A layer the graph payload does not carry (5mC, deamination, ...)
  * is simply never drawn.
  */
@@ -28,7 +28,8 @@ export function effectiveReadLayers(enabled: Record<string, boolean | undefined>
   panel?: Partial<ReadLayers> | null): ReadLayers {
   const g = enabled ?? {};
   const global: ReadLayers = {
-    nuc: (g.nuc ?? true) && (g.footprint ?? true),
+    // Graph reads always carry a nuc layer (legacy inference included): the read track then reads `nuc` alone.
+    nuc: g.nuc ?? true,
     msp: Boolean(g.fire || g.msp),
     tf: Boolean(g.tf),
     m6a: Boolean(g.m6a || g.mod),

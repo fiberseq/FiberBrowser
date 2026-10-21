@@ -14,7 +14,7 @@
  */
 import type { AltAllele, GroupItem, JunctionItem, LayoutModel, Visit } from './layout';
 import { visitPiece } from './layout';
-import type { HitPayload, SceneHit } from './scene';
+import { placementAt, targetAtX, type HitPayload, type Scene, type SceneHit } from './scene';
 import type { GraphRegistration, GraphTopology, GraphViewState, Span } from './types';
 
 export type GraphSelectionKind = 'graph-difference' | 'graph-locus';
@@ -63,7 +63,7 @@ export interface GraphSelection {
   provenance: 'direct' | 'inferred' | 'unresolved';
   canonical: GraphCanonical | null;
   /** Read binding(s) whose molecules were drawn here when it was selected (read-dependent rows need one). */
-  reads: { datasetIds: string[]; molecules: number } | null;
+  reads: { datasetIds: string[]; molecules: number; revisions?: Record<string, string> } | null;
   /** Where "Show source span" can go (sourcePlacements, computed when selected). */
   placements?: SourcePlacement[];
   reason?: string;
@@ -102,11 +102,53 @@ export function isInsertionGroup(g: GroupItem | JunctionItem | null | undefined)
 
 /** The group a hit is about (an allele inside a family names its enclosing group). */
 export function hitGroup(hit: SceneHit): GroupItem | JunctionItem | null {
+  // Anything inside an allele family's tube (its shared runs, sub-bubbles, marks) belongs to the enclosing group.
+  if (hit.within) return hit.within.group;
   const p = hit.payload;
-  if (p.kind === 'allele' || p.kind === 'filler' || p.kind === 'base' || p.kind === 'slot' || p.kind === 'complex') {
-    return hit.within?.group ?? p.group;
-  }
+  if (p.kind === 'allele' || p.kind === 'filler' || p.kind === 'base' || p.kind === 'slot' || p.kind === 'complex') return p.group;
   return null;
+}
+
+/** The path a click means: an allele's lane, a shared tube's clicked stripe (else its host). */
+function clickedPath(hit: SceneHit, y?: number): string | null {
+  const p = hit.payload;
+  if (p.kind === 'allele') {
+    const stripe = y !== undefined ? p.stripes?.find(s => y >= s.y0 && y <= s.y1) : undefined;
+    return stripe?.key ?? p.lane;
+  }
+  if (p.kind === 'filler') return p.lane;
+  if (p.kind === 'run') {
+    const stripe = y !== undefined ? p.stripes?.find(s => y >= s.y0 && y <= s.y1) : undefined;
+    return stripe?.key ?? p.host;
+  }
+  if (p.kind === 'base') return p.lane;
+  return null;
+}
+
+/** The allele of the selection a click names: inside a family, the member carried by the clicked path (else the
+ * family's lead), never an inner sub-bubble's own allele (it is not one of the group's alleles). */
+function chosenAllele(hit: SceneHit, path: string | null): string | null {
+  if (hit.within) {
+    const lead = hit.within.allele;
+    const all = [lead, ...(lead.family?.members ?? [])];
+    return (path ? all.find(a => a.carriers.includes(path)) : undefined)?.id ?? lead.id;
+  }
+  const p = hit.payload;
+  return p.kind === 'allele' || p.kind === 'filler' ? p.allele.id : null;
+}
+
+/** A shared run's occurrence under x on `path` (the scene's occurrence transform: carrier stripe, reversal), with
+ * the path-forward offset in it and the target base there (target-backed geometry only). */
+function runAt(p: Extract<HitPayload, { kind: 'run' }>, path: string, scene: Scene | undefined, x: number | undefined):
+  { visit: Visit; offset: number; target: number | null } {
+  const index = p.run.visits.indexOf(p.visit);
+  const fallback: Visit = (path === p.host ? p.visit : p.run.byCarrier?.[path]?.[index]) ?? p.visit;
+  if (!scene || x === undefined) return { visit: fallback, offset: 0, target: p.visit.target?.start ?? p.run.target?.start ?? null };
+  const at = placementAt(scene, x, p.run.id, undefined, path) ?? placementAt(scene, x, p.run.id);
+  const pool = [...p.run.visits, ...Object.values(p.run.byCarrier ?? {}).flat().filter((v): v is Visit => Boolean(v))];
+  const visit = (at && pool.find(v => v.occ.id === at.place.occ)) || fallback;
+  const t = targetAtX(scene.targetMap, x);
+  return { visit, offset: at ? at.offset : 0, target: t && !t.boundary ? t.pos : null };
 }
 
 function provenanceOf(alleles: GraphAlleleInfo[], model: LayoutModel): GraphSelection['provenance'] {
@@ -119,8 +161,10 @@ export interface SelectionContext {
   reg: GraphRegistration;
   state: GraphViewState;
   model: LayoutModel;
+  /** The scene the hit is on (a click's occurrence and target base come from its transforms). */
+  scene?: Scene;
   /** The read bindings drawn and the molecules over a source span (read-dependent rows). */
-  readsAt?: (source: { path: string; span: Span }[]) => { datasetIds: string[]; molecules: number } | null;
+  readsAt?: (source: { path: string; span: Span }[]) => { datasetIds: string[]; molecules: number; revisions?: Record<string, string> } | null;
 }
 
 function base(ctx: SelectionContext): Pick<GraphSelection, 'schema' | 'panelId' | 'registrationId' | 'revisions' | 'targetBinding' | 'targetReference' | 'contig' | 'canonical'> {
@@ -134,39 +178,39 @@ function base(ctx: SelectionContext): Pick<GraphSelection, 'schema' | 'panelId' 
 }
 
 /** The selection a hit names (null: nothing selectable there, e.g. connector filler with no allele). */
-export function selectionForHit(hit: SceneHit, ctx: SelectionContext, y?: number): GraphSelection | null {
+export function selectionForHit(hit: SceneHit, ctx: SelectionContext, y?: number, x?: number): GraphSelection | null {
   const p: HitPayload = hit.payload;
   const g = hitGroup(hit);
   if (g) {
     const alts = g.kind === 'group' ? allelesOf(g.alts) : g.alts;
     const alleles = alts.map(alleleInfo);
-    const chosen = p.kind === 'allele' || p.kind === 'filler' ? p.allele.id : null;
+    const path = clickedPath(hit, y);
+    const picked = chosenAllele(hit, path);
+    const chosen = picked && alleles.some(a => a.id === picked) ? picked : null;
     const source = alleles.flatMap(a => a.source);
+    // A click on sequence inside the allele also names that occurrence.
+    const inRun = p.kind === 'run' && path ? runAt(p, path, ctx.scene, x) : null;
     return {
       ...base(ctx), kind: 'graph-difference', what: g.kind === 'group' ? groupWhat(g) : 'junction',
       target: g.target ? { ...g.target } : null, locusKey: g.id, selectedAllele: chosen, alleles,
       base: g.kind === 'group' ? { paths: [...g.base.carriers], bp: g.base.bp } : null,
-      unavailable: g.kind === 'group' ? [...g.unavailable] : [], occurrence: null,
+      unavailable: g.kind === 'group' ? [...g.unavailable] : [],
+      occurrence: inRun && path ? { id: inRun.visit.occ.id, node: inRun.visit.occ.node, path, offset: inRun.offset, span: visitPiece(inRun.visit.occ) } : null,
       complete: ctx.model.complete && alleles.every(a => a.status === 'ok'),
       provenance: provenanceOf(alleles, ctx.model), reads: ctx.readsAt?.(source) ?? null,
       ...(g.kind === 'group' && g.reason ? { reason: g.reason } : {}),
     };
   }
   if (p.kind === 'run') {
-    // The carrier whose stripe was clicked (its own occurrence of the node), else the host.
-    const stripe = y !== undefined ? p.stripes?.find(s => y >= s.y0 && y <= s.y1) : undefined;
-    const path = stripe?.key ?? p.host;
-    const index = p.run.visits.indexOf(p.visit);
-    const own: Visit | null = path === p.host ? p.visit : p.run.byCarrier?.[path]?.[index] ?? null;
-    const visit = own ?? p.visit;
+    // The carrier whose stripe was clicked (its own occurrence of the node under x), else the host's.
+    const path = clickedPath(hit, y) ?? p.host;
+    const { visit, offset, target: at } = runAt(p, path, ctx.scene, x);
     const piece = visitPiece(visit.occ);
-    const target = p.visit.target ? { start: p.visit.target.start + 0, end: p.visit.target.end } : p.run.target;
-    const at = target ? Math.min(target.end - 1, Math.max(target.start, target.start + Math.round(p.offset))) : null;
     return {
       ...base(ctx), kind: 'graph-locus', what: 'sequence',
       target: at != null ? { start: at, end: at + 1 } : null, locusKey: p.run.id, selectedAllele: null, alleles: [],
       base: { paths: [...p.run.carriers], bp: p.run.bp }, unavailable: [],
-      occurrence: { id: visit.occ.id, node: visit.occ.node, path, offset: Math.round(p.offset), span: piece },
+      occurrence: { id: visit.occ.id, node: visit.occ.node, path, offset, span: piece },
       complete: ctx.model.complete, provenance: ctx.model.correspondenceComplete ? 'direct' : 'inferred',
       reads: ctx.readsAt?.([{ path, span: piece }]) ?? null,
     };

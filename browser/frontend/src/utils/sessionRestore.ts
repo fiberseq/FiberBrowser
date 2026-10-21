@@ -16,9 +16,28 @@ export function setSessionRestoreHandler(next: Handler | null): void {
   handler = next;
 }
 
+let inFlight = 0;
+
+/** Session restores and imports under way (file checks, relink dialogs, the import itself): nothing else may fill
+ * an empty page meanwhile (utils/adoptServerDatasets.ts). */
+export function sessionRestoresInFlight(): number {
+  return inFlight;
+}
+
+/** Count `work` as a session restore while it runs. */
+export async function duringSessionRestore<T>(work: () => Promise<T>): Promise<T> {
+  inFlight += 1;
+  try {
+    return await work();
+  } finally {
+    inFlight -= 1;
+  }
+}
+
 export function requestSessionRestore(session: Record<string, unknown>): Promise<SessionRestoreOutcome> {
   if (!handler) return Promise.resolve({ restored: false, message: 'Session restore is not available yet' });
-  return handler(session);
+  const h = handler;
+  return duringSessionRestore(() => h(session));
 }
 
 /** A saved browser session (as opposed to other JSON such as footprint rules). */

@@ -42,19 +42,18 @@ const WHAT: Record<string, string> = {
 function Placement({ sel, reg, p, ambiguous }: { sel: GraphSelection; reg: GraphRegistration | null; p: SourcePlacement; ambiguous: boolean }) {
   const panels = useBrowserStore(s => s.panels);
   void panels;   // re-render when panels open or close (source panels)
-  const targets = sourcePanelsFor(p.path);
-  const graphOpen = useBrowserStore(s => s.panels.some(x => x.id === sel.panelId));
+  const targets = sourcePanelsFor(p.path, sel.panelId);
   return (
     <li className="flex flex-wrap items-center gap-2" data-testid="graph-inspector-placement" data-path={p.path}
       data-start={p.span.start} data-end={p.span.end}>
       <span><strong>{pathLabel(reg, p.path)}</strong> {pathIdentity(reg, p.path)}:{spanText(p.span)}{p.note ? ` · ${p.note}` : ''}</span>
       {targets.map(t => (
         <button key={t.panelId} type="button" data-testid="graph-inspector-show-source" className="underline"
-          title={`Move ${t.label} to this span`} onClick={() => showSourceSpan(sel.panelId, p, t)}>Show in {t.label}</button>
+          title={`Move ${t.label} to this span`} onClick={() => showSourceSpan(sel.panelId, p, t, sel.registrationId)}>Show in {t.label}</button>
       ))}
-      <button type="button" data-testid="graph-inspector-open-path" className="underline" disabled={!graphOpen && !reg}
+      <button type="button" data-testid="graph-inspector-open-path" className="underline" disabled={!reg}
         title={ambiguous ? 'This path has more than one placement here: this one is shown' : 'A graph view on this path (its own coordinates; no BAM needed)'}
-        onClick={() => showSourceSpan(sel.panelId, p, null)}>{targets.length ? 'Open path view' : 'Show source span'}</button>
+        onClick={() => showSourceSpan(sel.panelId, p, null, sel.registrationId)}>{targets.length ? 'Open path view' : 'Show source span'}</button>
     </li>
   );
 }
@@ -119,6 +118,13 @@ export function GraphInspector({ selection: sel }: { selection: GraphSelection }
   const matches = canonical?.for === askKey ? canonical.response?.matches ?? [] : [];
   const stillCanonical = matches.filter(m => !canonicalProblem({ datasetId: m.dataset_id, id: m.id, revision: m.revision }, revisions));
 
+  // Read rows hold only while their bindings do: every dataset still bound, at the revision it was counted at.
+  const readsGone = sel.reads && sel.reads.datasetIds.length ? (() => {
+    const missing = sel.reads.datasetIds.filter(id => !bindings.some(b => b.dataset_id === id));
+    if (missing.length) return `${missing.length === 1 ? 'its dataset is' : 'its datasets are'} not bound to this graph now`;
+    const changed = sel.reads.datasetIds.filter(id => sel.reads!.revisions?.[id] && revisions[id] !== sel.reads!.revisions[id]);
+    return changed.length ? 'its dataset changed since (other files or map)' : null;
+  })() : null;
   const placements = sel.placements ?? [];
   const byPath = placementsByPath(placements);
   const target = reg?.bindings.find(b => b.key === sel.targetBinding) ?? null;
@@ -157,7 +163,7 @@ export function GraphInspector({ selection: sel }: { selection: GraphSelection }
             <tr key={a.id} data-allele={a.id} className={a.id === sel.selectedAllele ? 'bg-stone-100 dark:bg-stone-800' : ''}>
               <td className="pr-2 align-top">{a.paths.map(k => <span key={k} style={{ color: liveLiftHaplotypeColor(pathLabel(reg, k), dark) }} className="mr-1 font-semibold">{pathLabel(reg, k)}</span>)}</td>
               <td className="pr-2 align-top">{n(a.bp)} bp{a.inverted ? ' · inverted' : ''}{a.status !== 'ok' ? ` · ${a.status}` : ''}</td>
-              <td className="align-top">{a.source.map(s => <div key={s.path}>{pathIdentity(reg, s.path)}:{spanText(s.span)}</div>)}</td>
+              <td className="align-top">{a.source.map(s => <div key={`${s.path}|${s.span.start}-${s.span.end}`}>{pathIdentity(reg, s.path)}:{spanText(s.span)}</div>)}</td>
             </tr>
           ))}
         </tbody></table>
@@ -178,12 +184,14 @@ export function GraphInspector({ selection: sel }: { selection: GraphSelection }
         <h4 className="mt-2 font-semibold">Sequence</h4>
         <ul className="space-y-1">
           {sel.alleles.flatMap(a => a.source.slice(0, 1).map(s => <SequenceRow key={`${a.id}|${s.path}`} sel={sel} reg={reg} path={s.path} span={s.span} />))}
-          {sel.occurrence && <SequenceRow sel={sel} reg={reg} path={sel.occurrence.path} span={sel.occurrence.span} />}
+          {sel.occurrence && <SequenceRow key={`${sel.occurrence.id}|${sel.occurrence.span.start}`} sel={sel} reg={reg} path={sel.occurrence.path} span={sel.occurrence.span} />}
         </ul>
       </>}
 
       <h4 className="mt-2 font-semibold">Reads</h4>
-      {sel.reads && sel.reads.datasetIds.length
+      {readsGone
+        ? <p data-testid="graph-inspector-reads" data-stale="true">Read evidence from when it was selected is unavailable: {readsGone}.</p>
+        : sel.reads && sel.reads.datasetIds.length
         ? <p data-testid="graph-inspector-reads">{n(sel.reads.molecules)} molecules of {sel.reads.datasetIds.map(id => bindings.find(b => b.dataset_id === id)?.label ?? id).join(', ')} drawn over these spans.</p>
         : <p data-testid="graph-inspector-reads">No read binding: load a dataset whose files are aligned to one of these paths (read-dependent rows need one).</p>}
 
@@ -207,5 +215,5 @@ export function GraphInspectorHost() {
   const load = useGraphStatusStore(s => s.load);
   useEffect(() => { if (sel && open) void load(); }, [sel, open, load]);
   if (!sel || !open) return null;
-  return <GraphInspector key={`${sel.registrationId}|${sel.locusKey}|${sel.selectedAllele}`} selection={sel} />;
+  return <GraphInspector key={`${sel.registrationId}|${sel.locusKey}|${sel.selectedAllele}|${sel.occurrence?.id ?? ''}|${sel.occurrence?.offset ?? ''}`} selection={sel} />;
 }

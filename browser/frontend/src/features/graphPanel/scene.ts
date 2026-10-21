@@ -203,14 +203,16 @@ export function isSmallDifference(g: GroupItem, small: number): boolean {
   return everyAllele(g).every(a => a.status === 'ok' && !a.inverted && !a.family?.chain.some(it => it.kind === 'group'));
 }
 
-const foldCache = new WeakMap<Item[], Map<number, ChainItem[]>>();
+const foldCache = new WeakMap<Item[], Map<string, ChainItem[]>>();
 
-/** Runs and small differences in a row become one marked run (a mark does not branch, so it does not end the run). */
-export function foldMarks(items: Item[], small: number): ChainItem[] {
+/** Runs and small differences in a row become one marked run (a mark does not branch, so it does not end the run).
+ * An expanded group is never folded (it is drawn as its own bubble, at true bp). */
+export function foldMarks(items: Item[], small: number, expanded?: ReadonlySet<string>): ChainItem[] {
   if (!small || small <= 0) return items;
   let byT = foldCache.get(items);
   if (!byT) { byT = new Map(); foldCache.set(items, byT); }
-  const hit = byT.get(small);
+  const cacheKey = `${small}|${expanded && expanded.size ? [...expanded].sort().join(',') : ''}`;
+  const hit = byT.get(cacheKey);
   if (hit) return hit;
   const out: ChainItem[] = [];
   let pending: (RunItem | GroupItem)[] = [];
@@ -229,11 +231,11 @@ export function foldMarks(items: Item[], small: number): ChainItem[] {
   };
   for (const it of items) {
     if (it.kind === 'run') pending.push(it);
-    else if (it.kind === 'group' && isSmallDifference(it, small)) { pending.push(it); marks += 1; }
+    else if (it.kind === 'group' && !expanded?.has(it.id) && isSmallDifference(it, small)) { pending.push(it); marks += 1; }
     else { flush(); out.push(it); }
   }
   flush();
-  byT.set(small, out);
+  byT.set(cacheKey, out);
   return out;
 }
 
@@ -245,7 +247,7 @@ function contentWidth(items: TopItem[], scale: number, c: Compression, k: Metric
 
 /** A nested chain's width: folded the same way placement folds it. */
 function chainWidth(items: Item[], scale: number, c: Compression, k: Metrics = ROOMY): number {
-  return contentWidth(foldMarks(items, k.small ?? 0), scale, c, k);
+  return contentWidth(foldMarks(items, k.small ?? 0, k.expanded), scale, c, k);
 }
 
 function alleleWidth(a: AltAllele, scale: number, c: Compression, k: Metrics = ROOMY): number {
@@ -316,10 +318,11 @@ function maxAlleleBp(g: GroupItem): number {
 }
 
 /** Merge consecutive small top-level bubbles (separated by runs shorter than `distance` bp) into clusters. */
-function clusterChain(chain: ChainItem[], distance: number, anySize = false): TopItem[] {
+function clusterChain(chain: ChainItem[], distance: number, anySize = false, expanded?: ReadonlySet<string>): TopItem[] {
   const out: TopItem[] = [];
   let pending: ChainItem[] = [];
-  const small = (it: ChainItem) => it.kind === 'group' && (anySize || (it.type === 'bubble' && maxAlleleBp(it) < MAJOR_BP));
+  // An expanded group is never clustered away.
+  const small = (it: ChainItem) => it.kind === 'group' && !expanded?.has(it.id) && (anySize || (it.type === 'bubble' && maxAlleleBp(it) < MAJOR_BP));
   const runLike = (it: ChainItem) => it.kind === 'run' || it.kind === 'marked';
   const flush = () => {
     // Trailing runs are not part of a cluster.
@@ -386,19 +389,19 @@ export function planScene(model: LayoutModel, opts: Pick<SceneOptions, 'width' |
   // Crowded: compact curve zones first; cluster only when the bubbles' fixed pixels would still crowd out the
   // sequence. Small differences first become marks on the shared tube (no fixed pixels of their own).
   const small = Math.max(0, opts.smallBp ?? 0);
-  const folded = foldMarks(model.chain, small);
+  const folded = foldMarks(model.chain, small, opts.expanded);
   let top: TopItem[] = folded;
   const expanded = opts.expanded && opts.expanded.size ? opts.expanded : undefined;
   const withSmall = (m: Metrics): Metrics => ({ ...m, ...(small > 0 ? { small } : {}), ...(expanded ? { expanded } : {}) });
   let k: Metrics = withSmall(contentWidth(top, 0, c, withSmall(ROOMY)) > dataWidth * 0.6 ? COMPACT : ROOMY);
   const span = model.interval.end - model.interval.start;
   for (let distance = 32; contentWidth(top, 0, c, k) > dataWidth * 0.6 && distance <= 2 * span; distance *= 2) {
-    top = clusterChain(folded, distance);
+    top = clusterChain(folded, distance, false, opts.expanded);
   }
   // Still overflowing (many large bubbles): cluster bubbles of any size rather than ever zeroing sequence widths;
   // every cluster lists its members.
   for (let distance = 32; contentWidth(top, 0, c, k) > dataWidth * 0.9 && distance <= 2 * span; distance *= 2) {
-    top = clusterChain(folded, distance, true);
+    top = clusterChain(folded, distance, true, opts.expanded);
   }
   // Last resort (e.g. many fragment junctions): shrink every fixed pixel in proportion, so sequence always keeps
   // some width and nothing runs past the data area.
@@ -415,9 +418,9 @@ export function planScene(model: LayoutModel, opts: Pick<SceneOptions, 'width' |
       if (it.kind === 'group') {
         for (const a of it.alts) {
           drawnLanes.add(a.carriers[0]);
-          if (a.family) walk(foldMarks(a.family.chain, small));
+          if (a.family) walk(foldMarks(a.family.chain, small, opts.expanded));
         }
-        walk(foldMarks(it.base.chain, small));
+        walk(foldMarks(it.base.chain, small, opts.expanded));
       } else if (it.kind === 'junction') {
         for (const a of it.alts) if (a.bp > 0) drawnLanes.add(a.carriers[0]);
       } else if (it.kind === 'cluster') {
@@ -552,7 +555,7 @@ export function buildScene(model: LayoutModel, opts: SceneOptions & { plan?: Sce
   const placeChain = (items: TopItem[], x: number, host: string, slots: Map<string, Slot>, onTarget: boolean, depth: number): number => {
     const start = x;
     // Nested chains (a base allele's, a family's) fold their small differences the way their widths did.
-    const list: TopItem[] = depth === 0 ? items : foldMarks(items as Item[], small);
+    const list: TopItem[] = depth === 0 ? items : foldMarks(items as Item[], small, k.expanded);
     for (const it of list) {
       const w = itemWidth(it, scale, c, k);
       if (depth === 0) blocks.push({ id: it.id, kind: it.kind === 'group' ? `${it.kind}:${it.type}` : it.kind, x0: x, x1: x + w });

@@ -1,4 +1,5 @@
 import { normalizeSvConflictOptions } from '../utils/svConflicts';
+import { duringSessionRestore } from '../utils/sessionRestore';
 import { validateMatchedState } from '../utils/matchedRegions';
 import { normalizeFeatureRefs } from '../stores/featureStore';
 import { useSplitPanelStore } from '../stores/splitPanelStore';
@@ -265,6 +266,13 @@ export async function readSessionFile(path: string): Promise<{ success: boolean;
 }
 
 export async function importSession(
+  sessionJson: Record<string, unknown>,
+  pathMapping?: Record<string, string>,
+): Promise<Record<string, unknown>> {
+  return duringSessionRestore(() => importSessionNow(sessionJson, pathMapping));
+}
+
+async function importSessionNow(
   sessionJson: Record<string, unknown>,
   pathMapping?: Record<string, string>,
 ): Promise<Record<string, unknown>> {

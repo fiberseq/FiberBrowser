@@ -352,7 +352,7 @@ function solveLevel(input: LevelInput, buildFamilies: (g: GroupItem) => void): L
           }
         } else if (sb === sa + 1 && a.i === bb.segments[sa].to - 1 && b.i === bb.segments[sb].from && !problem) {
           // Walks on across the junction between consecutive segments.
-          const fallback = m.visits[a.j].occ.path_span.end;
+          const fallback = m.visits[a.j].backward ? m.visits[a.j].occ.path_span.start : m.visits[a.j].occ.path_span.end;
           candidates.push({ path: m.key, seg: sa, p: a.i + 1, q: -1, visits: between, status: 'junction',
             source: sourceSpanOf(between, fallback) });
         } else {

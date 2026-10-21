@@ -276,7 +276,8 @@ describe('graph read bands follow the toolbar Layers row', () => {
     expect(effectiveReadLayers({ m6a: false, mod: true }).m6a).toBe(true);
     expect(effectiveReadLayers({ fire: false, msp: true }).msp).toBe(true);
     expect(effectiveReadLayers({ fire: true }).msp).toBe(true);
-    expect(effectiveReadLayers({ nuc: true, footprint: false }).nuc).toBe(false);
+    expect(effectiveReadLayers({ nuc: true, footprint: false }).nuc).toBe(true);   // as ReadTrackCanvas with a nuc layer
+    expect(effectiveReadLayers({ nuc: false, footprint: true }).nuc).toBe(false);
     expect(effectiveReadLayers({}).nuc).toBe(true);   // nuc defaults on, as on the read track
     expect(effectiveReadLayers({}).tf).toBe(false);
     // The panel's own menu can only hide more, never show a layer the toolbar has off.

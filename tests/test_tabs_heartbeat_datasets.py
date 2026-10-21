@@ -19,6 +19,10 @@ def test_key_follows_the_loaded_datasets():
     assert datasets_key(_state(a=["/y.bam"])) != one                       # replaced under the same ID
     assert datasets_key(_state(a=["/x.bam"], b=["/z.bam"])) not in (empty, one)
     assert datasets_key(types.SimpleNamespace()) == empty                  # no dataset table at all
+    # Re-configured (another lift map or settings: its revision) under the same ID and files.
+    lifted = lambda k: types.SimpleNamespace(datasets={"a": types.SimpleNamespace(  # noqa: E731
+        paths=["/x.bam"], live_lift=types.SimpleNamespace(key=lambda: k))})
+    assert datasets_key(lifted("k1")) != datasets_key(lifted("k2"))
 
 
 def test_heartbeat_reports_the_key():

@@ -38,11 +38,19 @@ def _live_tabs(now: float) -> list[str]:
 
 
 def datasets_key(state) -> str:
-    """A short key of the server's loaded datasets (IDs and files): it changes when one is added, removed or
-    replaced, also by another tab or a script, so an open page can notice without listing them."""
+    """A short key of the server's loaded datasets: IDs, files and each dataset's revision (its files' size and
+    mtime and its live-lift identity: map and settings). It changes when a dataset is added, removed, replaced or
+    re-configured, also by another tab or a script, so an open page can notice without listing them."""
     import hashlib
 
-    items = sorted((str(d_id), tuple(str(p) for p in (getattr(d, "paths", None) or ())))
+    def revision(d) -> str:
+        try:
+            from services.graph_panel.reads import dataset_revision
+            return dataset_revision(d)
+        except Exception:  # noqa: BLE001 - a dataset whose files went missing still has a key
+            return "?"
+
+    items = sorted((str(d_id), tuple(str(p) for p in (getattr(d, "paths", None) or ())), revision(d))
                    for d_id, d in list((getattr(state, "datasets", None) or {}).items()))
     return hashlib.sha1(repr(items).encode()).hexdigest()[:12]
 

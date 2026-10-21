@@ -8,12 +8,13 @@ import { useBrowserStore } from '../stores/browserStore';
 import { useOpeningStore } from '../stores/openingStore';
 import { shouldAdoptServerDatasets, useServerDatasetsStore } from '../stores/serverDatasetsStore';
 import { useLaunchUiStore } from './launchSession';
+import { sessionRestoresInFlight } from './sessionRestore';
 
 let inflight = false;
 
 function busy(): boolean {
   const launch = useLaunchUiStore.getState();
-  return Boolean(launch.deciding || launch.restoring || useOpeningStore.getState().opening.length);
+  return Boolean(launch.deciding || launch.restoring || sessionRestoresInFlight() > 0 || useOpeningStore.getState().opening.length);
 }
 
 export async function adoptServerDatasetsIfEmpty(): Promise<boolean> {

@@ -466,3 +466,25 @@ def test_omissions_of_cached_records_are_reported_again(env):
     a = _reads(env, [did2], [{"binding": "mat", "windows": [{"start": 0, "end": 500}]}]).json()
     b = _reads(env, [did2], [{"binding": "mat", "windows": [{"start": 0, "end": 500}]}]).json()
     assert a["report"]["omitted"] == b["report"]["omitted"] and b["timings"]["records_decoded"] == 0
+
+
+def test_a_truncated_batch_never_caches_part_of_an_identity(env, monkeypatch):
+    """Two physical records sharing (library, QNAME, start, end, supplementary): a batch cut short after one of
+    them caches neither; the next request decodes both (Codex Gate F round 1)."""
+    bam = write_bam(env.tmp / "pair.bam", lambda h: [
+        make_record(h, "pair", MAT, 1000, "500M", tags=[("ns", _u32([10, 300])), ("nl", _u32([100, 100]))]),
+        make_record(h, "pair", MAT, 1000, "500M", tags=[("ns", _u32([20, 320])), ("nl", _u32([90, 90]))])])
+    did = _add_lifted(env, paths=[bam], dataset_id="pair")
+    paths = [{"binding": "mat", "windows": [{"start": 900, "end": 1600}]}]
+    full = _reads(env, [did], paths).json()
+    assert len(full["reads"]) == 2
+    gr.clear_cache()
+    monkeypatch.setattr(gr, "MAX_LEVEL", 0)
+    monkeypatch.setattr(gr, "MAX_DECODED_BYTES", 600)
+    cut = _reads(env, [did], paths).json()
+    assert cut["report"]["truncated"] is True
+    assert len(cut["reads"]) + cut["report"]["omitted"].get("payload_limit", 0) >= 1
+    monkeypatch.setattr(gr, "MAX_DECODED_BYTES", 8 * 1024 * 1024)
+    again = _reads(env, [did], paths).json()
+    assert len(again["reads"]) == 2 and again["report"]["truncated"] is False
+    assert sorted(r["k"] for r in again["reads"]) == sorted(r["k"] for r in full["reads"])

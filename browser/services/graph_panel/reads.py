@@ -397,14 +397,15 @@ def clear_cache() -> None:
 
 
 def _record_key(base: tuple, rec: tuple) -> tuple:
-    """A listed record's cache key: the (dataset, revision, path, contig) base and (library, QNAME, start, end,
-    flag)."""
+    """A listed record's cache key: the (dataset, revision, path, contig) base and the identity its composed rows
+    carry, (library, QNAME, start, end, supplementary). Physical records sharing it (duplicates, the same alignment
+    twice) are one entry, cached only once every one of them was decoded."""
     lib, qname, start, flag, end = rec[:5]
-    return base + (lib, qname, start, end, flag)
+    return base + (lib, qname, start, end, bool(flag & 0x800))
 
 
 def _decode_records(dataset, contig: str, size: int, windows: list, binding: str, missing: list, region: tuple,
-                    base: tuple) -> tuple:
+                    base: tuple, listed_n: Optional[dict] = None) -> tuple:
     """Decode and compose the ``missing`` listed records (only them: by QNAME, over their own spans inside the
     windows) and cache each: ``(entries, truncated, scoped counts)``. A record of the batch that composed to nothing
     is cached with its reason: a hard-clipped supplementary whose tags cannot be scoped, a record the loader's
@@ -447,18 +448,22 @@ def _decode_records(dataset, contig: str, size: int, windows: list, binding: str
     for rec in missing:
         lib, qname, start, flag, end, hard = rec
         k = ident(lib, qname, start, end, flag & 0x800)
+        key = _record_key(base, rec)
         got = tuple(composed.get(k, ()))
+        n = int((listed_n or {}).get(key, 1))
+        if budget.truncated and len(got) < n:
+            continue   # the batch stopped before every record of this identity: decoded again by a later request
         reason = None
         if not got:
             if k in nbytes:
                 reason = "records_without_correspondence"
             elif hard and flag & 0x800 and hard_left > 0:
                 reason, hard_left = "hard_clipped_supplementary", hard_left - 1
-            elif budget.truncated:
-                continue   # never reached: decoded again by a later request
             else:
                 reason = "loader_filters"
-        entries[_record_key(base, rec)] = (got, nbytes.get(k, 0), reason, _entry_bytes(got))
+        # Records of the identity that composed to nothing while another one did (a duplicate the loader dropped).
+        partial = max(0, n - len(got)) if got else 0
+        entries[key] = (got, nbytes.get(k, 0), reason, _entry_bytes(got), partial if reason is None else max(0, n - 1))
     _records_put(entries)
     return entries, bool(budget.truncated), counts.get("hard_clipped_scoped")
 
@@ -577,6 +582,9 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
         kept = [k for k in recs or () if keeps(k[1], lvl)]
         base = (dataset.id, dataset_revision(dataset), binding["key"], contig, tuple(sorted(LOADER_OPTIONS.items())))
         keys = [_record_key(base, k) for k in kept]
+        listed_n: dict = {}
+        for key in keys:
+            listed_n[key] = listed_n.get(key, 0) + 1
         have = _records_get(keys)
         missing, seen = [], set()
         for k, key in zip(kept, keys):
@@ -593,25 +601,29 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
             region = (max(0, min([windows[0][0], *(k[2] for k in missing)]) - 1),
                       min(size + 1, max([windows[-1][1], *(k[4] for k in missing)]) + 1))
             t = time.perf_counter()
-            got, truncated, sc = _decode_records(dataset, contig, size + 1, windows, binding["key"], missing, region, base)
+            got, truncated, sc = _decode_records(dataset, contig, size + 1, windows, binding["key"], missing, region, base,
+                                                 listed_n)
             decode_ms += (time.perf_counter() - t) * 1000
             decoded_records += len(got)
             for kk, vv in (sc or {}).items():
                 scoped[kk] = scoped.get(kk, 0) + vv
             have.update(got)
-        return [(k, have[key]) for k, key in zip(kept, keys) if key in have], truncated, not missing
+        out, done = [], set()
+        for k, key in zip(kept, keys):
+            if key in have and key not in done:
+                done.add(key)
+                out.append((k, have[key]))
+        # Identities a truncated batch never reached (still uncached): left out of this answer and reported.
+        return out, truncated, not missing, len(set(keys)) - len(out)
 
     # One level for the whole request: sparser (by QNAME hash) until every path's reads fit the request's payload
     # budget together. A sparser level is a subset of the records already decoded: only the first pass decodes.
     while True:
         results = [run(j, recs, level) for j, recs in zip(jobs, listed)]
         total_bytes = 0
-        for got, _t, _c in results:
-            seen_keys = set()
+        for got, _t, _c, _u in results:
             for rec, entry in got:
-                if id(entry) not in seen_keys:
-                    seen_keys.add(id(entry))
-                    total_bytes += entry[1]
+                total_bytes += entry[1]
         truncated = any(r[1] for r in results)
         if (total_bytes > max_bytes or truncated) and level < MAX_LEVEL:
             level += 1
@@ -623,19 +635,19 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
     filtered = 0
     hide = {j[0].id: getattr(_settings(j[0]), "supplementary_display", "own_rows") == "hide" for j in jobs}
     over_budget = total_bytes > max_bytes   # even at the sparsest level: enforced below, reported
-    for job, (got, _t, _c) in zip(jobs, results):
+    unreached = sum(r[3] for r in results)
+    for job, (got, _t, _c, _u) in zip(jobs, results):
         dataset, _binding, _contig, windows, _size = job
-        done, seen = set(), set()
-        for rec, (rows, _nb, reason, _eb) in got:
-            if id(rows) in done and rows:
-                continue
-            done.add(id(rows))
+        seen = set()
+        for rec, (rows, _nb, reason, _eb, extra) in got:
+            # `extra`: further records of this identity with no row of their own (counted like the first one).
             if reason == "loader_filters":
-                filtered += 1
+                filtered += 1 + extra
                 continue
             if reason:
-                counts[reason] = counts.get(reason, 0) + 1
+                counts[reason] = counts.get(reason, 0) + 1 + extra
                 continue
+            filtered += extra
             for r in rows:
                 if r["sup"] and hide[dataset.id]:
                     counts["supplementary_hidden"] = counts.get("supplementary_hidden", 0) + 1
@@ -709,8 +721,8 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
                                       "record_collisions", "records_without_correspondence") if counts.get(k)}
     if filtered:
         omitted["loader_filters"] = filtered
-    if payload_dropped:
-        omitted["payload_limit"] = payload_dropped
+    if payload_dropped or unreached:
+        omitted["payload_limit"] = payload_dropped + unreached
     report = {
         "molecules": len(molecules), "records": len(reads), "marks": marks,
         "sampling": {"level": level, "fraction": 1.0 / (1 << level), "estimated": estimated if known else None,

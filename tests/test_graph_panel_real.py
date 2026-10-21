@@ -180,11 +180,15 @@ def test_a_missing_db_or_map_is_reported_not_queried(client, tmp_path, missing):
     reg = r.json()["registration"]
     target = os.path.join(pkg, missing)
     shutil.rmtree(target) if os.path.isdir(target) else os.remove(target)
+    # Inspection routes refuse it too (never answer from the registration of a package that is gone).
+    seq = client.post("/api/graph/sequence", json={"registration_id": reg["id"], "revisions": reg["revisions"],
+                                                   "binding": "mat", "interval": {"start": 94_676, "end": 94_736}})
+    assert seq.status_code == 409 and seq.json()["error"]["code"] == "package_changed"
+    # Then it is no longer registered at all: a topology query says so (the panel refreshes its status).
     out = query(client, reg, "gone-1", 97_000, 98_000)
-    assert out.status_code in (409, 410, 422, 503), out.text
+    assert out.status_code == 404, out.text
     err = out.json()["error"]
-    assert err["code"] and err["message"] and err["retryable"] is False
-    assert err["code"] == "package_changed"
+    assert err["code"] == "unknown_registration" and err["retryable"] is False
     # The status no longer lists it as usable; it names the package and why (the panel's relink form).
     status = client.get("/api/graph/status").json()
     assert reg["id"] not in [r["id"] for r in status["registrations"]]

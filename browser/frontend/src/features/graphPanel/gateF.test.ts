@@ -297,3 +297,81 @@ describe('Gate F: dm6 plus a generic strain (no MAT/PAT assumptions)', () => {
 
 // Keep the SceneHit / LayoutModel types referenced (fixtures above are typed through them).
 export type _T = SceneHit | LayoutModel;
+
+describe('Gate F review round 1', () => {
+  const s = setup(alu10k as Fixture);
+  const ctx = () => ({ ...ctxOf(s), scene: s.scene });
+
+  it('a shared-sequence click names the base and occurrence under the pointer (not the run\'s first visit)', () => {
+    const run = s.scene.hits.filter(h => h.payload.kind === 'run' && !h.within)
+      .sort((a, b) => (b.x1 - b.x0) - (a.x1 - a.x0))[0];
+    const y = (run.y0 + run.y1) / 2;
+    const left = selectionForHit(run, ctx(), y, run.x0 + 5)!;
+    const right = selectionForHit(run, ctx(), y, run.x1 - 5)!;
+    expect(left.target && right.target).toBeTruthy();
+    expect(right.target!.start).toBeGreaterThan(left.target!.start + 20);
+    expect(right.occurrence!.id === left.occurrence!.id ? right.occurrence!.offset > left.occurrence!.offset : true).toBe(true);
+  });
+
+  it('a click inside an allele family names the enclosing insertion and the clicked path\'s allele', () => {
+    const inner = s.scene.hits.filter(h => h.within && h.within.group.target?.start === 97_395);
+    expect(inner.length).toBeGreaterThan(0);
+    for (const h of inner) {
+      expect(isInsertionGroup(hitGroup(h))).toBe(true);
+      const sel = selectionForHit(h, ctx(), (h.y0 + h.y1) / 2, (h.x0 + h.x1) / 2)!;
+      expect(sel.kind).toBe('graph-difference');
+      expect(sel.target).toEqual({ start: 97_395, end: 97_395 });
+      if (sel.selectedAllele) expect(sel.alleles.some(a => a.id === sel.selectedAllele)).toBe(true);
+      expect(sourcePlacements(sel, s.topology).length).toBeGreaterThan(0);
+    }
+  });
+
+  it('an expanded small insertion leaves the marks (its own bubble), and is never clustered', () => {
+    const small = 50;
+    const opts = { width: 1400, gutter: 52, rightPad: 6, compression: 'log' as const, smallBp: small };
+    const plain = planScene(s.model, opts);
+    const marked = plain.top.find(t => t.kind === 'marked' && t.parts.some(p => p.kind === 'group' && isInsertionGroup(p)));
+    expect(marked).toBeTruthy();   // 1 bp insertions are marks at this threshold
+    const id = (marked as { parts: { kind: string; id: string }[] }).parts.find(p => p.kind === 'group' && isInsertionGroup(p as never))!.id;
+    const wide = planScene(s.model, { ...opts, expanded: new Set([id]) });
+    expect(wide.top.some(t => t.kind === 'group' && t.id === id)).toBe(true);
+    expect(wide.top.some(t => t.kind === 'marked' && t.parts.some(p => p.id === id))).toBe(false);
+    // Drawn as its own slot, wider than the mark it was.
+    const scene = buildScene(s.model, { ...opts, rulerHeight: 30, laneHeight: 28, laneGap: 4, reversed: false, colors: {}, plan: wide, expanded: new Set([id]) });
+    expect(scene.hits.some(h => h.payload.kind === 'slot' && h.payload.group.id === id)).toBe(true);
+  });
+
+  it('source panels come only from the selection\'s own graph panel bindings', async () => {
+    const { sourcePanelsFor } = await import('./navigation');
+    const { useGraphReadsStore } = await import('./graphReadsStore');
+    useBrowserStore.setState({ panels: [{ id: 'S', contentType: 'dataset', datasetId: 'lift',
+      liftLink: { id: 'k', datasetId: 'lift', liftPanelId: 'L', hap: 'h', hapLabel: 'MAT', contig: 'c_MAT', flip: false } }] } as never);
+    const binding = { dataset_id: 'lift', label: 'L', kind: 'lifted' as const, revision: 'r', paths: { mat: 'c_MAT' }, problems: [], libraries: 1 };
+    useGraphReadsStore.setState({ byPanel: { other: { drawn: ['lift'], bindings: [binding] } } });
+    expect(sourcePanelsFor('mat', 'mine')).toEqual([]);
+    useGraphReadsStore.setState({ byPanel: { mine: { drawn: ['lift'], bindings: [binding] } } });
+    expect(sourcePanelsFor('mat', 'mine').map(t => t.panelId)).toEqual(['S']);
+    useGraphReadsStore.setState({ byPanel: {} });
+    useBrowserStore.setState({ panels: [] } as never);
+  });
+
+  it('a clamped zoom schedules no correction; a token never outlives a newer move', () => {
+    const st = { ...s.state, packageRevision: 'p' } as GraphViewState;
+    const v = { contig: 'chr3', start: 0, end: 50_000 };
+    const t = navigationToken('zp', st, v);
+    bumpNavigation('zp');
+    expect(tokenCurrent(t, st, v)).toBe(false);
+  });
+});
+
+describe('dataset adoption waits for a session restore', () => {
+  it('a restore in flight blocks adoption into an empty page', async () => {
+    const { duringSessionRestore, sessionRestoresInFlight } = await import('../../utils/sessionRestore');
+    let release: () => void = () => undefined;
+    const done = duringSessionRestore(() => new Promise<void>(r => { release = r; }));
+    expect(sessionRestoresInFlight()).toBe(1);
+    release();
+    await done;
+    expect(sessionRestoresInFlight()).toBe(0);
+  });
+});

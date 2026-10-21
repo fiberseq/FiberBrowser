@@ -209,6 +209,12 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         const error: GraphApiError = err instanceof GraphRequestError ? err.error : { code: 'network', message: String(err?.message ?? err), retryable: true };
         trace.error = error.code;
         setQuery(q => ({ ...q, loading: false, error, generation }));
+        // The package changed, went missing or is no longer registered: refresh the status, so the panel shows
+        // the unavailable view (with its relink) instead of the last topology.
+        if (['package_changed', 'unknown_registration', 'stale_revision'].includes(error.code)) {
+          setQuery({ response: null, loading: false, error, generation });
+          void useGraphStatusStore.getState().load(true);
+        }
       });
     }, DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
@@ -231,12 +237,14 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   const serverDatasets = useServerDatasetsStore(s => s.key);
   const datasetLabels = useBrowserStore(useShallow(s => Object.fromEntries(s.datasets.map(d => [d.id, d.label ?? d.id]))));
   const [readBindings, setReadBindings] = useState<GraphReadBinding[]>([]);
+  // Bumped when a reads request names a dataset revision the server no longer has: the bindings are read again.
+  const [bindingsToken, setBindingsToken] = useState(0);
   useEffect(() => {
     if (!reg) { setReadBindings([]); return; }
     const controller = new AbortController();
     getReadBindings(reg.id, controller.signal).then(setReadBindings).catch(() => { if (!controller.signal.aborted) setReadBindings([]); });
     return () => controller.abort();
-  }, [reg?.id, datasetKey, serverDatasets]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [reg?.id, datasetKey, serverDatasets, bindingsToken]); // eslint-disable-line react-hooks/exhaustive-deps
   // A read binding saved with the view names its dataset revision (files and map): a dataset that changed since is
   // not drawn until it is chosen again in the Reads menu (restore never re-binds another revision silently).
   const changedBindings = useMemo(() => readBindings.filter(b => readSettings.bound?.some(x => x.dataset_id === b.dataset_id && x.revision !== b.revision)),
@@ -273,6 +281,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
           const error: GraphApiError = err instanceof GraphRequestError ? err.error : { code: 'network', message: String(err?.message ?? err), retryable: true };
           // A failed load leaves no reads of another window on screen.
           setReads({ response: null, loading: false, error });
+          if (error.code === 'stale_revision' || error.code === 'unknown_dataset') setBindingsToken(n => n + 1);
         });
     }, READS_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
@@ -297,7 +306,9 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   const rowsPerLane = readSettings.maxRowsPerLane ?? DEFAULT_ROWS_PER_LANE;
   const activeDatasetIds = useMemo(() => new Set(activeBindings.map(b => b.dataset_id)), [activeBindings]);
   // The reads this panel draws and its bindings, for the shared molecule hover and "Show source span".
-  const drawnIdsKey = [...activeDatasetIds].sort().join(',');
+  // Only datasets with reads on a path this panel shows count as drawn here.
+  const drawnIdsKey = activeBindings.filter(b => Object.keys(b.paths).some(k => state?.selectedPathKeys.includes(k)))
+    .map(b => b.dataset_id).sort().join(',');
   const anyDrawn = Boolean(reads.response);
   useEffect(() => {
     if (!panelId) return;
@@ -539,7 +550,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     }
     if (!transform) return;
     const inData = x >= transform.left && x <= transform.left + transform.width;
-    if (!scene || !model || !inData || y < 0 || y > canvasHeight) { setCursor(null); return; }
+    if (!scene || !model || !inData || y < 0 || y > canvasHeight) { setCursor(null); if (panelId) useLiftHover.getState().clear(panelId); return; }
     const sx = x - sceneOffset;
     const readHit = readHitsRef.current.find(h => sx >= h.x0 && sx <= h.x1 && y >= h.y0 && y <= h.y1);
     if (readHit && panelId) {
@@ -577,13 +588,14 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       const r = m.read;
       if (spans.some(s => s.path === r.b && r.s < Math.max(s.span.end, s.span.start + 1) && r.e > s.span.start)) keys.add(moleculeKey(r.d, r.lib, r.q));
     }
-    return { datasetIds: [...activeDatasetIds], molecules: keys.size };
+    return { datasetIds: [...activeDatasetIds], molecules: keys.size,
+      revisions: Object.fromEntries(activeBindings.map(b => [b.dataset_id, b.revision])) };
   }, [drawnMolecules, activeBindings, activeDatasetIds]);
   const selectionAt = (x: number, y: number): { sel: GraphSelection; hit: NonNullable<ReturnType<typeof sceneHitAt>> } | null => {
     if (!scene || !model || !reg || !state || !panelId) return null;
     const hit = sceneHitAt(scene, x - sceneOffset, y);
     if (!hit) return null;
-    const sel = selectionForHit(hit, { panelId, reg, state, model, readsAt }, y);
+    const sel = selectionForHit(hit, { panelId, reg, state, model, readsAt, scene }, y, x - sceneOffset);
     if (!sel) return null;
     return { sel: { ...sel, placements: sourcePlacements(sel, response?.result ?? null) }, hit };
   };
@@ -632,24 +644,33 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   useEffect(() => {
     const c = correction.current;
     if (!c || !scene || !response || !viewport || !state || !panelId || !target) return;
+    // Any newer move, link or package change makes it stale: dropped at once, not kept for a later scene.
+    if (!tokenCurrent(c.token, state, viewport)) { correction.current = null; return; }
     if (response.result.interval.start !== viewport.start || response.result.interval.end !== viewport.end) return;
     correction.current = null;
-    if (!tokenCurrent(c.token, state, viewport)) return;
     const x = xForTarget(scene.targetMap, c.anchor, 'start', reversed);
     if (x == null || !transform) return;
     const dx = c.px - x;
     if (Math.abs(dx) < 2) return;
     const deltaBp = Math.round((reversed ? dx : -dx) / Math.max(1e-9, bpScale(transform)));
     if (!deltaBp) return;
-    commitViewport(panViewport(viewport, deltaBp, target.size, target.size_inferred), true);
+    const corrected = panViewport(viewport, deltaBp, target.size, target.size_inferred);
+    if (following) navigateGraph(panelId, corrected); else commitViewport(corrected, true);
   }, [scene]); // eslint-disable-line react-hooks/exhaustive-deps
   const zoomAround = (px: number, factor: number) => {
     if (!transform || !viewport || !target || !panelId || !state) return;
     const anchor = anchorAt(px);
-    const next = zoomViewport(viewport, factor, anchor, target.size, target.size_inferred, screenFraction(px));
-    commitViewport(next, true);
+    const next = clampViewport(zoomViewport(viewport, factor, anchor, target.size, target.size_inferred, screenFraction(px)), target.size, target.size_inferred);
+    correction.current = null;
+    if (next.start === viewport.start && next.end === viewport.end) return;   // clamped: nothing moves, nothing to correct
+    // Following: the initiator zooms (its own frame) and the graph follows it; on its own: only the graph.
+    if (following) navigateGraph(panelId, next); else commitViewport(next, true);
+    // The anchor's target base goes back under the pointer once the new scene is drawn; an insertion slot has no
+    // target base to anchor (its boundary would jump the slot's edge), so none is scheduled there.
+    const t = scene ? targetAtX(scene.targetMap, px - sceneOffset) : null;
+    if (t?.boundary) return;
     const after = useBrowserStore.getState().panels.find(p => p.id === panelId)?.graphView;
-    correction.current = after ? { token: navigationToken(panelId, after, clampViewport(next, target.size, target.size_inferred)), anchor, px } : null;
+    correction.current = after ? { token: navigationToken(panelId, after, next), anchor, px } : null;
   };
   /** Where x is across the data area (mirrored when reversed): the zoomed window keeps the anchor there. The new
    * layout is nonlinear too, so this is close, not exact (exact anchoring is the Phase F navigation adapter). */
@@ -710,7 +731,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       menuPlacements.forEach((pl, i) => {
         const many = (byPath.get(pl.path)?.length ?? 0) > 1;
         const what = `${laneLabelOf(pl.path)} ${pl.span.start.toLocaleString('en-US')}-${pl.span.end.toLocaleString('en-US')}${pl.note ? ` (${pl.note})` : ''}`;
-        for (const t of sourcePanelsFor(pl.path)) sub.push({ kind: 'item', action: `src:panel:${i}:${t.panelId}`, icon: 'target', label: `${what} → ${t.label}` });
+        for (const t of sourcePanelsFor(pl.path, panelId!)) sub.push({ kind: 'item', action: `src:panel:${i}:${t.panelId}`, icon: 'target', label: `${what} → ${t.label}` });
         sub.push({ kind: 'item', action: `src:path:${i}`, icon: 'panel:graph-view', label: `${what} → a graph view on the path`,
           title: many ? 'More than one placement of this sequence on the path: each is listed' : 'Its own coordinates; no BAM needed' });
       });
@@ -806,7 +827,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         const [, how, idx, into] = action.split(':');
         const pl = menuPlacements[Number(idx)];
         if (!pl) return;
-        const t = how === 'panel' ? sourcePanelsFor(pl.path).find(x => x.panelId === into) ?? null : null;
+        const t = how === 'panel' ? sourcePanelsFor(pl.path, panelId!).find(x => x.panelId === into) ?? null : null;
         showSourceSpan(panelId, pl, t);
         return;
       }
