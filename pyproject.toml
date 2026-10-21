@@ -77,7 +77,7 @@ plots = ["matplotlib>=3.5", "seaborn>=0.11"]
 pipeline = ["mappy>=2.24"]
 # The graph view's native helper (fiberbrowser-graph), a platform wheel built by packaging/graph-native/build_wheel.py.
 # Kept out of [all] until it is published for every platform (DESIGN_GRAPH_PANEL.md Gate G).
-graph = ["fiberbrowser-graph-native==0.4.0"]
+graph = ["fiberbrowser-graph-native==0.5.0"]
 all = [
     "fiberbrowser[app,copilot,primers,contact-maps,s3,umap,plots,pipeline]",
 ]
