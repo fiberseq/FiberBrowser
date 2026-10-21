@@ -759,9 +759,18 @@ def test_a_molecules_strand_is_resolved_as_linear_cohorts_resolve_it(env):
     assert not any(k.startswith("_ds") for r in out["reads"] for k in r)     # evidence never on the wire
     # Inferred: one C>T mark on the primary, three G>A on its supplementary: G>A for both (marks pooled).
     base = dict(d="x", lib=0, q="m", b="mat")
-    rows = [dict(base, k="1", rec="a", sup=False, _dsc=[1, 0], ds="CT"), dict(base, k="2", rec="b", sup=True, _dsc=[0, 3], ds="GA")]
+    rows = [dict(base, k="1", rec="a", sup=False, _dse=[[10, 1]]), dict(base, k="2", rec="b", sup=True, _dse=[[50, 0], [60, 0], [70, 0]])]
     gr.resolve_molecule_strands(rows)
-    assert [r["ds"] for r in rows] == ["GA", "GA"]
-    tie = [dict(base, k="1", rec="a", sup=False, _dsc=[2, 2])]
+    assert [r["ds"] for r in rows] == ["GA", "GA"] and not any("_dse" in r for r in rows)
+    tie = [dict(base, k="1", rec="a", sup=False, _dse=[[1, 1], [2, 1], [3, 0], [4, 0]])]
     gr.resolve_molecule_strands(tie)
     assert "ds" not in tie[0]
+    # Overlapping records repeat marks: each counts once (2 C>T, 3 G>A: G>A).
+    dup = [dict(base, k="1", rec="a", sup=False, _dse=[[1, 1], [2, 1], [5, 0], [6, 0], [7, 0]]),
+           dict(base, k="2", rec="b", sup=True, _dse=[[1, 1], [2, 1]])]
+    gr.resolve_molecule_strands(dup)
+    assert [r["ds"] for r in dup] == ["GA", "GA"]
+    # A hidden supplementary's evidence still decides (it is not drawn).
+    shown = [dict(base, k="1", rec="a", sup=False, _dse=[[10, 1]])]
+    gr.resolve_molecule_strands(shown, evidence_only=[dict(base, k="2", rec="b", sup=True, _dse=[[50, 0], [60, 0], [70, 0]])])
+    assert shown[0]["ds"] == "GA"

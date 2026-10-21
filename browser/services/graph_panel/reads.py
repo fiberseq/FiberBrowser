@@ -64,8 +64,8 @@ LOADER_OPTIONS = dict(include_methylation=True, ml_threshold=125, include_layers
                       hide_terminal_gaps=True, include_cigar=True, include_duplicates=False, sv_min_len=50)
 _LAYERS = ("nuc", "tf", "msp")
 # The cached rows' wire form: 2 adds the identities (aid, rk, hap) and the map's molecule groups (graph primary G0);
-# 3 the DAF strand of DAF-seq records (G8; 4: its evidence, resolved per molecule).
-WIRE_VERSION = 4
+# 3 the DAF strand of DAF-seq records (G8; 5: its evidence by mark, resolved per molecule).
+WIRE_VERSION = 5
 
 
 class ReadsError(Exception):
@@ -333,35 +333,39 @@ def compact_row(row: dict, origin: int, dataset_id: str, binding: str, windows: 
     explicit = row.get("strand")
     if explicit in ("CT", "GA", ".") and not row.get("_fiberbrowser_inferred_strand"):
         out["_dsx"] = explicit
-    ct = ga = 0
-    for event in row.get("deam") or ():
-        kind = event[1] if isinstance(event, (list, tuple)) and len(event) > 1 else None
-        ct += kind == 1
-        ga += kind == 0
-    if ct or ga:
-        out["_dsc"] = [ct, ga]
+    # (Each mark by identity: records of one molecule that overlap repeat marks, which count once, as linear.)
+    marks = [list(e) for e in row.get("deam") or () if isinstance(e, (list, tuple)) and len(e) > 1 and e[1] in (0, 1)]
+    if marks:
+        out["_dse"] = marks
     return out
 
 
-def resolve_molecule_strands(reads: list) -> None:
-    """Each molecule's DAF strand on every one of its rows (``ds``), as linear cohorts resolve it: the first
-    explicit call in primary-first order (an explicit '.' means none), else the majority of the molecule's marks
-    (a tie: none). The internal evidence fields are removed. ``reads`` are the response's copies."""
+def resolve_molecule_strands(reads: list, evidence_only: Optional[list] = None) -> None:
+    """Each molecule's DAF strand on every one of its rows (``ds``), as linear cohorts resolve it
+    (lift/cohort.py prepare_lift_cohort): the first explicit call in primary-first order (an explicit '.' means
+    none), else the majority of the molecule's distinct marks (a tie: none). ``evidence_only``: rows not drawn
+    (hidden supplementaries) whose evidence still counts. The internal evidence fields are removed. ``reads`` are
+    the response's copies."""
     by_molecule: dict = {}
     for r in reads:
         by_molecule.setdefault((r["d"], r["lib"], r["q"]), []).append(r)
-    for rows in by_molecule.values():
-        rows_sorted = sorted(rows, key=lambda r: (bool(r["sup"]), str(r.get("rec")), r["k"]))
+    extra: dict = {}
+    for r in evidence_only or ():
+        extra.setdefault((r["d"], r["lib"], r["q"]), []).append(r)
+    for m, rows in by_molecule.items():
+        evidence = rows + extra.get(m, [])
+        rows_sorted = sorted(evidence, key=lambda r: (bool(r["sup"]), str(r.get("rec")), r["k"]))
         call = next((r["_dsx"] for r in rows_sorted if r.get("_dsx")), None)
         if call is None:
-            ct = sum((r.get("_dsc") or (0, 0))[0] for r in rows)
-            ga = sum((r.get("_dsc") or (0, 0))[1] for r in rows)
+            marks = {tuple(e) for r in evidence for e in r.get("_dse") or ()}
+            ct = sum(1 for e in marks if e[1] == 1)
+            ga = sum(1 for e in marks if e[1] == 0)
             call = None if ct == ga else ("CT" if ct > ga else "GA")
         elif call == ".":
             call = None
         for r in rows:
             r.pop("_dsx", None)
-            r.pop("_dsc", None)
+            r.pop("_dse", None)
             if call:
                 r["ds"] = call
             else:
@@ -899,6 +903,7 @@ def _load(state, reg, body: dict, *, max_molecules: int, max_marks: int, max_byt
     hide = {j[0].id: getattr(_settings(j[0]), "supplementary_display", "own_rows") == "hide" for j in jobs}
     over_budget = total_bytes > max_bytes   # even at the sparsest level: enforced below, reported
     unreached = sum(r[3] for r in results)
+    hidden_rows: list = []
     for job, (got, _t, _c, _u) in zip(jobs, results):
         dataset, _binding, _contig, windows, _size = job
         seen = set()
@@ -914,6 +919,7 @@ def _load(state, reg, body: dict, *, max_molecules: int, max_marks: int, max_byt
             for r in rows:
                 if r["sup"] and hide[dataset.id]:
                     counts["supplementary_hidden"] = counts.get("supplementary_hidden", 0) + 1
+                    hidden_rows.append(r)   # its strand evidence still counts for its molecule (as linear)
                     continue
                 if r["k"] in seen:
                     counts["record_collisions"] = counts.get("record_collisions", 0) + 1
@@ -923,7 +929,7 @@ def _load(state, reg, body: dict, *, max_molecules: int, max_marks: int, max_byt
     if not_loaded:
         counts["supplementary_not_loaded"] = not_loaded
     # A molecule's DAF strand, as the linear rows resolve it (Codex G8 review): on the response's copies.
-    resolve_molecule_strands(reads)
+    resolve_molecule_strands(reads, evidence_only=[dict(r) for r in hidden_rows])
     # Density strips (§6.2 L2): every row decoded at the band's level, before the cap and the mark budget.
     strips = []
     span_bp = sum(b - a for j in jobs for a, b in j[3]) / max(1, len(jobs))
