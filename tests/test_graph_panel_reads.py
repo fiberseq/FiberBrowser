@@ -745,3 +745,23 @@ def test_the_payload_trim_keeps_a_band_that_fits_its_share(env, monkeypatch):
     assert bands["pat"]["molecules"] == 1
     assert [r["q"] for r in out["reads"] if r["b"] == "pat"] == ["pat_only"]
     assert out["report"]["omitted"].get("payload_limit", 0) > 0     # MAT's pins over its share: reported
+
+
+def test_a_molecules_strand_is_resolved_as_linear_cohorts_resolve_it(env):
+    """Codex G8 review: the first explicit call, primary first (an explicit '.' means none and wins over a
+    supplementary's call); else the majority of the molecule's marks across its records."""
+    daf = write_bam(env.tmp / "dafdot.bam", lambda h: [
+        make_record(h, "dot", MAT, 100, "500M", tags=[("ns", _u32([50])), ("nl", _u32([150])), ("st", ".")]),
+        make_record(h, "dot", MAT, 900, "300M", flag=2048, tags=[("ns", _u32([50])), ("nl", _u32([150])), ("st", "GA")])])
+    did = _add_lifted(env, paths=[daf], dataset_id="dafdot")
+    out = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 0, "end": 1500}]}]).json()
+    assert [r.get("ds") for r in out["reads"] if r["q"] == "dot"] == [None, None]
+    assert not any(k.startswith("_ds") for r in out["reads"] for k in r)     # evidence never on the wire
+    # Inferred: one C>T mark on the primary, three G>A on its supplementary: G>A for both (marks pooled).
+    base = dict(d="x", lib=0, q="m", b="mat")
+    rows = [dict(base, k="1", rec="a", sup=False, _dsc=[1, 0], ds="CT"), dict(base, k="2", rec="b", sup=True, _dsc=[0, 3], ds="GA")]
+    gr.resolve_molecule_strands(rows)
+    assert [r["ds"] for r in rows] == ["GA", "GA"]
+    tie = [dict(base, k="1", rec="a", sup=False, _dsc=[2, 2])]
+    gr.resolve_molecule_strands(tie)
+    assert "ds" not in tie[0]

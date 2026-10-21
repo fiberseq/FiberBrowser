@@ -64,8 +64,8 @@ LOADER_OPTIONS = dict(include_methylation=True, ml_threshold=125, include_layers
                       hide_terminal_gaps=True, include_cigar=True, include_duplicates=False, sv_min_len=50)
 _LAYERS = ("nuc", "tf", "msp")
 # The cached rows' wire form: 2 adds the identities (aid, rk, hap) and the map's molecule groups (graph primary G0);
-# 3 the DAF strand (ds: CT / GA) of DAF-seq records (G8).
-WIRE_VERSION = 3
+# 3 the DAF strand of DAF-seq records (G8; 4: its evidence, resolved per molecule).
+WIRE_VERSION = 4
 
 
 class ReadsError(Exception):
@@ -327,13 +327,45 @@ def compact_row(row: dict, origin: int, dataset_id: str, binding: str, windows: 
     m6a = [p for p in m6a if inside(p)]
     if m6a:
         out["m6a"] = m6a
-    # A DAF-seq record's strand (CT / GA: its st:Z tag, else its deamination marks), as linear rows read it, so a
-    # one-strand member's sub-band shows only its strand (G8).
-    from services.read_strand import read_strand
-    daf = read_strand(row)
-    if daf:
-        out["ds"] = daf
+    # A DAF-seq record's strand evidence (G8), resolved over its molecule when a response is assembled, as linear
+    # cohorts resolve it (lift/cohort.py prepare_lift_cohort): its explicit call (st:Z: CT, GA or '.', unknown) and
+    # its deamination marks (C>T, G>A counts). Internal fields, dropped from the wire; the resolved strand is ``ds``.
+    explicit = row.get("strand")
+    if explicit in ("CT", "GA", ".") and not row.get("_fiberbrowser_inferred_strand"):
+        out["_dsx"] = explicit
+    ct = ga = 0
+    for event in row.get("deam") or ():
+        kind = event[1] if isinstance(event, (list, tuple)) and len(event) > 1 else None
+        ct += kind == 1
+        ga += kind == 0
+    if ct or ga:
+        out["_dsc"] = [ct, ga]
     return out
+
+
+def resolve_molecule_strands(reads: list) -> None:
+    """Each molecule's DAF strand on every one of its rows (``ds``), as linear cohorts resolve it: the first
+    explicit call in primary-first order (an explicit '.' means none), else the majority of the molecule's marks
+    (a tie: none). The internal evidence fields are removed. ``reads`` are the response's copies."""
+    by_molecule: dict = {}
+    for r in reads:
+        by_molecule.setdefault((r["d"], r["lib"], r["q"]), []).append(r)
+    for rows in by_molecule.values():
+        rows_sorted = sorted(rows, key=lambda r: (bool(r["sup"]), str(r.get("rec")), r["k"]))
+        call = next((r["_dsx"] for r in rows_sorted if r.get("_dsx")), None)
+        if call is None:
+            ct = sum((r.get("_dsc") or (0, 0))[0] for r in rows)
+            ga = sum((r.get("_dsc") or (0, 0))[1] for r in rows)
+            call = None if ct == ga else ("CT" if ct > ga else "GA")
+        elif call == ".":
+            call = None
+        for r in rows:
+            r.pop("_dsx", None)
+            r.pop("_dsc", None)
+            if call:
+                r["ds"] = call
+            else:
+                r.pop("ds", None)
 
 
 def marks_of(read: dict) -> int:
@@ -890,20 +922,8 @@ def _load(state, reg, body: dict, *, max_molecules: int, max_marks: int, max_byt
                 reads.append(clip_to_windows(r, windows))   # copies: the cached read is never changed
     if not_loaded:
         counts["supplementary_not_loaded"] = not_loaded
-    # A molecule's DAF strand, as the linear rows resolve it (Codex G8 review): a record without a call of its own (a
-    # supplementary with no st:Z or marks there) takes its molecule's, its primary record's first. The cached rows are
-    # never changed (these are copies).
-    by_molecule: dict = {}
-    for r in reads:
-        if r.get("ds"):
-            m = (r["d"], r["lib"], r["q"])
-            if m not in by_molecule or (not r["sup"] and by_molecule[m][1]):
-                by_molecule[m] = (r["ds"], r["sup"])
-    for r in reads:
-        if not r.get("ds"):
-            got = by_molecule.get((r["d"], r["lib"], r["q"]))
-            if got:
-                r["ds"] = got[0]
+    # A molecule's DAF strand, as the linear rows resolve it (Codex G8 review): on the response's copies.
+    resolve_molecule_strands(reads)
     # Density strips (§6.2 L2): every row decoded at the band's level, before the cap and the mark budget.
     strips = []
     span_bp = sum(b - a for j in jobs for a, b in j[3]) / max(1, len(jobs))
