@@ -31,14 +31,20 @@ export const CLUSTER_COLORS = [
 ];
 export const UNASSIGNED_CLUSTER_ID = -1;
 export const UNASSIGNED_CLUSTER_COLOR = '#9ca3af';
+/** A graph run with no shared feature (DESIGN_GRAPH_PRIMARY §2.6 item 4): rows of a path that does not carry the
+ * regions' sequence. Shown, never hidden; a warm grey apart from Unassigned's. */
+export const NOT_CARRIER_CLUSTER_ID = -2;
+export const NOT_CARRIER_CLUSTER_COLOR = '#c8b48f';
 
 export function getClusterColor(cluster: number): string {
   if (cluster === UNASSIGNED_CLUSTER_ID) return UNASSIGNED_CLUSTER_COLOR;
+  if (cluster === NOT_CARRIER_CLUSTER_ID) return NOT_CARRIER_CLUSTER_COLOR;
   return CLUSTER_COLORS[((cluster % CLUSTER_COLORS.length) + CLUSTER_COLORS.length) % CLUSTER_COLORS.length];
 }
 
 export function getClusterLabel(cluster: number, compact = false): string {
   if (cluster === UNASSIGNED_CLUSTER_ID) return compact ? 'Unassigned' : 'Unassigned (no overlap)';
+  if (cluster === NOT_CARRIER_CLUSTER_ID) return compact ? 'Not a carrier' : "Not a carrier (of the regions' sequence)";
   // A group source's own name (the SV allele split's "Carriers" ...).
   const named = clusterGroupLabel(cluster);
   if (named) return named;

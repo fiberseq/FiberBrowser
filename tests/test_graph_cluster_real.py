@@ -301,3 +301,12 @@ def test_a_run_with_no_shared_feature_says_who_is_not_a_carrier(helper_env, alu_
     [out] = _graph(alu_state, _body([MAT, PAT, NAT], regions=PEAKS[:2]))
     assert out["results"]["obs-PAT"]["left_out"] == "not a carrier of the regions' sequence"
     assert out["results"]["obs-MAT"]["assignments"] and "left_out" not in out["results"]["obs-MAT"]
+    # Graph features (item 6): the non-carrier's rows at the regions are labelled "not a carrier" (-2), shown, as
+    # graph rows (their aid) so its band and pop-outs draw them; dynamic assignment gives later rows the same label.
+    pat = out["results"]["obs-PAT"]
+    assert pat["not_carrier"] and pat["assignments"] and set(pat["assignments"].values()) == {analysis.NOT_CARRIER}
+    assert all(k.endswith('"primary"]') for k in pat["assignments"])
+    assert not set(pat["assignments"]) & set(out["results"]["obs-MAT"]["assignments"])
+    model = dict(stages=out["stages"], label_ids=out["label_ids"], settings=out["settings"], revisions=out["revisions"])
+    [again] = _graph(alu_state, {**_body([MAT, PAT, NAT], regions=PEAKS[:2]), "run": model}, mode="assign")
+    assert again["results"]["obs-PAT"]["assignments"] == pat["assignments"]

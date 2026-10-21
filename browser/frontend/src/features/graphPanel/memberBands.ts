@@ -13,7 +13,7 @@ import type { GraphRead } from './types';
 import type { PackedLane, PlacedMolecule } from './readGeometry';
 import { idSetHas, orderIndex, qnameOfId, recordValueIndex } from '../../utils/recordKeys';
 import { branchScopesPanel, readIdSetForClusterRenderScope } from '../../utils/readScopes';
-import { UNASSIGNED_CLUSTER_ID } from '../../components/tracks/read-track/constants';
+import { NOT_CARRIER_CLUSTER_ID, UNASSIGNED_CLUSTER_ID } from '../../components/tracks/read-track/constants';
 
 export interface BandMember {
   panelId: string;
@@ -175,8 +175,9 @@ export function packMemberBands(molecules: readonly PlacedMolecule[], members: r
           const g = groups.get(c);
           if (g) g.push(m); else groups.set(c, [m]);
         }
-        const un = UNASSIGNED_CLUSTER_ID;
-        const keys = [...groups.keys()].sort((a, b) => (a === un ? 1 : 0) - (b === un ? 1 : 0)
+        // (Not a carrier, then Unassigned, last.)
+        const last = (c: number) => (c === UNASSIGNED_CLUSTER_ID ? 2 : c === NOT_CARRIER_CLUSTER_ID ? 1 : 0);
+        const keys = [...groups.keys()].sort((a, b) => last(a) - last(b)
           || (rankOf.get(a) ?? 1e9) - (rankOf.get(b) ?? 1e9) || a - b);
         packed = { rows: [], hidden: 0, clusters: [] };
         for (const c of keys) {

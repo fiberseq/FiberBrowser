@@ -31,7 +31,7 @@ import { idSetHas, qnameOfId, recordKey } from '../../utils/recordKeys';
 import { seedHistoryBaseline } from '../../stores/historySlice';
 import { useRunResultStore } from '../../stores/runResultStore';
 import { sortStateStillCurrent } from '../../utils/sortScope';
-import { UNASSIGNED_CLUSTER_ID } from '../../components/tracks/read-track/constants';
+import { NOT_CARRIER_CLUSTER_ID, UNASSIGNED_CLUSTER_ID } from '../../components/tracks/read-track/constants';
 import { isHost, hostOf, membersOf } from './hostMode';
 import { hostShowsGraph } from './hostHeader';
 import { useGraphBindingsStore } from './bindingsStore';
@@ -251,12 +251,14 @@ export async function runGraphCluster(s: BrowserState, basis: ClusterBasis,
   if (plan.destinations.some(d => !sortStateStillCurrent(s, now, d.stateKey)) || now.activeClusterTreeNodeId !== s.activeClusterTreeNodeId)
     throw new Error('The filters, branch or clusters changed while clustering. Cluster again here.');
   commitGraphRun(s, plan, response);
-  const total = Object.values(response.results).reduce((n, r) => n + Object.keys(r.assignments ?? {}).length, 0);
+  const total = Object.values(response.results).reduce((n, r) => n + Object.values(r.assignments ?? {}).filter(c => c !== NOT_CARRIER_CLUSTER_ID).length, 0);
+  const notCarriers = Object.values(response.results).reduce((n, r) => n + Object.values(r.assignments ?? {}).filter(c => c === NOT_CARRIER_CLUSTER_ID).length, 0);
   const names = Object.keys(response.names ?? {}).length;
   const left = Object.keys(response.columns.left_out ?? {}).length + plan.leftOut.length;
   const shared = response.columns.shared.length;
   const text = total
     ? `Clustered ${total.toLocaleString()} reads of ${plan.observations.length} path${plan.observations.length === 1 ? '' : 's'} on graph columns (${shared} shared feature${shared === 1 ? '' : 's'}${names ? `, ${names} refined within carriers` : ''}).`
+      + (notCarriers ? ` ${notCarriers.toLocaleString()} read${notCarriers === 1 ? '' : 's'} of paths without the regions' sequence shown as Not a carrier.` : '')
       + (left ? ` ${left} left out; see Cluster detail.` : '')
     : 'No reads covered the selected regions on every path. Check the regions and filters.';
   report(!total ? 'error' : left ? 'note' : 'done', text, plan.destinations.map(d => d.panelId));
@@ -352,6 +354,8 @@ export function commitGraphRun(s: BrowserState, plan: GraphClusterPlan, response
   };
   run.graph!.targetContig = plan.targetContig;
   const c = response.columns;
+  const notCarrierObs = Object.entries(response.results).filter(([, r]) => (r as { not_carrier?: boolean }).not_carrier)
+    .map(([oid, r]) => `${obsLabel.get(oid)?.label ?? oid} (${Object.keys(r.assignments ?? {}).length})`);
   const leftOut = [...Object.entries(c.left_out ?? {}).map(([oid, why]) => `${obsLabel.get(oid)?.label ?? oid}: ${why}`),
     ...plan.leftOut.map(l => `${l.reason}`)];
   run.details = `Clustered on graph node columns at ${plan.regions.length} region${plan.regions.length === 1 ? '' : 's'} of ${plan.target}: `
@@ -360,6 +364,7 @@ export function commitGraphRun(s: BrowserState, plan: GraphClusterPlan, response
     + (c.carrier_sets.length ? `Refined within carriers on ${c.carrier_sets.map(cs => `${partsText(cs.features)} (${cs.carriers.map(o => obsLabel.get(o)?.label ?? o).join(', ')})`).join('; ')}; non-carriers keep their labels. ` : '')
     + (c.dropped?.length ? `${c.dropped.length} small path-specific part${c.dropped.length === 1 ? '' : 's'} not used. ` : '')
     + (leftOut.length ? `Left out: ${leftOut.join('; ')}. ` : '')
+    + (notCarrierObs.length ? `Not a carrier (shown, not fitted): ${notCarrierObs.join('; ')}. ` : '')
     + (plan.offContig ? `${plan.offContig} selected region${plan.offContig === 1 ? ' is' : 's are'} not on the graph's target and were not used. ` : '')
     + 'Each path is fitted once; pop-outs and other panels of the same path show the same labels.';
   // The tree node its labels are (dynamic assignment applies only while it is the active node).

@@ -488,6 +488,43 @@ def _refine(state, spec, plan, labels, settings, observed, cache, sets_from, ech
     return stages, refinements, seen
 
 
+NOT_CARRIER = -2
+
+
+def _not_carrier_labels(state, spec, regions, oid: str, cache: dict) -> dict:
+    """A non-carrier's rows at the regions, labelled "not a carrier" (-2; DESIGN_GRAPH_PRIMARY §2.6 item 4; graph
+    features): a run with no shared feature fits its carriers only, and the other observations' rows that cover the
+    regions where their own path runs (the target walk they carry there) are shown as not carrying the regions'
+    sequence, not as unlabelled. Their read scope and strand apply, as a fit's would."""
+    from services.read_selection import read_matches_id_filter, with_graph_record_keys
+    from services.read_strand import filter_reads_by_strand, strand_calls
+    ob = next(o for o in spec["observations"] if o["id"] == oid)
+    out: dict = {}
+    for rc in regions:
+        carried = rc.carried.get(oid) or {}
+        if not carried:
+            continue
+        if ob["kind"] == "graph":
+            gs = [g for g, _rev in carried.values()]
+            rows, _desc = graph_window_rows(state, GraphSource(ob["dataset_id"], ob["binding"], ob["contig"]),
+                                            min(gs), max(gs) + 1, cache)
+        else:
+            from services.analysis_query import AnalysisReadQuery
+            query = AnalysisReadQuery.from_request(
+                state, chrom=ob["chrom"], start=rc.start, end=rc.end, dataset_ids=[ob["dataset_id"]], capability="clustering",
+                include_methylation=bool(ob.get("strand")), include_layers=False,
+                **({"lift_hap_by_dataset": {ob["dataset_id"]: ob["lift_hap"]}} if ob.get("lift_hap") else {}))
+            rows = query.build_working_set(state, ob["dataset_id"]).reads
+        if ob.get("read_ids") is not None:
+            wanted = with_graph_record_keys(ob["read_ids"])
+            rows = [r for r in rows if read_matches_id_filter(r, wanted)]
+        if ob.get("strand"):
+            rows = filter_reads_by_strand(rows, ob["strand"], strand_calls(state, ob["dataset_id"]))
+        for r in rows:
+            out[r.get("analysis_id") or r["id"]] = NOT_CARRIER
+    return out
+
+
 def _first_stage(plan):
     """Stage 1's features and observations: the shared features over every participant; a run with no shared
     feature (§2.6 item 4) fits its first carrier set's carriers on that set's features instead (the other
@@ -548,9 +585,15 @@ def run(state, reg, body: dict, tiles: dict, spec: Optional[dict] = None) -> dic
         if r1 is None:
             # A run with no shared feature fits its first carrier set's carriers only: the others carry none of
             # its features ("not a carrier"), whatever reads they have.
-            why = plan.left_out.get(oid) or ("not a carrier of the regions' sequence" if sets_from and oid not in oids
+            not_carrier = bool(sets_from and oid not in oids and oid not in plan.left_out)
+            why = plan.left_out.get(oid) or ("not a carrier of the regions' sequence" if not_carrier
                                              else "no reads cover the regions")
-            results[oid] = {"assignments": {}, "left_out": why}
+            if not_carrier:
+                marked = _not_carrier_labels(state, spec, regions, oid, cache)
+                results[oid] = {"assignments": marked, "left_out": why, "not_carrier": True,
+                                "cluster_counts": {NOT_CARRIER: len(marked)} if marked else {}}
+            else:
+                results[oid] = {"assignments": {}, "left_out": why}
             continue
         final = {aid: label_ids[lab] for aid, lab in labels.get(oid, {}).items()}
         results[oid] = {**{k: v for k, v in r1.items() if k != "assignments"}, "assignments": final,
@@ -604,6 +647,10 @@ def assign(state, reg, body: dict, tiles: dict, spec: Optional[dict] = None) -> 
     table = {str(k): int(v) for k, v in (run_def.get("label_ids") or {}).items()}
     results = {}
     for o in spec["observations"]:
+        if sets_from and o["id"] not in oids and o["id"] not in plan.left_out and o["id"] not in labels:
+            # Not a carrier (no shared feature): its rows at the regions, as the fit labelled them.
+            results[o["id"]] = {"assignments": _not_carrier_labels(state, spec, regions, o["id"], cache), "not_carrier": True}
+            continue
         per = labels.get(o["id"], {})
         # A refined label the fit never produced cannot be named: the read keeps its parent cluster.
         results[o["id"]] = {"assignments": {aid: table.get(lab, table.get(lab.rsplit(".", 1)[0], -1) if "." in lab else int(lab))

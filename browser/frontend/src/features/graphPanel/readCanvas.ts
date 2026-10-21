@@ -231,7 +231,7 @@ export function clusterCounts(lane: HostLane, startRow: number, rowCount: number
     counts.set(c, (counts.get(c) ?? 0) + lane.rows[i].length);
   }
   if (!counts.size) return null;
-  return [...counts].map(([c, n]) => `${c < 0 ? '–' : getClusterLabel(c, true)} ${n}`).join(' · ');
+  return [...counts].map(([c, n]) => `${c === -1 ? '–' : getClusterLabel(c, true)} ${n}`).join(' · ');
 }
 
 /** Host mode: each member sub-band's label in the gutter — its dataset colour down the rows it holds, the member's
