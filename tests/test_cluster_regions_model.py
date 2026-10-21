@@ -238,3 +238,108 @@ def test_a_stage_2_model_never_serves_another_parent(monkeypatch):
     again = {k: dict(v) for k, v in labels.items()}
     analysis._refine(None, spec, plan, again, settings, {}, {}, 0, {}, fitted=stages)
     assert all("." in lab for per in again.values() for lab in per.values())
+
+
+def test_a_carrier_with_no_fit_rows_in_a_parent_is_refined_by_assignment(monkeypatch):
+    """G7 step 0 review (agy): a refinement stage records its carrier set's every carrier, so a carrier whose rows
+    reach the parent only later (over the fit's cap, after a pan) is refined by dynamic assignment like its siblings,
+    never left on the parent label. (Probe by agy, inverted into a regression test.)"""
+    from services.graph_panel import analysis, columns as gc
+    feat_shared = gc.Feature(
+        "target", 0, 20, [0, 10],
+        {"obs-mat": [(0, 20, 100, 120, False)], "obs-pat": [(0, 20, 200, 220, False)], "obs-nat": [(0, 20, 300, 320, False)]},
+        ["obs-mat", "obs-pat", "obs-nat"],
+    )
+    feat_alu = gc.Feature(
+        "insertion", 0, 30, [0, 10, 20],
+        {"obs-mat": [(0, 30, 120, 150, False)], "obs-pat": [(0, 30, 220, 250, False)]},
+        ["obs-mat", "obs-pat"],
+    )
+    fake_plan = gc.Plan(
+        shared=[feat_shared],
+        carrier_sets=[{"carriers": ["obs-mat", "obs-pat"], "features": [feat_alu]}],
+        participants=["obs-mat", "obs-nat", "obs-pat"],
+        left_out={},
+        report={"dropped": []},
+    )
+    spec = {
+        "target": "grch38",
+        "target_size": 10000,
+        "regions": [{"start": 0, "end": 20, "mode": "accessibility"}],
+        "observations": [
+            {"id": "obs-mat", "dataset_id": "d", "kind": "graph", "binding": "mat", "contig": "c_mat", "read_ids": None, "strand": None},
+            {"id": "obs-pat", "dataset_id": "d", "kind": "graph", "binding": "pat", "contig": "c_pat", "read_ids": None, "strand": None},
+            {"id": "obs-nat", "dataset_id": "n", "kind": "linear", "binding": None, "chrom": "chr3", "genome": None, "lift_hap": None, "read_ids": None, "strand": None},
+        ],
+        "options": {"repeat_columns": "exclude", "carrier_features": "refine", "coverage_rule": "require_all", "insertions": True, "carrier_min_samples": 3},
+    }
+    reg = SimpleNamespace(id="reg1", revisions={"package": "1", "graph": "1", "db": "1", "maps": "1"})
+    state = SimpleNamespace(datasets={"d": SimpleNamespace(id="d", live_lift=None), "n": SimpleNamespace(id="n", live_lift=None)},
+                            ml_threshold=125, infer_legacy_layers=True, legacy_nuc_min_size=90, quality_filters=[])
+    monkeypatch.setattr(analysis, "build_geometry", lambda s, t: ([], fake_plan))
+    monkeypatch.setattr(analysis, "observation_snapshot", lambda st, sp: {o["id"]: {"rev": 1} for o in sp["observations"]})
+
+    # Fit time (e.g. capped): obs-mat has m1, m2 in cluster 0 (which split into 0.0 and 0.1 on feat_alu);
+    # obs-pat only has p1 in cluster 1 at fit time (its cluster-0 read p_uncapped was left out by the fit cap).
+    def fake_engine_fit(st, req, sources=None, row_cache=None, model=None):
+        if len(req.peak_regions) == 1 and req.peak_regions[0].end == 20:
+            # Stage 1
+            if model is None:
+                return {
+                    "results": {
+                        "obs-mat": {"assignments": {"m1": 0, "m2": 0}},
+                        "obs-pat": {"assignments": {"p1": 1}},
+                        "obs-nat": {"assignments": {"n1": 0}},
+                    },
+                    "model": {"peak_widths": [2], "cluster_patterns": {0: [1, 1], 1: [0, 0]}},
+                }
+            else:
+                # Assign time (uncapped): obs-pat now ALSO has p_uncapped in Stage-1 cluster 0!
+                return {
+                    "results": {
+                        "obs-mat": {"assignments": {"m1": 0, "m2": 0}},
+                        "obs-pat": {"assignments": {"p1": 1, "p_uncapped": 0}},
+                        "obs-nat": {"assignments": {"n1": 0}},
+                    },
+                }
+        else:
+            # Stage 2 on feat_alu (length 30)
+            res = {}
+            for v in req.viewports:
+                rids = list(v.read_ids or [])
+                # m1 -> subcluster 0 (0.0), m2 & p_uncapped -> subcluster 1 (0.1)
+                res[v.result_key] = {"assignments": {rid: (0 if rid == "m1" else 1) for rid in rids}}
+            return {
+                "results": res,
+                "model": model or {"peak_widths": [3], "cluster_patterns": {0: [1, 1, 1], 1: [0, 0, 0]}},
+            }
+
+    monkeypatch.setattr(fc, "run", fake_engine_fit)
+    body = {"method": "combinatorial", "k": 2}
+    fit_out = analysis.run(state, reg, body, {}, spec=spec)
+
+    # At fit time, m1 -> C0.0 (id 2), m2 -> C0.1 (id 3), n1 (non-carrier) -> C0 (id 0).
+    assert fit_out["label_ids"] == {"0": 0, "1": 1, "0.0": 2, "0.1": 3}
+    assert fit_out["results"]["obs-mat"]["assignments"] == {"m1": 2, "m2": 3}
+    assert fit_out["results"]["obs-nat"]["assignments"] == {"n1": 0}
+
+    # Look at what run() recorded for the Stage-2 stage:
+    stage2_def = fit_out["stages"][1]
+    assert stage2_def["carriers"] == ["obs-mat", "obs-pat"]
+
+    # Now run assign() with the fitted durable model (uncapped):
+    assign_body = {
+        **body,
+        "run": {
+            "stages": fit_out["stages"],
+            "label_ids": fit_out["label_ids"],
+            "settings": fit_out["settings"],
+            "revisions": fit_out["revisions"],
+        },
+    }
+    assign_out = analysis.assign(state, reg, assign_body, {}, spec=spec)
+
+    # m1 and m2 on obs-mat get refined labels 2 (C0.0) and 3 (C0.1):
+    assert assign_out["results"]["obs-mat"]["assignments"] == {"m1": 2, "m2": 3}
+    # p_uncapped (obs-pat, Stage-1 cluster 0) is refined on the insertion like obs-mat's m2: C0.1.
+    assert assign_out["results"]["obs-pat"]["assignments"]["p_uncapped"] == 3

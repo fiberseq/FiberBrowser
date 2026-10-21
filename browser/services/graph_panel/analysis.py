@@ -469,10 +469,13 @@ def _refine(state, spec, plan, labels, settings, observed, cache, sets_from, ech
                 labels[oid][aid] = f"{parent}.{sub}"
                 seen.add(f"{parent}.{sub}")
             if fitted is None:
-                stages.append({"stage": 2, "set": z, "parent": parent, "carriers": sorted(ids),
+                # The set's every carrier (not only the paths with rows in this parent in the fit's sample): a
+                # carrier whose rows reach this parent later (a pan, rows over the fit's cap) is refined too.
+                every = list(cs["carriers"])
+                stages.append({"stage": 2, "set": z, "parent": parent, "carriers": every,
                                "features": [f.public() for f in cs["features"]],
                                "samples": [list(f.samples) for f in cs["features"]], "model": model,
-                               "digest": _digest(spec, cs["features"], sorted(ids), settings, observed,
+                               "digest": _digest(spec, cs["features"], every, settings, observed,
                                                  [2, z, parent, _model_hash(model)])})
                 refinements.append({"set": z, "parent": parent, "rows": len(subs)})
     # A folded molecule echoed onto another path takes its winning row's final label.
