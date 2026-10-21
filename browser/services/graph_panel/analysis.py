@@ -585,8 +585,13 @@ def run(state, reg, body: dict, tiles: dict, spec: Optional[dict] = None) -> dic
         if r1 is None:
             # A run with no shared feature fits its first carrier set's carriers only: the others carry none of
             # its features ("not a carrier"), whatever reads they have.
-            not_carrier = bool(sets_from and oid not in oids and oid not in plan.left_out)
+            # Not a carrier: it carries no feature of any carrier set (one that carries a later set's sequence is not
+            # fitted in this run, and is not labelled "not a carrier" either; Codex review, group B).
+            later = bool(sets_from and oid not in oids and any(oid in cs["carriers"] for cs in plan.carrier_sets))
+            not_carrier = bool(sets_from and oid not in oids and oid not in plan.left_out and not later)
             why = plan.left_out.get(oid) or ("not a carrier of the regions' sequence" if not_carrier
+                                             else "carries only other path-specific sequence of these regions: choose "
+                                                  "its regions alone to cluster it" if later
                                              else "no reads cover the regions")
             if not_carrier:
                 marked = _not_carrier_labels(state, spec, regions, oid, cache)
@@ -647,7 +652,8 @@ def assign(state, reg, body: dict, tiles: dict, spec: Optional[dict] = None) -> 
     table = {str(k): int(v) for k, v in (run_def.get("label_ids") or {}).items()}
     results = {}
     for o in spec["observations"]:
-        if sets_from and o["id"] not in oids and o["id"] not in plan.left_out and o["id"] not in labels:
+        if (sets_from and o["id"] not in oids and o["id"] not in plan.left_out and o["id"] not in labels
+                and not any(o["id"] in cs["carriers"] for cs in plan.carrier_sets)):
             # Not a carrier (no shared feature): its rows at the regions, as the fit labelled them.
             results[o["id"]] = {"assignments": _not_carrier_labels(state, spec, regions, o["id"], cache), "not_carrier": True}
             continue

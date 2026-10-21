@@ -100,6 +100,7 @@ def scan(state, reg, body: dict, tiles: dict, spec: dict) -> dict:
     i_counts = [(np.zeros(f.length, dtype=np.int64), np.zeros(f.length, dtype=np.int64)) for f in insertions]
     reads_by_obs: dict = {}
     cache: dict = {}
+    loaded: list = []
     from services.read_selection import read_matches_id_filter, with_graph_record_keys
     from services.read_strand import filter_reads_by_strand, strand_calls
     for ob in spec["observations"]:
@@ -128,6 +129,26 @@ def scan(state, reg, body: dict, tiles: dict, spec: dict) -> dict:
             rows = [r for r in rows if read_matches_id_filter(r, wanted)]
         if ob.get("strand"):
             rows = filter_reads_by_strand(rows, ob["strand"], strand_calls(state, ob["dataset_id"]))
+        loaded.append((ob, rows, origin, a, b, carried))
+    # One row per folded molecule of a dataset (fold_molecule: one analysis_id on two paths), as graph clustering
+    # arbitrates it: the primary record's row, then more body bases, then the observation id (Codex review, group B).
+    from services.lift.cohort import folded_identity
+    from services.read_selection import read_body_spans
+    folded_best: dict = {}
+    for ob, rows, *_rest in loaded:
+        for r in rows:
+            aid = r.get("analysis_id")
+            if not folded_identity(aid):
+                continue
+            sup = bool(((r.get("live_lift") or {}).get("source") or {}).get("supplementary"))
+            rank = (sup, -sum(y - x for x, y in read_body_spans(r)), ob["id"])
+            key = (ob["dataset_id"], aid)
+            if key not in folded_best or rank < folded_best[key][0]:
+                folded_best[key] = (rank, id(r))
+    keep = {v[1] for v in folded_best.values()}
+    for ob, rows, origin, a, b, carried in loaded:
+        oid = ob["id"]
+        rows = [r for r in rows if not folded_identity(r.get("analysis_id")) or id(r) in keep]
         reads_by_obs[oid] = len(rows)
         if not rows:
             continue

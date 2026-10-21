@@ -84,10 +84,17 @@ export function graphClusterPlan(st: PlanState, basis: Basis): GraphClusterPlan 
   const explicit = st.selectedDatasets.size > 0;
   const hosts = st.panels.filter(p => hostDrawsGraph(p) && (!explicit || st.selectedDatasets.has(p.id)
     || st.panels.some(m => m.graphMemberOf === p.id && st.selectedDatasets.has(m.id))));
-  const host = hosts[0];
+  // The host whose package's target is the regions' contig (Codex review, group B: the first host in panel order
+  // could be on another contig); among those, one that follows the main view, then panel order.
+  const registrations = useGraphStatusStore.getState().status?.registrations ?? [];
+  const contigOf = (h: PanelConfig) => registrations.find(r => r.id === h.graphView?.registrationId)?.bindings
+    .find(b => b.key === h.graphView?.targetBinding)?.path.contig;
+  const chroms = basis.regions.map(p => p.chrom ?? st.chrom);
+  const eligible = hosts.filter(h => { const c = contigOf(h); return Boolean(c) && chroms.some(rc => sameChrom(rc, c!)); });
+  const host = [...eligible].sort((a, b) => (a.viewportOverride ? 1 : 0) - (b.viewportOverride ? 1 : 0))[0] ?? hosts[0];
   if (!host) return null;
   const gv = host.graphView!;
-  const registration = useGraphStatusStore.getState().status?.registrations.find(r => r.id === gv.registrationId);
+  const registration = registrations.find(r => r.id === gv.registrationId);
   if (!registration) return null;
   const target = gv.targetBinding!;
   const targetContig = registration.bindings.find(b => b.key === target)?.path.contig;

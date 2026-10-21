@@ -648,3 +648,22 @@ describe('graph features item 3: Scan on graph columns', () => {
     expect(graphScanBody(useBrowserStore.getState(), { ...call, chrom: 'chr4' })).toBeNull();
   });
 });
+
+describe('Codex review group B: the planner takes the host on the regions\' contig', () => {
+  it('a host on another contig, first in panel order, does not hide the main view\'s host', async () => {
+    const { graphScanBody } = await import('./graphScan');
+    const OTHER: GraphRegistration = { ...REG, id: 'gp9', bindings: [binding('t9', 'chr9', 'GRCh38'), binding('m9', 'chr9_MAT', 'S1'), binding('p9', 'chr9_PAT', 'S1')],
+      maps: [{ target: 't9', source: 'm9' }, { target: 't9', source: 'p9' }] };
+    seed([panel('x', { datasetId: 'n', viewportOverride: { chrom: 'chr9', start: 1, end: 10_000 } }), ...split()]);
+    setPanelViewMode('mat', 'graph');
+    // A graph host on chr9 (its own view), before the chr3 host in panel order.
+    useBrowserStore.setState(s => ({ panels: [{ ...s.panels.find(p => p.id === 'x')!, viewMode: 'graph',
+      graphView: { ...s.panels.find(p => p.id === 'mat')!.graphView!, registrationId: 'gp9', targetBinding: 't9', members: [{ panelId: 'x', binding: null }] } },
+      ...s.panels.filter(p => p.id !== 'x')] }));
+    useGraphStatusStore.setState({ status: { helper: { available: true }, registrations: [OTHER, REG] } as never });
+    const b = graphScanBody(useBrowserStore.getState(), { chrom: 'chr3', start: 128_650_000, end: 128_660_000, source: 'accessibility',
+      minWidth: 80, minReads: 5, thresholds: { smoothWidth: 100, thresholdStrong: 0.5, thresholdMedium: 0.3, thresholdWeak: 0.15, thresholdRare: 0.08 } });
+    expect(b?.registration_id).toBe('gp');
+    expect(b?.target).toBe('tgt');
+  });
+});

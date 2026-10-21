@@ -136,8 +136,10 @@ Sequence that only some haplotypes carry (an insertion, for example) is used to
 split clusters further among the haplotypes that carry it. Those clusters are
 named **C0.1**, **C1.0** and so on; the other reads keep their labels. When
 the regions hold only such sequence (no part every haplotype shares), the
-haplotypes that carry it are clustered and the others' reads there are labelled
-**Not a carrier**, in a colour of their own. The **Cluster detail** panel lists
+haplotypes that carry its first part are clustered, and the reads there of
+haplotypes that carry none of it are labelled **Not a carrier**, in a colour of
+their own. A haplotype that carries only another part is left out of that run
+(the run details say so): choose its region alone to cluster it. The **Cluster detail** panel lists
 what was used and what was left out.
 
 A cluster run stays while you pan and zoom on the same chromosome: new reads

@@ -310,3 +310,24 @@ def test_a_run_with_no_shared_feature_says_who_is_not_a_carrier(helper_env, alu_
     model = dict(stages=out["stages"], label_ids=out["label_ids"], settings=out["settings"], revisions=out["revisions"])
     [again] = _graph(alu_state, {**_body([MAT, PAT, NAT], regions=PEAKS[:2]), "run": model}, mode="assign")
     assert again["results"]["obs-PAT"]["assignments"] == pat["assignments"]
+
+
+def test_a_path_carrying_only_a_later_carrier_set_is_not_labelled_not_a_carrier(helper_env, alu_state, monkeypatch):
+    """Codex review (group B): with no shared feature and two carrier sets, a path carrying only the second set's
+    sequence is not fitted in the run and is never labelled "not a carrier" (it carries the regions' sequence)."""
+    from dataclasses import replace
+    _need_native(alu_state)
+    real = analysis.build_geometry
+
+    def two_sets(spec, tiles):
+        regions, plan = real(spec, tiles)
+        feats = list(plan.shared)
+        first = [replace(f, carriers=["obs-MAT", "obs-native"]) for f in feats[:1]]
+        second = [replace(f, carriers=["obs-PAT"]) for f in feats[1:2]]
+        return regions, replace(plan, shared=[], carrier_sets=[{"carriers": ["obs-MAT", "obs-native"], "features": first},
+                                                               {"carriers": ["obs-PAT"], "features": second}])
+    monkeypatch.setattr(analysis, "build_geometry", two_sets)
+    [out] = _graph(alu_state, _body([MAT, PAT, NAT], regions=PEAKS[:2]))
+    pat = out["results"]["obs-PAT"]
+    assert not pat.get("not_carrier") and analysis.NOT_CARRIER not in set(pat["assignments"].values())
+    assert "other path-specific sequence" in pat["left_out"]
