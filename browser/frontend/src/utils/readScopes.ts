@@ -13,10 +13,11 @@ export function hasActiveClusterFocus(focus: ClusterFocusSet): focus is Set<numb
  * their state key) take part; a panel copied afterwards keeps all its reads.
  */
 export function branchScopesPanel(
-  branch: { parentId: string | null; assignments?: Record<string, unknown> } | null | undefined,
+  branch: { parentId: string | null; assignments?: Record<string, unknown>; refinement?: boolean } | null | undefined,
   stateKey: string,
 ): boolean {
-  return Boolean(branch?.parentId && branch.assignments && stateKey in branch.assignments);
+  // (A refinement within carriers keeps every read of its parent: not a subset branch.)
+  return Boolean(branch?.parentId && !branch.refinement && branch.assignments && stateKey in branch.assignments);
 }
 
 export function readIdsForClusterFocus(

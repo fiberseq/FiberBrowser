@@ -99,6 +99,11 @@ export interface ClusterTreeNode {
   sourceClusterIds: number[];
   sourceLabel?: string;
   readScope?: Record<string, string[]>;
+  /** A refinement within carriers (graph primary §2.6): every read of the parent stays shown (it is not a subset
+   * branch), refined reads under their C<parent>.<j> names. */
+  refinement?: boolean;
+  /** Names of its refined clusters, by state key (restored with the node). */
+  groupLabels?: Record<string, Record<number, string>>;
 
   // Config used to compute this branch.
   clusterMethod: string;

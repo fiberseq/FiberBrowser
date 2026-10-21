@@ -16,6 +16,7 @@ import { useGraphSettings } from './handoff';
 import { clusterSelectionKeys } from '../../utils/clusterMatchedRun';
 import { clusterRunPlan, clusterWindows } from '../../utils/clusterTargets';
 import { recordKey } from '../../utils/recordKeys';
+import { branchScopesPanel } from '../../utils/readScopes';
 import { clusterAssignmentForRead } from '../../components/tracks/read-track/readFilter';
 import { addGraphRegion, runOutlines } from './runOutlines';
 import { requestFilterParamFromSets } from '../../components/tracks/read-track/useReadTrackData';
@@ -409,5 +410,47 @@ describe('review round 2 (G4/G5)', () => {
     const keys = clusterSelectionKeys(later, 'k-mat');
     expect(keys).toContain('k-same');
     expect(keys).not.toContain('k-own');
+  });
+});
+
+
+describe('review round 1 (agy G4)', () => {
+  const refined = (p: ReturnType<typeof plan>) => {
+    const id = (b: string) => p.observations.find(o => o.binding === b)!.id;
+    return { results: { [id('mat')]: { assignments: { [aid('m1')]: 2, [aid('m2')]: 1 }, stage1: { [aid('m1')]: 0, [aid('m2')]: 1 } },
+      [id('pat')]: { assignments: { [aid('p1')]: 0 }, stage1: { [aid('p1')]: 0 } } },
+      label_ids: { '0': 0, '1': 1, '0.0': 2 }, names: { '2': 'C0.0' }, stages: [{ stage: 1 }, { stage: 2 }],
+      columns: { shared: [], carrier_sets: [], left_out: {}, dropped: [], refinements: [] }, window_separation_nmi: null,
+      matched: null, settings: {}, revisions: REG.revisions, options: {}, timings: {} } as never;
+  };
+
+  it('a refinement keeps every read shown, names its clusters across tree moves, and a re-run replaces it', () => {
+    seed(split());
+    setPanelViewMode('mat', 'graph');
+    commitGraphRun(useBrowserStore.getState(), plan(), refined(plan()));
+    let s = useBrowserStore.getState();
+    const child = s.clusterTreeNodes[s.activeClusterTreeNodeId!];
+    expect(child.refinement).toBe(true);
+    expect(branchScopesPanel(child, 'k-mat')).toBe(false);
+    s.applyClusterTreeNode(child.parentId!);
+    useBrowserStore.getState().applyClusterTreeNode(child.id);
+    expect(useBrowserStore.getState().clusterGroupLabels['k-mat']).toEqual({ 2: 'C0.0' });
+    commitGraphRun(useBrowserStore.getState(), plan(), refined(plan()));
+    s = useBrowserStore.getState();
+    expect(Object.keys(s.clusterTreeNodes)).toHaveLength(2);
+    expect(s.clusterTreeNodes[s.activeClusterTreeNodeId!].parentId).toBe(child.parentId);
+  });
+
+  it('a targeted pop-out targets its graph; panels off the target are left out; empty scopes are refused', () => {
+    seed([...split(), panel('far', { liftHap: 'MAT', stateKey: 'k-far', viewportOverride: { chrom: 'chr9', start: 1, end: 100 } })]);
+    setPanelViewMode('mat', 'graph');
+    popOut('mat', ['pat']);
+    useBrowserStore.setState({ selectedDatasets: new Set(['pat']) });
+    expect(plan().observations.map(o => o.binding).sort()).toEqual(['mat', 'pat']);
+    useBrowserStore.setState({ selectedDatasets: new Set() });
+    expect(plan().destinations.map(d => d.stateKey)).not.toContain('k-far');
+    expect(plan().leftOut.map(l => l.panelId)).toContain('far');
+    useBrowserStore.setState({ filteredReadIds: { 'k-mat': new Set(), 'k-pat': new Set() } });
+    expect(plan().refusal).toMatch(/nothing to cluster/);
   });
 });

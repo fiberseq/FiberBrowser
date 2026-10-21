@@ -547,7 +547,7 @@ export interface ClusterSlice {
   commitSubcluster: (resultsByKey: Record<string, Record<string, number>>, options?: { sourceClusterIds?: number[]; sourceLabel?: string; name?: string; readScope?: Record<string, string[]> }) => string | null;
   /** Graph primary §2.6 `refineWithinCarriers`: one child node of the active node in which the given reads take
    * their refined labels and every other read keeps its parent label (shown, never sent to Unassigned). */
-  refineWithinCarriers: (resultsByKey: Record<string, Record<string, number>>, options: { name: string; sourceLabel: string }) => string | null;
+  refineWithinCarriers: (resultsByKey: Record<string, Record<string, number>>, options: { name: string; sourceLabel: string; groupLabels?: Record<string, Record<number, string>> }) => string | null;
   /** keepSameSvSplits: the Clusters panel's automatic re-apply of the root after a split into panels cleared the
    * active branch; a branch the user picks always drops SV splits. */
   applyClusterTreeNode: (id: string, options?: { keepSameSvSplits?: boolean }) => void;
@@ -1623,8 +1623,11 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
       assignments: cloneAssignments(childAssignments),
       order: normalizeClusterOrderRecord(childAssignments, {}),
       focus: {},
+      refinement: true,
+      ...(options.groupLabels ? { groupLabels: options.groupLabels } : {}),
     };
     set(current => ({
+      ...(options.groupLabels ? { clusterGroupLabels: { ...current.clusterGroupLabels, ...options.groupLabels } } : {}),
       clusterTreeNodes: { ...current.clusterTreeNodes, [id]: node },
       activeClusterTreeNodeId: id,
       selectedClusters: {},
@@ -1652,7 +1655,8 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
       activeClusterTreeNodeId: id,
       svSplits: kept.svSplits,
       svCarrierEvidence: kept.svCarrierEvidence,
-      clusterGroupLabels: kept.clusterGroupLabels,
+      // (A refinement's C<parent>.<j> names come back with it.)
+      clusterGroupLabels: node.groupLabels ? { ...kept.clusterGroupLabels, ...node.groupLabels } : kept.clusterGroupLabels,
       clusterAssignments: cloneAssignments(node.assignments),
       clusterOrder: normalizeClusterOrderRecord(node.assignments, node.order),
       clusterFocus: deserializeClusterFocus(node.focus),

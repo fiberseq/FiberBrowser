@@ -257,7 +257,7 @@ def parse(state, reg, body: dict) -> dict:
         raise GraphRunError("carrier_min_samples must be a positive integer")
     # Canonical order: by observation id, so panel and lane permutations never change the fit.
     out_obs.sort(key=lambda o: o["id"])
-    return {"target": target, "target_size": tb.get("size"), "regions": parsed_regions, "observations": out_obs,
+    return {"target": target, "target_size": tb.get("size"), "regions": ordered, "observations": out_obs,
             "binding_order": [b["key"] for b in reg.bindings],
             # Every path compared with the target: insertion frames are canonical over the package, not the run.
             "compared": sorted({m.get("source") for m in reg.maps if m.get("target") == target and m.get("source")}),

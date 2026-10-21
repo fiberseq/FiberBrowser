@@ -222,9 +222,10 @@ def test_native_only_graph_run_equals_cluster_all(helper_env, alu_state):
 
 def test_mixed_runs_are_permutation_invariant_and_the_model_reproduces_labels(helper_env, alu_state):
     _need_native(alu_state)
-    one, two = _graph(alu_state, _body([MAT, PAT, NAT], method="kmeans", sample_seed="7"),
-                      _body([NAT, PAT, MAT], method="kmeans", sample_seed="7"))
-    assert one["results"] == two["results"]
+    one, two, three = _graph(alu_state, _body([MAT, PAT, NAT], method="kmeans", sample_seed="7"),
+                             _body([NAT, PAT, MAT], method="kmeans", sample_seed="7"),
+                             _body([PAT, MAT, NAT], regions=list(reversed(PEAKS)), method="kmeans", sample_seed="7"))
+    assert one["results"] == two["results"] == three["results"]
     model = dict(stages=one["stages"], label_ids=one["label_ids"], settings=one["settings"], revisions=one["revisions"])
     [again] = _graph(alu_state, {**_body([MAT, PAT, NAT], method="kmeans"), "run": model}, mode="assign")
     for oid, res in one["results"].items():

@@ -141,9 +141,10 @@ def test_a_folded_molecule_on_two_paths_of_one_dataset_is_fitted_once(monkeypatc
     req = fc.RegionClusterRequest(viewports=[window("A", lift_hap="A"), window("B", lift_hap="B")],
                                   peak_regions=[PeakRegion(start=0, end=100)], method="combinatorial", k=2)
     out = fc.run(base, req)
-    assert folded in out["results"]["A"]["assignments"] and folded not in out["results"]["B"]["assignments"]
+    # Fitted once (the primary record's row, window A); window B's path shows the same label.
+    assert out["results"]["B"]["analysis_read_count"] == 1 and out["results"]["A"]["analysis_read_count"] == 2
+    assert out["results"]["B"]["assignments"][folded] == out["results"]["A"]["assignments"][folded]
     assert out["joint_cohort"]["shared_molecules_within_dataset"] == 1
-    assert out["results"]["B"]["analysis_read_count"] == 1
 
 
 def test_more_than_fifty_patterns_reassign_by_the_fits_weighted_rule(monkeypatch):

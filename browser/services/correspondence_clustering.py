@@ -218,7 +218,7 @@ def run(state, req, *, sources=None, model=None, row_cache=None):
         for r in own:
             if folded_identity(r.get('analysis_id')):
                 by_identity.setdefault((v.dataset_id, r['analysis_id']), []).append((wi, r))
-    dropped_rows, arbitrated = set(), 0
+    dropped_rows, arbitrated, echoes = set(), 0, []
     for hits in by_identity.values():
         if len({wi for wi, _r in hits}) < 2:
             continue
@@ -231,6 +231,8 @@ def run(state, req, *, sources=None, model=None, row_cache=None):
         for hit in hits:
             if hit is not keep:
                 dropped_rows.add(id(hit[1]))
+                # Its path shows the molecule's one label too (fitted once, on the kept row).
+                echoes.append((loaded[hit[0]][0].result_key, loaded[keep[0]][0].result_key, keep[1].get('analysis_id')))
         arbitrated += 1
     for v, own, query, chrom in loaded:
         own = [r for r in own if id(r) not in dropped_rows]
@@ -330,6 +332,11 @@ def run(state, req, *, sources=None, model=None, row_cache=None):
     for key, original in ids.items():
         a = {rid: assignments[f'{key}::{rid}'] for rid in original if f'{key}::{rid}' in assignments}
         results[key] = dict(assignments=a, cluster_counts=dict(Counter(a.values())), **stats[key])
+    for to_key, from_key, aid in echoes:
+        label = results.get(from_key, {}).get('assignments', {}).get(aid)
+        if label is not None and to_key in results:
+            results[to_key]['assignments'][aid] = label
+            results[to_key]['cluster_counts'] = dict(Counter(results[to_key]['assignments'].values()))
     assigned = [i for i, r in enumerate(reads) if r['id'] in assignments]
     labels = [assignments[reads[i]['id']] for i in assigned]
     return timings.attach(dict(results=results, frame_id=req.frame_id, digest=req.digest, joint_cohort=joint_report,

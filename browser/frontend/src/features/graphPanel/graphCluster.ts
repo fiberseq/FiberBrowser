@@ -101,7 +101,8 @@ export function graphClusterPlan(st: PlanState, basis: Basis): GraphClusterPlan 
   let selected = st.selectedDatasets;
   if (explicit) {
     selected = new Set(st.selectedDatasets);
-    for (const h of hosts) if (st.selectedDatasets.has(h.id)) for (const m of membersOf(st.panels, h)) selected.add(m.panel.id);
+    // (A targeted member targets its graph too: the host and its members are one comparison.)
+    for (const h of hosts) for (const m of membersOf(st.panels, h)) selected.add(m.panel.id);
   }
   const planState = selected === st.selectedDatasets ? st : { ...st, selectedDatasets: selected };
   const datasetIds = getTargetDatasetIds(selected, st.panels, st.datasets);
@@ -125,6 +126,11 @@ export function graphClusterPlan(st: PlanState, basis: Basis): GraphClusterPlan 
       else observations.set(id, { ...spec, id, scopes: [w.read_ids ?? null] });
       ids.push(id);
     };
+    const onTarget = !panel.genome && !panel.altAllele && !panel.liftLink && sameChrom(w.chrom, targetContig);
+    if (bound?.kind === 'lifted' && !onTarget) {
+      leftOut.push({ panelId: panel.id, reason: 'not on the graph\'s target (another contig, assembly or allele view)' });
+      continue;
+    }
     if (bound?.kind === 'lifted') {
       const hap = (w.lift_hap ?? '').toUpperCase();
       const keys = Object.keys(bound.paths).filter(k => sources.has(k) && (!hap || (bound.haps?.[k] ?? '').toUpperCase() === hap)).sort();
@@ -149,7 +155,8 @@ export function graphClusterPlan(st: PlanState, basis: Basis): GraphClusterPlan 
     return { ...o, read_ids: [...new Set(scopes.flat() as string[])].sort() };
   }).sort((a, b) => a.id.localeCompare(b.id));
   const refusal = !obs.length ? 'No panel in this run shows reads on the graph\'s target or paths.'
-    : obs.some(o => o.read_ids && !o.read_ids.length) ? null : null;
+    : obs.every(o => o.read_ids && !o.read_ids.length) ? 'No reads pass the read filters, so there is nothing to cluster. Clear a filter to cluster.'
+      : null;
   return { host, registration, target, targetContig, regions, observations: obs, destinations, leftOut,
     offContig: basis.regions.length - onTarget.length, refusal };
 }
@@ -293,6 +300,14 @@ export function commitGraphRun(s: BrowserState, plan: GraphClusterPlan, response
     now.commitSubcluster(withParentIds, { sourceClusterIds, sourceLabel: `from ${sourceClusterIds.map(c => `C${c}`).join('+')}`,
       name: 'Subcluster on graph columns', readScope: Object.fromEntries(Object.keys(withParentIds).map(k => [k, Object.keys(withParentIds[k])])) });
   } else {
+    // A run started on a refinement node replaces that refinement (its parent is the run's stage-1 node).
+    const active = now.activeClusterTreeNodeId ? now.clusterTreeNodes[now.activeClusterTreeNodeId] : null;
+    if (active?.refinement && active.parentId) {
+      const old = active.id;
+      useBrowserStore.setState({ activeClusterTreeNodeId: active.parentId });
+      useBrowserStore.getState().deleteClusterTreeNode(old);
+      useBrowserStore.setState({ activeClusterTreeNodeId: active.parentId });
+    }
     for (const [key, value] of Object.entries(stage1By)) now.setClusterAssignments(key, value);
     if (now.activeClusterTreeNodeId) now.syncActiveClusterTreeNode(); else now.captureActiveClusterTreeNode({ name: 'All reads' });
     if (refined) {
@@ -300,8 +315,9 @@ export function commitGraphRun(s: BrowserState, plan: GraphClusterPlan, response
       for (const [key, value] of Object.entries(finalBy)) {
         changed[key] = Object.fromEntries(Object.entries(value).filter(([id, c]) => stage1By[key]?.[id] !== c));
       }
+      const names = Object.fromEntries(Object.entries(response.names ?? {}).map(([k, v]) => [Number(k), v]));
       useBrowserStore.getState().refineWithinCarriers(changed, { name: 'Refined within carriers',
-        sourceLabel: 'carrier-only graph features' });
+        sourceLabel: 'carrier-only graph features', groupLabels: Object.fromEntries(Object.keys(finalBy).map(k => [k, names])) });
     }
   }
   const after = useBrowserStore.getState();
@@ -394,7 +410,8 @@ export async function assignWithGraphRun(run: ClusterMatchedRun, signal?: AbortS
     if (!Object.keys(fresh).length) continue;
     added += Object.keys(fresh).length;
     touched.push(d.stateKey);
-    st.setClusterAssignments(d.stateKey, fresh, { mirror: false, merge: true });
+    // (svSplit: keep the run's C<parent>.<j> names, which an ordinary write would drop.)
+    st.setClusterAssignments(d.stateKey, fresh, { mirror: false, merge: true, svSplit: true });
   }
   if (added) {
     const now = useBrowserStore.getState();
