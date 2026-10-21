@@ -105,13 +105,16 @@ export function registerBuiltinDataExports(): void {
       if (!scope.ok) return scope;
       if (!notPublic()) return no('Not available on a public server');
       const groups = readScopeGroups(ctx.state, ctx.readScope);
-      const bam = groups.filter(g => ctx.state.datasets.find(d => d.id === g.datasetId)?.data_type === 'bam');
+      const bam = groups.filter(g => isBamType(ctx.state.datasets.find(d => d.id === g.datasetId)?.data_type));
       if (bam.length === 0) return no('These reads are from BigBed datasets: a BAM subset needs a BAM');
-      if (bam.length < groups.length) return { ok: true, detail: `${scope.detail}; BigBed datasets are left out` };
-      return scope;
+      const lifted = bam.some(g => ctx.state.datasets.find(d => d.id === g.datasetId)?.data_type === 'bam_livelift');
+      const detail = [scope.detail, bam.length < groups.length ? 'BigBed datasets are left out' : '',
+        lifted ? 'lifted datasets\' reads on their source assembly' : ''].filter(Boolean).join('; ');
+      return { ok: true, detail };
     },
     run: ({ state, readScope }) => downloadReadBams(readScopeGroups(state, readScope)
-      .filter(g => state.datasets.find(d => d.id === g.datasetId)?.data_type === 'bam')),
+      .filter(g => isBamType(state.datasets.find(d => d.id === g.datasetId)?.data_type)),
+      new Set(state.datasets.filter(d => d.data_type === 'bam_livelift').map(d => d.id))),
   });
   registerDataExport({
     id: 'working-set', group: 'reads', order: 40,
@@ -339,4 +342,9 @@ export function registerBuiltinDataExports(): void {
       return 'Copied the summary';
     },
   });
+}
+
+/** A BAM subset's datasets: BAMs, and lifted datasets (their reads on the source assembly). */
+function isBamType(type: string | undefined): boolean {
+  return type === 'bam' || type === 'bam_livelift';
 }

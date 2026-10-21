@@ -454,6 +454,9 @@ export async function buildReadTable(
   state: BrowserState,
   groups: ReadScopeGroup[],
 ): Promise<{ tsv: string; rows: number; truncated: boolean; total: number }> {
+  // Lifted datasets are left out (Read Stats reads native alignments; the server refuses lifted ones).
+  const lifted = new Set(state.datasets.filter(d => d.data_type === 'bam_livelift').map(d => d.id));
+  groups = groups.filter(g => !lifted.has(g.datasetId));
   const total = groups.reduce((n, g) => n + g.readIds.length, 0);
   let budget = MAX_READ_STATS_READS;
   const regions = new Map<string, { chrom: string; start: number; end: number; genome?: string; groups: ReadScopeGroup[] }>();
@@ -504,14 +507,16 @@ export async function downloadReadTable(state: BrowserState, groups: ReadScopeGr
     : `Saved ${table.rows.toLocaleString()} reads`;
 }
 
-/** One BAM per dataset and region (POST /api/reads/export_bam). */
-export async function downloadReadBams(groups: ReadScopeGroup[]): Promise<string> {
+/** One BAM per dataset and region (POST /api/reads/export_bam; a lifted dataset's reads on its source assembly:
+ * POST /api/lift/export_bam, from the source windows the region lifts from). */
+export async function downloadReadBams(groups: ReadScopeGroup[], lifted: ReadonlySet<string> = new Set()): Promise<string> {
   const notes: string[] = [];
   let files = 0;
   for (const g of groups) {
     // A panel on another assembly: its reference (topology, contig names; services/panel_genomes.py).
     const query = g.genome ? `?panel_genome=${encodeURIComponent(g.genome)}` : '';
-    const response = await fetchApiResponse(`/api/reads/export_bam${query}`, {
+    const route = lifted.has(g.datasetId) ? '/api/lift/export_bam' : `/api/reads/export_bam${query}`;
+    const response = await fetchApiResponse(route, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dataset_id: g.datasetId, chrom: g.chrom, start: g.start, end: g.end, read_ids: g.readIds }),
@@ -526,6 +531,8 @@ export async function downloadReadBams(groups: ReadScopeGroup[]): Promise<string
     files += 1;
     const missing = Number(response.headers.get('x-fiberbrowser-missing') ?? 0);
     if (missing > 0) notes.push(`${missing} read${missing === 1 ? '' : 's'} of ${g.datasetId} not found`);
+    const source = response.headers.get('x-fiberbrowser-source-contigs');
+    if (source) notes.push(`${g.datasetId} on its source assembly (${source.split('+').join(', ')})`);
   }
   return `Saved ${files} BAM${files === 1 ? '' : 's'} (index with samtools index)${notes.length ? `; ${notes.join('; ')}` : ''}`;
 }

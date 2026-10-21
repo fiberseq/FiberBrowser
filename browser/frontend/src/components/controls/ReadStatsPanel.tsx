@@ -180,12 +180,21 @@ export function ReadStatsPanel({ isFullView }: Props) {
   // Reads are looked up where they are shown: the main view's go in the
   // request, each panel at another locus adds its own region. Panels showing
   // the same reads are merged first, then the request is capped.
+  // Lifted datasets (linear or graph rows) are left out: Read Stats reads native alignments, and the server refuses
+  // lifted ones (live lift's default deny). They are counted and said (graph primary G8).
+  const liftedIds = useMemo(() => new Set(datasets.filter(d => d.data_type === 'bam_livelift').map(d => d.id)), [datasets]);
   const scoped = useMemo(() => {
     const result: Record<string, string[]> = {};
     const regions = new Map<string, ReadStatsRegion>();
+    const lifted = new Map<string, Set<string>>();
     for (const [sk, orderedIds] of Object.entries(scopeIds)) {
       if (orderedIds.length === 0) continue;
       const dsId = stateKeyToDatasetId[sk] || sk;
+      if (liftedIds.has(dsId)) {
+        const set = lifted.get(dsId) ?? lifted.set(dsId, new Set()).get(dsId)!;
+        for (const id of orderedIds) set.add(id);
+        continue;
+      }
       const panel = panels.find(p => p.contentType === 'dataset' && (p.stateKey ?? p.datasetId) === sk);
       const v = panel?.viewportOverride;
       const elsewhere = v && (v.chrom !== chrom || v.start !== start || v.end !== end) ? v : null;
@@ -204,8 +213,9 @@ export function ReadStatsPanel({ isFullView }: Props) {
       if (!target[dsId]) target[dsId] = [];
       appendUniqueReadIds(target[dsId], orderedIds);
     }
-    return capRequest(result, [...regions.values()]);
-  }, [scopeIds, stateKeyToDatasetId, panels, chrom, start, end]);
+    return { ...capRequest(result, [...regions.values()]), liftedLeftOut: [...lifted.values()].reduce((n, s) => n + s.size, 0),
+      liftedDatasets: [...lifted.keys()] };
+  }, [scopeIds, stateKeyToDatasetId, panels, chrom, start, end, liftedIds]);
   const readIdsByDataset = scoped.main;
   const extraRegions = scoped.regions;
   const scopeTotal = scoped.total;
@@ -494,6 +504,7 @@ export function ReadStatsPanel({ isFullView }: Props) {
   );
   const headerDetail = [
     source ? `from ${source}` : '',
+    scoped.liftedLeftOut ? `${scoped.liftedLeftOut.toLocaleString()} read${scoped.liftedLeftOut === 1 ? '' : 's'} of lifted datasets left out (Read Stats reads native alignments; export them as a BAM subset)` : '',
     result && missingCount > 0 ? `${missingCount.toLocaleString()} of ${requestedCount.toLocaleString()} not found in this view` : '',
     !result && error ? 'Read stats unavailable for this group' : '',
   ].filter(Boolean).join(' · ');

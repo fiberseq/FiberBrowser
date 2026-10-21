@@ -128,8 +128,11 @@ def _query_windows(state, chrom: str, start: int, end: int) -> list:
 
 def write_read_subset_bam(state, dataset_id: str, chrom: str, start: int, end: int,
                           read_ids: Iterable[str], out_path: str,
-                          *, contig_links: Optional[dict] = None) -> dict:
-    """Write the region's records of ``read_ids`` to ``out_path``; returns counts."""
+                          *, contig_links: Optional[dict] = None, source_windows: Optional[list] = None) -> dict:
+    """Write the region's records of ``read_ids`` to ``out_path``; returns counts.
+
+    ``source_windows``: a lifted dataset's ``[(source contig, start, end)]`` (its BAM's own coordinates, from the
+    lift plan of a target window: ``lifted_source_windows``); its records there are written, on the source assembly."""
     import pysam
     from services.remote_sources.opening import open_alignment_file
     from utils.chrom import resolve_reference_name
@@ -137,7 +140,10 @@ def write_read_subset_bam(state, dataset_id: str, chrom: str, start: int, end: i
     dataset = state.get_dataset(dataset_id)
     if dataset is None:
         raise SubsetError(f"No dataset {dataset_id!r} is open")
-    if getattr(dataset, "data_type", None) != "bam":
+    lifted = getattr(dataset, "data_type", None) == "bam_livelift"
+    if source_windows is not None and not lifted:
+        raise SubsetError(f"{dataset.label} is not a lifted dataset")
+    if getattr(dataset, "data_type", None) != "bam" and not (lifted and source_windows is not None):
         raise SubsetError(f"{dataset.label} is not a BAM (a BAM subset needs alignments)")
     wanted = {str(r) for r in read_ids if r}
     if not wanted:
@@ -152,7 +158,14 @@ def write_read_subset_bam(state, dataset_id: str, chrom: str, start: int, end: i
     chain_end: Optional[str] = None
     records = []
     found: set = set()
-    windows = _query_windows(state, chrom, start, end)
+    # (contig, windows): the region's, or a lifted dataset's source windows by contig.
+    if source_windows is not None:
+        by_contig: dict = {}
+        for c, lo, hi in source_windows:
+            by_contig.setdefault(str(c), []).append((max(0, int(lo)), int(hi)))
+        targets = sorted(by_contig.items())
+    else:
+        targets = [(chrom, _query_windows(state, chrom, start, end))]
     for path in dataset.paths:
         with open_alignment_file(path, "rb") as bam:
             data = bam.header.to_dict()
@@ -172,25 +185,27 @@ def write_read_subset_bam(state, dataset_id: str, chrom: str, start: int, end: i
             else:
                 renames = _merge_read_groups(read_groups, list(data.get("RG") or []))
                 pg_renames = _merge_programs(programs, list(data.get("PG") or []))
-            bam_chrom = resolve_reference_name(chrom, bam.references, links=contig_links)
-            if bam_chrom is None:
-                continue
-            for k, (lo, hi) in enumerate(windows):
-                for read in bam.fetch(bam_chrom, lo, hi):
-                    if read.is_unmapped or read.query_name not in wanted:
-                        continue
-                    if not record_keeps_signal(read, signal_provenance):
-                        continue
-                    # A record across the seam overlaps an earlier window too: written from that one.
-                    if any(read.reference_start < p_hi and (read.reference_end or read.reference_start + 1) > p_lo
-                           for p_lo, p_hi in windows[:k]):
-                        continue
-                    if renames and read.has_tag("RG") and read.get_tag("RG") in renames:
-                        read.set_tag("RG", renames[read.get_tag("RG")], value_type="Z")
-                    if pg_renames and read.has_tag("PG") and read.get_tag("PG") in pg_renames:
-                        read.set_tag("PG", pg_renames[read.get_tag("PG")], value_type="Z")
-                    records.append(read)
-                    found.add(read.query_name)
+            for want_chrom, windows in targets:
+                bam_chrom = (want_chrom if want_chrom in bam.references else None) if source_windows is not None \
+                    else resolve_reference_name(want_chrom, bam.references, links=contig_links)
+                if bam_chrom is None:
+                    continue
+                for k, (lo, hi) in enumerate(windows):
+                    for read in bam.fetch(bam_chrom, lo, hi):
+                        if read.is_unmapped or read.query_name not in wanted:
+                            continue
+                        if not record_keeps_signal(read, signal_provenance):
+                            continue
+                        # A record across the seam overlaps an earlier window too: written from that one.
+                        if any(read.reference_start < p_hi and (read.reference_end or read.reference_start + 1) > p_lo
+                               for p_lo, p_hi in windows[:k]):
+                            continue
+                        if renames and read.has_tag("RG") and read.get_tag("RG") in renames:
+                            read.set_tag("RG", renames[read.get_tag("RG")], value_type="Z")
+                        if pg_renames and read.has_tag("PG") and read.get_tag("PG") in pg_renames:
+                            read.set_tag("PG", pg_renames[read.get_tag("PG")], value_type="Z")
+                        records.append(read)
+                        found.add(read.query_name)
     if header is None:
         raise SubsetError(f"{dataset.label} has no files")
     if read_groups:
@@ -203,3 +218,15 @@ def write_read_subset_bam(state, dataset_id: str, chrom: str, start: int, end: i
         for read in records:
             out.write(read)
     return {"records": len(records), "reads": len(found), "missing": sorted(wanted - found)}
+
+
+def lifted_source_windows(dataset, chrom: str, start: int, end: int) -> list:
+    """A lifted dataset's source windows for target ``[start, end)`` (graph primary G8): the lift plan's windows of
+    every source contig the view's records come from, as ``[(contig, start, end)]`` on the dataset's BAMs."""
+    from services.lift.live_lift import lift_key, plan_fetch, select_pieces
+    config = dataset.live_lift
+    key = lift_key(config.handle, config.haplotypes, config.settings)
+    selection = select_pieces(config.handle, chrom, int(start), int(end), haplotypes=config.haplotypes,
+                              settings=config.settings, key=key)
+    plan = plan_fetch(selection, config.settings, fetch_range=(int(start), int(end)))
+    return [(c.contig, a, b) for c in plan.contigs for a, b in c.windows]

@@ -237,3 +237,41 @@ describe('Export data with an hg38 and a dm6 panel (Each panel navigates)', () =
     expect(urls.map(u => u.replace(/^.*\/api/, '/api'))).toEqual(['/api/reads/export_bam', '/api/reads/export_bam?panel_genome=dm6']);
   });
 });
+
+describe('graph primary G8: lifted reads in exports', () => {
+  const s = () => useBrowserStore.getState();
+  beforeEach(() => {
+    useBrowserStore.setState({
+      datasets: [{ id: 'napa', label: 'napa_ddda', data_type: 'bam', paths: ['/d/napa.bam'] },
+        { id: 'lift', label: 'Lifted', data_type: 'bam_livelift', paths: ['/d/src.bam'] }],
+      panels: [panel('napa', { viewportOverride: { ...HUMAN_AT }, navOwn: true }), panel('lift', { viewportOverride: { ...HUMAN_AT }, navOwn: true })],
+      activeReadIds: { napa: ['h1'], lift: ['lift-cohort:v1 ["g|q1","q1","r",0,"primary"]'] },
+    } as never);
+  });
+
+  it('BAM subset: a lifted dataset\'s reads come from its source windows; the export says so', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      urls.push(String(url));
+      return new Response(new Blob(['BAM']), { status: 200, headers: { 'x-fiberbrowser-missing': '0',
+        ...(String(url).includes('/api/lift/') ? { 'x-fiberbrowser-source-contigs': 'chr19_MATERNAL+chr19_PATERNAL' } : {}) } });
+    }));
+    const entry = getDataExport('read-bam')!;
+    const avail = entryAvailability(entry, { state: s(), readScope: 'shown' } as never);
+    expect(avail.ok).toBe(true);
+    const msg = await entry.run({ state: s(), readScope: 'shown' } as never);
+    expect(urls.map(u => u.replace(/^.*\/api/, '/api')).sort()).toEqual(['/api/lift/export_bam', '/api/reads/export_bam']);
+    expect(String(msg)).toContain('on its source assembly (chr19_MATERNAL, chr19_PATERNAL)');
+  });
+
+  it('read table: lifted datasets are left out of the Read Stats request', async () => {
+    const bodies: any[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body ?? '{}')));
+      return json({ per_read: [], aggregate: {}, is_bam: true });
+    }));
+    await buildReadTable(s(), readScopeGroups(s(), 'shown'));
+    expect(bodies.length).toBe(1);
+    expect(Object.keys(bodies[0].read_ids_by_dataset)).toEqual(['napa']);
+  });
+});

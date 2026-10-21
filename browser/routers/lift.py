@@ -339,3 +339,68 @@ async def lift_molecule_provenance(dataset_id: str, req: MoleculeProvenanceReque
     from services.dataset_registration import invalidate_dataset_caches
     invalidate_dataset_caches(state, dataset_id)
     return {"success": True, "dataset": dataset.to_dict()}
+
+
+@router.post("/api/lift/export_bam")
+def lift_export_bam(payload: dict, state=Depends(get_state)):  # sync: BAM I/O in the threadpool
+    """A BAM of a lifted dataset's named reads (Export data > Reads > BAM subset; graph primary G8): their records on
+    the source assembly, in the source windows the target region ``chrom:start-end`` lifts from. Cohort identities
+    and record keys (lifted and graph rows) name their QNAMEs. Body as ``/api/reads/export_bam``."""
+    import os
+    import tempfile
+    from fastapi.responses import FileResponse, JSONResponse
+    from starlette.background import BackgroundTask
+    from services.lift.capability import is_lifted
+    from services.lift.cohort import raw_qnames
+    from services.lift.live_lift import LiftRefused
+    from services.lift.registration import require_enabled
+    from services.read_bam_subset import SubsetError, lifted_source_windows, write_read_subset_bam
+    from services.runtime import get_public_mode
+    from utils.responses import content_disposition
+
+    require_enabled()
+    if get_public_mode():
+        return JSONResponse({"success": False, "error": "BAM export is disabled in public mode"}, status_code=403)
+    payload = payload if isinstance(payload, dict) else {}
+    dataset = state.datasets.get(payload.get("dataset_id"))
+    if dataset is None or not is_lifted(dataset):
+        return JSONResponse({"success": False, "error": "Not a lifted dataset"}, status_code=404)
+    read_ids = payload.get("read_ids") or []
+    try:
+        chrom = str(payload["chrom"])
+        start, end = int(payload["start"]), int(payload["end"])
+    except (KeyError, TypeError, ValueError):
+        return JSONResponse({"success": False, "error": "chrom, start and end are required"}, status_code=400)
+    if not isinstance(read_ids, list) or end <= start:
+        return JSONResponse({"success": False, "error": "read_ids must be a list and end greater than start"}, status_code=400)
+    try:
+        windows = lifted_source_windows(dataset, chrom, start, end)
+    except LiftRefused as exc:
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=exc.status)
+    except KeyError:
+        return JSONResponse({"success": False, "error": f"{chrom} is not in this dataset's lift map"}, status_code=404)
+    if not windows:
+        return JSONResponse({"success": False, "error": "No source sequence lifts to this region"}, status_code=404)
+    qnames = sorted(raw_qnames([str(r) for r in read_ids], dataset))
+    fd, out_path = tempfile.mkstemp(prefix="fiberbrowser-subset-", suffix=".bam")
+    os.close(fd)
+    try:
+        result = write_read_subset_bam(state, dataset.id, chrom, start, end, qnames, out_path, source_windows=windows)
+    except SubsetError as exc:
+        os.unlink(out_path)
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=400)
+    except Exception as exc:  # noqa: BLE001 - reported to the user
+        os.unlink(out_path)
+        return JSONResponse({"success": False, "error": f"Could not write the BAM: {exc}"}, status_code=500)
+    if result["reads"] == 0:
+        os.unlink(out_path)
+        return JSONResponse({"success": False, "error": "None of these reads align in this region"}, status_code=404)
+    stem = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in (dataset.label or dataset.id))
+    contigs = "+".join(sorted({c for c, _a, _b in windows}))
+    filename = f"{stem}_source_{contigs}_{result['reads']}reads.bam"
+    return FileResponse(out_path, media_type="application/octet-stream",
+                        headers={"Content-Disposition": content_disposition(filename),
+                                 "X-FiberBrowser-Reads": str(result["reads"]),
+                                 "X-FiberBrowser-Missing": str(len(result["missing"])),
+                                 "X-FiberBrowser-Source-Contigs": contigs},
+                        background=BackgroundTask(os.unlink, out_path))

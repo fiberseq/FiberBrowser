@@ -627,3 +627,29 @@ def test_concurrent_loads_share_the_decoded_bytes_budget():
             assert b.concurrent == 2 and b.share == 16 * 1024 * 1024
     with gr._SharedBytes(32 * 1024 * 1024) as c:
         assert c.concurrent == 1
+
+
+def test_a_lifted_bam_subset_is_written_on_the_source_assembly(env):
+    """Graph primary G8: Export data > BAM subset for lifted rows (linear or graph): the named reads' records from
+    the source windows the target region lifts from, on the source contigs, every tag kept. Graph rows name their
+    reads by cohort identity or record key; both decode to the QNAME."""
+    import pysam
+    did = _add_lifted(env)
+    out = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 0, "end": 7000}]},
+                             {"binding": "pat", "windows": [{"start": 0, "end": 1000}]}]).json()
+    by_q = {r["q"]: r for r in out["reads"] if not r["sup"]}
+    ids = [by_q["legacy"]["aid"], by_q["explicit"]["rk"], by_q["pat1"]["aid"], "no-such-read"]
+    r = env.client.post("/api/lift/export_bam", json={"dataset_id": did, "chrom": TARGET, "start": 0, "end": TSIZE, "read_ids": ids})
+    assert r.status_code == 200, r.text
+    assert r.headers["X-FiberBrowser-Reads"] == "3" and r.headers["X-FiberBrowser-Missing"] == "1"
+    path = env.tmp / "subset.bam"
+    path.write_bytes(r.content)
+    with pysam.AlignmentFile(str(path)) as bam:
+        got = {(rec.query_name, rec.reference_name) for rec in bam}
+        assert ("legacy", MAT) in got and ("explicit", MAT) in got and ("pat1", PAT) in got
+        assert all(c in (MAT, PAT) for _q, c in got)     # source contigs, never the target
+    # The linear routes still refuse lifted datasets (default deny); this one refuses others.
+    assert env.client.post("/api/reads/export_bam", json={"dataset_id": did, "chrom": TARGET, "start": 0, "end": TSIZE,
+                                                          "read_ids": ["legacy"]}).status_code == 409
+    assert env.client.post("/api/lift/export_bam", json={"dataset_id": "nope", "chrom": TARGET, "start": 0, "end": 10,
+                                                         "read_ids": ["legacy"]}).status_code == 404
