@@ -98,7 +98,8 @@ export function initialGraphView(reg: GraphRegistration | null, main: LinearView
     ? (follow ? followViewport(main!, target.size, target.size_inferred) : clampViewport(firstCovered(target), target.size, target.size_inferred))
     : null;
   return {
-    schema: 1,
+    schema: 2,
+    role: 'standalone',
     registrationId: reg?.id ?? null,
     packageRevision: reg?.revisions.package ?? null,
     graphRevision: reg?.revisions.graph ?? null,
@@ -158,6 +159,6 @@ export function togglePath(state: GraphViewState, key: string): GraphViewState {
 
 export function isGraphViewState(v: unknown): v is GraphViewState {
   const s = v as GraphViewState | null;
-  return Boolean(s && typeof s === 'object' && s.schema === 1 && Array.isArray(s.selectedPathKeys)
+  return Boolean(s && typeof s === 'object' && (s.schema === 1 || s.schema === 2) && Array.isArray(s.selectedPathKeys)
     && (s.linkMode === 'follow' || s.linkMode === 'independent'));
 }

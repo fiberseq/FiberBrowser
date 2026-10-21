@@ -6,6 +6,8 @@
  * line (never body). Each band row is a molecule's record; rows show only data, the band a compact count.
  */
 import { LIVE_LIFT_COLORS } from '../../components/tracks/read-track/liveLiftCanvas';
+import { getClusterColor } from '../../components/tracks/read-track/constants';
+import type { HostLane } from './memberBands';
 import type { ChromatinStyle } from './chromatinStyle';
 import type { CallPiece, PackedLane, PlacedMolecule } from './readGeometry';
 import type { Scene } from './scene';
@@ -39,13 +41,27 @@ export function effectiveReadLayers(enabled: Record<string, boolean | undefined>
 }
 
 /** What one draw put on the canvas, per layer (e2e and tests read it). */
-export interface ReadDrawStats { nuc: number; tf: number; msp: number; m6a: number; m6aDensity: number }
+export interface ReadDrawStats { nuc: number; tf: number; msp: number; m6a: number; m6aDensity: number; outlined?: number }
 
 export function emptyDrawStats(): ReadDrawStats {
   return { nuc: 0, tf: 0, msp: 0, m6a: 0, m6aDensity: 0 };
 }
 
-export interface ReadHit { x0: number; x1: number; y0: number; y1: number; molecule: PlacedMolecule }
+export interface ReadHit { x0: number; x1: number; y0: number; y1: number; molecule: PlacedMolecule;
+  /** Host mode: the member panel whose sub-band the row is in. */
+  member?: string }
+
+/** Host mode (graph primary G3): what each row is and how it is marked. */
+export interface ReadDecoration {
+  /** Per lane: the member and cluster of each row (-1 unassigned, null: no clusters). */
+  rowMember?: (lane: string, row: number) => string | undefined;
+  rowCluster?: (lane: string, row: number) => number | null;
+  selected?: (member: string | undefined, m: PlacedMolecule) => boolean;
+  highlighted?: (m: PlacedMolecule) => boolean;
+}
+
+export const SELECTED_READ_COLOR = '#06b6d4';
+export const HIGHLIGHTED_READ_COLOR = '#ca8a04';
 
 /** A molecule's body as merged screen runs (touching pieces joined). */
 export function bodyRuns(m: PlacedMolecule): [number, number][] {
@@ -87,7 +103,7 @@ function drawCall(ctx: CanvasRenderingContext2D, c: CallPiece, y: number, h: num
  * band's opacity (reads of the previous window kept while the next load is in flight are dimmed). */
 export function drawReads(ctx: CanvasRenderingContext2D, scene: Scene, lanes: Map<string, PackedLane>, style: ChromatinStyle,
   layers: ReadLayers, colors: Record<string, string>, rowHeight = READ_ROW_HEIGHT, gap = READ_ROW_GAP, alpha = 1,
-  stats?: ReadDrawStats): ReadHit[] {
+  stats?: ReadDrawStats, deco?: ReadDecoration): ReadHit[] {
   const hits: ReadHit[] = [];
   const pxPerBpOf = (m: PlacedMolecule) => {
     const bp = m.body.reduce((t, b) => t + (b.s1 - b.s0), 0);
@@ -157,13 +173,28 @@ export function drawReads(ctx: CanvasRenderingContext2D, scene: Scene, lanes: Ma
         const left = m.body.reduce((a, b) => (b.x0 < a.x0 ? b : a), m.body[0]);
         ctx.fillStyle = ink;
         ctx.fillRect(left.x0, y, Math.min(3, Math.max(1, left.x1 - left.x0)), rowHeight);
+        // Host mode: the cluster stripe beside the haplotype stripe (the read tracks' palette; unassigned grey).
+        const cluster = deco?.rowCluster?.(row.key, r) ?? null;
+        if (cluster != null) {
+          ctx.fillStyle = getClusterColor(cluster);
+          ctx.fillRect(left.x0 + 3, y, 3, rowHeight);
+        }
         if (m.read.sup) {
           // A supplementary record: its body edged with a dashed line in the lane's ink.
           ctx.save(); ctx.strokeStyle = ink; ctx.lineWidth = 1; ctx.setLineDash([2, 2]);
           for (const [x0, x1] of bodyRuns(m)) if (x1 - x0 >= 3) ctx.strokeRect(x0 + 0.5, y + 0.5, x1 - x0 - 1, rowHeight - 1);
           ctx.restore();
         }
-        hits.push({ x0: m.extent![0], x1: m.extent![1], y0: y - gap / 2, y1: y + rowHeight + gap / 2, molecule: m });
+        const member = deco?.rowMember?.(row.key, r);
+        const selected = deco?.selected?.(member, m), highlighted = deco?.highlighted?.(m);
+        if (selected || highlighted) {
+          // Selected (cyan) or highlighted (amber): the read tracks' outlines.
+          ctx.save(); ctx.globalAlpha = 1; ctx.strokeStyle = selected ? SELECTED_READ_COLOR : HIGHLIGHTED_READ_COLOR; ctx.lineWidth = 2;
+          ctx.strokeRect(m.extent![0] - 1, y - 1, m.extent![1] - m.extent![0] + 2, rowHeight + 2);
+          ctx.restore();
+          if (stats) stats.outlined = (stats.outlined ?? 0) + 1;
+        }
+        hits.push({ x0: m.extent![0], x1: m.extent![1], y0: y - gap / 2, y1: y + rowHeight + gap / 2, molecule: m, ...(member ? { member } : {}) });
         ctx.globalAlpha = 1;
       }
     });
@@ -191,13 +222,39 @@ export function drawReadBandLabels(ctx: CanvasRenderingContext2D, scene: Scene, 
   }
 }
 
+/** Host mode: each member sub-band's label in the gutter — its dataset colour down the rows it holds, the member's
+ * name and how many records it shows (and how many more did not fit). */
+export function drawHostBandLabels(ctx: CanvasRenderingContext2D, scene: Scene, lanes: Map<string, HostLane>,
+  rowHeight = READ_ROW_HEIGHT, gap = READ_ROW_GAP): void {
+  ctx.textAlign = 'left';
+  for (const row of scene.rows) {
+    const lane = lanes.get(row.key);
+    if (!lane || !row.bandHeight) continue;
+    for (const g of lane.groups) {
+      if (!g.rowCount) continue;
+      const top = row.bandTop + gap + g.startRow * (rowHeight + gap);
+      const h = g.rowCount * (rowHeight + gap) - gap;
+      ctx.fillStyle = g.color;
+      ctx.fillRect(1, top, 3, Math.max(2, h));
+      const shown = lane.rows.slice(g.startRow, g.startRow + g.rowCount).reduce((t, r) => t + r.length, 0);
+      ctx.font = 'bold 10px sans-serif';
+      ctx.fillText(g.label, 8, top + 9);
+      if (h >= 20) {
+        ctx.font = '9px sans-serif';
+        ctx.fillStyle = '#64748b';
+        ctx.fillText(`${shown} read${shown === 1 ? '' : 's'}${g.hidden ? ` +${g.hidden}` : ''}`, 8, top + 19);
+      }
+    }
+  }
+}
+
 const where = (n: number) => n.toLocaleString('en-US');
 
 /** Hover text of a molecule row at x: the record, then the call or mark under the pointer (whole size, identity). */
 export function describeReadHit(hit: ReadHit, x: number, datasetLabel: (id: string) => string, laneLabel: (key: string) => string,
   layers?: ReadLayers): string {
   const m = hit.molecule, r = m.read;
-  const head = `${r.q} · ${datasetLabel(r.d)}${r.lib ? ` (library ${r.lib + 1})` : ''} · ${laneLabel(r.b)} ${r.c}:${where(r.s)}-${where(r.e)} · strand ${r.st}${r.sup ? ' · supplementary' : ''}`;
+  const head = `${r.q} · ${datasetLabel(r.d)}${r.lib ? ` (library ${r.lib + 1})` : ''} · ${laneLabel(r.b)} ${r.c}:${where(r.s)}-${where(r.e)} · alignment orientation ${r.st}${r.sup ? ' · supplementary' : ''}`;
   const near = (a: number, b: number) => x >= a - 0.5 && x <= b + 0.5;
   // Only calls of a drawn layer are named (a hidden layer is not under the pointer).
   const call = (['msp', 'tf', 'nuc'] as const).filter(l => !layers || layers[l]).map(l => m.calls.find(c => c.layer === l && near(c.x0, c.x1))).find(Boolean);

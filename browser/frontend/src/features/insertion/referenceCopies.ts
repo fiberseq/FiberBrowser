@@ -5,6 +5,7 @@
  * top 4 by default, a confirmation above 8, at most 16 (utils/variantSplit.splitVerdict).
  */
 import { useBrowserStore } from '../../stores/browserStore';
+import { withoutGraphMembership } from '../../stores/graphMembership';
 import { seedHistoryBaseline } from '../../stores/historySlice';
 import { generatePanelId } from '../../stores/utils';
 import type { PanelConfig } from '../../types';
@@ -50,7 +51,7 @@ export function openReferenceCopies(lensDatasetId: string, copies: ReferenceCopy
     const pad = Math.max(1_000, Math.round((c.end - c.start) * 0.2));
     const {
       collapsedBySplitGroup: _a, collapsedByHaplotypeGroup: _b, collapsedByContactRegionGroup: _c, ...base
-    } = template;
+    } = withoutGraphMembership(template);
     return {
       ...base,
       id: generatePanelId(),

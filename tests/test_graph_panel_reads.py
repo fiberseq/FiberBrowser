@@ -532,3 +532,11 @@ def test_graph_rows_carry_the_linear_rows_identities(env):
         assert r["hap"] in {x["live_lift"]["hap_label"] for x in rows}, r["q"]
         assert r["hap"] == ("MAT" if r["b"] == "mat" else "PAT")
     assert matched >= 3
+
+
+def test_lifted_read_bindings_name_each_paths_haplotype(env):
+    """Graph primary G1: a split panel's liftHap names the path it is a member for (binding key -> map label)."""
+    did = _add_lifted(env)
+    bindings = env.client.get("/api/graph/read_bindings", params={"registration_id": "g1"}).json()["bindings"]
+    (b,) = [x for x in bindings if x["dataset_id"] == did]
+    assert b["haps"] == {"mat": "MAT", "pat": "PAT"}

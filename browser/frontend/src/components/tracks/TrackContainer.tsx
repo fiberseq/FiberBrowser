@@ -45,6 +45,7 @@ import { runAppCommand } from '../../utils/appCommands';
 import { launchOfferHidesWelcome, useLaunchUiStore } from '../../utils/launchSession';
 import { useOpeningStore } from '../../stores/openingStore';
 import { OpeningPanels } from './OpeningPanels';
+import { datasetBodyFor } from './datasetBodyExtensions';
 import { stackHeights, usePanelContentHeightStore } from '../../stores/panelContentHeightStore';
 import { PanelIcon } from '../ui/panelIcons';
 import { panelFrameStyle, panelGap, roundedPanels } from '../../theme/uiTheme';
@@ -841,6 +842,8 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
 
     // Dataset panel
     const datasetColor = datasets.find(d => d.id === panel.datasetId)?.color ?? '#4b5563';
+    // A body of another kind in place of the sub-tracks (graph mode: DESIGN_GRAPH_PRIMARY §1.1).
+    const OtherBody = datasetBodyFor(panel)?.component ?? null;
     const hasHiddenSubTracks = !exportInProgress && showHiddenTrackStrip && panels.some(p => !p.collapsed && p.subTracks.some(track => !track.visible && !track.removed));
     const fixedH = calcFixedHeight(panel, trackLayout) + (hasHiddenSubTracks ? HIDDEN_SUBTRACK_STRIP_HEIGHT : 0)
       + (panel.viewportOverride || alignLocusBar ? PANEL_SITE_BAR_HEIGHT : 0);
@@ -882,11 +885,18 @@ export function TrackContainer({ onScanPeaks, scanning }: Props) {
         {hasHiddenSubTracks && <HiddenSubTrackStrip panel={panel} />}
         {panel.viewportOverride && <PanelSiteBar panel={panel} />}
         {!panel.viewportOverride && alignLocusBar && <MainViewBar />}
+        {OtherBody ? (
+          <Suspense fallback={<div className="p-4 text-sm text-gray-400">Loading...</div>}>
+            <OtherBody panel={panel} width={panelWidth}
+              height={Math.max(0, panelHeight - PANEL_HEADER_HEIGHT - (panel.viewportOverride || alignLocusBar ? PANEL_SITE_BAR_HEIGHT : 0))} />
+          </Suspense>
+        ) : (
         <TrackLabelsProvider showLabels={Boolean(panel.showTrackLabels)}>
           {panel.subTracks.map((track, trackIdx) =>
             renderSubTrack(track, trackIdx, panel, panelWidth, readHeight, isFirstPanel, trackLayout)
           )}
         </TrackLabelsProvider>
+        )}
         {/* Fill remaining space with drag-to-pan for panels without a read track */}
         {!panel.datasetId && !panel.viewportOverride && <GenomePanelSpacer />}
         {panel.viewportOverride && !panel.datasetId && <SplitViewSpacer panelId={panel.id} viewport={panel.viewportOverride} />}

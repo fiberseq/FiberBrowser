@@ -3,7 +3,15 @@
  * its rail tile or the strip with no dataset. A Preview feature while Gates C–G are outstanding.
  */
 import { lazy } from 'react';
-import { registerAnalysisPanel } from '../../plugins/registry';
+import { registerAnalysisPanel, registerPanelMigration } from '../../plugins/registry';
+import { registerPanelHeaderExtension } from '../../components/tracks/panelHeaderExtensions';
+import { registerDatasetBody } from '../../components/tracks/datasetBodyExtensions';
+import { useBrowserStore } from '../../stores/browserStore';
+import { restoreOrphanGraphMembers } from '../../stores/graphMembership';
+import { GraphHostBody, hostShowsGraph, useGraphModeHeader } from './hostHeader';
+import { startHandoffController } from './handoff';
+import { useGraphBindingsStore } from './bindingsStore';
+import { settlePendingGraphOpens } from './openAsGraph';
 import { declareContribution } from '../../plugins/packRegistry';
 import { registerPreviewFeature } from '../../utils/previewFeatures';
 import { GraphView } from '../icons';
@@ -25,7 +33,7 @@ export function registerGraphPanel(): void {
     summary: 'Up to four paths of a prepared pangenome graph package (a target and the haplotypes compared with it), drawn on the target\'s own ruler, with no BAM needed.',
     limitations: [
       'Paths are drawn as a selected-path tube map: shared sequence once, small differences as marks on the tube, larger ones as bubbles; not every graph allele.',
-      'Reads are drawn for datasets bound to a path by explicit identity (a live-lift map of the same path, or a BAM on the target).',
+      'Reads are drawn for datasets bound to a path by explicit identity (a live-lift map of the same path, or a BAM on the target). A bound dataset panel can also be viewed as a graph in place (its header\'s Linear ⇄ Graph), with its haplotypes popped out as panels.',
       'At most 50 kb of the target and four paths (the target included) at a time.',
       'The graph helper (the fiberbrowser-graph-native companion package, or the macOS app) and a package made by fiberbrowser-graph prepare are needed.',
     ],
@@ -55,4 +63,32 @@ export function registerGraphPanel(): void {
       '/api/graph/reads', '/api/graph/sequence', '/api/graph/differences'],
   });
   declareContribution('panelFields', 'graphView');
+  for (const field of ['viewMode', 'graphMemberOf', 'collapsedByGraphGroup', 'graphHandoff']) declareContribution('panelFields', field);
+  registerGraphMode();
+}
+
+/**
+ * Graph mode of dataset panels (DESIGN_GRAPH_PRIMARY; graph primary G1/G6): the header toggle, the graph body in place
+ * of the sub-tracks, the zoom-out hand-off, the read bindings every header reads, orphaned members shown again, and
+ * schema 1 sessions restored as standalone graph views.
+ */
+function registerGraphMode(): void {
+  registerPanelHeaderExtension(useGraphModeHeader);
+  registerDatasetBody({ id: 'graph-mode', shows: hostShowsGraph, component: GraphHostBody });
+  registerPanelMigration(panel => {
+    const gv = panel.graphView as { schema?: number; role?: string } | undefined;
+    if (!gv || typeof gv !== 'object' || gv.role) return null;
+    // Schema 1 (a graph-view panel's state before graph mode): standalone. A dataset panel never had one.
+    return { ...panel, graphView: { ...gv, schema: 2, role: panel.contentType === 'dataset' ? 'host' : 'standalone' } };
+  });
+  startHandoffController();
+  useBrowserStore.subscribe((s, prev) => {
+    if (s.panels !== prev.panels) {
+      // Members whose host closed (or a session without it): shown again, out of the graph (D8).
+      const fixed = restoreOrphanGraphMembers(s.panels);
+      if (fixed !== s.panels) queueMicrotask(() => useBrowserStore.setState(st => ({ panels: restoreOrphanGraphMembers(st.panels) })));
+      settlePendingGraphOpens();
+    }
+  });
+  useGraphBindingsStore.subscribe(settlePendingGraphOpens);
 }

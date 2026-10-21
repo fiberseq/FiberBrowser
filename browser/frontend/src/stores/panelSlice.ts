@@ -8,6 +8,7 @@ import type { PanelConfig, SubTrackConfig, SubTrackType, PanelLayout, PanelConte
 import { canonicalPanelType, getAnalysisPanel, isAnalysisPanel, normalizeAnalysisPanelContentTypes } from '../plugins/registry';
 import { generatePanelId, createDefaultSubTracks, createGenomeSubTracks, restoreBuiltinAt } from './utils';
 import { restoreOrphanSplitSources } from './splitSources';
+import { restoreOrphanGraphMembers, withoutGraphFold, withoutGraphMembership } from './graphMembership';
 import { clampTrackHeight, isDeletableTrack } from '../components/tracks/trackRegistry';
 import { isPanOrZoom, moveLikewise, withSiteLockSuppressed } from './siteLock';
 import { seedHistoryBaseline } from './historySlice';
@@ -804,7 +805,8 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
       newDismissed.add(panel.contentType);
     }
     // The last panel of a split shows the panel it was split from again (not left folded away).
-    const panels = restoreOrphanSplitSources(state.panels.filter(p => p.id !== panelId));
+    // (and a closed graph host's members are shown again, out of its graph, with their state: D8).
+    const panels = restoreOrphanGraphMembers(restoreOrphanSplitSources(state.panels.filter(p => p.id !== panelId)));
     // Its own state goes too, unless another panel shares its key.
     const key = panel?.contentType === 'dataset' ? panelKey(panel) : null;
     const keyShared = key != null && panels.some(p => p.contentType === 'dataset' && panelKey(p) === key);
@@ -832,7 +834,7 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
     if (!source || source.contentType !== 'dataset') return '';  // Only duplicate dataset panels
     const newId = generatePanelId();
     const clone: PanelConfig = {
-      ...source,
+      ...withoutGraphMembership(source),
       id: newId,
       subTracks: source.subTracks.map(t => ({ ...t })),
       stateKey: newId,      // independent state key so filters/clusters are per-copy
@@ -861,8 +863,8 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
     // Shown again by hand: no longer held folded by a split or comparison (closing that later leaves it be).
     panels: state.panels.map(p => {
       if (p.id !== panelId) return p;
-      if (collapsed) return { ...p, collapsed };
-      const { collapsedBySplitGroup: _a, collapsedByHaplotypeGroup: _b, collapsedByContactRegionGroup: _c, ...rest } = p;
+      if (collapsed) return { ...withoutGraphFold(p), collapsed };
+      const { collapsedBySplitGroup: _a, collapsedByHaplotypeGroup: _b, collapsedByContactRegionGroup: _c, ...rest } = withoutGraphFold(p);
       return { ...rest, collapsed };
     }),
     fullViewPanelId: collapsed && state.fullViewPanelId === panelId ? null : state.fullViewPanelId,
@@ -1131,7 +1133,7 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
     if (!source || source.contentType !== 'dataset') return '';
     const id = generatePanelId();
     const copy: PanelConfig = {
-      ...source, id, stateKey: id, strand,
+      ...withoutGraphMembership(source), id, stateKey: id, strand,
       subTracks: source.subTracks.map(track => ({ ...track })),
       linkGroup: null, collapsed: false, layoutColumn: undefined,
       // A comparison's copy leaves the comparison but keeps its locus: never in its reference's link group.
@@ -1159,7 +1161,7 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
     if (!source || source.contentType !== 'dataset') return '';
     const id = generatePanelId();
     const copy: PanelConfig = {
-      ...source,
+      ...withoutGraphMembership(source),
       id,
       subTracks: source.subTracks.map(track => ({ ...track })),
       stateKey: id,
@@ -1203,7 +1205,7 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
     const copies: PanelConfig[] = labels.slice(1).map(label => {
       const id = generatePanelId();
       return {
-        ...source, id, stateKey: id, liftHap: label, liftHaplotypeMode: 'split',
+        ...withoutGraphMembership(source), id, stateKey: id, liftHap: label, liftHaplotypeMode: 'split',
         subTracks: source.subTracks.map(track => ({ ...track })),
         collapsed: false, regionLabel: undefined,
         contactRegionGroupId: undefined, contactRegionRole: undefined, genomeRegionGroupId: undefined,

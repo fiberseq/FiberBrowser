@@ -123,6 +123,17 @@ def _lifted_paths(dataset, reg) -> tuple[dict, list]:
     return out, problems
 
 
+def lifted_haps(dataset, paths: dict) -> dict:
+    """``{binding key: haplotype label}`` of a lifted dataset's bound paths (graph primary: a split panel's
+    ``liftHap`` names the path it is a member for)."""
+    hap_of, labels = {}, {}
+    for key, contig in paths.items():
+        hap, labels = source_haplotype(dataset, contig)
+        if hap is not None:
+            hap_of[key] = labels.get(hap, hap)
+    return hap_of
+
+
 def _native_paths(state, dataset, reg) -> tuple[dict, list]:
     targets = {m.get("target") for m in reg.maps}
     main = {c.name: int(c.size) for c in (getattr(state, "chroms", None) or ())}
@@ -160,7 +171,8 @@ def read_bindings(state, reg) -> list:
         if not paths and not problems:
             continue
         out.append({"dataset_id": dataset.id, "label": dataset.label, "kind": kind, "revision": dataset_revision(dataset),
-                    "paths": paths, "problems": problems, "libraries": len(dataset.paths)})
+                    "paths": paths, "problems": problems, "libraries": len(dataset.paths),
+                    **({"haps": lifted_haps(dataset, paths)} if kind == "lifted" else {})})
     return out
 
 

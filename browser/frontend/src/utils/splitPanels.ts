@@ -13,6 +13,7 @@
  * panels keep their read names (a frozen rule).
  */
 import { getFeatureStates } from '../api/features';
+import { withoutGraphMembership } from '../stores/graphMembership';
 import { getClusterColor } from '../components/tracks/read-track/constants';
 import { useBrowserStore } from '../stores/browserStore';
 import { seedHistoryBaseline } from '../stores/historySlice';
@@ -235,7 +236,7 @@ export function openSplitPanels(grouping: SplitGrouping, rows: SplitRow[], sourc
       const stateKey = `${ds}:${groupId}:${i}`;
       const label = grouping.title && row.kind === 'group' && !grouping.labelsComplete ? `${grouping.title} · ${row.label}` : row.label;
       list.push({
-        ...source,
+        ...withoutGraphMembership(source),
         id, stateKey, collapsed: false, layoutColumn: undefined, heightFraction: undefined,
         subTracks: source.subTracks.map(t => ({ ...t })),
         // As a strand split's copy: out of the source's link and comparison groups (a comparison's copy keeps its locus).

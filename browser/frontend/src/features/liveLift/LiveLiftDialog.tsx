@@ -3,6 +3,7 @@
  * relates it to this genome, the haplotypes, and the display settings. The new dataset opens split into one panel per
  * haplotype unless "Pooled" is chosen (a rule per panel, so the panels follow the view).
  */
+import { setOpenViewFor, useGraphSettings, type LiftedOpenView } from '../graphPanel/handoff';
 import { useEffect, useRef, useState } from 'react';
 import { useBrowserStore } from '../../stores/browserStore';
 import { addLiveLiftDataset, inspectLiftMap, suggestLiftMaps, type LiftMapInfo, type LiftMapSuggestion, type LiftSettings, type SupplementaryDisplay } from './api';
@@ -20,6 +21,8 @@ export function LiveLiftDialog() {
   const [info, setInfo] = useState<LiftMapInfo | null>(null);
   const [haps, setHaps] = useState<string[]>([]);
   const [mode, setMode] = useState<'split' | 'pooled'>('split');
+  // Open as (graph primary §1.4): graph when a package binds the map's paths (the default), else split or pooled.
+  const [openAs, setOpenAs] = useState<LiftedOpenView>(() => useGraphSettings.getState().defaultLiftedView);
   const [gSplitKb, setGSplitKb] = useState(10);
   const [mergeKb, setMergeKb] = useState(50);
   const [alternatives, setAlternatives] = useState(false);
@@ -75,7 +78,7 @@ export function LiveLiftDialog() {
     setError(null);
     const settings: LiftSettings = {
       ...cohortSettings,
-      haplotype_mode: mode, g_split: Math.round(gSplitKb * 1000), window_merge: Math.round(mergeKb * 1000),
+      haplotype_mode: openAs === 'pooled' || mode === 'pooled' ? 'pooled' : 'split', g_split: Math.round(gSplitKb * 1000), window_merge: Math.round(mergeKb * 1000),
       alternatives, supplementary_display: supplementaries, coverage_hatching: hatching,
     };
     try {
@@ -84,7 +87,9 @@ export function LiveLiftDialog() {
         settings, label: label.trim() || undefined,
       });
       if (!r.success || !r.dataset) { setError(r.error ?? 'The dataset could not be opened.'); return; }
-      // Split into one panel per haplotype unless Pooled (register.autoSplitNewLiftedDatasets, from its settings).
+      // Split into one panel per haplotype unless Pooled (register.autoSplitNewLiftedDatasets, from its settings);
+      // Graph: then viewed as a graph when a registered package binds it.
+      setOpenViewFor(r.dataset.id, openAs);
       useBrowserStore.getState().addDataset(r.dataset);
       close();
     } catch (err) {
@@ -137,10 +142,12 @@ export function LiveLiftDialog() {
             ))}
           </fieldset>
         )}
-        <fieldset className="mb-2">
-          <legend className="mb-1">Haplotype panels</legend>
-          <label className="mr-3"><input type="radio" checked={mode === 'split'} onChange={() => setMode('split')} /> One panel per haplotype</label>
-          <label><input type="radio" checked={mode === 'pooled'} onChange={() => setMode('pooled')} /> Pooled</label>
+        <fieldset className="mb-2" data-testid="live-lift-open-as">
+          <legend className="mb-1">Open as</legend>
+          <label className="mr-3" title="One panel on the graph package's paths, its haplotypes folded in (split panels when no registered package binds the map)">
+            <input type="radio" checked={openAs === 'graph'} onChange={() => { setOpenAs('graph'); setMode('split'); }} data-testid="live-lift-open-graph" /> Graph</label>
+          <label className="mr-3"><input type="radio" checked={openAs === 'split'} onChange={() => { setOpenAs('split'); setMode('split'); }} data-testid="live-lift-open-split" /> One panel per haplotype</label>
+          <label><input type="radio" checked={openAs === 'pooled'} onChange={() => { setOpenAs('pooled'); setMode('pooled'); }} data-testid="live-lift-open-pooled" /> Pooled</label>
         </fieldset>
         <label className="mb-2 block">Name (optional)
           <input className={input} value={label} onChange={e => setLabel(e.target.value)} />

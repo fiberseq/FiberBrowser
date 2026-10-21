@@ -24,6 +24,7 @@ import { panelTraits } from './panelExtensions';
 import { panelTitle } from './panelTitle';
 import { useSplitPanelStore } from '../stores/splitPanelStore';
 import { splitShowsAll } from './splitLocus';
+import { foldedInShownGraph } from '../stores/graphMembership';
 
 export type ClusterPeak = { start: number; end: number; mode?: string; chrom?: string; genome?: string; match?: MatchedRegionInfo };
 
@@ -45,8 +46,13 @@ export interface ClusterWindow {
  */
 export function clusterWindows(st: PlanState, datasetIds: string[]): ClusterWindow[] {
   const { chrom, start, end } = st;
-  return st.panels.filter(panel => panel.contentType === 'dataset' && panel.datasetId && datasetIds.includes(panel.datasetId) && !panel.collapsed
-    && (!st.selectedDatasets.size || st.selectedDatasets.has(panel.id))).map(panel => {
+  // A member folded into a host's graph counts as shown (its reads are in the host's sub-band), selected with its host.
+  return st.panels.filter(panel => {
+    if (panel.contentType !== 'dataset' || !panel.datasetId || !datasetIds.includes(panel.datasetId)) return false;
+    const host = panel.collapsed ? foldedInShownGraph(panel, st.panels) : null;
+    if (panel.collapsed && !host) return false;
+    return !st.selectedDatasets.size || st.selectedDatasets.has(panel.id) || Boolean(host && st.selectedDatasets.has(host.id));
+  }).map(panel => {
     const sk = panel.stateKey ?? panel.datasetId!;
     const viewport = panel.viewportOverride ?? { chrom, start, end };
     const assignments = st.clusterAssignments?.[sk];

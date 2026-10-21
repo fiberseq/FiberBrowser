@@ -33,6 +33,15 @@ import { bumpNavigation, navigateGraph, navigationToken, showSourceSpan, sourceP
 import { useGraphReadsStore } from './graphReadsStore';
 import { moleculeKey, useLiftHover } from '../liveLift/linking/hover';
 import { xForTarget } from './scene';
+import { conversionTargets, convertStandalone, foldIn, isHost, joinCandidates, joinGraph, membersOf, panelKeyOf, panelView, popOut, poppable, setPanelViewMode } from './hostMode';
+import { packMemberBands, routeRead, type BandMember, type HostLane, type MemberState } from './memberBands';
+import { drawHostBandLabels, type ReadDecoration } from './readCanvas';
+import { useReadActionsStore } from '../../stores/readActionsStore';
+import { setPinnedLinear, useGraphSettings } from './handoff';
+import { copyText } from '../../utils/clipboard';
+import { excludeReadsUndoably } from '../../components/tracks/read-track/ReadTrackActions';
+import { seedHistoryBaseline } from '../../stores/historySlice';
+import { idSetHas } from '../../utils/recordKeys';
 
 const DEBOUNCE_MS = 100;
 /** Named visits walked beyond each window edge, so an event exactly at an edge has its flank (graphlift flank_bp). */
@@ -131,6 +140,9 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   const bodyHeight = Math.max(60, Math.floor(heightProp ?? measured.height ?? 0));
 
   const state = panel?.graphView ?? null;
+  // Graph mode of a dataset panel (DESIGN_GRAPH_PRIMARY §1): the panel's own viewport is the only authority, its
+  // members' reads are drawn in sub-bands with their own state; the standalone graph-view panel is unchanged.
+  const hostMode = isHost(panel);
   const regs = status?.registrations ?? [];
   const reg: GraphRegistration | null = (state?.registrationId ? regs.find(r => r.id === state.registrationId) : null) ?? null;
   const problem = state ? restoreProblem(state, regs) : null;
@@ -138,25 +150,31 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
 
   // A new panel takes the first registration once the status is known.
   useEffect(() => {
-    if (!panelId || !status?.helper.available || state) return;
+    if (!panelId || !status?.helper.available || state || panel?.contentType === 'dataset') return;
     if (!regs.length) return;
     setGraphView(panelId, initialGraphView(regs[0], main));
   }, [panelId, status, state, regs, main]);
 
   // Following a linear panel onto another contig: that contig's target in the same package, if it has one.
   useEffect(() => {
-    if (!panelId || !state || !reg || problem) return;
+    if (!panelId || !state || !reg || problem || hostMode) return;   // a host retargets with its view (handoff.ts)
     const next = retargetFor(reg, state, initiatorView(state, panels, main));
     if (next) setGraphView(panelId, next);
   }, [panelId, state, reg, problem, panels, main]);
-  const viewport = state && target && !problem ? effectiveViewport(state, target, panels, main) : null;
+  // A host's view: its own viewport (the main view or its own), on its target's contig (else no graph here: the
+  // hand-off draws it linear). The request is the helper's ≤ 50 kb; the panel's viewport is never clamped.
+  const hostView = hostMode && panel ? panelView(panel, main) : null;
+  const viewport = state && target && !problem
+    ? (hostMode ? (hostView && canFollow(target, hostView) ? clampViewport({ contig: hostView.chrom, start: hostView.start, end: hostView.end }, target.size, target.size_inferred) : null)
+      : effectiveViewport(state, target, panels, main))
+    : null;
   // Following: remember where it is, so a closed (or switched) initiator leaves the panel where it was, on its own.
   const lastFollowed = useRef<GraphViewport | null>(null);
-  const following = Boolean(state?.linkMode === 'follow' && target && canFollow(target, state ? initiatorView(state, panels, main) : null)
+  const following = Boolean(!hostMode && state?.linkMode === 'follow' && target && canFollow(target, state ? initiatorView(state, panels, main) : null)
     && (!state?.initiatingReferenceId || state.initiatingReferenceId === initiatorView(state, panels, main)?.reference));
   if (following && viewport) lastFollowed.current = viewport;
   useEffect(() => {
-    if (!panelId || !state || !status || state.linkMode !== 'follow' || following || problem) return;
+    if (!panelId || !state || !status || state.linkMode !== 'follow' || following || problem || hostMode) return;
     if (reg && retargetFor(reg, state, initiatorView(state, panels, main))) return;   // another contig of the package: retargets
     // Not (or no longer) followable, also a restored state on another reference: on its own where it was.
     setGraphView(panelId, { ...state, linkMode: 'independent', targetViewport: lastFollowed.current ?? state.targetViewport,
@@ -246,9 +264,13 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   // not drawn until it is chosen again in the Reads menu (restore never re-binds another revision silently).
   const changedBindings = useMemo(() => readBindings.filter(b => readSettings.bound?.some(x => x.dataset_id === b.dataset_id && x.revision !== b.revision)),
     [readBindings, readSettings.bound]);
+  // A host draws its members' datasets (the members decide, not the Reads menu's dataset list).
+  const members = useMemo(() => (hostMode && panel ? membersOf(panels, panel) : []), [hostMode, panel, panels]);
+  const memberDatasetsKey = members.map(m => m.panel.datasetId).join(',');
   const activeBindings = useMemo(() => (readSettings.show ? readBindings.filter(b => Object.keys(b.paths).length
     && !changedBindings.includes(b)
-    && (readSettings.datasets == null || readSettings.datasets.includes(b.dataset_id))) : []), [readBindings, readSettings, changedBindings]);
+    && (hostMode ? memberDatasetsKey.split(',').includes(b.dataset_id)
+      : (readSettings.datasets == null || readSettings.datasets.includes(b.dataset_id)))) : []), [readBindings, readSettings, changedBindings, hostMode, memberDatasetsKey]);
   const [reads, setReads] = useState<{ response: GraphReadsResponse | null; loading: boolean; error: GraphApiError | null; forStart?: number; key?: string }>({ response: null, loading: false, error: null });
   const readsGenRef = useRef(0);
   const readsInflightRef = useRef<AbortController | null>(null);
@@ -374,6 +396,40 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   // stay, dimmed (they are placed by source coordinate, so where they show they are right; the new edges fill in).
   const readsStale = Boolean(reads.response && reads.key !== readsKey);
   const readsShown = reads.response && (!readsStale || reads.loading) ? reads.response : null;
+  // Host mode: one sub-band per member under each path it binds, each with its own member's state (G3).
+  const datasetColors = useBrowserStore(useShallow(s => Object.fromEntries(s.datasets.map(d => [d.id, d.color ?? '#4b5563']))));
+  const bandMembers: BandMember[] = useMemo(() => {
+    if (!hostMode) return [];
+    const multi = new Set(members.map(m => m.panel.datasetId)).size > 1;
+    return members.filter(m => m.panel.datasetId).map(({ member, panel: p }) => {
+      const ds = datasetLabels[p.datasetId!] ?? p.datasetId!;
+      const hap = p.liftHap ?? null;
+      const name = p.title || (hap ? (multi ? `${ds} · ${hap}` : hap) : ds);
+      // Rows route by dataset and haplotype (a lifted member) or dataset (native, on the target): the saved path key
+      // is the member's path at the host's target, which a pan onto another contig changes.
+      void member;
+      return { panelId: p.id, stateKey: panelKeyOf(p), datasetId: p.datasetId!, liftHap: hap, binding: null,
+        label: name, color: datasetColors[p.datasetId!] ?? '#4b5563' };
+    });
+  }, [hostMode, members, datasetLabels, datasetColors]);
+  const clusterAssignmentsAll = useBrowserStore(s => s.clusterAssignments);
+  const clusterOrderAll = useBrowserStore(s => s.clusterOrder);
+  const clusterFocusAll = useBrowserStore(s => s.clusterFocus);
+  const filteredAll = useBrowserStore(s => s.filteredReadIds);
+  const sortAll = useBrowserStore(s => s.readSortOrder);
+  const selectedAll = useBrowserStore(s => s.selectedReadIds);
+  const excludedAll = useReadActionsStore(s => s.excludedReadIds);
+  const highlight = useReadActionsStore(s => s.highlight);
+  const memberStates = useMemo(() => {
+    const out: Record<string, MemberState> = {};
+    for (const m of bandMembers) {
+      out[m.panelId] = { assignments: clusterAssignmentsAll[m.stateKey], clusterOrder: clusterOrderAll[m.stateKey],
+        focus: clusterFocusAll[m.stateKey], filter: filteredAll[m.stateKey] ?? null, sort: sortAll[m.stateKey],
+        excluded: excludedAll[m.stateKey] };
+    }
+    return out;
+  }, [bandMembers, clusterAssignmentsAll, clusterOrderAll, clusterFocusAll, filteredAll, sortAll, excludedAll]);
+  const bandSort = state?.bandSort ?? 'position';
   const readLayout = useMemo(() => {
     if (!baseScene || !response || !readsShown) return null;
     const t0 = performance.now();
@@ -381,9 +437,23 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     const span = response.result.interval.end - response.result.interval.start;
     const placed = placeReads(readsShown.reads.filter(r => activeDatasetIds.has(r.d)), index, MAX_READ_PRIMITIVES,
       span / Math.max(1, baseScene.dataWidth));
-    const lanes = packMolecules(placed.molecules, rowsPerLane);
+    const lanes: Map<string, PackedLane | HostLane> = hostMode
+      ? packMemberBands(placed.molecules, bandMembers, memberStates, rowsPerLane, bandSort)
+      : packMolecules(placed.molecules, rowsPerLane);
     return { placed, lanes, ms: performance.now() - t0 };
-  }, [baseScene, response, readsShown, activeDatasetIds, rowsPerLane]);
+  }, [baseScene, response, readsShown, activeDatasetIds, rowsPerLane, hostMode, bandMembers, memberStates, bandSort]);
+  // Selected (each member's QNAME set) and highlighted ("Highlight in all panels": QNAME, cohort id or record key).
+  const decoration: ReadDecoration | undefined = useMemo(() => {
+    if (!hostMode || !readLayout) return undefined;
+    const keyOf = new Map(bandMembers.map(m => [m.panelId, m.stateKey]));
+    const lane = (k: string) => readLayout.lanes.get(k) as HostLane | undefined;
+    return {
+      rowMember: (k, r) => lane(k)?.rowMember?.[r],
+      rowCluster: (k, r) => lane(k)?.rowCluster?.[r] ?? null,
+      selected: (member, m) => Boolean(member && selectedAll[keyOf.get(member) ?? '']?.has(m.read.q)),
+      highlighted: m => Boolean(highlight?.ids.size && idSetHas(highlight.ids, [m.read.q, m.read.aid], m.read.rk)),
+    };
+  }, [hostMode, readLayout, bandMembers, selectedAll, highlight]);
   const bands = useMemo(() => {
     if (!readLayout) return null;
     const out: Record<string, number> = {};
@@ -453,7 +523,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       const tr = performance.now();
       const drawStats = emptyDrawStats();
       readHitsRef.current = readLayout ? drawReads(ctx, scene, readLayout.lanes, style, readLayers, laneColors, readRowHeight, READ_ROW_GAP,
-        readsStale ? 0.45 : 1, drawStats) : [];
+        readsStale ? 0.45 : 1, drawStats, decoration) : [];
       readDrawStatsRef.current = drawStats;
       let hoveredRows = 0;
       if (hoverKey) {
@@ -477,7 +547,8 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         ctx.beginPath();
         ctx.rect(0, GRAPH_RULER_HEIGHT, GRAPH_GUTTER - 2, canvasHeight);
         ctx.clip();
-        drawReadBandLabels(ctx, scene, readLayout.lanes, laneColors);
+        if (hostMode) drawHostBandLabels(ctx, scene, readLayout.lanes as Map<string, HostLane>, readRowHeight, READ_ROW_GAP);
+        else drawReadBandLabels(ctx, scene, readLayout.lanes, laneColors);
         ctx.restore();
       }
       // Gutter labels stay put.
@@ -493,7 +564,8 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         (window.__FIBERBROWSER_GRAPH_SCENES__ ??= {})[panelId] = { scene, model, offset: sceneOffset,
           ...(readLayout ? { reads: { molecules: readLayout.placed.molecules, hits: readHitsRef.current,
             placeMs: readLayout.ms, drawMs: readDrawMsRef.current, serverMs: reads.response?.timings.total_ms, drawn: readDrawStatsRef.current, layers: readLayers, hovered: hoveredRowsRef.current, hoverKey,
-            lanes: Object.fromEntries([...readLayout.lanes].map(([k, l]) => [k, { rows: l.rows.length, hidden: l.hidden }])) } } : {}) };
+            lanes: Object.fromEntries([...readLayout.lanes].map(([k, l]) => [k, { rows: l.rows.length, hidden: l.hidden,
+              ...((l as HostLane).groups ? { groups: (l as HostLane).groups.map(g => ({ member: g.memberId, label: g.label, rows: g.rowCount, reads: g.reads, order: g.order })) } : {}) }])) } } : {}) };
       }
     } else {
       drawRuler(ctx, null, viewport, width, reversed);
@@ -504,12 +576,20 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         if (trace.paintedAt === undefined) { trace.paintedAt = performance.now(); trace.outcome = trace.outcome ?? 'painted'; }
       });
     }
-  }, [scene, transform, width, canvasHeight, renderVersion, sceneOffset, readLayout, style, readSettings, readsStale, readLayers, hoverKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [scene, transform, width, canvasHeight, renderVersion, sceneOffset, readLayout, style, readSettings, readsStale, readLayers, hoverKey, decoration]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------------------------------------------------------------- navigation
   const commitViewport = useCallback((next: GraphViewport, detach = false, linearAtStart?: LinearView | null) => {
     if (!panelId || !state || !target) return;
     bumpNavigation(panelId);   // any correction computed before this move is stale now
+    if (hostMode) {
+      // The host's own viewport, through the ordinary panel navigation (never a detached graph viewport).
+      const store = useBrowserStore.getState();
+      const own = store.panels.find(p => p.id === panelId);
+      if (own?.viewportOverride) store.navigatePanelOwnView(panelId, next.contig, next.start, next.end);
+      else store.setViewport(next.contig, next.start, next.end);
+      return;
+    }
     if (state.linkMode === 'follow' && following && !detach) {
       // Following: the graph moves its initiating panel (in that panel's own frame) by the same bp, keeping that
       // panel's width, and follows it back. A drag measures from where the initiator was when it began, so moves
@@ -525,7 +605,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       return;
     }
     setGraphView(panelId, { ...state, linkMode: 'independent', targetViewport: next, initiatingPanelId: null, initiatingReferenceId: null });
-  }, [panelId, state, target, main, viewport, following]);
+  }, [panelId, state, target, main, viewport, following, hostMode]);
 
   const drag = useRef<{ x: number; view: GraphViewport; moved: boolean; linear: LinearView | null } | null>(null);
   const [cursor, setCursor] = useState<{ x: number; y: number; text: string; cursorX: number | null } | null>(null);
@@ -605,6 +685,25 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     const next = now.includes(groupId) ? now.filter(id => id !== groupId) : [...now, groupId].slice(-16);
     setGraphView(panelId, { ...state, layoutSettings: { ...state.layoutSettings, expanded: next } });
   };
+  /** The member read row under a point (host mode), with the member panel it belongs to. */
+  const readHitAt = (x: number, y: number) => {
+    const sx = x - sceneOffset;
+    return readHitsRef.current.find(h => sx >= h.x0 && sx <= h.x1 && y >= h.y0 && y <= h.y1) ?? null;
+  };
+  /** Select or deselect a read in its member's selection (QNAME, as every read view keeps it); with selection sync on
+   * (D14), every other member of the host showing that record follows (§4.3). */
+  const setReadSelected = (hit: ReadHit, on?: boolean) => {
+    const member = bandMembers.find(m => m.panelId === hit.member);
+    if (!member) return;
+    const store = useBrowserStore.getState();
+    const q = hit.molecule.read.q;
+    const next = on ?? !store.selectedReadIds[member.stateKey]?.has(q);
+    const targets = [member, ...(state?.syncSelection === false ? [] : bandMembers.filter(m => m !== member && routeRead(hit.molecule.read, m)))];
+    for (const m of targets) {
+      const has = useBrowserStore.getState().selectedReadIds[m.stateKey]?.has(q) ?? false;
+      if (has !== next) useBrowserStore.getState().toggleReadSelection(m.stateKey, q);
+    }
+  };
   const onPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const click = drag.current && !drag.current.moved;
     drag.current = null;
@@ -612,6 +711,9 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
     const zoom = rect.width > 0 && width > 0 ? rect.width / width : 1;
     const x = (e.clientX - rect.left) / zoom, y = (e.clientY - rect.top) / zoom;
+    // Shift-click on a read selects it (as in the read tracks).
+    const rh = hostMode && e.shiftKey ? readHitAt(x, y) : null;
+    if (rh) { setReadSelected(rh); return; }
     const found = selectionAt(x, y);
     if (!found) { if (graphSelection?.panelId === panelId) selectGraph(null); return; }
     if (e.metaKey || e.ctrlKey) { selectGraph(found.sel, true); return; }
@@ -655,16 +757,19 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     const deltaBp = Math.round((reversed ? dx : -dx) / Math.max(1e-9, bpScale(transform)));
     if (!deltaBp) return;
     const corrected = panViewport(viewport, deltaBp, target.size, target.size_inferred);
-    if (following) navigateGraph(panelId, corrected); else commitViewport(corrected, true);
+    if (following && !hostMode) navigateGraph(panelId, corrected); else commitViewport(corrected, true);
   }, [scene]); // eslint-disable-line react-hooks/exhaustive-deps
   const zoomAround = (px: number, factor: number) => {
     if (!transform || !viewport || !target || !panelId || !state) return;
     const anchor = anchorAt(px);
-    const next = clampViewport(zoomViewport(viewport, factor, anchor, target.size, target.size_inferred, screenFraction(px)), target.size, target.size_inferred);
+    // A host zooms its own viewport with no 50 kb clamp, so zooming out past the hand-off draws it linear (§7.1).
+    const next = hostMode && hostView
+      ? hostZoom(hostView, factor, anchor, screenFraction(px), target.size, target.size_inferred)
+      : clampViewport(zoomViewport(viewport, factor, anchor, target.size, target.size_inferred, screenFraction(px)), target.size, target.size_inferred);
     correction.current = null;
     if (next.start === viewport.start && next.end === viewport.end) return;   // clamped: nothing moves, nothing to correct
     // Following: the initiator zooms (its own frame) and the graph follows it; on its own: only the graph.
-    if (following) navigateGraph(panelId, next); else commitViewport(next, true);
+    if (following && !hostMode) navigateGraph(panelId, next); else commitViewport(next, true);
     // The anchor's target base goes back under the pointer once the new scene is drawn; an insertion slot has no
     // target base to anchor (its boundary would jump the slot's edge), so none is scheduled there.
     const t = scene ? targetAtX(scene.targetMap, px - sceneOffset) : null;
@@ -701,7 +806,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   };
 
   // ---------------------------------------------------------------- menu
-  const [menu, setMenu] = useState<{ x: number; y: number; sel?: GraphSelection; group?: string | null } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; sel?: GraphSelection; group?: string | null; read?: ReadHit | null } | null>(null);
   const WHAT_LABEL: Record<string, string> = { insertion: 'Insertion', deletion: 'Deletion', substitution: 'Substitution',
     inversion: 'Inversion', complex: 'Complex region', junction: 'Fragment junction', sequence: 'Sequence', gap: 'Graph gap',
     cluster: 'Clustered differences', 'open end': 'Open end' };
@@ -711,6 +816,32 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   const followable = useMemo(() => panels.filter(p => p.contentType === 'dataset' && p.viewportOverride && target
     && canFollow(target, { ...p.viewportOverride, reference: p.genome || main.reference })), [panels, target, main.reference]);
   const entries: ContextMenuEntry[] = [];
+  const handoffSettings = useGraphSettings();
+  const labelOfMember = (id: string) => bandMembers.find(m => m.panelId === id)?.label ?? 'panel';
+  // A read under the pointer (host mode): the read tracks' read actions, in its member's state.
+  if (menu?.read && hostMode) {
+    const hit = menu.read;
+    const r = hit.molecule.read;
+    const member = bandMembers.find(m => m.panelId === hit.member);
+    const sk = member?.stateKey ?? '';
+    const selected = selectedAll[sk];
+    const memberPanel = panels.find(p => p.id === hit.member);
+    entries.push({ kind: 'heading', label: `${r.q} · ${member?.label ?? ''}` });
+    entries.push({ kind: 'item', action: 'rd:select', icon: 'eye', label: selected?.has(r.q) ? 'Deselect read' : 'Select read',
+      title: `In ${member?.label ?? 'its panel'}${state?.syncSelection === false ? '' : ' and every member showing it'} (also Shift-click)` });
+    entries.push({ kind: 'item', action: 'rd:highlight', icon: 'target', label: 'Highlight molecule in all panels' });
+    if (selected?.size) {
+      entries.push({ kind: 'item', action: 'rd:keep', icon: 'filter', label: `Keep only selected reads (${selected.size.toLocaleString()})` });
+      entries.push({ kind: 'item', action: 'rd:exclude', icon: 'eye-off', label: `Exclude selected reads (${selected.size.toLocaleString()})` });
+    }
+    entries.push({ kind: 'item', action: 'rd:copy', icon: 'copy', label: 'Copy read name' });
+    if (memberPanel && memberPanel.id !== panelId) {
+      entries.push(memberPanel.collapsedByGraphGroup === panelId
+        ? { kind: 'item', action: `pop:${memberPanel.id}`, icon: 'panel:graph-view', label: `Pop out ${member?.label}` }
+        : { kind: 'item', action: `fold:${memberPanel.id}`, icon: 'panel:graph-view', label: `Fold ${member?.label} into the graph` });
+    }
+    entries.push({ kind: 'separator' });
+  }
   // What is under the pointer first (Inspect, expand, focus, source spans), the panel's settings below.
   const menuPlacements: SourcePlacement[] = menu?.sel?.placements ?? [];
   if (menu?.sel && state && reg && target) {
@@ -740,7 +871,42 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     }
     entries.push({ kind: 'separator' });
   }
-  if (state && reg && target) {
+  if (state && reg && target && hostMode && panel) {
+    // Graph mode of this dataset panel: its view is the panel's own; pop-outs are its members as ordinary panels.
+    entries.push({ kind: 'heading', label: `${target.assembly} · ${target.path.contig} · graph mode` });
+    entries.push({ kind: 'item', action: 'host:linear', icon: 'reads', label: 'View as linear', title: 'This panel\'s read tracks; its folded members open beside it' });
+    entries.push({ kind: 'item', action: 'host:pin', icon: 'pin', label: 'Stay linear',
+      title: `Draw linear tracks here until "Resume graph" (otherwise the graph hands off above ${formatBp(handoffSettings.outBp)})` });
+    const { folded, missing } = poppable(panels, panel);
+    const revealed = members.filter(m => m.panel.id !== panel.id && !m.panel.collapsedByGraphGroup);
+    const popEntries: { kind: 'item'; action: string; icon: string; label: string; title?: string }[] = [
+      ...folded.map(p => ({ kind: 'item' as const, action: `pop:${p.id}`, icon: 'panel:graph-view', label: `Pop out ${labelOfMember(p.id)}` })),
+      ...missing.map(m => ({ kind: 'item' as const, action: `popnew:${m.binding}`, icon: 'panel:graph-view', label: `Pop out ${m.hap} (a new panel)`,
+        title: 'A panel of this dataset for that haplotype, starting with this panel\'s state' })),
+    ];
+    if (folded.length + missing.length > 1) popEntries.push({ kind: 'item', action: 'pop:all', icon: 'panel:graph-view', label: 'Pop out all haplotypes in view' });
+    popEntries.push(...revealed.map(m => ({ kind: 'item' as const, action: `fold:${m.panel.id}`, icon: 'panel:graph-view', label: `Fold ${labelOfMember(m.panel.id)} into the graph` })));
+    if (revealed.length > 1) popEntries.push({ kind: 'item', action: 'fold:all', icon: 'panel:graph-view', label: 'Fold all pop-outs' });
+    if (popEntries.length) entries.push({ kind: 'submenu', id: 'popout', icon: 'panel:graph-view', label: `Pop out (${members.length - 1} member${members.length === 2 ? '' : 's'})`, entries: popEntries });
+    const joinable = joinCandidates(panels, panel);
+    if (joinable.length) {
+      entries.push({ kind: 'submenu', id: 'join', icon: 'layers', label: 'Add panels to this graph…',
+        entries: joinable.map(c => ({ kind: 'item' as const, action: `join:${c.panel.id}`, icon: 'layers',
+          label: `${c.panel.title || datasetLabels[c.panel.datasetId ?? ''] || c.panel.datasetId}${c.panel.liftHap ? ` · ${c.panel.liftHap}` : ''}` })) });
+    }
+    entries.push({ kind: 'submenu', id: 'bands', icon: 'settings', label: `Rows without a sort or clusters: ${bandSort === 'length' ? 'longest first' : 'by first base'}`,
+      entries: [
+        { kind: 'item' as const, action: 'band:position', icon: 'settings', label: `${bandSort === 'position' ? '✓ ' : ''}By first base` },
+        { kind: 'item' as const, action: 'band:length', icon: 'settings', label: `${bandSort === 'length' ? '✓ ' : ''}Longest first` },
+      ] });
+    entries.push({ kind: 'item', action: 'host:sync', icon: 'eye', label: `${state.syncSelection === false ? '' : '✓ '}Sync selection across the graph`,
+      title: 'Selecting a read selects it in every member showing the same record' });
+    entries.push({ kind: 'submenu', id: 'handoff', icon: 'settings', label: `Linear above ${formatBp(handoffSettings.outBp)}`,
+      entries: [[50_000, 40_000], [30_000, 25_000], [20_000, 15_000]].map(([o, i]) => ({ kind: 'item' as const, action: `ho:${o}:${i}`, icon: 'settings',
+        label: `${handoffSettings.outBp === o ? '✓ ' : ''}Above ${formatBp(o)} (graph again at ${formatBp(i)})` })) });
+    entries.push({ kind: 'separator' });
+  }
+  if (state && reg && target && !hostMode) {
     const mainOk = canFollow(target, main);
     entries.push({ kind: 'heading', label: `${target.assembly} · ${target.path.contig}` });
     entries.push({ kind: 'item', action: 'follow:main', icon: 'target', disabled: !mainOk,
@@ -753,7 +919,16 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     }
     entries.push({ kind: 'item', action: 'independent', icon: 'pin', label: `${state.linkMode === 'independent' ? '✓ ' : ''}Navigate on its own` });
     entries.push({ kind: 'item', action: 'goto', icon: 'search', label: 'Go to a target locus…' });
+    const convertible = panel ? conversionTargets(panels, panel) : [];
+    if (convertible.length) {
+      entries.push({ kind: 'submenu', id: 'convert', icon: 'reads', label: 'Make this the graph view of…',
+        entries: convertible.map(p => ({ kind: 'item' as const, action: `conv:${p.id}`, icon: 'reads',
+          label: `${p.title || datasetLabels[p.datasetId ?? ''] || p.datasetId}${p.liftHap ? ` · ${p.liftHap}` : ''}`,
+          title: 'That dataset panel views its graph here, with its read tools; this panel closes' })) });
+    }
     entries.push({ kind: 'separator' });
+  }
+  if (state && reg && target) {
     entries.push({ kind: 'submenu', id: 'paths', icon: 'layers', label: `Paths (${state.selectedPathKeys.length} of at most ${GRAPH_MAX_PATHS})`,
       entries: selectableBindings(reg, target.key, state.selectedPathKeys).map(b => {
         const on = state.selectedPathKeys.includes(b.key);
@@ -788,7 +963,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
           { kind: 'item' as const, action: 'reads:toggle', icon: readSettings.show ? 'eye' : 'eye-off', disabled: !bound.length,
             label: `${readSettings.show ? '✓ ' : ''}Show reads on the paths`,
             title: 'Molecules of loaded datasets whose assembly is a path of this graph, drawn along their walk' },
-          ...bound.map(b => ({ kind: 'item' as const, action: `reads:ds:${b.dataset_id}`, icon: shownIds.has(b.dataset_id) ? 'eye' : 'eye-off',
+          ...(hostMode ? [] : bound).map(b => ({ kind: 'item' as const, action: `reads:ds:${b.dataset_id}`, icon: shownIds.has(b.dataset_id) ? 'eye' : 'eye-off',
             label: `${shownIds.has(b.dataset_id) ? '✓ ' : ''}${b.label}${changedBindings.includes(b) ? ' (changed since saved: choose to bind it again)' : ''}`,
             title: `${b.kind === 'lifted' ? 'Live-lift dataset' : 'Dataset on the target'}: ${Object.entries(b.paths).filter(([k]) => state.selectedPathKeys.includes(k)).map(([k, c]) => `${laneLabelOf(k)} ← ${c}`).join(', ') || 'no selected path'}${b.problems.length ? ` · not bound: ${b.problems.join('; ')}` : ''}` })),
           ...readBindings.filter(b => b.problems.length && !Object.keys(b.paths).length).map(b => ({ kind: 'item' as const, action: `reads:none:${b.dataset_id}`,
@@ -814,12 +989,42 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   const onMenuAction = (action: string) => {
     const at = menu;
     setMenu(null);
+    if (hostMode && panelId && panel) {
+      const hit = at?.read;
+      const member = hit ? bandMembers.find(m => m.panelId === hit.member) : undefined;
+      const store = useBrowserStore.getState();
+      if (action === 'rd:select' && hit) { setReadSelected(hit); return; }
+      if (action === 'rd:highlight' && hit) { useReadActionsStore.getState().highlightReads([hit.molecule.read.q]); return; }
+      if (action === 'rd:copy' && hit) { void copyText(hit.molecule.read.q); return; }
+      if ((action === 'rd:keep' || action === 'rd:exclude') && member) {
+        const ids = [...(store.selectedReadIds[member.stateKey] ?? [])];
+        if (!ids.length) return;
+        if (action === 'rd:exclude') { excludeReadsUndoably(member.stateKey, ids); return; }
+        seedHistoryBaseline(store, 'Before keeping only the selected reads', 'analysis');
+        store.setFilteredReadIds(member.stateKey, new Set(ids));
+        useBrowserStore.getState().pushSnapshot?.('Keep only selected reads', { kind: 'analysis' });
+        return;
+      }
+      if (action === 'host:linear') { setPanelViewMode(panelId, 'linear'); return; }
+      if (action === 'host:pin') { setPinnedLinear(panelId, true); return; }
+      if (action === 'host:sync') { setGraphView(panelId, { ...state!, syncSelection: state!.syncSelection === false }); return; }
+      if (action.startsWith('band:')) { setGraphView(panelId, { ...state!, bandSort: action.slice(5) as 'position' | 'length' }); return; }
+      if (action.startsWith('ho:')) { const [, o, i] = action.split(':'); useGraphSettings.getState().set({ outBp: Number(o), inBp: Number(i) }); return; }
+      if (action === 'pop:all') { const { folded, missing } = poppable(panels, panel); popOut(panelId, folded.map(p => p.id), missing); return; }
+      if (action.startsWith('popnew:')) { const m = poppable(panels, panel).missing.filter(x => x.binding === action.slice(7)); popOut(panelId, [], m); return; }
+      if (action.startsWith('pop:')) { popOut(panelId, [action.slice(4)]); return; }
+      if (action === 'fold:all') { foldIn(panelId, members.filter(m => m.panel.id !== panelId).map(m => m.panel.id)); return; }
+      if (action.startsWith('fold:')) { foldIn(panelId, [action.slice(5)]); return; }
+      if (action.startsWith('join:')) { joinGraph(panelId, [action.slice(5)]); return; }
+    }
+    if (action.startsWith('conv:') && panelId) { convertStandalone(panelId, action.slice(5)); return; }
     if (at?.sel && panelId && state && target) {
       const sel = at.sel;
       if (action === 'sel:inspect') { selectGraph(sel, true); return; }
       if (action === 'sel:expand' && at.group) { toggleExpanded(at.group); selectGraph(sel, false); return; }
       if (action === 'sel:focus' && sel.target) {
-        navigateGraph(panelId, { contig: target.path.contig, ...focusWindow(sel.target, target.size) });
+        if (hostMode) commitViewport(clampViewport({ contig: target.path.contig, ...focusWindow(sel.target, target.size) }, target.size, target.size_inferred), true);
+        else navigateGraph(panelId, { contig: target.path.contig, ...focusWindow(sel.target, target.size) });
         selectGraph(sel, false);
         return;
       }
@@ -968,9 +1173,11 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
             e.preventDefault();
             const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
             const zoom = rect.width > 0 && width > 0 ? rect.width / width : 1;
-            const found = selectionAt((e.clientX - rect.left) / zoom, (e.clientY - rect.top) / zoom);
+            const px = (e.clientX - rect.left) / zoom, py = (e.clientY - rect.top) / zoom;
+            const read = hostMode ? readHitAt(px, py) : null;
+            const found = read ? null : selectionAt(px, py);
             const group = found ? hitGroup(found.hit) : null;
-            setMenu({ x: e.clientX, y: e.clientY, sel: found?.sel, group: isInsertionGroup(group) ? group.id : null });
+            setMenu({ x: e.clientX, y: e.clientY, sel: found?.sel, group: isInsertionGroup(group) ? group.id : null, read });
           }} />
         {/* Lane labels' accessible names (the canvas draws them). */}
         <div className="sr-only">{model?.rows.map(l => <span key={l.key} data-testid="graph-lane-label" title={l.title} style={{ color: laneColor(l) }}>{l.label}</span>)}</div>
@@ -1028,6 +1235,19 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       )}
     </div>
   );
+}
+
+/** A host's zoom about `anchor` (kept at screen fraction `fraction`) on its own viewport: no 50 kb clamp (the hand-off
+ * decides what it draws), at least 40 bp, inside the target when its size is known. */
+function hostZoom(view: { chrom: string; start: number; end: number }, factor: number, anchor: number, fraction: number,
+  size: number | null, sizeInferred: boolean): GraphViewport {
+  let width = Math.max(40, Math.round((view.end - view.start) * factor));
+  const limit = size != null && !sizeInferred ? size : null;
+  if (limit != null) width = Math.min(width, limit);
+  let start = Math.round(anchor - fraction * width);
+  if (start < 0) start = 0;
+  if (limit != null && start + width > limit) start = Math.max(0, limit - width);
+  return { contig: view.chrom, start, end: start + width };
 }
 
 const OMISSION_LABELS: Record<string, string> = {

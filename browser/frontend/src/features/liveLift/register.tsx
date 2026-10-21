@@ -15,6 +15,8 @@ import { groupLiftPanel, followLiftGroupingRows } from './grouping';
 import { liftHapLabels } from './types';
 import { liveLiftHaplotypeColor, registerHaplotypeLabels } from './palette';
 import { LiftedPanelLinkItems, registerLiftLinkingUi } from './linking/register';
+import { liftedOpenView } from '../graphPanel/handoff';
+import { notePendingGraphOpen } from '../graphPanel/openAsGraph';
 
 export function liveLiftChipText(ctx: Pick<PanelHeaderContext, 'panel' | 'dataset'>): string | null {
   if (!isLiveLift(ctx.dataset)) return null;
@@ -94,7 +96,12 @@ export function autoSplitNewLiftedDatasets(seen: Set<string>): void {
     // Only newly created panels carry an explicit split intent without a haplotype yet. A restored older panel
     // without that intent is already a view the user saved; its dataset's default must not rearrange it.
     if (mine.some(p => p.liftHap) || mine[0].liftHaplotypeMode !== 'split' || labels.length < 2) continue;
+    // Graph primary (DESIGN_GRAPH_PRIMARY §5.2): "Open as" (else the browser default). Graph: split as today, then
+    // the first haplotype panel becomes the host with its siblings folded in, once a package is known to bind it.
+    const view = liftedOpenView(dataset.id);
+    if (view === 'pooled') continue;
     state.splitPanelByLiftHap(mine[0].id, labels);
+    if (view === 'graph') notePendingGraphOpen(dataset.id);
   }
 }
 

@@ -365,6 +365,7 @@ test('an expanded linear insertion leaves the graph panel unchanged (HPRC packag
     await page.getByTestId('live-lift-bams').fill(LIFT_BAM);
     await page.getByTestId('live-lift-manifest').fill(LIFT_MAP);
     await expect(page.getByTestId('live-lift-haplotypes')).toContainText('MAT');
+    await page.getByTestId('live-lift-open-split').check();   // split panels (graph mode is the default with a package)
     await page.getByTestId('live-lift-add').click();
     await expect(page.getByTestId('live-lift-chip')).toHaveCount(2, { timeout: 60_000 });
     await expect.poll(() => page.locator('[data-read-track-loading="true"]').count(), { timeout: 120_000 }).toBe(0);
@@ -411,6 +412,7 @@ test('reads of a live-lift dataset drawn along their graph walk (HPRC package, G
     await page.getByTestId('live-lift-bams').fill(LIFT_BAM);
     await page.getByTestId('live-lift-manifest').fill(LIFT_MAP);
     await expect(page.getByTestId('live-lift-haplotypes')).toContainText('MAT');
+    await page.getByTestId('live-lift-open-split').check();   // split panels (graph mode is the default with a package)
     await page.getByTestId('live-lift-add').click();
     await expect(page.getByTestId('live-lift-chip')).toHaveCount(2, { timeout: 60_000 });
     const graph = await openGraphPanel(page);
@@ -717,6 +719,7 @@ test('Gate F: graph-plus-lifted-only and three-view molecule hover, canonical re
     await page.getByTestId('live-lift-bams').fill(LIFT_BAM);
     await page.getByTestId('live-lift-manifest').fill(LIFT_MAP);
     await expect(page.getByTestId('live-lift-haplotypes')).toContainText('MAT');
+    await page.getByTestId('live-lift-open-split').check();   // split panels (graph mode is the default with a package)
     await page.getByTestId('live-lift-add').click();
     await expect(page.getByTestId('live-lift-chip')).toHaveCount(2, { timeout: 60_000 });
     const graph = await openGraphPanel(page);

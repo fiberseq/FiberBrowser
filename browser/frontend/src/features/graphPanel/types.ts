@@ -139,9 +139,25 @@ export interface GraphApiError {
 /** How the panel picks its target viewport: its own, or following a linear panel (DESIGN §6). */
 export type GraphLinkMode = 'independent' | 'follow';
 
-/** Saved with the panel (sessions, history): identities and revisions, never geometry or in-flight state. */
+/** A host's member (DESIGN_GRAPH_PRIMARY §1.1): a dataset panel by id, and the package path it binds to (null: every
+ * path its dataset binds, a pooled lifted panel or a native panel on the target). */
+export interface GraphMember { panelId: string; binding: string | null }
+
+/** Saved with the panel (sessions, history): identities and revisions, never geometry or in-flight state.
+ * Schema 2 (DESIGN_GRAPH_PRIMARY §5.4) adds the role: `standalone` (the graph-view panel; schema 1 states are
+ * standalone) or `host` (a dataset panel in graph mode, whose own viewport is the only authority: `linkMode` and
+ * `targetViewport` are unused there). */
 export interface GraphViewState {
-  schema: 1;
+  schema: 1 | 2;
+  role?: 'host' | 'standalone';
+  /** Host: its members in band order, itself first. */
+  members?: GraphMember[];
+  /** Host: the zoom-out hand-off (§7): "Stay linear" pinned, and the mode last drawn (hysteresis across reloads). */
+  handoff?: { pinnedLinear?: boolean; shown?: 'graph' | 'linear' };
+  /** Host: how each sub-band orders rows without a sort or clusters ('position': first drawn base, 'length'). */
+  bandSort?: 'position' | 'length';
+  /** Host: selection changes mirror to the host's other members showing the same record (D14, default on). */
+  syncSelection?: boolean;
   registrationId: string | null;
   packageRevision: string | null;
   graphRevision: string | null;
@@ -225,6 +241,8 @@ export interface GraphReadBinding {
   revision: string;
   /** Package binding key -> BAM contig. */
   paths: Record<string, string>;
+  /** Lifted datasets: package binding key -> the map haplotype's label (MAT, PAT, a strain's haplotype). */
+  haps?: Record<string, string>;
   problems: string[];
   libraries: number;
 }
