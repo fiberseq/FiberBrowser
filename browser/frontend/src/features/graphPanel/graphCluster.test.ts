@@ -53,7 +53,7 @@ function seed(panels: PanelConfig[]) {
     { id: 'n', label: 'native', data_type: 'bam', color: '#654321' } as never],
     selectedDatasets: new Set(), clusterAssignments: {}, clusterOrder: {}, filteredReadIds: {}, selectedReadIds: {},
     selectedClusters: {}, clusterFocus: {}, clusterMatchedRun: null, clusterGroupLabels: {}, fullViewPanelId: null,
-    activeClusterTreeNodeId: null, clusterTreeNodes: {} });
+    activeClusterTreeNodeId: null, clusterTreeNodes: {}, clusterTreeRootIds: [], selectedPeaks: new Set(), peaksLocked: false } as never);
 }
 const split = () => [panel('mat', { liftHap: 'MAT', liftHaplotypeMode: 'split' }), panel('pat', { liftHap: 'PAT', liftHaplotypeMode: 'split' })];
 const plan = () => graphClusterPlan(useBrowserStore.getState(), { kind: 'peaks', regions: PEAKS })!;
@@ -257,6 +257,8 @@ describe('G5: the durable run', () => {
 
   it('a pan asks for assignment with the same model; a refused model changes nothing', async () => {
     committed();
+    // (The run's region selected and in view, as after a real run: a pan keeps the clusters, linear rules.)
+    addGraphRegion(128_655_000, 128_655_100, 'chr3');
     vi.useFakeTimers();
     const calls: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
@@ -485,5 +487,23 @@ describe('review round 3 (Codex G5)', () => {
     const later = { ...s, panels: [...s.panels, panel('nat2', { datasetId: 'n', stateKey: 'k-nat2' })],
       clusterAssignments: { ...s.clusterAssignments, 'k-nat2': { q1: 1 } } };
     expect(clusterSelectionKeys(later, 'k-nat')).not.toContain('k-nat2');
+  });
+});
+
+
+describe('final review (agy G5)', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+  it('labels assigned dynamically survive leaving the run\'s branch and coming back', async () => {
+    seed(split());
+    setPanelViewMode('mat', 'graph');
+    const p = plan();
+    const mat = p.observations.find(o => o.binding === 'mat')!.id;
+    commitGraphRun(useBrowserStore.getState(), p, { results: { [mat]: { assignments: { [aid('m1')]: 0 }, stage1: { [aid('m1')]: 0 } } },
+      label_ids: {}, names: {}, stages: [{ stage: 1 }], columns: { shared: [], carrier_sets: [], left_out: {}, dropped: [], refinements: [] },
+      window_separation_nmi: null, matched: null, settings: {}, revisions: REG.revisions, options: {}, timings: {} } as never);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ results: { [mat]: { assignments: { [aid('m1')]: 0, [aid('m2')]: 1 } } } }), { status: 200 })));
+    expect(await assignWithGraphRun(useBrowserStore.getState().clusterMatchedRun!)).toBe(1);
+    const node = useBrowserStore.getState().activeClusterTreeNodeId!;
+    expect(useBrowserStore.getState().clusterTreeNodes[node].assignments['k-mat'][recordKey(aid('m2'))!]).toBe(1);
   });
 });

@@ -412,8 +412,14 @@ export async function assignWithGraphRun(run: ClusterMatchedRun, signal?: AbortS
     if (!Object.keys(fresh).length) continue;
     added += Object.keys(fresh).length;
     touched.push(d.stateKey);
-    // (svSplit: keep the run's C<parent>.<j> names, which an ordinary write would drop.)
-    st.setClusterAssignments(d.stateKey, fresh, { mirror: false, merge: true, svSplit: true });
+    // (svSplit: keep the run's C<parent>.<j> names, which an ordinary write would drop. Mirrored into the run's
+    // tree node, which is the active one: its labels are model-assigned on fixed regions, not a viewport projection,
+    // so leaving the branch and coming back keeps them.)
+    st.setClusterAssignments(d.stateKey, fresh, { mirror: true, merge: true, svSplit: true });
+  }
+  if (added && run.names && Object.keys(run.names).length) {
+    useBrowserStore.setState(cur => ({ clusterGroupLabels: { ...cur.clusterGroupLabels,
+      ...Object.fromEntries(touched.map(k => [k, { ...(cur.clusterGroupLabels?.[k] ?? {}), ...run.names }])) } }));
   }
   if (added) {
     const now = useBrowserStore.getState();

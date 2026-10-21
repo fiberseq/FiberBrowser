@@ -337,6 +337,7 @@ def run(state, req, *, sources=None, model=None, row_cache=None):
         if label is not None and to_key in results:
             results[to_key]['assignments'][aid] = label
             results[to_key]['cluster_counts'] = dict(Counter(results[to_key]['assignments'].values()))
+            results[to_key].setdefault('echoed', {})[aid] = from_key
     assigned = [i for i, r in enumerate(reads) if r['id'] in assignments]
     labels = [assignments[reads[i]['id']] for i in assigned]
     return timings.attach(dict(results=results, frame_id=req.frame_id, digest=req.digest, joint_cohort=joint_report,

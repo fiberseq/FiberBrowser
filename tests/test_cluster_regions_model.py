@@ -188,3 +188,53 @@ def test_an_observations_snapshot_names_the_quality_filters(monkeypatch):
     before = analysis.observation_snapshot(st, spec)
     monkeypatch.setattr(qf, "active_quality_filters", lambda state: [{"layer": "msp", "field": "aq", "min": 100}])
     assert analysis.observation_snapshot(st, spec) != before
+
+
+# ── Stage 2 bookkeeping (final reviews, G5) ────────────────────────────────────
+
+def _stage2_setup(monkeypatch, assign_rows):
+    """A plan with one carrier set (A, B) and a fake engine assigning ``assign_rows(view)``."""
+    from services.graph_panel import analysis, columns as gc
+    feat = gc.Feature("insertion", 0, 10, [0, 5], {"A": [(0, 10, 100, 110, False)], "B": [(0, 10, 200, 210, False)]}, ["A", "B"])
+    plan = SimpleNamespace(carrier_sets=[{"carriers": ["A", "B"], "features": [feat]}])
+    spec = {"observations": [{"id": o, "dataset_id": "d", "kind": "graph", "binding": o.lower(), "contig": f"c{o}"} for o in ("A", "B")],
+            "regions": [{"start": 0, "end": 10, "mode": "accessibility"}], "target": "t", "options": {}}
+    calls = []
+
+    def engine(state, req, sources=None, row_cache=None, model=None):
+        calls.append({v.result_key: list(v.read_ids or []) for v in req.viewports})
+        res = {v.result_key: {"assignments": assign_rows(v)} for v in req.viewports}
+        return {"results": res, "model": model or {"peak_widths": [2], "cluster_patterns": {0: [0], 1: [1]}}}
+
+    monkeypatch.setattr(fc, "run", engine)
+    return analysis, spec, plan, analysis._settings_of({"method": "combinatorial", "k": 2}), calls
+
+
+def test_a_parent_with_fewer_than_two_covering_rows_records_no_stage(monkeypatch):
+    analysis, spec, plan, settings, _calls = _stage2_setup(monkeypatch, lambda v: {v.read_ids[0]: 0} if v.result_key == "A" else {})
+    labels = {"A": {"a1": "0", "a2": "0"}, "B": {"b1": "0"}}
+    stages, refinements, _seen = analysis._refine(None, spec, plan, labels, settings, {}, {}, 0, {})
+    assert stages == [] and refinements[0]["skipped"]
+    assert labels == {"A": {"a1": "0", "a2": "0"}, "B": {"b1": "0"}}
+
+
+def test_echoed_rows_never_enter_stage_2_and_take_their_winners_final_label(monkeypatch):
+    analysis, spec, plan, settings, calls = _stage2_setup(monkeypatch, lambda v: {i: n % 2 for n, i in enumerate(v.read_ids)})
+    labels = {"A": {"m": "0", "a2": "0"}, "B": {"m": "0", "b1": "0"}}
+    stages, _r, seen = analysis._refine(None, spec, plan, labels, settings, {}, {}, 0, {("B", "m"): "A"})
+    assert "m" not in calls[0]["B"]
+    assert labels["B"]["m"] == labels["A"]["m"] and "." in labels["A"]["m"]
+    assert len(stages) == 1 and seen
+
+
+def test_a_stage_2_model_never_serves_another_parent(monkeypatch):
+    analysis, spec, plan, settings, _calls = _stage2_setup(monkeypatch, lambda v: {i: n % 2 for n, i in enumerate(v.read_ids)})
+    labels = {"A": {"a1": "0", "a2": "1", "a3": "0", "a4": "1"}, "B": {"b1": "0", "b2": "1"}}
+    stages, _r, _seen = analysis._refine(None, spec, plan, {k: dict(v) for k, v in labels.items()}, settings, {}, {}, 0, {})
+    assert [s["parent"] for s in stages] == ["0", "1"]
+    swapped = [dict(stages[0], parent="1"), dict(stages[1], parent="0")]
+    with pytest.raises(analysis.GraphRunError, match="cluster again"):
+        analysis._refine(None, spec, plan, {k: dict(v) for k, v in labels.items()}, settings, {}, {}, 0, {}, fitted=swapped)
+    again = {k: dict(v) for k, v in labels.items()}
+    analysis._refine(None, spec, plan, again, settings, {}, {}, 0, {}, fitted=stages)
+    assert all("." in lab for per in again.values() for lab in per.values())

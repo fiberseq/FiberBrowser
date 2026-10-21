@@ -98,6 +98,14 @@ function compatibleLabels(run: ClusterMatchedRun, labels: Readonly<Record<string
   if (!byDataset) {
     byDataset = new Map();
     const obs = new Map((run.graph?.observations ?? []).map(o => [o.id, o.dataset_id]));
+    // Every row the run labelled (its observations' results), then what its destinations show.
+    for (const [oid, map] of Object.entries(run.assignments ?? {})) {
+      const ds = obs.get(oid);
+      if (!ds) continue;
+      const index = byDataset.get(ds) ?? new Map<string, number>();
+      for (const [id, c] of Object.entries(map ?? {})) index.set(recordKey(id) ?? id, c);
+      byDataset.set(ds, index);
+    }
     for (const d of run.destinations ?? []) {
       const ds = obs.get(d.observations[0]);
       if (!ds) continue;

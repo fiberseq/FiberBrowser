@@ -385,13 +385,14 @@ def observation_snapshot(state, spec) -> dict:
     return out
 
 
-def _digest(spec, features, oids, settings, observed=None) -> str:
-    """The stage's geometry, extraction settings and its observations' snapshots: a reconstruction must match it
-    exactly."""
+def _digest(spec, features, oids, settings, observed=None, stage=None) -> str:
+    """The stage's geometry, extraction settings, its observations' snapshots, run options, and which stage it is
+    (stage, carrier set, parent and its model): a reconstruction must match it exactly, and a model never serves
+    another stage or parent."""
     snap = {k: settings.get(k) for k in ("method", "subnucleosomal_threshold", "accessibility_threshold",
                                          "cluster_feature_rules", "k", "resolution", "balance_windows")}
     payload = [gc.geometry_digest(features, oids), snap, _modes(spec, features), spec["target"],
-               {o: (observed or {}).get(o) for o in oids}]
+               {o: (observed or {}).get(o) for o in oids}, spec.get("options"), stage]
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
 
@@ -399,6 +400,86 @@ def _digest(spec, features, oids, settings, observed=None) -> str:
 
 def _label_key(label) -> tuple:
     return tuple(int(x) for x in str(label).split("."))
+
+
+def _model_hash(model) -> str:
+    return hashlib.sha256(json.dumps(model, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def _echoes(out) -> dict:
+    """Rows the engine echoed (a folded molecule fitted on another path): ``{(obs, aid): winning obs}``."""
+    return {(oid, aid): src for oid, res in out["results"].items() for aid, src in (res.get("echoed") or {}).items()}
+
+
+def _refine(state, spec, plan, labels, settings, observed, cache, sets_from, echoes, fitted=None):
+    """Stage 2 (§2.6 refineWithinCarriers): for each carrier set in order, each current cluster's carriers are
+    subclustered on the set's features (fit), or assigned with that (set, parent)'s model (``fitted``: the run's
+    stages). Echoed rows (a folded molecule fitted on another path) never enter; non-carriers keep their labels.
+    Returns ``(stages, refinements, every label seen)``."""
+    from services.correspondence_clustering import run as engine
+    stages, refinements, seen = [], [], set()
+    by_key = {(st.get("set"), str(st.get("parent"))): st for st in (fitted or ())}
+    for z, cs in enumerate(plan.carrier_sets):
+        if z < sets_from:
+            continue
+        carriers = [c for c in cs["carriers"] if c in labels]
+        parents = sorted({lab for c in carriers for lab in labels[c].values()}, key=_label_key)
+        for parent in parents:
+            st = by_key.get((z, parent)) if fitted is not None else None
+            if fitted is not None:
+                if st is None:
+                    continue   # no refinement of this parent was fitted: its rows keep the parent label
+                allowed = list(st.get("carriers") or [])
+                if not set(allowed) <= set(cs["carriers"]):
+                    raise GraphRunError("settings or geometry changed: cluster again", "stale_model", 409)
+                if st.get("digest") != _digest(spec, cs["features"], allowed, settings, observed,
+                                               [2, z, parent, _model_hash(st.get("model"))]):
+                    raise GraphRunError("settings or geometry changed: cluster again", "stale_model", 409)
+                pool = allowed
+            else:
+                pool = carriers
+            ids = {c: sorted(aid for aid, lab in labels.get(c, {}).items() if lab == parent and (c, aid) not in echoes)
+                   for c in pool}
+            ids = {c: v for c, v in ids.items() if v}
+            if fitted is None and sum(len(v) for v in ids.values()) < 2:
+                continue
+            if not ids:
+                continue
+            views2, sources2 = _windows(spec, cs["features"], sorted(ids), read_ids=ids)
+            if not views2:
+                continue
+            req2 = _request(spec, cs["features"], views2, settings)
+            try:
+                out2 = engine(state, req2, sources=sources2, row_cache=cache,
+                              **({"model": st.get("model") or {}} if st is not None else {}))
+            except ValueError as exc:
+                if fitted is not None:
+                    raise GraphRunError(str(exc), "stale_model", 409) from None
+                refinements.append({"set": z, "parent": parent, "skipped": str(exc)})
+                continue
+            subs = {(oid, aid): int(sub) for oid, res in out2["results"].items() for aid, sub in res["assignments"].items()
+                    if aid in labels.get(oid, {}) and int(sub) >= 0}
+            model = out2.get("model") or {}
+            if fitted is None and (len(subs) < 2 or not model.get("peak_widths")
+                                   or not (model.get("centroids") or model.get("cluster_patterns"))):
+                # Fewer than two covering rows (or no model): nothing to refine; they keep the parent label.
+                refinements.append({"set": z, "parent": parent, "skipped": "fewer than two rows cover the features"})
+                continue
+            for (oid, aid), sub in subs.items():
+                labels[oid][aid] = f"{parent}.{sub}"
+                seen.add(f"{parent}.{sub}")
+            if fitted is None:
+                stages.append({"stage": 2, "set": z, "parent": parent, "carriers": sorted(ids),
+                               "features": [f.public() for f in cs["features"]],
+                               "samples": [list(f.samples) for f in cs["features"]], "model": model,
+                               "digest": _digest(spec, cs["features"], sorted(ids), settings, observed,
+                                                 [2, z, parent, _model_hash(model)])})
+                refinements.append({"set": z, "parent": parent, "rows": len(subs)})
+    # A folded molecule echoed onto another path takes its winning row's final label.
+    for (oid, aid), src in echoes.items():
+        if aid in labels.get(src, {}) and oid in labels:
+            labels[oid][aid] = labels[src][aid]
+    return stages, refinements, seen
 
 
 def _first_stage(plan):
@@ -430,46 +511,23 @@ def run(state, reg, body: dict, tiles: dict, spec: Optional[dict] = None) -> dic
     out1 = engine(state, req, sources=sources, row_cache=cache)
     stage1 = {oid: {aid: str(label) for aid, label in res["assignments"].items()} for oid, res in out1["results"].items()}
     labels = copy.deepcopy(stage1)
+    model1 = out1.get("model")
     stages = [{"stage": 1, "observations": oids, "features": [f.public() for f in first],
-               "samples": [list(f.samples) for f in first], "model": out1.get("model"),
-               "digest": _digest(spec, first, oids, settings, observed), **({"set": 0} if sets_from else {})}]
-    refinements = []
+               "samples": [list(f.samples) for f in first], "model": model1,
+               "digest": _digest(spec, first, oids, settings, observed, [1, 0 if sets_from else None, None, _model_hash(model1)]),
+               **({"set": 0} if sets_from else {})}]
+    refinements, seen = [], set()
     if plan.carrier_sets and spec["options"]["carrier_features"] == "refine":
-        for z, cs in enumerate(plan.carrier_sets):
-            if z < sets_from:
-                continue
-            carriers = [c for c in cs["carriers"] if c in labels]
-            parents = sorted({lab for c in carriers for lab in labels[c].values()}, key=_label_key)
-            for parent in parents:
-                ids = {c: sorted(aid for aid, lab in labels[c].items() if lab == parent) for c in carriers}
-                ids = {c: v for c, v in ids.items() if v}
-                if sum(len(v) for v in ids.values()) < 2:
-                    continue
-                views2, sources2 = _windows(spec, cs["features"], sorted(ids), read_ids=ids)
-                if not views2:
-                    continue
-                req2 = _request(spec, cs["features"], views2, settings)
-                try:
-                    out2 = engine(state, req2, sources=sources2, row_cache=cache)
-                except ValueError as exc:
-                    refinements.append({"set": z, "parent": parent, "skipped": str(exc)})
-                    continue
-                changed = 0
-                for oid, res in out2["results"].items():
-                    for aid, sub in res["assignments"].items():
-                        if aid in labels.get(oid, {}) and int(sub) >= 0:
-                            labels[oid][aid] = f"{parent}.{int(sub)}"
-                            changed += 1
-                stages.append({"stage": 2, "set": z, "parent": parent, "carriers": sorted(ids),
-                               "features": [f.public() for f in cs["features"]],
-                               "samples": [list(f.samples) for f in cs["features"]], "model": out2.get("model"),
-                               "digest": _digest(spec, cs["features"], sorted(ids), settings, observed)})
-                refinements.append({"set": z, "parent": parent, "rows": changed})
+        more, refinements, seen = _refine(state, spec, plan, labels, settings, observed, cache, sets_from, _echoes(out1))
+        stages.extend(more)
     # Integer ids: stage-1 labels keep theirs; refined labels follow in order, named C<parent>.<j>.
-    base_ids = sorted({int(lab) for per in stage1.values() for lab in per.values()})
+    # (Every label the stage-1 model can give, used or not, keeps its id; every intermediate refined label too.)
+    model_ids = {int(k) for k in ((model1 or {}).get("centroids") or {})} | {int(k) for k in ((model1 or {}).get("cluster_patterns") or {})}
+    base_ids = sorted({int(lab) for per in stage1.values() for lab in per.values()} | model_ids)
     nxt = (max(base_ids) + 1) if base_ids else 0
     label_ids, names = {}, {}
-    every = {lab for per in labels.values() for lab in per.values()} | {lab for per in stage1.values() for lab in per.values()}
+    every = ({lab for per in labels.values() for lab in per.values()} | {lab for per in stage1.values() for lab in per.values()}
+             | seen | {str(i) for i in base_ids})
     for lab in sorted(every, key=_label_key):
         if "." not in lab:
             label_ids[lab] = int(lab)
@@ -523,34 +581,16 @@ def assign(state, reg, body: dict, tiles: dict, spec: Optional[dict] = None) -> 
     cache: dict = {}
     s1 = run_def["stages"][0]
     first, oids, sets_from = _first_stage(plan)
-    if s1.get("digest") != _digest(spec, first, oids, settings, observed) or s1.get("observations") != oids:
+    if s1.get("digest") != _digest(spec, first, oids, settings, observed,
+                                   [1, 0 if sets_from else None, None, _model_hash(s1.get("model"))]) \
+            or s1.get("observations") != oids:
         raise GraphRunError("settings or geometry changed: cluster again", "stale_model", 409)
     views, sources = _windows(spec, first, oids)
     out1 = engine(state, _request(spec, first, views, settings), sources=sources, row_cache=cache,
                   model=s1.get("model") or {})
     labels = {oid: {aid: str(label) for aid, label in res["assignments"].items()} for oid, res in out1["results"].items()}
-    sets = {z: cs for z, cs in enumerate(plan.carrier_sets)}
-    for st in run_def["stages"][1:]:
-        cs = sets.get(st.get("set"))
-        parent = str(st.get("parent"))
-        if cs is None:
-            raise GraphRunError("settings or geometry changed: cluster again", "stale_model", 409)
-        carriers = [c for c in cs["carriers"] if c in labels]
-        ids = {c: sorted(aid for aid, lab in labels[c].items() if lab == parent) for c in carriers}
-        ids = {c: v for c, v in ids.items() if v}
-        if not ids:
-            continue
-        if st.get("digest") != _digest(spec, cs["features"], st.get("carriers") or [], settings, observed):
-            raise GraphRunError("settings or geometry changed: cluster again", "stale_model", 409)
-        views2, sources2 = _windows(spec, cs["features"], sorted(ids), read_ids=ids)
-        if not views2:
-            continue
-        out2 = engine(state, _request(spec, cs["features"], views2, settings), sources=sources2, row_cache=cache,
-                      model=st.get("model") or {})
-        for oid, res in out2["results"].items():
-            for aid, sub in res["assignments"].items():
-                if aid in labels.get(oid, {}) and int(sub) >= 0:
-                    labels[oid][aid] = f"{parent}.{int(sub)}"
+    _refine(state, spec, plan, labels, settings, observed, cache, sets_from, _echoes(out1),
+            fitted=[st for st in run_def["stages"][1:] if isinstance(st, dict)])
     table = {str(k): int(v) for k, v in (run_def.get("label_ids") or {}).items()}
     results = {}
     for o in spec["observations"]:

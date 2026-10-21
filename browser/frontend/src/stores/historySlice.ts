@@ -592,7 +592,7 @@ const DATASET_KEYED_RECORDS = new Set([
   'excludedReadIds', 'svSplits', 'clusterGroupLabels', 'svCarrierEvidence',
 ]);
 // The same, inside each cluster-tree branch (ClusterTreeNode).
-const CLUSTER_TREE_NODE_KEYED_RECORDS = ['assignments', 'order', 'focus', 'readScope'];
+const CLUSTER_TREE_NODE_KEYED_RECORDS = ['assignments', 'order', 'focus', 'readScope', 'groupLabels'];
 
 /**
  * Rename dataset ids in a serialized state (a reopened dataset can come back

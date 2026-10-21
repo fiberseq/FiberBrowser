@@ -348,3 +348,17 @@ def test_a_stretch_only_some_carriers_walk_is_its_own_carrier_only_feature():
     assert parts == [(["i1"], ["P", "Q"]), (["i2"], ["P"])]
     plan_ = gc.stage_plan([rc], ["L", "P", "Q"])
     assert sorted(cs["carriers"] for cs in plan_.carrier_sets) == [["P"], ["P", "Q"]]
+
+
+
+def test_the_shared_feature_blocks_hold_only_shared_positions():
+    """Final review (agy): a path's read covering only the shared part of a region enters stage 1, even where the
+    path also carries a stretch the other path lacks."""
+    nodes = {"a": 20, "d": 60}
+    t = path("target", [occ("t1", "a", (0, 20), (0, 20)), occ("t2", "d", (20, 80), (0, 60))])
+    m = path("m", [occ("m1", "a", (0, 20), (0, 20)), occ("m2", "d", (20, 80), (0, 60))])
+    p = path("p", [occ("p1", "a", (0, 20), (0, 20))], plan=plan(owned(0, 20), owned(20, 80, kind="target_insertion")))
+    rc = columns({"m": [topo(nodes, [t, m])], "p": [topo(nodes, [t, p])]}, 0, 80, [("M", "m"), ("P", "p")])
+    shared, deleted = rc.target_features(["M", "P"])
+    assert shared.blocks["M"] == [(0, 20, 0, 20, False)] and shared.samples == [0, 10]
+    assert deleted.blocks["M"] == [(20, 80, 20, 80, False)] and deleted.carriers == ["M"]

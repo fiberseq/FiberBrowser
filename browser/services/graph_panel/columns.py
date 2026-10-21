@@ -250,7 +250,10 @@ class RegionColumns:
         grid = _grid(0, length)
         full = frozenset(participants)
         carriers_at = [frozenset(i for i in participants if u in self.carried[i]) for u in range(length)]
-        blocks = {i: _runs([(u, *self.carried[i][u]) for u in sorted(self.carried[i])]) for i in participants}
+        # The shared feature's blocks hold only positions every participant carries (review: a read must not have
+        # to cover a stretch only its own path carries to enter stage 1; that stretch is a carrier-only feature).
+        blocks = {i: _runs([(u, *self.carried[i][u]) for u in sorted(self.carried[i]) if carriers_at[u] == full])
+                  for i in participants}
         out = [Feature("target", self.region, length, [u for u in grid if carriers_at[u] == full], blocks,
                        list(participants), label=f"{self.start:,}–{self.end:,}")]
         u = 0
