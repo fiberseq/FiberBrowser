@@ -286,7 +286,7 @@ def cluster_compact_reads(compact_reads, peak_regions, region_start, n_clusters,
                           random_state=42, cluster_feature_rules=None,
                           cluster_rule_context=None, window_groups=None,
                           resolution=1.0, fit_rows=None, missing_feature_groups=None,
-                          features_out=None):
+                          features_out=None, centers_out=None):
     """
     Cluster reads directly from compact format, skipping DataFrame intermediate.
 
@@ -315,7 +315,7 @@ def cluster_compact_reads(compact_reads, peak_regions, region_start, n_clusters,
     )
 
     if features_out is not None:
-        features_out.update(features=X, read_ids=read_ids, peak_widths=peak_widths)
+        features_out.update(features=X, read_ids=read_ids, peak_widths=peak_widths, peak_modes=peak_modes_used)
 
     if X.size == 0:
         return {}, {}, None, None
@@ -416,13 +416,14 @@ def cluster_compact_reads(compact_reads, peak_regions, region_start, n_clusters,
         element_read_ids = {i: [] for i in range(len(elements))}
         for read_idx, pattern in enumerate(read_patterns):
             for elem_idx, is_open in enumerate(pattern):
-                if is_open and elem_idx in element_read_ids:
+                # Only open (1): a missing element (-1, a window without the feature) is not open.
+                if is_open == 1 and elem_idx in element_read_ids:
                     element_read_ids[elem_idx].append(read_ids[read_idx])
         clusters = {}
         for pattern, label in pattern_to_label.items():
             clusters[int(label)] = {
                 "pattern": pattern,
-                "peak_states": {f"peak_{i}": bool(bit) for i, bit in enumerate(pattern)},
+                "peak_states": {f"peak_{i}": bit == 1 for i, bit in enumerate(pattern)},
                 "read_ids": [read_ids[i] for i in range(n_samples) if labels[i] == label],
             }
         combinatorial_info = {
@@ -438,7 +439,8 @@ def cluster_compact_reads(compact_reads, peak_regions, region_start, n_clusters,
 
     elif fit_rows is not None and method in ("kmeans", "minibatch"):
         from services.matched_view_clustering import _fit_predict
-        labels = _fit_predict(X, np.asarray(fit_rows, dtype=np.int64), n_clusters, method, random_state)
+        labels = _fit_predict(X, np.asarray(fit_rows, dtype=np.int64), n_clusters, method, random_state,
+                              centers_out=centers_out)
 
     elif method == "minibatch":
         try:

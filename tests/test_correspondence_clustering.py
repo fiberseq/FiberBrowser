@@ -11,9 +11,9 @@ from services.clustering_features import extract_features_from_compact
 from state.browser_state import BrowserState
 
 
-def window(key, start=100, reverse=False, genome=None, dataset='d', blocks=None):
+def window(key, start=100, reverse=False, genome=None, dataset='d', blocks=None, **kw):
     return fc.RegionViewport(dataset_id=dataset, result_key=key, chrom='chr1', start=start, end=start+200,
-        genome=genome, reverse=reverse, blocks=blocks or [fc.FrameBlock(frame=(0, 100), genomic=(start, start+100))])
+        genome=genome, reverse=reverse, blocks=blocks or [fc.FrameBlock(frame=(0, 100), genomic=(start, start+100))], **kw)
 
 
 def request(views, **kwargs):
@@ -155,12 +155,27 @@ def test_wrapped_regions_require_the_whole_hull(state, monkeypatch):
                  dict(id='full', intervals=[[0, 200, 0]])]
         return WorkingSet(reads, total_overlapping=2, total_spanning=1, chrom=chrom, start=start, end=end)
     monkeypatch.setattr(BrowserState, 'build_working_set', working)
-    v = window('wrap', start=0, blocks=[fc.FrameBlock(frame=(0, 10), genomic=(190, 200)),
-                                      fc.FrameBlock(frame=(10, 100), genomic=(0, 90))])
+    v = window('wrap', start=0, wraps_origin=True, blocks=[fc.FrameBlock(frame=(0, 10), genomic=(190, 200)),
+                                                         fc.FrameBlock(frame=(10, 100), genomic=(0, 90))])
     result = fc.run(base, request([v]))['results']['wrap']
     assert result['eligible_read_count'] == 2
     assert result['peak_covering_read_count'] == 1
     assert set(result['assignments']) == {'full'}
+
+
+def test_mixed_orientation_blocks_do_not_require_the_hull_without_the_flag(state, monkeypatch):
+    """Graph primary G0: the hull is required only on an explicit ``wraps_origin``; blocks whose order merely looks
+    wrapped (an inverted block between forward ones, a graph window) need only their own spans covered."""
+    base, _ = state
+    def working(self, dataset_id, chrom, start, end, *args, **kwargs):
+        reads = [dict(id='split', intervals=[[0, 90, 0], [190, 200, 0]]),
+                 dict(id='full', intervals=[[0, 200, 0]])]
+        return WorkingSet(reads, total_overlapping=2, total_spanning=1, chrom=chrom, start=start, end=end)
+    monkeypatch.setattr(BrowserState, 'build_working_set', working)
+    v = window('mixed', start=0, blocks=[fc.FrameBlock(frame=(0, 10), genomic=(190, 200), reverse=True),
+                                       fc.FrameBlock(frame=(10, 100), genomic=(0, 90))])
+    result = fc.run(base, request([v]))['results']['mixed']
+    assert result['peak_covering_read_count'] == 2
 
 
 @pytest.mark.parametrize('method', ['graph', 'kmeans'])

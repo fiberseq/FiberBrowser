@@ -409,6 +409,9 @@ export interface RegionClusterWindow extends ClusterWindow {
   genome: string | null;
   region_label: string;
   blocks: { feature: number; frame: [number, number]; genomic: [number, number]; reverse: boolean }[];
+  /** Its blocks run across a circular origin: reads must cover each feature's whole hull (an explicit flag; the
+   * server no longer infers it from block order, graph primary G0). */
+  wraps_origin?: boolean;
 }
 
 /** Pair groups by panel and copy order, never by positional peak indices. */
@@ -429,7 +432,7 @@ export function matchedClusterWindows(windows: ClusterWindow[], regions: Cluster
     const present = own.filter((p): p is ClusterPeak => !!p);
     return { ...w, stateKey: w.result_key, result_key: `${w.result_key}@${ids.join('+')}:${p.match!.label}`,
       start: Math.min(...present.map(p => p.start)), end: Math.max(...present.map(p => p.end)), genome: w.panel.genome ?? null,
-      region_label: p.match!.label,
+      region_label: p.match!.label, wraps_origin: present.some(q => Boolean(q.match?.wrapsOrigin)),
       blocks: own.flatMap((p, feature) => p?.match?.blocks.map(b => ({ ...b, feature, reverse: p.match!.reversed })) ?? []) };
   }) };
 }

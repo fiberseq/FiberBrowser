@@ -959,6 +959,9 @@ class RegionViewport(ClusterViewport):
     reverse: bool = False
     blocks: list[FrameBlock]
     region_label: Optional[str] = None
+    # The window's blocks run across a circular contig's origin: reads must cover the whole hull of each feature's
+    # blocks (graph primary G0). Never inferred from block order, which mixed-orientation blocks make look wrapped.
+    wraps_origin: bool = False
 
 
 class RegionClusterRequest(ClusterAllRequest):
@@ -968,6 +971,9 @@ class RegionClusterRequest(ClusterAllRequest):
     feature_geometry: Literal['crop'] = 'crop'
     balance_windows: bool = True
     member_specific_features: list[int] = Field(default_factory=list)
+    # Frame positions sampled per feature (graph primary §2.5: a carrier-only feature continues its parent's 10 bp
+    # grid); None: every 10 bp from 0, as before.
+    sample_positions: Optional[list[list[int]]] = None
 
 
 class CorrespondenceScanRequest(ScanPeaksRequest):

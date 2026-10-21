@@ -77,12 +77,17 @@ def _balanced_indices(groups: list[list[int]], rng: np.random.Generator) -> np.n
     return np.sort(np.concatenate([rng.choice(np.asarray(g), size=target, replace=False) for g in nonempty]))
 
 
-def _fit_predict(X: np.ndarray, fit_rows: np.ndarray, k: int, method: str, random_state: int) -> np.ndarray:
-    """K-means fitted on fit_rows, assigning every row; labels ordered by size (0 = largest)."""
+def _fit_predict(X: np.ndarray, fit_rows: np.ndarray, k: int, method: str, random_state: int,
+                 centers_out: dict | None = None) -> np.ndarray:
+    """K-means fitted on fit_rows, assigning every row; labels ordered by size (0 = largest). ``centers_out``
+    receives the fitted centres under the returned labels (graph primary G0: the model as fitted, never centres
+    recomputed from every assigned read)."""
     if X.shape[0] == 0:
         return np.zeros(0, dtype=np.int32)
     n_clusters = max(1, min(int(k), len(fit_rows)))
     if n_clusters == 1 or len(fit_rows) < 2:
+        if centers_out is not None and len(fit_rows):
+            centers_out[0] = X[fit_rows].mean(axis=0).astype(np.float64).tolist()
         return np.zeros(X.shape[0], dtype=np.int32)
     from sklearn.cluster import KMeans, MiniBatchKMeans
 
@@ -95,6 +100,9 @@ def _fit_predict(X: np.ndarray, fit_rows: np.ndarray, k: int, method: str, rando
     labels = model.predict(X).astype(np.int32)
     sizes = np.bincount(labels, minlength=n_clusters)
     rank = {int(old): new for new, old in enumerate(sorted(range(n_clusters), key=lambda c: (-sizes[c], c)))}
+    if centers_out is not None:
+        for old, new in rank.items():
+            centers_out[new] = model.cluster_centers_[old].astype(np.float64).tolist()
     return np.array([rank[int(label)] for label in labels], dtype=np.int32)
 
 
