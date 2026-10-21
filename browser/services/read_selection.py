@@ -36,7 +36,9 @@ def read_id_keys(read):
                     if rk:
                         keys.add(rk)
         return keys
-    return {str(read)}
+    from services.lift.cohort import record_key
+    rk = record_key(read) if read is not None else None
+    return {str(read), rk} if rk and rk != str(read) else {str(read)}
 
 
 def cohort_read_id(read):

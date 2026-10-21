@@ -48,8 +48,10 @@ export function clusterWindows(st: PlanState, datasetIds: string[]): ClusterWind
   const { chrom, start, end } = st;
   // A member folded into a host's graph counts as shown (its reads are in the host's sub-band), selected with its host.
   return st.panels.filter(panel => {
-    if (panel.contentType !== 'dataset' || !panel.datasetId || !datasetIds.includes(panel.datasetId)) return false;
+    if (panel.contentType !== 'dataset' || !panel.datasetId) return false;
     const host = panel.collapsed ? foldedInShownGraph(panel, st.panels) : null;
+    // A folded member of a targeted host is targeted with it (its dataset may be another one).
+    if (!datasetIds.includes(panel.datasetId) && !(host?.datasetId && datasetIds.includes(host.datasetId))) return false;
     if (panel.collapsed && !host) return false;
     return !st.selectedDatasets.size || st.selectedDatasets.has(panel.id) || Boolean(host && st.selectedDatasets.has(host.id));
   }).map(panel => {

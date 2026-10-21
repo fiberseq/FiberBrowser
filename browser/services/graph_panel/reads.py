@@ -41,6 +41,7 @@ from collections import OrderedDict
 from typing import Iterable, Optional
 
 MAX_MOLECULES = 300
+MAX_PINS = 2000
 MAX_MARKS = 100_000
 MAX_DECODED_BYTES = 8 * 1024 * 1024
 MAX_SOURCE_BP = 400_000
@@ -589,6 +590,12 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
         max_molecules = limits["molecules"]
     if isinstance(limits.get("marks"), int) and 0 < limits["marks"] < max_marks:
         max_marks = limits["marks"]
+    # Pins (graph primary G3): QNAMEs a host's members filter, select or highlight. Their records are kept at every
+    # sampling level and their molecules come first under the cap, so a read kept in a linear view is drawn here too.
+    raw_pins = body.get("pins") or []
+    if not isinstance(raw_pins, list) or not all(isinstance(q, str) for q in raw_pins):
+        raise _bad("pins must list QNAMEs")
+    pins = frozenset(raw_pins[:MAX_PINS])
     # The windows' records from their headers: the sampling level (expected molecules at most the cap) is chosen
     # before any call is decoded; supplementaries the dataset does not load are counted as omitted here.
     estimated = 0
@@ -622,7 +629,7 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
         record, entry)], truncated, all cached)``."""
         nonlocal decode_ms, decoded_records
         dataset, binding, contig, windows, size = job
-        kept = [k for k in recs or () if keeps(k[1], lvl)]
+        kept = [k for k in recs or () if k[1] in pins or keeps(k[1], lvl)]
         base = (dataset.id, dataset_revision(dataset), binding["key"], contig, tuple(sorted(LOADER_OPTIONS.items())),
                 WIRE_VERSION)
         keys = [_record_key(base, k) for k in kept]
@@ -704,7 +711,7 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
                 reads.append(clip_to_windows(r, windows))   # copies: the cached read is never changed
     if not_loaded:
         counts["supplementary_not_loaded"] = not_loaded
-    molecules = sorted({(r["d"], r["lib"], r["q"]) for r in reads}, key=lambda m: (name_hash(str(m[2])), m))
+    molecules = sorted({(r["d"], r["lib"], r["q"]) for r in reads}, key=lambda m: (m[2] not in pins, name_hash(str(m[2])), m))
     payload_dropped = 0
     if over_budget:
         # Whole molecules in hash order while their decoded size fits the request's budget; the rest are left out.
@@ -777,7 +784,7 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
         "m6a_density_reads": density_reads, "m6a_density_bp": density_bp,
         "calls_omitted_reads": sum(1 for r in reads if r.get("calls_omitted")),
         "truncated": truncated, "decoded_bytes": total_bytes,
-        "omitted": omitted, "shared_qnames": shared_qnames,
+        "omitted": omitted, "shared_qnames": shared_qnames, "pinned": len({m for m in molecules if m[2] in pins}),
         "hard_clipped_scoped": scoped or None,   # of the records this request decoded
     }
     return {"reads": reads, "report": report, "cached": cached_all,

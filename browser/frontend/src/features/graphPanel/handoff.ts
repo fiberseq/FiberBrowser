@@ -79,12 +79,19 @@ export function decideShown(prev: 'graph' | 'linear', widthBp: number, opts: { o
 /** Pure: the panels with a host showing `shown`: going linear reveals its folded members (marked); going back to the
  * graph folds the members it revealed (still marked). */
 export function applyShown(panels: PanelConfig[], hostId: string, shown: 'graph' | 'linear'): PanelConfig[] {
+  const host = panels.find(p => p.id === hostId);
+  const revealing = shown === 'linear' && panels.some(p => p.graphMemberOf === hostId && p.collapsedByGraphGroup === hostId);
   return panels.map(p => {
-    if (p.id === hostId && p.graphView) return p.graphView.handoff?.shown === shown ? p : { ...p, graphView: { ...p.graphView, handoff: { ...p.graphView.handoff, shown } } };
+    if (p.id === hostId && p.graphView) {
+      const lock = shown === 'linear' && p.viewportOverride && revealing ? { siteLocked: true } : {};
+      return p.graphView.handoff?.shown === shown && !('siteLocked' in lock) ? p : { ...p, ...lock, graphView: { ...p.graphView, handoff: { ...p.graphView.handoff, shown } } };
+    }
     if (p.graphMemberOf !== hostId) return p;
     if (shown === 'linear' && p.collapsedByGraphGroup === hostId) {
+      // Revealed at the host's own view, site-locked with it, so the side-by-side panels show the same window.
       const { collapsedByGraphGroup: _c, ...rest } = p;
-      return { ...rest, collapsed: false, graphHandoff: hostId };
+      return { ...rest, collapsed: false, graphHandoff: hostId,
+        ...(host?.viewportOverride ? { viewportOverride: { ...host.viewportOverride }, siteLocked: true } : {}) };
     }
     if (shown === 'graph' && p.graphHandoff === hostId) {
       const { graphHandoff: _h, ...rest } = p;
@@ -123,7 +130,7 @@ export function desiredShown(host: PanelConfig, main: LinearView, settings = use
     pinnedLinear: host.graphView?.handoff?.pinnedLinear, followable: hostFollowable(host, view) });
 }
 
-const timers = new Map<string, number>();
+const timers = new Map<string, { sig: string; timer: number }>();
 let started = false;
 
 /** Watch every host's viewport and apply the hand-off once it has settled (one decision per gesture). */
@@ -144,12 +151,16 @@ export function startHandoffController(): void {
       const want = desiredShown(host, main);
       const shown = host.graphView?.handoff?.shown ?? 'graph';
       const pending = timers.get(host.id);
+      // The gesture is judged once its viewport has been still for 300 ms: a new viewport restarts the wait,
+      // an unrelated change (another panel) does not.
+      const sig = `${want}|${view.chrom}:${view.start}-${view.end}`;
       if (want === shown) {
-        if (pending) { window.clearTimeout(pending); timers.delete(host.id); }
+        if (pending) { window.clearTimeout(pending.timer); timers.delete(host.id); }
         continue;
       }
-      if (pending) window.clearTimeout(pending);
-      timers.set(host.id, window.setTimeout(() => {
+      if (pending?.sig === sig) continue;
+      if (pending) window.clearTimeout(pending.timer);
+      timers.set(host.id, { sig, timer: window.setTimeout(() => {
         timers.delete(host.id);
         const st = useBrowserStore.getState();
         const h = st.panels.find(p => p.id === host.id);
@@ -157,7 +168,7 @@ export function startHandoffController(): void {
         const m: LinearView = { chrom: st.chrom, start: st.start, end: st.end, reference: genomeKeyFor(null, st) };
         const now = desiredShown(h, m);
         if (now !== (h.graphView?.handoff?.shown ?? 'graph')) useBrowserStore.setState(x => ({ panels: applyShown(x.panels, h.id, now) }));
-      }, HANDOFF_SETTLE_MS));
+      }, HANDOFF_SETTLE_MS) });
     }
   };
   useBrowserStore.subscribe((s, prev) => {

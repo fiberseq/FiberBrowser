@@ -41,9 +41,13 @@ export const useGraphBindingsStore = create<BindingsState>((set, get) => ({
     if (get().key === key) return Promise.resolve();
     if (inflight?.key === key) return inflight.promise;
     set({ loading: true });
-    const promise = Promise.all(regs.map(r => getReadBindings(r.id).then(list => [r, list] as const).catch(() => [r, [] as GraphReadBinding[]] as const)))
+    let failed = false;
+    const promise = Promise.all(regs.map(r => getReadBindings(r.id).then(list => [r, list] as const)
+      .catch(() => { failed = true; return [r, [] as GraphReadBinding[]] as const; })))
       .then(all => {
         if (inflight?.key !== key) return;
+        // A failed read is not an answer: nothing is recorded, the next change (or heartbeat) reads again.
+        if (failed) { set({ loading: false }); return; }
         const byDataset: Record<string, DatasetGraphBinding[]> = {};
         const problems: Record<string, string[]> = {};
         for (const [registration, list] of all) {

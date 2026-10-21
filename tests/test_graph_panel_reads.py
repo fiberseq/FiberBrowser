@@ -540,3 +540,18 @@ def test_lifted_read_bindings_name_each_paths_haplotype(env):
     bindings = env.client.get("/api/graph/read_bindings", params={"registration_id": "g1"}).json()["bindings"]
     (b,) = [x for x in bindings if x["dataset_id"] == did]
     assert b["haps"] == {"mat": "MAT", "pat": "PAT"}
+
+
+def test_pinned_qnames_survive_sampling_and_the_cap(env):
+    """Graph primary G3: a host's members' filters and selections pin their QNAMEs into the sample."""
+    many = write_bam(env.tmp / "pins.bam", lambda h: [
+        make_record(h, f"p{i:03d}", MAT, 100 + i * 10, "500M", tags=[("ns", _u32([50])), ("nl", _u32([150]))])
+        for i in range(120)])
+    did = _add_lifted(env, paths=[many], dataset_id="pins")
+    paths = [{"binding": "mat", "windows": [{"start": 0, "end": 2500}]}]
+    sampled = {r["q"] for r in _reads(env, [did], paths, limits={"molecules": 20}).json()["reads"]}
+    out = [f"p{i:03d}" for i in range(120) if f"p{i:03d}" not in sampled][:5]
+    pinned = _reads(env, [did], paths, limits={"molecules": 20}, pins=out).json()
+    got = {r["q"] for r in pinned["reads"]}
+    assert set(out) <= got and pinned["report"]["molecules"] <= 20 and pinned["report"]["pinned"] == 5
+    assert _reads(env, [did], paths, pins=[1]).status_code == 422

@@ -12,6 +12,7 @@
  * - The standalone graph-view panel can be made the graph view of a dataset panel.
  */
 import { useBrowserStore } from '../../stores/browserStore';
+import { useReadActionsStore } from '../../stores/readActionsStore';
 import { seedHistoryBaseline } from '../../stores/historySlice';
 import { PER_PANEL_STATE_KEYS } from '../../stores/panelSlice';
 import { generatePanelId } from '../../stores/utils';
@@ -230,6 +231,9 @@ export function popOut(hostId: string, memberIds: string[], newHaps: { binding: 
   if (!ids.size && !made.length) return [];
   undoable(memberIds.length + made.length > 1 ? 'Pop out haplotypes' : 'Pop out haplotype', () => useBrowserStore.setState(s => {
     const copied = copyPanelState(s as unknown as Record<string, unknown>, panelKeyOf(host), made.map(p => p.id));
+    // Its exclusions too (kept in the read actions store).
+    const excluded = useReadActionsStore.getState().excludedReadIds[panelKeyOf(host)];
+    if (excluded?.size) for (const m of made) useReadActionsStore.getState().excludeReads(m.id, [...excluded]);
     let panels = s.panels.map(p => (ids.has(p.id) && p.graphMemberOf === hostId ? sharedView(reveal(p), host) : p));
     const idx = panels.findIndex(p => p.id === hostId);
     panels = [...panels.slice(0, idx + 1), ...made.map(p => sharedView(p, host)), ...panels.slice(idx + 1)];
@@ -279,8 +283,11 @@ export function joinCandidates(panels: readonly PanelConfig[], host: PanelConfig
   const shown = new Set(host.graphView?.selectedPathKeys ?? []);
   const out: { panel: PanelConfig; binding: string | null }[] = [];
   for (const p of panels) {
+    // A panel at another locus or reference never joins (its band would show the host's window while it analyses
+    // its own); a host, even one viewed linear for now, keeps its own members.
     if (p.id === host.id || p.contentType !== 'dataset' || !p.datasetId || p.collapsed || isHost(p) || p.graphMemberOf
-      || p.readSubset || p.liftLink) continue;
+      || p.graphView?.role === 'host' || p.readSubset || p.liftLink) continue;
+    if (JSON.stringify(p.viewportOverride ?? null) !== JSON.stringify(host.viewportOverride ?? null) || (p.genome ?? null) !== (host.genome ?? null)) continue;
     const b = useGraphBindingsStore.getState().byDataset[p.datasetId]?.find(x => x.registration.id === reg)?.binding;
     if (!b) continue;
     const registration = useGraphStatusStore.getState().status?.registrations.find(r => r.id === reg) ?? null;

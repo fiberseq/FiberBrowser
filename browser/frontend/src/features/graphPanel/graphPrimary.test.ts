@@ -79,6 +79,9 @@ describe('G1: a dataset panel toggles linear ⇄ graph in place', () => {
     useBrowserStore.getState().undo();
     expect(get('mat').viewMode).toBeUndefined();
     expect(get('pat').collapsed).toBe(false);
+    useBrowserStore.getState().redo();
+    expect(get('mat')).toMatchObject({ viewMode: 'graph', graphView: { role: 'host' } });
+    expect(get('pat')).toMatchObject({ collapsed: true, collapsedByGraphGroup: 'mat', graphMemberOf: 'mat' });
   });
 
   it('split → graph → linear → graph: members revealed side by side, then folded again; independent clusters intact', () => {
@@ -186,6 +189,24 @@ describe('G1: lifecycle rules (§4.4)', () => {
     expect(useBrowserStore.getState().start).toBe(128_651_000);
   });
 
+  it('review fixes: no join across views or into another host; copies at a site carry no membership; exclusions copy', async () => {
+    const { copyPanelAtSite } = await import('../../utils/panelCopies');
+    useBrowserStore.setState(s => ({ panels: [...s.panels, panel('far', { datasetId: 'n', viewportOverride: { chrom: 'chr3', start: 600_000, end: 610_000 } }),
+      panel('near', { datasetId: 'n' })] }));
+    expect(joinCandidates(useBrowserStore.getState().panels, get('mat')).map(c => c.panel.id)).toEqual(['near']);
+    const copy = copyPanelAtSite(get('pat'), 'c1', { chrom: 'chr3', start: 0, end: 10 });
+    expect(copy.graphMemberOf).toBeUndefined();
+    expect(copyPanelAtSite(get('mat'), 'c2', { chrom: 'chr3', start: 0, end: 10 }).viewMode).toBeUndefined();
+  });
+
+  it('a host viewed linear is never another host\'s member', () => {
+    seed([...split(), panel('pool2', { datasetId: 'n' })]);
+    setPanelViewMode('mat', 'graph');
+    setPanelViewMode('pool2', 'graph');
+    setPanelViewMode('mat', 'linear');
+    expect(joinCandidates(useBrowserStore.getState().panels, get('pool2')).map(c => c.panel.id)).not.toContain('mat');
+  });
+
   it('a Cluster run includes folded members through their shown host', () => {
     const st = useBrowserStore.getState();
     const windows = clusterWindows(st as never, ['d']);
@@ -239,6 +260,14 @@ describe('G6: zoom hand-off (§7)', () => {
     expect(get('mat').graphView!.handoff!.shown).toBe('linear');
     setPinnedLinear('mat', false);
     expect(get('mat').graphView!.handoff!.shown).toBe('graph');
+  });
+
+  it('an own-view host reveals its members at its view, site-locked', () => {
+    seed(split().map(p => ({ ...p, viewportOverride: { chrom: 'chr3', start: 250_000, end: 260_000 } })));
+    setPanelViewMode('mat', 'graph');
+    const panels = applyShown(useBrowserStore.getState().panels.map(p => (p.id === 'mat' ? { ...p, viewportOverride: { chrom: 'chr3', start: 250_000, end: 310_000 } } : p)), 'mat', 'linear');
+    expect(panels.find(p => p.id === 'pat')).toMatchObject({ collapsed: false, siteLocked: true, viewportOverride: { start: 250_000, end: 310_000 } });
+    expect(panels.find(p => p.id === 'mat')!.siteLocked).toBe(true);
   });
 
   it('a member revealed by hand during the hand-off stays revealed on return', () => {
@@ -310,6 +339,16 @@ describe('G3: sub-bands read each member\'s own state through record keys', () =
     const plain = packMemberBands(mols, [M], {}, 40);
     expect(plain.get('mat')!.rows.map(r => r.map(m => m.read.q))).toEqual([['a', 'c'], ['b']]);
     expect(plain.get('mat')!.rowCluster).toEqual([null, null]);
+  });
+
+  it('review fixes: unassigned focus, clusters before the sort, branch scope', () => {
+    const un = packMemberBands(mols, [M], { mat: { assignments: { [aid('a')]: -1, [aid('b')]: 1 }, focus: new Set([-1]) } }, 40);
+    expect(un.get('mat')!.rows.flat().map(m => m.read.q)).toEqual(['a']);
+    // Linear order: clusters first, the sort within each cluster.
+    const both = packMemberBands(mols, [M], { mat: { assignments: { [aid('a')]: 2, [aid('b')]: 1, [aid('c')]: 1 }, clusterOrder: [1, 2], sort: ['a', 'c', 'b'] } }, 40);
+    expect(both.get('mat')!.rows.map(r => r[0].read.q)).toEqual(['c', 'b', 'a']);
+    const branch = packMemberBands(mols, [M], { mat: { assignments: { [aid('a', 1)]: 0 }, branchScope: new Set([aid('a', 1)]) } }, 40);
+    expect(branch.get('mat')!.rows.flat().map(m => m.read.q)).toEqual(['a']);
   });
 
   it('two members of one dataset with different filters each draw the row under their own rules', () => {

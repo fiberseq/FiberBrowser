@@ -33,6 +33,8 @@ export interface MemberState {
   filter?: ReadonlySet<string> | null;
   sort?: readonly string[];
   excluded?: ReadonlySet<string>;
+  /** An active child cluster branch: only its reads (ids of its assignments), as the read track scopes it. */
+  branchScope?: ReadonlySet<string> | null;
 }
 
 export interface BandGroup {
@@ -113,48 +115,48 @@ export function packMemberBands(molecules: readonly PlacedMolecule[], members: r
       if (!list.length) continue;
       if (st.excluded?.size) list = list.filter(m => !st.excluded!.has(m.read.q));
       if (st.filter) list = list.filter(m => idSetHas(st.filter!, rowKeys(m.read), m.read.rk));
+      if (st.branchScope) list = list.filter(m => idSetHas(st.branchScope!, rowKeys(m.read), m.read.rk));
       const clustered = Boolean(st.assignments && Object.keys(st.assignments).length);
-      const clusterOfRead = new Map<PlacedMolecule, number | null>();
-      for (const m of list) {
-        const c = clustered ? clusterOf(m.read, st.assignments) : undefined;
-        clusterOfRead.set(m, c === undefined || c === UNASSIGNED_CLUSTER_ID ? null : c);
-      }
-      if (st.focus?.size) list = list.filter(m => { const c = clusterOfRead.get(m); return c != null && st.focus!.has(c); });
+      // Its cluster as assigned (-1: unassigned by the run; undefined: no label), and as drawn (unassigned: -1).
+      const raw = new Map<PlacedMolecule, number | undefined>();
+      for (const m of list) raw.set(m, clustered ? clusterOf(m.read, st.assignments) : undefined);
+      if (st.focus?.size) list = list.filter(m => { const c = raw.get(m); return c !== undefined && st.focus!.has(c); });
+      const drawnCluster = (m: PlacedMolecule) => { const c = raw.get(m); return c === undefined ? UNASSIGNED_CLUSTER_ID : c; };
       const tie = (a: PlacedMolecule, b: PlacedMolecule) => (bandSort === 'length' ? bodyBp(b) - bodyBp(a) : 0)
         || a.extent![0] - b.extent![0] || a.read.k.localeCompare(b.read.k);
       const reads = list.length;
-      let order: BandGroup['order'] = bandSort;
+      // The member's sort order (a site or rule sort, by any of the row's identities): one row per read, in it.
+      const idx = st.sort?.length ? orderIndex(st.sort) : null;
+      const rank = (m: PlacedMolecule) => (idx ? idx.get(m.read.q) ?? (m.read.aid ? idx.get(m.read.aid) : undefined)
+        ?? (m.read.rk ? idx.get(m.read.rk) : undefined) ?? Number.MAX_SAFE_INTEGER : 0);
+      const ordered = (group: PlacedMolecule[], room: number) => (idx
+        ? firstFit([...group].sort((a, b) => rank(a) - rank(b) || tie(a, b)), room, gapPx, true)
+        : firstFit([...group].sort(tie), room, gapPx));
+      let order: BandGroup['order'] = idx ? 'sort' : bandSort;
       let packed: { rows: PlacedMolecule[][]; hidden: number; clusters: (number | null)[] };
-      if (st.sort?.length) {
-        // The member's sort order (a site or rule sort, by any of the row's identities): one row per read, in it.
-        order = 'sort';
-        const idx = orderIndex(st.sort);
-        const rank = (m: PlacedMolecule) => idx.get(m.read.q) ?? (m.read.aid ? idx.get(m.read.aid) : undefined)
-          ?? (m.read.rk ? idx.get(m.read.rk) : undefined) ?? Number.MAX_SAFE_INTEGER;
-        list = [...list].sort((a, b) => rank(a) - rank(b) || tie(a, b));
-        const ff = firstFit(list, maxRows, gapPx, true);
-        packed = { ...ff, clusters: ff.rows.map(r => (clustered ? clusterOfRead.get(r[0]) ?? UNASSIGNED_CLUSTER_ID : null)) };
-      } else if (clustered) {
-        // Grouped by cluster in the member's cluster order, unassigned last; rows never mix clusters.
+      if (clustered) {
+        // Clusters first, in the member's cluster order (unassigned last), as the read track groups them; the sort
+        // orders reads within each cluster. Rows never mix clusters.
         order = 'cluster';
         const rankOf = new Map((st.clusterOrder ?? []).map((c, i) => [c, i] as const));
-        const groups = new Map<number | null, PlacedMolecule[]>();
+        const groups = new Map<number, PlacedMolecule[]>();
         for (const m of list) {
-          const c = clusterOfRead.get(m) ?? null;
+          const c = drawnCluster(m);
           const g = groups.get(c);
           if (g) g.push(m); else groups.set(c, [m]);
         }
-        const keys = [...groups.keys()].sort((a, b) => (a == null ? 1 : 0) - (b == null ? 1 : 0)
-          || (rankOf.get(a ?? -1) ?? 1e9) - (rankOf.get(b ?? -1) ?? 1e9) || (a ?? 0) - (b ?? 0));
+        const un = UNASSIGNED_CLUSTER_ID;
+        const keys = [...groups.keys()].sort((a, b) => (a === un ? 1 : 0) - (b === un ? 1 : 0)
+          || (rankOf.get(a) ?? 1e9) - (rankOf.get(b) ?? 1e9) || a - b);
         packed = { rows: [], hidden: 0, clusters: [] };
         for (const c of keys) {
-          const ff = firstFit(groups.get(c)!.sort(tie), maxRows - packed.rows.length, gapPx);
+          const ff = ordered(groups.get(c)!, maxRows - packed.rows.length);
           packed.rows.push(...ff.rows);
-          packed.clusters.push(...ff.rows.map(() => c ?? UNASSIGNED_CLUSTER_ID));
+          packed.clusters.push(...ff.rows.map(() => c));
           packed.hidden += ff.hidden;
         }
       } else {
-        const ff = firstFit([...list].sort(tie), maxRows, gapPx);
+        const ff = ordered(list, maxRows);
         packed = { ...ff, clusters: ff.rows.map(() => null) };
       }
       lane.groups.push({ memberId: member.panelId, label: member.label, color: member.color, startRow: lane.rows.length,

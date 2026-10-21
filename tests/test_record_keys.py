@@ -51,3 +51,10 @@ def test_raw_qnames_decodes_record_keys_of_the_datasets_own_provenance():
     assert "m1/ccs" in out
     assert foreign in out and "q9" not in out   # another provenance group passes verbatim (never its QNAME)
     assert record_qname(own) == "m1/ccs" and record_qname("m1/ccs") is None
+
+
+def test_string_identities_answer_to_their_record_key():
+    """agy G0 r1: assignment keys and packed identities are strings; a record key in the set still names them."""
+    linear = _row(row_index=1)["analysis_id"]
+    assert read_matches_id_filter(linear, {record_key(_row()["analysis_id"])})
+    assert not read_matches_id_filter(linear, {_row()["analysis_id"]})

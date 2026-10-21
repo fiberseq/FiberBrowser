@@ -23,9 +23,21 @@ function parse(text: string): unknown {
 
 const isRecordPart = (v: unknown) => v === null || typeof v === 'string';
 
-/** The record key of a row identity: an `analysis_id`, a record key itself (returned as is), else null. */
+const memo = new Map<string, string | null>();
+
+/** The record key of a row identity: an `analysis_id`, a record key itself (returned as is), else null (memoised). */
 export function recordKey(id: string | null | undefined): string | null {
   if (!id) return null;
+  if (!id.startsWith(RECORD_PREFIX) && !id.startsWith(IDENTITY_PREFIX)) return null;
+  const hit = memo.get(id);
+  if (hit !== undefined) return hit;
+  const out = deriveRecordKey(id);
+  if (memo.size > 200_000) memo.clear();
+  memo.set(id, out);
+  return out;
+}
+
+function deriveRecordKey(id: string): string | null {
   if (id.startsWith(RECORD_PREFIX)) {
     const parts = parse(id.slice(RECORD_PREFIX.length));
     const ok = Array.isArray(parts) && parts.length === 3 && typeof parts[0] === 'string' && typeof parts[1] === 'string'
@@ -106,4 +118,12 @@ export function orderIndex(order: readonly string[]): Map<string, number> {
 export function idSetHas(ids: ReadonlySet<string>, keys: readonly (string | null | undefined)[], rk: string | null | undefined): boolean {
   for (const k of keys) if (k && ids.has(k)) return true;
   return Boolean(rk && (ids.has(rk) || recordKeysOf(ids).has(rk)));
+}
+
+/** The QNAME an id names: itself for a plain name, the QNAME inside an `analysis_id` or record key. */
+export function qnameOfId(id: string): string {
+  const prefix = id.startsWith(IDENTITY_PREFIX) ? IDENTITY_PREFIX : id.startsWith(RECORD_PREFIX) ? RECORD_PREFIX : null;
+  if (!prefix) return id;
+  const parts = parse(id.slice(prefix.length));
+  return Array.isArray(parts) && typeof parts[1] === 'string' ? parts[1] : id;
 }

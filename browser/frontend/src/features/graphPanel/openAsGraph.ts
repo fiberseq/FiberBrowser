@@ -10,10 +10,15 @@ import { seedHistoryBaseline } from '../../stores/historySlice';
 import { graphBindingFor, useGraphBindingsStore } from './bindingsStore';
 import { enterGraph, isHost, panelView } from './hostMode';
 
-const pending = new Set<string>();
+/** Dataset id -> its panels as split (a user action on them before the bindings arrive cancels the graph open). */
+const pending = new Map<string, string>();
+
+const signature = (datasetId: string) => JSON.stringify(useBrowserStore.getState().panels
+  .filter(p => p.contentType === 'dataset' && p.datasetId === datasetId)
+  .map(p => [p.id, p.liftHap ?? null, p.collapsed, p.layoutRow ?? 0, p.layoutColumn ?? null, p.title ?? null, p.viewportOverride ?? null, p.stateKey ?? null]));
 
 export function notePendingGraphOpen(datasetId: string): void {
-  pending.add(datasetId);
+  pending.set(datasetId, signature(datasetId));
   queueMicrotask(settlePendingGraphOpens);
 }
 
@@ -22,7 +27,7 @@ export function settlePendingGraphOpens(): void {
   if (!pending.size) return;
   const bindings = useGraphBindingsStore.getState();
   if (bindings.key == null || bindings.loading) return;
-  for (const datasetId of [...pending]) {
+  for (const [datasetId, split] of [...pending]) {
     const s = useBrowserStore.getState();
     const mine = s.panels.filter(p => p.contentType === 'dataset' && p.datasetId === datasetId && !p.readSubset && !p.liftLink);
     const bound = graphBindingFor(datasetId, bindings);
@@ -34,7 +39,8 @@ export function settlePendingGraphOpens(): void {
       continue;
     }
     pending.delete(datasetId);
-    const untouched = mine.length > 1 && mine.every(p => p.liftHap && !p.collapsed && !isHost(p) && !p.graphMemberOf);
+    // Untouched since the split (moved, renamed, hidden, navigated: left as the user has it; the header offers it).
+    const untouched = signature(datasetId) === split && mine.length > 1 && mine.every(p => p.liftHap && !p.collapsed && !isHost(p) && !p.graphMemberOf);
     if (!untouched) continue;
     const next = enterGraph(s.panels, mine[0].id, bound, panelView(mine[0]));
     if (!next) continue;

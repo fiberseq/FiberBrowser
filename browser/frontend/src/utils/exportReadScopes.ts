@@ -6,6 +6,7 @@
  * panel navigated elsewhere has its reads at its own region).
  */
 import type { BrowserState } from '../stores/browserStore';
+import { foldedInShownGraph } from '../stores/graphMembership';
 import { orderAssignmentReadIds } from './clusterExport';
 import { clusterOfScope, idsForScope, scopeOptions, type ReadStatsScope } from './readStatsScope';
 
@@ -39,7 +40,8 @@ export function onScreenStateKeys(state: ScopeState): string[] {
   const maximized = datasetPanels.find(p => p.id === state.fullViewPanelId);
   const onScreen = maximized
     ? [maximized]
-    : datasetPanels.filter(p => !p.collapsed && !state.collapsedRows?.has(p.layoutRow ?? 0));
+    : datasetPanels.filter(p => (!p.collapsed || foldedInShownGraph(p, state.panels)) && !state.collapsedRows?.has(p.layoutRow ?? 0));
+  // (A member folded into a shown graph is on screen: its reads are in the host's sub-band.)
   return [...new Set(onScreen.map(p => p.stateKey ?? p.datasetId!))];
 }
 

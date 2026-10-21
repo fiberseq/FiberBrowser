@@ -218,7 +218,8 @@ class PackedReads(Sequence):
         if index is not None:
             identities = (read_id_keys(row) for row in index.metadata)
         elif qnames is not None:
-            identities = ({cohort, name} for cohort, name in zip(self.read_ids(), qnames))
+            from services.lift.cohort import record_key
+            identities = ({cohort, name} | ({rk} if (rk := record_key(cohort)) else set()) for cohort, name in zip(self.read_ids(), qnames))
         else:
             # Older in-process objects have only one indexed identity.
             identities = (read_id_keys(row) for row in self)

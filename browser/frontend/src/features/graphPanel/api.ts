@@ -77,13 +77,15 @@ export interface ReadsQuery {
   /** Each selected path's source windows (the topology response's `paths[].windows`). */
   paths: { binding: string; windows: Span[] }[];
   limits?: { molecules?: number; marks?: number; level?: number };
+  /** QNAMEs kept in the sample whatever its level and cap (a host's members' filters, selections, highlights). */
+  pins?: string[];
 }
 
 export function queryReads(q: ReadsQuery, signal?: AbortSignal): Promise<GraphReadsResponse> {
   return call('/api/graph/reads', {
     method: 'POST', signal,
     body: JSON.stringify({ registration_id: q.registrationId, revisions: q.revisions, request_id: q.requestId,
-      panel_id: q.panelId, generation: q.generation, datasets: q.datasets, paths: q.paths, ...(q.limits ? { limits: q.limits } : {}) }),
+      panel_id: q.panelId, generation: q.generation, datasets: q.datasets, paths: q.paths, ...(q.limits ? { limits: q.limits } : {}), ...(q.pins?.length ? { pins: q.pins } : {}) }),
   });
 }
 
