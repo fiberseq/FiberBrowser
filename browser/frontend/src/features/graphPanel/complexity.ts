@@ -4,10 +4,10 @@
  * once less than 30% is. It is judged on the topology (never on how the scene packs it), so zooming and display
  * packing never trigger it.
  *
- * A target base is unresolved when the target path has no visit there (a coverage gap, an open end, or a helper limit
- * cut such as the selected-node limit, which returns no visits at all), or when no compared path with a plan has a
- * resolved correspondence covering it (a map anchor or an inferred fill). A compared path without a plan is not
- * counted.
+ * A target base is unresolved when the target path has no visit there (a coverage gap, an open end), or when no
+ * compared path with a plan has a resolved correspondence covering it (a map anchor or an inferred fill). A compared
+ * path without a plan is not counted. A helper limit cut (a `*_limit` summary, such as the selected-node limit at
+ * chr21 50 kb) leaves the whole window unresolved: what the helper returned is a truncated walk.
  *
  * While the host is drawn linear for this reason its graph body is not mounted, so the hand-off controller asks the
  * topology for the settled window itself (`probeComplexity`) to know when to come back.
@@ -38,6 +38,7 @@ export function unresolvedFraction(topology: GraphTopology): number {
   const w = topology.interval;
   const width = w.end - w.start;
   if (width <= 0) return 0;
+  if ((topology.summaries ?? []).some(s => typeof s.reason === 'string' && s.reason.endsWith('_limit'))) return 1;
   const target = topology.paths.find(p => p.binding === topology.target);
   const seen = union((target?.occurrences ?? []).map(o => o.path_span), w);
   // Compared paths with a plan: target spans their resolved correspondences cover.

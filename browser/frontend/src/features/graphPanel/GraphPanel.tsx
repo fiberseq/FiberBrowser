@@ -53,6 +53,8 @@ const FLANK_BP = 1;
 
 declare global {
   interface Window {
+    /** e2e only: each host's last complexity judgement (its window and unresolved fraction). */
+    __FIBERBROWSER_GRAPH_COMPLEXITY__?: Record<string, { view: string; fraction: number }>;
     /** e2e only (with __FIBERBROWSER_E2E_EXPOSE_STORE): each graph panel's last scene, to locate its geometry. */
     __FIBERBROWSER_GRAPH_SCENES__?: Record<string, { scene: Scene; model: LayoutModel; offset: number;
       reads?: { molecules: PlacedMolecule[]; lanes: Record<string, { rows: number; hidden: number }>; hits: ReadHit[]; placeMs?: number; drawMs?: number; serverMs?: number;
@@ -233,6 +235,8 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         const error: GraphApiError = err instanceof GraphRequestError ? err.error : { code: 'network', message: String(err?.message ?? err), retryable: true };
         trace.error = error.code;
         setQuery(q => ({ ...q, loading: false, error, generation }));
+        // The helper refused the window as too complex: it is unresolved (the complexity hand-off, §7.2).
+        if (hostMode && hostView && error.code === 'complexity_limit') useGraphComplexity.getState().set(panelId, viewKey(hostView), 1);
         // The package changed, went missing or is no longer registered: refresh the status, so the panel shows
         // the unavailable view (with its relink) instead of the last topology.
         if (onPackageError(error.code)) setQuery({ response: null, loading: false, error, generation });
@@ -252,7 +256,9 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   useEffect(() => {
     if (!hostMode || !panelId || !hostView || !response || !viewport) return;
     if (response.result.interval.start !== viewport.start || response.result.interval.end !== viewport.end) return;
-    useGraphComplexity.getState().set(panelId, viewKey(hostView), unresolvedFraction(response.result));
+    const fraction = unresolvedFraction(response.result);
+    useGraphComplexity.getState().set(panelId, viewKey(hostView), fraction);
+    if (window.__FIBERBROWSER_E2E_EXPOSE_STORE) (window.__FIBERBROWSER_GRAPH_COMPLEXITY__ ??= {})[panelId] = { view: viewKey(hostView), fraction };
   }, [response]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------------------------------------------------------------- reads (Gate E)

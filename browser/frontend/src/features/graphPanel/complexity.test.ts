@@ -26,6 +26,9 @@ describe('unresolvedFraction', () => {
   it('counts target coverage gaps and a limit cut (no visits at all)', () => {
     expect(unresolvedFraction(topo([path('t', { occurrences: [occ(0, 400)] })]))).toBeCloseTo(0.6);
     expect(unresolvedFraction(topo([path('t', {})]))).toBe(1);
+    // A helper limit cut: the walk is truncated (chr21 at 50 kb, the selected-node limit).
+    const cut = { ...topo([path('t', { occurrences: [occ(0, 820)] })]), complete: false, summaries: [{ reason: 'selected_node_limit', binding: 't' }] };
+    expect(unresolvedFraction(cut)).toBe(1);
   });
   it('counts target bases a compared path has no resolved correspondence for; paths without a plan do not count', () => {
     const t = path('t', { occurrences: [occ(0, 1000)] });
