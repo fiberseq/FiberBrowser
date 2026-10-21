@@ -20,9 +20,10 @@ declare module '../types' {
 
 /** A copy of a panel (duplicate, a strand or split copy) is never a host or member: it starts linear, on its own. */
 export function withoutGraphMembership<T extends PanelConfig>(panel: T): T {
-  if (!panel.viewMode && !panel.graphMemberOf && !panel.collapsedByGraphGroup && !panel.graphHandoff
+  if (!panel.viewMode && !panel.graphMemberOf && !panel.collapsedByGraphGroup && !panel.graphHandoff && !panel.liftSplitGroup
     && !(panel.graphView && (panel.graphView as { role?: string }).role === 'host')) return panel;
-  const { viewMode: _v, graphMemberOf: _m, collapsedByGraphGroup: _c, graphHandoff: _h, ...rest } = panel;
+  // (A copy is never one of its source's split siblings either: graph features.)
+  const { viewMode: _v, graphMemberOf: _m, collapsedByGraphGroup: _c, graphHandoff: _h, liftSplitGroup: _g, ...rest } = panel;
   const out = rest as T;
   if (panel.contentType === 'dataset') delete (out as { graphView?: unknown }).graphView;
   return out;

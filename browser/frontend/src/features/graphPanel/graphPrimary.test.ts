@@ -271,6 +271,34 @@ describe('G6: zoom hand-off (§7)', () => {
     expect(get('mat').graphView!.handoff!.shown).toBe('graph');
   });
 
+  it('graph features: a hand-off is part of the navigation that caused it, never of the next step', () => {
+    vi.useFakeTimers();
+    startHandoffController();
+    seed(split());
+    setPanelViewMode('mat', 'graph');
+    const st = () => useBrowserStore.getState();
+    useBrowserStore.setState({ _lastRestoreTime: 0 } as never);
+    st().pushSnapshot('Start', { kind: 'navigation' });
+    useBrowserStore.setState({ start: 128_650_000, end: 128_730_000 });
+    st().pushSnapshot('Navigate', { kind: 'navigation' });   // the browser's navigation step (before the hand-off)
+    vi.advanceTimersByTime(HANDOFF_SETTLE_MS + 10);
+    expect(get('mat').graphView!.handoff!.shown).toBe('linear');
+    // The next user action, then Undo: back to the handed-off view, not to the graph at 80 kb.
+    st().setClusterOrder('k-mat', [1, 0]);
+    st().pushSnapshot('Sort reads', { kind: 'sorting' as never });
+    expect(st()._historyStack.at(-1)!.label).toBe('Sort reads');
+    expect(st()._historyStack.at(-2)!.state.panels?.find((p: { id: string }) => p.id === 'mat')?.graphView?.handoff?.shown).toBe('linear');
+    vi.advanceTimersByTime(2000);
+    st().undo();
+    expect(get('mat').graphView!.handoff!.shown).toBe('linear');
+    expect(get('pat')).toMatchObject({ collapsed: false, graphHandoff: 'mat' });
+    // Stay linear is a step of its own.
+    vi.advanceTimersByTime(2000);
+    setPinnedLinear('mat', true);
+    expect(st()._historyStack.at(-1)!.label).toBe('Stay linear');
+    vi.useRealTimers();
+  });
+
   it('an own-view host reveals its members at its view, site-locked', () => {
     seed(split().map(p => ({ ...p, viewportOverride: { chrom: 'chr3', start: 250_000, end: 260_000 } })));
     setPanelViewMode('mat', 'graph');
@@ -422,4 +450,72 @@ it('graph primary leaves panels without a host alone', () => {
   seed(split());
   expect(enterGraph(useBrowserStore.getState().panels, 'nope', { registration: REG, binding: BOUND }, { chrom: 'chr3', start: 0, end: 10 })).toBeNull();
   expect(leaveGraph(useBrowserStore.getState().panels, 'mat').find(p => p.id === 'pat')).toEqual(get('pat'));
+});
+
+describe('graph features item 9: the thin report MED items', () => {
+  it('split-group ids: a host folds its own split siblings, never another copy\'s', () => {
+    const g1 = { liftSplitGroup: 'lsg-1' }, g2 = { liftSplitGroup: 'lsg-2' };
+    seed([panel('mat', { liftHap: 'MAT', liftHaplotypeMode: 'split', ...g1 }), panel('pat', { liftHap: 'PAT', liftHaplotypeMode: 'split', ...g1 }),
+      panel('mat2', { liftHap: 'MAT', liftHaplotypeMode: 'split', ...g2 }), panel('pat2', { liftHap: 'PAT', liftHaplotypeMode: 'split', ...g2 })]);
+    setPanelViewMode('mat', 'graph');
+    expect(get('mat').graphView!.members.map(m => m.panelId)).toEqual(['mat', 'pat']);
+    expect(get('pat2').collapsed).toBe(false);
+    expect(get('pat2').graphMemberOf).toBeUndefined();
+    // Split by haplotype gives its panels one group; a copy of one of them belongs to none.
+    seed([panel('src')]);
+    const ids = useBrowserStore.getState().splitPanelByLiftHap('src', ['MAT', 'PAT']);
+    const group = get('src').liftSplitGroup;
+    expect(group).toBeTruthy();
+    expect(get(ids[0]).liftSplitGroup).toBe(group);
+    expect(withoutGraphMembership(get(ids[0])).liftSplitGroup).toBeUndefined();
+  });
+
+  it('a haplotype comparison makes no panels for members folded into a graph', () => {
+    seed(split());
+    setPanelViewMode('mat', 'graph');
+    useBrowserStore.getState().openHaplotypeComparison({ chrom1: 'chr3_MAT', chrom2: 'chr3_PAT', start: 1000, end: 2000 });
+    const made = useBrowserStore.getState().panels.filter(p => p.haplotypeGroup);
+    expect(made).toHaveLength(2);
+    expect(made.every(p => (p.stateKey ?? '').startsWith('k-mat'))).toBe(true);
+  });
+
+  it('selection sync: a read selected in a linear pop-out is selected in every member of its dataset', async () => {
+    const { mirroredSelections } = await import('./selectionSync');
+    seed([...split(), panel('nat', { datasetId: 'n' })]);
+    setPanelViewMode('mat', 'graph');
+    joinGraph('mat', ['nat']);
+    popOut('mat', ['pat']);
+    const panels = useBrowserStore.getState().panels;
+    const out = mirroredSelections(panels, 'k-pat', new Set(), new Set(['q1']), {});
+    expect(out).toEqual([['k-mat', ['q1'], []]]);   // the host (MAT); never the native member (another dataset)
+    // Through the store: Shift-click in the pop-out, then deselect.
+    useBrowserStore.getState().toggleReadSelection('k-pat', 'q2');
+    expect(useBrowserStore.getState().selectedReadIds['k-mat']?.has('q2')).toBe(true);
+    useBrowserStore.getState().toggleReadSelection('k-pat', 'q2');
+    expect(useBrowserStore.getState().selectedReadIds['k-mat']?.has('q2')).toBe(false);
+    // Off with the host's sync setting.
+    useBrowserStore.setState(s => ({ panels: s.panels.map(p => (p.id === 'mat' ? { ...p, graphView: { ...p.graphView!, syncSelection: false } } : p)) }));
+    expect(mirroredSelections(useBrowserStore.getState().panels, 'k-pat', new Set(), new Set(['q3']), {})).toEqual([]);
+  });
+
+  it('default graph open: a filter or selection made on the new panels while the bindings load cancels it', async () => {
+    seed(split());
+    useGraphBindingsStore.setState({ key: null, loading: true } as never);
+    notePendingGraphOpen('d');
+    await Promise.resolve();
+    useBrowserStore.setState({ filteredReadIds: { 'k-pat': new Set(['q']) } } as never);
+    useGraphBindingsStore.setState({ key: 'x', loading: false, covered: ['d'] } as never);
+    const { settlePendingGraphOpens } = await import('./openAsGraph');
+    settlePendingGraphOpens();
+    expect(get('mat').viewMode).toBeUndefined();
+    expect(get('pat').collapsed).toBe(false);
+    // The same, untouched: it opens as a graph.
+    seed(split());
+    useGraphBindingsStore.setState({ key: null, loading: true } as never);
+    notePendingGraphOpen('d');
+    await Promise.resolve();
+    useGraphBindingsStore.setState({ key: 'x', loading: false, covered: ['d'] } as never);
+    settlePendingGraphOpens();
+    expect(get('mat').viewMode).toBe('graph');
+  });
 });

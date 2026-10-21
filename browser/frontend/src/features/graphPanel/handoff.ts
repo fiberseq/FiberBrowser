@@ -165,6 +165,17 @@ const settings = () => useGraphSettings.getState();
 let started = false;
 
 /** Watch every host's viewport and apply the hand-off once it has settled (one decision per gesture). */
+/**
+ * A hand-off, and the member moves that carry its members, are part of the navigation that caused them (graph
+ * features): recorded as a navigation step, which coalesces with the move's own (Browser.tsx), so the next action's
+ * Undo never reverts them and Undo of the move undoes them with it.
+ */
+function recordHandoffStep(label: string): void {
+  const st = useBrowserStore.getState();
+  if (!(st._historyStack?.length)) return;
+  st.pushSnapshot(label, { kind: 'navigation' });
+}
+
 export function startHandoffController(): void {
   if (started) return;
   started = true;
@@ -221,6 +232,7 @@ export function startHandoffController(): void {
         const now = desiredHandoff(h, m);
         if (now.shown !== (h.graphView?.handoff?.shown ?? 'graph') || now.reason !== (h.graphView?.handoff?.reason ?? undefined)) {
           useBrowserStore.setState(x => ({ panels: applyShown(x.panels, h.id, now.shown, now.reason) }));
+          recordHandoffStep(now.shown === 'linear' ? 'Graph view: linear (zoomed out)' : 'Graph view: graph');
         }
       }, HANDOFF_SETTLE_MS) });
     }
@@ -241,7 +253,10 @@ export function startHandoffController(): void {
         panels = moveHostMembers(panels, host.id, before, now);
       }
     }
-    if (panels !== s.panels) useBrowserStore.setState({ panels });
+    if (panels !== s.panels) {
+      useBrowserStore.setState({ panels });
+      recordHandoffStep('Graph members moved with their host');
+    }
   };
   useBrowserStore.subscribe((s, prev) => {
     if (s.panels !== prev.panels) carry();
@@ -263,4 +278,7 @@ export function setPinnedLinear(hostId: string, pinned: boolean): void {
     const d = desiredHandoff(host, main);
     return { panels: applyShown(panels, hostId, d.shown, d.reason) };
   });
+  // A user action: its own undo step.
+  const st = useBrowserStore.getState();
+  if (st._historyStack?.length) st.pushSnapshot(pinned ? 'Stay linear' : 'Resume graph');
 }

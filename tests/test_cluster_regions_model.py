@@ -147,6 +147,34 @@ def test_a_folded_molecule_on_two_paths_of_one_dataset_is_fitted_once(monkeypatc
     assert out["joint_cohort"]["shared_molecules_within_dataset"] == 1
 
 
+def test_a_folded_molecule_keeps_the_row_overlapping_more_of_its_features(monkeypatch):
+    """Graph features (cluster report MED 1): between two rows of a folded molecule of one dataset, neither the
+    primary's, the one overlapping more of its window's feature blocks is kept (not the one with more body bases)."""
+    from services.lift.cohort import _encode_identity
+    base = BrowserState(None)
+    base.datasets = {"d": SimpleNamespace(data_type="bam")}
+    base.dataset_order = ["d"]
+    folded = _encode_identity(["lib|m1", "m1", None, None, "primary"])
+
+    def working(self, dataset_id, chrom, start, end, *args, **kwargs):
+        from services.lift.cohort import _scope
+        hap = _scope.get()[1]
+        # Window A: a long row over the window (more body); window B: a row over both its features only.
+        body = [[0, end - start, 0, "+", True]] if hap == "A" else [[0, 160, 0, "+", True]]
+        rows = [dict(id="m1", analysis_id=folded, intervals=[[0, body[0][1], 147]],
+                     live_lift={"source": {"supplementary": True}, "segments": body})]
+        return WorkingSet(rows, total_overlapping=1, total_spanning=1, chrom=chrom, start=start, end=end)
+
+    monkeypatch.setattr(BrowserState, "build_working_set", working)
+    a = window("A", lift_hap="A")
+    b = window("B", lift_hap="B", blocks=[fc.FrameBlock(feature=0, frame=(0, 100), genomic=(100, 200)),
+                                          fc.FrameBlock(feature=1, frame=(0, 40), genomic=(220, 260))])
+    req = fc.RegionClusterRequest(viewports=[a, b], peak_regions=[PeakRegion(start=0, end=100), PeakRegion(start=0, end=40)],
+                                  member_specific_features=[1], method="combinatorial", k=2)
+    out = fc.run(base, req)
+    assert out["results"]["B"]["analysis_read_count"] == 1 and out["results"]["A"]["analysis_read_count"] == 0
+
+
 def test_more_than_fifty_patterns_reassign_by_the_fits_weighted_rule(monkeypatch):
     """Review round 3 (G2): rarer patterns join the nearest kept pattern weighted by feature overlap, in the fit and
     in model assignment alike, so unchanged reads keep their labels."""

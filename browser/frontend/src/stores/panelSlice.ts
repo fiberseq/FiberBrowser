@@ -607,7 +607,8 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
 
     // Collapse the source dataset panels, remembering which panels this
     // comparison hid so close only restores its own sources.
-    const datasetPanels = basePanels.filter(p => p.contentType === 'dataset' && isMainViewPanel(p));
+    // (Members folded into a graph are shown by their host: no comparison panels of their own; graph features.)
+    const datasetPanels = basePanels.filter(p => p.contentType === 'dataset' && isMainViewPanel(p) && !p.collapsedByGraphGroup);
     for (const original of datasetPanels) {
       const idx = newPanels.findIndex(p => p.id === original.id);
       if (idx >= 0 && !original.collapsed) {
@@ -1202,10 +1203,11 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
   splitPanelByLiftHap: (panelId, labels) => {
     const source = get().panels.find(p => p.id === panelId);
     if (!source || source.contentType !== 'dataset' || labels.length === 0) return [];
+    const liftSplitGroup = `lsg-${generatePanelId()}`;
     const copies: PanelConfig[] = labels.slice(1).map(label => {
       const id = generatePanelId();
       return {
-        ...withoutGraphMembership(source), id, stateKey: id, liftHap: label, liftHaplotypeMode: 'split',
+        ...withoutGraphMembership(source), id, stateKey: id, liftHap: label, liftHaplotypeMode: 'split', liftSplitGroup,
         subTracks: source.subTracks.map(track => ({ ...track })),
         collapsed: false, regionLabel: undefined,
         contactRegionGroupId: undefined, contactRegionRole: undefined, genomeRegionGroupId: undefined,
@@ -1219,7 +1221,7 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
       const src = panels[idx];
       // Other reads now: the source panel's clusters and filters don't apply.
       const { stateKey, reset } = isolatePanelState(current, src);
-      panels[idx] = { ...src, liftHap: labels[0], liftHaplotypeMode: 'split', ...(stateKey ? { stateKey } : {}) };
+      panels[idx] = { ...src, liftHap: labels[0], liftHaplotypeMode: 'split', liftSplitGroup, ...(stateKey ? { stateKey } : {}) };
       panels.splice(idx + 1, 0, ...copies);
       return { ...reset, panels };
     }));
@@ -1234,7 +1236,7 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
     return {
       ...reset,
       panels: state.panels.filter(p => !drop.has(p.id))
-        .map(p => p.id === keep.id ? { ...p, liftHap: undefined, liftHaplotypeMode: 'pooled', ...(stateKey ? { stateKey } : {}) } : p),
+        .map(p => p.id === keep.id ? { ...p, liftHap: undefined, liftHaplotypeMode: 'pooled', liftSplitGroup: undefined, ...(stateKey ? { stateKey } : {}) } : p),
     };
   })),
   setPanelViewport: (panelId, start, end) => {

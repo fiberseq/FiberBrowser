@@ -64,7 +64,10 @@ export function panelView(panel: PanelConfig, main: LinearView = mainView()): Li
 export function splitSiblings(panels: readonly PanelConfig[], panel: PanelConfig): PanelConfig[] {
   if (!panel.liftHap || !panel.datasetId) return [];
   const sameView = (p: PanelConfig) => JSON.stringify(p.viewportOverride ?? null) === JSON.stringify(panel.viewportOverride ?? null);
-  return panels.filter(p => p.id !== panel.id && p.contentType === 'dataset' && p.datasetId === panel.datasetId && p.liftHap
+  // One Split by haplotype's panels (its group id); panels split before groups existed match by dataset and view, and a
+  // grouped panel never takes another group's panels (two copies of a dataset split on their own; graph features).
+  const sameGroup = (p: PanelConfig) => (p.liftSplitGroup ?? null) === (panel.liftSplitGroup ?? null);
+  return panels.filter(p => p.id !== panel.id && p.contentType === 'dataset' && p.datasetId === panel.datasetId && p.liftHap && sameGroup(p)
     && !p.readSubset && !p.altAllele && !p.liftLink && !isHost(p) && p.graphView?.role !== 'host' && !p.graphMemberOf && sameView(p) && (p.genome ?? null) === (panel.genome ?? null));
 }
 

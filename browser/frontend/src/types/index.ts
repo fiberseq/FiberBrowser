@@ -749,6 +749,9 @@ export interface PanelConfig {
   liftHap?: string;
   /** Live lift: the panel's saved layout choice, independent of the dataset's default for newly opened panels. */
   liftHaplotypeMode?: 'split' | 'pooled';
+  /** Live lift: the haplotype panels one Split by haplotype made share this id (graph features): a graph host's split
+   * siblings are its group's, never another copy's. Absent on panels split before it existed (matched by dataset and view). */
+  liftSplitGroup?: string;
   siteLocked?: boolean;          // own-view panel that pans/zooms with the main view and other locked panels (stores/siteLock.ts)
   /** Its dataset is on another assembly with a reference of its own (its key: `dm6`, `fasta:…`, `contigs:…`); always navigates on its own. */
   genome?: string;

@@ -146,6 +146,7 @@ def run(state, req, *, sources=None, model=None, row_cache=None):
         layers = sorted({aliases.get(m, m) for m in modes if m != 'off' and m not in METHYLATION_CLUSTER_MODES})
     groups, stats, ids, metadata = {}, {}, {}, {}
     pending, loaded = [], []
+    feature_spans: list = []   # per loaded window: its feature blocks, relative to its start (folded-molecule arbitration)
     from services.lift.capability import require_for_ids
     require_for_ids(base, [v.dataset_id for v in req.viewports], "clustering")
     if sources and rule_modes:
@@ -206,12 +207,14 @@ def run(state, req, *, sources=None, model=None, row_cache=None):
         groups[v.result_key] = (hulls, v.start, context, mapped)
         stats[v.result_key] = dict(eligible_read_count=eligible, peak_covering_read_count=covering, analysis_read_count=len(own))
         loaded.append((v, own, query, chrom))
+        feature_spans.append(spans)
         metadata[v.result_key] = dict(genome=v.genome, chrom=chrom, reverse=v.reverse,
             blocks=[b.model_dump() for b in v.blocks], columns=mapped,
             **({'cohort': working.lift_cohort} if getattr(working, 'lift_cohort', None) else {}))
     # One row per folded molecule within a dataset (§3.4 item 8): under fold_molecule a molecule with records on two
-    # paths (windows) of one dataset has one analysis_id in both; the primary record's row is kept (then the one
-    # covering more bases, then the first window), before any sampling or fit.
+    # paths (windows) of one dataset has one analysis_id in both; among its rows that cover the regions (a row that
+    # cannot be fitted never displaces one that can) the primary record's is kept, then the one overlapping more of
+    # its window's feature blocks, then more body bases, then the first window; before any sampling or fit.
     from services.lift.cohort import folded_identity
     by_identity: dict = {}
     for wi, (v, own, _q, _c) in enumerate(loaded):
@@ -226,7 +229,9 @@ def run(state, req, *, sources=None, model=None, row_cache=None):
             wi, r = hit
             sup = bool(((r.get('live_lift') or {}).get('source') or {}).get('supplementary'))
             from services.read_selection import read_body_spans
-            return (sup, -sum(b - a for a, b in read_body_spans(r)), wi)
+            body = read_body_spans(r)
+            overlap = sum(max(0, min(b, fb) - max(a, fa)) for a, b in body for fa, fb in feature_spans[wi])
+            return (sup, -overlap, -sum(b - a for a, b in body), wi)
         keep = min(hits, key=rank)
         for hit in hits:
             if hit is not keep:
