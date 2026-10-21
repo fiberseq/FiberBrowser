@@ -67,6 +67,7 @@ import { useSplitPanelStore } from '../stores/splitPanelStore';
 import { beginRun, setRunResult } from '../stores/runResultStore';
 import { formatShare } from '../utils/denominators';
 import { foldedInShownGraph } from '../stores/graphMembership';
+import { extendedPeakScan } from '../utils/peakScanExtensions';
 import { clusterRunHeadline, clusterRunPlan, clusterWindows as sharedClusterWindows, panelTargetLabel, selectedClusterPeakRegions, type ClusterWindow } from '../utils/clusterTargets';
 import { splitShowsAll } from '../utils/splitLocus';
 import { resolveSplitPanels } from '../utils/splitPanels';
@@ -659,6 +660,26 @@ export function Browser() {
           thresholdWeak: rule.thresholds[2],
           thresholdRare: rule.thresholds[3],
         };
+        // A host drawing its graph on this view's contig: the scan runs on graph node columns, every haplotype
+        // pooled per column (graph features; features/graphPanel/graphScan.ts).
+        const graphRes = await extendedPeakScan(useBrowserStore.getState(), {
+          chrom, start, end, source: scanSource, minWidth: rule.minPeakWidth, minReads: rule.minReads, thresholds,
+          sampleSeed: analysisSampleSeed, signal,
+        });
+        if (graphRes) {
+          if (!stillCurrent()) return;
+          const graphPeaks: import('../types').FirePeak[] = graphRes.peaks.map(p => ({
+            start: p.start, end: p.end, index: p.index, layer: p.layer, score: p.score, threshold: p.threshold, width: p.width,
+            ...(p.graph && p.graph.kind !== 'target' ? { sourceLabel: `Graph: ${p.graph.label ? `insertion ${p.graph.label}` : 'insertion'}` } : {}),
+          }));
+          if (rule.source === 'accessibility' || rule.source === 'fire') {
+            useBrowserStore.setState({ fireSignal: graphRes.signal ?? [], fireTrackType: 'none' });
+          }
+          useBrowserStore.getState().setPeaksByRule(rule.id, graphPeaks);
+          useBrowserStore.getState().setCorrespondenceScans(rule.id, {});
+          if (graphRes.signal) useBrowserStore.getState().setPeakSignalCache(rule.id, graphRes.signal);
+          return;
+        }
         const pooled = await scanEquivalentRegions(state, rule, scanSource, signal);
         if (Object.keys(pooled.summaries).length) {
           const specific = await scanUnsharedRegions(state, rule, scanSource, pooled, signal);

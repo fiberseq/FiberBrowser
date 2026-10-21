@@ -20,6 +20,8 @@ SUPPORTED = SUPPORTED | {"difference_summary", "difference_split", "difference_l
 # Toolbar Sort and Filter and Read Stats (graph features): lifted rows in their analysis cohort, on target coordinates;
 # Read Stats takes alignment fields from each row's own source record (services/read_stats.py).
 SUPPORTED = SUPPORTED | {"sort", "filter", "read_stats"}
+# Graph peak scanning (graph features): lifted rows on their own paths, or a linear observation's analysis cohort.
+SUPPORTED = SUPPORTED | {"graph_peaks"}
 
 
 class LiveLiftUnsupported(Exception):

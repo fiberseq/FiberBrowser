@@ -13,6 +13,7 @@ import { startHandoffController } from './handoff';
 import { useGraphBindingsStore } from './bindingsStore';
 import { settlePendingGraphOpens } from './openAsGraph';
 import { registerGraphClustering } from './graphCluster';
+import { registerGraphScan } from './graphScan';
 import { declareContribution } from '../../plugins/packRegistry';
 import { registerPreviewFeature } from '../../utils/previewFeatures';
 import { GraphView } from '../icons';
@@ -85,6 +86,7 @@ function registerGraphMode(): void {
   startHandoffController();
   // Cluster on graph columns when a host draws its graph (DESIGN_GRAPH_PRIMARY §3.4; graph primary G4/G5).
   registerGraphClustering();
+  registerGraphScan();
   useBrowserStore.subscribe((s, prev) => {
     if (s.panels !== prev.panels) {
       // Members whose host closed (or a session without it): shown again, out of the graph (D8).

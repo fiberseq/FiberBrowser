@@ -619,3 +619,32 @@ describe('G7 step 0 review (Codex): a destination with no labels', () => {
     expect(fetchMock).toHaveBeenCalled();
   });
 });
+
+describe('graph features item 3: Scan on graph columns', () => {
+  const call = { chrom: 'chr3', start: 128_650_000, end: 128_660_000, source: 'accessibility', minWidth: 80, minReads: 5,
+    thresholds: { smoothWidth: 100, thresholdStrong: 0.5, thresholdMedium: 0.3, thresholdWeak: 0.15, thresholdRare: 0.08 } };
+
+  it('a host drawing its graph scans the view on node columns, with the observations Cluster would use', async () => {
+    const { graphScanBody } = await import('./graphScan');
+    seed([...split(), panel('nat', { datasetId: 'n' })]);
+    setPanelViewMode('mat', 'graph');
+    const b = graphScanBody(useBrowserStore.getState(), call)!;
+    expect(b.window).toEqual({ start: 128_650_000, end: 128_660_000 });
+    expect(b.target).toBe('tgt');
+    const obs = b.observations as { kind: string; binding?: string; label?: string }[];
+    expect(obs.map(o => [o.kind, o.binding ?? null]).sort()).toEqual([['graph', 'mat'], ['graph', 'pat'], ['linear', null]]);
+    expect(obs.every(o => o.label === undefined)).toBe(true);
+    expect((b.scan as Record<string, unknown>).signal_source).toBe('accessibility');
+    // Popping a haplotype out changes nothing (it is the same observation).
+    popOut('mat', ['pat']);
+    expect(JSON.stringify(graphScanBody(useBrowserStore.getState(), call))).toBe(JSON.stringify(b));
+  });
+
+  it('no host drawing its graph, or another contig: the linear scan', async () => {
+    const { graphScanBody } = await import('./graphScan');
+    seed(split());
+    expect(graphScanBody(useBrowserStore.getState(), call)).toBeNull();
+    setPanelViewMode('mat', 'graph');
+    expect(graphScanBody(useBrowserStore.getState(), { ...call, chrom: 'chr4' })).toBeNull();
+  });
+});

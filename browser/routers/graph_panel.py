@@ -313,3 +313,38 @@ async def graph_cluster_route(request: Request, state=Depends(get_state)):
 @router.post("/api/graph/cluster/assign")
 async def graph_cluster_assign_route(request: Request, state=Depends(get_state)):
     return await _graph_cluster(request, state, "assign")
+
+
+@router.post("/api/graph/scan_peaks")
+async def graph_scan_peaks_route(request: Request, state=Depends(get_state)):
+    """Peak scanning on graph node columns (graph features): a window's columns, every observation's counts pooled
+    per column, peaks on the target walk and inside insertions (services/graph_panel/scan.py)."""
+    from services.graph_panel import service
+    from services.graph_panel import reads as graph_reads
+    from services.graph_panel.analysis import GraphRunError
+    from services.graph_panel.scan import handle
+    body = await _json_body(request)
+    if body is None:
+        return JSONResponse({"status": "error", "error": {"code": "invalid_request", "message": "body must be a JSON object",
+                                                          "retryable": False}}, status_code=422)
+    status = await service.ensure_ready()
+    if not status.available:
+        return JSONResponse({"status": "error", "error": {"code": "helper_unavailable", "message": "Graph helper unavailable",
+                                                          "retryable": False}}, status_code=503)
+    try:
+        reg = _registration(body.get("registration_id"))
+        _checked(body, reg)
+        from services.lift.capability import require_for_ids
+        require_for_ids(state, [o.get("dataset_id") for o in body.get("observations") or [] if isinstance(o, dict)],
+                        "graph_peaks")
+        out = await handle(state, reg, body)
+    except graph_reads.ReadsError as exc:
+        return _reads_error(exc)
+    except GraphRunError as exc:
+        return JSONResponse({"status": "error", "error": {"code": exc.code, "message": str(exc), "retryable": False}},
+                            status_code=exc.status)
+    except (ValueError, KeyError, TypeError) as exc:
+        return JSONResponse({"status": "error", "error": {"code": "invalid_request", "message": str(exc), "retryable": False}},
+                            status_code=422)
+    out.update(registration_id=reg.id)
+    return Response(orjson.dumps(out, option=orjson.OPT_NON_STR_KEYS | orjson.OPT_SERIALIZE_NUMPY), media_type="application/json")

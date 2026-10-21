@@ -115,7 +115,12 @@ With a panel drawing its graph, **Cluster** clusters on the graph itself.
 The toolbar button says so ("Cluster at 4 regions on graph columns").
 
 1. Choose the regions: select peaks as usual, or draw one directly on the graph
-   with **Alt/Option-drag**.
+   with **Alt/Option-drag**. With a panel drawing its graph, **Scan** finds
+   peaks on the graph itself: each haplotype's reads count on their own path,
+   pooled where the haplotypes share the graph, so a peak is one peak for every
+   band. A peak inside sequence the reference lacks (an insertion) is listed as
+   a region around the insertion, named in the peak list; clustering there uses
+   the inserted sequence.
 2. Click **Cluster**.
 
 Each haplotype (and each native dataset) is fitted once, so every band of the
