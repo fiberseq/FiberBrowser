@@ -12,6 +12,7 @@ from services.clustering_inputs import (prefix_compact_read, cluster_modes_need_
 from services.matched_view_clustering import _balanced_indices, _nmi
 from services.panel_genomes import genome_view, dataset_genome
 from services.read_metrics import filter_reads_covering_regions, normalize_sample_seed, random_state_from_seed
+from services.read_selection import read_matches_id_filter
 
 
 def common_geometry(req):
@@ -81,8 +82,10 @@ def run(state, req):
     if not rule_modes:
         aliases = {'accessibility': 'msp', 'fire': 'msp', 'tf_layer': 'tf', 'tf_density': 'tf', 'nuc_layer': 'nuc'}
         layers = sorted({aliases.get(m, m) for m in modes if m != 'off' and m not in METHYLATION_CLUSTER_MODES})
-    reads, groups, stats, ids, metadata = [], {}, {}, {}, {}
-    rows_by_window, row_windows, row_genomes = [], [], []
+    groups, stats, ids, metadata = {}, {}, {}, {}
+    pending = []
+    from services.lift.capability import require_for_ids
+    require_for_ids(base, [v.dataset_id for v in req.viewports], "clustering")
     for v in req.viewports:
         started = time.perf_counter()
         if v.dataset_id not in base.datasets:
@@ -90,16 +93,20 @@ def run(state, req):
         if v.genome != dataset_genome(base, v.dataset_id):
             raise ValueError('The window reference differs from its dataset reference')
         wstate = genome_view(base, v.genome)
-        query = AnalysisReadQuery.from_request(wstate, chrom=v.chrom, start=v.start, end=v.end,
+        # G0 (DESIGN_GRAPH_PRIMARY §9): the clustering capability (lifted datasets are allowed), the window's
+        # haplotype rule and strand in its working set, as cluster_all and matched views load them.
+        query = AnalysisReadQuery.from_request(wstate, capability='clustering', chrom=v.chrom, start=v.start, end=v.end,
             dataset_ids=[v.dataset_id], max_reads=req.max_reads, sample_seed=seed,
             include_methylation=cluster_modes_need_methylation(modes) or bool(v.strand),
             include_layers=cluster_modes_need_layers(modes), requested_layers=layers,
             include_layer_qualities=rule_modes)
-        working = query.build_working_set(wstate, v.dataset_id, read_ids=v.read_ids, broad_prefetch_multiplier=1)
+        working = query.build_working_set(wstate, v.dataset_id, read_ids=v.read_ids, broad_prefetch_multiplier=1,
+                                          lift_hap=v.lift_hap, strand=v.strand)
         own = working.reads
         if v.read_ids is not None:
+            # Qualified scopes: QNAMEs, cohort identities and record keys all name their rows (read_id_keys).
             allowed = set(v.read_ids)
-            own = [r for r in own if r['id'] in allowed]
+            own = [r for r in own if read_matches_id_filter(r, allowed)]
         if v.strand:
             from services.read_strand import filter_reads_by_strand, strand_calls
             own = filter_reads_by_strand(own, v.strand, strand_calls(wstate, v.dataset_id))
@@ -124,15 +131,28 @@ def run(state, req):
                   max((b.genomic[1] for b in v.blocks if b.feature == i), default=v.start+1)-v.start) for i in range(len(lengths))]
         mapped = genomic_positions(v, positions)
         groups[v.result_key] = (hulls, v.start, build_cluster_rule_context(wstate, query.chrom, v.start, v.end), mapped)
-        ids[v.result_key] = [r['id'] for r in own]
         stats[v.result_key] = dict(eligible_read_count=eligible, peak_covering_read_count=covering, analysis_read_count=len(own))
-        rows_by_window.append(list(range(len(reads), len(reads)+len(own))))
-        reads.extend(prefix_compact_read({**r, '_cluster_group': v.result_key,
-                     '_consensus_dataset_id': v.dataset_id, '_consensus_chrom': query.chrom}, v.result_key) for r in own)
-        row_windows.extend([v.result_key]*len(own))
-        row_genomes.extend([v.genome or 'main']*len(own))
+        # Prefixed by window; the cohort identity (analysis_id) when the row has one, else its id.
+        pending.append((v, [prefix_compact_read({**r, '_cluster_group': v.result_key,
+                        '_consensus_dataset_id': v.dataset_id, '_consensus_chrom': query.chrom}, v.result_key) for r in own]))
         metadata[v.result_key] = dict(genome=v.genome, chrom=query.chrom, reverse=v.reverse,
-            blocks=[b.model_dump() for b in v.blocks], columns=mapped)
+            blocks=[b.model_dump() for b in v.blocks], columns=mapped,
+            **({'cohort': working.lift_cohort} if getattr(working, 'lift_cohort', None) else {}))
+    # Shared molecules first (G0, §3.4 item 7): the joint cohort removes and re-sorts rows, so the fit indices,
+    # window rows, result ids, counts and metrics are all derived from the rows it keeps, regrouped in window order.
+    from services.lift.joint import prepare_joint_cohort
+    joint_rows, joint_report = prepare_joint_cohort(base, [r for _v, rows in pending for r in rows],
+                                                    {v.dataset_id for v in req.viewports})
+    retained = {id(r): i for i, r in enumerate(joint_rows)}
+    reads, rows_by_window, row_windows, row_genomes = [], [], [], []
+    for v, rows in pending:
+        kept = sorted((r for r in rows if id(r) in retained), key=lambda r: retained[id(r)])
+        ids[v.result_key] = [r['_original_id'] for r in kept]
+        stats[v.result_key]['analysis_read_count'] = len(kept)
+        rows_by_window.append(list(range(len(reads), len(reads)+len(kept))))
+        reads.extend(kept)
+        row_windows.extend([v.result_key]*len(kept))
+        row_genomes.extend([v.genome or 'main']*len(kept))
     balanced = req.balance_windows and req.method in ('kmeans', 'minibatch')
     fit = None
     if req.method in ('kmeans', 'minibatch'):
@@ -150,7 +170,7 @@ def run(state, req):
         results[key] = dict(assignments=a, cluster_counts=dict(Counter(a.values())), **stats[key])
     assigned = [i for i, r in enumerate(reads) if r['id'] in assignments]
     labels = [assignments[reads[i]['id']] for i in assigned]
-    return timings.attach(dict(results=results, frame_id=req.frame_id, digest=req.digest,
+    return timings.attach(dict(results=results, frame_id=req.frame_id, digest=req.digest, joint_cohort=joint_report,
         member_specific_features=req.member_specific_features,
         excluded_features=excluded,
         matched=dict(windows=metadata, lengths=lengths, columns=positions,

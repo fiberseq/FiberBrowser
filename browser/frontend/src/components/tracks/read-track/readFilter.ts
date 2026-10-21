@@ -1,3 +1,5 @@
+import { recordKey } from '../../../utils/recordKeys';
+
 export interface ReadWithId {
   id: string;
   analysis_id?: string;
@@ -67,5 +69,7 @@ export function readIdKeys(read: ReadWithId): string[] {
   const keys = read.analysis_id ? [read.id, read.analysis_id] : [read.id];
   // A folded row is kept by any member's identity, as on the server (read_id_keys).
   for (const id of foldedIds(read)) if (!keys.includes(id)) keys.push(id);
+  // And by its record key (DESIGN_GRAPH_PRIMARY §3.1): an id set written in the graph view names the record.
+  for (const id of keys.slice(1)) { const rk = recordKey(id); if (rk && !keys.includes(rk)) keys.push(rk); }
   return keys;
 }

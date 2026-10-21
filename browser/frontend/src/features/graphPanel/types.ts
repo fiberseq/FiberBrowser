@@ -187,6 +187,12 @@ export interface GraphRead {
   lib: number;
   q: string;
   rec: string;
+  /** Lifted rows (graph primary G0, DESIGN_GRAPH_PRIMARY §3.1): the standard cohort identity (`analysis_id`, the
+   * graph's piece recorded as the primary placement), its record key (no row index, no placement) and the map
+   * haplotype's label, as the linear rows of the same record carry them. Native rows: absent (QNAME is the key). */
+  aid?: string;
+  rk?: string | null;
+  hap?: string | null;
   /** The package path (binding key) it is aligned to, and the BAM contig. */
   b: string;
   c: string;

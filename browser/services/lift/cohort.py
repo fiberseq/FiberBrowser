@@ -12,8 +12,49 @@ _scope = ContextVar("lift_cohort_scope", default=("display", None, None))
 _IDENTITY_PREFIX = "lift-cohort:v1 "  # A space cannot occur in a SAM QNAME.
 
 
+_RECORD_PREFIX = "lift-record:v1 "  # A record key (DESIGN_GRAPH_PRIMARY §3.1): molecule, QNAME, record.
+
+
 def _encode_identity(parts):
     return _IDENTITY_PREFIX + json.dumps(parts, separators=(",", ":"), ensure_ascii=True)
+
+
+def _encode_record(parts):
+    return _RECORD_PREFIX + json.dumps(parts, separators=(",", ":"), ensure_ascii=True)
+
+
+def record_key(value):
+    """The record key of a row identity (DESIGN_GRAPH_PRIMARY §3.1), independent of row index and placement, so a
+    graph row and the linear rows of the same record match across views: ``lift-record:v1 [molecule, QNAME,
+    record]`` (``record`` null under ``fold_molecule``). ``value`` is a versioned ``analysis_id``, a record key
+    itself, or anything else (a QNAME, a native id): None for those."""
+    value = str(value)
+    if value.startswith(_RECORD_PREFIX):
+        try:
+            parts = json.loads(value[len(_RECORD_PREFIX):])
+        except (ValueError, RecursionError):
+            return None
+        ok = (isinstance(parts, list) and len(parts) == 3 and isinstance(parts[0], str) and isinstance(parts[1], str)
+              and parts[1] and (parts[2] is None or isinstance(parts[2], str)))
+        return value if ok and _encode_record(parts) == value else None
+    if not value.startswith(_IDENTITY_PREFIX):
+        return None
+    try:
+        parts = json.loads(value[len(_IDENTITY_PREFIX):])
+    except (ValueError, RecursionError):
+        return None
+    if not (isinstance(parts, list) and len(parts) == 5 and isinstance(parts[0], str) and isinstance(parts[1], str)
+            and parts[1] and (parts[2] is None or isinstance(parts[2], str)) and _encode_identity(parts) == value):
+        return None
+    return _encode_record(parts[:3])
+
+
+def record_qname(value):
+    """The QNAME a record key names (None: not a record key)."""
+    value = str(value)
+    if not value.startswith(_RECORD_PREFIX) or record_key(value) != value:
+        return None
+    return json.loads(value[len(_RECORD_PREFIX):])[1]
 
 
 @contextmanager
@@ -60,6 +101,12 @@ def raw_qnames(ids, dataset):
     for value in ids:
         value = str(value)
         qname = value
+        rq = record_qname(value) if value.startswith(_RECORD_PREFIX) else None
+        if rq is not None:
+            # A record key (graph mode, DESIGN_GRAPH_PRIMARY §3.1) of this dataset's provenance: its QNAME.
+            molecule = json.loads(value[len(_RECORD_PREFIX):])[0]
+            if any(molecule == group + "|" + rq for group in groups.values()):
+                qname = rq
         if value.startswith(_IDENTITY_PREFIX):
             try:
                 parts = json.loads(value[len(_IDENTITY_PREFIX):])

@@ -50,6 +50,8 @@ MAX_LEVEL = 8
 LOADER_OPTIONS = dict(include_methylation=True, ml_threshold=125, include_layers=True, include_layer_qualities=True,
                       hide_terminal_gaps=True, include_cigar=True, include_duplicates=False, sv_min_len=50)
 _LAYERS = ("nuc", "tf", "msp")
+# The cached rows' wire form: 2 adds the identities (aid, rk, hap) and the map's molecule groups (graph primary G0).
+WIRE_VERSION = 2
 
 
 class ReadsError(Exception):
@@ -396,6 +398,28 @@ def clear_cache() -> None:
         _records_bytes = 0
 
 
+def source_haplotype(dataset, contig: str) -> tuple:
+    """A lifted dataset's map haplotype of a source contig and the map's labels (``(None, {})``: native)."""
+    config = getattr(dataset, "live_lift", None)
+    handle = getattr(config, "handle", None) if config is not None else None
+    if handle is None:
+        return None, {}
+    return getattr(handle, "source_haplotype", {}).get(contig), dict(getattr(handle, "haplotype_labels", {}) or {})
+
+
+def row_identity(row: dict, settings, labels: dict) -> dict:
+    """A lifted graph row's identities (DESIGN_GRAPH_PRIMARY §3.1): its standard ``analysis_id`` (``aid``; the
+    graph's one synthetic piece is recorded as the primary placement), its record key (``rk``: molecule, QNAME,
+    record; no row index, no placement) and its haplotype's label (``hap``), as the linear rows of the same record
+    carry them."""
+    from services.lift.cohort import analysis_id, record_key
+    ll = dict(row["live_lift"])
+    ll["placement"] = "primary"
+    aid = analysis_id({**row, "live_lift": ll}, settings)
+    hap = ll.get("hap")
+    return {"aid": aid, "rk": record_key(aid), "hap": labels.get(hap, hap) if hap is not None else None}
+
+
 def _record_key(base: tuple, rec: tuple) -> tuple:
     """A listed record's cache key: the (dataset, revision, path, contig) base and the identity its composed rows
     carry, (library, QNAME, start, end, supplementary). Physical records sharing it (duplicates, the same alignment
@@ -419,7 +443,10 @@ def _decode_records(dataset, contig: str, size: int, windows: list, binding: str
                           if r[2] < wb and r[4] > wa)
     if not spans:  # zero-length records: their start inside a window
         spans = merge_windows((r[2], r[2] + 1) for r in missing)
-    plan = _Plan(contig, size, spans, binding, region)
+    # The plan piece's haplotype is the map source's (DESIGN_GRAPH_PRIMARY §2.6, G0), as a linear lift names it, so
+    # a haplotype rule (``lift_hap``) and the rows' labels mean the same in both views; a native dataset has none.
+    hap, labels = source_haplotype(dataset, contig)
+    plan = _Plan(contig, size, spans, hap or binding, region)
     budget = LoadBudget(max_bytes=MAX_DECODED_BYTES)
     counts: dict = {}
     sampler = Sampler(0, only_ids=frozenset(r[1] for r in missing), exact_ids=True)
@@ -428,7 +455,8 @@ def _decode_records(dataset, contig: str, size: int, windows: list, binding: str
     a, b = plan.region
     rows = lift_compact_reads(decoded, plan, handle=None, region_start=a, region_end=b, settings=settings,
                               key=f"graph:{binding}", dataset_id=dataset.id, counts=counts,
-                              loader_options=LOADER_OPTIONS, molecule_groups={p: dataset.id for p in dataset.paths})
+                              loader_options=LOADER_OPTIONS,
+                              molecule_groups=settings.molecule_group_map(list(dataset.paths), dataset.id))
     lib_of = {p: i for i, p in enumerate(dataset.paths)}
 
     def ident(lib, qname, start, end, sup):
@@ -440,8 +468,11 @@ def _decode_records(dataset, contig: str, size: int, windows: list, binding: str
                   read.get("reference_end", 0), (read.get("_fiberbrowser_primary") or {}).get("is_supplementary"))
         nbytes[k] = nbytes.get(k, 0) + decoded_size_estimate(read)
     composed: dict = {}
+    lifted = getattr(dataset, "live_lift", None) is not None
     for row in rows:
         read = compact_full(row, a, dataset.id, binding)
+        if lifted:
+            read.update(row_identity(row, settings, labels))
         composed.setdefault(ident(read["lib"], read["q"], read["s"], read["e"], read["sup"]), []).append(read)
     entries: dict = {}
     hard_left = int(counts.get("hard_clipped_supplementary", 0))
@@ -580,7 +611,8 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
         nonlocal decode_ms, decoded_records
         dataset, binding, contig, windows, size = job
         kept = [k for k in recs or () if keeps(k[1], lvl)]
-        base = (dataset.id, dataset_revision(dataset), binding["key"], contig, tuple(sorted(LOADER_OPTIONS.items())))
+        base = (dataset.id, dataset_revision(dataset), binding["key"], contig, tuple(sorted(LOADER_OPTIONS.items())),
+                WIRE_VERSION)
         keys = [_record_key(base, k) for k in kept]
         listed_n: dict = {}
         for key in keys:

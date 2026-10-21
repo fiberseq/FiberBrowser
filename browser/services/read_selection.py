@@ -17,11 +17,24 @@ def read_id_keys(read):
     """Display identity and cohort identity; never infer molecule sharing from QNAME."""
     if isinstance(read, Mapping):
         keys = {str(v) for v in (read.get("id"), read.get("analysis_id")) if v is not None}
+        # Its record key (DESIGN_GRAPH_PRIMARY §3.1): an id set written in another view (a graph row's record)
+        # names the record, never the row index or placement.
+        if read.get("analysis_id") is not None:
+            from services.lift.cohort import record_key
+            rk = record_key(read["analysis_id"])
+            if rk:
+                keys.add(rk)
         # A display row folded from several records (supplementary_display='fold')
         # answers to each member's cohort identity.
         folded = (read.get("live_lift") or {}).get("folded") if isinstance(read.get("live_lift"), Mapping) else None
         if folded:
-            keys.update(str(v) for v in folded.get("analysis_ids") or () if v is not None)
+            from services.lift.cohort import record_key
+            for v in folded.get("analysis_ids") or ():
+                if v is not None:
+                    keys.add(str(v))
+                    rk = record_key(v)
+                    if rk:
+                        keys.add(rk)
         return keys
     return {str(read)}
 

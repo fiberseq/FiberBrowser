@@ -501,3 +501,34 @@ def test_a_changed_dataset_revision_is_its_own_refusal(env):
             "paths": [{"binding": "mat", "windows": [{"start": 0, "end": 3000}]}]}
     out = env.client.post("/api/graph/reads", json=body)
     assert out.status_code == 409 and out.json()["error"]["code"] == "stale_dataset_revision"
+
+
+def test_graph_rows_carry_the_linear_rows_identities(env):
+    """Graph primary G0 (DESIGN_GRAPH_PRIMARY §3.1, §2.6): a lifted graph row's molecule group is the dataset's
+    provenance (molecule_group_map), its haplotype is the map source's, and its record key is the one the linear
+    rows of the same record derive, so the two views match without loading each other's rows."""
+    from services.analysis_query import AnalysisReadQuery
+    from services.lift.cohort import record_key
+    did = _add_lifted(env)
+    out = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 0, "end": 7000}]},
+                             {"binding": "pat", "windows": [{"start": 0, "end": 1000}]}]).json()
+    graph = [r for r in out["reads"] if not r["sup"]]
+    assert graph and all(r["aid"].startswith("lift-cohort:v1 ") and r["rk"] == record_key(r["aid"]) for r in graph)
+    linear = []
+    for hap in ("MAT", "PAT"):
+        q = AnalysisReadQuery.from_request(env.state, capability="clustering", chrom=TARGET, start=0, end=TSIZE,
+                                           dataset_ids=[did], include_layers=False, include_methylation=False)
+        linear += q.build_working_set(env.state, did, lift_hap=hap).reads
+    by_q = {}
+    for row in linear:
+        by_q.setdefault(row["id"], []).append(row)
+    matched = 0
+    for r in graph:
+        rows = by_q.get(r["q"])
+        if not rows:
+            continue
+        matched += 1
+        assert r["rk"] in {record_key(x["analysis_id"]) for x in rows}, r["q"]
+        assert r["hap"] in {x["live_lift"]["hap_label"] for x in rows}, r["q"]
+        assert r["hap"] == ("MAT" if r["b"] == "mat" else "PAT")
+    assert matched >= 3
