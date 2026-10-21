@@ -744,7 +744,9 @@ def test_the_payload_trim_keeps_a_band_that_fits_its_share(env, monkeypatch):
     bands = {b["binding"]: b for b in out["report"]["bands"]}
     assert bands["pat"]["molecules"] == 1
     assert [r["q"] for r in out["reads"] if r["b"] == "pat"] == ["pat_only"]
-    assert out["report"]["omitted"].get("payload_limit", 0) > 0     # MAT's pins over its share: reported
+    # MAT's pins over its share: reported (trimmed from the payload, or never decoded past the budget: item 8).
+    omitted = out["report"]["omitted"]
+    assert omitted.get("payload_limit", 0) + omitted.get("records_not_reached", 0) > 0
 
 
 def test_a_molecules_strand_is_resolved_as_linear_cohorts_resolve_it(env):
@@ -810,3 +812,24 @@ def test_strand_evidence_is_independent_of_the_decode_origin(env):
     gr.clear_cache()
     panned = strands((3900, 4600), (2900, 4600))      # the supplementary first
     assert panned[("col", False)] == panned[("col", True)] == "CT"
+
+
+def test_the_sparsest_level_draws_the_same_reads_within_budget_on_repeat(env, monkeypatch):
+    """agy G7 review (graph features, item 8): at the sparsest level a decode truncated by the byte budget caches
+    its first slice; a repeat of the request decoded the next slice too and drew more. The decode's allowance is
+    the budget less what the band already holds, so a repeat draws the same reads and decodes nothing new."""
+    bam = write_bam(env.tmp / "sparsest.bam", lambda h: [
+        make_record(h, f"r{i:03d}", MAT, 100 + i * 10, "500M", tags=[("ns", _u32([50])), ("nl", _u32([150]))])
+        for i in range(30)])
+    did = _add_lifted(env, paths=[bam], dataset_id="sparsest")
+    paths = [{"binding": "mat", "windows": [{"start": 0, "end": 1000}]}]
+    monkeypatch.setattr(gr, "MAX_LEVEL", 0)
+    monkeypatch.setattr(gr, "MAX_DECODED_BYTES", 4_000)
+    first = _reads(env, [did], paths).json()
+    assert first["report"]["truncated"]
+    q1 = sorted(r["q"] for r in first["reads"])
+    assert 0 < len(q1) < 30
+    for _ in range(3):
+        again = _reads(env, [did], paths).json()
+        assert sorted(r["q"] for r in again["reads"]) == q1
+        assert again["report"]["decoded_bytes"] <= first["report"]["decoded_bytes"]

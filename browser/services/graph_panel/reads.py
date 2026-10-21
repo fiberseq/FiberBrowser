@@ -859,7 +859,14 @@ def _load(state, reg, body: dict, *, max_molecules: int, max_marks: int, max_byt
                 seen.add(key)
                 missing.append(k)
         truncated = False
-        if missing:
+        # The decode's allowance is the budget less the job's records already cached (graph features, item 8): a
+        # request repeated after a truncated decode draws the slice it drew before and decodes no further one, so
+        # the sparsest level stays within the budget and its sample does not grow with each repeat.
+        held = sum(have[key][1] for key in set(keys) if key in have)
+        allowance = max_bytes - held
+        if missing and allowance <= 0:
+            truncated = True
+        elif missing:
             # The region holds the windows and every record they fetch whole, a base beyond either end (so a
             # terminal insertion's boundary is inside it): no call is clipped before composing. It is bounded by
             # the BAM's own contig length (one base past it: coordinates only), never by a graph binding's possibly
@@ -869,7 +876,7 @@ def _load(state, reg, body: dict, *, max_molecules: int, max_marks: int, max_byt
                       min(size + 1, max([windows[-1][1], *(k[4] for k in missing)]) + 1))
             t = time.perf_counter()
             got, truncated, sc, n_decoded = _decode_records(dataset, contig, size + 1, windows, binding["key"], missing,
-                                                            region, base, listed_n, max_bytes)
+                                                            region, base, listed_n, allowance)
             decode_ms += (time.perf_counter() - t) * 1000
             decoded_records += n_decoded
             for kk, vv in (sc or {}).items():
