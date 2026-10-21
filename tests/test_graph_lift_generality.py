@@ -174,3 +174,14 @@ def test_a_graph_cluster_run_over_the_lifted_strain(server):
     result = out["results"]["obs-strain"]
     assert len(result["assignments"]) >= 5, result
     assert out["target"] == target and out["columns"]["shared"]
+
+
+def test_haplotype_labels_take_mat_pat_only_as_a_whole_token():
+    """Graph features (item 10): a haplotype key is MAT or PAT only where that is a whole token of it; sample names
+    that contain the letters keep their own labels."""
+    from services.lift.live_lift import _haplotype_labels
+    def manifest(*haps):
+        return {"sources": [{"name": "chrS"}], "chains": [{"haplotype": h, "source": 0} for h in haps]}
+    assert _haplotype_labels(manifest("w_mated#0", "line_PAT2#1")) == {"w_mated#0": "w_mated#0", "line_PAT2#1": "line_PAT2#1"}
+    assert _haplotype_labels(manifest("HG002_MAT#1", "HG002_PAT#2")) == {"HG002_MAT#1": "MAT", "HG002_PAT#2": "PAT"}
+    assert _haplotype_labels(manifest("s_maternal", "strainA#0")) == {"s_maternal": "MAT", "strainA#0": "strainA#0"}
