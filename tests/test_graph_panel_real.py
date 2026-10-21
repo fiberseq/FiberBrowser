@@ -39,9 +39,11 @@ def client(standalone_app, monkeypatch, tmp_path):
     monkeypatch.setenv("FIBERBROWSER_GRAPH_REGISTRY", str(tmp_path / "registry.json"))
     monkeypatch.delenv("FIBERBROWSER_GRAPH_PACKAGES", raising=False)
     service.reset_for_tests()
+    before = set(LIVE_PIDS)   # helpers this process started and has not reaped; never other servers' processes
     with TestClient(standalone_app, headers=auth_headers()) as c:
         yield c
-    assert not LIVE_PIDS
+    leaked = LIVE_PIDS - before
+    assert not leaked, f"helpers this test started were not reaped: {leaked}"
     service.reset_for_tests()
 
 

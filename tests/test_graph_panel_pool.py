@@ -207,11 +207,17 @@ def test_duplicate_terminal_frame_fails_the_worker(helper, package, env):
         pid = w.pid
         frame = await w.call("query", q("duplicate"))   # the first copy answers the job
         assert frame.type == "topology"
+        # The reader kills the worker on the second copy. Wait for that teardown itself, not for the pid to vanish:
+        # the child watcher reaps the pid a few loop turns before kill() records it, and leaving the loop in that
+        # window would cancel the teardown and leave the pid in LIVE_PIDS.
         for _ in range(200):
-            if w.state == "dead" and not pid_alive(pid):
+            if w._teardown is not None:
                 break
             await asyncio.sleep(0.01)
-        assert w.state == "dead" and w.death_reason == "protocol_unknown_job" and not pid_alive(pid)
+        assert w._teardown is not None, "the duplicate terminal frame did not fail the worker"
+        await asyncio.wait_for(asyncio.shield(w._teardown), 5)
+        assert w.state == "dead" and w.death_reason == "protocol_unknown_job"
+        assert not pid_alive(pid) and pid not in LIVE_PIDS
     run(go())
 
 
@@ -328,7 +334,8 @@ def test_cancel_while_another_subscriber_remains_keeps_the_job(helper, package, 
         reg = make_reg(package)
         a = asyncio.ensure_future(submit(pool, reg, q("sleep:400"), "ra", panel="A"))
         b = asyncio.ensure_future(submit(pool, reg, q("sleep:400"), "rb", panel="B"))
-        await asyncio.sleep(0.15)
+        while not pool.workers or pool.workers[0].state != "busy":   # started and running the shared job
+            await asyncio.sleep(0.002)
         (worker,) = pool.workers
         pid = worker.pid
         assert pool.cancel("ra")
@@ -624,11 +631,12 @@ def test_evicted_helpers_hold_their_slot_until_reaped(helper, package, env, monk
     async def go():
         pool = GraphPool(lambda: helper, queue_expiry_s=5.0)
         peak = 0
+        before = set(LIVE_PIDS)
 
         async def sample():
             nonlocal peak
             while True:
-                peak = max(peak, len(LIVE_PIDS))
+                peak = max(peak, len(LIVE_PIDS - before))   # only this test's helpers
                 await asyncio.sleep(0.01)
         sampler = asyncio.ensure_future(sample())
         for i, reg in enumerate(others):
@@ -715,6 +723,7 @@ def test_a_successor_keeps_its_reservation_and_no_second_process_starts_while_on
     async def go():
         pool = GraphPool(lambda: helper, max_workers=1, queue_expiry_s=5.0, deadline_s=0.15)
         reg = make_reg(package)
+        before = set(LIVE_PIDS)
         first = asyncio.ensure_future(submit(pool, reg, q("sleep:40"), "first", panel="A"))
         while not pool.workers or pool.workers[0].state != "busy":
             await asyncio.sleep(0.002)
@@ -734,7 +743,7 @@ def test_a_successor_keeps_its_reservation_and_no_second_process_starts_while_on
         await entered.wait()                                   # its deadline is reaping the worker
         third = asyncio.ensure_future(submit(pool, make_reg(other_pkg, "gother", revs2), q("ok"), "third", panel="C"))
         await asyncio.sleep(0.2)
-        assert len(LIVE_PIDS) <= 1 and not third.done()        # waits for the slot, no second process
+        assert len(LIVE_PIDS - before) <= 1 and not third.done()   # waits for the slot, no second process
         gate.set()
         assert (await asyncio.wait_for(third, 3))["status"] == "ok"
         await asyncio.gather(second, return_exceptions=True)
