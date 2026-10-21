@@ -915,12 +915,22 @@ def _load(state, reg, body: dict, *, max_molecules: int, max_marks: int, max_byt
         for r in reads:   # the decoded-size estimate of live_lift.decoded_size_estimate: a row plus 32 B per entry
             m = (r["d"], r["lib"], r["q"])
             size_of[m] = size_of.get(m, 0) + 512 + 32 * (marks_of(r) + len(r["cov"]) + len(r["ins"]) + len(r["dl"]))
-        fit, used = set(), 0
+        # Per band (agy G7 review): each band fills its share of the budget in this order (pins first, then hash), so
+        # a band that fits its share keeps its molecules whatever another band holds.
+        band_of: dict = {}
+        for r in reads:
+            band_of.setdefault((r["d"], r["lib"], r["q"]), (r["d"], r["b"]))
+        keys = sorted({band_of[m] for m in molecules})
+        need = [sum(size_of[m] for m in molecules if band_of[m] == k) for k in keys]
+        share = dict(zip(keys, band_bytes(need, max_bytes)))
+        used_by: dict = {}
+        fit = set()
         for m in molecules:
-            if used + size_of[m] > max_bytes:
+            k = band_of[m]
+            if used_by.get(k, 0) + size_of[m] > share[k]:
                 continue
             fit.add(m)
-            used += size_of[m]
+            used_by[k] = used_by.get(k, 0) + size_of[m]
         payload_dropped = len(molecules) - len(fit)
         reads = [r for r in reads if (r["d"], r["lib"], r["q"]) in fit]
         molecules = [m for m in molecules if m in fit]

@@ -114,5 +114,10 @@ export function probeComplexity(host: PanelConfig, view: { chrom: string; start:
     target: gv.targetBinding, interval: { start: view.start, end: view.end }, selected: gv.selectedPathKeys,
     contextBp: gv.layoutSettings.contextBp, flankBp: 1 }, controller.signal)
     .then(r => { if (probing.get(host.id) === controller) { probing.delete(host.id); useGraphComplexity.getState().set(host.id, key, unresolvedFraction(r.result)); } })
-    .catch(() => { if (probing.get(host.id) === controller) probing.delete(host.id); });
+    .catch(err => {
+      if (probing.get(host.id) !== controller) return;
+      probing.delete(host.id);
+      // The helper refused the window as too complex: unresolved, as the graph body records it (agy G7 review).
+      if (err?.error?.code === 'complexity_limit') useGraphComplexity.getState().set(host.id, key, 1);
+    });
 }

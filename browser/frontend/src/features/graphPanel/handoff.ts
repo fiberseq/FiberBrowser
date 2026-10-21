@@ -142,11 +142,13 @@ export function desiredHandoff(host: PanelConfig, main: LinearView, settings = u
   const status = useGraphStatusStore.getState().status;
   if (!status) return { shown: prev, ...(prev === 'linear' && host.graphView?.handoff?.reason ? { reason: host.graphView.handoff.reason } : {}) };
   if (!status.helper.available || !status.registrations.some(r => r.id === host.graphView?.registrationId)) return { shown: 'graph' };
-  const byWidth = decideShown(prev, view.end - view.start, { outBp: settings.outBp, inBp: settings.inBp,
+  const byComplexity = prev === 'linear' && host.graphView?.handoff?.reason === 'complexity';
+  // The width rule's hysteresis is about the width: a host linear for complexity is graph as far as the width goes
+  // (agy G7 review: at 40–50 kb it was relabelled linear-for-width and never came back).
+  const byWidth = decideShown(byComplexity ? 'graph' : prev, view.end - view.start, { outBp: settings.outBp, inBp: settings.inBp,
     pinnedLinear: host.graphView?.handoff?.pinnedLinear, followable: hostFollowable(host, view) });
   if (byWidth === 'linear') return { shown: 'linear', reason: 'width' };
   if (!settings.complexity) return { shown: 'graph' };
-  const byComplexity = prev === 'linear' && host.graphView?.handoff?.reason === 'complexity';
   const want = complexityShown(prev, complexityFor(host, view), byComplexity);
   // Not judged for this window yet: a host linear for complexity stays so until its probe answers.
   if (want == null) return byComplexity ? { shown: 'linear', reason: 'complexity' } : { shown: 'graph' };

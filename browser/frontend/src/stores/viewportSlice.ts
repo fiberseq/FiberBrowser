@@ -17,6 +17,19 @@ import { currentMatchedRun } from '../utils/clusterMatchedRun';
  * graph columns fixed by the run, not by the view, so pans and zooms within the package keep it (the linear rules
  * below would clear it once its peaks leave the view or peaks are locked). Leaving the contig clears it as usual.
  */
+/** A graph run's cluster state (kept by keepGraphRun; peaks still follow the linear rules, so a new window's peaks
+ * are scanned as usual). */
+const GRAPH_RUN_KEYS = ['clusterAssignments', 'clusterOrder', 'clusterPatterns', 'clusterCentroids', 'clusterPeakWidths',
+  'clusterPeakRegions', 'dynamicClustering', 'clusterTreeNodes', 'clusterTreeRootIds', 'activeClusterTreeNodeId'] as const;
+
+/** A move's state change, with a surviving graph run's cluster state left as it is. */
+function keepGraphRun(state: BrowserState, chrom: string, result: Partial<BrowserState>): Partial<BrowserState> {
+  if (!graphRunSurvivesMove(state, chrom)) return result;
+  const out: Record<string, unknown> = { ...result };
+  for (const k of GRAPH_RUN_KEYS) delete out[k];
+  return out as Partial<BrowserState>;
+}
+
 export function graphRunSurvivesMove(state: BrowserState, chrom: string): boolean {
   const run = currentMatchedRun(state.clusterMatchedRun, state.clusterAssignments);
   if (!run?.graph) return false;
@@ -281,7 +294,7 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
     if (!Number.isInteger(start)) start = Math.floor(start);
     if (!Number.isInteger(end)) end = Math.ceil(end);
     // An SV allele split whose locus stays in view keeps its groups (svSlice.ts).
-    set(state => withSiteRules(state, chrom, start, end, keepSvSplitsInView(state, ((): Partial<BrowserState> => {
+    set(state => withSiteRules(state, chrom, start, end, keepSvSplitsInView(state, keepGraphRun(state, chrom, ((): Partial<BrowserState> => {
     // Enforce minimum viewport width of 3bp to prevent division-by-zero
     // in coordinate transforms, canvas scaling, metaprofile binning, etc.
     if (end - start < 3) {
@@ -379,7 +392,7 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
       }
     }
 
-    const preserveDynamic = (hasDynamic && hasPatterns && hasPeakRegions && peaksVisible) || graphRunSurvivesMove(state, chrom);
+    const preserveDynamic = hasDynamic && hasPatterns && hasPeakRegions && peaksVisible;
 
     if (preserveDynamic) {
       if (DEBUG_VIEWPORT) console.log(`[setViewport] PATH: preserveDynamic -> keeping clustering state`);
@@ -585,7 +598,7 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
       relativeGene: null,
       // Keep: selectedFootprints, footprintGroups (absolute coords, persist across zoom), peakRules (config)
     };
-  })(), chrom, start, end)));
+  })()), chrom, start, end)));
   },
 
   setChroms: (chroms) => set({ chroms }),

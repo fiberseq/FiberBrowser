@@ -126,6 +126,8 @@ function compatibleLabels(run: ClusterMatchedRun, labels: Readonly<Record<string
 /** A saved comparison stops driving charts as soon as its displayed assignments change. */
 export function currentMatchedRun(run: ClusterMatchedRun | null, live: BrowserState['clusterAssignments']) {
   if (!run || !Array.isArray(run.windows) || !run.assignments || !run.panelAssignments) return null;
+  // A run that labelled nothing is never current (agy G7 review: it matched an empty workspace forever).
+  if (!Object.values(run.panelAssignments).some(a => Object.keys(a ?? {}).length)) return null;
   return Object.entries(run.panelAssignments).every(([key, assignments]) => {
     const now = live[key];
     // A destination that received no labels matches an absent or empty map alike (a refinement drops empty maps).

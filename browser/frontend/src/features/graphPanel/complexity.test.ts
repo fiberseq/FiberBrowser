@@ -90,6 +90,16 @@ describe('desiredHandoff', () => {
     expect(desiredHandoff(host(), main)).toEqual({ shown: 'graph' });
   });
 
+  it('agy G7 review: a host linear for complexity at 40–50 kb stays so for complexity and returns when resolved', () => {
+    const wide = { ...main, end: main.start + 45_000 };
+    const linear = host({ shown: 'linear', reason: 'complexity' });
+    expect(desiredHandoff(linear, wide)).toEqual({ shown: 'linear', reason: 'complexity' });
+    useGraphComplexity.getState().set('h', judgmentKey(linear.graphView, wide), 0.1);
+    expect(desiredHandoff(linear, wide)).toEqual({ shown: 'graph' });
+    // Linear for the width at 45 kb (the hysteresis band): still linear.
+    expect(desiredHandoff(host({ shown: 'linear', reason: 'width' }), wide)).toEqual({ shown: 'linear', reason: 'width' });
+  });
+
   it('a judgement is of the whole topology request: another path selection or package is judged again', () => {
     useGraphComplexity.getState().set('h', judgmentKey(host().graphView, main), 1);
     const linear = host({ shown: 'linear', reason: 'complexity' });

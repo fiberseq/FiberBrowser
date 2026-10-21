@@ -725,3 +725,20 @@ def test_graph_rows_carry_the_daf_strand(env):
     out = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 0, "end": 1500}]}]).json()
     got = {r["q"]: r.get("ds") for r in out["reads"]}
     assert got == {"ct1": "CT", "ga1": "GA", "plain": None}
+
+
+def test_the_payload_trim_keeps_a_band_that_fits_its_share(env, monkeypatch):
+    """agy G7 review: past the budget even at the sparsest level (pins never shrink), the payload trim fills each
+    band's share, so a band that fits keeps its molecule whatever another band's pins hold."""
+    bam = write_bam(env.tmp / "trim.bam", lambda h: [
+        *[make_record(h, f"mat_{i:03d}", MAT, 100 + i * 10, "500M", tags=[("ns", _u32([50])), ("nl", _u32([150]))])
+          for i in range(60)],
+        make_record(h, "pat_only", PAT, 100, "500M", tags=[("ns", _u32([50])), ("nl", _u32([150]))])])
+    did = _add_lifted(env, paths=[bam], dataset_id="trim")
+    paths = [{"binding": "mat", "windows": [{"start": 0, "end": 1500}]}, {"binding": "pat", "windows": [{"start": 0, "end": 1000}]}]
+    monkeypatch.setattr(gr, "MAX_DECODED_BYTES", 5_000)
+    out = _reads(env, [did], paths, pins=[f"mat_{i:03d}" for i in range(20)]).json()
+    bands = {b["binding"]: b for b in out["report"]["bands"]}
+    assert bands["pat"]["molecules"] == 1
+    assert [r["q"] for r in out["reads"] if r["b"] == "pat"] == ["pat_only"]
+    assert out["report"]["omitted"].get("payload_limit", 0) > 0     # MAT's pins over its share: reported

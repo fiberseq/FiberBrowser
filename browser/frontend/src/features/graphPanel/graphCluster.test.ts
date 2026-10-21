@@ -13,7 +13,7 @@ import { registerGraphPanel } from './register';
 import { assignWithGraphRun, commitGraphRun, destinationAssignments, graphClusterPlan, graphRequestBody, runGraphCluster, stableId } from './graphCluster';
 import { deserializeSavedState, remapDatasetIds, serializeState } from '../../stores/historySlice';
 import { useGraphSettings } from './handoff';
-import { clusterSelectionKeys } from '../../utils/clusterMatchedRun';
+import { clusterSelectionKeys, currentMatchedRun } from '../../utils/clusterMatchedRun';
 import { clusterRunPlan, clusterWindows } from '../../utils/clusterTargets';
 import { recordKey } from '../../utils/recordKeys';
 import { branchScopesPanel } from '../../utils/readScopes';
@@ -530,6 +530,25 @@ describe('G7 step 0: a graph run survives navigation within its package', () => 
     useBrowserStore.getState().setViewport('chr3', 128_600_000, 128_640_000);
     expect(Object.keys(labels())).toHaveLength(2);
     expect(useBrowserStore.getState().clusterMatchedRun!.graph).toBeTruthy();
+  });
+
+  it('agy G7 review: out-of-view peaks still go (the new window is scanned as usual); the labels stay', () => {
+    committed();
+    useBrowserStore.setState({ selectedPeaks: new Set([0]), peaksByRule: { r: [{ start: 128_655_000, end: 128_655_100, index: 0, layer: 0 }] } } as never);
+    useBrowserStore.getState().setViewport('chr3', 128_700_000, 128_710_000);
+    expect(Object.keys(labels())).toHaveLength(2);
+    expect(useBrowserStore.getState().selectedPeaks.size).toBe(0);
+    expect(useBrowserStore.getState().peaksByRule).toEqual({});
+  });
+
+  it('agy G7 review: a run that labelled nothing is not current, so it keeps nothing', () => {
+    seed(split());
+    setPanelViewMode('mat', 'graph');
+    commitGraphRun(useBrowserStore.getState(), plan(), { results: {}, label_ids: {}, names: {}, stages: [{ stage: 1 }],
+      columns: { shared: [], carrier_sets: [], left_out: {}, dropped: [], refinements: [] }, window_separation_nmi: null, matched: null,
+      settings: {}, revisions: REG.revisions, options: {}, timings: {} } as never);
+    const run = useBrowserStore.getState().clusterMatchedRun;
+    if (run) expect(currentMatchedRun(run, useBrowserStore.getState().clusterAssignments)).toBeNull();
   });
 
   it('keeps its labels with peaks locked', () => {

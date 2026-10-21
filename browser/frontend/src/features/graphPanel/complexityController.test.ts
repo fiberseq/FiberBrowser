@@ -6,10 +6,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const queries: any[] = [];
-vi.mock('./api', async orig => ({
-  ...(await orig<typeof import('./api')>()),
+let refuse = false;
+vi.mock('./api', async orig => { const mod = await orig<typeof import('./api')>(); return {
+  ...mod,
   querySubgraph: vi.fn(async (q: any) => {
     queries.push(q);
+    if (refuse) throw new mod.GraphRequestError(422, { code: 'complexity_limit', message: 'too complex', retryable: false });
     const resolved = q.selected.length < 2;   // the unresolved compared path is gone
     return { result: { target: q.target, interval: q.interval, nodes: [], edges: [], direct_matches: [], target_queries: [], summaries: [],
       complete: true, correspondence_complete: true, timings: {},
@@ -17,7 +19,7 @@ vi.mock('./api', async orig => ({
         occurrences: [{ id: 'o', fragment: 'f', node: 'n', handle: 'h', reverse: false, path_span: q.interval, clip: { start: 0, end: 1 } }] },
       ...(resolved ? [] : [{ binding: 'mat', windows: [], coverage: [], occurrences: [], complete: true, plan: { windows: [], candidates: [], summaries: [] } }])] } };
   }),
-}));
+}; });
 
 import { useBrowserStore } from '../../stores/browserStore';
 import { useGraphStatusStore } from './statusStore';
@@ -56,5 +58,22 @@ describe('complexity probes', () => {
     expect(queries[0].selected).toEqual(['t']);
     await vi.advanceTimersByTimeAsync(HANDOFF_SETTLE_MS + 20);
     expect(useBrowserStore.getState().panels[0].graphView!.handoff!.shown).toBe('graph');
+  });
+
+  it('agy G7 review: a refused probe is recorded as unresolved, not probed again and again', async () => {
+    startHandoffController();
+    refuse = true;
+    queries.length = 0;
+    const view = { chrom: 'chr3', start: 2000, end: 12_000 };
+    useBrowserStore.setState({ ...view, currentGenome: 'REF', panels: [host(['t', 'mat'])] } as never);
+    await vi.advanceTimersByTimeAsync(HANDOFF_SETTLE_MS + 20);
+    expect(queries.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(useGraphComplexity.getState().byHost.h).toMatchObject({ fraction: 1 });
+    useBrowserStore.setState(s => ({ panels: [...s.panels] }) as never);
+    await vi.advanceTimersByTimeAsync(HANDOFF_SETTLE_MS * 3);
+    expect(queries.length).toBe(1);
+    expect(useBrowserStore.getState().panels[0].graphView!.handoff!.shown).toBe('linear');
+    refuse = false;
   });
 });
