@@ -93,16 +93,17 @@ def test_flip_inversion_columns_map_base_for_base_reversed(helper_env):
 
 def test_alu_insertion_is_a_feature_carried_by_both_haplotypes(helper_env):
     regions, plan = _toy_columns("alu", 97_300, 97_500, ["mat", "pat"], [("M", "mat"), ("P", "pat")])
-    inserts = [f for f in regions[0].features if f.kind == "insertion" and f.length > 2000]
-    assert len(inserts) == 1 and sorted(inserts[0].carriers) == ["M", "P"]
+    # The Alu, in stretches both haplotypes walk (split where one has a private allele node).
+    inserts = [f for f in regions[0].features if f.kind == "insertion" and f.carriers == ["M", "P"]]
+    assert sum(f.length for f in inserts) > 2000
     # The boundary is target 97,395 (DESIGN_GRAPH_PANEL §4's regression).
-    assert inserts[0].anchor == (97_394, 97_395)
+    assert {f.anchor for f in inserts} == {(97_394, 97_395)}
     # Shared by every observation of this run: stage 1, beside the target walk.
     assert [f.kind for f in plan.shared][:1] == ["target"]
-    assert any(f.kind == "insertion" and f.nodes == inserts[0].nodes for f in plan.shared)
+    assert sum(f.length for f in plan.shared if f.kind == "insertion") > 2000
     # With a linear observation it is carrier-only: refined within the haplotypes.
     _regions, mixed = _toy_columns("alu", 97_300, 97_500, ["mat", "pat"], [("L", None), ("M", "mat"), ("P", "pat")])
-    assert any(cs["carriers"] == ["M", "P"] and any(f.kind == "insertion" and f.length > 2000 for f in cs["features"])
+    assert any(cs["carriers"] == ["M", "P"] and sum(f.length for f in cs["features"] if f.kind == "insertion") > 2000
                for cs in mixed.carrier_sets)
 
 
@@ -241,7 +242,7 @@ def test_refinement_within_carriers_keeps_non_carriers_labels(helper_env, alu_st
     [out] = _graph(alu_state, _body([MAT, PAT, NAT], regions=[(128657300, 128657500)]))
     sets = out["columns"]["carrier_sets"]
     assert sets and sets[0]["carriers"] == ["obs-MAT", "obs-PAT"]
-    assert sets[0]["features"][0]["kind"] == "insertion" and sets[0]["features"][0]["length"] > 2000
+    assert {f["kind"] for f in sets[0]["features"]} == {"insertion"} and sum(f["length"] for f in sets[0]["features"]) > 2000
     native = out["results"]["obs-native"]
     assert native["assignments"] == native["stage1"]
     names = {int(k): v for k, v in out["names"].items()}

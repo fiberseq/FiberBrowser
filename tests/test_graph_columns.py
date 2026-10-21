@@ -301,3 +301,50 @@ def test_a_region_only_carrier_specific_keeps_its_carrier_features_beside_shared
     assert [f.kind for f in plan_.shared] == ["target"] and plan_.shared[0].region == both.region
     assert sorted(cs["carriers"][0] for cs in plan_.carrier_sets) == ["P", "Q"]
     assert any(d["reason"] == "no position every path carries" for d in plan_.report["dropped"])
+
+
+# ── Review round 2 (G2): frames independent of the selection; columns split by their carrier set ─────────────
+
+def _three(paths):
+    """Columns at boundary 23 from tiles of every package path (``paths``: binding -> walk), observing some."""
+    nodes = {"a": 23, "b": 17, "i1": 30, "i2": 30, "x": 31}
+    t = path("target", [occ("t1", "a", (0, 23), (0, 23)), occ("t2", "b", (23, 40), (0, 17))])
+    res = {}
+    for b, walk in paths.items():
+        occs, pos = [occ(f"{b}a", "a", (0, 23), (0, 23))], 23
+        for n in walk:
+            occs.append(occ(f"{b}{n}", n, (pos, pos + nodes[n]), (0, nodes[n])))
+            pos += nodes[n]
+        occs.append(occ(f"{b}b", "b", (pos, pos + 17), (0, 17)))
+        res[b] = [topo(nodes, [t, path(b, occs)])]
+    allres = [r for rs in res.values() for r in rs]
+    def cols(observed):
+        return gc.region_columns(0, 0, 40, "target", gc.merge_occurrences(allres, "target"),
+                                 [gc.Observation(i, b) for i, b in observed],
+                                 {b: gc.merge_occurrences(rs, b) for b, rs in res.items()}, {b: {0: rs[0]} for b, rs in res.items()},
+                                 binding_order=["target", *paths])
+    return cols
+
+
+def test_insertion_samples_do_not_depend_on_which_paths_are_in_the_run():
+    cols = _three({"p": ["i1", "i2"], "q": ["i1", "x", "i2"]})
+    both = cols([("L", None), ("P", "p"), ("Q", "q")])
+    alone = cols([("L", None), ("Q", "q")])
+    def sampled(rc, oid):
+        out = set()
+        for f in rc.features:
+            for u in f.samples:
+                for u0, u1, g0, g1, rev in f.blocks.get(oid, ()):
+                    if u0 <= u < u1:
+                        out.add(g0 + (u - u0) if not rev else g1 - 1 - (u - u0))
+        return sorted(out)
+    assert sampled(both, "Q") == sampled(alone, "Q") and sampled(alone, "Q")
+
+
+def test_a_stretch_only_some_carriers_walk_is_its_own_carrier_only_feature():
+    cols = _three({"p": ["i1", "i2"], "q": ["i1"]})
+    rc = cols([("L", None), ("P", "p"), ("Q", "q")])
+    parts = sorted((f.nodes, f.carriers) for f in rc.features)
+    assert parts == [(["i1"], ["P", "Q"]), (["i2"], ["P"])]
+    plan_ = gc.stage_plan([rc], ["L", "P", "Q"])
+    assert sorted(cs["carriers"] for cs in plan_.carrier_sets) == [["P"], ["P", "Q"]]

@@ -206,7 +206,7 @@ class Feature:
     def public(self) -> dict:
         return {"kind": self.kind, "region": self.region, "length": self.length, "label": self.label,
                 "carriers": list(self.carriers), "samples": len(self.samples),
-                **({"nodes": self.nodes[:64], "node_count": len(self.nodes)} if self.nodes else {}),
+                **({"nodes": self.nodes[:512], "node_count": len(self.nodes)} if self.nodes else {}),
                 **({"anchor": list(self.anchor)} if self.anchor else {}),
                 **({"frame_span": list(self.span)} if self.span else {})}
 
@@ -343,48 +343,68 @@ def region_columns(region: int, start: int, end: int, target: str, target_occs: 
     return RegionColumns(region, start, end, features, report, carried, [c is not None for c in cols])
 
 
+def _insertion_runs(binding, occs_by_id, start, end, target_nodes, t_visits):
+    """A path's non-target runs between two target anchors inside the region: ``[(run occurrences, (lo, hi))]``,
+    plus how many were left out as repeats. Contiguous visits only, every run base carried, carried flank bases
+    (§2.3: the unclipped path_span authorises nothing beyond the clips)."""
+    occs = sorted(occs_by_id.values(), key=lambda q: (q.span[0], q.span[1]))
+    vis = visits(occs_by_id)
+    out, repeats = [], 0
+    i = 0
+    while i < len(occs):
+        if occs[i].node in target_nodes:
+            i += 1
+            continue
+        j = i
+        while j < len(occs) and occs[j].node not in target_nodes:
+            j += 1
+        run = occs[i:j]
+        left = occs[i - 1] if i > 0 else None
+        right = occs[j] if j < len(occs) else None
+        i = j
+        walk = [left, *run, right]
+        if left is None or right is None or any(a.span[1] != b.span[0] for a, b in zip(walk, walk[1:])) \
+                or any(q.clips != [(0, q.length)] for q in run):
+            continue
+        tl, tr = _flank_target(left, True, t_visits), _flank_target(right, False, t_visits)
+        if tl is None or tr is None:
+            continue
+        lo, hi = min(tl, tr), max(tl, tr)
+        if not (start <= lo and hi < end):
+            continue
+        if any(len(vis[q.node]) != 1 for q in run):
+            repeats += 1
+            continue
+        out.append((run, (lo, hi)))
+    return out, repeats
+
+
 def _insertion_features(region, start, end, target, t_visits, observations, path_occs, report,
                         binding_order=None) -> list[Feature]:
-    """Non-target node runs between two target anchors inside the region, partitioned into features: paths are
-    read in the package's binding order (never the request's), each run is split into maximal stretches of nodes
-    that already belong to a feature (its carrier joins it) and stretches of new nodes (a new feature, framed along
-    this path's walk), so a carrier's private nodes inside a shared insertion become their own feature."""
+    """Non-target node runs between two target anchors inside the region (§2.5).
+
+    - **Canonical frames** come from every package path in the tiles (each compared with the target), read in the
+      package's binding order, never from the run's observations: a run of new nodes is a frame along the first
+      path that walks it, sampled on the parent's 10 bp grid continued across the boundary along that path's walk;
+      a later path joins the frames of nodes already framed. So the sampled columns of a path never depend on which
+      other paths are in the run.
+    - **Features** are maximal stretches of a frame with one carrier set among the observations (a column is carried
+      by an observation whose path walks that node in a valid run), so a carrier's private sequence and a stretch
+      only some carriers share are features of their own.
+    """
     target_nodes = set(t_visits)
     rank = {b: i for i, b in enumerate(binding_order or ())}
-    ordered = sorted((ob for ob in observations if ob.binding is not None and ob.binding != target),
-                     key=lambda ob: (rank.get(ob.binding, len(rank)), ob.binding, ob.id))
-    feats: list[dict] = []    # {nodes, canon: [Occ], skip, carriers: {obs id: [Occ]}, anchor}
+    walkers = sorted((b for b in path_occs if b != target), key=lambda b: (rank.get(b, len(rank)), b))
+    frames: list[dict] = []    # {canon: [Occ], skip, anchor}
     owner: dict[str, int] = {}
-    for ob in ordered:
-        occs = sorted((path_occs.get(ob.binding) or {}).values(), key=lambda q: (q.span[0], q.span[1]))
-        vis = visits(path_occs.get(ob.binding) or {})
-        i = 0
-        while i < len(occs):
-            if occs[i].node in target_nodes:
-                i += 1
-                continue
-            j = i
-            while j < len(occs) and occs[j].node not in target_nodes:
-                j += 1
-            run = occs[i:j]
-            left = occs[i - 1] if i > 0 else None
-            right = occs[j] if j < len(occs) else None
-            i = j
-            walk = [left, *run, right]
-            # Between two target anchors in this extraction: contiguous visits, every run base carried (§2.3: the
-            # unclipped path_span authorises nothing beyond the clips).
-            if left is None or right is None or any(a.span[1] != b.span[0] for a, b in zip(walk, walk[1:])) \
-                    or any(q.clips != [(0, q.length)] for q in run):
-                continue
-            tl, tr = _flank_target(left, True, t_visits), _flank_target(right, False, t_visits)
-            if tl is None or tr is None:
-                continue
-            lo, hi = min(tl, tr), max(tl, tr)
-            if not (start <= lo and hi < end):
-                continue
-            if any(len(vis[q.node]) != 1 for q in run):
-                report["repeats"][ob.id] = report["repeats"].get(ob.id, 0) + 1
-                continue
+    valid: dict[str, list] = {}
+    for b in walkers:
+        runs, repeats = _insertion_runs(b, path_occs[b], start, end, target_nodes, t_visits)
+        valid[b] = runs
+        for ob in observations:
+            if ob.binding == b and repeats:
+                report["repeats"][ob.id] = report["repeats"].get(ob.id, 0) + repeats
+        for run, anchor in runs:
             offset = 0
             k = 0
             while k < len(run):
@@ -392,40 +412,49 @@ def _insertion_features(region, start, end, target, t_visits, observations, path
                 m = k
                 while m < len(run) and owner.get(run[m].node) == fid:
                     m += 1
-                group = run[k:m]
                 if fid is None:
-                    fid = len(feats)
-                    feats.append({"canon": group, "skip": offset, "carriers": {}, "anchor": (lo, hi)})
-                    for q in group:
-                        owner[q.node] = fid
-                feats[fid]["carriers"].setdefault(ob.id, []).extend(group)
-                offset += sum(q.length for q in group)
+                    frames.append({"canon": run[k:m], "skip": offset, "anchor": anchor})
+                    for q in run[k:m]:
+                        owner[q.node] = len(frames) - 1
+                offset += sum(q.length for q in run[k:m])
                 k = m
+    # Each observation's carried bases of each frame: its path's valid runs.
+    obs = sorted((ob for ob in observations if ob.binding is not None and ob.binding != target), key=lambda ob: ob.id)
     out = []
-    ids = sorted(ob.id for ob in observations)
-    for f in feats:
-        frame: list[tuple[str, int, bool]] = [(q.node, o, q.reverse) for q in f["canon"] for o in q.walk_offsets()]
+    for f in frames:
+        frame = [(q.node, o, q.reverse) for q in f["canon"] for o in q.walk_offsets()]
         index = {(n, o): u for u, (n, o, _r) in enumerate(frame)}
         canon_rev = {n: r for n, _o, r in frame}
+        nodes = set(canon_rev)
         lo, hi = f["anchor"]
-        # The parent's 10 bp grid continued across the boundary (§2.5), counted along the creating path's walk of
-        # the whole insertion (this feature starts ``skip`` bases into it).
         phase = (GRID_BP - (hi - start) % GRID_BP) % GRID_BP
-        samples = _grid(0, len(frame), (phase - f["skip"]) % GRID_BP)
-        sample_set = set(samples)
-        blocks, carriers = {}, []
-        for oid in ids:
-            run = f["carriers"].get(oid)
-            if not run:
-                continue
-            pts = sorted((index[(q.node, o)], q.pos(o), q.reverse != canon_rev[q.node])
-                         for q in run for o in q.walk_offsets() if (q.node, o) in index)
-            if any(p[0] in sample_set for p in pts):
-                carriers.append(oid)
-            blocks[oid] = _runs(pts)
-        out.append(Feature("insertion", region, len(frame), samples, blocks, carriers,
-                           label=f"{len(frame):,} bp at {lo:,}–{hi:,}", nodes=[q.node for q in f["canon"]],
-                           anchor=(lo, hi)))
+        grid = set(_grid(0, len(frame), (phase - f["skip"]) % GRID_BP))
+        pts: dict[str, dict[int, tuple[int, bool]]] = {}
+        for ob in obs:
+            mine = {}
+            for run, _anchor in valid.get(ob.binding, ()):
+                for q in run:
+                    if q.node in nodes:
+                        for o in q.walk_offsets():
+                            u = index.get((q.node, o))
+                            if u is not None:
+                                mine[u] = (q.pos(o), q.reverse != canon_rev[q.node])
+            if mine:
+                pts[ob.id] = mine
+        carriers_at = [tuple(sorted(oid for oid, mine in pts.items() if u in mine)) for u in range(len(frame))]
+        u = 0
+        while u < len(frame):
+            cs = carriers_at[u]
+            v = u
+            while v < len(frame) and carriers_at[v] == cs:
+                v += 1
+            if cs:
+                part_nodes = list(dict.fromkeys(frame[x][0] for x in range(u, v)))
+                samples = [x - u for x in range(u, v) if x in grid]
+                blocks = {oid: _runs([(x - u, *pts[oid][x]) for x in range(u, v)]) for oid in cs}
+                out.append(Feature("insertion", region, v - u, samples, blocks, list(cs) if samples else [],
+                                   label=f"{v - u:,} bp at {lo:,}–{hi:,}", nodes=part_nodes, anchor=(lo, hi)))
+            u = v
     return out
 
 

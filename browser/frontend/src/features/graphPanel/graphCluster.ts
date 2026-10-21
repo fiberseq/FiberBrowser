@@ -230,6 +230,14 @@ export async function runGraphCluster(s: BrowserState, basis: ClusterBasis,
   report(!total ? 'error' : left ? 'note' : 'done', text, plan.destinations.map(d => d.panelId));
 }
 
+/** Path-specific parts in a sentence: "2,353 bp of insertion (9 parts, 236 samples)". */
+function partsText(features: { kind: string; length: number; samples: number }[]): string {
+  const kinds = [...new Set(features.map(f => (f.kind === 'deleted' ? 'deleted stretch' : f.kind)))];
+  const bp = features.reduce((n, f) => n + f.length, 0);
+  const samples = features.reduce((n, f) => n + f.samples, 0);
+  return `${bp.toLocaleString()} bp of ${kinds.join(' and ')}${features.length > 1 ? ` (${features.length} parts, ${samples} samples)` : ` (${samples} samples)`}`;
+}
+
 /** Write a graph run's labels to every destination, as one undo step, and record the durable run. */
 export function commitGraphRun(s: BrowserState, plan: GraphClusterPlan, response: GraphClusterResponse): void {
   const now = useBrowserStore.getState();
@@ -294,8 +302,9 @@ export function commitGraphRun(s: BrowserState, plan: GraphClusterPlan, response
   const leftOut = [...Object.entries(c.left_out ?? {}).map(([oid, why]) => `${obsLabel.get(oid)?.label ?? oid}: ${why}`),
     ...plan.leftOut.map(l => `${l.reason}`)];
   run.details = `Clustered on graph node columns at ${plan.regions.length} region${plan.regions.length === 1 ? '' : 's'} of ${plan.target}: `
-    + `${c.shared.map(f => `${f.kind === 'target' ? 'target' : f.kind} ${f.label} (${f.samples} samples)`).join('; ')}. `
-    + (c.carrier_sets.length ? `Refined within carriers on ${c.carrier_sets.map(cs => `${cs.features.map(f => `${f.kind} ${f.label}`).join(', ')} (${cs.carriers.map(o => obsLabel.get(o)?.label ?? o).join(', ')})`).join('; ')}; non-carriers keep their labels. ` : '')
+    + `${c.shared.filter(f => f.kind === 'target').map(f => `target ${f.label} (${f.samples} samples)`).join('; ')}`
+    + `${c.shared.some(f => f.kind !== 'target') ? `; ${partsText(c.shared.filter(f => f.kind !== 'target'))} every path carries` : ''}. `
+    + (c.carrier_sets.length ? `Refined within carriers on ${c.carrier_sets.map(cs => `${partsText(cs.features)} (${cs.carriers.map(o => obsLabel.get(o)?.label ?? o).join(', ')})`).join('; ')}; non-carriers keep their labels. ` : '')
     + (c.dropped?.length ? `${c.dropped.length} small path-specific part${c.dropped.length === 1 ? '' : 's'} not used. ` : '')
     + (leftOut.length ? `Left out: ${leftOut.join('; ')}. ` : '')
     + (plan.offContig ? `${plan.offContig} selected region${plan.offContig === 1 ? ' is' : 's are'} not on the graph's target and were not used. ` : '')

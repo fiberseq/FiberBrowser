@@ -28,12 +28,20 @@ export function runOutlines(run: ClusterMatchedRun | null | undefined, scene: Sc
   }
   const cols = (g.columns ?? {}) as { shared?: ColumnFeature[]; carrier_sets?: { carriers: string[]; features: ColumnFeature[] }[] };
   const bindingOf = new Map(g.observations.map(o => [o.id, o.binding ?? null]));
-  const parts: { nodes: Set<string>; lanes: Set<string> | null }[] = [];
-  for (const f of cols.shared ?? []) if (f.kind === 'insertion' && f.nodes?.length) parts.push({ nodes: new Set(f.nodes), lanes: null });
+  // One outline per insertion and carrier set (its parts, split where a carrier has a private allele, together).
+  const byKey = new Map<string, { nodes: Set<string>; lanes: Set<string> | null }>();
+  const add = (f: ColumnFeature & { anchor?: number[] }, lanes: Set<string> | null, key: string) => {
+    if (f.kind !== 'insertion' || !f.nodes?.length) return;
+    const k = `${key}|${JSON.stringify(f.anchor ?? null)}`;
+    const have = byKey.get(k);
+    if (have) f.nodes.forEach(n => have.nodes.add(n)); else byKey.set(k, { nodes: new Set(f.nodes), lanes });
+  };
+  for (const f of cols.shared ?? []) add(f, null, 'shared');
   for (const cs of cols.carrier_sets ?? []) {
     const lanes = new Set(cs.carriers.map(c => bindingOf.get(c)).filter((b): b is string => Boolean(b)));
-    for (const f of cs.features) if (f.kind === 'insertion' && f.nodes?.length) parts.push({ nodes: new Set(f.nodes), lanes });
+    for (const f of cs.features) add(f, lanes, cs.carriers.join(','));
   }
+  const parts = [...byKey.values()];
   for (const part of parts) {
     const byLane = new Map<string, [number, number]>();
     for (const o of scene.occurrences) {

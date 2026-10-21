@@ -259,13 +259,18 @@ def parse(state, reg, body: dict) -> dict:
     out_obs.sort(key=lambda o: o["id"])
     return {"target": target, "target_size": tb.get("size"), "regions": parsed_regions, "observations": out_obs,
             "binding_order": [b["key"] for b in reg.bindings],
+            # Every path compared with the target: insertion frames are canonical over the package, not the run.
+            "compared": sorted({m.get("source") for m in reg.maps if m.get("target") == target and m.get("source")}),
             "options": {"repeat_columns": "exclude", "carrier_features": carrier, "coverage_rule": "require_all",
                         "insertions": options.get("insertions", "include") != "exclude",
                         "carrier_min_samples": min_samples}}
 
 
 def needed_tiles(spec: dict) -> tuple[list[Optional[str]], list[int]]:
-    sources = sorted({o["binding"] for o in spec["observations"] if o["kind"] == "graph"})
+    """Tiles of every path compared with the target when the run has a graph observation (canonical insertion
+    frames read every package path, §2.3), else of the target alone."""
+    graph = {o["binding"] for o in spec["observations"] if o["kind"] == "graph"}
+    sources = sorted(graph | set(spec.get("compared") or ())) if graph else []
     cells = sorted({c for r in spec["regions"] for c in gc.cells_for(r["start"], r["end"])})
     return (sources or [None]), cells
 
