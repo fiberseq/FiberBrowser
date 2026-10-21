@@ -11,7 +11,8 @@
  */
 import type { GraphRead } from './types';
 import type { PackedLane, PlacedMolecule } from './readGeometry';
-import { idSetHas, orderIndex, recordValueIndex } from '../../utils/recordKeys';
+import { idSetHas, orderIndex, qnameOfId, recordValueIndex } from '../../utils/recordKeys';
+import { branchScopesPanel, readIdSetForClusterRenderScope } from '../../utils/readScopes';
 import { UNASSIGNED_CLUSTER_ID } from '../../components/tracks/read-track/constants';
 
 export interface BandMember {
@@ -169,4 +170,39 @@ export function packMemberBands(molecules: readonly PlacedMolecule[], members: r
     if (lane.groups.length) lanes.set(laneKey, lane);
   }
   return lanes;
+}
+
+/**
+ * The QNAMEs a host asks the server to keep in its sample (pins), at most `max`: each member's effective scope
+ * first — its read filter within its cluster focus or child branch, the reads it can show at all — smallest first,
+ * then selections, highlights and the global pins. So a member's one kept read is never crowded out by others.
+ */
+export function graphPins(stateKeys: readonly string[], st: {
+  filtered: Readonly<Record<string, ReadonlySet<string> | null | undefined>>;
+  selected: Readonly<Record<string, ReadonlySet<string> | undefined>>;
+  focus: Readonly<Record<string, ReadonlySet<number> | null | undefined>>;
+  assignments: Readonly<Record<string, Record<string, number> | undefined>>;
+  branch: { parentId: string | null; assignments?: Record<string, unknown> } | null | undefined;
+  highlight: ReadonlySet<string> | null;
+  pinned: readonly string[];
+}, max: number): string[] {
+  const names = (ids: Iterable<string>) => new Set([...ids].map(qnameOfId));
+  const scopes: string[][] = [];
+  const rest: string[] = [];
+  for (const sk of stateKeys) {
+    const filter = st.filtered[sk];
+    const scoped = branchScopesPanel(st.branch, sk) || (st.focus[sk]?.size ?? 0) > 0
+      ? readIdSetForClusterRenderScope(st.assignments[sk], st.focus[sk] as Set<number> | null | undefined, true) : null;
+    if (filter && scoped) { const inScope = names(scoped); scopes.push([...names(filter)].filter(q => inScope.has(q))); }
+    else if (filter) scopes.push([...names(filter)]);
+    else if (scoped) scopes.push([...names(scoped)]);
+    for (const id of st.selected[sk] ?? []) rest.push(qnameOfId(id));
+  }
+  for (const id of st.highlight ?? []) rest.push(qnameOfId(id));
+  rest.push(...st.pinned.map(qnameOfId));
+  const out = new Set<string>();
+  for (const list of [...scopes.sort((a, b) => a.length - b.length).map(l => [...l].sort()), rest]) {
+    for (const q of list) { if (out.size >= max) break; out.add(q); }
+  }
+  return [...out].sort();
 }

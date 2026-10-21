@@ -14,7 +14,7 @@ import { create } from 'zustand';
 import { useBrowserStore } from '../../stores/browserStore';
 import type { PanelConfig } from '../../types';
 import { genomeKeyFor } from '../../utils/regionNavigation';
-import { isHost, panelView } from './hostMode';
+import { isHost, moveHostMembers, panelView } from './hostMode';
 import { canFollow, defaultCompared, defaultTarget, GRAPH_MAX_PATHS, type LinearView } from './state';
 import { useGraphStatusStore } from './statusStore';
 
@@ -176,7 +176,26 @@ export function startHandoffController(): void {
       }, HANDOFF_SETTLE_MS) });
     }
   };
+  // A host with its own view carries its members in step with it, however it moves (graph gestures, its linear
+  // tracks while handed off, the locus box): once per move, from the view it moved from. Members a site lock already
+  // moved, or that the user moved elsewhere, are left as they are.
+  const lastView = new Map<string, { chrom: string; start: number; end: number }>();
+  const carry = () => {
+    const s = useBrowserStore.getState();
+    let panels = s.panels;
+    for (const host of s.panels) {
+      if (!isHost(host) && host.graphView?.role !== 'host') continue;
+      const now = host.viewportOverride;
+      const before = lastView.get(host.id);
+      if (now) lastView.set(host.id, { ...now }); else lastView.delete(host.id);
+      if (now && before && (before.chrom !== now.chrom || before.start !== now.start || before.end !== now.end)) {
+        panels = moveHostMembers(panels, host.id, before, now);
+      }
+    }
+    if (panels !== s.panels) useBrowserStore.setState({ panels });
+  };
   useBrowserStore.subscribe((s, prev) => {
+    if (s.panels !== prev.panels) carry();
     if (s.panels === prev.panels && s.chrom === prev.chrom && s.start === prev.start && s.end === prev.end) return;
     check();
   });

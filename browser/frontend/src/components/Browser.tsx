@@ -1340,8 +1340,7 @@ export function Browser() {
     // Datasets whose every panel is filtered to nothing aren't clustered.
     // (A graph host's folded members of other datasets are windows too: their datasets join the run.)
     const windowDatasets=[...new Set(clusterWindows.map(view=>view.dataset_id))];
-    const runDatasetIds=filteredToNothing.length>0?datasetIds.filter(id=>clusterWindows.some(view=>view.dataset_id===id))
-      :[...datasetIds,...windowDatasets.filter(id=>!datasetIds.includes(id))];
+    const runDatasetIds=[...new Set([...(filteredToNothing.length>0?datasetIds.filter(id=>clusterWindows.some(view=>view.dataset_id===id)):datasetIds),...windowDatasets])];
     // Panels at other loci: each window gets its own matched peaks (see
     // alignWindowPeaks); the shared list is their offsets from the main start.
     let requestPeaks: Array<{ start: number; end: number; mode?: string }> = peakRegions.map(({ start: s, end: e, mode }) => ({ start: s, end: e, mode }));

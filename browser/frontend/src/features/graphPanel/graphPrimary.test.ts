@@ -16,7 +16,7 @@ import { migratePanelAliases } from '../../plugins/registry';
 import { registerGraphPanel } from './register';
 import { clusterWindows } from '../../utils/clusterTargets';
 import { notePendingGraphOpen } from './openAsGraph';
-import { clusterOf, packMemberBands, routeRead, type BandMember } from './memberBands';
+import { clusterOf, graphPins, packMemberBands, routeRead, type BandMember } from './memberBands';
 import type { PlacedMolecule } from './readGeometry';
 import type { GraphBinding, GraphRead, GraphReadBinding, GraphRegistration } from './types';
 import type { PanelConfig } from '../../types';
@@ -282,6 +282,25 @@ describe('G6: zoom hand-off (§7)', () => {
     expect(moved.find(p => p.id === 'pat')!.viewportOverride).toEqual({ chrom: 'chr3', start: 260_000, end: 320_000 });
   });
 
+  it('round 3: an own-view host carries in-step members in either mode, and locked ones only once', () => {
+    startHandoffController();
+    const view = { chrom: 'chr3', start: 100_000, end: 140_000 };
+    seed(split().map(p => ({ ...p, viewportOverride: { ...view } })));
+    setPanelViewMode('mat', 'graph');
+    // Folded: moves with the host.
+    useBrowserStore.getState().setPanelViewport('mat', 101_000, 141_000);
+    expect(get('pat').viewportOverride).toMatchObject({ start: 101_000, end: 141_000 });
+    // Revealed (linear for now): its linear tracks' moves carry it too.
+    setPanelViewMode('mat', 'linear');
+    useBrowserStore.getState().setPanelViewport('mat', 125_000, 165_000);
+    expect(get('pat').viewportOverride).toMatchObject({ start: 125_000, end: 165_000 });
+    // Locked with it: moved by the lock, once.
+    useBrowserStore.setState(s => ({ panels: s.panels.map(p => ({ ...p, siteLocked: true })) }));
+    for (let i = 1; i <= 4; i++) useBrowserStore.getState().setPanelViewport('mat', 125_000 + i * 1000, 165_000 + i * 1000);
+    expect(get('mat').viewportOverride).toMatchObject({ start: 129_000 });
+    expect(get('pat').viewportOverride).toMatchObject({ start: 129_000 });
+  });
+
   it('a member revealed by hand during the hand-off stays revealed on return', () => {
     seed(split());
     setPanelViewMode('mat', 'graph');
@@ -361,6 +380,17 @@ describe('G3: sub-bands read each member\'s own state through record keys', () =
     expect(both.get('mat')!.rows.map(r => r[0].read.q)).toEqual(['c', 'b', 'a']);
     const branch = packMemberBands(mols, [M], { mat: { assignments: { [aid('a', 1)]: 0 }, branchScope: new Set([aid('a', 1)]) } }, 40);
     expect(branch.get('mat')!.rows.flat().map(m => m.read.q)).toEqual(['a']);
+  });
+
+  it('round 3: a member\'s effective scope is pinned first, never crowded out by a large focus', () => {
+    const many = Object.fromEntries(Array.from({ length: 4000 }, (_, i) => [aid(`f${String(i).padStart(4, '0')}`), 1]));
+    const pins = graphPins(['k-mat', 'k-pat'], { filtered: { 'k-pat': new Set(['zz-one']) }, selected: {},
+      focus: { 'k-mat': new Set([1]) }, assignments: { 'k-mat': many }, branch: null, highlight: null, pinned: [] }, 2000);
+    expect(pins).toContain('zz-one');
+    expect(pins.length).toBe(2000);
+    // A filter inside a focus: only the reads in both.
+    expect(graphPins(['k'], { filtered: { k: new Set(['a', 'b']) }, selected: {}, focus: { k: new Set([2]) },
+      assignments: { k: { [aid('a')]: 2, [aid('b')]: 1 } }, branch: null, highlight: null, pinned: [] }, 10)).toEqual(['a']);
   });
 
   it('two members of one dataset with different filters each draw the row under their own rules', () => {

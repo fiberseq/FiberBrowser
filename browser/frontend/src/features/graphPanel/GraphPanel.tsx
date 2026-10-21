@@ -33,9 +33,8 @@ import { bumpNavigation, navigateGraph, navigationToken, showSourceSpan, sourceP
 import { useGraphReadsStore } from './graphReadsStore';
 import { moleculeKey, useLiftHover } from '../liveLift/linking/hover';
 import { xForTarget } from './scene';
-import { moveHostMembers } from './hostMode';
 import { conversionTargets, convertStandalone, foldIn, isHost, joinCandidates, joinGraph, membersOf, panelKeyOf, panelView, popOut, poppable, setPanelViewMode } from './hostMode';
-import { packMemberBands, routeRead, type BandMember, type HostLane, type MemberState } from './memberBands';
+import { graphPins, packMemberBands, routeRead, type BandMember, type HostLane, type MemberState } from './memberBands';
 import { drawHostBandLabels, type ReadDecoration } from './readCanvas';
 import { useReadActionsStore } from '../../stores/readActionsStore';
 import { setPinnedLinear, useGraphSettings } from './handoff';
@@ -295,18 +294,9 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   const assignmentsForPins = useBrowserStore(s => s.clusterAssignments);
   const pins = useMemo(() => {
     if (!hostMode) return [] as string[];
-    const out = new Set<string>(pinnedGlobal.map(qnameOfId));
-    for (const id of highlightForPins?.ids ?? []) out.add(qnameOfId(id));
-    for (const { panel: p } of members) {
-      const sk = panelKeyOf(p);
-      for (const id of selectedForPins[sk] ?? []) out.add(qnameOfId(id));
-      for (const id of filteredForPins[sk] ?? []) out.add(qnameOfId(id));
-      // A cluster focus or child branch scopes the member to its reads: those are kept too.
-      const scope = branchScopesPanel(branchForPins, sk) || (focusForPins[sk]?.size ?? 0) > 0
-        ? readIdSetForClusterRenderScope(assignmentsForPins[sk], focusForPins[sk], true) : null;
-      for (const id of scope ?? []) out.add(qnameOfId(id));
-    }
-    return [...out].sort().slice(0, MAX_GRAPH_PINS);
+    return graphPins(members.map(m => panelKeyOf(m.panel)), { filtered: filteredForPins, selected: selectedForPins,
+      focus: focusForPins, assignments: assignmentsForPins, branch: branchForPins, highlight: highlightForPins?.ids ?? null,
+      pinned: pinnedGlobal }, MAX_GRAPH_PINS);
   }, [hostMode, members, selectedForPins, filteredForPins, pinnedGlobal, highlightForPins, branchForPins, focusForPins, assignmentsForPins]);
   const pinsKey = pins.join('\u0000');
   const readsKey = reg && response && readPaths.length
@@ -651,9 +641,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       const own = store.panels.find(p => p.id === panelId);
       // Its own view: the ordinary panel navigation (site-locked pop-outs move with it; pans coalesce into one step).
       if (own?.viewportOverride && own.viewportOverride.chrom === next.contig) {
-        // Its members still in step with it move first, so the panel's navigation step records them too.
-        const moved = moveHostMembers(store.panels, panelId, own.viewportOverride, { chrom: next.contig, start: next.start, end: next.end });
-        if (moved !== store.panels) useBrowserStore.setState({ panels: moved });
+        // (Its members in step with it move with it: handoff.ts, the same in both rendering modes.)
         store.setPanelViewport(panelId, next.start, next.end);
       }
       else if (own?.viewportOverride) store.navigatePanelOwnView(panelId, next.contig, next.start, next.end);
