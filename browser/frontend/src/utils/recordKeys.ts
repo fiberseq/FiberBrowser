@@ -14,7 +14,7 @@ const RECORD_PREFIX = 'lift-record:v1 ';
 
 /** JSON as Python's `json.dumps(..., separators=(",", ":"), ensure_ascii=True)` writes it. */
 function pyJson(value: unknown): string {
-  return JSON.stringify(value).replace(/[\u0080-￿]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+  return JSON.stringify(value).replace(/[\u007f-\uffff]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 }
 
 function parse(text: string): unknown {
@@ -45,7 +45,9 @@ function rowRank(id: string): number {
   const parts = parse(id.slice(IDENTITY_PREFIX.length)) as unknown[] | null;
   if (!Array.isArray(parts)) return 0;
   const row = typeof parts[3] === 'number' ? parts[3] : 0;
-  return (parts[4] === 'primary' ? 0 : 1_000_000) + row;
+  // Placements: a primary chain ("17", or "primary" for a graph row), an alternative chain ("alt9").
+  const alt = typeof parts[4] === 'string' && parts[4].startsWith('alt');
+  return (alt ? 1_000_000 : 0) + row;
 }
 
 const keySets = new WeakMap<object, Set<string>>();
@@ -71,11 +73,14 @@ export function recordValueIndex<T extends number>(map: Readonly<Record<string, 
   if (hit) return hit as Map<string, T>;
   const out = new Map<string, T>();
   const rank = new Map<string, number>();
+  const winner = new Map<string, string>();
   for (const [id, value] of Object.entries(map)) {
     const rk = recordKey(id);
     if (!rk) continue;
     const r = rowRank(id);
-    if (!rank.has(rk) || r < rank.get(rk)!) { rank.set(rk, r); out.set(rk, value); }
+    // Ties (the same rank) go to the smaller id, never to the map's insertion order.
+    const prev = rank.get(rk);
+    if (prev === undefined || r < prev || (r === prev && id < (winner.get(rk) ?? ''))) { rank.set(rk, r); winner.set(rk, id); out.set(rk, value); }
   }
   valueIndexes.set(map as object, out);
   return out;

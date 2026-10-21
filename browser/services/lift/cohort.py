@@ -6,6 +6,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from collections import defaultdict
 from copy import deepcopy
+from functools import lru_cache
 import json
 
 _scope = ContextVar("lift_cohort_scope", default=("display", None, None))
@@ -23,7 +24,17 @@ def _encode_record(parts):
     return _RECORD_PREFIX + json.dumps(parts, separators=(",", ":"), ensure_ascii=True)
 
 
+@lru_cache(maxsize=65536)
+def _record_key_cached(value):
+    return _record_key(value)
+
+
 def record_key(value):
+    """The record key of a row identity (cached: identities are immutable strings); see ``_record_key``."""
+    return _record_key_cached(str(value)) if value is not None else None
+
+
+def _record_key(value):
     """The record key of a row identity (DESIGN_GRAPH_PRIMARY §3.1), independent of row index and placement, so a
     graph row and the linear rows of the same record match across views: ``lift-record:v1 [molecule, QNAME,
     record]`` (``record`` null under ``fold_molecule``). ``value`` is a versioned ``analysis_id``, a record key

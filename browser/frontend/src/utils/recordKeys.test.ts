@@ -41,3 +41,17 @@ describe('record keys (DESIGN_GRAPH_PRIMARY §3.1)', () => {
     expect(orderIndex(['x', linear]).get(recordKey(linear)!)).toBe(1);
   });
 });
+
+describe('record keys review fixes (G0 Codex)', () => {
+  it('ranks the linear producer\'s own placements: numeric chains are primary, alt chains are alternatives', () => {
+    const alt = aid('m|q', 'q', 'r', 0, 'alt9');
+    const primary = aid('m|q', 'q', 'r', 0, '17');
+    // The alternative first in the map: the primary still wins.
+    expect(recordValueIndex({ [alt]: 9, [primary]: 2 }).get(recordKey(primary)!)).toBe(2);
+    expect(recordValueIndex({ [aid('m|q', 'q', 'r', 1, '17')]: 5, [aid('m|q', 'q', 'r', 0, 'alt3')]: 6 }).get(recordKey(primary)!)).toBe(5);
+  });
+  it('escapes DEL as Python does', () => {
+    const id = `lift-cohort:v1 ["g\\u007f|q","q","r",0,"primary"]`;
+    expect(recordKey(id)).toBe('lift-record:v1 ["g\\u007f|q","q","r"]');
+  });
+});
