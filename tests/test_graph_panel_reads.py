@@ -556,3 +556,74 @@ def test_pinned_qnames_survive_sampling_and_the_cap(env):
     # Pinned molecules come on top of the cap (the rest still fill it).
     assert set(out) <= got and pinned["report"]["molecules"] <= 25 and pinned["report"]["pinned"] == 5
     assert _reads(env, [did], paths, pins=[1]).status_code == 422
+
+
+# ── G7 budgets (DESIGN_GRAPH_PRIMARY §6) ────────────────────────────────────
+
+def test_profile_budgets_follow_the_performance_profile():
+    low = gr.profile_budgets(types.SimpleNamespace(performance={"effective": "low", "sample_target": 1000}))
+    std = gr.profile_budgets(types.SimpleNamespace(performance={"effective": "standard", "sample_target": 4000}))
+    high = gr.profile_budgets(types.SimpleNamespace(performance={"effective": "high", "sample_target": 4000}))
+    assert (low["molecules"], low["decoded_bytes"]) == (1000, 8 * 1024 * 1024)
+    assert (std["molecules"], std["decoded_bytes"]) == (4000, 32 * 1024 * 1024) == (high["molecules"], high["decoded_bytes"])
+    assert low["records_bytes"] < std["records_bytes"] < high["records_bytes"]
+    # No profile (tools, tests): the Phase E request budget.
+    assert gr.profile_budgets(types.SimpleNamespace())["molecules"] == gr.MAX_MOLECULES
+
+
+def test_split_quota_gives_each_band_its_share_at_least_fifty():
+    assert gr.split_quota(4000, [10_000, 10_000]) == [2000, 2000]
+    # A small band keeps what it has; the rest goes to the others.
+    assert gr.split_quota(4000, [100, 10_000, 10_000]) == [100, 1950, 1950]
+    # The floor: 50 each, even when the budget split evenly would give less.
+    assert gr.split_quota(100, [500, 500, 500, 500]) == [50, 50, 50, 50]
+    assert gr.split_quota(20, [120]) == [20]          # never more than the budget for one band
+    assert gr.split_quota(40, [120, 1], floor=1) == [39, 1]   # an explicit request limit: a total
+    assert gr.split_quota(1000, [None, 30]) == [970, 30]
+
+
+def test_each_band_samples_at_its_own_level_and_reports_it(env):
+    """One band with 120 molecules and one with 1: with a 40-molecule budget the big band is sampled, the small one
+    keeps its molecule unsampled (§6.1: split across sub-bands, at least 50 each, never more than the request)."""
+    many = write_bam(env.tmp / "bands.bam", lambda h: [
+        *[make_record(h, f"b{i:03d}", MAT, 100 + i * 10, "500M", tags=[("ns", _u32([50])), ("nl", _u32([150]))])
+          for i in range(120)],
+        make_record(h, "lonely", PAT, 100, "500M", tags=[("ns", _u32([50])), ("nl", _u32([150]))])])
+    did = _add_lifted(env, paths=[many], dataset_id="bands")
+    paths = [{"binding": "mat", "windows": [{"start": 0, "end": 2500}]}, {"binding": "pat", "windows": [{"start": 0, "end": 1000}]}]
+    out = _reads(env, [did], paths, limits={"molecules": 40}).json()
+    bands = {b["binding"]: b for b in out["report"]["bands"]}
+    assert bands["pat"]["estimated"] == 1 and bands["pat"]["level"] == 0 and bands["pat"]["molecules"] == 1
+    assert bands["mat"]["estimated"] == 120 and bands["mat"]["level"] >= 1 and bands["mat"]["molecules"] <= 39
+    assert bands["mat"]["quota"] == 39 and bands["pat"]["quota"] == 1
+    assert out["report"]["budgets"]["molecules"] == 40
+
+
+def test_density_strip_counts_rows_before_the_cap_and_the_mark_budget(env, monkeypatch):
+    monkeypatch.setattr(gr, "MAX_LEVEL", 0)   # unsampled: the cap alone limits what is drawn
+    many = write_bam(env.tmp / "strip.bam", lambda h: [
+        make_record(h, f"s{i:03d}", MAT, 100 + i, "500M", tags=[("ns", _u32([200])), ("nl", _u32([150]))]) for i in range(30)])
+    did = _add_lifted(env, paths=[many], dataset_id="strip")
+    paths = [{"binding": "mat", "windows": [{"start": 0, "end": 1200}]}]
+    out = _reads(env, [did], paths, limits={"molecules": 5, "marks": 1, "strip_bp": 100}).json()
+    assert out["report"]["molecules"] <= 5
+    [strip] = out["strips"]
+    assert strip["binding"] == "mat" and strip["bp"] == 100
+    [[start, end, cov, acc, nuc]] = strip["windows"]
+    assert (start, end) == (0, 1200) and len(cov) == 12
+    decoded = out["report"]["bands"][0]["decoded"]
+    assert decoded > 5                       # more rows than drawn...
+    assert max(cov) == decoded               # ...all counted at the centre of a covered bin
+    assert cov[0] == 0 and cov[11] == 0      # 0-100 and 1100-1200 are outside every read
+    # Each read's nucleosome (ns 200 from its start) covers bin 3's centre (350): every row; bin 1 (150) none.
+    assert nuc[3] == decoded and nuc[1] == 0
+    assert all(a <= c for a, c in zip(acc, cov))
+
+
+def test_concurrent_loads_share_the_decoded_bytes_budget():
+    with gr._SharedBytes(32 * 1024 * 1024) as a:
+        assert a.share == 32 * 1024 * 1024
+        with gr._SharedBytes(32 * 1024 * 1024) as b:
+            assert b.concurrent == 2 and b.share == 16 * 1024 * 1024
+    with gr._SharedBytes(32 * 1024 * 1024) as c:
+        assert c.concurrent == 1

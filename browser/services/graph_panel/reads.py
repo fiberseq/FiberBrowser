@@ -23,12 +23,21 @@ nucleosome/MSP inference are the linear composer's, in source coordinates,
 before any node slicing. The browser cuts the composed calls at the visits and
 at the read's coverage holes (``cov``); nothing is inferred there.
 
-**Budgets** (§7): at most 300 molecules, 100,000 mark primitives and 8 MiB of
-decoded reads per request. Molecules are sampled by QNAME hash *before*
-decoding (``read_sampling.Sampler``; a load that would still pass 8 MiB is
-retried one level sparser), then capped in hash order; marks beyond the budget
-become m6A density. Every omission is reported, never silent. Topology and
-selected paths are never reduced for reads.
+**Budgets** (DESIGN_GRAPH_PRIMARY §6, graph primary G7): the performance profile's
+``sample_target`` molecules per request (1,000 Low memory, 4,000 Standard/High),
+split across the request's sub-bands — each (dataset, path) — at least 50 each,
+pins on top; 100,000 mark primitives per draw; 32 MiB of decoded reads (8 MiB
+Low memory), shared across concurrent loads (every host's request). Each
+sub-band is sampled by QNAME hash *before* decoding at the level its own quota
+needs (``read_sampling.Sampler``; a load that would still pass its byte budget
+is retried one level sparser), then capped in hash order; marks beyond the
+budget become m6A density. Every omission is reported, never silent. Topology
+and selected paths are never reduced for reads.
+
+**Density strip** (§6.2 L2): per sub-band, coverage and the accessible (MSP) and
+nucleosome counts at each bin's centre, over every row decoded at the band's
+sampling level — before the molecule cap and before the mark budget drops any
+call — so a band that draws fewer rows than it has molecules still shows them.
 """
 from __future__ import annotations
 
@@ -40,10 +49,14 @@ import time
 from collections import OrderedDict
 from typing import Iterable, Optional
 
-MAX_MOLECULES = 300
+MAX_MOLECULES = 300          # a request without a profile (tests, tools)
+MIN_BAND_MOLECULES = 50      # each sub-band's share of the profile's molecules is at least this
 MAX_PINS = 2000
 MAX_MARKS = 100_000
-MAX_DECODED_BYTES = 8 * 1024 * 1024
+MAX_DECODED_BYTES = 32 * 1024 * 1024   # the ceiling of a request's decoded-bytes budget (Standard/High)
+LOW_DECODED_BYTES = 8 * 1024 * 1024    # Low memory
+MIN_SHARED_BYTES = 2 * 1024 * 1024     # a request's floor while other loads share the budget
+MAX_STRIP_BINS = 4000
 MAX_SOURCE_BP = 400_000
 MAX_WINDOWS = 64
 MAX_LEVEL = 8
@@ -373,6 +386,103 @@ _RECORDS: "OrderedDict[tuple, tuple]" = OrderedDict()
 _RECORDS_LOCK = threading.Lock()
 _RECORDS_MAX_BYTES = 96 * 1024 * 1024
 _records_bytes = 0
+# The record cache follows the profile (4,000 molecules of long reads per band would thrash 96 MiB).
+_RECORDS_BUDGET = {"low": 48 * 1024 * 1024, "standard": 192 * 1024 * 1024, "high": 384 * 1024 * 1024}
+
+
+def profile_budgets(state) -> dict:
+    """The performance profile's read budgets (``services/performance.py``): molecules per request, the decoded-bytes
+    budget and the record cache. A state without a profile (tests, tools) keeps the Phase E defaults."""
+    perf = getattr(state, "performance", None) or {}
+    effective = perf.get("effective")
+    if not effective:
+        return {"molecules": MAX_MOLECULES, "decoded_bytes": MAX_DECODED_BYTES, "records_bytes": _RECORDS_MAX_BYTES,
+                "effective": None}
+    low = effective == "low"
+    target = int(perf.get("sample_target") or (1000 if low else 4000))
+    return {"molecules": max(1, target), "decoded_bytes": min(MAX_DECODED_BYTES, LOW_DECODED_BYTES if low else MAX_DECODED_BYTES),
+            "records_bytes": _RECORDS_BUDGET.get(effective, _RECORDS_BUDGET["standard"]), "effective": effective}
+
+
+_ACTIVE_LOCK = threading.Lock()
+_active_loads = 0
+
+
+class _SharedBytes:
+    """The decoded-bytes budget shared across concurrent read loads (every host's request): a load's share is the
+    budget over the loads running when it starts (at least ``MIN_SHARED_BYTES``)."""
+
+    def __init__(self, total: int):
+        self.total = int(total)
+        self.share = self.total
+
+    def __enter__(self):
+        global _active_loads
+        with _ACTIVE_LOCK:
+            _active_loads += 1
+            n = _active_loads
+        self.concurrent = n
+        self.share = max(min(self.total, MIN_SHARED_BYTES), self.total // max(1, n))
+        return self
+
+    def __exit__(self, *exc):
+        global _active_loads
+        with _ACTIVE_LOCK:
+            _active_loads = max(0, _active_loads - 1)
+        return False
+
+
+def split_quota(total: int, estimates: list, floor: int = MIN_BAND_MOLECULES) -> list:
+    """Each sub-band's molecule quota: ``total`` split evenly, at least ``floor`` each (never more than ``total``), a
+    band with fewer molecules than its share keeping only what it has and leaving the rest to the others (``None``:
+    unknown, takes its share)."""
+    n = len(estimates)
+    if not n:
+        return []
+    floor = max(1, min(int(floor), int(total)))
+    quotas = [0] * n
+    left = int(total)
+    order = sorted(range(n), key=lambda i: (estimates[i] is None, estimates[i] or 0, i))
+    for k, i in enumerate(order):
+        share = max(floor, left // (n - k) if k < n - 1 else left)
+        q = share if estimates[i] is None else min(int(estimates[i]), share)
+        quotas[i] = q
+        left = max(0, left - q)
+    return quotas
+
+
+def density_strip(reads: list, windows: list, bin_bp: int) -> dict:
+    """A sub-band's density strip over its windows: per bin (``bin_bp`` from each window's start), the rows covering
+    the bin's centre (coverage holes excluded), and of them the rows with an accessible (MSP) or a nucleosome call
+    there. ``{"bp", "windows": [[start, end, cov[], acc[], nuc[]]]}``."""
+    import numpy as np
+    out = []
+    for wa, wb in windows:
+        n = max(1, int(math.ceil((wb - wa) / bin_bp)))
+        centres = wa + (np.arange(n) + 0.5) * bin_bp
+        counts = {}
+        for name in ("cov", "msp", "nuc"):
+            starts, ends = [], []
+            for r in reads:
+                if name == "cov":
+                    ivs = r.get("cov") or ()
+                else:
+                    ivs = (r.get(name) or {}).get("iv") or ()
+                for iv in ivs:
+                    a, b = int(iv[0]), int(iv[1])
+                    if b > wa and a < wb:
+                        starts.append(a)
+                        ends.append(b)
+            diff = np.zeros(n + 1, dtype=np.int64)
+            if starts:
+                a = np.searchsorted(centres, np.asarray(starts, dtype=np.float64), side="left")
+                b = np.searchsorted(centres, np.asarray(ends, dtype=np.float64), side="left")
+                keep = b > a
+                np.add.at(diff, a[keep], 1)
+                np.add.at(diff, b[keep], -1)
+            counts[name] = np.cumsum(diff[:-1]).tolist()
+        out.append([int(wa), int(wb), counts["cov"], counts["msp"], counts["nuc"]])
+    return {"bp": int(bin_bp), "windows": out}
 
 
 def _entry_bytes(reads: tuple) -> int:
@@ -442,7 +552,7 @@ def _record_key(base: tuple, rec: tuple) -> tuple:
 
 
 def _decode_records(dataset, contig: str, size: int, windows: list, binding: str, missing: list, region: tuple,
-                    base: tuple, listed_n: Optional[dict] = None) -> tuple:
+                    base: tuple, listed_n: Optional[dict] = None, max_bytes: int = MAX_DECODED_BYTES) -> tuple:
     """Decode and compose the ``missing`` listed records (only them: by QNAME, over their own spans inside the
     windows) and cache each: ``(entries, truncated, scoped counts)``. A record of the batch that composed to nothing
     is cached with its reason: a hard-clipped supplementary whose tags cannot be scoped, a record the loader's
@@ -460,7 +570,7 @@ def _decode_records(dataset, contig: str, size: int, windows: list, binding: str
     # a haplotype rule (``lift_hap``) and the rows' labels mean the same in both views; a native dataset has none.
     hap, labels = source_haplotype(dataset, contig)
     plan = _Plan(contig, size, spans, hap or binding, region)
-    budget = LoadBudget(max_bytes=MAX_DECODED_BYTES)
+    budget = LoadBudget(max_bytes=min(max_bytes, MAX_DECODED_BYTES))
     counts: dict = {}
     sampler = Sampler(0, only_ids=frozenset(r[1] for r in missing), exact_ids=True)
     decoded = decode_source_records(list(dataset.paths), plan, loader_options=LOADER_OPTIONS, budget=budget,
@@ -579,8 +689,19 @@ def _settings(dataset):
     return dataset.live_lift.settings if getattr(dataset, "live_lift", None) is not None else LiftSettings()
 
 
-def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_marks: int = MAX_MARKS) -> dict:
-    """The reads of a request (blocking; run it in a worker thread)."""
+def load(state, reg, body: dict, *, max_molecules: Optional[int] = None, max_marks: int = MAX_MARKS) -> dict:
+    """The reads of a request (blocking; run it in a worker thread). ``max_molecules``: the request's molecule budget
+    (default: the performance profile's ``sample_target``)."""
+    global _RECORDS_MAX_BYTES
+    budgets = profile_budgets(state)
+    _RECORDS_MAX_BYTES = budgets["records_bytes"]
+    with _SharedBytes(min(MAX_DECODED_BYTES, budgets["decoded_bytes"])) as shared:
+        return _load(state, reg, body, max_molecules=budgets["molecules"] if max_molecules is None else max_molecules,
+                     max_marks=max_marks, max_bytes=shared.share, budgets={**budgets, "concurrent": shared.concurrent,
+                                                                             "decoded_share": shared.share})
+
+
+def _load(state, reg, body: dict, *, max_molecules: int, max_marks: int, max_bytes: int, budgets: dict) -> dict:
     from services.read_sampling import keeps, name_hash
 
     t0 = time.perf_counter()
@@ -601,6 +722,7 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
     estimated = 0
     known = True
     listed: list = []
+    per_job: list = []
     not_loaded = 0
     t_list = time.perf_counter()
     for dataset, _binding, contig, windows, _size in jobs:
@@ -611,15 +733,24 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
         listed.append(recs)
         if recs is None:
             known = False
+            per_job.append(None)
         else:
-            estimated += len({(k[0], k[1]) for k in recs})
+            n_mol = len({(k[0], k[1]) for k in recs})
+            per_job.append(n_mol)
+            estimated += n_mol
     list_ms = (time.perf_counter() - t_list) * 1000
-    level = 0
-    if known and estimated > max_molecules:
-        level = min(MAX_LEVEL, int(math.ceil(math.log2(estimated / max_molecules))))
-    if isinstance(limits.get("level"), int) and limits["level"] > level:
-        level = min(MAX_LEVEL, limits["level"])
-    max_bytes = MAX_DECODED_BYTES
+    # Each sub-band (dataset, path) samples at the level its own share of the molecules needs (§6.1).
+    # (An explicit request limit is a total: no per-band floor above it.)
+    explicit = isinstance(limits.get("molecules"), int) and 0 < limits["molecules"] <= max_molecules
+    quotas = split_quota(max_molecules, per_job, 1 if explicit else MIN_BAND_MOLECULES)
+    levels = []
+    for est, q in zip(per_job, quotas):
+        lvl = min(MAX_LEVEL, int(math.ceil(math.log2(est / max(1, q))))) if est is not None and est > q else 0
+        if isinstance(limits.get("level"), int) and limits["level"] > lvl:
+            lvl = min(MAX_LEVEL, limits["level"])
+        levels.append(lvl)
+    # (Tests and tools patch MAX_DECODED_BYTES: it stays the ceiling.)
+    max_bytes = min(max_bytes, MAX_DECODED_BYTES)
     decode_ms = 0.0
     decoded_records = 0
     scoped: dict = {}
@@ -653,7 +784,7 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
                       min(size + 1, max([windows[-1][1], *(k[4] for k in missing)]) + 1))
             t = time.perf_counter()
             got, truncated, sc, n_decoded = _decode_records(dataset, contig, size + 1, windows, binding["key"], missing,
-                                                            region, base, listed_n)
+                                                            region, base, listed_n, max_bytes)
             decode_ms += (time.perf_counter() - t) * 1000
             decoded_records += n_decoded
             for kk, vv in (sc or {}).items():
@@ -668,19 +799,20 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
         reached = {key for _k, key in zip(kept, keys) if key in have}
         return out, truncated, not missing, sum(n for key, n in listed_n.items() if key not in reached)
 
-    # One level for the whole request: sparser (by QNAME hash) until every path's reads fit the request's payload
-    # budget together. A sparser level is a subset of the records already decoded: only the first pass decodes.
+    # Every band one level sparser (by QNAME hash) until every path's reads fit the request's payload budget
+    # together. A sparser level is a subset of the records already decoded: only the first pass decodes.
     while True:
-        results = [run(j, recs, level) for j, recs in zip(jobs, listed)]
+        results = [run(j, recs, lvl) for j, recs, lvl in zip(jobs, listed, levels)]
         total_bytes = 0
         for got, _t, _c, _u in results:
             for rec, entry in got:
                 total_bytes += entry[1]
         truncated = any(r[1] for r in results)
-        if (total_bytes > max_bytes or truncated) and level < MAX_LEVEL:
-            level += 1
+        if (total_bytes > max_bytes or truncated) and min(levels, default=MAX_LEVEL) < MAX_LEVEL:
+            levels = [min(MAX_LEVEL, lvl + 1) for lvl in levels]
             continue
         break
+    level = max(levels, default=0)
     cached_all = all(r[2] for r in results)
     counts: dict = {}
     reads: list = []
@@ -711,6 +843,23 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
                 reads.append(clip_to_windows(r, windows))   # copies: the cached read is never changed
     if not_loaded:
         counts["supplementary_not_loaded"] = not_loaded
+    # Density strips (§6.2 L2): every row decoded at the band's level, before the cap and the mark budget.
+    strips = []
+    span_bp = sum(b - a for j in jobs for a, b in j[3]) / max(1, len(jobs))
+    strip_bp = limits.get("strip_bp")
+    if not (isinstance(strip_bp, int) and strip_bp > 0):
+        strip_bp = max(10, int(span_bp // 1000) or 10)
+    t_strip = time.perf_counter()
+    by_job_rows: dict = {}
+    for r in reads:
+        by_job_rows.setdefault((r["d"], r["b"]), []).append(r)
+    for job in jobs:
+        dataset, binding, _contig, windows, _size = job
+        total_bins = sum(int(math.ceil((b - a) / strip_bp)) for a, b in windows)
+        bp = strip_bp if total_bins <= MAX_STRIP_BINS else int(math.ceil(sum(b - a for a, b in windows) / MAX_STRIP_BINS))
+        strips.append({"dataset_id": dataset.id, "binding": binding["key"],
+                       **density_strip(by_job_rows.get((dataset.id, binding["key"]), []), windows, bp)})
+    strip_ms = (time.perf_counter() - t_strip) * 1000
     molecules = sorted({(r["d"], r["lib"], r["q"]) for r in reads}, key=lambda m: (m[2] not in pins, name_hash(str(m[2])), m))
     payload_dropped = 0
     if over_budget:
@@ -730,13 +879,33 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
         molecules = [m for m in molecules if m in fit]
         truncated = True
     capped = 0
-    # Pinned molecules (first in this order) never count against the cap: the rest fill it.
-    cap = max_molecules + sum(1 for m in molecules if m[2] in pins)
-    if len(molecules) > cap:
-        keep = set(molecules[:cap])
-        capped = len(molecules) - cap
+    # Each band keeps its quota of molecules in this order; pinned molecules (first) never count against it. A
+    # molecule kept by one band keeps its records in every band.
+    job_of = {(j[0].id, j[1]["key"]): i for i, j in enumerate(jobs)}
+    mols_of: list = [[] for _ in jobs]
+    seen_m: list = [set() for _ in jobs]
+    for r in reads:
+        i = job_of.get((r["d"], r["b"]))
+        m = (r["d"], r["lib"], r["q"])
+        if i is not None and m not in seen_m[i]:
+            seen_m[i].add(m)
+            mols_of[i].append(m)
+    rank_m = {m: i for i, m in enumerate(molecules)}
+    keep: set = set()
+    band_report = []
+    for i, job in enumerate(jobs):
+        ms = sorted(mols_of[i], key=rank_m.__getitem__)
+        cap_i = quotas[i] + sum(1 for m in ms if m[2] in pins)
+        keep.update(ms[:cap_i])
+        band_report.append({"dataset_id": job[0].id, "binding": job[1]["key"], "estimated": per_job[i],
+                            "quota": quotas[i], "level": levels[i], "fraction": 1.0 / (1 << levels[i]),
+                            "decoded": len(ms), "capped": max(0, len(ms) - cap_i)})
+    if len(keep) < len(molecules):
+        capped = len(molecules) - len(keep)
         reads = [r for r in reads if (r["d"], r["lib"], r["q"]) in keep]
-        molecules = molecules[:cap]
+        molecules = [m for m in molecules if m in keep]
+    for b in band_report:
+        b["molecules"] = len({(r["d"], r["lib"], r["q"]) for r in reads if r["d"] == b["dataset_id"] and r["b"] == b["binding"]})
     # QNAMEs in more than one library of a dataset: kept apart by library.
     libs: dict = {}
     for d, lib, q in molecules:
@@ -783,14 +952,18 @@ def load(state, reg, body: dict, *, max_molecules: int = MAX_MOLECULES, max_mark
         "molecules": len(molecules), "records": len(reads), "marks": marks,
         "sampling": {"level": level, "fraction": 1.0 / (1 << level), "estimated": estimated if known else None,
                      "molecules_capped": capped, "max_molecules": max_molecules},
+        "bands": band_report,
+        "budgets": {"profile": budgets.get("effective"), "molecules": max_molecules, "decoded_bytes": max_bytes,
+                    "concurrent_loads": budgets.get("concurrent", 1), "marks": max_marks},
         "m6a_density_reads": density_reads, "m6a_density_bp": density_bp,
         "calls_omitted_reads": sum(1 for r in reads if r.get("calls_omitted")),
         "truncated": truncated, "decoded_bytes": total_bytes,
         "omitted": omitted, "shared_qnames": shared_qnames, "pinned": len({m for m in molecules if m[2] in pins}),
         "hard_clipped_scoped": scoped or None,   # of the records this request decoded
     }
-    return {"reads": reads, "report": report, "cached": cached_all,
+    return {"reads": reads, "report": report, "cached": cached_all, "strips": strips,
             "bindings": [{"dataset_id": j[0].id, "binding": j[1]["key"], "contig": j[2],
                           "windows": [{"start": a, "end": b} for a, b in j[3]]} for j in jobs],
             "timings": {"total_ms": round((time.perf_counter() - t0) * 1000, 1), "list_ms": round(list_ms, 1),
-                        "decode_ms": round(decode_ms, 1), "records_decoded": decoded_records}}
+                        "decode_ms": round(decode_ms, 1), "records_decoded": decoded_records,
+                          "strip_ms": round(strip_ms, 1)}}
