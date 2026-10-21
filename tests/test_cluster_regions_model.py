@@ -144,3 +144,30 @@ def test_a_folded_molecule_on_two_paths_of_one_dataset_is_fitted_once(monkeypatc
     assert folded in out["results"]["A"]["assignments"] and folded not in out["results"]["B"]["assignments"]
     assert out["joint_cohort"]["shared_molecules_within_dataset"] == 1
     assert out["results"]["B"]["analysis_read_count"] == 1
+
+
+def test_more_than_fifty_patterns_reassign_by_the_fits_weighted_rule(monkeypatch):
+    """Review round 3 (G2): rarer patterns join the nearest kept pattern weighted by feature overlap, in the fit and
+    in model assignment alike, so unchanged reads keep their labels."""
+    base = BrowserState(None)
+    base.datasets = {"d": SimpleNamespace(data_type="bam")}
+    base.dataset_order = ["d"]
+    lengths = [100, 10, 100, 100, 100, 100]
+    starts = [sum(lengths[:i]) for i in range(len(lengths))]
+
+    def working(self, dataset_id, chrom, start, end, *args, **kwargs):
+        reads = []
+        for n in range(64):
+            ivs = [[a, a + ln, 0 if (n >> i) & 1 else 147] for i, (a, ln) in enumerate(zip(starts, lengths))]
+            reads.append(dict(id=f"r{n}", intervals=ivs))
+        return WorkingSet(reads, total_overlapping=64, total_spanning=64, chrom=chrom, start=start, end=end)
+
+    monkeypatch.setattr(BrowserState, "build_working_set", working)
+    v = fc.RegionViewport(dataset_id="d", result_key="w", chrom="chr1", start=0, end=600,
+                          blocks=[fc.FrameBlock(feature=i, frame=(0, ln), genomic=(a, a + ln)) for i, (a, ln) in enumerate(zip(starts, lengths))])
+    req = fc.RegionClusterRequest(viewports=[v], peak_regions=[PeakRegion(start=0, end=ln) for ln in lengths],
+                                  method="combinatorial", k=4)
+    out = fc.run(base, req)
+    assert len(out["model"]["cluster_patterns"]) == 50
+    again = fc.run(base, req, model=out["model"])
+    assert again["results"]["w"]["assignments"] == out["results"]["w"]["assignments"]

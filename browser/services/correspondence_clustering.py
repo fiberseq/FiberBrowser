@@ -101,15 +101,17 @@ def pattern_bits(X, widths, modes, rules, accessibility_threshold, missing=None)
     return out
 
 
-def assign_with_model(X, read_ids, widths, modes, model, snapshot, missing=None):
-    """Labels of feature rows under a fitted model: combinatorial patterns (exact, else the nearest kept pattern), or
-    the nearest fitted centre."""
+def assign_with_model(X, read_ids, widths, modes, model, snapshot, missing=None, weights=None):
+    """Labels of feature rows under a fitted model: combinatorial patterns (exact, else the nearest kept pattern by
+    the fit's own rule: weighted by how much of each feature the read covers, ``weights`` per row), or the nearest
+    fitted centre."""
     if model.get('cluster_patterns'):
         from services.dynamic_clustering import match_pattern_to_cluster
         table = {tuple(int(b) for b in bits): int(label) for label, bits in model['cluster_patterns'].items()}
         bits = pattern_bits(X, widths, modes, snapshot.get('cluster_feature_rules') or [],
                             snapshot['accessibility_threshold'], missing)
-        return {rid: (table[b] if b in table else match_pattern_to_cluster(b, table)) for rid, b in zip(read_ids, bits)}
+        return {rid: (table[b] if b in table else match_pattern_to_cluster(b, table, weights[i] if weights else None))
+                for i, (rid, b) in enumerate(zip(read_ids, bits))}
     centres = model.get('centroids') or {}
     if not centres:
         return {}
@@ -286,7 +288,19 @@ def run(state, req, *, sources=None, model=None, row_cache=None):
                          for v in req.viewports}
                 group_of = {r['id']: r.get('_cluster_group') for r in reads}
                 missing = [lacks.get(group_of.get(rid), set()) for rid in rids]
-                assignments = assign_with_model(np.asarray(X), rids, widths, used, model, snapshot, missing)
+                # The fit's weights for rarer patterns (cluster_compact_reads): each feature's overlap with the read,
+                # in its own window's coordinates, one per pattern bit.
+                from services.clustering_features import class_aware_pattern_slices
+                from services.dynamic_clustering import read_peak_overlap_weights
+                slices = class_aware_pattern_slices(widths, used, req.cluster_feature_rules)
+                by_id = {r['id']: r for r in reads}
+                weights = []
+                for rid in rids:
+                    r = by_id.get(rid)
+                    own_peaks = groups[r['_cluster_group']][0] if r is not None and r.get('_cluster_group') in groups else [(0, n) for n in lengths]
+                    w = read_peak_overlap_weights(r, own_peaks) if r is not None else None
+                    weights.append(tuple(w[p] for p, _o, _w, _c in slices) if w is not None else None)
+                assignments = assign_with_model(np.asarray(X), rids, widths, used, model, snapshot, missing, weights)
     else:
         assignments, _, _, patterns = cluster_compact_reads(reads, [(0, n) for n in lengths], 0, req.k,
             method=req.method, peak_modes=modes, random_state=random_state, cluster_feature_rules=req.cluster_feature_rules,
