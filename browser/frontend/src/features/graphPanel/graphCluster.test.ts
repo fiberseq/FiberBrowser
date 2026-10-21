@@ -4,13 +4,14 @@
  * permutation invariance, union scopes, fan-out under record keys within each destination's scope, refinement within
  * carriers as one child node, the durable run and its selection sync.
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useBrowserStore } from '../../stores/browserStore';
 import { useGraphStatusStore } from './statusStore';
 import { useGraphBindingsStore } from './bindingsStore';
 import { popOut, setPanelViewMode } from './hostMode';
 import { registerGraphPanel } from './register';
-import { commitGraphRun, destinationAssignments, graphClusterPlan, graphRequestBody, stableId } from './graphCluster';
+import { assignWithGraphRun, commitGraphRun, destinationAssignments, graphClusterPlan, graphRequestBody, stableId } from './graphCluster';
+import { deserializeSavedState, serializeState } from '../../stores/historySlice';
 import { useGraphSettings } from './handoff';
 import { clusterSelectionKeys } from '../../utils/clusterMatchedRun';
 import { clusterRunPlan } from '../../utils/clusterTargets';
@@ -188,5 +189,70 @@ describe('G4: fan-out and refinement', () => {
       targetMap: [{ x0: 0, x1: 1000, t0: 0, t1: 1000, kind: 'seq' }] } as never;
     expect(runOutlines(run, scene, 'gp', 'tgt')).toEqual([{ x0: 100, x1: 200, y0: 20, y1: 70, kind: 'region' }]);
     expect(runOutlines(run, scene, 'other', 'tgt')).toEqual([]);
+  });
+});
+
+
+describe('G5: the durable run', () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+  function committed() {
+    seed(split());
+    setPanelViewMode('mat', 'graph');
+    const p = plan();
+    const id = (b: string) => p.observations.find(o => o.binding === b)!.id;
+    commitGraphRun(useBrowserStore.getState(), p, {
+      results: { [id('mat')]: { assignments: { [aid('m1')]: 0, [aid('m2')]: 1 } }, [id('pat')]: { assignments: { [aid('p1')]: 1 } } },
+      label_ids: { '0': 0, '1': 1 }, names: {}, stages: [{ stage: 1, digest: 'x', model: { centroids: { 0: [0], 1: [1] } } }],
+      columns: { shared: [], carrier_sets: [], left_out: {}, dropped: [], refinements: [] }, window_separation_nmi: null,
+      matched: null, settings: { method: 'kmeans', k: 2 }, revisions: REG.revisions, options: {}, timings: {},
+    } as never);
+    return { p, id };
+  }
+
+  it('is saved with the session and restored with its colours and model', () => {
+    committed();
+    const saved = JSON.parse(JSON.stringify(serializeState(useBrowserStore.getState())));
+    useBrowserStore.setState({ clusterMatchedRun: null, clusterAssignments: {} });
+    useBrowserStore.setState(deserializeSavedState(saved));
+    const s = useBrowserStore.getState();
+    expect(s.clusterMatchedRun!.graph!.stages).toEqual([{ stage: 1, digest: 'x', model: { centroids: { 0: [0], 1: [1] } } }]);
+    expect(s.clusterMatchedRun!.destinations!.map(d => d.stateKey).sort()).toEqual(['k-mat', 'k-pat']);
+    expect(s.clusterAssignments['k-pat']).toEqual({ [recordKey(aid('p1'))!]: 1 });
+  });
+
+  it('dynamic assignment sends the stored model and adds only rows without a label', async () => {
+    const { id } = committed();
+    const bodies: any[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      bodies.push(JSON.parse(String(init.body)));
+      return new Response(JSON.stringify({ results: {
+        [id('mat')]: { assignments: { [aid('m1')]: 1, [aid('m2')]: 1, [aid('m3')]: 0 } },
+        [id('pat')]: { assignments: { [aid('p1')]: 1 } } } }), { status: 200 });
+    }));
+    const added = await assignWithGraphRun(useBrowserStore.getState().clusterMatchedRun!);
+    expect(added).toBe(1);
+    expect(bodies[0].run.stages[0].digest).toBe('x');
+    expect(bodies[0].run.revisions).toEqual(REG.revisions);
+    const rk = (q: string) => recordKey(aid(q))!;
+    // m1 keeps its label (0), never the reassigned 1; m3 is new.
+    expect(useBrowserStore.getState().clusterAssignments['k-mat']).toEqual({ [rk('m1')]: 0, [rk('m2')]: 1, [rk('m3')]: 0 });
+    // The run stays current (its displayed assignments are the live ones).
+    expect(useBrowserStore.getState().clusterMatchedRun!.panelAssignments['k-mat']).toEqual(useBrowserStore.getState().clusterAssignments['k-mat']);
+  });
+
+  it('a pan asks for assignment with the same model; a refused model changes nothing', async () => {
+    committed();
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calls.push(url);
+      return new Response(JSON.stringify({ status: 'error', error: { message: 'settings or geometry changed: cluster again' } }), { status: 409 });
+    }));
+    const before = JSON.stringify(useBrowserStore.getState().clusterAssignments);
+    useBrowserStore.getState().setViewport('chr3', 128_651_000, 128_661_000);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(calls).toEqual(['/api/graph/cluster/assign']);
+    expect(JSON.stringify(useBrowserStore.getState().clusterAssignments)).toBe(before);
   });
 });
