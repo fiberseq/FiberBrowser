@@ -156,8 +156,8 @@ class AnalysisReadQuery:
             return reads
         if len(read_ids) == 0:
             return []
-        requested = set(read_ids)
-        from services.read_selection import read_matches_id_filter
+        from services.read_selection import read_matches_id_filter, with_graph_record_keys
+        requested = with_graph_record_keys(read_ids)
         filtered = [read for read in reads if read_matches_id_filter(read, requested)]
         return filtered if filtered or not fallback_to_all else reads
 

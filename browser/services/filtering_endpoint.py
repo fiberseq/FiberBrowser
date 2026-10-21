@@ -578,6 +578,20 @@ def filter_reads_by_analysis_rule_for_request(
     return {"results": results, "sample_seed": query.sample_seed}
 
 
+def _assignment_lookup(cluster_assignments: dict):
+    """A read's cluster in a panel's assignments: its cohort identity (lifted) or id, else its record key (a graph
+    run writes lifted labels under record keys, DESIGN_GRAPH_PRIMARY §3.1; graph features review)."""
+    def lookup(read):
+        rid = cohort_read_id(read)
+        c = cluster_assignments.get(rid)
+        if c is None and read.get("analysis_id") is not None:
+            from services.lift.cohort import record_key
+            rk = record_key(read["analysis_id"])
+            c = cluster_assignments.get(rk) if rk else None
+        return c
+    return lookup
+
+
 def _sort_dataset_reads(
     all_reads: list[dict],
     cluster_assignments: dict,
@@ -611,8 +625,10 @@ def _sort_dataset_reads(
         for read in all_reads
     }
 
+    cluster_of = _assignment_lookup(cluster_assignments)
+    read_cluster = {cohort_read_id(read): cluster_of(read) for read in all_reads} if has_clusters else {}
     values = [value for read_id, value in read_metrics.items()
-              if not has_clusters or read_id in cluster_assignments]
+              if not has_clusters or read_cluster.get(read_id) is not None]
     note = {}
     if len(values) < 2 or len(set(values)) == 1:
         note["no_op_reason"] = (
@@ -626,8 +642,8 @@ def _sort_dataset_reads(
 
     cluster_totals = {}
     cluster_reads = {}
-    for read_id, cluster in cluster_assignments.items():
-        if read_id not in read_metrics:
+    for read_id, cluster in read_cluster.items():
+        if cluster is None:
             continue
         cluster_totals.setdefault(cluster, 0)
         cluster_reads.setdefault(cluster, [])
@@ -686,9 +702,9 @@ def _apply_linked_sort_order(
         if not working_set.reads:
             continue
 
+        cluster_of = _assignment_lookup(cluster_assignments)
         for read in working_set.reads:
-            read_id = cohort_read_id(read)
-            cluster = cluster_assignments.get(read_id)
+            cluster = cluster_of(read)
             if cluster is None:
                 continue
             metric = _compute_sort_metric(
@@ -726,9 +742,13 @@ def _apply_linked_sort_order(
         dataset_result["cluster_order"] = unified_order
         # The reads follow the shared cluster order too (keeping their order within a cluster).
         cluster_assignments = _cluster_assignments_for_sort(state, req, dataset_id)
+        from services.lift.cohort import record_key
         by_cluster: dict = {}
         for read_id in dataset_result.get("read_sort_order", []):
-            by_cluster.setdefault(cluster_assignments.get(read_id), []).append(read_id)
+            c = cluster_assignments.get(read_id)
+            if c is None and (rk := record_key(read_id)):
+                c = cluster_assignments.get(rk)
+            by_cluster.setdefault(c, []).append(read_id)
         rank = {cluster: index for index, cluster in enumerate(unified_order)}
         dataset_result["read_sort_order"] = [
             read_id

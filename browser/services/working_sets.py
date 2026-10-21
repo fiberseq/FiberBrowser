@@ -1547,6 +1547,10 @@ def _viewport_reads_from_broad(
     total_overlapping = 0
     total_spanning = 0
     read_id_set = set(read_ids) if read_ids is not None and not isinstance(read_ids, set) else read_ids
+    if read_id_set is not None and is_lifted(dataset):
+        # A graph row's identity names its record's rows here (graph features).
+        from services.read_selection import with_graph_record_keys
+        read_id_set = with_graph_record_keys(read_id_set)
     quality_filters = list(
         active_quality_filters(state)
         if quality_filters is None

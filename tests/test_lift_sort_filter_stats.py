@@ -120,3 +120,69 @@ def test_other_analyses_still_refuse(lift_env, path):
     r = client.post(path, params={**WINDOW, "dataset_id": did},
                     json={"dataset_ids": [did], "gene_ids": ["g"], "filters": {}})
     assert r.status_code == 409 and r.json()["notice"]
+
+
+def _graph_identity(aid):
+    """The graph row's identity of a linear row's record: the same molecule, QNAME and record, placement "primary"."""
+    import json
+    parts = json.loads(aid[len(PREFIX):])
+    return PREFIX + json.dumps(parts[:3] + [parts[3], "primary"], separators=(",", ":"), ensure_ascii=True)
+
+
+def test_graph_row_identities_name_their_records(lift_env):
+    """A graph band's shown reads are graph identities (placement "primary"); Read Stats and a sort's read scope
+    find the linear rows of the same records by record key, while a linear identity stays exact."""
+    client, state, manifest, bam = lift_env
+    did = _add(client, manifest, bam)["dataset"]["id"]
+    order = _sort(client, did)["read_sort_order"]
+    plus = next(i for i in order if _qname(i) == "plus")
+    graph = _graph_identity(plus)
+    assert graph != plus
+    r = client.post("/api/reads/stats", params=WINDOW, json={"read_ids_by_dataset": {did: [graph]}})
+    assert r.status_code == 200 and r.json()["found_count"] == 1, r.text
+    assert r.json()["per_read"][0]["read_id"] == graph
+    scoped = _sort(client, did, read_ids={did: [graph]})["read_sort_order"]
+    assert [_qname(i) for i in scoped] == ["plus"]
+    from services.read_selection import with_graph_record_keys
+    assert with_graph_record_keys({plus}) == {plus}
+
+
+def test_sort_by_cluster_with_a_graph_runs_record_key_labels(lift_env):
+    """Codex review (group A): a graph run writes lifted labels under record keys; a metric sort of the clustered
+    panel reads them through each row's record key (it skipped every lifted label)."""
+    from services.lift.cohort import record_key
+    client, state, manifest, bam = lift_env
+    did = _add(client, manifest, bam)["dataset"]["id"]
+    ids = _sort(client, did)["read_sort_order"]
+    by_record = {record_key(i): (0 if _qname(i) == "plus" else 1) for i in ids}
+    out = _sort(client, did, cluster_assignments={did: by_record})
+    assert out["cluster_order"] == [0, 1]
+    assert set(out["read_sort_order"]) == set(ids)
+
+
+def test_read_stats_take_the_rows_own_library_record(lift_env, tmp_path):
+    """Codex review (group A): two BAMs of a dataset with one QNAME at one start: each row is described from its own
+    library's record."""
+    import array
+    from live_lift_fixtures import make_record, write_bam
+    tags = [("ns", array.array("I", [100])), ("nl", array.array("I", [150]))]
+
+    def recs(mapq):
+        def build(h):
+            r = make_record(h, "twin", MAT, 2500, "600M", tags=tags)
+            r.mapping_quality = mapq
+            return [r]
+        return build
+    a = write_bam(tmp_path / "liba.bam", recs(11))
+    b = write_bam(tmp_path / "libb.bam", recs(42))
+    client, state, manifest, _bam = lift_env
+    r = client.post("/api/lift/datasets", json={"paths": [a, b], "manifest": manifest})
+    did = r.json()["dataset"]["id"]
+    ids = [i for i in _sort(client, did)["read_sort_order"] if _qname(i) == "twin"]
+    assert len(ids) == 2
+    got = {}
+    for i in ids:
+        out = client.post("/api/reads/stats", params=WINDOW, json={"read_ids_by_dataset": {did: [i]}}).json()
+        (row,) = out["per_read"]
+        got[i.split('"')[1].split("|")[0]] = row["mapq"]
+    assert sorted(got.values()) == [11, 42]

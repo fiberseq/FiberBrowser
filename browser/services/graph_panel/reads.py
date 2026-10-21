@@ -66,8 +66,9 @@ LOADER_OPTIONS = dict(include_methylation=True, ml_threshold=125, include_layers
 _LAYERS = ("nuc", "tf", "msp")
 # The cached rows' wire form: 2 adds the identities (aid, rk, hap) and the map's molecule groups (graph primary G0);
 # 3 the DAF strand of DAF-seq records (G8; 5: its evidence by mark, resolved per molecule; 6: marks by contig and
-# absolute source position, so records cached by decodes at other origins compare alike).
-WIRE_VERSION = 6
+# absolute source position, so records cached by decodes at other origins compare alike; 7: a supplementary's
+# primary's explicit call).
+WIRE_VERSION = 7
 
 
 class ReadsError(Exception):
@@ -392,6 +393,11 @@ def resolve_molecule_strands(reads: list, evidence_only: Optional[list] = None, 
                     calls[mol] = call
         elif call == ".":
             call = None
+        else:
+            # An explicit call is the molecule's in every window: cached for windows without its record.
+            calls = calls_of(m[0]) if calls_of is not None else None
+            if calls is not None:
+                calls[_strand_molecule(rows[0])] = call
         for r in rows:
             r.pop("_dsx", None)
             r.pop("_dse", None)
@@ -703,11 +709,32 @@ def _decode_records(dataset, contig: str, size: int, windows: list, binding: str
         nbytes[k] = nbytes.get(k, 0) + decoded_size_estimate(read)
     composed: dict = {}
     lifted = getattr(dataset, "live_lift", None) is not None
+    # A supplementary record with no strand call of its own takes its primary's explicit call (st:Z), found as linear
+    # rows find it: in this batch, else through its SA loci (live_lift.resolve_primary_metadata: bounded, cached), so
+    # a supplementary drawn without its primary keeps its molecule's strand (graph features review, item 7).
+    prim_strand: dict = {}
+    if lifted and getattr(settings, "primary_lookup", False) and any(
+            (r.get("_fiberbrowser_primary") or {}).get("is_supplementary") and "strand" not in r for r in decoded):
+        from services.lift.live_lift import molecule_key, resolve_primary_metadata
+        try:
+            meta = resolve_primary_metadata(dataset.live_lift.handle, decoded, settings=settings, counts=counts)
+        except (OSError, ValueError, KeyError, AttributeError):   # a failed lookup leaves the record's own evidence
+            meta = {}
+        for read in decoded:
+            if not (read.get("_fiberbrowser_primary") or {}).get("is_supplementary") or "strand" in read:
+                continue
+            m = meta.get(molecule_key(read)) or {}
+            if m.get("strand") in ("CT", "GA", "."):
+                prim_strand[ident(lib_of.get(read.get("source_path"), 0), read.get("id"), read.get("reference_start", 0),
+                                  read.get("reference_end", 0), True)] = m["strand"]
     for row in rows:
         read = compact_full(row, a, dataset.id, binding)
         if lifted:
             read.update(row_identity(row, settings, labels))
-        composed.setdefault(ident(read["lib"], read["q"], read["s"], read["e"], read["sup"]), []).append(read)
+        k = ident(read["lib"], read["q"], read["s"], read["e"], read["sup"])
+        if read["sup"] and "_dsx" not in read and k in prim_strand:
+            read["_dsx"] = prim_strand[k]
+        composed.setdefault(k, []).append(read)
     entries: dict = {}
     hard_left = int(counts.get("hard_clipped_supplementary", 0))
     for rec in missing:

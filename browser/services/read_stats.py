@@ -372,7 +372,18 @@ def _lifted_source_record(dataset, row, handles: dict):
     if contig is None or s0 is None or s1 is None:
         return None, None
     supp = bool(src.get("supplementary"))
-    for bam_path in getattr(dataset, "paths", None) or ():
+    paths = list(getattr(dataset, "paths", None) or ())
+    # The row's own library (Codex review: another BAM can hold the same QNAME at the same start).
+    lib = ll.get("library")
+    if isinstance(lib, int) and 0 <= lib < len(paths):
+        paths = [paths[lib]]
+    # The record's digest and occurrence (compact_read_loader._bam_projection_identity), when the row carries them.
+    digest, occurrence = None, 0
+    rec_id = str(ll.get("record") or "")
+    if ":" in rec_id and len(rec_id.split(":", 1)[0]) == 64:
+        digest, occ = rec_id.split(":", 1)
+        occurrence = int(occ) if occ.isdigit() else 0
+    for bam_path in paths:
         if bam_path not in handles:
             bam = get_bam_handle(bam_path)
             from services.signal_evidence import signal_header
@@ -381,9 +392,17 @@ def _lifted_source_record(dataset, row, handles: dict):
         if bam is None or contig not in (getattr(bam, "references", None) or ()):
             continue
         try:
+            seen = 0
             for rec in bam.fetch(contig, int(s0), int(s1)):
-                if (rec.query_name == row["id"] and rec.reference_start == int(s0) and not rec.is_unmapped
-                        and not rec.is_secondary and bool(rec.is_supplementary) == supp):
+                if (rec.query_name == row["id"] and rec.reference_start == int(s0) and rec.reference_end == int(s1)
+                        and not rec.is_unmapped and not rec.is_secondary and bool(rec.is_supplementary) == supp):
+                    if digest is not None:
+                        import hashlib
+                        if hashlib.sha256(rec.to_string().encode("utf-8")).hexdigest() != digest:
+                            continue
+                        if seen < occurrence:
+                            seen += 1
+                            continue
                     return rec, provenance
         except (ValueError, OSError) as exc:
             log_read_stats_diagnostic(f"[read_stats] Error fetching lifted source {contig}:{s0}-{s1}: {exc}")
@@ -405,6 +424,11 @@ def _collect_lifted_read_stats(
     handles: dict = {}
     for rid in requested_ids:
         rows = by_key.get(rid) or by_key.get(base_read_id(rid))
+        if not rows:
+            # A graph row's identity (placement "primary"): its record's rows (graph features).
+            from services.read_selection import _graph_identity_record_key
+            rk = _graph_identity_record_key(rid)
+            rows = by_key.get(rk) if rk else None
         if not rows:
             continue
         row = min(rows, key=_lift_row_rank)

@@ -41,6 +41,29 @@ def read_id_keys(read):
     return {str(read), rk} if rk and rk != str(read) else {str(read)}
 
 
+def _graph_identity_record_key(value):
+    """The record key of a graph row's cohort identity (its placement is "primary", which linear rows never carry:
+    they name their chain), else None. A graph row stands for its record in every view (DESIGN_GRAPH_PRIMARY §3.1)."""
+    if not isinstance(value, str) or not value.startswith("lift-cohort:v1 ") or '"primary"]' not in value[-12:]:
+        return None
+    from services.lift.cohort import record_key
+    return record_key(value)
+
+
+def with_graph_record_keys(ids):
+    """A requested id set that also names the records of graph rows' identities (graph features): a graph band's
+    shown reads (Read Stats, a sort's preview scope) are graph identities, which match linear and analysis rows of
+    the same record by record key. Linear identities stay exact (split rows of one record stay apart)."""
+    if ids is None:
+        return None
+    out = set(ids)
+    for value in list(out):
+        rk = _graph_identity_record_key(value)
+        if rk:
+            out.add(rk)
+    return out
+
+
 def cohort_read_id(read):
     return read.get("analysis_id") or read.get("id", "")
 

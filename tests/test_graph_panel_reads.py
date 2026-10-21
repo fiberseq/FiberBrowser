@@ -879,3 +879,18 @@ def test_a_cross_haplotype_supplementary_is_on_its_own_contigs_band(env):
     # One molecule: the same record key family, so selection and hover reach both rows.
     assert split[("mat", True)]["rk"] != split[("pat", False)]["rk"]
     assert split[("mat", True)]["aid"].split('"')[1] == split[("pat", False)]["aid"].split('"')[1]
+
+
+def test_a_supplementary_alone_takes_its_primarys_explicit_strand(env):
+    """Codex review (group A): a supplementary drawn without its primary (another window) takes the primary's
+    explicit st:Z call, found through its SA locus as linear rows find it, or from the strand cache once seen."""
+    tags = [("ns", _u32([50])), ("nl", _u32([150]))]
+    daf = write_bam(env.tmp / "explicit.bam", lambda h: [
+        make_record(h, "expl", MAT, 100, "500M", tags=[*tags, ("st", "CT")]),
+        make_record(h, "expl", MAT, 3000, "400M", flag=2048, tags=[*tags, ("SA", f"{MAT},101,+,500M,60,0;")])])
+    did = _add_lifted(env, paths=[daf], dataset_id="explicit")
+    gr.clear_cache()
+    env.state._read_strand_calls = {}
+    alone = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 2900, "end": 3500}]}]).json()
+    assert [r.get("ds") for r in alone["reads"] if r["q"] == "expl"] == ["CT"]
+    assert not any(k.startswith("_ds") for r in alone["reads"] for k in r)
