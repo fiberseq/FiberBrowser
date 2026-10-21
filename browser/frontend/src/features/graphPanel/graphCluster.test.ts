@@ -563,6 +563,37 @@ describe('G7 step 0: a graph run survives navigation within its package', () => 
     useBrowserStore.getState().setViewport('chr4', 1_000, 11_000);
     expect(Object.keys(labels())).toHaveLength(0);
   });
+  it('graph features: keeps its labels on a bookmark jump within the contig, Back and Forward, and an aliased name', () => {
+    committed();
+    const st = () => useBrowserStore.getState();
+    st().setViewport('chr3', 128_650_000, 128_660_000);
+    st().addBookmark('elsewhere');
+    st().pushViewportHistory({ chrom: 'chr3', start: 128_650_000, end: 128_660_000 });
+    st().setViewport('chr3', 128_700_000, 128_710_000);
+    expect(Object.keys(labels())).toHaveLength(2);
+    st().navigateToBookmark(st().bookmarks.at(-1)!.id);
+    expect(st().start).toBe(128_650_000);
+    expect(Object.keys(labels())).toHaveLength(2);
+    expect(st().clusterMatchedRun!.graph).toBeTruthy();
+    st().goBack();
+    expect(st().start).toBe(128_700_000);
+    expect(Object.keys(labels())).toHaveLength(2);
+    st().goForward();
+    expect(Object.keys(labels())).toHaveLength(2);
+    // An aliased name of the run's contig ('3' for 'chr3'), by setViewport and by a jump.
+    st().setViewport('3', 128_640_000, 128_650_000);
+    expect(Object.keys(labels())).toHaveLength(2);
+    st().goBack();
+    expect(Object.keys(labels())).toHaveLength(2);
+  });
+
+  it('graph features: a jump to another contig clears it, by bookmark or history', () => {
+    committed();
+    const st = () => useBrowserStore.getState();
+    useBrowserStore.setState({ bookmarks: [{ id: 'b4', name: 'b4', chrom: 'chr4', start: 1_000, end: 11_000, created: '' }] } as never);
+    st().navigateToBookmark('b4');
+    expect(Object.keys(labels())).toHaveLength(0);
+  });
 });
 
 describe('G7 step 0 review (Codex): a destination with no labels', () => {

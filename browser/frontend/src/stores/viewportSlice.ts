@@ -14,8 +14,9 @@ import { currentMatchedRun } from '../utils/clusterMatchedRun';
 
 /**
  * A current graph cluster run (DESIGN_GRAPH_PRIMARY §3.5) whose package's target is on this contig. Its regions are
- * graph columns fixed by the run, not by the view, so pans and zooms within the package keep it (the linear rules
- * below would clear it once its peaks leave the view or peaks are locked). Leaving the contig clears it as usual.
+ * graph columns fixed by the run, not by the view, so pans, zooms, bookmark jumps, Back/Forward and an aliased name
+ * of the contig ('3' for 'chr3') keep it (the linear rules below would clear it once its peaks leave the view or
+ * peaks are locked). Leaving the contig clears it as usual.
  */
 /** A graph run's cluster state (kept by keepGraphRun; peaks still follow the linear rules, so a new window's peaks
  * are scanned as usual). */
@@ -128,12 +129,14 @@ function groupsLeavingChrom(groups: FootprintGroup[], fromChrom: string): Footpr
 function jumpState(state: BrowserState, chrom: string, start: number, end: number, extra: Partial<BrowserState>): Partial<BrowserState> {
   const { footprintGroups: _dropped, ...clean } = makeCleanTransientState();
   void _dropped;
-  return withSiteRules(state, chrom, start, end, {
+  // A current graph run keeps its cluster state on a jump within its package's contig (an alias of it included), as
+  // on a pan (graph features): its regions are graph columns fixed by the run, not by the view.
+  return withSiteRules(state, chrom, start, end, keepGraphRun(state, chrom, {
     chrom, start, end,
     ...clean,
     ...(chrom !== state.chrom ? { footprintGroups: groupsLeavingChrom(state.footprintGroups, state.chrom) } : {}),
     ...extra,
-  } as Partial<BrowserState>);
+  } as Partial<BrowserState>));
 }
 
 // ============================================================
