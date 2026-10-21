@@ -403,7 +403,10 @@ def _label_key(label) -> tuple:
 
 
 def _model_hash(model) -> str:
-    return hashlib.sha256(json.dumps(model, sort_keys=True, default=str).encode()).hexdigest()
+    # As the model travels (JSON: integer label keys become strings, which sort differently), so a fitted model
+    # and the same model sent back by the browser hash alike.
+    wire = json.loads(json.dumps(model, default=str))
+    return hashlib.sha256(json.dumps(wire, sort_keys=True).encode()).hexdigest()
 
 
 def _echoes(out) -> dict:

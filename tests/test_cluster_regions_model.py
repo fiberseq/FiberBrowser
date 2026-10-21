@@ -343,3 +343,13 @@ def test_a_carrier_with_no_fit_rows_in_a_parent_is_refined_by_assignment(monkeyp
     assert assign_out["results"]["obs-mat"]["assignments"] == {"m1": 2, "m2": 3}
     # p_uncapped (obs-pat, Stage-1 cluster 0) is refined on the insertion like obs-mat's m2: C0.1.
     assert assign_out["results"]["obs-pat"]["assignments"]["p_uncapped"] == 3
+
+
+def test_a_model_with_many_labels_hashes_alike_after_json_transport():
+    """G7 step 0 review (Codex): integer label keys sort numerically, their JSON strings lexicographically; the
+    stage digest's model hash must not depend on which form it sees."""
+    import json
+    from services.graph_panel import analysis
+    model = {"cluster_patterns": {i: [i % 2, i // 2 % 2] for i in range(16)}, "peak_widths": [10, 10],
+             "centroids": {i: [float(i)] for i in range(12)}}
+    assert analysis._model_hash(model) == analysis._model_hash(json.loads(json.dumps(model)))

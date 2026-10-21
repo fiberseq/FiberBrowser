@@ -545,3 +545,27 @@ describe('G7 step 0: a graph run survives navigation within its package', () => 
     expect(Object.keys(labels())).toHaveLength(0);
   });
 });
+
+describe('G7 step 0 review (Codex): a destination with no labels', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+  it('keeps the run current, so dynamic assignment still runs', async () => {
+    seed(split());
+    setPanelViewMode('mat', 'graph');
+    const p = plan();
+    const mat = p.observations.find(o => o.binding === 'mat')!.id;
+    const pat = p.observations.find(o => o.binding === 'pat')!.id;
+    // A refined run (one child node) whose PAT destination received no rows.
+    commitGraphRun(useBrowserStore.getState(), p, { results: {
+        [mat]: { assignments: { [aid('m1')]: 2, [aid('m2')]: 1 }, stage1: { [aid('m1')]: 0, [aid('m2')]: 1 } },
+        [pat]: { assignments: {}, stage1: {} } },
+      label_ids: { '0': 0, '1': 1, '0.0': 2 }, names: { '2': 'C0.0' }, stages: [{ stage: 1 }, { stage: 2, set: 0, parent: '0' }],
+      columns: { shared: [], carrier_sets: [{ carriers: [mat, pat], features: [] }], left_out: {}, dropped: [], refinements: [] },
+      window_separation_nmi: null, matched: null, settings: {}, revisions: REG.revisions, options: {}, timings: {} } as never);
+    const st = useBrowserStore.getState();
+    expect(Object.keys(st.clusterAssignments['k-pat'] ?? {})).toHaveLength(0);
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ results: { [mat]: { assignments: { [aid('m1')]: 2, [aid('m2')]: 1, [aid('m3')]: 1 } } } }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    expect(await assignWithGraphRun(useBrowserStore.getState().clusterMatchedRun!)).toBe(1);
+    expect(fetchMock).toHaveBeenCalled();
+  });
+});
