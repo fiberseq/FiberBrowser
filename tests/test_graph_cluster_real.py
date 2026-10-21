@@ -282,3 +282,22 @@ def test_graph_rows_take_the_active_quality_gates(helper_env, alu_state):
     assert calls(gated) < calls(open_rows)
     again, _ = analysis.graph_window_rows(alu_state, src, 131192000, 131194000)
     assert calls(again) == calls(open_rows)   # the cache keeps the ungated rows
+
+
+def test_a_run_with_no_shared_feature_says_who_is_not_a_carrier(helper_env, alu_state, monkeypatch):
+    """G7 step 0: a run with no shared feature fits its first carrier set; every other participant is reported "not
+    a carrier", not as having no covering reads. (Real tiles and rows; the plan's shared features are recast as a
+    carrier set {MAT, native}, the shape two paths carrying different halves of a region give.)"""
+    from dataclasses import replace
+    _need_native(alu_state)
+    real = analysis.build_geometry
+
+    def no_shared(spec, tiles):
+        regions, plan = real(spec, tiles)
+        keep = ["obs-MAT", "obs-native"]
+        feats = [replace(f, carriers=keep) for f in plan.shared]
+        return regions, replace(plan, shared=[], carrier_sets=[{"carriers": keep, "features": feats}])
+    monkeypatch.setattr(analysis, "build_geometry", no_shared)
+    [out] = _graph(alu_state, _body([MAT, PAT, NAT], regions=PEAKS[:2]))
+    assert out["results"]["obs-PAT"]["left_out"] == "not a carrier of the regions' sequence"
+    assert out["results"]["obs-MAT"]["assignments"] and "left_out" not in out["results"]["obs-MAT"]

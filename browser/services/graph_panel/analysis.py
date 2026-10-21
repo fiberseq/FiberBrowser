@@ -540,7 +540,11 @@ def run(state, reg, body: dict, tiles: dict, spec: Optional[dict] = None) -> dic
         oid = o["id"]
         r1 = out1["results"].get(oid)
         if r1 is None:
-            results[oid] = {"assignments": {}, "left_out": plan.left_out.get(oid) or "no reads cover the regions"}
+            # A run with no shared feature fits its first carrier set's carriers only: the others carry none of
+            # its features ("not a carrier"), whatever reads they have.
+            why = plan.left_out.get(oid) or ("not a carrier of the regions' sequence" if sets_from and oid not in oids
+                                             else "no reads cover the regions")
+            results[oid] = {"assignments": {}, "left_out": why}
             continue
         final = {aid: label_ids[lab] for aid, lab in labels.get(oid, {}).items()}
         results[oid] = {**{k: v for k, v in r1.items() if k != "assignments"}, "assignments": final,

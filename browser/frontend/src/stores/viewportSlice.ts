@@ -6,7 +6,7 @@ import { keepMatched } from '../utils/matchedRegions';
 import { DEBUG, LAST_GENOME_STORAGE_KEY, LAST_FASTA_PATH_STORAGE_KEY, loadBookmarksFromStorage, saveBookmarksToStorage, makeCleanTransientState, saveFootprintGroupsToStorage } from './utils';
 import { useEphemeralStore } from './ephemeralStore';
 import { computeRuleOffset } from './peakRuleSlice';
-import { findChromInfo } from '../utils/chromAliases';
+import { findChromInfo, sameChrom } from '../utils/chromAliases';
 import { isPanOrZoom, moveLikewise, siteLockSuppressed } from './siteLock';
 import { hasViewLinks, linkedPanelMoving, linkedPanelView } from '../utils/panelExtensions';
 import { PER_PANEL_STATE_KEYS } from './panelSlice';
@@ -20,8 +20,8 @@ import { currentMatchedRun } from '../utils/clusterMatchedRun';
 export function graphRunSurvivesMove(state: BrowserState, chrom: string): boolean {
   const run = currentMatchedRun(state.clusterMatchedRun, state.clusterAssignments);
   if (!run?.graph) return false;
-  const contig = run.graph.targetContig ?? run.graph.target?.split('#').pop();
-  return !contig || contig === chrom;
+  const contig = run.graph.targetContig;
+  return Boolean(contig) && sameChrom(contig!, chrom);
 }
 
 /**

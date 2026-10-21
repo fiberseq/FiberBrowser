@@ -517,7 +517,7 @@ describe('G7 step 0: a graph run survives navigation within its package', () => 
     commitGraphRun(useBrowserStore.getState(), p, { results: { [mat]: { assignments: { [aid('m1')]: 0, [aid('m2')]: 1 } } },
       label_ids: {}, names: {}, stages: [{ stage: 1 }], columns: { shared: [], carrier_sets: [], left_out: {}, dropped: [], refinements: [] },
       window_separation_nmi: null, matched: null, settings: {}, revisions: REG.revisions, options: {}, timings: {} } as never);
-    expect(useBrowserStore.getState().clusterMatchedRun!.graph!.targetContig ?? targetContig).toBe(targetContig);
+    expect(useBrowserStore.getState().clusterMatchedRun!.graph!.targetContig).toBe(targetContig);
   }
   const labels = () => useBrowserStore.getState().clusterAssignments['k-mat'] ?? {};
 
