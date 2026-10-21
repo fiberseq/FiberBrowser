@@ -166,6 +166,12 @@ def graph_window_rows(state, source: GraphSource, start: int, end: int, cache: O
             _ROWS[key] = hit
             while len(_ROWS) > _ROWS_MAX:
                 _ROWS.popitem(last=False)
+    # The active call-quality gates, as every working set applies them (review G4: native and graph observations of
+    # the same evidence must give the same values); cached rows stay ungated.
+    from services.read_quality_filters import active_quality_filters, apply_quality_filters
+    gates = active_quality_filters(state)
+    if gates:
+        hit = ([g for r in hit[0] if (g := apply_quality_filters(r, gates)) is not None], hit[1])
     if cache is not None:
         cache[key] = hit
     return hit

@@ -267,3 +267,18 @@ def test_refinement_within_carriers_keeps_non_carriers_labels(helper_env, alu_st
     [again] = _graph(alu_state, {**_body([MAT, PAT, NAT], regions=[(128657300, 128657500)]), "run": model}, mode="assign")
     for oid, res in out["results"].items():
         assert again["results"][oid]["assignments"] == res["assignments"]
+
+
+def test_graph_rows_take_the_active_quality_gates(helper_env, alu_state):
+    """Review round 3 (G4): graph-source rows are gated like every working set, so graph and native observations
+    of the same evidence give the same values."""
+    from services.read_quality_filters import quality_filters_for_request
+    src = analysis.GraphSource("lifted", "mat_chr3", "chr3_MATERNAL")
+    open_rows, _ = analysis.graph_window_rows(alu_state, src, 131192000, 131194000)
+    calls = lambda rows: sum(len(((r.get("layers") or {}).get("nuc") or {}).get("intervals") or ()) for r in rows)
+    assert calls(open_rows) > 0
+    with quality_filters_for_request([{"layer": "nuc", "quality_name": "nq", "min_value": 256}]):
+        gated, _ = analysis.graph_window_rows(alu_state, src, 131192000, 131194000)
+    assert calls(gated) < calls(open_rows)
+    again, _ = analysis.graph_window_rows(alu_state, src, 131192000, 131194000)
+    assert calls(again) == calls(open_rows)   # the cache keeps the ungated rows

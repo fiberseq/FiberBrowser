@@ -82,26 +82,32 @@ export function graphRunStateKeys(run: ClusterMatchedRun, panels: readonly Panel
     const key = p.stateKey ?? p.datasetId;
     // A later panel joins only while its labels are this run's (review G5): an independently clustered panel of the
     // same path keeps its own clusters, selection and focus.
-    if (!keys.has(key) && !compatibleLabels(run, live?.[key])) continue;
+    if (!keys.has(key) && !compatibleLabels(run, live?.[key], p.datasetId)) continue;
     keys.add(key);
   }
   return [...keys];
 }
 
-const runLabelIndex = new WeakMap<object, Map<string, number>>();
+const runLabelIndex = new WeakMap<object, Map<string, Map<string, number>>>();
 
-/** Whether a panel's labels agree with a graph run's for every record both label (none: compatible). */
-function compatibleLabels(run: ClusterMatchedRun, labels: Readonly<Record<string, number>> | undefined): boolean {
+/** Whether a panel's labels agree with a graph run's, for its own dataset, for every record both label (none:
+ * compatible). */
+function compatibleLabels(run: ClusterMatchedRun, labels: Readonly<Record<string, number>> | undefined, datasetId: string): boolean {
   if (!labels) return true;
-  let index = runLabelIndex.get(run);
-  if (!index) {
-    index = new Map();
-    for (const [key, map] of Object.entries(run.panelAssignments ?? {})) {
-      void key;
-      for (const [id, c] of Object.entries(map ?? {})) index.set(recordKey(id) ?? id, c);
+  let byDataset = runLabelIndex.get(run);
+  if (!byDataset) {
+    byDataset = new Map();
+    const obs = new Map((run.graph?.observations ?? []).map(o => [o.id, o.dataset_id]));
+    for (const d of run.destinations ?? []) {
+      const ds = obs.get(d.observations[0]);
+      if (!ds) continue;
+      const index = byDataset.get(ds) ?? new Map<string, number>();
+      for (const [id, c] of Object.entries(run.panelAssignments?.[d.stateKey] ?? {})) index.set(recordKey(id) ?? id, c);
+      byDataset.set(ds, index);
     }
-    runLabelIndex.set(run, index);
+    runLabelIndex.set(run, byDataset);
   }
+  const index = byDataset.get(datasetId) ?? new Map<string, number>();
   for (const [id, c] of Object.entries(labels)) {
     const want = index.get(recordKey(id) ?? id);
     if (want === undefined || want !== c) return false;

@@ -24,7 +24,7 @@ import type { BrowserState } from '../../stores/browserStore';
 import type { PanelConfig } from '../../types';
 import { clusterWindows, type ClusterBasis, type ClusterTargetPlan, type PlanState } from '../../utils/clusterTargets';
 import { registerClusterBasisRunner, registerClusterPlanTransform } from '../../utils/clusterRunExtensions';
-import { graphRunStateKeys, observationShownBy, type ClusterMatchedRun, type GraphRunObservation } from '../../utils/clusterMatchedRun';
+import { currentMatchedRun, graphRunStateKeys, observationShownBy, type ClusterMatchedRun, type GraphRunObservation } from '../../utils/clusterMatchedRun';
 import { sameChrom } from '../../utils/chromAliases';
 import { getDatasetDisplayLabel } from '../../utils/datasetLabels';
 import { idSetHas, qnameOfId, recordKey } from '../../utils/recordKeys';
@@ -377,7 +377,9 @@ export async function assignWithGraphRun(run: ClusterMatchedRun, signal?: AbortS
   if (!g || !run.destinations) return 0;
   const current = () => {
     const st = useBrowserStore.getState();
-    return st.clusterMatchedRun === run && (st.activeClusterTreeNodeId ?? null) === (run.treeNodeId ?? null);
+    // The run's labels are still the shown ones (a merge, dissolve or any relabelling ends the model's use).
+    return st.clusterMatchedRun === run && (st.activeClusterTreeNodeId ?? null) === (run.treeNodeId ?? null)
+      && currentMatchedRun(run, st.clusterAssignments) === run;
   };
   // Only the run's own tree node (review G5): another branch's labels never take this model's.
   if (!current()) return 0;

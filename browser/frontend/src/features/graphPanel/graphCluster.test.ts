@@ -454,3 +454,36 @@ describe('review round 1 (agy G4)', () => {
     expect(plan().refusal).toMatch(/nothing to cluster/);
   });
 });
+
+describe('review round 3 (Codex G5)', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+  const response = (p: ReturnType<typeof plan>, labels: Record<string, Record<string, number>>) => ({
+    results: Object.fromEntries(p.observations.map(o => [o.id, { assignments: labels[o.binding ?? 'linear'] ?? {} }])),
+    label_ids: {}, names: {}, stages: [{ stage: 1 }], columns: { shared: [], carrier_sets: [], left_out: {}, dropped: [], refinements: [] },
+    window_separation_nmi: null, matched: null, settings: {}, revisions: REG.revisions, options: {}, timings: {},
+  }) as never;
+
+  it('after a relabelling (a merge) the model is no longer used', async () => {
+    seed(split());
+    setPanelViewMode('mat', 'graph');
+    const p = plan();
+    commitGraphRun(useBrowserStore.getState(), p, response(p, { mat: { [aid('m1')]: 0, [aid('m2')]: 1 } }));
+    const fetched: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => { fetched.push(url); return new Response('{"results":{}}', { status: 200 }); }));
+    const rk = (q: string) => recordKey(aid(q))!;
+    useBrowserStore.getState().setClusterAssignments('k-mat', { [rk('m1')]: 0, [rk('m2')]: 0 });
+    expect(await assignWithGraphRun(useBrowserStore.getState().clusterMatchedRun!)).toBe(0);
+    expect(fetched).toEqual([]);
+  });
+
+  it('a later panel\'s labels are checked against its own dataset\'s labels only', () => {
+    seed([...split(), panel('nat', { datasetId: 'n' })]);
+    setPanelViewMode('mat', 'graph');
+    const p = plan();
+    commitGraphRun(useBrowserStore.getState(), p, response(p, { linear: { q1: 0 }, mat: { [aid('q1')]: 1 } }));
+    const s = useBrowserStore.getState();
+    const later = { ...s, panels: [...s.panels, panel('nat2', { datasetId: 'n', stateKey: 'k-nat2' })],
+      clusterAssignments: { ...s.clusterAssignments, 'k-nat2': { q1: 1 } } };
+    expect(clusterSelectionKeys(later, 'k-nat')).not.toContain('k-nat2');
+  });
+});
