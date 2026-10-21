@@ -153,7 +153,9 @@ export interface GraphViewState {
   /** Host: its members in band order, itself first. */
   members?: GraphMember[];
   /** Host: the zoom-out hand-off (§7): "Stay linear" pinned, and the mode last drawn (hysteresis across reloads). */
-  handoff?: { pinnedLinear?: boolean; shown?: 'graph' | 'linear' };
+  handoff?: { pinnedLinear?: boolean; shown?: 'graph' | 'linear';
+    /** Why it is drawn linear: the width rule (also a pin or a view with no graph) or the complexity rule (§7.2). */
+    reason?: 'width' | 'complexity' };
   /** Host: how each sub-band orders rows without a sort or clusters ('position': first drawn base, 'length'). */
   bandSort?: 'position' | 'length';
   /** Host: selection changes mirror to the host's other members showing the same record (D14, default on). */
@@ -259,11 +261,16 @@ export interface GraphReadsReport {
   truncated: boolean;
   omitted: Record<string, number>;
   shared_qnames: number;
+  /** Per sub-band (dataset, path): its molecules in the windows, share, sampling level and what it kept (G7). */
+  bands?: import('./densityStrip').GraphBandReport[];
+  budgets?: { profile: string | null; molecules: number; decoded_bytes: number; concurrent_loads: number; marks: number };
 }
 
 export interface GraphReadsResponse {
   reads: GraphRead[];
   report: GraphReadsReport;
+  /** Density strips per (dataset, path) (G7, §6.2 L2): counts at bin centres over every row decoded for the band. */
+  strips?: import('./densityStrip').GraphStrip[];
   cached: boolean;
   bindings: { dataset_id: string; binding: string; contig: string; windows: Span[] }[];
   /** list_ms: the windows' record headers; decode_ms/records_decoded: the records not cached yet. */
@@ -278,6 +285,7 @@ export interface GraphReadSettings {
   datasets: string[] | null;
   layers?: { nuc?: boolean; msp?: boolean; m6a?: boolean; tf?: boolean };
   rowHeight?: number;
+  /** Rows per path (standalone) or sub-band (host): absent in a host means fill height (§6.1). */
   maxRowsPerLane?: number;
   /** The datasets (and their revisions) whose reads this view drew: saved with the session, checked on restore. */
   bound?: { dataset_id: string; revision: string }[];

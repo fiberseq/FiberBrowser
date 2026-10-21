@@ -13,6 +13,7 @@ import type { AnalysisPanelProps } from '../../plugins/types';
 import { ReadContextMenu, type ContextMenuEntry } from '../../components/tracks/read-track/ReadContextMenu';
 import { setupHighDpiCanvas, useCanvasRenderVersion } from '../../utils/canvasUtils';
 import { cancelSubgraph, getReadBindings, querySubgraph, queryReads, GraphRequestError } from './api';
+import { unresolvedFraction, useGraphComplexity, viewKey } from './complexity';
 import { drawRuler, drawScene, GRAPH_GUTTER, GRAPH_LANE_GAP, GRAPH_LANE_HEIGHT, GRAPH_RIGHT_PAD, GRAPH_RULER_HEIGHT, laneColor, laneTop } from './canvas';
 import { clampViewport, formatBp, formatLocus, fromX, makeTransform, panViewport, parseLocus, zoomViewport, bpScale, type GraphViewport } from './coordinates';
 import { buildLayout, laneLabel, type LayoutModel } from './layout';
@@ -23,7 +24,7 @@ import { usePanelContentHeightStore } from '../../stores/panelContentHeightStore
 import { useServerDatasetsStore } from '../../stores/serverDatasetsStore';
 import { genomeKeyFor } from '../../utils/regionNavigation';
 import { startTrace, type GraphTrace } from './timings';
-import type { GraphApiError, GraphReadBinding, GraphReadSettings, GraphReadsResponse, GraphRegistration, GraphSubgraphResponse, GraphViewState } from './types';
+import type { GraphApiError, GraphReadBinding, GraphReadSettings, GraphReadsReport, GraphReadsResponse, GraphRegistration, GraphSubgraphResponse, GraphViewState } from './types';
 import { MAX_READ_PRIMITIVES, packMolecules, placeReads, placementIndex, type PackedLane, type PlacedMolecule } from './readGeometry';
 import { addGraphRegion, drawRunOutlines, runOutlines } from './runOutlines';
 import { bandHeight, describeReadHit, drawReadBandLabels, drawReads, effectiveReadLayers, emptyDrawStats, READ_ROW_GAP, READ_ROW_HEIGHT, type ReadDrawStats, type ReadHit, type ReadLayers } from './readCanvas';
@@ -35,7 +36,8 @@ import { useGraphReadsStore } from './graphReadsStore';
 import { moleculeKey, useLiftHover } from '../liveLift/linking/hover';
 import { xForTarget } from './scene';
 import { conversionTargets, convertStandalone, foldIn, isHost, joinCandidates, joinGraph, membersOf, panelKeyOf, panelView, popOut, poppable, setPanelViewMode } from './hostMode';
-import { graphPins, packMemberBands, routeRead, type BandMember, type HostLane, type MemberState } from './memberBands';
+import { allocateRows, graphPins, packMemberBands, routeRead, STRIP_ROWS, type BandMember, type HostLane, type MemberState } from './memberBands';
+import { bandSampled, drawDensityStrips, placeStrips, stripKey, type GraphBandReport, type PlacedBin } from './densityStrip';
 import { drawHostBandLabels, type ReadDecoration } from './readCanvas';
 import { useReadActionsStore } from '../../stores/readActionsStore';
 import { setPinnedLinear, useGraphSettings } from './handoff';
@@ -54,7 +56,7 @@ declare global {
     /** e2e only (with __FIBERBROWSER_E2E_EXPOSE_STORE): each graph panel's last scene, to locate its geometry. */
     __FIBERBROWSER_GRAPH_SCENES__?: Record<string, { scene: Scene; model: LayoutModel; offset: number;
       reads?: { molecules: PlacedMolecule[]; lanes: Record<string, { rows: number; hidden: number }>; hits: ReadHit[]; placeMs?: number; drawMs?: number; serverMs?: number;
-        drawn?: ReadDrawStats; layers?: ReadLayers; hovered?: number; hoverKey?: string | null } }>;
+        drawn?: ReadDrawStats; layers?: ReadLayers; hovered?: number; hoverKey?: string | null; strips?: number; report?: GraphReadsReport } }>;
   }
 }
 const STATUS_HEIGHT = 18;
@@ -245,6 +247,13 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   }, []);
 
   const response = query.response;
+  // The complexity hand-off (§7.2): a host's topology says how much of its window is unresolved (judged on the
+  // topology, never on the scene's packing); the hand-off controller decides.
+  useEffect(() => {
+    if (!hostMode || !panelId || !hostView || !response || !viewport) return;
+    if (response.result.interval.start !== viewport.start || response.result.interval.end !== viewport.end) return;
+    useGraphComplexity.getState().set(panelId, viewKey(hostView), unresolvedFraction(response.result));
+  }, [response]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------------------------------------------------------------- reads (Gate E)
   // Which loaded datasets bind to this package's paths (explicit identities, checked by the server), and the
@@ -349,6 +358,8 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     [enabledModTypes, readSettings.layers]);
   const readRowHeight = readSettings.rowHeight ?? READ_ROW_HEIGHT;
   const rowsPerLane = readSettings.maxRowsPerLane ?? DEFAULT_ROWS_PER_LANE;
+  // A host fills its body height with rows by default (§6.1); a set row count (or a standalone panel) keeps it.
+  const fillHeight = hostMode && readSettings.maxRowsPerLane == null;
   const activeDatasetIds = useMemo(() => new Set(activeBindings.map(b => b.dataset_id)), [activeBindings]);
   // The reads this panel draws and its bindings, for the shared molecule hover and "Show source span".
   // Only datasets with reads on a path this panel shows count as drawn here.
@@ -465,11 +476,40 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     const span = response.result.interval.end - response.result.interval.start;
     const placed = placeReads(readsShown.reads.filter(r => activeDatasetIds.has(r.d)), index, MAX_READ_PRIMITIVES,
       span / Math.max(1, baseScene.dataWidth));
-    const lanes: Map<string, PackedLane | HostLane> = hostMode
-      ? packMemberBands(placed.molecules, bandMembers, memberStates, rowsPerLane, bandSort)
-      : packMolecules(placed.molecules, rowsPerLane);
-    return { placed, lanes, ms: performance.now() - t0 };
-  }, [baseScene, response, readsShown, activeDatasetIds, rowsPerLane, hostMode, bandMembers, memberStates, bandSort]);
+    let lanes: Map<string, PackedLane | HostLane>;
+    let strips = new Map<string, PlacedBin[]>();
+    if (hostMode) {
+      // Each sub-band's rows: what it needs, or its share of the body height (fill height); a band that draws fewer
+      // rows than it has molecules (sampled, capped or past its rows) gets a density strip above them (§6.2 L2).
+      const bandsBy = new Map<string, GraphBandReport>((readsShown.report.bands ?? []).map(b => [stripKey(b.dataset_id, b.binding), b]));
+      const dsOf = new Map(bandMembers.map(m => [m.panelId, m.datasetId]));
+      const sampled = (lane: string, member: string) => bandSampled(bandsBy.get(stripKey(dsOf.get(member) ?? '', lane)));
+      const first = packMemberBands(placed.molecules, bandMembers, memberStates, 1_000_000, bandSort);
+      const groups = [...first].flatMap(([lane, l]) => l.groups.map(g => ({ lane, member: g.memberId, need: g.rowCount })));
+      const key = (lane: string, member: string) => `${lane}\u0000${member}`;
+      const rowsOf = new Map<string, number>(), stripOf = new Map<string, number>();
+      let alloc = groups.map(g => (fillHeight ? g.need : Math.min(g.need, rowsPerLane)));
+      if (fillHeight) {
+        const lanesWithBands = new Set(groups.map(g => g.lane)).size;
+        const fixed = GRAPH_RULER_HEIGHT + STATUS_HEIGHT + 12 + compactSpace + fullRows * (laneHeight + GRAPH_LANE_GAP)
+          + lanesWithBands * (GRAPH_LANE_GAP + READ_ROW_GAP);
+        const total = Math.floor(Math.max(0, bodyHeight - fixed) / (readRowHeight + READ_ROW_GAP));
+        alloc = allocateRows(groups.map(g => g.need + (sampled(g.lane, g.member) ? STRIP_ROWS : 0)), total, 3);
+      }
+      groups.forEach((g, i) => {
+        const strip = sampled(g.lane, g.member) || alloc[i] < g.need ? STRIP_ROWS : 0;
+        stripOf.set(key(g.lane, g.member), strip);
+        // The strip's rows come out of the band's share (fill height) or on top of a set row count.
+        rowsOf.set(key(g.lane, g.member), fillHeight ? Math.max(strip + 3, alloc[i]) : Math.min(g.need, rowsPerLane) + strip);
+      });
+      lanes = packMemberBands(placed.molecules, bandMembers, memberStates, (l, m) => rowsOf.get(key(l, m)) ?? rowsPerLane, bandSort, 3,
+        (l, m) => stripOf.get(key(l, m)) ?? 0);
+      strips = placeStrips(readsShown, index);
+    } else {
+      lanes = packMolecules(placed.molecules, rowsPerLane);
+    }
+    return { placed, lanes, strips, ms: performance.now() - t0 };
+  }, [baseScene, response, readsShown, activeDatasetIds, rowsPerLane, hostMode, bandMembers, memberStates, bandSort, fillHeight, bodyHeight, readRowHeight, laneHeight, compactSpace, fullRows]);
   // The rows each member shows here ("Reads shown" scopes, exports): the host and its folded members (a revealed
   // member's own read track publishes its rows).
   useEffect(() => {
@@ -523,6 +563,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   const readDrawMsRef = useRef(0);
   const readDrawStatsRef = useRef<ReadDrawStats>(emptyDrawStats());
   const hoveredRowsRef = useRef(0);
+  const stripsDrawnRef = useRef(0);
   // Its natural body height (full lanes of NATURAL_LANE px, compact rows, the ruler and the status line): stacked
   // with other panels it takes this, not an equal share of the column (plugin sizeToContent). It only grows for one
   // selection of paths, so panning never makes the panels below jump back and forth.
@@ -594,6 +635,12 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       const drawStats = emptyDrawStats();
       readHitsRef.current = readLayout ? drawReads(ctx, scene, readLayout.lanes, style, readLayers, laneColors, readRowHeight, READ_ROW_GAP,
         readsStale ? 0.45 : 1, drawStats, decoration) : [];
+      if (readLayout && hostMode && readLayout.strips.size) {
+        const dsOf = new Map(bandMembers.map(m => [m.panelId, m.datasetId]));
+        const bandsBy = new Map<string, GraphBandReport>((readsShown?.report.bands ?? []).map(b => [stripKey(b.dataset_id, b.binding), b]));
+        stripsDrawnRef.current = drawDensityStrips(ctx, scene, readLayout.lanes as Map<string, HostLane>, readLayout.strips, id => dsOf.get(id), bandsBy,
+          style, readRowHeight, READ_ROW_GAP, readsStale ? 0.45 : 1, sceneOffset);
+      } else stripsDrawnRef.current = 0;
       readDrawStatsRef.current = drawStats;
       let hoveredRows = 0;
       if (hoverKey) {
@@ -635,7 +682,8 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
           ...(readLayout ? { reads: { molecules: readLayout.placed.molecules, hits: readHitsRef.current,
             placeMs: readLayout.ms, drawMs: readDrawMsRef.current, serverMs: reads.response?.timings.total_ms, drawn: readDrawStatsRef.current, layers: readLayers, hovered: hoveredRowsRef.current, hoverKey,
             lanes: Object.fromEntries([...readLayout.lanes].map(([k, l]) => [k, { rows: l.rows.length, hidden: l.hidden,
-              ...((l as HostLane).groups ? { groups: (l as HostLane).groups.map(g => ({ member: g.memberId, label: g.label, rows: g.rowCount, reads: g.reads, order: g.order })) } : {}) }])) } } : {}) };
+              ...((l as HostLane).groups ? { groups: (l as HostLane).groups.map(g => ({ member: g.memberId, label: g.label, rows: g.rowCount, reads: g.reads, order: g.order,
+                hidden: g.hidden, strip: g.stripRows ?? 0 })) } : {}) }])), strips: stripsDrawnRef.current, report: reads.response?.report } } : {}) };
       }
     } else {
       drawRuler(ctx, null, viewport, width, reversed);
@@ -1008,8 +1056,10 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     entries.push({ kind: 'item', action: 'host:sync', icon: 'eye', label: `${state.syncSelection === false ? '' : '✓ '}Sync selection across the graph`,
       title: 'Selecting a read selects it in every member showing the same record' });
     entries.push({ kind: 'submenu', id: 'handoff', icon: 'settings', label: `Linear above ${formatBp(handoffSettings.outBp)}`,
-      entries: [[50_000, 40_000], [30_000, 25_000], [20_000, 15_000]].map(([o, i]) => ({ kind: 'item' as const, action: `ho:${o}:${i}`, icon: 'settings',
-        label: `${handoffSettings.outBp === o ? '✓ ' : ''}Above ${formatBp(o)} (graph again at ${formatBp(i)})` })) });
+      entries: [...[[50_000, 40_000], [30_000, 25_000], [20_000, 15_000]].map(([o, i]) => ({ kind: 'item' as const, action: `ho:${o}:${i}`, icon: 'settings',
+        label: `${handoffSettings.outBp === o ? '✓ ' : ''}Above ${formatBp(o)} (graph again at ${formatBp(i)})` })),
+        { kind: 'item' as const, action: 'ho:complexity', icon: 'settings', label: `${handoffSettings.complexity ? '✓ ' : ''}Also where most of the window is unresolved`,
+          title: 'Linear when more than half of the window has no resolved graph correspondence; the graph returns below 30%' }] });
     entries.push({ kind: 'separator' });
   }
   if (state && reg && target && !hostMode) {
@@ -1076,7 +1126,9 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
             icon: 'eye-off', disabled: true, label: `${b.label}: not a path of this graph`, title: b.problems.join('; ') })),
           layerItem('nuc', 'Nucleosomes'), layerItem('msp', 'MSPs / FIRE'), layerItem('tf', 'TF footprints'), layerItem('m6a', 'm6A'),
           ...[5, 7, 10].map(h => ({ kind: 'item' as const, action: `reads:h:${h}`, icon: 'settings', label: `${readRowHeight === h ? '✓ ' : ''}Rows ${h} px` })),
-          ...[20, 40, 100].map(n => ({ kind: 'item' as const, action: `reads:rows:${n}`, icon: 'settings', label: `${rowsPerLane === n ? '✓ ' : ''}At most ${n} rows per path` })),
+          ...(hostMode ? [{ kind: 'item' as const, action: 'reads:rows:fill', icon: 'settings', label: `${fillHeight ? '✓ ' : ''}Rows fill the panel height` }] : []),
+          ...[20, 40, 100].map(n => ({ kind: 'item' as const, action: `reads:rows:${n}`, icon: 'settings',
+            label: `${!fillHeight && rowsPerLane === n ? '✓ ' : ''}At most ${n} rows per ${hostMode ? 'band' : 'path'}` })),
         ] });
     }
     entries.push({ kind: 'submenu', id: 'context', icon: 'settings', label: `Graph context: ${state.layoutSettings.contextBp} bp`,
@@ -1115,6 +1167,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       if (action === 'host:pin') { setPinnedLinear(panelId, true); return; }
       if (action === 'host:sync') { setGraphView(panelId, { ...state!, syncSelection: state!.syncSelection === false }); return; }
       if (action.startsWith('band:')) { setGraphView(panelId, { ...state!, bandSort: action.slice(5) as 'position' | 'length' }); return; }
+      if (action === 'ho:complexity') { useGraphSettings.getState().set({ complexity: !useGraphSettings.getState().complexity }); return; }
       if (action.startsWith('ho:')) { const [, o, i] = action.split(':'); useGraphSettings.getState().set({ outBp: Number(o), inBp: Number(i) }); return; }
       if (action === 'pop:all') { const { folded, missing } = poppable(panels, panel); popOut(panelId, folded.map(p => p.id), missing); return; }
       if (action.startsWith('popnew:')) { const m = poppable(panels, panel).missing.filter(x => x.binding === action.slice(7)); popOut(panelId, [], m); return; }
@@ -1178,6 +1231,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         if (shown.has(id)) shown.delete(id); else shown.add(id);
         next = { ...current, show: true, datasets: bound.every(d => shown.has(d)) ? null : bound.filter(d => shown.has(d)) };
       } else if (action.startsWith('reads:h:')) next = { ...current, rowHeight: Number(action.slice('reads:h:'.length)) };
+      else if (action === 'reads:rows:fill') { const { maxRowsPerLane: _m, ...rest } = current; next = rest; }
       else if (action.startsWith('reads:rows:')) next = { ...current, maxRowsPerLane: Number(action.slice('reads:rows:'.length)) };
       else if (action.startsWith('rl:')) {
         const key = action.slice(3) as keyof ReadLayers;

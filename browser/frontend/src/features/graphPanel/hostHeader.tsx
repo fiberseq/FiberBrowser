@@ -78,7 +78,8 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
     const chips = (
       <button type="button" className="fb-header-pill flex-shrink-0" data-testid="graph-mode-toggle" data-mode="graph" data-shown={shown}
         title={shown === 'graph' ? 'Graph mode: this panel and its members on the package\'s paths (click: view as linear)'
-          : `Graph mode, drawn linear here (${pinned ? 'Stay linear is on' : `wider than ${formatBp(outBp)}`}); click: view as linear`}
+          : `Graph mode, drawn linear here (${pinned ? 'Stay linear is on' : panel.graphView?.handoff?.reason === 'complexity'
+            ? 'most of the window is unresolved in the graph' : `wider than ${formatBp(outBp)}`}); click: view as linear`}
         onClick={e => { e.stopPropagation(); setPanelViewMode(panel.id, 'linear'); }}>{chipText}</button>
     );
     const menu = (
@@ -111,7 +112,9 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
     );
     const body = shown === 'linear' ? (
       <div data-testid="graph-handoff-bar" className="flex items-center gap-2 border-b border-stone-200 bg-stone-50 px-2 py-0.5 text-[11px] text-stone-600 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-300">
-        <span>{pinned ? 'Linear · graph mode paused' : `Linear · graph resumes below ${formatBp(useGraphSettings.getState().inBp)}`}</span>
+        <span>{pinned ? 'Linear · graph mode paused'
+          : panel.graphView?.handoff?.reason === 'complexity' ? 'Linear · most of this window is unresolved in the graph'
+            : `Linear · graph resumes below ${formatBp(useGraphSettings.getState().inBp)}`}</span>
         <button type="button" className="underline" data-testid={pinned ? 'graph-resume' : 'graph-stay-linear'}
           onClick={() => setPinnedLinear(panel.id, !pinned)}>{pinned ? 'Resume graph' : 'Stay linear'}</button>
       </div>

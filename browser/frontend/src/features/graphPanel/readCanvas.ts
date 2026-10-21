@@ -255,8 +255,9 @@ export function drawHostBandLabels(ctx: CanvasRenderingContext2D, scene: Scene, 
         ctx.font = '9px sans-serif';
         ctx.fillStyle = '#64748b';
         ctx.fillText(`${shown} read${shown === 1 ? '' : 's'}${g.hidden ? ` +${g.hidden}` : ''}`, 8, top + 19);
-        // Per-cluster counts (the compare step, DESIGN_GRAPH_PRIMARY §3.3): "C0 24 · C1 3".
-        const counts = clusterCounts(lane, g.startRow, g.rowCount);
+        // Per-cluster counts (the compare step, DESIGN_GRAPH_PRIMARY §3.3): "C0 24 · C1 3" (the strip's rows aside).
+        const strip = g.stripRows ?? 0;
+        const counts = clusterCounts(lane, g.startRow + strip, g.rowCount - strip);
         if (counts && h >= 30) ctx.fillText(counts, 8, top + 29);
       }
     }

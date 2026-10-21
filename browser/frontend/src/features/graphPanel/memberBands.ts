@@ -49,6 +49,8 @@ export interface BandGroup {
   hidden: number;
   /** How its rows are ordered ('sort': the member's sort order, 'cluster', 'position', 'length'). */
   order: 'sort' | 'cluster' | 'position' | 'length';
+  /** Rows reserved at its start for its density strip (§6.2 L2; 0: none). Its molecules follow them. */
+  stripRows?: number;
 }
 
 /** A host lane: its rows, which member and cluster each row is (-1 unassigned; null: the member has no clusters),
@@ -98,9 +100,28 @@ function firstFit(list: PlacedMolecule[], maxRows: number, gapPx: number, oneEac
   return { rows, hidden };
 }
 
-/** The host's lanes: per path, its members' sub-bands in member order. */
+/** Rows the density strip takes (≈ 24 px at the default 7 px rows and 2 px gaps). */
+export const STRIP_ROWS = 3;
+
+/** Fill height (§6.1): `total` rows shared by sub-bands that need `need` rows each — every band gets what it needs
+ * when they fit, else an equal share (at least `min`), smaller bands leaving the rest to the others. */
+export function allocateRows(need: readonly number[], total: number, min = 3): number[] {
+  const out = need.map(() => 0);
+  let left = Math.max(0, Math.floor(total));
+  const order = need.map((n, i) => [n, i] as const).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  order.forEach(([n, i], k) => {
+    const share = Math.max(min, Math.floor(left / (order.length - k)));
+    out[i] = Math.min(n, share);
+    left = Math.max(0, left - out[i]);
+  });
+  return out;
+}
+
+/** The host's lanes: per path, its members' sub-bands in member order. `maxRows`: rows per sub-band (a number, or
+ * per lane and member: fill height); `stripRows`: rows reserved at a sub-band's start for its density strip. */
 export function packMemberBands(molecules: readonly PlacedMolecule[], members: readonly BandMember[],
-  states: Readonly<Record<string, MemberState>>, maxRows: number, bandSort: 'position' | 'length' = 'position', gapPx = 3): Map<string, HostLane> {
+  states: Readonly<Record<string, MemberState>>, maxRows: number | ((lane: string, memberId: string) => number),
+  bandSort: 'position' | 'length' = 'position', gapPx = 3, stripRows?: (lane: string, memberId: string) => number): Map<string, HostLane> {
   const byLane = new Map<string, PlacedMolecule[]>();
   for (const m of molecules) {
     if (!m.extent) continue;
@@ -114,6 +135,8 @@ export function packMemberBands(molecules: readonly PlacedMolecule[], members: r
       const st = states[member.panelId] ?? {};
       let list = onLane.filter(m => routeRead(m.read, member));
       if (!list.length) continue;
+      const strip = Math.max(0, stripRows?.(laneKey, member.panelId) ?? 0);
+      const room = Math.max(1, (typeof maxRows === 'function' ? maxRows(laneKey, member.panelId) : maxRows) - strip);
       if (st.excluded?.size) list = list.filter(m => !st.excluded!.has(m.read.q));
       if (st.filter) list = list.filter(m => idSetHas(st.filter!, rowKeys(m.read), m.read.rk));
       if (st.branchScope) list = list.filter(m => idSetHas(st.branchScope!, rowKeys(m.read), m.read.rk));
@@ -151,17 +174,22 @@ export function packMemberBands(molecules: readonly PlacedMolecule[], members: r
           || (rankOf.get(a) ?? 1e9) - (rankOf.get(b) ?? 1e9) || a - b);
         packed = { rows: [], hidden: 0, clusters: [] };
         for (const c of keys) {
-          const ff = ordered(groups.get(c)!, maxRows - packed.rows.length);
+          const ff = ordered(groups.get(c)!, room - packed.rows.length);
           packed.rows.push(...ff.rows);
           packed.clusters.push(...ff.rows.map(() => c));
           packed.hidden += ff.hidden;
         }
       } else {
-        const ff = ordered(list, maxRows);
+        const ff = ordered(list, room);
         packed = { ...ff, clusters: ff.rows.map(() => null) };
       }
+      if (strip) {
+        // The strip's rows (empty, unclustered) come first; the band's rows follow them.
+        packed.rows.unshift(...Array.from({ length: strip }, () => []));
+        packed.clusters.unshift(...Array.from({ length: strip }, () => null));
+      }
       lane.groups.push({ memberId: member.panelId, label: member.label, color: member.color, startRow: lane.rows.length,
-        rowCount: packed.rows.length, reads, hidden: packed.hidden, order });
+        rowCount: packed.rows.length, reads, hidden: packed.hidden, order, ...(strip ? { stripRows: strip } : {}) });
       lane.rows.push(...packed.rows);
       lane.rowMember.push(...packed.rows.map(() => member.panelId));
       lane.rowCluster.push(...packed.clusters);

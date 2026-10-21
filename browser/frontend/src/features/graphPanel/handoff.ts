@@ -17,6 +17,7 @@ import { genomeKeyFor } from '../../utils/regionNavigation';
 import { isHost, moveHostMembers, panelView } from './hostMode';
 import { canFollow, defaultCompared, defaultTarget, GRAPH_MAX_PATHS, type LinearView } from './state';
 import { useGraphStatusStore } from './statusStore';
+import { complexityFor, complexityShown, probeComplexity, useGraphComplexity } from './complexity';
 
 export const HANDOFF_OUT_BP = 50_000;
 export const HANDOFF_IN_BP = 40_000;
@@ -29,13 +30,15 @@ interface GraphSettings {
   defaultLiftedView: LiftedOpenView;
   outBp: number;
   inBp: number;
-  set: (patch: Partial<Pick<GraphSettings, 'defaultLiftedView' | 'outBp' | 'inBp'>>) => void;
+  /** The complexity hand-off (§7.2, D4: on): linear where most of the window is unresolved in the topology. */
+  complexity: boolean;
+  set: (patch: Partial<Pick<GraphSettings, 'defaultLiftedView' | 'outBp' | 'inBp' | 'complexity'>>) => void;
 }
 
 const SETTINGS_KEY = 'fiberbrowser_graph_mode_settings_v1';
 
-function loadSettings(): Pick<GraphSettings, 'defaultLiftedView' | 'outBp' | 'inBp'> {
-  const base = { defaultLiftedView: 'graph' as LiftedOpenView, outBp: HANDOFF_OUT_BP, inBp: HANDOFF_IN_BP };
+function loadSettings(): Pick<GraphSettings, 'defaultLiftedView' | 'outBp' | 'inBp' | 'complexity'> {
+  const base = { defaultLiftedView: 'graph' as LiftedOpenView, outBp: HANDOFF_OUT_BP, inBp: HANDOFF_IN_BP, complexity: true };
   try {
     const raw = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? 'null');
     if (!raw || typeof raw !== 'object') return base;
@@ -43,7 +46,7 @@ function loadSettings(): Pick<GraphSettings, 'defaultLiftedView' | 'outBp' | 'in
     const clampBp = (v: unknown, d: number) => (typeof v === 'number' && v >= 10_000 && v <= 50_000 ? Math.round(v) : d);
     const outBp = clampBp(raw.outBp, base.outBp);
     const inBp = Math.min(outBp, clampBp(raw.inBp, base.inBp));
-    return { defaultLiftedView: view, outBp, inBp };
+    return { defaultLiftedView: view, outBp, inBp, complexity: raw.complexity !== false };
   } catch {
     return base;
   }
@@ -55,8 +58,11 @@ export const useGraphSettings = create<GraphSettings>((set, get) => ({
   set: patch => {
     const next = { ...get(), ...patch };
     if (next.inBp > next.outBp) next.inBp = next.outBp;
-    set({ defaultLiftedView: next.defaultLiftedView, outBp: next.outBp, inBp: next.inBp });
-    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ defaultLiftedView: next.defaultLiftedView, outBp: next.outBp, inBp: next.inBp })); } catch { /* not kept */ }
+    set({ defaultLiftedView: next.defaultLiftedView, outBp: next.outBp, inBp: next.inBp, complexity: next.complexity });
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ defaultLiftedView: next.defaultLiftedView, outBp: next.outBp, inBp: next.inBp,
+        complexity: next.complexity }));
+    } catch { /* not kept */ }
   },
 }));
 
@@ -78,11 +84,15 @@ export function decideShown(prev: 'graph' | 'linear', widthBp: number, opts: { o
 
 /** Pure: the panels with a host showing `shown`: going linear reveals its folded members (marked); going back to the
  * graph folds the members it revealed (still marked). */
-export function applyShown(panels: PanelConfig[], hostId: string, shown: 'graph' | 'linear'): PanelConfig[] {
+export function applyShown(panels: PanelConfig[], hostId: string, shown: 'graph' | 'linear', reason?: 'width' | 'complexity'): PanelConfig[] {
   const host = panels.find(p => p.id === hostId);
+  const why = shown === 'linear' ? reason : undefined;
   return panels.map(p => {
     if (p.id === hostId && p.graphView) {
-      return p.graphView.handoff?.shown === shown ? p : { ...p, graphView: { ...p.graphView, handoff: { ...p.graphView.handoff, shown } } };
+      const h = p.graphView.handoff;
+      if (h?.shown === shown && (h?.reason ?? undefined) === why) return p;
+      const { reason: _r, ...rest } = h ?? {};
+      return { ...p, graphView: { ...p.graphView, handoff: { ...rest, shown, ...(why ? { reason: why } : {}) } } };
     }
     if (p.graphMemberOf !== hostId) return p;
     if (shown === 'linear' && p.collapsedByGraphGroup === hostId) {
@@ -123,19 +133,33 @@ export function hostFollowable(host: PanelConfig, view: LinearView): boolean {
   return canFollow(target, view);
 }
 
-/** What the host should show now (no settling), given the store. */
-export function desiredShown(host: PanelConfig, main: LinearView, settings = useGraphSettings.getState()): 'graph' | 'linear' {
+/** What the host should show now (no settling), given the store, and why it is linear (the width rule — also a
+ * pin or a view with no graph — or the complexity rule). */
+export function desiredHandoff(host: PanelConfig, main: LinearView, settings = useGraphSettings.getState()): { shown: 'graph' | 'linear'; reason?: 'width' | 'complexity' } {
   const view = panelView(host, main);
   const prev = host.graphView?.handoff?.shown ?? 'graph';
   // Not known yet: as it was. The helper or the package gone: the graph body, whose panel says why and relinks.
   const status = useGraphStatusStore.getState().status;
-  if (!status) return prev;
-  if (!status.helper.available || !status.registrations.some(r => r.id === host.graphView?.registrationId)) return 'graph';
-  return decideShown(prev, view.end - view.start, { outBp: settings.outBp, inBp: settings.inBp,
+  if (!status) return { shown: prev, ...(prev === 'linear' && host.graphView?.handoff?.reason ? { reason: host.graphView.handoff.reason } : {}) };
+  if (!status.helper.available || !status.registrations.some(r => r.id === host.graphView?.registrationId)) return { shown: 'graph' };
+  const byWidth = decideShown(prev, view.end - view.start, { outBp: settings.outBp, inBp: settings.inBp,
     pinnedLinear: host.graphView?.handoff?.pinnedLinear, followable: hostFollowable(host, view) });
+  if (byWidth === 'linear') return { shown: 'linear', reason: 'width' };
+  if (!settings.complexity) return { shown: 'graph' };
+  const byComplexity = prev === 'linear' && host.graphView?.handoff?.reason === 'complexity';
+  const want = complexityShown(prev, complexityFor(host.id, view), byComplexity);
+  // Not judged for this window yet: a host linear for complexity stays so until its probe answers.
+  if (want == null) return byComplexity ? { shown: 'linear', reason: 'complexity' } : { shown: 'graph' };
+  return want === 'linear' ? { shown: 'linear', reason: 'complexity' } : { shown: 'graph' };
+}
+
+export function desiredShown(host: PanelConfig, main: LinearView, settings = useGraphSettings.getState()): 'graph' | 'linear' {
+  return desiredHandoff(host, main, settings).shown;
 }
 
 const timers = new Map<string, { sig: string; timer: number }>();
+const probes = new Map<string, { sig: string; timer: number }>();
+const settings = () => useGraphSettings.getState();
 let started = false;
 
 /** Watch every host's viewport and apply the hand-off once it has settled (one decision per gesture). */
@@ -153,14 +177,35 @@ export function startHandoffController(): void {
         useBrowserStore.setState(st => ({ panels: st.panels.map(p => (p.id === host.id ? { ...p, graphView: retarget } : p)) }));
         return;   // the change re-runs the check
       }
-      const want = desiredShown(host, main);
+      const desired = desiredHandoff(host, main);
+      const want = desired.shown;
       const shown = host.graphView?.handoff?.shown ?? 'graph';
+      const reason = host.graphView?.handoff?.reason;
       const pending = timers.get(host.id);
       // The gesture is judged once its viewport has been still for 300 ms: a new viewport restarts the wait,
       // an unrelated change (another panel) does not.
-      const sig = `${want}|${view.chrom}:${view.start}-${view.end}`;
-      if (want === shown) {
+      const sig = `${want}|${desired.reason ?? ''}|${view.chrom}:${view.start}-${view.end}`;
+      if (want === shown && desired.reason === (shown === 'linear' ? reason : undefined)) {
         if (pending) { window.clearTimeout(pending.timer); timers.delete(host.id); }
+        // Linear for complexity, in a window the graph could draw but not judged yet: ask its topology once settled.
+        if (shown === 'linear' && reason === 'complexity' && settings().complexity && view.end - view.start <= settings().outBp
+          && complexityFor(host.id, view) === undefined) {
+          const psig = `probe|${view.chrom}:${view.start}-${view.end}`;
+          const probe = probes.get(host.id);
+          if (probe?.sig !== psig) {
+            if (probe) window.clearTimeout(probe.timer);
+            probes.set(host.id, { sig: psig, timer: window.setTimeout(() => {
+              probes.delete(host.id);
+              const st = useBrowserStore.getState();
+              const h = st.panels.find(p => p.id === host.id);
+              const reg = useGraphStatusStore.getState().status?.registrations.find(r => r.id === h?.graphView?.registrationId);
+              if (!isHost(h) || !reg) return;
+              const m: LinearView = { chrom: st.chrom, start: st.start, end: st.end, reference: genomeKeyFor(null, st) };
+              const v = panelView(h, m);
+              if (`probe|${v.chrom}:${v.start}-${v.end}` === psig) probeComplexity(h, v, reg);
+            }, HANDOFF_SETTLE_MS) });
+          }
+        }
         continue;
       }
       if (pending?.sig === sig) continue;
@@ -171,8 +216,10 @@ export function startHandoffController(): void {
         const h = st.panels.find(p => p.id === host.id);
         if (!isHost(h)) return;
         const m: LinearView = { chrom: st.chrom, start: st.start, end: st.end, reference: genomeKeyFor(null, st) };
-        const now = desiredShown(h, m);
-        if (now !== (h.graphView?.handoff?.shown ?? 'graph')) useBrowserStore.setState(x => ({ panels: applyShown(x.panels, h.id, now) }));
+        const now = desiredHandoff(h, m);
+        if (now.shown !== (h.graphView?.handoff?.shown ?? 'graph') || now.reason !== (h.graphView?.handoff?.reason ?? undefined)) {
+          useBrowserStore.setState(x => ({ panels: applyShown(x.panels, h.id, now.shown, now.reason) }));
+        }
       }, HANDOFF_SETTLE_MS) });
     }
   };
@@ -201,6 +248,7 @@ export function startHandoffController(): void {
   });
   useGraphStatusStore.subscribe(check);
   useGraphSettings.subscribe(check);
+  useGraphComplexity.subscribe(check);
 }
 
 /** "Stay linear" / "Resume graph" (handoff.pinnedLinear): saved with the host, applied at once. */
@@ -210,6 +258,7 @@ export function setPinnedLinear(hostId: string, pinned: boolean): void {
     const host = panels.find(p => p.id === hostId);
     if (!isHost(host)) return { panels };
     const main: LinearView = { chrom: s.chrom, start: s.start, end: s.end, reference: genomeKeyFor(null, s) };
-    return { panels: applyShown(panels, hostId, desiredShown(host, main)) };
+    const d = desiredHandoff(host, main);
+    return { panels: applyShown(panels, hostId, d.shown, d.reason) };
   });
 }
