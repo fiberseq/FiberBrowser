@@ -99,9 +99,9 @@ export function watchGraphBindings(): void {
     if (!ids.length) return;
     const status = useGraphStatusStore.getState();
     if (!status.status) { if (!status.loading) void status.load(); return; }
-    void useGraphBindingsStore.getState().refresh(ids, useServerDatasetsStore.getState().key ?? '');
+    void useGraphBindingsStore.getState().refresh(ids, `${useServerDatasetsStore.getState().key ?? ''}|${s.refreshGeneration}`);
   };
-  useBrowserStore.subscribe((s, prev) => { if (s.datasets !== prev.datasets) refresh(); });
+  useBrowserStore.subscribe((s, prev) => { if (s.datasets !== prev.datasets || s.refreshGeneration !== prev.refreshGeneration) refresh(); });
   useServerDatasetsStore.subscribe(refresh);
   useGraphStatusStore.subscribe((s, prev) => { if (s.status !== prev.status) refresh(); });
   refresh();

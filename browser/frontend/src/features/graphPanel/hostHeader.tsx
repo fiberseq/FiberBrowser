@@ -25,7 +25,7 @@ const LazyGraphPanel = lazy(() => import('./GraphPanel'));
 /** A host's body while it draws its graph (the hand-off has it graph). */
 export function GraphHostBody({ panel, width, height }: DatasetBodyProps) {
   return (
-    <div data-testid="graph-host-body" data-panel-id={panel.id} style={{ height, overflow: 'hidden' }}>
+    <div data-testid="graph-host-body" data-panel-id={panel.id} data-crosshair-exclude="true" style={{ height, overflow: 'hidden' }}>
       <LazyGraphPanel panelId={panel.id} width={width} height={height} />
     </div>
   );

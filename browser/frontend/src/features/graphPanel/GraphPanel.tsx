@@ -33,6 +33,7 @@ import { bumpNavigation, navigateGraph, navigationToken, showSourceSpan, sourceP
 import { useGraphReadsStore } from './graphReadsStore';
 import { moleculeKey, useLiftHover } from '../liveLift/linking/hover';
 import { xForTarget } from './scene';
+import { moveHostMembers } from './hostMode';
 import { conversionTargets, convertStandalone, foldIn, isHost, joinCandidates, joinGraph, membersOf, panelKeyOf, panelView, popOut, poppable, setPanelViewMode } from './hostMode';
 import { packMemberBands, routeRead, type BandMember, type HostLane, type MemberState } from './memberBands';
 import { drawHostBandLabels, type ReadDecoration } from './readCanvas';
@@ -249,7 +250,8 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   // Which loaded datasets bind to this package's paths (explicit identities, checked by the server), and the
   // reads of the bound paths' source windows, requested once the topology says what those windows are.
   const readSettings = state?.reads ?? DEFAULT_READS;
-  const datasetKey = useBrowserStore(s => s.datasets.map(d => d.id).join(','));
+  // (A dataset's settings change bumps refreshGeneration and its server revision: its bindings are read again.)
+  const datasetKey = useBrowserStore(s => `${s.datasets.map(d => d.id).join(',')}|${s.refreshGeneration}`);
   // The server's datasets (from the tab heartbeat): one added there after this page opened (a script, another tab)
   // binds too.
   const serverDatasets = useServerDatasetsStore(s => s.key);
@@ -270,8 +272,9 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   // A host draws its members' datasets (the members decide, not the Reads menu's dataset list).
   const members = useMemo(() => (hostMode && panel ? membersOf(panels, panel) : []), [hostMode, panel, panels]);
   const memberDatasetsKey = members.map(m => m.panel.datasetId).join(',');
+  // (A host draws its members' current revisions: a member's dataset that changed is simply re-read.)
   const activeBindings = useMemo(() => (readSettings.show ? readBindings.filter(b => Object.keys(b.paths).length
-    && !changedBindings.includes(b)
+    && (hostMode || !changedBindings.includes(b))
     && (hostMode ? memberDatasetsKey.split(',').includes(b.dataset_id)
       : (readSettings.datasets == null || readSettings.datasets.includes(b.dataset_id)))) : []), [readBindings, readSettings, changedBindings, hostMode, memberDatasetsKey]);
   const [reads, setReads] = useState<{ response: GraphReadsResponse | null; loading: boolean; error: GraphApiError | null; forStart?: number; key?: string }>({ response: null, loading: false, error: null });
@@ -637,7 +640,12 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       const store = useBrowserStore.getState();
       const own = store.panels.find(p => p.id === panelId);
       // Its own view: the ordinary panel navigation (site-locked pop-outs move with it; pans coalesce into one step).
-      if (own?.viewportOverride && own.viewportOverride.chrom === next.contig) store.setPanelViewport(panelId, next.start, next.end);
+      if (own?.viewportOverride && own.viewportOverride.chrom === next.contig) {
+        // Its members still in step with it move first, so the panel's navigation step records them too.
+        const moved = moveHostMembers(store.panels, panelId, own.viewportOverride, { chrom: next.contig, start: next.start, end: next.end });
+        if (moved !== store.panels) useBrowserStore.setState({ panels: moved });
+        store.setPanelViewport(panelId, next.start, next.end);
+      }
       else if (own?.viewportOverride) store.navigatePanelOwnView(panelId, next.contig, next.start, next.end);
       else store.setViewport(next.contig, next.start, next.end);
       return;
@@ -740,6 +748,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   };
   /** The member read row under a point (host mode), with the member panel it belongs to. */
   const readHitAt = (x: number, y: number) => {
+    if (readsStale) return null;   // the previous window's reads, dimmed while the next load is in flight
     const sx = x - sceneOffset;
     return readHitsRef.current.find(h => sx >= h.x0 && sx <= h.x1 && y >= h.y0 && y <= h.y1) ?? null;
   };
@@ -828,6 +837,8 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     // target base to anchor (its boundary would jump the slot's edge), so none is scheduled there.
     const t = scene ? targetAtX(scene.targetMap, px - sceneOffset) : null;
     if (t?.boundary) return;
+    // A host zoomed past the hand-off draws linear: nothing to correct (a correction would restart its settling).
+    if (hostMode && next.end - next.start > useGraphSettings.getState().outBp) return;
     const after = useBrowserStore.getState().panels.find(p => p.id === panelId)?.graphView;
     correction.current = after ? { token: navigationToken(panelId, after, next), anchor, px } : null;
   };

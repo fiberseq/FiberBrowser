@@ -80,18 +80,17 @@ export function decideShown(prev: 'graph' | 'linear', widthBp: number, opts: { o
  * graph folds the members it revealed (still marked). */
 export function applyShown(panels: PanelConfig[], hostId: string, shown: 'graph' | 'linear'): PanelConfig[] {
   const host = panels.find(p => p.id === hostId);
-  const revealing = shown === 'linear' && panels.some(p => p.graphMemberOf === hostId && p.collapsedByGraphGroup === hostId);
   return panels.map(p => {
     if (p.id === hostId && p.graphView) {
-      const lock = shown === 'linear' && p.viewportOverride && revealing ? { siteLocked: true } : {};
-      return p.graphView.handoff?.shown === shown && !('siteLocked' in lock) ? p : { ...p, ...lock, graphView: { ...p.graphView, handoff: { ...p.graphView.handoff, shown } } };
+      return p.graphView.handoff?.shown === shown ? p : { ...p, graphView: { ...p.graphView, handoff: { ...p.graphView.handoff, shown } } };
     }
     if (p.graphMemberOf !== hostId) return p;
     if (shown === 'linear' && p.collapsedByGraphGroup === hostId) {
-      // Revealed at the host's own view, site-locked with it, so the side-by-side panels show the same window.
+      // Revealed at the host's own view, so the side-by-side panels show the same window (the host's moves carry
+      // members in step with it: GraphPanel commitViewport, moveHostMembers).
       const { collapsedByGraphGroup: _c, ...rest } = p;
       return { ...rest, collapsed: false, graphHandoff: hostId,
-        ...(host?.viewportOverride ? { viewportOverride: { ...host.viewportOverride }, siteLocked: true } : {}) };
+        ...(host?.viewportOverride ? { viewportOverride: { ...host.viewportOverride } } : {}) };
     }
     if (shown === 'graph' && p.graphHandoff === hostId) {
       const { graphHandoff: _h, ...rest } = p;
@@ -126,6 +125,10 @@ export function hostFollowable(host: PanelConfig, view: LinearView): boolean {
 export function desiredShown(host: PanelConfig, main: LinearView, settings = useGraphSettings.getState()): 'graph' | 'linear' {
   const view = panelView(host, main);
   const prev = host.graphView?.handoff?.shown ?? 'graph';
+  // Not known yet: as it was. The helper or the package gone: the graph body, whose panel says why and relinks.
+  const status = useGraphStatusStore.getState().status;
+  if (!status) return prev;
+  if (!status.helper.available || !status.registrations.some(r => r.id === host.graphView?.registrationId)) return 'graph';
   return decideShown(prev, view.end - view.start, { outBp: settings.outBp, inBp: settings.inBp,
     pinnedLinear: host.graphView?.handoff?.pinnedLinear, followable: hostFollowable(host, view) });
 }
@@ -141,7 +144,7 @@ export function startHandoffController(): void {
     const s = useBrowserStore.getState();
     const main: LinearView = { chrom: s.chrom, start: s.start, end: s.end, reference: genomeKeyFor(null, s) };
     for (const host of s.panels) {
-      if (!isHost(host)) continue;
+      if (!isHost(host) || host.collapsed) continue;
       const view = panelView(host, main);
       const retarget = retargetHost(host, view);
       if (retarget) {

@@ -65,7 +65,7 @@ export function splitSiblings(panels: readonly PanelConfig[], panel: PanelConfig
   if (!panel.liftHap || !panel.datasetId) return [];
   const sameView = (p: PanelConfig) => JSON.stringify(p.viewportOverride ?? null) === JSON.stringify(panel.viewportOverride ?? null);
   return panels.filter(p => p.id !== panel.id && p.contentType === 'dataset' && p.datasetId === panel.datasetId && p.liftHap
-    && !p.readSubset && !p.altAllele && !p.liftLink && !isHost(p) && !p.graphMemberOf && sameView(p) && (p.genome ?? null) === (panel.genome ?? null));
+    && !p.readSubset && !p.altAllele && !p.liftLink && !isHost(p) && p.graphView?.role !== 'host' && !p.graphMemberOf && sameView(p) && (p.genome ?? null) === (panel.genome ?? null));
 }
 
 /** Why a panel cannot be viewed as a graph (null: it can). */
@@ -90,7 +90,7 @@ export function hostGraphView(reg: GraphRegistration, bound: DatasetGraphBinding
   const target = defaultTarget(reg, view);
   const targetKey = target?.key ?? null;
   // Its own dataset's paths first (in map order), then the package's other compared paths.
-  const mapped = targetKey ? defaultCompared(reg, targetKey) : [];
+  const mapped = targetKey ? [...new Set(reg.maps.filter(m => m.target === targetKey).map(m => m.source))] : [];
   const own = mapped.filter(k => k in bound.binding.paths);
   const selected = targetKey ? [targetKey, ...new Set([...own, ...mapped])].slice(0, GRAPH_MAX_PATHS) : [];
   const keep = previous && previous.registrationId === reg.id && previous.targetBinding === targetKey;
@@ -167,9 +167,10 @@ export function enterGraph(panels: PanelConfig[], hostId: string, bound: Dataset
 /** Pure: the host drawn linear (the toggle, D5): its folded members are revealed side by side, marked, so viewing it
  * as a graph again folds them back. Its graph state stays for next time. */
 export function leaveGraph(panels: PanelConfig[], hostId: string): PanelConfig[] {
+  const host = panels.find(p => p.id === hostId);
   return panels.map(p => {
     if (p.id === hostId) return { ...p, viewMode: 'linear' as const };
-    if (p.graphMemberOf === hostId && p.collapsedByGraphGroup === hostId) return reveal(p, hostId);
+    if (p.graphMemberOf === hostId && p.collapsedByGraphGroup === hostId) return host ? sharedView(reveal(p, hostId), host) : reveal(p, hostId);
     return p;
   });
 }
@@ -239,15 +240,30 @@ export function popOut(hostId: string, memberIds: string[], newHaps: { binding: 
     panels = [...panels.slice(0, idx + 1), ...made.map(p => sharedView(p, host)), ...panels.slice(idx + 1)];
     panels = panels.map(p => (p.id === hostId ? { ...p, graphView: { ...p.graphView!, members: [...(p.graphView!.members ?? []),
       ...made.map((m, i) => ({ panelId: m.id, binding: newHaps[i].binding }))] },
-      ...(p.viewportOverride && (ids.size || made.length) ? { siteLocked: true } : {}) } : p));
+      } : p));
     return { panels, ...copied };
   }));
   return [...memberIds, ...made.map(p => p.id)];
 }
 
-/** A pop-out of a host with a view of its own takes that view, site-locked, so the two move together (§4.3). */
-function sharedView(p: PanelConfig, host: PanelConfig): PanelConfig {
-  return host.viewportOverride ? { ...p, viewportOverride: { ...host.viewportOverride }, siteLocked: true } : p;
+/** A pop-out of a host with a view of its own takes that view, and the host's moves carry it along while the two
+ * stay in step (§4.3; moveHostMembers). A host following the main view: its pop-outs follow it too. */
+export function sharedView(p: PanelConfig, host: PanelConfig): PanelConfig {
+  return host.viewportOverride ? { ...p, viewportOverride: { ...host.viewportOverride } } : p;
+}
+
+/** Pure: a host with its own view moved from `prev` to `next`: its members still showing `prev` move with it (a
+ * member the user moved elsewhere stays). */
+export function moveHostMembers(panels: PanelConfig[], hostId: string, prev: { chrom: string; start: number; end: number },
+  next: { chrom: string; start: number; end: number }): PanelConfig[] {
+  const same = (v?: { chrom: string; start: number; end: number }) => Boolean(v && v.chrom === prev.chrom && v.start === prev.start && v.end === prev.end);
+  let changed = false;
+  const out = panels.map(p => {
+    if (p.graphMemberOf !== hostId || !same(p.viewportOverride)) return p;
+    changed = true;
+    return { ...p, viewportOverride: { ...next } };
+  });
+  return changed ? out : panels;
 }
 
 /** Copy a panel's per-panel state maps to new keys (a pooled host's new haplotype panel starts where the host is;
@@ -337,7 +353,7 @@ export function removeFromGraph(panelId: string): void {
 /** Datasets panels a standalone graph-view panel can become the graph view of (they bind its package). */
 export function conversionTargets(panels: readonly PanelConfig[], standalone: PanelConfig): PanelConfig[] {
   const reg = standalone.graphView?.registrationId;
-  return panels.filter(p => p.contentType === 'dataset' && p.datasetId && !p.collapsed && !isHost(p) && !p.graphMemberOf && !p.readSubset
+  return panels.filter(p => p.contentType === 'dataset' && p.datasetId && !p.collapsed && !isHost(p) && p.graphView?.role !== 'host' && !p.graphMemberOf && !p.readSubset
     && !p.liftLink && useGraphBindingsStore.getState().byDataset[p.datasetId]?.some(x => x.registration.id === reg));
 }
 
@@ -363,13 +379,10 @@ export function convertStandalone(standaloneId: string, datasetPanelId: string):
         layoutSettings: sv.layoutSettings, ...(sv.reads ? { reads: sv.reads } : {}) };
       return { ...p, graphView: gv };
     });
-    return { panels, fullViewPanelId: s.fullViewPanelId === standaloneId ? null : s.fullViewPanelId };
+    // The panel takes the standalone view's viewport (its own viewport is the only authority), in the same step.
+    const moved = at ? panels.map(p => (p.id === datasetPanelId && p.viewportOverride ? { ...p, viewportOverride: { chrom: at.contig, start: at.start, end: at.end } } : p)) : panels;
+    const main = at && !panel.viewportOverride ? { chrom: at.contig, start: at.start, end: at.end } : {};
+    return { panels: moved, ...main, fullViewPanelId: s.fullViewPanelId === standaloneId ? null : s.fullViewPanelId };
   }));
-  // The panel moves to where the standalone view was (the host's own viewport is the only authority).
-  if (at) {
-    const host = useBrowserStore.getState().panels.find(p => p.id === datasetPanelId);
-    if (host?.viewportOverride) useBrowserStore.getState().navigatePanelOwnView(host.id, at.contig, at.start, at.end);
-    else useBrowserStore.getState().setViewport(at.contig, at.start, at.end);
-  }
   return null;
 }

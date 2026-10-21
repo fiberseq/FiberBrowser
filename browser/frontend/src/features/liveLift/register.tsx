@@ -41,7 +41,7 @@ export function useLiveLiftHeader(ctx: PanelHeaderContext) {
   const menu = (
     <>
       {/* A graph host or member keeps its panels: pool/split would close or remake them (leave graph mode first). */}
-      {labels.length > 1 && panel.viewMode !== 'graph' && !panel.graphMemberOf && (split ? (
+      {labels.length > 1 && panel.viewMode !== 'graph' && panel.graphView?.role !== 'host' && !panel.graphMemberOf && (split ? (
         <MenuItem tour="panel-live-lift-pool" icon={<span>⇄</span>} title="One panel with every haplotype's rows"
           onSelect={() => useBrowserStore.getState().poolLiftHapPanels(panel.datasetId!)}>
           <span data-testid="live-lift-pool">Pool haplotypes</span>

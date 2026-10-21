@@ -105,10 +105,14 @@ export function orderIndex(order: readonly string[]): Map<string, number> {
   const hit = orderIndexes.get(order as object);
   if (hit) return hit;
   const out = new Map<string, number>();
+  const rankOf = new Map<string, number>();
   order.forEach((id, i) => {
     if (!out.has(id)) out.set(id, i);
     const rk = recordKey(id);
-    if (rk && !out.has(rk)) out.set(rk, i);
+    if (!rk) return;
+    // A record's place is its primary placement's lowest row's place (§3.1), not its first row's.
+    const r = rowRank(id);
+    if (!rankOf.has(rk) || r < rankOf.get(rk)!) { rankOf.set(rk, r); out.set(rk, i); }
   });
   orderIndexes.set(order as object, out);
   return out;

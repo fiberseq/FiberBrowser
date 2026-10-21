@@ -50,7 +50,8 @@ export function restoreOrphanGraphMembers(panels: PanelConfig[]): PanelConfig[] 
     let next = p;
     if (p.graphMemberOf || p.collapsedByGraphGroup || p.graphHandoff) {
       const host = byId.get(p.graphMemberOf ?? p.collapsedByGraphGroup ?? p.graphHandoff ?? '');
-      if (!isHost(host) || host!.id === p.id) {
+      // (A host is never also a member: one graph per panel.)
+      if (!isHost(host) || host!.id === p.id || isHost(p) || host!.graphMemberOf) {
         const { graphMemberOf: _m, collapsedByGraphGroup: _c, graphHandoff: _h, ...rest } = p;
         next = { ...rest, collapsed: p.collapsedByGraphGroup ? false : p.collapsed } as PanelConfig;
       }

@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useBrowserStore } from '../../stores/browserStore';
 import { useGraphStatusStore } from './statusStore';
 import { useGraphBindingsStore } from './bindingsStore';
-import { convertStandalone, enterGraph, foldIn, isHost, joinCandidates, joinGraph, leaveGraph, membersOf, popOut, poppable,
+import { moveHostMembers, convertStandalone, enterGraph, foldIn, isHost, joinCandidates, joinGraph, leaveGraph, membersOf, popOut, poppable,
   removeFromGraph, setPanelViewMode } from './hostMode';
 import { applyShown, decideShown, startHandoffController, setPinnedLinear, useGraphSettings, HANDOFF_SETTLE_MS } from './handoff';
 import { restoreOrphanGraphMembers, withoutGraphMembership } from '../../stores/graphMembership';
@@ -45,7 +45,7 @@ function seed(panels: PanelConfig[], view = { chrom: 'chr3', start: 128_650_000,
   useGraphStatusStore.setState({ status: { helper: { available: true }, registrations: [REG] } as never, error: null, loading: false });
   // The key the registration's own refresh computes for these datasets, so it never re-reads them from a server.
   useGraphBindingsStore.setState({ byDataset: { d: [{ registration: REG, binding: BOUND }], n: [{ registration: REG, binding: NATIVE }] },
-    problems: {}, key: `d,n||gp@${REG.revisions.package}`, covered: ['d', 'n'], loading: false });
+    problems: {}, key: `d,n||${useBrowserStore.getState().refreshGeneration ?? 0}|gp@${REG.revisions.package}`, covered: ['d', 'n'], loading: false });
   useBrowserStore.setState({ panels, ...view, currentGenome: 'GRCh38', datasets: [
     { id: 'd', label: 'lifted', data_type: 'bam_livelift', color: '#123456' } as never,
     { id: 'n', label: 'native', data_type: 'bam', color: '#654321' } as never],
@@ -207,6 +207,15 @@ describe('G1: lifecycle rules (§4.4)', () => {
     expect(joinCandidates(useBrowserStore.getState().panels, get('pool2')).map(c => c.panel.id)).not.toContain('mat');
   });
 
+  it('round 2: a linear-for-now host is never folded into another; clustering uses the host\'s window', () => {
+    seed([...split(), panel('nat', { datasetId: 'n' })]);
+    setPanelViewMode('mat', 'graph');
+    setPanelViewMode('mat', 'linear');
+    setPanelViewMode('pat', 'graph');   // a member of a linear host: its host views the graph again
+    expect(isHost(get('mat'))).toBe(true);
+    expect(get('pat').graphMemberOf).toBe('mat');
+  });
+
   it('a Cluster run includes folded members through their shown host', () => {
     const st = useBrowserStore.getState();
     const windows = clusterWindows(st as never, ['d']);
@@ -266,8 +275,11 @@ describe('G6: zoom hand-off (§7)', () => {
     seed(split().map(p => ({ ...p, viewportOverride: { chrom: 'chr3', start: 250_000, end: 260_000 } })));
     setPanelViewMode('mat', 'graph');
     const panels = applyShown(useBrowserStore.getState().panels.map(p => (p.id === 'mat' ? { ...p, viewportOverride: { chrom: 'chr3', start: 250_000, end: 310_000 } } : p)), 'mat', 'linear');
-    expect(panels.find(p => p.id === 'pat')).toMatchObject({ collapsed: false, siteLocked: true, viewportOverride: { start: 250_000, end: 310_000 } });
-    expect(panels.find(p => p.id === 'mat')!.siteLocked).toBe(true);
+    expect(panels.find(p => p.id === 'pat')).toMatchObject({ collapsed: false, viewportOverride: { start: 250_000, end: 310_000 } });
+    // The host's next move carries the member still in step with it (no site lock coupling it to the main view).
+    expect(panels.find(p => p.id === 'mat')!.siteLocked).toBeFalsy();
+    const moved = moveHostMembers(panels, 'mat', { chrom: 'chr3', start: 250_000, end: 310_000 }, { chrom: 'chr3', start: 260_000, end: 320_000 });
+    expect(moved.find(p => p.id === 'pat')!.viewportOverride).toEqual({ chrom: 'chr3', start: 260_000, end: 320_000 });
   });
 
   it('a member revealed by hand during the hand-off stays revealed on return', () => {
@@ -287,7 +299,7 @@ describe('G6: zoom hand-off (§7)', () => {
     expect(get('pat').collapsedByGraphGroup).toBe('mat');
     seed(split().map(p => ({ ...p, datasetId: 'zzz' })));
     useBrowserStore.setState(s => ({ datasets: [...s.datasets, { id: 'zzz', label: 'z', data_type: 'bam_livelift' } as never] }));
-    useGraphBindingsStore.setState({ covered: ['d', 'n', 'zzz'], key: `d,n,zzz||gp@${REG.revisions.package}` });
+    useGraphBindingsStore.setState({ covered: ['d', 'n', 'zzz'], key: `d,n,zzz||${useBrowserStore.getState().refreshGeneration ?? 0}|gp@${REG.revisions.package}` });
     notePendingGraphOpen('zzz');
     await new Promise(r => setTimeout(r, 0));
     expect(get('mat').viewMode).toBeUndefined();

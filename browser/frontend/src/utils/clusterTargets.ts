@@ -56,7 +56,9 @@ export function clusterWindows(st: PlanState, datasetIds: string[]): ClusterWind
     return !st.selectedDatasets.size || st.selectedDatasets.has(panel.id) || Boolean(host && st.selectedDatasets.has(host.id));
   }).map(panel => {
     const sk = panel.stateKey ?? panel.datasetId!;
-    const viewport = panel.viewportOverride ?? { chrom, start, end };
+    // A folded member analyses the window its host shows (its sub-band is in the host's graph).
+    const shownBy = panel.collapsed ? foldedInShownGraph(panel, st.panels) : null;
+    const viewport = (shownBy ?? panel).viewportOverride ?? { chrom, start, end };
     const assignments = st.clusterAssignments?.[sk];
     const selected = st.selectedClusters?.[sk], focus = st.clusterFocus?.[sk];
     const subset = selected?.size ? selected : focus?.size ? focus : null;
