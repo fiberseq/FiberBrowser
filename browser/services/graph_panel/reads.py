@@ -890,6 +890,20 @@ def _load(state, reg, body: dict, *, max_molecules: int, max_marks: int, max_byt
                 reads.append(clip_to_windows(r, windows))   # copies: the cached read is never changed
     if not_loaded:
         counts["supplementary_not_loaded"] = not_loaded
+    # A molecule's DAF strand, as the linear rows resolve it (Codex G8 review): a record without a call of its own (a
+    # supplementary with no st:Z or marks there) takes its molecule's, its primary record's first. The cached rows are
+    # never changed (these are copies).
+    by_molecule: dict = {}
+    for r in reads:
+        if r.get("ds"):
+            m = (r["d"], r["lib"], r["q"])
+            if m not in by_molecule or (not r["sup"] and by_molecule[m][1]):
+                by_molecule[m] = (r["ds"], r["sup"])
+    for r in reads:
+        if not r.get("ds"):
+            got = by_molecule.get((r["d"], r["lib"], r["q"]))
+            if got:
+                r["ds"] = got[0]
     # Density strips (§6.2 L2): every row decoded at the band's level, before the cap and the mark budget.
     strips = []
     span_bp = sum(b - a for j in jobs for a, b in j[3]) / max(1, len(jobs))

@@ -720,11 +720,14 @@ def test_graph_rows_carry_the_daf_strand(env):
     daf = write_bam(env.tmp / "daf.bam", lambda h: [
         make_record(h, "ct1", MAT, 100, "500M", tags=[("ns", _u32([50])), ("nl", _u32([150])), ("st", "CT")]),
         make_record(h, "ga1", MAT, 200, "500M", tags=[("ns", _u32([50])), ("nl", _u32([150])), ("st", "GA")]),
-        make_record(h, "plain", MAT, 300, "500M", tags=[("ns", _u32([50])), ("nl", _u32([150]))])])
+        make_record(h, "plain", MAT, 300, "500M", tags=[("ns", _u32([50])), ("nl", _u32([150]))]),
+        # A supplementary record with no strand of its own takes its molecule's (its primary's), as linear rows do.
+        make_record(h, "ct1", MAT, 900, "300M", flag=2048, tags=[("ns", _u32([50])), ("nl", _u32([150]))])])
     did = _add_lifted(env, paths=[daf], dataset_id="daf")
     out = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 0, "end": 1500}]}]).json()
-    got = {r["q"]: r.get("ds") for r in out["reads"]}
-    assert got == {"ct1": "CT", "ga1": "GA", "plain": None}
+    got = {(r["q"], r["sup"]): r.get("ds") for r in out["reads"]}
+    assert got[("ct1", False)] == "CT" and got[("ga1", False)] == "GA" and got[("plain", False)] is None
+    assert got[("ct1", True)] == "CT"
 
 
 def test_the_payload_trim_keeps_a_band_that_fits_its_share(env, monkeypatch):

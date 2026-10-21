@@ -96,10 +96,15 @@ Hovering a read outlines the same molecule everywhere it is drawn.
 
 ## Read tools in graph mode
 
-The toolbar tools work on every panel in view, graph bands included:
-**Sort**, **Filter**, **Highlight**, **Select**, read menus (right-click),
-**Keep only selected** and **Exclude selected**. DAF-seq panels that show one
-strand (CT or GA) show only that strand's reads in their band too.
+On every band: **Select** (Shift-click), **Highlight**, the read menu
+(right-click: **Keep only selected**, **Exclude selected**, **Copy name**,
+**Pop out**), and the panel's own filters, orders and clusters, which each band
+applies as its panel does. DAF-seq panels that show one strand (CT or GA) show
+only that strand's reads in their band too.
+
+The toolbar's **Sort** and **Filter** run on native panels shown as panels
+(not folded into a graph). Lifted datasets do not take them, in graph mode or
+linear; pop a native panel out to sort or filter it, and its band follows.
 
 ### Clustering
 
@@ -183,6 +188,7 @@ computer without the graph package shows the panel with **View as linear**.
 | **View as graph** is greyed out | Its tooltip says why: no package is registered, or no package path matches the dataset (sample, haplotype, contig and size). |
 | A band is missing | The panel is not on this graph's paths, or it was removed from the graph. Check **Add panel to this graph**. |
 | The panel keeps showing linear | The view is wider than the hand-off width, **Stay linear** is on, or most of the window is unresolved; the bar under the header says which. |
+| Sort or Filter does nothing on a band | They run on native panels shown as panels; lifted datasets do not take them. |
 | Fewer reads than in the linear view | The band is sampled or past its rows: its label and the status line give the counts. Choose a higher **Performance mode**, or fix a row count in the **Reads** menu. |
 | Read Stats leaves reads out | Lifted datasets are not described by Read Stats; export them as a BAM subset. |
 
