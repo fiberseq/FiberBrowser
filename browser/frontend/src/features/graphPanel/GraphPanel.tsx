@@ -118,6 +118,8 @@ interface QueryState {
   loading: boolean;
   error: GraphApiError | null;
   generation: number;
+  /** A host's response: the complexity judgement key of the request it answers. */
+  judgment?: string | null;
 }
 
 export function GraphPanel({ panelId, width: widthProp, height: heightProp }: AnalysisPanelProps) {
@@ -217,6 +219,8 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       const trace = startTrace(panelId, generation, { start: viewport.start, end: viewport.end }, navigatedAtRef.current);
       inflightRef.current = { id: requestId, controller, trace };
       setQuery(q => ({ ...q, loading: true, generation }));
+      // What this request is (for the complexity judgement): its own identity, never a later one's (Codex G7 r2).
+      const judgment = hostMode && hostView ? judgmentKey(state, hostView) : null;
       querySubgraph({
         registrationId: reg.id, revisions: reg.revisions, requestId, panelId, generation, target: target.key,
         interval: { start: viewport.start, end: viewport.end }, selected: state.selectedPathKeys,
@@ -227,7 +231,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         trace.server = response.timings;
         trace.cached = response.cached;
         inflightRef.current = null;
-        setQuery({ response, loading: false, error: null, generation });
+        setQuery({ response, loading: false, error: null, generation, judgment });
       }).catch(err => {
         if (controller.signal.aborted || generation !== generationRef.current) return;
         inflightRef.current = null;
@@ -236,7 +240,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         trace.error = error.code;
         setQuery(q => ({ ...q, loading: false, error, generation }));
         // The helper refused the window as too complex: it is unresolved (the complexity hand-off, §7.2).
-        if (hostMode && hostView && error.code === 'complexity_limit') useGraphComplexity.getState().set(panelId, judgmentKey(state, hostView), 1);
+        if (judgment && error.code === 'complexity_limit') useGraphComplexity.getState().set(panelId, judgment, 1);
         // The package changed, went missing or is no longer registered: refresh the status, so the panel shows
         // the unavailable view (with its relink) instead of the last topology.
         if (onPackageError(error.code)) setQuery({ response: null, loading: false, error, generation });
@@ -254,10 +258,11 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   // The complexity hand-off (§7.2): a host's topology says how much of its window is unresolved (judged on the
   // topology, never on the scene's packing); the hand-off controller decides.
   useEffect(() => {
-    if (!hostMode || !panelId || !hostView || !response || !viewport) return;
+    if (!hostMode || !panelId || !hostView || !response || !viewport || !query.judgment) return;
     if (response.result.interval.start !== viewport.start || response.result.interval.end !== viewport.end) return;
     const fraction = unresolvedFraction(response.result);
-    useGraphComplexity.getState().set(panelId, judgmentKey(state, hostView), fraction);
+    // Under the identity of the request it answers (a response superseded by a newer request is not the newer one's).
+    useGraphComplexity.getState().set(panelId, query.judgment, fraction);
     if (window.__FIBERBROWSER_E2E_EXPOSE_STORE) (window.__FIBERBROWSER_GRAPH_COMPLEXITY__ ??= {})[panelId] = { view: viewKey(hostView), fraction };
   }, [response]); // eslint-disable-line react-hooks/exhaustive-deps
 
