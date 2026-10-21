@@ -621,12 +621,71 @@ def test_density_strip_counts_rows_before_the_cap_and_the_mark_budget(env, monke
 
 
 def test_concurrent_loads_share_the_decoded_bytes_budget():
-    with gr._SharedBytes(32 * 1024 * 1024) as a:
-        assert a.share == 32 * 1024 * 1024
-        with gr._SharedBytes(32 * 1024 * 1024) as b:
-            assert b.concurrent == 2 and b.share == 16 * 1024 * 1024
-    with gr._SharedBytes(32 * 1024 * 1024) as c:
-        assert c.concurrent == 1
+    """One allocator: the allowances of loads running together never pass the budget; a load waits while less than
+    the floor is free, and gets what is free when the others end (Codex G7 review)."""
+    import threading
+    import time
+    total = 32 * 1024 * 1024
+    with gr._SharedBytes(total) as a:
+        assert a.share == total
+        entered = threading.Event()
+        got = {}
+
+        def second():
+            with gr._SharedBytes(total) as b:
+                got["share"], got["concurrent"] = b.share, b.concurrent
+                entered.set()
+        t = threading.Thread(target=second)
+        t.start()
+        assert not entered.wait(0.3)      # nothing free: it waits
+    t.join(5)
+    assert entered.is_set() and got["share"] == total
+    # Many at once: the shares in use never pass the budget.
+    peak, lock, in_use = [0], threading.Lock(), [0]
+
+    def worker():
+        with gr._SharedBytes(total) as w:
+            with lock:
+                in_use[0] += w.share
+                peak[0] = max(peak[0], in_use[0])
+            time.sleep(0.05)
+            with lock:
+                in_use[0] -= w.share
+    threads = [threading.Thread(target=worker) for _ in range(6)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(10)
+    assert 0 < peak[0] <= total and gr._shared_in_use == 0 and gr._active_loads == 0
+
+
+def test_a_band_that_fits_its_byte_share_is_never_sampled_for_another(env, monkeypatch):
+    """Codex G7 review: byte pressure from one band makes that band sparser, never a small band that fits."""
+    many = write_bam(env.tmp / "pressure.bam", lambda h: [
+        *[make_record(h, f"p{i:03d}", MAT, 100 + i * 10, "500M", tags=[("ns", _u32([50])), ("nl", _u32([150]))])
+          for i in range(120)],
+        make_record(h, "small", PAT, 100, "500M", tags=[("ns", _u32([50])), ("nl", _u32([150]))])])
+    did = _add_lifted(env, paths=[many], dataset_id="pressure")
+    paths = [{"binding": "mat", "windows": [{"start": 0, "end": 2500}]}, {"binding": "pat", "windows": [{"start": 0, "end": 1000}]}]
+    full = _reads(env, [did], paths).json()
+    assert full["report"]["sampling"]["level"] == 0
+    monkeypatch.setattr(gr, "MAX_DECODED_BYTES", int(full["report"]["decoded_bytes"] * 0.4))
+    out = _reads(env, [did], paths).json()
+    bands = {b["binding"]: b for b in out["report"]["bands"]}
+    assert bands["mat"]["level"] >= 1
+    assert bands["pat"]["level"] == 0 and bands["pat"]["molecules"] == 1
+    assert out["report"]["decoded_bytes"] <= gr.MAX_DECODED_BYTES
+
+
+def test_a_smaller_record_cache_budget_trims_at_once():
+    """Codex G7 review: switching to Low memory trims the record cache to its budget immediately."""
+    gr.clear_cache()
+    gr._records_put({("k", i): ((), 0, None, 1024 * 1024, 0) for i in range(8)})
+    assert gr._records_bytes == 8 * 1024 * 1024
+    gr._records_resize(3 * 1024 * 1024)
+    assert gr._records_bytes <= 3 * 1024 * 1024 and len(gr._RECORDS) == 3
+    gr._records_resize(96 * 1024 * 1024)
+    gr.clear_cache()
 
 
 def test_a_lifted_bam_subset_is_written_on_the_source_assembly(env):

@@ -13,7 +13,7 @@
  * topology for the settled window itself (`probeComplexity`) to know when to come back.
  */
 import { create } from 'zustand';
-import type { GraphTopology, Span } from './types';
+import type { GraphTopology, GraphViewState, Span } from './types';
 import { querySubgraph } from './api';
 import type { PanelConfig } from '../../types';
 
@@ -69,8 +69,15 @@ export function complexityShown(prev: 'graph' | 'linear', fraction: number | nul
 
 export const viewKey = (v: { chrom: string; start: number; end: number }) => `${v.chrom}:${v.start}-${v.end}`;
 
+/** What a judgement is of: the whole topology request (package and revision, target, paths, context) at a window,
+ * so a changed path selection or package is judged again (Codex G7 review). */
+export function judgmentKey(gv: GraphViewState | undefined | null, v: { chrom: string; start: number; end: number }): string {
+  return JSON.stringify([gv?.registrationId ?? null, gv?.packageRevision ?? null, gv?.targetBinding ?? null, gv?.selectedPathKeys ?? [],
+    gv?.layoutSettings?.contextBp ?? 0, viewKey(v)]);
+}
+
 interface ComplexityState {
-  /** Per host: the window (viewKey) its topology was judged for, and the unresolved fraction there. */
+  /** Per host: the topology request (judgmentKey) it was judged for, and the unresolved fraction there. */
   byHost: Record<string, { view: string; fraction: number }>;
   set: (hostId: string, view: string, fraction: number) => void;
 }
@@ -84,10 +91,10 @@ export const useGraphComplexity = create<ComplexityState>(set => ({
   }),
 }));
 
-/** The host's unresolved fraction for its window (undefined: not judged for this window). */
-export function complexityFor(hostId: string, view: { chrom: string; start: number; end: number }): number | undefined {
-  const c = useGraphComplexity.getState().byHost[hostId];
-  return c && c.view === viewKey(view) ? c.fraction : undefined;
+/** The host's unresolved fraction for its window and topology request (undefined: not judged for them). */
+export function complexityFor(host: PanelConfig, view: { chrom: string; start: number; end: number }): number | undefined {
+  const c = useGraphComplexity.getState().byHost[host.id];
+  return c && c.view === judgmentKey(host.graphView, view) ? c.fraction : undefined;
 }
 
 const probing = new Map<string, AbortController>();
@@ -97,7 +104,7 @@ export function probeComplexity(host: PanelConfig, view: { chrom: string; start:
   reg: { id: string; revisions: { package: string; graph: string; db: string; maps: string } }): void {
   const gv = host.graphView;
   if (!gv?.targetBinding) return;
-  const key = viewKey(view);
+  const key = judgmentKey(gv, view);
   const running = probing.get(host.id);
   if (running) running.abort();
   const controller = new AbortController();

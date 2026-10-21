@@ -17,7 +17,7 @@ import { genomeKeyFor } from '../../utils/regionNavigation';
 import { isHost, moveHostMembers, panelView } from './hostMode';
 import { canFollow, defaultCompared, defaultTarget, GRAPH_MAX_PATHS, type LinearView } from './state';
 import { useGraphStatusStore } from './statusStore';
-import { complexityFor, complexityShown, probeComplexity, useGraphComplexity } from './complexity';
+import { complexityFor, complexityShown, judgmentKey, probeComplexity, useGraphComplexity } from './complexity';
 
 export const HANDOFF_OUT_BP = 50_000;
 export const HANDOFF_IN_BP = 40_000;
@@ -147,7 +147,7 @@ export function desiredHandoff(host: PanelConfig, main: LinearView, settings = u
   if (byWidth === 'linear') return { shown: 'linear', reason: 'width' };
   if (!settings.complexity) return { shown: 'graph' };
   const byComplexity = prev === 'linear' && host.graphView?.handoff?.reason === 'complexity';
-  const want = complexityShown(prev, complexityFor(host.id, view), byComplexity);
+  const want = complexityShown(prev, complexityFor(host, view), byComplexity);
   // Not judged for this window yet: a host linear for complexity stays so until its probe answers.
   if (want == null) return byComplexity ? { shown: 'linear', reason: 'complexity' } : { shown: 'graph' };
   return want === 'linear' ? { shown: 'linear', reason: 'complexity' } : { shown: 'graph' };
@@ -189,8 +189,8 @@ export function startHandoffController(): void {
         if (pending) { window.clearTimeout(pending.timer); timers.delete(host.id); }
         // Linear for complexity, in a window the graph could draw but not judged yet: ask its topology once settled.
         if (shown === 'linear' && reason === 'complexity' && settings().complexity && view.end - view.start <= settings().outBp
-          && complexityFor(host.id, view) === undefined) {
-          const psig = `probe|${view.chrom}:${view.start}-${view.end}`;
+          && complexityFor(host, view) === undefined) {
+          const psig = `probe|${judgmentKey(host.graphView, view)}`;
           const probe = probes.get(host.id);
           if (probe?.sig !== psig) {
             if (probe) window.clearTimeout(probe.timer);
@@ -202,7 +202,7 @@ export function startHandoffController(): void {
               if (!isHost(h) || !reg) return;
               const m: LinearView = { chrom: st.chrom, start: st.start, end: st.end, reference: genomeKeyFor(null, st) };
               const v = panelView(h, m);
-              if (`probe|${v.chrom}:${v.start}-${v.end}` === psig) probeComplexity(h, v, reg);
+              if (`probe|${judgmentKey(h.graphView, v)}` === psig) probeComplexity(h, v, reg);
             }, HANDOFF_SETTLE_MS) });
           }
         }

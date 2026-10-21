@@ -13,7 +13,7 @@ import type { AnalysisPanelProps } from '../../plugins/types';
 import { ReadContextMenu, type ContextMenuEntry } from '../../components/tracks/read-track/ReadContextMenu';
 import { setupHighDpiCanvas, useCanvasRenderVersion } from '../../utils/canvasUtils';
 import { cancelSubgraph, getReadBindings, querySubgraph, queryReads, GraphRequestError } from './api';
-import { unresolvedFraction, useGraphComplexity, viewKey } from './complexity';
+import { judgmentKey, unresolvedFraction, useGraphComplexity, viewKey } from './complexity';
 import { drawRuler, drawScene, GRAPH_GUTTER, GRAPH_LANE_GAP, GRAPH_LANE_HEIGHT, GRAPH_RIGHT_PAD, GRAPH_RULER_HEIGHT, laneColor, laneTop } from './canvas';
 import { clampViewport, formatBp, formatLocus, fromX, makeTransform, panViewport, parseLocus, zoomViewport, bpScale, type GraphViewport } from './coordinates';
 import { buildLayout, laneLabel, type LayoutModel } from './layout';
@@ -236,7 +236,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         trace.error = error.code;
         setQuery(q => ({ ...q, loading: false, error, generation }));
         // The helper refused the window as too complex: it is unresolved (the complexity hand-off, §7.2).
-        if (hostMode && hostView && error.code === 'complexity_limit') useGraphComplexity.getState().set(panelId, viewKey(hostView), 1);
+        if (hostMode && hostView && error.code === 'complexity_limit') useGraphComplexity.getState().set(panelId, judgmentKey(state, hostView), 1);
         // The package changed, went missing or is no longer registered: refresh the status, so the panel shows
         // the unavailable view (with its relink) instead of the last topology.
         if (onPackageError(error.code)) setQuery({ response: null, loading: false, error, generation });
@@ -257,7 +257,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     if (!hostMode || !panelId || !hostView || !response || !viewport) return;
     if (response.result.interval.start !== viewport.start || response.result.interval.end !== viewport.end) return;
     const fraction = unresolvedFraction(response.result);
-    useGraphComplexity.getState().set(panelId, viewKey(hostView), fraction);
+    useGraphComplexity.getState().set(panelId, judgmentKey(state, hostView), fraction);
     if (window.__FIBERBROWSER_E2E_EXPOSE_STORE) (window.__FIBERBROWSER_GRAPH_COMPLEXITY__ ??= {})[panelId] = { view: viewKey(hostView), fraction };
   }, [response]); // eslint-disable-line react-hooks/exhaustive-deps
 

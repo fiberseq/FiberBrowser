@@ -411,32 +411,62 @@ def profile_budgets(state) -> dict:
             "records_bytes": _RECORDS_BUDGET.get(effective, _RECORDS_BUDGET["standard"]), "effective": effective}
 
 
-_ACTIVE_LOCK = threading.Lock()
+_SHARED = threading.Condition()
+_shared_in_use = 0
 _active_loads = 0
 
 
 class _SharedBytes:
-    """The decoded-bytes budget shared across concurrent read loads (every host's request): a load's share is the
-    budget over the loads running when it starts (at least ``MIN_SHARED_BYTES``)."""
+    """The decoded-bytes budget shared across concurrent read loads (every host's request): one allocator, so the
+    loads' allowances together never pass the budget. A load reserves a share of what is free (the budget over the
+    loads running, at least ``MIN_SHARED_BYTES``, never more than is free) and waits while less than that floor is
+    free; it releases its share when it ends."""
 
     def __init__(self, total: int):
         self.total = int(total)
-        self.share = self.total
+        self.share = 0
+        self.concurrent = 1
 
     def __enter__(self):
-        global _active_loads
-        with _ACTIVE_LOCK:
+        global _shared_in_use, _active_loads
+        from services.background_work import checkpoint
+        floor = min(self.total, MIN_SHARED_BYTES)
+        with _SHARED:
             _active_loads += 1
-            n = _active_loads
-        self.concurrent = n
-        self.share = max(min(self.total, MIN_SHARED_BYTES), self.total // max(1, n))
+            try:
+                while self.total - _shared_in_use < floor:
+                    _SHARED.wait(0.05)
+                    checkpoint()   # a load whose client left stops waiting
+            except BaseException:
+                _active_loads -= 1
+                _SHARED.notify_all()
+                raise
+            free = self.total - _shared_in_use
+            self.concurrent = _active_loads
+            self.share = min(free, max(floor, self.total // max(1, _active_loads)))
+            _shared_in_use += self.share
         return self
 
     def __exit__(self, *exc):
-        global _active_loads
-        with _ACTIVE_LOCK:
+        global _shared_in_use, _active_loads
+        with _SHARED:
+            _shared_in_use = max(0, _shared_in_use - self.share)
             _active_loads = max(0, _active_loads - 1)
+            _SHARED.notify_all()
         return False
+
+
+def band_bytes(need: list, total: int) -> list:
+    """Each band's share of the decoded bytes: what it needs when that fits, else an equal share of the rest (a band
+    needing less than its share leaves the remainder to the others)."""
+    out = [0] * len(need)
+    left = max(0, int(total))
+    order = sorted(range(len(need)), key=lambda i: (need[i], i))
+    for k, i in enumerate(order):
+        share = left // (len(order) - k)
+        out[i] = min(int(need[i]), share)
+        left -= out[i]
+    return out
 
 
 def split_quota(total: int, estimates: list, floor: int = MIN_BAND_MOLECULES) -> list:
@@ -505,6 +535,16 @@ def _records_get(keys) -> dict:
                 _RECORDS.move_to_end(k)
                 out[k] = hit
     return out
+
+
+def _records_resize(max_bytes: int) -> None:
+    """A new record-cache budget (the profile changed): least recently used entries go at once."""
+    global _RECORDS_MAX_BYTES, _records_bytes
+    with _RECORDS_LOCK:
+        _RECORDS_MAX_BYTES = int(max_bytes)
+        while _records_bytes > _RECORDS_MAX_BYTES and _RECORDS:
+            _k, old = _RECORDS.popitem(last=False)
+            _records_bytes -= old[3]
 
 
 def _records_put(items: dict) -> None:
@@ -699,9 +739,9 @@ def _settings(dataset):
 def load(state, reg, body: dict, *, max_molecules: Optional[int] = None, max_marks: int = MAX_MARKS) -> dict:
     """The reads of a request (blocking; run it in a worker thread). ``max_molecules``: the request's molecule budget
     (default: the performance profile's ``sample_target``)."""
-    global _RECORDS_MAX_BYTES
     budgets = profile_budgets(state)
-    _RECORDS_MAX_BYTES = budgets["records_bytes"]
+    if budgets["records_bytes"] != _RECORDS_MAX_BYTES:
+        _records_resize(budgets["records_bytes"])
     with _SharedBytes(min(MAX_DECODED_BYTES, budgets["decoded_bytes"])) as shared:
         return _load(state, reg, body, max_molecules=budgets["molecules"] if max_molecules is None else max_molecules,
                      max_marks=max_marks, max_bytes=shared.share, budgets={**budgets, "concurrent": shared.concurrent,
@@ -806,19 +846,22 @@ def _load(state, reg, body: dict, *, max_molecules: int, max_marks: int, max_byt
         reached = {key for _k, key in zip(kept, keys) if key in have}
         return out, truncated, not missing, sum(n for key, n in listed_n.items() if key not in reached)
 
-    # Every band one level sparser (by QNAME hash) until every path's reads fit the request's payload budget
-    # together. A sparser level is a subset of the records already decoded: only the first pass decodes.
+    # Bands over their share of the request's payload budget go one level sparser (by QNAME hash) until every
+    # band's reads fit together; a band that fits its share keeps its level. A sparser level is a subset of the
+    # records already decoded: only the first pass decodes.
     while True:
         results = [run(j, recs, lvl) for j, recs, lvl in zip(jobs, listed, levels)]
-        total_bytes = 0
-        for got, _t, _c, _u in results:
-            for rec, entry in got:
-                total_bytes += entry[1]
-        truncated = any(r[1] for r in results)
-        if (total_bytes > max_bytes or truncated) and min(levels, default=MAX_LEVEL) < MAX_LEVEL:
-            levels = [min(MAX_LEVEL, lvl + 1) for lvl in levels]
-            continue
-        break
+        need = [sum(entry[1] for _rec, entry in got) for got, _t, _c, _u in results]
+        total_bytes = sum(need)
+        if total_bytes <= max_bytes and not any(r[1] for r in results):
+            break
+        shares = band_bytes(need, max_bytes)
+        over = [i for i, (n, sh) in enumerate(zip(need, shares)) if (n > sh or results[i][1]) and levels[i] < MAX_LEVEL]
+        if not over:
+            break
+        for i in over:
+            levels[i] += 1
+    truncated = any(r[1] for r in results)
     level = max(levels, default=0)
     cached_all = all(r[2] for r in results)
     counts: dict = {}

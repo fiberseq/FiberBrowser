@@ -3,7 +3,7 @@
  * the topology, back below 30%, judged on the topology; a linear host probes its settled window.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import { complexityShown, unresolvedFraction, useGraphComplexity, viewKey } from './complexity';
+import { complexityShown, judgmentKey, unresolvedFraction, useGraphComplexity } from './complexity';
 import { applyShown, desiredHandoff, useGraphSettings } from './handoff';
 import { useGraphStatusStore } from './statusStore';
 import type { GraphPathResult, GraphTopology } from './types';
@@ -71,23 +71,35 @@ describe('desiredHandoff', () => {
 
   it('goes linear for complexity in a narrow window, and returns once the probe says below 30%', () => {
     expect(desiredHandoff(host(), main)).toEqual({ shown: 'graph' });
-    useGraphComplexity.getState().set('h', viewKey(main), 0.8);
+    useGraphComplexity.getState().set('h', judgmentKey(host().graphView, main), 0.8);
     expect(desiredHandoff(host(), main)).toEqual({ shown: 'linear', reason: 'complexity' });
     const linear = host({ shown: 'linear', reason: 'complexity' });
     // A new window not judged yet: stays linear (its probe decides).
     const moved = { ...main, start: 2000, end: 12_000 };
     expect(desiredHandoff(linear, moved)).toEqual({ shown: 'linear', reason: 'complexity' });
-    useGraphComplexity.getState().set('h', viewKey(moved), 0.4);
+    useGraphComplexity.getState().set('h', judgmentKey(linear.graphView, moved), 0.4);
     expect(desiredHandoff(linear, moved).shown).toBe('linear');
-    useGraphComplexity.getState().set('h', viewKey(moved), 0.2);
+    useGraphComplexity.getState().set('h', judgmentKey(linear.graphView, moved), 0.2);
     expect(desiredHandoff(linear, moved)).toEqual({ shown: 'graph' });
   });
 
   it('the width rule wins and says so; the setting turns the complexity rule off', () => {
-    useGraphComplexity.getState().set('h', viewKey(main), 0.9);
+    useGraphComplexity.getState().set('h', judgmentKey(host().graphView, main), 0.9);
     expect(desiredHandoff(host(), { ...main, end: 80_000 })).toEqual({ shown: 'linear', reason: 'width' });
     useGraphSettings.getState().set({ complexity: false });
     expect(desiredHandoff(host(), main)).toEqual({ shown: 'graph' });
+  });
+
+  it('a judgement is of the whole topology request: another path selection or package is judged again', () => {
+    useGraphComplexity.getState().set('h', judgmentKey(host().graphView, main), 1);
+    const linear = host({ shown: 'linear', reason: 'complexity' });
+    expect(desiredHandoff(linear, main)).toEqual({ shown: 'linear', reason: 'complexity' });
+    const other = { ...linear, graphView: { ...linear.graphView!, selectedPathKeys: ['t', 'mat'] } };
+    // Not judged for the new selection: it stays linear until its probe answers (handoff controller), which then
+    // decides; the old judgement no longer applies.
+    useGraphComplexity.getState().set('h', judgmentKey(other.graphView, main), 0.1);
+    expect(desiredHandoff(other, main)).toEqual({ shown: 'graph' });
+    expect(desiredHandoff(linear, main)).toEqual({ shown: 'linear', reason: 'complexity' });
   });
 
   it('applyShown records the reason while linear and clears it on return', () => {
