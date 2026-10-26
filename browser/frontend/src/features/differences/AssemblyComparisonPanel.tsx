@@ -15,13 +15,21 @@ export function useMapDataset(dataset: Dataset): Dataset | null {
 export const inspectKey = (mapId: string, s: DifferenceSelection) => comparisonKey(mapId, s.chrom, `inspect:${s.difference.id}`);
 
 /** Compare the inspected difference (and, with a consensus, its read sequence) and store the result. */
-export async function runInspectComparison(selection: DifferenceSelection, map: Dataset, readSequences?: Record<string, string>, signal?: AbortSignal) {
+/** The read-discovery scope a comparison runs under: the same dataset/analysis namespace as the row's (so
+ * identities and lineage match), and complete only when the caller's loaded calls say so. */
+export function readScopeFor(selection: DifferenceSelection, map: Dataset, searchComplete = false) {
+  const native = selection.datasetId !== map.id;
+  return { search_complete: searchComplete, dataset_id: selection.datasetId, analysis_scope: native ? 'native_only' : 'lifted_only' };
+}
+
+export async function runInspectComparison(selection: DifferenceSelection, map: Dataset, readSequences?: Record<string, string>, signal?: AbortSignal,
+  searchComplete = false) {
   const d = selection.difference;
   const reads = d.source === 'reads' ? [{ id: d.id, ref_start: d.t_start, ref_end: d.t_end, alt_bp: d.alt_bp,
     geometry_members: (d.target as { geometry_members?: { ref_start: number; ref_end: number; alt_bp: number }[] } | undefined)
       ?.geometry_members?.map(m => [m.ref_start, m.ref_end, m.alt_bp]) }] : [];
   const r = await compareWithAssembly({ dataset_id: map.id, chrom: selection.chrom, start: d.t_start - 2000, end: d.t_end + 2000,
-    reads, read_sequences: readSequences }, signal);
+    reads, read_sequences: readSequences, read_scope: readScopeFor(selection, map, searchComplete) }, signal);
   if (signal?.aborted) return r;
   if (!r.status) useComparisonStore.getState().put(inspectKey(map.id, selection), r);
   return r;

@@ -193,8 +193,8 @@ def assembly_comparison(state, dataset, *, chrom, start, end, reads=(), read_seq
     pad = int(max(radius, matching_policy.broad_anchor_fraction * widest)) + radius
     all_items = assembly_items_for_region(config, chrom, max(0, start - pad), end + pad)
     context = [i for i in all_items if i["kind"] in CONTEXT_KINDS]
-    items = [i for i in all_items if i["kind"] in LOCAL_KINDS
-             and max(i["ref_bp"], i["alt_bp"]) >= policy.evidence_floor_bp]
+    local_all = [i for i in all_items if i["kind"] in LOCAL_KINDS]   # every local edit, including sub-floor SNVs
+    items = [i for i in local_all if max(i["ref_bp"], i["alt_bp"]) >= policy.evidence_floor_bp]
     dropped = []
     if len(items) > policy.max_assembly_items:
         reasons.add("assembly_items_cap")
@@ -373,7 +373,7 @@ def assembly_comparison(state, dataset, *, chrom, start, end, reads=(), read_seq
                         book.resolve_exact(identity, exact)
                         value["identity_state"], value["exact_allele_id"] = "exact", exact
     for value in assembly.values():
-        value["exact_target"] = _exact_target(value, assembly, context, reference, chrom, policy, labels, dropped)
+        value["exact_target"] = _exact_target(value, assembly, context, reference, chrom, policy, labels, dropped, local_all)
     for value in assembly.values():
         value.pop("alt")
     return dict(schema_version="differences:v1", comparison_version=COMPARISON_VERSION, dataset_id=dataset.id,
@@ -384,17 +384,33 @@ def assembly_comparison(state, dataset, *, chrom, start, end, reads=(), read_seq
                 lineage_events=events, ledger=book.payload())
 
 
-def _exact_target(value, assembly, context, reference, chrom, policy, labels, dropped=()):
-    """A frozen exact target with every complete competing assembly allele."""
+def _exact_target(value, assembly, context, reference, chrom, policy, labels, dropped=(), local_all=()):
+    """A frozen exact target with every complete competing assembly allele.
+
+    Each candidate is one haplotype's allele spliced onto the reference over a common diagnostic window. That is
+    only that haplotype's true sequence when it has no other edit in the window: the window grows over every nearby
+    local edit (any size, including the cap's dropped items), and a target whose own haplotype has another edit
+    there gets no exact target; another haplotype with several edits leaves the competition incomplete.
+    """
     if not value["exact_allele_id"] or value["alt"] is None:
         return None
     s, e = value["t_start"], value["t_end"]
-    competitors = [v for v in assembly.values() if v["item_id"] != value["item_id"]
-                   and v["t_start"] <= e + policy.diagnostic_flank_bp and v["t_end"] >= s - policy.diagnostic_flank_bp]
-    ds = max(0, min([s, *(v["t_start"] for v in competitors)]) - policy.diagnostic_flank_bp)
-    de = max([e, *(v["t_end"] for v in competitors)]) + policy.diagnostic_flank_bp
+    flank = policy.diagnostic_flank_bp
+    ds, de = max(0, s - flank), e + flank
+    nearby = list(local_all) + list(dropped)
+    for _ in range(64):   # grow to a fixed point over overlapping edits (bounded)
+        inside = [i for i in nearby if i["t_start"] <= de and i["t_end"] >= ds]
+        lo = max(0, min([s, *(i["t_start"] for i in inside)]) - flank)
+        hi = max([e, *(i["t_end"] for i in inside)]) + flank
+        if (lo, hi) == (ds, de):
+            break
+        ds, de = lo, hi
     if de - ds > policy.max_allele_bp:
         return None
+    inside = [i for i in nearby if i["t_start"] <= de and i["t_end"] >= ds]
+    own_hap = [i for i in inside if i["hap"] == value["hap"] and i["id"] != value["item_id"]]
+    if own_hap:
+        return None   # the haplotype's window holds other edits: a single-edit splice would not be its sequence
     window = reference.bases(ds, de)
     if window is None or len(window) != de - ds:
         return None
@@ -403,16 +419,23 @@ def _exact_target(value, assembly, context, reference, chrom, policy, labels, dr
     candidates = {target_id: changed(value)}
     names = {target_id: [value["hap_label"]]}
     complete = True
-    for v in competitors:
-        if v["alt"] is None or not v["exact_allele_id"]:
-            complete = False
+    by_hap = {}
+    for i in inside:
+        by_hap.setdefault(i["hap"], []).append(i)
+    for hap, edits in by_hap.items():
+        if hap == value["hap"]:
             continue
+        compared = [assembly.get(i["id"]) for i in edits]
+        if len(edits) > 1 or any(c is None or c["alt"] is None or not c["exact_allele_id"] for c in compared):
+            complete = False   # several edits, a sub-floor/dropped edit or missing sequence on this haplotype
+            continue
+        v = compared[0]
         candidates.setdefault(v["exact_allele_id"], changed(v))
         names.setdefault(v["exact_allele_id"], []).append(v["hap_label"])
     names[target_id] = sorted(set(names[target_id]) | {assembly[i]["hap_label"] for i in value["shared_with"]})
     # Unsupported local representations, and competitors the item cap dropped, leave the competition open.
     if any(c["t_start"] < de and c["t_end"] > ds for c in context) or any(
-            d["t_start"] <= e + policy.diagnostic_flank_bp and d["t_end"] >= s - policy.diagnostic_flank_bp for d in dropped):
+            d["t_start"] <= de and d["t_end"] >= ds for d in dropped):
         complete = False
     candidates["reference"] = window
     return dict(target_id=target_id, revision=1, target_type="exact", chrom=chrom, ref_start=s, ref_end=e,

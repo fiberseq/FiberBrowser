@@ -21,6 +21,29 @@ def stored_frame_chemistry(context) -> bool:
     return context is not None and getattr(context, "provenance", None) in ST_TAG_PROVENANCE
 
 
+# The molecule (read-frame) chemistry of an alignment's st, from which each record's stored-SEQ frame follows.
+MOLECULE_FROM_ST = "BAM:st:molecule"
+_SWAP_ST = {"CT": "GA", "GA": "CT"}
+
+
+def molecule_chemistry_from_st(st: str, reverse: bool) -> str:
+    """st is in the record's stored (reference-forward) frame; the read itself is its reverse complement when reverse."""
+    return _SWAP_ST.get(st, st) if reverse else st
+
+
+def stored_chemistry_for(molecule: str, reverse: bool) -> str:
+    return _SWAP_ST.get(molecule, molecule) if reverse else molecule
+
+
+_DAF_DECODE = str.maketrans("YRyr", "TAta")
+
+
+def decode_daf_bases(sequence):
+    """fiberhmm-daf-encode stores deaminated bases as IUPAC: Y (a C read as T) and R (a G read as A). The
+    likelihood models conversions itself, so observed sequence is compared in plain ACGT (as FiberHMM decodes it)."""
+    return None if sequence is None else sequence.translate(_DAF_DECODE)
+
+
 @dataclass(frozen=True)
 class DafContext:
     chemistry: str  # molecule chemistry; never swapped by target orientation

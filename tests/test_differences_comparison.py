@@ -306,3 +306,22 @@ def test_display_memberships_use_the_escaped_molecule_key():
     source = inspect.getsource(projected_service.add_display_memberships)
     assert "molecule_key(alignment.molecule.library_id, alignment.molecule.raw_name)" in source
     assert molecule_key("g", "read|1") == "g|read\\|1"
+
+
+def test_no_exact_target_when_the_haplotype_has_another_edit_in_the_window(tmp_path, monkeypatch):
+    """agy r2 HIGH 4: a single-edit splice is not the haplotype's sequence when it has another nearby edit."""
+    from services.lift import differences as diff
+    state, ds, _ = build(tmp_path, pat_insert=Y_OTHER)
+    real = diff.assembly_items_for_region
+
+    def with_snv(config, chrom, start, end, **kw):
+        out = real(config, chrom, start, end, **kw)
+        return out + [dict(id="MAT:snv", hap="H#1", hap_label="MAT", kind="snv", reason="substitution", t_start=5010,
+                           t_end=5011, ref_bp=1, alt_bp=1, chain=0, strand="+", src={"contig": "chrC_MATERNAL", "start": 3980, "end": 3981}),
+                      dict(id="PAT:snv", hap="H#2", hap_label="PAT", kind="snv", reason="substitution", t_start=4990,
+                           t_end=4991, ref_bp=1, alt_bp=1, chain=1, strand="+", src={"contig": "chrC_PATERNAL", "start": 3990, "end": 3991})]
+    monkeypatch.setattr(diff, "assembly_items_for_region", with_snv)
+    out = compare(state, ds)
+    mat = next(v for v in out["assembly"].values() if v["hap_label"] == "MAT" and v["kind"] == "insertion")
+    pat = next(v for v in out["assembly"].values() if v["hap_label"] == "PAT" and v["kind"] == "insertion")
+    assert mat["exact_target"] is None and pat["exact_target"] is None   # each haplotype has a nearby SNV

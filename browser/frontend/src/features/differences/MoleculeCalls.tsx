@@ -76,7 +76,8 @@ export function MoleculeCalls({ selection, native = false }: { selection: Differ
           body: JSON.stringify({ ...q, frozen_calls: result, consensus: true, include_duplicates: policy.include_duplicates }) });
       const seq = lens.consensus?.seq;
       if (!seq) { setConsensus({ busy: false, message: `No consensus: ${lens.reason ?? lens.consensus_resource?.reason ?? 'no full carrier sequence'}` }); return; }
-      const r = await runInspectComparison(selection, map, { [selection.difference.id]: seq });
+      // Discovery completeness comes from the loaded calls (a 'not in the assembly' verdict needs it).
+      const r = await runInspectComparison(selection, map, { [selection.difference.id]: seq }, undefined, Boolean(result.scope?.search_complete));
       setConsensus({ busy: false, message: r.status ? `${r.status}: ${r.reason}` : `Compared a ${seq.length.toLocaleString()} bp consensus (${lens.consensus!.method_label}, ${lens.consensus!.n_reads} reads).` });
     } catch (e) { setConsensus({ busy: false, message: String((e as Error).message ?? e) }); }
   };

@@ -25,7 +25,7 @@ from .likelihood import LikelihoodBudget, LikelihoodPolicy, compete
 from .policy import SearchBudget, SearchPolicy
 
 PROJECTION_VERSION = "read-map:v1"
-_COMPLEMENT = str.maketrans("ACGTNacgtn", "TGCANtgcan")
+_COMPLEMENT = str.maketrans("ACGTNYRacgtnyr", "TGCANRYtgcanry")   # Y (C>T) and R (G>A) complement each other
 
 
 def revcomp(sequence):
@@ -426,7 +426,8 @@ def _slice_observed(alignment, projected, start, end):
         qualities = alignment.qualities[a:b]
         if minus:
             sequence, qualities = revcomp(sequence), qualities[::-1]
-        return sequence, qualities, (q0, q1), True
+        from .alleles import decode_daf_bases
+        return decode_daf_bases(sequence), qualities, (q0, q1), True
     return None, (), None, False
 
 
@@ -479,10 +480,13 @@ def classify_projection(alignment, projected, target, *, context=None, likelihoo
         candidates = dict(target.get("candidates") or {})
         competition_complete = target.get("competition_complete") is True and target_id in candidates and "reference" in candidates
         policy = likelihood_policy or LikelihoodPolicy()
-        from .alleles import stored_frame_chemistry
+        from .alleles import MOLECULE_FROM_ST, stored_chemistry_for, stored_frame_chemistry
         # st-tag chemistry is in the stored-SEQ frame: complemented only when this projection reversed the SEQ
-        # (a minus piece). A molecule-frame context follows the alignment's orientation through the projection.
+        # (a minus piece). A molecule pooled from st tags takes this record's own stored frame first. A
+        # molecule-frame context (explicit) follows the alignment's orientation through the projection.
         projection_reversed = (projected["alignment_orientation"] == "reverse") != bool(alignment.reverse)
+        if context is not None and context.provenance == MOLECULE_FROM_ST:
+            context = replace(context, chemistry=stored_chemistry_for(context.chemistry, bool(alignment.reverse)), provenance="BAM:st")
         reverse = projection_reversed if stored_frame_chemistry(context) else projected["alignment_orientation"] == "reverse"
         context = replace(context or DafContext("unknown", "unavailable"), reverse_complemented=reverse, base_qualities=qualities)
         # A deletion is structurally diagnostic even without BAM SEQ, but a
@@ -542,8 +546,15 @@ def call_molecule(alignments, paths, target, *, policy=ProjectionPolicy(), budge
     alignments = list({a.record_id: a for a in alignments}.values())
     walks = {a.record_id: _walk(a, budget.check) for a in alignments}
     if context is None:
-        primary_contexts = {(a.chemistry, a.chemistry_provenance) for a in alignments if not a.supplementary and a.chemistry != "unknown"}
-        available_contexts = primary_contexts or {(a.chemistry, a.chemistry_provenance) for a in alignments if a.chemistry != "unknown"}
+        # Each record's st is in its own stored frame: pool them in the molecule (read) frame, so a reverse
+        # supplementary's swapped st agrees with its forward primary; each record then gets its own stored frame.
+        from .alleles import MOLECULE_FROM_ST, molecule_chemistry_from_st
+        def molecule_frame(a):
+            if a.chemistry_provenance == "BAM:st" and a.chemistry in ("CT", "GA"):
+                return molecule_chemistry_from_st(a.chemistry, a.reverse), MOLECULE_FROM_ST
+            return a.chemistry, a.chemistry_provenance
+        primary_contexts = {molecule_frame(a) for a in alignments if not a.supplementary and a.chemistry != "unknown"}
+        available_contexts = primary_contexts or {molecule_frame(a) for a in alignments if a.chemistry != "unknown"}
         context = DafContext(*next(iter(available_contexts))) if len(available_contexts) == 1 else DafContext("unknown", "unresolved_molecule_chemistry")
     hs, geometry_hs, diagnostics = [], [], []
     primary_complete = False
