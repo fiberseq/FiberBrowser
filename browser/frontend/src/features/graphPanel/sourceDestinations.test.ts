@@ -1,0 +1,146 @@
+/**
+ * Source-view pop-outs are peers of the graph (DESIGN_GRAPH_PRIMARY §4.2 "lifted path, source view"; Codex review,
+ * group H): a linked source panel (P3) on a lifted member's haplotype is a destination of graph runs through its
+ * source rows — the same records as the graph rows, named there by QNAME — for label fan-out, dynamic assignment
+ * and selection sync.
+ */
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useBrowserStore } from '../../stores/browserStore';
+import { useGraphStatusStore } from './statusStore';
+import { useGraphBindingsStore } from './bindingsStore';
+import { setPanelViewMode } from './hostMode';
+import { registerGraphPanel } from './register';
+import { assignWithGraphRun, commitGraphRun, destinationAssignments, graphClusterPlan, labelLinkedSource } from './graphCluster';
+import { useGraphSettings } from './handoff';
+import { graphRunStateKeys, sourceLabels } from '../../utils/clusterMatchedRun';
+import { mirroredSelections } from './selectionSync';
+import { popOutPaths, setPopOutKind } from './popOutKind';
+import type { GraphBinding, GraphReadBinding, GraphRegistration } from './types';
+import type { PanelConfig } from '../../types';
+
+registerGraphPanel();
+
+const binding = (key: string, contig: string, sample: string): GraphBinding => ({
+  key, path: { sample, haplotype: '0', contig }, assembly: sample, reference: sample, size: 200_000_000, size_inferred: false,
+  fragments: [{ origin: 0, end: 200_000_000, indexed: true }], uncovered: [],
+});
+const REG: GraphRegistration = {
+  id: 'gp', label: 'pkg', producer: 'fiberbrowser-graph', build_target: 't',
+  revisions: { package: 'p'.repeat(64), graph: 'g'.repeat(64), db: 'd'.repeat(64), maps: 'm'.repeat(64) },
+  bindings: [binding('tgt', 'chr3', 'GRCh38'), binding('mat', 'chr3_MAT', 'S1'), binding('pat', 'chr3_PAT', 'S1')],
+  maps: [{ target: 'tgt', source: 'pat' }, { target: 'tgt', source: 'mat' }],
+};
+const BOUND: GraphReadBinding = { dataset_id: 'd', label: 'lifted', kind: 'lifted', revision: 'r1',
+  paths: { mat: 'chr3_MAT', pat: 'chr3_PAT' }, haps: { mat: 'MAT', pat: 'PAT' }, problems: [], libraries: 1 };
+
+const panel = (id: string, extra: Partial<PanelConfig> = {}): PanelConfig => ({
+  id, contentType: 'dataset', datasetId: 'd', subTracks: [], collapsed: false, linkGroup: null, layoutRow: 0, stateKey: `k-${id}`, ...extra,
+});
+const source = (id: string, hap: '1' | '2', label: 'MAT' | 'PAT', extra: Partial<PanelConfig> = {}) => panel(id, { datasetId: 'src', genome: 'S1',
+  viewportOverride: { chrom: `chr3_${label}`, start: 1000, end: 11_000 }, stateKey: `${id}~lift-source`,
+  liftLink: { id: `l-${id}`, datasetId: 'd', liftPanelId: 'mat', hap, hapLabel: label, contig: `chr3_${label}`, flip: false, chain: null } as never, ...extra });
+const PEAKS = [{ start: 128_655_000, end: 128_655_100, mode: 'accessibility' }];
+const aid = (q: string, rec = 'r:0', row = 0) => `lift-cohort:v1 ${JSON.stringify([`lib|${q}`, q, rec, row, 'primary'])}`;
+
+function seed(panels: PanelConfig[]) {
+  useGraphStatusStore.setState({ status: { helper: { available: true }, registrations: [REG] } as never, error: null, loading: false });
+  useGraphBindingsStore.setState({ byDataset: { d: [{ registration: REG, binding: BOUND }] },
+    problems: {}, key: `d,src||${useBrowserStore.getState().refreshGeneration ?? 0}|gp@${REG.revisions.package}`, covered: ['d', 'src'], loading: false });
+  useBrowserStore.setState({ panels, chrom: 'chr3', start: 128_650_000, end: 128_660_000, currentGenome: 'GRCh38', datasets: [
+    { id: 'd', label: 'lifted', data_type: 'bam_livelift', color: '#123456' } as never,
+    { id: 'src', label: 'source', data_type: 'bam', color: '#654321' } as never],
+    selectedDatasets: new Set(), clusterAssignments: {}, clusterOrder: {}, filteredReadIds: {}, selectedReadIds: {},
+    selectedClusters: {}, clusterFocus: {}, clusterMatchedRun: null, clusterGroupLabels: {}, fullViewPanelId: null,
+    activeClusterTreeNodeId: null, clusterTreeNodes: {}, clusterTreeRootIds: [], selectedPeaks: new Set(), peaksLocked: false } as never);
+}
+const split = () => [panel('mat', { liftHap: 'MAT', liftHaplotypeMode: 'split' }), panel('pat', { liftHap: 'PAT', liftHaplotypeMode: 'split' })];
+const plan = () => graphClusterPlan(useBrowserStore.getState(), { kind: 'peaks', regions: PEAKS })!;
+const response = (results: Record<string, { assignments: Record<string, number> }>) => ({ results, label_ids: { '0': 0, '1': 1 }, names: {},
+  stages: [{ stage: 1 }], columns: { shared: [], carrier_sets: [], left_out: {}, dropped: [], refinements: [] },
+  window_separation_nmi: null, matched: null, settings: {}, revisions: REG.revisions, options: {}, timings: {} }) as never;
+
+beforeEach(() => { localStorage.clear(); useGraphSettings.getState().set({ outBp: 50_000, inBp: 40_000, defaultLiftedView: 'graph' }); });
+
+describe('a linked source panel is a destination of graph runs', () => {
+  it('the planner makes it a QNAME destination of its haplotype\'s observation, adding no observation or scope', () => {
+    seed([...split(), source('srcP', '2', 'PAT')]);
+    setPanelViewMode('mat', 'graph');
+    const p = plan();
+    const pat = p.observations.find(o => o.binding === 'pat')!;
+    expect(p.observations).toHaveLength(2);
+    expect(p.leftOut.map(l => l.panelId)).not.toContain('srcP');
+    expect(p.destinations.find(d => d.panelId === 'srcP')).toMatchObject({ stateKey: 'srcP~lift-source', observations: [pat.id], keyBy: 'qname' });
+    // A filter on the source panel scopes its own labels, never the fit.
+    useBrowserStore.setState({ filteredReadIds: { 'srcP~lift-source': new Set(['q1']) } });
+    expect(plan().observations.find(o => o.binding === 'pat')!.read_ids).toBeUndefined();
+  });
+
+  it('labels fan out by QNAME within its scope; a fitted label wins over "not a carrier"', () => {
+    const dest = { stateKey: 's', observations: ['o1', 'o2'], panelId: 'srcP', scope: ['q1', 'q2'], keyBy: 'qname' as const };
+    expect(destinationAssignments(dest, { o1: { assignments: { [aid('q1')]: -2, [aid('q3')]: 1 } }, o2: { assignments: { [aid('q1', 'r:1')]: 0, [aid('q2')]: 1 } } }))
+      .toEqual({ q1: 0, q2: 1 });
+    expect(sourceLabels({ assignments: { o1: { [aid('q9')]: 3 } } }, ['o1'])).toEqual({ q9: 3 });
+  });
+
+  it('a run labels it; a source view opened later joins the run, takes its labels at once, and is reached by dynamic assignment', async () => {
+    seed([...split(), source('srcP', '2', 'PAT')]);
+    setPanelViewMode('mat', 'graph');
+    const p = plan();
+    const pat = p.observations.find(o => o.binding === 'pat')!.id;
+    const mat = p.observations.find(o => o.binding === 'mat')!.id;
+    commitGraphRun(useBrowserStore.getState(), p, response({ [pat]: { assignments: { [aid('q1')]: 0, [aid('q2')]: 1 } }, [mat]: { assignments: { [aid('m1')]: 1 } } }));
+    expect(useBrowserStore.getState().clusterAssignments['srcP~lift-source']).toEqual({ q1: 0, q2: 1 });
+    // A MAT source view opened after the run.
+    useBrowserStore.setState(s => ({ panels: [...s.panels, source('srcM', '1', 'MAT')] }));
+    const run = useBrowserStore.getState().clusterMatchedRun!;
+    expect(graphRunStateKeys(run, useBrowserStore.getState().panels, 'chr3', useBrowserStore.getState().clusterAssignments)).toContain('srcM~lift-source');
+    expect(labelLinkedSource('srcM')).toBe(1);
+    expect(useBrowserStore.getState().clusterAssignments['srcM~lift-source']).toEqual({ m1: 1 });
+    // Dynamic assignment labels its new rows by QNAME.
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ results: { [mat]: { assignments: { [aid('m1')]: 1, [aid('m2')]: 0 } } } }), { status: 200 })));
+    await assignWithGraphRun(useBrowserStore.getState().clusterMatchedRun!);
+    vi.unstubAllGlobals();
+    expect(useBrowserStore.getState().clusterAssignments['srcM~lift-source']).toEqual({ m1: 1, m2: 0 });
+  });
+
+  it('an independently clustered source panel does not join', () => {
+    seed([...split()]);
+    setPanelViewMode('mat', 'graph');
+    const p = plan();
+    const mat = p.observations.find(o => o.binding === 'mat')!.id;
+    commitGraphRun(useBrowserStore.getState(), p, response({ [mat]: { assignments: { [aid('m1')]: 1 } } }));
+    useBrowserStore.setState(s => ({ panels: [...s.panels, source('srcM', '1', 'MAT')], clusterAssignments: { ...s.clusterAssignments, 'srcM~lift-source': { m1: 5 } } }));
+    const st = useBrowserStore.getState();
+    expect(graphRunStateKeys(st.clusterMatchedRun!, st.panels, 'chr3', st.clusterAssignments)).not.toContain('srcM~lift-source');
+    expect(labelLinkedSource('srcM')).toBe(0);
+  });
+
+  it('selection syncs between the graph\'s members and its linked source views, by QNAME', () => {
+    seed([...split(), source('srcP', '2', 'PAT')]);
+    setPanelViewMode('mat', 'graph');
+    const panels = useBrowserStore.getState().panels;
+    const fromSource = mirroredSelections(panels, 'srcP~lift-source', new Set(), new Set(['q1']), {});
+    expect(fromSource.map(([k, add]) => [k, add])).toEqual(expect.arrayContaining([['k-mat', ['q1']], ['k-pat', ['q1']]]));
+    const fromMember = mirroredSelections(panels, 'k-pat', new Set(), new Set([aid('q2')]), {});
+    expect(fromMember.map(([k, add]) => [k, add])).toEqual(expect.arrayContaining([['srcP~lift-source', ['q2']]]));
+  });
+
+  it('a source-kind pop-out reveals the open source view with the run\'s labels, in one undo step', async () => {
+    seed([...split(), source('srcP', '2', 'PAT', { collapsed: true })]);
+    setPanelViewMode('mat', 'graph');
+    const p = plan();
+    const pat = p.observations.find(o => o.binding === 'pat')!.id;
+    commitGraphRun(useBrowserStore.getState(), p, response({ [pat]: { assignments: { [aid('q1')]: 0 } } }));
+    expect(useBrowserStore.getState().clusterAssignments['srcP~lift-source']).toBeUndefined();
+    setPopOutKind('mat', 'source');
+    const steps = useBrowserStore.getState()._historyStack?.length ?? 0;
+    popOutPaths('mat', ['pat']);
+    await new Promise(r => setTimeout(r, 0));
+    const get = (id: string) => useBrowserStore.getState().panels.find(x => x.id === id)!;
+    expect(get('srcP').collapsed).toBe(false);
+    expect(useBrowserStore.getState().clusterAssignments['srcP~lift-source']).toEqual({ q1: 0 });
+    expect(useBrowserStore.getState()._historyStack?.length).toBe(steps + 1);
+    useBrowserStore.getState().undo();
+    expect(get('srcP').collapsed).toBe(true);
+  });
+});

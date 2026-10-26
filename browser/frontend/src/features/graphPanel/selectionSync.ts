@@ -3,11 +3,12 @@
  * graph — the host, a folded member, a popped-out member — is selected or deselected in every other member showing
  * the same dataset, whatever its haplotype (one molecule's records on two haplotypes, a pooled copy, a copy with
  * other filters), as a Shift-click on a graph row already does for its own path. Off with the host's "Sync selection
- * across the graph". Selections are QNAMEs in every view, so a selection names the molecule in each member.
+ * across the graph". Selections are QNAMEs in every view, so a selection names the molecule in each member, and in
+ * the source views linked to the graph's lifted members (P3 source-view pop-outs: the same records, by QNAME).
  */
 import { useBrowserStore } from '../../stores/browserStore';
 import type { PanelConfig } from '../../types';
-import { hostOf, membersOf } from './hostMode';
+import { hostOf, isHost, membersOf } from './hostMode';
 import { qnameOfId } from '../../utils/recordKeys';
 
 const keyOf = (p: PanelConfig) => p.stateKey ?? p.datasetId ?? p.id;
@@ -17,21 +18,35 @@ export function mirroredSelections(panels: readonly PanelConfig[], changedKey: s
   before: ReadonlySet<string> | undefined, after: ReadonlySet<string> | undefined,
   current: Readonly<Record<string, ReadonlySet<string> | undefined>>): [string, string[], string[]][] {
   const panel = panels.find(p => p.contentType === 'dataset' && keyOf(p) === changedKey);
-  const host = hostOf(panels, panel);
+  // A linked source panel (a source-view pop-out, §4.2) belongs to the graph its lifted panel is in.
+  const host = panel?.liftLink ? sourceHost(panels, panel) : hostOf(panels, panel);
   if (!panel || !host || (host.graphView as { syncSelection?: boolean } | undefined)?.syncSelection === false) return [];
   const names = (s: ReadonlySet<string> | undefined) => new Set([...(s ?? [])].map(qnameOfId));
   const was = names(before), now = names(after);
   const added = [...now].filter(q => !was.has(q)), removed = [...was].filter(q => !now.has(q));
   if (!added.length && !removed.length) return [];
   const out: [string, string[], string[]][] = [];
-  for (const { panel: m } of membersOf(panels, host)) {
+  // The lifted dataset whose records these are (a source panel's link names it); its members and its source panels.
+  const dataset = panel.liftLink?.datasetId ?? panel.datasetId;
+  const peers = [...membersOf(panels, host).map(m => m.panel).filter(m => m.datasetId === dataset),
+    ...panels.filter(p => p.contentType === 'dataset' && p.liftLink?.datasetId === dataset && sourceHost(panels, p)?.id === host.id)];
+  for (const m of peers) {
     const k = keyOf(m);
-    if (k === changedKey || m.datasetId !== panel.datasetId) continue;
+    if (k === changedKey) continue;
     const have = names(current[k]);
     const add = added.filter(q => !have.has(q)), drop = removed.filter(q => have.has(q));
     if (add.length || drop.length) out.push([k, add, drop]);
   }
   return out;
+}
+
+/** The host a linked source panel's lifted panel belongs to (else a host with a member of its lifted dataset). */
+export function sourceHost(panels: readonly PanelConfig[], source: PanelConfig): PanelConfig | null {
+  const link = source.liftLink;
+  if (!link) return null;
+  const direct = hostOf(panels, panels.find(p => p.id === link.liftPanelId));
+  if (direct) return direct;
+  return panels.find(h => isHost(h) && membersOf(panels, h).some(m => m.panel.datasetId === link.datasetId)) ?? null;
 }
 
 let started = false;

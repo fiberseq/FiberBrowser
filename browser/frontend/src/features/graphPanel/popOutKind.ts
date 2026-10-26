@@ -11,6 +11,8 @@ import { isLiveLift } from '../../utils/datasetKinds';
 import type { PanelConfig } from '../../types';
 import { linkedSourcePanels, openLinkedSourceView } from '../liveLift/linking/liftLink';
 import { isHost, popOut, undoable } from './hostMode';
+import { labelLinkedSource } from './graphCluster';
+import { serializeState } from '../../stores/historySlice';
 import type { GraphViewState } from './types';
 
 export type PopOutKind = NonNullable<GraphViewState['popOutKind']>;
@@ -83,9 +85,16 @@ async function openSources(sources: PopOutPlan['sources']): Promise<void> {
         // (Synchronous for an open one: it relinks to this lifted panel and returns.)
         void openLinkedSourceView(liftPanelId, hap);
         useBrowserStore.setState(x => ({ panels: x.panels.map(p => (p.id === existing.id && p.collapsed ? { ...p, collapsed: false } : p)) }));
+        // A peer of the graph: the current graph run's labels, by QNAME (§4.2).
+        labelLinkedSource(existing.id);
       });
       continue;
     }
-    await openLinkedSourceView(liftPanelId, hap);
+    const id = await openLinkedSourceView(liftPanelId, hap);
+    // Its labels belong to the step that opened it.
+    if (id && labelLinkedSource(id)) {
+      const st = useBrowserStore.getState();
+      st.foldIntoCurrentSnapshot?.(serializeState(st));
+    }
   }
 }

@@ -1,6 +1,6 @@
 import type { BrowserState } from '../stores/browserStore';
 import type { PanelConfig } from '../types';
-import { recordKey } from './recordKeys';
+import { qnameOfId, recordKey } from './recordKeys';
 
 /** A graph run's observation (features/graphPanel/graphCluster.ts): one (dataset, package path) fitted once. */
 export interface GraphRunObservation {
@@ -50,7 +50,9 @@ export interface ClusterMatchedRun {
   /** A graph run: its definition and model; `windows` are then its observations (one column each in the charts). */
   graph?: GraphRunDefinition;
   /** A graph run's destinations: every panel that received an observation's labels (pop-outs add none). */
-  destinations?: { stateKey: string; observations: string[]; panelId: string; scope?: string[] | null }[];
+  destinations?: { stateKey: string; observations: string[]; panelId: string; scope?: string[] | null;
+    /** 'qname': a linked source panel (P3) — its rows are the source BAM's records, named by QNAME. */
+    keyBy?: 'qname' }[];
   /** Names of refined clusters (C<parent>.<j>). */
   names?: Record<number, string>;
   /** A graph run: the cluster tree node its labels are (dynamic assignment applies only while it is active). */
@@ -66,6 +68,16 @@ export function observationShownBy(o: GraphRunObservation, p: PanelConfig): bool
   return o.kind === 'linear' ? (o.lift_hap ?? '').toUpperCase() === hap : !hap || (o.hap ?? '').toUpperCase() === hap;
 }
 
+/** Whether a linked source panel (P3, `liftLink`) shows a graph observation's records on the haplotype's own
+ * assembly (DESIGN_GRAPH_PRIMARY §4.2 "lifted path, source view": a destination of runs through its source rows,
+ * which are the same records as the graph rows, named there by QNAME). */
+export function linkedSourceShows(o: GraphRunObservation, p: PanelConfig): boolean {
+  const link = (p as PanelConfig & { liftLink?: { datasetId: string; hap: string; hapLabel: string } }).liftLink;
+  if (p.contentType !== 'dataset' || !link || o.kind !== 'graph' || o.dataset_id !== link.datasetId) return false;
+  const hap = (o.hap ?? '').toUpperCase();
+  return !hap || hap === (link.hapLabel ?? '').toUpperCase() || hap === (link.hap ?? '').toUpperCase();
+}
+
 /** The state keys a graph run's labels apply to now: its destinations, and any panel since opened on one of its
  * observations (a member popped out later, a new haplotype panel), so selection and focus sync reach them. */
 export function graphRunStateKeys(run: ClusterMatchedRun, panels: readonly PanelConfig[], mainChrom?: string,
@@ -77,6 +89,14 @@ export function graphRunStateKeys(run: ClusterMatchedRun, panels: readonly Panel
     if (p.contentType !== 'dataset' || !p.datasetId) continue;
     // On the run's target contig (its own view, else the main view's).
     const chrom = p.viewportOverride?.chrom ?? mainChrom;
+    // A linked source panel is on the haplotype's own assembly (another contig): it joins through its link.
+    const source = obs.filter(o => linkedSourceShows(o, p));
+    if (source.length) {
+      const key = p.stateKey ?? p.datasetId;
+      if (!keys.has(key) && !compatibleSourceLabels(run, live?.[key], source.map(o => o.id))) continue;
+      keys.add(key);
+      continue;
+    }
     if (contig && chrom && chrom !== contig) continue;
     if (!obs.some(o => observationShownBy(o, p))) continue;
     const key = p.stateKey ?? p.datasetId;
@@ -86,6 +106,29 @@ export function graphRunStateKeys(run: ClusterMatchedRun, panels: readonly Panel
     keys.add(key);
   }
   return [...keys];
+}
+
+/** A linked source panel's labels (by QNAME) agree with what the run gave those observations' records. */
+function compatibleSourceLabels(run: ClusterMatchedRun, labels: Readonly<Record<string, number>> | undefined, observations: string[]): boolean {
+  if (!labels || !Object.keys(labels).length) return true;
+  const want = sourceLabels(run, observations);
+  return Object.entries(labels).every(([q, c]) => want[q] === c);
+}
+
+/** The run's labels for these observations keyed by QNAME, as a linked source panel names its records: a fitted
+ * label over another record's "not a carrier" (-2), else the smallest id's (deterministic). */
+export function sourceLabels(run: Pick<ClusterMatchedRun, 'assignments'>, observations: readonly string[],
+  scope?: ReadonlySet<string> | null): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const oid of observations) {
+    for (const [id, c] of Object.entries(run.assignments?.[oid] ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+      const q = qnameOfId(id);
+      if (scope && !scope.has(q)) continue;
+      const prev = out[q];
+      if (prev === undefined || (prev < 0 && c >= 0)) out[q] = c;
+    }
+  }
+  return out;
 }
 
 const runLabelIndex = new WeakMap<object, Map<string, Map<string, Set<number>>>>();

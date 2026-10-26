@@ -24,7 +24,7 @@ import type { BrowserState } from '../../stores/browserStore';
 import type { PanelConfig } from '../../types';
 import { clusterWindows, type ClusterBasis, type ClusterTargetPlan, type PlanState } from '../../utils/clusterTargets';
 import { registerClusterBasisRunner, registerClusterPlanTransform } from '../../utils/clusterRunExtensions';
-import { currentMatchedRun, graphRunStateKeys, observationShownBy, type ClusterMatchedRun, type GraphRunObservation } from '../../utils/clusterMatchedRun';
+import { currentMatchedRun, graphRunStateKeys, linkedSourceShows, observationShownBy, sourceLabels, type ClusterMatchedRun, type GraphRunObservation } from '../../utils/clusterMatchedRun';
 import { sameChrom } from '../../utils/chromAliases';
 import { getDatasetDisplayLabel } from '../../utils/datasetLabels';
 import { idSetHas, qnameOfId, recordKey } from '../../utils/recordKeys';
@@ -40,7 +40,9 @@ import type { GraphRegistration, GraphRevisions } from './types';
 
 export type GraphObservationSpec = GraphRunObservation;
 
-export interface GraphDestination { stateKey: string; observations: string[]; panelId: string; scope: string[] | null }
+export interface GraphDestination { stateKey: string; observations: string[]; panelId: string; scope: string[] | null;
+  /** 'qname': a linked source panel (P3), whose rows are the source records named by QNAME (§4.2). */
+  keyBy?: 'qname' }
 
 export interface GraphClusterPlan {
   host: PanelConfig;
@@ -110,6 +112,9 @@ export function graphClusterPlan(st: PlanState, basis: Basis): GraphClusterPlan 
     selected = new Set(st.selectedDatasets);
     // (A targeted member targets its graph too: the host and its members are one comparison.)
     for (const h of hosts) for (const m of membersOf(st.panels, h)) selected.add(m.panel.id);
+    // (And the source views linked to its lifted members: peers of the graph, §4.2.)
+    const lifted = new Set(hosts.flatMap(h => membersOf(st.panels, h).map(m => m.panel.datasetId)));
+    for (const p of st.panels) if (p.liftLink && lifted.has(p.liftLink.datasetId) && !p.collapsed) selected.add(p.id);
   }
   const planState = selected === st.selectedDatasets ? st : { ...st, selectedDatasets: selected };
   const datasetIds = getTargetDatasetIds(selected, st.panels, st.datasets);
@@ -119,8 +124,15 @@ export function graphClusterPlan(st: PlanState, basis: Basis): GraphClusterPlan 
   const observations = new Map<string, GraphObservationSpec & { scopes: (string[] | null)[] }>();
   const destinations: GraphDestination[] = [];
   const leftOut: { panelId: string; reason: string }[] = [];
+  // Linked source panels (P3 source-view pop-outs): destinations of their lifted path's observation, added once every
+  // observation is known; they never widen an observation's scope (their ids are source QNAMEs).
+  const sourceWindows: typeof windows = [];
   for (const w of windows) {
     const panel = w.panel;
+    if (panel.liftLink && (bindings[panel.liftLink.datasetId] ?? []).some(b => b.registration.id === registration.id && b.binding.kind === 'lifted')) {
+      sourceWindows.push(w);
+      continue;
+    }
     const ds = st.datasets.find(d => d.id === w.dataset_id);
     const name = ds ? getDatasetDisplayLabel(ds) : w.dataset_id;
     const bound = (bindings[w.dataset_id] ?? []).find(b => b.registration.id === registration.id)?.binding;
@@ -161,6 +173,11 @@ export function graphClusterPlan(st: PlanState, basis: Basis): GraphClusterPlan 
     }
     destinations.push({ stateKey: w.result_key, observations: ids, panelId: panel.id, scope: w.read_ids ?? null });
   }
+  for (const w of sourceWindows) {
+    const ids = [...observations.values()].filter(o => linkedSourceShows(o as GraphRunObservation, w.panel)).map(o => o.id);
+    if (!ids.length) { leftOut.push({ panelId: w.panel.id, reason: 'its lifted path is not in this run' }); continue; }
+    destinations.push({ stateKey: w.result_key, observations: ids, panelId: w.panel.id, scope: w.read_ids ?? null, keyBy: 'qname' });
+  }
   const obs = [...observations.values()].map(({ scopes, ...o }) => {
     // The union of the destinations' id scopes (one fit per row); any destination with every read: every read.
     if (scopes.some(s => s === null)) return o;
@@ -177,6 +194,11 @@ export function graphClusterPlan(st: PlanState, basis: Basis): GraphClusterPlan 
 
 /** A destination's labels: its observations' rows inside its own read scope, keyed by record key (lifted) or id. */
 export function destinationAssignments(dest: GraphDestination, results: Record<string, { assignments?: Record<string, number> }>): Record<string, number> {
+  // A linked source panel: its records by QNAME.
+  if (dest.keyBy === 'qname') {
+    return sourceLabels({ assignments: Object.fromEntries(dest.observations.map(o => [o, results[o]?.assignments ?? {}])) }, dest.observations,
+      dest.scope ? new Set(dest.scope.map(qnameOfId)) : null);
+  }
   const scope = dest.scope ? new Set(dest.scope) : null;
   const out: Record<string, number> = {};
   for (const oid of dest.observations) {
@@ -378,7 +400,8 @@ export function commitGraphRun(s: BrowserState, plan: GraphClusterPlan, response
       columns: { shared: response.columns.shared, carrier_sets: response.columns.carrier_sets, dropped: response.columns.dropped,
         left_out: response.columns.left_out },
     },
-    destinations: plan.destinations.map(d => ({ stateKey: d.stateKey, observations: d.observations, panelId: d.panelId, scope: d.scope })),
+    destinations: plan.destinations.map(d => ({ stateKey: d.stateKey, observations: d.observations, panelId: d.panelId, scope: d.scope,
+      ...(d.keyBy ? { keyBy: d.keyBy } : {}) })),
     names,
   };
   run.graph!.targetContig = plan.targetContig;
@@ -462,9 +485,11 @@ export async function assignWithGraphRun(run: ClusterMatchedRun, signal?: AbortS
   const known = new Set(run.destinations.map(d => d.stateKey));
   const later = graphRunStateKeys(run, st.panels, st.chrom, st.clusterAssignments).filter(k => !known.has(k)).flatMap(stateKey => {
     const p = st.panels.find(q => (q.stateKey ?? q.datasetId) === stateKey);
-    const obs = p ? g.observations.filter(o => observationShownBy(o, p)).map(o => o.id) : [];
+    const source = p ? g.observations.filter(o => linkedSourceShows(o, p)).map(o => o.id) : [];
+    const obs = source.length ? source : p ? g.observations.filter(o => observationShownBy(o, p)).map(o => o.id) : [];
     const filter = st.filteredReadIds[stateKey];
-    return obs.length ? [{ stateKey, observations: obs, panelId: p!.id, scope: filter ? [...filter] : null }] : [];
+    return obs.length ? [{ stateKey, observations: obs, panelId: p!.id, scope: filter ? [...filter] : null,
+      ...(source.length ? { keyBy: 'qname' as const } : {}) }] : [];
   });
   let added = 0;
   const touched: string[] = [];
@@ -562,4 +587,33 @@ function startGraphDynamicAssignment(): void {
       if (now?.graph && (st.activeClusterTreeNodeId ?? null) === (now.treeNodeId ?? null)) void assignWithGraphRun(now, controller.signal);
     }, 400);
   });
+}
+
+/**
+ * A linked source panel opened as a pop-out of a graph (§4.2 "lifted path, source view") takes the current graph
+ * run's labels at once, by QNAME, within its own read filter: it is a peer destination of the run (dynamic
+ * assignment and selection sync reach it through graphRunStateKeys). Labels it already has are kept. Returns the
+ * number of records labelled.
+ */
+export function labelLinkedSource(panelId: string): number {
+  const st = useBrowserStore.getState();
+  const run = st.clusterMatchedRun;
+  const p = st.panels.find(x => x.id === panelId);
+  if (!run?.graph || !p?.liftLink || (st.activeClusterTreeNodeId ?? null) !== (run.treeNodeId ?? null)
+    || currentMatchedRun(run, st.clusterAssignments) !== run) return 0;
+  const obs = run.graph.observations.filter(o => linkedSourceShows(o, p)).map(o => o.id);
+  if (!obs.length) return 0;
+  const key = p.stateKey ?? p.datasetId ?? p.id;
+  const filter = st.filteredReadIds[key];
+  const live = st.clusterAssignments[key] ?? {};
+  const fresh = Object.fromEntries(Object.entries(sourceLabels(run, obs, filter ? new Set([...filter].map(qnameOfId)) : null))
+    .filter(([q, c]) => c !== UNASSIGNED_CLUSTER_ID && live[q] === undefined));
+  if (!Object.keys(fresh).length) return 0;
+  st.setClusterAssignments(key, fresh, { mirror: true, merge: true, svSplit: true });
+  if (run.names && Object.keys(run.names).length) mirrorGroupLabels([key], run.names);
+  const now = useBrowserStore.getState();
+  useBrowserStore.setState({ clusterMatchedRun: { ...run, panelAssignments: { ...run.panelAssignments, [key]: now.clusterAssignments[key] ?? {} },
+    destinations: [...(run.destinations ?? []).filter(d => d.stateKey !== key), { stateKey: key, observations: obs, panelId: p.id,
+      scope: filter ? [...filter] : null, keyBy: 'qname' }] } });
+  return Object.keys(fresh).length;
 }
