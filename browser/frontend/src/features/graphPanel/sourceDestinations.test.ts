@@ -265,5 +265,30 @@ describe('a linked source panel is a destination of graph runs', () => {
     expect(st.clusterAssignments['srcP~lift-source']).toEqual({ q1: 0 });
     expect(st.clusterMatchedRun!.destinations!.find(d => d.stateKey === 'srcP~lift-source')!.scope).toEqual(['q1']);
   });
+
+  it('post-merge A1 #2: reopening a source view clustered on its own keeps its order and focus when its label numbers equal the member\'s', async () => {
+    seed([...split(), source('srcP', '2', 'PAT', { collapsed: true })]);
+    const key = 'srcP~lift-source';
+    const s = useBrowserStore.getState();
+    // The same reads in the same numbered groups, but clustered on the source itself (no graph run gave them).
+    s.setClusterAssignments(key, { q1: 0, q2: 1 });
+    s.setClusterAssignments('k-pat', { [aid('q1')]: 0, [aid('q2')]: 1 });
+    s.setClusterOrder(key, [1, 0]);
+    s.setClusterOrder('k-pat', [0, 1]);
+    s.setClusterFocus(key, new Set([1]));
+    s.setClusterFocus('k-pat', new Set([0]));
+    useBrowserStore.setState(x => ({ clusterGroupLabels: { ...x.clusterGroupLabels, [key]: { 1: 'mine' }, 'k-pat': { 0: 'theirs' } } }));
+    setPanelViewMode('mat', 'graph');
+    expect(useBrowserStore.getState().clusterMatchedRun).toBeNull();
+    setPopOutKind('mat', 'source');
+    popOutPaths('mat', ['pat']);
+    await new Promise(r => setTimeout(r, 0));
+    const st = useBrowserStore.getState();
+    expect(st.panels.find(x => x.id === 'srcP')!.collapsed).toBe(false);
+    expect(st.clusterAssignments[key]).toEqual({ q1: 0, q2: 1 });
+    expect(st.clusterOrder[key]).toEqual([1, 0]);
+    expect([...st.clusterFocus[key]!]).toEqual([1]);
+    expect(st.clusterGroupLabels[key]).toEqual({ 1: 'mine' });
+  });
 });
 

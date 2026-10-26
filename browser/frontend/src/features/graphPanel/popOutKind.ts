@@ -158,6 +158,9 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
     let live = cur.clusterAssignments[tk];
     const got = project(cur.clusterAssignments[fk], active ? provenanceLineage(cur, fk, active) : liveProvenance(cur, fk));
     const had = Boolean(live && Object.keys(live).length);
+    // Its own: labels no graph run gave it, even when their numbers equal the member's (Codex post-merge review,
+    // group A round 1, #2).
+    if (had && !runOwned(cur, tk, active)) return {};
     if (had && got && !Object.entries(live!).every(([q, c]) => got[q] === c)) return {};
     if (had && !got && !runLabelled(cur, tk)) return {};
     if (!had && got) { live = got; patch.clusterAssignments = { ...cur.clusterAssignments, [tk]: got }; }
@@ -197,6 +200,12 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
 /** Whether a source view's labels are the current graph run's (it is one of the run's destinations). */
 function runLabelled(s: ReturnType<typeof useBrowserStore.getState>, key: string): boolean {
   return Boolean(s.clusterMatchedRun?.graph && s.clusterMatchedRun.destinations?.some(d => d.stateKey === key));
+}
+
+/** Whether a source view's labels came from a graph run: it is a destination of the current run, or a run of the
+ * active tree node's lineage labelled it. Otherwise they are its own clustering. */
+function runOwned(s: ReturnType<typeof useBrowserStore.getState>, key: string, active: string | null): boolean {
+  return runLabelled(s, key) || Boolean(active && provenanceLineage(s, key, active).length);
 }
 
 /** A source view's read state from its member, by QNAME: its filter, selection and exclusions (state it already
