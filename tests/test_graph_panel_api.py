@@ -68,10 +68,18 @@ def graph_env(monkeypatch, tmp_path, fake_helper):
 def app_client(standalone_app, graph_env):
     from starlette.testclient import TestClient
     from conftest import auth_headers
+    before = set(LIVE_PIDS)
     with TestClient(standalone_app, headers=auth_headers()) as client:
         yield client
     # Leaving the context ran the server's lifespan shutdown: no helper survives it.
-    assert not LIVE_PIDS, f"helpers left after shutdown: {LIVE_PIDS}"
+    leaked = _started_since(before)
+    assert not leaked, f"helpers left after shutdown: {leaked}"
+
+
+def _started_since(before):
+    """Helper pids alive now that were not before this test: ``LIVE_PIDS`` is process-wide, so a pid another
+    test left (or one still being reaped) neither hides nor fakes a leak of this test."""
+    return set(LIVE_PIDS) - set(before)
 
 
 def body(reg, **over):
@@ -231,15 +239,28 @@ def test_a_package_that_fails_verification_or_changes_is_refused(app_client, pac
     assert r.status_code == 404
 
 
+def test_a_registered_package_can_be_removed(app_client, package, graph_env):
+    reg = app_client.post("/api/graph/registrations", json={"package": str(package)}).json()["registration"]
+    r = app_client.delete(f"/api/graph/registrations/{reg['id']}")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"registration_id": reg["id"], "removed": True}
+    assert app_client.get("/api/graph/status").json()["registrations"] == []
+    # Forgotten for the next start too.
+    assert json.loads((graph_env / "registry.json").read_text())["packages"] == []
+    gone = app_client.delete(f"/api/graph/registrations/{reg['id']}")
+    assert gone.status_code == 404 and gone.json()["error"]["code"] == "unknown_registration"
+
+
 def test_env_packages_are_registered_at_first_use(standalone_app, graph_env, package, monkeypatch):
     monkeypatch.setenv("FIBERBROWSER_GRAPH_PACKAGES", str(package))
     service.reset_for_tests()
     from starlette.testclient import TestClient
     from conftest import auth_headers
+    before = set(LIVE_PIDS)
     with TestClient(standalone_app, headers=auth_headers()) as client:
         regs = client.get("/api/graph/registrations").json()["registrations"]
         assert [r["id"] for r in regs] == ["g" + "a" * 16]
-    assert not LIVE_PIDS
+    assert not _started_since(before)
 
 
 def test_lifespan_shutdown_reaps_a_busy_helper(standalone_app, graph_env, package):
@@ -249,6 +270,7 @@ def test_lifespan_shutdown_reaps_a_busy_helper(standalone_app, graph_env, packag
     from starlette.testclient import TestClient
     from conftest import auth_headers
     pids, answers = set(), []
+    before = set(LIVE_PIDS)
     with TestClient(standalone_app, headers=auth_headers()) as client:
         reg = client.post("/api/graph/registrations", json={"package": str(package)}).json()["registration"]
         client.post("/api/graph/subgraph", json=body(reg, request_id="warm"))
@@ -264,7 +286,7 @@ def test_lifespan_shutdown_reaps_a_busy_helper(standalone_app, graph_env, packag
         assert "busy" in {w["state"] for w in workers}
     thread.join(5)
     assert answers == [(503, "shutdown")]
-    assert pids and not LIVE_PIDS
+    assert pids and not _started_since(before) and not (pids & set(LIVE_PIDS))
     for pid in pids:
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)
@@ -313,8 +335,9 @@ def test_flank_bp_only_reaches_a_helper_that_lists_it(monkeypatch, standalone_ap
     from conftest import auth_headers
     monkeypatch.setenv("FAKE_GRAPH_FEATURES", "none")
     service.reset_for_tests()
+    before = set(LIVE_PIDS)
     with TestClient(standalone_app, headers=auth_headers()) as client:
         reg = client.post("/api/graph/registrations", json={"package": str(package)}).json()["registration"]
         out = client.post("/api/graph/subgraph", json=body(reg, flank_bp=1)).json()
         assert "flank_bp" not in out["result"]["echo"]
-    assert not LIVE_PIDS
+    assert not _started_since(before)

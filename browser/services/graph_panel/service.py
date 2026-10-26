@@ -229,6 +229,15 @@ async def register_package(package_dir: str) -> dict:
     return reg.public()
 
 
+async def unregister_package(registration_id: str) -> dict:
+    """Forget a registered package (it is no longer offered; a package named in FIBERBROWSER_GRAPH_PACKAGES comes
+    back at the next start)."""
+    await ensure_ready()
+    reg = registry().get(str(registration_id or ""))   # 404 unknown_registration
+    registry().unregister(reg.id)
+    return {"registration_id": reg.id, "removed": True}
+
+
 def cancel(request_id: str) -> bool:
     loop = asyncio.get_running_loop()
     with _lock:

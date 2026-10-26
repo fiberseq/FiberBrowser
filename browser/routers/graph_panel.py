@@ -54,6 +54,18 @@ async def graph_register(req: RegisterRequest):
         return _error(exc)
 
 
+@router.delete("/api/graph/registrations/{registration_id}")
+async def graph_unregister(registration_id: str):
+    """Forget a registered package (host-only, like registering one)."""
+    from services.graph_panel import service
+    from services.graph_panel.registration import RegistrationError
+    try:
+        return await service.unregister_package(registration_id)
+    except RegistrationError as exc:
+        return JSONResponse({"status": "error", "error": {"code": exc.code, "message": exc.message, "retryable": False}},
+                            status_code=exc.status)
+
+
 @router.get("/api/graph/registrations/{registration_id}/paths")
 async def graph_paths(registration_id: str, offset: int = Query(0, ge=0), limit: int = Query(64, ge=1, le=128),
                       filter: Optional[str] = Query(None, max_length=256)):
