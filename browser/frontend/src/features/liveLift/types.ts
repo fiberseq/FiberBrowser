@@ -11,6 +11,10 @@ export interface LiveLiftDatasetInfo {
   settings: LiftSettings;
   key: string;
   source_assembly?: string;
+  /** The map's one source sample (PanSN `HG002#1` -> `HG002`; null: several or unknown). Labels: sampleLabel.ts. */
+  source_sample?: string | null;
+  /** The target reference's name from the map's target paths (`GRCh38#0` -> `GRCh38`), when known. */
+  target_reference?: string | null;
 }
 
 declare module '../../types/dataset' {

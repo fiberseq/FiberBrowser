@@ -43,12 +43,15 @@ export function inspectionModel(rows: DifferenceInspection[], preferredHap?: str
   return { rows: ordered, summary, misphased: rows.filter(r => r.allele === 'grch38'),
     carriers: carrierRows.map(r => r.id), carrierRows };
 }
-export function haplotypeSummary(alleles: Record<string, number>) {
+/** `reference`: the target assembly's name (sampleLabel.targetReferenceLabel). */
+export function haplotypeSummary(alleles: Record<string, number>, reference = 'the reference') {
   return Object.entries(alleles).map(([allele, n]) => allele === 'same_as_grch38'
-    ? `no difference here, ${n} ${n === 1 ? 'read agrees' : 'reads agree'} with GRCh38`
+    ? `no difference here, ${n} ${n === 1 ? 'read agrees' : 'reads agree'} with ${reference}`
     : `${allele.toUpperCase().replace(/_/g, ' ')} ${n}`).join(' · ');
 }
-export function differenceDescription(d: Difference, chrom: string): string {
+/** `names`: the two assemblies as labels name them (sampleLabel.ts; default "Reference" and "Source"). */
+export function differenceDescription(d: Difference, chrom: string, names: { source?: string | null; target?: string | null } = {}): string {
+  const src = names.source || 'Source', tgt = names.target || 'Reference';
   const locus = d.src.contig && d.src.start !== null && d.src.end !== null
     ? d.src.start === d.src.end ? `${d.src.contig}:${d.src.start.toLocaleString()}|${(d.src.start + 1).toLocaleString()} (source boundary)`
       : `${d.src.contig}:${(d.src.start + 1).toLocaleString()}–${d.src.end.toLocaleString()}`
@@ -57,8 +60,8 @@ export function differenceDescription(d: Difference, chrom: string): string {
     : `${chrom}:${(d.t_start + 1).toLocaleString()}–${d.t_end.toLocaleString()}`;
   const size = d.kind === 'replacement' ? `${d.ref_bp.toLocaleString()}→${d.alt_bp.toLocaleString()}` : differenceSize(d).toLocaleString();
   return `${d.hap_label} · ${d.kind.replace(/_/g, ' ')} · ${size} bp · ${d.source === 'reads' ? 'read-only event' : 'assembly difference'}\n`
-    + `GRCh38 ${target}\nHG002 ${locus}\n`
-    + `GRCh38: ${d.grch38 ?? 'unknown'}${d.grch38 !== null && d.ref_truncated ? `… (${d.ref_bp.toLocaleString()} bp)` : ''} · HG002: ${d.alt ?? 'unknown'}${d.alt !== null && d.alt_truncated ? `… (${d.alt_bp.toLocaleString()} bp)` : ''}\n`
+    + `${tgt} ${target}\n${src} ${locus}\n`
+    + `${tgt}: ${d.grch38 ?? 'unknown'}${d.grch38 !== null && d.ref_truncated ? `… (${d.ref_bp.toLocaleString()} bp)` : ''} · ${src}: ${d.alt ?? 'unknown'}${d.alt !== null && d.alt_truncated ? `… (${d.alt_bp.toLocaleString()} bp)` : ''}\n`
     + `${BADGE_REASONS[d.reason] ?? d.reason.replace(/_/g, ' ')}`
     + (d.read_support ? `\nGeometry candidate: ${d.read_support.carriers} native reads' ${d.kind} (sequence comparison unassessed)` : '')
     + ((d.read_candidates?.length ?? 0) > 1 ? ` · ${d.read_candidates!.length} candidate clusters; counts not combined` : '');

@@ -7,6 +7,7 @@ import { registerViewLink } from '../../utils/panelExtensions';
 import { openAltAllelePanel } from '../altAllele/altAllelePanel';
 import type { DifferenceSelection } from './inspectionStore';
 import { useLiveLiftStore } from './store';
+import { sourceHapLabel, sourceSampleLabel, sourceSampleName } from './sampleLabel';
 
 interface SourceLink { chrom: string; pos: number; targetEnd?: number; contig: string; start: number; end: number; reversed: boolean }
 declare module '../../types' { interface PanelConfig { liveLiftSource?: SourceLink } }
@@ -54,10 +55,10 @@ export async function openSourceView(s: DifferenceSelection): Promise<void> {
   if (!dataset || !d.src.contig || d.src.start === null || d.src.end === null) return;
   try {
     // Reuse an ordinary source BAM if already open; the header-contig reference
-    // path works without an HG002 FASTA and is persisted like alt-allele panels.
+    // path works without a source-assembly FASTA and is persisted like alt-allele panels.
     let native = st.datasets.find(n => n.data_type === 'bam' && n.path === dataset.path);
     if (!native) {
-      const result = await addDataset(dataset.paths?.length ? dataset.paths : dataset.path, `${dataset.label} · HG002 source`);
+      const result = await addDataset(dataset.paths?.length ? dataset.paths : dataset.path, `${dataset.label} · ${sourceSampleName(dataset) ? `${sourceSampleName(dataset)} source` : 'source assembly'}`);
       if (!result.success || !result.dataset || result.dataset.data_type !== 'bam') throw new Error(result.error ?? 'Cannot open the source BAM as a native dataset');
       native = result.dataset;
     }
@@ -74,17 +75,17 @@ export async function openSourceView(s: DifferenceSelection): Promise<void> {
       panels: [...state.panels, { id, contentType: 'dataset', datasetId: source.id, stateKey: `${id}~hg002`,
         subTracks: createDefaultSubTracks(state.orthogonalTracks, state.compositeTracks), collapsed: false, linkGroup: null,
         layoutRow: 0, genome: attached.genome!.key, ownLocus: true, siteLocked: false,
-        title: `HG002 ${d.hap_label} ${d.kind}`, titleDetail: `Local link anchored at the ${d.kind}`,
+        title: `${sourceHapLabel(dataset, d.hap_label)} ${d.kind}`, titleDetail: `Local link anchored at the ${d.kind}`,
         viewportOverride: { chrom: d.src.contig!, start: Math.max(0, d.src.start! - 1000), end: d.src.end! + 1000 },
         ...(s.viewKey === 'main' ? { liveLiftSource: { chrom: s.chrom, pos: d.t_start, targetEnd: d.t_end, contig: d.src.contig!, start: d.src.start!, end: d.src.end!, reversed: d.strand === '-' } } : {}),
       }],
     }));
-    useBrowserStore.getState().pushSnapshot(`Open ${d.kind} in HG002 source view`, { kind: 'layout' });
+    useBrowserStore.getState().pushSnapshot(`Open ${d.kind} in ${sourceSampleLabel(dataset)} source view`, { kind: 'layout' });
   } catch (e) {
     // The native match is the existing alt-allele path's accepted input.
     const native = st.datasets.find(n => n.data_type === 'bam' && n.path !== dataset.path);
     if (native && d.read_support && d.kind === 'insertion') {
       await openAltAllelePanel({ datasetId: native.id, chrom: s.chrom, ref: d.t_start, len: d.alt_bp }, { afterPanelId: s.panelId });
-    } else useBrowserStore.getState().setError(`HG002 source view: ${(e as Error).message}. An alt-allele fallback requires matching native insertion evidence.`);
+    } else useBrowserStore.getState().setError(`${sourceSampleName(dataset) ? `${sourceSampleName(dataset)} source` : 'Source assembly'} view: ${(e as Error).message}. An alt-allele fallback requires matching native insertion evidence.`);
   }
 }

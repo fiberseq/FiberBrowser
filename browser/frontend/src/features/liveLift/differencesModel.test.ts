@@ -33,8 +33,10 @@ describe('difference strip decisions', () => {
   });
   it('names both assemblies, bases, reason, and matched native evidence on hover', () => {
     const text = differenceDescription({ ...diff(50, 2353, 'insertion'), reason: 'source_insertion', read_support: { carriers: 7, cluster: 0 } }, 'chr1');
-    expect(text).toContain('GRCh38 chr1:'); expect(text).toContain('HG002 src:');
-    expect(text).toContain('GRCh38: A · HG002: C'); expect(text).toContain('sequence of the source assembly only');
+    expect(text).toContain('Reference chr1:'); expect(text).toContain('Source src:');
+    expect(text).toContain('Reference: A · Source: C');
+    const named = differenceDescription({ ...diff(50, 2353, 'insertion'), reason: 'source_insertion' }, 'chr1', { source: 'NA12878', target: 'CHM13' });
+    expect(named).toContain('CHM13 chr1:'); expect(named).toContain('NA12878 src:'); expect(named).toContain('CHM13: A · NA12878: C'); expect(text).toContain('sequence of the source assembly only');
     expect(text).toContain("Geometry candidate: 7 native reads' insertion (sequence comparison unassessed)");
   });
   it('previous/next searches beyond edges and respects each minimum-size filter', () => {

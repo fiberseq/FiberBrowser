@@ -253,7 +253,7 @@ describe('tooltip and chip', () => {
     expect(lines).toContain('Molecule strand CT (st, unchanged by the lift)');
     expect(lines.some(l => l.startsWith('1 segment run reversed'))).toBe(true);
     expect(lines.some(l => l.startsWith('+2.4 kb: sequence of the source assembly only'))).toBe(true);
-    expect(lines).toContain('CIGAR detail: muted HG002 assembly differences; normal read mismatches; amber GRCh38-allele markers (possible mis-phasing).');
+    expect(lines).toContain('CIGAR detail: muted source-assembly differences; normal read mismatches; amber reference-allele markers (possible mis-phasing).');
   });
 
   it('chips a lifted panel by haplotype', () => {

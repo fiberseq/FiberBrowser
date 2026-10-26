@@ -11,6 +11,7 @@ import { declareContribution } from '../../../plugins/packRegistry';
 import { useBrowserStore } from '../../../stores/browserStore';
 import { liveLiftHaplotypeColor } from '../palette';
 import { liftHapLabels } from '../types';
+import { sourceHapLabel } from '../sampleLabel';
 import { useLiveLiftStore } from '../store';
 import { LIFT_RIBBON_HEIGHT, LiftRibbonStrip } from './LiftRibbonStrip';
 import {
@@ -29,7 +30,7 @@ export function LiftedPanelLinkItems({ ctx }: { ctx: PanelHeaderContext }) {
     <>
       {haps.map(hap => (
         <MenuItem key={hap} tour="panel-live-lift-source-view" icon={<span>⇣</span>}
-          title={`Open the source BAM on HG002 ${hap} coordinates under this panel, linked through the map`}
+          title={`Open the source BAM on ${sourceHapLabel(dataset, hap)} coordinates under this panel, linked through the map`}
           onSelect={() => { void openLinkedSourceView(panel.id, hap); }}>
           <span data-testid={`live-lift-open-source-${hap}`}>{haps.length > 1 ? `Open ${hap} source view` : 'Open source view'}</span>
         </MenuItem>
@@ -43,10 +44,11 @@ function useLinkedSourceHeader(ctx: PanelHeaderContext) {
   const link = ctx.panel.liftLink;
   const candidates = useLiftLinkCandidates(s => (link ? s.byPanel[ctx.panel.id] : undefined));
   const liftKey = useBrowserStore(s => (link ? s.datasets.find(d => d.id === link.datasetId)?.live_lift?.key : undefined));
+  const lifted = useBrowserStore(s => (link ? s.datasets.find(d => d.id === link.datasetId) : undefined));
   const enabled = useLiveLiftStore(s => s.enabled);
   if (!link || !enabled) return null;
   const summary = liftKey ? loadedSummary(link.datasetId, liftKey) : null;
-  const text = `Linked · HG002 ${link.hapLabel}${link.flip ? ' · reversed' : ''}`;
+  const text = `Linked · ${sourceHapLabel(lifted, link.hapLabel)}${link.flip ? ' · reversed' : ''}`;
   const chainLabel = (chain: number) => {
     const row = summary?.chains[chain];
     return row ? `${row[3]} ${row[6]} (${row[0]}:${row[1].toLocaleString()}–${row[2].toLocaleString()})` : `chain ${chain}`;

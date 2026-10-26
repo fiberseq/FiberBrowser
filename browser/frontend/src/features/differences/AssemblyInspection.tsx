@@ -14,6 +14,7 @@ import { liveLiftHaplotypeColor } from '../liveLift/palette';
 import { IdentifyTab, identifyLens } from '../insertion/IdentifyTab';
 import type { LensResponse } from '../insertion/insertionLensModel';
 import { openSourceView } from '../liveLift/sourceView';
+import { sourceSampleLabel, sourceSampleName, targetReferenceLabel } from '../liveLift/sampleLabel';
 
 export const LIFT_SPLIT_REASON = 'Split by carrier is unavailable: /api/sv/split does not accept live-lift datasets yet.';
 const bases = (s: string | null, length = s?.length ?? 0) => s === null ? 'unknown' : s === '' ? '∅'
@@ -106,7 +107,7 @@ export function AssemblyInspection({ panel, dataset, anchor }: { panel: PanelCon
     style={{ left: Math.max(8, Math.min(rect?.left ?? 8, window.innerWidth - 750)), top, width: Math.min(730, window.innerWidth - 16), maxHeight: Math.max(160, window.innerHeight - top - 12), overflow: 'auto' }}>
     <div className="flex justify-between gap-4"><strong style={{ color: liveLiftHaplotypeColor(d.hap_label, dark) }}>{d.hap_label} · {d.kind.replace(/_/g, ' ')} · {Math.max(d.alt_bp, d.ref_bp).toLocaleString()} bp</strong>
       <button aria-label="Close difference inspection" onClick={() => useDifferenceSelection.getState().select(null)}>×</button></div>
-    <p className="whitespace-pre-line text-[11px] my-2">{differenceDescription(described, current.chrom)}</p>
+    <p className="whitespace-pre-line text-[11px] my-2">{differenceDescription(described, current.chrom, { source: sourceSampleName(dataset), target: targetReferenceLabel(dataset, 'Reference') })}</p>
     <div className="flex gap-3 my-2 items-center">
       {(d.kind === 'insertion' || d.kind === 'replacement') && <span title={d.alt_bp < 50 ? 'Insertion-local read payloads start at 50 bp.' : d.alt_bp > 50_000 ? 'Insertion payload is too large (over 50 kb).' : 'Open the insertion across this view'}>
         <button disabled={!expandableAltBlock(d) || d.source==='reads'&&d.src.start===null} onClick={() => expandDifference(current)}>{d.kind === 'replacement' ? 'Expand alternate' : 'Expand insertion'}</button></span>}
@@ -117,7 +118,7 @@ export function AssemblyInspection({ panel, dataset, anchor }: { panel: PanelCon
       </>}
       {['insertion', 'deletion', 'replacement'].includes(d.kind) &&
         <button disabled={opening || !d.src.contig || d.src.start === null} title="Open the source BAM on its own header-contig reference; locally linked at this difference"
-          onClick={() => { setOpening(true); void openSourceView(current).finally(() => setOpening(false)); }}>{opening ? 'Opening…' : 'Open in HG002 view'}</button>
+          onClick={() => { setOpening(true); void openSourceView(current).finally(() => setOpening(false)); }}>{opening ? 'Opening…' : `Open in ${sourceSampleLabel(dataset)} view`}</button>
       }
     </div>
     <p>Assembly observation · {d.sequence_status ?? 'unresolved'} sequence · provisional identity · assembly comparison unassessed</p>
@@ -129,11 +130,11 @@ export function AssemblyInspection({ panel, dataset, anchor }: { panel: PanelCon
     {identify && lens && <IdentifyTab response={lens} datasetId={dataset.id} identifyKey={identifyKey} reversed={false} visible dark={dark} />}
     <div className="my-2 flex gap-3 flex-wrap">{Object.entries(model.summary).map(([hap, alleles]) => <span key={hap}
       data-testid={hap !== preferredHap ? 'live-lift-other-hap-summary' : 'live-lift-selected-hap-summary'}>
-      <span style={{ color: liveLiftHaplotypeColor(hap, dark) }}>{hap}</span>: {haplotypeSummary(alleles)}</span>)}</div>
-    {model.misphased.length > 0 && <p className="text-amber-700 dark:text-amber-300 font-semibold" data-testid="live-lift-misphased">{model.misphased.length} GRCh38-allele reads · possible mis-phasing / mismapping</p>}
+      <span style={{ color: liveLiftHaplotypeColor(hap, dark) }}>{hap}</span>: {haplotypeSummary(alleles, targetReferenceLabel(dataset, 'the reference'))}</span>)}</div>
+    {model.misphased.length > 0 && <p className="text-amber-700 dark:text-amber-300 font-semibold" data-testid="live-lift-misphased">{model.misphased.length} {targetReferenceLabel(dataset)}-allele reads · possible mis-phasing / mismapping</p>}
     {data && error && <p role="status">{error}</p>}
     {readRequested && !data && <p role="status">{error || 'Loading reads and alleles…'}</p>}
-    {data && <><p>Source alignment observations (carriage is shown in the molecule-call table).</p><table className="w-full text-left text-[10px] mt-2"><thead><tr>{['Read', 'Hap / strand', 'Allele', 'Read bases', 'HG002', 'GRCh38', ...(['insertion', 'replacement'].includes(d.kind) ? ['Identity'] : []), 'Chromatin / nearby m6A'].map(h => <th key={h} className="px-1">{h}</th>)}</tr></thead>
+    {data && <><p>Source alignment observations (carriage is shown in the molecule-call table).</p><table className="w-full text-left text-[10px] mt-2"><thead><tr>{['Read', 'Hap / strand', 'Allele', 'Read bases', sourceSampleName(dataset) ?? 'Source', targetReferenceLabel(dataset, 'Reference'), ...(['insertion', 'replacement'].includes(d.kind) ? ['Identity'] : []), 'Chromatin / nearby m6A'].map(h => <th key={h} className="px-1">{h}</th>)}</tr></thead>
       <tbody>{model.rows.map((r, i) => <tr key={`${r.id}-${r.record}-${i}`} data-hap={r.hap_label} data-allele={r.allele} className={r.allele === 'grch38' ? 'bg-amber-100 dark:bg-amber-950' : 'hover:bg-slate-100 dark:hover:bg-slate-800'}
         onMouseEnter={() => useReadActionsStore.setState({ highlight: { ids: new Set([r.row_id ?? r.id]), scopedRows:{[dataset.id]:new Set([r.row_id ?? r.id])}, pulseUntil: null, scrollTo: null, scrolled: new Set(), nonce: Date.now() } })}
         onMouseLeave={() => useReadActionsStore.getState().clearHighlight()}>

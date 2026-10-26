@@ -24,7 +24,8 @@ import type { Difference, DifferencesResponse } from './differenceTypes';
 vi.mock('./api', async original => ({ ...await original<typeof import('./api')>(), getDifferences: vi.fn(), getDifferenceReads: vi.fn() }));
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 const dataset: Dataset = { id: 'lift', label: 'Lift', path: '/source.bam', color: '#000', data_type: 'bam_livelift',
-  live_lift: { key: 'key-1', manifest: 'map.json', map_label: 'map', settings: {}, haplotypes: ['h1', 'h2'], haplotype_labels: { h1: 'MAT', h2: 'PAT' } } };
+  live_lift: { key: 'key-1', manifest: 'map.json', map_label: 'map', settings: {}, haplotypes: ['h1', 'h2'], haplotype_labels: { h1: 'MAT', h2: 'PAT' },
+    source_sample: 'NA12878', target_reference: 'CHM13' } };
 const panel: PanelConfig = { id: 'mat', contentType: 'dataset', datasetId: 'lift', liftHap: 'MAT', stateKey: 'mat-state', linkGroup: null, layoutRow: 0, subTracks: [], collapsed: false };
 const native: PanelConfig = { ...panel, id: 'native', datasetId: 'native', liftHap: undefined };
 const diff: Difference = { id: 'MAT:src:100-2453:insertion', hap: 'h1', hap_label: 'MAT', kind: 'insertion', reason: 'source_insertion', source: 'assembly',
@@ -154,7 +155,7 @@ describe('differences strip and inspection', () => {
       summary: {}, capped: false, max_records: 500 });
     vi.mocked(getDifferences).mockResolvedValue(response([{ ...diff, id: 'snv', kind: 'snv', t_end: 501, ref_bp: 1, alt_bp: 1 }]));
     renderStrip(); await settle(); inspectClick(host.querySelector('[data-testid="live-lift-diff-item"]')!); await settle();
-    expect(document.querySelector('[data-testid="live-lift-misphased"]')?.textContent).toContain('1 GRCh38-allele');
+    expect(document.querySelector('[data-testid="live-lift-misphased"]')?.textContent).toContain('1 CHM13-allele');
     expect(document.querySelector('table')?.textContent).toContain('nucleosome (nuc) · m6A 4 bp');
     // The carriers are outlined (not pinned: no second read fetch).
     expect([...useReadActionsStore.getState().highlight!.ids]).toEqual(['r0']);
@@ -176,10 +177,10 @@ describe('differences strip and inspection', () => {
     const first = document.querySelector('tbody tr')!;
     expect(first.getAttribute('data-hap')).toBe('MAT'); expect(first.getAttribute('data-allele')).toBe('hg002');
     expect(first.children[1].textContent).toBe('● MAT');
-    expect(document.querySelector('[data-testid="live-lift-other-hap-summary"]')?.textContent).toBe('PAT: no difference here, 35 reads agree with GRCh38');
+    expect(document.querySelector('[data-testid="live-lift-other-hap-summary"]')?.textContent).toBe('PAT: no difference here, 35 reads agree with CHM13');
     expect(document.querySelector('[data-testid="live-lift-misphased"]')).toBeNull();
     expect(document.querySelector('table')?.textContent).not.toContain('/ ?');
-    expect(document.querySelector('[data-testid="live-lift-diff-popover"]')?.textContent).toContain('GRCh38: A · HG002: C');
+    expect(document.querySelector('[data-testid="live-lift-diff-popover"]')?.textContent).toContain('CHM13: A · NA12878: C');
   });
   it('renders insertion previews with their full length and identity separately from carriage', async () => {
     vi.mocked(getDifferenceReads).mockResolvedValue({ dataset_id: 'lift', lift_key: 'key-1', chrom: 'chr1', pos: 500, end: 500,
@@ -271,8 +272,8 @@ describe('badge click and sibling axes', () => {
     renderStrip(); await settle(); act(() => { selectBadge(); }); await settle();
     expect(getDifferences).toHaveBeenCalledTimes(1);
     expect(useDifferenceSelection.getState().selection?.difference).toEqual(canonical);
-    expect(document.querySelector('[data-testid="live-lift-diff-popover"]')?.textContent).toContain('HG002 src:101–101');
-    expect(document.querySelector('[data-testid="live-lift-diff-popover"]')?.textContent).toContain('GRCh38:  · HG002: C');
+    expect(document.querySelector('[data-testid="live-lift-diff-popover"]')?.textContent).toContain('NA12878 src:101–101');
+    expect(document.querySelector('[data-testid="live-lift-diff-popover"]')?.textContent).toContain('CHM13:  · NA12878: C');
   });
   it('fetches a small unfiltered window for an unloaded ID and picks that exact item', async () => {
     vi.mocked(getDifferences).mockResolvedValue(response([{ ...canonical, id: 'neighbour', alt: 'T' }, canonical]));

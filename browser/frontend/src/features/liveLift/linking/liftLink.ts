@@ -21,6 +21,7 @@ import type { Dataset, PanelConfig } from '../../../types';
 import { useLiveLiftStore } from '../store';
 import { ensureSummary, mapSpan, onNavigationData, prefetchView, sourceContigsFor, type MapCandidate, type SpanMapping } from './navigation';
 import type { LiftLinkConfig } from './types';
+import { sourceHapLabel } from '../sampleLabel';
 import './types';
 
 export const LIFT_RIBBON_TRACK = 'lift-ribbon';
@@ -258,7 +259,7 @@ export async function openLinkedSourceView(liftPanelId: string, hapLabel?: strin
         id, contentType: 'dataset', datasetId: source.id, stateKey: `${id}~lift-source`,
         subTracks: [{ type: LIFT_RIBBON_TRACK, visible: true }, ...createDefaultSubTracks(state.orthogonalTracks, state.compositeTracks)],
         collapsed: false, linkGroup: null, layoutRow: row, layoutColumn: column, genome: genomeKey, siteLocked: false,
-        title: `HG002 ${label} source`, titleDetail: `Linked to the live-lift ${label} panel through the map`,
+        title: `${sourceHapLabel(dataset, label)} source`, titleDetail: `Linked to the live-lift ${label} panel through the map`,
         viewportOverride: { chrom: mapping.chrom, start: mapping.start, end: mapping.end }, liftLink: link,
       } as PanelConfig;
       const panels = [...state.panels];

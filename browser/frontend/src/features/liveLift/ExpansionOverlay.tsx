@@ -4,12 +4,14 @@ import { useDifferenceSelection } from './inspectionStore';
 import { liveLiftHaplotypeColor } from './palette';
 import type { Difference } from './differenceTypes';
 import { openSourceView } from './sourceView';
+import { sourceSampleLabel } from './sampleLabel';
 import { useLiveLiftStore } from './store';
 import type { PanelConfig } from '../../types';
 
 export function ExpansionOverlay({ axis, viewKey, sidebar = 0, panel: enclosing }: { axis: LiftAxis; viewKey: string; sidebar?: number; panel?: PanelConfig | null }) {
   const dark = useBrowserStore(s => s.darkMode);
   const panels = useBrowserStore(s => s.panels);
+  const datasets = useBrowserStore(s => s.datasets);
   return <>{axis.blocks.map(({ x0, x1, ins }) => <div key={ins.ins_id} data-testid="live-lift-expanded-block" data-ins-id={ins.ins_id}
     className="absolute top-0 z-20 text-[10px] h-6 border-x border-slate-300 bg-slate-100/95 dark:bg-slate-800/95"
     style={{ left: sidebar + x0, width: Math.max(1, x1 - x0), color: liveLiftHaplotypeColor(ins.hap_label, dark) }}>
@@ -18,7 +20,7 @@ export function ExpansionOverlay({ axis, viewKey, sidebar = 0, panel: enclosing 
     <button data-testid="live-lift-expanded-collapse" aria-label={`Collapse ${ins.label}`} className="font-bold" onClick={() => useBrowserStore.getState().collapseLiveLift(viewKey, ins.ins_id)}>×</button>
     <strong className="whitespace-nowrap" title={ins.detail ?? ins.label} data-testid="live-lift-expanded-label">{ins.label}</strong>
     {ins.source !== 'reads' && <button onClick={()=>useBrowserStore.getState().expandLiveLift(viewKey,{...ins,associate_native:!ins.associate_native})} title="Associate native observations for layout using geometry; this does not establish allele equivalence">{ins.associate_native?'Unlink native layout':'Associate native layout'}</button>}
-    {(ins.source === 'reads' ? ['Identify'] : ['Identify', 'Open in HG002 view']).map(action => <button key={action} className="underline whitespace-nowrap" title={action} onClick={() => {
+    {(ins.source === 'reads' ? ['Identify'] : ['Identify', `Open in ${sourceSampleLabel(datasets.find(d => d.id === ins.datasetId))} view`]).map(action => <button key={action} className="underline whitespace-nowrap" title={action} onClick={() => {
       const panel = (enclosing?.datasetId === ins.datasetId ? enclosing : undefined)
         ?? panels.find(p => p.datasetId === ins.datasetId && p.liftHap === ins.hap_label)
         ?? panels.find(p => p.datasetId === ins.datasetId) ?? enclosing;

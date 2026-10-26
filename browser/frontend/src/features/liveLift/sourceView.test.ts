@@ -17,10 +17,11 @@ const selection: DifferenceSelection = { panelId: 'mat', datasetId: 'lift', chro
 beforeEach(() => {
   vi.mocked(addDataset).mockReset(); vi.mocked(attachPanelGenome).mockReset(); vi.mocked(openAltAllelePanel).mockReset();
   useLiveLiftStore.setState({ enabled: true });
-  useBrowserStore.setState({ chrom: 'chr1', start: 0, end: 1000, datasets: [{ id: 'lift', path: '/source.bam', label: 'lift', color: '#000', data_type: 'bam_livelift' }], panels: [], slotOrder: [], pushSnapshot: vi.fn() });
+  useBrowserStore.setState({ chrom: 'chr1', start: 0, end: 1000, datasets: [{ id: 'lift', path: '/source.bam', label: 'lift', color: '#000', data_type: 'bam_livelift',
+    live_lift: { source_sample: 'NA12878', haplotypes: ['NA12878#1'], haplotype_labels: {}, manifest: 'm', map_label: 'm', settings: {}, key: 'k' } }], panels: [], slotOrder: [], pushSnapshot: vi.fn() });
   usePanelGenomeStore.setState({ genomes: {}, assignments: {}, refresh: vi.fn().mockResolvedValue(undefined) });
 });
-describe('HG002 source view', () => {
+describe('source assembly view', () => {
   it.each([0, 1, 100])('links both spans of a replacement/deletion with %i source bases', async alt => {
     vi.mocked(addDataset).mockResolvedValue({ success: true, dataset: { id: 'src', path: '/source.bam', label: 'source', color: '#000', data_type: 'bam' } });
     vi.mocked(attachPanelGenome).mockResolvedValue({ success: true, genome: { key: 'contigs:src', chroms: [{ name: 'src', size: 10000 }] } as never });
@@ -49,7 +50,8 @@ describe('HG002 source view', () => {
     vi.mocked(addDataset).mockResolvedValue({ success: true, dataset: { id: 'src', path: '/source.bam', label: 'source', color: '#000', data_type: 'bam' } });
     vi.mocked(attachPanelGenome).mockResolvedValue({ success: true, genome: { key: 'contigs:src', chroms: [{ name: 'src', size: 10000 }] } as never });
     await openSourceView(selection);
-    expect(addDataset).toHaveBeenCalledWith('/source.bam', 'lift · HG002 source');
+    expect(addDataset).toHaveBeenCalledWith('/source.bam', 'lift · NA12878 source');
+    expect(useBrowserStore.getState().panels[0].title).toBe('NA12878 MAT insertion');
     expect(attachPanelGenome).toHaveBeenCalledWith({ dataset_ids: ['src'], contigs: true, span: 0 });
     const p = useBrowserStore.getState().panels[0];
     expect(p).toMatchObject({ datasetId: 'src', genome: 'contigs:src', viewportOverride: { chrom: 'src', start: 0, end: 2100 } });
