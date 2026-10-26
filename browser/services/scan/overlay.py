@@ -21,6 +21,7 @@ idempotent: layers it wrote carry ``scan_overlay`` and are replaced.
 """
 from __future__ import annotations
 
+import hashlib
 from typing import Dict, List
 
 STATE_BYTE = {'1': 1, '0': 2, '.': 3}
@@ -130,10 +131,18 @@ def apply_scan_overlays(state, dataset_id: str, chrom: str, start: int, end: int
                 marks.setdefault(r.get('qname', ''), {}).setdefault(group, []).append(r)
     if not marks:
         return reads
+    # A pass's token: rows this exact pass already overlaid (same view, same scans) are returned as they are, so a
+    # later pass keeps the row objects (and the consensus projection's receipt over them).
+    token = 'scan:' + hashlib.sha256(repr((dataset_id, chrom, int(start), int(end),
+                                           tuple((sc.scan_id, sc.manifest_digest) for sc, _s, _g in scans))).encode()).hexdigest()[:16]
     out = []
     for read in reads:
+        original = read.get('layers') or {}
+        if any(isinstance(v, dict) and v.get('scan_overlay') == token for v in original.values()):
+            out.append(read)
+            continue
         mine = marks.get(str(read.get('id', '')))
-        layers = {k: v for k, v in (read.get('layers') or {}).items() if not (isinstance(v, dict) and v.get('scan_overlay'))}
+        layers = {k: v for k, v in original.items() if not (isinstance(v, dict) and v.get('scan_overlay'))}
         if mine:
             # The row's own record: by its identity when the row carries it, else by where its alignment is.
             sha, occ = read.get('record_sha256'), read.get('alignment_occurrence')
@@ -159,7 +168,7 @@ def apply_scan_overlays(state, dataset_id: str, chrom: str, start: int, end: int
                     srcs.append([a - start, b - start, size])
                     if 'hit_id' in row:
                         names.append(row.get('hit_id', ''))
-                        q0.append([STATE_BYTE.get(str(row.get('state')), 3)])
+                        q0.append(_state_bytes(row))
                     else:   # a molecule-wide mark: its own bytes (the MA group's qualities) and AN name
                         names.append(row.get('name', '') if row.get('name') not in (None, '.') else '')
                         q0.append([int(x) for x in str(row.get('q') or '').split(',') if x != ''])
@@ -168,13 +177,37 @@ def apply_scan_overlays(state, dataset_id: str, chrom: str, start: int, end: int
                     layers[group] = dict(intervals=ivs, source_intervals=srcs, annotation_names=names,
                                          quality_names=[f'q{i}' for i in range(width)],
                                          qualities=[[q[i] if i < len(q) else 0 for q in q0] for i in range(width)],
-                                         scan_overlay=True, source_layer=LAYER_META.get(group, ('', '', 'tf'))[2],
+                                         scan_overlay=token, source_layer=LAYER_META.get(group, ('', '', 'tf'))[2],
                                          draw_style='fill')
-        if mine or len(layers) != len(read.get('layers') or {}):
+        if set(layers) != set(original) or any(layers[k] is not original.get(k) for k in layers):
             read = dict(read)
             read['layers'] = layers
         out.append(read)
     return out
+
+
+TIER_BYTE = {'': 0, 'core': 1, 'edge': 2, 'loose': 3}
+
+
+def _byte(value) -> int:
+    try:
+        return int(round(255 * min(1.0, max(0.0, float(value)))))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _state_bytes(row: dict) -> List[int]:
+    """A state row's MA bytes, as the scan writes its state group: fpcls (state, posterior, tier); nfrvar (state, p)
+    for variants, (state, 255 open / 0 closed) for regions."""
+    state = STATE_BYTE.get(str(row.get('state')), 3)
+    hit = str(row.get('hit_id', ''))
+    if hit.startswith('fp:'):
+        return [state, _byte(row.get('posterior')), TIER_BYTE.get(str(row.get('tier') or ''), 0)]
+    if hit.startswith('nfr:variant:'):
+        return [state, _byte(row.get('p'))]
+    if hit.startswith('nfr:'):
+        return [state, 255 if str(row.get('state')) == '1' else 0]
+    return [state]
 
 
 def apply_to_working_set(state, dataset_id, chrom, start, end, working_set):

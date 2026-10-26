@@ -135,7 +135,8 @@ def hits_for_view(scan, module: str, chrom: str, start: int, end: int, *, type_i
         flags = [f for f in str(r.get('flags') or '').split(',') if f]
         a, b = int(r['start']), int(r['end'])
         hits.append(dict(
-            hitId=r['hit_id'], typeId=r.get('type'), chrom=r['chrom'], start=a, end=b,
+            # The caller's name for the contig (an alias of the table's, chr1 / 1), so navigation stays on its genome.
+            hitId=r['hit_id'], typeId=r.get('type'), chrom=chrom if scan.frame is None else r['chrom'], start=a, end=b,
             anchor=int(r['anchor']) if r.get('anchor') not in (None, '') else (a + b) // 2,
             strand=r.get('strand') if r.get('strand') in ('+', '-') else None,
             label=r.get('label') or '', score=_num(r.get('score')), unitId=r.get('unit_id'),

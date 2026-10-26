@@ -75,8 +75,20 @@ class Table:
         self._tabix = pysam.TabixFile(str(self.path), index=str(idx))
         self.contigs = set(self._tabix.contigs)
 
+    def contig(self, chrom: str) -> Optional[str]:
+        """The table's name for a contig: itself, or its alias (chr1 / 1) by the browser's rule."""
+        if chrom in self.contigs:
+            return chrom
+        try:
+            from utils.chrom import normalize_chrom_name
+        except ImportError:   # pragma: no cover - outside the browser
+            return None
+        want = normalize_chrom_name(chrom)
+        return next((c for c in self.contigs if normalize_chrom_name(c) == want), None)
+
     def fetch(self, chrom: str, start: Optional[int] = None, end: Optional[int] = None) -> List[dict]:
-        if chrom not in self.contigs:
+        chrom = self.contig(chrom)
+        if chrom is None:
             return []
         with self._lock:
             if start is None:

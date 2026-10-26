@@ -133,8 +133,8 @@ class OpenScan:
         return found[0] if found else None
 
     def datasets_of_browser(self, browser_id: str) -> List[str]:
-        """Every scan dataset bound to a browser dataset (several when one loaded dataset holds their files)."""
-        return [sid for sid, b in self.bindings.items() if b.get('dataset') == browser_id and b.get('status') == 'bound']
+        """Every scan dataset bound to a browser dataset."""
+        return list(dict.fromkeys(sid for sid, bid, _via, _files in self.bound_pairs() if bid == browser_id))
 
     def count_types(self) -> None:
         """Rows per hit type of each module's hits table (small tables read whole; larger: module totals only)."""
@@ -160,46 +160,83 @@ class OpenScan:
 
     # ---- dataset binding
     def bind(self, state) -> None:
-        """Bind each scan dataset to one loaded dataset by content id: every input file of the scan dataset (or every
-        annotated BAM written for it) must be a file of that loaded dataset. ``files`` maps each scan input index to
-        the loaded file that holds it (its records are the ones the states name)."""
+        """Bind scan datasets to loaded datasets by content id. A loaded dataset binds when its files are exactly the
+        files of one scan dataset, or exactly partitioned by several (a merged dataset of A + B), as inputs or as the
+        annotated BAMs the scan wrote. Several loaded datasets can hold the same files (the same BAM opened twice, a
+        live-lift dataset of it): all of them bind (``also``). A loaded dataset holding other files too, or only some,
+        is 'partial': its other reads would be labelled by this scan. ``files`` maps each scan input index to the
+        loaded file that holds it."""
         loaded = _loaded_files(state)
         annotated = (self.manifest.get('outputs') or {}).get('annotated') or []
+        wanted: Dict[str, Dict[str, list]] = {}
+        for ds in self.manifest.get('datasets') or []:
+            sid = ds.get('dataset_id')
+            wanted[sid] = {
+                'input': [(int(f.get('input_index', i)), f.get('content_id')) for i, f in enumerate(ds.get('files') or [])],
+                'annotated': [(int(a.get('input_index', 0)), a.get('content_id')) for a in annotated if a.get('dataset_id') == sid],
+            }
+        found: Dict[str, list] = {sid: [] for sid in wanted}
+        overlaps: Dict[str, str] = {}
+        for ds_id, files in loaded.items():
+            by_cid = {cid: path for path, cid in files if cid}
+            own = set(by_cid)
+            if not own or len(by_cid) != len(files):
+                continue
+            for via in ('input', 'annotated'):
+                parts = [sid for sid, w in wanted.items()
+                         if w[via] and {cid for _i, cid in w[via]} <= own]
+                for sid, w in wanted.items():
+                    if w[via] and {cid for _i, cid in w[via]} & own:
+                        overlaps.setdefault(sid, ds_id)
+                union = [cid for sid in parts for _i, cid in wanted[sid][via]]
+                if parts and len(union) == len(set(union)) and set(union) == own:
+                    for sid in parts:
+                        found[sid].append((ds_id, via, {str(i): by_cid[cid] for i, cid in wanted[sid][via]}))
+                    break
+        names = {os.path.basename(path): ds_id for ds_id, files in loaded.items() for path, _cid in files}
         out = {}
         for ds in self.manifest.get('datasets') or []:
             sid = ds.get('dataset_id')
-            inputs = [(int(f.get('input_index', i)), f.get('content_id'), f.get('name') or '') for i, f in enumerate(ds.get('files') or [])]
-            ann = [(int(a.get('input_index', 0)), a.get('content_id'), os.path.basename(a.get('path') or ''))
-                   for a in annotated if a.get('dataset_id') == sid]
-            best = None
-            partial = None
-            for ds_id, files in loaded.items():
-                by_cid = {cid: path for path, cid in files if cid}
-                for via, wanted in (('input', inputs), ('annotated', ann)):
-                    if not wanted:
-                        continue
-                    hits = {idx: by_cid[cid] for idx, cid, _n in wanted if cid in by_cid}
-                    if len(hits) == len(wanted):
-                        best = best or (ds_id, via, hits)
-                    elif hits:
-                        partial = partial or ds_id
-            if best:
-                ds_id, via, files = best
-                out[sid] = dict(dataset=ds_id, status='bound', via=via, files={str(k): v for k, v in files.items()})
-                continue
-            if partial:
-                out[sid] = dict(dataset=partial, status='partial', via=None,
-                                note='only some of its files are in a loaded dataset: open all of them as one dataset')
-                continue
-            names = {os.path.basename(path): ds_id for ds_id, files in loaded.items() for path, _cid in files}
-            stale = next((names[n] for _i, _c, n in inputs if n in names), None)
-            if stale:
-                out[sid] = dict(dataset=stale, status='stale', via=None,
-                                note='the loaded BAM differs from the one scanned (content changed): re-scan')
+            if found[sid]:
+                (ds_id, via, files), rest = found[sid][0], found[sid][1:]
+                out[sid] = dict(dataset=ds_id, status='bound', via=via, files=files,
+                                also=[dict(dataset=d, via=v, files=f) for d, v, f in rest])
+            elif sid in overlaps:
+                out[sid] = dict(dataset=overlaps[sid], status='partial', via=None,
+                                note='a loaded dataset holds some of its files with others, or only some of them: '
+                                     'open exactly its files as one dataset')
             else:
-                out[sid] = dict(dataset=None, status='unbound', via=None,
-                                note='scan of other files: hits only, no per-read join')
+                stale = next((names[f.get('name')] for f in ds.get('files') or [] if f.get('name') in names), None)
+                if stale:
+                    out[sid] = dict(dataset=stale, status='stale', via=None,
+                                    note='the loaded BAM differs from the one scanned (content changed): re-scan')
+                else:
+                    out[sid] = dict(dataset=None, status='unbound', via=None,
+                                    note='scan of other files: hits only, no per-read join')
         self.bindings = out
+
+    def bound_pairs(self):
+        """(scan dataset, browser dataset, via, {input index: loaded path}) of every binding, the extra ones too."""
+        for sid, b in self.bindings.items():
+            if b.get('status') != 'bound':
+                continue
+            yield sid, b['dataset'], b.get('via'), {int(k): v for k, v in (b.get('files') or {}).items()}
+            for extra in b.get('also') or ():
+                yield sid, extra['dataset'], extra.get('via'), {int(k): v for k, v in (extra.get('files') or {}).items()}
+
+    def update_frame(self, state) -> None:
+        """The scan's frame against the browser's reference (again after datasets or the reference changed)."""
+        problem = _reference_problem(state, self.manifest)
+        self.frame, self.reference_note = None, None
+        bound = [b for b in self.bindings.values() if b.get('status') == 'bound']
+        if problem and bound:
+            lifted = [b['dataset'] for b in bound
+                      if getattr((getattr(state, 'datasets', None) or {}).get(b['dataset']), 'data_type', None) == 'bam_livelift']
+            contigs = (self.manifest.get('reference') or {}).get('contigs') or []
+            self.frame = dict(kind='source', assembly=(self.manifest.get('reference') or {}).get('contigs_sha256', '')[:12],
+                              liftedDatasets=lifted, firstContig=str(contigs[0][0]) if contigs else '')
+            self.reference_note = ('scanned in the source assembly of ' + (', '.join(lifted) if lifted else 'its BAM')
+                                   + ': per-read states join; hits stay in source coordinates (lifting hits: G1)')
 
     # ---- hub feature sets
     def sets(self, state=None) -> List[dict]:
@@ -403,15 +440,7 @@ def open_scan(state, path, *, source: str = 'opened', label: Optional[str] = Non
     bound = [b for b in scan.bindings.values() if b.get('status') == 'bound']
     if problem and not bound:
         raise ScanOpenError(f'Reference mismatch: {problem}. This scan was made on another reference')
-    scan.reference_note = None
-    if problem:
-        lifted = [b['dataset'] for b in bound
-                  if getattr((getattr(state, 'datasets', None) or {}).get(b['dataset']), 'data_type', None) == 'bam_livelift']
-        contigs = (manifest.get('reference') or {}).get('contigs') or []
-        scan.frame = dict(kind='source', assembly=(manifest.get('reference') or {}).get('contigs_sha256', '')[:12],
-                          liftedDatasets=lifted, firstContig=str(contigs[0][0]) if contigs else '')
-        scan.reference_note = ('scanned in the source assembly of ' + (', '.join(lifted) if lifted else 'its BAM')
-                               + ': per-read states join; hits stay in source coordinates (lifting hits: G1)')
+    scan.update_frame(state)
     scan.count_types()
     scans, lock = _session(state)
     with lock:
@@ -426,6 +455,7 @@ def open_scan(state, path, *, source: str = 'opened', label: Optional[str] = Non
             # The same scan key in two directories (computed live and opened from disk): both stay, under distinct ids.
             scan.scan_id = scan.scan_id + (':cache' if source == 'cache' else ':' + _digest([str(p)], 8))
         scans[scan.scan_id] = scan
+        state.scan_bound_signature = _loaded_signature(state)
     _refresh_layers(state)
     return scan
 
@@ -463,11 +493,29 @@ def close_scan(state, scan_id: str) -> bool:
     return scan is not None
 
 
+def _loaded_signature(state) -> tuple:
+    return tuple(sorted((ds_id, tuple(getattr(ds, 'paths', None) or ()), getattr(ds, 'data_type', None))
+                        for ds_id, ds in (getattr(state, 'datasets', None) or {}).items())) + \
+        (tuple((str(c.name), int(c.size)) for c in (getattr(state, 'chroms', None) or [])),)
+
+
 def rebind_all(state) -> None:
-    """Datasets were added or removed: bind every open scan again."""
-    for scan in list_scans(state):
-        scan.bind(state)
+    """Datasets or the reference changed: bind every open scan again (under the registry lock) and recompute frames."""
+    scans, lock = _session(state)
+    with lock:
+        for scan in scans.values():
+            scan.bind(state)
+            scan.update_frame(state)
+        state.scan_bound_signature = _loaded_signature(state)
     _refresh_layers(state)
+
+
+def ensure_bound(state) -> None:
+    """Bind again when the loaded datasets (or the reference) changed since the last binding."""
+    if not state.__dict__.get('scan_registry'):
+        return
+    if state.__dict__.get('scan_bound_signature') != _loaded_signature(state):
+        rebind_all(state)
 
 
 def find_set(state, set_id: str):

@@ -155,15 +155,27 @@ def view_units(reference: Dict[str, int], chrom: str, start: int, end: int, neig
     return list(chosen), info
 
 
-def union_units(previous: Sequence, new: Sequence):
-    """The cumulative grid plan of a browser scan directory: earlier units plus new ones, in genome order."""
+def _grid_neighbours(reference: Dict[str, int], chrom: str, units) -> Dict[str, list]:
+    """Each unit's left and right genome-grid neighbours (unit json, None at a contig end)."""
+    from fiberhmm.scan.units import plan
+    grid, _info = plan(reference, genome=True, contigs=[chrom])
+    by_id = {u.unit_id: u.to_json() for u in grid}
+    return {u.unit_id: [by_id.get(u.left) if u.left else None, by_id.get(u.right) if u.right else None] for u in units}
+
+
+def union_units(previous: Sequence, new: Sequence, contig_order: Optional[Dict[str, int]] = None):
+    """The cumulative grid plan of a browser scan directory: earlier units plus new ones, in genome order (contigs
+    in header order, then zones), numbered again from 0 as a genome plan numbers them."""
+    from fiberhmm.scan.types import ScanUnit
     by_id = {u.unit_id: u for u in previous}
     for u in new:
         by_id.setdefault(u.unit_id, u)
-    return sorted(by_id.values(), key=lambda u: u.index)
+    rank = contig_order or {}
+    ordered = sorted(by_id.values(), key=lambda u: (rank.get(u.chrom, len(rank)), u.zone_start, u.zone_end))
+    return [ScanUnit(**{**u.to_json(), 'index': i}) for i, u in enumerate(ordered)]
 
 
-def _gene_bed(state, genes: Sequence[str], flank: int, out_dir: Path) -> Path:
+def _gene_bed(state, genes: Sequence[str], flank: int, out_dir: Path, reference: Optional[Dict[str, int]] = None) -> Path:
     from services.files_endpoint import search_gene_payload
     rows, missing = [], []
     for g in genes:
@@ -175,7 +187,9 @@ def _gene_bed(state, genes: Sequence[str], flank: int, out_dir: Path) -> Path:
             missing.append(g)
             continue
         tss = int(hit['tss'])
-        rows.append((hit['chrom'], max(0, tss - flank), tss + flank, hit.get('gene_name') or g))
+        # The annotation's contig name may be an alias of the BAM's (chr1 / 1): the BED uses the BAM's.
+        chrom = _resolve_chrom(reference, hit['chrom']) if reference else hit['chrom']
+        rows.append((chrom, max(0, tss - flank), tss + flank, hit.get('gene_name') or g))
     if missing:
         raise ScanPlanError(f'Not in the loaded gene annotation: {", ".join(missing[:8])}')
     if not rows:
@@ -262,6 +276,7 @@ def build_plan(state, request: dict) -> dict:
         if end <= start:
             raise ScanPlanError('The view is empty')
         units, info = view_units(reference, chrom, start, end)
+        neighbours = _grid_neighbours(reference, chrom, units)
         cli_where = ['--genome', '--contigs', chrom]
         where_label = f'{len(units)} grid units (the view\'s and one more each side)'
     else:
@@ -274,7 +289,7 @@ def build_plan(state, request: dict) -> dict:
                 cli_where = ['--bed', str(bed)]
             elif scope == 'genes':
                 flank = int(request.get('flank') or DEFAULT_GENE_FLANK)
-                bed = _gene_bed(state, request.get('genes') or [], flank, gene_dir)
+                bed = _gene_bed(state, request.get('genes') or [], flank, gene_dir, reference)
                 units, info = fh_plan(reference, bed=str(bed))
                 cli_where = ['--bed', str(bed)]
             elif scope == 'regions':
@@ -290,6 +305,8 @@ def build_plan(state, request: dict) -> dict:
                 raise
             raise ScanPlanError(str(error)) from None
         units = list(units)
+        by_id = {u.unit_id: u.to_json() for u in units}
+        neighbours = {u.unit_id: [by_id.get(u.left), by_id.get(u.right)] for u in units}
         where_label = f'{len(units)} {"BED" if info.get("mode") == "bed" else "grid"} unit{"s" if len(units) != 1 else ""}'
     base_datasets = [(i, d['dataset_id'], d['chemistry'], d['content_ids']) for i, d in enumerate(datasets)]
     contigs_sha = I.contigs_sha256(contigs)
@@ -305,7 +322,8 @@ def build_plan(state, request: dict) -> dict:
     plan = dict(
         scope=scope, datasets=datasets, read_policy=policy, raw_read_policy=raw_policy, modules=module_plans,
         module_names=[m['name'] for m in module_plans], parameters=params, units=[u.to_json() for u in units],
-        units_info=info, where=where_label, contigs_sha256=contigs_sha,
+        units_info=info, where=where_label, contigs_sha256=contigs_sha, neighbours=neighbours,
+        contig_order={c: i for i, c in enumerate(reference)},
         workers=max(1, min(int(request.get('workers') or default_workers()), os.cpu_count() or 1)),
     )
     plan['coverage'] = coverage(state, plan)
@@ -437,6 +455,7 @@ def coverage(state, plan: dict) -> dict:
     from .registry import list_scans
     from .tables import iter_rows
     want = {u['unit_id']: u for u in plan['units']}
+    neighbours = plan.get('neighbours') or {}
     out = {}
     for module in plan['module_names']:
         mplan = next(m for m in plan['modules'] if m['name'] == module)
@@ -444,13 +463,22 @@ def coverage(state, plan: dict) -> dict:
         for scan in list_scans(state):
             if str(scan.path) == mplan['cache_dir'] or not _scan_matches(scan, plan, mplan):
                 continue
+            done: Dict[str, dict] = {}
             for chrom in {u['chrom'] for u in want.values()}:
                 for row in scan.tables.fetch('units.tsv.bgz', chrom):
-                    u = want.get(row.get('unit_id'))
-                    if u and row.get('status') in ('done', 'empty') and int(row['start']) == u['start'] \
-                            and int(row['end']) == u['end'] and int(row.get('zone_start', -1)) == u['zone_start'] \
-                            and int(row.get('zone_end', -1)) == u['zone_end']:
-                        covered.setdefault(u['unit_id'], scan.scan_id)
+                    if row.get('status') in ('done', 'empty'):
+                        done[row.get('unit_id')] = row
+            def same(uid, unit):
+                row = done.get(uid)
+                return row is not None and unit is not None and int(row['start']) == unit['start'] \
+                    and int(row['end']) == unit['end'] and int(row.get('zone_start', -1)) == unit['zone_start'] \
+                    and int(row.get('zone_end', -1)) == unit['zone_end']
+            # All or nothing, with every unit's grid neighbours computed there too: then the open scan reconciled
+            # each seam as a full run does. Otherwise the cache computes the whole plan (no seam between sources).
+            if all(same(uid, u) for uid, u in want.items()) and \
+                    all(same(n['unit_id'], n) for uid in want for n in neighbours.get(uid, ()) if n):
+                covered = {uid: scan.scan_id for uid in want}
+                break
         cached = set()
         units_tsv = Path(mplan['cache_dir']) / 'units.tsv.bgz'
         if units_tsv.is_file():

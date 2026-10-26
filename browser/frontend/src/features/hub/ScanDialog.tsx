@@ -17,6 +17,8 @@ export function ScanDialog({ onClose }: { onClose: () => void }) {
   const datasets = useBrowserStore(s => s.datasets);
   const panels = useBrowserStore(s => s.panels);
   const chrom = useBrowserStore(s => s.chrom);
+  // The reads panels' duplicate policy is part of the read policy (shown duplicates are scanned too).
+  const showDuplicates = useBrowserStore(s => Boolean(s.showDuplicateReads));
   const start = useBrowserStore(s => s.start);
   const end = useBrowserStore(s => s.end);
   const scannable = useMemo(() => datasets.filter(d => d.data_type === 'bam'), [datasets]);
@@ -58,12 +60,13 @@ export function ScanDialog({ onClose }: { onClose: () => void }) {
     const caps: ScanRequest['caps'] = {};
     if (capDiscovery.trim()) caps.max_discovery_molecules = Number(capDiscovery);
     if (capQuant.trim()) caps.max_quantification_molecules = Number(capQuant);
-    const base = { datasets: chosen, modules, workers, ...(parameters ? { parameters } : {}), ...(Object.keys(caps).length ? { caps } : {}) };
+    const base = { datasets: chosen, modules, workers, ...(parameters ? { parameters } : {}), ...(Object.keys(caps).length ? { caps } : {}),
+      ...(showDuplicates ? { include_duplicates: true } : {}) };
     if (scope === 'view') return { ...base, scope, chrom, start, end };
     if (scope === 'bed') return bed.trim() ? { ...base, scope, bed: bed.trim() } : 'Give a BED file.';
     const names = genes.split(/[\s,;]+/).map(g => g.trim()).filter(Boolean);
     return names.length ? { ...base, scope: 'genes', genes: names } : 'Give gene names.';
-  }, [chosen, modules, paramsText, capDiscovery, capQuant, workers, scope, chrom, start, end, bed, genes]);
+  }, [chosen, modules, paramsText, capDiscovery, capQuant, workers, scope, chrom, start, end, bed, genes, showDuplicates]);
 
   useEffect(() => {
     if (typeof request === 'string' || !available?.available) { setPlan(null); setError(typeof request === 'string' ? request : ''); return; }

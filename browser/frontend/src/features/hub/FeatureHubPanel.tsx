@@ -11,7 +11,7 @@ import { AnalysisPanelShell } from '../../components/controls/shared/AnalysisPan
 import { JobStatus } from '../../components/controls/shared/JobStatus';
 import { pickFolder } from '../../api/files';
 import { liveLiftHaplotypeColor } from '../liveLift/palette';
-import { closeScanId, loadScanHits, openScanPath, restoreSessionScans, scanSets, useHubData, useProviderSets } from './hubData';
+import { closeScanId, loadScanHits, openScanPath, refreshScans, restoreSessionScans, scanSets, useHubData, useProviderSets } from './hubData';
 import { hitSelectionEntry, type HubSelected, type HubUi } from './hubState';
 import { useHubJob } from './hubJob';
 import { asAnchors, asClusterRegions, asFilter, goToHits } from './actions';
@@ -76,7 +76,10 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
   useEffect(() => { void restoreSessionScans(); }, [sessionScans]);
   // Hits in view of the visible scan sets (debounced while browsing).
   const hidden = hub.ui.hiddenSets.join('\n');
-  const scanKey = scans.map(s => `${s.scanId}:${s.manifestDigest}`).join('|');
+  // A scan's columns follow its bindings: they change when datasets open or close.
+  const scanKey = scans.map(s => `${s.scanId}:${s.manifestDigest}:${s.datasets.map(d => `${d.scanDataset}=${d.status}:${d.dataset ?? ''}`).join(',')}`).join('|');
+  const datasetKey = datasets.map(d => `${d.id}:${(d.paths ?? [d.path]).join(',')}`).join('|');
+  useEffect(() => { if (hub.scans.length) void refreshScans(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [datasetKey]);
   useEffect(() => {
     const t = setTimeout(() => { void loadScanHits(view, hub.ui.hiddenSets); }, 250);
     return () => clearTimeout(t);
@@ -310,7 +313,8 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
           onClick={() => { void act(() => asAnchors(selected), `Saved ${selected.length} anchor${selected.length === 1 ? '' : 's'} (kept with the session).`); }}>Anchors</AnalysisButton>
         <AnalysisButton theme="indigo" variant="soft" disabled={busy} data-testid="hub-use-cluster"
           onClick={() => { void act(() => asClusterRegions(selected), 'Clustered on the selected hits.'); }}>Cluster regions</AnalysisButton>
-        <AnalysisButton theme="indigo" variant="soft" disabled={busy} data-testid="hub-use-filter" title="Keep the reads in state 1 (member, open, carrier) at any of the selected hits"
+        <AnalysisButton theme="indigo" variant="soft" disabled={busy || !selected.some(h => h.hasStates)} data-testid="hub-use-filter"
+          title="Keep the reads in state 1 (a class member, open in the NFR) at any of the selected hits that have per-read states"
           onClick={() => { void act(() => asFilter(selected, 'any'), 'Filtered the reads to members of the selected hits.'); }}>Filter</AnalysisButton>
         <button type="button" className="ml-auto text-[11px] text-ink-muted hover:underline" onClick={() => setHub({ selected: [] })}>Clear</button>
       </section>}
@@ -343,8 +347,10 @@ function HitRows({ row, selected, expanded, columns, kind, delta, onClick, onTog
       {columns.map(c => {
         const v = row.role ? hit.values?.[c.key]?.[row.role] : undefined;
         const inGroups = c.key === 'all' || set.groups.some(g => g.id === c.key);
+        // A value; empty: a column of the set without a value here (not measured, or no value of this kind);
+        // '—': a column the set doesn't have (not scanned there). Never a made-up 0.
         return <td key={c.key} className="px-1 text-right" title={v?.n != null ? `n = ${v.n}${v.lo != null ? ` · lower bound ${fmt(v.lo, kind)}` : ''}` : undefined}>
-          {v?.v != null ? fmt(v.v, kind) : inGroups ? (hit.values?.[c.key] ? '0' : '') : '—'}
+          {v?.v != null ? fmt(v.v, kind) : inGroups ? '' : '—'}
         </td>;
       })}
       {delta !== undefined && <td className="px-1 text-right">{delta != null ? `${delta > 0 ? '+' : ''}${fmt(delta, kind)}` : ''}</td>}

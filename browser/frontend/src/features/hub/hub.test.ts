@@ -102,10 +102,10 @@ describe('featureHub session state', () => {
 describe('hub refs and Use as', () => {
   const sel = (over: Partial<HubSelected> = {}): HubSelected => ({ setId: 'hub:0123456789abcdef', hitId: 'fp:class:chr3:150:aaaaaaaa',
     typeId: 'fp.class', chrom: 'chr3', start: 140, end: 160, anchor: 150, datasets: ['a', 'b'], ...over });
-  it('per-dataset kinds get one ref per bound dataset; legacy sets keep their legacy refs', () => {
+  it('a hub hit is one ref (the scan provider reads every bound dataset); legacy sets keep their legacy refs', () => {
     const refs = selectionRefs([sel()]);
     expect(refs.map(r => [r.kind, r.source, r.id, r.datasetId])).toEqual([
-      ['fp-class', 'hub:0123456789abcdef', 'fp:class:chr3:150:aaaaaaaa', 'a'], ['fp-class', 'hub:0123456789abcdef', 'fp:class:chr3:150:aaaaaaaa', 'b']]);
+      ['fp-class', 'hub:0123456789abcdef', 'fp:class:chr3:150:aaaaaaaa', undefined]]);
     const legacy = { kind: 'fp-class', source: 'job', id: 'class_1', datasetId: 'a' } as FeatureRef;
     expect(selectionRefs([sel({ legacyRefs: [legacy] })])).toEqual([legacy]);
   });
@@ -287,4 +287,41 @@ describe('review fixes (round 3)', () => {
     expect(useBrowserStore.getState().featureHub.scans).toEqual([]);
     fetchSpy.mockRestore();
   }, 15_000);
+});
+
+
+describe('agy review fixes', () => {
+  it('Use as filter uses only hits with per-read states and says what it left out', async () => {
+    const { asFilter } = await import('./actions');
+    expect(await asFilter([{ setId: 'browser:peaks:r1', hitId: 'p', typeId: 'peaks.peak', chrom: 'chr3', start: 1, end: 2, anchor: 1, hasStates: false }]))
+      .toMatch(/per-read states/);
+  });
+  it('Use as cluster regions merges hits with one span and leaves the store as it was when Cluster would not use them', async () => {
+    const { asClusterRegions, clusterRegionsOf } = await import('./actions');
+    const { DEFAULT_PEAK_RULES } = await import('../../types/peak');
+    const base = { setId: 'hub:0123456789abcdef', chrom: 'chr3', start: 140, end: 160, anchor: 150, datasets: ['a'] };
+    useBrowserStore.setState({ chrom: 'chr3', start: 0, end: 10_000, selectedFeatures: [], clusterPeakMode: 'accessibility' as never, panels: [] as never,
+      peakRules: DEFAULT_PEAK_RULES.map(r => ({ ...r })), peaksByRule: {}, selectedPeaks: new Set(), peakModes: {} });
+    expect(clusterRegionsOf([{ ...base, hitId: 'r', typeId: 'nfr.region' }, { ...base, hitId: 'v', typeId: 'fp.class' }])).toHaveLength(2);
+    expect(await asClusterRegions([{ ...base, hitId: 'r', typeId: 'nfr.region' }, { ...base, hitId: 'v', typeId: 'fp.class' }], false)).toBeNull();
+    expect([...useBrowserStore.getState().selectedPeaks]).toHaveLength(1);
+    expect(Object.values(useBrowserStore.getState().peakModes)).toEqual(['tf']);
+    // The custom rule off: refused before anything changes.
+    const rules = DEFAULT_PEAK_RULES.map(r => ({ ...r, enabled: r.source === 'custom' ? false : r.enabled }));
+    useBrowserStore.setState({ peakRules: rules, peaksByRule: {}, selectedPeaks: new Set(), peakModes: {} });
+    expect(await asClusterRegions([{ ...base, hitId: 'v', typeId: 'fp.class' }], false)).toMatch(/Custom peak rule/);
+    expect(useBrowserStore.getState().peaksByRule).toEqual({});
+  });
+});
+
+describe('record-keyed read filters', () => {
+  it('split panels and cluster scopes match lifted rows to a filter of record keys', async () => {
+    const { splitReadFilter } = await import('../../stores/splitPanelStore');
+    const { recordKey } = await import('../../utils/recordKeys');
+    const row = 'lift-cohort:v1 ["g|q1","q1","abc:0",1,"primary"]';
+    const other = 'lift-cohort:v1 ["g|q2","q2","def:0",0,"primary"]';
+    const filter = new Set([recordKey(row)!]);
+    const out = splitReadFilter({ state: 'ready', ids: new Set([row, other]) } as never, filter);
+    expect([...(out ?? [])]).toEqual([row]);
+  });
 });

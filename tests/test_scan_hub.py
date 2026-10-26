@@ -79,7 +79,7 @@ def test_registry_binds_by_content_id_and_lists_sets(tmp_path, bam):
     d = write_scan_dir(tmp_path / 'scan', bam, hits=HITS, values=VALUES)
     st = _state([_dataset('ds_a', bam)])
     scan = registry.open_scan(st, d)
-    assert scan.bindings['dataset_1'] == dict(dataset='ds_a', status='bound', via='input', files={'0': bam})
+    assert scan.bindings['dataset_1'] == dict(dataset='ds_a', status='bound', via='input', files={'0': bam}, also=[])
     (fp_set,) = scan.sets(st)
     assert fp_set['setId'].startswith('hub:') and fp_set['typeId'] == 'fp.class' and fp_set['count'] == 2
     assert fp_set['datasets'] == ['ds_a']
@@ -268,11 +268,12 @@ def test_overlay_puts_states_on_native_reads(tmp_path, bam):
     reads = [dict(id='m1/1/ccs', start=1000, end=1500, layers={}), dict(id='m1/2/ccs', start=1100, end=1600, layers={}),
              dict(id='other', start=1000, end=1500, layers={'nuc': {'intervals': []}})]
     out = apply_scan_overlays(st, 'ds_a', 'chrT', 1000, 2000, reads)
-    assert out[0]['layers']['fpcls']['intervals'] == [[200, 220, 20]] and out[0]['layers']['fpcls']['qualities'] == [[1]]
-    assert out[1]['layers']['fpcls']['qualities'] == [[2]]
+    assert out[0]['layers']['fpcls']['intervals'] == [[200, 220, 20]] and out[0]['layers']['fpcls']['qualities'][0] == [1]
+    assert out[0]['layers']['fpcls']['quality_names'] == ['q0', 'q1', 'q2']      # state, posterior, tier as fpcls.QQQ
+    assert out[1]['layers']['fpcls']['qualities'][0] == [2]
     assert out[2] is reads[2]
     again = apply_scan_overlays(st, 'ds_a', 'chrT', 1000, 2000, out)
-    assert again[0]['layers'] == out[0]['layers']
+    assert all(a is b for a, b in zip(again, out))   # an exact second pass keeps the row objects
     registry.close_scan(st, registry.list_scans(st)[0].scan_id)
     assert 'fpcls' not in ds.available_layers and 'fpcls' not in ds.derived_layers
 
@@ -533,7 +534,7 @@ def test_overlay_every_scan_dataset_bound_to_one_dataset_and_molecular_size(tmp_
     assert scan.datasets_of_browser('merged') == ['dataset_1', 'dataset_2']
     out = apply_scan_overlays(st, 'merged', 'chrT', 1000, 3000, [dict(id='m1/1/ccs', reference_start=1000, reference_end=2500, layers={}),
                                                                  dict(id='m2/2/ccs', reference_start=1000, reference_end=1500, layers={})])
-    assert out[0]['layers']['fpcls']['qualities'] == [[1]] and out[1]['layers']['fpcls']['qualities'] == [[2]]
+    assert out[0]['layers']['fpcls']['qualities'][0] == [1] and out[1]['layers']['fpcls']['qualities'][0] == [2]
     assert out[0]['layers']['nucsz']['intervals'] == [[10, 1157, 147]]   # molecular length, not the 1147 bp span
 
 
@@ -561,3 +562,51 @@ def test_scan_generation_refuses_registrations_for_a_replaced_session(tmp_path, 
     assert registry.list_scans(st) == []
     registry.open_scan(st, d, generation=registry.generation(st))
     assert len(registry.list_scans(st)) == 1
+
+
+def test_bindings_exact_files_and_every_holder(tmp_path):
+    """A scan of [a] binds to every loaded dataset holding exactly [a] (also), never to a merged [a, b] (b's reads
+    would be labelled by this scan); a scan of a and b as two datasets binds both to a merged [a, b]."""
+    from services.scan import registry
+    a_dir, b_dir = tmp_path / 'a', tmp_path / 'b'
+    a_dir.mkdir(); b_dir.mkdir()
+    bam_a = tiny_bam(a_dir / 'a.bam', reads=(('m1/1/ccs', 1000, 0),))
+    bam_b = tiny_bam(b_dir / 'b.bam', reads=(('m2/2/ccs', 1000, 0),))
+    d = write_scan_dir(tmp_path / 'scan', bam_a, hits=HITS)
+    st = _state([_dataset('merged', [bam_a, bam_b]), _dataset('only_a', bam_a), _dataset('again_a', bam_a)])
+    scan = registry.open_scan(st, d)
+    b = scan.bindings['dataset_1']
+    assert b['status'] == 'bound' and b['dataset'] == 'only_a' and [x['dataset'] for x in b['also']] == ['again_a']
+    assert scan.datasets_of_browser('merged') == [] and scan.datasets_of_browser('again_a') == ['dataset_1']
+    st2 = _state([_dataset('merged', [bam_a, bam_b])])
+    assert registry.open_scan(st2, d).bindings['dataset_1']['status'] == 'partial'
+
+
+def test_rebinding_follows_dataset_changes(tmp_path, bam):
+    from services.scan import registry
+    d = write_scan_dir(tmp_path / 'scan', bam, hits=HITS)
+    st = _state([])
+    scan = registry.open_scan(st, d)
+    assert scan.bindings['dataset_1']['status'] == 'unbound'
+    st.datasets['late'] = _dataset('late', bam)          # a dataset opened after the scan
+    registry.ensure_bound(st)
+    assert scan.bindings['dataset_1']['dataset'] == 'late'
+
+
+def test_contig_alias_queries(tmp_path):
+    """The BAM and the scan name a contig '3', the browser 'chr3': hits, units and overlays still find their rows,
+    and hits carry the browser's name."""
+    from services.scan import registry, serve
+    from services.scan.overlay import apply_scan_overlays
+    bam3 = tiny_bam(tmp_path / 'b3.bam', contig='3', reads=(('m1/1/ccs', 1000, 0),))
+    hits = [(1200, 1220, 'fp:class:3:1210:aaaaaaaa', 'class_001')]
+    d = write_scan_dir(tmp_path / 'scan', bam3, contig='3', hits=hits,
+                       states=[('fp:class:3:1210:aaaaaaaa', 1200, 1220, 'm1/1/ccs', 'r1:0', '1')])
+    st = _state([_dataset('ds3', bam3)], chroms=(('chr3', 100_000),))
+    scan = registry.open_scan(st, d)
+    assert scan.frame is None
+    got = serve.hits_for_view(scan, 'fp', 'chr3', 1000, 2000)['hits']
+    assert [(h['chrom'], h['label']) for h in got] == [('chr3', 'class_001')]
+    assert serve.units_for_view(scan, 'chr3', 0, 100_000)
+    (read,) = apply_scan_overlays(st, 'ds3', 'chr3', 1000, 2000, [dict(id='m1/1/ccs', reference_start=1000, reference_end=1500, layers={})])
+    assert read['layers']['fpcls']['intervals'] == [[200, 220, 20]]

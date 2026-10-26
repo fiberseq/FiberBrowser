@@ -12,10 +12,11 @@ import type { FeatureHit, FeatureSet, FeatureTypeDecl, HitValue } from '../hub/t
 import { svFeatureRef, svMatches, svName, type SvLike } from './svFeatures';
 
 const SV_TYPE: FeatureTypeDecl = {
-  typeId: 'var.sv', module: 'browser:sv', label: 'SV', plural: 'SVs', provides: ['hit', 'state'], anchor: 'start', zeroWidth: true,
+  // No per-read states through the hub yet (SV genotypes group reads through the SV tab's own split).
+  typeId: 'var.sv', module: 'browser:sv', label: 'SV', plural: 'SVs', provides: ['hit'], anchor: 'start', zeroWidth: true,
   scores: [{ name: 'prevalence', label: 'Carrier share', kind: 'fraction', better: 'none', perGroup: true },
     { name: 'support', label: 'Carriers', kind: 'count', better: 'high', perGroup: true }],
-  stateRule: '1: carrier; 0: reference (spans the site without it); .: not informative', roles: { prevalence: 'prevalence', strength: 'support' },
+  roles: { prevalence: 'prevalence', strength: 'support' },
 };
 
 function svSets(s: BrowserState, view: HubView): FeatureSet[] {

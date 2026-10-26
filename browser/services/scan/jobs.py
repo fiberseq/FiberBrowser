@@ -91,11 +91,11 @@ def module_units(plan: dict, module: dict):
     info = dict(plan['units_info'])
     if plan['scope'] == 'view':
         previous = _previous_units(module['cache_dir'])
-        units = union_units(previous, needed)
+        units = union_units(previous, needed, plan.get('contig_order'))
         if previous and {u.unit_id for u in units} == {u.unit_id for u in previous} and not cov['to_compute']:
             return None
-        order = list(dict.fromkeys(u.chrom for u in units))
-        info['contigs'] = order
+        rank = plan.get('contig_order') or {}
+        info['contigs'] = sorted({u.chrom for u in units}, key=lambda c: rank.get(c, len(rank)))   # header order
     else:
         units = needed
         if (Path(module['cache_dir']) / 'manifest.json').is_file() and not cov['to_compute']:

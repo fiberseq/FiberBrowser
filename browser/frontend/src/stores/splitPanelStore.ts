@@ -4,6 +4,7 @@
  * rule, and a session also keeps these names as the fallback when a run is gone.
  */
 import { create } from 'zustand';
+import { idSetHas, recordKey } from '../utils/recordKeys';
 import type { FeatureRef } from './featureStore';
 
 /** Split sources plugin packs add (utils/splitPanels.ts registerSplitSourceKind): a pack augments this interface
@@ -54,6 +55,7 @@ export function splitReadFilter(subset: SplitReads | undefined, filter: Set<stri
   if (!subset) return filter;
   const ids = subset.state === 'loading' || subset.state === 'error' || subset.ids.size === 0 ? new Set([NO_READS]) : subset.ids;
   if (!filter) return ids;
-  const both = new Set([...ids].filter(id => filter.has(id)));
+  // A filter can name lifted rows by record key (per-record feature states): idSetHas matches those too.
+  const both = new Set([...ids].filter(id => idSetHas(filter, [id], recordKey(id))));
   return both.size ? both : new Set([NO_READS]);
 }

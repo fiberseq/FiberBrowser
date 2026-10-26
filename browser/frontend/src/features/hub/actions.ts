@@ -10,6 +10,7 @@ import { useBrowserStore } from '../../stores/browserStore';
 import { featureRegionMode, type FeatureRef } from '../../stores/featureStore';
 import { filterBySelectedFeatures, type FeatureFilterMode } from '../../utils/featureClustering';
 import { runUiCluster } from '../../utils/clusterRunner';
+import { seedHistoryBaseline } from '../../stores/historySlice';
 import { sameChrom } from '../../utils/chromAliases';
 import { selectionRefs, type HubSelected } from './hubState';
 import { kindOfType } from './kinds';
@@ -69,7 +70,22 @@ export async function asClusterRegions(selected: HubSelected[], run = true): Pro
     if (selected.length && !selected.some(onThisGenome)) return 'These hits are in another assembly\'s coordinates: lifting them onto this genome comes later.';
     return selected.length ? 'None of the selected hits is in the main view: go to them first.' : 'Select hits first.';
   }
+  // One region per span (an NFR and its full-span variant, two insertions at one boundary): a layer mode wins over
+  // plain accessibility.
+  const bySpan = new Map<string, typeof regions[number]>();
+  for (const r of regions) {
+    const key = `${r.start}-${r.end}`;
+    const prev = bySpan.get(key);
+    if (!prev || (prev.mode === 'accessibility' && r.mode !== 'accessibility')) bySpan.set(key, r);
+  }
+  regions.splice(0, regions.length, ...bySpan.values());
   const store = useBrowserStore.getState();
+  const customRule = store.peakRules.find(r => r.id === store.getCustomRuleId());
+  if (!customRule || !customRule.enabled) return 'Turn on the Custom peak rule first: the hub\'s regions are custom peaks.';
+  // Everything changed below goes back if Cluster wouldn't use the hub's regions.
+  const before = { selectedFeatures: store.selectedFeatures, clusterPeakMode: store.clusterPeakMode, peaksByRule: store.peaksByRule,
+    selectedPeaks: store.selectedPeaks, peakModes: store.peakModes };
+  seedHistoryBaseline(store, 'Before cluster regions from the feature hub', 'analysis');
   // Cluster's own precedence (utils/clusterTargets.clusterBasis): selected features and an active cluster rule win
   // over selected peaks, so both make way for the hub's regions.
   if (store.selectedFeatures.length) store.setSelectedFeatures([]);
@@ -91,10 +107,13 @@ export async function asClusterRegions(selected: HubSelected[], run = true): Pro
   }
   useBrowserStore.setState({ selectedPeaks, peakModes: peakModes as typeof now.peakModes });
   const basis = clusterBasis(useBrowserStore.getState());
-  if (basis.kind !== 'peaks') return `Cluster would use ${basis.what}, not the hub's regions: clear it first.`;
   const want = regions.map(r => `${r.start}-${r.end}-${r.mode}`).sort().join(',');
   const got = basis.regions.filter(r => !r.genome).map(r => `${r.start}-${r.end}-${r.mode}`).sort().join(',');
-  if (want !== got || basis.regions.some(r => r.genome)) return 'Cluster\'s regions are not the hub\'s: check the selected peaks.';
+  if (basis.kind !== 'peaks' || want !== got || basis.regions.some(r => r.genome)) {
+    useBrowserStore.setState(before);
+    return basis.kind !== 'peaks' ? `Cluster would use ${basis.what}, not the hub's regions: clear it first.`
+      : 'Cluster\'s regions would not be the hub\'s (a matched group overlaps them?): nothing was changed.';
+  }
   useBrowserStore.getState().pushSnapshot(`Cluster regions from the feature hub (${regions.length})`);
   if (!run) return null;
   const ran = await runUiCluster();
@@ -111,10 +130,17 @@ export async function asClusterRegions(selected: HubSelected[], run = true): Pro
 /** Keep the reads in state 1 at the selected hits (any or all of them) in the target panels. */
 export async function asFilter(selected: HubSelected[], mode: FeatureFilterMode = 'any'): Promise<string | null> {
   if (!selected.length) return 'Select hits first.';
-  const refs = selectionRefs(selected);
-  const names = selected.map(h => h.label || h.hitId).slice(0, 4).join(', ') + (selected.length > 4 ? '…' : '');
-  return filterBySelectedFeatures(mode, { features: refs, target: 'feature-hub',
+  // Only hits with per-read states (peaks, SVs and Differences have none here): the rest are left out, said so.
+  const usable = selected.filter(h => h.hasStates);
+  if (!usable.length) return 'None of the selected hits has per-read states (footprint classes and NFRs do).';
+  const refs = selectionRefs(usable);
+  if (refs.length > 16) return `${refs.length} hits: filter on 16 or fewer at a time.`;
+  const names = usable.map(h => h.label || h.hitId).slice(0, 4).join(', ') + (usable.length > 4 ? '…' : '');
+  const error = await filterBySelectedFeatures(mode, { features: refs, target: 'feature-hub',
     label: `Feature hub > ${mode === 'all' ? 'in every' : mode === 'none' ? 'in none of' : 'in any of'} ${names}` });
+  if (error) return error;
+  const left = selected.length - usable.length;
+  return left ? `Filtered on ${usable.length} hit${usable.length === 1 ? '' : 's'}; ${left} without per-read states left out.` : null;
 }
 
 /** Centre the main view on hits (the view's width, or their span with a margin). */

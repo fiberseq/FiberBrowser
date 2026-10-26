@@ -259,3 +259,36 @@ def test_plan_read_policy_from_settings_and_grouped_datasets(bams, cache):
     grouped = planning.build_plan(st, dict(datasets=['both'], scope='view', chrom=CONTIG, start=20000, end=30000, modules=['fp']))
     assert '--datasets scan_datasets.json' in grouped['cli']['text'] and '--bam' not in grouped['cli']['text']
     assert grouped['cli']['datasets'] == [{'dataset_id': 'dataset_1', 'paths': [planning._home_short(p) for p in bams]}]
+
+
+def test_a_partial_open_scan_does_not_make_units_precomputed(bams, cli_uncapped, tmp_path, monkeypatch):
+    """Precomputed is all or nothing, and only from a scan that also computed every unit's grid neighbours (so it
+    reconciled each seam as a full run does): a browser cache of [0, 40 kb) opened from disk doesn't cover a view
+    at [40, 140 kb); the genome scan does."""
+    from services.scan import registry, planning
+    monkeypatch.setenv('FIBERBROWSER_SCAN_CACHE_DIR', str(tmp_path / 'first'))
+    st = _state(bams)
+    _scan(st, start=0, end=40_000)
+    partial_dir = _cache_dir(st, 'fp')
+    monkeypatch.setenv('FIBERBROWSER_SCAN_CACHE_DIR', str(tmp_path / 'second'))
+    st2 = _state(bams)
+    registry.open_scan(st2, partial_dir)
+    req = dict(datasets=sorted(st2.datasets), scope='view', chrom=CONTIG, start=40_000, end=LENGTH, modules=['fp'],
+               parameters={})
+    plan = planning.build_plan(st2, req)
+    assert plan['coverage']['fp']['precomputed'] == {} and plan['coverage']['fp']['to_compute']
+    registry.open_scan(st2, cli_uncapped)
+    plan = planning.build_plan(st2, req)
+    assert len(plan['coverage']['fp']['precomputed']) == len(plan['units'])
+
+
+def test_union_of_views_on_two_contigs_is_a_genome_plan_order():
+    from fiberhmm.scan.units import plan
+    from services.scan.planning import union_units
+    reference = {'chr1': 75_000, 'chr2': 75_000}
+    units, _ = plan(reference, genome=True)
+    chr2 = [u for u in units if u.chrom == 'chr2'][:2]
+    chr1 = [u for u in units if u.chrom == 'chr1'][1:]
+    merged = union_units(union_units([], chr2, {'chr1': 0, 'chr2': 1}), chr1, {'chr1': 0, 'chr2': 1})
+    assert [(u.chrom, u.zone_start) for u in merged] == [('chr1', 25_000), ('chr1', 50_000), ('chr2', 0), ('chr2', 25_000)]
+    assert [u.index for u in merged] == [0, 1, 2, 3]

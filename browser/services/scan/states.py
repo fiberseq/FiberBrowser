@@ -67,14 +67,13 @@ def _combine(found: Dict[Tuple[str, str], list]) -> Dict[Tuple[str, str], str]:
 
 
 def _bindings(scan, want_dataset: Optional[str]):
-    """{scan dataset id: (browser dataset id, via, {input index: loaded path})} of the bound datasets."""
+    """{(scan dataset id, browser dataset id): (browser dataset id, via, {input index: loaded path})} of every
+    binding (a scan dataset can bind to several loaded datasets holding its files)."""
     out = {}
-    for sid, b in scan.bindings.items():
-        if b.get('status') != 'bound':
+    for sid, bid, via, files in scan.bound_pairs():
+        if want_dataset and bid != want_dataset:
             continue
-        if want_dataset and b.get('dataset') != want_dataset:
-            continue
-        out[sid] = (b['dataset'], b.get('via'), {int(k): v for k, v in (b.get('files') or {}).items()})
+        out[(sid, bid)] = (bid, via, files)
     return out
 
 
@@ -103,16 +102,29 @@ def states_from_table(state, scan, module: str, hit: dict, bound) -> Dict[Tuple[
     found: Dict[Tuple[str, str], list] = {}
     a, b = int(hit['start']), max(int(hit['end']), int(hit['start']) + 1)
     lo, hi = max(0, a - STATE_FETCH_PAD), b + STATE_FETCH_PAD
+    sids = {sid for sid, _bid in bound}
     rows = [r for r in scan.tables.fetch(f'{module}/states.tsv.bgz', hit['chrom'], lo, hi)
-            if r.get('hit_id') == hit['hit_id'] and r.get('dataset_id') in bound]
+            if r.get('hit_id') == hit['hit_id'] and r.get('dataset_id') in sids]
     if not rows:
         return found
-    keyers = {sid: _Keyer(state, bid, files) for sid, (bid, _via, files) in bound.items()}
+    for pair, binding in bound.items():
+        _states_for_binding(state, hit, rows, pair, binding, found)
+    return found
+
+
+def _states_for_binding(state, hit, rows, pair, binding, found) -> None:
+    sid, _bid = pair
+    bid, _via, files = binding
+    rows = [r for r in rows if r.get('dataset_id') == sid]
+    if not rows:
+        return
+    bound = {sid: binding}
+    keyers = {sid: _Keyer(state, bid, files)}
     # The states tables name records without their input file: a dataset of several files finds each record's
     # file by its records over the rows' span (only live-lift keys need it: the provenance group is per file).
     file_of: Dict[str, Dict[str, List[int]]] = {}
     for sid, (bid, _via, files) in bound.items():
-        mine = [r for r in rows if r.get('dataset_id') == sid]
+        mine = rows
         if keyers[sid].lifted and len(files) > 1 and mine:
             r_lo = min(int(r['start']) for r in mine)
             r_hi = max(max(int(r['end']), int(r['start']) + 1) for r in mine)
@@ -140,7 +152,6 @@ def states_from_table(state, scan, module: str, hit: dict, bound) -> Dict[Tuple[
         for input_index, st in pairs:
             key = keyers[sid].key(input_index, group[0].get('qname', ''), record or None)
             found.setdefault((bound[sid][0], key), []).append(st)
-    return found
 
 
 def _align_key(read) -> tuple:
@@ -164,11 +175,8 @@ def states_from_annotated(state, scan, module: str, type_id: str, hit: dict, bou
     contracts = None
     found: Dict[Tuple[str, str], list] = {}
     a, b = int(hit['start']), max(int(hit['end']), int(hit['start']) + 1)
-    for out in (scan.manifest.get('outputs') or {}).get('annotated') or []:
-        sid = out.get('dataset_id')
-        if sid not in bound:
-            continue
-        bid, via, files = bound[sid]
+    for out, (bid, via, files) in [(o, b) for o in (scan.manifest.get('outputs') or {}).get('annotated') or []
+                                   for (sid, _bid), b in bound.items() if sid == o.get('dataset_id')]:
         path = scan.path / out['path']
         input_index = int(out.get('input_index', 0))
         # The annotated records of each alignment, in file order (identical copies stay apart).
@@ -265,8 +273,9 @@ def _parse_an(text: str):
 
 def hub_feature_states(state, source: str, feature: dict):
     """``/api/features/states`` provider for hub refs: ``(states, datasets, label, span)``."""
-    from .registry import find_set
+    from .registry import ensure_bound, find_set
     from .serve import find_hit
+    ensure_bound(state)
     found_set = find_set(state, source)
     if found_set is None:
         raise ValueError('The scan of this feature is not open in this session: open it in the Feature hub')

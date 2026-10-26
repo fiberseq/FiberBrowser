@@ -45,6 +45,8 @@ export interface HubSelected {
   datasets?: string[];
   /** The hit's coordinate frame (a scan of another assembly: 'source'); absent: this genome. */
   frame?: Frame;
+  /** Its set provides per-read states through /api/features/states (Filter can use it). */
+  hasStates?: boolean;
   /** Sets backed by a legacy run keep their legacy refs (fp-class job/family per dataset, nfr run/element, sv). */
   legacyRefs?: FeatureRef[];
 }
@@ -110,6 +112,7 @@ export function normalizeHub(value: unknown): FeatureHubState {
       anchor: num(h.anchor) ?? Math.floor((num(h.start)! + num(h.end)!) / 2),
       ...(h.strand === '+' || h.strand === '-' ? { strand: h.strand as '+' | '-' } : {}), ...(str(h.label) ? { label: str(h.label) } : {}),
       ...(Array.isArray(h.datasets) ? { datasets: h.datasets.filter((x): x is string => typeof x === 'string') } : {}),
+      ...(typeof h.hasStates === 'boolean' ? { hasStates: h.hasStates } : {}),
       ...(h.frame && typeof h.frame === 'object' && typeof (h.frame as { kind?: unknown }).kind === 'string' ? { frame: h.frame as Frame } : {}),
       ...(Array.isArray(h.legacyRefs) ? { legacyRefs: normalizeFeatureRefs(h.legacyRefs) } : {}) }];
   });
@@ -191,18 +194,20 @@ export function selectionRefs(selected: HubSelected[]): FeatureRef[] {
   const out: FeatureRef[] = [];
   for (const h of selected) {
     if (h.legacyRefs?.length) { out.push(...h.legacyRefs); continue; }
+    // One ref per hub hit: the scan provider reads every bound dataset's states from it (no dataset fan-out).
     const kind = kindOfType(h.typeId);
-    const def = featureKindDef(kind);
-    const base = { kind, source: h.setId, id: h.hitId, chrom: h.chrom, start: h.start, end: h.end, label: h.label } as FeatureRef;
-    // A per-dataset kind (fp-class) needs its dataset in the ref: one ref per bound dataset.
-    if (def?.perDataset) for (const ds of h.datasets ?? []) out.push({ ...base, datasetId: ds });
-    else out.push(base);
+    out.push({ kind, source: h.setId, id: h.hitId, chrom: h.chrom, start: h.start, end: h.end, label: h.label } as FeatureRef);
   }
   return out;
 }
 
 export function hitSelectionEntry(set: FeatureSet, hit: FeatureHit): HubSelected {
-  return { setId: set.setId, hitId: hit.hitId, typeId: hit.typeId, chrom: hit.chrom, start: hit.start, end: hit.end,
+  // Per-read states: scan sets declaring 'state' (read from the scan), and legacy sets whose refs a states provider
+  // answers (Find classes, NFR runs). Kinds with their own actions (SVs) have none here.
+  const legacy = hit.legacyRefs ?? [];
+  const hasStates = set.type.provides.includes('state') && (legacy.length
+    ? legacy.every(r => !featureKindDef(r.kind)?.actions) : set.source.kind === 'scan' || set.setId.startsWith('hub:'));
+  return { setId: set.setId, hitId: hit.hitId, typeId: hit.typeId, chrom: hit.chrom, start: hit.start, end: hit.end, hasStates,
     anchor: hit.anchor, ...(hit.strand ? { strand: hit.strand } : {}), ...(hit.label ? { label: hit.label } : {}),
     datasets: set.datasets, ...(hit.frame && hit.frame.kind !== 'linear' ? { frame: hit.frame } : {}),
     ...(hit.legacyRefs?.length ? { legacyRefs: hit.legacyRefs } : {}) };
