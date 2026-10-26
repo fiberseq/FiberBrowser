@@ -106,7 +106,9 @@ def module_units(plan: dict, module: dict):
 def submit(state, request: dict, *, runner=None) -> dict:
     """Plan and queue a live scan; returns the job summary. ``runner`` replaces ``run_units`` (tests)."""
     from .planning import build_plan
+    from .registry import generation as scan_generation
     plan = build_plan(state, request)
+    born = scan_generation(state)
     jobs, lock = _session(state)
     with lock:
         if any(j['status'] in ('queued', 'running', 'cancelling') for j in jobs.values()):
@@ -157,7 +159,7 @@ def submit(state, request: dict, *, runner=None) -> dict:
                     raise ScanCancelled()
                 if (Path(module['cache_dir']) / 'manifest.json').is_file():
                     scan = open_scan(state, module['cache_dir'], source='cache',
-                                     label=f"Browser scan · {module['name']}")
+                                     label=f"Browser scan · {module['name']}", generation=born)
                     with lock:
                         job['scans'].append(scan.scan_id)
             with lock:
@@ -186,7 +188,7 @@ def submit(state, request: dict, *, runner=None) -> dict:
 def dispose_session(state) -> None:
     """A session is being imported: cancel this workspace's scans in progress (their results never register) and
     close its open scans. The imported session reopens its own (the hub restores them by path)."""
-    from .registry import _session as registry_session, _refresh_layers
+    from .registry import _refresh_layers
     jobs, lock = _session(state)
     with lock:
         for job in jobs.values():
@@ -195,9 +197,8 @@ def dispose_session(state) -> None:
                 job['_disposed'] = True
                 job['status'] = 'cancelling'
                 job['message'] = 'Cancelled: another session was opened'
-    scans, rlock = registry_session(state)
-    with rlock:
-        scans.clear()
+    from .registry import new_generation
+    new_generation(state)   # closes the scans; anything opened for the previous session no longer registers
     _refresh_layers(state)
 
 

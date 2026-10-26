@@ -48,7 +48,23 @@ def _session(state):
         if 'scan_registry' not in state.__dict__:
             state.scan_registry = {}
             state.scan_registry_lock = threading.RLock()
+            state.scan_generation = 0
     return state.scan_registry, state.scan_registry_lock
+
+
+def generation(state) -> int:
+    """The workspace's scan generation: a session import moves it on, and a scan opened for an older one never
+    registers."""
+    _session(state)
+    return int(state.__dict__.get('scan_generation', 0))
+
+
+def new_generation(state) -> int:
+    scans, lock = _session(state)
+    with lock:
+        state.scan_generation = int(state.__dict__.get('scan_generation', 0)) + 1
+        scans.clear()
+        return state.scan_generation
 
 
 def _camel_type(decl: dict) -> dict:
@@ -368,7 +384,8 @@ def validate(path: Path, manifest: dict) -> List[str]:
     return problems
 
 
-def open_scan(state, path, *, source: str = 'opened', label: Optional[str] = None) -> OpenScan:
+def open_scan(state, path, *, source: str = 'opened', label: Optional[str] = None,
+              generation: Optional[int] = None) -> OpenScan:
     """Open (or re-read) a scan directory in this session.
 
     The reference: a scan bound to a loaded dataset was made on that dataset's own file, so its reference is the
@@ -398,6 +415,8 @@ def open_scan(state, path, *, source: str = 'opened', label: Optional[str] = Non
     scan.count_types()
     scans, lock = _session(state)
     with lock:
+        if generation is not None and generation != int(state.__dict__.get('scan_generation', 0)):
+            raise ScanOpenError('Another session was opened meanwhile: this scan belongs to the previous one')
         # One registration per directory: a browser cache that grew (another chromosome) has a new scan id.
         # The replaced reader is not closed here: a request may be reading it; its files close when it is dropped.
         for key in [k for k, v in scans.items() if v.path == p]:

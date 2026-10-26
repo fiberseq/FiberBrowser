@@ -252,3 +252,39 @@ describe('review fixes (round 2)', () => {
     fetchSpy.mockRestore();
   });
 });
+
+describe('review fixes (round 3)', () => {
+  it('work for a replaced session never writes into the imported one', async () => {
+    let hold: (() => void) | null = null;
+    const opened: Array<{ path: string; generation?: number }> = [];
+    const scan = (path: string) => ({ scanId: path, path, label: path, source: 'cache', manifestDigest: '', sets: [], datasets: [], annotated: [], modules: {}, units: { mode: 'grid' }, annotate: false });
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const u = String(url);
+      const reply = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (u.includes('/api/scan/list')) return reply({ scans: [scan('/old/cache')], generation: 3 });
+      if (u.includes('/api/scan/open')) {
+        const body = JSON.parse(String((init as RequestInit).body));
+        if (body.path === '/a/1') await new Promise<void>(r => { hold = () => r(); });
+        opened.push(body);
+        return reply(scan(body.path));
+      }
+      return reply({ datasets: [] });
+    });
+    const { restoreSessionScans, resetHubData, adoptScans, hubGeneration } = await import('./hubData');
+    // A restore of session A (two scans) is under way; session B is imported while the first open is pending.
+    useBrowserStore.setState({ featureHub: { ...EMPTY_HUB, scans: ['/a/1', '/a/2'].map(p => ({ path: p, scanId: p, manifestDigest: '', label: p, source: 'opened' as const })) } });
+    const restoring = restoreSessionScans();
+    await vi.waitFor(() => { if (!hold) throw new Error('not yet'); }, { timeout: 5000 });
+    const oldGeneration = hubGeneration();
+    resetHubData();
+    useBrowserStore.setState({ featureHub: EMPTY_HUB });
+    hold!();
+    await restoring;
+    expect(opened.map(o => o.path)).toEqual(['/a/1']);        // /a/2 is never opened for the replaced session
+    expect(opened[0].generation).toBe(3);                      // the server refuses it if its generation moved on
+    // A live scan of session A finishing after the import doesn't join session B.
+    await adoptScans(['/old/cache'], oldGeneration);
+    expect(useBrowserStore.getState().featureHub.scans).toEqual([]);
+    fetchSpy.mockRestore();
+  }, 15_000);
+});

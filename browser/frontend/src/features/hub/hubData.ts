@@ -27,6 +27,13 @@ export const useHubData = create<HubDataStore>(set => ({
   setScans: scans => set({ scans }),
 }));
 
+/**
+ * The hub's session generation: a session import moves it on (resetHubData), and work started for an older one
+ * (restoring, adopting a live scan's results) stops at its next step without writing anything.
+ */
+let generation = 0;
+const current = (born: number) => born === generation;
+
 const opened = (info: ScanInfo): HubOpenedScan => ({ path: info.path, scanId: info.scanId, manifestDigest: info.manifestDigest, label: info.label, source: info.source });
 
 function rememberInSession(info: ScanInfo) {
@@ -54,17 +61,21 @@ export async function refreshScans(): Promise<ScanInfo[]> {
 }
 
 /** A live scan of this session finished: its cache directories join the session (then the list). */
-export async function adoptScans(scanIds: string[]): Promise<void> {
-  if (!scanIds.length) return;
+export async function adoptScans(scanIds: string[], born = generation): Promise<void> {
+  if (!scanIds.length || !current(born)) return;
   try {
     const { scans } = await listScans();
+    if (!current(born)) return;
     for (const s of scans) if (scanIds.includes(s.scanId)) rememberInSession(s);
   } catch { /* the next refresh shows them once listed */ }
-  await refreshScans();
+  if (current(born)) await refreshScans();
 }
+
+export const hubGeneration = () => generation;
 
 /** A session is being imported: the hub's live data belong to the previous one. */
 export function resetHubData(): void {
+  generation += 1;
   hitsController?.abort();
   useHubData.setState({ scans: [], missing: {}, error: '', hits: {}, loadingHits: false });
 }
@@ -128,19 +139,26 @@ export async function restoreSessionScans(): Promise<void> {
 
 async function restoreOnce(): Promise<void> {
   {
+    const born = generation;
+    let serverGeneration: number | undefined;
+    try { serverGeneration = (await listScans()).generation; } catch { /* an older server: no generation */ }
+    if (!current(born)) return;
     const server = await refreshScans();
+    if (!current(born)) return;
     const open = new Set(server.map(s => s.path));   // every scan the server has open (refreshScans returns all)
     const missing: Record<string, string> = { ...useHubData.getState().missing };
     for (const s of useBrowserStore.getState().featureHub.scans) {
+      if (!current(born)) return;   // another session was imported meanwhile: its own restore runs
       if (open.has(s.path)) { delete missing[s.path]; continue; }
       try {
-        const info = await apiOpen(s.path);
+        const info = await apiOpen(s.path, serverGeneration);
         delete missing[s.path];
         if (s.manifestDigest && info.manifestDigest !== s.manifestDigest) missing[s.path] = 'the scan changed since the session was saved: its hits may differ';
       } catch (e) {
         missing[s.path] = String((e as Error).message ?? e).replace(/^API error \d+: /, '');
       }
     }
+    if (!current(born)) return;
     // Scans of a session imported meanwhile are what count: forget notes about paths it no longer lists.
     const listed = new Set(useBrowserStore.getState().featureHub.scans.map(s => s.path));
     for (const path of Object.keys(missing)) if (!listed.has(path)) delete missing[path];

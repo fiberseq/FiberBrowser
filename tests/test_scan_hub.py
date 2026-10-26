@@ -493,7 +493,8 @@ def test_states_identical_record_in_two_files(tmp_path):
     settings = LiftSettings()
     groups = settings.molecule_group_map([bam_a, bam_b], 'lifted')
     key = lambda path: _encode_record([molecule_key(groups[path], 'm1/1/ccs'), 'm1/1/ccs', rec])
-    for states, want in ((['1', '1'], '1'), (['1', '0'], '.')):
+    # one row for two files: one copy may never have been evaluated (a cap keeps one of them) -> '.'
+    for states, want in ((['1', '1'], '1'), (['1', '0'], '.'), (['1'], '.')):
         d = _two_file_scan(tmp_path / f'case_{"".join(states)}', bam_a, bam_b,
                            states=[('fp:class:chrT:1210:aaaaaaaa', 1200, 1220, 'm1/1/ccs', rec, st) for st in states])
         ds = _dataset('lifted', [bam_a, bam_b], data_type='bam_livelift', live_lift=NS(settings=settings))
@@ -547,3 +548,16 @@ def test_session_import_disposes_scans_and_live_scans(tmp_path, bam):
     jobs.dispose_session(st)
     assert registry.list_scans(st) == []
     assert js['j1']['_cancel'].is_set() and js['j1']['_disposed'] and js['j1']['status'] == 'cancelling'
+
+
+def test_scan_generation_refuses_registrations_for_a_replaced_session(tmp_path, bam):
+    from services.scan import registry, jobs
+    d = write_scan_dir(tmp_path / 'scan', bam, hits=HITS)
+    st = _state([_dataset('ds_a', bam)])
+    born = registry.generation(st)
+    jobs.dispose_session(st)                       # a session import while a scan was opening
+    with pytest.raises(registry.ScanOpenError, match='Another session'):
+        registry.open_scan(st, d, generation=born)
+    assert registry.list_scans(st) == []
+    registry.open_scan(st, d, generation=registry.generation(st))
+    assert len(registry.list_scans(st)) == 1

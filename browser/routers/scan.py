@@ -54,10 +54,13 @@ async def open_scan(request: dict, state=Depends(get_state)):
     if not isinstance(path, str) or not path.strip():
         raise HTTPException(status_code=422, detail='Give the scan directory (path)')
     _confined(path)
+    # A restore names the scan generation it read (/api/scan/list): an open for a session replaced since is refused.
+    gen = request.get('generation')
     try:
-        scan = await asyncio.to_thread(do_open, state, path.strip())
+        scan = await asyncio.to_thread(do_open, state, path.strip(), generation=gen if isinstance(gen, int) else None)
     except ScanOpenError as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
+        status = 409 if 'Another session' in str(error) else 422
+        raise HTTPException(status_code=status, detail=str(error)) from error
     return scan.info(state)
 
 
@@ -65,11 +68,11 @@ async def open_scan(request: dict, state=Depends(get_state)):
 async def list_scans(state=Depends(get_state)):
     """The scans open in this session (opened directories and the browser's own scan cache)."""
     _not_on_lab_requests()
-    from services.scan.registry import list_scans as do_list, rebind_all
+    from services.scan.registry import generation, list_scans as do_list, rebind_all
     def run():
         rebind_all(state)
-        return [s.info(state) for s in do_list(state)]
-    return dict(scans=await asyncio.to_thread(run))
+        return dict(scans=[s.info(state) for s in do_list(state)], generation=generation(state))
+    return await asyncio.to_thread(run)
 
 
 @router.delete('/api/scan/{scan_id}')

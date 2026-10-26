@@ -130,11 +130,12 @@ def states_from_table(state, scan, module: str, hit: dict, bound) -> Dict[Tuple[
         states = [_state_char(r.get('state')) for r in group]
         if len(candidates) == 1:
             pairs = [(candidates[0], st) for st in states]
-        elif len(set(states)) == 1:
-            # The same record in several files (identical copies): one row per file, all agreeing.
+        elif len(states) == len(candidates) and len(set(states)) == 1:
+            # The same record in several files (identical copies): a row for every file, all agreeing.
             pairs = [(i, states[0]) for i in candidates]
         else:
-            # Disagreeing copies the tables can't tell apart (they name no input file): not evaluated.
+            # Copies the tables can't tell apart (they name no input file): some may not have been evaluated (a cap
+            # can keep one of them), or they disagree: not evaluated.
             pairs = [(i, '.') for i in candidates]
         for input_index, st in pairs:
             key = keyers[sid].key(input_index, group[0].get('qname', ''), record or None)

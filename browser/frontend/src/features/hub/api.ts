@@ -73,8 +73,10 @@ const json = (body: unknown): RequestInit => ({ method: 'POST', headers: { 'Cont
 
 export const scanAvailable = () => fetchJson<{ available: boolean; reason?: string; fiberhmm?: string;
   modules: Array<{ name: string; version: string; experimental: boolean; types: string[] }> }>('/api/scan/available');
-export const openScan = (path: string) => fetchJson<ScanInfo>('/api/scan/open', json({ path }));
-export const listScans = () => fetchJson<{ scans: ScanInfo[] }>('/api/scan/list');
+/** `generation`: the server's scan generation the caller read (a restore): refused (409) once a session replaced it. */
+export const openScan = (path: string, generation?: number) =>
+  fetchJson<ScanInfo>('/api/scan/open', json(generation === undefined ? { path } : { path, generation }));
+export const listScans = () => fetchJson<{ scans: ScanInfo[]; generation?: number }>('/api/scan/list');
 export const closeScan = (scanId: string) => fetchJson<{ closed: boolean }>(`/api/scan/${encodeURIComponent(scanId)}`, { method: 'DELETE' });
 export function scanHits(scanId: string, module: string, chrom: string, start: number, end: number, type?: string, signal?: AbortSignal) {
   const q = new URLSearchParams({ module, chrom, start: String(Math.max(0, Math.floor(start))), end: String(Math.ceil(end)) });
