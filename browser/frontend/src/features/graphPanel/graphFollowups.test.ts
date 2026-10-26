@@ -407,7 +407,8 @@ describe('group H review 3: revealing an open source view is its own undo step',
     vi.mocked(openLinkedSourceView).mockClear();
     popOutPaths('mat', ['pat']);
     await new Promise(r => setTimeout(r, 0));
-    expect(openLinkedSourceView).toHaveBeenCalledWith('mat', 'PAT');
+    // (The open one it reveals, and the box for its undo step: agy post-merge review, group C, HIGH 3.)
+    expect(openLinkedSourceView).toHaveBeenCalledWith('mat', 'PAT', expect.objectContaining({ existingId: 'src' }));
     expect(get('src').collapsed).toBe(false);
     expect(useBrowserStore.getState()._historyStack?.length).toBe(steps + 1);
     useBrowserStore.getState().undo();

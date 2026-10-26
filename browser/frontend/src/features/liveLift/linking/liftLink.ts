@@ -263,8 +263,11 @@ export function linkedSourcePanels(datasetId: string, hap?: string | null): Pane
  */
 export async function openLinkedSourceView(liftPanelId: string, hapLabel?: string | null,
   /** A graph pop-out (graph features): the view to map (the host's own view) and the panel to stack it beside (the
-   * host, when the lifted panel is folded into its graph). */
-  opts: { view?: { chrom: string; start: number; end: number }; besidePanelId?: string } = {}): Promise<string | null> {
+   * host, when the lifted panel is folded into its graph); the open source view it reveals (`existingId`: the one on
+   * the member's strand when they are split by strand), and a box the caller fills with the id of the undo step it
+   * records for that reveal (`step`), which a late exact remap folds into. */
+  opts: { view?: { chrom: string; start: number; end: number }; besidePanelId?: string; existingId?: string;
+    step?: { id: number | null } } = {}): Promise<string | null> {
   const st = useBrowserStore.getState();
   const liftPanel = st.panels.find(p => p.id === liftPanelId);
   const dataset = st.datasets.find(d => d.id === liftPanel?.datasetId);
@@ -275,11 +278,22 @@ export async function openLinkedSourceView(liftPanelId: string, hapLabel?: strin
   const key = dataset.live_lift.key;
   // A lifted panel (or graph host) with a view of its own: the source view maps that view, never the main view.
   const own = opts.view ? { ...opts.view } : liftedOwnView(liftPanelId, st.panels);
-  const existing = linkedSourcePanels(dataset.id, hap)[0];
+  const linked = linkedSourcePanels(dataset.id, hap);
+  // The one the caller reveals (never the other strand's: agy post-merge review, group C, HIGH 3).
+  const existing = linked.find(p => p.id === opts.existingId) ?? linked[0];
   if (existing) {
-    if (existing.liftLink!.liftPanelId !== liftPanelId) updateLink(existing.id, { liftPanelId });
+    const relinked = existing.liftLink!.liftPanelId !== liftPanelId;
+    if (relinked) updateLink(existing.id, { liftPanelId });
     // Reopened or relinked beside a view of its own: shown at that view now, not where it was left.
-    if (own) remapRevealedSource(existing, dataset.id, key, own);
+    if (own) remapRevealedSource(existing, dataset.id, key, own, opts.step);
+    else if (relinked) {
+      // Relinked to a lifted panel that follows the main view: it shows the main view now, as after a main-view move
+      // (not the locus of the panel it was linked to; group C, HIGH 3).
+      const now = useBrowserStore.getState();
+      const fresh = now.panels.find(p => p.id === existing.id);
+      const span = fresh ? liftViewLink.toPanel(fresh, { chrom: now.chrom, start: now.start, end: now.end }) : undefined;
+      if (span) now.setPanelViewportFromLink(existing.id, span);
+    }
     return existing.id;
   }
   try {
@@ -351,12 +365,21 @@ export async function openLinkedSourceView(liftPanelId: string, hapLabel?: strin
   }
 }
 
+/** The exact remap of a revealed source view that still waits on its tiles (null: none; never rejected): "Pop out"
+ * of several haplotypes reveals the next one only after it, so each folds into its own step. */
+const settling = new Map<string, Promise<void>>();
+export function revealSettling(panelId: string): Promise<void> | null {
+  return settling.get(panelId) ?? null;
+}
+
 /** A source view revealed (or relinked) beside a lifted panel with a view of its own goes to that view. At once when
  * the map answers exactly (tiles loaded, as for a view on screen), so the caller's undo step records it; an
  * approximate answer is shown at once too, and the exact one follows when the tiles arrive — only if nothing moved,
  * was relinked, undone or recorded since, folded into the reveal's own step when the caller recorded one
- * (post-merge review, group C rounds 2 and 3). */
-function remapRevealedSource(existing: PanelConfig, datasetId: string, key: string, own: Span): void {
+ * (post-merge review, group C rounds 2 and 3). `bound`: the caller names that step (filled right after it records
+ * it); else it is taken as the step recorded in the same turn. */
+function remapRevealedSource(existing: PanelConfig, datasetId: string, key: string, own: Span, bound?: { id: number | null }): void {
+  settling.delete(existing.id);   // an earlier reveal's remap no longer applies (its generation is behind)
   const map = () => {
     const now = useBrowserStore.getState().panels.find(p => p.id === existing.id);
     return now?.liftLink ? sourceViewFor(now, own) : null;
@@ -375,17 +398,19 @@ function remapRevealedSource(existing: PanelConfig, datasetId: string, key: stri
   }
   const after = lastSnapshotId();   // before the caller records its step
   const gen = bump(existing.id);
-  let step: number | null = null;
-  queueMicrotask(() => { step = lastSnapshotId(); });   // the caller's step, recorded right after this returns
+  let captured: number | null = null;
+  // The caller's step, recorded right after this returns.
+  if (!bound) queueMicrotask(() => { captured = lastSnapshotId(); });
   const viewNow = () => JSON.stringify(useBrowserStore.getState().panels.find(p => p.id === existing.id)?.viewportOverride ?? null);
   const shown = viewNow();
-  void (async () => {
+  const settle = (async () => {
     if (!await ensureSummary(datasetId, key)) return;
     await prefetchView(datasetId, key, 0, own.chrom, own.start, own.end);
     const st = useBrowserStore.getState();
     const now = st.panels.find(p => p.id === existing.id);
     const stack = st._historyStack ?? [];
     const latest = stack.length ? stack[stack.length - 1].id ?? 0 : 0;
+    const step = bound ? bound.id : captured;
     if (!now?.liftLink || generation.get(existing.id) !== gen || viewNow() !== shown
       || JSON.stringify(liftedOwnView(now.liftLink.liftPanelId, st.panels)) !== JSON.stringify(own)
       || latest !== (step ?? after) || (stack.length > 0 && st._historyPointer !== stack.length - 1)) return;
@@ -395,7 +420,9 @@ function remapRevealedSource(existing: PanelConfig, datasetId: string, key: stri
     show(out);
     // Into the reveal's own step (the caller recorded one, and it is still the latest and current).
     if (step !== null && step !== after) useBrowserStore.getState().foldIntoCurrentSnapshot?.(serializeState(useBrowserStore.getState()));
-  })();
+  })().catch(() => undefined);
+  settling.set(existing.id, settle);
+  void settle.then(() => { if (settling.get(existing.id) === settle) settling.delete(existing.id); });
 }
 
 /** The source panel shows the other orientation (the user's override of the entry orientation). */

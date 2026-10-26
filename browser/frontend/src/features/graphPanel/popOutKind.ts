@@ -10,13 +10,13 @@ import { useBrowserStore } from '../../stores/browserStore';
 import { isLiveLift } from '../../utils/datasetKinds';
 import { liftHapLabels } from '../liveLift/types';
 import type { PanelConfig } from '../../types';
-import { linkedSourcePanels, openLinkedSourceView } from '../liveLift/linking/liftLink';
+import { linkedSourcePanels, openLinkedSourceView, revealSettling } from '../liveLift/linking/liftLink';
 import { isHost, liveProvenance, panelKeyOf, popOut, provenanceCovers, provenanceLineage, provenanceShare, undoable, type GraphProvenance } from './hostMode';
 import { useReadActionsStore } from '../../stores/readActionsStore';
 import { qnameOfId } from '../../utils/recordKeys';
 import { linkedSourceObservations, sourceLabels } from '../../utils/clusterMatchedRun';
 import { labelLinkedSource } from './graphCluster';
-import { serializeState } from '../../stores/historySlice';
+import { lastSnapshotId, serializeState } from '../../stores/historySlice';
 import type { GraphViewState } from './types';
 
 export type PopOutKind = NonNullable<GraphViewState['popOutKind']>;
@@ -77,6 +77,13 @@ export function popOutPaths(hostId: string, memberIds: string[], missing: { bind
   return out;
 }
 
+/** A revealed source view's late exact remap, waited for at most `ms` (a stalled request never holds up the rest). */
+async function settledOrTimeout(settling: Promise<void>, ms = 10_000): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([settling, new Promise<void>(r => { timer = setTimeout(r, ms); })]);
+  clearTimeout(timer);
+}
+
 /** One after another (each opens a dataset and a reference, and takes its own undo step). A source view already
  * open is revealed (and relinked) as one undo step of its own: openLinkedSourceView records none for it (Codex
  * review, group H). */
@@ -92,9 +99,12 @@ async function openSources(host: PanelConfig, sources: PopOutPlan['sources']): P
     const open = lift?.datasetId ? linkedSourcePanels(lift.datasetId, hap ?? lift.liftHap ?? null) : [];
     const existing = open.find(p => (p.strand ?? null) === fromStrand) ?? open[0];
     if (existing) {
+      // The step this reveal records: a remap that waits on its tiles folds into it (agy post-merge review, group C,
+      // HIGH 3).
+      const step = { id: null as number | null };
       undoable(`Show ${existing.liftLink?.hapLabel ?? hap ?? ''} source view`.replace('  ', ' '), () => {
-        // (Synchronous for an open one: it relinks to this lifted panel and returns.)
-        void openLinkedSourceView(liftPanelId, hap);
+        // (Synchronous for an open one: it relinks this one, on the member's strand, to this lifted panel and returns.)
+        void openLinkedSourceView(liftPanelId, hap, { existingId: existing.id, step });
         useBrowserStore.setState(x => ({ panels: x.panels.map(p => (p.id === existing.id && p.collapsed ? { ...p, collapsed: false } : p)) }));
         // A peer of the member, as a new one is (agy review, group H round 2): its read state first, then the current
         // run's labels within that scope, then the member's clusters on every tree node.
@@ -102,6 +112,10 @@ async function openSources(host: PanelConfig, sources: PopOutPlan['sources']): P
         labelLinkedSource(existing.id);
         seedSourceState(fromPanelId, existing.id);
       });
+      step.id = lastSnapshotId();
+      // The next source only once this one settled, so each remap folds into its own step, not a later one.
+      const settling = revealSettling(existing.id);
+      if (settling) await settledOrTimeout(settling);
       continue;
     }
     const id = await openLinkedSourceView(liftPanelId, hap, { ...(view ? { view } : {}), ...(liftPanelId !== host.id ? { besidePanelId: host.id } : {}) });
