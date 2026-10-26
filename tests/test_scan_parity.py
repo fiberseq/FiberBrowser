@@ -240,3 +240,22 @@ def test_peaks_use_the_local_rare_rule_outside_grid_scans(bams, cache, tmp_path)
     grid = planning.build_plan(st, dict(datasets=sorted(st.datasets), scope='view', chrom=CONTIG, start=20000, end=30000,
                                         modules=['peaks']))
     assert 'peaks' not in grid['parameters']   # 'auto' = local + records on grid units, as the CLI's genome scan
+
+
+def test_plan_read_policy_from_settings_and_grouped_datasets(bams, cache):
+    """The settings' read_policy reaches the plan (the dialog's caps on top, as cap flags over a parameter file), and
+    a dataset of several BAMs is written with --datasets on the command line (repeated --bam would split it)."""
+    from models.domain import Dataset
+    from services.scan import planning
+    st = _state(bams)
+    plan = planning.build_plan(st, dict(datasets=sorted(st.datasets), scope='view', chrom=CONTIG, start=20000, end=30000,
+                                        modules=['fp'], caps={'max_discovery_molecules': 9},
+                                        parameters={'read_policy': {'filters': {'min_mapq': 60}, 'caps': {'sample_seed': 47, 'max_discovery_molecules': 3}}}))
+    assert plan['read_policy']['filters']['min_mapq'] == 60
+    assert plan['read_policy']['caps'] == {'max_discovery_molecules': 9, 'max_quantification_molecules': 0, 'sample_seed': 47}
+    assert 'read_policy' not in plan['parameters'] and plan['cli']['parameters']['read_policy'] == {'filters': {'min_mapq': 60}}
+    assert '--max-discovery-molecules 9' in plan['cli']['text'] and '--sample-seed 47' in plan['cli']['text']
+    st.datasets = {'both': Dataset('both', list(bams), label='Both')}
+    grouped = planning.build_plan(st, dict(datasets=['both'], scope='view', chrom=CONTIG, start=20000, end=30000, modules=['fp']))
+    assert '--datasets scan_datasets.json' in grouped['cli']['text'] and '--bam' not in grouped['cli']['text']
+    assert grouped['cli']['datasets'] == [{'dataset_id': 'dataset_1', 'paths': [planning._home_short(p) for p in bams]}]

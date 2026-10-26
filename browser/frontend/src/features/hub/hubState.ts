@@ -7,7 +7,7 @@
 import { registerStoreExtension } from '../../stores/storeExtensions';
 import type { BrowserState } from '../../stores/browserStore';
 import { featureKindDef, normalizeFeatureRefs, registerFeatureKind, type FeatureRef } from '../../stores/featureStore';
-import type { AnchorSet, FeatureHit, FeatureSet, FeatureTypeDecl } from './types';
+import type { AnchorSet, FeatureHit, FeatureSet, FeatureTypeDecl, Frame } from './types';
 import { kindOfType } from './kinds';
 
 export interface HubOpenedScan {
@@ -43,6 +43,8 @@ export interface HubSelected {
   label?: string;
   /** The browser datasets the hit's states are read in (scan sets: bound datasets). */
   datasets?: string[];
+  /** The hit's coordinate frame (a scan of another assembly: 'source'); absent: this genome. */
+  frame?: Frame;
   /** Sets backed by a legacy run keep their legacy refs (fp-class job/family per dataset, nfr run/element, sv). */
   legacyRefs?: FeatureRef[];
 }
@@ -95,7 +97,8 @@ export function normalizeHub(value: unknown): FeatureHubState {
       if (!q || !str(q.chrom) || num(q.pos) === null) return [];
       return [{ chrom: str(q.chrom), pos: num(q.pos)!, ...(q.strand === '+' || q.strand === '-' ? { strand: q.strand as '+' | '-' } : {}),
         ...(str(q.label) ? { label: str(q.label) } : {}), ...(str(q.hitId) ? { hitId: str(q.hitId) } : {}),
-        ...(num(q.start) !== null ? { start: num(q.start)! } : {}), ...(num(q.end) !== null ? { end: num(q.end)! } : {}) }];
+        ...(num(q.start) !== null ? { start: num(q.start)! } : {}), ...(num(q.end) !== null ? { end: num(q.end)! } : {}),
+        ...(q.frame && typeof q.frame === 'object' && typeof (q.frame as { kind?: unknown }).kind === 'string' ? { frame: q.frame as Frame } : {}) }];
     });
     return [{ id: str(a.id), label: str(a.label) || 'Anchors', sources: Array.isArray(a.sources) ? a.sources.filter((x): x is string => typeof x === 'string') : [],
       createdAt: str(a.createdAt), anchors: points }];
@@ -107,6 +110,7 @@ export function normalizeHub(value: unknown): FeatureHubState {
       anchor: num(h.anchor) ?? Math.floor((num(h.start)! + num(h.end)!) / 2),
       ...(h.strand === '+' || h.strand === '-' ? { strand: h.strand as '+' | '-' } : {}), ...(str(h.label) ? { label: str(h.label) } : {}),
       ...(Array.isArray(h.datasets) ? { datasets: h.datasets.filter((x): x is string => typeof x === 'string') } : {}),
+      ...(h.frame && typeof h.frame === 'object' && typeof (h.frame as { kind?: unknown }).kind === 'string' ? { frame: h.frame as Frame } : {}),
       ...(Array.isArray(h.legacyRefs) ? { legacyRefs: normalizeFeatureRefs(h.legacyRefs) } : {}) }];
   });
   return { scans, ui, anchors, selected };
@@ -189,5 +193,6 @@ export function selectionRefs(selected: HubSelected[]): FeatureRef[] {
 export function hitSelectionEntry(set: FeatureSet, hit: FeatureHit): HubSelected {
   return { setId: set.setId, hitId: hit.hitId, typeId: hit.typeId, chrom: hit.chrom, start: hit.start, end: hit.end,
     anchor: hit.anchor, ...(hit.strand ? { strand: hit.strand } : {}), ...(hit.label ? { label: hit.label } : {}),
-    datasets: set.datasets, ...(hit.legacyRefs?.length ? { legacyRefs: hit.legacyRefs } : {}) };
+    datasets: set.datasets, ...(hit.frame && hit.frame.kind !== 'linear' ? { frame: hit.frame } : {}),
+    ...(hit.legacyRefs?.length ? { legacyRefs: hit.legacyRefs } : {}) };
 }

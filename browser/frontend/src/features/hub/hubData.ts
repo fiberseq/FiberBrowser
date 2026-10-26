@@ -89,11 +89,26 @@ export async function refreshDatasetLayers(): Promise<void> {
 }
 
 let restoring = false;
-/** Reopen the session's scans the server doesn't have open (after a session import or a restart). */
+let again = false;
+/**
+ * Reopen the session's scans the server doesn't have open (after a session import or a restart). A call while one
+ * runs (another session imported meanwhile) runs again when it ends, on the session's list as it is then.
+ */
 export async function restoreSessionScans(): Promise<void> {
-  if (restoring) return;
+  if (restoring) { again = true; return; }
   restoring = true;
   try {
+    do {
+      again = false;
+      await restoreOnce();
+    } while (again);
+  } finally {
+    restoring = false;
+  }
+}
+
+async function restoreOnce(): Promise<void> {
+  {
     const server = await refreshScans();
     const open = new Set(server.map(s => s.path));
     const missing: Record<string, string> = { ...useHubData.getState().missing };
@@ -107,11 +122,12 @@ export async function restoreSessionScans(): Promise<void> {
         missing[s.path] = String((e as Error).message ?? e).replace(/^API error \d+: /, '');
       }
     }
+    // Scans of a session imported meanwhile are what count: forget notes about paths it no longer lists.
+    const listed = new Set(useBrowserStore.getState().featureHub.scans.map(s => s.path));
+    for (const path of Object.keys(missing)) if (!listed.has(path)) delete missing[path];
     useHubData.setState({ missing });
     await refreshScans();
     void refreshDatasetLayers();
-  } finally {
-    restoring = false;
   }
 }
 

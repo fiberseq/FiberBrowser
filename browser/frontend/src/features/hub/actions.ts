@@ -13,13 +13,14 @@ import { runUiCluster } from '../../utils/clusterRunner';
 import { sameChrom } from '../../utils/chromAliases';
 import { selectionRefs, type HubSelected } from './hubState';
 import { kindOfType } from './kinds';
-import type { AnchorSet } from './types';
+import type { AnchorSet, Frame } from './types';
+import { clusterBasis } from '../../utils/clusterTargets';
 
 const ZERO_WIDTH_PAD = 25;
 
 export function newAnchorSet(selected: HubSelected[], label?: string): AnchorSet {
   const anchors = selected.map(h => ({ chrom: h.chrom, pos: h.anchor, ...(h.strand ? { strand: h.strand } : {}),
-    ...(h.label ? { label: h.label } : {}), hitId: h.hitId, start: h.start, end: h.end }));
+    ...(h.label ? { label: h.label } : {}), hitId: h.hitId, start: h.start, end: h.end, ...(h.frame ? { frame: h.frame } : {}) }));
   const types = [...new Set(selected.map(h => h.typeId))];
   return {
     id: `anchors-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
@@ -39,11 +40,14 @@ export function asAnchors(selected: HubSelected[], label?: string): string | nul
 }
 
 /** The selection's intervals in the main view, as peak regions (zero-width hits get a small window). */
+/** Hits in this genome's coordinates (a scan of another assembly lists its hits there until they are lifted, G1). */
+export const onThisGenome = (h: { frame?: Frame }) => !h.frame || h.frame.kind === 'linear' || h.frame.kind === 'lifted';
+
 export function clusterRegionsOf(selected: HubSelected[]): { start: number; end: number; mode: string; label?: string }[] {
   const s = useBrowserStore.getState();
   const out = [];
   for (const h of selected) {
-    if (!sameChrom(h.chrom, s.chrom) || h.end < s.start || h.start > s.end) continue;
+    if (!onThisGenome(h) || !sameChrom(h.chrom, s.chrom) || h.end < s.start || h.start > s.end) continue;
     const start = h.end > h.start ? h.start : h.start - ZERO_WIDTH_PAD;
     const end = h.end > h.start ? h.end : h.start + ZERO_WIDTH_PAD;
     const ref = { kind: kindOfType(h.typeId), source: h.setId, id: h.hitId } as FeatureRef;
@@ -61,11 +65,16 @@ export function clusterRegionsOf(selected: HubSelected[]): { start: number; end:
  */
 export async function asClusterRegions(selected: HubSelected[], run = true): Promise<string | null> {
   const regions = clusterRegionsOf(selected);
-  if (!regions.length) return selected.length ? 'None of the selected hits is in the main view: go to them first.' : 'Select hits first.';
+  if (!regions.length) {
+    if (selected.length && !selected.some(onThisGenome)) return 'These hits are in another assembly\'s coordinates: lifting them onto this genome comes later.';
+    return selected.length ? 'None of the selected hits is in the main view: go to them first.' : 'Select hits first.';
+  }
   const store = useBrowserStore.getState();
-  if (store.selectedFeatures.length) {
-    // Cluster prefers selected features over peaks (utils/clusterTargets): the hub's regions would be ignored.
-    store.setSelectedFeatures([]);
+  // Cluster's own precedence (utils/clusterTargets.clusterBasis): selected features and an active cluster rule win
+  // over selected peaks, so both make way for the hub's regions.
+  if (store.selectedFeatures.length) store.setSelectedFeatures([]);
+  if (typeof store.clusterPeakMode === 'string' && store.clusterPeakMode.startsWith('cluster_rule:')) {
+    useBrowserStore.setState({ clusterPeakMode: 'accessibility' as typeof store.clusterPeakMode });
   }
   for (const r of regions) store.addCustomPeak(r.start, r.end, store.chrom);
   const now = useBrowserStore.getState();
@@ -80,6 +89,8 @@ export async function asClusterRegions(selected: HubSelected[], run = true): Pro
     if (r.mode !== 'accessibility') peakModes[p.index] = r.mode;
   }
   useBrowserStore.setState({ selectedPeaks, peakModes: peakModes as typeof now.peakModes });
+  const basis = clusterBasis(useBrowserStore.getState());
+  if (basis.kind !== 'peaks') return `Cluster would use ${basis.what}, not the hub's regions: clear it first.`;
   useBrowserStore.getState().pushSnapshot(`Cluster regions from the feature hub (${regions.length})`);
   if (!run) return null;
   const ran = await runUiCluster();
@@ -103,8 +114,9 @@ export async function asFilter(selected: HubSelected[], mode: FeatureFilterMode 
 }
 
 /** Centre the main view on hits (the view's width, or their span with a margin). */
-export function goToHits(selected: Array<{ chrom: string; start: number; end: number }>): void {
-  if (!selected.length) return;
+export function goToHits(all: Array<{ chrom: string; start: number; end: number; frame?: Frame }>): string | null {
+  const selected = all.filter(onThisGenome);
+  if (!selected.length) return all.length ? 'These hits are in another assembly\'s coordinates: lifting them onto this genome comes later.' : null;
   const s = useBrowserStore.getState();
   const chrom = selected[0].chrom;
   const same = selected.filter(h => sameChrom(h.chrom, chrom));
@@ -113,4 +125,5 @@ export function goToHits(selected: Array<{ chrom: string; start: number; end: nu
   const width = Math.max(s.end - s.start, Math.ceil((hi - lo) * 1.2), 2_000);
   const start = Math.max(0, Math.round((lo + hi) / 2 - width / 2));
   s.setViewport(chrom, start, start + width);
+  return null;
 }

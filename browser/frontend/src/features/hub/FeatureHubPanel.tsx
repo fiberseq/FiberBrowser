@@ -304,7 +304,7 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
 
       {selected.length > 0 && <section className="flex flex-wrap items-center gap-1 rounded-fb border border-indigo-200 bg-indigo-50/60 px-2 py-1 dark:border-indigo-800 dark:bg-indigo-950/30" data-testid="hub-selection">
         <span className="font-medium" data-testid="hub-selected-count">{selected.length} selected</span>
-        <AnalysisButton onClick={() => goToHits(selected)} data-testid="hub-goto">Go to</AnalysisButton>
+        <AnalysisButton onClick={() => setNotice(goToHits(selected) ?? '')} data-testid="hub-goto">Go to</AnalysisButton>
         <span className="text-[11px] text-ink-muted">Use as</span>
         <AnalysisButton theme="indigo" variant="soft" disabled={busy} data-testid="hub-use-anchors"
           onClick={() => { void act(() => asAnchors(selected), `Saved ${selected.length} anchor${selected.length === 1 ? '' : 's'} (kept with the session).`); }}>Anchors</AnalysisButton>
@@ -319,7 +319,7 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
         <div className="text-[11px] font-medium text-ink-secondary">Anchor sets</div>
         {hub.anchors.map(a => <div key={a.id} className="flex items-center gap-2 text-[11px]" data-testid="hub-anchor-set">
           <span>{a.label}</span><span className="text-ink-muted">{a.anchors.length} anchor{a.anchors.length === 1 ? '' : 's'}</span>
-          <button type="button" className="text-indigo-700 hover:underline dark:text-indigo-300" onClick={() => goToHits(a.anchors.map(p => ({ chrom: p.chrom, start: p.start ?? p.pos, end: p.end ?? p.pos + 1 })))}>Go to</button>
+          <button type="button" className="text-indigo-700 hover:underline dark:text-indigo-300" onClick={() => setNotice(goToHits(a.anchors.map(p => ({ chrom: p.chrom, start: p.start ?? p.pos, end: p.end ?? p.pos + 1, frame: p.frame }))) ?? '')}>Go to</button>
           <button type="button" className="ml-auto text-ink-muted hover:underline" onClick={() => setHub(h => ({ anchors: h.anchors.filter(x => x.id !== a.id) }))}>Remove</button>
         </div>)}
       </section>}
@@ -363,7 +363,7 @@ function HitRows({ row, selected, expanded, columns, kind, delta, onClick, onTog
             </span>)}
           </div>
           <div className="flex gap-1">
-            <AnalysisButton onClick={() => goToHits([hit])} data-testid="hub-row-goto">Go to</AnalysisButton>
+            <AnalysisButton onClick={() => { goToHits([hit]); }} disabled={hit.frame?.kind === 'source'} title={hit.frame?.kind === 'source' ? 'In another assembly\'s coordinates: lifting hits onto this genome comes later' : undefined} data-testid="hub-row-goto">Go to</AnalysisButton>
             {hit.link && <AnalysisButton onClick={() => useBrowserStore.getState().openAnalysisPanel(hit.link!.panel)}>Open in its panel</AnalysisButton>}
           </div>
         </div>

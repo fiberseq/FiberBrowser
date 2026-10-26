@@ -135,14 +135,21 @@ def apply_scan_overlays(state, dataset_id: str, chrom: str, start: int, end: int
         mine = marks.get(str(read.get('id', '')))
         layers = {k: v for k, v in (read.get('layers') or {}).items() if not (isinstance(v, dict) and v.get('scan_overlay'))}
         if mine:
-            r_start = read.get('start')
-            r_end = read.get('end')
+            # The row's own record: by its identity when the row carries it, else by where its alignment is.
+            sha, occ = read.get('record_sha256'), read.get('alignment_occurrence')
+            own = f'{sha}:{occ}' if sha and occ is not None else None
+            r_start = read.get('reference_start', read.get('start'))
+            r_end = read.get('reference_end', read.get('end'))
             for group, rows in mine.items():
                 ivs, srcs, names, q0 = [], [], [], []
                 for row in sorted(rows, key=lambda x: (int(x['start']), int(x['end']), x.get('hit_id', ''))):
                     a, b = int(row['start']), int(row['end'])
-                    if r_start is not None and r_end is not None and not (a < int(r_end) and int(r_start) < b):
-                        continue   # another record (a supplementary) of this read name holds it
+                    b = max(b, a + 1)   # a zero-width mark (an insertion boundary) is drawn as its base
+                    if own is not None and row.get('record'):
+                        if row['record'] != own:
+                            continue   # another record (a supplementary, a copy) of this read name
+                    elif isinstance(r_start, int) and isinstance(r_end, int) and not (a < r_end and r_start < max(b, a + 1)):
+                        continue   # another record of this read name holds it
                     lo, hi = max(a, start), min(b, end)
                     if hi <= lo:
                         continue

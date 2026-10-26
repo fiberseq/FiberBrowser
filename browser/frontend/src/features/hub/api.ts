@@ -44,7 +44,7 @@ export interface ScanPlanSummary {
   units: number; workers: number;
   coverage: Record<string, { total: number; precomputed: number; cached: number; toCompute: number; precomputedBy: string[] }>;
   settingsHashes: Record<string, string>; experimental: string[];
-  cli: { args: string[]; text: string; parameters: Record<string, unknown> | null; notes: string[] };
+  cli: { args: string[]; text: string; parameters: Record<string, unknown> | null; datasets?: Array<Record<string, unknown>> | null; notes: string[] };
   note?: string | null;
 }
 

@@ -128,5 +128,7 @@ export interface AnchorSet {
   /** The sets the anchors came from. */
   sources: string[];
   createdAt: string;
-  anchors: Array<{ chrom: string; pos: number; strand?: '+' | '-'; label?: string; hitId?: string; start?: number; end?: number }>;
+  anchors: Array<{ chrom: string; pos: number; strand?: '+' | '-'; label?: string; hitId?: string; start?: number; end?: number;
+    /** Another frame than this genome's (a scan of a source assembly); absent: this genome. */
+    frame?: Frame }>;
 }

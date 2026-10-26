@@ -106,6 +106,12 @@ class OpenScan:
                 return decl
         return None
 
+    def set_id(self, type_id: str, module: str) -> str:
+        """A set's id: over the scan id for opened scans; over the directory for the browser's cache, whose scan id
+        changes as it grows (another chromosome), so a selection keeps naming its sets."""
+        key = f'cache:{self.path}' if self.source == 'cache' else self.scan_id
+        return set_id_of(type_id, key, module, self.module(module).get('settings_hash', ''))
+
     def dataset_of_browser(self, browser_id: str) -> Optional[str]:
         for scan_ds, b in self.bindings.items():
             if b.get('dataset') == browser_id and b.get('status') == 'bound':
@@ -136,27 +142,39 @@ class OpenScan:
 
     # ---- dataset binding
     def bind(self, state) -> None:
-        """Bind each scan dataset to a loaded dataset by content id (inputs and annotated outputs)."""
+        """Bind each scan dataset to one loaded dataset by content id: every input file of the scan dataset (or every
+        annotated BAM written for it) must be a file of that loaded dataset. ``files`` maps each scan input index to
+        the loaded file that holds it (its records are the ones the states name)."""
         loaded = _loaded_files(state)
-        by_cid: Dict[str, str] = {}
-        by_name: Dict[str, str] = {}
-        for ds_id, files in loaded.items():
-            for path, cid in files:
-                if cid:
-                    by_cid.setdefault(cid, ds_id)
-                by_name.setdefault(os.path.basename(path), ds_id)
         annotated = (self.manifest.get('outputs') or {}).get('annotated') or []
         out = {}
         for ds in self.manifest.get('datasets') or []:
             sid = ds.get('dataset_id')
-            cids = [(f.get('content_id'), 'input', f.get('name')) for f in ds.get('files') or []]
-            cids += [(a.get('content_id'), 'annotated', os.path.basename(a.get('path') or ''))
-                     for a in annotated if a.get('dataset_id') == sid]
-            match = next(((by_cid[c], via) for c, via, _n in cids if c and c in by_cid), None)
-            if match:
-                out[sid] = dict(dataset=match[0], status='bound', via=match[1])
+            inputs = [(int(f.get('input_index', i)), f.get('content_id'), f.get('name') or '') for i, f in enumerate(ds.get('files') or [])]
+            ann = [(int(a.get('input_index', 0)), a.get('content_id'), os.path.basename(a.get('path') or ''))
+                   for a in annotated if a.get('dataset_id') == sid]
+            best = None
+            partial = None
+            for ds_id, files in loaded.items():
+                by_cid = {cid: path for path, cid in files if cid}
+                for via, wanted in (('input', inputs), ('annotated', ann)):
+                    if not wanted:
+                        continue
+                    hits = {idx: by_cid[cid] for idx, cid, _n in wanted if cid in by_cid}
+                    if len(hits) == len(wanted):
+                        best = best or (ds_id, via, hits)
+                    elif hits:
+                        partial = partial or ds_id
+            if best:
+                ds_id, via, files = best
+                out[sid] = dict(dataset=ds_id, status='bound', via=via, files={str(k): v for k, v in files.items()})
                 continue
-            stale = next((by_name[n] for _c, via, n in cids if via == 'input' and n in by_name), None)
+            if partial:
+                out[sid] = dict(dataset=partial, status='partial', via=None,
+                                note='only some of its files are in a loaded dataset: open all of them as one dataset')
+                continue
+            names = {os.path.basename(path): ds_id for ds_id, files in loaded.items() for path, _cid in files}
+            stale = next((names[n] for _i, _c, n in inputs if n in names), None)
             if stale:
                 out[sid] = dict(dataset=stale, status='stale', via=None,
                                 note='the loaded BAM differs from the one scanned (content changed): re-scan')
@@ -190,7 +208,7 @@ class OpenScan:
                     label = names.get(bid) if bid else None
                     groups.append(dict(id=sid, datasetId=bid, kind='dataset', label=label or sid,
                                        scanDataset=sid, binding=b.get('status', 'unbound')))
-                    if b.get('status') in ('stale', 'unbound') and b.get('note') not in notes:
+                    if b.get('status') in ('stale', 'unbound', 'partial') and b.get('note') not in notes:
                         notes.append(b['note'])
                 stale = any((self.bindings.get(ds['dataset_id']) or {}).get('status') == 'stale'
                             for ds in m.get('datasets') or [])
@@ -201,7 +219,7 @@ class OpenScan:
                            f"{(m.get('fiberhmm') or {}).get('version', '')} · {module} {block.get('version', '')}"
                            f" · {unit_text} · settings {block.get('settings_hash', '')[:8]}")
                 out.append(dict(
-                    setId=set_id_of(type_id, self.scan_id, module, block.get('settings_hash', '')),
+                    setId=self.set_id(type_id, module),
                     typeId=type_id, type=_camel_type(decl),
                     provenance=dict(producer=producer, scanId=self.scan_id, module=module,
                                     moduleVersion=block.get('version'), settingsHash=block.get('settings_hash'),
@@ -236,7 +254,8 @@ class OpenScan:
                             records=a.get('records'), scope=a.get('scope'))
                        for a in (m.get('outputs') or {}).get('annotated') or [] if a.get('path')],
             datasets=[dict(scanDataset=d.get('dataset_id'), ordinal=d.get('ordinal'), chemistry=d.get('chemistry'),
-                           files=[f.get('name') for f in d.get('files') or []], **(self.bindings.get(d.get('dataset_id')) or {}))
+                           files=[f.get('name') for f in d.get('files') or []],
+                           **{k: v for k, v in (self.bindings.get(d.get('dataset_id')) or {}).items() if k != 'files'})
                       for d in m.get('datasets') or []],
             status=m.get('status'), readPolicy=m.get('read_policy'),
             sets=self.sets(state),
@@ -300,22 +319,48 @@ def read_manifest(path) -> dict:
     return manifest
 
 
+def _inside(root: Path, rel: str) -> Optional[Path]:
+    """``root / rel`` when it stays inside ``root`` after resolving symlinks (and passes a lab server's read roots),
+    else None. Manifest paths are relative; an absolute path, ``..`` or an outward symlink is refused."""
+    if not isinstance(rel, str) or not rel or os.path.isabs(rel):
+        return None
+    p = (root / rel)
+    try:
+        resolved = p.resolve()
+        resolved.relative_to(root.resolve())
+    except (OSError, ValueError):
+        return None
+    try:
+        from services.lab.paths import PathDenied, confine
+        confine(str(resolved))
+    except ImportError:   # pragma: no cover - the lab helpers ship with the browser
+        pass
+    except PathDenied:
+        return None
+    return p
+
+
 def validate(path: Path, manifest: dict) -> List[str]:
-    """Light checks: every listed table exists with an index; annotated BAMs exist with an index."""
+    """Every listed table exists inside the scan directory with an index; annotated BAMs likewise."""
     from .tables import index_path
     problems = []
     for rel in sorted((manifest.get('outputs') or {}).get('tables') or {}):
-        p = path / rel
-        if not p.is_file():
+        p = _inside(path, rel)
+        if p is None:
+            problems.append(f'{rel} is outside the scan directory')
+        elif not p.is_file():
             problems.append(f'missing table {rel}')
-        elif index_path(p) is None:
+        elif index_path(p) is None or _inside(path, str(index_path(p).relative_to(path))) is None:
             problems.append(f'missing index of {rel}')
     for a in (manifest.get('outputs') or {}).get('annotated') or []:
-        p = path / (a.get('path') or '')
-        if not p.is_file():
-            problems.append(f'missing annotated BAM {a.get("path")}')
-        elif not (Path(str(p) + '.csi').is_file() or Path(str(p) + '.bai').is_file()):
-            problems.append(f'missing index of {a.get("path")}')
+        rel = a.get('path') or ''
+        p = _inside(path, rel)
+        if p is None:
+            problems.append(f'{rel} is outside the scan directory')
+        elif not p.is_file():
+            problems.append(f'missing annotated BAM {rel}')
+        elif not any(_inside(path, rel + ext) and (path / (rel + ext)).is_file() for ext in ('.csi', '.bai')):
+            problems.append(f'missing index of {rel}')
     return problems
 
 
@@ -349,13 +394,13 @@ def open_scan(state, path, *, source: str = 'opened', label: Optional[str] = Non
     scan.count_types()
     scans, lock = _session(state)
     with lock:
+        # One registration per directory: a browser cache that grew (another chromosome) has a new scan id.
+        for key in [k for k, v in scans.items() if v.path == p]:
+            scans.pop(key).tables.close()
         old = scans.get(scan.scan_id)
-        if old is not None and old.path != p and old.source == 'opened' and source == 'cache':
-            # The same scan key computed live and opened from disk: keep both under distinct ids.
-            scan.scan_id = scan.scan_id + ':cache'
-        old = scans.get(scan.scan_id)
-        if old is not None:
-            old.tables.close()
+        if old is not None and old.path != p:
+            # The same scan key in two directories (computed live and opened from disk): both stay, under distinct ids.
+            scan.scan_id = scan.scan_id + (':cache' if source == 'cache' else ':' + _digest([str(p)], 8))
         scans[scan.scan_id] = scan
     _refresh_layers(state)
     return scan
@@ -406,6 +451,6 @@ def find_set(state, set_id: str):
     for scan in list_scans(state):
         for module, block in (scan.manifest.get('modules') or {}).items():
             for decl in block.get('feature_types') or []:
-                if set_id_of(decl.get('type_id'), scan.scan_id, module, block.get('settings_hash', '')) == set_id:
+                if scan.set_id(decl.get('type_id'), module) == set_id:
                     return scan, module, decl.get('type_id')
     return None

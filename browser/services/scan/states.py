@@ -9,17 +9,19 @@ recomputed in the browser:
   BAMs, read live over the hit: one interval per (hit, record), AN = the hit id, byte 0 the state code. This is
   the same per-molecule result the reads carry when the annotated BAM is opened as a dataset.
 
-Keys. Native datasets are keyed by read name (a name whose records disagree gives '.'). Live-lift datasets are
-keyed by record key (``lift-record:v1 [<group>|<QNAME>, <QNAME>, <record>]``, ``services/lift/cohort.py``), the
-identity every lifted row of that record shares, so split rows get their record's state; under ``fold_molecule``
-the record part is null and the molecule's records are combined (agreeing states, else '.').
+Keys. Native datasets are keyed by read name; a name whose records disagree (a primary and a supplementary, or
+identical copies) gives '.'. Live-lift datasets are keyed by record key (``lift-record:v1 [<group>|<QNAME>,
+<QNAME>, <record>]``, ``services/lift/cohort.py``), the identity every lifted row of that record shares, so split
+rows get their record's state; ``<group>`` is the loaded file's provenance group (the binding maps each scan file
+to the loaded file holding it). Under ``fold_molecule`` the record part is null and the molecule's records are
+combined (agreeing states, else '.').
 """
 from __future__ import annotations
 
 import hashlib
 import os
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 STATE_FETCH_PAD = 2_000
 CODE_TO_STATE = {1: '1', 2: '0', 3: '.'}
@@ -33,7 +35,7 @@ def _state_char(value) -> str:
 class _Keyer:
     """Builds a bound browser dataset's read keys (read name, or record key for live-lift datasets)."""
 
-    def __init__(self, state, dataset_id: str, scan_paths: Dict[int, str]):
+    def __init__(self, state, dataset_id: str, files: Dict[int, str]):
         self.dataset_id = dataset_id
         ds = (getattr(state, 'datasets', None) or {}).get(dataset_id)
         self.lifted = getattr(ds, 'data_type', None) == 'bam_livelift'
@@ -43,20 +45,20 @@ class _Keyer:
         self.groups = {}
         if self.lifted and settings is not None and hasattr(settings, 'molecule_group_map'):
             self.groups = settings.molecule_group_map(list(getattr(ds, 'paths', None) or []), dataset_id)
-        self.scan_paths = scan_paths
+        self.files = files                   # scan input index -> the loaded file holding it
 
-    def key(self, input_index: int, qname: str, record: Optional[str], path: Optional[str] = None) -> str:
+    def key(self, input_index: int, qname: str, record: Optional[str]) -> str:
         if not self.lifted:
             return qname
         from services.lift.cohort import _encode_record
         from services.lift.joint import group_for, molecule_key
-        source = path or self.scan_paths.get(int(input_index or 0))
+        source = self.files.get(int(input_index))
         resolved = os.path.realpath(source) if source else None
         group = group_for(self.groups, source, resolved) or self.dataset_id
         return _encode_record([molecule_key(group, qname), qname, None if self.fold else (record or None)])
 
 
-def _combine(found: Dict[Tuple[str, str], set]) -> Dict[Tuple[str, str], str]:
+def _combine(found: Dict[Tuple[str, str], list]) -> Dict[Tuple[str, str], str]:
     out = {}
     for key, states in found.items():
         called = {s for s in states if s != '.'}
@@ -65,52 +67,73 @@ def _combine(found: Dict[Tuple[str, str], set]) -> Dict[Tuple[str, str], str]:
 
 
 def _bindings(scan, want_dataset: Optional[str]):
-    """{scan dataset id: (browser dataset id, via)} of the bound datasets (one, when a dataset is asked for)."""
+    """{scan dataset id: (browser dataset id, via, {input index: loaded path})} of the bound datasets."""
     out = {}
     for sid, b in scan.bindings.items():
         if b.get('status') != 'bound':
             continue
         if want_dataset and b.get('dataset') != want_dataset:
             continue
-        out[sid] = (b['dataset'], b.get('via'))
+        out[sid] = (b['dataset'], b.get('via'), {int(k): v for k, v in (b.get('files') or {}).items()})
     return out
-
-
-def _scan_input_paths(scan, scan_dataset: str) -> Dict[int, str]:
-    for d in scan.manifest.get('datasets') or []:
-        if d.get('dataset_id') == scan_dataset:
-            return {int(f.get('input_index', i)): f.get('path') for i, f in enumerate(d.get('files') or [])}
-    return {}
-
-
-def states_from_table(state, scan, module: str, hit: dict, bound) -> Dict[Tuple[str, str], set]:
-    found: Dict[Tuple[str, str], set] = {}
-    a, b = int(hit['start']), max(int(hit['end']), int(hit['start']) + 1)
-    rows = scan.tables.fetch(f'{module}/states.tsv.bgz', hit['chrom'], max(0, a - STATE_FETCH_PAD), b + STATE_FETCH_PAD)
-    keyers = {sid: _Keyer(state, bid, _scan_input_paths(scan, sid)) for sid, (bid, _via) in bound.items()}
-    for r in rows:
-        if r.get('hit_id') != hit['hit_id']:
-            continue
-        sid = r.get('dataset_id')
-        if sid not in bound:
-            continue
-        record = r.get('record') or None
-        # The tables name the input BAM's records; input_index is in the record of the evidence map only, so the
-        # dataset's first file stands for a single-file dataset (the common case) and the group falls back to it.
-        key = keyers[sid].key(0, r.get('qname', ''), record)
-        found.setdefault((bound[sid][0], key), set()).add(_state_char(r.get('state')))
-    return found
 
 
 def _record_identity(read) -> str:
     return hashlib.sha256(read.to_string().encode('utf-8')).hexdigest()
 
 
+def _records_in(path: str, chrom: str, start: int, end: int) -> Dict[str, None]:
+    """``<sha>:<occ>`` of the records a file holds over a region (occurrence counted within the fetch, as the
+    scan and the browser count it: identical records share a position)."""
+    import pysam
+    out: Dict[str, None] = {}
+    occ: Dict[str, int] = {}
+    with pysam.AlignmentFile(path, 'rb') as bam:
+        if chrom not in bam.references:
+            return out
+        for read in bam.fetch(chrom, start, end):
+            sha = _record_identity(read)
+            n = occ.get(sha, 0)
+            occ[sha] = n + 1
+            out[f'{sha}:{n}'] = None
+    return out
+
+
+def states_from_table(state, scan, module: str, hit: dict, bound) -> Dict[Tuple[str, str], list]:
+    found: Dict[Tuple[str, str], list] = {}
+    a, b = int(hit['start']), max(int(hit['end']), int(hit['start']) + 1)
+    lo, hi = max(0, a - STATE_FETCH_PAD), b + STATE_FETCH_PAD
+    rows = [r for r in scan.tables.fetch(f'{module}/states.tsv.bgz', hit['chrom'], lo, hi)
+            if r.get('hit_id') == hit['hit_id'] and r.get('dataset_id') in bound]
+    if not rows:
+        return found
+    keyers = {sid: _Keyer(state, bid, files) for sid, (bid, _via, files) in bound.items()}
+    # The states tables name records without their input file: a dataset of several files finds each record's
+    # file by its records over the rows' span (only live-lift keys need it: the provenance group is per file).
+    file_of: Dict[str, Dict[str, int]] = {}
+    for sid, (bid, _via, files) in bound.items():
+        if keyers[sid].lifted and len(files) > 1:
+            r_lo = min(int(r['start']) for r in rows if r.get('dataset_id') == sid) if any(r.get('dataset_id') == sid for r in rows) else lo
+            r_hi = max(max(int(r['end']), int(r['start']) + 1) for r in rows if r.get('dataset_id') == sid) if any(r.get('dataset_id') == sid for r in rows) else hi
+            index: Dict[str, int] = {}
+            for i, path in sorted(files.items()):
+                for rec in _records_in(path, hit['chrom'], r_lo, r_hi):
+                    index.setdefault(rec, i)
+            file_of[sid] = index
+    for r in rows:
+        sid = r['dataset_id']
+        record = r.get('record') or None
+        input_index = file_of.get(sid, {}).get(record or '', 0)
+        key = keyers[sid].key(input_index, r.get('qname', ''), record)
+        found.setdefault((bound[sid][0], key), []).append(_state_char(r.get('state')))
+    return found
+
+
 def _align_key(read) -> tuple:
     return (read.query_name, int(read.flag), int(read.reference_start), read.cigarstring or '')
 
 
-def states_from_annotated(state, scan, module: str, type_id: str, hit: dict, bound) -> Dict[Tuple[str, str], set]:
+def states_from_annotated(state, scan, module: str, type_id: str, hit: dict, bound) -> Dict[Tuple[str, str], list]:
     """States from the scan's annotated BAMs (the MA state group, AN = hit id), keyed for each bound dataset."""
     import pysam
     groups = (scan.module(module) or {}).get('ma_groups') or []
@@ -119,72 +142,72 @@ def states_from_annotated(state, scan, module: str, type_id: str, hit: dict, bou
         return {}
     group = state_groups[0]
     name = group.get('group')
-    codes = {int(k): v for k, v in (group.get('state_codes') or {}).items()} if group.get('state_codes') else {}
     to_state = {}
-    for code, meaning in codes.items():
+    for code, meaning in (group.get('state_codes') or {}).items():
         m = str(meaning).lower()
-        to_state[code] = '1' if m in ('member', 'open') else '0' if m in ('non_member', 'non-member', 'closed') else '.'
+        to_state[int(code)] = '1' if m in ('member', 'open') else '0' if m in ('non_member', 'non-member', 'closed') else '.'
     to_state = to_state or CODE_TO_STATE
     contracts = None
-    found: Dict[Tuple[str, str], set] = {}
+    found: Dict[Tuple[str, str], list] = {}
     a, b = int(hit['start']), max(int(hit['end']), int(hit['start']) + 1)
     for out in (scan.manifest.get('outputs') or {}).get('annotated') or []:
         sid = out.get('dataset_id')
         if sid not in bound:
             continue
-        bid, via = bound[sid]
+        bid, via, files = bound[sid]
         path = scan.path / out['path']
-        per_align: Dict[tuple, str] = {}
+        input_index = int(out.get('input_index', 0))
+        # The annotated records of each alignment, in file order (identical copies stay apart).
+        per_align: Dict[tuple, List[str]] = {}
         with pysam.AlignmentFile(str(path), 'rb') as bam:
             if hit['chrom'] not in bam.references:
                 continue
             if contracts is None:
                 contracts = _contracts(bam.header)
             for read in bam.fetch(hit['chrom'], a, b):
+                state_here = None
                 for item in _state_items(read, name, contracts):
                     if item[0] == hit['hit_id']:
-                        per_align[_align_key(read)] = to_state.get(int(item[1]), '.')
+                        state_here = to_state.get(int(item[1]), '.')
+                # Every record keeps its place (a copy without a mark too), so the k-th records match below.
+                per_align.setdefault(_align_key(read), []).append(state_here)
+        per_align = {k: v for k, v in per_align.items() if any(x is not None for x in v)}
         if not per_align:
             continue
-        keyer = _Keyer(state, bid, _scan_input_paths(scan, sid))
+        keyer = _Keyer(state, bid, files)
         if not keyer.lifted:
-            for (qname, *_rest), s in per_align.items():
-                found.setdefault((bid, qname), set()).add(s)
+            for (qname, *_rest), states in per_align.items():
+                for st in states:
+                    if st is not None:
+                        found.setdefault((bid, qname), []).append(st)
             continue
-        # Record keys name the records of the file the dataset reads: the annotated BAM itself, or the input BAM.
-        input_index = int(out.get('input_index', 0))
-        source = str(path) if via == 'annotated' else _scan_input_paths(scan, sid).get(input_index)
+        # Record keys name the records of the file the dataset reads (the annotated BAM, or the input BAM): the k-th
+        # record of an alignment there is the k-th annotated record of that alignment.
+        source = files.get(input_index)
         if not source or not Path(source).is_file():
             continue
-        dataset_paths = list(getattr((getattr(state, 'datasets', None) or {}).get(bid), 'paths', None) or [])
-        own = next((p for p in dataset_paths if os.path.realpath(p) == os.path.realpath(source)), source)
         occurrences: Dict[str, int] = {}
+        seen: Dict[tuple, int] = {}
         with pysam.AlignmentFile(source, 'rb') as bam:
             for read in bam.fetch(hit['chrom'], a, b):
                 sha = _record_identity(read)
                 occ = occurrences.get(sha, 0)
                 occurrences[sha] = occ + 1
-                s = per_align.get(_align_key(read))
-                if s is None:
+                k = _align_key(read)
+                states = per_align.get(k)
+                if not states:
                     continue
-                found.setdefault((bid, keyer.key(input_index, read.query_name, f'{sha}:{occ}', own)), set()).add(s)
+                i = seen.get(k, 0)
+                seen[k] = i + 1
+                if i < len(states) and states[i] is not None:
+                    found.setdefault((bid, keyer.key(input_index, read.query_name, f'{sha}:{occ}')), []).append(states[i])
     return found
 
 
 def _contracts(header) -> dict:
     """Scan MA contracts of a header: group -> contract (``@CO FIBERHMM-SCAN-MA:v1:<json>``)."""
-    import json
-    out = {}
-    for comment in header.to_dict().get('CO', []) or []:
-        text = str(comment)
-        if text.startswith('FIBERHMM-SCAN-MA:v1:'):
-            try:
-                value = json.loads(text[len('FIBERHMM-SCAN-MA:v1:'):])
-            except ValueError:
-                continue
-            if isinstance(value, dict) and isinstance(value.get('group'), str):
-                out[value['group']] = value
-    return out
+    from services.bam_tags import scan_ma_contracts
+    return scan_ma_contracts(header)
 
 
 def _state_items(read, group: str, contracts: dict):
@@ -247,6 +270,6 @@ def hub_feature_states(state, source: str, feature: dict):
         found = states_from_table(state, scan, module, hit, bound)
     else:
         found = states_from_annotated(state, scan, module, type_id, hit, bound)
-    datasets = sorted({bid for bid, _via in bound.values()})
+    datasets = sorted({bid for bid, _via, _files in bound.values()})
     label = hit.get('label') or feature['id']
     return _combine(found), datasets, f'{decl.get("label") or type_id} {label}'.strip(), (int(hit['start']), int(hit['end']))

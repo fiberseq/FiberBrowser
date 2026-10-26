@@ -79,7 +79,7 @@ def test_registry_binds_by_content_id_and_lists_sets(tmp_path, bam):
     d = write_scan_dir(tmp_path / 'scan', bam, hits=HITS, values=VALUES)
     st = _state([_dataset('ds_a', bam)])
     scan = registry.open_scan(st, d)
-    assert scan.bindings['dataset_1'] == dict(dataset='ds_a', status='bound', via='input')
+    assert scan.bindings['dataset_1'] == dict(dataset='ds_a', status='bound', via='input', files={'0': bam})
     (fp_set,) = scan.sets(st)
     assert fp_set['setId'].startswith('hub:') and fp_set['typeId'] == 'fp.class' and fp_set['count'] == 2
     assert fp_set['datasets'] == ['ds_a']
@@ -322,3 +322,102 @@ def test_overlay_mark_groups_from_marks_table(tmp_path, bam):
     assert read['layers']['nucsz']['intervals'] == [[10, 157, 147]]
     assert read['layers']['nucsz']['qualities'] == [[2], [0], [230], [128]] and read['layers']['nucsz']['quality_names'] == ['q0', 'q1', 'q2', 'q3']
     assert read['layers']['nucseg']['annotation_names'] == ['nucseg@ab_0']
+
+
+def _two_file_scan(tmp_path, bam_a, bam_b, states=()):
+    from services.scan.identity import content_id
+    d = write_scan_dir(tmp_path / 'scan2', bam_a, hits=HITS, values=VALUES, states=states)
+    m = json.loads((d / 'manifest.json').read_text())
+    m['datasets'][0]['files'].append({'name': Path(bam_b).name, 'path': bam_b, 'input_index': 1, 'content_id': content_id(bam_b), 'size': 1})
+    (d / 'manifest.json').write_text(json.dumps(m))
+    return d
+
+
+def test_registry_binds_a_multi_file_dataset_only_whole(tmp_path, bam):
+    """A scan dataset of files A + B binds to a loaded dataset holding both, never to A alone (B's rows would be
+    attributed to it)."""
+    from services.scan import registry
+    other = tmp_path / 'b'
+    other.mkdir()
+    bam_b = tiny_bam(other / 'b.bam', reads=(('m2/1/ccs', 1100, 0),))
+    d = _two_file_scan(tmp_path, bam, bam_b)
+    st = _state([_dataset('only_a', bam)])
+    scan = registry.open_scan(st, d)
+    assert scan.bindings['dataset_1']['status'] == 'partial'
+    assert scan.dataset_of_browser('only_a') is None
+    st2 = _state([_dataset('both', [bam, bam_b])])
+    scan2 = registry.open_scan(st2, d)
+    assert scan2.bindings['dataset_1']['status'] == 'bound' and scan2.bindings['dataset_1']['files'] == {'0': bam, '1': bam_b}
+
+
+def test_registry_refuses_paths_outside_the_scan_directory(tmp_path, bam):
+    from services.scan import registry
+    d = write_scan_dir(tmp_path / 'scan', bam, hits=HITS)
+    outside = tmp_path / 'elsewhere'
+    outside.mkdir()
+    (d / 'fp' / 'hits.tsv.bgz').rename(outside / 'hits.tsv.bgz')
+    (d / 'fp' / 'hits.tsv.bgz.tbi').rename(outside / 'hits.tsv.bgz.tbi')
+    (d / 'fp' / 'hits.tsv.bgz').symlink_to(outside / 'hits.tsv.bgz')
+    (d / 'fp' / 'hits.tsv.bgz.tbi').symlink_to(outside / 'hits.tsv.bgz.tbi')
+    with pytest.raises(registry.ScanOpenError, match='outside the scan directory'):
+        registry.open_scan(_state(), d)
+    m = json.loads((d / 'manifest.json').read_text())
+    m['outputs']['tables'] = {'../escape.tsv.bgz': {'rows': 0}}
+    (d / 'manifest.json').write_text(json.dumps(m))
+    with pytest.raises(registry.ScanOpenError, match='outside the scan directory'):
+        registry.open_scan(_state(), d)
+
+
+def test_states_live_lift_multi_file_use_each_records_file(tmp_path):
+    """Two files in one live-lift dataset: a record of the second file is keyed with the second file's group."""
+    from services.scan import registry
+    from services.scan.identity import content_id
+    from services.scan.states import hub_feature_states
+    from services.lift.live_lift import LiftSettings
+    from services.lift.joint import molecule_key
+    a_dir, b_dir = tmp_path / 'a', tmp_path / 'b'
+    a_dir.mkdir(); b_dir.mkdir()
+    bam_a = tiny_bam(a_dir / 'a.bam', reads=(('m1/1/ccs', 1000, 0),))
+    bam_b = tiny_bam(b_dir / 'b.bam', reads=(('m2/2/ccs', 1050, 0),))
+    rec_b = next(iter(__import__('services.scan.states', fromlist=['x'])._records_in(bam_b, 'chrT', 1000, 1600)))
+    d = _two_file_scan(tmp_path, bam_a, bam_b, states=[('fp:class:chrT:1210:aaaaaaaa', 1200, 1220, 'm2/2/ccs', rec_b, '1')])
+    settings = LiftSettings()
+    ds = _dataset('lifted', [bam_a, bam_b], data_type='bam_livelift', live_lift=NS(settings=settings))
+    st = _state([ds])
+    set_id = registry.open_scan(st, d).sets(st)[0]['setId']
+    states, *_ = hub_feature_states(st, set_id, {'id': 'fp:class:chrT:1210:aaaaaaaa'})
+    groups = settings.molecule_group_map([bam_a, bam_b], 'lifted')
+    from services.lift.cohort import _encode_record
+    assert states == {('lifted', _encode_record([molecule_key(groups[bam_b], 'm2/2/ccs'), 'm2/2/ccs', rec_b])): '1'}
+
+
+def test_overlay_marks_go_to_their_own_record(tmp_path, bam):
+    """A read name with a primary and a supplementary: each row gets only its own record's mark."""
+    from services.scan import registry
+    from services.scan.overlay import apply_scan_overlays
+    states = [('fp:class:chrT:1210:aaaaaaaa', 1200, 1220, 'm1/3/ccs', 'p:0', '1'),
+              ('fp:class:chrT:5000:bbbbbbbb', 5000, 5000, 'm1/3/ccs', 's:0', '0')]
+    d = write_scan_dir(tmp_path / 'scan', bam, hits=HITS, values=VALUES, states=states)
+    st = _state([_dataset('ds_a', bam)])
+    registry.open_scan(st, d)
+    rows = [dict(id='m1/3/ccs', reference_start=1000, reference_end=1500, layers={}),
+            dict(id='m1/3/ccs', reference_start=4800, reference_end=5300, layers={}),
+            dict(id='m1/3/ccs', record_sha256='s', alignment_occurrence=0, reference_start=0, reference_end=9000, layers={})]
+    out = apply_scan_overlays(st, 'ds_a', 'chrT', 0, 9000, rows)
+    assert out[0]['layers']['fpcls']['annotation_names'] == ['fp:class:chrT:1210:aaaaaaaa']
+    assert out[1]['layers']['fpcls']['annotation_names'] == ['fp:class:chrT:5000:bbbbbbbb']
+    assert out[2]['layers']['fpcls']['annotation_names'] == ['fp:class:chrT:5000:bbbbbbbb']
+
+
+def test_registry_keeps_one_entry_per_directory(tmp_path, bam):
+    from services.scan import registry
+    d = write_scan_dir(tmp_path / 'scan', bam, hits=HITS)
+    st = _state([_dataset('ds_a', bam)])
+    first = registry.open_scan(st, d, source='cache')
+    set_id = first.sets(st)[0]['setId']
+    m = json.loads((d / 'manifest.json').read_text())
+    m['scan_id'] = 'fedcba9876543210'          # the cache grew: another scan id, the same directory
+    (d / 'manifest.json').write_text(json.dumps(m))
+    second = registry.open_scan(st, d, source='cache')
+    assert [s.scan_id for s in registry.list_scans(st)] == ['fedcba9876543210']
+    assert second.sets(st)[0]['setId'] == set_id   # cache set ids follow the directory

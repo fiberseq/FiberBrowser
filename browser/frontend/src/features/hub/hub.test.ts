@@ -150,3 +150,58 @@ describe('the states request', () => {
     fetchSpy.mockRestore();
   });
 });
+
+describe('review fixes (round 1)', () => {
+  const sel = (over: Partial<HubSelected> = {}): HubSelected => ({ setId: 'hub:0123456789abcdef', hitId: 'h', typeId: 'fp.class',
+    chrom: 'chr3', start: 140, end: 160, anchor: 150, datasets: ['a'], ...over });
+  it('hits of another assembly never become cluster regions, anchors without their frame, or a target view', async () => {
+    useBrowserStore.setState({ chrom: 'chr3', start: 0, end: 10_000 });
+    const source = sel({ frame: { kind: 'source', assembly: 'hg002', contig: 'chr3_MATERNAL' } });
+    expect(clusterRegionsOf([source])).toEqual([]);
+    const { asClusterRegions, goToHits } = await import('./actions');
+    expect(await asClusterRegions([source], false)).toMatch(/another assembly/);
+    expect(goToHits([source])).toMatch(/another assembly/);
+    expect(newAnchorSet([source]).anchors[0].frame).toEqual(source.frame);
+    // and the frame survives a session
+    expect(normalizeHub({ selected: [source], anchors: [newAnchorSet([source], 'x')] }).selected[0].frame).toEqual(source.frame);
+  });
+  it('Use as cluster regions makes way for its regions over an active cluster rule and selected features', async () => {
+    const { clusterBasis } = await import('../../utils/clusterTargets');
+    const { asClusterRegions } = await import('./actions');
+    useBrowserStore.setState({ chrom: 'chr3', start: 0, end: 10_000, clusterPeakMode: 'cluster_rule:old' as never,
+      selectedFeatures: [{ kind: 'fp-class', source: 'job', id: 'c', datasetId: 'a', chrom: 'chr3', start: 10, end: 20 }] });
+    expect(await asClusterRegions([sel()], false)).toBeNull();
+    const st = useBrowserStore.getState();
+    expect(st.clusterPeakMode).toBe('accessibility');
+    expect(st.selectedFeatures).toEqual([]);
+    const basis = clusterBasis(st);
+    expect(basis.kind).toBe('peaks');
+    expect(basis.regions).toEqual([{ start: 140, end: 160, mode: 'tf', chrom: 'chr3' }]);
+  });
+  it('a session imported while scans are being restored gets its own scans reopened', async () => {
+    const opened: string[] = [];
+    let releaseA: (() => void) | null = null;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const u = String(url);
+      const reply = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (u.includes('/api/scan/list')) return reply({ scans: [] });
+      if (u.includes('/api/scan/open')) {
+        const path = JSON.parse(String((init as RequestInit).body)).path as string;
+        if (path === '/scan/A') await new Promise<void>(r => { releaseA = () => r(); });
+        opened.push(path);
+        return reply({ scanId: path, path, label: path, source: 'opened', manifestDigest: '', sets: [], datasets: [], annotated: [], modules: {}, units: { mode: 'grid' }, annotate: false });
+      }
+      return reply({ datasets: [] });
+    });
+    const { restoreSessionScans } = await import('./hubData');
+    useBrowserStore.setState({ featureHub: { ...EMPTY_HUB, scans: [{ path: '/scan/A', scanId: 'A', manifestDigest: '', label: 'A', source: 'opened' }] } });
+    const first = restoreSessionScans();
+    await vi.waitFor(() => { if (!releaseA) throw new Error('not yet'); }, { timeout: 5000 });
+    useBrowserStore.setState({ featureHub: { ...EMPTY_HUB, scans: [{ path: '/scan/B', scanId: 'B', manifestDigest: '', label: 'B', source: 'opened' }] } });
+    void restoreSessionScans();
+    releaseA!();
+    await first;
+    expect(opened).toEqual(['/scan/A', '/scan/B']);
+    fetchSpy.mockRestore();
+  }, 15_000);
+});

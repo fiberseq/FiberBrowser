@@ -163,7 +163,8 @@ export function ScanDialog({ onClose }: { onClose: () => void }) {
             <code className="block min-w-0 flex-1 break-all rounded bg-gray-50 px-2 py-1 font-mono text-[11px] dark:bg-white/5" data-testid="hub-scan-cli">{plan.cli.text}</code>
             <button type="button" className="fb-btn" onClick={copy} data-testid="hub-scan-cli-copy">{copied ? 'Copied' : 'Copy'}</button>
           </div>
-          {plan.cli.parameters && <div className="text-[11px] text-ink-muted">scan_parameters.json: <code className="font-mono">{JSON.stringify(plan.cli.parameters)}</code></div>}
+          {plan.cli.datasets && <div className="text-[11px] text-ink-muted">scan_datasets.json: <code className="break-all font-mono">{JSON.stringify(plan.cli.datasets)}</code></div>}
+          {plan.cli.parameters && <div className="text-[11px] text-ink-muted">scan_parameters.json: <code className="break-all font-mono">{JSON.stringify(plan.cli.parameters)}</code></div>}
           {plan.cli.notes.map((n, i) => <div key={i} className="text-[11px] text-ink-muted">{n}</div>)}
         </div>}
         {error && <p role="alert" className="mb-2 text-red-700 dark:text-red-300" data-testid="hub-scan-error">{error}</p>}

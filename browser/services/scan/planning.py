@@ -20,6 +20,7 @@ Execution-only controls (workers) never change a row and are not part of any key
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -207,7 +208,18 @@ def build_plan(state, request: dict) -> dict:
     from fiberhmm.scan.runner import base_key, resolve_modules
     from fiberhmm.scan.units import plan as fh_plan
     datasets = _dataset_inputs(state, request.get('datasets') or [])
-    raw_policy = read_policy(state, caps=request.get('caps'), include_duplicates=bool(request.get('include_duplicates')))
+    params = copy.deepcopy(request.get('parameters') or {})
+    if not isinstance(params, dict):
+        raise ScanPlanError('Settings must be a JSON object of module groups')
+    # As fiberhmm-scan: the parameter file's read_policy, with the browser's own controls (the dialog's caps, shown
+    # duplicates, the Low-memory cap) on top, as the CLI's cap flags override the file.
+    file_policy = params.pop('read_policy', None) or {}
+    if not isinstance(file_policy, dict):
+        raise ScanPlanError('Settings: read_policy must be an object')
+    browser_policy = read_policy(state, caps=request.get('caps'), include_duplicates=bool(request.get('include_duplicates')))
+    raw_policy = copy.deepcopy(file_policy)
+    for key, value in browser_policy.items():
+        raw_policy[key] = {**(raw_policy.get(key) or {}), **value} if isinstance(value, dict) else value
     try:
         policy = resolve_read_policy(raw_policy)
     except ValueError as error:
@@ -216,9 +228,6 @@ def build_plan(state, request: dict) -> dict:
         [m for m in (request.get('modules') or []) if m not in MODULE_ORDER]
     if not modules:
         raise ScanPlanError('Choose at least one module')
-    params = request.get('parameters') or {}
-    if not isinstance(params, dict):
-        raise ScanPlanError('Settings must be a JSON object of module groups')
     scope = request.get('scope') or 'view'
     if 'peaks' in modules and scope != 'view':
         # Owner, 26 Oct (DESIGN §16): FiberBrowser uses the local Rare rule, which doesn't depend on the view, and
@@ -325,12 +334,22 @@ def command_line(plan: dict, where: List[str]) -> dict:
         text = _home_short(str(text))
         return text if all(c.isalnum() or c in '/._-:~,=+' for c in text) else "'" + text.replace("'", "'\\''") + "'"
     args = ['fiberhmm-scan']
-    for d in plan['datasets']:
-        for p in d['paths']:
-            args += ['--bam', q(p)]
     chems = {d['chemistry'] for d in plan['datasets'] if d['chemistry']}
-    if chems:
-        args += ['--chemistry', next(iter(chems))]
+    # A dataset of several BAMs (or datasets of different chosen chemistries) needs --datasets: repeated --bam flags
+    # would make each BAM a dataset of its own.
+    grouped = any(len(d['paths']) > 1 for d in plan['datasets']) or len(chems) > 1 or \
+        (chems and any(not d['chemistry'] for d in plan['datasets']))
+    datasets_json = None
+    if grouped:
+        datasets_json = [dict(dataset_id=d['dataset_id'], paths=[_home_short(p) for p in d['paths']],
+                              **({'chemistry': d['chemistry']} if d['chemistry'] else {})) for d in plan['datasets']]
+        args += ['--datasets', 'scan_datasets.json']
+    else:
+        for d in plan['datasets']:
+            for p in d['paths']:
+                args += ['--bam', q(p)]
+        if chems:
+            args += ['--chemistry', next(iter(chems))]
     args += [q(w) for w in where]
     args += ['--modules', ','.join(plan['module_names'])]
     caps = (plan['raw_read_policy'] or {}).get('caps') or {}
@@ -339,9 +358,9 @@ def command_line(plan: dict, where: List[str]) -> dict:
         if name in caps:
             args += [flag, str(caps[name])]
     extra = dict(plan['parameters'] or {})
-    filters = (plan['raw_read_policy'] or {}).get('filters')
-    if filters:
-        extra['read_policy'] = {'filters': filters}
+    policy = {k: v for k, v in (plan['raw_read_policy'] or {}).items() if k != 'caps'}
+    if policy:
+        extra['read_policy'] = policy
     if extra:
         args += ['--parameters', 'scan_parameters.json']
     args += ['--no-annotate', '-o', 'scan_dir']
@@ -349,11 +368,11 @@ def command_line(plan: dict, where: List[str]) -> dict:
     if plan['scope'] == 'view':
         notes.append('--genome --contigs computes every unit of the contig; the browser computes the view\'s units. '
                      'Opening that scan makes these units precomputed.')
-    if len(chems) > 1:
-        notes.append('Datasets use different chemistries: give them with --datasets datasets.json')
+    if datasets_json:
+        notes.append('scan_datasets.json lists the datasets (several BAMs in one dataset, or chosen chemistries)')
     notes.append('Drop --no-annotate to write per-molecule results into annotated BAMs (the default for genome scans). '
                  '--cores and --window-jobs never change a row.')
-    return dict(args=args, text=' '.join(args), parameters=extra or None, notes=notes)
+    return dict(args=args, text=' '.join(args), parameters=extra or None, datasets=datasets_json, notes=notes)
 
 
 # ------------------------------------------------------------------ coverage by open scans
@@ -370,7 +389,15 @@ def _scan_matches(scan, plan: dict, module: dict) -> bool:
     if block.get('version') != module['version'] or block.get('settings_hash') != module['settings_hash']:
         return False
     info, units = m.get('units') or {}, plan['units_info']
-    return all(info.get(k) == units.get(k) for k in ('unit_bp', 'stride_bp', 'grid_offset'))
+    # The unit mode decides rules the settings leave on 'auto' (peaks: window rules for BED units, local for grid).
+    if not all(info.get(k) == units.get(k) for k in ('mode', 'unit_bp', 'stride_bp', 'grid_offset')):
+        return False
+    if block.get('calibration') and module['name'] != 'peaks':
+        # A dataset-level calibration (nuc) is drawn from the scanned territory: only the same plan has the same one.
+        same = {k: v for k, v in info.items() if k != 'count'} == {k: v for k, v in units.items() if k != 'count'}
+        if not same or int(info.get('count') or -1) != len(plan['units']):
+            return False
+    return True
 
 
 def coverage(state, plan: dict) -> dict:
