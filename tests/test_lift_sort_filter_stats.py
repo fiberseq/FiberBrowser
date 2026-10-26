@@ -277,3 +277,6 @@ def test_scoped_linear_scan_keeps_a_shown_molecules_supplementaries(lift_env):
         assert r.status_code == 200, r.text
         return r.json()["n_reads"]
     assert scan(primary) == scan(split) >= 2
+    # Under a working-set cap (Codex review, group G round 2) the shown molecule is still loaded in full.
+    state.max_working_reads = 1
+    assert scan(primary) >= 2

@@ -560,20 +560,21 @@ def run_scan_peaks_endpoint(
             # A lifted panel's shown reads name their molecules: a display row folds its supplementaries into its
             # primary's identity, so every row of a shown molecule is scanned (agy review, group E).
             import json as _json
-            molecules = set()
+            molecules, qnames = set(), set()
             for v in scope:
                 v = str(v)
                 if v.startswith(("lift-cohort:v1 ", "lift-record:v1 ")):
                     try:
-                        molecules.add(_json.loads(v.split(" ", 1)[1])[0])
+                        parts = _json.loads(v.split(" ", 1)[1])
+                        molecules.add(parts[0])
+                        qnames.add(str(parts[1]))
                     except (ValueError, IndexError, TypeError):
                         pass
-            # Unscoped explicitly: read_ids=None means "the query's scope", which would drop the supplementaries
-            # before they are matched by molecule (Codex review, group G).
-            from dataclasses import replace as _replace
-            unscoped = _replace(query, read_ids_by_dataset={k: v for k, v in query.read_ids_by_dataset.items() if k != ds_id},
-                                singleton_read_ids=None)
-            working_set = unscoped.build_working_set(state, ds_id)
+                else:
+                    qnames.add(v)
+            # Loaded by the shown molecules' QNAMEs (every record of each, supplementaries too, still a targeted
+            # load that sampling cannot thin), then matched by molecule (Codex review, group G round 2).
+            working_set = query.build_working_set(state, ds_id, read_ids=sorted(qnames))
             ds_reads = [r for r in working_set.reads if (r.get("live_lift") or {}).get("molecule") in molecules
                         or query.filter_reads_for_dataset(ds_id, [r])]
         else:
