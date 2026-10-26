@@ -21,6 +21,9 @@ import { useGraphSettings } from './handoff';
 import { registerGraphPanel } from './register';
 import { memberLabel, singleHapPathName } from './labels';
 import type { GraphBinding, GraphOccurrence, GraphRead, GraphReadBinding, GraphRegistration, GraphTopology } from './types';
+import { createElement, act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { PopOutPicker, pickedPopOut, usePopOutPicker } from './PopOutPicker';
 import { canonicalWalk, firstCarriedColumn, firstCarriedColumns } from './columnOrder';
 import { packMemberBands, type BandMember } from './memberBands';
 import type { PlacedMolecule } from './readGeometry';
@@ -186,5 +189,49 @@ describe('item 4: sort by position orders rows by their first carried graph colu
     expect(order(packMemberBands(mols, [M], {}, 10, 'position'))).toEqual(['c', 'b', 'a', 'd']);
     // Longest first ignores columns.
     expect(order(packMemberBands(mols, [M], {}, 10, 'length', 3, undefined, m => cols.get(m.read.k)))).toEqual(['c', 'b', 'a', 'd']);
+  });
+});
+
+describe('item 1: Pop out paths… (a chosen subset, one undo step)', () => {
+  it('pickedPopOut keeps only the checked members and new haplotypes', () => {
+    const folded = [panel('a'), panel('b'), panel('c')];
+    const missing = [{ binding: 'mat', hap: 'MAT' }, { binding: 'pat', hap: 'PAT' }];
+    expect(pickedPopOut(folded, missing, new Set(['m:c', 'm:a', 'b:pat']))).toEqual({ ids: ['a', 'c'], missing: [{ binding: 'pat', hap: 'PAT' }] });
+    expect(pickedPopOut(folded, missing, new Set())).toEqual({ ids: [], missing: [] });
+  });
+
+  it('the checklist pops out exactly the checked paths, as one undo step', async () => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    seed([panel('pool', { liftHaplotypeMode: 'pooled' }), panel('nat', { datasetId: 'n' })]);
+    setPanelViewMode('pool', 'graph');
+    const { joinGraph } = await import('./hostMode');
+    joinGraph('pool', ['nat']);
+    const before = useBrowserStore.getState().panels.length;
+    const { folded, missing } = poppable(useBrowserStore.getState().panels, get('pool'));
+    expect(folded.map(p => p.id)).toEqual(['nat']);
+    expect(missing.map(m => m.hap).sort()).toEqual(['MAT', 'PAT']);
+    usePopOutPicker.getState().open('pool');
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const root = createRoot(el);
+    await act(async () => { root.render(createElement(PopOutPicker, { hostId: 'pool', folded, missing, labelOf: (p: PanelConfig) => p.id })); });
+    const picks = [...el.querySelectorAll<HTMLInputElement>('[data-testid="graph-pop-out-pick"]')];
+    expect(picks.map(i => i.dataset.member ?? i.dataset.binding)).toEqual(['nat', 'mat', 'pat']);
+    const confirm = el.querySelector<HTMLButtonElement>('[data-testid="graph-pop-out-confirm"]')!;
+    expect(confirm.disabled).toBe(true);
+    useBrowserStore.getState().pushSnapshot?.('start', { kind: 'layout' });
+    const steps = useBrowserStore.getState()._historyStack?.length ?? 0;
+    await act(async () => { picks[0].click(); picks[2].click(); });
+    await act(async () => { confirm.click(); });
+    expect(usePopOutPicker.getState().hostId).toBeNull();
+    const panels = useBrowserStore.getState().panels;
+    expect(panels.length).toBe(before + 1);
+    expect(panels.filter(p => p.liftHap).map(p => p.liftHap)).toEqual(['PAT']);
+    expect(get('nat').collapsedByGraphGroup).toBeUndefined();
+    expect(useBrowserStore.getState()._historyStack?.length).toBe(steps + 1);
+    useBrowserStore.getState().undo();
+    expect(useBrowserStore.getState().panels.length).toBe(before);
+    expect(get('nat').collapsedByGraphGroup).toBe('pool');
+    act(() => root.unmount());
   });
 });

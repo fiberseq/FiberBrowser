@@ -16,6 +16,7 @@ import { graphBindingFor, useGraphBindingsStore, watchGraphBindings } from './bi
 import { formatBp } from './coordinates';
 import { HANDOFF_OUT_BP, setPinnedLinear, useGraphSettings } from './handoff';
 import { foldIn, graphUnavailable, hostOf, isHost, joinCandidates, joinGraph, membersOf, poppable, removeFromGraph, setPanelViewMode, viewSelectionAsGraph } from './hostMode';
+import { PopOutPicker, usePopOutPicker } from './PopOutPicker';
 import { POP_OUT_KINDS, popOutKindOf, popOutPaths, setPopOutKind, type PopOutKind } from './popOutKind';
 import { useGraphStatusStore } from './statusStore';
 import { memberLabel, singleHapPathName } from './labels';
@@ -55,6 +56,7 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
   const related = useBrowserStore(useShallow(s => s.panels.filter(p => p.id === panel.graphMemberOf || p.graphMemberOf === panel.id
     || (isHost(p) && p.id !== panel.id))));
   const outBp = useGraphSettings(s => s.outBp);
+  const pickerOpen = usePopOutPicker(s => s.hostId === panel.id);
   void bindingsKey;
   useEffect(() => { watchGraphBindings(); }, []);
   if (panel.contentType !== 'dataset' || !panel.datasetId) return null;
@@ -108,6 +110,10 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
             onSelect={() => popOutPaths(panel.id, [], [m])}><span data-testid="graph-pop-out-new" data-binding={m.binding}>Pop out {m.hap} (a new panel)</span></MenuItem>
         ))}
         {folded.length + missing.length > 1 && (
+          <MenuItem tour="panel-graph-popout-some" icon={<span>⇱</span>} title="Choose which paths in view to pop out as panels"
+            onSelect={() => usePopOutPicker.getState().open(panel.id)}><span data-testid="graph-pop-out-some">Pop out paths…</span></MenuItem>
+        )}
+        {folded.length + missing.length > 1 && (
           <MenuItem tour="panel-graph-popout-all" icon={<span>⇱</span>} title="Every folded member and haplotype in view, as panels"
             onSelect={() => popOutPaths(panel.id, folded.map(p => p.id), missing)}><span data-testid="graph-pop-out-all">Pop out all haplotypes in view</span></MenuItem>
         )}
@@ -129,7 +135,11 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
         ))}
       </>
     );
-    const body = shown === 'linear' ? (
+    const picker = pickerOpen && folded.length + missing.length > 0 ? (
+      <PopOutPicker key={[...folded.map(p => p.id), ...missing.map(m => m.binding)].join('|')} hostId={panel.id} folded={folded} missing={missing}
+        labelOf={p => memberLabel(p, datasetLabels(p), panel.graphView?.targetBinding ?? null)} />
+    ) : null;
+    const handoffBar = shown === 'linear' ? (
       <div data-testid="graph-handoff-bar" className="flex items-center gap-2 border-b border-stone-200 bg-stone-50 px-2 py-0.5 text-[11px] text-stone-600 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-300">
         <span>{pinned ? 'Linear · graph mode paused'
           : panel.graphView?.handoff?.reason === 'complexity' ? 'Linear · most of this window is unresolved in the graph'
@@ -138,6 +148,7 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
           onClick={() => setPinnedLinear(panel.id, !pinned)}>{pinned ? 'Resume graph' : 'Stay linear'}</button>
       </div>
     ) : null;
+    const body = picker || handoffBar ? <>{picker}{handoffBar}</> : null;
     return { chipTexts: [chipText], chips, menu, wantsMenu: true, menuTitle: 'graph mode', ...(body ? { body } : {}) };
   }
   if (member) {
