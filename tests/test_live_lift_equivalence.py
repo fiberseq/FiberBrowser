@@ -176,9 +176,10 @@ def test_flip_scdaf_minus_chain_strand_and_marks():
             continue
         assert r.get("strand") == source[r["id"]]            # the molecule's st, unchanged
         their_strand, theirs = lifted[r["id"]]
-        # fiberhmm-lift swaps st with the reverse-complemented SEQ; here only the presentation flips.
+        # fiberhmm-lift swaps st with the reverse-complemented SEQ; the browser shows both in the molecule frame
+        # (owner, 26 Oct): the same CT/GA label in the live-lifted and the fiberhmm-lifted panel.
         if r.get("strand") in ("CT", "GA"):
-            assert their_strand == {"CT": "GA", "GA": "CT"}[r.get("strand")]
+            assert their_strand == r.get("strand")
         mine = {tuple(e) for e in r.get("deam", ())}
         their_pos = {p: f for p, f in theirs}
         for p, f in mine:

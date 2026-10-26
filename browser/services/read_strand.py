@@ -65,6 +65,22 @@ def seq_ry_strand(sequence: Optional[str]) -> Optional[str]:
     return "CT" if y > r else "GA"
 
 
+_SWAP = {"CT": "GA", "GA": "CT"}
+
+
+def lift_flipped(read) -> bool:
+    """A ``fiberhmm-lift`` record whose strand the lift reversed: its ``Yp:Z`` source
+    locus (``<contig>:<pos>:<strand>``) names the other strand. FiberHMM then swapped
+    ``st`` to describe the reverse-complemented SEQ (the target frame)."""
+    try:
+        if not read.has_tag("Yp"):
+            return False
+        source = str(read.get_tag("Yp")).rsplit(":", 1)[-1]
+    except (AttributeError, KeyError, ValueError):
+        return False
+    return source in ("+", "-") and source != ("-" if read.is_reverse else "+")
+
+
 def record_strand_fields(read) -> dict:
     """``{'strand': 'CT'|'GA'}`` from a record's ``st:Z`` (FiberHMM's rule; it
     then decides the read's strand over its deamination marks, see
@@ -73,8 +89,15 @@ def record_strand_fields(read) -> dict:
     read, ``fiberhmm-lift`` repairs it). An ``st`` that is neither CT nor GA
     gives ``{'strand': '.'}`` (present, no strand, as in FiberHMM); empty
     without an ``st`` tag (the marks decide)."""
+    # Strand labels are in the molecule frame everywhere (owner, 26 Oct): a record whose strand
+    # fiberhmm-lift reversed shows its source st (as live lift keeps it), while the R/Y check
+    # below compares the tag as written with the SEQ it describes (both target frame).
+    flipped = lift_flipped(read)
     try:
         if not read.has_tag("st"):
+            if flipped:
+                seq_strand = seq_ry_strand(getattr(read, "query_sequence", None))
+                return {"strand": _SWAP[seq_strand], "strand_frame": "molecule"} if seq_strand else {}
             return {}
         strand = st_tag_strand(read.get_tag("st"))
     except (AttributeError, KeyError):
@@ -82,9 +105,12 @@ def record_strand_fields(read) -> dict:
     if strand is None:
         return {"strand": ST_UNKNOWN}
     seq_strand = seq_ry_strand(getattr(read, "query_sequence", None))
+    out = {"strand": _SWAP[strand] if flipped else strand}
+    if flipped:
+        out["strand_frame"] = "molecule"
     if seq_strand is not None and seq_strand != strand:
-        return {"strand": strand, "strand_conflict": True}
-    return {"strand": strand}
+        out["strand_conflict"] = True
+    return out
 
 
 _MAX_CACHED_CALLS = 500_000

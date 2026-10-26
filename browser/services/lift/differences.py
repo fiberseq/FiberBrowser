@@ -519,6 +519,13 @@ def annotate_read_evidence(items, sv_clusters, *, matching_policy=None):
     return unmatched
 
 
+def _record_strand(record):
+    """The molecule-frame strand of a record (services/read_strand.record_strand_fields)."""
+    from services.read_strand import record_strand_fields
+    value = record_strand_fields(record).get("strand")
+    return value if value in ("CT", "GA") else None
+
+
 def md_reference(md, runs):
     """Sparse source-reference mismatches from MD over aligned runs.
     MD consumes deletions but not CIGAR insertions/skips. Runs carry absolute
@@ -974,7 +981,7 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
                                   "unknown" if hg is None else
                                   "no_insertion" if not rb and not hg else "deleted" if not rb else
                                   "hg002" if carries and (hap == span["hap"] or rb == hg) and bool(hg) else "other")
-                st = meta.get("strand") if meta else (record.get_tag("st") if record.has_tag("st") else None)
+                st = meta.get("strand") if meta else _record_strand(record)
                 from services.lift.cohort import analysis_id
                 item = dict(row_id=analysis_id(row,config.settings) if ll else None,id=record.query_name, molecule=ll.get("molecule", f"{dataset.id}|{record.query_name}"),
                             hap_label=config.handle.haplotype_labels.get(hap, hap), record=ll.get("record", record_id),
