@@ -13,6 +13,8 @@ import { existsSync } from 'node:fs';
 const LIFT_BAM = process.env.FIBERBROWSER_TEST_LIFT_BAM ?? '';
 const NATIVE_BAM = process.env.FIBERBROWSER_TEST_LIFT_NATIVE ?? '';
 const LIFT_MAP = process.env.FIBERBROWSER_TEST_LIFT_MAP ?? '';
+// The source assembly (its alleles when the BAM has no MD tags); optional.
+const SOURCE_FASTA = process.env.FIBERBROWSER_TEST_LIFT_SOURCE_FASTA ?? '';
 const HAVE_DATA = [LIFT_BAM, NATIVE_BAM, LIFT_MAP].every(p => existsSync(p));
 const VIEW = { chrom: 'chr3', start: 128_650_000, end: 128_670_000 };
 
@@ -47,6 +49,7 @@ test('add a live-lift dataset next to the native BAM: split MAT/PAT panels rende
   await expect(dialog).toBeVisible();
   await page.getByTestId('live-lift-bams').fill(LIFT_BAM);
   await page.getByTestId('live-lift-manifest').fill(LIFT_MAP);
+  if (SOURCE_FASTA) await page.getByTestId('live-lift-source-fasta').fill(SOURCE_FASTA);
   await expect(page.getByTestId('live-lift-haplotypes')).toContainText('MAT');
   await expect(page.getByTestId('live-lift-haplotypes')).toContainText('PAT');
   await page.getByTestId('live-lift-add').click();
@@ -82,7 +85,9 @@ test('add a live-lift dataset next to the native BAM: split MAT/PAT panels rende
   const mat = panels.find((p: any) => p.hap === 'MAT')!;
   await page.evaluate(() => {
     const store = (window as any).__FIBERBROWSER_STORE__;
-    store.setState({ fillReadHeight: false, readRowHeight: 16 });
+    // Insertion marks are off by default (owner, 25 Oct): turn ticks on to click one.
+    store.setState((s: any) => ({ fillReadHeight: false, readRowHeight: 16,
+      differencesSession: { ...s.differencesSession, options: { ...s.differencesSession.options, readBadges: 'ticks' } } }));
   });
   const matCanvas = page.locator(`[data-read-track-state-key="${mat.stateKey}"] canvas[data-copilot-track="reads"]`);
   await expect.poll(() => matCanvas.getAttribute('data-live-lift-badge-target')).toBeTruthy();
@@ -156,9 +161,10 @@ test('add a live-lift dataset next to the native BAM: split MAT/PAT panels rende
   await expect(inspection).toContainText('Allele');
   await expect(inspection).toContainText('HG002');
   await expect(inspection).toContainText('GRCh38');
-  await expect(inspection.locator('tbody tr[data-hap="MAT"][data-allele="hg002"]').first()).toBeVisible();
+  // The HG002 allele needs the source assembly or MD tags on the BAM; without either it is honestly unknown.
+  if (SOURCE_FASTA) await expect(inspection.locator('tbody tr[data-hap="MAT"][data-allele="hg002"]').first()).toBeVisible();
   await expect(inspection.locator('tbody tr').first()).toHaveAttribute('data-hap', 'MAT');
-  await expect(inspection.getByTestId('live-lift-other-hap-summary')).toContainText(/PAT: no difference here, \d+ reads agree with GRCh38/);
+  if (SOURCE_FASTA) await expect(inspection.getByTestId('live-lift-other-hap-summary')).toContainText(/PAT: no difference here, \d+ reads agree with GRCh38/);
   await expect(inspection.locator('tbody tr[data-hap="PAT"][data-allele="grch38"]')).toHaveCount(0);
   await expect(inspection.locator('tbody')).not.toContainText('/ ?');
   await page.keyboard.press('Escape');
@@ -285,7 +291,8 @@ test('open a linked source view: panels move together through the map, the ribbo
   await expect.poll(() => page.locator('[data-read-track-loading="true"]').count(), { timeout: 60_000 }).toBe(0);
 
   // Hovering a lifted molecule outlines it in both panels and lines it in the ribbon.
-  await store(`s.setState({ fillReadHeight: false, readRowHeight: 16 })`);
+  // Insertion marks are off by default (owner, 25 Oct): turn ticks on to find a badge.
+  await store(`s.setState(x => ({ fillReadHeight: false, readRowHeight: 16, differencesSession: { ...x.differencesSession, options: { ...x.differencesSession.options, readBadges: 'ticks' } } }))`);
   const matCanvas = page.locator(`[data-read-track-state-key="${mat.stateKey ?? mat.datasetId}"] canvas[data-copilot-track="reads"]`);
   await expect.poll(() => matCanvas.getAttribute('data-live-lift-badge-target'), { timeout: 30_000 }).toBeTruthy();
   const scale = await matCanvas.evaluate((c: HTMLCanvasElement) => ({ x: c.getBoundingClientRect().width / c.clientWidth, y: c.getBoundingClientRect().height / c.clientHeight }));

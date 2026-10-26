@@ -148,8 +148,11 @@ test.describe('Differences and live lift', () => {
       await page.getByTestId('track-context-menu').getByRole('menuitem', { name: 'Hide the table' }).click();
 
       // Inspect an assembly insertion (⌘/Ctrl-click): its comparison section replaces "assembly comparison unassessed".
-      const insertion = page.locator('[data-testid="live-lift-diff-item"][data-kind="insertion"]').first();
-      await insertion.click({ modifiers: ['ControlOrMeta'] });
+      // The MAT AluY insertion; focus + Enter (neighbouring SNV marks can overlap its hit box at this zoom).
+      const alu = Object.values(comparison.assembly).find((v: any) => v.hap_label === 'MAT' && v.alt_bp > 1000) as any;
+      expect(alu).toBeTruthy();
+      await page.locator(`[data-testid="live-lift-diff-item"][data-difference-id="${alu.item_id}"]`).first().focus();
+      await page.keyboard.press('Enter');
       const inspector = page.getByTestId('live-lift-diff-popover');
       await expect(inspector).toBeVisible();
       await expect(inspector.getByTestId('assembly-comparison')).toBeVisible({ timeout: 60_000 });
