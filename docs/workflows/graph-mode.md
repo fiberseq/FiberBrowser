@@ -164,7 +164,9 @@ The graph is drawn up to 50 kb wide. Past that the panel switches to its linear
 tracks, and the folded haplotypes open beside it, so you still see them side by
 side. A bar under the header says *Linear · graph resumes below 40 kb*. Zoom
 back in to 40 kb or less and the graph returns, with the haplotypes folded
-again (unless you moved one of them yourself).
+again (unless you moved one of them yourself). **Scan** works on the linear tracks too:
+a lifted dataset's peaks are found on the reference, every haplotype's reads
+pooled, as the graph scan pools them where the haplotypes share the reference.
 
 The panel also switches to linear when more than half of the window has no
 resolved place in the graph (for example a region the graph could not build at

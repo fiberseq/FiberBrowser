@@ -493,6 +493,7 @@ def run_scan_peaks_endpoint(
         include_layers=scan_signal_needs_layers(req.signal_source),
         requested_layers=[custom_layer] if custom_layer else None,
         include_layer_qualities=False,
+        capability="peaks",
     )
     resolved_chrom = query.chrom
     scan_dataset_ids = query.dataset_ids
@@ -522,7 +523,10 @@ def run_scan_peaks_endpoint(
     for ds_id in query.dataset_ids:
         checkpoint()  # a scan whose clients left stops between datasets
         from services.direct_read_projection import direct_scan_counts
-        direct_counts = None if getattr(req, "strand", None) else direct_scan_counts(state, query, ds_id, signal_source)
+        from services.lift.capability import is_lifted
+        # A lifted dataset is scanned on its analysis cohort (target coordinates), never from display caches.
+        lifted = is_lifted(state.datasets.get(ds_id))
+        direct_counts = None if getattr(req, "strand", None) or lifted else direct_scan_counts(state, query, ds_id, signal_source)
         if direct_counts is not None:
             numerator, total_counts, ds_n_reads = direct_counts
             scan_numerators.append(numerator)
@@ -530,7 +534,7 @@ def run_scan_peaks_endpoint(
             n_reads += ds_n_reads
             direct_scan_hits += 1
             continue
-        broad_counts = None if getattr(req, "strand", None) else _compute_scan_counts_from_broad_cache(
+        broad_counts = None if getattr(req, "strand", None) or lifted else _compute_scan_counts_from_broad_cache(
             state=state,
             query=query,
             dataset_id=ds_id,

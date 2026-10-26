@@ -35,6 +35,8 @@ LIFT_ALLOWED: frozenset = frozenset({
     # "read_stats"). Transcription-state filters and every other analysis stay closed.
     (_POST, "/api/sort_reads"), (_POST, "/api/filter"), (_POST, "/api/filter_by_analysis_rule"),
     (_POST, "/api/reads/stats"),
+    # Peak scanning in linear view (capability "peaks": the analysis cohort, haplotypes pooled).
+    (_POST, "/api/scan_peaks"),
     # Dataset bookkeeping (list, remove, its assembly report).
     (_DELETE, "/api/datasets/{dataset_id}"), (_GET, "/api/datasets/{dataset_id}/assembly"),
     (_POST, "/api/datasets/{dataset_id}/refresh_capabilities"),

@@ -113,7 +113,7 @@ def test_read_stats_mixed_native_and_lifted(lift_env):
     assert [e["dataset_id"] for e in r.json()["per_read"]] == [did]
 
 
-@pytest.mark.parametrize("path", ["/api/filter_by_transcription_state", "/api/scan_peaks"])
+@pytest.mark.parametrize("path", ["/api/filter_by_transcription_state", "/api/autozoom"])
 def test_other_analyses_still_refuse(lift_env, path):
     client, state, manifest, bam = lift_env
     did = _add(client, manifest, bam)["dataset"]["id"]
@@ -201,3 +201,15 @@ def test_similarity_and_projection_sorts_read_a_graph_runs_record_key_labels(lif
                 projection={"peak_regions": peaks, "cluster_assignments": {did: labels}})
     assert set(out["cluster_order"]) <= {0, 1}
     assert {record_key(i) for i in out["read_sort_order"]} == set(labels)
+
+
+def test_linear_peak_scanning_takes_lifted_datasets(lift_env):
+    """Graph features audit (A2): Scan in linear view (a host handed off past 50 kb) scans a lifted dataset's analysis
+    cohort on target coordinates, haplotypes pooled, instead of refusing it."""
+    client, state, manifest, bam = lift_env
+    did = _add(client, manifest, bam)["dataset"]["id"]
+    r = client.post("/api/scan_peaks", params={**WINDOW, "dataset_id": did},
+                    json={"dataset_ids": [did], "min_reads": 1, "min_width": 20, "threshold_rare": 0.01})
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["n_reads"] >= 3
