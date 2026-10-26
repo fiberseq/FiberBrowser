@@ -251,6 +251,8 @@ interface Backbone {
   own: string[];
   /** An own carrier's visit at backbone visit i (the host's own is `visits[i]`). */
   ownVisit?: (carrier: string, i: number) => Visit | null;
+  /** Backbone visit i's orientation in the frame members' `Visit.reverse` uses (default `visits[i].reverse`). */
+  orient?: (i: number) => boolean;
 }
 
 interface Anchor { j: number; i: number }
@@ -361,7 +363,9 @@ function solveLevel(input: LevelInput, buildFamilies: (g: GroupItem) => void): L
       }
       runOf[k] = run;
     }
-    solutions.push({ key: m.key, anchors: m.anchors, runOf, anchorAt, candidates, visits: m.visits });
+    const sol: MemberSolution = { key: m.key, anchors: m.anchors, runOf, anchorAt, candidates, visits: m.visits };
+    mergePalindromicInversions(sol, bb);
+    solutions.push(sol);
   }
 
   // -------------------------------------------------- groups by equal flank keys, per segment
@@ -707,6 +711,8 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
   segs.forEach((s, k) => { for (let i = s.from; i < s.to; i++) segOf[i] = k; });
   const backbone: Backbone = {
     host: topology.target, visits: tVisits, segments: segs, segOf, own: [topology.target],
+    // Target visits' own strand: a path visit walks target visit i in baseline parity when its `reverse` equals it.
+    orient: i => targetOccs[i].reverse,
     key: (seg, p) => {
       const s = segs[seg];
       return p < s.to ? `${s.fragment}|${targetOccs[p].id}|0` : `${s.fragment}|${targetOccs[s.to - 1].id}|end`;
@@ -1056,6 +1062,61 @@ export function inversionVerdict(between: Visit[], opposite: (k: number) => numb
   });
   if (!any) return null;
   return consistent && invBp * 2 >= allBp && invBp * 2 >= baseBp ? INVERSION : 'a local inversion';
+}
+
+/** At most this many consecutive candidates of one path are tried as one palindromic-core inversion. */
+const MAX_PALINDROME_CANDIDATES = 6;
+
+/**
+ * Palindromic-core inversions (PHASE_D open item 1, agy 2a). An inverted stretch whose core is a palindromic walk
+ * (P+, P-) anchors on that core in baseline parity, so the stretch arrives as two (or more) candidates, each a
+ * substitution or indel, with the core between them as shared steps: "two crossed substitutions". A second pass over
+ * each path's consecutive candidates finds a run whose whole walk between its outer anchors is the reverse of the
+ * base stretch there (same nodes, opposite orientation, reverse order: then the core is necessarily palindromic) and
+ * replaces it by one inverted candidate over the whole stretch; the core's anchors stop placing the path on the base.
+ * Candidates that are not each other's reverse (adjacent unrelated substitutions) never pass the check.
+ */
+function mergePalindromicInversions(s: MemberSolution, bb: Backbone): void {
+  const cands = s.candidates;
+  if (cands.length < 2) return;
+  const n = bb.visits.length;
+  const orient = bb.orient ?? ((i: number) => bb.visits[i].reverse);
+  const anchorIdx = (i: number) => (i >= 0 && i < n ? s.anchorAt[i]
+    : i === -1 ? (s.anchors[0]?.i === -1 ? 0 : -1) : (s.anchors[s.anchors.length - 1]?.i === n ? s.anchors.length - 1 : -1));
+  const eligible = (c: Candidate) => c.status === 'ok' && !c.inverted;
+  const out: Candidate[] = [];
+  for (let x = 0; x < cands.length; x++) {
+    const c1 = cands[x];
+    const kL = eligible(c1) ? anchorIdx(c1.p - 1) : -1;
+    let merged = -1;
+    if (kL >= 0) {
+      for (let y = x + 1; y < cands.length && y <= x + MAX_PALINDROME_CANDIDATES; y++) {
+        const c2 = cands[y];
+        // One continuous walk on one segment: every candidate in it resolved, no break between the outer anchors.
+        if (c2.seg !== c1.seg || (c2.status !== 'ok')) break;
+        if (c2.inverted) continue;
+        const kR = anchorIdx(c2.q);
+        if (kR < 0 || s.runOf[kR] !== s.runOf[kL]) break;
+        const jL = s.anchors[kL].j, jR = s.anchors[kR].j;
+        const len = jR - jL - 1;
+        if (len !== c2.q - c1.p || len < 2) continue;
+        let reversed = true;
+        for (let t = 0; t < len && reversed; t++) {
+          const v = s.visits[jR - 1 - t], b = bb.visits[c1.p + t];
+          reversed = v.occ.node === b.occ.node && v.reverse !== orient(c1.p + t);
+        }
+        if (reversed) { merged = y; break; }
+      }
+    }
+    if (merged < 0) { out.push(c1); continue; }
+    const c2 = cands[merged];
+    const visits = s.visits.slice(s.anchors[kL].j + 1, s.anchors[anchorIdx(c2.q)].j);
+    out.push({ path: s.key, seg: c1.seg, p: c1.p, q: c2.q, visits, status: 'ok', source: sourceSpanOf(visits, c1.source.start), inverted: true });
+    // The core is walked inside the inverted allele, not on the base.
+    for (let i = c1.p; i < c2.q; i++) s.anchorAt[i] = -1;
+    x = merged;
+  }
+  s.candidates = out;
 }
 
 // ---------------------------------------------------------------------------------------------------- repeats
