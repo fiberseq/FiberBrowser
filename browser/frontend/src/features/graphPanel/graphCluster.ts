@@ -441,14 +441,16 @@ export function commitGraphRun(s: BrowserState, plan: GraphClusterPlan, response
  * rows), so a pop-out filters each node's labels with that node's own run. */
 function stampGraphProvenance(run: ClusterMatchedRun): void {
   if (!run.graph || !run.destinations || !run.treeNodeId) return;
-  const provenance = { destinations: run.destinations.map(d => d.stateKey), observations: run.graph.observations,
+  // By destination: another panel's run on the same node keeps its own (agy review, group B round 4).
+  const entry = { observations: run.graph.observations,
     owned: Object.fromEntries(Object.entries(run.assignments).map(([oid, a]) => [oid, Object.keys(a).map(id => recordKey(id) ?? id)])) };
+  const mine = Object.fromEntries(run.destinations.map(d => [d.stateKey, entry]));
   useBrowserStore.setState(cur => {
     const node = cur.clusterTreeNodes[run.treeNodeId!];
     if (!node) return {};
     const parent = node.refinement && node.parentId ? cur.clusterTreeNodes[node.parentId] : null;
-    return { clusterTreeNodes: { ...cur.clusterTreeNodes, [node.id]: { ...node, graphProvenance: provenance },
-      ...(parent ? { [parent.id]: { ...parent, graphProvenance: provenance } } : {}) } };
+    return { clusterTreeNodes: { ...cur.clusterTreeNodes, [node.id]: { ...node, graphProvenance: { ...(node.graphProvenance ?? {}), ...mine } },
+      ...(parent ? { [parent.id]: { ...parent, graphProvenance: { ...(parent.graphProvenance ?? {}), ...mine } } } : {}) } };
   });
 }
 

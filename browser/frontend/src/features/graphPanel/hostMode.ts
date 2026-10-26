@@ -233,7 +233,8 @@ export function poppable(panels: readonly PanelConfig[], host: PanelConfig): { f
  * record keys each observation labelled. */
 export type GraphProvenance = { destinations: string[]; observations: GraphRunObservation[]; owned: Record<string, string[]> };
 
-type ProvenanceState = { clusterTreeNodes: Record<string, { parentId: string | null; graphProvenance?: GraphProvenance }>;
+type ProvenanceState = { clusterTreeNodes: Record<string, { parentId: string | null;
+  graphProvenance?: Record<string, { observations: GraphRunObservation[]; owned: Record<string, string[]> }> }>;
   clusterMatchedRun: import('../../utils/clusterMatchedRun').ClusterMatchedRun | null;
   clusterAssignments: Record<string, Record<string, number>> };
 
@@ -241,9 +242,18 @@ type ProvenanceState = { clusterTreeNodes: Record<string, { parentId: string | n
 export function provenanceLineage(s: ProvenanceState, key: string, nodeId: string | null | undefined): GraphProvenance[] {
   const out: GraphProvenance[] = [];
   for (let n = nodeId ? s.clusterTreeNodes[nodeId] : undefined, seen = 0; n && seen < 1000; n = n.parentId ? s.clusterTreeNodes[n.parentId] : undefined, seen++) {
-    if (n.graphProvenance?.destinations.includes(key)) out.push(n.graphProvenance);
+    const p = n.graphProvenance?.[key];
+    if (p?.observations && p.owned) out.push({ destinations: [key], observations: p.observations, owned: p.owned });
   }
   return out;
+}
+
+/** The provenance a panel's labels on the active tree node are split by: the node lineage's, else the current graph
+ * run's (a node rebuilt by another clustering keeps it; agy review, group B round 4). */
+export function activeProvenance(s: ProvenanceState & { activeClusterTreeNodeId?: string | null }, key: string): GraphProvenance[] {
+  const id = s.activeClusterTreeNodeId;
+  const lineage = id && s.clusterTreeNodes[id] ? provenanceLineage(s, key, id) : [];
+  return lineage.length ? lineage : liveProvenance(s, key);
 }
 
 /** The current graph run's provenance for `key`, while its labels are the shown ones (none otherwise). */
@@ -291,15 +301,13 @@ export function popOut(hostId: string, memberIds: string[], newHaps: { binding: 
     // nor a focus or picks (agy round 3, Codex round 3).
     const hostKey = panelKeyOf(host);
     const lineage = (id: string | null | undefined) => provenanceLineage(s, hostKey, id);
-    const fromRun = liveProvenance(s, hostKey);
     /** Each new panel's share of ``labels`` (null: not filtered, the copy stands). */
     const share = (provs: GraphProvenance[], labels: Record<string, number> | undefined) => {
       if (!provenanceCovers(provs, labels)) return null;
       return new Map(made.map(m => [m.id, provenanceShare(provs, labels!, o => observationShownBy(o, m))]));
     };
     if (made.length) {
-      const activeId = s.activeClusterTreeNodeId;
-      const liveShare = share(activeId && s.clusterTreeNodes[activeId] ? lineage(activeId) : fromRun, s.clusterAssignments[hostKey]);
+      const liveShare = share(activeProvenance(s, hostKey), s.clusterAssignments[hostKey]);
       if (liveShare) {
         const without = (name: string, ids: string[]) => {
           const map = (copied[name] ?? (s as unknown as Record<string, unknown>)[name]) as Record<string, unknown> | undefined;
@@ -316,8 +324,12 @@ export function popOut(hostId: string, memberIds: string[], newHaps: { binding: 
         without('selectedClusters', empty);
       }
       const nodes = Object.fromEntries(Object.entries(s.clusterTreeNodes).flatMap(([nid, n]) => {
-        const got = share(lineage(nid), n.assignments?.[hostKey]);
-        const per = got ? made.map(m => [m.id, got.get(m.id)!] as const).filter(([, v]) => Object.keys(v).length) : [];
+        const labels = n.assignments?.[hostKey];
+        const got = share(nid === s.activeClusterTreeNodeId ? activeProvenance(s, hostKey) : lineage(nid), labels);
+        // Labels no graph run of the node owns are copied whole, as the live copy is (so a branch switch keeps
+        // them; agy round 4).
+        const per = got ? made.map(m => [m.id, got.get(m.id)!] as const).filter(([, v]) => Object.keys(v).length)
+          : labels && Object.keys(labels).length ? made.map(m => [m.id, { ...labels }] as const) : [];
         if (!per.length) return [];
         const copyOf = <T,>(map: Record<string, T> | undefined, f: (v: T) => T) => (map?.[hostKey] !== undefined && map?.[hostKey] !== null
           ? { ...map, ...Object.fromEntries(per.map(([id]) => [id, f(map[hostKey])])) } : map);

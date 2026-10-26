@@ -213,6 +213,14 @@ function sameAssignments(a: Record<string, number> | undefined, b: Record<string
   return keys.every(k => a[k] === b[k]);
 }
 
+/** A rebuilt tree node keeps the graph-run provenance of the panels whose labels did not change (another panel's
+ * clustering re-syncs the node; agy review, group B round 4). */
+function keptGraphProvenance(node: ClusterTreeNode | undefined, assignments: Record<string, Record<string, number>>):
+  Pick<ClusterTreeNode, 'graphProvenance'> {
+  const kept = Object.entries(node?.graphProvenance ?? {}).filter(([key]) => sameAssignments(node!.assignments[key], assignments[key]));
+  return kept.length ? { graphProvenance: Object.fromEntries(kept) } : {};
+}
+
 function cloneAssignments(assignments: Record<string, Record<string, number>>): Record<string, Record<string, number>> {
   return Object.fromEntries(
     Object.entries(assignments)
@@ -1477,14 +1485,17 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
     return {
       clusterTreeNodes: {
         ...state.clusterTreeNodes,
-        [id]: buildClusterTreeNodeFromState(state, {
-          id,
-          parentId: current.parentId,
-          name: current.name,
-          sourceClusterIds: current.sourceClusterIds,
-          sourceLabel: current.sourceLabel,
-          readScope: current.readScope,
-        }),
+        [id]: {
+          ...buildClusterTreeNodeFromState(state, {
+            id,
+            parentId: current.parentId,
+            name: current.name,
+            sourceClusterIds: current.sourceClusterIds,
+            sourceLabel: current.sourceLabel,
+            readScope: current.readScope,
+          }),
+          ...keptGraphProvenance(current, state.clusterAssignments),
+        },
       },
     };
   }),
@@ -1495,14 +1506,17 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
     const existingId = state.activeClusterTreeNodeId;
     const id = existingId ?? crypto.randomUUID();
     const existing = existingId ? state.clusterTreeNodes[existingId] : undefined;
-    const node = buildClusterTreeNodeFromState(state, {
-      id,
-      parentId: existing?.parentId ?? null,
-      name: options?.name ?? existing?.name ?? 'All reads',
-      sourceClusterIds: existing?.sourceClusterIds ?? [],
-      sourceLabel: existing?.sourceLabel,
-      readScope: existing?.readScope,
-    });
+    const node = {
+      ...buildClusterTreeNodeFromState(state, {
+        id,
+        parentId: existing?.parentId ?? null,
+        name: options?.name ?? existing?.name ?? 'All reads',
+        sourceClusterIds: existing?.sourceClusterIds ?? [],
+        sourceLabel: existing?.sourceLabel,
+        readScope: existing?.readScope,
+      }),
+      ...keptGraphProvenance(existing, state.clusterAssignments),
+    };
     set(current => ({
       clusterTreeNodes: { ...current.clusterTreeNodes, [id]: node },
       clusterTreeRootIds: node.parentId === null && !current.clusterTreeRootIds.includes(id)
