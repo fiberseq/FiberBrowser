@@ -66,7 +66,8 @@ is drawn faint.
   [Differences](differences.md#expanding-an-insertion)).
 - **⌘/Ctrl-click** opens the inspector; **Shift-click** selects it.
 - **Hover** for its counts at each level.
-- **Right-click** for its actions:
+- **Right-click** for its actions (the menu is headed *Differences (SVs and
+  indels in reads)*):
 
 | Item | What it does |
 |---|---|
@@ -85,7 +86,14 @@ is drawn faint.
 ![A variant's right-click menu on the Differences row](../images/pangenome/sv-row-menu.png)
 
 The row also works from the keyboard: the arrow keys move between variants,
-Enter highlights the reads, Shift+Enter selects, and Shift+F10 opens the menu.
+Enter highlights the reads, Shift+Enter selects, `i` inspects, and Shift+F10
+opens the menu.
+
+When a lifted dataset is open, the inspector compares the variant with that
+dataset's assembly (**Confirmed by assembly**, **assembly-supported
+(approximate)**, ...); see [Differences](differences.md#assembly-comparison).
+It uses the first lifted dataset that was opened, whatever its sample: with
+several samples open, keep only the sample you mean to compare with.
 
 ## Highlighted carriers
 

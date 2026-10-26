@@ -17,7 +17,7 @@ alignment metadata. Boundary crops near retained indels require a fresh summary.
 Evidence is classified per molecule (QNAME) per target:
 
 - **Confirmed:** a matching CIGAR event, or a same-chromosome, same-strand junction
-  with both MAPQs >=20, equal full-query lengths and non-overlapping query
+  with both MAPQs at or above the junction floor (0 by default: no MAPQ filter), equal full-query lengths and non-overlapping query
   intervals. A deletion junction has <=20 unaligned query bases; an insertion
   junction has a query gap matching the allele length and sequence available
   across that gap. Query intervals include hard clips in the full-query frame;
@@ -26,8 +26,8 @@ Evidence is classified per molecule (QNAME) per target:
   evidence. Insertion clips retain the 50 bp floor. Mixed soft/hard clips expose
   only their available soft sequence. Hard clips alone never confirm an insert.
 - **Conflicting (putative — elsewhere):** another alignment segment explains
-  at least **500 bp and 50% of the particular supporting clip**, with **MAPQ
-  >=20**, on another chromosome or **more than 100,000 bp** from the target
+  at least **500 bp and 50% of the particular supporting clip**, with MAPQ at
+  least **Min elsewhere MAPQ** (default **0**, no MAPQ filter), on another chromosome or **more than 100,000 bp** from the target
   interval. Distance includes the target's equivalent placements. This is a
   warning about competing alignment evidence, not a proven noncarrier genotype.
   Explained bases count the union of **M/=/X query blocks** intersecting that

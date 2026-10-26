@@ -27,11 +27,11 @@ Setting up is described in
 - **A graph package.** This is a prepared pangenome graph (for example an HPRC
   release cut to the contigs you work on), made with `fiberbrowser-graph
   prepare` from [graphlift](https://github.com/mtcicero26/graphlift).
-  Packages are registered once, from the **Graph view** panel's **Register a
-  graph package…** item, and are remembered
-  ([details](pangenome-setup.md#registering-a-graph-package)). The Graph view
-  panel is a preview feature, shown while **Show preview features** (Settings;
-  on unless you turned it off) is on. Graph mode on dataset panels does not need preview features.
+  Packages are registered once, with **Open ▾ → Register graph package…** or
+  in **Settings › Reads & Display › Graph mode** (**Graph packages**: enter the
+  folder, **Register**; **Remove** forgets one), and are remembered
+  ([details](pangenome-setup.md#registering-a-graph-package)). Neither needs
+  preview features.
 - **Reads that the graph knows.** Either of these works:
   - a **lifted dataset**: reads aligned to a sample's own assembly and viewed on
     the reference through a lift map (**Open → Add live lift…**; see
@@ -51,13 +51,25 @@ why.
   them. In **Add live lift…**, **Open as** is set to **Graph**; choose
   **One panel per haplotype** or **Pooled** to open it the old way. The first
   haplotype's panel shows the graph; the other haplotypes are folded into it.
+  **Open as** starts from **Settings › Reads & Display › Graph mode › Open
+  lifted datasets as** (**Graph (default)**, **Split panels**, **Pooled
+  panel**).
 - **A dataset with one haplotype** (a strain against its reference, for
   example) opens in graph mode on its one panel.
 - **Any bound panel** can be switched with the **Linear ⇄ Graph** pill in its
   header, or with **View as graph** / **View as linear** in its **…** menu. The
   switch is one undo step.
-- **Native datasets open linear.** Switch them to graph mode, or add them to a
-  graph (below).
+- **Native BAMs open linear** unless you tick **Open in graph mode** in **Load
+  by path**, or turn on **Open native BAMs in graph mode** in Settings (Open
+  file, drag and drop and Load by path then follow it). A BAM whose contig no
+  package binds stays linear. Switch any panel later, or add it to a graph
+  (below).
+- **A restored session** keeps its split panels as saved. When graph is your
+  default view, the first panel shows *A graph package binds this dataset; its
+  haplotype panels can be viewed together on its paths.* with **View as graph**
+  and **×**. The same bar appears when a package binds a dataset after you have
+  changed its panels. Once you use or dismiss it, it doesn't come back until
+  the next session restore.
 
 ## Reading the view
 
@@ -66,7 +78,8 @@ why.
   drawn as a branch with its size (for example **+2,350 bp** for an insertion).
 - **Bands.** Under each lane there is one band per panel drawn there. A band is
   labelled with its panel's name and its read count, with that panel's colour
-  down the left edge.
+  down the left edge. A dataset with one haplotype is labelled by its path name
+  (header **Graph · strainA#0**, band *strainA#0*).
 - **Rows.** The bands share the panel's height ("Rows fill the panel height" in
   the panel's **Reads** menu, the default). Choose **At most 20 / 40 / 100 rows
   per band** to fix the count instead.
@@ -87,15 +100,22 @@ why.
 The graph is a set of panels drawn together. Every band is a real panel, and
 you can take any of them out to look at it on its own.
 
-- **Pop out** a haplotype: in the header's **…** menu, **Pop out PAT** (or
-  **Pop out all haplotypes in view**). The haplotype opens as its own panel
-  next to the graph, with its own read tracks and tools. It keeps the state it
-  had in the graph (filters, selections, clusters).
+- **Pop out** a haplotype: in the header's **…** menu, **Pop out PAT**, **Pop
+  out all haplotypes in view**, or **Pop out paths…** (a checklist: **Pop out
+  N** pops out the ticked paths in one undo step). The haplotype opens as its
+  own panel next to the graph, with its own read tracks and tools. It keeps the
+  state it had in the graph (filters, selections, clusters).
+- **Pop out as: lifted panel** (the default), **source view** or **lifted and
+  source** chooses what a pop-out opens: the lifted haplotype panel, its
+  [source view](linked-panels.md) on the sample's own assembly, or both. Native
+  panels always pop out as panels. The choice is saved with the panel.
 - **Fold it back** with **Fold into graph** in its menu. Its state is kept.
-- **Add another panel** to the graph with **Add panel to this graph**: for
-  example the same sample aligned to the reference, or a second sample. Its
-  reads are drawn in their own band on the lanes they belong to. **Remove from
-  graph** takes it out again.
+- **Add another panel** to the graph with **Add ‹dataset› to this graph** in
+  the **…** menu (or **Add panels to this graph…** in the graph's right-click
+  menu); from the other panel, **Join ‹dataset› graph**. For example the same
+  sample aligned to the reference, or a second sample. Its reads are drawn in
+  their own band on the lanes they belong to. **Remove from graph** takes it
+  out again.
 
 ![The header menu of a panel in graph mode, with a native panel of the same sample beside it](../images/graph/graph-mode-menu.png)
 
@@ -115,7 +135,10 @@ On every band: **Select** (Shift-click), **Highlight**, the read menu
 applies as its panel does. DAF-seq panels that show one strand (CT or GA) show
 only that strand's reads in their band too. Soft-clipped read ends are marked
 as in the read tracks (a bar with a tick toward the clipped sequence), with the
-same **SV display** switch and minimum length.
+same **SV display** switch and minimum length. Rows with no sort or clusters
+are ordered **By first carried column** (the first graph position each read
+covers); **Rows without a sort or clusters** in the graph's right-click menu
+switches to **Longest first**.
 
 The toolbar's **Sort** and **Filter** run on every panel in view, lifted or
 native, including the haplotypes folded into a graph: each band takes its
@@ -149,13 +172,23 @@ Sequence that only some haplotypes carry (an insertion, for example) is used to
 split clusters further among the haplotypes that carry it. Those clusters are
 named **C0.1**, **C1.0** and so on; the other reads keep their labels. When
 the regions hold only such sequence (no part every haplotype shares), the
-haplotypes that carry its first part are clustered, and the reads there of
-haplotypes that carry none of it are labelled **Not a carrier**, in a colour of
-their own. A haplotype that carries only another part is left out of that run
-(the run details say so): choose its region alone to cluster it. A haplotype that lacks a region's
-sequence altogether (a deletion) is not clustered there either: its reads that
-span the deletion are labelled **Not a carrier**. The **Cluster detail** panel lists
-what was used and what was left out.
+haplotypes that carry its first part are clustered. The reads of a haplotype
+that carries none of it are labelled **Not a carrier**, in a colour of their
+own, but only when that is certain: the haplotype's sequence there is not
+repeated or unresolved, it carries no smaller part that was too short to
+cluster, and the read covers every region on its own path. Otherwise the
+haplotype is left out, and the run details say why. A haplotype that carries
+only another part is left out too: choose its region alone to cluster it. A
+haplotype that lacks every region (a plain deletion on its path) is not
+clustered there: its reads that span every deletion are labelled **Not a
+carrier**. A molecule clustered on another path keeps that label, and reads
+labelled as you pan can replace **Not a carrier**. The **Cluster detail** panel
+lists what was used and what was left out (*Not a carrier (shown, not
+fitted)*).
+
+An open source view of a haplotype in the run takes the run's labels by read
+name (its own strand), follows selections and gets labels for new reads as you
+pan. It is not a separate column in the cluster charts.
 
 A cluster run stays while you pan and zoom on the same chromosome: new reads
 that come into view are given labels from the same run.
@@ -177,7 +210,7 @@ that come into view are given labels from the same run.
 
 The graph is drawn up to 50 kb wide. Past that the panel switches to its linear
 tracks, and the folded haplotypes open beside it, so you still see them side by
-side. A bar under the header says *Linear · graph resumes below 40 kb*. Zoom
+side. A bar under the header says *Linear · graph resumes below 40.0 kb*. Zoom
 back in to 40 kb or less and the graph returns, with the haplotypes folded
 again (unless you moved one of them yourself). **Scan** works on the linear tracks too:
 a lifted dataset's peaks are found on the reference, every haplotype's reads
@@ -190,10 +223,18 @@ this width), and comes back when less than 30% is unresolved. The bar then says
 
 ![Past 50 kb: the panel is linear and the haplotypes are beside it](../images/graph/graph-mode-handoff.png)
 
-- **Stay linear** (on the bar, or in the graph's right-click menu) keeps the panel linear
-  until **Resume graph**.
-- **Linear above …** in the graph's menu sets the width (50, 30 or 20 kb), and
-  turns the "most of the window is unresolved" rule off or on.
+- **Stay linear** (on the bar, or in the graph's right-click menu) keeps the
+  panel linear until **Resume graph** (the bar then says *Linear · graph mode
+  paused*).
+- **Linear above …** in the graph's menu sets the widths (**Above 50.0 kb
+  (graph again at 40.0 kb)**, **Above 30.0 kb**, **Above 20.0 kb**) and **Also
+  where most of the window is unresolved**. **Settings › Reads & Display ›
+  Graph mode** takes any pair from 10 to 50 kb (**Linear when wider than**,
+  **Graph again at or below**) and **Complexity hand-off**. These apply in this
+  browser, to every panel.
+- Switching between graph and linear fades over 150 ms (not with reduced
+  motion). After a graph run, a panel drawn linear lists the inserted sequence
+  the run used as *Not drawn in linear view: …*.
 
 ## Speed and memory
 
@@ -212,8 +253,9 @@ hundred molecules and its density strip.
 
 ## Sessions
 
-Graph mode, the folded and popped-out panels, the hand-off setting and the
-cluster run are saved with sessions and the undo history. A session opened on a
+Graph mode, the folded and popped-out panels, **Stay linear**, the pop-out
+kind and the cluster run are saved with sessions and the undo history. The
+hand-off widths are kept in this browser, not in sessions. A session opened on a
 computer without the graph package shows the panel with **View as linear**.
 
 ## Troubleshooting
@@ -221,7 +263,8 @@ computer without the graph package shows the panel with **View as linear**.
 | Symptom | What to check |
 |---|---|
 | **View as graph** is greyed out | Its tooltip says why: no package is registered, or no package path matches the dataset (sample, haplotype, contig and size). |
-| A band is missing | The panel is not on this graph's paths, or it was removed from the graph. Check **Add panel to this graph**. |
+| A band is missing | The panel is not on this graph's paths, or it was removed from the graph. Check **Add ‹dataset› to this graph**. |
+| A native BAM opened linear | **Open native BAMs in graph mode** is off, or no package binds its contig; switch it with **Linear ⇄ Graph**. |
 | The panel keeps showing linear | The view is wider than the hand-off width, **Stay linear** is on, or most of the window is unresolved; the bar under the header says which. |
 | Sort or Filter does nothing on a band | The rule counts only reference positions: a region inside an insertion has none. Choose a region on the reference. |
 | Fewer reads than in the linear view | The band is sampled or past its rows: its label and the status line give the counts. Choose a higher **Performance mode**, or fix a row count in the **Reads** menu. |

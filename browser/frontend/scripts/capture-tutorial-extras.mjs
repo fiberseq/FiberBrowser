@@ -97,6 +97,8 @@ async function captureSvExtras(page, { out, shoot, audit, sleep }) {
       // The SVs tab lists the reads the split was made from: the insertion and its carriers.
       await page.locator('[data-panel-content-type="variants"] [data-testid="variants-svs-split-source"]').waitFor({ timeout: 30_000 });
       await page.locator('[data-panel-content-type="variants"] [data-testid="variants-sv"]').first().waitFor({ timeout: 30_000 });
+      // The split panels' automatic peak scan ("Scanning peaks...") finishes before the shot.
+      await page.waitForFunction(() => !/Scanning peaks/.test(document.body.textContent ?? ''), null, { timeout: 90_000, polling: 500 }).catch(() => {});
       await sleep(1500);
     }],
   ];

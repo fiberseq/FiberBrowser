@@ -44,12 +44,14 @@ this genome.
 | Action | What it does |
 |---|---|
 | **Click** an insertion | Expands it in place (see below). Click it again to collapse it. |
-| **Click** any other difference | Highlights the reads that carry it, in every panel. |
+| **Click** any other difference | Highlights the reads that carry it: on a lifted dataset, its haplotype's carriers in that dataset's panels. |
 | **Shift-click** | Selects the difference: an amber dashed guide line runs through every panel at it. |
 | **⌘-click** (Ctrl-click on Windows and Linux) | Opens the inspector. |
 | **Right-click** | Opens the row's menu; its first item is **Inspect…**. |
 
-Escape closes the inspector.
+On the keyboard, Tab to a mark of a lifted panel's row and press Enter to
+inspect it. On a native BAM's row the arrow keys move between variants, Enter
+highlights the reads and `i` inspects. Escape closes the inspector.
 
 ## Expanding an insertion
 
@@ -80,8 +82,9 @@ carry it show a gap.
   the other haplotype's reads show a gap.
 - **The bar at the top of the column** has **×** (collapse), **Associate
   native layout** (above), **Identify** (what the inserted sequence is) and,
-  for an assembly insertion, **Open in HG002 view**: a panel of the sample's
-  own assembly anchored at the insertion. That panel follows the main view only
+  for an assembly insertion, **Open in HG002 view** (named after the sample in
+  the lift map; *Open in source assembly view* when the map names no single
+  sample): a panel of the sample's own assembly anchored at the insertion. That panel follows the main view only
   near the insertion and has no ribbon; for a fully linked view use **Open MAT
   source view** (see [Linked panels](linked-panels.md)).
 
@@ -108,10 +111,10 @@ Right-click a mark for its actions, then the row's own options.
 | Item | What it does |
 |---|---|
 | **Assembly differences (the map)** | The haplotype lanes (on by default). |
-| **Read-supported edits** | The **Reads** lane: insertions, deletions and replacements found in the loaded reads (off by default). |
+| **Read-supported edits** | The **Reads** lane: insertions, deletions and replacements found in the loaded reads, compared with the assembly (off by default; see [Assembly comparison](#assembly-comparison)). |
 | **Minimum size** | All sizes, ≥10 bp, ≥50 bp or ≥1000 bp. |
 | **Show the table** / **Hide the table** | The difference table, below. |
-| **Insertions on reads** | Off (the default), Ticks or Ticks with size: marks on the reads themselves. |
+| **Insertions on reads** | Off (the default), Ticks or Ticks with size: marks on the reads themselves (also the **Insertions** control in the toolbar's Layers row). |
 | **Live-lift settings…** | The dataset's settings. |
 
 ![The Differences row's right-click menu](../images/pangenome/differences-menu.png)
@@ -125,8 +128,9 @@ level, and open the insertion in the lens. See
 
 **Show the table** lists the differences in view below the row: where each
 comes from (haplotype or reads), its interval on this genome, the change
-(reference → alternative size), its sequence or support, and an **Inspect**
-button.
+(reference → alternative size), its sequence or support, its **Assembly
+comparison** (below), and an **Inspect** button. It opens just below the row,
+over the reads, and scrolls; **×** or **Hide the table** closes it.
 
 ![The difference table under the row](../images/pangenome/differences-table.png)
 
@@ -139,21 +143,27 @@ difference on a lifted panel it shows:
   assemblies, and the bases on each.
 - **Buttons:** **Expand insertion** (or **Expand alternate**), **Identify** and
   **Open in HG002 view**.
+- **Assembly comparison:** the difference's label and links (see
+  [Assembly comparison](#assembly-comparison)).
 - **Molecule calls:** click **Load molecule calls** to sort the reads into
   carriers, reference and not informative. Tick **putative**, **conflicting**,
   **ambiguous** or **duplicates** to count those reads as carriers too (only
   putative is ticked at first; see
   [Structural variants](structural-variants.md#evidence-levels)). **Lifted
   reads** uses the lifted panel's reads; **Combined representations** adds an
-  open native dataset of the same molecules. Then **Highlight carriers**,
-  **Split by carrier**, or **Open detailed workspace** (the insertion lens,
-  below).
+  open native dataset of the same molecules. **Allele target** chooses what a
+  carrier must carry: **Geometry (any sequence)**, or, for an assembly allele
+  up to about 1 kb, **Exact assembly allele** (the reads' bases must match the
+  assembly's). Then **Highlight carriers**, **Split by carrier**, **Compare
+  consensus with assembly**, or **Open detailed workspace** (the insertion
+  lens, below).
 - **Per haplotype:** how many reads of each haplotype carry the sample's
   allele and how many the reference allele. Reads of a haplotype that show the
   reference allele are flagged as possible mis-phasing or mismapping.
-- **The read table:** each read's haplotype and strand, its allele, its own
-  bases next to the two assemblies' bases, and the chromatin nearby. Hover a
-  row to highlight that read.
+- **The read table:** each read's name, haplotype and strand, its allele, its
+  own bases next to the two assemblies' bases (the columns are named after the
+  map's sample and reference, for example *HG002* and *GRCh38*), and the
+  chromatin nearby. Hover a row to highlight that read.
 
 The read table loads by itself when the panel has up to 2,000 reads in view.
 With more, the inspector says so and offers **Load observed bases and
@@ -164,7 +174,43 @@ chromatin**.
 For a structural variant on a BAM aligned to this genome, the inspector
 (*Inspect difference*) shows each read's observed bases, coverage and
 chromatin, with **Expand alternate**, **Load full observed sequence** and
-**Identify observed alternate**.
+**Identify observed alternate**. When a lifted dataset on this genome is open,
+it also compares the variant with that dataset's assembly (below): the first
+lifted dataset opened, whatever its sample, so with several samples open keep
+only the one you mean. Without one it says **Reads only (no assembly)**.
+
+## Assembly comparison
+
+When the reads and a sample's assembly both have a difference, FiberBrowser
+says whether they agree. A read difference (from **Read-supported edits**, or
+a structural variant on a native BAM) gets one of these labels:
+
+| Label | Meaning |
+|---|---|
+| ✓ **Confirmed by assembly** | The assembly has exactly the same change: the changed haplotypes are equal. |
+| ≈ **assembly-supported (approximate)** | The reads' allele and the assembly's align with at least 90% identity. |
+| ? **Assembly candidate (geometry only)** | The assembly has a difference of the same shape there, but its sequence either was not compared or did not agree closely enough; the haplotype's line below says which (for example *sequence not close enough*). |
+| **Not in the compared assembly haplotypes** | The assembly has no such difference. |
+| **Assembly comparison unassessed** | It could not be decided (for example, sequence is missing). |
+
+Differences under 10 bp are not assessed. A read deletion can be confirmed
+from its span alone; a read insertion needs its sequence: click **Compare
+consensus with assembly** in the inspector (after **Load molecule calls**),
+which builds the reads' consensus and compares it. An assembly insertion's own
+sequence needs the **Source assembly FASTA** given when the lifted dataset was
+added.
+
+The label shows as a mark (✓, ≈, ?) beside the read difference in the
+**Reads** lane, in its tooltip, in the table's **Assembly comparison** column
+and at the top of the inspector, with each haplotype's link (for example
+*MAT: exact (full changed haplotypes equal)* or *PAT: approximate · identity
+99.5%*). The newest comparison is used everywhere.
+
+![Read-supported edits: the Reads lane under the haplotype lanes, and the table's Assembly comparison column](../images/pangenome/differences-comparison.png)
+
+![A read-supported insertion compared with the assembly through the reads' consensus: assembly-supported (approximate)](../images/pangenome/differences-comparison-inspector.png)
+
+![The native BAM's inspector for the same insertion, compared with the open lifted dataset's assembly: Confirmed by assembly](../images/pangenome/differences-native-inspector.png)
 
 ## The insertion lens
 
@@ -194,5 +240,7 @@ options (they are also in its right-click menu):
 | Read-supported edits | off |
 | Minimum size | All sizes |
 | Insertions on reads | Off |
+| Read analysis MAPQ ≥ | 0 (no MAPQ filter) |
 
-**Save** applies them to every panel of the dataset.
+**Save** applies them to every panel of the dataset. **Insertions on reads**
+and **Read analysis MAPQ ≥** apply to the whole session.
