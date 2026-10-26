@@ -1157,8 +1157,8 @@ const MAX_PALINDROME_CANDIDATES = 6;
  * each path's consecutive candidates finds a run whose whole walk between its outer anchors is the reverse of the
  * base stretch there (same nodes, opposite orientation, reverse order: then the core is necessarily palindromic) and
  * replaces it by one inverted candidate over the whole stretch; the core's anchors stop placing the path on the base.
- * Candidates that are not each other's reverse (adjacent unrelated substitutions) never pass the check, and neither
- * does a walk that starts in the target's own orientation (a forward walk of a palindromic stretch, agy r2).
+ * Candidates that are not each other's reverse (adjacent unrelated substitutions) never pass the check. Forward
+ * palindromic flanks are trimmed off onto the base, and a forward walk of a palindromic stretch is no inversion.
  */
 function mergePalindromicInversions(s: MemberSolution, bb: Backbone): void {
   const cands = s.candidates;
@@ -1171,10 +1171,12 @@ function mergePalindromicInversions(s: MemberSolution, bb: Backbone): void {
   // matches it in the opposite orientation). The whole-walk reversal below is what decides.
   const eligible = (c: Candidate) => c.status === 'ok' || (c.status === 'unresolved' && NON_BREAKING.has(c.reason ?? ''));
   const out: Candidate[] = [];
+  // Forward flank visits trimmed off an inversion: placed on the base as anchors (with their run).
+  const added: { anchor: Anchor; run: number }[] = [];
   for (let x = 0; x < cands.length; x++) {
     const c1 = cands[x];
     const kL = eligible(c1) ? anchorIdx(c1.p - 1) : -1;
-    let merged = -1;
+    let merged = -1, bestTrim = 0;
     if (kL >= 0) {
       for (let y = x + 1; y < cands.length && y <= x + MAX_PALINDROME_CANDIDATES; y++) {
         const c2 = cands[y];
@@ -1190,23 +1192,48 @@ function mergePalindromicInversions(s: MemberSolution, bb: Backbone): void {
           const v = s.visits[jR - 1 - t], b = bb.visits[c1.p + t];
           reversed = v.occ.node === b.occ.node && v.reverse !== orient(c1.p + t);
         }
-        // A palindromic target stretch reads the same reversed: a walk that starts on it in the target's own
-        // orientation is not inverted there (a forward walk of a palindrome, or forward palindromic flanks around a
-        // smaller inversion). By symmetry its last visit is then forward too, so the run must start and end with
-        // actual opposite-strand traversal; an inner run is tried from the next candidate on.
-        const v0 = s.visits[jL + 1];
-        const forwardStart = v0.occ.node === bb.visits[c1.p].occ.node && v0.reverse === orient(c1.p);
+        if (!reversed) continue;
+        // A palindromic target stretch reads the same reversed: where the walk follows it in the target's own
+        // orientation it is not inverted (a forward walk of a palindrome, forward palindromic flanks around a smaller
+        // inversion). By symmetry the forward prefix and suffix have one length: trimmed off both ends, so the
+        // inversion starts and ends with actual opposite-strand traversal. Nothing left: no inversion. A trim that
+        // covers a whole outer candidate (a flank beyond an anchored node) is left to the inner run.
+        let trim = 0;
+        while (trim * 2 < len && s.visits[jL + 1 + trim].occ.node === bb.visits[c1.p + trim].occ.node
+          && s.visits[jL + 1 + trim].reverse === orient(c1.p + trim)) trim += 1;
+        if (len - 2 * trim < 2) continue;
+        if (trim > 0 && (trim >= c1.visits.length || trim >= c1.q - c1.p || trim >= c2.visits.length || trim >= c2.q - c2.p)) continue;
         // The longest such run: one inversion, not several sharing palindromic cores.
-        if (reversed && !forwardStart) merged = y;
+        merged = y;
+        bestTrim = trim;
       }
     }
     if (merged < 0) { out.push(c1); continue; }
     const c2 = cands[merged];
-    const visits = s.visits.slice(s.anchors[kL].j + 1, s.anchors[anchorIdx(c2.q)].j);
-    out.push({ path: s.key, seg: c1.seg, p: c1.p, q: c2.q, visits, status: 'ok', source: sourceSpanOf(visits, c1.source.start), inverted: true });
+    const jL = s.anchors[kL].j, jR = s.anchors[anchorIdx(c2.q)].j, run = s.runOf[kL];
+    const p = c1.p + bestTrim, q = c2.q - bestTrim;
+    const visits = s.visits.slice(jL + 1 + bestTrim, jR - bestTrim);
+    out.push({ path: s.key, seg: c1.seg, p, q, visits, status: 'ok', source: sourceSpanOf(visits, c1.source.start), inverted: true });
     // The core is walked inside the inverted allele, not on the base.
-    for (let i = c1.p; i < c2.q; i++) s.anchorAt[i] = -1;
+    for (let i = p; i < q; i++) s.anchorAt[i] = -1;
+    // The trimmed forward flanks walk the base in place: shared steps.
+    for (let t = 0; t < bestTrim; t++) {
+      added.push({ anchor: { j: jL + 1 + t, i: c1.p + t }, run });
+      added.push({ anchor: { j: jR - bestTrim + t, i: q + t }, run });
+    }
     x = merged;
+  }
+  if (added.length) {
+    // Rebuild the anchor arrays with the flank anchors; anchors of an inversion's core stay off the base.
+    const placed = new Set<number>();
+    for (let i = 0; i < n; i++) if (s.anchorAt[i] >= 0) placed.add(i);
+    for (const { anchor } of added) placed.add(anchor.i);
+    const all = [...s.anchors.map((anchor, k) => ({ anchor, run: s.runOf[k] })), ...added]
+      .sort((a, b) => a.anchor.j - b.anchor.j || a.anchor.i - b.anchor.i);
+    s.anchors = all.map(z => z.anchor);
+    s.runOf = Int32Array.from(all.map(z => z.run));
+    s.anchorAt.fill(-1);
+    s.anchors.forEach((a, k) => { if (a.i >= 0 && a.i < n && placed.has(a.i)) s.anchorAt[a.i] = k; });
   }
   s.candidates = out;
 }

@@ -152,5 +152,40 @@ describe('Graph follow-ups review regressions', () => {
       expect(lead.family!.chain.filter(i => i.kind === 'run').reduce((t, r) => t + r.bp, 0)).toBe(famBp);
     }
   });
+
+  // ------------------------------------------------------------------ agy round 3
+  const sig = (a: { visits: { occ: { node: string }; reverse: boolean }[] }) => a.visits.map(v => `${v.occ.node}${v.reverse ? '-' : '+'}`);
+
+  it('agy r3: forward flanks inside the outer differences are trimmed onto the base, the inversion keeps its core', () => {
+    // Distinct arms, no anchored spacer between the forward flank P and the inversion (r2 1c without X).
+    const noX = build(fromWalks({ L: 400, M: 150, P: 80, A: 60, Q: 40, B: 70, N: 150, R: 400 }, {
+      ref: ['L', 'M', 'P', 'M', 'P', 'A', 'Q', '-Q', 'B', '-P', 'N', '-P', 'N', 'R'],
+      mat: ['L', 'M', 'P', 'P', 'M', 'P', '-B', 'Q', '-Q', '-A', '-P', 'N', '-P', '-P', 'N', 'R'] }));
+    expect(inverted(noX).map(a => [a.bp, sig(a)])).toEqual([[210, ['B-', 'Q+', 'Q-', 'A-']]]);
+    // Repeated arms, the flank longer than the arm (r1 2A with flanks): one inversion, nothing unresolved.
+    const local = build(fromWalks({ L: 400, M: 150, P: 80, A: 60, Q: 40, N: 150, R: 400 }, {
+      ref: ['L', 'M', 'P', 'M', 'P', 'A', 'Q', '-Q', 'A', '-P', 'N', '-P', 'N', 'R'],
+      mat: ['L', 'M', 'P', 'P', 'M', 'P', '-A', 'Q', '-Q', '-A', '-P', 'N', '-P', '-P', 'N', 'R'] }));
+    expect(inverted(local).map(a => [a.bp, sig(a)])).toEqual([[200, ['A-', 'Q+', 'Q-', 'A-']]]);
+    expect(local.stats).toMatchObject({ inversions: 1, unresolved: 0 });
+    // Five copies of the flank pair on both sides, no other difference: one inversion, no repeat visits, MAT on P.
+    const five = build(fromWalks({ L: 400, P: 40, M: 150, A: 120, Q: 30, N: 150, R: 400 }, {
+      ref: ['L', 'P', '-P', 'P', '-P', 'P', '-P', 'P', '-P', 'M', 'P', 'A', 'Q', '-Q', 'A', '-P', 'N', 'R'],
+      mat: ['L', 'P', '-P', 'P', '-P', 'P', '-P', 'P', '-P', 'M', 'P', '-A', 'Q', '-Q', '-A', '-P', 'N', 'R'] }));
+    expect(five.stats).toMatchObject({ inversions: 1, repeats: 0, substitutions: 0, unresolved: 0 });
+    expect(inverted(five).map(a => [a.bp, sig(a)])).toEqual([[300, ['A-', 'Q+', 'Q-', 'A-']]]);
+    expect(onTarget(five, 'mat', 400 + 8 * 40 + 150 + 10)).toBe(true);   // the forward P after M
+  });
+
+  it('agy r3: inside an insertion family the member\'s inversion is trimmed the same way, matching a peer panel led by MAT', () => {
+    const nodes = { L: 400, P: 40, M: 200, A: 120, Q: 30, N: 200, R: 400 };
+    const mat = ['L', 'P', '-P', 'M', 'P', 'A', 'Q', '-Q', 'A', '-P', 'N', 'R'], pat = ['L', 'P', '-P', 'M', 'P', '-A', 'Q', '-Q', '-A', '-P', 'N', 'R'];
+    const fam = build(fromWalks(nodes, { ref: ['L', 'R'], mat, pat }));
+    expect(inverted(fam).map(a => [a.carriers, a.bp, sig(a)])).toEqual([[['pat'], 300, ['A-', 'Q+', 'Q-', 'A-']]]);
+    expect(fam.stats.inversions).toBe(1);
+    const peer = build(fromWalks(nodes, { mat, pat }));
+    expect(inverted(peer).map(a => [a.carriers, a.bp, sig(a)])).toEqual([[['pat'], 300, ['A-', 'Q+', 'Q-', 'A-']]]);
+    expect(peer.stats).toMatchObject({ inversions: 1, unresolved: 0, repeats: 0 });
+  });
 });
 
