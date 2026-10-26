@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { boxIsBlank, drawUntilComplete, UI_CAPTURE_MAX_DRAWS, type UiCaptureDeps, type UiCaptureProbe } from './uiCapture';
+import { boxIsBlank, drawUntilComplete, probeDrawn, UI_CAPTURE_MAX_DRAWS, type ProbeMarks, type UiCaptureDeps, type UiCaptureProbe } from './uiCapture';
 
 const WHITE = 0xffffffff;
 const CHROME = 0xff444444;
@@ -9,14 +9,16 @@ const READ_GREEN = 0xff2ca033;
  * A stand-in canvas holding a W x H image. The fake rasterizer paints into `pixels`;
  * drawImage (the fallback copy) fills the target box with the source's colour.
  */
-interface FakeCanvas { width: number; height: number; pixels: Uint32Array; copies: number; getContext: () => unknown }
+interface FakeCanvas { width: number; height: number; pixels: Uint32Array; copies: number; ops: string[]; getContext: () => unknown }
 function fakeCanvas(): FakeCanvas {
   const c: FakeCanvas = {
-    width: 0, height: 0, pixels: new Uint32Array(0), copies: 0,
+    width: 0, height: 0, pixels: new Uint32Array(0), copies: 0, ops: [],
     getContext: () => ({
       clearRect: () => { c.pixels = new Uint32Array(c.width * c.height); },
       fillRect: () => { c.pixels.fill(WHITE); },
       set fillStyle(_v: string) { /* the background */ },
+      save: () => c.ops.push('save'), restore: () => c.ops.push('restore'),
+      translate: (x: number) => c.ops.push(`translate ${x}`), scale: (x: number) => c.ops.push(`scale ${x}`),
       drawImage: (_src: unknown, _sx: number, _sy: number, _sw: number, _sh: number, dx: number, dy: number, dw: number, dh: number) => {
         c.copies++;
         for (let y = Math.floor(dy); y < dy + dh; y++) for (let x = Math.floor(dx); x < dx + dw; x++) c.pixels[y * c.width + x] = READ_GREEN;
@@ -96,5 +98,47 @@ describe('full UI capture', () => {
     px[5] = READ_GREEN;
     expect(boxIsBlank(px, 4, { x: 0, y: 0, w: 4, h: 4 })).toBe(false);
     expect(boxIsBlank(px, 4, { x: 2, y: 2, w: 2, h: 2 })).toBe(true);
+  });
+
+  it('flips a mirrored canvas when it copies it in', async () => {
+    const d = deps(Infinity);
+    await drawUntilComplete('svg', 40, 30, { pixelRatio: 1 }, [{ ...probes[0], mirror: true }], d);
+    expect(d.canvas().ops).toEqual(['save', 'translate 40', 'scale -1', 'restore']);
+  });
+});
+
+describe('a canvas shows in the image', () => {
+  // A 40 x 20 read track at (0, 10) of a 40 x 30 window: reads on even rows, on screen.
+  const W = 40, H = 30;
+  const box = { x: 0, y: 10, w: 40, h: 20 };
+  // The canvas's own grid (1 cell per CSS px): marks on even rows.
+  const mark = new Uint8Array(40 * 20).map((_, i) => (Math.floor(i / 40) % 2 === 0 ? 1 : 0));
+  const marks: ProbeMarks = { cols: 40, rows: 20, mark, contrast: 200 };
+  const probe: UiCaptureProbe = { box, marks };
+  const image = (row: (y: number, x: number) => number) => {
+    const px = new Uint32Array(W * H);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) px[y * W + x] = y < 10 ? CHROME : row(y - 10, x);
+    return px;
+  };
+  const reads = (y: number) => (y % 2 === 0 ? READ_GREEN : WHITE);
+
+  it('with its reads', () => {
+    expect(probeDrawn(image(reads), W, probe)).toBe(true);
+  });
+
+  it('not when blank, even with an HTML label or guide line over it', () => {
+    expect(probeDrawn(image(() => WHITE), W, probe)).toBe(false);
+    // A dark vertical guide line and a label across the top row.
+    expect(probeDrawn(image((y, x) => (x === 20 || (y === 0 && x < 30) ? CHROME : WHITE)), W, probe)).toBe(false);
+  });
+
+  it('with a highlight wash over its reads', () => {
+    // 35% yellow over the reads and the background.
+    const wash = (p: number) => {
+      const mix = (c: number, y: number) => Math.round(0.65 * c + 0.35 * y);
+      const r = mix(p & 255, 0xfd), g = mix((p >>> 8) & 255, 0xe0), b = mix((p >>> 16) & 255, 0x47);
+      return (0xff << 24 | b << 16 | g << 8 | r) >>> 0;
+    };
+    expect(probeDrawn(image(y => wash(reads(y))), W, probe)).toBe(true);
   });
 });

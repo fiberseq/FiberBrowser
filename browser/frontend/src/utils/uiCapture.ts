@@ -8,8 +8,9 @@
  * same SVG again paints them. Chromium decodes them first, so one draw is complete.
  *
  * So this draws the SVG again until the image is complete: two draws in a row give the
- * same pixels and every canvas that has marks on screen has marks in the image. A canvas
- * still blank after the last draw is copied in from the page.
+ * same pixels and every canvas that has marks on screen shows them in the image (its
+ * marks stand out from its background there as on screen). A canvas still missing after
+ * the last draw is copied in from the page.
  */
 
 export interface UiCaptureOptions {
@@ -24,13 +25,25 @@ export interface UiCaptureOptions {
 export interface UiBox { x: number; y: number; w: number; h: number }
 
 /**
- * A canvas on screen with marks on it: its box must not come out blank. `source` and
- * `sourceBox` (backing-store px) copy its visible part in when it does.
+ * The canvas's own picture, sampled on a `cols` x `rows` grid over its visible box:
+ * which samples are marks (not the canvas's background colour), and the contrast
+ * between marks and background (largest channel difference of their means).
+ */
+export interface ProbeMarks { cols: number; rows: number; mark: Uint8Array; contrast: number }
+
+/**
+ * A canvas on screen with marks on it. In the image, its marks must stand out from its
+ * background as they do on screen (an HTML label or guide over a blank canvas does not
+ * count); without `marks`, its box must just not be one flat colour. `source` and
+ * `sourceBox` (backing-store px; `mirror`: drawn flipped, CSS scaleX(-1)) copy its
+ * visible part in when it never draws.
  */
 export interface UiCaptureProbe {
   box: UiBox;
+  marks?: ProbeMarks;
   source?: CanvasImageSource;
   sourceBox?: UiBox;
+  mirror?: boolean;
 }
 
 export interface UiCaptureDeps {
@@ -107,6 +120,49 @@ export function boxIsBlank(pixels: Uint32Array, width: number, box: UiBox): bool
 }
 
 /**
+ * The mean colour of cell (col, row) of a probe's box on a cols x rows grid, from a
+ * `width` px wide fingerprint: averaged like the canvas's own grid (a downscale).
+ */
+function cellMean(pixels: Uint32Array, width: number, height: number, box: UiBox, cols: number, rows: number, col: number, row: number): number {
+  const x0 = Math.max(0, Math.floor(box.x + (col * box.w) / cols)), x1 = Math.min(width, Math.max(x0 + 1, Math.floor(box.x + ((col + 1) * box.w) / cols)));
+  const y0 = Math.max(0, Math.floor(box.y + (row * box.h) / rows)), y1 = Math.min(height, Math.max(y0 + 1, Math.floor(box.y + ((row + 1) * box.h) / rows)));
+  let r = 0, g = 0, bl = 0, n = 0;
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const p = pixels[y * width + x];
+      r += p & 255; g += (p >>> 8) & 255; bl += (p >>> 16) & 255; n++;
+    }
+  }
+  if (n === 0) return 0;
+  return (Math.round(r / n)) | (Math.round(g / n) << 8) | (Math.round(bl / n) << 16);
+}
+
+/** Largest channel difference between the mean colours of the mark and background samples. */
+function markContrast(colorAt: (i: number) => number, mark: Uint8Array): number {
+  const sums = [[0, 0, 0], [0, 0, 0]];
+  const counts = [0, 0];
+  for (let i = 0; i < mark.length; i++) {
+    const p = colorAt(i), m = mark[i];
+    counts[m]++;
+    for (let c = 0; c < 3; c++) sums[m][c] += (p >>> (8 * c)) & 255;
+  }
+  if (counts[0] === 0 || counts[1] === 0) return 0;
+  let best = 0;
+  for (let c = 0; c < 3; c++) best = Math.max(best, Math.abs(sums[1][c] / counts[1] - sums[0][c] / counts[0]));
+  return best;
+}
+
+/** True when the probe's canvas shows in the fingerprint (`width` px wide). */
+export function probeDrawn(pixels: Uint32Array, width: number, probe: UiCaptureProbe): boolean {
+  const m = probe.marks;
+  if (!m) return !boxIsBlank(pixels, width, probe.box);
+  const height = Math.floor(pixels.length / width);
+  const out = markContrast(i => cellMean(pixels, width, height, probe.box, m.cols, m.rows, i % m.cols, Math.floor(i / m.cols)), m.mark);
+  // A wash over the track (a highlight) keeps most of the contrast; a blank canvas has none.
+  return out >= 0.3 * m.contrast;
+}
+
+/**
  * Draw `svgUrl` (an html-to-image SVG of a `width` x `height` CSS px node) on one canvas
  * until it is complete (see the file comment), and return that canvas.
  */
@@ -133,7 +189,7 @@ export async function drawUntilComplete(
     return deps.fingerprint(canvas, width, height);
   };
   const fpWidth = Math.max(1, Math.round(width));
-  const blankProbes = (fp: Uint32Array | null) => (fp ? probes.filter(p => boxIsBlank(fp, fpWidth, p.box)) : probes);
+  const blankProbes = (fp: Uint32Array | null) => (fp ? probes.filter(p => !probeDrawn(fp, fpWidth, p)) : probes);
 
   let previous = await paint();
   let blank = blankProbes(previous);
@@ -150,7 +206,14 @@ export async function drawUntilComplete(
     if (!probe.source || !probe.sourceBox) continue;
     const s = probe.sourceBox, b = probe.box;
     if (s.w <= 0 || s.h <= 0) continue;
-    ctx.drawImage(probe.source, s.x, s.y, s.w, s.h, b.x * k, b.y * k, b.w * k, b.h * k);
+    ctx.save();
+    if (probe.mirror) {
+      // Drawn flipped on screen: flip about the box's vertical centre line.
+      ctx.translate((2 * b.x + b.w) * k, 0);
+      ctx.scale(-1, 1);
+    }
+    ctx.drawImage(probe.source, s.x, s.y, s.w, s.h, probe.mirror ? 0 : b.x * k, b.y * k, b.w * k, b.h * k);
+    ctx.restore();
   }
   return canvas;
 }
@@ -168,20 +231,57 @@ function visibleBox(el: Element, root: Element): DOMRect {
   return new DOMRect(left, top, Math.max(0, right - left), Math.max(0, bottom - top));
 }
 
-/** True when the canvas shows more than one colour (sampled small). */
-function canvasHasMarks(canvas: HTMLCanvasElement): boolean {
-  if (canvas.width === 0 || canvas.height === 0) return false;
-  const probe = document.createElement('canvas');
-  probe.width = 32; probe.height = 32;
-  const ctx = probe.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return false;
+/** A canvas's CSS transform: identity, a horizontal flip (reversed views), or something else. */
+function canvasTransform(canvas: HTMLCanvasElement): 'none' | 'mirror' | 'other' {
+  const t = getComputedStyle(canvas).transform;
+  if (!t || t === 'none') return 'none';
+  const m = t.match(/^matrix\(([^)]+)\)$/);
+  if (!m) return 'other';
+  const [a, b, c, d] = m[1].split(',').map(Number);
+  if (b === 0 && c === 0 && d === 1 && (a === 1 || a === -1)) return a === 1 ? 'none' : 'mirror';
+  return 'other';
+}
+
+/**
+ * Sample the canvas's visible part (backing-store box `src`) on a grid, as it shows on
+ * screen (over white; flipped when mirrored). Null when it has no marks.
+ */
+function sampleMarks(canvas: HTMLCanvasElement, src: UiBox, cssW: number, cssH: number, mirror: boolean): ProbeMarks | null {
+  const cols = Math.max(1, Math.min(64, Math.round(cssW)));
+  const rows = Math.max(1, Math.min(64, Math.round(cssH)));
+  // At CSS size, then averaged per cell: the same way the image's fingerprint is gridded.
+  const w = Math.max(1, Math.round(cssW)), h = Math.max(1, Math.round(cssH));
+  const full = document.createElement('canvas');
+  full.width = w; full.height = h;
+  const ctx = full.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return null;
+  const px = new Uint32Array(cols * rows);
   try {
-    ctx.drawImage(canvas, 0, 0, 32, 32);
-    const px = new Uint32Array(ctx.getImageData(0, 0, 32, 32).data.buffer);
-    return px.some(p => p !== px[0]);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, w, h);
+    if (mirror) { ctx.translate(w, 0); ctx.scale(-1, 1); }
+    ctx.drawImage(canvas, src.x, src.y, src.w, src.h, 0, 0, w, h);
+    const all = new Uint32Array(ctx.getImageData(0, 0, w, h).data.buffer);
+    const box = { x: 0, y: 0, w, h };
+    for (let i = 0; i < px.length; i++) px[i] = cellMean(all, w, h, box, cols, rows, i % cols, Math.floor(i / cols));
   } catch {
-    return false;
+    return null;
   }
+  // The background: the commonest colour; marks: samples well away from it.
+  const counts = new Map<number, number>();
+  for (const p of px) counts.set(p, (counts.get(p) ?? 0) + 1);
+  let bg = px[0], most = 0;
+  for (const [p, n] of counts) if (n > most) { bg = p; most = n; }
+  const mark = new Uint8Array(px.length);
+  let marks = 0;
+  for (let i = 0; i < px.length; i++) {
+    let far = false;
+    for (let c = 0; c < 3; c++) if (Math.abs(((px[i] >>> (8 * c)) & 255) - ((bg >>> (8 * c)) & 255)) > 24) far = true;
+    if (far) { mark[i] = 1; marks++; }
+  }
+  if (marks < 3 || px.length - marks < 3) return null;
+  const contrast = markContrast(i => px[i], mark);
+  return contrast > 24 ? { cols, rows, mark, contrast } : null;
 }
 
 /** The canvases in `root` that show marks, as probes in `root`'s CSS px. */
@@ -192,16 +292,21 @@ function canvasProbes(root: HTMLElement, width: number, filter?: (node: HTMLElem
   const probes: UiCaptureProbe[] = [];
   for (const canvas of Array.from(root.querySelectorAll('canvas'))) {
     if (filter && !filter(canvas as unknown as HTMLElement)) continue;
+    if (canvas.width === 0 || canvas.height === 0 || getComputedStyle(canvas).visibility === 'hidden') continue;
     const rect = canvas.getBoundingClientRect();
     const visible = visibleBox(canvas, root);
     if (rect.width < 1 || rect.height < 1 || visible.width < 1 || visible.height < 1) continue;
-    if (getComputedStyle(canvas).visibility === 'hidden' || !canvasHasMarks(canvas)) continue;
+    const transform = canvasTransform(canvas);
+    if (transform === 'other') continue;
+    const mirror = transform === 'mirror';
     const sx = canvas.width / rect.width, sy = canvas.height / rect.height;
-    probes.push({
-      box: { x: (visible.left - rootRect.left) / zoom, y: (visible.top - rootRect.top) / zoom, w: visible.width / zoom, h: visible.height / zoom },
-      source: canvas,
-      sourceBox: { x: (visible.left - rect.left) * sx, y: (visible.top - rect.top) * sy, w: visible.width * sx, h: visible.height * sy },
-    });
+    // The visible part in backing-store px; flipped on screen, its left edge is the canvas's right.
+    const left = mirror ? rect.right - visible.right : visible.left - rect.left;
+    const sourceBox = { x: left * sx, y: (visible.top - rect.top) * sy, w: visible.width * sx, h: visible.height * sy };
+    const box = { x: (visible.left - rootRect.left) / zoom, y: (visible.top - rootRect.top) / zoom, w: visible.width / zoom, h: visible.height / zoom };
+    const marks = sampleMarks(canvas, sourceBox, box.w, box.h, mirror);
+    if (!marks) continue;
+    probes.push({ box, marks, source: canvas, sourceBox, mirror });
   }
   return probes;
 }
