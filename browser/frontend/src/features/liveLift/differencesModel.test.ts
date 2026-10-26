@@ -83,6 +83,6 @@ describe('carrier highlights from an inspection', () => {
     expect(m.carriers).toEqual(['q']);
     expect(carrierHighlight(m.carrierRows, 'lift')).toEqual({ ids: ['q'], scopedRows: { lift: new Set(['lift|0|q|mat']) } });
     expect(inspectionModel(rows, 'MAT').carriers).toEqual(['r']);
-    expect(carrierHighlight([{ id: 'x' }] as DifferenceInspection[], 'lift')).toEqual({ ids: ['x'] });
+    expect(carrierHighlight([{ id: 'x' }] as DifferenceInspection[], 'lift')).toEqual({ ids: ['x'], scopedRows: { lift: new Set(['name:x']) } });
   });
 });

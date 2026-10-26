@@ -113,9 +113,21 @@ class LiftMapHandle:
 
     def __init__(self, manifest_path: str):
         self.path = os.path.abspath(manifest_path)
-        with open(self.path, "rb") as fh:
+        from services.lab.paths import confine, open_read
+        with open_read(self.path) as fh:   # a lab server's read roots (plain open elsewhere)
             raw = fh.read()
-        self.map = LiftMap(json.loads(raw), os.path.dirname(self.path))
+        from services.lift.chain_map import is_chain_path, load_chain_map
+        # A plain UCSC chain loads whole into memory (no per-target payload files);
+        # a graphlift sidecar manifest loads its targets lazily.
+        self.plain_chain = is_chain_path(self.path)
+        if self.plain_chain:
+            self.map = load_chain_map(self.path)
+        else:
+            self.map = LiftMap(json.loads(raw), os.path.dirname(self.path))
+            # The reader opens per-target payload files itself: each must be readable here too.
+            for names in self.map.m.get("target_files", {}).values():
+                for name in names:
+                    confine(os.path.join(self.map.dir, name))
         self.manifest = self.map.m
         self.payload_stamps = payload_stamps(self.manifest, self.map.dir)
         digest = hashlib.sha256(raw)
@@ -497,7 +509,10 @@ def plan_fetch(selection: PieceSelection, settings: LiftSettings, fetch_range: O
         n_windows += len(merged)
         contigs.append(ContigFetch(contig, merged[0][0], merged[-1][1], [tuple(w) for w in merged], pieces))
     view_bp = max(1, selection.view_end - selection.view_start)
-    budget = max(SOURCE_BP_PER_VIEW * view_bp, MIN_SOURCE_BP_BUDGET)
+    # The total sums every haplotype's source bp. The base budget was set for MAT+PAT; more haplotypes scale it
+    # (one or two keep it unchanged), so a 3+-haplotype map isn't refused at every zoom.
+    n_haps = len({p.hap for c in contigs for p in c.pieces if getattr(p, "hap", None) is not None})
+    budget = int(max(SOURCE_BP_PER_VIEW * view_bp, MIN_SOURCE_BP_BUDGET) * max(1.0, n_haps / 2))
     if n_windows > MAX_WINDOWS:
         raise LiftRefused(f"Live lift: this view needs {n_windows} source windows (at most {MAX_WINDOWS}); zoom in.")
     if total > budget:

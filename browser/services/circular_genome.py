@@ -243,7 +243,7 @@ _ROW_IDENTITY_KEYS = (
     "library_id", "source_path", "record_sha256", "alignment_occurrence",
     "reference_start", "reference_end", "alignment_orientation",
     "chemical_strand", "daf_strand", "strand", "_original_id", "bigbed_sample",
-    "strand_conflict", "lift",
+    "strand_conflict", "lift", "lift_flipped", "strand_frame",
     # Absolute-coordinate SV events (services/sv_events.py): the record's own.
     "sv",
     "aligned_blocks", "sv_segments", "sequence_span",

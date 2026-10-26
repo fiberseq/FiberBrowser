@@ -751,7 +751,7 @@ def _load_dataset_evidence(
     preferred_read_ids: Sequence[str] = (),
     tf_layer: str = "tf",
     nuc_layer: str = "nuc",
-    minimum_mapq: int = 20,
+    minimum_mapq: int = 0,
     legacy_annotation_frame: Optional[str] = None,
 ):
     # A dataset on another assembly reads its contexts from its own reference.

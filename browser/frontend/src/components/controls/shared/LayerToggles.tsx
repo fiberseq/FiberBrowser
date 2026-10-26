@@ -5,6 +5,7 @@ import { useConsensusViewStore } from '../../../stores/consensusViewStore';
 import { getCanonicalLayerEntries, getLayerColor, getLayerLabel, getLayerTitle, getNucDisplayLabel, getNucDisplayTitle, isDerivedLayerName } from '../../../utils/layerColors';
 import { isStrandRescueLayer } from '../../../utils/strandRescue';
 import { ChevronDown } from '../../ui/Icons';
+import { InsertionMarksControl } from '../../../features/differences/InsertionMarksControl';
 
 // MSP is an internal compatibility key for older BAM/BigBed outputs. The
 // user-facing control is always FIRE; aq filtering lives in Quality Filters.
@@ -190,6 +191,7 @@ export function LayerToggles({ compact = false, wrap = true }: LayerTogglesProps
     >
       {standardTypes.map(renderToggle)}
       {derivedTypes.filter(t => t === 'tf_rc' || t === 'tf_cr').map(renderToggle)}
+      <InsertionMarksControl compact={compact} />
       {(tfInferenceTypes.length > 0 || strandRescueTypes.length > 0 || derivedTypes.some(t => t !== 'tf_cr' && t !== 'tf_rc') || hasNativeLattice) && <details className="relative" data-testid="advanced-layers">
         <summary className={`${textSize} flex cursor-pointer list-none items-center gap-0.5 text-slate-500 dark:text-slate-400 [&::-webkit-details-marker]:hidden`}>
           Advanced layers

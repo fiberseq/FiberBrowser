@@ -11,6 +11,39 @@ from .calls import Call
 _COMPLEMENT = str.maketrans("ACGT", "TGCA")
 
 
+# Chemistry read from a BAM st tag. FiberHMM's st (fiberhmm/daf/encoder.py) counts reference C>T versus G>A on the
+# stored, reference-forward SEQ, so it is already in the stored-SEQ frame: only a projection that reverse-complements
+# that SEQ (a minus-chain lift) complements it, never the read's own orientation.
+ST_TAG_PROVENANCE = frozenset({"BAM:st", "bam_st_tag"})
+
+
+def stored_frame_chemistry(context) -> bool:
+    return context is not None and getattr(context, "provenance", None) in ST_TAG_PROVENANCE
+
+
+# The molecule (read-frame) chemistry of an alignment's st, from which each record's stored-SEQ frame follows.
+MOLECULE_FROM_ST = "BAM:st:molecule"
+_SWAP_ST = {"CT": "GA", "GA": "CT"}
+
+
+def molecule_chemistry_from_st(st: str, reverse: bool) -> str:
+    """st is in the record's stored (reference-forward) frame; the read itself is its reverse complement when reverse."""
+    return _SWAP_ST.get(st, st) if reverse else st
+
+
+def stored_chemistry_for(molecule: str, reverse: bool) -> str:
+    return _SWAP_ST.get(molecule, molecule) if reverse else molecule
+
+
+_DAF_DECODE = str.maketrans("YRyr", "TAta")
+
+
+def decode_daf_bases(sequence):
+    """fiberhmm-daf-encode stores deaminated bases as IUPAC: Y (a C read as T) and R (a G read as A). The
+    likelihood models conversions itself, so observed sequence is compared in plain ACGT (as FiberHMM decodes it)."""
+    return None if sequence is None else sequence.translate(_DAF_DECODE)
+
+
 @dataclass(frozen=True)
 class DafContext:
     chemistry: str  # molecule chemistry; never swapped by target orientation
@@ -68,6 +101,8 @@ def diagnostic_assignment(observed, candidates, *, target_id, complete, chemistr
         return Call(reasons=("diagnostic_sequence_unavailable",))
     if chemistry not in {"none", "CT", "GA"}:
         return Call(reasons=("unknown_chemistry",))
+    if chemistry in ("CT", "GA"):
+        observed = decode_daf_bases(observed)   # IUPAC Y/R are DAF conversions only under DAF chemistry
     if any(base not in "ACGT" for sequence in (observed, *candidates.values()) for base in sequence.upper()):
         return Call(reasons=("ambiguous_bases",))
     observed = observed.upper()

@@ -199,12 +199,21 @@ def enrich_native(state, envelope, *, dataset_id, chrom, ref, target_end, specif
                     interrupted.add(molecule.key)
                 break
             try:
-                context = DafContext(**contexts.get(read.query_name, {"chemistry": "unknown", "provenance": "unavailable"}))
+                # Explicit molecule context, then the record's own st tag, then the
+                # dataset-level default ("*"), else unknown chemistry.
+                raw = contexts.get(read.query_name)
+                if raw is None and read.has_tag("st") and read.get_tag("st") in ("CT", "GA"):
+                    raw = {"chemistry": read.get_tag("st"), "provenance": "bam_st_tag"}
+                context = DafContext(**(raw or contexts.get("*") or {"chemistry": "unknown", "provenance": "unavailable"}))
             except TypeError as exc:
                 raise SvRequestError("invalid molecule chemistry context") from exc
             # Context chemistry is canonical; BAM reverse orientation needs its
             # transition matrix complemented exactly once, never a CT/GA rename.
-            context = replace(context, reverse_complemented=bool(read.is_reverse), base_qualities=obs["qualities"])
+            # An st-tag chemistry describes the stored SEQ, which observe_interval returns as is (never complemented);
+            # an explicit molecule-frame context is complemented for a reverse-mapped record.
+            from .alleles import stored_frame_chemistry
+            reverse = False if stored_frame_chemistry(context) else bool(read.is_reverse)
+            context = replace(context, reverse_complemented=reverse, base_qualities=obs["qualities"])
             geometry = envelope['calls_by_molecule'][molecule.key].get('geometry_evidence') or {}
             conditional = compete(obs["sequence"], {**candidates, "reference": reference}, target_id=target,
                                   complete=obs["complete"] and competition_complete, context=context, policy=policy, budget=budget,

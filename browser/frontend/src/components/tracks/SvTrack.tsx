@@ -204,7 +204,7 @@ export function SvTrack({ width, height, panel, sidebarWidth = 0 }: {
         ...(cluster.t === 'I' && isExpandable(d) ? [{ kind: 'item', action: 'diff:expand', label: isExpanded(view) ? 'Collapse insertion' : 'Expand insertion', icon: 'layers', shortcut: 'click' } as never] : []));
     }
     useTrackMenuStore.getState().openMenu({
-      panelId: panel.id, type: 'sv', x: clientX, y: clientY, own, title: 'SV track',
+      panelId: panel.id, type: 'sv', x: clientX, y: clientY, own, title: 'Differences (SVs and indels in reads)',
       onOwn: action => { void runOwn(action, cluster); },
     });
   };

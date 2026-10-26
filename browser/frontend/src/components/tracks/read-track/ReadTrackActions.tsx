@@ -7,7 +7,7 @@ import { useReadActionsStore } from '../../../stores/readActionsStore';
 import { READ_ACTIONS_HINT } from '../../../utils/shortcuts';
 import { copyText } from '../../../utils/clipboard';
 import { formatReadNameList } from '../../../utils/readNames';
-import { beginReadPanelIntent, locateReads, readWindow } from '../../../utils/readLocate';
+import { beginReadPanelIntent, locateReads, navigatePanelTo, readWindow } from '../../../utils/readLocate';
 import { findChromInfo } from '../../../utils/chromAliases';
 import { formatCoordinates } from '../../../utils/coordinates';
 import { X } from '../../ui/Icons';
@@ -214,7 +214,15 @@ export function ReadTrackActions(props: ReadTrackActionsProps) {
         if (!intent.isCurrent()) break;
         const hit = res?.found[0];
         const ext = readExtent(read);
-        const span = hit && hit.chrom === chrom ? hit : ext ? { start: origin + ext.lo, end: origin + ext.hi } : null;
+        // A hit on another chromosome (a split read's other alignment, a lifted read's primary) moves the view there.
+        if (hit && hit.chrom !== chrom) {
+          actions.pulseReads([read.id]);
+          const win = readWindow(hit, store.spanningOnly);
+          const panel = store.panels.find(p => p.contentType === 'dataset' && (p.stateKey ?? p.datasetId) === stateKey);
+          navigatePanelTo(panel, hit.chrom, Math.max(0, Math.round(win.start)), Math.max(Math.round(win.start) + 1, Math.round(win.end)));
+          break;
+        }
+        const span = hit ? hit : ext ? { start: origin + ext.lo, end: origin + ext.hi } : null;
         if (!span) break;
         actions.pulseReads([read.id]);
         const win = readWindow(span, store.spanningOnly);

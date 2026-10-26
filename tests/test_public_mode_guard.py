@@ -24,7 +24,7 @@ PUBLIC_DENIED = {
     ("GET", "/api/lift/tiles"), ("GET", "/api/lift/pieces"),
     ("POST", "/api/differences/inspect"), ("POST", "/api/differences/alternate-blocks"),
     ("POST", "/api/differences/sequence"), ("POST", "/api/differences/lens"),
-    ("POST", "/api/differences/observations"),
+    ("POST", "/api/differences/observations"), ("POST", "/api/differences/compare"),
     # Graph panel: helper status, host graph packages and their queries (routers/graph_panel.py)
     ("GET", "/api/graph/status"), ("GET", "/api/graph/registrations"), ("POST", "/api/graph/registrations"),
     ("DELETE", "/api/graph/registrations/{registration_id}"),
@@ -239,7 +239,7 @@ def test_allowlist_has_no_stale_entries(standalone_app):
     ("POST", "/api/lift/analysis/summary"), ("POST", "/api/lift/analysis/split"),
     ("POST", "/api/differences/inspect"), ("POST", "/api/differences/alternate-blocks"),
     ("POST", "/api/differences/sequence"), ("POST", "/api/differences/lens"),
-    ("POST", "/api/differences/observations"),
+    ("POST", "/api/differences/observations"), ("POST", "/api/differences/compare"),
     # Graph panel: helper status, host graph packages and their queries (routers/graph_panel.py)
     ("GET", "/api/graph/status"), ("GET", "/api/graph/registrations"), ("POST", "/api/graph/registrations"),
     ("DELETE", "/api/graph/registrations/greg"), ("GET", "/api/lift/datasets?dataset_id=missing"),

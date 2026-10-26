@@ -1,5 +1,40 @@
 """Job-level explicit shared-molecule overlap and optional deduplication."""
+import os
 from collections import defaultdict
+
+
+def _escape(value) -> str:
+    return str(value).replace("\\", "\\\\").replace("|", "\\|")
+
+
+def molecule_key(group, qname) -> str:
+    """``group|qname``, with ``\\`` and ``|`` escaped inside either part, so two
+    different (group, qname) pairs never share a key. Names without those
+    characters keep the key they always had."""
+    return f"{_escape(group)}|{_escape(qname)}"
+
+
+def _real(path) -> str:
+    try:
+        return os.path.realpath(os.path.expanduser(str(path)))
+    except (OSError, ValueError, TypeError):
+        return str(path)
+
+
+def group_for(groups: dict, source_path=None, library_id=None):
+    """A record's provenance group. ``groups`` keys are the paths the user named
+    (possibly relative or a symlink); records carry the resolved file path
+    (``library_id``) and sometimes the raw one, so both sides are resolved."""
+    if not groups:
+        return None
+    for key in (source_path, library_id):
+        if key and groups.get(key):
+            return groups[key]
+    resolved = {_real(p): g for p, g in groups.items() if g}
+    for key in (source_path, library_id):
+        if key and resolved.get(_real(key)):
+            return resolved[_real(key)]
+    return None
 
 
 def molecule_identity(dataset, read):
@@ -7,10 +42,10 @@ def molecule_identity(dataset, read):
     if ll:
         return ll.get("molecule")
     groups = dict(getattr(dataset, "molecule_groups", []) or [])
-    group = groups.get(read.get("source_path")) or groups.get(read.get("library_id"))
+    group = group_for(groups, read.get("source_path"), read.get("library_id"))
     if not group:
         return None
-    return f"{group}|{read.get('_display_id') or read.get('_original_id') or read['id']}"
+    return molecule_key(group, read.get('_display_id') or read.get('_original_id') or read['id'])
 
 
 def joint_dedup_datasets(state, dataset_ids):

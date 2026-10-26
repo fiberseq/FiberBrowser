@@ -394,7 +394,8 @@ def lift_compact_reads(reads, plan, *, handle, region_start, region_end, setting
         ctx.source_fasta = None
         if ctx.loader_options.get("include_cigar") and ctx.loader_options.get("source_fasta"):
             import pysam
-            ctx.source_fasta = stack.enter_context(pysam.FastaFile(ctx.loader_options["source_fasta"]))
+            from services.lift.dataset import open_source_fasta
+            ctx.source_fasta = stack.enter_context(open_source_fasta(ctx.loader_options["source_fasta"]))
         # Rows and their geometry first, for every read; then the window's
         # intervals, calls, marks and molecular spans in one columnar pass
         # (compose_columns); then each row's payload.
@@ -1137,8 +1138,9 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
     # record's own. ``analysis_id`` is assigned per fold mode later (P2).
     library = read.get("library_id") or read.get("source_path") or ""
     qname = read.get("id")
-    group = ctx.molecule_groups.get(read.get("source_path")) or ctx.molecule_groups.get(library) or ctx.dataset_id
-    molecule = f"{group}|{qname}"
+    from services.lift.joint import group_for, molecule_key
+    group = group_for(ctx.molecule_groups, read.get("source_path"), library) or ctx.dataset_id
+    molecule = molecule_key(group, qname)
     mol_meta = ctx.molecules.get((library, qname))
     record_hap = row.frags[0].p.hap
     if mol_meta is not None:

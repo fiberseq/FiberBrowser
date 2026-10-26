@@ -11,9 +11,22 @@ import { DEFAULT_EVIDENCE_POLICY, inspectDifference, type EvidencePolicy, type W
 import { frozenTarget } from './selection';
 import { workspaceAssignments } from './callModel';
 import { membershipChanges } from './session';
+import { exactTargetsFor, type ExactTarget } from './comparison';
+import { runInspectComparison, useInspectEntry, useMapDataset } from './AssemblyComparisonPanel';
+import { fetchJson } from '../../api/sharedFetch';
+import type { Dataset } from '../../types';
 
 export function MoleculeCalls({ selection, native = false }: { selection: DifferenceSelection; native?: boolean }) {
-  const target = useMemo(() => frozenTarget(selection), [selection]);
+  const ownDataset = useBrowserStore(s => s.datasets.find(d => d.id === selection.datasetId));
+  const map = useMapDataset(ownDataset ?? ({ id: selection.datasetId, data_type: native ? 'bam' : 'bam_livelift' } as Dataset));
+  const comparison = useInspectEntry(selection, map);
+  const exactTargets = useMemo(() => exactTargetsFor(comparison), [comparison]);
+  // Geometry by default; an exact assembly allele (with its competitors and the reference) on request.
+  const [exactId, setExactId] = useState('');
+  const exact: ExactTarget | undefined = exactTargets.find(t => t.target_id === exactId);
+  const geometry = useMemo(() => frozenTarget(selection), [selection]);
+  const target = exact ?? geometry;
+  const [consensus, setConsensus] = useState<{ busy: boolean; message: string }>({ busy: false, message: '' });
   const [policy, setPolicy] = useState<EvidencePolicy>(selection.evidencePolicy ?? DEFAULT_EVIDENCE_POLICY);
   const [requested, setRequested] = useState(native);
   const [result, setResult] = useState<WorkspaceCalls | null>(null);
@@ -53,9 +66,32 @@ export function MoleculeCalls({ selection, native = false }: { selection: Differ
     applyFrozenDifferenceSplit(panel?.stateKey ?? selection.datasetId, q, result);
     setPreview(false);
   };
+  // The reads' consensus is the read allele's sequence; comparing it lets an insertion reach "Confirmed by assembly".
+  const compareConsensus = async () => {
+    if (!result || !map) return;
+    setConsensus({ busy: true, message: '' });
+    try {
+      const lens = await fetchJson<{ consensus?: { seq: string; method_label: string; n_reads: number }; status?: string; reason?: string; consensus_resource?: { reason: string } }>(
+        '/api/differences/lens', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...q, frozen_calls: result, consensus: true, include_duplicates: policy.include_duplicates }) });
+      const seq = lens.consensus?.seq;
+      if (!seq) { setConsensus({ busy: false, message: `No consensus: ${lens.reason ?? lens.consensus_resource?.reason ?? 'no full carrier sequence'}` }); return; }
+      // Discovery completeness comes from the loaded calls (a 'not in the assembly' verdict needs it).
+      const r = await runInspectComparison(selection, map, { [selection.difference.id]: seq }, undefined, Boolean(result.scope?.search_complete));
+      setConsensus({ busy: false, message: r.status ? `${r.status}: ${r.reason}` : `Compared a ${seq.length.toLocaleString()} bp consensus (${lens.consensus!.method_label}, ${lens.consensus!.n_reads} reads).` });
+    } catch (e) { setConsensus({ busy: false, message: String((e as Error).message ?? e) }); }
+  };
+  const canConsensus = selection.difference.source === 'reads' && selection.difference.alt_bp > 0 && Boolean(map) && !exact;
   if (!supported) return <p>Read carriage for this topology is unavailable. Assembly geometry remains inspectable.</p>;
   return <section aria-label="Molecule calls" className="mt-2 border-t pt-2">
     <p>{target.target_type === 'geometry' ? 'Frozen geometry target · exact sequence carriage remains separate' : 'Frozen exact allele target'} · revision {target.revision}</p>
+    {exactTargets.length > 0 && <p><label className="inline-flex items-center gap-1">Allele target
+      <select aria-label="Allele target" data-testid="allele-target" value={exactId} onChange={e => { setExactId(e.target.value); setRequested(true); }}>
+        <option value="">Geometry (any sequence)</option>
+        {exactTargets.map(t => <option key={t.target_id} value={t.target_id}>Exact assembly allele: {t.candidate_labels[t.target_id] ?? 'assembly'} {t.ref_end - t.ref_start}→{t.alt_bp} bp</option>)}
+      </select></label>
+      {exact && <span data-testid="allele-target-competitors"> · competing: {Object.keys(exact.candidates ?? {}).filter(k => k !== exact.target_id).map(k => k === 'reference' ? 'reference' : exact.candidate_labels[k] ?? 'other allele').join(', ')}
+        {exact.competition_complete ? '' : ' · competition incomplete (some local alleles lack sequence)'}</span>}</p>}
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
       {(['include_putative', 'include_conflicting', 'include_ambiguous', 'include_duplicates'] as const).map(key => <label key={key} className="inline-flex items-center gap-1 whitespace-nowrap">
         <input type="checkbox" checked={policy[key]} onChange={e => setPolicy(p => ({ ...p, [key]: e.target.checked }))} /> {key.replace('include_', '').replace(/_/g, ' ')}
@@ -75,8 +111,14 @@ export function MoleculeCalls({ selection, native = false }: { selection: Differ
       {expandableAltBlock(selection.difference) && <button onClick={() => openInsertionLens({ datasetId:selection.datasetId, chrom:selection.chrom, pos:target.ref_start,
         ref:target.ref_start,len:target.alt_bp,tolerance:0,lenMin:target.alt_bp,lenMax:target.alt_bp,flank:0,anchor:'left',
         workspace:{query:q,calls:result!} },selection.panelId)}>Open detailed workspace</button>}{' '}
+      {canConsensus && <><button data-testid="compare-consensus" disabled={consensus.busy} onClick={() => { void compareConsensus(); }}>
+        {consensus.busy ? 'Building consensus…' : 'Compare consensus with assembly'}</button>{' '}</>}
       <button onClick={highlight}>Highlight carriers</button>{' '}
       <button onClick={() => saved ? setPreview(true) : split()}>{saved ? 'Preview recompute' : 'Split by carrier'}</button>
+      {consensus.message && <p role="status" data-testid="consensus-status">{consensus.message}</p>}
+      {target.target_type === 'exact' && <p data-testid="exact-counts">Exact allele calls: {snapshot.counts[0]} carry it · {snapshot.counts[1]} reference · {snapshot.counts[2]} other allele or unresolved
+        {(result as { chemistry_default?: { chemistry: string; provenance: string } | null }).chemistry_default
+          ? ` · chemistry ${(result as any).chemistry_default.chemistry} (${(result as any).chemistry_default.provenance})` : ' · chemistry from st tags only'}</p>}
       {preview && <div role="status">Saved {saved?.counts.join('/')} → proposed {groups.counts.join('/')} (carriers/reference/not informative).
         <p>Row membership: +{changes?.added} / −{changes?.removed} / {changes?.changed} changed groups.</p>
         <p>Target {saved?.differenceSnapshot?.target.target_id ?? 'historical geometry'} → {target.target_id}; revision {target.revision}. Current inspector policy replaces the saved policy only when applied.</p>

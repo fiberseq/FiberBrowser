@@ -132,6 +132,9 @@ def validate_live_lift(handle, bam_paths: Iterable[str], haplotypes: Iterable[st
     return out
 
 
+PLAIN_CHAIN_MIN_IDENTITY = 0.90
+
+
 def _check_anchors(handle, out, target_fasta, source_fasta):
     """Spot check up to 16 distributed anchor blocks (at least 200 bp).
     Chain blocks merge exact anchors with inferred fills. Subtract every
@@ -164,31 +167,77 @@ def _check_anchors(handle, out, target_fasta, source_fasta):
                     k += 1
                 if t + n - pos >= 200:
                     candidates.append((ci, pos, q + pos - t, t + n - pos))
-        if not candidates:
-            out.anchors = {"status": "not checked", "message": "Anchor sequences not checked: no anchor blocks >= 200 bp."}
-            return
-        n = min(16, len(candidates))
-        chosen = [candidates[i * (len(candidates) - 1) // max(1, n - 1)] for i in range(n)]
         # Open read-only: never build an index beside a user's reference.
         if not os.path.isfile(source_fasta + ".fai"):
             raise ValueError("source FASTA needs a .fai index (run samtools faidx first)")
-        with pysam.FastaFile(source_fasta) as source:
-            for ci, t, q, length in chosen:
-                chain = handle.map.chains[ci]
-                target_name = handle.manifest["targets"][chain["target"]]["name"]
-                src = handle.manifest["sources"][chain["source"]]
-                q0, q1 = (q, q + length) if chain["strand"] == "+" else (src["size"] - q - length, src["size"] - q)
-                a = target_fasta.fetch(target_name, t, t + length).upper()
-                b = source.fetch(src["name"], q0, q1).upper()
-                if chain["strand"] == "-":
-                    b = revcomp(b)
-                if len(a) != length or len(b) != length or a != b:
-                    message = (f"Anchor sequence mismatch: {target_name}:{t}-{t + length} and "
-                               f"{src['name']}:{q0}-{q1} ({chain['strand']}) in {source_fasta}.")
-                    out.errors.append(message)
-                    out.anchors = {"status": "mismatch", "message": message}
-                    return
-        out.anchors = {"status": "consistent", "checked": n,
+        from services.lift.dataset import open_source_fasta
+        with open_source_fasta(source_fasta) as source:
+            # Only contigs both FASTAs hold (a reference or source FASTA of some chromosomes is fine), and only
+            # anchors whose bases both know: an N-masked or partial assembly cannot fail on bases it lacks.
+            target_names, source_names = set(target_fasta.references), set(source.references)
+            candidates = [c for c in candidates
+                          if handle.manifest["targets"][handle.map.chains[c[0]]["target"]]["name"] in target_names
+                          and handle.manifest["sources"][handle.map.chains[c[0]]["source"]]["name"] in source_names]
+            if not candidates:
+                out.anchors = {"status": "not checked", "message": "Anchor sequences not checked: no anchor blocks >= 200 bp on contigs both FASTAs hold."}
+                return
+            # Up to 16 samples spread evenly over each haplotype's anchors (every haplotype is checked); an anchor
+            # with unknown bases is replaced by the next one in its own bucket, never by one elsewhere.
+            by_hap = {}
+            for c in candidates:
+                by_hap.setdefault(handle.map.chains[c[0]]["haplotype"], []).append(c)
+            groups = list(by_hap.values())
+            shares = [0] * len(groups)
+            budget = 16
+            while budget and any(shares[h] < len(g) for h, g in enumerate(groups)):   # round robin, spare to the rest
+                for h, g in enumerate(groups):
+                    if budget and shares[h] < len(g):
+                        shares[h] += 1
+                        budget -= 1
+            buckets = []
+            for group, k in zip(groups, shares):
+                buckets += [group[i * len(group) // k:(i + 1) * len(group) // k] for i in range(k)]
+            # Each bucket has its own retry budget, so N-masked anchors of one haplotype cannot use up another's.
+            per_bucket = max(1, 4000 // max(1, len(buckets)))
+            n, checked_haps = 0, set()
+            plain = bool(getattr(handle, "plain_chain", False))
+            for bucket in buckets:
+                for ci, t, q, length in bucket[:per_bucket]:
+                    length = min(length, 2000)
+                    chain = handle.map.chains[ci]
+                    target_name = handle.manifest["targets"][chain["target"]]["name"]
+                    src = handle.manifest["sources"][chain["source"]]
+                    q0, q1 = (q, q + length) if chain["strand"] == "+" else (src["size"] - q - length, src["size"] - q)
+                    a = target_fasta.fetch(target_name, t, t + length).upper()
+                    b = source.fetch(src["name"], q0, q1).upper()
+                    if chain["strand"] == "-":
+                        b = revcomp(b)
+                    if "N" in a or "N" in b:
+                        continue
+                    n += 1
+                    checked_haps.add(handle.map.chains[ci]["haplotype"])
+                    # A plain UCSC chain cannot mark substitutions inside its aligned blocks (a sidecar's exact
+                    # anchors exclude them), so its anchors are compared by identity rather than exact equality.
+                    same = a == b if not plain else (len(a) == len(b) == length and
+                                                     sum(x == y for x, y in zip(a, b)) >= PLAIN_CHAIN_MIN_IDENTITY * length)
+                    if len(a) != length or len(b) != length or not same:
+                        message = (f"Anchor sequence mismatch: {target_name}:{t}-{t + length} and "
+                                   f"{src['name']}:{q0}-{q1} ({chain['strand']}) in {source_fasta}.")
+                        out.errors.append(message)
+                        out.anchors = {"status": "mismatch", "message": message}
+                        return
+                    break   # one checked anchor per bucket
+        if not n:
+            out.anchors = {"status": "not checked", "message": "Anchor sequences not checked: every sampled anchor has unknown (N) bases."}
+            return
+        unchecked = sorted(set(by_hap) - checked_haps)
+        if unchecked:
+            # Say which haplotypes the spot check could not reach (unknown bases or few anchors).
+            out.warnings.append("Anchor sequences not checked for haplotype(s) " + ", ".join(unchecked)
+                                + ": no sampled anchor with known bases in the source FASTA.")
+        if plain:
+            out.info.append(f"Plain chain: anchors compared at >= {PLAIN_CHAIN_MIN_IDENTITY:.0%} identity (chains do not mark substitutions).")
+        out.anchors = {"status": "consistent", "checked": n, "unchecked_haplotypes": unchecked,
                        "message": f"Anchor sequences consistent ({n} blocks >= 200 bp checked); this is a spot check, not proof of assembly identity."}
     except (OSError, ValueError, KeyError) as exc:
         message = f"Cannot check anchor sequences in {source_fasta}: {exc}"

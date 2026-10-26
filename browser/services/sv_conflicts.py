@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import math
 
-DEFAULT_CONFLICT_OPTIONS = dict(enabled=True, max_distance=100_000, min_mapq=20,
+DEFAULT_CONFLICT_OPTIONS = dict(enabled=True, max_distance=100_000, min_mapq=0,
                                 min_overlap=500, min_clip_fraction=0.5)
 
 

@@ -93,7 +93,8 @@ def test_qname_decode_validates_identity_and_preserves_raw_pipes(fold_molecule, 
     names = ['read', 'sample|run|read', 'group|nested|read|1', 'lift-cohort:v1:broken']
     assert raw_qnames(names, dataset) == set(names)
     for name in names:
-        read = row(molecule='group|nested|' + name)
+        from services.lift.joint import molecule_key
+        read = row(molecule=molecule_key('group|nested', name))  # B11: escaped, so it never collides
         read['id'] = name
         encoded = analysis_id(read, settings)
         assert encoded != name

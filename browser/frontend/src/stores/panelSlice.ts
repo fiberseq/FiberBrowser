@@ -1,6 +1,6 @@
 import { copyPanelAtSite } from '../utils/panelCopies';
 import { previewHidden } from '../utils/previewFeatures';
-import { mainViewForPanel, withLinkedPanelMoving } from '../utils/panelExtensions';
+import { mainViewForPanel, panelFollowers, withLinkedPanelMoving } from '../utils/panelExtensions';
 import { isPublicServerPage } from '../utils/publicServerFlag';
 import { revealDrawerPanel } from './drawerTabsStore';
 import type { BrowserState } from './browserStore';
@@ -1087,6 +1087,8 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
   })),
   navigatePanel: (panelId, chrom, start, end) => withUndo(get, panelNavigationLabel(chrom, start), () => {
     movePanelOwnView(panelId, chrom, start, end);
+    const moved = get().panels.find(p => p.id === panelId);
+    if (moved?.viewportOverride) for (const f of panelFollowers(moved, moved.viewportOverride, get().panels)) get().setPanelViewportFromLink(f.panelId, f.span);
     // A linked panel (utils/panelExtensions.ts view links) takes the main view with it, as its pans do: one undo step.
     const state = get();
     const panel = state.panels.find(p => p.id === panelId);
@@ -1255,14 +1257,15 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
     const next = { chrom: prev.chrom, start, end };
     if (next.start === prev.start && next.end === prev.end) return;
     const move = panel.siteLocked && isPanOrZoom(prev, next);
+    // An undo step, like a move of the main view. A locked panel moves the main view too, whose own navigation step
+    // records it (not twice). Seeded before the link maps the move, so a late link correction knows the baseline
+    // is not the move's step.
+    if (!move) seedHistoryBaseline(state, 'Before navigation', 'navigation');
     // A linked panel's view on the main genome (utils/panelExtensions.ts view links; null: none, or the main view
     // already shows it, e.g. a pan inside a part with no main-view coordinates, whose own step is then recorded below).
     const mappedMain = !move ? mainViewForPanel(panel, next) ?? null : null;
     const linkedMain = mappedMain && !(mappedMain.chrom === state.chrom && mappedMain.start === state.start && mappedMain.end === state.end)
       ? mappedMain : null;
-    // An undo step, like a move of the main view. A locked panel moves the
-    // main view too, whose own navigation step records it (not twice).
-    if (!move) seedHistoryBaseline(state, 'Before navigation', 'navigation');
     // Its reference's link group shows the same locus ("Linked navigation", panels on another assembly).
     const peers = new Set(linkGroupPeers(state.panels, panel, state.navigationMode));
     set({
@@ -1273,6 +1276,8 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
       }),
       lastMovedPanels: recordPanelMove(state.lastMovedPanels, panel, next),
     });
+    // Panels linked to this one that keep views of their own ("Each panel navigates") follow it.
+    for (const f of panelFollowers(panel, next, get().panels)) get().setPanelViewportFromLink(f.panelId, f.span);
     if (move) {
       // The main view is a site too; its own update must not move us again.
       const main = moveLikewise({ chrom: state.chrom, start: state.start, end: state.end }, prev, next);

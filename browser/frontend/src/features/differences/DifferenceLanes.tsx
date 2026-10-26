@@ -3,6 +3,7 @@ import type { WorkspaceCalls } from './api';
 import { setupHighDpiCanvas, useCanvasRenderVersion } from '../../utils/canvasUtils';
 import { usePanOffsetTransform } from '../../hooks/usePanOffsetTransform';
 import { DifferenceTable } from './DifferenceTable';
+import { compareWithAssembly, comparisonFor, comparisonKey, LABEL_MARK, useComparisonStore, type ComparisonResponse } from './comparison';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Dataset, PanelConfig } from '../../types';
 import { useBrowserStore } from '../../stores/browserStore';
@@ -14,7 +15,7 @@ import { liftHapLabels } from '../liveLift/types';
 import { differenceDescription, differenceGlyph, differenceLanes, MIN_SIZES, nextDifference, stripModel } from '../liveLift/differencesModel';
 import { useDifferenceSelection, type DifferenceSelection } from '../liveLift/inspectionStore';
 import { clickDifference, differenceHint, differenceMenuEntries, runDifferenceMenuAction } from './differenceActions';
-import { READ_BADGE_MODES, readBadgeMode, setDifferenceRowOptions, setReadBadgeMode } from './displayOptions';
+import { analysisMinMapq, READ_BADGE_MODES, readBadgeMode, setDifferenceRowOptions, setReadBadgeMode } from './displayOptions';
 import { useTrackMenuStore } from '../../stores/trackMenuStore';
 import { useTrackFeedStore } from '../../stores/trackFeedStore';
 import type { ContextMenuEntry } from '../../components/tracks/read-track/ReadContextMenu';
@@ -56,6 +57,7 @@ export function DifferenceLanes({ panel, dataset, width, gutter = 0, height }: {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [table, setTable] = useState(false);
   const badges = useBrowserStore(s => readBadgeMode(s));
+  const minMapq = useBrowserStore(s => analysisMinMapq(s));
   const readsInView = useTrackFeedStore(s => s.byStateKey[panel.stateKey ?? panel.datasetId ?? '']?.reads?.length ?? 0);
   usePanOffsetTransform(canvas, { scope: viewKey });
   const query = useMemo(() => ({ datasetId: dataset.id, liftKey, chrom, start, end, liftHap: panel.liftHap,
@@ -101,20 +103,40 @@ export function DifferenceLanes({ panel, dataset, width, gutter = 0, height }: {
   };
   const [readItems,setReadItems]=useState<import('../liveLift/differenceTypes').Difference[]>([]);
   const [readScope,setReadScope]=useState('');
+  const [readComplete,setReadComplete]=useState(false);
   useEffect(()=>{
-    setReadItems([]);setReadScope('');if(!sources.reads||!enabled)return;
+    setReadItems([]);setReadScope('');setReadComplete(false);if(!sources.reads||!enabled)return;
     const controller=new AbortController();
     const timer=setTimeout(()=>{void fetchJson<WorkspaceCalls>('/api/lift/analysis/summary',{
       method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,
-      body:JSON.stringify({dataset_id:dataset.id,chrom,start:Math.floor(start),end:Math.ceil(end),analysis_scope:'lifted_only'}),
+      body:JSON.stringify({dataset_id:dataset.id,chrom,start:Math.floor(start),end:Math.ceil(end),analysis_scope:'lifted_only',
+        projection_policy:{min_mapq:analysisMinMapq(useBrowserStore.getState())}}),
     }).then(r=>{if(controller.signal.aborted)return;
       setReadScope(r.status?`${r.status}: ${r.reason}`:r.scope.search_complete?'Read discovery complete in loaded cohort':'Read discovery partial');
+      setReadComplete(!r.status&&Boolean(r.scope.search_complete));
       setReadItems((r.targets??[]).map(({target:t})=>({id:t.target_id,target:t,hap:'',hap_label:'Reads',source:'reads',
         kind:t.ref_end>t.ref_start?(t.alt_bp?'replacement':'deletion'):'insertion',reason:'composed_geometry',t_start:t.ref_start,t_end:t.ref_end,ref_bp:t.ref_end-t.ref_start,alt_bp:t.alt_bp,
         src:{contig:null,start:null,end:null},chain:null,strand:null,grch38:null,alt:null})));
     }).catch(e=>{if(!controller.signal.aborted)setReadScope(String(e.message??e));});},140);
     return()=>{clearTimeout(timer);controller.abort();};
-  },[dataset.id,liftKey,chrom,start,end,sources.reads,enabled]);
+  },[dataset.id,liftKey,chrom,start,end,sources.reads,enabled,minMapq]);
+  // Assembly comparison of the read lane (labels, typed links, novelty; the ledger is saved with the session).
+  const [comparison,setComparison]=useState<ComparisonResponse|null>(null);
+  useEffect(()=>{
+    setComparison(null);
+    if(!enabled||!sources.assembly||!sources.reads||!data||data.mode!=='items'||!readItems.length||end-start>2_000_000)return;
+    const controller=new AbortController();
+    const timer=setTimeout(()=>{void compareWithAssembly({dataset_id:dataset.id,chrom,start,end,
+      reads:readItems.slice(0,256).map(d=>({id:d.id,ref_start:d.t_start,ref_end:d.t_end,alt_bp:d.alt_bp,
+        geometry_members:(d.target as {geometry_members?:{ref_start:number;ref_end:number;alt_bp:number}[]}|undefined)?.geometry_members?.map(m=>[m.ref_start,m.ref_end,m.alt_bp])})),
+      read_scope:{search_complete:readComplete,dataset_id:dataset.id,analysis_scope:'lifted_only'}},controller.signal)
+      .then(r=>{if(controller.signal.aborted||r.status)return;useComparisonStore.getState().put(comparisonKey(dataset.id,chrom,`row:${panel.id}`),r);setComparison(r);})
+      .catch(()=>{});},200);
+    return()=>{clearTimeout(timer);controller.abort();};
+  },[enabled,sources.assembly,sources.reads,data,readItems,readComplete,dataset.id,chrom,start,end,panel.id]);
+  // Labels come from the newest comparison covering each read difference (the row's, or an inspector's consensus).
+  const byKey = useComparisonStore(s => s.byKey);
+  const readLabel = (d: import('../liveLift/differenceTypes').Difference) => d.source === 'reads' ? comparisonFor(byKey, `${dataset.id}|${chrom}|`, d) : null;
   const model = useMemo(() => {
     const assembly=sources.assembly&&data?stripModel(data,minBp):{items:[],bins:[]};
     return {bins:assembly.bins,items:[...assembly.items,...readItems.filter(d=>Math.max(d.ref_bp,d.alt_bp)>=minBp)]};
@@ -145,9 +167,12 @@ export function DifferenceLanes({ panel, dataset, width, gutter = 0, height }: {
         if (g.shape === 'wedge') { ctx.moveTo(x-4,y+2); ctx.lineTo(x+4,y+2); ctx.lineTo(x,y+laneHeight-3); ctx.closePath(); ctx.fill(); }
         else if (g.shape === 'bracket') { ctx.moveTo(left,y+laneHeight-3); ctx.lineTo(left,y+4); ctx.lineTo(left+w,y+4); ctx.lineTo(left+w,y+laneHeight-3); ctx.stroke(); }
         else { for (const span of axis.spans(d.t_start, Math.max(d.t_start+1,d.t_end))) ctx.fillRect(gutter+span.x,y+3,Math.max(2,span.w),Math.max(2,laneHeight-6)); }
+        const entry = readLabel(d);
+        const mark = entry?.kind === 'reads' ? LABEL_MARK[entry.value.label] : undefined;
+        if (mark) { ctx.save(); ctx.font='bold 10px sans-serif'; ctx.fillStyle=dark?'#e2e8f0':'#0f172a'; ctx.fillText(mark, Math.max(left,x)+5, y+10); ctx.restore(); }
       }
     }
-  }, [axis, width, bandHeight, laneHeight, model, lanes.join(','), gutter, dark, start, end, canvasRenderVersion]);
+  }, [axis, width, bandHeight, laneHeight, model, lanes.join(','), gutter, dark, start, end, comparison, byKey, canvasRenderVersion]);
   if (!enabled) return null;
   const statusText = error || (busy ? 'Finding difference…' : readScope || (data ? data.mode === 'bins'
     ? 'Density; zoom for individual differences' : 'Click a difference to expand or highlight it; ⌘-click to inspect' : 'Loading…'));
@@ -202,17 +227,22 @@ export function DifferenceLanes({ panel, dataset, width, gutter = 0, height }: {
       // An expanded insertion's marker covers its column (a click there collapses it).
       const block = axis.blocks.find(b => b.ins.ins_id === d.id || b.ins.alleles?.some(a => a.ins_id === d.id));
       const x = block ? block.x0 : axis.toX(d.t_start), z = block ? block.x1 : axis.toX(d.t_end), i = lanes.indexOf(d.hap_label);
+      const found = readLabel(d);
+      const label = found?.kind === 'reads' ? found.value : undefined;
       return <button key={d.id} data-testid="live-lift-diff-item" data-kind={d.kind} data-difference-id={d.id}
-        aria-label={differenceDescription(d, chrom)} title={`${differenceDescription(d, chrom)}\n${differenceHint(d)}`}
+        data-assembly-label={label?.label}
+        aria-label={differenceDescription(d, chrom)} title={`${differenceDescription(d, chrom)}${label ? `\n${label.label_text}` : ''}\n${differenceHint(d)}`}
         // Above the row's resize grip (z-20), which would otherwise take clicks on the bottom lane.
         className="absolute z-30 cursor-pointer bg-transparent focus:ring-1 focus:ring-violet-500"
         style={{ left: gutter+Math.min(x,z)-4, top:24+i*laneHeight, width:Math.max(9,Math.abs(z-x)+8), height:laneHeight }}
         // Click: expand an insertion / highlight carriers; Shift: select; ⌘/Ctrl or right-click: inspect (differenceActions).
         onClick={e => clickDifference(e, selectionOf(d), readsInView)}
         onContextMenu={e => openMenu(e, d)}
-        onKeyDown={e => { if(e.key==='Enter') inspect(d); }} />;
+        // Enter inspects; preventDefault stops the button's own synthetic click (which would close it again or expand).
+        onKeyDown={e => { if(e.key==='Enter') { e.preventDefault(); e.stopPropagation(); inspect(d); } }} />;
     })}
-    {table && <div className="absolute left-0 right-0 top-full z-40 bg-white dark:bg-slate-900 max-h-64 overflow-auto border p-2"><DifferenceTable items={model.items} chrom={chrom} inspect={inspect} /></div>}
+    {table && <div className="absolute left-0 right-0 top-full z-40 bg-white dark:bg-slate-900 max-h-64 overflow-auto border p-2"><DifferenceTable items={model.items} chrom={chrom} inspect={inspect} comparison={comparison}
+      readText={d => { const e = readLabel(d); return e?.kind === 'reads' ? e.value.label_text : undefined; }} /></div>}
     <DifferencePopover panel={panel} dataset={dataset} anchor={anchor} />
   </div>;
 }

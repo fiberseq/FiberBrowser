@@ -584,7 +584,8 @@ export function drawReadTrack(params: DrawReadsParams): void {
   for (let i = firstVisibleRow; i <= lastVisibleRow; i++) {
     const read = displayReads[i];
     const readHighlighted = params.readHighlightMode === 'rows'
-      ? readHighlightIds?.has(read.analysis_id ?? read.id)
+      // Scoped rows: a display row id, or 'name:<id>' for a row the caller could only name (a folded record).
+      ? readHighlightIds?.has(read.analysis_id ?? read.id) || readHighlightIds?.has(`name:${read.id}`)
       : readHighlightIds?.has(read.analysis_id ?? read.id) || readHighlightIds?.has(read.id) || readHighlightIds?.has(read.id.replace(/_\d+$/, ''));
     const svUncertain = uncertainSvIds?.has(read.id) || uncertainSvIds?.has(read.id.replace(/_\d+$/, ''));
     const y = headerHeight + histogramHeight + i * (rowHeight + rowGap) - (needsScroll ? clampedScrollOffset : 0);

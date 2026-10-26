@@ -12,8 +12,9 @@ export const READ_BADGE_MODES: Array<{ mode: LiveLiftBadgeMode; label: string; t
 ];
 
 export function readBadgeMode(s: { differencesSession?: { options?: { readBadges?: LiveLiftBadgeMode } } }): LiveLiftBadgeMode {
+  // Off by default (owner, 25 Oct): the Differences row still shows insertions and its arrows expand them.
   const m = s.differencesSession?.options?.readBadges;
-  return m === 'off' || m === 'labels' ? m : 'ticks';
+  return m === 'ticks' || m === 'labels' ? m : 'off';
 }
 
 export function setReadBadgeMode(mode: LiveLiftBadgeMode): void {
@@ -25,4 +26,16 @@ export function setReadBadgeMode(mode: LiveLiftBadgeMode): void {
 export function setDifferenceRowOptions(panelId: string, patch: { sources?: { assembly: boolean; reads: boolean }; minBp?: number }): void {
   useBrowserStore.setState(s => ({ panels: s.panels.map(p => p.id !== panelId ? p : {
     ...p, ...(patch.sources ? { differenceSources: patch.sources } : {}), ...(patch.minBp != null ? { liveLiftMinBp: patch.minBp } : {}) }) }));
+}
+
+/** MAPQ floor for read-difference analysis (projection policy). 0, no filter, by default (owner, 25 Oct);
+ * a session saved with an explicit threshold keeps it. */
+export function analysisMinMapq(s: { differencesSession?: { options?: { projectionPolicy?: { min_mapq?: number } } } }): number {
+  const v = s.differencesSession?.options?.projectionPolicy?.min_mapq;
+  return typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(255, Math.round(v))) : 0;
+}
+
+export function setAnalysisMinMapq(value: number): void {
+  useBrowserStore.setState(s => ({ differencesSession: { ...s.differencesSession, options: { ...s.differencesSession.options,
+    projectionPolicy: { ...s.differencesSession.options.projectionPolicy, min_mapq: Math.max(0, Math.min(255, Math.round(value))) } } } }));
 }

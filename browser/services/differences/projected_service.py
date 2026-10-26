@@ -36,7 +36,7 @@ def map_paths(config, chrom, start, end, *, policy, use_cache=True):
     handle = config.handle
     # Immutable observation/path namespace; fingerprint remains cache revision.
     namespace = content_id("map-target-content:v1", [digest_file(handle.path), *[
-        digest_file(os.path.join(handle.map.dir, name)) for name in handle.manifest["target_files"][chrom]]])
+        digest_file(os.path.join(handle.map.dir, name)) for name in handle.manifest.get("target_files", {}).get(chrom, [])]])
     with handle.lock:
         for (ci, primary), pieces in grouped.items():
             chain = handle.map.chains[ci]
@@ -430,6 +430,8 @@ def _projected_analysis(state, dataset, *, chrom, start, end, feature, target=No
                 raw_context = (contexts or {}).get(key)
                 if raw_context is None and len(context_aliases.get(aa[0].molecule.raw_name, ())) == 1:
                     raw_context = (contexts or {}).get(aa[0].molecule.raw_name)
+                if raw_context is None and all(a.chemistry == "unknown" for a in aa):
+                    raw_context = (contexts or {}).get("*")  # dataset-level default, never over an st tag
                 context = DafContext(**raw_context) if raw_context is not None else None
                 detail = call_molecule(grouped.get(key, []), paths, t, policy=policy, budget=budget, context=context,
                     likelihood_policy=likelihood_policy, likelihood_budget=likelihood_budget)
@@ -608,6 +610,8 @@ def chemistry_context(contexts, key, bundles):
     name = bundles[key][0].molecule.raw_name
     if raw is None and sum(records[0].molecule.raw_name == name for records in bundles.values()) == 1:
         raw = contexts.get(name)
+    if raw is None and all(a.chemistry == "unknown" for a in bundles[key]):
+        raw = contexts.get("*")  # dataset-level default, never over an st tag
     return DafContext(**raw) if raw is not None else None
 
 
@@ -646,7 +650,9 @@ def add_display_memberships(index, dataset, alignment, plan, display_pieces=None
         placement = _placement(row)
         row_index = numbered.get(placement, 0)
         numbered[placement] = row_index+1
-        ll = dict(molecule=f"{alignment.molecule.library_id}|{alignment.molecule.raw_name}",
+        from services.lift.joint import molecule_key
+        # The same encoder the display rows use (services/lift/compose.py), so memberships match their rows.
+        ll = dict(molecule=molecule_key(alignment.molecule.library_id, alignment.molecule.raw_name),
                   record=f"{alignment.record_sha256}:{alignment.record_occurrence}",
                   row_index=row_index, placement=placement)
         identity = analysis_id(dict(id=alignment.molecule.raw_name, live_lift=ll), dataset.live_lift.settings)

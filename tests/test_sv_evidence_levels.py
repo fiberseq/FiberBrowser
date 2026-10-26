@@ -21,7 +21,8 @@ def test_multi_allelic_clips_are_ambiguous_and_never_enter_a_putative_split():
 
 @pytest.mark.parametrize('reverse', [False, True])
 @pytest.mark.parametrize('mapq,sa_cigar,confirmed', [
-    (60, '1000S500M', True), (0, '1000S500M', False),
+    # No junction MAPQ floor by default (owner, 25 Oct): a MAPQ-0 supplementary still confirms.
+    (60, '1000S500M', True), (0, '1000S500M', True),
     (60, '500M1000S', False), (60, '900S600M', False),
 ])
 def test_deletion_junction_requires_mapq_and_nonoverlapping_query_intervals(reverse, mapq, sa_cigar, confirmed):

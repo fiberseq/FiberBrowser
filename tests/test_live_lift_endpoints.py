@@ -66,7 +66,7 @@ def _compact(client, did, start=1000, end=9000, **params):
 
 def test_flag_off_hides_every_route(lift_env, monkeypatch):
     client, _state, manifest, bam = lift_env
-    monkeypatch.delenv("FIBERBROWSER_LIVE_LIFT")
+    monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "0")
     assert client.post("/api/lift/datasets", json={"paths": [bam], "manifest": manifest}).status_code == 404
     assert client.get("/api/lift/inspect", params={"manifest": manifest}).status_code == 404
     assert client.get("/api/lift/enabled").json() == {"enabled": False}
@@ -193,7 +193,7 @@ def test_session_round_trip_and_flag_off_notice(lift_env, monkeypatch):
     restored = restore_from_session(state, entry)
     ds = state.datasets[restored["dataset"]["id"]]
     assert ds.data_type == "bam_livelift" and ds.live_lift.settings.g_split == 20_000
-    monkeypatch.delenv("FIBERBROWSER_LIVE_LIFT")
+    monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "0")
     with pytest.raises(Exception, match="FIBERBROWSER_LIVE_LIFT=1"):
         restore_from_session(state, entry)
 
@@ -233,3 +233,23 @@ def test_binary_transport_keeps_live_lift_and_reuse_is_off(lift_env):
     assert reads["plus"]["live_lift"]["segments"] == [[2500, 5710, 0, "+", True]]
     assert reads["plus"]["live_lift"]["connectors"] == [[3000, 3010]]
     assert data.get("_region_reuse_safe") is False
+
+
+def test_live_lift_is_on_by_default_except_lab_and_public(monkeypatch):
+    """Owner decision (25 Oct): live lift is on by default; =0 opts out; lab and public servers keep it off."""
+    from services import runtime
+    from services.lift.dataset import live_lift_enabled
+    monkeypatch.delenv("FIBERBROWSER_LIVE_LIFT", raising=False)
+    assert live_lift_enabled()
+    monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "0")
+    assert not live_lift_enabled()
+    monkeypatch.delenv("FIBERBROWSER_LIVE_LIFT")
+    for setter in (runtime.set_lab_mode, runtime.set_public_mode):
+        setter(True)
+        try:
+            assert not live_lift_enabled()
+            monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "1")   # an explicit host opt-in still works
+            assert live_lift_enabled()
+            monkeypatch.delenv("FIBERBROWSER_LIVE_LIFT")
+        finally:
+            setter(False)

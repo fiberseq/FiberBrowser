@@ -135,6 +135,6 @@ def test_lens_retains_conflicting_rows_and_reasons(monkeypatch):
 
 def test_invalid_thresholds_are_bounded_and_fall_back():
     assert normalize_conflict_options('{') == normalize_conflict_options()
-    assert normalize_conflict_options({'min_mapq': float('nan')})['min_mapq'] == 20
+    assert normalize_conflict_options({'min_mapq': float('nan')})['min_mapq'] == 0
     assert normalize_conflict_options({'max_distance': -1, 'min_clip_fraction': 2}) == {
         **normalize_conflict_options(), 'max_distance': 0, 'min_clip_fraction': 1}

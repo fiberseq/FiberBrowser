@@ -284,7 +284,9 @@ def test_real_compatible_query_conflict_requires_quality_overlap_and_placement()
     result = call_molecule([supporting, elsewhere], [p], target(0, 1000))
     assert result["call"]["level"] == "conflicting"
     assert "compatible_query_elsewhere" in result["call"]["reasons"]
-    safe = call_molecule([supporting, replace(elsewhere, mapq=0)], [p], target(0, 1000))
+    # A MAPQ floor applies only when a policy sets one (none by default since 25 Oct).
+    assert call_molecule([supporting, replace(elsewhere, mapq=0)], [p], target(0, 1000))["call"]["level"] == "conflicting"
+    safe = call_molecule([supporting, replace(elsewhere, mapq=0)], [p], target(0, 1000), policy=ProjectionPolicy(min_mapq=20))
     assert safe["call"]["level"] == "confirmed"
     unprojectable = replace(elsewhere, contig="unmapped-source")
     assert call_molecule([supporting, unprojectable], [p], target(0, 1000))["call"]["level"] == "confirmed"
@@ -455,3 +457,14 @@ def test_hypotheses_share_immutable_source_cigar_instead_of_multiplying_storage(
     assert len(result["hypotheses"]) == 64
     assert result["call"]["assignment"] == "target"
     assert all(d["projection"]["source_cigar"] is a.cigar for h in result["diagnostics"] for d in h["records"])
+
+
+def test_st_chemistry_pools_in_the_molecule_frame_across_opposite_strand_records():
+    """agy r2 HIGH 2: a forward CT record and a reverse record tagged GA (its own stored frame) are one CT molecule."""
+    forward = replace(alignment(30), record_id="fwd", supplementary=True, chemistry="CT", chemistry_provenance="BAM:st")
+    backward = replace(alignment(30, reverse=True), record_id="rev", supplementary=True, chemistry="GA", chemistry_provenance="BAM:st")
+    result = call_molecule([forward, backward], [path(20, 30)], target(20, 30, exact=True))
+    assert "unknown_chemistry" not in result["call"]["reasons"], result["call"]
+    disagreeing = replace(backward, chemistry="CT")   # the same molecule frame would need GA on the reverse record
+    unresolved = call_molecule([forward, disagreeing], [path(20, 30)], target(20, 30, exact=True))
+    assert "unknown_chemistry" in unresolved["call"]["reasons"], unresolved["call"]

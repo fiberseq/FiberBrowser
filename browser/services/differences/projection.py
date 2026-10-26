@@ -25,7 +25,7 @@ from .likelihood import LikelihoodBudget, LikelihoodPolicy, compete
 from .policy import SearchBudget, SearchPolicy
 
 PROJECTION_VERSION = "read-map:v1"
-_COMPLEMENT = str.maketrans("ACGTNacgtn", "TGCANtgcan")
+_COMPLEMENT = str.maketrans("ACGTNYRacgtnyr", "TGCANRYtgcanry")   # Y (C>T) and R (G>A) complement each other
 
 
 def revcomp(sequence):
@@ -46,7 +46,7 @@ class ProjectionPolicy:
     max_cigar_operations: int = 262_144
     max_spool_bytes: int = 64 * 1024 * 1024
     deadline_s: float = 30.
-    min_mapq: int = 20
+    min_mapq: int = 0  # MAPQ filtering off by default (owner, 25 Oct); a saved policy keeps its own
     cohort_alternatives: str = "exclude"
     conflicts_enabled: bool = True
     conflict_min_overlap: int = 500
@@ -446,7 +446,7 @@ def geometry_matches(e, target, policy):
             and abs(a-alt_bp) <= max(policy.geometry_span_bp, policy.geometry_span_fraction*max(a, alt_bp)))
 
 
-def classify_projection(alignment, projected, target, *, context=None, likelihood_policy=None, likelihood_budget=None, min_mapq=20, diagnostic_halo_bp=10_000, geometry_policy=None):
+def classify_projection(alignment, projected, target, *, context=None, likelihood_policy=None, likelihood_budget=None, min_mapq=0, diagnostic_halo_bp=10_000, geometry_policy=None):
     """One call inside one path. Geometry and sequence calls stay independent."""
     start, end, alt_bp = target["ref_start"], target["ref_end"], target["alt_bp"]
     target_id = target["target_id"]
@@ -479,8 +479,15 @@ def classify_projection(alignment, projected, target, *, context=None, likelihoo
         candidates = dict(target.get("candidates") or {})
         competition_complete = target.get("competition_complete") is True and target_id in candidates and "reference" in candidates
         policy = likelihood_policy or LikelihoodPolicy()
-        context = replace(context or DafContext("unknown", "unavailable"),
-            reverse_complemented=projected["alignment_orientation"] == "reverse", base_qualities=qualities)
+        from .alleles import MOLECULE_FROM_ST, stored_chemistry_for, stored_frame_chemistry
+        # st-tag chemistry is in the stored-SEQ frame: complemented only when this projection reversed the SEQ
+        # (a minus piece). A molecule pooled from st tags takes this record's own stored frame first. A
+        # molecule-frame context (explicit) follows the alignment's orientation through the projection.
+        projection_reversed = (projected["alignment_orientation"] == "reverse") != bool(alignment.reverse)
+        if context is not None and context.provenance == MOLECULE_FROM_ST:
+            context = replace(context, chemistry=stored_chemistry_for(context.chemistry, bool(alignment.reverse)), provenance="BAM:st")
+        reverse = projection_reversed if stored_frame_chemistry(context) else projected["alignment_orientation"] == "reverse"
+        context = replace(context or DafContext("unknown", "unavailable"), reverse_complemented=reverse, base_qualities=qualities)
         # A deletion is structurally diagnostic even without BAM SEQ, but a
         # competing empty allele at this boundary is never silently excluded.
         structural = (any((e["ref_start"], e["ref_end"], e["alt_bp"]) == (start, end, 0) for e in matching)
@@ -538,8 +545,15 @@ def call_molecule(alignments, paths, target, *, policy=ProjectionPolicy(), budge
     alignments = list({a.record_id: a for a in alignments}.values())
     walks = {a.record_id: _walk(a, budget.check) for a in alignments}
     if context is None:
-        primary_contexts = {(a.chemistry, a.chemistry_provenance) for a in alignments if not a.supplementary and a.chemistry != "unknown"}
-        available_contexts = primary_contexts or {(a.chemistry, a.chemistry_provenance) for a in alignments if a.chemistry != "unknown"}
+        # Each record's st is in its own stored frame: pool them in the molecule (read) frame, so a reverse
+        # supplementary's swapped st agrees with its forward primary; each record then gets its own stored frame.
+        from .alleles import MOLECULE_FROM_ST, molecule_chemistry_from_st
+        def molecule_frame(a):
+            if a.chemistry_provenance == "BAM:st" and a.chemistry in ("CT", "GA"):
+                return molecule_chemistry_from_st(a.chemistry, a.reverse), MOLECULE_FROM_ST
+            return a.chemistry, a.chemistry_provenance
+        primary_contexts = {molecule_frame(a) for a in alignments if not a.supplementary and a.chemistry != "unknown"}
+        available_contexts = primary_contexts or {molecule_frame(a) for a in alignments if a.chemistry != "unknown"}
         context = DafContext(*next(iter(available_contexts))) if len(available_contexts) == 1 else DafContext("unknown", "unresolved_molecule_chemistry")
     hs, geometry_hs, diagnostics = [], [], []
     primary_complete = False

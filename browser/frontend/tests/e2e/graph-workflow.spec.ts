@@ -25,7 +25,7 @@ const LIFT_BAM = process.env.FIBERBROWSER_TEST_LIFT_BAM ?? '';
 const LIFT_MAP = process.env.FIBERBROWSER_TEST_LIFT_MAP ?? '';
 const NATIVE_BAM = process.env.FIBERBROWSER_TEST_LIFT_NATIVE ?? '';
 const SHOTS = process.env.FIBERBROWSER_GRAPH_SHOTS?.trim();
-const READY = [HELPER, HPRC, LIFT_BAM, LIFT_MAP, NATIVE_BAM].every(p => p && existsSync(p)) && process.env.FIBERBROWSER_LIVE_LIFT === '1'
+const READY = [HELPER, HPRC, LIFT_BAM, LIFT_MAP, NATIVE_BAM].every(p => p && existsSync(p)) && process.env.FIBERBROWSER_LIVE_LIFT !== '0'
   && Boolean(process.env.FIBERBROWSER_TEST_FASTA);
 const PEAKS = [[128655000, 128655100], [128656200, 128656300], [128658000, 128658100], [128659000, 128659100]];
 
@@ -64,7 +64,7 @@ async function headerItem(page: Page, panelId: string, testId: string, member?: 
 }
 
 test('graph workflow: join a native panel, toggle, pop out and fold, Cluster, pan, strips, hand-off (HPRC)', async ({ page }) => {
-  test.skip(!READY, 'needs the graph helper, the HPRC package, the live-lift demo data (and its native BAM) and FIBERBROWSER_LIVE_LIFT=1');
+  test.skip(!READY, 'needs the graph helper, the HPRC package, the live-lift demo data (and its native BAM) (live lift is on unless FIBERBROWSER_LIVE_LIFT=0)');
   test.setTimeout(600_000);
   const server = await graphServer();
   const s = S(page);

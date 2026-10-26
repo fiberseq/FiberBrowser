@@ -118,6 +118,7 @@ def raw_qnames(ids, dataset):
     Decode only versioned identities for this dataset's provenance and folding
     mode. Every unrecognized value passes through verbatim, including pipes.
     """
+    from services.lift.joint import molecule_key
     settings = dataset.live_lift.settings
     out = set()
     groups = settings.molecule_group_map(getattr(dataset, "paths", []), getattr(dataset, "id", ""))
@@ -128,7 +129,7 @@ def raw_qnames(ids, dataset):
         if rq is not None:
             # A record key (graph mode, DESIGN_GRAPH_PRIMARY §3.1) of this dataset's provenance: its QNAME.
             molecule = json.loads(value[len(_RECORD_PREFIX):])[0]
-            if any(molecule == group + "|" + rq for group in groups.values()):
+            if any(molecule in (molecule_key(group, rq), group + "|" + rq) for group in groups.values()):
                 qname = rq
         if value.startswith(_IDENTITY_PREFIX):
             try:
@@ -142,7 +143,7 @@ def raw_qnames(ids, dataset):
                                      else type(orientation) is int and orientation >= 0)
                 if (isinstance(molecule, str) and isinstance(name, str) and name and not any(c.isspace() for c in name)
                         and isinstance(placement, str) and placement and valid_record and valid_orientation
-                        and any(molecule == group + "|" + name for group in groups.values())
+                        and any(molecule in (molecule_key(group, name), group + "|" + name) for group in groups.values())  # legacy unescaped keys still decode
                         and _encode_identity(parts) == value):
                     qname = name
         out.add(qname)

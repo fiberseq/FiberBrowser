@@ -348,7 +348,7 @@ test('two graph panels: one follows the main view, one navigates on its own', as
 const HAVE_LIFT = [LIFT_BAM, NATIVE_BAM, LIFT_MAP].every(p => p && existsSync(p)) && Boolean(HPRC && existsSync(HPRC));
 
 test('an expanded linear insertion leaves the graph panel unchanged (HPRC package, live lift)', async ({ page }) => {
-  test.skip(!HAVE_LIFT || process.env.FIBERBROWSER_LIVE_LIFT !== '1', 'needs the pg-lift work data, the HPRC package and FIBERBROWSER_LIVE_LIFT=1');
+  test.skip(!HAVE_LIFT || process.env.FIBERBROWSER_LIVE_LIFT === '0', 'needs the pg-lift work data, the HPRC package (live lift is on unless FIBERBROWSER_LIVE_LIFT=0)');
   test.setTimeout(420_000);
   const server = await graphServer([HPRC], NATIVE_BAM);
   const measurements: Record<string, unknown> = {};
@@ -403,7 +403,7 @@ test('an expanded linear insertion leaves the graph panel unchanged (HPRC packag
 });
 
 test('reads of a live-lift dataset drawn along their graph walk (HPRC package, Gate E)', async ({ page }) => {
-  test.skip(!HAVE_LIFT || process.env.FIBERBROWSER_LIVE_LIFT !== '1', 'needs the pg-lift work data, the HPRC package and FIBERBROWSER_LIVE_LIFT=1');
+  test.skip(!HAVE_LIFT || process.env.FIBERBROWSER_LIVE_LIFT === '0', 'needs the pg-lift work data, the HPRC package (live lift is on unless FIBERBROWSER_LIVE_LIFT=0)');
   test.setTimeout(480_000);
   const server = await graphServer([HPRC]);
   try {
@@ -710,7 +710,7 @@ test('Gate F: graph-only inspection, expansion, focus, source span and restore w
 });
 
 test('Gate F: graph-plus-lifted-only and three-view molecule hover, canonical reuse, source panel and initiator closure (HPRC)', async ({ page }) => {
-  test.skip(!HAVE_LIFT || process.env.FIBERBROWSER_LIVE_LIFT !== '1', 'needs the pg-lift work data, the HPRC package and FIBERBROWSER_LIVE_LIFT=1');
+  test.skip(!HAVE_LIFT || process.env.FIBERBROWSER_LIVE_LIFT === '0', 'needs the pg-lift work data, the HPRC package (live lift is on unless FIBERBROWSER_LIVE_LIFT=0)');
   test.setTimeout(480_000);
   const server = await graphServer([HPRC]);
   try {

@@ -231,6 +231,9 @@
     },
     {
       "name": "low SA MAPQ",
+      "options": {
+        "min_mapq": 20
+      },
       "read": {
         "id": "synthetic",
         "reference_start": 0,

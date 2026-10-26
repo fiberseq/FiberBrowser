@@ -83,7 +83,7 @@ def test_lifted_dataset_names_its_sample_and_the_list_filters_by_id(lift_env):
 
 def test_listing_is_hidden_with_the_flag_off(lift_env, monkeypatch):
     client, _tmp = lift_env
-    monkeypatch.delenv("FIBERBROWSER_LIVE_LIFT")
+    monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "0")
     assert client.get("/api/lift/datasets").status_code == 404
 
 

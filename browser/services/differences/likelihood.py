@@ -184,6 +184,11 @@ def compete(observed, candidates, *, target_id, complete, context=None, geometry
     if context.base_qualities and (len(context.base_qualities) != len(observed) or any(q < 0 or q > 93 for q in context.base_qualities)):
         raise ValueError("qualities must match the observed target-oriented sequence")
     observed = observed.upper()
+    if context.chemistry in ("CT", "GA"):
+        # DAF stores conversions as IUPAC Y/R in SEQ; under DAF chemistry they are observed T/A. Elsewhere
+        # Y/R stay genuine ambiguity codes and refuse an exact call below.
+        from .alleles import decode_daf_bases
+        observed = decode_daf_bases(observed)
     candidates = {k: v.upper() for k, v in candidates.items()}
     if any(b not in "ACGT" for seq in (observed, *candidates.values()) for b in seq):
         return result(Call(reasons=("ambiguous_bases",)))

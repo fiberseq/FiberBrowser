@@ -100,3 +100,58 @@ async def difference_lens(req: WorkspaceRequest, request: Request, state=Depends
 @router.post("/api/differences/observations")
 async def difference_observations(req: WorkspaceRequest, request: Request, state=Depends(get_state)):
     return await _workspace(req, request, state, "observations")
+
+
+class ReadDifference(BaseModel):
+    id: str = Field(min_length=1, max_length=256)
+    ref_start: int = Field(ge=0)
+    ref_end: int = Field(ge=0)
+    alt_bp: int = Field(ge=0)
+    geometry_members: Optional[list[list[int]]] = Field(None, max_length=256)
+
+
+class ComparisonRequest(BaseModel):
+    dataset_id: str
+    chrom: str
+    start: int = Field(ge=0)
+    end: int = Field(ge=0)
+    reads: list[ReadDifference] = Field(default_factory=list, max_length=256)
+    read_sequences: Optional[dict[str, str]] = None
+    read_scope: Optional[dict] = None
+    ledger: Optional[dict] = None
+    matching_policy: Optional[dict] = None
+    comparison_policy: Optional[dict] = None
+
+
+@router.post("/api/differences/compare")
+async def compare_with_assembly(req: ComparisonRequest, request: Request, state=Depends(get_state)):
+    """Assembly comparison: exact IDs, typed links, labels, novelty, exact
+    targets and the session identity ledger with any merge/split lineage."""
+    from services.background_work import Cancelled, cancelled_response, run_background
+    from services.differences.comparison import ComparisonPolicy, assembly_comparison
+    from services.differences.identity import content_id
+    from services.differences.matching import MatchingPolicy
+    from services.lift.registration import require_enabled
+    from services.reconstruction_budget import ResourceResult
+    require_enabled()
+    dataset = state.datasets.get(req.dataset_id)
+    if dataset is None:
+        raise HTTPException(404, "Dataset not found")
+    if sum(len(v) for v in (req.read_sequences or {}).values()) > 200_000:
+        raise HTTPException(422, "read sequences exceed 200,000 bases")
+    try:
+        matching = dict(req.matching_policy or {})
+        matching = MatchingPolicy(**{k: v for k, v in matching.items() if k in MatchingPolicy.__dataclass_fields__})
+        policy = ComparisonPolicy(**{k: v for k, v in (req.comparison_policy or {}).items()
+                                     if k in ComparisonPolicy.__dataclass_fields__ and k != "version"})
+        key = ("difference_compare:v1", id(state), content_id("request", req.model_dump()),
+               getattr(dataset.live_lift, "key", lambda: None)() if getattr(dataset, "live_lift", None) else None)
+        return await run_background(request, key, assembly_comparison, state, dataset, chrom=req.chrom,
+            start=req.start, end=req.end, reads=[r.model_dump() for r in req.reads], read_sequences=req.read_sequences,
+            read_scope=req.read_scope, ledger=req.ledger, matching_policy=matching, policy=policy)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except ResourceResult as exc:
+        return exc.payload()
+    except Cancelled:
+        return cancelled_response()

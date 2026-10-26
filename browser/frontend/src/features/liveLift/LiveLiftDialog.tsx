@@ -17,6 +17,7 @@ export function LiveLiftDialog() {
   const setOpen = useLiveLiftStore(s => s.setDialogOpen);
   const [bams, setBams] = useState('');
   const [manifest, setManifest] = useState('');
+  const [sourceFasta, setSourceFasta] = useState('');
   const [label, setLabel] = useState('');
   const [info, setInfo] = useState<LiftMapInfo | null>(null);
   const [haps, setHaps] = useState<string[]>([]);
@@ -84,7 +85,7 @@ export function LiveLiftDialog() {
     try {
       const r = await addLiveLiftDataset({
         paths: bams.split(/\n|,/).map(p => p.trim()).filter(Boolean), manifest: manifest.trim(), haplotypes: haps,
-        settings, label: label.trim() || undefined,
+        settings, label: label.trim() || undefined, source_fasta: sourceFasta.trim() || undefined,
       });
       if (!r.success || !r.dataset) { setError(r.error ?? 'The dataset could not be opened.'); return; }
       // Split into one panel per haplotype unless Pooled (register.autoSplitNewLiftedDatasets, from its settings);
@@ -127,8 +128,12 @@ export function LiveLiftDialog() {
             </> : <p className="text-ink-secondary" data-testid="live-lift-map-help">No lift map was found next to this BAM or in the Library. {suggestions.help}</p>}
           </div>
         )}
-        <label className="mb-2 block">Graphlift map (.graphlift.json)
+        <label className="mb-2 block">Lift map (graphlift .graphlift.json, or a UCSC .chain / .chain.gz)
           <input className={input} value={manifest} onChange={e => setManifest(e.target.value)} data-testid="live-lift-manifest" />
+        </label>
+        <label className="mb-2 block" title="The BAM's own assembly as an indexed FASTA. Optional: with it, the Differences inspector shows assembly bases, Identify works on assembly insertions, and insertions can be confirmed by assembly.">
+          Source assembly FASTA (optional)
+          <input className={input} value={sourceFasta} onChange={e => setSourceFasta(e.target.value)} data-testid="live-lift-source-fasta" placeholder="e.g. hg002v1.1.fa (indexed)" />
         </label>
         {info && (
           <fieldset className="mb-2" data-testid="live-lift-haplotypes">

@@ -44,7 +44,7 @@ READONLY_MESSAGE = "That folder is read-only on this server; choose a folder in 
 # Keys whose string values are file or folder paths.
 _PATH_KEY = re.compile(
     r"(^|_)(path|paths|file|files|filename|filepath|dir|dirs|directory|folder|bam|bams|bigbed|bigwig|fasta|fa|gtf|"
-    r"gff|bed|cool|mcool|reads|reference|genbank|bundle|bundle_path|bundle_paths|session_path|catalog|package|manifest)$",
+    r"gff|bed|cool|mcool|reads|reference|genbank|bundle|bundle_path|bundle_paths|session_path|catalog|package|near|manifest)$",
     re.IGNORECASE)
 # Keys that name a place to write.
 _WRITE_KEY = re.compile(r"(^|_)(output|outdir|out_dir|output_dir|output_root|output_path|save_path|dest|destination|"

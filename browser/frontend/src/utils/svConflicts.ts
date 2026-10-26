@@ -12,7 +12,7 @@ export interface SvConflictReason {
   overlap: number; clip_fraction: number; distance: number | null; message: string;
 }
 export const DEFAULT_SV_CONFLICT_OPTIONS: SvConflictOptions = {
-  enabled: true, max_distance: 100_000, min_mapq: 20, min_overlap: 500, min_clip_fraction: 0.5,
+  enabled: true, max_distance: 100_000, min_mapq: 0, min_overlap: 500, min_clip_fraction: 0.5,
 };
 export function normalizeSvConflictOptions(input?: unknown): SvConflictOptions {
   const value = input && typeof input === 'object' ? input as Partial<SvConflictOptions> : undefined;

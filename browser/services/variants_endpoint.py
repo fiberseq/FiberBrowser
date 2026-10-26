@@ -151,7 +151,7 @@ def scan_params(body: dict) -> dict:
         "min_depth": _int(body.get("min_depth"), 20, 1, 1_000_000),
         "both_strands": bool(body.get("both_strands", True)),
         "min_bq": _int(body.get("min_bq"), 20, 0, 93),
-        "min_mapq": _int(body.get("min_mapq"), 20, 0, 255),
+        "min_mapq": _int(body.get("min_mapq"), 0, 0, 255),
         "max_indel": _int(body.get("max_indel"), 30, 1, 1000),
         "mode": mode,
         "include_duplicates": bool(body.get("include_duplicates", False)),

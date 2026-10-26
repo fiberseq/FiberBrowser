@@ -7,6 +7,7 @@ import { expandableAltBlock } from './capabilities';
 import { frozenTarget } from './selection';
 import { getAlternateBlocks, type AlternateBlock, type WorkspaceQuery } from './api';
 import { MoleculeCalls } from './MoleculeCalls';
+import { AssemblyComparisonPanel } from './AssemblyComparisonPanel';
 import { useAutoLoadBound } from './autoLoad';
 import { IdentifyTab, identifyLens } from '../insertion/IdentifyTab';
 import type { LensResponse } from '../insertion/insertionLensModel';
@@ -66,7 +67,8 @@ export function NativeInspector({ selection, panel, dataset, anchor }: {
     style={{ left: Math.max(8, rect?.left ?? 8), top: 60, width: Math.min(760, window.innerWidth-16), maxHeight: '85vh' }}>
     <button className="float-right" aria-label="Close difference inspection" onClick={() => useDifferenceSelection.getState().select(null)}>×</button>
     <strong>{d.kind} · {d.ref_bp}→{d.alt_bp} bp · reads</strong>
-    <p>{selection.chrom}:{d.t_start}–{d.t_end} · provisional identity · sequence unavailable until loaded · reads only</p>
+    <p>{selection.chrom}:{d.t_start}–{d.t_end} · sequence unavailable until loaded</p>
+    <AssemblyComparisonPanel selection={selection} dataset={dataset} />
     <p>Reference [{d.t_start}, {d.t_end}) · alternate {d.alt_bp} bp · net {d.alt_bp-d.ref_bp} bp</p>
     <p>Boundary aligned · unaligned interior · observed bases retain their own offsets.</p>
     {expandableAltBlock(d) && <><button onClick={() => expandDifference(selection)}>Expand alternate</button>{' '}

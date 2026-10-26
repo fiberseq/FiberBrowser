@@ -24,8 +24,9 @@ import { formatPctInterval } from '../../utils/proportionInterval';
 function pct(x: number) { return `${Math.round(x * 100)}%`; }
 
 /**
- * "3,267 carriers of 3,600 informative reads · 91% (95% CI 90–92%)" (round 2, N17: "3,267 of 3,600 carriers" called
- * the informative reads carriers).
+ * "3,267 confirmed of 3,600 informative reads · 91% (95% CI 90–92%)": confirmed carriers (the Differences/SV tiers:
+ * confirmed, putative, conflicting) of the informative reads (round 2, N17: "3,267 of 3,600 carriers" called the
+ * informative reads carriers).
  */
 export function svCarriersText(carriers: number, informative: number): string {
   return `${carriers.toLocaleString()} confirmed of ${informative.toLocaleString()} informative read${informative === 1 ? '' : 's'} · ${formatPctInterval(carriers, informative)}`;

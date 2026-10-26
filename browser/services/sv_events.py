@@ -44,7 +44,7 @@ SV_CLIP_TOL_BP = 20
 # max(20 bp, min(5% of len, 50 bp)) of the insertion (target-site
 # duplications put PacBio clips up to ~30 bp from the CIGAR insertion).
 SV_INS_CLIP_TOL_MAX = 50
-SV_JUNCTION_MIN_MAPQ = 20
+SV_JUNCTION_MIN_MAPQ = 0  # no MAPQ floor by default (owner, 25 Oct); svDrawing.ts mirrors it
 
 _CIGAR_REF_RE = re.compile(r"(\d+)([MIDNSHP=X])")
 

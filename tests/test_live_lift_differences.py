@@ -408,7 +408,7 @@ def test_http_native_bam_match_flag_gate_and_detail(evidence, monkeypatch):
         monkeypatch.setattr(lr, "lifted_reads_for_region", lambda *a, **k: pytest.fail("inspection missed broad cache"))
         cached = client.get("/api/lift/difference_reads", params=dict(dataset_id=did, chrom=TARGET, pos=1100))
         assert cached.status_code == 200 and cached.json()["rows"]
-        monkeypatch.delenv("FIBERBROWSER_LIVE_LIFT")
+        monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "0")
         assert client.get("/api/lift/differences", params=query).status_code == 404
         assert client.get("/api/lift/difference_reads", params=dict(dataset_id=did, chrom=TARGET, pos=1100)).status_code == 404
     finally:

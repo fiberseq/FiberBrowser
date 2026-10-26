@@ -18,7 +18,7 @@ const HPRC = process.env.FIBERBROWSER_TEST_GRAPH_HPRC_PACKAGE?.trim() ?? '';
 const LIFT_BAM = process.env.FIBERBROWSER_TEST_LIFT_BAM ?? '';
 const LIFT_MAP = process.env.FIBERBROWSER_TEST_LIFT_MAP ?? '';
 const SHOTS = process.env.FIBERBROWSER_GRAPH_SHOTS?.trim();
-const READY = [HELPER, HPRC, LIFT_BAM, LIFT_MAP].every(p => p && existsSync(p)) && process.env.FIBERBROWSER_LIVE_LIFT === '1'
+const READY = [HELPER, HPRC, LIFT_BAM, LIFT_MAP].every(p => p && existsSync(p)) && process.env.FIBERBROWSER_LIVE_LIFT !== '0'
   && Boolean(process.env.FIBERBROWSER_TEST_FASTA);
 // The four P2B AluY peaks (each 100 bp, carried by both haplotypes).
 const PEAKS = [[128655000, 128655100], [128656200, 128656300], [128658000, 128658100], [128659000, 128659100]];
@@ -55,7 +55,7 @@ async function headerItem(page: Page, panelId: string, testId: string) {
 }
 
 test('Cluster on graph columns: one labelling across haplotypes and pop-outs, never refitted by a pop-out (HPRC)', async ({ page }) => {
-  test.skip(!READY, 'needs the graph helper, the HPRC package, the live-lift demo data and FIBERBROWSER_LIVE_LIFT=1');
+  test.skip(!READY, 'needs the graph helper, the HPRC package, the live-lift demo data (live lift is on unless FIBERBROWSER_LIVE_LIFT=0)');
   test.setTimeout(600_000);
   const server = await graphServer();
   const s = store(page);

@@ -17,7 +17,7 @@ export interface SnpParams {
   mode: SnpMode;
 }
 
-export const DEFAULT_SNP_PARAMS: SnpParams = { min_maf: 0.1, min_depth: 20, both_strands: true, min_bq: 20, min_mapq: 20, mode: 'auto' };
+export const DEFAULT_SNP_PARAMS: SnpParams = { min_maf: 0.1, min_depth: 20, both_strands: true, min_bq: 20, min_mapq: 0, mode: 'auto' };
 
 export interface ScanTarget {
   genome?: string | null;
