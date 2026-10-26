@@ -150,4 +150,34 @@ describe('not a carrier: frontend follow-ups', () => {
     expect(useBrowserStore.getState().clusterAssignments[patId]).toEqual({ [rk(aid('p1'))]: -2 });
     expect(useBrowserStore.getState().clusterAssignments[matId]).toEqual({ [rk(aid('m1'))]: 0, [rk(aid('m2'))]: 1 });
   });
+
+  it('provenance takes a dynamic answer that changes no shown label (Codex round 3)', async () => {
+    const { plan, obsM, obsP } = setup();
+    // Both records labelled at the fit, A through MAT and B through PAT; the model then also places B on MAT (a
+    // molecule on both paths): the pooled host map does not change, but MAT's pop-out must show B too.
+    commit(plan, obsM, obsP, { [aid('a')]: 0 }, { [aid('b')]: 0 });
+    stub({ results: { [obsM]: { assignments: { [aid('a')]: 0, [aid('b')]: 0 } }, [obsP]: { assignments: { [aid('b')]: 0 } } } });
+    expect(await assignWithGraphRun(useBrowserStore.getState().clusterMatchedRun!)).toBe(0);
+    expect(Object.keys(useBrowserStore.getState().clusterMatchedRun!.assignments[obsM]).sort()).toEqual([aid('a'), aid('b')].sort());
+    const [matId] = popOut('host', [], [{ binding: 'mat', hap: 'MAT' }]);
+    const rk = (id: string) => recordKey(id)!;
+    expect(useBrowserStore.getState().clusterAssignments[matId]).toEqual({ [rk(aid('a'))]: 0, [rk(aid('b'))]: 0 });
+  });
+
+  it('each tree node filters a pop-out with its own run: a parent keeps carriers a subcluster left out (Codex round 3)', () => {
+    const { plan, obsM, obsP } = setup();
+    commit(plan, obsM, obsP, { [aid('m1')]: 0, [aid('m2')]: 1 }, { [aid('p1')]: -2 });
+    const parentId = useBrowserStore.getState().activeClusterTreeNodeId!;
+    // Subcluster C0 (m1 only) on the graph columns.
+    useBrowserStore.setState({ selectedClusters: { 'k-host': new Set([0]) } } as never);
+    commit(plan, obsM, obsP, { [aid('m1')]: 0 }, {});
+    const childId = useBrowserStore.getState().activeClusterTreeNodeId!;
+    expect(childId).not.toBe(parentId);
+    const [matId] = popOut('host', [], [{ binding: 'mat', hap: 'MAT' }]);
+    const rk = (id: string) => recordKey(id)!;
+    expect(useBrowserStore.getState().clusterAssignments[matId]).toEqual({ [rk(aid('m1'))]: 0 });
+    useBrowserStore.getState().applyClusterTreeNode(parentId);
+    expect(useBrowserStore.getState().clusterAssignments[matId]).toEqual({ [rk(aid('m1'))]: 0, [rk(aid('m2'))]: 1 });
+  });
 });
+

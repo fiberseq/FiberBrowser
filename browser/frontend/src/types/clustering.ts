@@ -126,6 +126,11 @@ export interface ClusterTreeNode {
   peakWidths?: number[];
   dynamicClustering: boolean;
 
+  /** A graph run's node: its destinations, observations and the record keys each observation labelled (dynamic
+   * assignment included). A haplotype popped out of a host keeps, on this node, only its own observations' rows. */
+  graphProvenance?: { destinations: string[]; observations: import('../utils/clusterMatchedRun').GraphRunObservation[];
+    owned: Record<string, string[]> };
+
   // Results are keyed by current stateKey for in-session branch switching.
   assignments: Record<string, Record<string, number>>;
   order: Record<string, number[]>;

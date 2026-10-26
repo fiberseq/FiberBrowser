@@ -431,10 +431,26 @@ export function commitGraphRun(s: BrowserState, plan: GraphClusterPlan, response
   // The tree node its labels are (dynamic assignment applies only while it is the active node).
   run.treeNodeId = useBrowserStore.getState().activeClusterTreeNodeId ?? null;
   useBrowserStore.setState({ clusterMatchedRun: run });
+  stampGraphProvenance(run);
   useBrowserStore.getState().pushSnapshot('Cluster on graph columns');
 }
 
 // ── Dynamic assignment with the durable model (G5) ─────────────────────────────
+
+/** Record a graph run's provenance on its tree node (and, for a refinement, on the stage-1 node it refines: the same
+ * rows), so a pop-out filters each node's labels with that node's own run. */
+function stampGraphProvenance(run: ClusterMatchedRun): void {
+  if (!run.graph || !run.destinations || !run.treeNodeId) return;
+  const provenance = { destinations: run.destinations.map(d => d.stateKey), observations: run.graph.observations,
+    owned: Object.fromEntries(Object.entries(run.assignments).map(([oid, a]) => [oid, Object.keys(a).map(id => recordKey(id) ?? id)])) };
+  useBrowserStore.setState(cur => {
+    const node = cur.clusterTreeNodes[run.treeNodeId!];
+    if (!node) return {};
+    const parent = node.refinement && node.parentId ? cur.clusterTreeNodes[node.parentId] : null;
+    return { clusterTreeNodes: { ...cur.clusterTreeNodes, [node.id]: { ...node, graphProvenance: provenance },
+      ...(parent ? { [parent.id]: { ...parent, graphProvenance: provenance } } : {}) } };
+  });
+}
 
 /** A run's per-observation labels after a dynamic assignment, under the rules the live maps follow: a new row takes
  * its label, an existing one keeps it, except that a model label replaces "not a carrier" (-2); and a record placed
@@ -523,11 +539,16 @@ export async function assignWithGraphRun(run: ClusterMatchedRun, signal?: AbortS
       return { clusterTreeNodes: { ...cur.clusterTreeNodes, [id]: { ...node, assignments } } };
     });
   }
-  if (added) {
+  // The observations' provenance takes every answer, also when no shown label changed (a record already labelled
+  // through another path; Codex review, group B round 3).
+  const assignments = assignedObservations(run.assignments, response.results);
+  if (added || JSON.stringify(assignments) !== JSON.stringify(run.assignments)) {
     const now = useBrowserStore.getState();
-    useBrowserStore.setState({ clusterMatchedRun: { ...run, assignments: assignedObservations(run.assignments, response.results),
-      panelAssignments: { ...run.panelAssignments,
-      ...Object.fromEntries([...run.destinations.map(d => d.stateKey), ...touched].map(k => [k, now.clusterAssignments[k] ?? {}])) } } });
+    const next = { ...run, assignments, panelAssignments: added ? { ...run.panelAssignments,
+      ...Object.fromEntries([...run.destinations.map(d => d.stateKey), ...touched].map(k => [k, now.clusterAssignments[k] ?? {}])) }
+      : run.panelAssignments };
+    useBrowserStore.setState({ clusterMatchedRun: next });
+    stampGraphProvenance(next);
   }
   return added;
 }

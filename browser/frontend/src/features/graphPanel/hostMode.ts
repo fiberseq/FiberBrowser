@@ -19,7 +19,7 @@ import { generatePanelId } from '../../stores/utils';
 import { withoutGraphMembership } from '../../stores/graphMembership';
 import type { PanelConfig } from '../../types';
 import { genomeKeyFor } from '../../utils/regionNavigation';
-import { observationShownBy } from '../../utils/clusterMatchedRun';
+import { observationShownBy, type GraphRunObservation } from '../../utils/clusterMatchedRun';
 import { recordKey } from '../../utils/recordKeys';
 import { graphBindingFor, memberBindingFor, useGraphBindingsStore, type DatasetGraphBinding } from './bindingsStore';
 import { canFollow, defaultCompared, defaultTarget, GRAPH_MAX_PATHS, DEFAULT_CONTEXT_BP, type LinearView } from './state';
@@ -245,26 +245,37 @@ export function popOut(hostId: string, memberIds: string[], newHaps: { binding: 
     const copied = copyPanelState(s as unknown as Record<string, unknown>, panelKeyOf(host), made.map(p => p.id));
     // A graph run's labels on the host: each new haplotype panel keeps only its own observations' rows, so the other
     // haplotype's labels never scope its reads (agy review of the group B fix: a "not a carrier" pop-out hid its
-    // unlabelled reads). Whichever of the run's tree nodes is shown (stage 1, a refinement, a merge of its
-    // clusters), and on every tree node that holds the host's labels, so a branch switch keeps them (agy, round 2).
-    const run = s.clusterMatchedRun;
+    // unlabelled reads). Each tree node that holds the host's labels is filtered with its own run's provenance, so a
+    // branch switch keeps the right rows (agy round 2, Codex round 3); a node without one is left as it was.
     const hostKey = panelKeyOf(host);
-    if (run?.graph && run.destinations?.some(d => d.stateKey === hostKey) && made.length) {
-      const owned = new Map(made.map(m => [m.id, new Set(run.graph!.observations.filter(o => observationShownBy(o, m))
-        .flatMap(o => Object.keys(run.assignments[o.id] ?? {}).map(id => recordKey(id) ?? id)))]));
-      const only = (labels: Record<string, number> | undefined, id: string) =>
-        Object.fromEntries(Object.entries(labels ?? {}).filter(([rid]) => owned.get(id)!.has(recordKey(rid) ?? rid)));
+    type Provenance = { destinations: string[]; observations: GraphRunObservation[]; owned: Record<string, string[]> };
+    const run = s.clusterMatchedRun;
+    const fromRun: Provenance | null = run?.graph && run.destinations ? { destinations: run.destinations.map(d => d.stateKey),
+      observations: run.graph.observations,
+      owned: Object.fromEntries(Object.entries(run.assignments).map(([o, a]) => [o, Object.keys(a).map(id => recordKey(id) ?? id)])) } : null;
+    const only = (prov: Provenance | null | undefined, labels: Record<string, number> | undefined, m: PanelConfig) => {
+      if (!prov || !prov.destinations.includes(hostKey) || !labels) return null;
+      const own = new Set(prov.observations.filter(o => observationShownBy(o, m)).flatMap(o => prov.owned[o.id] ?? []));
+      return Object.fromEntries(Object.entries(labels).filter(([rid]) => own.has(recordKey(rid) ?? rid)));
+    };
+    if (made.length) {
+      const active = s.activeClusterTreeNodeId ? s.clusterTreeNodes[s.activeClusterTreeNodeId] : null;
+      const liveProv = active?.graphProvenance ?? fromRun;
       const live = s.clusterAssignments[hostKey];
-      if (live && copied.clusterAssignments) {
-        copied.clusterAssignments = { ...(copied.clusterAssignments as Record<string, Record<string, number>>),
-          ...Object.fromEntries(made.map(m => [m.id, only(live, m.id)])) };
+      const liveOwn = made.map(m => [m.id, only(liveProv, live, m)] as const).filter(([, v]) => v);
+      if (liveOwn.length && copied.clusterAssignments) {
+        copied.clusterAssignments = { ...(copied.clusterAssignments as Record<string, Record<string, number>>), ...Object.fromEntries(liveOwn) };
       }
-      const nodes = Object.fromEntries(Object.entries(s.clusterTreeNodes).filter(([, n]) => n.assignments?.[hostKey]).map(([nid, n]) => [nid, {
-        ...n,
-        assignments: { ...n.assignments, ...Object.fromEntries(made.map(m => [m.id, only(n.assignments[hostKey], m.id)])) },
-        ...(n.order?.[hostKey] ? { order: { ...n.order, ...Object.fromEntries(made.map(m => [m.id, [...n.order![hostKey]]])) } } : {}),
-        ...(n.groupLabels?.[hostKey] ? { groupLabels: { ...n.groupLabels, ...Object.fromEntries(made.map(m => [m.id, { ...n.groupLabels![hostKey] }])) } } : {}),
-      }]));
+      const nodes = Object.fromEntries(Object.entries(s.clusterTreeNodes).flatMap(([nid, n]) => {
+        const per = made.map(m => [m.id, only(n.graphProvenance, n.assignments?.[hostKey], m)] as const).filter(([, v]) => v);
+        if (!per.length) return [];
+        return [[nid, {
+          ...n,
+          assignments: { ...n.assignments, ...Object.fromEntries(per) },
+          ...(n.order?.[hostKey] ? { order: { ...n.order, ...Object.fromEntries(per.map(([id]) => [id, [...n.order![hostKey]]])) } } : {}),
+          ...(n.groupLabels?.[hostKey] ? { groupLabels: { ...n.groupLabels, ...Object.fromEntries(per.map(([id]) => [id, { ...n.groupLabels![hostKey] }])) } } : {}),
+        }]];
+      }));
       if (Object.keys(nodes).length) copied.clusterTreeNodes = { ...s.clusterTreeNodes, ...nodes };
     }
     // Its exclusions too (kept in the read actions store).
