@@ -22,6 +22,7 @@ import { registerGraphPanel } from './register';
 import { memberLabel, singleHapPathName } from './labels';
 import type { GraphBinding, GraphOccurrence, GraphRead, GraphReadBinding, GraphRegistration, GraphTopology } from './types';
 import { createElement, act } from 'react';
+import { CROSSFADE_MS, fadeIn, panelBodyParts } from './crossfade';
 import { createRoot } from 'react-dom/client';
 import { PopOutPicker, pickedPopOut, usePopOutPicker } from './PopOutPicker';
 import { canonicalWalk, firstCarriedColumn, firstCarriedColumns } from './columnOrder';
@@ -233,5 +234,32 @@ describe('item 1: Pop out paths… (a chosen subset, one undo step)', () => {
     expect(useBrowserStore.getState().panels.length).toBe(before);
     expect(get('nat').collapsedByGraphGroup).toBe('pool');
     act(() => root.unmount());
+  });
+});
+
+describe('item 6: the hand-off crossfade (150 ms, reduced motion respected)', () => {
+  const media = (reduce: boolean) => vi.spyOn(window, 'matchMedia').mockImplementation(q => ({ matches: reduce && q.includes('reduce'), media: q } as MediaQueryList));
+  afterEach(() => vi.restoreAllMocks());
+
+  it('fades the new body in over 150 ms; nothing moves with reduced motion', () => {
+    if (!window.matchMedia) (window as { matchMedia?: unknown }).matchMedia = () => ({ matches: false });
+    const el = document.createElement('div');
+    const animate = vi.fn();
+    (el as unknown as { animate: unknown }).animate = animate;
+    media(false);
+    expect(fadeIn([el, null])).toBe(1);
+    expect(animate).toHaveBeenCalledWith([{ opacity: 0 }, { opacity: 1 }], expect.objectContaining({ duration: CROSSFADE_MS }));
+    expect(CROSSFADE_MS).toBe(150);
+    media(true);
+    expect(fadeIn([el])).toBe(0);
+    expect(animate).toHaveBeenCalledTimes(1);
+  });
+
+  it('the linear body is the panel\'s children after the header notices', () => {
+    const panelEl = document.createElement('div');
+    panelEl.dataset.panelId = 'h';
+    panelEl.innerHTML = '<div id="bar"></div><div id="notices"><span id="handoff"></span></div><div id="t1"></div><div id="t2"></div>';
+    expect(panelBodyParts(panelEl.querySelector('#handoff')).map(e => e.id)).toEqual(['t1', 't2']);
+    expect(panelBodyParts(null)).toEqual([]);
   });
 });

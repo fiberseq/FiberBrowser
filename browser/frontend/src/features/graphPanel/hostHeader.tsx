@@ -7,7 +7,8 @@
  * - a member: the chip "In graph · MAT", "Fold into graph", "Remove from graph";
  * - any other bound panel: "Join <host> graph".
  */
-import { lazy, useEffect } from 'react';
+import { lazy, useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
+import { fadeIn, panelBodyParts } from './crossfade';
 import { useShallow } from 'zustand/react/shallow';
 import { MenuItem } from '../../components/tracks/PanelHeader';
 import type { PanelHeaderContext } from '../../components/tracks/panelHeaderExtensions';
@@ -27,8 +28,11 @@ const LazyGraphPanel = lazy(() => import('./GraphPanel'));
 
 /** A host's body while it draws its graph (the hand-off has it graph). */
 export function GraphHostBody({ panel, width, height }: DatasetBodyProps) {
+  // The graph comes back with a 150 ms fade (§7.3; mounted when the host's body switches to its graph).
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => { fadeIn([ref.current]); }, []);
   return (
-    <div data-testid="graph-host-body" data-panel-id={panel.id} data-crosshair-exclude="true" style={{ height, overflow: 'hidden' }}>
+    <div ref={ref} data-testid="graph-host-body" data-panel-id={panel.id} data-crosshair-exclude="true" style={{ height, overflow: 'hidden' }}>
       <LazyGraphPanel panelId={panel.id} width={width} height={height} />
     </div>
   );
@@ -39,6 +43,14 @@ export function hostShowsGraph(panel: PanelConfig): boolean {
   return isHost(panel) && panel.graphView?.handoff?.shown !== 'linear';
 }
 
+
+/** The hand-off bar of a host drawn linear: mounted when its body switches to its linear tracks, which then fade in
+ * over 150 ms (§7.3). */
+function HandoffBar({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => { fadeIn(panelBodyParts(ref.current)); }, []);
+  return <div ref={ref} data-testid="graph-handoff">{children}</div>;
+}
 
 const POP_OUT_KIND_LABELS: Record<PopOutKind, string> = { lifted: 'lifted panel', source: 'source view', both: 'lifted and source' };
 const POP_OUT_KIND_TITLES: Record<PopOutKind, string> = {
@@ -140,13 +152,15 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
         labelOf={p => memberLabel(p, datasetLabels(p), panel.graphView?.targetBinding ?? null)} />
     ) : null;
     const handoffBar = shown === 'linear' ? (
-      <div data-testid="graph-handoff-bar" className="flex items-center gap-2 border-b border-stone-200 bg-stone-50 px-2 py-0.5 text-[11px] text-stone-600 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-300">
-        <span>{pinned ? 'Linear · graph mode paused'
-          : panel.graphView?.handoff?.reason === 'complexity' ? 'Linear · most of this window is unresolved in the graph'
-            : `Linear · graph resumes below ${formatBp(useGraphSettings.getState().inBp)}`}</span>
-        <button type="button" className="underline" data-testid={pinned ? 'graph-resume' : 'graph-stay-linear'}
-          onClick={() => setPinnedLinear(panel.id, !pinned)}>{pinned ? 'Resume graph' : 'Stay linear'}</button>
-      </div>
+      <HandoffBar>
+        <div data-testid="graph-handoff-bar" className="flex items-center gap-2 border-b border-stone-200 bg-stone-50 px-2 py-0.5 text-[11px] text-stone-600 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-300">
+          <span>{pinned ? 'Linear · graph mode paused'
+            : panel.graphView?.handoff?.reason === 'complexity' ? 'Linear · most of this window is unresolved in the graph'
+              : `Linear · graph resumes below ${formatBp(useGraphSettings.getState().inBp)}`}</span>
+          <button type="button" className="underline" data-testid={pinned ? 'graph-resume' : 'graph-stay-linear'}
+            onClick={() => setPinnedLinear(panel.id, !pinned)}>{pinned ? 'Resume graph' : 'Stay linear'}</button>
+        </div>
+      </HandoffBar>
     ) : null;
     const body = picker || handoffBar ? <>{picker}{handoffBar}</> : null;
     return { chipTexts: [chipText], chips, menu, wantsMenu: true, menuTitle: 'graph mode', ...(body ? { body } : {}) };
