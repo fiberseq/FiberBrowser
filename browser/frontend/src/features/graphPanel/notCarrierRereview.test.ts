@@ -175,9 +175,52 @@ describe('not a carrier: frontend follow-ups', () => {
     expect(childId).not.toBe(parentId);
     const [matId] = popOut('host', [], [{ binding: 'mat', hap: 'MAT' }]);
     const rk = (id: string) => recordKey(id)!;
-    expect(useBrowserStore.getState().clusterAssignments[matId]).toEqual({ [rk(aid('m1'))]: 0 });
+    // The subcluster's other rows keep their dead-bucket label (-1), as on the host (their parent run's rows).
+    expect(useBrowserStore.getState().clusterAssignments[matId]).toEqual({ [rk(aid('m1'))]: 0, [rk(aid('m2'))]: -1 });
     useBrowserStore.getState().applyClusterTreeNode(parentId);
     expect(useBrowserStore.getState().clusterAssignments[matId]).toEqual({ [rk(aid('m1'))]: 0, [rk(aid('m2'))]: 1 });
+  });
+
+  it('pop-outs after a graph subcluster or a later split: each node by its lineage; labels not from a graph run are left alone (agy round 3)', async () => {
+    const { applySvSplit } = await import('../../utils/svAlleleSplit');
+    const { plan, obsM, obsP } = setup();
+    const rk = (id: string) => recordKey(id)!;
+    commit(plan, obsM, obsP, { [aid('m0')]: 0, [aid('m1')]: 1 }, { [aid('p1')]: -2 });
+    const rootId = useBrowserStore.getState().activeClusterTreeNodeId!;
+    useBrowserStore.setState({ selectedClusters: { 'k-host': new Set([0]) } } as never);
+    commit(plan, obsM, obsP, { [aid('m0')]: 0 }, {});
+    useBrowserStore.getState().applyClusterTreeNode(rootId);
+    const [matId, patId] = popOut('host', [], [{ binding: 'mat', hap: 'MAT' }, { binding: 'pat', hap: 'PAT' }]);
+    expect(useBrowserStore.getState().clusterAssignments[matId]).toEqual({ [rk(aid('m0'))]: 0, [rk(aid('m1'))]: 1 });
+    expect(useBrowserStore.getState().clusterAssignments[patId]).toEqual({ [rk(aid('p1'))]: -2 });
+    // A later SV split relabels the host with rows no graph run owns: the pop-out takes the host's labels unfiltered.
+    const again = setup();
+    commit(again.plan, again.obsM, again.obsP, { [aid('m0')]: 0 }, {});
+    applySvSplit('k-host', { datasetId: 'd', chrom: 'chr3', t: 'D', ref: 128_655_000, len: 500, end: 128_655_500, margin: 50,
+      label: 'DEL 500bp', counts: { 0: 1, 1: 1 }, viewStart: 128_650_000, viewEnd: 128_660_000 } as never,
+    { [rk(aid('m0'))]: 0, [rk(aid('mNew'))]: 1 });
+    const [mat2] = popOut('host', [], [{ binding: 'mat', hap: 'MAT' }]);
+    expect(useBrowserStore.getState().clusterAssignments[mat2]).toEqual(useBrowserStore.getState().clusterAssignments['k-host']);
+  });
+
+  it('a haplotype with no label of its own gets none, no focus and no empty branch map; focus follows non-empty ones (agy round 3)', () => {
+    const { plan, obsM, obsP } = setup();
+    const rk = (id: string) => recordKey(id)!;
+    commit(plan, obsM, obsP, { [aid('m0')]: 0, [aid('m1')]: 1 }, {});
+    const rootId = useBrowserStore.getState().activeClusterTreeNodeId!;
+    const childId = useBrowserStore.getState().commitSubcluster({ 'k-host': { [rk(aid('m0'))]: 0 } },
+      { sourceClusterIds: [0], name: 'Subcluster C0' } as never)!;
+    useBrowserStore.setState({ clusterFocus: { ...useBrowserStore.getState().clusterFocus, 'k-host': new Set([0]) } } as never);
+    useBrowserStore.getState().syncActiveClusterTreeNode();
+    const [matId, patId] = popOut('host', [], [{ binding: 'mat', hap: 'MAT' }, { binding: 'pat', hap: 'PAT' }]);
+    const st = useBrowserStore.getState();
+    expect(st.clusterTreeNodes[childId].assignments[patId]).toBeUndefined();
+    expect(st.clusterAssignments[patId]).toBeUndefined();
+    expect(st.clusterFocus[patId]).toBeUndefined();
+    expect(st.clusterTreeNodes[childId].assignments[matId]).toBeTruthy();
+    useBrowserStore.getState().applyClusterTreeNode(rootId);
+    useBrowserStore.getState().applyClusterTreeNode(childId);
+    expect(useBrowserStore.getState().clusterFocus[matId]).toEqual(useBrowserStore.getState().clusterFocus['k-host']);
   });
 });
 
