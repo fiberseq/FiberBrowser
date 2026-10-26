@@ -22,9 +22,11 @@ declare module '../types' {
 export function withoutGraphMembership<T extends PanelConfig>(panel: T): T {
   if (!panel.viewMode && !panel.graphMemberOf && !panel.collapsedByGraphGroup && !panel.graphHandoff && !panel.liftSplitGroup
     && !(panel.graphView && (panel.graphView as { role?: string }).role === 'host')) return panel;
-  // (A copy is never one of its source's split siblings either: graph features.)
+  // (A copy is never one of its source's split siblings either, nor a legacy panel's: a haplotype panel's copy gets
+  // a group of its own; graph features review.)
   const { viewMode: _v, graphMemberOf: _m, collapsedByGraphGroup: _c, graphHandoff: _h, liftSplitGroup: _g, ...rest } = panel;
   const out = rest as T;
+  if (panel.liftHap || panel.liftSplitGroup) (out as PanelConfig).liftSplitGroup = `solo:${Math.random().toString(36).slice(2, 10)}`;
   if (panel.contentType === 'dataset') delete (out as { graphView?: unknown }).graphView;
   return out;
 }

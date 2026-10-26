@@ -476,7 +476,9 @@ describe('graph features item 9: the thin report MED items', () => {
     const group = get('src').liftSplitGroup;
     expect(group).toBeTruthy();
     expect(get(ids[0]).liftSplitGroup).toBe(group);
-    expect(withoutGraphMembership(get(ids[0])).liftSplitGroup).toBeUndefined();
+    const copy = withoutGraphMembership(get(ids[0])).liftSplitGroup;
+    expect(copy).not.toBe(group);
+    expect(copy?.startsWith('solo:')).toBe(true);
   });
 
   it('a haplotype comparison makes no panels for members folded into a graph', () => {
@@ -550,5 +552,33 @@ describe('audit A7: View as graph from a panel selection', () => {
     expect(get('mat').graphView!.members.map(m => m.panelId).sort()).toEqual(['mat', 'nat', 'pat']);
     expect(get('nat')).toMatchObject({ collapsed: true, graphMemberOf: 'mat' });
     useBrowserStore.setState({ selectedDatasets: new Set() });
+  });
+});
+
+describe('agy review group C round 2', () => {
+  it('siblings show other haplotypes on the same strand; two copies of MAT never fold each other', () => {
+    seed([panel('mat', { liftHap: 'MAT', liftHaplotypeMode: 'split' }), panel('mat2', { liftHap: 'MAT', liftHaplotypeMode: 'split' }),
+      panel('pat', { liftHap: 'PAT', liftHaplotypeMode: 'split', strand: 'GA' })]);
+    setPanelViewMode('mat', 'graph');
+    expect(get('mat').graphView!.members.map(m => m.panelId)).toEqual(['mat']);
+  });
+
+  it('Pool haplotypes pools the clicked panel\'s group only, never a graph\'s panels', () => {
+    seed([panel('s1', { liftHap: 'MAT', liftHaplotypeMode: 'split', liftSplitGroup: 'g1' }), panel('p1', { liftHap: 'PAT', liftHaplotypeMode: 'split', liftSplitGroup: 'g1' }),
+      panel('s2', { liftHap: 'MAT', liftHaplotypeMode: 'split', liftSplitGroup: 'g2' }), panel('p2', { liftHap: 'PAT', liftHaplotypeMode: 'split', liftSplitGroup: 'g2' })]);
+    setPanelViewMode('s1', 'graph');
+    useBrowserStore.getState().poolLiftHapPanels('d', 's2');
+    const ids = useBrowserStore.getState().panels.map(p => p.id);
+    expect(ids).toEqual(['s1', 'p1', 's2']);
+    expect(get('s1').liftHap).toBe('MAT');
+    expect(get('s2').liftHap).toBeUndefined();
+  });
+
+  it('Stay linear is an undo step even in a session with no history yet', () => {
+    seed(split());
+    setPanelViewMode('mat', 'graph');
+    useBrowserStore.setState({ _historyStack: [], _historyPointer: -1 } as never);
+    setPinnedLinear('mat', true);
+    expect(useBrowserStore.getState().canUndo()).toBe(true);
   });
 });

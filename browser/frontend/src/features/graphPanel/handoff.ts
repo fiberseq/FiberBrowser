@@ -11,7 +11,7 @@
  * ordinary panel navigation, never a clamp or a detached graph viewport (§7.1).
  */
 import { create } from 'zustand';
-import { serializeState } from '../../stores/historySlice';
+import { seedHistoryBaseline, serializeState } from '../../stores/historySlice';
 import { useBrowserStore } from '../../stores/browserStore';
 import type { PanelConfig } from '../../types';
 import { genomeKeyFor } from '../../utils/regionNavigation';
@@ -176,8 +176,11 @@ let started = false;
 function recordHandoffStep(_label: string): void {
   const st = useBrowserStore.getState();
   const stack = st._historyStack ?? [];
-  const current = stack[st._historyPointer ?? stack.length - 1];
-  if (!current || Date.now() - (st._lastRestoreTime ?? 0) < 1500) return;
+  // Only the latest step, and only a navigation step: never an action taken at the new view before the hand-off
+  // settled (agy review, group C).
+  if ((st._historyPointer ?? stack.length - 1) !== stack.length - 1) return;
+  const current = stack[stack.length - 1];
+  if (!current || current.kind !== 'navigation' || Date.now() - (st._lastRestoreTime ?? 0) < 1500) return;
   const now = serializeState(st);
   const at = (x: { chrom?: string; start?: number; end?: number; panels?: { id: string; viewportOverride?: unknown }[] }) =>
     JSON.stringify([x.chrom, x.start, x.end, (x.panels ?? []).map(p => [p.id, p.viewportOverride ?? null])]);
@@ -277,6 +280,7 @@ export function startHandoffController(): void {
 
 /** "Stay linear" / "Resume graph" (handoff.pinnedLinear): saved with the host, applied at once. */
 export function setPinnedLinear(hostId: string, pinned: boolean): void {
+  seedHistoryBaseline(useBrowserStore.getState(), 'Before graph view change', 'layout');
   useBrowserStore.setState(s => {
     const panels = s.panels.map(p => (p.id === hostId && p.graphView ? { ...p, graphView: { ...p.graphView, handoff: { ...p.graphView.handoff, pinnedLinear: pinned } } } : p));
     const host = panels.find(p => p.id === hostId);
@@ -285,7 +289,6 @@ export function setPinnedLinear(hostId: string, pinned: boolean): void {
     const d = desiredHandoff(host, main);
     return { panels: applyShown(panels, hostId, d.shown, d.reason) };
   });
-  // A user action: its own undo step.
-  const st = useBrowserStore.getState();
-  if (st._historyStack?.length) st.pushSnapshot(pinned ? 'Stay linear' : 'Resume graph');
+  // A user action: its own undo step (a baseline first, in a session with no history yet).
+  useBrowserStore.getState().pushSnapshot(pinned ? 'Stay linear' : 'Resume graph', { kind: 'layout' });
 }

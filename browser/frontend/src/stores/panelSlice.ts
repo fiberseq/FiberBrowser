@@ -226,7 +226,7 @@ export interface PanelSlice {
   /** Live lift: one panel per haplotype label (the source panel keeps the first); returns the new panels' ids. */
   splitPanelByLiftHap: (panelId: string, labels: string[]) => string[];
   /** Live lift: the dataset's haplotype panels back to one pooled panel. */
-  poolLiftHapPanels: (datasetId: string) => void;
+  poolLiftHapPanels: (datasetId: string, panelId?: string) => void;
   /** DAF-seq: a copy of this panel showing `strand`, next to it. */
   addStrandPanel: (panelId: string, strand: 'CT' | 'GA') => string;
   /** Panel whose location box should take focus once it renders (a new copy at another locus). */
@@ -608,7 +608,10 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
     // Collapse the source dataset panels, remembering which panels this
     // comparison hid so close only restores its own sources.
     // (Members folded into a graph are shown by their host: no comparison panels of their own; graph features.)
-    const datasetPanels = basePanels.filter(p => p.contentType === 'dataset' && isMainViewPanel(p) && !p.collapsedByGraphGroup);
+    // (A member folded into a graph is left out when another panel of its dataset stands for it; one folded into
+    // another dataset's graph is a source of its own: graph features review.)
+    const datasetPanels = basePanels.filter(p => p.contentType === 'dataset' && isMainViewPanel(p)
+      && (!p.collapsedByGraphGroup || !basePanels.some(q => q !== p && q.datasetId === p.datasetId && !q.collapsedByGraphGroup && isMainViewPanel(q))));
     for (const original of datasetPanels) {
       const idx = newPanels.findIndex(p => p.id === original.id);
       if (idx >= 0 && !original.collapsed) {
@@ -1166,7 +1169,7 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
       id,
       subTracks: source.subTracks.map(track => ({ ...track })),
       stateKey: id,
-      strand: 'GA',
+      strand: 'GA', ...(source.liftSplitGroup ? { liftSplitGroup: source.liftSplitGroup } : {}),
       linkGroup: null,
       collapsed: false,
       layoutColumn: undefined,  // its own column, right after the source
@@ -1227,16 +1230,21 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
     }));
     return copies.map(c => c.id);
   },
-  poolLiftHapPanels: (datasetId) => withUndo(get, 'Pool haplotypes', () => set(state => {
-    const mine = state.panels.filter(p => p.datasetId === datasetId && p.liftHap);
+  poolLiftHapPanels: (datasetId, panelId) => withUndo(get, 'Pool haplotypes', () => set(state => {
+    // One Split by haplotype's panels (the clicked panel's group), never a graph's host or members; the clicked
+    // panel is kept (graph features review).
+    const clicked = panelId ? state.panels.find(p => p.id === panelId) : undefined;
+    const inGraph = (p: PanelConfig) => p.viewMode === 'graph' || (p.graphView as { role?: string } | undefined)?.role === 'host' || Boolean(p.graphMemberOf);
+    const mine = state.panels.filter(p => p.datasetId === datasetId && p.liftHap && !inGraph(p)
+      && (!clicked || (p.liftSplitGroup ?? null) === (clicked.liftSplitGroup ?? null)));
     if (mine.length === 0) return state;
-    const keep = mine[0];
+    const keep = (clicked && mine.find(p => p.id === clicked.id)) || mine[0];
     const drop = new Set(mine.slice(1).map(p => p.id));
     const { stateKey, reset } = isolatePanelState(state, keep);
     return {
       ...reset,
-      panels: state.panels.filter(p => !drop.has(p.id))
-        .map(p => p.id === keep.id ? { ...p, liftHap: undefined, liftHaplotypeMode: 'pooled', liftSplitGroup: undefined, ...(stateKey ? { stateKey } : {}) } : p),
+      panels: restoreOrphanGraphMembers(state.panels.filter(p => !drop.has(p.id))
+        .map(p => p.id === keep.id ? { ...p, liftHap: undefined, liftHaplotypeMode: 'pooled', liftSplitGroup: undefined, ...(stateKey ? { stateKey } : {}) } : p)),
     };
   })),
   setPanelViewport: (panelId, start, end) => {
