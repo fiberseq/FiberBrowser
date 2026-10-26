@@ -22,6 +22,7 @@ import { migratePanelAliases } from '../../plugins/registry';
 import { graphBindingFor } from './bindingsStore';
 import { useGraphSettings } from './handoff';
 import { registerGraphPanel } from './register';
+import { withLayoutDefaults } from './state';
 import { memberLabel, singleHapPathName } from './labels';
 import type { GraphBinding, GraphOccurrence, GraphRead, GraphReadBinding, GraphRegistration, GraphTopology } from './types';
 import { createElement, act } from 'react';
@@ -574,5 +575,20 @@ describe('group H Codex round 3, 1: an inverted run keeps its target ranks (not 
       expect(lane.rows[0].map(m => m.read.k)).toEqual(['up']);
       expect(lane.hidden).toBe(1);
     }
+  });
+});
+
+describe('a schema-1 state without layoutSettings (coordinator, trial merge)', () => {
+  it('gets the default layout settings instead of crashing', () => {
+    const partial = { schema: 1, registrationId: null, selectedPathKeys: [], linkMode: 'independent', targetViewport: null } as never;
+    const fixed = withLayoutDefaults(partial) as unknown as { layoutSettings: { contextBp: number; laneHeight: number } };
+    expect(fixed.layoutSettings.contextBp).toBeGreaterThan(0);
+    expect(fixed.layoutSettings.laneHeight).toBe(28);
+    const whole = { ...(partial as object), layoutSettings: { contextBp: 500, laneHeight: 20 } } as never;
+    expect(withLayoutDefaults(whole)).toBe(whole);
+    registerGraphPanel();
+    const migrated = migratePanelAliases([{ id: 'g1', contentType: 'graph-view', graphView: partial }] as never)[0] as unknown as { graphView: { layoutSettings: { laneHeight: number }; role: string } };
+    expect(migrated.graphView.role).toBe('standalone');
+    expect(migrated.graphView.layoutSettings.laneHeight).toBe(28);
   });
 });

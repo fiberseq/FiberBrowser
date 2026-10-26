@@ -18,7 +18,7 @@ import { drawRuler, drawScene, GRAPH_GUTTER, GRAPH_LANE_GAP, GRAPH_LANE_HEIGHT, 
 import { clampViewport, formatBp, formatLocus, fromX, makeTransform, panViewport, parseLocus, zoomViewport, bpScale, type GraphViewport } from './coordinates';
 import { buildLayout, laneLabel, type LayoutModel } from './layout';
 import { buildScene, COMPACT_LANE_PX, describeSceneHit, planScene, sceneHitAt, sceneInverse, smallDifferenceBp, targetAtX, type Compression, type Scene } from './scene';
-import { type LinearView, canFollow, defaultCompared, defaultTarget, effectiveViewport, initialGraphView, initiatorView, restoreProblem, retargetFor, selectableBindings, togglePath, GRAPH_MAX_PATHS } from './state';
+import { type LinearView, canFollow, defaultCompared, defaultTarget, effectiveViewport, initialGraphView, initiatorView, restoreProblem, retargetFor, selectableBindings, togglePath, withLayoutDefaults, GRAPH_MAX_PATHS } from './state';
 import { onPackageError, useGraphStatusStore } from './statusStore';
 import { usePanelContentHeightStore } from '../../stores/panelContentHeightStore';
 import { useServerDatasetsStore } from '../../stores/serverDatasetsStore';
@@ -153,7 +153,8 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   const width = Math.max(120, Math.floor(widthProp ?? measured.width ?? 0) - 2);
   const bodyHeight = Math.max(60, Math.floor(heightProp ?? measured.height ?? 0));
 
-  const state = panel?.graphView ?? null;
+  const rawState = panel?.graphView ?? null;
+  const state = useMemo(() => (rawState ? withLayoutDefaults(rawState) : null), [rawState]);
   // Graph mode of a dataset panel (DESIGN_GRAPH_PRIMARY §1): the panel's own viewport is the only authority, its
   // members' reads are drawn in sub-bands with their own state; the standalone graph-view panel is unchanged.
   const hostMode = isHost(panel);

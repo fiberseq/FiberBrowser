@@ -270,7 +270,7 @@ describe('Gate C review regressions', () => {
     console.log('CROSSING_COST_MS', JSON.stringify(times.map(x => +x.toFixed(1))));
     // Quadrupling the components may not cost more than ~10x (quadratic would be ~16x).
     expect(times[2] / Math.max(1, times[0])).toBeLessThan(10);
-  });
+  }, 60_000);   // wall-clock scaling check: the ratio is the assertion; under load one run can take several seconds
 
   it('squeezed gaps keep their own place: target map entries never overlap and round-trip (Codex r3-1)', () => {
     const t: Walk = [], a: Walk = [];

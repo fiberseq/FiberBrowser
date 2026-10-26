@@ -15,6 +15,8 @@ import { settlePendingGraphOpens } from './openAsGraph';
 import { registerGraphClustering } from './graphCluster';
 import { registerGraphScan } from './graphScan';
 import { startSelectionSync } from './selectionSync';
+import { withLayoutDefaults } from './state';
+import type { GraphViewState } from './types';
 import { declareContribution } from '../../plugins/packRegistry';
 import { registerPreviewFeature } from '../../utils/previewFeatures';
 import { GraphView } from '../icons';
@@ -79,10 +81,15 @@ function registerGraphMode(): void {
   registerPanelHeaderExtension(useGraphModeHeader);
   registerDatasetBody({ id: 'graph-mode', shows: hostShowsGraph, component: GraphHostBody });
   registerPanelMigration(panel => {
-    const gv = panel.graphView as { schema?: number; role?: string } | undefined;
-    if (!gv || typeof gv !== 'object' || gv.role) return null;
+    const gv = panel.graphView as { schema?: number; role?: string; layoutSettings?: unknown } | undefined;
+    if (!gv || typeof gv !== 'object') return null;
+    if (gv.role) {
+      // A state without layoutSettings (hand-made or partial) gets the defaults rather than crashing the panel.
+      const fixed = withLayoutDefaults(gv as GraphViewState);
+      return fixed === gv ? null : { ...panel, graphView: fixed };
+    }
     // Schema 1 (a graph-view panel's state before graph mode): standalone. A dataset panel never had one.
-    return { ...panel, graphView: { ...gv, schema: 2, role: panel.contentType === 'dataset' ? 'host' : 'standalone' } };
+    return { ...panel, graphView: withLayoutDefaults({ ...gv, schema: 2, role: panel.contentType === 'dataset' ? 'host' : 'standalone' } as GraphViewState) };
   });
   startHandoffController();
   // Cluster on graph columns when a host draws its graph (DESIGN_GRAPH_PRIMARY §3.4; graph primary G4/G5).

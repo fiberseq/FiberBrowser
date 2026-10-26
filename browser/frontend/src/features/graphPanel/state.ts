@@ -157,6 +157,14 @@ export function togglePath(state: GraphViewState, key: string): GraphViewState {
   return { ...state, selectedPathKeys };
 }
 
+/** A state with `layoutSettings` filled in (a hand-made or partial schema-1 state may lack it). */
+export function withLayoutDefaults<T extends GraphViewState>(state: T): T {
+  const ls = (state as { layoutSettings?: Partial<GraphViewState['layoutSettings']> }).layoutSettings;
+  if (ls && typeof ls === 'object' && Number.isFinite(ls.contextBp) && Number.isFinite(ls.laneHeight)) return state;
+  return { ...state, layoutSettings: { ...(ls && typeof ls === 'object' ? ls : {}),
+    contextBp: Number.isFinite(ls?.contextBp) ? ls!.contextBp! : DEFAULT_CONTEXT_BP, laneHeight: Number.isFinite(ls?.laneHeight) ? ls!.laneHeight! : 28 } };
+}
+
 export function isGraphViewState(v: unknown): v is GraphViewState {
   const s = v as GraphViewState | null;
   return Boolean(s && typeof s === 'object' && (s.schema === 1 || s.schema === 2) && Array.isArray(s.selectedPathKeys)
