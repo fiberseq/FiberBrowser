@@ -669,26 +669,51 @@ def _top_level(items, rows, row_read, segs, F, USZ, seg_ustart, P_seg, P_c0, P_c
             keep = ok[P_seg[pos]]
             pos, sti = pos[keep], sti[keep]
     c0, c1 = P_c0[pos], P_c1[pos]
-    o = np.argsort((sti << 32) | c0, kind="stable")
-    sti, c0, c1 = sti[o], c0[o], c1[o]
-    run = np.maximum.accumulate((sti << 32) | c1) & 0xFFFFFFFF if len(sti) else sti
-    first = np.ones(len(sti), dtype=bool)
-    first[1:] = sti[1:] != sti[:-1]
+    # Gaps run between calls of one span, or with terminal gaps hidden of one
+    # rejoin group (compose._gaps); a gap that crosses span edges is cut at them.
+    st_group = F.off[st_row] + F.chain_start[st_first] if hide else np.arange(len(st_first), dtype=np.int64)
+    key = st_group[sti]
+    o = np.argsort((key << 32) | c0, kind="stable")
+    key, sti, c0, c1 = key[o], sti[o], c0[o], c1[o]
+    run = np.maximum.accumulate((key << 32) | c1) & 0xFFFFFFFF if len(key) else key
+    first = np.ones(len(key), dtype=bool)
+    first[1:] = key[1:] != key[:-1]
     prev = np.empty_like(run)
     prev[1:] = run[:-1]
     inner = ~first & (c0 > prev)
-    g_st, g0, g1 = [sti[inner]], [prev[inner]], [c0[inner]]
+    g_st, g0, g1, g_size = [sti[inner]], [prev[inner]], [c0[inner]], [prev[inner] - c0[inner]]
+    cross = np.flatnonzero(inner & (prev < st_b0[sti]))
+    if len(cross):
+        keep = np.ones(len(g_st[0]), dtype=bool)
+        keep[np.searchsorted(np.flatnonzero(inner), cross)] = False
+        g_st, g0, g1, g_size = [g_st[0][keep]], [g0[0][keep]], [g1[0][keep]], [g_size[0][keep]]
+        xs, x0, x1, xz = [], [], [], []
+        for j in cross.tolist():
+            a, b, s = int(prev[j]), int(c0[j]), int(sti[j])
+            r = int(st_row[s])
+            for t in range(int(row_st[r]), int(row_st[r + 1])):
+                if st_group[t] == st_group[s] and min(b, st_b1[t]) > max(a, st_b0[t]):
+                    xs.append(t)
+                    x0.append(max(a, int(st_b0[t])))
+                    x1.append(min(b, int(st_b1[t])))
+                    xz.append(a - b)
+        g_st.append(np.asarray(xs, dtype=np.int64))
+        g0.append(np.asarray(x0, dtype=np.int64))
+        g1.append(np.asarray(x1, dtype=np.int64))
+        g_size.append(np.asarray(xz, dtype=np.int64))
     if not hide:
         # Leading gap of each span with calls, trailing gap after its last call,
         # and the whole span when it has none (eligible rows only).
         g_st.append(sti[first])
         g0.append(st_b0[sti[first]])
         g1.append(c0[first])
+        g_size.append(g0[-1] - g1[-1])
         last = np.ones(len(sti), dtype=bool)
         last[:-1] = sti[1:] != sti[:-1]
         g_st.append(sti[last])
         g0.append(run[last])
         g1.append(st_b1[sti[last]])
+        g_size.append(g0[-1] - g1[-1])
         row_ok = np.zeros(len(rows), dtype=bool)
         row_ok[seg_row[ok]] = True
         empty = row_ok[st_row]
@@ -697,10 +722,10 @@ def _top_level(items, rows, row_read, segs, F, USZ, seg_ustart, P_seg, P_c0, P_c
         g_st.append(e)
         g0.append(st_b0[e])
         g1.append(st_b1[e])
-    g_st, g0, g1 = np.concatenate(g_st), np.concatenate(g0), np.concatenate(g1)
+        g_size.append(g0[-1] - g1[-1])
+    g_st, g0, g1, size = (np.concatenate(v) for v in (g_st, g0, g1, g_size))
     real = g1 > g0
-    g_st, g0, g1 = g_st[real], g0[real], g1[real]
-    size = -(g1 - g0)
+    g_st, g0, g1, size = g_st[real], g0[real], g1[real], size[real]
     k0, k1 = np.maximum(g0, 0), np.minimum(g1, WID[st_row[g_st]])
     vis = k1 > k0
     g_st, k0, k1, size = g_st[vis], k0[vis], k1[vis], size[vis]

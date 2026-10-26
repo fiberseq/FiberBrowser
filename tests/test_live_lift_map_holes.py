@@ -1,0 +1,142 @@
+"""Linkers across 1-bp map holes survive composition (graph follow-ups item 1).
+
+A map hole of at most ``rejoin_bp`` (a 1-bp source base with no target, a
+badge; or a 1-bp target base with no source, a connector) splits a row into
+spans. A gap (linker) between calls on either side of it used to be dropped
+when terminal gaps are hidden, so lifted rows stopped tiling peaks. It is now
+kept, cut at the span edges: no interval crosses the hole. The columnar pass
+and the per-row functions agree.
+"""
+import copy
+import os
+
+import pytest
+
+from services.lift import compose
+from services.lift import live_lift as ll
+from services.read_metrics import read_covers_regions
+
+from test_live_lift_columnar import _same
+
+# source [0, 50) -> target [0, 50); source base 50 unmapped (badge at 50);
+# source [51, 100) -> target [50, 99); target base 99 unmapped (connector [99, 100));
+# source [100, 140) -> target [100, 140).
+PIECES = [ll.LiftPiece(0, 0, 50, 0, 50, "+", True, "H#1", "src"),
+          ll.LiftPiece(0, 50, 99, 51, 100, "+", True, "H#1", "src"),
+          ll.LiftPiece(0, 100, 140, 100, 140, "+", True, "H#1", "src")]
+IVS = [[5, 30, 25], [30, 70, -40], [70, 95, 25], [95, 120, -25], [120, 135, 15]]
+
+
+def _read(**updates):
+    read = {"id": "r", "reference_start": 0, "reference_end": 140, "intervals": copy.deepcopy(IVS),
+            "qualities": [1, 2, 3], "alignment_orientation": "forward", "library_id": "lib", "source_path": "a.bam",
+            "record_sha256": "s", "alignment_occurrence": 0, "_fiberbrowser_source_base": 0,
+            "_fiberbrowser_aligned_runs": [[0, 0, 140]],
+            "_fiberbrowser_lift_record": {"contig": "src", "reverse": False, "length": 140},
+            "_fiberbrowser_primary": {"is_supplementary": False, "sa": None},
+            "_fiberbrowser_calls": {"intervals": [["a", 5, 30], None, ["b", 70, 95], None, ["c", 120, 135]]},
+            "layers": {}}
+    read.update(updates)
+    return read
+
+
+def _compose(reads, pieces, rejoin_bp=5, **opts):
+    sel = ll.PieceSelection("tgt", 0, 140, 0, 140, pieces)
+    return compose.lift_compact_reads(copy.deepcopy(reads), ll.FetchPlan(sel, [], 0, 0), handle=None,
+                                      region_start=0, region_end=140, key="k", dataset_id="d", molecules={},
+                                      settings=ll.LiftSettings(rejoin_bp=rejoin_bp), loader_options=opts)
+
+
+def _both(monkeypatch, reads, pieces=PIECES, **kw):
+    columnar = _compose(reads, pieces, **kw)
+    with monkeypatch.context() as m:
+        m.setattr(compose, "precompute", lambda *a, **k: None)
+        per_row = _compose(reads, pieces, **kw)
+    _same(columnar, per_row)
+    return columnar
+
+
+def _ivs(row):
+    return [list(iv) for iv in row["intervals"]]
+
+
+def test_linkers_across_a_badge_and_a_connector_are_kept_and_cut(monkeypatch):
+    (row,) = _both(monkeypatch, [_read()])
+    assert _ivs(row) == [[5, 30, 25], [30, 50, -39], [50, 69, -39], [69, 94, 25], [94, 99, -26],
+                         [100, 120, -26], [120, 135, 15]]
+    assert row["live_lift"]["connectors"] == [[99, 100]]
+    assert [b[0] for b in row["live_lift"]["badges"]] == [50]
+    assert row["live_lift"]["calls"]["intervals"] == ["a", None, None, "b", None, None, "c"]
+    # Peaks either side of each hole tile; the connector base itself stays a hole.
+    assert read_covers_regions(row, [(20, 80), (90, 99), (100, 130)])
+    assert not read_covers_regions(row, [(95, 105)])
+
+
+def test_minus_strand_rows_keep_linkers_too(monkeypatch):
+    pieces = [ll.LiftPiece(0, 140 - p.t_end, 140 - p.t_start, p.q_start, p.q_end, "-", True, "H#1", "src")
+              for p in PIECES]
+    (row,) = _both(monkeypatch, [_read()], pieces)
+    assert _ivs(row) == [[5, 20, 15], [20, 40, -26], [41, 46, -26], [46, 71, 25], [71, 90, -39],
+                         [90, 110, -39], [110, 135, 25]]
+
+
+def test_holes_wider_than_rejoin_bp_still_drop_the_linker(monkeypatch):
+    (row,) = _both(monkeypatch, [_read()], rejoin_bp=0)
+    assert _ivs(row) == [[5, 30, 25], [69, 94, 25], [120, 135, 15]]
+
+
+def test_shown_terminal_gaps_are_unchanged(monkeypatch):
+    for rejoin in (0, 5):
+        (row,) = _both(monkeypatch, [_read()], rejoin_bp=rejoin, hide_terminal_gaps=False)
+        assert _ivs(row) == [[0, 5, -5], [5, 30, 25], [30, 50, -20], [50, 69, -19], [69, 94, 25], [94, 99, -5],
+                             [100, 120, -20], [120, 135, 15], [135, 140, -5]]
+
+
+def test_a_span_with_no_call_between_two_holes_is_one_linker(monkeypatch):
+    pieces = [ll.LiftPiece(0, 0, 40, 0, 40, "+", True, "H#1", "src"),
+              ll.LiftPiece(0, 41, 60, 40, 59, "+", True, "H#1", "src"),
+              ll.LiftPiece(0, 61, 140, 59, 138, "+", True, "H#1", "src")]
+    read = _read(intervals=[[5, 30, 25], [30, 80, -50], [80, 100, 20]],
+                 _fiberbrowser_calls={"intervals": [["a", 5, 30], None, ["b", 80, 100]]}, qualities=[])
+    (row,) = _both(monkeypatch, [read], pieces)
+    assert _ivs(row) == [[5, 30, 25], [30, 40, -52], [41, 60, -52], [61, 82, -52], [82, 102, 20]]
+
+
+def test_inferred_msps_cross_holes_the_same_way(monkeypatch):
+    read = _read(_fiberbrowser_legacy={"ma_names": [], "explicit_msp": False})
+    (row,) = _both(monkeypatch, [read], legacy_nuc_min_size=10)
+    assert [list(iv) for iv in row["layers"]["msp"]["intervals"]] == [
+        [30, 50, 39], [50, 69, 39], [94, 99, 26], [100, 120, 26]]
+
+
+@pytest.mark.skipif(not (os.environ.get("FIBERBROWSER_TEST_LIFT_BAM") and os.environ.get("FIBERBROWSER_TEST_LIFT_MAP")),
+                    reason="needs the HG002 demo BAM and its lift map")
+def test_lifted_rows_tile_the_aluy_peaks(tmp_path, monkeypatch):
+    """Every lifted MAT/PAT row spanning the four AluY demo peaks tiles them (was 44 of 49: the linker
+    across a 1-bp map hole was dropped)."""
+    monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "1")
+    from plugins import init_context
+    from services.analysis_query import AnalysisReadQuery
+    from services.lift.registration import add_live_lift_dataset
+    from services.read_selection import read_body_spans
+    from state.browser_state import BrowserState
+
+    origin = 128_650_000
+    peaks = [(5000, 5100), (6200, 6300), (8000, 8100), (9000, 9100)]
+    st = BrowserState(None, None, None, None)
+    init_context(st)
+    st.max_working_reads = 10000
+    add_live_lift_dataset(st, paths=[os.environ["FIBERBROWSER_TEST_LIFT_BAM"]],
+                          manifest=os.environ["FIBERBROWSER_TEST_LIFT_MAP"], dataset_id="lifted")
+    spanning = tiling = 0
+    for hap in ("MAT", "PAT"):
+        q = AnalysisReadQuery.from_request(st, capability="clustering", chrom="chr3", start=origin,
+                                           end=origin + 20000, dataset_ids=["lifted"], max_reads=None)
+        for row in q.build_working_set(st, "lifted", lift_hap=hap).reads:
+            body = read_body_spans(row)
+            if not body or body[0][0] > peaks[0][0] or body[-1][1] < peaks[-1][1]:
+                continue
+            spanning += 1
+            tiling += read_covers_regions(row, peaks)
+    assert spanning == 49
+    assert tiling == 49
