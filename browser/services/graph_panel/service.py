@@ -233,20 +233,30 @@ async def register_package(package_dir: str) -> dict:
 
 
 def confine_package(package_dir: str) -> None:
-    """Lab confinement (services/lab/paths.py) of a package directory and of each file its manifest names, resolved
-    against it; a no-op off the lab profile and outside member requests."""
+    """Lab confinement (services/lab/paths.py) of what registering a package reads: the package directory, its
+    manifest.json and every entry under it (symlinks resolved: a link out of the data folders is refused before
+    anything is read), and the files the helper serves from (`db.path`, `maps[*]` manifest and files, resolved
+    against the package). `graph.path` is the build's provenance (the source GBZ), never read: not confined.
+    A no-op off the lab profile and outside member requests."""
     from services.lab.paths import confine, enforcing
+    from services.graph_panel.registration import MANIFEST, read_manifest
     if not enforcing():
         return
     confine(package_dir)
     real = os.path.realpath(os.path.expanduser(package_dir))
+    confine(os.path.join(real, MANIFEST))
+    # Everything the fingerprint walk stats (links to files and folders included).
+    for root, dirs, files in os.walk(real):
+        for name in dirs + files:
+            confine(os.path.join(root, name))
     try:
-        from services.graph_panel.registration import read_manifest
         manifest = read_manifest(real)
     except RegistrationError:
         return  # not a package: registering refuses it
-    named = [(manifest.get("graph") or {}).get("path"), (manifest.get("db") or {}).get("path")]
+    named = [(manifest.get("db") or {}).get("path")]
     for m in manifest.get("maps") or []:
+        if not isinstance(m, dict):
+            continue
         named.append((m.get("manifest") or {}).get("path"))
         named += [f.get("path") for f in m.get("files") or [] if isinstance(f, dict)]
     for path in named:
