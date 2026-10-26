@@ -331,3 +331,16 @@ def test_a_path_carrying_only_a_later_carrier_set_is_not_labelled_not_a_carrier(
     pat = out["results"]["obs-PAT"]
     assert not pat.get("not_carrier") and analysis.NOT_CARRIER not in set(pat["assignments"].values())
     assert "other path-specific sequence" in pat["left_out"]
+
+
+def test_a_path_lacking_the_region_is_not_a_carrier(helper_env, alu_state):
+    """Graph features audit: PAT lacks a 21 bp stretch MAT carries (128,651,029); a region inside it fits MAT, and
+    PAT's reads that span the deletion's junction are labelled "not a carrier" (-2), in the fit and on assignment."""
+    [out] = _graph(alu_state, _body([MAT, PAT], regions=[(128651029, 128651050)]))
+    pat = out["results"]["obs-PAT"]
+    assert pat.get("not_carrier"), pat
+    assert pat["assignments"] and set(pat["assignments"].values()) == {analysis.NOT_CARRIER}
+    assert out["results"]["obs-MAT"]["assignments"]
+    model = dict(stages=out["stages"], label_ids=out["label_ids"], settings=out["settings"], revisions=out["revisions"])
+    [again] = _graph(alu_state, {**_body([MAT, PAT], regions=[(128651029, 128651050)]), "run": model}, mode="assign")
+    assert again["results"]["obs-PAT"]["assignments"] == pat["assignments"]

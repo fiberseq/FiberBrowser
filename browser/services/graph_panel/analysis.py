@@ -525,6 +525,55 @@ def _not_carrier_labels(state, spec, regions, oid: str, cache: dict) -> dict:
     return out
 
 
+JUNCTION_PAD_BP = 50
+
+
+def _absent_path_labels(state, spec, tiles, regions, oid: str, cache: dict) -> dict:
+    """A path proven to lack every region it has no columns of (a deletion: the plan's 'absent', nothing unresolved)
+    is not a carrier of their sequence (§2.6 "windows with no blocks"; graph features audit): its rows that span the
+    deletion's junction on its own path (a target base carried on each side of the region) are labelled -2. A path
+    whose lack is unresolved (repeats, an incomplete topology) is only left out."""
+    ob = next(o for o in spec["observations"] if o["id"] == oid)
+    if ob["kind"] != "graph":
+        return {}
+    lacking = [i for i, rc in enumerate(regions) if not rc.carried.get(oid)]
+    if not lacking or any(not regions[i].report.get("absent", {}).get(oid) or regions[i].report.get("unresolved", {}).get(oid)
+                          for i in lacking):
+        return {}
+    from services.read_selection import read_body_spans, read_matches_id_filter, with_graph_record_keys
+    from services.read_strand import filter_reads_by_strand, strand_calls
+    target = spec["target"]
+    out: dict = {}
+    for i in lacking:
+        r = spec["regions"][i]
+        a, b = max(0, r["start"] - JUNCTION_PAD_BP), r["end"] + JUNCTION_PAD_BP
+        cells = gc.cells_for(r["start"], r["end"])
+        results = [res for per in tiles.values() for c, res in per.items() if c in cells]
+        per = tiles.get(ob["binding"]) or {}
+        rc = gc.region_columns(i, a, b, target, gc.merge_occurrences(results, target), [gc.Observation(oid, ob["binding"])],
+                               {ob["binding"]: gc.merge_occurrences([per[c] for c in cells if c in per], ob["binding"])},
+                               {ob["binding"]: {c: per[c] for c in cells if c in per}}, insertions=False)
+        carried = rc.carried.get(oid) or {}
+        left = [g for u, (g, _rev) in carried.items() if a + u < r["start"]]
+        right = [g for u, (g, _rev) in carried.items() if a + u >= r["end"]]
+        if not left or not right:
+            continue
+        # The junction: the last base carried before the region and the first after it, on the path.
+        rev = any(rv for _g, rv in carried.values())
+        g0, g1 = (min(left), max(right)) if rev else (max(left), min(right))
+        lo, hi = min(g0, g1), max(g0, g1)
+        rows, _desc = graph_window_rows(state, GraphSource(ob["dataset_id"], ob["binding"], ob["contig"]), lo, hi + 1, cache)
+        if ob.get("read_ids") is not None:
+            wanted = with_graph_record_keys(ob["read_ids"])
+            rows = [x for x in rows if read_matches_id_filter(x, wanted)]
+        if ob.get("strand"):
+            rows = filter_reads_by_strand(rows, ob["strand"], strand_calls(state, ob["dataset_id"]))
+        for x in rows:
+            if any(s0 <= 0 and s1 >= hi - lo + 1 for s0, s1 in read_body_spans(x)):
+                out[x.get("analysis_id") or x["id"]] = NOT_CARRIER
+    return out
+
+
 def _first_stage(plan):
     """Stage 1's features and observations: the shared features over every participant; a run with no shared
     feature (§2.6 item 4) fits its first carrier set's carriers on that set's features instead (the other
@@ -593,6 +642,12 @@ def run(state, reg, body: dict, tiles: dict, spec: Optional[dict] = None) -> dic
                                              else "carries only other path-specific sequence of these regions: choose "
                                                   "its regions alone to cluster it" if later
                                              else "no reads cover the regions")
+            absent = (oid in plan.left_out and plan.left_out[oid].startswith("no columns")
+                      and _absent_path_labels(state, spec, tiles, regions, oid, cache))
+            if absent:
+                results[oid] = {"assignments": absent, "left_out": "not a carrier of the regions' sequence (it lacks it)",
+                                "not_carrier": True, "cluster_counts": {NOT_CARRIER: len(absent)}}
+                continue
             if not_carrier:
                 marked = _not_carrier_labels(state, spec, regions, oid, cache)
                 results[oid] = {"assignments": marked, "left_out": why, "not_carrier": True,
@@ -652,6 +707,11 @@ def assign(state, reg, body: dict, tiles: dict, spec: Optional[dict] = None) -> 
     table = {str(k): int(v) for k, v in (run_def.get("label_ids") or {}).items()}
     results = {}
     for o in spec["observations"]:
+        if o["id"] in plan.left_out and plan.left_out[o["id"]].startswith("no columns"):
+            absent = _absent_path_labels(state, spec, tiles, regions, o["id"], cache)
+            if absent:
+                results[o["id"]] = {"assignments": absent, "not_carrier": True}
+                continue
         if (sets_from and o["id"] not in oids and o["id"] not in plan.left_out and o["id"] not in labels
                 and not any(o["id"] in cs["carriers"] for cs in plan.carrier_sets)):
             # Not a carrier (no shared feature): its rows at the regions, as the fit labelled them.

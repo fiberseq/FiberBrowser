@@ -139,7 +139,9 @@ the regions hold only such sequence (no part every haplotype shares), the
 haplotypes that carry its first part are clustered, and the reads there of
 haplotypes that carry none of it are labelled **Not a carrier**, in a colour of
 their own. A haplotype that carries only another part is left out of that run
-(the run details say so): choose its region alone to cluster it. The **Cluster detail** panel lists
+(the run details say so): choose its region alone to cluster it. A haplotype that lacks a region's
+sequence altogether (a deletion) is not clustered there either: its reads that
+span the deletion are labelled **Not a carrier**. The **Cluster detail** panel lists
 what was used and what was left out.
 
 A cluster run stays while you pan and zoom on the same chromosome: new reads
