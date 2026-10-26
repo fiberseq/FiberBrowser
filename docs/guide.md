@@ -28,7 +28,7 @@ time.
 - [Tracks](#tracks): [36](#36-adding-a-track) adding a track · [37](#37-track-hubs) track hubs
 - [Other analyses](#other-analyses): [38](#38-co-accessibility) co-accessibility · [39](#39-primers) primers
 - [Panels and layout](#panels-and-layout): [40](#40-linking-and-merging-datasets) linking · [41](#41-genomes-and-navigation) genomes · [42](#42-panel-actions) panel actions · [43](#43-layout) layout
-- [Variants](#variants): [44](#44-a-structural-variant-demo) the SV demo · [45](#45-the-variants-panel) Variants panel · [46](#46-snps-in-view) SNPs · [47](#47-reads-split-by-haplotype) split by haplotype · [48](#48-structural-variants) SVs · [49](#49-insertions-on-the-reads) the SV row · [50](#50-the-insert-expanded) insert expanded · [51](#51-inside-the-insert-a-ctcf-site) a CTCF site
+- [Variants](#variants): [44](#44-a-structural-variant-demo) the SV demo · [45](#45-the-variants-panel) Variants panel · [46](#46-snps-in-view) SNPs · [47](#47-reads-split-by-haplotype) split by haplotype · [48](#48-structural-variants) SVs · [49](#49-insertions-on-the-reads) the Differences row · [50](#50-the-insert-expanded) insert expanded · [51](#51-inside-the-insert-a-ctcf-site) a CTCF site
 - [Around the browser](#around-the-browser): [52](#52-undo) undo · [53](#53-save) save · [54](#54-export-a-figure) figure · [55](#55-export-data) data · [56](#56-the-tutorial-panel) Tutorial panel · [57](#57-copilot) Copilot · [58](#58-thats-the-tour) the end
 - [Beyond the tour](#beyond-the-tour): [the read menu](#the-read-menu) · [the command palette](#the-command-palette) · [regions and highlights](#regions-and-highlights-in-depth) · [genomes and panels](#genomes-and-panels) · [side panels](#side-panels-and-the-drawer) · [opening files](#opening-files-and-the-library) · [POD5 runs](#run-everything-from-the-app-pod5) · [read filters](#read-filters) · [footprint classes](#footprint-classes-in-depth) · [DAF-seq strands](#daf-seq-strands-side-by-side) · [haplotypes](#haplotype-comparison) · [figures](#figure-export) · [data](#data-export) · [undo history](#undo-history) · [sessions](#sessions-and-workspaces) · [Jupyter](#jupyter-and-python) · [your own data](#your-own-data)
 
@@ -733,7 +733,8 @@ at its centre, so it shows what a structural variant can add to a locus.
 **Next** loads the demo in a panel named **H1 insertion demo (Fiber-seq)** and
 moves to `chr1:23,273,500-23,281,000`. The NAPA panel folds away meanwhile.
 The reads stop at the breakpoint where the carriers' alignments are clipped,
-and the SV row above the reads flags the insertion.
+and the **Differences** row above the reads (the SV row in FiberBrowser 3.0)
+flags the insertion.
 
 ### 45. The Variants panel
 
@@ -795,32 +796,51 @@ closes the split.
 
 The **SVs** tab lists the deletions and insertions in view (50 bp or more),
 with how many informative reads carry each: here **INS 7.5 kb @
-chr1:23,277,273**, 71 carriers of 108 informative reads. Each row can:
+chr1:23,277,273**, with its confirmed carriers out of the informative reads,
+then the putative, conflicting and ambiguous reads. A *confirmed* carrier's
+alignment holds the insertion or is split across it; a *putative* one is only
+clipped there. Checkboxes above the list choose which of them count as
+carriers (confirmed and putative by default); see
+[Structural variants](workflows/structural-variants.md#evidence-levels). Each
+row can:
 
 - **Group in this panel** or **Split into panels…**: the reads by the SV's
   allele (carriers, reference, not informative);
 - **Open in lens**: the insertion lens (the inserted bases of each carrier);
 - **SNP alleles**: which SNP alleles the carriers have and the reference
-  reads do not, and **Select the linked SNPs** to split by them.
+  reads do not, and **Select the linked SNPs** to split by them;
+- **Inspect difference**: the inspector, with each read's observed bases and
+  chromatin (see [Differences](workflows/differences.md#the-inspector)).
 
 Tick two to four SVs to group or split the reads by their combined genotype.
 
 ### 49. Insertions on the reads
 
-![Step 49: the SV row](images/guide/49_insertions_on_the_reads.png)
+![Step 49: the Differences row](images/guide/49_insertions_on_the_reads.png)
 
-The **SV** row above the reads flags each insertion (with its size and its
-carriers) and draws each deletion as a bar. Hover a flag for its carriers.
-Right-click it for the same actions as the SVs tab:
+The **Differences** row above the reads flags each insertion (with its size,
+then its confirmed carriers over the informative reads) and draws
+each deletion as a bar. Hover a flag for its carriers at each evidence level.
 
-![The SV row's menu](images/guide/x17_sv_row_menu.png)
+- **Click** a flag to highlight its carriers; on an insertion of 50 bp to
+  50 kb, the click also expands the insertion in place, with each carrier's
+  inserted bases in a column of their own (click again to collapse it). See
+  [Differences](workflows/differences.md#expanding-an-insertion).
+- **⌘-click** (Ctrl-click) opens the inspector.
+- **Right-click** for **Inspect…**, **Expand insertion**, the same group and
+  split actions as the SVs tab, highlights by evidence level (**Highlight
+  carriers (confirmed + putative)**, **Highlight confirmed only**, and the
+  putative, conflicting and ambiguous reads), **Open carriers with the insert
+  expanded** and **Open this insertion in the lens**:
+
+![The Differences row's menu on the insertion](images/guide/x17_sv_row_menu.png)
 
 ### 50. The insert, expanded
 
 ![Step 50: the insert expanded](images/guide/50_the_insert_expanded.png)
 
-**Open carriers with the insert expanded** (in the SV row's menu, or **Show
-insert expanded** in a panel's ⋯ menu) re-aligns the insertion's carriers
+**Open carriers with the insert expanded** (in the Differences row's menu, or
+**Show insert expanded** in a panel's ⋯ menu) re-aligns the insertion's carriers
 onto its alternate allele: the reference flank, the consensus of the inserted
 sequence, and the other flank. The reads inside the insert can then be
 clustered, sorted, filtered and analysed like any region. The ruler counts
@@ -833,8 +853,8 @@ preview features).
 
 ![Step 51: the insert's CTCF footprint](images/guide/51_inside_the_insert_a_ctcf_site.png)
 
-The panel shows insert positions 3,300–4,300, with its SV row hidden (the
-per-read insertion marks only clutter the insert). **Next** on the previous
+The panel shows insert positions 3,300–4,300, with its Differences row hidden
+(the per-read insertion marks only clutter the insert). **Next** on the previous
 step also sorted the carriers by accessibility over the insert's
 nucleosome-free region (insert ~3,723–3,879): most carriers are open there (at
 the top), and most of those have a footprint at its centre (insert ~3,771–3,804) over a
@@ -845,7 +865,7 @@ To compare carriers with the reads without the insertion, **Split into
 panels…** on the insertion's row of the SVs tab opens the carriers (with the
 insert expanded) and the reference reads side by side. The SVs tab then lists
 the SVs of all the reads the split was made from, so the insertion stays
-listed with its 71 carriers:
+listed with all its carriers:
 
 ![Carriers and reference reads](images/guide/x18_sv_split_carriers.png)
 

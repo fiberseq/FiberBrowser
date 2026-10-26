@@ -30,9 +30,11 @@ insertion columns and selected-site guide. Equivalent parental insertions at the
 
 ## Limits exposed in the UI
 
-- **Split by carrier** is disabled: `/api/sv/split` rejects lifted datasets
-  (`services/lift/capability.py` does not support `sv_summary`). Existing native
-  SV splitting and the SV view are unchanged.
+- **Split by carrier** on a lifted difference runs through the Differences
+  inspector's molecule calls (capability `difference_split`). The native
+  `/api/sv/split` route still rejects lifted datasets
+  (`services/lift/capability.py` does not support `sv_summary`); native SV
+  splitting and the SV view are unchanged.
 - In-place chromatin payloads exist for **50 bp through 50 kb**. Smaller indels
   remain inspectable; larger blocks are refused with a notice.
 - **Identify** reuses `IdentifyTab` and its job store with one full carrier's
@@ -42,8 +44,8 @@ insertion columns and selected-site guide. Equivalent parental insertions at the
   equal-length MAT/PAT insertions cannot share the wrong result.
 - Only reads, ruler, coverage and highlight bands accept the piecewise axis.
   SV, sequence, gene, metaprofile, FIRE, capture, primer, consensus, Micro-C,
-  co-accessibility, orthogonal, annotation, composite and plugin tracks are
-  dimmed with **“Insertion expanded: track not aligned”** until collapse.
+  co-accessibility, orthogonal, annotation, composite and plugin tracks keep
+  the plain genome axis.
   Pixel smoothing is suspended while blocks are open to avoid bleeding target
   signal into native insertion gaps.
 

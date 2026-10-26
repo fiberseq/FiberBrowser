@@ -17,13 +17,26 @@ them out to see it side by side, with all the usual read tools.
 
 ## What you need
 
+Setting up is described in
+[Setting up live lift and graph mode](pangenome-setup.md). In short:
+
+- **The graph helper.** The macOS app includes it; with pip, install
+  `fiberbrowser[graph]`, or build `fiberbrowser-graph` from
+  [graphlift](https://github.com/mtcicero26/graphlift)
+  ([details](pangenome-setup.md#installing-the-graph-helper)).
 - **A graph package.** This is a prepared pangenome graph (for example an HPRC
-  release cut to the contigs you work on). Packages are registered once, from
-  the graph view's **Register a graph package…** item, and are remembered.
+  release cut to the contigs you work on), made with `fiberbrowser-graph
+  prepare` from [graphlift](https://github.com/mtcicero26/graphlift).
+  Packages are registered once, from the **Graph view** panel's **Register a
+  graph package…** item, and are remembered
+  ([details](pangenome-setup.md#registering-a-graph-package)). The Graph view
+  panel is a preview feature, shown while **Show preview features** (Settings;
+  on unless you turned it off) is on. Graph mode on dataset panels does not need preview features.
 - **Reads that the graph knows.** Either of these works:
   - a **lifted dataset**: reads aligned to a sample's own assembly and viewed on
-    the reference through a lift map (**Open → Add live lift…**). Each
-    haplotype's reads are drawn on that haplotype's lane;
+    the reference through a lift map (**Open → Add live lift…**; see
+    [Live lift](live-lift.md)). Each haplotype's reads are drawn on that
+    haplotype's lane;
   - a **native dataset**: reads aligned to the reference the graph is built on.
     Its reads are drawn on the reference lane.
 
@@ -36,7 +49,7 @@ why.
 
 - **New lifted datasets open in graph mode** when a registered package binds
   them. In **Add live lift…**, **Open as** is set to **Graph**; choose
-  **Split panels** or **Pooled panel** to open it the old way. The first
+  **One panel per haplotype** or **Pooled** to open it the old way. The first
   haplotype's panel shows the graph; the other haplotypes are folded into it.
 - **A dataset with one haplotype** (a strain against its reference, for
   example) opens in graph mode on its one panel.

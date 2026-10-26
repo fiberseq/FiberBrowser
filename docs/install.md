@@ -191,6 +191,7 @@ Extras (`pip install "fiberbrowser[app,copilot]"`, or `[all]`):
 | `umap` | UMAP in the cluster Projection tab |
 | `plots` | server-side diagnostic plots, the standalone primer CLI |
 | `pipeline` | mappy, the minimap2 Python module, for new DAF-seq runs when the `minimap2` program isn't installed |
+| `graph` | the graph helper (`fiberbrowser-graph-native`) for [graph mode](workflows/graph-mode.md) and the graph view; not part of `[all]`. Built for Apple silicon Macs so far; elsewhere build `fiberbrowser-graph` from [graphlift](https://github.com/mtcicero26/graphlift) and set `FIBERBROWSER_GRAPH_HELPER` (see [Setting up live lift and graph mode](workflows/pangenome-setup.md)). The Mac app includes it. |
 
 **New DAF-seq runs** (FASTQ → aligned, called BAM) run FiberHMM's
 `fiberhmm-pipeline`, which aligns with minimap2: install the program
