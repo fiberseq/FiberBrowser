@@ -66,8 +66,15 @@ export interface FeatureKindDef {
   groupingNote?: string;
   /** The short name group labels use ("Class 3" -> "C3"). */
   shortName?: (f: FeatureRef) => string;
-  /** The peak-region mode the non-combinatorial Cluster uses for its span (null: not a region to cluster on). */
-  regionMode?: (f: FeatureRef) => string | null;
+  /**
+   * The peak-region mode the non-combinatorial Cluster uses for its span (null: not a region to cluster on). `layers`:
+   * the feature's dataset's available layers, when the caller knows them (a kind may pick its layer by them).
+   */
+  regionMode?: (f: FeatureRef, ctx?: { layers?: Record<string, unknown> }) => string | null;
+  /** The hub feature type its refs stand for ('fp.class'; features/hub/kinds.ts keeps the table one to one). */
+  typeId?: string;
+  /** Insertion boundaries: a ref with `start === end` keeps its coordinates (the true interval is the boundary). */
+  zeroWidth?: boolean;
   /**
    * The kind's own toolbar actions. A selection holding it gets these instead of the generic ones: its features
    * alone are used (it doesn't mix with other kinds there; the chip says so).
@@ -114,10 +121,20 @@ export function listedFeatureKinds(): FeatureKindDef[] {
 }
 
 registerFeatureKind({
-  kind: 'fp-class', perDataset: true, layerLabel: 'TF class layer', pluralName: 'footprint classes', listOrder: 10,
+  kind: 'fp-class', typeId: 'fp.class', perDataset: true, layerLabel: 'TF class layer', pluralName: 'footprint classes', listOrder: 10,
   stateNote: 'classes: footprinted or not', layerNote: 'footprint classes on the TF class layer',
   shortName: f => (f.label || f.id).replace(/^class\s*/i, 'C'),
+  // The TF class layer the dataset has: recalled (tf_rc), cross-recalled (tf_cr), else the calls (tf). Without the
+  // dataset's layers (the combinatorial pattern regions), 'tf'.
+  regionMode: (_f, ctx) => (ctx?.layers?.tf_rc ? 'tf_rc' : ctx?.layers?.tf_cr ? 'tf_cr' : 'tf'),
 });
+
+/** A feature's peak-region mode (its kind's `regionMode`; 'accessibility' for kinds without one; null: not a region). */
+export function featureRegionMode(f: FeatureRef, layers?: Record<string, unknown>): string | null {
+  const def = kinds.get(f.kind);
+  if (!def?.regionMode) return 'accessibility';
+  return layers ? def.regionMode(f, { layers }) : def.regionMode(f);
+}
 
 export const featureKey = (r: FeatureRef): string => {
   const def = kinds.get(r.kind);
@@ -147,7 +164,9 @@ export function normalizeFeatureRefs(value: unknown): FeatureRef[] {
     const ref: FeatureRef = { kind: r.kind as FeatureKind, source: r.source, id: r.id };
     if (typeof r.datasetId === 'string' && r.datasetId) ref.datasetId = r.datasetId;
     if (typeof r.chrom === 'string' && r.chrom) ref.chrom = r.chrom;
-    if (Number.isFinite(r.start) && Number.isFinite(r.end) && Number(r.end) > Number(r.start)) { ref.start = Number(r.start); ref.end = Number(r.end); }
+    // Zero-width coordinates (an insertion boundary) are kept only for kinds that declare them.
+    if (Number.isFinite(r.start) && Number.isFinite(r.end)
+      && (Number(r.end) > Number(r.start) || (def.zeroWidth && Number(r.end) === Number(r.start)))) { ref.start = Number(r.start); ref.end = Number(r.end); }
     if (typeof r.label === 'string' && r.label) ref.label = r.label;
     if (typeof r.colour === 'string' && r.colour) ref.colour = r.colour;
     const key = featureKey(ref);
