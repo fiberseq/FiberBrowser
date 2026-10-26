@@ -1157,7 +1157,8 @@ const MAX_PALINDROME_CANDIDATES = 6;
  * each path's consecutive candidates finds a run whose whole walk between its outer anchors is the reverse of the
  * base stretch there (same nodes, opposite orientation, reverse order: then the core is necessarily palindromic) and
  * replaces it by one inverted candidate over the whole stretch; the core's anchors stop placing the path on the base.
- * Candidates that are not each other's reverse (adjacent unrelated substitutions) never pass the check.
+ * Candidates that are not each other's reverse (adjacent unrelated substitutions) never pass the check, and neither
+ * does a walk that starts in the target's own orientation (a forward walk of a palindromic stretch, agy r2).
  */
 function mergePalindromicInversions(s: MemberSolution, bb: Backbone): void {
   const cands = s.candidates;
@@ -1189,8 +1190,14 @@ function mergePalindromicInversions(s: MemberSolution, bb: Backbone): void {
           const v = s.visits[jR - 1 - t], b = bb.visits[c1.p + t];
           reversed = v.occ.node === b.occ.node && v.reverse !== orient(c1.p + t);
         }
+        // A palindromic target stretch reads the same reversed: a walk that starts on it in the target's own
+        // orientation is not inverted there (a forward walk of a palindrome, or forward palindromic flanks around a
+        // smaller inversion). By symmetry its last visit is then forward too, so the run must start and end with
+        // actual opposite-strand traversal; an inner run is tried from the next candidate on.
+        const v0 = s.visits[jL + 1];
+        const forwardStart = v0.occ.node === bb.visits[c1.p].occ.node && v0.reverse === orient(c1.p);
         // The longest such run: one inversion, not several sharing palindromic cores.
-        if (reversed) merged = y;
+        if (reversed && !forwardStart) merged = y;
       }
     }
     if (merged < 0) { out.push(c1); continue; }
@@ -1277,7 +1284,8 @@ function alignFamilies(group: GroupItem, lanes: string[], counter: { n: number }
         if (count.get(sig) === 1 && leadCount.get(sig) === 1) pairs.push({ a: j, b: leadAt.get(sig)! });
       });
       pairs.sort((x, y) => x.a - y.a || y.b - x.b);
-      const chain = colinearChain(pairs);
+      // The heaviest shared chain (bp), as the target-allele alignment keeps: never a few tiny nodes over a long block.
+      const chain = heaviestChain(pairs, p => other.visits[p.a].bp, 0, lead.visits.length);
       const shared = chain.reduce((t, p) => t + other.visits[p.a].bp, 0);
       if (!chain.length || shared < Math.max(10, 0.2 * Math.min(lead.bp, other.bp))) continue;
       members.push({ allele: other, anchors: [{ j: -1, i: -1 }, ...chain.map(p => ({ j: p.a, i: p.b })), { j: other.visits.length, i: lead.visits.length }] });

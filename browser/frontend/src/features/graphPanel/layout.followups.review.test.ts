@@ -105,4 +105,52 @@ describe('Graph follow-ups review regressions', () => {
     expect(onTarget(m, 'mat', 1100)).toBe(true);
     expect(matAlleles(m)).toEqual([[{ start: 500, end: 506 }, 0, 'ok', false], [{ start: 1506, end: 1506 }, 6, 'ok', false]]);
   });
+
+  // ------------------------------------------------------------------ agy round 2
+  const inverted = (m: LayoutModel) => groups(m.chain).flatMap(g => g.alts.flatMap(a => [a, ...(a.family?.members ?? [])]).filter(a => a.inverted));
+
+  it('agy r2 1a: a forward walk of a palindromic target stretch is never an inversion (tandem copies, identical walks)', () => {
+    const tandem = build(fromWalks({ L: 400, M: 200, P: 80, Q: 60, N: 200, R: 400 }, {
+      ref: ['L', 'M', 'P', 'M', 'P', 'Q', '-Q', '-P', 'N', '-P', 'N', 'R'],
+      mat: ['L', 'M', 'P', 'P', 'M', 'P', 'Q', '-Q', '-P', 'N', '-P', '-P', 'N', 'R'] }));
+    expect(inverted(tandem)).toEqual([]);
+    expect(tandem.stats.inversions).toBe(0);
+    const walk = ['L', 'P', '-P', 'P', '-P', 'P', '-P', 'P', '-P', 'P', '-P', 'Q', '-Q', 'P', '-P', 'P', '-P', 'P', '-P', 'P', '-P', 'P', '-P', 'R'];
+    const same = build(fromWalks({ L: 2000, P: 30, Q: 50, R: 2000 }, { ref: walk, mat: walk }));
+    expect(inverted(same)).toEqual([]);
+    expect(same.stats.inversions).toBe(0);
+  });
+
+  it('agy r2 1b: inside an insertion family, a member walking the lead\'s palindromic stretch forward is no inversion', () => {
+    const m = build(fromWalks({ L: 400, P: 80, M: 200, Q: 60, N: 200, X: 1, Y: 1, R: 400 }, {
+      ref: ['L', 'R'], mat: ['L', 'P', '-P', 'M', 'P', 'Q', '-Q', '-P', 'N', 'X', 'R'], pat: ['L', 'P', '-P', 'M', 'P', 'Q', '-Q', '-P', 'N', 'Y', 'R'] }));
+    expect(inverted(m)).toEqual([]);
+    expect(m.stats.inversions).toBe(0);
+  });
+
+  it('agy r2 1c: forward palindromic flanks around a palindromic-core inversion stay outside it', () => {
+    const m = build(fromWalks({ L: 400, M: 150, P: 80, X: 90, A: 60, Q: 40, B: 70, N: 150, R: 400 }, {
+      ref: ['L', 'M', 'P', 'M', 'P', 'X', 'A', 'Q', '-Q', 'B', '-X', '-P', 'N', '-P', 'N', 'R'],
+      mat: ['L', 'M', 'P', 'P', 'M', 'P', 'X', '-B', 'Q', '-Q', '-A', '-X', '-P', 'N', '-P', '-P', 'N', 'R'] }));
+    const inv = inverted(m);
+    expect(inv.map(a => [a.bp, a.visits.map(v => `${v.occ.node}${v.reverse ? '-' : '+'}`)])).toEqual([[210, ['B-', 'Q+', 'Q-', 'A-']]]);
+    // MAT stays on the target over its forward flank X.
+    const x = (m.chain.find(i => i.kind === 'run' && i.visits.some(v => v.occ.node === 'X')) as Extract<Item, { kind: 'run' }> | undefined)
+      ?? groups(m.chain).flatMap(g => g.base.chain).find(i => i.kind === 'run' && i.visits.some(v => v.occ.node === 'X')) as Extract<Item, { kind: 'run' }>;
+    expect(x.carriers).toContain('mat');
+  });
+
+  it('agy r2 2: alternate families keep the heaviest shared chain (bp), as the target-allele alignment does', () => {
+    for (const [s, famBp] of [[2, 1000], [130, 1000]] as const) {
+      const m = build(fromWalks({ L: 400, S1: s, S2: s, BIG: 1000, R: 400 }, {
+        ref: ['L', 'R'], mat: ['L', 'S1', 'S2', 'BIG', 'R'], pat: ['L', 'BIG', 'S1', 'S2', 'R'] }));
+      const [g] = groups(m.chain);
+      const lead = g.alts.find(a => a.family)!;
+      expect(lead).toBeTruthy();
+      expect(lead.family!.members).toHaveLength(1);
+      // BIG runs once, on the family tube; S1 S2 are the sub-bubbles.
+      expect(lead.family!.chain.filter(i => i.kind === 'run').reduce((t, r) => t + r.bp, 0)).toBe(famBp);
+    }
+  });
 });
+
