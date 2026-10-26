@@ -65,9 +65,11 @@ The dialog asks for:
   one dataset.
 - **Lift map (graphlift .graphlift.json, or a UCSC .chain / .chain.gz).**
 - **Source assembly FASTA (optional):** the sample's own assembly, indexed.
-  With it the inspector shows the assembly's bases, **Identify** and **Copy
-  sequence** work on assembly insertions, and insertions can be **Confirmed by
-  assembly** (see [Differences](differences.md#assembly-comparison)). When the
+  With it the inspector shows the assembly's bases, **Copy sequence** copies
+  an assembly insertion's bases, and insertions can be **Confirmed by
+  assembly** (see [Differences](differences.md#assembly-comparison)).
+  (**Identify** works on the sequence of one carrier read that holds the whole
+  insertion, with or without this FASTA.) When the
   reference FASTA is loaded too, a spot check of the map's anchors refuses a
   FASTA that doesn't match the map.
 - **Haplotypes.** All are ticked; untick any you don't want.
@@ -180,10 +182,11 @@ assembly. BAM export is not available on a public server.
 
 Some analyses refuse lifted datasets and say so: *{Feature} is not available
 for live-lift datasets yet. Use the source BAM, or a BAM aligned to this
-genome, for it.* These include peak scanning in the linear view, metaprofiles,
-co-accessibility and figure read tracks. Open the source view, or the same
-reads aligned to the reference, for them. In graph mode, **Scan** works on
-lifted datasets.
+genome, for it.* These include metaprofiles, co-accessibility and figure read
+tracks. Open the source view, or the same reads aligned to the reference, for
+them. **Scan** works on lifted datasets: in the linear view it finds peaks in
+the lifted reads on the reference's coordinates, every haplotype pooled, and
+in graph mode on the graph.
 
 ## Troubleshooting
 

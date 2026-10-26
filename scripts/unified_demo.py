@@ -133,12 +133,23 @@ def server_env(a) -> dict:
     prefs = os.path.join(scratch, "analysis_preferences.json")
     with open(prefs, "w") as fh:
         json.dump({"show_preview_features": not a.no_preview}, fh)
-    env = dict(os.environ)
+    # Inherited FIBERBROWSER_* settings (a Library, settings file or server config of your own) are dropped, and every
+    # store the server writes points into the demo's home: the demo never reads or changes your own files.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("FIBERBROWSER_")}
     env.update({
         "HOME": a.home,
         "FIBERBROWSER_LIVE_LIFT": "1",
         "FIBERBROWSER_PREFERENCES": prefs,
         "FIBERBROWSER_GRAPH_REGISTRY": os.path.join(scratch, "graph_registrations.json"),
+        "FIBERBROWSER_SETTINGS": os.path.join(scratch, "browser_settings.json"),
+        "FIBERBROWSER_APP_SETTINGS": os.path.join(scratch, "app_settings.json"),
+        "FIBERBROWSER_RUNTIME_FILE": os.path.join(scratch, "browser_runtime.json"),
+        "FIBERBROWSER_LIBRARY": os.path.join(scratch, "library.json"),
+        "FIBERBROWSER_JOBS_DIR": os.path.join(scratch, "jobs"),
+        "FIBERBROWSER_QC_CACHE_DIR": os.path.join(scratch, "qc_cache"),
+        "FIBERBROWSER_UPLOAD_DIR": os.path.join(scratch, "uploads"),
+        "FIBERBROWSER_REGION_CATALOG_DIR": os.path.join(scratch, "regions"),
+        "FIBERBROWSER_RECENT_TRACKS_FILE": os.path.join(scratch, "recent_tracks.json"),
         "FIBERBROWSER_LIBRARY_NO_STARTUP_SCAN": "1",
         "FIBERBROWSER_NO_UPDATE_CHECK": "1",
         "FIBERBROWSER_NO_OPEN": "1",
@@ -151,8 +162,6 @@ def server_env(a) -> dict:
         env["FIBERBROWSER_GRAPH_PACKAGES"] = os.pathsep.join(a.graph_package)
         if a.graph_helper:
             env["FIBERBROWSER_GRAPH_HELPER"] = a.graph_helper
-    else:
-        env.pop("FIBERBROWSER_GRAPH_PACKAGES", None)
     if a.frontend_dist:
         env["FIBERBROWSER_FRONTEND_DIST"] = a.frontend_dist
     return env

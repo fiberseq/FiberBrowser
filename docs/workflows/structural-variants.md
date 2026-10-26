@@ -89,10 +89,11 @@ The row also works from the keyboard: the arrow keys move between variants,
 Enter highlights the reads, Shift+Enter selects, `i` inspects, and Shift+F10
 opens the menu.
 
-When a lifted dataset of the same sample is open, the inspector compares the
-variant with that sample's assembly (**Confirmed by assembly**,
-**assembly-supported (approximate)**, ...); see
-[Differences](differences.md#assembly-comparison).
+When a lifted dataset is open, the inspector compares the variant with that
+dataset's assembly (**Confirmed by assembly**, **assembly-supported
+(approximate)**, ...); see [Differences](differences.md#assembly-comparison).
+It uses the first lifted dataset that was opened, whatever its sample: with
+several samples open, keep only the sample you mean to compare with.
 
 ## Highlighted carriers
 

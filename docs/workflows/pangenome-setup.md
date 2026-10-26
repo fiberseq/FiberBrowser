@@ -23,7 +23,7 @@ source (MIT).
 |---|---|---|
 | **A lift map**: a graphlift map (`*.graphlift.json`, with the files next to it), or a plain UCSC chain (`.chain`, `.chain.gz`) | live lift, linked panels, the Differences row | `gbz2chain` in [graphlift](https://github.com/mtcicero26/graphlift#chains-and-sidecar-gbz2chain), from a pangenome graph (for example an HPRC release), which writes both; or any UCSC chain, for example a liftOver chain |
 | **A BAM aligned to the sample's assembly** | live lift | your aligner, against the assembly whose contig names the map uses (for example `chr1_MATERNAL`) |
-| **The sample's assembly FASTA** (optional, indexed) | the inspector's assembly bases, **Identify** on assembly insertions, **Confirmed by assembly** for insertions | the assembly you aligned the BAM to |
+| **The sample's assembly FASTA** (optional, indexed) | the inspector's assembly bases, copying an assembly insertion, **Confirmed by assembly** for insertions | the assembly you aligned the BAM to |
 | **The graph helper** (`fiberbrowser-graph`) | graph mode, the graph view panel | the macOS app includes it; otherwise `pip install "fiberbrowser[graph]"` (see below) |
 | **A graph package** | graph mode, the graph view panel | `fiberbrowser-graph prepare` in [graphlift](https://github.com/mtcicero26/graphlift#fiberbrowser-graph-helper-fiberbrowser-graph) |
 
@@ -148,8 +148,11 @@ Every path has a default under one work folder, `~/pglift_work` (or
 `$PGLIFT_WORK`): `demo_data/`, `maps/`, `graph/` and `ref/`, as in the example
 above. Pass `--port`, or the default (8883) is used. `python scripts/unified_demo.py --help` lists them.
 
-The launcher gives the server a home folder of its own, so it never reads or
-changes your settings, Library or sessions in `~/.fiberhmm`. It listens on this
+The launcher gives the server a home folder of its own, points every file the
+server keeps (settings, Library, jobs, sessions) into it and ignores
+`FIBERBROWSER_*` variables set in your shell, so it never reads or changes
+your own settings, Library or sessions. Pass the graph helper with
+`--graph-helper`, not `FIBERBROWSER_GRAPH_HELPER`. It listens on this
 computer only, without an access token: use it for demos and testing, not as a
 shared server.
 

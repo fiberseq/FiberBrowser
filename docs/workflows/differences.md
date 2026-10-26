@@ -175,8 +175,9 @@ For a structural variant on a BAM aligned to this genome, the inspector
 (*Inspect difference*) shows each read's observed bases, coverage and
 chromatin, with **Expand alternate**, **Load full observed sequence** and
 **Identify observed alternate**. When a lifted dataset on this genome is open,
-it also compares the variant with that dataset's assembly (below); without one
-it says **Reads only (no assembly)**.
+it also compares the variant with that dataset's assembly (below): the first
+lifted dataset opened, whatever its sample, so with several samples open keep
+only the one you mean. Without one it says **Reads only (no assembly)**.
 
 ## Assembly comparison
 
@@ -188,7 +189,7 @@ a structural variant on a native BAM) gets one of these labels:
 |---|---|
 | ✓ **Confirmed by assembly** | The assembly has exactly the same change: the changed haplotypes are equal. |
 | ≈ **assembly-supported (approximate)** | The reads' allele and the assembly's align with at least 90% identity. |
-| ? **Assembly candidate (geometry only)** | The assembly has a difference of the same shape there, but the sequences were not compared. |
+| ? **Assembly candidate (geometry only)** | The assembly has a difference of the same shape there, but its sequence either was not compared or did not agree closely enough; the haplotype's line below says which (for example *sequence not close enough*). |
 | **Not in the compared assembly haplotypes** | The assembly has no such difference. |
 | **Assembly comparison unassessed** | It could not be decided (for example, sequence is missing). |
 

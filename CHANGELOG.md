@@ -24,7 +24,7 @@ Maps, graph packages and the helper are made with
   folders and in the Library, best match first. On a lab server the search
   stays in its data folders.
 - **Source assembly FASTA (optional)** in the dialog: with the sample's own
-  assembly, the inspector shows its bases, **Identify** works on assembly
+  assembly, the inspector shows its bases, **Copy sequence** copies assembly
   insertions, insertions can be **Confirmed by assembly**, and a spot check of
   the map's anchors refuses a FASTA that doesn't match.
 - Lifted reads are drawn in pieces where the assemblies differ, with dashed
