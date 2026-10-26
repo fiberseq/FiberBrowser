@@ -109,7 +109,7 @@ export function LiveLiftSettingsDialog() {
               <select data-testid="live-lift-settings-read-badges" value={badges} onChange={e => setBadges(e.target.value as LiveLiftBadgeMode)}>
                 {READ_BADGE_MODES.map(m => <option key={m.mode} value={m.mode} title={m.title}>{m.label}</option>)}</select></label>
             <label className="inline-flex items-center gap-1 whitespace-nowrap" title="Leave out alignments below this mapping quality from read-difference calls. 0: no MAPQ filter (the default).">Read analysis MAPQ ≥
-              <input type="number" data-testid="live-lift-settings-min-mapq" className="w-14" min={0} max={255} step={1} value={minMapq}
+              <input type="number" data-testid="live-lift-settings-min-mapq" className="w-14 rounded border border-gray-300 px-1 dark:border-white/20 dark:bg-dark-surface" min={0} max={255} step={1} value={minMapq}
                 onChange={e => setMinMapq(Number(e.target.value) || 0)} /></label>
           </div>
         </fieldset>

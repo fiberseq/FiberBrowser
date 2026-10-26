@@ -3,7 +3,7 @@ import type { WorkspaceCalls } from './api';
 import { setupHighDpiCanvas, useCanvasRenderVersion } from '../../utils/canvasUtils';
 import { usePanOffsetTransform } from '../../hooks/usePanOffsetTransform';
 import { DifferenceTable } from './DifferenceTable';
-import { compareWithAssembly, comparisonKey, LABEL_MARK, useComparisonStore, type ComparisonResponse } from './comparison';
+import { compareWithAssembly, comparisonFor, comparisonKey, LABEL_MARK, useComparisonStore, type ComparisonResponse } from './comparison';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Dataset, PanelConfig } from '../../types';
 import { useBrowserStore } from '../../stores/browserStore';
@@ -134,6 +134,9 @@ export function DifferenceLanes({ panel, dataset, width, gutter = 0, height }: {
       .catch(()=>{});},200);
     return()=>{clearTimeout(timer);controller.abort();};
   },[enabled,sources.assembly,sources.reads,data,readItems,readComplete,dataset.id,chrom,start,end,panel.id]);
+  // Labels come from the newest comparison covering each read difference (the row's, or an inspector's consensus).
+  const byKey = useComparisonStore(s => s.byKey);
+  const readLabel = (d: import('../liveLift/differenceTypes').Difference) => d.source === 'reads' ? comparisonFor(byKey, `${dataset.id}|${chrom}|`, d) : null;
   const model = useMemo(() => {
     const assembly=sources.assembly&&data?stripModel(data,minBp):{items:[],bins:[]};
     return {bins:assembly.bins,items:[...assembly.items,...readItems.filter(d=>Math.max(d.ref_bp,d.alt_bp)>=minBp)]};
@@ -164,11 +167,12 @@ export function DifferenceLanes({ panel, dataset, width, gutter = 0, height }: {
         if (g.shape === 'wedge') { ctx.moveTo(x-4,y+2); ctx.lineTo(x+4,y+2); ctx.lineTo(x,y+laneHeight-3); ctx.closePath(); ctx.fill(); }
         else if (g.shape === 'bracket') { ctx.moveTo(left,y+laneHeight-3); ctx.lineTo(left,y+4); ctx.lineTo(left+w,y+4); ctx.lineTo(left+w,y+laneHeight-3); ctx.stroke(); }
         else { for (const span of axis.spans(d.t_start, Math.max(d.t_start+1,d.t_end))) ctx.fillRect(gutter+span.x,y+3,Math.max(2,span.w),Math.max(2,laneHeight-6)); }
-        const mark = d.source==='reads' ? LABEL_MARK[comparison?.reads[d.id]?.label ?? 'unassessed'] : undefined;
+        const entry = readLabel(d);
+        const mark = entry?.kind === 'reads' ? LABEL_MARK[entry.value.label] : undefined;
         if (mark) { ctx.save(); ctx.font='bold 10px sans-serif'; ctx.fillStyle=dark?'#e2e8f0':'#0f172a'; ctx.fillText(mark, Math.max(left,x)+5, y+10); ctx.restore(); }
       }
     }
-  }, [axis, width, bandHeight, laneHeight, model, lanes.join(','), gutter, dark, start, end, comparison, canvasRenderVersion]);
+  }, [axis, width, bandHeight, laneHeight, model, lanes.join(','), gutter, dark, start, end, comparison, byKey, canvasRenderVersion]);
   if (!enabled) return null;
   const statusText = error || (busy ? 'Finding difference…' : readScope || (data ? data.mode === 'bins'
     ? 'Density; zoom for individual differences' : 'Click a difference to expand or highlight it; ⌘-click to inspect' : 'Loading…'));
@@ -223,7 +227,8 @@ export function DifferenceLanes({ panel, dataset, width, gutter = 0, height }: {
       // An expanded insertion's marker covers its column (a click there collapses it).
       const block = axis.blocks.find(b => b.ins.ins_id === d.id || b.ins.alleles?.some(a => a.ins_id === d.id));
       const x = block ? block.x0 : axis.toX(d.t_start), z = block ? block.x1 : axis.toX(d.t_end), i = lanes.indexOf(d.hap_label);
-      const label = d.source==='reads' ? comparison?.reads[d.id] : undefined;
+      const found = readLabel(d);
+      const label = found?.kind === 'reads' ? found.value : undefined;
       return <button key={d.id} data-testid="live-lift-diff-item" data-kind={d.kind} data-difference-id={d.id}
         data-assembly-label={label?.label}
         aria-label={differenceDescription(d, chrom)} title={`${differenceDescription(d, chrom)}${label ? `\n${label.label_text}` : ''}\n${differenceHint(d)}`}
@@ -236,7 +241,8 @@ export function DifferenceLanes({ panel, dataset, width, gutter = 0, height }: {
         // Enter inspects; preventDefault stops the button's own synthetic click (which would close it again or expand).
         onKeyDown={e => { if(e.key==='Enter') { e.preventDefault(); e.stopPropagation(); inspect(d); } }} />;
     })}
-    {table && <div className="absolute left-0 right-0 top-full z-40 bg-white dark:bg-slate-900 max-h-64 overflow-auto border p-2"><DifferenceTable items={model.items} chrom={chrom} inspect={inspect} comparison={comparison} /></div>}
+    {table && <div className="absolute left-0 right-0 top-full z-40 bg-white dark:bg-slate-900 max-h-64 overflow-auto border p-2"><DifferenceTable items={model.items} chrom={chrom} inspect={inspect} comparison={comparison}
+      readText={d => { const e = readLabel(d); return e?.kind === 'reads' ? e.value.label_text : undefined; }} /></div>}
     <DifferencePopover panel={panel} dataset={dataset} anchor={anchor} />
   </div>;
 }

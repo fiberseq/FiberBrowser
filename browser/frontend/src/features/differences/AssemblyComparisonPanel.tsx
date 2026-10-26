@@ -62,7 +62,10 @@ export function AssemblyComparisonPanel({ selection, dataset }: { selection: Dif
   if (!supported) return <p data-testid="assembly-comparison">Assembly comparison: not available for this topology (geometry stays inspectable).</p>;
   if (!map) return <p data-testid="assembly-comparison"><strong data-testid="assembly-comparison-label">{LABEL_TEXT.reads_only}</strong>
     {' '}· open a live-lift dataset on this genome to compare with its assembly.</p>;
-  if (!entry) return <p data-testid="assembly-comparison" role="status">{error || (busy ? 'Comparing with the assembly…' : 'Assembly comparison unavailable.')}</p>;
+  const d = selection.difference;
+  if (!entry && !busy && !error && Math.max(d.ref_bp, d.alt_bp) < 10)
+    return <p data-testid="assembly-comparison">Assembly comparison: not assessed under 10 bp (the read-evidence floor); the assembly bases are shown below.</p>;
+  if (!entry) return <p data-testid="assembly-comparison" role="status">{error || (busy ? 'Comparing with the assembly…' : 'Assembly comparison: not available for this difference here.')}</p>;
   if (entry.kind === 'assembly') {
     const v = entry.value;
     const shared = v.shared_with.map(id => assembly[id]?.hap_label).filter(Boolean);

@@ -33,7 +33,7 @@ export interface ComparisonResponse {
   assembly: Record<string, AssemblyComparison>; reads: Record<string, ReadComparison>;
   lineage_events: { reason: string; parents: string[]; descendants: string[] }[];
   ledger: Record<string, any>; policy: Record<string, unknown>;
-  status?: string; reason?: string;
+  status?: string; reason?: string; _received?: number;
 }
 export interface ReadDifferenceInput { id: string; ref_start: number; ref_end: number; alt_bp: number; geometry_members?: number[][] }
 
@@ -62,7 +62,9 @@ export function mergeLedger(a: Record<string, any> | undefined, b: Record<string
 }
 
 interface Store { byKey: Record<string, ComparisonResponse>; put: (key: string, r: ComparisonResponse) => void }
-export const useComparisonStore = create<Store>(set => ({ byKey: {}, put: (key, r) => set(s => ({ byKey: { ...s.byKey, [key]: r } })) }));
+let received = 0;
+/** The newest comparison covering a difference wins (a consensus re-compare supersedes the row's). */
+export const useComparisonStore = create<Store>(set => ({ byKey: {}, put: (key, r) => set(s => ({ byKey: { ...s.byKey, [key]: { ...r, _received: ++received } } })) }));
 
 export const comparisonKey = (datasetId: string, chrom: string, scope: string) => `${datasetId}|${chrom}|${scope}`;
 
@@ -85,12 +87,13 @@ export async function compareWithAssembly(body: { dataset_id: string; chrom: str
 /** The comparison entry for a selected difference, from whichever stored response covers it. */
 export function comparisonFor(byKey: Record<string, ComparisonResponse>, prefix: string, d: Difference):
   { kind: 'reads'; value: ReadComparison; response: ComparisonResponse } | { kind: 'assembly'; value: AssemblyComparison; response: ComparisonResponse } | null {
+  let best: ReturnType<typeof comparisonFor> = null;
   for (const [key, response] of Object.entries(byKey)) {
-    if (!key.startsWith(prefix)) continue;
-    if (d.source === 'assembly' && response.assembly?.[d.id]) return { kind: 'assembly', value: response.assembly[d.id], response };
-    if (d.source === 'reads' && response.reads?.[d.id]) return { kind: 'reads', value: response.reads[d.id], response };
+    if (!key.startsWith(prefix) || (best && (best.response._received ?? 0) > (response._received ?? 0))) continue;
+    if (d.source === 'assembly' && response.assembly?.[d.id]) best = { kind: 'assembly', value: response.assembly[d.id], response };
+    else if (d.source === 'reads' && response.reads?.[d.id]) best = { kind: 'reads', value: response.reads[d.id], response };
   }
-  return null;
+  return best;
 }
 
 /** Exact assembly alleles a user can test reads against for this difference. */

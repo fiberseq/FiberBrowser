@@ -14,7 +14,8 @@ export function InsertionMarksControl({ compact = true }: { compact?: boolean })
     <span aria-hidden="true" className="inline-block h-2.5 w-0.5 flex-shrink-0 bg-violet-600 dark:bg-violet-400" />
     Insertions
     <select aria-label="Insertion marks on reads" data-testid="insertion-marks-select" value={mode}
-      className="rounded border border-gray-300 bg-white px-0.5 py-0 text-[12px] text-slate-800 dark:border-white/20 dark:bg-dark-surface dark:text-slate-100"
+      style={{ width: 'auto', minWidth: 0 }}
+      className="w-auto rounded border border-gray-300 bg-white px-0.5 py-0 text-[12px] text-slate-800 dark:border-white/20 dark:bg-dark-surface dark:text-slate-100"
       onChange={e => setReadBadgeMode(e.target.value as typeof mode)}>
       {READ_BADGE_MODES.map(m => <option key={m.mode} value={m.mode} title={m.title}>{m.label}</option>)}
     </select>
