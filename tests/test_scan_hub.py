@@ -255,3 +255,23 @@ def test_scan_routes(tmp_path, bam):
     assert client.post('/api/scan/open', json={'path': str(tmp_path / 'missing')}).status_code == 422
     assert len(client.get('/api/scan/list').json()['scans']) == 1
     assert client.delete(f'/api/scan/{info["scanId"]}').json() == {'closed': True}
+
+
+def test_overlay_puts_states_on_native_reads(tmp_path, bam):
+    from services.scan import registry
+    from services.scan.overlay import apply_scan_overlays
+    d = _states_scan(tmp_path, bam)
+    ds = _dataset('ds_a', bam)
+    st = _state([ds])
+    registry.open_scan(st, d)
+    assert ds.available_layers.get('fpcls') and ds.derived_layers['fpcls']['kind'] == 'scan-overlay'
+    reads = [dict(id='m1/1/ccs', start=1000, end=1500, layers={}), dict(id='m1/2/ccs', start=1100, end=1600, layers={}),
+             dict(id='other', start=1000, end=1500, layers={'nuc': {'intervals': []}})]
+    out = apply_scan_overlays(st, 'ds_a', 'chrT', 1000, 2000, reads)
+    assert out[0]['layers']['fpcls']['intervals'] == [[200, 220, 20]] and out[0]['layers']['fpcls']['qualities'] == [[1]]
+    assert out[1]['layers']['fpcls']['qualities'] == [[2]]
+    assert out[2] is reads[2]
+    again = apply_scan_overlays(st, 'ds_a', 'chrT', 1000, 2000, out)
+    assert again[0]['layers'] == out[0]['layers']
+    registry.close_scan(st, registry.list_scans(st)[0].scan_id)
+    assert 'fpcls' not in ds.available_layers and 'fpcls' not in ds.derived_layers

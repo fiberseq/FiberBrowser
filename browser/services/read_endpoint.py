@@ -162,6 +162,11 @@ def apply_consensus_display_overlays(
 
     if not reads:
         return reads
+    if state.__dict__.get('scan_registry'):
+        # fiberhmm-scan states as layers on the display paths too (the fast sampler and the direct BAM path
+        # bypass build_working_set); idempotent, so rows build_working_set already overlaid are unchanged.
+        from services.scan.overlay import apply_scan_overlays
+        reads = apply_scan_overlays(state, dataset_id, chrom, start, end, reads)
     working_set = WorkingSet(
         reads,
         total_overlapping,

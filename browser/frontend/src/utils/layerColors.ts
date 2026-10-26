@@ -33,6 +33,13 @@ const KNOWN_COLORS: Record<string, string> = {
   deam_ct: '#2563eb',    // blue (CT / C->T strand covered)
   deam_ga: '#e11d48',    // rose (GA / G->A strand covered)
   footprint: '#16a34a',  // green (legacy primary footprint layer)
+  // fiberhmm-scan per-molecule groups (MA groups of annotated BAMs, or the scan overlay of tables-mode scans)
+  fpcls: '#7c3aed',      // violet, as footprint classes
+  nfrvar: '#0f766e',     // teal (NFR variant membership)
+  nfrmol: '#64748b',     // slate (NFR molecule scalars: whole-molecule interval)
+  nucsz: '#16a34a',      // green (nucleosome size classes)
+  nucseg: '#15803d',     // dark green (array segments)
+  nucmol: '#64748b',     // slate (nucleosome molecule scalars)
 };
 
 /** Short, human-friendly labels for known layer names. Falls back to the raw name. */
@@ -58,6 +65,12 @@ const KNOWN_LABELS: Record<string, string> = {
   deam_ct: 'CT strand',
   deam_ga: 'GA strand',
   footprint: 'FP',
+  fpcls: 'Scan · classes',
+  nfrvar: 'Scan · NFR variants',
+  nfrmol: 'Scan · NFR scalars',
+  nucsz: 'Scan · nuc sizes',
+  nucseg: 'Scan · arrays',
+  nucmol: 'Scan · nuc scalars',
 };
 
 function hslToHex(hue: number, saturation: number, lightness: number): string {

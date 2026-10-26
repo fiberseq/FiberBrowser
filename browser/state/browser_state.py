@@ -974,6 +974,11 @@ class BrowserState:
             load_bigbed_marks=_load_bigbed_marks,
             stable_sampler=sample_stable_by_id,
         )
+        if self.__dict__.get('scan_registry'):
+            # fiberhmm-scan states as layers (tables-mode scans bound to this dataset), before the consensus
+            # projection so its receipt names the rows it returns.
+            from services.scan.overlay import apply_to_working_set
+            working_set = apply_to_working_set(self, dataset_id, chrom, start, end, working_set)
         if self.__dict__.get('consensus_workflow_active'):
             from services.consensus_workflow import apply_overlays
             working_set = apply_overlays(self, dataset_id, chrom, start, end, working_set)

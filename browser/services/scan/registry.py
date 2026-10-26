@@ -353,7 +353,16 @@ def open_scan(state, path, *, source: str = 'opened', label: Optional[str] = Non
         if old is not None:
             old.tables.close()
         scans[scan.scan_id] = scan
+    _refresh_layers(state)
     return scan
+
+
+def _refresh_layers(state) -> None:
+    from .overlay import refresh_dataset_layers
+    try:
+        refresh_dataset_layers(state)
+    except Exception:   # pragma: no cover - layers are a display convenience; never fail an open on them
+        pass
 
 
 def get_scan(state, scan_id: str) -> OpenScan:
@@ -377,6 +386,7 @@ def close_scan(state, scan_id: str) -> bool:
         scan = scans.pop(scan_id, None)
     if scan is not None:
         scan.tables.close()
+        _refresh_layers(state)
     return scan is not None
 
 
@@ -384,6 +394,7 @@ def rebind_all(state) -> None:
     """Datasets were added or removed: bind every open scan again."""
     for scan in list_scans(state):
         scan.bind(state)
+    _refresh_layers(state)
 
 
 def find_set(state, set_id: str):
