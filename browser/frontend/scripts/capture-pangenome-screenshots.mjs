@@ -79,6 +79,9 @@ async function redact(page, workDir) {
     const fix = s => {
       let out = s;
       for (const [re, to] of rules) out = out.replace(re, to);
+      // Any other absolute path keeps only its file name, under the neutral work folder (URLs are left alone).
+      out = out.replace(/(?<![\w:/.])(?:~|\/)[^\s"'<>,]*\/([^/\s"'<>,]+)/g,
+        (m, base) => (m.startsWith('~/pglift_work/') ? m : `~/pglift_work/${base}`));
       return out.replace(readName, m => {
         if (!names.has(m)) names.set(m, `read ${names.size + 1}`);
         return names.get(m);
