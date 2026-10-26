@@ -16,7 +16,7 @@ import { useBrowserStore } from '../../../stores/browserStore';
 import { lastSnapshotId, serializeState } from '../../../stores/historySlice';
 import { usePanelGenomeStore } from '../../../stores/panelGenomeStore';
 import { createDefaultSubTracks, generatePanelId } from '../../../stores/utils';
-import { registerViewLink, withLinkedPanelMoving, type Span } from '../../../utils/panelExtensions';
+import { registerPanelLink, registerViewLink, withLinkedPanelMoving, type Span } from '../../../utils/panelExtensions';
 import type { Dataset, PanelConfig } from '../../../types';
 import { useLiveLiftStore } from '../store';
 import { ensureSummary, mapSpan, onNavigationData, prefetchView, sourceContigsFor, type MapCandidate, type SpanMapping } from './navigation';
@@ -106,6 +106,31 @@ function schedule(panel: PanelConfig, gen: number, chrom: string, kind: Correcti
     : { after: lastSnapshotId() };
   pending.set(panel.id, { gen, linkId: panel.liftLink!.id, chrom, datasetId: panel.liftLink!.datasetId, kind, history });
 }
+
+/** "Each panel navigates": a source panel and its lifted panel both keep views of their own, so the link moves one
+ * panel with the other directly (through the loaded map; a move whose tiles are not loaded yet leaves the other
+ * panel where it is, there being no main view to correct later). */
+export const liftPanelLink = {
+  followers: (panel: PanelConfig, next: Span, panels: PanelConfig[]): { panelId: string; span: Span }[] => {
+    if (!useLiveLiftStore.getState().enabled) return [];
+    const l = panel.liftLink;
+    if (l) {
+      const lifted = panels.find(p => p.id === l.liftPanelId);
+      const key = liftKey(l.datasetId);
+      if (!lifted?.viewportOverride || !key) return [];
+      const out = mapSpan(l.datasetId, key, 'toTarget', next, { preferChain: l.chain ?? null });
+      return out.status === 'mapped' ? [{ panelId: lifted.id, span: clampSpan(lifted, out.mapping) }] : [];
+    }
+    if (!panel.viewportOverride) return [];
+    const out: { panelId: string; span: Span }[] = [];
+    for (const source of panels) {
+      if (source.liftLink?.liftPanelId !== panel.id || !source.viewportOverride) continue;
+      const view = sourceViewFor(source, next);
+      if (view && view !== 'pending') { publishCandidates(source.id, view.mapping); out.push({ panelId: source.id, span: view.span }); }
+    }
+    return out;
+  },
+};
 
 export const liftViewLink = {
   toPanel: (panel: PanelConfig, main: Span): Span | null | undefined => {
@@ -369,6 +394,7 @@ export function registerLiftLinking(): void {
   if (registered) return;
   registered = true;
   registerViewLink(liftViewLink);
+  registerPanelLink(liftPanelLink);
   useBrowserStore.subscribe((s, prev) => { if (s.panels !== prev.panels && s.panels.some(p => p.liftLink)) queueMicrotask(retargetLinks); });
   onNavigationData(id => queueMicrotask(() => applyCorrections(id)));
 }

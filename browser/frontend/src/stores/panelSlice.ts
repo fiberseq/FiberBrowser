@@ -1,6 +1,6 @@
 import { copyPanelAtSite } from '../utils/panelCopies';
 import { previewHidden } from '../utils/previewFeatures';
-import { mainViewForPanel, withLinkedPanelMoving } from '../utils/panelExtensions';
+import { mainViewForPanel, panelFollowers, withLinkedPanelMoving } from '../utils/panelExtensions';
 import { isPublicServerPage } from '../utils/publicServerFlag';
 import { revealDrawerPanel } from './drawerTabsStore';
 import type { BrowserState } from './browserStore';
@@ -1084,6 +1084,8 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
   })),
   navigatePanel: (panelId, chrom, start, end) => withUndo(get, panelNavigationLabel(chrom, start), () => {
     movePanelOwnView(panelId, chrom, start, end);
+    const moved = get().panels.find(p => p.id === panelId);
+    if (moved?.viewportOverride) for (const f of panelFollowers(moved, moved.viewportOverride, get().panels)) get().setPanelViewportFromLink(f.panelId, f.span);
     // A linked panel (utils/panelExtensions.ts view links) takes the main view with it, as its pans do: one undo step.
     const state = get();
     const panel = state.panels.find(p => p.id === panelId);
@@ -1266,6 +1268,8 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
       }),
       lastMovedPanels: recordPanelMove(state.lastMovedPanels, panel, next),
     });
+    // Panels linked to this one that keep views of their own ("Each panel navigates") follow it.
+    for (const f of panelFollowers(panel, next, get().panels)) get().setPanelViewportFromLink(f.panelId, f.span);
     if (move) {
       // The main view is a site too; its own update must not move us again.
       const main = moveLikewise({ chrom: state.chrom, start: state.start, end: state.end }, prev, next);

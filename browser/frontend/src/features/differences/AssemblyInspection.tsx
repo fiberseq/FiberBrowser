@@ -16,7 +16,6 @@ import { IdentifyTab, identifyLens } from '../insertion/IdentifyTab';
 import type { LensResponse } from '../insertion/insertionLensModel';
 import { openSourceView } from '../liveLift/sourceView';
 
-export const LIFT_SPLIT_REASON = 'Split by carrier is unavailable: /api/sv/split does not accept live-lift datasets yet.';
 const bases = (s: string | null, length = s?.length ?? 0) => s === null ? 'unknown' : s === '' ? '∅'
   : length > s.length ? `${s}… (${length.toLocaleString()} bp)` : s.length > 60 ? `${s.slice(0, 28)}…${s.slice(-12)} (${s.length.toLocaleString()} bp)` : s;
 
@@ -138,7 +137,7 @@ export function AssemblyInspection({ panel, dataset, anchor }: { panel: PanelCon
       <tbody>{model.rows.map((r, i) => <tr key={`${r.id}-${r.record}-${i}`} data-hap={r.hap_label} data-allele={r.allele} className={r.allele === 'grch38' ? 'bg-amber-100 dark:bg-amber-950' : 'hover:bg-slate-100 dark:hover:bg-slate-800'}
         onMouseEnter={() => useReadActionsStore.setState({ highlight: { ids: new Set([r.row_id ?? r.id]), scopedRows:{[dataset.id]:new Set([r.row_id ?? r.id])}, pulseUntil: null, scrollTo: null, scrolled: new Set(), nonce: Date.now() } })}
         onMouseLeave={() => useReadActionsStore.getState().clearHighlight()}>
-        <td className="max-w-40 truncate px-1" title={`${r.molecule}\n${r.record}\n${r.source_pos.contig}:${r.source_pos.start}-${r.source_pos.end}`}>{r.molecule}{r.supplementary ? ' · supp' : ''}</td>
+        <td className="max-w-40 truncate px-1" data-testid="inspection-read-name" title={`${r.id}\nmolecule ${r.molecule}\n${r.record}\n${r.source_pos.contig}:${r.source_pos.start}-${r.source_pos.end}`}>{r.id}{r.supplementary ? ' · supp' : ''}</td>
         <td style={{ color: liveLiftHaplotypeColor(r.hap_label, dark) }}>● {r.hap_label}{r.strand ? ` / ${r.strand}` : ''}</td><td>{r.allele.toUpperCase().replace(/_/g, ' ')}</td>
         <td title={r.read_bases} className="font-mono max-w-28 break-all">{bases(r.read_bases, r.read_bases_length)}</td><td title={r.hg002 ?? undefined} className="font-mono max-w-24 break-all">{bases(r.hg002, r.hg002_length)}</td><td className="font-mono">{bases(r.grch38, r.grch38_length)}</td>
         {(d.kind === 'insertion' || d.kind === 'replacement') && <td>{r.identity == null ? '—' : `${r.identity.toFixed(1)}%`}</td>}

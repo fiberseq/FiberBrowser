@@ -109,3 +109,30 @@ describe('linked panel corrections fold only into their own undo step (B2)', () 
     expect(st._historyStack.at(-1)!.state.start).toBe(approximate);   // the unrelated step keeps its own state
   });
 });
+
+describe('"Each panel navigates": linked source and lifted panels move each other (A13)', () => {
+  it('a source move takes the lifted panel along, and a lifted move takes the source along', async () => {
+    const resolves: (() => void)[] = [];
+    await setupLinkedStore(resolves);
+    useBrowserStore.setState(s => ({ navigationMode: 'perPanel', panels: s.panels.map(p => p.id === 'mat'
+      ? { ...p, viewportOverride: { chrom: 'T', start: 2000, end: 3000 } } : p) }) as never);
+    // Load the tiles both directions need.
+    useBrowserStore.getState().setPanelViewport('src', 3990, 6090);
+    for (const r of resolves.splice(0)) r();
+    await flush();
+    useBrowserStore.getState().setPanelViewport('src', 3990, 6091);
+    for (const r of resolves.splice(0)) r();
+    await flush();
+    useBrowserStore.getState().setPanelViewport('src', 3990, 6090);
+    const mat = () => useBrowserStore.getState().panels.find(p => p.id === 'mat')!.viewportOverride!;
+    expect([mat().chrom, mat().start, mat().end]).toEqual(['T', 5000, 7000]);
+    expect([useBrowserStore.getState().start, useBrowserStore.getState().end]).toEqual([2000, 3000]);   // main view untouched
+    useBrowserStore.getState().setPanelViewport('mat', 1500, 2500);
+    for (const r of resolves.splice(0)) r();
+    await flush();
+    useBrowserStore.getState().setPanelViewport('mat', 1500, 2501);
+    useBrowserStore.getState().setPanelViewport('mat', 1500, 2500);
+    const src = useBrowserStore.getState().panels.find(p => p.id === 'src')!.viewportOverride!;
+    expect([src.chrom, src.start, src.end]).toEqual(['S', 500, 1500]);
+  });
+});
