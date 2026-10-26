@@ -52,8 +52,12 @@ function withUndo(get: () => BrowserState, label: string, apply: () => void, coa
 const PANEL_NAVIGATION_COALESCE_MS = 750;
 
 /** Panels linked to `panel` that keep views of their own follow its move, and theirs follow them (a source view moves
- * its graph host, which moves the host's other source views), each panel at most once. */
-function moveLinkedFollowers(get: () => BrowserState, panel: PanelConfig, span: { chrom: string; start: number; end: number }) {
+ * its graph host, which moves the host's other source views), each panel at most once. A follower moves as if the
+ * user had moved it: the move is recorded for its link group (Linked navigation goes where it is), and a jump leaves
+ * its clusters and filters behind, as the panel it follows did; a linked source view keeps its own, as it does when the
+ * main view jumps (post-merge review, agy group C, HIGH 4). */
+function moveLinkedFollowers(get: () => BrowserState, set: (partial: (state: BrowserState) => Partial<BrowserState>) => void,
+  panel: PanelConfig, span: { chrom: string; start: number; end: number }) {
   const moved = new Set([panel.id]);
   let wave = [{ panel, span }];
   while (wave.length) {
@@ -62,7 +66,17 @@ function moveLinkedFollowers(get: () => BrowserState, panel: PanelConfig, span: 
       for (const f of panelFollowers(w.panel, w.span, get().panels)) {
         if (moved.has(f.panelId)) continue;
         moved.add(f.panelId);
-        get().setPanelViewportFromLink(f.panelId, f.span);
+        set(state => {
+          const follower = state.panels.find(x => x.id === f.panelId);
+          const v = follower?.viewportOverride;
+          if (!follower || !v || (v.chrom === f.span.chrom && v.start === f.span.start && v.end === f.span.end)) return state;
+          const to = { chrom: f.span.chrom, start: f.span.start, end: f.span.end };
+          return {
+            ...(!follower.liftLink && !isPanOrZoom(v, to) ? clearPanelState(state, panelKey(follower)) : {}),
+            panels: state.panels.map(x => x.id === f.panelId ? { ...x, viewportOverride: to } : x),
+            lastMovedPanels: recordPanelMove(state.lastMovedPanels, follower, to),
+          };
+        });
         const p = get().panels.find(x => x.id === f.panelId);
         if (p) next.push({ panel: p, span: f.span });
       }
@@ -1110,7 +1124,7 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
   navigatePanel: (panelId, chrom, start, end) => withUndo(get, panelNavigationLabel(chrom, start), () => {
     movePanelOwnView(panelId, chrom, start, end);
     const moved = get().panels.find(p => p.id === panelId);
-    if (moved?.viewportOverride) moveLinkedFollowers(get, moved, moved.viewportOverride);
+    if (moved?.viewportOverride) moveLinkedFollowers(get, set, moved, moved.viewportOverride);
     // A linked panel (utils/panelExtensions.ts view links) takes the main view with it, as its pans do: one undo step.
     const state = get();
     const panel = state.panels.find(p => p.id === panelId);
@@ -1126,7 +1140,7 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
     // Panels linked to it that keep views of their own follow it, as after navigatePanel (a graph host's moves to
     // another contig and its pans while it follows a graph go through here).
     const moved = get().panels.find(p => p.id === panelId);
-    if (moved?.viewportOverride) moveLinkedFollowers(get, moved, moved.viewportOverride);
+    if (moved?.viewportOverride) moveLinkedFollowers(get, set, moved, moved.viewportOverride);
   }),
   openPanelAtSite: (panelId, options) => {
     const state = get();
@@ -1306,7 +1320,7 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
       lastMovedPanels: recordPanelMove(state.lastMovedPanels, panel, next),
     });
     // Panels linked to this one that keep views of their own ("Each panel navigates") follow it.
-    moveLinkedFollowers(get, panel, next);
+    moveLinkedFollowers(get, set, panel, next);
     if (move) {
       // The main view is a site too; its own update must not move us again.
       const main = moveLikewise({ chrom: state.chrom, start: state.start, end: state.end }, prev, next);
