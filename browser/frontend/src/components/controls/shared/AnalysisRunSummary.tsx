@@ -10,7 +10,8 @@ export type AnalysisSummaryTarget =
   | 'peak-detection'
   | 'quality'
   | 'reproducibility'
-  | 'transcription-filters';
+  | 'transcription-filters'
+  | 'feature-hub';
 
 function formatCap(count: number | null | undefined): string {
   if (count == null) return 'Full analysis set';
@@ -36,6 +37,11 @@ export function openSummaryTarget(target: AnalysisSummaryTarget, source: string)
     } else if (target === 'peak-detection') {
       window.sessionStorage.setItem('fiberbrowser_analysis_rules_tab', 'peaks');
     }
+  }
+
+  if (target === 'feature-hub') {
+    store.openAnalysisPanel('feature-hub');
+    return;
   }
 
   if (target === 'analysis-filter') {

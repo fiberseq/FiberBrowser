@@ -4,11 +4,20 @@ import type { Difference, DifferencesResponse } from './differenceTypes';
  * responses, scoped by lift_key as well as dataset/chromosome: a settings
  * change must never resolve a badge against geometry from the previous map. */
 const loaded: DifferencesResponse[] = [];
+const listeners = new Set<() => void>();
 export function rememberDifferences(response: DifferencesResponse) {
   loaded.unshift(response);
   loaded.splice(16);
+  for (const fn of listeners) fn();
 }
-export function clearDifferenceCache() { loaded.length = 0; }
+export function clearDifferenceCache() { loaded.length = 0; for (const fn of listeners) fn(); }
+/** The responses loaded lately, newest first (the feature hub lists the Differences in view from them). */
+export function loadedDifferences(): readonly DifferencesResponse[] { return loaded; }
+/** Called when a response is remembered or the cache is cleared. */
+export function onDifferencesLoaded(fn: () => void): () => void {
+  listeners.add(fn);
+  return () => { listeners.delete(fn); };
+}
 export function findLoadedDifference(datasetId: string, liftKey: string, chrom: string,
   event: { id?: string; hap: string; pos: number; kind: 'insertion' | 'snv' }): Difference | undefined {
   for (const response of loaded) {

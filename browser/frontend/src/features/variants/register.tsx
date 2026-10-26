@@ -13,6 +13,7 @@ import { registerTrackRenderer } from '../../components/tracks/trackRenderers';
 import { registerSvRowSelection } from '../../components/tracks/svRowSelection';
 import { CHIP_BTN } from '../../components/controls/FeatureSelectionChip';
 import { registerFeatureKind, type FeatureRef } from '../../stores/featureStore';
+import { registerSvHubProvider } from './hubProvider';
 import { useBrowserStore } from '../../stores/browserStore';
 import { Variants } from '../icons';
 import { FEATURE_PANEL_FIELDS } from '../types';
@@ -74,6 +75,7 @@ export function clearSvSelectionOfSplit(panels: { readSubset?: { rule?: { splitS
 }
 
 export function registerVariants(): void {
+  registerSvHubProvider();
   registerAnalysisPanel({
     contentType: 'variants',
     label: 'Variants',
@@ -130,8 +132,15 @@ export function registerVariants(): void {
   // SVs as selectable features: shift-click on the SV row, the Variants panel's SVs tab; two to four of them split the
   // reads by their combined genotype.
   registerFeatureKind({
-    kind: 'sv', perDataset: true, keyedByChrom: true, layerLabel: 'SV genotype', noun: 'SVs',
+    kind: 'sv', typeId: 'var.sv', perDataset: true, keyedByChrom: true, layerLabel: 'SV genotype', noun: 'SVs',
     stateNote: 'SVs: carrier or reference at each',
+    // An insertion is a boundary: stored refs keep [ref, ref+1) (3.0.x sessions), the hub reads them as zero width
+    // at ref. A 1 bp deletion [ref, ref+1) is a real interval and stays as it is.
+    zeroWidth: true,
+    hubSpan: f => {
+      const sv = svOfFeature(f);
+      return sv?.t === 'I' ? { start: sv.ref, end: sv.ref } : null;
+    },
     // An SV is not a region to cluster on (its genotype splits the reads: Cluster combinatorial, the chip).
     regionMode: () => null,
     actions: {

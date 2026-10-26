@@ -76,6 +76,11 @@ export interface FeatureKindDef {
   /** Insertion boundaries: a ref with `start === end` keeps its coordinates (the true interval is the boundary). */
   zeroWidth?: boolean;
   /**
+   * The ref's true interval for the hub, where the stored one differs: SV insertions were stored as `[ref, ref+1)`
+   * and are the boundary `ref` (zero width). Absent: the stored interval.
+   */
+  hubSpan?: (f: FeatureRef) => { start: number; end: number } | null;
+  /**
    * The kind's own toolbar actions. A selection holding it gets these instead of the generic ones: its features
    * alone are used (it doesn't mix with other kinds there; the chip says so).
    */
@@ -128,6 +133,13 @@ registerFeatureKind({
   // dataset's layers (the combinatorial pattern regions), 'tf'.
   regionMode: (_f, ctx) => (ctx?.layers?.tf_rc ? 'tf_rc' : ctx?.layers?.tf_cr ? 'tf_cr' : 'tf'),
 });
+
+/** A ref's true interval (its kind's `hubSpan`, else the stored one); null without coordinates. */
+export function hubSpanOf(f: FeatureRef): { start: number; end: number; zeroWidth: boolean } | null {
+  const own = kinds.get(f.kind)?.hubSpan?.(f);
+  const span = own ?? (f.start != null && f.end != null ? { start: f.start, end: f.end } : null);
+  return span ? { ...span, zeroWidth: span.end <= span.start } : null;
+}
 
 /** A feature's peak-region mode (its kind's `regionMode`; 'accessibility' for kinds without one; null: not a region). */
 export function featureRegionMode(f: FeatureRef, layers?: Record<string, unknown>): string | null {

@@ -106,11 +106,16 @@ export interface FeatureHit {
   label?: string;
   /** Pooled scores by declared name (prevalence, support_gain_nats, score, tier, …). */
   scores: Record<string, number | null>;
-  /** Per comparison column (group id) and score: the value with its interval and counts. */
+  /** Per comparison column (group id) and score role (prevalence, strength): the value with its interval and counts. */
   values?: Record<string, Record<string, HitValue>>;
+  /** Per-type detail for the row's expansion (module columns, raw per-group values). */
+  detail?: Record<string, unknown>;
   flags?: string[];
-  /** The legacy selection identity, for sets backed by a legacy run (fp-class job/family, nfr run/element, sv). */
-  legacyRef?: import('../../stores/featureStore').FeatureRef;
+  /**
+   * The legacy selection identity, for sets backed by a legacy run (fp-class job/family per dataset, nfr run/element,
+   * sv per dataset): what /api/features/states resolves for them, and what sessions keep (DESIGN §5.3).
+   */
+  legacyRefs?: import('../../stores/featureStore').FeatureRef[];
   /** Open in the owning panel. */
   link?: { panel: string; payload: unknown };
   aliases?: Array<{ frame: Frame; start: number; end: number; status: 'exact' | 'split' | 'partial' | 'unmapped' | 'absent' | 'unresolved' }>;

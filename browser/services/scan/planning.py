@@ -298,7 +298,7 @@ def default_workers() -> int:
 def _signal_note(state) -> Optional[str]:
     try:
         from services.signal_evidence import active_signal_filters
-        if active_signal_filters(state):
+        if any(active_signal_filters(state).values()):
             return 'Signal filters are not applied by scans: fiberhmm-scan reads the whole BAM files'
     except Exception:
         pass

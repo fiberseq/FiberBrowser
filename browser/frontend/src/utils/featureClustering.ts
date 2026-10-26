@@ -12,6 +12,7 @@ import { featureKindDef, featureKindWithActions, featureRegionMode, featureShort
 import { seedHistoryBaseline } from '../stores/historySlice';
 import { useReadActionsStore } from '../stores/readActionsStore';
 import { useSplitPanelStore, type SplitSource } from '../stores/splitPanelStore';
+import type { ReadFilterSourceTarget } from '../stores/clusterSlice';
 import { applyReadGroups, type ReadGroupsInput } from './readGroups';
 import { sameChrom } from './chromAliases';
 import { idSetHas, recordKey } from './recordKeys';
@@ -276,9 +277,13 @@ export const FEATURE_FILTERS: { value: `features:${FeatureFilterMode}`; label: s
   { value: 'features:none', label: 'In no selected feature', title: 'Hide the members of the selected features as excluded reads (the read menu shows them again); every other read stays' },
 ];
 
-/** Keep (or hide) reads by membership at the selected features in the target panels (an undo step). */
-export async function filterBySelectedFeatures(mode: FeatureFilterMode): Promise<string | null> {
-  const { features } = featuresInView();
+/**
+ * Keep (or hide) reads by membership at the selected features in the target panels (an undo step). `override`: other
+ * features than the toolbar selection (the feature hub's selection), the filter's label and its source.
+ */
+export async function filterBySelectedFeatures(mode: FeatureFilterMode,
+  override?: { features: FeatureRef[]; label?: string; target?: ReadFilterSourceTarget }): Promise<string | null> {
+  const { features } = override ? { features: override.features } : featuresInView();
   const own = featureKindWithActions(features);
   if (own) return own.actions.sortFilter;
   if (!features.length) return `Select ${selectableKindsPhrase()} first.`;
@@ -318,9 +323,9 @@ export async function filterBySelectedFeatures(mode: FeatureFilterMode): Promise
       return null;
     }
     if (writes.every(([, keep]) => keep.size === 0)) return `No read passes this filter at ${featureNames(features)}.`;
-    const label = `Features > ${FEATURE_FILTERS.find(f => f.value === `features:${mode}`)!.label.toLowerCase()} (${featureNames(features)})`;
+    const label = override?.label ?? `Features > ${FEATURE_FILTERS.find(f => f.value === `features:${mode}`)!.label.toLowerCase()} (${featureNames(features)})`;
     seedHistoryBaseline(useBrowserStore.getState(), 'Before read filter', 'filtering');
-    for (const [key, keep] of writes) useBrowserStore.getState().setFilteredReadIds(key, keep, { target: 'analysis-filter', label });
+    for (const [key, keep] of writes) useBrowserStore.getState().setFilteredReadIds(key, keep, { target: override?.target ?? 'analysis-filter', label });
     useBrowserStore.getState().pushSnapshot(`Filter: ${label}`);
     return null;
   } catch (e) {

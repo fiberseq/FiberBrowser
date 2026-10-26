@@ -1,0 +1,116 @@
+/**
+ * The hub's "Use as" actions (DESIGN §6.2) on the hub selection:
+ * - anchors: an anchor set (positions, strand, label) saved with the session (association, overlays, sync windows);
+ * - cluster regions: the hits in view as the Cluster button's peak regions (each on its kind's layer), then Cluster;
+ * - filter: keep the reads in state 1 at any (or every) chosen hit, through /api/features/states (source
+ *   'feature-hub' in the filter chip);
+ * - go to: the view centred on the hits.
+ */
+import { useBrowserStore } from '../../stores/browserStore';
+import { featureRegionMode, type FeatureRef } from '../../stores/featureStore';
+import { filterBySelectedFeatures, type FeatureFilterMode } from '../../utils/featureClustering';
+import { runUiCluster } from '../../utils/clusterRunner';
+import { sameChrom } from '../../utils/chromAliases';
+import { selectionRefs, type HubSelected } from './hubState';
+import { kindOfType } from './kinds';
+import type { AnchorSet } from './types';
+
+const ZERO_WIDTH_PAD = 25;
+
+export function newAnchorSet(selected: HubSelected[], label?: string): AnchorSet {
+  const anchors = selected.map(h => ({ chrom: h.chrom, pos: h.anchor, ...(h.strand ? { strand: h.strand } : {}),
+    ...(h.label ? { label: h.label } : {}), hitId: h.hitId, start: h.start, end: h.end }));
+  const types = [...new Set(selected.map(h => h.typeId))];
+  return {
+    id: `anchors-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    label: label || `${anchors.length} ${types.join(' + ')} anchor${anchors.length === 1 ? '' : 's'}`,
+    sources: [...new Set(selected.map(h => h.setId))], createdAt: new Date().toISOString(), anchors,
+  };
+}
+
+/** Save the selection as an anchor set (an undo step; saved with the session). */
+export function asAnchors(selected: HubSelected[], label?: string): string | null {
+  if (!selected.length) return 'Select hits first (click a row; shift-click adds).';
+  const set = newAnchorSet(selected, label);
+  const store = useBrowserStore.getState();
+  store.setFeatureHub(hub => ({ anchors: [...hub.anchors, set] }));
+  store.pushSnapshot(`Anchors: ${set.label}`);
+  return null;
+}
+
+/** The selection's intervals in the main view, as peak regions (zero-width hits get a small window). */
+export function clusterRegionsOf(selected: HubSelected[]): { start: number; end: number; mode: string; label?: string }[] {
+  const s = useBrowserStore.getState();
+  const out = [];
+  for (const h of selected) {
+    if (!sameChrom(h.chrom, s.chrom) || h.end < s.start || h.start > s.end) continue;
+    const start = h.end > h.start ? h.start : h.start - ZERO_WIDTH_PAD;
+    const end = h.end > h.start ? h.end : h.start + ZERO_WIDTH_PAD;
+    const ref = { kind: kindOfType(h.typeId), source: h.setId, id: h.hitId } as FeatureRef;
+    const ds = h.datasets?.[0];
+    const layers = (s.datasets.find(d => d.id === ds)?.available_layers ?? {}) as Record<string, unknown>;
+    const mode = featureRegionMode(ref, layers) ?? 'accessibility';
+    out.push({ start: Math.max(0, Math.floor(start)), end: Math.ceil(end), mode, label: h.label });
+  }
+  return out;
+}
+
+/**
+ * The selection's hits in view become the Cluster button's peak regions (custom peaks, each on its kind's layer),
+ * then Cluster runs as the button does. Returns an error message, or null.
+ */
+export async function asClusterRegions(selected: HubSelected[], run = true): Promise<string | null> {
+  const regions = clusterRegionsOf(selected);
+  if (!regions.length) return selected.length ? 'None of the selected hits is in the main view: go to them first.' : 'Select hits first.';
+  const store = useBrowserStore.getState();
+  if (store.selectedFeatures.length) {
+    // Cluster prefers selected features over peaks (utils/clusterTargets): the hub's regions would be ignored.
+    store.setSelectedFeatures([]);
+  }
+  for (const r of regions) store.addCustomPeak(r.start, r.end, store.chrom);
+  const now = useBrowserStore.getState();
+  const custom = now.getCustomRuleId();
+  const peaks = now.getAllPeaks().filter(p => p.ruleId === custom && sameChrom(p.chrom ?? now.chrom, now.chrom));
+  const selectedPeaks = new Set<number>();
+  const peakModes: Record<number, string> = {};
+  for (const r of regions) {
+    const p = peaks.find(x => x.start === r.start && x.end === r.end);
+    if (!p) continue;
+    selectedPeaks.add(p.index);
+    if (r.mode !== 'accessibility') peakModes[p.index] = r.mode;
+  }
+  useBrowserStore.setState({ selectedPeaks, peakModes: peakModes as typeof now.peakModes });
+  useBrowserStore.getState().pushSnapshot(`Cluster regions from the feature hub (${regions.length})`);
+  if (!run) return null;
+  const ran = await runUiCluster();
+  if (!ran) return 'Open a read panel to cluster.';
+  const assigned = Object.values(useBrowserStore.getState().clusterAssignments ?? {}).some(m => m && Object.keys(m).length > 0);
+  if (!assigned) {
+    const lo = Math.min(...regions.map(r => r.start)), hi = Math.max(...regions.map(r => r.end));
+    return `Cluster ran, but no read covers all ${regions.length} regions (${((hi - lo) / 1000).toFixed(1)} kb apart): `
+      + 'Cluster uses the reads that span every region, so select hits closer together.';
+  }
+  return null;
+}
+
+/** Keep the reads in state 1 at the selected hits (any or all of them) in the target panels. */
+export async function asFilter(selected: HubSelected[], mode: FeatureFilterMode = 'any'): Promise<string | null> {
+  if (!selected.length) return 'Select hits first.';
+  const refs = selectionRefs(selected);
+  const names = selected.map(h => h.label || h.hitId).slice(0, 4).join(', ') + (selected.length > 4 ? '…' : '');
+  return filterBySelectedFeatures(mode, { features: refs, target: 'feature-hub',
+    label: `Feature hub > ${mode === 'all' ? 'in every' : mode === 'none' ? 'in none of' : 'in any of'} ${names}` });
+}
+
+/** Centre the main view on hits (the view's width, or their span with a margin). */
+export function goToHits(selected: Array<{ chrom: string; start: number; end: number }>): void {
+  if (!selected.length) return;
+  const s = useBrowserStore.getState();
+  const chrom = selected[0].chrom;
+  const same = selected.filter(h => sameChrom(h.chrom, chrom));
+  const lo = Math.min(...same.map(h => h.start));
+  const hi = Math.max(...same.map(h => Math.max(h.end, h.start + 1)));
+  const width = Math.max(s.end - s.start, Math.ceil((hi - lo) * 1.2), 2_000);
+  const start = Math.max(0, Math.round((lo + hi) / 2 - width / 2));
+  s.setViewport(chrom, start, start + width);
+}

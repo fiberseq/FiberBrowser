@@ -3,6 +3,7 @@
  * (one panel per haplotype by default, pooled one click away; its settings), and the dialogs. Behind the server's
  * flag: with it off nothing here is offered (a session's lifted dataset is refused by the server with a notice).
  */
+import { registerDifferencesHubProvider } from './hubProvider';
 import './types';
 import './persistence';
 import { registerPanelHeaderExtension, type PanelHeaderContext } from '../../components/tracks/panelHeaderExtensions';
@@ -140,6 +141,7 @@ let done = false;
 export function registerLiveLift(): void {
   if (done) return;
   done = true;
+  registerDifferencesHubProvider();
   registerPanelHeaderExtension(useLiveLiftHeader);
   registerPanelHeaderExtension(useNativeBamLiftEntry);
   registerLiftLinkingUi();
