@@ -21,9 +21,12 @@ export function nextDifference(items: Difference[], start: number, end: number, 
  * read-supported edit (no assembly allele: its alternate is what the reads show) is carried by rows with its bases. */
 export function carriesDifference(d: Pick<Difference, 'source' | 'kind' | 'alt'> & Partial<Pick<Difference, 'hap_label'>> | null | undefined,
   row: Pick<DifferenceInspection, 'allele' | 'read_bases' | 'carries_insertion' | 'carries_deletion'> & Partial<Pick<DifferenceInspection, 'hap_label'>>): boolean {
-  // 'hg002' means the read matches its own haplotype's allele: a carrier only on the difference's haplotype.
-  if (d?.source !== 'reads') return (row.allele === 'hg002' && (d?.source !== 'assembly' || !row.hap_label || row.hap_label === d.hap_label))
-    || !!row.carries_insertion || !!row.carries_deletion;
+  // An assembly difference's carriers are on its own haplotype: 'hg002' (the read matches its haplotype's allele)
+  // or explicit carriage. Cross-parent carriage stays separate (another parent's boundary may hold any insertion).
+  if (d?.source !== 'reads') {
+    const own = d?.source !== 'assembly' || !row.hap_label || row.hap_label === d.hap_label;
+    return own && (row.allele === 'hg002' || !!row.carries_insertion || !!row.carries_deletion);
+  }
   if (d.kind === 'deletion') return row.allele === 'deleted' || !!row.carries_deletion;
   if (d.alt) return (row.read_bases ?? '').toUpperCase() === d.alt.toUpperCase();
   return row.allele === 'other' || row.allele === 'grch38';

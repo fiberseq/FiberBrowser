@@ -23,3 +23,12 @@ it('keeps a folded carrier without a display row scoped to its dataset', () => {
   expect(Object.keys(hl.scopedRows ?? {})).toEqual(['lift']);
   expect(hl.scopedRows!.lift).toEqual(new Set(['lift|0|mol_mat|mat', 'name:mol_fold']));
 });
+
+it('does not outline another parent\'s read that carries some other insertion at its boundary (agy probe)', () => {
+  const insertion = { ...diff, id: 'ins-mat', kind: 'insertion', alt_bp: 100, ref_bp: 0 } as unknown as Difference;
+  const r = [
+    { id: 'mat', row_id: 'a', hap_label: 'MAT', allele: 'unknown', carries_insertion: true, read_bases: 'A'.repeat(100) },
+    { id: 'pat', row_id: 'b', hap_label: 'PAT', allele: 'other', carries_insertion: true, read_bases: 'AA' },
+  ] as DifferenceInspection[];
+  expect(inspectionModel(r, 'MAT', insertion).carriers).toEqual(['mat']);
+});

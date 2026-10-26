@@ -132,6 +132,9 @@ def validate_live_lift(handle, bam_paths: Iterable[str], haplotypes: Iterable[st
     return out
 
 
+PLAIN_CHAIN_MIN_IDENTITY = 0.90
+
+
 def _check_anchors(handle, out, target_fasta, source_fasta):
     """Spot check up to 16 distributed anchor blocks (at least 200 bp).
     Chain blocks merge exact anchors with inferred fills. Subtract every
@@ -196,6 +199,7 @@ def _check_anchors(handle, out, target_fasta, source_fasta):
             # Each bucket has its own retry budget, so N-masked anchors of one haplotype cannot use up another's.
             per_bucket = max(1, 4000 // max(1, len(buckets)))
             n, checked_haps = 0, set()
+            plain = bool(getattr(handle, "plain_chain", False))
             for bucket in buckets:
                 for ci, t, q, length in bucket[:per_bucket]:
                     length = min(length, 2000)
@@ -211,7 +215,11 @@ def _check_anchors(handle, out, target_fasta, source_fasta):
                         continue
                     n += 1
                     checked_haps.add(handle.map.chains[ci]["haplotype"])
-                    if len(a) != length or len(b) != length or a != b:
+                    # A plain UCSC chain cannot mark substitutions inside its aligned blocks (a sidecar's exact
+                    # anchors exclude them), so its anchors are compared by identity rather than exact equality.
+                    same = a == b if not plain else (len(a) == len(b) == length and
+                                                     sum(x == y for x, y in zip(a, b)) >= PLAIN_CHAIN_MIN_IDENTITY * length)
+                    if len(a) != length or len(b) != length or not same:
                         message = (f"Anchor sequence mismatch: {target_name}:{t}-{t + length} and "
                                    f"{src['name']}:{q0}-{q1} ({chain['strand']}) in {source_fasta}.")
                         out.errors.append(message)
@@ -226,6 +234,8 @@ def _check_anchors(handle, out, target_fasta, source_fasta):
             # Say which haplotypes the spot check could not reach (unknown bases or few anchors).
             out.warnings.append("Anchor sequences not checked for haplotype(s) " + ", ".join(unchecked)
                                 + ": no sampled anchor with known bases in the source FASTA.")
+        if plain:
+            out.info.append(f"Plain chain: anchors compared at >= {PLAIN_CHAIN_MIN_IDENTITY:.0%} identity (chains do not mark substitutions).")
         out.anchors = {"status": "consistent", "checked": n, "unchecked_haplotypes": unchecked,
                        "message": f"Anchor sequences consistent ({n} blocks >= 200 bp checked); this is a spot check, not proof of assembly identity."}
     except (OSError, ValueError, KeyError) as exc:

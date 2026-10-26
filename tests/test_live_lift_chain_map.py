@@ -133,3 +133,24 @@ def test_real_chain_matches_its_sidecar():
                 return sorted((h.manifest["sources"][h.map.chains[p.chain]["source"]]["name"], p.t_start, p.t_end,
                                p.q_start, p.q_end, p.strand, p.primary) for p in h.map.target_to_source(chrom, s, e))
             assert geo(chain) == geo(side), (chrom, s, e)
+
+
+def test_plain_chain_anchor_check_tolerates_block_substitutions(tmp_path):
+    """agy probe: substitutions inside a plain chain's aligned block are not an assembly mismatch."""
+    import pysam
+    from services.lift.validate import validate_live_lift
+    t_seq = "ACGT" * 250
+    q = list(t_seq)
+    q[500] = "T" if q[500] != "T" else "A"
+    q[700:715] = list("T" * 15)
+    for name, contig, seq in (("t.fa", "chr1", t_seq), ("s.fa", "chr1_MATERNAL", "".join(q)), ("w.fa", "chr1_MATERNAL", t_seq[::-1])):
+        (tmp_path / name).write_text(f">{contig}\n{seq}\n")
+        pysam.faidx(str(tmp_path / name))
+    (tmp_path / "one.chain").write_text("chain 9000 chr1 1000 + 0 1000 chr1_MATERNAL 1000 + 0 1000 1\n1000\n\n")
+    bam = write_bam(tmp_path / "one.bam", lambda h: [make_record(h, "r", "chr1_MATERNAL", 10, "50M")], contigs=(("chr1_MATERNAL", 1000),))
+    handle = LiftMapHandle(str(tmp_path / "one.chain"))
+    with pysam.FastaFile(str(tmp_path / "t.fa")) as target:
+        ok = validate_live_lift(handle, [bam], handle.haplotypes, target_fasta=target, source_fasta=str(tmp_path / "s.fa"))
+        wrong = validate_live_lift(handle, [bam], handle.haplotypes, target_fasta=target, source_fasta=str(tmp_path / "w.fa"))
+    assert ok.ok and ok.anchors["status"] == "consistent", ok.anchors
+    assert not wrong.ok and wrong.anchors["status"] == "mismatch"
