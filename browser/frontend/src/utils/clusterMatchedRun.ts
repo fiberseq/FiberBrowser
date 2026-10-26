@@ -74,8 +74,21 @@ export function observationShownBy(o: GraphRunObservation, p: PanelConfig): bool
 export function linkedSourceShows(o: GraphRunObservation, p: PanelConfig): boolean {
   const link = (p as PanelConfig & { liftLink?: { datasetId: string; hap: string; hapLabel: string } }).liftLink;
   if (p.contentType !== 'dataset' || !link || o.kind !== 'graph' || o.dataset_id !== link.datasetId) return false;
+  // A strand-split source panel (CT / GA) shows only that strand's records: never the other strand's observation.
+  if (p.strand && o.strand && o.strand !== p.strand) return false;
   const hap = (o.hap ?? '').toUpperCase();
   return !hap || hap === (link.hapLabel ?? '').toUpperCase() || hap === (link.hap ?? '').toUpperCase();
+}
+
+/** The observations whose labels a linked source panel takes (Codex review, group H round 2): its own strand's when
+ * the run split the path by strand, else the unsplit ones; an unsplit source panel takes the unsplit observation when
+ * there is one (both strands' records are then in it), else every strand's. So one QNAME never takes another
+ * strand's label. */
+export function linkedSourceObservations<T extends GraphRunObservation>(observations: readonly T[], p: PanelConfig): T[] {
+  const shown = observations.filter(o => linkedSourceShows(o, p));
+  const want = (p.strand === 'CT' || p.strand === 'GA') ? p.strand : null;
+  const exact = shown.filter(o => (o.strand ?? null) === want);
+  return exact.length ? exact : shown;
 }
 
 /** The state keys a graph run's labels apply to now: its destinations, and any panel since opened on one of its
@@ -90,7 +103,7 @@ export function graphRunStateKeys(run: ClusterMatchedRun, panels: readonly Panel
     // On the run's target contig (its own view, else the main view's).
     const chrom = p.viewportOverride?.chrom ?? mainChrom;
     // A linked source panel is on the haplotype's own assembly (another contig): it joins through its link.
-    const source = obs.filter(o => linkedSourceShows(o, p));
+    const source = linkedSourceObservations(obs, p);
     if (source.length) {
       const key = p.stateKey ?? p.datasetId;
       if (!keys.has(key) && !compatibleSourceLabels(run, live?.[key], source.map(o => o.id))) continue;
@@ -109,7 +122,7 @@ export function graphRunStateKeys(run: ClusterMatchedRun, panels: readonly Panel
 }
 
 /** A linked source panel's labels (by QNAME) agree with what the run gave those observations' records. */
-function compatibleSourceLabels(run: ClusterMatchedRun, labels: Readonly<Record<string, number>> | undefined, observations: string[]): boolean {
+export function compatibleSourceLabels(run: ClusterMatchedRun, labels: Readonly<Record<string, number>> | undefined, observations: string[]): boolean {
   if (!labels || !Object.keys(labels).length) return true;
   const want = sourceLabels(run, observations);
   return Object.entries(labels).every(([q, c]) => want[q] === c);

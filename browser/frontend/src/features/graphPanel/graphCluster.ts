@@ -24,7 +24,7 @@ import type { BrowserState } from '../../stores/browserStore';
 import type { PanelConfig } from '../../types';
 import { clusterWindows, type ClusterBasis, type ClusterTargetPlan, type PlanState } from '../../utils/clusterTargets';
 import { registerClusterBasisRunner, registerClusterPlanTransform } from '../../utils/clusterRunExtensions';
-import { currentMatchedRun, graphRunStateKeys, linkedSourceShows, observationShownBy, sourceLabels, type ClusterMatchedRun, type GraphRunObservation } from '../../utils/clusterMatchedRun';
+import { compatibleSourceLabels, currentMatchedRun, graphRunStateKeys, linkedSourceObservations, observationShownBy, sourceLabels, type ClusterMatchedRun, type GraphRunObservation } from '../../utils/clusterMatchedRun';
 import { sameChrom } from '../../utils/chromAliases';
 import { getDatasetDisplayLabel } from '../../utils/datasetLabels';
 import { idSetHas, qnameOfId, recordKey } from '../../utils/recordKeys';
@@ -174,7 +174,7 @@ export function graphClusterPlan(st: PlanState, basis: Basis): GraphClusterPlan 
     destinations.push({ stateKey: w.result_key, observations: ids, panelId: panel.id, scope: w.read_ids ?? null });
   }
   for (const w of sourceWindows) {
-    const ids = [...observations.values()].filter(o => linkedSourceShows(o as GraphRunObservation, w.panel)).map(o => o.id);
+    const ids = linkedSourceObservations([...observations.values()] as (GraphRunObservation & { id: string })[], w.panel).map(o => o.id);
     if (!ids.length) { leftOut.push({ panelId: w.panel.id, reason: 'its lifted path is not in this run' }); continue; }
     destinations.push({ stateKey: w.result_key, observations: ids, panelId: w.panel.id, scope: w.read_ids ?? null, keyBy: 'qname' });
   }
@@ -485,7 +485,7 @@ export async function assignWithGraphRun(run: ClusterMatchedRun, signal?: AbortS
   const known = new Set(run.destinations.map(d => d.stateKey));
   const later = graphRunStateKeys(run, st.panels, st.chrom, st.clusterAssignments).filter(k => !known.has(k)).flatMap(stateKey => {
     const p = st.panels.find(q => (q.stateKey ?? q.datasetId) === stateKey);
-    const source = p ? g.observations.filter(o => linkedSourceShows(o, p)).map(o => o.id) : [];
+    const source = p ? linkedSourceObservations(g.observations, p).map(o => o.id) : [];
     const obs = source.length ? source : p ? g.observations.filter(o => observationShownBy(o, p)).map(o => o.id) : [];
     const filter = st.filteredReadIds[stateKey];
     return obs.length ? [{ stateKey, observations: obs, panelId: p!.id, scope: filter ? [...filter] : null,
@@ -601,11 +601,14 @@ export function labelLinkedSource(panelId: string): number {
   const p = st.panels.find(x => x.id === panelId);
   if (!run?.graph || !p?.liftLink || (st.activeClusterTreeNodeId ?? null) !== (run.treeNodeId ?? null)
     || currentMatchedRun(run, st.clusterAssignments) !== run) return 0;
-  const obs = run.graph.observations.filter(o => linkedSourceShows(o, p)).map(o => o.id);
+  const obs = linkedSourceObservations(run.graph.observations, p).map(o => o.id);
   if (!obs.length) return 0;
   const key = p.stateKey ?? p.datasetId ?? p.id;
   const filter = st.filteredReadIds[key];
   const live = st.clusterAssignments[key] ?? {};
+  // A source panel clustered on its own keeps its clustering: never merged, renamed or made a destination (Codex
+  // review, group H round 2).
+  if (!compatibleSourceLabels(run, live, obs)) return 0;
   const fresh = Object.fromEntries(Object.entries(sourceLabels(run, obs, filter ? new Set([...filter].map(qnameOfId)) : null))
     .filter(([q, c]) => c !== UNASSIGNED_CLUSTER_ID && live[q] === undefined));
   if (!Object.keys(fresh).length) return 0;

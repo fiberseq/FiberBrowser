@@ -12,7 +12,7 @@ import { setPanelViewMode } from './hostMode';
 import { registerGraphPanel } from './register';
 import { assignWithGraphRun, commitGraphRun, destinationAssignments, graphClusterPlan, labelLinkedSource } from './graphCluster';
 import { useGraphSettings } from './handoff';
-import { graphRunStateKeys, sourceLabels } from '../../utils/clusterMatchedRun';
+import { graphRunStateKeys, linkedSourceObservations, sourceLabels } from '../../utils/clusterMatchedRun';
 import { mirroredSelections } from './selectionSync';
 import { popOutPaths, setPopOutKind } from './popOutKind';
 import type { GraphBinding, GraphReadBinding, GraphRegistration } from './types';
@@ -143,4 +143,41 @@ describe('a linked source panel is a destination of graph runs', () => {
     useBrowserStore.getState().undo();
     expect(get('srcP').collapsed).toBe(true);
   });
+
+  it('round 2: revealing a source panel clustered on its own keeps its clusters and names, and it is not made a destination', async () => {
+    seed([...split(), source('srcP', '2', 'PAT', { collapsed: true })]);
+    useBrowserStore.setState({ clusterAssignments: { 'srcP~lift-source': { q1: 1 } }, clusterGroupLabels: { 'srcP~lift-source': { 1: 'mine' } } } as never);
+    setPanelViewMode('mat', 'graph');
+    const p = plan();
+    const pat = p.observations.find(o => o.binding === 'pat')!.id;
+    commitGraphRun(useBrowserStore.getState(), p, { ...(response({ [pat]: { assignments: { [aid('q1')]: 0, [aid('q2')]: 1 } } }) as object), names: { 1: 'C0.1' } } as never);
+    expect(useBrowserStore.getState().clusterAssignments['srcP~lift-source']).toEqual({ q1: 1 });
+    expect(labelLinkedSource('srcP')).toBe(0);
+    setPopOutKind('mat', 'source');
+    popOutPaths('mat', ['pat']);
+    await new Promise(r => setTimeout(r, 0));
+    const st = useBrowserStore.getState();
+    expect(st.panels.find(x => x.id === 'srcP')!.collapsed).toBe(false);
+    expect(st.clusterAssignments['srcP~lift-source']).toEqual({ q1: 1 });
+    expect(st.clusterGroupLabels['srcP~lift-source']?.[1]).toBe('mine');
+    expect((st.clusterMatchedRun?.destinations ?? []).some(d => d.stateKey === 'srcP~lift-source')).toBe(false);
+  });
+
+  it('round 2: a strand-split source panel takes only its own strand\'s observation, never the other strand\'s label', () => {
+    seed([...split(), panel('patCT', { liftHap: 'PAT', strand: 'CT' }), panel('patGA', { liftHap: 'PAT', strand: 'GA' }),
+      source('srcGA', '2', 'PAT', { strand: 'GA' }), source('srcCT', '2', 'PAT', { strand: 'CT' })]);
+    setPanelViewMode('mat', 'graph');
+    const p = plan();
+    const ct = p.observations.find(o => o.binding === 'pat' && o.strand === 'CT')!;
+    const ga = p.observations.find(o => o.binding === 'pat' && o.strand === 'GA')!;
+    expect(ct && ga).toBeTruthy();
+    expect(p.destinations.find(d => d.panelId === 'srcCT')!.observations).toEqual([ct.id]);
+    expect(p.destinations.find(d => d.panelId === 'srcGA')!.observations).toEqual([ga.id]);
+    commitGraphRun(useBrowserStore.getState(), p, response({ [ga.id]: { assignments: { [aid('q1', 'r:1')]: 1 } }, [ct.id]: { assignments: { [aid('q1', 'r:0')]: 0 } } }));
+    expect(useBrowserStore.getState().clusterAssignments['srcCT~lift-source']).toEqual({ q1: 0 });
+    expect(useBrowserStore.getState().clusterAssignments['srcGA~lift-source']).toEqual({ q1: 1 });
+    // An unsplit source panel with only strand observations takes them all.
+    expect(linkedSourceObservations([ct, ga] as never, source('x', '2', 'PAT')).length).toBe(2);
+  });
 });
+
