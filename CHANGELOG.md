@@ -30,7 +30,10 @@ Maps, graph packages and the helper are made with
   equivalent `fiberhmm-scan` command line; units an opened scan or an earlier
   scan computed with the same key are never computed again. Results go to the
   scan cache (`FIBERBROWSER_SCAN_CACHE_DIR`) and give the same rows as the
-  command line. Needs FiberHMM with `fiberhmm.scan`.
+  command line. Needs FiberHMM with `fiberhmm.scan`; `nuc` (nucleosome arrays)
+  appears when the FiberHMM has it. Peak scans use the local Rare rule (8%
+  open with at least min reads molecules covering the base, independent of the
+  view); the window rule stays a setting for this release.
 - Cluster, Sort and Filter by features read hub hits' per-read states; lifted
   datasets get them per record, so split rows of one read keep their own state.
 

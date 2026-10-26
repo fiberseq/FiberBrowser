@@ -46,7 +46,8 @@ names the scan, the FiberHMM and module versions, the units and the settings.
 
 Genome scans write each input BAM again with the scan's per-read results as
 extra MA groups (`fpcls` class membership, `nfrvar` NFR states, `nfrmol` NFR
-molecule scalars). Open an annotated BAM like any BAM, or as a live-lift dataset:
+molecule scalars; `nucsz` nucleosome sizes, `nucseg` array segments and
+`nucmol` scalars from `nuc`). Open an annotated BAM like any BAM, or as a live-lift dataset:
 the groups appear as layers (**Scan · classes**, **Scan · NFR variants**…) and
 follow the reads through live lift. Scans written as tables (BED scans, and the
 browser's own scans) give the same layers to the bound datasets.
@@ -61,7 +62,13 @@ browser's own scans) give the same layers to the bound datasets.
   own assembly: run fiberhmm-scan on their BAM and open the scan).
 - **Where**: the view's units of the genome grid (50 kb units, each owning its
   central 25 kb) and one more on each side; a BED file; or genes (TSS ± 5 kb).
-- **Modules**: `fp`, `nfr` (experimental) and `peaks`.
+- **Modules**: `fp`, `nfr` (experimental), `peaks`, and `nuc` (nucleosome
+  arrays, experimental) when your FiberHMM has it. Peaks use the local Rare
+  rule: a base is Rare where at least 8% of the molecules are open and at least
+  **min reads** molecules cover it, whatever the view; every record counts,
+  supplementaries included. The older window rule is a setting for this release
+  (`{"peaks": {"tier_rule": "window", "row_rule": "view"}}`), for BED and gene
+  scans.
 - **Settings**: depth caps (molecules used to discover and to quantify),
   workers (never changes a row), and module settings as JSON, as
   `fiberhmm-scan --parameters` takes them.
@@ -89,7 +96,9 @@ BAM files.
 - **Columns**: **All** is the pool; then one column per dataset (and per
   haplotype, in MAT orange and PAT blue, for Differences). Footprint classes and
   NFR variants show their prevalence (the share of callable molecules that are
-  members); peaks their score; SVs the share of informative reads that carry it.
+  members); nucleosome patches the share of measured molecules in the segment
+  class (phased patches: phasing over its null), also per haplotype; peaks their
+  score; SVs the share of informative reads that carry it.
   An empty cell is a dataset of the set without a value there; **—** is a
   dataset the set did not scan.
 - **Type**, **Prevalence ≥**, **Sort** and **Compare** (a Δ column between two
