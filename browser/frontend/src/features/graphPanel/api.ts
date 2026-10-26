@@ -30,6 +30,11 @@ export async function registerGraphPackage(packageDir: string): Promise<GraphReg
   return out.registration;
 }
 
+/** Forget a registered package (host-only, like registering one). */
+export function unregisterGraphPackage(registrationId: string): Promise<{ registration_id: string; removed: boolean }> {
+  return call(`/api/graph/registrations/${encodeURIComponent(registrationId)}`, { method: 'DELETE' });
+}
+
 export interface SubgraphQuery {
   registrationId: string;
   revisions: GraphRevisions;

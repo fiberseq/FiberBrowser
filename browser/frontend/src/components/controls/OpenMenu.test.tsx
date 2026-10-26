@@ -79,14 +79,15 @@ describe('Open ▾ in the top bar', () => {
     expect(button.getAttribute('aria-expanded')).toBe('true');
     expect(items().map(i => i.dataset.testid)).toEqual([
       'open-menu-open-file', 'open-menu-library', 'open-menu-load-by-path', 'open-menu-connect-cluster',
-      'open-menu-new-daf-run', 'open-menu-dataset-qc',
+      'open-menu-new-daf-run', 'open-menu-dataset-qc', 'open-menu-register-graph-package',
     ]);
-    expect(items().map(i => i.querySelector('span > span')!.textContent)).toEqual([
+    expect(items().slice(0, 6).map(i => i.querySelector('span > span')!.textContent)).toEqual([
       'Open file…', 'Open from Library', 'Load by path / URL…', 'Connect to cluster…',
       'Process raw data (New DAF-seq run)…', 'Data quality (QC a dataset)…',
     ]);
-    // One separator, between opening data and making or checking it.
-    expect(box.querySelectorAll('[data-testid="open-menu"] [role="separator"]')).toHaveLength(1);
+    // A separator between opening data and making or checking it, and one before the graph package entry.
+    expect(box.querySelectorAll('[data-testid="open-menu"] [role="separator"]')).toHaveLength(2);
+    expect(q('open-menu-register-graph-package')!.textContent).toBe('Register graph package…');
     const sep = box.querySelector('[data-testid="open-menu"] [role="separator"]')!;
     expect(sep.compareDocumentPosition(q('open-menu-new-daf-run')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(sep.compareDocumentPosition(q('open-menu-connect-cluster')!) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
@@ -154,7 +155,7 @@ describe('Open ▾ in the top bar', () => {
     await key('ArrowUp');
     await key('ArrowUp');
     // Wraps to the last item (grayed items stay reachable, so their reason is read out).
-    expect(document.activeElement).toBe(q('open-menu-dataset-qc'));
+    expect(document.activeElement).toBe(q('open-menu-register-graph-package'));
     await key('Home');
     expect(document.activeElement).toBe(q('open-menu-open-file'));
     await key('Escape');
@@ -209,7 +210,7 @@ describe('Open ▾ in the top bar', () => {
     expect(main.getAttribute('aria-label')).toBe('Open file');
     expect(q('open-menu-button')).not.toBeNull();
     await openMenu();
-    expect(items()).toHaveLength(6);
+    expect(items()).toHaveLength(7);
   });
 
   it('not on a public server (nothing there opens host files)', async () => {

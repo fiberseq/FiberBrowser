@@ -6,6 +6,8 @@ import { shortcutForCommand } from '../../utils/shortcuts';
 import { useMenuKeys } from '../../hooks/useMenuKeys';
 import { CheckCircle, ChevronDown, Dna, FolderOpen, Library, Link, Server } from '../ui/Icons';
 import { useLiveLiftStore } from '../../features/liveLift/store';
+import { revealSetting } from '../../utils/revealSetting';
+import { GRAPH_MODE_SETTINGS } from './sidebar/view/GraphModeSettings';
 
 type Icon = ComponentType<SVGProps<SVGSVGElement> & { size?: number }>;
 
@@ -40,7 +42,7 @@ export function OpenSplitButton({ compact, loading, onOpenFile, buttonClass }: O
   const rootRef = useRef<HTMLDivElement>(null);
   // Availability reads the store: re-render while open when it changes.
   useBrowserStore(s => s.datasets.length);
-  useBrowserStore(s => s.publicMode);
+  const publicMode = useBrowserStore(s => s.publicMode);
   const onKeyDown = useMenuKeys(open, () => setOpen(false), rootRef);
   // Live lift (behind the server's flag): another way in, a BAM of another assembly drawn here through a map.
   const liveLiftOn = useLiveLiftStore(s => s.enabled === true);
@@ -132,14 +134,25 @@ export function OpenSplitButton({ compact, loading, onOpenFile, buttonClass }: O
               })}
             </div>
           ))}
-          {liveLiftOn && (
+          {!publicMode && (
             <div role="none">
               <div className="fb-menu-sep" role="separator" />
-              <button type="button" role="menuitem" className="fb-menu-item items-start" data-testid="open-menu-add-live-lift"
+              {liveLiftOn && <button type="button" role="menuitem" className="fb-menu-item items-start" data-testid="open-menu-add-live-lift"
                 title="A BAM aligned to another assembly (e.g. HG002), drawn on this genome through a graphlift map"
                 onClick={() => { setOpen(false); useLiveLiftStore.getState().setDialogOpen(true); }}>
                 <Link size={14} aria-hidden="true" className="mt-0.5 flex-shrink-0" />
                 <span>Add live lift…</span>
+              </button>}
+              {/* Graph packages (graph mode on dataset panels): not a preview feature; Settings › Graph mode lists them. */}
+              <button type="button" role="menuitem" className="fb-menu-item items-start" data-testid="open-menu-register-graph-package"
+                title="Register a prepared pangenome graph package (fiberbrowser-graph prepare) so datasets it binds can be viewed in graph mode"
+                onClick={() => {
+                  setOpen(false);
+                  void revealSetting(GRAPH_MODE_SETTINGS.packages, { focus: false })
+                    .then(() => document.querySelector<HTMLInputElement>('[data-testid="graph-package-path"]')?.focus());
+                }}>
+                <Dna size={14} aria-hidden="true" className="mt-0.5 flex-shrink-0" />
+                <span>Register graph package…</span>
               </button>
             </div>
           )}
