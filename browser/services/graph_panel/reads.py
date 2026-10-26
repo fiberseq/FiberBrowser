@@ -50,6 +50,10 @@ import time
 from collections import OrderedDict
 from typing import Iterable, Optional
 
+import numpy as np
+
+from services.read_columns import IntColumn
+
 MAX_MOLECULES = 300          # a request without a profile (tests, tools)
 MIN_BAND_MOLECULES = 50      # each sub-band's share of the profile's molecules is at least this
 MAX_PINS = 2000
@@ -266,12 +270,22 @@ def _abs_layer(layer: Optional[dict], ids, parts, origin: int, name: str, keep) 
     quals = layer.get("qualities") or []
     ids = list(ids or [None] * len(layer["intervals"]))
     parts = list(parts or [None] * len(layer["intervals"]))
-    idx = [i for i, iv in enumerate(layer["intervals"]) if keep(int(iv[0]) + origin, int(iv[1]) + origin)]
-    if not idx:
-        return None
-    out = {"iv": [[int(layer["intervals"][i][0]) + origin, int(layer["intervals"][i][1]) + origin,
-                   int(layer["intervals"][i][2])] for i in idx],
-           "id": [ids[i] for i in idx], "part": [parts[i] for i in idx]}
+    column = layer["intervals"]
+    if type(column) is IntColumn and (column.width or 0) >= 3:
+        # Read row format 2: the same selection and values from the column's array in bulk.
+        arr = column.array
+        a, b = arr[:, 0] + origin, arr[:, 1] + origin
+        hit = np.flatnonzero(keep(a, b))
+        if not len(hit):
+            return None
+        idx = hit.tolist()
+        ivs = np.stack([a[hit], b[hit], arr[hit, 2]], axis=1).tolist()
+    else:
+        idx = [i for i, iv in enumerate(column) if keep(int(iv[0]) + origin, int(iv[1]) + origin)]
+        if not idx:
+            return None
+        ivs = [[int(column[i][0]) + origin, int(column[i][1]) + origin, int(column[i][2])] for i in idx]
+    out = {"iv": ivs, "id": [ids[i] for i in idx], "part": [parts[i] for i in idx]}
     for qn, track in zip(names, quals):
         if track is not None and qn in ("nq", "lq", "rq", "aq", "tq", "el", "er", "q0"):
             out[qn] = [track[i] for i in idx]
@@ -290,6 +304,11 @@ def compact_row(row: dict, origin: int, dataset_id: str, binding: str, windows: 
     wins = windows or [[-1 << 62, 1 << 62]]
 
     def keep(a, b):
+        if type(a) is np.ndarray:   # a column's starts and ends at once
+            hit = np.zeros(len(a), dtype=bool)
+            for wa, wb in wins:
+                hit |= (a < wb) & (b > wa)
+            return hit
         return any(a < wb and b > wa for wa, wb in wins)
 
     def inside(p):
@@ -326,8 +345,16 @@ def compact_row(row: dict, origin: int, dataset_id: str, binding: str, windows: 
         layer = _abs_layer(layers.get(name), calls.get(f"layer:{name}"), parts.get(f"layer:{name}"), origin, name, keep)
         if layer is not None:
             out[name] = layer
-    m6a = [int(p) + origin for p in row.get("methyl_m6a") or ()]
-    m6a = [p for p in m6a if inside(p)]
+    marks = row.get("methyl_m6a")
+    if type(marks) is IntColumn and marks.width is None:
+        p = marks.array + origin
+        hit = np.zeros(len(p), dtype=bool)
+        for wa, wb in wins:
+            hit |= (p >= wa) & (p < wb)
+        m6a = p[hit].tolist()
+    else:
+        m6a = [int(p) + origin for p in marks or ()]
+        m6a = [p for p in m6a if inside(p)]
     if m6a:
         out["m6a"] = m6a
     # A DAF-seq record's strand evidence (G8), resolved over its molecule when a response is assembled, as linear
