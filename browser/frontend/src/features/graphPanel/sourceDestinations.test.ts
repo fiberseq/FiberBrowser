@@ -330,5 +330,57 @@ describe('a linked source panel is a destination of graph runs', () => {
     useBrowserStore.getState().applyClusterTreeNode('r');
     expect(useBrowserStore.getState().clusterAssignments[key]).toEqual({ q1: 0 });
   });
+  it('post-merge A2 #2: a source clustered on its own after a graph run labelled it keeps its order and focus on reopen, though its numbers equal the member\'s', async () => {
+    seed([...split(), source('srcP', '2', 'PAT')]);
+    setPanelViewMode('mat', 'graph');
+    const p = plan();
+    const pat = p.observations.find(o => o.binding === 'pat')!.id;
+    commitGraphRun(useBrowserStore.getState(), p, response({ [pat]: { assignments: { [aid('q1')]: 0, [aid('q2')]: 1 } } }));
+    const key = 'srcP~lift-source';
+    const root = useBrowserStore.getState().activeClusterTreeNodeId!;
+    expect(useBrowserStore.getState().clusterTreeNodes[root].graphProvenance?.[key]).toBeDefined();
+    // An ordinary clustering of the source alone (as the Cluster button runs it) that happens to give the same groups.
+    useBrowserStore.setState({ clusterMatchedRun: null });
+    const s = useBrowserStore.getState();
+    s.setClusterAssignments(key, { q1: 0, q2: 1 });
+    s.syncActiveClusterTreeNode();
+    s.setClusterOrder(key, [1, 0]);
+    s.setClusterFocus(key, new Set([1]));
+    s.setClusterOrder('k-pat', [0, 1]);
+    s.setClusterFocus('k-pat', new Set([0]));
+    expect(useBrowserStore.getState().clusterTreeNodes[root].graphProvenance?.[key]).toBeUndefined();
+    expect(useBrowserStore.getState().clusterTreeNodes[root].graphProvenance?.['k-pat']).toBeDefined();
+    useBrowserStore.setState(x => ({ panels: x.panels.map(q => (q.id === 'srcP' ? { ...q, collapsed: true } : q)) }));
+    setPopOutKind('mat', 'source');
+    popOutPaths('mat', ['pat']);
+    await new Promise(r => setTimeout(r, 0));
+    const st = useBrowserStore.getState();
+    expect(st.panels.find(x => x.id === 'srcP')!.collapsed).toBe(false);
+    expect(st.clusterOrder[key]).toEqual([1, 0]);
+    expect([...st.clusterFocus[key]!]).toEqual([1]);
+    expect(st.clusterTreeNodes[root].focus[key]).toEqual([1]);
+  });
+
+  it('post-merge A2 #2: an ancestor node\'s graph provenance does not make a source\'s labels on a child node the run\'s', async () => {
+    seed([...split(), source('srcP', '2', 'PAT', { collapsed: true })]);
+    const key = 'srcP~lift-source';
+    const node = (id: string, parentId: string | null, extra: Record<string, unknown>) => ({
+      id, parentId, name: id, createdAt: 0, chrom: 'chr3', start: 128_650_000, end: 128_660_000, sourceClusterIds: [], clusterMethod: 'kmeans', clusterK: 2,
+      subnucleosomalThreshold: 0, accessibilityThreshold: 0, peakRegions: [], selectedPeakIndices: [], peakModes: {}, patterns: {}, dynamicClustering: false,
+      assignments: { 'k-pat': { [aid('q1')]: 0, [aid('q2')]: 1 }, [key]: { q1: 0, q2: 1 } }, order: { 'k-pat': [0, 1], [key]: [1, 0] },
+      focus: { 'k-pat': [0], [key]: [1] }, ...extra });
+    // The root was a graph run's; the child's source labels are a clustering of its own.
+    useBrowserStore.setState({ clusterTreeNodes: { r: node('r', null, { graphProvenance: { [key]: { observations: [], owned: {} } } }), c: node('c', 'r', {}) },
+      clusterTreeRootIds: ['r'], activeClusterTreeNodeId: 'c',
+      clusterAssignments: { 'k-pat': { [aid('q1')]: 0, [aid('q2')]: 1 }, [key]: { q1: 0, q2: 1 } }, clusterOrder: { 'k-pat': [0, 1], [key]: [1, 0] },
+      clusterFocus: { 'k-pat': new Set([0]), [key]: new Set([1]) } } as never);
+    setPanelViewMode('mat', 'graph');
+    setPopOutKind('mat', 'source');
+    popOutPaths('mat', ['pat']);
+    await new Promise(r => setTimeout(r, 0));
+    const st = useBrowserStore.getState();
+    expect(st.clusterOrder[key]).toEqual([1, 0]);
+    expect([...st.clusterFocus[key]!]).toEqual([1]);
+  });
 });
 

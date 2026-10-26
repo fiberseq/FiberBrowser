@@ -221,6 +221,16 @@ function keptGraphProvenance(node: ClusterTreeNode | undefined, assignments: Rec
   return kept.length ? { graphProvenance: Object.fromEntries(kept) } : {};
 }
 
+/** A node whose labels for `key` a grouping other than a graph run has replaced: no graph run's provenance owns them
+ * any more, even when the new labels equal the old (a graph run stamps its own after writing; Codex post-merge
+ * review, group A round 2, #2). */
+function withoutGraphProvenance(node: ClusterTreeNode, key: string): ClusterTreeNode {
+  if (!node.graphProvenance?.[key]) return node;
+  const { [key]: _gone, ...rest } = node.graphProvenance;
+  const { graphProvenance: _all, ...base } = node;
+  return Object.keys(rest).length ? { ...base, graphProvenance: rest } : base;
+}
+
 function cloneAssignments(assignments: Record<string, Record<string, number>>): Record<string, Record<string, number>> {
   return Object.fromEntries(
     Object.entries(assignments)
@@ -1110,7 +1120,7 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
         clusterTreeNodes: {
           ...state.clusterTreeNodes,
           [activeNode.id]: {
-            ...activeNode,
+            ...(options?.merge ? activeNode : withoutGraphProvenance(activeNode, datasetId)),
             assignments: cloneAssignments(clusterAssignments),
             order: cloneOrder(clusterOrder),
           },

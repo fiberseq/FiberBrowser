@@ -217,10 +217,16 @@ function runLabelled(s: ReturnType<typeof useBrowserStore.getState>, key: string
   return Boolean(s.clusterMatchedRun?.graph && s.clusterMatchedRun.destinations?.some(d => d.stateKey === key));
 }
 
-/** Whether a source view's labels came from a graph run: it is a destination of the current run, or a run of the
- * active tree node's lineage labelled it. Otherwise they are its own clustering. */
+/** Whether a source view's labels are a graph run's: the current run's while they are its shown labels, or those of
+ * the run that labelled it on the active tree node itself, while they are that node's. Any other grouping of it
+ * since drops that node's provenance (setClusterAssignments), and an ancestor's never counts: a clustering of its
+ * own keeps its order and focus however its numbers fall (Codex post-merge review, group A rounds 1-2, #2). */
 function runOwned(s: ReturnType<typeof useBrowserStore.getState>, key: string, active: string | null): boolean {
-  return runLabelled(s, key) || Boolean(active && provenanceLineage(s, key, active).length);
+  if (liveProvenance(s, key).length) return true;
+  const node = active ? s.clusterTreeNodes[active] : undefined;
+  const mine = node?.assignments?.[key], live = s.clusterAssignments[key];
+  return Boolean(node?.graphProvenance?.[key] && mine && live && Object.keys(mine).length === Object.keys(live).length
+    && Object.entries(mine).every(([q, c]) => live[q] === c));
 }
 
 /** A source view's read state from its member, by QNAME: its filter, selection and exclusions (state it already
