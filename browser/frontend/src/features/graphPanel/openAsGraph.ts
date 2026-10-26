@@ -9,6 +9,7 @@ import { useBrowserStore } from '../../stores/browserStore';
 import { seedHistoryBaseline } from '../../stores/historySlice';
 import { graphBindingFor, useGraphBindingsStore } from './bindingsStore';
 import { enterGraph, isHost, panelView } from './hostMode';
+import { offerGraphView } from './graphOffer';
 
 /** Dataset id -> its panels as split (a user action on them before the bindings arrive cancels the graph open). */
 const pending = new Map<string, string>();
@@ -54,7 +55,7 @@ export function settlePendingGraphOpens(): void {
     // (One haplotype: its one panel, which has no haplotype of its own to split by, G8.)
     const untouched = signature(datasetId) === split && mine.length >= 1 && (mine.length === 1 || mine.every(p => p.liftHap))
       && mine.every(p => !p.collapsed && !isHost(p) && !p.graphMemberOf);
-    if (!untouched) continue;
+    if (!untouched) { offerGraphView(datasetId); continue; }   // the chip offers it instead (§5.2 step 3)
     const next = enterGraph(s.panels, mine[0].id, bound, panelView(mine[0]));
     if (!next) continue;
     seedHistoryBaseline(s, 'Before opening as graph', 'layout');

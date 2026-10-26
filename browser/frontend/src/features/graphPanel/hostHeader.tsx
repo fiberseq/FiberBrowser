@@ -18,6 +18,7 @@ import { formatBp } from './coordinates';
 import { HANDOFF_OUT_BP, setPinnedLinear, useGraphSettings } from './handoff';
 import { foldIn, graphUnavailable, hostOf, isHost, joinCandidates, joinGraph, membersOf, poppable, removeFromGraph, setPanelViewMode, viewSelectionAsGraph } from './hostMode';
 import { PopOutPicker, usePopOutPicker } from './PopOutPicker';
+import { acceptGraphOffer, dismissGraphOffer, graphOfferPanel, useGraphOffers } from './graphOffer';
 import { POP_OUT_KINDS, popOutKindOf, popOutPaths, setPopOutKind, type PopOutKind } from './popOutKind';
 import { useGraphStatusStore } from './statusStore';
 import { memberLabel, singleHapPathName } from './labels';
@@ -69,8 +70,14 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
     || (isHost(p) && p.id !== panel.id))));
   const outBp = useGraphSettings(s => s.outBp);
   const pickerOpen = usePopOutPicker(s => s.hostId === panel.id);
+  const offered = useGraphOffers(s => Boolean(panel.datasetId && s.offered[panel.datasetId] && !s.done[panel.datasetId]));
+  // (Which panel shows the offer depends on the dataset's other panels.)
+  const offerHere = useBrowserStore(s => offered && graphOfferPanel(s.panels, panel.datasetId, useGraphOffers.getState()) === panel.id);
   void bindingsKey;
   useEffect(() => { watchGraphBindings(); }, []);
+  // Viewed as a graph some other way (the header toggle, a selection): the offer is used.
+  const inGraph = isHost(panel) || Boolean(panel.graphMemberOf);
+  useEffect(() => { if (offered && inGraph && panel.datasetId) dismissGraphOffer(panel.datasetId); }, [offered, inGraph, panel.datasetId]);
   if (panel.contentType !== 'dataset' || !panel.datasetId) return null;
   const host = isHost(panel);
   const panels = [panel, ...related];
@@ -197,7 +204,17 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
       ))}
     </>
   );
-  return { chipTexts: [`${text} ⇄ Graph`], chips, menu, wantsMenu: true, menuTitle: 'graph mode' };
+  // A restored split session, or a binding that came after the user acted on these panels: offered once (§5.2, §5.4).
+  const offer = offerHere && !graphUnavailable(panel) ? (
+    <div data-testid="graph-offer-bar" data-dataset={panel.datasetId}
+      className="flex items-center gap-2 border-b border-stone-200 bg-stone-50 px-2 py-0.5 text-[11px] text-stone-600 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-300">
+      <span>A graph package binds this dataset{panel.liftHap ? '; its haplotype panels can be viewed together on its paths' : ''}.</span>
+      <button type="button" className="underline" data-testid="graph-offer-view" onClick={() => acceptGraphOffer(panel.id, panel.datasetId!)}>View as graph</button>
+      <button type="button" className="ml-auto" aria-label="Dismiss" title="Dismiss" data-testid="graph-offer-dismiss"
+        onClick={() => dismissGraphOffer(panel.datasetId!)}>×</button>
+    </div>
+  ) : null;
+  return { chipTexts: [`${text} ⇄ Graph`], chips, menu, wantsMenu: true, menuTitle: 'graph mode', ...(offer ? { body: offer } : {}) };
 }
 
 export { HANDOFF_OUT_BP };

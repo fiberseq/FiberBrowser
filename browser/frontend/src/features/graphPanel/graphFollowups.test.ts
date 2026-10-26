@@ -22,6 +22,9 @@ import { registerGraphPanel } from './register';
 import { memberLabel, singleHapPathName } from './labels';
 import type { GraphBinding, GraphOccurrence, GraphRead, GraphReadBinding, GraphRegistration, GraphTopology } from './types';
 import { createElement, act } from 'react';
+import { acceptGraphOffer, dismissGraphOffer, graphOfferPanel, offerGraphView, useGraphOffers } from './graphOffer';
+import { autoSplitNewLiftedDatasets } from '../liveLift/register';
+import { notePendingGraphOpen, settlePendingGraphOpens } from './openAsGraph';
 import { CROSSFADE_MS, fadeIn, panelBodyParts } from './crossfade';
 import { createRoot } from 'react-dom/client';
 import { PopOutPicker, pickedPopOut, usePopOutPicker } from './PopOutPicker';
@@ -263,3 +266,50 @@ describe('item 6: the hand-off crossfade (150 ms, reduced motion respected)', ()
     expect(panelBodyParts(null)).toEqual([]);
   });
 });
+
+describe('item 2: the one-time "View as graph" offer (restored split sessions, late bindings)', () => {
+  beforeEach(() => useGraphOffers.setState({ offered: {}, done: {} }));
+  const offers = () => useGraphOffers.getState();
+
+  it('a restored split session is left as saved and offered once on its first split panel', () => {
+    seed(split());
+    useBrowserStore.setState(s => ({ datasets: s.datasets.map(d => (d.id === 'd' ? { ...d, live_lift: { haplotypes: ['1', '2'], haplotype_labels: { 1: 'MAT', 2: 'PAT' } } } as never : d)) }));
+    const before = JSON.stringify(useBrowserStore.getState().panels);
+    autoSplitNewLiftedDatasets(new Set());
+    expect(JSON.stringify(useBrowserStore.getState().panels)).toBe(before);
+    expect(graphOfferPanel(useBrowserStore.getState().panels, 'd', offers())).toBe('mat');
+    // Used: the panel views its graph, and the offer is gone for good.
+    expect(acceptGraphOffer('mat', 'd')).toBeNull();
+    expect(isHostPanel('mat')).toBe(true);
+    expect(offers().done.d).toBe(true);
+    offerGraphView('d');
+    expect(graphOfferPanel(useBrowserStore.getState().panels, 'd', offers())).toBeNull();
+  });
+
+  it('a binding that arrives after the user acted on the split panels offers it instead of rearranging them', () => {
+    seed(split());
+    useGraphBindingsStore.setState({ loading: true });
+    notePendingGraphOpen('d');
+    useBrowserStore.setState(s => ({ panels: s.panels.map(p => (p.id === 'pat' ? { ...p, title: 'renamed' } : p)) }));
+    useGraphBindingsStore.setState({ loading: false });
+    settlePendingGraphOpens();
+    expect(get('mat').viewMode).toBeUndefined();
+    expect(graphOfferPanel(useBrowserStore.getState().panels, 'd', offers())).toBe('mat');
+    // Dismissed: not shown again this session, even when offered again.
+    dismissGraphOffer('d');
+    offerGraphView('d');
+    expect(graphOfferPanel(useBrowserStore.getState().panels, 'd', offers())).toBeNull();
+  });
+
+  it('no offer on a dataset already in a graph, or never offered; a hidden first panel passes it to the next', () => {
+    seed(split());
+    expect(graphOfferPanel(useBrowserStore.getState().panels, 'd', offers())).toBeNull();
+    offerGraphView('d');
+    const hidden = useBrowserStore.getState().panels.map(p => (p.id === 'mat' ? { ...p, collapsed: true } : p));
+    expect(graphOfferPanel(hidden, 'd', offers())).toBe('pat');
+    setPanelViewMode('mat', 'graph');
+    expect(graphOfferPanel(useBrowserStore.getState().panels, 'd', offers())).toBeNull();
+  });
+});
+
+function isHostPanel(id: string) { return get(id).graphView?.role === 'host' && get(id).viewMode === 'graph'; }
