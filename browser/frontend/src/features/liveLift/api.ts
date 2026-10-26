@@ -1,4 +1,6 @@
 /** Live-lift endpoints (routers/lift.py); every one answers 404 while the server's flag is off. */
+import { isPublicMode } from '../../utils/publicMode';
+import { isSandboxPage } from '../../utils/sandbox';
 import type { Dataset } from '../../types';
 import { fetchJson } from '../../api/sharedFetch';
 import { getCoverage, type CoverageResponse } from '../../api/coverage';
@@ -65,6 +67,8 @@ export interface LiftAddResult {
 }
 
 export async function liveLiftEnabled(): Promise<boolean> {
+  // Live lift is off on public servers and in tour tabs (public-mode rules refuse the route): not asked there.
+  if (isPublicMode() || isSandboxPage()) return false;
   try {
     const r = await fetch('/api/lift/enabled');
     if (!r.ok) return false;
