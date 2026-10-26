@@ -13,7 +13,10 @@ import { useBrowserStore } from '../../stores/browserStore';
 import { useGraphStatusStore } from './statusStore';
 import { useGraphBindingsStore } from './bindingsStore';
 import { enterGraph, poppable, setPanelViewMode } from './hostMode';
-import { popOutKindOf, popOutPaths, popOutPlan, setPopOutKind } from './popOutKind';
+import { popOutKindOf, popOutPaths, popOutPlan, seedSourceState, setPopOutKind } from './popOutKind';
+import { duringSessionRestore, SESSION_RESTORED_EVENT } from '../../utils/sessionRestore';
+import { useReadActionsStore } from '../../stores/readActionsStore';
+import { offerRestoredSplitSessions } from '../liveLift/register';
 import { openLinkedSourceView } from '../liveLift/linking/liftLink';
 import { migratePanelAliases } from '../../plugins/registry';
 import { graphBindingFor } from './bindingsStore';
@@ -29,7 +32,8 @@ import { notePendingGraphOpen, settlePendingGraphOpens } from './openAsGraph';
 import { CROSSFADE_MS, fadeIn, panelBodyParts } from './crossfade';
 import { createRoot } from 'react-dom/client';
 import { PopOutPicker, pickedPopOut, usePopOutPicker } from './PopOutPicker';
-import { canonicalWalk, firstCarriedColumn, firstCarriedColumns } from './columnOrder';
+import { canonicalWalk, compareColumnKeys, firstCarriedColumn, firstCarriedColumns } from './columnOrder';
+import repeatVisit from './__fixtures__/gateC/repeat_visit.topology.json';
 import { packMemberBands, type BandMember } from './memberBands';
 import type { PlacedMolecule } from './readGeometry';
 import type { PanelConfig } from '../../types';
@@ -124,9 +128,9 @@ describe('item 5: the per-host pop-out kind (lifted, source, both; D7)', () => {
     const host = get('mat');
     expect(popOutPlan(s.panels, s.datasets, host, ['pat', 'nat'], [], 'lifted')).toEqual({ reveal: ['pat', 'nat'], make: [], sources: [] });
     expect(popOutPlan(s.panels, s.datasets, host, ['pat', 'nat'], [], 'source'))
-      .toEqual({ reveal: ['nat'], make: [], sources: [{ liftPanelId: 'mat', hap: 'PAT' }] });
+      .toEqual({ reveal: ['nat'], make: [], sources: [{ liftPanelId: 'mat', hap: 'PAT', fromPanelId: 'pat' }] });
     expect(popOutPlan(s.panels, s.datasets, host, ['pat'], [{ binding: 'x', hap: 'X' }], 'both'))
-      .toEqual({ reveal: ['pat'], make: [{ binding: 'x', hap: 'X' }], sources: [{ liftPanelId: 'mat', hap: 'PAT' }, { liftPanelId: 'mat', hap: 'X' }] });
+      .toEqual({ reveal: ['pat'], make: [{ binding: 'x', hap: 'X' }], sources: [{ liftPanelId: 'mat', hap: 'PAT', fromPanelId: 'pat' }, { liftPanelId: 'mat', hap: 'X', fromPanelId: 'mat' }] });
   });
 
   it('source: popping out a path opens its source view and leaves the member folded', async () => {
@@ -136,7 +140,7 @@ describe('item 5: the per-host pop-out kind (lifted, source, both; D7)', () => {
     vi.mocked(openLinkedSourceView).mockClear();
     popOutPaths('mat', ['pat']);
     await new Promise(r => setTimeout(r, 0));
-    expect(openLinkedSourceView).toHaveBeenCalledWith('mat', 'PAT');
+    expect(openLinkedSourceView).toHaveBeenCalledWith('mat', 'PAT', {});
     expect(get('pat').collapsedByGraphGroup).toBe('mat');
     setPopOutKind('mat', 'both');
     popOutPaths('mat', poppable(useBrowserStore.getState().panels, get('mat')).folded.map(p => p.id));
@@ -406,5 +410,139 @@ describe('group H review 3: revealing an open source view is its own undo step',
     useBrowserStore.getState().undo();
     expect(get('src').collapsed).toBe(true);
     expect(popOutKindOf(get('mat'))).toBe('source');
+  });
+});
+
+describe('group H agy review 1: canonical order on minus-parity carriers and repeated nodes', () => {
+  const occ = (id: string, node: string, start: number, end: number, reverse = false): GraphOccurrence => ({
+    id, node, handle: `${node}${reverse ? '-' : '+'}`, reverse, fragment: 'f', path_span: { start, end }, clip: { start: 0, end: end - start } });
+  const rd = (k: string, b: string, s0: number, e0: number) => ({ k, b, s: s0, e: e0, cov: [[s0, e0, 0, 1]] as [number, number, number, number][] });
+
+  it('a minus-parity carrier is walked in the target frame: its insertion ranks between its flanks', () => {
+    // Target nL → nM → nR; the carrier walks the reverse complement: nR- → nIns → nM- → nL-.
+    const topo = { target: 'tgt', interval: { start: 0, end: 300 }, nodes: [], edges: [], summaries: [], target_queries: [], direct_matches: [],
+      complete: true, correspondence_complete: true, timings: {},
+      paths: [{ binding: 'tgt', windows: [], coverage: [], plan: null, complete: true, occurrences: [occ('t0', 'nL', 0, 100), occ('t1', 'nM', 100, 200), occ('t2', 'nR', 200, 300)] },
+        { binding: 'm', windows: [], coverage: [], plan: null, complete: true,
+          occurrences: [occ('m0', 'nR', 0, 100, true), occ('m1', 'nIns', 100, 150), occ('m2', 'nM', 150, 250, true), occ('m3', 'nL', 250, 350, true)] }] } as unknown as GraphTopology;
+    const cols = firstCarriedColumns([rd('ins', 'm', 100, 150), rd('right', 'm', 0, 100), rd('mid', 'm', 150, 250)], topo, ['tgt', 'm']);
+    expect(cols.get('ins')![0]).toBe(1);
+    expect(compareColumnKeys(cols.get('mid'), cols.get('ins'))).toBeLessThan(0);
+    expect(compareColumnKeys(cols.get('ins'), cols.get('right'))).toBeLessThan(0);
+    // Within nR (target forward, carrier reversed): its first canonical column is the node's start.
+    expect(cols.get('right')).toEqual([2, 0, 0, 0]);
+  });
+
+  it('a node the target walks twice ranks per visit: the insertion after its second copy comes after the node between', () => {
+    const topo = (repeatVisit as { topology: unknown }).topology as GraphTopology;
+    const cols = firstCarriedColumns([rd('mid', 'mat', 1100, 1400), rd('ins', 'mat', 1800, 1890), rd('copy2', 'mat', 1600, 1700)], topo, ['ref', 'mat', 'pat']);
+    expect(cols.get('mid')).toEqual([2, 0, 0, 100]);
+    expect(cols.get('copy2')![0]).toBe(3);
+    expect(compareColumnKeys(cols.get('mid'), cols.get('ins'))).toBeLessThan(0);
+    expect(compareColumnKeys(cols.get('copy2'), cols.get('ins'))).toBeLessThan(0);
+  });
+
+  it('an extra copy the target walks once never runs the frame backwards', () => {
+    const topo = { target: 'tgt', interval: { start: 0, end: 300 }, nodes: [], edges: [], summaries: [], target_queries: [], direct_matches: [],
+      complete: true, correspondence_complete: true, timings: {},
+      paths: [{ binding: 'tgt', windows: [], coverage: [], plan: null, complete: true, occurrences: [occ('t0', 'a', 0, 100), occ('t1', 'b', 100, 200), occ('t2', 'c', 200, 300)] },
+        { binding: 'm', windows: [], coverage: [], plan: null, complete: true,
+          occurrences: [occ('m0', 'a', 0, 100), occ('m1', 'b', 100, 200), occ('m2', 'a', 200, 300), occ('m3', 'x', 300, 350), occ('m4', 'c', 350, 450)] }] } as unknown as GraphTopology;
+    const cols = firstCarriedColumns([rd('b', 'm', 120, 180), rd('dup', 'm', 210, 290), rd('x', 'm', 300, 350), rd('c', 'm', 360, 440)], topo, ['tgt', 'm']);
+    expect(compareColumnKeys(cols.get('b'), cols.get('dup'))).toBeLessThan(0);
+    expect(compareColumnKeys(cols.get('dup'), cols.get('x'))).toBeLessThan(0);
+    expect(compareColumnKeys(cols.get('x'), cols.get('c'))).toBeLessThan(0);
+  });
+});
+
+describe('group H agy review 2: a saved linear single-haplotype session is restored as saved', () => {
+  beforeEach(() => useGraphOffers.setState({ offered: {}, done: {} }));
+  const oneHapDataset = () => useBrowserStore.setState(s => ({ datasets: s.datasets.map(d => (d.id === 's'
+    ? { ...d, live_lift: { haplotypes: ['1'], haplotype_labels: { 1: 'A' } } } as never : d)) }));
+
+  it('a single-haplotype panel saved linear stays linear and is offered "View as graph"', async () => {
+    seed([panel('only', { datasetId: 's', liftHaplotypeMode: 'split', viewMode: 'linear' })]);
+    oneHapDataset();
+    autoSplitNewLiftedDatasets(new Set());
+    await new Promise(r => setTimeout(r, 0));
+    settlePendingGraphOpens();
+    expect(get('only').viewMode).toBe('linear');
+    expect(graphOfferPanel(useBrowserStore.getState().panels, 's', useGraphOffers.getState())).toBe('only');
+    // A later restore of the same layout offers it again.
+    useGraphOffers.setState({ offered: {}, done: { s: true } });
+    offerRestoredSplitSessions();
+    expect(graphOfferPanel(useBrowserStore.getState().panels, 's', useGraphOffers.getState())).toBe('only');
+  });
+
+  it('anything arriving while a session restores is a restored layout, never opened as a graph', async () => {
+    seed([panel('only', { datasetId: 's', liftHaplotypeMode: 'split' })]);
+    oneHapDataset();
+    await duringSessionRestore(async () => { autoSplitNewLiftedDatasets(new Set()); return { restored: true }; });
+    await new Promise(r => setTimeout(r, 0));
+    settlePendingGraphOpens();
+    expect(get('only').viewMode).toBeUndefined();
+  });
+});
+
+describe('group H agy review 4: the offer views this panel only; the restored event only after a real restore', () => {
+  beforeEach(() => useGraphOffers.setState({ offered: {}, done: {} }));
+
+  it('accepting the offer never folds other selected panels and is one undo step', () => {
+    seed([...split(), panel('nat', { datasetId: 'n' })]);
+    useBrowserStore.setState({ selectedDatasets: new Set(['mat', 'nat']) } as never);
+    offerGraphView('d');
+    useBrowserStore.getState().pushSnapshot?.('start', { kind: 'layout' });
+    expect(acceptGraphOffer('mat', 'd')).toBeNull();
+    expect(get('nat').graphMemberOf).toBeUndefined();
+    expect(get('pat').graphMemberOf).toBe('mat');
+    useBrowserStore.getState().undo();
+    expect(get('mat').viewMode).toBeUndefined();
+  });
+
+  it('fires once when the outermost restore really restored; never for a cancelled or failed one', async () => {
+    const seen = vi.fn();
+    window.addEventListener(SESSION_RESTORED_EVENT, seen);
+    await duringSessionRestore(async () => ({ restored: false }));
+    await duringSessionRestore(async () => ({ success: false }));
+    await expect(duringSessionRestore(async () => { throw new Error('no'); })).rejects.toThrow();
+    expect(seen).not.toHaveBeenCalled();
+    await duringSessionRestore(async () => duringSessionRestore(async () => ({ success: true })).then(() => ({ restored: true })));
+    expect(seen).toHaveBeenCalledTimes(1);
+    window.removeEventListener(SESSION_RESTORED_EVENT, seen);
+  });
+});
+
+describe('group H agy review 3: source pop-outs start with their member\'s state, beside the host, at its view', () => {
+  const aidOf = (q: string) => `lift-cohort:v1 ${JSON.stringify([`d#0|${q}`, q, `${q}:r`, 0, 'primary'])}`;
+
+  it('a new source view takes the member\'s filter, selection, exclusions, labels, order, focus and names by QNAME', () => {
+    seed([...split(), panel('src', { datasetId: 'n', stateKey: 'src~lift-source' })]);
+    useBrowserStore.setState({ filteredReadIds: { 'k-pat': new Set([aidOf('q1'), 'q2']) }, selectedReadIds: { 'k-pat': new Set([aidOf('q1')]) },
+      clusterAssignments: { 'k-pat': { [aidOf('q1')]: 0, [aidOf('q2')]: 1 } }, clusterOrder: { 'k-pat': [1, 0] }, clusterFocus: { 'k-pat': new Set([1]) },
+      clusterGroupLabels: { 'k-pat': { 1: 'C1' } } } as never);
+    useReadActionsStore.getState().excludeReads('k-pat', [aidOf('q3')]);
+    seedSourceState('pat', 'src');
+    const st = useBrowserStore.getState();
+    expect([...st.filteredReadIds['src~lift-source']!].sort()).toEqual(['q1', 'q2']);
+    expect([...st.selectedReadIds['src~lift-source']!]).toEqual(['q1']);
+    expect(st.clusterAssignments['src~lift-source']).toEqual({ q1: 0, q2: 1 });
+    expect(st.clusterOrder['src~lift-source']).toEqual([1, 0]);
+    expect([...st.clusterFocus['src~lift-source']!]).toEqual([1]);
+    expect(st.clusterGroupLabels['src~lift-source']).toEqual({ 1: 'C1' });
+    expect([...useReadActionsStore.getState().excludedReadIds['src~lift-source']!]).toEqual(['q3']);
+  });
+
+  it('a joined dataset\'s source view opens beside the host; a host with its own view maps that view', async () => {
+    seed([...split(), panel('only', { datasetId: 's' })]);
+    setPanelViewMode('mat', 'graph');
+    const { joinGraph } = await import('./hostMode');
+    joinGraph('mat', ['only']);
+    expect(get('only').graphMemberOf).toBe('mat');
+    setPopOutKind('mat', 'source');
+    useBrowserStore.setState(s => ({ panels: s.panels.map(p => (p.id === 'mat' ? { ...p, viewportOverride: { chrom: 'chr3', start: 100, end: 900 } } : p)) }));
+    vi.mocked(openLinkedSourceView).mockClear();
+    popOutPaths('mat', ['only']);
+    await new Promise(r => setTimeout(r, 0));
+    expect(openLinkedSourceView).toHaveBeenCalledWith('only', null, { view: { chrom: 'chr3', start: 100, end: 900 }, besidePanelId: 'mat' });
   });
 });

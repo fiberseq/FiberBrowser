@@ -28,15 +28,32 @@ export function sessionRestoresInFlight(): number {
  * layout listen, e.g. the graph package's "View as graph" offer). */
 export const SESSION_RESTORED_EVENT = 'fiberbrowser:session-restored';
 
-/** Count `work` as a session restore while it runs. */
+/** Whether a settled restore actually restored: an outcome saying `restored: false` (cancelled, refused) or
+ * `success: false` did not. */
+function restoredBy(result: unknown): boolean {
+  if (!result || typeof result !== 'object') return true;
+  const r = result as { restored?: unknown; success?: unknown };
+  return r.restored !== false && r.success !== false;
+}
+
+let restoredSinceIdle = false;
+
+/** Count `work` as a session restore while it runs. The restored event fires once the outermost restore settles,
+ * and only when a restore really happened (not a cancelled, refused or failed one: agy review, group H). */
 export async function duringSessionRestore<T>(work: () => Promise<T>): Promise<T> {
   inFlight += 1;
   try {
-    return await work();
+    const result = await work();
+    if (restoredBy(result)) restoredSinceIdle = true;
+    return result;
   } finally {
     inFlight -= 1;
-    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
-      try { window.dispatchEvent(new CustomEvent(SESSION_RESTORED_EVENT)); } catch { /* no DOM events here */ }
+    if (inFlight === 0) {
+      const fire = restoredSinceIdle;
+      restoredSinceIdle = false;
+      if (fire && typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+        try { window.dispatchEvent(new CustomEvent(SESSION_RESTORED_EVENT)); } catch { /* no DOM events here */ }
+      }
     }
   }
 }

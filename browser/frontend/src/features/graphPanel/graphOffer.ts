@@ -6,7 +6,7 @@
  */
 import { create } from 'zustand';
 import type { PanelConfig } from '../../types';
-import { isHost, viewSelectionAsGraph } from './hostMode';
+import { isHost, setPanelViewMode } from './hostMode';
 
 interface OfferState {
   /** Datasets offered (restored split, or bound late). */
@@ -57,7 +57,8 @@ export function graphOfferPanel(panels: readonly PanelConfig[], datasetId: strin
 
 /** "View as graph" from the offer: the panel views its graph (its split siblings fold in); the offer is used. */
 export function acceptGraphOffer(panelId: string, datasetId: string): string | null {
-  const why = viewSelectionAsGraph(panelId);
+  // This panel only (its split siblings fold in): never the other selected panels, and one undo step (agy review).
+  const why = setPanelViewMode(panelId, 'graph');
   if (!why) dismissGraphOffer(datasetId);
   return why;
 }

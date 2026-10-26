@@ -15,34 +15,72 @@ import type { GraphOccurrence, GraphRead, GraphTopology, Span } from './types';
 export type ColumnKey = readonly [number, number, number, number];
 
 export interface CanonicalWalk {
-  /** Node id -> its rank and the canonical orientation of the node (true: the walk traverses it reversed). */
+  /** Node id -> its rank and canonical orientation at its first canonical visit (true: the walk traverses it
+   * reversed). */
   nodes: Map<string, { rank: readonly [number, number, number]; reverse: boolean }>;
+  /** Occurrence id -> the rank and canonical orientation of that visit (a repeated node ranks per visit). */
+  visits: Map<string, { rank: readonly [number, number, number]; reverse: boolean }>;
   /** Binding -> its occurrences in path order. */
   occurrences: Map<string, GraphOccurrence[]>;
 }
 
-/** The canonical walk of a topology. `bindingOrder`: the package's binding order (default: the topology's paths). */
+/**
+ * The canonical walk of a topology. `bindingOrder`: the package's binding order (default: the topology's paths).
+ *
+ * - Target visits rank by visit, in walk order (a node the target walks twice has two ranks).
+ * - A carrier path is walked in the target's frame order: its baseline parity is the orientation carrying most of
+ *   its bp on target nodes (a minus-parity carrier is walked backwards, as layout.ts frames it). A visit of a target
+ *   node takes the first target visit of that node after the carrier's last anchor (colinear; none: an extra copy,
+ *   ranked like an insertion after the anchor); an
+ *   off-target node ranks right after the last anchor, in frame order, and keeps its first carrier's rank and
+ *   orientation (relative to the target frame) for later carriers (agy review, group H).
+ */
 export function canonicalWalk(topology: GraphTopology, bindingOrder?: readonly string[]): CanonicalWalk {
   const occurrences = new Map<string, GraphOccurrence[]>();
   for (const p of topology.paths) {
     occurrences.set(p.binding, [...p.occurrences].sort((a, b) => a.path_span.start - b.path_span.start || a.path_span.end - b.path_span.end));
   }
   const nodes: CanonicalWalk['nodes'] = new Map();
-  let rank = 0;
-  for (const o of occurrences.get(topology.target) ?? []) {
-    if (!nodes.has(o.node)) nodes.set(o.node, { rank: [rank++, 0, 0], reverse: o.reverse });
-  }
+  const visits: CanonicalWalk['visits'] = new Map();
+  const targetVisits = new Map<string, { i: number; reverse: boolean }[]>();
+  (occurrences.get(topology.target) ?? []).forEach((o, i) => {
+    const v = { rank: [i, 0, 0] as const, reverse: o.reverse };
+    visits.set(o.id, v);
+    if (!nodes.has(o.node)) nodes.set(o.node, v);
+    (targetVisits.get(o.node) ?? targetVisits.set(o.node, []).get(o.node)!).push({ i, reverse: o.reverse });
+  });
   const order = (key: string) => { const i = bindingOrder?.indexOf(key) ?? -1; return i < 0 ? 1e6 + topology.paths.findIndex(p => p.binding === key) : i; };
   const others = topology.paths.map(p => p.binding).filter(b => b !== topology.target).sort((a, b) => order(a) - order(b));
+  const len = (o: GraphOccurrence) => Math.max(1, o.clip.end - o.clip.start);
   others.forEach((b, pi) => {
+    const occs = occurrences.get(b) ?? [];
+    // Baseline parity: the orientation against the target carrying the most bp of shared nodes.
+    let same = 0, opposite = 0;
+    for (const o of occs) {
+      const t = targetVisits.get(o.node)?.[0];
+      if (t) { if (o.reverse === t.reverse) same += len(o); else opposite += len(o); }
+    }
+    const backward = opposite > same;
     let anchor = -1, step = 0;
-    for (const o of occurrences.get(b) ?? []) {
+    for (const o of backward ? [...occs].reverse() : occs) {
+      const t = targetVisits.get(o.node);
+      // (A target visit at or before the anchor would run the frame backwards: a copy the target walks fewer times
+      // than this carrier is unrolled like an insertion, after the anchor.)
+      const hit = t?.find(x => x.i > anchor) ?? (t && anchor < 0 ? t[0] : undefined);
+      if (hit) {
+        anchor = hit.i; step = 0;
+        visits.set(o.id, { rank: [hit.i, 0, 0], reverse: hit.reverse });
+        continue;
+      }
+      if (t) { visits.set(o.id, { rank: [anchor, pi + 1, ++step], reverse: o.reverse !== backward }); continue; }
       const known = nodes.get(o.node);
-      if (known) { if (known.rank[1] === 0 && known.rank[2] === 0) { anchor = known.rank[0]; step = 0; } continue; }
-      nodes.set(o.node, { rank: [anchor, pi + 1, ++step], reverse: o.reverse });
+      if (known) { visits.set(o.id, known); continue; }
+      const v = { rank: [anchor, pi + 1, ++step] as const, reverse: o.reverse !== backward };
+      nodes.set(o.node, v);
+      visits.set(o.id, v);
     }
   });
-  return { nodes, occurrences };
+  return { nodes, visits, occurrences };
 }
 
 const intersect = (a: Span, b: Span): Span | null => {
@@ -64,7 +102,7 @@ export function firstCarriedColumn(read: Pick<GraphRead, 'b' | 's' | 'e' | 'cov'
   for (const o of occs) {
     if (o.path_span.end <= read.s) continue;
     if (o.path_span.start >= read.e) break;
-    const node = walk.nodes.get(o.node);
+    const node = walk.visits.get(o.id) ?? walk.nodes.get(o.node);
     if (!node) continue;
     // The clip is in the path's traversal of the node: path coordinates from the visit's start.
     const clip = { start: o.path_span.start + o.clip.start, end: o.path_span.start + o.clip.end };

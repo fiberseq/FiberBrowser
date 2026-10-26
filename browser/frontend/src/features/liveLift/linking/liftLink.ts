@@ -208,7 +208,10 @@ export function linkedSourcePanels(datasetId: string, hap?: string | null): Pane
  * from the main view, stacked under the lifted panel and linked to it. An already linked panel for that haplotype is
  * kept (and returned).
  */
-export async function openLinkedSourceView(liftPanelId: string, hapLabel?: string | null): Promise<string | null> {
+export async function openLinkedSourceView(liftPanelId: string, hapLabel?: string | null,
+  /** A graph pop-out (graph features): the view to map (the host's own view) and the panel to stack it beside (the
+   * host, when the lifted panel is folded into its graph). */
+  opts: { view?: { chrom: string; start: number; end: number }; besidePanelId?: string } = {}): Promise<string | null> {
   const st = useBrowserStore.getState();
   const liftPanel = st.panels.find(p => p.id === liftPanelId);
   const dataset = st.datasets.find(d => d.id === liftPanel?.datasetId);
@@ -225,7 +228,7 @@ export async function openLinkedSourceView(liftPanelId: string, hapLabel?: strin
   try {
     const summary = await ensureSummary(dataset.id, key);
     if (!summary) throw new Error('the lift map summary is unavailable');
-    const main = { chrom: st.chrom, start: st.start, end: st.end };
+    const main = opts.view ? { ...opts.view } : { chrom: st.chrom, start: st.start, end: st.end };
     await prefetchView(dataset.id, key, 0, main.chrom, main.start, main.end);
     const out = mapSpan(dataset.id, key, 'toSource', main, { hap });
     const contigs = sourceContigsFor(summary, main.chrom, hap);
@@ -250,7 +253,8 @@ export async function openLinkedSourceView(liftPanelId: string, hapLabel?: strin
     const link: LiftLinkConfig = { id: `lift-link-${id}`, datasetId: dataset.id, liftPanelId, hap, hapLabel: label,
       contig: mapping.chrom, flip: mapping.minus, chain: null };
     useBrowserStore.setState(state => {
-      const at = state.panels.findIndex(p => p.id === liftPanelId);
+      const beside = opts.besidePanelId && state.panels.some(p => p.id === opts.besidePanelId) ? opts.besidePanelId : liftPanelId;
+      const at = state.panels.findIndex(p => p.id === beside);
       if (at < 0) return state;
       const lp = state.panels[at];
       const row = lp.layoutRow ?? 0;
@@ -276,7 +280,8 @@ export async function openLinkedSourceView(liftPanelId: string, hapLabel?: strin
     const now = useBrowserStore.getState();
     const moved = now.chrom !== main.chrom || now.start !== main.start || now.end !== main.end;
     const installed = now.panels.find(p => p.id === id);
-    if (installed && (moved || !mapping.exact)) {
+    // (Opened at a host's own view: the main view's corrections are not for it.)
+    if (installed && !opts.view && (moved || !mapping.exact)) {
       schedule(installed, bump(id), now.chrom, 'panel');
       queueMicrotask(() => applyCorrections(dataset.id));
     }

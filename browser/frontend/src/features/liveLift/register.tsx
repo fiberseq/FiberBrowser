@@ -18,7 +18,7 @@ import { LiftedPanelLinkItems, registerLiftLinkingUi } from './linking/register'
 import { liftedOpenView } from '../graphPanel/handoff';
 import { notePendingGraphOpen } from '../graphPanel/openAsGraph';
 import { offerGraphView } from '../graphPanel/graphOffer';
-import { SESSION_RESTORED_EVENT } from '../../utils/sessionRestore';
+import { SESSION_RESTORED_EVENT, sessionRestoresInFlight } from '../../utils/sessionRestore';
 
 export function liveLiftChipText(ctx: Pick<PanelHeaderContext, 'panel' | 'dataset'>): string | null {
   if (!isLiveLift(ctx.dataset)) return null;
@@ -95,7 +95,9 @@ export function offerRestoredSplitSessions(): void {
   for (const dataset of state.datasets) {
     if (!isLiveLift(dataset)) continue;
     const mine = state.panels.filter(p => p.contentType === 'dataset' && p.datasetId === dataset.id);
-    if (!mine.some(p => p.liftHap) || mine.some(p => p.viewMode === 'graph' || p.graphMemberOf)) continue;
+    // (A single-haplotype dataset's one panel has no haplotype of its own: restored linear, it is offered too.)
+    const oneHap = liftHapLabels(dataset.live_lift).length === 1;
+    if (!(mine.some(p => p.liftHap) || oneHap) || mine.some(p => p.viewMode === 'graph' || p.graphMemberOf)) continue;
     if (liftedOpenView(dataset.id) === 'graph') offerGraphView(dataset.id, { fresh: true });
   }
 }
@@ -110,9 +112,13 @@ export function autoSplitNewLiftedDatasets(seen: Set<string>): void {
     const labels = liftHapLabels(dataset.live_lift);
     // Only newly created panels carry an explicit split intent without a haplotype yet. A restored older panel
     // without that intent is already a view the user saved; its dataset's default must not rearrange it.
-    if (mine.some(p => p.liftHap) || mine[0].liftHaplotypeMode !== 'split' || !labels.length) {
-      // A saved split session: restored as saved, with a one-time "View as graph" offer (§5.4).
-      if (mine.some(p => p.liftHap) && liftedOpenView(dataset.id) === 'graph') offerGraphView(dataset.id);
+    // A restored layout (agy review, group H): split panels, a panel saved linear or once a graph host, or anything
+    // arriving while a session restores. A single-haplotype panel keeps its split intent without a haplotype, so
+    // its saved linear view must not open as a graph.
+    const restored = mine.some(p => p.liftHap || p.viewMode === 'linear' || p.graphView || p.graphMemberOf) || sessionRestoresInFlight() > 0;
+    if (restored || mine[0].liftHaplotypeMode !== 'split' || !labels.length) {
+      // A saved split (or single-haplotype linear) session: restored as saved, with a one-time "View as graph" offer (§5.4).
+      if (restored && labels.length && !mine.some(p => p.viewMode === 'graph' || p.graphMemberOf) && liftedOpenView(dataset.id) === 'graph') offerGraphView(dataset.id);
       continue;
     }
     // Graph primary (DESIGN_GRAPH_PRIMARY §5.2): "Open as" (else the browser default). Graph: split as today, then
