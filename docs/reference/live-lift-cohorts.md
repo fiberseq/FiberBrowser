@@ -71,7 +71,8 @@ broad loaded cohort from viewport `overlapping_rows`, `used_rows`, and the
 final result's `analysis_read_count`. Clustering counts refer to cohort rows;
 several display rows can represent one folded row.
 
-Other analyses remain refused, including standalone metaprofiles, peak scans,
-co-accessibility, read statistics, figures, consensus, exports and dataset
-merging. The shared geometry helpers are ready for later expansion; native
+Toolbar Sort and Filter, Read Stats, the BAM subset export (on the source
+assembly) and peak scans on graph columns accept lifted datasets. Other
+analyses remain refused, including standalone metaprofiles, linear peak scans,
+co-accessibility, figures, consensus, other exports and dataset merging. The shared geometry helpers are ready for later expansion; native
 columnar clustering remains restricted to native BAM datasets.
