@@ -231,7 +231,9 @@ export interface PanelSlice {
   setPanelIndependent: (panelId: string, independent: boolean) => void;
   navigatePanel: (panelId: string, chrom: string, start: number, end: number) => void;
   /** navigatePanel without moving the main view through a view link. */
-  navigatePanelOwnView: (panelId: string, chrom: string, start: number, end: number) => void;
+  /** `followLinks: false`: only this panel moves (showing a source span in a linked source view, not a navigation of
+   * the pair). */
+  navigatePanelOwnView: (panelId: string, chrom: string, start: number, end: number, options?: { followLinks?: boolean }) => void;
   /**
    * Copy a dataset panel next to itself with its own navigation; returns the
    * copy's id. `linked` (the header's +): it moves with the main view until
@@ -1118,8 +1120,9 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
       withLinkedPanelMoving(panelId, () => get().setViewport(mapped.chrom, mapped.start, mapped.end));
     }
   }),
-  navigatePanelOwnView: (panelId, chrom, start, end) => withUndo(get, panelNavigationLabel(chrom, start), () => {
+  navigatePanelOwnView: (panelId, chrom, start, end, options) => withUndo(get, panelNavigationLabel(chrom, start), () => {
     movePanelOwnView(panelId, chrom, start, end);
+    if (options?.followLinks === false) return;
     // Panels linked to it that keep views of their own follow it, as after navigatePanel (a graph host's moves to
     // another contig and its pans while it follows a graph go through here).
     const moved = get().panels.find(p => p.id === panelId);

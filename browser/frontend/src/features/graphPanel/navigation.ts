@@ -143,7 +143,8 @@ export function showSourceSpan(fromPanelId: string, placement: SourcePlacement, 
   const win = sourceWindow(placement.span);
   const s = useBrowserStore.getState();
   if (into) {
-    s.navigatePanelOwnView(into.panelId, into.contig, win.start, win.end);
+    // Only the source view moves to the inserted bases or the repeat copy: the graph and the other views stay put.
+    s.navigatePanelOwnView(into.panelId, into.contig, win.start, win.end, { followLinks: false });
     return into.panelId;
   }
   // The graph panel it came from may be closed or show another package now: the selection's registration opens the
