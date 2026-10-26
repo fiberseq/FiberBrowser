@@ -29,8 +29,9 @@ Rows of one window are told apart by a composite key ``row * 2**40 + x``, so
 a single sorted array holds every row's fragment starts (or ends, or a read's
 run starts) and one ``searchsorted`` finds, for each position, the fragment
 or run of its own row. Mapped intervals and marks are handed back as
-``read_columns.IntColumn`` slices of read-only window arrays (read row format
-2: they read exactly as the lists they stand for); every other value is a
+``read_columns.IntColumn`` copies of slices of the window arrays (read row
+format 2: they read exactly as the lists they stand for; each row owns its
+arrays, so no row pins a window); every other value is a
 Python int, bool or list (``tolist``), never a NumPy scalar. A read's lists
 are read into arrays once per load (``_cached``), so its hidden insertion
 blocks reuse them.
@@ -42,7 +43,7 @@ from operator import itemgetter
 
 import numpy as np
 
-from services.read_columns import read_only, wrap
+from services.read_columns import owned, read_only
 
 _SHIFT = 1 << 40
 _first = itemgetter(0)
@@ -555,7 +556,7 @@ def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts, small):
                 keys[j] = [int(call[1]), int(call[1])]
     ids = list(map(UIDS.__getitem__, P_u.tolist()))
     # Mapped intervals stay one window array; each group gets a read-only
-    # slice of it (``read_columns.IntColumn``, read row format 2), never Python lists.
+    # copy of its slice (``read_columns.owned``, read row format 2), never Python lists.
     mapped = read_only(np.stack([P_c0, P_c1, USZ[P_u]], axis=1))
     cols = (P_c0, P_c1, P_i, P_k)
     bounds = np.searchsorted(P_seg, np.arange(nseg + 1, dtype=np.int64)).tolist()
@@ -568,9 +569,9 @@ def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts, small):
         lo, hi = bounds[s], bounds[s + 1]
         s += 1
         if u.calls:
-            row._pre.groups[u.name] = (LazyParts(cols, lo, hi), wrap(mapped[lo:hi]), ids[lo:hi], keys[lo:hi])
+            row._pre.groups[u.name] = (LazyParts(cols, lo, hi), owned(mapped[lo:hi]), ids[lo:hi], keys[lo:hi])
         else:  # no calls: no identity (_call_identity)
-            row._pre.groups[u.name] = (LazyParts(cols, lo, hi), wrap(mapped[lo:hi]), [None] * (hi - lo),
+            row._pre.groups[u.name] = (LazyParts(cols, lo, hi), owned(mapped[lo:hi]), [None] * (hi - lo),
                                        [None] * (hi - lo))
     for r, row, u in segs:
         top = row._pre.intervals
@@ -754,7 +755,7 @@ def _top_level(items, rows, row_read, segs, F, USZ, seg_ustart, P_seg, P_c0, P_c
     for j in np.flatnonzero(ok).tolist():
         row = segs[j][1]
         a, b = eb[j], eb[j + 1]
-        row._pre.intervals = (wrap(shown[a:b]), order_all[a:b], rk_l[qb[a]:qb[b]])
+        row._pre.intervals = (owned(shown[a:b]), order_all[a:b], rk_l[qb[a]:qb[b]])
 
 
 # ── Point marks ─────────────────────────────────────────────────────────────
@@ -850,7 +851,7 @@ def _map_point_fields(items, rows, row_read, F, base, ctx, fields, small):
     marks = read_only(packed & 0xFFFFFFFF)
     bounds = np.searchsorted(packed, np.arange(nseg + 1, dtype=np.int64) << 32).tolist()
     for s, (row, key) in enumerate(targets):
-        row._pre.points[key] = (wrap(marks[bounds[s]:bounds[s + 1]]), dropped[s])
+        row._pre.points[key] = (owned(marks[bounds[s]:bounds[s + 1]]), dropped[s])
 
 
 def _new_store(_read):

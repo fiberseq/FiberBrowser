@@ -196,3 +196,20 @@ def test_retained_size_counts_the_array():
 
     c = _col(list(range(3000)), 3)
     assert retained_size(c) == c.array.nbytes + 112
+
+
+def test_columns_own_their_arrays():
+    """A column never pins a larger allocation than it reports (cache budgets)."""
+    from services.read_columns import owned
+
+    big = np.arange(3 * 65536, dtype=np.int64).reshape(-1, 3)
+    for c in (IntColumn(big[5:7]), owned(big[5:7]), pickle.loads(pickle.dumps(owned(big[5:7]), protocol=5))):
+        assert c.array.nbytes == 48 and c.retained_bytes == 48 + 112
+        base = c.array.base
+        while isinstance(base, np.ndarray) and base.base is not None:
+            base = base.base
+        assert base is None or getattr(base, "nbytes", len(memoryview(base))) <= 48
+        assert not c.array.flags.writeable
+    before = (IntColumn(big[5:7]), owned(big[5:7]))
+    big[5, 0] = -1  # the source array changing never changes a column
+    assert all(c[0][0] == 15 for c in before)

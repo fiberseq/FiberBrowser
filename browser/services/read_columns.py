@@ -50,9 +50,9 @@ class IntColumn:
             raise TypeError(f"IntColumn holds int64, not {a.dtype}")
         if a.ndim not in (1, 2):
             raise ValueError("IntColumn is 1-D or 2-D")
-        if a.flags.writeable:
-            a = a.view()
-            a.flags.writeable = False
+        # Its own read-only copy: nobody can change it, and it pins nothing larger.
+        a = a.copy()
+        a.flags.writeable = False
         self._a = a
 
     # ── fast paths ──────────────────────────────────────────────────────────
@@ -72,7 +72,8 @@ class IntColumn:
 
     @property
     def retained_bytes(self) -> int:
-        # byte_cache.retained_size: the array (or its share of a window array).
+        # byte_cache.retained_size: the array. Rows own their arrays (``owned``;
+        # IntColumn(view) of a larger array would keep that alive uncounted).
         return int(self._a.nbytes) + 112
 
     def __array__(self, dtype=None, copy=None):
@@ -184,7 +185,11 @@ class IntColumn:
 
 
 def _rebuild(array):
-    return IntColumn(array)
+    # A freshly unpickled array is owned by nobody else: no copy needed.
+    if array.dtype != np.int64 or array.ndim not in (1, 2):
+        return IntColumn(array)
+    array.flags.writeable = False
+    return wrap(array)
 
 
 # Types an evidence field may have in format 2 (lists in rows decoded or built
@@ -240,6 +245,17 @@ def wrap(array) -> IntColumn:
     composer's window arrays; ``IntColumn(array)`` checks)."""
     c = object.__new__(IntColumn)
     c._a = array
+    return c
+
+
+def owned(view) -> IntColumn:
+    """An ``IntColumn`` of its own read-only copy of ``view`` (an int64 slice
+    of a window array): a row never pins, nor shares, a larger allocation, so
+    ``retained_bytes`` is exactly what it keeps alive."""
+    c = object.__new__(IntColumn)
+    a = view.copy()
+    a.flags.writeable = False
+    c._a = a
     return c
 
 
