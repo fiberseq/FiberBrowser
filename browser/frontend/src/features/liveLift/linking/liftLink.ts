@@ -77,12 +77,21 @@ function clampSpan(panel: PanelConfig, m: SpanMapping): Span {
   return { chrom: m.chrom, start: Math.max(0, start), end: Math.max(Math.max(0, start) + 1, end) };
 }
 
+/** The panel whose view is the lifted side of a link: its lifted panel, or the graph host that panel is folded into.
+ * (A source-view pop-out of a graph host's haplotype stays linked to that haplotype's panel, which is hidden in the
+ * host's graph: the host's view is the one the user moves, and it carries its folded members along.) */
+function liftedViewPanel(l: LiftLinkConfig, panels: PanelConfig[]): PanelConfig | undefined {
+  const lifted = panels.find(p => p.id === l.liftPanelId);
+  const host = lifted?.collapsedByGraphGroup ? panels.find(p => p.id === lifted.collapsedByGraphGroup) : undefined;
+  return host ?? lifted;
+}
+
 /** Whether the link is live: the flag is on, its lifted dataset is open and its lifted panel follows the main view. */
 function linkActive(l: LiftLinkConfig): string | null {
   if (!useLiveLiftStore.getState().enabled) return null;
   const key = liftKey(l.datasetId);
   if (!key) return null;
-  const liftPanel = useBrowserStore.getState().panels.find(p => p.id === l.liftPanelId);
+  const liftPanel = liftedViewPanel(l, useBrowserStore.getState().panels);
   // A lifted panel with a view of its own ("Each panel navigates") is not the main view this panel follows.
   if (liftPanel?.viewportOverride) return null;
   return key;
@@ -116,7 +125,7 @@ export const liftPanelLink = {
     if (!useLiveLiftStore.getState().enabled) return [];
     const l = panel.liftLink;
     if (l) {
-      const lifted = panels.find(p => p.id === l.liftPanelId);
+      const lifted = liftedViewPanel(l, panels);
       const key = liftKey(l.datasetId);
       if (!lifted?.viewportOverride || !key) return [];
       const out = mapSpan(l.datasetId, key, 'toTarget', next, { preferChain: l.chain ?? null });
@@ -125,7 +134,7 @@ export const liftPanelLink = {
     if (!panel.viewportOverride) return [];
     const out: { panelId: string; span: Span }[] = [];
     for (const source of panels) {
-      if (source.liftLink?.liftPanelId !== panel.id || !source.viewportOverride) continue;
+      if (!source.liftLink || liftedViewPanel(source.liftLink, panels)?.id !== panel.id || !source.viewportOverride) continue;
       const view = sourceViewFor(source, next);
       if (view && view !== 'pending') { publishCandidates(source.id, view.mapping); out.push({ panelId: source.id, span: view.span }); }
     }
