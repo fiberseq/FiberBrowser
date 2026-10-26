@@ -52,6 +52,7 @@ export const SIDEBAR_SUBSECTIONS: Record<string, { label: string; section: Sideb
   'view.display': { label: 'Read Display', section: 'view' },
   'view.navigation': { label: 'Navigation', section: 'view' },
   'view.advanced': { label: 'Read Filters', section: 'view' },
+  'view.graph': { label: 'Graph mode', section: 'view' },
   'analysis.reproducibility': { label: 'Reproducibility', section: 'analysis' },
   'analysis.peaks': { label: 'Peak Detection', section: 'analysis' },
   'analysis.app': { label: 'FiberHMM & Updates', section: 'analysis' },

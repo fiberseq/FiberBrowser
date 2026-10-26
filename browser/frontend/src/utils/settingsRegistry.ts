@@ -21,6 +21,7 @@ import { PREVIEW_SETTINGS } from '../components/controls/sidebar/view/PreviewFea
 import { LEGACY_LAYER_SETTINGS } from '../components/controls/sidebar/view/LegacyLayerInferenceSettings';
 import { LAYER_CACHE_SETTINGS } from '../components/controls/sidebar/view/LayerCacheSettings';
 import { NAVIGATION_SETTINGS } from '../components/controls/sidebar/view/NavigationSettings';
+import { GRAPH_MODE_SETTINGS } from '../components/controls/sidebar/view/GraphModeSettings';
 import { PEAK_SETTINGS } from '../components/controls/sidebar/analysis/PeakDetectionSettings';
 import { APP_SETTINGS } from '../components/controls/sidebar/analysis/AppSettings';
 import { REPRODUCIBILITY_SETTINGS } from '../components/controls/sidebar/analysis/ReproducibilitySettings';
@@ -40,7 +41,7 @@ const GROUPS: ReadonlyArray<Record<string, SettingDef>> = [
   REFERENCE_PAIR_SETTINGS,
   // Reads & Display
   UI_SCALE_SETTINGS, PERFORMANCE_SETTINGS, PANEL_LAUNCHER_SETTINGS, PREVIEW_SETTINGS, READ_LIMIT_SETTINGS, READ_SEPARATOR_SETTINGS, DISPLAY_TOGGLE_SETTINGS,
-  LEGACY_LAYER_SETTINGS, LAYER_CACHE_SETTINGS, NAVIGATION_SETTINGS,
+  LEGACY_LAYER_SETTINGS, LAYER_CACHE_SETTINGS, NAVIGATION_SETTINGS, GRAPH_MODE_SETTINGS,
   GAP_FILTER_SETTINGS, FOOTPRINT_FILTER_SETTINGS, SIGNAL_FILTER_SETTINGS, SV_SETTINGS, CIGAR_SETTINGS,
   // Analysis & Reproducibility
   REPRODUCIBILITY_SETTINGS, PEAK_SETTINGS, APP_SETTINGS,

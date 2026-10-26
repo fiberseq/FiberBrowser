@@ -33,13 +33,25 @@ interface GraphSettings {
   inBp: number;
   /** The complexity hand-off (§7.2, D4: on): linear where most of the window is unresolved in the topology. */
   complexity: boolean;
-  set: (patch: Partial<Pick<GraphSettings, 'defaultLiftedView' | 'outBp' | 'inBp' | 'complexity'>>) => void;
+  /** How a native dataset opened from a file or path opens when a package binds it (D3: linear; graph is opt-in). */
+  nativeOpenView: NativeOpenView;
+  set: (patch: Partial<Pick<GraphSettings, SettingKey>>) => void;
+}
+
+export type NativeOpenView = 'linear' | 'graph';
+type SettingKey = 'defaultLiftedView' | 'outBp' | 'inBp' | 'complexity' | 'nativeOpenView';
+export const HANDOFF_MIN_BP = 10_000;
+export const HANDOFF_MAX_BP = 50_000;
+/** A threshold kept in 10–50 kb (whole bp); anything else (not a number) is null. */
+export function clampHandoffBp(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? Math.min(HANDOFF_MAX_BP, Math.max(HANDOFF_MIN_BP, Math.round(v))) : null;
 }
 
 const SETTINGS_KEY = 'fiberbrowser_graph_mode_settings_v1';
 
-function loadSettings(): Pick<GraphSettings, 'defaultLiftedView' | 'outBp' | 'inBp' | 'complexity'> {
-  const base = { defaultLiftedView: 'graph' as LiftedOpenView, outBp: HANDOFF_OUT_BP, inBp: HANDOFF_IN_BP, complexity: true };
+function loadSettings(): Pick<GraphSettings, SettingKey> {
+  const base = { defaultLiftedView: 'graph' as LiftedOpenView, outBp: HANDOFF_OUT_BP, inBp: HANDOFF_IN_BP, complexity: true,
+    nativeOpenView: 'linear' as NativeOpenView };
   try {
     const raw = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? 'null');
     if (!raw || typeof raw !== 'object') return base;
@@ -47,7 +59,8 @@ function loadSettings(): Pick<GraphSettings, 'defaultLiftedView' | 'outBp' | 'in
     const clampBp = (v: unknown, d: number) => (typeof v === 'number' && v >= 10_000 && v <= 50_000 ? Math.round(v) : d);
     const outBp = clampBp(raw.outBp, base.outBp);
     const inBp = Math.min(outBp, clampBp(raw.inBp, base.inBp));
-    return { defaultLiftedView: view, outBp, inBp, complexity: raw.complexity !== false };
+    return { defaultLiftedView: view, outBp, inBp, complexity: raw.complexity !== false,
+      nativeOpenView: raw.nativeOpenView === 'graph' ? 'graph' : 'linear' };
   } catch {
     return base;
   }
@@ -58,11 +71,17 @@ export const useGraphSettings = create<GraphSettings>((set, get) => ({
   ...loadSettings(),
   set: patch => {
     const next = { ...get(), ...patch };
+    // 10–50 kb (the helper's ceiling), back-in never above out (a bad value keeps the current one).
+    next.outBp = clampHandoffBp(next.outBp) ?? get().outBp;
+    next.inBp = clampHandoffBp(next.inBp) ?? get().inBp;
     if (next.inBp > next.outBp) next.inBp = next.outBp;
-    set({ defaultLiftedView: next.defaultLiftedView, outBp: next.outBp, inBp: next.inBp, complexity: next.complexity });
+    if (!['graph', 'split', 'pooled'].includes(next.defaultLiftedView)) next.defaultLiftedView = get().defaultLiftedView;
+    if (next.nativeOpenView !== 'graph') next.nativeOpenView = 'linear';
+    set({ defaultLiftedView: next.defaultLiftedView, outBp: next.outBp, inBp: next.inBp, complexity: next.complexity,
+      nativeOpenView: next.nativeOpenView });
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify({ defaultLiftedView: next.defaultLiftedView, outBp: next.outBp, inBp: next.inBp,
-        complexity: next.complexity }));
+        complexity: next.complexity, nativeOpenView: next.nativeOpenView }));
     } catch { /* not kept */ }
   },
 }));
