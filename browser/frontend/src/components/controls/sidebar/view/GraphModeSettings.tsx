@@ -11,7 +11,7 @@ import { defineSettings, inSidebar, settingAnchor } from '../../../../utils/sett
 import { SidebarSettingNote, SidebarSettingRow, SidebarSettingToggle } from '../shared/SidebarSetting';
 import { pickFolder } from '../../../../api/files';
 import {
-  HANDOFF_MAX_BP, HANDOFF_MIN_BP, useGraphSettings, type LiftedOpenView,
+  HANDOFF_MAX_BP, HANDOFF_MIN_BP, useGraphSettings, validHandoffPair, type LiftedOpenView,
 } from '../../../../features/graphPanel/handoff';
 import { useGraphStatusStore } from '../../../../features/graphPanel/statusStore';
 import { unregisterGraphPackage, GraphRequestError } from '../../../../features/graphPanel/api';
@@ -79,13 +79,15 @@ export function GraphModeSettings() {
 
   const outKb = Number(outDraft), inKb = Number(inDraft);
   const min = HANDOFF_MIN_BP / 1000, max = HANDOFF_MAX_BP / 1000;
+  // Judged on the whole-bp pair that would be saved (40.0004 / 40.0003 kb are both 40,000 bp).
+  const outBp = Math.round(outKb * 1000), inBp = Math.round(inKb * 1000);
   const handoffError = !Number.isFinite(outKb) || !Number.isFinite(inKb) || outDraft.trim() === '' || inDraft.trim() === ''
     ? 'Enter both thresholds in kb.'
-    : outKb < min || outKb > max || inKb < min || inKb > max ? `Both thresholds are ${min}–${max} kb.`
-      : inKb >= outKb ? 'Back to the graph must be below the zoom-out threshold.' : null;
+    : outBp < HANDOFF_MIN_BP || outBp > HANDOFF_MAX_BP || inBp < HANDOFF_MIN_BP || inBp > HANDOFF_MAX_BP ? `Both thresholds are ${min}–${max} kb.`
+      : !validHandoffPair(outBp, inBp) ? 'Back to the graph must be below the zoom-out threshold.' : null;
   const commitHandoff = () => {
     if (handoffError) return;
-    settings.set({ outBp: Math.round(outKb * 1000), inBp: Math.round(inKb * 1000) });
+    settings.set({ outBp, inBp });
   };
 
   return (

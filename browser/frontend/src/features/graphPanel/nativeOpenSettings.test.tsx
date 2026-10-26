@@ -119,8 +119,12 @@ describe('Graph mode settings', () => {
   it('keeps the hand-off thresholds in 10–50 kb with back-in never above out', () => {
     const s = () => useGraphSettings.getState();
     s().set({ outBp: 5_000 });
-    expect(s().outBp).toBe(10_000);
-    expect(s().inBp).toBe(10_000);
+    // Back-in stays strictly below zoom-out (the hysteresis): 10,000 <= in < out <= 50,000.
+    expect([s().outBp, s().inBp]).toEqual([10_001, 10_000]);
+    s().set({ outBp: 40_000, inBp: 40_000 });
+    expect([s().outBp, s().inBp]).toEqual([40_000, 39_999]);
+    s().set({ outBp: 40_000.4, inBp: 40_000.3 });
+    expect(s().inBp).toBeLessThan(s().outBp);
     s().set({ outBp: 90_000, inBp: 30_000 });
     expect([s().outBp, s().inBp]).toEqual([50_000, 30_000]);
     s().set({ inBp: Number.NaN });
@@ -128,6 +132,20 @@ describe('Graph mode settings', () => {
     s().set({ nativeOpenView: 'graph', complexity: false });
     expect(JSON.parse(localStorage.getItem('fiberbrowser_graph_mode_settings_v1')!)).toMatchObject({ outBp: 50_000, inBp: 30_000,
       nativeOpenView: 'graph', complexity: false });
+  });
+
+  it('a stored pair that breaks the hysteresis loads as the defaults', async () => {
+    for (const stored of [{ outBp: 40_000, inBp: 40_000 }, { outBp: 30_000, inBp: 35_000 }, { outBp: 60_000, inBp: 40_000 }, { outBp: 40_000.5, inBp: 30_000 }]) {
+      localStorage.setItem('fiberbrowser_graph_mode_settings_v1', JSON.stringify(stored));
+      vi.resetModules();
+      const fresh = await import('./handoff');
+      expect([fresh.useGraphSettings.getState().outBp, fresh.useGraphSettings.getState().inBp], JSON.stringify(stored)).toEqual([50_000, 40_000]);
+    }
+    localStorage.setItem('fiberbrowser_graph_mode_settings_v1', JSON.stringify({ outBp: 30_000, inBp: 20_000 }));
+    vi.resetModules();
+    const kept = await import('./handoff');
+    expect([kept.useGraphSettings.getState().outBp, kept.useGraphSettings.getState().inBp]).toEqual([30_000, 20_000]);
+    expect(kept.validHandoffPair(10_000, 9_999)).toBe(false);
   });
 
   function mount() {
@@ -160,6 +178,11 @@ describe('Graph mode settings', () => {
       expect(useGraphSettings.getState().inBp).toBe(40_000);
       type(out, '60');
       expect(q('graph-settings-handoff-error')?.textContent).toMatch(/10–50 kb/);
+      // Equal once rounded to whole bp (40,000 / 40,000): refused, nothing saved.
+      type(out, '40.0004'); type(back, '40.0003');
+      act(() => back.dispatchEvent(new FocusEvent('focusout', { bubbles: true })));
+      expect(q('graph-settings-handoff-error')?.textContent).toMatch(/below/);
+      expect([useGraphSettings.getState().outBp, useGraphSettings.getState().inBp]).toEqual([50_000, 40_000]);
       type(out, '30'); type(back, '20');
       act(() => back.dispatchEvent(new FocusEvent('focusout', { bubbles: true })));
       expect(q('graph-settings-handoff-error')).toBeNull();

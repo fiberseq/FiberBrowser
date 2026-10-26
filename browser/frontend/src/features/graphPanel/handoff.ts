@@ -46,6 +46,16 @@ export const HANDOFF_MAX_BP = 50_000;
 export function clampHandoffBp(v: unknown): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? Math.min(HANDOFF_MAX_BP, Math.max(HANDOFF_MIN_BP, Math.round(v))) : null;
 }
+/** Whether a whole-bp pair keeps the hysteresis: 10,000 <= in < out <= 50,000. */
+export function validHandoffPair(outBp: number, inBp: number): boolean {
+  return Number.isInteger(outBp) && Number.isInteger(inBp) && HANDOFF_MIN_BP <= inBp && inBp < outBp && outBp <= HANDOFF_MAX_BP;
+}
+/** A pair made valid: out in (10 kb, 50 kb], in in [10 kb, out). A value that is not a number keeps `fallback`'s. */
+export function normalizeHandoffPair(outBp: unknown, inBp: unknown, fallback = { outBp: HANDOFF_OUT_BP, inBp: HANDOFF_IN_BP }): { outBp: number; inBp: number } {
+  const out = Math.max(HANDOFF_MIN_BP + 1, clampHandoffBp(outBp) ?? fallback.outBp);
+  const back = Math.min(out - 1, clampHandoffBp(inBp) ?? fallback.inBp);
+  return { outBp: out, inBp: back };
+}
 
 const SETTINGS_KEY = 'fiberbrowser_graph_mode_settings_v1';
 
@@ -56,9 +66,9 @@ function loadSettings(): Pick<GraphSettings, SettingKey> {
     const raw = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? 'null');
     if (!raw || typeof raw !== 'object') return base;
     const view = ['graph', 'split', 'pooled'].includes(raw.defaultLiftedView) ? raw.defaultLiftedView : base.defaultLiftedView;
-    const clampBp = (v: unknown, d: number) => (typeof v === 'number' && v >= 10_000 && v <= 50_000 ? Math.round(v) : d);
-    const outBp = clampBp(raw.outBp, base.outBp);
-    const inBp = Math.min(outBp, clampBp(raw.inBp, base.inBp));
+    // A stored pair that breaks 10,000 <= in < out <= 50,000 falls back to the defaults.
+    const stored = typeof raw.outBp === 'number' && typeof raw.inBp === 'number' && validHandoffPair(raw.outBp, raw.inBp);
+    const { outBp, inBp } = stored ? { outBp: raw.outBp as number, inBp: raw.inBp as number } : base;
     return { defaultLiftedView: view, outBp, inBp, complexity: raw.complexity !== false,
       nativeOpenView: raw.nativeOpenView === 'graph' ? 'graph' : 'linear' };
   } catch {
@@ -71,10 +81,8 @@ export const useGraphSettings = create<GraphSettings>((set, get) => ({
   ...loadSettings(),
   set: patch => {
     const next = { ...get(), ...patch };
-    // 10–50 kb (the helper's ceiling), back-in never above out (a bad value keeps the current one).
-    next.outBp = clampHandoffBp(next.outBp) ?? get().outBp;
-    next.inBp = clampHandoffBp(next.inBp) ?? get().inBp;
-    if (next.inBp > next.outBp) next.inBp = next.outBp;
+    // 10–50 kb (the helper's ceiling) with back-in strictly below out (a bad value keeps the current one).
+    Object.assign(next, normalizeHandoffPair(next.outBp, next.inBp, { outBp: get().outBp, inBp: get().inBp }));
     if (!['graph', 'split', 'pooled'].includes(next.defaultLiftedView)) next.defaultLiftedView = get().defaultLiftedView;
     if (next.nativeOpenView !== 'graph') next.nativeOpenView = 'linear';
     set({ defaultLiftedView: next.defaultLiftedView, outBp: next.outBp, inBp: next.inBp, complexity: next.complexity,
