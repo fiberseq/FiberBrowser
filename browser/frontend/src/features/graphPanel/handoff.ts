@@ -11,6 +11,7 @@
  * ordinary panel navigation, never a clamp or a detached graph viewport (§7.1).
  */
 import { create } from 'zustand';
+import { serializeState } from '../../stores/historySlice';
 import { useBrowserStore } from '../../stores/browserStore';
 import type { PanelConfig } from '../../types';
 import { genomeKeyFor } from '../../utils/regionNavigation';
@@ -166,14 +167,22 @@ let started = false;
 
 /** Watch every host's viewport and apply the hand-off once it has settled (one decision per gesture). */
 /**
- * A hand-off, and the member moves that carry its members, are part of the navigation that caused them (graph
- * features): recorded as a navigation step, which coalesces with the move's own (Browser.tsx), so the next action's
- * Undo never reverts them and Undo of the move undoes them with it.
+ * A hand-off is part of the navigation that caused it (graph features): it amends that navigation's undo step in
+ * place, never appending a step of its own or truncating Redo (Codex review, group C). Only the step at the history
+ * pointer is amended, and only when it was taken at this very view: a hand-off that comes before the navigation's
+ * step is recorded (Browser.tsx, 500 ms after the move) is simply part of that step, and one after an Undo or Redo
+ * (a restored step at another view) amends nothing.
  */
-function recordHandoffStep(label: string): void {
+function recordHandoffStep(_label: string): void {
   const st = useBrowserStore.getState();
-  if (!(st._historyStack?.length)) return;
-  st.pushSnapshot(label, { kind: 'navigation' });
+  const stack = st._historyStack ?? [];
+  const current = stack[st._historyPointer ?? stack.length - 1];
+  if (!current || Date.now() - (st._lastRestoreTime ?? 0) < 1500) return;
+  const now = serializeState(st);
+  const at = (x: { chrom?: string; start?: number; end?: number; panels?: { id: string; viewportOverride?: unknown }[] }) =>
+    JSON.stringify([x.chrom, x.start, x.end, (x.panels ?? []).map(p => [p.id, p.viewportOverride ?? null])]);
+  if (at(current.state as never) !== at(now as never)) return;
+  st.foldIntoCurrentSnapshot(now);
 }
 
 export function startHandoffController(): void {
@@ -253,10 +262,8 @@ export function startHandoffController(): void {
         panels = moveHostMembers(panels, host.id, before, now);
       }
     }
-    if (panels !== s.panels) {
-      useBrowserStore.setState({ panels });
-      recordHandoffStep('Graph members moved with their host');
-    }
+    // (Synchronous with the host's move: the move's own undo step records them.)
+    if (panels !== s.panels) useBrowserStore.setState({ panels });
   };
   useBrowserStore.subscribe((s, prev) => {
     if (s.panels !== prev.panels) carry();

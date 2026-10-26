@@ -920,3 +920,17 @@ def test_explicit_calls_of_native_rows_never_enter_the_strand_cache():
                    aid='lift-cohort:v1 ["g|m","m","a",0,"primary"]')]
     gr.resolve_molecule_strands(lifted, calls_of=lambda _d: calls)
     assert calls == {"g|m": "GA"}
+
+
+def test_clips_belong_to_their_own_record(env):
+    """Codex review (group C): two records sharing a name and bounds (a forward and a reverse supplementary) each carry
+    only their own clip."""
+    tags = [("ns", _u32([50])), ("nl", _u32([150]))]
+    bam = write_bam(env.tmp / "twins.bam", lambda h: [
+        make_record(h, "tw", MAT, 1000, "80S400M", flag=2048, tags=tags),
+        make_record(h, "tw", MAT, 1000, "400M80S", flag=2048 | 16, reverse=True, tags=tags),
+        make_record(h, "tw", MAT, 5000, "300M", tags=tags)])
+    did = _add_lifted(env, paths=[bam], dataset_id="twins")
+    out = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 0, "end": 6000}]}]).json()
+    sups = sorted((r.get("clips") or []) for r in out["reads"] if r["q"] == "tw" and r["sup"])
+    assert sups == [[[1000, 80, "L"]], [[1400, 80, "R"]]]

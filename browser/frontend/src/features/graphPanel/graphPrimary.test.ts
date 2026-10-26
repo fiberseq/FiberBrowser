@@ -292,6 +292,15 @@ describe('G6: zoom hand-off (§7)', () => {
     st().undo();
     expect(get('mat').graphView!.handoff!.shown).toBe('linear');
     expect(get('pat')).toMatchObject({ collapsed: false, graphHandoff: 'mat' });
+    // Undo and Redo: a later hand-off never appends a step or drops Redo (Codex review, group C).
+    vi.advanceTimersByTime(2000);
+    const len = st()._historyStack.length;
+    st().undo();
+    expect(st().canRedo()).toBe(true);
+    vi.advanceTimersByTime(HANDOFF_SETTLE_MS + 2000);
+    expect(st().canRedo()).toBe(true);
+    expect(st()._historyStack.length).toBe(len);
+    st().redo();
     // Stay linear is a step of its own.
     vi.advanceTimersByTime(2000);
     setPinnedLinear('mat', true);

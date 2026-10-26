@@ -716,7 +716,11 @@ def _decode_records(dataset, contig: str, size: int, windows: list, binding: str
         clips = [[int(ev["ref"]), int(ev["len"]), "L" if ev.get("side") == "L" else "R"] for ev in read.get("sv") or ()
                  if isinstance(ev, dict) and ev.get("t") == "S" and isinstance(ev.get("ref"), int) and int(ev.get("len") or 0) > 0]
         if clips:
-            clips_of.setdefault(k, []).extend(clips)
+            # Owned by the record itself (its digest and occurrence, as the composer names it: a row's ``rec``), never
+            # by records that merely share its name and bounds (Codex review, group C).
+            sha, occ = read.get("record_sha256"), read.get("alignment_occurrence")
+            rec_id = f"{sha}:{occ}" if sha else f"{read.get('reference_start')}-{read.get('reference_end')}"
+            clips_of.setdefault((k[0], str(read.get("id")), rec_id), []).extend(clips)
     composed: dict = {}
     lifted = getattr(dataset, "live_lift", None) is not None
     # A supplementary record with no strand call of its own takes its primary's explicit call (st:Z), found as linear
@@ -744,7 +748,7 @@ def _decode_records(dataset, contig: str, size: int, windows: list, binding: str
         k = ident(read["lib"], read["q"], read["s"], read["e"], read["sup"])
         if read["sup"] and "_dsx" not in read and k in prim_strand:
             read["_dsx"] = prim_strand[k]
-        mine = [c for c in clips_of.get(k, ()) if read["s"] <= c[0] <= read["e"]
+        mine = [c for c in clips_of.get((read["lib"], str(read["q"]), str(read.get("rec"))), ()) if read["s"] <= c[0] <= read["e"]
                 and any(c0 <= c[0] <= c1 for c0, c1, *_ in read["cov"])]
         if mine:
             read["clips"] = mine
