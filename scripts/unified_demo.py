@@ -34,6 +34,7 @@ import argparse
 import json
 import os
 import shlex
+import socket
 import signal
 import subprocess
 import sys
@@ -69,7 +70,7 @@ def parse_args(argv=None):
     ap.add_argument("--fasta", default=work("ref", "GRCh38.fa"), help="reference FASTA (with .fai)")
     ap.add_argument("--native-label", default="GRCh38", help="suffix of native dataset labels (default: GRCh38)")
     ap.add_argument("--pooled", action="store_true", help="lifted datasets as one pooled panel (not graph or split)")
-    ap.add_argument("--no-preview", action="store_true", help="leave preview features off")
+    ap.add_argument("--no-preview", action="store_true", help="turn preview features off for this server")
     ap.add_argument("--view", default=DEFAULT_VIEW, help=f"locus to print in the start link (default {DEFAULT_VIEW})")
     ap.add_argument("--home", default=None, help="the server's HOME (default: a new temporary folder)")
     ap.add_argument("--python", default=sys.executable, help="Python that runs the server (default: this one)")
@@ -201,6 +202,9 @@ def main(argv=None):
     if a.build:
         subprocess.run(["npx", "vite", "build", "--outDir", a.frontend_dist, "--emptyOutDir"],
                        cwd=os.path.join(ROOT, "browser", "frontend"), check=True)
+    with socket.socket() as probe:
+        if probe.connect_ex(("127.0.0.1", a.port)) == 0:
+            sys.exit(f"Port {a.port} is already in use: pick another with --port.")
     args = [a.python, "browser.py", "-p", str(a.port), "--no-open", "--no-token", "--copilot", "off"]
     if os.path.exists(a.fasta):
         args += ["--fasta", a.fasta]
@@ -209,6 +213,8 @@ def main(argv=None):
     try:
         wait_ready(a.port, proc)
         add_samples(a)
+        if proc.poll() is not None:
+            sys.exit("FiberBrowser exited while the samples were loading (see its output above).")
         chrom, span = a.view.replace(",", "").split(":")
         start, end = span.split("-")
         print(f"\nReady: http://localhost:{a.port}/?chr={chrom}&start={start}&end={end}")

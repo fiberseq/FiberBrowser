@@ -84,7 +84,7 @@ after it was checked is refused until you register it again.
 ## Preview features
 
 **Settings › Reads & Display › Read Display › Show preview features** shows
-features that are still being finished. For graphs it controls only the
+features that are still being finished. It is on unless you turn it off. For graphs it controls only the
 standalone **Graph view** panel, which is also where packages are registered
 in the app. Graph mode on dataset panels (the **Linear ⇄ Graph** pill and
 **View as graph**) does not depend on it.
@@ -119,7 +119,7 @@ It prints a link to open when the data is loaded. Ctrl+C stops the server.
 | `--graph-helper PATH` | A `fiberbrowser-graph` you built; otherwise the companion package or the macOS app's copy is used. |
 | `--fasta FILE` | The reference FASTA (with its `.fai`). |
 | `--pooled` | Lifted datasets open as one pooled panel. |
-| `--no-preview` | Leave preview features off. |
+| `--no-preview` | Turn preview features off for this server. |
 | `--port N` | The port (default 8883). |
 | `--home DIR` | The server's home folder (default: a new temporary folder). |
 | `--build` | Build this checkout's frontend first (into the server's home folder, never into the checkout). |
@@ -142,4 +142,4 @@ shared server.
 | *Cannot read the map* | The file is not a graphlift map (a plain `.chain` is not enough), or the files next to it are missing. |
 | **Graph helper unavailable** | Install `fiberbrowser[graph]`, or set `FIBERBROWSER_GRAPH_HELPER`, then restart. |
 | **View as graph** is greyed out | Its tooltip says why: no helper, no registered package, or no package path matches the dataset. |
-| No **Graph view** panel in the rail | Turn on **Show preview features**. |
+| No **Graph view** panel in the rail | **Show preview features** was turned off: turn it back on. |

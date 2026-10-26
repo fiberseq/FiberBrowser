@@ -49,8 +49,7 @@ this genome.
 | **⌘-click** (Ctrl-click on Windows and Linux) | Opens the inspector. |
 | **Right-click** | Opens the row's menu; its first item is **Inspect…**. |
 
-On the keyboard, Tab to a mark and press Enter to inspect it; Escape closes the
-inspector.
+Escape closes the inspector.
 
 ## Expanding an insertion
 
@@ -81,8 +80,10 @@ carry it show a gap.
   the other haplotype's reads show a gap.
 - **The bar at the top of the column** has **×** (collapse), **Associate
   native layout** (above), **Identify** (what the inserted sequence is) and,
-  for a lifted insertion, **Open in HG002 view** (the source view at the
-  insertion; see [Linked panels](linked-panels.md)).
+  for an assembly insertion, **Open in HG002 view**: a panel of the sample's
+  own assembly anchored at the insertion. That panel follows the main view only
+  near the insertion and has no ribbon; for a fully linked view use **Open MAT
+  source view** (see [Linked panels](linked-panels.md)).
 
 Insertions shorter than 50 bp or longer than 50 kb can't be expanded; the row
 says why. They can still be inspected.
@@ -99,7 +100,7 @@ Right-click a mark for its actions, then the row's own options.
 | **Expand insertion** / **Collapse insertion** | As a plain click, on insertions. |
 | **Highlight carrier reads** | As a plain click, on other differences. |
 | **Split by carrier…** | Opens the inspector, where the reads are split into carriers and non-carriers. |
-| **Show in the source view** | Moves the linked source view to this difference (opens one if needed). |
+| **Show in the source view** | Moves the linked source view to this difference. Without one, it opens a panel of the sample's assembly anchored at the difference (no ribbon, no linked navigation). |
 | **Copy sequence** | Copies the inserted or alternative bases. |
 
 **The row's options** (under **Differences row**):

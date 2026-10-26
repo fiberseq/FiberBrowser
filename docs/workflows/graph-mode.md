@@ -30,8 +30,8 @@ Setting up is described in
   Packages are registered once, from the **Graph view** panel's **Register a
   graph package…** item, and are remembered
   ([details](pangenome-setup.md#registering-a-graph-package)). The Graph view
-  panel is a preview feature: turn on **Show preview features** in Settings to
-  see it. Graph mode on dataset panels does not need preview features.
+  panel is a preview feature, shown while **Show preview features** (Settings;
+  on unless you turned it off) is on. Graph mode on dataset panels does not need preview features.
 - **Reads that the graph knows.** Either of these works:
   - a **lifted dataset**: reads aligned to a sample's own assembly and viewed on
     the reference through a lift map (**Open → Add live lift…**; see

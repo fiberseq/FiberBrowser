@@ -25,7 +25,7 @@
  */
 import { chromium } from 'playwright';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -65,13 +65,15 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 /** Replace paths and read names in the page (text nodes, inputs, titles) before a shot. */
 async function redact(page, workDir) {
-  await page.evaluate(({ home, work }) => {
+  const real = p => { try { return realpathSync(p); } catch { return p; } };
+  await page.evaluate(({ home, work, realHome, realWork }) => {
     const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const rules = [[new RegExp(esc(work), 'g'), '~/pglift_work'], [new RegExp(esc(home), 'g'), '~'],
+    const rules = [[new RegExp(esc(realWork), 'g'), '~/pglift_work'], [new RegExp(esc(work), 'g'), '~/pglift_work'],
+      [new RegExp(esc(realHome), 'g'), '~'], [new RegExp(esc(home), 'g'), '~'],
       [/(?:\/Users|\/home|\/data\/home)\/[^/\s"'<>]+/g, '~'],
       [/\/private\/(tmp|var)\/[^\s"'<>]*\/(?=pglift_work)/g, '~/'],
       // A safety net for laboratory sample IDs in file names or headers (the demo data is staged under neutral names).
-      [/\bPS0\d{3,}\b/g, 'sample_a']];
+      [/(?<![A-Za-z0-9])PS0\d+(?![A-Za-z0-9])/gi, 'sample_a']];
     const names = new Map();
     const readName = /\b(m\d{5}[A-Za-z0-9_]*\/\d+\/ccs(?:\/[A-Za-z0-9_]+)*|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/g;
     const fix = s => {
@@ -99,7 +101,7 @@ async function redact(page, workDir) {
       const cell = tr.querySelector('td');
       if (cell && cell.firstChild) cell.textContent = `read ${i + 1}`;
     });
-  }, { home: os.homedir(), work: workDir });
+  }, { home: os.homedir(), work: workDir, realHome: real(os.homedir()), realWork: real(workDir) });
 }
 
 const store = (page, body, arg) => page.evaluate(([b, a]) => {
