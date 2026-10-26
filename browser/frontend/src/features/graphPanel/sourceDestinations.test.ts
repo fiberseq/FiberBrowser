@@ -222,5 +222,48 @@ describe('a linked source panel is a destination of graph runs', () => {
     useBrowserStore.getState().applyClusterTreeNode('c');
     expect(shown()).toEqual({ a: { q1: 3, q2: 4 }, o: [4, 3], f: [4], n: { 3: 'C3', 4: 'C4' } });
   });
+
+  it('agy round 2: reopening a collapsed source view seeds it like a new one (read state, clusters on every node, order, focus, names)', async () => {
+    seed([...split(), source('srcP', '2', 'PAT', { collapsed: true })]);
+    setPanelViewMode('mat', 'graph');
+    const node = (id: string, parentId: string | null, assignments: Record<string, number>, order: number[], focus: number[] | null, names?: Record<number, string>) => ({
+      id, parentId, name: id, createdAt: 0, chrom: 'chr3', start: 128_650_000, end: 128_660_000, sourceClusterIds: [], clusterMethod: 'kmeans', clusterK: 2,
+      subnucleosomalThreshold: 0, accessibilityThreshold: 0, peakRegions: [], selectedPeakIndices: [], peakModes: {}, patterns: {}, dynamicClustering: false,
+      assignments: { 'k-pat': assignments }, order: { 'k-pat': order }, focus: { 'k-pat': focus }, ...(names ? { groupLabels: { 'k-pat': names } } : {}) });
+    const rootLabels = { [aid('q1')]: 0, [aid('q2')]: 1 }, childLabels = { [aid('q1')]: 3, [aid('q2')]: 4 };
+    useBrowserStore.setState({ clusterTreeNodes: { r: node('r', null, rootLabels, [0, 1], null), c: node('c', 'r', childLabels, [4, 3], [4], { 3: 'C3', 4: 'C4' }) },
+      clusterTreeRootIds: ['r'], activeClusterTreeNodeId: 'c', clusterAssignments: { 'k-pat': childLabels }, clusterOrder: { 'k-pat': [4, 3] },
+      clusterFocus: { 'k-pat': new Set([4]) }, clusterGroupLabels: { 'k-pat': { 3: 'C3', 4: 'C4' } },
+      filteredReadIds: { 'k-pat': new Set([aid('q1'), aid('q2')]) }, selectedReadIds: { 'k-pat': new Set([aid('q1')]) } } as never);
+    setPopOutKind('mat', 'source');
+    popOutPaths('mat', ['pat']);
+    await new Promise(r => setTimeout(r, 0));
+    const key = 'srcP~lift-source';
+    const st = useBrowserStore.getState();
+    expect(st.panels.find(x => x.id === 'srcP')!.collapsed).toBe(false);
+    expect([...st.filteredReadIds[key]!].sort()).toEqual(['q1', 'q2']);
+    expect([...st.selectedReadIds[key]!]).toEqual(['q1']);
+    expect(st.clusterAssignments[key]).toEqual({ q1: 3, q2: 4 });
+    expect(st.clusterOrder[key]).toEqual([4, 3]);
+    expect([...st.clusterFocus[key]!]).toEqual([4]);
+    expect(st.clusterGroupLabels[key]).toEqual({ 3: 'C3', 4: 'C4' });
+    useBrowserStore.getState().applyClusterTreeNode('r');
+    expect(useBrowserStore.getState().clusterAssignments[key]).toEqual({ q1: 0, q2: 1 });
+  });
+
+  it('agy round 2: a source view takes the member\'s filter before the run labels it: filtered-out reads get no label, and its destination is scoped', async () => {
+    seed([...split(), source('srcP', '2', 'PAT', { collapsed: true })]);
+    setPanelViewMode('mat', 'graph');
+    const p = plan();
+    const pat = p.observations.find(o => o.binding === 'pat')!.id;
+    commitGraphRun(useBrowserStore.getState(), p, response({ [pat]: { assignments: { [aid('q1')]: 0, [aid('q2')]: 1 } } }));
+    useBrowserStore.setState(s => ({ filteredReadIds: { ...s.filteredReadIds, 'k-pat': new Set([aid('q1')]) } }));
+    setPopOutKind('mat', 'source');
+    popOutPaths('mat', ['pat']);
+    await new Promise(r => setTimeout(r, 0));
+    const st = useBrowserStore.getState();
+    expect(st.clusterAssignments['srcP~lift-source']).toEqual({ q1: 0 });
+    expect(st.clusterMatchedRun!.destinations!.find(d => d.stateKey === 'srcP~lift-source')!.scope).toEqual(['q1']);
+  });
 });
 

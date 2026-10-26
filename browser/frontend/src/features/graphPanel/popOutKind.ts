@@ -8,6 +8,7 @@
  */
 import { useBrowserStore } from '../../stores/browserStore';
 import { isLiveLift } from '../../utils/datasetKinds';
+import { liftHapLabels } from '../liveLift/types';
 import type { PanelConfig } from '../../types';
 import { linkedSourcePanels, openLinkedSourceView } from '../liveLift/linking/liftLink';
 import { isHost, liveProvenance, panelKeyOf, popOut, provenanceCovers, provenanceLineage, provenanceShare, undoable, type GraphProvenance } from './hostMode';
@@ -86,14 +87,20 @@ async function openSources(host: PanelConfig, sources: PopOutPlan['sources']): P
   for (const { liftPanelId, hap, fromPanelId } of sources) {
     const st = useBrowserStore.getState();
     const lift = st.panels.find(p => p.id === liftPanelId);
-    const existing = lift?.datasetId ? linkedSourcePanels(lift.datasetId, hap ?? lift.liftHap ?? null)[0] : undefined;
+    // An open source view of this haplotype, on the member's strand when the views are split by strand.
+    const fromStrand = st.panels.find(p => p.id === fromPanelId)?.strand ?? null;
+    const open = lift?.datasetId ? linkedSourcePanels(lift.datasetId, hap ?? lift.liftHap ?? null) : [];
+    const existing = open.find(p => (p.strand ?? null) === fromStrand) ?? open[0];
     if (existing) {
       undoable(`Show ${existing.liftLink?.hapLabel ?? hap ?? ''} source view`.replace('  ', ' '), () => {
         // (Synchronous for an open one: it relinks to this lifted panel and returns.)
         void openLinkedSourceView(liftPanelId, hap);
         useBrowserStore.setState(x => ({ panels: x.panels.map(p => (p.id === existing.id && p.collapsed ? { ...p, collapsed: false } : p)) }));
-        // A peer of the graph: the current graph run's labels, by QNAME (§4.2).
+        // A peer of the member, as a new one is (agy review, group H round 2): its read state first, then the current
+        // run's labels within that scope, then the member's clusters on every tree node.
+        seedSourceReadState(fromPanelId, existing.id);
         labelLinkedSource(existing.id);
+        seedSourceState(fromPanelId, existing.id);
       });
       continue;
     }
@@ -101,6 +108,8 @@ async function openSources(host: PanelConfig, sources: PopOutPlan['sources']): P
     if (!id) continue;
     // A peer of the member it shows: the run's labels, else the member's own, and its read state, by QNAME; all
     // part of the step that opened it.
+    // (Its filter first, so the run labels only the reads it shows: agy review, group H round 2.)
+    seedSourceReadState(fromPanelId, id);
     labelLinkedSource(id);
     seedSourceState(fromPanelId, id);
     const after = useBrowserStore.getState();
@@ -123,10 +132,11 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
   const to = st.panels.find(p => p.id === sourcePanelId);
   if (!from || !to) return;
   const fk = panelKeyOf(from), tk = panelKeyOf(to);
-  const names = (ids: Iterable<string> | null | undefined) => (ids ? new Set([...ids].map(qnameOfId)) : null);
   // A member of exactly this haplotype (and not the other strand) has only this source's records.
-  const hapOnly = Boolean(from.liftHap) && (from.liftHap ?? '').toUpperCase() === (to.liftLink?.hapLabel ?? '').toUpperCase()
-    && !(from.strand && to.strand && from.strand !== to.strand);
+  // (A single-haplotype lifted dataset's panel has no haplotype of its own: all its records are that one's.)
+  const oneHap = liftHapLabels(st.datasets.find(d => d.id === from.datasetId)?.live_lift).length === 1;
+  const hapOnly = (oneHap || (Boolean(from.liftHap) && (from.liftHap ?? '').toUpperCase() === (to.liftLink?.hapLabel ?? '').toUpperCase()))
+    && from.datasetId === to.liftLink?.datasetId && !(from.strand && to.strand && from.strand !== to.strand);
   /** A map of the member's labels as this source's QNAME labels (null: none of them are this source's for sure). */
   const project = (labels: Record<string, number> | undefined, provs: GraphProvenance[]): Record<string, number> | null => {
     if (!labels || !Object.keys(labels).length) return null;
@@ -140,18 +150,17 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
     return Object.keys(byName).length ? byName : null;
   };
   const active = st.activeClusterTreeNodeId && st.clusterTreeNodes[st.activeClusterTreeNodeId] ? st.activeClusterTreeNodeId : null;
+  seedSourceReadState(fromPanelId, sourcePanelId);
   useBrowserStore.setState(cur => {
     const patch: Record<string, unknown> = {};
-    const filter = names(cur.filteredReadIds[fk]);
-    if (filter && !cur.filteredReadIds[tk]) patch.filteredReadIds = { ...cur.filteredReadIds, [tk]: filter };
-    const selected = names(cur.selectedReadIds[fk]);
-    if (selected?.size && !cur.selectedReadIds[tk]?.size) patch.selectedReadIds = { ...cur.selectedReadIds, [tk]: selected };
-    // Live clusters: the run's labels already here, else the member's share.
+    // Live clusters: the member's share; labels the source already has (the current run's, just now) stay only while
+    // they agree with it. A source clustered on its own keeps its clusters, order, focus and names untouched.
     let live = cur.clusterAssignments[tk];
-    if (!live || !Object.keys(live).length) {
-      const got = project(cur.clusterAssignments[fk], active ? provenanceLineage(cur, fk, active) : liveProvenance(cur, fk));
-      if (got) { live = got; patch.clusterAssignments = { ...cur.clusterAssignments, [tk]: got }; }
-    }
+    const got = project(cur.clusterAssignments[fk], active ? provenanceLineage(cur, fk, active) : liveProvenance(cur, fk));
+    const had = Boolean(live && Object.keys(live).length);
+    if (had && got && !Object.entries(live!).every(([q, c]) => got[q] === c)) return {};
+    if (had && !got && !runLabelled(cur, tk)) return {};
+    if (!had && got) { live = got; patch.clusterAssignments = { ...cur.clusterAssignments, [tk]: got }; }
     const labelled = Boolean(live && Object.keys(live).length);
     const order = labelled && cur.clusterOrder[fk]?.length ? [...cur.clusterOrder[fk]] : cur.clusterOrder[tk];
     const focus = labelled && cur.clusterFocus[fk]?.size ? new Set(cur.clusterFocus[fk]!) : cur.clusterFocus[tk] ?? null;
@@ -183,6 +192,31 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
     if (Object.keys(nodes).length) patch.clusterTreeNodes = { ...cur.clusterTreeNodes, ...nodes };
     return patch;
   });
+}
+
+/** Whether a source view's labels are the current graph run's (it is one of the run's destinations). */
+function runLabelled(s: ReturnType<typeof useBrowserStore.getState>, key: string): boolean {
+  return Boolean(s.clusterMatchedRun?.graph && s.clusterMatchedRun.destinations?.some(d => d.stateKey === key));
+}
+
+/** A source view's read state from its member, by QNAME: its filter, selection and exclusions (state it already
+ * has is kept). Before any labels, so the run labels only the reads it shows. */
+export function seedSourceReadState(fromPanelId: string, sourcePanelId: string): void {
+  const st = useBrowserStore.getState();
+  const from = st.panels.find(p => p.id === fromPanelId);
+  const to = st.panels.find(p => p.id === sourcePanelId);
+  if (!from || !to) return;
+  const fk = panelKeyOf(from), tk = panelKeyOf(to);
+  const names = (ids: Iterable<string> | null | undefined) => (ids ? new Set([...ids].map(qnameOfId)) : null);
+  useBrowserStore.setState(cur => {
+    const patch: Record<string, unknown> = {};
+    const filter = names(cur.filteredReadIds[fk]);
+    if (filter && !cur.filteredReadIds[tk]) patch.filteredReadIds = { ...cur.filteredReadIds, [tk]: filter };
+    const selected = names(cur.selectedReadIds[fk]);
+    if (selected?.size && !cur.selectedReadIds[tk]?.size) patch.selectedReadIds = { ...cur.selectedReadIds, [tk]: selected };
+    return patch;
+  });
   const excluded = useReadActionsStore.getState().excludedReadIds[fk];
-  if (excluded?.size) useReadActionsStore.getState().excludeReads(tk, [...names(excluded)!]);
+  const have = useReadActionsStore.getState().excludedReadIds[tk];
+  if (excluded?.size && !have?.size) useReadActionsStore.getState().excludeReads(tk, [...names(excluded)!]);
 }

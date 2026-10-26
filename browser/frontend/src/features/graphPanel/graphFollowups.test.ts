@@ -629,3 +629,16 @@ describe('group H agy round 2, 1: palindromic-core inversions; the anchor never 
     expect(compareColumnKeys(cols.get('ins'), cols.get('e'))).toBeLessThan(0);
   });
 });
+
+describe('group H agy round 2, 3: a single-haplotype lifted panel seeds its source view with its own clusters', () => {
+  it('no provenance needed: all its records are its one haplotype\'s', () => {
+    const aidOf = (q: string) => `lift-cohort:v1 ${JSON.stringify([`s#0|${q}`, q, `${q}:r`, 0, 'primary'])}`;
+    seed([panel('only', { datasetId: 's' }), panel('srcA', { datasetId: 'n', stateKey: 'srcA~lift-source',
+      liftLink: { id: 'l', datasetId: 's', liftPanelId: 'only', hap: '1', hapLabel: 'A', contig: 'chr3_A', flip: false, chain: null } as never })]);
+    useBrowserStore.setState(s => ({ datasets: s.datasets.map(d => (d.id === 's' ? { ...d, live_lift: { haplotypes: ['1'], haplotype_labels: { 1: 'A' } } } as never : d)),
+      clusterAssignments: { 'k-only': { [aidOf('q1')]: 0, [aidOf('q2')]: 1 } }, clusterOrder: { 'k-only': [1, 0] } }) as never);
+    seedSourceState('only', 'srcA');
+    expect(useBrowserStore.getState().clusterAssignments['srcA~lift-source']).toEqual({ q1: 0, q2: 1 });
+    expect(useBrowserStore.getState().clusterOrder['srcA~lift-source']).toEqual([1, 0]);
+  });
+});
