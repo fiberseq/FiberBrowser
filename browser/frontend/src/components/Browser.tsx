@@ -144,6 +144,9 @@ function branchReadScopeForStateKeys(
   return scope;
 }
 
+
+/** How long an automatic peak scan may run before it is stopped (a manual Scan has no limit). */
+const AUTO_SCAN_BUDGET_MS = 60_000;
 export function Browser() {
   // The UI size, held down for the top bar and toolbar while it would leave the reads too little room (audit H5).
   const chromeZoom = useChromeZoom();
@@ -842,7 +845,12 @@ export function Browser() {
 
     setScanning(true);
     try {
-      await Promise.all(rulesToScan.map(r => scanPeaksForRule(r.id, signal)));
+      const scans = Promise.all(rulesToScan.map(r => scanPeaksForRule(r.id, signal)));
+      // A cancelled scan stops showing "Scanning peaks..." at once, whatever request it still waits on (its results
+      // are for a view or scope that is gone, and are dropped when they arrive).
+      await (signal ? Promise.race([scans, new Promise<void>(resolve => {
+        if (signal.aborted) resolve(); else signal.addEventListener('abort', () => resolve(), { once: true });
+      })]) : scans);
     } finally {
       setScanning(false);
     }
@@ -938,9 +946,20 @@ export function Browser() {
       const run = () => {
         if (controller.signal.aborted) return;
         if (DEBUG) console.log(`Auto-scanning peaks for ${regionKey}`);
+        // An automatic scan has a time budget: one the server can't answer in time (busy with other work) stops,
+        // so "Scanning peaks..." never stays up. It is not retried automatically for this view (no loop of
+        // minute-long attempts); Scan runs it again.
+        let budget: ReturnType<typeof setTimeout> | null = null;
         waitForViewIdle(controller.signal)
           .then(() => {
-            if (!controller.signal.aborted) return handleScanPeaksRef.current(controller.signal);
+            if (controller.signal.aborted) return;
+            budget = setTimeout(() => {
+              if (controller.signal.aborted) return;
+              console.warn(`Automatic peak scan of ${chrom}:${start}-${end} stopped after ${AUTO_SCAN_BUDGET_MS / 1000} s; press Scan to run it.`);
+              lastScanRegionRef.current = regionKey;
+              controller.abort();
+            }, AUTO_SCAN_BUDGET_MS);
+            return handleScanPeaksRef.current(controller.signal);
           })
           .then(() => {
             if (controller.signal.aborted) return;
@@ -948,6 +967,7 @@ export function Browser() {
           })
           .catch(() => { /* failed: leave the region unscanned so it is retried */ })
           .finally(() => {
+            if (budget) clearTimeout(budget);
             if (autoScanRef.current === job) autoScanRef.current = null;
           });
       };
