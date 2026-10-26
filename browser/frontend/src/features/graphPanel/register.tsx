@@ -1,6 +1,7 @@
 /**
  * The graph-view panel type (DESIGN_GRAPH_PANEL.md §1): `contentType: 'graph-view'`, not a singleton, opened from
- * its rail tile or the strip with no dataset. A Preview feature while Gates C–G are outstanding.
+ * its rail tile or the strip with no dataset. A Preview feature until the graph helper ships for every platform
+ * and saved sessions from earlier versions are checked to open unchanged.
  */
 import { lazy } from 'react';
 import { registerAnalysisPanel, registerPanelMigration } from '../../plugins/registry';
@@ -43,7 +44,7 @@ export function registerGraphPanel(): void {
       'The graph helper (the fiberbrowser-graph-native companion package, or the macOS app) and a package made by fiberbrowser-graph prepare are needed.',
     ],
     inUse: state => Boolean(state.panels?.some(p => p.contentType === GRAPH_VIEW_PANEL)),
-    graduation: 'It graduates with every platform\'s helper and the release replay (Gate G).',
+    graduation: 'It leaves Preview when the graph helper is available on every platform (not only Apple silicon Macs) and sessions saved with earlier versions are checked to open unchanged.',
   });
   registerAnalysisPanel({
     contentType: GRAPH_VIEW_PANEL,
