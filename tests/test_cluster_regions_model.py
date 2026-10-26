@@ -309,7 +309,7 @@ def test_a_carrier_with_no_fit_rows_in_a_parent_is_refined_by_assignment(monkeyp
 
     # Fit time (e.g. capped): obs-mat has m1, m2 in cluster 0 (which split into 0.0 and 0.1 on feat_alu);
     # obs-pat only has p1 in cluster 1 at fit time (its cluster-0 read p_uncapped was left out by the fit cap).
-    def fake_engine_fit(st, req, sources=None, row_cache=None, model=None):
+    def fake_engine_fit(st, req, sources=None, row_cache=None, model=None, covering_out=None):
         if len(req.peak_regions) == 1 and req.peak_regions[0].end == 20:
             # Stage 1
             if model is None:
