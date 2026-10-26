@@ -59,7 +59,7 @@ class LiveLiftConfig:
             "settings": self.settings.as_dict(),
             "key": self.key(),
             "source_assembly": _source_assembly(handle),
-            "source_sample": source_sample(handle.haplotypes),
+            "source_sample": source_sample(self.haplotypes),
             "target_reference": target_reference(handle.manifest),
             "source_fasta": self.source_fasta,
             "validation": self.validation,
@@ -83,8 +83,9 @@ def _pansn_sample(name) -> Optional[str]:
 
 
 def source_sample(haplotypes) -> Optional[str]:
-    """The one sample a map's source haplotypes belong to (labels: "Open in HG002 view"); None for several or none."""
-    samples = {_pansn_sample(h) for h in haplotypes or ()}
+    """The one sample the dataset's source haplotypes belong to (labels: "Open in HG002 view"); None for several,
+    none, or keys that are not PanSN names (``H1`` names no sample)."""
+    samples = {_pansn_sample(h) for h in haplotypes or () if "#" in str(h)}
     samples.discard(None)
     return samples.pop() if len(samples) == 1 else None
 

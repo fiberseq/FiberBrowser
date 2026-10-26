@@ -85,3 +85,27 @@ def test_listing_is_hidden_with_the_flag_off(lift_env, monkeypatch):
     client, _tmp = lift_env
     monkeypatch.delenv("FIBERBROWSER_LIVE_LIFT")
     assert client.get("/api/lift/datasets").status_code == 404
+
+
+def _rehap(path, rename):
+    with open(path) as fh:
+        m = json.load(fh)
+    m["chains"] = [c for c in m["chains"] if c["haplotype"] in rename]
+    for chain in m["chains"]:
+        chain["haplotype"] = rename[chain["haplotype"]]
+    m["nets"] = {rename[k]: v for k, v in m["nets"].items() if k in rename}
+    with open(path, "w") as fh:
+        json.dump(m, fh)
+    return path
+
+
+def test_non_pansn_keys_and_one_sample_of_several_name_the_right_sample(tmp_path):
+    """agy, group O: a generic map's key ("H1") names no sample; one sample opened from a multi-sample map is it."""
+    from services.lift.dataset import LiveLiftConfig
+    ll.clear_selection_cache()
+    assert source_sample(["H1"]) is None
+    generic = _rehap(write_toy_sidecar(tmp_path / "generic"), {"H#1": "H1"})
+    assert LiveLiftConfig(generic, ["H1"]).to_dict()["source_sample"] is None
+    multi = _rehap(write_toy_sidecar(tmp_path / "multi"), {"H#1": "strainA#0", "H#2": "strainB#0"})
+    assert LiveLiftConfig(multi, ["strainA#0"]).to_dict()["source_sample"] == "strainA"
+    assert LiveLiftConfig(multi, ["strainA#0", "strainB#0"]).to_dict()["source_sample"] is None

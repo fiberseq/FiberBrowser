@@ -22,6 +22,19 @@ describe('source sample and target reference labels', () => {
     expect(sourceHapLabel(lifted({}), 'PAT')).toBe('PAT');
     expect(sourceHapLabel(lifted({ source_sample: 'strainA' }), 'strainA#0')).toBe('strainA#0');
   });
+  it('a non-PanSN map, or one sample opened from a multi-sample map, never names the wrong sample (agy, group O)', () => {
+    // Generic map with key "H1": no sample, and the haplotype is not doubled ("H1 H1").
+    const generic = lifted({ source_sample: null, haplotypes: ['H1'], available_haplotypes: { H1: 'H1' } });
+    expect(sourceSampleName(generic)).toBeNull();
+    expect(sourceHapLabel(generic, 'H1')).toBe('H1');
+    expect(sourceSampleLabel(generic)).toBe('source assembly');
+    // strainA opened from a strainA + strainB map (an older server without source_sample): strainA.
+    const one = lifted({ haplotypes: ['strainA#0'], available_haplotypes: { 'strainA#0': 'strainA#0', 'strainB#0': 'strainB#0' } });
+    expect(sourceSampleName(one)).toBe('strainA');
+    // Both selected: no single sample.
+    expect(sourceSampleName(lifted({ haplotypes: ['strainA#0', 'strainB#0'] }))).toBeNull();
+    expect(sourceHapLabel(lifted({ source_sample: 'S' }), 'S')).toBe('S');
+  });
   it('names the target reference when the map does', () => {
     expect(targetReferenceLabel(lifted({ target_reference: 'CHM13' }))).toBe('CHM13');
     expect(targetReferenceLabel(lifted({}), 'Reference')).toBe('Reference');

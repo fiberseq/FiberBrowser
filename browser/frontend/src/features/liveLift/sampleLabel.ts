@@ -19,7 +19,8 @@ export function sourceSampleName(dataset: Lifted): string | null {
   const info = dataset?.live_lift;
   if (!info) return null;
   if (info.source_sample) return info.source_sample;
-  const keys = Object.keys(info.available_haplotypes ?? {}).length ? Object.keys(info.available_haplotypes ?? {}) : info.haplotypes ?? [];
+  // The dataset's own haplotypes first (one sample opened from a multi-sample map is that sample), else the map's.
+  const keys = info.haplotypes?.length ? info.haplotypes : Object.keys(info.available_haplotypes ?? {});
   // A haplotype key without a PanSN '#' ("H1") names no sample.
   const samples = new Set(keys.filter(k => k.includes('#')).map(pansnSample).filter((s): s is string => Boolean(s)));
   return samples.size === 1 ? [...samples][0] : null;
@@ -34,7 +35,7 @@ export function sourceSampleLabel(dataset: Lifted): string {
  * its sample and is not prefixed again). */
 export function sourceHapLabel(dataset: Lifted, hap: string | null | undefined): string {
   const sample = sourceSampleName(dataset);
-  if (sample && hap && pansnSample(hap) === sample && hap.includes('#')) return hap;
+  if (sample && hap && ((pansnSample(hap) === sample && hap.includes('#')) || hap === sample)) return hap;
   return [sample, hap].filter(Boolean).join(' ') || 'source assembly';
 }
 
