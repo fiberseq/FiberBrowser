@@ -567,6 +567,26 @@ def _not_carrier_labels(state, spec, regions, oid: str, cache: dict, labelled: f
     return out
 
 
+def _unfitted_sequence(regions, plan, oid: str) -> Optional[str]:
+    """Why a participant outside every carrier set is still not provably "not a carrier" (None: it is): it carries
+    carrier-only sequence of the regions the plan dropped (too few sampled positions), or its lack of the fitted
+    sequence is not proven (repeated or unresolved columns on its path, or an unresolved target walk). Graph
+    follow-ups, Codex review of group B: non-carriage is judged from the regions' complete sequence evidence, before
+    features are dropped."""
+    pset = set(plan.participants)
+    for rc in regions:
+        report = rc.report
+        if (report.get("repeats", {}).get(oid) or report.get("unresolved", {}).get(oid)
+                or report.get("target_unresolved") or report.get("target_repeats")):
+            return "its sequence in these regions is repeated or unresolved on this path"
+        for f in [*rc.target_features(plan.participants), *rc.features]:
+            if f.kind == "target" or oid not in f.blocks:
+                continue
+            if set(f.blocks) & pset != pset:
+                return "carries only path-specific sequence of these regions too short to cluster (see dropped features)"
+    return None
+
+
 JUNCTION_PAD_BP = 2_000
 
 
@@ -693,11 +713,14 @@ def run(state, reg, body: dict, tiles: dict, spec: Optional[dict] = None) -> dic
             # Not a carrier: it carries no feature of any carrier set (one that carries a later set's sequence is not
             # fitted in this run, and is not labelled "not a carrier" either; Codex review, group B).
             later = bool(sets_from and oid not in oids and any(oid in cs["carriers"] for cs in plan.carrier_sets))
-            not_carrier = bool(sets_from and oid not in oids and oid not in plan.left_out and not later)
+            # Nor is one that carries dropped path-specific sequence, or whose lack is not proven (Codex, follow-ups).
+            unfitted = (_unfitted_sequence(regions, plan, oid)
+                        if sets_from and oid not in oids and oid not in plan.left_out and not later else None)
+            not_carrier = bool(sets_from and oid not in oids and oid not in plan.left_out and not later and not unfitted)
             why = plan.left_out.get(oid) or ("not a carrier of the regions' sequence" if not_carrier
                                              else "carries only other path-specific sequence of these regions: choose "
                                                   "its regions alone to cluster it" if later
-                                             else "no reads cover the regions")
+                                             else unfitted or "no reads cover the regions")
             absent = (oid in plan.left_out and plan.left_out[oid].startswith("no columns")
                       and _absent_path_labels(state, spec, tiles, regions, oid, cache, labelled))
             if absent:
@@ -773,7 +796,8 @@ def assign(state, reg, body: dict, tiles: dict, spec: Optional[dict] = None) -> 
                 results[o["id"]] = {"assignments": absent, "not_carrier": True}
                 continue
         if (sets_from and o["id"] not in oids and o["id"] not in plan.left_out and o["id"] not in labels
-                and not any(o["id"] in cs["carriers"] for cs in plan.carrier_sets)):
+                and not any(o["id"] in cs["carriers"] for cs in plan.carrier_sets)
+                and not _unfitted_sequence(regions, plan, o["id"])):
             # Not a carrier (no shared feature): its rows at the regions, as the fit labelled them.
             results[o["id"]] = {"assignments": _not_carrier_labels(state, spec, regions, o["id"], cache, labelled), "not_carrier": True}
             continue
