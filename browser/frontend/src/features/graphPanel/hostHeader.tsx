@@ -19,7 +19,7 @@ import { formatBp } from './coordinates';
 import { HANDOFF_OUT_BP, setPinnedLinear, useGraphSettings } from './handoff';
 import { foldIn, graphUnavailable, hostOf, isHost, joinCandidates, joinGraph, membersOf, poppable, removeFromGraph, setPanelViewMode, viewSelectionAsGraph } from './hostMode';
 import { PopOutPicker, usePopOutPicker } from './PopOutPicker';
-import { acceptGraphOffer, dismissGraphOffer, graphOfferPanel, useGraphOffers } from './graphOffer';
+import { acceptGraphOffer, dismissGraphOffer, graphOfferPanel, useGraphOffers, withdrawGraphOffer } from './graphOffer';
 import { POP_OUT_KINDS, popOutKindOf, popOutPaths, setPopOutKind, type PopOutKind } from './popOutKind';
 import { useGraphStatusStore } from './statusStore';
 import { memberLabel, singleHapPathName } from './labels';
@@ -79,7 +79,13 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
   useEffect(() => { watchGraphBindings(); }, []);
   // Viewed as a graph some other way (the header toggle, a selection): the offer is used.
   const inGraph = isHost(panel) || Boolean(panel.graphMemberOf);
-  useEffect(() => { if (offered && inGraph && panel.datasetId) dismissGraphOffer(panel.datasetId); }, [offered, inGraph, panel.datasetId]);
+  // (Judged on the store's panels now, not this render's: a header of a panel a session restore just replaced may
+  // still be mounted when the restored split panels are offered.)
+  useEffect(() => {
+    if (!offered || !inGraph || !panel.datasetId) return;
+    const now = useBrowserStore.getState().panels;
+    if (now.some(p => p.datasetId === panel.datasetId && (isHost(p) || p.graphMemberOf))) withdrawGraphOffer(panel.datasetId);
+  }, [offered, inGraph, panel.datasetId]);
   if (panel.contentType !== 'dataset' || !panel.datasetId) return null;
   const host = isHost(panel);
   const panels = [panel, ...related];

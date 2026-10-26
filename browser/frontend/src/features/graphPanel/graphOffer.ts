@@ -17,10 +17,27 @@ interface OfferState {
 
 export const useGraphOffers = create<OfferState>(() => ({ offered: {}, done: {} }));
 
-export function offerGraphView(datasetId: string): void {
+/** Offer "View as graph" for a dataset. `fresh`: a session restore just laid its panels out again, so an earlier
+ * offer that was used or dismissed (on another layout) does not suppress this one. */
+export function offerGraphView(datasetId: string, opts: { fresh?: boolean } = {}): void {
   const s = useGraphOffers.getState();
+  if (opts.fresh && s.done[datasetId]) {
+    const { [datasetId]: _used, ...done } = s.done;
+    void _used;
+    useGraphOffers.setState({ offered: { ...s.offered, [datasetId]: true }, done });
+    return;
+  }
   if (s.offered[datasetId] || s.done[datasetId]) return;
   useGraphOffers.setState({ offered: { ...s.offered, [datasetId]: true } });
+}
+
+/** The dataset is in a graph now (viewed as a graph some other way): its offer is withdrawn. */
+export function withdrawGraphOffer(datasetId: string): void {
+  const s = useGraphOffers.getState();
+  if (!s.offered[datasetId]) return;
+  const { [datasetId]: _gone, ...offered } = s.offered;
+  void _gone;
+  useGraphOffers.setState({ offered });
 }
 
 export function dismissGraphOffer(datasetId: string): void {
@@ -43,4 +60,9 @@ export function acceptGraphOffer(panelId: string, datasetId: string): string | n
   const why = viewSelectionAsGraph(panelId);
   if (!why) dismissGraphOffer(datasetId);
   return why;
+}
+
+// e2e and local checks read the offers (App.tsx exposes the browser store the same way).
+if (typeof window !== 'undefined' && (window as unknown as { __FIBERBROWSER_E2E_EXPOSE_STORE?: boolean }).__FIBERBROWSER_E2E_EXPOSE_STORE) {
+  (window as unknown as { __FIBERBROWSER_GRAPH_OFFERS__?: typeof useGraphOffers }).__FIBERBROWSER_GRAPH_OFFERS__ = useGraphOffers;
 }

@@ -96,7 +96,7 @@ export function offerRestoredSplitSessions(): void {
     if (!isLiveLift(dataset)) continue;
     const mine = state.panels.filter(p => p.contentType === 'dataset' && p.datasetId === dataset.id);
     if (!mine.some(p => p.liftHap) || mine.some(p => p.viewMode === 'graph' || p.graphMemberOf)) continue;
-    if (liftedOpenView(dataset.id) === 'graph') offerGraphView(dataset.id);
+    if (liftedOpenView(dataset.id) === 'graph') offerGraphView(dataset.id, { fresh: true });
   }
 }
 

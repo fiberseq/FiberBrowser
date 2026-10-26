@@ -23,7 +23,7 @@ import { memberLabel, singleHapPathName } from './labels';
 import type { GraphBinding, GraphOccurrence, GraphRead, GraphReadBinding, GraphRegistration, GraphTopology } from './types';
 import { createElement, act } from 'react';
 import { featureText, notDrawnInLinear } from './linearNotices';
-import { acceptGraphOffer, dismissGraphOffer, graphOfferPanel, offerGraphView, useGraphOffers } from './graphOffer';
+import { acceptGraphOffer, dismissGraphOffer, graphOfferPanel, offerGraphView, useGraphOffers, withdrawGraphOffer } from './graphOffer';
 import { autoSplitNewLiftedDatasets, offerRestoredSplitSessions } from '../liveLift/register';
 import { notePendingGraphOpen, settlePendingGraphOpens } from './openAsGraph';
 import { CROSSFADE_MS, fadeIn, panelBodyParts } from './crossfade';
@@ -300,6 +300,21 @@ describe('item 2: the one-time "View as graph" offer (restored split sessions, l
     useGraphOffers.setState({ offered: {}, done: {} });
     offerRestoredSplitSessions();
     expect(offers().offered.d).toBeUndefined();
+  });
+
+  it('an offer used or dismissed on an earlier layout does not suppress the offer of a split session restored later', () => {
+    seed(split());
+    useBrowserStore.setState(s => ({ datasets: s.datasets.map(d => (d.id === 'd' ? { ...d, live_lift: { haplotypes: ['1', '2'], haplotype_labels: { 1: 'MAT', 2: 'PAT' } } } as never : d)) }));
+    offerGraphView('d');
+    dismissGraphOffer('d');
+    offerGraphView('d');
+    expect(graphOfferPanel(useBrowserStore.getState().panels, 'd', offers())).toBeNull();
+    offerRestoredSplitSessions();
+    expect(graphOfferPanel(useBrowserStore.getState().panels, 'd', offers())).toBe('mat');
+    // Withdrawn (viewed as a graph another way) is not "dismissed": nothing remembered.
+    withdrawGraphOffer('d');
+    expect(offers().offered.d).toBeUndefined();
+    expect(offers().done.d).toBeUndefined();
   });
 
   it('a binding that arrives after the user acted on the split panels offers it instead of rearranging them', () => {
