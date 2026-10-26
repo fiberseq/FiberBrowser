@@ -206,7 +206,7 @@ class Pileup:
 
 
 def pileup(records: Iterable, chrom: str, start: int, end: int, *, ref: Optional[np.ndarray] = None,
-           min_bq: int = 20, min_mapq: int = 20, max_indel: int = 30, include_duplicates: bool = False,
+           min_bq: int = 20, min_mapq: int = 0, max_indel: int = 30, include_duplicates: bool = False,
            cancelled: Optional[Callable[[], bool]] = None) -> Pileup:
     """Allele counts per position, strand class and base over ``[start, end)``.
 
@@ -473,7 +473,7 @@ class AlleleMatrix:
 
 
 def read_alleles(records: Iterable, chrom: str, start: int, end: int, candidates: list[dict], *,
-                 min_bq: int = 20, min_mapq: int = 20, include_duplicates: bool = False,
+                 min_bq: int = 20, min_mapq: int = 0, include_duplicates: bool = False,
                  cancelled: Optional[Callable[[], bool]] = None) -> AlleleMatrix:
     """Each read's allele code at each candidate (``MISSING`` where it does not cover it)."""
     pos = np.array([c["pos"] for c in candidates], dtype=np.int64)

@@ -186,7 +186,7 @@ SETTING_KEYS = ("enzyme", "seq", "min_mapq", "min_read_length", "dedup", "dedup_
                 # FiberHMM 3.0 basecaller provenance: what the inputs record (shown, not a calling setting)
                 # and the --basecaller-info / --modbase-model override (carried into the re-call)
                 "basecaller", "basecaller_override")
-PIPELINE_DEFAULTS = {"min_mapq": 20, "min_read_length": 1000, "seq_daf": "nanopore"}
+PIPELINE_DEFAULTS = {"min_mapq": 0, "min_read_length": 1000, "seq_daf": "nanopore"}
 
 
 def override_args(override: Any) -> list[tuple[str, list[str]]]:

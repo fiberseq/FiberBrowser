@@ -46,7 +46,7 @@ class ProjectionPolicy:
     max_cigar_operations: int = 262_144
     max_spool_bytes: int = 64 * 1024 * 1024
     deadline_s: float = 30.
-    min_mapq: int = 20
+    min_mapq: int = 0  # MAPQ filtering off by default (owner, 25 Oct); a saved policy keeps its own
     cohort_alternatives: str = "exclude"
     conflicts_enabled: bool = True
     conflict_min_overlap: int = 500
@@ -446,7 +446,7 @@ def geometry_matches(e, target, policy):
             and abs(a-alt_bp) <= max(policy.geometry_span_bp, policy.geometry_span_fraction*max(a, alt_bp)))
 
 
-def classify_projection(alignment, projected, target, *, context=None, likelihood_policy=None, likelihood_budget=None, min_mapq=20, diagnostic_halo_bp=10_000, geometry_policy=None):
+def classify_projection(alignment, projected, target, *, context=None, likelihood_policy=None, likelihood_budget=None, min_mapq=0, diagnostic_halo_bp=10_000, geometry_policy=None):
     """One call inside one path. Geometry and sequence calls stay independent."""
     start, end, alt_bp = target["ref_start"], target["ref_end"], target["alt_bp"]
     target_id = target["target_id"]

@@ -15,7 +15,7 @@ import { liftHapLabels } from '../liveLift/types';
 import { differenceDescription, differenceGlyph, differenceLanes, MIN_SIZES, nextDifference, stripModel } from '../liveLift/differencesModel';
 import { useDifferenceSelection, type DifferenceSelection } from '../liveLift/inspectionStore';
 import { clickDifference, differenceHint, differenceMenuEntries, runDifferenceMenuAction } from './differenceActions';
-import { READ_BADGE_MODES, readBadgeMode, setDifferenceRowOptions, setReadBadgeMode } from './displayOptions';
+import { analysisMinMapq, READ_BADGE_MODES, readBadgeMode, setDifferenceRowOptions, setReadBadgeMode } from './displayOptions';
 import { useTrackMenuStore } from '../../stores/trackMenuStore';
 import { useTrackFeedStore } from '../../stores/trackFeedStore';
 import type { ContextMenuEntry } from '../../components/tracks/read-track/ReadContextMenu';
@@ -57,6 +57,7 @@ export function DifferenceLanes({ panel, dataset, width, gutter = 0, height }: {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [table, setTable] = useState(false);
   const badges = useBrowserStore(s => readBadgeMode(s));
+  const minMapq = useBrowserStore(s => analysisMinMapq(s));
   const readsInView = useTrackFeedStore(s => s.byStateKey[panel.stateKey ?? panel.datasetId ?? '']?.reads?.length ?? 0);
   usePanOffsetTransform(canvas, { scope: viewKey });
   const query = useMemo(() => ({ datasetId: dataset.id, liftKey, chrom, start, end, liftHap: panel.liftHap,
@@ -108,7 +109,8 @@ export function DifferenceLanes({ panel, dataset, width, gutter = 0, height }: {
     const controller=new AbortController();
     const timer=setTimeout(()=>{void fetchJson<WorkspaceCalls>('/api/lift/analysis/summary',{
       method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,
-      body:JSON.stringify({dataset_id:dataset.id,chrom,start:Math.floor(start),end:Math.ceil(end),analysis_scope:'lifted_only'}),
+      body:JSON.stringify({dataset_id:dataset.id,chrom,start:Math.floor(start),end:Math.ceil(end),analysis_scope:'lifted_only',
+        projection_policy:{min_mapq:analysisMinMapq(useBrowserStore.getState())}}),
     }).then(r=>{if(controller.signal.aborted)return;
       setReadScope(r.status?`${r.status}: ${r.reason}`:r.scope.search_complete?'Read discovery complete in loaded cohort':'Read discovery partial');
       setReadComplete(!r.status&&Boolean(r.scope.search_complete));
@@ -117,7 +119,7 @@ export function DifferenceLanes({ panel, dataset, width, gutter = 0, height }: {
         src:{contig:null,start:null,end:null},chain:null,strand:null,grch38:null,alt:null})));
     }).catch(e=>{if(!controller.signal.aborted)setReadScope(String(e.message??e));});},140);
     return()=>{clearTimeout(timer);controller.abort();};
-  },[dataset.id,liftKey,chrom,start,end,sources.reads,enabled]);
+  },[dataset.id,liftKey,chrom,start,end,sources.reads,enabled,minMapq]);
   // Assembly comparison of the read lane (labels, typed links, novelty; the ledger is saved with the session).
   const [comparison,setComparison]=useState<ComparisonResponse|null>(null);
   useEffect(()=>{

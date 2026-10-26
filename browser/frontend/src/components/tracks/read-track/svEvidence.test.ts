@@ -41,7 +41,9 @@ describe('SV evidence levels', () => {
       read.sv_segments = read.sv_segments.map(s => ({ ...s, strand }));
       expect(svEvidenceLevel(read, target, 'chrT')).toBe('confirmed');
     }
-    for (const patch of [{ mapq: 0 }, { q_start: 50 }, { strand: '+' as const }]) {
+    // No MAPQ floor for junctions by default (owner, 25 Oct): MAPQ 0 still confirms.
+    expect(svEvidenceLevel({ ...read, sv_segments: [read.sv_segments[0], { ...read.sv_segments[1], mapq: 0 }] }, target)).toBe('confirmed');
+    for (const patch of [{ q_start: 50 }, { strand: '+' as const }]) {
       expect(svEvidenceLevel({ ...read, sv_segments: [read.sv_segments[0], { ...read.sv_segments[1], ...patch }] }, target)).toBe('putative');
     }
     expect(svEvidenceLevel({ ...read, sequence_span: [0, 100] }, target)).toBe('putative');

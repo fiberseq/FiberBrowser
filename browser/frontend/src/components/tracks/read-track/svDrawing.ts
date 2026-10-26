@@ -14,6 +14,8 @@ export const SV_MIN_LEN_LOWEST = 10;
 export const SV_MIN_LEN_HIGHEST = 1_000_000;
 /** Allele split: reads must reach this far past both breakpoints to be informative. */
 export const SV_SPAN_MARGIN = 100;
+/** MAPQ floor for a drawn SA junction: none by default (owner, 25 Oct); mirrors sv_events.SV_JUNCTION_MIN_MAPQ. */
+export const SV_JUNCTION_MIN_MAPQ = 0;
 /** The SV track's default height (its own row since fb-n11-tracks; the registry has its limits). */
 export const SV_BAND_HEIGHT = 44;
 /** Every SV glyph takes clicks and hovers over at least this many px across (faint ones too). */
@@ -185,7 +187,7 @@ export function svEvidenceLevel(read: Pick<CompactRead, 'sv' | 'sv_evidence' | '
   }
   const segments = [...uniqueSegments.values()];
   for (const left of segments) for (const right of segments) {
-    if (left === right || left.mapq < 20 || right.mapq < 20 || left.strand !== right.strand
+    if (left === right || left.mapq < SV_JUNCTION_MIN_MAPQ || right.mapq < SV_JUNCTION_MIN_MAPQ || left.strand !== right.strand
       || left.chrom !== right.chrom || (chrom && left.chrom !== chrom) || left.query_length !== right.query_length) continue;
     const gap = right.q_start - left.q_end;
     if (gap < 0 || (left.pos + left.cigar_ref_len < lo - tol || left.pos + left.cigar_ref_len > hi + tol)) continue;

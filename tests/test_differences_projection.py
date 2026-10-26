@@ -284,7 +284,9 @@ def test_real_compatible_query_conflict_requires_quality_overlap_and_placement()
     result = call_molecule([supporting, elsewhere], [p], target(0, 1000))
     assert result["call"]["level"] == "conflicting"
     assert "compatible_query_elsewhere" in result["call"]["reasons"]
-    safe = call_molecule([supporting, replace(elsewhere, mapq=0)], [p], target(0, 1000))
+    # A MAPQ floor applies only when a policy sets one (none by default since 25 Oct).
+    assert call_molecule([supporting, replace(elsewhere, mapq=0)], [p], target(0, 1000))["call"]["level"] == "conflicting"
+    safe = call_molecule([supporting, replace(elsewhere, mapq=0)], [p], target(0, 1000), policy=ProjectionPolicy(min_mapq=20))
     assert safe["call"]["level"] == "confirmed"
     unprojectable = replace(elsewhere, contig="unmapped-source")
     assert call_molecule([supporting, unprojectable], [p], target(0, 1000))["call"]["level"] == "confirmed"

@@ -1,4 +1,5 @@
 import { useBrowserStore } from '../../stores/browserStore';
+import { analysisMinMapq } from './displayOptions';
 import { fetchJson } from '../../api/sharedFetch';
 import type { MoleculeEnvelope, MoleculeCall } from './contracts';
 import type { LiveLiftInsertion, CompactRead } from '../../components/tracks/read-track/types';
@@ -30,7 +31,8 @@ export interface AlternateBlock extends LiveLiftInsertion {
 }
 export interface BlocksResponse { blocks?: AlternateBlock[]; complete?: boolean; status?: string; reason?: string }
 export function inspectDifference(q: WorkspaceQuery, policy: EvidencePolicy, signal?: AbortSignal): Promise<WorkspaceCalls> {
-  return fetchJson('/api/differences/inspect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...q, ...policy }), signal });
+  const min_mapq = analysisMinMapq(useBrowserStore.getState());
+  return fetchJson('/api/differences/inspect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...q, ...policy, policy: { min_mapq } }), signal });
 }
 export function getAlternateBlocks(q: WorkspaceQuery, rowIds: string[] | undefined, layers: string[], includeDuplicates: boolean, signal?: AbortSignal, observations=false): Promise<BlocksResponse> {
   return fetchJson(observations ? '/api/differences/observations' : '/api/differences/alternate-blocks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...q, row_ids: rowIds, layers, include_duplicates: includeDuplicates }), signal });

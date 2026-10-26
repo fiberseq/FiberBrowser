@@ -1,6 +1,6 @@
 /** A lifted dataset's display settings after it was opened (each is part of its lift_key: caches start over). */
 import { MIN_SIZES } from './differencesModel';
-import { READ_BADGE_MODES, readBadgeMode, setDifferenceRowOptions, setReadBadgeMode } from '../differences/displayOptions';
+import { analysisMinMapq, READ_BADGE_MODES, readBadgeMode, setAnalysisMinMapq, setDifferenceRowOptions, setReadBadgeMode } from '../differences/displayOptions';
 import type { LiveLiftBadgeMode } from '../../components/tracks/read-track/liveLiftCanvas';
 import { useEffect, useState } from 'react';
 import { create } from 'zustand';
@@ -30,7 +30,8 @@ export function LiveLiftSettingsDialog() {
   const firstPanel = useBrowserStore(st => st.panels.find(p => p.datasetId === datasetId));
   const [rowSources, setRowSources] = useState({ assembly: true, reads: false });
   const [rowMinBp, setRowMinBp] = useState(0);
-  const [badges, setBadges] = useState<LiveLiftBadgeMode>('ticks');
+  const [badges, setBadges] = useState<LiveLiftBadgeMode>('off');
+  const [minMapq, setMinMapq] = useState(0);
   const nativeDatasets = useBrowserStore(s => s.datasets).filter(d => d.data_type === 'bam');
   const [nativeProvenance, setNativeProvenance] = useState<Record<string, { groups: [string, string][]; policy: 'off' | 'by_molecule' }>>({});
   useEffect(() => {
@@ -46,6 +47,7 @@ export function LiveLiftSettingsDialog() {
     setRowSources(firstPanel?.differenceSources ?? { assembly: true, reads: false });
     setRowMinBp(firstPanel?.liveLiftMinBp ?? 0);
     setBadges(readBadgeMode(useBrowserStore.getState()));
+    setMinMapq(analysisMinMapq(useBrowserStore.getState()));
   }, [datasetId]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!datasetId || !dataset) return null;
   const save = async () => {
@@ -53,6 +55,7 @@ export function LiveLiftSettingsDialog() {
       setDifferenceRowOptions(p.id, { sources: rowSources, minBp: rowMinBp });
     }
     setReadBadgeMode(badges);
+    setAnalysisMinMapq(minMapq);
     const r = await updateLiftSettings(datasetId, {
       ...advanced,
       g_split: Math.round(gSplitKb * 1000), window_merge: Math.round(mergeKb * 1000), alternatives,
@@ -105,6 +108,9 @@ export function LiveLiftSettingsDialog() {
             <label className="inline-flex items-center gap-1 whitespace-nowrap">Insertions on reads
               <select data-testid="live-lift-settings-read-badges" value={badges} onChange={e => setBadges(e.target.value as LiveLiftBadgeMode)}>
                 {READ_BADGE_MODES.map(m => <option key={m.mode} value={m.mode} title={m.title}>{m.label}</option>)}</select></label>
+            <label className="inline-flex items-center gap-1 whitespace-nowrap" title="Leave out alignments below this mapping quality from read-difference calls. 0: no MAPQ filter (the default).">Read analysis MAPQ ≥
+              <input type="number" data-testid="live-lift-settings-min-mapq" className="w-14" min={0} max={255} step={1} value={minMapq}
+                onChange={e => setMinMapq(Number(e.target.value) || 0)} /></label>
           </div>
         </fieldset>
         <details className="mt-3"><summary className="cursor-pointer">Advanced</summary>

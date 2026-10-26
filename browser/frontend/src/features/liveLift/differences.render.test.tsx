@@ -101,7 +101,7 @@ describe('differences strip and inspection', () => {
     const menu = useTrackMenuStore.getState().menu!;
     const labels = (menu.own ?? []).flatMap(e => e.kind === 'item' || e.kind === 'submenu' || e.kind === 'heading' ? [e.label] : []);
     expect(labels).toEqual(expect.arrayContaining(['Differences row', '✓ Assembly differences (the map)', 'Show the table', 'Live-lift settings…']));
-    expect(labels.some(l => l.startsWith('Insertions on reads: ticks'))).toBe(true);
+    expect(labels.some(l => l.startsWith('Insertions on reads: off'))).toBe(true);
     act(() => menu.onOwn!('opt:reads'));
     expect(useBrowserStore.getState().panels.find(p => p.id === panel.id)?.differenceSources).toEqual({ assembly: true, reads: true });
     act(() => menu.onOwn!('opt:min:50'));
