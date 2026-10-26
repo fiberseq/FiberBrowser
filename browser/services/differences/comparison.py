@@ -191,8 +191,56 @@ def assembly_comparison(state, dataset, *, chrom, start, end, reads=(), read_seq
     radius = max(matching_policy.broad_anchor_bp, policy.diagnostic_flank_bp)
     widest = max([0, *(max(r["ref_end"] - r["ref_start"], r["alt_bp"]) for r in reads)])
     pad = int(max(radius, matching_policy.broad_anchor_fraction * widest)) + radius
-    fetched = (max(0, start - pad), end + pad)
+    read_edits, read_out = [], {}
+    for r in reads:
+        checkpoint()
+        rid = str(r["id"])
+        s, e, a = int(r["ref_start"]), int(r["ref_end"]), int(r["alt_bp"])
+        seq = read_sequences.get(rid)
+        if seq is not None:
+            seq = seq.upper()
+            if len(seq) > policy.max_allele_bp or any(c not in "ACGTNYR" for c in seq):
+                raise ValueError("read sequences must be at most max_allele_bp bases of ACGTNYR")
+            a = len(seq)
+        # N, and DAF Y/R left in a majority consensus, are unknown bases: no exact identity from them.
+        complete = a == 0 or (seq is not None and not any(c in "NYR" for c in seq))
+        alt = "" if a == 0 else seq if complete else None
+        kind = "deletion" if a == 0 else "insertion" if s == e else "replacement"
+        read_edits.append(Edit(f"reads:{rid}", reference_id, chrom, s, e, a, "reads", alt, kind=kind,
+                               sequence_complete=complete))
+        read_out[rid] = dict(read_id=rid, ref_start=s, ref_end=e, alt_bp=a, kind=kind,
+                             sequence_status="available" if complete else "unavailable",
+                             sequence_source="consensus" if seq is not None else "geometry" if a == 0 else None,
+                             links=[], members=[list(m) for m in r.get("geometry_members") or [[s, e, int(r["alt_bp"])]]])
+    # Each read's span covers its equivalent placements: an equal assembly allele may sit anywhere among them.
+    read_spans = {}
+    for edit, rid in zip(read_edits, read_out):
+        read_spans[rid] = (edit.start, edit.end)
+        window = reference.window(reference_id, chrom, edit.start, edit.end) if edit.sequence_complete else None
+        if window is not None:
+            try:
+                _, canonical = reconstruct((edit,), window, matching_policy)
+                read_spans[rid] = _equivalent_span(dict(t_start=edit.start, t_end=edit.end, alt_bp=edit.alt_bp,
+                                                        equivalent_anchors=canonical.equivalent_anchors))
+            except (ValueError, ResourceResult):
+                pass
+    # The fetch covers the view and every read's nearby window (matching and novelty look that far), then once more
+    # every local edit touching the view or a read's window (a deletion across the view's edge: its exact-target
+    # window and competitors lie within its span plus pad). Half-open, so the right edge sits one base further.
+    # It reaches at most max_allele_bp past the view's own pad; whatever lies further stays unassessed below.
+    floor, ceiling = max(0, start - pad - policy.max_allele_bp), end + pad + policy.max_allele_bp
+    nearby_of = {rid: (a - pad, z + pad) for rid, (a, z) in read_spans.items()}
+    focus = [(start, end), *nearby_of.values()]
+    lo = min([start - pad, *(a for a, _ in nearby_of.values())])
+    hi = max([end + pad, *(z + 1 for _, z in nearby_of.values())])
+    fetched = (max(floor, lo), min(ceiling, hi))
     all_items = assembly_items_for_region(config, chrom, *fetched)
+    touching = [i for i in all_items if i["kind"] in LOCAL_KINDS and any(_overlaps(i, a, z) for a, z in focus)]
+    wider = (max(floor, min([fetched[0], *(i["t_start"] - pad for i in touching)])),
+             min(ceiling, max([fetched[1], *(i["t_end"] + pad + 1 for i in touching)])))
+    if wider != fetched:
+        fetched = wider
+        all_items = assembly_items_for_region(config, chrom, *fetched)
     context = [i for i in all_items if i["kind"] in CONTEXT_KINDS]
     local_all = [i for i in all_items if i["kind"] in LOCAL_KINDS]   # every local edit, including sub-floor SNVs
     items = [i for i in local_all if max(i["ref_bp"], i["alt_bp"]) >= policy.evidence_floor_bp]
@@ -270,27 +318,6 @@ def assembly_comparison(state, dataset, *, chrom, start, end, reads=(), read_seq
         for i in ids:
             assembly[i]["shared_with"] = [j for j in ids if j != i]
 
-    read_edits, read_out = [], {}
-    for r in reads:
-        checkpoint()
-        rid = str(r["id"])
-        s, e, a = int(r["ref_start"]), int(r["ref_end"]), int(r["alt_bp"])
-        seq = read_sequences.get(rid)
-        if seq is not None:
-            seq = seq.upper()
-            if len(seq) > policy.max_allele_bp or any(c not in "ACGTNYR" for c in seq):
-                raise ValueError("read sequences must be at most max_allele_bp bases of ACGTNYR")
-            a = len(seq)
-        # N, and DAF Y/R left in a majority consensus, are unknown bases: no exact identity from them.
-        complete = a == 0 or (seq is not None and not any(c in "NYR" for c in seq))
-        alt = "" if a == 0 else seq if complete else None
-        kind = "deletion" if a == 0 else "insertion" if s == e else "replacement"
-        read_edits.append(Edit(f"reads:{rid}", reference_id, chrom, s, e, a, "reads", alt, kind=kind,
-                               sequence_complete=complete))
-        read_out[rid] = dict(read_id=rid, ref_start=s, ref_end=e, alt_bp=a, kind=kind,
-                             sequence_status="available" if complete else "unavailable",
-                             sequence_source="consensus" if seq is not None else "geometry" if a == 0 else None,
-                             links=[], members=[list(m) for m in r.get("geometry_members") or [[s, e, int(r["alt_bp"])]]])
     result = match_edits(read_edits, edits, window_provider=reference.window, policy=matching_policy) if read_edits and edits else dict(
         links=[], compounds=[], search_complete=True, reasons=[], unassessed_observations=[])
     reasons |= set(result.get("reasons", []))
@@ -322,8 +349,7 @@ def assembly_comparison(state, dataset, *, chrom, start, end, reads=(), read_seq
         for t in targets:
             assembly[t]["read_links"].append(dict(read_id=rid, relation=relation, rule=rule, scores=scores))
     for rid, value in read_out.items():
-        s, e = value["ref_start"], value["ref_end"]
-        nearby = (s - pad, e + pad)
+        nearby = nearby_of[rid]
         near_items = [assembly[i["id"]] for i in items if _overlaps(i, *nearby)]
         links = [dict(relation=l["relation"]) for l in value["links"]]
         scope = ComparisonScope(
@@ -339,11 +365,14 @@ def assembly_comparison(state, dataset, *, chrom, start, end, reads=(), read_seq
         # difference leave the comparison incomplete: never a "not in the assembly" verdict over them.
         unsupported = [i for i in context if i["kind"] == "inversion" and _overlaps(i, *nearby)]
         capped_here = [i for i in dropped if _overlaps(i, *nearby)]
-        if unsupported or capped_here:
+        # A nearby window the bounded fetch could not cover may hold an equal assembly allele: never "novel" over it.
+        beyond = max(0, nearby[0]) < fetched[0] or nearby[1] >= fetched[1]
+        if unsupported or capped_here or beyond:
             scope = replace(scope, representations_complete=scope.representations_complete and not unsupported,
-                            search_complete=scope.search_complete and not capped_here,
+                            search_complete=scope.search_complete and not capped_here and not beyond,
                             reasons=tuple(sorted(set(scope.reasons) | ({"unsupported_representation"} if unsupported else set())
-                                                 | ({"assembly_items_cap"} if capped_here else set()))))
+                                                 | ({"assembly_items_cap"} if capped_here else set())
+                                                 | ({"fetch_horizon"} if beyond else set()))))
         decision = novelty(links, scope)
         status = decision["status"]
         label = ("confirmed_by_assembly" if status == "assembly_equivalent" else

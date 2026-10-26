@@ -548,3 +548,47 @@ def test_isolated_300bp_insertion_keeps_a_valid_exact_target(tmp_path):
     assert target["candidates"][mat["exact_allele_id"]] == T[lo - 25:5000] + allele + T[5000:hi + 25]
     assert set(target["candidates"]) == {mat["exact_allele_id"], "reference"}
     state.fasta.close()
+
+
+def test_deletion_across_the_view_edge_keeps_its_exact_target(tmp_path):
+    """agy post-merge review B HIGH 2(1): a 300 bp deletion straddling the view's right edge is fetched; the fetch
+    widens over it so its exact target (window [4975, 5325]) is not refused at the old edge 5210."""
+    state, ds = edited_map(tmp_path, T, {"MAT": [(5000, 5300, "")], "PAT": []})
+    out = assembly_comparison(state, ds, chrom=CHROM, start=4900, end=5100, read_scope={"search_complete": True},
+                              reads=[dict(id="r_del300", ref_start=5000, ref_end=5300, alt_bp=0)])
+    assert out["reads"]["r_del300"]["label"] == "confirmed_by_assembly"
+    mat = _hap_item(out, "MAT", "deletion")
+    target = mat["exact_target"]
+    assert target is not None and target["competition_complete"] is True
+    assert target["diagnostic_start"] <= 4975 and target["diagnostic_end"] >= 5325
+    assert target["candidates"]["reference"] == T[target["diagnostic_start"]:target["diagnostic_end"]]
+    state.fasta.close()
+
+
+def test_read_with_a_shifted_equal_deletion_past_the_view_is_not_novel(tmp_path):
+    """agy post-merge review B HIGH 2(2): PAT carries the read's 300 bp deletion shifted to [5220, 5520) in a 560 bp
+    A repeat. The fetch covers the read's equivalent placements, so the narrow view confirms it instead of calling
+    it novel_relative_to_assembly."""
+    reference = T[:4990] + "A" * 560 + T[5550:]
+    state, ds = edited_map(tmp_path, reference, {"MAT": [], "PAT": [(5220, 5520, "")]})
+    read = [dict(id="r_del300", ref_start=5000, ref_end=5300, alt_bp=0)]
+    for view in ((4900, 5600), (4900, 5100)):
+        out = assembly_comparison(state, ds, chrom=CHROM, start=view[0], end=view[1], reads=read,
+                                  read_scope={"search_complete": True})
+        assert out["reads"]["r_del300"]["label"] == "confirmed_by_assembly", view
+    state.fasta.close()
+
+
+def test_read_window_past_the_bounded_fetch_is_unassessed_not_novel(tmp_path):
+    """agy post-merge review B HIGH 2: the fetch widens at most max_allele_bp past the view's pad; a read whose
+    nearby window still reaches past it is unassessed (fetch_horizon), never novel."""
+    state, ds = edited_map(tmp_path, T, {"MAT": [], "PAT": []})
+    read = [dict(id="r_del300", ref_start=5000, ref_end=5300, alt_bp=0)]
+    wide = assembly_comparison(state, ds, chrom=CHROM, start=4900, end=5100, reads=read, read_scope={"search_complete": True})
+    assert wide["reads"]["r_del300"]["label"] == "novel_relative_to_assembly"   # nothing anywhere: novel
+    out = assembly_comparison(state, ds, chrom=CHROM, start=4900, end=5100, reads=read, read_scope={"search_complete": True},
+                              policy=ComparisonPolicy(max_allele_bp=150))
+    value = out["reads"]["r_del300"]
+    assert value["label"] == "unassessed"
+    assert "fetch_horizon" in value["novelty"]["reasons"] and "search_unassessed" in value["novelty"]["reasons"]
+    state.fasta.close()
