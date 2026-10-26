@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures/server';
-import type { Page } from '@playwright/test';
-import { readFileSync } from 'node:fs';
+import { webkit, type Page } from '@playwright/test';
+import { existsSync, readFileSync } from 'node:fs';
 
 /**
  * Export → Image → Capture full UI in WebKit (Safari, the desktop app's window).
@@ -8,7 +8,8 @@ import { readFileSync } from 'node:fs';
  * capture came out with headers and controls but no reads. Chromium never showed it
  * (export-read-ink.spec.ts covers full UI capture there).
  */
-test.use({ browserName: 'webkit', fixtureBam: 'demo' });
+// launchOptions: {} drops a Chromium executable set by FIBERBROWSER_PLAYWRIGHT_EXECUTABLE.
+test.use({ browserName: 'webkit', fixtureBam: 'demo', launchOptions: {} });
 
 const DEMO = { chrom: 'chr19', start: 47_514_000, end: 47_518_000 };
 
@@ -73,6 +74,7 @@ async function readInk(page: Page, file: string): Promise<number[]> {
 }
 
 test('full UI capture contains the reads in every panel (WebKit)', async ({ page, server, browserName }, info) => {
+  test.skip(!existsSync(webkit.executablePath()), 'WebKit is not installed (npx playwright install webkit)');
   expect(browserName).toBe('webkit');
   test.setTimeout(240_000);
   await open(page, server.baseUrl);
