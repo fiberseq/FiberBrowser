@@ -186,3 +186,18 @@ def test_read_stats_take_the_rows_own_library_record(lift_env, tmp_path):
         (row,) = out["per_read"]
         got[i.split('"')[1].split("|")[0]] = row["mapq"]
     assert sorted(got.values()) == [11, 42]
+
+
+def test_similarity_and_projection_sorts_read_a_graph_runs_record_key_labels(lift_env):
+    """agy review (group A): similarity and projection sorts of a panel clustered on graph columns (labels under record
+    keys) find its rows (they matched none and fell back to cluster sizes / produced no order)."""
+    from services.lift.cohort import record_key
+    client, state, manifest, bam = lift_env
+    did = _add(client, manifest, bam)["dataset"]["id"]
+    ids = _sort(client, did)["read_sort_order"]
+    labels = {record_key(i): (0 if _qname(i) in ("plus", "split") else 1) for i in ids}
+    peaks = [{"start": 3500, "end": 3700, "mode": "accessibility"}]
+    out = _sort(client, did, sort_by="projection", cluster_assignments={did: labels},
+                projection={"peak_regions": peaks, "cluster_assignments": {did: labels}})
+    assert set(out["cluster_order"]) <= {0, 1}
+    assert {record_key(i) for i in out["read_sort_order"]} == set(labels)

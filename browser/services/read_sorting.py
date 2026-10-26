@@ -185,6 +185,12 @@ def sort_similarity_for_dataset(
                 )
                 if x.size > 0 and len(read_ids) > 0:
                     read_id_to_idx = {rid: i for i, rid in enumerate(read_ids)}
+                    # A graph run's labels are record keys: each names its record's rows (graph features review).
+                    from services.lift.cohort import record_key
+                    for i, rid in enumerate(read_ids):
+                        rk = record_key(rid)
+                        if rk and rk not in read_id_to_idx:
+                            read_id_to_idx[rk] = i
                     cluster_centroids = []
                     cluster_ids = []
                     for cluster_id in unique_clusters:

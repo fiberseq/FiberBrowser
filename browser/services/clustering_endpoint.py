@@ -1011,7 +1011,13 @@ def run_cluster_projection_endpoint(
             read_dataset_id, original_id = split_prefixed_read_id(read_id, dataset_id)
             all_features.append(features[index])
             all_read_ids.append((read_dataset_id, original_id))
-            all_assignments.append(assigned.get(original_id, -1))
+            # (A graph run's labels are under record keys: graph features review.)
+            label = assigned.get(original_id)
+            if label is None:
+                from services.lift.cohort import record_key
+                rk = record_key(original_id)
+                label = assigned.get(rk, -1) if rk else -1
+            all_assignments.append(label)
             read = reads_by_id.get(original_id) or {}
             all_strands.append((cached_read_strand(read, calls) or "") if read else "")
             orientation = read.get("alignment_orientation")

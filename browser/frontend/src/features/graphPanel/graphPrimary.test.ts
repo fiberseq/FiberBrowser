@@ -528,3 +528,15 @@ describe('graph features item 9: the thin report MED items', () => {
     expect(get('mat').viewMode).toBe('graph');
   });
 });
+
+describe('agy review group A: a selected host targets its folded members', () => {
+  it('Sort and Filter targets (getStateKeyMap) include the folded member of a selected host', async () => {
+    const { getStateKeyMap, getTargetDatasetIds } = await import('../../stores/browserStore');
+    seed([...split(), panel('nat', { datasetId: 'n' })]);
+    setPanelViewMode('mat', 'graph');
+    const st = useBrowserStore.getState();
+    const sel = new Set(['mat']);
+    expect(getTargetDatasetIds(sel, st.panels, st.datasets)).toEqual(['d']);
+    expect(getStateKeyMap(sel, st.panels, st.datasets)).toEqual({ d: ['k-mat', 'k-pat'] });
+  });
+});

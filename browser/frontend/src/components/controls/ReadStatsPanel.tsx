@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { onScreenStateKeys } from '../../utils/exportReadScopes';
 import { foldedInShownGraph } from '../../stores/graphMembership';
+import { qnameOfId, recordKey } from '../../utils/recordKeys';
+import { clusterAssignmentForRead } from '../tracks/read-track/readFilter';
 import { useShallow } from 'zustand/react/shallow';
 import { useBrowserStore } from '../../stores/browserStore';
 import { fetchReadStats, type ReadStatsRegion, type ReadStatsResponse } from '../../api/readStats';
@@ -217,18 +219,29 @@ export function ReadStatsPanel({ isFullView }: Props) {
   // only when each dataset has one clustered panel on screen, so a read's
   // cluster is not ambiguous between panel copies clustered on their own.
   const clusteredKeyByDataset = useMemo(() => {
-    const out = new Map<string, string>();
+    const out = new Map<string, string[]>();
     for (const sk of panelStateKeys) {
       if (!Object.keys(clusterAssignments[sk] ?? {}).length) continue;
       const ds = stateKeyToDatasetId[sk] || sk;
-      if (out.has(ds)) return null;
-      out.set(ds, sk);
+      out.set(ds, [...(out.get(ds) ?? []), sk]);
+    }
+    // Several clustered panels of one dataset: only its haplotype panels (MAT, PAT: disjoint reads; graph features
+    // review), never copies clustered on their own, where a read's cluster would be ambiguous.
+    const hapOf = (sk: string) => panels.find(p => (p.stateKey ?? p.datasetId) === sk)?.liftHap ?? null;
+    for (const keys of out.values()) {
+      const haps = keys.map(hapOf);
+      if (keys.length > 1 && (haps.some(h => !h) || new Set(haps).size < haps.length)) return null;
     }
     return out;
-  }, [panelStateKeys, clusterAssignments, stateKeyToDatasetId]);
+  }, [panelStateKeys, clusterAssignments, stateKeyToDatasetId, panels]);
   const clusterOf = useCallback((datasetId: string, readId: string) => {
-    const sk = clusteredKeyByDataset?.get(datasetId);
-    return sk ? clusterAssignments[sk]?.[readId] : undefined;
+    // By identity: a lifted read's label may be under its record key (a graph run).
+    const asRead = recordKey(readId) ? { id: qnameOfId(readId), analysis_id: readId, live_lift: true } : readId;
+    for (const sk of clusteredKeyByDataset?.get(datasetId) ?? []) {
+      const c = clusterAssignmentForRead(clusterAssignments[sk] ?? {}, asRead);
+      if (c !== undefined) return c;
+    }
+    return undefined;
   }, [clusteredKeyByDataset, clusterAssignments]);
 
   const requestedReadOrder = useMemo(() => {

@@ -1533,12 +1533,24 @@ def _viewport_reads_from_broad(
         all_reads = prepared.rows
         if cohort_out is not None:
             cohort_out.update(prepared.description)
-        from services.read_strand import filter_reads_by_strand, strand_calls, cached_read_strand
+        from services.read_strand import filter_reads_by_strand, strand_calls
         calls = strand_calls(state, dataset.id)
+        # The session's cross-window cache, by molecule, as graph rows use it (reads.resolve_molecule_strands; graph
+        # features review): an explicit call is the molecule's own; else a molecule called before keeps that call,
+        # and one called from its marks here is cached. A molecule whose marks tie stays without a strand (never
+        # re-inferred from one of its records alone).
         for r in all_reads:
-            call = cached_read_strand(r, calls)
-            if call and r.get("_fiberbrowser_inferred_strand"):
-                r["strand"] = call
+            mol = (r.get("live_lift") or {}).get("molecule")
+            if mol is None or (r.get("strand") in ("CT", "GA", ".") and not r.get("_fiberbrowser_inferred_strand")):
+                continue
+            known = calls.get(mol)
+            if known is not None:
+                r["strand"], r["_fiberbrowser_inferred_strand"] = known, True
+            elif r.get("strand") in ("CT", "GA"):
+                calls[mol] = r["strand"]
+            elif r.get("deam"):
+                # (Its marks tie over the molecule: no strand, rather than one record's own majority.)
+                r["strand"], r["_fiberbrowser_inferred_strand"] = ".", True
         if strand:
             all_reads = filter_reads_by_strand(all_reads, strand, calls)
         row_filter = None

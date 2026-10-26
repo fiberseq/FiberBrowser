@@ -934,3 +934,29 @@ def test_clips_belong_to_their_own_record(env):
     out = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 0, "end": 6000}]}]).json()
     sups = sorted((r.get("clips") or []) for r in out["reads"] if r["q"] == "tw" and r["sup"])
     assert sups == [[[1000, 80, "L"]], [[1400, 80, "R"]]]
+
+
+def test_linear_and_graph_rows_share_molecule_strands(env):
+    """agy review (group A): linear lifted rows use the cross-window cache by molecule, as graph rows do: a tie over a
+    molecule's records stays without a strand (one record's majority never enters the cache), and a molecule called
+    before keeps its call in a window where its record has no marks."""
+    def seq(n, marks):
+        out = list("C" * n)
+        for off, base in marks:
+            out[off] = base
+        return "".join(out)
+    tags = [("ns", _u32([50])), ("nl", _u32([150]))]
+    daf = write_bam(env.tmp / "share.bam", lambda h: [
+        make_record(h, "tie", MAT, 100, "400M", tags=tags, seq=seq(400, [(10, "Y")])),
+        make_record(h, "tie", MAT, 600, "400M", flag=2048, tags=tags, seq=seq(400, [(10, "R")]))])
+    did = _add_lifted(env, paths=[daf], dataset_id="share")
+    env.state._read_strand_calls = {}
+    q = dict(dataset_id=did, max_reads=5000, include_layers="true", full_working_set="true", lift_hap="MAT", include_methylation="true")
+    from live_lift_fixtures import TARGET
+    lin = env.client.get("/api/reads/compact", params={**q, "chrom": TARGET, "start": 0, "end": 20000})
+    assert lin.status_code == 200, lin.text
+    strands = [r.get("strand") for r in lin.json()["reads"] if r["id"] == "tie"]
+    assert strands and all(s in (None, ".") for s in strands)
+    assert not env.state._read_strand_calls.get(did)
+    graph = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 0, "end": 1500}]}]).json()
+    assert [r.get("ds") for r in graph["reads"] if r["q"] == "tie"] == [None, None]

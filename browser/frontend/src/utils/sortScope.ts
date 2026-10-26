@@ -2,6 +2,7 @@ import type { BrowserState } from '../stores/browserStore';
 import type { ClusterTreeNode, FirePeak } from '../types';
 import { clusterAssignmentForRead } from '../components/tracks/read-track/readFilter';
 import { branchScopesPanel } from './readScopes';
+import { idSetHas, qnameOfId, recordKey } from './recordKeys';
 import { filterRegionGroups, type FilterRegionGroup } from './filterScopes';
 
 export interface ResolveSortRequestScopeOptions {
@@ -57,7 +58,8 @@ export function resolveSortRequestScope(options: ResolveSortRequestScopeOptions)
     if (scopes.length) {
       const [first, ...rest] = scopes;
       const sets = rest.map(ids => new Set(ids));
-      readIds[dsId] = first.filter(id => sets.every(ids => ids.has(id)));
+      // By identity (QNAME, cohort identity, record key: a graph run's labels are record keys; graph features review).
+      readIds[dsId] = first.filter(id => sets.every(ids => idSetHas(ids, [id, qnameOfId(id)], recordKey(id))));
     }
   }
 

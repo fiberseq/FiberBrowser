@@ -43,3 +43,19 @@ describe('liftHapsForRound', () => {
     expect(liftHapsForRound({ lift: 'lift#pat' }, panels)).toEqual({ lift: 'PAT' });
   });
 });
+
+describe('agy review group A: scoped sorts of a panel with a graph run (record-key labels)', () => {
+  it('a selected cluster within a read filter, and the displayed scope, match by record', async () => {
+    const { resolveSortRequestScope } = await import('./sortScope');
+    const { displayedScope } = await import('./progressiveAnalysis');
+    const { recordKey } = await import('./recordKeys');
+    const linear = aid('a'), other = aid('b');
+    const rk = recordKey(linear)!, rkOther = recordKey(other)!;
+    const out = resolveSortRequestScope({ datasetIds: ['d'], sortKeyMap: { d: ['k'] }, clusterAssignments: { k: { [rk]: 1, [rkOther]: 2 } },
+      selectedClusters: { k: new Set([1]) }, clusterFocus: {}, filteredReadIds: { k: new Set([linear, other]) },
+      activeClusterTreeNodeId: null, clusterTreeNodes: {} });
+    expect(out.readIds.d).toEqual([rk]);
+    // The display's rows (linear identities) within that scope.
+    expect(displayedScope([linear, other], out.readIds.d)).toEqual([linear]);
+  });
+});

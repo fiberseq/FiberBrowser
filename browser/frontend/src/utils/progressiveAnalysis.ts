@@ -1,3 +1,4 @@
+import { idSetHas, qnameOfId, recordKey } from './recordKeys';
 import { create } from 'zustand';
 import { useBrowserStore, type BrowserState } from '../stores/browserStore';
 import { captureRunViews, runViewsStillCurrent } from './panelRunScope';
@@ -29,7 +30,9 @@ export function stoppedText(kind: Kind, refining: boolean, reason?: 'locus' | 'c
 /** Intersect the display with an optional full scope; an empty display stays empty. */
 export function displayedScope(ids: string[] | undefined, full?: string[]): string[] {
   const allowed = full === undefined ? null : new Set(full);
-  return [...new Set(ids ?? [])].filter(id => !allowed || allowed.has(id));
+  // By identity: a graph row's shown id names its record, which a scope may hold as a record key (a graph run's
+  // labels) or a QNAME (graph features review).
+  return [...new Set(ids ?? [])].filter(id => !allowed || idSetHas(allowed, [id, qnameOfId(id)], recordKey(id)));
 }
 
 /** Wait for every target's display; skip a duplicate fit when its full scope is already drawn. */

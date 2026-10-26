@@ -1,3 +1,4 @@
+import { foldedInShownGraph } from '../stores/graphMembership';
 import type { PanelConfig } from '../types';
 import { isPanOrZoom } from '../stores/siteLock';
 import type { Locus } from './panelNavigation';
@@ -46,7 +47,8 @@ const analysisIdentityOf = (p: PanelConfig | null, s: ViewState) => {
     ? JSON.stringify([dataset.live_lift?.key ?? dataset.source_identity, p?.liftHap ?? p?.readSubset?.rule.liftHap]) : undefined;
 };
 const locusOf = (p: PanelConfig | null, s: ViewState): Locus => {
-  const v = p?.viewportOverride;
+  // (A member folded into a shown graph is at its host's view: graph features review.)
+  const v = (p && s.panels && foldedInShownGraph(p, s.panels) || p)?.viewportOverride;
   return v ? { chrom: v.chrom, start: v.start, end: v.end } : { chrom: s.chrom, start: s.start, end: s.end };
 };
 

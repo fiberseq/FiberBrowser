@@ -469,6 +469,18 @@ export async function buildReadTable(
     if (!regions.has(key)) regions.set(key, { chrom: g.chrom, start: g.start, end: g.end, genome: g.genome, groups: [] });
     regions.get(key)!.groups.push(take);
   }
+  // A read's label in its group's panel, else in its dataset's haplotype panels (MAT and PAT of one dataset share a
+  // group; their reads are disjoint), by identity (a graph run's labels are record keys; graph features review).
+  const clusterOfRead = (stateKey: string, datasetId: string, readId: string) => {
+    const asRead = recordKey(readId) ? { id: qnameOfId(readId), analysis_id: readId, live_lift: true } : readId;
+    const keys = [stateKey, ...state.panels.filter(p => p.contentType === 'dataset' && p.datasetId === datasetId && p.liftHap)
+      .map(p => p.stateKey ?? p.datasetId!)];
+    for (const k of keys) {
+      const c = clusterAssignmentForRead(state.clusterAssignments[k] ?? {}, asRead);
+      if (c !== undefined) return c;
+    }
+    return undefined;
+  };
   const rows: unknown[][] = [[...READ_TABLE_COLUMNS]];
   let order = 0;
   for (const region of regions.values()) {
@@ -490,8 +502,7 @@ export async function buildReadTable(
           chrom: region.chrom,
           reference: genomeKeyFor(region.genome, state),
           // A lifted row's label is under its cohort identity or its record key (a graph run): the read track's rule.
-          cluster: clusterAssignmentForRead(state.clusterAssignments[g.stateKey] ?? {},
-            recordKey(readId) ? { id: qnameOfId(readId), analysis_id: readId, live_lift: true } : readId) ?? '',
+          cluster: clusterOfRead(g.stateKey, g.datasetId, readId) ?? '',
           viewer_order: ++order,
         };
         rows.push(READ_TABLE_COLUMNS.map(c => values[c] ?? ''));

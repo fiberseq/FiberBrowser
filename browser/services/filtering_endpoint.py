@@ -263,7 +263,9 @@ def _sort_projection_for_request(
         unscoped[dataset_id] = assigned
         scope = query.read_ids_for_dataset(dataset_id)
         if scope is not None:
-            scope_set = set(scope)
+            # By identity: a graph run's labels are record keys, a scope's ids cohort identities (graph features review).
+            from services.lift.cohort import record_key
+            scope_set = set(scope) | {rk for x in scope if (rk := record_key(x))}
             assigned = {read_id: cluster for read_id, cluster in assigned.items() if read_id in scope_set}
         scoped[dataset_id] = assigned
     # The map: the whole clustering the Projection tab shows (given, else the
@@ -322,11 +324,19 @@ def _sort_projection_for_request(
             rows = np.flatnonzero(np.asarray(read_datasets) == dataset_id)
             row_order, cluster_order = ordered_rows(rows) if rows.size else ([], [])
         wanted = scoped.get(dataset_id, {})
-        order = [read_ids[i] for i in row_order if read_datasets[i] == dataset_id and read_ids[i] in wanted]
-        placed = set(order)
+        from services.lift.cohort import record_key
+
+        def label_key(rid):
+            # The label's key for a mapped read: its own id, else its record key (a graph run's labels).
+            if rid in wanted:
+                return rid
+            rk = record_key(rid)
+            return rk if rk in wanted else None
+        order = [read_ids[i] for i in row_order if read_datasets[i] == dataset_id and label_key(read_ids[i]) is not None]
+        placed = set(order) | {label_key(r) for r in order}
         # Clustered reads the map couldn't use (none in this window) keep their place after it.
         order += [read_id for read_id in wanted if read_id not in placed]
-        present = {wanted[read_id] for read_id in order}
+        present = {wanted[label_key(read_id) or read_id] for read_id in order}
         results[dataset_id] = {
             "cluster_order": [c for c in cluster_order if c in present],
             "read_sort_order": order,
