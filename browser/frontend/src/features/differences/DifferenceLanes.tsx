@@ -1,6 +1,6 @@
 import { fetchJson } from '../../api/sharedFetch';
 import type { WorkspaceCalls } from './api';
-import { setupHighDpiCanvas } from '../../utils/canvasUtils';
+import { setupHighDpiCanvas, useCanvasRenderVersion } from '../../utils/canvasUtils';
 import { usePanOffsetTransform } from '../../hooks/usePanOffsetTransform';
 import { DifferenceTable } from './DifferenceTable';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -121,6 +121,8 @@ export function DifferenceLanes({ panel, dataset, width, gutter = 0, height }: {
   }, [data,minBp,sources.assembly,readItems]);
   const bandHeight = Math.max(20, (height ?? differenceLanesHeight(panel, dataset)) - 24);
   const laneHeight = bandHeight / Math.max(1, lanes.length);
+  // Export raises the canvas render scale and waits for every canvas to draw at it.
+  const canvasRenderVersion = useCanvasRenderVersion();
   useEffect(() => {
     if (!canvas.current) return;
     const ctx = setupHighDpiCanvas(canvas.current, width, bandHeight);
@@ -145,7 +147,7 @@ export function DifferenceLanes({ panel, dataset, width, gutter = 0, height }: {
         else { for (const span of axis.spans(d.t_start, Math.max(d.t_start+1,d.t_end))) ctx.fillRect(gutter+span.x,y+3,Math.max(2,span.w),Math.max(2,laneHeight-6)); }
       }
     }
-  }, [axis, width, bandHeight, laneHeight, model, lanes.join(','), gutter, dark, start, end]);
+  }, [axis, width, bandHeight, laneHeight, model, lanes.join(','), gutter, dark, start, end, canvasRenderVersion]);
   if (!enabled) return null;
   const statusText = error || (busy ? 'Finding difference…' : readScope || (data ? data.mode === 'bins'
     ? 'Density; zoom for individual differences' : 'Click a difference to expand or highlight it; ⌘-click to inspect' : 'Loading…'));
