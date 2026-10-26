@@ -938,16 +938,18 @@ def _subtract(iv, cuts):
     return out
 
 
-def _logical(parts, mapped, ids, frags):
+def _logical(parts, mapped, ids, frags, groups=None):
     """Per span, the footprint calls whole again: parts of one call (same id)
     in one span joined to their hull, as the decoder saw them before cutting
-    them at deletions. ``{span: [[t0, t1, size], ...]}`` sorted."""
+    them at deletions. ``{span: [[t0, t1, size], ...]}`` sorted. With
+    ``groups`` (``_span_groups``), per rejoin group instead: a call cut at a
+    deletion is whole again across a map hole inside it."""
     by_span = {}
     for j, (_t0, _t1, _i, k) in enumerate(parts):
         iv = mapped[j]
         if iv[2] <= 0:
             continue
-        span = frags[k].span
+        span = frags[k].span if groups is None else groups[frags[k].span]
         key = ids[j] if ids[j] is not None else ("part", j)
         hulls = by_span.setdefault(span, {})
         h = hulls.get(key)
@@ -966,21 +968,25 @@ def _span_groups(row):
     return out
 
 
-def _gaps(logical, spans, cuts, hide_terminal_gaps, width, groups=None):
+def _gaps(logical, spans, cuts, hide_terminal_gaps, width, groups=None, grouped=None):
     """Gaps between consecutive calls inside one span, then cut at the read's
     deletions. With terminal gaps hidden, a gap between calls of two spans of
     one rejoin group (``groups``, ``_span_groups``) is kept, cut at the spans'
     edges, so no gap crosses a badge or connector yet a 1-bp map hole drops no
-    linker (shown terminal gaps already reach the span edges)."""
+    linker (shown terminal gaps already reach the span edges). ``grouped()``:
+    the calls per rejoin group (``_logical`` with ``groups``)."""
     out = []
     if hide_terminal_gaps and groups and len(set(groups.values())) < len(groups):
         by_group = {}
         for span, bounds in spans.items():
-            by_group.setdefault(groups.get(span, ("span", span)), []).append((bounds, span))
-        for members in by_group.values():
+            by_group.setdefault(groups[span], []).append((bounds, span))
+        whole = grouped() if grouped is not None else None
+        for group, members in by_group.items():
             members.sort()
             prev = None
-            for iv in sorted(iv for _b, span in members for iv in logical.get(span, [])):
+            calls = (whole.get(group, []) if whole is not None
+                     else sorted(iv for _b, span in members for iv in logical.get(span, [])))
+            for iv in calls:
                 if prev is not None and iv[0] > prev:
                     for (b0, b1), _span in members:
                         g0, g1 = max(prev, b0), min(iv[0], b1)
@@ -1019,7 +1025,10 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
     if "sv" in read:
         payload["sv"], sa, d = _map_sv(read["sv"], row, ctx)
         dropped["events"] += d
-        cuts = sorted((e["ref"] - rs0, e["ref"] + e["len"] - rs0) for e in payload["sv"] if e.get("t") == "D")
+        # Every deleted base of the CIGAR (raw pieces: a replacement and a deletion shifted to its canonical
+        # position included), as the native loader cuts calls (sv_events.read_deletion_cuts).
+        from services.sv_events import deletion_spans
+        cuts = sorted((t0 - rs0, t1 - rs0) for a, b in deletion_spans(read["sv"]) for t0, t1, _k in row.parts(a, b))
         if not payload["sv"]:
             del payload["sv"]
 
@@ -1044,7 +1053,9 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
                 rank[i] = n
                 n += 1
         logical = _logical(parts, mapped, ids, row.frags)
-        gaps = _gaps(logical, spans, cuts, ctx.hide_terminal_gaps, width, _span_groups(row))
+        groups = _span_groups(row)
+        gaps = _gaps(logical, spans, cuts, ctx.hide_terminal_gaps, width, groups,
+                     lambda: _logical(parts, mapped, ids, row.frags, groups))
         combined = mapped + gaps
         order = sorted(range(len(combined)), key=lambda j: (combined[j][0], combined[j][1], j))
         payload["intervals"] = [combined[j] for j in order]
@@ -1441,13 +1452,14 @@ def _infer_legacy(read, layers, payload, parts, mapped, ids, keys, logical, cuts
         msp = []
         # Nucleosomes of one rejoin group together; an MSP across a 1-bp map
         # hole is cut at the spans' edges (as top-level gaps are).
-        spans, members = _spans(row, ctx), {}
-        for span, group in _span_groups(row).items():
+        spans, members, groups = _spans(row, ctx), {}, _span_groups(row)
+        for span, group in groups.items():
             members.setdefault(group, []).append(span)
+        whole = (_logical(parts, mapped, ids, row.frags, groups) if len(members) < len(groups)
+                 else {groups[s]: calls for s, calls in logical.items()})
         for group in sorted(members):
             bounds = sorted(spans[s] for s in members[group])
-            for iv in generate_msp_from_nuc_gaps([c for s in members[group] for c in logical.get(s, ())],
-                                                 min_nuc_size=ctx.nuc_min_size):
+            for iv in generate_msp_from_nuc_gaps(whole.get(group, ()), min_nuc_size=ctx.nuc_min_size):
                 pieces = [[max(iv[0], b0), min(iv[1], b1), *iv[2:]] for b0, b1 in bounds
                           if min(iv[1], b1) > max(iv[0], b0)]
                 for part in (p for piece in pieces for p in _subtract(piece, cuts)):

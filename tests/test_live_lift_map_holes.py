@@ -140,3 +140,58 @@ def test_lifted_rows_tile_the_aluy_peaks(tmp_path, monkeypatch):
             tiling += read_covers_regions(row, peaks)
     assert spanning == 49
     assert tiling == 49
+
+
+def _bam(tmp_path, records):
+    import pysam
+    from array import array
+    path = str(tmp_path / "src.bam")
+    header = {"HD": {"VN": "1.6"}, "SQ": [{"SN": "chrS", "LN": 1000}]}
+    with pysam.AlignmentFile(path, "wb", header=header) as out:
+        for name, cigar, ns, nl in records:
+            n = sum(length for op, length in cigar if op in (0, 1))
+            a = pysam.AlignedSegment(out.header)
+            a.query_name, a.query_sequence, a.flag, a.reference_id, a.reference_start = name, "A" * n, 0, 0, 0
+            a.mapping_quality, a.cigartuples = 60, cigar
+            a.query_qualities = pysam.qualitystring_to_array("I" * n)
+            a.set_tag("ns", array("I", ns))
+            a.set_tag("nl", array("I", nl))
+            out.write(a)
+    pysam.index(path)
+    return path
+
+
+def _lift_bam(monkeypatch, path, pieces):
+    sel = ll.PieceSelection("chrT", 0, 350, 0, 350, sorted(pieces, key=lambda p: (p.t_start, p.chain)))
+    plan = ll.plan_fetch(sel, ll.LiftSettings())
+    kw = dict(handle=None, region_start=0, region_end=350, settings=ll.LiftSettings(), key="k", dataset_id="d")
+    rows = compose.lift_compact_reads(ll.decode_source_records([path], plan), plan, **kw)
+    with monkeypatch.context() as m:
+        m.setattr(compose, "precompute", lambda *a, **k: None)
+        per_row = compose.lift_compact_reads(ll.decode_source_records([path], plan), plan, **kw)
+    _same(rows, per_row)
+    return {r["id"]: r for r in rows}
+
+
+def _src(qs, qe):
+    return ll.LiftPiece(0, qs, qe, qs, qe, "+", True, "H#1", "chrS")
+
+
+def test_deleted_bases_stay_cut_across_a_map_hole(tmp_path, monkeypatch):
+    """agy review of group K. One nucleosome cut by a 60D65I replacement (the decoder's two pieces of one call) is
+    whole again across a 1-bp map hole inside the deletion: no linker or inferred MSP inside it. Two nucleosomes
+    flanking a replacement keep their linker cut at the deleted bases (the CIGAR's raw deletion pieces, as the native
+    loader cuts), with or without a hole."""
+    path = _bam(tmp_path, [("split", [(0, 40), (2, 60), (1, 65), (0, 140)], [10], [215]),
+                           ("two", [(0, 110), (2, 60), (1, 65), (0, 130)], [5, 185], [95, 105])])
+    plain = _lift_bam(monkeypatch, path, [_src(0, 350)])
+    in_split = _lift_bam(monkeypatch, path, [_src(0, 70), _src(71, 350)])     # a hole inside the first deletion
+    in_two = _lift_bam(monkeypatch, path, [_src(0, 140), _src(141, 350)])     # a hole inside the second one
+    for rows in (plain, in_split):
+        assert _ivs(rows["split"]) == [[10, 40, 215], [100, 220, 215]]
+        assert not (rows["split"].get("layers") or {}).get("msp")
+        assert not read_covers_regions(rows["split"], [(45, 65)])
+    for rows in (plain, in_two):
+        assert _ivs(rows["two"]) == [[5, 100, 95], [100, 110, -80], [170, 180, -80], [180, 285, 105]]
+        assert [list(iv) for iv in rows["two"]["layers"]["msp"]["intervals"]] == [[100, 110, 80], [170, 180, 80]]
+        assert not read_covers_regions(rows["two"], [(115, 135)])
