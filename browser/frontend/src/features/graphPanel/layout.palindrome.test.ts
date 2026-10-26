@@ -8,7 +8,7 @@ import palindromic from './__fixtures__/followups/palindromic_inversion.topology
 import crossedCore from './__fixtures__/followups/crossed_core.topology.json';
 import familyPalindrome from './__fixtures__/followups/family_palindrome.topology.json';
 import { buildLayout, type GroupItem, type Item, type LayoutModel, type RunItem } from './layout';
-import { buildScene, describeSceneHit, placementAt, type Prim, type Scene } from './scene';
+import { buildScene, describeSceneHit, placementAt, sceneInverse, type Prim, type Scene } from './scene';
 import type { GraphBinding, GraphTopology } from './types';
 
 type Fixture = { topology: unknown; bindings: unknown };
@@ -70,6 +70,15 @@ describe('Graph follow-ups: palindromic-core inversions', () => {
     expect(curves.some(c => Math.abs(c.x0 - tube.x0) < 1e-6)).toBe(true);
     const h = s.hits.find(x => x.payload.kind === 'allele' && x.payload.allele === a)!;
     expect(describeSceneHit(h, (h.x0 + h.x1) / 2, m)).toMatch(/^MAT, ALT · inversion of 190 bp: walks target 900-1,090 \(190 bp\) in reverse/);
+    // Over the core, MAT's lane resolves to MAT's own visit of P inside its inversion, never to the target tube.
+    const row = s.rows.find(r => r.key === 'mat')!;
+    const inv = sceneInverse(s, (tube.x0 + tube.x1) / 2, tube.y + tube.h / 2)!;
+    expect(tube.y >= row.top && tube.y + tube.h <= row.top + row.height).toBe(true);
+    expect(inv.kind).toBe('allele');
+    if (inv.kind === 'allele') {
+      expect(inv.path).toBe('mat');
+      expect(a.visits.slice(1, 3).map(v => v.occ.id)).toContain(inv.occurrence);
+    }
     // Never folded into marks, whatever the threshold.
     expect(scene(m, false, 500).blocks.some(b => b.id === alleles(m, 'mat')[0].g.id && b.kind === 'group:bubble')).toBe(true);
   });
