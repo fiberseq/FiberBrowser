@@ -322,10 +322,11 @@ function solveLevel(input: LevelInput, buildFamilies: (g: GroupItem) => void): L
   const order = new Map(lanes.map((k, i) => [k, i]));
   const byLane = (a: string, b: string) => (order.get(a) ?? 99) - (order.get(b) ?? 99);
   const solutions: MemberSolution[] = [];
+  const orient = bb.orient ?? ((i: number) => bb.visits[i].reverse);
   for (const m of input.members) {
-    const anchorAt = new Int32Array(n).fill(-1);
-    m.anchors.forEach((a, k) => { if (a.i >= 0 && a.i < n) anchorAt[a.i] = k; });
-    const runOf = new Int32Array(m.anchors.length);
+    // Anchors with the target-allele alignment's extra anchors inserted, and the connected run of each.
+    const anchors: Anchor[] = [];
+    const runs: number[] = [];
     const candidates: Candidate[] = [];
     let run = 0;
     for (let k = 0; k < m.anchors.length; k++) {
@@ -344,12 +345,27 @@ function solveLevel(input: LevelInput, buildFamilies: (g: GroupItem) => void): L
             // Adjacent on both sides but not one walk: open ends, never an empty "insertion".
             run += 1;
           } else {
-            const fallback = a.j >= 0 && a.j < m.visits.length
-              ? (m.visits[a.j].backward ? m.visits[a.j].occ.path_span.start : m.visits[a.j].occ.path_span.end) : 0;
+            const fallbackAt = (x: Anchor) => (x.j >= 0 && x.j < m.visits.length
+              ? (m.visits[x.j].backward ? m.visits[x.j].occ.path_span.start : m.visits[x.j].occ.path_span.end) : 0);
             const inverted = problem === INVERSION;
-            candidates.push({ path: m.key, seg: sa, p: a.i + 1, q: b.i, visits: between,
-              status: problem && !inverted ? 'unresolved' : 'ok', reason: problem && !inverted ? problem : undefined,
-              source: sourceSpanOf(between, fallback), inverted: inverted || undefined });
+            // Target-allele family alignment: a resolved replacement that shares stretches with the target allele
+            // (nodes the anchor chain could not place, e.g. a repeat the target walks twice) is aligned on it. The
+            // shared stretches become anchors (drawn once, on the target's tube) and only the differences remain
+            // candidates, whatever the lane order.
+            const extra = input.targetSpan && !problem && between.length && b.i > a.i + 1
+              ? alignOnBase(between, a.i + 1, b.i, bb, orient).map(x => ({ j: a.j + 1 + x.a, i: x.b })) : [];
+            let prev = a;
+            for (const x of [...extra, b]) {
+              // Between two extra anchors (or one and a flank) adjacent on both sides: a shared step.
+              if (!extra.length || x.i !== prev.i + 1 || x.j !== prev.j + 1) {
+                const visits = m.visits.slice(prev.j + 1, x.j);
+                candidates.push({ path: m.key, seg: sa, p: prev.i + 1, q: x.i, visits,
+                  status: problem && !inverted ? 'unresolved' : 'ok', reason: problem && !inverted ? problem : undefined,
+                  source: sourceSpanOf(visits, fallbackAt(prev)), inverted: inverted || undefined });
+              }
+              if (x !== b) { anchors.push(x); runs.push(run); delete m.visits[x.j].repeat; }
+              prev = x;
+            }
             if (breaking) run += 1;
           }
         } else if (sb === sa + 1 && a.i === bb.segments[sa].to - 1 && b.i === bb.segments[sb].from && !problem) {
@@ -361,9 +377,12 @@ function solveLevel(input: LevelInput, buildFamilies: (g: GroupItem) => void): L
           run += 1;
         }
       }
-      runOf[k] = run;
+      anchors.push(m.anchors[k]);
+      runs.push(run);
     }
-    const sol: MemberSolution = { key: m.key, anchors: m.anchors, runOf, anchorAt, candidates, visits: m.visits };
+    const anchorAt = new Int32Array(n).fill(-1);
+    anchors.forEach((a, k) => { if (a.i >= 0 && a.i < n) anchorAt[a.i] = k; });
+    const sol: MemberSolution = { key: m.key, anchors, runOf: Int32Array.from(runs), anchorAt, candidates, visits: m.visits };
     mergePalindromicInversions(sol, bb);
     solutions.push(sol);
   }
@@ -1064,6 +1083,40 @@ export function inversionVerdict(between: Visit[], opposite: (k: number) => numb
   return consistent && invBp * 2 >= allBp && invBp * 2 >= baseBp ? INVERSION : 'a local inversion';
 }
 
+/**
+ * The target allele as a family lead: the colinear chain of a replacement's visits that walk base visits of [p, q)
+ * in the same orientation (by node; a node walked equally often on both sides, up to four times), when it shares at least a
+ * fifth of the shorter side and 10 bp (the alternates' family threshold). Pairs are (allele index a, base index b).
+ */
+function alignOnBase(between: Visit[], p: number, q: number, bb: Backbone, orient: (i: number) => boolean): { a: number; b: number }[] {
+  const sig = (node: string, reverse: boolean) => `${node}${reverse ? '-' : '+'}`;
+  const baseAt = new Map<string, number[]>();
+  let baseBp = 0;
+  for (let i = p; i < q; i++) {
+    baseBp += bb.visits[i].bp;
+    const k = sig(bb.visits[i].occ.node, orient(i));
+    const list = baseAt.get(k);
+    if (list) list.push(i); else baseAt.set(k, [i]);
+  }
+  const altCount = new Map<string, number>();
+  let altBp = 0;
+  for (const v of between) { altBp += v.bp; const k = sig(v.occ.node, v.reverse); altCount.set(k, (altCount.get(k) ?? 0) + 1); }
+  const pairs: { a: number; b: number }[] = [];
+  between.forEach((v, j) => {
+    const k = sig(v.occ.node, v.reverse);
+    const list = baseAt.get(k);
+    // Copies walked equally often on both sides pair up in order; a different count (a duplication or a lost copy)
+    // leaves which copy is which open, so those stay unplaced, as the anchor chain leaves them (agy 6a).
+    if (!list || list.length > MAX_CANDIDATES_PER_VISIT || altCount.get(k) !== list.length) return;
+    for (const i of list) pairs.push({ a: j, b: i });
+  });
+  if (!pairs.length) return [];
+  pairs.sort((x, y) => x.a - y.a || y.b - x.b);
+  const chain = colinearChain(pairs);
+  const shared = chain.reduce((t, x) => t + between[x.a].bp, 0);
+  return shared >= Math.max(10, 0.2 * Math.min(altBp, baseBp)) ? chain : [];
+}
+
 /** At most this many consecutive candidates of one path are tried as one palindromic-core inversion. */
 const MAX_PALINDROME_CANDIDATES = 6;
 
@@ -1162,15 +1215,19 @@ function annotateRepeats(visits: Visit[], anchors: Anchor[], host: GraphOccurren
 // ---------------------------------------------------------------------------------------------------- families
 
 /**
- * Align a group's alternate alleles that share nodes on the first of them (lane order): shared stretches become
- * one tube, differences sub-bubbles. A member needs shared bp of at least a fifth of the shorter allele (and 10 bp)
- * — one tiny common node does not make two alleles one family.
+ * Align a group's alternate alleles that share nodes: shared stretches become one tube, differences sub-bubbles. A
+ * member needs shared bp of at least a fifth of the shorter allele (and 10 bp) — one tiny common node does not make
+ * two alleles one family. Stretches an allele shares with the target allele are already aligned on it (alignOnBase:
+ * the target leads). Among alternates the lead is chosen without lane order: the longest, then by walk, so the same
+ * alleles give the same family whatever order the paths are selected in.
  */
 function alignFamilies(group: GroupItem, lanes: string[], counter: { n: number }): void {
   if (group.depth + 1 >= MAX_DEPTH || group.alts.length < 2) return;
   // Inverted alleles are drawn as their own reversed walk, never aligned into a family tube.
   const remaining = group.alts.filter(a => a.status === 'ok' && a.visits.length > 0 && !a.inverted);
   const kept: AltAllele[] = group.alts.filter(a => !remaining.includes(a));
+  const walkKey = new Map(remaining.map(a => [a, signature(a.visits)]));
+  remaining.sort((x, y) => y.bp - x.bp || (walkKey.get(x)! < walkKey.get(y)! ? -1 : walkKey.get(x)! > walkKey.get(y)! ? 1 : 0));
   while (remaining.length) {
     const lead = remaining.shift()!;
     const leadCount = new Map<string, number>();
@@ -1265,7 +1322,8 @@ function alignFamilies(group: GroupItem, lanes: string[], counter: { n: number }
       }
     };
     expand(level.chains[0]);
-    lead.family = { members: members.map(m => m.allele), chain: level.chains[0] };
+    const laneOf = (a: AltAllele) => lanes.indexOf(a.carriers[0]);
+    lead.family = { members: members.map(m => m.allele).sort((x, y) => laneOf(x) - laneOf(y)), chain: level.chains[0] };
     kept.push(lead);
   }
   const order = new Map(lanes.map((k, i) => [k, i]));
