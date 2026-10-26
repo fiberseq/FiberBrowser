@@ -1,5 +1,184 @@
 # Changelog
 
+## Unreleased
+
+Everything since 3.0.1. Live lift is on by default
+(`FIBERBROWSER_LIVE_LIFT=0` turns it off for a server); graph mode needs the
+graph helper and a graph package. See [Setting up live lift and graph mode](docs/workflows/pangenome-setup.md).
+Maps, graph packages and the helper are made with
+[graphlift](https://github.com/mtcicero26/graphlift).
+
+### Live lift
+
+- **Reads from another assembly, drawn on this genome.** **Open ▾ → Add live
+  lift…** shows a BAM aligned to a sample's own assembly (for example HG002's
+  maternal and paternal haplotypes) on the genome you are browsing, through a
+  graphlift map, without realigning. Only the view and a margin are lifted, as
+  you browse. By default each haplotype gets its own panel (**MAT**, **PAT**),
+  next to the same reads aligned to the reference; **Open as** also offers
+  **Graph** and **Pooled**. See [Live lift](docs/workflows/live-lift.md).
+- **View on another assembly (live lift)…** in a BAM panel's **…** menu opens
+  the same dialog for that BAM, with the maps it found next to the BAM, in its
+  folders and in the Library, best match first.
+- Lifted reads are drawn in pieces where the assemblies differ, with dashed
+  connectors across gaps. **Hatching** on the coverage track marks stretches
+  with no counterpart on the haplotype, so they don't look like stretches with
+  no reads.
+- **Insertions on reads**: optional ticks where a read has bases the reference
+  lacks: **Off** (the default; the Differences row shows the insertions),
+  **Ticks** or **Ticks with size**, from the row's right-click menu or the
+  settings. Ticks stay visible at every row height; this fixes insertion badges
+  that showed on one haplotype only at some window sizes.
+- **Supplementary alignments**: **Own rows** (the default), **On the primary's
+  row** or **Hide**.
+- **Live-lift settings…** (display, the Differences row and how lifted reads
+  enter analyses) are saved with sessions. Haplotypes other than MAT and PAT get
+  their own stable colours.
+- Lifted panels work with **Sort**, **Filter**, **Read Stats** and clustering.
+  Native and lifted panels can share one clustering model, with options for
+  supplementaries, alternative placements and molecules shared between
+  libraries. **Export data → Reads → BAM subset** writes lifted reads as they
+  are on their source assembly.
+- Analyses that don't support lifted datasets yet refuse them with a message
+  that says what to use instead. Live lift is not available on public servers.
+
+### Linked panels
+
+- **Open MAT source view** (or PAT) on a lifted panel opens the same reads on
+  the sample's own assembly, under the lifted panel, without an assembly FASTA.
+  See [Linked panels](docs/workflows/linked-panels.md).
+- A **ribbon** joins the two panels: which stretches correspond, matches on the
+  opposite strand, and wedges where one side has bases the other lacks.
+- **Shared hover**: a molecule is outlined in both panels, with a line across
+  the ribbon, with tooltips on or off.
+- **Shared navigation**: the source view follows the main view through the map,
+  and moving the source view moves the main view. Expanding an insertion moves
+  the source view to its bases.
+- Where a view matches several stretches (*N correspondences*), the source
+  view's menu chooses which one to follow; a match on the opposite strand opens
+  reversed. Links are saved with sessions.
+
+### The Differences row and inspector
+
+- **The SV row is now the Differences row.** On a BAM aligned to this genome it
+  shows the structural variants in the reads, as before. On a lifted dataset it
+  shows where each haplotype differs from this genome, one lane per haplotype,
+  and optionally the edits the reads support. ◀ ▶ jump to the next difference.
+  See [Differences](docs/workflows/differences.md).
+- **Click an insertion to expand it in place.** Its inserted bases open as a
+  column shared by every panel, with each carrier's m6A, accessibility and
+  footprints. Matching MAT and PAT insertions share one column. Click a
+  different kind of difference to highlight its carriers. The same clicks work
+  on read ticks and on the native row.
+- **⌘/Ctrl-click, or right-click → Inspect…, opens the inspector**: the
+  difference on both assemblies, molecule calls (carriers, reference, not
+  informative), per-haplotype counts and each read's own bases and chromatin.
+  Observed bases load by themselves for up to 2,000 reads in view.
+- The row's right-click menu holds its options (sources, minimum size, the
+  difference table, insertion ticks) and each difference's actions (inspect,
+  expand, highlight, split by carrier, show in the source view, copy the
+  sequence). The same options are under **Live-lift settings… → Differences
+  row**.
+- **Split by carrier** works on lifted differences, from the inspector. Splits
+  can be frozen and saved; sessions with 3.0 SV splits and expanded insertions
+  open with them migrated, and a relink step reattaches saved cohorts to moved
+  files.
+
+### Structural variants
+
+- **Evidence levels.** Each molecule's evidence for a variant is **confirmed**
+  (its alignment holds the event, or is split across it), **putative** (only
+  clipped there), **conflicting** (the clip aligns well somewhere else) or
+  **ambiguous** (the clip fits more than one variant), with its own count in the
+  SVs tab, the Differences row, highlights, the split dialog and the insertion
+  lens. See [Structural variants](docs/workflows/structural-variants.md).
+- Carriers default to **confirmed + putative**. **Confirmed only**, and adding
+  conflicting or ambiguous reads, are options in the SVs tab, the row's menu
+  and the lens. Putative and other uncertain carriers are drawn with dashed
+  outlines. Saved splits keep the choices they were made with.
+- The conflicting-clip rule is set under **Settings › Read Filters ›
+  Structural variants › Advanced carrier evidence**.
+- Counts follow the same rules everywhere: one molecule per variant, with one
+  10 bp evidence floor whatever the display cutoff. Molecules that align near a variant only
+  through supplementary alignments are recovered. Replacements are trimmed to
+  their real size, and equivalent breakpoints in repeats count as one variant.
+- The SVs tab counts read *N confirmed of M informative reads* (was *N carriers
+  of M informative reads*), and each row has **Inspect difference**.
+
+### Graph mode and the graph view
+
+- **Graph mode**: a dataset panel drawn on a pangenome graph, with the
+  reference and each haplotype as lanes and each panel's reads in a band on
+  its lane. Switch with the **Linear ⇄ Graph** pill or **View as graph**. New
+  lifted datasets open in graph mode when a registered package binds them.
+  The other haplotypes fold into the graph and can be popped out as ordinary
+  panels and folded back; other panels can be added. See
+  [Graph mode](docs/workflows/graph-mode.md).
+- Read tools work on every band: selection, highlight, the read menu, filters,
+  Sort, Filter and the toolbar layers, DAF-seq strands and soft clips.
+  **Cluster** runs on the graph itself (each haplotype fitted once, so every
+  band of a haplotype gets the same labels), and **Scan** finds peaks on the
+  graph. Runs survive pans, bookmarks and Back/Forward.
+- Past 50 kb, or where most of the window is not resolved in the graph, the
+  panel switches to linear and returns below 40 kb (**Stay linear**, **Linear
+  above…**). Bands fill the panel; a band that can't show every read gets a
+  density strip and a count of what is drawn. Read budgets follow
+  **Performance mode**.
+- **Graph view panel** (preview): a sequence tube map of the graph in view, with
+  inversions, repeats and small differences, reads along their walks, click to
+  expand an insertion and ⌘-click to inspect. Graph packages are registered
+  from it.
+- **The graph helper** ships as the `fiberbrowser[graph]` extra (not in
+  `[all]`; built for Apple silicon Macs so far) and is included in the macOS
+  app. Checked packages are remembered, so the check is not repeated at each
+  start.
+
+### BAMs lifted with fiberhmm-lift
+
+- BAMs lifted through a graph show each molecule once: records that the lift
+  marks as supplementary or secondary of the source (its `Yf` tag) are hidden.
+  A lift that kept no `Yf` tag shows every record, and the BAM check suggests
+  repairing it with FiberHMM's `fiberhmm-lift --repair-only`. Native `vg
+  giraffe` BAMs are no longer taken for lifts.
+- A read's DAF-seq strand (CT or GA) comes from its own `st` tag. The tooltip
+  shows a repaired lift's source locus and source MAPQ, and the Library shows
+  the lift (source → target, graph).
+
+### Clustering and analysis
+
+- **No MAPQ filter by default.** Analyses and the conflicting-clip rule no
+  longer drop reads below MAPQ 20 unless you set a minimum; the minimum stays
+  available where it was.
+
+- Cluster assignment counts only positions a read covers, breaks ties the same
+  way every time, and no longer depends on read order.
+- Metaprofile signal and coverage use the same bins.
+
+### Performance
+
+- Lifted panels pan 2–3.5 times faster and open up to twice as fast. In graph
+  mode a pan decodes only the new records.
+- Large reconstructions stay within their memory budget, can be cancelled, and
+  release idle workers.
+- Native panning reuses cached reads again.
+
+### Fixed
+
+- Loading could hang (HTTP 499) when two panels read the same BAM.
+- DAF-C read and contact views show nucleosomes from FiberHMM 3.0 `MA` and
+  fibertools 0.13 `Ma` BAMs, and the BAM check no longer reports "missing
+  Fiber-seq tags" for fibertools 0.13 `Ma`/`Aq` BAMs.
+- Datasets added to the server after a page opened now appear in it.
+- A crash in SV projection, stale split and export requests, DAF consensus for
+  circular carriers, and insertion marks on minus-strand reads.
+
+### For developers
+
+- `scripts/unified_demo.py` starts a server with live lift, the graph helper, a
+  graph package and preview features on, and loads demo samples with neutral
+  labels ([how](docs/workflows/pangenome-setup.md#trying-everything-at-once-the-demo-launcher)).
+- `FIBERBROWSER_FRONTEND_DIST` serves a frontend built outside the checkout.
+
 ## 3.0.1 — 2026-10-16
 
 FiberBrowser 3.0.1 bundles FiberHMM 3.0.2 and requires

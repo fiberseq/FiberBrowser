@@ -177,7 +177,6 @@ def test_analysis_capability_still_refuses_lifted_ids(lift_env):
     ('/api/reads/random_window', 'GET', {}), ('/api/reads/top_windows', 'GET', {}),
     ('/api/autozoom', 'POST', {}),
     ('/api/quality/impact', 'POST', {'filters': [{'layer': '*', 'quality_name': 'nq', 'min_value': 1}]}),
-    ('/api/scan_peaks', 'POST', {}),
     ('/api/footprint/derived_layers/load', 'POST', {'path': 'synthetic.fiberlayers'}),
     *[(f'/api/variants/{kind}', 'POST', {}) for kind in ('snps', 'alleles', 'svs', 'sv_linkage')],
     ('/api/sv/split', 'POST', {'t': 'D', 'ref': 4000, 'len': 100}),

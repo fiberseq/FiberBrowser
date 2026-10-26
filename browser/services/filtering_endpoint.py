@@ -215,6 +215,8 @@ def _sort_similarity_for_request(
             sample_seed=query.sample_seed,
             read_ids=query.read_ids_for_dataset(dataset_id),
             cluster_assignments_override=_cluster_assignments_for_sort(state, req, dataset_id),
+            peak_regions_override=[{"start": int(a), "end": int(b), "mode": "accessibility"} for a, b, *_ in (req.peak_regions or [])] or None,
+            lift_hap=(req.lift_hap_by_dataset or {}).get(dataset_id),
         )
 
     if req.linked and len(query.dataset_ids) > 1 and len(results) > 1:
@@ -279,6 +281,7 @@ def _sort_projection_for_request(
         state=state,
         req=ProjectionRequest(
             dataset_ids=list(query.dataset_ids),
+            lift_hap_by_dataset=req.lift_hap_by_dataset,
             peak_regions=list(settings.peak_regions) if settings else [],
             method="tsne",
             subnucleosomal_threshold=settings.subnucleosomal_threshold if settings else 90,

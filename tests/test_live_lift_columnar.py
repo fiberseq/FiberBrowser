@@ -1,17 +1,28 @@
 """The composer's window-wide columnar pass (compose_columns) gives exactly the
 rows of the per-row functions it replaces: random pieces and decoded reads,
 composed with the pass and with it switched off, must match value for value
-and type for type (dict key order included)."""
+and type for type (dict key order included; an ``IntColumn`` of the pass
+counts as the list it stands for)."""
 import copy
 import random
 
+import numpy as np
 import pytest
 
 from services.lift import compose
+from services.read_columns import IntColumn
 from services.lift import live_lift as ll
 
 
 def _same(x, y, path="$"):
+    # Read row format 2: a column stands for the list (int64, Python ints back).
+    if type(x) is IntColumn:
+        assert x.array.dtype == np.int64, f"{path}: column dtype {x.array.dtype}"
+        assert type(y) is list, f"{path}: column != {type(y).__name__}"
+        x = x.tolist()
+    if type(y) is IntColumn:
+        assert type(x) is list, f"{path}: {type(x).__name__} != column"
+        y = y.tolist()
     assert type(x) is type(y), f"{path}: {type(x).__name__} != {type(y).__name__}"
     if isinstance(x, dict):
         assert list(x) == list(y), f"{path}: keys {list(x)} != {list(y)}"
@@ -231,3 +242,44 @@ def test_cancellation_reaches_the_hidden_blocks(monkeypatch):
     monkeypatch.setattr(compose, "_insertion_payloads", cancelling)
     with cancel_scope(token), pytest.raises(Cancelled):
         _compose([_one()] * 512, pieces, 0, 40)
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_viewport_projection_of_columns_matches_lists(seed):
+    """Read row format 2: projecting composed rows (IntColumn fields) to a
+    viewport gives exactly what projecting the same rows as lists gives, type
+    for type (working_sets.project_broad_read_to_viewport, and the live-lift
+    crop of calls and call parts it ends with)."""
+    from services.read_columns import has_columns, plain
+    from services.working_sets import make_layer_key, project_broad_read_to_viewport
+
+    rng = random.Random(100 + seed)
+    projected = 0
+    for _ in range(30):
+        pieces = _pieces(rng)
+        if not pieces:
+            continue
+        lo, hi = min(p.t_start for p in pieces), max(p.t_end for p in pieces)
+        r0 = rng.randrange(lo - 100, hi)
+        r1 = r0 + rng.randrange(1, 3000)
+        sel = ll.PieceSelection("tgt", r0, r1, r0, r1, sorted(pieces, key=lambda p: (p.t_start, p.chain)))
+        plan = ll.FetchPlan(sel, [], 0, 0)
+        reads = [_read(rng, i) for i in range(rng.randrange(1, 10))]
+        rows = compose.lift_compact_reads(reads, plan, handle=None, region_start=r0, region_end=r1, key="k",
+                                          dataset_id="d", molecules={}, settings=ll.LiftSettings(),
+                                          loader_options=dict(hide_terminal_gaps=rng.random() < 0.6))
+        for row in rows:
+            listed = plain(row)
+            for _ in range(4):
+                offset = rng.randrange(-50, max(1, r1 - r0))
+                width = rng.choice([1, 10, 300, 5000])
+                kw = dict(viewport_offset=offset, region_width=width, include_methylation=rng.random() < 0.8,
+                          layer_key=rng.choice([make_layer_key(True), make_layer_key(True, "nuc"),
+                                                make_layer_key(False)]),
+                          include_layer_qualities=rng.random() < 0.7, index_intervals=rng.random() < 0.5)
+                got = project_broad_read_to_viewport(row, **kw)
+                want = project_broad_read_to_viewport(listed, **kw)
+                assert not has_columns(got[0] or {}) or "insertions" in str(got[0])
+                _same(got, want)
+                projected += 1
+    assert projected > 200

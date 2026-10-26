@@ -113,7 +113,7 @@ def test_read_stats_mixed_native_and_lifted(lift_env):
     assert [e["dataset_id"] for e in r.json()["per_read"]] == [did]
 
 
-@pytest.mark.parametrize("path", ["/api/filter_by_transcription_state", "/api/scan_peaks"])
+@pytest.mark.parametrize("path", ["/api/filter_by_transcription_state", "/api/autozoom"])
 def test_other_analyses_still_refuse(lift_env, path):
     client, state, manifest, bam = lift_env
     did = _add(client, manifest, bam)["dataset"]["id"]
@@ -201,3 +201,82 @@ def test_similarity_and_projection_sorts_read_a_graph_runs_record_key_labels(lif
                 projection={"peak_regions": peaks, "cluster_assignments": {did: labels}})
     assert set(out["cluster_order"]) <= {0, 1}
     assert {record_key(i) for i in out["read_sort_order"]} == set(labels)
+
+
+def test_linear_peak_scanning_takes_lifted_datasets(lift_env):
+    """Graph features audit (A2): Scan in linear view (a host handed off past 50 kb) scans a lifted dataset's analysis
+    cohort on target coordinates, haplotypes pooled, instead of refusing it."""
+    client, state, manifest, bam = lift_env
+    did = _add(client, manifest, bam)["dataset"]["id"]
+    r = client.post("/api/scan_peaks", params={**WINDOW, "dataset_id": did},
+                    json={"dataset_ids": [did], "min_reads": 1, "min_width": 20, "threshold_rare": 0.01})
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["n_reads"] >= 3
+
+
+def test_similarity_sort_of_a_filtered_panel_with_record_key_labels(lift_env):
+    """Codex review (group E): a graph run's record-key labels, scoped by a filter's cohort identities, still order the
+    clusters by similarity (the scope removed every label)."""
+    from services.lift.cohort import record_key
+    client, state, manifest, bam = lift_env
+    did = _add(client, manifest, bam)["dataset"]["id"]
+    ids = _sort(client, did)["read_sort_order"]
+    labels = {record_key(i): (0 if _qname(i) in ("plus", "split") else 1) for i in ids}
+    out = _sort(client, did, sort_by="similarity", cluster_assignments={did: labels}, read_ids={did: ids})
+    assert sorted(out["cluster_order"]) == [0, 1]
+
+
+def test_similarity_sort_after_a_graph_run_with_a_qname_scope(lift_env):
+    """agy review (group E): after a graph run (labels under record keys, regions not stored on the dataset) a
+    similarity sort scoped by QNAMEs uses the run's regions sent with the request and keeps every label."""
+    from services.lift.cohort import record_key
+    client, state, manifest, bam = lift_env
+    did = _add(client, manifest, bam)["dataset"]["id"]
+    ids = _sort(client, did)["read_sort_order"]
+    labels = {record_key(i): (0 if _qname(i) in ("plus", "split") else 1) for i in ids}
+    out = _sort(client, did, sort_by="similarity", cluster_assignments={did: labels},
+                read_ids={did: sorted({_qname(i) for i in ids})}, peak_regions=[[3500, 3700]])
+    assert sorted(out["cluster_order"]) == [0, 1]
+
+
+def test_linear_scan_counts_a_molecule_shared_by_two_datasets_once_under_joint_dedup(lift_env):
+    """agy review (group E): two lifted datasets of the same records with joint_dedup by_molecule count each shared
+    molecule once in a linear scan, as the graph-column scan does."""
+    client, state, manifest, bam = lift_env
+    a = _add(client, manifest, bam)["dataset"]["id"]
+    b = _add(client, manifest, bam, label="copy")["dataset"]["id"]
+    if a == b:
+        pytest.skip("the same files make one dataset here")
+    for d in (a, b):
+        r = client.post(f"/api/lift/datasets/{d}/settings", json={"settings": {"joint_dedup": "by_molecule", "molecule_groups": [[bam, "shared"]]}})
+        if r.status_code != 200:
+            pytest.skip(f"joint_dedup is not a dataset setting here: {r.text[:120]}")
+    single = client.post("/api/scan_peaks", params={**WINDOW, "dataset_id": a},
+                         json={"dataset_ids": [a], "min_reads": 1, "min_width": 20, "threshold_rare": 0.01}).json()["n_reads"]
+    both = client.post("/api/scan_peaks", params=WINDOW,
+                       json={"dataset_ids": [a, b], "min_reads": 1, "min_width": 20, "threshold_rare": 0.01}).json()["n_reads"]
+    # One row per shared molecule (the joint cohort's rule, as clustering applies it): never both copies.
+    assert both <= single < 2 * both
+
+
+def test_scoped_linear_scan_keeps_a_shown_molecules_supplementaries(lift_env):
+    """Codex review (group G): a linear Scan scoped to a molecule's primary identity scans its supplementary rows too
+    (the query's own scope must not drop them before the molecule match)."""
+    import json
+    client, state, manifest, bam = lift_env
+    did = _add(client, manifest, bam)["dataset"]["id"]
+    split = [i for i in _sort(client, did)["read_sort_order"] if _qname(i) == "split"]
+    if len(split) < 2:
+        pytest.skip("the fixture's split molecule has one row here")
+    primary = [i for i in split if json.loads(i[len(PREFIX):])[4] == "primary"][:1] or split[:1]
+
+    def scan(ids):
+        r = client.post("/api/scan_peaks", params={**WINDOW, "dataset_id": did},
+                        json={"dataset_ids": [did], "read_ids": ids, "min_reads": 1, "min_width": 20, "threshold_rare": 0.01})
+        assert r.status_code == 200, r.text
+        return r.json()["n_reads"]
+    assert scan(primary) == scan(split) >= 2
+    # Under a working-set cap (Codex review, group G round 2) the shown molecule is still loaded in full.
+    state.max_working_reads = 1
+    assert scan(primary) >= 2

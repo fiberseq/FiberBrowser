@@ -687,3 +687,82 @@ describe('Codex review group B round 2: run details of a run with no shared feat
     expect(details).toContain('the paths left out are not');
   });
 });
+
+describe('backfill review: labels of a record on two paths; refined names across branch switches', () => {
+  const response = (results: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({ results, label_ids: { '0': 0, '1': 1 }, names: {},
+    stages: [{ stage: 1 }], columns: { shared: [], carrier_sets: [], left_out: {}, dropped: [], refinements: [] },
+    window_separation_nmi: null, matched: null, settings: {}, revisions: REG.revisions, options: {}, timings: {}, ...extra }) as never;
+
+  it('a later panel agreeing with one path\'s label for a record labelled on two paths joins the run', () => {
+    seed(split());
+    setPanelViewMode('mat', 'graph');
+    const p = plan();
+    const mat = p.observations.find(o => o.binding === 'mat')!.id, pat = p.observations.find(o => o.binding === 'pat')!.id;
+    const rowA = aid('m1', 'rec1', 0, 'primary'), rowB = aid('m1', 'rec1', 0, 'alt1');
+    commitGraphRun(useBrowserStore.getState(), p, response({ [mat]: { assignments: { [rowA]: 0 }, stage1: { [rowA]: 0 } },
+      [pat]: { assignments: { [rowB]: 1 }, stage1: { [rowB]: 1 } } }));
+    const st = useBrowserStore.getState();
+    useBrowserStore.setState({ panels: [...st.panels, panel('copy', { liftHap: 'MAT', liftHaplotypeMode: 'split' })],
+      clusterAssignments: { ...st.clusterAssignments, 'k-copy': { ...st.clusterAssignments['k-mat'] } } });
+    const after = useBrowserStore.getState();
+    expect(clusterSelectionKeys(after, 'k-mat')).toContain('k-copy');
+  });
+
+  it('refined names survive a branch switch, for a subcluster run and for panels labelled later', async () => {
+    seed(split());
+    setPanelViewMode('mat', 'graph');
+    const p = plan();
+    const mat = p.observations.find(o => o.binding === 'mat')!.id, pat = p.observations.find(o => o.binding === 'pat')!.id;
+    commitGraphRun(useBrowserStore.getState(), p, response({ [mat]: { assignments: { [aid('m1')]: 2 }, stage1: { [aid('m1')]: 0 } },
+      [pat]: { assignments: { [aid('m2')]: 0 }, stage1: { [aid('m2')]: 0 } } },
+    { label_ids: { '0': 0, '0.0': 2 }, names: { '2': 'C0.0' }, stages: [{ stage: 1 }, { stage: 2, set: 0, parent: '0' }],
+      columns: { shared: [], carrier_sets: [{ carriers: [mat], features: [] }], left_out: {}, dropped: [], refinements: [] } }));
+    useBrowserStore.setState(s => ({ panels: [...s.panels, panel('later', { liftHap: 'MAT', liftHaplotypeMode: 'split' })] }));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ results: { [mat]: { assignments: { [aid('m1')]: 2, [aid('m3')]: 2 } },
+      [pat]: { assignments: { [aid('m2')]: 0 } } } }), { status: 200 })));
+    expect(await assignWithGraphRun(useBrowserStore.getState().clusterMatchedRun!)).toBeGreaterThan(0);
+    vi.unstubAllGlobals();
+    const refined = useBrowserStore.getState().activeClusterTreeNodeId!;
+    const parent = useBrowserStore.getState().clusterTreeNodes[refined].parentId!;
+    useBrowserStore.getState().applyClusterTreeNode(parent);
+    useBrowserStore.getState().applyClusterTreeNode(refined);
+    expect(useBrowserStore.getState().clusterGroupLabels['k-later']?.[2]).toBe('C0.0');
+    expect(useBrowserStore.getState().clusterGroupLabels['k-mat']?.[2]).toBe('C0.0');
+  });
+});
+
+describe('agy review group B round 2: Scan beyond 50 kb', () => {
+  it('a view wider than the graph draws scans linear', async () => {
+    const { graphScanBody } = await import('./graphScan');
+    seed(split());
+    setPanelViewMode('mat', 'graph');
+    expect(graphScanBody(useBrowserStore.getState(), { chrom: 'chr3', start: 128_600_000, end: 128_680_000, source: 'accessibility',
+      minWidth: 80, minReads: 5, thresholds: { smoothWidth: 100, thresholdStrong: 0.5, thresholdMedium: 0.3, thresholdWeak: 0.15, thresholdRare: 0.08 } })).toBeNull();
+  });
+});
+
+describe('Codex review group F: a pop-out of a refined run keeps its labels across a branch switch', () => {
+  it('a member popped out from a pooled host keeps its copied labels and names on the run\'s node', async () => {
+    seed([panel('pool', { liftHaplotypeMode: 'pooled' })]);
+    setPanelViewMode('pool', 'graph');
+    const p = plan();
+    const mat = p.observations.find(o => o.binding === 'mat')!.id;
+    commitGraphRun(useBrowserStore.getState(), p, { results: { [mat]: { assignments: { [aid('m1')]: 2 }, stage1: { [aid('m1')]: 0 } } },
+      label_ids: { '0': 0, '0.0': 2 }, names: { '2': 'C0.0' }, stages: [{ stage: 1 }, { stage: 2, set: 0, parent: '0' }],
+      columns: { shared: [], carrier_sets: [{ carriers: [mat], features: [] }], left_out: {}, dropped: [], refinements: [] },
+      window_separation_nmi: null, matched: null, settings: {}, revisions: REG.revisions, options: {}, timings: {} } as never);
+    popOut('pool', [], [{ binding: 'mat', hap: 'MAT' }]);
+    const made = useBrowserStore.getState().panels.find(q => q.id !== 'pool' && q.liftHap === 'MAT');
+    expect(made).toBeTruthy();
+    if (!made) return;
+    const key = made.stateKey ?? made.id;
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ results: { [mat]: { assignments: { [aid('m1')]: 2 } } } }), { status: 200 })));
+    await assignWithGraphRun(useBrowserStore.getState().clusterMatchedRun!);
+    vi.unstubAllGlobals();
+    const refined = useBrowserStore.getState().activeClusterTreeNodeId!;
+    const parent = useBrowserStore.getState().clusterTreeNodes[refined].parentId;
+    if (parent) { useBrowserStore.getState().applyClusterTreeNode(parent); useBrowserStore.getState().applyClusterTreeNode(refined); }
+    expect(useBrowserStore.getState().clusterTreeNodes[refined].assignments?.[key]).toBeTruthy();
+    expect(useBrowserStore.getState().clusterGroupLabels[key]?.[2]).toBe('C0.0');
+  });
+});

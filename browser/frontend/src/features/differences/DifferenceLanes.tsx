@@ -1,6 +1,6 @@
 import { fetchJson } from '../../api/sharedFetch';
 import type { WorkspaceCalls } from './api';
-import { setupHighDpiCanvas } from '../../utils/canvasUtils';
+import { setupHighDpiCanvas, useCanvasRenderVersion } from '../../utils/canvasUtils';
 import { usePanOffsetTransform } from '../../hooks/usePanOffsetTransform';
 import { DifferenceTable } from './DifferenceTable';
 import { compareWithAssembly, comparisonKey, LABEL_MARK, useComparisonStore, type ComparisonResponse } from './comparison';
@@ -140,6 +140,8 @@ export function DifferenceLanes({ panel, dataset, width, gutter = 0, height }: {
   }, [data,minBp,sources.assembly,readItems]);
   const bandHeight = Math.max(20, (height ?? differenceLanesHeight(panel, dataset)) - 24);
   const laneHeight = bandHeight / Math.max(1, lanes.length);
+  // Export raises the canvas render scale and waits for every canvas to draw at it.
+  const canvasRenderVersion = useCanvasRenderVersion();
   useEffect(() => {
     if (!canvas.current) return;
     const ctx = setupHighDpiCanvas(canvas.current, width, bandHeight);
@@ -166,7 +168,7 @@ export function DifferenceLanes({ panel, dataset, width, gutter = 0, height }: {
         if (mark) { ctx.save(); ctx.font='bold 10px sans-serif'; ctx.fillStyle=dark?'#e2e8f0':'#0f172a'; ctx.fillText(mark, Math.max(left,x)+5, y+10); ctx.restore(); }
       }
     }
-  }, [axis, width, bandHeight, laneHeight, model, lanes.join(','), gutter, dark, start, end, comparison]);
+  }, [axis, width, bandHeight, laneHeight, model, lanes.join(','), gutter, dark, start, end, comparison, canvasRenderVersion]);
   if (!enabled) return null;
   const statusText = error || (busy ? 'Finding difference…' : readScope || (data ? data.mode === 'bins'
     ? 'Density; zoom for individual differences' : 'Click a difference to expand or highlight it; ⌘-click to inspect' : 'Loading…'));

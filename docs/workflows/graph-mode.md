@@ -17,13 +17,26 @@ them out to see it side by side, with all the usual read tools.
 
 ## What you need
 
+Setting up is described in
+[Setting up live lift and graph mode](pangenome-setup.md). In short:
+
+- **The graph helper.** The macOS app includes it; with pip, install
+  `fiberbrowser[graph]`, or build `fiberbrowser-graph` from
+  [graphlift](https://github.com/mtcicero26/graphlift)
+  ([details](pangenome-setup.md#installing-the-graph-helper)).
 - **A graph package.** This is a prepared pangenome graph (for example an HPRC
-  release cut to the contigs you work on). Packages are registered once, from
-  the graph view's **Register a graph package…** item, and are remembered.
+  release cut to the contigs you work on), made with `fiberbrowser-graph
+  prepare` from [graphlift](https://github.com/mtcicero26/graphlift).
+  Packages are registered once, from the **Graph view** panel's **Register a
+  graph package…** item, and are remembered
+  ([details](pangenome-setup.md#registering-a-graph-package)). The Graph view
+  panel is a preview feature, shown while **Show preview features** (Settings;
+  on unless you turned it off) is on. Graph mode on dataset panels does not need preview features.
 - **Reads that the graph knows.** Either of these works:
   - a **lifted dataset**: reads aligned to a sample's own assembly and viewed on
-    the reference through a lift map (**Open → Add live lift…**). Each
-    haplotype's reads are drawn on that haplotype's lane;
+    the reference through a lift map (**Open → Add live lift…**; see
+    [Live lift](live-lift.md)). Each haplotype's reads are drawn on that
+    haplotype's lane;
   - a **native dataset**: reads aligned to the reference the graph is built on.
     Its reads are drawn on the reference lane.
 
@@ -36,7 +49,7 @@ why.
 
 - **New lifted datasets open in graph mode** when a registered package binds
   them. In **Add live lift…**, **Open as** is set to **Graph**; choose
-  **Split panels** or **Pooled panel** to open it the old way. The first
+  **One panel per haplotype** or **Pooled** to open it the old way. The first
   haplotype's panel shows the graph; the other haplotypes are folded into it.
 - **A dataset with one haplotype** (a strain against its reference, for
   example) opens in graph mode on its one panel.
@@ -139,7 +152,9 @@ the regions hold only such sequence (no part every haplotype shares), the
 haplotypes that carry its first part are clustered, and the reads there of
 haplotypes that carry none of it are labelled **Not a carrier**, in a colour of
 their own. A haplotype that carries only another part is left out of that run
-(the run details say so): choose its region alone to cluster it. The **Cluster detail** panel lists
+(the run details say so): choose its region alone to cluster it. A haplotype that lacks a region's
+sequence altogether (a deletion) is not clustered there either: its reads that
+span the deletion are labelled **Not a carrier**. The **Cluster detail** panel lists
 what was used and what was left out.
 
 A cluster run stays while you pan and zoom on the same chromosome: new reads
@@ -164,7 +179,9 @@ The graph is drawn up to 50 kb wide. Past that the panel switches to its linear
 tracks, and the folded haplotypes open beside it, so you still see them side by
 side. A bar under the header says *Linear · graph resumes below 40 kb*. Zoom
 back in to 40 kb or less and the graph returns, with the haplotypes folded
-again (unless you moved one of them yourself).
+again (unless you moved one of them yourself). **Scan** works on the linear tracks too:
+a lifted dataset's peaks are found on the reference, every haplotype's reads
+pooled, as the graph scan pools them where the haplotypes share the reference.
 
 The panel also switches to linear when more than half of the window has no
 resolved place in the graph (for example a region the graph could not build at

@@ -22,6 +22,9 @@ SUPPORTED = SUPPORTED | {"difference_summary", "difference_split", "difference_l
 SUPPORTED = SUPPORTED | {"sort", "filter", "read_stats"}
 # Graph peak scanning (graph features): lifted rows on their own paths, or a linear observation's analysis cohort.
 SUPPORTED = SUPPORTED | {"graph_peaks"}
+# Peak scanning in linear view (graph features audit A2): a lifted dataset's analysis cohort on target coordinates,
+# every haplotype pooled, as the graph-column scan pools them on the target walk.
+SUPPORTED = SUPPORTED | {"peaks"}
 
 
 class LiveLiftUnsupported(Exception):

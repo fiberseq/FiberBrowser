@@ -13,8 +13,14 @@ try:
         def render(self, content) -> bytes:
             return _orjson.dumps(
                 content,
+                default=_json_default,
                 option=_orjson.OPT_NON_STR_KEYS | _orjson.OPT_SERIALIZE_NUMPY,
             )
+
+    def _json_default(value):
+        # Read row format 2: an IntColumn (services/read_columns.py) is its list.
+        from services.read_columns import json_default
+        return json_default(value)
 except ImportError:
     ORJSONResponse = JSONResponse  # type: ignore[misc,assignment]
 

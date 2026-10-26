@@ -15,7 +15,7 @@ import { useBrowserStore } from '../../stores/browserStore';
 import { useGraphBindingsStore, watchGraphBindings } from './bindingsStore';
 import { formatBp } from './coordinates';
 import { HANDOFF_OUT_BP, setPinnedLinear, useGraphSettings } from './handoff';
-import { foldIn, graphUnavailable, hostOf, isHost, joinCandidates, joinGraph, membersOf, popOut, poppable, removeFromGraph, setPanelViewMode } from './hostMode';
+import { foldIn, graphUnavailable, hostOf, isHost, joinCandidates, joinGraph, membersOf, popOut, poppable, removeFromGraph, setPanelViewMode, viewSelectionAsGraph } from './hostMode';
 import { useGraphStatusStore } from './statusStore';
 import type { DatasetBodyProps } from '../../components/tracks/datasetBodyExtensions';
 import type { PanelConfig } from '../../types';
@@ -141,12 +141,12 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
   const chips = (
     <button type="button" className="fb-header-pill flex-shrink-0" data-testid="graph-mode-toggle" data-mode="linear"
       title={`View as graph (the package's paths${panel.liftHap ? '; this panel\'s other haplotypes join it' : ''})`}
-      onClick={e => { e.stopPropagation(); setPanelViewMode(panel.id, 'graph'); }}>{text} ⇄ Graph</button>
+      onClick={e => { e.stopPropagation(); viewSelectionAsGraph(panel.id); }}>{text} ⇄ Graph</button>
   );
   const menu = (
     <>
       <MenuItem tour="panel-graph-view" icon={<span>⌥</span>} title="This panel on the graph package's paths, with its haplotypes and read tools"
-        onSelect={() => setPanelViewMode(panel.id, 'graph')}><span data-testid="graph-view-as-graph">View as graph</span></MenuItem>
+        onSelect={() => viewSelectionAsGraph(panel.id)}><span data-testid="graph-view-as-graph">View as graph</span></MenuItem>
       {hosts.map(h => (
         <MenuItem key={h.id} tour="panel-graph-join" icon={<span>+</span>} title="This panel's reads join that graph; this panel folds into it"
           onSelect={() => joinGraph(h.id, [panel.id])}><span data-testid="graph-join" data-host={h.id}>Join {h.title || h.liftHap || 'that'} graph</span></MenuItem>

@@ -41,6 +41,8 @@ LIFT_ALLOWED: frozenset = frozenset({
     (_POST, "/api/differences/inspect"), (_POST, "/api/differences/lens"), (_POST, "/api/differences/compare"),
     (_POST, "/api/differences/alternate-blocks"), (_POST, "/api/differences/observations"),
     (_POST, "/api/differences/sequence"),
+    # Peak scanning in linear view (capability "peaks": the analysis cohort, haplotypes pooled).
+    (_POST, "/api/scan_peaks"),
     # Dataset bookkeeping (list, remove, its assembly report).
     (_DELETE, "/api/datasets/{dataset_id}"), (_GET, "/api/datasets/{dataset_id}/assembly"),
     (_POST, "/api/datasets/{dataset_id}/refresh_capabilities"),

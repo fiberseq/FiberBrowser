@@ -41,3 +41,19 @@ describe('item 6: "not a carrier" (-2) is a label of its own, shown', () => {
     expect(clusterCounts(lane, 0, lane.rows.length)).toBe('C0 1 · Not a carrier 1 · – 2');
   });
 });
+
+describe('agy review group B round 2', () => {
+  it('labels that are all "not a carrier" scope no reads in a linear panel', async () => {
+    const { clusteredReadIdSet } = await import('../../components/tracks/read-track/readFilter');
+    expect(clusteredReadIdSet({ a: -2, b: -2 })).toBeNull();
+    expect(clusteredReadIdSet({ a: -2, b: 0 })).toEqual(new Set(['a', 'b']));
+  });
+
+  it('a fitted label is never overwritten by another path not-a-carrier label', async () => {
+    const { destinationAssignments } = await import('./graphCluster');
+    const id = 'lift-cohort:v1 ["g|m","m",null,null,"primary"]';
+    const dest = { stateKey: 'k', observations: ['M', 'P'], panelId: 'p', scope: null };
+    expect(Object.values(destinationAssignments(dest, { M: { assignments: { [id]: 0 } }, P: { assignments: { [id]: -2 } } }))).toEqual([0]);
+    expect(Object.values(destinationAssignments({ ...dest, observations: ['P', 'M'] }, { M: { assignments: { [id]: 0 } }, P: { assignments: { [id]: -2 } } }))).toEqual([0]);
+  });
+});

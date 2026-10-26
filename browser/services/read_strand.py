@@ -107,7 +107,33 @@ def strand_calls(state, dataset_id: Optional[str]) -> dict:
     return calls
 
 
+def _lifted_strand(read: dict, calls: Optional[dict]) -> Optional[str]:
+    """A lifted row's strand by molecule (graph features review): its cohort resolved it over every record of the
+    molecule (prepare_lift_cohort); an explicit call is the molecule's and is cached; a call from marks defers to one
+    cached before (another window, the graph view) and is cached; a molecule left without one (a tie, no marks) takes
+    the cached call, else none. Never inferred from one record of the molecule alone."""
+    mol = (read.get("live_lift") or {}).get("molecule")
+    s = read.get("strand")
+    explicit = s in STRANDS and not read.get("_fiberbrowser_inferred_strand")
+    if explicit:
+        if calls is not None and mol is not None:
+            calls[mol] = s
+        return s
+    if s == ST_UNKNOWN and not read.get("_fiberbrowser_inferred_strand"):
+        return None
+    known = calls.get(mol) if calls is not None and mol is not None else None
+    if known is not None:
+        return known
+    if s in STRANDS:
+        if calls is not None and mol is not None:
+            calls[mol] = s
+        return s
+    return None
+
+
 def cached_read_strand(read: dict, calls: Optional[dict]) -> Optional[str]:
+    if read.get("live_lift"):
+        return _lifted_strand(read, calls)
     if calls is None or ((read.get("strand") in STRANDS or read.get("strand") == ST_UNKNOWN)
                          and not read.get("_fiberbrowser_inferred_strand")):
         # A record's own st:Z decides for that record; the per-name cache is

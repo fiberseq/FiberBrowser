@@ -822,9 +822,11 @@ def _compact_reads_payload(
             # Prepare molecule properties before strand, spanning, IDs and caps.
             all_reads = apply_min_footprint_filter(filter_lift_hap(all_reads, lift_hap), dataset, min_footprints)
             for r in all_reads:
+                # The molecule's strand (read_strand._lifted_strand): also on a record with no marks of its own.
                 call = cached_read_strand(r, calls)
-                if call and r.get("_fiberbrowser_inferred_strand"):
-                    r["strand"] = call
+                explicit = r.get("strand") in ("CT", "GA", ".") and not r.get("_fiberbrowser_inferred_strand")
+                if call and not explicit:
+                    r["strand"], r["_fiberbrowser_inferred_strand"] = call, True
         if strand:
             # A one-strand panel's counts are that strand's reads.
             all_reads = filter_reads_by_strand(all_reads, strand, calls)

@@ -7,6 +7,7 @@ from contextvars import ContextVar
 import numpy as np
 from utils.responses import ORJSONResponse
 from starlette.responses import Response
+from services.read_columns import IntColumn, as_list
 
 MEDIA_TYPE = 'application/vnd.fiberbrowser.reads.v1'
 _MISSING = object()
@@ -59,7 +60,7 @@ def encode_reads(payload: dict) -> bytes:
         if isinstance(first, dict) and all(isinstance(v, dict) for v in present):
             keys = dict.fromkeys(k for v in present for k in v)
             return {**node, 'kind': 'object', 'fields': {
-                k: column([v.get(k, _MISSING) if isinstance(v, dict) else _MISSING for v in values], k in numeric_fields) for k in keys}}
+                k: field([v.get(k, _MISSING) if isinstance(v, dict) else _MISSING for v in values], k in numeric_fields) for k in keys}}
         if isinstance(first, (list, tuple)) and all(isinstance(v, (list, tuple)) for v in present):
             offsets = [0]
             flat = []
@@ -88,6 +89,66 @@ def encode_reads(payload: dict) -> bytes:
             codes.append(index[key])
         return {**node, 'kind': 'dictionary', 'dictionary': dictionary,
                 'values': vector(codes, '|u1' if len(dictionary) <= 256 else '<u4')}
+
+    def field(values, numeric):
+        # Read row format 2 (services/read_columns.py): a field may hold an
+        # IntColumn (only ever as a dict value). It is packed exactly as the
+        # list it stands for: from its array when every value of the field
+        # allows it, else as that list.
+        if not any(type(v) is IntColumn for v in values):
+            return column(values, numeric)
+        packed = int_columns(values, numeric)
+        if packed is not None:
+            return packed
+        return column([as_list(v) for v in values], numeric)
+
+    def int_columns(values, numeric):
+        """``column(values, numeric)`` for values that are IntColumns, int
+        lists or absent, all of one shape; None when some value is not."""
+        arrays, ndim, width = [], None, None
+        for v in values:
+            if v is _MISSING or v is None:
+                continue
+            if type(v) is IntColumn:
+                a = v.array
+            elif isinstance(v, list):
+                if not v:
+                    continue
+                try:
+                    a = np.asarray(v)
+                except (ValueError, TypeError, OverflowError):  # ragged or odd: the list path
+                    return None
+                if a.dtype.kind not in 'iu' or a.dtype == np.uint64:
+                    return None
+            else:
+                return None
+            if ndim is None:
+                ndim = a.ndim
+            if a.ndim != ndim or a.ndim not in (1, 2):
+                return None
+            if ndim == 2:
+                if width is None:
+                    width = a.shape[1]
+                if a.shape[1] != width:
+                    return None
+            arrays.append(a)
+        lengths = [0 if v is _MISSING or v is None else len(v) for v in values]
+        node = {'n': len(values)}
+        if any(v is _MISSING or v is None for v in values):
+            node['valid'] = vector([0 if v is _MISSING else 1 if v is None else 2 for v in values], '|u1')
+        offsets = np.zeros(len(values) + 1, dtype=np.int64)
+        np.cumsum(lengths, out=offsets[1:])
+        shape = ({'stride': lengths[0]} if len(set(lengths)) == 1
+                 else {'offsets': vector(offsets, '<u4')})
+        total = int(offsets[-1])
+        if not total:
+            return {**node, 'kind': 'list', **shape, 'items': {'n': 0, 'kind': 'null'}}
+        flat = np.concatenate([a.reshape(-1) for a in arrays]).astype(np.int64, copy=False)
+        numbers = {'n': len(flat), **numbers_column(flat)}
+        if ndim == 1:
+            return {**node, 'kind': 'list', **shape, 'items': numbers}
+        return {**node, 'kind': 'list', **shape,
+                'items': {'n': total, 'kind': 'list', 'stride': width, 'items': numbers}}
 
     def dataset(data):
         return {**{k: v for k, v in data.items() if k not in {'reads', '_read_bounds', '_read_terminals'}},

@@ -164,7 +164,7 @@ What is supported and what is Preview in 3.0:
 | [Tutorial](https://github.com/fiberseq/FiberBrowser/blob/main/docs/tutorial.md) | A written walkthrough of the tour on the bundled demos. |
 | [Reference](https://github.com/fiberseq/FiberBrowser/blob/main/docs/reference.md) | Command-line options, environment variables, the access token, file formats, BAM tags and layers, the dataset catalog, panels, keyboard shortcuts. |
 | [Installing FiberBrowser](https://github.com/fiberseq/FiberBrowser/blob/main/docs/install.md) | The Mac and Windows apps, pip and extras, conda, Docker, a source checkout. |
-| [Workflows](https://github.com/fiberseq/FiberBrowser/blob/main/docs/index.md#workflows) | DAF-seq runs, the Library, data on a cluster or S3, plasmids, clustering and transcription states, haplotypes. |
+| [Workflows](https://github.com/fiberseq/FiberBrowser/blob/main/docs/index.md#workflows) | DAF-seq runs, the Library, data on a cluster or S3, plasmids, clustering and transcription states, haplotypes, live lift, linked panels, differences and structural variants, graph mode. |
 | [Jupyter / Python API](https://github.com/fiberseq/FiberBrowser/blob/main/docs/jupyter-api.md) | `browser_client.py`: connecting, headless servers, figures, every method. |
 | [Analysis methods and statistics](https://github.com/fiberseq/FiberBrowser/blob/main/docs/analysis_methods_and_statistics.md) | How each analysis is computed and tested. |
 | [Deploying on a server](https://github.com/fiberseq/FiberBrowser/blob/main/docs/deployment/index.md) | Personal, lab and public servers; Open OnDemand. |

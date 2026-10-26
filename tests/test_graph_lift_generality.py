@@ -125,7 +125,9 @@ def _identities_are_valid(rows, did):
         assert r["aid"].startswith("lift-cohort:v1 "), r["aid"]
         parts = json.loads(r["aid"][len("lift-cohort:v1 "):])
         assert len(parts) == 5 and parts[1] == r["q"] and parts[0].endswith("|" + r["q"]) and parts[4] == "primary"
-        assert r["rk"] == record_key(r["aid"])
+        assert r["rk"] is not None and r["rk"] == record_key(r["aid"])
+        # The record component is the source record's (its digest and occurrence) and the molecule is this dataset's.
+        assert isinstance(parts[2], str) and parts[2] == r["rec"] and isinstance(parts[3], int)
 
 
 def test_a_single_haplotype_strain_lift_loads_on_its_path(server):
@@ -209,3 +211,6 @@ def test_haplotype_labels_take_mat_pat_only_as_a_whole_token():
     assert _haplotype_labels(manifest("w_mated#0", "line_PAT2#1")) == {"w_mated#0": "w_mated#0", "line_PAT2#1": "line_PAT2#1"}
     assert _haplotype_labels(manifest("HG002_MAT#1", "HG002_PAT#2")) == {"HG002_MAT#1": "MAT", "HG002_PAT#2": "PAT"}
     assert _haplotype_labels(manifest("s_maternal", "strainA#0")) == {"s_maternal": "MAT", "strainA#0": "strainA#0"}
+    # A sample named pat or mat-1 keeps its name; two samples' _MAT keys never share a label (agy review, group D).
+    assert _haplotype_labels(manifest("mat-1#0", "pat#1", "pat#2")) == {"mat-1#0": "mat-1#0", "pat#1": "pat#1", "pat#2": "pat#2"}
+    assert _haplotype_labels(manifest("S1_MAT#1", "S2_MAT#1")) == {"S1_MAT#1": "S1_MAT#1", "S2_MAT#1": "S2_MAT#1"}
