@@ -390,27 +390,35 @@ def _exact_target(value, assembly, context, reference, chrom, policy, labels, dr
     """A frozen exact target with every complete competing assembly allele.
 
     Each candidate is one haplotype's allele spliced onto the reference over a common diagnostic window. That is
-    only that haplotype's true sequence when it has no other edit in the window: the window grows over every nearby
-    local edit (any size, including the cap's dropped items), and a target whose own haplotype has another edit
-    there gets no exact target; another haplotype with several edits leaves the competition incomplete.
+    only that haplotype's true sequence when it has no other edit in the window: the window covers every
+    representation of the allele that another haplotype carries, grows over every nearby local edit (any size,
+    including the cap's dropped items), and a target whose own haplotype has another edit there gets no exact
+    target; another haplotype with several edits leaves the competition incomplete.
     """
     if not value["exact_allele_id"] or value["alt"] is None:
         return None
     s, e = value["t_start"], value["t_end"]
+    # Shifted equivalent placements of the allele on other haplotypes join the window, so their other edits are seen.
+    shared = [assembly[i] for i in value["shared_with"]]
+    s0, e0 = min([s, *(v["t_start"] for v in shared)]), max([e, *(v["t_end"] for v in shared)])
     flank = policy.diagnostic_flank_bp
-    ds, de = max(0, s - flank), e + flank
+    ds, de = max(0, s0 - flank), e0 + flank
+    if de - ds > policy.max_allele_bp:
+        return None
     nearby = list(local_all) + list(dropped)
     while True:   # grow to a fixed point over overlapping edits; each step widens, so the size bound ends it
         inside = [i for i in nearby if i["t_start"] <= de and i["t_end"] >= ds]
-        lo = max(0, min([s, *(i["t_start"] for i in inside)]) - flank)
-        hi = max([e, *(i["t_end"] for i in inside)]) + flank
+        lo = max(0, min([s0, *(i["t_start"] for i in inside)]) - flank)
+        hi = max([e0, *(i["t_end"] for i in inside)]) + flank
         if (lo, hi) == (ds, de):
             break
         ds, de = min(ds, lo), max(de, hi)
         if de - ds > policy.max_allele_bp:
             return None
-    if fetched is not None and (ds < fetched[0] and fetched[0] > 0 or de > fetched[1]):
-        return None   # the window reaches past the edits this comparison fetched: it cannot see them all
+    # The fetch is half-open ([start, end): an insertion at its end, or an edit ending at its start, is not fetched)
+    # while the window takes in every edit touching it, so a window reaching either fetch edge cannot see them all.
+    if fetched is not None and (ds <= fetched[0] and fetched[0] > 0 or de >= fetched[1]):
+        return None
     if any(i["t_start"] < ds or i["t_end"] > de for i in inside):
         return None
     inside = [i for i in nearby if i["t_start"] <= de and i["t_end"] >= ds]
@@ -438,9 +446,9 @@ def _exact_target(value, assembly, context, reference, chrom, policy, labels, dr
         v = compared[0]
         candidates.setdefault(v["exact_allele_id"], changed(v))
         names.setdefault(v["exact_allele_id"], []).append(v["hap_label"])
-    # Another haplotype shares this allele over the window only when it has no other edit there.
+    # Another haplotype shares this allele over the window only when the shared item is its sole edit there.
     names[target_id] = sorted(set(names[target_id]) | {assembly[i]["hap_label"] for i in value["shared_with"]
-                                                       if len(by_hap.get(assembly[i]["hap"], ())) <= 1})
+                                                       if [x["id"] for x in by_hap.get(assembly[i]["hap"], ())] == [i]})
     # Unsupported local representations, and competitors the item cap dropped, leave the competition open.
     if any(c["t_start"] < de and c["t_end"] > ds for c in context) or any(
             d["t_start"] <= de and d["t_end"] >= ds for d in dropped):
