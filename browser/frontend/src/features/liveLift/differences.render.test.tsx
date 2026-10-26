@@ -177,6 +177,9 @@ describe('differences strip and inspection', () => {
     const first = document.querySelector('tbody tr')!;
     expect(first.getAttribute('data-hap')).toBe('MAT'); expect(first.getAttribute('data-allele')).toBe('hg002');
     expect(first.children[1].textContent).toBe('● MAT');
+    // The wire allele (hg002) shows as the dataset's source sample; the wire value stays on data-allele.
+    expect(first.children[2].textContent).toBe('NA12878');
+    expect(document.querySelector('[data-testid="live-lift-selected-hap-summary"]')?.textContent).toBe('MAT: NA12878 1');
     expect(document.querySelector('[data-testid="live-lift-other-hap-summary"]')?.textContent).toBe('PAT: no difference here, 35 reads agree with CHM13');
     expect(document.querySelector('[data-testid="live-lift-misphased"]')).toBeNull();
     expect(document.querySelector('table')?.textContent).not.toContain('/ ?');

@@ -43,11 +43,24 @@ export function inspectionModel(rows: DifferenceInspection[], preferredHap?: str
   return { rows: ordered, summary, misphased: rows.filter(r => r.allele === 'grch38'),
     carriers: carrierRows.map(r => r.id), carrierRows };
 }
-/** `reference`: the target assembly's name (sampleLabel.targetReferenceLabel). */
-export function haplotypeSummary(alleles: Record<string, number>, reference = 'the reference') {
+/**
+ * An allele as people read it. The wire enums name the first map's assemblies (`hg002`: the source assembly's
+ * allele, `grch38`: the target reference's, `same_as_grch38`); they are shown as the dataset's own names
+ * (sampleLabel.ts), else "Source" / "Reference". Other values (other, deleted, no_coverage) are spelled out.
+ */
+export function alleleLabel(allele: string, names: { source?: string | null; target?: string | null } = {}): string {
+  const src = names.source || 'Source', tgt = names.target || 'Reference';
+  if (allele === 'hg002') return src;
+  if (allele === 'grch38') return tgt;
+  if (allele === 'same_as_grch38') return `Same as ${tgt}`;
+  return allele.toUpperCase().replace(/_/g, ' ');
+}
+/** `reference`: the target assembly's name (sampleLabel.targetReferenceLabel); `source`: the source sample's. */
+export function haplotypeSummary(alleles: Record<string, number>, reference = 'the reference', source?: string | null) {
+  const target = reference === 'the reference' ? null : reference;
   return Object.entries(alleles).map(([allele, n]) => allele === 'same_as_grch38'
     ? `no difference here, ${n} ${n === 1 ? 'read agrees' : 'reads agree'} with ${reference}`
-    : `${allele.toUpperCase().replace(/_/g, ' ')} ${n}`).join(' · ');
+    : `${alleleLabel(allele, { source, target })} ${n}`).join(' · ');
 }
 /** `names`: the two assemblies as labels name them (sampleLabel.ts; default "Reference" and "Source"). */
 export function differenceDescription(d: Difference, chrom: string, names: { source?: string | null; target?: string | null } = {}): string {

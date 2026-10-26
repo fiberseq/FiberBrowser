@@ -8,7 +8,7 @@ import { useReadActionsStore } from '../../stores/readActionsStore';
 import { useBrowserStore } from '../../stores/browserStore';
 import { getDifferenceReads } from '../liveLift/api';
 import { useDifferenceSelection, expandDifference } from '../liveLift/inspectionStore';
-import { carrierHighlight, differenceDescription, haplotypeSummary, inspectionModel } from '../liveLift/differencesModel';
+import { alleleLabel, carrierHighlight, differenceDescription, haplotypeSummary, inspectionModel } from '../liveLift/differencesModel';
 import type { DifferenceReadsResponse } from '../liveLift/differenceTypes';
 import { liveLiftHaplotypeColor } from '../liveLift/palette';
 import { IdentifyTab, identifyLens } from '../insertion/IdentifyTab';
@@ -130,7 +130,7 @@ export function AssemblyInspection({ panel, dataset, anchor }: { panel: PanelCon
     {identify && lens && <IdentifyTab response={lens} datasetId={dataset.id} identifyKey={identifyKey} reversed={false} visible dark={dark} />}
     <div className="my-2 flex gap-3 flex-wrap">{Object.entries(model.summary).map(([hap, alleles]) => <span key={hap}
       data-testid={hap !== preferredHap ? 'live-lift-other-hap-summary' : 'live-lift-selected-hap-summary'}>
-      <span style={{ color: liveLiftHaplotypeColor(hap, dark) }}>{hap}</span>: {haplotypeSummary(alleles, targetReferenceLabel(dataset, 'the reference'))}</span>)}</div>
+      <span style={{ color: liveLiftHaplotypeColor(hap, dark) }}>{hap}</span>: {haplotypeSummary(alleles, targetReferenceLabel(dataset, 'the reference'), sourceSampleName(dataset))}</span>)}</div>
     {model.misphased.length > 0 && <p className="text-amber-700 dark:text-amber-300 font-semibold" data-testid="live-lift-misphased">{model.misphased.length} {targetReferenceLabel(dataset)}-allele reads · possible mis-phasing / mismapping</p>}
     {data && error && <p role="status">{error}</p>}
     {readRequested && !data && <p role="status">{error || 'Loading reads and alleles…'}</p>}
@@ -139,7 +139,7 @@ export function AssemblyInspection({ panel, dataset, anchor }: { panel: PanelCon
         onMouseEnter={() => useReadActionsStore.setState({ highlight: { ids: new Set([r.row_id ?? r.id]), scopedRows:{[dataset.id]:new Set([r.row_id ?? r.id])}, pulseUntil: null, scrollTo: null, scrolled: new Set(), nonce: Date.now() } })}
         onMouseLeave={() => useReadActionsStore.getState().clearHighlight()}>
         <td className="max-w-40 truncate px-1" title={`${r.molecule}\n${r.record}\n${r.source_pos.contig}:${r.source_pos.start}-${r.source_pos.end}`}>{r.molecule}{r.supplementary ? ' · supp' : ''}</td>
-        <td style={{ color: liveLiftHaplotypeColor(r.hap_label, dark) }}>● {r.hap_label}{r.strand ? ` / ${r.strand}` : ''}</td><td>{r.allele.toUpperCase().replace(/_/g, ' ')}</td>
+        <td style={{ color: liveLiftHaplotypeColor(r.hap_label, dark) }}>● {r.hap_label}{r.strand ? ` / ${r.strand}` : ''}</td><td>{alleleLabel(r.allele, { source: sourceSampleName(dataset), target: targetReferenceLabel(dataset, 'Reference') })}</td>
         <td title={r.read_bases} className="font-mono max-w-28 break-all">{bases(r.read_bases, r.read_bases_length)}</td><td title={r.hg002 ?? undefined} className="font-mono max-w-24 break-all">{bases(r.hg002, r.hg002_length)}</td><td className="font-mono">{bases(r.grch38, r.grch38_length)}</td>
         {(d.kind === 'insertion' || d.kind === 'replacement') && <td>{r.identity == null ? '—' : `${r.identity.toFixed(1)}%`}</td>}
         <td>{r.chromatin.state === 'accessible' ? 'MSP / accessible' : r.chromatin.state}{r.chromatin.layer ? ` (${r.chromatin.layer})` : ''}{r.chromatin.nearest_m6a_bp !== null ? ` · m6A ${r.chromatin.nearest_m6a_bp} bp` : ''}</td>

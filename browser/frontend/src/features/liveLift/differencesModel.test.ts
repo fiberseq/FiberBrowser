@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { differenceDescription, differenceGlyph, differenceLanes, inspectionModel, nextDifference, stripModel } from './differencesModel';
+import { alleleLabel, differenceDescription, haplotypeSummary, differenceGlyph, differenceLanes, inspectionModel, nextDifference, stripModel } from './differencesModel';
 import type { Difference, DifferenceInspection, DifferencesResponse } from './differenceTypes';
 import deletionInspection from '../../../../../tests/data/deletion_inspection.json';
 const diff = (pos: number, size = 1, kind: Difference['kind'] = 'snv'): Difference => ({
@@ -30,6 +30,13 @@ describe('difference strip decisions', () => {
     for (const [kind, shape] of [['snv', 'tick'], ['deletion', 'bracket'], ['inversion', 'chevron'], ['no_correspondence', 'hatch'], ['aligned_bubble', 'hatch'], ['replacement', 'hatch']] as const) {
       expect(differenceGlyph(diff(50, 10, kind)).shape).toBe(shape);
     }
+  });
+  it('shows allele enums as the dataset\'s own assembly names (wire values unchanged)', () => {
+    expect(haplotypeSummary({ hg002: 2, grch38: 1 }, 'dm6', 'strainA')).toBe('strainA 2 · dm6 1');
+    expect(haplotypeSummary({ hg002: 2, grch38: 1, no_coverage: 3 })).toBe('Source 2 · Reference 1 · NO COVERAGE 3');
+    expect(alleleLabel('same_as_grch38', { target: 'dm6' })).toBe('Same as dm6');
+    expect(alleleLabel('hg002', { source: 'NA12878' })).toBe('NA12878');
+    expect(alleleLabel('other')).toBe('OTHER');
   });
   it('names both assemblies, bases, reason, and matched native evidence on hover', () => {
     const text = differenceDescription({ ...diff(50, 2353, 'insertion'), reason: 'source_insertion', read_support: { carriers: 7, cluster: 0 } }, 'chr1');
