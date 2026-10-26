@@ -347,23 +347,26 @@ function solveLevel(input: LevelInput, buildFamilies: (g: GroupItem) => void): L
           } else {
             const fallbackAt = (x: Anchor) => (x.j >= 0 && x.j < m.visits.length
               ? (m.visits[x.j].backward ? m.visits[x.j].occ.path_span.start : m.visits[x.j].occ.path_span.end) : 0);
-            const inverted = problem === INVERSION;
             // Target-allele family alignment: a resolved replacement that shares stretches with the target allele
             // (nodes the anchor chain could not place, e.g. a repeat the target walks twice) is aligned on it. The
             // shared stretches become anchors (drawn once, on the target's tube) and only the differences remain
             // candidates, whatever the lane order.
-            const extra = input.targetSpan && !problem && between.length && b.i > a.i + 1
+            // An unplaced local inversion between such stretches is aligned too: each remaining piece then gets its
+            // own verdict (a placed inversion, a local inversion, or a plain difference).
+            const extra = input.targetSpan && (!problem || problem === 'a local inversion') && between.length && b.i > a.i + 1
               ? alignOnBase(between, a.i + 1, b.i, bb, orient).map(x => ({ j: a.j + 1 + x.a, i: x.b })) : [];
             let prev = a;
             for (const x of [...extra, b]) {
               // Between two extra anchors (or one and a flank) adjacent on both sides: a shared step.
               if (!extra.length || x.i !== prev.i + 1 || x.j !== prev.j + 1) {
                 const visits = m.visits.slice(prev.j + 1, x.j);
+                const verdict = extra.length ? m.continuous(prev, x) : problem;
+                const inv = verdict === INVERSION;
                 candidates.push({ path: m.key, seg: sa, p: prev.i + 1, q: x.i, visits,
-                  status: problem && !inverted ? 'unresolved' : 'ok', reason: problem && !inverted ? problem : undefined,
-                  source: sourceSpanOf(visits, fallbackAt(prev)), inverted: inverted || undefined });
+                  status: verdict && !inv ? 'unresolved' : 'ok', reason: verdict && !inv ? verdict : undefined,
+                  source: sourceSpanOf(visits, fallbackAt(prev)), inverted: inv || undefined });
               }
-              if (x !== b) { anchors.push(x); runs.push(run); delete m.visits[x.j].repeat; }
+              if (x !== b) { anchors.push(x); runs.push(run); }
               prev = x;
             }
             if (breaking) run += 1;
@@ -828,7 +831,6 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
     }
     const anchors = chain.map(p => ({ j: p.a, i: p.b }));
     anchorCounts[path.binding] = anchors.length;
-    annotateRepeats(visits, anchors, targetOccs);
     const continuous = (a: Anchor, b: Anchor): string | null => {
       const va = visits[a.j], vb = visits[b.j];
       // The window may cut a visit: then the walk between the two is not all here.
@@ -893,6 +895,11 @@ export function buildLayout(topology: GraphTopology, bindings: GraphBinding[]): 
   const familyCounter = { n: 0 };
   const buildFamilies = (g: GroupItem) => alignFamilies(g, lanes, familyCounter);
   const level = solveLevel({ backbone, members, depth: 0, targetSpan, lanes, idPrefix: '' }, buildFamilies);
+  // Repeat visits from the final placement: the target-allele alignment adds anchors, a palindromic-core inversion
+  // takes its core's away.
+  for (const s of level.solutions) {
+    annotateRepeats(s.visits, s.anchors.filter((a, k) => a.i >= 0 && a.i < tVisits.length && s.anchorAt[a.i] === k), targetOccs);
+  }
   const junctions = level.junctions;
 
   // The top-level chain: segments, with junction items (gaps, fragment boundaries) between and at the window edges.
@@ -1112,9 +1119,32 @@ function alignOnBase(between: Visit[], p: number, q: number, bb: Backbone, orien
   });
   if (!pairs.length) return [];
   pairs.sort((x, y) => x.a - y.a || y.b - x.b);
-  const chain = colinearChain(pairs);
+  const chain = heaviestChain(pairs, x => between[x.a].bp, p, q);
   const shared = chain.reduce((t, x) => t + between[x.a].bp, 0);
   return shared >= Math.max(10, 0.2 * Math.min(altBp, baseBp)) ? chain : [];
+}
+
+/**
+ * The colinear chain (strictly increasing in a and b) carrying the most weight, b in [lo, hi); pairs sorted by
+ * (a asc, b desc). A Fenwick tree of prefix maxima over b: O(k log n).
+ */
+function heaviestChain<T extends { a: number; b: number }>(pairs: T[], weight: (x: T) => number, lo: number, hi: number): T[] {
+  const size = hi - lo;
+  const tree = new Float64Array(size + 1), at = new Int32Array(size + 1).fill(-1);
+  const best = new Float64Array(pairs.length), prev = new Int32Array(pairs.length).fill(-1);
+  let top = -1;
+  for (let k = 0; k < pairs.length; k++) {
+    // Best chain ending at b' < b (same-a pairs come later in b, so they never chain: the b-descending order).
+    let m = 0, from = -1;
+    for (let i = pairs[k].b - lo; i > 0; i -= i & -i) if (tree[i] > m) { m = tree[i]; from = at[i]; }
+    best[k] = m + weight(pairs[k]);
+    prev[k] = from;
+    for (let i = pairs[k].b - lo + 1; i <= size; i += i & -i) if (best[k] > tree[i]) { tree[i] = best[k]; at[i] = k; }
+    if (top < 0 || best[k] > best[top]) top = k;
+  }
+  const out: T[] = [];
+  for (let k = top; k >= 0; k = prev[k]) out.push(pairs[k]);
+  return out.reverse();
 }
 
 /** At most this many consecutive candidates of one path are tried as one palindromic-core inversion. */
@@ -1136,7 +1166,9 @@ function mergePalindromicInversions(s: MemberSolution, bb: Backbone): void {
   const orient = bb.orient ?? ((i: number) => bb.visits[i].reverse);
   const anchorIdx = (i: number) => (i >= 0 && i < n ? s.anchorAt[i]
     : i === -1 ? (s.anchors[0]?.i === -1 ? 0 : -1) : (s.anchors[s.anchors.length - 1]?.i === n ? s.anchors.length - 1 : -1));
-  const eligible = (c: Candidate) => c.status === 'ok' && !c.inverted;
+  // Any piece of one continuous walk: a plain difference, a placed or a local inversion (an arm with a repeated node
+  // matches it in the opposite orientation). The whole-walk reversal below is what decides.
+  const eligible = (c: Candidate) => c.status === 'ok' || (c.status === 'unresolved' && NON_BREAKING.has(c.reason ?? ''));
   const out: Candidate[] = [];
   for (let x = 0; x < cands.length; x++) {
     const c1 = cands[x];
@@ -1146,8 +1178,7 @@ function mergePalindromicInversions(s: MemberSolution, bb: Backbone): void {
       for (let y = x + 1; y < cands.length && y <= x + MAX_PALINDROME_CANDIDATES; y++) {
         const c2 = cands[y];
         // One continuous walk on one segment: every candidate in it resolved, no break between the outer anchors.
-        if (c2.seg !== c1.seg || (c2.status !== 'ok')) break;
-        if (c2.inverted) continue;
+        if (c2.seg !== c1.seg || !eligible(c2)) break;
         const kR = anchorIdx(c2.q);
         if (kR < 0 || s.runOf[kR] !== s.runOf[kL]) break;
         const jL = s.anchors[kL].j, jR = s.anchors[kR].j;
@@ -1158,7 +1189,8 @@ function mergePalindromicInversions(s: MemberSolution, bb: Backbone): void {
           const v = s.visits[jR - 1 - t], b = bb.visits[c1.p + t];
           reversed = v.occ.node === b.occ.node && v.reverse !== orient(c1.p + t);
         }
-        if (reversed) { merged = y; break; }
+        // The longest such run: one inversion, not several sharing palindromic cores.
+        if (reversed) merged = y;
       }
     }
     if (merged < 0) { out.push(c1); continue; }

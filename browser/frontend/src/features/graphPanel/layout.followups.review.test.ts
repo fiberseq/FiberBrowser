@@ -1,0 +1,108 @@
+/**
+ * Graph follow-ups (A14) review regressions (agy round 1): palindromic-core inversions with repeated arms or several
+ * cores, per-piece verdicts after the target-allele alignment, repeat visits from the final placement, and the
+ * heaviest shared chain. Small walk topologies in the helper's shape (direct matches of every shared node).
+ */
+import { describe, expect, it } from 'vitest';
+import { buildLayout, type GroupItem, type Item, type LayoutModel } from './layout';
+import { buildScene, type Prim } from './scene';
+import type { GraphBinding, GraphTopology } from './types';
+
+/** A topology from node lengths and signed walks (target first), with every shared node's direct matches. */
+function fromWalks(nodes: Record<string, number>, walks: Record<string, string[]>): { topology: GraphTopology; bindings: GraphBinding[] } {
+  const paths = Object.entries(walks).map(([binding, walk]) => {
+    let at = 0;
+    const occurrences = walk.map((step, j) => {
+      const node = step.replace('-', ''), len = nodes[node];
+      const o = { id: `${binding}.${j}`, fragment: `${binding}#f`, node, handle: node, reverse: step.startsWith('-'), path_span: { start: at, end: at + len }, clip: { start: 0, end: len } };
+      at += len;
+      return o;
+    });
+    return { binding, windows: [{ start: 0, end: at }], coverage: [{ span: { start: 0, end: at }, kind: 'covered', fragment: `${binding}#f` }], occurrences, plan: null, complete: true };
+  });
+  const target = paths[0];
+  const direct_matches = paths.slice(1).flatMap(p => p.occurrences.flatMap(o => target.occurrences.filter(t => t.node === o.node).map(t => ({
+    target_occurrence: t.id, source_occurrence: o.id, source_binding: p.binding, reverse: o.reverse !== t.reverse, provenance: 'direct_named_walk',
+  }))));
+  const end = target.occurrences.at(-1)!.path_span.end;
+  return {
+    topology: { target: target.binding, interval: { start: 0, end }, nodes: Object.entries(nodes).map(([id, length]) => ({ id, length, selected: true, context: false })),
+      edges: [], paths, direct_matches, target_queries: [], summaries: [], complete: true, correspondence_complete: true, timings: {} } as unknown as GraphTopology,
+    bindings: [],
+  };
+}
+const build = (f: ReturnType<typeof fromWalks>) => buildLayout(f.topology, f.bindings);
+function groups(items: Item[], out: GroupItem[] = []): GroupItem[] {
+  for (const it of items) {
+    if (it.kind !== 'group') continue;
+    out.push(it);
+    groups(it.base.chain, out);
+    for (const a of it.alts) if (a.family) groups(a.family.chain, out);
+  }
+  return out;
+}
+const matAlleles = (m: LayoutModel) => groups(m.chain).flatMap(g => g.alts.filter(a => a.carriers.includes('mat')).map(a => [g.target, a.bp, a.status, Boolean(a.inverted)]));
+const onTarget = (m: LayoutModel, path: string, at: number) => m.chain.some(i => i.kind === 'run' && i.carriers.includes(path) && i.target!.start <= at && at < i.target!.end)
+  || groups(m.chain).some(g => g.base.chain.some(i => i.kind === 'run' && i.carriers.includes(path) && i.target!.start <= at && at < i.target!.end));
+const COLORS = { ref: '#334155', mat: '#c2410c', pat: '#1d4ed8', target: '#334155' };
+const arcs = (m: LayoutModel) => buildScene(m, { width: 1200, gutter: 52, rightPad: 6, rulerHeight: 30, laneHeight: 34, laneGap: 4, compression: 'log', reversed: false, colors: COLORS, smallBp: 0 })
+  .prims.filter((p): p is Extract<Prim, { t: 'arc' }> => p.t === 'arc');
+
+describe('Graph follow-ups review regressions', () => {
+  it('agy 2A: arms with a repeated node (each a local inversion) still make one palindromic-core inversion', () => {
+    const m = build(fromWalks({ L: 500, X: 150, A: 50, P: 30, B: 70, R: 500 },
+      { ref: ['L', 'X', 'A', 'P', '-P', 'A', 'B', 'R'], mat: ['L', '-B', '-A', 'P', '-P', '-A', '-X', 'R'] }));
+    expect(matAlleles(m)).toEqual([[{ start: 500, end: 880 }, 380, 'ok', true]]);
+    expect(m.stats).toMatchObject({ inversions: 1, unresolved: 0 });
+    expect(onTarget(m, 'mat', 700)).toBe(false);
+    // Arms that are each a placed inversion: one inversion too.
+    const m2 = build(fromWalks({ L: 500, A: 60, P: 30, R: 500 }, { ref: ['L', 'A', 'P', '-P', 'A', 'R'], mat: ['L', '-A', 'P', '-P', '-A', 'R'] }));
+    expect(matAlleles(m2)).toEqual([[{ start: 500, end: 680 }, 180, 'ok', true]]);
+  });
+
+  it('agy 2C: an inversion over several palindromic cores is one inversion (the longest reversed run)', () => {
+    const m = build(fromWalks({ L: 500, A: 60, P: 30, B: 70, Q: 30, R: 500 }, {
+      ref: ['L', 'A', 'P', '-P', 'B', 'Q', '-Q', 'A', 'P', '-P', 'B', 'R'], mat: ['L', '-B', 'P', '-P', '-A', 'Q', '-Q', '-B', 'P', '-P', '-A', 'R'] }));
+    expect(matAlleles(m)).toEqual([[{ start: 500, end: 940 }, 440, 'ok', true]]);
+    expect(onTarget(m, 'mat', 700)).toBe(false);
+  });
+
+  it('agy 1A: a piece left after the target-allele alignment gets its own verdict (a placed inversion)', () => {
+    const m = build(fromWalks({ L: 500, A: 200, I: 40, X: 80, R: 500 },
+      { ref: ['L', 'A', 'I', 'A', '-I', '-I', 'R'], mat: ['L', 'A', '-I', 'A', 'X', 'R'] }));
+    expect(matAlleles(m)).toEqual([[{ start: 700, end: 740 }, 40, 'ok', true], [{ start: 940, end: 1020 }, 80, 'ok', false]]);
+    expect(m.stats).toMatchObject({ inversions: 1, substitutions: 1, unresolved: 0 });
+  });
+
+  it('agy 1B: a local inversion between two copies of a repeat aligns on the target allele', () => {
+    const m = build(fromWalks({ L: 500, A: 120, B: 20, R: 500 }, { ref: ['L', 'A', 'B', 'A', 'R'], mat: ['L', 'A', '-B', 'A', 'R'] }));
+    expect(matAlleles(m)).toEqual([[{ start: 620, end: 640 }, 20, 'ok', true]]);
+    expect(m.stats).toMatchObject({ inversions: 1, unresolved: 0 });
+  });
+
+  it('agy 3A: repeat visits follow the final placement (a core taken by an inversion is no anchor)', () => {
+    const m = build(fromWalks({ L: 500, A: 60, P: 30, B: 70, M: 500, R: 500 },
+      { ref: ['L', 'A', 'P', '-P', 'B', 'M', 'R'], mat: ['L', '-B', 'P', '-P', '-A', 'M', 'P', 'R'] }));
+    expect(m.stats).toMatchObject({ inversions: 1, repeats: 0 });
+    expect(arcs(m)).toEqual([]);
+    const m2 = build(fromWalks({ P: 30, L: 500, A: 60, B: 70, R: 500 },
+      { ref: ['P', 'L', 'A', 'P', '-P', 'B', 'R'], mat: ['P', 'L', '-B', 'P', '-P', '-A', 'R'] }));
+    expect(m2.stats).toMatchObject({ inversions: 1, repeats: 2 });
+  });
+
+  it('agy 3B: copies anchored by the target-allele alignment number the others as repeat visits', () => {
+    const m = build(fromWalks({ L: 500, A: 120, B: 20, C: 20, M: 500, R: 500 },
+      { ref: ['L', 'A', 'B', 'A', 'M', 'R'], mat: ['L', 'A', 'C', 'A', 'M', 'A', 'A', 'A', 'R'] }));
+    expect(m.stats.repeats).toBe(3);
+    expect(m.summaries.some(t => t.includes('walks node A 5 times here: visits beyond 4 are not unrolled'))).toBe(true);
+  });
+
+  it('agy 4: the alignment keeps the heaviest shared chain, not the one with most visits', () => {
+    const m = build(fromWalks({ L: 500, S: 2, BIG: 500, R: 500 },
+      { ref: ['L', 'S', 'S', 'S', 'BIG', 'BIG', 'R'], mat: ['L', 'BIG', 'BIG', 'S', 'S', 'S', 'R'] }));
+    // BIG BIG run on the target; the three 2 bp S copies are a deletion before and an insertion after them.
+    expect(onTarget(m, 'mat', 600)).toBe(true);
+    expect(onTarget(m, 'mat', 1100)).toBe(true);
+    expect(matAlleles(m)).toEqual([[{ start: 500, end: 506 }, 0, 'ok', false], [{ start: 1506, end: 1506 }, 6, 'ok', false]]);
+  });
+});
