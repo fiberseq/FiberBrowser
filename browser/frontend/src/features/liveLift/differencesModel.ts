@@ -19,9 +19,11 @@ export function nextDifference(items: Difference[], start: number, end: number, 
 }
 /** Whether an inspected row carries the difference: an assembly difference's carriers have its assembly allele; a
  * read-supported edit (no assembly allele: its alternate is what the reads show) is carried by rows with its bases. */
-export function carriesDifference(d: Pick<Difference, 'source' | 'kind' | 'alt'> | null | undefined,
-  row: Pick<DifferenceInspection, 'allele' | 'read_bases' | 'carries_insertion' | 'carries_deletion'>): boolean {
-  if (d?.source !== 'reads') return row.allele === 'hg002' || !!row.carries_insertion || !!row.carries_deletion;
+export function carriesDifference(d: Pick<Difference, 'source' | 'kind' | 'alt'> & Partial<Pick<Difference, 'hap_label'>> | null | undefined,
+  row: Pick<DifferenceInspection, 'allele' | 'read_bases' | 'carries_insertion' | 'carries_deletion'> & Partial<Pick<DifferenceInspection, 'hap_label'>>): boolean {
+  // 'hg002' means the read matches its own haplotype's allele: a carrier only on the difference's haplotype.
+  if (d?.source !== 'reads') return (row.allele === 'hg002' && (d?.source !== 'assembly' || !row.hap_label || row.hap_label === d.hap_label))
+    || !!row.carries_insertion || !!row.carries_deletion;
   if (d.kind === 'deletion') return row.allele === 'deleted' || !!row.carries_deletion;
   if (d.alt) return (row.read_bases ?? '').toUpperCase() === d.alt.toUpperCase();
   return row.allele === 'other' || row.allele === 'grch38';
@@ -30,12 +32,14 @@ export function carriesDifference(d: Pick<Difference, 'source' | 'kind' | 'alt'>
 /** Carrier rows as a read highlight: their display rows (analysis ids) in `datasetId` when every row has one, so
  * the same QNAME in another dataset or library is not outlined; their names otherwise. */
 export function carrierHighlight(rows: Pick<DifferenceInspection, 'id' | 'row_id'>[], datasetId: string): { ids: string[]; scopedRows?: Record<string, Set<string>> } {
+  // Always scoped to this dataset: display rows where known, 'name:<id>' for a row without one (a folded
+  // supplementary), so a carrier is never outlined in every dataset sharing its name.
   const ids = [...new Set(rows.map(r => r.id))];
-  return rows.length && rows.every(r => r.row_id) ? { ids, scopedRows: { [datasetId]: new Set(rows.map(r => r.row_id!)) } } : { ids };
+  return rows.length ? { ids, scopedRows: { [datasetId]: new Set(rows.map(r => r.row_id ?? `name:${r.id}`)) } } : { ids };
 }
 
 export function inspectionModel(rows: DifferenceInspection[], preferredHap?: string | null,
-  difference?: Pick<Difference, 'source' | 'kind' | 'alt'> | null) {
+  difference?: Pick<Difference, 'source' | 'kind' | 'alt'> & Partial<Pick<Difference, 'hap_label'>> | null) {
   const ordered = [...rows].sort((a, b) => Number(b.hap_label === preferredHap) - Number(a.hap_label === preferredHap));
   const summary: Record<string, Record<string, number>> = {};
   for (const r of ordered) { const hap = summary[r.hap_label] ??= {}; hap[r.allele] = (hap[r.allele] ?? 0) + 1; }

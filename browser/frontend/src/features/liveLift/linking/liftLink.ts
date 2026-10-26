@@ -13,7 +13,7 @@ import { create } from 'zustand';
 import { addDataset } from '../../../api/datasets';
 import { attachPanelGenome } from '../../../api/panelGenomes';
 import { useBrowserStore } from '../../../stores/browserStore';
-import { serializeState } from '../../../stores/historySlice';
+import { lastSnapshotId, serializeState } from '../../../stores/historySlice';
 import { usePanelGenomeStore } from '../../../stores/panelGenomeStore';
 import { createDefaultSubTracks, generatePanelId } from '../../../stores/utils';
 import { registerViewLink, withLinkedPanelMoving, type Span } from '../../../utils/panelExtensions';
@@ -43,8 +43,9 @@ function publishCandidates(panelId: string, mapping: SpanMapping) {
 const generation = new Map<string, number>();
 interface Correction {
   gen: number; linkId: string; chrom: string; datasetId: string; kind: 'panel' | 'main';
-  /** Undo history when it was scheduled: the step the move that scheduled it adds (at most one) absorbs it. */
-  history: { length: number; at: number };
+  /** Undo history when it was scheduled: the one step the move that scheduled it records (an id above `after`,
+   * not a baseline) absorbs the correction while it is still the current, latest step. */
+  history: { after: number };
 }
 const pending = new Map<string, Correction>();
 
@@ -102,7 +103,7 @@ function schedule(panel: PanelConfig, gen: number, chrom: string, kind: Correcti
   const prior = pending.get(panel.id);
   // A move rescheduled by its own approximate correction keeps the original move's history mark.
   const history = prior && prior.gen === gen ? prior.history
-    : { length: useBrowserStore.getState()._historyStack?.length ?? 0, at: Date.now() };
+    : { after: lastSnapshotId() };
   pending.set(panel.id, { gen, linkId: panel.liftLink!.id, chrom, datasetId: panel.liftLink!.datasetId, kind, history });
 }
 
@@ -145,7 +146,10 @@ function foldCorrection(c: Correction): void {
   const st = useBrowserStore.getState();
   const stack = st._historyStack ?? [];
   const current = stack[st._historyPointer];
-  if (!current || st._historyPointer !== stack.length - 1 || stack.length > c.history.length + 1 || current.timestamp < c.history.at) return;
+  // Exactly one step recorded since the move scheduled this (its own), still current and latest, and not a
+  // "Before navigation" baseline: anything else (an undo, another step, only a baseline) leaves history alone.
+  const since = stack.filter(s => (s.id ?? 0) > c.history.after && !s.baseline);
+  if (!current || st._historyPointer !== stack.length - 1 || since.length !== 1 || since[0] !== current) return;
   st.foldIntoCurrentSnapshot?.(serializeState(st));
 }
 

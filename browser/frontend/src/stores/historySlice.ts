@@ -65,7 +65,15 @@ export interface Snapshot {
   coalesceKey?: string;
   /** This step closed these datasets: undoing it reopens them from their files, redoing closes them again. */
   closedDatasets?: SerializedDataset[];
+  /** Unique per recorded step (a coalesced step gets a new one): lets a late effect fold into exactly its step. */
+  id?: number;
+  /** A "Before …" checkpoint (seedHistoryBaseline), never a step a late correction may rewrite. */
+  baseline?: boolean;
 }
+
+let snapshotSeq = 0;
+/** The id the most recently recorded step got (0: none yet). */
+export const lastSnapshotId = () => snapshotSeq;
 
 type SnapshotOptions = {
   kind?: SnapshotKind; coalesceKey?: string; coalesceMs?: number; closedDatasets?: SerializedDataset[];
@@ -122,6 +130,7 @@ export type SnapshotKind =
  * (same kind, within the coalescing window) must not replace it. */
 let baselineCounter = 0;
 const baselineKey = () => `baseline-${++baselineCounter}`;
+const isBaselineKey = (key?: string) => Boolean(key?.startsWith('baseline-'));
 
 /**
  * Display preferences kept in snapshots for sessions and crash recovery, but
@@ -1330,6 +1339,8 @@ export function createHistorySlice(
         state: serialized,
         kind,
         coalesceKey,
+        id: ++snapshotSeq,
+        ...(isBaselineKey(options?.coalesceKey) ? { baseline: true } : {}),
         ...(options?.closedDatasets?.length ? { closedDatasets: options.closedDatasets } : {}),
       };
 
@@ -1372,6 +1383,8 @@ export function createHistorySlice(
         state: snapshotState,
         kind,
         coalesceKey,
+        id: ++snapshotSeq,
+        ...(isBaselineKey(options?.coalesceKey) ? { baseline: true } : {}),
       };
 
       set((s) => {

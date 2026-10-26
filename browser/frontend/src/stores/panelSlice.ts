@@ -1247,14 +1247,15 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
     const next = { chrom: prev.chrom, start, end };
     if (next.start === prev.start && next.end === prev.end) return;
     const move = panel.siteLocked && isPanOrZoom(prev, next);
+    // An undo step, like a move of the main view. A locked panel moves the main view too, whose own navigation step
+    // records it (not twice). Seeded before the link maps the move, so a late link correction knows the baseline
+    // is not the move's step.
+    if (!move) seedHistoryBaseline(state, 'Before navigation', 'navigation');
     // A linked panel's view on the main genome (utils/panelExtensions.ts view links; null: none, or the main view
     // already shows it, e.g. a pan inside a part with no main-view coordinates, whose own step is then recorded below).
     const mappedMain = !move ? mainViewForPanel(panel, next) ?? null : null;
     const linkedMain = mappedMain && !(mappedMain.chrom === state.chrom && mappedMain.start === state.start && mappedMain.end === state.end)
       ? mappedMain : null;
-    // An undo step, like a move of the main view. A locked panel moves the
-    // main view too, whose own navigation step records it (not twice).
-    if (!move) seedHistoryBaseline(state, 'Before navigation', 'navigation');
     // Its reference's link group shows the same locus ("Linked navigation", panels on another assembly).
     const peers = new Set(linkGroupPeers(state.panels, panel, state.navigationMode));
     set({
