@@ -398,20 +398,42 @@ def _digest(spec, features, oids, settings, observed=None, stage=None) -> str:
 
 # ── Runs ────────────────────────────────────────────────────────────────────
 
+def _run_digest(spec, plan, refinements_stages) -> str:
+    """The whole run's geometry: its regions, carrier sets and every refinement stage's digest (backfill review B8: a
+    model fitted on other regions, or with its refinements stripped, is refused on assignment)."""
+    payload = [[[r["start"], r["end"], r["mode"]] for r in spec["regions"]],
+               [[list(cs["carriers"]), [f.public() for f in cs["features"]]] for cs in plan.carrier_sets],
+               sorted(str(st.get("digest")) for st in refinements_stages)]
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
+
+
 def _label_key(label) -> tuple:
     return tuple(int(x) for x in str(label).split("."))
 
 
+def _canonical_numbers(v):
+    """Integral floats as integers, as the browser's JSON.stringify writes them (0.0 -> 0): a model fitted here and
+    the same model sent back by the browser hash alike (backfill review B1)."""
+    if isinstance(v, float) and v.is_integer():
+        return int(v)
+    if isinstance(v, list):
+        return [_canonical_numbers(x) for x in v]
+    if isinstance(v, dict):
+        return {k: _canonical_numbers(x) for k, x in v.items()}
+    return v
+
+
 def _model_hash(model) -> str:
-    # As the model travels (JSON: integer label keys become strings, which sort differently), so a fitted model
-    # and the same model sent back by the browser hash alike.
-    wire = json.loads(json.dumps(model, default=str))
+    # As the model travels (JSON: integer label keys become strings, which sort differently; integral floats lose
+    # their ".0"), so a fitted model and the same model sent back by the browser hash alike.
+    wire = _canonical_numbers(json.loads(json.dumps(model, default=str)))
     return hashlib.sha256(json.dumps(wire, sort_keys=True).encode()).hexdigest()
 
 
 def _echoes(out) -> dict:
-    """Rows the engine echoed (a folded molecule fitted on another path): ``{(obs, aid): winning obs}``."""
-    return {(oid, aid): src for oid, res in out["results"].items() for aid, src in (res.get("echoed") or {}).items()}
+    """Rows the engine echoed (a folded molecule fitted on another path): ``{(obs, own aid): (winning obs, its aid)}``."""
+    return {(oid, aid): (tuple(src) if isinstance(src, list) else (src, aid))
+            for oid, res in out["results"].items() for aid, src in (res.get("echoed") or {}).items()}
 
 
 def _refine(state, spec, plan, labels, settings, observed, cache, sets_from, echoes, fitted=None):
@@ -472,6 +494,13 @@ def _refine(state, spec, plan, labels, settings, observed, cache, sets_from, ech
                 labels[oid][aid] = f"{parent}.{sub}"
                 seen.add(f"{parent}.{sub}")
             if fitted is None:
+                # Every label the stage's model can give (C<parent>.<k>), used in the fit or not, gets an id, so a
+                # carrier assigned later to an unused centre keeps it (backfill review B4).
+                for k in list((model.get("centroids") or {}).keys()) + list((model.get("cluster_patterns") or {}).keys()):
+                    try:
+                        seen.add(f"{parent}.{int(k)}")
+                    except (TypeError, ValueError):
+                        pass
                 # The set's every carrier (not only the paths with rows in this parent in the fit's sample): a
                 # carrier whose rows reach this parent later (a pan, rows over the fit's cap) is refined too.
                 every = list(cs["carriers"])
@@ -483,8 +512,9 @@ def _refine(state, spec, plan, labels, settings, observed, cache, sets_from, ech
                 refinements.append({"set": z, "parent": parent, "rows": len(subs)})
     # A folded molecule echoed onto another path takes its winning row's final label.
     for (oid, aid), src in echoes.items():
-        if aid in labels.get(src, {}) and oid in labels:
-            labels[oid][aid] = labels[src][aid]
+        src, src_aid = (src, aid) if isinstance(src, str) else src
+        if src_aid in labels.get(src, {}) and oid in labels:
+            labels[oid][aid] = labels[src][src_aid]
     return stages, refinements, seen
 
 
@@ -615,6 +645,7 @@ def run(state, reg, body: dict, tiles: dict, spec: Optional[dict] = None) -> dic
     if plan.carrier_sets and spec["options"]["carrier_features"] == "refine":
         more, refinements, seen = _refine(state, spec, plan, labels, settings, observed, cache, sets_from, _echoes(out1))
         stages.extend(more)
+    stages[0]["run"] = _run_digest(spec, plan, stages[1:])
     # Integer ids: stage-1 labels keep theirs; refined labels follow in order, named C<parent>.<j>.
     # (Every label the stage-1 model can give, used or not, keeps its id; every intermediate refined label too.)
     model_ids = {int(k) for k in ((model1 or {}).get("centroids") or {})} | {int(k) for k in ((model1 or {}).get("cluster_patterns") or {})}
@@ -700,6 +731,8 @@ def assign(state, reg, body: dict, tiles: dict, spec: Optional[dict] = None) -> 
     if s1.get("digest") != _digest(spec, first, oids, settings, observed,
                                    [1, 0 if sets_from else None, None, _model_hash(s1.get("model"))]) \
             or s1.get("observations") != oids:
+        raise GraphRunError("settings or geometry changed: cluster again", "stale_model", 409)
+    if "run" in s1 and s1.get("run") != _run_digest(spec, plan, [st for st in run_def["stages"][1:] if isinstance(st, dict)]):
         raise GraphRunError("settings or geometry changed: cluster again", "stale_model", 409)
     views, sources = _windows(spec, first, oids)
     out1 = engine(state, _request(spec, first, views, settings), sources=sources, row_cache=cache,

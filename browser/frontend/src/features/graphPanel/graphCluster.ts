@@ -279,6 +279,24 @@ function partsText(features: { kind: string; length: number; samples: number }[]
   return `${bp.toLocaleString()} bp of ${kinds.join(' and ')}${features.length > 1 ? ` (${features.length} parts, ${samples} samples)` : ` (${samples} samples)`}`;
 }
 
+/**
+ * The run's refined names (C<parent>.<j>) on these panels, in the live labels and on the active cluster tree node, so
+ * a branch switch and back keeps them (backfill review B10: the node held none for a subcluster run or for panels
+ * labelled later).
+ */
+function mirrorGroupLabels(keys: readonly string[], names: Readonly<Record<number, string>>): void {
+  useBrowserStore.setState(st => {
+    const add = Object.fromEntries(keys.map(k => [k, { ...(st.clusterGroupLabels?.[k] ?? {}), ...names }]));
+    const id = st.activeClusterTreeNodeId;
+    const node = id ? st.clusterTreeNodes[id] : null;
+    return {
+      clusterGroupLabels: { ...st.clusterGroupLabels, ...add },
+      ...(node && id ? { clusterTreeNodes: { ...st.clusterTreeNodes, [id]: { ...node,
+        groupLabels: { ...(node.groupLabels ?? {}), ...Object.fromEntries(keys.map(k => [k, { ...(node.groupLabels?.[k] ?? {}), ...names }])) } } } } : {}),
+    };
+  });
+}
+
 /** Write a graph run's labels to every destination, as one undo step, and record the durable run. */
 export function commitGraphRun(s: BrowserState, plan: GraphClusterPlan, response: GraphClusterResponse): void {
   const now = useBrowserStore.getState();
@@ -333,10 +351,7 @@ export function commitGraphRun(s: BrowserState, plan: GraphClusterPlan, response
   after.setDynamicClustering(false);
   after.setClusterPatterns({}); after.setClusterCentroids({}, []); after.setClusterWindowPeaks(null); after.setClusterPeakRegions([]);
   const names = Object.fromEntries(Object.entries(response.names ?? {}).map(([k, v]) => [Number(k), v]));
-  if (Object.keys(names).length) {
-    useBrowserStore.setState(st => ({ clusterGroupLabels: { ...st.clusterGroupLabels,
-      ...Object.fromEntries(Object.keys(finalBy).map(k => [k, names])) } }));
-  }
+  if (Object.keys(names).length) mirrorGroupLabels(Object.keys(finalBy), names);
   const live = useBrowserStore.getState().clusterAssignments;
   const obsLabel = new Map(plan.observations.map(o => [o.id, o]));
   const firstDest = (oid: string) => plan.destinations.find(d => d.observations.includes(oid));
@@ -438,10 +453,7 @@ export async function assignWithGraphRun(run: ClusterMatchedRun, signal?: AbortS
     // so leaving the branch and coming back keeps them.)
     st.setClusterAssignments(d.stateKey, fresh, { mirror: true, merge: true, svSplit: true });
   }
-  if (added && run.names && Object.keys(run.names).length) {
-    useBrowserStore.setState(cur => ({ clusterGroupLabels: { ...cur.clusterGroupLabels,
-      ...Object.fromEntries(touched.map(k => [k, { ...(cur.clusterGroupLabels?.[k] ?? {}), ...run.names }])) } }));
-  }
+  if (added && run.names && Object.keys(run.names).length) mirrorGroupLabels(touched, run.names);
   if (added) {
     const now = useBrowserStore.getState();
     useBrowserStore.setState({ clusterMatchedRun: { ...run, panelAssignments: { ...run.panelAssignments,

@@ -88,37 +88,40 @@ export function graphRunStateKeys(run: ClusterMatchedRun, panels: readonly Panel
   return [...keys];
 }
 
-const runLabelIndex = new WeakMap<object, Map<string, Map<string, number>>>();
+const runLabelIndex = new WeakMap<object, Map<string, Map<string, Set<number>>>>();
 
 /** Whether a panel's labels agree with a graph run's, for its own dataset, for every record both label (none:
- * compatible). */
+ * compatible). A record labelled on two paths (one placement on each) may carry a label per path: a panel agrees with
+ * any of them (backfill review: the second path's label overwrote the first's). */
 function compatibleLabels(run: ClusterMatchedRun, labels: Readonly<Record<string, number>> | undefined, datasetId: string): boolean {
   if (!labels) return true;
   let byDataset = runLabelIndex.get(run);
   if (!byDataset) {
     byDataset = new Map();
     const obs = new Map((run.graph?.observations ?? []).map(o => [o.id, o.dataset_id]));
+    const add = (ds: string, id: string, c: number) => {
+      const index = byDataset!.get(ds) ?? new Map<string, Set<number>>();
+      const key = recordKey(id) ?? id;
+      (index.get(key) ?? index.set(key, new Set()).get(key)!).add(c);
+      byDataset!.set(ds, index);
+    };
     // Every row the run labelled (its observations' results), then what its destinations show.
     for (const [oid, map] of Object.entries(run.assignments ?? {})) {
       const ds = obs.get(oid);
       if (!ds) continue;
-      const index = byDataset.get(ds) ?? new Map<string, number>();
-      for (const [id, c] of Object.entries(map ?? {})) index.set(recordKey(id) ?? id, c);
-      byDataset.set(ds, index);
+      for (const [id, c] of Object.entries(map ?? {})) add(ds, id, c);
     }
     for (const d of run.destinations ?? []) {
       const ds = obs.get(d.observations[0]);
       if (!ds) continue;
-      const index = byDataset.get(ds) ?? new Map<string, number>();
-      for (const [id, c] of Object.entries(run.panelAssignments?.[d.stateKey] ?? {})) index.set(recordKey(id) ?? id, c);
-      byDataset.set(ds, index);
+      for (const [id, c] of Object.entries(run.panelAssignments?.[d.stateKey] ?? {})) add(ds, id, c);
     }
     runLabelIndex.set(run, byDataset);
   }
-  const index = byDataset.get(datasetId) ?? new Map<string, number>();
+  const index = byDataset.get(datasetId) ?? new Map<string, Set<number>>();
   for (const [id, c] of Object.entries(labels)) {
     const want = index.get(recordKey(id) ?? id);
-    if (want === undefined || want !== c) return false;
+    if (!want || !want.has(c)) return false;
   }
   return true;
 }
