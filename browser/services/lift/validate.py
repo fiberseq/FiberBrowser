@@ -170,7 +170,8 @@ def _check_anchors(handle, out, target_fasta, source_fasta):
         # Open read-only: never build an index beside a user's reference.
         if not os.path.isfile(source_fasta + ".fai"):
             raise ValueError("source FASTA needs a .fai index (run samtools faidx first)")
-        with pysam.FastaFile(source_fasta) as source:
+        from services.lift.dataset import open_source_fasta
+        with open_source_fasta(source_fasta) as source:
             # Only contigs both FASTAs hold (a reference or source FASTA of some chromosomes is fine), and only
             # anchors whose bases both know: an N-masked or partial assembly cannot fail on bases it lacks.
             target_names, source_names = set(target_fasta.references), set(source.references)

@@ -73,6 +73,9 @@ def add_live_lift_dataset(state, *, paths: Iterable[str], manifest: str, haploty
         return {"success": False, "error": "\n\n".join(errors)}
     if any(not str(p).lower().endswith(".bam") for p in bam_paths):
         return {"success": False, "error": "Live lift reads BAM files only."}
+    if source_fasta:
+        from services.lab.paths import confine_fasta
+        confine_fasta(source_fasta, {})   # PathDenied (403) outside a lab's data roots
     index_error = ensure_local_bam_indexes(bam_paths)
     if index_error:
         return index_error

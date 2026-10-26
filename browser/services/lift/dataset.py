@@ -28,6 +28,15 @@ def live_lift_enabled() -> bool:
     return not (get_lab_mode() or get_public_mode())
 
 
+def open_source_fasta(path: str):
+    """The live-lift source assembly FASTA, opened under a lab server's rules (its index must resolve inside the
+    data roots, and a missing one is only written where writing is allowed); plain pysam elsewhere."""
+    import pysam
+    from services.lab.paths import confine_fasta
+    confine_fasta(path, {})
+    return pysam.FastaFile(path)
+
+
 def label_order(label: str) -> tuple:
     """MAT before PAT before anything else (panels, chips and menus list haplotypes this way)."""
     return ({"MAT": 0, "PAT": 1}.get(str(label).upper(), 2), str(label))

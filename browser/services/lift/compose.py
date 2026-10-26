@@ -391,7 +391,8 @@ def lift_compact_reads(reads, plan, *, handle, region_start, region_end, setting
         ctx.source_fasta = None
         if ctx.loader_options.get("include_cigar") and ctx.loader_options.get("source_fasta"):
             import pysam
-            ctx.source_fasta = stack.enter_context(pysam.FastaFile(ctx.loader_options["source_fasta"]))
+            from services.lift.dataset import open_source_fasta
+            ctx.source_fasta = stack.enter_context(open_source_fasta(ctx.loader_options["source_fasta"]))
         # Rows and their geometry first, for every read; then the window's
         # intervals, calls, marks and molecular spans in one columnar pass
         # (compose_columns); then each row's payload.

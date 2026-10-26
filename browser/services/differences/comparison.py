@@ -206,8 +206,8 @@ def assembly_comparison(state, dataset, *, chrom, start, end, reads=(), read_seq
     book = IdentityLedger(ledger) if ledger else IdentityLedger()
     source = None
     if config.source_fasta:
-        import pysam
-        source = pysam.FastaFile(config.source_fasta)
+        from services.lift.dataset import open_source_fasta
+        source = open_source_fasta(config.source_fasta)
     else:
         reasons.add("assembly_sequence_unavailable")
     assembly, edits, by_observation = {}, [], {}

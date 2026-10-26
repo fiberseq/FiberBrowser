@@ -368,7 +368,8 @@ def differences_for_region(state, dataset, chrom, start, end, *, lift_hap=None, 
             v["alt_bp"] += item["alt_bp"]
         bins = [grouped[k] for k in sorted(grouped)]
         items = [v for v in items if max(v["ref_bp"], v["alt_bp"]) >= 1000]
-    source = pysam.FastaFile(config.source_fasta) if config.source_fasta else None
+    from services.lift.dataset import open_source_fasta
+    source = open_source_fasta(config.source_fasta) if config.source_fasta else None
     try:
         for item in items:
             item["ref_truncated"] = item["ref_bp"] > 60
@@ -429,7 +430,8 @@ def difference_sequence(dataset, chrom, pos, item_id, *, offset=0, limit=50_000,
     if total == 0:
         sequence = ""
     else:
-        with pysam.FastaFile(dataset.live_lift.source_fasta) as source:
+        from services.lift.dataset import open_source_fasta
+        with open_source_fasta(dataset.live_lift.source_fasta) as source:
             sequence = fasta_bases(source, src["contig"], a, b)
     if sequence is None:
         raise HTTPException(409, "Source assembly sequence unavailable")
@@ -850,7 +852,8 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
             return (r for r in self.records if r.reference_name == contig and r.reference_start < end and r.reference_end > start)
 
     with ExitStack() as stack:
-        source = stack.enter_context(pysam.FastaFile(config.source_fasta)) if config.source_fasta else None
+        from services.lift.dataset import open_source_fasta
+        source = stack.enter_context(open_source_fasta(config.source_fasta)) if config.source_fasta else None
         fetched, adapters = [], {}
         for path in dataset.paths:
             bam = stack.enter_context(pysam.AlignmentFile(path, "rb"))

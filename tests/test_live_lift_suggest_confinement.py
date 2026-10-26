@@ -40,3 +40,21 @@ def test_lab_member_suggestions_stay_inside_data_roots(lab, monkeypatch):
     r = alice.get("/api/lift/maps", params={"near": str(lab.outside / "outside_src.bam")})
     assert r.status_code in (400, 403), r.text
     assert os.path.abspath(outside_leak) not in r.text
+
+
+def test_lab_member_source_fasta_is_confined(lab, monkeypatch):
+    """agy probe: the source assembly FASTA (and its index) stays inside the lab's data roots."""
+    import pysam
+    monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "1")
+    sidecar = write_toy_sidecar(str(lab.data / "maps"))
+    bam = write_bam(str(lab.data / "src.bam"), lambda h: [make_record(h, "r", MAT, 100, "200M")], contigs=[(MAT, SSIZE)])
+    outside = lab.outside / "secret.fa"
+    outside.write_text(f">{MAT}\n{'G' * SSIZE}\n")
+    pysam.faidx(str(outside))
+    linked = lab.data / "linked.fa"
+    linked.write_text(f">{MAT}\n{'G' * SSIZE}\n")
+    (lab.data / "linked.fa.fai").symlink_to(lab.outside / "secret.fa.fai")
+    alice = member_client(lab)
+    for source in (str(outside), str(linked)):
+        r = alice.post("/api/lift/datasets", json={"paths": [bam], "manifest": sidecar, "source_fasta": source})
+        assert r.status_code == 403 or not r.json().get("success"), (source, r.text)
