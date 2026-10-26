@@ -8,8 +8,7 @@ panels are linked through the lift map. A ribbon between them shows which
 stretches correspond, hovering a molecule outlines it in both, and moving either
 panel moves the other.
 
-This needs [live lift](live-lift.md), which has to be switched on when
-FiberBrowser starts ([Setting up](pangenome-setup.md#turning-on-live-lift)).
+It starts from a [lifted dataset](live-lift.md).
 
 ![A lifted MAT panel with its source view under it, joined by the ribbon](../images/pangenome/linked-source-view.png)
 

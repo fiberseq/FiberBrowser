@@ -16,14 +16,19 @@ insertion on one haplotype, with a CTCF site inside it.
 
 | Level | What it means | Counted as a carrier |
 |---|---|---|
-| **Confirmed** | The read's alignment has the event itself (an insertion or deletion in its CIGAR), or two pieces of the read are joined across it with good mapping quality on both sides. | always |
+| **Confirmed** | The read's alignment has the event itself (an insertion or deletion in its CIGAR), or two pieces of the read are joined directly across it. | always |
 | **Putative** | The read is clipped where the variant is, consistent with it, but it does not span it. | by default |
 | **Conflicting** | As putative, but much of the clipped part aligns well somewhere else (another chromosome, or more than 100 kb away). The clip may come from a different event. | only when you include it |
 | **Ambiguous** | The clip fits more than one nearby variant. | only when you include it |
 
-Molecules are counted once per variant, however many alignments they have, and
-the same counts appear everywhere: the Differences row, the Variants panel, the
-split dialog, highlights and the insertion lens. The technical definitions are
+Molecules are counted once per variant, however many alignments they have,
+with the same rules everywhere: the Differences row, the Variants panel, the
+split dialog, highlights and the insertion lens. The numbers can still differ
+between them when they count different reads: the Differences row counts the
+reads loaded for the view (which may be a sample of a deep view; its tooltip
+says so), while the SVs tab, splits and the lens count every read in the
+region. Different carrier choices (putative, conflicting, ambiguous) also give
+different counts. The technical definitions are
 in [SV evidence](../reference/sv-evidence.md).
 
 ## The SVs tab
@@ -101,12 +106,12 @@ loaded):
 |---|---|
 | Flag clips explained elsewhere | on |
 | Max local distance (bp) | 100,000 |
-| Min elsewhere MAPQ | 20 |
+| Min elsewhere MAPQ | 0 (no MAPQ filter) |
 | Min explained clip (bp) | 500 |
 | Min fraction of clip explained | 0.5 |
 
-A clip is conflicting when another alignment of the same molecule, with at
-least that mapping quality, explains at least that many of its bases and that
+A clip is conflicting when another alignment of the same molecule (with at
+least the minimum mapping quality, if you set one) explains at least that many of its bases and that
 fraction of it, on another chromosome or farther away than the local distance.
 **Restore evidence defaults** puts the values back. Splits you saved keep their
 own settings.

@@ -14,11 +14,12 @@ cluster them together.
 
 ![A lifted sample split into MAT and PAT panels, under the same reads aligned to GRCh38](../images/pangenome/live-lift-split.png)
 
-## Turning it on
+## What you need
 
-Live lift has to be switched on when FiberBrowser starts, and it needs a lift
-map made with [graphlift](https://github.com/mtcicero26/graphlift). See
-[Setting up live lift and graph mode](pangenome-setup.md#turning-on-live-lift).
+A lift map made with [graphlift](https://github.com/mtcicero26/graphlift) (see
+below), and a BAM aligned to the sample's assembly. See
+[Setting up live lift and graph mode](pangenome-setup.md) for where these come
+from.
 
 ## What a map is
 
@@ -77,12 +78,13 @@ Click **Add**.
 - **Reads** are drawn on the reference wherever the map places them. A read
   that crosses a stretch the reference lacks is drawn in pieces, with a dashed
   connector across sequence that only the reference has.
-- **Insertion ticks.** A small tick on a read marks bases that the reference
-  lacks there (an insertion in the sample). **Insertions on reads** chooses
-  **Off**, **Ticks** (the default) or **Ticks with size** (labelled, for
-  example *+2.4 kb*, where rows are at least 7 px tall). It is in the
-  Differences row's right-click menu and in **Live-lift settings…**. Clicking
-  a labelled tick expands the insertion (see
+- **Insertions.** The Differences row above the reads shows where the sample
+  has bases the reference lacks. The reads themselves carry no insertion marks
+  unless you ask for them: **Insertions on reads** chooses **Off** (the
+  default), **Ticks** (a small tick on each read with an insertion there) or
+  **Ticks with size** (labelled, for example *+2.4 kb*, where rows are at
+  least 7 px tall). It is in the Differences row's right-click menu and in
+  **Live-lift settings…**. Clicking a tick expands the insertion (see
   [Differences](differences.md#expanding-an-insertion)).
 - **Hatching.** Grey diagonal lines over the coverage histogram mark stretches
   of the reference that have no counterpart on the haplotype (for example a
@@ -164,7 +166,7 @@ lifted datasets.
 
 | Symptom | What to check |
 |---|---|
-| No **Add live lift…** | Live lift is off: see [Setting up](pangenome-setup.md#turning-on-live-lift). |
+| No **Add live lift…** | The server was started with live lift turned off ([Setting up](pangenome-setup.md#live-lift-is-on)). |
 | *No lift map was found* | Put the map (with its files) next to the BAM or in the Library, or type its path. |
 | *the BAM's contigs are not this map's sources* | The BAM was aligned to a different assembly, or its contigs are named differently. |
 | A stretch has no reads | Check for hatching: the reference may have no counterpart on that haplotype there. |

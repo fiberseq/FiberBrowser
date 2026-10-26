@@ -37,8 +37,9 @@ What the row shows depends on the panel:
 
 ## Clicking
 
-The same clicks work on the Differences row, on a lifted read's insertion tick,
-and on the row of a BAM aligned to this genome.
+The same clicks work on the Differences row, on a lifted read's insertion tick
+(when **Insertions on reads** shows them), and on the row of a BAM aligned to
+this genome.
 
 | Action | What it does |
 |---|---|
@@ -54,15 +55,23 @@ inspector.
 ## Expanding an insertion
 
 A plain click on an insertion of 50 bp to 50 kb opens a column at that position
-holding the inserted bases. Each read that carries the insertion shows its
-inserted sequence there, with its m6A, accessibility and footprints, at the
-same scale as the rest of the view. Reads that don't carry it show a gap.
+holding the inserted bases. Each read of the panel you clicked in that carries
+the insertion shows its inserted sequence there, with its m6A, accessibility
+and footprints, at the same scale as the rest of the view. Reads that don't
+carry it show a gap.
 
 ![An insertion expanded in place: MAT and PAT carriers share one column](../images/pangenome/differences-expanded.png)
 
 - **Every panel shares the column**, so a native panel and the MAT and PAT
   panels stay aligned. The genome coordinates on either side don't change; the
   ruler shades the column and labels it.
+- **Native panels.** An insertion expanded from a lifted panel opens the
+  column in a native panel too, but its reads' inserted bases are not filled
+  in until you click **Associate native layout** on the column's bar (and
+  **Unlink native layout** to undo it). Until then the native reads show a
+  gap whether or not they carry the insertion. Associating matches the native
+  reads' insertions to this column by position and length only; it does not
+  prove they are the same allele.
 - **Matching insertions share one column.** When MAT and PAT both carry an
   insertion at the same place with lengths within 10% (or 3 bp) of each other,
   one column holds both, as wide as the longer one. The label gives both sizes
@@ -70,9 +79,10 @@ same scale as the rest of the view. Reads that don't carry it show a gap.
   dashed grey tail: its calls are never stretched to fit.
 - **An insertion only one haplotype carries** opens on that haplotype's reads;
   the other haplotype's reads show a gap.
-- **The bar at the top of the column** has **×** (collapse), **Identify** (what
-  the inserted sequence is) and, on a lifted panel, **Open in HG002 view** (the
-  source view at the insertion; see [Linked panels](linked-panels.md)).
+- **The bar at the top of the column** has **×** (collapse), **Associate
+  native layout** (above), **Identify** (what the inserted sequence is) and,
+  for a lifted insertion, **Open in HG002 view** (the source view at the
+  insertion; see [Linked panels](linked-panels.md)).
 
 Insertions shorter than 50 bp or longer than 50 kb can't be expanded; the row
 says why. They can still be inspected.
@@ -100,7 +110,7 @@ Right-click a mark for its actions, then the row's own options.
 | **Read-supported edits** | The **Reads** lane: insertions, deletions and replacements found in the loaded reads (off by default). |
 | **Minimum size** | All sizes, ≥10 bp, ≥50 bp or ≥1000 bp. |
 | **Show the table** / **Hide the table** | The difference table, below. |
-| **Insertions on reads** | Off, Ticks or Ticks with size: the marks on the reads themselves. |
+| **Insertions on reads** | Off (the default), Ticks or Ticks with size: marks on the reads themselves. |
 | **Live-lift settings…** | The dataset's settings. |
 
 ![The Differences row's right-click menu](../images/pangenome/differences-menu.png)
@@ -182,6 +192,6 @@ options (they are also in its right-click menu):
 | Assembly differences (the map) | on |
 | Read-supported edits | off |
 | Minimum size | All sizes |
-| Insertions on reads | Ticks |
+| Insertions on reads | Off |
 
 **Save** applies them to every panel of the dataset.

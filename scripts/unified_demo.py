@@ -2,8 +2,8 @@
 """Start FiberBrowser with every pangenome feature turned on, and load demo data.
 
 Turns on, for this server only:
-  * live lift (FIBERBROWSER_LIVE_LIFT=1): lifted datasets, linked source views, the Differences row's
-    assembly lanes;
+  * live lift (on by default; FIBERBROWSER_LIVE_LIFT=1 is set too, for builds where it was opt-in): lifted
+    datasets, linked source views, the Differences row's assembly lanes;
   * the graph helper and a graph package (graph mode on dataset panels, the graph view panel);
   * preview features (Settings > Show preview features), which include the standalone graph view panel.
 

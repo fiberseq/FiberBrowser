@@ -5,7 +5,7 @@
 Live lift and graph mode let you look at reads aligned to a sample's own
 assembly (for example the maternal and paternal haplotypes of HG002) on the
 reference genome, and on a pangenome graph. This page says what to install and
-switch on. The features themselves are described in:
+set up. The features themselves are described in:
 
 - [Live lift](live-lift.md): reads from another assembly drawn on this genome
 - [Linked panels](linked-panels.md): the source assembly beside the lifted view, joined by ribbons
@@ -29,26 +29,19 @@ source (MIT).
 A plain UCSC `.chain` file cannot drive live lift: FiberBrowser reads the
 graphlift map (`gbz2chain` writes the chain and the map together).
 
-## Turning on live lift
+## Live lift is on
 
-<!-- ENABLEMENT: this section is the one place that says how live lift is switched on. The owner may change it
-     (on by default, or an in-app switch). Update this section and the "Turning it on" lines in live-lift.md and
-     graph-mode.md, which link here. -->
+<!-- ENABLEMENT (owner decision, 25 Oct): live lift is on by default; FIBERBROWSER_LIVE_LIFT only turns it off.
+     If this changes again, this section is the one place to update (live-lift.md, linked-panels.md and graph-mode.md
+     do not describe enablement). -->
 
-Live lift is off unless FiberBrowser is started with the environment variable
-`FIBERBROWSER_LIVE_LIFT=1`:
+Live lift needs no setup beyond a lift map: **Open ▾** has **Add live lift…**
+and a BAM panel's **…** menu has **View on another assembly (live lift)…**.
 
-```bash
-FIBERBROWSER_LIVE_LIFT=1 fiberbrowser
-```
-
-With it on, **Open ▾** has **Add live lift…** and a BAM panel's **…** menu has
-**View on another assembly (live lift)…**. With it off, neither item is shown,
-and a saved session that holds a lifted dataset says *Start FiberBrowser with
-FIBERBROWSER_LIVE_LIFT=1 to open it.*
-
-Graph mode works with or without live lift, but lifted datasets (the usual way
-to get haplotype reads onto a graph) need it.
+To turn it off for a server (for example a shared one), start FiberBrowser with
+`FIBERBROWSER_LIVE_LIFT=0`. The two menu items are then hidden, and a saved
+session that holds a lifted dataset says that live lift is turned off on that
+server.
 
 ## Installing the graph helper
 
@@ -101,8 +94,8 @@ in the app. Graph mode on dataset panels (the **Linear ⇄ Graph** pill and
 ## Trying everything at once: the demo launcher
 
 `scripts/unified_demo.py` in a source checkout starts FiberBrowser with all of
-the above switched on, for that server only: live lift, the graph helper and a
-graph package, and preview features. It then loads a sample as a lifted dataset
+the above ready, for that server only: live lift, the graph helper and a graph
+package, and preview features. It then loads a sample as a lifted dataset
 (**Sample A (lifted)**) and, if you give one, the same reads aligned to the
 reference (**Sample A (GRCh38)**).
 
@@ -144,7 +137,7 @@ shared server.
 
 | Symptom | What to check |
 |---|---|
-| No **Add live lift…** in **Open ▾** | FiberBrowser was started without `FIBERBROWSER_LIVE_LIFT=1`. |
+| No **Add live lift…** in **Open ▾** | The server was started with `FIBERBROWSER_LIVE_LIFT=0` (live lift turned off). |
 | *No lift map was found next to this BAM or in the Library* | Put the `.graphlift.json` (with its files) next to the BAM or in its folder, add it to the Library, or type its path in the dialog. |
 | *Cannot read the map* | The file is not a graphlift map (a plain `.chain` is not enough), or the files next to it are missing. |
 | **Graph helper unavailable** | Install `fiberbrowser[graph]`, or set `FIBERBROWSER_GRAPH_HELPER`, then restart. |

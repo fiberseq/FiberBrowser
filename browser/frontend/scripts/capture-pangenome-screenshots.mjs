@@ -19,8 +19,9 @@
  *   --width W          final PNG width (default 1600)
  *
  * Every shot is optional: a failure is logged and the next one is taken. Text that could identify a person or a
- * computer is replaced before each shot: the home folder and the work folder in paths (inputs and text), and
- * sequencing read names (PacBio movie names, UUIDs) in tables, by "read 1", "read 2", ... Check the PNGs anyway.
+ * computer is replaced before each shot: home folders and the work folder in paths (inputs, text and titles),
+ * read names in the inspectors' tables (whatever their format), PacBio movie names and UUIDs anywhere, by
+ * "read 1", "read 2", ... Tooltips are hidden. Check every PNG anyway before committing it.
  */
 import { chromium } from 'playwright';
 import { spawnSync } from 'node:child_process';
@@ -67,7 +68,10 @@ async function redact(page, workDir) {
   await page.evaluate(({ home, work }) => {
     const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const rules = [[new RegExp(esc(work), 'g'), '~/pglift_work'], [new RegExp(esc(home), 'g'), '~'],
-      [/\/private\/(tmp|var)\/[^\s"'<>]*\/(?=pglift_work)/g, '~/']];
+      [/(?:\/Users|\/home|\/data\/home)\/[^/\s"'<>]+/g, '~'],
+      [/\/private\/(tmp|var)\/[^\s"'<>]*\/(?=pglift_work)/g, '~/'],
+      // A safety net for laboratory sample IDs in file names or headers (the demo data is staged under neutral names).
+      [/\bPS0\d{3,}\b/g, 'sample_a']];
     const names = new Map();
     const readName = /\b(m\d{5}[A-Za-z0-9_]*\/\d+\/ccs(?:\/[A-Za-z0-9_]+)*|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/g;
     const fix = s => {
@@ -88,6 +92,13 @@ async function redact(page, workDir) {
       if (v !== el.value) el.value = v;
     }
     for (const el of document.querySelectorAll('[title]')) el.setAttribute('title', fix(el.getAttribute('title')));
+    // Read and molecule names in the inspectors' tables are replaced whatever their format (first column).
+    const tables = '[data-testid="live-lift-diff-popover"] tbody tr, [role="dialog"][aria-label^="Inspect"] tbody tr, '
+      + 'section[aria-label="Molecule calls"] tbody tr, [data-panel-content-type*="insertion"] tbody tr';
+    document.querySelectorAll(tables).forEach((tr, i) => {
+      const cell = tr.querySelector('td');
+      if (cell && cell.firstChild) cell.textContent = `read ${i + 1}`;
+    });
   }, { home: os.homedir(), work: workDir });
 }
 
@@ -214,27 +225,25 @@ async function main() {
     });
 
     // ---------------------------------------------------------------- the Differences row on the split panels
+    // The MAT panel's Differences row: its largest insertion (insertion ticks on reads are off by default).
+    const matInsertion = () => page.locator(`[data-testid="live-lift-diff-strip"][data-panel-id="${mat().id}"] `
+      + '[data-testid="live-lift-diff-item"][data-kind="insertion"]').last();
+
     await take('differences-expanded', async () => {
       await store(page, `s.setState({ fillReadHeight: false, readRowHeight: 8 })`);
       await idle(page, 1000);
-      const c = readCanvas(mat());
-      await page.waitForFunction(el => el?.getAttribute('data-live-lift-badge-target'), await c.elementHandle(), { timeout: 30_000 });
-      const t = JSON.parse(await c.getAttribute('data-live-lift-badge-target'));
-      const scale = await c.evaluate(el => ({ x: el.getBoundingClientRect().width / el.clientWidth, y: el.getBoundingClientRect().height / el.clientHeight }));
-      await c.click({ position: { x: t.x * scale.x, y: t.y * scale.y } });
+      await matInsertion().waitFor({ timeout: 30_000 });
+      await matInsertion().click();
       await page.getByTestId('live-lift-expanded-block').first().waitFor({ timeout: 30_000 });
       await idle(page, 2500);
       await shoot(page, 'differences-expanded');
     });
 
     await take('differences-inspector', async () => {
-      const c = readCanvas(mat());
-      await page.waitForFunction(el => el?.getAttribute('data-live-lift-badge-target'), await c.elementHandle(), { timeout: 30_000 });
-      const t = JSON.parse(await c.getAttribute('data-live-lift-badge-target'));
-      const scale = await c.evaluate(el => ({ x: el.getBoundingClientRect().width / el.clientWidth, y: el.getBoundingClientRect().height / el.clientHeight }));
-      await c.click({ position: { x: t.x * scale.x, y: t.y * scale.y }, modifiers: ['ControlOrMeta'] });
+      await matInsertion().click({ modifiers: ['ControlOrMeta'] });
       const inspector = page.getByTestId('live-lift-diff-popover');
-      await inspector.locator('tbody tr').first().waitFor({ timeout: 60_000 });
+      await inspector.waitFor({ timeout: 30_000 });
+      await inspector.locator('tbody tr').first().waitFor({ timeout: 60_000 }).catch(() => {});
       await inspector.getByRole('button', { name: 'Load molecule calls', exact: true }).click().catch(() => {});
       await page.getByTestId('difference-molecule-counts').waitFor({ timeout: 60_000 }).catch(() => {});
       await sleep(1000);
@@ -348,14 +357,17 @@ async function main() {
       const reads = sv.locator(`[data-panel-id="${nat.id}"] canvas[data-copilot-track="reads"]`).first();
       const sidebar = Number(await reads.getAttribute('data-track-sidebar')) || 0;
       const at = await store(sv, `const st = s.getState(); return { start: st.start, end: st.end };`);
+      // The SV clusters in view, as the Variants panel asks for them (POST /api/variants/svs).
       const pos = await sv.evaluate(async ({ ds, chrom, start, end }) => {
-        const r = await fetch(`/api/sv/summary?${new URLSearchParams({ dataset_id: ds, chrom, start: String(start), end: String(end) })}`);
+        const r = await fetch('/api/variants/svs', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dataset_id: ds, chrom, start: Math.floor(start), end: Math.ceil(end), min_len: 50, include_duplicates: false }) });
         if (!r.ok) return null;
         const j = await r.json();
-        const ins = (j.clusters ?? j.svs ?? []).filter(c => c.t === 'I').sort((a, b) => (b.support ?? 0) - (a.support ?? 0))[0];
-        return ins ? ins.ref ?? ins.pos : null;
+        const ins = (j.clusters ?? []).filter(c => c.t === 'I').sort((a, b) => (b.support ?? 0) - (a.support ?? 0))[0];
+        return ins ? ins.ref : null;
       }, { ds: nat.ds, chrom: AT.chrom, start: at.start, end: at.end });
-      const p = pos ?? 128_657_000;
+      if (pos == null) throw new Error('no insertion on the native row in view');
+      const p = pos;
       return { x: box.x + sidebar + ((p - at.start) / (at.end - at.start)) * (box.width - sidebar), y: box.y + box.height / 2 };
     };
 

@@ -36,8 +36,7 @@ Setting up is described in
   - a **lifted dataset**: reads aligned to a sample's own assembly and viewed on
     the reference through a lift map (**Open → Add live lift…**; see
     [Live lift](live-lift.md)). Each haplotype's reads are drawn on that
-    haplotype's lane. Live lift has to be switched on when FiberBrowser starts
-    ([how](pangenome-setup.md#turning-on-live-lift));
+    haplotype's lane;
   - a **native dataset**: reads aligned to the reference the graph is built on.
     Its reads are drawn on the reference lane.
 

@@ -2,10 +2,9 @@
 
 ## Unreleased
 
-Everything since 3.0.1. Live lift (and so linked panels, the assembly lanes of
-the Differences row and lifted graph bands) is switched on with
-`FIBERBROWSER_LIVE_LIFT=1`; graph mode needs the graph helper and a graph
-package. See [Setting up live lift and graph mode](docs/workflows/pangenome-setup.md).
+Everything since 3.0.1. Live lift is on by default
+(`FIBERBROWSER_LIVE_LIFT=0` turns it off for a server); graph mode needs the
+graph helper and a graph package. See [Setting up live lift and graph mode](docs/workflows/pangenome-setup.md).
 Maps, graph packages and the helper are made with
 [graphlift](https://github.com/mtcicero26/graphlift).
 
@@ -25,10 +24,11 @@ Maps, graph packages and the helper are made with
   connectors across gaps. **Hatching** on the coverage track marks stretches
   with no counterpart on the haplotype, so they don't look like stretches with
   no reads.
-- **Insertions on reads**: a tick where a read has bases the reference lacks.
-  **Off**, **Ticks** (the default) or **Ticks with size**. Ticks stay visible at
-  every row height; this fixes insertion badges that showed on one haplotype
-  only at some window sizes.
+- **Insertions on reads**: optional ticks where a read has bases the reference
+  lacks: **Off** (the default; the Differences row shows the insertions),
+  **Ticks** or **Ticks with size**, from the row's right-click menu or the
+  settings. Ticks stay visible at every row height; this fixes insertion badges
+  that showed on one haplotype only at some window sizes.
 - **Supplementary alignments**: **Own rows** (the default), **On the primary's
   row** or **Hide**.
 - **Live-lift settings…** (display, the Differences row and how lifted reads
@@ -98,8 +98,8 @@ Maps, graph packages and the helper are made with
   outlines. Saved splits keep the choices they were made with.
 - The conflicting-clip rule is set under **Settings › Read Filters ›
   Structural variants › Advanced carrier evidence**.
-- Counts agree everywhere: one molecule per variant, with one 10 bp evidence
-  floor whatever the display cutoff. Molecules that align near a variant only
+- Counts follow the same rules everywhere: one molecule per variant, with one
+  10 bp evidence floor whatever the display cutoff. Molecules that align near a variant only
   through supplementary alignments are recovered. Replacements are trimmed to
   their real size, and equivalent breakpoints in repeats count as one variant.
 - The SVs tab counts read *N confirmed of M informative reads* (was *N carriers
@@ -145,6 +145,10 @@ Maps, graph packages and the helper are made with
   the lift (source → target, graph).
 
 ### Clustering and analysis
+
+- **No MAPQ filter by default.** Analyses and the conflicting-clip rule no
+  longer drop reads below MAPQ 20 unless you set a minimum; the minimum stays
+  available where it was.
 
 - Cluster assignment counts only positions a read covers, breaks ties the same
   way every time, and no longer depends on read order.
