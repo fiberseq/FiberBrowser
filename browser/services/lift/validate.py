@@ -164,16 +164,27 @@ def _check_anchors(handle, out, target_fasta, source_fasta):
                     k += 1
                 if t + n - pos >= 200:
                     candidates.append((ci, pos, q + pos - t, t + n - pos))
-        if not candidates:
-            out.anchors = {"status": "not checked", "message": "Anchor sequences not checked: no anchor blocks >= 200 bp."}
-            return
-        n = min(16, len(candidates))
-        chosen = [candidates[i * (len(candidates) - 1) // max(1, n - 1)] for i in range(n)]
         # Open read-only: never build an index beside a user's reference.
         if not os.path.isfile(source_fasta + ".fai"):
             raise ValueError("source FASTA needs a .fai index (run samtools faidx first)")
         with pysam.FastaFile(source_fasta) as source:
-            for ci, t, q, length in chosen:
+            # Only contigs both FASTAs hold (a reference or source FASTA of some chromosomes is fine), and only
+            # anchors whose bases both know: an N-masked or partial assembly cannot fail on bases it lacks.
+            target_names, source_names = set(target_fasta.references), set(source.references)
+            candidates = [c for c in candidates
+                          if handle.manifest["targets"][handle.map.chains[c[0]]["target"]]["name"] in target_names
+                          and handle.manifest["sources"][handle.map.chains[c[0]]["source"]]["name"] in source_names]
+            if not candidates:
+                out.anchors = {"status": "not checked", "message": "Anchor sequences not checked: no anchor blocks >= 200 bp on contigs both FASTAs hold."}
+                return
+            step = max(1, len(candidates) // 64)
+            ordered = candidates[::step] + [c for i, c in enumerate(candidates) if i % step]
+            n, tried = 0, 0
+            for ci, t, q, length in ordered:
+                if n >= 16 or tried >= 2000:
+                    break
+                tried += 1
+                length = min(length, 2000)
                 chain = handle.map.chains[ci]
                 target_name = handle.manifest["targets"][chain["target"]]["name"]
                 src = handle.manifest["sources"][chain["source"]]
@@ -182,12 +193,18 @@ def _check_anchors(handle, out, target_fasta, source_fasta):
                 b = source.fetch(src["name"], q0, q1).upper()
                 if chain["strand"] == "-":
                     b = revcomp(b)
+                if "N" in a or "N" in b:
+                    continue
+                n += 1
                 if len(a) != length or len(b) != length or a != b:
                     message = (f"Anchor sequence mismatch: {target_name}:{t}-{t + length} and "
                                f"{src['name']}:{q0}-{q1} ({chain['strand']}) in {source_fasta}.")
                     out.errors.append(message)
                     out.anchors = {"status": "mismatch", "message": message}
                     return
+        if not n:
+            out.anchors = {"status": "not checked", "message": "Anchor sequences not checked: every sampled anchor has unknown (N) bases."}
+            return
         out.anchors = {"status": "consistent", "checked": n,
                        "message": f"Anchor sequences consistent ({n} blocks >= 200 bp checked); this is a spot check, not proof of assembly identity."}
     except (OSError, ValueError, KeyError) as exc:

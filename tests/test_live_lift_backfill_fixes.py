@@ -73,3 +73,27 @@ def test_source_budget_scales_with_haplotypes(haps, bp, ok):
     else:
         with pytest.raises(ll.LiftRefused):
             ll.plan_fetch(selection, ll.LiftSettings())
+
+
+def test_anchor_check_skips_contigs_and_bases_a_fasta_lacks(tmp_path):
+    """A source FASTA of some contigs, or N-masked outside a window, is not an anchor mismatch."""
+    import pysam
+    from services.lift.validate import validate_live_lift
+    from test_differences_comparison import build, CHROM
+    state, ds, files = build(tmp_path)
+    mat, pat = files["mat"], files["pat"]
+
+    def fasta(name, entries):
+        path = tmp_path / name
+        path.write_text("".join(f">{n}\n{s}\n" for n, s in entries))
+        pysam.faidx(str(path))
+        return str(path)
+    mat_only = fasta("mat_only.fa", [("chrC_MATERNAL", mat)])
+    masked = fasta("masked.fa", [("chrC_MATERNAL", "N" * len(mat)), ("chrC_PATERNAL", "N" * len(pat))])
+    wrong = fasta("wrong.fa", [("chrC_MATERNAL", mat[::-1]), ("chrC_PATERNAL", pat[::-1])])
+    handle = ds.live_lift.handle
+    for path, status in ((mat_only, "consistent"), (masked, "not checked")):
+        result = validate_live_lift(handle, ds.paths, ds.live_lift.haplotypes, target_fasta=state.fasta, source_fasta=path)
+        assert result.ok and result.anchors["status"] == status, result.anchors
+    result = validate_live_lift(handle, ds.paths, ds.live_lift.haplotypes, target_fasta=state.fasta, source_fasta=wrong)
+    assert not result.ok and result.anchors["status"] == "mismatch"
