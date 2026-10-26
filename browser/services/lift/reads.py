@@ -160,6 +160,10 @@ def keep_interval(interval, offset, width, call=None):
 
 def _kept(intervals, offset, width, calls=()):
     """Indices the broad-cache projection keeps (working_sets._project_*_intervals)."""
+    from services.working_sets import _column_view
+    column = _column_view(intervals, offset, width, calls)
+    if column is not None:  # an IntColumn (read row format 2): the same rule on its array
+        return column[0].tolist()
     kept = []
     for i, iv in enumerate(intervals or ()):
         if keep_interval(iv, offset, width, calls[i] if i < len(calls) else None):
