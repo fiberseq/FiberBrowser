@@ -38,6 +38,8 @@ from operator import itemgetter
 
 import numpy as np
 
+from services.read_columns import read_only, wrap
+
 _SHIFT = 1 << 40
 _first = itemgetter(0)
 # Intervals, calls and marks (times the rows that map them) per batch: bounds
@@ -469,10 +471,12 @@ def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts, small):
         if not items[int(P_d[j])][2].has_aligned(int(call[1]), int(call[2])):
             keys[j] = [int(call[1]), int(call[1])]  # insertion-only: its own molecular start
     ids = [UIDS[j] for j in P_u.tolist()]
-    mapped = np.stack([P_c0, P_c1, USZ[P_u]], axis=1).tolist()
+    # Mapped intervals stay one window array; each group gets a read-only
+    # slice of it (``read_columns.IntColumn``, read row format 2), never Python lists.
+    mapped = read_only(np.stack([P_c0, P_c1, USZ[P_u]], axis=1))
     cols = (P_c0, P_c1, P_i, P_k)
     bounds = np.searchsorted(P_seg, np.arange(nseg + 1, dtype=np.int64)).tolist()
-    _top_level(items, rows, row_read, segs, F, USZ, seg_ustart, P_seg, P_c0, P_c1, P_i, fg, bounds, ctx)
+    _top_level(items, rows, row_read, segs, F, USZ, seg_ustart, P_seg, P_c0, P_c1, P_i, fg, bounds, ctx, mapped)
     s = 0
     for row, u in targets:
         if not u.ivs:
@@ -481,31 +485,34 @@ def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts, small):
         lo, hi = bounds[s], bounds[s + 1]
         s += 1
         if u.calls:
-            row._pre.groups[u.name] = (LazyParts(cols, lo, hi), mapped[lo:hi], ids[lo:hi], keys[lo:hi])
+            row._pre.groups[u.name] = (LazyParts(cols, lo, hi), wrap(mapped[lo:hi]), ids[lo:hi], keys[lo:hi])
         else:  # no calls: no identity (_call_identity)
-            row._pre.groups[u.name] = (LazyParts(cols, lo, hi), mapped[lo:hi], [None] * (hi - lo), [None] * (hi - lo))
+            row._pre.groups[u.name] = (LazyParts(cols, lo, hi), wrap(mapped[lo:hi]), [None] * (hi - lo),
+                                       [None] * (hi - lo))
     for r, row, u in segs:
         top = row._pre.intervals
         if u.name == "intervals" and top is not None:  # the top-level intervals in display order (_top_level)
-            _lo, order, gaps, ranks = top
+            shown, order, ranks = top
             group = row._pre.groups["intervals"]
-            combined = group[1] + gaps
-            extra = [None] * len(gaps)
+            extra = [None] * (len(order) - len(group[2]))
             quals = items[row_read[r]][0].get("qualities") or []
-            row._pre.intervals = (list(map(combined.__getitem__, order)),
+            row._pre.intervals = (shown,
                                   list(map((group[2] + extra).__getitem__, order)),
                                   list(map((group[3] + extra).__getitem__, order)),
                                   list(map(quals.__getitem__, ranks)) if quals else None)
 
 
-def _top_level(items, rows, row_read, segs, F, USZ, seg_ustart, P_seg, P_c0, P_c1, P_i, fg, bounds, ctx):
+def _top_level(items, rows, row_read, segs, F, USZ, seg_ustart, P_seg, P_c0, P_c1, P_i, fg, bounds, ctx, mapped):
     """The top-level intervals of each row as ``_row_payload`` lays them out:
     footprint parts plus the gaps between whole calls inside each span
     (``_logical`` + ``_gaps``), sorted by ``(start, end, index)``, with their
     qualities. Only rows whose read has no ``sv`` (no deletion cuts) and whose
     calls each map to one part per span (so each logical call is one part);
     ``row._pre.intervals`` is left None for the others. Sets it to
-    ``(lo, order, gaps, quality ranks)``; ``_map_units`` turns that into lists."""
+    ``(intervals, order, quality ranks)``: the intervals (``IntColumn``, a
+    slice of one window array of parts and gaps in display order) and the
+    index of each in ``mapped`` + gaps, from which ``_map_units`` orders the
+    call lists."""
     RS0, WID, hide = F.row_rs0, F.row_width, ctx.hide_terminal_gaps
     nseg = len(segs)
     if not nseg or F.max_width >= (1 << 31):
@@ -582,7 +589,7 @@ def _top_level(items, rows, row_read, segs, F, USZ, seg_ustart, P_seg, P_c0, P_c
     seg_of_row = np.full(len(rows), -1, dtype=np.int64)
     seg_of_row[seg_row[ok]] = np.flatnonzero(ok)
     g_seg = seg_of_row[st_row[g_st]]
-    gaps = np.stack([k0, k1, size], axis=1).tolist()
+    gaps = np.stack([k0, k1, size], axis=1)
     gb = np.searchsorted(g_seg, np.arange(nseg + 1, dtype=np.int64)).tolist()
     # Display order of parts + gaps per segment: (start, end, index), gaps after parts.
     pb = np.asarray(bounds, dtype=np.int64)
@@ -613,11 +620,17 @@ def _top_level(items, rows, row_read, segs, F, USZ, seg_ustart, P_seg, P_c0, P_c
                      dtype=np.int64, count=nseg)
     qual_ok = is_part & positive[ustart + pi] & (rk < nq[e_seg])
     rk_l = np.where(qual_ok, rk, -1).tolist()
+    # The displayed intervals of every eligible row, in order, in one array.
+    shown = np.empty((len(e_j), 3), dtype=np.int64)
+    at = np.flatnonzero(is_part)
+    shown[at] = mapped[pb[e_seg[at]] + e_j[at]]
+    at = np.flatnonzero(~is_part)
+    shown[at] = gaps[gfirst[e_seg[at]] + (e_j[at] - n_p[e_seg[at]])]
+    read_only(shown)
     for j in np.flatnonzero(ok).tolist():
         row = segs[j][1]
         a, b = eb[j], eb[j + 1]
-        row._pre.intervals = (bounds[j], order_all[a:b], gaps[gb[j]:gb[j + 1]],
-                              [x for x in rk_l[a:b] if x >= 0])
+        row._pre.intervals = (wrap(shown[a:b]), order_all[a:b], [x for x in rk_l[a:b] if x >= 0])
 
 
 # ── Point marks ─────────────────────────────────────────────────────────────
@@ -691,10 +704,10 @@ def _map_point_fields(items, rows, row_read, F, base, ctx, fields, small):
         rel = F.base_t(kg, x) - RS0[E_r]
         keep = hit & (rel >= 0) & (rel < WID[E_r])
         packed = np.sort((E_seg[keep] << 32) | rel[keep])
-    marks = (packed & 0xFFFFFFFF).tolist()
+    marks = read_only(packed & 0xFFFFFFFF)
     bounds = np.searchsorted(packed, np.arange(nseg + 1, dtype=np.int64) << 32).tolist()
     for s, (row, key) in enumerate(targets):
-        row._pre.points[key] = (marks[bounds[s]:bounds[s + 1]], dropped[s])
+        row._pre.points[key] = (wrap(marks[bounds[s]:bounds[s + 1]]), dropped[s])
 
 
 # ── Molecular spans ─────────────────────────────────────────────────────────

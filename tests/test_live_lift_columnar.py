@@ -1,17 +1,28 @@
 """The composer's window-wide columnar pass (compose_columns) gives exactly the
 rows of the per-row functions it replaces: random pieces and decoded reads,
 composed with the pass and with it switched off, must match value for value
-and type for type (dict key order included)."""
+and type for type (dict key order included; an ``IntColumn`` of the pass
+counts as the list it stands for)."""
 import copy
 import random
 
+import numpy as np
 import pytest
 
 from services.lift import compose
+from services.read_columns import IntColumn
 from services.lift import live_lift as ll
 
 
 def _same(x, y, path="$"):
+    # Read row format 2: a column stands for the list (int64, Python ints back).
+    if type(x) is IntColumn:
+        assert x.array.dtype == np.int64, f"{path}: column dtype {x.array.dtype}"
+        assert type(y) is list, f"{path}: column != {type(y).__name__}"
+        x = x.tolist()
+    if type(y) is IntColumn:
+        assert type(x) is list, f"{path}: {type(x).__name__} != column"
+        y = y.tolist()
     assert type(x) is type(y), f"{path}: {type(x).__name__} != {type(y).__name__}"
     if isinstance(x, dict):
         assert list(x) == list(y), f"{path}: keys {list(x)} != {list(y)}"

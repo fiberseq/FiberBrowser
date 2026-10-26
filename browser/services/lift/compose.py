@@ -47,6 +47,7 @@ from contextlib import ExitStack
 import numpy as np
 
 from services.lift.compose_columns import LazyParts, precompute
+from services.read_columns import IntColumn
 
 _COMPLEMENT = str.maketrans("ACGTNRYKMSWBDHVacgtnrykmswbdhv", "TGCANYRMKSWVHDBtgcanyrmkswvhdb")
 # Left/right quality tracks that trade places when intervals reverse (bam_tags.parse_ma_aq_tags_into_layers).
@@ -1000,6 +1001,8 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
         if quals_out is not None:
             payload["qualities"] = quals_out
     else:
+        if type(mapped) is IntColumn:  # a columnar group on a row laid out here (deletion cuts)
+            mapped = mapped.tolist()
         quals = read.get("qualities") or []
         rank, n = {}, 0
         for i, iv in enumerate(ivs):
@@ -1361,19 +1364,31 @@ def _infer_legacy(read, layers, payload, parts, mapped, ids, keys, logical, cuts
             if len(iv) > 2 and iv[2] > 0:
                 rank[i] = n
                 n += 1
-        order = sorted((j for j, iv in enumerate(mapped) if iv[2] > 0), key=lambda j: (mapped[j][0], mapped[j][1], j))
+        column = mapped.array if type(mapped) is IntColumn else None
+        if column is not None:
+            # The same order, selection and intervals from the group's array.
+            pos = np.flatnonzero(column[:, 2] > 0)
+            order_a = pos[np.lexsort((pos, column[pos, 1], column[pos, 0]))]
+            big = column[order_a, 2] >= ctx.nuc_min_size
+        else:
+            order = sorted((j for j, iv in enumerate(mapped) if iv[2] > 0), key=lambda j: (mapped[j][0], mapped[j][1], j))
         for name, wanted, keep in (("nuc", infer_nuc, lambda s: s >= ctx.nuc_min_size),
                                    ("tf", infer_tf, lambda s: s < ctx.nuc_min_size)):
             if not wanted:
                 continue
-            sel = [j for j in order if keep(mapped[j][2])]
+            if column is not None:
+                picked = order_a[big] if name == "nuc" else order_a[~big]
+                sel = picked.tolist()
+            else:
+                sel = [j for j in order if keep(mapped[j][2])]
             if not sel:
                 continue
             names, tracks = [], []
             if ctx.layer_qualities:
                 if quals:
                     names.append("nq")
-                    tracks.append([quals[rank[parts[j][2]]] if parts[j][2] in rank else 0 for j in sel])
+                    index = parts.index() if isinstance(parts, LazyParts) else [part[2] for part in parts]
+                    tracks.append([quals[rank[index[j]]] if index[j] in rank else 0 for j in sel])
                 if edge:
                     lq = [edge.get(ids[j], [0, 0])[0] for j in sel]
                     rq = [edge.get(ids[j], [0, 0])[1] for j in sel]
@@ -1381,8 +1396,9 @@ def _infer_legacy(read, layers, payload, parts, mapped, ids, keys, logical, cuts
                         lq, rq = rq, lq
                     names += ["lq", "rq"]
                     tracks += [lq, rq]
-            layers[name] = {"intervals": [mapped[j] for j in sel], "qualities": tracks or None,
-                            "quality_names": names}
+            layers[name] = {"intervals": (IntColumn(column[picked]) if column is not None
+                                          else [mapped[j] for j in sel]),
+                            "qualities": tracks or None, "quality_names": names}
             call_ids[f"layer:{name}"] = [ids[j] for j in sel]
             call_parts[f"layer:{name}"] = [keys[j] for j in sel]
     if infer_msp:

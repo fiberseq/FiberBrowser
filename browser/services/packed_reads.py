@@ -9,6 +9,7 @@ from collections import OrderedDict
 import threading
 import numpy as np
 from services.background_work import checkpoint
+from services.read_columns import IntColumn
 from contextlib import contextmanager
 from contextvars import ContextVar
 
@@ -60,6 +61,20 @@ def compact_read_bounds(read, viewport_start=None, viewport_end=None, include=No
     lo = hi = None
     groups = [intervals for name, intervals in read_geometry_groups(read) if include is None or include(name)]
     for group in groups:
+        if type(group) is IntColumn and group.width is not None and group.width >= 2:
+            # Read row format 2: the same extent from the column's array.
+            arr = group.array
+            starts, ends = arr[:, 0], arr[:, 1]
+            if viewport_start is not None:
+                keep = (ends > viewport_start) & (starts < viewport_end)
+                starts, ends = starts[keep], ends[keep]
+            if len(starts):
+                a, b = int(starts.min()), int(ends.max())
+                if lo is None or a < lo:
+                    lo = a
+                if hi is None or b > hi:
+                    hi = b
+            continue
         for interval in group:
             if len(interval) < 2:
                 continue
@@ -71,6 +86,17 @@ def compact_read_bounds(read, viewport_start=None, viewport_end=None, include=No
             if hi is None or end > hi:
                 hi = end
     return None if lo is None else (lo, hi)
+
+
+def _positive_spans(group):
+    """``(start, end)`` of a group's non-empty intervals, sorted."""
+    if type(group) is IntColumn and group.width is not None and group.width >= 2:
+        arr = group.array
+        keep = arr[:, 1] > arr[:, 0]
+        starts, ends = arr[keep, 0], arr[keep, 1]
+        order = np.lexsort((ends, starts))
+        return list(zip(starts[order].tolist(), ends[order].tolist()))
+    return sorted((int(iv[0]), int(iv[1])) for iv in group if len(iv) >= 2 and iv[1] > iv[0])
 
 
 def _merge_sorted(intervals):
@@ -328,7 +354,7 @@ class ReadDisplayIndex:
                 checkpoint()
             intervals = []
             for name, group in read_geometry_groups(read):
-                own = sorted((int(iv[0]), int(iv[1])) for iv in group if len(iv) >= 2 and iv[1] > iv[0])
+                own = _positive_spans(group)
                 if not own:
                     continue
                 gid = group_names.setdefault(name, len(group_names))
