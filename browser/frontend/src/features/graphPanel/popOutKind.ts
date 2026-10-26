@@ -137,8 +137,9 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
   const oneHap = liftHapLabels(st.datasets.find(d => d.id === from.datasetId)?.live_lift).length === 1;
   const hapOnly = (oneHap || (Boolean(from.liftHap) && (from.liftHap ?? '').toUpperCase() === (to.liftLink?.hapLabel ?? '').toUpperCase()))
     && from.datasetId === to.liftLink?.datasetId && !(from.strand && to.strand && from.strand !== to.strand);
-  /** A map of the member's labels as this source's QNAME labels (null: none of them are this source's for sure). */
-  const project = (labels: Record<string, number> | undefined, provs: GraphProvenance[]): Record<string, number> | null => {
+  /** A map of the member's labels as this source's QNAME labels, within the reads the source shows (`scope`: its
+   * filter; null: none of them are this source's for sure, or none is in scope). */
+  const project = (labels: Record<string, number> | undefined, provs: GraphProvenance[], scope: ReadonlySet<string> | null): Record<string, number> | null => {
     if (!labels || !Object.keys(labels).length) return null;
     let mine: Record<string, number> | null = null;
     if (provenanceCovers(provs, labels)) {
@@ -146,7 +147,7 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
       mine = provenanceShare(provs, labels, o => picked.has(o.id));
     } else if (hapOnly) mine = labels;
     if (!mine) return null;
-    const byName = sourceLabels({ assignments: { m: mine } }, ['m']);
+    const byName = sourceLabels({ assignments: { m: mine } }, ['m'], scope);
     return Object.keys(byName).length ? byName : null;
   };
   const active = st.activeClusterTreeNodeId && st.clusterTreeNodes[st.activeClusterTreeNodeId] ? st.activeClusterTreeNodeId : null;
@@ -156,7 +157,10 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
     // Live clusters: the member's share; labels the source already has (the current run's, just now) stay only while
     // they agree with it. A source clustered on its own keeps its clusters, order, focus and names untouched.
     let live = cur.clusterAssignments[tk];
-    const got = project(cur.clusterAssignments[fk], active ? provenanceLineage(cur, fk, active) : liveProvenance(cur, fk));
+    // Only reads its filter keeps get a label, so the labels never scope away the reads it shows (Codex post-merge
+    // review, group A round 1, #3).
+    const scope = cur.filteredReadIds[tk]?.size ? new Set([...cur.filteredReadIds[tk]!].map(qnameOfId)) : null;
+    const got = project(cur.clusterAssignments[fk], active ? provenanceLineage(cur, fk, active) : liveProvenance(cur, fk), scope);
     const had = Boolean(live && Object.keys(live).length);
     // Its own: labels no graph run gave it, even when their numbers equal the member's (Codex post-merge review,
     // group A round 1, #2).
@@ -166,7 +170,9 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
     if (!had && got) { live = got; patch.clusterAssignments = { ...cur.clusterAssignments, [tk]: got }; }
     const labelled = Boolean(live && Object.keys(live).length);
     const order = labelled && cur.clusterOrder[fk]?.length ? [...cur.clusterOrder[fk]] : cur.clusterOrder[tk];
-    const focus = labelled && cur.clusterFocus[fk]?.size ? new Set(cur.clusterFocus[fk]!) : cur.clusterFocus[tk] ?? null;
+    // The member's focus only on groups the source has (none: it keeps its own).
+    const inherited = labelled ? focusOn(cur.clusterFocus[fk], live!) : null;
+    const focus = inherited ? new Set(inherited) : cur.clusterFocus[tk] ?? null;
     const groupNames = labelled && cur.clusterGroupLabels?.[fk] && Object.keys(cur.clusterGroupLabels[fk]).length
       ? { ...cur.clusterGroupLabels[fk], ...(cur.clusterGroupLabels?.[tk] ?? {}) } : cur.clusterGroupLabels?.[tk];
     if (labelled) {
@@ -185,16 +191,25 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
         continue;
       }
       if (!n.assignments?.[fk] || (n.assignments[tk] && Object.keys(n.assignments[tk]).length)) continue;
-      const got = project(n.assignments[fk], provenanceLineage(cur, fk, nid));
+      const got = project(n.assignments[fk], provenanceLineage(cur, fk, nid), scope);
       if (!got) continue;
+      const nodeFocus = focusOn(n.focus?.[fk], got);
       nodes[nid] = { ...n, assignments: { ...n.assignments, [tk]: got },
         order: n.order?.[fk] ? { ...n.order, [tk]: [...n.order[fk]] } : n.order,
-        focus: n.focus?.[fk] ? { ...n.focus, [tk]: [...n.focus[fk]!] } : n.focus,
+        focus: nodeFocus ? { ...n.focus, [tk]: nodeFocus } : n.focus,
         ...(n.groupLabels?.[fk] ? { groupLabels: { ...n.groupLabels, [tk]: { ...n.groupLabels[fk] } } } : {}) };
     }
     if (Object.keys(nodes).length) patch.clusterTreeNodes = { ...cur.clusterTreeNodes, ...nodes };
     return patch;
   });
+}
+
+/** The focused groups a label map has (null: none of them). */
+function focusOn(focus: Iterable<number> | null | undefined, labels: Record<string, number>): number[] | null {
+  if (!focus) return null;
+  const have = new Set(Object.values(labels));
+  const kept = [...focus].filter(c => have.has(c));
+  return kept.length ? kept : null;
 }
 
 /** Whether a source view's labels are the current graph run's (it is one of the run's destinations). */

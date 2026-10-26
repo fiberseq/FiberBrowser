@@ -17,6 +17,7 @@ import { mirroredSelections } from './selectionSync';
 import { popOutPaths, seedSourceState, setPopOutKind } from './popOutKind';
 import type { GraphBinding, GraphReadBinding, GraphRegistration } from './types';
 import type { PanelConfig } from '../../types';
+import { clusteredReadIdSet, filterReadsByReadIdSet } from '../../components/tracks/read-track/readFilter';
 
 registerGraphPanel();
 
@@ -289,6 +290,45 @@ describe('a linked source panel is a destination of graph runs', () => {
     expect(st.clusterOrder[key]).toEqual([1, 0]);
     expect([...st.clusterFocus[key]!]).toEqual([1]);
     expect(st.clusterGroupLabels[key]).toEqual({ 1: 'mine' });
+  });
+
+  it('post-merge A1 #3: a reopened source view with its own filter takes no labels for the reads it filters out, so its own reads stay shown', async () => {
+    seed([...split(), source('srcP', '2', 'PAT', { collapsed: true })]);
+    const key = 'srcP~lift-source';
+    useBrowserStore.setState({ filteredReadIds: { [key]: new Set(['q3']) } } as never);
+    setPanelViewMode('mat', 'graph');
+    const p = plan();
+    const pat = p.observations.find(o => o.binding === 'pat')!.id;
+    commitGraphRun(useBrowserStore.getState(), p, response({ [pat]: { assignments: { [aid('q1')]: 0, [aid('q2')]: 1 } } }));
+    setPopOutKind('mat', 'source');
+    popOutPaths('mat', ['pat']);
+    await new Promise(r => setTimeout(r, 0));
+    const st = useBrowserStore.getState();
+    expect([...st.filteredReadIds[key]!]).toEqual(['q3']);
+    expect(Object.keys(st.clusterAssignments[key] ?? {})).toEqual([]);
+    const shown = filterReadsByReadIdSet(filterReadsByReadIdSet([{ id: 'q3' }], st.filteredReadIds[key]), clusteredReadIdSet(st.clusterAssignments[key] ?? {}));
+    expect(shown).toEqual([{ id: 'q3' }]);
+  });
+
+  it('post-merge A1 #3: seeding scopes the live labels and every tree node\'s to the source\'s filter, and keeps focus only on groups it has', () => {
+    seed([...split(), source('srcP', '2', 'PAT')]);
+    const key = 'srcP~lift-source';
+    const node = (id: string, parentId: string | null, assignments: Record<string, number>, order: number[], focus: number[] | null) => ({
+      id, parentId, name: id, createdAt: 0, chrom: 'chr3', start: 128_650_000, end: 128_660_000, sourceClusterIds: [], clusterMethod: 'kmeans', clusterK: 2,
+      subnucleosomalThreshold: 0, accessibilityThreshold: 0, peakRegions: [], selectedPeakIndices: [], peakModes: {}, patterns: {}, dynamicClustering: false,
+      assignments: { 'k-pat': assignments }, order: { 'k-pat': order }, focus: { 'k-pat': focus } });
+    const rootLabels = { [aid('q1')]: 0, [aid('q2')]: 1 }, childLabels = { [aid('q1')]: 3, [aid('q2')]: 4 };
+    useBrowserStore.setState({ clusterTreeNodes: { r: node('r', null, rootLabels, [0, 1], [1]), c: node('c', 'r', childLabels, [4, 3], [4]) },
+      clusterTreeRootIds: ['r'], activeClusterTreeNodeId: 'c', clusterAssignments: { 'k-pat': childLabels }, clusterOrder: { 'k-pat': [4, 3] },
+      clusterFocus: { 'k-pat': new Set([4]) }, filteredReadIds: { [key]: new Set(['q1']) } } as never);
+    seedSourceState('pat', 'srcP');
+    const st = useBrowserStore.getState();
+    expect(st.clusterAssignments[key]).toEqual({ q1: 3 });
+    expect(st.clusterFocus[key] ?? null).toBeNull();
+    expect(st.clusterTreeNodes.r.assignments[key]).toEqual({ q1: 0 });
+    expect(st.clusterTreeNodes.r.focus[key] ?? null).toBeNull();
+    useBrowserStore.getState().applyClusterTreeNode('r');
+    expect(useBrowserStore.getState().clusterAssignments[key]).toEqual({ q1: 0 });
   });
 });
 
