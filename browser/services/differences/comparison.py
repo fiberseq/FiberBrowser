@@ -191,7 +191,8 @@ def assembly_comparison(state, dataset, *, chrom, start, end, reads=(), read_seq
     radius = max(matching_policy.broad_anchor_bp, policy.diagnostic_flank_bp)
     widest = max([0, *(max(r["ref_end"] - r["ref_start"], r["alt_bp"]) for r in reads)])
     pad = int(max(radius, matching_policy.broad_anchor_fraction * widest)) + radius
-    all_items = assembly_items_for_region(config, chrom, max(0, start - pad), end + pad)
+    fetched = (max(0, start - pad), end + pad)
+    all_items = assembly_items_for_region(config, chrom, *fetched)
     context = [i for i in all_items if i["kind"] in CONTEXT_KINDS]
     local_all = [i for i in all_items if i["kind"] in LOCAL_KINDS]   # every local edit, including sub-floor SNVs
     items = [i for i in local_all if max(i["ref_bp"], i["alt_bp"]) >= policy.evidence_floor_bp]
@@ -277,10 +278,11 @@ def assembly_comparison(state, dataset, *, chrom, start, end, reads=(), read_seq
         seq = read_sequences.get(rid)
         if seq is not None:
             seq = seq.upper()
-            if len(seq) > policy.max_allele_bp or any(c not in "ACGTN" for c in seq):
-                raise ValueError("read sequences must be at most max_allele_bp bases of ACGTN")
+            if len(seq) > policy.max_allele_bp or any(c not in "ACGTNYR" for c in seq):
+                raise ValueError("read sequences must be at most max_allele_bp bases of ACGTNYR")
             a = len(seq)
-        complete = a == 0 or (seq is not None and "N" not in seq)
+        # N, and DAF Y/R left in a majority consensus, are unknown bases: no exact identity from them.
+        complete = a == 0 or (seq is not None and not any(c in "NYR" for c in seq))
         alt = "" if a == 0 else seq if complete else None
         kind = "deletion" if a == 0 else "insertion" if s == e else "replacement"
         read_edits.append(Edit(f"reads:{rid}", reference_id, chrom, s, e, a, "reads", alt, kind=kind,
@@ -373,7 +375,7 @@ def assembly_comparison(state, dataset, *, chrom, start, end, reads=(), read_seq
                         book.resolve_exact(identity, exact)
                         value["identity_state"], value["exact_allele_id"] = "exact", exact
     for value in assembly.values():
-        value["exact_target"] = _exact_target(value, assembly, context, reference, chrom, policy, labels, dropped, local_all)
+        value["exact_target"] = _exact_target(value, assembly, context, reference, chrom, policy, labels, dropped, local_all, fetched)
     for value in assembly.values():
         value.pop("alt")
     return dict(schema_version="differences:v1", comparison_version=COMPARISON_VERSION, dataset_id=dataset.id,
@@ -384,7 +386,7 @@ def assembly_comparison(state, dataset, *, chrom, start, end, reads=(), read_seq
                 lineage_events=events, ledger=book.payload())
 
 
-def _exact_target(value, assembly, context, reference, chrom, policy, labels, dropped=(), local_all=()):
+def _exact_target(value, assembly, context, reference, chrom, policy, labels, dropped=(), local_all=(), fetched=None):
     """A frozen exact target with every complete competing assembly allele.
 
     Each candidate is one haplotype's allele spliced onto the reference over a common diagnostic window. That is
@@ -398,14 +400,18 @@ def _exact_target(value, assembly, context, reference, chrom, policy, labels, dr
     flank = policy.diagnostic_flank_bp
     ds, de = max(0, s - flank), e + flank
     nearby = list(local_all) + list(dropped)
-    for _ in range(64):   # grow to a fixed point over overlapping edits (bounded)
+    while True:   # grow to a fixed point over overlapping edits; each step widens, so the size bound ends it
         inside = [i for i in nearby if i["t_start"] <= de and i["t_end"] >= ds]
         lo = max(0, min([s, *(i["t_start"] for i in inside)]) - flank)
         hi = max([e, *(i["t_end"] for i in inside)]) + flank
         if (lo, hi) == (ds, de):
             break
-        ds, de = lo, hi
-    if de - ds > policy.max_allele_bp:
+        ds, de = min(ds, lo), max(de, hi)
+        if de - ds > policy.max_allele_bp:
+            return None
+    if fetched is not None and (ds < fetched[0] and fetched[0] > 0 or de > fetched[1]):
+        return None   # the window reaches past the edits this comparison fetched: it cannot see them all
+    if any(i["t_start"] < ds or i["t_end"] > de for i in inside):
         return None
     inside = [i for i in nearby if i["t_start"] <= de and i["t_end"] >= ds]
     own_hap = [i for i in inside if i["hap"] == value["hap"] and i["id"] != value["item_id"]]
@@ -432,7 +438,9 @@ def _exact_target(value, assembly, context, reference, chrom, policy, labels, dr
         v = compared[0]
         candidates.setdefault(v["exact_allele_id"], changed(v))
         names.setdefault(v["exact_allele_id"], []).append(v["hap_label"])
-    names[target_id] = sorted(set(names[target_id]) | {assembly[i]["hap_label"] for i in value["shared_with"]})
+    # Another haplotype shares this allele over the window only when it has no other edit there.
+    names[target_id] = sorted(set(names[target_id]) | {assembly[i]["hap_label"] for i in value["shared_with"]
+                                                       if len(by_hap.get(assembly[i]["hap"], ())) <= 1})
     # Unsupported local representations, and competitors the item cap dropped, leave the competition open.
     if any(c["t_start"] < de and c["t_end"] > ds for c in context) or any(
             d["t_start"] <= de and d["t_end"] >= ds for d in dropped):

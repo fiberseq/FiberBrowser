@@ -426,8 +426,7 @@ def _slice_observed(alignment, projected, start, end):
         qualities = alignment.qualities[a:b]
         if minus:
             sequence, qualities = revcomp(sequence), qualities[::-1]
-        from .alleles import decode_daf_bases
-        return decode_daf_bases(sequence), qualities, (q0, q1), True
+        return sequence, qualities, (q0, q1), True
     return None, (), None, False
 
 

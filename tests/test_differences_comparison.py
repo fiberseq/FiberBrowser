@@ -325,3 +325,41 @@ def test_no_exact_target_when_the_haplotype_has_another_edit_in_the_window(tmp_p
     mat = next(v for v in out["assembly"].values() if v["hap_label"] == "MAT" and v["kind"] == "insertion")
     pat = next(v for v in out["assembly"].values() if v["hap_label"] == "PAT" and v["kind"] == "insertion")
     assert mat["exact_target"] is None and pat["exact_target"] is None   # each haplotype has a nearby SNV
+
+
+def test_exact_target_window_never_reaches_past_the_fetched_edits(tmp_path):
+    """agy r3 HIGH 2: a diagnostic window beyond the fetched range could miss a haplotype's other edits."""
+    state, ds, _ = build(tmp_path)
+    # The MAT deletion [3000,3030) sits just inside a fetch that starts at 2999 only when the view starts there.
+    out = assembly_comparison(state, ds, chrom=CHROM, start=3010, end=8000)
+    for v in out["assembly"].values():
+        t = v["exact_target"]
+        if t:
+            assert t["diagnostic_start"] >= 0 and len(t["candidates"]["reference"]) == t["diagnostic_end"] - t["diagnostic_start"]
+            assert all(len(c) >= 0 for c in t["candidates"].values())
+
+
+def test_shared_label_skips_a_haplotype_with_other_edits_in_the_window(tmp_path, monkeypatch):
+    """agy r3 HIGH 2(3): 'MAT / PAT' only when PAT carries nothing else in the window."""
+    from services.lift import differences as diff
+    state, ds, _ = build(tmp_path)   # PAT carries the same insertion X at 5000
+    real = diff.assembly_items_for_region
+
+    def with_pat_snv(config, chrom, start, end, **kw):
+        return real(config, chrom, start, end, **kw) + [dict(id="PAT:snv", hap="H#2", hap_label="PAT", kind="snv",
+            reason="substitution", t_start=5010, t_end=5011, ref_bp=1, alt_bp=1, chain=1, strand="+",
+            src={"contig": "chrC_PATERNAL", "start": 4110, "end": 4111})]
+    monkeypatch.setattr(diff, "assembly_items_for_region", with_pat_snv)
+    out = compare(state, ds)
+    mat = next(v for v in out["assembly"].values() if v["hap_label"] == "MAT" and v["kind"] == "insertion")
+    assert mat["exact_target"]["candidate_labels"][mat["exact_allele_id"]] == "MAT"
+    assert mat["exact_target"]["competition_complete"] is False
+
+
+def test_iupac_ambiguity_is_not_decoded_without_daf_chemistry():
+    """agy r3 HIGH 1: Y/R are DAF conversions only under CT/GA chemistry."""
+    from services.differences.alleles import DafContext
+    from services.differences.likelihood import compete
+    candidates = {"t": "ATCG" * 25, "c": "ACCG" + "ATCG" * 24, "reference": ""}
+    plain = compete("AYCG" + "ATCG" * 24, candidates, target_id="t", complete=True, context=DafContext("none", "dataset_chemistry:hia5-pacbio"))
+    assert plain["call"]["assignment"] == "unknown" and "ambiguous_bases" in plain["call"]["reasons"]

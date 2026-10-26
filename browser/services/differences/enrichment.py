@@ -62,8 +62,7 @@ def observe_interval(read, start, end, *, flank=1, max_bases=100_000):
     bounds = all(0 <= a <= b <= len(sequence) for a, b in intervals)
     contiguous = all(a == previous_b for (_, previous_b), (a, _) in zip(intervals, intervals[1:]))
     complete = bounds and contiguous and not skipped and left == flank and right == flank
-    from .alleles import decode_daf_bases
-    observed = decode_daf_bases("".join(sequence[a:b] for a, b in intervals)) if bounds else None
+    observed = "".join(sequence[a:b] for a, b in intervals) if bounds else None
     qualities = tuple(quality for a, b in intervals for quality in (read.query_qualities[a:b] if read.query_qualities is not None else ()))
     hard = cigar[0][1] if cigar[0][0] == 5 else 0
     query_interval = ((hard + intervals[0][0], hard + intervals[-1][1]) if intervals else

@@ -101,6 +101,8 @@ def diagnostic_assignment(observed, candidates, *, target_id, complete, chemistr
         return Call(reasons=("diagnostic_sequence_unavailable",))
     if chemistry not in {"none", "CT", "GA"}:
         return Call(reasons=("unknown_chemistry",))
+    if chemistry in ("CT", "GA"):
+        observed = decode_daf_bases(observed)   # IUPAC Y/R are DAF conversions only under DAF chemistry
     if any(base not in "ACGT" for sequence in (observed, *candidates.values()) for base in sequence.upper()):
         return Call(reasons=("ambiguous_bases",))
     observed = observed.upper()
