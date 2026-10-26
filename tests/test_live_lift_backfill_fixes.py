@@ -97,3 +97,16 @@ def test_anchor_check_skips_contigs_and_bases_a_fasta_lacks(tmp_path):
         assert result.ok and result.anchors["status"] == status, result.anchors
     result = validate_live_lift(handle, ds.paths, ds.live_lift.haplotypes, target_fasta=state.fasta, source_fasta=wrong)
     assert not result.ok and result.anchors["status"] == "mismatch"
+
+
+def test_anchor_check_samples_every_haplotype(tmp_path):
+    """Codex r2 HIGH 1: a wrong second haplotype is refused even when the first matches everywhere."""
+    import pysam
+    from services.lift.validate import validate_live_lift
+    from test_differences_comparison import build
+    state, ds, files = build(tmp_path)
+    path = tmp_path / "pat_wrong.fa"
+    path.write_text(f">chrC_MATERNAL\n{files['mat']}\n>chrC_PATERNAL\n{files['pat'][::-1]}\n")
+    pysam.faidx(str(path))
+    result = validate_live_lift(ds.live_lift.handle, ds.paths, ds.live_lift.haplotypes, target_fasta=state.fasta, source_fasta=str(path))
+    assert not result.ok and result.anchors["status"] == "mismatch" and "chrC_PATERNAL" in result.anchors["message"]

@@ -42,3 +42,13 @@ def test_flipped_record_whose_st_was_not_swapped_is_still_flagged():
 def test_flipped_record_without_st_uses_its_marks_in_the_molecule_frame():
     assert record_strand_fields(record(reverse=True, yp="chrS:11:+", seq="ACGTR" * 4)) == {"strand": "CT", "strand_frame": "molecule"}
     assert record_strand_fields(record(reverse=True, seq="ACGTR" * 4)) == {}
+
+
+def test_flipped_record_without_st_or_iupac_marks_flips_its_decoded_majority():
+    """Codex r2 HIGH 2: MD-mismatch marks decode in the target frame; the fallback majority is swapped back."""
+    from services.read_strand import read_strand
+    fields = record_strand_fields(record(reverse=True, yp="chrS:11:+", seq="ACGTA" * 4))
+    assert fields == {"lift_flipped": True}
+    ga_marks = {"deam": [[1, 0], [2, 0], [3, 0]], **fields}           # G>A marks in the target frame
+    assert read_strand(ga_marks) == "CT"                             # the source molecule's CT
+    assert read_strand({"deam": [[1, 0], [2, 0], [3, 0]]}) == "GA"   # an unflipped record is unchanged

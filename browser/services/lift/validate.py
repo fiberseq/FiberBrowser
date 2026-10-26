@@ -177,31 +177,47 @@ def _check_anchors(handle, out, target_fasta, source_fasta):
             if not candidates:
                 out.anchors = {"status": "not checked", "message": "Anchor sequences not checked: no anchor blocks >= 200 bp on contigs both FASTAs hold."}
                 return
-            step = max(1, len(candidates) // 64)
-            ordered = candidates[::step] + [c for i, c in enumerate(candidates) if i % step]
+            # Up to 16 samples spread evenly over each haplotype's anchors (every haplotype is checked); an anchor
+            # with unknown bases is replaced by the next one in its own bucket, never by one elsewhere.
+            by_hap = {}
+            for c in candidates:
+                by_hap.setdefault(handle.map.chains[c[0]]["haplotype"], []).append(c)
+            groups = list(by_hap.values())
+            shares = [0] * len(groups)
+            budget = 16
+            while budget and any(shares[h] < len(g) for h, g in enumerate(groups)):   # round robin, spare to the rest
+                for h, g in enumerate(groups):
+                    if budget and shares[h] < len(g):
+                        shares[h] += 1
+                        budget -= 1
+            buckets = []
+            for group, k in zip(groups, shares):
+                buckets += [group[i * len(group) // k:(i + 1) * len(group) // k] for i in range(k)]
             n, tried = 0, 0
-            for ci, t, q, length in ordered:
-                if n >= 16 or tried >= 2000:
-                    break
-                tried += 1
-                length = min(length, 2000)
-                chain = handle.map.chains[ci]
-                target_name = handle.manifest["targets"][chain["target"]]["name"]
-                src = handle.manifest["sources"][chain["source"]]
-                q0, q1 = (q, q + length) if chain["strand"] == "+" else (src["size"] - q - length, src["size"] - q)
-                a = target_fasta.fetch(target_name, t, t + length).upper()
-                b = source.fetch(src["name"], q0, q1).upper()
-                if chain["strand"] == "-":
-                    b = revcomp(b)
-                if "N" in a or "N" in b:
-                    continue
-                n += 1
-                if len(a) != length or len(b) != length or a != b:
-                    message = (f"Anchor sequence mismatch: {target_name}:{t}-{t + length} and "
-                               f"{src['name']}:{q0}-{q1} ({chain['strand']}) in {source_fasta}.")
-                    out.errors.append(message)
-                    out.anchors = {"status": "mismatch", "message": message}
-                    return
+            for bucket in buckets:
+                for ci, t, q, length in bucket:
+                    if tried >= 4000:
+                        break
+                    tried += 1
+                    length = min(length, 2000)
+                    chain = handle.map.chains[ci]
+                    target_name = handle.manifest["targets"][chain["target"]]["name"]
+                    src = handle.manifest["sources"][chain["source"]]
+                    q0, q1 = (q, q + length) if chain["strand"] == "+" else (src["size"] - q - length, src["size"] - q)
+                    a = target_fasta.fetch(target_name, t, t + length).upper()
+                    b = source.fetch(src["name"], q0, q1).upper()
+                    if chain["strand"] == "-":
+                        b = revcomp(b)
+                    if "N" in a or "N" in b:
+                        continue
+                    n += 1
+                    if len(a) != length or len(b) != length or a != b:
+                        message = (f"Anchor sequence mismatch: {target_name}:{t}-{t + length} and "
+                                   f"{src['name']}:{q0}-{q1} ({chain['strand']}) in {source_fasta}.")
+                        out.errors.append(message)
+                        out.anchors = {"status": "mismatch", "message": message}
+                        return
+                    break   # one checked anchor per bucket
         if not n:
             out.anchors = {"status": "not checked", "message": "Anchor sequences not checked: every sampled anchor has unknown (N) bases."}
             return

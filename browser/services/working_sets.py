@@ -1456,7 +1456,7 @@ def project_broad_read_to_viewport(
         "chemical_strand", "daf_strand", "strand", "_original_id", "_display_id",
         "alignment_spans", "signal",
         # st/SEQ strand disagreement and graph-lift provenance (record-level).
-        "strand_conflict", "lift", "analysis_id", "_fiberbrowser_inferred_strand",
+        "strand_conflict", "lift", "analysis_id", "_fiberbrowser_inferred_strand", "lift_flipped", "strand_frame",
         # SV events are in absolute reference coordinates: never shifted.
         "sv",
         "aligned_blocks", "sv_segments", "sequence_span",

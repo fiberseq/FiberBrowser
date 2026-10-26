@@ -42,7 +42,9 @@ def read_strand(read: dict) -> Optional[str]:
             ga += 1
     if ct == ga:
         return None
-    return "CT" if ct > ga else "GA"
+    strand = "CT" if ct > ga else "GA"
+    # Marks decoded from a record whose strand fiberhmm-lift reversed are in the target frame.
+    return _SWAP[strand] if read.get("lift_flipped") else strand
 
 
 def st_tag_strand(value) -> Optional[str]:
@@ -97,7 +99,9 @@ def record_strand_fields(read) -> dict:
         if not read.has_tag("st"):
             if flipped:
                 seq_strand = seq_ry_strand(getattr(read, "query_sequence", None))
-                return {"strand": _SWAP[seq_strand], "strand_frame": "molecule"} if seq_strand else {}
+                # Without R/Y bases the strand comes later from decoded marks (MD mismatches) in the target
+                # frame: read_strand swaps that majority back for a record marked lift_flipped.
+                return {"strand": _SWAP[seq_strand], "strand_frame": "molecule"} if seq_strand else {"lift_flipped": True}
             return {}
         strand = st_tag_strand(read.get_tag("st"))
     except (AttributeError, KeyError):
