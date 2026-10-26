@@ -8,6 +8,12 @@ import os
 from typing import Iterable, Optional
 
 SUFFIX = ".graphlift.json"
+
+
+def is_map_name(name: str) -> bool:
+    """A graphlift sidecar manifest or a plain UCSC chain (services/lift/chain_map.py)."""
+    from services.lift.chain_map import is_chain_path
+    return str(name).endswith(SUFFIX) or is_chain_path(name)
 MAX_SUGGESTIONS = 20
 # A folder next to a BAM can be large or on a slow network share: each scan
 # reads at most this many entries, and at most this many subfolders.
@@ -44,7 +50,7 @@ def _entries(folder: str, want) -> list:
 
 
 def _maps_in(folder: str) -> list:
-    return _entries(folder, lambda e: e.name.endswith(SUFFIX) and e.is_file())
+    return _entries(folder, lambda e: is_map_name(e.name) and e.is_file())
 
 
 def _candidates(state, near: str) -> Iterable[tuple[str, str]]:
@@ -64,7 +70,7 @@ def _candidates(state, near: str) -> Iterable[tuple[str, str]]:
         # Read-only: no lock (nothing is written), so a suggestion never touches the Library's files.
         for entry in library_store._read_unlocked().get("entries", {}).values():
             path = str(entry.get("path") or "")
-            if path.endswith(SUFFIX):
+            if is_map_name(path):
                 yield path, "in the Library"
     except Exception:  # noqa: BLE001 - the Library is optional here
         pass
@@ -106,6 +112,6 @@ def suggest_maps(state, near: str) -> dict:
                     "matches_bam": None if shared is None else shared > 0})
     out.sort(key=lambda s: (s.get("matches_bam") is not True, "error" in s))
     return {"near": near, "maps": out,
-            "help": "A graphlift map (.graphlift.json) relates the BAM's assembly (its contig names) to this genome. "
+            "help": "A lift map, either a graphlift map (.graphlift.json) or a plain UCSC chain (.chain, .chain.gz), relates the BAM's assembly (its contig names) to this genome. "
                     "Build one with graphlift from the assemblies' chains and place it next to the BAM, or add it to the "
                     "Library, then pick it here."}

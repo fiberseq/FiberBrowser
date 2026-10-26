@@ -115,7 +115,11 @@ class LiftMapHandle:
         self.path = os.path.abspath(manifest_path)
         with open(self.path, "rb") as fh:
             raw = fh.read()
-        self.map = LiftMap(json.loads(raw), os.path.dirname(self.path))
+        from services.lift.chain_map import is_chain_path, load_chain_map
+        # A plain UCSC chain loads whole into memory (no per-target payload files);
+        # a graphlift sidecar manifest loads its targets lazily.
+        self.plain_chain = is_chain_path(self.path)
+        self.map = load_chain_map(self.path) if self.plain_chain else LiftMap(json.loads(raw), os.path.dirname(self.path))
         self.manifest = self.map.m
         self.payload_stamps = payload_stamps(self.manifest, self.map.dir)
         digest = hashlib.sha256(raw)

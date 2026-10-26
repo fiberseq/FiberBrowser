@@ -36,7 +36,7 @@ def map_paths(config, chrom, start, end, *, policy, use_cache=True):
     handle = config.handle
     # Immutable observation/path namespace; fingerprint remains cache revision.
     namespace = content_id("map-target-content:v1", [digest_file(handle.path), *[
-        digest_file(os.path.join(handle.map.dir, name)) for name in handle.manifest["target_files"][chrom]]])
+        digest_file(os.path.join(handle.map.dir, name)) for name in handle.manifest.get("target_files", {}).get(chrom, [])]])
     with handle.lock:
         for (ci, primary), pieces in grouped.items():
             chain = handle.map.chains[ci]

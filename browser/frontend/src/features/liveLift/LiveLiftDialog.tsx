@@ -127,7 +127,7 @@ export function LiveLiftDialog() {
             </> : <p className="text-ink-secondary" data-testid="live-lift-map-help">No lift map was found next to this BAM or in the Library. {suggestions.help}</p>}
           </div>
         )}
-        <label className="mb-2 block">Graphlift map (.graphlift.json)
+        <label className="mb-2 block">Lift map (graphlift .graphlift.json, or a UCSC .chain / .chain.gz)
           <input className={input} value={manifest} onChange={e => setManifest(e.target.value)} data-testid="live-lift-manifest" />
         </label>
         {info && (

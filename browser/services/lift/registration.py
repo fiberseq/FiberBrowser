@@ -65,7 +65,7 @@ def add_live_lift_dataset(state, *, paths: Iterable[str], manifest: str, haploty
     if not raw:
         return {"success": False, "error": "Choose the source BAM file(s)."}
     if not manifest:
-        return {"success": False, "error": "Choose the graphlift map (the sidecar's .graphlift.json manifest)."}
+        return {"success": False, "error": "Choose the lift map: a graphlift sidecar (.graphlift.json) or a UCSC chain (.chain, .chain.gz)."}
     bam_paths = normalize_local_paths(raw)
     errors = validate_dataset_paths(bam_paths, raw)
     if errors:
