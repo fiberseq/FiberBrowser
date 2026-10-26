@@ -1,6 +1,6 @@
 """Live-lift endpoints (DESIGN_LIVE_LIFT.md §3.1): open a lifted dataset,
 inspect a graphlift map, change a lifted dataset's settings. Every route
-answers 404 while the ``FIBERBROWSER_LIVE_LIFT`` flag is off."""
+answers 404 when live lift is off (``FIBERBROWSER_LIVE_LIFT=0``, or a lab/public server)."""
 from __future__ import annotations
 
 import asyncio

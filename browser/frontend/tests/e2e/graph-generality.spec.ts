@@ -23,7 +23,7 @@ const LIFTS = process.env.FIBERBROWSER_TEST_GRAPH_LIFT_GENERALITY?.trim() ?? '';
 const MAP = LIFTS && path.join(LIFTS, 'strain', 'strain.chain.graphlift.json');
 const BAM = LIFTS && path.join(LIFTS, 'strain', 'strain.src.bam');
 const FASTA = LIFTS && path.join(LIFTS, 'strain', 'dm6_chr2L.fa');
-const READY = [HELPER, STRAIN, MAP, BAM, FASTA].every(p => p && existsSync(p)) && process.env.FIBERBROWSER_LIVE_LIFT === '1';
+const READY = [HELPER, STRAIN, MAP, BAM, FASTA].every(p => p && existsSync(p)) && process.env.FIBERBROWSER_LIVE_LIFT !== '0';
 const MAT_PAT = /\b(MAT|PAT|MATERNAL|PATERNAL)\b/i;
 
 async function strainServer(): Promise<ServerProcess> {
@@ -43,7 +43,7 @@ const panels = (page: Page) => page.evaluate(() => (window as any).__FIBERBROWSE
     member: p.graphMemberOf ?? null, role: p.graphView?.role ?? null })));
 
 test('a single-haplotype strain lift opens as a one-panel graph with the map\'s own label', async ({ page }) => {
-  test.skip(!READY, 'needs the graph helper, the strain package, its lift fixtures and FIBERBROWSER_LIVE_LIFT=1');
+  test.skip(!READY, 'needs the graph helper, the strain package, its lift fixtures (live lift is on unless FIBERBROWSER_LIVE_LIFT=0)');
   test.setTimeout(300_000);
   const server = await strainServer();
   try {

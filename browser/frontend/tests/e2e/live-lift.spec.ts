@@ -17,7 +17,7 @@ const HAVE_DATA = [LIFT_BAM, NATIVE_BAM, LIFT_MAP].every(p => existsSync(p));
 const VIEW = { chrom: 'chr3', start: 128_650_000, end: 128_670_000 };
 
 test.skip(!HAVE_DATA, 'pg-lift work data not present');
-test.skip(process.env.FIBERBROWSER_LIVE_LIFT !== '1', 'run with FIBERBROWSER_LIVE_LIFT=1 (the feature flag)');
+test.skip(process.env.FIBERBROWSER_LIVE_LIFT === '0', 'live lift turned off with FIBERBROWSER_LIVE_LIFT=0');
 test.use({ fixtureBam: NATIVE_BAM });
 
 test('add a live-lift dataset next to the native BAM: split MAT/PAT panels render lifted rows', async ({ page, server }) => {

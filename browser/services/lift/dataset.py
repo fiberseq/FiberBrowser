@@ -1,8 +1,12 @@
 """Live-lift datasets (``data_type='bam_livelift'``, DESIGN_LIVE_LIFT.md §2.1):
 source BAM(s) drawn on the main genome through a graphlift sidecar.
 
-Behind the flag ``FIBERBROWSER_LIVE_LIFT`` (off: the routes answer 404 and
-the frontend shows no entry point; a session holding a lifted dataset says so).
+On by default on a personal server. ``FIBERBROWSER_LIVE_LIFT=0`` turns it off
+(the routes answer 404, the frontend shows no entry point and a session holding
+a lifted dataset says so). A public server and remote clients never reach the
+lift routes (their allowlists leave them out). A shared lab server keeps live
+lift off unless its host sets ``FIBERBROWSER_LIVE_LIFT=1``, because opening a
+map reads a path on the server outside the lab's dataset confinement.
 """
 from __future__ import annotations
 
@@ -15,7 +19,13 @@ FLAG_ENV = "FIBERBROWSER_LIVE_LIFT"
 
 
 def live_lift_enabled() -> bool:
-    return os.environ.get(FLAG_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+    value = os.environ.get(FLAG_ENV, "").strip().lower()
+    if value in ("0", "false", "no", "off"):
+        return False
+    if value in ("1", "true", "yes", "on"):
+        return True
+    from services.runtime import get_lab_mode, get_public_mode
+    return not (get_lab_mode() or get_public_mode())
 
 
 def label_order(label: str) -> tuple:

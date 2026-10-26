@@ -117,7 +117,7 @@ def test_navigation_routes_need_the_flag_and_a_lifted_dataset(env, monkeypatch):
         nid = native["dataset"]["id"]
         assert client.get("/api/lift/summary", params={"dataset_id": nid}).status_code == 409
     assert client.get("/api/lift/summary", params={"dataset_id": "missing"}).status_code == 404
-    monkeypatch.delenv("FIBERBROWSER_LIVE_LIFT")
+    monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "0")
     for path, extra in (("summary", {}), ("outline", {"chrom": TARGET}), ("tiles", {"side": "target", "contig": TARGET, "tile": 0}),
                         ("pieces", {"chrom": TARGET, "start": 0, "end": 10})):
         assert client.get(f"/api/lift/{path}", params={"dataset_id": did, **extra}).status_code == 404
@@ -193,7 +193,7 @@ def test_map_suggestions_next_to_a_bam_say_whether_its_contigs_match(env, tmp_pa
     other = write_bam(here / "other.bam", lambda h: [], contigs=(("chrZ", 1000),))
     assert client.get("/api/lift/maps", params={"near": other}).json()["maps"][0]["matches_bam"] is False
     assert "graphlift map" in out["help"]
-    monkeypatch.delenv("FIBERBROWSER_LIVE_LIFT")
+    monkeypatch.setenv("FIBERBROWSER_LIVE_LIFT", "0")
     assert client.get("/api/lift/maps", params={"near": moved}).status_code == 404
 
 
