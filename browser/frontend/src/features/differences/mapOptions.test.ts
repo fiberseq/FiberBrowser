@@ -3,7 +3,7 @@ import { mapOptionsFor } from './AssemblyComparisonPanel';
 import type { Dataset } from '../../types';
 
 const ds = (id: string, data_type: string, samples?: string[]) => ({ id, label: id, path: `/${id}.bam`, color: '#000', data_type,
-  ...(samples ? { read_group_samples: samples } : {}) }) as unknown as Dataset;
+  ...(samples ? { sample_keys: samples } : {}) }) as unknown as Dataset;
 
 describe("the native inspector compares with the assembly of the dataset's own sample", () => {
   const native = ds('nativeA', 'bam', ['A.1', 'A.2']);

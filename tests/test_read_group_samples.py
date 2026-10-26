@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pysam
 
-from services.read_group_samples import read_group_samples
+from services.read_group_samples import read_group_samples, sample_keys
 
 
 def _bam(path, samples):
@@ -28,3 +28,21 @@ def test_no_samples_for_other_data_remote_files_or_missing_files(tmp_path):
     gone = str(tmp_path / "gone.bam")
     assert read_group_samples(SimpleNamespace(data_type="bam", is_remote=False, paths=[gone], path=gone)) == []
     assert read_group_samples(SimpleNamespace(data_type="bam", is_remote=False, paths=[_bam(tmp_path / "n.bam", [])], path=None)) == []
+
+
+def test_payload_keys_are_opaque_but_equal_for_equal_samples(tmp_path):
+    a = SimpleNamespace(data_type="bam", is_remote=False, paths=[_bam(tmp_path / "a.bam", ["subject42.cell1"])], path=None)
+    b = SimpleNamespace(data_type="bam_livelift", is_remote=False, paths=[_bam(tmp_path / "b.bam", ["subject42.cell1", "x"])], path=None)
+    c = SimpleNamespace(data_type="bam", is_remote=False, paths=[_bam(tmp_path / "c.bam", ["other"])], path=None)
+    ka, kb, kc = sample_keys(a), sample_keys(b), sample_keys(c)
+    assert set(ka) <= set(kb) and not set(ka) & set(kc)
+    assert all("subject42" not in k for k in ka + kb)
+
+
+def test_dataset_payload_never_carries_sample_names(tmp_path):
+    from models.domain import Dataset
+    bam = _bam(tmp_path / "s.bam", ["subject42.cell1"])
+    ds = Dataset("s", bam, label="s", data_type="bam")
+    payload = ds.to_dict()
+    assert "read_group_samples" not in payload and len(payload["sample_keys"]) == 1
+    assert "subject42" not in repr(payload)

@@ -91,8 +91,8 @@ export interface Dataset {
   consensus_chemistry?: 'ddda' | 'dddb' | 'hia5-pacbio' | 'hia5-nanopore' | null;
   /** @deprecated Legacy name of consensus_chemistry (servers before 3.0). */
   family_scan_chemistry?: 'ddda' | 'dddb' | 'hia5-pacbio' | 'hia5-nanopore' | null;
-  /** Sample names its BAM read groups declare (@RG SM): a native dataset is matched with the lifted dataset of its sample. */
-  read_group_samples?: string[];
+  /** Opaque keys for the samples its BAM read groups declare (equal for equal samples on this server): a native dataset is matched with the lifted dataset of its sample. */
+  sample_keys?: string[];
   chemistry_metadata?: {
     chemistry?: 'ddda' | 'dddb' | 'hia5-pacbio' | 'hia5-nanopore' | null;
     source?: string;

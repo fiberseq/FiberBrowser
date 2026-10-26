@@ -25,16 +25,16 @@ export interface MapOptions {
 
 /** Which open lifted dataset's map is the assembly for a native dataset: the one of the same sample (its BAM read
  * groups), else the only one open when the samples can't be told; with several candidates the user picks. */
-export function mapOptionsFor(dataset: Pick<Dataset, 'id' | 'data_type' | 'read_group_samples'>, datasets: Dataset[], chosen?: string): MapOptions {
+export function mapOptionsFor(dataset: Pick<Dataset, 'id' | 'data_type' | 'sample_keys'>, datasets: Dataset[], chosen?: string): MapOptions {
   if (dataset.data_type === 'bam_livelift') {
     const own = datasets.find(d => d.id === dataset.id) ?? (dataset as Dataset);
     return { map: own, options: [own], reason: 'one' };
   }
   const lifted = datasets.filter(d => d.data_type === 'bam_livelift');
   if (!lifted.length) return { map: null, options: [], reason: 'none' };
-  const mine = new Set(dataset.read_group_samples ?? []);
-  const same = mine.size ? lifted.filter(d => (d.read_group_samples ?? []).some(s => mine.has(s))) : [];
-  const known = mine.size > 0 && lifted.every(d => (d.read_group_samples ?? []).length > 0);
+  const mine = new Set(dataset.sample_keys ?? []);
+  const same = mine.size ? lifted.filter(d => (d.sample_keys ?? []).some(s => mine.has(s))) : [];
+  const known = mine.size > 0 && lifted.every(d => (d.sample_keys ?? []).length > 0);
   const options = same.length ? same : lifted;
   const reason: MapOptions['reason'] = same.length === 1 ? 'one' : same.length > 1 ? 'several_of_sample'
     : known ? 'none_of_sample' : lifted.length === 1 ? 'one' : 'unknown_samples';
