@@ -169,16 +169,21 @@ def _haplotype_labels(manifest) -> dict:
     out = {}
     for hap in {c["haplotype"] for c in manifest["chains"]}:
         labels = votes.get(hap, set())
-        token = re.search(r"(?:^|[_#.\-])(MAT|PAT)(?:ERNAL)?(?=$|[_#.\-])", hap.upper())
+        # MAT/PAT after "_" in the sample ("HG002_MAT#1", "s_maternal") or as a token of the haplotype slot after "#";
+        # never a sample named "pat" or "mat-1" (agy review, group D round 2).
+        token = re.search(r"_(MAT|PAT)(?:ERNAL)?(?=$|[_#.\-])|#(?:[^#]*[_.\-])?(MAT|PAT)(?:ERNAL)?(?=$|[_#.\-])", hap.upper())
         if len(labels) == 1:
             out[hap] = labels.pop()
         elif token:
             # MAT/PAT as a whole token of the key ("HG002_MAT#1"), never inside another word ("w_mated", "line_PAT2";
             # graph features, item 10).
-            out[hap] = token.group(1)
+            out[hap] = token.group(1) or token.group(2)
         else:
             out[hap] = hap
-    return out
+    # A derived label two haplotypes would share (two samples' _MAT) names neither: each keeps its own key.
+    from collections import Counter
+    counts = Counter(v for k, v in out.items() if v != k)
+    return {k: (k if v != k and counts[v] > 1 else v) for k, v in out.items()}
 
 
 def payload_stamps(manifest, directory) -> list:

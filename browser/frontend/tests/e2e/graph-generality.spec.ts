@@ -93,6 +93,19 @@ test('a single-haplotype strain lift opens as a one-panel graph with the map\'s 
     }, host.id);
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.every((g: any) => g.member === host.id && g.rows > 0)).toBe(true);
+    // Every drawn molecule on the strainA path (never the dm6 target, whose contig is also chr2L), with the map's
+    // haplotype label and lifted identities (agy review, group D).
+    const drawn = await page.evaluate(pid => {
+      const e = (window as any).__FIBERBROWSER_GRAPH_SCENES__?.[pid as string];
+      const strain = e?.model?.rows?.find((r: any) => String(r.label).includes('strainA'))?.key;
+      return { strain, lanes: Object.keys(e?.reads?.lanes ?? {}), molecules: (e?.reads?.molecules ?? []).map((m: any) => ({
+        lane: m.lane, hap: m.read.hap, aid: m.read.aid ?? '', rk: m.read.rk ?? '' })) };
+    }, host.id);
+    expect(drawn.strain).toBeTruthy();
+    expect(drawn.lanes).toEqual([drawn.strain]);
+    expect(drawn.molecules.length).toBeGreaterThan(5);
+    expect(drawn.molecules.every((m: any) => m.lane === drawn.strain && m.hap === 'strainA#0'
+      && m.aid.startsWith('lift-cohort:v1 ') && m.rk.startsWith('lift-record:v1 '))).toBe(true);
     expect(errors).toEqual([]);
   } finally {
     await stopServer(server);
