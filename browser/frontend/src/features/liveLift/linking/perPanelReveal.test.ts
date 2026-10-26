@@ -1,28 +1,36 @@
-// Adapted from the post-merge review's round-2 probes (Codex): each case failed before the fix or guards a path it touched.
+// Adapted from the post-merge review's round-2 and round-3 probes (Codex): each case failed before the fix or guards a path it touched.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useBrowserStore } from '../../../stores/browserStore';
 import { useLiveLiftStore } from '../store';
-import { registerLiftLinking, openLinkedSourceView, chooseLinkChain } from './liftLink';
+import { registerLiftLinking, openLinkedSourceView, chooseLinkChain, sourceViewFor, linkGeneration } from './liftLink';
 import { resetNavigation, setNavigationFetcher, prefetchView } from './navigation';
 import { popOutPaths } from '../../graphPanel/popOutKind';
 
+let driftTile = false;
 let heldTarget: (()=>void)[]=[];
 const flush = async () => { for (let i=0;i<50;i++) await Promise.resolve(); };
 const view=(id:string)=>useBrowserStore.getState().panels.find(p=>p.id===id)!.viewportOverride;
 function tile(side:number) {
+ if (!side && driftTile) {
+  const out=[0x47,0x4c,0x54,0x31,0,0,2];
+  const uv=(v:number)=>{while(v>=128){out.push((v&127)|128);v=Math.floor(v/128);}out.push(v);};
+  uv(2000);uv(2000);uv(0);uv(0);
+  uv(2000);uv(15000);uv(4000);uv(0);
+  return new Uint8Array(out);
+ }
  const out=[0x47,0x4c,0x54,0x31,side,0,1];
  const uv=(v:number)=>{while(v>=128){out.push((v&127)|128);v=Math.floor(v/128);}out.push(v);};
  uv(side?0:2000);uv(18000);uv(side?2000:0);uv(0);
  return new Uint8Array(out);
 }
-async function setup(twoSources=false, holdTarget=false) {
- heldTarget=[];
+async function setup(twoSources=false, holdTarget=false, withDrift=false) {
+ heldTarget=[]; driftTile=withDrift;
  resetNavigation();registerLiftLinking();useLiveLiftStore.setState({enabled:true});
  vi.stubGlobal('fetch',vi.fn(async()=>{throw new Error('network forbidden');}));
  setNavigationFetcher({json:async(u:string)=>u.includes('summary')?{
-  key:'k',tile_bp:1000000,outline_max_drift:0,haplotypes:['H'],labels:{H:'MAT'},sources:{S:'H'},targets:{T:20000},selected:[true],
-  chains:[['T',1000,19000,'S',0,18000,'+','H',18000,18000]],
- }:{rows:[[1000,19000,0,18000,'+',0,0,u.includes('side=source')?'T':'S']]},bytes:async(u:string)=>{
+  key:'k',tile_bp:1000000,outline_max_drift:driftTile?1000:0,haplotypes:['H'],labels:{H:'MAT'},sources:{S:'H'},targets:{T:20000},selected:[true],
+  chains:[['T',1000,19000,'S',0,driftTile?17000:18000,'+','H',18000,18000]],
+ }:{rows:[[1000,19000,0,driftTile?17000:18000,'+',0,driftTile?1000:0,u.includes('side=source')?'T':'S']]},bytes:async(u:string)=>{
  const side=u.includes('side=source')?1:0;const n=new URL(u,'http://x').searchParams.get('tile');
  if(holdTarget && !side && n==='0') return new Promise<Uint8Array>(r=>heldTarget.push(()=>r(tile(0))));
  return tile(side);
@@ -105,5 +113,58 @@ describe('Each panel navigates: revealing, cycles, Linked navigation and split p
   expect(view('src')).toEqual({chrom:'S',start:4000,end:6000});
   chooseLinkChain('src',0);
   expect(view('src')).toEqual({chrom:'S',start:4000,end:6000});
+ });
+});
+
+describe('Each panel navigates: a revealed source view settles exactly, and never after Undo (post-merge review, group C round 3)',()=>{
+ it('R3-outline: reveal with outline loaded still settles at the exact tile position',async()=>{
+  await setup(false,true,true);
+  const src=useBrowserStore.getState().panels.find(p=>p.id==='src')!;
+  const own={chrom:'T',start:5000,end:7000};
+  sourceViewFor(src,own); await flush(); // outline loaded, target tile absent
+  popOutPaths('host',['mat']); await flush();
+  expect(heldTarget).toHaveLength(1);
+  for(const release of heldTarget.splice(0))release(); await flush();
+  const mapped=sourceViewFor(useBrowserStore.getState().panels.find(p=>p.id==='src')!,own);
+  expect(mapped && mapped!=='pending' && mapped.mapping.exact).toBe(true);
+  expect(mapped && mapped!=='pending' && mapped.span).toEqual({chrom:'S',start:3000,end:5000});
+  expect(view('src')).toEqual({chrom:'S',start:3000,end:5000});
+ });
+ it('R3-undo: pending reveal does not write after the reveal was undone',async()=>{
+  await setup(false,true);
+  popOutPaths('host',['mat']); await flush();
+  useBrowserStore.getState().undo();
+  const before=view('src');
+  for(const release of heldTarget.splice(0))release(); await flush();
+  expect(useBrowserStore.getState().panels.find(p=>p.id==='src')!.collapsed).toBe(true);
+  expect(view('src')).toEqual(before);
+ });
+ it('R3-branch: pending reveal never folds into the step that replaced it after Undo',async()=>{
+  await setup(false,true);
+  popOutPaths('host',['mat']); await flush();
+  useBrowserStore.getState().undo(); await flush();
+  useBrowserStore.getState().setPanelReversed('host',true);
+  const st=useBrowserStore.getState();
+  const id=st._historyStack[st._historyPointer].id;
+  const before=st._historyStack[st._historyPointer].state.panels?.find(p=>p.id==='src')?.viewportOverride;
+  for(const release of heldTarget.splice(0))release(); await flush();
+  const after=useBrowserStore.getState();
+  expect(after._historyStack[after._historyPointer].id).toBe(id);
+  expect(after._historyStack[after._historyPointer].state.panels?.find(p=>p.id==='src')?.viewportOverride).toEqual(before);
+ });
+ it('R3-delayed-redo: late exact reveal is included in its own undo step',async()=>{
+  await setup(false,true);
+  popOutPaths('host',['mat']); await flush();
+  for(const release of heldTarget.splice(0))release(); await flush();
+  expect(view('src')).toEqual({chrom:'S',start:4000,end:6000});
+  useBrowserStore.getState().undo();useBrowserStore.getState().redo();
+  expect(view('src')).toEqual({chrom:'S',start:4000,end:6000});
+ });
+ it('R3-linked-reveal: without an own lifted view reveal leaves source viewport untouched',async()=>{
+  await setup();
+  useBrowserStore.setState(s=>({navigationMode:'linked',panels:s.panels.map(p=>p.id==='src'?p:{...p,viewportOverride:undefined})}));
+  const before=view('src');
+  popOutPaths('host',['mat']);await flush();
+  expect(view('src')).toEqual(before);
  });
 });

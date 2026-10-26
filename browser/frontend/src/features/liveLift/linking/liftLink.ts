@@ -343,34 +343,50 @@ export async function openLinkedSourceView(liftPanelId: string, hapLabel?: strin
   }
 }
 
-/** A source view revealed (or relinked) beside a lifted panel with a view of its own goes to that view: at once
- * when the map tiles are loaded (as they are for a view on screen), so the caller's undo step records it; else once
- * they arrive, only if nothing moved, was relinked or restored meanwhile, folded into that step while it is still the
- * latest (post-merge review, group C round 2). */
+/** A source view revealed (or relinked) beside a lifted panel with a view of its own goes to that view. At once when
+ * the map answers exactly (tiles loaded, as for a view on screen), so the caller's undo step records it; an
+ * approximate answer is shown at once too, and the exact one follows when the tiles arrive — only if nothing moved,
+ * was relinked, undone or recorded since, folded into the reveal's own step when the caller recorded one
+ * (post-merge review, group C rounds 2 and 3). */
 function remapRevealedSource(existing: PanelConfig, datasetId: string, key: string, own: Span): void {
-  const apply = (): 'done' | 'pending' | 'none' => {
+  const map = () => {
     const now = useBrowserStore.getState().panels.find(p => p.id === existing.id);
-    const out = now?.liftLink ? sourceViewFor(now, own) : null;
-    if (out === 'pending') return 'pending';
-    if (!out) return 'none';
-    bump(existing.id);
-    pending.delete(existing.id);
+    return now?.liftLink ? sourceViewFor(now, own) : null;
+  };
+  const show = (out: { span: Span; mapping: SpanMapping }) => {
     publishCandidates(existing.id, out.mapping);
     useBrowserStore.getState().setPanelViewportFromLink(existing.id, out.span);
-    return 'done';
   };
-  if (apply() !== 'pending') return;
-  const history = { after: lastSnapshotId() };
+  const first = map();
+  if (!first) return;
+  if (first !== 'pending') {
+    bump(existing.id);
+    pending.delete(existing.id);
+    show(first);
+    if (first.mapping.exact) return;
+  }
+  const after = lastSnapshotId();   // before the caller records its step
   const gen = bump(existing.id);
-  const startView = JSON.stringify(existing.viewportOverride ?? null);
+  let step: number | null = null;
+  queueMicrotask(() => { step = lastSnapshotId(); });   // the caller's step, recorded right after this returns
+  const viewNow = () => JSON.stringify(useBrowserStore.getState().panels.find(p => p.id === existing.id)?.viewportOverride ?? null);
+  const shown = viewNow();
   void (async () => {
     if (!await ensureSummary(datasetId, key)) return;
     await prefetchView(datasetId, key, 0, own.chrom, own.start, own.end);
     const st = useBrowserStore.getState();
     const now = st.panels.find(p => p.id === existing.id);
-    if (!now?.liftLink || generation.get(existing.id) !== gen || JSON.stringify(now.viewportOverride ?? null) !== startView
-      || JSON.stringify(liftedOwnView(now.liftLink.liftPanelId, st.panels)) !== JSON.stringify(own)) return;
-    if (apply() === 'done') foldCorrection({ gen, linkId: now.liftLink.id, chrom: own.chrom, datasetId, kind: 'panel', history });
+    const stack = st._historyStack ?? [];
+    const latest = stack.length ? stack[stack.length - 1].id ?? 0 : 0;
+    if (!now?.liftLink || generation.get(existing.id) !== gen || viewNow() !== shown
+      || JSON.stringify(liftedOwnView(now.liftLink.liftPanelId, st.panels)) !== JSON.stringify(own)
+      || latest !== (step ?? after) || (stack.length > 0 && st._historyPointer !== stack.length - 1)) return;
+    const out = map();
+    if (!out || out === 'pending') return;
+    pending.delete(existing.id);
+    show(out);
+    // Into the reveal's own step (the caller recorded one, and it is still the latest and current).
+    if (step !== null && step !== after) useBrowserStore.getState().foldIntoCurrentSnapshot?.(serializeState(useBrowserStore.getState()));
   })();
 }
 
