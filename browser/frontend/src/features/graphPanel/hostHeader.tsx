@@ -9,6 +9,7 @@
  */
 import { lazy, useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
 import { fadeIn, panelBodyParts } from './crossfade';
+import { featureText, notDrawnInLinear } from './linearNotices';
 import { useShallow } from 'zustand/react/shallow';
 import { MenuItem } from '../../components/tracks/PanelHeader';
 import type { PanelHeaderContext } from '../../components/tracks/panelHeaderExtensions';
@@ -70,6 +71,7 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
     || (isHost(p) && p.id !== panel.id))));
   const outBp = useGraphSettings(s => s.outBp);
   const pickerOpen = usePopOutPicker(s => s.hostId === panel.id);
+  const graphRun = useBrowserStore(s => (s.clusterMatchedRun?.graph?.hostPanelId === panel.id ? s.clusterMatchedRun : null));
   const offered = useGraphOffers(s => Boolean(panel.datasetId && s.offered[panel.datasetId] && !s.done[panel.datasetId]));
   // (Which panel shows the offer depends on the dataset's other panels.)
   const offerHere = useBrowserStore(s => offered && graphOfferPanel(s.panels, panel.datasetId, useGraphOffers.getState()) === panel.id);
@@ -158,6 +160,8 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
       <PopOutPicker key={[...folded.map(p => p.id), ...missing.map(m => m.binding)].join('|')} hostId={panel.id} folded={folded} missing={missing}
         labelOf={p => memberLabel(p, datasetLabels(p), panel.graphView?.targetBinding ?? null)} />
     ) : null;
+    // The graph run's carrier-only regions (§7.4): listed while linear, which has no coordinate for them.
+    const notDrawn = shown === 'linear' ? notDrawnInLinear(graphRun, panel.id) : [];
     const handoffBar = shown === 'linear' ? (
       <HandoffBar>
         <div data-testid="graph-handoff-bar" className="flex items-center gap-2 border-b border-stone-200 bg-stone-50 px-2 py-0.5 text-[11px] text-stone-600 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-300">
@@ -167,6 +171,12 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
           <button type="button" className="underline" data-testid={pinned ? 'graph-resume' : 'graph-stay-linear'}
             onClick={() => setPinnedLinear(panel.id, !pinned)}>{pinned ? 'Resume graph' : 'Stay linear'}</button>
         </div>
+        {notDrawn.length > 0 && (
+          <div data-testid="graph-handoff-carrier-only" className="px-2 py-0.5 text-[11px] text-stone-600 dark:text-stone-300"
+            title="Sequence the target does not have: the graph run used it, linear tracks have no coordinate for it">
+            Not drawn in linear view: {notDrawn.map(featureText).join('; ')}
+          </div>
+        )}
       </HandoffBar>
     ) : null;
     const body = picker || handoffBar ? <>{picker}{handoffBar}</> : null;

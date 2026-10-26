@@ -22,6 +22,7 @@ import { registerGraphPanel } from './register';
 import { memberLabel, singleHapPathName } from './labels';
 import type { GraphBinding, GraphOccurrence, GraphRead, GraphReadBinding, GraphRegistration, GraphTopology } from './types';
 import { createElement, act } from 'react';
+import { featureText, notDrawnInLinear } from './linearNotices';
 import { acceptGraphOffer, dismissGraphOffer, graphOfferPanel, offerGraphView, useGraphOffers } from './graphOffer';
 import { autoSplitNewLiftedDatasets } from '../liveLift/register';
 import { notePendingGraphOpen, settlePendingGraphOpens } from './openAsGraph';
@@ -313,3 +314,23 @@ describe('item 2: the one-time "View as graph" offer (restored split sessions, l
 });
 
 function isHostPanel(id: string) { return get(id).graphView?.role === 'host' && get(id).viewMode === 'graph'; }
+
+describe('item 3: what a host drawn linear cannot show (§7.4)', () => {
+  const run = (hostPanelId: string, columns: unknown) => ({ graph: { hostPanelId, columns } }) as never;
+  const ins = (label: string, length = 312) => ({ kind: 'insertion', length, samples: 2, label });
+
+  it('lists the run\'s insertions (carrier-only or shared off the target), never target or deleted stretches', () => {
+    const r = run('mat', { shared: [{ kind: 'target', length: 900, samples: 3, label: 'T1' }, ins('I0', 40)],
+      carrier_sets: [{ carriers: ['o1'], features: [ins('I1'), { kind: 'deleted', length: 50, samples: 1, label: 'D1' }] },
+        { carriers: ['o2'], features: [ins('I1')] }] });
+    expect(notDrawnInLinear(r, 'mat').map(f => f.label)).toEqual(['I0', 'I1']);
+    expect(featureText(ins('I1', 1200))).toBe('insertion I1 (1,200 bp)');
+  });
+
+  it('nothing for another host\'s run, a linear run, or a run on target columns only', () => {
+    expect(notDrawnInLinear(run('pat', { carrier_sets: [{ carriers: [], features: [ins('I1')] }] }), 'mat')).toEqual([]);
+    expect(notDrawnInLinear({} as never, 'mat')).toEqual([]);
+    expect(notDrawnInLinear(null, 'mat')).toEqual([]);
+    expect(notDrawnInLinear(run('mat', { shared: [{ kind: 'target', length: 900, samples: 3, label: 'T1' }] }), 'mat')).toEqual([]);
+  });
+});
