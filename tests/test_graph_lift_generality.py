@@ -125,7 +125,9 @@ def _identities_are_valid(rows, did):
         assert r["aid"].startswith("lift-cohort:v1 "), r["aid"]
         parts = json.loads(r["aid"][len("lift-cohort:v1 "):])
         assert len(parts) == 5 and parts[1] == r["q"] and parts[0].endswith("|" + r["q"]) and parts[4] == "primary"
-        assert r["rk"] == record_key(r["aid"])
+        assert r["rk"] is not None and r["rk"] == record_key(r["aid"])
+        # The record component is the source record's (its digest and occurrence) and the molecule is this dataset's.
+        assert isinstance(parts[2], str) and parts[2] == r["rec"] and isinstance(parts[3], int)
 
 
 def test_a_single_haplotype_strain_lift_loads_on_its_path(server):

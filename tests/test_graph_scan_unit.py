@@ -81,3 +81,15 @@ def test_a_molecule_shared_by_two_datasets_follows_their_joint_policy(monkeypatc
                              dict(id="B", dataset_id="d2", kind="graph", binding="mat", contig="cM", read_ids=None, strand=None)]}
     out = gscan.scan(state, None, {"scan": {"signal_source": "accessibility", "min_reads": 1, "threshold_rare": 0.01}}, {}, spec)
     assert out["n_reads"] == 1
+
+
+def test_a_repeated_or_unresolved_lack_is_never_not_a_carrier():
+    """Codex review (group B round 3): -2 needs proven absence; repeated, unresolved or target-unresolved columns in
+    the region leave the path out instead."""
+    from services.graph_panel import analysis
+    spec = {"target": "t", "regions": [{"start": 0, "end": 50}],
+            "observations": [dict(id="P", dataset_id="d", kind="graph", binding="pat", contig="cP", read_ids=None, strand=None)]}
+    for report in ({"absent": {"P": 30}, "repeats": {"P": 20}}, {"absent": {"P": 30}, "unresolved": {"P": 5}},
+                   {"absent": {"P": 30}, "target_unresolved": 3}, {"repeats": {"P": 50}}):
+        rc = types.SimpleNamespace(carried={}, report=report)
+        assert analysis._absent_path_labels(None, spec, {}, [rc], "P", {}) == {}

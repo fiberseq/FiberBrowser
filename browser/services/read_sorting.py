@@ -82,7 +82,11 @@ def sort_similarity_for_dataset(
     cluster_assignments = (cluster_assignments_override if cluster_assignments_override is not None
                            else dataset.cluster_assignments)
     if read_ids is not None:
+        # By identity: a scope of cohort identities also names their records (a graph run's labels are record keys;
+        # Codex review, group E).
+        from services.lift.cohort import record_key
         wanted = {str(read_id) for read_id in read_ids}
+        wanted |= {rk for read_id in list(wanted) if (rk := record_key(read_id))}
         cluster_assignments = {
             read_id: cluster
             for read_id, cluster in cluster_assignments.items()

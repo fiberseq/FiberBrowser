@@ -213,3 +213,15 @@ def test_linear_peak_scanning_takes_lifted_datasets(lift_env):
     assert r.status_code == 200, r.text
     out = r.json()
     assert out["n_reads"] >= 3
+
+
+def test_similarity_sort_of_a_filtered_panel_with_record_key_labels(lift_env):
+    """Codex review (group E): a graph run's record-key labels, scoped by a filter's cohort identities, still order the
+    clusters by similarity (the scope removed every label)."""
+    from services.lift.cohort import record_key
+    client, state, manifest, bam = lift_env
+    did = _add(client, manifest, bam)["dataset"]["id"]
+    ids = _sort(client, did)["read_sort_order"]
+    labels = {record_key(i): (0 if _qname(i) in ("plus", "split") else 1) for i in ids}
+    out = _sort(client, did, sort_by="similarity", cluster_assignments={did: labels}, read_ids={did: ids})
+    assert sorted(out["cluster_order"]) == [0, 1]

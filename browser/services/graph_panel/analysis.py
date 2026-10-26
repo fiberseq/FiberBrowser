@@ -537,8 +537,11 @@ def _absent_path_labels(state, spec, tiles, regions, oid: str, cache: dict) -> d
     if ob["kind"] != "graph":
         return {}
     lacking = [i for i, rc in enumerate(regions) if not rc.carried.get(oid)]
+    # Proven absent only: absent columns, and no unresolved, repeated or target-unresolved column in those regions (a
+    # repeat is ambiguous, never asserted absence; Codex review, group B round 3).
     if not lacking or any(not regions[i].report.get("absent", {}).get(oid) or regions[i].report.get("unresolved", {}).get(oid)
-                          for i in lacking):
+                          or regions[i].report.get("repeats", {}).get(oid) or regions[i].report.get("target_unresolved")
+                          or regions[i].report.get("target_repeats") for i in lacking):
         return {}
     from services.read_selection import read_body_spans, read_matches_id_filter, with_graph_record_keys
     from services.read_strand import filter_reads_by_strand, strand_calls
