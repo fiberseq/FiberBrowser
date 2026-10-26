@@ -69,9 +69,13 @@ class _Chain:
 
 
 def read_chains(path):
-    opener = gzip.open if open(path, "rb").read(2) == b"\x1f\x8b" else open
+    import io
+    from services.lab.paths import open_read
+    with open_read(path) as raw:   # a lab server's read roots (plain open elsewhere)
+        data = raw.read()
+    text = gzip.decompress(data) if data[:2] == b"\x1f\x8b" else data
     out = []
-    with opener(path, "rt") as fh:
+    with io.StringIO(text.decode("utf-8", "replace")) as fh:
         for n, line in enumerate(fh, 1):
             if line.startswith("chain"):
                 if out:
