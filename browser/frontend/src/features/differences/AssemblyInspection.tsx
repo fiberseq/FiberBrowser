@@ -1,5 +1,6 @@
 import { expandableAltBlock } from './capabilities';
 import { MoleculeCalls } from './MoleculeCalls';
+import { INSPECTOR_BUTTON } from './inspectorText';
 import { AssemblyComparisonPanel } from './AssemblyComparisonPanel';
 import { useAutoLoadBound } from './autoLoad';
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
@@ -110,14 +111,14 @@ export function AssemblyInspection({ panel, dataset, anchor }: { panel: PanelCon
     <p className="whitespace-pre-line text-[11px] my-2">{differenceDescription(described, current.chrom, { source: sourceSampleName(dataset), target: targetReferenceLabel(dataset, 'Reference') })}</p>
     <div className="flex gap-3 my-2 items-center">
       {(d.kind === 'insertion' || d.kind === 'replacement') && <span title={d.alt_bp < 50 ? 'Insertion-local read payloads start at 50 bp.' : d.alt_bp > 50_000 ? 'Insertion payload is too large (over 50 kb).' : 'Open the insertion across this view'}>
-        <button disabled={!expandableAltBlock(d) || d.source==='reads'&&d.src.start===null} onClick={() => expandDifference(current)}>{d.kind === 'replacement' ? 'Expand alternate' : 'Expand insertion'}</button></span>}
+        <button className={INSPECTOR_BUTTON} disabled={!expandableAltBlock(d) || d.source==='reads'&&d.src.start===null} onClick={() => expandDifference(current)}>{d.kind === 'replacement' ? 'Expand alternate' : 'Expand insertion'}</button></span>}
 
       {(d.kind === 'insertion' || d.kind === 'replacement') && <>
         <span title={candidate ? 'Identify one full carrier’s sequence; this is not an assembly consensus.' : 'No full insertion sequence is available from the inspected reads.'}>
-          <button disabled={!candidate || fetchingSequence} onClick={() => { void requestIdentification(); }}>{fetchingSequence ? 'Loading sequence…' : 'Identify'}</button></span>
+          <button className={INSPECTOR_BUTTON} disabled={!candidate || fetchingSequence} onClick={() => { void requestIdentification(); }}>{fetchingSequence ? 'Loading sequence…' : 'Identify'}</button></span>
       </>}
       {['insertion', 'deletion', 'replacement'].includes(d.kind) &&
-        <button disabled={opening || !d.src.contig || d.src.start === null} title="Open the source BAM on its own header-contig reference; locally linked at this difference"
+        <button className={INSPECTOR_BUTTON} disabled={opening || !d.src.contig || d.src.start === null} title="Open the source BAM on its own header-contig reference; locally linked at this difference"
           onClick={() => { setOpening(true); void openSourceView(current).finally(() => setOpening(false)); }}>{opening ? 'Opening…' : `Open in ${sourceSampleLabel(dataset)} view`}</button>
       }
     </div>
@@ -125,7 +126,7 @@ export function AssemblyInspection({ panel, dataset, anchor }: { panel: PanelCon
     <p>Reference [{d.t_start}, {d.t_end}) · {d.ref_bp} bp → alternate {d.alt_bp} bp · net {d.alt_bp-d.ref_bp} bp</p>
     <MoleculeCalls selection={current} />
     {!readRequested && <p data-testid="difference-load-reason">{bound.reason}{' '}
-      <button onClick={() => setReadRequested(true)}>Load observed bases and chromatin</button></p>}
+      <button className={INSPECTOR_BUTTON} onClick={() => setReadRequested(true)}>Load observed bases and chromatin</button></p>}
     {(current.action === 'identify' || identify) && data && !lens && <p role="status">Identify unavailable: no full insertion sequence is available from the inspected reads.</p>}
     {identify && lens && <IdentifyTab response={lens} datasetId={dataset.id} identifyKey={identifyKey} reversed={false} visible dark={dark} />}
     <div className="my-2 flex gap-3 flex-wrap">{Object.entries(model.summary).map(([hap, alleles]) => <span key={hap}

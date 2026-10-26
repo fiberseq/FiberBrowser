@@ -14,6 +14,7 @@ import { membershipChanges } from './session';
 import { exactTargetsFor, type ExactTarget } from './comparison';
 import { runInspectComparison, useInspectEntry, useMapDataset } from './AssemblyComparisonPanel';
 import { fetchJson } from '../../api/sharedFetch';
+import { callText, INSPECTOR_BUTTON, reasonText } from './inspectorText';
 import type { Dataset } from '../../types';
 
 export function MoleculeCalls({ selection, native = false }: { selection: DifferenceSelection; native?: boolean }) {
@@ -84,7 +85,7 @@ export function MoleculeCalls({ selection, native = false }: { selection: Differ
   const canConsensus = selection.difference.source === 'reads' && selection.difference.alt_bp > 0 && Boolean(map) && !exact;
   if (!supported) return <p>Read carriage for this topology is unavailable. Assembly geometry remains inspectable.</p>;
   return <section aria-label="Molecule calls" className="mt-2 border-t pt-2">
-    <p>{target.target_type === 'geometry' ? 'Frozen geometry target · exact sequence carriage remains separate' : 'Frozen exact allele target'} · revision {target.revision}</p>
+    <p title={`Target revision ${target.revision}`}>{target.target_type === 'geometry' ? 'Molecule calls for this difference\'s geometry (any sequence of this size here)' : 'Molecule calls for the exact assembly allele'}</p>
     {exactTargets.length > 0 && <p><label className="inline-flex items-center gap-1">Allele target
       <select aria-label="Allele target" data-testid="allele-target" value={exactId} onChange={e => { setExactId(e.target.value); setRequested(true); }}>
         <option value="">Geometry (any sequence)</option>
@@ -100,21 +101,24 @@ export function MoleculeCalls({ selection, native = false }: { selection: Differ
         <option value="lifted_only">Lifted reads</option><option value="combined">Combined representations</option></select>
         {scope === 'combined' && <select aria-label="Native representation dataset" value={nativeDataset} onChange={e => setNativeDataset(e.target.value)}>
           <option value="">Select native dataset</option>{datasets.filter(d => d.data_type === 'bam').map(d => <option key={d.id} value={d.id}>{d.label ?? d.id}</option>)}</select>}</>}
-      <button onClick={() => { setRequested(true); setRevision(n => n+1); }}>Load molecule calls</button>
+      <button className={INSPECTOR_BUTTON} onClick={() => { setRequested(true); setRevision(n => n+1); }}>Load molecule calls</button>
     </div>
     {error && <p role="status">{error}</p>}
     {requested && !result && !error && <p role="status">Loading scoped calls…</p>}
     {snapshot && groups && <>
-      <p>Calls are a frozen loaded snapshot. Reload explicitly after changing sources.</p>
+      <p className="text-slate-500">These calls are a snapshot: load them again after changing the options above.</p>
       <p data-testid="difference-molecule-counts">{groups.counts[0]} carriers · {groups.counts[1]} reference · {groups.counts[2]} not informative · {snapshot.sequence_unresolved_count} sequence unresolved</p>
-      <p>Discovery: {String(result!.scope.cohort ?? 'loaded')} · {JSON.stringify(result!.scope.reasons ?? [])}</p>
-      {expandableAltBlock(selection.difference) && <button onClick={() => openInsertionLens({ datasetId:selection.datasetId, chrom:selection.chrom, pos:target.ref_start,
+      {(() => { const reasons = Array.isArray(result!.scope.reasons) ? (result!.scope.reasons as unknown[]).map(String) : [];
+        return reasons.length > 0 && <p data-testid="difference-discovery">Read search ({String(result!.scope.cohort ?? 'loaded').replace(/_/g, ' ')} reads): {reasonText(reasons)}</p>; })()}
+      <div className="my-1 flex flex-wrap gap-1.5">
+      {expandableAltBlock(selection.difference) && <button className={INSPECTOR_BUTTON} onClick={() => openInsertionLens({ datasetId:selection.datasetId, chrom:selection.chrom, pos:target.ref_start,
         ref:target.ref_start,len:target.alt_bp,tolerance:0,lenMin:target.alt_bp,lenMax:target.alt_bp,flank:0,anchor:'left',
-        workspace:{query:q,calls:result!} },selection.panelId)}>Open detailed workspace</button>}{' '}
-      {canConsensus && <><button data-testid="compare-consensus" disabled={consensus.busy} onClick={() => { void compareConsensus(); }}>
-        {consensus.busy ? 'Building consensus…' : 'Compare consensus with assembly'}</button>{' '}</>}
-      <button onClick={highlight}>Highlight carriers</button>{' '}
-      <button onClick={() => saved ? setPreview(true) : split()}>{saved ? 'Preview recompute' : 'Split by carrier'}</button>
+        workspace:{query:q,calls:result!} },selection.panelId)}>Open detailed workspace</button>}
+      {canConsensus && <button className={INSPECTOR_BUTTON} data-testid="compare-consensus" disabled={consensus.busy} onClick={() => { void compareConsensus(); }}>
+        {consensus.busy ? 'Building consensus…' : 'Compare consensus with assembly'}</button>}
+      <button className={INSPECTOR_BUTTON} onClick={highlight}>Highlight carriers</button>
+      <button className={INSPECTOR_BUTTON} onClick={() => saved ? setPreview(true) : split()}>{saved ? 'Preview recompute' : 'Split by carrier'}</button>
+      </div>
       {consensus.message && <p role="status" data-testid="consensus-status">{consensus.message}</p>}
       {target.target_type === 'exact' && <p data-testid="exact-counts">Exact allele calls: {snapshot.counts[0]} carry it · {snapshot.counts[1]} reference · {snapshot.counts[2]} other allele or unresolved
         {(result as { chemistry_default?: { chemistry: string; provenance: string } | null }).chemistry_default
@@ -126,12 +130,12 @@ export function MoleculeCalls({ selection, native = false }: { selection: Differ
           include_putative: saved?.includePutative ?? false, include_conflicting: saved?.includeConflicting ?? false,
           include_ambiguous: saved?.includeAmbiguous ?? false, include_duplicates: saved?.includeDuplicates ?? false,
           conflict_options: saved?.conflictOptions }, proposed: policy }, null, 2)}</pre></details>
-        <button onClick={split}>Apply recomputed split</button><button onClick={() => setPreview(false)}>Keep saved split</button></div>}
-      <table className="w-full text-left"><thead><tr><th>Molecule</th><th>Final call / geometry</th><th>Representations and dissent</th></tr></thead>
+        <div className="flex gap-1.5"><button className={INSPECTOR_BUTTON} onClick={split}>Apply recomputed split</button><button className={INSPECTOR_BUTTON} onClick={() => setPreview(false)}>Keep saved split</button></div></div>}
+      <table className="w-full text-left"><thead><tr><th>Molecule</th><th>Call</th><th>Why (click for the evidence)</th></tr></thead>
         <tbody>{Object.entries(snapshot.calls_by_molecule).slice(0, 500).map(([id, call]) => <tr key={id}
           onMouseEnter={() => highlightMolecules(result!,new Set([id]))}>
-          <td>{result!.membership.molecules[id]?.raw_name ?? id}</td><td>{call.call.assignment} · {call.call.level ?? 'unknown'}{call.geometry_group !== undefined && ` · geometry ${['carrier', 'reference', 'not informative'][call.geometry_group]}`}</td>
-          <td><details><summary>{call.call.reasons.join(', ') || call.call.method}{call.complete ? '' : ' · partial'}</summary><pre className="whitespace-pre-wrap max-w-lg">{JSON.stringify({representations:call.representations,...(call as any).lifted&&{projection:(call as any).lifted},...(call as any).native&&{native:(call as any).native},geometry:(call as any).geometry_evidence}, null, 2)}</pre></details></td>
+          <td>{result!.membership.molecules[id]?.raw_name ?? id}</td><td data-testid="molecule-call" title={`${call.call.assignment} · ${call.call.level ?? 'no level'}`}>{callText(call.call, call.geometry_group)}</td>
+          <td><details><summary title={call.call.reasons.join(', ') || call.call.method}>{reasonText(call.call.reasons.length ? call.call.reasons : [call.call.method])}{call.complete ? '' : ' · partial'}</summary><pre className="whitespace-pre-wrap max-w-lg">{JSON.stringify({representations:call.representations,...(call as any).lifted&&{projection:(call as any).lifted},...(call as any).native&&{native:(call as any).native},geometry:(call as any).geometry_evidence}, null, 2)}</pre></details></td>
         </tr>)}</tbody></table>
       {Object.keys(snapshot.calls_by_molecule).length > 500 && <p>Showing the first 500 molecules. Counts use the full returned cohort.</p>}
     </>}
