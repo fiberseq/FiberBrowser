@@ -193,12 +193,11 @@ def _check_anchors(handle, out, target_fasta, source_fasta):
             buckets = []
             for group, k in zip(groups, shares):
                 buckets += [group[i * len(group) // k:(i + 1) * len(group) // k] for i in range(k)]
-            n, tried = 0, 0
+            # Each bucket has its own retry budget, so N-masked anchors of one haplotype cannot use up another's.
+            per_bucket = max(1, 4000 // max(1, len(buckets)))
+            n, checked_haps = 0, set()
             for bucket in buckets:
-                for ci, t, q, length in bucket:
-                    if tried >= 4000:
-                        break
-                    tried += 1
+                for ci, t, q, length in bucket[:per_bucket]:
                     length = min(length, 2000)
                     chain = handle.map.chains[ci]
                     target_name = handle.manifest["targets"][chain["target"]]["name"]
@@ -211,6 +210,7 @@ def _check_anchors(handle, out, target_fasta, source_fasta):
                     if "N" in a or "N" in b:
                         continue
                     n += 1
+                    checked_haps.add(handle.map.chains[ci]["haplotype"])
                     if len(a) != length or len(b) != length or a != b:
                         message = (f"Anchor sequence mismatch: {target_name}:{t}-{t + length} and "
                                    f"{src['name']}:{q0}-{q1} ({chain['strand']}) in {source_fasta}.")
@@ -221,7 +221,12 @@ def _check_anchors(handle, out, target_fasta, source_fasta):
         if not n:
             out.anchors = {"status": "not checked", "message": "Anchor sequences not checked: every sampled anchor has unknown (N) bases."}
             return
-        out.anchors = {"status": "consistent", "checked": n,
+        unchecked = sorted(set(by_hap) - checked_haps)
+        if unchecked:
+            # Say which haplotypes the spot check could not reach (unknown bases or few anchors).
+            out.warnings.append("Anchor sequences not checked for haplotype(s) " + ", ".join(unchecked)
+                                + ": no sampled anchor with known bases in the source FASTA.")
+        out.anchors = {"status": "consistent", "checked": n, "unchecked_haplotypes": unchecked,
                        "message": f"Anchor sequences consistent ({n} blocks >= 200 bp checked); this is a spot check, not proof of assembly identity."}
     except (OSError, ValueError, KeyError) as exc:
         message = f"Cannot check anchor sequences in {source_fasta}: {exc}"

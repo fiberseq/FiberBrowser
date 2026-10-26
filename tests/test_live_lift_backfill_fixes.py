@@ -110,3 +110,25 @@ def test_anchor_check_samples_every_haplotype(tmp_path):
     pysam.faidx(str(path))
     result = validate_live_lift(ds.live_lift.handle, ds.paths, ds.live_lift.haplotypes, target_fasta=state.fasta, source_fasta=str(path))
     assert not result.ok and result.anchors["status"] == "mismatch" and "chrC_PATERNAL" in result.anchors["message"]
+
+
+def test_anchor_check_budget_is_per_bucket_and_reports_unchecked_haplotypes(tmp_path, monkeypatch):
+    """Codex r3 HIGH: masked anchors of one haplotype cannot use up the next haplotype's checks."""
+    import pysam
+    from services.lift import validate
+    from test_differences_comparison import build
+    state, ds, files = build(tmp_path)
+
+    def fasta(name, mat, pat):
+        path = tmp_path / name
+        path.write_text(f">chrC_MATERNAL\n{mat}\n>chrC_PATERNAL\n{pat}\n")
+        pysam.faidx(str(path))
+        return str(path)
+    handle, haps = ds.live_lift.handle, ds.live_lift.haplotypes
+    masked_mat_wrong_pat = fasta("a.fa", "N" * len(files["mat"]), files["pat"][::-1])
+    result = validate.validate_live_lift(handle, ds.paths, haps, target_fasta=state.fasta, source_fasta=masked_mat_wrong_pat)
+    assert not result.ok and result.anchors["status"] == "mismatch"
+    ok_mat_masked_pat = fasta("b.fa", files["mat"], "N" * len(files["pat"]))
+    result = validate.validate_live_lift(handle, ds.paths, haps, target_fasta=state.fasta, source_fasta=ok_mat_masked_pat)
+    assert result.ok and result.anchors["unchecked_haplotypes"] == ["H#2"]
+    assert any("not checked for haplotype" in w for w in result.warnings)
