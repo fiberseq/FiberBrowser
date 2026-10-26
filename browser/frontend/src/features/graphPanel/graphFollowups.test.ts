@@ -24,7 +24,7 @@ import type { GraphBinding, GraphOccurrence, GraphRead, GraphReadBinding, GraphR
 import { createElement, act } from 'react';
 import { featureText, notDrawnInLinear } from './linearNotices';
 import { acceptGraphOffer, dismissGraphOffer, graphOfferPanel, offerGraphView, useGraphOffers } from './graphOffer';
-import { autoSplitNewLiftedDatasets } from '../liveLift/register';
+import { autoSplitNewLiftedDatasets, offerRestoredSplitSessions } from '../liveLift/register';
 import { notePendingGraphOpen, settlePendingGraphOpens } from './openAsGraph';
 import { CROSSFADE_MS, fadeIn, panelBodyParts } from './crossfade';
 import { createRoot } from 'react-dom/client';
@@ -285,6 +285,21 @@ describe('item 2: the one-time "View as graph" offer (restored split sessions, l
     expect(offers().done.d).toBe(true);
     offerGraphView('d');
     expect(graphOfferPanel(useBrowserStore.getState().panels, 'd', offers())).toBeNull();
+  });
+
+  it('a split session opened later in the page (datasets already seen) is offered after the restore settles', () => {
+    seed(split());
+    useBrowserStore.setState(s => ({ datasets: s.datasets.map(d => (d.id === 'd' ? { ...d, live_lift: { haplotypes: ['1', '2'], haplotype_labels: { 1: 'MAT', 2: 'PAT' } } } as never : d)) }));
+    const before = JSON.stringify(useBrowserStore.getState().panels);
+    offerRestoredSplitSessions();
+    expect(JSON.stringify(useBrowserStore.getState().panels)).toBe(before);
+    expect(graphOfferPanel(useBrowserStore.getState().panels, 'd', offers())).toBe('mat');
+    // Already a graph: nothing offered.
+    useGraphOffers.setState({ offered: {}, done: {} });
+    expect(acceptGraphOffer('mat', 'd')).toBeNull();
+    useGraphOffers.setState({ offered: {}, done: {} });
+    offerRestoredSplitSessions();
+    expect(offers().offered.d).toBeUndefined();
   });
 
   it('a binding that arrives after the user acted on the split panels offers it instead of rearranging them', () => {

@@ -24,6 +24,10 @@ export function sessionRestoresInFlight(): number {
   return inFlight;
 }
 
+/** Fired on window after a session restore or import settles (features that offer something once per restored
+ * layout listen, e.g. the graph package's "View as graph" offer). */
+export const SESSION_RESTORED_EVENT = 'fiberbrowser:session-restored';
+
 /** Count `work` as a session restore while it runs. */
 export async function duringSessionRestore<T>(work: () => Promise<T>): Promise<T> {
   inFlight += 1;
@@ -31,6 +35,9 @@ export async function duringSessionRestore<T>(work: () => Promise<T>): Promise<T
     return await work();
   } finally {
     inFlight -= 1;
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+      try { window.dispatchEvent(new CustomEvent(SESSION_RESTORED_EVENT)); } catch { /* no DOM events here */ }
+    }
   }
 }
 

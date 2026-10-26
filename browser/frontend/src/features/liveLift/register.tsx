@@ -18,6 +18,7 @@ import { LiftedPanelLinkItems, registerLiftLinkingUi } from './linking/register'
 import { liftedOpenView } from '../graphPanel/handoff';
 import { notePendingGraphOpen } from '../graphPanel/openAsGraph';
 import { offerGraphView } from '../graphPanel/graphOffer';
+import { SESSION_RESTORED_EVENT } from '../../utils/sessionRestore';
 
 export function liveLiftChipText(ctx: Pick<PanelHeaderContext, 'panel' | 'dataset'>): string | null {
   if (!isLiveLift(ctx.dataset)) return null;
@@ -87,6 +88,18 @@ export function useNativeBamLiftEntry(ctx: PanelHeaderContext) {
  * opened (the dialog, the API, a script). Once per dataset: a panel set the user pooled, or a session's panels (which
  * carry their haplotypes), are left as they are.
  */
+/** After a session restore: each lifted dataset restored as split haplotype panels (not in a graph) is offered
+ * "View as graph" once, when graph is its open view. */
+export function offerRestoredSplitSessions(): void {
+  const state = useBrowserStore.getState();
+  for (const dataset of state.datasets) {
+    if (!isLiveLift(dataset)) continue;
+    const mine = state.panels.filter(p => p.contentType === 'dataset' && p.datasetId === dataset.id);
+    if (!mine.some(p => p.liftHap) || mine.some(p => p.viewMode === 'graph' || p.graphMemberOf)) continue;
+    if (liftedOpenView(dataset.id) === 'graph') offerGraphView(dataset.id);
+  }
+}
+
 export function autoSplitNewLiftedDatasets(seen: Set<string>): void {
   const state = useBrowserStore.getState();
   for (const dataset of state.datasets) {
@@ -127,6 +140,9 @@ export function registerLiveLift(): void {
   followLiftGroupingRows();
   void useLiveLiftStore.getState().check();
   const seen = new Set<string>();
+  // A session opened later in the page (Load file, Restore, drag and drop) restores its split panels as saved; the
+  // datasets were already seen, so the one-time "View as graph" offer (§5.4) is made here.
+  if (typeof window !== 'undefined') window.addEventListener(SESSION_RESTORED_EVENT, () => setTimeout(offerRestoredSplitSessions, 0));
   useBrowserStore.subscribe((s, previous) => {
     if (s.datasets === previous.datasets && s.panels === previous.panels) return;
     // Haplotypes other than MAT/PAT take their colours in each map's order (palette.ts).
