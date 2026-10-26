@@ -87,7 +87,8 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
   useEffect(() => { if (jobDone) void loadScanHits(view, hub.ui.hiddenSets); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [jobDone]);
 
   const sets: FeatureSet[] = useMemo(() => {
-    const fromScans = scanSets(scans).map(s => ({ ...s, source: { kind: 'inline' as const, hits: scanHitsBySet[s.setId]?.hits ?? [] } }));
+    const fromScans = scanSets(scans).map(s => ({ ...s, groups: [...s.groups, ...(scanHitsBySet[s.setId]?.groups ?? [])],
+      source: { kind: 'inline' as const, hits: scanHitsBySet[s.setId]?.hits ?? [] } }));
     return [...fromScans, ...providerSets];
   }, [scans, scanHitsBySet, providerSets]);
   const visible = sets.filter(s => !hub.ui.hiddenSets.includes(s.setId));

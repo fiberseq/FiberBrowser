@@ -275,3 +275,50 @@ def test_overlay_puts_states_on_native_reads(tmp_path, bam):
     assert again[0]['layers'] == out[0]['layers']
     registry.close_scan(st, registry.list_scans(st)[0].scan_id)
     assert 'fpcls' not in ds.available_layers and 'fpcls' not in ds.derived_layers
+
+
+def test_role_columns_nuc_patches_and_haplotypes():
+    from services.scan.serve import role_columns
+    cell = lambda v, n=10: dict(v=v, lo=None, hi=None, n=n, nCallable=n)
+    raw = {'all': {'fraction': cell(0.5)}, 'dataset_1': {'fraction': cell(0.6)}, 'dataset_1:HP1': {'fraction': cell(0.7)}}
+    kinds = {'all': 'all', 'dataset_1': 'dataset', 'dataset_1:HP1': 'haplotype'}
+    cols = role_columns('nuc.patch.regular', raw, kinds, ['dataset_1'])
+    assert cols['all']['prevalence']['v'] == 0.5 and cols['dataset_1']['prevalence']['v'] == 0.6
+    assert cols['dataset_1:HP1']['prevalence']['v'] == 0.7
+    phased = role_columns('nuc.patch.phased', {'dataset_1': {'R_minus_null': cell(0.2)}}, {'dataset_1': 'dataset'}, ['dataset_1'])
+    assert phased['dataset_1']['strength']['v'] == 0.2 and 'prevalence' not in phased['dataset_1']
+
+
+def test_score_roles_of_scan_types():
+    from services.scan.registry import _camel_type
+    def decl(type_id, *names):
+        return dict(type_id=type_id, module=type_id.split('.')[0], provides=['hit'],
+                    scores=[dict(name=n, label=n, kind='fraction', better='high', per_group=True) for n in names])
+    assert _camel_type(decl('fp.class', 'prevalence', 'support_gain_nats'))['roles'] == {'prevalence': 'prevalence', 'strength': 'support_gain_nats'}
+    assert _camel_type(decl('nuc.patch.regular', 'fraction', 'q_hat'))['roles'] == {'prevalence': 'fraction'}
+    assert _camel_type(decl('nuc.patch.phased', 'R_minus_null', 'P'))['roles'] == {'strength': 'R_minus_null'}
+    assert _camel_type(decl('peaks.peak', 'score', 'tier'))['roles'] == {'strength': 'score'}
+
+
+def test_overlay_mark_groups_from_marks_table(tmp_path, bam):
+    """A tables-mode nuc scan: its nucsz / nucseg marks become layers with their bytes as q0..qN."""
+    from scan_fixtures import row, write_table
+    from services.scan import registry
+    from services.scan.overlay import apply_scan_overlays
+    d = write_scan_dir(tmp_path / 'scan', bam, hits=HITS)
+    write_table(d / 'nuc' / 'marks.tsv.bgz', ['group', 'dataset_id', 'qname', 'record', 'molecule', 'mol_start', 'mol_len', 'q', 'name'],
+                [row('chrT', 1010, 1157, 'nucsz', 'dataset_1', 'm1/1/ccs', 'r1:0', 'mol:v1 0', 11, 147, '2,0,230,128', 'nucsz@ab_0'),
+                 row('chrT', 1000, 1400, 'nucseg', 'dataset_1', 'm1/1/ccs', 'r1:0', 'mol:v1 0', 1, 400, '1,200,85', 'nucseg@ab_0')], {'chrT': 0})
+    m = json.loads((d / 'manifest.json').read_text())
+    m['modules']['nuc'] = {'version': '1.0', 'settings_hash': 'n' * 16, 'feature_types': [],
+                           'ma_groups': [{'group': 'nucsz', 'kind': 'mark'}, {'group': 'nucseg', 'kind': 'mark'}, {'group': 'nucmol', 'kind': 'scalar'}]}
+    m['outputs']['tables']['nuc/marks.tsv.bgz'] = dict(rows=2, sha256='')
+    (d / 'manifest.json').write_text(json.dumps(m))
+    ds = _dataset('ds_a', bam)
+    st = _state([ds])
+    registry.open_scan(st, d)
+    assert ds.derived_layers['nucsz']['kind'] == 'scan-overlay' and ds.available_layers['nucseg']
+    (read,) = apply_scan_overlays(st, 'ds_a', 'chrT', 1000, 2000, [dict(id='m1/1/ccs', start=1000, end=1500, layers={})])
+    assert read['layers']['nucsz']['intervals'] == [[10, 157, 147]]
+    assert read['layers']['nucsz']['qualities'] == [[2], [0], [230], [128]] and read['layers']['nucsz']['quality_names'] == ['q0', 'q1', 'q2', 'q3']
+    assert read['layers']['nucseg']['annotation_names'] == ['nucseg@ab_0']

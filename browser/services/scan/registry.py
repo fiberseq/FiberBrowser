@@ -58,9 +58,13 @@ def _camel_type(decl: dict) -> dict:
                    better=s.get('better', 'none'), perGroup=bool(s.get('per_group'))) for s in decl.get('scores') or []]
     names = {s['name'] for s in scores}
     roles = {}
-    if 'prevalence' in names:
-        roles['prevalence'] = 'prevalence'
-    for strength in ('support_gain_nats', 'gain_nats', 'score'):
+    # Canonical score roles (DESIGN §5.5): prevalence = the share of molecules in state 1 (nuc segment patches: the
+    # share of measured molecules in the segment class); strength = the module's strength score.
+    for prevalence in ('prevalence', 'fraction'):
+        if prevalence in names:
+            roles['prevalence'] = prevalence
+            break
+    for strength in ('support_gain_nats', 'gain_nats', 'score', 'R_minus_null'):
         if strength in names:
             roles['strength'] = strength
             break

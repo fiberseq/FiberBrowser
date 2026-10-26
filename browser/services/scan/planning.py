@@ -219,6 +219,16 @@ def build_plan(state, request: dict) -> dict:
     params = request.get('parameters') or {}
     if not isinstance(params, dict):
         raise ScanPlanError('Settings must be a JSON object of module groups')
+    scope = request.get('scope') or 'view'
+    if 'peaks' in modules and scope != 'view':
+        # Owner, 26 Oct (DESIGN §16): FiberBrowser uses the local Rare rule, which doesn't depend on the view, and
+        # counts every record. Grid units (the view scope) get it from FiberHMM's 'auto'; BED-like units would get
+        # the window rule, so it is set explicitly (and shown on the command line). The window rule stays reachable
+        # for one release: {"peaks": {"tier_rule": "window", "row_rule": "view"}}.
+        peaks = dict(params.get('peaks') or {})
+        peaks.setdefault('tier_rule', 'local')
+        peaks.setdefault('row_rule', 'records')
+        params = {**params, 'peaks': peaks}
     try:
         resolved_mods = resolve_modules(modules, params, dict(raw_policy.get('caps') or {}))
     except ValueError as error:
@@ -231,7 +241,6 @@ def build_plan(state, request: dict) -> dict:
                                 'run it with fiberhmm-scan and open the scan here')
     reference = _reference_of(datasets[0]['paths'])
     contigs = list(reference.items())
-    scope = request.get('scope') or 'view'
     gene_dir = cache_root() / 'inputs'
     if scope == 'view':
         chrom = _resolve_chrom(reference, str(request.get('chrom') or ''))

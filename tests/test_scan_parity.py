@@ -221,3 +221,22 @@ def test_cancel_stops_a_scan(bams, cache):
     # A second scan may start once the first has stopped.
     with pytest.raises(ValueError, match='Choose at least one module'):
         jobs.submit(st, dict(datasets=sorted(st.datasets), scope='view', chrom=CONTIG, start=0, end=30_000, modules=[]))
+
+
+def test_peaks_use_the_local_rare_rule_outside_grid_scans(bams, cache, tmp_path):
+    """Owner decision (26 Oct): browser peaks use the local Rare rule and count every record; BED-like scopes set it
+    (FiberHMM's 'auto' would pick the window rule there), grid scans get it from 'auto'. The window rule stays
+    reachable as a setting."""
+    from services.scan import planning
+    st = _state(bams)
+    bed = tmp_path / 'units.bed'
+    bed.write_text(f'{CONTIG}\t20000\t30000\tlocus\n')
+    plan = planning.build_plan(st, dict(datasets=sorted(st.datasets), scope='bed', bed=str(bed), modules=['peaks']))
+    assert plan['parameters']['peaks'] == {'tier_rule': 'local', 'row_rule': 'records'}
+    assert '--parameters scan_parameters.json' in plan['cli']['text'] and plan['cli']['parameters']['peaks']['tier_rule'] == 'local'
+    window = planning.build_plan(st, dict(datasets=sorted(st.datasets), scope='bed', bed=str(bed), modules=['peaks'],
+                                          parameters={'peaks': {'tier_rule': 'window', 'row_rule': 'view'}}))
+    assert window['parameters']['peaks'] == {'tier_rule': 'window', 'row_rule': 'view'}
+    grid = planning.build_plan(st, dict(datasets=sorted(st.datasets), scope='view', chrom=CONTIG, start=20000, end=30000,
+                                        modules=['peaks']))
+    assert 'peaks' not in grid['parameters']   # 'auto' = local + records on grid units, as the CLI's genome scan

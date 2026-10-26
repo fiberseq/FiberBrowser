@@ -84,6 +84,14 @@ def role_columns(type_id: str, raw: Dict[str, Dict[str, dict]], kinds: Dict[str,
         put('all', 'prevalence', raw.get('all', {}).get('prevalence_em'))
         for ds in scan_datasets:
             put(ds, 'prevalence', weighted([raw.get(g, {}).get('em') for g in channels_of[ds]]))
+    elif type_id.startswith('nuc.patch.'):
+        # Segment patches: the share of measured molecules in the segment class (prevalence-like); phased patches:
+        # phasing strength over its null. Per dataset and per dataset haplotype ('<dataset>:HP1').
+        metric, role = ('R_minus_null', 'strength') if type_id == 'nuc.patch.phased' else ('fraction', 'prevalence')
+        put('all', role, raw.get('all', {}).get(metric))
+        for group in raw:
+            if group != 'all':
+                put(group, role, raw[group].get(metric))
     elif type_id.startswith('peaks.'):
         put('all', 'strength', raw.get('all', {}).get('score'))
         for ds in scan_datasets:

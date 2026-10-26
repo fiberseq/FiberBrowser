@@ -6,9 +6,11 @@ scopes, the browser's live-scan cache) keeps them in ``<module>/states.tsv.bgz``
 on the reads of the bound native datasets under the same layer names, so a layer reads the same whichever way the
 scan stored it:
 
-- one interval per (hit, record) with a state, the mark's span (a member's own call edges, else the hit span);
-- quality ``q0`` = the MA state byte (1 member / open, 2 non-member / closed, 3 abstain), as the MA group's first
-  byte; annotation name = the hit id.
+- state groups (``states.tsv.bgz``): one interval per (hit, record) with a state, the mark's span (a member's own
+  call edges, else the hit span); quality ``q0`` = the MA state byte (1 member / open, 2 non-member / closed,
+  3 abstain), as the MA group's first byte; annotation name = the hit id;
+- mark groups (``marks.tsv.bgz``: ``nucsz``, ``nucseg``): one interval per mark, its reference envelope, with the
+  mark's bytes as ``q0..qN`` and its AN name, as the annotated BAM's group reads.
 
 Native reads join by read name (a record's row is the one whose alignment holds the mark). Live-lift datasets
 read scan layers from annotated BAMs (MA groups follow the read through live lift); a tables-mode overlay on
@@ -25,6 +27,8 @@ STATE_BYTE = {'1': 1, '0': 2, '.': 3}
 LAYER_META = {
     'fpcls': ('Footprint classes (scan)', '#7c3aed', 'tf'),
     'nfrvar': ('NFR variants (scan)', '#0f766e', 'msp'),
+    'nucsz': ('Nucleosome sizes (scan)', '#16a34a', 'nuc'),
+    'nucseg': ('Array segments (scan)', '#15803d', 'nuc'),
 }
 
 
@@ -41,6 +45,18 @@ def _state_groups(scan) -> Dict[str, str]:
     return out
 
 
+def _mark_groups(scan) -> Dict[str, List[str]]:
+    """module -> its mark group names (nucsz, nucseg), for modules whose marks table this scan wrote."""
+    out = {}
+    for module, block in (scan.manifest.get('modules') or {}).items():
+        if not scan.tables.has(f'{module}/marks.tsv.bgz'):
+            continue
+        names = [g['group'] for g in block.get('ma_groups') or [] if g.get('kind') == 'mark' and g.get('group')]
+        if names:
+            out[module] = names
+    return out
+
+
 def overlay_scans(state, dataset_id: str):
     """(scan, scan dataset id, {module: group}) of the open tables-mode scans bound to a native dataset."""
     if not state.__dict__.get('scan_registry'):
@@ -52,10 +68,24 @@ def overlay_scans(state, dataset_id: str):
     out = []
     for scan in list_scans(state):
         sid = scan.dataset_of_browser(dataset_id)
-        groups = _state_groups(scan) if sid else {}
-        if groups:
-            out.append((scan, sid, groups))
+        if not sid:
+            continue
+        groups = _state_groups(scan)
+        marks = _mark_groups(scan)
+        if groups or marks:
+            out.append((scan, sid, dict(groups, **{f'{m}#marks': ','.join(names) for m, names in marks.items()})))
     return out
+
+
+def _group_names(groups: Dict[str, str]):
+    """(module, table, group) of an overlay entry: state groups read states.tsv, '<module>#marks' entries marks.tsv."""
+    for key, value in groups.items():
+        if key.endswith('#marks'):
+            module = key[:-len('#marks')]
+            for name in value.split(','):
+                yield module, 'marks', name
+        else:
+            yield key, 'states', value
 
 
 def refresh_dataset_layers(state) -> None:
@@ -69,7 +99,7 @@ def refresh_dataset_layers(state) -> None:
             derived.pop(name, None)
             available.pop(name, None)   # declared by this overlay (a dataset's own MA group never gets an entry)
         for _scan, _sid, groups in overlay_scans(state, ds_id):
-            for group in groups.values():
+            for _module, _table, group in _group_names(groups):
                 if available.get(group) and group not in derived:
                     continue   # the dataset's own MA group (an annotated BAM): no overlay needed
                 label, colour, source = LAYER_META.get(group, (f'{group} (scan)', '#64748b', 'tf'))
@@ -85,11 +115,17 @@ def apply_scan_overlays(state, dataset_id: str, chrom: str, start: int, end: int
     derived = getattr(ds, 'derived_layers', None) or {}
     marks: Dict[str, Dict[str, list]] = {}
     for scan, sid, groups in scans:
-        for module, group in groups.items():
+        by_table: Dict[tuple, list] = {}
+        for module, table, group in _group_names(groups):
             if (derived.get(group) or {}).get('kind') != 'scan-overlay':
                 continue   # the dataset carries this group itself
-            for r in scan.tables.fetch(f'{module}/states.tsv.bgz', chrom, start, end):
+            by_table.setdefault((module, table), []).append(group)
+        for (module, table), wanted in by_table.items():
+            for r in scan.tables.fetch(f'{module}/{table}.tsv.bgz', chrom, start, end):
                 if r.get('dataset_id') != sid:
+                    continue
+                group = wanted[0] if table == 'states' else r.get('group')
+                if group not in wanted:
                     continue
                 marks.setdefault(r.get('qname', ''), {}).setdefault(group, []).append(r)
     if not marks:
@@ -112,12 +148,19 @@ def apply_scan_overlays(state, dataset_id: str, chrom: str, start: int, end: int
                         continue
                     ivs.append([lo - start, hi - start, b - a])
                     srcs.append([a - start, b - start, b - a])
-                    names.append(row.get('hit_id', ''))
-                    q0.append(STATE_BYTE.get(str(row.get('state')), 3))
+                    if 'hit_id' in row:
+                        names.append(row.get('hit_id', ''))
+                        q0.append([STATE_BYTE.get(str(row.get('state')), 3)])
+                    else:   # a molecule-wide mark: its own bytes (the MA group's qualities) and AN name
+                        names.append(row.get('name', '') if row.get('name') not in (None, '.') else '')
+                        q0.append([int(x) for x in str(row.get('q') or '').split(',') if x != ''])
                 if ivs:
+                    width = max((len(q) for q in q0), default=0)
                     layers[group] = dict(intervals=ivs, source_intervals=srcs, annotation_names=names,
-                                         quality_names=['q0'], qualities=[q0], scan_overlay=True,
-                                         source_layer=LAYER_META.get(group, ('', '', 'tf'))[2], draw_style='fill')
+                                         quality_names=[f'q{i}' for i in range(width)],
+                                         qualities=[[q[i] if i < len(q) else 0 for q in q0] for i in range(width)],
+                                         scan_overlay=True, source_layer=LAYER_META.get(group, ('', '', 'tf'))[2],
+                                         draw_style='fill')
         if mine or len(layers) != len(read.get('layers') or {}):
             read = dict(read)
             read['layers'] = layers

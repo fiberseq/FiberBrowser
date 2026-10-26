@@ -9,7 +9,7 @@ import { useBrowserStore } from '../../stores/browserStore';
 import { closeScan as apiClose, listScans, openScan as apiOpen, scanHits, type ScanHit, type ScanInfo, type ScanSetInfo } from './api';
 import { ensureHubKind, hubProviders, onHubProvidersChanged, type HubOpenedScan, type HubView } from './hubState';
 import { dsKey } from './providers';
-import type { FeatureHit, FeatureSet, HitValue } from './types';
+import type { FeatureHit, FeatureSet, GroupDecl, HitValue } from './types';
 
 interface HubDataStore {
   scans: ScanInfo[];
@@ -17,7 +17,7 @@ interface HubDataStore {
   missing: Record<string, string>;
   error: string;
   /** set id -> hits in the view the key names. */
-  hits: Record<string, { key: string; hits: FeatureHit[]; truncated: boolean; error?: string }>;
+  hits: Record<string, { key: string; hits: FeatureHit[]; truncated: boolean; error?: string; groups?: GroupDecl[] }>;
   loadingHits: boolean;
   setScans: (scans: ScanInfo[]) => void;
 }
@@ -119,7 +119,28 @@ export async function restoreSessionScans(): Promise<void> {
 export function scanColumnKey(set: ScanSetInfo, scanDataset: string, scanId: string): string {
   if (scanDataset === 'all') return 'all';
   const g = set.groups.find(x => x.scanDataset === scanDataset || x.id === scanDataset);
-  return g?.datasetId ? dsKey(g.datasetId) : `scan:${scanId}:${scanDataset}`;
+  if (g) return g.datasetId ? dsKey(g.datasetId) : `scan:${scanId}:${g.scanDataset ?? scanDataset}`;
+  // A dataset's haplotype group ('dataset_1:HP1', nuc patches): its dataset's column with the haplotype.
+  const cut = scanDataset.lastIndexOf(':');
+  const base = cut > 0 ? set.groups.find(x => x.scanDataset === scanDataset.slice(0, cut)) : undefined;
+  if (base) return `${base.datasetId ? dsKey(base.datasetId) : `scan:${scanId}:${base.scanDataset}`}:${scanDataset.slice(cut + 1)}`;
+  return `scan:${scanId}:${scanDataset}`;
+}
+
+/** Column decls for the scan groups a set's hits carry beyond its datasets (haplotype groups). */
+export function extraScanGroups(set: ScanSetInfo, scanId: string, hits: ScanHit[]): GroupDecl[] {
+  const out = new Map<string, GroupDecl>();
+  for (const h of hits) {
+    for (const col of Object.keys(h.columns ?? {})) {
+      if (col === 'all' || set.groups.some(g => g.scanDataset === col || g.id === col)) continue;
+      const key = scanColumnKey(set, col, scanId);
+      if (out.has(key)) continue;
+      const cut = col.lastIndexOf(':');
+      const base = cut > 0 ? set.groups.find(g => g.scanDataset === col.slice(0, cut)) : undefined;
+      out.set(key, { id: key, datasetId: base?.datasetId, kind: 'haplotype', label: base ? `${base.label} ${col.slice(cut + 1)}` : col });
+    }
+  }
+  return [...out.values()];
 }
 
 export function scanHitToFeature(set: ScanSetInfo, scanId: string, h: ScanHit): FeatureHit {
@@ -165,8 +186,9 @@ export async function loadScanHits(view: HubView, hidden: string[]): Promise<voi
     for (const [module, sets] of byModule) {
       jobs.push(scanHits(scan.scanId, module, view.chrom, view.start, view.end, undefined, controller.signal).then(res => {
         for (const set of sets) {
-          next[set.setId] = { key, truncated: res.truncated,
-            hits: res.hits.filter(h => h.typeId === set.typeId).map(h => scanHitToFeature(set, scan.scanId, h)) };
+          const mine = res.hits.filter(h => h.typeId === set.typeId);
+          next[set.setId] = { key, truncated: res.truncated, groups: extraScanGroups(set, scan.scanId, mine),
+            hits: mine.map(h => scanHitToFeature(set, scan.scanId, h)) };
         }
       }).catch(e => {
         if (controller.signal.aborted) return;
