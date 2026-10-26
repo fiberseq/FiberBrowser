@@ -10,6 +10,7 @@ import threading
 from bisect import bisect_left, bisect_right
 from collections import OrderedDict
 from services.byte_cache import ByteCache
+from services.read_columns import IntColumn
 from services.packed_reads import pack_reads, PackedReads, PackedReadBuilder, bounded_analysis, compact_read_bounds
 from typing import Callable, Iterable, Optional
 
@@ -1235,7 +1236,46 @@ def _visible_interval_range(container: dict, view_start: int, view_end: int):
     return intervals, range(lo, hi), positive_prefix
 
 
+def _column_view(intervals, viewport_offset: int, region_width: int, calls=()):
+    """For an ``IntColumn`` of ``[start, end, size]`` (read row format 2,
+    services/read_columns.py): ``(kept indices, starts, ends, sizes)`` of the
+    intervals the projection loops below keep, clipped, as arrays; None for
+    any other value (the loops then run). Kept: a visible span, or a
+    zero-width insertion marker with a call inside ``[0, width]``
+    (``lift.reads.keep_interval``)."""
+    if type(intervals) is not IntColumn or intervals.width is None or intervals.width < 3:
+        return None
+    import numpy as np
+    arr = intervals.array
+    rel_start = arr[:, 0] - viewport_offset
+    rel_end = arr[:, 1] - viewport_offset
+    clipped_start = np.maximum(rel_start, 0)
+    clipped_end = np.minimum(rel_end, region_width)
+    keep = clipped_end > clipped_start
+    marker = ~keep & (rel_start == rel_end) & (rel_start >= 0) & (rel_start <= region_width)
+    if marker.any():
+        for i in np.flatnonzero(marker).tolist():
+            marker[i] = i < len(calls) and calls[i] is not None
+        keep |= marker
+    kept = np.flatnonzero(keep)
+    return kept, clipped_start[kept], clipped_end[kept], arr[kept, 2]
+
+
 def _project_primary_intervals(read: dict, viewport_offset: int, region_width: int, *, index_intervals=True):
+    column = _column_view(read.get("intervals"), viewport_offset, region_width,
+                          ((read.get("live_lift") or {}).get("calls") or {}).get("intervals") or ())
+    if column is not None:
+        # The loop below on the column's array (same intervals, qualities and types).
+        kept, starts, ends, sizes = column
+        qualities = read.get("qualities")
+        adjusted_intervals = tuple(zip(starts.tolist(), ends.tolist(), sizes.tolist()))
+        if qualities is None:
+            return adjusted_intervals, None
+        import numpy as np
+        positive = read["intervals"].array[:, 2] > 0
+        index = np.cumsum(positive) - positive  # positive intervals before each
+        take = kept[positive[kept]]
+        return adjusted_intervals, [qualities[i] for i in index[take].tolist() if i < len(qualities)]
     adjusted_intervals = []
     adjusted_qualities = []
     qualities = read.get("qualities")
@@ -1274,6 +1314,9 @@ def _project_primary_intervals(read: dict, viewport_offset: int, region_width: i
 
 
 def _project_positions(positions, viewport_offset: int, region_width: int) -> list[int]:
+    if type(positions) is IntColumn and positions.width is None:
+        rel = positions.array - viewport_offset
+        return rel[(rel >= 0) & (rel < region_width)].tolist()
     adjusted = []
     for pos in positions or []:
         rel = pos - viewport_offset
@@ -1307,7 +1350,13 @@ def _project_layer_intervals(
     kept_indices = []
     view_start = viewport_offset
     view_end = viewport_offset + region_width
-    if index_intervals and not calls:
+    column = _column_view(intervals, viewport_offset, region_width, calls)
+    if column is not None:
+        kept, starts, ends, sizes = column
+        adjusted_intervals = [list(iv) for iv in zip(starts.tolist(), ends.tolist(), sizes.tolist())]
+        kept_indices = kept.tolist()
+        visible_range = ()
+    elif index_intervals and not calls:
         intervals, visible_range, _positive_prefix = _visible_interval_range(layer, view_start, view_end)
     else:
         visible_range = range(len(intervals))
@@ -1436,7 +1485,11 @@ def project_broad_read_to_viewport(
     if layer_key_includes(layer_key, "fire", "msp") and read.get("fire"):
         adjusted_fire = []
         calls = ((read.get("live_lift") or {}).get("calls") or {}).get("fire") or ()
-        for i, iv in enumerate(read["fire"]):
+        column = _column_view(read["fire"], viewport_offset, region_width, calls)
+        if column is not None:
+            _kept, starts, ends, sizes = column
+            adjusted_fire = [list(iv) for iv in zip(starts.tolist(), ends.tolist(), sizes.tolist())]
+        for i, iv in enumerate(read["fire"] if column is None else ()):
             clipped = _clip_interval_to_viewport(iv, viewport_offset, region_width,
                                                  call=calls[i] if i < len(calls) else None)
             if clipped is not None:
