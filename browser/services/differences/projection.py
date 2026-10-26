@@ -479,8 +479,12 @@ def classify_projection(alignment, projected, target, *, context=None, likelihoo
         candidates = dict(target.get("candidates") or {})
         competition_complete = target.get("competition_complete") is True and target_id in candidates and "reference" in candidates
         policy = likelihood_policy or LikelihoodPolicy()
-        context = replace(context or DafContext("unknown", "unavailable"),
-            reverse_complemented=projected["alignment_orientation"] == "reverse", base_qualities=qualities)
+        from .alleles import stored_frame_chemistry
+        # st-tag chemistry is in the stored-SEQ frame: complemented only when this projection reversed the SEQ
+        # (a minus piece). A molecule-frame context follows the alignment's orientation through the projection.
+        projection_reversed = (projected["alignment_orientation"] == "reverse") != bool(alignment.reverse)
+        reverse = projection_reversed if stored_frame_chemistry(context) else projected["alignment_orientation"] == "reverse"
+        context = replace(context or DafContext("unknown", "unavailable"), reverse_complemented=reverse, base_qualities=qualities)
         # A deletion is structurally diagnostic even without BAM SEQ, but a
         # competing empty allele at this boundary is never silently excluded.
         structural = (any((e["ref_start"], e["ref_end"], e["alt_bp"]) == (start, end, 0) for e in matching)

@@ -209,7 +209,11 @@ def enrich_native(state, envelope, *, dataset_id, chrom, ref, target_end, specif
                 raise SvRequestError("invalid molecule chemistry context") from exc
             # Context chemistry is canonical; BAM reverse orientation needs its
             # transition matrix complemented exactly once, never a CT/GA rename.
-            context = replace(context, reverse_complemented=bool(read.is_reverse), base_qualities=obs["qualities"])
+            # An st-tag chemistry describes the stored SEQ, which observe_interval returns as is (never complemented);
+            # an explicit molecule-frame context is complemented for a reverse-mapped record.
+            from .alleles import stored_frame_chemistry
+            reverse = False if stored_frame_chemistry(context) else bool(read.is_reverse)
+            context = replace(context, reverse_complemented=reverse, base_qualities=obs["qualities"])
             geometry = envelope['calls_by_molecule'][molecule.key].get('geometry_evidence') or {}
             conditional = compete(obs["sequence"], {**candidates, "reference": reference}, target_id=target,
                                   complete=obs["complete"] and competition_complete, context=context, policy=policy, budget=budget,

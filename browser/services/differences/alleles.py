@@ -11,6 +11,16 @@ from .calls import Call
 _COMPLEMENT = str.maketrans("ACGT", "TGCA")
 
 
+# Chemistry read from a BAM st tag. FiberHMM's st (fiberhmm/daf/encoder.py) counts reference C>T versus G>A on the
+# stored, reference-forward SEQ, so it is already in the stored-SEQ frame: only a projection that reverse-complements
+# that SEQ (a minus-chain lift) complements it, never the read's own orientation.
+ST_TAG_PROVENANCE = frozenset({"BAM:st", "bam_st_tag"})
+
+
+def stored_frame_chemistry(context) -> bool:
+    return context is not None and getattr(context, "provenance", None) in ST_TAG_PROVENANCE
+
+
 @dataclass(frozen=True)
 class DafContext:
     chemistry: str  # molecule chemistry; never swapped by target orientation
