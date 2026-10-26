@@ -517,7 +517,8 @@ describe('group H agy review 3: source pop-outs start with their member\'s state
   const aidOf = (q: string) => `lift-cohort:v1 ${JSON.stringify([`d#0|${q}`, q, `${q}:r`, 0, 'primary'])}`;
 
   it('a new source view takes the member\'s filter, selection, exclusions, labels, order, focus and names by QNAME', () => {
-    seed([...split(), panel('src', { datasetId: 'n', stateKey: 'src~lift-source' })]);
+    seed([...split(), panel('src', { datasetId: 'n', stateKey: 'src~lift-source',
+      liftLink: { id: 'l', datasetId: 'd', liftPanelId: 'mat', hap: '2', hapLabel: 'PAT', contig: 'chr3_PAT', flip: false, chain: null } as never })]);
     useBrowserStore.setState({ filteredReadIds: { 'k-pat': new Set([aidOf('q1'), 'q2']) }, selectedReadIds: { 'k-pat': new Set([aidOf('q1')]) },
       clusterAssignments: { 'k-pat': { [aidOf('q1')]: 0, [aidOf('q2')]: 1 } }, clusterOrder: { 'k-pat': [1, 0] }, clusterFocus: { 'k-pat': new Set([1]) },
       clusterGroupLabels: { 'k-pat': { 1: 'C1' } } } as never);

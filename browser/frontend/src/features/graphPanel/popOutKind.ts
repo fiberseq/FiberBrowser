@@ -10,10 +10,10 @@ import { useBrowserStore } from '../../stores/browserStore';
 import { isLiveLift } from '../../utils/datasetKinds';
 import type { PanelConfig } from '../../types';
 import { linkedSourcePanels, openLinkedSourceView } from '../liveLift/linking/liftLink';
-import { isHost, panelKeyOf, popOut, undoable } from './hostMode';
+import { isHost, liveProvenance, panelKeyOf, popOut, provenanceCovers, provenanceLineage, provenanceShare, undoable, type GraphProvenance } from './hostMode';
 import { useReadActionsStore } from '../../stores/readActionsStore';
 import { qnameOfId } from '../../utils/recordKeys';
-import { sourceLabels } from '../../utils/clusterMatchedRun';
+import { linkedSourceObservations, sourceLabels } from '../../utils/clusterMatchedRun';
 import { labelLinkedSource } from './graphCluster';
 import { serializeState } from '../../stores/historySlice';
 import type { GraphViewState } from './types';
@@ -110,9 +110,12 @@ async function openSources(host: PanelConfig, sources: PopOutPlan['sources']): P
 
 /**
  * A new source view popped out of a graph starts where its member is (agy review, group H): its read filter,
- * selection, exclusions, cluster order, focus and cluster names, and — when the current graph run did not label it
- * (no run, a merged or relabelled one) — the member's own cluster labels, all named by QNAME (the source rows are
- * the same records). State the source view already has is kept.
+ * selection and exclusions by QNAME (the source rows are the same records), and its clusters on every tree node
+ * that has them — labels, order, focus and names — so switching branches keeps them (Codex review, group H round 3).
+ * Labels are only ever this source's haplotype and strand: split by the graph runs' record provenance when the
+ * labels are theirs, else taken only from a member of that one haplotype; a pooled host's labels with no provenance
+ * (a merged or regrouped run) give none, never another haplotype's (Codex round 3). The current run's labels
+ * (labelLinkedSource) stay. State the source view already has is kept.
  */
 export function seedSourceState(fromPanelId: string, sourcePanelId: string): void {
   const st = useBrowserStore.getState();
@@ -121,26 +124,63 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
   if (!from || !to) return;
   const fk = panelKeyOf(from), tk = panelKeyOf(to);
   const names = (ids: Iterable<string> | null | undefined) => (ids ? new Set([...ids].map(qnameOfId)) : null);
-  const labels = st.clusterAssignments[fk];
-  // Labels from the run just now, or the member's own here: either way the member's cluster order applies.
-  let labelled = Boolean(Object.keys(st.clusterAssignments[tk] ?? {}).length);
-  if (labels && Object.keys(labels).length && !labelled) {
-    const byName = sourceLabels({ assignments: { m: labels } }, ['m']);
-    if (Object.keys(byName).length) { st.setClusterAssignments(tk, byName, { mirror: true, merge: true, svSplit: true }); labelled = true; }
-  }
+  // A member of exactly this haplotype (and not the other strand) has only this source's records.
+  const hapOnly = Boolean(from.liftHap) && (from.liftHap ?? '').toUpperCase() === (to.liftLink?.hapLabel ?? '').toUpperCase()
+    && !(from.strand && to.strand && from.strand !== to.strand);
+  /** A map of the member's labels as this source's QNAME labels (null: none of them are this source's for sure). */
+  const project = (labels: Record<string, number> | undefined, provs: GraphProvenance[]): Record<string, number> | null => {
+    if (!labels || !Object.keys(labels).length) return null;
+    let mine: Record<string, number> | null = null;
+    if (provenanceCovers(provs, labels)) {
+      const picked = new Set(provs.flatMap(p => linkedSourceObservations(p.observations, to).map(o => o.id)));
+      mine = provenanceShare(provs, labels, o => picked.has(o.id));
+    } else if (hapOnly) mine = labels;
+    if (!mine) return null;
+    const byName = sourceLabels({ assignments: { m: mine } }, ['m']);
+    return Object.keys(byName).length ? byName : null;
+  };
+  const active = st.activeClusterTreeNodeId && st.clusterTreeNodes[st.activeClusterTreeNodeId] ? st.activeClusterTreeNodeId : null;
   useBrowserStore.setState(cur => {
     const patch: Record<string, unknown> = {};
     const filter = names(cur.filteredReadIds[fk]);
     if (filter && !cur.filteredReadIds[tk]) patch.filteredReadIds = { ...cur.filteredReadIds, [tk]: filter };
     const selected = names(cur.selectedReadIds[fk]);
     if (selected?.size && !cur.selectedReadIds[tk]?.size) patch.selectedReadIds = { ...cur.selectedReadIds, [tk]: selected };
-    if (cur.clusterOrder[fk]?.length && (labelled || !cur.clusterOrder[tk]?.length)) patch.clusterOrder = { ...cur.clusterOrder, [tk]: [...cur.clusterOrder[fk]] };
-    const focus = cur.clusterFocus[fk];
-    if (focus?.size && !cur.clusterFocus[tk]?.size) patch.clusterFocus = { ...cur.clusterFocus, [tk]: new Set(focus) };
-    const groupNames = cur.clusterGroupLabels?.[fk];
-    if (groupNames && Object.keys(groupNames).length && !cur.clusterGroupLabels?.[tk]) {
-      patch.clusterGroupLabels = { ...cur.clusterGroupLabels, [tk]: { ...groupNames } };
+    // Live clusters: the run's labels already here, else the member's share.
+    let live = cur.clusterAssignments[tk];
+    if (!live || !Object.keys(live).length) {
+      const got = project(cur.clusterAssignments[fk], active ? provenanceLineage(cur, fk, active) : liveProvenance(cur, fk));
+      if (got) { live = got; patch.clusterAssignments = { ...cur.clusterAssignments, [tk]: got }; }
     }
+    const labelled = Boolean(live && Object.keys(live).length);
+    const order = labelled && cur.clusterOrder[fk]?.length ? [...cur.clusterOrder[fk]] : cur.clusterOrder[tk];
+    const focus = labelled && cur.clusterFocus[fk]?.size ? new Set(cur.clusterFocus[fk]!) : cur.clusterFocus[tk] ?? null;
+    const groupNames = labelled && cur.clusterGroupLabels?.[fk] && Object.keys(cur.clusterGroupLabels[fk]).length
+      ? { ...cur.clusterGroupLabels[fk], ...(cur.clusterGroupLabels?.[tk] ?? {}) } : cur.clusterGroupLabels?.[tk];
+    if (labelled) {
+      if (order) patch.clusterOrder = { ...cur.clusterOrder, [tk]: order };
+      if (focus?.size) patch.clusterFocus = { ...cur.clusterFocus, [tk]: focus };
+      if (groupNames) patch.clusterGroupLabels = { ...cur.clusterGroupLabels, [tk]: groupNames };
+    }
+    // Every tree node: the active one takes the complete live state; the others their own share of the member's.
+    const nodes: Record<string, unknown> = {};
+    for (const [nid, n] of Object.entries(cur.clusterTreeNodes)) {
+      if (nid === active) {
+        if (!labelled) continue;
+        nodes[nid] = { ...n, assignments: { ...n.assignments, [tk]: { ...live! } }, order: { ...n.order, ...(order ? { [tk]: [...order] } : {}) },
+          focus: { ...n.focus, [tk]: focus?.size ? [...focus] : null },
+          ...(groupNames ? { groupLabels: { ...(n.groupLabels ?? {}), [tk]: { ...groupNames } } } : {}) };
+        continue;
+      }
+      if (!n.assignments?.[fk] || (n.assignments[tk] && Object.keys(n.assignments[tk]).length)) continue;
+      const got = project(n.assignments[fk], provenanceLineage(cur, fk, nid));
+      if (!got) continue;
+      nodes[nid] = { ...n, assignments: { ...n.assignments, [tk]: got },
+        order: n.order?.[fk] ? { ...n.order, [tk]: [...n.order[fk]] } : n.order,
+        focus: n.focus?.[fk] ? { ...n.focus, [tk]: [...n.focus[fk]!] } : n.focus,
+        ...(n.groupLabels?.[fk] ? { groupLabels: { ...n.groupLabels, [tk]: { ...n.groupLabels[fk] } } } : {}) };
+    }
+    if (Object.keys(nodes).length) patch.clusterTreeNodes = { ...cur.clusterTreeNodes, ...nodes };
     return patch;
   });
   const excluded = useReadActionsStore.getState().excludedReadIds[fk];

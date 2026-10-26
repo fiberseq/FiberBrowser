@@ -14,7 +14,7 @@ import { assignWithGraphRun, commitGraphRun, destinationAssignments, graphCluste
 import { useGraphSettings } from './handoff';
 import { graphRunStateKeys, linkedSourceObservations, sourceLabels } from '../../utils/clusterMatchedRun';
 import { mirroredSelections } from './selectionSync';
-import { popOutPaths, setPopOutKind } from './popOutKind';
+import { popOutPaths, seedSourceState, setPopOutKind } from './popOutKind';
 import type { GraphBinding, GraphReadBinding, GraphRegistration } from './types';
 import type { PanelConfig } from '../../types';
 
@@ -178,6 +178,49 @@ describe('a linked source panel is a destination of graph runs', () => {
     expect(useBrowserStore.getState().clusterAssignments['srcGA~lift-source']).toEqual({ q1: 1 });
     // An unsplit source panel with only strand observations takes them all.
     expect(linkedSourceObservations([ct, ga] as never, source('x', '2', 'PAT')).length).toBe(2);
+  });
+
+  it('round 3: a pooled host\'s labels reach a source view only for its haplotype, by provenance, also after a merge', () => {
+    seed([panel('pool', { liftHaplotypeMode: 'pooled' }), source('srcP', '2', 'PAT', { collapsed: true })]);
+    setPanelViewMode('pool', 'graph');
+    const p = plan();
+    const mat = p.observations.find(o => o.binding === 'mat')!.id;
+    const pat = p.observations.find(o => o.binding === 'pat')!.id;
+    // One QNAME with a record on each haplotype; one MAT-only QNAME.
+    commitGraphRun(useBrowserStore.getState(), p, response({ [mat]: { assignments: { [aid('q', 'm:0')]: 0, [aid('mOnly', 'm:1')]: 0 } },
+      [pat]: { assignments: { [aid('q', 'p:0')]: 1 } } }));
+    expect(useBrowserStore.getState().activeClusterTreeNodeId).toBeTruthy();
+    // A merge relabels the host (the run is no longer the shown labels).
+    useBrowserStore.setState(s => ({ clusterAssignments: { ...s.clusterAssignments, 'k-pool': { ...s.clusterAssignments['k-pool'], [aid('mOnly', 'm:1')]: 1 } } }));
+    seedSourceState('pool', 'srcP');
+    expect(useBrowserStore.getState().clusterAssignments['srcP~lift-source']).toEqual({ q: 1 });
+  });
+
+  it('round 3: with no provenance, a pooled host\'s labels give a source view none (never another haplotype\'s)', () => {
+    seed([panel('pool', { liftHaplotypeMode: 'pooled' }), source('srcP', '2', 'PAT')]);
+    useBrowserStore.setState({ clusterAssignments: { 'k-pool': { [aid('q', 'm:0')]: 0, [aid('q', 'p:0')]: 1 } } } as never);
+    seedSourceState('pool', 'srcP');
+    expect(useBrowserStore.getState().clusterAssignments['srcP~lift-source']).toBeUndefined();
+  });
+
+  it('round 3: the source view\'s clusters are on every tree node: switching to the root and back keeps labels, order, focus and names', () => {
+    seed([...split(), source('srcP', '2', 'PAT')]);
+    const node = (id: string, parentId: string | null, assignments: Record<string, number>, order: number[], focus: number[] | null, names?: Record<number, string>) => ({
+      id, parentId, name: id, createdAt: 0, chrom: 'chr3', start: 128_650_000, end: 128_660_000, sourceClusterIds: [], clusterMethod: 'kmeans', clusterK: 2,
+      subnucleosomalThreshold: 0, accessibilityThreshold: 0, peakRegions: [], selectedPeakIndices: [], peakModes: {}, patterns: {}, dynamicClustering: false,
+      assignments: { 'k-pat': assignments }, order: { 'k-pat': order }, focus: { 'k-pat': focus }, ...(names ? { groupLabels: { 'k-pat': names } } : {}) });
+    const rootLabels = { [aid('q1')]: 0, [aid('q2')]: 1 }, childLabels = { [aid('q1')]: 3, [aid('q2')]: 4 };
+    useBrowserStore.setState({ clusterTreeNodes: { r: node('r', null, rootLabels, [0, 1], null), c: node('c', 'r', childLabels, [4, 3], [4], { 3: 'C3', 4: 'C4' }) },
+      clusterTreeRootIds: ['r'], activeClusterTreeNodeId: 'c', clusterAssignments: { 'k-pat': childLabels }, clusterOrder: { 'k-pat': [4, 3] },
+      clusterFocus: { 'k-pat': new Set([4]) }, clusterGroupLabels: { 'k-pat': { 3: 'C3', 4: 'C4' } } } as never);
+    seedSourceState('pat', 'srcP');
+    const key = 'srcP~lift-source';
+    const shown = () => { const st = useBrowserStore.getState(); return { a: st.clusterAssignments[key], o: st.clusterOrder[key], f: st.clusterFocus[key] ? [...st.clusterFocus[key]!] : null, n: st.clusterGroupLabels[key] }; };
+    expect(shown()).toEqual({ a: { q1: 3, q2: 4 }, o: [4, 3], f: [4], n: { 3: 'C3', 4: 'C4' } });
+    useBrowserStore.getState().applyClusterTreeNode('r');
+    expect(useBrowserStore.getState().clusterAssignments[key]).toEqual({ q1: 0, q2: 1 });
+    useBrowserStore.getState().applyClusterTreeNode('c');
+    expect(shown()).toEqual({ a: { q1: 3, q2: 4 }, o: [4, 3], f: [4], n: { 3: 'C3', 4: 'C4' } });
   });
 });
 

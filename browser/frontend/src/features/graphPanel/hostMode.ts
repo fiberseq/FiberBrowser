@@ -229,6 +229,45 @@ export function poppable(panels: readonly PanelConfig[], host: PanelConfig): { f
   return { folded, missing };
 }
 
+/** A graph run's record provenance on a tree node (or of the current run): its destinations, observations and the
+ * record keys each observation labelled. */
+export type GraphProvenance = { destinations: string[]; observations: GraphRunObservation[]; owned: Record<string, string[]> };
+
+type ProvenanceState = { clusterTreeNodes: Record<string, { parentId: string | null; graphProvenance?: GraphProvenance }>;
+  clusterMatchedRun: import('../../utils/clusterMatchedRun').ClusterMatchedRun | null;
+  clusterAssignments: Record<string, Record<string, number>> };
+
+/** The provenance of the graph runs of a tree node's lineage (itself and its ancestors) that labelled `key`. */
+export function provenanceLineage(s: ProvenanceState, key: string, nodeId: string | null | undefined): GraphProvenance[] {
+  const out: GraphProvenance[] = [];
+  for (let n = nodeId ? s.clusterTreeNodes[nodeId] : undefined, seen = 0; n && seen < 1000; n = n.parentId ? s.clusterTreeNodes[n.parentId] : undefined, seen++) {
+    if (n.graphProvenance?.destinations.includes(key)) out.push(n.graphProvenance);
+  }
+  return out;
+}
+
+/** The current graph run's provenance for `key`, while its labels are the shown ones (none otherwise). */
+export function liveProvenance(s: ProvenanceState, key: string): GraphProvenance[] {
+  const run = s.clusterMatchedRun;
+  return run?.graph && run.destinations?.some(d => d.stateKey === key) && currentMatchedRun(run, s.clusterAssignments) === run
+    ? [{ destinations: run.destinations.map(d => d.stateKey), observations: run.graph.observations,
+      owned: Object.fromEntries(Object.entries(run.assignments).map(([o, a]) => [o, Object.keys(a).map(id => recordKey(id) ?? id)])) }] : [];
+}
+
+/** Whether every label of a map is the provenance's (unassigned aside): only then can it be split by observation. */
+export function provenanceCovers(provs: readonly GraphProvenance[], labels: Record<string, number> | undefined): boolean {
+  if (!provs.length || !labels) return false;
+  const known = new Set(provs.flatMap(p => Object.values(p.owned).flat()));
+  return Object.entries(labels).every(([rid, c]) => c === UNASSIGNED_CLUSTER_ID || known.has(recordKey(rid) ?? rid));
+}
+
+/** The labels of the observations `shows` picks (their records, by record key). */
+export function provenanceShare(provs: readonly GraphProvenance[], labels: Record<string, number>,
+  shows: (o: GraphRunObservation) => boolean): Record<string, number> {
+  const own = new Set(provs.flatMap(p => p.observations.filter(shows).flatMap(o => p.owned[o.id] ?? [])));
+  return Object.fromEntries(Object.entries(labels).filter(([rid]) => own.has(recordKey(rid) ?? rid)));
+}
+
 /** Pop members out of a host's graph (one, some or all): revealed as ordinary panels, next to the host. A pooled
  * host's haplotype with no panel yet gets one, with a copy of the host's state (`copyPanelState`). */
 export function popOut(hostId: string, memberIds: string[], newHaps: { binding: string; hap: string }[] = []): string[] {
@@ -251,28 +290,12 @@ export function popOut(hostId: string, memberIds: string[], newHaps: { binding: 
     // is theirs (labels a later split or grouping wrote are left as they were); a panel left with no label gets none,
     // nor a focus or picks (agy round 3, Codex round 3).
     const hostKey = panelKeyOf(host);
-    type Provenance = { destinations: string[]; observations: GraphRunObservation[]; owned: Record<string, string[]> };
-    const lineage = (id: string | null | undefined): Provenance[] => {
-      const out: Provenance[] = [];
-      for (let n = id ? s.clusterTreeNodes[id] : undefined, seen = 0; n && seen < 1000; n = n.parentId ? s.clusterTreeNodes[n.parentId] : undefined, seen++) {
-        if (n.graphProvenance?.destinations.includes(hostKey)) out.push(n.graphProvenance);
-      }
-      return out;
-    };
-    const run = s.clusterMatchedRun;
-    const fromRun: Provenance[] = run?.graph && run.destinations?.some(d => d.stateKey === hostKey)
-      && currentMatchedRun(run, s.clusterAssignments) === run ? [{ destinations: run.destinations.map(d => d.stateKey),
-        observations: run.graph.observations,
-        owned: Object.fromEntries(Object.entries(run.assignments).map(([o, a]) => [o, Object.keys(a).map(id => recordKey(id) ?? id)])) }] : [];
+    const lineage = (id: string | null | undefined) => provenanceLineage(s, hostKey, id);
+    const fromRun = liveProvenance(s, hostKey);
     /** Each new panel's share of ``labels`` (null: not filtered, the copy stands). */
-    const share = (provs: Provenance[], labels: Record<string, number> | undefined) => {
-      if (!provs.length || !labels) return null;
-      const known = new Set(provs.flatMap(p => Object.values(p.owned).flat()));
-      if (!Object.entries(labels).every(([rid, c]) => c === UNASSIGNED_CLUSTER_ID || known.has(recordKey(rid) ?? rid))) return null;
-      return new Map(made.map(m => {
-        const own = new Set(provs.flatMap(p => p.observations.filter(o => observationShownBy(o, m)).flatMap(o => p.owned[o.id] ?? [])));
-        return [m.id, Object.fromEntries(Object.entries(labels).filter(([rid]) => own.has(recordKey(rid) ?? rid)))];
-      }));
+    const share = (provs: GraphProvenance[], labels: Record<string, number> | undefined) => {
+      if (!provenanceCovers(provs, labels)) return null;
+      return new Map(made.map(m => [m.id, provenanceShare(provs, labels!, o => observationShownBy(o, m))]));
     };
     if (made.length) {
       const activeId = s.activeClusterTreeNodeId;
