@@ -93,3 +93,19 @@ def test_a_repeated_or_unresolved_lack_is_never_not_a_carrier():
                    {"absent": {"P": 30}, "target_unresolved": 3}, {"repeats": {"P": 50}}):
         rc = types.SimpleNamespace(carried={}, report=report)
         assert analysis._absent_path_labels(None, spec, {}, [rc], "P", {}) == {}
+
+
+def test_rows_of_one_dataset_in_two_observations_count_once(monkeypatch):
+    """agy review (group B round 2): a pooled panel and a strand panel of one dataset are two observations over the
+    same rows: each row counts once."""
+    width = 300
+    _setup(monkeypatch, width)
+    body = [[0, width, 0, "+", True]]
+    monkeypatch.setattr(gscan, "graph_window_rows", lambda state, source, a, b, cache=None: (
+        [dict(id="r1", analysis_id=_encode_identity(["g|r1", "r1", "x", 0, "primary"]), intervals=[[0, b - a, 40]],
+              live_lift={"source": {"supplementary": False}, "segments": body})], {}))
+    spec = {"target": "t", "regions": [{"start": 0, "end": width}], "binding_order": ["t", "mat"],
+            "observations": [dict(id="A", dataset_id="d", kind="graph", binding="mat", contig="cM", read_ids=None, strand=None),
+                             dict(id="B", dataset_id="d", kind="graph", binding="mat", contig="cM", read_ids=None, strand=None)]}
+    out = gscan.scan(types.SimpleNamespace(), None, {"scan": {"signal_source": "accessibility", "min_reads": 1, "threshold_rare": 0.01}}, {}, spec)
+    assert out["n_reads"] == 1

@@ -134,6 +134,11 @@ export function graphClusterPlan(st: PlanState, basis: Basis): GraphClusterPlan 
       ids.push(id);
     };
     const onTarget = !panel.genome && !panel.altAllele && !panel.liftLink && sameChrom(w.chrom, targetContig);
+    // A panel at another locus of the target (its own view, not over any region) is not in this run (agy review).
+    if (onTarget && !regions.some(r => w.start < r.end && w.end > r.start)) {
+      leftOut.push({ panelId: panel.id, reason: 'at another locus of the graph\'s target' });
+      continue;
+    }
     if (bound?.kind === 'lifted' && !onTarget) {
       leftOut.push({ panelId: panel.id, reason: 'not on the graph\'s target (another contig, assembly or allele view)' });
       continue;
@@ -178,6 +183,8 @@ export function destinationAssignments(dest: GraphDestination, results: Record<s
     for (const [id, label] of Object.entries(results[oid]?.assignments ?? {})) {
       const rk = recordKey(id);
       if (scope && !idSetHas(scope, [id, qnameOfId(id)], rk)) continue;
+      // A record a fitted observation labelled keeps that label over another path's "not a carrier".
+      if (label === NOT_CARRIER_CLUSTER_ID && (out[rk ?? id] ?? -1) >= 0) continue;
       out[rk ?? id] = label;
     }
   }

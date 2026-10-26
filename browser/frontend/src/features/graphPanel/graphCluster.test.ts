@@ -730,3 +730,13 @@ describe('backfill review: labels of a record on two paths; refined names across
     expect(useBrowserStore.getState().clusterGroupLabels['k-mat']?.[2]).toBe('C0.0');
   });
 });
+
+describe('agy review group B round 2: Scan beyond 50 kb', () => {
+  it('a view wider than the graph draws scans linear', async () => {
+    const { graphScanBody } = await import('./graphScan');
+    seed(split());
+    setPanelViewMode('mat', 'graph');
+    expect(graphScanBody(useBrowserStore.getState(), { chrom: 'chr3', start: 128_600_000, end: 128_680_000, source: 'accessibility',
+      minWidth: 80, minReads: 5, thresholds: { smoothWidth: 100, thresholdStrong: 0.5, thresholdMedium: 0.3, thresholdWeak: 0.15, thresholdRare: 0.08 } })).toBeNull();
+  });
+});

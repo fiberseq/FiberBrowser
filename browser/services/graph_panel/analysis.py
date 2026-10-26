@@ -521,7 +521,7 @@ def _refine(state, spec, plan, labels, settings, observed, cache, sets_from, ech
 NOT_CARRIER = -2
 
 
-def _not_carrier_labels(state, spec, regions, oid: str, cache: dict) -> dict:
+def _not_carrier_labels(state, spec, regions, oid: str, cache: dict, labelled: frozenset = frozenset()) -> dict:
     """A non-carrier's rows at the regions, labelled "not a carrier" (-2; DESIGN_GRAPH_PRIMARY §2.6 item 4; graph
     features): a run with no shared feature fits its carriers only, and the other observations' rows that cover the
     regions where their own path runs (the target walk they carry there) are shown as not carrying the regions'
@@ -550,50 +550,67 @@ def _not_carrier_labels(state, spec, regions, oid: str, cache: dict) -> dict:
             rows = [r for r in rows if read_matches_id_filter(r, wanted)]
         if ob.get("strand"):
             rows = filter_reads_by_strand(rows, ob["strand"], strand_calls(state, ob["dataset_id"]))
+        from services.lift.cohort import record_key
+        from services.read_selection import read_body_spans
+        gs = [g for g, _rev in carried.values()] if ob["kind"] == "graph" else [rc.start + u for u in carried]
+        lo_g = min(gs) - (min(gs) if ob["kind"] == "graph" else rc.start)
+        hi_g = max(gs) - (min(gs) if ob["kind"] == "graph" else rc.start) + 1
         for r in rows:
-            out[r.get("analysis_id") or r["id"]] = NOT_CARRIER
+            rid = r.get("analysis_id") or r["id"]
+            # A record a fitted observation labelled (a folded molecule's other path) keeps its label; a read that
+            # does not cover the region's columns on its path is not judged (agy review, group B).
+            if (record_key(rid) or rid) in labelled:
+                continue
+            if not any(s0 <= lo_g and s1 >= hi_g for s0, s1 in read_body_spans(r)):
+                continue
+            out[rid] = NOT_CARRIER
     return out
 
 
-JUNCTION_PAD_BP = 50
+JUNCTION_PAD_BP = 2_000
 
 
-def _absent_path_labels(state, spec, tiles, regions, oid: str, cache: dict) -> dict:
-    """A path proven to lack every region it has no columns of (a deletion: the plan's 'absent', nothing unresolved)
-    is not a carrier of their sequence (§2.6 "windows with no blocks"; graph features audit): its rows that span the
-    deletion's junction on its own path (a target base carried on each side of the region) are labelled -2. A path
-    whose lack is unresolved (repeats, an incomplete topology) is only left out."""
+def _absent_path_labels(state, spec, tiles, regions, oid: str, cache: dict, labelled: frozenset = frozenset()) -> dict:
+    """A path proven to lack every region of the run (a deletion: the plan's 'absent', nothing unresolved or
+    repeated) is not a carrier of their sequence (§2.6 "windows with no blocks"; graph features audit): its reads that
+    span the deletion's junction on its own path are labelled -2. The junction is the nearest target base it carries
+    on each side of the region, adjacent on its path (a replacement bubble walking other nodes is not a deletion);
+    flanks are looked for up to JUNCTION_PAD_BP away. A path whose lack is unresolved is only left out."""
     ob = next(o for o in spec["observations"] if o["id"] == oid)
     if ob["kind"] != "graph":
         return {}
     lacking = [i for i, rc in enumerate(regions) if not rc.carried.get(oid)]
-    # Proven absent only: absent columns, and no unresolved, repeated or target-unresolved column in those regions (a
-    # repeat is ambiguous, never asserted absence; Codex review, group B round 3).
-    if not lacking or any(not regions[i].report.get("absent", {}).get(oid) or regions[i].report.get("unresolved", {}).get(oid)
-                          or regions[i].report.get("repeats", {}).get(oid) or regions[i].report.get("target_unresolved")
-                          or regions[i].report.get("target_repeats") for i in lacking):
+    if len(lacking) != len(regions) or any(
+            not regions[i].report.get("absent", {}).get(oid) or regions[i].report.get("unresolved", {}).get(oid)
+            or regions[i].report.get("repeats", {}).get(oid) or regions[i].report.get("target_unresolved")
+            or regions[i].report.get("target_repeats") for i in lacking):
         return {}
+    from services.lift.cohort import record_key
     from services.read_selection import read_body_spans, read_matches_id_filter, with_graph_record_keys
     from services.read_strand import filter_reads_by_strand, strand_calls
     target = spec["target"]
     out: dict = {}
     for i in lacking:
         r = spec["regions"][i]
-        a, b = max(0, r["start"] - JUNCTION_PAD_BP), r["end"] + JUNCTION_PAD_BP
-        cells = gc.cells_for(r["start"], r["end"])
+        width = r["end"] - r["start"]
+        pad = max(0, min(JUNCTION_PAD_BP, (gc.MAX_FEATURE_BP - width) // 2))
+        if pad <= 0:
+            continue
+        a, b = max(0, r["start"] - pad), r["end"] + pad
+        cells = sorted(set(gc.cells_for(a, b)))
         results = [res for per in tiles.values() for c, res in per.items() if c in cells]
         per = tiles.get(ob["binding"]) or {}
         rc = gc.region_columns(i, a, b, target, gc.merge_occurrences(results, target), [gc.Observation(oid, ob["binding"])],
                                {ob["binding"]: gc.merge_occurrences([per[c] for c in cells if c in per], ob["binding"])},
                                {ob["binding"]: {c: per[c] for c in cells if c in per}}, insertions=False)
         carried = rc.carried.get(oid) or {}
-        left = [g for u, (g, _rev) in carried.items() if a + u < r["start"]]
-        right = [g for u, (g, _rev) in carried.items() if a + u >= r["end"]]
+        left = [u for u in carried if a + u < r["start"]]
+        right = [u for u in carried if a + u >= r["end"]]
         if not left or not right:
             continue
-        # The junction: the last base carried before the region and the first after it, on the path.
-        rev = any(rv for _g, rv in carried.values())
-        g0, g1 = (min(left), max(right)) if rev else (max(left), min(right))
+        g0, g1 = carried[max(left)][0], carried[min(right)][0]
+        if abs(g1 - g0) != 1:
+            continue   # not a plain deletion on this path
         lo, hi = min(g0, g1), max(g0, g1)
         rows, _desc = graph_window_rows(state, GraphSource(ob["dataset_id"], ob["binding"], ob["contig"]), lo, hi + 1, cache)
         if ob.get("read_ids") is not None:
@@ -602,8 +619,11 @@ def _absent_path_labels(state, spec, tiles, regions, oid: str, cache: dict) -> d
         if ob.get("strand"):
             rows = filter_reads_by_strand(rows, ob["strand"], strand_calls(state, ob["dataset_id"]))
         for x in rows:
+            rid = x.get("analysis_id") or x["id"]
+            if (record_key(rid) or rid) in labelled:
+                continue
             if any(s0 <= 0 and s1 >= hi - lo + 1 for s0, s1 in read_body_spans(x)):
-                out[x.get("analysis_id") or x["id"]] = NOT_CARRIER
+                out[rid] = NOT_CARRIER
     return out
 
 
@@ -661,6 +681,8 @@ def run(state, reg, body: dict, tiles: dict, spec: Optional[dict] = None) -> dic
             label_ids[lab] = nxt
             names[nxt] = "C" + lab
             nxt += 1
+    from services.lift.cohort import record_key
+    labelled = frozenset((record_key(x) or x) for per in labels.values() for x in per)
     results = {}
     for o in spec["observations"]:
         oid = o["id"]
@@ -677,13 +699,13 @@ def run(state, reg, body: dict, tiles: dict, spec: Optional[dict] = None) -> dic
                                                   "its regions alone to cluster it" if later
                                              else "no reads cover the regions")
             absent = (oid in plan.left_out and plan.left_out[oid].startswith("no columns")
-                      and _absent_path_labels(state, spec, tiles, regions, oid, cache))
+                      and _absent_path_labels(state, spec, tiles, regions, oid, cache, labelled))
             if absent:
                 results[oid] = {"assignments": absent, "left_out": "not a carrier of the regions' sequence (it lacks it)",
                                 "not_carrier": True, "cluster_counts": {NOT_CARRIER: len(absent)}}
                 continue
             if not_carrier:
-                marked = _not_carrier_labels(state, spec, regions, oid, cache)
+                marked = _not_carrier_labels(state, spec, regions, oid, cache, labelled)
                 results[oid] = {"assignments": marked, "left_out": why, "not_carrier": True,
                                 "cluster_counts": {NOT_CARRIER: len(marked)} if marked else {}}
             else:
@@ -741,17 +763,19 @@ def assign(state, reg, body: dict, tiles: dict, spec: Optional[dict] = None) -> 
     _refine(state, spec, plan, labels, settings, observed, cache, sets_from, _echoes(out1),
             fitted=[st for st in run_def["stages"][1:] if isinstance(st, dict)])
     table = {str(k): int(v) for k, v in (run_def.get("label_ids") or {}).items()}
+    from services.lift.cohort import record_key
+    labelled = frozenset((record_key(x) or x) for per in labels.values() for x in per)
     results = {}
     for o in spec["observations"]:
         if o["id"] in plan.left_out and plan.left_out[o["id"]].startswith("no columns"):
-            absent = _absent_path_labels(state, spec, tiles, regions, o["id"], cache)
+            absent = _absent_path_labels(state, spec, tiles, regions, o["id"], cache, labelled)
             if absent:
                 results[o["id"]] = {"assignments": absent, "not_carrier": True}
                 continue
         if (sets_from and o["id"] not in oids and o["id"] not in plan.left_out and o["id"] not in labels
                 and not any(o["id"] in cs["carriers"] for cs in plan.carrier_sets)):
             # Not a carrier (no shared feature): its rows at the regions, as the fit labelled them.
-            results[o["id"]] = {"assignments": _not_carrier_labels(state, spec, regions, o["id"], cache), "not_carrier": True}
+            results[o["id"]] = {"assignments": _not_carrier_labels(state, spec, regions, o["id"], cache, labelled), "not_carrier": True}
             continue
         per = labels.get(o["id"], {})
         # A refined label the fit never produced cannot be named: the read keeps its parent cluster.

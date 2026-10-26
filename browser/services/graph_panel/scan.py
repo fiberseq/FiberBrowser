@@ -180,6 +180,20 @@ def scan(state, reg, body: dict, tiles: dict, spec: dict) -> dict:
               for ob, rows, *rest in loaded]
     # Molecules shared by datasets: the datasets' joint policy (joint_dedup by_molecule keeps one row), as graph
     # clustering's joint cohort applies it.
+    # One row per (dataset, row identity) across observations: a pooled panel and a haplotype or strand panel of the
+    # same dataset overlap (agy review, group B).
+    seen_rows: set = set()
+    deduped = []
+    for ob, rows, *rest in loaded:
+        mine = []
+        for r in rows:
+            key = (ob["dataset_id"], r.get("analysis_id") or r.get("id"))
+            if key in seen_rows:
+                continue
+            seen_rows.add(key)
+            mine.append(r)
+        deduped.append((ob, mine, *rest))
+    loaded = deduped
     dataset_ids = sorted({ob["dataset_id"] for ob, *_r in loaded})
     if len(dataset_ids) > 1:
         from services.lift.joint import prepare_joint_cohort

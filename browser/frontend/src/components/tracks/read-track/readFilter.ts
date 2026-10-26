@@ -45,6 +45,9 @@ export function clusteredReadIdSet(
   assignments: Record<string, number>,
 ): Set<string> | null {
   const ids = Object.keys(assignments);
+  // Labels that are all "not a carrier" (-2: a graph run's path without the regions' sequence) scope nothing: the
+  // panel keeps every read, unlabelled ones as Unassigned (graph features review).
+  if (ids.length > 0 && ids.every(id => assignments[id] === -2)) return null;
   return ids.length > 0 ? new Set(ids) : null;
 }
 

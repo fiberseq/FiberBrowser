@@ -19,8 +19,12 @@ const wire = (o: Record<string, unknown>) => {
 
 /** The graph scan's request for this view, or null (no host drawing its graph on this view's contig). */
 export function graphScanBody(state: BrowserState, call: PeakScanCall): Record<string, unknown> | null {
+  // The graph draws at most 50 kb; wider (a host handing off) the linear scan runs (agy review, group B).
+  if (call.end - call.start > 50_000) return null;
   const plan = graphClusterPlan(state as never, { kind: 'peaks', regions: [{ start: call.start, end: call.end, chrom: call.chrom }] });
   if (!plan || plan.refusal || !plan.observations.length) return null;
+  // A host at its own view shows another window than the main view this scan is of.
+  if (plan.host.viewportOverride) return null;
   // Panels that left the view's window on their own (another locus) are scanned by the linear path, not here.
   return {
     registration_id: plan.registration.id, revisions: plan.registration.revisions, target: plan.target,
