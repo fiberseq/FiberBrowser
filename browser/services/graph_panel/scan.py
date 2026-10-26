@@ -131,24 +131,64 @@ def scan(state, reg, body: dict, tiles: dict, spec: dict) -> dict:
             rows = filter_reads_by_strand(rows, ob["strand"], strand_calls(state, ob["dataset_id"]))
         loaded.append((ob, rows, origin, a, b, carried))
     # One row per folded molecule of a dataset (fold_molecule: one analysis_id on two paths), as graph clustering
-    # arbitrates it: the primary record's row, then more body bases, then the observation id (Codex review, group B).
+    # arbitrates it: among its rows that overlap their observation's usable columns (a row inside an excluded repeat
+    # never displaces one that counts), the primary record's, then the most usable bases, then more body bases, then
+    # the observation id (Codex review, group B).
     from services.lift.cohort import folded_identity
     from services.read_selection import read_body_spans
+
+    def runs(points):
+        pts = sorted(set(points))
+        out, lo, prev = [], None, None
+        for p in pts:
+            if lo is None:
+                lo = prev = p
+            elif p == prev + 1:
+                prev = p
+            else:
+                out.append((lo, prev + 1)); lo = prev = p
+        if lo is not None:
+            out.append((lo, prev + 1))
+        return out
+
+    usable: dict = {}
+    for ob, rows, origin, a, b, carried in loaded:
+        pts = [g - origin for g, _rev in carried.values()] if ob["kind"] == "graph" else list(carried.keys())
+        if ob["kind"] == "graph":
+            for f in insertions:
+                for _u0, _u1, g0, g1, _rev in f.blocks.get(ob["id"]) or ():
+                    pts.extend(range(g0 - origin, g1 - origin))
+        usable[ob["id"]] = runs(pts)
+
+    def usable_overlap(oid, r):
+        return sum(max(0, min(y, v) - max(x, u)) for x, y in read_body_spans(r) for u, v in usable[oid])
+
     folded_best: dict = {}
     for ob, rows, *_rest in loaded:
         for r in rows:
             aid = r.get("analysis_id")
             if not folded_identity(aid):
                 continue
+            over = usable_overlap(ob["id"], r)
             sup = bool(((r.get("live_lift") or {}).get("source") or {}).get("supplementary"))
-            rank = (sup, -sum(y - x for x, y in read_body_spans(r)), ob["id"])
+            rank = (over == 0, sup, -over, -sum(y - x for x, y in read_body_spans(r)), ob["id"])
             key = (ob["dataset_id"], aid)
             if key not in folded_best or rank < folded_best[key][0]:
                 folded_best[key] = (rank, id(r))
     keep = {v[1] for v in folded_best.values()}
+    loaded = [(ob, [r for r in rows if not folded_identity(r.get("analysis_id")) or id(r) in keep], *rest)
+              for ob, rows, *rest in loaded]
+    # Molecules shared by datasets: the datasets' joint policy (joint_dedup by_molecule keeps one row), as graph
+    # clustering's joint cohort applies it.
+    dataset_ids = sorted({ob["dataset_id"] for ob, *_r in loaded})
+    if len(dataset_ids) > 1:
+        from services.lift.joint import prepare_joint_cohort
+        tagged = [{**r, "_consensus_dataset_id": ob["dataset_id"], "_scan_row": id(r)} for ob, rows, *_r in loaded for r in rows]
+        kept_rows, _joint = prepare_joint_cohort(state, tagged, dataset_ids)
+        retained = {r["_scan_row"] for r in kept_rows}
+        loaded = [(ob, [r for r in rows if id(r) in retained], *rest) for ob, rows, *rest in loaded]
     for ob, rows, origin, a, b, carried in loaded:
         oid = ob["id"]
-        rows = [r for r in rows if not folded_identity(r.get("analysis_id")) or id(r) in keep]
         reads_by_obs[oid] = len(rows)
         if not rows:
             continue

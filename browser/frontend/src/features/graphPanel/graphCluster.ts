@@ -363,17 +363,26 @@ export function commitGraphRun(s: BrowserState, plan: GraphClusterPlan, response
   const c = response.columns;
   const notCarrierObs = Object.entries(response.results).filter(([, r]) => (r as { not_carrier?: boolean }).not_carrier)
     .map(([oid, r]) => `${obsLabel.get(oid)?.label ?? oid} (${Object.keys(r.assignments ?? {}).length})`);
-  const leftOut = [...Object.entries(c.left_out ?? {}).map(([oid, why]) => `${obsLabel.get(oid)?.label ?? oid}: ${why}`),
+  // Observations the run left out on its own (a path carrying only a later carrier set's sequence, no covering
+  // reads), besides the plan's (Codex review, group B).
+  const resultLeftOut = Object.entries(response.results).filter(([oid, r]) => r.left_out && !(r as { not_carrier?: boolean }).not_carrier
+    && !(oid in (c.left_out ?? {}))).map(([oid, r]) => `${obsLabel.get(oid)?.label ?? oid}: ${r.left_out}`);
+  const leftOut = [...resultLeftOut, ...Object.entries(c.left_out ?? {}).map(([oid, why]) => `${obsLabel.get(oid)?.label ?? oid}: ${why}`),
     ...plan.leftOut.map(l => `${l.reason}`)];
   run.details = `Clustered on graph node columns at ${plan.regions.length} region${plan.regions.length === 1 ? '' : 's'} of ${plan.target}: `
     + `${c.shared.filter(f => f.kind === 'target').map(f => `target ${f.label} (${f.samples} samples)`).join('; ')}`
     + `${c.shared.some(f => f.kind !== 'target') ? `; ${partsText(c.shared.filter(f => f.kind !== 'target'))} every path carries` : ''}. `
-    + (c.carrier_sets.length ? `Refined within carriers on ${c.carrier_sets.map(cs => `${partsText(cs.features)} (${cs.carriers.map(o => obsLabel.get(o)?.label ?? o).join(', ')})`).join('; ')}; non-carriers keep their labels. ` : '')
+    + (c.carrier_sets.length && !c.shared.length
+      // No sequence every path shares: the first carrier set's carriers are fitted on it (stage 1); refinements of
+      // later sets apply only to those carriers (Codex review, group B: details named every set as refined).
+      ? `No sequence every path shares: fitted ${partsText(c.carrier_sets[0].features)} on its carriers (${c.carrier_sets[0].carriers.map(o => obsLabel.get(o)?.label ?? o).join(', ')}). `
+        + (c.carrier_sets.length > 1 ? `Refined within those carriers on ${c.carrier_sets.slice(1).map(cs => partsText(cs.features)).join('; ')}. ` : '')
+      : c.carrier_sets.length ? `Refined within carriers on ${c.carrier_sets.map(cs => `${partsText(cs.features)} (${cs.carriers.map(o => obsLabel.get(o)?.label ?? o).join(', ')})`).join('; ')}; non-carriers keep their labels. ` : '')
     + (c.dropped?.length ? `${c.dropped.length} small path-specific part${c.dropped.length === 1 ? '' : 's'} not used. ` : '')
     + (leftOut.length ? `Left out: ${leftOut.join('; ')}. ` : '')
     + (notCarrierObs.length ? `Not a carrier (shown, not fitted): ${notCarrierObs.join('; ')}. ` : '')
     + (plan.offContig ? `${plan.offContig} selected region${plan.offContig === 1 ? ' is' : 's are'} not on the graph's target and were not used. ` : '')
-    + 'Each path is fitted once; pop-outs and other panels of the same path show the same labels.';
+    + `Each path in the run is fitted once${resultLeftOut.length ? ' (the paths left out are not)' : ''}; pop-outs and other panels of the same path show the same labels.`;
   // The tree node its labels are (dynamic assignment applies only while it is the active node).
   run.treeNodeId = useBrowserStore.getState().activeClusterTreeNodeId ?? null;
   useBrowserStore.setState({ clusterMatchedRun: run });

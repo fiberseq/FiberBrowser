@@ -667,3 +667,23 @@ describe('Codex review group B: the planner takes the host on the regions\' cont
     expect(b?.target).toBe('tgt');
   });
 });
+
+describe('Codex review group B round 2: run details of a run with no shared feature', () => {
+  it('say which path was left out and do not call later sets refinements of every path', () => {
+    seed(split());
+    setPanelViewMode('mat', 'graph');
+    const p = plan();
+    const mat = p.observations.find(o => o.binding === 'mat')!.id, pat = p.observations.find(o => o.binding === 'pat')!.id;
+    const part = { kind: 'insertion', length: 100, samples: 10, label: 'x' };
+    commitGraphRun(useBrowserStore.getState(), p, { results: { [mat]: { assignments: { [aid('m1')]: 0 } },
+      [pat]: { assignments: {}, left_out: 'carries only other path-specific sequence of these regions: choose its regions alone to cluster it' } },
+      label_ids: {}, names: {}, stages: [{ stage: 1 }], columns: { shared: [], carrier_sets: [{ carriers: [mat], features: [part] }, { carriers: [pat], features: [part] }],
+        left_out: {}, dropped: [], refinements: [] },
+      window_separation_nmi: null, matched: null, settings: {}, revisions: REG.revisions, options: {}, timings: {} } as never);
+    const details = useBrowserStore.getState().clusterMatchedRun!.details!;
+    expect(details).toContain('No sequence every path shares');
+    expect(details).toContain('Left out:');
+    expect(details).toContain('other path-specific sequence');
+    expect(details).toContain('the paths left out are not');
+  });
+});
