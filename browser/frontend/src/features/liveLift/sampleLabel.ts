@@ -30,9 +30,11 @@ export function sourceSampleLabel(dataset: Lifted): string {
   return sourceSampleName(dataset) ?? 'source assembly';
 }
 
-/** "HG002 MAT" (or just "MAT" when the sample is unknown). */
+/** "HG002 MAT" (or just "MAT" when the sample is unknown; a PanSN haplotype label such as "strainA#0" already names
+ * its sample and is not prefixed again). */
 export function sourceHapLabel(dataset: Lifted, hap: string | null | undefined): string {
   const sample = sourceSampleName(dataset);
+  if (sample && hap && pansnSample(hap) === sample && hap.includes('#')) return hap;
   return [sample, hap].filter(Boolean).join(' ') || 'source assembly';
 }
 

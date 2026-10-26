@@ -20,6 +20,7 @@ describe('source sample and target reference labels', () => {
     expect(sourceSampleLabel(null)).toBe('source assembly');
     expect(sourceHapLabel(lifted({ source_sample: 'NA12878' }), 'MAT')).toBe('NA12878 MAT');
     expect(sourceHapLabel(lifted({}), 'PAT')).toBe('PAT');
+    expect(sourceHapLabel(lifted({ source_sample: 'strainA' }), 'strainA#0')).toBe('strainA#0');
   });
   it('names the target reference when the map does', () => {
     expect(targetReferenceLabel(lifted({ target_reference: 'CHM13' }))).toBe('CHM13');
