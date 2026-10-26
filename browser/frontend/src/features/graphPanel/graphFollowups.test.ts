@@ -388,3 +388,23 @@ describe('group H review 1: position order not left to right on screen never was
     expect(lane.rows.map(r => r.map(m => m.read.q))).toEqual([['a', 'b', 'c'], ['d'], ['e']]);
   });
 });
+
+describe('group H review 3: revealing an open source view is its own undo step', () => {
+  it('a collapsed linked source panel is revealed undoably; Undo hides it and keeps the pop-out kind', async () => {
+    const src = panel('src', { datasetId: 'nsrc', collapsed: true,
+      liftLink: { id: 'l', datasetId: 'd', liftPanelId: 'mat', hap: '2', hapLabel: 'PAT', contig: 'chr3_PAT', flip: false, chain: null } as never });
+    seed([...split(), src]);
+    setPanelViewMode('mat', 'graph');
+    setPopOutKind('mat', 'source');
+    const steps = useBrowserStore.getState()._historyStack?.length ?? 0;
+    vi.mocked(openLinkedSourceView).mockClear();
+    popOutPaths('mat', ['pat']);
+    await new Promise(r => setTimeout(r, 0));
+    expect(openLinkedSourceView).toHaveBeenCalledWith('mat', 'PAT');
+    expect(get('src').collapsed).toBe(false);
+    expect(useBrowserStore.getState()._historyStack?.length).toBe(steps + 1);
+    useBrowserStore.getState().undo();
+    expect(get('src').collapsed).toBe(true);
+    expect(popOutKindOf(get('mat'))).toBe('source');
+  });
+});

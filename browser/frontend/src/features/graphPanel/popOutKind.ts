@@ -9,7 +9,7 @@
 import { useBrowserStore } from '../../stores/browserStore';
 import { isLiveLift } from '../../utils/datasetKinds';
 import type { PanelConfig } from '../../types';
-import { openLinkedSourceView } from '../liveLift/linking/liftLink';
+import { linkedSourcePanels, openLinkedSourceView } from '../liveLift/linking/liftLink';
 import { isHost, popOut, undoable } from './hostMode';
 import type { GraphViewState } from './types';
 
@@ -70,14 +70,22 @@ export function popOutPaths(hostId: string, memberIds: string[], missing: { bind
   return out;
 }
 
-/** One after another (each opens a dataset and a reference, and takes its own undo step); an open one is revealed. */
+/** One after another (each opens a dataset and a reference, and takes its own undo step). A source view already
+ * open is revealed (and relinked) as one undo step of its own: openLinkedSourceView records none for it (Codex
+ * review, group H). */
 async function openSources(sources: PopOutPlan['sources']): Promise<void> {
   for (const { liftPanelId, hap } of sources) {
-    const id = await openLinkedSourceView(liftPanelId, hap);
-    if (!id) continue;
     const st = useBrowserStore.getState();
-    if (st.panels.find(p => p.id === id)?.collapsed) {
-      useBrowserStore.setState({ panels: st.panels.map(p => (p.id === id ? { ...p, collapsed: false } : p)) });
+    const lift = st.panels.find(p => p.id === liftPanelId);
+    const existing = lift?.datasetId ? linkedSourcePanels(lift.datasetId, hap ?? lift.liftHap ?? null)[0] : undefined;
+    if (existing) {
+      undoable(`Show ${existing.liftLink?.hapLabel ?? hap ?? ''} source view`.replace('  ', ' '), () => {
+        // (Synchronous for an open one: it relinks to this lifted panel and returns.)
+        void openLinkedSourceView(liftPanelId, hap);
+        useBrowserStore.setState(x => ({ panels: x.panels.map(p => (p.id === existing.id && p.collapsed ? { ...p, collapsed: false } : p)) }));
+      });
+      continue;
     }
+    await openLinkedSourceView(liftPanelId, hap);
   }
 }
