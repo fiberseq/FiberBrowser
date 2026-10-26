@@ -461,6 +461,20 @@ export async function assignWithGraphRun(run: ClusterMatchedRun, signal?: AbortS
     st.setClusterAssignments(d.stateKey, fresh, { mirror: true, merge: true, svSplit: true });
   }
   if (added && run.names && Object.keys(run.names).length) mirrorGroupLabels(touched, run.names);
+  // Panels joined since the run (a pop-out carrying its host's labels) are kept on the run's tree node too, with the
+  // refined names, even when no row needed a label (Codex review, group F: a branch switch lost them).
+  const joined = later.map(d => d.stateKey).filter(k => Object.keys(useBrowserStore.getState().clusterAssignments[k] ?? {}).length);
+  if (joined.length) {
+    if (run.names && Object.keys(run.names).length) mirrorGroupLabels(joined, run.names);
+    useBrowserStore.setState(cur => {
+      const id = cur.activeClusterTreeNodeId;
+      const node = id ? cur.clusterTreeNodes[id] : null;
+      if (!node || !id) return {};
+      const assignments = { ...(node.assignments ?? {}) };
+      for (const k of joined) if (!assignments[k]) assignments[k] = { ...cur.clusterAssignments[k] };
+      return { clusterTreeNodes: { ...cur.clusterTreeNodes, [id]: { ...node, assignments } } };
+    });
+  }
   if (added) {
     const now = useBrowserStore.getState();
     useBrowserStore.setState({ clusterMatchedRun: { ...run, panelAssignments: { ...run.panelAssignments,

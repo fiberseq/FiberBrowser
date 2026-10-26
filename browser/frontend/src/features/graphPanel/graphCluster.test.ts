@@ -740,3 +740,29 @@ describe('agy review group B round 2: Scan beyond 50 kb', () => {
       minWidth: 80, minReads: 5, thresholds: { smoothWidth: 100, thresholdStrong: 0.5, thresholdMedium: 0.3, thresholdWeak: 0.15, thresholdRare: 0.08 } })).toBeNull();
   });
 });
+
+describe('Codex review group F: a pop-out of a refined run keeps its labels across a branch switch', () => {
+  it('a member popped out from a pooled host keeps its copied labels and names on the run\'s node', async () => {
+    seed([panel('pool', { liftHaplotypeMode: 'pooled' })]);
+    setPanelViewMode('pool', 'graph');
+    const p = plan();
+    const mat = p.observations.find(o => o.binding === 'mat')!.id;
+    commitGraphRun(useBrowserStore.getState(), p, { results: { [mat]: { assignments: { [aid('m1')]: 2 }, stage1: { [aid('m1')]: 0 } } },
+      label_ids: { '0': 0, '0.0': 2 }, names: { '2': 'C0.0' }, stages: [{ stage: 1 }, { stage: 2, set: 0, parent: '0' }],
+      columns: { shared: [], carrier_sets: [{ carriers: [mat], features: [] }], left_out: {}, dropped: [], refinements: [] },
+      window_separation_nmi: null, matched: null, settings: {}, revisions: REG.revisions, options: {}, timings: {} } as never);
+    popOut('pool', [], [{ binding: 'mat', hap: 'MAT' }]);
+    const made = useBrowserStore.getState().panels.find(q => q.id !== 'pool' && q.liftHap === 'MAT');
+    expect(made).toBeTruthy();
+    if (!made) return;
+    const key = made.stateKey ?? made.id;
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ results: { [mat]: { assignments: { [aid('m1')]: 2 } } } }), { status: 200 })));
+    await assignWithGraphRun(useBrowserStore.getState().clusterMatchedRun!);
+    vi.unstubAllGlobals();
+    const refined = useBrowserStore.getState().activeClusterTreeNodeId!;
+    const parent = useBrowserStore.getState().clusterTreeNodes[refined].parentId;
+    if (parent) { useBrowserStore.getState().applyClusterTreeNode(parent); useBrowserStore.getState().applyClusterTreeNode(refined); }
+    expect(useBrowserStore.getState().clusterTreeNodes[refined].assignments?.[key]).toBeTruthy();
+    expect(useBrowserStore.getState().clusterGroupLabels[key]?.[2]).toBe('C0.0');
+  });
+});
