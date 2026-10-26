@@ -297,6 +297,9 @@ class _Ctx:
         self.hide_terminal_gaps = bool(opts.get("hide_terminal_gaps", True))
         self.infer_legacy = bool(opts.get("infer_legacy_layers", True))
         self.nuc_min_size = int(opts.get("legacy_nuc_min_size", 90) or 90)
+        from services.sv_events import SV_MIN_LEN_DEFAULT
+        # Calls are cut only at indel events of at least this length, as the native loader cuts them.
+        self.sv_min_len = int(SV_MIN_LEN_DEFAULT if opts.get("sv_min_len") is None else opts["sv_min_len"])
         self.layer_qualities = bool(opts.get("include_layer_qualities", True))
         include, requested = normalize_layer_request(opts.get("include_layers", True), opts.get("requested_layers"))
         self.wants = {name: wants_layer(include, requested, *aliases) for name, aliases in
@@ -913,6 +916,16 @@ def _map_sv(events, row, ctx):
     return out, sa, dropped
 
 
+def _event_len(ev):
+    """An indel event's length as ``sv_alleles.cigar_replacements`` measures its raw CIGAR (inserted or deleted
+    bases, whichever is more)."""
+    raw = ev.get("raw_pieces")
+    if raw:
+        return max(sum(int(p.get("len", 0)) for p in raw if p.get("t") == "I"),
+                   sum(int(p.get("len", 0)) for p in raw if p.get("t") == "D"))
+    return int(ev.get("len", 0))
+
+
 def _spans(row, ctx):
     """``{span id: (t0, t1)}`` region-relative body spans (fragments with no
     connector or badge between them)."""
@@ -1026,9 +1039,11 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
         payload["sv"], sa, d = _map_sv(read["sv"], row, ctx)
         dropped["events"] += d
         # Every deleted base of the CIGAR (raw pieces: a replacement and a deletion shifted to its canonical
-        # position included), as the native loader cuts calls (sv_events.read_deletion_cuts).
+        # position included) of events of at least sv_min_len (the record's events go down to the evidence
+        # floor), as the native loader cuts calls (sv_events.read_deletion_cuts).
         from services.sv_events import deletion_spans
-        cuts = sorted((t0 - rs0, t1 - rs0) for a, b in deletion_spans(read["sv"]) for t0, t1, _k in row.parts(a, b))
+        cuts = sorted((t0 - rs0, t1 - rs0) for a, b in deletion_spans(e for e in read["sv"] if _event_len(e) >= ctx.sv_min_len)
+                      for t0, t1, _k in row.parts(a, b))
         if not payload["sv"]:
             del payload["sv"]
 

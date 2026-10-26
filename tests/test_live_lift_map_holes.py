@@ -161,14 +161,16 @@ def _bam(tmp_path, records):
     return path
 
 
-def _lift_bam(monkeypatch, path, pieces):
+def _lift_bam(monkeypatch, path, pieces, **options):
     sel = ll.PieceSelection("chrT", 0, 350, 0, 350, sorted(pieces, key=lambda p: (p.t_start, p.chain)))
     plan = ll.plan_fetch(sel, ll.LiftSettings())
-    kw = dict(handle=None, region_start=0, region_end=350, settings=ll.LiftSettings(), key="k", dataset_id="d")
-    rows = compose.lift_compact_reads(ll.decode_source_records([path], plan), plan, **kw)
+    kw = dict(handle=None, region_start=0, region_end=350, settings=ll.LiftSettings(), key="k", dataset_id="d",
+              loader_options=options or None)
+    rows = compose.lift_compact_reads(ll.decode_source_records([path], plan, loader_options=options or None), plan, **kw)
     with monkeypatch.context() as m:
         m.setattr(compose, "precompute", lambda *a, **k: None)
-        per_row = compose.lift_compact_reads(ll.decode_source_records([path], plan), plan, **kw)
+        per_row = compose.lift_compact_reads(ll.decode_source_records([path], plan, loader_options=options or None),
+                                             plan, **kw)
     _same(rows, per_row)
     return {r["id"]: r for r in rows}
 
@@ -195,3 +197,17 @@ def test_deleted_bases_stay_cut_across_a_map_hole(tmp_path, monkeypatch):
         assert _ivs(rows["two"]) == [[5, 100, 95], [100, 110, -80], [170, 180, -80], [180, 285, 105]]
         assert [list(iv) for iv in rows["two"]["layers"]["msp"]["intervals"]] == [[100, 110, 80], [170, 180, 80]]
         assert not read_covers_regions(rows["two"], [(115, 135)])
+
+
+def test_indels_shorter_than_sv_min_len_cut_nothing(tmp_path, monkeypatch):
+    """agy review of group K, round 2: a record's events go down to the 10 bp evidence floor, but the native loader
+    cuts calls only at events of at least sv_min_len; lifted rows do the same (a 20D25I replacement, 25 bp)."""
+    path = _bam(tmp_path, [("short", [(0, 110), (2, 20), (1, 25), (0, 130)], [5, 145], [95, 105])])
+    rows = _lift_bam(monkeypatch, path, [_src(0, 350)])
+    assert _ivs(rows["short"]) == [[5, 100, 95], [100, 140, -40], [140, 245, 105]]
+    assert [list(iv) for iv in rows["short"]["layers"]["msp"]["intervals"]] == [[100, 140, 40]]
+    assert read_covers_regions(rows["short"], [(112, 128)])
+    # With sv_min_len at 20 the replacement counts, and its deleted bases cut the linker.
+    rows = _lift_bam(monkeypatch, path, [_src(0, 350)], sv_min_len=20)
+    assert _ivs(rows["short"]) == [[5, 100, 95], [100, 110, -40], [130, 140, -40], [140, 245, 105]]
+
