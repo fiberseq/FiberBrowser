@@ -50,6 +50,29 @@ async def lift_map_suggestions(near: str = Query("", description="a BAM whose ne
     return await asyncio.to_thread(suggest_maps, state, near)
 
 
+@router.get("/api/lift/datasets")
+async def lift_list_datasets(dataset_id: Optional[str] = None, state=Depends(get_state)):
+    """Loaded live-lift datasets (id, label, lift metadata); ``dataset_id`` narrows it to that one (404 unknown,
+    409 not a live-lift dataset)."""
+    from services.lift.registration import require_enabled
+    from services.lift.capability import is_lifted
+    require_enabled()
+    if dataset_id is not None:
+        dataset = state.datasets.get(dataset_id)
+        if dataset is None:
+            raise HTTPException(404, "Dataset not found")
+        if not is_lifted(dataset):
+            raise HTTPException(409, "Not a live-lift dataset")
+        ids = [dataset_id]
+    else:
+        ids = [did for did in state.dataset_order if is_lifted(state.datasets.get(did))]
+    out = []
+    for did in ids:
+        d = state.datasets[did]
+        out.append({"id": did, "label": getattr(d, "label", did), "live_lift": d.live_lift.to_dict()})
+    return {"datasets": out}
+
+
 @router.post("/api/lift/datasets")
 async def lift_add_dataset(req: LiftDatasetRequest, state=Depends(get_state)):
     from services.lift.registration import add_live_lift_dataset

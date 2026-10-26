@@ -11,7 +11,7 @@ import pytest
 PUBLIC_DENIED = {
     # Live lift: opening a dataset from the host's files, reading a map from them, and its settings (the flag
     # itself is harmless but is a host feature too).
-    ("GET", "/api/lift/enabled"), ("GET", "/api/lift/inspect"), ("POST", "/api/lift/datasets"),
+    ("GET", "/api/lift/enabled"), ("GET", "/api/lift/inspect"), ("POST", "/api/lift/datasets"), ("GET", "/api/lift/datasets"),
     ("POST", "/api/lift/datasets/{dataset_id}/settings"),
     ("GET", "/api/lift/differences"), ("GET", "/api/lift/difference_reads"),
     ("GET", "/api/lift/difference_sequence"), ("POST", "/api/lift/provenance/{dataset_id}"),
@@ -27,6 +27,7 @@ PUBLIC_DENIED = {
     ("POST", "/api/differences/observations"),
     # Graph panel: helper status, host graph packages and their queries (routers/graph_panel.py)
     ("GET", "/api/graph/status"), ("GET", "/api/graph/registrations"), ("POST", "/api/graph/registrations"),
+    ("DELETE", "/api/graph/registrations/{registration_id}"),
     ("GET", "/api/graph/registrations/{registration_id}/paths"), ("POST", "/api/graph/subgraph"),
     ("DELETE", "/api/graph/requests/{request_id}"),
     # its reads: host BAMs of loaded datasets on the host package's paths
@@ -241,6 +242,7 @@ def test_allowlist_has_no_stale_entries(standalone_app):
     ("POST", "/api/differences/observations"),
     # Graph panel: helper status, host graph packages and their queries (routers/graph_panel.py)
     ("GET", "/api/graph/status"), ("GET", "/api/graph/registrations"), ("POST", "/api/graph/registrations"),
+    ("DELETE", "/api/graph/registrations/greg"), ("GET", "/api/lift/datasets?dataset_id=missing"),
     ("GET", "/api/graph/registrations/{registration_id}/paths"), ("POST", "/api/graph/subgraph"),
     ("DELETE", "/api/graph/requests/{request_id}"),
     # its reads: host BAMs of loaded datasets on the host package's paths
