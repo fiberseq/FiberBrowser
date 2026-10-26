@@ -85,6 +85,8 @@ class OpenScan:
         self.bindings: Dict[str, dict] = {}
         self.type_counts: Dict[str, Optional[int]] = {}
         self.manifest_digest = _digest(manifest, 32)
+        self.frame: Optional[dict] = None          # set when the scan is in another assembly than the browser's
+        self.reference_note: Optional[str] = None
 
     # ---- what the scan is
     @property
@@ -203,12 +205,12 @@ class OpenScan:
                                     inputs=[f.get('content_id') for d in m.get('datasets') or [] for f in d.get('files') or []],
                                     units=units.get('mode', 'grid'), summary=summary,
                                     experimental=bool(block.get('experimental'))),
-                    frame=dict(m.get('frame') or {'kind': 'linear'}),
+                    frame=dict(self.frame or m.get('frame') or {'kind': 'linear'}),
                     datasets=datasets, groups=groups,
                     coverage=dict(territory='units', ref=self.scan_id),
                     count=self.type_counts.get(type_id),
                     status='stale' if stale else ('partial' if partial else 'complete'),
-                    note='; '.join(notes) or None,
+                    note='; '.join(notes + ([self.reference_note] if self.reference_note else [])) or None,
                     source=dict(kind='scan', scanId=self.scan_id, module=module),
                 ))
         return out
@@ -218,7 +220,8 @@ class OpenScan:
         return dict(
             scanId=self.scan_id, path=str(self.path), label=self.label, source=self.source,
             manifestDigest=self.manifest_digest, schema=m.get('schema'),
-            fiberhmm=(m.get('fiberhmm') or {}).get('version'), frame=m.get('frame'),
+            fiberhmm=(m.get('fiberhmm') or {}).get('version'), frame=self.frame or m.get('frame'),
+            referenceNote=self.reference_note,
             units={k: (m.get('units') or {}).get(k) for k in ('mode', 'unit_bp', 'stride_bp', 'grid_offset', 'contigs',
                                                              'regions', 'bed', 'count')},
             modules={n: dict(version=b.get('version'), settingsHash=b.get('settings_hash'),
@@ -313,17 +316,32 @@ def validate(path: Path, manifest: dict) -> List[str]:
 
 
 def open_scan(state, path, *, source: str = 'opened', label: Optional[str] = None) -> OpenScan:
-    """Open (or re-read) a scan directory in this session."""
+    """Open (or re-read) a scan directory in this session.
+
+    The reference: a scan bound to a loaded dataset was made on that dataset's own file, so its reference is the
+    file's. When it differs from the browser's reference (a scan of a live-lift dataset's source BAM, in its own
+    assembly), the scan's frame is ``source``: its per-read states join the lifted rows by record key, and its hits
+    stay in source coordinates until they are lifted (G1). An unbound scan must match the browser's reference."""
     p = Path(path).expanduser().resolve()
     manifest = read_manifest(p)
-    problem = _reference_problem(state, manifest)
-    if problem:
-        raise ScanOpenError(f'Reference mismatch: {problem}. This scan was made on another reference')
     problems = validate(p, manifest)
     if problems:
         raise ScanOpenError('The scan directory is incomplete: ' + '; '.join(problems[:4]))
     scan = OpenScan(p, manifest, source, label or p.name)
     scan.bind(state)
+    problem = _reference_problem(state, manifest)
+    bound = [b for b in scan.bindings.values() if b.get('status') == 'bound']
+    if problem and not bound:
+        raise ScanOpenError(f'Reference mismatch: {problem}. This scan was made on another reference')
+    scan.reference_note = None
+    if problem:
+        lifted = [b['dataset'] for b in bound
+                  if getattr((getattr(state, 'datasets', None) or {}).get(b['dataset']), 'data_type', None) == 'bam_livelift']
+        contigs = (manifest.get('reference') or {}).get('contigs') or []
+        scan.frame = dict(kind='source', assembly=(manifest.get('reference') or {}).get('contigs_sha256', '')[:12],
+                          liftedDatasets=lifted, firstContig=str(contigs[0][0]) if contigs else '')
+        scan.reference_note = ('scanned in the source assembly of ' + (', '.join(lifted) if lifted else 'its BAM')
+                               + ': per-read states join; hits stay in source coordinates (lifting hits: G1)')
     scan.count_types()
     scans, lock = _session(state)
     with lock:

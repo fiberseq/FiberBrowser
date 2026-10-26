@@ -52,6 +52,15 @@ def _typed(cols: List[str], cells: List[str]) -> dict:
     return row
 
 
+def iter_rows(path) -> Iterator[dict]:
+    """Every row of a table, in file order, without opening its index (small tables: units, callable)."""
+    with gzip.open(path, 'rt') as handle:
+        first = handle.readline().rstrip('\n')
+        cols = first[1:].split('\t') if first.startswith('#') else list(COMMON)
+        for line in handle:
+            yield _typed(cols, line.rstrip('\n').split('\t'))
+
+
 class Table:
     """One indexed table. ``fetch`` returns rows (dicts; integer columns parsed) overlapping a region."""
 

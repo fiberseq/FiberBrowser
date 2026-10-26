@@ -48,6 +48,7 @@ from routers.workspaces import router as workspaces_router
 from routers.lift import router as lift_router
 from routers.differences import router as differences_router
 from routers.graph_panel import router as graph_panel_router
+from routers.scan import router as scan_router
 
 API_ROUTERS = (
     jupyter_router,
@@ -95,6 +96,7 @@ API_ROUTERS = (
     lift_router,
     differences_router,
     graph_panel_router,
+    scan_router,
 )
 
 
