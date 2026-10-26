@@ -88,7 +88,7 @@ describe('SV display settings', () => {
     act(() => applyImportedState({ frontend: { svConflictOptions: saved.svConflictOptions } }));
     expect(useBrowserStore.getState().svConflictOptions.max_distance).toBe(5000);
     act(() => applyImportedState({ frontend: {} }));
-    expect(useBrowserStore.getState().svConflictOptions).toMatchObject({ enabled: true, max_distance: 100000, min_mapq: 20 });
+    expect(useBrowserStore.getState().svConflictOptions).toMatchObject({ enabled: true, max_distance: 100000, min_mapq: 0 });   // MAPQ filtering off by default (owner, 25 Oct)
     act(() => root.unmount());
   });
 });
