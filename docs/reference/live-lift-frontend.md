@@ -1,6 +1,6 @@
 # Live-lift differences and insertion inspection (P2a4)
 
-Everything is gated by the server's live-lift flag and a displayed
+Everything is gated by live lift being on (the default; see `FIBERBROWSER_LIVE_LIFT`) and a displayed
 `bam_livelift` dataset. Native sibling panels participate in the shared axis,
 insertion columns and selected-site guide. Equivalent parental insertions at the same boundary (within 10% length, or 3 bp) share one column. Each parent draws its own payload at the same bp scale; the longer allele sets the width and a shorter allele has a marked tail. Labels flag differing lengths and boundary alignment. Competing matches remain separate; this does not imply internal sequence alignment.
 

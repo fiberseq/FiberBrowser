@@ -24,7 +24,7 @@ Defaults live under one work folder, $PGLIFT_WORK or ~/pglift_work:
   maps/hprc.GRCh38.HG002.chain.graphlift.json the lift map (a graphlift sidecar and its files, or a UCSC .chain)
   graph/hprc-package/                          a graph package (made with `fiberbrowser-graph prepare`)
   ref/GRCh38.fa                                the reference FASTA (with its .fai)
-  ref/source.fa                                optional: the samples' own assembly FASTA (indexed)
+  ref/source.fa(.gz)                           optional: the samples' own assembly FASTA (indexed)
 
 The graph helper is taken from --graph-helper, else from the `fiberbrowser[graph]` companion package
 (or the macOS app). The server gets its own HOME (a new temporary folder unless --home is given), so
@@ -71,7 +71,8 @@ def parse_args(argv=None):
     ap.add_argument("--fasta", default=work("ref", "GRCh38.fa"), help="reference FASTA (with .fai)")
     ap.add_argument("--source-fasta", default=None, metavar="FILE",
                     help="the samples' own assembly FASTA (indexed; optional): assembly bases in the inspector, Identify on "
-                         "assembly insertions, 'Confirmed by assembly' for insertions (default: ref/source.fa if present)")
+                         "assembly insertions, 'Confirmed by assembly' for insertions (default: ref/source.fa or "
+                         "ref/source.fa.gz if present)")
     ap.add_argument("--native-label", default="GRCh38", help="suffix of native dataset labels (default: GRCh38)")
     ap.add_argument("--pooled", action="store_true", help="lifted datasets as one pooled panel (not graph or split)")
     ap.add_argument("--no-preview", action="store_true", help="turn preview features off for this server")
@@ -118,8 +119,8 @@ def check_inputs(a) -> None:
         a.source_fasta = full(a.source_fasta)
         if not os.path.exists(a.source_fasta):
             missing.append(f"source assembly FASTA: {a.source_fasta}")
-    elif os.path.exists(work("ref", "source.fa")):
-        a.source_fasta = work("ref", "source.fa")
+    else:
+        a.source_fasta = next((work("ref", n) for n in ("source.fa", "source.fa.gz") if os.path.exists(work("ref", n))), None)
     if missing:
         sys.exit("Missing inputs (see --help for the defaults):\n  " + "\n  ".join(missing))
     if not os.path.exists(a.fasta):

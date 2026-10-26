@@ -134,7 +134,7 @@ It prints a link to open when the data is loaded. Ctrl+C stops the server.
 |---|---|
 | `--sample LABEL LIFTED_BAM [NATIVE_BAM]` | A sample: its reads on its own assembly (added as a live-lift dataset, *LABEL (lifted)*) and, optionally, on the reference (*LABEL (GRCh38)*). Repeat for more samples. |
 | `--map FILE` | The lift map for the lifted BAMs: a graphlift `.graphlift.json`, or a UCSC `.chain` / `.chain.gz`. |
-| `--source-fasta FILE` | The samples' own assembly FASTA (indexed; optional; default `ref/source.fa` when it exists). |
+| `--source-fasta FILE` | The samples' own assembly FASTA (indexed; optional; default `ref/source.fa` or `ref/source.fa.gz` when one exists). |
 | `--graph-package DIR` | A graph package (repeatable). `--no-graph` leaves graphs off, so lifted datasets open as one panel per haplotype. |
 | `--graph-helper PATH` | A `fiberbrowser-graph` you built; otherwise the companion package or the macOS app's copy is used. |
 | `--fasta FILE` | The reference FASTA (with its `.fai`). |
