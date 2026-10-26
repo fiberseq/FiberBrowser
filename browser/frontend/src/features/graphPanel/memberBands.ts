@@ -90,19 +90,37 @@ export function clusterOf(r: GraphRead, assignments: Readonly<Record<string, num
 
 const bodyBp = (m: PlacedMolecule) => m.body.reduce((t, b) => t + (b.s1 - b.s0), 0);
 
-/** First-fit rows for molecules in the given order (x extents), at most `maxRows`; the rest counted hidden. */
+/** First-fit rows for molecules in the given order (x extents), at most `maxRows`; the rest counted hidden. A row
+ * takes a molecule wherever its x range (with the gap) is free, so an order that is not left to right on screen (by
+ * canonical column in a mirrored panel, by a sort) keeps the earlier molecules' row priority without wasting rows
+ * (Codex review, group H). Each row keeps its occupied ranges sorted and disjoint. */
 function firstFit(list: PlacedMolecule[], maxRows: number, gapPx: number, oneEach = false): { rows: PlacedMolecule[][]; hidden: number } {
   const rows: PlacedMolecule[][] = [];
-  const ends: number[] = [];
+  const occupied: [number, number][][] = [];
   let hidden = 0;
+  // The first range in a row not clear of x by the gap (its end + gap > x); the ones before it are left of x.
+  const firstNotLeftOf = (ranges: [number, number][], x: number) => {
+    let lo = 0, hi = ranges.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (ranges[mid][1] + gapPx <= x) lo = mid + 1; else hi = mid; }
+    return lo;
+  };
+  // Free when that range (and so every later one) starts a gap or more after the molecule ends.
+  const fits = (ranges: [number, number][], x0: number, x1: number) => {
+    const k = firstNotLeftOf(ranges, x0);
+    return k >= ranges.length || ranges[k][0] >= x1 + gapPx;
+  };
   for (const m of list) {
-    let r = oneEach ? -1 : ends.findIndex(e => e + gapPx <= m.extent![0]);
+    const [x0, x1] = m.extent!;
+    let r = oneEach ? -1 : occupied.findIndex(ranges => fits(ranges, x0, x1));
     if (r < 0) {
       if (rows.length >= maxRows) { hidden++; continue; }
-      r = rows.length; rows.push([]); ends.push(-Infinity);
+      r = rows.length; rows.push([]); occupied.push([]);
     }
     rows[r].push(m);
-    ends[r] = Math.max(ends[r], m.extent![1]);
+    const ranges = occupied[r];
+    let lo = 0, hi = ranges.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (ranges[mid][0] <= x0) lo = mid + 1; else hi = mid; }
+    ranges.splice(lo, 0, [x0, x1]);
   }
   return { rows, hidden };
 }

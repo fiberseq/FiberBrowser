@@ -365,3 +365,26 @@ describe('item 3: what a host drawn linear cannot show (§7.4)', () => {
     expect(notDrawnInLinear(run('mat', { shared: [{ kind: 'target', length: 900, samples: 3, label: 'T1' }] }), 'mat')).toEqual([]);
   });
 });
+
+describe('group H review 1: position order not left to right on screen never wastes rows', () => {
+  const M: BandMember = { panelId: 'mat', stateKey: 'k-mat', datasetId: 'd', liftHap: 'MAT', binding: 'mat', label: 'MAT', color: '#111' };
+  const mol = (q: string, x0: number, x1: number): PlacedMolecule => ({ read: { k: `d|0|${q}|r`, d: 'd', lib: 0, q, rec: 'r', b: 'mat', c: '', st: '+',
+    sup: false, s: 0, e: 1, cov: [], ins: [], hap: 'MAT' } as GraphRead, lane: 'mat', visits: [], body: [], calls: [], m6a: [], density: [], ins: [],
+    holes: [], connectors: [], extent: [x0, x1], unplacedBp: 0 });
+
+  it('40 disjoint reads in right-to-left canonical order (a mirrored panel) pack into one row, none hidden', () => {
+    const mols = Array.from({ length: 40 }, (_, i) => mol(`r${i}`, 1000 - i * 20, 1000 - i * 20 + 10));
+    const rank = new Map(mols.map((m, i) => [m.read.k, [i, 0, 0, 0] as const]));
+    const lane = packMemberBands(mols, [M], {}, 20, 'position', 3, undefined, m => rank.get(m.read.k))!.get('mat')!;
+    expect(lane.rows.length).toBe(1);
+    expect(lane.hidden).toBe(0);
+    // Row priority follows the canonical order.
+    expect(lane.rows[0][0].read.q).toBe('r0');
+  });
+
+  it('overlaps still take new rows; a read fits a gap between two others, with the gap respected', () => {
+    const lane = packMemberBands([mol('a', 0, 10), mol('b', 40, 50), mol('c', 14, 36), mol('d', 12, 38), mol('e', 5, 45)], [M], {}, 10, 'position', 3,
+      undefined, m => [['a', 'b', 'c', 'd', 'e'].indexOf(m.read.q), 0, 0, 0])!.get('mat')!;
+    expect(lane.rows.map(r => r.map(m => m.read.q))).toEqual([['a', 'b', 'c'], ['d'], ['e']]);
+  });
+});
