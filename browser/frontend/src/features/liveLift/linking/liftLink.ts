@@ -271,17 +271,7 @@ export async function openLinkedSourceView(liftPanelId: string, hapLabel?: strin
   if (existing) {
     if (existing.liftLink!.liftPanelId !== liftPanelId) updateLink(existing.id, { liftPanelId });
     // Reopened or relinked beside a view of its own: shown at that view now, not where it was left.
-    if (own && await ensureSummary(dataset.id, key)) {
-      await prefetchView(dataset.id, key, 0, own.chrom, own.start, own.end);
-      const now = useBrowserStore.getState().panels.find(p => p.id === existing.id);
-      const out = now ? sourceViewFor(now, own) : null;
-      if (out && out !== 'pending') {
-        bump(existing.id);
-        pending.delete(existing.id);
-        publishCandidates(existing.id, out.mapping);
-        useBrowserStore.getState().setPanelViewportFromLink(existing.id, out.span);
-      }
-    }
+    if (own) remapRevealedSource(existing, dataset.id, key, own);
     return existing.id;
   }
   try {
@@ -351,6 +341,37 @@ export async function openLinkedSourceView(liftPanelId: string, hapLabel?: strin
     useBrowserStore.getState().setError(`Source view: ${(e as Error).message}`);
     return null;
   }
+}
+
+/** A source view revealed (or relinked) beside a lifted panel with a view of its own goes to that view: at once
+ * when the map tiles are loaded (as they are for a view on screen), so the caller's undo step records it; else once
+ * they arrive, only if nothing moved, was relinked or restored meanwhile, folded into that step while it is still the
+ * latest (post-merge review, group C round 2). */
+function remapRevealedSource(existing: PanelConfig, datasetId: string, key: string, own: Span): void {
+  const apply = (): 'done' | 'pending' | 'none' => {
+    const now = useBrowserStore.getState().panels.find(p => p.id === existing.id);
+    const out = now?.liftLink ? sourceViewFor(now, own) : null;
+    if (out === 'pending') return 'pending';
+    if (!out) return 'none';
+    bump(existing.id);
+    pending.delete(existing.id);
+    publishCandidates(existing.id, out.mapping);
+    useBrowserStore.getState().setPanelViewportFromLink(existing.id, out.span);
+    return 'done';
+  };
+  if (apply() !== 'pending') return;
+  const history = { after: lastSnapshotId() };
+  const gen = bump(existing.id);
+  const startView = JSON.stringify(existing.viewportOverride ?? null);
+  void (async () => {
+    if (!await ensureSummary(datasetId, key)) return;
+    await prefetchView(datasetId, key, 0, own.chrom, own.start, own.end);
+    const st = useBrowserStore.getState();
+    const now = st.panels.find(p => p.id === existing.id);
+    if (!now?.liftLink || generation.get(existing.id) !== gen || JSON.stringify(now.viewportOverride ?? null) !== startView
+      || JSON.stringify(liftedOwnView(now.liftLink.liftPanelId, st.panels)) !== JSON.stringify(own)) return;
+    if (apply() === 'done') foldCorrection({ gen, linkId: now.liftLink.id, chrom: own.chrom, datasetId, kind: 'panel', history });
+  })();
 }
 
 /** The source panel shows the other orientation (the user's override of the entry orientation). */
