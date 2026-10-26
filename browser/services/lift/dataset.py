@@ -59,6 +59,8 @@ class LiveLiftConfig:
             "settings": self.settings.as_dict(),
             "key": self.key(),
             "source_assembly": _source_assembly(handle),
+            "source_sample": source_sample(handle.haplotypes),
+            "target_reference": target_reference(handle.manifest),
             "source_fasta": self.source_fasta,
             "validation": self.validation,
         }
@@ -69,6 +71,30 @@ class LiveLiftConfig:
                      source_fasta=data.get("source_fasta"))
         config.validation = data.get("validation")
         return config
+
+
+def _pansn_sample(name) -> Optional[str]:
+    """The sample of a PanSN name (``HG002#1#chr3`` and ``HG002#1`` -> ``HG002``); a ``_MAT``/``_PATERNAL``-style
+    suffix on the sample is dropped (``HG002_MAT#1`` -> ``HG002``)."""
+    import re
+    sample = str(name or "").split("#", 1)[0].strip()
+    sample = re.sub(r"[_.\-](MAT|PAT)(ERNAL)?$", "", sample, flags=re.IGNORECASE)
+    return sample or None
+
+
+def source_sample(haplotypes) -> Optional[str]:
+    """The one sample a map's source haplotypes belong to (labels: "Open in HG002 view"); None for several or none."""
+    samples = {_pansn_sample(h) for h in haplotypes or ()}
+    samples.discard(None)
+    return samples.pop() if len(samples) == 1 else None
+
+
+def target_reference(manifest) -> Optional[str]:
+    """The target assembly's name from the map's target paths (``GRCh38#0`` -> ``GRCh38``), when they agree."""
+    names = {_pansn_sample(t.get("haplotype") or t.get("path") or "") if "#" in str(t.get("haplotype") or t.get("path") or "") else None
+             for t in manifest.get("targets") or [] if isinstance(t, dict)}
+    names.discard(None)
+    return names.pop() if len(names) == 1 else None
 
 
 def _source_assembly(handle) -> str:
