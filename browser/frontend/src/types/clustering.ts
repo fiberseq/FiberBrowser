@@ -131,6 +131,10 @@ export interface ClusterTreeNode {
    * out of that panel keeps, on this node, only its own observations' rows. */
   graphProvenance?: Record<string, { observations: import('../utils/clusterMatchedRun').GraphRunObservation[];
     owned: Record<string, string[]> }>;
+  /** State keys whose labels on this node another grouping (a merge, a clustering of the panel's own) replaced after
+   * the graph run labelled them: the run's provenance still says whose records they are (pop-outs split by it), but
+   * the labels are no longer the run's own (a source view keeps its order and focus). A graph run clears its keys. */
+  graphLabelsReplaced?: Record<string, boolean>;
 
   // Results are keyed by current stateKey for in-session branch switching.
   assignments: Record<string, Record<string, number>>;

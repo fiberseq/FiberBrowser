@@ -214,21 +214,20 @@ function sameAssignments(a: Record<string, number> | undefined, b: Record<string
 }
 
 /** A rebuilt tree node keeps the graph-run provenance of the panels whose labels did not change (another panel's
- * clustering re-syncs the node; agy review, group B round 4). */
+ * clustering re-syncs the node; agy review, group B round 4), and which of those labels another grouping replaced. */
 function keptGraphProvenance(node: ClusterTreeNode | undefined, assignments: Record<string, Record<string, number>>):
-  Pick<ClusterTreeNode, 'graphProvenance'> {
+  Pick<ClusterTreeNode, 'graphProvenance' | 'graphLabelsReplaced'> {
   const kept = Object.entries(node?.graphProvenance ?? {}).filter(([key]) => sameAssignments(node!.assignments[key], assignments[key]));
-  return kept.length ? { graphProvenance: Object.fromEntries(kept) } : {};
+  const replaced = kept.filter(([key]) => node!.graphLabelsReplaced?.[key]).map(([key]) => [key, true] as const);
+  return kept.length ? { graphProvenance: Object.fromEntries(kept), ...(replaced.length ? { graphLabelsReplaced: Object.fromEntries(replaced) } : {}) } : {};
 }
 
-/** A node whose labels for `key` a grouping other than a graph run has replaced: no graph run's provenance owns them
- * any more, even when the new labels equal the old (a graph run stamps its own after writing; Codex post-merge
- * review, group A round 2, #2). */
-function withoutGraphProvenance(node: ClusterTreeNode, key: string): ClusterTreeNode {
-  if (!node.graphProvenance?.[key]) return node;
-  const { [key]: _gone, ...rest } = node.graphProvenance;
-  const { graphProvenance: _all, ...base } = node;
-  return Object.keys(rest).length ? { ...base, graphProvenance: rest } : base;
+/** A node whose labels for `key` a grouping other than a graph run replaced: they are no longer the run's own, even
+ * when the new labels equal the old; the run's record provenance stays, so pop-outs still split them by haplotype (a
+ * graph run clears the mark after writing; Codex post-merge review, group A rounds 2-3, #2). */
+function withGraphLabelsReplaced(node: ClusterTreeNode, key: string): ClusterTreeNode {
+  if (!node.graphProvenance?.[key] || node.graphLabelsReplaced?.[key]) return node;
+  return { ...node, graphLabelsReplaced: { ...(node.graphLabelsReplaced ?? {}), [key]: true } };
 }
 
 function cloneAssignments(assignments: Record<string, Record<string, number>>): Record<string, Record<string, number>> {
@@ -1120,7 +1119,7 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
         clusterTreeNodes: {
           ...state.clusterTreeNodes,
           [activeNode.id]: {
-            ...(options?.merge ? activeNode : withoutGraphProvenance(activeNode, datasetId)),
+            ...(options?.merge ? activeNode : withGraphLabelsReplaced(activeNode, datasetId)),
             assignments: cloneAssignments(clusterAssignments),
             order: cloneOrder(clusterOrder),
           },

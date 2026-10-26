@@ -601,7 +601,7 @@ const DATASET_KEYED_RECORDS = new Set([
   'excludedReadIds', 'svSplits', 'clusterGroupLabels', 'svCarrierEvidence',
 ]);
 // The same, inside each cluster-tree branch (ClusterTreeNode).
-const CLUSTER_TREE_NODE_KEYED_RECORDS = ['assignments', 'order', 'focus', 'readScope', 'groupLabels', 'graphProvenance'];
+const CLUSTER_TREE_NODE_KEYED_RECORDS = ['assignments', 'order', 'focus', 'readScope', 'groupLabels', 'graphProvenance', 'graphLabelsReplaced'];
 
 /**
  * A tree node's graph-run provenance, keyed by state key. A node saved while it held one run's provenance whole

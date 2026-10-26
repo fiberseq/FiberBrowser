@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useBrowserStore } from '../../stores/browserStore';
 import { useGraphStatusStore } from './statusStore';
 import { useGraphBindingsStore } from './bindingsStore';
-import { setPanelViewMode } from './hostMode';
+import { popOut, setPanelViewMode } from './hostMode';
 import { registerGraphPanel } from './register';
 import { assignWithGraphRun, commitGraphRun, destinationAssignments, graphClusterPlan, labelLinkedSource } from './graphCluster';
 import { useGraphSettings } from './handoff';
@@ -18,6 +18,8 @@ import { popOutPaths, seedSourceState, setPopOutKind } from './popOutKind';
 import type { GraphBinding, GraphReadBinding, GraphRegistration } from './types';
 import type { PanelConfig } from '../../types';
 import { clusteredReadIdSet, filterReadsByReadIdSet } from '../../components/tracks/read-track/readFilter';
+import { recordKey } from '../../utils/recordKeys';
+import { deserializeSavedState, serializeState } from '../../stores/historySlice';
 
 registerGraphPanel();
 
@@ -348,8 +350,9 @@ describe('a linked source panel is a destination of graph runs', () => {
     s.setClusterFocus(key, new Set([1]));
     s.setClusterOrder('k-pat', [0, 1]);
     s.setClusterFocus('k-pat', new Set([0]));
-    expect(useBrowserStore.getState().clusterTreeNodes[root].graphProvenance?.[key]).toBeUndefined();
-    expect(useBrowserStore.getState().clusterTreeNodes[root].graphProvenance?.['k-pat']).toBeDefined();
+    // The run's record provenance stays; its labels are marked replaced on the source only.
+    expect(useBrowserStore.getState().clusterTreeNodes[root].graphProvenance?.[key]).toBeDefined();
+    expect(useBrowserStore.getState().clusterTreeNodes[root].graphLabelsReplaced).toEqual({ [key]: true });
     useBrowserStore.setState(x => ({ panels: x.panels.map(q => (q.id === 'srcP' ? { ...q, collapsed: true } : q)) }));
     setPopOutKind('mat', 'source');
     popOutPaths('mat', ['pat']);
@@ -381,6 +384,65 @@ describe('a linked source panel is a destination of graph runs', () => {
     const st = useBrowserStore.getState();
     expect(st.clusterOrder[key]).toEqual([1, 0]);
     expect([...st.clusterFocus[key]!]).toEqual([1]);
+  });
+  it.each(['direct', 'undo-redo', 'session'])('post-merge A3: a pooled host merged through the replacing setter keeps its record provenance, so a PAT pop-out takes no MAT labels (%s)', mode => {
+    seed([panel('pool', { liftHaplotypeMode: 'pooled' })]);
+    useBrowserStore.setState({ _historyStack: [], _historyPointer: -1, _historyPaused: false } as never);
+    setPanelViewMode('pool', 'graph');
+    const p = plan();
+    const mat = p.observations.find(o => o.binding === 'mat')!.id;
+    const m0 = aid('m0', 'm:0'), m1 = aid('m1', 'm:1');
+    commitGraphRun(useBrowserStore.getState(), p, response({ [mat]: { assignments: { [m0]: 0, [m1]: 1 } } }));
+    const root = useBrowserStore.getState().activeClusterTreeNodeId!;
+    expect(useBrowserStore.getState().clusterTreeNodes[root].graphProvenance?.['k-pool']).toBeDefined();
+    // "Merge similar clusters" writes its result with the replacing setter.
+    useBrowserStore.getState().setClusterAssignments('k-pool', { [recordKey(m0)!]: 0, [recordKey(m1)!]: 0 });
+    useBrowserStore.getState().setDynamicClustering(false);
+    useBrowserStore.getState().pushSnapshot('Merge similar clusters');
+    if (mode === 'undo-redo') {
+      useBrowserStore.getState().undo();
+      expect(useBrowserStore.getState().clusterTreeNodes[root].graphProvenance?.['k-pool']).toBeDefined();
+      useBrowserStore.getState().redo();
+      expect(useBrowserStore.getState().clusterAssignments['k-pool']).toEqual({ [recordKey(m0)!]: 0, [recordKey(m1)!]: 0 });
+    }
+    if (mode === 'session') useBrowserStore.setState(deserializeSavedState(JSON.parse(JSON.stringify(serializeState(useBrowserStore.getState())))));
+    const [pat] = popOut('pool', [], [{ binding: 'pat', hap: 'PAT' }]);
+    const st = useBrowserStore.getState();
+    const patRows = [{ id: 'pat-visible', analysis_id: aid('pat-visible', 'p:0') }];
+    const visible = (labels: Record<string, number> | undefined) => filterReadsByReadIdSet(patRows, clusteredReadIdSet(labels ?? {})).length;
+    expect(st.clusterAssignments[pat]).toBeUndefined();
+    expect(visible(st.clusterAssignments[pat])).toBe(1);
+    expect(st.clusterTreeNodes[root].assignments[pat]).toBeUndefined();
+    useBrowserStore.getState().applyClusterTreeNode(root);
+    expect(visible(useBrowserStore.getState().clusterAssignments[pat])).toBe(1);
+  });
+
+  it('post-merge A3: a source view opened after a pooled host\'s labels were replaced takes its haplotype\'s replacement labels', () => {
+    seed([panel('pool', { liftHaplotypeMode: 'pooled' })]);
+    setPanelViewMode('pool', 'graph');
+    const p = plan();
+    const mat = p.observations.find(o => o.binding === 'mat')!.id, pat = p.observations.find(o => o.binding === 'pat')!.id;
+    const m = aid('m', 'm:0'), q = aid('p', 'p:0');
+    commitGraphRun(useBrowserStore.getState(), p, response({ [mat]: { assignments: { [m]: 0 } }, [pat]: { assignments: { [q]: 1 } } }));
+    useBrowserStore.setState(s => ({ panels: [...s.panels, source('srcP', '2', 'PAT')], clusterMatchedRun: null }));
+    useBrowserStore.getState().setClusterAssignments('k-pool', { [recordKey(m)!]: 1, [recordKey(q)!]: 0 });
+    seedSourceState('pool', 'srcP');
+    expect(useBrowserStore.getState().clusterAssignments['srcP~lift-source']).toEqual({ p: 0 });
+  });
+
+  it('post-merge A3: a graph run clears the replaced mark of the panels it labels', () => {
+    seed([...split(), source('srcP', '2', 'PAT')]);
+    setPanelViewMode('mat', 'graph');
+    const p = plan();
+    const pat = p.observations.find(o => o.binding === 'pat')!.id;
+    commitGraphRun(useBrowserStore.getState(), p, response({ [pat]: { assignments: { [aid('q1')]: 0, [aid('q2')]: 1 } } }));
+    const root = useBrowserStore.getState().activeClusterTreeNodeId!;
+    useBrowserStore.setState({ clusterMatchedRun: null });
+    useBrowserStore.getState().setClusterAssignments('srcP~lift-source', { q1: 0, q2: 1 });
+    useBrowserStore.getState().syncActiveClusterTreeNode();
+    expect(useBrowserStore.getState().clusterTreeNodes[root].graphLabelsReplaced).toEqual({ 'srcP~lift-source': true });
+    commitGraphRun(useBrowserStore.getState(), plan(), response({ [pat]: { assignments: { [aid('q1')]: 1, [aid('q2')]: 0 } } }));
+    expect(useBrowserStore.getState().clusterTreeNodes[root].graphLabelsReplaced).toBeUndefined();
   });
 });
 

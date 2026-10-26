@@ -445,12 +445,18 @@ function stampGraphProvenance(run: ClusterMatchedRun): void {
   const entry = { observations: run.graph.observations,
     owned: Object.fromEntries(Object.entries(run.assignments).map(([oid, a]) => [oid, Object.keys(a).map(id => recordKey(id) ?? id)])) };
   const mine = Object.fromEntries(run.destinations.map(d => [d.stateKey, entry]));
+  // Its labels are its own again on those panels (its writes marked them replaced).
+  const stamped = (n: BrowserState['clusterTreeNodes'][string]) => {
+    const replaced = Object.fromEntries(Object.entries(n.graphLabelsReplaced ?? {}).filter(([k]) => !(k in mine)));
+    const { graphLabelsReplaced: _old, ...rest } = n;
+    return { ...rest, graphProvenance: { ...(n.graphProvenance ?? {}), ...mine }, ...(Object.keys(replaced).length ? { graphLabelsReplaced: replaced } : {}) };
+  };
   useBrowserStore.setState(cur => {
     const node = cur.clusterTreeNodes[run.treeNodeId!];
     if (!node) return {};
     const parent = node.refinement && node.parentId ? cur.clusterTreeNodes[node.parentId] : null;
-    return { clusterTreeNodes: { ...cur.clusterTreeNodes, [node.id]: { ...node, graphProvenance: { ...(node.graphProvenance ?? {}), ...mine } },
-      ...(parent ? { [parent.id]: { ...parent, graphProvenance: { ...(parent.graphProvenance ?? {}), ...mine } } } : {}) } };
+    return { clusterTreeNodes: { ...cur.clusterTreeNodes, [node.id]: stamped(node),
+      ...(parent ? { [parent.id]: stamped(parent) } : {}) } };
   });
 }
 
