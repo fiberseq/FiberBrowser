@@ -2,7 +2,7 @@
 """Start FiberBrowser with every pangenome feature turned on, and load demo data.
 
 Turns on, for this server only:
-  * live lift (on by default; FIBERBROWSER_LIVE_LIFT=1 is set too, for builds where it was opt-in): lifted
+  * live lift (FIBERBROWSER_LIVE_LIFT=1; it is on by default, except on lab and public servers): lifted
     datasets, linked source views, the Differences row's assembly lanes;
   * the graph helper and a graph package (graph mode on dataset panels, the graph view panel);
   * preview features (Settings > Show preview features), which include the standalone graph view panel.
@@ -21,9 +21,10 @@ Then it adds each sample: the BAM aligned to the sample's own assembly as a live
 Defaults live under one work folder, $PGLIFT_WORK or ~/pglift_work:
   demo_data/sample_a.alu_chr3.hg002v1.1.bam   reads aligned to the sample's assembly (lifted)
   demo_data/sample_a.alu_chr3.GRCh38.bam      the same reads aligned to GRCh38 (native)
-  maps/hprc.GRCh38.HG002.chain.graphlift.json the graphlift map (a sidecar manifest and its files)
+  maps/hprc.GRCh38.HG002.chain.graphlift.json the lift map (a graphlift sidecar and its files, or a UCSC .chain)
   graph/hprc-package/                          a graph package (made with `fiberbrowser-graph prepare`)
   ref/GRCh38.fa                                the reference FASTA (with its .fai)
+  ref/source.fa                                optional: the samples' own assembly FASTA (indexed)
 
 The graph helper is taken from --graph-helper, else from the `fiberbrowser[graph]` companion package
 (or the macOS app). The server gets its own HOME (a new temporary folder unless --home is given), so
@@ -60,7 +61,7 @@ def parse_args(argv=None):
                          "dataset, 'LABEL (lifted)') and, optionally, on the reference ('LABEL (GRCh38)'). "
                          "Repeat for more samples. Default: Sample A from demo_data/.")
     ap.add_argument("--map", default=work("maps", "hprc.GRCh38.HG002.chain.graphlift.json"),
-                    help="graphlift map (.graphlift.json) for the lifted BAMs")
+                    help="lift map for the lifted BAMs: a graphlift .graphlift.json, or a UCSC .chain / .chain.gz")
     ap.add_argument("--graph-package", action="append", default=None, metavar="DIR",
                     help="graph package folder (repeatable; default: graph/hprc-package)")
     ap.add_argument("--no-graph", action="store_true",
@@ -68,6 +69,9 @@ def parse_args(argv=None):
     ap.add_argument("--graph-helper", default=None, metavar="PATH",
                     help="fiberbrowser-graph executable (default: the fiberbrowser[graph] companion package)")
     ap.add_argument("--fasta", default=work("ref", "GRCh38.fa"), help="reference FASTA (with .fai)")
+    ap.add_argument("--source-fasta", default=None, metavar="FILE",
+                    help="the samples' own assembly FASTA (indexed; optional): assembly bases in the inspector, Identify on "
+                         "assembly insertions, 'Confirmed by assembly' for insertions (default: ref/source.fa if present)")
     ap.add_argument("--native-label", default="GRCh38", help="suffix of native dataset labels (default: GRCh38)")
     ap.add_argument("--pooled", action="store_true", help="lifted datasets as one pooled panel (not graph or split)")
     ap.add_argument("--no-preview", action="store_true", help="turn preview features off for this server")
@@ -110,6 +114,12 @@ def check_inputs(a) -> None:
             if not os.access(a.graph_helper, os.X_OK):
                 missing.append(f"graph helper: {a.graph_helper}")
     a.fasta = full(a.fasta)
+    if a.source_fasta:
+        a.source_fasta = full(a.source_fasta)
+        if not os.path.exists(a.source_fasta):
+            missing.append(f"source assembly FASTA: {a.source_fasta}")
+    elif os.path.exists(work("ref", "source.fa")):
+        a.source_fasta = work("ref", "source.fa")
     if missing:
         sys.exit("Missing inputs (see --help for the defaults):\n  " + "\n  ".join(missing))
     if not os.path.exists(a.fasta):
@@ -178,8 +188,10 @@ def add_samples(a) -> None:
     settings = {"haplotype_mode": "pooled" if a.pooled else "split"}
     for s in a.sample:
         label, lifted, native = s[0], s[1], (s[2] if len(s) > 2 else None)
-        out = post(a.port, "/api/lift/datasets", {"paths": [lifted], "manifest": a.map, "haplotypes": [],
-                                                  "label": f"{label} (lifted)", "settings": settings})
+        body = {"paths": [lifted], "manifest": a.map, "haplotypes": [], "label": f"{label} (lifted)", "settings": settings}
+        if a.source_fasta:
+            body["source_fasta"] = a.source_fasta
+        out = post(a.port, "/api/lift/datasets", body)
         if not out.get("success"):
             sys.exit(f"Could not add {label} as a live-lift dataset: {out.get('error')}")
         print(f"Added {label} (lifted)", flush=True)
@@ -188,6 +200,10 @@ def add_samples(a) -> None:
             if not out.get("success"):
                 sys.exit(f"Could not add {label} ({a.native_label}): {out.get('error')}")
             print(f"Added {label} ({a.native_label})", flush=True)
+
+
+def _interrupt(*_):
+    raise KeyboardInterrupt
 
 
 def main(argv=None):
@@ -210,6 +226,8 @@ def main(argv=None):
         args += ["--fasta", a.fasta]
     print("Server: " + shlex.join(args), flush=True)
     proc = subprocess.Popen(args, cwd=ROOT, env=server_env(a))
+    # A plain kill of this script (SIGTERM) stops the server too, as Ctrl+C does.
+    signal.signal(signal.SIGTERM, _interrupt)
     try:
         wait_ready(a.port, proc)
         add_samples(a)
