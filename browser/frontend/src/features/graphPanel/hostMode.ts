@@ -19,6 +19,8 @@ import { generatePanelId } from '../../stores/utils';
 import { withoutGraphMembership } from '../../stores/graphMembership';
 import type { PanelConfig } from '../../types';
 import { genomeKeyFor } from '../../utils/regionNavigation';
+import { currentMatchedRun, observationShownBy } from '../../utils/clusterMatchedRun';
+import { recordKey } from '../../utils/recordKeys';
 import { graphBindingFor, memberBindingFor, useGraphBindingsStore, type DatasetGraphBinding } from './bindingsStore';
 import { canFollow, defaultCompared, defaultTarget, GRAPH_MAX_PATHS, DEFAULT_CONTEXT_BP, type LinearView } from './state';
 import { useGraphStatusStore } from './statusStore';
@@ -241,6 +243,20 @@ export function popOut(hostId: string, memberIds: string[], newHaps: { binding: 
   if (!ids.size && !made.length) return [];
   undoable(memberIds.length + made.length > 1 ? 'Pop out haplotypes' : 'Pop out haplotype', () => useBrowserStore.setState(s => {
     const copied = copyPanelState(s as unknown as Record<string, unknown>, panelKeyOf(host), made.map(p => p.id));
+    // A graph run's labels on the host: each new haplotype panel keeps only its own observations' rows, so the other
+    // haplotype's labels never scope its reads (agy review of the group B fix: a "not a carrier" pop-out hid its
+    // unlabelled reads).
+    const run = currentMatchedRun(s.clusterMatchedRun, s.clusterAssignments);
+    const hostLabels = s.clusterAssignments[panelKeyOf(host)];
+    if (run?.graph && hostLabels && run.destinations?.some(d => d.stateKey === panelKeyOf(host)) && copied.clusterAssignments) {
+      const byKey = { ...(copied.clusterAssignments as Record<string, Record<string, number>>) };
+      for (const m of made) {
+        const own = new Set(run.graph.observations.filter(o => observationShownBy(o, m))
+          .flatMap(o => Object.keys(run.assignments[o.id] ?? {}).map(id => recordKey(id) ?? id)));
+        byKey[m.id] = Object.fromEntries(Object.entries(hostLabels).filter(([id]) => own.has(recordKey(id) ?? id)));
+      }
+      copied.clusterAssignments = byKey;
+    }
     // Its exclusions too (kept in the read actions store).
     const excluded = useReadActionsStore.getState().excludedReadIds[panelKeyOf(host)];
     if (excluded?.size) for (const m of made) useReadActionsStore.getState().excludeReads(m.id, [...excluded]);

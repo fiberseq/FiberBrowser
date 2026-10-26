@@ -529,11 +529,12 @@ def _not_carrier_labels(state, spec, regions, oid: str, cache: dict, labelled: f
     from services.read_selection import read_matches_id_filter, with_graph_record_keys
     from services.read_strand import filter_reads_by_strand, strand_calls
     ob = next(o for o in spec["observations"] if o["id"] == oid)
-    out: dict = {}
+    out: Optional[dict] = None
     for rc in regions:
         carried = rc.carried.get(oid) or {}
         if not carried:
             continue
+        mine: dict = {}
         if ob["kind"] == "graph":
             gs = [g for g, _rev in carried.values()]
             rows, _desc = graph_window_rows(state, GraphSource(ob["dataset_id"], ob["binding"], ob["contig"]),
@@ -563,8 +564,10 @@ def _not_carrier_labels(state, spec, regions, oid: str, cache: dict, labelled: f
                 continue
             if not any(s0 <= lo_g and s1 >= hi_g for s0, s1 in read_body_spans(r)):
                 continue
-            out[rid] = NOT_CARRIER
-    return out
+            mine[rid] = NOT_CARRIER
+        # A read is judged on every region it is asked about, as the fit's coverage rule (agy, follow-ups).
+        out = mine if out is None else {rid: lab for rid, lab in out.items() if rid in mine}
+    return out or {}
 
 
 def _unfitted_sequence(regions, plan, oid: str) -> Optional[str]:
@@ -609,13 +612,16 @@ def _absent_path_labels(state, spec, tiles, regions, oid: str, cache: dict, labe
     from services.read_selection import read_body_spans, read_matches_id_filter, with_graph_record_keys
     from services.read_strand import filter_reads_by_strand, strand_calls
     target = spec["target"]
-    out: dict = {}
+    out: Optional[dict] = None
+    # Every region must be a proven plain deletion on this path, and a read is labelled only when it spans every
+    # region's junction: one region that is not (a replacement bubble, no flank found) leaves the path unlabelled
+    # (agy review of the group B fix, follow-ups).
     for i in lacking:
         r = spec["regions"][i]
         width = r["end"] - r["start"]
         pad = max(0, min(JUNCTION_PAD_BP, (gc.MAX_FEATURE_BP - width) // 2))
         if pad <= 0:
-            continue
+            return {}
         a, b = max(0, r["start"] - pad), r["end"] + pad
         cells = sorted(set(gc.cells_for(a, b)))
         results = [res for per in tiles.values() for c, res in per.items() if c in cells]
@@ -627,10 +633,21 @@ def _absent_path_labels(state, spec, tiles, regions, oid: str, cache: dict, labe
         left = [u for u in carried if a + u < r["start"]]
         right = [u for u in carried if a + u >= r["end"]]
         if not left or not right:
-            continue
+            return {}
         g0, g1 = carried[max(left)][0], carried[min(right)][0]
         if abs(g1 - g0) != 1:
-            continue   # not a plain deletion on this path
+            return {}   # not a plain deletion on this path
+        # Every target base between the two flanks is proven absent on the path (a flank repeated elsewhere on it
+        # is left out of ``carried``, so adjacent path positions alone prove nothing).
+        g_lo, g_hi = a + max(left) + 1, a + min(right)
+        gap = gc.region_columns(i, g_lo, g_hi, target, gc.merge_occurrences(results, target),
+                                [gc.Observation(oid, ob["binding"])],
+                                {ob["binding"]: gc.merge_occurrences([per[c] for c in cells if c in per], ob["binding"])},
+                                {ob["binding"]: {c: per[c] for c in cells if c in per}}, insertions=False)
+        if (gap.carried.get(oid) or gap.report.get("repeats", {}).get(oid) or gap.report.get("unresolved", {}).get(oid)
+                or gap.report.get("target_unresolved") or gap.report.get("target_repeats")
+                or gap.report.get("absent", {}).get(oid) != g_hi - g_lo):
+            return {}
         lo, hi = min(g0, g1), max(g0, g1)
         rows, _desc = graph_window_rows(state, GraphSource(ob["dataset_id"], ob["binding"], ob["contig"]), lo, hi + 1, cache)
         if ob.get("read_ids") is not None:
@@ -638,13 +655,15 @@ def _absent_path_labels(state, spec, tiles, regions, oid: str, cache: dict, labe
             rows = [x for x in rows if read_matches_id_filter(x, wanted)]
         if ob.get("strand"):
             rows = filter_reads_by_strand(rows, ob["strand"], strand_calls(state, ob["dataset_id"]))
+        mine = {}
         for x in rows:
             rid = x.get("analysis_id") or x["id"]
             if (record_key(rid) or rid) in labelled:
                 continue
             if any(s0 <= 0 and s1 >= hi - lo + 1 for s0, s1 in read_body_spans(x)):
-                out[rid] = NOT_CARRIER
-    return out
+                mine[rid] = NOT_CARRIER
+        out = mine if out is None else {rid: lab for rid, lab in out.items() if rid in mine}
+    return out or {}
 
 
 def _first_stage(plan):
@@ -673,7 +692,8 @@ def run(state, reg, body: dict, tiles: dict, spec: Optional[dict] = None) -> dic
     first, oids, sets_from = _first_stage(plan)
     views, sources = _windows(spec, first, oids)
     req = _request(spec, first, views, settings)
-    out1 = engine(state, req, sources=sources, row_cache=cache)
+    covering: dict = {}
+    out1 = engine(state, req, sources=sources, row_cache=cache, covering_out=covering)
     stage1 = {oid: {aid: str(label) for aid, label in res["assignments"].items()} for oid, res in out1["results"].items()}
     labels = copy.deepcopy(stage1)
     model1 = out1.get("model")
@@ -702,7 +722,10 @@ def run(state, reg, body: dict, tiles: dict, spec: Optional[dict] = None) -> dic
             names[nxt] = "C" + lab
             nxt += 1
     from services.lift.cohort import record_key
-    labelled = frozenset((record_key(x) or x) for per in labels.values() for x in per)
+    # Every record a fitted observation covers, sampled into the fit or not (max_reads): assignment labels it, so the
+    # fit never gives its folded molecule -2 on another path (agy review of the group B fix, follow-ups).
+    labelled = frozenset((record_key(x) or x) for per in labels.values() for x in per) | frozenset(
+        (record_key(x) or x) for ids in covering.values() for x in ids)
     results = {}
     for o in spec["observations"]:
         oid = o["id"]

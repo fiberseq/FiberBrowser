@@ -451,7 +451,10 @@ export async function assignWithGraphRun(run: ClusterMatchedRun, signal?: AbortS
   for (const d of [...run.destinations, ...later]) {
     const labels = destinationAssignments({ ...d, scope: d.scope ?? null }, response.results);
     const live = st.clusterAssignments[d.stateKey] ?? {};
-    const fresh = Object.fromEntries(Object.entries(labels).filter(([id, c]) => live[id] === undefined && c !== UNASSIGNED_CLUSTER_ID));
+    // A model label also replaces "not a carrier" (-2) on a record the model now places (agy review: a carrier molecule
+    // the fit sampled out must not stay -2).
+    const fresh = Object.fromEntries(Object.entries(labels).filter(([id, c]) => c !== UNASSIGNED_CLUSTER_ID
+      && (live[id] === undefined || (live[id] === NOT_CARRIER_CLUSTER_ID && c >= 0))));
     if (!Object.keys(fresh).length) continue;
     added += Object.keys(fresh).length;
     touched.push(d.stateKey);

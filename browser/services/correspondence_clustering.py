@@ -123,10 +123,11 @@ def assign_with_model(X, read_ids, widths, modes, model, snapshot, missing=None,
     return {rid: int(keys[int(i)]) for rid, i in zip(read_ids, np.argmin(d, axis=1))}
 
 
-def run(state, req, *, sources=None, model=None, row_cache=None):
+def run(state, req, *, sources=None, model=None, row_cache=None, covering_out=None):
     """``sources``: graph-source windows by result key (graph primary §2.6; ``services/graph_panel/analysis.py``),
     whose rows are on a package path's own coordinates, not the window's reference. ``model``: assign every
-    eligible row with a fitted model (dynamic assignment, §3.5) instead of fitting."""
+    eligible row with a fitted model (dynamic assignment, §3.5) instead of fitting. ``covering_out``: filled with
+    each window's covering row ids before the ``max_reads`` cap ({result key: [analysis_id or id]})."""
     sources = sources or {}
     timings = EndpointTimings()
     check_cluster_method(req.method)
@@ -245,6 +246,8 @@ def run(state, req, *, sources=None, model=None, row_cache=None):
         arbitrated += 1
     for v, own, query, chrom in loaded:
         own = [r for r in own if id(r) not in dropped_rows]
+        if covering_out is not None:
+            covering_out[v.result_key] = [r.get('analysis_id') or r['id'] for r in own]
         if query is not None:
             own = query.cap_reads(own, namespace='cluster_regions', label=v.result_key)
         elif req.max_reads and len(own) > req.max_reads:

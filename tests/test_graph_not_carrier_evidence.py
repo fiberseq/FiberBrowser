@@ -100,3 +100,185 @@ def test_fit_and_assignment_label_a_proven_non_carrier(monkeypatch):
     fit, again = _run_and_assign(monkeypatch, regions, p)
     assert fit["not_carrier"] and fit["assignments"] == {"b-read": analysis.NOT_CARRIER}
     assert again["assignments"] == {"b-read": analysis.NOT_CARRIER}
+
+
+# ── Proven deletions (_absent_path_labels; agy's review of the group B fix) ──────────────────────────────────
+
+class _Dataset:
+    id, paths, path, data_type, live_lift, cluster_feature_settings = "d", ["/fake/a.bam"], "/fake/a.bam", "bam", None, {}
+
+
+class _State:
+    def __init__(self):
+        self.datasets = {"d": _Dataset()}
+        self.signal_quality_filters = []
+
+    def get_dataset(self, ds_id):
+        return self.datasets.get(ds_id)
+
+
+def _obs(i, binding):
+    return {"id": i, "dataset_id": "d", "kind": "graph", "binding": binding, "contig": "c" + binding, "read_ids": None,
+            "strand": None}
+
+
+def _spec(regions, *obs, **options):
+    return {"target": "target", "regions": [{"start": a, "end": b, "mode": "accessibility"} for a, b in regions],
+            "observations": list(obs),
+            "options": {"insertions": True, "carrier_features": "refine", "carrier_min_samples": 3, **options}}
+
+
+def _columns_of(tiles, spec, oid, binding):
+    res = [r for per in tiles.values() for r in per.values()]
+    return [gc.region_columns(i, r["start"], r["end"], "target", gc.merge_occurrences(res, "target"),
+                              [gc.Observation(oid, binding)], {binding: gc.merge_occurrences(res, binding)}, tiles)
+            for i, r in enumerate(spec["regions"])]
+
+
+def test_a_flank_repeated_elsewhere_on_the_path_is_not_a_proven_junction(monkeypatch):
+    """agy probe 1b: the target walks nL, nDup, nDel, nR; the path walks nL, nR (adjacent) and elsewhere two copies
+    of nDup around its own allele. In the region (nDel) it is cleanly absent, but nDup (between the flanks) is
+    repeated on the path, so the adjacent flanks prove no deletion: no -2."""
+    nodes = {"nL": 100, "nDup": 400, "nDel": 50, "nR": 100, "nAlt": 50}
+    t = path("target", [occ("t1", "nL", (0, 100), (0, 100)), occ("t2", "nDup", (100, 500), (0, 400)),
+                        occ("t3", "nDel", (500, 550), (0, 50)), occ("t4", "nR", (550, 650), (0, 100))])
+    p = path("pat", [occ("p1", "nL", (0, 100), (0, 100)), occ("p2", "nR", (100, 200), (0, 100)),
+                     occ("p3", "nDup", (800, 1200), (0, 400)), occ("p4", "nAlt", (1200, 1250), (0, 50)),
+                     occ("p5", "nDup", (1250, 1650), (0, 400))], plan=plan(owned(0, 650)))
+    tiles = {"pat": {0: topo(nodes, [t, p])}}
+    spec = _spec([(500, 550)], _obs("P", "pat"))
+    monkeypatch.setattr(analysis, "graph_window_rows", lambda st, src, a, b, cache=None: (
+        [{"id": "r", "analysis_id": "aid", "intervals": [[0, b - a, b - a]]}], {}))
+    regions = _columns_of(tiles, spec, "P", "pat")
+    assert regions[0].report["absent"] == {"P": 50} and not regions[0].report["repeats"]
+    assert analysis._absent_path_labels(_State(), spec, tiles, regions, "P", {}) == {}
+
+
+def _deletion_tiles():
+    """Two plain deletions on the path: target nDel1 [100, 150) and nDel2 [250, 300) between carried flanks."""
+    nodes = {"a": 100, "d1": 50, "b": 100, "d2": 50, "c": 100}
+    t = path("target", [occ("t1", "a", (0, 100), (0, 100)), occ("t2", "d1", (100, 150), (0, 50)),
+                        occ("t3", "b", (150, 250), (0, 100)), occ("t4", "d2", (250, 300), (0, 50)),
+                        occ("t5", "c", (300, 400), (0, 100))])
+    p = path("pat", [occ("p1", "a", (0, 100), (0, 100)), occ("p2", "b", (100, 200), (0, 100)),
+                     occ("p3", "c", (200, 300), (0, 100))],
+             plan=plan(owned(0, 100), owned(100, 150, kind="target_insertion"), owned(150, 250),
+                       owned(250, 300, kind="target_insertion"), owned(300, 400)))
+    return {"pat": {0: topo(nodes, [t, p])}}
+
+
+def test_a_read_must_span_every_regions_junction(monkeypatch):
+    """Two proven deletions: a read spanning both junctions is -2; one spanning only the first is not judged."""
+    tiles = _deletion_tiles()
+    spec = _spec([(100, 150), (250, 300)], _obs("P", "pat"))
+
+    def rows(st, src, a, b, cache=None):   # path junctions at 99|100 and 199|200
+        both = {"id": "both", "analysis_id": "both", "intervals": [[0, 400, 400]]}
+        first = {"id": "first", "analysis_id": "first", "intervals": [[0, 150 - a, 150 - a]]}
+        return [{**both, "intervals": [[50 - a, 260 - a, 210]]}, first], {}
+    monkeypatch.setattr(analysis, "graph_window_rows", rows)
+    regions = _columns_of(tiles, spec, "P", "pat")
+    assert analysis._absent_path_labels(_State(), spec, tiles, regions, "P", {}) == {"both": analysis.NOT_CARRIER}
+    # The single proven deletion alone still labels both reads that span it.
+    one = _spec([(100, 150)], _obs("P", "pat"))
+    assert analysis._absent_path_labels(_State(), one, tiles, _columns_of(tiles, one, "P", "pat")[:1], "P", {}) == {
+        "both": analysis.NOT_CARRIER, "first": analysis.NOT_CARRIER}
+
+
+def test_a_sampled_out_carrier_molecule_is_never_not_a_carrier(monkeypatch):
+    """agy probe 2: with max_reads, a folded carrier molecule left out of the fit's sample (it covers the region on
+    the carrier path; its supplementary spans the deletion junction on the other) is not labelled -2 there; the
+    durable assignment labels it on its carrier path, and not -2 either."""
+    from services.lift.cohort import _encode_identity
+    nodes = {"nL": 100, "nDel": 50, "nR": 100}
+    t = path("target", [occ("t1", "nL", (0, 100), (0, 100)), occ("t2", "nDel", (100, 150), (0, 50)),
+                        occ("t3", "nR", (150, 250), (0, 100))])
+    m = path("mat", [occ("m1", "nL", (0, 100), (0, 100)), occ("m2", "nDel", (100, 150), (0, 50)),
+                     occ("m3", "nR", (150, 250), (0, 100))])
+    p = path("pat", [occ("p1", "nL", (0, 100), (0, 100)), occ("p3", "nR", (100, 200), (0, 100))],
+             plan=plan(owned(0, 100), owned(100, 150, kind="target_insertion"), owned(150, 250)))
+    tiles = {"mat": {0: topo(nodes, [t, m])}, "pat": {0: topo(nodes, [t, p])}}
+    aids = {q: _encode_identity([f"d|{q}", q, None, 0, "primary"]) for q in ("molA", "molB", "molC")}
+
+    def rows(_st, src, a, b, cache=None):
+        w = b - a
+        sup = src.binding == "pat"
+        return ([{"id": q, "analysis_id": aids[q], "intervals": [[0, w, (-w if q == "molA" and not sup else w)]],
+                  "live_lift": {"source": {"supplementary": sup}, "segments": [[0, w, 0, "+", True]]}}
+                 for q in ("molA", "molB", "molC")], {})
+    monkeypatch.setattr(analysis, "graph_window_rows", rows)
+    monkeypatch.setattr(analysis, "observation_snapshot", lambda st, sp: {})
+    import types
+    spec = _spec([(100, 150)], _obs("obs-M", "mat"), _obs("obs-P", "pat"), coverage_rule="require_all")
+    reg = types.SimpleNamespace(revisions={"package": "1"})
+    fit = analysis.run(_State(), reg, {"method": "kmeans", "k": 2, "max_reads": 2}, tiles, spec)
+    fitted = fit["results"]["obs-M"]["assignments"]
+    [out] = [aid for aid in aids.values() if aid not in fitted]   # sampled out of the fit
+    assert out not in fit["results"]["obs-P"]["assignments"]
+    model = dict(stages=fit["stages"], label_ids=fit["label_ids"], settings=fit["settings"], revisions=fit["revisions"])
+    again = analysis.assign(_State(), reg, {"run": model}, tiles, spec)
+    assert again["results"]["obs-M"]["assignments"][out] >= 0
+    assert out not in again["results"]["obs-P"]["assignments"]
+
+
+def _alu_package():
+    import os
+    found = [p for p in os.environ.get("FIBERBROWSER_TEST_GRAPH_PACKAGES", "").split(os.pathsep)
+             if p.strip() and os.path.basename(os.path.normpath(p)) == "alu"]
+    helper = os.environ.get("FIBERBROWSER_TEST_GRAPH_HELPER", "").strip()
+    return (found[0] if found and helper and os.path.isfile(helper) else None), helper
+
+
+def test_a_replacement_bubble_beside_a_deletion_is_not_a_carrier_on_the_real_helper(monkeypatch, tmp_path):
+    """agy probe 1a (real helper, toy ``alu`` package): on ``pat``, target [91,037, 91,058) is a 21 bp plain deletion
+    and [70,886, 70,888) a 2 bp replacement bubble. The bubble alone gives no -2; with the deletion in the same run
+    the path is still not "not a carrier" (it carries other sequence there), in the fit and on assignment."""
+    import asyncio
+    import pytest
+    from services.graph_panel import reads as greads, service
+    from services.lift.cohort import _encode_identity
+    package, helper = _alu_package()
+    if package is None:
+        pytest.skip("set FIBERBROWSER_TEST_GRAPH_HELPER and FIBERBROWSER_TEST_GRAPH_PACKAGES (alu)")
+    monkeypatch.setenv("FIBERBROWSER_GRAPH_HELPER", helper)
+    monkeypatch.setenv("FIBERBROWSER_GRAPH_REGISTRY", str(tmp_path / "registry.json"))
+    monkeypatch.delenv("FIBERBROWSER_GRAPH_PACKAGES", raising=False)
+    service.reset_for_tests()
+    analysis.clear_caches()
+
+    def rows(_st, src, a, b, cache=None):
+        w = b - a
+        q = ("m1", "m2") if src.binding == "mat" else ("p1", "p2")
+        return ([{"id": x, "analysis_id": _encode_identity([f"d|{x}", x, "r" + x, 0, "primary"]),
+                  "intervals": [[0, w, w if x.endswith("2") else -max(1, w // 2)]],
+                  "live_lift": {"source": {"supplementary": False}, "segments": [[0, w, 0, "+", True]]}} for x in q], {})
+    monkeypatch.setattr(analysis, "graph_window_rows", rows)
+    monkeypatch.setattr(analysis, "observation_snapshot", lambda st, sp: {})
+    monkeypatch.setattr(greads, "read_bindings", lambda st, reg: [
+        {"dataset_id": "d", "kind": "lifted", "paths": {"mat": "cM", "pat": "cP"}}])
+    obs = [{"id": "obs-M", "dataset_id": "d", "kind": "graph", "binding": "mat"},
+           {"id": "obs-P", "dataset_id": "d", "kind": "graph", "binding": "pat"}]
+
+    def body(regions):
+        return {"target": "target", "regions": [{"start": a, "end": b, "mode": "accessibility"} for a, b in regions],
+                "observations": obs, "method": "kmeans", "k": 2}
+
+    async def go():
+        try:
+            await service.ensure_ready()
+            reg = await asyncio.to_thread(service.registry().register, service.helper_status().path, package)
+            alone = await analysis.handle(_State(), reg, body([(91_037, 91_058)]))
+            both = await analysis.handle(_State(), reg, body([(70_886, 70_888), (91_037, 91_058)]))
+            model = dict(stages=both["stages"], label_ids=both["label_ids"], settings=both["settings"],
+                         revisions=both["revisions"])
+            again = await analysis.handle(_State(), reg, {**body([(70_886, 70_888), (91_037, 91_058)]), "run": model},
+                                          mode="assign")
+            return alone["results"]["obs-P"], both["results"]["obs-P"], again["results"]["obs-P"]
+        finally:
+            await service.shutdown()
+            service.reset_for_tests()
+            analysis.clear_caches()
+    alone, both, again = asyncio.run(go())
+    assert alone.get("not_carrier") and set(alone["assignments"].values()) == {analysis.NOT_CARRIER}   # the control
+    assert not both.get("not_carrier") and both["assignments"] == {}
+    assert again["assignments"] == {}
