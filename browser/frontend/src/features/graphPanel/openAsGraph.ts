@@ -10,6 +10,10 @@ import { seedHistoryBaseline } from '../../stores/historySlice';
 import { graphBindingFor, useGraphBindingsStore } from './bindingsStore';
 import { enterGraph, isHost, panelView } from './hostMode';
 import { offerGraphView } from './graphOffer';
+import { useGraphSettings } from './handoff';
+import { referenceMatches } from './state';
+import { useGraphStatusStore } from './statusStore';
+import { genomeKeyFor } from '../../utils/regionNavigation';
 
 /** Dataset id -> its panels as split (a user action on them before the bindings arrive cancels the graph open). */
 const pending = new Map<string, string>();
@@ -62,4 +66,39 @@ export function settlePendingGraphOpens(): void {
     useBrowserStore.setState({ panels: next });
     useBrowserStore.getState().pushSnapshot?.('Open as graph', { kind: 'layout' });
   }
+}
+
+/**
+ * "Open in graph mode" for a native dataset (DESIGN_GRAPH_PRIMARY §1.4, §5.3, D3: off by default): offered while
+ * the graph helper is there and a registered package's target is on the loaded genome (which contig binds is known
+ * once the dataset is loaded: an unbound dataset simply stays linear).
+ */
+export function nativeGraphOffered(): boolean {
+  const status = useGraphStatusStore.getState().status;
+  if (!status?.helper.available || !status.registrations.length) return false;
+  const reference = genomeKeyFor(null, useBrowserStore.getState());
+  return status.registrations.some(r => [...new Set(r.maps.map(m => m.target))]
+    .some(k => { const b = r.bindings.find(x => x.key === k); return Boolean(b && (!reference || referenceMatches(b, reference))); }));
+}
+
+/** Whether native datasets opened from files open in graph mode (the browser setting; a form's checkbox overrides). */
+export function nativeOpensAsGraph(): boolean {
+  return useGraphSettings.getState().nativeOpenView === 'graph';
+}
+
+/**
+ * A native dataset just opened with "Open in graph mode": its panel keeps the choice as a display preference
+ * (`openAs`, saved with the session, never in LiftSettings: §1.4), and becomes a graph host once its binding is
+ * known, unless the user acted on it first (the header toggle offers it then). Lifted datasets have their own
+ * "Open as" (the Add live lift dialog).
+ */
+export function openNativeAsGraph(datasetId: string): void {
+  const s = useBrowserStore.getState();
+  const dataset = s.datasets.find(d => d.id === datasetId);
+  if (!dataset || dataset.data_type !== 'bam') return;
+  if (s.panels.some(p => p.datasetId === datasetId && p.contentType === 'dataset' && p.openAs !== 'graph')) {
+    useBrowserStore.setState(st => ({ panels: st.panels.map(p => (p.datasetId === datasetId && p.contentType === 'dataset' && !p.readSubset
+      ? { ...p, openAs: 'graph' as const } : p)) }));
+  }
+  notePendingGraphOpen(datasetId);
 }

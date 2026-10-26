@@ -749,6 +749,8 @@ export interface PanelConfig {
   liftHap?: string;
   /** Live lift: the panel's saved layout choice, independent of the dataset's default for newly opened panels. */
   liftHaplotypeMode?: 'split' | 'pooled';
+  /** Opened with "Open in graph mode" (a per-dataset display preference saved with the session; features/graphPanel/openAsGraph). */
+  openAs?: 'graph';
   /** Live lift: the haplotype panels one Split by haplotype made share this id (graph features): a graph host's split
    * siblings are its group's, never another copy's. Absent on panels split before it existed (matched by dataset and view). */
   liftSplitGroup?: string;

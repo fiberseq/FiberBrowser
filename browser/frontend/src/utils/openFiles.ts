@@ -22,6 +22,7 @@ import { looksLikeSession, requestSessionRestore } from './sessionRestore';
 import { showLoadedReference } from './referenceNavigation';
 import { messageFromError } from './fileLoadErrors';
 import { baseName, formatGroupOf, planSelection, unknownTypeMessage } from './supportedFiles';
+import { nativeOpensAsGraph, openNativeAsGraph } from '../features/graphPanel/openAsGraph';
 
 export interface OpenReport {
   /** Files that opened (datasets, tracks, references, ...). */
@@ -35,6 +36,8 @@ export interface OpenReport {
 export interface OpenOptions {
   /** Where a plasmid map shows: with reads in the batch, the main view. */
   plasmidPlacement?: PlasmidPlacement;
+  /** Native BAM datasets open in graph mode when a package binds them (default: the browser's Graph mode setting). */
+  openAsGraph?: boolean;
 }
 
 /** "name: reason", unless the reason already names the file. */
@@ -108,6 +111,7 @@ export async function openLocalPaths(paths: string[], options: OpenOptions = {})
     const r = await addDataset(target);
     if (r.success && r.dataset) {
       store().addDataset(r.dataset);
+      if (r.dataset.data_type === 'bam' && (options.openAsGraph ?? nativeOpensAsGraph())) openNativeAsGraph(r.dataset.id);
       report.opened.push(path);
       report.errors.push(...((r as { warnings?: string[] }).warnings ?? []));
     } else {
