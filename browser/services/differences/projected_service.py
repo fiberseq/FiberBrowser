@@ -430,6 +430,8 @@ def _projected_analysis(state, dataset, *, chrom, start, end, feature, target=No
                 raw_context = (contexts or {}).get(key)
                 if raw_context is None and len(context_aliases.get(aa[0].molecule.raw_name, ())) == 1:
                     raw_context = (contexts or {}).get(aa[0].molecule.raw_name)
+                if raw_context is None and all(a.chemistry == "unknown" for a in aa):
+                    raw_context = (contexts or {}).get("*")  # dataset-level default, never over an st tag
                 context = DafContext(**raw_context) if raw_context is not None else None
                 detail = call_molecule(grouped.get(key, []), paths, t, policy=policy, budget=budget, context=context,
                     likelihood_policy=likelihood_policy, likelihood_budget=likelihood_budget)
@@ -608,6 +610,8 @@ def chemistry_context(contexts, key, bundles):
     name = bundles[key][0].molecule.raw_name
     if raw is None and sum(records[0].molecule.raw_name == name for records in bundles.values()) == 1:
         raw = contexts.get(name)
+    if raw is None and all(a.chemistry == "unknown" for a in bundles[key]):
+        raw = contexts.get("*")  # dataset-level default, never over an st tag
     return DafContext(**raw) if raw is not None else None
 
 

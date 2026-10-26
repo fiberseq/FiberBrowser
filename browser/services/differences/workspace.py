@@ -47,13 +47,19 @@ def inspect(state, dataset, *, chrom, start, end, target, policy=None,
     target = validate_target(target, chrom, start, end, projection_policy)
     evidence_policy = dict(include_duplicates=include_duplicates, include_putative=include_putative,
                            include_conflicting=include_conflicting, include_ambiguous=include_ambiguous)
+    # Exact targets need molecule chemistry. Explicit contexts win, then each
+    # record's st tag, then the dataset's declared chemistry ("*"). The frozen
+    # target itself is never rewritten.
+    default = dataset_chemistry_default(dataset) if target["target_type"] == "exact" else None
+    contexts = {**({"*": default} if default else {}), **(target.get("chemistry_by_name") or {})}
     if dataset.data_type == "bam_livelift":
         result = projected_analysis(state, dataset, chrom=chrom, start=start, end=end, target=target,
             feature="split", policy=projection_policy, include_duplicates=include_duplicates,
             analysis_scope=analysis_scope or "lifted_only", native_dataset_id=native_dataset_id,
-            contexts=target.get("chemistry_by_name"), evidence_policy=evidence_policy)
+            contexts=contexts, evidence_policy=evidence_policy)
         result["evidence_policy"] = evidence_policy
         result["scope"]["data_revision"] = revision
+        result["chemistry_default"] = default
         return result
     if dataset.data_type != "bam" or analysis_scope not in (None, "native_only"):
         raise ValueError("native inspection requires a native BAM and native_only scope")
@@ -61,8 +67,9 @@ def inspect(state, dataset, *, chrom, start, end, target, policy=None,
     ref_bp, alt_bp = target["ref_end"]-target["ref_start"], target["alt_bp"]
     if ref_bp and alt_bp:
         result = _native_both_span_calls(state, dataset, chrom=chrom, start=start, end=end, target=target,
-            policy=projection_policy, evidence_policy=evidence_policy)
+            policy=projection_policy, evidence_policy=evidence_policy, contexts=contexts)
         result["scope"]["data_revision"] = revision
+        result["chemistry_default"] = default
         return result
     if max(ref_bp, alt_bp) < 10:
         raise ValueError("native differences require at least 10 bp of geometry")
@@ -79,7 +86,7 @@ def inspect(state, dataset, *, chrom, start, end, target, policy=None,
         from .enrichment import enrich_native
         enriched = enrich_native(state, envelope, dataset_id=dataset.id, chrom=chrom,
             ref=target["ref_start"], target_end=target["ref_end"],
-            specification={**target, "reference": target.get("candidates", {}).get("reference"),
+            specification={**target, "chemistry_by_name": contexts, "reference": target.get("candidates", {}).get("reference"),
                 "candidates": {k: v for k, v in target.get("candidates", {}).items() if k != "reference"}},
             include_duplicates=include_duplicates)
         from dataclasses import asdict
@@ -102,7 +109,7 @@ def inspect(state, dataset, *, chrom, start, end, target, policy=None,
             group=0 if call["assignment"]=="target" and allowed else 1 if call["assignment"]=="reference" else 2
             counts[group]+=1
     return dict(schema_version=SCHEMA_VERSION, analysis_scope="native_only", membership=envelope["membership"],
-        evidence_policy=evidence_policy, policy=envelope["policy"], scope=scope,
+        evidence_policy=evidence_policy, policy=envelope["policy"], scope=scope, chemistry_default=default,
         identity_assumption=envelope["identity_assumption"], targets=[dict(target=target,
             calls_by_molecule=calls, counts=counts, geometry_counts=envelope["geometry_counts"],
             sequence_unresolved_count=len(calls) if target["target_type"]=="geometry" else sum(c["call"]["assignment"] not in {"target","reference","other_allele"} for c in calls.values()))])
@@ -375,7 +382,24 @@ def sequence(state, dataset, *, chrom, start, end, target, row_ids=None, layers=
     raise ResourceResult("unavailable", "record_not_in_scope")
 
 
-def _native_both_span_calls(state, dataset, *, chrom, start, end, target, policy, evidence_policy):
+def dataset_chemistry_default(dataset):
+    """A molecule chemistry context from the dataset's declared assay, or None.
+
+    Fiber-seq (Hia5 m6A) molecules are not deaminated, so their bases compare as
+    ordinary sequence ('none'). DAF datasets carry per-record st tags instead,
+    and an undeclared dataset stays unknown: exact calls then remain unknown.
+    """
+    from services.chemistry_metadata import dataset_consensus_chemistry
+    chemistry = dataset_consensus_chemistry(dataset)
+    if chemistry in ("hia5-pacbio", "hia5-nanopore"):
+        return {"chemistry": "none", "provenance": f"dataset_chemistry:{chemistry}"}
+    layers = getattr(dataset, "available_layers", None) or {}
+    if not chemistry and layers.get("m6a") and not layers.get("deam"):
+        return {"chemistry": "none", "provenance": "dataset_layers:m6a"}
+    return None
+
+
+def _native_both_span_calls(state, dataset, *, chrom, start, end, target, policy, evidence_policy, contexts=None):
     """Use explicit ref and alt spans for replacements, never a pure-I/D proxy."""
     from .projected_service import native_bundles, native_call, _public_projection
     from .projection import ProjectionBudget
@@ -392,7 +416,7 @@ def _native_both_span_calls(state, dataset, *, chrom, start, end, target, policy
         likelihood_budget = LikelihoodBudget(LikelihoodPolicy())
         for key, records in bundles.items():
             budget.check()
-            detail = native_call(records, target, policy=policy, budget=budget, context=chemistry_context(target.get("chemistry_by_name"), key, bundles), likelihood_budget=likelihood_budget)
+            detail = native_call(records, target, policy=policy, budget=budget, context=chemistry_context(contexts if contexts is not None else target.get("chemistry_by_name"), key, bundles), likelihood_budget=likelihood_budget)
             call = detail["call"]
             if key in interrupted:
                 call = dict(assignment="unknown", level=None, method="native_cigar", reasons=reasons, witness_ids=[])

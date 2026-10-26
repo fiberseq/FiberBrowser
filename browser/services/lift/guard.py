@@ -35,6 +35,12 @@ LIFT_ALLOWED: frozenset = frozenset({
     # "read_stats"). Transcription-state filters and every other analysis stay closed.
     (_POST, "/api/sort_reads"), (_POST, "/api/filter"), (_POST, "/api/filter_by_analysis_rule"),
     (_POST, "/api/reads/stats"),
+    # Versioned Differences workspace. Each service checks its own capability: inspect and lens use the projected
+    # difference_split/difference_lens gates, compare reads only the map and FASTAs, and alternate blocks, observations
+    # and sequence refuse anything but a native BAM.
+    (_POST, "/api/differences/inspect"), (_POST, "/api/differences/lens"), (_POST, "/api/differences/compare"),
+    (_POST, "/api/differences/alternate-blocks"), (_POST, "/api/differences/observations"),
+    (_POST, "/api/differences/sequence"),
     # Dataset bookkeeping (list, remove, its assembly report).
     (_DELETE, "/api/datasets/{dataset_id}"), (_GET, "/api/datasets/{dataset_id}/assembly"),
     (_POST, "/api/datasets/{dataset_id}/refresh_capabilities"),

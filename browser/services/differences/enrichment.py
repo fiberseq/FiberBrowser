@@ -199,7 +199,12 @@ def enrich_native(state, envelope, *, dataset_id, chrom, ref, target_end, specif
                     interrupted.add(molecule.key)
                 break
             try:
-                context = DafContext(**contexts.get(read.query_name, {"chemistry": "unknown", "provenance": "unavailable"}))
+                # Explicit molecule context, then the record's own st tag, then the
+                # dataset-level default ("*"), else unknown chemistry.
+                raw = contexts.get(read.query_name)
+                if raw is None and read.has_tag("st") and read.get_tag("st") in ("CT", "GA"):
+                    raw = {"chemistry": read.get_tag("st"), "provenance": "bam_st_tag"}
+                context = DafContext(**(raw or contexts.get("*") or {"chemistry": "unknown", "provenance": "unavailable"}))
             except TypeError as exc:
                 raise SvRequestError("invalid molecule chemistry context") from exc
             # Context chemistry is canonical; BAM reverse orientation needs its

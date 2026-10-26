@@ -127,6 +127,78 @@ class IdentityLedger:
             self.data["lineage"][identity] = {"descendants": list(descendants), "reason": reason,
                                                "proof": deepcopy(proof)}
 
+    def reconcile(self, namespace: str, groups, *, max_records=None):
+        """Register the current grouping of one discovery scope and write lineage.
+
+        ``groups`` is ``[(observation_ids, snapshot)]``. Active records of the
+        same namespace that share observations with a current group are its
+        predecessors. One predecessor whose observations went only to this
+        group with a different membership is ``membership_revised``; several
+        predecessors joining one group are a ``cluster_merge``; one predecessor
+        whose observations went to several groups is a one-to-many
+        ``cluster_split``; anything else is ``regrouped``. An unchanged member
+        set keeps its identity. Records outside the current groups are left
+        untouched, so panning never retires a cluster that is merely out of view.
+        Returns ``(identities, events)``, identities in group order.
+        """
+        groups = [(sorted(set(ids)), snapshot) for ids, snapshot in groups]
+        active = {identity: set(record["observation_ids"]) for identity, record in self.data["records"].items()
+                  if record.get("namespace") == namespace and record["identity_state"] != "retired"}
+        owner = {}
+        for identity, members in active.items():
+            for member in members:
+                owner.setdefault(member, set()).add(identity)
+        identities, events = [], []
+        predecessors = []
+        for members, snapshot in groups:
+            seed = content_id("seed:v1", [namespace, members])
+            if seed in self.data["seeds"] and self.data["seeds"][seed] in active:
+                identities.append(self.data["seeds"][seed])
+                predecessors.append(set())
+                continue
+            if max_records is not None and len(self.data["records"]) >= max_records:
+                identities.append(None)
+                predecessors.append(set())
+                continue
+            # A member set seen before under a since-retired identity returns
+            # as a new record; the retired one keeps its lineage.
+            self.data["seeds"].pop(seed, None)
+            identities.append(self.register(namespace, members, snapshot))
+            predecessors.append({p for m in members for p in owner.get(m, ())})
+        # Connected components of the predecessor/descendant bipartite graph.
+        root = {}
+
+        def find(node):
+            while root.setdefault(node, node) != node:
+                root[node] = root[root[node]]
+                node = root[node]
+            return node
+        for identity, parents in zip(identities, predecessors):
+            for parent in parents:
+                root[find(("p", parent))] = find(("c", identity))
+        components = {}
+        for node in list(root):
+            kind, identity = node
+            if identity is not None:
+                components.setdefault(find(node), (set(), set()))[0 if kind == "p" else 1].add(identity)
+        for component_parents, component_children in sorted(components.values(), key=lambda pc: sorted(pc[0])):
+            if not component_parents or not component_children:
+                continue
+            if len(component_parents) == 1 and len(component_children) == 1:
+                reason = "membership_revised"
+            elif len(component_children) == 1:
+                reason = "cluster_merge"
+            elif len(component_parents) == 1:
+                reason = "cluster_split"
+            else:
+                reason = "regrouped"
+            parents, children = sorted(component_parents), sorted(component_children)
+            self.retire(parents, children, reason=reason,
+                        proof={"shared_observations": sorted(set().union(*(active[p] for p in parents))
+                                                              & {m for ids, _ in groups for m in ids})[:64]})
+            events.append({"reason": reason, "parents": parents, "descendants": children})
+        return identities, events
+
     def lookup(self, identity, *, frozen=True):
         # Frozen selections never acquire a different target or membership.
         snapshot = self.data["snapshots"].get(identity)

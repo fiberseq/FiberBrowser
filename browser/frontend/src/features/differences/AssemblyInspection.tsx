@@ -1,5 +1,6 @@
 import { expandableAltBlock } from './capabilities';
 import { MoleculeCalls } from './MoleculeCalls';
+import { AssemblyComparisonPanel } from './AssemblyComparisonPanel';
 import { useAutoLoadBound } from './autoLoad';
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
@@ -120,7 +121,7 @@ export function AssemblyInspection({ panel, dataset, anchor }: { panel: PanelCon
           onClick={() => { setOpening(true); void openSourceView(current).finally(() => setOpening(false)); }}>{opening ? 'Opening…' : 'Open in HG002 view'}</button>
       }
     </div>
-    <p>Assembly observation · {d.sequence_status ?? 'unresolved'} sequence · provisional identity · assembly comparison unassessed</p>
+    <AssemblyComparisonPanel selection={current} dataset={dataset} />
     <p>Reference [{d.t_start}, {d.t_end}) · {d.ref_bp} bp → alternate {d.alt_bp} bp · net {d.alt_bp-d.ref_bp} bp</p>
     <MoleculeCalls selection={current} />
     {!readRequested && <p data-testid="difference-load-reason">{bound.reason}{' '}
