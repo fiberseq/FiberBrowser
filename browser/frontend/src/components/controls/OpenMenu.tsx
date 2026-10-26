@@ -7,7 +7,7 @@ import { useMenuKeys } from '../../hooks/useMenuKeys';
 import { CheckCircle, ChevronDown, Dna, FolderOpen, Library, Link, Server } from '../ui/Icons';
 import { useLiveLiftStore } from '../../features/liveLift/store';
 import { revealSetting } from '../../utils/revealSetting';
-import { GRAPH_MODE_SETTINGS } from './sidebar/view/GraphModeSettings';
+import { GRAPH_MODE_SETTINGS, canManageGraphPackages } from './sidebar/view/GraphModeSettings';
 
 type Icon = ComponentType<SVGProps<SVGSVGElement> & { size?: number }>;
 
@@ -134,7 +134,7 @@ export function OpenSplitButton({ compact, loading, onOpenFile, buttonClass }: O
               })}
             </div>
           ))}
-          {!publicMode && (
+          {!publicMode && (liveLiftOn || canManageGraphPackages()) && (
             <div role="none">
               <div className="fb-menu-sep" role="separator" />
               {liveLiftOn && <button type="button" role="menuitem" className="fb-menu-item items-start" data-testid="open-menu-add-live-lift"
@@ -143,8 +143,9 @@ export function OpenSplitButton({ compact, loading, onOpenFile, buttonClass }: O
                 <Link size={14} aria-hidden="true" className="mt-0.5 flex-shrink-0" />
                 <span>Add live lift…</span>
               </button>}
-              {/* Graph packages (graph mode on dataset panels): not a preview feature; Settings › Graph mode lists them. */}
-              <button type="button" role="menuitem" className="fb-menu-item items-start" data-testid="open-menu-register-graph-package"
+              {/* Graph packages (graph mode on dataset panels): not a preview feature; Settings › Graph mode lists them.
+                  On a lab server only its admins manage them. */}
+              {canManageGraphPackages() && <button type="button" role="menuitem" className="fb-menu-item items-start" data-testid="open-menu-register-graph-package"
                 title="Register a prepared pangenome graph package (fiberbrowser-graph prepare) so datasets it binds can be viewed in graph mode"
                 onClick={() => {
                   setOpen(false);
@@ -153,7 +154,7 @@ export function OpenSplitButton({ compact, loading, onOpenFile, buttonClass }: O
                 }}>
                 <Dna size={14} aria-hidden="true" className="mt-0.5 flex-shrink-0" />
                 <span>Register graph package…</span>
-              </button>
+              </button>}
             </div>
           )}
         </div>

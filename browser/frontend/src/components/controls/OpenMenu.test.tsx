@@ -237,6 +237,18 @@ describe('Open ▾ availability (the commands\' own rules)', () => {
     expect(byCommand['open-file'].enabled).toBe(true);
   });
 
+  it('Register graph package… is for lab admins only on a lab server', async () => {
+    setLab({ user: 'ana', role: 'member', auth: 'accounts', anonymous: false, jobs: false });
+    await mount();
+    await openMenu();
+    expect(q('open-menu-register-graph-package')).toBeNull();
+    await act(async () => root.unmount());
+    setLab({ user: 'boss', role: 'admin', auth: 'accounts', anonymous: false, jobs: false });
+    await mount();
+    await openMenu();
+    expect(q('open-menu-register-graph-package')).not.toBeNull();
+  });
+
   it('a lab server with runs, signed out: sign in first', () => {
     setLab({ user: null, role: null, auth: 'accounts', anonymous: true, jobs: true });
     const flat = openMenuEntries().flat();

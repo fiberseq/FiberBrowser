@@ -70,6 +70,8 @@ LAB_DENIED_PREFIXES: tuple[str, ...] = ("/api/jupyter/", "/api/linked/", "/api/a
 COPILOT_ALLOWED_WHEN_OFF = frozenset({("GET", "/api/nl/capabilities")})
 LAB_ADMIN_ONLY: frozenset[tuple[str, str]] = frozenset({
     ("POST", "/api/s3/configure"), ("GET", "/admin"),
+    # The graph package table is one per server, shared by every member (routers/graph_panel.py).
+    ("POST", "/api/graph/registrations"), ("DELETE", "/api/graph/registrations/{registration_id}"),
 })
 LAB_ADMIN_PREFIXES: tuple[str, ...] = ("/api/admin/",)
 # Pages and forms of the sign-in flow: open to everyone.

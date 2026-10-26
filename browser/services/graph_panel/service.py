@@ -222,11 +222,36 @@ async def register_package(package_dir: str) -> dict:
     if not status.available:
         raise JobError("helper_unavailable", "Graph helper unavailable", retryable=False, status=503,
                        detail={"hint": status.hint})
+    # A lab server: the package and every file its manifest names (the graph may live beside it, "../x.gbz") must be
+    # in the lab's data folders (PathDenied: 403).
+    confine_package(package_dir)
     try:
         reg = await asyncio.to_thread(registry().register, status.path, package_dir)
     except RegistrationError as exc:
         raise _bad(exc.message, exc.code, exc.status) from None
     return reg.public()
+
+
+def confine_package(package_dir: str) -> None:
+    """Lab confinement (services/lab/paths.py) of a package directory and of each file its manifest names, resolved
+    against it; a no-op off the lab profile and outside member requests."""
+    from services.lab.paths import confine, enforcing
+    if not enforcing():
+        return
+    confine(package_dir)
+    real = os.path.realpath(os.path.expanduser(package_dir))
+    try:
+        from services.graph_panel.registration import read_manifest
+        manifest = read_manifest(real)
+    except RegistrationError:
+        return  # not a package: registering refuses it
+    named = [(manifest.get("graph") or {}).get("path"), (manifest.get("db") or {}).get("path")]
+    for m in manifest.get("maps") or []:
+        named.append((m.get("manifest") or {}).get("path"))
+        named += [f.get("path") for f in m.get("files") or [] if isinstance(f, dict)]
+    for path in named:
+        if isinstance(path, str) and path:
+            confine(os.path.join(real, path))
 
 
 async def unregister_package(registration_id: str) -> dict:
@@ -235,6 +260,12 @@ async def unregister_package(registration_id: str) -> dict:
     await ensure_ready()
     reg = registry().get(str(registration_id or ""))   # 404 unknown_registration
     registry().unregister(reg.id)
+    # Its cached topologies, queued and running jobs and helpers go too.
+    loop = asyncio.get_running_loop()
+    with _lock:
+        current = _pools.get(id(loop))
+    if current is not None:
+        await current.forget_registration(reg.id)
     return {"registration_id": reg.id, "removed": True}
 
 

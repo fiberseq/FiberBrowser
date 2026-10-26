@@ -16,8 +16,16 @@ import {
 import { useGraphStatusStore } from '../../../../features/graphPanel/statusStore';
 import { unregisterGraphPackage, GraphRequestError } from '../../../../features/graphPanel/api';
 import { watchGraphBindings } from '../../../../features/graphPanel/bindingsStore';
+import { isLabServerPage, labInfo } from '../../../../utils/labServer';
 
 const notPublic = () => (useBrowserStore.getState().publicMode ? 'not on a public server' : null);
+
+/** Who may register or remove graph packages: anyone locally; on a shared lab server only its admins (the table is
+ * one per server; services/lab/auth.py LAB_ADMIN_ONLY). */
+export function canManageGraphPackages(): boolean {
+  const lab = labInfo();
+  return lab === null || lab.role === 'admin';
+}
 
 export const GRAPH_MODE_SETTINGS = defineSettings({
   liftedView: {
@@ -152,6 +160,7 @@ function GraphPackages() {
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const helperMissing = status && !status.helper.available;
+  const manage = canManageGraphPackages();
 
   const register = async (dir = path) => {
     const value = dir.trim();
@@ -198,8 +207,8 @@ function GraphPackages() {
           {status.registrations.map(r => (
             <li key={r.id} className="flex items-center gap-1.5 text-[11.5px]" data-testid="graph-package-row" data-registration-id={r.id}>
               <span className="min-w-0 flex-1 truncate" title={`${r.label} · ${r.bindings.length} paths`}>{r.label}</span>
-              <button type="button" className="text-[11px] underline disabled:opacity-40" disabled={busy}
-                data-testid={`graph-package-remove-${r.id}`} onClick={() => void remove(r.id, r.label)}>Remove</button>
+              {manage && <button type="button" className="text-[11px] underline disabled:opacity-40" disabled={busy}
+                data-testid={`graph-package-remove-${r.id}`} onClick={() => void remove(r.id, r.label)}>Remove</button>}
             </li>
           ))}
         </ul>
@@ -207,16 +216,18 @@ function GraphPackages() {
       {status?.registration_errors?.map(e => (
         <div key={e.package} className="text-[11px] text-amber-700 dark:text-amber-300" data-testid="graph-package-error">{e.package}: {e.error}</div>
       ))}
-      <div className="flex gap-1">
+      {!manage && <div className="text-[11px] text-ink-secondary" data-testid="graph-packages-admin-only">Lab admins register and remove graph packages on this server.</div>}
+      {manage && <div className="flex gap-1">
         <input type="text" value={path} onChange={e => setPath(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') void register(); }}
           aria-label="Graph package folder" placeholder="/path/to/graph-package" data-testid="graph-package-path"
           className="text-[12px] px-1.5 py-1 border rounded flex-1 dark:bg-dark-bg dark:border-gray-600 dark:text-gray-300 min-w-0" />
-        <button type="button" className="btn-tool text-xs" disabled={busy} onClick={() => void browse()} data-testid="graph-package-browse">Browse…</button>
+        {/* No folder dialog on a lab server (it would open on the server's screen). */}
+        {!isLabServerPage() && <button type="button" className="btn-tool text-xs" disabled={busy} onClick={() => void browse()} data-testid="graph-package-browse">Browse…</button>}
         <button type="button" className="px-2 py-1 bg-blue-500 text-white rounded text-[11px] hover:bg-blue-600 disabled:opacity-40"
           disabled={busy || !path.trim() || Boolean(helperMissing)} onClick={() => void register()} data-testid="graph-package-register">
           {busy ? '…' : 'Register'}
         </button>
-      </div>
+      </div>}
       {error && <div className="text-[11px] text-rose-700 dark:text-rose-300" role="alert" data-testid="graph-package-message-error">{error}</div>}
       {note && <div className="text-[11px] text-emerald-700 dark:text-emerald-300" data-testid="graph-package-message">{note}</div>}
     </div>

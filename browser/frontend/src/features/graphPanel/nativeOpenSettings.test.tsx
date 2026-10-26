@@ -19,7 +19,7 @@ import { useGraphSettings } from './handoff';
 import { nativeGraphOffered, openNativeAsGraph, settlePendingGraphOpens } from './openAsGraph';
 import { registerGraphPanel } from './register';
 import { openLocalPaths } from '../../utils/openFiles';
-import { GraphModeSettings } from '../../components/controls/sidebar/view/GraphModeSettings';
+import { GraphModeSettings, canManageGraphPackages } from '../../components/controls/sidebar/view/GraphModeSettings';
 import type { GraphBinding, GraphReadBinding, GraphRegistration } from './types';
 import type { PanelConfig } from '../../types';
 
@@ -226,6 +226,31 @@ describe('Graph mode settings', () => {
       expect(useGraphStatusStore.getState().status?.registrations.map(r => r.id)).toEqual(['g2']);
       expect([...box.querySelectorAll('[data-testid="graph-package-row"]')].map(r => r.getAttribute('data-registration-id'))).toEqual(['g2']);
     } finally { act(() => root.unmount()); }
+  });
+
+  it('on a lab server only admins get Register and Remove, and nobody gets the server-side folder dialog', () => {
+    seed();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ helper: { available: true }, registrations: [REG], registration_errors: [] }))));
+    const win = window as unknown as { __FIBERBROWSER_LAB__?: unknown };
+    try {
+      win.__FIBERBROWSER_LAB__ = { user: 'alice', role: 'member', auth: 'accounts', anonymous: false, jobs: false };
+      expect(canManageGraphPackages()).toBe(false);
+      let m = mount();
+      expect(m.box.querySelectorAll('[data-testid="graph-package-row"]')).toHaveLength(1);
+      expect(m.q('graph-package-remove-gp')).toBeNull();
+      expect(m.q('graph-package-register')).toBeNull();
+      expect(m.q('graph-package-path')).toBeNull();
+      expect(m.q('graph-packages-admin-only')).not.toBeNull();
+      act(() => m.root.unmount());
+      win.__FIBERBROWSER_LAB__ = { user: 'boss', role: 'admin', auth: 'accounts', anonymous: false, jobs: false };
+      expect(canManageGraphPackages()).toBe(true);
+      m = mount();
+      expect(m.q('graph-package-remove-gp')).not.toBeNull();
+      expect(m.q('graph-package-register')).not.toBeNull();
+      expect(m.q('graph-package-browse')).toBeNull();
+      act(() => m.root.unmount());
+    } finally { delete win.__FIBERBROWSER_LAB__; }
+    expect(canManageGraphPackages()).toBe(true);
   });
 
   it('is hidden on a public server', () => {
