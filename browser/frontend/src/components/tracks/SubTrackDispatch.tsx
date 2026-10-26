@@ -547,6 +547,10 @@ export function useSubTrackDispatch({ onScanPeaks, scanning }: UseSubTrackDispat
 
     const isReadsTrack = track.type === 'reads';
     const intrinsicHeight = isReadsTrack ? readHeight : trackHeight;
+    // content-visibility: auto contains paint to the row: the live-lift Differences row's table (and its other
+    // drop-downs) open below the row and would be clipped to it. That row is small, so it never skips rendering.
+    const skipsRendering = !exportInProgress && useContentVisibility
+      && !(track.type === 'sv' && liftEnabled && dataset?.data_type === 'bam_livelift');
     // Every kind but the reads and the ruler resizes (trackRegistry).
     const isResizable = !isReadsTrack && isResizableTrack(track.type);
     const hideTrackTitle = `Minimize ${getTrackLabel(track.type)} in all panels (Option/Alt-click: this panel only)`;
@@ -584,8 +588,8 @@ export function useSubTrackDispatch({ onScanPeaks, scanning }: UseSubTrackDispat
           flexShrink: 0,
           overflow: isReadsTrack ? (exportFullReadTracks ? 'visible' : 'hidden') : undefined,
           position: 'relative',
-          contentVisibility: exportInProgress || !useContentVisibility ? undefined : 'auto',
-          containIntrinsicSize: exportInProgress || !useContentVisibility ? undefined : `${Math.max(1, Math.round(intrinsicHeight))}px`,
+          contentVisibility: skipsRendering ? 'auto' : undefined,
+          containIntrinsicSize: skipsRendering ? `${Math.max(1, Math.round(intrinsicHeight))}px` : undefined,
           ...(isPrimer ? { overflow: 'visible', zIndex: 10 } : {}),
         }}
       >
