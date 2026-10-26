@@ -5,6 +5,7 @@
  * Pure: ReadContextMenu draws the items, useReadMenuActions does them.
  */
 import { previewHidden } from '../../../utils/previewFeatures';
+import { SV_CONFLICT_EXPLANATION } from '../../../utils/svConflicts';
 
 export type ReadMenuAction =
   | 'select-read'
@@ -198,7 +199,7 @@ export function svClusterMenu(sv: SvClusterMenuContext): ReadMenuEntry[] {
     entries.push(item('sv-highlight-supporting', 'Highlight carriers (confirmed + putative)', 'pin'),
       item('sv-highlight-confirmed', 'Highlight confirmed only', 'pin'),
       item('sv-highlight-putative', 'Highlight putative reads', 'pin'),
-      item('sv-highlight-conflicting', 'Highlight conflicting reads (clip aligns elsewhere)', 'pin'),
+      item('sv-highlight-conflicting', 'Highlight conflicting reads (clip aligns elsewhere)', 'pin', { title: SV_CONFLICT_EXPLANATION }),
       item('sv-highlight-ambiguous', 'Highlight ambiguous reads', 'pin'));
     for (const c of shown()) entries.push(...(c.svClusterItems?.(sv) ?? []));
   }

@@ -233,7 +233,8 @@ export function DifferenceLanes({ panel, dataset, width, gutter = 0, height }: {
         // Click: expand an insertion / highlight carriers; Shift: select; ⌘/Ctrl or right-click: inspect (differenceActions).
         onClick={e => clickDifference(e, selectionOf(d), readsInView)}
         onContextMenu={e => openMenu(e, d)}
-        onKeyDown={e => { if(e.key==='Enter') inspect(d); }} />;
+        // Enter inspects; preventDefault stops the button's own synthetic click (which would close it again or expand).
+        onKeyDown={e => { if(e.key==='Enter') { e.preventDefault(); e.stopPropagation(); inspect(d); } }} />;
     })}
     {table && <div className="absolute left-0 right-0 top-full z-40 bg-white dark:bg-slate-900 max-h-64 overflow-auto border p-2"><DifferenceTable items={model.items} chrom={chrom} inspect={inspect} comparison={comparison} /></div>}
     <DifferencePopover panel={panel} dataset={dataset} anchor={anchor} />
