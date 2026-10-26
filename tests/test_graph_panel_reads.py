@@ -960,3 +960,20 @@ def test_linear_and_graph_rows_share_molecule_strands(env):
     assert not env.state._read_strand_calls.get(did)
     graph = _reads(env, [did], [{"binding": "mat", "windows": [{"start": 0, "end": 1500}]}]).json()
     assert [r.get("ds") for r in graph["reads"] if r["q"] == "tie"] == [None, None]
+
+
+def test_a_lifted_rows_strand_is_its_molecules_in_every_filter():
+    """agy review (group E): a lifted record of a molecule whose marks tie (no strand after its cohort) is never
+    re-inferred from its own marks (which poisoned the cache for every view); an explicit call is cached; a cached
+    call applies to a record without marks."""
+    from services.read_strand import cached_read_strand, filter_reads_by_strand
+    calls = {}
+    tied = {"id": "q", "live_lift": {"molecule": "g|q"}, "deam": [[10, 1]]}
+    assert cached_read_strand(tied, calls) is None and calls == {}
+    assert filter_reads_by_strand([tied], "CT", calls) == []
+    explicit = {"id": "e", "strand": "GA", "live_lift": {"molecule": "g|e"}}
+    assert cached_read_strand(explicit, calls) == "GA" and calls == {"g|e": "GA"}
+    bare = {"id": "e", "live_lift": {"molecule": "g|e"}}
+    assert cached_read_strand(bare, calls) == "GA"
+    native = {"id": "n", "deam": [[1, 1], [2, 1]]}
+    assert cached_read_strand(native, calls) == "CT"   # native rows: unchanged (per record, by name)

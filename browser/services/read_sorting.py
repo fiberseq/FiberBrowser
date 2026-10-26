@@ -61,6 +61,13 @@ def sort_reads_by_kmeans(
     return [reads[i] for i in np.argsort(labels)]
 
 
+def _qname(value: str) -> str:
+    """The QNAME a cohort identity or record key names (else the value itself)."""
+    from services.lift.cohort import record_qname, record_key
+    rk = record_key(value)
+    return (record_qname(rk) if rk else None) or value
+
+
 def sort_similarity_for_dataset(
     state,
     ds_id: str,
@@ -71,8 +78,11 @@ def sort_similarity_for_dataset(
     sample_seed: str = DEFAULT_SAMPLE_SEED,
     read_ids: Optional[Sequence[str]] = None,
     cluster_assignments_override: Optional[dict] = None,
+    peak_regions_override: Optional[list] = None,
+    lift_hap: Optional[str] = None,
 ) -> dict:
-    """Sort clusters for one dataset by pattern or centroid similarity."""
+    """Sort clusters for one dataset by pattern or centroid similarity. ``peak_regions_override``: the regions the
+    shown clustering used when the dataset holds none (a graph run's regions); ``lift_hap``: a split panel's."""
     dataset = state.get_dataset(ds_id)
     if not dataset:
         return {"cluster_order": [], "read_sort_order": []}
@@ -85,12 +95,15 @@ def sort_similarity_for_dataset(
         # By identity: a scope of cohort identities also names their records (a graph run's labels are record keys;
         # Codex review, group E).
         from services.lift.cohort import record_key
+        from services.read_selection import read_id_keys
         wanted = {str(read_id) for read_id in read_ids}
         wanted |= {rk for read_id in list(wanted) if (rk := record_key(read_id))}
+        # A label's key matches by itself, its record key or its QNAME (a QNAME scope, a graph row's identity against
+        # linear labels; agy review, group E).
         cluster_assignments = {
             read_id: cluster
             for read_id, cluster in cluster_assignments.items()
-            if read_id in wanted
+            if read_id in wanted or (read_id_keys(read_id) & wanted) or _qname(read_id) in wanted
         }
     element_info = dataset.cluster_element_info
     # Stored patterns describe the dataset's latest clustering. An override for
@@ -143,7 +156,7 @@ def sort_similarity_for_dataset(
         sorted_clusters = sorted(unique_clusters, key=pattern_sort_key)
         return {"cluster_order": sorted_clusters, "read_sort_order": []}
 
-    peak_regions = dataset.cluster_peak_regions
+    peak_regions = dataset.cluster_peak_regions or peak_regions_override
     if chrom and start is not None and end is not None and peak_regions:
         try:
             from scipy.cluster.hierarchy import linkage, leaves_list
@@ -152,7 +165,7 @@ def sort_similarity_for_dataset(
             chrom_t = state.translate_chrom(chrom)
             # A lifted dataset's rows in its analysis cohort, keyed as its clustering is (cohort identities).
             from services.lift.cohort import using_lift_cohort
-            with using_lift_cohort("analysis"):
+            with using_lift_cohort("analysis", lift_hap):
                 working_set = state.build_working_set(
                     ds_id,
                     chrom_t,

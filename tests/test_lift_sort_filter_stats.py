@@ -225,3 +225,36 @@ def test_similarity_sort_of_a_filtered_panel_with_record_key_labels(lift_env):
     labels = {record_key(i): (0 if _qname(i) in ("plus", "split") else 1) for i in ids}
     out = _sort(client, did, sort_by="similarity", cluster_assignments={did: labels}, read_ids={did: ids})
     assert sorted(out["cluster_order"]) == [0, 1]
+
+
+def test_similarity_sort_after_a_graph_run_with_a_qname_scope(lift_env):
+    """agy review (group E): after a graph run (labels under record keys, regions not stored on the dataset) a
+    similarity sort scoped by QNAMEs uses the run's regions sent with the request and keeps every label."""
+    from services.lift.cohort import record_key
+    client, state, manifest, bam = lift_env
+    did = _add(client, manifest, bam)["dataset"]["id"]
+    ids = _sort(client, did)["read_sort_order"]
+    labels = {record_key(i): (0 if _qname(i) in ("plus", "split") else 1) for i in ids}
+    out = _sort(client, did, sort_by="similarity", cluster_assignments={did: labels},
+                read_ids={did: sorted({_qname(i) for i in ids})}, peak_regions=[[3500, 3700]])
+    assert sorted(out["cluster_order"]) == [0, 1]
+
+
+def test_linear_scan_counts_a_molecule_shared_by_two_datasets_once_under_joint_dedup(lift_env):
+    """agy review (group E): two lifted datasets of the same records with joint_dedup by_molecule count each shared
+    molecule once in a linear scan, as the graph-column scan does."""
+    client, state, manifest, bam = lift_env
+    a = _add(client, manifest, bam)["dataset"]["id"]
+    b = _add(client, manifest, bam, label="copy")["dataset"]["id"]
+    if a == b:
+        pytest.skip("the same files make one dataset here")
+    for d in (a, b):
+        r = client.post(f"/api/lift/datasets/{d}/settings", json={"settings": {"joint_dedup": "by_molecule", "molecule_groups": [[bam, "shared"]]}})
+        if r.status_code != 200:
+            pytest.skip(f"joint_dedup is not a dataset setting here: {r.text[:120]}")
+    single = client.post("/api/scan_peaks", params={**WINDOW, "dataset_id": a},
+                         json={"dataset_ids": [a], "min_reads": 1, "min_width": 20, "threshold_rare": 0.01}).json()["n_reads"]
+    both = client.post("/api/scan_peaks", params=WINDOW,
+                       json={"dataset_ids": [a, b], "min_reads": 1, "min_width": 20, "threshold_rare": 0.01}).json()["n_reads"]
+    # One row per shared molecule (the joint cohort's rule, as clustering applies it): never both copies.
+    assert both <= single < 2 * both

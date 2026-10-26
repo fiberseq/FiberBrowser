@@ -550,12 +550,31 @@ def run_scan_peaks_endpoint(
             log_clustering_diagnostic(f"  Dataset {ds_id}: {ds_n_reads} reads from broad cache")
             continue
 
-        working_set = query.build_working_set(state, ds_id)
+        scope = query.read_ids_for_dataset(ds_id) if lifted else None
+        if lifted and scope is not None:
+            # A lifted panel's shown reads name their molecules: a display row folds its supplementaries into its
+            # primary's identity, so every row of a shown molecule is scanned (agy review, group E).
+            import json as _json
+            molecules = set()
+            for v in scope:
+                v = str(v)
+                if v.startswith(("lift-cohort:v1 ", "lift-record:v1 ")):
+                    try:
+                        molecules.add(_json.loads(v.split(" ", 1)[1])[0])
+                    except (ValueError, IndexError, TypeError):
+                        pass
+            working_set = query.build_working_set(state, ds_id, read_ids=None)
+            ds_reads = [r for r in working_set.reads if (r.get("live_lift") or {}).get("molecule") in molecules
+                        or query.filter_reads_for_dataset(ds_id, [r])]
+        else:
+            working_set = query.build_working_set(state, ds_id)
+            ds_reads = None
         if not working_set.reads:
             log_clustering_diagnostic(f"  Dataset {ds_id}: no reads")
             continue
 
-        ds_reads = query.filter_reads_for_dataset(ds_id, working_set.reads)
+        if ds_reads is None:
+            ds_reads = query.filter_reads_for_dataset(ds_id, working_set.reads)
         if ds_reads is not working_set.reads and len(ds_reads) != len(working_set.reads):
             log_clustering_diagnostic(
                 f"  Dataset {ds_id}: {len(ds_reads)} specified reads "
@@ -571,7 +590,7 @@ def run_scan_peaks_endpoint(
             from services.read_strand import filter_reads_by_strand, strand_calls
             ds_reads = filter_reads_by_strand(ds_reads, req.strand, strand_calls(state, ds_id))
         n_reads += len(ds_reads)
-        scan_reads.extend(ds_reads)
+        scan_reads.extend({**r, "_consensus_dataset_id": ds_id} for r in ds_reads)
     server_timings["working_set_ms"] = phase_ms(phase_t0)
     if broad_scan_hits:
         server_timings["broad_scan_hits"] = float(broad_scan_hits)
@@ -590,6 +609,13 @@ def run_scan_peaks_endpoint(
         }
 
     phase_t0 = time.perf_counter()
+    if scan_reads and len({r["_consensus_dataset_id"] for r in scan_reads}) > 1:
+        # Molecules shared by datasets: their joint policy (joint_dedup by_molecule keeps one row), as the
+        # graph-column scan and clustering apply it (agy review, group E).
+        from services.lift.joint import prepare_joint_cohort
+        before = len(scan_reads)
+        scan_reads, _joint = prepare_joint_cohort(state, scan_reads, sorted({r["_consensus_dataset_id"] for r in scan_reads}))
+        n_reads -= before - len(scan_reads)
     if scan_reads:
         numerator, total_counts = compute_scan_counts(scan_reads, req.signal_source, region_width)
         scan_numerators.append(numerator)

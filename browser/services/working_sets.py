@@ -1542,6 +1542,8 @@ def _viewport_reads_from_broad(
         for r in all_reads:
             mol = (r.get("live_lift") or {}).get("molecule")
             if mol is None or (r.get("strand") in ("CT", "GA", ".") and not r.get("_fiberbrowser_inferred_strand")):
+                if mol is not None and r.get("strand") in ("CT", "GA"):
+                    calls[mol] = r["strand"]   # an explicit call is the molecule's in every window
                 continue
             known = calls.get(mol)
             if known is not None:

@@ -1798,7 +1798,10 @@ export function Browser() {
             } : undefined),
             descending: sortDescending,
             linked: isLinkedGroup(roundIds, panels.filter(p => round[p.datasetId ?? ''] === (p.stateKey ?? p.datasetId))),
-            peakRegions: groupPeakRegions.length > 0 ? groupPeakRegions : undefined,
+            // (Similarity after a graph run: the run's regions, which the datasets do not hold; graph features review.)
+            peakRegions: backendSortBy === 'similarity' && !sortState.clusterPeakRegions.length && sortState.clusterMatchedRun?.graph?.regions?.length
+              ? sortState.clusterMatchedRun.graph.regions.map(r => [r.start, r.end])
+              : groupPeakRegions.length > 0 ? groupPeakRegions : undefined,
             selectedPeakWindows: scopeWindows,
             layer: sortLayer,
             transcriptionState: sortTranscriptionState,
@@ -1810,7 +1813,9 @@ export function Browser() {
             // The Projection tab's map: the clustering's peaks (this view's own
             // matched peaks for a run over several loci), rules and threshold.
             projection: backendSortBy === 'projection' ? {
-              peakRegions: clusterChartRunPeaks(sortState.clusterPeakRegions, sortState.clusterWindowPeaks, roundIds.map(id => round[id]),
+              // (A graph run keeps its regions in the run, not in clusterPeakRegions; graph features review.)
+              peakRegions: clusterChartRunPeaks(sortState.clusterPeakRegions.length ? sortState.clusterPeakRegions
+                : (sortState.clusterMatchedRun?.graph?.regions ?? []), sortState.clusterWindowPeaks, roundIds.map(id => round[id]),
                 { chrom: group.chrom, start: group.start, end: group.end, genome: group.genome ?? null }, chrom)
                 .map(p => ({ start: p.start, end: p.end, mode: p.mode || 'accessibility' })),
               clusterFeatureRules: sortState.clusterFeatureRules,
