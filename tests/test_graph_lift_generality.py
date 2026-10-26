@@ -116,6 +116,18 @@ def _load(server, reg, did, binding_windows):
                                                  for k, (a, b) in binding_windows.items()]})
 
 
+def _identities_are_valid(rows, did):
+    """Every row's aid is a versioned cohort identity of its own record (QNAME, the map's molecule group, the graph's
+    primary placement) and its rk is that identity's record key (Codex review, group D)."""
+    import json
+    from services.lift.cohort import record_key
+    for r in rows:
+        assert r["aid"].startswith("lift-cohort:v1 "), r["aid"]
+        parts = json.loads(r["aid"][len("lift-cohort:v1 "):])
+        assert len(parts) == 5 and parts[1] == r["q"] and parts[0].endswith("|" + r["q"]) and parts[4] == "primary"
+        assert r["rk"] == record_key(r["aid"])
+
+
 def test_a_single_haplotype_strain_lift_loads_on_its_path(server):
     package, manifest, bam = _fixture("strain")
     reg = _register(package)
@@ -133,11 +145,19 @@ def test_a_single_haplotype_strain_lift_loads_on_its_path(server):
     rows = out["reads"]
     assert len(rows) == 24 and {r["b"] for r in rows} == {key} and {r["c"] for r in rows} == {"chr2L"}
     assert {r["hap"] for r in rows} == {"strainA#0"} and all(NOT_MAT_PAT(r["hap"]) for r in rows)
-    assert all(r["aid"] and r["rk"] for r in rows) and len({r["rk"] for r in rows}) == 24
+    _identities_are_valid(rows, did)
+    assert len({r["rk"] for r in rows}) == 24
     # Fiber-seq marks and footprints come through, in source coordinates.
     assert all(r["m6a"] for r in rows) and all(r["nuc"]["iv"] for r in rows)
     assert all(10_000 <= r["cov"][0][0] < 22_000 for r in rows)
     assert {(b["dataset_id"], b["binding"]) for b in out["report"]["bands"]} == {(did, key)}
+    # The same records as the linear lifted rows of the dataset (by record key).
+    from services.lift.cohort import record_key
+    lin = server.client.get("/api/reads/compact", params=dict(chrom="chr2L", start=0, end=60_000, dataset_id=did,
+                                                             max_reads=5000, full_working_set="true"))
+    assert lin.status_code == 200, lin.text
+    linear = {record_key(r["analysis_id"]) for r in lin.json()["reads"] if r.get("analysis_id")}
+    assert linear and linear <= {r["rk"] for r in rows}
 
 
 def test_two_sample_haplotypes_each_load_on_their_own_lane(server):
@@ -156,7 +176,8 @@ def test_two_sample_haplotypes_each_load_on_their_own_lane(server):
     assert sorted(lanes) == sorted([h1, h2]) and all(len(v) == 12 for v in lanes.values())
     assert {r["hap"] for r in lanes[h1]} == {"sampleB#1"} and {r["hap"] for r in lanes[h2]} == {"sampleB#2"}
     assert {r["q"][:3] for r in lanes[h1]} == {"g1_"} and {r["q"][:3] for r in lanes[h2]} == {"g2_"}
-    assert all(r["aid"] and r["rk"] and NOT_MAT_PAT(r["hap"]) for r in out["reads"])
+    assert all(NOT_MAT_PAT(r["hap"]) for r in out["reads"])
+    _identities_are_valid(out["reads"], did)
     assert {b["binding"] for b in out["report"]["bands"]} == {h1, h2}
 
 
@@ -173,6 +194,9 @@ def test_a_graph_cluster_run_over_the_lifted_strain(server):
     out = arun(lambda: analysis.handle(server.state, reg, body))
     result = out["results"]["obs-strain"]
     assert len(result["assignments"]) >= 5, result
+    # The labels are keyed by the graph rows' own identities, so the band draws them (Codex review, group D).
+    drawn = {r["aid"] for r in _load(server, reg, did, {key: (0, 50_000)})["reads"]}
+    assert set(result["assignments"]) <= drawn
     assert out["target"] == target and out["columns"]["shared"]
 
 
