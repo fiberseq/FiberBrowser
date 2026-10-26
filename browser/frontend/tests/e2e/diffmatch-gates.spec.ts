@@ -19,6 +19,7 @@ import { test, expect, type Page, type Locator } from '@playwright/test';
 import { cpSync, existsSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { panelButton, pickRandomPort, startServer, stopServer, type ServerProcess } from './fixtures/server';
 
 const LIFT_BAM = process.env.FIBERBROWSER_TEST_LIFT_BAM ?? '';
@@ -52,7 +53,8 @@ async function prepare(page: Page, { previews = false, dark = false } = {}) {
   const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
   await page.setViewportSize({ width: 1500, height: 1050 });
-  await page.addInitScript(([p, d]) => {
+  // On the context: pages opened later (a restored session in a fresh page) get it too.
+  await page.context().addInitScript(([p, d]) => {
     (window as any).__FIBERBROWSER_E2E_EXPOSE_STORE = true;
     (window as any).__FIBERBROWSER_E2E_DISABLE_GENOME_AUTOLOAD = true;
     if (!sessionStorage.getItem('gates-kept')) { localStorage.clear(); sessionStorage.clear(); sessionStorage.setItem('gates-kept', '1'); }
@@ -69,6 +71,32 @@ const state = <T,>(page: Page, fn: (s: any) => T) =>
 async function ready(page: Page, url: string) {
   await page.goto(url);
   await expect.poll(() => page.evaluate(() => (window as any).__FIBERBROWSER_STORE__?.getState().chroms.length ?? 0), { timeout: 120_000 }).toBeGreaterThan(0);
+}
+
+async function saveSession(page: Page, file: string) {
+  const download = page.waitForEvent('download');
+  await page.getByTestId('save-session-button').click();
+  await (await download).saveAs(file);
+  return JSON.parse(readFileSync(file, 'utf8'));
+}
+
+async function restoreSession(page: Page, file: string) {
+  await page.getByTestId('settings-rail-file').click();
+  const imported = page.waitForResponse(r => r.url().includes('/api/session/import') && r.request().method() === 'POST');
+  await page.getByTestId('restore-session-file-input').setInputFiles(file);
+  const result = await (await imported).json();
+  expect(result.success, JSON.stringify(result)).toBe(true);
+  return result;
+}
+
+async function openGraphView(page: Page): Promise<Locator> {
+  const before = await page.getByTestId('graph-panel').count();
+  await panelButton(page, 'graph-view').first().click();
+  await expect(page.getByTestId('graph-panel')).toHaveCount(before + 1, { timeout: 30_000 });
+  const graph = page.getByTestId('graph-panel').nth(before);
+  await expect(graph).toHaveAttribute('data-graph-loading', 'false', { timeout: 60_000 });
+  await expect(graph).toHaveAttribute('data-graph-lanes', /target/, { timeout: 60_000 });
+  return graph;
 }
 
 /** "Add live lift…" from the Open menu, linear (graph mode off unless asked). */
@@ -275,9 +303,9 @@ test.describe('saved sessions from earlier versions', () => {
   test('a 3.0.x session restores unchanged: its panels, legacy SV track and settings', async ({ page }, info) => {
     test.skip(!HAVE_LIFT, 'needs the native BAM of the pg-lift work data');
     test.setTimeout(240_000);
-    const fixture = path.join(__dirname, 'fixtures', 'session-3.0.x.json');
+    const fixture = fileURLToPath(new URL('./fixtures/session-3.0.x.json', import.meta.url));
     test.skip(!existsSync(fixture), 'the 3.0.x session fixture is missing');
-    const session = JSON.parse(readFileSync(fixture, 'utf8').replaceAll('__NATIVE_BAM__', NATIVE_BAM));
+    const session = JSON.parse(readFileSync(fixture, 'utf8').replaceAll('__NATIVE_BAM__', NATIVE_BAM).replaceAll('__FASTA__', process.env.FIBERBROWSER_TEST_FASTA ?? ''));
     const file = info.outputPath('session-3.0.x.json');
     writeFileSync(file, JSON.stringify(session));
     const srv = await server(null);
@@ -305,25 +333,31 @@ test.describe('saved sessions from earlier versions', () => {
     } finally { await stopServer(srv); }
   });
 
-  test('a schema-1 graph view restores as a standalone graph view and draws', async ({ page }, info) => {
+  test('a schema-1 graph view restores as a standalone graph view and draws', async ({ page: first }, info) => {
+    let page = first;
     test.skip(!HAVE_ALU, 'needs the graph helper and the alu package');
     test.setTimeout(240_000);
     const srv = await server(null, { ...graphEnv([ALU]), FIBERBROWSER_LIVE_LIFT: '0' });
     try {
       const errors = await prepare(page, { previews: true });
       await ready(page, `${srv.baseUrl}/?chr=chr3&start=92395&end=102395`);
-      const reg = (await (await page.request.get(`${srv.baseUrl}/api/graph/registrations`)).json()).registrations[0];
-      const exported = await page.request.post(`${srv.baseUrl}/api/session/export`, { data: { chrom: 'chr3', start: 92395, end: 102395,
-        frontend: { chrom: 'chr3', start: 92395, end: 102395, panels: [{ id: 'gv1', contentType: 'graph-view', datasetId: null, subTracks: [], collapsed: false, linkGroup: null, layoutRow: 0,
-          graphView: { schema: 1, registrationId: reg.id, packageRevision: reg.revisions.package, graphRevision: reg.revisions.graph, mapRevision: reg.revisions.maps,
-            targetBinding: reg.target_binding ?? reg.targets?.[0]?.binding ?? 'target', selectedPathKeys: [], linkMode: 'follow' } }] } } });
-      expect(exported.ok()).toBe(true);
+      // A session saved with a graph view, its state rewritten to the schema-1 shape (Gate F's: no role, no read binding).
+      const live = await openGraphView(page);
+      const liveId = await live.getAttribute('data-graph-panel-id');
       const file = info.outputPath('session-schema1-graph.json');
-      writeFileSync(file, JSON.stringify(await exported.json()));
-      await page.getByTestId('settings-rail-file').click();
-      const imported = page.waitForResponse(r => r.url().includes('/api/session/import') && r.request().method() === 'POST');
-      await page.getByTestId('restore-session-file-input').setInputFiles(file);
-      expect((await (await imported).json()).success).toBe(true);
+      const saved = await saveSession(page, file);
+      const panel = saved.frontend.panels.find((p: any) => p.contentType === 'graph-view');
+      const { role, reads, handoff, ...rest } = panel.graphView;
+      panel.id = 'gv1';
+      panel.graphView = { ...rest, schema: 1 };
+      saved.frontend.panels = saved.frontend.panels.filter((p: any) => p.contentType !== 'graph-view' || p.id === 'gv1');
+      writeFileSync(file, JSON.stringify(saved));
+      expect(liveId).toBeTruthy();
+      const fresh = await page.context().newPage();
+      fresh.on('pageerror', e => errors.push(e.message));
+      await ready(fresh, srv.baseUrl);
+      await restoreSession(fresh, file);
+      page = fresh;
       await expect.poll(() => state(page, s => s.panels.find((p: any) => p.id === 'gv1')?.graphView?.role ?? null), { timeout: 30_000 }).toBe('standalone');
       expect(await state(page, s => s.panels.find((p: any) => p.id === 'gv1').graphView.schema)).toBe(2);
       const graph = page.locator('[data-testid="graph-panel"][data-graph-panel-id="gv1"]');
@@ -388,7 +422,8 @@ test.describe('graph panel navigation gates (Phase F)', () => {
     } finally { await stopServer(srv); }
   });
 
-  test('relink after the package was deleted: unavailable with its frozen view, then live again', async ({ page }) => {
+  test('relink after the package was deleted: unavailable with its frozen view, then live again', async ({ page: first }) => {
+    let page = first;
     test.setTimeout(240_000);
     const scratch = mkdtempSync(path.join(os.tmpdir(), 'fiberbrowser-relink-'));
     const pkg = path.join(scratch, 'alu');
@@ -397,30 +432,30 @@ test.describe('graph panel navigation gates (Phase F)', () => {
     try {
       const errors = await prepare(page, { previews: true });
       await ready(page, `${srv.baseUrl}/?chr=chr3&start=92395&end=102395`);
-      const graph = await openGraph(page);
-      // The package folder is deleted (moved away): the restored view stays frozen and offers a relink.
+      await openGraph(page);
+      const file = test.info().outputPath('relink-session.json');
+      await saveSession(page, file);
+      // The package folder is deleted (moved away), then the session is restored: the view stays frozen with a relink.
       renameSync(pkg, `${pkg}.gone`);
-      await page.reload();
-      await expect.poll(() => page.evaluate(() => (window as any).__FIBERBROWSER_STORE__?.getState().chroms.length ?? 0), { timeout: 60_000 }).toBeGreaterThan(0);
-      const stale = page.getByTestId('graph-panel-stale');
-      if (!(await stale.count())) {
-        // A kept page state may need the status checked again.
-        await page.getByText('Check again').click().catch(() => {});
-      }
+      const fresh = await page.context().newPage();
+      fresh.on('pageerror', e => errors.push(e.message));
+      await ready(fresh, srv.baseUrl);
+      await restoreSession(fresh, file);
+      const stale = fresh.getByTestId('graph-panel-stale');
       await expect(stale).toBeVisible({ timeout: 60_000 });
-      await expect(page.getByTestId('graph-panel-frozen')).toContainText('chr3');
-      await page.screenshot({ path: test.info().outputPath('relink-unavailable.png') });
+      await expect(fresh.getByTestId('graph-panel-frozen')).toContainText('chr3');
+      await fresh.screenshot({ path: test.info().outputPath('relink-unavailable.png') });
       renameSync(`${pkg}.gone`, pkg);
-      const relink = page.getByTestId('graph-panel-relink');
+      const relink = fresh.getByTestId('graph-panel-relink');
       if (await relink.count()) await relink.first().click();
       else {
-        await page.getByTestId('graph-panel-register-path').fill(pkg);
-        await page.getByTestId('graph-panel-register-submit').click();
+        await fresh.getByTestId('graph-panel-register-path').first().fill(pkg);
+        await fresh.getByTestId('graph-panel-register-submit').first().click();
       }
+      page = fresh;
       await expect(page.getByTestId('graph-panel-stale')).toHaveCount(0, { timeout: 60_000 });
       await expect(page.getByTestId('graph-panel').first()).toHaveAttribute('data-graph-lanes', /target/, { timeout: 60_000 });
       await page.screenshot({ path: test.info().outputPath('relink-live.png') });
-      expect(graph).toBeTruthy();
       expect(errors).toEqual([]);
     } finally { await stopServer(srv); }
   });

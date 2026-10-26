@@ -268,3 +268,41 @@ def test_route_compare_and_lifted_exact_inspection(tmp_path, monkeypatch):
     finally:
         srv.state = old
         init_context(old)
+
+
+def test_cap_dropped_competitors_leave_exact_targets_and_novelty_open(tmp_path):
+    """Codex r1 HIGH 1: a competitor dropped by the item cap must not leave competition 'complete'."""
+    state, ds, _ = build(tmp_path, pat_insert=Y_OTHER)
+    out = compare(state, ds, [ins("far", pos=5000, alt=300)], read_sequences={"far": "A" * 300},
+                  read_scope={"search_complete": True}, policy=ComparisonPolicy(max_assembly_items=1))
+    assert "assembly_items_cap" in out["reasons"]
+    kept = [v for v in out["assembly"].values() if v["exact_target"]]
+    assert kept and all(v["exact_target"]["competition_complete"] is False for v in kept)
+    assert out["reads"]["far"]["label"] != "novel_relative_to_assembly"
+
+
+def test_unsupported_inversion_blocks_a_negative_label(tmp_path, monkeypatch):
+    """Codex r1 HIGH 2: an overlapping inversion is not compared, so the read difference stays unassessed."""
+    from services.lift import differences as diff
+    state, ds, _ = build(tmp_path)
+    real = diff.assembly_items_for_region
+
+    def with_inversion(config, chrom, start, end, **kw):
+        return real(config, chrom, start, end, **kw) + [dict(id="MAT:inv", hap="H#1", hap_label="MAT", kind="inversion",
+            reason="inversion", t_start=6500, t_end=7500, ref_bp=1000, alt_bp=1000, chain=0, strand="-",
+            src={"contig": "chrC_MATERNAL", "start": 5000, "end": 6000})]
+    monkeypatch.setattr(diff, "assembly_items_for_region", with_inversion)
+    seq = "".join(random.Random(5).choice("ACGT") for _ in range(30))
+    out = compare(state, ds, [ins("r", pos=7000, alt=30)], read_sequences={"r": seq}, read_scope={"search_complete": True})
+    assert out["reads"]["r"]["label"] == "unassessed"
+    assert "unsupported_representation" in out["reads"]["r"]["novelty"]["reasons"]
+
+
+def test_display_memberships_use_the_escaped_molecule_key():
+    """Codex r1 HIGH 3: membership identities and display rows share one encoder (QNAMEs may hold '|')."""
+    import inspect
+    from services.differences import projected_service
+    from services.lift.joint import molecule_key
+    source = inspect.getsource(projected_service.add_display_memberships)
+    assert "molecule_key(alignment.molecule.library_id, alignment.molecule.raw_name)" in source
+    assert molecule_key("g", "read|1") == "g|read\\|1"

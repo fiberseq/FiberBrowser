@@ -650,7 +650,9 @@ def add_display_memberships(index, dataset, alignment, plan, display_pieces=None
         placement = _placement(row)
         row_index = numbered.get(placement, 0)
         numbered[placement] = row_index+1
-        ll = dict(molecule=f"{alignment.molecule.library_id}|{alignment.molecule.raw_name}",
+        from services.lift.joint import molecule_key
+        # The same encoder the display rows use (services/lift/compose.py), so memberships match their rows.
+        ll = dict(molecule=molecule_key(alignment.molecule.library_id, alignment.molecule.raw_name),
                   record=f"{alignment.record_sha256}:{alignment.record_occurrence}",
                   row_index=row_index, placement=placement)
         identity = analysis_id(dict(id=alignment.molecule.raw_name, live_lift=ll), dataset.live_lift.settings)

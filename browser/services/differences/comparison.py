@@ -28,7 +28,7 @@ with every complete competing assembly allele at the locus and the reference.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import os
 
 from services.reconstruction_budget import ResourceResult
@@ -195,9 +195,11 @@ def assembly_comparison(state, dataset, *, chrom, start, end, reads=(), read_seq
     context = [i for i in all_items if i["kind"] in CONTEXT_KINDS]
     items = [i for i in all_items if i["kind"] in LOCAL_KINDS
              and max(i["ref_bp"], i["alt_bp"]) >= policy.evidence_floor_bp]
+    dropped = []
     if len(items) > policy.max_assembly_items:
         reasons.add("assembly_items_cap")
-        items = sorted(items, key=lambda i: -max(i["ref_bp"], i["alt_bp"]))[:policy.max_assembly_items]
+        ranked = sorted(items, key=lambda i: -max(i["ref_bp"], i["alt_bp"]))
+        items, dropped = ranked[:policy.max_assembly_items], ranked[policy.max_assembly_items:]
         items.sort(key=lambda i: (i["t_start"], i["hap_label"]))
     labels = config.labels() if hasattr(config, "labels") else {}
     haps = tuple(sorted({i["hap"] for i in all_items} | set(getattr(config, "haplotypes", ()) or ())))
@@ -331,6 +333,15 @@ def assembly_comparison(state, dataset, *, chrom, start, end, reads=(), read_seq
             search_complete=bool(result.get("search_complete", True)) and "assembly_items_cap" not in reasons,
             bubbles_resolved=not any(i["kind"] == "aligned_bubble" and _overlaps(i, *nearby) for i in context),
             reasons=tuple(sorted(r for r in reasons if r in ("reference_unavailable", "assembly_sequence_unavailable"))))
+        # Representations the matcher cannot compare (inversions) or items the cap dropped near this
+        # difference leave the comparison incomplete: never a "not in the assembly" verdict over them.
+        unsupported = [i for i in context if i["kind"] == "inversion" and _overlaps(i, *nearby)]
+        capped_here = [i for i in dropped if _overlaps(i, *nearby)]
+        if unsupported or capped_here:
+            scope = replace(scope, representations_complete=scope.representations_complete and not unsupported,
+                            search_complete=scope.search_complete and not capped_here,
+                            reasons=tuple(sorted(set(scope.reasons) | ({"unsupported_representation"} if unsupported else set())
+                                                 | ({"assembly_items_cap"} if capped_here else set()))))
         decision = novelty(links, scope)
         status = decision["status"]
         label = ("confirmed_by_assembly" if status == "assembly_equivalent" else
@@ -362,7 +373,7 @@ def assembly_comparison(state, dataset, *, chrom, start, end, reads=(), read_seq
                         book.resolve_exact(identity, exact)
                         value["identity_state"], value["exact_allele_id"] = "exact", exact
     for value in assembly.values():
-        value["exact_target"] = _exact_target(value, assembly, context, reference, chrom, policy, labels)
+        value["exact_target"] = _exact_target(value, assembly, context, reference, chrom, policy, labels, dropped)
     for value in assembly.values():
         value.pop("alt")
     return dict(schema_version="differences:v1", comparison_version=COMPARISON_VERSION, dataset_id=dataset.id,
@@ -373,7 +384,7 @@ def assembly_comparison(state, dataset, *, chrom, start, end, reads=(), read_seq
                 lineage_events=events, ledger=book.payload())
 
 
-def _exact_target(value, assembly, context, reference, chrom, policy, labels):
+def _exact_target(value, assembly, context, reference, chrom, policy, labels, dropped=()):
     """A frozen exact target with every complete competing assembly allele."""
     if not value["exact_allele_id"] or value["alt"] is None:
         return None
@@ -399,7 +410,9 @@ def _exact_target(value, assembly, context, reference, chrom, policy, labels):
         candidates.setdefault(v["exact_allele_id"], changed(v))
         names.setdefault(v["exact_allele_id"], []).append(v["hap_label"])
     names[target_id] = sorted(set(names[target_id]) | {assembly[i]["hap_label"] for i in value["shared_with"]})
-    if any(c["t_start"] < de and c["t_end"] > ds for c in context):
+    # Unsupported local representations, and competitors the item cap dropped, leave the competition open.
+    if any(c["t_start"] < de and c["t_end"] > ds for c in context) or any(
+            d["t_start"] <= e + policy.diagnostic_flank_bp and d["t_end"] >= s - policy.diagnostic_flank_bp for d in dropped):
         complete = False
     candidates["reference"] = window
     return dict(target_id=target_id, revision=1, target_type="exact", chrom=chrom, ref_start=s, ref_end=e,
