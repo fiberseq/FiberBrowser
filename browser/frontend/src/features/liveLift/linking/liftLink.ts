@@ -79,11 +79,19 @@ function clampSpan(panel: PanelConfig, m: SpanMapping): Span {
 
 /** The panel whose view is the lifted side of a link: its lifted panel, or the graph host that panel is folded into.
  * (A source-view pop-out of a graph host's haplotype stays linked to that haplotype's panel, which is hidden in the
- * host's graph: the host's view is the one the user moves, and it carries its folded members along.) */
+ * host's graph: the host's view is the one the user moves, and it carries its folded members along.)
+ * A member the host revealed (a hand-off to linear, "View as linear", a 'both' pop-out) is carried along too while
+ * it shows exactly the host's view (handoff.ts carry, moveHostMembers): the host is its view then as well, so its
+ * source view follows the host and moves it (and so the member). One the user moved elsewhere is its own view
+ * (post-merge review, agy group C, HIGH 1). */
 function liftedViewPanel(l: Pick<LiftLinkConfig, 'liftPanelId'>, panels: PanelConfig[]): PanelConfig | undefined {
   const lifted = panels.find(p => p.id === l.liftPanelId);
-  const host = lifted?.collapsedByGraphGroup ? panels.find(p => p.id === lifted.collapsedByGraphGroup) : undefined;
-  return host ?? lifted;
+  if (!lifted) return undefined;
+  if (lifted.collapsedByGraphGroup) return panels.find(p => p.id === lifted.collapsedByGraphGroup) ?? lifted;
+  const host = lifted.graphMemberOf && lifted.graphMemberOf !== lifted.id ? panels.find(p => p.id === lifted.graphMemberOf) : undefined;
+  const a = lifted.viewportOverride, b = host?.viewportOverride;
+  const inStep = Boolean(a && b && a.chrom === b.chrom && a.start === b.start && a.end === b.end);
+  return host?.graphView?.role === 'host' && inStep ? host : lifted;
 }
 
 /** The view a lifted panel shows when it is not the main view ("Each panel navigates", or a graph host with a locus of
