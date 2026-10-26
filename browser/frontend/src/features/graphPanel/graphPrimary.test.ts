@@ -540,3 +540,15 @@ describe('agy review group A: a selected host targets its folded members', () =>
     expect(getStateKeyMap(sel, st.panels, st.datasets)).toEqual({ d: ['k-mat', 'k-pat'] });
   });
 });
+
+describe('audit A7: View as graph from a panel selection', () => {
+  it('the selected native panel joins the new host, folded', async () => {
+    const { viewSelectionAsGraph } = await import('./hostMode');
+    seed([...split(), panel('nat', { datasetId: 'n' })]);
+    useBrowserStore.setState({ selectedDatasets: new Set(['mat', 'nat']) });
+    expect(viewSelectionAsGraph('mat')).toBeNull();
+    expect(get('mat').graphView!.members.map(m => m.panelId).sort()).toEqual(['mat', 'nat', 'pat']);
+    expect(get('nat')).toMatchObject({ collapsed: true, graphMemberOf: 'mat' });
+    useBrowserStore.setState({ selectedDatasets: new Set() });
+  });
+});

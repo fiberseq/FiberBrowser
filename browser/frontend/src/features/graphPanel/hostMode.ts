@@ -300,6 +300,19 @@ export function foldIn(hostId: string, memberIds: string[]): void {
 }
 
 /** Dataset panels in view that could join a host's graph: they bind one of its shown paths in the same package. */
+/**
+ * View as graph from a panel selection (§1.3, graph features): the panel becomes the host and the other selected
+ * panels that bind one of its graph's paths join it, folded. Without a selection, or with only this panel selected,
+ * it is setPanelViewMode.
+ */
+export function viewSelectionAsGraph(panelId: string): string | null {
+  const selected = [...useBrowserStore.getState().selectedDatasets].filter(id => id !== panelId);
+  const why = setPanelViewMode(panelId, 'graph');
+  if (why || !selected.length || !useBrowserStore.getState().selectedDatasets.has(panelId)) return why;
+  joinGraph(panelId, selected);
+  return null;
+}
+
 export function joinCandidates(panels: readonly PanelConfig[], host: PanelConfig): { panel: PanelConfig; binding: string | null }[] {
   const reg = host.graphView?.registrationId;
   const shown = new Set(host.graphView?.selectedPathKeys ?? []);
