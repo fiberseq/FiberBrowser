@@ -215,6 +215,8 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
               title={s.datasets.map(d => `${d.scanDataset}: ${d.status}${d.dataset ? ` → ${datasets.find(x => x.id === d.dataset)?.label ?? d.dataset}` : ''}${d.note ? ` (${d.note})` : ''}`).join('\n') + (s.referenceNote ? `\n${s.referenceNote}` : '')}
               data-testid="hub-scan-binding">● {status}</span>
             {s.annotated.length > 0 && <span className="text-[11px] text-ink-muted" title={s.annotated.map(a => a.path).join('\n')}>annotated BAMs: {s.annotated.length}</span>}
+            {status === 'stale' && <button type="button" className="text-[11px] text-amber-700 underline dark:text-amber-300" data-testid="hub-scan-rescan"
+              title="The loaded BAM changed since this scan: scan the view's units again" onClick={() => setDialog(true)}>Re-scan…</button>}
             <button type="button" className="ml-auto text-[11px] text-ink-muted hover:underline" onClick={() => { void closeScanId(s.scanId); }}>Close</button>
           </div>;
         })}
