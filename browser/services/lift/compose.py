@@ -1074,8 +1074,9 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
     # record's own. ``analysis_id`` is assigned per fold mode later (P2).
     library = read.get("library_id") or read.get("source_path") or ""
     qname = read.get("id")
-    group = ctx.molecule_groups.get(read.get("source_path")) or ctx.molecule_groups.get(library) or ctx.dataset_id
-    molecule = f"{group}|{qname}"
+    from services.lift.joint import group_for, molecule_key
+    group = group_for(ctx.molecule_groups, read.get("source_path"), library) or ctx.dataset_id
+    molecule = molecule_key(group, qname)
     mol_meta = ctx.molecules.get((library, qname))
     record_hap = row.frags[0].p.hap
     if mol_meta is not None:

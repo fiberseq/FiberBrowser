@@ -66,7 +66,8 @@ def add_live_lift_dataset(state, *, paths: Iterable[str], manifest: str, haploty
         return {"success": False, "error": "Choose the source BAM file(s)."}
     if not manifest:
         return {"success": False, "error": "Choose the lift map: a graphlift sidecar (.graphlift.json) or a UCSC chain (.chain, .chain.gz)."}
-    bam_paths = normalize_local_paths(raw)
+    # Absolute paths (a relative one would not reopen from a session started elsewhere).
+    bam_paths = [p if "://" in str(p) else os.path.abspath(os.path.expanduser(str(p))) for p in normalize_local_paths(raw)]
     errors = validate_dataset_paths(bam_paths, raw)
     if errors:
         return {"success": False, "error": "\n\n".join(errors)}
@@ -75,6 +76,9 @@ def add_live_lift_dataset(state, *, paths: Iterable[str], manifest: str, haploty
     index_error = ensure_local_bam_indexes(bam_paths)
     if index_error:
         return index_error
+    # Provenance groups are keyed by the BAMs as the user named them: key them by the same normalized
+    # paths the dataset keeps, so cohort identities survive a relative path, a symlink or a session restore.
+    settings = _portable_groups(settings, dict(zip(raw, bam_paths)))
     try:
         config = LiveLiftConfig(manifest, list(haplotypes), LiftSettings.from_dict(settings), source_fasta=source_fasta)
     except (LiftSettingsError, ValueError, OSError) as exc:
@@ -138,6 +142,20 @@ def update_settings(state, dataset_id: str, settings: Optional[dict] = None,
     return {"success": True, "dataset": dataset.to_dict()}
 
 
+def _portable_groups(settings: Optional[dict], renamed: dict) -> Optional[dict]:
+    """``settings`` with ``molecule_groups`` keys renamed through ``renamed`` (raw -> normalized path),
+    then made absolute (records are matched to them through resolved paths, services/lift/joint.group_for)."""
+    if not settings or not settings.get("molecule_groups"):
+        return settings
+    groups = settings["molecule_groups"]
+    pairs = groups.items() if isinstance(groups, dict) else groups
+    out = []
+    for path, label in pairs:
+        path = str(path)
+        out.append([os.path.abspath(os.path.expanduser(renamed.get(path) or path)), label])
+    return {**settings, "molecule_groups": out}
+
+
 # ── Sessions (built-in plugin hooks, plugins/builtin_features.py) ───────────
 
 def session_entry(dataset) -> Optional[dict]:
@@ -158,10 +176,13 @@ def restore_from_session(state, entry: dict, *, path_mapping: Optional[dict] = N
     require_enabled()
     # Session import maps the entire entry already; direct restorers can use
     # the same rule, including manifest/source FASTA rather than just BAMs.
+    original_paths = [str(p) for p in entry.get("paths") or []]
     if path_mapping:
         from services.session_files import apply_path_mapping
         entry = apply_path_mapping(entry, path_mapping)
-    spec = entry.get("live_lift") or {}
+    spec = dict(entry.get("live_lift") or {})
+    # Provenance keys follow their BAMs through relocation (saved path i -> restored path i).
+    spec["settings"] = _portable_groups(spec.get("settings"), dict(zip(original_paths, [str(p) for p in entry.get("paths") or []])))
     result = add_live_lift_dataset(state, paths=entry.get("paths") or [], manifest=spec.get("manifest"),
                                    haplotypes=spec.get("haplotypes") or (), settings=spec.get("settings"),
                                    label=entry.get("label"), dataset_id=entry.get("id"), source_fasta=spec.get("source_fasta"))
