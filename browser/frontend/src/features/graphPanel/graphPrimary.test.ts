@@ -574,6 +574,13 @@ describe('agy review group C round 2', () => {
     expect(get('s2').liftHap).toBeUndefined();
   });
 
+  it('Pool haplotypes from the second panel of a group keeps that panel, pooled (Codex group G)', () => {
+    seed([panel('s1', { liftHap: 'MAT', liftHaplotypeMode: 'split', liftSplitGroup: 'g1' }), panel('p1', { liftHap: 'PAT', liftHaplotypeMode: 'split', liftSplitGroup: 'g1' })]);
+    useBrowserStore.getState().poolLiftHapPanels('d', 'p1');
+    expect(useBrowserStore.getState().panels.map(p => p.id)).toEqual(['p1']);
+    expect(get('p1')).toMatchObject({ liftHap: undefined, liftHaplotypeMode: 'pooled' });
+  });
+
   it('Stay linear is an undo step even in a session with no history yet', () => {
     seed(split());
     setPanelViewMode('mat', 'graph');

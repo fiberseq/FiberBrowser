@@ -182,16 +182,24 @@ def scan(state, reg, body: dict, tiles: dict, spec: dict) -> dict:
     # clustering's joint cohort applies it.
     # One row per (dataset, row identity) across observations: a pooled panel and a haplotype or strand panel of the
     # same dataset overlap (agy review, group B).
+    # A lifted row is named by its cohort identity; a native row by its record (library, QNAME, digest, occurrence,
+    # bounds), never by its QNAME alone: distinct records sharing a QNAME both count (Codex review, group G). Rows of
+    # one observation are distinct records; only repeats across observations are dropped.
+    from services.lift.cohort import _IDENTITY_PREFIX
+
+    def row_key(r):
+        aid = r.get("analysis_id")
+        if isinstance(aid, str) and aid.startswith(_IDENTITY_PREFIX):
+            return ("lifted", aid)
+        return ("native", r.get("library_id"), r.get("id"), r.get("record_sha256"), r.get("alignment_occurrence"),
+                r.get("reference_start", r.get("start")), r.get("reference_end", r.get("end")), r.get("alignment_orientation"))
+
     seen_rows: set = set()
     deduped = []
     for ob, rows, *rest in loaded:
-        mine = []
-        for r in rows:
-            key = (ob["dataset_id"], r.get("analysis_id") or r.get("id"))
-            if key in seen_rows:
-                continue
-            seen_rows.add(key)
-            mine.append(r)
+        keys = [(ob["dataset_id"], row_key(r)) for r in rows]
+        mine = [r for r, key in zip(rows, keys) if key not in seen_rows]
+        seen_rows.update(keys)
         deduped.append((ob, mine, *rest))
     loaded = deduped
     dataset_ids = sorted({ob["dataset_id"] for ob, *_r in loaded})

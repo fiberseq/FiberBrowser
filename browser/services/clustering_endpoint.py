@@ -520,13 +520,18 @@ def run_scan_peaks_endpoint(
 
     from services.background_work import checkpoint
     phase_t0 = time.perf_counter()
+    from services.lift.joint import joint_dedup_datasets
+    # Datasets whose shared molecules the joint policy deduplicates: their rows, never cached counts (Codex review,
+    # group G).
+    joint_rows = joint_dedup_datasets(state, query.dataset_ids) if len(query.dataset_ids) > 1 else set()
     for ds_id in query.dataset_ids:
         checkpoint()  # a scan whose clients left stops between datasets
         from services.direct_read_projection import direct_scan_counts
         from services.lift.capability import is_lifted
         # A lifted dataset is scanned on its analysis cohort (target coordinates), never from display caches.
         lifted = is_lifted(state.datasets.get(ds_id))
-        direct_counts = None if getattr(req, "strand", None) or lifted else direct_scan_counts(state, query, ds_id, signal_source)
+        no_shortcut = bool(getattr(req, "strand", None)) or lifted or ds_id in joint_rows
+        direct_counts = None if no_shortcut else direct_scan_counts(state, query, ds_id, signal_source)
         if direct_counts is not None:
             numerator, total_counts, ds_n_reads = direct_counts
             scan_numerators.append(numerator)
@@ -534,7 +539,7 @@ def run_scan_peaks_endpoint(
             n_reads += ds_n_reads
             direct_scan_hits += 1
             continue
-        broad_counts = None if getattr(req, "strand", None) or lifted else _compute_scan_counts_from_broad_cache(
+        broad_counts = None if no_shortcut else _compute_scan_counts_from_broad_cache(
             state=state,
             query=query,
             dataset_id=ds_id,
@@ -563,7 +568,12 @@ def run_scan_peaks_endpoint(
                         molecules.add(_json.loads(v.split(" ", 1)[1])[0])
                     except (ValueError, IndexError, TypeError):
                         pass
-            working_set = query.build_working_set(state, ds_id, read_ids=None)
+            # Unscoped explicitly: read_ids=None means "the query's scope", which would drop the supplementaries
+            # before they are matched by molecule (Codex review, group G).
+            from dataclasses import replace as _replace
+            unscoped = _replace(query, read_ids_by_dataset={k: v for k, v in query.read_ids_by_dataset.items() if k != ds_id},
+                                singleton_read_ids=None)
+            working_set = unscoped.build_working_set(state, ds_id)
             ds_reads = [r for r in working_set.reads if (r.get("live_lift") or {}).get("molecule") in molecules
                         or query.filter_reads_for_dataset(ds_id, [r])]
         else:

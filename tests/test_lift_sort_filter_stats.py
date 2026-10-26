@@ -258,3 +258,22 @@ def test_linear_scan_counts_a_molecule_shared_by_two_datasets_once_under_joint_d
                        json={"dataset_ids": [a, b], "min_reads": 1, "min_width": 20, "threshold_rare": 0.01}).json()["n_reads"]
     # One row per shared molecule (the joint cohort's rule, as clustering applies it): never both copies.
     assert both <= single < 2 * both
+
+
+def test_scoped_linear_scan_keeps_a_shown_molecules_supplementaries(lift_env):
+    """Codex review (group G): a linear Scan scoped to a molecule's primary identity scans its supplementary rows too
+    (the query's own scope must not drop them before the molecule match)."""
+    import json
+    client, state, manifest, bam = lift_env
+    did = _add(client, manifest, bam)["dataset"]["id"]
+    split = [i for i in _sort(client, did)["read_sort_order"] if _qname(i) == "split"]
+    if len(split) < 2:
+        pytest.skip("the fixture's split molecule has one row here")
+    primary = [i for i in split if json.loads(i[len(PREFIX):])[4] == "primary"][:1] or split[:1]
+
+    def scan(ids):
+        r = client.post("/api/scan_peaks", params={**WINDOW, "dataset_id": did},
+                        json={"dataset_ids": [did], "read_ids": ids, "min_reads": 1, "min_width": 20, "threshold_rare": 0.01})
+        assert r.status_code == 200, r.text
+        return r.json()["n_reads"]
+    assert scan(primary) == scan(split) >= 2

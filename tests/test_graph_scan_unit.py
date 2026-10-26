@@ -109,3 +109,49 @@ def test_rows_of_one_dataset_in_two_observations_count_once(monkeypatch):
                              dict(id="B", dataset_id="d", kind="graph", binding="mat", contig="cM", read_ids=None, strand=None)]}
     out = gscan.scan(types.SimpleNamespace(), None, {"scan": {"signal_source": "accessibility", "min_reads": 1, "threshold_rare": 0.01}}, {}, spec)
     assert out["n_reads"] == 1
+
+
+def test_native_records_sharing_a_qname_both_count_and_count_once_across_observations(monkeypatch):
+    """Codex review (group G): two native records with one QNAME (two libraries) covering opposite halves of the
+    window are two records; a second observation of the same dataset adds nothing."""
+    width = 1000
+    carried = {u: (u, False) for u in range(width)}
+    cols = types.SimpleNamespace(features=[], carried={"N": dict(carried), "M": dict(carried)}, walk=[True] * width, report={})
+    monkeypatch.setattr(gscan.gc, "region_columns", lambda *a, **k: cols)
+    monkeypatch.setattr(gscan.gc, "merge_occurrences", lambda *a, **k: {})
+
+    def rec(lib, a, b):
+        return dict(id="q1", library_id=lib, record_sha256=f"sha{lib}", alignment_occurrence=0, reference_start=a,
+                    reference_end=b, alignment_orientation="forward", start=a, end=b, intervals=[[a, b, 40]])
+
+    class Query:
+        @classmethod
+        def from_request(cls, *a, **k):
+            return cls()
+
+        def build_working_set(self, state, dataset_id):
+            return types.SimpleNamespace(reads=[rec(0, 0, 500), rec(1, 500, 1000)])
+    import services.analysis_query as aq
+    monkeypatch.setattr(aq, "AnalysisReadQuery", Query)
+    spec = {"target": "t", "regions": [{"start": 0, "end": width}], "binding_order": ["t"],
+            "observations": [dict(id="N", dataset_id="n", kind="linear", binding="t", chrom="chr", read_ids=None, strand=None),
+                             dict(id="M", dataset_id="n", kind="linear", binding="t", chrom="chr", read_ids=None, strand=None)]}
+    out = gscan.scan(types.SimpleNamespace(), None, {"start": 0, "end": width, "scan": {"signal_source": "accessibility",
+                     "min_reads": 1, "threshold_rare": 0.01}}, {}, spec)
+    assert out["n_reads"] == 2
+    assert out["columns"]["observations"] == {"N": 2, "M": 0}
+
+
+def test_joint_dedup_datasets_names_the_datasets_whose_rows_the_joint_policy_drops():
+    """Codex review (group G): a native dataset sharing a provenance group with a lifted one under joint_dedup
+    by_molecule is scanned row by row (its cached counts would bypass the deduplication); otherwise none are."""
+    from services.lift.joint import joint_dedup_datasets
+    lifted = types.SimpleNamespace(settings=types.SimpleNamespace(molecule_groups=[["x.bam", "grp"]], joint_dedup="by_molecule"))
+    ds = {"lift": types.SimpleNamespace(live_lift=lifted),
+          "nat": types.SimpleNamespace(live_lift=None, molecule_groups=[["x.bam", "grp"]], joint_dedup="by_molecule"),
+          "other": types.SimpleNamespace(live_lift=None, molecule_groups=[["y.bam", "g2"]], joint_dedup="by_molecule"),
+          "off": types.SimpleNamespace(live_lift=None, molecule_groups=[["x.bam", "grp"]], joint_dedup="off")}
+    state = types.SimpleNamespace(get_dataset=ds.get)
+    assert joint_dedup_datasets(state, ["lift", "nat", "other"]) == {"lift", "nat"}
+    assert joint_dedup_datasets(state, ["lift", "off"]) == set()
+    assert joint_dedup_datasets(state, ["nat", "other"]) == set()

@@ -13,6 +13,25 @@ def molecule_identity(dataset, read):
     return f"{group}|{read.get('_display_id') or read.get('_original_id') or read['id']}"
 
 
+def joint_dedup_datasets(state, dataset_ids):
+    """The datasets whose rows ``prepare_joint_cohort`` may drop: those sharing a provenance group with another of
+    ``dataset_ids`` when all of them deduplicate by molecule (empty otherwise). Aggregate shortcuts (display or
+    broad-cache counts) must not stand in for their rows."""
+    groups_of, policies = {}, {}
+    for ds_id in dataset_ids:
+        dataset = state.get_dataset(ds_id)
+        if dataset is None:
+            continue
+        config = getattr(dataset, "live_lift", None)
+        settings = config.settings if config else None
+        groups_of[ds_id] = {g for g in dict(settings.molecule_groups if settings else getattr(dataset, "molecule_groups", []) or []).values() if g}
+        policies[ds_id] = settings.joint_dedup if settings else getattr(dataset, "joint_dedup", "off")
+    participating = {d for d, gs in groups_of.items() if any(gs & og for o, og in groups_of.items() if o != d)}
+    if participating and all(policies[d] == "by_molecule" for d in participating):
+        return participating
+    return set()
+
+
 def prepare_joint_cohort(state, reads, dataset_ids=None):
     """Resolve policy only among datasets whose provenance groups are shared.
 

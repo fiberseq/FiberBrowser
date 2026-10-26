@@ -1239,7 +1239,7 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
       && (!clicked || (p.liftSplitGroup ?? null) === (clicked.liftSplitGroup ?? null)));
     if (mine.length === 0) return state;
     const keep = (clicked && mine.find(p => p.id === clicked.id)) || mine[0];
-    const drop = new Set(mine.slice(1).map(p => p.id));
+    const drop = new Set(mine.filter(p => p.id !== keep.id).map(p => p.id));
     const { stateKey, reset } = isolatePanelState(state, keep);
     return {
       ...reset,
