@@ -2,7 +2,7 @@
  * A host's read bands by member (DESIGN_GRAPH_PRIMARY §1.1, §3.2–3.3; graph primary G3): under each path's lane, one
  * sub-band per member panel bound to that path, in member order. Every sub-band reads its own member's state
  * (stateKey): exclusions, id filters, cluster focus, then its order — the member's sort if it has one, else its
- * clusters (grouped, unassigned last), else by first drawn base (or length). The same molecule shown by two members
+ * clusters (grouped, unassigned last), else by first carried column (or length). The same molecule shown by two members
  * (two copies of a dataset with different filters) is drawn in both, each under its own rules.
  *
  * Rows find their member's state through the row's identities: QNAME (selections, exclusions and "keep only" sets
@@ -11,6 +11,7 @@
  */
 import type { GraphRead } from './types';
 import type { PackedLane, PlacedMolecule } from './readGeometry';
+import { compareColumnKeys, type ColumnKey } from './columnOrder';
 import { idSetHas, orderIndex, qnameOfId, recordValueIndex } from '../../utils/recordKeys';
 import { branchScopesPanel, readIdSetForClusterRenderScope } from '../../utils/readScopes';
 import { NOT_CARRIER_CLUSTER_ID, UNASSIGNED_CLUSTER_ID } from '../../components/tracks/read-track/constants';
@@ -127,7 +128,8 @@ export function allocateRows(need: readonly number[], total: number, min = 3): n
  * per lane and member: fill height); `stripRows`: rows reserved at a sub-band's start for its density strip. */
 export function packMemberBands(molecules: readonly PlacedMolecule[], members: readonly BandMember[],
   states: Readonly<Record<string, MemberState>>, maxRows: number | ((lane: string, memberId: string) => number),
-  bandSort: 'position' | 'length' = 'position', gapPx = 3, stripRows?: (lane: string, memberId: string) => number): Map<string, HostLane> {
+  bandSort: 'position' | 'length' = 'position', gapPx = 3, stripRows?: (lane: string, memberId: string) => number,
+  columnOf?: (m: PlacedMolecule) => ColumnKey | null | undefined): Map<string, HostLane> {
   const byLane = new Map<string, PlacedMolecule[]>();
   for (const m of molecules) {
     if (!m.extent) continue;
@@ -152,7 +154,9 @@ export function packMemberBands(molecules: readonly PlacedMolecule[], members: r
       for (const m of list) raw.set(m, clustered ? clusterOf(m.read, st.assignments) : undefined);
       if (st.focus?.size) list = list.filter(m => { const c = raw.get(m); return c !== undefined && st.focus!.has(c); });
       const drawnCluster = (m: PlacedMolecule) => { const c = raw.get(m); return c === undefined ? UNASSIGNED_CLUSTER_ID : c; };
+      // By position: the first graph column each record carries, in canonical walk order (§3.2), when known.
       const tie = (a: PlacedMolecule, b: PlacedMolecule) => (bandSort === 'length' ? bodyBp(b) - bodyBp(a) : 0)
+        || (bandSort === 'position' && columnOf ? compareColumnKeys(columnOf(a), columnOf(b)) : 0)
         || a.extent![0] - b.extent![0] || a.read.k.localeCompare(b.read.k);
       const reads = list.length;
       // The member's sort order (a site or rule sort, by any of the row's identities): one row per read, in it.

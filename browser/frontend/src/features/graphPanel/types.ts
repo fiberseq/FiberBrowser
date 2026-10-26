@@ -156,7 +156,7 @@ export interface GraphViewState {
   handoff?: { pinnedLinear?: boolean; shown?: 'graph' | 'linear';
     /** Why it is drawn linear: the width rule (also a pin or a view with no graph) or the complexity rule (§7.2). */
     reason?: 'width' | 'complexity' };
-  /** Host: how each sub-band orders rows without a sort or clusters ('position': first drawn base, 'length'). */
+  /** Host: how each sub-band orders rows without a sort or clusters ('position': first carried graph column in canonical walk order, 'length'). */
   bandSort?: 'position' | 'length';
   /** Host: selection changes mirror to the host's other members showing the same record (D14, default on). */
   syncSelection?: boolean;

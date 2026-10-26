@@ -20,7 +20,10 @@ import { graphBindingFor } from './bindingsStore';
 import { useGraphSettings } from './handoff';
 import { registerGraphPanel } from './register';
 import { memberLabel, singleHapPathName } from './labels';
-import type { GraphBinding, GraphReadBinding, GraphRegistration } from './types';
+import type { GraphBinding, GraphOccurrence, GraphRead, GraphReadBinding, GraphRegistration, GraphTopology } from './types';
+import { canonicalWalk, firstCarriedColumn, firstCarriedColumns } from './columnOrder';
+import { packMemberBands, type BandMember } from './memberBands';
+import type { PlacedMolecule } from './readGeometry';
 import type { PanelConfig } from '../../types';
 
 registerGraphPanel();
@@ -132,5 +135,56 @@ describe('item 5: the per-host pop-out kind (lifted, source, both; D7)', () => {
     await new Promise(r => setTimeout(r, 0));
     expect(get('pat').collapsedByGraphGroup).toBeUndefined();
     expect(openLinkedSourceView).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('item 4: sort by position orders rows by their first carried graph column', () => {
+  const occ = (id: string, node: string, start: number, end: number, reverse = false, clip?: [number, number]): GraphOccurrence => ({
+    id, fragment: 'f', node, handle: `${node}${reverse ? '-' : '+'}`, reverse, path_span: { start, end },
+    clip: { start: clip?.[0] ?? 0, end: clip?.[1] ?? end - start } });
+  // Target: n1+, n2- (inverted against MAT), n3+. MAT: n1+, an insertion n9, n2+, n3+.
+  const TOPO = { target: 'tgt', interval: { start: 0, end: 30 }, nodes: [], edges: [], direct_matches: [], target_queries: [], summaries: [],
+    complete: true, correspondence_complete: true, timings: {},
+    paths: [
+      { binding: 'mat', windows: [], coverage: [], plan: null, complete: true,
+        occurrences: [occ('m3', 'n3', 25, 35), occ('m1', 'n1', 0, 10), occ('m9', 'n9', 10, 15), occ('m2', 'n2', 15, 25)] },
+      { binding: 'tgt', windows: [], coverage: [], plan: null, complete: true,
+        occurrences: [occ('t1', 'n1', 0, 10), occ('t2', 'n2', 10, 20, true), occ('t3', 'n3', 20, 30)] },
+    ] } as unknown as GraphTopology;
+  const rd = (q: string, cov: [number, number][]): GraphRead => ({ k: `d|0|${q}|r`, d: 'd', lib: 0, q, rec: 'r', b: 'mat', c: '', st: '+',
+    sup: false, s: cov[0][0], e: cov[cov.length - 1][1], cov: cov.map(([a, b]) => [a, b, 0, 1]), ins: [], hap: 'MAT' } as GraphRead);
+
+  it('ranks nodes along the target walk; an off-target node follows the last target node before it on its carrier', () => {
+    const walk = canonicalWalk(TOPO, ['tgt', 'mat']);
+    expect(walk.nodes.get('n1')!.rank).toEqual([0, 0, 0]);
+    expect(walk.nodes.get('n2')).toEqual({ rank: [1, 0, 0], reverse: true });
+    expect(walk.nodes.get('n9')!.rank).toEqual([0, 1, 1]);
+  });
+
+  it('the first carried column: insertion after n1, offsets along the canonical orientation, only inside the clip', () => {
+    const walk = canonicalWalk(TOPO);
+    expect(firstCarriedColumn(rd('ins', [[12, 30]]), walk)).toEqual([0, 1, 1, 2]);
+    // MAT walks n2 forward, the target reversed: the canonical first column of [17, 25) is node-forward 9 → offset 0.
+    expect(firstCarriedColumn(rd('late', [[17, 30]]), walk)).toEqual([1, 0, 0, 0]);
+    expect(firstCarriedColumn(rd('early', [[15, 20]]), walk)).toEqual([1, 0, 0, 5]);
+    // Outside every clip: nothing carried.
+    const clipped = { ...TOPO, paths: TOPO.paths.map(p => ({ ...p, occurrences: p.occurrences.map(o => ({ ...o, clip: { start: 0, end: 0 } })) })) };
+    expect(firstCarriedColumn(rd('x', [[0, 30]]), canonicalWalk(clipped as GraphTopology))).toBeNull();
+  });
+
+  it('a sub-band sorted by position follows the columns, not the pixels (mirrored, or a first visit not drawn)', () => {
+    const reads = [rd('a', [[17, 30]]), rd('b', [[15, 20]]), rd('c', [[12, 30]]), rd('d', [[2, 8]])];
+    // Pixels the other way round (a mirrored panel): d drawn rightmost, c leftmost. All overlap, so one row each.
+    const xs: Record<string, number> = { a: 20, b: 10, c: 0, d: 30 };
+    const mols: PlacedMolecule[] = reads.map(r => ({ read: r, lane: 'mat', visits: [], body: [], calls: [], m6a: [], density: [], ins: [],
+      holes: [], connectors: [], extent: [xs[r.q], 100], unplacedBp: 0 }));
+    const M: BandMember = { panelId: 'mat', stateKey: 'k-mat', datasetId: 'd', liftHap: 'MAT', binding: 'mat', label: 'MAT', color: '#111' };
+    const cols = firstCarriedColumns(reads, TOPO);
+    const order = (lanes: ReturnType<typeof packMemberBands>) => lanes.get('mat')!.rows.map(r => r[0].read.q);
+    expect(order(packMemberBands(mols, [M], {}, 10, 'position', 3, undefined, m => cols.get(m.read.k)))).toEqual(['d', 'c', 'a', 'b']);
+    // Without columns (the linear rule, unchanged): by first drawn x.
+    expect(order(packMemberBands(mols, [M], {}, 10, 'position'))).toEqual(['c', 'b', 'a', 'd']);
+    // Longest first ignores columns.
+    expect(order(packMemberBands(mols, [M], {}, 10, 'length', 3, undefined, m => cols.get(m.read.k)))).toEqual(['c', 'b', 'a', 'd']);
   });
 });

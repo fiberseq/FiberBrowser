@@ -39,6 +39,7 @@ import { conversionTargets, convertStandalone, foldIn, isHost, joinCandidates, j
 import { allocateRows, graphPins, packMemberBands, routeRead, STRIP_ROWS, type BandMember, type HostLane, type MemberState } from './memberBands';
 import { singleHapPathName } from './labels';
 import { popOutPaths } from './popOutKind';
+import { firstCarriedColumns } from './columnOrder';
 import { graphBindingFor } from './bindingsStore';
 import { bandSampled, drawDensityStrips, placeStrips, stripKey, type GraphBandReport, type PlacedBin } from './densityStrip';
 import { drawHostBandLabels, type ReadDecoration } from './readCanvas';
@@ -510,7 +511,10 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       const bandsBy = new Map<string, GraphBandReport>((readsShown.report.bands ?? []).map(b => [stripKey(b.dataset_id, b.binding), b]));
       const dsOf = new Map(bandMembers.map(m => [m.panelId, m.datasetId]));
       const sampled = (lane: string, member: string) => bandSampled(bandsBy.get(stripKey(dsOf.get(member) ?? '', lane)));
-      const first = packMemberBands(placed.molecules, bandMembers, memberStates, 1_000_000, bandSort);
+      // Sort by position: each record's first carried graph column in canonical walk order (§3.2), not its pixels.
+      const columns = bandSort === 'position' ? firstCarriedColumns(placed.molecules.map(m => m.read), response.result, reg?.bindings.map(b => b.key)) : null;
+      const columnOf = columns ? (m: PlacedMolecule) => columns.get(m.read.k) : undefined;
+      const first = packMemberBands(placed.molecules, bandMembers, memberStates, 1_000_000, bandSort, 3, undefined, columnOf);
       const groups = [...first].flatMap(([lane, l]) => l.groups.map(g => ({ lane, member: g.memberId, need: g.rowCount })));
       const key = (lane: string, member: string) => `${lane}\u0000${member}`;
       const rowsOf = new Map<string, number>(), stripOf = new Map<string, number>();
@@ -529,13 +533,13 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         rowsOf.set(key(g.lane, g.member), fillHeight ? Math.max(strip + 3, alloc[i]) : Math.min(g.need, rowsPerLane) + strip);
       });
       lanes = packMemberBands(placed.molecules, bandMembers, memberStates, (l, m) => rowsOf.get(key(l, m)) ?? rowsPerLane, bandSort, 3,
-        (l, m) => stripOf.get(key(l, m)) ?? 0);
+        (l, m) => stripOf.get(key(l, m)) ?? 0, columnOf);
       strips = placeStrips(readsShown, index);
     } else {
       lanes = packMolecules(placed.molecules, rowsPerLane);
     }
     return { placed, lanes, strips, ms: performance.now() - t0 };
-  }, [baseScene, response, readsShown, activeDatasetIds, rowsPerLane, hostMode, bandMembers, memberStates, bandSort, fillKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [baseScene, response, readsShown, activeDatasetIds, rowsPerLane, hostMode, bandMembers, memberStates, bandSort, fillKey, reg]); // eslint-disable-line react-hooks/exhaustive-deps
   // The rows each member shows here ("Reads shown" scopes, exports): the host and its folded members (a revealed
   // member's own read track publishes its rows).
   useEffect(() => {
@@ -1074,9 +1078,9 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         entries: joinable.map(c => ({ kind: 'item' as const, action: `join:${c.panel.id}`, icon: 'layers',
           label: `${c.panel.title || datasetLabels[c.panel.datasetId ?? ''] || c.panel.datasetId}${c.panel.liftHap ? ` · ${c.panel.liftHap}` : ''}` })) });
     }
-    entries.push({ kind: 'submenu', id: 'bands', icon: 'settings', label: `Rows without a sort or clusters: ${bandSort === 'length' ? 'longest first' : 'by first base'}`,
+    entries.push({ kind: 'submenu', id: 'bands', icon: 'settings', label: `Rows without a sort or clusters: ${bandSort === 'length' ? 'longest first' : 'by first carried column'}`,
       entries: [
-        { kind: 'item' as const, action: 'band:position', icon: 'settings', label: `${bandSort === 'position' ? '✓ ' : ''}By first base` },
+        { kind: 'item' as const, action: 'band:position', icon: 'settings', label: `${bandSort === 'position' ? '✓ ' : ''}By first carried column` },
         { kind: 'item' as const, action: 'band:length', icon: 'settings', label: `${bandSort === 'length' ? '✓ ' : ''}Longest first` },
       ] });
     entries.push({ kind: 'item', action: 'host:sync', icon: 'eye', label: `${state.syncSelection === false ? '' : '✓ '}Sync selection across the graph`,
