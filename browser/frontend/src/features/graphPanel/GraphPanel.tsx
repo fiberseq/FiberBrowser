@@ -35,9 +35,10 @@ import { bumpNavigation, navigateGraph, navigationToken, showSourceSpan, sourceP
 import { useGraphReadsStore } from './graphReadsStore';
 import { moleculeKey, useLiftHover } from '../liveLift/linking/hover';
 import { xForTarget } from './scene';
-import { conversionTargets, convertStandalone, foldIn, isHost, joinCandidates, joinGraph, membersOf, panelKeyOf, panelView, popOut, poppable, setPanelViewMode } from './hostMode';
+import { conversionTargets, convertStandalone, foldIn, isHost, joinCandidates, joinGraph, membersOf, panelKeyOf, panelView, poppable, setPanelViewMode } from './hostMode';
 import { allocateRows, graphPins, packMemberBands, routeRead, STRIP_ROWS, type BandMember, type HostLane, type MemberState } from './memberBands';
 import { singleHapPathName } from './labels';
+import { popOutPaths } from './popOutKind';
 import { graphBindingFor } from './bindingsStore';
 import { bandSampled, drawDensityStrips, placeStrips, stripKey, type GraphBandReport, type PlacedBin } from './densityStrip';
 import { drawHostBandLabels, type ReadDecoration } from './readCanvas';
@@ -1194,9 +1195,9 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       if (action.startsWith('band:')) { setGraphView(panelId, { ...state!, bandSort: action.slice(5) as 'position' | 'length' }); return; }
       if (action === 'ho:complexity') { useGraphSettings.getState().set({ complexity: !useGraphSettings.getState().complexity }); return; }
       if (action.startsWith('ho:')) { const [, o, i] = action.split(':'); useGraphSettings.getState().set({ outBp: Number(o), inBp: Number(i) }); return; }
-      if (action === 'pop:all') { const { folded, missing } = poppable(panels, panel); popOut(panelId, folded.map(p => p.id), missing); return; }
-      if (action.startsWith('popnew:')) { const m = poppable(panels, panel).missing.filter(x => x.binding === action.slice(7)); popOut(panelId, [], m); return; }
-      if (action.startsWith('pop:')) { popOut(panelId, [action.slice(4)]); return; }
+      if (action === 'pop:all') { const { folded, missing } = poppable(panels, panel); popOutPaths(panelId, folded.map(p => p.id), missing); return; }
+      if (action.startsWith('popnew:')) { const m = poppable(panels, panel).missing.filter(x => x.binding === action.slice(7)); popOutPaths(panelId, [], m); return; }
+      if (action.startsWith('pop:')) { popOutPaths(panelId, [action.slice(4)]); return; }
       if (action === 'fold:all') { foldIn(panelId, members.filter(m => m.panel.id !== panelId).map(m => m.panel.id)); return; }
       if (action.startsWith('fold:')) { foldIn(panelId, [action.slice(5)]); return; }
       if (action.startsWith('join:')) { joinGraph(panelId, [action.slice(5)]); return; }

@@ -4,10 +4,19 @@
  * pop-out kind, and the single-haplotype label.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('../liveLift/linking/liftLink', async importOriginal => ({
+  ...(await importOriginal<typeof import('../liveLift/linking/liftLink')>()),
+  openLinkedSourceView: vi.fn(async () => null),
+}));
 import { useBrowserStore } from '../../stores/browserStore';
 import { useGraphStatusStore } from './statusStore';
 import { useGraphBindingsStore } from './bindingsStore';
-import { setPanelViewMode } from './hostMode';
+import { enterGraph, poppable, setPanelViewMode } from './hostMode';
+import { popOutKindOf, popOutPaths, popOutPlan, setPopOutKind } from './popOutKind';
+import { openLinkedSourceView } from '../liveLift/linking/liftLink';
+import { migratePanelAliases } from '../../plugins/registry';
+import { graphBindingFor } from './bindingsStore';
 import { useGraphSettings } from './handoff';
 import { registerGraphPanel } from './register';
 import { memberLabel, singleHapPathName } from './labels';
@@ -75,5 +84,53 @@ describe('item 7: a single-haplotype member is labelled by its PanSN path name',
     expect(setPanelViewMode('only', 'graph')).toBeNull();
     expect(get('only').graphView?.role).toBe('host');
     expect(memberLabel(get('only'), 'strain dataset', get('only').graphView!.targetBinding)).toBe('STRAIN#1');
+  });
+});
+
+describe('item 5: the per-host pop-out kind (lifted, source, both; D7)', () => {
+  it('absent is lifted (an older session restores as before); the setting is saved with the host and undoable', () => {
+    seed(split());
+    setPanelViewMode('mat', 'graph');
+    expect(get('mat').graphView!.popOutKind).toBeUndefined();
+    expect(popOutKindOf(get('mat'))).toBe('lifted');
+    expect(popOutKindOf({ ...get('mat'), graphView: { ...get('mat').graphView!, popOutKind: 'bogus' as never } })).toBe('lifted');
+    useBrowserStore.getState().pushSnapshot?.('start', { kind: 'layout' });
+    setPopOutKind('mat', 'both');
+    expect(get('mat').graphView!.popOutKind).toBe('both');
+    // Restored with the session (migration leaves a schema 2 host as it is).
+    expect((migratePanelAliases([get('mat')] as never)[0] as unknown as PanelConfig).graphView!.popOutKind).toBe('both');
+    // Kept when the host views its graph again (hostGraphView).
+    const again = enterGraph(useBrowserStore.getState().panels, 'mat', graphBindingFor('d')!, { chrom: 'chr3', start: 128_650_000, end: 128_660_000, reference: 'GRCh38' })!;
+    expect(again.find(p => p.id === 'mat')!.graphView!.popOutKind).toBe('both');
+    useBrowserStore.getState().undo();
+    expect(popOutKindOf(get('mat'))).toBe('lifted');
+  });
+
+  it('plans: lifted reveals; source opens the linked source view (host for its own dataset); both does both; native always reveals', () => {
+    seed([...split(), panel('nat', { datasetId: 'n' })]);
+    setPanelViewMode('mat', 'graph');
+    const s = useBrowserStore.getState();
+    const host = get('mat');
+    expect(popOutPlan(s.panels, s.datasets, host, ['pat', 'nat'], [], 'lifted')).toEqual({ reveal: ['pat', 'nat'], make: [], sources: [] });
+    expect(popOutPlan(s.panels, s.datasets, host, ['pat', 'nat'], [], 'source'))
+      .toEqual({ reveal: ['nat'], make: [], sources: [{ liftPanelId: 'mat', hap: 'PAT' }] });
+    expect(popOutPlan(s.panels, s.datasets, host, ['pat'], [{ binding: 'x', hap: 'X' }], 'both'))
+      .toEqual({ reveal: ['pat'], make: [{ binding: 'x', hap: 'X' }], sources: [{ liftPanelId: 'mat', hap: 'PAT' }, { liftPanelId: 'mat', hap: 'X' }] });
+  });
+
+  it('source: popping out a path opens its source view and leaves the member folded', async () => {
+    seed(split());
+    setPanelViewMode('mat', 'graph');
+    setPopOutKind('mat', 'source');
+    vi.mocked(openLinkedSourceView).mockClear();
+    popOutPaths('mat', ['pat']);
+    await new Promise(r => setTimeout(r, 0));
+    expect(openLinkedSourceView).toHaveBeenCalledWith('mat', 'PAT');
+    expect(get('pat').collapsedByGraphGroup).toBe('mat');
+    setPopOutKind('mat', 'both');
+    popOutPaths('mat', poppable(useBrowserStore.getState().panels, get('mat')).folded.map(p => p.id));
+    await new Promise(r => setTimeout(r, 0));
+    expect(get('pat').collapsedByGraphGroup).toBeUndefined();
+    expect(openLinkedSourceView).toHaveBeenCalledTimes(2);
   });
 });

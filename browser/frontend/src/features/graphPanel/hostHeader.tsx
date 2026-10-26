@@ -15,7 +15,8 @@ import { useBrowserStore } from '../../stores/browserStore';
 import { graphBindingFor, useGraphBindingsStore, watchGraphBindings } from './bindingsStore';
 import { formatBp } from './coordinates';
 import { HANDOFF_OUT_BP, setPinnedLinear, useGraphSettings } from './handoff';
-import { foldIn, graphUnavailable, hostOf, isHost, joinCandidates, joinGraph, membersOf, popOut, poppable, removeFromGraph, setPanelViewMode, viewSelectionAsGraph } from './hostMode';
+import { foldIn, graphUnavailable, hostOf, isHost, joinCandidates, joinGraph, membersOf, poppable, removeFromGraph, setPanelViewMode, viewSelectionAsGraph } from './hostMode';
+import { POP_OUT_KINDS, popOutKindOf, popOutPaths, setPopOutKind, type PopOutKind } from './popOutKind';
 import { useGraphStatusStore } from './statusStore';
 import { memberLabel, singleHapPathName } from './labels';
 import type { DatasetBodyProps } from '../../components/tracks/datasetBodyExtensions';
@@ -37,6 +38,13 @@ export function hostShowsGraph(panel: PanelConfig): boolean {
   return isHost(panel) && panel.graphView?.handoff?.shown !== 'linear';
 }
 
+
+const POP_OUT_KIND_LABELS: Record<PopOutKind, string> = { lifted: 'lifted panel', source: 'source view', both: 'lifted and source' };
+const POP_OUT_KIND_TITLES: Record<PopOutKind, string> = {
+  lifted: 'A popped-out path is its lifted panel, on this genome',
+  source: 'A popped-out path opens its source BAM on that haplotype\'s own assembly, linked through the map',
+  both: 'A popped-out path shows its lifted panel and its linked source view',
+};
 
 export function useGraphModeHeader(ctx: PanelHeaderContext) {
   const { panel, dataset } = ctx;
@@ -76,6 +84,7 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
     const { folded, missing } = poppable(panels, panel);
     const revealed = members.filter(m => m.panel.id !== panel.id && !m.panel.collapsedByGraphGroup);
     const joinable = joinCandidates(useBrowserStore.getState().panels, panel);
+    const popOutKind = popOutKindOf(panel);
     // One haplotype (G8): the host is labelled by its path's PanSN name, as split members are by MAT / PAT.
     const pathName = singleHapPathName(graphBindingFor(panel.datasetId), panel.liftHap, panel.graphView?.targetBinding ?? null);
     const chipText = `${shown === 'graph' ? 'Graph' : 'Graph · linear'}${pathName ? ` · ${pathName}` : ''}`;
@@ -92,16 +101,22 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
           onSelect={() => setPanelViewMode(panel.id, 'linear')}><span data-testid="graph-view-as-linear">View as linear</span></MenuItem>
         {folded.map(p => (
           <MenuItem key={p.id} tour="panel-graph-popout" icon={<span>⇱</span>} title="Shown as its own panel, with its own tools and state"
-            onSelect={() => popOut(panel.id, [p.id])}><span data-testid="graph-pop-out" data-member={p.id}>Pop out {memberLabel(p, datasetLabels(p), panel.graphView?.targetBinding ?? null)}</span></MenuItem>
+            onSelect={() => popOutPaths(panel.id, [p.id])}><span data-testid="graph-pop-out" data-member={p.id}>Pop out {memberLabel(p, datasetLabels(p), panel.graphView?.targetBinding ?? null)}</span></MenuItem>
         ))}
         {missing.map(m => (
           <MenuItem key={m.binding} tour="panel-graph-popout" icon={<span>⇱</span>} title="A new panel of this dataset for that haplotype, starting with this panel's state"
-            onSelect={() => popOut(panel.id, [], [m])}><span data-testid="graph-pop-out-new" data-binding={m.binding}>Pop out {m.hap} (a new panel)</span></MenuItem>
+            onSelect={() => popOutPaths(panel.id, [], [m])}><span data-testid="graph-pop-out-new" data-binding={m.binding}>Pop out {m.hap} (a new panel)</span></MenuItem>
         ))}
         {folded.length + missing.length > 1 && (
           <MenuItem tour="panel-graph-popout-all" icon={<span>⇱</span>} title="Every folded member and haplotype in view, as panels"
-            onSelect={() => popOut(panel.id, folded.map(p => p.id), missing)}><span data-testid="graph-pop-out-all">Pop out all haplotypes in view</span></MenuItem>
+            onSelect={() => popOutPaths(panel.id, folded.map(p => p.id), missing)}><span data-testid="graph-pop-out-all">Pop out all haplotypes in view</span></MenuItem>
         )}
+        {POP_OUT_KINDS.map(k => (
+          <MenuItem key={`kind-${k}`} tour="panel-graph-popout-kind" icon={<span>{popOutKind === k ? '●' : '○'}</span>}
+            title={POP_OUT_KIND_TITLES[k]} onSelect={() => setPopOutKind(panel.id, k)}>
+            <span data-testid="graph-pop-out-kind" data-kind={k} data-checked={popOutKind === k ? 'true' : 'false'}>Pop out as: {POP_OUT_KIND_LABELS[k]}</span>
+          </MenuItem>
+        ))}
         {revealed.length > 0 && (
           <MenuItem tour="panel-graph-fold-all" icon={<span>⇲</span>} title="Hide the popped-out members again (their state stays)"
             onSelect={() => foldIn(panel.id, revealed.map(m => m.panel.id))}><span data-testid="graph-fold-all">Fold all pop-outs</span></MenuItem>

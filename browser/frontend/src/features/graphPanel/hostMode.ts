@@ -119,10 +119,12 @@ export function hostGraphView(reg: GraphRegistration, bound: DatasetGraphBinding
     handoff: { pinnedLinear: previous?.handoff?.pinnedLinear ?? false, shown: 'graph' },
     bandSort: previous?.bandSort ?? 'position',
     syncSelection: previous?.syncSelection ?? true,
+    // A preference of the host: kept across a retarget (another registration or target too).
+    ...(previous?.popOutKind ? { popOutKind: previous.popOutKind } : {}),
   };
 }
 
-function undoable(label: string, apply: () => void): void {
+export function undoable(label: string, apply: () => void): void {
   seedHistoryBaseline(useBrowserStore.getState(), `Before ${label.charAt(0).toLowerCase()}${label.slice(1)}`, 'layout');
   apply();
   useBrowserStore.getState().pushSnapshot?.(label, { kind: 'layout' });

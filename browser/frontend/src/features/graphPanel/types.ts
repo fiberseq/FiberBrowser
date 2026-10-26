@@ -160,6 +160,9 @@ export interface GraphViewState {
   bandSort?: 'position' | 'length';
   /** Host: selection changes mirror to the host's other members showing the same record (D14, default on). */
   syncSelection?: boolean;
+  /** Host: what a pop-out shows (§4.2, §5.1, D7): the member panel ('lifted', also when absent), the P3 linked
+   * source panel on the haplotype's assembly ('source'), or both. */
+  popOutKind?: 'lifted' | 'source' | 'both';
   registrationId: string | null;
   packageRevision: string | null;
   graphRevision: string | null;
