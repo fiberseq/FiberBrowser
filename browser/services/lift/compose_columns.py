@@ -123,9 +123,18 @@ class _Runs:
         self.off = np.zeros(len(runs_list) + 1, dtype=np.int64)
         np.cumsum(n, out=self.off[1:])
         total = int(self.off[-1])
-        self.ref = _ints(chain.from_iterable(r.ref for r in runs_list), total)
-        self.seq = _ints(chain.from_iterable(r.seq for r in runs_list), total)
-        self.len = _ints(chain.from_iterable(r.len for r in runs_list), total)
+        # Each read's runs are read once per load: its hidden insertion blocks
+        # use the same runs again (``_cols``, kept on the runs object).
+        cols = [getattr(r, "_cols", None) for r in runs_list]
+        if all(c is not None for c in cols):
+            self.ref, self.seq, self.len = ((np.concatenate([c[j] for c in cols]) if cols
+                                             else np.zeros(0, dtype=np.int64)) for j in range(3))
+        else:
+            self.ref = read_only(_ints(chain.from_iterable(r.ref for r in runs_list), total))
+            self.seq = read_only(_ints(chain.from_iterable(r.seq for r in runs_list), total))
+            self.len = read_only(_ints(chain.from_iterable(r.len for r in runs_list), total))
+            for r, a, b in zip(runs_list, self.off[:-1].tolist(), self.off[1:].tolist()):
+                r._cols = (self.ref[a:b], self.seq[a:b], self.len[a:b])
         self.reverse = np.fromiter((bool(r.reverse) for r in runs_list), dtype=bool, count=len(runs_list))
         self.length = _ints((r.length for r in runs_list), len(runs_list))
         self.read = np.repeat(np.arange(len(runs_list), dtype=np.int64), n)
@@ -137,10 +146,41 @@ class _Runs:
                 bad[1:] |= same & (self.ref[:-1] + self.len[:-1] > self.ref[1:])
             ok[self.read[bad]] = False
         self.ok = ok
+        self._seqkey = self._seq_ok = None
         self.key = self.read * _SHIFT + self.ref
         # Run ends ascend within a read whose runs are ``ok``; the running
         # maximum keeps the array sorted across the others (never searched).
         self.end_key = np.maximum.accumulate(self.read * _SHIFT + self.ref + self.len) if total else self.key
+
+    def has_aligned(self, d, m0, m1):
+        """``_SeqRuns.has_aligned(m0, m1)`` for reads ``d`` (arrays):
+        ``(result, exact)``; ``exact`` false where the batched search can't
+        reproduce it (a read whose SEQ starts are not ascending within
+        ``[0, 2**40)``)."""
+        if self._seqkey is None:
+            total = len(self.seq)
+            ok = np.ones(len(self.n), dtype=bool)
+            if total:
+                bad = (self.seq < 0) | (self.seq >= _SHIFT)
+                if total > 1:
+                    bad[1:] |= (self.read[1:] == self.read[:-1]) & (self.seq[1:] < self.seq[:-1])
+                ok[self.read[bad]] = False
+            # Reads that can't be searched get a constant key: the array stays sorted.
+            self._seqkey = self.read * _SHIFT + np.where(ok[self.read], self.seq, 0) if total else self.seq
+            self._seq_ok = ok
+        n = self.n[d]
+        reverse = self.reverse[d]
+        length = self.length[d]
+        a = np.where(reverse, length - m1, m0)
+        b = np.where(reverse, length - m0, m1)
+        exact = self._seq_ok[d].copy()
+        if not len(self.seq):
+            return np.zeros(len(d), dtype=bool), exact
+        x = np.clip(b - 1, -1, _SHIFT - 1)
+        off = self.off[d]
+        i = np.searchsorted(self._seqkey, d * _SHIFT + x, side="right") - 1 - off
+        ii = np.clip(off + np.clip(i, 0, np.maximum(n - 1, 0)), 0, len(self.seq) - 1)
+        return (n > 0) & (i >= 0) & (self.seq[ii] + self.len[ii] > a), exact
 
     def mol_at(self, d, x):
         """``_SeqRuns.mol_at`` for reads ``d`` at reference positions ``x`` (arrays)."""
@@ -231,11 +271,25 @@ class _Unit:
     ``start`` is its offset in the window's unit tables; ``ids``/``has``/``first``
     per interval (output call id, whether it has a call, the source start of
     its call's first interval as ``_call_starts`` finds it)."""
-    __slots__ = ("name", "ivs", "calls", "ok", "ids", "has", "first", "start")
+    __slots__ = ("name", "ivs", "calls", "ok", "ids", "has", "first", "start", "arr")
 
     def __init__(self, name, ivs, calls):
         self.name, self.ivs, self.calls = name, ivs or [], calls
         self.ok, self.ids, self.has, self.first, self.start = True, None, None, None, 0
+        self.arr = None  # the intervals as an (n, 3) int64 array, once read
+
+
+def _cached(ctx, name, read, make):
+    """``make(read)``, kept on ``ctx`` for the rest of the load: the hidden
+    insertion blocks are composed from the same reads again, and need not
+    read their lists, nor work out their call identity, a second time."""
+    cache = ctx.__dict__.setdefault(name, {})
+    hit = cache.get(id(read))
+    if hit is not None and hit[0] is read:
+        return hit[1], False
+    value = make(read)
+    cache[id(read)] = (read, value)
+    return value, True
 
 
 def _read_units(read):
@@ -329,21 +383,34 @@ def _expand(ei, r, a, b, k0, n, soff, F, RS0, WID, E_seg, E_i):
 def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts, small):
     """``groups`` of every disjoint row: ``_map_group`` + ``_call_identity``."""
     RS0, WID = F.row_rs0, F.row_width
-    units_by_read = [_read_units(it[0]) for it in items]
+    units_by_read, fresh = [], []
+    for it in items:
+        units, new = _cached(ctx, "_column_units", it[0], _read_units)
+        units_by_read.append(units)
+        if new:
+            fresh += units
     flat = [u for units in units_by_read for u in units]
-    every = list(chain.from_iterable(u.ivs for u in flat))
+    every = list(chain.from_iterable(u.ivs for u in fresh))
     if every and not (set(map(len, every)) == {3} and _all_ints(chain.from_iterable(every))):
-        for u in flat:
+        for u in fresh:
             u.ok = not u.ivs or (set(map(len, u.ivs)) == {3} and _all_ints(chain.from_iterable(u.ivs)))
     live = [u for u in flat if u.ok and u.ivs]
     total = 0
     for u in live:
         u.start = total
         total += len(u.ivs)
+    unread = [u for u in live if u.arr is None]
     try:
-        vals = _ints(chain.from_iterable(chain.from_iterable(u.ivs for u in live)), 3 * total).reshape(-1, 3)
+        values = read_only(_ints(chain.from_iterable(chain.from_iterable(u.ivs for u in unread)),
+                                 3 * sum(len(u.ivs) for u in unread)).reshape(-1, 3))
     except OverflowError:  # beyond int64: the per-row path
         return
+    at = 0
+    for u in unread:
+        u.arr = values[at:at + len(u.ivs)]
+        at += len(u.ivs)
+    vals = (values if len(unread) == len(live) else
+            np.concatenate([u.arr for u in live]) if live else np.zeros((0, 3), dtype=np.int64))
     UA, UB, USZ = vals[:, 0], vals[:, 1], vals[:, 2]
     if not (_small(UA) and _small(UB)):
         return
@@ -363,7 +430,8 @@ def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts, small):
         if not u.calls:
             UIDS += [None] * n
             continue
-        _unit_identity(u)
+        if u.ids is None:
+            _unit_identity(u)
         UIDS += u.ids
         if u.has is None:
             UHAS[u.start:u.start + n] = True
@@ -400,11 +468,15 @@ def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts, small):
     if len(A) and max(int(A.max()), int(B.max())) >= _SHIFT:
         return  # composite keys need positions below 2**40: the per-row path
     todo = USZ[E_u] >= 0
-    # Width-1 intervals of a group with calls may be insertion-only markers:
-    # one by one, exactly as _map_group does (rest_parts).
+    # Width-1 intervals of a group with calls may be insertion-only markers
+    # (a call with no aligned base: rest_parts makes a zero-width marker).
+    # Whether a call has an aligned base is looked up for all of them at once;
+    # the markers, and calls of any unusual form, go one by one exactly as
+    # _map_group does (rest_parts); the others are ordinary intervals.
     slow = todo & (B - A == 1) & seg_calls[E_seg]
+    marker, by_hand, mol0 = _insertion_only(np.flatnonzero(slow), E_seg, E_i, E_d, segs, R)
     extra = []
-    for e in np.flatnonzero(slow).tolist():
+    for e in np.flatnonzero(marker | by_hand).tolist():
         s = int(E_seg[e])
         r, row, u = segs[s]
         d = row_read[r]
@@ -412,7 +484,7 @@ def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts, small):
             extra.append((s, *part))
     # Every other interval: one part per fragment it overlaps (row.parts;
     # nearly always the one fragment holding it whole).
-    ei = np.flatnonzero(todo & ~slow)
+    ei = np.flatnonzero(todo & ~(marker | by_hand))
     r, a, b = E_r[ei], A[ei], B[ei]
     k = F.find(r, a)
     soff = F.soff[r]
@@ -465,12 +537,19 @@ def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts, small):
     has = UHAS[P_u]
     for j in np.flatnonzero(~has).tolist():
         keys[j] = None
-    for j in np.flatnonzero(has & (UB[P_u] - UA[P_u] == 1)).tolist():
-        u = segs[int(P_seg[j])][2]
-        call = u.calls[int(P_i[j])]
-        if not items[int(P_d[j])][2].has_aligned(int(call[1]), int(call[2])):
-            keys[j] = [int(call[1]), int(call[1])]  # insertion-only: its own molecular start
-    ids = [UIDS[j] for j in P_u.tolist()]
+    # Width-1 parts with a call (all among the candidates above): a marker's
+    # key is its own molecular start; unusual calls are checked one by one.
+    w1 = np.flatnonzero(has & (UB[P_u] - UA[P_u] == 1))
+    if len(w1):
+        e_of = seg_off[P_seg[w1]] + P_i[w1]
+        for j, e in zip(w1[marker[e_of]].tolist(), e_of[marker[e_of]].tolist()):
+            keys[j] = [mol0[e], mol0[e]]  # insertion-only: its own molecular start
+        for j in w1[by_hand[e_of]].tolist():
+            u = segs[int(P_seg[j])][2]
+            call = u.calls[int(P_i[j])]
+            if not items[int(P_d[j])][2].has_aligned(int(call[1]), int(call[2])):
+                keys[j] = [int(call[1]), int(call[1])]
+    ids = list(map(UIDS.__getitem__, P_u.tolist()))
     # Mapped intervals stay one window array; each group gets a read-only
     # slice of it (``read_columns.IntColumn``, read row format 2), never Python lists.
     mapped = read_only(np.stack([P_c0, P_c1, USZ[P_u]], axis=1))
@@ -500,6 +579,43 @@ def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts, small):
                                   list(map((group[2] + extra).__getitem__, order)),
                                   list(map((group[3] + extra).__getitem__, order)),
                                   list(map(quals.__getitem__, ranks)) if quals else None)
+
+
+def _insertion_only(cand, E_seg, E_i, E_d, segs, R):
+    """For the width-1 intervals ``cand`` (element indices) of groups with
+    calls: ``(marker, by_hand, mol0)`` over all elements. ``marker``: a plain
+    ``[id, m0, m1]`` call with no aligned base in ``[m0, m1)``
+    (``_SeqRuns.has_aligned`` false), ``mol0[e]`` its ``m0``; ``by_hand``: a
+    call of another form, or one the batched lookup can't answer exactly.
+    Candidates without a call (None) are neither: ordinary intervals."""
+    n = len(E_seg)
+    marker = np.zeros(n, dtype=bool)
+    by_hand = np.zeros(n, dtype=bool)
+    mol0 = {}
+    if not len(cand):
+        return marker, by_hand, mol0
+    plain, m0s, m1s = [], [], []
+    for e, s, i in zip(cand.tolist(), E_seg[cand].tolist(), E_i[cand].tolist()):
+        calls = segs[s][2].calls
+        call = calls[i] if i < len(calls) else None
+        if call is None:
+            continue
+        if (type(call) is list and len(call) >= 3 and type(call[1]) is int and type(call[2]) is int
+                and -_SHIFT < call[1] < _SHIFT and -_SHIFT < call[2] < _SHIFT):
+            plain.append(e)
+            m0s.append(call[1])
+            m1s.append(call[2])
+        else:
+            by_hand[e] = True
+    if plain:
+        e = np.asarray(plain, dtype=np.int64)
+        m0 = np.asarray(m0s, dtype=np.int64)
+        aligned, exact = R.has_aligned(E_d[e], m0, np.asarray(m1s, dtype=np.int64))
+        by_hand[e[~exact]] = True
+        hit = exact & ~aligned
+        marker[e[hit]] = True
+        mol0.update(zip(e[hit].tolist(), m0[hit].tolist()))
+    return marker, by_hand, mol0
 
 
 def _top_level(items, rows, row_read, segs, F, USZ, seg_ustart, P_seg, P_c0, P_c1, P_i, fg, bounds, ctx, mapped):
@@ -619,7 +735,11 @@ def _top_level(items, rows, row_read, segs, F, USZ, seg_ustart, P_seg, P_c0, P_c
     nq = np.fromiter((len(items[row_read[r]][0].get("qualities") or ()) for r, _row, _u in segs),
                      dtype=np.int64, count=nseg)
     qual_ok = is_part & positive[ustart + pi] & (rk < nq[e_seg])
-    rk_l = np.where(qual_ok, rk, -1).tolist()
+    # Each row's ranks: the qualifying entries of its slice, in order.
+    qual_ok &= rk >= 0
+    rk_l = rk[qual_ok].tolist()
+    qb = np.cumsum(qual_ok)
+    qb = np.concatenate([[0], qb]).tolist()
     # The displayed intervals of every eligible row, in order, in one array.
     shown = np.empty((len(e_j), 3), dtype=np.int64)
     at = np.flatnonzero(is_part)
@@ -630,7 +750,7 @@ def _top_level(items, rows, row_read, segs, F, USZ, seg_ustart, P_seg, P_c0, P_c
     for j in np.flatnonzero(ok).tolist():
         row = segs[j][1]
         a, b = eb[j], eb[j + 1]
-        row._pre.intervals = (wrap(shown[a:b]), order_all[a:b], [x for x in rk_l[a:b] if x >= 0])
+        row._pre.intervals = (wrap(shown[a:b]), order_all[a:b], rk_l[qb[a]:qb[b]])
 
 
 # ── Point marks ─────────────────────────────────────────────────────────────
@@ -640,11 +760,15 @@ def _map_point_fields(items, rows, row_read, F, base, ctx, fields, small):
     Lists longer than ``small`` go through NumPy there too (int64 conversion);
     shorter ones are mapped in Python, so they must hold Python ints."""
     RS0, WID = F.row_rs0, F.row_width
-    targets, segs, flat = [], [], []
+    # Each list is read into an array once per load (_cached): a read's rows,
+    # and its hidden insertion blocks, share it. ``store[key]``: the array, or
+    # False for a short list that is not all ints (the per-row path).
+    targets, segs, arrays, unread = [], [], [], []
     for r, row in enumerate(rows):
         if not F.disjoint[r]:
             continue
         read = items[row_read[r]][0]
+        store = _cached(ctx, "_column_points", read, _new_store)[0]
         for key in fields:
             if key not in read:
                 continue
@@ -654,21 +778,36 @@ def _map_point_fields(items, rows, row_read, F, base, ctx, fields, small):
             if not values:
                 row._pre.points[key] = ([], 0)
                 continue
-            if len(values) <= small and not _all_ints(values):
+            if key not in store:
+                if len(values) <= small and not _all_ints(values):
+                    store[key] = False
+                    continue
+                store[key] = None
+                unread.append((store, key, values))
+            elif store[key] is False:
                 continue
             targets.append((row, key))
             segs.append((r, len(values)))
-            flat.append(values)
+            arrays.append((store, key))
+    if unread:
+        try:
+            got = read_only(_ints(chain.from_iterable(v for _s, _k, v in unread),
+                                  sum(len(v) for _s, _k, v in unread)))
+        except OverflowError:  # beyond int64: the per-row path
+            for store, key, _v in unread:
+                del store[key]
+            return
+        at = 0
+        for store, key, values in unread:
+            store[key] = got[at:at + len(values)]
+            at += len(values)
     if not segs or F.max_width >= (1 << 31):
         return
     nseg = len(segs)
     seg_row = _ints((s[0] for s in segs), nseg)
     seg_len = _ints((s[1] for s in segs), nseg)
     E_seg = np.repeat(np.arange(nseg, dtype=np.int64), seg_len)
-    try:
-        x = _ints(chain.from_iterable(flat), len(E_seg))
-    except OverflowError:  # beyond int64: the per-row path
-        return
+    x = np.concatenate([store[key] for store, key in arrays])
     if not _small(x):
         return
     x += base[_ints((row_read[s[0]] for s in segs), nseg)][E_seg]
@@ -708,6 +847,10 @@ def _map_point_fields(items, rows, row_read, F, base, ctx, fields, small):
     bounds = np.searchsorted(packed, np.arange(nseg + 1, dtype=np.int64) << 32).tolist()
     for s, (row, key) in enumerate(targets):
         row._pre.points[key] = (wrap(marks[bounds[s]:bounds[s + 1]]), dropped[s])
+
+
+def _new_store(_read):
+    return {}
 
 
 # ── Molecular spans ─────────────────────────────────────────────────────────
