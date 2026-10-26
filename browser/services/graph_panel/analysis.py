@@ -272,13 +272,28 @@ def parse(state, reg, body: dict) -> dict:
                         "carrier_min_samples": min_samples}}
 
 
-def needed_tiles(spec: dict) -> tuple[list[Optional[str]], list[int]]:
+def _junction_span(r: dict, size: Optional[int]) -> Optional[tuple[int, int]]:
+    """Where ``_absent_path_labels`` looks for a deletion's flanks around region ``r`` (None: no room)."""
+    pad = max(0, min(JUNCTION_PAD_BP, (gc.MAX_FEATURE_BP - (r["end"] - r["start"])) // 2))
+    if pad <= 0:
+        return None
+    return max(0, r["start"] - pad), (min(int(size), r["end"] + pad) if size else r["end"] + pad)
+
+
+def needed_tiles(spec: dict, junctions: bool = False) -> tuple[list[Optional[str]], list[int]]:
     """Tiles of every path compared with the target when the run has a graph observation (canonical insertion
-    frames read every package path, §2.3), else of the target alone."""
+    frames read every package path, §2.3), else of the target alone. ``junctions``: also the cells around each
+    region where a proven deletion's flanks are looked for (a deletion across a cell boundary; the geometry itself
+    reads only the regions' own cells)."""
     graph = {o["binding"] for o in spec["observations"] if o["kind"] == "graph"}
     sources = sorted(graph | set(spec.get("compared") or ())) if graph else []
-    cells = sorted({c for r in spec["regions"] for c in gc.cells_for(r["start"], r["end"])})
-    return (sources or [None]), cells
+    cells = {c for r in spec["regions"] for c in gc.cells_for(r["start"], r["end"])}
+    if junctions and graph:
+        for r in spec["regions"]:
+            span = _junction_span(r, spec.get("target_size"))
+            if span:
+                cells.update(gc.cells_for(*span))
+    return (sources or [None]), sorted(cells)
 
 
 # ── Geometry ────────────────────────────────────────────────────────────────
@@ -618,11 +633,10 @@ def _absent_path_labels(state, spec, tiles, regions, oid: str, cache: dict, labe
     # (agy review of the group B fix, follow-ups).
     for i in lacking:
         r = spec["regions"][i]
-        width = r["end"] - r["start"]
-        pad = max(0, min(JUNCTION_PAD_BP, (gc.MAX_FEATURE_BP - width) // 2))
-        if pad <= 0:
+        span = _junction_span(r, spec.get("target_size"))
+        if span is None:
             return {}
-        a, b = max(0, r["start"] - pad), r["end"] + pad
+        a, b = span
         cells = sorted(set(gc.cells_for(a, b)))
         results = [res for per in tiles.values() for c, res in per.items() if c in cells]
         per = tiles.get(ob["binding"]) or {}
@@ -834,7 +848,7 @@ def assign(state, reg, body: dict, tiles: dict, spec: Optional[dict] = None) -> 
 async def handle(state, reg, body: dict, *, mode: str = "fit") -> dict:
     """The route's work: tiles on the event loop (the helper pool), the fit or assignment in a worker thread."""
     spec = parse(state, reg, body)
-    sources, cells = needed_tiles(spec)
+    sources, cells = needed_tiles(spec, junctions=True)
     started = time.perf_counter()
     tiles = await fetch_tiles(reg, spec["target"], sources, cells)
     tiles_ms = round((time.perf_counter() - started) * 1000, 1)

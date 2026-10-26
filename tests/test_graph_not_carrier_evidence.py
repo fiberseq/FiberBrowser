@@ -282,3 +282,83 @@ def test_a_replacement_bubble_beside_a_deletion_is_not_a_carrier_on_the_real_hel
     assert alone.get("not_carrier") and set(alone["assignments"].values()) == {analysis.NOT_CARRIER}   # the control
     assert not both.get("not_carrier") and both["assignments"] == {}
     assert again["assignments"] == {}
+
+
+def test_a_deletion_across_a_tile_cell_boundary_keeps_its_not_a_carrier(monkeypatch):
+    """agy round 2: a plain 300 bp deletion [9,900, 10,200) crosses the 10 kb cell boundary. A region inside it that
+    meets only cell 1 still gets -2 on the lacking path, in the fit and on assignment: the run fetches the cells
+    around each region where the deletion's flanks are looked for, and the whole-stretch proof reads them."""
+    import asyncio
+    from services.graph_panel import reads as greads, service
+    from services.lift.cohort import _encode_identity
+    analysis.clear_caches()
+    nodes = {"nL": 9_900, "nDel": 300, "nR": 9_800}
+
+    def cell_tile(source, cell):
+        lo, hi = max(0, cell * 10_000 - 2_000), min(20_000, (cell + 1) * 10_000 + 2_000)
+
+        def clip(oid, node, t0, t1, s0):
+            a, b = max(t0, lo), min(t1, hi)
+            return [occ(oid, node, (s0, s0 + (t1 - t0)), (a - t0, b - t0))] if b > a else []
+        paths = [path("target", [*clip("tL", "nL", 0, 9_900, 0), *clip("tD", "nDel", 9_900, 10_200, 9_900),
+                                 *clip("tR", "nR", 10_200, 20_000, 10_200)])]
+        if source == "mat":
+            paths.append(path("mat", [*clip("mL", "nL", 0, 9_900, 0), *clip("mD", "nDel", 9_900, 10_200, 9_900),
+                                      *clip("mR", "nR", 10_200, 20_000, 10_200)], plan=plan(owned(0, 20_000, 0, 20_000))))
+        elif source == "pat":
+            paths.append(path("pat", [*clip("pL", "nL", 0, 9_900, 0), *clip("pR", "nR", 10_200, 20_000, 9_900)],
+                              plan=plan(owned(0, 9_900, 0, 9_900), owned(9_900, 10_200, 9_900, 9_900, kind="target_insertion"),
+                                        owned(10_200, 20_000, 9_900, 19_700))))
+        return topo(nodes, paths)
+
+    requested = []
+
+    class Pool:
+        async def submit(self, _reg, _op, payload, **_kw):
+            req = payload["request"]
+            cell = 0 if req["interval"]["start"] == 0 else 1
+            requested.append(cell)
+            return {"result": cell_tile(next((s for s in req["selected"] if s != "target"), "target"), cell)}
+
+    def rows(_st, src, a, b, cache=None):
+        w = b - a
+        return ([{"id": q, "analysis_id": _encode_identity([f"d|{q}", q, "r" + q, 0, "primary"]),
+                  "intervals": [[0, w, w if q != "m1" else -max(1, w // 2)]],
+                  "live_lift": {"source": {"supplementary": False}, "segments": [[0, w, 0, "+", True]]}}
+                 for q in (("m1", "m2") if src.binding == "mat" else ("p1",))], {})
+
+    class Reg:
+        id = "pkg"
+        revisions = {"package": "1", "graph": "1", "db": "1", "maps": "1"}
+        bindings = [{"key": "target", "size": 20_000, "path": {"contig": "chr3"}},
+                    {"key": "mat", "size": 20_000, "path": {"contig": "cM"}},
+                    {"key": "pat", "size": 19_700, "path": {"contig": "cP"}}]
+        maps = [{"target": "target", "source": "mat"}, {"target": "target", "source": "pat"}]
+
+        def binding(self, k):
+            return next((b for b in self.bindings if b["key"] == k), None)
+
+    monkeypatch.setattr(service, "pool", lambda: Pool())
+    monkeypatch.setattr(analysis, "observation_snapshot", lambda st, sp: {})
+    monkeypatch.setattr(analysis, "graph_window_rows", rows)
+    monkeypatch.setattr(greads, "read_bindings", lambda st, reg: [
+        {"dataset_id": "d", "kind": "lifted", "paths": {"mat": "cM", "pat": "cP"}}])
+    obs = [{"id": "obs-M", "dataset_id": "d", "kind": "graph", "binding": "mat"},
+           {"id": "obs-P", "dataset_id": "d", "kind": "graph", "binding": "pat"}]
+    body = {"target": "target", "regions": [{"start": 10_020, "end": 10_180, "mode": "accessibility"}],
+            "observations": obs, "method": "kmeans", "k": 2}
+
+    async def go():
+        fit = await analysis.handle(_State(), Reg(), body)
+        model = dict(stages=fit["stages"], label_ids=fit["label_ids"], settings=fit["settings"], revisions=fit["revisions"])
+        again = await analysis.handle(_State(), Reg(), {**body, "run": model}, mode="assign")
+        return fit["results"]["obs-P"], again["results"]["obs-P"]
+    try:
+        fit, again = asyncio.run(go())
+    finally:
+        analysis.clear_caches()
+    assert 0 in requested   # the cell holding the deletion's left part
+    assert fit.get("not_carrier") and list(fit["assignments"].values()) == [analysis.NOT_CARRIER]
+    assert again["assignments"] == fit["assignments"]
+    # The geometry itself reads only the region's own cell (digests unchanged); a scan fetches no extra cells.
+    assert analysis.needed_tiles({"observations": obs, "regions": body["regions"], "target_size": 20_000})[1] == [1]

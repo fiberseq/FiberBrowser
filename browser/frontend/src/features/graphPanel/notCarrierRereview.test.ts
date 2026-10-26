@@ -56,15 +56,17 @@ function setup() {
 }
 
 function commit(plan: ReturnType<typeof setup>['plan'], obsM: string, obsP: string, mat: Record<string, number>,
-  pat: Record<string, number>) {
+  pat: Record<string, number>, refined?: { stage1: Record<string, number> }) {
   commitGraphRun(useBrowserStore.getState(), plan, {
     results: {
-      [obsM]: { assignments: mat, stage1: mat, cluster_counts: { 0: 1 } },
-      [obsP]: { assignments: pat, not_carrier: true, left_out: "not a carrier of the regions' sequence (it lacks it)" },
+      [obsM]: { assignments: mat, stage1: refined?.stage1 ?? mat, cluster_counts: { 0: 1 } },
+      [obsP]: { assignments: pat, stage1: pat, not_carrier: true, left_out: "not a carrier of the regions' sequence (it lacks it)" },
     },
-    label_ids: { '0': 0 }, names: {}, stages: [{ stage: 1 }],
+    label_ids: refined ? { '0': 0, '1': 1, '0.0': 2 } : { '0': 0 }, names: refined ? { '2': 'C0.0' } : {},
+    stages: refined ? [{ stage: 1 }, { stage: 2, set: 0, parent: '0' }] : [{ stage: 1 }],
     columns: { regions: plan.regions, shared: [{ kind: 'target', region: 0, length: 21, label: 'x', carriers: [obsM], samples: 3 }],
-      carrier_sets: [], left_out: { [obsP]: 'no columns' }, dropped: [] },
+      carrier_sets: refined ? [{ carriers: [obsM], features: [{ kind: 'insertion', length: 50, samples: 5, label: 'ins' }] }] : [],
+      left_out: { [obsP]: 'no columns' }, dropped: [] },
     observations: [obsM, obsP], window_separation_nmi: null, matched: null, settings: {}, revisions: REG.revisions,
     target: 'tgt', options: {},
   } as never);
@@ -103,5 +105,49 @@ describe('not a carrier: frontend follow-ups', () => {
     expect(clusteredReadIdSet(pat)).toBeNull();
     // The host keeps both.
     expect(Object.keys(useBrowserStore.getState().clusterAssignments['k-host']).length).toBe(2);
+  });
+
+  const stub = (payload: unknown) => vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200,
+    text: async () => JSON.stringify(payload), json: async () => payload })));
+  const aid = (q: string) => `lift-cohort:v1 ["d|${q}","${q}","r${q}",0,"primary"]`;
+
+  it('pop-outs after dynamic assignment keep every row their own path labelled, and no other (round 2)', async () => {
+    const { plan, obsM, obsP } = setup();
+    // m1 and p1 fitted (max_reads); m2, p2 assigned later; molA upgraded from -2 on PAT to 0 on MAT.
+    const molA = 'lift-cohort:v1 ["d|molA","molA",null,0,"primary"]';
+    commit(plan, obsM, obsP, { [aid('m1')]: 0 }, { [aid('p1')]: -2, [molA]: -2 });
+    stub({ results: { [obsM]: { assignments: { [aid('m1')]: 0, [aid('m2')]: 0, [molA]: 0 } },
+      [obsP]: { assignments: { [aid('p1')]: -2, [aid('p2')]: -2 } } } });
+    expect(await assignWithGraphRun(useBrowserStore.getState().clusterMatchedRun!)).toBe(3);
+    const run = useBrowserStore.getState().clusterMatchedRun!;
+    expect(Object.keys(run.assignments[obsM]).sort()).toEqual([aid('m1'), aid('m2'), molA].sort());
+    expect(run.assignments[obsP]).toEqual({ [aid('p1')]: -2, [aid('p2')]: -2 });   // molA is no longer -2 anywhere
+    const [matId, patId] = popOut('host', [], [{ binding: 'mat', hap: 'MAT' }, { binding: 'pat', hap: 'PAT' }]);
+    const st = useBrowserStore.getState();
+    const rk = (id: string) => recordKey(id)!;
+    expect(st.clusterAssignments[matId]).toEqual({ [rk(aid('m1'))]: 0, [rk(aid('m2'))]: 0, [rk(molA)]: 0 });
+    expect(st.clusterAssignments[patId]).toEqual({ [rk(aid('p1'))]: -2, [rk(aid('p2'))]: -2 });
+    expect(clusteredReadIdSet(st.clusterAssignments[patId])).toBeNull();
+  });
+
+  it('a pop-out from the run\'s stage-1 node keeps only its own labels, and every node keeps them across switches', () => {
+    const { plan, obsM, obsP } = setup();
+    commit(plan, obsM, obsP, { [aid('m1')]: 2, [aid('m2')]: 1 }, { [aid('p1')]: -2 }, { stage1: { [aid('m1')]: 0, [aid('m2')]: 1 } });
+    const refinedId = useBrowserStore.getState().activeClusterTreeNodeId!;
+    const stage1Id = useBrowserStore.getState().clusterTreeNodes[refinedId].parentId!;
+    const rk = (id: string) => recordKey(id)!;
+    useBrowserStore.getState().applyClusterTreeNode(stage1Id);
+    const [patId] = popOut('host', [], [{ binding: 'pat', hap: 'PAT' }]);
+    expect(useBrowserStore.getState().clusterAssignments[patId]).toEqual({ [rk(aid('p1'))]: -2 });
+    expect(clusteredReadIdSet(useBrowserStore.getState().clusterAssignments[patId])).toBeNull();
+    const [matId] = popOut('host', [], [{ binding: 'mat', hap: 'MAT' }]);
+    expect(useBrowserStore.getState().clusterAssignments[matId]).toEqual({ [rk(aid('m1'))]: 0, [rk(aid('m2'))]: 1 });
+    // Switching to the refinement and back keeps both pop-outs' labels (each node's own).
+    useBrowserStore.getState().applyClusterTreeNode(refinedId);
+    expect(useBrowserStore.getState().clusterAssignments[matId]).toEqual({ [rk(aid('m1'))]: 2, [rk(aid('m2'))]: 1 });
+    expect(useBrowserStore.getState().clusterAssignments[patId]).toEqual({ [rk(aid('p1'))]: -2 });
+    useBrowserStore.getState().applyClusterTreeNode(stage1Id);
+    expect(useBrowserStore.getState().clusterAssignments[patId]).toEqual({ [rk(aid('p1'))]: -2 });
+    expect(useBrowserStore.getState().clusterAssignments[matId]).toEqual({ [rk(aid('m1'))]: 0, [rk(aid('m2'))]: 1 });
   });
 });

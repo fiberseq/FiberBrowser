@@ -413,6 +413,26 @@ export function commitGraphRun(s: BrowserState, plan: GraphClusterPlan, response
 
 // ── Dynamic assignment with the durable model (G5) ─────────────────────────────
 
+/** A run's per-observation labels after a dynamic assignment, under the rules the live maps follow: a new row takes
+ * its label, an existing one keeps it, except that a model label replaces "not a carrier" (-2); and a record placed
+ * by the model on one path is no longer "not a carrier" on another. Pop-outs read which rows are whose from it. */
+export function assignedObservations(before: Record<string, Record<string, number>>,
+  results: Record<string, { assignments?: Record<string, number> }>): Record<string, Record<string, number>> {
+  const out: Record<string, Record<string, number>> = Object.fromEntries(Object.entries(before).map(([k, v]) => [k, { ...v }]));
+  for (const [oid, r] of Object.entries(results)) {
+    const mine = out[oid] ?? (out[oid] = {});
+    for (const [id, c] of Object.entries(r.assignments ?? {})) {
+      if (c === UNASSIGNED_CLUSTER_ID) continue;
+      if (mine[id] === undefined || (mine[id] === NOT_CARRIER_CLUSTER_ID && c >= 0)) mine[id] = c;
+    }
+  }
+  const placed = new Set(Object.values(out).flatMap(a => Object.entries(a).filter(([, c]) => c >= 0).map(([id]) => recordKey(id) ?? id)));
+  for (const a of Object.values(out)) {
+    for (const [id, c] of Object.entries(a)) if (c === NOT_CARRIER_CLUSTER_ID && placed.has(recordKey(id) ?? id)) delete a[id];
+  }
+  return out;
+}
+
 /** Label rows of the run's observations that have no label yet, with the run's model (never refitting). Existing
  * labels never change. Returns the number of rows labelled, or an error message. */
 export async function assignWithGraphRun(run: ClusterMatchedRun, signal?: AbortSignal): Promise<number | string> {
@@ -480,7 +500,8 @@ export async function assignWithGraphRun(run: ClusterMatchedRun, signal?: AbortS
   }
   if (added) {
     const now = useBrowserStore.getState();
-    useBrowserStore.setState({ clusterMatchedRun: { ...run, panelAssignments: { ...run.panelAssignments,
+    useBrowserStore.setState({ clusterMatchedRun: { ...run, assignments: assignedObservations(run.assignments, response.results),
+      panelAssignments: { ...run.panelAssignments,
       ...Object.fromEntries([...run.destinations.map(d => d.stateKey), ...touched].map(k => [k, now.clusterAssignments[k] ?? {}])) } } });
   }
   return added;
