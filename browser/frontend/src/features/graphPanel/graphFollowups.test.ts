@@ -36,6 +36,7 @@ import { PopOutPicker, pickedPopOut, usePopOutPicker } from './PopOutPicker';
 import { canonicalWalk, compareColumnKeys, firstCarriedColumn, firstCarriedColumns } from './columnOrder';
 import repeatVisit from './__fixtures__/gateC/repeat_visit.topology.json';
 import invSplit from './__fixtures__/gateD/inv_split.topology.json';
+import palindromic from './__fixtures__/followups/palindromic_inversion.topology.json';
 import { packMemberBands, type BandMember } from './memberBands';
 import type { PlacedMolecule } from './readGeometry';
 import type { PanelConfig } from '../../types';
@@ -590,5 +591,41 @@ describe('a schema-1 state without layoutSettings (coordinator, trial merge)', (
     const migrated = migratePanelAliases([{ id: 'g1', contentType: 'graph-view', graphView: partial }] as never)[0] as unknown as { graphView: { layoutSettings: { laneHeight: number }; role: string } };
     expect(migrated.graphView.role).toBe('standalone');
     expect(migrated.graphView.layoutSettings.laneHeight).toBe(28);
+  });
+});
+
+describe('group H agy round 2, 1: palindromic-core inversions; the anchor never rewinds behind an inverted run', () => {
+  const topoOf = (j: unknown) => ((j as { topology?: unknown }).topology ?? j) as GraphTopology;
+  const rd = (k: string, b: string, s0: number, e0: number) => ({ k, b, s: s0, e: e0, cov: [[s0, e0, 0, 1]] as [number, number, number, number][] });
+  const occ = (id: string, node: string, start: number, end: number, reverse = false): GraphOccurrence => ({
+    id, node, handle: `${node}${reverse ? '-' : '+'}`, reverse, fragment: 'f', path_span: { start, end }, clip: { start: 0, end: end - start } });
+
+  it('MAT walks 4-, 3+, 3-, 2- through the target\'s 2, 3+, 3-, 4: the core visits take 3- then 3+ (descending), and the upstream read keeps the row', () => {
+    const topo = topoOf(palindromic);
+    const walk = canonicalWalk(topo, ['ref', 'mat', 'pat', 'alt']);
+    expect(walk.occurrences.get('mat')!.map(o => walk.visits.get(o.id)!.rank)).toEqual([[0, 0, 0], [4, 0, 0], [3, 0, 0], [2, 0, 0], [1, 0, 0], [5, 0, 0]]);
+    const reads = [rd('down', 'mat', 900, 985), rd('up', 'mat', 970, 1030)];
+    const cols = firstCarriedColumns(reads, topo, ['ref', 'mat', 'pat', 'alt']);
+    expect(compareColumnKeys(cols.get('up'), cols.get('down'))).toBeLessThan(0);
+    const M: BandMember = { panelId: 'mat', stateKey: 'k-mat', datasetId: 'd', liftHap: 'MAT', binding: 'mat', label: 'MAT', color: '#111' };
+    const mol = (r: ReturnType<typeof rd>): PlacedMolecule => ({ read: { ...r, d: 'd', lib: 0, q: r.k, rec: 'r', c: '', st: '+', sup: false, ins: [], hap: 'MAT' } as GraphRead,
+      lane: 'mat', visits: [], body: [], calls: [], m6a: [], density: [], ins: [], holes: [], connectors: [], extent: [0, 100], unplacedBp: 0 });
+    const lane = packMemberBands(reads.map(mol), [M], {}, 1, 'position', 3, undefined, m => cols.get(m.read.k))!.get('mat')!;
+    expect(lane.rows[0].map(m => m.read.k)).toEqual(['up']);
+  });
+
+  it('an insertion at the right breakpoint of an inversion ranks after the inverted run, not inside it', () => {
+    const topo = { target: 'tgt', interval: { start: 0, end: 500 }, nodes: [], edges: [], summaries: [], target_queries: [], direct_matches: [],
+      complete: true, correspondence_complete: true, timings: {},
+      paths: [{ binding: 'tgt', windows: [], coverage: [], plan: null, complete: true,
+        occurrences: [occ('ta', 'a', -400, 100), occ('tb', 'b', 100, 200), occ('tc', 'c', 200, 300), occ('td', 'd', 300, 400), occ('te', 'e', 400, 900)] },
+        { binding: 'm', windows: [], coverage: [], plan: null, complete: true,
+          occurrences: [occ('ma', 'a', -400, 100), occ('md', 'd', 100, 200, true), occ('mc', 'c', 200, 300, true), occ('mb', 'b', 300, 400, true),
+            occ('mi', 'ins', 400, 450), occ('me', 'e', 450, 950)] }] } as unknown as GraphTopology;
+    // (Long shared flanks: the carrier's baseline is forward, b-c-d its inverted run.)
+    const cols = firstCarriedColumns([rd('c', 'm', 220, 280), rd('ins', 'm', 400, 450), rd('e', 'm', 460, 540)], topo, ['tgt', 'm']);
+    expect(cols.get('ins')).toEqual([3, 1, 1, 0]);
+    expect(compareColumnKeys(cols.get('c'), cols.get('ins'))).toBeLessThan(0);
+    expect(compareColumnKeys(cols.get('ins'), cols.get('e'))).toBeLessThan(0);
   });
 });

@@ -84,20 +84,35 @@ export function canonicalWalk(topology: GraphTopology, bindingOrder?: readonly s
     }
     const backward = opposite > same;
     const claimed = new Set<number>();
-    let anchor = -1, step = 0;
-    const take = (o: GraphOccurrence, i: number) => {
-      claimed.add(i); anchor = i; step = 0;
-      visits.set(o.id, { rank: [i, 0, 0], reverse: targetOccs[i].reverse });
+    // `anchor`: the furthest target visit taken so far (insertions rank after it; it never rewinds behind an inverted
+    // run). `last` and `inverted`: the previous visit taken and whether it runs against the baseline, so a visit of
+    // several candidates inside an inverted run takes the next one down of the same parity (a palindromic core:
+    // agy review, group H round 2).
+    let anchor = -1, step = 0, last = -1, inverted = false;
+    const take = (o: GraphOccurrence, c: { i: number; inv: boolean }) => {
+      claimed.add(c.i); anchor = Math.max(anchor, c.i); last = c.i; inverted = c.inv; step = 0;
+      visits.set(o.id, { rank: [c.i, 0, 0], reverse: targetOccs[c.i].reverse });
     };
     for (const o of backward ? [...occs].reverse() : occs) {
       const d = direct.get(o.id);
-      if (d?.length === 1 && !claimed.has(d[0].i)) { take(o, d[0].i); continue; }
       const t = targetVisits.get(o.node);
-      if (t) {
-        // A node both walk once: that target visit, wherever it lies (an inversion runs against the frame).
-        if (t.length === 1 && walks.get(o.node) === 1 && !claimed.has(t[0].i)) { take(o, t[0].i); continue; }
-        const hit = t.find(x => x.i > anchor && !claimed.has(x.i)) ?? (anchor < 0 ? t.find(x => !claimed.has(x.i)) : undefined);
-        if (hit) { take(o, hit.i); continue; }
+      // Candidates: its direct matches, else the target's visits of its node; `inv`: against the baseline parity.
+      const cands = (d?.length ? d.map(m => ({ i: m.i, inv: m.reverse !== backward }))
+        : (t ?? []).map(x => ({ i: x.i, inv: (o.reverse !== x.reverse) !== backward }))).filter(c => !claimed.has(c.i));
+      if (d?.length || t) {
+        // One match (a unique direct match, or a node both walk once): that target visit, wherever it lies.
+        const unique = (d?.length === 1) || (!d?.length && t!.length === 1 && walks.get(o.node) === 1);
+        let pick: { i: number; inv: boolean } | undefined = unique ? cands[0] : undefined;
+        if (!pick && cands.length) {
+          const down = cands.filter(c => c.inv && c.i < last).sort((a, b2) => b2.i - a.i)[0];
+          const up = cands.filter(c => !c.inv && c.i > anchor).sort((a, b2) => a.i - b2.i)[0];
+          // Inside an inverted run the next one down, else the next one up (colinear); an inverted run starting here
+          // begins at its furthest candidate; nothing taken yet: the first.
+          pick = (inverted ? down ?? up : up ?? down)
+            ?? cands.filter(c => c.inv && c.i > anchor).sort((a, b2) => b2.i - a.i)[0]
+            ?? (anchor < 0 ? [...cands].sort((a, b2) => a.i - b2.i)[0] : undefined);
+        }
+        if (pick) { take(o, pick); continue; }
         // An extra copy: unrolled like an insertion after the anchor.
         visits.set(o.id, { rank: [anchor, pi + 1, ++step], reverse: o.reverse !== backward });
         continue;
