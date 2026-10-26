@@ -37,6 +37,8 @@ import { moleculeKey, useLiftHover } from '../liveLift/linking/hover';
 import { xForTarget } from './scene';
 import { conversionTargets, convertStandalone, foldIn, isHost, joinCandidates, joinGraph, membersOf, panelKeyOf, panelView, popOut, poppable, setPanelViewMode } from './hostMode';
 import { allocateRows, graphPins, packMemberBands, routeRead, STRIP_ROWS, type BandMember, type HostLane, type MemberState } from './memberBands';
+import { singleHapPathName } from './labels';
+import { graphBindingFor } from './bindingsStore';
 import { bandSampled, drawDensityStrips, placeStrips, stripKey, type GraphBandReport, type PlacedBin } from './densityStrip';
 import { drawHostBandLabels, type ReadDecoration } from './readCanvas';
 import { useReadActionsStore } from '../../stores/readActionsStore';
@@ -453,7 +455,9 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     return members.filter(m => m.panel.datasetId).map(({ member, panel: p }) => {
       const ds = datasetLabels[p.datasetId!] ?? p.datasetId!;
       const hap = p.liftHap ?? null;
-      const name = p.title || (hap ? (multi ? `${ds} · ${hap}` : hap) : ds);
+      // One haplotype (G8): its path's PanSN name, as split members show MAT / PAT (graph follow-ups item 7).
+      const one = hap ? null : singleHapPathName(graphBindingFor(p.datasetId), null, state?.targetBinding ?? null);
+      const name = p.title || (hap ? (multi ? `${ds} · ${hap}` : hap) : one ? (multi ? `${ds} · ${one}` : one) : ds);
       // Rows route by dataset and haplotype (a lifted member) or dataset (native, on the target): the saved path key
       // is the member's path at the host's target, which a pan onto another contig changes.
       void member;
@@ -465,7 +469,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         strand: p.strand === 'CT' || p.strand === 'GA' ? p.strand : null,
         label: p.strand === 'CT' || p.strand === 'GA' ? `${name} · ${p.strand}` : name, color: datasetColors[p.datasetId!] ?? '#4b5563' };
     });
-  }, [hostMode, members, datasetLabels, datasetColors]);
+  }, [hostMode, members, datasetLabels, datasetColors, state?.targetBinding]);
   const clusterAssignmentsAll = useBrowserStore(s => s.clusterAssignments);
   const clusterOrderAll = useBrowserStore(s => s.clusterOrder);
   const clusterFocusAll = useBrowserStore(s => s.clusterFocus);

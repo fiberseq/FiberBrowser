@@ -12,11 +12,12 @@ import { useShallow } from 'zustand/react/shallow';
 import { MenuItem } from '../../components/tracks/PanelHeader';
 import type { PanelHeaderContext } from '../../components/tracks/panelHeaderExtensions';
 import { useBrowserStore } from '../../stores/browserStore';
-import { useGraphBindingsStore, watchGraphBindings } from './bindingsStore';
+import { graphBindingFor, useGraphBindingsStore, watchGraphBindings } from './bindingsStore';
 import { formatBp } from './coordinates';
 import { HANDOFF_OUT_BP, setPinnedLinear, useGraphSettings } from './handoff';
 import { foldIn, graphUnavailable, hostOf, isHost, joinCandidates, joinGraph, membersOf, popOut, poppable, removeFromGraph, setPanelViewMode, viewSelectionAsGraph } from './hostMode';
 import { useGraphStatusStore } from './statusStore';
+import { memberLabel, singleHapPathName } from './labels';
 import type { DatasetBodyProps } from '../../components/tracks/datasetBodyExtensions';
 import type { PanelConfig } from '../../types';
 
@@ -36,7 +37,6 @@ export function hostShowsGraph(panel: PanelConfig): boolean {
   return isHost(panel) && panel.graphView?.handoff?.shown !== 'linear';
 }
 
-const memberLabel = (p: PanelConfig, datasetLabel: string) => p.title || (p.liftHap ? p.liftHap : datasetLabel);
 
 export function useGraphModeHeader(ctx: PanelHeaderContext) {
   const { panel, dataset } = ctx;
@@ -67,6 +67,8 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
     };
   }
   const datasetLabel = dataset?.label ?? panel.datasetId;
+  const datasetLabels = (p: PanelConfig) => (p.datasetId === panel.datasetId ? datasetLabel
+    : useBrowserStore.getState().datasets.find(d => d.id === p.datasetId)?.label ?? p.datasetId ?? '');
   if (host) {
     const shown = panel.graphView?.handoff?.shown ?? 'graph';
     const pinned = Boolean(panel.graphView?.handoff?.pinnedLinear);
@@ -74,9 +76,11 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
     const { folded, missing } = poppable(panels, panel);
     const revealed = members.filter(m => m.panel.id !== panel.id && !m.panel.collapsedByGraphGroup);
     const joinable = joinCandidates(useBrowserStore.getState().panels, panel);
-    const chipText = shown === 'graph' ? 'Graph' : 'Graph · linear';
+    // One haplotype (G8): the host is labelled by its path's PanSN name, as split members are by MAT / PAT.
+    const pathName = singleHapPathName(graphBindingFor(panel.datasetId), panel.liftHap, panel.graphView?.targetBinding ?? null);
+    const chipText = `${shown === 'graph' ? 'Graph' : 'Graph · linear'}${pathName ? ` · ${pathName}` : ''}`;
     const chips = (
-      <button type="button" className="fb-header-pill flex-shrink-0" data-testid="graph-mode-toggle" data-mode="graph" data-shown={shown}
+      <button type="button" className="fb-header-pill flex-shrink-0" data-testid="graph-mode-toggle" data-mode="graph" data-shown={shown} data-path-name={pathName ?? undefined}
         title={shown === 'graph' ? 'Graph mode: this panel and its members on the package\'s paths (click: view as linear)'
           : `Graph mode, drawn linear here (${pinned ? 'Stay linear is on' : panel.graphView?.handoff?.reason === 'complexity'
             ? 'most of the window is unresolved in the graph' : `wider than ${formatBp(outBp)}`}); click: view as linear`}
@@ -88,7 +92,7 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
           onSelect={() => setPanelViewMode(panel.id, 'linear')}><span data-testid="graph-view-as-linear">View as linear</span></MenuItem>
         {folded.map(p => (
           <MenuItem key={p.id} tour="panel-graph-popout" icon={<span>⇱</span>} title="Shown as its own panel, with its own tools and state"
-            onSelect={() => popOut(panel.id, [p.id])}><span data-testid="graph-pop-out" data-member={p.id}>Pop out {memberLabel(p, datasetLabel)}</span></MenuItem>
+            onSelect={() => popOut(panel.id, [p.id])}><span data-testid="graph-pop-out" data-member={p.id}>Pop out {memberLabel(p, datasetLabels(p), panel.graphView?.targetBinding ?? null)}</span></MenuItem>
         ))}
         {missing.map(m => (
           <MenuItem key={m.binding} tour="panel-graph-popout" icon={<span>⇱</span>} title="A new panel of this dataset for that haplotype, starting with this panel's state"
@@ -123,7 +127,7 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
   }
   if (member) {
     const folded = panel.collapsedByGraphGroup === member.id;
-    const text = `In graph · ${memberLabel(panel, datasetLabel)}`;
+    const text = `In graph · ${memberLabel(panel, datasetLabel, member.graphView?.targetBinding ?? null)}`;
     const chips = <span className="fb-header-pill flex-shrink-0" data-testid="graph-member-chip" title={`Drawn in ${member.title || 'its host'}'s graph; its own tools and state`}>{text}</span>;
     const menu = (
       <>
