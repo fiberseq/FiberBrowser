@@ -9,7 +9,7 @@ const ASSIGNMENT: Record<string, string> = {
 const GEOMETRY = ['Carrier', 'Reference', 'Not informative'];
 
 const REASON: Record<string, string> = {
-  sequence_not_assessed: 'sequence not checked (the target is the geometry; pick an exact allele to check it)',
+  sequence_not_assessed: 'sequence not checked',
   ambiguous_bases: 'ambiguous bases in the read',
   uncalibrated_likelihood_profile: 'likelihood not calibrated',
   competing_diagnostics: 'competing alleles look alike here',

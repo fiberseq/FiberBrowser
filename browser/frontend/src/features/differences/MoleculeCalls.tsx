@@ -85,7 +85,9 @@ export function MoleculeCalls({ selection, native = false }: { selection: Differ
   const canConsensus = selection.difference.source === 'reads' && selection.difference.alt_bp > 0 && Boolean(map) && !exact;
   if (!supported) return <p>Read carriage for this topology is unavailable. Assembly geometry remains inspectable.</p>;
   return <section aria-label="Molecule calls" className="mt-2 border-t pt-2">
-    <p title={`Target revision ${target.revision}`}>{target.target_type === 'geometry' ? 'Molecule calls for this difference\'s geometry (any sequence of this size here)' : 'Molecule calls for the exact assembly allele'}</p>
+    <p title={`Target revision ${target.revision}`}>{target.target_type === 'geometry'
+      ? `Molecule calls for this difference's geometry (any sequence of this size here; sequence is not checked${exactTargets.length ? ': pick an exact assembly allele below to check it' : ''})`
+      : 'Molecule calls for the exact assembly allele'}</p>
     {exactTargets.length > 0 && <p><label className="inline-flex items-center gap-1">Allele target
       <select aria-label="Allele target" data-testid="allele-target" value={exactId} onChange={e => { setExactId(e.target.value); setRequested(true); }}>
         <option value="">Geometry (any sequence)</option>

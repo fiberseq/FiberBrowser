@@ -10,7 +10,7 @@ describe('molecule calls read as plain language (docs review, native inspector)'
     expect(callText({ assignment: 'some_new_code', level: null }, 2)).toBe('Not informative by geometry · some new code');
   });
   it('turns reason codes into words, keeping unknown ones readable', () => {
-    expect(reasonText(['sequence_not_assessed'])).toMatch(/^sequence not checked/);
+    expect(reasonText(['sequence_not_assessed'])).toBe('sequence not checked');
     expect(reasonText(['ambiguous_bases', 'brand_new_reason'])).toBe('ambiguous bases in the read; brand new reason');
   });
 });
