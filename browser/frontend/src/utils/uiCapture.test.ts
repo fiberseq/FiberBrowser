@@ -9,19 +9,22 @@ const READ_GREEN = 0xff2ca033;
  * A stand-in canvas holding a W x H image. The fake rasterizer paints into `pixels`;
  * drawImage (the fallback copy) fills the target box with the source's colour.
  */
-interface FakeCanvas { width: number; height: number; pixels: Uint32Array; copies: number; ops: string[]; getContext: () => unknown }
+interface FakeCanvas { width: number; height: number; pixels: Uint32Array; copies: number; ops: string[]; tx: number; sx: number; getContext: () => unknown }
 function fakeCanvas(): FakeCanvas {
   const c: FakeCanvas = {
-    width: 0, height: 0, pixels: new Uint32Array(0), copies: 0, ops: [],
+    width: 0, height: 0, pixels: new Uint32Array(0), copies: 0, ops: [], tx: 0, sx: 1,
     getContext: () => ({
       clearRect: () => { c.pixels = new Uint32Array(c.width * c.height); },
       fillRect: () => { c.pixels.fill(WHITE); },
       set fillStyle(_v: string) { /* the background */ },
-      save: () => c.ops.push('save'), restore: () => c.ops.push('restore'),
-      translate: (x: number) => c.ops.push(`translate ${x}`), scale: (x: number) => c.ops.push(`scale ${x}`),
+      save: () => c.ops.push('save'), restore: () => { c.ops.push('restore'); c.tx = 0; c.sx = 1; },
+      translate: (x: number) => { c.ops.push(`translate ${x}`); c.tx += x * c.sx; },
+      scale: (x: number) => { c.ops.push(`scale ${x}`); c.sx *= x; },
       drawImage: (_src: unknown, _sx: number, _sy: number, _sw: number, _sh: number, dx: number, dy: number, dw: number, dh: number) => {
         c.copies++;
-        for (let y = Math.floor(dy); y < dy + dh; y++) for (let x = Math.floor(dx); x < dx + dw; x++) c.pixels[y * c.width + x] = READ_GREEN;
+        // The destination box under the current translate/scale (x only).
+        const a = c.tx + c.sx * dx, b = c.tx + c.sx * (dx + dw);
+        for (let y = Math.floor(dy); y < dy + dh; y++) for (let x = Math.floor(Math.min(a, b)); x < Math.max(a, b); x++) c.pixels[y * c.width + x] = READ_GREEN;
       },
     }),
   };
@@ -100,10 +103,18 @@ describe('full UI capture', () => {
     expect(boxIsBlank(px, 4, { x: 2, y: 2, w: 2, h: 2 })).toBe(true);
   });
 
-  it('flips a mirrored canvas when it copies it in', async () => {
+  it('flips a mirrored canvas when it copies it in, in its own box', async () => {
     const d = deps(Infinity);
-    await drawUntilComplete('svg', 40, 30, { pixelRatio: 1 }, [{ ...probes[0], mirror: true }], d);
-    expect(d.canvas().ops).toEqual(['save', 'translate 40', 'scale -1', 'restore']);
+    // The right half of the read track's row band.
+    const box = { x: 20, y: 10, w: 20, h: 20 };
+    await drawUntilComplete('svg', 40, 30, { pixelRatio: 1 }, [{ box, source: {} as CanvasImageSource, sourceBox: { x: 0, y: 0, w: 20, h: 20 }, mirror: true }], d);
+    const c = d.canvas();
+    expect(c.ops).toEqual(['save', 'translate 40', 'scale -1', 'restore']);
+    // Copied over x 20-39 only; the left half keeps the (blank) draw.
+    const row = 11 * c.width;
+    expect(c.pixels[row + 19]).toBe(WHITE);
+    expect(c.pixels[row + 20]).toBe(READ_GREEN);
+    expect(c.pixels[row + 39]).toBe(READ_GREEN);
   });
 });
 

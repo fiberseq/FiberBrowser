@@ -208,8 +208,8 @@ export async function drawUntilComplete(
     if (s.w <= 0 || s.h <= 0) continue;
     ctx.save();
     if (probe.mirror) {
-      // Drawn flipped on screen: flip about the box's vertical centre line.
-      ctx.translate((2 * b.x + b.w) * k, 0);
+      // Drawn flipped on screen: x -> (b.x + b.w) * k - x, so [0, b.w * k] lands on the box.
+      ctx.translate((b.x + b.w) * k, 0);
       ctx.scale(-1, 1);
     }
     ctx.drawImage(probe.source, s.x, s.y, s.w, s.h, probe.mirror ? 0 : b.x * k, b.y * k, b.w * k, b.h * k);
