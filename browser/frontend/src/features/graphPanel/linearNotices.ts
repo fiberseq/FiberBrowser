@@ -21,7 +21,8 @@ export function notDrawnInLinear(run: ClusterMatchedRun | null | undefined, host
   return all.filter(f => f && f.kind === 'insertion' && !seen.has(f.label) && seen.add(f.label));
 }
 
-/** "insertion I1 (312 bp)" for the notice. */
+/** "insertion I1 (312 bp)" for the notice; a label that already names its size ("237 bp at …") is not repeated. */
 export function featureText(f: RunFeature): string {
+  if (/\d bp\b/.test(f.label)) return `${f.kind} ${f.label}`;
   return `${f.kind} ${f.label} (${f.length.toLocaleString()} bp)`;
 }

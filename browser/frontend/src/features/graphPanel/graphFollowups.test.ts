@@ -325,6 +325,7 @@ describe('item 3: what a host drawn linear cannot show (§7.4)', () => {
         { carriers: ['o2'], features: [ins('I1')] }] });
     expect(notDrawnInLinear(r, 'mat').map(f => f.label)).toEqual(['I0', 'I1']);
     expect(featureText(ins('I1', 1200))).toBe('insertion I1 (1,200 bp)');
+    expect(featureText(ins('237 bp at 128,657,389–128,657,390', 237))).toBe('insertion 237 bp at 128,657,389–128,657,390');
   });
 
   it('nothing for another host\'s run, a linear run, or a run on target columns only', () => {

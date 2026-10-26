@@ -151,7 +151,7 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
         {joinable.map(c => (
           <MenuItem key={c.panel.id} tour="panel-graph-add" icon={<span>+</span>} title="Its reads join this graph on the path they bind; the panel folds into it"
             onSelect={() => joinGraph(panel.id, [c.panel.id])}>
-            <span data-testid="graph-add-panel" data-member={c.panel.id}>Add {c.panel.title || c.panel.liftHap || 'panel'} to this graph</span>
+            <span data-testid="graph-add-panel" data-member={c.panel.id}>Add {c.panel.title || [datasetLabels(c.panel), c.panel.liftHap].filter(Boolean).join(' · ')} to this graph</span>
           </MenuItem>
         ))}
       </>
@@ -210,7 +210,7 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
         onSelect={() => viewSelectionAsGraph(panel.id)}><span data-testid="graph-view-as-graph">View as graph</span></MenuItem>
       {hosts.map(h => (
         <MenuItem key={h.id} tour="panel-graph-join" icon={<span>+</span>} title="This panel's reads join that graph; this panel folds into it"
-          onSelect={() => joinGraph(h.id, [panel.id])}><span data-testid="graph-join" data-host={h.id}>Join {h.title || h.liftHap || 'that'} graph</span></MenuItem>
+          onSelect={() => joinGraph(h.id, [panel.id])}><span data-testid="graph-join" data-host={h.id}>Join {h.title || [datasetLabels(h), h.liftHap].filter(Boolean).join(' · ') || 'that'} graph</span></MenuItem>
       ))}
     </>
   );
