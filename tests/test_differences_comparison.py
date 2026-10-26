@@ -422,7 +422,7 @@ def test_exact_target_refused_when_an_insertion_sits_at_the_fetch_end(tmp_path):
     out = assembly_comparison(state, ds, chrom=CHROM, start=4900, end=5200)
     mat = _hap_item(out, "MAT")
     target = mat["exact_target"]
-    assert (target["diagnostic_start"], target["diagnostic_end"]) == (4975, 5126)
+    assert target["diagnostic_start"] <= 4975 and target["diagnostic_end"] >= 5101 + 25
     assert target["candidate_labels"][mat["exact_allele_id"]] == "MAT"
     assert target["competition_complete"] is False
     state.fasta.close()
@@ -478,4 +478,73 @@ def test_shifted_shared_insertion_alone_shares_the_target(tmp_path):
     assert target["candidate_labels"][tid] == "MAT / PAT"
     assert set(target["candidates"]) == {tid, "reference"}
     assert target["candidates"][tid] == reference[lo:5060] + "A" * 100 + reference[5060:hi]   # PAT's own splice
+    state.fasta.close()
+
+
+def test_repeat_target_window_spans_the_repeat_so_other_repeat_alleles_compete(tmp_path):
+    """agy post-merge review B HIGH 1(1): MAT's A*100 at 5000 and PAT's A*200 at 5060 are different alleles of one
+    A repeat. The window spans the repeat (equivalent_anchors), so PAT's allele competes and a PAT carrier is called
+    other_allele instead of a confirmed reference."""
+    reference = T[:4990] + "A" * 120 + T[5110:]
+    state, ds = edited_map(tmp_path, reference, {"MAT": [(5000, 5000, "A" * 100)], "PAT": [(5060, 5060, "A" * 200)]})
+    out = assembly_comparison(state, ds, chrom=CHROM, start=4900, end=5200)
+    mat, pat = _hap_item(out, "MAT"), _hap_item(out, "PAT")
+    lo, hi = mat["equivalent_anchors"]
+    assert lo <= 4990 and hi >= 5110 and pat["exact_allele_id"] != mat["exact_allele_id"]
+    target = mat["exact_target"]
+    assert target["diagnostic_start"] <= lo - 25 and target["diagnostic_end"] >= hi + 25
+    assert target["candidate_labels"][pat["exact_allele_id"]] == "PAT"
+    assert target["candidate_labels"][mat["exact_allele_id"]] == "MAT"
+    assert target["competition_complete"] is True
+    pat_src = reference[:5060] + "A" * 200 + reference[5060:]
+    ds.paths = [write_bam(tmp_path / "pat_carrier.bam",
+                          lambda h: [make_record(h, "pat_mol", "chrC_PAT", 4800, "600M", seq=pat_src[4800:5400])],
+                          contigs=(("chrC_MAT", len(reference) + 100), ("chrC_PAT", len(pat_src))))]
+    ds.consensus_chemistry = "hia5-pacbio"
+    from services.differences.workspace import inspect
+    calls = inspect(state, ds, chrom=CHROM, start=4800, end=5300, target=target)["targets"][0]["calls_by_molecule"]
+    assert len(calls) == 1
+    call = next(iter(calls.values()))["call"]
+    assert call["assignment"] == "other_allele", call
+    state.fasta.close()
+
+
+def test_repeat_target_refused_when_the_repeat_reaches_past_the_fetch(tmp_path):
+    """agy post-merge review B HIGH 1(2): PAT carries MAT's A*100 shifted to 5120 plus a deletion in a 160 bp A repeat.
+    Comparing [4990, 5001) fetches [4890, 5101), short of the repeat's end, so MAT gets no exact target there."""
+    reference = T[:4990] + "A" * 160 + T[5150:]
+    state, ds = edited_map(tmp_path, reference, {"MAT": [(5000, 5000, "A" * 100)],
+                                                 "PAT": [(5120, 5120, "A" * 100), (5125, 5135, "")]})
+    out = assembly_comparison(state, ds, chrom=CHROM, start=4990, end=5001)
+    mat = _hap_item(out, "MAT")
+    assert mat["equivalent_anchors"][1] >= 5150 > 5101
+    assert mat["exact_target"] is None
+    # Fetched in full, PAT's shifted copy and its deletion are both in the window: no shared label, competition open.
+    out = assembly_comparison(state, ds, chrom=CHROM, start=4900, end=5300)
+    mat = _hap_item(out, "MAT")
+    assert mat["exact_allele_id"] == _hap_item(out, "PAT")["exact_allele_id"]
+    target = mat["exact_target"]
+    assert target["diagnostic_end"] >= 5150 + 25
+    assert target["candidate_labels"][mat["exact_allele_id"]] == "MAT"
+    assert target["competition_complete"] is False
+    state.fasta.close()
+
+
+def test_isolated_300bp_insertion_keeps_a_valid_exact_target(tmp_path):
+    """An isolated insertion keeps a complete exact target; its window is its equivalent placements plus the flank
+    (here T[4999] repeats the allele's last base, so the insertion may also sit one base left)."""
+    from services.differences.projected_service import validate_target
+    from services.differences.projection import ProjectionPolicy
+    allele = "ACGT" * 75
+    state, ds = edited_map(tmp_path, T, {"MAT": [(5000, 5000, allele)]})
+    out = assembly_comparison(state, ds, chrom=CHROM, start=4990, end=5010)
+    mat = _hap_item(out, "MAT")
+    target = mat["exact_target"]
+    assert target is not None and target["competition_complete"] is True
+    validate_target(target, CHROM, 4990, 5010, ProjectionPolicy())
+    lo, hi = mat["equivalent_anchors"]
+    assert (lo, hi) == (4999, 5000)
+    assert (target["diagnostic_start"], target["diagnostic_end"]) == (lo - 25, hi + 25)
+    assert target["candidates"][mat["exact_allele_id"]] == T[lo - 25:5000] + allele + T[5000:hi + 25]
+    assert set(target["candidates"]) == {mat["exact_allele_id"], "reference"}
     state.fasta.close()

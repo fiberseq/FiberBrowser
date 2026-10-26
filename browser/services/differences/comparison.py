@@ -386,30 +386,47 @@ def assembly_comparison(state, dataset, *, chrom, start, end, reads=(), read_seq
                 lineage_events=events, ledger=book.payload())
 
 
+def _equivalent_span(v):
+    """The reference extent of every equivalent placement of an edit (a repeat-shifted indel may sit anywhere in it).
+
+    equivalent_anchors are the first and last start positions of a pure indel's placements; a deletion's last
+    placement ends ref_bp after its start. Edits without anchors (sub-floor, dropped, unnormalized) keep their span.
+    """
+    s, e = v["t_start"], v["t_end"]
+    anchors = v.get("equivalent_anchors")
+    if not anchors:
+        return s, e
+    return min(s, anchors[0]), max(e, anchors[1] + (e - s if not v.get("alt_bp") else 0))
+
+
 def _exact_target(value, assembly, context, reference, chrom, policy, labels, dropped=(), local_all=(), fetched=None):
     """A frozen exact target with every complete competing assembly allele.
 
     Each candidate is one haplotype's allele spliced onto the reference over a common diagnostic window. That is
     only that haplotype's true sequence when it has no other edit in the window: the window covers every
-    representation of the allele that another haplotype carries, grows over every nearby local edit (any size,
-    including the cap's dropped items), and a target whose own haplotype has another edit there gets no exact
-    target; another haplotype with several edits leaves the competition incomplete.
+    equivalent placement of the allele (its whole repeat, and every representation another haplotype carries),
+    grows over every nearby local edit and that edit's own equivalent placements (any size, including the cap's
+    dropped items), and a target whose own haplotype has another edit there gets no exact target; another haplotype
+    with several edits leaves the competition incomplete.
     """
     if not value["exact_allele_id"] or value["alt"] is None:
         return None
     s, e = value["t_start"], value["t_end"]
-    # Shifted equivalent placements of the allele on other haplotypes join the window, so their other edits are seen.
-    shared = [assembly[i] for i in value["shared_with"]]
-    s0, e0 = min([s, *(v["t_start"] for v in shared)]), max([e, *(v["t_end"] for v in shared)])
+    # Reads may place a repeat indel anywhere among its equivalent placements, and other haplotypes may carry the
+    # allele shifted: the window spans them all, so every haplotype's other edits there are seen.
+    seeds = [_equivalent_span(v) for v in (value, *(assembly[i] for i in value["shared_with"]))]
+    s0, e0 = min(a for a, _ in seeds), max(z for _, z in seeds)
     flank = policy.diagnostic_flank_bp
     ds, de = max(0, s0 - flank), e0 + flank
     if de - ds > policy.max_allele_bp:
         return None
     nearby = list(local_all) + list(dropped)
+    extent = {i["id"]: _equivalent_span(assembly.get(i["id"], i)) for i in nearby}
+    touching = lambda: [i for i in nearby if extent[i["id"]][0] <= de and extent[i["id"]][1] >= ds]
     while True:   # grow to a fixed point over overlapping edits; each step widens, so the size bound ends it
-        inside = [i for i in nearby if i["t_start"] <= de and i["t_end"] >= ds]
-        lo = max(0, min([s0, *(i["t_start"] for i in inside)]) - flank)
-        hi = max([e0, *(i["t_end"] for i in inside)]) + flank
+        inside = touching()
+        lo = max(0, min([s0, *(extent[i["id"]][0] for i in inside)]) - flank)
+        hi = max([e0, *(extent[i["id"]][1] for i in inside)]) + flank
         if (lo, hi) == (ds, de):
             break
         ds, de = min(ds, lo), max(de, hi)
@@ -421,7 +438,7 @@ def _exact_target(value, assembly, context, reference, chrom, policy, labels, dr
         return None
     if any(i["t_start"] < ds or i["t_end"] > de for i in inside):
         return None
-    inside = [i for i in nearby if i["t_start"] <= de and i["t_end"] >= ds]
+    inside = touching()
     own_hap = [i for i in inside if i["hap"] == value["hap"] and i["id"] != value["item_id"]]
     if own_hap:
         return None   # the haplotype's window holds other edits: a single-edit splice would not be its sequence
