@@ -28,8 +28,12 @@ Hidden insertion blocks run through it too, each in its own frame
 Rows of one window are told apart by a composite key ``row * 2**40 + x``, so
 a single sorted array holds every row's fragment starts (or ends, or a read's
 run starts) and one ``searchsorted`` finds, for each position, the fragment
-or run of its own row. All values handed back are Python ints, bools and
-lists (``tolist``), never NumPy scalars.
+or run of its own row. Mapped intervals and marks are handed back as
+``read_columns.IntColumn`` slices of read-only window arrays (read row format
+2: they read exactly as the lists they stand for); every other value is a
+Python int, bool or list (``tolist``), never a NumPy scalar. A read's lists
+are read into arrays once per load (``_cached``), so its hidden insertion
+blocks reuse them.
 """
 from __future__ import annotations
 

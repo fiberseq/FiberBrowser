@@ -72,8 +72,7 @@ class IntColumn:
 
     @property
     def retained_bytes(self) -> int:
-        # byte_cache.retained_size: the values plus a list's worth of overhead
-        # is not what is retained; the array (or its share of a window array).
+        # byte_cache.retained_size: the array (or its share of a window array).
         return int(self._a.nbytes) + 112
 
     def __array__(self, dtype=None, copy=None):
@@ -98,10 +97,8 @@ class IntColumn:
     def __getitem__(self, index):
         if isinstance(index, slice):
             return self._a[index].tolist()
-        if isinstance(index, (int, np.integer)) and not isinstance(index, (bool, np.bool_)):
+        if isinstance(index, (int, np.integer)):
             return self._a[index].tolist()
-        if isinstance(index, bool):
-            return self._a[int(index)].tolist()
         raise TypeError(f"list indices must be integers or slices, not {type(index).__name__}")
 
     def __contains__(self, value):

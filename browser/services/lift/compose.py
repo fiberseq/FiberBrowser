@@ -37,6 +37,11 @@ insertion blocks follow in one more columnar pass. The per-row functions here
 (``_map_group``, ``_call_identity``, ``_map_points``, ``_molecular_spans``,
 ``_logical``/``_gaps``) define the output and handle whatever the columnar
 pass leaves to them; it reproduces them exactly.
+
+Rows are read row format 2 (``services/read_columns.py``): the intervals,
+FIRE, layer intervals and point marks the columnar pass maps are
+``IntColumn`` slices of its window arrays rather than lists (the rows it
+leaves to the per-row functions keep lists). Either reads the same.
 """
 from __future__ import annotations
 
