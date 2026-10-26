@@ -153,6 +153,8 @@ def submit(state, request: dict, *, runner=None) -> dict:
                         os.replace(tmp, _plan_file(module['cache_dir']))
                     with lock:
                         job['computed_units'] += computing
+                if job.get('_disposed'):
+                    raise ScanCancelled()
                 if (Path(module['cache_dir']) / 'manifest.json').is_file():
                     scan = open_scan(state, module['cache_dir'], source='cache',
                                      label=f"Browser scan · {module['name']}")
@@ -179,6 +181,24 @@ def submit(state, request: dict, *, runner=None) -> dict:
 
     job['_future'] = _EXECUTOR.submit(contextvars.copy_context().run, worker)
     return _summary(job)
+
+
+def dispose_session(state) -> None:
+    """A session is being imported: cancel this workspace's scans in progress (their results never register) and
+    close its open scans. The imported session reopens its own (the hub restores them by path)."""
+    from .registry import _session as registry_session, _refresh_layers
+    jobs, lock = _session(state)
+    with lock:
+        for job in jobs.values():
+            if job['status'] in ('queued', 'running', 'cancelling'):
+                job['_cancel'].set()
+                job['_disposed'] = True
+                job['status'] = 'cancelling'
+                job['message'] = 'Cancelled: another session was opened'
+    scans, rlock = registry_session(state)
+    with rlock:
+        scans.clear()
+    _refresh_layers(state)
 
 
 def get_job(state, job_id: str) -> dict:

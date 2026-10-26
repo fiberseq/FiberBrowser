@@ -216,8 +216,13 @@ def build_plan(state, request: dict) -> dict:
     file_policy = params.pop('read_policy', None) or {}
     if not isinstance(file_policy, dict):
         raise ScanPlanError('Settings: read_policy must be an object')
-    browser_policy = read_policy(state, caps=request.get('caps'), include_duplicates=bool(request.get('include_duplicates')))
+    # Explicit caps (the file's, then the dialog's on top) come first; the Low-memory machine cap is only a ceiling
+    # over them (it never raises a smaller explicit cap).
+    explicit_caps = {**(file_policy.get('caps') or {}),
+                     **{k: v for k, v in (request.get('caps') or {}).items() if v not in (None, '')}}
+    browser_policy = read_policy(state, caps=explicit_caps, include_duplicates=bool(request.get('include_duplicates')))
     raw_policy = copy.deepcopy(file_policy)
+    raw_policy.pop('caps', None)
     for key, value in browser_policy.items():
         raw_policy[key] = {**(raw_policy.get(key) or {}), **value} if isinstance(value, dict) else value
     try:
@@ -392,12 +397,38 @@ def _scan_matches(scan, plan: dict, module: dict) -> bool:
     # The unit mode decides rules the settings leave on 'auto' (peaks: window rules for BED units, local for grid).
     if not all(info.get(k) == units.get(k) for k in ('mode', 'unit_bp', 'stride_bp', 'grid_offset')):
         return False
+    if module['name'] == 'peaks' and _effective_peak_rules(module['settings'], plan['units']) != _scan_peak_rules(scan):
+        # 'auto' rules resolve by the plan (window rules only when every unit is a lone BED unit).
+        return False
     if block.get('calibration') and module['name'] != 'peaks':
         # A dataset-level calibration (nuc) is drawn from the scanned territory: only the same plan has the same one.
         same = {k: v for k, v in info.items() if k != 'count'} == {k: v for k, v in units.items() if k != 'count'}
         if not same or int(info.get('count') or -1) != len(plan['units']):
             return False
     return True
+
+
+def _effective_peak_rules(settings: dict, units: List[dict]) -> tuple:
+    """The peaks module's tier and row rules for a plan, as its calibrate() resolves 'auto'."""
+    single = all(u.get('mode') == 'bed' and u.get('left') is None and u.get('right') is None for u in units)
+    tier = settings.get('tier_rule', 'auto')
+    rows = settings.get('row_rule', 'auto')
+    return (('window' if single else 'local') if tier == 'auto' else tier,
+            ('view' if single else 'records') if rows == 'auto' else rows)
+
+
+def _scan_peak_rules(scan) -> Optional[tuple]:
+    """The rules an open scan's peaks used (its peaks/extra/calibration.json), else None."""
+    from .registry import _inside
+    rel = ((scan.module('peaks') or {}).get('calibration') or {}).get('path') or 'peaks/extra/calibration.json'
+    p = _inside(scan.path, rel)
+    if p is None or not p.is_file():
+        return None
+    try:
+        cal = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return None
+    return (cal.get('tier_rule'), cal.get('row_rule'))
 
 
 def coverage(state, plan: dict) -> dict:

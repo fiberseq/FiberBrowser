@@ -118,6 +118,11 @@ class TableSet:
         with self._lock:
             t = self._open.get(rel)
             if t is None:
+                # Checked again when opened (the directory was validated when the scan was opened).
+                try:
+                    (self.root / rel).resolve().relative_to(self.root.resolve())
+                except ValueError:
+                    raise ValueError(f'{rel} is outside the scan directory') from None
                 t = self._open[rel] = Table(self.root / rel)
             return t
 

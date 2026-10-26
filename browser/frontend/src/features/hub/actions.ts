@@ -79,7 +79,8 @@ export async function asClusterRegions(selected: HubSelected[], run = true): Pro
   for (const r of regions) store.addCustomPeak(r.start, r.end, store.chrom);
   const now = useBrowserStore.getState();
   const custom = now.getCustomRuleId();
-  const peaks = now.getAllPeaks().filter(p => p.ruleId === custom && sameChrom(p.chrom ?? now.chrom, now.chrom));
+  // The main reference's custom peaks only (a panel on another genome can hold a peak with the same span).
+  const peaks = now.getAllPeaks().filter(p => p.ruleId === custom && !p.genome && sameChrom(p.chrom ?? now.chrom, now.chrom));
   const selectedPeaks = new Set<number>();
   const peakModes: Record<number, string> = {};
   for (const r of regions) {
@@ -91,6 +92,9 @@ export async function asClusterRegions(selected: HubSelected[], run = true): Pro
   useBrowserStore.setState({ selectedPeaks, peakModes: peakModes as typeof now.peakModes });
   const basis = clusterBasis(useBrowserStore.getState());
   if (basis.kind !== 'peaks') return `Cluster would use ${basis.what}, not the hub's regions: clear it first.`;
+  const want = regions.map(r => `${r.start}-${r.end}-${r.mode}`).sort().join(',');
+  const got = basis.regions.filter(r => !r.genome).map(r => `${r.start}-${r.end}-${r.mode}`).sort().join(',');
+  if (want !== got || basis.regions.some(r => r.genome)) return 'Cluster\'s regions are not the hub\'s: check the selected peaks.';
   useBrowserStore.getState().pushSnapshot(`Cluster regions from the feature hub (${regions.length})`);
   if (!run) return null;
   const ran = await runUiCluster();

@@ -127,7 +127,18 @@ export function registerHubState(): void {
     }),
     serialize: s => ({ featureHub: s.featureHub ?? EMPTY_HUB }),
     restoreSnapshot: saved => ('featureHub' in saved ? { featureHub: normalizeHub(saved.featureHub) } : {}),
-    importSession: frontend => ({ featureHub: normalizeHub(frontend?.featureHub) }),
+    importSession: frontend => {
+      const featureHub = normalizeHub(frontend?.featureHub);
+      // The server closed the previous session's scans on import: reopen this session's own (also with the hub
+      // closed, so their read layers come back).
+      if (featureHub.scans.length) setTimeout(() => { void import('./hubData').then(m => m.restoreSessionScans()); }, 0);
+      return { featureHub };
+    },
+    // The previous session's live data and live scan.
+    onSessionImport: () => {
+      void import('./hubData').then(m => m.resetHubData());
+      void import('./hubJob').then(m => m.useHubJob.getState().clear());
+    },
   });
 }
 

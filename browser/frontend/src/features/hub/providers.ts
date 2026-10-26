@@ -92,7 +92,8 @@ function peakSets(s: BrowserState, view: HubView): FeatureSet[] {
   const out: FeatureSet[] = [];
   for (const rule of s.peakRules) {
     if (!rule.enabled || rule.source === 'custom' || rule.source === 'matched') continue;
-    const peaks = (s.peaksByRule[rule.id] ?? []).filter(p => overlapsView(p.chrom ?? s.chrom, p.start, p.end, view));
+    // Peaks of a panel on another reference (p.genome) are not this genome's coordinates.
+    const peaks = (s.peaksByRule[rule.id] ?? []).filter(p => !p.genome && overlapsView(p.chrom ?? s.chrom, p.start, p.end, view));
     const setId = `browser:peaks:${rule.id}`;
     const hits: FeatureHit[] = peaks.map(p => {
       const chrom = p.chrom ?? s.chrom;

@@ -421,3 +421,129 @@ def test_registry_keeps_one_entry_per_directory(tmp_path, bam):
     second = registry.open_scan(st, d, source='cache')
     assert [s.scan_id for s in registry.list_scans(st)] == ['fedcba9876543210']
     assert second.sets(st)[0]['setId'] == set_id   # cache set ids follow the directory
+
+
+def test_scan_routes_refused_on_lab_member_requests(tmp_path, bam, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import services.lab.paths as lab_paths
+    from routers.scan import router
+    from state.dependencies import get_state
+    d = write_scan_dir(tmp_path / 'scan', bam, hits=HITS)
+    st = _state([_dataset('ds_a', bam)])
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_state] = lambda: st
+    monkeypatch.setattr(lab_paths, 'enforcing', lambda: True)
+    client = TestClient(app)
+    assert client.post('/api/scan/open', json={'path': str(d)}).status_code == 403
+    assert client.get('/api/scan/list').status_code == 403
+    assert client.post('/api/scan/jobs', json={}).status_code == 403
+
+
+def test_manifest_link_out_of_the_directory_is_refused(tmp_path, bam):
+    from services.scan import registry
+    d = write_scan_dir(tmp_path / 'scan', bam, hits=HITS)
+    private = tmp_path / 'private'
+    private.mkdir()
+    (d / 'manifest.json').rename(private / 'manifest.json')
+    (d / 'manifest.json').symlink_to(private / 'manifest.json')
+    with pytest.raises(registry.ScanOpenError, match='outside the scan directory'):
+        registry.open_scan(_state(), d)
+
+
+def test_low_memory_cap_is_a_ceiling_over_explicit_caps():
+    from services.scan.planning import read_policy
+    st = NS(performance={'effective': 'low', 'max_working_reads': 15000})
+    assert read_policy(st, caps={'max_discovery_molecules': 10})['caps'] == {'max_discovery_molecules': 10, 'max_quantification_molecules': 15000}
+    assert read_policy(NS(performance={'effective': 'standard'}), caps={})  == {}
+
+
+def test_effective_peak_rules_follow_the_plan(tmp_path, bam):
+    from services.scan.planning import _effective_peak_rules, _scan_peak_rules
+    from services.scan import registry
+    lone = [dict(mode='bed', left=None, right=None)]
+    grid = [dict(mode='grid', left=None, right='x'), dict(mode='grid', left='y', right=None)]
+    auto = {'tier_rule': 'auto', 'row_rule': 'auto'}
+    assert _effective_peak_rules(auto, lone) == ('window', 'view')
+    assert _effective_peak_rules(auto, grid) == ('local', 'records')
+    assert _effective_peak_rules(auto, lone + grid) == ('local', 'records')
+    assert _effective_peak_rules({'tier_rule': 'local', 'row_rule': 'records'}, lone) == ('local', 'records')
+    d = write_scan_dir(tmp_path / 'scan', bam, hits=HITS)
+    (d / 'peaks' / 'extra').mkdir(parents=True)
+    (d / 'peaks' / 'extra' / 'calibration.json').write_text(json.dumps({'tier_rule': 'window', 'row_rule': 'view'}))
+    scan = registry.open_scan(_state([_dataset('ds_a', bam)]), d)
+    assert _scan_peak_rules(scan) == ('window', 'view')
+
+
+def test_states_identical_record_in_two_files(tmp_path):
+    """The tables name no input file: identical records in two files agree -> both keyed; disagree -> '.'."""
+    from services.scan import registry
+    from services.scan.states import hub_feature_states, _records_in
+    from services.lift.live_lift import LiftSettings
+    from services.lift.cohort import _encode_record
+    from services.lift.joint import molecule_key
+    a_dir, b_dir = tmp_path / 'a', tmp_path / 'b'
+    a_dir.mkdir(); b_dir.mkdir()
+    reads = (('m1/1/ccs', 1000, 0),)
+    bam_a = tiny_bam(a_dir / 'a.bam', reads=reads)
+    bam_b = tiny_bam(b_dir / 'b.bam', reads=reads + (('m9/9/ccs', 3000, 0),))   # same record, different file
+    rec = next(iter(_records_in(bam_a, 'chrT', 900, 1600)))
+    assert rec in _records_in(bam_b, 'chrT', 900, 1600)
+    settings = LiftSettings()
+    groups = settings.molecule_group_map([bam_a, bam_b], 'lifted')
+    key = lambda path: _encode_record([molecule_key(groups[path], 'm1/1/ccs'), 'm1/1/ccs', rec])
+    for states, want in ((['1', '1'], '1'), (['1', '0'], '.')):
+        d = _two_file_scan(tmp_path / f'case_{"".join(states)}', bam_a, bam_b,
+                           states=[('fp:class:chrT:1210:aaaaaaaa', 1200, 1220, 'm1/1/ccs', rec, st) for st in states])
+        ds = _dataset('lifted', [bam_a, bam_b], data_type='bam_livelift', live_lift=NS(settings=settings))
+        st = _state([ds])
+        set_id = registry.open_scan(st, d).sets(st)[0]['setId']
+        got, *_ = hub_feature_states(st, set_id, {'id': 'fp:class:chrT:1210:aaaaaaaa'})
+        assert got == {('lifted', key(bam_a)): want, ('lifted', key(bam_b)): want}
+
+
+def test_overlay_every_scan_dataset_bound_to_one_dataset_and_molecular_size(tmp_path):
+    from scan_fixtures import row, write_table
+    from services.scan import registry
+    from services.scan.identity import content_id
+    from services.scan.overlay import apply_scan_overlays
+    a_dir, b_dir = tmp_path / 'a', tmp_path / 'b'
+    a_dir.mkdir(); b_dir.mkdir()
+    bam_a = tiny_bam(a_dir / 'a.bam', reads=(('m1/1/ccs', 1000, 0),))
+    bam_b = tiny_bam(b_dir / 'b.bam', reads=(('m2/2/ccs', 1000, 0),))
+    d = write_scan_dir(tmp_path / 'scan', bam_a, hits=HITS, states=[
+        ('fp:class:chrT:1210:aaaaaaaa', 1200, 1220, 'm1/1/ccs', 'r1:0', '1')])
+    m = json.loads((d / 'manifest.json').read_text())
+    m['datasets'].append({'dataset_id': 'dataset_2', 'ordinal': 1, 'chemistry': None,
+                          'files': [{'name': 'b.bam', 'path': bam_b, 'input_index': 0, 'content_id': content_id(bam_b), 'size': 1}]})
+    (d / 'manifest.json').write_text(json.dumps(m))
+    write_table(d / 'fp' / 'states.tsv.bgz', ['hit_id', 'dataset_id', 'qname', 'record', 'molecule', 'state'],
+                [row('chrT', 1200, 1220, 'fp:class:chrT:1210:aaaaaaaa', 'dataset_1', 'm1/1/ccs', 'r1:0', 'mol:v1 0', '1'),
+                 row('chrT', 1200, 1220, 'fp:class:chrT:1210:aaaaaaaa', 'dataset_2', 'm2/2/ccs', 'r2:0', 'mol:v1 0', '0')], {'chrT': 0})
+    write_table(d / 'nuc' / 'marks.tsv.bgz', ['group', 'dataset_id', 'qname', 'record', 'molecule', 'mol_start', 'mol_len', 'q', 'name'],
+                [row('chrT', 1010, 2157, 'nucsz', 'dataset_1', 'm1/1/ccs', 'r1:0', 'mol:v1 0', 11, 147, '2,0,230,128', 'nucsz@ab_0')], {'chrT': 0})
+    m = json.loads((d / 'manifest.json').read_text())
+    m['modules']['nuc'] = {'version': '1.0', 'settings_hash': 'n' * 16, 'feature_types': [], 'ma_groups': [{'group': 'nucsz', 'kind': 'mark'}]}
+    m['outputs']['tables']['nuc/marks.tsv.bgz'] = dict(rows=1, sha256='')
+    (d / 'manifest.json').write_text(json.dumps(m))
+    st = _state([_dataset('merged', [bam_a, bam_b])])
+    scan = registry.open_scan(st, d)
+    assert scan.datasets_of_browser('merged') == ['dataset_1', 'dataset_2']
+    out = apply_scan_overlays(st, 'merged', 'chrT', 1000, 3000, [dict(id='m1/1/ccs', reference_start=1000, reference_end=2500, layers={}),
+                                                                 dict(id='m2/2/ccs', reference_start=1000, reference_end=1500, layers={})])
+    assert out[0]['layers']['fpcls']['qualities'] == [[1]] and out[1]['layers']['fpcls']['qualities'] == [[2]]
+    assert out[0]['layers']['nucsz']['intervals'] == [[10, 1157, 147]]   # molecular length, not the 1147 bp span
+
+
+def test_session_import_disposes_scans_and_live_scans(tmp_path, bam):
+    import threading
+    from services.scan import registry, jobs
+    d = write_scan_dir(tmp_path / 'scan', bam, hits=HITS)
+    st = _state([_dataset('ds_a', bam)])
+    registry.open_scan(st, d)
+    js, lock = jobs._session(st)
+    js['j1'] = dict(job_id='j1', status='running', created_at=0, _cancel=threading.Event())
+    jobs.dispose_session(st)
+    assert registry.list_scans(st) == []
+    assert js['j1']['_cancel'].is_set() and js['j1']['_disposed'] and js['j1']['status'] == 'cancelling'

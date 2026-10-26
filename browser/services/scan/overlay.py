@@ -58,7 +58,7 @@ def _mark_groups(scan) -> Dict[str, List[str]]:
 
 
 def overlay_scans(state, dataset_id: str):
-    """(scan, scan dataset id, {module: group}) of the open tables-mode scans bound to a native dataset."""
+    """(scan, [scan dataset ids], {module: group}) of the open tables-mode scans bound to a native dataset."""
     if not state.__dict__.get('scan_registry'):
         return []
     ds = (getattr(state, 'datasets', None) or {}).get(dataset_id)
@@ -67,13 +67,13 @@ def overlay_scans(state, dataset_id: str):
     from .registry import list_scans
     out = []
     for scan in list_scans(state):
-        sid = scan.dataset_of_browser(dataset_id)
-        if not sid:
+        sids = scan.datasets_of_browser(dataset_id)
+        if not sids:
             continue
         groups = _state_groups(scan)
         marks = _mark_groups(scan)
         if groups or marks:
-            out.append((scan, sid, dict(groups, **{f'{m}#marks': ','.join(names) for m, names in marks.items()})))
+            out.append((scan, sids, dict(groups, **{f'{m}#marks': ','.join(names) for m, names in marks.items()})))
     return out
 
 
@@ -114,7 +114,7 @@ def apply_scan_overlays(state, dataset_id: str, chrom: str, start: int, end: int
     ds = state.datasets.get(dataset_id)
     derived = getattr(ds, 'derived_layers', None) or {}
     marks: Dict[str, Dict[str, list]] = {}
-    for scan, sid, groups in scans:
+    for scan, sids, groups in scans:
         by_table: Dict[tuple, list] = {}
         for module, table, group in _group_names(groups):
             if (derived.get(group) or {}).get('kind') != 'scan-overlay':
@@ -122,7 +122,7 @@ def apply_scan_overlays(state, dataset_id: str, chrom: str, start: int, end: int
             by_table.setdefault((module, table), []).append(group)
         for (module, table), wanted in by_table.items():
             for r in scan.tables.fetch(f'{module}/{table}.tsv.bgz', chrom, start, end):
-                if r.get('dataset_id') != sid:
+                if r.get('dataset_id') not in sids:
                     continue
                 group = wanted[0] if table == 'states' else r.get('group')
                 if group not in wanted:
@@ -153,8 +153,10 @@ def apply_scan_overlays(state, dataset_id: str, chrom: str, start: int, end: int
                     lo, hi = max(a, start), min(b, end)
                     if hi <= lo:
                         continue
-                    ivs.append([lo - start, hi - start, b - a])
-                    srcs.append([a - start, b - start, b - a])
+                    # The size field is the mark's molecular length (as the MA group parses), not its reference span.
+                    size = int(row['mol_len']) if isinstance(row.get('mol_len'), int) else b - a
+                    ivs.append([lo - start, hi - start, size])
+                    srcs.append([a - start, b - start, size])
                     if 'hit_id' in row:
                         names.append(row.get('hit_id', ''))
                         q0.append([STATE_BYTE.get(str(row.get('state')), 3)])

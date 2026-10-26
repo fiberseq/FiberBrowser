@@ -19,9 +19,11 @@ const SV_TYPE: FeatureTypeDecl = {
 };
 
 function svSets(s: BrowserState, view: HubView): FeatureSet[] {
-  const feeds = Object.values(useTrackFeedStore.getState().byStateKey);
   const merged: Array<{ sv: SvLike; byDataset: Record<string, { support: number; informative: number }> }> = [];
-  for (const feed of feeds) {
+  for (const [stateKey, feed] of Object.entries(useTrackFeedStore.getState().byStateKey)) {
+    // A panel on another reference (its own genome) is not in this genome's coordinates.
+    const panel = s.panels.find(p => (p.stateKey ?? p.datasetId) === stateKey);
+    if (panel?.genome) continue;
     if (!feed.sv || feed.zoomedOut || !overlapsView(feed.dataChrom, view.start, view.end, view)) continue;
     for (const c of feed.sv.clusters) {
       const sv: SvLike = { t: c.t, ref: c.ref, len: c.len };

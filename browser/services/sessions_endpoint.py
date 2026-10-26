@@ -337,6 +337,9 @@ def _import_session(state, req, *, dafc_state=None) -> dict:
     # Runs the session carries (its saved classes refer to them) stay as they are; the rest go. None is deleted
     # before its replacement exists: they are restored under their own ids once the datasets are open.
     dispose_consensus(state, keep_fit_cache=True, keep_job_ids=session_run_ids(session))
+    # Scans open in the workspace and live scans belong to it too (the feature hub reopens the session's own).
+    from services.scan.jobs import dispose_session as dispose_scans
+    dispose_scans(state)
     # Plugin packs drop their work for the replaced session (keeping what the new one carries).
     run_hooks("session_import_begin", state, session)
     # Loads still running for the replaced datasets must not refill the caches.

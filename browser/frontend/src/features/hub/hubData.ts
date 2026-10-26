@@ -35,19 +35,38 @@ function rememberInSession(info: ScanInfo) {
   }));
 }
 
-/** Refresh the server's open scans; the browser-scan cache directories join the session's list. */
+/**
+ * Refresh the server's open scans. The hub shows the scans this session lists (featureHub.scans): a scan the server
+ * has open for another reason (a session imported before) never joins it on its own.
+ */
 export async function refreshScans(): Promise<ScanInfo[]> {
   try {
     const { scans } = await listScans();
-    useHubData.setState({ scans, error: '' });
-    for (const s of scans) for (const set of s.sets) ensureHubKind(set.type);
-    const known = new Set(useBrowserStore.getState().featureHub.scans.map(s => s.path));
-    for (const s of scans) if (s.source === 'cache' && !known.has(s.path)) rememberInSession(s);
+    const listed = new Set(useBrowserStore.getState().featureHub.scans.map(s => s.path));
+    const mine = scans.filter(s => listed.has(s.path));
+    useHubData.setState({ scans: mine, error: '' });
+    for (const s of mine) for (const set of s.sets) ensureHubKind(set.type);
     return scans;
   } catch (e) {
     useHubData.setState({ error: String((e as Error).message ?? e) });
     return useHubData.getState().scans;
   }
+}
+
+/** A live scan of this session finished: its cache directories join the session (then the list). */
+export async function adoptScans(scanIds: string[]): Promise<void> {
+  if (!scanIds.length) return;
+  try {
+    const { scans } = await listScans();
+    for (const s of scans) if (scanIds.includes(s.scanId)) rememberInSession(s);
+  } catch { /* the next refresh shows them once listed */ }
+  await refreshScans();
+}
+
+/** A session is being imported: the hub's live data belong to the previous one. */
+export function resetHubData(): void {
+  hitsController?.abort();
+  useHubData.setState({ scans: [], missing: {}, error: '', hits: {}, loadingHits: false });
 }
 
 /** Open a scan directory (Open scan…): binds it to the loaded datasets and lists its sets. */
@@ -110,7 +129,7 @@ export async function restoreSessionScans(): Promise<void> {
 async function restoreOnce(): Promise<void> {
   {
     const server = await refreshScans();
-    const open = new Set(server.map(s => s.path));
+    const open = new Set(server.map(s => s.path));   // every scan the server has open (refreshScans returns all)
     const missing: Record<string, string> = { ...useHubData.getState().missing };
     for (const s of useBrowserStore.getState().featureHub.scans) {
       if (open.has(s.path)) { delete missing[s.path]; continue; }
@@ -135,12 +154,19 @@ async function restoreOnce(): Promise<void> {
 export function scanColumnKey(set: ScanSetInfo, scanDataset: string, scanId: string): string {
   if (scanDataset === 'all') return 'all';
   const g = set.groups.find(x => x.scanDataset === scanDataset || x.id === scanDataset);
-  if (g) return g.datasetId ? dsKey(g.datasetId) : `scan:${scanId}:${g.scanDataset ?? scanDataset}`;
+  if (g) return groupKey(set, g, scanId);
   // A dataset's haplotype group ('dataset_1:HP1', nuc patches): its dataset's column with the haplotype.
   const cut = scanDataset.lastIndexOf(':');
   const base = cut > 0 ? set.groups.find(x => x.scanDataset === scanDataset.slice(0, cut)) : undefined;
-  if (base) return `${base.datasetId ? dsKey(base.datasetId) : `scan:${scanId}:${base.scanDataset}`}:${scanDataset.slice(cut + 1)}`;
+  if (base) return `${groupKey(set, base, scanId)}:${scanDataset.slice(cut + 1)}`;
   return `scan:${scanId}:${scanDataset}`;
+}
+
+/** A scan group's column: its bound dataset's (with the scan dataset when several bind to one loaded dataset). */
+function groupKey(set: ScanSetInfo, g: ScanSetInfo['groups'][number], scanId: string): string {
+  if (!g.datasetId) return `scan:${scanId}:${g.scanDataset ?? g.id}`;
+  const shared = set.groups.filter(x => x.datasetId === g.datasetId).length > 1;
+  return shared ? `${dsKey(g.datasetId)}#${g.scanDataset ?? g.id}` : dsKey(g.datasetId);
 }
 
 /** Column decls for the scan groups a set's hits carry beyond its datasets (haplotype groups). */
@@ -178,7 +204,11 @@ export function scanHitToFeature(set: ScanSetInfo, scanId: string, h: ScanHit): 
 export function scanSets(scans: ScanInfo[]): Array<FeatureSet & { scan: ScanInfo; info: ScanSetInfo }> {
   // Groups keyed like the hits' values: the bound browser dataset's column, else the scan's own dataset.
   return scans.flatMap(scan => scan.sets.map(set => ({ ...(set as unknown as FeatureSet), scan, info: set,
-    groups: set.groups.map(g => ({ ...g, id: g.id === 'all' ? 'all' : scanColumnKey(set, g.scanDataset ?? g.id, scan.scanId) })) })));
+    groups: set.groups.map(g => {
+      if (g.id === 'all') return g;
+      const id = scanColumnKey(set, g.scanDataset ?? g.id, scan.scanId);
+      return { ...g, id, label: id.includes('#') ? `${g.label} · ${g.scanDataset ?? g.id}` : g.label };
+    }) })));
 }
 
 let hitsController: AbortController | null = null;

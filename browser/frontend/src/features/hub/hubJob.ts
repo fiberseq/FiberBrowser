@@ -1,7 +1,7 @@
 /** The live scan this session runs, polled until it ends; its scans then join the hub (transient). */
 import { create } from 'zustand';
 import { cancelScanJob, getScanJob, type ScanJob } from './api';
-import { refreshDatasetLayers, refreshScans } from './hubData';
+import { adoptScans, refreshDatasetLayers } from './hubData';
 
 interface HubJobStore {
   job: ScanJob | null;
@@ -26,7 +26,7 @@ export const useHubJob = create<HubJobStore>((set, get) => ({
         if (get().job?.job_id !== next.job_id) return;
         set({ job: next });
         if (!LIVE.has(next.status)) {
-          await refreshScans();
+          await adoptScans(next.scans ?? []);
           void refreshDatasetLayers();
           return;
         }
@@ -40,5 +40,5 @@ export const useHubJob = create<HubJobStore>((set, get) => ({
     if (!job) return;
     try { set({ job: await cancelScanJob(job.job_id) }); } catch { /* polling shows the state */ }
   },
-  clear: () => set({ job: null }),
+  clear: () => { if (timer) clearTimeout(timer); timer = null; set({ job: null }); },
 }));

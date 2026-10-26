@@ -113,10 +113,12 @@ class OpenScan:
         return set_id_of(type_id, key, module, self.module(module).get('settings_hash', ''))
 
     def dataset_of_browser(self, browser_id: str) -> Optional[str]:
-        for scan_ds, b in self.bindings.items():
-            if b.get('dataset') == browser_id and b.get('status') == 'bound':
-                return scan_ds
-        return None
+        found = self.datasets_of_browser(browser_id)
+        return found[0] if found else None
+
+    def datasets_of_browser(self, browser_id: str) -> List[str]:
+        """Every scan dataset bound to a browser dataset (several when one loaded dataset holds their files)."""
+        return [sid for sid, b in self.bindings.items() if b.get('dataset') == browser_id and b.get('status') == 'bound']
 
     def count_types(self) -> None:
         """Rows per hit type of each module's hits table (small tables read whole; larger: module totals only)."""
@@ -310,6 +312,8 @@ def read_manifest(path) -> dict:
         raise ScanOpenError(f'Not a folder: {p}')
     if not mf.is_file():
         raise ScanOpenError('No manifest.json in this folder: give a finished fiberhmm-scan output directory')
+    if _inside(p, 'manifest.json') is None:
+        raise ScanOpenError('manifest.json is outside the scan directory (a link out of it)')
     try:
         manifest = json.loads(mf.read_text())
     except ValueError as error:
@@ -395,8 +399,9 @@ def open_scan(state, path, *, source: str = 'opened', label: Optional[str] = Non
     scans, lock = _session(state)
     with lock:
         # One registration per directory: a browser cache that grew (another chromosome) has a new scan id.
+        # The replaced reader is not closed here: a request may be reading it; its files close when it is dropped.
         for key in [k for k, v in scans.items() if v.path == p]:
-            scans.pop(key).tables.close()
+            scans.pop(key)
         old = scans.get(scan.scan_id)
         if old is not None and old.path != p:
             # The same scan key in two directories (computed live and opened from disk): both stay, under distinct ids.
@@ -434,7 +439,7 @@ def close_scan(state, scan_id: str) -> bool:
     with lock:
         scan = scans.pop(scan_id, None)
     if scan is not None:
-        scan.tables.close()
+        # Not closed explicitly: a request may still be reading it (its files close when it is dropped).
         _refresh_layers(state)
     return scan is not None
 

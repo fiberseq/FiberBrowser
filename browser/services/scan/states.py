@@ -110,22 +110,35 @@ def states_from_table(state, scan, module: str, hit: dict, bound) -> Dict[Tuple[
     keyers = {sid: _Keyer(state, bid, files) for sid, (bid, _via, files) in bound.items()}
     # The states tables name records without their input file: a dataset of several files finds each record's
     # file by its records over the rows' span (only live-lift keys need it: the provenance group is per file).
-    file_of: Dict[str, Dict[str, int]] = {}
+    file_of: Dict[str, Dict[str, List[int]]] = {}
     for sid, (bid, _via, files) in bound.items():
-        if keyers[sid].lifted and len(files) > 1:
-            r_lo = min(int(r['start']) for r in rows if r.get('dataset_id') == sid) if any(r.get('dataset_id') == sid for r in rows) else lo
-            r_hi = max(max(int(r['end']), int(r['start']) + 1) for r in rows if r.get('dataset_id') == sid) if any(r.get('dataset_id') == sid for r in rows) else hi
-            index: Dict[str, int] = {}
+        mine = [r for r in rows if r.get('dataset_id') == sid]
+        if keyers[sid].lifted and len(files) > 1 and mine:
+            r_lo = min(int(r['start']) for r in mine)
+            r_hi = max(max(int(r['end']), int(r['start']) + 1) for r in mine)
+            index: Dict[str, List[int]] = {}
             for i, path in sorted(files.items()):
                 for rec in _records_in(path, hit['chrom'], r_lo, r_hi):
-                    index.setdefault(rec, i)
+                    index.setdefault(rec, []).append(i)
             file_of[sid] = index
+    by_record: Dict[tuple, List[dict]] = {}
     for r in rows:
-        sid = r['dataset_id']
-        record = r.get('record') or None
-        input_index = file_of.get(sid, {}).get(record or '', 0)
-        key = keyers[sid].key(input_index, r.get('qname', ''), record)
-        found.setdefault((bound[sid][0], key), []).append(_state_char(r.get('state')))
+        by_record.setdefault((r['dataset_id'], r.get('record') or ''), []).append(r)
+    for (sid, record), group in by_record.items():
+        candidates = file_of.get(sid, {}).get(record) if sid in file_of else [0]
+        candidates = candidates or [0]
+        states = [_state_char(r.get('state')) for r in group]
+        if len(candidates) == 1:
+            pairs = [(candidates[0], st) for st in states]
+        elif len(set(states)) == 1:
+            # The same record in several files (identical copies): one row per file, all agreeing.
+            pairs = [(i, states[0]) for i in candidates]
+        else:
+            # Disagreeing copies the tables can't tell apart (they name no input file): not evaluated.
+            pairs = [(i, '.') for i in candidates]
+        for input_index, st in pairs:
+            key = keyers[sid].key(input_index, group[0].get('qname', ''), record or None)
+            found.setdefault((bound[sid][0], key), []).append(st)
     return found
 
 

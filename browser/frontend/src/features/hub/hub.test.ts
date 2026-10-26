@@ -205,3 +205,50 @@ describe('review fixes (round 1)', () => {
     fetchSpy.mockRestore();
   }, 15_000);
 });
+
+describe('review fixes (round 2)', () => {
+  it('peaks and SVs of a panel on another reference are not listed as this genome\'s hits', async () => {
+    const { hubProviders } = await import('./hubState');
+    const { useTrackFeedStore } = await import('../../stores/trackFeedStore');
+    useBrowserStore.setState({ chrom: 'chr3', start: 0, end: 10_000,
+      peakRules: [{ id: 'r1', name: 'Acc', source: 'accessibility', enabled: true, color: '#000', opacity: 1, useGradient: false, smoothWidth: 100, thresholds: [0.6, 0.4, 0.2, 0.08], minPeakWidth: 80, minReads: 5 }],
+      peaksByRule: { r1: [{ start: 100, end: 200, index: 0, chrom: 'chr3' }, { start: 240, end: 260, index: 1, chrom: 'chr3', genome: 'hg002' }] },
+      panels: [{ id: 'p1', contentType: 'dataset', datasetId: 'a', stateKey: 'a' }, { id: 'p2', contentType: 'dataset', datasetId: 'b', stateKey: 'b', genome: 'hg002' }] as never });
+    const sv = (datasetId: string) => ({ datasetId, chrom: 'chr3', start: 0, end: 10_000, dataChrom: 'chr3', dataStart: 0, dataEnd: 10_000, zoomedOut: false,
+      sv: { min_len: 50, margin: 50, scope: 'all', n_reads: 10, clips: [], clusters: [{ id: 'x', t: 'D', ref: 140, len: 20, end: 160, support: 3, informative: 10, sa_support: 0 }] } });
+    useTrackFeedStore.setState({ byStateKey: { a: sv('a') as never, b: sv('b') as never } });
+    const s = useBrowserStore.getState();
+    const view = { chrom: 'chr3', start: 0, end: 10_000 };
+    const peaks = hubProviders().find(p => p.id === 'peaks')!.sets(s, view);
+    expect(peaks[0].source.kind === 'inline' && peaks[0].source.hits.map(h => h.start)).toEqual([100]);
+    const svs = hubProviders().find(p => p.id === 'sv')!.sets(s, view);
+    expect(svs[0].datasets).toEqual(['a']);
+  });
+  it('Use as cluster regions takes this genome\'s custom peak, not another genome\'s with the same span', async () => {
+    const { asClusterRegions } = await import('./actions');
+    const { clusterBasis } = await import('../../utils/clusterTargets');
+    const { DEFAULT_PEAK_RULES } = await import('../../types/peak');
+    useBrowserStore.setState({ chrom: 'chr3', start: 0, end: 10_000, selectedFeatures: [], clusterPeakMode: 'accessibility' as never, panels: [] as never,
+      peakRules: DEFAULT_PEAK_RULES.map(r => ({ ...r })), peaksByRule: {}, selectedPeaks: new Set(), peakModes: {} });
+    useBrowserStore.getState().addCustomPeak(140, 160, 'chr3', 'other-genome');
+    expect(await asClusterRegions([{ setId: 'hub:0123456789abcdef', hitId: 'h', typeId: 'fp.class', chrom: 'chr3', start: 140, end: 160, anchor: 150, datasets: ['a'] }], false)).toBeNull();
+    const basis = clusterBasis(useBrowserStore.getState());
+    expect(basis.regions).toEqual([{ start: 140, end: 160, mode: 'tf', chrom: 'chr3' }]);
+  });
+  it('the hub lists only the session\'s scans; a live scan\'s scans join it when it finishes', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async url => {
+      const scan = (path: string, source: string) => ({ scanId: path, path, label: path, source, manifestDigest: '', sets: [], datasets: [], annotated: [], modules: {}, units: { mode: 'grid' }, annotate: false });
+      const body = String(url).includes('/api/scan/list') ? { scans: [scan('/old/cache', 'cache'), scan('/new/cache', 'cache')] } : { datasets: [] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+    const { refreshScans, adoptScans, useHubData } = await import('./hubData');
+    useBrowserStore.setState({ featureHub: EMPTY_HUB });
+    await refreshScans();
+    expect(useHubData.getState().scans).toEqual([]);
+    expect(useBrowserStore.getState().featureHub.scans).toEqual([]);
+    await adoptScans(['/new/cache']);
+    expect(useHubData.getState().scans.map(s => s.path)).toEqual(['/new/cache']);
+    expect(useBrowserStore.getState().featureHub.scans.map(s => s.path)).toEqual(['/new/cache']);
+    fetchSpy.mockRestore();
+  });
+});
