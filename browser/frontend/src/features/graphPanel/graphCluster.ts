@@ -498,6 +498,7 @@ function transformPlan(st: PlanState, plan: ClusterTargetPlan): ClusterTargetPla
     return r;
   });
   const n = g.observations.length;
+  const inRunCount = rows.filter(r => r.inRun).length;
   const what = `${g.regions.length} region${g.regions.length === 1 ? '' : 's'} on graph columns`;
   const headline = `Cluster at ${what} · ${n} path${n === 1 ? '' : 's'} fitted once`;
   const notes = [...plan.notes.filter(x => !x.includes('left out')),
@@ -505,7 +506,8 @@ function transformPlan(st: PlanState, plan: ClusterTargetPlan): ClusterTargetPla
     ...(g.offContig ? [`${g.offContig} region${g.offContig === 1 ? '' : 's'} not on the graph's target`] : [])];
   return { ...plan, rows, refusal: g.refusal, basis: { ...plan.basis, kind: 'graph' as ClusterBasis['kind'], what },
     headline, notes, summary: [headline, ...notes].join(' · '),
-    chip: `Panels: ${rows.filter(r => r.inRun).length} panels · ${n} path${n === 1 ? '' : 's'}${g.leftOut.length ? ` · ${g.leftOut.length} left out` : ''}` };
+    // "1 panel" / "3 panels" (it once read "Panels: 1 panels").
+    chip: `${inRunCount} panel${inRunCount === 1 ? '' : 's'} · ${n} path${n === 1 ? '' : 's'}${g.leftOut.length ? ` · ${g.leftOut.length} left out` : ''}` };
 }
 
 let registered = false;
