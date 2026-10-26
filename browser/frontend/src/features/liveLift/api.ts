@@ -79,7 +79,7 @@ export function inspectLiftMap(manifest: string): Promise<LiftMapInfo> {
 }
 
 export function addLiveLiftDataset(body: {
-  paths: string[]; manifest: string; haplotypes: string[]; settings?: LiftSettings; label?: string;
+  paths: string[]; manifest: string; haplotypes: string[]; settings?: LiftSettings; label?: string; source_fasta?: string;
 }): Promise<LiftAddResult> {
   return fetchJson('/api/lift/datasets', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),

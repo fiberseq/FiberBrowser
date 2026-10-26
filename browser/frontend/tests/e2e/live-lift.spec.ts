@@ -430,7 +430,9 @@ test('the Differences row: compact header, options in its right-click menu and t
   await page.getByTestId('live-lift-diff-strip').first().click({ button: 'right', position: { x: 300, y: 30 } });
   await page.getByTestId('track-context-menu').getByRole('menuitem', { name: 'Live-lift settings…' }).click();
   await expect(page.getByTestId('live-lift-settings-differences')).toBeVisible();
-  await page.getByTestId('live-lift-settings-read-badges').selectOption('off');
+  // Insertion marks are off by default (owner, 25 Oct); the settings turn ticks on.
+  await expect(page.getByTestId('live-lift-settings-read-badges')).toHaveValue('off');
+  await page.getByTestId('live-lift-settings-read-badges').selectOption('ticks');
   await page.getByTestId('live-lift-settings-save').click();
-  await expect.poll(() => page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().differencesSession.options.readBadges)).toBe('off');
+  await expect.poll(() => page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().differencesSession.options.readBadges)).toBe('ticks');
 });
