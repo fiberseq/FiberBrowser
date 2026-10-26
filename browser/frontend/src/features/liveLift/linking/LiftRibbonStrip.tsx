@@ -49,8 +49,10 @@ export function LiftRibbonStrip({ panel, width, height, sidebarWidth }: { panel:
   const ref = useRef<HTMLDivElement>(null);
   const { chrom, start, end, dark, dataset, liftReversed, sourceReversed, expansions, liftPanel } = useBrowserStore(useShallow(s => {
     const lp = s.panels.find(p => p.id === link.liftPanelId);
+    // The lifted panel's own view when it keeps one ("Each panel navigates"), else the main view it follows.
+    const lv = lp?.viewportOverride;
     return {
-      chrom: s.chrom, start: s.start, end: s.end, dark: s.darkMode,
+      chrom: lv?.chrom ?? s.chrom, start: lv?.start ?? s.start, end: lv?.end ?? s.end, dark: s.darkMode,
       dataset: s.datasets.find(d => d.id === link.datasetId),
       liftReversed: panelReversed(s, link.liftPanelId), sourceReversed: panelReversed(s, panel.id),
       expansions: s.liveLiftExpansions?.[liveLiftViewKey(lp)] ?? EMPTY, liftPanel: lp,

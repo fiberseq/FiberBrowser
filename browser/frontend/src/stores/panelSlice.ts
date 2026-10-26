@@ -51,6 +51,26 @@ function withUndo(get: () => BrowserState, label: string, apply: () => void, coa
 /** A panel's pans/zooms this close together are one undo step (the main view's settle after 500 ms). */
 const PANEL_NAVIGATION_COALESCE_MS = 750;
 
+/** Panels linked to `panel` that keep views of their own follow its move, and theirs follow them (a source view moves
+ * its graph host, which moves the host's other source views), each panel at most once. */
+function moveLinkedFollowers(get: () => BrowserState, panel: PanelConfig, span: { chrom: string; start: number; end: number }) {
+  const moved = new Set([panel.id]);
+  let wave = [{ panel, span }];
+  while (wave.length) {
+    const next: typeof wave = [];
+    for (const w of wave) {
+      for (const f of panelFollowers(w.panel, w.span, get().panels)) {
+        if (moved.has(f.panelId)) continue;
+        moved.add(f.panelId);
+        get().setPanelViewportFromLink(f.panelId, f.span);
+        const p = get().panels.find(x => x.id === f.panelId);
+        if (p) next.push({ panel: p, span: f.span });
+      }
+    }
+    wave = next;
+  }
+}
+
 const panelKey = (panel: PanelConfig) => panel.stateKey ?? panel.datasetId ?? panel.id;
 
 /**
@@ -1088,7 +1108,7 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
   navigatePanel: (panelId, chrom, start, end) => withUndo(get, panelNavigationLabel(chrom, start), () => {
     movePanelOwnView(panelId, chrom, start, end);
     const moved = get().panels.find(p => p.id === panelId);
-    if (moved?.viewportOverride) for (const f of panelFollowers(moved, moved.viewportOverride, get().panels)) get().setPanelViewportFromLink(f.panelId, f.span);
+    if (moved?.viewportOverride) moveLinkedFollowers(get, moved, moved.viewportOverride);
     // A linked panel (utils/panelExtensions.ts view links) takes the main view with it, as its pans do: one undo step.
     const state = get();
     const panel = state.panels.find(p => p.id === panelId);
@@ -1098,7 +1118,13 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
       withLinkedPanelMoving(panelId, () => get().setViewport(mapped.chrom, mapped.start, mapped.end));
     }
   }),
-  navigatePanelOwnView: (panelId, chrom, start, end) => withUndo(get, panelNavigationLabel(chrom, start), () => movePanelOwnView(panelId, chrom, start, end)),
+  navigatePanelOwnView: (panelId, chrom, start, end) => withUndo(get, panelNavigationLabel(chrom, start), () => {
+    movePanelOwnView(panelId, chrom, start, end);
+    // Panels linked to it that keep views of their own follow it, as after navigatePanel (a graph host's moves to
+    // another contig and its pans while it follows a graph go through here).
+    const moved = get().panels.find(p => p.id === panelId);
+    if (moved?.viewportOverride) moveLinkedFollowers(get, moved, moved.viewportOverride);
+  }),
   openPanelAtSite: (panelId, options) => {
     const state = get();
     const source = state.panels.find(p => p.id === panelId);
@@ -1277,7 +1303,7 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
       lastMovedPanels: recordPanelMove(state.lastMovedPanels, panel, next),
     });
     // Panels linked to this one that keep views of their own ("Each panel navigates") follow it.
-    for (const f of panelFollowers(panel, next, get().panels)) get().setPanelViewportFromLink(f.panelId, f.span);
+    moveLinkedFollowers(get, panel, next);
     if (move) {
       // The main view is a site too; its own update must not move us again.
       const main = moveLikewise({ chrom: state.chrom, start: state.start, end: state.end }, prev, next);
