@@ -3,8 +3,9 @@
 ## Unreleased
 
 Everything since 3.0.1. Live lift is on by default
-(`FIBERBROWSER_LIVE_LIFT=0` turns it off for a server); graph mode needs the
-graph helper and a graph package. See [Setting up live lift and graph mode](docs/workflows/pangenome-setup.md).
+(`FIBERBROWSER_LIVE_LIFT=0` turns it off for a server; a lab server keeps it
+off unless started with `=1`); graph mode needs the graph helper and a graph
+package. See [Setting up live lift and graph mode](docs/workflows/pangenome-setup.md).
 Maps, graph packages and the helper are made with
 [graphlift](https://github.com/mtcicero26/graphlift).
 
@@ -13,21 +14,27 @@ Maps, graph packages and the helper are made with
 - **Reads from another assembly, drawn on this genome.** **Open ▾ → Add live
   lift…** shows a BAM aligned to a sample's own assembly (for example HG002's
   maternal and paternal haplotypes) on the genome you are browsing, through a
-  graphlift map, without realigning. Only the view and a margin are lifted, as
+  graphlift map or a plain UCSC chain (`.chain`, `.chain.gz`), without
+  realigning. Only the view and a margin are lifted, as
   you browse. By default each haplotype gets its own panel (**MAT**, **PAT**),
   next to the same reads aligned to the reference; **Open as** also offers
   **Graph** and **Pooled**. See [Live lift](docs/workflows/live-lift.md).
 - **View on another assembly (live lift)…** in a BAM panel's **…** menu opens
   the same dialog for that BAM, with the maps it found next to the BAM, in its
-  folders and in the Library, best match first.
+  folders and in the Library, best match first. On a lab server the search
+  stays in its data folders.
+- **Source assembly FASTA (optional)** in the dialog: with the sample's own
+  assembly, the inspector shows its bases, **Copy sequence** copies assembly
+  insertions, insertions can be **Confirmed by assembly**, and a spot check of
+  the map's anchors refuses a FASTA that doesn't match.
 - Lifted reads are drawn in pieces where the assemblies differ, with dashed
   connectors across gaps. **Hatching** on the coverage track marks stretches
   with no counterpart on the haplotype, so they don't look like stretches with
   no reads.
 - **Insertions on reads**: optional ticks where a read has bases the reference
   lacks: **Off** (the default; the Differences row shows the insertions),
-  **Ticks** or **Ticks with size**, from the row's right-click menu or the
-  settings. Ticks stay visible at every row height; this fixes insertion badges
+  **Ticks** or **Ticks with size**, from the **Insertions** control in the
+  toolbar's **Layers** row, the row's right-click menu or the settings. Ticks stay visible at every row height; this fixes insertion badges
   that showed on one haplotype only at some window sizes.
 - **Supplementary alignments**: **Own rows** (the default), **On the primary's
   row** or **Hide**.
@@ -52,8 +59,12 @@ Maps, graph packages and the helper are made with
 - **Shared hover**: a molecule is outlined in both panels, with a line across
   the ribbon, with tooltips on or off.
 - **Shared navigation**: the source view follows the main view through the map,
-  and moving the source view moves the main view. Expanding an insertion moves
-  the source view to its bases.
+  and moving the source view moves the main view; in *Each panel navigates*
+  the two panels still move each other. Expanding an insertion moves the
+  source view to its bases. **Zoom to read** follows a read to another
+  chromosome.
+- Source views are named after the sample in the lift map (for example *HG002
+  MAT source*), not a fixed name.
 - Where a view matches several stretches (*N correspondences*), the source
   view's menu chooses which one to follow; a match on the opposite strand opens
   reversed. Links are saved with sessions.
@@ -79,6 +90,22 @@ Maps, graph packages and the helper are made with
   expand, highlight, split by carrier, show in the source view, copy the
   sequence). The same options are under **Live-lift settings… → Differences
   row**.
+- **Assembly comparison.** A read difference is compared with the sample's
+  assembly and labelled ✓ **Confirmed by assembly** (the same change),
+  ≈ **assembly-supported (approximate)** (at least 90% identity) or
+  ? **Assembly candidate (geometry only)**, in the **Reads** lane, its tooltip,
+  the table's new **Assembly comparison** column and the inspector, with each
+  haplotype's link. **Compare consensus with assembly** compares an insertion
+  through the reads' consensus. A native BAM's inspector compares with an open
+  lifted dataset's assembly. See
+  [Differences](docs/workflows/differences.md#assembly-comparison).
+- **Exact assembly alleles**: the inspector's **Allele target** calls carriers
+  of the assembly's exact allele (up to about 1 kb), not only its shape.
+  **Load molecule calls** works on lifted datasets.
+- Enter on a focused mark opens the inspector. Carrier highlights stay within
+  the lifted dataset and the difference's own haplotype. The inspector's read
+  table shows read names, and its columns are named after the map's sample and
+  reference.
 - **Split by carrier** works on lifted differences, from the inspector. Splits
   can be frozen and saved; sessions with 3.0 SV splits and expanded insertions
   open with them migrated, and a relink step reattaches saved cohorts to moved
@@ -103,7 +130,9 @@ Maps, graph packages and the helper are made with
   through supplementary alignments are recovered. Replacements are trimmed to
   their real size, and equivalent breakpoints in repeats count as one variant.
 - The SVs tab counts read *N confirmed of M informative reads* (was *N carriers
-  of M informative reads*), and each row has **Inspect difference**.
+  of M informative reads*), and each row has **Inspect difference**. The
+  native row's menu is headed *Differences (SVs and indels in reads)*, and `i`
+  inspects from the keyboard.
 
 ### Graph mode and the graph view
 
@@ -125,9 +154,24 @@ Maps, graph packages and the helper are made with
   density strip and a count of what is drawn. Read budgets follow
   **Performance mode**.
 - **Graph view panel** (preview): a sequence tube map of the graph in view, with
-  inversions, repeats and small differences, reads along their walks, click to
-  expand an insertion and ⌘-click to inspect. Graph packages are registered
-  from it.
+  inversions (a palindromic core drawn as one inversion), repeats and small
+  differences, reads along their walks, click to expand an insertion and
+  ⌘-click to inspect.
+- **Register graph package…** in **Open ▾**, and a **Graph packages** list in
+  **Settings › Reads & Display › Graph mode** (register, **Remove**), without
+  preview features; on a lab server only its admins manage them.
+- **Settings › Reads & Display › Graph mode**: **Open lifted datasets as**,
+  **Open native BAMs in graph mode**, the zoom-out hand-off (any 10–50 kb pair)
+  and **Complexity hand-off**. **Load by path** has **Open in graph mode**.
+- A one-time **View as graph** offer on restored split sessions and when a
+  package binds a dataset late.
+- **Pop out paths…** pops out a chosen set of haplotypes; **Pop out as: lifted
+  panel / source view / lifted and source** chooses what a pop-out opens.
+  Source views take a graph run's labels.
+- Rows are ordered by their first carried graph column; switching between graph
+  and linear fades; a panel drawn linear lists the inserted sequence a run used;
+  a single-haplotype dataset is labelled by its path name; **Not a carrier** is
+  given only with complete evidence.
 - **The graph helper** ships as the `fiberbrowser[graph]` extra (not in
   `[all]`; built for Apple silicon Macs so far) and is included in the macOS
   app. Checked packages are remembered, so the check is not repeated at each
@@ -140,15 +184,19 @@ Maps, graph packages and the helper are made with
   A lift that kept no `Yf` tag shows every record, and the BAM check suggests
   repairing it with FiberHMM's `fiberhmm-lift --repair-only`. Native `vg
   giraffe` BAMs are no longer taken for lifts.
-- A read's DAF-seq strand (CT or GA) comes from its own `st` tag. The tooltip
+- A read's DAF-seq strand (CT or GA) comes from its own `st` tag; a record whose
+  strand fiberhmm-lift reversed shows its source `st`, so CT/GA agree across
+  native, live-lifted, fiberhmm-lifted and graph rows. The tooltip
   shows a repaired lift's source locus and source MAPQ, and the Library shows
   the lift (source → target, graph).
 
 ### Clustering and analysis
 
-- **No MAPQ filter by default.** Analyses and the conflicting-clip rule no
-  longer drop reads below MAPQ 20 unless you set a minimum; the minimum stays
-  available where it was.
+- **No MAPQ filter by default.** Read-difference calls, conflicting clips,
+  split-read junctions, the SNP scan and consensus evidence no longer drop
+  reads below MAPQ 20. A minimum can still be set: **Read analysis MAPQ ≥** (new,
+  in Live-lift settings), **MapQ ≥** in the SNPs tab and **Min elsewhere MAPQ**
+  for conflicting clips.
 
 - Cluster assignment counts only positions a read covers, breaks ties the same
   way every time, and no longer depends on read order.
@@ -171,6 +219,9 @@ Maps, graph packages and the helper are made with
 - Datasets added to the server after a page opened now appear in it.
 - A crash in SV projection, stale split and export requests, DAF consensus for
   circular carriers, and insertion marks on minus-strand reads.
+- Lifted rows keep their connectors across 1 bp map holes, keep deleted bases
+  cut, and cut calls only at indels of at least the SV minimum, as native rows
+  do.
 
 ### For developers
 

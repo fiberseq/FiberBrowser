@@ -75,6 +75,11 @@ a lab server's accounts and audit log. `fiberbrowser --open-link URL` hands a
 | `FIBERBROWSER_SETTINGS` | Use another settings file instead of `~/.fiberhmm/browser_settings.json`. |
 | `FIBERBROWSER_NO_UPDATE_CHECK=1`, `FIBERBROWSER_UPDATE_URL` | Turn update checks off, or read the update manifest from another address (see [Updates](updates.md)). |
 | `FIBERBROWSER_RECENT_TRACKS_FILE` | Where the Tracks panel keeps its **Recent** list (default `~/.fiberhmm/recent_tracks.json`). |
+| `FIBERBROWSER_LIVE_LIFT=0` (or `1`) | Turn live lift off (it is on by default), or on for a lab server, where it is off by default. A public server never offers it. See [Setting up live lift and graph mode](workflows/pangenome-setup.md#live-lift-is-on). |
+| `FIBERBROWSER_GRAPH_HELPER=/path/to/fiberbrowser-graph` | Use this graph helper instead of the `fiberbrowser[graph]` companion package or the macOS app's copy. |
+| `FIBERBROWSER_GRAPH_PACKAGES=dir[:dir…]` | Register these graph packages at start-up. |
+| `FIBERBROWSER_GRAPH_REGISTRY` | Where registered graph packages are remembered (default `~/.fiberhmm/graph_registrations.json`). |
+| `FIBERBROWSER_FRONTEND_DIST` | Serve a frontend built outside the checkout (development). |
 
 `~/.fiberhmm/browser_settings.json` holds a few per-computer settings for
 source and pip runs: `fiberhmm_source_dir` (as `FIBERHMM_SOURCE_DIR`),

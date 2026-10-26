@@ -21,27 +21,39 @@ source (MIT).
 
 | What | Used by | Where it comes from |
 |---|---|---|
-| **A lift map** (`*.graphlift.json`, with the files next to it) | live lift, linked panels, the Differences row | `gbz2chain` in [graphlift](https://github.com/mtcicero26/graphlift#chains-and-sidecar-gbz2chain), from a pangenome graph (for example an HPRC release) |
+| **A lift map**: a graphlift map (`*.graphlift.json`, with the files next to it), or a plain UCSC chain (`.chain`, `.chain.gz`) | live lift, linked panels, the Differences row | `gbz2chain` in [graphlift](https://github.com/mtcicero26/graphlift#chains-and-sidecar-gbz2chain), from a pangenome graph (for example an HPRC release), which writes both; or any UCSC chain, for example a liftOver chain |
 | **A BAM aligned to the sample's assembly** | live lift | your aligner, against the assembly whose contig names the map uses (for example `chr1_MATERNAL`) |
+| **The sample's assembly FASTA** (optional, indexed) | the inspector's assembly bases, copying an assembly insertion, **Confirmed by assembly** for insertions | the assembly you aligned the BAM to |
 | **The graph helper** (`fiberbrowser-graph`) | graph mode, the graph view panel | the macOS app includes it; otherwise `pip install "fiberbrowser[graph]"` (see below) |
 | **A graph package** | graph mode, the graph view panel | `fiberbrowser-graph prepare` in [graphlift](https://github.com/mtcicero26/graphlift#fiberbrowser-graph-helper-fiberbrowser-graph) |
 
-A plain UCSC `.chain` file cannot drive live lift: FiberBrowser reads the
-graphlift map (`gbz2chain` writes the chain and the map together).
+A graphlift map is the better choice when you have one. A plain chain works,
+with these differences:
+
+- its haplotypes come from its contig names: `SAMPLE#HAP#CONTIG` gives one
+  haplotype per `SAMPLE#HAP`, `_MATERNAL` and `_PATERNAL` give **MAT** and
+  **PAT**, and anything else is one haplotype, **H**;
+- the Differences row shows insertions, deletions and other gaps, but no
+  substitutions (a chain doesn't record them);
+- the whole chain is held in memory (about 850 MB for a whole genome).
 
 ## Live lift is on
 
-<!-- ENABLEMENT (owner decision, 25 Oct): live lift is on by default; FIBERBROWSER_LIVE_LIFT only turns it off.
-     If this changes again, this section is the one place to update (live-lift.md, linked-panels.md and graph-mode.md
-     do not describe enablement). -->
+<!-- ENABLEMENT (owner decision, 25 Oct): live lift is on by default; FIBERBROWSER_LIVE_LIFT only turns it off
+     (and turns it on for a lab server). If this changes again, this section is the one place to update. -->
 
 Live lift needs no setup beyond a lift map: **Open ▾** has **Add live lift…**
 and a BAM panel's **…** menu has **View on another assembly (live lift)…**.
 
-To turn it off for a server (for example a shared one), start FiberBrowser with
-`FIBERBROWSER_LIVE_LIFT=0`. The two menu items are then hidden, and a saved
-session that holds a lifted dataset says that live lift is turned off on that
-server.
+- **To turn it off** for a server, start FiberBrowser with
+  `FIBERBROWSER_LIVE_LIFT=0` (or `false`, `no`, `off`). The two menu items are
+  then hidden.
+- **A shared lab server** keeps it off unless its host starts it with
+  `FIBERBROWSER_LIVE_LIFT=1`. **A public server** never offers it.
+- **A saved session** that holds a lifted dataset, opened where live lift is
+  off, says *This session or request uses a live-lift dataset, which is turned
+  off in this server. Start FiberBrowser with FIBERBROWSER_LIVE_LIFT=1 to open
+  it.*
 
 ## Installing the graph helper
 
@@ -68,26 +80,33 @@ A graph package is a folder made by `fiberbrowser-graph prepare`. FiberBrowser
 checks every file in it once, when you register it, and remembers it after
 that.
 
-- **In the app:** open the **Graph view** panel (a preview feature, see below),
-  then **Register a graph package…** in its right-click menu (or in its empty
-  state, *No graph package registered*). Enter the package folder and click
-  **Register**. Checking a large package can take a few minutes.
+- **In the app:** **Open ▾ → Register graph package…** opens **Settings ›
+  Reads & Display › Graph mode**, at **Graph packages**. Enter the package
+  folder (or **Browse…**) and click **Register**. Checking a large package can
+  take a few minutes. **Remove** next to a package forgets it.
 - **At start-up:** `FIBERBROWSER_GRAPH_PACKAGES=/path/to/package` (several
-  folders separated by `:`) registers packages without opening the panel.
+  folders separated by `:`) registers packages. A package named there comes
+  back at the next start even after **Remove**.
+- **On a shared lab server** only its admins can register or remove packages;
+  others see *Lab admins register and remove graph packages on this server.*
 
-![The graph view panel before a package is registered](../images/pangenome/setup-graph-register.png)
+![Settings › Reads & Display › Graph mode: how lifted datasets open, the zoom-out hand-off, and the registered graph packages](../images/pangenome/setup-graph-packages.png)
 
-With more than one package registered, the graph view's right-click menu has a
-**Graph package** submenu to switch between them. A package whose files change
-after it was checked is refused until you register it again.
+The same Settings block chooses how new lifted datasets open (**Open lifted
+datasets as**), whether native BAMs open in graph mode, and the zoom-out
+hand-off; see [Graph mode](graph-mode.md). The standalone **Graph view** panel
+still has its own **Register a graph package…** item, and, with more than one
+package registered, a **Graph package** submenu to switch between them. A
+package whose files change after it was checked is refused until you register
+it again.
 
 ## Preview features
 
 **Settings › Reads & Display › Read Display › Show preview features** shows
-features that are still being finished. It is on unless you turn it off. For graphs it controls only the
-standalone **Graph view** panel, which is also where packages are registered
-in the app. Graph mode on dataset panels (the **Linear ⇄ Graph** pill and
-**View as graph**) does not depend on it.
+features that are still being finished. It is on unless you turn it off. For
+graphs it controls only the standalone **Graph view** panel. Registering
+packages and graph mode on dataset panels (the **Linear ⇄ Graph** pill and
+**View as graph**) don't depend on it.
 
 ![Show preview features in Settings](../images/pangenome/setup-preview-features.png)
 
@@ -114,7 +133,8 @@ It prints a link to open when the data is loaded. Ctrl+C stops the server.
 | Option | What it does |
 |---|---|
 | `--sample LABEL LIFTED_BAM [NATIVE_BAM]` | A sample: its reads on its own assembly (added as a live-lift dataset, *LABEL (lifted)*) and, optionally, on the reference (*LABEL (GRCh38)*). Repeat for more samples. |
-| `--map FILE` | The graphlift map (`.graphlift.json`) for the lifted BAMs. |
+| `--map FILE` | The lift map for the lifted BAMs: a graphlift `.graphlift.json`, or a UCSC `.chain` / `.chain.gz`. |
+| `--source-fasta FILE` | The samples' own assembly FASTA (indexed; optional; default `ref/source.fa` or `ref/source.fa.gz` when one exists). |
 | `--graph-package DIR` | A graph package (repeatable). `--no-graph` leaves graphs off, so lifted datasets open as one panel per haplotype. |
 | `--graph-helper PATH` | A `fiberbrowser-graph` you built; otherwise the companion package or the macOS app's copy is used. |
 | `--fasta FILE` | The reference FASTA (with its `.fai`). |
@@ -126,10 +146,13 @@ It prints a link to open when the data is loaded. Ctrl+C stops the server.
 
 Every path has a default under one work folder, `~/pglift_work` (or
 `$PGLIFT_WORK`): `demo_data/`, `maps/`, `graph/` and `ref/`, as in the example
-above. `python scripts/unified_demo.py --help` lists them.
+above. Pass `--port`, or the default (8883) is used. `python scripts/unified_demo.py --help` lists them.
 
-The launcher gives the server a home folder of its own, so it never reads or
-changes your settings, Library or sessions in `~/.fiberhmm`. It listens on this
+The launcher gives the server a home folder of its own, points every file the
+server keeps (settings, Library, jobs, sessions) into it and ignores
+`FIBERBROWSER_*` variables set in your shell, so it never reads or changes
+your own settings, Library or sessions. Pass the graph helper with
+`--graph-helper`, not `FIBERBROWSER_GRAPH_HELPER`. It listens on this
 computer only, without an access token: use it for demos and testing, not as a
 shared server.
 
@@ -137,9 +160,11 @@ shared server.
 
 | Symptom | What to check |
 |---|---|
-| No **Add live lift…** in **Open ▾** | The server was started with `FIBERBROWSER_LIVE_LIFT=0` (live lift turned off). |
-| *No lift map was found next to this BAM or in the Library* | Put the `.graphlift.json` (with its files) next to the BAM or in its folder, add it to the Library, or type its path in the dialog. |
-| *Cannot read the map* | The file is not a graphlift map (a plain `.chain` is not enough), or the files next to it are missing. |
+| No **Add live lift…** in **Open ▾** | The server was started with `FIBERBROWSER_LIVE_LIFT=0`, or it is a lab server started without `=1`, or a public server. |
+| *No lift map was found next to this BAM or in the Library* | Put the map (a `.graphlift.json` with its files, or a `.chain`) next to the BAM or in a folder beside it, add it to the Library, or type its path in the dialog. |
+| *Cannot read the map* | The file is neither a graphlift map nor a UCSC chain, or a graphlift map's files are missing. |
+| *Anchor sequence mismatch* | The source assembly FASTA is not the assembly the map was made from. |
 | **Graph helper unavailable** | Install `fiberbrowser[graph]`, or set `FIBERBROWSER_GRAPH_HELPER`, then restart. |
 | **View as graph** is greyed out | Its tooltip says why: no helper, no registered package, or no package path matches the dataset. |
 | No **Graph view** panel in the rail | **Show preview features** was turned off: turn it back on. |
+| No **Register graph package…** in **Open ▾** | A public server, or a lab server where you are not an admin. |

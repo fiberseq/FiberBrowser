@@ -19,12 +19,20 @@ source view**; **Open source view** when the panel has one haplotype).
 
 The source view opens directly under the lifted panel, at the stretch of the
 assembly that corresponds to the view. It is an ordinary panel of the same BAM
-on the assembly's contigs, titled for example *HG002 MAT source*, and it needs
-no FASTA of the assembly. Each haplotype has at most one source view: choosing
-the item again brings back the one that is open.
+on the assembly's contigs, titled with the sample and haplotype (for example
+*HG002 MAT source*; the sample's name comes from the lift map, and a map that
+names no single sample gives *MAT source*). It needs no FASTA of the assembly.
+Each haplotype has at most one source view: choosing the item again brings
+back the one that is open.
 
 The source view's header shows a chip in the haplotype's colour, *Linked ·
 HG002 MAT* (with *· reversed* when it is drawn reversed).
+
+A source view can also open from [graph mode](graph-mode.md): with **Pop out
+as: source view** (or **lifted and source**) in a graph panel's **…** menu,
+popping out a haplotype opens its source view beside the graph, starting with
+that haplotype's filters, selections and clusters. A source view of a
+haplotype that is in a graph cluster run takes the run's labels by read name.
 
 ## The ribbon
 
@@ -74,9 +82,13 @@ libraries with the same read names are never confused.
 - **Show in the source view**, in a difference's right-click menu, moves the
   source view to that difference.
 
-The link follows the main view. In **Per panel** navigation (the
-**Linked / Per panel** switch; *Each panel navigates*) the panels move on their
-own; the ribbon and the shared hover still work.
+In **Per panel** navigation (the **Linked / Per panel** switch; *Each panel
+navigates*) the lifted panel and its source view still move each other through
+the map, while the main view stays where it is. A move made before the map has
+loaded there leaves the other panel in place.
+
+**Zoom to read** (in the read menu) also moves the panel when the read is
+found on another chromosome.
 
 ## When there is more than one match
 

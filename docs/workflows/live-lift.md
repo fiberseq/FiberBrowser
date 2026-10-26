@@ -16,8 +16,8 @@ cluster them together.
 
 ## What you need
 
-A lift map made with [graphlift](https://github.com/mtcicero26/graphlift) (see
-below), and a BAM aligned to the sample's assembly. See
+A lift map (see below), a BAM aligned to the sample's assembly and, if you
+have it, that assembly's FASTA. See
 [Setting up live lift and graph mode](pangenome-setup.md) for where these come
 from.
 
@@ -25,27 +25,35 @@ from.
 
 A **lift map** relates the contigs of the sample's assembly (for example
 `chr3_MATERNAL` and `chr3_PATERNAL`) to the reference you are browsing. It is
-a `.graphlift.json` file with a few files next to it, written by `gbz2chain`
-in [graphlift](https://github.com/mtcicero26/graphlift) from a pangenome graph.
-One map can hold several haplotypes; FiberBrowser shows them by their labels
-(**MAT**, **PAT**, or the map's own names).
+either:
 
-The BAM's contig names must be the map's source names. A plain UCSC `.chain`
-file cannot be used.
+- a **graphlift map**: a `.graphlift.json` file with a few files next to it,
+  written by `gbz2chain` in [graphlift](https://github.com/mtcicero26/graphlift)
+  from a pangenome graph; or
+- a plain **UCSC chain** (`.chain`, `.chain.gz`, `.over.chain`), for example a
+  liftOver chain. Its haplotypes come from its contig names (`_MATERNAL` and
+  `_PATERNAL` give **MAT** and **PAT**), and the Differences row shows its
+  gaps but no substitutions. See
+  [Setting up](pangenome-setup.md#what-you-need) for the other differences.
+
+One map can hold several haplotypes; FiberBrowser shows them by their labels
+(**MAT**, **PAT**, or the map's own names). The BAM's contig names must be the
+map's source names.
 
 ## Opening a lifted dataset
 
 There are two ways in:
 
-- **Open ▾ → Add live lift…** (the last item in the menu) opens an empty
-  dialog.
+- **Open ▾ → Add live lift…** opens an empty dialog.
 - **View on another assembly (live lift)…** in a BAM panel's **…** menu opens
   the same dialog with that BAM filled in, and lists the maps it found.
 
 ![Open ▾ → Add live lift…](../images/pangenome/live-lift-open-menu.png)
 
-FiberBrowser looks for maps next to the BAM, in its parent folder and its
-subfolders, in the Library, and among the maps already in use. Maps whose
+FiberBrowser looks for maps (graphlift maps and chains) next to the BAM, in
+its parent folder, in the folders inside the BAM's folder, in the Library, and
+among the maps already in use. For a remote BAM only the Library and the maps
+in use are searched, and on a lab server only its data folders. Maps whose
 source contigs match the BAM come first, and the best match is chosen for you.
 If none is found, the dialog says so; type the map's path instead.
 
@@ -55,9 +63,18 @@ The dialog asks for:
 
 - **Source BAM file(s), one per line.** Several BAMs of the same sample make
   one dataset.
-- **Graphlift map (.graphlift.json).**
+- **Lift map (graphlift .graphlift.json, or a UCSC .chain / .chain.gz).**
+- **Source assembly FASTA (optional):** the sample's own assembly, indexed.
+  With it the inspector shows the assembly's bases, **Copy sequence** copies
+  an assembly insertion's bases, and insertions can be **Confirmed by
+  assembly** (see [Differences](differences.md#assembly-comparison)).
+  (**Identify** works on the sequence of one carrier read that holds the whole
+  insertion, with or without this FASTA.) When the
+  reference FASTA is loaded too, a spot check of the map's anchors refuses a
+  FASTA that doesn't match the map.
 - **Haplotypes.** All are ticked; untick any you don't want.
-- **Open as:**
+- **Open as** (it starts from **Settings › Reads & Display › Graph mode › Open
+  lifted datasets as**):
   - **Graph** (the default): one panel drawn on a pangenome graph, with the
     haplotypes folded in. This needs a registered graph package that knows the
     map's haplotypes; otherwise the dataset opens as one panel per haplotype.
@@ -79,17 +96,25 @@ Click **Add**.
   that crosses a stretch the reference lacks is drawn in pieces, with a dashed
   connector across sequence that only the reference has.
 - **Insertions.** The Differences row above the reads shows where the sample
-  has bases the reference lacks. The reads themselves carry no insertion marks
-  unless you ask for them: **Insertions on reads** chooses **Off** (the
-  default), **Ticks** (a small tick on each read with an insertion there) or
-  **Ticks with size** (labelled, for example *+2.4 kb*, where rows are at
-  least 7 px tall). It is in the Differences row's right-click menu and in
-  **Live-lift settings…**. Clicking a tick expands the insertion (see
+  has bases the reference lacks; click one there to expand it. The reads
+  themselves carry no insertion marks unless you ask for them: the
+  **Insertions** control in the toolbar's **Layers** row (shown while a lifted
+  dataset is open) chooses **Off** (the default), **Ticks** (a small tick on
+  each read with an insertion there) or **Ticks with size** (labelled, for
+  example *+2.4 kb*, where rows are at least 7 px tall). The same choice is in
+  the Differences row's right-click menu and in **Live-lift settings…**; it is
+  one setting for the session. Clicking a tick expands the insertion (see
   [Differences](differences.md#expanding-an-insertion)).
+
+![The Insertions control in the Layers row, set to Ticks with size](../images/pangenome/live-lift-insertions.png)
+
 - **Hatching.** Grey diagonal lines over the coverage histogram mark stretches
   of the reference that have no counterpart on the haplotype (for example a
   deletion in the sample). There, an empty coverage track means "nothing to
-  lift", not "no reads". Light hatching marks partial correspondence.
+  lift", not "no reads". Light hatching marks partial correspondence. The
+  coverage histogram is off by default: turn on **Coverage histogram** in
+  **Settings › Reads & Display**. The reads show the same stretch as a dashed
+  connector.
 - **The Differences row** above the reads shows where the haplotype differs
   from the reference. See [Differences](differences.md).
 - **The read tooltip** says where the read came from (*Live lift from
@@ -143,7 +168,7 @@ dataset.
 | Show alternative placements | off | Also draw reads at their other placements (up to 16, dashed rows). |
 | Supplementary alignments | Own rows | As above. |
 | Hatch coverage without correspondence | on | The hatching above. |
-| **Differences row** | | Sources, minimum size and insertion ticks; see [Differences](differences.md#settings). |
+| **Differences row** | | Sources, minimum size, insertion ticks and **Read analysis MAPQ ≥** (0: no MAPQ filter); see [Differences](differences.md#settings). |
 | **Advanced** | | How lifted reads enter analyses: haplotype panels (split or pooled), supplementary records and alternative placements in analyses, folding a molecule's records into one row, pooled coverage, and which libraries share molecules with an open native dataset. |
 
 ## Exporting lifted reads
@@ -157,16 +182,18 @@ assembly. BAM export is not available on a public server.
 
 Some analyses refuse lifted datasets and say so: *{Feature} is not available
 for live-lift datasets yet. Use the source BAM, or a BAM aligned to this
-genome, for it.* These include peak scanning in the linear view, metaprofiles,
-co-accessibility and figure read tracks. Open the source view, or the same
-reads aligned to the reference, for them. In graph mode, **Scan** works on
-lifted datasets.
+genome, for it.* These include metaprofiles, co-accessibility and figure read
+tracks. Open the source view, or the same reads aligned to the reference, for
+them. **Scan** works on lifted datasets: in the linear view it finds peaks in
+the lifted reads on the reference's coordinates, every haplotype pooled, and
+in graph mode on the graph.
 
 ## Troubleshooting
 
 | Symptom | What to check |
 |---|---|
-| No **Add live lift…** | The server was started with live lift turned off ([Setting up](pangenome-setup.md#live-lift-is-on)). |
+| No **Add live lift…** | The server has live lift turned off (`FIBERBROWSER_LIVE_LIFT=0`, a lab server, or a public server; see [Setting up](pangenome-setup.md#live-lift-is-on)). |
+| *Anchor sequence mismatch* | The source assembly FASTA is not the assembly the map was made from. |
 | *No lift map was found* | Put the map (with its files) next to the BAM or in the Library, or type its path. |
 | *the BAM's contigs are not this map's sources* | The BAM was aligned to a different assembly, or its contigs are named differently. |
 | A stretch has no reads | Check for hatching: the reference may have no counterpart on that haplotype there. |

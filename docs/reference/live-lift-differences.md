@@ -1,7 +1,8 @@
 # Live-lift differences and insertion expansion
 
 All coordinates are zero based, half open. All endpoints require
-`FIBERBROWSER_LIVE_LIFT=1` and are unavailable in public mode. `dataset_id`
+live lift to be on (the default; `FIBERBROWSER_LIVE_LIFT=0` turns it off, and a lab
+server needs `=1`) and are unavailable in public mode. `dataset_id`
 must identify a `bam_livelift` dataset. `lift_hap` optionally selects a
 configured haplotype key or its case-insensitive label (`MAT`, `PAT`). The
 dataset capability is `differences`.

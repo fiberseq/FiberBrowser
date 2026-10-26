@@ -269,16 +269,20 @@ in 3.0; the expanded insert (step 50) is a Preview feature, on by default
    ![One panel per haplotype](images/guide/47_reads_split_by_haplotype.png)
 
 5. Open **SVs**. It lists the deletions and insertions of 50 bp or more in
-   view, with their carriers: here **INS 7.5 kb @ chr1:23,277,273**, carried by
-   71 of 108 informative reads. Each row can group or split the reads by the
-   SV (carriers, reference, not informative), open it in the **Insertion
-   lens**, or show which SNP alleles travel with it. Tick two to four SVs to
+   view, with their carriers: here **INS 7.5 kb @ chr1:23,277,273**, with its
+   confirmed carriers out of the informative reads, then its putative,
+   conflicting and ambiguous reads (see
+   [Structural variants](workflows/structural-variants.md#evidence-levels)).
+   Each row can group or split the reads by the SV (carriers, reference, not
+   informative), open it in the **Insertion lens**, inspect it, or show which
+   SNP alleles travel with it. Tick two to four SVs to
    split by their combined genotype. ([48](guide.md#48-structural-variants))
-6. Hover the insertion's flag in the **SV** row for its carriers, and
-   right-click it for the same actions.
-   ([49](guide.md#49-insertions-on-the-reads))
+6. Hover the insertion's flag in the **Differences** row (the SV row in 3.0)
+   for its carriers. Click it to highlight them and expand the insertion in
+   place, ⌘-click to inspect it, and right-click it for the same actions as
+   the SVs tab. ([49](guide.md#49-insertions-on-the-reads))
 
-   ![The SV row's menu](images/guide/x17_sv_row_menu.png)
+   ![The Differences row's menu on the insertion](images/guide/x17_sv_row_menu.png)
 
 7. Right-click the insertion and choose **Open carriers with the insert
    expanded**. The carriers are re-aligned onto the alternate allele (reference
