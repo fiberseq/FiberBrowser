@@ -29,10 +29,14 @@ export interface CanonicalWalk {
  *
  * - Target visits rank by visit, in walk order (a node the target walks twice has two ranks).
  * - A carrier path is walked in the target's frame order: its baseline parity is the orientation carrying most of
- *   its bp on target nodes (a minus-parity carrier is walked backwards, as layout.ts frames it). A visit of a target
- *   node takes the first target visit of that node after the carrier's last anchor (colinear; none: an extra copy,
- *   ranked like an insertion after the anchor); an
- *   off-target node ranks right after the last anchor, in frame order, and keeps its first carrier's rank and
+ *   its matched bp (the helper's direct matches, else shared nodes; a minus-parity carrier is walked backwards, as
+ *   layout.ts frames it).
+ * - A carrier visit takes the target visit it is matched to: the helper's direct match when there is exactly one;
+ *   else a node both walk once (an inverted run keeps its target ranks and orientation, whatever order the carrier
+ *   walks it in); else, for a node either walks more than once, the first unclaimed target visit after the carrier's
+ *   last anchor (colinear). A copy left without one is ranked like an insertion after the anchor (Codex review,
+ *   group H round 3: an inversion is not an extra copy).
+ * - An off-target node ranks right after the last anchor, in frame order, and keeps its first carrier's rank and
  *   orientation (relative to the target frame) for later carriers (agy review, group H).
  */
 export function canonicalWalk(topology: GraphTopology, bindingOrder?: readonly string[]): CanonicalWalk {
@@ -42,37 +46,62 @@ export function canonicalWalk(topology: GraphTopology, bindingOrder?: readonly s
   }
   const nodes: CanonicalWalk['nodes'] = new Map();
   const visits: CanonicalWalk['visits'] = new Map();
+  const targetOccs = occurrences.get(topology.target) ?? [];
   const targetVisits = new Map<string, { i: number; reverse: boolean }[]>();
-  (occurrences.get(topology.target) ?? []).forEach((o, i) => {
+  targetOccs.forEach((o, i) => {
     const v = { rank: [i, 0, 0] as const, reverse: o.reverse };
     visits.set(o.id, v);
     if (!nodes.has(o.node)) nodes.set(o.node, v);
     (targetVisits.get(o.node) ?? targetVisits.set(o.node, []).get(o.node)!).push({ i, reverse: o.reverse });
   });
+  // The helper's direct matches (either wire form): source occurrence -> its target visits and relative orientation.
+  const targetIndex = new Map(targetOccs.map((o, i) => [o.id, i]));
+  const direct = new Map<string, { i: number; reverse: boolean }[]>();
+  const addMatch = (src: string, tgt: string, reverse: boolean) => {
+    const i = targetIndex.get(tgt);
+    if (i === undefined) return;
+    (direct.get(src) ?? direct.set(src, []).get(src)!).push({ i, reverse });
+  };
+  for (const m of topology.direct_matches ?? []) addMatch(m.source_occurrence, m.target_occurrence, m.reverse);
+  for (const [p, si, ti, r] of topology.direct_match_index ?? []) {
+    const src = topology.paths[p]?.occurrences[si], tgt = targetOccs.length ? topology.paths.find(x => x.binding === topology.target)?.occurrences[ti] : undefined;
+    if (src && tgt) addMatch(src.id, tgt.id, r === 1);
+  }
   const order = (key: string) => { const i = bindingOrder?.indexOf(key) ?? -1; return i < 0 ? 1e6 + topology.paths.findIndex(p => p.binding === key) : i; };
   const others = topology.paths.map(p => p.binding).filter(b => b !== topology.target).sort((a, b) => order(a) - order(b));
   const len = (o: GraphOccurrence) => Math.max(1, o.clip.end - o.clip.start);
   others.forEach((b, pi) => {
     const occs = occurrences.get(b) ?? [];
-    // Baseline parity: the orientation against the target carrying the most bp of shared nodes.
+    const walks = new Map<string, number>();
+    for (const o of occs) walks.set(o.node, (walks.get(o.node) ?? 0) + 1);
+    // Baseline parity: the orientation against the target carrying the most matched bp.
     let same = 0, opposite = 0;
     for (const o of occs) {
-      const t = targetVisits.get(o.node)?.[0];
-      if (t) { if (o.reverse === t.reverse) same += len(o); else opposite += len(o); }
+      const d = direct.get(o.id);
+      const rev = d?.length === 1 ? d[0].reverse : (() => { const t = targetVisits.get(o.node)?.[0]; return t ? o.reverse !== t.reverse : null; })();
+      if (rev === null) continue;
+      if (rev) opposite += len(o); else same += len(o);
     }
     const backward = opposite > same;
+    const claimed = new Set<number>();
     let anchor = -1, step = 0;
+    const take = (o: GraphOccurrence, i: number) => {
+      claimed.add(i); anchor = i; step = 0;
+      visits.set(o.id, { rank: [i, 0, 0], reverse: targetOccs[i].reverse });
+    };
     for (const o of backward ? [...occs].reverse() : occs) {
+      const d = direct.get(o.id);
+      if (d?.length === 1 && !claimed.has(d[0].i)) { take(o, d[0].i); continue; }
       const t = targetVisits.get(o.node);
-      // (A target visit at or before the anchor would run the frame backwards: a copy the target walks fewer times
-      // than this carrier is unrolled like an insertion, after the anchor.)
-      const hit = t?.find(x => x.i > anchor) ?? (t && anchor < 0 ? t[0] : undefined);
-      if (hit) {
-        anchor = hit.i; step = 0;
-        visits.set(o.id, { rank: [hit.i, 0, 0], reverse: hit.reverse });
+      if (t) {
+        // A node both walk once: that target visit, wherever it lies (an inversion runs against the frame).
+        if (t.length === 1 && walks.get(o.node) === 1 && !claimed.has(t[0].i)) { take(o, t[0].i); continue; }
+        const hit = t.find(x => x.i > anchor && !claimed.has(x.i)) ?? (anchor < 0 ? t.find(x => !claimed.has(x.i)) : undefined);
+        if (hit) { take(o, hit.i); continue; }
+        // An extra copy: unrolled like an insertion after the anchor.
+        visits.set(o.id, { rank: [anchor, pi + 1, ++step], reverse: o.reverse !== backward });
         continue;
       }
-      if (t) { visits.set(o.id, { rank: [anchor, pi + 1, ++step], reverse: o.reverse !== backward }); continue; }
       const known = nodes.get(o.node);
       if (known) { visits.set(o.id, known); continue; }
       const v = { rank: [anchor, pi + 1, ++step] as const, reverse: o.reverse !== backward };

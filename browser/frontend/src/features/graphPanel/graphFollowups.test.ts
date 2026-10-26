@@ -34,6 +34,7 @@ import { createRoot } from 'react-dom/client';
 import { PopOutPicker, pickedPopOut, usePopOutPicker } from './PopOutPicker';
 import { canonicalWalk, compareColumnKeys, firstCarriedColumn, firstCarriedColumns } from './columnOrder';
 import repeatVisit from './__fixtures__/gateC/repeat_visit.topology.json';
+import invSplit from './__fixtures__/gateD/inv_split.topology.json';
 import { packMemberBands, type BandMember } from './memberBands';
 import type { PlacedMolecule } from './readGeometry';
 import type { PanelConfig } from '../../types';
@@ -544,5 +545,33 @@ describe('group H agy review 3: source pop-outs start with their member\'s state
     popOutPaths('mat', ['only']);
     await new Promise(r => setTimeout(r, 0));
     expect(openLinkedSourceView).toHaveBeenCalledWith('only', null, { view: { chrom: 'chr3', start: 100, end: 900 }, besidePanelId: 'mat' });
+  });
+});
+
+describe('group H Codex round 3, 1: an inverted run keeps its target ranks (not extra copies)', () => {
+  const topoOf = (j: unknown) => ((j as { topology?: unknown }).topology ?? j) as GraphTopology;
+  const rd = (k: string, s0: number, e0: number) => ({ k, b: 'mat', s: s0, e: e0, cov: [[s0, e0, 0, 1]] as [number, number, number, number][] });
+  const mol = (r: ReturnType<typeof rd>): PlacedMolecule => ({ read: { ...r, d: 'd', lib: 0, q: r.k, rec: 'r', c: '', st: '+', sup: false, ins: [], hap: 'MAT' } as GraphRead,
+    lane: 'mat', visits: [], body: [], calls: [], m6a: [], density: [], ins: [], holes: [], connectors: [], extent: [0, 100], unplacedBp: 0 });
+
+  it('inv_split: MAT walks 4-, 3-, 2- against the target\'s 2, 3, 4; each keeps its target rank and orientation', () => {
+    for (const withMatches of [true, false]) {
+      const base = topoOf(invSplit);
+      const topo = withMatches ? base : { ...base, direct_matches: [], direct_match_index: undefined } as GraphTopology;
+      const walk = canonicalWalk(topo, ['ref', 'mat', 'pat']);
+      const mat = walk.occurrences.get('mat')!;
+      expect(mat.map(o => walk.visits.get(o.id)!.rank[0])).toEqual([0, 3, 2, 1, 4]);
+      expect(mat.every(o => walk.visits.get(o.id)!.reverse === false)).toBe(true);
+      // The read reaching node 2 (upstream on the target) ranks first and keeps the one row.
+      const reads = [rd('down', 1030, 1220), rd('up', 1200, 1320)];
+      const cols = firstCarriedColumns(reads, topo, ['ref', 'mat', 'pat']);
+      expect(cols.get('up')).toEqual([1, 0, 0, 10]);
+      // (It ends 10 bp into node 2, which MAT walks reversed: its first canonical column there is offset 110.)
+      expect(cols.get('down')).toEqual([1, 0, 0, 110]);
+      const M: BandMember = { panelId: 'mat', stateKey: 'k-mat', datasetId: 'd', liftHap: 'MAT', binding: 'mat', label: 'MAT', color: '#111' };
+      const lane = packMemberBands(reads.map(mol), [M], {}, 1, 'position', 3, undefined, m => cols.get(m.read.k))!.get('mat')!;
+      expect(lane.rows[0].map(m => m.read.k)).toEqual(['up']);
+      expect(lane.hidden).toBe(1);
+    }
   });
 });
