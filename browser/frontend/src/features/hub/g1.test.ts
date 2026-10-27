@@ -94,7 +94,13 @@ describe('matching hits across frames (DESIGN §5.4)', () => {
     const b = hit('s2|b', 's2', { chrom: 'chr3_MATERNAL', start: 20, end: 120, anchor: 70, frame: MAT_FRAME,
       target: { chrom: 'chr3', start: 9_000, end: 9_100, anchor: 9_050 } });   // split: kept on another segment
     expect(sameFeature(a, b)).toBe(true);
-    expect(sameFeature(a, { ...b, frame: { ...MAT_FRAME, datasetId: 'other' } })).toBe(false);
+    // Another dataset of the same assembly is the same frame; another assembly is not; without an assembly identity
+    // the live-lift dataset decides.
+    expect(sameFeature(a, { ...b, frame: { ...MAT_FRAME, datasetId: 'other' } })).toBe(true);
+    expect(sameFeature(a, { ...b, frame: { ...MAT_FRAME, assembly: 'other' } })).toBe(false);
+    const bare = (h: Matchable, ds: string) => ({ ...h, frame: { ...MAT_FRAME, assembly: '', datasetId: ds } });
+    expect(sameFeature(bare(a, 'x'), bare(b, 'x'))).toBe(true);
+    expect(sameFeature(bare(a, 'x'), bare(b, 'y'))).toBe(false);
     expect(sameFeature(a, { ...b, frame: PAT_FRAME, chrom: 'chr3_PATERNAL' })).toBe(false);
   });
 
@@ -232,11 +238,23 @@ describe('hub hits on a graph host', () => {
     expect(shared.get('mat')).toEqual([10, 20]);
   });
 
+  it('never draws a hit on a path that does not carry it, or on the copies of a repeat', () => {
+    const paths = (mat: string) => ({ target: { status: 'carried', carried: 10, total: 10, label: 't', datasets: [] },
+      mat: { status: mat, carried: 0, total: 10, label: 'm', datasets: [] } }) as unknown as GraphAlias['paths'];
+    expect([...columnSpans(scene, topology, [['n1', 10, 20]], 'lane', paths('unresolved')).keys()]).toEqual(['target']);
+    expect([...columnSpans(scene, topology, [['n1', 10, 20]], 'lane', paths('carried')).keys()]).toEqual(['target', 'mat']);
+    // MAT walks n1 twice here: a repeat; its copies are not placements.
+    const repeat = { ...topology, paths: [topology.paths[0], { binding: 'mat', occurrences: [...topology.paths[1].occurrences,
+      { id: 'm3', node: 'n1', reverse: false }] }] } as unknown as GraphTopology;
+    expect([...columnSpans(scene, repeat, [['n1', 10, 20]], 'lane', paths('carried')).keys()]).toEqual(['target']);
+  });
+
   it('outlines selected and unselected hits; an insertion hit only on its carriers; a click finds the narrowest', () => {
+    const st = (status: string) => ({ status, carried: 0, total: 0, label: '', datasets: [] });
     const inside = { setId: 's', hitId: 'in', typeId: 'nfr.region', chrom: 'chr3_MATERNAL', start: 5, end: 10, anchor: 7,
-      graph: { ...graph([['n2', 0, 5]]), registration: 'g1', target: 'target' } };
+      graph: { ...graph([['n2', 0, 5]], { target: st('absent'), mat: st('carried') } as never), registration: 'g1', target: 'target' } };
     const shared = { setId: 's', hitId: 'sh', typeId: 'nfr.region', chrom: 'chr3', start: 1_010, end: 1_020, anchor: 1_015,
-      graph: { ...graph([['n1', 10, 20]]), registration: 'g1', target: 'target', binding: 'target' } };
+      graph: { ...graph([['n1', 10, 20]], { target: st('carried'), mat: st('carried') } as never), registration: 'g1', target: 'target', binding: 'target' } };
     const plain = { setId: 's2', hitId: 'p', typeId: 'peaks.peak', chrom: 'chr3', start: 1_000, end: 1_040, anchor: 1_020 };
     const out = hubGraphOutlines(scene, topology, 'g1', 'target', false,
       [{ hit: inside, selected: true }, { hit: shared, selected: false }, { hit: plain, selected: false }], 'chr3');

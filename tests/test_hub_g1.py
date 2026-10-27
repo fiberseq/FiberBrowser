@@ -175,6 +175,15 @@ def test_source_frame_hits_are_lifted_keeping_source_coordinates(tmp_path, monke
     assert by['partial']['lift']['status'] == 'partial'
 
 
+def test_source_windows_hold_a_point_at_a_projected_stretch_end(tmp_path):
+    from services.scan.lift import source_windows
+    st, _bam = _lifted_state(tmp_path, os.path.join(_package('alu'), 'map0', 'map.json'))
+    config = st.datasets['lifted'].live_lift
+    pieces = [p for p in config.handle.map.target_to_source('GRCh38#0#chr3', 200_000, 240_000) if p.primary]
+    windows = source_windows(config, 'GRCh38#0#chr3', 200_000, 240_000)
+    assert windows[MAT] == (min(p.q_start for p in pieces), max(p.q_end for p in pieces) + 1)
+
+
 def test_source_frame_scan_without_a_lifted_dataset_says_why(tmp_path):
     from models.domain import Dataset
     from services.scan.projection import source_hits_for_view
@@ -222,15 +231,17 @@ def test_graph_columns_mat_hit_in_the_insertion_is_absent_on_the_target(tmp_path
                   source=dict(chrom=MAT, start=95_000, end=95_100, anchor=95_050),
                   lift=dict(status='unmapped', junction=[ALU_JUNCTION, ALU_JUNCTION]))
     on_target = dict(hitId='h-t', chrom='chr3', start=90_000, end=90_050, anchor=90_025)
+    # A boundary inside the insertion (zero width): its graph columns are the base after it.
+    point = dict(inside, hitId='h-pt', start=95_000, end=95_000, anchor=95_000, source=dict(chrom=MAT, start=95_000, end=95_000, anchor=95_000))
 
     async def go():
         await service.ensure_ready()
         await asyncio.to_thread(service.registry().register, service.helper_status().path, package)
-        hits = [inside, on_target]
+        hits = [inside, on_target, point]
         note = await add_graph_aliases(st, hits, 'chr3')
         return hits, note
     try:
-        (hit_in, hit_t), note = _arun(go)
+        (hit_in, hit_t, hit_pt), note = _arun(go)
     finally:
         service.reset_for_tests()
         analysis.clear_caches()
@@ -243,6 +254,9 @@ def test_graph_columns_mat_hit_in_the_insertion_is_absent_on_the_target(tmp_path
     # The target walks around the insertion: its columns are absent there, never unresolved or "not scanned".
     assert g['paths']['target']['status'] == 'absent'
     assert g['paths']['pat']['status'] in ('carried', 'partial', 'absent')
+    pt = hit_pt['graph']
+    assert pt['size'] == 1 and pt['known'] == 1 and pt['paths']['target']['status'] == 'absent'
+    assert pt['paths']['mat']['status'] == 'carried'
     t = hit_t['graph']
     assert t['binding'] == 'target' and t['size'] == 50
     assert {p['status'] for p in t['paths'].values()} == {'carried'}
@@ -269,46 +283,55 @@ def test_column_runs_merge_forward_and_reverse_walks():
 
 # ── Review fixes (Codex group A, round 1) ───────────────────────────────────
 
-class _Piece(NS):
-    pass
-
-
 class _FakeMap:
-    """A lift map with two chains on one source: + chain 0 maps source [0,100) -> target [1000,1100) and source
-    [150,250) -> [1100,1200) (a source insertion at [100,150)); - chain 1 maps source [400,500) -> target [5000,5100)."""
+    """A lift map of one 2,000 bp source on target 't', chains as (strand, blocks [(q0, q1, t0)], gaps [t, q, tlen,
+    qlen, reason index]) in forward source coordinates (a - chain's target runs down as the source runs up):
+
+    0 (+): source [0,100) -> [1000,1100), [150,250) -> [1100,1200): a source insertion [100,150) at target 1,100;
+    1 (-): source [400,500) -> target (5100 down to 5000);
+    2 (+): source [600,650) -> [2000,2050), [750,800) -> [2150,2200): a conflict gap [650,750);
+    3 (+) and 4 (+): both hold source [900,1000) in insertion gaps, attached at target 3,000 and at 7,000."""
+    reasons = ['source_insertion', 'target_insertion', 'aligned_indel', 'dissimilar', 'too_big', 'conflict']
+    CHAINS = [('+', [(0, 100, 1000), (150, 250, 1100)], [(1100, 100, 0, 50, 0)]),
+              ('-', [(400, 500, 5100)], []),
+              ('+', [(600, 650, 2000), (750, 800, 2150)], [(2050, 650, 100, 100, 5)]),
+              ('+', [(850, 900, 2950), (1000, 1050, 3000)], [(3000, 900, 0, 100, 0)]),
+              ('+', [(880, 900, 6980), (1000, 1020, 7000)], [(7000, 900, 0, 100, 0)])]
 
     def __init__(self):
-        self.m = {'targets': [{'name': 't'}], 'sources': [{'name': 's'}]}
-        self.chains = [{'target': 0, 'source': 0, 'strand': '+'}, {'target': 0, 'source': 0, 'strand': '-'}]
+        self.m = {'targets': [{'name': 't'}], 'sources': [{'name': 's', 'size': 2000}]}
+        self.sources = {'s': 0}
+        self.by_source = {0: list(range(len(self.CHAINS)))}
+        self.chains = [{'target': 0, 'source': 0, 'strand': st, 'q_start_forward': bl[0][0], 'q_end_forward': bl[-1][1]}
+                       for st, bl, _g in self.CHAINS]
 
-    def gap_span(self, contig, pos):
-        if 100 <= pos < 150:
-            return ('source_insertion', 100, 150)
-        if 250 <= pos < 400:
-            return ('outside_chains', 250, 400)
-        return ('unknown_source', pos, pos + 1)
+    def chain_data(self, ci):
+        gaps = [list(g) for g in self.CHAINS[ci][2]]
+        return {'gaps': gaps, 'gq': [g[1] for g in gaps]}
 
     def source_to_target(self, contig, a, b):
         out = []
-        for q0, q1, t0, chain, strand in ((0, 100, 1000, 0, '+'), (150, 250, 1100, 0, '+'), (400, 500, 5100, 1, '-')):
-            s0, s1 = max(a, q0), min(b, q1)
-            if s1 <= s0:
-                continue
-            if strand == '+':
-                ts, te = t0 + (s0 - q0), t0 + (s1 - q0)
-            else:   # source increasing, target decreasing from t0
-                ts, te = t0 - (s1 - q0), t0 - (s0 - q0)
-            out.append(_Piece(chain=chain, t_start=ts, t_end=te, strand=strand, primary=True))
+        for ci, (strand, blocks, _g) in enumerate(self.CHAINS):
+            for q0, q1, t0 in blocks:
+                s0, s1 = max(a, q0), min(b, q1)
+                if s1 <= s0:
+                    continue
+                ts, te = (t0 + (s0 - q0), t0 + (s1 - q0)) if strand == '+' else (t0 - (s1 - q0), t0 - (s0 - q0))
+                out.append(NS(chain=ci, t_start=ts, t_end=te, strand=strand, primary=True))
         return out
 
 
-def test_insertion_junction_needs_one_chain_around_the_gap():
+def test_insertion_junction_needs_one_unambiguous_attachment():
     from services.scan.lift import insertion_junction
     lm = _FakeMap()
     assert insertion_junction(lm, 's', 110, 140) == ('t', 1100, 1100)   # inside chain 0's source insertion
-    # Between unrelated chains (a rearrangement), or past the gap: not placed.
-    assert insertion_junction(lm, 's', 300, 310) is None
-    assert insertion_junction(lm, 's', 120, 160) is None
+    assert insertion_junction(lm, 's', 300, 310) is None                # outside every chain
+    assert insertion_junction(lm, 's', 120, 160) is None                # runs past its gap
+    assert insertion_junction(lm, 's', 660, 670) is None                # a conflict gap (a possible rearrangement)
+    assert insertion_junction(lm, 's', 920, 930) is None                # two chains attach it at different places
+    lm.CHAINS = list(reversed(lm.CHAINS[3:])) + lm.CHAINS[:3]            # whatever the chain order
+    lm.__init__()
+    assert insertion_junction(lm, 's', 920, 930) is None
 
 
 def test_incomplete_graph_columns_never_claim_carried_or_absent():

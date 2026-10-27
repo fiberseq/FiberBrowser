@@ -40,17 +40,26 @@ function xAt(o: Scene['occurrences'][number], p: number): number {
 
 /** Lane spans (x ranges per lane) of a hit's columns on a scene. `by: 'path'`: per carrier path instead (a carrier
  * drawn on a stripe of another lane's shared tube counts for its own path, whose read band is its own). */
-export function columnSpans(scene: Scene, topology: GraphTopology, columns: GraphAlias['columns'], by: 'lane' | 'path' = 'lane'): Map<string, [number, number]> {
+export function columnSpans(scene: Scene, topology: GraphTopology, columns: GraphAlias['columns'], by: 'lane' | 'path' = 'lane',
+  paths?: GraphAlias['paths']): Map<string, [number, number]> {
   const runs = new Map<string, Array<[number, number]>>();
   for (const [node, a, b] of columns) runs.set(node, [...(runs.get(node) ?? []), [a, b]]);
   const lengths = new Map(topology.nodes.map(n => [n.id, n.length]));
   const reverse = new Map<string, boolean>();
-  for (const p of topology.paths) for (const o of p.occurrences) reverse.set(o.id, o.reverse);
+  // Visits per (path, node) in this window: a node a path walks more than once is a repeat, its copies unresolved.
+  const visits = new Map<string, number>();
+  for (const p of topology.paths) for (const o of p.occurrences) {
+    reverse.set(o.id, o.reverse);
+    visits.set(`${p.binding}|${o.node}`, (visits.get(`${p.binding}|${o.node}`) ?? 0) + 1);
+  }
   const out = new Map<string, [number, number]>();
   for (const o of scene.occurrences) {
     const mine = runs.get(o.node);
     const len = lengths.get(o.node);
     if (!mine || len == null) continue;
+    // Only where the hit is placed: on paths that carry it (wholly or in part), never on a repeat's copies.
+    if (paths && !['carried', 'partial'].includes(paths[o.path]?.status ?? '')) continue;
+    if ((visits.get(`${o.path}|${o.node}`) ?? 1) > 1) continue;
     const rev = reverse.get(o.occ) ?? false;
     for (const [a, b] of mine) {
       const [p0, p1] = pathForward(a, b, len, rev);
@@ -92,12 +101,12 @@ export function hubGraphOutlines(scene: Scene | null, topology: GraphTopology | 
     if (g && g.registration === registrationId && g.target === target) {
       // Each carrier lane's tube; a selected hit also its lane's read band (bands sit below all the lanes).
       const base = (x0: number, x1: number) => ({ key, setId: hit.setId, hitId: hit.hitId, label, selected, x0, x1: Math.max(x1, x0 + 2), kind: 'columns' as const });
-      for (const [lane, [x0, x1]] of columnSpans(scene, topology, g.columns)) {
+      for (const [lane, [x0, x1]] of columnSpans(scene, topology, g.columns, 'lane', g.paths)) {
         const row = rowOf.get(lane);
         if (row) out.push({ ...base(x0, x1), y0: row.top, y1: row.top + row.height });
       }
       if (selected) {
-        for (const [path, [x0, x1]] of columnSpans(scene, topology, g.columns, 'path')) {
+        for (const [path, [x0, x1]] of columnSpans(scene, topology, g.columns, 'path', g.paths)) {
           const row = rowOf.get(path);
           if (row && row.bandHeight > 0) out.push({ ...base(x0, x1), y0: row.bandTop, y1: row.bandTop + row.bandHeight });
         }

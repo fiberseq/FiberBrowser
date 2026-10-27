@@ -19,18 +19,22 @@ included, no legacy layer inference), so the comparison isolates the lift:
 
 Join: one source record is ``(QNAME, source contig, source start)``; live
 rows carry it in ``live_lift.source``, lifted records in ``Yp`` (1-based).
-A source record whose rows touch the selection edge on either side is left
+A key two distinct SAM records share is ambiguous (``Yp`` cannot tell their
+lifted records apart): it is never compared, and it fails the verdict. A
+source record whose rows touch the selection edge on either side is left
 out and counted.
 
 Per source record: placements (target contig, start, end, orientation),
-the molecule strand (``st``), every call interval per call group
-(``intervals``, ``fire`` and each MA layer) per call id, and m6A/5mC
-positions. Calls are compared two ways:
+the molecule strand (``st``, both sides in the molecule frame), every call
+interval per call group (``intervals``, ``fire`` and each MA layer), and
+m6A/5mC positions. Calls of a group are paired by target geometry, never by
+tag-array id (a frame conversion can renumber those): greatest base
+overlap, ties by target order (``pair_calls``). Calls are compared two ways:
 
 - raw geometry, the parts as the rows deliver them;
-- bases: per call id, the merged target bases (zero-width insertion
-  markers kept as positions). Buckets: identical, within 10 bp (hull ends
-  within 10 bp and at most 10 bp in the symmetric difference), different.
+- bases: per call, the merged target bases (zero-width insertion markers
+  kept as positions). Buckets: identical, within 10 bp (hull ends within
+  10 bp and at most 10 bp in the symmetric difference), different.
 
 Each difference gets a cause (``CALL_CAUSES``); see ``classify_call``.
 
@@ -248,14 +252,76 @@ def compare_placement(lp: dict, np_: dict, tolerance=TOLERANCE_BP) -> dict:
     return out
 
 
+def _pairing_spans(parts) -> list:
+    """The bases a call covers for pairing: its merged parts, a zero-width marker as the one base after it."""
+    return merge_spans([[int(a), int(b)] if int(b) > int(a) else [int(a), int(a) + 1] for a, b in parts])
+
+
+def overlap_bp(a, b) -> int:
+    """Bases two merged span lists share."""
+    i = j = n = 0
+    while i < len(a) and j < len(b):
+        lo, hi = max(a[i][0], b[j][0]), min(a[i][1], b[j][1])
+        if hi > lo:
+            n += hi - lo
+        if a[i][1] < b[j][1]:
+            i += 1
+        else:
+            j += 1
+    return n
+
+
+def pair_calls(live: dict, native: dict) -> list:
+    """Pair one call group's calls (``{call id: parts}`` per side) by target
+    geometry, never by id: tag-array indices (``MA0:3``, ``ns:3``) are not
+    stable across a lift, since a frame conversion re-sorts them on reverse
+    records. Greatest base overlap first, ties by target order; a call that
+    overlaps nothing on the other side stays unpaired. Returns ``[(live id |
+    None, native id | None)]``."""
+    def order(calls):
+        keys = [k for k in calls if calls[k]]
+        spans = {k: _pairing_spans(calls[k]) for k in keys}
+        keys.sort(key=lambda k: (spans[k][0][0], spans[k][-1][1], str(k)))
+        return keys, [spans[k] for k in keys]
+
+    lk, ls = order(live)
+    nk, ns = order(native)
+    import bisect
+    starts = [sp[0][0] for sp in ns]
+    reach, top = [], None
+    for sp in ns:  # running maximum of hull ends: earlier calls past it end before a live call starts
+        top = sp[-1][1] if top is None else max(top, sp[-1][1])
+        reach.append(top)
+    candidates = []
+    for i, sp in enumerate(ls):
+        a, b = sp[0][0], sp[-1][1]
+        j = bisect.bisect_left(starts, b) - 1
+        while j >= 0 and reach[j] > a:
+            n = overlap_bp(sp, ns[j])
+            if n:
+                candidates.append((-n, i, j))
+            j -= 1
+    used_l, used_n, pairs = set(), set(), []
+    for _n, i, j in sorted(candidates):
+        if i not in used_l and j not in used_n:
+            used_l.add(i)
+            used_n.add(j)
+            pairs.append((i, j))
+    out = [(lk[i], nk[j]) for i, j in sorted(pairs)]
+    out += [(lk[i], None) for i in range(len(lk)) if i not in used_l]
+    out += [(None, nk[j]) for j in range(len(nk)) if j not in used_n]
+    return out
+
+
 def compare_calls(lp: dict, np_: dict, tolerance=TOLERANCE_BP) -> list:
+    """Every call of every group, paired by geometry (``pair_calls``) and classified."""
     out = []
     for group in sorted(set(lp["calls"]) | set(np_["calls"])):
         lc, nc = lp["calls"].get(group, {}), np_["calls"].get(group, {})
-        for call in sorted(set(lc) | set(nc), key=str):
-            res = classify_call(lc.get(call, []), nc.get(call, []), lp.get("connectors", ()),
-                                lp.get("insertions", ()), tolerance)
-            res.update(group=group, call=call)
+        for li, ni in pair_calls(lc, nc):
+            res = classify_call(lc.get(li, []) if li is not None else [], nc.get(ni, []) if ni is not None else [],
+                                lp.get("connectors", ()), lp.get("insertions", ()), tolerance)
+            res.update(group=group, call=li if li is not None else ni, live_call=li, native_call=ni)
             out.append(res)
     return out
 
@@ -275,16 +341,64 @@ def union_placements(placements: list) -> dict:
 
 def strand_status(lp: dict, np_: dict) -> str:
     """The molecule strand (``st``) of a placement pair: 'absent', 'inferred'
-    (either side guessed it from marks), 'same', 'frame_flip' (differs on a
-    ``-`` chain: the accepted molecule-frame difference) or 'differs'."""
+    (either side guessed it from marks), 'same' or 'differs'. Both sides are
+    in the molecule frame: live lift keeps the source ``st``, and the loader
+    turns a lifted record's ``st`` back to the molecule frame where the lift
+    reversed it (``read_strand.record_strand_fields``). A correct swap on a
+    ``-`` chain therefore compares equal; a missing one differs."""
     ls_, ns_ = lp.get("strand"), np_.get("strand")
     if ls_ is None and ns_ is None:
         return "absent"
     if lp.get("strand_inferred") or np_.get("strand_inferred"):
         return "inferred"
-    if ls_ == ns_:
-        return "same"
-    return "frame_flip" if lp.get("minus_chain") else "differs"
+    return "same" if ls_ == ns_ else "differs"
+
+
+def find_ambiguous(live_records: dict, source_counts: dict) -> set:
+    """Source keys ``(QNAME, contig, start)`` that two distinct SAM records
+    share: live rows of the key from more than one record (record hash and
+    occurrence), or more than one mapped, non-secondary source record there.
+    Their placements cannot be told apart on the lifted side (``Yp`` names
+    only the key), so they are never compared."""
+    return ({k for k, recs in live_records.items() if len(set(recs)) > 1}
+            | {k for k, n in source_counts.items() if n > 1})
+
+
+def join_records(live_by: dict, native_by: dict, edge=(), ambiguous=()) -> tuple:
+    """``(records, one_side, n_edge, n_ambiguous)``: one record per source key
+    on both sides; ``one_side`` lists ``(key, 'live_only' | 'native_only')``.
+    Keys touching the window edge, and ambiguous keys, are left out and counted."""
+    edge, ambiguous = set(edge), set(ambiguous)
+    keys = sorted(set(live_by) | set(native_by))
+    records, one_side = [], []
+    n_edge = n_ambiguous = 0
+    for key in keys:
+        if key in ambiguous:
+            n_ambiguous += 1
+            continue
+        if key in edge:
+            n_edge += 1
+            continue
+        if key not in native_by or key not in live_by:
+            one_side.append((key, "live_only" if key in live_by else "native_only"))
+            continue
+        records.append({"key": key, "live": live_by[key], "native": native_by[key]})
+    return records, one_side, n_edge, n_ambiguous
+
+
+def source_record_counts(source_bam, keys) -> dict:
+    """Mapped, non-secondary source records at each key ``(QNAME, contig, start)``."""
+    import pysam
+
+    out = {}
+    with pysam.AlignmentFile(source_bam) as bam:
+        for qname, contig, start in keys:
+            if contig not in bam.references:
+                continue
+            out[(qname, contig, start)] = sum(
+                1 for r in bam.fetch(contig, start, start + 1)
+                if r.query_name == qname and r.reference_start == start and not r.is_secondary and not r.is_unmapped)
+    return out
 
 
 def summarize(records: list, deam_from_md: bool = False, verdict_points=VERDICT_POINTS, rejoin_bp: int = 5) -> dict:
@@ -332,17 +446,23 @@ def summarize(records: list, deam_from_md: bool = False, verdict_points=VERDICT_
                 _example(examples, "placement_geometry", idx, rec,
                          live=[live[i][k] for k in ("contig", "start", "end", "orientation")],
                          native=[native[j][k] for k in ("contig", "start", "end", "orientation")])
-            strand[strand_status(live[i], native[j])] += 1
+            status = strand_status(live[i], native[j])
+            strand[status] += 1
+            if status == "differs":
+                strand["differs_on_minus_chain" if live[i].get("minus_chain") else "differs_on_plus_chain"] += 1
             strand["minus_chain_placements"] += bool(live[i].get("minus_chain"))
             for c in res["calls"]:
                 calls[c["group"]][c["bucket"]] += 1
                 calls[c["group"]]["raw_" + c["raw"]] += 1
+                if c["live_call"] is not None and c["native_call"] is not None and c["live_call"] != c["native_call"]:
+                    calls[c["group"]]["paired_ids_differ"] += 1
                 if c["cause"]:
                     causes[(c["group"], c["cause"], c["bucket"])] += 1
                     cause_bp[(c["group"], c["cause"])] += c["bp"]
-                    _example(examples, f"{c['group']}:{c['cause']}", idx, rec, call=c["call"],
-                             live=live[i]["calls"].get(c["group"], {}).get(c["call"], []),
-                             native=native[j]["calls"].get(c["group"], {}).get(c["call"], []), bp=c["bp"])
+                    _example(examples, f"{c['group']}:{c['cause']}", idx, rec, live_call=c["live_call"],
+                             native_call=c["native_call"],
+                             live=live[i]["calls"].get(c["group"], {}).get(c["live_call"], []),
+                             native=native[j]["calls"].get(c["group"], {}).get(c["native_call"], []), bp=c["bp"])
                 if c.get("holes"):
                     holes[(c["group"], "calls_max_hole_le_rejoin_bp" if max(c["holes"]) <= rejoin_bp
                            else "calls_max_hole_gt_rejoin_bp")] += 1
@@ -451,7 +571,7 @@ def placement(row, base: int, live: bool, contig: str) -> dict:
         for k, iv in enumerate(ivs):
             if len(iv) > 2 and iv[2] <= 0:
                 continue  # gaps and neutral rows: derived, not calls
-            call = ids[k] if k < len(ids) and ids[k] is not None else "<no id>"
+            call = ids[k] if k < len(ids) and ids[k] is not None else f"<no id>:{iv[0] + base}-{iv[1] + base}"
             by_call.setdefault(str(call), []).append([iv[0] + base, iv[1] + base])
         if by_call:
             calls[group] = by_call
@@ -591,10 +711,12 @@ def run(args) -> dict:
     native_reads = load_native(args.lifted_bam, chrom, sel0, sel1, loader_options)
 
     live_by, native_by = collections.defaultdict(list), collections.defaultdict(list)
+    live_records = collections.defaultdict(set)
     edge = set()
     for row in analysis.rows:
         src = row["live_lift"]["source"]
         key = (row["id"], src["contig"], int(src["start"]))
+        live_records[key].add(str(row["live_lift"]["record"]))
         segs = row["live_lift"].get("segments") or ()
         if any(s[0] <= 0 or s[1] >= width for s in segs):
             edge.add(key)
@@ -612,36 +734,30 @@ def run(args) -> dict:
 
     unlifted = unlifted_reasons(args.unlifted_bam)
     keys = sorted(set(live_by) | set(native_by))
+    ambiguous = find_ambiguous(live_records, source_record_counts(args.source_bam, keys))
+    records, one_side_keys, n_edge, n_ambiguous = join_records(live_by, native_by, edge, ambiguous)
     one_side = collections.Counter()
     one_side_examples = []
-    records = []
     native_qnames = {k[0] for k in native_by}
-    for key in keys:
-        if key in edge:
-            continue
-        if key not in native_by or key not in live_by:
-            side = "live_only" if key in live_by else "native_only"
-            cause = "unknown"
-            if side == "live_only":
-                if key in unlifted:
-                    cause = f"unlifted:{unlifted[key]}"
-                elif any(q == key[0] for q, *_ in unlifted) and key[0] not in native_qnames:
-                    cause = "orphan_supplementary_dropped"
-            elif load.truncated:
-                cause = "live_load_truncated"
-            elif (loader_options.get("hide_terminal_gaps", True)
-                  and not decoded(args.source_bam, key[1], key[2], key[0], loader_options)
-                  and decoded(args.source_bam, key[1], key[2], key[0],
-                              dict(loader_options, hide_terminal_gaps=False))):
-                # The source record decodes only with terminal gaps shown: the loader's whole-record
-                # terminal-gap filter dropped it in the source frame, where its ends differ from the lifted
-                # record's (a liftbam split, or ends soft-clipped on the lifted record).
-                cause = "terminal_gap_filter"
-            one_side[(side, cause)] += 1
-            if len(one_side_examples) < MAX_EXAMPLES:
-                one_side_examples.append({"side": side, "cause": cause, "source": f"{key[1]}:{key[2]}"})
-            continue
-        records.append({"key": key, "live": live_by[key], "native": native_by[key]})
+    for key, side in one_side_keys:
+        cause = "unknown"
+        if side == "live_only":
+            if key in unlifted:
+                cause = f"unlifted:{unlifted[key]}"
+            elif any(q == key[0] for q, *_ in unlifted) and key[0] not in native_qnames:
+                cause = "orphan_supplementary_dropped"
+        elif load.truncated:
+            cause = "live_load_truncated"
+        elif (loader_options.get("hide_terminal_gaps", True)
+              and not decoded(args.source_bam, key[1], key[2], key[0], loader_options)
+              and decoded(args.source_bam, key[1], key[2], key[0], dict(loader_options, hide_terminal_gaps=False))):
+            # The source record decodes only with terminal gaps shown: the loader's whole-record
+            # terminal-gap filter dropped it in the source frame, where its ends differ from the lifted
+            # record's (a liftbam split, or ends soft-clipped on the lifted record).
+            cause = "terminal_gap_filter"
+        one_side[(side, cause)] += 1
+        if len(one_side_examples) < MAX_EXAMPLES:
+            one_side_examples.append({"side": side, "cause": cause, "source": f"{key[1]}:{key[2]}"})
 
     census = lifted_bam_census(args.lifted_bam, chrom, sel0, sel1)
     summary = summarize(records, deam_from_md=census.get("with_md", 0) == 0, rejoin_bp=settings.rejoin_bp)
@@ -661,7 +777,8 @@ def run(args) -> dict:
                  "source_records": len(live_by)},
         "native": {"rows_loaded": len(native_reads), "rows_without_yp": no_yp, "source_records": len(native_by),
                    "census": census},
-        "join": {"source_records_either_side": len(keys), "edge_excluded": len(edge & set(keys)),
+        "join": {"source_records_either_side": len(keys), "edge_excluded": n_edge,
+                 "ambiguous_source_keys": n_ambiguous,
                  "one_side_only": [{"side": s, "cause": c, "n": n} for (s, c), n in sorted(one_side.items())],
                  "one_side_examples": one_side_examples},
         **summary,
@@ -675,8 +792,8 @@ def run(args) -> dict:
 def verdict(result) -> str:
     """PASS only when no record is on one side only and every compared record
     has identical placements, identical call bases (per record, every call
-    over all its placements) and identical points; ``st`` may differ only on
-    ``-`` chains (the accepted molecule-frame difference)."""
+    over all its placements) and identical points and ``st`` (both in the
+    molecule frame). Ambiguous source keys and a truncated live load fail it."""
     c = result["counts"]
     n = c.get("records_compared", 0)
     problems = []
@@ -688,8 +805,11 @@ def verdict(result) -> str:
         problems.append(f"{sum(x['n'] for x in result['join']['one_side_only'])} records on one side only")
     if result.get("live", {}).get("load_counts", {}).get("truncated"):
         problems.append("the live load was truncated by its budget (rerun on a smaller window or with --no-budget)")
+    if result["join"].get("ambiguous_source_keys"):
+        problems.append(f"{result['join']['ambiguous_source_keys']} ambiguous source keys (two records share QNAME, "
+                        "source contig and start) were not compared")
     if result.get("strand", {}).get("differs"):
-        problems.append(f"st differs on {result['strand']['differs']} placements on + chains")
+        problems.append(f"st differs on {result['strand']['differs']} placements (molecule frame)")
     return "PASS" if not problems else "FAIL: " + "; ".join(problems)
 
 
@@ -706,14 +826,16 @@ def markdown(result) -> str:
               "placements_identical_geometry"):
         lines.append(f"| {k} | {c.get(k, 0)} |")
     lines.append(f"| edge_excluded | {result['join']['edge_excluded']} |")
+    lines.append(f"| ambiguous_source_keys (not compared) | {result['join'].get('ambiguous_source_keys', 0)} |")
     for x in result["join"]["one_side_only"]:
         lines.append(f"| {x['side']} ({x['cause']}) | {x['n']} |")
     for title, table in (("calls per placement", result["calls"]), ("calls per record", result["record_calls"])):
-        lines += ["", f"| {title} | identical | within 10 bp | different | raw identical | raw same bases |",
-                  "|---|---|---|---|---|---|"]
+        lines += ["", f"| {title} | identical | within 10 bp | different | raw identical | raw same bases | "
+                  "paired, ids differ |", "|---|---|---|---|---|---|---|"]
         for g, b in table.items():
             lines.append(f"| {g} | {b.get('identical', 0)} | {b.get('within_10bp', 0)} | {b.get('different', 0)} | "
-                         f"{b.get('raw_identical', '')} | {b.get('raw_same_bases', '')} |")
+                         f"{b.get('raw_identical', '')} | {b.get('raw_same_bases', '')} | "
+                         f"{b.get('paired_ids_differ', '')} |")
     lines += ["", "| points per record | identical | differ | deam_from_md | positions shared | live only | "
               "native only |", "|---|---|---|---|---|---|---|"]
     for f, p in result["points"].items():

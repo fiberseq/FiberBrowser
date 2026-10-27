@@ -63,12 +63,13 @@ export function matchInGraph(a: Matchable, b: Matchable): boolean {
   return shared > 0 && shared >= MIN_RECIPROCAL * g.size && shared >= MIN_RECIPROCAL * h.size;
 }
 
-/** Whether two hits match in a source frame they share (the same contig of the same assembly, through the same
- * live-lift dataset): their own intervals, by the same rule as on this genome. */
+/** Whether two hits match in a source frame they share (the same contig of the same assembly: the scans' reference
+ * identity; without one, the same live-lift dataset): their own intervals, by the same rule as on this genome. */
 export function matchInSource(a: Matchable, b: Matchable): boolean {
   const f = a.frame, g = b.frame;
-  if (f?.kind !== 'source' || g?.kind !== 'source' || f.contig !== g.contig || (f.assembly || '') !== (g.assembly || '')
-    || (f.datasetId ?? '') !== (g.datasetId ?? '')) return false;
+  if (f?.kind !== 'source' || g?.kind !== 'source' || f.contig !== g.contig) return false;
+  const sameFrame = f.assembly && g.assembly ? f.assembly === g.assembly : Boolean(f.datasetId) && f.datasetId === g.datasetId;
+  if (!sameFrame) return false;
   if (a.end <= a.start || b.end <= b.start) return Math.abs(a.anchor - b.anchor) <= D_MATCH;
   return reciprocal(a.start, a.end, b.start, b.end);
 }

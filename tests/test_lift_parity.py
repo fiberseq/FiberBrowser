@@ -123,13 +123,87 @@ def test_union_placements_compares_a_call_cut_by_a_split_whole():
     assert [(c["call"], c["bucket"]) for c in res] == [("as:1", "identical")]
 
 
-def test_strand_status():
+def test_strand_status_compares_the_molecule_frame():
     assert lp.strand_status(place(0, 1), place(0, 1)) == "absent"
     assert lp.strand_status(dict(place(0, 1), strand="CT"), dict(place(0, 1), strand="CT")) == "same"
-    assert lp.strand_status(dict(place(0, 1), strand="CT", minus_chain=True),
-                            dict(place(0, 1), strand="GA")) == "frame_flip"
     assert lp.strand_status(dict(place(0, 1), strand="CT"), dict(place(0, 1), strand="GA")) == "differs"
     assert lp.strand_status(dict(place(0, 1), strand="CT", strand_inferred=True), place(0, 1)) == "inferred"
+
+
+def test_correct_st_swap_on_a_minus_chain_is_the_same_strand():
+    # fiberhmm-lift swapped st to GA on the reversed record; the loader reads it back as CT (molecule frame).
+    rec = {"key": ("q", "c", 1), "live": [dict(place(0, 10), strand="CT", minus_chain=True)],
+           "native": [dict(place(0, 10), strand="CT")]}
+    res = _result([rec])
+    assert res["strand"]["same"] == 1
+    assert lp.verdict(res) == "PASS"
+
+
+def test_missing_st_swap_on_a_minus_chain_is_a_difference():
+    # st left CT on the reversed record: the loader's molecule frame gives GA.
+    rec = {"key": ("q", "c", 1), "live": [dict(place(0, 10), strand="CT", minus_chain=True)],
+           "native": [dict(place(0, 10), strand="GA")]}
+    res = _result([rec])
+    assert res["strand"]["differs_on_minus_chain"] == 1
+    assert "st differs on 1 placements" in lp.verdict(res)
+
+
+# ── call pairing ─────────────────────────────────────────────────────────────
+
+def test_pair_calls_by_greatest_overlap_not_by_id():
+    live = {"MA0:0": [[1100, 1200]], "MA0:1": [[1700, 1800]], "MA0:2": [[3000, 3010]]}
+    native = {"MA0:1": [[1100, 1150], [1151, 1200]], "MA0:0": [[1700, 1801]], "x": [[5000, 5001]]}
+    assert lp.pair_calls(live, native) == [("MA0:0", "MA0:1"), ("MA0:1", "MA0:0"), ("MA0:2", None), (None, "x")]
+
+
+def test_pair_calls_takes_a_marker_as_its_next_base_and_breaks_ties_by_order():
+    assert lp.pair_calls({"a": [[390, 390]]}, {"b": [[390, 391]]}) == [("a", "b")]
+    # One live call overlapping two native calls equally: the first in target order wins.
+    assert lp.pair_calls({"a": [[0, 20]]}, {"n1": [[0, 10]], "n2": [[10, 20]]}) == [("a", "n1"), (None, "n2")]
+
+
+def test_reverse_legacy_record_with_swapped_ids_and_identical_intervals_passes():
+    # A frame conversion re-sorted a reverse record's legacy MA calls: the ids swap, the intervals don't.
+    rec = {"key": ("q", "chr3_MATERNAL", 10),
+           "live": [place(1000, 2000, {"layer:nuc": {"MA0:0": [[1100, 1200]], "MA0:1": [[1700, 1800]]}},
+                          orientation="reverse", connectors=[], insertions=[])],
+           "native": [place(1000, 2000, {"layer:nuc": {"MA0:1": [[1100, 1200]], "MA0:0": [[1700, 1800]]}},
+                            orientation="reverse")]}
+    res = _result([rec])
+    assert res["record_calls"]["layer:nuc"] == {"identical": 2}
+    assert res["calls"]["layer:nuc"]["paired_ids_differ"] == 2
+    assert lp.verdict(res) == "PASS"
+
+
+# ── join ─────────────────────────────────────────────────────────────────────
+
+def test_ambiguous_source_keys_are_never_compared():
+    # Two distinct records share QNAME, contig and start; the lifted side swapped their calls. Unioned per key they
+    # would compare identical and pass.
+    key = ("q", "chr3_MATERNAL", 10)
+    live_by = {key: [place(1000, 2000, {"intervals": {"ns:0": [[1100, 1200]]}}),
+                     place(1000, 2000, {"intervals": {"ns:0": [[1500, 1600]]}})]}
+    native_by = {key: [place(1000, 2000, {"intervals": {"ns:0": [[1500, 1600]]}}),
+                       place(1000, 2000, {"intervals": {"ns:0": [[1100, 1200]]}})]}
+    unsafe, _one, _edge, _amb = lp.join_records(live_by, native_by)
+    assert lp.verdict(_result(unsafe)) == "PASS"  # the hazard: what an unguarded join would report
+    ambiguous = lp.find_ambiguous({key: {"sha1:0", "sha2:0"}}, {})
+    assert ambiguous == {key}
+    assert lp.find_ambiguous({key: {"sha1:0"}}, {key: 2}) == {key}
+    assert lp.find_ambiguous({key: {"sha1:0"}}, {key: 1}) == set()
+    records, one_side, n_edge, n_ambiguous = lp.join_records(live_by, native_by, ambiguous=ambiguous)
+    assert (records, one_side, n_edge, n_ambiguous) == ([], [], 0, 1)
+    res = _result(records)
+    res["join"]["ambiguous_source_keys"] = n_ambiguous
+    assert "1 ambiguous source keys" in lp.verdict(res)
+
+
+def test_join_records_counts_edges_and_one_side_keys():
+    a, b, c = ("a", "c", 1), ("b", "c", 2), ("e", "c", 3)
+    records, one_side, n_edge, n_ambiguous = lp.join_records(
+        {a: [place(0, 1)], b: [place(0, 1)], c: [place(0, 1)]}, {a: [place(0, 1)], c: [place(0, 1)]}, edge={c})
+    assert [r["key"] for r in records] == [a]
+    assert one_side == [(b, "live_only")] and (n_edge, n_ambiguous) == (1, 0)
 
 
 # ── summarize and verdict ────────────────────────────────────────────────────

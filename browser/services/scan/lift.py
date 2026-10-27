@@ -182,36 +182,65 @@ def lift_intervals(map_path: str, intervals: Sequence[Tuple[str, int, int]], *, 
 
 # ── Anchors of unmapped hits ────────────────────────────────────────────────
 
-def insertion_junction(lift_map, contig: str, start: int, end: int) -> Optional[Tuple[str, int, int]]:
+# Gaps a source interval with no projection can be placed at: sequence the source has and the target lacks (an
+# insertion), or replaces with other sequence. Gaps graphlift marks too big or conflicting (possible inversions or
+# transpositions) are not attachments.
+JUNCTION_GAPS = ('source_insertion', 'aligned_indel', 'dissimilar')
+
+
+def gap_candidates(lift_map, contig: str, start: int, end: int) -> List[tuple]:
+    """``[(chain, reason, lo, hi)]``: every chain gap holding source ``[start, end)`` whole (``[lo, hi)`` forward source
+    coordinates), across all the source's chains (graphlift_map.gap_span returns only the first)."""
+    import bisect
+    si = lift_map.sources.get(contig)
+    if si is None:
+        return []
+    qsize = lift_map.m['sources'][si]['size']
+    out = []
+    for ci in lift_map.by_source.get(si, []):
+        c = lift_map.chains[ci]
+        if not (c['q_start_forward'] <= start and end <= c['q_end_forward']):
+            continue
+        d = lift_map.chain_data(ci)
+        qs, qe = (start, end) if c['strand'] == '+' else (qsize - end, qsize - start)
+        k = bisect.bisect_right(d['gq'], qs) - 1
+        while k >= 0:
+            g = d['gaps'][k]
+            if g[1] <= qs and qe <= g[1] + g[3]:
+                lo, hi = g[1], g[1] + g[3]
+                if c['strand'] == '-':
+                    lo, hi = qsize - hi, qsize - lo
+                out.append((ci, lift_map.reasons[g[4]], lo, hi))
+                break
+            if g[1] + g[3] <= qs and g[3] > 0:
+                break
+            k -= 1
+    return out
+
+
+def insertion_junction(lift_map, contig: str, start: int, end: int, max_span: int = 10_000) -> Optional[Tuple[str, int, int]]:
     """``(target, lo, hi)``: where a source interval with no projection sits on the target, or None.
 
-    Only a gap inside one chain places it: the interval lies within that chain's gap (an insertion in the source,
-    ``lo == hi``; or a replacement, ``lo < hi``), and the bases flanking the gap project through the same chain,
-    which says where the gap attaches. A gap between chains, a stretch outside every chain, or an interval running
-    past its gap is a rearrangement or an unknown: not placed."""
-    try:
-        reason, lo, hi = lift_map.gap_span(contig, int(start))
-    except Exception:   # noqa: BLE001 - a map without that source
-        return None
-    if reason in ('unknown_source', 'uncovered', 'outside_chains'):
-        return None
-    lo, hi = int(lo), int(hi)
-    if int(start) < lo or int(end) > hi:
-        return None
-    left = [p for p in lift_map.source_to_target(contig, max(0, lo - 1), lo) if p.primary] if lo > 0 else []
-    right = [p for p in lift_map.source_to_target(contig, hi, hi + 1) if p.primary]
-    chains = {p.chain for p in left} & {p.chain for p in right}
-    if len(chains) != 1:
-        return None
-    ci = chains.pop()
-    a = next(p for p in left if p.chain == ci)
-    b = next(p for p in right if p.chain == ci)
-    if a.strand != b.strand:
-        return None
-    # On a + chain the left flank ends at the junction and the right one starts there; on a - chain the reverse.
-    x, y = (a.t_end, b.t_start) if a.strand == '+' else (b.t_end, a.t_start)
-    target = lift_map.m['targets'][lift_map.chains[ci]['target']]['name']
-    return target, min(x, y), max(x, y)
+    The interval must lie whole in one chain's insertion or replacement gap (``JUNCTION_GAPS``), and the bases
+    flanking that gap must project through the same chain, as primary: that says where the gap attaches (an
+    insertion: ``lo == hi``; a replacement: the target stretch it replaces, at most ``max_span`` bp, the split gap).
+    Every chain is considered, and the attachment must be one and the same whatever the chain order; anything else
+    (a rearrangement, a conflict, competing chains, a stretch outside every chain) is not placed."""
+    placed = set()
+    for ci, reason, lo, hi in gap_candidates(lift_map, contig, int(start), int(end)):
+        if reason not in JUNCTION_GAPS:
+            return None
+        left = [p for p in lift_map.source_to_target(contig, max(0, lo - 1), lo) if p.primary and p.chain == ci] if lo > 0 else []
+        right = [p for p in lift_map.source_to_target(contig, hi, hi + 1) if p.primary and p.chain == ci]
+        if not left or not right or left[0].strand != right[0].strand:
+            continue
+        a, b = left[0], right[0]
+        # On a + chain the left flank ends at the junction and the right one starts there; on a - chain the reverse.
+        x, y = (a.t_end, b.t_start) if a.strand == '+' else (b.t_end, a.t_start)
+        if abs(y - x) > max_span:
+            return None
+        placed.add((lift_map.m['targets'][lift_map.chains[ci]['target']]['name'], min(x, y), max(x, y)))
+    return placed.pop() if len(placed) == 1 else None
 
 
 # ── Hits of a scan ──────────────────────────────────────────────────────────
@@ -242,7 +271,7 @@ def lift_hits(config, hits: Sequence[dict]) -> Dict[int, HitLift]:
     out: Dict[int, HitLift] = {}
     for i, (lift, (contig, start, end)) in enumerate(zip(lifted, intervals)):
         if lift.status == 'unmapped' and lift.reason == 'no_projection':
-            j = insertion_junction(handle.map, contig, start, end)
+            j = insertion_junction(handle.map, contig, start, end, max_span=split_gap)
             if j is not None:
                 lift.junction_chrom, lift.junction = j[0], (j[1], j[2])
         out[i] = lift
@@ -271,7 +300,8 @@ def source_windows(config, chrom: str, start: int, end: int) -> Dict[str, Tuple[
         name = lm.m['sources'][chain['source']]['name']
         lo, hi = out.get(name, (p.q_start, p.q_end))
         out[name] = (min(lo, p.q_start), max(hi, p.q_end))
-    return out
+    # One past the last base: a zero-width hit at a projected stretch's end (a contig end) is in the window too.
+    return {name: (lo, hi + 1) for name, (lo, hi) in out.items()}
 
 
 def clear_cache() -> None:

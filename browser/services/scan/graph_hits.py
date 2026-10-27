@@ -287,8 +287,15 @@ async def add_graph_aliases(state, hits: List[dict], view_chrom: str) -> Optiona
             occs_key = tuple(cells)
             if occs_key not in merged:
                 merged[occs_key] = merged_occurrences(tiles, target)
-            h['graph'] = alias_for(reg, target, bindings, tiles, own=own, start=start, end=end, anchor=anchor,
-                                   occs_of=merged[occs_key])
+            # A zero-width hit (a boundary) takes the base after it, or the one before it at a contig end (liftbed's
+            # rule for points); its anchor stays the boundary.
+            spans = [(start, end)] if end > start else [(start, start + 1)] + ([(start - 1, start)] if start > 0 else [])
+            for a, b in spans:
+                alias = alias_for(reg, target, bindings, tiles, own=own, start=a, end=b, anchor=anchor,
+                                  occs_of=merged[occs_key])
+                if alias['known'] or (a, b) == spans[-1]:
+                    h['graph'] = alias
+                    break
     return note
 
 
@@ -311,4 +318,4 @@ def _hit_plan(h: dict, by_contig: dict, target: str):
     if h.get('end') is None or h.get('start') is None:
         return None
     a, b = int(h['start']), int(h['end'])
-    return None, a, (b if b > a else a + 1), (a, max(a, b))
+    return None, a, max(a, b), (a, max(a, b))
