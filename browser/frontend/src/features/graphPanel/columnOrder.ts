@@ -119,8 +119,10 @@ export function canonicalWalk(topology: GraphTopology, bindingOrder?: readonly s
     const reaches = (j: number, c: number) => {
       const covered = new Set<number>();
       for (let k = j + 1; k < seq.length; k++) {
-        if (!info[k].matched) continue; // an insertion inside the run
-        const inv = info[k].all.filter(x => x.inv && x.i > anchor && x.i < c && !claimed.has(x.i));
+        // What it can still take: nothing for an insertion, or a copy of a node already taken (both ride along).
+        const free = info[k].all.filter(x => !claimed.has(x.i) && (info[k].unique || !reserved.has(x.i)));
+        if (!free.length) continue;
+        const inv = free.filter(x => x.inv && x.i > anchor && x.i < c);
         if (!inv.length) break;
         for (const x of inv) covered.add(x.i);
       }

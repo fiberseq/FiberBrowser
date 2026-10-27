@@ -112,6 +112,21 @@ describe('agy post-merge A, HIGH 1: inverted runs entered at a visit with severa
       .toEqual([3, 1, 2, 0]);
   });
 
+  it('a copy of a node already taken, inside the run, is an insertion and does not end it (Codex, stabilize round 1)', () => {
+    // Target L X+ A+ C+ C- A+ R; MAT walks X again inside an inversion over A C+ C- A.
+    const spec = { ref: ['L+', 'X+', 'A+', 'C+', 'C-', 'A+', 'R+'], mat: ['L+', 'X+', 'A-', 'C+', 'X+', 'C-', 'A-', 'R+'] };
+    const lens = { L: 1000, X: 40, A: 300, C: 50, R: 1000 };
+    for (const matches of [true, false]) {
+      expect(ranks(topo(spec, lens, matches)).map(v => v.rank)).toEqual([[0, 0, 0], [1, 0, 0], [5, 0, 0], [4, 0, 0], [5, 1, 1], [3, 0, 0], [2, 0, 0], [6, 0, 0]]);
+    }
+    // With one row, the read in the A- that lies on the target's first A keeps it.
+    const walk = canonicalWalk(topo(spec, lens), ['ref', 'mat']);
+    const reads = [rd('second_a', 1100, 1200), rd('first_a', 1530, 1630)];
+    const lane = packMemberBands(reads.map(mol), [M], {}, 1, 'position', 3, undefined, m => firstCarriedColumn(m.read, walk))!.get('mat')!;
+    expect(lane.rows.flat().map(m => m.read.k)).toEqual(['first_a']);
+    expect(lane.hidden).toBe(1);
+  });
+
   it('an inversion over A B A descends it; a target visit the carrier deletes inside an inversion may be crossed', () => {
     expect(ranks(topo({ ref: ['L+', 'A+', 'B+', 'A+', 'R+'], mat: ['L+', 'A-', 'B-', 'A-', 'R+'] }, { L: 1000, A: 300, B: 400, R: 1000 })).map(v => v.rank[0]))
       .toEqual([0, 3, 2, 1, 4]);
