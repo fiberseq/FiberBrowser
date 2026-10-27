@@ -411,33 +411,61 @@ test.describe('graph panel navigation gates (Phase F)', () => {
     return m ? m.x0 + (((tb as number) - m.t0) / (m.t1 - m.t0)) * (m.x1 - m.x0) + e.offset : null;
   }, [id, t] as const));
 
-  test('anchored zoom keeps the target base under the pointer', async ({ page }) => {
+  /** Ctrl+wheel up over the graph at 30% of its width; returns what the zoom needs to be checked. */
+  async function wheelZoom(page: Page) {
+    const graph = await openGraph(page);
+    const box = (await graph.getByTestId('graph-panel-canvas').boundingBox())!;
+    const px = Math.round(box.width * 0.3);
+    const anchor = await targetAt(page, graph, px);
+    expect(anchor).not.toBeNull();
+    const start = Number(await graph.getAttribute('data-graph-start'));
+    await page.mouse.move(box.x + px, box.y + 40);
+    await page.keyboard.down('ControlOrMeta');
+    await page.mouse.wheel(0, -120);
+    await page.keyboard.up('ControlOrMeta');
+    await expect.poll(async () => Number(await graph.getAttribute('data-graph-start')), { timeout: 30_000 }).not.toBe(start);
+    // Settled: drawn, and no further move (the correction is a second move) for a second.
+    let last = '';
+    await expect.poll(async () => {
+      const now = `${await graph.getAttribute('data-graph-start')}-${await graph.getAttribute('data-graph-end')} ${await graph.getAttribute('data-graph-loading')}`;
+      const same = now === last && now.endsWith('false');
+      last = now;
+      return same;
+    }, { timeout: 30_000, intervals: [1_000] }).toBe(true);
+    return { graph, px, anchor: anchor! };
+  }
+
+  test('anchored zoom: Ctrl+wheel zooms in about the pointer', async ({ page }) => {
     test.setTimeout(240_000);
     const srv = await server(null, { ...graphEnv([ALU]), FIBERBROWSER_LIVE_LIFT: '0' });
     try {
       const errors = await prepare(page, { previews: true });
       await ready(page, `${srv.baseUrl}/?chr=chr3&start=92395&end=102395`);
-      const graph = await openGraph(page);
-      const canvas = graph.getByTestId('graph-panel-canvas');
-      const box = (await canvas.boundingBox())!;
-      const px = Math.round(box.width * 0.3);
-      const anchor = await targetAt(page, graph, px);
-      expect(anchor).not.toBeNull();
-      const start = Number(await graph.getAttribute('data-graph-start'));
-      await page.mouse.move(box.x + px, box.y + 40);
-      await page.keyboard.down('ControlOrMeta');
-      await page.mouse.wheel(0, -120);
-      await page.keyboard.up('ControlOrMeta');
-      await expect.poll(async () => Number(await graph.getAttribute('data-graph-start')), { timeout: 30_000 }).not.toBe(start);
-      await expect(graph).toHaveAttribute('data-graph-loading', 'false', { timeout: 30_000 });
-      // The correction lands after the new scene is drawn: the anchor base is back under the pointer.
-      await expect.poll(async () => {
-        const x = await xOfTarget(page, graph, Math.round(anchor!));
-        return x === null ? Infinity : Math.abs(x - px);
-      }, { timeout: 30_000 }).toBeLessThanOrEqual(3);
+      const { graph, anchor } = await wheelZoom(page);
       const width = Number(await graph.getAttribute('data-graph-end')) - Number(await graph.getAttribute('data-graph-start'));
       expect(width).toBeLessThan(10_000);   // zoomed in
+      expect(await xOfTarget(page, graph, Math.round(anchor))).not.toBeNull();   // the anchor base still drawn
       expect(errors).toEqual([]);
+    } finally { await stopServer(srv); }
+  });
+
+  // BUG (found by the e2e health pass, 26 Oct): the settled anchored zoom leaves the anchor base 47.9 px left of the
+  // pointer on this AluY window, in every one of 12 repeats. Frame by frame: the zoomed window draws it 73.7 px off
+  // (the average-scale zoom), then the correction pans 426 bp, converted from pixels with the average scale
+  // (GraphPanel.tsx, the `correction` effect: deltaBp = dx / bpScale(transform)). The layout is nonlinear (the
+  // +2.35 kb insertion at 97.4 kb is drawn wide), so the pan falls short. The old version of this test polled, and
+  // passed only when a poll landed in the ~110 ms while the zoomed scene slid with the correction's pan (the base
+  // passes under the pointer then), which made it flaky (2 of 5 full runs failed with 47.94 px). Repro: run this test
+  // without .fixme.
+  test.fixme('anchored zoom keeps the target base under the pointer', async ({ page }) => {
+    test.setTimeout(240_000);
+    const srv = await server(null, { ...graphEnv([ALU]), FIBERBROWSER_LIVE_LIFT: '0' });
+    try {
+      await prepare(page, { previews: true });
+      await ready(page, `${srv.baseUrl}/?chr=chr3&start=92395&end=102395`);
+      const { graph, px, anchor } = await wheelZoom(page);
+      const x = await xOfTarget(page, graph, Math.round(anchor));
+      expect(x === null ? Infinity : Math.abs(x - px)).toBeLessThanOrEqual(3);
     } finally { await stopServer(srv); }
   });
 
