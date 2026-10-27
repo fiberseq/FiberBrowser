@@ -23,6 +23,7 @@ import { useReadActionsStore } from '../../stores/readActionsStore';
 import { isLiveJob, useNucJob } from './nucJob';
 import { nucObservations, observationDatasets, observationsKey, observationViews } from './planner';
 import { SegmentsView } from './SegmentsView';
+import { PatchList } from './PatchList';
 import { WindowControls, WindowView } from './WindowView';
 import { categoryLabel, highlightCategory } from './selection';
 import { resolveWindow, placeableHits } from './windowSource';
@@ -203,6 +204,7 @@ export function NucleosomePanel({ isFullView, panelId }: AnalysisPanelProps) {
       {shown.length > 0 && mode === 'window' && <WindowControls settings={settings} setSettings={setSettings} resolution={resolution} hubCount={hubHits.length} />}
       {shown.length > 0 && mode === 'segments' && <SegmentsView observations={shown} summaries={summaries} loading={loading}
         onHide={obsId => setSettings({ hidden: [...hidden, obsId] })} onSelect={select} />}
+      {shown.length > 0 && mode === 'segments' && <PatchList observations={shown} settings={settings} setSettings={setSettings} onSelect={select} />}
       {shown.length > 0 && mode === 'window' && <WindowView observations={shown} results={windowResults} loading={windowLoading} />}
       {notComputed > 0 && !live && mode === 'segments' && <p className="text-ink-secondary" data-testid="nuc-not-computed">
         {notComputed === shown.length ? 'Nothing computed in view yet: ' : 'Some molecules in view have no outputs yet: '}

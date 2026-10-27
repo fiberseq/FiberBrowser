@@ -177,3 +177,26 @@ async def nuc_select(request: dict, state=Depends(get_state)):
                                        include_duplicates=bool(request.get('include_duplicates')))
     except (ObservationError, ValueError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@router.post('/api/nuc/patches')
+async def nuc_patches(request: dict, state=Depends(get_state)):
+    """Per-observation patch scores: each observation's fraction and FiberHMM's shift-within-read recurrence test
+    over each listed patch, with Benjamini-Hochberg q-values per observation and kind."""
+    _not_on_lab_requests()
+    request = _body(request)
+    obs, patches = request.get('observations'), request.get('patches')
+    if not isinstance(obs, list) or not obs or not isinstance(patches, list):
+        raise HTTPException(status_code=422, detail='Give the observations and the patches')
+    if len(patches) > 500:
+        raise HTTPException(status_code=422, detail='Score at most 500 patches at once')
+    fdr = request.get('fdr', 0.05)
+    if not isinstance(fdr, (int, float)) or not 0 < float(fdr) < 1:
+        raise HTTPException(status_code=422, detail='fdr must be between 0 and 1')
+    from services.nuc.observations import ObservationError
+    from services.nuc.patches import patch_scores
+    try:
+        return await asyncio.to_thread(patch_scores, state, obs, patches, fdr=float(fdr),
+                                       include_duplicates=bool(request.get('include_duplicates')))
+    except (ObservationError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error

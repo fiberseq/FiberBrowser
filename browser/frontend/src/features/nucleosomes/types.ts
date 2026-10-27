@@ -144,6 +144,8 @@ export interface NucPanelState {
   flank?: number;
   /** Background anchors for the dephasing readout: none, or the other selected hub hits. */
   background?: 'none' | 'hub';
+  /** Patch types left out of the patch list. */
+  patchTypesHidden?: string[];
 }
 
 export interface NucPhasingBin {

@@ -94,6 +94,19 @@ test('nucleosome panel: compute in view, a column per panel, layers on the reads
   expect(layers.on).toEqual([true, true]);
   expect(layers.withNucsz).toBeGreaterThan(5);
   expect(layers.names).toEqual(['coarse', 'named', 'posterior', 'z']);
+  // Selection: an NRL bin highlights its molecules in the read tracks.
+  await page.getByTestId('nuc-nrl-hist-bin').first().click();
+  await expect(page.getByTestId('nuc-selection')).toContainText(/Highlighting [1-9]\d* molecule/, { timeout: 30_000 });
+  // Window mode: the view as the window, then an anchor at its centre (phasing in both frames).
+  await page.getByTestId('nuc-mode-window').click();
+  await expect(page.getByTestId('nuc-window-row')).toHaveCount(2);
+  await expect(page.getByTestId('nuc-window-molecules').first()).toHaveText(/^[1-9]\d*/, { timeout: 60_000 });
+  await expect(page.getByTestId('nuc-window-nrl').first()).toHaveText(/\d+ \[\d+–\d+\]/);
+  await page.getByTestId('nuc-anchor').selectOption('centre');
+  await expect(page.getByTestId('nuc-window-state').first()).toHaveText(/^\d+ \/ \d+ \/ \d+$/, { timeout: 60_000 });
+  await expect(page.getByTestId('nuc-phasing-anchor').first()).toBeVisible();
+  await info.attach('nucleosome-window-mode', { body: await page.getByTestId('nuc-panel').screenshot(), contentType: 'image/png' });
+  await page.getByTestId('nuc-mode-segments').click();
   // Hiding a column, then showing it again.
   await page.getByRole('button', { name: /^Hide / }).first().click();
   await expect(page.getByTestId('nuc-row')).toHaveCount(1);

@@ -23,7 +23,7 @@ export function registerNucleosomePanel(): void {
     singleton: false, minUsableWidth: 360,
     description: 'Footprint sizes, spacing and array segments for every panel side by side (haplotypes, strands, linked loci, graph paths), from FiberHMM\'s nucleosome module.',
     sessionKeys: ['panels[].nucleosomes'],
-    apiEndpoints: ['/api/nuc/available', '/api/nuc/status', '/api/nuc/jobs', '/api/nuc/jobs/{job_id}', '/api/nuc/summary', '/api/nuc/records', '/api/nuc/window', '/api/nuc/select', '/api/nuc/metrics'],
+    apiEndpoints: ['/api/nuc/available', '/api/nuc/status', '/api/nuc/jobs', '/api/nuc/jobs/{job_id}', '/api/nuc/summary', '/api/nuc/records', '/api/nuc/window', '/api/nuc/select', '/api/nuc/metrics', '/api/nuc/patches'],
   });
   declareContribution('panelFields', 'nucleosomes');
 }

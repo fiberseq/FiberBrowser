@@ -62,3 +62,14 @@ export const nucSelect = (observation: NucObservation, category: NucCategory, in
   fetchJson<{ obsId: string; readIds: string[]; qnames: string[]; molecules: number }>('/api/nuc/select', json({
     observation: descriptor(observation), category, include_duplicates: includeDuplicates,
   }));
+
+export interface NucPatchRequest { key: string; type: string; chrom: string; start: number; end: number }
+export interface NucPatchScore {
+  kind?: string; n?: number; fraction?: number | null; observed?: number | null; expected?: number | null;
+  p?: number | null; q?: number | null; significant?: boolean; notComputed?: number; error?: string; note?: string;
+}
+
+/** Per-observation patch scores: fraction and FiberHMM's recurrence test per patch, BH q per observation and kind. */
+export const nucPatches = (observations: NucObservation[], patches: NucPatchRequest[], includeDuplicates = false, signal?: AbortSignal) =>
+  fetchJson<{ fdr: number; observations: Array<{ obsId: string; datasetId: string; patches: Record<string, NucPatchScore> }> }>(
+    '/api/nuc/patches', json({ observations: observations.map(descriptor), patches, include_duplicates: includeDuplicates }, signal));
