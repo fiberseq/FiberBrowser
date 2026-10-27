@@ -631,7 +631,8 @@ export interface ClusterSlice {
   setFootprintFilterKey: (key: string | null) => void;
   setActiveReadIds: (datasetId: string, ids: string[]) => void;
   setAutozoomDistance: (distance: number) => void;
-  setClusterFocus: (datasetId: string, clusters: Set<number> | null) => void;
+  /** `record: false`: part of a larger action that records its own undo step (Split by SV), not a step of its own. */
+  setClusterFocus: (datasetId: string, clusters: Set<number> | null, options?: { record?: boolean }) => void;
   /** Focus these clusters in several panels at once, as one undo step (the read map, its legend). */
   focusClustersIn: (stateKeys: string[], clusters: Set<number> | null, label?: string) => void;
   clearClusterFocus: () => void;
@@ -1505,8 +1506,9 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
   })),
   setAutozoomDistance: (distance) => set({ autozoomDistance: distance }),
   
-  setClusterFocus: (datasetId, clusters) => {
-    ensureFilterBaseline();
+  setClusterFocus: (datasetId, clusters, options) => {
+    const record = options?.record !== false;
+    if (record) ensureFilterBaseline();
     set(state => {
       const clusterFocus = { ...state.clusterFocus };
       for (const key of clusterSelectionKeys(state, datasetId)) clusterFocus[key] = clusters ? new Set(clusters) : null;
@@ -1523,7 +1525,7 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
         } : {}),
       };
     });
-    pushFilterSnapshot('Set cluster focus', `cluster-focus:${datasetId}`);
+    if (record) pushFilterSnapshot('Set cluster focus', `cluster-focus:${datasetId}`);
   },
   focusClustersIn: (stateKeys, clusters, label) => {
     if (stateKeys.length === 0) return;

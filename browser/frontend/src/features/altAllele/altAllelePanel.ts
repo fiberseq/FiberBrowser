@@ -17,6 +17,7 @@ import { create } from 'zustand';
 import { openAltAllele, insertionClustersInView, type AltAlleleResponse } from './api';
 import { removeDataset } from '../../api/datasets';
 import { useBrowserStore } from '../../stores/browserStore';
+import { useSplitPanelStore } from '../../stores/splitPanelStore';
 import { seedHistoryBaseline, serializeDataset, type SerializedDataset } from '../../stores/historySlice';
 import { closedDatasetReference, usePanelGenomeStore } from '../../stores/panelGenomeStore';
 import type { PanelConfig } from '../../types';
@@ -173,16 +174,34 @@ function startLocus(res: AltAlleleResponse, from?: { chrom: string; start: numbe
   return res.locus!;
 }
 
-function fail(label: string, error?: string) {
-  useBrowserStore.getState().setError(`Could not show the insert expanded (${label}): ${error || 'the server did not answer'}`);
+/** The error banner for a failed build; `retry` (the same call again) gives it a Retry button. */
+function fail(label: string, error: string | undefined, retry?: () => void) {
+  useBrowserStore.getState().setError(`Could not show the insert expanded (${label}): ${error || 'the server did not answer'}`,
+    retry ? { label: 'Retry', run: retry } : undefined);
+}
+
+/**
+ * A split panel (a combined-SV genotype) whose reads all carry an insertion, shown expanded: the panel keeps its own
+ * reads there (this genotype's, not every carrier of the insertion). Its Retry runs this again, read copy included.
+ */
+export async function expandSplitPanelInsertion(panelId: string, cluster: AltAlleleCluster): Promise<string | null> {
+  const panel = useBrowserStore.getState().panels.find(p => p.id === panelId);
+  if (!panel) return null;
+  const reads = useSplitPanelStore.getState().reads[panel.stateKey ?? panel.datasetId ?? panel.id];
+  const id = await showPanelOnAltAllele(panelId, cluster, {}, () => void expandSplitPanelInsertion(panelId, cluster));
+  const now = useBrowserStore.getState().panels.find(p => p.id === panelId);
+  if (id && reads && now?.stateKey) useSplitPanelStore.getState().setReads(now.stateKey, reads);
+  return id;
 }
 
 /**
  * Switch a dataset panel to the alt allele of `cluster` (carriers only, insert expanded).
  * What it showed before is kept for showPanelOnReference. Returns the alt dataset id, or null.
+ * `retry`: what the error banner's Retry runs when the build fails (default: this call again). A caller that does
+ * more after this call passes its own.
  */
 export async function showPanelOnAltAllele(panelId: string, cluster: AltAlleleCluster,
-  opts: { includeReference?: boolean; flank?: number } = {}): Promise<string | null> {
+  opts: { includeReference?: boolean; flank?: number } = {}, retry?: () => void): Promise<string | null> {
   const panel = useBrowserStore.getState().panels.find(p => p.id === panelId);
   if (!panel || panel.contentType !== 'dataset') return null;
   const label = clusterLabel(cluster);
@@ -195,7 +214,7 @@ export async function showPanelOnAltAllele(panelId: string, cluster: AltAlleleCl
       return null;
     }
     if (!res.success || !res.dataset || !res.layout || !res.genome_key) {
-      fail(label, res.error);
+      fail(label, res.error, retry ?? (() => void showPanelOnAltAllele(panelId, cluster, opts)));
       return null;
     }
     const dataset = await registerAltDataset(res);
@@ -394,7 +413,7 @@ export async function openAltAllelePanel(cluster: AltAlleleCluster,
       return null;
     }
     if (!res.success || !res.dataset || !res.layout || !res.genome_key) {
-      fail(label, res.error);
+      fail(label, res.error, () => void openAltAllelePanel(cluster, opts));
       return null;
     }
     const dataset = await registerAltDataset(res);
@@ -480,7 +499,8 @@ export async function setAltIncludeReference(panelId: string, include: boolean):
   if (!panel || !alt || Boolean(alt.includeReference) === include) return;
   const before = panel.datasetId;
   const viewport = panel.viewportOverride;
-  const id = await showPanelOnAltAllele(panelId, alt.cluster, { includeReference: include, flank: alt.flank });
+  const id = await showPanelOnAltAllele(panelId, alt.cluster, { includeReference: include, flank: alt.flank },
+    () => void setAltIncludeReference(panelId, include));
   if (!id) return;
   // Same contig: stay where it was.
   if (viewport) {
@@ -514,7 +534,8 @@ export async function healAltAllelePanels(): Promise<void> {
       try {
         const res = await requestAltAllele(alt.cluster, { includeReference: alt.includeReference, flank: alt.flank });
         if (!res.success || !res.dataset || !res.layout || !res.genome_key) {
-          fail(clusterLabel(alt.cluster), res.error);
+          // Retry heals every restored panel still missing its alt allele (this one included).
+          fail(clusterLabel(alt.cluster), res.error, () => void healAltAllelePanels());
           return;
         }
         const dataset = await registerAltDataset(res);

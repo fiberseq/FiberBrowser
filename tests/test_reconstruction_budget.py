@@ -7,8 +7,9 @@ import pytest
 
 from services.background_work import cancel_scope
 from services.insertion_consensus import align, band_width, build_consensus, consensus_with_knots, partials_to_consensus
+import services.reconstruction_budget as reconstruction_budget
 from services.reconstruction_budget import (DEFAULT_LIMITS, RESERVATIONS, Limits, Reservations,
-    ResourceResult, WorkBudget, close_warm_worker, estimate_alignment, isolated)
+    ResourceResult, WorkBudget, budgeted_request, close_warm_worker, estimate_alignment, isolated)
 
 
 @pytest.fixture(autouse=True)
@@ -89,6 +90,44 @@ def test_process_bytes_are_reserved_and_released_after_success_and_deadline():
         isolated('time', 'sleep', (5,), {}, lengths=[], limits=replace(DEFAULT_LIMITS, deadline_s=.1))
     assert RESERVATIONS.bytes == RESERVATIONS.large == RESERVATIONS.queued == 0
     assert not multiprocessing.active_children()
+
+
+@budgeted_request
+def _sleeps_in_one_request(limits, *seconds):
+    """One request of back-to-back isolated jobs, as build_alt_allele runs them."""
+    return [isolated('time', 'sleep', (s,), {}, lengths=[], limits=limits) for s in seconds]
+
+
+def test_each_job_in_a_request_gets_its_own_deadline(monkeypatch):
+    # Each job fits its own 5 s limit; together they take longer than 5 s.
+    # budgeted_request reads the module's DEFAULT_LIMITS; isolated takes limits= explicitly.
+    limits = replace(DEFAULT_LIMITS, deadline_s=5)
+    monkeypatch.setattr(reconstruction_budget, 'DEFAULT_LIMITS', limits)
+    started = time.monotonic()
+    assert _sleeps_in_one_request(limits, 3, 3) == [None, None]
+    assert time.monotonic() - started > limits.deadline_s
+    assert RESERVATIONS.bytes == RESERVATIONS.large == RESERVATIONS.queued == 0
+    assert not multiprocessing.active_children()
+
+
+def test_request_ceiling_stops_a_request_of_several_jobs(monkeypatch):
+    # The second job starts well inside its own 5 s, so the 6 s request ceiling stops it.
+    limits = replace(DEFAULT_LIMITS, deadline_s=5, request_deadline_s=6)
+    monkeypatch.setattr(reconstruction_budget, 'DEFAULT_LIMITS', limits)
+    started = time.monotonic()
+    with pytest.raises(ResourceResult, match='deadline') as error:
+        _sleeps_in_one_request(limits, 2, 30)
+    elapsed = time.monotonic() - started
+    assert error.value.parameters == {'seconds': 6}
+    assert 6 <= elapsed < 9
+    assert RESERVATIONS.bytes == RESERVATIONS.large == RESERVATIONS.queued == 0
+    assert not multiprocessing.active_children()
+
+
+def test_request_deadline_cannot_be_shorter_than_a_job_deadline():
+    assert DEFAULT_LIMITS.request_deadline_s >= DEFAULT_LIMITS.deadline_s
+    with pytest.raises(ValueError, match='request deadline'):
+        Limits(deadline_s=10, request_deadline_s=5)
 
 
 def test_warm_worker_reuses_only_the_process_and_keeps_memory_reserved():

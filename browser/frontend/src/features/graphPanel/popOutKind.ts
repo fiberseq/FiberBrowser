@@ -10,7 +10,7 @@ import { useBrowserStore } from '../../stores/browserStore';
 import { isLiveLift } from '../../utils/datasetKinds';
 import { liftHapLabels } from '../liveLift/types';
 import type { PanelConfig } from '../../types';
-import { linkedSourcePanels, openLinkedSourceView } from '../liveLift/linking/liftLink';
+import { linkedSourcePanels, markRevealStep, openLinkedSourceView } from '../liveLift/linking/liftLink';
 import { isHost, liveProvenance, panelKeyOf, popOut, provenanceCovers, provenanceLineage, provenanceShare, undoable, type GraphProvenance } from './hostMode';
 import { useReadActionsStore } from '../../stores/readActionsStore';
 import { drawnRowOwnership, drawnRowsFor } from '../../stores/clusterSlice';
@@ -97,6 +97,7 @@ async function openSources(host: PanelConfig, sources: PopOutPlan['sources']): P
       // The step this reveal records: a remap that waits on its tiles folds into it (agy post-merge review, group C,
       // HIGH 3).
       const step = { id: null as number | null };
+      const before = lastSnapshotId();
       undoable(`Show ${existing.liftLink?.hapLabel ?? hap ?? ''} source view`.replace('  ', ' '), () => {
         // (Synchronous for an open one: it relinks this one, on the member's strand, to this lifted panel and returns.)
         void openLinkedSourceView(liftPanelId, hap, { existingId: existing.id, step });
@@ -108,8 +109,10 @@ async function openSources(host: PanelConfig, sources: PopOutPlan['sources']): P
         seedSourceState(fromPanelId, existing.id);
       });
       step.id = lastSnapshotId();
-      // No waiting for its late remap (agy group C round 2, NEW HIGH 1): the next reveal goes on at once; a late remap
-      // whose step is no longer the latest is dropped, and the source view then follows its next move.
+      // No waiting for its late remap (agy group C round 2, NEW HIGH 1): the next reveal goes on at once. Its step
+      // only reveals a source view, so an earlier reveal's late remap still lands across it (a step of any other kind,
+      // or an Undo, drops that remap, and the source view then follows its next move).
+      if (step.id !== before) markRevealStep(step.id);
       continue;
     }
     const id = await openLinkedSourceView(liftPanelId, hap, { ...(view ? { view } : {}), ...(liftPanelId !== host.id ? { besidePanelId: host.id } : {}) });

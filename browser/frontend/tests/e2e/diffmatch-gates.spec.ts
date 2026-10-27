@@ -449,15 +449,13 @@ test.describe('graph panel navigation gates (Phase F)', () => {
     } finally { await stopServer(srv); }
   });
 
-  // BUG (found by the e2e health pass, 26 Oct): the settled anchored zoom leaves the anchor base 47.9 px left of the
-  // pointer on this AluY window, in every one of 12 repeats. Frame by frame: the zoomed window draws it 73.7 px off
-  // (the average-scale zoom), then the correction pans 426 bp, converted from pixels with the average scale
-  // (GraphPanel.tsx, the `correction` effect: deltaBp = dx / bpScale(transform)). The layout is nonlinear (the
-  // +2.35 kb insertion at 97.4 kb is drawn wide), so the pan falls short. The old version of this test polled, and
-  // passed only when a poll landed in the ~110 ms while the zoomed scene slid with the correction's pan (the base
-  // passes under the pointer then), which made it flaky (2 of 5 full runs failed with 47.94 px). Repro: run this test
-  // without .fixme.
-  test.fixme('anchored zoom keeps the target base under the pointer', async ({ page }) => {
+  // Found by the e2e health pass (26 Oct): the settled zoom left the anchor base 47.9 px from the pointer on this AluY
+  // window, every time. The correction converted its pixel miss to bases with the average scale, and the +2.35 kb
+  // insertion at 97.4 kb is drawn wide, so the pan fell short. The layout also re-spreads the width beside the
+  // insertion when the window moves, so no one conversion is exact. The correction now converts at the scale of the
+  // sequence around the anchor, then takes up to two secant steps (GraphPanel.tsx, the `correction` effect): on this
+  // window 73.7 px, then 42.3, 7.0 and 0.6 px.
+  test('anchored zoom keeps the target base under the pointer', async ({ page }) => {
     test.setTimeout(240_000);
     const srv = await server(null, { ...graphEnv([ALU]), FIBERBROWSER_LIVE_LIFT: '0' });
     try {

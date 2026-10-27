@@ -31,3 +31,18 @@ it('ledgers merge: retired records and higher revisions win; lineage is unioned'
   expect(Object.keys(m.records)).toEqual(['x', 'y']);
   expect(m.lineage.x.descendants).toEqual(['y']);
 });
+
+it('inspector comparisons expire: the store keeps the newest MAX_INSPECT_ENTRIES, never the one just put, and every row entry', async () => {
+  const { MAX_INSPECT_ENTRIES } = await import('./comparison');
+  useComparisonStore.setState({ byKey: {} });
+  const r = { dataset_id: 'd', chrom: 'c', start: 0, end: 1, search_complete: true, reasons: [], lineage_events: [], ledger: {}, policy: {},
+    assembly: {}, reads: {} } as never;
+  useComparisonStore.getState().put('d|c|row:p1', r);
+  for (let i = 0; i < MAX_INSPECT_ENTRIES + 5; i++) useComparisonStore.getState().put(`d|c|inspect:x${i}`, r);
+  const keys = Object.keys(useComparisonStore.getState().byKey);
+  expect(keys.filter(k => k.includes('|inspect:'))).toHaveLength(MAX_INSPECT_ENTRIES);
+  expect(keys).toContain('d|c|row:p1');
+  expect(keys).not.toContain('d|c|inspect:x0');
+  expect(keys).toContain(`d|c|inspect:x${MAX_INSPECT_ENTRIES + 4}`);
+  useComparisonStore.setState({ byKey: {} });
+});

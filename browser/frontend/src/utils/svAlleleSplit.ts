@@ -8,6 +8,7 @@ import { normalizeSvConflictOptions, type SvConflictOptions, type SvConflictReas
  */
 import { fetchJson } from '../api/sharedFetch';
 import { useBrowserStore } from '../stores/browserStore';
+import { seedHistoryBaseline } from '../stores/historySlice';
 import { useSplitPanelStore } from '../stores/splitPanelStore';
 import type { SvSplitDef } from '../stores/svSlice';
 import { SV_SPAN_MARGIN, svAlleleLabel } from '../components/tracks/read-track/svDrawing';
@@ -79,9 +80,12 @@ export function svSplitDef(target: SvSplitTarget, sv: SvSplitAllele, response: S
 /** Put a split's groups in the store, as a clustering run would (one undo step). */
 export function applySvSplit(stateKey: string, def: SvSplitDef, assignments: Record<string, number>): void {
   const store = useBrowserStore.getState();
+  // A step to return to (an empty history, or changes since the last step), before any of the split's changes.
+  seedHistoryBaseline(store, 'Before split by SV allele', 'clustering');
   store.setClusterAssignments(stateKey, assignments, { svSplit: true });
   store.setClusterOrder(stateKey, [0, 1, 2]);
-  store.setClusterFocus(stateKey, null);
+  // (Part of this step: its own "Set cluster focus" step made Undo after a split take two presses.)
+  store.setClusterFocus(stateKey, null, { record: false });
   store.clearClusterSelection(stateKey);
   // An allele is not an accessibility pattern: never re-derived on pan.
   store.setDynamicClustering(false);
@@ -165,9 +169,10 @@ export function clearSvSplit(stateKey: string): void {
   initialRequests.delete(stateKey);
   const store = useBrowserStore.getState();
   if (!store.svSplits[stateKey]) return;
+  seedHistoryBaseline(store, 'Before clearing the SV split', 'clustering');
   store.setClusterAssignments(stateKey, {});
   store.setClusterOrder(stateKey, []);
-  store.setClusterFocus(stateKey, null);
+  store.setClusterFocus(stateKey, null, { record: false });
   store.clearClusterSelection(stateKey);
   store.setSvSelectedCluster(stateKey, null);
   store.pushSnapshot('Clear SV split');

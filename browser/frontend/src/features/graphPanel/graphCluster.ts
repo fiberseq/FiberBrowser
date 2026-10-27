@@ -414,13 +414,17 @@ export function commitGraphRun(s: BrowserState, plan: GraphClusterPlan, response
   };
   run.graph!.targetContig = plan.targetContig;
   const c = response.columns;
-  const notCarrierObs = Object.entries(response.results).filter(([, r]) => (r as { not_carrier?: boolean }).not_carrier)
-    .map(([oid, r]) => `${obsLabel.get(oid)?.label ?? oid} (${Object.keys(r.assignments ?? {}).length})`);
+  const notCarriers = Object.entries(response.results).filter(([, r]) => (r as { not_carrier?: boolean }).not_carrier);
+  const notCarrierObs = notCarriers.map(([oid, r]) => `${obsLabel.get(oid)?.label ?? oid} (${Object.keys(r.assignments ?? {}).length})`);
+  // (A path that is not a carrier is said once, under "Not a carrier": the columns' "no columns of region 1 on this
+  // path" is why it isn't one.)
+  const notCarrierIds = new Set(notCarriers.map(([oid]) => oid));
   // Observations the run left out on its own (a path carrying only a later carrier set's sequence, no covering
   // reads), besides the plan's (Codex review, group B).
   const resultLeftOut = Object.entries(response.results).filter(([oid, r]) => r.left_out && !(r as { not_carrier?: boolean }).not_carrier
     && !(oid in (c.left_out ?? {}))).map(([oid, r]) => `${obsLabel.get(oid)?.label ?? oid}: ${r.left_out}`);
-  const leftOut = [...resultLeftOut, ...Object.entries(c.left_out ?? {}).map(([oid, why]) => `${obsLabel.get(oid)?.label ?? oid}: ${why}`),
+  const leftOut = [...resultLeftOut, ...Object.entries(c.left_out ?? {}).filter(([oid]) => !notCarrierIds.has(oid))
+    .map(([oid, why]) => `${obsLabel.get(oid)?.label ?? oid}: ${why}`),
     ...plan.leftOut.map(l => `${l.reason}`)];
   run.details = `Clustered on graph node columns at ${plan.regions.length} region${plan.regions.length === 1 ? '' : 's'} of ${plan.target}: `
     + `${c.shared.filter(f => f.kind === 'target').map(f => `target ${f.label} (${f.samples} samples)`).join('; ')}`

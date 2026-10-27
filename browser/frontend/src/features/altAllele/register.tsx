@@ -16,8 +16,8 @@ import { useBrowserStore } from '../../stores/browserStore';
 import { useSplitPanelStore } from '../../stores/splitPanelStore';
 import { altAlleleName, altLayoutForContig, altPositionLabel, describeAltPosition, mapSpanToAlt, mapSpanToRef } from './altAlleleCoords';
 import {
-  cancelAltAlleleBuild, expandSvSplitCarriers, svSplitExpands, openAltAllelePanel, releaseAltDatasets, setAltIncludeReference, setAltLinked, showPanelOnAltAllele,
-  showPanelOnReference, toggleInsertExpanded, useAltAlleleBuildStore,
+  cancelAltAlleleBuild, expandSplitPanelInsertion, expandSvSplitCarriers, svSplitExpands, openAltAllelePanel, releaseAltDatasets, setAltIncludeReference,
+  setAltLinked, showPanelOnAltAllele, showPanelOnReference, toggleInsertExpanded, useAltAlleleBuildStore,
 } from './altAllelePanel';
 import { useAltAllelePanels } from './useAltAllelePanels';
 import { ALT_ALLELE_PREVIEW } from './preview';
@@ -65,11 +65,7 @@ function useAltAlleleHeader({ panel, dataset, showLayoutChrome }: PanelHeaderCon
   // fit whole, and always in "…" (round 2, N3: in a two-SV split's 480-px headers they shrank to empty circles).
   const splitInsertions = previews && subset && !alt && showLayoutChrome ? (subset.rule.carriedInsertions ?? []).slice(0, 2) : [];
   const expandInsertion = (ins: (typeof splitInsertions)[number]) => {
-    const reads = useSplitPanelStore.getState().reads[panel.stateKey ?? panel.datasetId ?? panel.id];
-    void showPanelOnAltAllele(panel.id, { datasetId: ins.datasetId, chrom: ins.chrom, ref: ins.ref, len: ins.len }).then(id => {
-      const now = useBrowserStore.getState().panels.find(p => p.id === panel.id);
-      if (id && reads && now?.stateKey) useSplitPanelStore.getState().setReads(now.stateKey, reads);
-    });
+    void expandSplitPanelInsertion(panel.id, { datasetId: ins.datasetId, chrom: ins.chrom, ref: ins.ref, len: ins.len });
   };
   const expandTitle = (ins: (typeof splitInsertions)[number]) => `Every read of this panel carries ${ins.name} (+${ins.len.toLocaleString()} bp at ${ins.chrom}:${(ins.ref + 1).toLocaleString()}): show it expanded, the reads on its alternate allele. One insertion at a time; “Pinned to insertion ⓘ” → Show on reference goes back.`;
   const headerPills = splitInsertions.map(ins => ({

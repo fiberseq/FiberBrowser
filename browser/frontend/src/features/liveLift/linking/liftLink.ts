@@ -371,9 +371,17 @@ export async function openLinkedSourceView(liftPanelId: string, hapLabel?: strin
   }
 }
 
-/** The exact remap of a revealed source view that still waits on its tiles (null: none; never rejected): "Pop out"
- * of several haplotypes reveals the next one only after it, so each folds into its own step. */
+/** The exact remap of a revealed source view that still waits on its tiles (null: none; never rejected). */
 const settling = new Map<string, Promise<void>>();
+/** Undo steps that only reveal an open source view: a graph pop-out of several haplotypes records one per source view
+ * at once, without waiting on the previous one's tiles, and an earlier reveal's late exact remap lands across them. */
+const revealSteps = new Set<number>();
+export function markRevealStep(id: number | null): void {
+  if (id == null) return;
+  revealSteps.add(id);
+  // (Ids only grow: the oldest go first once there are many.)
+  if (revealSteps.size > 512) revealSteps.delete(revealSteps.values().next().value!);
+}
 export function revealSettling(panelId: string): Promise<void> | null {
   return settling.get(panelId) ?? null;
 }
@@ -383,8 +391,10 @@ export function revealSettling(panelId: string): Promise<void> | null {
  * approximate answer is shown at once too, and the exact one follows when the tiles arrive — only if nothing moved,
  * was relinked, undone, redone or recorded since: the current undo step is still the reveal's own (folded into it)
  * when the caller recorded one, else still the one that was current at the reveal, Redo steps above it or not
- * (post-merge review, group C rounds 2 and 3). `bound`: the caller names that step (filled right after it records
- * it); else it is taken as the step recorded in the same turn. */
+ * (post-merge review, group C rounds 2 and 3). Other source views' reveals recorded after it don't count as
+ * recorded: they left this one alone, and the exact view joins each of them too (stabilize review: popping out
+ * several open source views left the first at its old locus). `bound`: the caller names that step (filled right
+ * after it records it); else it is taken as the step recorded in the same turn. */
 function remapRevealedSource(existing: PanelConfig, datasetId: string, key: string, own: Span, bound?: { id: number | null }): void {
   const map = () => {
     const now = useBrowserStore.getState().panels.find(p => p.id === existing.id);
@@ -413,6 +423,17 @@ function remapRevealedSource(existing: PanelConfig, datasetId: string, key: stri
   if (!bound) queueMicrotask(() => { captured = lastSnapshotId(); });
   const viewNow = () => JSON.stringify(useBrowserStore.getState().panels.find(p => p.id === existing.id)?.viewportOverride ?? null);
   const shown = viewNow();
+  /** This panel's view in a saved step. */
+  const viewIn = (state: { panels?: unknown[] }) =>
+    JSON.stringify(((state.panels ?? []) as (PanelConfig | null)[]).find(p => p?.id === existing.id)?.viewportOverride ?? null);
+  /** The steps after `id` up to the current one (null: `id` is gone, or undone past). */
+  const stepsSince = (id: number | null) => {
+    const s = useBrowserStore.getState();
+    const stack = s._historyStack ?? [];
+    const at = id === null ? -1 : stack.findIndex(x => x.id === id);
+    if (id !== null && (at < 0 || at > s._historyPointer)) return null;
+    return stack.slice(at + 1, s._historyPointer + 1);
+  };
   const settle = (async () => {
     if (!await ensureSummary(datasetId, key)) return;
     await prefetchView(datasetId, key, 0, own.chrom, own.start, own.end);
@@ -421,15 +442,29 @@ function remapRevealedSource(existing: PanelConfig, datasetId: string, key: stri
     const step = bound ? bound.id : captured;
     const recorded = step !== null && step !== after;
     // (Not "the latest step": "Open source view" after an Undo records none, and Redo steps stay above it.)
+    const ownStep = recorded ? step : stepAtReveal;
+    const later = stepsSince(ownStep);
     if (!now?.liftLink || generation.get(existing.id) !== gen || viewNow() !== shown
       || JSON.stringify(liftedOwnView(now.liftLink.liftPanelId, st.panels)) !== JSON.stringify(own)
-      || currentStep() !== (recorded ? step : stepAtReveal) || st._lastRestoreTime !== restoredAtReveal) return;
+      || !later || !later.every(x => x.id != null && revealSteps.has(x.id) && viewIn(x.state) === shown)
+      || st._lastRestoreTime !== restoredAtReveal) return;
     const out = map();
     if (!out || out === 'pending') return;
     pending.delete(existing.id);
     show(out);
-    // Into the reveal's own step (the caller recorded one, and it is still the current one).
-    if (recorded) useBrowserStore.getState().foldIntoCurrentSnapshot?.(serializeState(useBrowserStore.getState()));
+    const shownState = useBrowserStore.getState();
+    if (!later.length) {
+      // Into the reveal's own step (the caller recorded one, and it is still the current one).
+      if (recorded) shownState.foldIntoCurrentSnapshot?.(serializeState(shownState));
+      return;
+    }
+    // Into its own step and each later reveal's: only this panel's view (Undo of a later reveal keeps it exact).
+    const view = shownState.panels.find(p => p.id === existing.id)?.viewportOverride;
+    const ids = [...(recorded ? [step!] : []), ...later.map(x => x.id!)];
+    shownState.rewriteSnapshots?.(ids, state => ({ ...state, panels: (state.panels ?? []).map(p => {
+      const panel = p as PanelConfig;
+      return panel?.id === existing.id ? { ...panel, viewportOverride: view } : p;
+    }) }));
   })().catch(() => undefined);
   settling.set(existing.id, settle);
   void settle.then(() => { if (settling.get(existing.id) === settle) settling.delete(existing.id); });

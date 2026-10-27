@@ -17,14 +17,27 @@ import { liftHapLabels } from './types';
 import { liveLiftHaplotypeColor, registerHaplotypeLabels } from './palette';
 import { LiftedPanelLinkItems, registerLiftLinkingUi } from './linking/register';
 import { liftedOpenView } from '../graphPanel/handoff';
+import { isHost, membersOf } from '../graphPanel/hostMode';
+import type { PanelConfig } from '../../types';
 import { notePendingGraphOpen } from '../graphPanel/openAsGraph';
 import { offerGraphView } from '../graphPanel/graphOffer';
 import { SESSION_RESTORED_EVENT, sessionRestoresInFlight } from '../../utils/sessionRestore';
 
-export function liveLiftChipText(ctx: Pick<PanelHeaderContext, 'panel' | 'dataset'>): string | null {
+/** The haplotypes a graph host of a lifted dataset draws: its own and those of its members of the same dataset, in the
+ * dataset's order. A popped-out member is still drawn in the graph (its band, as membersOf lists it), so it counts too.
+ * Null: not a host drawing its graph, or a pooled one, which draws every haplotype anyway. */
+export function graphDrawnHaps(panels: readonly PanelConfig[], panel: PanelConfig, labels: readonly string[]): string[] | null {
+  if (!panel.liftHap || !isHost(panel) || panel.graphView?.handoff?.shown === 'linear') return null;
+  const haps = new Set(membersOf(panels, panel).map(m => m.panel).filter(p => p.datasetId === panel.datasetId && p.liftHap).map(p => p.liftHap!));
+  if (haps.size < 2) return null;
+  return [...labels.filter(l => haps.has(l)), ...[...haps].filter(h => !labels.includes(h))];
+}
+
+/** "Live lift · MAT → this genome": the haplotypes the panel draws (a graph host's folded members too, `drawn`). */
+export function liveLiftChipText(ctx: Pick<PanelHeaderContext, 'panel' | 'dataset'>, drawn?: readonly string[] | null): string | null {
   if (!isLiveLift(ctx.dataset)) return null;
   const labels = liftHapLabels(ctx.dataset?.live_lift);
-  const which = ctx.panel.liftHap ?? labels.join('+');
+  const which = drawn?.length ? drawn.join(' + ') : ctx.panel.liftHap ?? labels.join('+');
   return `Live lift · ${which} → this genome`;
 }
 
@@ -32,13 +45,16 @@ export function useLiveLiftHeader(ctx: PanelHeaderContext) {
   const dark = useBrowserStore(s => s.darkMode);
   const { panel, dataset } = ctx;
   const labels = liftHapLabels(dataset?.live_lift);
+  // In graph mode a host draws its folded members' haplotypes too (the chip named only its own).
+  const drawnKey = useBrowserStore(s => graphDrawnHaps(s.panels, panel, labels)?.join('\u0000') ?? '');
   if (!isLiveLift(dataset) || !panel.datasetId) return null;
-  const text = liveLiftChipText(ctx)!;
+  const drawn = drawnKey ? drawnKey.split('\u0000') : null;
+  const text = liveLiftChipText(ctx, drawn)!;
   const split = Boolean(panel.liftHap);
   const title = `Live lift: ${dataset?.label} drawn on this genome through ${dataset?.live_lift?.map_label ?? 'its map'}`
-    + ` (no realignment). ${split ? `This panel shows haplotype ${panel.liftHap}.` : 'Haplotypes pooled.'}`;
+    + ` (no realignment). ${drawn ? `This graph draws haplotypes ${drawn.join(' and ')}.` : split ? `This panel shows haplotype ${panel.liftHap}.` : 'Haplotypes pooled.'}`;
   const chips = (
-    <span className="fb-header-pill flex-shrink-0 truncate" style={{ color: liveLiftHaplotypeColor(panel.liftHap, dark) }}
+    <span className="fb-header-pill flex-shrink-0 truncate" style={{ color: liveLiftHaplotypeColor(drawn ? null : panel.liftHap, dark) }}
       title={title} data-testid="live-lift-chip">{text}</span>
   );
   const menu = (

@@ -93,6 +93,14 @@ describe('not a carrier: frontend follow-ups', () => {
     expect(live[recordKey(aidB)!]).toBe(0);   // an existing label never changes
   });
 
+  it('Cluster detail names a not-carrier path once, under "Not a carrier", not also under "Left out" (stabilize 2)', () => {
+    const { plan, obsM, obsP } = setup();
+    commit(plan, obsM, obsP, { [aid('m1')]: 0 }, { [aid('p1')]: -2 });
+    const details = useBrowserStore.getState().clusterMatchedRun!.details!;
+    expect(details).toContain('Not a carrier (shown, not fitted)');
+    expect(details).not.toContain('Left out');
+  });
+
   it('a haplotype popped out of a pooled host keeps only its own labels', () => {
     const { plan, obsM, obsP } = setup();
     const aidM = 'lift-cohort:v1 ["d|m1","m1","rm1",0,"primary"]';

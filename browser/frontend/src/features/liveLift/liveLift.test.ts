@@ -9,7 +9,7 @@ import { makeDataViewportKey } from '../../components/tracks/read-track/useReadT
 import { canProjectReadRegion } from '../../api/loadedReadRegion';
 import { createTestStore, ensureBuiltinPanelsRegistered } from '../../stores/__tests__/helpers';
 import { liveLiftTooltipLines } from './LiveLiftTooltip';
-import { liveLiftChipText } from './register';
+import { graphDrawnHaps, liveLiftChipText } from './register';
 import { isBamBacked, isLiveLift } from '../../utils/datasetKinds';
 import { liveLiftHaplotypeColor } from './palette';
 import { makeAxis } from './axis';
@@ -261,6 +261,21 @@ describe('tooltip and chip', () => {
       haplotype_labels: { 'H#1': 'MAT', 'H#2': 'PAT' } } } as never;
     expect(liveLiftChipText({ panel: { liftHap: 'PAT' } as never, dataset })).toBe('Live lift · PAT → this genome');
     expect(liveLiftChipText({ panel: {} as never, dataset })).toBe('Live lift · MAT+PAT → this genome');
+    // A graph host draws its folded members' haplotypes too (docs agent, 27 Oct: the chip named only its own).
+    const host = { id: 'h', contentType: 'dataset', datasetId: 'l', liftHap: 'MAT', viewMode: 'graph',
+      graphView: { role: 'host', members: [{ panelId: 'h', binding: null }, { panelId: 'p', binding: 'pat' }, { panelId: 'n', binding: 't' }] } } as never;
+    const pat = { id: 'p', contentType: 'dataset', datasetId: 'l', liftHap: 'PAT', graphMemberOf: 'h', collapsed: true } as never;
+    const native = { id: 'n', contentType: 'dataset', datasetId: 'nat', graphMemberOf: 'h', collapsed: true } as never;
+    const drawn = graphDrawnHaps([host, pat, native], host, ['MAT', 'PAT']);
+    expect(drawn).toEqual(['MAT', 'PAT']);
+    expect(liveLiftChipText({ panel: host, dataset }, drawn)).toBe('Live lift · MAT + PAT → this genome');
+    // A popped-out member is still drawn in the graph (its band); a panel that left the graph is not.
+    expect(graphDrawnHaps([host, { ...(pat as object), collapsed: false } as never], host, ['MAT', 'PAT'])).toEqual(['MAT', 'PAT']);
+    expect(graphDrawnHaps([host, { ...(pat as object), graphMemberOf: undefined, collapsed: false } as never], host, ['MAT', 'PAT'])).toBeNull();
+    // Drawn linear past the hand-off, or not a host: its own haplotype only.
+    const linear = { ...(host as object), graphView: { role: 'host', handoff: { shown: 'linear' } } } as never;
+    expect(graphDrawnHaps([linear, pat], linear, ['MAT', 'PAT'])).toBeNull();
+    expect(graphDrawnHaps([pat], pat, ['MAT', 'PAT'])).toBeNull();
     expect(isBamBacked(dataset)).toBe(true);
     expect(isLiveLift({ data_type: 'bam' })).toBe(false);
   });

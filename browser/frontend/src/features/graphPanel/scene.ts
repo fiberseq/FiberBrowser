@@ -1009,6 +1009,14 @@ export function xForTarget(map: TargetMapEntry[], t: number, edge: 'start' | 'en
   return edge === 'start' ? xs[0] : xs[xs.length - 1];
 }
 
+/** Pixels per target base of the sequence drawn at `t` (null: `t` is not in drawn sequence). The layout is nonlinear:
+ * an insertion drawn wide takes width that the average scale spreads over every target base, so a pan converted from
+ * pixels with the average scale falls short wherever an insertion is in view. */
+export function localBpScale(map: TargetMapEntry[], t: number): number | null {
+  for (const m of map) if (m.kind === 'seq' && m.t1 > m.t0 && t >= m.t0 && t <= m.t1) return Math.abs(m.x1 - m.x0) / (m.t1 - m.t0);
+  return null;
+}
+
 /** The target coordinate at x: a position in sequence, an insertion boundary (no interval), or null. */
 export function targetAtX(map: TargetMapEntry[], x: number): { pos: number; boundary: boolean; kind: TargetMapEntry['kind'] } | null {
   for (const m of map) {

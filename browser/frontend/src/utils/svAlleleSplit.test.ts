@@ -315,3 +315,64 @@ describe('current split counts and historical assignments', () => {
     expect(useBrowserStore.getState().svSplits.ds).toBe(def);
   });
 });
+
+describe('Split by SV is one undo step (stabilize 2, item 1)', () => {
+  let initial: ReturnType<typeof useBrowserStore.getState>;
+  beforeEach(() => {
+    initial = useBrowserStore.getState();
+    useBrowserStore.setState({ chrom: 'chrSV', start: 8_000, end: 16_000, _historyStack: [], _historyPointer: -1, _lastRestoreTime: 0 });
+    // A grouping of the panel before the split, recorded as its own step.
+    useBrowserStore.getState().setClusterAssignments('ds', { a: 4, b: 5 });
+    useBrowserStore.getState().pushSnapshot('Cluster reads', { kind: 'clustering' });
+  });
+  afterEach(() => { vi.unstubAllGlobals(); useBrowserStore.setState(initial, true); });
+
+  it('records one step, and one Undo brings back the grouping before it', async () => {
+    const before = useBrowserStore.getState()._historyStack.length;
+    mockSplit({ a: 0, b: 1 });
+    await splitBySv(TARGET, SV);
+    let s = useBrowserStore.getState();
+    expect(s._historyStack.slice(before).map(x => x.label)).toEqual(['Split by SV allele: DEL 1.5 kb @ chrSV:10,001']);
+    s.undo();
+    s = useBrowserStore.getState();
+    expect(s.svSplits.ds).toBeUndefined();
+    expect(s.clusterAssignments.ds).toEqual({ a: 4, b: 5 });
+  });
+
+  it('the first split after history was cleared can be undone (Codex stabilize-2 review, round 1)', async () => {
+    useBrowserStore.getState().clearHistory();
+    mockSplit({ a: 0, b: 1 });
+    await splitBySv(TARGET, SV);
+    let s = useBrowserStore.getState();
+    expect(s.canUndo()).toBe(true);
+    s.undo();
+    s = useBrowserStore.getState();
+    expect(s.svSplits.ds).toBeUndefined();
+    expect(s.clusterAssignments.ds).toEqual({ a: 4, b: 5 });
+    // And Clear SV split right after a cleared history.
+    s.redo();
+    useBrowserStore.getState().clearHistory();
+    const { clearSvSplit } = await import('./svAlleleSplit');
+    clearSvSplit('ds');
+    s = useBrowserStore.getState();
+    expect(s.canUndo()).toBe(true);
+    s.undo();
+    expect(useBrowserStore.getState().svSplits.ds).toBeTruthy();
+  });
+
+  it('Clear SV split is one step too', async () => {
+    const { clearSvSplit } = await import('./svAlleleSplit');
+    mockSplit({ a: 0, b: 1 });
+    await splitBySv(TARGET, SV);
+    // Not coalesced with the split by time: a later click.
+    useBrowserStore.setState(s => ({ _historyStack: s._historyStack.map(x => ({ ...x, timestamp: x.timestamp - 10_000 })) }));
+    const before = useBrowserStore.getState()._historyStack.length;
+    clearSvSplit('ds');
+    let s = useBrowserStore.getState();
+    expect(s._historyStack.slice(before).map(x => x.label)).toEqual(['Clear SV split']);
+    s.undo();
+    s = useBrowserStore.getState();
+    expect(s.svSplits.ds).toBeTruthy();
+    expect(s.clusterAssignments.ds).toEqual({ a: 0, b: 1 });
+  });
+});
