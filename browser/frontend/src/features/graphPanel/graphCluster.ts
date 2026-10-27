@@ -447,12 +447,12 @@ export function commitGraphRun(s: BrowserState, plan: GraphClusterPlan, response
 
 /** Record a graph run's provenance on its tree node (and, for a refinement, on the stage-1 node it refines: the same
  * rows), so a pop-out filters each node's labels with that node's own run. */
-function stampGraphProvenance(run: ClusterMatchedRun): void {
+function stampGraphProvenance(run: ClusterMatchedRun, keys?: readonly string[]): void {
   if (!run.graph || !run.destinations || !run.treeNodeId) return;
   // By destination: another panel's run on the same node keeps its own (agy review, group B round 4).
   const entry = { observations: run.graph.observations,
     owned: Object.fromEntries(Object.entries(run.assignments).map(([oid, a]) => [oid, Object.keys(a).map(id => recordKey(id) ?? id)])) };
-  const mine = Object.fromEntries(run.destinations.map(d => [d.stateKey, entry]));
+  const mine = Object.fromEntries(run.destinations.filter(d => !keys || keys.includes(d.stateKey)).map(d => [d.stateKey, entry]));
   // Its labels are its own again on those panels (its writes marked them replaced).
   const stamped = (n: BrowserState['clusterTreeNodes'][string]) => {
     const replaced = Object.fromEntries(Object.entries(n.graphLabelsReplaced ?? {}).filter(([k]) => !(k in mine)));
@@ -657,5 +657,8 @@ export function labelLinkedSource(panelId: string): number {
   useBrowserStore.setState({ clusterMatchedRun: { ...run, panelAssignments: { ...run.panelAssignments, [key]: now.clusterAssignments[key] ?? {} },
     destinations: [...(run.destinations ?? []).filter(d => d.stateKey !== key), { stateKey: key, observations: obs, panelId: p.id,
       scope: filter ? [...filter] : null, keyBy: 'qname' }] } });
+  // On the run's tree node too, as for a destination it planned: its labels are the run's after the run has ended
+  // (agy post-merge review, group A, HIGH 2).
+  stampGraphProvenance(useBrowserStore.getState().clusterMatchedRun!, [key]);
   return Object.keys(fresh).length;
 }

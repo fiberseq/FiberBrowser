@@ -14,6 +14,7 @@ import { linkedSourcePanels, openLinkedSourceView, revealSettling } from '../liv
 import { isHost, liveProvenance, panelKeyOf, popOut, provenanceCovers, provenanceLineage, provenanceShare, undoable, type GraphProvenance } from './hostMode';
 import { useReadActionsStore } from '../../stores/readActionsStore';
 import { qnameOfId } from '../../utils/recordKeys';
+import { UNASSIGNED_CLUSTER_ID } from '../../components/tracks/read-track/constants';
 import { linkedSourceObservations, sourceLabels } from '../../utils/clusterMatchedRun';
 import { labelLinkedSource } from './graphCluster';
 import { lastSnapshotId, serializeState } from '../../stores/historySlice';
@@ -172,16 +173,19 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
     // they agree with it. A source clustered on its own keeps its clusters, order, focus and names untouched.
     let live = cur.clusterAssignments[tk];
     // Only reads its filter keeps get a label, so the labels never scope away the reads it shows (Codex post-merge
-    // review, group A round 1, #3).
-    const scope = cur.filteredReadIds[tk]?.size ? new Set([...cur.filteredReadIds[tk]!].map(qnameOfId)) : null;
+    // review, group A round 1, #3); a filter no read passes labels none (agy post-merge review, group A, HIGH 2).
+    const scope = cur.filteredReadIds[tk] ? new Set([...cur.filteredReadIds[tk]!].map(qnameOfId)) : null;
     const got = project(cur.clusterAssignments[fk], active ? provenanceLineage(cur, fk, active) : liveProvenance(cur, fk), scope);
-    const had = Boolean(live && Object.keys(live).length);
+    // (Only Unassigned labels, the dead bucket a subcluster leaves for a panel it did not label, are no clustering.)
+    const had = Boolean(live && Object.values(live).some(c => c !== UNASSIGNED_CLUSTER_ID));
     // Its own: labels no graph run gave it, even when their numbers equal the member's (Codex post-merge review,
     // group A round 1, #2).
     if (had && !runOwned(cur, tk, active)) return {};
-    if (had && got && !Object.entries(live!).every(([q, c]) => got[q] === c)) return {};
+    // A graph run's labels the member's share no longer agrees with (a later run, or a merge or split of the member,
+    // while the source was folded away) follow the member's (agy post-merge review, group A, HIGH 2).
+    const stale = Boolean(had && got && !Object.entries(live!).every(([q, c]) => got[q] === c));
     if (had && !got && !runLabelled(cur, tk)) return {};
-    if (!had && got) { live = got; patch.clusterAssignments = { ...cur.clusterAssignments, [tk]: got }; }
+    if ((!had || stale) && got) { live = got; patch.clusterAssignments = { ...cur.clusterAssignments, [tk]: got }; }
     const labelled = Boolean(live && Object.keys(live).length);
     const order = labelled && cur.clusterOrder[fk]?.length ? [...cur.clusterOrder[fk]] : cur.clusterOrder[tk];
     // The member's focus only on groups the source has (none: it keeps its own).

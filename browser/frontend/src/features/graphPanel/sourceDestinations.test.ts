@@ -502,5 +502,67 @@ describe('a linked source panel is a destination of graph runs', () => {
     expect(after.clusterOrder[key]).toEqual([2, 0]);
     expect([...after.clusterFocus[key]!]).toEqual([0]);
   });
+  const reopen = async () => {
+    useBrowserStore.setState(x => ({ panels: x.panels.map(q => (q.id === 'srcP' ? { ...q, collapsed: false } : q)) }));
+    useBrowserStore.setState(x => ({ panels: x.panels.map(q => (q.id === 'srcP' ? { ...q, collapsed: true } : q)) }));
+    setPopOutKind('mat', 'source');
+    popOutPaths('mat', ['pat']);
+    await new Promise(r => setTimeout(r, 0));
+    return useBrowserStore.getState();
+  };
+
+  it('agy post-merge A HIGH 2: a source view folded away during a later graph run takes the member\'s new labels on reopen', async () => {
+    seed([...split(), source('srcP', '2', 'PAT')]);
+    setPanelViewMode('mat', 'graph');
+    const pat = plan().observations.find(o => o.binding === 'pat')!.id;
+    commitGraphRun(useBrowserStore.getState(), plan(), response({ [pat]: { assignments: { [aid('q1')]: 0, [aid('q2')]: 1 } } }));
+    const key = 'srcP~lift-source';
+    expect(useBrowserStore.getState().clusterAssignments[key]).toEqual({ q1: 0, q2: 1 });
+    useBrowserStore.setState(x => ({ panels: x.panels.map(q => (q.id === 'srcP' ? { ...q, collapsed: true } : q)) }));
+    commitGraphRun(useBrowserStore.getState(), plan(), response({ [pat]: { assignments: { [aid('q1')]: 1, [aid('q2')]: 0 } } }));
+    expect(useBrowserStore.getState().clusterAssignments[key]).toEqual({ q1: 0, q2: 1 });
+    const st = await reopen();
+    expect(st.clusterAssignments[key]).toEqual({ q1: 1, q2: 0 });
+  });
+
+  it('agy post-merge A HIGH 2: a source view folded away during a graph subcluster takes the member\'s share, not only Unassigned', async () => {
+    seed([...split(), source('srcP', '2', 'PAT')]);
+    setPanelViewMode('mat', 'graph');
+    const pat = plan().observations.find(o => o.binding === 'pat')!.id;
+    commitGraphRun(useBrowserStore.getState(), plan(), response({ [pat]: { assignments: { [aid('q1')]: 0, [aid('q2')]: 1 } } }));
+    const key = 'srcP~lift-source';
+    useBrowserStore.setState(x => ({ panels: x.panels.map(q => (q.id === 'srcP' ? { ...q, collapsed: true } : q)), selectedClusters: { 'k-pat': new Set([0]) } }));
+    commitGraphRun(useBrowserStore.getState(), plan(), response({ [pat]: { assignments: { [aid('q1')]: 0 } } }));
+    expect(Object.values(useBrowserStore.getState().clusterAssignments[key] ?? {}).every(c => c === -1)).toBe(true);
+    const st = await reopen();
+    expect(st.clusterAssignments[key]?.q1).toBe(0);
+  });
+
+  it('agy post-merge A HIGH 2: a source view whose filter no read passes takes no labels on reopen', async () => {
+    seed([...split(), source('srcP', '2', 'PAT', { collapsed: true })]);
+    setPanelViewMode('mat', 'graph');
+    const pat = plan().observations.find(o => o.binding === 'pat')!.id;
+    commitGraphRun(useBrowserStore.getState(), plan(), response({ [pat]: { assignments: { [aid('q1')]: 0, [aid('q2')]: 1 } } }));
+    useBrowserStore.setState({ filteredReadIds: { 'k-pat': new Set<string>() } } as never);
+    const st = await reopen();
+    expect(st.filteredReadIds['srcP~lift-source']?.size).toBe(0);
+    expect(Object.keys(st.clusterAssignments['srcP~lift-source'] ?? {})).toEqual([]);
+  });
+  it('agy post-merge A HIGH 2: a source view that joined a run after it, folded away while the member\'s groups were merged, takes the merged labels on reopen', async () => {
+    seed([...split()]);
+    setPanelViewMode('mat', 'graph');
+    const pat = plan().observations.find(o => o.binding === 'pat')!.id;
+    commitGraphRun(useBrowserStore.getState(), plan(), response({ [pat]: { assignments: { [aid('q1')]: 0, [aid('q2')]: 1, [aid('q3')]: 2 } } }));
+    const key = 'srcP~lift-source';
+    useBrowserStore.setState(x => ({ panels: [...x.panels, source('srcP', '2', 'PAT')] }));
+    expect(labelLinkedSource('srcP')).toBe(3);
+    const root = useBrowserStore.getState().activeClusterTreeNodeId!;
+    expect(useBrowserStore.getState().clusterTreeNodes[root].graphProvenance?.[key]).toBeDefined();
+    useBrowserStore.setState(x => ({ panels: x.panels.map(q => (q.id === 'srcP' ? { ...q, collapsed: true } : q)) }));
+    // The member's groups 1 and 2 merged (the replacing setter, as the cluster panel's merge writes it).
+    useBrowserStore.getState().setClusterAssignments('k-pat', { [aid('q1')]: 0, [aid('q2')]: 1, [aid('q3')]: 1 });
+    const st = await reopen();
+    expect(st.clusterAssignments[key]).toEqual({ q1: 0, q2: 1, q3: 1 });
+  });
 });
 
