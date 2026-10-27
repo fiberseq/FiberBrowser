@@ -123,6 +123,26 @@ describe('a jump made like a pan (setPanelViewport: a graph host Go to on its co
   });
 });
 
+describe('a pan-like jump that was not a pan (a distant Go to on the host\'s contig)', () => {
+  it('Back leaves the locked panels and the main view where the jump left them (Codex stabilize UI r2)', () => {
+    useBrowserStore.setState({ chrom: 'chr3', start: 1_000, end: 2_000, panels: [
+      panel('host', { viewportOverride: { chrom: 'chr3', start: 5_000, end: 6_000 }, siteLocked: true }),
+      panel('peer', { viewportOverride: { chrom: 'chr3', start: 10_000, end: 11_000 }, siteLocked: true }),
+    ] } as never);
+    st().recordJump('host', { likePan: true });
+    st().setPanelViewport('host', 10_000, 15_000);       // not a pan: nothing locked moves
+    expect(view()).toEqual({ chrom: 'chr3', start: 1_000, end: 2_000 });
+    st().goBack();                                         // back from 10-15 kb to 5-6 kb would read as a zoom
+    expect(own('host')).toEqual({ chrom: 'chr3', start: 5_000, end: 6_000 });
+    expect(own('peer')).toEqual({ chrom: 'chr3', start: 10_000, end: 11_000 });
+    expect(view()).toEqual({ chrom: 'chr3', start: 1_000, end: 2_000 });
+    st().goForward();
+    expect(own('host')).toEqual({ chrom: 'chr3', start: 10_000, end: 15_000 });
+    expect(own('peer')).toEqual({ chrom: 'chr3', start: 10_000, end: 11_000 });
+    expect(view()).toEqual({ chrom: 'chr3', start: 1_000, end: 2_000 });
+  });
+});
+
 describe('Each panel navigates', () => {
   beforeEach(() => {
     useBrowserStore.setState({

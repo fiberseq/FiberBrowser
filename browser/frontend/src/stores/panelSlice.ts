@@ -240,7 +240,9 @@ export interface PanelSlice {
   reorderSubTracks: (panelId: string, fromIndex: number, toIndex: number) => void;
 
   // Panel viewport (for split-view panels with viewportOverride)
-  setPanelViewport: (panelId: string, start: number, end: number) => void;
+  /** `options.lockedMove`: whether panels locked to it (and the main view) move likewise; default: when the move is
+   *  a pan or zoom. Back / Forward pass the outward jump's own answer, so the return trip moves the same panels. */
+  setPanelViewport: (panelId: string, start: number, end: number, options?: { lockedMove?: boolean }) => void;
   setPanelIndependent: (panelId: string, independent: boolean) => void;
   navigatePanel: (panelId: string, chrom: string, start: number, end: number) => void;
   /** navigatePanel without moving the main view through a view link. */
@@ -1291,14 +1293,14 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
         .map(p => p.id === keep.id ? { ...p, liftHap: undefined, liftHaplotypeMode: 'pooled', liftSplitGroup: undefined, ...(stateKey ? { stateKey } : {}) } : p)),
     };
   })),
-  setPanelViewport: (panelId, start, end) => {
+  setPanelViewport: (panelId, start, end, options) => {
     const state = get();
     const panel = state.panels.find(p => p.id === panelId);
     const prev = panel?.viewportOverride;
     if (!panel || !prev) return;
     const next = { chrom: prev.chrom, start, end };
     if (next.start === prev.start && next.end === prev.end) return;
-    const move = panel.siteLocked && isPanOrZoom(prev, next);
+    const move = Boolean(panel.siteLocked) && (options?.lockedMove ?? isPanOrZoom(prev, next));
     // An undo step, like a move of the main view. A locked panel moves the main view too, whose own navigation step
     // records it (not twice). Seeded before the link maps the move, so a late link correction knows the baseline
     // is not the move's step.
