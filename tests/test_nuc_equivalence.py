@@ -173,3 +173,18 @@ def test_rows_carry_contract_quality_names_and_never_nucmol(bam):
     assert rows[0]['layers']['nucseg']['quality_names'] == ['code', 'posterior_or_llr10', 'q_hat_minus_100_or_count']
     ds = st.datasets['ds0']
     assert ds.derived_layers['nucsz']['kind'] == 'nuc-live' and ds.available_layers['nucseg']
+
+
+def test_a_genome_nuc_scan_makes_a_view_precomputed(bam, scan_dir):
+    """scan-next follow-up: nuc's calibration no longer depends on the plan (scope 'data'), so an open genome scan
+    covers a view's units; the old same-plan condition is gone."""
+    from services.scan import planning
+    from services.scan.registry import open_scan
+    st = _state(bam)
+    open_scan(st, scan_dir)
+    assert json.loads((scan_dir / 'nuc' / 'extra' / 'calibration.json').read_text())['scope'] == 'data'
+    plan = planning.build_plan(st, dict(datasets=['ds0'], scope='view', chrom=CONTIG, start=40_000, end=70_000,
+                                        modules=['nuc'], parameters={'nuc': SETTINGS}))
+    cov = plan['coverage']['nuc']
+    assert cov['to_compute'] == [] and len(cov['precomputed']) == len(plan['units'])
+    assert '--genome --zones chrS:' in plan['cli']['text']

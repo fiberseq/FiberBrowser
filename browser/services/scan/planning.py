@@ -277,7 +277,9 @@ def build_plan(state, request: dict) -> dict:
             raise ScanPlanError('The view is empty')
         units, info = view_units(reference, chrom, start, end)
         neighbours = _grid_neighbours(reference, chrom, units)
-        cli_where = ['--genome', '--contigs', chrom]
+        # fiberhmm-scan --genome --zones plans exactly these genome-grid units (their ids, spans, zones and keys are
+        # the genome scan's), so the line computes what the browser computes (CONTRACTS §5.1, v1.9).
+        cli_where = ['--genome', '--zones', f'{chrom}:{units[0].zone_start}-{units[-1].zone_end}']
         where_label = f'{len(units)} grid units (the view\'s and one more each side)'
     else:
         try:
@@ -389,8 +391,8 @@ def command_line(plan: dict, where: List[str]) -> dict:
     args += ['--no-annotate', '-o', 'scan_dir']
     notes = []
     if plan['scope'] == 'view':
-        notes.append('--genome --contigs computes every unit of the contig; the browser computes the view\'s units. '
-                     'Opening that scan makes these units precomputed.')
+        notes.append('--genome --zones plans the same genome-grid units as the browser (the view\'s and one more each '
+                     'side); a genome scan of the contig has them too, and opening either makes them precomputed.')
     if datasets_json:
         notes.append('scan_datasets.json lists the datasets (several BAMs in one dataset, or chosen chemistries)')
     notes.append('Drop --no-annotate to write per-molecule results into annotated BAMs (the default for genome scans). '
@@ -418,12 +420,27 @@ def _scan_matches(scan, plan: dict, module: dict) -> bool:
     if module['name'] == 'peaks' and _effective_peak_rules(module['settings'], plan['units']) != _scan_peak_rules(scan):
         # 'auto' rules resolve by the plan (window rules only when every unit is a lone BED unit).
         return False
-    if block.get('calibration') and module['name'] != 'peaks':
-        # A dataset-level calibration (nuc) is drawn from the scanned territory: only the same plan has the same one.
+    if block.get('calibration') and module['name'] != 'peaks' and _calibration_scope(scan, module['name']) != 'data':
+        # A dataset-level calibration drawn from the scanned territory (nuc before module 2.1, or
+        # calibration_scope 'territory'): only the same plan has the same one. With scope 'data' (nuc's default
+        # since CONTRACTS v1.9) the record depends on the inputs and settings only, so any plan shares it.
         same = {k: v for k, v in info.items() if k != 'count'} == {k: v for k, v in units.items() if k != 'count'}
         if not same or int(info.get('count') or -1) != len(plan['units']):
             return False
     return True
+
+
+def _calibration_scope(scan, module: str) -> Optional[str]:
+    """The ``scope`` of an open scan's module calibration record ('data' | 'territory'), None when unknown."""
+    from .registry import _inside
+    rel = ((scan.module(module) or {}).get('calibration') or {}).get('path') or f'{module}/extra/calibration.json'
+    p = _inside(scan.path, rel)
+    if p is None or not p.is_file():
+        return None
+    try:
+        return json.loads(p.read_text()).get('scope')
+    except (OSError, ValueError, AttributeError):
+        return None
 
 
 def _effective_peak_rules(settings: dict, units: List[dict]) -> tuple:

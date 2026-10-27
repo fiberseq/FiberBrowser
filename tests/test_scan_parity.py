@@ -185,6 +185,21 @@ def test_partial_view_inner_zones_equal_cli(bams, cli_uncapped, cache):
         assert got == want and got, m
 
 
+def test_the_view_cli_line_computes_the_browsers_rows(bams, cache, tmp_path):
+    """The dialog's command line for a view (--genome --zones, CONTRACTS v1.9) run as it is gives the browser's rows,
+    the edge units' seams included."""
+    from services.scan import planning
+    st = _state(bams)
+    plan = planning.build_plan(st, dict(datasets=sorted(st.datasets), scope='view', chrom=CONTIG, start=40_000,
+                                        end=70_000, modules=['fp', 'nfr'], parameters=NFR_PARAMS))
+    args = plan['cli']['args']
+    zones = args[args.index('--zones') + 1]
+    assert zones == f"{CONTIG}:{plan['units'][0]['zone_start']}-{plan['units'][-1]['zone_end']}"
+    cli = _cli(tmp_path / 'zones', bams, where=('--genome', '--zones', zones))
+    _scan(st, start=40_000, end=70_000)
+    _assert_same_rows({m: _cache_dir(st, m) for m in ('fp', 'nfr')}, cli)
+
+
 def test_precomputed_units_skip_compute(bams, cli_uncapped, cache):
     from services.scan import registry, planning
     st = _state(bams)
@@ -201,7 +216,10 @@ def test_precomputed_units_skip_compute(bams, cli_uncapped, cache):
     # The CLI line lists the BAMs in canonical order, the same units (the contig's grid) and the same settings.
     assert plan['cli']['args'][:5] == ['fiberhmm-scan', '--bam', _canonical(bams)[0], '--bam', _canonical(bams)[1]] or \
         plan['cli']['text'].startswith('fiberhmm-scan --bam')
-    assert '--genome --contigs chrT' in plan['cli']['text'] and '--no-annotate' in plan['cli']['text']
+    # The view's genome-grid units exactly (fiberhmm-scan --zones, CONTRACTS v1.9): its first zone start to its last
+    # zone end.
+    zones = f"--genome --zones chrT:{plan['units'][0]['zone_start']}-{plan['units'][-1]['zone_end']}"
+    assert zones in plan['cli']['text'] and '--no-annotate' in plan['cli']['text']
 
 
 def test_cancel_stops_a_scan(bams, cache):

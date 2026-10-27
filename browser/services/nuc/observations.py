@@ -63,8 +63,9 @@ def _read_id_keys(ids) -> Tuple[set, set]:
     return qnames, records
 
 
-def resolve(state, obs: dict, policy: dict) -> Tuple[NucSource, list, Tuple[str, int, int]]:
-    """(source, [(file, sha, occ, qname, DAF strand)], window) of one observation descriptor."""
+def resolve(state, obs: dict, policy: dict) -> Tuple[NucSource, list, List[Tuple[str, int, int]]]:
+    """(source, [(file, sha, occ, qname, DAF strand)], windows) of one observation descriptor; the windows are in the
+    records' own coordinates (a live-lift observation's view through its haplotype's primary lift pieces)."""
     from .live import view_records
     ds_id = str(obs.get('datasetId') or '')
     source = nuc_source(state, ds_id)
@@ -75,16 +76,17 @@ def resolve(state, obs: dict, policy: dict) -> Tuple[NucSource, list, Tuple[str,
         if not contig or end <= start:
             raise ObservationError(f'{obs.get("label") or ds_id}: a graph observation needs its path span')
         recs = view_records(source, [(contig, start, end)], policy)
-        window = (contig, start, end)
+        windows = [(contig, start, end)]
     else:
         chrom, start, end = str(obs.get('chrom') or ''), int(obs.get('start') or 0), int(obs.get('end') or 0)
         if not chrom or end <= start:
             raise ObservationError(f'{obs.get("label") or ds_id}: no view')
-        window = (chrom, start, end)
         if source.kind == 'native':
-            recs = view_records(source, [window], policy)
+            windows = [(chrom, start, end)]
+            recs = view_records(source, windows, policy)
         else:
             recs = _lifted_records(state, source, chrom, start, end, obs.get('liftHap'))
+            windows = source_windows(state, source, chrom, start, end, obs.get('liftHap'))
     strand = obs.get('strand')
     ids = obs.get('readIds')
     if ids is not None:
@@ -93,18 +95,42 @@ def resolve(state, obs: dict, policy: dict) -> Tuple[NucSource, list, Tuple[str,
     if strand in ('CT', 'GA'):
         # A DAF strand panel shows the reads whose st:Z call is that strand (the server's strand filter).
         recs = [r for r in recs if r[4] == strand]
-    return source, recs, window
+    return source, recs, windows
+
+
+def source_windows(state, source: NucSource, chrom: str, start: int, end: int, hap: Optional[str] = None):
+    """A target view in a live-lift dataset's source coordinates: its primary lift pieces (of ``hap`` when given)
+    clipped to the view, merged per source contig."""
+    from services.lift.live_lift import clip_piece, lift_key, select_pieces
+    from .live import _merge
+    config = state.datasets[source.browser_id].live_lift
+    handle = config.handle
+    if chrom not in handle.map.targets:
+        return []
+    haps = handle.resolve_haplotypes(config.haplotypes)
+    key = lift_key(handle, haps, config.settings)
+    sel = select_pieces(handle, chrom, int(start), int(end), haplotypes=haps, settings=config.settings, key=key)
+    labels = getattr(handle, 'haplotype_labels', None) or {}
+    out = []
+    for p in sel.pieces:
+        if not p.primary:
+            continue
+        if hap and hap not in (p.hap, labels.get(p.hap)):
+            continue
+        c = clip_piece(p, int(start), int(end))
+        if c is not None:
+            out.append((p.source, int(c.q_start), int(c.q_end)))
+    return _merge(out)
 
 
 def _lifted_records(state, source: NucSource, chrom: str, start: int, end: int, hap: Optional[str]):
-    from services.lift.reads import lifted_reads_for_region, lift_display_hap
+    from services.lift.reads import lifted_reads_for_region
     ds = state.datasets[source.browser_id]
     rows = lifted_reads_for_region(ds, chrom, int(start), int(end), {})
-    want = lift_display_hap(hap) if hap else None
     out, seen = [], set()
     for row in rows:
         ll = row.get('live_lift') or {}
-        if want is not None and ll.get('hap') not in (want, hap) and ll.get('hap_label') not in (want, hap):
+        if hap and hap not in (ll.get('hap'), ll.get('hap_label')):
             continue
         rec = str(ll.get('record') or '')
         if ':' not in rec:
@@ -149,9 +175,22 @@ def _hist(values: Sequence[float], edges: Sequence[float]) -> List[int]:
     return counts
 
 
-def summarize_rows(rows: Sequence[RecordOutputs], window: Tuple[str, int, int]) -> dict:
-    """Molecule-wide summary of stored outputs over a window (reference or source coordinates of the rows)."""
-    _chrom, w0, w1 = window
+def _inside(windows, chrom: str, a: int, b: int) -> int:
+    """Bases of ``[a, b)`` on ``chrom`` inside the windows (a zero-width span counts 1 when its base is inside)."""
+    n = 0
+    for c, w0, w1 in windows:
+        if c != chrom:
+            continue
+        if a == b:
+            if w0 <= a < w1:
+                return 1
+            continue
+        n += max(0, min(b, w1) - max(a, w0))
+    return n
+
+
+def summarize_rows(rows: Sequence[RecordOutputs], windows: Sequence[Tuple[str, int, int]]) -> dict:
+    """Molecule-wide summary of stored outputs over windows in the rows' own coordinates."""
     coarse = {k: 0 for k in COARSE}
     tf = 0
     z = []
@@ -172,8 +211,8 @@ def summarize_rows(rows: Sequence[RecordOutputs], window: Tuple[str, int, int]) 
             if r.scalars.get('gap_cv') is not None:
                 cv.append(r.scalars['gap_cv'])
         for ms, ml, a, b, q, _n in r.groups.get('nucsz') or ():
-            mid = (a + max(b, a + 1)) / 2
-            if not w0 <= mid < w1 or not q:
+            mid = (a + max(b, a + 1)) // 2
+            if not q or not _inside(windows, r.chrom, mid, mid):
                 continue
             code = q[0] & 15
             if code < len(COARSE):
@@ -185,16 +224,16 @@ def summarize_rows(rows: Sequence[RecordOutputs], window: Tuple[str, int, int]) 
         for ms, ml, a, b, q, _n in r.groups.get('nucseg') or ():
             if not q:
                 continue
-            lo, hi = max(a, w0), min(b, w1)
+            inside = _inside(windows, r.chrom, a, b)
             if q[0] >= 16:
-                if hi > lo or (a == b and w0 <= a < w1):
+                if inside:
                     if q[0] == 16:
                         undersized += 1
                     elif q[0] == 17:
                         missing += 1
                 continue
-            if hi > lo and q[0] in SEG_STATES:
-                seg_bp[SEG_STATES[q[0]]] += hi - lo
+            if inside and q[0] in SEG_STATES:
+                seg_bp[SEG_STATES[q[0]]] += inside
     n_fp = sum(coarse.values())
     seg_total = sum(seg_bp.values())
     return dict(
@@ -211,7 +250,8 @@ def summarize_rows(rows: Sequence[RecordOutputs], window: Tuple[str, int, int]) 
 
 
 def _window_metrics(source: NucSource, keys, window, cfg) -> Optional[dict]:
-    """FiberHMM's window metrics for the observation's molecules (decoded molecules from the store)."""
+    """FiberHMM's window metrics for the observation's molecules (decoded molecules from the store) over one window
+    in their own coordinates."""
     from fiberhmm.nuc.window import window_metrics
     from .engine import nuc_params
     config = (cfg.calibration.settings_hash, cfg.calibration.digest)
@@ -240,7 +280,7 @@ def summarize(state, observations: Sequence[dict], *, include_duplicates: bool =
         entry = dict(obsId=obs.get('obsId'), label=obs.get('label'), datasetId=obs.get('datasetId'),
                      kind=obs.get('kind') or 'linear')
         try:
-            source, recs, window = resolve(state, obs, policy)
+            source, recs, windows = resolve(state, obs, policy)
         except (ObservationError, ValueError) as error:
             entry['error'] = str(error)
             out.append(entry)
@@ -259,11 +299,14 @@ def summarize(state, observations: Sequence[dict], *, include_duplicates: bool =
             seen.add(mol_key)
             rows.append(r)
         entry.update(records=len(recs), computed=len(rows), notComputed=missing,
-                     window=dict(chrom=window[0], start=window[1], end=window[2]),
+                     windows=[dict(chrom=c, start=a, end=b) for c, a, b in windows],
                      calibration=cfg.calibration.summary() if cfg is not None else None,
                      sources=sorted({r.source for r in rows}))
-        entry.update(summarize_rows(rows, window))
-        if cfg is not None and rows:
+        entry.update(summarize_rows(rows, windows))
+        if cfg is not None and rows and windows:
+            # window metrics over the observation's largest window (a lifted view through an insertion is still
+            # one source span per haplotype)
+            window = max(windows, key=lambda w: w[2] - w[1])
             try:
                 entry['windowMetrics'] = _window_metrics(source, recs, window, cfg)
             except Exception as error:   # noqa: BLE001 - a metrics failure must not hide the summary

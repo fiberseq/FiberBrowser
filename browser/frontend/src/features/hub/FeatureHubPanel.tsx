@@ -342,7 +342,10 @@ function HitRows({ row, selected, expanded, columns, kind, delta, onClick, onTog
     <tr ref={ref} className={`cursor-pointer border-t border-gray-100 dark:border-gray-800 ${selected ? 'bg-indigo-50 dark:bg-indigo-950/40' : 'hover:bg-gray-50 dark:hover:bg-white/5'}`}
       onClick={onClick} data-testid="hub-row" data-selected={selected ? 'true' : 'false'} data-type={hit.typeId}>
       <td className="px-1 text-left"><span className="rounded bg-gray-100 px-1 text-[10px] text-gray-700 dark:bg-white/10 dark:text-gray-200">{hit.typeId}</span></td>
-      <td className="px-1 text-left">{locus(hit)}{hit.end <= hit.start ? ' ⋮' : ''}</td>
+      <td className="px-1 text-left">{locus(hit)}{hit.end <= hit.start ? ' ⋮' : ''}
+        {hit.flags?.includes('open_end') && <span className="ml-1 rounded bg-amber-100 px-1 text-[10px] text-amber-800 dark:bg-amber-900/40 dark:text-amber-200"
+          title="At the edge of the scanned units: a scan reaching further may change this hit (fiberhmm-scan open_end)"
+          data-testid="hub-row-open-end">open end</span>}</td>
       <td className="max-w-[10rem] truncate px-1 text-left" title={hit.label}>{hit.label}</td>
       {columns.map(c => {
         const v = row.role ? hit.values?.[c.key]?.[row.role] : undefined;
