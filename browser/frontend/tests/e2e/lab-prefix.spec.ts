@@ -78,6 +78,9 @@ test.beforeAll(async () => {
     FIBERBROWSER_SETTINGS: path.join(REPO_ROOT, 'tests', '__no_user_settings__.json'),
     FIBERBROWSER_RUNTIME_FILE: path.join(scratch, 'runtime.json'),
     FIBERBROWSER_LIBRARY_NO_STARTUP_SCAN: '1',
+    // Only the picked test port: the server's own fallback would walk to ports outside FIBERBROWSER_TEST_PORTS.
+    FIBERBROWSER_PORT_MIN: String(port),
+    FIBERBROWSER_PORT_MAX: String(port),
   };
   const added = spawnSync(PYTHON, ['-m', 'fiberbrowser', 'users', 'add', 'alice', '--role', 'admin',
     '--password-stdin', '--config', config], { cwd: REPO_ROOT, env, input: `${PASSWORD}\n`, encoding: 'utf-8' });

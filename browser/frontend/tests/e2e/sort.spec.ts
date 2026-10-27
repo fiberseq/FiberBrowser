@@ -233,10 +233,18 @@ test('Sort after splitting a visible SV into panels uses only each allele cohort
   await page.getByTestId('sort-run-button').click();
   await sortDone(page);
   // Sort previews the displayed reads, then refines the full subset (sortDone): a large cohort can take two
-  // requests. Every request sorts reads of one allele cohort only, and each cohort's full read list is sorted.
-  const sent = requests.flatMap(r => Object.values(r.read_ids ?? {})) as string[][];
-  expect(sent.length).toBeGreaterThanOrEqual(cohorts.length);
-  for (const ids of sent) expect(cohorts.some(c => ids.every(id => c.ids.includes(id)))).toBe(true);
+  // requests. Never an unscoped sort of the whole dataset: every request names reads for each of its datasets,
+  // all from one allele cohort, and each cohort's full read list is sorted.
+  expect(requests.length).toBeGreaterThanOrEqual(cohorts.length);
+  for (const r of requests) {
+    expect(r.dataset_ids?.length).toBeGreaterThan(0);
+    expect(Object.keys(r.read_ids ?? {}).sort()).toEqual([...r.dataset_ids].sort());
+    for (const ids of Object.values(r.read_ids) as string[][]) {
+      expect(ids.length).toBeGreaterThan(0);
+      expect(cohorts.some(c => ids.every(id => c.ids.includes(id)))).toBe(true);
+    }
+  }
+  const sent = requests.flatMap(r => Object.values(r.read_ids)) as string[][];
   for (const cohort of cohorts) expect(sent.some(ids => JSON.stringify([...ids].sort()) === JSON.stringify([...cohort.ids].sort()))).toBe(true);
   await info.attach('sv-sort-cohorts', { body: JSON.stringify({ panels: cohorts.map(c => ({ key: c.key, count: c.ids.length })), requests: requests.length }), contentType: 'application/json' });
 });
