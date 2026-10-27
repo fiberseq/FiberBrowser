@@ -13,6 +13,8 @@
  *   --base-url URL      use a running server (started with --no-token) instead of starting one
  *   --port N            port for the server this script starts (default: first free in 8300-8399)
  *   --python PATH       interpreter for browser.py (default: $FIBERBROWSER_TEST_PYTHON or python3)
+ *   --fasta FILE        reference FASTA (indexed) for the server this script starts: the SNP table then compares
+ *                       with the reference (without one the major allele stands in for it)
  *   --out DIR           where the PNGs go (default: <repo>/docs/images/guide)
  *   --audit FILE        also write the step-by-step audit as JSON
  *   --no-extras         only the tour steps
@@ -41,7 +43,7 @@ const REPO_ROOT = path.resolve(HERE, '../../..');
 
 function parseArgs(argv) {
   const opts = {
-    baseUrl: null, port: null, python: process.env.FIBERBROWSER_TEST_PYTHON || 'python3',
+    baseUrl: null, port: null, python: process.env.FIBERBROWSER_TEST_PYTHON || 'python3', fasta: null,
     out: path.join(REPO_ROOT, 'docs', 'images', 'guide'), audit: null,
     extras: true, compress: true, width: 1600,
   };
@@ -51,6 +53,7 @@ function parseArgs(argv) {
     if (a === '--base-url') opts.baseUrl = next().replace(/\/$/, '');
     else if (a === '--port') opts.port = Number(next());
     else if (a === '--python') opts.python = next();
+    else if (a === '--fasta') opts.fasta = path.resolve(next());
     else if (a === '--out') opts.out = path.resolve(next());
     else if (a === '--audit') opts.audit = path.resolve(next());
     else if (a === '--no-extras') opts.extras = false;
@@ -82,7 +85,8 @@ async function startServer(opts) {
   }
   if (!port) throw new Error('No free port in 8300-8399');
   const runtimeDir = mkdtempSync(path.join(os.tmpdir(), 'fiberbrowser-capture-'));
-  const proc = spawn(opts.python, ['browser.py', '-p', String(port), '--no-token', '--no-open', '--copilot', 'off'], {
+  const args = ['browser.py', '-p', String(port), '--no-token', '--no-open', '--copilot', 'off', ...(opts.fasta ? ['--fasta', opts.fasta] : [])];
+  const proc = spawn(opts.python, args, {
     cwd: REPO_ROOT,
     env: {
       ...process.env,
@@ -164,9 +168,12 @@ async function waitForPanels(page, timeoutMs = 15_000) {
     const busy = await page.evaluate(() => Array.from(document.querySelectorAll('[data-panel-content-type] *'))
       .some(el => el.children.length === 0 && el.getClientRects().length > 0
         && /^(Loading|Fetching|Analyzing|Analysing|Starting|Computing)\b.*(…|\.\.\.)$/.test((el.textContent || '').trim())));
-    if (!busy) return;
+    if (!busy) break;
     await sleep(300);
   }
+  // A peak scan (the toolbar's "Scanning peaks...", for example on a new insert-expanded panel) finishes too.
+  await page.waitForFunction(() => !/Scanning peaks/.test(document.body.innerText ?? ''), null, { timeout: 60_000, polling: 500 })
+    .catch(() => console.warn('  still scanning peaks after 60 s'));
 }
 
 async function shoot(page, file) {

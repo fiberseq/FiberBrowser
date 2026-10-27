@@ -182,9 +182,11 @@ only another part is left out too: choose its region alone to cluster it. A
 haplotype that lacks every region (a plain deletion on its path) is not
 clustered there: its reads that span every deletion are labelled **Not a
 carrier**. A molecule clustered on another path keeps that label, and reads
-labelled as you pan can replace **Not a carrier**. The **Cluster detail** panel
+labelled as you pan can replace **Not a carrier**. The **Clusters** panel
 lists what was used and what was left out (*Not a carrier (shown, not
 fitted)*).
+
+![A deletion on one haplotype: PAT lacks 89 bp of the reference, so its reads are labelled Not a carrier and MAT's are clustered](../images/graph/graph-mode-not-a-carrier.png)
 
 An open source view of a haplotype in the run takes the run's labels by read
 name (its own strand), follows selections and gets labels for new reads as you

@@ -138,7 +138,7 @@ describe('SV display on the read canvas', () => {
     const withSummary = draw([REF], { svSummary: SUMMARY });
     const firstRowY = (fills: typeof plain.fills) => Math.min(...fills.filter(f => f.fill === readBg).map(f => f.y));
     expect(firstRowY(withSummary.fills)).toBe(firstRowY(plain.fills));
-    expect(withSummary.texts.some(t => t.text.startsWith('SV'))).toBe(false);
+    expect(withSummary.texts.some(t => t.text.startsWith('Differences'))).toBe(false);
   });
 
   it('the SV track draws to the height it is given (glyphs and labels scale)', () => {
@@ -151,7 +151,7 @@ describe('SV display on the read canvas', () => {
       top: 0, height: 160, width: 1000, sidebarWidth: 0, viewStart: START, toX: rel => rel, isReversed: false, backgroundColor: '#fff',
     });
     expect(small.texts.some(t => t.text.includes('1/2'))).toBe(true);
-    expect(tall.texts.some(t => t.text.startsWith('SV'))).toBe(true);
+    expect(tall.texts.some(t => t.text.startsWith('Differences'))).toBe(true);
     // The deletion's label sits near the arc's apex: high up in the tall track, not at a fixed 36 px band.
     const labelY = (texts: typeof small.texts) => texts.find(t => t.text.includes('1/2'))!.y;
     expect(labelY(tall.texts)).toBeLessThan(40);

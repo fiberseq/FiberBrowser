@@ -130,7 +130,7 @@ level, and open the insertion in the lens. See
 comes from (haplotype or reads), its interval on this genome, the change
 (reference → alternative size), its sequence or support, its **Assembly
 comparison** (below), and an **Inspect** button. It opens just below the row,
-over the reads, and scrolls; **×** or **Hide the table** closes it.
+over the reads, and scrolls; **Hide the table** in the row's menu closes it.
 
 ![The difference table under the row](../images/pangenome/differences-table.png)
 
@@ -169,13 +169,13 @@ The read table loads by itself when the panel has up to 2,000 reads in view.
 With more, the inspector says so and offers **Load observed bases and
 chromatin**.
 
-![The inspector for an insertion, with molecule calls and the read table](../images/pangenome/differences-inspector.png)
+![The inspector for an insertion, with its molecule calls](../images/pangenome/differences-inspector.png)
 
 For a structural variant on a BAM aligned to this genome, the inspector
 (*Inspect difference*) shows each read's observed bases, coverage and
-chromatin, with **Expand alternate**, **Load full observed sequence** and
-**Identify observed alternate**. When a lifted dataset on this genome is open,
-it also compares the variant with that dataset's assembly (below): the first
+chromatin, with **Expand insertion** (or **Expand alternate**), **Load full
+observed sequence** and **Identify observed alternate**. When a lifted dataset
+on this genome is open, it also compares the variant with that dataset's assembly (below): the first
 lifted dataset opened, whatever its sample, so with several samples open keep
 only the one you mean. Without one it says **Reads only (no assembly)**.
 
@@ -206,7 +206,7 @@ and at the top of the inspector, with each haplotype's link (for example
 *MAT: exact (full changed haplotypes equal)* or *PAT: approximate · identity
 99.5%*). The newest comparison is used everywhere.
 
-![Read-supported edits: the Reads lane under the haplotype lanes, and the table's Assembly comparison column](../images/pangenome/differences-comparison.png)
+![Read-supported edits: the Reads lane under the haplotype lanes, and the read insertion's row in the table with its assembly comparison](../images/pangenome/differences-comparison.png)
 
 ![A read-supported insertion compared with the assembly through the reads' consensus: assembly-supported (approximate)](../images/pangenome/differences-comparison-inspector.png)
 

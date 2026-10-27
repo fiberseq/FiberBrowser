@@ -13,6 +13,11 @@
  * assembly-comparison labels, SV evidence levels, setup) and docs/images/graph/graph-mode-*.png. The guide's
  * Variants images (48-51, x17, x18) come from capture-tutorial-screenshots.mjs (--base-url works there too).
  *
+ * docs/images/graph/graph-mode-not-a-carrier.png needs the launcher's MHC window instead:
+ *
+ *   python scripts/unified_demo.py --locus mhc --port 8891 --build
+ *   node scripts/capture-pangenome-screenshots.mjs --base-url http://localhost:8891 --locus mhc
+ *
  * Options:
  *   --base-url URL     the unified_demo.py server (required)
  *   --out DIR          pangenome PNGs (default: <repo>/docs/images/pangenome)
@@ -22,6 +27,7 @@
  *   --python PATH      Python with Pillow, for compression (default: python3)
  *   --no-compress      keep the raw 2x PNGs
  *   --width W          final PNG width (default 1600)
+ *   --locus L          alu (default: every shot above) or mhc (graph-mode-not-a-carrier, from a --locus mhc server)
  *
  * Every shot is optional: a failure is logged and the next one is taken (the exit status is 1 if any failed). Datasets
  * a shot opens (source views, the own-assembly BAM) are removed again, so every page starts from the launcher's
@@ -40,6 +46,10 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../../..');
 const AT = { chrom: 'chr3', start: 128_653_000, end: 128_661_000 };   // the AluY insertion of the demo data
+// --locus mhc: the launcher's MHC window. GRCh38 chr6:31,045,089-31,045,177 (89 bp) is missing from the sample's
+// paternal haplotype only; the region is inside it (the launcher's sample_a.mhc.not_carrier_region.bed, 0-based).
+const MHC = { chrom: 'chr6', start: 31_044_530, end: 31_045_730 };
+const MHC_REGION = [31_045_098, 31_045_167];
 const LIFTED = 'Sample A (lifted)';
 const NATIVE = 'Sample A (GRCh38)';
 const OWN = 'Sample A (own assembly)';
@@ -49,7 +59,7 @@ function parseArgs(argv) {
     baseUrl: null, out: path.join(REPO_ROOT, 'docs', 'images', 'pangenome'),
     graphOut: path.join(REPO_ROOT, 'docs', 'images', 'graph'),
     workDir: process.env.PGLIFT_WORK || path.join(os.homedir(), 'pglift_work'),
-    only: null, python: 'python3', compress: true, width: 1600,
+    only: null, python: 'python3', compress: true, width: 1600, locus: 'alu',
   };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -62,10 +72,16 @@ function parseArgs(argv) {
     else if (a === '--python') opts.python = next();
     else if (a === '--no-compress') opts.compress = false;
     else if (a === '--width') opts.width = Number(next());
+    else if (a === '--locus') opts.locus = next();
     else if (a === '-h' || a === '--help') { console.log('See the header of scripts/capture-pangenome-screenshots.mjs'); process.exit(0); }
     else throw new Error(`Unknown option ${a}`);
   }
   if (!opts.baseUrl) throw new Error('--base-url is required (a server started by scripts/unified_demo.py)');
+  if (!['alu', 'mhc'].includes(opts.locus)) throw new Error('--locus is alu or mhc');
+  // The MHC server has one shot of its own, and the AluY server never takes it.
+  const mhcShots = ['graph-mode-not-a-carrier'];
+  if (opts.locus === 'mhc') opts.only = new Set([...(opts.only ?? mhcShots)].filter(n => mhcShots.includes(n)));
+  else if (!opts.only) opts.only = { has: n => !mhcShots.includes(n) };
   return opts;
 }
 
@@ -205,6 +221,36 @@ async function main() {
   const newPage = async lifted => { await resetDatasets(); return openPage(browser, opts.baseUrl, { lifted }); };
 
   try {
+    // ================================================================ "Not a carrier" (the --locus mhc server)
+    if (opts.locus === 'mhc' && want('graph-mode-not-a-carrier')) {
+      await resetDatasets();
+      const m = await openPage(browser, opts.baseUrl, { lifted: 'graph', view: MHC });
+      await take('graph-mode-not-a-carrier', async () => {
+        await m.waitForFunction(() => Number(document.querySelector('[data-testid="graph-host-body"] [data-testid="graph-panel"]')?.getAttribute('data-graph-reads') || 0) > 20,
+          null, { timeout: 180_000 });
+        await idle(m, 3000);
+        // The region inside the deletion, as the BED import would select it (no file dialog), and no other region.
+        await m.evaluate(({ region, chrom }) => {
+          const s = window.__FIBERBROWSER_STORE__;
+          const rule = { ...s.getState().peakRules[0], id: 'demo', enabled: true, name: 'Imported peaks', color: '#d97706' };
+          s.setState({ clusterMethod: 'kmeans', clusterK: 3, clusterPeakMode: 'accessibility', selectedPeaks: new Set([0]),
+            peakRules: [rule], peaksByRule: { demo: [{ start: region[0], end: region[1], index: 0, layer: 0, chrom }] }, peaksLocked: true });
+        }, { region: MHC_REGION, chrom: MHC.chrom });
+        await sleep(800);
+        await m.getByTestId('cluster-run-button').click();
+        await m.waitForFunction(() => Boolean(window.__FIBERBROWSER_STORE__.getState().clusterMatchedRun?.graph), null, { timeout: 240_000 });
+        await idle(m, 3000);
+        // The Clusters panel beside the dataset panels: the run's own words ("Not a carrier (shown, not fitted): PAT ...").
+        await store(m, `s.getState().openAnalysisPanel('cluster-detail')`);
+        await m.waitForFunction(() => /Not a carrier \(shown, not fitted\)/.test(document.body.innerText), null, { timeout: 30_000 });
+        await idle(m, 2500);
+        await shoot(m, 'graph-mode-not-a-carrier');
+        const said = (await m.locator('body').innerText()).match(/Not a carrier \(shown, not fitted\)[^.]*/)?.[0];
+        console.log(`      ${said}`);
+      });
+      await m.close();
+    }
+
     // ================================================================ live lift, split panels
     if (wantAny('live-lift-split', 'live-lift-open-menu', 'live-lift-settings', 'live-lift-insertions', 'live-lift-hatching',
       'differences-expanded', 'differences-inspector', 'differences-row', 'differences-menu', 'differences-table',
@@ -339,11 +385,15 @@ async function main() {
       const pooledBox = () => page.locator(`[data-panel-id="${pooledPanel().id}"]`).first();
 
       const rowHeight = h => store(page, `s.getState().setSubTrackHeight(a.id, 'sv', a.h)`, { id: pooledPanel().id, h });
-      // The table opens below the row, over the reads. At this build the row's wrapper has content-visibility: auto
-      // (SubTrackDispatch.tsx), whose paint containment clips the table to the row, so it never shows; the shot lets
-      // the row overflow and lifts it above the reads. Reported as a UI bug.
+      // The table opens below the row, over the reads. Older builds clipped it to the row (content-visibility: auto
+      // on the row's wrapper, SubTrackDispatch.tsx); the shot lifts it above the reads only when the table is not on
+      // top at its centre, and says so.
       const liftTable = () => page.evaluate(id => {
         const strip = document.querySelector(`[data-testid="live-lift-diff-strip"][data-panel-id="${id}"]`);
+        const table = strip?.querySelector('.top-full');
+        const box = table?.getBoundingClientRect();
+        const onTop = box && box.height > 0 && table.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+        if (onTop) return false;
         const row = strip?.closest('.fb-track-row');
         for (const el of [strip, row]) {
           if (!el) continue;
@@ -351,6 +401,16 @@ async function main() {
           el.style.position = 'relative';
           el.style.zIndex = '45';
         }
+        return true;
+      }, pooledPanel().id).then(lifted => { if (lifted) console.log('      the table was hidden under the reads: lifted for the shot'); });
+      /** Scroll the table to its first read-supported row (the Reads lane's), a couple of rows from the top. */
+      const scrollTableToReads = () => page.evaluate(id => {
+        const table = document.querySelector(`[data-testid="live-lift-diff-strip"][data-panel-id="${id}"] .top-full`);
+        const rows = [...(table?.querySelectorAll('tbody tr[data-difference-id]') ?? [])];
+        const i = rows.findIndex(tr => !/^(MAT|PAT):/.test(tr.dataset.differenceId ?? ''));
+        if (!table || i < 0) return false;
+        table.scrollTop = Math.max(0, rows[Math.max(0, i - 2)].offsetTop - 4);
+        return true;
       }, pooledPanel().id);
       await take('differences-row', async () => {
         await strip(pooledPanel()).waitFor({ timeout: 20_000 });
@@ -369,9 +429,13 @@ async function main() {
       });
 
       await take('differences-table', async () => {
+        await rowHeight(84);   // two lanes (as differences-row leaves it)
+        await idle(page, 800);
         await (await rowMenu(pooledPanel())).getByText('Show the table', { exact: false }).click();
         await sleep(1500);
         await liftTable();
+        // The row keeps focus after its menu, which shows its hover chrome (resize handle, minimize button).
+        await page.evaluate(() => document.activeElement?.blur?.());
         await shoot(page, 'differences-table', pooledBox());
       });
 
@@ -415,6 +479,9 @@ async function main() {
         }
         await idle(page, 2000);
         await liftTable();
+        // The read insertion's row, with its label in the Assembly comparison column.
+        if (!(await scrollTableToReads())) console.log('      no read-supported row in the table');
+        await sleep(400);
         await shoot(page, 'differences-comparison', pooledBox());
       });
 

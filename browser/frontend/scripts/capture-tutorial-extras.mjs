@@ -118,18 +118,61 @@ async function captureSvExtras(page, { out, shoot, audit, sleep }) {
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
   await closePanel(page, 'variants');
-  await page.evaluate(() => {
+  // Close the x18 split as a user does (Split x in a split panel's header). Closing a split restores the panels it
+  // replaced, after a moment: removing the SV demo's panels while the split is open let it bring them back later
+  // (the H1 panel at the NAPA locus and the insert-expanded carriers stayed open for the Footprints views).
+  const splitPanels = () => page.evaluate(() => (window.__FIBERBROWSER_STORE__?.getState().panels ?? []).filter(p => p.readSubset).length);
+  for (let i = 0; i < 4 && await splitPanels(); i += 1) {
+    await page.locator('[data-testid="split-panel-close-all"]').first().click({ timeout: 5000 }).catch(() => {});
+    await sleep(800);
+  }
+  await page.waitForFunction(() => !(window.__FIBERBROWSER_STORE__?.getState().panels ?? []).some(p => p.readSubset),
+    null, { timeout: 15_000, polling: 250 }).catch(() => {});
+  if (await splitPanels()) console.log('extra     the x18 split did not close');
+  // Then close the SV demo's panels as a user does (x in each panel's header). That closes the dataset with its only
+  // panel; removing just the panel left the dataset open, and a dataset with no panel gets a new one later (the H1
+  // panel came back at the NAPA locus, "No reads in this view", beside the Footprints views).
+  const otherPanels = () => page.evaluate(() => {
     const st = window.__FIBERBROWSER_STORE__?.getState();
-    if (!st) return;
-    const napa = st.datasets.find(d => /^NAPA demo/.test(d.label ?? ''));
-    for (const p of [...st.panels]) {
-      if (p.contentType === 'dataset' && p.datasetId !== napa?.id) st.removePanel(p.id);
-    }
-    const now = window.__FIBERBROWSER_STORE__.getState();
+    const napa = st?.datasets.find(d => /^NAPA demo/.test(d.label ?? ''));
+    return (st?.panels ?? []).filter(p => p.contentType === 'dataset' && p.datasetId !== napa?.id).map(p => p.id);
+  });
+  for (let i = 0; i < 8; i += 1) {
+    const [id] = await otherPanels();
+    if (!id) break;
+    const close = page.getByTestId(`panel-close-${id}`);
+    if (!(await close.isVisible().catch(() => false))) await page.getByTestId(`panel-actions-${id}`).click({ timeout: 3000 }).catch(() => {});
+    await close.click({ timeout: 5000 }).catch(() => page.evaluate(pid => window.__FIBERBROWSER_STORE__?.getState().removePanel(pid), id));
+    await sleep(1000);
+  }
+  const left = await otherPanels();
+  if (left.length) console.log(`extra     ${left.length} SV demo panel(s) still open`);
+  await page.evaluate(() => {
+    const now = window.__FIBERBROWSER_STORE__?.getState();
+    if (!now) return;
     for (const p of now.panels) if (p.contentType === 'dataset' && p.collapsed) now.setPanelCollapsed(p.id, false);
     now.setViewport('chr19', 47_514_000, 47_518_000);
   });
   await settle(page, sleep, 2500);
+}
+
+/** Wait until the element `selector` names stays the same node, in place, for a second (false after `ms`). */
+async function steady(page, selector, ms = 30_000) {
+  return page.evaluate(async ({ selector, ms }) => {
+    const t0 = performance.now();
+    let last = null;
+    let where = '';
+    let since = t0;
+    while (performance.now() - t0 < ms) {
+      const el = document.querySelector(selector);
+      const r = el?.getBoundingClientRect();
+      const at = r ? `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)}` : '';
+      if (el !== last || at !== where) { last = el; where = at; since = performance.now(); }
+      else if (el && performance.now() - since > 1000) return true;
+      await new Promise(res => setTimeout(res, 100));
+    }
+    return false;
+  }, { selector, ms });
 }
 
 export async function captureExtras(page, { baseUrl, out, shoot, audit, sleep, waitForPanels, main }) {
@@ -141,11 +184,21 @@ export async function captureExtras(page, { baseUrl, out, shoot, audit, sleep, w
     ['x01_class_highlighted_on_reads', 'Footprint classes: a class highlighted on the reads', async () => {
       await openPanel(page, 'Footprints');
       await tab(page, 'footprint-analysis', 'states');
-      const name = page.locator(`${FP} [data-testid="recaller-class-table"] [data-testid="recaller-row"] button`).first();
-      await name.scrollIntoViewIfNeeded();
-      await name.click();
+      // The class table re-renders while the panel settles: a handle taken too early is detached by the time it is
+      // scrolled to. Wait for the first class name to hold still, then click it (a click re-queries the locator and
+      // scrolls it into view itself).
+      const nameSel = `${FP} [data-testid="recaller-class-table"] [data-testid="recaller-row"] button`;
+      if (!(await steady(page, nameSel))) console.log('extra     the class table was still changing after 30 s');
+      await page.locator(nameSel).first().click({ timeout: 15_000 });
       await sleep(1500);
-      await page.locator(`${FP} [data-testid="recaller-class-table"]`).first().evaluate(el => el.scrollIntoView({ block: 'start' }));
+      // The table to the top of the Footprints panel's own scroll area (scrollIntoView would also scroll the
+      // workspace, hiding the panels' headers).
+      await page.locator(`${FP} [data-testid="recaller-class-table"]`).first().evaluate(el => {
+        const panel = el.closest('[data-panel-content-type]');
+        let box = el.parentElement;
+        while (box && box !== panel && !(box.scrollHeight > box.clientHeight && /(auto|scroll)/.test(getComputedStyle(box).overflowY))) box = box.parentElement;
+        if (box && panel?.contains(box)) box.scrollTop += el.getBoundingClientRect().top - box.getBoundingClientRect().top;
+      });
     }],
     ['x02_compare_strands_plot', 'Compare strands: class prevalence on CT and GA', async () => {
       await page.locator(`${FP} [data-testid="compare-datasets"]`).evaluate(el => { el.open = true; });
