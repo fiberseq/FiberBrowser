@@ -93,6 +93,11 @@ describe('patch list: scoped columns', () => {
     await act(async () => root.render(<PatchList observations={scoped} settings={{}} setSettings={() => { }} onSelect={() => { }} revision="r1" />));
     await vi.waitFor(() => expect(container.querySelectorAll('[data-testid="nuc-patch-scan-value"]').length).toBe(2), { timeout: 3000 });
     expect([...container.querySelectorAll('[data-testid="nuc-patch-scan-value"]')].map(e => e.textContent)).toEqual(['R−null 0.31', '—']);
+    // A stale binding (the BAM changed since the scan) never lends its value (Codex E3).
+    useHubData.setState({ scans: [{ ...scan, datasets: [{ ...scan.datasets[0], status: 'stale' }] } as ScanInfo] });
+    await act(async () => root.render(<PatchList observations={[obs[0]]} settings={{}} setSettings={() => { }} onSelect={() => { }} revision="r3" />));
+    await vi.waitFor(() => expect(container.querySelectorAll('[data-testid="nuc-patch-scan-value"]').length).toBe(1), { timeout: 3000 });
+    expect(container.querySelector('[data-testid="nuc-patch-scan-value"]')!.textContent).toBe('—');
     act(() => root.unmount()); container.remove(); spy.mockRestore(); useHubData.setState({ scans: [] });
   });
 });

@@ -161,7 +161,10 @@ export function PatchList({ observations, settings, setSettings, onSelect, revis
                   // The scan scores whole datasets: only a column of the whole dataset (no read scope, haplotype or
                   // strand) shows its value.
                   const whole = o.kind === 'linear' && !o.readIds && !o.strand && !o.liftHap;
-                  const group = whole ? nucScans.find(x => x.scanId === r.scanId)?.datasets.find(d => d.dataset === o.datasetId)?.scanDataset : undefined;
+                  // Only a fully bound scan group that is the dataset's whole cohort (not stale, not one of several
+                  // groups merged into it, not a partial binding).
+                  const bound = whole ? (nucScans.find(x => x.scanId === r.scanId)?.datasets ?? []).filter(d => d.dataset === o.datasetId) : [];
+                  const group = bound.length === 1 && bound[0].status === 'bound' ? bound[0].scanDataset : undefined;
                   const raw = group ? r.hit.raw?.[group] : undefined;
                   const val = raw?.[r.type === 'phased' ? 'R_minus_null' : 'coherence']?.v ?? null;
                   return <td key={o.obsId} className="px-1 text-right text-ink-secondary" data-testid="nuc-patch-scan-value"
