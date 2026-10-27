@@ -256,3 +256,44 @@ def test_scan_overlay_joins_rows_by_file(two_bams, tmp_path):
             ('nuc', {'record': 's:0', 'nrl': '220.0', '_file': '/x/b.bam'})]
     read = {'id': 'q', 'record_sha256': 's', 'alignment_occurrence': 0, 'library_id': '/x/b.bam'}
     assert _with_scalars(read, rows)['_fiberbrowser_scalars']['nuc.nrl'] == 220.0
+
+
+def test_annotated_nuc_marks_inside_an_insertion_keep_the_nearest_aligned_base():
+    """Codex A3-1: the MA parser keeps nucsz/nucseg marks with no aligned base, as the scan's zero-width envelope."""
+    from models.domain import CigarCoordMapper
+    from services.bam_tags import parse_ma_aq_tags_into_layers
+    mapper = CigarCoordMapper([(0, 1000), (1, 1000), (0, 2000)], 5000)   # 1000 M, a 1 kb insertion, 2000 M
+    ma = '4000;nucsz.QQQQ:101-147,1201-147,2101-147'      # before, inside, after the insertion
+    aq = [2, 0, 230, 128] * 3
+    layers = parse_ma_aq_tags_into_layers(ma, aq, mapper, 4000, 9000, an_str='nucsz@d_0,nucsz@d_1,nucsz@d_2',
+                                          tags_are_molecular=True)
+    ivs = layers['nucsz']['intervals']
+    assert len(ivs) == 3 and ivs[1][1] - ivs[1][0] == 1
+    assert ivs[1][0] in (5999 - 4000, 6000 - 4000)       # the insertion's flanking aligned bases
+    assert layers['nucsz']['annotation_names'] == ['nucsz@d_0', 'nucsz@d_1', 'nucsz@d_2']
+    other = parse_ma_aq_tags_into_layers('4000;tf.QQQ:1201-30', [1, 2, 3], mapper, 4000, 9000)
+    assert 'tf' not in other            # other groups keep the old rule
+
+
+def test_window_metrics_use_the_molecules_contig_name():
+    from services.nuc.observations import frame_chrom
+    mols = [NS(chrom='1'), NS(chrom='1')]
+    assert frame_chrom(mols, 'chr1') == '1' and frame_chrom(mols, '1') == '1' and frame_chrom([], 'chr1') == 'chr1'
+
+
+def test_lifted_compute_covers_the_graph_hull(monkeypatch):
+    """Codex A3-2: a live-lift view also computes each source contig's piece hull (a graph column's span)."""
+    import services.nuc.observations as obs_mod
+    from services.nuc import live
+    monkeypatch.setattr(obs_mod, 'source_windows', lambda *a, **k: [('c', 0, 1000), ('c', 101_000, 102_000)])
+
+    class Plan:
+        contigs = [NS(contig='c', windows=[(0, 1000), (101_000, 102_000)])]
+    import services.lift.live_lift as ll
+    monkeypatch.setattr(ll, 'select_pieces', lambda *a, **k: None)
+    monkeypatch.setattr(ll, 'plan_fetch', lambda *a, **k: Plan)
+    monkeypatch.setattr(ll, 'lift_key', lambda *a, **k: 'k')
+    handle = NS(map=NS(targets={'chrT'}), resolve_haplotypes=lambda h: h)
+    st = NS(datasets={'d': NS(live_lift=NS(handle=handle, haplotypes=['H#1'], settings=None))})
+    regions = live.source_regions(st, NS(kind='lifted', browser_id='d'), 'chrT', 0, 5000)
+    assert ('c', 0, 102_000) in regions

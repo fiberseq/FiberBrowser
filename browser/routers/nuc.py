@@ -141,3 +141,39 @@ async def nuc_summary(request: dict, state=Depends(get_state)):
         raise HTTPException(status_code=422, detail='Give the observations')
     from services.nuc.observations import summarize
     return await asyncio.to_thread(summarize, state, obs, include_duplicates=bool(request.get('include_duplicates')))
+
+
+@router.post('/api/nuc/window')
+async def nuc_window(request: dict, state=Depends(get_state)):
+    """Window mode: FiberHMM window metrics per observation, with an anchor's phasing (both frames) and the
+    dephasing readout against background anchors."""
+    _not_on_lab_requests()
+    request = _body(request)
+    obs = request.get('observations')
+    if not isinstance(obs, list) or not obs or not isinstance(request.get('window'), dict):
+        raise HTTPException(status_code=422, detail='Give the observations and the window')
+    from services.nuc.observations import ObservationError
+    from services.nuc.window import window_analysis
+    try:
+        return await asyncio.to_thread(window_analysis, state, obs, request['window'], request.get('anchor'),
+                                       request.get('background'),
+                                       include_duplicates=bool(request.get('include_duplicates')))
+    except ObservationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@router.post('/api/nuc/select')
+async def nuc_select(request: dict, state=Depends(get_state)):
+    """The read identities of an observation's molecules in a category (a size class, an NRL bin, a segment state,
+    an event): what a click in the panel highlights."""
+    _not_on_lab_requests()
+    request = _body(request)
+    if not isinstance(request.get('observation'), dict) or not isinstance(request.get('category'), dict):
+        raise HTTPException(status_code=422, detail='Give the observation and the category')
+    from services.nuc.observations import ObservationError
+    from services.nuc.window import select_reads
+    try:
+        return await asyncio.to_thread(select_reads, state, request['observation'], request['category'],
+                                       include_duplicates=bool(request.get('include_duplicates')))
+    except (ObservationError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error

@@ -198,7 +198,15 @@ def source_regions(state, source: NucSource, chrom: str, start: int, end: int) -
     key = lift_key(handle, haps, config.settings)
     selection = select_pieces(handle, chrom, int(start), int(end), haplotypes=haps, settings=config.settings, key=key)
     plan = plan_fetch(selection, config.settings, fetch_range=(int(start), int(end)))
-    return [(c.contig, int(a), int(b)) for c in plan.contigs for a, b in c.windows]
+    regions = [(c.contig, int(a), int(b)) for c in plan.contigs for a, b in c.windows]
+    # A graph path's span is each source contig's lift-piece hull over the view (an insertion between pieces is on
+    # the path, services/nuc/observations.py): computed too, so a graph column's molecules all have outputs.
+    from .observations import source_windows
+    hulls: Dict[str, List[int]] = {}
+    for c, a, b in source_windows(state, source, chrom, int(start), int(end)):
+        h = hulls.setdefault(c, [a, b])
+        h[0], h[1] = min(h[0], a), max(h[1], b)
+    return regions + [(c, a, b) for c, (a, b) in hulls.items()]
 
 
 class Rec(NamedTuple):

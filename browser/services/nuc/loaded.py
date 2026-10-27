@@ -148,9 +148,11 @@ def _annotated(source, windows, keys) -> Dict[Tuple[str, str, int], RecordOutput
                        for line in bam.header.to_dict().get('CO', [])):
                 continue          # not an annotated BAM with nuc groups
             ctx = DecodeContext(bam.header, NucParams())
-            refs = set(bam.references)
+            from .live import bam_chrom
+            refs = list(bam.references)
             for chrom, a, b in windows:
-                if chrom not in refs:
+                chrom = bam_chrom(refs, chrom)
+                if chrom is None:
                     continue
                 for read, sha, occ in iter_records(bam, chrom, int(a), int(b), {**filters, 'duplicates': 'include'}):
                     key = (path, sha, int(occ))

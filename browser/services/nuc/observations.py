@@ -309,10 +309,23 @@ def _window_metrics(cohort: Sequence[Rec], window, cfg) -> Optional[dict]:
         results[id(mol)] = res
     if not mols:
         return None
+    window = (frame_chrom(mols, window[0]), window[1], window[2])
     wr = window_metrics(mols, window, params=nuc_params(cfg.settings), cal=cfg.calibration.calibration,
                         results=results)
     agg = dict(wr.groups.get('all') or {})
     return json.loads(json.dumps(agg, default=lambda o: None if isinstance(o, float) and not math.isfinite(o) else str(o)))
+
+
+def frame_chrom(mols, chrom: str) -> str:
+    """A window's contig as the molecules' BAM names it (chr1 / 1 aliases): FiberHMM matches names exactly."""
+    from utils.chrom import normalize_chrom_name
+    want = normalize_chrom_name(chrom)
+    for m in mols:
+        if m.chrom == chrom:
+            return chrom
+        if m.chrom and normalize_chrom_name(m.chrom) == want:
+            return m.chrom
+    return chrom
 
 
 def _molecule_key(qname: str) -> str:
