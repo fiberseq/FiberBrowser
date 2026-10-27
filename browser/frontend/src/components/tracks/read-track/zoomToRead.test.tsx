@@ -110,7 +110,8 @@ describe('Zoom to read (Codex 18)', () => {
     useBrowserStore.setState({ viewportHistory: [], historyIndex: -1 } as never);
     let answer = await zoomToRead();
     await act(async () => { answer(found); await new Promise(r => setTimeout(r, 0)); });
-    expect(useBrowserStore.getState().viewportHistory).toEqual([{ chrom: 'chr1', start: 0, end: 1_000 }]);
+    // (with whether the jump was a pan or zoom, decided now: a jump 4 kb away from a 1 kb view is not)
+    expect(useBrowserStore.getState().viewportHistory).toEqual([{ chrom: 'chr1', start: 0, end: 1_000, pan: false }]);
     act(() => root?.unmount());
     host?.remove();
     render(true);
@@ -118,7 +119,7 @@ describe('Zoom to read (Codex 18)', () => {
     answer = await zoomToRead();
     await act(async () => { answer(found); await new Promise(r => setTimeout(r, 0)); });
     expect(onViewportChange).toHaveBeenCalled();
-    expect(useBrowserStore.getState().viewportHistory).toEqual([{ chrom: 'chr1', start: 0, end: 1_000, panelId: 'p1', likePan: true }]);
+    expect(useBrowserStore.getState().viewportHistory).toEqual([{ chrom: 'chr1', start: 0, end: 1_000, panelId: 'p1', likePan: true, pan: false }]);
   });
 
   it('another session opened meanwhile: it stands down', async () => {

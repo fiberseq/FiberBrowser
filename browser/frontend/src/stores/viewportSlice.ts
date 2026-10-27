@@ -43,13 +43,13 @@ export function graphRunSurvivesMove(state: BrowserState, chrom: string): boolea
  * clusters and filters (the main view's reset of those maps skips their
  * keys), and locked ones pan/zoom along with it.
  */
-function withSiteRules(state: BrowserState, chrom: string, start: number, end: number, result: Partial<BrowserState>): Partial<BrowserState> {
+function withSiteRules(state: BrowserState, chrom: string, start: number, end: number, result: Partial<BrowserState>, panOverride?: boolean): Partial<BrowserState> {
   // Panning and zooming keep the order of known reads, as independent panels do.
   // A jump to another locus drops it; newly encountered reads follow the ordered ones.
   if (isPanOrZoom(state, { chrom, start, end }) && 'readSortOrder' in result) {
     result = { ...result, readSortOrder: state.readSortOrder };
   }
-  return withViewLinks(state, chrom, start, end, withLockedSites(state, chrom, start, end, result));
+  return withViewLinks(state, chrom, start, end, withLockedSites(state, chrom, start, end, result, panOverride));
 }
 
 /**
@@ -76,14 +76,15 @@ function withViewLinks(state: BrowserState, chrom: string, start: number, end: n
   return changed ? { ...result, panels: out } : result;
 }
 
-function withLockedSites(state: BrowserState, chrom: string, start: number, end: number, result: Partial<BrowserState>): Partial<BrowserState> {
+function withLockedSites(state: BrowserState, chrom: string, start: number, end: number, result: Partial<BrowserState>, panOverride?: boolean): Partial<BrowserState> {
   const own = state.panels.filter(p => p.viewportOverride);
   if (own.length === 0) return result;
   const out: Record<string, unknown> = { ...result };
   const prev = { chrom: state.chrom, start: state.start, end: state.end };
   const next = { chrom: (out.chrom as string) ?? chrom, start: (out.start as number) ?? start, end: (out.end as number) ?? end };
   const locking = !siteLockSuppressed() && own.some(p => p.siteLocked);
-  const pan = isPanOrZoom(prev, next);
+  // (Back / Forward pass the jump's own answer: the return trip moves the panels the jump moved, never decided anew.)
+  const pan = panOverride ?? isPanOrZoom(prev, next);
   // A linked panel moves with a pan or zoom; one showing exactly the main
   // view (a plain linked copy) also follows a jump elsewhere, and like the
   // main view leaves its filters and clusters behind.
@@ -126,7 +127,7 @@ function groupsLeavingChrom(groups: FootprintGroup[], fromChrom: string): Footpr
  * (a panel at its own locus keeps its clusters and filters; a linked copy
  * follows). Saved footprint definitions survive.
  */
-function jumpState(state: BrowserState, chrom: string, start: number, end: number, extra: Partial<BrowserState>): Partial<BrowserState> {
+function jumpState(state: BrowserState, chrom: string, start: number, end: number, extra: Partial<BrowserState>, panOverride?: boolean): Partial<BrowserState> {
   const { footprintGroups: _dropped, ...clean } = makeCleanTransientState();
   void _dropped;
   // A current graph run keeps its cluster state on a jump within its package's contig (an alias of it included), as
@@ -136,7 +137,7 @@ function jumpState(state: BrowserState, chrom: string, start: number, end: numbe
     ...clean,
     ...(chrom !== state.chrom ? { footprintGroups: groupsLeavingChrom(state.footprintGroups, state.chrom) } : {}),
     ...extra,
-  } as Partial<BrowserState>));
+  } as Partial<BrowserState>), panOverride);
 }
 
 type Span3 = { chrom: string; start: number; end: number };
@@ -151,7 +152,7 @@ function historyTargetView(state: BrowserState, entry: ViewportHistoryEntry): Sp
 
 /** Back / Forward: the entry's view goes to `to` (a panel through its own navigation, so what follows it follows).
  * `outwardWasPan`: whether the jump itself (its view before → after) was a pan or zoom, which is what decided whether
- * a pan-like jump moved the panels locked to it; the return trip moves the same ones (never decided anew). */
+ * it moved the panels locked to the view; the return trip moves the same ones (never decided anew). */
 function applyHistoryMove(get: () => BrowserState, set: (p: Partial<BrowserState> | ((s: BrowserState) => Partial<BrowserState>)) => void,
   entry: ViewportHistoryEntry, to: Span3, history: Partial<BrowserState>, outwardWasPan = false) {
   if (entry.panelId) {
@@ -163,7 +164,13 @@ function applyHistoryMove(get: () => BrowserState, set: (p: Partial<BrowserState
     else get().navigatePanel(entry.panelId, to.chrom, to.start, to.end);
     return;
   }
-  set(s => jumpState(s, to.chrom, to.start, to.end, history));
+  set(s => jumpState(s, to.chrom, to.start, to.end, history, outwardWasPan));
+}
+
+/** Whether a jump from `from` to `to` was a pan or zoom: the jump's recorded answer (made when it was made), else
+ * judged from where it went (a bookmark, or a caller that didn't say). */
+function jumpWasPan(entry: ViewportHistoryEntry, to: Span3): boolean {
+  return entry.pan ?? isPanOrZoom(entry, to);
 }
 
 // ============================================================
@@ -240,9 +247,10 @@ export interface ViewportSlice {
    * Go there): its view now goes into navigation history, so Back returns to it. `panelId`: the panel whose own view
    * the jump moves (its view is recorded when it has one of its own; else the main view's). `likePan`: the jump moves
    * that panel through setPanelViewport (locked panels and the main view move likewise), and Back / Forward do too.
-   * Pans and zooms don't call it.
+   * `to`: where the jump goes, so whether it is a pan or zoom (which panels locked to the view move with it) is
+   * decided now, not from where the view is at Back. Pans and zooms don't call it.
    */
-  recordJump: (panelId?: string | null, options?: { likePan?: boolean }) => void;
+  recordJump: (panelId?: string | null, options?: { likePan?: boolean; to?: { chrom: string; start: number; end: number } }) => void;
 
   // CIGAR display actions
   toggleReversed: () => void;
@@ -817,8 +825,9 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
     const state = get();
     const bookmark = state.bookmarks.find(b => b.id === id);
     if (bookmark) {
-      // Push current viewport to history before navigating
-      get().pushViewportHistory({ chrom: state.chrom, start: state.start, end: state.end });
+      // Push current viewport to history before navigating (with the jump's pan answer, for Back)
+      const from = { chrom: state.chrom, start: state.start, end: state.end };
+      get().pushViewportHistory({ ...from, pan: isPanOrZoom(from, bookmark) });
       // Navigate to bookmark
       set(s => jumpState(s, bookmark.chrom, bookmark.start, bookmark.end, {}));
     }
@@ -839,13 +848,16 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
   pushViewportHistory: (entry: ViewportHistoryEntry) => {
     const state = get();
     const record: ViewportHistoryEntry = { chrom: entry.chrom, start: entry.start, end: entry.end,
-      ...(entry.panelId ? { panelId: entry.panelId, ...(entry.likePan ? { likePan: true } : {}) } : {}) };
+      ...(entry.panelId ? { panelId: entry.panelId, ...(entry.likePan ? { likePan: true } : {}) } : {}),
+      ...(entry.pan !== undefined ? { pan: entry.pan } : {}) };
     // Back went somewhere earlier: a new jump drops the undone ones (as a web browser does).
     let history = state.historyIndex >= 0 ? state.viewportHistory.slice(0, state.historyIndex) : state.viewportHistory;
     const last = history[history.length - 1];
     // Leaving the same place again (a repeated Go to, or one that didn't move): one entry.
     if (last && (last.panelId ?? null) === (record.panelId ?? null) && sameSpan(last, record) && !!last.likePan === !!record.likePan) {
-      if (history !== state.viewportHistory || state.historyIndex !== -1) set({ viewportHistory: history, historyIndex: -1 });
+      // (The newer jump from there is the one Back undoes: its pan answer.)
+      const merged = record.pan !== undefined && last.pan !== record.pan ? [...history.slice(0, -1), { ...last, pan: record.pan }] : history;
+      if (merged !== state.viewportHistory || state.historyIndex !== -1) set({ viewportHistory: merged, historyIndex: -1 });
       return;
     }
     history = [...history, record].slice(-50);
@@ -856,8 +868,16 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
     const state = get();
     const panel = panelId ? state.panels.find(p => p.id === panelId) : undefined;
     const own = panel?.viewportOverride;
-    if (own) get().pushViewportHistory({ chrom: own.chrom, start: own.start, end: own.end, panelId: panel!.id, ...(options?.likePan ? { likePan: true } : {}) });
-    else get().pushViewportHistory({ chrom: state.chrom, start: state.start, end: state.end });
+    const to = options?.to;
+    if (own) {
+      // A pan-like jump keeps its contig (setPanelViewport), so its pan answer is judged on that contig.
+      const pan = to ? isPanOrZoom(own, { chrom: options?.likePan ? own.chrom : to.chrom, start: to.start, end: to.end }) : undefined;
+      get().pushViewportHistory({ chrom: own.chrom, start: own.start, end: own.end, panelId: panel!.id,
+        ...(options?.likePan ? { likePan: true } : {}), ...(pan !== undefined ? { pan } : {}) });
+    } else {
+      const from = { chrom: state.chrom, start: state.start, end: state.end };
+      get().pushViewportHistory({ ...from, ...(to ? { pan: isPanOrZoom(from, to) } : {}) });
+    }
   },
 
   goBack: () => {
@@ -870,7 +890,7 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
       // A closed panel, or a view already where the jump left from (nothing to undo): the one before.
       if (!now || sameSpan(now, entry)) continue;
       const history = viewportHistory.map((e, j) => (j === i ? { ...e, to: { chrom: now.chrom, start: now.start, end: now.end } } : e));
-      applyHistoryMove(get, set, entry, entry, { viewportHistory: history, historyIndex: i }, isPanOrZoom(entry, now));
+      applyHistoryMove(get, set, entry, entry, { viewportHistory: history, historyIndex: i }, jumpWasPan(entry, now));
       return;
     }
   },
@@ -884,7 +904,7 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
       const now = historyTargetView(state, entry);
       if (!entry.to || !now) continue;
       const next = i + 1 >= viewportHistory.length ? -1 : i + 1;
-      applyHistoryMove(get, set, entry, entry.to, { historyIndex: next }, isPanOrZoom(entry, entry.to));
+      applyHistoryMove(get, set, entry, entry.to, { historyIndex: next }, jumpWasPan(entry, entry.to));
       return;
     }
   },

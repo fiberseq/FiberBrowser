@@ -193,7 +193,7 @@ export function beginReadPanelIntent(stateKey: string): NavigationIntent {
 export function navigatePanelTo(panel: PanelConfig | null | undefined, chrom: string, start: number, end: number): void {
   const store = useBrowserStore.getState();
   // A jump (Zoom to read, a read found by name): Back (Alt+←) returns to where the view was.
-  store.recordJump(panel?.viewportOverride ? panel.id : null);
+  store.recordJump(panel?.viewportOverride ? panel.id : null, { to: { chrom, start, end } });
   if (panel?.viewportOverride) {
     store.navigatePanel(panel.id, chrom, start, end);
   } else {
@@ -325,7 +325,11 @@ export async function goToReads(names: string[], ctx: GoToReadsContext = {}): Pr
       if (!target) continue;
       if (ctx.navigate) {
         // A panel's box: its own reference only (its datasets were searched).
-        if (i === 0) ctx.navigate(target.chrom, target.start, target.end);
+        if (i === 0) {
+          // A jump: Back (Alt+←) returns to where the box's panel was.
+          useBrowserStore.getState().recordJump(ctx.target && ctx.target !== 'main' ? ctx.target.panelId : null, { to: target });
+          ctx.navigate(target.chrom, target.start, target.end);
+        }
         continue;
       }
       const panel = panelOf(group[0]);

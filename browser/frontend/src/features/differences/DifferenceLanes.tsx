@@ -97,7 +97,7 @@ export function DifferenceLanes({ panel, dataset, width, gutter = 0, height }: {
       const lo = Math.max(0, Math.round((found.t_start + found.t_end - size) / 2));
       const st = useBrowserStore.getState();
       // A jump to the next difference: Back (Alt+←) returns to where the view was.
-      st.recordJump(panel.viewportOverride ? panel.id : null, { likePan: true });
+      st.recordJump(panel.viewportOverride ? panel.id : null, { likePan: true, to: { chrom, start: lo, end: lo + size } });
       if (panel.viewportOverride) st.setPanelViewport(panel.id, lo, lo + size);
       else st.setViewport(chrom, lo, lo + size);
     } catch (e) { if (!controller.signal.aborted) setError(String((e as Error).message)); }

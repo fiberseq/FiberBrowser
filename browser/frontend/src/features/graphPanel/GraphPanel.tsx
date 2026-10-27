@@ -1296,7 +1296,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     // to it, the same way.)
     if (hostMode) {
       const own = useBrowserStore.getState().panels.find(p => p.id === panelId)?.viewportOverride;
-      useBrowserStore.getState().recordJump(panelId, { likePan: own?.chrom === parsed.contig });
+      useBrowserStore.getState().recordJump(panelId, { likePan: own?.chrom === parsed.contig, to: { chrom: parsed.contig, start: parsed.start, end: parsed.end } });
     }
     commitViewport(clampViewport(parsed, target.size, target.size_inferred), true);
     setPrompt(null);

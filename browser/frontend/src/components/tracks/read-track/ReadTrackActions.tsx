@@ -228,7 +228,7 @@ export function ReadTrackActions(props: ReadTrackActionsProps) {
         const win = readWindow(span, store.spanningOnly);
         // A jump: Back (Alt+←) returns to where this panel's view was (a panel with its own view moves like a pan).
         const own = onViewportChange ? store.panels.find(p => p.contentType === 'dataset' && (p.stateKey ?? p.datasetId) === stateKey && p.viewportOverride) : undefined;
-        store.recordJump(own?.id ?? null, { likePan: Boolean(own) });
+        store.recordJump(own?.id ?? null, { likePan: Boolean(own), to: { chrom, start: win.start, end: win.end } });
         navigate(win.start, win.end);
         break;
       }

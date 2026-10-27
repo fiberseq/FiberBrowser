@@ -179,7 +179,7 @@ export function goToRegion(genome: string, entry: RegionEntry, options: GoToRegi
   regions.noteVisited(entry.id);
   if (options.navigate) {
     // A jump (search, the Regions panel, N / P): Back (Alt+←) returns to where the view was.
-    s.recordJump(options.panelId);
+    s.recordJump(options.panelId, { to: { chrom: entry.chrom, start, end } });
     options.navigate(entry.chrom, start, end);
     return null;
   }
@@ -189,12 +189,13 @@ export function goToRegion(genome: string, entry: RegionEntry, options: GoToRegi
   // already is: answers still pending for it are stale (search/navigationIntent).
   supersedeNavigationIntents(target.kind === 'panel' ? { panelId: target.panelId } : 'main');
   if (target.kind === 'panel') {
-    s.recordJump(target.panelId);
+    s.recordJump(target.panelId, { to: { chrom: entry.chrom, start, end } });
     s.navigatePanel(target.panelId, entry.chrom, start, end);
   } else {
     if (s.chroms.length && !findChromInfo(s.chroms, entry.chrom)) return `${entry.chrom} is not on the loaded genome.`;
-    s.recordJump();
-    s.setViewport(findChromInfo(s.chroms, entry.chrom)?.name ?? entry.chrom, start, end);
+    const chrom = findChromInfo(s.chroms, entry.chrom)?.name ?? entry.chrom;
+    s.recordJump(null, { to: { chrom, start, end } });
+    s.setViewport(chrom, start, end);
   }
   return null;
 }

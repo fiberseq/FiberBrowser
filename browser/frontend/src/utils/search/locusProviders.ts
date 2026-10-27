@@ -33,7 +33,7 @@ function goTo(ctx: SearchContext, chrom: string, start: number, end: number): vo
   const s = useBrowserStore.getState();
   const name = findChromInfo(ctx.chroms ?? s.chroms, chrom)?.name ?? chrom;
   // A jump: Back (Alt+←) returns to where the view was.
-  s.recordJump(ctx.navigate && ctx.target && ctx.target !== 'main' ? ctx.target.panelId : null);
+  s.recordJump(ctx.navigate && ctx.target && ctx.target !== 'main' ? ctx.target.panelId : null, { to: { chrom: name, start, end } });
   if (ctx.navigate) ctx.navigate(name, start, end);
   else s.setViewport(name, start, end);
 }

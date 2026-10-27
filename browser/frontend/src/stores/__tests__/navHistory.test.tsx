@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useBrowserStore } from '../browserStore';
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
 import { goToRegion } from '../../utils/regionNavigation';
-import { navigatePanelTo } from '../../utils/readLocate';
+import { goToReads, navigatePanelTo } from '../../utils/readLocate';
 import { setRegionCatalogPersistence, useRegionCatalogStore } from '../regionCatalogStore';
 import { SmartSearchInput } from '../../components/controls/SmartSearchInput';
 
@@ -140,6 +140,85 @@ describe('a pan-like jump that was not a pan (a distant Go to on the host\'s con
     expect(own('host')).toEqual({ chrom: 'chr3', start: 10_000, end: 15_000 });
     expect(own('peer')).toEqual({ chrom: 'chr3', start: 10_000, end: 11_000 });
     expect(view()).toEqual({ chrom: 'chr3', start: 1_000, end: 2_000 });
+  });
+});
+
+describe('Back moves the locked panels the jump moved, decided when the jump was made (agy stabilize, finding 1)', () => {
+  const locked = (host: [number, number], peer: [number, number]) => useBrowserStore.setState({ chrom: 'chr3', start: 1_000, end: 2_000, panels: [
+    panel('host', { viewportOverride: { chrom: 'chr3', start: host[0], end: host[1] }, siteLocked: true }),
+    panel('peer', { viewportOverride: { chrom: 'chr3', start: peer[0], end: peer[1] }, siteLocked: true }),
+  ] } as never);
+
+  it('a nearby pan-like jump, then pans past it: Back still brings the locked panel and the main view back', () => {
+    locked([5_000, 6_000], [10_000, 11_000]);
+    st().recordJump('host', { likePan: true, to: { chrom: 'chr3', start: 5_500, end: 6_500 } });
+    st().setPanelViewport('host', 5_500, 6_500);
+    for (const x of [6_100, 6_700, 7_300]) st().setPanelViewport('host', x, x + 1_000);   // unrecorded pans
+    expect(own('peer')).toEqual({ chrom: 'chr3', start: 12_300, end: 13_300 });
+    st().goBack();
+    expect(own('host')).toEqual({ chrom: 'chr3', start: 5_000, end: 6_000 });
+    expect(own('peer')).toEqual({ chrom: 'chr3', start: 10_000, end: 11_000 });
+    expect(view()).toEqual({ chrom: 'chr3', start: 1_000, end: 2_000 });
+  });
+
+  it('a distant pan-like jump, then a zoom out over the old view: Back leaves the locked panel where the user put it', () => {
+    locked([5_000, 6_000], [10_000, 11_000]);
+    st().recordJump('host', { likePan: true, to: { chrom: 'chr3', start: 20_000, end: 21_000 } });
+    st().setPanelViewport('host', 20_000, 21_000);
+    expect(own('peer')).toEqual({ chrom: 'chr3', start: 10_000, end: 11_000 });
+    st().setPanelViewport('host', 4_000, 24_000);                                          // the user's own zoom
+    const peerAfterZoom = own('peer');
+    st().goBack();
+    expect(own('host')).toEqual({ chrom: 'chr3', start: 5_000, end: 6_000 });
+    expect(own('peer')).toEqual(peerAfterZoom);
+  });
+
+  it('a main-view jump to a wider view nearby that moved no locked panel: Back moves none either', () => {
+    useBrowserStore.setState({ chrom: 'chr3', start: 1_000, end: 2_000, panels: [
+      panel('peer', { viewportOverride: { chrom: 'chr3', start: 20_000, end: 21_000 }, siteLocked: true }),
+    ] } as never);
+    st().recordJump(null, { to: { chrom: 'chr3', start: 5_000, end: 10_000 } });
+    st().setViewport('chr3', 5_000, 10_000);
+    expect(own('peer')).toEqual({ chrom: 'chr3', start: 20_000, end: 21_000 });
+    st().goBack();
+    expect(view()).toEqual({ chrom: 'chr3', start: 1_000, end: 2_000 });
+    expect(own('peer')).toEqual({ chrom: 'chr3', start: 20_000, end: 21_000 });
+    st().goForward();
+    expect(own('peer')).toEqual({ chrom: 'chr3', start: 20_000, end: 21_000 });
+  });
+
+  it('the same for the locus box (it passes where it goes)', async () => {
+    useBrowserStore.setState({ panels: [panel('peer', { viewportOverride: { chrom: 'chr3', start: 20_000, end: 21_000 }, siteLocked: true })] } as never);
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    act(() => root.render(<SmartSearchInput />));
+    const el = host.querySelector('[data-testid="location-search-input"]') as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+    act(() => { el.focus(); setter.call(el, 'chr3:5,000-10,000'); el.dispatchEvent(new Event('input', { bubbles: true })); });
+    await act(async () => { host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); });
+    st().goBack();
+    expect(view()).toEqual({ chrom: 'chr3', start: 1_000, end: 2_000 });
+    expect(own('peer')).toEqual({ chrom: 'chr3', start: 20_000, end: 21_000 });
+    act(() => root.unmount());
+    host.remove();
+  });
+});
+
+describe('a read found from a panel\'s own locus box (agy stabilize, finding 2)', () => {
+  it('is a jump Back undoes on that panel', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({ scope: 'region', complete: true, not_found: [],
+        found: [{ name: 'r1', read_id: 'r1', dataset_id: 'a', chrom: 'chr3', start: 50_000, end: 52_000, strand: '+' }] }),
+      text: async () => '' }) as unknown as Response));
+    useBrowserStore.setState({ navigationMode: 'perPanel', datasets: [{ id: 'a', label: 'A', data_type: 'bam' }] as never,
+      panels: [panel('a', { viewportOverride: { chrom: 'chr3', start: 1_000, end: 2_000 } })] } as never);
+    const res = await goToReads(['r1'], { viewport: { chrom: 'chr3', start: 1_000, end: 2_000 }, datasetIds: ['a'], target: { panelId: 'a' },
+      navigate: (c, s, e) => st().navigatePanel('a', c, s, e) });
+    expect(res.ok).toBe(true);
+    expect(own('a')!.start).toBeGreaterThan(40_000);
+    st().goBack();
+    expect(own('a')).toEqual({ chrom: 'chr3', start: 1_000, end: 2_000 });
   });
 });
 
