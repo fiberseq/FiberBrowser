@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_COLORMAP } from '../types';
+import { buildRuleMatchContext, readMatchesRule } from './ruleMatching';
 import {
   NUC_COARSE_CLASSES,
   NUC_SIZE_CLASS_COLORS,
@@ -135,6 +136,52 @@ describe('the nucsz index', () => {
     expect(nucSizeMarkAt(index, 210)?.coarse).toBe(1 + 16);
     expect(nucSizeMarkAt(index, 150)?.coarse).toBe(2);
     expect(nucSizeMarkAt(index, 300)).toBeNull();
+  });
+});
+
+describe('clipped overlapping footprints keep their own class', () => {
+  // A mono nucleosome [100, 247, 147] overlapping a short TF call [200, 220, 20], viewed at 205-215: both clip to
+  // [0, 10) and differ only by molecular length.
+  const clipped = {
+    intervals: [[0, 10, 147], [0, 10, 20]] as [number, number, number][],
+    quality_names: ['coarse', 'named', 'posterior', 'z'],
+    qualities: [[2 + 16, 1 + 16], [0, 0], [200, 210], [128, 60]],
+  };
+
+  it('keeps each mark\'s molecular length and matches on span and length', () => {
+    const index = buildNucSizeIndex(clipped)!;
+    expect(index.marks.map(m => m.len).sort((a, b) => a! - b!)).toEqual([20, 147]);
+    expect(nucSizeMarkFor(index, 0, 10, 20)?.coarse).toBe(1 + 16);
+    expect(nucSizeMarkFor(index, 0, 10, 147)?.coarse).toBe(2 + 16);
+  });
+
+  it('an ambiguous span gives no class rather than another footprint\'s', () => {
+    const index = buildNucSizeIndex(clipped)!;
+    expect(nucSizeMarkFor(index, 0, 10)).toBeNull();
+    expect(nucSizeMarkFor(index, 0, 10, 99)).toBeNull();
+    // Marks with the same bytes are not ambiguous.
+    const same = buildNucSizeIndex({ ...clipped, qualities: [[2, 2], [0, 0], [200, 200], [128, 128]] })!;
+    expect(nucSizeMarkFor(same, 0, 10)?.coarse).toBe(2);
+    // A piece of a clipped call (midpoint lookup) is told apart by length too.
+    expect(nucSizeMarkFor(index, 2, 8, 20)?.coarse).toBe(1 + 16);
+    expect(nucSizeMarkFor(index, 2, 8, 147)?.coarse).toBe(2 + 16);
+    expect(nucSizeMarkFor(index, 2, 8)).toBeNull();
+  });
+
+  it('hover takes the shorter footprint where clipped spans tie', () => {
+    expect(nucSizeMarkAt(buildNucSizeIndex(clipped), 5)?.len).toBe(20);
+  });
+
+  it('a TF item never takes the overlapping nucleosome\'s class in rule matching', () => {
+    const read = { id: 'r1', intervals: [] as [number, number, number][],
+      layers: { tf: { intervals: [[0, 10, 20]] as [number, number, number][] }, nucsz: clipped } };
+    const ctx = buildRuleMatchContext([], [], [], 0, 10, []);
+    const mono = nucSizeClassRules().find(r => r.nucCoarse?.[0] === 2)!;
+    // Rule matching passes the item's molecular length: the TF item gets its own short TF class, never the
+    // overlapping nucleosome's mono class.
+    expect(readMatchesRule(read, mono, ctx)).toBe(false);
+    expect(readMatchesRule(read, { ...mono, nucTf: null }, ctx)).toBe(false);
+    expect(readMatchesRule(read, { ...mono, nucCoarse: [1], nucTf: true }, ctx)).toBe(true);
   });
 });
 

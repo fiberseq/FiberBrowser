@@ -189,6 +189,27 @@ def test_graph_rows_carry_classes_on_call_pieces_and_a_segment_lane():
     assert marks_of(out) == 5
 
 
+def test_graph_call_never_takes_an_overlapping_footprints_class():
+    """A nucleosome [100, 247) whose midpoint falls inside a TF mark [170, 190) keeps its own mono class; a TF piece
+    keeps its own; a span shared by two marks with other bytes gives no class."""
+    from services.graph_panel.reads import _nuc_classes
+    layers = {'nucsz': {'intervals': [[100, 247, 147], [170, 190, 20]], 'quality_names': ['coarse', 'named', 'posterior', 'z'],
+                        'qualities': [[2, 17], [0, 0], [230, 200], [128, 40]]}}
+    out = {'nuc': {'iv': [[100, 247, 147]], 'id': [None], 'part': [None]},
+           'tf': {'iv': [[170, 190, 20]], 'id': [None], 'part': [None]}}
+    _nuc_classes(out, layers, 0, lambda a, b: True)
+    assert out['nuc']['cls'] == [2] and out['nuc']['zb'] == [128]
+    assert out['tf']['cls'] == [17] and out['tf']['zb'] == [40]
+    # A piece of the split nucleosome around the TF (same molecular length) still finds it.
+    out = {'nuc': {'iv': [[150, 200, 147]], 'id': [None], 'part': [None]}}
+    _nuc_classes(out, layers, 0, lambda a, b: True)
+    assert out['nuc']['cls'] == [2]
+    # No length, two marks with different bytes over the midpoint: no class rather than the wrong one.
+    out = {'nuc': {'iv': [[175, 185, None]], 'id': [None], 'part': [None]}}
+    _nuc_classes(out, layers, 0, lambda a, b: True)
+    assert 'cls' not in out['nuc']
+
+
 def test_an_empty_live_group_still_keeps_scan_marks_out(two_bams, tmp_path):
     """Codex A2-r1: a live configuration that gives a record no segment must not let a scan's older marks back."""
     from fiberhmm.scan import run_units

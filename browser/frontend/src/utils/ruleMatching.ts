@@ -531,14 +531,15 @@ export interface CompactReadLike {
 export function readMatchesRule(read: CompactReadLike, rule: ColorRule, ctx: RuleMatchContext): boolean {
   // Nucleosome conditions read each nuc/tf item's nucsz mark.
   const nucIndex = ruleHasNucConditions(rule) ? nucSizeIndex(read.layers?.nucsz) : null;
-  const markFor = (layerName: string, intStart: number, intEnd: number) => (
-    nucIndex && NUC_MARK_ITEM_LAYERS.has(layerName) ? nucSizeMarkFor(nucIndex, intStart, intEnd) : null
+  // The item's molecular length tells overlapping clipped footprints apart (same displayed span).
+  const markFor = (layerName: string, intStart: number, intEnd: number, size?: number) => (
+    nucIndex && NUC_MARK_ITEM_LAYERS.has(layerName) ? nucSizeMarkFor(nucIndex, intStart, intEnd, size) : null
   );
   // Top-level intervals are the primary 'footprint' layer, as the canvas names
   // them, so a rule targeting only other layers (e.g. TF) skips them.
   for (const [intStart, intEnd, size] of read.intervals) {
     if (size > 0 && footprintMatchesRule(
-      intStart, intEnd, size, rule, ctx, 'footprint', undefined, undefined, markFor('footprint', intStart, intEnd),
+      intStart, intEnd, size, rule, ctx, 'footprint', undefined, undefined, markFor('footprint', intStart, intEnd, size),
     )) return true;
   }
   for (const [layerName, layer] of Object.entries(read.layers ?? {})) {
@@ -560,7 +561,7 @@ export function readMatchesRule(read: CompactReadLike, rule: ColorRule, ctx: Rul
       }
       if (footprintMatchesRule(
         intStart, intEnd, size, rule, ctx, layerName, qualities, layer?.annotation_names?.[i],
-        markFor(layerName, intStart, intEnd),
+        markFor(layerName, intStart, intEnd, size),
       )) {
         return true;
       }

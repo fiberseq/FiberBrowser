@@ -760,7 +760,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
         // Pass the actual primary layer name so target-scoped rules can gate
         // correctly; split TF intervals are handled in the overlay loop.
         const colorHit = getColorHit(
-          adjustedStart, adjustedEnd, size, primaryLayer, nucIndex ? nucSizeMarkFor(nucIndex, intStart, intEnd) : null,
+          adjustedStart, adjustedEnd, size, primaryLayer, nucIndex ? nucSizeMarkFor(nucIndex, intStart, intEnd, size) : null,
         );
         let color = colorHit.color;
         let visualOpacity = colorHit.opacity;
@@ -1261,7 +1261,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
               }
               return intervalQualities;
             };
-            const itemNucMark = nucIndex && isTf ? nucSizeMarkFor(nucIndex, ls, le) : null;
+            const itemNucMark = nucIndex && isTf ? nucSizeMarkFor(nucIndex, ls, le, lsize) : null;
             for (const rule of activeColormap.rules) {
               // Non-TF layers: only consider rules that explicitly target this layer.
               if (!isTf && ((rule.targetLayers ?? []).length === 0 || !ruleTargetsLayer(rule, layerName))) continue;

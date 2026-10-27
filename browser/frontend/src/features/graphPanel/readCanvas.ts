@@ -3,16 +3,21 @@
  * colour, a haplotype stripe at its left end (the live-lift convention), nucleosomes and other calls in the
  * colormap's chromatin colours, FIRE/MSP with their accessibility opacity, m6A ticks, CIGAR deletions as a line
  * through the body, read insertions as small carets, and the walk across connector space or undrawn bp as a dashed
- * line (never body). Each band row is a molecule's record; rows show only data, the band a compact count.
+ * line (never body). Each band row is a molecule's record; rows show only data, the band a compact count. With the
+ * Nucleosomes layers on, size-class rules recolour nuc/tf calls by their class bytes and the segment lane is drawn
+ * at the bottom of each row, as on the read track (utils/nucLayers.ts, read-track/nucSegCanvas.ts).
  */
 import { LIVE_LIFT_COLORS } from '../../components/tracks/read-track/liveLiftCanvas';
 import { getClusterColor, getClusterLabel } from '../../components/tracks/read-track/constants';
 import { SV_COLORS } from '../../components/tracks/read-track/svDrawing';
+import { drawNucSegLane } from '../../components/tracks/read-track/nucSegCanvas';
+import { inkOn } from '../../components/tracks/read-track/ReadTrackCanvas';
+import { describeNucClassBytes, describeNucSegRow, isNucSegEvent, nucSegLaneGeometry, type NucSegRow, type NucSegRows } from '../../utils/nucLayers';
 
 const SV_CLIP_COLOR = SV_COLORS.clip;
 import type { HostLane } from './memberBands';
-import type { ChromatinStyle } from './chromatinStyle';
-import type { CallPiece, PackedLane, PlacedMolecule } from './readGeometry';
+import { graphNucMark, type CallStyle, type ChromatinStyle } from './chromatinStyle';
+import type { CallPiece, PackedLane, PlacedMolecule, SegPiece } from './readGeometry';
 import type { Scene } from './scene';
 
 export const READ_ROW_HEIGHT = 7;
@@ -22,14 +27,17 @@ export const READ_INSERTION_MIN_BP = 10;
 
 export interface ReadLayers { nuc: boolean; tf: boolean; msp: boolean; m6a: boolean;
   /** Soft clips of at least this length, as the read tracks' SV display draws them (null or absent: off). */
-  clipsMinLen?: number | null }
+  clipsMinLen?: number | null;
+  /** Nucleosomes group: size-class rules read each call's class bytes (`nucsz`), the segment lane (`nucseg`). */
+  nucsz?: boolean;
+  nucseg?: boolean }
 
 /**
  * The layers a graph read band draws: the toolbar's Layers row (the store's `enabledModTypes`, read the way the
  * read track reads it) and, under it, the panel's own Reads menu. Nucleosomes follow Nuc (as the read track's for
  * reads with a nuc layer, which graph reads always have); MSPs follow Accessibility (FIRE, or its legacy MSP key); TF follows
- * TF; m6A follows m6A (or its legacy `mod` alias). A layer the graph payload does not carry (5mC, deamination, ...)
- * is simply never drawn.
+ * TF; m6A follows m6A (or its legacy `mod` alias); size classes and the segment lane follow the Nucleosomes group.
+ * A layer the graph payload does not carry (5mC, deamination, ...) is simply never drawn.
  */
 export function effectiveReadLayers(enabled: Record<string, boolean | undefined> | null | undefined,
   panel?: Partial<ReadLayers> | null): ReadLayers {
@@ -42,11 +50,14 @@ export function effectiveReadLayers(enabled: Record<string, boolean | undefined>
     m6a: Boolean(g.m6a || g.mod),
   };
   return { nuc: global.nuc && panel?.nuc !== false, msp: global.msp && panel?.msp !== false,
-    tf: global.tf && panel?.tf !== false, m6a: global.m6a && panel?.m6a !== false };
+    tf: global.tf && panel?.tf !== false, m6a: global.m6a && panel?.m6a !== false,
+    nucsz: Boolean(g.nucsz), nucseg: Boolean(g.nucseg) };
 }
 
 /** What one draw put on the canvas, per layer (e2e and tests read it). */
-export interface ReadDrawStats { nuc: number; tf: number; msp: number; m6a: number; m6aDensity: number; outlined?: number; clips?: number }
+export interface ReadDrawStats { nuc: number; tf: number; msp: number; m6a: number; m6aDensity: number; outlined?: number; clips?: number;
+  /** Segment-lane rows drawn (segments and events). */
+  nucSeg?: number }
 
 export function emptyDrawStats(): ReadDrawStats {
   return { nuc: 0, tf: 0, msp: 0, m6a: 0, m6aDensity: 0 };
@@ -84,8 +95,33 @@ export function bandHeight(lane: PackedLane | undefined, rowHeight = READ_ROW_HE
   return lane.rows.length * (rowHeight + gap) + gap;
 }
 
-function drawCall(ctx: CanvasRenderingContext2D, c: CallPiece, y: number, h: number, style: ChromatinStyle, pxPerBp: number, alpha = 1) {
-  const s = style.call(c.layer, c.call[2], c.qualities);
+/** A call piece's style: its whole call's size and qualities, and its class bytes while size classes are on (off:
+ * no mark, so class rules match nothing). */
+export function callPieceStyle(style: ChromatinStyle, c: CallPiece, nucClasses: boolean): CallStyle | null {
+  return style.call(c.layer, c.call[2], c.qualities, nucClasses ? graphNucMark(c.cls, c.zb, c.call[0], c.call[1]) : null);
+}
+
+/** A molecule's segment-lane pieces as lane rows in screen x, shifted by `base` so none starts left of 0 (the lane
+ * renderer clips rows to [0, regionWidth)). */
+function segLaneRows(pieces: SegPiece[], base: number): NucSegRows {
+  const rows: NucSegRows = { segments: [], events: [] };
+  for (const p of pieces) {
+    const row: NucSegRow = { start: p.x0 - base, end: p.x1 - base, code: p.code, value: p.value, extra: p.extra };
+    (isNucSegEvent(p.code) ? rows.events : rows.segments).push(row);
+  }
+  return rows;
+}
+
+/** Draw a molecule's segment lane at the bottom of its row (the read track's renderer); returns the rows drawn. */
+export function drawSegLane(ctx: CanvasRenderingContext2D, pieces: SegPiece[], y: number, h: number, ground: string, dark: boolean): number {
+  if (!pieces.length || !nucSegLaneGeometry(y, h)) return 0;
+  const base = pieces.reduce((t, p) => Math.min(t, p.x0), 0);
+  return drawNucSegLane(ctx, segLaneRows(pieces, base), { y, bodyH: h, linkedOffset: 0, regionWidth: Infinity, toX: rel => rel + base, ground, dark });
+}
+
+function drawCall(ctx: CanvasRenderingContext2D, c: CallPiece, y: number, h: number, style: ChromatinStyle, pxPerBp: number, alpha = 1,
+  nucClasses = false) {
+  const s = callPieceStyle(style, c, nucClasses);
   if (!s) return;
   const x = c.x0, w = Math.max(0.75, c.x1 - c.x0);
   ctx.globalAlpha = s.opacity * alpha;
@@ -110,6 +146,7 @@ export function drawReads(ctx: CanvasRenderingContext2D, scene: Scene, lanes: Ma
   layers: ReadLayers, colors: Record<string, string>, rowHeight = READ_ROW_HEIGHT, gap = READ_ROW_GAP, alpha = 1,
   stats?: ReadDrawStats, deco?: ReadDecoration): ReadHit[] {
   const hits: ReadHit[] = [];
+  const segDark = layers.nucseg ? inkOn(style.body).dark : false;
   const pxPerBpOf = (m: PlacedMolecule) => {
     const bp = m.body.reduce((t, b) => t + (b.s1 - b.s0), 0);
     const px = m.body.reduce((t, b) => t + (b.x1 - b.x0), 0);
@@ -146,7 +183,7 @@ export function drawReads(ctx: CanvasRenderingContext2D, scene: Scene, lanes: Ma
         ctx.clip();
         for (const layer of ['nuc', 'tf', 'msp'] as const) {
           if (!layers[layer]) continue;
-          for (const c of m.calls) if (c.layer === layer) { drawCall(ctx, c, y, rowHeight, style, pxPerBp, alpha); if (stats) stats[layer]++; }
+          for (const c of m.calls) if (c.layer === layer) { drawCall(ctx, c, y, rowHeight, style, pxPerBp, alpha, Boolean(layers.nucsz)); if (stats) stats[layer]++; }
         }
         if (layers.m6a) {
           ctx.fillStyle = style.m6a;
@@ -159,6 +196,11 @@ export function drawReads(ctx: CanvasRenderingContext2D, scene: Scene, lanes: Ma
             ctx.fillRect(d.x0, y, Math.max(0.5, d.x1 - d.x0), rowHeight);
           }
           ctx.globalAlpha = alpha;
+        }
+        // The segment lane: a thin strip at the bottom of the row, over the calls.
+        if (layers.nucseg && m.seg?.length) {
+          const n = drawSegLane(ctx, m.seg, y, rowHeight, style.body, segDark);
+          if (stats) stats.nucSeg = (stats.nucSeg ?? 0) + n;
         }
         ctx.restore();
         // CIGAR holes inside drawn geometry, where at least a pixel: a deletion is a dark line, a skip (N) dashed.
@@ -288,20 +330,40 @@ export function describeReadHit(hit: ReadHit, x: number, datasetLabel: (id: stri
   const m = hit.molecule, r = m.read;
   const head = `${r.q} · ${datasetLabel(r.d)}${r.lib ? ` (library ${r.lib + 1})` : ''} · ${laneLabel(r.b)} ${r.c}:${where(r.s)}-${where(r.e)} · alignment orientation ${r.st}${r.sup ? ' · supplementary' : ''}`;
   const near = (a: number, b: number) => x >= a - 0.5 && x <= b + 0.5;
+  // The segment lane under the pointer (while drawn): the segment's state, then any disruption event there.
+  const lane = !layers || layers.nucseg ? describeSegAt(m.seg, near) : null;
+  const withLane = (text: string) => (lane ? `${text} — ${lane}` : text);
   // Only calls of a drawn layer are named (a hidden layer is not under the pointer).
   const call = (['msp', 'tf', 'nuc'] as const).filter(l => !layers || layers[l]).map(l => m.calls.find(c => c.layer === l && near(c.x0, c.x1))).find(Boolean);
   if (call) {
     const name = call.layer === 'nuc' ? 'nucleosome' : call.layer === 'tf' ? 'TF footprint' : call.inferred ? 'MSP (inferred from nucleosome gaps)' : 'MSP';
     const q = Object.entries(call.qualities).map(([k, v]) => `${k} ${v}`).join(', ');
     const pieces = m.calls.filter(c => c.layer === call.layer && c.index === call.index).length;
-    return `${head} — ${name} ${where(call.call[2])} bp at ${where(call.call[0])}-${where(call.call[1])}${call.id ? ` (${call.id})` : ''}${q ? ` · ${q}` : ''}${pieces > 1 ? ` · drawn in ${pieces} pieces` : ''}`;
+    // Its size class and z (while size classes are on).
+    const cls = (!layers || layers.nucsz) && call.cls != null ? ` · ${describeNucClassBytes(call.cls, call.zb)}` : '';
+    return withLane(`${head} — ${name} ${where(call.call[2])} bp at ${where(call.call[0])}-${where(call.call[1])}${call.id ? ` (${call.id})` : ''}${cls}${q ? ` · ${q}` : ''}${pieces > 1 ? ` · drawn in ${pieces} pieces` : ''}`);
   }
   const ins = m.ins.find(i => Math.abs(i.x - x) <= 2 && i.len >= READ_INSERTION_MIN_BP);
-  if (ins) return `${head} — read insertion of ${where(ins.len)} bp at ${r.c}:${where(ins.pos)} (no path sequence)`;
+  if (ins) return withLane(`${head} — read insertion of ${where(ins.len)} bp at ${r.c}:${where(ins.pos)} (no path sequence)`);
   const hole = m.holes.find(h => near(h.x0, h.x1));
-  if (hole) return `${head} — ${hole.kind === 'D' ? 'deletion' : 'skipped (N)'} of ${where(hole.s1 - hole.s0)} bp in the read`;
-  if (m.marksHidden) return `${head} — calls and m6A not drawn (the panel's mark budget; fewer rows or a smaller window shows them)`;
+  if (hole) return withLane(`${head} — ${hole.kind === 'D' ? 'deletion' : 'skipped (N)'} of ${where(hole.s1 - hole.s0)} bp in the read`);
+  if (m.marksHidden) {
+    const what = layers?.nucseg && r.nseg?.iv.length ? 'calls, m6A and the segment lane' : 'calls and m6A';
+    return `${head} — ${what} not drawn (the panel's mark budget; fewer rows or a smaller window shows them)`;
+  }
   const c = m.connectors.find(k => near(k.x0, k.x1));
   if (c) return `${head} — ${c.kind === 'unplaced' ? 'walks sequence not drawn here (summarised or clustered)' : 'walks on (connector space, no sequence)'}`;
-  return head;
+  return withLane(head);
+}
+
+/** The segment-lane row and events under the pointer, as hover text (null: none there). */
+function describeSegAt(pieces: SegPiece[] | undefined, near: (a: number, b: number) => boolean): string | null {
+  if (!pieces?.length) return null;
+  const under = pieces.filter(p => near(p.x0, p.x1));
+  const row = (p: SegPiece): NucSegRow => ({ start: p.row[0], end: p.row[1], code: p.code, value: p.value, extra: p.extra });
+  const segment = under.find(p => !isNucSegEvent(p.code));
+  const events = under.filter(p => isNucSegEvent(p.code)).filter((p, i, all) => all.findIndex(q => q.index === p.index) === i);
+  const parts = [...(segment ? [`array: ${describeNucSegRow(row(segment))}`] : []),
+    ...events.map(e => `disrupted: ${describeNucSegRow(row(e))}`)];
+  return parts.length ? parts.join('; ') : null;
 }

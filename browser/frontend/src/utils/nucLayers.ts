@@ -125,6 +125,9 @@ export interface NucSizeMark {
   named: number;
   posterior: number;
   z: number;
+  /** The footprint's molecular length (the interval's third value), kept through clipping: two overlapping
+   * footprints clipped to the same displayed span still differ by it. Absent: unknown. */
+  len?: number;
 }
 
 /** A read's `nucsz` marks sorted by start, for lookups by item span or position. */
@@ -161,7 +164,7 @@ export function buildNucSizeIndex(layer: LayerLike): NucSizeIndex | null {
   const marks: NucSizeMark[] = [];
   let maxLen = 0;
   for (let i = 0; i < intervals.length; i++) {
-    const [start, end] = intervals[i];
+    const [start, end, len] = intervals[i];
     const c = coarse[i];
     if (c === undefined || !Number.isFinite(start) || !Number.isFinite(end)) continue;
     marks.push({
@@ -171,6 +174,7 @@ export function buildNucSizeIndex(layer: LayerLike): NucSizeIndex | null {
       named: q[1]?.[i] ?? 0,
       posterior: q[2]?.[i] ?? 0,
       z: q[3]?.[i] ?? NUC_Z_MISSING,
+      ...(Number.isFinite(len) ? { len } : {}),
     });
     if (end - start > maxLen) maxLen = end - start;
   }
@@ -201,33 +205,58 @@ function upperBound(marks: NucSizeMark[], pos: number): number {
   return lo;
 }
 
-/**
- * The mark of an item spanning [start, end) (view-relative, the payload's own frame): the mark with the identical
- * span, else the mark containing the item's midpoint. Calls split at deletions or lift gaps give several items that
- * share one mark. When marks overlap (a TF call over a nucleosome), the one overlapping the item most wins.
- */
-export function nucSizeMarkFor(index: NucSizeIndex | null | undefined, start: number, end: number): NucSizeMark | null {
-  if (!index) return null;
-  const { marks } = index;
-  for (let k = lowerBound(marks, start); k < marks.length && marks[k].start === start; k++) {
-    if (marks[k].end === end) return marks[k];
-  }
-  const mid = (start + end) / 2;
-  let best: NucSizeMark | null = null;
-  let bestOverlap = -Infinity;
-  for (let k = upperBound(marks, mid) - 1; k >= 0 && marks[k].start + index.maxLen > mid; k--) {
-    const mark = marks[k];
-    if (mark.end <= mid) continue;
-    const overlap = Math.min(end, mark.end) - Math.max(start, mark.start);
-    if (overlap > bestOverlap || (overlap === bestOverlap && best && mark.end - mark.start < best.end - best.start)) {
-      best = mark;
-      bestOverlap = overlap;
-    }
-  }
-  return best;
+function sameMarkBytes(a: NucSizeMark, b: NucSizeMark): boolean {
+  return a.coarse === b.coarse && a.named === b.named && a.posterior === b.posterior && a.z === b.z;
 }
 
-/** The smallest mark covering a view-relative position (hover). */
+/**
+ * The mark of an item spanning [start, end) (view-relative, the payload's own frame) whose molecular length is `len`
+ * (the item interval's third value): the mark with the identical span, else the mark containing the item's
+ * midpoint. Calls split at deletions or lift gaps give several items that share one mark. When marks overlap (a TF
+ * call over a nucleosome), a mark of the item's own length wins, else the one overlapping the item most. Clipping can
+ * give overlapping footprints the same displayed span: those are told apart by length, and a tie that is still
+ * ambiguous (marks with different bytes) gives no mark rather than another footprint's.
+ */
+export function nucSizeMarkFor(index: NucSizeIndex | null | undefined, start: number, end: number, len?: number): NucSizeMark | null {
+  if (!index) return null;
+  const { marks } = index;
+  const hasLen = len !== undefined && Number.isFinite(len);
+  const ofLen = (list: NucSizeMark[]) => {
+    const same = hasLen ? list.filter(mark => mark.len === len) : [];
+    return same.length ? same : list;
+  };
+  const exact: NucSizeMark[] = [];
+  for (let k = lowerBound(marks, start); k < marks.length && marks[k].start === start; k++) {
+    if (marks[k].end === end) exact.push(marks[k]);
+  }
+  if (exact.length) {
+    const pool = ofLen(exact);
+    return pool.every(mark => sameMarkBytes(mark, pool[0])) ? pool[0] : null;
+  }
+  const mid = (start + end) / 2;
+  const covering: NucSizeMark[] = [];
+  for (let k = upperBound(marks, mid) - 1; k >= 0 && marks[k].start + index.maxLen > mid; k--) {
+    if (marks[k].end > mid) covering.push(marks[k]);
+  }
+  let best: NucSizeMark | null = null;
+  let bestOverlap = -Infinity;
+  let ambiguous = false;
+  for (const mark of ofLen(covering)) {
+    const overlap = Math.min(end, mark.end) - Math.max(start, mark.start);
+    const span = mark.end - mark.start;
+    if (!best || overlap > bestOverlap || (overlap === bestOverlap && span < best.end - best.start)) {
+      best = mark;
+      bestOverlap = overlap;
+      ambiguous = false;
+    } else if (overlap === bestOverlap && span === best.end - best.start && !sameMarkBytes(mark, best)) {
+      ambiguous = true;
+    }
+  }
+  return ambiguous ? null : best;
+}
+
+/** The smallest mark covering a view-relative position (hover); among marks clipped to the same span, the shortest
+ * footprint. */
 export function nucSizeMarkAt(index: NucSizeIndex | null | undefined, pos: number): NucSizeMark | null {
   if (!index) return null;
   const { marks } = index;
@@ -235,7 +264,8 @@ export function nucSizeMarkAt(index: NucSizeIndex | null | undefined, pos: numbe
   for (let k = upperBound(marks, pos) - 1; k >= 0 && marks[k].start + index.maxLen > pos; k--) {
     const mark = marks[k];
     if (mark.end <= pos) continue;
-    if (!best || mark.end - mark.start < best.end - best.start) best = mark;
+    const span = mark.end - mark.start, bestSpan = best ? best.end - best.start : Infinity;
+    if (!best || span < bestSpan || (span === bestSpan && (mark.len ?? Infinity) < (best.len ?? Infinity))) best = mark;
   }
   return best;
 }
@@ -249,6 +279,15 @@ export function describeNucSizeMark(mark: NucSizeMark): string {
   parts.push(z === null ? 'z missing' : `z ${formatSigned(z)}`);
   parts.push(`P ${Math.round(100 * nucPosteriorFromByte(mark.posterior))}%`);
   if (nucCoarseIsTf(mark.coarse)) parts.push('TF call or overlaps one');
+  return parts.join(' · ');
+}
+
+/** One hover line for class and z bytes alone (graph reads carry no posterior), e.g. "mono · z −0.4". */
+export function describeNucClassBytes(coarse: number, zByte: number | null | undefined): string {
+  const parts = [nucCoarseName(nucCoarseCode(coarse))];
+  const z = zByte == null ? null : nucZFromByte(zByte);
+  parts.push(z === null ? 'z missing' : `z ${formatSigned(z)}`);
+  if (nucCoarseIsTf(coarse)) parts.push('TF call or overlaps one');
   return parts.join(' · ');
 }
 

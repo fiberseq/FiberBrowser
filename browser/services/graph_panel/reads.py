@@ -309,23 +309,35 @@ def _nuc_classes(out: dict, layers: dict, origin: int, keep) -> None:
         quals = sz.get("qualities") or []
         q0 = quals[0] if quals else None
         qz = quals[names.index("z")] if "z" in names and names.index("z") < len(quals) else (quals[3] if len(quals) > 3 else None)
-        marks = sorted((int(iv[0]) + origin, int(iv[1]) + origin, i) for i, iv in enumerate(sz["intervals"]))
+        marks = sorted((int(iv[0]) + origin, int(iv[1]) + origin, i, int(iv[2]) if len(iv) > 2 else None)
+                       for i, iv in enumerate(sz["intervals"]))
         starts = [m[0] for m in marks]
         import bisect
+
+        def bytes_of(i):
+            return (int(q0[i]) if q0 is not None else None, int(qz[i]) if qz is not None else None)
+
+        def mark_for(a, b, size):
+            # The piece's own footprint: among the marks holding its midpoint, the one with its span and molecular
+            # length, then its length; overlapping footprints with other bytes never lend theirs (no class instead).
+            mid = (a + b) // 2
+            k = bisect.bisect_right(starts, mid) - 1
+            held = [marks[j] for j in range(k, max(-1, k - 16), -1)   # marks starting at or before mid (few overlap)
+                    if marks[j][0] <= mid < max(marks[j][1], marks[j][0] + 1)]
+            for pool in ([m for m in held if m[0] == a and m[1] == b and m[3] == size],
+                         [m for m in held if size is not None and m[3] == size],
+                         [m for m in held if m[0] == a and m[1] == b], held):
+                if pool:
+                    first = bytes_of(pool[0][2])
+                    return pool[0][2] if all(bytes_of(m[2]) == first for m in pool) else None
+            return None
         for name in ("nuc", "tf"):
             layer = out.get(name)
             if not layer:
                 continue
             cls, zb = [], []
-            for a, b, _size in layer["iv"]:
-                mid = (int(a) + int(b)) // 2
-                k = bisect.bisect_right(starts, mid) - 1
-                hit = None
-                for j in range(k, max(-1, k - 8), -1):   # marks starting at or before mid (few overlap)
-                    m0, m1, i = marks[j]
-                    if m0 <= mid < max(m1, m0 + 1):
-                        hit = i
-                        break
+            for a, b, size in layer["iv"]:
+                hit = mark_for(int(a), int(b), int(size) if size is not None else None)
                 cls.append(int(q0[hit]) if hit is not None and q0 is not None else None)
                 zb.append(int(qz[hit]) if hit is not None and qz is not None else None)
             if any(c is not None for c in cls):

@@ -1372,7 +1372,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
           model.stats.unplaced ? `${model.stats.unplaced} unplaced runs` : null,
           model.stats.unresolved ? `${model.stats.unresolved} unresolved` : null,
           ...model.summaries.slice(0, 2),
-          readsSummary(reads, readLayout),
+          readsSummary(reads, readLayout, Boolean(readLayers.nucseg)),
           changedBindings.length ? `not drawn: ${changedBindings.map(b => b.label).join(', ')} changed since this view was saved (Reads menu binds it again)` : null,
           response?.cached ? 'cached' : response?.timings.total_ms != null ? `${response.timings.total_ms < 10 ? response.timings.total_ms.toFixed(1) : Math.round(response.timings.total_ms)} ms` : null,
         ].filter(Boolean).join(' · ')
@@ -1487,8 +1487,8 @@ const OMISSION_LABELS: Record<string, string> = {
 
 /** The status line's reads part: records drawn, molecules, sampling and every omission (never silent). */
 function readsSummary(reads: { response: GraphReadsResponse | null; loading: boolean; error: GraphApiError | null },
-  layout: { placed: { molecules: PlacedMolecule[]; offLane: number; unplacedBp: number; empty: number; m6aAsDensity: boolean; marksHidden: number };
-    lanes: Map<string, PackedLane> } | null): string | null {
+  layout: { placed: { molecules: PlacedMolecule[]; offLane: number; unplacedBp: number; empty: number; m6aAsDensity: boolean; marksHidden: number;
+    segHidden?: number }; lanes: Map<string, PackedLane> } | null, segLane = false): string | null {
   if (reads.error) return `reads: ${reads.error.message}`;
   if (!reads.response) return reads.loading ? 'loading reads…' : null;
   const rep = reads.response.report;
@@ -1505,7 +1505,9 @@ function readsSummary(reads: { response: GraphReadsResponse | null; loading: boo
   if (omitted.length) parts.push(`omitted: ${omitted.join(', ')}`);
   if (rep.shared_qnames) parts.push(`${rep.shared_qnames} QNAMEs in two libraries (kept apart)`);
   if (layout?.placed.m6aAsDensity) parts.push('m6A as density (mark budget)');
-  if (layout?.placed.marksHidden) parts.push(`calls not drawn on ${layout.placed.marksHidden} (mark budget)`);
+  if (layout?.placed.marksHidden) {
+    parts.push(`calls${segLane && layout.placed.segHidden ? ' and segment lanes' : ''} not drawn on ${layout.placed.marksHidden} (mark budget)`);
+  }
   if (layout?.placed.empty) parts.push(`${layout.placed.empty} with nothing in the drawn walk`);
   if (layout?.placed.offLane) parts.push(`${layout.placed.offLane} on paths not shown`);
   if (layout?.placed.unplacedBp) parts.push(`${layout.placed.unplacedBp.toLocaleString('en-US')} read bp not drawn (summarised geometry)`);

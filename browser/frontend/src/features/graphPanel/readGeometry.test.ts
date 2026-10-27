@@ -272,7 +272,7 @@ describe('graph read bands follow the toolbar Layers row', () => {
 
   it('reads the store toggles the way the read track does (aliases included)', () => {
     expect(effectiveReadLayers({ nuc: true, footprint: true, tf: true, fire: false, msp: false, m6a: false, mod: false }))
-      .toEqual({ nuc: true, tf: true, msp: false, m6a: false });
+      .toEqual({ nuc: true, tf: true, msp: false, m6a: false, nucsz: false, nucseg: false });
     expect(effectiveReadLayers({ m6a: false, mod: true }).m6a).toBe(true);
     expect(effectiveReadLayers({ fire: false, msp: true }).msp).toBe(true);
     expect(effectiveReadLayers({ fire: true }).msp).toBe(true);

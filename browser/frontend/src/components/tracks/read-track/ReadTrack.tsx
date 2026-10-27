@@ -929,7 +929,7 @@ export function ReadTrack({
 
         const ruleId = getMatchingRuleId(
           intervalStart, intervalEnd, size, metaprofileRules, ruleCtx,
-          nucIndex ? nucSizeMarkFor(nucIndex, intervalStart, intervalEnd) : null,
+          nucIndex ? nucSizeMarkFor(nucIndex, intervalStart, intervalEnd, size) : null,
         );
 
         if (ruleId && ruleDiffs[ruleId]) {
