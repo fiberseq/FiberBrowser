@@ -17,18 +17,18 @@ import { liftHapLabels } from './types';
 import { liveLiftHaplotypeColor, registerHaplotypeLabels } from './palette';
 import { LiftedPanelLinkItems, registerLiftLinkingUi } from './linking/register';
 import { liftedOpenView } from '../graphPanel/handoff';
-import { isHost } from '../graphPanel/hostMode';
+import { isHost, membersOf } from '../graphPanel/hostMode';
 import type { PanelConfig } from '../../types';
 import { notePendingGraphOpen } from '../graphPanel/openAsGraph';
 import { offerGraphView } from '../graphPanel/graphOffer';
 import { SESSION_RESTORED_EVENT, sessionRestoresInFlight } from '../../utils/sessionRestore';
 
-/** The haplotypes a graph host of a lifted dataset draws: its own and those of its folded members of the same dataset,
- * in the dataset's order (null: not a host drawing its graph, or a pooled one, which draws every haplotype anyway). */
+/** The haplotypes a graph host of a lifted dataset draws: its own and those of its members of the same dataset, in the
+ * dataset's order. A popped-out member is still drawn in the graph (its band, as membersOf lists it), so it counts too.
+ * Null: not a host drawing its graph, or a pooled one, which draws every haplotype anyway. */
 export function graphDrawnHaps(panels: readonly PanelConfig[], panel: PanelConfig, labels: readonly string[]): string[] | null {
   if (!panel.liftHap || !isHost(panel) || panel.graphView?.handoff?.shown === 'linear') return null;
-  const haps = new Set([panel.liftHap, ...panels.filter(p => p.graphMemberOf === panel.id && p.collapsed && p.datasetId === panel.datasetId && p.liftHap)
-    .map(p => p.liftHap!)]);
+  const haps = new Set(membersOf(panels, panel).map(m => m.panel).filter(p => p.datasetId === panel.datasetId && p.liftHap).map(p => p.liftHap!));
   if (haps.size < 2) return null;
   return [...labels.filter(l => haps.has(l)), ...[...haps].filter(h => !labels.includes(h))];
 }
