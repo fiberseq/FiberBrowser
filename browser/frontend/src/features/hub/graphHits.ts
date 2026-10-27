@@ -5,8 +5,10 @@
  * share its sequence, and a MAT/PAT hit inside an insertion is drawn on the inserted sequence of its carriers only.
  * A hit without graph columns but placed on this genome is outlined over its target span across the lanes.
  *
- * Hits come from the hub's hits in view (the scan sets) and from the hub selection; selected ones are drawn bold.
- * A click on an outline selects its hit (shift adds), as a click on its hub row does.
+ * Hits come from the hub's hits in view (the scan sets) and from the hub selection. Unselected hits are a faint
+ * dotted box on their carriers' lane tubes; selected ones are filled, on the tubes and on those lanes' read bands.
+ * Shift-click inside a box adds or removes its hit in the hub selection (a plain click on a tube keeps selecting the
+ * graph locus); a plain click on a selected hit's read band selects it alone.
  */
 import { useBrowserStore } from '../../stores/browserStore';
 import type { GraphTopology } from '../graphPanel/types';
@@ -35,8 +37,9 @@ function xAt(o: Scene['occurrences'][number], p: number): number {
   return o.dir === 1 ? o.x0 + u * (o.x1 - o.x0) : o.x1 - u * (o.x1 - o.x0);
 }
 
-/** Lane spans (x ranges per lane) of a hit's columns on a scene. */
-export function columnSpans(scene: Scene, topology: GraphTopology, columns: GraphAlias['columns']): Map<string, [number, number]> {
+/** Lane spans (x ranges per lane) of a hit's columns on a scene. `by: 'path'`: per carrier path instead (a carrier
+ * drawn on a stripe of another lane's shared tube counts for its own path, whose read band is its own). */
+export function columnSpans(scene: Scene, topology: GraphTopology, columns: GraphAlias['columns'], by: 'lane' | 'path' = 'lane'): Map<string, [number, number]> {
   const runs = new Map<string, Array<[number, number]>>();
   for (const [node, a, b] of columns) runs.set(node, [...(runs.get(node) ?? []), [a, b]]);
   const lengths = new Map(topology.nodes.map(n => [n.id, n.length]));
@@ -54,8 +57,9 @@ export function columnSpans(scene: Scene, topology: GraphTopology, columns: Grap
       if (hi <= lo) continue;
       const xa = xAt(o, lo), xb = xAt(o, hi);
       const x0 = Math.min(xa, xb), x1 = Math.max(xa, xb);
-      const have = out.get(o.lane);
-      out.set(o.lane, have ? [Math.min(have[0], x0), Math.max(have[1], x1)] : [x0, x1]);
+      const at = by === 'lane' ? o.lane : o.path;
+      const have = out.get(at);
+      out.set(at, have ? [Math.min(have[0], x0), Math.max(have[1], x1)] : [x0, x1]);
     }
   }
   return out;
@@ -85,26 +89,34 @@ export function hubGraphOutlines(scene: Scene | null, topology: GraphTopology | 
     const label = hit.label || hit.typeId;
     const g = hit.graph;
     if (g && g.registration === registrationId && g.target === target) {
+      // Each carrier lane's tube; a selected hit also its lane's read band (bands sit below all the lanes).
+      const base = (x0: number, x1: number) => ({ key, setId: hit.setId, hitId: hit.hitId, label, selected, x0, x1: Math.max(x1, x0 + 2), kind: 'columns' as const });
       for (const [lane, [x0, x1]] of columnSpans(scene, topology, g.columns)) {
         const row = rowOf.get(lane);
-        if (!row) continue;
-        const y1 = row.bandHeight > 0 ? row.bandTop + row.bandHeight : row.top + row.height;
-        out.push({ key, setId: hit.setId, hitId: hit.hitId, label, selected, x0, x1: Math.max(x1, x0 + 2), y0: row.top, y1, kind: 'columns' });
+        if (row) out.push({ ...base(x0, x1), y0: row.top, y1: row.top + row.height });
+      }
+      if (selected) {
+        for (const [path, [x0, x1]] of columnSpans(scene, topology, g.columns, 'path')) {
+          const row = rowOf.get(path);
+          if (row && row.bandHeight > 0) out.push({ ...base(x0, x1), y0: row.bandTop, y1: row.bandTop + row.bandHeight });
+        }
       }
       continue;
     }
-    // No columns on this package: the hit's target span across the lanes, when it is placed on this genome.
+    // No columns on this package: the hit's target span (selected: across the lanes; else on the target lane).
     const t = displaySpan(hit);
     if (!t || t.insertion) continue;
     const a = xForTarget(scene.targetMap, t.start, 'start', reversed);
     const b = xForTarget(scene.targetMap, Math.max(t.end, t.start + 1), 'end', reversed);
     if (a == null || b == null) continue;
-    out.push({ key, setId: hit.setId, hitId: hit.hitId, label, selected, x0: Math.min(a, b), x1: Math.max(a, b, Math.min(a, b) + 2), y0: top, y1: bottom, kind: 'region' });
+    const first = scene.rows[0];
+    out.push({ key, setId: hit.setId, hitId: hit.hitId, label, selected, x0: Math.min(a, b), x1: Math.max(a, b, Math.min(a, b) + 2),
+      y0: selected ? top : first.top, y1: selected ? bottom : first.top + first.height, kind: 'region' });
   }
   return out;
 }
 
-const COLOUR = { line: 'rgba(79, 70, 229, 0.95)', faint: 'rgba(79, 70, 229, 0.45)', fill: 'rgba(79, 70, 229, 0.10)' };
+const COLOUR = { line: 'rgba(79, 70, 229, 0.95)', faint: 'rgba(79, 70, 229, 0.35)', fill: 'rgba(79, 70, 229, 0.12)' };
 
 export function drawHubOutlines(ctx: CanvasRenderingContext2D, outlines: HubGraphOutline[]): void {
   if (!outlines.length) return;
@@ -115,7 +127,7 @@ export function drawHubOutlines(ctx: CanvasRenderingContext2D, outlines: HubGrap
       ctx.fillRect(o.x0, o.y0, Math.max(1, o.x1 - o.x0), o.y1 - o.y0);
     }
     ctx.strokeStyle = o.selected ? COLOUR.line : COLOUR.faint;
-    ctx.setLineDash(o.selected ? [] : [3, 2]);
+    ctx.setLineDash(o.selected ? [] : [2, 2]);
     ctx.lineWidth = o.selected ? 1.5 : 1;
     ctx.strokeRect(o.x0 + 0.5, o.y0 + 0.5, Math.max(1, o.x1 - o.x0 - 1), o.y1 - o.y0 - 1);
   }
@@ -132,9 +144,12 @@ export function hubOutlineAt(outlines: HubGraphOutline[], x: number, y: number):
   return best;
 }
 
-/** Hover text of an outline. */
-export function hubOutlineText(o: HubGraphOutline): string {
-  return `Feature hub: ${o.label}${o.selected ? ' (selected)' : ''}. Click to ${o.selected ? 'deselect' : 'select'} it in the hub.`;
+/** Hover text of an outline. `onGeometry`: the pointer is also on the graph's own geometry (a tube, an allele), where a
+ * plain click selects that instead; Shift-click selects the hit there. */
+export function hubOutlineText(o: HubGraphOutline, onGeometry = false): string {
+  const verb = o.selected ? 'remove it from' : 'add it to';
+  return `Feature hub: ${o.label}${o.selected ? ' (selected)' : ''}. ${onGeometry ? `Shift-click to ${verb} the hub selection.`
+    : `Click to select it in the hub; Shift-click to ${verb} the selection.`}`;
 }
 
 /** A click on an outline: select its hit in the hub (shift/⌘ adds or removes). Returns whether it was handled. */

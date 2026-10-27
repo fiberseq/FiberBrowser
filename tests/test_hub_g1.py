@@ -160,6 +160,12 @@ def test_source_frame_hits_are_lifted_keeping_source_coordinates(tmp_path, monke
         assert h['chrom'] == MAT and h['source']['chrom'] == MAT           # source coordinates kept
         assert h['frame'] == {'kind': 'source', 'contig': MAT, 'hap': 'HG002_MAT#0', 'hapLabel': 'MAT', 'datasetId': 'lifted'}
         assert 'dataset_1:MAT' in h['columns'] and 'dataset_1' not in h['columns']
+    # A one-dataset scan with pooled values only ('all', as peaks write them): the pool fills the haplotype column.
+    from services.scan.projection import _annotate
+    pooled = _annotate(dict(hitId='p', chrom=MAT, start=1, end=2, anchor=1, columns={'all': {'strength': {'v': 0.3}}}),
+                       'lifted', st.datasets['lifted'].live_lift.handle, {'HG002_MAT#0': 'MAT'}, None, None, 'x',
+                       scan_datasets=('dataset_1',))
+    assert pooled['columns'] == {'all': {'strength': {'v': 0.3}}, 'dataset_1:MAT': {'strength': {'v': 0.3}}}
     assert by['exact']['lift']['status'] == 'exact' and by['exact']['target']['end'] - by['exact']['target']['start'] == 40
     assert by['exact']['target']['start'] <= by['exact']['lift']['anchor'] < by['exact']['target']['end']
     inside = by['inside']

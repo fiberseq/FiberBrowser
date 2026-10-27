@@ -213,10 +213,20 @@ describe('hub hits on a graph host', () => {
     const out = hubGraphOutlines(scene, topology, 'g1', 'target', false,
       [{ hit: inside, selected: true }, { hit: shared, selected: false }, { hit: plain, selected: false }]);
     const of = (id: string) => out.filter(o => o.hitId === id);
-    expect(of('in').map(o => [o.y0, o.x0, o.x1, o.selected])).toEqual([[40, 70, 80, true]]);
-    expect(of('sh').map(o => o.y0).sort()).toEqual([0, 40]);
-    expect(of('sh')[0]).toMatchObject({ kind: 'columns', y1: 30 });   // the target lane and its reads band
-    expect(of('p')).toEqual([expect.objectContaining({ kind: 'region', x0: 0, x1: 40, y0: 0, y1: 50 })]);
+    // Selected: the MAT tube (the MAT lane has no read band here).
+    expect(of('in').map(o => [o.y0, o.y1, o.x0, o.x1, o.selected])).toEqual([[40, 50, 70, 80, true]]);
+    // Unselected: each carrier lane's tube only, never its read band.
+    expect(of('sh').map(o => [o.y0, o.y1]).sort()).toEqual([[0, 10], [40, 50]]);
+    expect(of('p')).toEqual([expect.objectContaining({ kind: 'region', x0: 0, x1: 40, y0: 0, y1: 10 })]);
+    // Selected, it covers its lanes' read bands too (bands sit below the lanes: one box each, not one tall box).
+    const sel = hubGraphOutlines(scene, topology, 'g1', 'target', false, [{ hit: shared, selected: true }]);
+    expect(sel.map(o => [o.y0, o.y1]).sort()).toEqual([[0, 10], [10, 30], [40, 50]]);
+    // A carrier drawn on a stripe of another lane's tube: its own path's read band is covered.
+    const striped = { ...scene, occurrences: [...scene.occurrences,
+      { occ: 'm1', node: 'n1', lane: 'target', owner: 'r', x0: 0, x1: 40, start: 0, end: 40, dir: 1, path: 'mat' }],
+      rows: scene.rows.map(r => (r.key === 'mat' ? { ...r, bandTop: 60, bandHeight: 15 } : r)) } as unknown as Scene;
+    const bands = hubGraphOutlines(striped, topology, 'g1', 'target', false, [{ hit: shared, selected: true }]);
+    expect(bands.map(o => [o.y0, o.y1]).sort((a, b) => a[0] - b[0])).toEqual([[0, 10], [10, 30], [40, 50], [60, 75]]);
     expect(hubOutlineAt(out, 15, 5)?.hitId).toBe('sh');
     expect(hubOutlineAt(out, 75, 45)?.hitId).toBe('in');
     expect(hubGraphOutlines(scene, topology, 'other', 'target', false, [{ hit: inside, selected: true }])).toEqual([]);

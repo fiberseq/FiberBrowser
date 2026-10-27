@@ -838,7 +838,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       // made-up target base.
       const inv = sceneInverse(scene, sx, y);
       const cursorX = hit.cursor && inv?.kind === 'target' ? x : null;
-      setCursor({ x, y, text: describeSceneHit(hit, sx, model, reversed) + (hubHit ? `\n${hubOutlineText(hubHit)}` : ''), cursorX });
+      setCursor({ x, y, text: describeSceneHit(hit, sx, model, reversed) + (hubHit ? `\n${hubOutlineText(hubHit, true)}` : ''), cursorX });
     } else if (hubHit) {
       setCursor({ x, y, text: hubOutlineText(hubHit), cursorX: null });
     } else {
@@ -916,9 +916,10 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     const rh = hostMode && e.shiftKey ? readHitAt(x, y) : null;
     if (rh) { setReadSelected(rh); return; }
     const found = selectionAt(x, y);
-    // Off the graph's own geometry, inside a feature hub hit: select it in the hub.
-    const hubHit = !found ? hubOutlineAt(hubOutlines, x - sceneOffset, y) : null;
-    if (hubHit && selectFromGraph(hubHit, e.shiftKey || e.metaKey || e.ctrlKey)) return;
+    // Inside a feature hub hit: off the graph's own geometry a click selects it in the hub; Shift-click adds or removes
+    // it anywhere inside (a plain click on a tube keeps selecting the graph locus).
+    const hubHit = !found || e.shiftKey ? hubOutlineAt(hubOutlines, x - sceneOffset, y) : null;
+    if (hubHit && selectFromGraph(hubHit, e.shiftKey)) return;
     if (!found) { if (graphSelection?.panelId === panelId) selectGraph(null); return; }
     if (e.metaKey || e.ctrlKey) { selectGraph(found.sel, true); return; }
     const group = hitGroup(found.hit);

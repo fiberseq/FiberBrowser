@@ -249,7 +249,8 @@ class OpenScan:
             contigs = (self.manifest.get('reference') or {}).get('contigs') or []
             self.frame = dict(kind='source', assembly=(self.manifest.get('reference') or {}).get('contigs_sha256', '')[:12],
                               liftedDatasets=lifted, firstContig=str(contigs[0][0]) if contigs else '')
-            self.reference_note = ('scanned in the source assembly of ' + (', '.join(lifted) if lifted else 'its BAM')
+            names = _dataset_labels(state)
+            self.reference_note = ('scanned in the source assembly of ' + (', '.join(names.get(d, d) for d in lifted) if lifted else 'its BAM')
                                    + (': per-read states join; hits are lifted onto this genome with liftbed, keeping '
                                       'their source coordinates' if lifted else
                                       ': hits stay in source coordinates (open its BAM as a live-lift dataset to lift them)'))

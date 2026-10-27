@@ -59,6 +59,7 @@ def source_hits_for_view(state, scan, module: str, chrom: str, start: int, end: 
                      'be placed on this genome')
     seen = set()
     counts: Dict[str, int] = {}
+    scan_ids = tuple(d.get('dataset_id') for d in scan.manifest.get('datasets') or ())
     for ds_id in datasets:
         config = state.datasets[ds_id].live_lift
         handle = config.handle
@@ -86,7 +87,7 @@ def source_hits_for_view(state, scan, module: str, chrom: str, start: int, end: 
             notes.append(str(exc))
             for h in rows:
                 seen.add(h['hitId'])
-                out_hits.append(_annotate(h, ds_id, handle, labels, None, None, chrom, note=str(exc)))
+                out_hits.append(_annotate(h, ds_id, handle, labels, None, None, chrom, note=str(exc), scan_datasets=scan_ids))
             continue
         n = len(rows)
         for i, h in enumerate(rows):
@@ -95,13 +96,14 @@ def source_hits_for_view(state, scan, module: str, chrom: str, start: int, end: 
                 continue
             seen.add(h['hitId'])
             counts[lift.status] = counts.get(lift.status, 0) + 1
-            out_hits.append(_annotate(h, ds_id, handle, labels, lift, at, chrom))
+            out_hits.append(_annotate(h, ds_id, handle, labels, lift, at, chrom, scan_datasets=scan_ids))
     out_hits.sort(key=lambda h: ((h.get('target') or {}).get('start', 0), h['hitId']))
     return dict(hits=out_hits[:limit], truncated=truncated or len(out_hits) > limit, chrom=chrom, start=start, end=end,
                 module=module, frame='source', liftStatus=counts, note='; '.join(dict.fromkeys(notes)) or None)
 
 
-def _annotate(h: dict, ds_id: str, handle, labels: dict, lift, at, chrom: str, note: Optional[str] = None) -> dict:
+def _annotate(h: dict, ds_id: str, handle, labels: dict, lift, at, chrom: str, note: Optional[str] = None,
+              scan_datasets: tuple = ()) -> dict:
     contig = h['chrom']
     hap = getattr(handle, 'source_haplotype', {}).get(contig)
     hap_label = labels.get(hap, hap) if hap else None
@@ -109,8 +111,12 @@ def _annotate(h: dict, ds_id: str, handle, labels: dict, lift, at, chrom: str, n
     h['frame'] = dict(kind='source', contig=contig, hap=hap, hapLabel=hap_label, datasetId=ds_id)
     h['source'] = dict(chrom=contig, start=h['start'], end=h['end'], anchor=h['anchor'])
     if hap_label:
-        # The scan's dataset columns become that dataset's haplotype columns (the pool stays 'all').
-        h['columns'] = {(k if k == 'all' or ':' in k else f'{k}:{hap_label}'): v for k, v in h['columns'].items()}
+        # The scan's dataset columns become that dataset's haplotype columns (the pool stays 'all'). A one-dataset scan
+        # whose values are pooled only ('all', as peaks write them) fills its dataset's haplotype column with the pool.
+        cols = {(k if k == 'all' or ':' in k else f'{k}:{hap_label}'): v for k, v in h['columns'].items()}
+        if len(scan_datasets) == 1 and 'all' in cols and not any(k.startswith(f'{scan_datasets[0]}:') for k in cols):
+            cols[f'{scan_datasets[0]}:{hap_label}'] = cols['all']
+        h['columns'] = cols
     if lift is None:
         h['lift'] = dict(status='unmapped', reason=note or 'not lifted')
         return h

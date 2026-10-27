@@ -18,6 +18,7 @@ import { asAnchors, asClusterRegions, asFilter, goToHits } from './actions';
 import { ScanDialog } from './ScanDialog';
 import { columnPathStatus, displaySpan, graphText, liftChip, liftText } from './frames';
 import { matchHits } from './matching';
+import { useGraphStatusStore } from '../graphPanel/statusStore';
 import type { FeatureHit, FeatureSet, HitValue } from './types';
 
 interface Row { set: FeatureSet; hit: FeatureHit; role: 'prevalence' | 'strength' | null; key: string; matches: string[] }
@@ -89,12 +90,14 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
   // A scan's columns follow its bindings: they change when datasets open or close.
   const scanKey = scans.map(s => `${s.scanId}:${s.manifestDigest}:${s.datasets.map(d => `${d.scanDataset}=${d.status}:${d.dataset ?? ''}`).join(',')}`).join('|');
   const datasetKey = datasets.map(d => `${d.id}:${(d.paths ?? [d.path]).join(',')}`).join('|');
+  // Graph columns come with the hits: registering or removing a package reads them again.
+  const graphKey = useGraphStatusStore(s => (s.status?.registrations ?? []).map(r => `${r.id}@${r.revisions.package}`).join(','));
   useEffect(() => { if (hub.scans.length) void refreshScans(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [datasetKey]);
   useEffect(() => {
     const t = setTimeout(() => { void loadScanHits(view, hub.ui.hiddenSets); }, 250);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, hidden, scanKey]);
+  }, [view, hidden, scanKey, graphKey]);
   // A finished live scan: its hits.
   const jobDone = job && !['queued', 'running', 'cancelling'].includes(job.status) ? job.job_id + job.status : '';
   useEffect(() => { if (jobDone) void loadScanHits(view, hub.ui.hiddenSets); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [jobDone]);
@@ -360,6 +363,7 @@ function HitRows({ row, selected, expanded, columns, kind, delta, onClick, onTog
 }) {
   const { set, hit } = row;
   const ref = useRef<HTMLTableRowElement>(null);
+  const dark = useBrowserStore(s => s.darkMode);
   const here = displaySpan(hit);
   const chip = liftChip(hit);
   const hap = hit.frame?.kind === 'source' ? (hit.frame.hapLabel ?? hit.frame.hap) : undefined;
@@ -374,7 +378,7 @@ function HitRows({ row, selected, expanded, columns, kind, delta, onClick, onTog
       <td className="px-1 text-left"><span className="rounded bg-gray-100 px-1 text-[10px] text-gray-700 dark:bg-white/10 dark:text-gray-200">{hit.typeId}</span></td>
       <td className="whitespace-nowrap px-1 text-left" data-testid="hub-row-locus">
         {here ? locus(here) : locus(hit)}{here ? (here.end <= here.start ? ' ⋮' : '') : ''}
-        {hap && <span className="ml-1 text-[10px] font-semibold" style={{ color: liveLiftHaplotypeColor(hap) }}>{hap}</span>}
+        {hap && <span className="ml-1 text-[10px] font-semibold" style={{ color: liveLiftHaplotypeColor(hap, dark) }}>{hap}</span>}
         {chip && <span className={`ml-1 rounded px-1 text-[10px] ${CHIP_TONE[chip.tone]}`} data-testid="hub-lift-chip" title={hover}>{chip.text}</span>}
         {matched.length > 0 && <span className="ml-1 rounded bg-emerald-50 px-1 text-[10px] text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200"
           data-testid="hub-match-chip" title={`The same feature in another frame or set:\n${matchText}`}>≡ {matched.length}</span>}

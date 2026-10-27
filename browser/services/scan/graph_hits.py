@@ -149,9 +149,31 @@ def _sources(reg, target: str) -> List[str]:
     return list(dict.fromkeys(m.get('source') for m in reg.maps if m.get('target') == target and m.get('source')))
 
 
+_FETCH_LOCKS: Dict[int, tuple] = {}     # id(loop) -> (loop, lock); closed loops are dropped
+DUPLICATE_RETRIES = 20
+
+
 async def _fetch(reg, target: str, sources: List[Optional[str]], cells: List[int]) -> dict:
+    """The tiles, through graph clustering's cache. Hub requests fetch one at a time (the view's modules and scans ask for
+    the same tiles at once, and a tile's request id is fixed by its key, so a second request while the first is
+    pending is refused as a duplicate); a duplicate from another caller (a graph run) waits for that one to fill the
+    cache."""
     from services.graph_panel import analysis
-    return await asyncio.wait_for(analysis.fetch_tiles(reg, target, sources, cells), TILE_TIMEOUT_S)
+    loop = asyncio.get_running_loop()
+    for key in [k for k, (lp, _l) in _FETCH_LOCKS.items() if lp.is_closed()]:
+        _FETCH_LOCKS.pop(key, None)
+    entry = _FETCH_LOCKS.get(id(loop))
+    if entry is None or entry[0] is not loop:
+        entry = _FETCH_LOCKS[id(loop)] = (loop, asyncio.Lock())
+    async with entry[1]:
+        for attempt in range(DUPLICATE_RETRIES + 1):
+            try:
+                return await asyncio.wait_for(analysis.fetch_tiles(reg, target, sources, cells), TILE_TIMEOUT_S)
+            except analysis.GraphRunError as exc:
+                if 'duplicate_request' not in str(exc) or attempt == DUPLICATE_RETRIES:
+                    raise
+                await asyncio.sleep(0.1)
+    raise RuntimeError('unreachable')
 
 
 def merged_occurrences(tiles: dict, target: str) -> dict:
