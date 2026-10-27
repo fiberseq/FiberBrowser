@@ -6,6 +6,8 @@ import { DifferencePopover } from '../liveLift/DifferencePopover';
 import { getDifferenceReads } from '../liveLift/api';
 import { useDifferenceSelection } from '../liveLift/inspectionStore';
 import { useBrowserStore } from '../../stores/browserStore';
+import { useTrackFeedStore } from '../../stores/trackFeedStore';
+import { identifyLens } from '../insertion/IdentifyTab';
 import { AssemblyComparisonPanel, mapOptionsFor, useMapChoice } from './AssemblyComparisonPanel';
 import { compareWithAssembly, useComparisonStore } from './comparison';
 import { useGraphStatusStore } from '../graphPanel/statusStore';
@@ -226,5 +228,89 @@ describe('post-merge review, agy group D: Reads-lane Identify, sample matching p
     await useGraphStatusStore.getState().load();
     expect(getGraphStatus).toHaveBeenCalledTimes(1);
     expect(useGraphStatusStore.getState().status).not.toBeNull();
+  });
+});
+
+// agy post-merge review D round 2, HIGH 1: on a pooled panel both haplotypes can carry a read-supported insertion and
+// the server (no haplotype preference) may pick the second haplotype's carrier; Identify uses that carrier's sequence.
+describe('Reads-lane Identify on a diploid pooled panel', () => {
+  const dataset: any = {
+    id: 'lift_ds',
+    label: 'Lift',
+    path: '/fake/source.bam',
+    data_type: 'bam_livelift',
+    live_lift: { key: 'k1', haplotypes: ['H#1', 'H#2'], haplotype_labels: { 'H#1': 'MAT', 'H#2': 'PAT' } },
+  };
+  const panel: any = { id: 'p_pooled', datasetId: 'lift_ds', subTracks: [], linkGroup: null, contentType: 'dataset', collapsed: false };
+  const insertion: any = {
+    id: 'geom:ins:1200:120', hap: '', hap_label: 'Reads', kind: 'insertion', source: 'reads', reason: 'composed_geometry',
+    t_start: 1200, t_end: 1200, ref_bp: 0, alt_bp: 120, strand: null, chain: null,
+    src: { contig: null, start: null, end: null }, grch38: null, alt: null,
+  };
+  const row = (hap: 'MAT' | 'PAT', length: number) => ({
+    id: `mol_${hap}`, record: `rec_${hap}:0`, molecule: `lift_ds|mol_${hap}`, hap_label: hap, strand: '+', supplementary: false,
+    source_pos: { contig: `ctg_${hap}`, start: 200, end: 201 }, read_bases: 'A'.repeat(60), read_bases_length: length,
+    hg002: 'C', grch38: null, allele: 'other', ins_id: `${hap}:ctg_${hap}:200-201:inspection`, carries_insertion: true,
+    mol_bp: length, chromatin: { state: 'none', layer: null, nearest_m6a_bp: null, orientation: '+' },
+  });
+  // Rows in haplotype order (MAT first); the server's best carrier is PAT's (120 bp matches the insertion exactly).
+  const response = (withSequence: boolean): any => ({
+    dataset_id: 'lift_ds', lift_key: 'k1', chrom: 'chrT', pos: 1200, end: 1200, preferred_hap: null,
+    rows: [row('MAT', 121), row('PAT', 120)], summary: { MAT: { other: 1 }, PAT: { other: 1 } }, capped: false, max_records: 500,
+    sequence: withSequence ? { sequence: 'A'.repeat(120), read_id: 'mol_PAT', record: 'rec_PAT:0',
+      ins_id: 'PAT:ctg_PAT:200-201:inspection', orientation: '+', source: 'reads' } : null,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useComparisonStore.setState({ byKey: {} });
+    useDifferenceSelection.getState().select(null);
+    useTrackFeedStore.setState({ byStateKey: {} } as any);
+    useBrowserStore.setState({ publicMode: false, datasets: [dataset], panels: [panel] } as any);
+    vi.mocked(compareWithAssembly).mockResolvedValue({
+      dataset_id: 'lift_ds', chrom: 'chrT', start: 0, end: 3000, search_complete: false,
+      reasons: [], assembly: {}, reads: {}, lineage_events: [], ledger: {}, policy: {},
+    } as any);
+  });
+
+  async function open(action?: 'identify') {
+    useDifferenceSelection.getState().select({ panelId: panel.id, datasetId: dataset.id, viewKey: 'main', chrom: 'chrT',
+      ...(action ? { action } : {}), difference: insertion });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    await act(async () => { root.render(<DifferencePopover panel={panel} dataset={dataset} anchor={{ current: host }} />); });
+    await act(async () => { await Promise.resolve(); });
+    return () => { act(() => root.unmount()); host.remove(); };
+  }
+
+  function expectIdentified() {
+    expect(document.body.textContent).not.toContain('Identify unavailable');
+    expect(document.querySelector('[data-testid="identify-tab"]')).not.toBeNull();
+    expect(identifyLens).toHaveBeenCalledWith(
+      expect.objectContaining({ consensus: expect.objectContaining({ seq: 'A'.repeat(120), n_reads: 1 }) }), 'lift_ds', expect.anything());
+  }
+
+  it('clicking Identify identifies the carrier the server picked from the second haplotype', async () => {
+    useTrackFeedStore.setState({ byStateKey: { lift_ds: { reads: [{ id: 'mol_MAT' }, { id: 'mol_PAT' }], zoomedOut: false } } } as any);
+    vi.mocked(getDifferenceReads).mockImplementation(async (params: any) => response(Boolean(params.includeSequence)));
+    const close = await open();
+    try {
+      const identifyBtn = [...document.querySelectorAll('button')].find(b => b.textContent === 'Identify')!;
+      expect(identifyBtn.disabled).toBe(false);
+      await act(async () => { identifyBtn.click(); });
+      await act(async () => { await Promise.resolve(); });
+      expect(getDifferenceReads).toHaveBeenLastCalledWith(expect.objectContaining({ liftHap: 'Reads', includeSequence: true }), expect.any(AbortSignal));
+      expectIdentified();
+    } finally { close(); }
+  });
+
+  it('the context menu\'s Identify identifies the carrier the server picked from the second haplotype', async () => {
+    vi.mocked(getDifferenceReads).mockResolvedValue(response(true));
+    const close = await open('identify');
+    try {
+      expect(getDifferenceReads).toHaveBeenCalledWith(expect.objectContaining({ liftHap: 'Reads', includeSequence: true }), expect.any(AbortSignal));
+      expectIdentified();
+    } finally { close(); }
   });
 });

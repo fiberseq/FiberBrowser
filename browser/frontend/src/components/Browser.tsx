@@ -3,6 +3,7 @@ import { AnalysisProgressLine } from './controls/AnalysisProgressLine';
 import { scanEquivalentRegions, scanUnsharedRegions } from '../utils/equivalentScanning';
 import { peakScanScope } from '../utils/peakScanScope';
 import { waitForViewIdle } from '../utils/viewIdle';
+import { AUTO_SCAN_BUDGET_MS, armScanBudget, scanStoppedNote } from '../utils/scanBudget';
 import { clusterBasisRunner } from '../utils/clusterRunExtensions';
 import { hasOrdinaryPeakSelection, isScannedRule } from '../utils/matchedRegions';
 import { linkChoseViewport } from '../utils/sessionLinks';
@@ -144,9 +145,6 @@ function branchReadScopeForStateKeys(
   return scope;
 }
 
-
-/** How long an automatic peak scan may run before it is stopped (a manual Scan has no limit). */
-const AUTO_SCAN_BUDGET_MS = 60_000;
 export function Browser() {
   // The UI size, held down for the top bar and toolbar while it would leave the reads too little room (audit H5).
   const chromeZoom = useChromeZoom();
@@ -203,6 +201,9 @@ export function Browser() {
 
   const [trackList, setTrackList] = useState<TrackListEntry[]>([]);
   const [scanning, setScanning] = useState(false);
+  // An automatic scan stopped by its time budget: the Scan control says so until a scan runs or the view moves.
+  const [scanStopped, setScanStopped] = useState<string | null>(null);
+  useEffect(() => { setScanStopped(null); }, [chrom, start, end]);
   const [clustering, setClustering] = useState(false);
 
   // Export panel state
@@ -844,6 +845,7 @@ export function Browser() {
     if (rulesToScan.length === 0) return;
 
     setScanning(true);
+    setScanStopped(null);
     try {
       const scans = Promise.all(rulesToScan.map(r => scanPeaksForRule(r.id, signal)));
       // A cancelled scan stops showing "Scanning peaks..." at once, whatever request it still waits on (its results
@@ -949,16 +951,15 @@ export function Browser() {
         // An automatic scan has a time budget: one the server can't answer in time (busy with other work) stops,
         // so "Scanning peaks..." never stays up. It is not retried automatically for this view (no loop of
         // minute-long attempts); Scan runs it again.
-        let budget: ReturnType<typeof setTimeout> | null = null;
+        let disarm: (() => void) | null = null;
         waitForViewIdle(controller.signal)
           .then(() => {
             if (controller.signal.aborted) return;
-            budget = setTimeout(() => {
-              if (controller.signal.aborted) return;
+            disarm = armScanBudget(controller, () => {
               console.warn(`Automatic peak scan of ${chrom}:${start}-${end} stopped after ${AUTO_SCAN_BUDGET_MS / 1000} s; press Scan to run it.`);
               lastScanRegionRef.current = regionKey;
-              controller.abort();
-            }, AUTO_SCAN_BUDGET_MS);
+              setScanStopped(scanStoppedNote());
+            });
             return handleScanPeaksRef.current(controller.signal);
           })
           .then(() => {
@@ -967,7 +968,7 @@ export function Browser() {
           })
           .catch(() => { /* failed: leave the region unscanned so it is retried */ })
           .finally(() => {
-            if (budget) clearTimeout(budget);
+            disarm?.();
             if (autoScanRef.current === job) autoScanRef.current = null;
           });
       };
@@ -2254,6 +2255,7 @@ export function Browser() {
             onClearFilter={handleClearFilter}
             onScanPeaks={handleScanPeaks}
             scanning={scanning}
+            scanNote={scanStopped}
             clustering={clustering}
           />
 

@@ -235,6 +235,8 @@ def add_dataset_for_request(state, req: AddDatasetRequest) -> dict:
 
         path_arg = paths if len(paths) > 1 else paths[0]
         dataset = state.add_dataset(dataset_id, path_arg, label=req.label or default_label)
+        if getattr(req, "lift_source_of", None):
+            dataset.lift_source_of = str(req.lift_source_of)
         result = {"success": True, "dataset": dataset.to_dict()}
         if dataset.is_remote:
             result["message"] = "Remote dataset loaded successfully"

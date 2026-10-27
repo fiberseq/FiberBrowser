@@ -12,6 +12,12 @@ export function isBamBacked(dataset: Kind): boolean {
   return dataset?.data_type === 'bam' || dataset?.data_type === 'bam_livelift';
 }
 
+/** A dataset that gets a panel of its own when it appears (not a live-lift source view's BAM, which shows only in its
+ *  source view: after a reload without a session it would be an empty panel on its first contig). */
+export function opensOwnPanel(dataset: Pick<Dataset, 'lift_source_of'> | null | undefined): boolean {
+  return !dataset?.lift_source_of;
+}
+
 /** A live-lift dataset. */
 export function isLiveLift(dataset: Kind): boolean {
   return dataset?.data_type === 'bam_livelift';

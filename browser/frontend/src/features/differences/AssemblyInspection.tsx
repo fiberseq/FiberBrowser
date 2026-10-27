@@ -64,8 +64,11 @@ export function AssemblyInspection({ panel, dataset, anchor }: { panel: PanelCon
     document.addEventListener('keydown', key, true);
     return () => { document.removeEventListener('keydown', key, true); useReadActionsStore.setState({ highlight: prior }); };
   }, [current, model, readRequested, dataset.id]);
-  const candidate = data?.rows.find(r => (d?.source === 'reads' ? (!preferredHap || r.hap_label === preferredHap) && r.ins_id : r.ins_id === d?.id)
+  const isCandidate = (r: DifferenceReadsResponse['rows'][number]) => Boolean((d?.source === 'reads' ? (!preferredHap || r.hap_label === preferredHap) && r.ins_id : r.ins_id === d?.id)
     && r.carries_insertion && (!r.alignment_ins_id || r.alignment_ins_id === r.ins_id) && (r.read_bases_length ?? r.read_bases.length) <= 50_000);
+  // With no haplotype preference (a pooled panel's "Reads" lane) the server may pick any haplotype's carrier:
+  // the candidate is the eligible row it picked, else the first eligible one.
+  const candidate = (data?.sequence ? data.rows.find(r => isCandidate(r) && r.ins_id === data.sequence?.ins_id) : undefined) ?? data?.rows.find(isCandidate);
   const sequence = data?.sequence?.ins_id === (d?.source === 'reads' ? candidate?.ins_id : d?.id) ? data?.sequence?.sequence : undefined;
   const identifyKey = `${dataset.id}|${dataset.live_lift?.key ?? ''}|${current?.chrom ?? ''}|${d?.id ?? ''}`;
   const lens = useMemo<LensResponse | null>(() => !d || !sequence || !current ? null : ({ success: true, dataset_id: dataset.id, chrom: current.chrom, flank: 0,

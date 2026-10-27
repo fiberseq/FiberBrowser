@@ -17,6 +17,7 @@ import { seedHistoryBaseline } from '../../stores/historySlice';
 import { PER_PANEL_STATE_KEYS } from '../../stores/panelSlice';
 import { generatePanelId } from '../../stores/utils';
 import { withoutGraphMembership } from '../../stores/graphMembership';
+import { drawnRowOwnership, drawnRowsFor } from '../../stores/clusterSlice';
 import type { PanelConfig } from '../../types';
 import { genomeKeyFor } from '../../utils/regionNavigation';
 import { currentMatchedRun, observationShownBy, type GraphRunObservation } from '../../utils/clusterMatchedRun';
@@ -301,10 +302,15 @@ export function popOut(hostId: string, memberIds: string[], newHaps: { binding: 
     // nor a focus or picks (agy round 3, Codex round 3).
     const hostKey = panelKeyOf(host);
     const lineage = (id: string | null | undefined) => provenanceLineage(s, hostKey, id);
+    // Folded molecules the host drew go to the haplotype that shows their rows too (drawnRowOwnership: also labels
+    // written without updating a tree node, e.g. a read grouping, or a subcluster; graph follow-ups item 5).
+    const drawn = drawnRowsFor(hostKey, s.panels);
     /** Each new panel's share of ``labels`` (null: not filtered, the copy stands). */
     const share = (provs: GraphProvenance[], labels: Record<string, number> | undefined) => {
       if (!provenanceCovers(provs, labels)) return null;
-      return new Map(made.map(m => [m.id, provenanceShare(provs, labels!, o => observationShownBy(o, m))]));
+      const extra = drawnRowOwnership(provs, labels, drawn);
+      const all = extra ? [...provs, { destinations: [hostKey], ...extra }] : provs;
+      return new Map(made.map(m => [m.id, provenanceShare(all, labels!, o => observationShownBy(o, m))]));
     };
     if (made.length) {
       const liveShare = share(activeProvenance(s, hostKey), s.clusterAssignments[hostKey]);

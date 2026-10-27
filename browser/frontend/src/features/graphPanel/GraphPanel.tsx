@@ -48,7 +48,7 @@ import { setPinnedLinear, useGraphSettings } from './handoff';
 import { copyText } from '../../utils/clipboard';
 import { excludeReadsUndoably } from '../../components/tracks/read-track/ReadTrackActions';
 import { seedHistoryBaseline } from '../../stores/historySlice';
-import { idSetHas, qnameOfId } from '../../utils/recordKeys';
+import { idSetHas, isMoleculeRecordKey, qnameOfId } from '../../utils/recordKeys';
 import { branchScopesPanel, readIdSetForClusterRenderScope } from '../../utils/readScopes';
 
 const DEBOUNCE_MS = 100;
@@ -390,6 +390,14 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     if (!panelId) return;
     useGraphReadsStore.getState().publish(panelId, anyDrawn ? (drawnIdsKey ? drawnIdsKey.split(',') : []) : [], readBindings, reg?.id ?? null);
   }, [panelId, drawnIdsKey, anyDrawn, readBindings, reg?.id]);
+  // The folded molecules it drew, on their primary record's path's haplotype (the one a lifted pop-out shows them on),
+  // so a grouping or pop-out routes their labels there (graph follow-ups item 5).
+  useEffect(() => {
+    if (!panelId) return;
+    useGraphReadsStore.getState().publishRowHaps(panelId, (reads.response?.reads ?? [])
+      .filter(r => r.rk && r.hap && !r.sup && isMoleculeRecordKey(r.rk))
+      .map(r => ({ rk: r.rk!, datasetId: r.d, hap: r.hap!, ...(r.ds ? { strand: r.ds } : {}) })));
+  }, [panelId, reads.response]);
   useEffect(() => () => { if (panelId) { useGraphReadsStore.getState().clear(panelId); useLiftHover.getState().clear(panelId); } }, [panelId]);
   // The molecule hovered here or in a lifted / source / native panel of the same files (moleculeKey: dataset,
   // library, QNAME): its rows are outlined in every view.
@@ -1290,6 +1298,13 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         targetViewport: clampViewport(parsed, next.size, next.size_inferred) });
       setPrompt(null);
       return;
+    }
+    // A graph host's Go to is a jump of its panel (or the main view): Back (Alt+←) returns to where it was.
+    // (On its own view's contig the host moves like a pan, through setPanelViewport: Back moves it, and what is locked
+    // to it, the same way.)
+    if (hostMode) {
+      const own = useBrowserStore.getState().panels.find(p => p.id === panelId)?.viewportOverride;
+      useBrowserStore.getState().recordJump(panelId, { likePan: own?.chrom === parsed.contig, to: { chrom: parsed.contig, start: parsed.start, end: parsed.end } });
     }
     commitViewport(clampViewport(parsed, target.size, target.size_inferred), true);
     setPrompt(null);

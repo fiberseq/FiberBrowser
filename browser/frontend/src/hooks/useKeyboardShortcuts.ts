@@ -214,8 +214,10 @@ export function useKeyboardShortcuts(options: KeyboardShortcutsOptions = {}) {
       }
 
       // Each panel navigates: the main view's pan/zoom keys would move a view
-      // no panel shows (each panel has its own locus box).
-      if (s.navigationMode === 'perPanel' && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', '+', '=', '-'].includes(e.key)) {
+      // no panel shows (each panel has its own locus box). Back / Forward
+      // (Alt+← / Alt+→) still work: they undo the panels' own jumps too.
+      if (s.navigationMode === 'perPanel' && !(e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight'))
+        && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', '+', '=', '-'].includes(e.key)) {
         return;
       }
 

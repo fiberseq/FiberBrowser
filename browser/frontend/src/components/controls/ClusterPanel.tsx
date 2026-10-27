@@ -146,6 +146,8 @@ interface ClusterPanelProps {
   onClearFilter: () => void;
   onScanPeaks?: () => void;
   scanning?: boolean;
+  /** An automatic scan was stopped (its time budget): shown beside Scan until a scan runs or the view moves. */
+  scanNote?: string | null;
   clustering?: boolean;
   sorting?: boolean;
 }
@@ -157,6 +159,7 @@ export function ClusterPanel({
   onClearFilter,
   onScanPeaks,
   scanning,
+  scanNote,
   clustering,
   sorting,
 }: ClusterPanelProps) {
@@ -731,6 +734,10 @@ export function ClusterPanel({
                     "Scanning…" moved Quality to the next toolbar row and back on every pan (round 3). */}
                 Scan
               </ActionButton>
+            )}
+            {/* An automatic scan stopped by its time budget: said beside Scan (the group's summary is folded away). */}
+            {onScanPeaks && scanNote && !scanning && (
+              <span role="status" data-testid="peak-scan-stopped" className="whitespace-nowrap px-1 text-[11px] text-amber-700 dark:text-amber-400">{scanNote}</span>
             )}
           </>
         )}

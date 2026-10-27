@@ -52,6 +52,9 @@ class AddDatasetRequest(BaseModel):
     paths: Optional[List[str]] = None
     label: Optional[str] = None
     url: Optional[str] = None
+    # A live-lift dataset's linked source view opens its BAM as a native dataset: that dataset's id. The page shows
+    # such a dataset only in its source view (a reload without a session opens no panel of its own for it).
+    lift_source_of: Optional[str] = None
 
 class MergeDatasetsRequest(BaseModel):
     dataset_ids: List[str]

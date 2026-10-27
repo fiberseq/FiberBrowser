@@ -4,13 +4,15 @@ import { comparisonFor, exactTargetsFor, mergeLedger, useComparisonStore } from 
 const read = { id: 'r1', source: 'reads' } as never;
 const response = (label: string) => ({ reads: { r1: { read_id: 'r1', label, label_text: label, links: [], novelty: { status: '', reasons: [] } } }, assembly: {} }) as never;
 
-it('the newest comparison covering a difference wins (a consensus re-compare over the row)', () => {
+it('the inspector\'s own comparison of a difference wins (a consensus re-compare over the row); else the newest', () => {
   const put = useComparisonStore.getState().put;
   put('ds|chr3|row:p1', response('assembly_candidate'));
+  put('ds|chr3|row:p2', response('assembly_supported_approximate'));
+  expect(comparisonFor(useComparisonStore.getState().byKey, 'ds|chr3|', read)!.value).toMatchObject({ label: 'assembly_supported_approximate' });
   put('ds|chr3|inspect:r1', response('confirmed_by_assembly'));
   expect(comparisonFor(useComparisonStore.getState().byKey, 'ds|chr3|', read)!.value).toMatchObject({ label: 'confirmed_by_assembly' });
-  put('ds|chr3|row:p1', response('unassessed'));   // a later row refresh is newer still
-  expect(comparisonFor(useComparisonStore.getState().byKey, 'ds|chr3|', read)!.value).toMatchObject({ label: 'unassessed' });
+  put('ds|chr3|row:p1', response('unassessed'));   // a later, narrower row refresh does not replace it
+  expect(comparisonFor(useComparisonStore.getState().byKey, 'ds|chr3|', read)!.value).toMatchObject({ label: 'confirmed_by_assembly' });
   expect(comparisonFor(useComparisonStore.getState().byKey, 'other|chr3|', read)).toBeNull();
 });
 

@@ -13,6 +13,7 @@ import type { PanelConfig } from '../../types';
 import { linkedSourcePanels, openLinkedSourceView } from '../liveLift/linking/liftLink';
 import { isHost, liveProvenance, panelKeyOf, popOut, provenanceCovers, provenanceLineage, provenanceShare, undoable, type GraphProvenance } from './hostMode';
 import { useReadActionsStore } from '../../stores/readActionsStore';
+import { drawnRowOwnership, drawnRowsFor } from '../../stores/clusterSlice';
 import { qnameOfId } from '../../utils/recordKeys';
 import { UNASSIGNED_CLUSTER_ID } from '../../components/tracks/read-track/constants';
 import { linkedSourceObservations, sourceLabels } from '../../utils/clusterMatchedRun';
@@ -139,6 +140,7 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
   const to = st.panels.find(p => p.id === sourcePanelId);
   if (!from || !to) return;
   const fk = panelKeyOf(from), tk = panelKeyOf(to);
+  const drawn = drawnRowsFor(fk, st.panels);
   // A member of exactly this haplotype (and not the other strand) has only this source's records.
   // (A single-haplotype lifted dataset's panel has no haplotype of its own: all its records are that one's.)
   const oneHap = liftHapLabels(st.datasets.find(d => d.id === from.datasetId)?.live_lift).length === 1;
@@ -150,8 +152,11 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
     if (!labels || !Object.keys(labels).length) return null;
     let mine: Record<string, number> | null = null;
     if (provenanceCovers(provs, labels)) {
-      const picked = new Set(provs.flatMap(p => linkedSourceObservations(p.observations, to).map(o => o.id)));
-      mine = provenanceShare(provs, labels, o => picked.has(o.id));
+      // Folded molecules the member drew go to the haplotype that shows their rows too (graph follow-ups item 5).
+      const extra = drawnRowOwnership(provs, labels, drawn);
+      const all = extra ? [...provs, { destinations: [fk], ...extra }] : provs;
+      const picked = new Set(all.flatMap(p => linkedSourceObservations(p.observations, to).map(o => o.id)));
+      mine = provenanceShare(all, labels, o => picked.has(o.id));
     } else if (hapOnly) mine = labels;
     if (!mine) return null;
     const byName = sourceLabels({ assignments: { m: mine } }, ['m'], scope);

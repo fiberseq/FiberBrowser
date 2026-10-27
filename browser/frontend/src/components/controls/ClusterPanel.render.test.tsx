@@ -73,6 +73,23 @@ describe('ClusterPanel toolbar groups', () => {
     await act(async () => { byId(id)!.dispatchEvent(new MouseEvent('pointerover', { bubbles: true, relatedTarget: document.body })); });
   };
 
+  it('says beside Scan when an automatic scan was stopped by its time budget (not while a scan runs)', async () => {
+    const note = 'Scan stopped after 60 s — press Scan to retry';
+    await act(async () => {
+      root.render(<ClusterPanel onCluster={vi.fn()} onSort={vi.fn()} onFilter={vi.fn()} onClearFilter={vi.fn()} onScanPeaks={vi.fn()} scanning={false} scanNote={note} />);
+    });
+    expect(byId('peak-scan-stopped')?.textContent).toBe(note);
+    // Beside Scan, on screen with the group folded (not in its hidden summary card).
+    expect(byId('peak-scan-stopped')!.closest('[data-toolbar-peek]')).toBeNull();
+    expect(byId('toolbar-group-peaks')?.getAttribute('data-open')).toBe('false');
+    await act(async () => {
+      root.render(<ClusterPanel onCluster={vi.fn()} onSort={vi.fn()} onFilter={vi.fn()} onClearFilter={vi.fn()} onScanPeaks={vi.fn()} scanning scanNote={note} />);
+    });
+    expect(byId('peak-scan-stopped')).toBeNull();
+    await renderPanel();
+    expect(byId('peak-scan-stopped')).toBeNull();
+  });
+
   it('lets the user choose a preview with full refinement or a full run only', async () => {
     await renderPanel();
     await click('toolbar-group-toggle-cluster');
