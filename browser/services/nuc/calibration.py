@@ -25,7 +25,7 @@ import tempfile
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 from .inputs import NucSource
 
@@ -81,8 +81,11 @@ def cache_key(source: NucSource, filters: dict, settings_hash: str, version: str
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
-def _from_scan(state, source: NucSource, settings_hash: str, version: str, filters: dict) -> Optional[CalibrationRef]:
+def _from_scan(state, source: NucSource, settings_hash: str, version: str, filters: dict) -> Optional[Dict[str, CalibrationRef]]:
+    """Per file of the dataset, the record of the scan dataset that holds it, from one bound scan whose nuc module
+    matches (a browser dataset may hold several scan datasets' files: each keeps its own record)."""
     from services.scan.registry import _inside, list_scans
+    from .inputs import real
     scans = sorted(list_scans(state), key=lambda s: (s.source != 'opened', s.opened_at))
     for scan in scans:
         block = scan.module('nuc')
@@ -90,8 +93,12 @@ def _from_scan(state, source: NucSource, settings_hash: str, version: str, filte
             continue
         if ((scan.manifest.get('read_policy') or {}).get('filters') or {}) != filters:
             continue
-        sids = scan.datasets_of_browser(source.browser_id)
-        if not sids:
+        sid_of: Dict[str, str] = {}
+        for sid, bid, _via, by_index in scan.bound_pairs():
+            if bid == source.browser_id:
+                for _i, path in by_index.items():
+                    sid_of[real(path)] = sid
+        if not sid_of or any(p not in sid_of for p in source.paths):
             continue
         rel = (block.get('calibration') or {}).get('path') if isinstance(block.get('calibration'), dict) else None
         p = _inside(scan.path, rel or 'nuc/extra/calibration.json')
@@ -101,11 +108,13 @@ def _from_scan(state, source: NucSource, settings_hash: str, version: str, filte
             wrapper = json.loads(p.read_text())
         except (OSError, ValueError):
             continue
-        if wrapper.get('schema') != CAL_SCHEMA:
+        if wrapper.get('schema') != CAL_SCHEMA or any(sid_of[q] not in (wrapper.get('datasets') or {}) for q in source.paths):
             continue
-        for sid in sids:
-            if sid in (wrapper.get('datasets') or {}):
-                return CalibrationRef(wrapper, sid, 'scan', settings_hash, version, scan_id=scan.scan_id, path=str(p))
+        refs: Dict[str, CalibrationRef] = {}
+        for path in source.paths:
+            refs[path] = CalibrationRef(wrapper, sid_of[path], 'scan', settings_hash, version, scan_id=scan.scan_id,
+                                        path=str(p))
+        return refs
     return None
 
 
@@ -122,10 +131,14 @@ def _from_cache(source: NucSource, settings_hash: str, version: str, filters: di
     return CalibrationRef(wrapper, LABEL, 'cache', settings_hash, version, path=str(p))
 
 
-def find_calibration(state, source: NucSource, settings_hash: str, version: str, filters: dict) -> Optional[CalibrationRef]:
-    """A stored record for the dataset (a bound scan's, else the cache's), or None."""
-    return _from_scan(state, source, settings_hash, version, filters) or \
-        _from_cache(source, settings_hash, version, filters)
+def find_calibration(state, source: NucSource, settings_hash: str, version: str, filters: dict) -> Optional[Dict[str, CalibrationRef]]:
+    """Stored records for the dataset, per file (a bound scan's, else the cache's one record for every file), or
+    None."""
+    refs = _from_scan(state, source, settings_hash, version, filters)
+    if refs:
+        return refs
+    cached = _from_cache(source, settings_hash, version, filters)
+    return {p: cached for p in source.paths} if cached is not None else None
 
 
 def compute_calibration(source: NucSource, settings: dict, settings_hash: str, version: str, policy: dict, *,

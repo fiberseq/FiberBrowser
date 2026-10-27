@@ -73,14 +73,28 @@ def overlay_scans(state, dataset_id: str):
             continue
         groups = _state_groups(scan)
         marks = _mark_groups(scan)
-        if groups or marks:
-            out.append((scan, sids, dict(groups, **{f'{m}#marks': ','.join(names) for m, names in marks.items()})))
+        scalars = _scalar_modules(scan)
+        if groups or marks or scalars:
+            out.append((scan, sids, dict(groups, **{f'{m}#marks': ','.join(names) for m, names in marks.items()},
+                                         **{f'{m}#molecules': '1' for m in scalars})))
+    return out
+
+
+def _scalar_modules(scan) -> List[str]:
+    """Modules with a per-molecule scalar group whose molecules table this scan wrote (nuc: nucmol, nfr: nfrmol)."""
+    out = []
+    for module, block in (scan.manifest.get('modules') or {}).items():
+        if scan.tables.has(f'{module}/molecules.tsv.bgz') and \
+                any(g.get('kind') == 'scalar' for g in block.get('ma_groups') or []):
+            out.append(module)
     return out
 
 
 def _group_names(groups: Dict[str, str]):
     """(module, table, group) of an overlay entry: state groups read states.tsv, '<module>#marks' entries marks.tsv."""
     for key, value in groups.items():
+        if key.endswith('#molecules'):
+            continue   # scalars: read by apply_scan_overlays itself
         if key.endswith('#marks'):
             module = key[:-len('#marks')]
             for name in value.split(','):
@@ -129,7 +143,16 @@ def apply_scan_overlays(state, dataset_id: str, chrom: str, start: int, end: int
                 if group not in wanted:
                     continue
                 marks.setdefault(r.get('qname', ''), {}).setdefault(group, []).append(r)
-    if not marks:
+    # Per-molecule scalars (molecules.tsv: exact values) for Filter/Sort terms, cluster columns and Read Stats.
+    scalar_rows: Dict[str, list] = {}
+    for scan, sids, groups in scans:
+        for key in groups:
+            if key.endswith('#molecules'):
+                module = key[:-len('#molecules')]
+                for r in scan.tables.fetch(f'{module}/molecules.tsv.bgz', chrom, start, end):
+                    if r.get('dataset_id') in sids:
+                        scalar_rows.setdefault(r.get('qname', ''), []).append((module, r))
+    if not marks and not scalar_rows:
         return reads
     # Mark groups' byte names as their contract declares them (nucsz: coarse, named, posterior, z), so a tables-mode
     # overlay names its qualities as an annotated BAM's group parses (bam_tags known_qual_names).
@@ -155,6 +178,8 @@ def apply_scan_overlays(state, dataset_id: str, chrom: str, start: int, end: int
             r_start = read.get('reference_start', read.get('start'))
             r_end = read.get('reference_end', read.get('end'))
             for group, rows in mine.items():
+                if isinstance(layers.get(group), dict) and layers[group].get('nuc_live'):
+                    continue   # live nucleosome outputs (the dataset's last Compute) win over a scan's rows
                 ivs, srcs, names, q0 = [], [], [], []
                 for row in sorted(rows, key=lambda x: (int(x['start']), int(x['end']), x.get('hit_id', ''))):
                     a, b = int(row['start']), int(row['end'])
@@ -188,8 +213,44 @@ def apply_scan_overlays(state, dataset_id: str, chrom: str, start: int, end: int
         if set(layers) != set(original) or any(layers[k] is not original.get(k) for k in layers):
             read = dict(read)
             read['layers'] = layers
+        mol_rows = scalar_rows.get(str(read.get('id', '')))
+        if mol_rows:
+            read = _with_scalars(read, mol_rows)
         out.append(read)
     return out
+
+
+_NOT_SCALARS = {'chrom', 'start', 'end', 'idx_start', 'idx_end', 'dataset_id', 'input_index', 'qname', 'record',
+                'molecule', 'calls_digest_hi', 'calls_digest_lo'}
+
+
+def _with_scalars(read: dict, rows) -> dict:
+    """``read`` with its record's molecules-table scalars (values already on the row, live ones, win)."""
+    from services.nuc.scalars import SCALARS_KEY, scalars_from_values
+    sha, occ = read.get('record_sha256'), read.get('alignment_occurrence')
+    own = f'{sha}:{occ}' if sha and occ is not None else None
+    have = dict(read.get(SCALARS_KEY) or {})
+    added = False
+    for module, row in rows:
+        if own is not None and row.get('record') and row['record'] != own:
+            continue
+        values = {}
+        for k, v in row.items():
+            if k in _NOT_SCALARS:
+                continue
+            try:
+                values[k] = None if v in (None, '') else float(v)
+            except (TypeError, ValueError):
+                continue
+        for k, v in scalars_from_values(module, values).items():
+            if k not in have:
+                have[k] = v
+                added = True
+    if not added:
+        return read
+    read = dict(read)
+    read[SCALARS_KEY] = have
+    return read
 
 
 TIER_BYTE = {'': 0, 'core': 1, 'edge': 2, 'loose': 3}

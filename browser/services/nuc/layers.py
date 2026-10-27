@@ -8,8 +8,8 @@ tracks, AN names, and on live-lift decodes ``_fiberbrowser_calls`` with molecula
 composition project them like any MA group. A record that carries the groups itself (an annotated BAM) keeps its
 own.
 
-``nucmol`` (one whole-molecule interval of scalar bytes) is never a drawn layer; its values are per-read scalars
-(``services.nuc.scalars``).
+``nucmol`` (one whole-molecule interval of scalar bytes) is never a drawn layer: its values ride on the row as
+internal scalars (``services.nuc.scalars``) for Filter/Sort terms, cluster columns and Read Stats.
 """
 from __future__ import annotations
 
@@ -35,7 +35,10 @@ def injector(bam_path, region_start: int, region_end: int, *, include_layers: bo
     if not include_layers or not isinstance(bam_path, str) or '://' in bam_path or not STORE.has_rows(bam_path):
         return None
     groups = [g for g in LAYER_GROUPS if requested_layers is None or g in requested_layers]
-    if not groups:
+    # The molecule scalars (nucmol: Filter/Sort terms, cluster columns, Read Stats) ride on the row as internal
+    # fields whenever the request loads layers.
+    scalars = requested_layers is None or 'nucmol' in requested_layers
+    if not groups and not scalars:
         return None
     rows = STORE.rows_of(bam_path)
     r0, r1 = int(region_start), int(region_end)
@@ -51,12 +54,19 @@ def injector(bam_path, region_start: int, region_end: int, *, include_layers: bo
         if layers is None:
             layers = read_data['layers'] = {}
         for g in groups:
-            if g in layers:
-                continue          # the record's own MA group (an annotated BAM)
+            # Live outputs are the dataset's active configuration (the last Compute): they replace the record's own
+            # group (an annotated BAM, possibly from other settings), and the scan overlay leaves them alone.
+            layers.pop(g, None)
             payload = layer_payload(g, out.groups.get(g) or (), r0, r1, include_qualities=include_qualities,
                                     include_calls=include_lift_meta)
             if payload is not None:
+                payload['nuc_live'] = True
                 layers[g] = payload
+        if scalars:
+            from .scalars import SCALARS_KEY, scalars_from_values
+            have = read_data.setdefault(SCALARS_KEY, {})
+            have.update(scalars_from_values('nuc', {k: v for k, v in out.scalars.items()
+                                                     if k not in ('calls_digest_hi', 'calls_digest_lo')}))
     return inject
 
 

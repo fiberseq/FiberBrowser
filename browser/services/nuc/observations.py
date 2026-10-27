@@ -3,24 +3,27 @@
 An observation is one column of the panel: a dataset panel's reads in its view (a haplotype pop-out, a strand
 split, a split panel's subset, a filtered or cluster-focused read set), a linked locus (a panel at its own view),
 or a graph path's reads. The frontend builds the descriptors from the same windows a Cluster run sends
-(``utils/clusterTargets.clusterWindows``, graph runs' observations); this module resolves each one to the source
+(``utils/clusterTargets.clusterWindows``, graph hosts' members); this module resolves each one to the source
 records it shows:
 
 - native: every record over the view passing the read filters (``live.view_records``);
 - live lift: the lifted rows of the view (``lifted_reads_for_region``), restricted to the observation's haplotype,
-  each named by its source file and record (``live_lift.library`` / ``live_lift.record``);
-- graph: the records over the path's span in the dataset's own coordinates;
-- then, when the observation names reads (``readIds``: QNAMEs, ``lift-record:v1`` record keys or ``lift-cohort:v1``
-  row identities), only those.
+  each named by its source file, record and provenance-qualified molecule key (``live_lift.library`` /
+  ``record`` / ``molecule``); the view's windows in source coordinates are its haplotype's lift pieces;
+- graph: the records over the path's span in the dataset's own coordinates (a haplotype's lift-piece hull);
+- then, when the observation names reads (``readIds``), only those: a plain QNAME names every record of that read;
+  a ``lift-record:v1`` key or ``lift-cohort:v1`` identity names its molecule (with its provenance group) and record,
+  and a folded key its molecule's records only.
 
-Physical molecules are counted once per observation (``mol:v1``-style: one molecule per QNAME and file), so a
-split lifted record or a supplementary never counts twice.
+One record per physical molecule (``mol:v1``, a primary record first) enters every aggregate, so a split lifted
+record, a supplementary or a CCS strand pair never counts twice.
 
-Summaries are molecule-wide distributions over each observation's stored outputs (size classes and density-matched
-z of footprints in the window, per-molecule repeat length, regularity and gap CV, segment fractions and events in
-the window), plus FiberHMM's ``window_metrics`` for the window (class mix with ``insufficient``, NRL quantiles,
-regular / disordered / undetermined fractions) from the decoded molecules. No nucleosome maths runs in the
-browser.
+Summaries are measured in molecular bases: each record's window is the view's span projected onto the molecule
+(aligned bases), so deletions never inflate a segment and insertions never hide one. They are molecule-wide
+distributions over each observation's outputs (size classes and density-matched z of footprints centred in the
+window, per-molecule repeat length, regularity and gap CV, segment shares and events in the window), plus FiberHMM's
+``window_metrics`` for the window. Live outputs count only under the dataset's active configuration; records without
+them come from what is loaded (a bound scan's rows, an annotated BAM's groups). No nucleosome maths runs here.
 """
 from __future__ import annotations
 
@@ -29,6 +32,7 @@ import math
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from .inputs import NucSource, nuc_source, real
+from .live import Rec
 from .store import STORE, RecordOutputs
 
 COARSE = ('cant_tell', 'short', 'mono', 'long', 'multi2', 'multi3', 'edge_truncated')
@@ -41,31 +45,39 @@ class ObservationError(ValueError):
     pass
 
 
-def _read_id_keys(ids) -> Tuple[set, set]:
-    """(QNAMEs, records 'sha:occ') named by a read-id list (QNAMEs, record keys, row identities)."""
-    qnames, records = set(), set()
-    for raw in ids or ():
-        s = str(raw)
-        for prefix in ('lift-record:v1 ', 'lift-cohort:v1 '):
-            if s.startswith(prefix):
-                try:
-                    parts = json.loads(s[len(prefix):])
-                except ValueError:
-                    parts = None
-                if isinstance(parts, list) and len(parts) >= 3:
-                    if isinstance(parts[2], str):
-                        records.add(parts[2])
-                    elif isinstance(parts[1], str):
-                        qnames.add(parts[1])     # a folded molecule key: every record of the QNAME
-                break
-        else:
-            qnames.add(s)
-    return qnames, records
+class _ReadIds:
+    """What a read-id list names (QNAMEs, record keys, row identities)."""
+
+    def __init__(self, ids):
+        self.qnames, self.records, self.molecules = set(), set(), set()
+        for raw in ids or ():
+            s = str(raw)
+            for prefix in ('lift-record:v1 ', 'lift-cohort:v1 '):
+                if s.startswith(prefix):
+                    try:
+                        parts = json.loads(s[len(prefix):])
+                    except ValueError:
+                        parts = None
+                    if isinstance(parts, list) and len(parts) >= 3 and isinstance(parts[1], str):
+                        if isinstance(parts[2], str):
+                            self.records.add((parts[0], parts[1], parts[2]))
+                        else:
+                            self.molecules.add((parts[0], parts[1]))     # a folded molecule: its records
+                    break
+            else:
+                self.qnames.add(s)
+
+    def match(self, rec: Rec) -> bool:
+        if rec.qname in self.qnames:
+            return True
+        if rec.molecule is not None:
+            return (rec.molecule, rec.qname, f'{rec.sha}:{rec.occ}') in self.records or \
+                (rec.molecule, rec.qname) in self.molecules
+        return False
 
 
-def resolve(state, obs: dict, policy: dict) -> Tuple[NucSource, list, List[Tuple[str, int, int]]]:
-    """(source, [(file, sha, occ, qname, DAF strand)], windows) of one observation descriptor; the windows are in the
-    records' own coordinates (a live-lift observation's view through its haplotype's primary lift pieces)."""
+def resolve(state, obs: dict, policy: dict) -> Tuple[NucSource, List[Rec], List[Tuple[str, int, int]]]:
+    """(source, records, windows) of one observation descriptor; the windows are in the records' own coordinates."""
     from .live import view_records
     ds_id = str(obs.get('datasetId') or '')
     source = nuc_source(state, ds_id)
@@ -98,16 +110,16 @@ def resolve(state, obs: dict, policy: dict) -> Tuple[NucSource, list, List[Tuple
             windows = [(chrom, start, end)]
             recs = view_records(source, windows, policy)
         else:
-            recs = _lifted_records(state, source, chrom, start, end, obs.get('liftHap'))
             windows = source_windows(state, source, chrom, start, end, obs.get('liftHap'))
+            recs = _lifted_records(state, source, chrom, start, end, obs.get('liftHap'), windows, policy)
     strand = obs.get('strand')
     ids = obs.get('readIds')
     if ids is not None:
-        qnames, records = _read_id_keys(ids)
-        recs = [r for r in recs if r[3] in qnames or f'{r[1]}:{r[2]}' in records]
+        named = _ReadIds(ids)
+        recs = [r for r in recs if named.match(r)]
     if strand in ('CT', 'GA'):
         # A DAF strand panel shows the reads whose st:Z call is that strand (the server's strand filter).
-        recs = [r for r in recs if r[4] == strand]
+        recs = [r for r in recs if r.strand == strand]
     return source, recs, windows
 
 
@@ -136,11 +148,14 @@ def source_windows(state, source: NucSource, chrom: str, start: int, end: int, h
     return _merge(out)
 
 
-def _lifted_records(state, source: NucSource, chrom: str, start: int, end: int, hap: Optional[str]):
+def _lifted_records(state, source: NucSource, chrom: str, start: int, end: int, hap: Optional[str], windows,
+                    policy) -> List[Rec]:
+    """The records of a live-lift dataset's lifted rows in view (of ``hap``), with their molecular windows."""
     from services.lift.reads import lifted_reads_for_region
+    from .live import view_records
     ds = state.datasets[source.browser_id]
     rows = lifted_reads_for_region(ds, chrom, int(start), int(end), {})
-    out, seen = [], set()
+    lifted: Dict[Tuple[str, str, int], Tuple[str, Optional[str], Optional[str]]] = {}
     for row in rows:
         ll = row.get('live_lift') or {}
         if hap and hap not in (ll.get('hap'), ll.get('hap_label')):
@@ -152,11 +167,15 @@ def _lifted_records(state, source: NucSource, chrom: str, start: int, end: int, 
         lib = int(ll.get('library') or 0)
         if not 0 <= lib < len(source.paths):
             continue
-        key = (source.paths[lib], sha, int(occ))
-        if key not in seen:
-            seen.add(key)
-            st = row.get('strand')
-            out.append((*key, str(row.get('id') or ''), st if st in ('CT', 'GA') else None))
+        st = row.get('strand')
+        lifted.setdefault((source.paths[lib], sha, int(occ)),
+                          (str(row.get('id') or ''), st if st in ('CT', 'GA') else None, ll.get('molecule')))
+    by_key = {(r.path, r.sha, r.occ): r for r in view_records(source, windows, policy)} if windows else {}
+    out = []
+    for key, (qname, strand, molecule) in lifted.items():
+        r = by_key.get(key)
+        wins = r.molwins if r is not None else tuple((-1, -1) for _w in windows)
+        out.append(Rec(*key, qname, strand, bool(r.supplementary) if r is not None else False, wins, molecule))
     return out
 
 
@@ -165,6 +184,7 @@ def _quantiles(values: Sequence[float]) -> Optional[List[float]]:
     vs = sorted(v for v in values if v is not None and math.isfinite(v))
     if not vs:
         return None
+
     def q(p):
         k = (len(vs) - 1) * p
         lo, hi = math.floor(k), math.ceil(k)
@@ -188,11 +208,11 @@ def _hist(values: Sequence[float], edges: Sequence[float]) -> List[int]:
     return counts
 
 
-def _inside(windows, chrom: str, a: int, b: int) -> int:
-    """Bases of ``[a, b)`` on ``chrom`` inside the windows (a zero-width span counts 1 when its base is inside)."""
+def _overlap(molwins, a: int, b: int) -> int:
+    """Molecular bases of ``[a, b)`` inside a record's windows (a zero-length span counts 1 when inside)."""
     n = 0
-    for c, w0, w1 in windows:
-        if c != chrom:
+    for w0, w1 in molwins:
+        if w1 <= w0:
             continue
         if a == b:
             if w0 <= a < w1:
@@ -202,8 +222,8 @@ def _inside(windows, chrom: str, a: int, b: int) -> int:
     return n
 
 
-def summarize_rows(rows: Sequence[RecordOutputs], windows: Sequence[Tuple[str, int, int]]) -> dict:
-    """Molecule-wide summary of stored outputs over windows in the rows' own coordinates."""
+def summarize_rows(items: Sequence[Tuple[RecordOutputs, Tuple[Tuple[int, int], ...]]]) -> dict:
+    """Molecule-wide summary of outputs with each record's molecular windows (one item per molecule)."""
     coarse = {k: 0 for k in COARSE}
     tf = 0
     z = []
@@ -211,7 +231,7 @@ def summarize_rows(rows: Sequence[RecordOutputs], windows: Sequence[Tuple[str, i
     undersized = missing = 0
     nrl, reg, cv = [], [], []
     too_short = low = 0
-    for r in rows:
+    for r, molwins in items:
         if r.low_information:
             low += 1
         flags = int(r.scalars.get('flags') or 0)
@@ -223,9 +243,8 @@ def summarize_rows(rows: Sequence[RecordOutputs], windows: Sequence[Tuple[str, i
             reg.append(r.scalars['regularity'])
             if r.scalars.get('gap_cv') is not None:
                 cv.append(r.scalars['gap_cv'])
-        for ms, ml, a, b, q, _n in r.groups.get('nucsz') or ():
-            mid = (a + max(b, a + 1)) // 2
-            if not q or not _inside(windows, r.chrom, mid, mid):
+        for ms, ml, _a, _b, q, _n in r.groups.get('nucsz') or ():
+            if not q or not _overlap(molwins, ms + ml // 2, ms + ml // 2):
                 continue
             code = q[0] & 15
             if code < len(COARSE):
@@ -234,10 +253,10 @@ def summarize_rows(rows: Sequence[RecordOutputs], windows: Sequence[Tuple[str, i
                 tf += 1
             if len(q) > 3 and q[3] != 255 and code in (1, 2, 3):
                 z.append((q[3] - 128) / 20.0)
-        for ms, ml, a, b, q, _n in r.groups.get('nucseg') or ():
+        for ms, ml, _a, _b, q, _n in r.groups.get('nucseg') or ():
             if not q:
                 continue
-            inside = _inside(windows, r.chrom, a, b)
+            inside = _overlap(molwins, ms, ms + ml)
             if q[0] >= 16:
                 if inside:
                     if q[0] == 16:
@@ -250,27 +269,27 @@ def summarize_rows(rows: Sequence[RecordOutputs], windows: Sequence[Tuple[str, i
     n_fp = sum(coarse.values())
     seg_total = sum(seg_bp.values())
     return dict(
-        molecules=len(rows), lowInformation=low,
+        molecules=len(items), lowInformation=low,
         sizes=dict(coarse=coarse, tf=tf, footprints=n_fp,
                    cantTellFraction=round((coarse['cant_tell'] + coarse['edge_truncated']) / n_fp, 4) if n_fp else None,
                    z=dict(edges=Z_EDGES, counts=_hist(z, Z_EDGES), n=len(z))),
         spacing=dict(nrl=dict(quantiles=_quantiles(nrl), edges=NRL_EDGES, counts=_hist(nrl, NRL_EDGES), n=len(nrl)),
                      regularity=_quantiles(reg), gapCv=_quantiles(cv),
-                     tooShortFraction=round(too_short / len(rows), 4) if rows else None),
+                     tooShortFraction=round(too_short / len(items), 4) if items else None),
         segments=dict(bp=seg_total, **{k: (round(v / seg_total, 4) if seg_total else None) for k, v in seg_bp.items()},
                       undersizedRuns=undersized, missingNucleosomes=missing),
     )
 
 
-def _window_metrics(source: NucSource, keys, window, cfg) -> Optional[dict]:
-    """FiberHMM's window metrics for the observation's molecules (decoded molecules from the store) over one window
-    in their own coordinates."""
+def _window_metrics(cohort: Sequence[Rec], window, cfg) -> Optional[dict]:
+    """FiberHMM's window metrics for one record per molecule of the observation (decoded molecules from the store,
+    under the active configuration) over one window in their own coordinates."""
     from fiberhmm.nuc.window import window_metrics
     from .engine import nuc_params
-    config = (cfg.calibration.settings_hash, cfg.calibration.digest)
     mols, results = [], {}
-    for path, sha, occ, *_rest in keys:
-        hit = STORE.get_result(path, sha, occ, config)
+    for r in cohort:
+        config = cfg.config_for(r.path)
+        hit = STORE.get_result(r.path, r.sha, r.occ, config) if config is not None else None
         if hit is None:
             continue
         mol, res = hit
@@ -284,56 +303,76 @@ def _window_metrics(source: NucSource, keys, window, cfg) -> Optional[dict]:
     return json.loads(json.dumps(agg, default=lambda o: None if isinstance(o, float) and not math.isfinite(o) else str(o)))
 
 
+def _molecule_key(qname: str) -> str:
+    from fiberhmm.scan.identity import molecule_id
+    return molecule_id([qname])
+
+
+def observation_cohort(state, obs: dict, policy: dict):
+    """(source, records, windows, active configuration, [(record, outputs)] one per molecule, counts)."""
+    from .jobs import active_config
+    source, recs, windows = resolve(state, obs, policy)
+    cfg = active_config(state, source.browser_id)
+
+    def live_row(r: Rec) -> Optional[RecordOutputs]:
+        # Live outputs count under the dataset's active configuration only (another dataset may have computed
+        # this file with other settings).
+        if cfg is None or STORE.config_of(r.path) != cfg.config_for(r.path):
+            return None
+        return STORE.get(r.path, r.sha, r.occ)
+
+    def failed(r: Rec) -> bool:
+        return cfg is not None and STORE.config_of(r.path) == cfg.config_for(r.path) and \
+            STORE.failed(r.path, r.sha, r.occ) is not None
+
+    absent = [(r.path, r.sha, r.occ) for r in recs if live_row(r) is None and not failed(r)]
+    loaded = {}
+    if absent:
+        try:
+            from .loaded import loaded_rows
+            loaded = loaded_rows(state, source, windows, absent)
+        except Exception:   # noqa: BLE001 - loaded rows are an addition; live rows still summarise
+            loaded = {}
+    # One record per physical molecule (mol:v1), a primary record first.
+    by_molecule: Dict[str, Tuple[Rec, RecordOutputs]] = {}
+    missing = undecodable = 0
+    for r in sorted(recs, key=lambda x: x.supplementary):
+        row = live_row(r) or loaded.get((r.path, r.sha, r.occ))
+        if row is None:
+            if failed(r):
+                undecodable += 1
+            else:
+                missing += 1
+            continue
+        by_molecule.setdefault(_molecule_key(r.qname), (r, row))
+    return source, recs, windows, cfg, list(by_molecule.values()), dict(missing=missing, undecodable=undecodable)
+
+
 def summarize(state, observations: Sequence[dict], *, include_duplicates: bool = False) -> dict:
     from .inputs import browser_read_policy
-    from .jobs import active_config
     policy = browser_read_policy(state, include_duplicates=include_duplicates)
     out = []
     for obs in observations:
         entry = dict(obsId=obs.get('obsId'), label=obs.get('label'), datasetId=obs.get('datasetId'),
                      kind=obs.get('kind') or 'linear')
         try:
-            source, recs, windows = resolve(state, obs, policy)
+            source, recs, windows, cfg, cohort, counts = observation_cohort(state, obs, policy)
         except (ObservationError, ValueError) as error:
             entry['error'] = str(error)
             out.append(entry)
             continue
-        cfg = active_config(state, source.browser_id)
-        rows, seen = [], set()
-        missing = undecodable = 0
-        # Records not computed live: what is loaded (a bound scan's rows, an annotated BAM's groups).
-        absent = [(p, s, o) for p, s, o, _q, _st in recs if STORE.get(p, s, o) is None and STORE.failed(p, s, o) is None]
-        loaded = {}
-        if absent:
-            try:
-                from .loaded import loaded_rows
-                loaded = loaded_rows(state, source, windows, absent)
-            except Exception:   # noqa: BLE001 - loaded rows are an addition; live rows still summarise
-                loaded = {}
-        for path, sha, occ, qname, _strand in recs:
-            r = STORE.get(path, sha, occ) or loaded.get((path, sha, occ))
-            if r is None:
-                if STORE.failed(path, sha, occ) is not None:
-                    undecodable += 1
-                else:
-                    missing += 1
-                continue
-            mol_key = (path, qname)
-            if mol_key in seen:
-                continue
-            seen.add(mol_key)
-            rows.append(r)
-        entry.update(records=len(recs), computed=len(rows), notComputed=missing, undecodable=undecodable,
+        entry.update(records=len(recs), computed=len(cohort), notComputed=counts['missing'],
+                     undecodable=counts['undecodable'],
                      windows=[dict(chrom=c, start=a, end=b) for c, a, b in windows],
                      calibration=cfg.calibration.summary() if cfg is not None else None,
-                     sources=sorted({r.source for r in rows}))
-        entry.update(summarize_rows(rows, windows))
-        if cfg is not None and rows and windows:
+                     sources=sorted({row.source for _r, row in cohort}))
+        entry.update(summarize_rows([(row, r.molwins) for r, row in cohort]))
+        if cfg is not None and cohort and windows:
             # window metrics over the observation's largest window (a lifted view through an insertion is still
             # one source span per haplotype)
             window = max(windows, key=lambda w: w[2] - w[1])
             try:
-                entry['windowMetrics'] = _window_metrics(source, recs, window, cfg)
+                entry['windowMetrics'] = _window_metrics([r for r, _row in cohort], window, cfg)
             except Exception as error:   # noqa: BLE001 - a metrics failure must not hide the summary
                 entry['windowMetrics'] = None
                 entry['windowMetricsError'] = str(error)
@@ -348,10 +387,9 @@ def record_rows(state, dataset_id: str, chrom: str, start: int, end: int, *, inc
     policy = browser_read_policy(state, include_duplicates=include_duplicates)
     source = nuc_source(state, dataset_id)
     regions = source_regions(state, source, chrom, int(start), int(end))
-    recs = view_records(source, regions, policy)
     rows = []
-    for path, sha, occ, qname, _strand in recs:
-        r = STORE.get(path, sha, occ)
-        rows.append(dict(record=f'{sha}:{occ}', file=source.paths.index(real(path)) if real(path) in source.paths else 0,
-                         qname=qname, outputs=r.to_json() if r is not None else None))
-    return dict(datasetId=dataset_id, regions=[list(r) for r in regions], records=rows)
+    for r in view_records(source, regions, policy):
+        out = STORE.get(r.path, r.sha, r.occ)
+        rows.append(dict(record=f'{r.sha}:{r.occ}', file=source.paths.index(real(r.path)) if real(r.path) in source.paths else 0,
+                         qname=r.qname, outputs=out.to_json() if out is not None else None))
+    return dict(datasetId=dataset_id, regions=[list(x) for x in regions], records=rows)

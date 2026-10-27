@@ -68,11 +68,13 @@ MAX_LEVEL = 8
 LOADER_OPTIONS = dict(include_methylation=True, ml_threshold=125, include_layers=True, include_layer_qualities=True,
                       hide_terminal_gaps=True, include_cigar=True, include_duplicates=False, sv_min_len=50)
 _LAYERS = ("nuc", "tf", "msp")
+# Lanes drawn under a graph row, one primitive per interval (the nucleosome segment lane, NUC §7.1).
+_LANES = ("nseg",)
 # The cached rows' wire form: 2 adds the identities (aid, rk, hap) and the map's molecule groups (graph primary G0);
 # 3 the DAF strand of DAF-seq records (G8; 5: its evidence by mark, resolved per molecule; 6: marks by contig and
 # absolute source position, so records cached by decodes at other origins compare alike; 7: a supplementary's
-# primary's explicit call; 8: soft clips).
-WIRE_VERSION = 8
+# primary's explicit call; 8: soft clips; 9: nucleosome classes on nuc/tf pieces and the segment lane).
+WIRE_VERSION = 9
 
 
 class ReadsError(Exception):
@@ -294,6 +296,48 @@ def _abs_layer(layer: Optional[dict], ids, parts, origin: int, name: str, keep) 
     return out
 
 
+def _nuc_classes(out: dict, layers: dict, origin: int, keep) -> None:
+    """Nucleosome outputs on a graph row (NUC §7.1, P-B): each nuc/tf piece gets its footprint's nucsz class byte
+    (``cls``: coarse code + 16 for TF, as nucsz Q1) and z byte (``zb``: 20 z + 128, 255 missing) by the mark that
+    holds the piece's midpoint, so no extra primitive is spent; ``nseg`` is the segment lane (nucseg rows: [start,
+    end, molecular length] with their code, posterior or 10 x LLR, and q-hat - 100 or count bytes)."""
+    sz = layers.get("nucsz")
+    if sz and sz.get("intervals"):
+        names = list(sz.get("quality_names") or [])
+        quals = sz.get("qualities") or []
+        q0 = quals[0] if quals else None
+        qz = quals[names.index("z")] if "z" in names and names.index("z") < len(quals) else (quals[3] if len(quals) > 3 else None)
+        marks = sorted((int(iv[0]) + origin, int(iv[1]) + origin, i) for i, iv in enumerate(sz["intervals"]))
+        starts = [m[0] for m in marks]
+        import bisect
+        for name in ("nuc", "tf"):
+            layer = out.get(name)
+            if not layer:
+                continue
+            cls, zb = [], []
+            for a, b, _size in layer["iv"]:
+                mid = (int(a) + int(b)) // 2
+                k = bisect.bisect_right(starts, mid) - 1
+                hit = None
+                for j in range(k, max(-1, k - 8), -1):   # marks starting at or before mid (few overlap)
+                    m0, m1, i = marks[j]
+                    if m0 <= mid < max(m1, m0 + 1):
+                        hit = i
+                        break
+                cls.append(int(q0[hit]) if hit is not None and q0 is not None else None)
+                zb.append(int(qz[hit]) if hit is not None and qz is not None else None)
+            if any(c is not None for c in cls):
+                layer["cls"], layer["zb"] = cls, zb
+    seg = layers.get("nucseg")
+    if seg and seg.get("intervals"):
+        quals = seg.get("qualities") or []
+        idx = [i for i, iv in enumerate(seg["intervals"]) if keep(int(iv[0]) + origin, int(iv[1]) + origin)]
+        if idx:
+            out["nseg"] = {"iv": [[int(seg["intervals"][i][0]) + origin, int(seg["intervals"][i][1]) + origin,
+                                   int(seg["intervals"][i][2])] for i in idx],
+                           **{key: [int(quals[j][i]) for i in idx] for j, key in enumerate(("code", "p", "q3")) if j < len(quals)}}
+
+
 def compact_row(row: dict, origin: int, dataset_id: str, binding: str, windows: Optional[list] = None) -> dict:
     """A composed row (relative to ``origin``) as the graph wire form, in absolute source coordinates. Calls are
     whole (their own bounds, never clipped); only those touching ``windows`` are sent, and m6A inside them."""
@@ -345,6 +389,7 @@ def compact_row(row: dict, origin: int, dataset_id: str, binding: str, windows: 
         layer = _abs_layer(layers.get(name), calls.get(f"layer:{name}"), parts.get(f"layer:{name}"), origin, name, keep)
         if layer is not None:
             out[name] = layer
+    _nuc_classes(out, layers, origin, keep)
     marks = row.get("methyl_m6a")
     if type(marks) is IntColumn and marks.width is None:
         p = marks.array + origin
@@ -437,7 +482,7 @@ def resolve_molecule_strands(reads: list, evidence_only: Optional[list] = None, 
 
 
 def marks_of(read: dict) -> int:
-    return (sum(len((read.get(n) or {}).get("iv") or ()) for n in _LAYERS) + len(read.get("m6a") or ())
+    return (sum(len((read.get(n) or {}).get("iv") or ()) for n in _LAYERS + _LANES) + len(read.get("m6a") or ())
             + len(read.get("m6a_density") or ()))
 
 
@@ -463,8 +508,8 @@ def clip_to_windows(read: dict, windows: list) -> dict:
     def keep(a, b):
         return any(a < wb and b > wa for wa, wb in windows)
 
-    out = {k: v for k, v in read.items() if k not in _LAYERS and k != "m6a"}
-    for name in _LAYERS:
+    out = {k: v for k, v in read.items() if k not in _LAYERS + _LANES and k != "m6a"}
+    for name in _LAYERS + _LANES:
         layer = read.get(name)
         if not layer:
             continue
@@ -944,8 +989,10 @@ def _load(state, reg, body: dict, *, max_molecules: int, max_marks: int, max_byt
         nonlocal decode_ms, decoded_records
         dataset, binding, contig, windows, size = job
         kept = [k for k in recs or () if k[1] in pins or keeps(k[1], lvl)]
+        from services.nuc.store import nuc_identity
+        # (Nucleosome outputs computed for the dataset's records are part of what a composed row is: services/nuc.)
         base = (dataset.id, dataset_revision(dataset), binding["key"], contig, tuple(sorted(LOADER_OPTIONS.items())),
-                WIRE_VERSION)
+                WIRE_VERSION, nuc_identity(dataset))
         keys = [_record_key(base, k) for k in kept]
         listed_n: dict = {}
         for key in keys:

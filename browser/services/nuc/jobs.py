@@ -34,11 +34,23 @@ MAX_VIEW_BP = 2_000_000
 class ActiveConfig:
     settings: dict
     settings_hash: str
-    calibration: object        # CalibrationRef
+    calibrations: dict         # real path -> CalibrationRef (files of several scan datasets keep their own record)
     policy: dict
 
+    @property
+    def calibration(self):
+        """The first file's record (one record for every file unless the files come from several scan datasets)."""
+        return next(iter(self.calibrations.values()))
+
+    def config_for(self, path: str):
+        from .inputs import real
+        cal = self.calibrations.get(real(path))
+        return (cal.settings_hash, cal.digest) if cal is not None else None
+
     def summary(self) -> dict:
-        return dict(settingsHash=self.settings_hash, calibration=self.calibration.summary())
+        digests = {c.digest for c in self.calibrations.values()}
+        return dict(settingsHash=self.settings_hash, calibration=self.calibration.summary(),
+                    perFile=len(digests) > 1)
 
 
 def _session(state):
@@ -73,13 +85,19 @@ def ensure_config(state, source, settings: dict, settings_hash: str, policy: dic
     from .engine import module_version
     version = module_version()
     filters = policy.get('filters') or {}
-    cal = find_calibration(state, source, settings_hash, version, filters)
-    if cal is None:
+    cals = find_calibration(state, source, settings_hash, version, filters)
+    if cals is None:
         cal = compute_calibration(source, settings, settings_hash, version, policy, cores=cores, progress=progress,
                                   cancel=cancel)
-    cfg = ActiveConfig(settings, settings_hash, cal, policy)
+        cals = {p: cal for p in source.paths}
+    cfg = ActiveConfig(settings, settings_hash, cals, policy)
     _session(state)
     state.nuc_active[source.browser_id] = cfg
+    # Another dataset reading one of these files under another configuration loses its outputs there (the store
+    # holds one configuration per file): it no longer has an active configuration (Compute again).
+    for other, ocfg in list(state.nuc_active.items()):
+        if other != source.browser_id and any(ocfg.config_for(p) not in (None, cfg.config_for(p)) for p in source.paths):
+            state.nuc_active.pop(other, None)
     return cfg
 
 
@@ -188,11 +206,18 @@ def submit(state, request: dict) -> dict:
                         update_progress(job, f'molecules ({_i + 1}/{n})',
                                         f'{_label}: {computed:,} molecules computed of {records:,} records',
                                         task='molecules')
-                stats = compute_regions(source, regions, plan['settings'], cfg.calibration, policy,
-                                        progress=rec_progress, cancel=cancel)
-                touched = refresh_after(state, source.paths)
+                try:
+                    stats = compute_regions(source, regions, plan['settings'], cfg.calibrations, policy,
+                                            progress=rec_progress, cancel=cancel)
+                finally:
+                    # Outputs are published batch by batch: a cancelled or failed compute refreshes what it wrote.
+                    touched = refresh_after(state, source.paths)
+                    with lock:
+                        job['results'][source.browser_id] = dict(calibration=cfg.calibration.summary(), datasets=touched,
+                                                                 records=0, computed=0, cached=0, undecodable={},
+                                                                 regions=[list(r) for r in regions], complete=False)
                 with lock:
-                    job['results'][source.browser_id] = dict(calibration=cfg.calibration.summary(), datasets=touched,
+                    job['results'][source.browser_id].update(complete=True,
                                                              **{k: v for k, v in stats.items() if k != 'fraction'})
             with lock:
                 job['status'] = 'complete'

@@ -16,7 +16,7 @@ occurrence), over
 from __future__ import annotations
 
 import threading
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -88,26 +88,29 @@ class _Counter:
         self.undecodable: Dict[str, int] = {}
 
 
-def compute_regions(source: NucSource, regions: Sequence[Tuple[str, int, int]], settings: dict, cal: CalibrationRef,
+def compute_regions(source: NucSource, regions: Sequence[Tuple[str, int, int]], settings: dict, cals,
                     policy: dict, *, progress: Optional[Callable[[int, int], None]] = None, cancel=None,
                     keep_results: bool = True) -> dict:
     """Compute and store outputs for every record (passing ``policy``'s filters) overlapping ``regions`` of the
-    dataset's files (in the files' own coordinates). Records already stored for this configuration are kept."""
+    dataset's files (in the files' own coordinates). ``cals``: a CalibrationRef, or one per real path. Records
+    already stored for this configuration are kept."""
     import pysam
     from fiberhmm.scan.reads import iter_records
     from .engine import nuc_params
     params = nuc_params(settings)
     pkey = _params_key(settings)
-    config = (cal.settings_hash, cal.digest)
-    calibration = cal.calibration
+    if isinstance(cals, CalibrationRef):
+        cals = {p: cals for p in source.paths}
     filters = policy['filters']
     n = _Counter()
     for path in source.paths:
-        STORE.configure(path, config)
+        STORE.configure(path, (cals[path].settings_hash, cals[path].digest))
     regions = _merge(regions)
     total_bp = sum(b - a for _c, a, b in regions) or 1
     done_bp = 0
     for i, path in enumerate(source.paths):
+        config = (cals[path].settings_hash, cals[path].digest)
+        calibration = cals[path].calibration
         with pysam.AlignmentFile(path, 'rb') as bam:
             refs = set(bam.references)
             ctx = _decode_context(path, bam.header, params, pkey)
@@ -185,14 +188,54 @@ def source_regions(state, source: NucSource, chrom: str, start: int, end: int) -
     return [(c.contig, int(a), int(b)) for c in plan.contigs for a, b in c.windows]
 
 
-def view_records(source: NucSource, regions: Sequence[Tuple[str, int, int]], policy: dict
-                 ) -> List[Tuple[str, str, int, str, Optional[str]]]:
-    """(path, sha, occ, qname, DAF strand) of every record over ``regions`` passing the read filters (no decoding);
-    the strand is the record's ``st:Z`` call (CT / GA), None without one."""
+class Rec(NamedTuple):
+    """One source record of an observation."""
+    path: str
+    sha: str
+    occ: int
+    qname: str
+    strand: Optional[str]            # the record's DAF strand call (st:Z), None without one
+    supplementary: bool
+    molwins: Tuple[Tuple[int, int], ...]   # per window of the request: its molecular span on this record, or (-1, -1)
+    molecule: Optional[str] = None   # a lifted row's provenance-qualified molecule key (live_lift.molecule)
+
+
+def mol_window(read, start: int, end: int) -> Tuple[int, int]:
+    """The molecular span of reference ``[start, end)`` on a record (``NucMolecule.ref_interval_to_mol``: aligned
+    query bases, reverse records counted from the molecule's other end), or (-1, -1) when none of it is aligned."""
+    qlo = qhi = None
+    q = r = 0
+    r = int(read.reference_start)
+    for op, n in read.cigartuples or ():
+        if op in (0, 7, 8):                       # M = X: aligned
+            a, b = max(r, start), min(r + n, end)
+            if b > a:
+                lo, hi = q + (a - r), q + (b - r)
+                qlo = lo if qlo is None else min(qlo, lo)
+                qhi = hi if qhi is None else max(qhi, hi)
+            q += n
+            r += n
+        elif op in (1, 4):                        # I S: query only
+            q += n
+        elif op in (2, 3):                        # D N: reference only
+            r += n
+    if qlo is None:
+        return (-1, -1)
+    if read.is_reverse:
+        L = int(read.query_length or 0)
+        return (L - qhi, L - qlo)
+    return (qlo, qhi)
+
+
+def view_records(source: NucSource, regions: Sequence[Tuple[str, int, int]], policy: dict,
+                 windows: Optional[Sequence[Tuple[str, int, int]]] = None) -> List[Rec]:
+    """Every record over ``regions`` passing the read filters (no decoding), with its molecular spans of ``windows``
+    (default: the regions)."""
     import pysam
     from fiberhmm.scan.reads import iter_records
     from services.read_strand import record_strand_fields
-    out = []
+    windows = list(windows if windows is not None else regions)
+    out: List[Rec] = []
     seen = set()
     for path in source.paths:
         with pysam.AlignmentFile(path, 'rb') as bam:
@@ -202,8 +245,12 @@ def view_records(source: NucSource, regions: Sequence[Tuple[str, int, int]], pol
                     continue
                 for read, sha, occ in iter_records(bam, chrom, int(start), int(end), policy['filters']):
                     key = (path, sha, occ)
-                    if key not in seen:
-                        seen.add(key)
-                        strand = record_strand_fields(read).get('strand')
-                        out.append((path, sha, occ, str(read.query_name), strand if strand in ('CT', 'GA') else None))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    strand = record_strand_fields(read).get('strand')
+                    wins = tuple(mol_window(read, int(a), int(b)) if c == read.reference_name else (-1, -1)
+                                 for c, a, b in windows)
+                    out.append(Rec(path, sha, occ, str(read.query_name), strand if strand in ('CT', 'GA') else None,
+                                   bool(read.is_supplementary), wins))
     return out

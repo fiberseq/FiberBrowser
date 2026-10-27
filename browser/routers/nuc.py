@@ -61,7 +61,7 @@ async def nuc_status(request: dict, state=Depends(get_state)):
             stored = find_calibration(state, source, sh, version, policy.get('filters') or {})
             entry.update(kind=source.kind, label=source.label,
                          active=cfg.summary() if cfg is not None else None,
-                         storedCalibration=stored.summary() if stored is not None else None,
+                         storedCalibration=next(iter(stored.values())).summary() if stored else None,
                          records=sum(len(STORE.rows_of(p)) for p in source.paths))
             out.append(entry)
         return dict(available=True, settingsHash=sh, version=version, datasets=out)
