@@ -219,12 +219,28 @@ export interface ColorRule {
   qualityGates?: QualityGate[];
   /** If true, match only layer intervals carrying a non-empty AN name. */
   requireAnnotationName?: boolean;
+  /**
+   * Nucleosome size conditions (native/nucleosome_panel/DESIGN.md §5.4, §7.1): a nuc/tf item matches through the
+   * read's `nucsz` mark for it (CONTRACTS §11.3). All set conditions must hold; an item without a mark never matches
+   * a rule that sets one.
+   * - `nucCoarse`: coarse codes (nucsz Q1 low 4 bits: 0 can't tell, 1 short, 2 mono, 3 long, 4 multi(2),
+   *   5 multi(3+), 6 edge-truncated); empty or absent: any.
+   * - `nucNamed`: named codes (nucsz Q2: 1 small, 2 hexasome, 3 octasome, 4 chromatosome; absolute calibration only).
+   * - `zMin` / `zMax`: the density-matched z range (Q4 = 20 z + 128; 255 = missing, which never matches).
+   * - `nucTf`: true only TF calls (or footprints overlapping one: Q1 bit 16), false only nucleosome calls.
+   */
+  nucCoarse?: number[];
+  nucNamed?: number[];
+  zMin?: number | null;
+  zMax?: number | null;
+  nucTf?: boolean | null;
   enabled: boolean;
 }
 
 export const CLUSTER_RULE_MODE_PREFIX = 'cluster_rule:';
 
-export type ClusterFeatureRuleTermSource = 'layer' | 'label_rule' | 'footprint_group' | 'footprint_class' | 'transcription_state';
+export type ClusterFeatureRuleTermSource = 'layer' | 'label_rule' | 'footprint_group' | 'footprint_class' | 'transcription_state'
+  | 'molecule_metric' | 'feature_hub';
 export type TranscriptionStateRuleKind = 'pause' | 'pic' | 'elongating';
 
 export type AnalysisRulePeakScope = 'selectedPeaks' | 'allPeaks';
@@ -269,6 +285,13 @@ export interface ClusterFeatureRuleTerm {
   group?: FootprintGroup;
   /** Built-in Pol II state source, matching the Transcription panel definitions. */
   transcriptionState?: TranscriptionStateRuleKind;
+  /** `molecule_metric`: a per-molecule scalar ('nuc.nrl', 'nuc.regularity', 'nfr.openness', ...: the scan
+   * modules' scalar groups nucmol / nfrmol, browser/services/nuc/scalars.py). Missing values never pass. */
+  moleculeMetric?: string;
+  /** `feature_hub`: the hub hits the term reads per-read states at (a snapshot of the selection), and the state
+   * that counts ('1' member / open, '0' not; '.' never counts). */
+  hubHits?: Array<{ setId: string; hitId: string; chrom: string; start: number; end: number; label?: string }>;
+  hubState?: '1' | '0';
 }
 
 export interface ClusterFeatureRule {
@@ -291,7 +314,8 @@ export interface ClusterFeatureRuleSet {
   savedAt?: number;
 }
 
-export type AnalysisSortMetric = 'count' | 'occupancy' | 'rate' | 'accessibility';
+/** `value`: a molecule_metric term's scalar itself (missing values sort last and never pass a filter). */
+export type AnalysisSortMetric = 'count' | 'occupancy' | 'rate' | 'accessibility' | 'value';
 
 export interface AnalysisSortRule {
   id: string;
@@ -313,7 +337,8 @@ export interface AnalysisSortRuleSet {
 }
 
 export type AnalysisFilterMetric = AnalysisSortMetric;
-export type AnalysisFilterOperator = 'gt' | 'gte' | 'lt' | 'lte' | 'eq';
+/** `between`: threshold <= value <= thresholdMax (both inclusive). */
+export type AnalysisFilterOperator = 'gt' | 'gte' | 'lt' | 'lte' | 'eq' | 'between';
 
 export interface AnalysisFilterRule {
   id: string;
@@ -327,6 +352,10 @@ export interface AnalysisFilterRule {
   metric: AnalysisFilterMetric;
   operator: AnalysisFilterOperator;
   threshold: number;
+  /** The upper bound of `between`. */
+  thresholdMax?: number | null;
+  /** 'and': keep only reads that also pass the panel's current filter (rules combined with AND). */
+  combine?: 'replace' | 'and';
 }
 
 export interface AnalysisFilterRuleSet {
