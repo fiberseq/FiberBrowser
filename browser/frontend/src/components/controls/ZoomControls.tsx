@@ -44,6 +44,7 @@ export function ZoomControls() {
       const result = await findTopLocus(currentSize, undefined, { signal: controller.signal });
       if (isTopLocusStep(result)) {
         setLocus(result);
+        useBrowserStore.getState().recordJump();  // Back (Alt+←) returns here
         setViewport(result.window.chrom, result.window.start, result.window.end);
       } else if (result.reason !== 'cancelled') {
         useBrowserStore.getState().setError(result.message);

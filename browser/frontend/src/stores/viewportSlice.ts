@@ -139,6 +139,27 @@ function jumpState(state: BrowserState, chrom: string, start: number, end: numbe
   } as Partial<BrowserState>));
 }
 
+type Span3 = { chrom: string; start: number; end: number };
+const sameSpan = (a: Span3, b: Span3) => a.chrom === b.chrom && a.start === b.start && a.end === b.end;
+
+/** Where a history entry's view is now: its panel's own view, else the main view; null when that panel is gone (or
+ * has no view of its own any more, e.g. back in Linked navigation). */
+function historyTargetView(state: BrowserState, entry: ViewportHistoryEntry): Span3 | null {
+  if (!entry.panelId) return { chrom: state.chrom, start: state.start, end: state.end };
+  return state.panels.find(p => p.id === entry.panelId)?.viewportOverride ?? null;
+}
+
+/** Back / Forward: the entry's view goes to `to` (a panel through its own navigation, so what follows it follows). */
+function applyHistoryMove(get: () => BrowserState, set: (p: Partial<BrowserState> | ((s: BrowserState) => Partial<BrowserState>)) => void,
+  entry: ViewportHistoryEntry, to: Span3, history: Partial<BrowserState>) {
+  if (entry.panelId) {
+    set(history);
+    get().navigatePanel(entry.panelId, to.chrom, to.start, to.end);
+    return;
+  }
+  set(s => jumpState(s, to.chrom, to.start, to.end, history));
+}
+
 // ============================================================
 // VIEWPORT SLICE — Interface
 // ============================================================
@@ -208,6 +229,12 @@ export interface ViewportSlice {
   canGoBack: () => boolean;
   canGoForward: () => boolean;
   pushViewportHistory: (entry: ViewportHistoryEntry) => void;
+  /**
+   * A jump is about to move a view (a locus box, saved regions, N / P, Differences arrows, Zoom to read, a table's
+   * Go there): its view now goes into navigation history, so Back returns to it. `panelId`: the panel whose own view
+   * the jump moves (its view is recorded when it has one of its own; else the main view's). Pans and zooms don't call it.
+   */
+  recordJump: (panelId?: string | null) => void;
 
   // CIGAR display actions
   toggleReversed: () => void;
@@ -798,97 +825,71 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
     set({ bookmarks: newBookmarks });
   },
 
-  // Navigation history actions
+  // Navigation history actions. Each entry is a jump: the view it left (main, or one panel's own), and once Back has
+  // undone it, where it went (`to`, for Forward). historyIndex -1: every jump is current (at the head); k: entries k
+  // and later were undone by Back.
   pushViewportHistory: (entry: ViewportHistoryEntry) => {
     const state = get();
-    // Don't push if it's the same as current location
-    const lastEntry = state.viewportHistory[state.viewportHistory.length - 1];
-    if (lastEntry &&
-        lastEntry.chrom === entry.chrom &&
-        lastEntry.start === entry.start &&
-        lastEntry.end === entry.end) {
-      // Already recorded (e.g. Forward reached it): moving on from it puts us back at the head.
-      if (state.historyIndex !== -1) set({ historyIndex: -1 });
+    const record: ViewportHistoryEntry = { chrom: entry.chrom, start: entry.start, end: entry.end, ...(entry.panelId ? { panelId: entry.panelId } : {}) };
+    // Back went somewhere earlier: a new jump drops the undone ones (as a web browser does).
+    let history = state.historyIndex >= 0 ? state.viewportHistory.slice(0, state.historyIndex) : state.viewportHistory;
+    const last = history[history.length - 1];
+    // Leaving the same place again (a repeated Go to, or one that didn't move): one entry.
+    if (last && (last.panelId ?? null) === (record.panelId ?? null) && sameSpan(last, record)) {
+      if (history !== state.viewportHistory || state.historyIndex !== -1) set({ viewportHistory: history, historyIndex: -1 });
       return;
     }
+    history = [...history, record].slice(-50);
+    set({ viewportHistory: history, historyIndex: -1 });
+  },
 
-    // If we're in the middle of history (went back), truncate forward history
-    let history = state.viewportHistory;
-    if (state.historyIndex >= 0 && state.historyIndex < history.length - 1) {
-      history = history.slice(0, state.historyIndex + 1);
-    }
-
-    // Add new entry and limit to 50 entries
-    const newHistory = [...history, entry].slice(-50);
-    set({
-      viewportHistory: newHistory,
-      historyIndex: -1,  // Reset to head
-    });
+  recordJump: (panelId) => {
+    const state = get();
+    const panel = panelId ? state.panels.find(p => p.id === panelId) : undefined;
+    const own = panel?.viewportOverride;
+    if (own) get().pushViewportHistory({ chrom: own.chrom, start: own.start, end: own.end, panelId: panel!.id });
+    else get().pushViewportHistory({ chrom: state.chrom, start: state.start, end: state.end });
   },
 
   goBack: () => {
     const state = get();
-    const { viewportHistory, historyIndex, chrom, start, end } = state;
-
-    // Calculate actual index (historyIndex -1 means we're at the head, looking at current view)
-    const currentIdx = historyIndex === -1 ? viewportHistory.length : historyIndex;
-
-    if (currentIdx <= 0) return;  // Can't go back further
-
-    // If at head, first push current location so we can go forward to it
-    if (historyIndex === -1 && viewportHistory.length > 0) {
-      // Check if current position is different from last in history
-      const lastEntry = viewportHistory[viewportHistory.length - 1];
-      if (lastEntry.chrom !== chrom || lastEntry.start !== start || lastEntry.end !== end) {
-        // Push current to history and navigate — single atomic set()
-        const newHistory = [...viewportHistory, { chrom, start, end }].slice(-50);
-        const targetIdx = newHistory.length - 2;
-        const target = newHistory[targetIdx];
-        set(s => jumpState(s, target.chrom, target.start, target.end, {
-          viewportHistory: newHistory,
-          historyIndex: targetIdx,
-        }));
-        return;
-      }
-    }
-
-    // Navigate to previous entry
-    const targetIdx = currentIdx - 1;
-    const target = viewportHistory[targetIdx];
-    if (target) {
-      set(s => jumpState(s, target.chrom, target.start, target.end, { historyIndex: targetIdx }));
+    const { viewportHistory } = state;
+    const head = state.historyIndex === -1 ? viewportHistory.length : state.historyIndex;
+    for (let i = head - 1; i >= 0; i--) {
+      const entry = viewportHistory[i];
+      const now = historyTargetView(state, entry);
+      // A closed panel, or a view already where the jump left from (nothing to undo): the one before.
+      if (!now || sameSpan(now, entry)) continue;
+      const history = viewportHistory.map((e, j) => (j === i ? { ...e, to: { chrom: now.chrom, start: now.start, end: now.end } } : e));
+      applyHistoryMove(get, set, entry, entry, { viewportHistory: history, historyIndex: i });
+      return;
     }
   },
 
   goForward: () => {
     const state = get();
     const { viewportHistory, historyIndex } = state;
-
-    if (historyIndex === -1 || historyIndex >= viewportHistory.length - 1) {
-      return;  // Already at head
-    }
-
-    const targetIdx = historyIndex + 1;
-    const target = viewportHistory[targetIdx];
-    if (target) {
-      // Stay on the entry (even the last one): the view now is that entry, so
-      // the next Back goes to the one before it. Resetting to the head (-1)
-      // made Back 'go' to the last entry, the view itself.
-      set(s => jumpState(s, target.chrom, target.start, target.end, { historyIndex: targetIdx }));
+    if (historyIndex === -1) return;  // at the head
+    for (let i = historyIndex; i < viewportHistory.length; i++) {
+      const entry = viewportHistory[i];
+      const now = historyTargetView(state, entry);
+      if (!entry.to || !now) continue;
+      const next = i + 1 >= viewportHistory.length ? -1 : i + 1;
+      applyHistoryMove(get, set, entry, entry.to, { historyIndex: next });
+      return;
     }
   },
 
   canGoBack: () => {
     const state = get();
-    const { viewportHistory, historyIndex } = state;
-    const currentIdx = historyIndex === -1 ? viewportHistory.length : historyIndex;
-    return currentIdx > 0;
+    const head = state.historyIndex === -1 ? state.viewportHistory.length : state.historyIndex;
+    return state.viewportHistory.slice(0, head).some(e => { const now = historyTargetView(state, e); return !!now && !sameSpan(now, e); });
   },
 
   canGoForward: () => {
     const state = get();
-    const { viewportHistory, historyIndex } = state;
-    return historyIndex !== -1 && historyIndex < viewportHistory.length - 1;
+    if (state.historyIndex === -1) return false;
+    return state.viewportHistory.slice(state.historyIndex).some(e => !!e.to && !!historyTargetView(state, e));
   },
 
   // CIGAR display actions

@@ -162,6 +162,7 @@ export function svComboView(datasetId: string): { chrom: string; start: number; 
 export function goToSvView(datasetId: string, view: { chrom: string; start: number; end: number }): void {
   const s = useBrowserStore.getState();
   const panel = svComboPanel(datasetId);
+  s.recordJump(panel?.viewportOverride ? panel.id : null);  // Back (Alt+←) returns here
   if (panel?.viewportOverride) s.navigatePanel(panel.id, view.chrom, view.start, view.end);
   else s.setViewport(view.chrom, view.start, view.end);
 }

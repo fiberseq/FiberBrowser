@@ -9,8 +9,15 @@ export interface Bookmark {
   created: string;
 }
 
+/**
+ * One jump in navigation history (Back / Forward, Alt+← / Alt+→): where its view was before the jump (chrom, start,
+ * end), and once Back has undone it, where the jump went (`to`, for Forward). `panelId`: the jump moved that panel's
+ * own view ("Each panel navigates", or a panel on another reference), not the main view.
+ */
 export interface ViewportHistoryEntry {
   chrom: string;
   start: number;
   end: number;
+  panelId?: string;
+  to?: { chrom: string; start: number; end: number };
 }

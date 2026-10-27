@@ -1291,6 +1291,8 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       setPrompt(null);
       return;
     }
+    // A graph host's Go to is a jump of its panel (or the main view): Back (Alt+←) returns to where it was.
+    if (hostMode) useBrowserStore.getState().recordJump(panelId);
     commitViewport(clampViewport(parsed, target.size, target.size_inferred), true);
     setPrompt(null);
   };

@@ -179,6 +179,7 @@ export function IdentifyTab({ response, datasetId, genome = insertionReference(d
   const copyReport = async () => { if (result) say(await copyText(result.report) ? 'Report copied' : 'Could not copy'); };
   const go = (chrom: string, start: number, end: number) => {
     const pad = Math.max(500, Math.round((end - start) * 0.2));
+    useBrowserStore.getState().recordJump();  // Back (Alt+←) returns here
     useBrowserStore.getState().setViewport(chrom, Math.max(0, start - pad), end + pad);
   };
 

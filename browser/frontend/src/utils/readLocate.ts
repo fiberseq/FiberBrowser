@@ -192,6 +192,8 @@ export function beginReadPanelIntent(stateKey: string): NavigationIntent {
 /** Move a panel to a locus: its own view when it navigates on its own, else the main view. */
 export function navigatePanelTo(panel: PanelConfig | null | undefined, chrom: string, start: number, end: number): void {
   const store = useBrowserStore.getState();
+  // A jump (Zoom to read, a read found by name): Back (Alt+←) returns to where the view was.
+  store.recordJump(panel?.viewportOverride ? panel.id : null);
   if (panel?.viewportOverride) {
     store.navigatePanel(panel.id, chrom, start, end);
   } else {

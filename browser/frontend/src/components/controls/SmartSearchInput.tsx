@@ -258,6 +258,8 @@ export function SmartSearchInput({ viewport, onNavigate, compact = false, inputR
         return;
       }
       supersedeNavigationIntents(target);
+      // A jump: Back (Alt+←) returns to where this box's view was.
+      useBrowserStore.getState().recordJump(panelId);
       setViewport(parsed.chrom, parsed.start, parsed.end);
       rootRef.current?.querySelector('input')?.blur();
       return;

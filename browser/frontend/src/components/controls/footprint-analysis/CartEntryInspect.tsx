@@ -218,7 +218,7 @@ export function CartEntryInspect({ group, targetDatasetIds, width }: CartEntryIn
         <div className="flex items-center gap-2 text-[11px] text-gray-500">
           On {refChrom}, outside this view.
           <AnalysisButton theme="emerald" variant="soft"
-            onClick={() => { const s = useBrowserStore.getState(); if (source.panelId) s.navigatePanel(source.panelId, refChrom, regionStart, regionEnd); else s.setViewport(refChrom, regionStart, regionEnd); }}>
+            onClick={() => { const s = useBrowserStore.getState(); s.recordJump(source.panelId); if (source.panelId) s.navigatePanel(source.panelId, refChrom, regionStart, regionEnd); else s.setViewport(refChrom, regionStart, regionEnd); }}>
             Go there
           </AnalysisButton>
         </div>
