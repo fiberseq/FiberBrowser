@@ -288,6 +288,12 @@ function normalizeColorRuleSnapshot(rule: unknown): ColorRule | undefined {
     conditions: Array.isArray(raw.conditions) ? raw.conditions as any : [],
     qualityGates: normalizeQualityGates(raw.qualityGates ?? raw.quality_gates),
     requireAnnotationName: raw.requireAnnotationName === true || raw.require_annotation_name === true,
+    // Nucleosome size conditions (read through each item's nucsz mark).
+    ...(Array.isArray(raw.nucCoarse) ? { nucCoarse: raw.nucCoarse.map(Number).filter(Number.isFinite) } : {}),
+    ...(Array.isArray(raw.nucNamed) ? { nucNamed: raw.nucNamed.map(Number).filter(Number.isFinite) } : {}),
+    ...(raw.zMin != null && Number.isFinite(Number(raw.zMin)) ? { zMin: Number(raw.zMin) } : {}),
+    ...(raw.zMax != null && Number.isFinite(Number(raw.zMax)) ? { zMax: Number(raw.zMax) } : {}),
+    ...(typeof raw.nucTf === 'boolean' ? { nucTf: raw.nucTf } : {}),
     enabled: raw.enabled !== false,
   };
 }
