@@ -81,7 +81,11 @@ export NUMBA_CACHE_DIR="${NUMBA_CACHE_DIR:-$work/numba}"
 echo "e2e:full: work folder $work"
 echo "e2e:full: ports $FIBERBROWSER_TEST_PORTS, reference $FIBERBROWSER_TEST_FASTA"
 
-# The current source, built outside the checkout.
+# The current source, built outside the checkout (the build empties its folder first: never through a link).
+[[ -L "$work/dist" ]] && fail "$work/dist is a symbolic link: remove it (the build empties the folder it points to)"
+if [[ -e "$work/dist" ]] && [[ "$(cd "$work/dist" && pwd -P)/" == "$repo/"* ]]; then
+  fail "$work/dist is inside the repository ($repo)"
+fi
 npx vite build --outDir "$work/dist" --emptyOutDir --logLevel warn
 export FIBERBROWSER_FRONTEND_DIST="$work/dist"
 
