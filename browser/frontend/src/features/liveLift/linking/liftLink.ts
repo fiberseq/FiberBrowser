@@ -282,6 +282,7 @@ export async function openLinkedSourceView(liftPanelId: string, hapLabel?: strin
   // The one the caller reveals (never the other strand's: agy post-merge review, group C, HIGH 3).
   const existing = linked.find(p => p.id === opts.existingId) ?? linked[0];
   if (existing) {
+    settling.delete(existing.id);   // an earlier reveal's remap no longer applies (its generation is behind)
     const relinked = existing.liftLink!.liftPanelId !== liftPanelId;
     if (relinked) updateLink(existing.id, { liftPanelId });
     // Reopened or relinked beside a view of its own: shown at that view now, not where it was left.
@@ -379,7 +380,6 @@ export function revealSettling(panelId: string): Promise<void> | null {
  * (post-merge review, group C rounds 2 and 3). `bound`: the caller names that step (filled right after it records
  * it); else it is taken as the step recorded in the same turn. */
 function remapRevealedSource(existing: PanelConfig, datasetId: string, key: string, own: Span, bound?: { id: number | null }): void {
-  settling.delete(existing.id);   // an earlier reveal's remap no longer applies (its generation is behind)
   const map = () => {
     const now = useBrowserStore.getState().panels.find(p => p.id === existing.id);
     return now?.liftLink ? sourceViewFor(now, own) : null;
