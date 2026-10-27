@@ -80,6 +80,8 @@ def test_states_tables_equal_annotated(scans, data_type):
     from_tables = _all_states(_state(bams, data_type), tables)
     from_reads = _all_states(_state(bams, data_type), annotated)
     assert from_tables and set(from_tables) == set(from_reads)
+    # both state groups are covered: footprint classes (fpcls) and NFRs (nfrvar)
+    assert any(h.startswith('fp:') for h in from_tables) and any(h.startswith('nfr:') for h in from_tables)
     called = sum(1 for states in from_tables.values() for v in states.values() if v != '.')
     assert called > 50, 'the fixture must give called states'
     for hit_id in from_tables:

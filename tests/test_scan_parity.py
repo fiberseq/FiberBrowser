@@ -112,6 +112,8 @@ def _cache_dir(st, module):
 def _assert_same_rows(browser: dict, cli: Path, tables=TABLES):
     for rel in tables:
         module = rel.split('/')[0]
+        # Both runs must have written the table (a missing pair would compare None with None).
+        assert (cli / rel).is_file() and (browser[module] / rel).is_file(), f'{rel}: not written'
         got = _rows(browser[module] / rel)
         want = _rows(cli / rel)
         assert got == want, f'{rel}: browser and CLI rows differ'
@@ -124,6 +126,8 @@ def test_full_view_equals_cli_uncapped_1_worker(bams, cli_uncapped, cache):
     _assert_same_rows(dirs, cli_uncapped)
     assert any(_rows(cli_uncapped / 'fp/hits.tsv.bgz')[1:]), 'the fixture must yield footprint classes'
     assert any(_rows(cli_uncapped / 'nfr/hits.tsv.bgz')[1:]), 'the fixture must yield NFRs'
+    assert len(_rows(cli_uncapped / 'nfr/variants.tsv.bgz')) > 1, 'the fixture must yield NFR variants'
+    assert len(_rows(cli_uncapped / 'nfr/states.tsv.bgz')) > 1 and len(_rows(cli_uncapped / 'fp/states.tsv.bgz')) > 1
     assert job['computed_units'] > 0
     # Same units as the genome scan of the contig: the same scan key (dataset order, labels, policy, settings).
     for m in ('fp', 'nfr'):
@@ -292,3 +296,24 @@ def test_union_of_views_on_two_contigs_is_a_genome_plan_order():
     merged = union_units(union_units([], chr2, {'chr1': 0, 'chr2': 1}), chr1, {'chr1': 0, 'chr2': 1})
     assert [(u.chrom, u.zone_start) for u in merged] == [('chr1', 25_000), ('chr1', 50_000), ('chr2', 0), ('chr2', 25_000)]
     assert [u.index for u in merged] == [0, 1, 2, 3]
+
+
+def test_bed_scope_peaks_run_with_the_local_rule(bams, cache, tmp_path):
+    """The owner's peaks decision, executed: a BED scan with peaks runs through run_units with the local Rare rule
+    and every record (its calibration says so), as the CLI given the same --parameters."""
+    from services.scan import jobs
+    st = _state(bams)
+    bed = tmp_path / 'units.bed'
+    bed.write_text(f'{CONTIG}\t20000\t30000\tlocus\n')
+    job = jobs.submit(st, dict(datasets=sorted(st.datasets), scope='bed', bed=str(bed), modules=['peaks'], workers=1))
+    done = jobs.wait(st, job['job_id'], timeout=600)
+    assert done['status'] == 'complete', done
+    d = _cache_dir(st, 'peaks')
+    cal = json.loads((d / 'peaks' / 'extra' / 'calibration.json').read_text())
+    assert (cal['tier_rule'], cal['row_rule']) == ('local', 'records')
+    cli = _cli(tmp_path / 'cli_bed', bams, modules='peaks', where=('--bed', str(bed)),
+               params={'peaks': {'tier_rule': 'local', 'row_rule': 'records'}})
+    for rel in ('peaks/hits.tsv.bgz', 'peaks/values.tsv.bgz'):
+        assert (cli / rel).is_file() == (d / rel).is_file()
+        if (cli / rel).is_file():
+            assert _rows(d / rel) == _rows(cli / rel), rel
