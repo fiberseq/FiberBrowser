@@ -76,6 +76,9 @@ test('contained projections preserve molecular layers and uncapped summaries', a
   const loaded = decodeReadBinary(Uint8Array.from(await response.body()).buffer);
   const normalize = (reads: any[]) => JSON.parse(JSON.stringify(reads.map(read => ({ ...read,
     ...(read.layers ? { layers: Object.fromEntries(Object.entries(read.layers).filter(([, layer]: any) => layer.intervals?.length)) } : {}),
+    // A read's full SV evidence: the server sends `sv_evidence` only where it differs from `sv`, while a projection
+    // always keeps it explicitly (loadedReadRegion.ts); consumers read `sv_evidence ?? sv`.
+    ...((read.sv_evidence ?? read.sv) ? { sv_evidence: read.sv_evidence ?? read.sv } : {}),
   })).sort((a, b) => a.id.localeCompare(b.id))));
   let checked = 0;
   for (const [start, end] of [[region.start, region.end], [region.start + Math.floor(width / 4), region.end - Math.floor(width / 4)]]) {

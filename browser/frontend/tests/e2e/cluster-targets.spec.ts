@@ -22,6 +22,10 @@ const PYTHON = process.env.FIBERBROWSER_TEST_PYTHON?.trim() || 'python';
 const SHOTS = process.env.FB_SHOTS_DIR;
 const VIEW = { chrom: 'chrSV', start: 8_000, end: 16_000 };
 const INS_POS = 14_000;
+// The split's carriers panel is named by its evidence tiers ("Keep evidence tier counts in split panel titles"):
+// the fixture's 9 confirmed carriers, putative included by default (none here).
+const CARRIERS = 'Confirmed (9) + putative (0)';
+const esc = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const store = <T,>(page: Page, fn: (s: any) => T) =>
   page.evaluate(f => new Function('s', `return (${f})(s)`)((window as any).__FIBERBROWSER_STORE__.getState()), fn.toString()) as Promise<T>;
@@ -121,7 +125,7 @@ test.describe('Cluster: what it applies to, before and after the run', () => {
     await groupControls(page, 'cluster');
     // The toolbar's chip is short (round 2, N7); the picker has the long form.
     // (Round 3, R8: it names what it chooses.)
-    await expect(page.getByTestId('cluster-applies-to-short')).toHaveText('Panels: Carriers · 1 left out');
+    await expect(page.getByTestId('cluster-applies-to-short')).toHaveText(`Panels: ${CARRIERS} · 1 left out`);
     await page.getByTestId('cluster-applies-to').click();
     const menu = page.getByTestId('cluster-applies-to-menu');
     // N2 / R8: focus is in the picker, on the checked mode radio; ↓ moves to the other radio (in All mode the panel
@@ -136,10 +140,10 @@ test.describe('Cluster: what it applies to, before and after the run', () => {
     await expect(menu).toContainText('Panels for Cluster, Sort and Filter');
     await expect(menu.getByTestId('cluster-applies-to-scope')).toContainText('Sort and Filter act on the same panels');
     // R6: the plan the run follows, the same words as the Cluster button's tooltip.
-    await expect(menu.getByTestId('cluster-applies-to-summary')).toHaveText('Cluster at 1 selected peak in Carriers');
+    await expect(menu.getByTestId('cluster-applies-to-summary')).toHaveText(`Cluster at 1 selected peak in ${CARRIERS}`);
     await expect(menu.getByTestId('cluster-applies-to-note')).toHaveText('Reference left out: different coordinates');
-    await expect(page.getByTestId('cluster-run-button')).toHaveAttribute('title', /^Cluster at 1 selected peak in Carriers/);
-    await expect(menu.locator(`[data-panel-id="${ids.ref}"] [data-testid="cluster-applies-reason"]`)).toContainText('different coordinates from Carriers');
+    await expect(page.getByTestId('cluster-run-button')).toHaveAttribute('title', new RegExp(`^Cluster at 1 selected peak in ${esc(CARRIERS)}`));
+    await expect(menu.locator(`[data-panel-id="${ids.ref}"] [data-testid="cluster-applies-reason"]`)).toContainText(`different coordinates from ${CARRIERS}`);
     await expect(menu.locator(`[data-panel-id="${ids.alt}"]`)).toHaveAttribute('data-in-run', 'true');
     await shot(page, 'cluster_applies_to');
     await page.keyboard.press('Escape');
@@ -159,10 +163,10 @@ test.describe('Cluster: what it applies to, before and after the run', () => {
     expect(after[ids.ds] ?? 0).toBe(before[ids.ds] ?? 0);
     const result = page.getByTestId('run-result-cluster');
     await expect(result).toBeVisible();
-    await expect(result).toContainText(/Clustered \d+ reads? in Carriers at 1 selected peak\./);
+    await expect(result).toContainText(new RegExp(`Clustered \\d+ reads? in ${esc(CARRIERS)} at 1 selected peak\\.`));
     const marker = page.getByTestId('run-result-cluster-marker');
     const firstRun = Number(await marker.getAttribute('data-run'));
-    await expect(result).toContainText('Not clustered: Reference (different coordinates from Carriers');
+    await expect(result).toContainText(`Not clustered: Reference (different coordinates from ${CARRIERS}`);
     await expect(page.getByLabel('Dismiss error')).toHaveCount(0);
     await shot(page, 'cluster_run_result');
 
@@ -173,12 +177,12 @@ test.describe('Cluster: what it applies to, before and after the run', () => {
       s.selectFeature({ kind: 'sv', source: ds, id: `I:${ins}:400`, datasetId: ds, chrom, start: ins, end: ins + 1, label: 'INS 400' }, true);
     }, [VIEW.chrom, INS_POS, ids.ds] as const);
     const runTitle = await page.getByTestId('cluster-run-button').getAttribute('title');
-    expect(runTitle).toMatch(/^Cluster at 1 selected peak in Carriers/);
+    expect(runTitle).toMatch(new RegExp(`^Cluster at 1 selected peak in ${esc(CARRIERS)}`));
     expect(runTitle).toContain('ticked SVs group reads only with Combinatorial');
     expect(runTitle).not.toMatch(/INS 400|accessibility layer/);
     await page.getByTestId('cluster-run-button').click();
     await expect(marker).toHaveAttribute('data-run', String(firstRun + 1), { timeout: 60_000 });
-    await expect(result).toContainText(/Clustered \d+ reads? in Carriers at 1 selected peak \(ticked SVs group reads only with Combinatorial\)\./, { timeout: 60_000 });
+    await expect(result).toContainText(new RegExp(`Clustered \\d+ reads? in ${esc(CARRIERS)} at 1 selected peak \\(ticked SVs group reads only with Combinatorial\\)\\.`), { timeout: 60_000 });
     expect(requests).toHaveLength(2);
     await page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().clearFeatureSelection());
 
