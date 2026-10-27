@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nucObservations, observationDatasets, observationsKey } from './planner';
+import { nucObservations, observationDatasets, observationsKey, observationViews } from './planner';
 import type { PanelConfig } from '../../types';
 
 const panel = (o: Partial<PanelConfig> & { id: string }): PanelConfig => ({
@@ -54,6 +54,23 @@ describe('nucleosome observation planner', () => {
     const obs = nucObservations(state([host, folded, panel({ id: 'nat' })]));
     expect(obs.map(o => o.obsId)).toEqual(['lifted:graph:MAT', 'lifted:graph:PAT', 'native']);
     expect(obs[0]).toMatchObject({ kind: 'graph', liftHap: 'MAT', graph: { hap: 'MAT' }, datasetId: 'lifted' });
+  });
+
+  it('a graph host gives a column per member it draws, another dataset\'s folded member included', () => {
+    const host = panel({ id: 'host', datasetId: 'native', stateKey: 'native', viewMode: 'graph',
+      graphView: { role: 'host', registrationId: 'reg', targetBinding: 'grch38',
+        members: [{ panelId: 'host', binding: null }, { panelId: 'm1', binding: 'mat' }] } } as never);
+    const member = panel({ id: 'm1', datasetId: 'lifted', stateKey: 'lifted:MAT', liftHap: 'MAT', collapsed: true, graphMemberOf: 'host' } as never);
+    const obs = nucObservations(state([host, member]));
+    expect(obs.map(o => o.obsId)).toEqual(['native:graph', 'lifted:MAT:graph:MAT']);
+    expect(obs[1]).toMatchObject({ datasetId: 'lifted', liftHap: 'MAT', kind: 'graph', chrom: 'chr3', start: 1000, end: 9000 });
+  });
+
+  it('the refresh key follows the whole read membership, not its size and first ids', () => {
+    const a = nucObservations(state([panel({ id: 'nat' })], { filteredReadIds: { native: new Set(['r1', 'r2', 'r3', 'r4']) } }));
+    const b = nucObservations(state([panel({ id: 'nat' })], { filteredReadIds: { native: new Set(['r1', 'r2', 'r3', 'r5']) } }));
+    expect(observationsKey(a)).not.toBe(observationsKey(b));
+    expect(observationViews([...a, ...a])).toEqual([{ datasetId: 'native', chrom: 'chr3', start: 1000, end: 9000 }]);
   });
 
   it('skips panels of datasets the module cannot read', () => {

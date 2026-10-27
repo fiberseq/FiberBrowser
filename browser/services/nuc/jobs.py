@@ -109,11 +109,26 @@ def plan_request(state, request: dict) -> dict:
     chrom = str(request.get('chrom') or '')
     start, end = int(request.get('start') or 0), int(request.get('end') or 0)
     extra = request.get('sourceRegions') or []
-    if (not chrom or end <= start) and not extra:
-        raise ValueError('Give a view (chrom, start, end) or source regions')
-    if chrom and end - start > MAX_VIEW_BP:
-        raise ValueError(f'The view is {end - start:,} bp; the nucleosome panel computes up to {MAX_VIEW_BP:,} bp '
-                         'live (scan larger regions with fiberhmm-scan and open the scan)')
+    # Each dataset's own views (the panel's columns: a linked locus computes at its own view), else one view for all.
+    views: Dict[str, list] = {}
+    for v in request.get('views') or []:
+        try:
+            ds, c, a, b = str(v['datasetId']), str(v['chrom']), int(v['start']), int(v['end'])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError('views: {datasetId, chrom, start, end} each') from None
+        if b <= a:
+            raise ValueError(f'views: an empty view for {ds}')
+        views.setdefault(ds, []).append((c, a, b))
+    if chrom and end > start:
+        for s in sources:
+            views.setdefault(s.browser_id, []).append((chrom, start, end))
+    if not views and not extra:
+        raise ValueError('Give a view (chrom, start, end), views or source regions')
+    for ds_views in views.values():
+        for c, a, b in ds_views:
+            if b - a > MAX_VIEW_BP:
+                raise ValueError(f'The view is {b - a:,} bp; the nucleosome panel computes up to {MAX_VIEW_BP:,} bp '
+                                 'live (scan larger regions with fiberhmm-scan and open the scan)')
     settings, sh = resolve_settings(request.get('parameters') or None)
     regions: Dict[str, list] = {}
     for r in extra:
@@ -121,7 +136,7 @@ def plan_request(state, request: dict) -> dict:
             regions.setdefault(str(r['datasetId']), []).append((str(r['contig']), int(r['start']), int(r['end'])))
         except (KeyError, TypeError, ValueError):
             raise ValueError('sourceRegions: {datasetId, contig, start, end} each') from None
-    return dict(sources=sources, chrom=chrom, start=start, end=end, settings=settings, settings_hash=sh,
+    return dict(sources=sources, chrom=chrom, start=start, end=end, views=views, settings=settings, settings_hash=sh,
                 source_regions=regions, include_duplicates=bool(request.get('include_duplicates')),
                 cores=_cores(request))
 
@@ -164,8 +179,8 @@ def submit(state, request: dict) -> dict:
                 cfg = ensure_config(state, source, plan['settings'], plan['settings_hash'], policy,
                                     cores=plan['cores'], progress=cal_progress, cancel=cancel)
                 regions = []
-                if plan['chrom'] and plan['end'] > plan['start']:
-                    regions += source_regions(state, source, plan['chrom'], plan['start'], plan['end'])
+                for c, a, b in plan['views'].get(source.browser_id, []):
+                    regions += source_regions(state, source, c, a, b)
                 regions += plan['source_regions'].get(source.browser_id, [])
 
                 def rec_progress(records, computed, _label=source.label, _i=i):

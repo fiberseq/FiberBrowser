@@ -8,43 +8,58 @@
  * Never getTargetDatasetIds: it collapses a dataset's panels into one dataset.
  */
 import { clusterWindows, panelTargetLabel, type PlanState } from '../../utils/clusterTargets';
-import { hostDrawsGraph } from '../graphPanel/graphCluster';
+import { hostDrawsGraph, stableId } from '../graphPanel/graphCluster';
+import { membersOf } from '../graphPanel/hostMode';
 import { liveLiftHaplotypeColor } from '../liveLift/palette';
 import { liftHapLabels } from '../liveLift/types';
 import type { NucObservation } from './types';
 
 const FALLBACK_COLOR = '#16a34a';
+const readable = (dataType: string | undefined) => dataType === 'bam' || dataType === 'bam_livelift';
 
 export function nucObservations(st: PlanState, dark = false): NucObservation[] {
-  // Every shown dataset panel, whatever is targeted: the panel compares them all side by side.
+  // Every shown dataset panel, whatever is targeted: the panel compares them all side by side. Folded graph members
+  // are in these windows too (their reads are in the host's sub-bands), with their own read scope.
   const windows = clusterWindows({ ...st, selectedDatasets: new Set() }, st.datasets.map(d => d.id));
+  const byKey = new Map(windows.map(w => [w.result_key, w]));
   const out: NucObservation[] = [];
+  const seen = new Set<string>();
+  const push = (o: NucObservation) => { if (!seen.has(o.obsId)) { seen.add(o.obsId); out.push(o); } };
   for (const w of windows) {
     const panel = w.panel;
-    // A member folded into a host's graph: the host's path columns stand for its reads.
+    // A member folded into a host's graph: its host's member columns below stand for it.
     if (panel.collapsed) continue;
     const ds = st.datasets.find(d => d.id === w.dataset_id);
-    if (!ds || (ds.data_type !== 'bam' && ds.data_type !== 'bam_livelift')) continue;
-    const stateKey = w.result_key;
+    if (!ds || !readable(ds.data_type)) continue;
     const { short } = panelTargetLabel(st, panel);
-    const base = {
-      datasetId: w.dataset_id, panelId: panel.id, stateKey, chrom: w.chrom, start: w.start, end: w.end,
-      ...(w.strand ? { strand: w.strand } : {}), ...(w.read_ids ? { readIds: w.read_ids } : {}),
-    };
+    const view = { chrom: w.chrom, start: w.start, end: w.end };
     if (hostDrawsGraph(panel)) {
-      const haps = ds.data_type === 'bam_livelift' ? liftHapLabels(ds.live_lift) : [];
-      if (!haps.length) {
-        out.push({ ...base, obsId: `${stateKey}:graph`, label: `${short} · graph`, color: ds.color || FALLBACK_COLOR, kind: 'graph', graph: {} });
-      }
-      for (const hap of haps) {
-        out.push({ ...base, obsId: `${stateKey}:graph:${hap}`, label: `${short} · graph ${hap}`,
-          color: liveLiftHaplotypeColor(hap, dark), kind: 'graph', liftHap: hap, graph: { hap } });
+      // One column per member the host draws (itself and its folded members, whatever their dataset), per haplotype
+      // path: a pooled lifted member draws each of its haplotypes on its own path.
+      for (const { panel: member } of membersOf(st.panels, panel)) {
+        const mds = st.datasets.find(d => d.id === member.datasetId);
+        if (!mds || !readable(mds.data_type)) continue;
+        const key = member.stateKey ?? member.datasetId!;
+        const mw = byKey.get(key);
+        const memberName = member.id === panel.id ? short : panelTargetLabel(st, member).short;
+        const haps: Array<string | null> = member.liftHap ? [member.liftHap]
+          : mds.data_type === 'bam_livelift' ? liftHapLabels(mds.live_lift) : [null];
+        for (const hap of haps.length ? haps : [null]) {
+          push({
+            obsId: `${key}:graph${hap ? `:${hap}` : ''}`, label: `${memberName} · graph${hap ? ` ${hap}` : ''}`,
+            color: hap ? liveLiftHaplotypeColor(hap, dark) : (mds.color || FALLBACK_COLOR), kind: 'graph',
+            datasetId: member.datasetId!, panelId: member.id, stateKey: key, ...view,
+            ...(hap ? { liftHap: hap } : {}), ...(mw?.strand ? { strand: mw.strand } : {}),
+            ...(mw?.read_ids ? { readIds: mw.read_ids } : {}), graph: hap ? { hap } : {},
+          });
+        }
       }
       continue;
     }
-    out.push({ ...base, obsId: stateKey, label: short, kind: 'linear',
-      color: w.lift_hap ? liveLiftHaplotypeColor(w.lift_hap, dark) : (ds.color || FALLBACK_COLOR),
-      ...(w.lift_hap ? { liftHap: w.lift_hap } : {}) });
+    push({ datasetId: w.dataset_id, panelId: panel.id, stateKey: w.result_key, ...view, obsId: w.result_key, label: short,
+      kind: 'linear', color: w.lift_hap ? liveLiftHaplotypeColor(w.lift_hap, dark) : (ds.color || FALLBACK_COLOR),
+      ...(w.lift_hap ? { liftHap: w.lift_hap } : {}), ...(w.strand ? { strand: w.strand } : {}),
+      ...(w.read_ids ? { readIds: w.read_ids } : {}) });
   }
   return out;
 }
@@ -54,8 +69,17 @@ export function observationDatasets(observations: NucObservation[]): string[] {
   return [...new Set(observations.map(o => o.datasetId))];
 }
 
-/** A key that changes when any observation's identity or scope changes (refetch the summary). */
+/** Each observation's dataset and view, once: what a job computes (lifted views resolve to source windows on the
+ * server). */
+export function observationViews(observations: NucObservation[]): Array<{ datasetId: string; chrom: string; start: number; end: number }> {
+  const out = new Map<string, { datasetId: string; chrom: string; start: number; end: number }>();
+  for (const o of observations) out.set(`${o.datasetId}|${o.chrom}|${o.start}|${o.end}`, { datasetId: o.datasetId, chrom: o.chrom, start: o.start, end: o.end });
+  return [...out.values()];
+}
+
+/** A key that changes when any observation's identity or scope changes (refetch the summary): the full read
+ * membership enters through a digest of the sorted ids. */
 export function observationsKey(observations: NucObservation[]): string {
   return JSON.stringify(observations.map(o => [o.obsId, o.datasetId, o.kind, o.chrom, o.start, o.end, o.liftHap ?? null,
-    o.strand ?? null, o.readIds ? o.readIds.length : null, o.readIds?.slice(0, 3) ?? null]));
+    o.strand ?? null, o.readIds ? `${o.readIds.length}:${stableId([...o.readIds].sort())}` : null]));
 }

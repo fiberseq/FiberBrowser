@@ -9,13 +9,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useBrowserStore } from '../../stores/browserStore';
+import { useSplitPanelStore } from '../../stores/splitPanelStore';
 import type { AnalysisPanelProps } from '../../plugins/types';
 import { AnalysisButton, AnalysisPanelHeader } from '../../components/controls/shared/AnalysisControls';
 import { AnalysisPanelShell } from '../../components/controls/shared/AnalysisPanelShell';
 import { JobStatus } from '../../components/controls/shared/JobStatus';
 import { nucStatus, nucSummary } from './api';
 import { isLiveJob, useNucJob } from './nucJob';
-import { nucObservations, observationDatasets, observationsKey } from './planner';
+import { nucObservations, observationDatasets, observationsKey, observationViews } from './planner';
 import type { NucCalibrationSummary, NucDatasetStatus, NucObservation, NucObservationSummary, NucPanelState } from './types';
 
 const pct = (v: number | null | undefined, digits = 0) => (v == null || !Number.isFinite(v) ? '' : `${(v * 100).toFixed(digits)}%`);
@@ -82,7 +83,9 @@ export function NucleosomePanel({ isFullView, panelId }: AnalysisPanelProps) {
   // The observations: planned again whenever panels, the view, datasets, filters or cluster selections change.
   const deps = useBrowserStore(useShallow(s => [s.panels, s.datasets, s.chrom, s.start, s.end, s.filteredReadIds, s.clusterFocus,
     s.selectedClusters, s.clusterAssignments, s.selectedDatasets]));
-  const observations = useMemo(() => nucObservations(useBrowserStore.getState(), dark), [...deps, dark]);  // eslint-disable-line react-hooks/exhaustive-deps
+  // Split panels' own reads resolve in their own store (clusterWindows reads it).
+  const splitReads = useSplitPanelStore(s => s.reads);
+  const observations = useMemo(() => nucObservations(useBrowserStore.getState(), dark), [...deps, splitReads, dark]);  // eslint-disable-line react-hooks/exhaustive-deps
   const hidden = new Set(settings.hidden ?? []);
   const shown = observations.filter(o => !hidden.has(o.obsId));
   const datasetIds = observationDatasets(observations);
@@ -119,12 +122,10 @@ export function NucleosomePanel({ isFullView, panelId }: AnalysisPanelProps) {
 
   const live = isLiveJob(job);
   const compute = () => {
-    const linear = shown.filter(o => o.kind === 'linear' || o.kind === 'graph');
-    if (!linear.length || !panelId) return;
-    // One job over the main view (the datasets of every column); a linked locus gets its own range when it differs.
-    const st = useBrowserStore.getState();
+    if (!shown.length || !panelId) return;
+    // Every column's own view: a linked locus or a panel at its own view computes there.
     void useNucJob.getState().submit({
-      datasets: observationDatasets(linear), chrom: st.chrom, start: st.start, end: st.end,
+      datasets: observationDatasets(shown), views: observationViews(shown),
       ...(settings.parameters ? { parameters: settings.parameters } : {}),
     }, panelId);
   };

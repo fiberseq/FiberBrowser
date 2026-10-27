@@ -15,7 +15,9 @@ export const nucStatus = (datasets: string[], parameters?: Record<string, unknow
 
 export interface NucJobRequest {
   datasets: string[];
+  /** One view (all datasets), or each dataset's own views (a live-lift view resolves to source windows). */
   chrom?: string; start?: number; end?: number;
+  views?: Array<{ datasetId: string; chrom: string; start: number; end: number }>;
   sourceRegions?: Array<{ datasetId: string; contig: string; start: number; end: number }>;
   parameters?: Record<string, unknown>;
   include_duplicates?: boolean;

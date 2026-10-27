@@ -25,6 +25,17 @@ interface NucJobStore {
 }
 
 let timer: ReturnType<typeof setTimeout> | null = null;
+const finished = new Set<string>();
+
+/** Once per job, when it ends: read the touched datasets again, switch the layers on, move the revision. */
+async function finish(job: NucJob): Promise<void> {
+  if (finished.has(job.job_id)) return;
+  finished.add(job.job_id);
+  const touched = [...new Set(Object.values(job.results ?? {}).flatMap(r => r.datasets ?? []))];
+  await refreshNucDatasets(touched);
+  if (job.status === 'complete') showNucLayers();
+  useNucJob.setState(s => ({ revision: s.revision + 1 }));
+}
 
 /** Read the touched datasets again from the server: layer lists and source identity (read tracks refetch). */
 export async function refreshNucDatasets(ids: string[]): Promise<void> {
@@ -68,6 +79,8 @@ export const useNucJob = create<NucJobStore>((set, get) => ({
     }
     set({ job, panelId });
     if (timer) clearTimeout(timer);
+    // A job can end before its submit response arrives: every response goes through the same end handling.
+    if (!LIVE.has(job.status)) { await finish(job); return; }
     const poll = async () => {
       const current = get().job;
       if (!current || !LIVE.has(current.status)) return;
@@ -75,13 +88,7 @@ export const useNucJob = create<NucJobStore>((set, get) => ({
         const next = await getNucJob(current.job_id);
         if (get().job?.job_id !== next.job_id) return;
         set({ job: next });
-        if (!LIVE.has(next.status)) {
-          const touched = [...new Set(Object.values(next.results ?? {}).flatMap(r => r.datasets ?? []))];
-          await refreshNucDatasets(touched);
-          if (next.status === 'complete') showNucLayers();
-          set(s => ({ revision: s.revision + 1 }));
-          return;
-        }
+        if (!LIVE.has(next.status)) { await finish(next); return; }
       } catch { /* the next poll retries */ }
       timer = setTimeout(() => { void poll(); }, 700);
     };
@@ -90,7 +97,12 @@ export const useNucJob = create<NucJobStore>((set, get) => ({
   cancel: async () => {
     const job = get().job;
     if (!job) return;
-    try { set({ job: await cancelNucJob(job.job_id) }); } catch { /* polling shows the state */ }
+    try {
+      const next = await cancelNucJob(job.job_id);
+      if (get().job?.job_id !== next.job_id) return;
+      set({ job: next });
+      if (!LIVE.has(next.status)) await finish(next);
+    } catch { /* polling shows the state */ }
   },
   clear: () => { if (timer) clearTimeout(timer); timer = null; set({ job: null, panelId: null, error: '' }); },
 }));

@@ -250,3 +250,18 @@ def test_an_annotated_bam_summarises_from_its_own_groups_and_equals_live(bam, tm
     for key, row in ann.items():
         assert row.nucmol == live_rows[key].nucmol, key
         assert {g: sorted(m) for g, m in row.groups.items()} == {g: sorted(m) for g, m in live_rows[key].groups.items()}
+
+
+def test_a_job_computes_each_columns_own_view(bam):
+    """Codex B1-4: a panel at its own view (a linked locus) is computed there, not at the main view."""
+    from services.nuc import jobs
+    from services.nuc.store import STORE
+    st = _state(bam)
+    job = jobs.submit(st, dict(datasets=['ds0'], views=[dict(datasetId='ds0', chrom=CONTIG, start=20_000, end=24_000),
+                                                         dict(datasetId='ds0', chrom=CONTIG, start=120_000, end=124_000)],
+                               parameters=SETTINGS, workers=2))
+    done = jobs.wait(st, job['job_id'], timeout=900)
+    assert done['status'] == 'complete', done
+    assert done['results']['ds0']['regions'] == [[CONTIG, 20_000, 24_000], [CONTIG, 120_000, 124_000]]
+    starts = sorted(r.ref_start for r in STORE.rows_of(bam).values())
+    assert any(s < 24_000 for s in starts) and any(s > 100_000 for s in starts)
