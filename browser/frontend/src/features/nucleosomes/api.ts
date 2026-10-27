@@ -1,6 +1,6 @@
 /** The nucleosome panel's routes (browser/routers/nuc.py). */
 import { fetchJson } from '../../api/sharedFetch';
-import type { NucDatasetStatus, NucJob, NucObservation, NucObservationSummary } from './types';
+import type { NucDatasetStatus, NucJob, NucObservation, NucObservationSummary, NucWindowObservation } from './types';
 
 const json = (body: unknown, signal?: AbortSignal): RequestInit => ({
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), ...(signal ? { signal } : {}),
@@ -38,3 +38,27 @@ export const nucSummary = (observations: NucObservation[], signal?: AbortSignal,
       ...(o.readIds ? { readIds: o.readIds } : {}), ...(o.graph ? { graph: o.graph } : {}),
     })),
   }, signal));
+
+const descriptor = (o: NucObservation) => ({
+  obsId: o.obsId, label: o.label, datasetId: o.datasetId, kind: o.kind, chrom: o.chrom, start: o.start, end: o.end,
+  ...(o.liftHap ? { liftHap: o.liftHap } : {}), ...(o.strand ? { strand: o.strand } : {}),
+  ...(o.readIds ? { readIds: o.readIds } : {}), ...(o.graph ? { graph: o.graph } : {}),
+});
+
+/** Window mode: window metrics per observation, an anchor's phasing (both frames), dephasing against backgrounds. */
+export const nucWindow = (observations: NucObservation[], window: { chrom: string; start: number; end: number },
+  anchor: { pos: number; orientation: number } | null, background: Array<{ chrom: string; pos: number; orientation: number }>,
+  includeDuplicates = false, signal?: AbortSignal) =>
+  fetchJson<{ observations: NucWindowObservation[] }>('/api/nuc/window', json({
+    observations: observations.map(descriptor), window, ...(anchor ? { anchor } : {}),
+    ...(background.length ? { background } : {}), include_duplicates: includeDuplicates,
+  }, signal));
+
+export type NucCategory = { kind: 'coarse'; name: string } | { kind: 'nrl'; lo: number; hi: number }
+  | { kind: 'segment'; state: string } | { kind: 'event'; name: string };
+
+/** The read identities of an observation's molecules in a category (what a click highlights). */
+export const nucSelect = (observation: NucObservation, category: NucCategory, includeDuplicates = false) =>
+  fetchJson<{ obsId: string; readIds: string[]; qnames: string[]; molecules: number }>('/api/nuc/select', json({
+    observation: descriptor(observation), category, include_duplicates: includeDuplicates,
+  }));

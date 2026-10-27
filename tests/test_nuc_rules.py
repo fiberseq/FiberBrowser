@@ -161,3 +161,13 @@ def test_scalar_groups_decode_and_never_stay_a_layer():
         'nfr.openness': 0.5, 'nfr.n_nfr': 2.0, 'nfr.longest_linker': 300.0}
     assert decode_bytes('nfrmol', [255, 255, 255, 255]) == {'nfr.openness': None, 'nfr.n_nfr': None, 'nfr.longest_linker': None}
     assert decode_bytes('nucmol', [1, 2]) == {}
+
+
+def test_correspondence_cluster_nuc_modes_read_the_nuc_groups():
+    """Graph-path and matched-region windows load the groups a nucleosome mode reads."""
+    from services.correspondence_clustering import mode_layer
+    assert mode_layer('nuc.size.mono') == 'nucsz'
+    assert mode_layer('nuc.seg.regular') == 'nucseg'
+    assert mode_layer('nuc.event.missing') == 'nucseg'
+    assert mode_layer('accessibility') == 'msp'
+    assert mode_layer('tf_density') == 'tf'

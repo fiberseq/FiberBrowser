@@ -123,6 +123,19 @@ def assign_with_model(X, read_ids, widths, modes, model, snapshot, missing=None,
     return {rid: int(keys[int(i)]) for rid, i in zip(read_ids, np.argmin(d, axis=1))}
 
 
+_MODE_LAYER_ALIASES = {'accessibility': 'msp', 'fire': 'msp', 'tf_layer': 'tf', 'tf_density': 'tf', 'nuc_layer': 'nuc'}
+
+
+def mode_layer(mode: str) -> str:
+    """The layer a (non-rule) cluster mode reads. Nucleosome modes read the nucsz / nucseg groups
+    (services/clustering_features.py ``_nuc_mode_intervals``)."""
+    if mode.startswith('nuc.size.'):
+        return 'nucsz'
+    if mode.startswith(('nuc.seg.', 'nuc.event.')):
+        return 'nucseg'
+    return _MODE_LAYER_ALIASES.get(mode, mode)
+
+
 def run(state, req, *, sources=None, model=None, row_cache=None, covering_out=None):
     """``sources``: graph-source windows by result key (graph primary §2.6; ``services/graph_panel/analysis.py``),
     whose rows are on a package path's own coordinates, not the window's reference. ``model``: assign every
@@ -143,8 +156,7 @@ def run(state, req, *, sources=None, model=None, row_cache=None, covering_out=No
     rule_modes = any(m.startswith('cluster_rule:') for m in modes)
     layers = cluster_modes_requested_layers(modes)
     if not rule_modes:
-        aliases = {'accessibility': 'msp', 'fire': 'msp', 'tf_layer': 'tf', 'tf_density': 'tf', 'nuc_layer': 'nuc'}
-        layers = sorted({aliases.get(m, m) for m in modes if m != 'off' and m not in METHYLATION_CLUSTER_MODES})
+        layers = sorted({mode_layer(m) for m in modes if m != 'off' and m not in METHYLATION_CLUSTER_MODES})
     groups, stats, ids, metadata = {}, {}, {}, {}
     pending, loaded = [], []
     feature_spans: list = []   # per loaded window: its feature blocks, relative to its start (folded-molecule arbitration)

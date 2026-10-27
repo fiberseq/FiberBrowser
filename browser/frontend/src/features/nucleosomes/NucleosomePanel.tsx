@@ -4,7 +4,9 @@
  * long / multi / can't tell; named classes only with an absolute calibration), per-molecule spacing and
  * regularity, and array segments (regular, disordered, undetermined, low information) with the disruption events
  * (undersized runs, missing nucleosomes). Computed by FiberHMM's nuc module on the complete molecules, live in the
- * view (Compute) or read from an opened scan; no nucleosome maths runs here.
+ * view (Compute) or read from an opened scan; no nucleosome maths runs here. Two modes: Segments (molecule-wide
+ * outputs in view; every bar part, NRL bin and event highlights its molecules in every read track) and Window
+ * (window metrics in one window, with an anchor's phasing and the dephasing readout against background anchors).
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
@@ -14,25 +16,21 @@ import type { AnalysisPanelProps } from '../../plugins/types';
 import { AnalysisButton, AnalysisPanelHeader } from '../../components/controls/shared/AnalysisControls';
 import { AnalysisPanelShell } from '../../components/controls/shared/AnalysisPanelShell';
 import { JobStatus } from '../../components/controls/shared/JobStatus';
-import { nucStatus, nucSummary } from './api';
+import { nucStatus, nucSummary, nucWindow, type NucCategory } from './api';
 import { useHubData } from '../hub/hubData';
+import type { HubSelected } from '../hub/hubState';
+import { useReadActionsStore } from '../../stores/readActionsStore';
 import { isLiveJob, useNucJob } from './nucJob';
 import { nucObservations, observationDatasets, observationsKey, observationViews } from './planner';
-import type { NucCalibrationSummary, NucDatasetStatus, NucObservation, NucObservationSummary, NucPanelState } from './types';
+import { SegmentsView } from './SegmentsView';
+import { WindowControls, WindowView } from './WindowView';
+import { categoryLabel, highlightCategory } from './selection';
+import { resolveWindow, placeableHits } from './windowSource';
+import type { NucCalibrationSummary, NucDatasetStatus, NucObservation, NucObservationSummary, NucPanelState, NucWindowObservation } from './types';
 
-const pct = (v: number | null | undefined, digits = 0) => (v == null || !Number.isFinite(v) ? '' : `${(v * 100).toFixed(digits)}%`);
 const num = (v: number | null | undefined, digits = 0) => (v == null || !Number.isFinite(v) ? '' : v.toFixed(digits));
 
-/** Coarse classes in the mix bar: colour and label (can't tell / edge-truncated hatched, never dropped). */
-export const COARSE_BAR: Array<{ key: keyof NonNullable<NucObservationSummary['sizes']>['coarse']; label: string; color: string; hatched?: boolean }> = [
-  { key: 'short', label: 'short (z < −2)', color: '#f59e0b' },
-  { key: 'mono', label: 'mono', color: '#16a34a' },
-  { key: 'long', label: 'long (z > 2)', color: '#0d9488' },
-  { key: 'multi2', label: 'multi (2)', color: '#2563eb' },
-  { key: 'multi3', label: 'multi (3+)', color: '#7c3aed' },
-  { key: 'cant_tell', label: "can't tell", color: '#9ca3af', hatched: true },
-  { key: 'edge_truncated', label: 'edge-truncated', color: '#d1d5db', hatched: true },
-];
+const NO_HITS: HubSelected[] = [];
 
 function calibrationText(c: NucCalibrationSummary | null | undefined): string {
   if (!c) return 'not calibrated yet';
@@ -49,20 +47,6 @@ function calibrationTitle(c: NucCalibrationSummary | null | undefined): string {
     c.absolute ? 'absolute calibration: named classes available' : 'no absolute control: named classes are not shown',
     `${c.regions} calibration window${c.regions === 1 ? '' : 's'} (scope ${c.scope ?? 'data'})`,
   ].join('\n');
-}
-
-export function CoarseMixBar({ sizes }: { sizes: NucObservationSummary['sizes'] }) {
-  if (!sizes || !sizes.footprints) return <span className="text-ink-muted">—</span>;
-  const total = sizes.footprints;
-  return <div className="flex h-3 w-28 overflow-hidden rounded-sm border border-line dark:border-white/10" data-testid="nuc-coarse-bar"
-    title={COARSE_BAR.map(c => `${c.label}: ${sizes.coarse[c.key]} (${pct(sizes.coarse[c.key] / total)})`).join('\n') + `\nTF calls among them: ${sizes.tf}`}>
-    {COARSE_BAR.map(c => {
-      const w = sizes.coarse[c.key] / total;
-      if (!w) return null;
-      return <span key={c.key} style={{ width: `${w * 100}%`, background: c.hatched
-        ? `repeating-linear-gradient(135deg, ${c.color} 0 2px, transparent 2px 4px)` : c.color }} />;
-    })}
-  </div>;
 }
 
 function useDatasetStatus(ids: string[], revision: number | string, parameters?: Record<string, unknown>, includeDuplicates = false) {
@@ -122,6 +106,41 @@ export function NucleosomePanel({ isFullView, panelId }: AnalysisPanelProps) {
     return () => { clearTimeout(timerId); ctl.abort(); };
   }, [shownKey, revision]);   // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Window mode: the window (view, selected peak, hub hit, coordinates, hand-off), its anchor and background.
+  const mode = settings.mode ?? 'segments';
+  const view = useBrowserStore(useShallow(s => ({ chrom: s.chrom, start: s.start, end: s.end })));
+  const peaks = useBrowserStore(useShallow(s => mode === 'window' ? s.getAllPeaks().filter(p => !p.match && s.selectedPeaks.has(p.index)) : []));
+  const hubSelected = useBrowserStore(s => s.featureHub?.selected ?? NO_HITS);
+  const hubHits = placeableHits(hubSelected);
+  const resolution = useMemo(() => resolveWindow(settings, { ...view, peaks, hubSelected }),
+    [settings, view, peaks, hubSelected]);
+  const resolutionKey = JSON.stringify(resolution);
+  const [windowResults, setWindowResults] = useState<Record<string, NucWindowObservation>>({});
+  const [windowLoading, setWindowLoading] = useState(false);
+  const windowCtl = useRef<AbortController | null>(null);
+  useEffect(() => {
+    if (mode !== 'window' || !shown.length || 'error' in resolution) { setWindowResults({}); return; }
+    windowCtl.current?.abort();
+    const ctl = new AbortController();
+    windowCtl.current = ctl;
+    const timerId = setTimeout(() => {
+      setWindowLoading(true);
+      nucWindow(shown, resolution.window, resolution.anchor, resolution.background, includeDuplicates, ctl.signal)
+        .then(res => { if (!ctl.signal.aborted) { setWindowResults(Object.fromEntries(res.observations.map(o => [o.obsId, o]))); setError(''); } })
+        .catch(e => { if (!ctl.signal.aborted) setError(String(e?.message ?? e)); })
+        .finally(() => { if (!ctl.signal.aborted) setWindowLoading(false); });
+    }, 500);
+    return () => { clearTimeout(timerId); ctl.abort(); };
+  }, [mode, shownKey, revision, resolutionKey]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Selection (segments mode): a bar part, NRL bin or event highlights the observation's molecules that have it.
+  const [selection, setSelection] = useState<{ label: string; count: number } | null>(null);
+  const select = (obs: NucObservation, category: NucCategory) => {
+    highlightCategory(obs, category, includeDuplicates)
+      .then(count => setSelection({ label: `${obs.label} · ${categoryLabel(category)}`, count }))
+      .catch(e => setError(String(e?.message ?? e)));
+  };
+
   const setSettings = (patch: Partial<NucPanelState>) => {
     if (!panelId) return;
     useBrowserStore.setState(s => ({ panels: s.panels.map(p => p.id === panelId ? { ...p, nucleosomes: { ...(p.nucleosomes ?? {}), ...patch } } : p) }));
@@ -170,27 +189,22 @@ export function NucleosomePanel({ isFullView, panelId }: AnalysisPanelProps) {
       </section>
 
       {!shown.length && <p className="text-ink-secondary">Open a dataset panel: each panel, haplotype pop-out, strand split and graph path becomes a column here.</p>}
-      {shown.length > 0 && <div className="overflow-x-auto">
-        <table className="w-full text-[11px]" data-testid="nuc-table">
-          <thead className="text-ink-muted">
-            <tr>
-              <th className="px-1 text-left">Observation</th>
-              <th className="px-1 text-right" title="Molecules with outputs / records in view">Molecules</th>
-              <th className="px-1 text-left" title="Coarse size calls of footprints centred in view (nucleosome and TF calls)">Size classes</th>
-              <th className="px-1 text-right" title="Footprints whose size can't be told, or that touch a read end">Can't tell</th>
-              <th className="px-1 text-right" title="Per-molecule repeat length (median of dyad gaps): median [IQR]">NRL</th>
-              <th className="px-1 text-right" title="Per-molecule regularity S: median">S</th>
-              <th className="px-1 text-right" title="Molecules too short for a repeat length">Too short</th>
-              <th className="whitespace-nowrap px-1 text-right" title="Share of segmented bases in view: regular / disordered / undetermined / low information">Reg · Dis · Und · Low</th>
-              <th className="px-1 text-right" title="Undersized footprint runs and missing nucleosomes in view">Events</th>
-            </tr>
-          </thead>
-          <tbody>
-            {shown.map(o => <ObservationRow key={o.obsId} obs={o} summary={summaries[o.obsId]} loading={loading} onHide={() => setSettings({ hidden: [...hidden, o.obsId] })} />)}
-          </tbody>
-        </table>
+      {shown.length > 0 && <div className="flex flex-wrap items-center gap-2 text-[11px]">
+        <div role="tablist" aria-label="Nucleosome panel mode" className="inline-flex overflow-hidden rounded border border-line dark:border-white/10">
+          {(['segments', 'window'] as const).map(m => <button key={m} type="button" role="tab" aria-selected={mode === m} data-testid={`nuc-mode-${m}`}
+            className={`px-2 py-0.5 ${mode === m ? 'bg-emerald-600 text-white' : 'text-ink-secondary hover:bg-gray-100 dark:hover:bg-white/10'}`}
+            title={m === 'segments' ? 'Molecule-wide outputs in view: sizes, spacing, array segments' : 'Metrics within one window, phasing at an anchor, dephasing against background anchors'}
+            onClick={() => setSettings({ mode: m })}>{m === 'segments' ? 'Segments' : 'Window'}</button>)}
+        </div>
+        {mode === 'segments' && selection && <span className="text-ink-secondary" data-testid="nuc-selection">
+          Highlighting {selection.count.toLocaleString()} molecule{selection.count === 1 ? '' : 's'}: {selection.label}
+          <button type="button" className="ml-1 underline" onClick={() => { useReadActionsStore.getState().clearHighlight(); setSelection(null); }}>clear</button></span>}
       </div>}
-      {notComputed > 0 && !live && <p className="text-ink-secondary" data-testid="nuc-not-computed">
+      {shown.length > 0 && mode === 'window' && <WindowControls settings={settings} setSettings={setSettings} resolution={resolution} hubCount={hubHits.length} />}
+      {shown.length > 0 && mode === 'segments' && <SegmentsView observations={shown} summaries={summaries} loading={loading}
+        onHide={obsId => setSettings({ hidden: [...hidden, obsId] })} onSelect={select} />}
+      {shown.length > 0 && mode === 'window' && <WindowView observations={shown} results={windowResults} loading={windowLoading} />}
+      {notComputed > 0 && !live && mode === 'segments' && <p className="text-ink-secondary" data-testid="nuc-not-computed">
         {notComputed === shown.length ? 'Nothing computed in view yet: ' : 'Some molecules in view have no outputs yet: '}
         Compute in view, or open a nucleosome scan in the Hub.</p>}
       {hidden.size > 0 && <button type="button" className="text-[11px] text-ink-muted underline" onClick={() => setSettings({ hidden: [] })} data-testid="nuc-show-hidden">
@@ -198,38 +212,6 @@ export function NucleosomePanel({ isFullView, panelId }: AnalysisPanelProps) {
       <p className="text-[11px] text-ink-muted">Named classes (hexasome, octasome, chromatosome) need an absolute calibration (601 arrays or spike-ins); without one sizes are density-matched z and coarse calls.</p>
     </div>
   </AnalysisPanelShell>;
-}
-
-function ObservationRow({ obs, summary, loading, onHide }: { obs: NucObservation; summary?: NucObservationSummary; loading: boolean; onHide: () => void }) {
-  const s = summary;
-  const nrl = s?.spacing?.nrl.quantiles;
-  const seg = s?.segments;
-  return <tr className="border-t border-gray-100 dark:border-gray-800" data-testid="nuc-row" data-obs={obs.obsId} data-kind={obs.kind}>
-    <td className="px-1 text-left">
-      <span className="mr-1 inline-block h-2.5 w-2.5 rounded-sm align-middle" style={{ background: obs.color }} />
-      <span className="align-middle" title={`${obs.label}${obs.kind === 'graph' ? ' (graph path: every molecule over the path, insertions included)' : ''}${obs.readIds ? ` · ${obs.readIds.length} reads` : ''}`}>{obs.label}</span>
-      <button type="button" aria-label={`Hide ${obs.label}`} className="ml-1 text-ink-muted hover:text-ink" onClick={onHide}>×</button>
-      {s?.sources?.some(x => x !== 'live') && <span className="ml-1 rounded bg-gray-100 px-1 text-[10px] text-gray-600 dark:bg-white/10 dark:text-gray-300"
-        data-testid="nuc-source" title={`Outputs read from ${s.sources.filter(x => x !== 'live').map(x => x === 'annotated' ? "the BAM's own nucleosome groups" : 'an opened scan').join(' and ')}${s.sources.includes('live') ? ', the rest computed here' : ''}`}>
-        {s.sources.includes('annotated') ? 'BAM tags' : 'scan'}</span>}
-    </td>
-    {s?.error ? <td colSpan={8} className="px-1 text-left text-amber-700 dark:text-amber-300">{s.error}</td> : <>
-      <td className="whitespace-nowrap px-1 text-right" data-testid="nuc-molecules"
-        title={s ? [`${s.computed ?? 0} molecules with outputs of ${s.records ?? 0} records in view`,
-          s.undecodable ? `${s.undecodable} records without calls FiberHMM can read` : '',
-          s.notComputed ? `${s.notComputed} not computed yet` : '',
-          s.lowInformation ? `${s.lowInformation} below the low-information floor (counted, left out of segments)` : ''].filter(Boolean).join('\n') : undefined}>
-        {s ? `${(s.computed ?? 0).toLocaleString()} / ${(s.records ?? 0).toLocaleString()}` : loading ? '…' : ''}
-        {s?.lowInformation ? <span className="text-ink-muted"> · {s.lowInformation} low</span> : null}</td>
-      <td className="px-1 text-left"><CoarseMixBar sizes={s?.sizes} /></td>
-      <td className="px-1 text-right">{pct(s?.sizes?.cantTellFraction)}</td>
-      <td className="whitespace-nowrap px-1 text-right" data-testid="nuc-nrl">{nrl ? `${num(nrl[2])} [${num(nrl[1])}–${num(nrl[3])}]` : ''}</td>
-      <td className="px-1 text-right">{num(s?.spacing?.regularity?.[2], 2)}</td>
-      <td className="px-1 text-right">{pct(s?.spacing?.tooShortFraction)}</td>
-      <td className="whitespace-nowrap px-1 text-right" data-testid="nuc-segments">{seg?.bp ? `${pct(seg.regular)} · ${pct(seg.disordered)} · ${pct(seg.undetermined)} · ${pct(seg.low_information)}` : ''}</td>
-      <td className="px-1 text-right">{seg ? `${seg.undersizedRuns} · ${seg.missingNucleosomes}` : ''}</td>
-    </>}
-  </tr>;
 }
 
 export default NucleosomePanel;

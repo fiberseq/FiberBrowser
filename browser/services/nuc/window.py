@@ -154,6 +154,7 @@ def select_reads(state, obs: dict, category: dict, *, include_duplicates: bool =
     _source, _recs, _windows, _cfg, cohort, _counts = observation_cohort(state, obs, policy)
     kind = category.get('kind')
     keys: List[str] = []
+    qnames: List[str] = []
     for rec, row in cohort:
         hit = False
         if kind == 'coarse':
@@ -165,7 +166,8 @@ def select_reads(state, obs: dict, category: dict, *, include_duplicates: bool =
                         hit = True
                         break
         elif kind == 'nrl':
-            v = row.scalars.get('nrl')
+            # As the summary's NRL histogram: molecules too short for a repeat length have none.
+            v = None if int(row.scalars.get('flags') or 0) & 1 else row.scalars.get('nrl')
             hit = v is not None and float(category.get('lo', -1e9)) <= v < float(category.get('hi', 1e9))
         elif kind == 'segment':
             want = {v: k for k, v in SEG_STATES.items()}.get(category.get('state'))
@@ -179,4 +181,7 @@ def select_reads(state, obs: dict, category: dict, *, include_duplicates: bool =
             raise ObservationError(f'Unknown category {kind!r}')
         if hit:
             keys.append(_read_key(rec))
-    return dict(obsId=obs.get('obsId'), readIds=keys, molecules=len(cohort))
+            qnames.append(rec.qname)
+    # readIds: the observation's own rows (record keys for lifted rows); qnames: the same molecules in every other
+    # panel (native rows, graph pop-outs sync by QNAME).
+    return dict(obsId=obs.get('obsId'), readIds=keys, qnames=sorted(set(qnames)), molecules=len(cohort))
