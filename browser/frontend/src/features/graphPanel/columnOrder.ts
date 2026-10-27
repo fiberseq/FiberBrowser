@@ -142,10 +142,9 @@ export function canonicalWalk(topology: GraphTopology, bindingOrder?: readonly s
           const down = cands.filter(c => c.inv && c.i < last).sort((a, b2) => b2.i - a.i)[0];
           const up = cands.filter(c => !c.inv && c.i > anchor).sort((a, b2) => a.i - b2.i)[0];
           // Inside an inverted run the next one down, else the next one up (colinear); an inverted run starting here
-          // begins at the furthest candidate it reaches; nothing taken yet: the first.
+          // begins at the furthest candidate it reaches (none: an extra copy, also before the first anchor).
           pick = (inverted ? down ?? up : up ?? down)
-            ?? cands.filter(c => c.inv && c.i > anchor).sort((a, b2) => b2.i - a.i).find(c => reaches(j, c.i))
-            ?? (anchor < 0 ? [...cands].sort((a, b2) => a.i - b2.i)[0] : undefined);
+            ?? cands.filter(c => c.inv && c.i > anchor).sort((a, b2) => b2.i - a.i).find(c => reaches(j, c.i));
         }
         if (pick) { take(o, pick); continue; }
         // An extra copy: unrolled like an insertion after the anchor.

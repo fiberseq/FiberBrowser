@@ -66,6 +66,21 @@ describe('agy post-merge A, HIGH 1: an inverted copy never leaps across colinear
     expect(lane.hidden).toBe(1);
   });
 
+  it('a window that starts at an inverted copy before the first shared node: the copy ranks before it, not after (agy, stabilize)', () => {
+    // Target B+ A+ A+ R; MAT A- B+ A+ A+ R.
+    for (const matches of [true, false]) {
+      const v = ranks(topo({ ref: ['B+', 'A+', 'A+', 'R+'], mat: ['A-', 'B+', 'A+', 'A+', 'R+'] }, { A: 300, B: 400, R: 1000 }, matches));
+      expect(v[0]).toEqual({ rank: [-1, 1, 1], reverse: true });
+      expect(v.slice(1).map(x => x.rank)).toEqual([[0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0]]);
+    }
+    // With one row, the read inside the inverted copy keeps it over the one entering B.
+    const walk = canonicalWalk(topo({ ref: ['B+', 'A+', 'A+', 'R+'], mat: ['A-', 'B+', 'A+', 'A+', 'R+'] }, { A: 300, B: 400, R: 1000 }), ['ref', 'mat']);
+    const reads = [rd('into_b', 200, 500), rd('in_copy', 50, 280)];
+    const lane = packMemberBands(reads.map(mol), [M], {}, 1, 'position', 3, undefined, m => firstCarriedColumn(m.read, walk))!.get('mat')!;
+    expect(lane.rows.flat().map(m => m.read.k)).toEqual(['in_copy']);
+    expect(lane.hidden).toBe(1);
+  });
+
   it('1B: a tandem forward copy is an extra copy, not the inverted repeat after B', () => {
     // Target L P+ B+ P- R; MAT duplicates P before B: L P+ P+ B+ P- R.
     for (const matches of [true, false]) {
