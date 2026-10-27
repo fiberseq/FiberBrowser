@@ -1640,14 +1640,23 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
       if (Object.keys(merged).length) childAssignments[sk] = merged;
     }
     if (!Object.keys(childAssignments).length) return null;
+    // Panels the refinement does not label keep their order, focus, names and graph provenance (agy post-merge
+    // review, group A, HIGH 3: a refined graph run of one host wiped every other panel's).
+    const untouched = (key: string) => !(key in resultsByKey);
+    const keptOrder = Object.fromEntries(Object.entries(state.clusterOrder).filter(([k]) => untouched(k)));
+    const keptFocus = Object.fromEntries(Object.entries(state.clusterFocus).filter(([k, f]) => untouched(k) && f && k in childAssignments));
+    const order = normalizeClusterOrderRecord(childAssignments, keptOrder);
+    const groupLabels = { ...Object.fromEntries([...Object.entries(parent.groupLabels ?? {}), ...Object.entries(state.clusterGroupLabels ?? {})]
+      .filter(([k]) => untouched(k) && k in childAssignments)), ...(options.groupLabels ?? {}) };
     const id = crypto.randomUUID();
     const node: ClusterTreeNode = {
       ...buildClusterTreeNodeFromState(state, { id, parentId, name: options.name, sourceClusterIds: [], sourceLabel: options.sourceLabel }),
       assignments: cloneAssignments(childAssignments),
-      order: normalizeClusterOrderRecord(childAssignments, {}),
-      focus: {},
+      order,
+      focus: serializeClusterFocus(keptFocus),
       refinement: true,
-      ...(options.groupLabels ? { groupLabels: options.groupLabels } : {}),
+      ...(Object.keys(groupLabels).length ? { groupLabels } : {}),
+      ...keptGraphProvenance(parent, childAssignments),
     };
     set(current => ({
       ...(options.groupLabels ? { clusterGroupLabels: { ...current.clusterGroupLabels, ...options.groupLabels } } : {}),
@@ -1655,8 +1664,8 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
       activeClusterTreeNodeId: id,
       selectedClusters: {},
       clusterAssignments: cloneAssignments(childAssignments),
-      clusterOrder: normalizeClusterOrderRecord(childAssignments, {}),
-      clusterFocus: {},
+      clusterOrder: order,
+      clusterFocus: keptFocus,
     }));
     return id;
   },

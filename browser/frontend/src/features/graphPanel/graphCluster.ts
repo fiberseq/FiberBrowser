@@ -360,6 +360,14 @@ export function commitGraphRun(s: BrowserState, plan: GraphClusterPlan, response
     const active = now.activeClusterTreeNodeId ? now.clusterTreeNodes[now.activeClusterTreeNodeId] : null;
     if (active?.refinement && active.parentId) {
       const old = active.id;
+      // Labels another grouping replaced on the refinement stay marked on the node that takes its place (agy post-merge
+      // review, group A, HIGH 3).
+      const replaced = active.graphLabelsReplaced;
+      if (replaced && Object.keys(replaced).length) useBrowserStore.setState(cur => {
+        const parent = cur.clusterTreeNodes[active.parentId!];
+        return parent ? { clusterTreeNodes: { ...cur.clusterTreeNodes, [parent.id]: { ...parent,
+          graphLabelsReplaced: { ...(parent.graphLabelsReplaced ?? {}), ...replaced } } } } : {};
+      });
       useBrowserStore.setState({ activeClusterTreeNodeId: active.parentId });
       useBrowserStore.getState().deleteClusterTreeNode(old);
       useBrowserStore.setState({ activeClusterTreeNodeId: active.parentId });

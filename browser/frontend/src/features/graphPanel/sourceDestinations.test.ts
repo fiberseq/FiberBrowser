@@ -444,5 +444,63 @@ describe('a linked source panel is a destination of graph runs', () => {
     commitGraphRun(useBrowserStore.getState(), plan(), response({ [pat]: { assignments: { [aid('q1')]: 1, [aid('q2')]: 0 } } }));
     expect(useBrowserStore.getState().clusterTreeNodes[root].graphLabelsReplaced).toBeUndefined();
   });
+  it('agy post-merge A HIGH 3: a refined graph run keeps the order, focus, names and provenance of panels it does not label', () => {
+    seed([...split(), source('srcP', '2', 'PAT')]);
+    useBrowserStore.setState({ clusterAssignments: { 'k-other': { x1: 0, x2: 1 } }, clusterOrder: { 'k-other': [1, 0] },
+      clusterFocus: { 'k-other': new Set([1]) }, clusterGroupLabels: { 'k-other': { 1: 'mine' } } } as never);
+    setPanelViewMode('mat', 'graph');
+    const p = plan();
+    const pat = p.observations.find(o => o.binding === 'pat')!.id;
+    commitGraphRun(useBrowserStore.getState(), p, { ...(response({ [pat]: { assignments: { [aid('q1')]: 0, [aid('q2')]: 2 } } }) as object),
+      results: { [pat]: { assignments: { [aid('q1')]: 0, [aid('q2')]: 2 }, stage1: { [aid('q1')]: 0, [aid('q2')]: 0 } } }, names: { 2: 'C0.1' } } as never);
+    const st = useBrowserStore.getState();
+    const refined = st.clusterTreeNodes[st.activeClusterTreeNodeId!];
+    expect(refined.refinement).toBe(true);
+    expect(st.clusterAssignments['srcP~lift-source']).toEqual({ q1: 0, q2: 2 });
+    expect(st.clusterOrder['k-other']).toEqual([1, 0]);
+    expect([...st.clusterFocus['k-other']!]).toEqual([1]);
+    expect(st.clusterGroupLabels['k-other']).toEqual({ 1: 'mine' });
+    expect(refined.order['k-other']).toEqual([1, 0]);
+    expect(refined.focus['k-other']).toEqual([1]);
+    expect(refined.groupLabels?.['k-other']).toEqual({ 1: 'mine' });
+    // Back to the stage-1 node and to the refinement again: the other panel's names come back with it.
+    useBrowserStore.getState().applyClusterTreeNode(refined.parentId!);
+    useBrowserStore.getState().applyClusterTreeNode(refined.id);
+    expect(useBrowserStore.getState().clusterGroupLabels['k-other']).toEqual({ 1: 'mine' });
+    expect(useBrowserStore.getState().clusterOrder['k-other']).toEqual([1, 0]);
+  });
+
+  it('agy post-merge A HIGH 3: a graph run that replaces a refinement keeps its marks of labels clustered on their own, so a reopened source keeps its order and focus', async () => {
+    seed([...split(), source('srcP', '2', 'PAT')]);
+    setPanelViewMode('mat', 'graph');
+    const p = plan();
+    const pat = p.observations.find(o => o.binding === 'pat')!.id;
+    commitGraphRun(useBrowserStore.getState(), p, { ...(response({ [pat]: { assignments: { [aid('q1')]: 0, [aid('q2')]: 2 } } }) as object),
+      results: { [pat]: { assignments: { [aid('q1')]: 0, [aid('q2')]: 2 }, stage1: { [aid('q1')]: 0, [aid('q2')]: 0 } } }, names: { 2: 'C0.1' } } as never);
+    const key = 'srcP~lift-source';
+    const refined = useBrowserStore.getState().activeClusterTreeNodeId!;
+    // The source clustered on its own on the refinement (the same numbers), then folded away.
+    const s = useBrowserStore.getState();
+    s.setClusterAssignments(key, { q1: 0, q2: 2 });
+    s.setClusterOrder(key, [2, 0]);
+    // (Its own focus only: a focus set through the run's shared picks would make the next run a subcluster.)
+    useBrowserStore.setState(x => ({ clusterFocus: { ...x.clusterFocus, [key]: new Set([0]) } }));
+    expect(useBrowserStore.getState().clusterTreeNodes[refined].graphLabelsReplaced?.[key]).toBe(true);
+    useBrowserStore.setState(x => ({ panels: x.panels.map(q => (q.id === 'srcP' ? { ...q, collapsed: true } : q)) }));
+    // A one-stage run on the host replaces the refinement; the folded source is not one of its destinations.
+    commitGraphRun(useBrowserStore.getState(), plan(), response({ [pat]: { assignments: { [aid('q1')]: 0, [aid('q2')]: 2 } } }));
+    const st = useBrowserStore.getState();
+    expect(st.clusterTreeNodes[refined]).toBeUndefined();
+    expect(st.clusterTreeNodes[st.activeClusterTreeNodeId!].graphLabelsReplaced?.[key]).toBe(true);
+    st.setClusterOrder('k-pat', [0, 2]);
+    useBrowserStore.setState(x => ({ clusterFocus: { ...x.clusterFocus, 'k-pat': new Set([2]) } }));
+    expect([...useBrowserStore.getState().clusterFocus[key]!]).toEqual([0]);
+    setPopOutKind('mat', 'source');
+    popOutPaths('mat', ['pat']);
+    await new Promise(r => setTimeout(r, 0));
+    const after = useBrowserStore.getState();
+    expect(after.clusterOrder[key]).toEqual([2, 0]);
+    expect([...after.clusterFocus[key]!]).toEqual([0]);
+  });
 });
 
