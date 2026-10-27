@@ -25,17 +25,19 @@ export function readRegionProfiles(reads: CompactRead[], width: number, requeste
     definitions.set(name, { source, min, max, diff: new Float64Array(bins + 1) });
   }
   const coverage = new Float64Array(bins + 1);
-  const add = (diff: Float64Array, s: number, e: number, body = false) => {
+  // Half-open [s, e): the bins of s .. e - 1, for coverage and signal alike (the server's rule since
+  // "Use the same half-open bins for metaprofile signal and coverage").
+  const add = (diff: Float64Array, s: number, e: number) => {
     s = Math.max(0, Math.min(width, s)); e = Math.max(0, Math.min(width, e));
     if (e <= s) return;
     const lo = Math.min(bins - 1, Math.floor(s / binSize));
-    const hi = Math.min(bins - 1, Math.floor((body ? Math.max(s, e - 1) : e) / binSize));
+    const hi = Math.min(bins - 1, Math.floor(Math.max(s, e - 1) / binSize));
     diff[lo]++; diff[hi + 1]--;
   };
   for (const read of reads) {
     const primary = read.intervals;
     if (!primary.length) continue;
-    add(coverage, primary[0][0], primary[primary.length - 1][1], true);
+    add(coverage, primary[0][0], primary[primary.length - 1][1]);
     for (const { source, min, max, diff } of definitions.values()) {
       const layer = source ? (read.layers?.[source] ?? (source === 'fire' ? read.layers?.msp : undefined)) : undefined;
       const intervals = source === null ? primary : layer?.intervals
