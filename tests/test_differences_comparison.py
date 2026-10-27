@@ -580,15 +580,94 @@ def test_read_with_a_shifted_equal_deletion_past_the_view_is_not_novel(tmp_path)
 
 
 def test_read_window_past_the_bounded_fetch_is_unassessed_not_novel(tmp_path):
-    """agy post-merge review B HIGH 2: the fetch widens at most max_allele_bp past the view's pad; a read whose
+    """agy post-merge review B HIGH 2: the fetch widens at most max_fetch_widen_bp past the view's pad; a read whose
     nearby window still reaches past it is unassessed (fetch_horizon), never novel."""
     state, ds = edited_map(tmp_path, T, {"MAT": [], "PAT": []})
     read = [dict(id="r_del300", ref_start=5000, ref_end=5300, alt_bp=0)]
     wide = assembly_comparison(state, ds, chrom=CHROM, start=4900, end=5100, reads=read, read_scope={"search_complete": True})
     assert wide["reads"]["r_del300"]["label"] == "novel_relative_to_assembly"   # nothing anywhere: novel
     out = assembly_comparison(state, ds, chrom=CHROM, start=4900, end=5100, reads=read, read_scope={"search_complete": True},
-                              policy=ComparisonPolicy(max_allele_bp=150))
+                              policy=ComparisonPolicy(max_fetch_widen_bp=150))
     value = out["reads"]["r_del300"]
     assert value["label"] == "unassessed"
     assert "fetch_horizon" in value["novelty"]["reasons"] and "search_unassessed" in value["novelty"]["reasons"]
+    state.fasta.close()
+
+
+def _by_label(out, label):
+    return next(v for v in out["assembly"].values() if v["hap_label"] == label)
+
+
+def test_shortening_replacement_in_a_repeat_spans_its_net_deletion(tmp_path):
+    """agy post-merge review B2 HIGH 1: MAT replaces [5000,5400) of an 800 bp ACGT repeat with ACGT*25, which trims
+    to a 300 bp deletion whose last placement ends at 5800. The window spans it, so PAT's deletion at the repeat's
+    end competes and a PAT carrier is other_allele; a view fetching short of 5800 gets no exact target."""
+    reference = T[:5000] + "ACGT" * 200 + T[5800:]
+    state, ds = edited_map(tmp_path, reference, {"MAT": [(5000, 5400, "ACGT" * 25)], "PAT": [(5780, 5820, "")]})
+    out = assembly_comparison(state, ds, chrom=CHROM, start=4800, end=6000)
+    mat, pat = _by_label(out, "MAT"), _by_label(out, "PAT")
+    assert mat["equivalent_anchors"][1] == 5500
+    target = mat["exact_target"]
+    assert target["diagnostic_end"] >= 5800 + 25
+    assert target["candidate_labels"][pat["exact_allele_id"]] == "PAT"
+    assert target["competition_complete"] is True
+    pat_src = reference[:5780] + reference[5820:]
+    ds.paths = [write_bam(tmp_path / "pat_carrier.bam",
+                          lambda h: [make_record(h, "pat_mol", "chrC_PAT", 4800, "1100M", seq=pat_src[4800:5900])],
+                          contigs=(("chrC_MAT", len(reference) - 300), ("chrC_PAT", len(pat_src))))]
+    ds.consensus_chemistry = "hia5-pacbio"
+    from services.differences.workspace import inspect
+    calls = inspect(state, ds, chrom=CHROM, start=4800, end=6000, target=target)["targets"][0]["calls_by_molecule"]
+    assert next(iter(calls.values()))["call"]["assignment"] == "other_allele"
+    state.fasta.close()
+    (tmp_path / "b").mkdir()
+    state, ds = edited_map(tmp_path / "b", reference, {"MAT": [(5000, 5400, "ACGT" * 25)], "PAT": [(5560, 5800, "")]})
+    out = assembly_comparison(state, ds, chrom=CHROM, start=4990, end=5440)   # fetches [4890, 5541)
+    assert not any(v["hap_label"] == "PAT" for v in out["assembly"].values())
+    assert _by_label(out, "MAT")["exact_target"] is None
+    state.fasta.close()
+
+
+def test_fetch_widening_is_bounded_so_far_edits_do_not_hit_the_item_cap(tmp_path):
+    """agy post-merge review B2 HIGH 3: one 48 kb deletion across the view's edge no longer widens the fetch by 50 kb
+    into 512 far edits that would evict the view's own allele and leave every read unassessed."""
+    long_rng = random.Random(11)
+    long_ref = "".join(long_rng.choice("ACGT") for _ in range(60_000))
+    edits = {"MAT": [(3000, 3020, "")], "BIG": [(3950, 51_950, "")]}
+    for h in range(8):
+        edits[f"H{h}"] = [(10_000 + k * 500, 10_000 + k * 500 + 30, "") for k in range(64)]
+    state, ds = edited_map(tmp_path, long_ref, edits)
+    reads = [dict(id="r_confirmed", ref_start=3000, ref_end=3020, alt_bp=0), dict(id="r_novel", ref_start=2500, ref_end=2520, alt_bp=0)]
+    out = assembly_comparison(state, ds, chrom=CHROM, start=2000, end=4000, reads=reads, read_scope={"search_complete": True})
+    assert "assembly_items_cap" not in out["reasons"]
+    assert _by_label(out, "MAT")["exact_target"] is not None
+    assert out["reads"]["r_confirmed"]["label"] == "confirmed_by_assembly"
+    assert out["reads"]["r_novel"]["label"] == "novel_relative_to_assembly"
+    state.fasta.close()
+
+
+def test_item_cap_keeps_the_views_edits_first_and_counts_only_nearby(tmp_path):
+    """agy post-merge review B2 HIGH 3: under the item cap the view's and the reads' own edits are kept before larger
+    edits outside them, and a read with no dropped edit nearby keeps its verdict."""
+    state, ds = edited_map(tmp_path, T, {"MAT": [(3000, 3020, "")], "FAR": [(4005, 4035, ""), (4040, 4070, "")]})
+    reads = [dict(id="r_confirmed", ref_start=3000, ref_end=3020, alt_bp=0), dict(id="r_novel", ref_start=2500, ref_end=2520, alt_bp=0)]
+    out = assembly_comparison(state, ds, chrom=CHROM, start=2000, end=4000, reads=reads, read_scope={"search_complete": True},
+                              policy=ComparisonPolicy(max_assembly_items=1))
+    assert "assembly_items_cap" in out["reasons"]
+    assert [v["hap_label"] for v in out["assembly"].values()] == ["MAT"]
+    assert out["reads"]["r_confirmed"]["label"] == "confirmed_by_assembly"
+    assert out["reads"]["r_novel"]["label"] == "novel_relative_to_assembly"
+    state.fasta.close()
+
+
+def test_read_in_a_repeat_past_the_halo_is_unassessed_not_novel(tmp_path):
+    """agy post-merge review B2 HIGH 2: a read deletion in a 3.2 kb repeat cannot prove its placements within the
+    1 kb halo; PAT carries it at the repeat's far end, outside the fetch, so the read is unassessed, not novel."""
+    reference = T[:2000] + "ACGT" * 800 + T[5200:]
+    state, ds = edited_map(tmp_path, reference, {"MAT": [], "PAT": [(5100, 5200, "")]})
+    out = assembly_comparison(state, ds, chrom=CHROM, start=1900, end=2200, read_scope={"search_complete": True},
+                              reads=[dict(id="r", ref_start=2000, ref_end=2100, alt_bp=0)])
+    value = out["reads"]["r"]
+    assert value["label"] == "unassessed"
+    assert "normalization_incomplete" in value["novelty"]["reasons"]
     state.fasta.close()

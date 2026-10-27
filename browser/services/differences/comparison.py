@@ -63,12 +63,13 @@ class ComparisonPolicy:
     halo_bp: int = 1000
     diagnostic_flank_bp: int = 25
     max_ledger_records: int = 2000
+    max_fetch_widen_bp: int = 5000
 
     def __post_init__(self):
         if not 0.5 <= self.approximate_min_identity <= 1:
             raise ValueError("approximate_min_identity must be within [0.5, 1]")
         for key in ("evidence_floor_bp", "max_approximate_cells", "max_assembly_items", "max_read_differences",
-                    "max_allele_bp", "halo_bp", "diagnostic_flank_bp", "max_ledger_records"):
+                    "max_allele_bp", "halo_bp", "diagnostic_flank_bp", "max_ledger_records", "max_fetch_widen_bp"):
             if type(getattr(self, key)) is not int or getattr(self, key) <= 0:
                 raise ValueError("positive integer comparison limits required")
 
@@ -213,7 +214,7 @@ def assembly_comparison(state, dataset, *, chrom, start, end, reads=(), read_seq
                              sequence_source="consensus" if seq is not None else "geometry" if a == 0 else None,
                              links=[], members=[list(m) for m in r.get("geometry_members") or [[s, e, int(r["alt_bp"])]]])
     # Each read's span covers its equivalent placements: an equal assembly allele may sit anywhere among them.
-    read_spans = {}
+    read_spans, unsettled = {}, set()   # unsettled: a read whose equivalent placements could not be proven
     for edit, rid in zip(read_edits, read_out):
         read_spans[rid] = (edit.start, edit.end)
         window = reference.window(reference_id, chrom, edit.start, edit.end) if edit.sequence_complete else None
@@ -222,13 +223,16 @@ def assembly_comparison(state, dataset, *, chrom, start, end, reads=(), read_seq
                 _, canonical = reconstruct((edit,), window, matching_policy)
                 read_spans[rid] = _equivalent_span(dict(t_start=edit.start, t_end=edit.end, alt_bp=edit.alt_bp,
                                                         equivalent_anchors=canonical.equivalent_anchors))
+                if not canonical.normalization_complete:
+                    unsettled.add(rid)
             except (ValueError, ResourceResult):
-                pass
+                unsettled.add(rid)
     # The fetch covers the view and every read's nearby window (matching and novelty look that far), then once more
     # every local edit touching the view or a read's window (a deletion across the view's edge: its exact-target
     # window and competitors lie within its span plus pad). Half-open, so the right edge sits one base further.
-    # It reaches at most max_allele_bp past the view's own pad; whatever lies further stays unassessed below.
-    floor, ceiling = max(0, start - pad - policy.max_allele_bp), end + pad + policy.max_allele_bp
+    # It reaches at most max_fetch_widen_bp past the view's own pad; whatever lies further stays unassessed below
+    # (reads) or gets no exact target here (the inspector compares around the difference itself).
+    floor, ceiling = max(0, start - pad - policy.max_fetch_widen_bp), end + pad + policy.max_fetch_widen_bp
     nearby_of = {rid: (a - pad, z + pad) for rid, (a, z) in read_spans.items()}
     focus = [(start, end), *nearby_of.values()]
     lo = min([start - pad, *(a for a, _ in nearby_of.values())])
@@ -247,7 +251,8 @@ def assembly_comparison(state, dataset, *, chrom, start, end, reads=(), read_seq
     dropped = []
     if len(items) > policy.max_assembly_items:
         reasons.add("assembly_items_cap")
-        ranked = sorted(items, key=lambda i: -max(i["ref_bp"], i["alt_bp"]))
+        # The view's and the reads' own edits are kept first, then the largest.
+        ranked = sorted(items, key=lambda i: (not any(_overlaps(i, a, z) for a, z in focus), -max(i["ref_bp"], i["alt_bp"])))
         items, dropped = ranked[:policy.max_assembly_items], ranked[policy.max_assembly_items:]
         items.sort(key=lambda i: (i["t_start"], i["hap_label"]))
     labels = config.labels() if hasattr(config, "labels") else {}
@@ -358,7 +363,7 @@ def assembly_comparison(state, dataset, *, chrom, start, end, reads=(), read_seq
             correspondence_complete=not any(i["kind"] == "no_correspondence" and _overlaps(i, *nearby) for i in context),
             sequence_complete=value["sequence_status"] == "available" and all(v["sequence_status"] == "available" for v in near_items),
             representations_complete=bool(result.get("search_complete", True)),
-            search_complete=bool(result.get("search_complete", True)) and "assembly_items_cap" not in reasons,
+            search_complete=bool(result.get("search_complete", True)),   # items the cap dropped count only nearby
             bubbles_resolved=not any(i["kind"] == "aligned_bubble" and _overlaps(i, *nearby) for i in context),
             reasons=tuple(sorted(r for r in reasons if r in ("reference_unavailable", "assembly_sequence_unavailable"))))
         # Representations the matcher cannot compare (inversions) or items the cap dropped near this
@@ -366,13 +371,16 @@ def assembly_comparison(state, dataset, *, chrom, start, end, reads=(), read_seq
         unsupported = [i for i in context if i["kind"] == "inversion" and _overlaps(i, *nearby)]
         capped_here = [i for i in dropped if _overlaps(i, *nearby)]
         # A nearby window the bounded fetch could not cover may hold an equal assembly allele: never "novel" over it.
+        # So may a read whose equivalent placements could not be proven (a repeat past the halo, or N bases there).
         beyond = max(0, nearby[0]) < fetched[0] or nearby[1] >= fetched[1]
-        if unsupported or capped_here or beyond:
+        unproven = rid in unsettled
+        if unsupported or capped_here or beyond or unproven:
             scope = replace(scope, representations_complete=scope.representations_complete and not unsupported,
-                            search_complete=scope.search_complete and not capped_here and not beyond,
+                            search_complete=scope.search_complete and not capped_here and not beyond and not unproven,
                             reasons=tuple(sorted(set(scope.reasons) | ({"unsupported_representation"} if unsupported else set())
                                                  | ({"assembly_items_cap"} if capped_here else set())
-                                                 | ({"fetch_horizon"} if beyond else set()))))
+                                                 | ({"fetch_horizon"} if beyond else set())
+                                                 | ({"normalization_incomplete"} if unproven else set()))))
         decision = novelty(links, scope)
         status = decision["status"]
         label = ("confirmed_by_assembly" if status == "assembly_equivalent" else
@@ -418,14 +426,15 @@ def assembly_comparison(state, dataset, *, chrom, start, end, reads=(), read_seq
 def _equivalent_span(v):
     """The reference extent of every equivalent placement of an edit (a repeat-shifted indel may sit anywhere in it).
 
-    equivalent_anchors are the first and last start positions of a pure indel's placements; a deletion's last
-    placement ends ref_bp after its start. Edits without anchors (sub-floor, dropped, unnormalized) keep their span.
+    equivalent_anchors are the first and last start positions of the trimmed allele's placements; when it trims to a
+    deletion (a pure deletion, or a replacement shorter than its reference span) the last placement ends the net
+    deleted length after its start. Edits without anchors (sub-floor, dropped, unnormalized) keep their span.
     """
     s, e = v["t_start"], v["t_end"]
     anchors = v.get("equivalent_anchors")
     if not anchors:
         return s, e
-    return min(s, anchors[0]), max(e, anchors[1] + (e - s if not v.get("alt_bp") else 0))
+    return min(s, anchors[0]), max(e, anchors[1] + max(0, (e - s) - (v.get("alt_bp") or 0)))
 
 
 def _exact_target(value, assembly, context, reference, chrom, policy, labels, dropped=(), local_all=(), fetched=None):
