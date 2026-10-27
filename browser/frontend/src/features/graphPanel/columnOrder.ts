@@ -31,11 +31,13 @@ export interface CanonicalWalk {
  * - A carrier path is walked in the target's frame order: its baseline parity is the orientation carrying most of
  *   its matched bp (the helper's direct matches, else shared nodes; a minus-parity carrier is walked backwards, as
  *   layout.ts frames it).
- * - A carrier visit takes the target visit it is matched to: the helper's direct match when there is exactly one;
- *   else a node both walk once (an inverted run keeps its target ranks and orientation, whatever order the carrier
- *   walks it in); else, for a node either walks more than once, the first unclaimed target visit after the carrier's
- *   last anchor (colinear). A copy left without one is ranked like an insertion after the anchor (Codex review,
- *   group H round 3: an inversion is not an extra copy).
+ * - A carrier visit takes the target visit it is matched to: the helper's direct match when there is exactly one and
+ *   the carrier walks the node once or along its baseline; else a node both walk once (an inverted run keeps its
+ *   target ranks and orientation, whatever order the carrier walks it in); else, for a node either walks more than
+ *   once, the first unclaimed target visit after the carrier's last anchor (colinear), never one another visit
+ *   matches uniquely. An inverted run entered at a visit with several candidates begins at the furthest one it
+ *   reaches without jumping across a target visit a later visit matches colinearly. A copy left without one is ranked
+ *   like an insertion after the anchor (Codex review, group H round 3: an inversion is not an extra copy).
  * - An off-target node ranks right after the last anchor, in frame order, and keeps its first carrier's rank and
  *   orientation (relative to the target frame) for later carriers (agy review, group H).
  */
@@ -95,23 +97,51 @@ export function canonicalWalk(topology: GraphTopology, bindingOrder?: readonly s
       claimed.add(c.i); if (c.i > anchor) { anchor = c.i; step = 0; } last = c.i; inverted = c.inv;
       visits.set(o.id, { rank: [c.i, 0, 0], reverse: targetOccs[c.i].reverse });
     };
-    for (const o of backward ? [...occs].reverse() : occs) {
-      const d = direct.get(o.id);
-      const t = targetVisits.get(o.node);
-      // Candidates: its direct matches, else the target's visits of its node; `inv`: against the baseline parity.
-      const cands = (d?.length ? d.map(m => ({ i: m.i, inv: m.reverse !== backward }))
-        : (t ?? []).map(x => ({ i: x.i, inv: (o.reverse !== x.reverse) !== backward }))).filter(c => !claimed.has(c.i));
-      if (d?.length || t) {
-        // One match (a unique direct match, or a node both walk once): that target visit, wherever it lies.
-        const unique = (d?.length === 1) || (!d?.length && t!.length === 1 && walks.get(o.node) === 1);
+    const seq = backward ? [...occs].reverse() : occs;
+    // Candidates: its direct matches, else the target's visits of its node; `inv`: against the baseline parity.
+    // Unique: one candidate, and the carrier walks the node once or along the baseline, in either wire form (the
+    // helper matches every shared node pair, so a sole direct match alone does not make a copy unique: an inverted
+    // copy upstream of the colinear one is not its match; agy post-merge review A, HIGH 1).
+    const info = seq.map(o => {
+      const d = direct.get(o.id), t = targetVisits.get(o.node);
+      const all = d?.length ? d.map(m => ({ i: m.i, inv: m.reverse !== backward }))
+        : (t ?? []).map(x => ({ i: x.i, inv: (o.reverse !== x.reverse) !== backward }));
+      const unique = all.length === 1 && (walks.get(o.node) === 1 || !all[0].inv);
+      return { matched: Boolean(d?.length || t), all, unique };
+    });
+    // A target visit some visit matches uniquely is kept for it: a visit with several candidates never takes it.
+    const reserved = new Set(info.filter(x => x.unique).map(x => x.all[0].i));
+    // An inverted run starting at visit j may begin at candidate `c` only if it does not jump across a target visit a
+    // later visit matches colinearly, unless an inverted visit of the run right after j covers it (it takes it on the
+    // way down). A target visit nothing later matches colinearly (deleted in this carrier) may be crossed.
+    const lastColinear = new Map<number, number>();
+    info.forEach((x, k) => { for (const c of x.all) if (!c.inv) lastColinear.set(c.i, k); });
+    const reaches = (j: number, c: number) => {
+      const covered = new Set<number>();
+      for (let k = j + 1; k < seq.length; k++) {
+        const inv = info[k].all.filter(x => x.inv && x.i > anchor && x.i < c && !claimed.has(x.i));
+        if (!inv.length) break;
+        for (const x of inv) covered.add(x.i);
+      }
+      for (let i = anchor + 1; i < c; i++) {
+        if (!claimed.has(i) && !covered.has(i) && (lastColinear.get(i) ?? -1) > j) return false;
+      }
+      return true;
+    };
+    for (let j = 0; j < seq.length; j++) {
+      const o = seq[j];
+      const { matched, unique } = info[j];
+      const cands = info[j].all.filter(c => !claimed.has(c.i) && (unique || !reserved.has(c.i)));
+      if (matched) {
+        // One match: that target visit, wherever it lies.
         let pick: { i: number; inv: boolean } | undefined = unique ? cands[0] : undefined;
         if (!pick && cands.length) {
           const down = cands.filter(c => c.inv && c.i < last).sort((a, b2) => b2.i - a.i)[0];
           const up = cands.filter(c => !c.inv && c.i > anchor).sort((a, b2) => a.i - b2.i)[0];
           // Inside an inverted run the next one down, else the next one up (colinear); an inverted run starting here
-          // begins at its furthest candidate; nothing taken yet: the first.
+          // begins at the furthest candidate it reaches; nothing taken yet: the first.
           pick = (inverted ? down ?? up : up ?? down)
-            ?? cands.filter(c => c.inv && c.i > anchor).sort((a, b2) => b2.i - a.i)[0]
+            ?? cands.filter(c => c.inv && c.i > anchor).sort((a, b2) => b2.i - a.i).find(c => reaches(j, c.i))
             ?? (anchor < 0 ? [...cands].sort((a, b2) => a.i - b2.i)[0] : undefined);
         }
         if (pick) { take(o, pick); continue; }
