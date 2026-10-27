@@ -38,12 +38,16 @@ class Limits:
     wavefront_max_bases: int = 10_000
     wavefront_pair_states: int = 4_000_000
     deadline_s: float = 30.0
+    # Each job gets its own deadline_s. A request of several jobs stops here.
+    request_deadline_s: float = 120.0
 
     def __post_init__(self):
         if any(not isinstance(v, (int, float)) or v <= 0 for k, v in asdict(self).items() if k != "version"):
             raise ValueError("positive reconstruction limits required")
         if self.job_bytes > self.request_bytes or self.request_bytes > self.process_bytes:
             raise ValueError("job <= request <= process reservation required")
+        if self.request_deadline_s < self.deadline_s:
+            raise ValueError("job deadline <= request deadline required")
 
 
 DEFAULT_LIMITS = Limits()
@@ -75,12 +79,17 @@ _parent_request = ContextVar("reconstruction_parent_request", default=None)
 
 
 def budgeted_request(function):
-    """Share work/deadline across successive isolated jobs in one request."""
+    """Share work across successive isolated jobs in one request.
+
+    Each job keeps its own full deadline_s from when it starts. The whole
+    request stops at request_deadline_s.
+    """
     @wraps(function)
     def call(*args, **kwargs):
         if _parent_request.get() is not None:
             return function(*args, **kwargs)
-        token = _parent_request.set({"cells": 0, "deadline": time.monotonic() + DEFAULT_LIMITS.deadline_s})
+        seconds = DEFAULT_LIMITS.request_deadline_s
+        token = _parent_request.set({"cells": 0, "deadline": time.monotonic() + seconds, "deadline_s": seconds})
         try:
             return function(*args, **kwargs)
         finally:
@@ -172,7 +181,8 @@ class Reservations:
         self.condition = threading.Condition()
         self.bytes = self.large = self.queued = 0
 
-    def acquire(self, size, large, deadline, checkpoint):
+    def acquire(self, size, large, deadline, checkpoint, seconds=None):
+        """``seconds``: the limit behind ``deadline``, reported when it is hit."""
         with self.condition:
             if size > self.limits.process_bytes:
                 raise ResourceResult("budget_exceeded", "process_bytes", bytes=size)
@@ -189,7 +199,8 @@ class Reservations:
                     close_warm_worker()
                 with self.condition:
                     if time.monotonic() >= deadline:
-                        raise ResourceResult("budget_exceeded", "deadline", seconds=self.limits.deadline_s)
+                        raise ResourceResult("budget_exceeded", "deadline",
+                                             seconds=self.limits.deadline_s if seconds is None else seconds)
                     if self.bytes + size <= self.limits.process_bytes and not (large and self.large):
                         self.bytes += size
                         self.large += int(large)
@@ -356,7 +367,10 @@ def isolated(module, name, args, kwargs, *, lengths, pairs=(), limits=DEFAULT_LI
     # Reserve the full configurable request allowance, covering inputs, worker
     # overhead and retained outputs even when the polished backbone changes.
     size = limits.request_bytes
-    deadline = min(time.monotonic() + limits.deadline_s, request['deadline']) if request else time.monotonic() + limits.deadline_s
+    # This job's own deadline, cut short only by the request's ceiling.
+    deadline, seconds = time.monotonic() + limits.deadline_s, limits.deadline_s
+    if request is not None and request['deadline'] < deadline:
+        deadline, seconds = request['deadline'], request['deadline_s']
     from services.background_work import Cancelled, checkpoint
     def check():
         try:
@@ -374,7 +388,7 @@ def isolated(module, name, args, kwargs, *, lengths, pairs=(), limits=DEFAULT_LI
             retained = True
         # An idle worker keeps its entire byte reservation, but releases its
         # active large-job slot. Reuse transfers that reservation to this job.
-        RESERVATIONS.acquire(0 if retained else size, large, deadline, check)
+        RESERVATIONS.acquire(0 if retained else size, large, deadline, check, seconds)
         acquired = True
         if process is None:
             context = multiprocessing.get_context('spawn')
@@ -389,7 +403,7 @@ def isolated(module, name, args, kwargs, *, lengths, pairs=(), limits=DEFAULT_LI
         while True:
             check()
             if time.monotonic() >= deadline:
-                raise ResourceResult("budget_exceeded", "deadline", seconds=limits.deadline_s)
+                raise ResourceResult("budget_exceeded", "deadline", seconds=seconds)
             if parent.poll(0.02):
                 # Resource diagnostics have a small independent envelope even
                 # when a caller configures a tiny output allowance.
