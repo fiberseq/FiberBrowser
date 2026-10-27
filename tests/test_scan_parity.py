@@ -317,3 +317,17 @@ def test_bed_scope_peaks_run_with_the_local_rule(bams, cache, tmp_path):
         assert (cli / rel).is_file() == (d / rel).is_file()
         if (cli / rel).is_file():
             assert _rows(d / rel) == _rows(cli / rel), rel
+
+
+def test_genes_scope_plans_tss_units_on_the_bams_contig_names(bams, cache):
+    """Genes: TSS +/- 5 kb BED units, with the annotation's contig name mapped to the BAM's (here 'T' -> 'chrT')."""
+    import pandas as pd
+    from services.scan import planning
+    st = _state(bams)
+    st.gtf_data = {'transcripts': pd.DataFrame([dict(gene_name='GENEA', transcript_id='t1', chrom='T', start=24_000, end=30_000, strand='+'),
+                                                dict(gene_name='GENEB', transcript_id='t2', chrom='T', start=70_000, end=80_000, strand='-')])}
+    plan = planning.build_plan(st, dict(datasets=sorted(st.datasets), scope='genes', genes=['GENEA', 'GENEB'], modules=['fp']))
+    assert [(u['chrom'], u['start'], u['end']) for u in plan['units']] == [(CONTIG, 19_000, 29_000), (CONTIG, 74_999, 84_999)]
+    assert '--bed' in plan['cli']['text']
+    with pytest.raises(planning.ScanPlanError, match='Not in the loaded gene annotation'):
+        planning.build_plan(st, dict(datasets=sorted(st.datasets), scope='genes', genes=['NOPE'], modules=['fp']))
