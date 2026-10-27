@@ -52,6 +52,15 @@ export function testPorts(raw = process.env.FIBERBROWSER_TEST_PORTS): number[] {
 }
 const TEST_PORTS = testPorts();
 const portListText = () => TEST_PORTS.join(', ');
+
+/**
+ * Skip (with the reason) a test that runs `count` servers at once when FIBERBROWSER_TEST_PORTS lists fewer
+ * ports. Call it in the test, its describe or at the top of the spec file.
+ */
+export function requireTestPorts(count: number): void {
+  base.skip(TEST_PORTS.length < count,
+    `runs ${count} servers at once: list ${count} ports in FIBERBROWSER_TEST_PORTS (e.g. 8880,8881); it has ${portListText()}`);
+}
 const RICH_DAF_REGION = { chrom: 'chr2R', start: 9_929_319, end: 10_029_319 };
 // The tracked NAPA demo BAM: 3,202 DddA reads on chr19 starting 47,514,488-47,517,768.
 const DEMO_REGION = { chrom: 'chr19', start: 47_514_000, end: 47_518_000 };

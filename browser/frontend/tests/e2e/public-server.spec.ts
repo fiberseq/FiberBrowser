@@ -7,7 +7,7 @@
  *
  * Spawns its own server (`--public --catalog`), not the BAM fixture's.
  */
-import { startServer, stopServer, pickRandomPort, testPorts } from './fixtures/server';
+import { startServer, stopServer, pickRandomPort, requireTestPorts, testPorts } from './fixtures/server';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { test as base, expect } from './fixtures/nativeDialogs';
@@ -19,12 +19,13 @@ const REPO_ROOT = process.env.FIBERBROWSER_TEST_DIR
 const DEMO_CATALOG = path.join(REPO_ROOT, 'deploy', 'demo', 'catalog.json');
 const LOCUS = 'chr19:47515640-47517640';
 
-const test = base.extend<{}, { publicServer: { baseUrl: string } }>({
-  publicServer: [async ({}, use) => {
+// One public server per test, stopped after it: a worker-scoped one outlived its tests and held a test port.
+const test = base.extend<{ publicServer: { baseUrl: string } }>({
+  publicServer: async ({}, use) => {
     const proc = await startServer(null, await pickRandomPort(), { public: true, extraArgs: ['--catalog', DEMO_CATALOG] });
     try { await use({ baseUrl: proc.baseUrl }); }
     finally { await stopServer(proc); }
-  }, { scope: 'worker' }],
+  },
 });
 
 test.describe('public server', () => {
@@ -108,6 +109,7 @@ test.describe('public server', () => {
 });
 
 base('a busy port keeps its server alive and the new fixture follows its own port', async () => {
+  requireTestPorts(2);
   const first = await startServer(null, await pickRandomPort());
   try {
     const second = await startServer(null, first.port);

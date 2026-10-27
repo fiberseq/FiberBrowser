@@ -16,7 +16,7 @@
  */
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { pickRandomPort, startServer, stopServer } from './fixtures/server';
+import { pickRandomPort, requireTestPorts, startServer, stopServer } from './fixtures/server';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,6 +35,9 @@ async function waitFor(check: () => Promise<boolean>, timeoutMs = 60_000): Promi
   }
   throw new Error('timed out');
 }
+
+// The signed-link file server and FiberBrowser both take a test port.
+requireTestPorts(2);
 
 let files: ChildProcess | null = null;
 let fiberbrowser: ChildProcess | null = null;
