@@ -476,6 +476,8 @@ class Dataset:
             **({"plasmid": self.plasmid_report} if getattr(self, "plasmid_report", None) else {}),
             # A live-lift dataset's map, haplotypes and settings (services/lift/dataset.py).
             **({"live_lift": self.live_lift.to_dict()} if getattr(self, "live_lift", None) is not None else {}),
+            # Opened by that live-lift dataset's linked source view (shown only there; no panel of its own on a reload).
+            **({"lift_source_of": self.lift_source_of} if getattr(self, "lift_source_of", None) else {}),
             # Fields a plugin pack attaches to a dataset of its own (plugins/packs.py): name -> value.
             **{k: v for k, v in (getattr(self, "pack_fields", None) or {}).items() if v},
         }

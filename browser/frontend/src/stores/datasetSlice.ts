@@ -5,7 +5,7 @@ import { DEBUG, generatePanelId, createDefaultSubTracks, createGenomeSubTracks, 
 import { restoreOrphanSplitSources } from './splitSources';
 import { mergeDatasets, unmergeDataset } from '../api/datasets';
 import { cancelFirstReadsJump, markFirstReadsJump, viewportKey } from '../utils/firstReadsJump';
-import { isLiveLift } from '../utils/datasetKinds';
+import { isLiveLift, opensOwnPanel } from '../utils/datasetKinds';
 
 
 // ============================================================
@@ -297,7 +297,8 @@ export function createDatasetSlice(set: (partial: Partial<BrowserState> | ((stat
     const existingLinkGroup = state.panels.find(p => p.linkGroup)?.linkGroup;
     const defaultLinkGroup = existingLinkGroup || (datasets.length > 1 ? `link-${state.nextLinkGroupId}` : null);
     const newPanels = datasets
-      .filter(d => !existingPanelDatasetIds.has(d.id))
+      // A live-lift source view's BAM shows only in its source view (opensOwnPanel).
+      .filter(d => !existingPanelDatasetIds.has(d.id) && opensOwnPanel(d))
       .map(d => ({
         id: generatePanelId(),
         contentType: 'dataset' as PanelContentType,

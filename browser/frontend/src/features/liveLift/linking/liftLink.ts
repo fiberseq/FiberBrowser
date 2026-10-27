@@ -313,7 +313,7 @@ export async function openLinkedSourceView(liftPanelId: string, hapLabel?: strin
     const mapping = out.mapping;
     let native = st.datasets.find(n => n.data_type === 'bam' && samePaths(n, dataset));
     if (!native) {
-      const result = await addDataset(dataset.paths?.length ? dataset.paths : dataset.path, `${dataset.label} · ${label} source`);
+      const result = await addDataset(dataset.paths?.length ? dataset.paths : dataset.path, `${dataset.label} · ${label} source`, { liftSourceOf: dataset.id });
       if (!result.success || !result.dataset || result.dataset.data_type !== 'bam') throw new Error(result.error ?? 'cannot open the source BAM as a native dataset');
       native = result.dataset;
     }

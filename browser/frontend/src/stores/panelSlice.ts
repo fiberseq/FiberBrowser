@@ -15,7 +15,7 @@ import { seedHistoryBaseline } from './historySlice';
 import { canLinkToMainView, inComparisonGroup, isMainViewPanel, linkGroupPeers, recordPanelMove } from '../utils/panelNavigation';
 import { forgetRememberedState } from '../hooks/useRememberedState';
 import { isStacked, sideBySide, stackBelow, stackTarget, type PanelArrangement } from './panelArrangement';
-import { isLiveLift } from '../utils/datasetKinds';
+import { isLiveLift, opensOwnPanel } from '../utils/datasetKinds';
 
 /** Analysis state kept per panel (keyed by stateKey ?? datasetId). */
 
@@ -1586,7 +1586,7 @@ export function createPanelSlice(set: (partial: Partial<BrowserState> | ((state:
   initPanelsFromDatasets: () => set(state => {
     if (state.panels.length > 0) return state;  // Already initialized
     const defaultLinkGroup = state.datasets.length > 1 ? 'link-1' : null;
-    const panels: PanelConfig[] = state.datasets.map(ds => ({
+    const panels: PanelConfig[] = state.datasets.filter(opensOwnPanel).map(ds => ({
       id: generatePanelId(),
       contentType: 'dataset' as PanelContentType,
       datasetId: ds.id,

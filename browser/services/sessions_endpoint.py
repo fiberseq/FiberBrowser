@@ -65,6 +65,8 @@ def build_session_export_for_request(state, req, *, now: datetime | None = None,
                    if getattr(dataset, "molecule_groups", None) or getattr(dataset, "joint_dedup", "off") != "off" else {}),
                 # A chemistry chosen in the browser (not saved into the file).
                 **_chemistry_override(dataset),
+                # A live-lift source view's BAM (shown only in its source view).
+                **({"lift_source_of": dataset.lift_source_of} if getattr(dataset, "lift_source_of", None) else {}),
                 # Fields a plugin pack keeps for a dataset of its own (rebuilt from them on import).
                 **dataset_session_fields(dataset),
             }
@@ -708,6 +710,8 @@ def _restore_chemistry_override(dataset, dataset_data: dict) -> None:
 
     dataset.molecule_groups = dataset_data.get("molecule_groups") or []
     dataset.joint_dedup = dataset_data.get("joint_dedup", "off")
+    if dataset_data.get("lift_source_of"):
+        dataset.lift_source_of = str(dataset_data["lift_source_of"])
     # consensus_chemistry; sessions saved before 3.0 call it family_scan_chemistry.
     chemistry = dataset_data.get("consensus_chemistry") or dataset_data.get("family_scan_chemistry")
     metadata = dataset_data.get("chemistry_metadata")

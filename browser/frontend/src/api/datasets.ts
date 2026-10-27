@@ -9,10 +9,12 @@ export async function getDatasets(): Promise<{ datasets: Dataset[] }> {
   return fetchJson(`${API_BASE}/datasets`);
 }
 
-export async function addDataset(pathOrPaths: string | string[], label?: string): Promise<{ success: boolean; dataset?: Dataset; error?: string }> {
-  const body = Array.isArray(pathOrPaths)
-    ? { paths: pathOrPaths, label }
-    : { path: pathOrPaths, label };
+export async function addDataset(pathOrPaths: string | string[], label?: string, options: { liftSourceOf?: string } = {}): Promise<{ success: boolean; dataset?: Dataset; error?: string }> {
+  const body = {
+    ...(Array.isArray(pathOrPaths) ? { paths: pathOrPaths, label } : { path: pathOrPaths, label }),
+    // A live-lift source view's BAM: shown only in its source view.
+    ...(options.liftSourceOf ? { lift_source_of: options.liftSourceOf } : {}),
+  };
 
   return fetchJson(`${API_BASE}/datasets/add`, {
     method: 'POST',

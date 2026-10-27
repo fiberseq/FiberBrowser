@@ -93,6 +93,9 @@ export interface Dataset {
   family_scan_chemistry?: 'ddda' | 'dddb' | 'hia5-pacbio' | 'hia5-nanopore' | null;
   /** Opaque keys for the samples its BAM read groups declare (equal for equal samples on this server): a native dataset is matched with the lifted dataset of its sample. */
   sample_keys?: string[];
+  /** Opened by this live-lift dataset's linked source view: shown only in a source view, never as a panel of its own
+   *  (a page reload without a session would otherwise show it as an empty panel on its first contig). */
+  lift_source_of?: string;
   chemistry_metadata?: {
     chemistry?: 'ddda' | 'dddb' | 'hia5-pacbio' | 'hia5-nanopore' | null;
     source?: string;
