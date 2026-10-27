@@ -56,6 +56,8 @@ test.describe('exported figures follow the UI size',()=>{
       const track=page.locator('[data-read-track-render-count]').first();
       await expect.poll(()=>track.evaluate(el=>Number(el.getAttribute('data-read-track-render-count'))>0
         &&el.getAttribute('data-read-track-loading')==='false'),{timeout:30_000}).toBe(true);
+      // The other tracks too (the metaprofile's lines came in after the reads in one run): nothing left loading.
+      await page.waitForLoadState('networkidle');
       await page.waitForTimeout(400);
       await page.getByTestId('export-screenshot-button').click();
       await page.getByRole('button',{name:'SVG',exact:true}).click();
@@ -71,8 +73,10 @@ test.describe('exported figures follow the UI size',()=>{
       const fontOf=(text:string)=>attr(new RegExp(`font-size="([\\d.]+)"[^>]*>${text.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}</text>`));
       // The header bar under the dataset label: its fill rect's height.
       const coords=`${r.chrom}:${r.start.toLocaleString()}-${r.end.toLocaleString()}`;
-      const strokes=[...svg.matchAll(/stroke-width="([\d.]+)"/g)].map(m=>Number(m[1])).filter(w=>w>0);
-      strokes.sort((a,b)=>a-b);
+      // Every kind of stroke, not one median: the median sat between two kinds (10 strokes of 1, 11 of 1.5) and flipped
+      // when a track's lines were in one export and not another.
+      const strokes=[...new Set([...svg.matchAll(/stroke-width="([\d.]+)"/g)].map(m=>Number(m[1])).filter(w=>w>0)
+        .map(w=>Math.round(w*100)/100))].sort((a,b)=>a-b);
       return {
         width:attr(/<svg[^>]*width="([\d.]+)"/),
         title:fontOf(coords),
@@ -81,7 +85,7 @@ test.describe('exported figures follow the UI size',()=>{
           const m=svg.match(/<path d="M [\d.-]+ ([\d.-]+) L [\d.-]+ [\d.-]+ L [\d.-]+ ([\d.-]+) L [^"]*Z" fill="[^"]*"\/>\s*<text[^>]*>napa_ddda<\/text>/);
           return m?Number(m[2])-Number(m[1]):NaN;
         })(),
-        stroke:strokes[Math.floor(strokes.length/2)],
+        strokes,
         layoutWidth:await page.locator('[data-export-container]').evaluate(el=>(el as HTMLElement).offsetWidth),
       };
     }
@@ -97,13 +101,14 @@ test.describe('exported figures follow the UI size',()=>{
     expect(at150.title).toBeCloseTo(27,5);
     expect(at150.header).toBeCloseTo(19.5,5);
     expect(at150.headerRow/at100.headerRow).toBeCloseTo(1.5,2);
-    expect(at150.stroke/at100.stroke).toBeCloseTo(1.5,2);
+    expect(at100.strokes.length).toBeGreaterThan(0);
+    expect(at150.strokes).toEqual(at100.strokes.map(w=>Math.round(w*1.5*100)/100));
     expect(at150.width).toBeCloseTo(at150.layoutWidth*1.5,0);
     // Match UI size off: 100% sizes, the 150% view's layout.
     expect(at150off.title).toBe(18);
     expect(at150off.header).toBe(13);
     expect(at150off.headerRow).toBeCloseTo(at100.headerRow,1);
-    expect(at150off.stroke).toBeCloseTo(at100.stroke,1);
+    expect(at150off.strokes).toEqual(at100.strokes);
     expect(at150off.width).toBeCloseTo(at150off.layoutWidth,0);
   });
 });
