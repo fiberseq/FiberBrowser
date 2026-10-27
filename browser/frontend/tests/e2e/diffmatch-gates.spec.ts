@@ -17,7 +17,8 @@
  */
 import type { Page, Locator } from '@playwright/test';
 import { test, expect } from './fixtures/nativeDialogs';
-import { cpSync, existsSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { closeSync, cpSync, existsSync, mkdtempSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -303,13 +304,27 @@ async function canvasInk(page: Page, el: Locator, file: string): Promise<number>
   }, { data: readFileSync(file).toString('base64'), b: box });
 }
 
+/** A session's fingerprint of a local file, as services/session_files.py file_fingerprint() makes it. */
+function fileFingerprint(file: string) {
+  const head = Buffer.alloc(1 << 20);
+  const fd = openSync(file, 'r');
+  try {
+    const read = readSync(fd, head, 0, head.length, 0);
+    return { size: statSync(file).size, head_sha256: createHash('sha256').update(head.subarray(0, read)).digest('hex') };
+  } finally { closeSync(fd); }
+}
+
 test.describe('saved sessions from earlier versions', () => {
   test('a 3.0.x session restores unchanged: its panels, legacy SV track and settings', async ({ page }, info) => {
     test.skip(!HAVE_LIFT, 'needs the native BAM of the pg-lift work data');
     test.setTimeout(240_000);
     const fixture = fileURLToPath(new URL('./fixtures/session-3.0.x.json', import.meta.url));
     test.skip(!existsSync(fixture), 'the 3.0.x session fixture is missing');
-    const session = JSON.parse(readFileSync(fixture, 'utf8').replaceAll('__NATIVE_BAM__', NATIVE_BAM).replaceAll('__FASTA__', process.env.FIBERBROWSER_TEST_FASTA ?? ''));
+    const fasta = path.resolve(process.env.FIBERBROWSER_TEST_FASTA ?? '');
+    const session = JSON.parse(readFileSync(fixture, 'utf8').replaceAll('__NATIVE_BAM__', NATIVE_BAM).replaceAll('__FASTA__', fasta));
+    // The fixture was saved with a chr3-only reference: give it this run's reference's fingerprint (size and the
+    // first MiB's SHA-256, services/session_files.py), or the import stops to ask about a changed file.
+    session.file_fingerprints[fasta] = fileFingerprint(fasta);
     const file = info.outputPath('session-3.0.x.json');
     writeFileSync(file, JSON.stringify(session));
     const srv = await server(null);
