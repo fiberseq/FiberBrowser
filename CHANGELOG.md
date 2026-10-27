@@ -25,6 +25,13 @@ Maps, graph packages and the helper are made with
   scan of a live-lift dataset's own BAM joins the lifted rows record by record.
   Scan per-read groups (`fpcls`, `nfrvar`, `nfrmol`) in annotated BAMs show as
   layers, also through live lift.
+- **Hits of an assembly scan** (a scan of a live-lift dataset's own BAM) are
+  lifted onto this genome with graphlift's `liftbed`, keeping their source
+  coordinates, with a status: lifted, split, partial, in insertion (placed at
+  the junction) or unmapped. With a graph package, each hit knows which paths
+  carry it: a column whose path lacks it says **absent**. Hits of one feature in
+  two frames match (≡, **Matched only**). Use as works on them, and graph mode
+  draws the hub's hits on the graph (Shift-click selects).
 - **Scan…** runs fiberhmm-scan's engine on the open BAMs: the view's 50 kb grid
   units (and one more each side), a BED file or genes, with the modules, depth
   caps and settings you choose. It shows what is already computed and the

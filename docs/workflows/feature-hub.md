@@ -37,7 +37,8 @@ file contents (not its name or path), and says how it went:
 A scan made on another reference is refused, unless it is bound to a loaded
 file. That is the case for a live-lift dataset's own BAM, scanned in the
 sample's assembly: its per-read states join the lifted rows record by record,
-and its hits stay in the assembly's coordinates.
+and its hits are lifted onto this genome (see
+[Hits of an assembly scan](#hits-of-an-assembly-scan)).
 
 The scan's sets keep where they came from: the tooltip at the right of a set
 names the scan, the FiberHMM and module versions, the units and the settings.
@@ -112,6 +113,65 @@ scans it opened (reopened when the session is), its settings, the selection and
 the anchor sets. A scan that can't be found is listed as **Scan not found**:
 open it again from where it is now, or re-scan.
 
+## Hits of an assembly scan
+
+A scan of a live-lift dataset's own BAM (for example HG002's maternal and
+paternal contigs) lists its hits in the view of this genome. Each hit is lifted
+with graphlift's `liftbed`, through the dataset's map and with the settings
+`fiberhmm-lift --bed` uses, so it lands where `fiberhmm-lift --bed` puts it and
+where the dataset's reads land. It keeps its own coordinates.
+
+![Lifted peaks of an HG002 scan beside a GRCh38 scan's: haplotype, lift status, matches and "absent"](../images/feature-hub/lifted-hits.png)
+
+- **Locus** is where the hit is on this genome, followed by its haplotype (MAT
+  orange, PAT blue) and how it lifted:
+  - **lifted**: one placement, every base on this genome;
+  - **lifted · split**: its bases land in several places (an inversion edge, a
+    gap of 10 kb or more); the place with the most bases is shown;
+  - **lifted · partial**: some of its bases have no place here (an insertion
+    or a gap inside the hit);
+  - **in insertion**: the whole hit lies in sequence this genome lacks. It is
+    placed at the insertion's junction (`⋮`, the base after it);
+  - **unmapped**: off the map; it has no place here.
+
+  Hover a row, or expand it (**▸**), for the source coordinates, what the lift
+  did, and which haplotypes carry the hit.
+- **Columns**: the scan's dataset becomes one column per haplotype
+  (**Sample A (lifted) MAT**, **… PAT**), filled for the haplotype the hit is
+  on.
+- **absent**: with a graph package registered, the hub knows which paths carry
+  each hit's sequence (its graph columns). A column whose reads are on a path
+  that lacks it says **absent**: a MAT or PAT hit inside an insertion is absent
+  for a dataset on GRCh38, not "not scanned".
+- **≡ n**: the same feature found in another frame or set. A GRCh38 scan's hit
+  and a lifted hit match when they overlap by at least half of each (points:
+  within 20 bp); hits inside an insertion match on their graph columns, so only
+  haplotypes that carry that sequence share them. Hover the chip for the
+  matches; **Matched only** keeps rows with a match.
+- **Use as** works on lifted hits. Anchors and cluster regions use where the hit
+  is on this genome (a hit in an insertion: a small region around its junction,
+  so a graph-mode Cluster clusters on the inserted sequence); the anchors keep
+  the source coordinates. **Filter** uses the scan's per-read states, which join
+  the lifted rows record by record.
+
+**In graph mode** the hub's hits are drawn on the graph's own sequence: a faint
+box on the lanes that carry each hit, and the selected ones filled, on those
+lanes and their reads. A hit inside an insertion is drawn on the inserted
+sequence of the haplotypes that carry it. **Shift-click** a box to add or remove
+its hit in the hub's selection (a plain click on a tube still selects the
+graph's own locus; a plain click on a selected hit's reads selects it alone).
+The selected hits are also outlined on the linear panels, the haplotype panels
+popped out of the graph, and the linked source views of the assembly.
+
+![Graph mode with a MAT hit inside the AluY insertion selected in the hub: drawn on the inserted sequence and the reads of both haplotypes, and at the junction on the GRCh38 panel](../images/feature-hub/lifted-hits-graph.png)
+
+**Pooled scans in this genome's frame.** A scan that pools the lifted molecules
+of several haplotypes in GRCh38 coordinates is made with `fiberhmm-lift` (a
+lifted BAM) and then `fiberhmm-scan` on that BAM. The browser can't run it from
+live-lift rows yet: live lift places the records where `fiberhmm-lift` does,
+but some footprint calls differ at small map gaps, so the two would not give
+the same rows.
+
 ## Use as
 
 With hits selected:
@@ -135,8 +195,10 @@ With hits selected:
 
 - The table lists the hits in the main view; genome-wide lists of a scan come
   later.
-- A scan in another assembly lists its hits in that assembly's coordinates;
-  lifting them onto this genome comes later. Its per-read states already join
-  lifted rows.
+- A scan in another assembly is lifted onto this genome through a live-lift
+  dataset of its BAM; without one, its hits can't be placed here. Lifting needs
+  graphlift's `liftbed` next to the graph helper (or `FIBERBROWSER_LIFTBED`).
+- Graph columns, and so **absent**, are for scan hits; Differences, peak rules
+  and Find classes rows have none yet.
 - Graph bubbles are not listed yet.
 - Association tests between feature types come later.
