@@ -344,3 +344,85 @@ def test_differing_m6a_fails():
     res = _result([rec])
     assert res["points"]["methyl_m6a"]["live_only"] == 1
     assert "points differ" in lp.verdict(res)
+
+
+# ── measured tiling and annotation names (review round 3) ────────────────────
+
+def test_a_gap_across_a_connector_that_live_lift_drops_is_a_difference():
+    # Source [0,40) -> target [0,40), source [40,80) -> target [60,100): footprints at [0,10) and [90,100) agree,
+    # but only the lifted record holds the accessible gap [10,90), which a scan counts (0/0 vs 1/1 at base 50).
+    live = _live_row([])
+    live["intervals"] = [[0, 10, 10], [90, 100, 10]]
+    live["live_lift"].update(calls={"intervals": ["ns:0", "ns:1"]}, connectors=[[40, 60]])
+    native = _native_row([], calls={"intervals": [["ns:0", 0, 10], None, ["ns:1", 70, 80]]})
+    native["intervals"] = [[0, 10, 10], [10, 90, -80], [90, 100, 10]]
+    res = _result([{"key": ("q", "c", 1), "live": [lp.placement(live, 0, True, "c")],
+                    "native": [lp.placement(native, 0, False, "c")]}])
+    assert res["record_calls"]["intervals"] == {"identical": 2}
+    assert res["record_calls"]["intervals~gap"] == {"different": 1}
+    assert [(x["group"], x["cause"]) for x in res["causes"]] == [("intervals~gap", "gap_dropped_at_connector")]
+    assert "call bases differ" in lp.verdict(res)
+
+
+def test_gap_parts_a_connector_separates_compare_as_one_gap():
+    live = _live_row([])
+    live["intervals"] = [[0, 10, 10], [10, 40, -80], [60, 90, -80], [90, 100, 10]]
+    live["live_lift"].update(calls={"intervals": ["ns:0", None, None, "ns:1"]}, connectors=[[40, 60]])
+    p = lp.placement(live, 0, True, "c")
+    assert p["calls"]["intervals~gap"] == {"<tile>": [[10, 40], [60, 90]]}
+    assert lp.tiling_units([[10, 40], [60, 90]], [[10, 90]], [[40, 60]]) == [([[10, 40], [60, 90]], [[10, 90]])]
+    # A lifted record's row cut by its own hole still compares as one unit against live lift's row.
+    assert lp.tiling_units([[0, 50]], [[0, 20], [21, 50]]) == [([[0, 50]], [[0, 20], [21, 50]])]
+    native = _native_row([], calls={"intervals": [["ns:0", 0, 10], None, ["ns:1", 70, 80]]})
+    native["intervals"] = [[0, 10, 10], [10, 90, -80], [90, 100, 10]]
+    res = lp.compare_calls(p, lp.placement(native, 0, False, "c"))
+    gap = [c for c in res if c["group"] == "intervals~gap"]
+    assert [(c["cause"], c["bp"]) for c in gap] == [("connector_hole", 20)]
+
+
+def test_neutral_rows_are_compared_too():
+    def neutral(row, span):
+        return dict(row, intervals=[[span[0], span[1], 0]])
+    same = lp.compare_calls(lp.placement(neutral(_live_row([]), (5, 20)), 0, True, "c"),
+                            lp.placement(neutral(_native_row([]), (5, 20)), 0, False, "c"))
+    assert [(c["group"], c["bucket"]) for c in same] == [("intervals~neutral", "identical")]
+    moved = lp.compare_calls(lp.placement(neutral(_live_row([]), (5, 20)), 0, True, "c"),
+                             lp.placement(neutral(_native_row([]), (5, 60)), 0, False, "c"))
+    assert [(c["group"], c["bucket"]) for c in moved] == [("intervals~neutral", "different")]
+
+
+def test_missing_and_empty_annotation_names_are_the_same_payload():
+    # MA=100;x.:11-20,71-20 with AN=.,named, split between the calls: the live part keeps the blank entry of a named
+    # layer, the lifted record's parser drops an all-blank array.
+    live = _live_row([])
+    live["layers"] = {"x": {"intervals": [[11, 31, 20]], "annotation_names": [""]}}
+    live["live_lift"]["calls"] = {"layer:x": ["MA0:0"]}
+    native = _native_row([], layers={"x": {"intervals": [[11, 31, 20]], "_fiberbrowser_calls": [["MA0:0", 11, 31]]}})
+    res = _result([{"key": ("q", "c", 1), "live": [lp.placement(live, 0, True, "c")],
+                    "native": [lp.placement(native, 0, False, "c")]}])
+    assert lp.verdict(res) == "PASS"
+
+
+def test_a_gap_live_lift_drops_next_to_an_insertion_is_named():
+    live = _live_row([])
+    live["intervals"] = [[0, 10, 10], [90, 100, 10]]
+    live["live_lift"].update(calls={"intervals": ["ns:0", "ns:1"]}, badges=[[50, "source_insertion", 12, 12, "I"]])
+    native = _native_row([], calls={"intervals": [["ns:0", 0, 10], None, ["ns:1", 90, 100]]})
+    native["intervals"] = [[0, 10, 10], [10, 90, -80], [90, 100, 10]]
+    res = lp.compare_calls(lp.placement(live, 0, True, "c"), lp.placement(native, 0, False, "c"))
+    assert [(c["group"], c["cause"]) for c in res if c["bucket"] != "identical"] == [
+        ("intervals~gap", "gap_dropped_at_insertion")]
+
+
+def test_a_leading_gap_only_the_lifted_record_holds_is_a_terminal_gap_extent():
+    # The decoder ends a hidden terminal gap at the record's first call of any kind (an MSP at [0,10)); live lift
+    # rebuilds gaps between footprints only.
+    live = _live_row([])
+    live["intervals"] = [[40, 60, 20]]
+    live["live_lift"]["calls"] = {"intervals": ["ns:0"]}
+    native = _native_row([], calls={"intervals": [None, ["ns:0", 40, 60]]})
+    native["intervals"] = [[10, 40, -30], [40, 60, 20]]
+    res = lp.compare_calls(lp.placement(live, 0, True, "c"), lp.placement(native, 0, False, "c"))
+    assert [(c["group"], c["cause"]) for c in res if c["bucket"] != "identical"] == [
+        ("intervals~gap", "terminal_gap_extent")]
+

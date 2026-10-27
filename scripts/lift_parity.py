@@ -27,7 +27,9 @@ out and counted.
 Per source record: placements (target contig, start, end, orientation),
 the molecule strand (``st``, both sides in the molecule frame), every call
 interval per call group (``intervals``, ``fire`` and each MA layer) with its
-payload (size or score, quality/state bytes, annotation name), m6A/5mC
+payload (size or score, quality/state bytes, annotation name), the group's
+gap and neutral rows (the measured tiling a scan counts: ``intervals~gap``,
+``intervals~neutral``, compared like calls by geometry), m6A/5mC
 positions, and deamination positions with their channel (C->T or G->A, in
 the molecule frame). Calls of a group are paired by target geometry, never
 by tag-array id (a frame conversion can renumber those): greatest base
@@ -83,6 +85,14 @@ CALL_CAUSES = {
                    "least sv_min_len) that the source record does not have; live lift keeps those bases",
     "payload": "same geometry, different payload: the call's state/quality bytes, score, size or annotation "
                "name differ (e.g. nfrvar open vs closed)",
+    "gap_dropped_at_connector": "a gap (accessible linker / inferred MSP) or neutral row the lifted record holds "
+                                "across a target-only stretch; live lift emits no gap across a connector longer "
+                                "than rejoin_bp (terminal gaps are hidden per span)",
+    "gap_dropped_at_insertion": "a gap or neutral row the lifted record holds next to a target insertion; live "
+                                "lift emits no gap across an insertion badge longer than rejoin_bp",
+    "terminal_gap_extent": "a gap between the record's outermost call of any kind (an MSP, say) and its first or "
+                           "last footprint: the decoder ends hidden terminal gaps at the extent of all calls, live "
+                           "lift at the footprints",
     "native_only": "the call is only on the lifted record",
     "live_only": "the call is only on the live-lift row",
     "other": "unclassified (see the examples)",
@@ -332,6 +342,9 @@ def compare_calls(lp: dict, np_: dict, tolerance=TOLERANCE_BP) -> list:
     out = []
     for group in sorted(set(lp["calls"]) | set(np_["calls"])):
         lc, nc = lp["calls"].get(group, {}), np_["calls"].get(group, {})
+        if TILING_MARK in group:
+            out += compare_tiling(group, lc.get("<tile>", []), nc.get("<tile>", []), lp, tolerance)
+            continue
         lpay, npay = lp.get("payloads", {}).get(group, {}), np_.get("payloads", {}).get(group, {})
         for li, ni in pair_calls(lc, nc, lpay, npay):
             res = classify_call(lc.get(li, []) if li is not None else [], nc.get(ni, []) if ni is not None else [],
@@ -344,6 +357,32 @@ def compare_calls(lp: dict, np_: dict, tolerance=TOLERANCE_BP) -> list:
                 if res["bucket"] == "identical":
                     res.update(bucket="different", cause="payload")
             out.append(res)
+    return out
+
+
+def compare_tiling(group, live_parts, native_parts, lp: dict, tolerance=TOLERANCE_BP) -> list:
+    """A group's gap or neutral rows, unit by unit (``tiling_units``), classified
+    like calls. A unit only the lifted record holds is refined by where live
+    lift lost it: across a connector, or next to an insertion badge."""
+    connectors, insertions = lp.get("connectors", ()), lp.get("insertions", ())
+    # The extent of the live row's own calls in this group: hidden terminal gaps end there on live lift.
+    own = merge_spans(x for parts in lp["calls"].get(group.split(TILING_MARK)[0], {}).values() for x in parts)
+    out = []
+    for lparts, nparts in tiling_units(live_parts, native_parts, connectors):
+        res = classify_call(lparts, nparts, connectors, insertions, tolerance)
+        hull = merge_spans(lparts + nparts)
+        key = f"<tile>:{hull[0][0]}-{hull[-1][1]}" if hull else "<tile>"
+        if res["cause"] == "native_only":
+            merged = merge_spans(nparts)
+            if overlap_bp(merged, merge_spans(connectors)):
+                res["cause"] = "gap_dropped_at_connector"
+            elif any(a - 1 <= int(x) <= b for x in insertions for a, b in merged):
+                res["cause"] = "gap_dropped_at_insertion"
+            elif own and (merged[-1][1] <= own[0][0] or merged[0][0] >= own[-1][1]):
+                res["cause"] = "terminal_gap_extent"
+        res.update(group=group, call=key, live_call=key if lparts else None, native_call=key if nparts else None,
+                   payload_differs=False, live_parts=lparts, native_parts=nparts)
+        out.append(res)
     return out
 
 
@@ -494,9 +533,10 @@ def summarize(records: list, verdict_points=VERDICT_POINTS, rejoin_bp: int = 5) 
                                   "native_payload": sorted(map(str, native[j]["payloads"][c["group"]][c["native_call"]]))}
                     _example(examples, f"{c['group']}:{c['cause']}", idx, rec, live_call=c["live_call"],
                              native_call=c["native_call"],
-                             live=live[i]["calls"].get(c["group"], {}).get(c["live_call"], []),
-                             native=native[j]["calls"].get(c["group"], {}).get(c["native_call"], []), bp=c["bp"],
-                             **detail)
+                             live=c.get("live_parts", live[i]["calls"].get(c["group"], {}).get(c["live_call"], [])),
+                             native=c.get("native_parts",
+                                          native[j]["calls"].get(c["group"], {}).get(c["native_call"], [])),
+                             bp=c["bp"], **detail)
                 if c.get("holes"):
                     holes[(c["group"], "calls_max_hole_le_rejoin_bp" if max(c["holes"]) <= rejoin_bp
                            else "calls_max_hole_gt_rejoin_bp")] += 1
@@ -582,7 +622,9 @@ def _payloads(ivs, layer=None, top_qualities=None) -> list:
                       for t, track in enumerate(tracks) if k < len(track))
         if k in top_rank:
             quals += (("q", int(top[top_rank[k]])),)
-        name = annotations[k] if k < len(annotations) else None
+        # A missing name array and an empty name mean the same (no name): the parser omits an all-blank
+        # array, while a split keeps blank entries of a layer whose other calls are named.
+        name = (annotations[k] if k < len(annotations) else None) or None
         out.append((tuple(int(x) for x in iv[2:]), quals, name))
     return out
 
@@ -643,24 +685,50 @@ def deam_events(events, base: int, flipped: bool) -> list:
     return out
 
 
+TILING_MARK = "~"  # "intervals~gap", "intervals~neutral": a group's tiling rows, compared like calls
+
+
+def tiling_units(live_parts, native_parts, connectors=()) -> list:
+    """A group's gap (or neutral) rows from both sides cut into comparable
+    units: connected stretches of either side's rows, joined across live
+    connectors (live lift cuts a gap there; the lifted record holds one
+    interval). Returns ``[(live parts, native parts)]`` per unit, in target order."""
+    spans = sorted([(int(a), int(b), 0) for a, b in live_parts] + [(int(a), int(b), 1) for a, b in native_parts])
+    units, end = [], None
+    for a, b, side in spans:
+        if end is not None and (a <= end or not subtract_spans([[end, a]], connectors)):
+            end = max(end, b)
+        else:
+            units.append(([], []))
+            end = b
+        units[-1][side].append([a, b])
+    return units
+
+
 def placement(row, base: int, live: bool, contig: str) -> dict:
     """A row as a placement: absolute target geometry, calls ``{group:
     {call id: [[t0, t1], ...]}}`` (positive calls; zero-width markers kept),
     their payloads ``{group: {call id: set of payload tuples}}``, points
     (deamination with its channel, molecule frame), and for live rows the
     connectors and whether it is on a ``-`` chain."""
-    calls, payloads = {}, {}
+    calls, payloads, tiling = {}, {}, {}
+    connectors = ([[a + base, b + base] for a, b in row["live_lift"].get("connectors") or ()] if live else [])
     for group, ivs, ids, pays in _call_groups(row, live):
         by_call, pay = {}, {}
         for k, iv in enumerate(ivs):
             if len(iv) > 2 and iv[2] <= 0:
-                continue  # gaps and neutral rows: derived, not calls
+                # Gap (inferred MSP / linker) and neutral rows: the measured tiling a scan counts too.
+                kind = "gap" if iv[2] < 0 else "neutral"
+                tiling.setdefault(f"{group}{TILING_MARK}{kind}", []).append([iv[0] + base, iv[1] + base])
+                continue
             call = ids[k] if k < len(ids) and ids[k] is not None else f"<no id>:{iv[0] + base}-{iv[1] + base}"
             by_call.setdefault(str(call), []).append([iv[0] + base, iv[1] + base])
             pay.setdefault(str(call), set()).add(pays[k])
         if by_call:
             calls[group] = by_call
             payloads[group] = pay
+    for group, parts in tiling.items():
+        calls[group] = {"<tile>": parts}  # cut into units against the other side (tiling_units)
     points = {f: [int(x) + base for x in _as_list(row.get(f))] for f in POINT_FIELDS if row.get(f) is not None}
     flipped = False if live else lift_flipped(row)
     if row.get("deam") is not None:
@@ -671,7 +739,7 @@ def placement(row, base: int, live: bool, contig: str) -> dict:
            "calls": calls, "payloads": payloads, "points": points, "lift_flipped": flipped}
     if live:
         ll = row["live_lift"]
-        out["connectors"] = [[a + base, b + base] for a, b in ll.get("connectors") or ()]
+        out["connectors"] = connectors
         out["insertions"] = sorted({int(bd[0]) + base for bd in ll.get("badges") or ()})
         out["minus_chain"] = any(seg[3] == "-" for seg in ll.get("segments") or ())
         out["segments"] = [[s[0] + base, s[1] + base] for s in ll.get("segments") or ()]
