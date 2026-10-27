@@ -124,7 +124,13 @@ export function useInspectComparison(selection: DifferenceSelection, map: Datase
   const supported = LOCAL.includes(d.kind);
   useEffect(() => {
     if (!map || !supported) return;
-    if (entry && (useComparisonStore.getState().byKey[key] || !lacksExactTarget(entry))) return;
+    if (entry && useComparisonStore.getState().byKey[key]) return;
+    if (entry && !lacksExactTarget(entry)) {
+      // A row comparison that already covers it becomes the inspector's own (the same response, its arrival order
+      // kept): a pan replaces the row's entry, and the exact targets would drop from Molecule calls with it.
+      useComparisonStore.setState(s => (s.byKey[key] ? s : { byKey: { ...s.byKey, [key]: entry.response } }));
+      return;
+    }
     const controller = new AbortController();
     setBusy(true); setError('');
     runInspectComparison(selection, map, undefined, controller.signal)

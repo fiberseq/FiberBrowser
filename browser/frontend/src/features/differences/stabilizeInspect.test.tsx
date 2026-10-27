@@ -147,3 +147,19 @@ it('an inspection whose answer still lacks a target or still stops short is not 
   await inspect(patInsertion);
   expect(fetchMock).toHaveBeenCalledTimes(1);
 });
+
+it('a complete row entry the inspector reuses becomes its own: panning while it is open keeps the exact target', async () => {
+  // agy's out-of-scope HIGH (stabilize review): the reused row entry was never saved under the inspector's key, so
+  // the next row comparison (a pan) replaced it and the exact allele dropped from Molecule calls.
+  put(rowKey, response(4900, 5200, { 'PAT:ins': asmItem('PAT', targetPat) }, {}));
+  await inspect(patInsertion);
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(useComparisonStore.getState().byKey[comparisonKey('ds1', 'chrC', 'inspect:PAT:ins')]).toBeTruthy();
+
+  // Panned: the row comparison of the new view no longer holds the difference, or holds it without its target.
+  await act(async () => { put(rowKey, response(9000, 9300, {}, {})); });
+  expect(exactTargetsFor(captured!.entry).map(t => t.target_id)).toEqual(['allele:pat100']);
+  await act(async () => { put(rowKey, response(4950, 5150, { 'PAT:ins': asmItem('PAT', null) }, {})); });
+  expect(exactTargetsFor(captured!.entry).map(t => t.target_id)).toEqual(['allele:pat100']);
+  expect(fetchMock).not.toHaveBeenCalled();
+});
