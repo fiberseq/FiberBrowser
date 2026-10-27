@@ -30,6 +30,14 @@ async def nuc_available():
     return await asyncio.to_thread(available)
 
 
+@router.get('/api/nuc/metrics')
+async def nuc_metrics():
+    """The per-molecule metrics rule terms can name (the nucmol / nfrmol scalar groups)."""
+    _not_on_lab_requests()
+    from services.nuc.scalars import metrics
+    return dict(metrics=metrics())
+
+
 @router.post('/api/nuc/status')
 async def nuc_status(request: dict, state=Depends(get_state)):
     """Per dataset: whether the panel can read it, its active configuration, a stored calibration, stored records."""

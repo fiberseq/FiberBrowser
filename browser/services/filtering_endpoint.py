@@ -512,7 +512,49 @@ def _analysis_filter_sort_by(metric: str, rule: dict | None = None) -> str:
     return "rule" if rule else "fp_count"
 
 
-def _metric_passes_filter(value: float, operator: str, threshold: float) -> bool:
+def _term_layers(layer: Optional[str], molecule_metric: Optional[str] = None) -> tuple[bool, Optional[list[str]]]:
+    """(include_layers, requested_layers) a rule's term needs: its layer, and for a molecule metric the scalar group
+    that carries it (nucmol, nfrmol), so the rows have their scalars. Nothing for a term needing neither."""
+    from services.nuc.scalars import group_of
+    group = group_of(molecule_metric)
+    if group:
+        return True, [group] + ([layer] if layer and layer != "all_fp" else [])
+    return bool(layer), _requested_layers(layer)
+
+
+def _hub_counter(state, feature_hub: Optional[dict], wanted_default: str = "1"):
+    """A function (read, dataset id) -> the number of the given hub hits where the read's state is the wanted one
+    ('1' member / open, '0' not; '.' never counts), from the hub's states provider (/api/features/states)."""
+    if not feature_hub:
+        return None
+    from services.feature_states import feature_states
+    from services.lift.cohort import record_key
+    hits = [h for h in feature_hub.get("hits") or [] if isinstance(h, dict) and h.get("set_id") and h.get("hit_id")]
+    if not hits:
+        raise ValueError("feature_hub: give the hub hits (set_id, hit_id)")
+    wanted = str(feature_hub.get("state") or wanted_default)
+    if wanted not in ("1", "0"):
+        raise ValueError("feature_hub: state is '1' or '0'")
+    states = feature_states(state, [dict(kind="hub", source=str(h["set_id"]), id=str(h["hit_id"])) for h in hits])
+    by_dataset = states.get("by_dataset") or {}
+
+    def count(read, dataset_id):
+        keyed = by_dataset.get(dataset_id) or {}
+        rk = record_key(read.get("analysis_id")) if read.get("analysis_id") is not None else None
+        text = keyed.get(rk) if rk else None
+        if text is None:
+            text = keyed.get(str(read.get("id", "")))
+        return float(text.count(wanted)) if text else 0.0
+    return count
+
+
+def _metric_passes_filter(value: Optional[float], operator: str, threshold: float,
+                          threshold_max: Optional[float] = None) -> bool:
+    if value is None:
+        return False   # a missing value (a molecule metric the read lacks) never passes
+    if operator == "between":
+        hi = threshold if threshold_max is None else threshold_max
+        return threshold <= value <= hi
     if operator == "gt":
         return value > threshold
     if operator == "lt":
@@ -533,6 +575,8 @@ def filter_reads_by_analysis_rule_for_request(
     end: int,
     spanning: bool = False,
 ) -> dict:
+    # Layers the rule's term needs (its layer; a molecule metric's scalar group), not only a layer named directly.
+    term_include, term_layers = _term_layers(req.layer, req.molecule_metric if req.metric == "value" else None)
     query = AnalysisReadQuery.from_request(
         state,
         chrom=chrom,
@@ -541,13 +585,16 @@ def filter_reads_by_analysis_rule_for_request(
         spanning=spanning,
         dataset_ids=req.dataset_ids,
         sample_seed=req.sample_seed,
-        include_layers=bool(req.layer) or bool(req.transcription_state),
-        requested_layers=_requested_layers(req.layer),
+        include_layers=term_include or bool(req.transcription_state),
+        requested_layers=term_layers,
         capability="filter",
         lift_hap_by_dataset=req.lift_hap_by_dataset,
     )
     if not query.dataset_ids:
         return {"results": {}, "sample_seed": query.sample_seed}
+    if req.metric == "value" and not req.molecule_metric:
+        raise ValueError("The value metric needs a molecule metric")
+    hub_count = _hub_counter(state, req.feature_hub)
 
     sort_by = "transcription_state" if req.transcription_state else _analysis_filter_sort_by(req.metric, req.rule)
     peak_regions = [(region[0], region[1]) for region in req.peak_regions] if req.peak_regions else []
@@ -565,6 +612,16 @@ def filter_reads_by_analysis_rule_for_request(
 
         filtered_ids = []
         for read in working_set.reads:
+            if req.metric == "value":
+                from services.nuc.scalars import metric_value
+                if _metric_passes_filter(metric_value(read, req.molecule_metric), req.operator, threshold,
+                                         req.threshold_max):
+                    filtered_ids.append(cohort_read_id(read))
+                continue
+            if hub_count is not None:
+                if _metric_passes_filter(hub_count(read, dataset_id), req.operator, threshold, req.threshold_max):
+                    filtered_ids.append(cohort_read_id(read))
+                continue
             metric = _compute_sort_metric(
                 read,
                 start=start,
@@ -579,7 +636,7 @@ def filter_reads_by_analysis_rule_for_request(
                 transcription_state=req.transcription_state,
                 transcription_genes=transcription_genes,
             )
-            if _metric_passes_filter(metric, req.operator, threshold):
+            if _metric_passes_filter(metric, req.operator, threshold, req.threshold_max):
                 filtered_ids.append(cohort_read_id(read))
 
         results[dataset_id] = {
@@ -676,6 +733,39 @@ def _sort_dataset_reads(
         flat_read_order.extend(read_id for read_id, _metric in sorted_reads)
 
     return {"cluster_order": sorted_clusters, "read_sort_order": flat_read_order, **note}
+
+
+def _sort_by_values(all_reads: list[dict], cluster_assignments: dict, req: SortReadsRequest, dataset_id: str,
+                    hub_count=None) -> dict:
+    """Reads (and clusters, by their mean) ordered by a molecule metric or a hub-state count; reads without a value
+    go last whatever the direction, and clusters with no value at all after the others."""
+    from services.nuc.scalars import metric_value
+    values = {}
+    for read in all_reads:
+        rid = cohort_read_id(read)
+        values[rid] = hub_count(read, dataset_id) if hub_count is not None else metric_value(read, req.molecule_metric)
+
+    def order(items):
+        known = sorted((x for x in items if x[1] is not None), key=lambda x: x[1], reverse=req.descending)
+        return known + [x for x in items if x[1] is None]
+    note = {}
+    known = [v for v in values.values() if v is not None]
+    if len(known) < 2 or len(set(known)) == 1:
+        note["no_op_reason"] = ("Fewer than two reads have this value here." if len(known) < 2 else
+                                "All reads have the same value for this sort.")
+    if not cluster_assignments:
+        return {"cluster_order": [], "read_sort_order": [rid for rid, _v in order(list(values.items()))], **note}
+    cluster_of = _assignment_lookup(cluster_assignments)
+    by_cluster: dict = {}
+    for read in all_reads:
+        c = cluster_of(read)
+        if c is not None:
+            by_cluster.setdefault(c, []).append((cohort_read_id(read), values[cohort_read_id(read)]))
+    means = {c: (sum(v for _r, v in items if v is not None) / max(1, sum(v is not None for _r, v in items))
+                 if any(v is not None for _r, v in items) else None) for c, items in by_cluster.items()}
+    clusters = [c for c, _m in order(list(means.items()))]
+    flat = [rid for c in clusters for rid, _v in order(by_cluster[c])]
+    return {"cluster_order": clusters, "read_sort_order": flat, **note}
 
 
 def _cluster_assignments_for_sort(state, req: SortReadsRequest, dataset_id: str) -> dict[str, int]:
@@ -794,8 +884,9 @@ def sort_reads_for_request(
         # Metrics use interval/layer evidence. Similarity and projection resolve
         # their own feature payload; raw methylation marks are never used here.
         include_methylation=False,
-        include_layers=bool(req.layer) or bool(req.transcription_state),
-        requested_layers=_requested_layers(req.layer),
+        include_layers=_term_layers(req.layer, req.molecule_metric if req.sort_by == "value" else None)[0]
+        or bool(req.transcription_state),
+        requested_layers=_term_layers(req.layer, req.molecule_metric if req.sort_by == "value" else None)[1],
         read_ids_by_dataset=req.read_ids,
         capability="sort",
         lift_hap_by_dataset=req.lift_hap_by_dataset,
@@ -844,6 +935,9 @@ def sort_reads_for_request(
         f"transcription_genes={len(transcription_genes)}"
     )
 
+    if req.sort_by == "value" and not req.molecule_metric:
+        raise ValueError("Sorting by value needs a molecule metric")
+    hub_count = _hub_counter(state, req.feature_hub) if req.sort_by == "feature_hub" else None
     results = {}
     for dataset_id in query.dataset_ids:
         working_set = query.build_working_set(state, dataset_id)
@@ -852,6 +946,9 @@ def sort_reads_for_request(
             continue
 
         cluster_assignments = _cluster_assignments_for_sort(state, req, dataset_id)
+        if req.sort_by in ("value", "feature_hub"):
+            results[dataset_id] = _sort_by_values(working_set.reads, cluster_assignments, req, dataset_id, hub_count)
+            continue
         results[dataset_id] = _sort_dataset_reads(
             working_set.reads,
             cluster_assignments,

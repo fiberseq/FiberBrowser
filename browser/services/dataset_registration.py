@@ -293,7 +293,10 @@ def configure_bam_dataset_layers(dataset: Dataset, primary_path: str) -> None:
             'msp': diag.get('has_msps', False) and not has_fire,
             'fire': has_fire,
         }
+        from services.nuc.scalars import SCALAR_GROUPS
         for ma_layer in diag.get('ma_layers', []):
+            if ma_layer in SCALAR_GROUPS:
+                continue   # a scan's per-molecule scalar group (nucmol, nfrmol): rule terms, not a layer to draw
             dataset.available_layers[ma_layer] = True
         dataset.has_circular_annotations = bool(diag.get('has_circular_annotations', False))
         dataset.circular_contigs = dict(diag.get('circular_contigs') or {})

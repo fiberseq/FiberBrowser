@@ -1461,6 +1461,8 @@ def project_broad_read_to_viewport(
         "sv",
         "aligned_blocks", "sv_segments", "sequence_span",
         "sv_alignments", "supplementary",
+        # The molecule's scalars (nucmol / nfrmol: services/nuc/scalars.py), the same in every view.
+        "_fiberbrowser_scalars",
     ):
         if identity_key in read:
             adjusted_read[identity_key] = read[identity_key]
@@ -1574,9 +1576,11 @@ def _viewport_reads_from_broad(
     bc_end: Optional[int] = None,
     row_filter: Optional[Callable] = None,
     cohort_out: Optional[dict] = None,
+    overlay: Optional[Callable] = None,
 ) -> tuple[list[dict], int, int]:
     """``row_filter``: rows that never enter the working set (a lifted display's
-    haplotype and display settings), applied before every count, filter and cap."""
+    haplotype and display settings), applied before every count, filter and cap.
+    ``overlay``: a function adding scan layers to a projected row (before quality filters)."""
     # Prepare the complete broad cohort before spatial, spanning or ID filters.
     from services.lift.capability import is_lifted
     if is_lifted(dataset):
@@ -1663,6 +1667,8 @@ def _viewport_reads_from_broad(
                 include_layer_qualities=include_layer_qualities,
                 index_intervals=index_intervals,
             )
+            if adjusted_read is not None and overlay is not None:
+                adjusted_read = overlay(adjusted_read)
             if adjusted_read is not None and (not min_footprints or not adjusted_read.get("live_lift") or count_footprints(adjusted_read) >= min_footprints):
                 viewport_reads.append(adjusted_read)
             continue
@@ -1678,6 +1684,8 @@ def _viewport_reads_from_broad(
         )
         if adjusted_read is None:
             continue
+        if overlay is not None:
+            adjusted_read = overlay(adjusted_read)
 
         if quality_filters and "layers" in adjusted_read:
             if (
@@ -2275,6 +2283,14 @@ def _build_working_set(
     from services.lift.cohort import cohort_key
     lift_display = cohort_key(dataset)
 
+    # Tables-mode scans bound to the dataset put their layers and scalars on the rows before quality filters and
+    # metaprofiles see them (feature hub agy A5); the scans are part of the cached working set's identity.
+    scan_overlay, overlay_key = None, ()
+    if state.__dict__.get('scan_registry'):
+        from services.scan.overlay import overlay_signature, prepare_scan_overlay
+        overlay_key = overlay_signature(state, dataset_id)
+        if overlay_key:
+            scan_overlay = prepare_scan_overlay(state, dataset_id, chrom, start, end)
     working_cache_key = make_working_cache_key(
         dataset_id,
         chrom,
@@ -2292,7 +2308,7 @@ def _build_working_set(
         include_layer_qualities,
         # A lifted display's haplotype rule: its rows are filtered before the cap below.
         topology=topology if lift_display is None else (*topology, lift_display),
-    )
+    ) + ((('scan-overlay', overlay_key),) if overlay_key else ())
     if cacheable and not force_reload:
         cache_lock, _inflight = _broad_cache_sync(state)
         with cache_lock:
@@ -2445,6 +2461,7 @@ def _build_working_set(
         bc_end=broad_cache_key[3] if broad_cache_key else broad_end,
         row_filter=display_row_filter(dataset),
         cohort_out=cohort_description,
+        overlay=scan_overlay,
     )
     sampling_metadata = sampling_info(all_reads, start, end, total_overlapping, total_spanning) if level else None
     if sampling_metadata:

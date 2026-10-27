@@ -357,6 +357,11 @@ def nuc_layer_duplicates_primary(read: dict) -> bool:
     return True
 
 
+# Layers that are not footprints: accessibility and marks, and the nucleosome module's per-footprint annotations
+# (nucsz repeats each footprint; nucseg holds segments) and per-molecule scalar groups (services/nuc).
+NON_FOOTPRINT_LAYERS = frozenset({"msp", "fire", "m6a", "mod", "m5c", "deam", "nucsz", "nucseg", "nucmol", "nfrmol"})
+
+
 def get_layer_intervals(read: dict, layer: Optional[str]):
     """Return primary intervals or intervals from a named compact-read layer."""
     if layer is None:
@@ -365,7 +370,7 @@ def get_layer_intervals(read: dict, layer: Optional[str]):
     if layer == "all_fp":
         out = []
         seen = set()
-        non_fp_layers = {"msp", "fire", "m6a", "mod", "m5c", "deam"}
+        non_fp_layers = NON_FOOTPRINT_LAYERS
         for layer_name, layer_data in layers.items():
             if layer_name in non_fp_layers:
                 continue
@@ -643,7 +648,7 @@ def _rule_interval_entries(read: dict, layer: Optional[str], with_qualities: boo
     from services.clustering_features import _interval_quality_map, _iter_layer_interval_entries
     if layer == "all_fp":
         seen = set()
-        non_fp_layers = {"msp", "fire", "m6a", "mod", "m5c", "deam"}
+        non_fp_layers = NON_FOOTPRINT_LAYERS
         for layer_name, layer_data in (read.get("layers") or {}).items():
             if layer_name in non_fp_layers:
                 continue

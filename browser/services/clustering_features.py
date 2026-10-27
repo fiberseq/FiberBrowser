@@ -270,6 +270,10 @@ def _cluster_feature_rule_intervals(
             # Pol II state terms are evaluated by the sort/filter routes, where
             # transcript IDs and strand-aware state definitions are available.
             continue
+        if term.get("source") in ("molecule_metric", "feature_hub"):
+            # Not positional: a molecule metric is a column of its own (extract_features_from_compact); hub states
+            # drive Filter/Sort and Combinatorial grouping, not interval features.
+            continue
         if term.get('source') == 'footprint_class' or (
                 term.get('source') == 'footprint_group' and (term.get('group') or {}).get('consensusStateId')):
             if (rule_context or {}).get('_separate_class_columns'):
@@ -404,10 +408,50 @@ def _weighted_intervals_for_mode(
             if iv[2] >= subnucleosomal_threshold
         ]
 
+    if mode.startswith(NUC_MODE_PREFIXES):
+        return _nuc_mode_intervals(layers, mode)
+
     layer = layers.get(mode)
     if layer and layer.get("intervals"):
         return [(iv[0], iv[1], 1.0) for iv in layer["intervals"]]
     return []
+
+
+# Nucleosome modes (NUC §7.1 Cluster): a coarse size class of the nucsz marks, a segment state or an event of nucseg.
+NUC_MODE_PREFIXES = ("nuc.size.", "nuc.seg.", "nuc.event.")
+NUC_SIZE_CODES = {"cant_tell": 0, "short": 1, "mono": 2, "long": 3, "multi2": 4, "multi3": 5, "edge_truncated": 6}
+NUC_SEG_CODES = {"regular": 1, "disordered": 2, "low_information": 3, "undetermined": 4}
+NUC_EVENT_CODES = {"undersized": 16, "missing": 17}
+
+
+def _nuc_mode_intervals(layers: dict, mode: str) -> list[tuple[int, int, float]]:
+    """The intervals of a nucleosome mode: nucsz marks of one coarse class ('tf': TF calls or footprints overlapping
+    one), nucseg segments of one state, or nucseg events of one kind (first byte of each mark)."""
+    group = "nucsz" if mode.startswith("nuc.size.") else "nucseg"
+    layer = layers.get(group) or {}
+    ivs = layer.get("intervals") or []
+    codes = (layer.get("qualities") or [None])[0]
+    if not ivs or codes is None:
+        return []
+    name = mode.split(".", 2)[2]
+    if mode.startswith("nuc.size."):
+        if name == "tf":
+            keep = lambda q: bool(int(q) & 16)
+        elif name in NUC_SIZE_CODES:
+            code = NUC_SIZE_CODES[name]
+            keep = lambda q: (int(q) & 15) == code
+        else:
+            return []
+    else:
+        code = (NUC_SEG_CODES if mode.startswith("nuc.seg.") else NUC_EVENT_CODES).get(name)
+        if code is None:
+            return []
+        keep = lambda q: int(q) == code
+    return [(iv[0], iv[1], 1.0) for iv, q in zip(ivs, codes) if keep(q)]
+
+
+def _molecule_metric_terms(terms) -> list:
+    return [t for t in terms or () if t.get("source") == "molecule_metric" and t.get("moleculeMetric")]
 
 
 def class_aware_pattern_slices(peak_widths, peak_modes, rules):
@@ -421,6 +465,8 @@ def class_aware_pattern_slices(peak_widths, peak_modes, rules):
         terms = rule.get('terms', []) if rule.get('enabled') is not False else []
         count = sum(t.get('source') == 'footprint_class' or
                     (t.get('source') == 'footprint_group' and bool((t.get('group') or {}).get('consensusStateId'))) for t in terms)
+        # Molecule metric columns are binary-like too: a percentile rank, split at the median (0.5).
+        count += len(_molecule_metric_terms(terms))
         spatial = width - count
         if spatial > 0 or not count:
             output.append((i, offset, max(0, spatial), False))
@@ -456,6 +502,7 @@ def extract_features_from_compact(
 
     peak_col_info = []
     class_columns = []
+    metric_columns = []
     class_widths = []
     cluster_rule_context = {**(cluster_rule_context or {}), '_separate_class_columns': True}
     total_cols = 0
@@ -472,14 +519,18 @@ def extract_features_from_compact(
         terms = rule.get('terms', []) if rule.get('enabled') is not False else []
         class_terms = [t for t in terms if t.get('source') == 'footprint_class' or
                        (t.get('source') == 'footprint_group' and (t.get('group') or {}).get('consensusStateId'))]
-        if class_terms and len(class_terms) == len(terms):
+        metric_terms = _molecule_metric_terms(terms)
+        if (class_terms or metric_terms) and len(class_terms) + len(metric_terms) == len(terms):
             positions = []
         peak_col_info.append((total_cols, positions, mode))
         total_cols += len(positions)
         for term in class_terms:
             class_columns.append((total_cols, term, left, right))
             total_cols += 1
-        class_widths.append(len(class_terms))
+        for term in metric_terms:
+            metric_columns.append((total_cols, term))
+            total_cols += 1
+        class_widths.append(len(class_terms) + len(metric_terms))
 
     if total_cols == 0:
         return np.array([]), [], [], [info[2] for info in peak_col_info]
@@ -558,9 +609,29 @@ def extract_features_from_compact(
                 if start <= rel_pos < end:
                     features[read_idx, start_col_idx + pos_offset] = value
 
+    if metric_columns:
+        _fill_metric_columns(features, compact_reads, metric_columns)
+
     peak_widths = [len(info[1]) + class_widths[i] for i, info in enumerate(peak_col_info)]
     peak_modes_used = [info[2] for info in peak_col_info]
     return features, read_ids, peak_widths, peak_modes_used
+
+
+def _fill_metric_columns(features, compact_reads, metric_columns) -> None:
+    """Molecule metric columns (NUC §7.1 Cluster): each read's scalar as its percentile rank among the reads that
+    have it (0..1, so a median split is 0.5, as combinatorial grouping reads class bits); a read without the value
+    gets the median (0.5)."""
+    from services.nuc.scalars import metric_value
+    for col, term in metric_columns:
+        values = [metric_value(read, term.get("moleculeMetric")) for read in compact_reads]
+        known = sorted(v for v in values if v is not None)
+        n = len(known)
+        for i, v in enumerate(values):
+            if v is None or n == 0:
+                features[i, col] = 0.5
+                continue
+            lo, hi = bisect_left(known, v), bisect_right(known, v)
+            features[i, col] = ((lo + hi) / 2) / n if n > 1 else 0.5
 
 
 def extract_features_grouped(compact_reads, peak_regions, region_start, groups=None, **kwargs):

@@ -122,10 +122,26 @@ def refresh_dataset_layers(state) -> None:
                 derived[group] = dict(id=group, label=label, color=colour, kind='scan-overlay', source_layer=source)
 
 
+def overlay_signature(state, dataset_id: str) -> tuple:
+    """What the overlay on a dataset's rows depends on (its tables-mode scans): part of a cached working set's key."""
+    return tuple((sc.scan_id, sc.manifest_digest) for sc, _s, _g in overlay_scans(state, dataset_id))
+
+
 def apply_scan_overlays(state, dataset_id: str, chrom: str, start: int, end: int, reads: List[dict]) -> List[dict]:
-    scans = overlay_scans(state, dataset_id)
-    if not scans or not reads:
+    if not reads:
         return reads
+    apply_one = prepare_scan_overlay(state, dataset_id, chrom, start, end)
+    if apply_one is None:
+        return reads
+    return [apply_one(read) for read in reads]
+
+
+def prepare_scan_overlay(state, dataset_id: str, chrom: str, start: int, end: int):
+    """A function putting the bound tables-mode scans' layers and scalars on one row of ``[start, end)`` (rows
+    relative to ``start``), or None when nothing applies. The scans' rows are fetched once, here."""
+    scans = overlay_scans(state, dataset_id)
+    if not scans:
+        return None
     ds = state.datasets.get(dataset_id)
     derived = getattr(ds, 'derived_layers', None) or {}
     marks: Dict[str, Dict[str, list]] = {}
@@ -153,7 +169,7 @@ def apply_scan_overlays(state, dataset_id: str, chrom: str, start: int, end: int
                     if r.get('dataset_id') in sids:
                         scalar_rows.setdefault(r.get('qname', ''), []).append((module, r))
     if not marks and not scalar_rows:
-        return reads
+        return None
     # Mark groups' byte names as their contract declares them (nucsz: coarse, named, posterior, z), so a tables-mode
     # overlay names its qualities as an annotated BAM's group parses (bam_tags known_qual_names).
     declared = {g.get('group'): list(g.get('quality_names') or []) for scan, _s, _g in scans
@@ -163,12 +179,11 @@ def apply_scan_overlays(state, dataset_id: str, chrom: str, start: int, end: int
     # later pass keeps the row objects (and the consensus projection's receipt over them).
     token = 'scan:' + hashlib.sha256(repr((dataset_id, chrom, int(start), int(end),
                                            tuple((sc.scan_id, sc.manifest_digest) for sc, _s, _g in scans))).encode()).hexdigest()[:16]
-    out = []
-    for read in reads:
+
+    def apply_one(read: dict) -> dict:
         original = read.get('layers') or {}
         if any(isinstance(v, dict) and v.get('scan_overlay') == token for v in original.values()):
-            out.append(read)
-            continue
+            return read
         mine = marks.get(str(read.get('id', '')))
         layers = {k: v for k, v in original.items() if not (isinstance(v, dict) and v.get('scan_overlay'))}
         if mine:
@@ -216,8 +231,8 @@ def apply_scan_overlays(state, dataset_id: str, chrom: str, start: int, end: int
         mol_rows = scalar_rows.get(str(read.get('id', '')))
         if mol_rows:
             read = _with_scalars(read, mol_rows)
-        out.append(read)
-    return out
+        return read
+    return apply_one
 
 
 _NOT_SCALARS = {'chrom', 'start', 'end', 'idx_start', 'idx_end', 'dataset_id', 'input_index', 'qname', 'record',
