@@ -19,5 +19,8 @@ export interface ViewportHistoryEntry {
   start: number;
   end: number;
   panelId?: string;
+  /** The jump moved its panel the way a pan does (setPanelViewport: locked panels and the main view moved likewise),
+   *  so Back / Forward move it the same way and those come back too. */
+  likePan?: boolean;
   to?: { chrom: string; start: number; end: number };
 }

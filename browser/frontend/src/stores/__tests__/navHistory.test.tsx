@@ -102,6 +102,27 @@ describe('Linked navigation', () => {
   });
 });
 
+describe('a jump made like a pan (setPanelViewport: a graph host Go to on its contig, a Differences arrow)', () => {
+  it('Back and Forward move the locked panels and the main view with it, as the jump did', () => {
+    useBrowserStore.setState({ chrom: 'chr3', start: 1_000, end: 2_000, panels: [
+      panel('host', { viewportOverride: { chrom: 'chr3', start: 5_000, end: 6_000 }, siteLocked: true }),
+      panel('peer', { viewportOverride: { chrom: 'chr3', start: 10_000, end: 11_000 }, siteLocked: true }),
+    ] } as never);
+    st().recordJump('host', { likePan: true });
+    st().setPanelViewport('host', 5_500, 6_500);
+    expect(view()).toEqual({ chrom: 'chr3', start: 1_500, end: 2_500 });
+    expect(own('peer')).toEqual({ chrom: 'chr3', start: 10_500, end: 11_500 });
+    st().goBack();
+    expect(own('host')).toEqual({ chrom: 'chr3', start: 5_000, end: 6_000 });
+    expect(own('peer')).toEqual({ chrom: 'chr3', start: 10_000, end: 11_000 });
+    expect(view()).toEqual({ chrom: 'chr3', start: 1_000, end: 2_000 });
+    st().goForward();
+    expect(own('host')).toEqual({ chrom: 'chr3', start: 5_500, end: 6_500 });
+    expect(own('peer')).toEqual({ chrom: 'chr3', start: 10_500, end: 11_500 });
+    expect(view()).toEqual({ chrom: 'chr3', start: 1_500, end: 2_500 });
+  });
+});
+
 describe('Each panel navigates', () => {
   beforeEach(() => {
     useBrowserStore.setState({

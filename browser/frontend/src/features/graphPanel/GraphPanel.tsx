@@ -1292,7 +1292,12 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       return;
     }
     // A graph host's Go to is a jump of its panel (or the main view): Back (Alt+←) returns to where it was.
-    if (hostMode) useBrowserStore.getState().recordJump(panelId);
+    // (On its own view's contig the host moves like a pan, through setPanelViewport: Back moves it, and what is locked
+    // to it, the same way.)
+    if (hostMode) {
+      const own = useBrowserStore.getState().panels.find(p => p.id === panelId)?.viewportOverride;
+      useBrowserStore.getState().recordJump(panelId, { likePan: own?.chrom === parsed.contig });
+    }
     commitViewport(clampViewport(parsed, target.size, target.size_inferred), true);
     setPrompt(null);
   };

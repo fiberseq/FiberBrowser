@@ -154,7 +154,10 @@ function applyHistoryMove(get: () => BrowserState, set: (p: Partial<BrowserState
   entry: ViewportHistoryEntry, to: Span3, history: Partial<BrowserState>) {
   if (entry.panelId) {
     set(history);
-    get().navigatePanel(entry.panelId, to.chrom, to.start, to.end);
+    // A jump made like a pan (locked panels and the main view moved likewise) goes back the same way, so they return too.
+    const now = get().panels.find(p => p.id === entry.panelId)?.viewportOverride;
+    if (entry.likePan && now?.chrom === to.chrom) get().setPanelViewport(entry.panelId, to.start, to.end);
+    else get().navigatePanel(entry.panelId, to.chrom, to.start, to.end);
     return;
   }
   set(s => jumpState(s, to.chrom, to.start, to.end, history));
@@ -232,9 +235,11 @@ export interface ViewportSlice {
   /**
    * A jump is about to move a view (a locus box, saved regions, N / P, Differences arrows, Zoom to read, a table's
    * Go there): its view now goes into navigation history, so Back returns to it. `panelId`: the panel whose own view
-   * the jump moves (its view is recorded when it has one of its own; else the main view's). Pans and zooms don't call it.
+   * the jump moves (its view is recorded when it has one of its own; else the main view's). `likePan`: the jump moves
+   * that panel through setPanelViewport (locked panels and the main view move likewise), and Back / Forward do too.
+   * Pans and zooms don't call it.
    */
-  recordJump: (panelId?: string | null) => void;
+  recordJump: (panelId?: string | null, options?: { likePan?: boolean }) => void;
 
   // CIGAR display actions
   toggleReversed: () => void;
@@ -830,12 +835,13 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
   // and later were undone by Back.
   pushViewportHistory: (entry: ViewportHistoryEntry) => {
     const state = get();
-    const record: ViewportHistoryEntry = { chrom: entry.chrom, start: entry.start, end: entry.end, ...(entry.panelId ? { panelId: entry.panelId } : {}) };
+    const record: ViewportHistoryEntry = { chrom: entry.chrom, start: entry.start, end: entry.end,
+      ...(entry.panelId ? { panelId: entry.panelId, ...(entry.likePan ? { likePan: true } : {}) } : {}) };
     // Back went somewhere earlier: a new jump drops the undone ones (as a web browser does).
     let history = state.historyIndex >= 0 ? state.viewportHistory.slice(0, state.historyIndex) : state.viewportHistory;
     const last = history[history.length - 1];
     // Leaving the same place again (a repeated Go to, or one that didn't move): one entry.
-    if (last && (last.panelId ?? null) === (record.panelId ?? null) && sameSpan(last, record)) {
+    if (last && (last.panelId ?? null) === (record.panelId ?? null) && sameSpan(last, record) && !!last.likePan === !!record.likePan) {
       if (history !== state.viewportHistory || state.historyIndex !== -1) set({ viewportHistory: history, historyIndex: -1 });
       return;
     }
@@ -843,11 +849,11 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
     set({ viewportHistory: history, historyIndex: -1 });
   },
 
-  recordJump: (panelId) => {
+  recordJump: (panelId, options) => {
     const state = get();
     const panel = panelId ? state.panels.find(p => p.id === panelId) : undefined;
     const own = panel?.viewportOverride;
-    if (own) get().pushViewportHistory({ chrom: own.chrom, start: own.start, end: own.end, panelId: panel!.id });
+    if (own) get().pushViewportHistory({ chrom: own.chrom, start: own.start, end: own.end, panelId: panel!.id, ...(options?.likePan ? { likePan: true } : {}) });
     else get().pushViewportHistory({ chrom: state.chrom, start: state.start, end: state.end });
   },
 
