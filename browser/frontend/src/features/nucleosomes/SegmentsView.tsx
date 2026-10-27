@@ -83,20 +83,20 @@ function Row({ obs, summary, loading, onHide, onSelect }: {
         {s ? `${(s.computed ?? 0).toLocaleString()} / ${(s.records ?? 0).toLocaleString()}` : loading ? '…' : ''}
         {s?.lowInformation ? <span className="text-ink-muted"> · {s.lowInformation} low</span> : null}</td>
       <td className="px-1 text-left">
-        <StackedShares parts={coarse} testId="nuc-coarse-bar" onPart={key => onSelect({ kind: 'coarse', name: key })}
+        <StackedShares parts={coarse} width={96} testId="nuc-coarse-bar" onPart={key => onSelect({ kind: 'coarse', name: key })}
           title={`${COARSE_PARTS.map(p => `${p.label}: ${s?.sizes?.coarse[p.key as 'mono'] ?? 0}`).join('\n')}\nTF calls among them: ${s?.sizes?.tf ?? 0}\ncan't tell or truncated: ${pct(s?.sizes?.cantTellFraction)}`} />
       </td>
-      <td className="px-1 text-left">{s?.sizes?.z ? <MiniHistogram edges={s.sizes.z.edges} counts={s.sizes.z.counts} color={obs.color} width={84} height={20} marks={[-2, 2]} testId="nuc-z" /> : null}</td>
+      <td className="px-1 text-left">{s?.sizes?.z ? <MiniHistogram edges={s.sizes.z.edges} counts={s.sizes.z.counts} color={obs.color} width={72} height={18} marks={[-2, 2]} testId="nuc-z" /> : null}</td>
       <td className="whitespace-nowrap px-1 text-left" data-testid="nuc-nrl">
-        {nrl ? <div className="flex items-center gap-1">
-          <MiniHistogram edges={nrl.edges} counts={nrl.counts} color={obs.color} width={96} height={20} unit=" bp" testId="nuc-nrl-hist"
+        {nrl ? <div className="flex flex-col items-start">
+          <MiniHistogram edges={nrl.edges} counts={nrl.counts} color={obs.color} width={84} height={18} unit=" bp" testId="nuc-nrl-hist"
             onBin={(lo, hi) => onSelect({ kind: 'nrl', lo, hi })} />
           <span>{nrl.quantiles ? `${num(nrl.quantiles[2])} [${num(nrl.quantiles[1])}–${num(nrl.quantiles[3])}]` : ''}</span>
         </div> : null}
       </td>
       <td className="whitespace-nowrap px-1 text-right">{num(s?.spacing?.regularity?.[2], 2)}{s?.spacing ? ` · ${pct(s.spacing.tooShortFraction)}` : ''}</td>
       <td className="px-1 text-left" data-testid="nuc-segments">
-        {seg?.bp ? <StackedShares parts={segments} testId="nuc-seg-bar" onPart={key => onSelect({ kind: 'segment', state: key })}
+        {seg?.bp ? <StackedShares parts={segments} width={96} testId="nuc-seg-bar" onPart={key => onSelect({ kind: 'segment', state: key })}
           title={SEGMENT_PARTS.map(p => `${p.label}: ${pct(seg[p.key])}`).join('\n')} /> : null}
         {seg?.bp ? <span className="sr-only">{`${pct(seg.regular)} · ${pct(seg.disordered)} · ${pct(seg.undetermined)} · ${pct(seg.low_information)}`}</span> : null}
       </td>

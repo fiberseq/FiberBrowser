@@ -5,11 +5,11 @@
  * the best period, positional dispersion), and with background anchors (the other selected hub hits) the dephasing
  * readout: the anchor's coherence and excess among matched backgrounds (fuzzy / dephased, NUC §13.1 kind 4).
  */
-import { useState } from 'react';
-import { fmt, PhasingBars, StackedShares, type SharePart } from './charts';
+import { useState, type ReactNode } from 'react';
+import { fmt, PhasingBars, StackedShares } from './charts';
 import { COARSE_PARTS, SEGMENT_PARTS } from './SegmentsView';
 import { DEFAULT_FLANK, parseCoordinates, type WindowResolution } from './windowSource';
-import type { NucObservation, NucPanelState, NucPhasing, NucWindowObservation, NucWindowSource } from './types';
+import type { NucObservation, NucPanelState, NucPhasing, NucWindowMetrics, NucWindowObservation, NucWindowSource } from './types';
 
 const pct = (v: number | null | undefined) => (v == null || !Number.isFinite(v) ? '—' : `${Math.round(v * 100)}%`);
 const SOURCES: Array<{ key: NucWindowSource; label: string; title: string }> = [
@@ -83,88 +83,79 @@ function phasingSummary(ph?: NucPhasing): string {
   return `${fmt(b.R_minus_null, 2)}${b.null_p != null && b.null_p < 0.05 ? '*' : ''}`;
 }
 
+/** One metric row of the window table: a label (with its tooltip) and a cell per observation. */
+interface MetricRow { key: string; label: string; title: string; cell: (m: NucWindowMetrics, r: NucWindowObservation, o: NucObservation) => ReactNode; anchor?: boolean; dephasing?: boolean }
+
+const ROWS: MetricRow[] = [
+  { key: 'molecules', label: 'Molecules', title: 'Molecules measured over at least 80% of the window · below the low-information floor (left out)',
+    cell: (m, r) => <span data-testid="nuc-window-molecules" title={`${m.n_molecules ?? 0} molecules measured${m.excluded_low_information ? `, ${m.excluded_low_information} low-information left out` : ''}${r.notComputed ? `, ${r.notComputed} not computed` : ''}`}>
+      {m.n_molecules ?? 0}{m.excluded_low_information ? <span className="text-ink-muted"> · {m.excluded_low_information} low</span> : null}</span> },
+  { key: 'mix', label: 'Class mix', title: 'Coarse calls of footprints centred in the window (can\'t tell and edge-truncated hatched)',
+    cell: m => <div className="flex items-center gap-1">
+      <StackedShares parts={COARSE_PARTS.map(p => ({ ...p, value: (m.class_mix ?? {})[p.key] ?? 0 }))} width={84} testId="nuc-window-mix" />
+      {m.insufficient && <span className="rounded bg-amber-100 px-1 text-[10px] text-amber-800 dark:bg-amber-900/40 dark:text-amber-200" data-testid="nuc-insufficient"
+        title="Can't-tell calls dominate this window: its size mix is not informative">insufficient</span>}</div> },
+  { key: 'nrl', label: 'NRL', title: 'Per-molecule repeat length in the window: median [IQR] · share too short for one',
+    cell: m => <span data-testid="nuc-window-nrl">{m.nrl_quantiles ? `${Math.round(m.nrl_quantiles[2])} [${Math.round(m.nrl_quantiles[1])}–${Math.round(m.nrl_quantiles[3])}]` : '—'}
+      <span className="text-ink-muted"> · {pct(m.too_short_fraction)} short</span></span> },
+  { key: 'segments', label: 'Segments', title: 'Mean share of each molecule\'s window in regular / disordered / undetermined / low-information segments',
+    cell: m => <StackedShares parts={SEGMENT_PARTS.map(p => ({ ...p, value: (m[`${p.key}_fraction` as 'regular_fraction'] ?? 0) as number }))} width={84} testId="nuc-window-seg"
+      title={SEGMENT_PARTS.map(p => `${p.label}: ${pct(m[`${p.key}_fraction` as 'regular_fraction'])}`).join('\n')} /> },
+  { key: 'disrupted', label: 'Missing · undersized', title: 'Missing nucleosomes per molecule · mean undersized share of the window',
+    cell: m => <span>{fmt(m.missing_per_molecule, 2)} · {pct(m.undersized_fraction)}</span> },
+  { key: 'state', label: 'At anchor', title: 'Molecules with a nucleosome over the anchor / open there / not measured', anchor: true,
+    cell: m => <span data-testid="nuc-window-state">{m.state_counts ? `${m.state_counts['1'] ?? 0} / ${m.state_counts['0'] ?? 0} / ${m.state_counts['.'] ?? 0}` : '—'}</span> },
+  { key: 'phase-anchor', label: 'Phasing (anchor)', anchor: true,
+    title: 'Anchor frame: R − null per whole-period bin from the anchor (solid: p < 0.05; tick: best period), then the summary over all bins (* p < 0.05)',
+    cell: (m, _r, o) => <div className="flex items-center gap-1">
+      <PhasingBars bins={m.phasing?.anchor?.bins?.slice(0, -1) ?? []} color={o.color} width={60} height={16} testId="nuc-phasing-anchor" />
+      <span title={m.phasing?.anchor ? `period ${fmt(m.phasing.anchor.P, 0)} bp · ${m.phasing.anchor.n_molecules} molecules` : undefined}>{phasingSummary(m.phasing?.anchor)}</span></div> },
+  { key: 'phase-molecule', label: 'Phasing (molecule)', anchor: true, title: 'Molecule frame: dyad phase relative to each molecule\'s own grid',
+    cell: (m, _r, o) => <div className="flex items-center gap-1">
+      <PhasingBars bins={m.phasing?.molecule?.bins?.slice(0, -1) ?? []} color={o.color} width={60} height={16} testId="nuc-phasing-molecule" />
+      <span title={m.phasing?.molecule ? `period ${fmt(m.phasing.molecule.P, 0)} bp · ${m.phasing.molecule.n_molecules} molecules` : undefined}>{phasingSummary(m.phasing?.molecule)}</span></div> },
+  { key: 'dispersion', label: 'Dispersion σ', anchor: true, title: 'Positional dispersion of the dyads across molecules at the anchor (bp)',
+    cell: m => <span>{m.phasing?.anchor?.dispersion_bp == null ? '—' : `${fmt(m.phasing.anchor.dispersion_bp, 0)} bp`}</span> },
+  { key: 'dephasing', label: 'Dephasing', dephasing: true,
+    title: 'The anchor\'s phase coherence among matched background anchors (matched on marking rate and depth): p(dephased) = share of backgrounds at or below it · backgrounds matched',
+    cell: m => { const dep = m.dephasing; return <span data-testid="nuc-dephasing"
+      title={dep ? [`coherence ${fmt(dep.coherence.value, 3)} (matched background median ${fmt(dep.coherence.background_median, 3)}, ${dep.coherence.n_matched} matched)`,
+        `excess ${fmt(dep.excess.value, 3)} (median ${fmt(dep.excess.background_median, 3)})`, `${dep.n_background} background anchors on this observation`].join('\n') : undefined}>
+      {dep ? `p ${fmt(dep.coherence.p_dephased, 2)} · ${dep.coherence.n_matched}` : '—'}</span>; } },
+];
+
+/** Metrics as rows, observations as columns (DESIGN §6.2): few observations, many metrics, so it fits a side panel. */
 export function WindowView({ observations, results, loading }: {
   observations: NucObservation[]; results: Record<string, NucWindowObservation>; loading: boolean;
 }) {
   const anyAnchor = Object.values(results).some(r => r.metrics?.phasing);
   const anyDephasing = Object.values(results).some(r => r.metrics?.dephasing);
+  const rows = ROWS.filter(r => (!r.anchor || anyAnchor) && (!r.dephasing || anyDephasing));
   return <div className="overflow-x-auto">
     <table className="w-full text-[11px]" data-testid="nuc-window-table">
       <thead className="text-ink-muted">
         <tr>
-          <th className="px-1 text-left">Observation</th>
-          <th className="px-1 text-right" title="Molecules measured over at least 80% of the window · below the low-information floor (left out)">Molecules</th>
-          <th className="px-1 text-left" title="Coarse calls of footprints centred in the window">Class mix</th>
-          <th className="px-1 text-right" title="Per-molecule repeat length in the window: median [IQR] · too short">NRL</th>
-          <th className="px-1 text-left" title="Mean share of each molecule's window in regular / disordered / undetermined / low-information segments">Segments</th>
-          <th className="px-1 text-right" title="Missing nucleosomes per molecule · mean undersized share">Missing · undersized</th>
-          {anyAnchor && <>
-            <th className="px-1 text-right" title="Molecules with a nucleosome over the anchor / open there / not measured">At anchor</th>
-            <th className="px-1 text-left" title="Anchor frame: R − null per whole-period bin (solid: p < 0.05; tick: best period); summary over all bins (* p < 0.05)">Phasing (anchor)</th>
-            <th className="px-1 text-left" title="Molecule frame: dyad phase relative to each molecule's own grid">Phasing (molecule)</th>
-            <th className="px-1 text-right" title="Positional dispersion of the nearest dyads across molecules (bp)">σ</th>
-          </>}
-          {anyDephasing && <th className="px-1 text-right" title="Coherence at the anchor among matched background anchors: p(dephased) = share of backgrounds at or below it; excess the same">Dephasing</th>}
+          <th className="px-1 text-left" />
+          {observations.map(o => <th key={o.obsId} className="px-1 text-left font-normal" data-testid="nuc-window-col" data-obs={o.obsId}>
+            <span className="mr-1 inline-block h-2.5 w-2.5 rounded-sm align-middle" style={{ background: o.color }} />
+            <span className="align-middle text-ink">{o.label}</span>
+            {results[o.obsId]?.anchorNote && <span className="ml-1 text-amber-700 dark:text-amber-300" title={results[o.obsId].anchorNote}>⚠</span>}
+          </th>)}
         </tr>
       </thead>
       <tbody>
-        {observations.map(o => <WindowRow key={o.obsId} obs={o} result={results[o.obsId]} loading={loading} anchorCols={anyAnchor} dephasingCol={anyDephasing} />)}
+        {rows.map((row, i) => <tr key={row.key} className="border-t border-gray-100 align-middle dark:border-gray-800">
+          <th className="whitespace-nowrap px-1 text-left font-normal text-ink-secondary" title={row.title}>{row.label}</th>
+          {observations.map(o => {
+            const r = results[o.obsId];
+            const m = r?.metrics;
+            if (!r) return <td key={o.obsId} className="px-1 text-ink-muted">{i === 0 && loading ? '…' : ''}</td>;
+            if (r.error) return <td key={o.obsId} className="px-1 text-amber-700 dark:text-amber-300" {...(i === 0 ? { 'data-testid': 'nuc-window-error' } : {})}>{i === 0 ? r.error : ''}</td>;
+            if (!m) return <td key={o.obsId} className="px-1 text-ink-muted">{i === 0 ? (r.notComputed ? `${r.notComputed} molecules not computed yet: Compute in view` : 'No molecule covers the window') : ''}</td>;
+            return <td key={o.obsId} className="whitespace-nowrap px-1">{row.cell(m, r, o)}</td>;
+          })}
+        </tr>)}
       </tbody>
     </table>
   </div>;
-}
-
-function WindowRow({ obs, result, loading, anchorCols, dephasingCol }: {
-  obs: NucObservation; result?: NucWindowObservation; loading: boolean; anchorCols: boolean; dephasingCol: boolean;
-}) {
-  const m = result?.metrics;
-  const cols = 5 + (anchorCols ? 4 : 0) + (dephasingCol ? 1 : 0);
-  const mix = m?.class_mix ?? {};
-  const coarse: SharePart[] = COARSE_PARTS.map(p => ({ ...p, value: mix[p.key] ?? 0 }));
-  const segs: SharePart[] = SEGMENT_PARTS.map(p => ({ ...p, value: (m?.[`${p.key}_fraction` as 'regular_fraction'] ?? 0) as number }));
-  const q = m?.nrl_quantiles;
-  const st = m?.state_counts;
-  const dep = m?.dephasing;
-  return <tr className="border-t border-gray-100 align-middle dark:border-gray-800" data-testid="nuc-window-row" data-obs={obs.obsId}>
-    <td className="px-1 text-left">
-      <span className="mr-1 inline-block h-2.5 w-2.5 rounded-sm align-middle" style={{ background: obs.color }} />
-      <span className="align-middle">{obs.label}</span>
-      {result?.anchorNote && <span className="ml-1 text-amber-700 dark:text-amber-300" title={result.anchorNote}>⚠</span>}
-    </td>
-    {result?.error ? <td colSpan={cols} className="px-1 text-left text-amber-700 dark:text-amber-300" data-testid="nuc-window-error">{result.error}</td>
-      : !result ? <td colSpan={cols} className="px-1 text-left text-ink-muted">{loading ? '…' : ''}</td>
-      : !m ? <td colSpan={cols} className="px-1 text-left text-ink-muted">{result.notComputed ? `${result.notComputed} molecules not computed yet: Compute in view` : 'No molecule covers the window'}</td>
-      : <>
-        <td className="whitespace-nowrap px-1 text-right" data-testid="nuc-window-molecules"
-          title={`${m.n_molecules ?? 0} molecules measured${m.excluded_low_information ? `, ${m.excluded_low_information} low-information left out` : ''}${result.notComputed ? `, ${result.notComputed} not computed` : ''}`}>
-          {m.n_molecules ?? 0}{m.excluded_low_information ? <span className="text-ink-muted"> · {m.excluded_low_information} low</span> : null}</td>
-        <td className="px-1 text-left">
-          <div className="flex items-center gap-1">
-            <StackedShares parts={coarse} width={96} testId="nuc-window-mix" />
-            {m.insufficient && <span className="rounded bg-amber-100 px-1 text-[10px] text-amber-800 dark:bg-amber-900/40 dark:text-amber-200" data-testid="nuc-insufficient"
-              title="Can't-tell calls dominate this window: its size mix is not informative">insufficient</span>}
-          </div>
-        </td>
-        <td className="whitespace-nowrap px-1 text-right" data-testid="nuc-window-nrl">{q ? `${Math.round(q[2])} [${Math.round(q[1])}–${Math.round(q[3])}]` : '—'}
-          <span className="text-ink-muted"> · {pct(m.too_short_fraction)}</span></td>
-        <td className="px-1 text-left"><StackedShares parts={segs} width={96} testId="nuc-window-seg" /></td>
-        <td className="whitespace-nowrap px-1 text-right">{fmt(m.missing_per_molecule, 2)} · {pct(m.undersized_fraction)}</td>
-        {anchorCols && <>
-          <td className="whitespace-nowrap px-1 text-right" data-testid="nuc-window-state" title="nucleosome / open / not measured at the anchor">
-            {st ? `${st['1'] ?? 0} / ${st['0'] ?? 0} / ${st['.'] ?? 0}` : '—'}</td>
-          <td className="px-1 text-left"><div className="flex items-center gap-1">
-            <PhasingBars bins={m.phasing?.anchor?.bins?.slice(0, -1) ?? []} color={obs.color} width={72} height={18} testId="nuc-phasing-anchor" />
-            <span title={m.phasing?.anchor ? `period ${fmt(m.phasing.anchor.P, 0)} bp · ${m.phasing.anchor.n_molecules} molecules` : undefined}>{phasingSummary(m.phasing?.anchor)}</span></div></td>
-          <td className="px-1 text-left"><div className="flex items-center gap-1">
-            <PhasingBars bins={m.phasing?.molecule?.bins?.slice(0, -1) ?? []} color={obs.color} width={72} height={18} testId="nuc-phasing-molecule" />
-            <span title={m.phasing?.molecule ? `period ${fmt(m.phasing.molecule.P, 0)} bp · ${m.phasing.molecule.n_molecules} molecules` : undefined}>{phasingSummary(m.phasing?.molecule)}</span></div></td>
-          <td className="whitespace-nowrap px-1 text-right">{fmt(m.phasing?.anchor?.dispersion_bp, 0)}</td>
-        </>}
-        {dephasingCol && <td className="whitespace-nowrap px-1 text-right" data-testid="nuc-dephasing"
-          title={dep ? [`coherence ${fmt(dep.coherence.value, 3)} (matched background median ${fmt(dep.coherence.background_median, 3)}, ${dep.coherence.n_matched} matched)`,
-            `excess ${fmt(dep.excess.value, 3)} (median ${fmt(dep.excess.background_median, 3)})`,
-            `${dep.n_background} background anchors on this observation`].join('\n') : undefined}>
-          {dep ? `p ${fmt(dep.coherence.p_dephased, 2)} · ${dep.coherence.n_matched}` : '—'}</td>}
-      </>}
-  </tr>;
 }

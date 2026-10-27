@@ -99,7 +99,7 @@ test('nucleosome panel: compute in view, a column per panel, layers on the reads
   await expect(page.getByTestId('nuc-selection')).toContainText(/Highlighting [1-9]\d* molecule/, { timeout: 30_000 });
   // Window mode: the view as the window, then an anchor at its centre (phasing in both frames).
   await page.getByTestId('nuc-mode-window').click();
-  await expect(page.getByTestId('nuc-window-row')).toHaveCount(2);
+  await expect(page.getByTestId('nuc-window-col')).toHaveCount(2);
   await expect(page.getByTestId('nuc-window-molecules').first()).toHaveText(/^[1-9]\d*/, { timeout: 60_000 });
   await expect(page.getByTestId('nuc-window-nrl').first()).toHaveText(/\d+ \[\d+–\d+\]/);
   await page.getByTestId('nuc-anchor').selectOption('centre');

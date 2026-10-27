@@ -62,7 +62,9 @@ export function nucObservations(st: PlanState, dark = false): NucObservation[] {
       }
       continue;
     }
-    push({ datasetId: w.dataset_id, panelId: panel.id, stateKey: w.result_key, ...view, obsId: w.result_key, label: short,
+    // A pooled lifted panel gives one window per haplotype: each column names its haplotype.
+    const label = w.lift_hap && !short.toUpperCase().includes(w.lift_hap.toUpperCase()) ? `${short} · ${w.lift_hap}` : short;
+    push({ datasetId: w.dataset_id, panelId: panel.id, stateKey: w.result_key, ...view, obsId: w.result_key, label,
       kind: 'linear', color: w.lift_hap ? liveLiftHaplotypeColor(w.lift_hap, dark) : (ds.color || FALLBACK_COLOR),
       ...(w.lift_hap ? { liftHap: w.lift_hap } : {}), ...(w.strand ? { strand: w.strand } : {}),
       ...(w.read_ids ? { readIds: w.read_ids } : {}) });

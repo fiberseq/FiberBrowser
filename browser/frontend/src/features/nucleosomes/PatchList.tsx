@@ -85,10 +85,20 @@ export function PatchList({ observations, settings, setSettings, onSelect }: {
   }, [rowsKey, obsKey, includeDuplicates]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const scanLive = scanJob && ['queued', 'running', 'cancelling'].includes(scanJob.status);
+  // Live scans read datasets on this genome; a live-lift dataset is scanned in its own assembly (fiberhmm-scan on its
+  // BAM, then open the scan), so it is left out here. Its columns still score every patch with their own molecules.
+  const datasets = useBrowserStore(s => s.datasets);
+  const isLifted = (id: string) => datasets.find(x => x.id === id)?.data_type === 'bam_livelift';
+  const scannable = observationDatasets(observations).filter(id => !isLifted(id));
+  const leftOut = observationDatasets(observations).filter(isLifted);
   const findInView = async () => {
     setError('');
+    if (!scannable.length) {
+      setError('Live-lift datasets are scanned in their own assembly: run fiberhmm-scan on the BAM and open the scan in the Feature hub.');
+      return;
+    }
     try {
-      const job = await submitScan({ datasets: observationDatasets(observations), scope: 'view', chrom: view.chrom, start: view.start, end: view.end,
+      const job = await submitScan({ datasets: scannable, scope: 'view', chrom: view.chrom, start: view.start, end: view.end,
         modules: ['nuc'], include_duplicates: includeDuplicates, ...(settings.parameters ? { parameters: { nuc: settings.parameters } } : {}) });
       useHubJob.getState().track(job);
     } catch (e) { setError(String((e as Error)?.message ?? e)); }
@@ -106,7 +116,7 @@ export function PatchList({ observations, settings, setSettings, onSelect }: {
         <span className="inline-block h-2 w-2 rounded-sm" style={{ background: t.color }} />{t.label}</label>)}
       <button type="button" className="ml-auto rounded border border-line px-1.5 py-0.5 disabled:opacity-50 dark:border-white/10" data-testid="nuc-find-patches"
         disabled={Boolean(scanLive) || !observations.length}
-        title="Run the nuc scan over the view (the Feature hub's live scan, the same engine as fiberhmm-scan): recurrence, phased and fuzzy patches"
+        title={`Run the nuc scan over the view (the Feature hub's live scan, the same engine as fiberhmm-scan): recurrence, phased and fuzzy patches${leftOut.length ? '. Live-lift datasets are scanned in their own assembly (fiberhmm-scan on the BAM); their columns still score every patch' : ''}`}
         onClick={() => { void findInView(); }}>{scanLive ? `Scanning… ${scanJob?.progress?.fraction != null ? `${Math.round(scanJob.progress.fraction * 100)}%` : ''}` : 'Find patches in view'}</button>
       <button type="button" className="rounded border border-line px-1.5 py-0.5 dark:border-white/10" onClick={openHub} data-testid="nuc-open-hub"
         title="Scan a BED file or gene list, or list a scan's patches genome-wide, in the Feature hub">Feature hub…</button>

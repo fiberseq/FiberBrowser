@@ -38,6 +38,12 @@ describe('nucleosome observation planner', () => {
     expect(observationDatasets(obs)).toEqual(['lifted', 'daf', 'native']);
   });
 
+  it('haplotype columns name their haplotype', () => {
+    const obs = nucObservations(state([panel({ id: 'mat', datasetId: 'lifted', stateKey: 'lifted:MAT', liftHap: 'MAT' }),
+      panel({ id: 'pat', datasetId: 'lifted', stateKey: 'lifted:PAT', liftHap: 'PAT' })]));
+    expect(obs.map(o => [o.liftHap, o.label])).toEqual([['MAT', 'Sample A (lifted) · MAT'], ['PAT', 'Sample A (lifted) · PAT']]);
+  });
+
   it('a filtered panel sends its kept reads; an empty filter sends none', () => {
     const st = state([panel({ id: 'nat' }), panel({ id: 'mat', datasetId: 'lifted', stateKey: 'lifted:MAT', liftHap: 'MAT' })],
       { filteredReadIds: { native: new Set(['r1', 'r2']), 'lifted:MAT': new Set() } });
