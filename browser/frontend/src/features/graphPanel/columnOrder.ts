@@ -119,6 +119,7 @@ export function canonicalWalk(topology: GraphTopology, bindingOrder?: readonly s
     const reaches = (j: number, c: number) => {
       const covered = new Set<number>();
       for (let k = j + 1; k < seq.length; k++) {
+        if (!info[k].matched) continue; // an insertion inside the run
         const inv = info[k].all.filter(x => x.inv && x.i > anchor && x.i < c && !claimed.has(x.i));
         if (!inv.length) break;
         for (const x of inv) covered.add(x.i);

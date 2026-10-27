@@ -103,6 +103,15 @@ describe('agy post-merge A, HIGH 1: inverted runs entered at a visit with severa
     expect(v.map(x => x.reverse)).toEqual([false, false, true, false, false, false]);
   });
 
+  it('an insertion inside the run does not end it; a minus-parity carrier walks the same run in its frame', () => {
+    const v = ranks(topo({ ref: ['L+', 'A+', 'C+', 'C-', 'A+', 'R+'], mat: ['L+', 'A-', 'C+', 'I+', 'C-', 'A-', 'R+'] }, { L: 1000, A: 300, C: 50, I: 40, R: 1000 }));
+    expect(v.map(x => x.rank[0])).toEqual([0, 4, 3, 4, 2, 1, 5]);
+    expect(v[3].rank).toEqual([4, 1, 1]);
+    // The inverted tandem, walked as its reverse complement.
+    expect(ranks(topo({ ref: ['L+', 'A+', 'A+', 'R+'], mat: ['R-', 'A+', 'A+', 'L-'] }, { L: 1000, A: 300, R: 1000 })).map(x => x.rank[0]))
+      .toEqual([3, 1, 2, 0]);
+  });
+
   it('an inversion over A B A descends it; a target visit the carrier deletes inside an inversion may be crossed', () => {
     expect(ranks(topo({ ref: ['L+', 'A+', 'B+', 'A+', 'R+'], mat: ['L+', 'A-', 'B-', 'A-', 'R+'] }, { L: 1000, A: 300, B: 400, R: 1000 })).map(v => v.rank[0]))
       .toEqual([0, 3, 2, 1, 4]);
