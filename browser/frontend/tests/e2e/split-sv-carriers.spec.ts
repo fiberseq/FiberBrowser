@@ -232,6 +232,43 @@ test.describe('an SV split into panels: the Carriers with the insert expanded', 
     await expect.poll(() => store(page, s => s.datasets.length)).toBe(1);
     expect(errors).toEqual([]);
   });
+
+  test('a failed insert-expanded build offers Retry, and Retry shows it', async ({ page, server }) => {
+    // Stabilize 2, item 6: the build can stop on the server's time budget ("deadline"); the banner then offers Retry.
+    test.setTimeout(180_000);
+    const errors: string[] = [];
+    page.on('pageerror', e => errors.push(e.message));
+    let failNext = true;
+    await page.route('**/api/alt_allele/open', async route => {
+      if (!failNext) return route.continue();
+      failNext = false;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: false, error: 'deadline' }) });
+    });
+    const firstReads = page.waitForResponse(r => r.url().includes('/api/reads/compact') && r.url().includes('chrSV') && r.ok());
+    await open(page, `${server.baseUrl}/?chr=${VIEW.chrom}&start=${VIEW.start}&end=${VIEW.end}`);
+    await firstReads;
+    await expect.poll(() => page.locator('[data-read-track-loading="true"]').count(), { timeout: 30_000 }).toBe(0);
+    const svTrack = page.locator('canvas[data-testid^="sv-track-canvas-"]');
+    const box = (await svTrack.boundingBox())!;
+    const sidebar = Number(await page.locator('canvas[data-copilot-track="reads"]').first().getAttribute('data-track-sidebar')) || 0;
+    const x = box.x + sidebar + ((INS_POS - VIEW.start) / (VIEW.end - VIEW.start)) * (box.width - sidebar);
+    await page.mouse.click(x, box.y + box.height / 2, { button: 'right' });
+    await page.getByTestId('track-context-menu').getByRole('menuitem', { name: 'Split into panels by this SV' }).click();
+    const dialog = page.getByTestId('split-panels-dialog');
+    await expect(dialog.getByTestId('split-panels-row').first()).toBeVisible({ timeout: 30_000 });
+    await dialog.getByTestId('split-panels-open').click();
+    await expect.poll(() => store(page, s => s.panels.filter((p: any) => p.readSubset).length)).toBe(2);
+    // The build failed: the banner says why and offers Retry; the Carriers panel is not expanded.
+    await expect(page.getByText(/Could not show the insert expanded .*: deadline/)).toBeVisible({ timeout: 30_000 });
+    const retry = page.getByTestId('error-banner-retry');
+    await expect(retry).toHaveText('Retry');
+    expect(await store(page, s => s.panels.some((p: any) => p.readSubset && p.altAllele))).toBe(false);
+    await page.screenshot({ path: test.info().outputPath('retry-offered.png') });
+    await retry.click();
+    await expect(page.getByText(/Could not show the insert expanded/)).toHaveCount(0);
+    await expect.poll(() => store(page, s => s.panels.some((p: any) => p.readSubset && p.altAllele)), { timeout: 90_000 }).toBe(true);
+    expect(errors).toEqual([]);
+  });
 });
 
 test.describe('two SVs at once', () => {
