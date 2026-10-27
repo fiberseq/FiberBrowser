@@ -54,8 +54,10 @@ export const nucWindow = (observations: NucObservation[], window: { chrom: strin
     ...(background.length ? { background } : {}), include_duplicates: includeDuplicates,
   }, signal));
 
+/** What a click selects. `scope: 'patch'`: within a patch, with the patch scores' window (the hull of a lifted
+ * observation's pieces) and measured bases. */
 export type NucCategory = { kind: 'coarse'; name: string } | { kind: 'nrl'; lo: number; hi: number }
-  | { kind: 'segment'; state: string } | { kind: 'event'; name: string };
+  | { kind: 'segment'; state: string; scope?: 'patch' } | { kind: 'event'; name: string; scope?: 'patch' };
 
 /** The read identities of an observation's molecules in a category (what a click highlights). */
 export const nucSelect = (observation: NucObservation, category: NucCategory, includeDuplicates = false) =>

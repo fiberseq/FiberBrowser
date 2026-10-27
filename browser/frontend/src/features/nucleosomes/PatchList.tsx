@@ -158,11 +158,15 @@ export function PatchList({ observations, settings, setSettings, onSelect, revis
                 const sc = scores[o.obsId]?.[r.key];
                 if (!t?.category) {
                   // Phased and fuzzy patches: the scan's own per-dataset values (R − null, coherence of phases).
-                  const group = nucScans.find(x => x.scanId === r.scanId)?.datasets.find(d => d.dataset === o.datasetId)?.scanDataset;
+                  // The scan scores whole datasets: only a column of the whole dataset (no read scope, haplotype or
+                  // strand) shows its value.
+                  const whole = o.kind === 'linear' && !o.readIds && !o.strand && !o.liftHap;
+                  const group = whole ? nucScans.find(x => x.scanId === r.scanId)?.datasets.find(d => d.dataset === o.datasetId)?.scanDataset : undefined;
                   const raw = group ? r.hit.raw?.[group] : undefined;
                   const val = raw?.[r.type === 'phased' ? 'R_minus_null' : 'coherence']?.v ?? null;
                   return <td key={o.obsId} className="px-1 text-right text-ink-secondary" data-testid="nuc-patch-scan-value"
-                    title={r.type === 'phased' ? "The scan's R − null for this dataset" : "The scan's coherence of this dataset's phases (1: all in phase)"}>
+                    title={!whole ? 'The scan scores whole datasets; this column is a subset (reads, haplotype or strand)'
+                      : r.type === 'phased' ? "The scan's R − null for this dataset" : "The scan's coherence of this dataset's phases (1: all in phase)"}>
                     {val == null ? '—' : `${r.type === 'phased' ? 'R−null' : 'coh.'} ${val.toFixed(2)}`}</td>;
                 }
                 if (!sc) return <td key={o.obsId} className="px-1 text-right text-ink-muted">{loading ? '…' : ''}</td>;
@@ -172,7 +176,7 @@ export function PatchList({ observations, settings, setSettings, onSelect, revis
                     title={[`${sc.n ?? 0} molecules measured over at least half the patch`, `fraction ${pct(sc.fraction)} (expected under the shift null ${pct(sc.expected)})`,
                       `p ${sci(sc.p)} · q ${sci(sc.q)}${sc.significant ? ' (recurrent at FDR 5%)' : ''}`, sc.notComputed ? `${sc.notComputed} molecules not computed yet` : '',
                       'click: highlight these molecules'].filter(Boolean).join('\n')}
-                    onClick={() => onSelect({ ...o, chrom: r.hit.chrom, start: r.hit.start, end: r.hit.end }, t.category!)}>
+                    onClick={() => onSelect({ ...o, chrom: r.hit.chrom, start: r.hit.start, end: r.hit.end }, { ...t.category!, scope: 'patch' } as NucCategory)}>
                     {pct(sc.fraction)}<span className="text-ink-muted"> · q {sci(sc.q)}</span></button></td>;
               })}
               <td className="px-1"><button type="button" aria-label="Go to the patch" className="text-ink-muted hover:text-ink" data-testid="nuc-patch-go"

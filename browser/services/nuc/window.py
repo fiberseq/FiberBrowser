@@ -154,13 +154,30 @@ def select_reads(state, obs: dict, category: dict, *, include_duplicates: bool =
     from .inputs import browser_read_policy
     from .observations import SEG_STATES, _overlap
     policy = browser_read_policy(state, include_duplicates=include_duplicates)
-    _source, _recs, _windows, _cfg, cohort, _counts = observation_cohort(state, obs, policy)
+    _source, _recs, windows, cfg, cohort, _counts = observation_cohort(state, obs, policy)
     kind = category.get('kind')
     keys: List[str] = []
     qnames: List[str] = []
+    patch = None
+    if category.get('scope') == 'patch' and kind in ('segment', 'event'):
+        # Within a patch: the patch scores' window (the hull of the projected pieces) and measured bases, so a click
+        # on a score highlights the molecules behind it.
+        from .patches import PATCH_KIND, molecule_track
+        name = category.get('state') if kind == 'segment' else category.get('name')
+        patch = (PATCH_KIND.get(str(name)), window_hull(windows), molecule_track)
+        if patch[0] is None:
+            raise ObservationError(f'No patch kind {name!r}')
     for rec, row in cohort:
         hit = False
-        if kind == 'coarse':
+        if patch is not None:
+            pkind, hull, track = patch
+            if hull is None or row.low_information or not same_contig(row.chrom, hull[0]):
+                continue
+            res = STORE.get_result(rec.path, rec.sha, rec.occ, cfg.config_for(rec.path)) if cfg is not None else None
+            measured, kinds = track(row, res[0] if res else None, rec.blocks)
+            inside = [(max(a, hull[1]), min(b, hull[2])) for a, b in measured if min(b, hull[2]) > max(a, hull[1])]
+            hit = any(min(b, d) > max(a, c) for a, b in inside for c, d in kinds[pkind])
+        elif kind == 'coarse':
             name = category.get('name')
             for ms, ml, _a, _b, q, _n in row.groups.get('nucsz') or ():
                 if q and _overlap(rec.molwins, ms + ml // 2, ms + ml // 2):

@@ -60,7 +60,7 @@ describe('patch list', () => {
     const scored = requests.find(r => r.url.includes('/api/nuc/patches'))!.body;
     expect(scored.patches.map((p: { type: string }) => p.type)).toEqual(['regular', 'missing']);
     act(() => (rowsEls[0].querySelector('[data-testid="nuc-patch-score"] button') as HTMLElement).click());
-    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ obsId: 'a', start: 12_000, end: 14_000 }), { kind: 'segment', state: 'regular' });
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ obsId: 'a', start: 12_000, end: 14_000 }), { kind: 'segment', state: 'regular', scope: 'patch' });
     // Codex E1: new outputs (a compute, a scan, dataset content) or a changed read scope score again.
     const scoredRequests = () => requests.filter(r => r.url.includes('/api/nuc/patches')).length;
     const before = scoredRequests();
@@ -78,5 +78,21 @@ describe('patch list', () => {
     const submitted = requests.find(r => r.url.includes('/api/scan/jobs'))!.body;
     expect(submitted).toMatchObject({ datasets: ['dA', 'dB'], scope: 'view', chrom: 'chr3', start: 10_000, end: 40_000, modules: ['nuc'],
       parameters: { nuc: { calibration: 'self' } } });
+  });
+});
+
+describe('patch list: scoped columns', () => {
+  it('a column of part of a dataset never shows the scan\'s whole-dataset value (Codex E2-3)', async () => {
+    useBrowserStore.setState({ chrom: 'chr3', start: 10_000, end: 40_000, showDuplicateReads: false } as never);
+    useHubData.setState({ scans: [scan] });
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => new Response(JSON.stringify(String(input).includes('/hits')
+      ? { hits: [hit('p1', 'phased', 30_000, { raw: { dataset_1: { R_minus_null: { v: 0.31 } } } })], truncated: false }
+      : { fdr: 0.05, observations: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+    const scoped = [obs[0], { ...obs[0], obsId: 'a2', readIds: [] as string[] }];
+    await act(async () => root.render(<PatchList observations={scoped} settings={{}} setSettings={() => { }} onSelect={() => { }} revision="r1" />));
+    await vi.waitFor(() => expect(container.querySelectorAll('[data-testid="nuc-patch-scan-value"]').length).toBe(2), { timeout: 3000 });
+    expect([...container.querySelectorAll('[data-testid="nuc-patch-scan-value"]')].map(e => e.textContent)).toEqual(['R−null 0.31', '—']);
+    act(() => root.unmount()); container.remove(); spy.mockRestore(); useHubData.setState({ scans: [] });
   });
 });

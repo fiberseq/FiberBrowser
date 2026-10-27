@@ -31,12 +31,15 @@ export function MiniHistogram({ edges, counts, color, width = 120, height = 26, 
 
 export interface SharePart { key: string; label: string; value: number; color: string; hatched?: boolean }
 
-/** Shares as one stacked bar; `onPart` makes each part a selection target. Hatched parts are never dropped. */
-export function StackedShares({ parts, width = 112, onPart, testId, title }: {
-  parts: SharePart[]; width?: number; onPart?: (key: string) => void; testId?: string; title?: string;
+/** Shares as one stacked bar; `onPart` makes each part a selection target. Hatched parts are never dropped.
+ * `denominator`: the whole the values are shares of (default: their sum); with fractions that may sum below one
+ * (a window with unsegmented bases) pass 1, and the remainder stays empty. */
+export function StackedShares({ parts, width = 112, onPart, testId, title, denominator }: {
+  parts: SharePart[]; width?: number; onPart?: (key: string) => void; testId?: string; title?: string; denominator?: number;
 }) {
-  const total = parts.reduce((a, p) => a + (p.value || 0), 0);
-  if (!total) return <span className="text-ink-muted" data-testid={testId}>—</span>;
+  const sum = parts.reduce((a, p) => a + (p.value || 0), 0);
+  const total = denominator && denominator > 0 ? Math.max(denominator, sum) : sum;
+  if (!sum) return <span className="text-ink-muted" data-testid={testId}>—</span>;
   return <div className="flex h-3 overflow-hidden rounded-sm border border-line dark:border-white/10" style={{ width }} data-testid={testId}
     title={title ?? parts.map(p => `${p.label}: ${(p.value / total * 100).toFixed(0)}%`).join('\n')}>
     {parts.map(p => p.value ? <span key={p.key} role={onPart ? 'button' : undefined} tabIndex={onPart ? 0 : undefined}

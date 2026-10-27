@@ -135,3 +135,18 @@ def test_a_window_across_an_insertion_keeps_every_projected_piece():
     assert window_hull([('h1', 0, 1000), ('h2', 0, 3000), ('h1', 5000, 5500)]) == ('h2', 0, 3000)
     assert window_hull([]) is None
     assert same_contig('chr3', '3') and not same_contig('chr3', 'chr13')
+
+
+def test_a_patch_click_selects_the_molecules_behind_its_score(computed, scan_dir):
+    """Codex E2-2: selection within a patch uses the patch scores' window and measured bases."""
+    from services.nuc.patches import patch_scores
+    from services.nuc.window import select_reads
+    obs = {**OBS, 'start': 0, 'end': LENGTH}
+    hits = [h for h in _scan_patches(scan_dir, computed) if h['typeId'] == 'nuc.patch.regular']
+    assert hits
+    h = hits[0]
+    score = patch_scores(computed, [obs], [dict(key='k', type='regular', chrom=h['chrom'], start=h['start'], end=h['end'])])
+    got = score['observations'][0]['patches']['k']
+    scoped = {**obs, 'chrom': h['chrom'], 'start': h['start'], 'end': h['end']}
+    sel = select_reads(computed, scoped, dict(kind='segment', state='regular', scope='patch'))
+    assert got['fraction'] > 0 and 0 < len(sel['readIds']) <= got['n'] + 50

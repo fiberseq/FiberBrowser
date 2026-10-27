@@ -105,7 +105,8 @@ const ROWS: MetricRow[] = [
     cell: m => <span data-testid="nuc-window-nrl">{m.nrl_quantiles ? `${Math.round(m.nrl_quantiles[2])} [${Math.round(m.nrl_quantiles[1])}–${Math.round(m.nrl_quantiles[3])}]` : '—'}
       <span className="text-ink-muted"> · {pct(m.too_short_fraction)} short</span></span> },
   { key: 'segments', label: 'Segments', title: 'Mean share of each molecule\'s window in regular / disordered / undetermined / low-information segments',
-    cell: m => <StackedShares parts={SEGMENT_PARTS.map(p => ({ ...p, value: (m[`${p.key}_fraction` as 'regular_fraction'] ?? 0) as number }))} width={84} testId="nuc-window-seg"
+    // FiberHMM's window fractions are shares of the whole window: unsegmented bases stay as the empty remainder.
+    cell: m => <StackedShares parts={SEGMENT_PARTS.map(p => ({ ...p, value: (m[`${p.key}_fraction` as 'regular_fraction'] ?? 0) as number }))} width={84} testId="nuc-window-seg" denominator={1}
       title={SEGMENT_PARTS.map(p => `${p.label}: ${pct(m[`${p.key}_fraction` as 'regular_fraction'])}`).join('\n')} /> },
   { key: 'disrupted', label: 'Missing · undersized', title: 'Missing nucleosomes per molecule · mean undersized share of the window',
     cell: m => <span>{fmt(m.missing_per_molecule, 2)} · {pct(m.undersized_fraction)}</span> },

@@ -121,6 +121,12 @@ describe('views', () => {
       { kind: 'segment', state: 'disordered' }, { kind: 'event', name: 'missing' }]);
   });
 
+  it('window: segment fractions below one keep the unsegmented remainder (Codex E2-1)', async () => {
+    const result = { obsId: 'o1', datasetId: 'd1', molecules: 3, metrics: { n_molecules: 3, regular_fraction: 0.25, disordered_fraction: 0, undetermined_fraction: 0, low_information_fraction: 0 } } as NucWindowObservation;
+    await act(async () => root.render(<WindowView observations={[obs]} results={{ o1: result }} loading={false} />));
+    expect((container.querySelector('[data-testid="nuc-window-seg-regular"]') as HTMLElement).style.width).toBe('25%');
+  });
+
   it('window: FiberHMM\'s multi3+ class counts as multi (3+) (Codex E4)', () => {
     expect(classMixCount({ mono: 1, 'multi3+': 9 }, 'multi3')).toBe(9);
     expect(classMixCount({ mono: 1, 'multi3+': 9 }, 'mono')).toBe(1);
@@ -158,5 +164,8 @@ describe('views', () => {
     expect(container.querySelector('[data-testid="nuc-phasing-anchor"]')).not.toBeNull();
     expect(container.textContent).toContain('0.15*');
     expect(container.querySelector('[data-testid="nuc-dephasing"]')!.textContent).toBe('p 0.10 · 9');
+    // Window segment fractions are shares of the whole window (0.6 + 0.1 + 0.3 = 1 here); below one the rest stays empty.
+    const reg = container.querySelector('[data-testid="nuc-window-seg-regular"]') as HTMLElement;
+    expect(reg.style.width).toBe('60%');
   });
 });
