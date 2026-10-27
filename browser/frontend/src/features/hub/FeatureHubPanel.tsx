@@ -17,10 +17,13 @@ import { useHubJob } from './hubJob';
 import { asAnchors, asClusterRegions, asFilter, goToHits } from './actions';
 import { sendToNucleosomeWindow } from '../nucleosomes/handoff';
 import { ScanDialog } from './ScanDialog';
+import { columnPathStatus, displaySpan, graphText, liftChip, liftText } from './frames';
+import { matchHits } from './matching';
+import { useGraphStatusStore } from '../graphPanel/statusStore';
 import type { FeatureHit, FeatureSet, HitValue } from './types';
 
-interface Row { set: FeatureSet; hit: FeatureHit; role: 'prevalence' | 'strength' | null }
-interface Column { key: string; label: string; colour?: string; kind: string }
+interface Row { set: FeatureSet; hit: FeatureHit; role: 'prevalence' | 'strength' | null; key: string; matches: string[] }
+interface Column { key: string; label: string; colour?: string; kind: string; datasetId?: string; hap?: string }
 
 const fmt = (v: number | null | undefined, kind?: string) => {
   if (v == null || !Number.isFinite(v)) return '';
@@ -49,6 +52,14 @@ function maxPrevalence(row: Row): number | null {
 }
 
 const locus = (h: { chrom: string; start: number; end: number; anchor: number }) => `${h.chrom}:${(h.anchor + 1).toLocaleString()}`;
+const rowKey = (set: FeatureSet, hit: FeatureHit) => `${set.setId}|${hit.hitId}`;
+/** Sort position: where the hit is on this genome (a hit that can't be placed here sorts last). */
+const placeOf = (h: FeatureHit) => displaySpan(h)?.start ?? Number.MAX_SAFE_INTEGER;
+const CHIP_TONE = {
+  ok: 'bg-sky-50 text-sky-800 dark:bg-sky-900/30 dark:text-sky-200',
+  warn: 'bg-amber-50 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200',
+  muted: 'bg-violet-50 text-violet-800 dark:bg-violet-900/30 dark:text-violet-200',
+};
 const sameSel = (a: HubSelected, set: FeatureSet, hit: FeatureHit) => a.setId === set.setId && a.hitId === hit.hitId;
 
 export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
@@ -80,12 +91,14 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
   // A scan's columns follow its bindings: they change when datasets open or close.
   const scanKey = scans.map(s => `${s.scanId}:${s.manifestDigest}:${s.datasets.map(d => `${d.scanDataset}=${d.status}:${d.dataset ?? ''}`).join(',')}`).join('|');
   const datasetKey = datasets.map(d => `${d.id}:${(d.paths ?? [d.path]).join(',')}`).join('|');
+  // Graph columns come with the hits: registering or removing a package reads them again.
+  const graphKey = useGraphStatusStore(s => (s.status?.registrations ?? []).map(r => `${r.id}@${r.revisions.package}`).join(','));
   useEffect(() => { if (hub.scans.length) void refreshScans(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [datasetKey]);
   useEffect(() => {
     const t = setTimeout(() => { void loadScanHits(view, hub.ui.hiddenSets); }, 250);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, hidden, scanKey]);
+  }, [view, hidden, scanKey, graphKey]);
   // A finished live scan: its hits.
   const jobDone = job && !['queued', 'running', 'cancelling'].includes(job.status) ? job.job_id + job.status : '';
   useEffect(() => { if (jobDone) void loadScanHits(view, hub.ui.hiddenSets); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [jobDone]);
@@ -111,8 +124,8 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
         const hits = set.source.kind === 'inline' ? set.source.hits : [];
         if (!hits.some(h => h.values?.[g.id])) continue;
         seen.add(g.id);
-        const colour = g.kind === 'haplotype' ? liveLiftHaplotypeColor(g.label, dark) : undefined;
-        extra.push({ key: g.id, label: g.label, kind: g.kind, colour });
+        const colour = g.kind === 'haplotype' ? liveLiftHaplotypeColor(g.hap ?? g.label, dark) : undefined;
+        extra.push({ key: g.id, label: g.label, kind: g.kind, colour, ...(g.datasetId ? { datasetId: g.datasetId } : {}), ...(g.hap ? { hap: g.hap } : {}) });
       }
     }
     extra.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'dataset' ? -1 : 1)
@@ -120,14 +133,22 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
     return [...out, ...extra];
   }, [visible, datasets, dark]);
 
+  // Hits of one feature in several frames (a scan here and a lifted scan of an assembly; MAT and PAT): DESIGN §5.4.
+  const matches = useMemo(() => matchHits(visible.flatMap(set => (set.source.kind === 'inline' ? set.source.hits : [])
+    .map(hit => ({ ...hit, key: rowKey(set, hit), setId: set.setId })))), [visible]);
+  const byKey = useMemo(() => new Map(visible.flatMap(set => (set.source.kind === 'inline' ? set.source.hits : []).map(hit => [rowKey(set, hit), { set, hit }] as const))), [visible]);
   const rows: Row[] = useMemo(() => {
     const out: Row[] = [];
     for (const set of visible) {
       if (ui.typeFilter && set.typeId !== ui.typeFilter) continue;
       const role = roleOf(set);
-      for (const hit of set.source.kind === 'inline' ? set.source.hits : []) out.push({ set, hit, role });
+      for (const hit of set.source.kind === 'inline' ? set.source.hits : []) {
+        const key = rowKey(set, hit);
+        out.push({ set, hit, role, key, matches: matches.get(key) ?? [] });
+      }
     }
-    const filtered = ui.minPrevalence == null ? out : out.filter(r => (maxPrevalence(r) ?? -1) >= ui.minPrevalence!);
+    const shared = ui.sharedOnly ? out.filter(r => r.matches.length > 0) : out;
+    const filtered = ui.minPrevalence == null ? shared : shared.filter(r => (maxPrevalence(r) ?? -1) >= ui.minPrevalence!);
     const delta = (r: Row) => {
       if (!ui.compare) return null;
       const a = valueOf(r, ui.compare[0])?.v, b = valueOf(r, ui.compare[1])?.v;
@@ -139,15 +160,15 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
         case 'strength': return r.hit.values?.all?.strength?.v ?? r.hit.scores.strength ?? -Infinity;
         case 'delta': return delta(r) ?? -Infinity;
         case 'label': return r.hit.label ?? '';
-        default: return r.hit.start;
+        default: return placeOf(r.hit);
       }
     };
     const dir = ui.sort.dir === 'desc' ? -1 : 1;
     return filtered.sort((a, b) => {
       const ka = key(a), kb = key(b);
-      return (ka < kb ? -1 : ka > kb ? 1 : 0) * dir || a.hit.start - b.hit.start || a.hit.hitId.localeCompare(b.hit.hitId);
+      return (ka < kb ? -1 : ka > kb ? 1 : 0) * dir || placeOf(a.hit) - placeOf(b.hit) || a.hit.hitId.localeCompare(b.hit.hitId);
     });
-  }, [visible, ui]);
+  }, [visible, ui, matches]);
 
   const selected = hub.selected;
   const isSelected = (r: Row) => selected.some(x => sameSel(x, r.set, r.hit));
@@ -250,6 +271,7 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
             {experimental && <span className="rounded bg-amber-100 px-1 text-[10px] text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">experimental</span>}
             {set.status !== 'complete' && <span className="rounded bg-gray-100 px-1 text-[10px] text-gray-600 dark:bg-white/10 dark:text-gray-300">{set.status}</span>}
             {set.note && <span className="truncate text-[11px] text-amber-700 dark:text-amber-300" title={set.note}>{set.note}</span>}
+            {scanHitsBySet[set.setId]?.note && <span className="truncate text-[11px] text-amber-700 dark:text-amber-300" title={scanHitsBySet[set.setId]!.note} data-testid="hub-set-note">{scanHitsBySet[set.setId]!.note}</span>}
             <span className="ml-auto truncate text-[11px] text-ink-muted" title={set.provenance.summary}>{set.provenance.producer === 'browser' ? set.provenance.module : (set as { scan?: { label: string } }).scan?.label ?? set.provenance.module}</span>
           </label>;
         })}
@@ -273,6 +295,9 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
             <option value="label:asc">Sort: label</option>
             {ui.compare && <option value="delta:desc">Sort: Δ</option>}
           </select>
+          <label className="inline-flex items-center gap-1 text-[11px]" title="Only hits found again in another frame or set: the same feature in this genome's scan and a lifted scan of an assembly, or on both haplotypes">
+            <input type="checkbox" checked={Boolean(ui.sharedOnly)} onChange={e => setUi({ sharedOnly: e.target.checked })} data-testid="hub-shared-only" />Matched only
+          </label>
           <select className="input-tool min-h-0 rounded px-1.5 py-0.5 text-[11px]" aria-label="Compare" data-testid="hub-compare" value={ui.compare ? ui.compare.join('|') : ''}
             onChange={e => setUi({ compare: e.target.value ? e.target.value.split('|') as [string, string] : null })}>
             <option value="">Compare: off</option>
@@ -297,7 +322,7 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
                 const sel = isSelected(r);
                 const kind = roleKind(r.set, r.role);
                 const d = ui.compare ? (() => { const a = valueOf(r, ui.compare![0])?.v, b = valueOf(r, ui.compare![1])?.v; return a != null && b != null ? a - b : null; })() : null;
-                return <HitRows key={id} row={r} selected={sel} expanded={expanded === id} columns={columns} kind={kind} delta={ui.compare ? d : undefined}
+                return <HitRows key={id} row={r} selected={sel} expanded={expanded === id} columns={columns} kind={kind} delta={ui.compare ? d : undefined} byKey={byKey}
                   onClick={e => click(r, e.shiftKey || e.metaKey || e.ctrlKey)} onToggle={() => setExpanded(expanded === id ? null : id)} />;
               })}
               {!rows.length && <tr><td colSpan={columns.length + 5} className="px-2 py-2 text-ink-secondary">No hits in view{ui.minPrevalence != null || ui.typeFilter ? ' with these filters' : ''}.</td></tr>}
@@ -332,7 +357,7 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
         <div className="text-[11px] font-medium text-ink-secondary">Anchor sets</div>
         {hub.anchors.map(a => <div key={a.id} className="flex items-center gap-2 text-[11px]" data-testid="hub-anchor-set">
           <span>{a.label}</span><span className="text-ink-muted">{a.anchors.length} anchor{a.anchors.length === 1 ? '' : 's'}</span>
-          <button type="button" className="text-indigo-700 hover:underline dark:text-indigo-300" onClick={() => setNotice(goToHits(a.anchors.map(p => ({ chrom: p.chrom, start: p.start ?? p.pos, end: p.end ?? p.pos + 1, frame: p.frame }))) ?? '')}>Go to</button>
+          <button type="button" className="text-indigo-700 hover:underline dark:text-indigo-300" onClick={() => setNotice(goToHits(a.anchors.map(p => ({ chrom: p.chrom, start: p.start ?? p.pos, end: p.end ?? p.pos + 1, frame: p.source ? undefined : p.frame }))) ?? '')}>Go to</button>
           <button type="button" className="ml-auto text-ink-muted hover:underline" onClick={() => setHub(h => ({ anchors: h.anchors.filter(x => x.id !== a.id) }))}>Remove</button>
         </div>)}
       </section>}
@@ -341,26 +366,47 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
   </AnalysisPanelShell>;
 }
 
-function HitRows({ row, selected, expanded, columns, kind, delta, onClick, onToggle }: {
+function HitRows({ row, selected, expanded, columns, kind, delta, onClick, onToggle, byKey }: {
   row: Row; selected: boolean; expanded: boolean; columns: Column[]; kind?: string; delta?: number | null;
-  onClick: (e: React.MouseEvent) => void; onToggle: () => void;
+  onClick: (e: React.MouseEvent) => void; onToggle: () => void; byKey: Map<string, { set: FeatureSet; hit: FeatureHit }>;
 }) {
   const { set, hit } = row;
   const ref = useRef<HTMLTableRowElement>(null);
+  const dark = useBrowserStore(s => s.darkMode);
+  const here = displaySpan(hit);
+  const chip = liftChip(hit);
+  const hap = hit.frame?.kind === 'source' ? (hit.frame.hapLabel ?? hit.frame.hap) : undefined;
+  const hover = [liftText(hit), graphText(hit.graph)].filter(Boolean).join('\n');
+  const matched = row.matches.map(k => byKey.get(k)).filter((m): m is { set: FeatureSet; hit: FeatureHit } => Boolean(m));
+  const matchText = matched.map(m => `${m.set.type.label} · ${m.hit.frame?.kind === 'source' ? (m.hit.frame.hapLabel ?? m.hit.frame.contig) : 'this genome'}`
+    + ` · ${(m.set as { scan?: { label: string } }).scan?.label ?? m.set.provenance.module} · ${(() => { const t = displaySpan(m.hit); return t ? locus(t) : locus(m.hit); })()}`).join('\n');
   return <>
     <tr ref={ref} className={`cursor-pointer border-t border-gray-100 dark:border-gray-800 ${selected ? 'bg-indigo-50 dark:bg-indigo-950/40' : 'hover:bg-gray-50 dark:hover:bg-white/5'}`}
-      onClick={onClick} data-testid="hub-row" data-selected={selected ? 'true' : 'false'} data-type={hit.typeId}>
+      onClick={onClick} data-testid="hub-row" data-selected={selected ? 'true' : 'false'} data-type={hit.typeId}
+      data-lift={hit.lift?.status ?? ''} data-hap={hap ?? ''} title={hover || undefined}>
       <td className="px-1 text-left"><span className="rounded bg-gray-100 px-1 text-[10px] text-gray-700 dark:bg-white/10 dark:text-gray-200">{hit.typeId}</span></td>
-      <td className="px-1 text-left">{locus(hit)}{hit.end <= hit.start ? ' ⋮' : ''}
+      <td className="whitespace-nowrap px-1 text-left" data-testid="hub-row-locus">
+        {here ? locus(here) : locus(hit)}{here ? (here.end <= here.start ? ' ⋮' : '') : ''}
+        {hap && <span className="ml-1 text-[10px] font-semibold" style={{ color: liveLiftHaplotypeColor(hap, dark) }}>{hap}</span>}
+        {chip && <span className={`ml-1 rounded px-1 text-[10px] ${CHIP_TONE[chip.tone]}`} data-testid="hub-lift-chip" title={hover}>{chip.text}</span>}
+        {matched.length > 0 && <span className="ml-1 rounded bg-emerald-50 px-1 text-[10px] text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200"
+          data-testid="hub-match-chip" title={`The same feature in another frame or set:\n${matchText}`}>≡ {matched.length}</span>}
         {hit.flags?.includes('open_end') && <span className="ml-1 rounded bg-amber-100 px-1 text-[10px] text-amber-800 dark:bg-amber-900/40 dark:text-amber-200"
           title="At the edge of the scanned units: a scan reaching further may change this hit (fiberhmm-scan open_end)"
-          data-testid="hub-row-open-end">open end</span>}</td>
+          data-testid="hub-row-open-end">open end</span>}
+      </td>
       <td className="max-w-[10rem] truncate px-1 text-left" title={hit.label}>{hit.label}</td>
       {columns.map(c => {
         const v = row.role ? hit.values?.[c.key]?.[row.role] : undefined;
         const inGroups = c.key === 'all' || set.groups.some(g => g.id === c.key);
         // A value; empty: a column of the set without a value here (not measured, or no value of this kind);
-        // '—': a column the set doesn't have (not scanned there). Never a made-up 0.
+        // 'absent': the column's path lacks the hit's sequence (graph columns: an insertion only some haplotypes
+        // carry); '—': a column the set doesn't have (not scanned there). Never a made-up 0.
+        const path = v?.v == null && c.key !== 'all' ? columnPathStatus(hit.graph, c) : undefined;
+        if (path === 'absent') {
+          return <td key={c.key} className="px-1 text-right text-[10px] italic text-ink-muted" data-testid="hub-cell-absent"
+            title={`${c.label} lacks this sequence (graph columns): absent, not "not scanned"`}>absent</td>;
+        }
         return <td key={c.key} className="px-1 text-right" title={v?.n != null ? `n = ${v.n}${v.lo != null ? ` · lower bound ${fmt(v.lo, kind)}` : ''}` : undefined}>
           {v?.v != null ? fmt(v.v, kind) : inGroups ? '' : '—'}
         </td>;
@@ -372,7 +418,13 @@ function HitRows({ row, selected, expanded, columns, kind, delta, onClick, onTog
     {expanded && <tr className="bg-gray-50/60 dark:bg-white/5" data-testid="hub-row-detail">
       <td colSpan={columns.length + 5} className="px-2 py-1">
         <div className="space-y-1">
-          <div><strong>{set.type.label}</strong> {hit.label} · {hit.chrom}:{(hit.start + 1).toLocaleString()}{hit.end > hit.start ? `-${hit.end.toLocaleString()}` : ' (insertion boundary)'}</div>
+          <div><strong>{set.type.label}</strong> {hit.label} · {hit.chrom}:{(hit.start + 1).toLocaleString()}{hit.end > hit.start ? `-${hit.end.toLocaleString()}` : ' (insertion boundary)'}{hap ? ` (${hap})` : ''}</div>
+          {hit.lift && <div data-testid="hub-row-lift">{liftText(hit)}</div>}
+          {hit.graph && <div className="text-ink-muted" data-testid="hub-row-graph">{graphText(hit.graph)}</div>}
+          {matched.length > 0 && <div data-testid="hub-row-matches">Same feature: {matched.map(m => {
+            const t = displaySpan(m.hit);
+            return `${(m.set as { scan?: { label: string } }).scan?.label ?? m.set.provenance.module}${m.hit.frame?.kind === 'source' ? ` ${m.hit.frame.hapLabel ?? ''}` : ''} ${m.hit.label ?? ''} at ${t ? locus(t) : locus(m.hit)}`;
+          }).join('; ')}</div>}
           <div className="text-ink-muted">{set.provenance.summary}</div>
           {set.type.stateRule && <div className="text-ink-muted">States: {set.type.stateRule}</div>}
           <div className="flex flex-wrap gap-x-3">
@@ -381,7 +433,7 @@ function HitRows({ row, selected, expanded, columns, kind, delta, onClick, onTog
             </span>)}
           </div>
           <div className="flex gap-1">
-            <AnalysisButton onClick={() => { goToHits([hit]); }} disabled={hit.frame?.kind === 'source'} title={hit.frame?.kind === 'source' ? 'In another assembly\'s coordinates: lifting hits onto this genome comes later' : undefined} data-testid="hub-row-goto">Go to</AnalysisButton>
+            <AnalysisButton onClick={() => { goToHits([hit]); }} disabled={!here} title={!here ? 'In another assembly, and it doesn\'t lift onto this genome' : undefined} data-testid="hub-row-goto">Go to</AnalysisButton>
             {hit.link && <AnalysisButton onClick={() => useBrowserStore.getState().openAnalysisPanel(hit.link!.panel)}>Open in its panel</AnalysisButton>}
             {(!hit.frame || hit.frame.kind === 'linear' || hit.frame.kind === 'lifted') && <AnalysisButton data-testid="hub-row-nuc-window"
               title="Measure nucleosomes around this hit in the Nucleosomes panel's window mode"

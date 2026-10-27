@@ -8,6 +8,7 @@ import { registerAnalysisPanel } from '../../plugins/registry';
 import { registerHubState } from './hubState';
 import { registerCoreHubProviders } from './providers';
 import { FeatureHubIcon } from './icon';
+import { installHubOutlines } from './hubOutlines';
 
 const Panel = lazy(() => import('./FeatureHubPanel').then(m => ({ default: m.FeatureHubPanel })));
 let done = false;
@@ -17,6 +18,7 @@ export function registerFeatureHub(): void {
   done = true;
   registerHubState();
   registerCoreHubProviders();
+  installHubOutlines();
   registerAnalysisPanel({
     contentType: 'feature-hub', label: 'Feature hub', shortLabel: 'Hub', headerColor: '#4f46e5', component: Panel,
     icon: FeatureHubIcon, group: 'analysis', stripOrder: 5.4, singleton: true, minUsableWidth: 320,

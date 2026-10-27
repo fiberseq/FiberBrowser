@@ -16,12 +16,23 @@ import { selectionRefs, type HubSelected } from './hubState';
 import { kindOfType } from './kinds';
 import type { AnchorSet, Frame } from './types';
 import { clusterBasis } from '../../utils/clusterTargets';
+import { displaySpan, inThisGenome, regionOf, type Placeable } from './frames';
 
-const ZERO_WIDTH_PAD = 25;
+/** An anchor in this genome: a lifted hit is anchored where it lifted (or at its insertion's junction), keeping its
+ * source coordinates and lift status; a hit that can't be placed here keeps its own frame and coordinates. */
+function anchorOf(h: HubSelected): AnchorSet['anchors'][number] {
+  const base = { ...(h.strand ? { strand: h.strand } : {}), ...(h.label ? { label: h.label } : {}), hitId: h.hitId };
+  const t = !inThisGenome(h) ? h.target : undefined;
+  if (t) {
+    return { chrom: t.chrom, pos: t.anchor, start: t.start, end: t.end, ...base,
+      ...(h.frame ? { frame: h.frame } : {}), source: { chrom: h.chrom, start: h.start, end: h.end },
+      ...(h.lift ? { lift: h.lift } : {}), ...(t.insertion ? { insertion: true } : {}) };
+  }
+  return { chrom: h.chrom, pos: h.anchor, ...base, start: h.start, end: h.end, ...(h.frame ? { frame: h.frame } : {}) };
+}
 
 export function newAnchorSet(selected: HubSelected[], label?: string): AnchorSet {
-  const anchors = selected.map(h => ({ chrom: h.chrom, pos: h.anchor, ...(h.strand ? { strand: h.strand } : {}),
-    ...(h.label ? { label: h.label } : {}), hitId: h.hitId, start: h.start, end: h.end, ...(h.frame ? { frame: h.frame } : {}) }));
+  const anchors = selected.map(anchorOf);
   const types = [...new Set(selected.map(h => h.typeId))];
   return {
     id: `anchors-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
@@ -40,17 +51,19 @@ export function asAnchors(selected: HubSelected[], label?: string): string | nul
   return null;
 }
 
-/** The selection's intervals in the main view, as peak regions (zero-width hits get a small window). */
-/** Hits in this genome's coordinates (a scan of another assembly lists its hits there until they are lifted, G1). */
-export const onThisGenome = (h: { frame?: Frame }) => !h.frame || h.frame.kind === 'linear' || h.frame.kind === 'lifted';
+/** Hits placed on this genome: in its coordinates, or lifted onto it (a source-frame hit that lifted, or sits at an
+ * insertion's junction, G1). An unmapped hit of another assembly is not. */
+export const onThisGenome = (h: Placeable | { frame?: Frame }) => ('chrom' in h ? displaySpan(h as Placeable) !== null : inThisGenome(h));
 
+/** The selection's intervals in the main view, as peak regions (zero-width hits and insertion junctions get a small
+ * window: in graph mode a region holding an insertion's junction clusters on the inserted columns). */
 export function clusterRegionsOf(selected: HubSelected[]): { start: number; end: number; mode: string; label?: string }[] {
   const s = useBrowserStore.getState();
   const out = [];
   for (const h of selected) {
-    if (!onThisGenome(h) || !sameChrom(h.chrom, s.chrom) || h.end < s.start || h.start > s.end) continue;
-    const start = h.end > h.start ? h.start : h.start - ZERO_WIDTH_PAD;
-    const end = h.end > h.start ? h.end : h.start + ZERO_WIDTH_PAD;
+    const t = displaySpan(h);
+    if (!t || !sameChrom(t.chrom, s.chrom) || t.end < s.start || t.start > s.end) continue;
+    const { start, end } = regionOf(t);
     const ref = { kind: kindOfType(h.typeId), source: h.setId, id: h.hitId } as FeatureRef;
     const ds = h.datasets?.[0];
     const layers = (s.datasets.find(d => d.id === ds)?.available_layers ?? {}) as Record<string, unknown>;
@@ -67,7 +80,7 @@ export function clusterRegionsOf(selected: HubSelected[]): { start: number; end:
 export async function asClusterRegions(selected: HubSelected[], run = true): Promise<string | null> {
   const regions = clusterRegionsOf(selected);
   if (!regions.length) {
-    if (selected.length && !selected.some(onThisGenome)) return 'These hits are in another assembly\'s coordinates: lifting them onto this genome comes later.';
+    if (selected.length && !selected.some(onThisGenome)) return 'These hits are in another assembly and don\'t lift onto this genome.';
     return selected.length ? 'None of the selected hits is in the main view: go to them first.' : 'Select hits first.';
   }
   // One region per span (an NFR and its full-span variant, two insertions at one boundary): a layer mode wins over
@@ -143,10 +156,13 @@ export async function asFilter(selected: HubSelected[], mode: FeatureFilterMode 
   return left ? `Filtered on ${usable.length} hit${usable.length === 1 ? '' : 's'}; ${left} without per-read states left out.` : null;
 }
 
-/** Centre the main view on hits (the view's width, or their span with a margin). */
-export function goToHits(all: Array<{ chrom: string; start: number; end: number; frame?: Frame }>): string | null {
-  const selected = all.filter(onThisGenome);
-  if (!selected.length) return all.length ? 'These hits are in another assembly\'s coordinates: lifting them onto this genome comes later.' : null;
+/** Centre the main view on hits (the view's width, or their span with a margin); lifted hits where they lifted. */
+export function goToHits(all: Array<{ chrom: string; start: number; end: number; anchor?: number; frame?: Frame; target?: Placeable['target'] }>): string | null {
+  const selected = all.flatMap(h => {
+    const t = displaySpan({ anchor: h.start, ...h } as Placeable);
+    return t ? [t] : [];
+  });
+  if (!selected.length) return all.length ? 'These hits are in another assembly and don\'t lift onto this genome.' : null;
   const s = useBrowserStore.getState();
   const chrom = selected[0].chrom;
   const same = selected.filter(h => sameChrom(h.chrom, chrom));

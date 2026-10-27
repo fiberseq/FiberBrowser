@@ -88,8 +88,9 @@ def _dataset_inputs(state, dataset_ids: Sequence[str]) -> List[dict]:
         label = getattr(ds, 'label', ds_id)
         if getattr(ds, 'data_type', None) == 'bam_livelift':
             raise ScanPlanError(f'{label}: a live-lift dataset is scanned in its own assembly. Run fiberhmm-scan on its '
-                                'BAM and open the scan here (its per-read states join the lifted rows); lifting a '
-                                "scan's hits onto this genome comes later (G1)")
+                                'BAM and open the scan here: its per-read states join the lifted rows and its hits are '
+                                'lifted onto this genome. Pooled scans of lifted molecules in this genome\'s frame need '
+                                'fiberhmm-lift and fiberhmm-scan on the lifted BAM for now')
         if getattr(ds, 'data_type', None) != 'bam':
             raise ScanPlanError(f'{label}: scans read FiberHMM-called BAMs')
         paths = list(getattr(ds, 'paths', None) or [ds.path])

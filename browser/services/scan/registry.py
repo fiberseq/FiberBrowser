@@ -249,8 +249,11 @@ class OpenScan:
             contigs = (self.manifest.get('reference') or {}).get('contigs') or []
             self.frame = dict(kind='source', assembly=(self.manifest.get('reference') or {}).get('contigs_sha256', '')[:12],
                               liftedDatasets=lifted, firstContig=str(contigs[0][0]) if contigs else '')
-            self.reference_note = ('scanned in the source assembly of ' + (', '.join(lifted) if lifted else 'its BAM')
-                                   + ': per-read states join; hits stay in source coordinates (lifting hits: G1)')
+            names = _dataset_labels(state)
+            self.reference_note = ('scanned in the source assembly of ' + (', '.join(names.get(d, d) for d in lifted) if lifted else 'its BAM')
+                                   + (': per-read states join; hits are lifted onto this genome with liftbed, keeping '
+                                      'their source coordinates' if lifted else
+                                      ': hits stay in source coordinates (open its BAM as a live-lift dataset to lift them)'))
 
     # ---- hub feature sets
     def sets(self, state=None) -> List[dict]:
@@ -442,7 +445,8 @@ def open_scan(state, path, *, source: str = 'opened', label: Optional[str] = Non
     The reference: a scan bound to a loaded dataset was made on that dataset's own file, so its reference is the
     file's. When it differs from the browser's reference (a scan of a live-lift dataset's source BAM, in its own
     assembly), the scan's frame is ``source``: its per-read states join the lifted rows by record key, and its hits
-    stay in source coordinates until they are lifted (G1). An unbound scan must match the browser's reference."""
+    are lifted onto this genome through the dataset's map (``projection``). An unbound scan must match the browser's
+    reference."""
     p = Path(path).expanduser().resolve()
     manifest = read_manifest(p)
     problems = validate(p, manifest)
