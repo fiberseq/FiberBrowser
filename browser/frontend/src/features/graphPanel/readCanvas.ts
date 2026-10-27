@@ -11,6 +11,7 @@ import { SV_COLORS } from '../../components/tracks/read-track/svDrawing';
 
 const SV_CLIP_COLOR = SV_COLORS.clip;
 import type { HostLane } from './memberBands';
+import { GRAPH_GUTTER } from './canvas';
 import type { ChromatinStyle } from './chromatinStyle';
 import type { CallPiece, PackedLane, PlacedMolecule } from './readGeometry';
 import type { Scene } from './scene';
@@ -250,6 +251,34 @@ export function clusterCounts(lane: HostLane, startRow: number, rowCount: number
   return [...counts].map(([c, n]) => `${c === -1 ? '–' : getClusterLabel(c, true)} ${n}`).join(' · ');
 }
 
+/** Text for the gutter in lines of at most `width` (measured by `measure`), at most `maxLines` of them: whole " · "
+ * items per line where they fit, an item wider than a line wrapped at its spaces; past `maxLines` the last line ends
+ * in "…". (The gutter is 52 px: "Not a carrier 51" or "C0 29 · C1 3" on one line were cut off.) */
+export function gutterLines(text: string, width: number, measure: (s: string) => number, maxLines: number): string[] {
+  if (maxLines < 1) return [];
+  const pieces: string[] = [];
+  for (const item of text.split(' · ')) {
+    if (measure(item) <= width) { pieces.push(item); continue; }
+    // Wider than a line: its words, packed (a single word wider than a line stays whole).
+    let line = '';
+    for (const word of item.split(' ')) {
+      const next = line ? `${line} ${word}` : word;
+      if (line && measure(next) > width) { pieces.push(line); line = word; } else line = next;
+    }
+    if (line) pieces.push(line);
+  }
+  const lines: string[] = [];
+  for (const piece of pieces) {
+    const last = lines.length ? lines[lines.length - 1] : null;
+    const joined = last !== null ? `${last} · ${piece}` : piece;
+    if (last !== null && measure(joined) <= width) lines[lines.length - 1] = joined; else lines.push(piece);
+  }
+  if (lines.length <= maxLines) return lines;
+  const kept = lines.slice(0, maxLines);
+  kept[maxLines - 1] = `${kept[maxLines - 1]}…`;
+  return kept;
+}
+
 /** Host mode: each member sub-band's label in the gutter — its dataset colour down the rows it holds, the member's
  * name and how many records it shows (and how many more did not fit). */
 export function drawHostBandLabels(ctx: CanvasRenderingContext2D, scene: Scene, lanes: Map<string, HostLane>,
@@ -274,7 +303,11 @@ export function drawHostBandLabels(ctx: CanvasRenderingContext2D, scene: Scene, 
         // Per-cluster counts (the compare step, DESIGN_GRAPH_PRIMARY §3.3): "C0 24 · C1 3" (the strip's rows aside).
         const strip = g.stripRows ?? 0;
         const counts = clusterCounts(lane, g.startRow + strip, g.rowCount - strip);
-        if (counts && h >= 30) ctx.fillText(counts, 8, top + 29);
+        if (counts && h >= 30) {
+          // Wrapped to the gutter, as many lines as the band has room for.
+          const lines = gutterLines(counts, GRAPH_GUTTER - 10, t => ctx.measureText(t).width, Math.floor((h - 20) / 10));
+          lines.forEach((line, i) => ctx.fillText(line, 8, top + 29 + i * 10));
+        }
       }
     }
   }
