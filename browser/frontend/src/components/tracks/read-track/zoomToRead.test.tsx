@@ -105,6 +105,22 @@ describe('Zoom to read (Codex 18)', () => {
     expect(onViewportChange).not.toHaveBeenCalled();
   });
 
+  it('is a jump Back can undo: the view it leaves goes into navigation history (main view; a panel at its own locus)', async () => {
+    render(false);
+    useBrowserStore.setState({ viewportHistory: [], historyIndex: -1 } as never);
+    let answer = await zoomToRead();
+    await act(async () => { answer(found); await new Promise(r => setTimeout(r, 0)); });
+    expect(useBrowserStore.getState().viewportHistory).toEqual([{ chrom: 'chr1', start: 0, end: 1_000 }]);
+    act(() => root?.unmount());
+    host?.remove();
+    render(true);
+    useBrowserStore.setState({ viewportHistory: [], historyIndex: -1 } as never);
+    answer = await zoomToRead();
+    await act(async () => { answer(found); await new Promise(r => setTimeout(r, 0)); });
+    expect(onViewportChange).toHaveBeenCalled();
+    expect(useBrowserStore.getState().viewportHistory).toEqual([{ chrom: 'chr1', start: 0, end: 1_000, panelId: 'p1', likePan: true }]);
+  });
+
   it('another session opened meanwhile: it stands down', async () => {
     render(false);
     const answer = await zoomToRead();
