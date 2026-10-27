@@ -1891,6 +1891,12 @@ def _build_compact_reads_from_bam_region(
     def _wants_layer(*names: str) -> bool:
         return wants_layer(include_layers, requested_layer_set, *names)
 
+    # Nucleosome outputs computed for these records (services/nuc): layers of their rows, as MA groups read.
+    from services.nuc.layers import injector as _nuc_injector
+    nuc_inject = _nuc_injector(bam_path, region_start, region_end, include_layers=include_layers,
+                               requested_layers=requested_layer_set, include_qualities=include_layer_qualities,
+                               include_lift_meta=include_lift_meta)
+
     profile_bam = os.environ.get("FIBERBROWSER_PROFILE_BAM") == "1"
     diagnose_bam = profile_bam or bam_diagnostics_enabled()
     profile_total_t0 = time_module.perf_counter() if profile_bam else 0.0
@@ -2291,6 +2297,8 @@ def _build_compact_reads_from_bam_region(
                     _profile_add("sv_events", phase_t0)
                     if partition is not None:
                         read_data['_fiberbrowser_source_order'] = source_order
+                    if nuc_inject is not None:
+                        nuc_inject(read_data)
                     reads.append(read_data)
                     if load_budget is not None:
                         load_budget.account(read_data)
@@ -2733,6 +2741,8 @@ def _build_compact_reads_from_bam_region(
             _profile_add("sv_events", phase_t0)
             if partition is not None:
                 read_data['_fiberbrowser_source_order'] = source_order
+            if nuc_inject is not None:
+                nuc_inject(read_data)
             reads.append(read_data)
             if load_budget is not None:
                 load_budget.account(read_data)

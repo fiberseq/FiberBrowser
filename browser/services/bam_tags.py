@@ -1357,6 +1357,11 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
         ("tf_cross_consensus", 6): ["tq", "fi", "fq", "op", "sq", "q0"],
         ("msp", 1): ["aq"],
         ("fp_v2", 1): ["nq"],
+        # fiberhmm-scan nuc groups (CONTRACTS §11.3, their header declarations): the coarse code (+16 TF), the
+        # named code, round(255 x posterior), the z byte; the segment / event code, posterior or 10 x LLR, q-hat - 100
+        # or the event's count.
+        ("nucsz", 4): ["coarse", "named", "posterior", "z"],
+        ("nucseg", 3): ["code", "posterior_or_llr10", "q_hat_minus_100_or_count"],
     }
 
     # One logical MA type may be written as several strand sections (e.g.

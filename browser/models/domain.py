@@ -444,13 +444,16 @@ class Dataset:
     def to_dict(self):
         from services.background_work import file_identity
         from services.lift.reads import lift_identity
+        from services.nuc.store import nuc_identity
         from services.read_group_samples import sample_keys
         import hashlib
         return {
             # A live-lift dataset's settings are part of what its reads are (lift_key): client caches follow them.
+            # So are nucleosome outputs computed for its records (services/nuc): their layers join the rows.
             "source_identity": hashlib.sha256(repr((file_identity(self.paths),
                                                     tuple(tuple(p) for p in getattr(self, "molecule_groups", [])),
-                                getattr(self, "joint_dedup", "off"), *(lift_identity(self)))).encode()).hexdigest(),
+                                getattr(self, "joint_dedup", "off"), *(lift_identity(self)),
+                                *nuc_identity(self))).encode()).hexdigest(),
             "id": self.id,
             "label": self.label,
             "path": self.path,

@@ -131,6 +131,11 @@ def apply_scan_overlays(state, dataset_id: str, chrom: str, start: int, end: int
                 marks.setdefault(r.get('qname', ''), {}).setdefault(group, []).append(r)
     if not marks:
         return reads
+    # Mark groups' byte names as their contract declares them (nucsz: coarse, named, posterior, z), so a tables-mode
+    # overlay names its qualities as an annotated BAM's group parses (bam_tags known_qual_names).
+    declared = {g.get('group'): list(g.get('quality_names') or []) for scan, _s, _g in scans
+                for block in (scan.manifest.get('modules') or {}).values()
+                for g in block.get('ma_groups') or [] if g.get('kind') == 'mark'}
     # A pass's token: rows this exact pass already overlaid (same view, same scans) are returned as they are, so a
     # later pass keeps the row objects (and the consensus projection's receipt over them).
     token = 'scan:' + hashlib.sha256(repr((dataset_id, chrom, int(start), int(end),
@@ -174,8 +179,9 @@ def apply_scan_overlays(state, dataset_id: str, chrom: str, start: int, end: int
                         q0.append([int(x) for x in str(row.get('q') or '').split(',') if x != ''])
                 if ivs:
                     width = max((len(q) for q in q0), default=0)
+                    names_q = declared.get(group) or []
                     layers[group] = dict(intervals=ivs, source_intervals=srcs, annotation_names=names,
-                                         quality_names=[f'q{i}' for i in range(width)],
+                                         quality_names=names_q if len(names_q) == width else [f'q{i}' for i in range(width)],
                                          qualities=[[q[i] if i < len(q) else 0 for q in q0] for i in range(width)],
                                          scan_overlay=token, source_layer=LAYER_META.get(group, ('', '', 'tf'))[2],
                                          draw_style='fill')

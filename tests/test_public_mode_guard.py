@@ -14,6 +14,10 @@ PUBLIC_DENIED = {
     ("GET", "/api/scan/{scan_id}/hits"), ("GET", "/api/scan/{scan_id}/units"), ("POST", "/api/scan/plan"),
     ("POST", "/api/scan/jobs"), ("GET", "/api/scan/jobs"), ("GET", "/api/scan/jobs/{job_id}"),
     ("DELETE", "/api/scan/jobs/{job_id}"),
+    # The nucleosome panel: live jobs read the host's BAMs, write the calibration cache and run compute.
+    ("GET", "/api/nuc/available"), ("POST", "/api/nuc/status"), ("POST", "/api/nuc/jobs"), ("GET", "/api/nuc/jobs"),
+    ("GET", "/api/nuc/jobs/{job_id}"), ("DELETE", "/api/nuc/jobs/{job_id}"), ("POST", "/api/nuc/records"),
+    ("POST", "/api/nuc/summary"),
     # Live lift: opening a dataset from the host's files, reading a map from them, and its settings (the flag
     # itself is harmless but is a host feature too).
     ("GET", "/api/lift/enabled"), ("GET", "/api/lift/inspect"), ("POST", "/api/lift/datasets"), ("GET", "/api/lift/datasets"),
