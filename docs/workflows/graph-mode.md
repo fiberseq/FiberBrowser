@@ -100,9 +100,11 @@ why.
 The graph is a set of panels drawn together. Every band is a real panel, and
 you can take any of them out to look at it on its own.
 
-- **Pop out** a haplotype: in the header's **…** menu, **Pop out PAT**, **Pop
-  out all haplotypes in view**, or **Pop out paths…** (a checklist: **Pop out
-  N** pops out the ticked paths in one undo step). The haplotype opens as its
+- **Pop out** a haplotype: in the header's **…** menu, **Pop out PAT** (one
+  item per haplotype folded into the graph). When more than one path can pop
+  out, the menu also has **Pop out all haplotypes in view** and **Pop out
+  paths…** (a checklist: **Pop out N** pops out the ticked paths in one undo
+  step). The haplotype opens as its
   own panel next to the graph, with its own read tracks and tools. It keeps the
   state it had in the graph (filters, selections, clusters).
 - **Pop out as: lifted panel** (the default), **source view** or **lifted and

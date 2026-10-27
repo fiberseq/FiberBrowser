@@ -279,6 +279,21 @@ export function gutterLines(text: string, width: number, measure: (s: string) =>
   return kept;
 }
 
+/** A band name that fits one gutter line: the name; else its last " · " part (the haplotype of "Sample A (lifted) · PAT");
+ * else the longest start that fits, ending in "…". (The band's top line has the full name.) */
+export function gutterLabel(label: string, width: number, measure: (s: string) => number): string {
+  if (measure(label) <= width) return label;
+  const parts = label.split(' · ');
+  const last = parts[parts.length - 1];
+  if (parts.length > 1 && measure(last) <= width) return last;
+  const text = parts.length > 1 ? last : label;
+  for (let n = text.length - 1; n > 0; n--) {
+    const cut = `${text.slice(0, n).trimEnd()}…`;
+    if (measure(cut) <= width) return cut;
+  }
+  return '…';
+}
+
 /** Host mode: each member sub-band's label in the gutter — its dataset colour down the rows it holds, the member's
  * name and how many records it shows (and how many more did not fit). */
 export function drawHostBandLabels(ctx: CanvasRenderingContext2D, scene: Scene, lanes: Map<string, HostLane>,
@@ -295,18 +310,23 @@ export function drawHostBandLabels(ctx: CanvasRenderingContext2D, scene: Scene, 
       ctx.fillRect(1, top, 3, Math.max(2, h));
       const shown = lane.rows.slice(g.startRow, g.startRow + g.rowCount).reduce((t, r) => t + r.length, 0);
       ctx.font = 'bold 10px sans-serif';
-      ctx.fillText(g.label, 8, top + 9);
+      ctx.fillText(gutterLabel(g.label, GRAPH_GUTTER - 10, t => ctx.measureText(t).width), 8, top + 9);
       if (h >= 20) {
         ctx.font = '9px sans-serif';
         ctx.fillStyle = '#64748b';
-        ctx.fillText(`${shown} read${shown === 1 ? '' : 's'}${g.hidden ? ` +${g.hidden}` : ''}`, 8, top + 19);
+        const measure = (t: string) => ctx.measureText(t).width;
+        // "44 reads +9" is wider than the gutter too: wrapped like the counts ("44 reads", "+9").
+        const reads = gutterLines(`${shown} read${shown === 1 ? '' : 's'}${g.hidden ? ` +${g.hidden}` : ''}`, GRAPH_GUTTER - 10,
+          measure, Math.floor((h - 10) / 10));
+        reads.forEach((line, i) => ctx.fillText(line, 8, top + 19 + i * 10));
+        const below = 10 + reads.length * 10;
         // Per-cluster counts (the compare step, DESIGN_GRAPH_PRIMARY §3.3): "C0 24 · C1 3" (the strip's rows aside).
         const strip = g.stripRows ?? 0;
         const counts = clusterCounts(lane, g.startRow + strip, g.rowCount - strip);
-        if (counts && h >= 30) {
+        if (counts && h >= below + 10) {
           // Wrapped to the gutter, as many lines as the band has room for.
-          const lines = gutterLines(counts, GRAPH_GUTTER - 10, t => ctx.measureText(t).width, Math.floor((h - 20) / 10));
-          lines.forEach((line, i) => ctx.fillText(line, 8, top + 29 + i * 10));
+          const lines = gutterLines(counts, GRAPH_GUTTER - 10, measure, Math.floor((h - below) / 10));
+          lines.forEach((line, i) => ctx.fillText(line, 8, top + below + 9 + i * 10));
         }
       }
     }

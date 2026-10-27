@@ -1,7 +1,7 @@
 // The graph band gutter is 52 px wide: a cluster count line such as "Not a carrier 51" or "C0 29 · C1 3" was cut off
 // (stabilize open item, LOW). It now wraps to the gutter.
 import { describe, expect, it } from 'vitest';
-import { gutterLines } from './readCanvas';
+import { gutterLabel, gutterLines } from './readCanvas';
 
 // 5 px per character, a 42 px line: 8 characters fit.
 const measure = (s: string) => s.length * 5;
@@ -21,8 +21,29 @@ describe('gutterLines', () => {
     expect(gutterLines('Not a carrier 51', 60, measure, 3)).toEqual(['Not a', 'carrier 51']);
   });
 
+  it('wraps the reads line before its hidden count', () => {
+    expect(gutterLines('44 reads +9', 42, measure, 2)).toEqual(['44 reads', '+9']);
+    expect(gutterLines('44 reads +9', 42, measure, 1)).toEqual(['44 reads…']);
+    expect(gutterLines('7 reads', 42, measure, 2)).toEqual(['7 reads']);
+  });
+
   it('ends in "…" when the band has no room for every line', () => {
     expect(gutterLines('C0 2 · C1 3 · C2 4', 42, measure, 2)).toEqual(['C0 2', 'C1 3…']);
     expect(gutterLines('C0 2', 42, measure, 0)).toEqual([]);
+  });
+});
+
+describe('gutterLabel', () => {
+  it('keeps a band name that fits', () => {
+    expect(gutterLabel('MAT', 42, measure)).toBe('MAT');
+  });
+
+  it('falls back to the haplotype of a long lifted band name', () => {
+    expect(gutterLabel('Sample A (lifted) · PAT', 42, measure)).toBe('PAT');
+  });
+
+  it('cuts a long name without parts to the gutter, ending in "…"', () => {
+    expect(gutterLabel('Sample A (GRCh38)', 42, measure)).toBe('Sample…');
+    expect(measure(gutterLabel('Sample A (GRCh38)', 42, measure))).toBeLessThanOrEqual(42);
   });
 });
