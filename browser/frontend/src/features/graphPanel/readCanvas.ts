@@ -279,6 +279,21 @@ export function gutterLines(text: string, width: number, measure: (s: string) =>
   return kept;
 }
 
+/** A band name that fits one gutter line: the name; else its last " · " part (the haplotype of "Sample A (lifted) · PAT");
+ * else the longest start that fits, ending in "…". (The band's top line has the full name.) */
+export function gutterLabel(label: string, width: number, measure: (s: string) => number): string {
+  if (measure(label) <= width) return label;
+  const parts = label.split(' · ');
+  const last = parts[parts.length - 1];
+  if (parts.length > 1 && measure(last) <= width) return last;
+  const text = parts.length > 1 ? last : label;
+  for (let n = text.length - 1; n > 0; n--) {
+    const cut = `${text.slice(0, n).trimEnd()}…`;
+    if (measure(cut) <= width) return cut;
+  }
+  return '…';
+}
+
 /** Host mode: each member sub-band's label in the gutter — its dataset colour down the rows it holds, the member's
  * name and how many records it shows (and how many more did not fit). */
 export function drawHostBandLabels(ctx: CanvasRenderingContext2D, scene: Scene, lanes: Map<string, HostLane>,
@@ -295,7 +310,7 @@ export function drawHostBandLabels(ctx: CanvasRenderingContext2D, scene: Scene, 
       ctx.fillRect(1, top, 3, Math.max(2, h));
       const shown = lane.rows.slice(g.startRow, g.startRow + g.rowCount).reduce((t, r) => t + r.length, 0);
       ctx.font = 'bold 10px sans-serif';
-      ctx.fillText(g.label, 8, top + 9);
+      ctx.fillText(gutterLabel(g.label, GRAPH_GUTTER - 10, t => ctx.measureText(t).width), 8, top + 9);
       if (h >= 20) {
         ctx.font = '9px sans-serif';
         ctx.fillStyle = '#64748b';
