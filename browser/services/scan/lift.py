@@ -228,12 +228,13 @@ def insertion_junction(lift_map, contig: str, start: int, end: int, max_span: in
     (a rearrangement, a conflict, competing chains, a stretch outside every chain) is not placed."""
     placed = set()
     for ci, reason, lo, hi in gap_candidates(lift_map, contig, int(start), int(end)):
-        if reason not in JUNCTION_GAPS:
-            return None
         left = [p for p in lift_map.source_to_target(contig, max(0, lo - 1), lo) if p.primary and p.chain == ci] if lo > 0 else []
         right = [p for p in lift_map.source_to_target(contig, hi, hi + 1) if p.primary and p.chain == ci]
+        # Only primary chains attach (liftbed runs with --alt never): an alternative chain's gap neither places nor vetoes.
         if not left or not right or left[0].strand != right[0].strand:
             continue
+        if reason not in JUNCTION_GAPS:
+            return None
         a, b = left[0], right[0]
         # On a + chain the left flank ends at the junction and the right one starts there; on a - chain the reverse.
         x, y = (a.t_end, b.t_start) if a.strand == '+' else (b.t_end, a.t_start)
@@ -316,7 +317,8 @@ def overlaps_target(lift: HitLift, chrom_ok, start: int, end: int) -> bool:
         return (a < end and start < b) if b > a else start <= a < end
     if lift.junction is not None and lift.junction_chrom is not None and chrom_ok(lift.junction_chrom):
         lo, hi = lift.junction
-        return lo < end and start <= hi
+        # A replacement's target stretch is half-open; an insertion's junction is a point.
+        return (lo < end and start < hi) if hi > lo else start <= lo < end
     return False
 
 

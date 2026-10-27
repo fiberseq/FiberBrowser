@@ -243,6 +243,11 @@ describe('hub hits on a graph host', () => {
       mat: { status: mat, carried: 0, total: 10, label: 'm', datasets: [] } }) as unknown as GraphAlias['paths'];
     expect([...columnSpans(scene, topology, [['n1', 10, 20]], 'lane', paths('unresolved')).keys()]).toEqual(['target']);
     expect([...columnSpans(scene, topology, [['n1', 10, 20]], 'lane', paths('carried')).keys()]).toEqual(['target', 'mat']);
+    // A partly carrying path is drawn only on the columns it carries (its own list, from the analysis tiles).
+    const part = { ...paths('partial'), mat: { ...paths('partial').mat, columns: [['n1', 15, 20]] } } as unknown as GraphAlias['paths'];
+    const spans = columnSpans(scene, topology, [['n1', 10, 20]], 'lane', part);
+    expect(spans.get('target')).toEqual([10, 20]);
+    expect(spans.get('mat')).toEqual([15, 20]);
     // MAT walks n1 twice here: a repeat; its copies are not placements.
     const repeat = { ...topology, paths: [topology.paths[0], { binding: 'mat', occurrences: [...topology.paths[1].occurrences,
       { id: 'm3', node: 'n1', reverse: false }] }] } as unknown as GraphTopology;

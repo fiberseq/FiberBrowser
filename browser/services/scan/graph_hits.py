@@ -67,6 +67,19 @@ def own_columns(occs: Dict[str, gc.Occ], start: int, end: int) -> Tuple[List[Tup
     return cols, repeats
 
 
+def point_base(pos: int, size: Optional[int]) -> Tuple[int, int]:
+    """The base a boundary at ``pos`` stands for: the one after it, or, at the path's end, the one before it."""
+    if size is not None and pos >= int(size) and pos > 0:
+        return pos - 1, pos
+    return pos, pos + 1
+
+
+def carried_runs(cols: List[Tuple[str, int]], occs: Dict[str, gc.Occ]) -> List[list]:
+    """The columns a path carries (visits the node once, offset in the clip), as runs."""
+    vis = gc.visits(occs)
+    return _runs([(n, o) for n, o in cols if len(vis.get(n) or ()) == 1 and vis[n][0].carries(o)])
+
+
 def path_status(cols: List[Tuple[str, int]], occs: Dict[str, gc.Occ], complete: bool, total: Optional[int] = None) -> dict:
     """How one path covers a hit: carried / partial / absent / unresolved, with counts. ``total``: the hit's bases
     (default: its known columns). Bases without a known column (outside a clip, a repeat) are never carried and
@@ -227,8 +240,10 @@ def alias_for(reg, target: str, bindings: dict, tiles: dict, *, own: Optional[st
         tile_set = tiles.get(None if key == target else key) or {}
         st = path_status(cols, occs_of.get(key) or {}, _complete_over(tile_set, key, target, lo, hi), total)
         b = bindings.get(key) or {}
+        # A path carrying only part of the hit says which columns (drawing places the hit there and nowhere else).
+        extra = {'columns': carried_runs(cols, occs_of.get(key) or {})[:MAX_COLUMN_RUNS]} if st['status'] == 'partial' else {}
         paths[key] = dict(st, label=b.get('label') or key, datasets=list(b.get('datasets') or ()),
-                          **({'hap': b['hap']} if b.get('hap') else {}))
+                          **({'hap': b['hap']} if b.get('hap') else {}), **extra)
     runs = _runs(cols)
     # ``size``: the hit's bases (the denominator of matching); ``known``: those with a column. A hit whose columns
     # are incomplete matches only through the columns it has, against its whole length.
@@ -287,15 +302,12 @@ async def add_graph_aliases(state, hits: List[dict], view_chrom: str) -> Optiona
             occs_key = tuple(cells)
             if occs_key not in merged:
                 merged[occs_key] = merged_occurrences(tiles, target)
-            # A zero-width hit (a boundary) takes the base after it, or the one before it at a contig end (liftbed's
-            # rule for points); its anchor stays the boundary.
-            spans = [(start, end)] if end > start else [(start, start + 1)] + ([(start - 1, start)] if start > 0 else [])
-            for a, b in spans:
-                alias = alias_for(reg, target, bindings, tiles, own=own, start=a, end=b, anchor=anchor,
-                                  occs_of=merged[occs_key])
-                if alias['known'] or (a, b) == spans[-1]:
-                    h['graph'] = alias
-                    break
+            # A zero-width hit (a boundary) takes the base after it; at the path's end, the one before it (liftbed's
+            # rule for points). Its anchor stays the boundary.
+            if end <= start:
+                start, end = point_base(start, (reg.binding(own or target) or {}).get('size'))
+            h['graph'] = alias_for(reg, target, bindings, tiles, own=own, start=start, end=end, anchor=anchor,
+                                   occs_of=merged[occs_key])
     return note
 
 

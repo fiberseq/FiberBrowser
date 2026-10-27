@@ -128,7 +128,9 @@ export interface GraphAlias {
   known?: number;
   truncated?: boolean;
   repeats?: number;
-  paths: Record<string, { status: PathStatus; carried: number; total: number; label: string; datasets: string[]; hap?: string }>;
+  /** Per package path: its status; a path carrying part of the hit also lists the columns it carries. */
+  paths: Record<string, { status: PathStatus; carried: number; total: number; label: string; datasets: string[]; hap?: string;
+    columns?: Array<[string, number, number]> }>;
 }
 
 export interface HitValue { v: number | null; lo?: number | null; hi?: number | null; n?: number | null; nCallable?: number | null }

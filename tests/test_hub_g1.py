@@ -296,7 +296,10 @@ class _FakeMap:
               ('-', [(400, 500, 5100)], []),
               ('+', [(600, 650, 2000), (750, 800, 2150)], [(2050, 650, 100, 100, 5)]),
               ('+', [(850, 900, 2950), (1000, 1050, 3000)], [(3000, 900, 0, 100, 0)]),
-              ('+', [(880, 900, 6980), (1000, 1020, 7000)], [(7000, 900, 0, 100, 0)])]
+              ('+', [(880, 900, 6980), (1000, 1020, 7000)], [(7000, 900, 0, 100, 0)]),
+              # 5 (+, an alternative, never primary): a conflict gap over chain 0's insertion.
+              ('+', [(50, 100, 9000), (150, 200, 9100)], [(9050, 100, 50, 50, 5)])]
+    ALTERNATIVE = {5}
 
     def __init__(self):
         self.m = {'targets': [{'name': 't'}], 'sources': [{'name': 's', 'size': 2000}]}
@@ -317,21 +320,50 @@ class _FakeMap:
                 if s1 <= s0:
                     continue
                 ts, te = (t0 + (s0 - q0), t0 + (s1 - q0)) if strand == '+' else (t0 - (s1 - q0), t0 - (s0 - q0))
-                out.append(NS(chain=ci, t_start=ts, t_end=te, strand=strand, primary=True))
+                out.append(NS(chain=ci, t_start=ts, t_end=te, strand=strand, primary=ci not in self.ALTERNATIVE))
         return out
 
 
 def test_insertion_junction_needs_one_unambiguous_attachment():
     from services.scan.lift import insertion_junction
     lm = _FakeMap()
-    assert insertion_junction(lm, 's', 110, 140) == ('t', 1100, 1100)   # inside chain 0's source insertion
+    # Inside chain 0's source insertion (the alternative chain 5's conflict gap over it neither places nor vetoes it).
+    assert insertion_junction(lm, 's', 110, 140) == ('t', 1100, 1100)
     assert insertion_junction(lm, 's', 300, 310) is None                # outside every chain
     assert insertion_junction(lm, 's', 120, 160) is None                # runs past its gap
     assert insertion_junction(lm, 's', 660, 670) is None                # a conflict gap (a possible rearrangement)
     assert insertion_junction(lm, 's', 920, 930) is None                # two chains attach it at different places
-    lm.CHAINS = list(reversed(lm.CHAINS[3:])) + lm.CHAINS[:3]            # whatever the chain order
+    lm.CHAINS = [lm.CHAINS[4], lm.CHAINS[3], *lm.CHAINS[:3]]            # whatever the chain order
+    lm.ALTERNATIVE = set()
     lm.__init__()
     assert insertion_junction(lm, 's', 920, 930) is None
+
+
+def test_junction_overlap_is_half_open_for_replacements_and_a_point_for_insertions():
+    from services.scan.lift import HitLift, overlaps_target
+    same = lambda c: c == 't'
+    rep = HitLift('unmapped', junction=(1100, 1200), junction_chrom='t')
+    assert overlaps_target(rep, same, 1150, 1160) and overlaps_target(rep, same, 1000, 1101)
+    assert not overlaps_target(rep, same, 1200, 1210)
+    ins = HitLift('unmapped', junction=(1100, 1100), junction_chrom='t')
+    assert overlaps_target(ins, same, 1100, 1101) and not overlaps_target(ins, same, 1050, 1100)
+
+
+def test_a_boundary_stands_for_the_base_after_it_except_at_the_path_end():
+    from services.scan.graph_hits import point_base
+    assert point_base(100, 300) == (100, 101)
+    assert point_base(300, 300) == (299, 300)
+    assert point_base(0, None) == (0, 1)
+
+
+def test_a_partly_carrying_path_lists_the_columns_it_carries():
+    from services.graph_panel.columns import Occ
+    from services.scan.graph_hits import carried_runs, path_status
+    cols = [('a', o) for o in range(10)] + [('r', o) for o in range(5)]
+    occs = {'1': Occ('1', 'a', 10, False, (0, 10), [(0, 10)]), '2': Occ('2', 'r', 5, False, (10, 15), [(0, 5)]),
+            '3': Occ('3', 'r', 5, False, (40, 45), [(0, 5)])}      # r walked twice: a repeat, not carried
+    assert path_status(cols, occs, True)['status'] == 'partial'
+    assert carried_runs(cols, occs) == [['a', 0, 10]]
 
 
 def test_incomplete_graph_columns_never_claim_carried_or_absent():

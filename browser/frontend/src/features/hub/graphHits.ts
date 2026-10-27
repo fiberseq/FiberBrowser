@@ -42,8 +42,15 @@ function xAt(o: Scene['occurrences'][number], p: number): number {
  * drawn on a stripe of another lane's shared tube counts for its own path, whose read band is its own). */
 export function columnSpans(scene: Scene, topology: GraphTopology, columns: GraphAlias['columns'], by: 'lane' | 'path' = 'lane',
   paths?: GraphAlias['paths']): Map<string, [number, number]> {
-  const runs = new Map<string, Array<[number, number]>>();
-  for (const [node, a, b] of columns) runs.set(node, [...(runs.get(node) ?? []), [a, b]]);
+  const byNode = (cols: GraphAlias['columns']) => {
+    const m = new Map<string, Array<[number, number]>>();
+    for (const [node, a, b] of cols) m.set(node, [...(m.get(node) ?? []), [a, b]]);
+    return m;
+  };
+  const runs = byNode(columns);
+  // A path carrying part of the hit is drawn only on the columns it carries (from the hit's own analysis tiles; the
+  // display window can hold fewer visits than those, so its visit counts can't tell).
+  const partial = new Map(Object.entries(paths ?? {}).filter(([, p]) => p.status === 'partial').map(([k, p]) => [k, byNode(p.columns ?? [])]));
   const lengths = new Map(topology.nodes.map(n => [n.id, n.length]));
   const reverse = new Map<string, boolean>();
   // Visits per (path, node) in this window: a node a path walks more than once is a repeat, its copies unresolved.
@@ -54,7 +61,7 @@ export function columnSpans(scene: Scene, topology: GraphTopology, columns: Grap
   }
   const out = new Map<string, [number, number]>();
   for (const o of scene.occurrences) {
-    const mine = runs.get(o.node);
+    const mine = partial.has(o.path) ? partial.get(o.path)!.get(o.node) : runs.get(o.node);
     const len = lengths.get(o.node);
     if (!mine || len == null) continue;
     // Only where the hit is placed: on paths that carry it (wholly or in part), never on a repeat's copies.
