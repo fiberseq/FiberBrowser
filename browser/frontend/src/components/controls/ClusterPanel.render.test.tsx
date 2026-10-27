@@ -79,6 +79,9 @@ describe('ClusterPanel toolbar groups', () => {
       root.render(<ClusterPanel onCluster={vi.fn()} onSort={vi.fn()} onFilter={vi.fn()} onClearFilter={vi.fn()} onScanPeaks={vi.fn()} scanning={false} scanNote={note} />);
     });
     expect(byId('peak-scan-stopped')?.textContent).toBe(note);
+    // Beside Scan, on screen with the group folded (not in its hidden summary card).
+    expect(byId('peak-scan-stopped')!.closest('[data-toolbar-peek]')).toBeNull();
+    expect(byId('toolbar-group-peaks')?.getAttribute('data-open')).toBe('false');
     await act(async () => {
       root.render(<ClusterPanel onCluster={vi.fn()} onSort={vi.fn()} onFilter={vi.fn()} onClearFilter={vi.fn()} onScanPeaks={vi.fn()} scanning scanNote={note} />);
     });

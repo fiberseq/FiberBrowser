@@ -709,12 +709,9 @@ export function ClusterPanel({
             {/* Fixed minimum widths: these change on every navigation (none /
                 scanning / N of M), and a changing width re-wraps the toolbar. */}
             <span className="inline-block min-w-[6rem] text-gray-600 dark:text-gray-400">
-              {totalPeaks === 0 ? (scanNote && !scanning ? '' : 'none') : `${selectedPeaks.size} of ${totalPeaks} selected`}
+              {totalPeaks === 0 ? 'none' : `${selectedPeaks.size} of ${totalPeaks} selected`}
               {customPeaks.length > 0 && (
                 <span className="text-amber-600 ml-1">({customPeaks.length} custom)</span>
-              )}
-              {scanNote && !scanning && (
-                <span role="status" data-testid="peak-scan-stopped" className={`text-amber-700 dark:text-amber-400${totalPeaks ? ' ml-1' : ''}`}>{scanNote}</span>
               )}
             </span>
           </>
@@ -737,6 +734,10 @@ export function ClusterPanel({
                     "Scanning…" moved Quality to the next toolbar row and back on every pan (round 3). */}
                 Scan
               </ActionButton>
+            )}
+            {/* An automatic scan stopped by its time budget: said beside Scan (the group's summary is folded away). */}
+            {onScanPeaks && scanNote && !scanning && (
+              <span role="status" data-testid="peak-scan-stopped" className="whitespace-nowrap px-1 text-[11px] text-amber-700 dark:text-amber-400">{scanNote}</span>
             )}
           </>
         )}
