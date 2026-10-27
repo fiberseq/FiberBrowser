@@ -146,7 +146,9 @@ describe('readMatchesRule with nucleosome conditions', () => {
   };
   const read = {
     id: 'r',
-    intervals: [[0, 100, -100], [100, 247, 147], [600, 740, 140], [760, 900, 140]] as [number, number, number][],
+    // The multi(2) call [600, 900) split at a deletion: each piece keeps its call's size (sv_events.py
+    // split_compact_read_at_deletions), the molecular length its mark carries.
+    intervals: [[0, 100, -100], [100, 247, 147], [600, 740, 300], [760, 900, 300]] as [number, number, number][],
     layers: { tf: { intervals: [[300, 330, 30]] as [number, number, number][] }, nucsz },
   };
 

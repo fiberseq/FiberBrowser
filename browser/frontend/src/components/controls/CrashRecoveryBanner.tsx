@@ -324,6 +324,7 @@ export async function restoreSnapshot(saved: SerializedState) {
     clusterPatterns: r.clusterPatterns,
     clusterCentroids: r.clusterCentroids,
     clusterPeakWidths: r.clusterPeakWidths,
+    clusterMetricCohort: r.clusterMetricCohort ?? {},
     clusterPeakRegions: r.clusterPeakRegions,
     dynamicClustering: r.dynamicClustering,
     dynamicOverlapMode: r.dynamicOverlapMode,

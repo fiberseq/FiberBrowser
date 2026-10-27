@@ -98,7 +98,7 @@ export function bandHeight(lane: PackedLane | undefined, rowHeight = READ_ROW_HE
 /** A call piece's style: its whole call's size and qualities, and its class bytes while size classes are on (off:
  * no mark, so class rules match nothing). */
 export function callPieceStyle(style: ChromatinStyle, c: CallPiece, nucClasses: boolean): CallStyle | null {
-  return style.call(c.layer, c.call[2], c.qualities, nucClasses ? graphNucMark(c.cls, c.zb, c.call[0], c.call[1]) : null);
+  return style.call(c.layer, c.call[2], c.qualities, nucClasses ? graphNucMark(c.cls, c.zb, c.nb, c.call[0], c.call[1]) : null);
 }
 
 /** A molecule's segment-lane pieces as lane rows in screen x, shifted by `base` so none starts left of 0 (the lane
@@ -340,7 +340,7 @@ export function describeReadHit(hit: ReadHit, x: number, datasetLabel: (id: stri
     const q = Object.entries(call.qualities).map(([k, v]) => `${k} ${v}`).join(', ');
     const pieces = m.calls.filter(c => c.layer === call.layer && c.index === call.index).length;
     // Its size class and z (while size classes are on).
-    const cls = (!layers || layers.nucsz) && call.cls != null ? ` · ${describeNucClassBytes(call.cls, call.zb)}` : '';
+    const cls = (!layers || layers.nucsz) && call.cls != null ? ` · ${describeNucClassBytes(call.cls, call.zb, call.nb)}` : '';
     return withLane(`${head} — ${name} ${where(call.call[2])} bp at ${where(call.call[0])}-${where(call.call[1])}${call.id ? ` (${call.id})` : ''}${cls}${q ? ` · ${q}` : ''}${pieces > 1 ? ` · drawn in ${pieces} pieces` : ''}`);
   }
   const ins = m.ins.find(i => Math.abs(i.x - x) <= 2 && i.len >= READ_INSERTION_MIN_BP);

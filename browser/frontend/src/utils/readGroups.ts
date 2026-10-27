@@ -39,6 +39,8 @@ export interface GroupingStash {
   patterns: Record<number, number[]>;
   centroids: Record<number, number[]>;
   peakWidths: number[];
+  /** The replaced model's molecule metric cohort (older stashes: none). */
+  metricCohort?: import('../types').ClusterMetricCohort;
   peakRegions: { start: number; end: number; mode?: string; chrom?: string; genome?: string }[];
   dynamicClustering: boolean;
 }
@@ -89,6 +91,7 @@ export function applyReadGroups(input: ReadGroupsInput, stateKeyMap: Record<stri
     patterns: before.clusterPatterns,
     centroids: before.clusterCentroids,
     peakWidths: before.clusterPeakWidths,
+    metricCohort: before.clusterMetricCohort,
     peakRegions: before.clusterPeakRegions,
     dynamicClustering: before.dynamicClustering,
   };
@@ -106,7 +109,7 @@ export function applyReadGroups(input: ReadGroupsInput, stateKeyMap: Record<stri
   // These groups are not peak patterns: never re-derive them on pan. The live fields only: the setters would
   // also write them into the active cluster-tree node (the user's clustering, kept as it was).
   useBrowserStore.setState({ dynamicClustering: false, clusterPatterns: input.patterns, clusterCentroids: {}, clusterPeakWidths: [],
-    clusterPeakRegions: input.regions });
+    clusterMetricCohort: {}, clusterPeakRegions: input.regions });
   store.pushSnapshot(label, { kind: 'clustering' });
   const after = useBrowserStore.getState();
   return { label, written: Object.fromEntries(pairs.map(([key]) => [key, after.clusterAssignments[key]])), stash };
@@ -153,6 +156,6 @@ export function restoreReadGroups(applied: AppliedGrouping, label = 'Clear read 
   }
   setFocus(Object.fromEntries(Object.entries(stash.keys).map(([key, prev]) => [key, prev.focus ?? null])));
   useBrowserStore.setState({ clusterPatterns: stash.patterns, clusterCentroids: stash.centroids, clusterPeakWidths: stash.peakWidths,
-    clusterPeakRegions: stash.peakRegions, dynamicClustering: stash.dynamicClustering });
+    clusterMetricCohort: stash.metricCohort ?? {}, clusterPeakRegions: stash.peakRegions, dynamicClustering: stash.dynamicClustering });
   store.pushSnapshot(label, { kind: 'clustering' });
 }

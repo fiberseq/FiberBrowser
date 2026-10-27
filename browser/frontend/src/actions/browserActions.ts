@@ -773,6 +773,7 @@ async function clusterPeakRegions(
   let filteredOut = 0;
   let skipped = 0;
   let lastPatterns: Record<string, unknown> | undefined;
+  let lastMetricCohort: import('../types').ClusterMetricCohort | undefined;
   let seeded = false;
   for (const round of sortRounds(runIds, mainKeys)) {
     const readIdsMap: Record<string, string[]> = {};
@@ -838,6 +839,7 @@ async function clusterPeakRegions(
     }
     if (appliedHere) {
       lastPatterns = res.cluster_patterns as Record<string, unknown> | undefined;
+      lastMetricCohort = res.cluster_metric_cohort;
       const note = performanceSamplingNote(res.results);
       if (note) performanceNotes.add(note);
     }
@@ -848,7 +850,7 @@ async function clusterPeakRegions(
     return `Clustering on the ${label} changed nothing${skipped ? ` (${skipped} panel(s) changed while it ran)` : ''}.`;
   }
   if (lastPatterns && clusterMethod === 'combinatorial') {
-    useBrowserStore.getState().setClusterPatterns(lastPatterns as never);
+    useBrowserStore.getState().setClusterPatterns(lastPatterns as never, lastMetricCohort);
     useBrowserStore.getState().setClusterPeakRegions(peakRegions);
     useBrowserStore.getState().setDynamicClustering(true);
   } else {

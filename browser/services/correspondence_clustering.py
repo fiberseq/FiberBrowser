@@ -137,24 +137,12 @@ def mode_layer(mode: str) -> str:
     return _MODE_LAYER_ALIASES.get(mode, mode)
 
 
-METRIC_COHORT_MAX = 4001
-
-
 def fitted_metric_cohort(reads, modes, cluster_feature_rules) -> dict:
-    """The known values each molecule metric column of a fit ranked against (the whole fitted cohort), to keep with
-    the model so assigning new reads ranks them the same way. Large cohorts keep evenly spaced order statistics
-    (``METRIC_COHORT_MAX``), which give the same percentile ranks to within 1/``METRIC_COHORT_MAX``."""
-    from services.clustering_features import molecule_metric_cohort, molecule_metric_ids
-    ids = molecule_metric_ids(modes, cluster_feature_rules)
-    if not ids:
-        return {}
-    out = {}
-    for metric_id, known in molecule_metric_cohort(reads, ids).items():
-        if len(known) > METRIC_COHORT_MAX:
-            idx = np.linspace(0, len(known) - 1, METRIC_COHORT_MAX).round().astype(int)
-            known = [known[i] for i in idx]
-        out[metric_id] = [float(v) for v in known]
-    return out
+    """The cohort each molecule metric column of a fit ranked against (the whole fitted cohort), to keep with the
+    model so assigning new reads ranks them the same way: each metric's distinct values with their counts, exact
+    (services/clustering_features.py ``fitted_metric_cohort``). Models saved before keep a sorted list, still read."""
+    from services.clustering_features import fitted_metric_cohort as exact_cohort
+    return exact_cohort(reads, modes, cluster_feature_rules)
 
 
 def run(state, req, *, sources=None, model=None, row_cache=None, covering_out=None):

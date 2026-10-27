@@ -181,7 +181,7 @@ def test_assigning_to_a_saved_model_ranks_metrics_against_the_fitted_cohort():
     rule = {'id': 'm', 'enabled': True, 'terms': [{'id': 't', 'source': 'molecule_metric', 'moleculeMetric': 'nuc.nrl'}]}
     fitted = [{'id': f'f{i}', 'intervals': [], '_fiberbrowser_scalars': {'nuc.nrl': v}} for i, v in enumerate([170.0, 180.0, 190.0, 200.0, None])]
     cohort = fitted_metric_cohort(fitted, ['cluster_rule:m'], [rule])
-    assert cohort == {'nuc.nrl': [170.0, 180.0, 190.0, 200.0]}
+    assert cohort == {'nuc.nrl': {'values': [170.0, 180.0, 190.0, 200.0], 'counts': [1, 1, 1, 1]}}
     assert fitted_metric_cohort(fitted, ['accessibility'], []) == {}
     # Two new reads both above the fitted median: alone they would split 0.25 / 0.75.
     new = [{'id': 'n0', 'intervals': [], '_fiberbrowser_scalars': {'nuc.nrl': 195.0}, '_cluster_group': 'w'},

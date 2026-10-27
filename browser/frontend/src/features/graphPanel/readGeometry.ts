@@ -39,8 +39,10 @@ export interface CallPiece extends ReadPiece {
   edgeL?: number;
   edgeR?: number;
   inferred?: boolean;
-  /** nuc/tf: the call's nucsz class byte and z byte (null: no mark; absent: the layer carries none). */
+  /** nuc/tf: the call's nucsz class, named and z bytes (null: no mark, or no named byte; absent: the layer carries
+   * none). */
   cls?: number | null;
+  nb?: number | null;
   zb?: number | null;
 }
 
@@ -308,7 +310,7 @@ export function placeRead(read: GraphRead, index: PlacementIndex, lane = read.b,
       const leftQ = layer === 'tf' ? qualities.el : qualities.lq;
       const rightQ = layer === 'tf' ? qualities.er : qualities.rq;
       // The footprint's class and z bytes ride on every piece of the call (no extra primitive).
-      const cls = l.cls ? { cls: l.cls[index] ?? null, zb: l.zb?.[index] ?? null } : {};
+      const cls = l.cls ? { cls: l.cls[index] ?? null, nb: l.nb?.[index] ?? null, zb: l.zb?.[index] ?? null } : {};
       const pieces: CallPiece[] = cut(cs, ce).map(pc => {
         // The call's source-left edge is on this piece's screen-left when the placement runs left to right.
         const srcLeft = pc.s0 === cs ? leftQ ?? 255 : undefined;

@@ -7,14 +7,14 @@
  *
  * Rules that need target coordinates (genes, peaks, tracks) never match here: an alternate path has no target
  * coordinates of its own (DESIGN_GRAPH_PANEL.md §5, coordinate-dependent landmarks stay unapplied). Nucleosome class
- * rules (coarse code, z, TF bit) are not coordinate-dependent: they read the class bytes the call carries, and never
- * match a call without them (the read track's rule).
+ * rules (coarse code, named class, z, TF bit) are not coordinate-dependent: they read the class bytes the call
+ * carries, and never match a call without them (the read track's rule).
  */
 import { MOD_COLORS } from '../../components/tracks/read-track/constants';
 import { buildRuleMatchContext, footprintMatchesRule, ruleTargetsLayer, type RuleMatchContext } from '../../utils/ruleMatching';
 import { buildRuleColorResolver } from '../../utils/ruleColors';
 import { getLayerColor } from '../../utils/layerColors';
-import { NUC_Z_MISSING, type NucSizeMark } from '../../utils/nucLayers';
+import { NUC_NAMED_MISSING, NUC_Z_MISSING, type NucSizeMark } from '../../utils/nucLayers';
 import type { Colormap } from '../../types';
 
 export type CallLayer = 'nuc' | 'tf' | 'msp';
@@ -33,11 +33,14 @@ export interface ChromatinStyle {
   applyTf: boolean;
 }
 
-/** A graph call's nucsz mark from its class and z bytes, in the shape the rule matcher reads (no named class or
- * posterior on the graph wire). Null without a class byte. */
-export function graphNucMark(cls: number | null | undefined, zb: number | null | undefined, start = 0, end = 0): NucSizeMark | null {
+/** A graph call's nucsz mark from its class, z and named bytes, in the shape the rule matcher reads (no posterior on
+ * the graph wire). A missing named byte (a payload before wire version 10) is no named evidence, which no named
+ * rule matches, never "unnamed" (0). Null without a class byte. */
+export function graphNucMark(cls: number | null | undefined, zb: number | null | undefined, nb?: number | null,
+  start = 0, end = 0): NucSizeMark | null {
   if (cls == null || !Number.isFinite(cls)) return null;
-  return { start, end, coarse: cls, named: 0, posterior: 0, z: zb != null && Number.isFinite(zb) ? zb : NUC_Z_MISSING };
+  return { start, end, coarse: cls, named: nb != null && Number.isFinite(nb) ? nb : NUC_NAMED_MISSING, posterior: 0,
+    z: zb != null && Number.isFinite(zb) ? zb : NUC_Z_MISSING };
 }
 
 const clamp01 = (v: unknown, fallback = 1) => {

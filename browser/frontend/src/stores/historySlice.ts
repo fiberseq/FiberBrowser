@@ -11,7 +11,7 @@ import { clampMotifP, normalizeCustomMotifs, normalizeScoreMode } from '../utils
 import { restoreExtensions, serializeExtensions } from './storeExtensions';
 import type { BrowserState } from './browserStore';
 import type { CatalogEntry, CompositeTrack } from '../types/dataset';
-import type { ClusterWindowPeaks } from '../types/clustering';
+import type { ClusterMetricCohort, ClusterWindowPeaks } from '../types/clustering';
 import type { SavedTrack } from './savedTracksSlice';
 import type { ReadFilterSource } from './clusterSlice';
 import { toArray, toSet } from './hydration';
@@ -311,6 +311,8 @@ export interface SerializedState {
   clusterPatterns: Record<number, number[]>;
   clusterCentroids?: Record<number, number[]>;
   clusterPeakWidths?: number[];
+  /** The fit's molecule metric cohort, with its patterns or centroids (older snapshots: none). */
+  clusterMetricCohort?: ClusterMetricCohort;
   clusterPeakRegions: Array<{ start: number; end: number; mode?: string }>;
   /** A run over panels at several loci: each panel's own matched peaks and view (older saves: none). */
   clusterMatchedRun?: import('../utils/clusterMatchedRun').ClusterMatchedRun | null;
@@ -819,6 +821,7 @@ export function serializeState(state: BrowserState): SerializedState {
     clusterPatterns: state.clusterPatterns,
     clusterCentroids: state.clusterCentroids,
     clusterPeakWidths: state.clusterPeakWidths,
+    clusterMetricCohort: state.clusterMetricCohort,
     clusterPeakRegions: state.clusterPeakRegions,
     clusterMatchedRun: state.clusterMatchedRun ?? null,
     clusterWindowPeaks: state.clusterWindowPeaks ?? null,
@@ -1084,6 +1087,7 @@ function deserializeState(
     clusterPatterns: s.clusterPatterns,
     clusterCentroids: s.clusterCentroids ?? {},
     clusterPeakWidths: s.clusterPeakWidths ?? [],
+    clusterMetricCohort: s.clusterMetricCohort ?? {},
     clusterPeakRegions: s.clusterPeakRegions,
     clusterMatchedRun: s.clusterMatchedRun ?? null,
     clusterWindowPeaks: normalizeClusterWindowPeaks(s.clusterWindowPeaks),

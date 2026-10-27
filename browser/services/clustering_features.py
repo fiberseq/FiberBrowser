@@ -221,16 +221,20 @@ def _same_mark_bytes(a: dict[str, float], b: dict[str, float]) -> bool:
 def nuc_size_mark_for(index, start: float, end: float, length: float | None = None) -> dict[str, float] | None:
     """The mark of an item spanning [start, end) whose molecular length is ``length`` (the item interval's third
     value): the mark with the identical span, else a mark containing the item's midpoint. Among overlapping marks one
-    of the item's own length wins, else the one overlapping the item most (ties: the shorter mark). A tie that stays
-    ambiguous (marks with different bytes) gives no mark rather than another footprint's."""
+    of the item's own length wins, else the one overlapping the item most (ties: the shorter mark). A mark of another
+    known length is never the item's (a filter may have removed the item's own mark: no mark, not a neighbour's);
+    marks or items without a length match by span. A tie that stays ambiguous (marks with different bytes) gives no
+    mark rather than another footprint's."""
     if not index:
         return None
     starts, marks, longest = index
     has_length = length is not None and np.isfinite(length)
 
     def of_length(pool):
-        same = [mark for mark in pool if mark.get("len") == length] if has_length else []
-        return same or pool
+        if not has_length:
+            return pool
+        same = [mark for mark in pool if mark.get("len") == length]
+        return same or [mark for mark in pool if mark.get("len") is None]
 
     exact = []
     k = bisect_left(starts, start)
@@ -238,8 +242,8 @@ def nuc_size_mark_for(index, start: float, end: float, length: float | None = No
         if marks[k]["end"] == end:
             exact.append(marks[k])
         k += 1
-    if exact:
-        pool = of_length(exact)
+    pool = of_length(exact)
+    if pool:
         return pool[0] if all(_same_mark_bytes(mark, pool[0]) for mark in pool) else None
     mid = (start + end) / 2
     covering = []
@@ -667,8 +671,9 @@ def extract_features_from_compact(
     `server.extract_features_from_compact` API:
     `(features, read_ids, peak_widths, peak_modes_used)`.
 
-    `metric_cohort` (from :func:`molecule_metric_cohort`): the known values each molecule metric column ranks
-    against, when these reads are a part (a window) of a larger cohort; by default the reads given.
+    `metric_cohort` (:func:`molecule_metric_cohort`, or a fit's :func:`fitted_metric_cohort`): the known values
+    each molecule metric column ranks against, when these reads are a part (a window, a view) of a larger or an
+    earlier cohort; by default the reads given.
     """
     if not compact_reads or not peak_regions:
         return np.array([]), [], [], []
@@ -822,10 +827,55 @@ def molecule_metric_cohort(compact_reads, metric_ids) -> dict[str, list[float]]:
             for metric_id in metric_ids}
 
 
+def metric_cohort_counts(known) -> dict[str, list]:
+    """A cohort's known values as distinct sorted ``values`` with their ``counts``: every multiplicity kept, so
+    :func:`metric_percentile_ranks` gives exactly the full cohort's ranks, in the space of its distinct values."""
+    values: list[float] = []
+    counts: list[int] = []
+    for v in sorted(float(x) for x in known if x is not None):
+        if values and values[-1] == v:
+            counts[-1] += 1
+        else:
+            values.append(v)
+            counts.append(1)
+    return {"values": values, "counts": counts}
+
+
+def fitted_metric_cohort(compact_reads, peak_modes, cluster_feature_rules) -> dict:
+    """The cohort each molecule metric column of a fit ranked against (the fitted reads), exact
+    (:func:`metric_cohort_counts`), to keep with the fitted model (patterns, centroids) so assigning reads later
+    ranks them the same way; {} when the fit has no metric column."""
+    ids = molecule_metric_ids(peak_modes, cluster_feature_rules)
+    if not ids:
+        return {}
+    return {metric_id: metric_cohort_counts(known) for metric_id, known in molecule_metric_cohort(compact_reads, ids).items()}
+
+
 def metric_percentile_ranks(values, known=None) -> np.ndarray:
     """Molecule metric column values (NUC §7.1 Cluster): each value's percentile rank among the known values
     (mid-rank, 0..1, so a median split is 0.5, as combinatorial grouping reads class bits); a missing value, or a
-    cohort of fewer than two known values, gives the median (0.5). ``known`` (sorted) defaults to ``values``' own."""
+    cohort of fewer than two known values, gives the median (0.5). ``known``: the sorted known values, or their
+    distinct values with counts (:func:`metric_cohort_counts`); by default ``values``' own."""
+    if isinstance(known, dict):
+        distinct = [float(v) for v in known.get("values") or ()]
+        counts = [int(c) for c in known.get("counts") or ()]
+        if len(counts) != len(distinct):
+            raise ValueError("A metric cohort needs one count per value")
+        below = [0]   # below[k]: known values smaller than distinct[k]
+        for c in counts:
+            below.append(below[-1] + c)
+        n = below[-1]
+        ranks = np.full(len(values), 0.5, dtype=np.float32)
+        if n < 2:
+            return ranks
+        for i, v in enumerate(values):
+            if v is None:
+                continue
+            k = bisect_left(distinct, v)
+            lo = below[k]
+            hi = lo + (counts[k] if k < len(distinct) and distinct[k] == v else 0)
+            ranks[i] = ((lo + hi) / 2) / n
+        return ranks
     if known is None:
         known = sorted(v for v in values if v is not None)
     n = len(known)

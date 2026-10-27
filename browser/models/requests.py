@@ -229,6 +229,9 @@ class AssignToClustersRequest(BaseModel):
     cluster_patterns: Dict[int, List[int]] = {}
     cluster_centroids: Optional[Dict[int, List[float]]] = None
     cluster_peak_widths: Optional[List[int]] = None
+    # The fit's molecule metric cohort ({metric: {values, counts}}, as cluster_all returns it with the patterns or
+    # centroids): metric columns rank the view's reads against the fitted reads. Absent: against the view's own.
+    cluster_metric_cohort: Optional[Dict[str, Any]] = None
     overlap_mode: str = 'aggressive'  # 'aggressive' (assign if overlaps any peak) | 'conservative' (require all peaks)
     dataset_ids: List[str] = []
     read_ids: Optional[Dict[str, List[str]]] = None

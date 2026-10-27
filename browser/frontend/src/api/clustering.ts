@@ -1,4 +1,4 @@
-import type { ClusterFeatureRule, ClusterResponse, FilterMode, PeakMode } from '../types';
+import type { ClusterFeatureRule, ClusterMetricCohort, ClusterResponse, FilterMode, PeakMode } from '../types';
 import { fetchJson } from './sharedFetch';
 
 const API_BASE = '/api';
@@ -62,6 +62,9 @@ export async function clusterAllReads(
   cluster_patterns?: Record<number, number[]>;
   cluster_centroids?: Record<number, number[]>;
   cluster_peak_widths?: number[];
+  /** The fit's molecule metric cohort (only when a cluster rule has a molecule metric term): sent back with the
+   * patterns or centroids for dynamic assignment. */
+  cluster_metric_cohort?: ClusterMetricCohort;
   peak_regions?: Array<{ start: number; end: number; mode?: string }>;
   sample_seed?: string | null;
   cluster_random_state?: number;
@@ -417,6 +420,9 @@ export async function assignToClusters(
     // widths instead of patterns, and reads are assigned to the nearest centroid.
     centroids?: Record<number, number[]>;
     peakWidths?: number[];
+    // The fit's molecule metric cohort (cluster_all's cluster_metric_cohort): metric columns rank the view's reads
+    // against the fitted reads, for patterns and centroids alike. Absent or empty: against the view's own reads.
+    metricCohort?: ClusterMetricCohort;
     // Conservative: a read missing any clustering peak goes to Unassigned.
     overlapMode?: 'conservative' | 'aggressive';
   }
@@ -447,6 +453,7 @@ export async function assignToClusters(
         cluster_centroids: options!.centroids,
         cluster_peak_widths: options!.peakWidths ?? [],
       } : {}),
+      ...(options?.metricCohort && Object.keys(options.metricCohort).length ? { cluster_metric_cohort: options.metricCohort } : {}),
     }),
     signal: options?.signal,
   });

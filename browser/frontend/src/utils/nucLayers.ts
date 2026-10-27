@@ -59,6 +59,9 @@ export const NUC_NAMED_CLASSES: readonly NucClass[] = [
 
 export const NUC_TF_BIT = 16;
 export const NUC_Z_MISSING = 255;
+/** A mark's named byte where the payload carries no named evidence (a graph payload without `nb`): no named code,
+ * so no `nucNamed` rule matches it, not even "unnamed" (0). */
+export const NUC_NAMED_MISSING = -1;
 
 export function nucCoarseCode(coarseByte: number): number {
   return coarseByte & 15;
@@ -73,7 +76,7 @@ export function nucCoarseName(code: number): string {
 }
 
 export function nucNamedName(code: number): string | null {
-  if (!code) return null;
+  if (!code || code === NUC_NAMED_MISSING) return null;
   return NUC_NAMED_CLASSES.find(c => c.code === code)?.label ?? `code ${code}`;
 }
 
@@ -214,25 +217,26 @@ function sameMarkBytes(a: NucSizeMark, b: NucSizeMark): boolean {
  * (the item interval's third value): the mark with the identical span, else the mark containing the item's
  * midpoint. Calls split at deletions or lift gaps give several items that share one mark. When marks overlap (a TF
  * call over a nucleosome), a mark of the item's own length wins, else the one overlapping the item most. Clipping can
- * give overlapping footprints the same displayed span: those are told apart by length, and a tie that is still
- * ambiguous (marks with different bytes) gives no mark rather than another footprint's.
+ * give overlapping footprints the same displayed span: those are told apart by length. A mark of another known
+ * length is never the item's (a filter may have removed the item's own mark: no mark, not a neighbour's); marks or
+ * items without a length match by span. A tie that is still ambiguous (marks with different bytes) gives no mark
+ * rather than another footprint's.
  */
 export function nucSizeMarkFor(index: NucSizeIndex | null | undefined, start: number, end: number, len?: number): NucSizeMark | null {
   if (!index) return null;
   const { marks } = index;
   const hasLen = len !== undefined && Number.isFinite(len);
   const ofLen = (list: NucSizeMark[]) => {
-    const same = hasLen ? list.filter(mark => mark.len === len) : [];
-    return same.length ? same : list;
+    if (!hasLen) return list;
+    const same = list.filter(mark => mark.len === len);
+    return same.length ? same : list.filter(mark => mark.len === undefined);
   };
   const exact: NucSizeMark[] = [];
   for (let k = lowerBound(marks, start); k < marks.length && marks[k].start === start; k++) {
     if (marks[k].end === end) exact.push(marks[k]);
   }
-  if (exact.length) {
-    const pool = ofLen(exact);
-    return pool.every(mark => sameMarkBytes(mark, pool[0])) ? pool[0] : null;
-  }
+  const pool = ofLen(exact);
+  if (pool.length) return pool.every(mark => sameMarkBytes(mark, pool[0])) ? pool[0] : null;
   const mid = (start + end) / 2;
   const covering: NucSizeMark[] = [];
   for (let k = upperBound(marks, mid) - 1; k >= 0 && marks[k].start + index.maxLen > mid; k--) {
@@ -282,9 +286,12 @@ export function describeNucSizeMark(mark: NucSizeMark): string {
   return parts.join(' · ');
 }
 
-/** One hover line for class and z bytes alone (graph reads carry no posterior), e.g. "mono · z −0.4". */
-export function describeNucClassBytes(coarse: number, zByte: number | null | undefined): string {
+/** One hover line for class, named and z bytes alone (graph reads carry no posterior), e.g. "mono · octasome ·
+ * z −0.4". */
+export function describeNucClassBytes(coarse: number, zByte: number | null | undefined, namedByte?: number | null): string {
   const parts = [nucCoarseName(nucCoarseCode(coarse))];
+  const named = namedByte == null ? null : nucNamedName(namedByte);
+  if (named) parts.push(named);
   const z = zByte == null ? null : nucZFromByte(zByte);
   parts.push(z === null ? 'z missing' : `z ${formatSigned(z)}`);
   if (nucCoarseIsTf(coarse)) parts.push('TF call or overlaps one');

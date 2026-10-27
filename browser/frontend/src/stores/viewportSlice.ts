@@ -21,7 +21,7 @@ import { currentMatchedRun } from '../utils/clusterMatchedRun';
 /** A graph run's cluster state (kept by keepGraphRun; peaks still follow the linear rules, so a new window's peaks
  * are scanned as usual). */
 const GRAPH_RUN_KEYS = ['clusterAssignments', 'clusterOrder', 'clusterPatterns', 'clusterCentroids', 'clusterPeakWidths',
-  'clusterPeakRegions', 'dynamicClustering', 'clusterTreeNodes', 'clusterTreeRootIds', 'activeClusterTreeNodeId'] as const;
+  'clusterMetricCohort', 'clusterPeakRegions', 'dynamicClustering', 'clusterTreeNodes', 'clusterTreeRootIds', 'activeClusterTreeNodeId'] as const;
 
 /** A move's state change, with a surviving graph run's cluster state left as it is. */
 function keepGraphRun(state: BrowserState, chrom: string, result: Partial<BrowserState>): Partial<BrowserState> {
@@ -393,6 +393,7 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
         clusterPatterns: EMPTY_OBJ,
         clusterCentroids: EMPTY_OBJ,
         clusterPeakWidths: EMPTY_ARR,
+        clusterMetricCohort: EMPTY_OBJ,
         clusterPeakRegions: EMPTY_ARR,
         dynamicClustering: false,
         // Keep the cluster tree in sync with the (now-cleared) live assignments
@@ -480,6 +481,7 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
         clusterPatterns: EMPTY_OBJ,
         clusterCentroids: EMPTY_OBJ,
         clusterPeakWidths: EMPTY_ARR,
+        clusterMetricCohort: EMPTY_OBJ,
         clusterPeakRegions: EMPTY_ARR,
         dynamicClustering: false,
         // Keep the cluster tree in sync with the (now-cleared) live assignments
@@ -584,6 +586,7 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
         clusterPatterns: EMPTY_OBJ,
         clusterCentroids: EMPTY_OBJ,
         clusterPeakWidths: EMPTY_ARR,
+        clusterMetricCohort: EMPTY_OBJ,
         clusterPeakRegions: EMPTY_ARR,
         dynamicClustering: false,
         // Keep the cluster tree in sync with the (now-cleared) live assignments
@@ -714,6 +717,7 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
       clusterPatterns: {},
       clusterCentroids: {},
       clusterPeakWidths: [],
+      clusterMetricCohort: {},
       clusterPeakRegions: [],
       dynamicClustering: false,
       clusterProfiles: {},

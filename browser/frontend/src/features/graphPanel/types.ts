@@ -199,9 +199,12 @@ export interface GraphReadLayer {
   part: ([number, number] | null)[];
   nq?: number[]; lq?: number[]; rq?: number[]; aq?: number[]; tq?: number[]; el?: number[]; er?: number[]; q0?: number[];
   inferred?: boolean;
-  /** nuc/tf: the footprint's nucsz class byte (low 4 bits the coarse code, +16 for a TF call or one overlapping it)
-   * and z byte (20 z + 128, 255 missing), parallel to `iv`; null where the call has no mark. */
+  /** nuc/tf: the footprint's nucsz class byte (low 4 bits the coarse code, +16 for a TF call or one overlapping it),
+   * named byte (nucsz Q2: 0 unnamed, 1 small, 2 hexasome, 3 octasome, 4 chromatosome; wire version 10, absent in
+   * older payloads: no named evidence) and z byte (20 z + 128, 255 missing), parallel to `iv`; null where the call
+   * has no mark (or, for `nb`, its mark no named byte). */
   cls?: (number | null)[];
+  nb?: (number | null)[];
   zb?: (number | null)[];
 }
 

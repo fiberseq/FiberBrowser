@@ -185,6 +185,35 @@ describe('clipped overlapping footprints keep their own class', () => {
   });
 });
 
+describe('a missing footprint mark never borrows another footprint\'s class (Codex D2-1)', () => {
+  // The clipped nuc [0, 10, 147] and TF [0, 10, 20] of above, after a nucsz.posterior >= 100 filter removed the TF's
+  // mark (coarse 17, posterior 50): only the mono mark (coarse 18, posterior 200) is left.
+  const filtered = {
+    intervals: [[0, 10, 147]] as [number, number, number][],
+    quality_names: ['coarse', 'named', 'posterior', 'z'],
+    qualities: [[2 + 16], [0], [200], [128]],
+  };
+
+  it('a call of another known length gets no mark; its own length or no length match by span', () => {
+    const index = buildNucSizeIndex(filtered)!;
+    expect(nucSizeMarkFor(index, 0, 10, 20)).toBeNull();
+    expect(nucSizeMarkFor(index, 2, 8, 20)).toBeNull();          // the midpoint lookup rejects it too
+    expect(nucSizeMarkFor(index, 0, 10, 147)?.coarse).toBe(2 + 16);
+    expect(nucSizeMarkFor(index, 0, 10)?.coarse).toBe(2 + 16);
+    // A mark without a length still matches a call of any length by span.
+    const unknown = buildNucSizeIndex({ intervals: [[0, 10, NaN]] as [number, number, number][], qualities: [[1 + 16], [0], [50], [128]] })!;
+    expect(nucSizeMarkFor(unknown, 0, 10, 20)?.coarse).toBe(1 + 16);
+  });
+
+  it('a TF rule for the mono class does not match the TF call', () => {
+    const read = { id: 'r1', intervals: [] as [number, number, number][],
+      layers: { tf: { intervals: [[0, 10, 20]] as [number, number, number][] }, nucsz: filtered } };
+    const ctx = buildRuleMatchContext([], [], [], 0, 10, []);
+    const tfMono = { ...nucSizeClassRules().find(r => r.nucCoarse?.[0] === 2)!, targetLayers: ['tf'], nucTf: null };
+    expect(readMatchesRule(read, tfMono, ctx)).toBe(false);
+  });
+});
+
 describe('nucseg rows', () => {
   const layer = {
     intervals: [[0, 800, 800], [800, 1200, 400], [1200, 1500, 300], [1500, 2000, 500], [300, 450, 150], [1000, 1100, 100]] as [number, number, number][],

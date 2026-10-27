@@ -169,7 +169,7 @@ export function Browser() {
 
   // Group 2: Cluster + analysis state
   const {
-    clusterAssignments, clusterPatterns, clusterCentroids, clusterPeakWidths, clusterPeakRegions, clusterFeatureRules, dynamicClustering, dynamicOverlapMode,
+    clusterAssignments, clusterPatterns, clusterCentroids, clusterPeakWidths, clusterMetricCohort, clusterPeakRegions, clusterFeatureRules, dynamicClustering, dynamicOverlapMode,
     selectedPeaks, clusterPeakMode, clusterK, clusterMethod, subnucleosomalThreshold, accessibilityThreshold,
     syncPeaksToBackend, activeReadIds, selectedGenes, peakModes,
     selectedDatasets, selectedFootprints, selectedReadIds,
@@ -177,7 +177,8 @@ export function Browser() {
     activeClusterBranch,
   } = useBrowserStore(useShallow(s => ({
     clusterAssignments: s.clusterAssignments, clusterPatterns: s.clusterPatterns,
-    clusterCentroids: s.clusterCentroids, clusterPeakWidths: s.clusterPeakWidths, dynamicOverlapMode: s.dynamicOverlapMode,
+    clusterCentroids: s.clusterCentroids, clusterPeakWidths: s.clusterPeakWidths, clusterMetricCohort: s.clusterMetricCohort,
+    dynamicOverlapMode: s.dynamicOverlapMode,
     clusterPeakRegions: s.clusterPeakRegions, clusterFeatureRules: s.clusterFeatureRules, dynamicClustering: s.dynamicClustering,
     selectedPeaks: s.selectedPeaks, clusterPeakMode: s.clusterPeakMode, clusterK: s.clusterK, clusterMethod: s.clusterMethod,
     subnucleosomalThreshold: s.subnucleosomalThreshold, accessibilityThreshold: s.accessibilityThreshold,
@@ -540,6 +541,8 @@ export function Browser() {
               centroids: clusterCentroids,
               peakWidths: clusterPeakWidths,
             } : {}),
+            // The fit's molecule metric cohort: a scalar-defined cluster keeps its reads when the view changes.
+            metricCohort: clusterMetricCohort,
           }
         );
 
@@ -581,7 +584,7 @@ export function Browser() {
     }, 300);
 
     return () => { clearTimeout(timeoutId); controller.abort(); };
-  }, [chrom, start, end, dynamicClustering, clusterPatterns, clusterCentroids, clusterPeakWidths, dynamicOverlapMode, clusterPeakRegions, clusterFeatureRules, activeClusterBranchDynamicKey, datasets, selectedDatasets, panels, spanningOnly, subnucleosomalThreshold, accessibilityThreshold, analysisSampleSeed]);
+  }, [chrom, start, end, dynamicClustering, clusterPatterns, clusterCentroids, clusterPeakWidths, clusterMetricCohort, dynamicOverlapMode, clusterPeakRegions, clusterFeatureRules, activeClusterBranchDynamicKey, datasets, selectedDatasets, panels, spanningOnly, subnucleosomalThreshold, accessibilityThreshold, analysisSampleSeed]);
 
   // Helper: collect read IDs for scanning
   const collectScanReadIds = useCallback(() => {
@@ -1557,14 +1560,15 @@ export function Browser() {
       // uses binary patterns; other methods (kmeans, etc.) use per-cluster
       // centroids. Either enables dynamic reassignment as the viewport changes.
       if (res.cluster_patterns && clusterMethod === 'combinatorial') {
-        useBrowserStore.getState().setClusterPatterns(res.cluster_patterns);
+        // With the fit's molecule metric cohort, which dynamic assignment ranks against.
+        useBrowserStore.getState().setClusterPatterns(res.cluster_patterns, res.cluster_metric_cohort);
         useBrowserStore.getState().setClusterCentroids({}, []);
         useBrowserStore.getState().setClusterPeakRegions(runPeakRegions);
         useBrowserStore.getState().setDynamicClustering(true);
         lastDynamicClusterRef.current = { chrom, start, end };
       } else if (res.cluster_centroids && Object.keys(res.cluster_centroids).length > 0) {
         useBrowserStore.getState().setClusterPatterns({});
-        useBrowserStore.getState().setClusterCentroids(res.cluster_centroids, res.cluster_peak_widths ?? []);
+        useBrowserStore.getState().setClusterCentroids(res.cluster_centroids, res.cluster_peak_widths ?? [], res.cluster_metric_cohort);
         useBrowserStore.getState().setClusterPeakRegions(runPeakRegions);
         useBrowserStore.getState().setDynamicClustering(true);
         lastDynamicClusterRef.current = { chrom, start, end };

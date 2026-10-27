@@ -84,8 +84,13 @@ def assign_reads_to_centroids(
     overlap_mode: str = "conservative",
     cluster_feature_rules: list[dict] | None = None,
     cluster_rule_context: dict | None = None,
+    metric_cohort: dict | None = None,
 ) -> dict:
     """Assign reads to the nearest cluster centroid (kmeans-style redistribution).
+
+    ``metric_cohort``: the fit's molecule metric cohort (clustering_features ``fitted_metric_cohort``), so a metric
+    column ranks these reads against the reads the centroids were fitted on, not against each other (None: a model
+    saved without one, ranked against these reads as before).
 
     ``overlap_mode``:
       - ``"conservative"``: a read must overlap EVERY clustering peak, otherwise
@@ -110,6 +115,7 @@ def assign_reads_to_centroids(
         peak_modes=peak_modes,
         cluster_feature_rules=cluster_feature_rules,
         cluster_rule_context=cluster_rule_context,
+        metric_cohort=metric_cohort or None,
     )
     if features.size == 0:
         return {"assignments": {}, "cluster_counts": {}, "filtered_read_ids": []}
@@ -319,6 +325,7 @@ def assign_reads_to_cluster_patterns(
     overlap_mode: str = "aggressive",
     cluster_feature_rules: list[dict] | None = None,
     cluster_rule_context: dict | None = None,
+    metric_cohort: dict | None = None,
 ) -> dict:
     """Assign reads to existing cluster patterns for dynamic clustering.
 
@@ -329,7 +336,8 @@ def assign_reads_to_cluster_patterns(
 
     ``overlap_mode`` as for centroids: ``"conservative"`` sends a read that
     misses any clustering peak to Unassigned; ``"aggressive"`` assigns every
-    read overlapping at least one peak.
+    read overlapping at least one peak. ``metric_cohort`` as for centroids: a
+    molecule metric bit is the read's rank among the fitted reads.
     """
     from services.clustering_features import class_aware_pattern_slices
 
@@ -348,6 +356,7 @@ def assign_reads_to_cluster_patterns(
         peak_modes=peak_modes,
         cluster_feature_rules=cluster_feature_rules,
         cluster_rule_context=cluster_rule_context,
+        metric_cohort=metric_cohort or None,
     )
     if features.size == 0:
         return {"assignments": {}, "cluster_counts": {}, "filtered_read_ids": []}

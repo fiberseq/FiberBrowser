@@ -73,8 +73,10 @@ _LANES = ("nseg",)
 # The cached rows' wire form: 2 adds the identities (aid, rk, hap) and the map's molecule groups (graph primary G0);
 # 3 the DAF strand of DAF-seq records (G8; 5: its evidence by mark, resolved per molecule; 6: marks by contig and
 # absolute source position, so records cached by decodes at other origins compare alike; 7: a supplementary's
-# primary's explicit call; 8: soft clips; 9: nucleosome classes on nuc/tf pieces and the segment lane).
-WIRE_VERSION = 9
+# primary's explicit call; 8: soft clips; 9: nucleosome classes on nuc/tf pieces and the segment lane; 10: the named
+# byte ``nb`` beside ``cls``/``zb``, and no class from a mark of another molecular length. Clients read a payload
+# without ``nb`` as no named evidence).
+WIRE_VERSION = 10
 
 
 class ReadsError(Exception):
@@ -300,30 +302,46 @@ def _abs_layer(layer: Optional[dict], ids, parts, origin: int, name: str, keep) 
 
 def _nuc_classes(out: dict, layers: dict, origin: int, keep) -> None:
     """Nucleosome outputs on a graph row (NUC §7.1, P-B): each nuc/tf piece gets its footprint's nucsz class byte
-    (``cls``: coarse code + 16 for TF, as nucsz Q1) and z byte (``zb``: 20 z + 128, 255 missing) by the mark that
-    holds the piece's midpoint, so no extra primitive is spent; ``nseg`` is the segment lane (nucseg rows: [start,
-    end, molecular length] with their code, posterior or 10 x LLR, and q-hat - 100 or count bytes)."""
+    (``cls``: coarse code + 16 for TF, as nucsz Q1), named byte (``nb``: nucsz Q2, None without that track) and z
+    byte (``zb``: 20 z + 128, 255 missing) by the mark that holds the piece's midpoint, so no extra primitive is
+    spent; ``nseg`` is the segment lane (nucseg rows: [start, end, molecular length] with their code, posterior or
+    10 x LLR, and q-hat - 100 or count bytes)."""
     sz = layers.get("nucsz")
     if sz and sz.get("intervals"):
         names = list(sz.get("quality_names") or [])
         quals = sz.get("qualities") or []
+
+        def track(name, index):
+            # A byte track by its declared name, else by its §11.3 position (coarse, named, posterior, z).
+            if name in names:
+                at = names.index(name)
+                return quals[at] if at < len(quals) else None
+            return quals[index] if len(quals) > index else None
         q0 = quals[0] if quals else None
-        qz = quals[names.index("z")] if "z" in names and names.index("z") < len(quals) else (quals[3] if len(quals) > 3 else None)
+        qn = track("named", 1)
+        qz = track("z", 3)
         marks = sorted((int(iv[0]) + origin, int(iv[1]) + origin, i, int(iv[2]) if len(iv) > 2 else None)
                        for i, iv in enumerate(sz["intervals"]))
         starts = [m[0] for m in marks]
         import bisect
 
+        def byte(values, i):
+            return int(values[i]) if values is not None and i < len(values) and values[i] is not None else None
+
         def bytes_of(i):
-            return (int(q0[i]) if q0 is not None else None, int(qz[i]) if qz is not None else None)
+            return (byte(q0, i), byte(qn, i), byte(qz, i))
 
         def mark_for(a, b, size):
             # The piece's own footprint: among the marks holding its midpoint, the one with its span and molecular
-            # length, then its length; overlapping footprints with other bytes never lend theirs (no class instead).
+            # length, then its length. A mark of another known length is never the piece's (a filter may have removed
+            # its own: no class rather than a neighbour's); marks or pieces without a length match by span, and
+            # overlapping footprints with other bytes never lend theirs (no class instead).
             mid = (a + b) // 2
             k = bisect.bisect_right(starts, mid) - 1
             held = [marks[j] for j in range(k, max(-1, k - 16), -1)   # marks starting at or before mid (few overlap)
                     if marks[j][0] <= mid < max(marks[j][1], marks[j][0] + 1)]
+            if size is not None:
+                held = [m for m in held if m[3] is None or m[3] == size]
             for pool in ([m for m in held if m[0] == a and m[1] == b and m[3] == size],
                          [m for m in held if size is not None and m[3] == size],
                          [m for m in held if m[0] == a and m[1] == b], held):
@@ -335,13 +353,14 @@ def _nuc_classes(out: dict, layers: dict, origin: int, keep) -> None:
             layer = out.get(name)
             if not layer:
                 continue
-            cls, zb = [], []
+            cls, nb, zb = [], [], []
             for a, b, size in layer["iv"]:
                 hit = mark_for(int(a), int(b), int(size) if size is not None else None)
-                cls.append(int(q0[hit]) if hit is not None and q0 is not None else None)
-                zb.append(int(qz[hit]) if hit is not None and qz is not None else None)
+                cls.append(byte(q0, hit) if hit is not None else None)
+                nb.append(byte(qn, hit) if hit is not None else None)
+                zb.append(byte(qz, hit) if hit is not None else None)
             if any(c is not None for c in cls):
-                layer["cls"], layer["zb"] = cls, zb
+                layer["cls"], layer["nb"], layer["zb"] = cls, nb, zb
     seg = layers.get("nucseg")
     if seg and seg.get("intervals"):
         quals = seg.get("qualities") or []
