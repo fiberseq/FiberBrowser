@@ -146,6 +146,8 @@ interface ClusterPanelProps {
   onClearFilter: () => void;
   onScanPeaks?: () => void;
   scanning?: boolean;
+  /** An automatic scan was stopped (its time budget): shown beside Scan until a scan runs or the view moves. */
+  scanNote?: string | null;
   clustering?: boolean;
   sorting?: boolean;
 }
@@ -157,6 +159,7 @@ export function ClusterPanel({
   onClearFilter,
   onScanPeaks,
   scanning,
+  scanNote,
   clustering,
   sorting,
 }: ClusterPanelProps) {
@@ -706,9 +709,12 @@ export function ClusterPanel({
             {/* Fixed minimum widths: these change on every navigation (none /
                 scanning / N of M), and a changing width re-wraps the toolbar. */}
             <span className="inline-block min-w-[6rem] text-gray-600 dark:text-gray-400">
-              {totalPeaks === 0 ? 'none' : `${selectedPeaks.size} of ${totalPeaks} selected`}
+              {totalPeaks === 0 ? (scanNote && !scanning ? '' : 'none') : `${selectedPeaks.size} of ${totalPeaks} selected`}
               {customPeaks.length > 0 && (
                 <span className="text-amber-600 ml-1">({customPeaks.length} custom)</span>
+              )}
+              {scanNote && !scanning && (
+                <span role="status" data-testid="peak-scan-stopped" className={`text-amber-700 dark:text-amber-400${totalPeaks ? ' ml-1' : ''}`}>{scanNote}</span>
               )}
             </span>
           </>
