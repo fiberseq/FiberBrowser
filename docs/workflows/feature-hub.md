@@ -120,11 +120,13 @@ With hits selected:
   the session, for comparisons at anchors.
 - **Cluster regions** makes the hits in view the Cluster button's regions, each
   on its own layer (footprint classes on the TF class layer, NFRs and peaks on
-  accessibility), and runs Cluster. Cluster uses the reads that span every
+  accessibility), and runs Cluster. Hits with the same span are one region. It
+  needs the **Custom** peak rule on. Cluster uses the reads that span every
   region, so pick hits that the same reads cover.
 - **Filter** keeps the reads that are members (state 1: in the class, open in
-  the NFR, carrying the SV) of any selected hit. The filter chip says **Feature
-  hub**.
+  the NFR) of any selected hit with per-read states; peaks, SVs and Differences
+  have none here and are left out, as the notice says. The filter chip says
+  **Feature hub**.
 - **Go to** shows the selected hits.
 
 ![Reads clustered on two NFR variants picked in the hub](../images/feature-hub/cluster-regions.png)
