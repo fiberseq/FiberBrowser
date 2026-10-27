@@ -17,6 +17,7 @@ import { create } from 'zustand';
 import { openAltAllele, insertionClustersInView, type AltAlleleResponse } from './api';
 import { removeDataset } from '../../api/datasets';
 import { useBrowserStore } from '../../stores/browserStore';
+import { useSplitPanelStore } from '../../stores/splitPanelStore';
 import { seedHistoryBaseline, serializeDataset, type SerializedDataset } from '../../stores/historySlice';
 import { closedDatasetReference, usePanelGenomeStore } from '../../stores/panelGenomeStore';
 import type { PanelConfig } from '../../types';
@@ -177,6 +178,20 @@ function startLocus(res: AltAlleleResponse, from?: { chrom: string; start: numbe
 function fail(label: string, error: string | undefined, retry?: () => void) {
   useBrowserStore.getState().setError(`Could not show the insert expanded (${label}): ${error || 'the server did not answer'}`,
     retry ? { label: 'Retry', run: retry } : undefined);
+}
+
+/**
+ * A split panel (a combined-SV genotype) whose reads all carry an insertion, shown expanded: the panel keeps its own
+ * reads there (this genotype's, not every carrier of the insertion). Its Retry runs this again, read copy included.
+ */
+export async function expandSplitPanelInsertion(panelId: string, cluster: AltAlleleCluster): Promise<string | null> {
+  const panel = useBrowserStore.getState().panels.find(p => p.id === panelId);
+  if (!panel) return null;
+  const reads = useSplitPanelStore.getState().reads[panel.stateKey ?? panel.datasetId ?? panel.id];
+  const id = await showPanelOnAltAllele(panelId, cluster, {}, () => void expandSplitPanelInsertion(panelId, cluster));
+  const now = useBrowserStore.getState().panels.find(p => p.id === panelId);
+  if (id && reads && now?.stateKey) useSplitPanelStore.getState().setReads(now.stateKey, reads);
+  return id;
 }
 
 /**

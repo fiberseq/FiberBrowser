@@ -91,3 +91,17 @@ describe('Retry on a failed insert-expanded build', () => {
     expect(panel('panel-src').viewportOverride).toEqual(view);
   });
 });
+
+describe('Retry of a split panel\'s Expand (stabilize 2)', () => {
+  it('keeps the panel\'s own reads on Retry too, as the first try would', async () => {
+    const { useSplitPanelStore } = await import('../../stores/splitPanelStore');
+    const { expandSplitPanelInsertion } = await import('./altAllelePanel');
+    const genotypeReads = new Set(['r1', 'r2']);
+    useSplitPanelStore.getState().setReads('carriers-key', genotypeReads as never);
+    api.openAltAllele.mockResolvedValueOnce(DEADLINE).mockResolvedValueOnce(OK);
+    expect(await expandSplitPanelInsertion('panel-src', CLUSTER)).toBeNull();
+    useBrowserStore.getState().errorAction!.run();
+    await vi.waitFor(() => expect(panel('panel-src').datasetId).toBe(ALT.id));
+    await vi.waitFor(() => expect(useSplitPanelStore.getState().reads[panel('panel-src').stateKey!]).toBe(genotypeReads));
+  });
+});
