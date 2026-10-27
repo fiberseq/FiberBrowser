@@ -20,7 +20,9 @@ _pending_shutdown_task = None
 # timers in background tabs to about once a minute, so a tab counts as open
 # for TAB_ALIVE_S after its last report). Closing a tab starts a monitor that
 # shuts the server down once no open tab remains; a reload registers a new
-# page id well within that time.
+# page id well within that time. The monitor's check needs no open tab AND no
+# tab closed in the last SHUTDOWN_CHECK_S: otherwise a check landing between a
+# reload's close report and the new page's first report stopped the server.
 #
 # Only the owner's own tabs count (services/remote_access.py): a tab of
 # another device (a phone through tailscale serve, a laptop on the Wi-Fi)
@@ -30,11 +32,17 @@ TAB_ALIVE_S = 150
 SHUTDOWN_CHECK_S = 15
 _tab_last_seen: dict[str, float] = {}
 _closed_tabs: set[str] = set()
+_last_tab_closed = float("-inf")  # time.monotonic() of the last close report
 
 
 def _live_tabs(now: float) -> list[str]:
     horizon = now - TAB_ALIVE_S
     return [tab for tab, seen in _tab_last_seen.items() if seen >= horizon]
+
+
+def _should_shut_down(now: float) -> bool:
+    """No tab open, and none closed within SHUTDOWN_CHECK_S (a reloading page reports in again in that time)."""
+    return not _live_tabs(now) and now - _last_tab_closed >= SHUTDOWN_CHECK_S
 
 
 _REVISIONS: dict = {}
@@ -104,12 +112,13 @@ async def shutdown(request: Request, tab: str | None = Query(None, max_length=64
     import signal
     import time
 
-    global _pending_shutdown_task
+    global _pending_shutdown_task, _last_tab_closed
     if get_public_mode():
         return {"message": "Shutdown disabled in public mode"}
     refusal = lifecycle_refusal(request)
     if refusal is not None:
         return refusal
+    _last_tab_closed = time.monotonic()
     if tab:
         _tab_last_seen.pop(tab, None)
         _closed_tabs.add(tab)
@@ -118,7 +127,7 @@ async def shutdown(request: Request, tab: str | None = Query(None, max_length=64
             global _pending_shutdown_task
             while True:
                 await asyncio.sleep(SHUTDOWN_CHECK_S)
-                if not _live_tabs(time.monotonic()):
+                if _should_shut_down(time.monotonic()):
                     print("=== No browser tabs open; shutting down ===")
                     os.kill(os.getpid(), signal.SIGTERM)
                     return
