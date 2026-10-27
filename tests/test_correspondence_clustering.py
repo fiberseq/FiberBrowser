@@ -302,3 +302,33 @@ def test_loads_only_layers_used_by_mapped_features(state, monkeypatch, mode, lay
     monkeypatch.setattr(fc.AnalysisReadQuery, 'build_working_set', working)
     req = request([window('a'), window('b')]); req.peak_regions[0].mode = mode
     fc.run(base, req)
+
+
+def test_nucleosome_modes_load_the_nuc_groups_with_their_class_bytes(monkeypatch):
+    """Review C-2: a nuc.size mode loads nucsz with its quality bytes; without them every read gives no feature."""
+    base = BrowserState(None)
+    base.current_genome = 'main-ref'
+    base.datasets = {'d': SimpleNamespace()}
+    base.dataset_order = ['d']
+    seen = {}
+
+    def working(self, dataset_id, chrom, start, end, spanning=False, min_footprints=0, **kwargs):
+        seen.update(kwargs)
+        quals = bool(kwargs.get('include_layer_qualities'))
+        reads = []
+        for i in range(8):
+            mono = i % 2 == 0
+            layer = dict(intervals=[[0, 147, 147]] if mono else [[0, 20, 20]], quality_names=['coarse', 'named', 'posterior', 'z'],
+                         **({'qualities': [[2, 0, 200, 128]] if mono else [[17, 0, 200, 128]]} if quals else {}))
+            reads.append(dict(id=f'r{i}', intervals=[[0, end - start, 0]], layers={'nucsz': layer}))
+        return WorkingSet(reads, total_overlapping=8, total_spanning=8, chrom=chrom, start=start, end=end)
+
+    monkeypatch.setattr(BrowserState, 'build_working_set', working)
+    req = fc.RegionClusterRequest(viewports=[window('a')], peak_regions=[PeakRegion(start=0, end=100, mode='nuc.size.mono')],
+                                  method='kmeans', k=2)
+    result = fc.run(base, req)
+    assert 'nucsz' in (seen.get('requested_layers') or [])
+    assert seen.get('include_layer_qualities') is True
+    labels = result['results']['a']['assignments']
+    assert len({labels[f'r{i}'] for i in range(0, 8, 2)}) == 1
+    assert {labels[f'r{i}'] for i in range(0, 8, 2)} != {labels[f'r{i}'] for i in range(1, 8, 2)}

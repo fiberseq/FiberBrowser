@@ -123,6 +123,7 @@ def assign_with_model(X, read_ids, widths, modes, model, snapshot, missing=None,
     return {rid: int(keys[int(i)]) for rid, i in zip(read_ids, np.argmin(d, axis=1))}
 
 
+NUC_QUALITY_LAYERS = {'nucsz', 'nucseg'}
 _MODE_LAYER_ALIASES = {'accessibility': 'msp', 'fire': 'msp', 'tf_layer': 'tf', 'tf_density': 'tf', 'nuc_layer': 'nuc'}
 
 
@@ -189,7 +190,8 @@ def run(state, req, *, sources=None, model=None, row_cache=None, covering_out=No
                 dataset_ids=[v.dataset_id], max_reads=req.max_reads, sample_seed=seed,
                 include_methylation=cluster_modes_need_methylation(modes) or bool(v.strand),
                 include_layers=cluster_modes_need_layers(modes), requested_layers=layers,
-                include_layer_qualities=rule_modes)
+                # Rule terms and nucleosome modes read the per-item quality bytes (class, state codes).
+                include_layer_qualities=rule_modes or bool(set(layers or ()) & NUC_QUALITY_LAYERS))
             working = query.build_working_set(wstate, v.dataset_id, read_ids=v.read_ids, broad_prefetch_multiplier=1,
                                               lift_hap=v.lift_hap, strand=v.strand)
             own = working.reads
