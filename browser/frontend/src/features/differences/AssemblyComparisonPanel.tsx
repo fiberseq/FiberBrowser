@@ -4,7 +4,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useBrowserStore } from '../../stores/browserStore';
 import type { Dataset } from '../../types';
 import type { DifferenceSelection } from '../liveLift/inspectionStore';
-import { comparisonFor, comparisonKey, compareWithAssembly, LABEL_TEXT, linkText, useComparisonStore } from './comparison';
+import { comparisonFor, comparisonKey, compareWithAssembly, exactTargetsFor, LABEL_TEXT, linkText, useComparisonStore } from './comparison';
 
 const LOCAL = ['insertion', 'deletion', 'replacement', 'snv', 'mnv'];
 
@@ -99,7 +99,16 @@ export function useInspectEntry(selection: DifferenceSelection, map: Dataset | n
   return useComparisonStore(s => map ? comparisonFor(s.byKey, `${map.id}|${selection.chrom}|`, selection.difference) : null);
 }
 
-/** One comparison for the inspected difference; a row comparison already covering it is reused. */
+/** A comparison that knows an exact assembly allele for this difference but froze no target for it (the target's
+ * window reached past what that comparison fetched): the inspector then runs its own, wider comparison. */
+export function lacksExactTarget(entry: ReturnType<typeof comparisonFor>): boolean {
+  if (!entry || exactTargetsFor(entry).length) return false;
+  if (entry.kind === 'assembly') return !!entry.value.exact_allele_id;
+  return entry.value.links.some(l => l.assembly_item_ids.some(id => !!entry.response.assembly[id]?.exact_allele_id));
+}
+
+/** One comparison for the inspected difference; a row comparison already covering it is reused unless it lacks
+ * the exact target an inspection tests reads against. */
 export function useInspectComparison(selection: DifferenceSelection, map: Dataset | null) {
   const d = selection.difference;
   const key = map ? inspectKey(map.id, selection) : '';
@@ -108,7 +117,8 @@ export function useInspectComparison(selection: DifferenceSelection, map: Datase
   const [busy, setBusy] = useState(false);
   const supported = LOCAL.includes(d.kind);
   useEffect(() => {
-    if (!map || entry || !supported) return;
+    if (!map || !supported) return;
+    if (entry && (useComparisonStore.getState().byKey[key] || !lacksExactTarget(entry))) return;
     const controller = new AbortController();
     setBusy(true); setError('');
     runInspectComparison(selection, map, undefined, controller.signal)
