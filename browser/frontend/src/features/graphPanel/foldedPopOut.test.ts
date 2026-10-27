@@ -8,6 +8,8 @@ import { clusterAssignmentForRead, clusteredReadIdSet } from '../../components/t
 import { idSetHas, isMoleculeRecordKey, recordKey } from '../../utils/recordKeys';
 import { applySvSplit } from '../../utils/svAlleleSplit';
 import { useTrackFeedStore } from '../../stores/trackFeedStore';
+import { useGraphReadsStore } from './graphReadsStore';
+import { applyReadGroups } from '../../utils/readGroups';
 import type { GraphRegistration } from './types';
 import type { PanelConfig } from '../../types';
 
@@ -62,6 +64,7 @@ function setup() {
     clusterMethod: 'kmeans', clusterK: 2, clusterResolution: 1, subnucleosomalThreshold: 120, accessibilityThreshold: 30,
   } as never);
   useTrackFeedStore.setState({ byStateKey: {} });
+  useGraphReadsStore.setState({ byPanel: {}, rowHaps: {} });
 }
 
 /** A graph run on the host: MAT's and PAT's rows fitted (PAT left out when it has none). */
@@ -161,6 +164,52 @@ describe('a folded molecule after a non-graph relabel on a pooled host reaches t
     // stay marked as another grouping's (not the run's).
     expect(JSON.stringify(st.clusterTreeNodes[root].graphProvenance)).toBe(rootProv);
     expect(st.clusterTreeNodes[child].graphLabelsReplaced?.['k-hostA']).toBe(true);
+  });
+
+  describe('agy whole-diff review: other relabel paths', () => {
+    // molA labelled through MAT (its supplementary's row), its primary on PAT; p1 PAT's own.
+    const run = () => runGraph({ [fid('molA')]: 0, [fid('m1')]: 1 }, { [fid('p1')]: 1 });
+    const linearRows = () => drawn([{ id: fid('molA', '271'), q: 'molA', hap: 'PAT' }, { id: fid('m1', '5'), q: 'm1', hap: 'MAT' },
+      { id: fid('p1', '63'), q: 'p1', hap: 'PAT' }]);
+    const shown = (labels: Record<string, number> | undefined) => Boolean(labels
+      && idSetHas(clusteredReadIdSet(labels)!, ['molA', fid('molA', '63')], rk(fid('molA'))));
+
+    it('(a) an SV split while the host shows its graph: the graph panel\'s drawn rows route the folded molecule', () => {
+      run();
+      // No read track (the host shows its graph); the graph panel drew molA's primary row on PAT, its supplementary on MAT.
+      useGraphReadsStore.getState().publishRowHaps('hostA', [{ rk: rk(fid('molA')), datasetId: 'ds1', hap: 'PAT' },
+        { rk: rk(fid('m1')), datasetId: 'ds1', hap: 'MAT' }, { rk: rk(fid('p1')), datasetId: 'ds1', hap: 'PAT' }]);
+      applySvSplit('k-hostA', { datasetId: 'ds1', chrom: 'chr3', t: 'D', ref: 128_655_000, len: 500, end: 128_655_500, margin: 50,
+        label: 'DEL 500bp', counts: [1, 2, 0], viewStart: 128_650_000, viewEnd: 128_660_000 } as never,
+        { [rk(fid('molA'))]: 0, [rk(fid('m1'))]: 1, [rk(fid('p1'))]: 1 });
+      const [, patId] = popBoth();
+      const labels = useBrowserStore.getState().clusterAssignments[patId];
+      expect(labels).toEqual({ [rk(fid('molA'))]: 0, [rk(fid('p1'))]: 1 });
+      expect(shown(labels)).toBe(true);
+    });
+
+    it('(b) a read grouping (written without updating the tree node) routes the folded molecule at pop-out', () => {
+      run();
+      linearRows();
+      applyReadGroups({ byDataset: { ds1: { [fid('molA', '271')]: 1, [fid('m1', '5')]: 0, [fid('p1', '63')]: 1 } },
+        order: [0, 1], patterns: {}, regions: [], labels: { 0: 'MAT', 1: 'PAT' } } as never, { ds1: ['k-hostA'] }, 'Group by haplotype');
+      const [, patId] = popBoth();
+      const labels = useBrowserStore.getState().clusterAssignments[patId];
+      expect(labels).toEqual({ [fid('molA', '271')]: 1, [fid('p1', '63')]: 1 });
+      expect(shown(labels)).toBe(true);
+    });
+
+    it('(c) a linear subcluster routes the folded molecule at pop-out, and on its tree node', () => {
+      run();
+      linearRows();
+      useBrowserStore.getState().commitSubcluster({ 'k-hostA': { [fid('molA', '271')]: 0, [fid('p1', '63')]: 1 } }, { sourceClusterIds: [0, 1] });
+      const child = useBrowserStore.getState().activeClusterTreeNodeId!;
+      const [, patId] = popBoth();
+      const st = useBrowserStore.getState();
+      expect(st.clusterAssignments[patId]?.[fid('molA', '271')]).toBe(0);
+      expect(shown(st.clusterAssignments[patId])).toBe(true);
+      expect(st.clusterTreeNodes[child].assignments[patId]?.[fid('molA', '271')]).toBe(0);
+    });
   });
 
   it('a molecule drawn only on MAT, or rows not drawn, keep the run\'s routing (PAT gets none of MAT\'s labels)', () => {

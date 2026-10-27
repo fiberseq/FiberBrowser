@@ -7,10 +7,18 @@
 import { create } from 'zustand';
 import type { GraphReadBinding } from './types';
 
+/** A drawn molecule's haplotype (graph follow-ups item 5): a molecule-level record key (`fold_molecule`) whose
+ * primary record's row this panel drew, on its path's haplotype, which is the haplotype a lifted panel shows all the
+ * molecule's rows on. */
+export interface DrawnRowHap { rk: string; datasetId: string; hap: string; strand?: string | null }
+
 interface GraphReadsState {
   /** registrationId: the package the bindings were verified for (another package's same-named path is not it). */
   byPanel: Record<string, { drawn: string[]; bindings: GraphReadBinding[]; registrationId?: string | null }>;
+  /** Per panel: the haplotypes of the folded molecules it drew (DrawnRowHap). */
+  rowHaps: Record<string, DrawnRowHap[]>;
   publish: (panelId: string, drawn: string[], bindings: GraphReadBinding[], registrationId?: string | null) => void;
+  publishRowHaps: (panelId: string, rows: DrawnRowHap[]) => void;
   clear: (panelId: string) => void;
 }
 
@@ -18,6 +26,8 @@ const same = (a: readonly string[], b: readonly string[]) => a.length === b.leng
 
 export const useGraphReadsStore = create<GraphReadsState>(set => ({
   byPanel: {},
+  rowHaps: {},
+  publishRowHaps: (panelId, rows) => set(s => (!rows.length && !(panelId in s.rowHaps) ? s : { rowHaps: { ...s.rowHaps, [panelId]: rows } })),
   publish: (panelId, drawn, bindings, registrationId = null) => set(s => {
     const prev = s.byPanel[panelId];
     const ids = [...drawn].sort();
@@ -25,9 +35,10 @@ export const useGraphReadsStore = create<GraphReadsState>(set => ({
     return { byPanel: { ...s.byPanel, [panelId]: { drawn: ids, bindings, registrationId } } };
   }),
   clear: panelId => set(s => {
-    if (!(panelId in s.byPanel)) return s;
+    if (!(panelId in s.byPanel) && !(panelId in s.rowHaps)) return s;
     const { [panelId]: _gone, ...rest } = s.byPanel;
-    return { byPanel: rest };
+    const { [panelId]: _haps, ...restHaps } = s.rowHaps;
+    return { byPanel: rest, rowHaps: restHaps };
   }),
 }));
 
