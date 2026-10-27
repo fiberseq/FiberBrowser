@@ -123,7 +123,9 @@ export interface GraphAlias {
   anchor: [number, number];
   /** [node, o0, o1): node-forward offsets, in walk order. */
   columns: Array<[string, number, number]>;
+  /** The hit's bases (the denominator of statuses and matching); `known`: those with a column. */
   size: number;
+  known?: number;
   truncated?: boolean;
   repeats?: number;
   paths: Record<string, { status: PathStatus; carried: number; total: number; label: string; datasets: string[]; hap?: string }>;

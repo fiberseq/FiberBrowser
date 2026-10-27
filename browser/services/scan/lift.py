@@ -183,28 +183,35 @@ def lift_intervals(map_path: str, intervals: Sequence[Tuple[str, int, int]], *, 
 # ── Anchors of unmapped hits ────────────────────────────────────────────────
 
 def insertion_junction(lift_map, contig: str, start: int, end: int) -> Optional[Tuple[str, int, int]]:
-    """``(target, lo, hi)``: where a source interval with no projection sits on the target, from the bases that
-    flank its unprojected run (an insertion's junction is ``lo == hi``). None when no flank projects."""
+    """``(target, lo, hi)``: where a source interval with no projection sits on the target, or None.
+
+    Only a gap inside one chain places it: the interval lies within that chain's gap (an insertion in the source,
+    ``lo == hi``; or a replacement, ``lo < hi``), and the bases flanking the gap project through the same chain,
+    which says where the gap attaches. A gap between chains, a stretch outside every chain, or an interval running
+    past its gap is a rearrangement or an unknown: not placed."""
     try:
         reason, lo, hi = lift_map.gap_span(contig, int(start))
     except Exception:   # noqa: BLE001 - a map without that source
         return None
-    if reason in ('unknown_source', 'uncovered'):
+    if reason in ('unknown_source', 'uncovered', 'outside_chains'):
         return None
-    lo, hi = min(int(lo), int(start)), max(int(hi), int(end))
-    left = [p for p in lift_map.source_to_target(contig, max(0, lo - 1), lo) if p.primary]
+    lo, hi = int(lo), int(hi)
+    if int(start) < lo or int(end) > hi:
+        return None
+    left = [p for p in lift_map.source_to_target(contig, max(0, lo - 1), lo) if p.primary] if lo > 0 else []
     right = [p for p in lift_map.source_to_target(contig, hi, hi + 1) if p.primary]
-    if not left and not right:
+    chains = {p.chain for p in left} & {p.chain for p in right}
+    if len(chains) != 1:
         return None
-    chain_target = lambda p: lift_map.m['targets'][lift_map.chains[p.chain]['target']]['name']
-    # A + chain's left flank ends where the junction is; a - chain's starts there.
-    points = [(chain_target(p), p.t_end if p.strand == '+' else p.t_start) for p in left] + \
-             [(chain_target(p), p.t_start if p.strand == '+' else p.t_end) for p in right]
-    targets = {t for t, _ in points}
-    if len(targets) != 1:
+    ci = chains.pop()
+    a = next(p for p in left if p.chain == ci)
+    b = next(p for p in right if p.chain == ci)
+    if a.strand != b.strand:
         return None
-    xs = [x for _t, x in points]
-    return targets.pop(), min(xs), max(xs)
+    # On a + chain the left flank ends at the junction and the right one starts there; on a - chain the reverse.
+    x, y = (a.t_end, b.t_start) if a.strand == '+' else (b.t_end, a.t_start)
+    target = lift_map.m['targets'][lift_map.chains[ci]['target']]['name']
+    return target, min(x, y), max(x, y)
 
 
 # ── Hits of a scan ──────────────────────────────────────────────────────────
@@ -223,7 +230,8 @@ def lift_hits(config, hits: Sequence[dict]) -> Dict[int, HitLift]:
                               'sidecar (.graphlift.json) to lift hits')
     intervals = [(str(h['chrom']), int(h['start']), int(h['end'])) for h in hits]
     split_gap = int(getattr(config.settings, 'g_split', 10_000))
-    key = (_map_identity(handle.path), split_gap,
+    # The handle's fingerprint covers the manifest and every target payload file (a payload-only update changes it).
+    key = (_map_identity(handle.path), getattr(handle, 'fingerprint', None), split_gap,
            hashlib.sha256(json.dumps(intervals, separators=(',', ':')).encode()).hexdigest())
     with _CACHE_LOCK:
         hit = _CACHE.get(key)

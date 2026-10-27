@@ -647,7 +647,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   const hubHits = useHubData(s => s.hits);
   const hubSelected = useBrowserStore(s => s.featureHub?.selected);
   const hubOutlines = useMemo(() => hubGraphOutlines(scene ?? null, response?.result, state?.registrationId ?? null,
-    state?.targetBinding ?? null, reversed, drawableHits(hubSelected)), [scene, response, state?.registrationId, state?.targetBinding, reversed, hubHits, hubSelected]); // eslint-disable-line react-hooks/exhaustive-deps
+    state?.targetBinding ?? null, reversed, drawableHits(hubSelected), viewport?.contig ?? null), [scene, response, state?.registrationId, state?.targetBinding, reversed, hubHits, hubSelected, viewport?.contig]); // eslint-disable-line react-hooks/exhaustive-deps
   const laneCount = model?.rows.length ?? state?.selectedPathKeys.length ?? 0;
   const canvasHeight = scene?.height ?? laneTop(laneCount, laneHeight) + GRAPH_LANE_GAP;
   // While a pan's new response is on its way, the last scene slides with the viewport (its average scale).

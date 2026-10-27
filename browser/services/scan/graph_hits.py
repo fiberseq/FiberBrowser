@@ -67,8 +67,10 @@ def own_columns(occs: Dict[str, gc.Occ], start: int, end: int) -> Tuple[List[Tup
     return cols, repeats
 
 
-def path_status(cols: List[Tuple[str, int]], occs: Dict[str, gc.Occ], complete: bool) -> dict:
-    """How one path covers a hit's columns: carried / partial / absent / unresolved, with counts."""
+def path_status(cols: List[Tuple[str, int]], occs: Dict[str, gc.Occ], complete: bool, total: Optional[int] = None) -> dict:
+    """How one path covers a hit: carried / partial / absent / unresolved, with counts. ``total``: the hit's bases
+    (default: its known columns). Bases without a known column (outside a clip, a repeat) are never carried and
+    never prove absence, so a hit whose columns are incomplete is at most partial, or unresolved."""
     vis = gc.visits(occs)
     carried = unvisited = 0
     for node, o in cols:
@@ -77,12 +79,13 @@ def path_status(cols: List[Tuple[str, int]], occs: Dict[str, gc.Occ], complete: 
             carried += 1
         elif not hits:
             unvisited += 1
-    total = len(cols)
+    total = len(cols) if total is None else int(total)
+    known = len(cols)
     if total and carried == total:
         status = 'carried'
     elif carried:
         status = 'partial'
-    elif total and unvisited == total and complete:
+    elif total and known == total and unvisited == total and complete:
         status = 'absent'
     else:
         status = 'unresolved'
@@ -150,30 +153,54 @@ def _sources(reg, target: str) -> List[str]:
 
 
 _FETCH_LOCKS: Dict[int, tuple] = {}     # id(loop) -> (loop, lock); closed loops are dropped
-DUPLICATE_RETRIES = 20
 
 
 async def _fetch(reg, target: str, sources: List[Optional[str]], cells: List[int]) -> dict:
-    """The tiles, through graph clustering's cache. Hub requests fetch one at a time (the view's modules and scans ask for
-    the same tiles at once, and a tile's request id is fixed by its key, so a second request while the first is
-    pending is refused as a duplicate); a duplicate from another caller (a graph run) waits for that one to fill the
-    cache."""
-    from services.graph_panel import analysis
+    """``{source: {cell: topology}}``: graph clustering's tiles (the same requests, the same cache,
+    ``analysis._TILES``), fetched under request ids of the hub's own. Graph runs give a tile a request id fixed by its
+    key, and the pool refuses a second request with a pending id, so sharing those ids could fail a run's request
+    (or the hub's). Hub requests run one at a time, so the view's modules and scans don't fetch one tile twice."""
+    import uuid
+    from services.graph_panel import analysis, service
+    from services.graph_panel.pool import JobError
     loop = asyncio.get_running_loop()
     for key in [k for k, (lp, _l) in _FETCH_LOCKS.items() if lp.is_closed()]:
         _FETCH_LOCKS.pop(key, None)
     entry = _FETCH_LOCKS.get(id(loop))
     if entry is None or entry[0] is not loop:
         entry = _FETCH_LOCKS[id(loop)] = (loop, asyncio.Lock())
+    tb = reg.binding(target)
+    size = tb.get('size') if tb else None
+    out: dict = {}
     async with entry[1]:
-        for attempt in range(DUPLICATE_RETRIES + 1):
-            try:
-                return await asyncio.wait_for(analysis.fetch_tiles(reg, target, sources, cells), TILE_TIMEOUT_S)
-            except analysis.GraphRunError as exc:
-                if 'duplicate_request' not in str(exc) or attempt == DUPLICATE_RETRIES:
-                    raise
-                await asyncio.sleep(0.1)
-    raise RuntimeError('unreachable')
+        for source in sources:
+            got = out.setdefault(source, {})
+            for cell in cells:
+                key = analysis._tile_key(reg, target, source, cell)
+                with analysis._TILES_LOCK:
+                    hit = analysis._TILES.get(key)
+                    if hit is not None:
+                        analysis._TILES.move_to_end(key)
+                if hit is None:
+                    a, b = gc.tile_interval(cell, size)
+                    # The request graph clustering makes for this tile (analysis.fetch_tiles), so either fills the
+                    # shared cache with the same topology.
+                    request = {'target': target, 'interval': {'start': a, 'end': b},
+                               'selected': [target] + ([source] if source and source != target else []),
+                               'context_bp': 0, 'snarls': 'none'}
+                    rid = f'hub-cols-{uuid.uuid4().hex[:16]}'
+                    try:
+                        frame = await asyncio.wait_for(service.pool().submit(
+                            reg, 'query', {'request': request}, request_id=rid, panel_id=rid, generation=0), TILE_TIMEOUT_S)
+                    except JobError as exc:
+                        raise RuntimeError(f'the graph tile {a:,}-{b:,} could not be read: {exc}') from None
+                    hit = frame['result']
+                    with analysis._TILES_LOCK:
+                        analysis._TILES[key] = hit
+                        while len(analysis._TILES) > analysis._TILES_MAX:
+                            analysis._TILES.popitem(last=False)
+                got[cell] = hit
+    return out
 
 
 def merged_occurrences(tiles: dict, target: str) -> dict:
@@ -193,17 +220,20 @@ def alias_for(reg, target: str, bindings: dict, tiles: dict, *, own: Optional[st
     own_key = own or target
     occs_of = occs_of if occs_of is not None else merged_occurrences(tiles, target)
     cols, repeats = own_columns(occs_of.get(own_key) or {}, start, end)
+    total = max(1, int(end) - int(start))
     lo, hi = anchor
     paths = {}
     for key in [target, *sources]:
         tile_set = tiles.get(None if key == target else key) or {}
-        st = path_status(cols, occs_of.get(key) or {}, _complete_over(tile_set, key, target, lo, hi))
+        st = path_status(cols, occs_of.get(key) or {}, _complete_over(tile_set, key, target, lo, hi), total)
         b = bindings.get(key) or {}
         paths[key] = dict(st, label=b.get('label') or key, datasets=list(b.get('datasets') or ()),
                           **({'hap': b['hap']} if b.get('hap') else {}))
     runs = _runs(cols)
+    # ``size``: the hit's bases (the denominator of matching); ``known``: those with a column. A hit whose columns
+    # are incomplete matches only through the columns it has, against its whole length.
     return dict(registration=reg.id, target=target, binding=own_key, anchor=[int(lo), int(hi)],
-                columns=runs[:MAX_COLUMN_RUNS], truncated=len(runs) > MAX_COLUMN_RUNS, size=len(cols),
+                columns=runs[:MAX_COLUMN_RUNS], truncated=len(runs) > MAX_COLUMN_RUNS, size=total, known=len(cols),
                 repeats=repeats, paths=paths)
 
 

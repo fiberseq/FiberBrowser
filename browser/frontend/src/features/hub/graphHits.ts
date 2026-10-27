@@ -11,6 +11,7 @@
  * graph locus); a plain click on a selected hit's read band selects it alone.
  */
 import { useBrowserStore } from '../../stores/browserStore';
+import { sameChrom } from '../../utils/chromAliases';
 import type { GraphTopology } from '../graphPanel/types';
 import { xForTarget, type Scene } from '../graphPanel/scene';
 import { scanSets, useHubData } from './hubData';
@@ -78,7 +79,7 @@ export function drawableHits(selected: HubSelected[] = useBrowserStore.getState(
 
 /** The outlines of the hub's hits on a host's scene (empty: no scene, or no hit on this package and target). */
 export function hubGraphOutlines(scene: Scene | null, topology: GraphTopology | null | undefined, registrationId: string | null,
-  target: string | null, reversed = false, hits = drawableHits()): HubGraphOutline[] {
+  target: string | null, reversed = false, hits = drawableHits(), contig: string | null = null): HubGraphOutline[] {
   if (!scene || !topology || !registrationId || !target || !scene.rows.length) return [];
   const out: HubGraphOutline[] = [];
   const rowOf = new Map(scene.rows.map(r => [r.key, r]));
@@ -103,9 +104,10 @@ export function hubGraphOutlines(scene: Scene | null, topology: GraphTopology | 
       }
       continue;
     }
-    // No columns on this package: the hit's target span (selected: across the lanes; else on the target lane).
+    // No columns on this package: the hit's target span (selected: across the lanes; else on the target lane), only
+    // on the graph of its own contig.
     const t = displaySpan(hit);
-    if (!t || t.insertion) continue;
+    if (!t || t.insertion || !contig || !sameChrom(t.chrom, contig)) continue;
     const a = xForTarget(scene.targetMap, t.start, 'start', reversed);
     const b = xForTarget(scene.targetMap, Math.max(t.end, t.start + 1), 'end', reversed);
     if (a == null || b == null) continue;

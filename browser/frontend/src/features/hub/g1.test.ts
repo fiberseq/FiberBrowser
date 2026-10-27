@@ -2,6 +2,7 @@ import '../testSetup';
 import { describe, expect, it, beforeEach } from 'vitest';
 import { useBrowserStore } from '../../stores/browserStore';
 import { useAnalysisRegionStore } from '../../stores/analysisRegionStore';
+import { usePanelGenomeStore } from '../../stores/panelGenomeStore';
 import { columnPathStatus, displaySpan, graphText, liftChip, liftText, regionOf } from './frames';
 import { matchHits, sameFeature, type Matchable } from './matching';
 import { normalizeHub, hitSelectionEntry, type HubSelected } from './hubState';
@@ -56,6 +57,8 @@ describe('display coordinates of hits in other frames (G1)', () => {
     expect(columnPathStatus(g, { datasetId: 'lifted', hap: 'MAT' })).toBe('carried');
     expect(columnPathStatus(g, { datasetId: 'lifted', hap: 'PAT' })).toBe('partial');
     expect(columnPathStatus(g, { datasetId: 'lifted' })).toBeUndefined();     // which haplotype: not said
+    // A native dataset's HP1/HP2 subgroup (a scan's haplotype group) is on the dataset's own path: absent too.
+    expect(columnPathStatus(g, { datasetId: 'native', hap: 'HP1' })).toBe('absent');
     expect(columnPathStatus(g, { datasetId: 'other' })).toBeUndefined();
     expect(columnPathStatus(undefined, { datasetId: 'native' })).toBeUndefined();
     expect(graphText(g)).toMatch(/GRCh38: absent \(lacks this sequence\); MAT: carries it; PAT: carries part of it \(40 of 100 bp\)/);
@@ -83,6 +86,16 @@ describe('matching hits across frames (DESIGN §5.4)', () => {
     const mat2 = hit('s|m2', 's', { chrom: 'chr3_MATERNAL', frame: MAT_FRAME, target: { chrom: 'chr3', start: 1_000, end: 1_200, anchor: 1_100 } });
     expect(sameFeature(mat, pat)).toBe(true);
     expect(sameFeature(mat, mat2)).toBe(false);
+  });
+
+  it('two scans of one assembly contig match by their own intervals, whatever their lifts', () => {
+    const a = hit('s1|a', 's1', { chrom: 'chr3_MATERNAL', start: 0, end: 100, anchor: 50, frame: MAT_FRAME,
+      target: { chrom: 'chr3', start: 1_000, end: 1_100, anchor: 1_050 } });
+    const b = hit('s2|b', 's2', { chrom: 'chr3_MATERNAL', start: 20, end: 120, anchor: 70, frame: MAT_FRAME,
+      target: { chrom: 'chr3', start: 9_000, end: 9_100, anchor: 9_050 } });   // split: kept on another segment
+    expect(sameFeature(a, b)).toBe(true);
+    expect(sameFeature(a, { ...b, frame: { ...MAT_FRAME, datasetId: 'other' } })).toBe(false);
+    expect(sameFeature(a, { ...b, frame: PAT_FRAME, chrom: 'chr3_PATERNAL' })).toBe(false);
   });
 
   it('point features match within 20 bp of their anchors', () => {
@@ -174,6 +187,21 @@ describe('source-frame scan hits in the hub', () => {
     expect(outlines).toHaveLength(1);
     expect(outlines[0]).toMatchObject({ chrom: 'chr3', start: 1_000, end: 1_150, datasetIds: ['lifted', 'native'] });
     expect(useAnalysisRegionStore.getState().outlines).toBeDefined();
+    // A linked source view of the assembly (a pop-out "as source view") gets the source coordinates.
+    usePanelGenomeStore.setState({ genomes: { hg002: { chroms: [{ name: 'chr3_MATERNAL', size: 200_000_000 }] },
+      other: { chroms: [{ name: 'chr3_MATERNAL', size: 200_000_000 }] } } } as never);
+    const source = { chrom: 'chr3', pos: 1_000, contig: 'chr3_MATERNAL', start: 51_000, end: 51_200, reversed: false };
+    // The lifted dataset's own BAM opened as a source view (the inspector's "Open in … view"), and a linked source view.
+    const ownBam = { id: 'sv', contentType: 'dataset', datasetId: 'native-src', genome: 'hg002', liveLiftSource: source };
+    const linkedView = { id: 'lv', contentType: 'dataset', datasetId: 'native-src2', genome: 'hg002', liftLink: { datasetId: 'lifted', hap: 'HG002#2' } };
+    // Another assembly that happens to name a contig chr3_MATERNAL: never outlined.
+    const stranger = { id: 'ov', contentType: 'dataset', datasetId: 'x', genome: 'other', liveLiftSource: source };
+    const datasets = [{ id: 'lifted', path: '/data/a.bam' }, { id: 'native-src', path: '/data/a.bam' }, { id: 'native-src2', path: '/data/a.bam' },
+      { id: 'x', path: '/data/b.bam' }];
+    const all = hubOutlinesFor({ ...s, datasets: datasets as never, panels: [ownBam, linkedView, stranger] } as never, [entry]);
+    expect(all.map(o => [o.genomeKey, o.datasetIds[0], o.chrom])).toEqual([
+      [expect.any(String), 'lifted', 'chr3'], ['hg002', 'native-src', 'chr3_MATERNAL'], ['hg002', 'native-src2', 'chr3_MATERNAL']]);
+    expect(all[1]).toMatchObject({ start: 51_000, end: 51_200 });
   });
 });
 
@@ -211,7 +239,10 @@ describe('hub hits on a graph host', () => {
       graph: { ...graph([['n1', 10, 20]]), registration: 'g1', target: 'target', binding: 'target' } };
     const plain = { setId: 's2', hitId: 'p', typeId: 'peaks.peak', chrom: 'chr3', start: 1_000, end: 1_040, anchor: 1_020 };
     const out = hubGraphOutlines(scene, topology, 'g1', 'target', false,
-      [{ hit: inside, selected: true }, { hit: shared, selected: false }, { hit: plain, selected: false }]);
+      [{ hit: inside, selected: true }, { hit: shared, selected: false }, { hit: plain, selected: false }], 'chr3');
+    // A hit on another chromosome (a selection kept across navigation) is never drawn on this graph.
+    expect(hubGraphOutlines(scene, topology, 'g1', 'target', false, [{ hit: { ...plain, chrom: 'chr1' }, selected: true }], 'chr3')).toEqual([]);
+    expect(hubGraphOutlines(scene, topology, 'g1', 'target', false, [{ hit: plain, selected: true }], null)).toEqual([]);
     const of = (id: string) => out.filter(o => o.hitId === id);
     // Selected: the MAT tube (the MAT lane has no read band here).
     expect(of('in').map(o => [o.y0, o.y1, o.x0, o.x1, o.selected])).toEqual([[40, 50, 70, 80, true]]);
@@ -219,13 +250,13 @@ describe('hub hits on a graph host', () => {
     expect(of('sh').map(o => [o.y0, o.y1]).sort()).toEqual([[0, 10], [40, 50]]);
     expect(of('p')).toEqual([expect.objectContaining({ kind: 'region', x0: 0, x1: 40, y0: 0, y1: 10 })]);
     // Selected, it covers its lanes' read bands too (bands sit below the lanes: one box each, not one tall box).
-    const sel = hubGraphOutlines(scene, topology, 'g1', 'target', false, [{ hit: shared, selected: true }]);
+    const sel = hubGraphOutlines(scene, topology, 'g1', 'target', false, [{ hit: shared, selected: true }], 'chr3');
     expect(sel.map(o => [o.y0, o.y1]).sort()).toEqual([[0, 10], [10, 30], [40, 50]]);
     // A carrier drawn on a stripe of another lane's tube: its own path's read band is covered.
     const striped = { ...scene, occurrences: [...scene.occurrences,
       { occ: 'm1', node: 'n1', lane: 'target', owner: 'r', x0: 0, x1: 40, start: 0, end: 40, dir: 1, path: 'mat' }],
       rows: scene.rows.map(r => (r.key === 'mat' ? { ...r, bandTop: 60, bandHeight: 15 } : r)) } as unknown as Scene;
-    const bands = hubGraphOutlines(striped, topology, 'g1', 'target', false, [{ hit: shared, selected: true }]);
+    const bands = hubGraphOutlines(striped, topology, 'g1', 'target', false, [{ hit: shared, selected: true }], 'chr3');
     expect(bands.map(o => [o.y0, o.y1]).sort((a, b) => a[0] - b[0])).toEqual([[0, 10], [10, 30], [40, 50], [60, 75]]);
     expect(hubOutlineAt(out, 15, 5)?.hitId).toBe('sh');
     expect(hubOutlineAt(out, 75, 45)?.hitId).toBe('in');

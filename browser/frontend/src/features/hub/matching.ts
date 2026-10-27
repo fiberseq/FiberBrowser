@@ -6,7 +6,8 @@
  * - in this genome's coordinates (each hit's own, or its lift), their intervals overlap by at least 50% reciprocally;
  *   a point feature (zero width) matches when the anchors are at most `D_MATCH` bp apart;
  * - or, on a graph package's columns, their column sets overlap by at least 50% reciprocally. This is how hits inside
- *   an insertion (no place on this genome) match: only hits on paths that carry those columns can share them.
+ *   an insertion (no place on this genome) match: only hits on paths that carry those columns can share them;
+ * - or, in a source frame both share (two scans of the same assembly contig), by their own intervals.
  *
  * Hits of one set in one frame are never matched to each other (a scan reports each feature once per frame). A hit
  * whose lift is split is matched by its kept placement, like any other.
@@ -62,10 +63,20 @@ export function matchInGraph(a: Matchable, b: Matchable): boolean {
   return shared > 0 && shared >= MIN_RECIPROCAL * g.size && shared >= MIN_RECIPROCAL * h.size;
 }
 
+/** Whether two hits match in a source frame they share (the same contig of the same assembly, through the same
+ * live-lift dataset): their own intervals, by the same rule as on this genome. */
+export function matchInSource(a: Matchable, b: Matchable): boolean {
+  const f = a.frame, g = b.frame;
+  if (f?.kind !== 'source' || g?.kind !== 'source' || f.contig !== g.contig || (f.assembly || '') !== (g.assembly || '')
+    || (f.datasetId ?? '') !== (g.datasetId ?? '')) return false;
+  if (a.end <= a.start || b.end <= b.start) return Math.abs(a.anchor - b.anchor) <= D_MATCH;
+  return reciprocal(a.start, a.end, b.start, b.end);
+}
+
 export function sameFeature(a: Matchable, b: Matchable): boolean {
   if (a.key === b.key || a.typeId !== b.typeId) return false;
   if (a.setId === b.setId && frameKey(a) === frameKey(b)) return false;
-  return matchInGenome(a, b) || matchInGraph(a, b);
+  return matchInSource(a, b) || matchInGenome(a, b) || matchInGraph(a, b);
 }
 
 /** `{hit key: keys of the hits that are the same feature in another frame or set}`. */

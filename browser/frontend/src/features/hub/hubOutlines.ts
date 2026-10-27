@@ -15,6 +15,15 @@ import { displaySpan, inThisGenome, regionOf } from './frames';
 import type { HubSelected } from './hubState';
 
 export const HUB_OUTLINE_KIND = 'hub';
+
+type FileHolder = { path?: string; paths?: string[] } | undefined;
+/** Two datasets on the same BAM files (so the same assembly). */
+function samePaths(a: FileHolder, b: FileHolder): boolean {
+  if (!a || !b) return false;
+  const pa = a.paths?.length ? a.paths : [a.path];
+  const pb = b.paths?.length ? b.paths : [b.path];
+  return pa.length === pb.length && pa.every((p, i) => Boolean(p) && p === pb[i]);
+}
 export const HUB_OUTLINE_COLOUR = '#4f46e5';
 const MAX_OUTLINES = 64;
 
@@ -33,9 +42,16 @@ export function hubOutlinesFor(s: BrowserState, selected: HubSelected[]): Analys
         label: t.insertion ? `${label} (in an insertion)` : label });
     }
     if (inThisGenome(h)) continue;
-    // The source coordinates, on the linked source views of the hit's assembly.
+    // The source coordinates, on the source views of the hit's own assembly: the linked source views of the live-lift
+    // dataset it was lifted through, and source panels of that dataset's own BAM (the inspector's "Open in … view").
+    const liftedId = h.frame?.kind === 'source' ? h.frame.datasetId : undefined;
+    const lifted = liftedId ? s.datasets.find(d => d.id === liftedId) : undefined;
+    if (!lifted) continue;
     for (const p of s.panels) {
-      if (!p.genome || !p.datasetId || !(p as { liveLiftSource?: unknown }).liveLiftSource) continue;
+      if (!p.genome || !p.datasetId) continue;
+      const linked = (p as { liftLink?: { datasetId?: string } }).liftLink?.datasetId === liftedId;
+      const own = Boolean((p as { liveLiftSource?: unknown }).liveLiftSource) && samePaths(s.datasets.find(d => d.id === p.datasetId), lifted);
+      if (!linked && !own) continue;
       if (!genomes[p.genome]?.chroms?.some(c => c.name === h.chrom)) continue;
       const r = regionOf({ chrom: h.chrom, start: h.start, end: h.end, anchor: h.anchor });
       out.push({ chrom: h.chrom, start: r.start, end: r.end, genome: p.genome, genomeKey: p.genome, datasetIds: [p.datasetId],

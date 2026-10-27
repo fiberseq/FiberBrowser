@@ -237,7 +237,7 @@ def test_graph_columns_mat_hit_in_the_insertion_is_absent_on_the_target(tmp_path
     assert note is None
     g = hit_in['graph']
     assert g['binding'] == 'mat' and g['anchor'] == [ALU_JUNCTION, ALU_JUNCTION]
-    assert g['size'] == 100 and g['columns']
+    assert g['size'] == 100 and g['known'] == 100 and g['columns']
     assert g['paths']['mat']['status'] == 'carried' and g['paths']['mat']['datasets'] == ['lifted']
     assert g['paths']['mat'].get('hap') == 'MAT'
     # The target walks around the insertion: its columns are absent there, never unresolved or "not scanned".
@@ -265,3 +265,114 @@ def test_graph_aliases_without_a_helper_leave_hits_alone(monkeypatch, tmp_path):
 def test_column_runs_merge_forward_and_reverse_walks():
     from services.scan.graph_hits import _runs
     assert _runs([('a', 0), ('a', 1), ('a', 2), ('b', 5), ('b', 4), ('c', 0)]) == [['a', 0, 3], ['b', 4, 6], ['c', 0, 1]]
+
+
+# ── Review fixes (Codex group A, round 1) ───────────────────────────────────
+
+class _Piece(NS):
+    pass
+
+
+class _FakeMap:
+    """A lift map with two chains on one source: + chain 0 maps source [0,100) -> target [1000,1100) and source
+    [150,250) -> [1100,1200) (a source insertion at [100,150)); - chain 1 maps source [400,500) -> target [5000,5100)."""
+
+    def __init__(self):
+        self.m = {'targets': [{'name': 't'}], 'sources': [{'name': 's'}]}
+        self.chains = [{'target': 0, 'source': 0, 'strand': '+'}, {'target': 0, 'source': 0, 'strand': '-'}]
+
+    def gap_span(self, contig, pos):
+        if 100 <= pos < 150:
+            return ('source_insertion', 100, 150)
+        if 250 <= pos < 400:
+            return ('outside_chains', 250, 400)
+        return ('unknown_source', pos, pos + 1)
+
+    def source_to_target(self, contig, a, b):
+        out = []
+        for q0, q1, t0, chain, strand in ((0, 100, 1000, 0, '+'), (150, 250, 1100, 0, '+'), (400, 500, 5100, 1, '-')):
+            s0, s1 = max(a, q0), min(b, q1)
+            if s1 <= s0:
+                continue
+            if strand == '+':
+                ts, te = t0 + (s0 - q0), t0 + (s1 - q0)
+            else:   # source increasing, target decreasing from t0
+                ts, te = t0 - (s1 - q0), t0 - (s0 - q0)
+            out.append(_Piece(chain=chain, t_start=ts, t_end=te, strand=strand, primary=True))
+        return out
+
+
+def test_insertion_junction_needs_one_chain_around_the_gap():
+    from services.scan.lift import insertion_junction
+    lm = _FakeMap()
+    assert insertion_junction(lm, 's', 110, 140) == ('t', 1100, 1100)   # inside chain 0's source insertion
+    # Between unrelated chains (a rearrangement), or past the gap: not placed.
+    assert insertion_junction(lm, 's', 300, 310) is None
+    assert insertion_junction(lm, 's', 120, 160) is None
+
+
+def test_incomplete_graph_columns_never_claim_carried_or_absent():
+    from services.graph_panel.columns import Occ
+    from services.scan.graph_hits import own_columns, path_status
+    # The hit's path visits node a over [0, 100) but only [0, 1) is inside the clip: one known column of 100 bases.
+    occs = {'o': Occ('o', 'a', 100, False, (0, 100), [(0, 1)])}
+    cols, repeats = own_columns(occs, 0, 100)
+    assert cols == [('a', 0)] and repeats == 0
+    assert path_status(cols, occs, True, total=100)['status'] == 'partial'
+    # Another path that doesn't visit node a: with 99 bases unknown, absence isn't proven.
+    assert path_status(cols, {}, True, total=100)['status'] == 'unresolved'
+    assert path_status(cols, {}, True, total=1)['status'] == 'absent'
+
+
+def test_lift_cache_follows_the_map_payload(monkeypatch):
+    from services.scan import lift
+    calls = []
+
+    def fake(path, intervals, split_gap=10_000, liftbed=None):
+        calls.append(path)
+        return [lift.HitLift('exact', 't', 1, 2, placements=1) for _ in intervals]
+    monkeypatch.setattr(lift, 'lift_intervals', fake)
+    monkeypatch.setattr(lift, '_map_identity', lambda p: (p, 1, 1))
+    lift.clear_cache()
+    config = NS(settings=NS(g_split=10_000), handle=NS(path='m.json', plain_chain=False, fingerprint='a', map=None))
+    hits = [dict(chrom='s', start=0, end=10)]
+    lift.lift_hits(config, hits)
+    lift.lift_hits(config, hits)
+    assert len(calls) == 1
+    config.handle.fingerprint = 'b'          # a target payload file changed: the manifest did not
+    lift.lift_hits(config, hits)
+    assert len(calls) == 2
+    lift.clear_cache()
+
+
+def test_source_windows_reach_as_far_as_the_split_gap(monkeypatch, tmp_path):
+    from services.scan import projection
+    seen = []
+    monkeypatch.setattr(projection, 'source_windows', lambda config, name, a, b: seen.append((a, b)) or {})
+    config = NS(settings=NS(g_split=30_000), handle=NS(map=NS(targets={'chr3': 0}), haplotype_labels={}, source_haplotype={}))
+    ds = NS(data_type='bam_livelift', live_lift=config)
+    scan = NS(bound_pairs=lambda: [('dataset_1', 'lifted', 'input', {})], manifest={'datasets': [{'dataset_id': 'dataset_1'}]})
+    projection.source_hits_for_view(NS(datasets={'lifted': ds}), scan, 'fp', 'chr3', 100_000, 102_000)
+    assert seen == [(70_000, 132_000)]
+
+
+def test_hub_tiles_use_their_own_request_ids_and_the_shared_cache(monkeypatch):
+    from services.graph_panel import analysis, service
+    from services.scan import graph_hits
+    analysis.clear_caches()
+    ids = []
+
+    class Pool:
+        async def submit(self, reg, kind, payload, request_id, panel_id, generation):
+            ids.append(request_id)
+            return {'result': {'interval': payload['request']['interval'], 'selected': payload['request']['selected']}}
+    monkeypatch.setattr(service, 'pool', lambda: Pool())
+    reg = NS(id='g', revisions={'package': 'p', 'graph': 'g', 'db': 'd', 'maps': 'm'}, binding=lambda key: {'size': 100_000})
+    first = asyncio.run(graph_hits._fetch(reg, 'target', [None, 'mat'], [1]))
+    again = asyncio.run(graph_hits._fetch(reg, 'target', [None, 'mat'], [1]))
+    assert len(ids) == 2 and all(i.startswith('hub-cols-') for i in ids) and len(set(ids)) == 2
+    assert first == again
+    assert first['mat'][1]['selected'] == ['target', 'mat'] and first[None][1]['selected'] == ['target']
+    # The same cache graph runs read (analysis.fetch_tiles finds them without a request).
+    assert analysis._TILES[analysis._tile_key(reg, 'target', 'mat', 1)] == first['mat'][1]
+    analysis.clear_caches()

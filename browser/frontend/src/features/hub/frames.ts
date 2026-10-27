@@ -81,7 +81,10 @@ export function columnPathStatus(g: GraphAlias | undefined, column: { datasetId?
   if (!g || !column.datasetId) return undefined;
   const on = Object.values(g.paths).filter(p => p.datasets.includes(column.datasetId!));
   if (!on.length) return undefined;
-  const pick = on.filter(p => (column.hap ? p.hap === column.hap : !p.hap));
+  // A haplotype column of a live-lift dataset is that haplotype's path; a subgroup of a native dataset (its HP1/HP2
+  // reads) is on the dataset's own path (the target's), which has no haplotype.
+  let pick = column.hap ? on.filter(p => p.hap === column.hap) : on.filter(p => !p.hap);
+  if (column.hap && !pick.length) pick = on.filter(p => !p.hap);
   return pick.length === 1 ? pick[0].status : undefined;
 }
 

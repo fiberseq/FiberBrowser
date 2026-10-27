@@ -65,8 +65,11 @@ def source_hits_for_view(state, scan, module: str, chrom: str, start: int, end: 
         handle = config.handle
         labels = dict(getattr(handle, 'haplotype_labels', {}) or {})
         name = _target_name(config, chrom)
+        # liftbed joins a hit's bases across target gaps below the split gap, so a placement over the view can have
+        # its nearest projected base up to g_split away: the windows are found that far out (then filtered by lift).
+        pad = max(PAD, int(getattr(config.settings, 'g_split', 10_000)))
         try:
-            windows = source_windows(config, name, max(0, start - PAD), end + PAD)
+            windows = source_windows(config, name, max(0, start - pad), end + pad)
         except Exception as exc:   # noqa: BLE001 - a map without this target
             notes.append(f'{ds_id}: {exc}')
             continue
