@@ -52,8 +52,11 @@ def _dataset_of_group(group: str, kind: str) -> Optional[str]:
     return None
 
 
-def role_columns(type_id: str, raw: Dict[str, Dict[str, dict]], kinds: Dict[str, str], scan_datasets: List[str]) -> Dict[str, Dict[str, dict]]:
-    """Per column ('all' and each scan dataset): {'prevalence': cell, 'strength': cell} from the raw values."""
+def role_columns(type_id: str, raw: Dict[str, Dict[str, dict]], kinds: Dict[str, str], scan_datasets: List[str],
+                 roles: Optional[Dict[str, str]] = None) -> Dict[str, Dict[str, dict]]:
+    """Per column ('all', each scan dataset, each group the values name): {'prevalence': cell, 'strength': cell}.
+    fp.class, nfr.variant and peaks follow the contract's score roles (§7); any other type (nuc, and modules to come)
+    reads its declared roles' scores in every group, so nothing here depends on a module's own value names."""
     out: Dict[str, Dict[str, dict]] = {}
 
     def put(col, role, cell):
@@ -84,25 +87,17 @@ def role_columns(type_id: str, raw: Dict[str, Dict[str, dict]], kinds: Dict[str,
         put('all', 'prevalence', raw.get('all', {}).get('prevalence_em'))
         for ds in scan_datasets:
             put(ds, 'prevalence', weighted([raw.get(g, {}).get('em') for g in channels_of[ds]]))
-    elif type_id.startswith('nuc.patch.'):
-        # Segment patches: the share of measured molecules in the segment class (prevalence-like); phased patches:
-        # phasing strength over its null. Per dataset and per dataset haplotype ('<dataset>:HP1').
-        metric, role = ('R_minus_null', 'strength') if type_id == 'nuc.patch.phased' else ('fraction', 'prevalence')
-        put('all', role, raw.get('all', {}).get(metric))
-        for group in raw:
-            if group != 'all':
-                put(group, role, raw[group].get(metric))
     elif type_id.startswith('peaks.'):
         put('all', 'strength', raw.get('all', {}).get('score'))
         for ds in scan_datasets:
             put(ds, 'strength', raw.get(ds, {}).get('score'))
     else:
-        for ds in scan_datasets:
-            cells = raw.get(ds) or {}
-            if 'prevalence' in cells:
-                put(ds, 'prevalence', cells['prevalence'])
-        if 'prevalence' in (raw.get('all') or {}):
-            put('all', 'prevalence', raw['all']['prevalence'])
+        # Declared roles, read in every group the values carry (datasets, channels, haplotypes such as '<ds>:HP1').
+        for role, name in (roles or {'prevalence': 'prevalence'}).items():
+            if role not in ('prevalence', 'strength') or not name:
+                continue
+            for group, cells in raw.items():
+                put(group, role, cells.get(name))
     return out
 
 
@@ -123,6 +118,8 @@ def hits_for_view(scan, module: str, chrom: str, start: int, end: int, *, type_i
             if v.get('hit_id') in wanted:
                 values.setdefault(v['hit_id'], []).append(v)
     scan_datasets = [d.get('dataset_id') for d in scan.manifest.get('datasets') or []]
+    from .registry import _camel_type
+    roles_of = {d.get('type_id'): _camel_type(d)['roles'] for d in (scan.module(module) or {}).get('feature_types') or []}
     hits = []
     for r in rows:
         raw: Dict[str, Dict[str, dict]] = {}
@@ -130,7 +127,7 @@ def hits_for_view(scan, module: str, chrom: str, start: int, end: int, *, type_i
         for v in values.get(r['hit_id'], ()):
             raw.setdefault(v['group'], {})[v['value_name']] = _value_cell(v)
             kinds[v['group']] = v.get('group_kind', '')
-        columns = role_columns(r.get('type', ''), raw, kinds, scan_datasets)
+        columns = role_columns(r.get('type', ''), raw, kinds, scan_datasets, roles_of.get(r.get('type', '')))
         module_cols = {k: v for k, v in r.items() if k not in HIT_FIXED}
         flags = [f for f in str(r.get('flags') or '').split(',') if f]
         a, b = int(r['start']), int(r['end'])

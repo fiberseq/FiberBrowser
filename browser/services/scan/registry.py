@@ -67,23 +67,37 @@ def new_generation(state) -> int:
         return state.scan_generation
 
 
+# The score roles the scan contract names (CONTRACTS §7 "Score roles"); other types use their declarations.
+CONTRACT_ROLES = {
+    'fp.class': {'prevalence': 'prevalence', 'strength': 'support_gain_nats'},
+    'nfr.variant': {'prevalence': 'prevalence', 'strength': 'gain_nats'},
+    'peaks.peak': {'strength': 'score'},
+    'peaks.broad': {'strength': 'score'},
+}
+
+
+def score_roles(scores: List[dict]) -> dict:
+    """Canonical score roles (DESIGN §5.5) from a type's declared scores, never from module-specific names (modules
+    change their scores; nuc's are not final): prevalence = a score named 'prevalence', else the first per-group
+    fraction; strength = the first other per-group score that isn't a code or a length, else the first such score."""
+    roles = {}
+    prev = next((x for x in scores if x['name'] == 'prevalence'), None) or \
+        next((x for x in scores if x.get('kind') == 'fraction' and x.get('perGroup')), None)
+    if prev:
+        roles['prevalence'] = prev['name']
+    others = [x for x in scores if x is not prev and x.get('kind') not in ('code', 'bp', 'q')]
+    strength = next((x for x in others if x.get('perGroup')), None) or (others[0] if others else None)
+    if strength:
+        roles['strength'] = strength['name']
+    return roles
+
+
 def _camel_type(decl: dict) -> dict:
     """A manifest feature type (snake_case) as the hub's FeatureTypeDecl (camelCase), with score roles."""
     type_id = decl.get('type_id', '')
     scores = [dict(name=s.get('name'), label=s.get('label') or s.get('name'), kind=s.get('kind', 'fraction'),
                    better=s.get('better', 'none'), perGroup=bool(s.get('per_group'))) for s in decl.get('scores') or []]
-    names = {s['name'] for s in scores}
-    roles = {}
-    # Canonical score roles (DESIGN §5.5): prevalence = the share of molecules in state 1 (nuc segment patches: the
-    # share of measured molecules in the segment class); strength = the module's strength score.
-    for prevalence in ('prevalence', 'fraction'):
-        if prevalence in names:
-            roles['prevalence'] = prevalence
-            break
-    for strength in ('support_gain_nats', 'gain_nats', 'score', 'R_minus_null'):
-        if strength in names:
-            roles['strength'] = strength
-            break
+    roles = dict(CONTRACT_ROLES.get(type_id) or score_roles(scores))
     return dict(typeId=type_id, module=decl.get('module', ''), label=decl.get('label') or type_id,
                 plural=decl.get('plural') or decl.get('label') or type_id, provides=list(decl.get('provides') or []),
                 anchor=decl.get('anchor', 'centre'), zeroWidth=bool(decl.get('zero_width')), scores=scores,

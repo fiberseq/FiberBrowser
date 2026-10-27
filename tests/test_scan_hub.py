@@ -283,11 +283,15 @@ def test_role_columns_nuc_patches_and_haplotypes():
     cell = lambda v, n=10: dict(v=v, lo=None, hi=None, n=n, nCallable=n)
     raw = {'all': {'fraction': cell(0.5)}, 'dataset_1': {'fraction': cell(0.6)}, 'dataset_1:HP1': {'fraction': cell(0.7)}}
     kinds = {'all': 'all', 'dataset_1': 'dataset', 'dataset_1:HP1': 'haplotype'}
-    cols = role_columns('nuc.patch.regular', raw, kinds, ['dataset_1'])
+    # Any type outside the contract's §7 roles (nuc's patches, whose scores will change) uses its declared roles.
+    cols = role_columns('nuc.patch.regular', raw, kinds, ['dataset_1'], {'prevalence': 'fraction'})
     assert cols['all']['prevalence']['v'] == 0.5 and cols['dataset_1']['prevalence']['v'] == 0.6
     assert cols['dataset_1:HP1']['prevalence']['v'] == 0.7
-    phased = role_columns('nuc.patch.phased', {'dataset_1': {'R_minus_null': cell(0.2)}}, {'dataset_1': 'dataset'}, ['dataset_1'])
+    phased = role_columns('nuc.patch.phased', {'dataset_1': {'R_minus_null': cell(0.2)}}, {'dataset_1': 'dataset'}, ['dataset_1'],
+                          {'strength': 'R_minus_null'})
     assert phased['dataset_1']['strength']['v'] == 0.2 and 'prevalence' not in phased['dataset_1']
+    renamed = role_columns('nuc.patch.fuzzy', {'all': {'dephased': cell(0.4)}}, {'all': 'all'}, [], {'prevalence': 'dephased'})
+    assert renamed['all']['prevalence']['v'] == 0.4
 
 
 def test_score_roles_of_scan_types():
@@ -296,9 +300,15 @@ def test_score_roles_of_scan_types():
         return dict(type_id=type_id, module=type_id.split('.')[0], provides=['hit'],
                     scores=[dict(name=n, label=n, kind='fraction', better='high', per_group=True) for n in names])
     assert _camel_type(decl('fp.class', 'prevalence', 'support_gain_nats'))['roles'] == {'prevalence': 'prevalence', 'strength': 'support_gain_nats'}
-    assert _camel_type(decl('nuc.patch.regular', 'fraction', 'q_hat'))['roles'] == {'prevalence': 'fraction'}
-    assert _camel_type(decl('nuc.patch.phased', 'R_minus_null', 'P'))['roles'] == {'strength': 'R_minus_null'}
-    assert _camel_type(decl('peaks.peak', 'score', 'tier'))['roles'] == {'strength': 'score'}
+    def typed(type_id, *scores):
+        return dict(type_id=type_id, module='nuc', provides=['hit'],
+                    scores=[dict(name=n, label=n, kind=k, better='high', per_group=g) for n, k, g in scores])
+    # Roles come from the declarations (names, kinds, per-group), not from module-specific score names.
+    assert _camel_type(typed('nuc.patch.regular', ('fraction', 'fraction', True), ('q_hat', 'bp', False)))['roles'] == {'prevalence': 'fraction'}
+    assert _camel_type(typed('nuc.patch.phased', ('R_minus_null', 'z', True), ('P', 'bp', False), ('p', 'q', False)))['roles'] == {'strength': 'R_minus_null'}
+    assert _camel_type(typed('nuc.patch.future', ('share', 'fraction', True), ('dephasing', 'nats', True)))['roles'] == {'prevalence': 'share', 'strength': 'dephasing'}
+    # the contract's own roles for its types (§7): peaks' score is their strength
+    assert _camel_type(typed('peaks.peak', ('score', 'fraction', True), ('tier', 'code', False)))['roles'] == {'strength': 'score'}
 
 
 def test_overlay_mark_groups_from_marks_table(tmp_path, bam):
