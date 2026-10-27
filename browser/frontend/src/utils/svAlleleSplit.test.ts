@@ -339,6 +339,27 @@ describe('Split by SV is one undo step (stabilize 2, item 1)', () => {
     expect(s.clusterAssignments.ds).toEqual({ a: 4, b: 5 });
   });
 
+  it('the first split after history was cleared can be undone (Codex stabilize-2 review, round 1)', async () => {
+    useBrowserStore.getState().clearHistory();
+    mockSplit({ a: 0, b: 1 });
+    await splitBySv(TARGET, SV);
+    let s = useBrowserStore.getState();
+    expect(s.canUndo()).toBe(true);
+    s.undo();
+    s = useBrowserStore.getState();
+    expect(s.svSplits.ds).toBeUndefined();
+    expect(s.clusterAssignments.ds).toEqual({ a: 4, b: 5 });
+    // And Clear SV split right after a cleared history.
+    s.redo();
+    useBrowserStore.getState().clearHistory();
+    const { clearSvSplit } = await import('./svAlleleSplit');
+    clearSvSplit('ds');
+    s = useBrowserStore.getState();
+    expect(s.canUndo()).toBe(true);
+    s.undo();
+    expect(useBrowserStore.getState().svSplits.ds).toBeTruthy();
+  });
+
   it('Clear SV split is one step too', async () => {
     const { clearSvSplit } = await import('./svAlleleSplit');
     mockSplit({ a: 0, b: 1 });
