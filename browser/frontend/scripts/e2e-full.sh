@@ -57,6 +57,10 @@ if [[ "$work/" == "$repo/"* ]]; then
   [[ -n "$created" ]] && rmdir "$work" 2>/dev/null
   fail "FIBERBROWSER_E2E_WORK must be outside the repository ($repo): $work"
 fi
+# The scratch HOME must be a real folder, never a link back to a real home or its ~/.fiberhmm.
+for link in "$work/home" "$work/home/.fiberhmm"; do
+  [[ -L "$link" ]] && fail "$link is a symbolic link: the servers' HOME must be a scratch folder"
+done
 mkdir -p "$work/home"
 
 python="${FIBERBROWSER_TEST_PYTHON:-python}"

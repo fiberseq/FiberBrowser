@@ -210,7 +210,11 @@ test.describe('Cluster: what it applies to, before and after the run', () => {
     await page.getByTestId('cluster-applies-all').click();
     await page.keyboard.press('Escape');
     await expect(refName).toHaveAttribute('aria-pressed', 'false');
+    // Wait for this run's own line (its run number), not the previous one's tone: closing the panels while it is
+    // still running stops it ("the locus changed"), and the line then never says "(panels closed)".
+    const runBefore = await marker.getAttribute('data-run');
     await page.getByTestId('cluster-run-button').click();
+    await expect(marker).not.toHaveAttribute('data-run', runBefore ?? '', { timeout: 60_000 });
     await expect(result).toHaveAttribute('data-tone', /done|note/, { timeout: 60_000 });
     await expect(result).not.toContainText("can't include");
     // N5: once the panels it clustered close (the split), the line says so rather than reading as current.
