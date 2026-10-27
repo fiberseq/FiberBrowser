@@ -375,7 +375,12 @@ export function ReadStatsPanel({ isFullView }: Props) {
 
   const readStatsTsvRows = useCallback(() => {
     if (!result) return;
-    const cols = ['read_id', 'dataset_id', 'aligned_span', 'footprint_count', 'avg_footprint_size', 'accessibility_pct', 'methyl_count', 'methyl_pct', 'mapq', 'strand', 'viewer_order'];
+    const base = ['read_id', 'dataset_id', 'aligned_span', 'footprint_count', 'avg_footprint_size', 'accessibility_pct', 'methyl_count', 'methyl_pct', 'mapq', 'strand'];
+    // The nucleosome columns when any read has them (molecule scalars of the nuc module).
+    const nuc = ['nrl', 'regularity', 'gap_cv', 'lambda_acc', 'n_short', 'n_mono', 'n_multi', 'n_cant_tell', 'reg_fraction',
+      'disordered_fraction', 'undetermined_fraction', 'n_missing'];
+    const hasNuc = sortedRows.some(r => nuc.some(c => (r as unknown as Record<string, unknown>)[c] != null));
+    const cols = [...base, ...(hasNuc ? nuc : []), 'viewer_order'];
     return [
       cols,
       ...sortedRows.map(r =>

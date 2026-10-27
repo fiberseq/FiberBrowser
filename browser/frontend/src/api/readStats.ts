@@ -35,6 +35,19 @@ export interface PerReadStats {
   lifted?: boolean;
   fp_intervals: [number, number, number][] | null;  // [start, end, size] read-relative
   methyl_pos: number[] | null;  // read-relative positions
+  // Nucleosome molecule scalars (nucmol; null when missing or not scanned)
+  nrl?: number | null;
+  regularity?: number | null;
+  gap_cv?: number | null;
+  lambda_acc?: number | null;
+  n_short?: number | null;
+  n_mono?: number | null;
+  n_multi?: number | null;
+  n_cant_tell?: number | null;
+  reg_fraction?: number | null;
+  disordered_fraction?: number | null;
+  undetermined_fraction?: number | null;
+  n_missing?: number | null;
 }
 
 export interface HistogramBin {

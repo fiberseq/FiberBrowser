@@ -81,7 +81,7 @@ import { ServerFileBrowserHost } from './controls/files/ServerFileBrowser';
 import { FRONTEND_DIAGNOSTICS } from '../utils/diagnostics';
 import { seedHistoryBaseline, serializeState, type SerializedState } from '../stores/historySlice';
 import { CLUSTER_RULE_MODE_PREFIX, type AnalysisFilterRule, type AnalysisSortRule, type ClusterFeatureRuleTerm, type PeakMode, type TranscriptionStateRuleKind } from '../types';
-import { normalizeAnalysisRuleScope, normalizeTranscriptionStateRuleKind, resolveClusterRuleRegions } from '../utils/analysisRules';
+import { analysisFilterLabel, analysisRuleTermProblem, filterRuleRequestFields, intersectWithCurrentFilter, normalizeAnalysisRuleScope, normalizeTranscriptionStateRuleKind, resolveClusterRuleRegions, sortRuleRequestFields, type FeatureHubRequest } from '../utils/analysisRules';
 import { filterRegionGroups, groupStillShown } from '../utils/filterScopes';
 import { logPerfTiming, nowMs } from '../utils/perfDebug';
 import { clusterBranchDynamicScopeKey, isClusterBranchAtViewport } from '../utils/clusterBranches';
@@ -1717,8 +1717,15 @@ export function Browser() {
     let sortDescending = true;
     let sortTranscriptionState: TranscriptionStateRuleKind | null = null;
     let sortGeneIds: string[] | undefined;
+    let sortMoleculeMetric: string | undefined;
+    let sortFeatureHub: FeatureHubRequest | undefined;
     if (analysisSortRule) {
       const term = analysisSortRule.terms[0];
+      const problem = analysisRuleTermProblem(term);
+      if (problem) {
+        reportSort('error', `Sort rule "${analysisSortRule.name}" ${problem}.`);
+        return;
+      }
       sortTranscriptionState = transcriptionStateFromTerm(term);
       sortGeneIds = sortTranscriptionState ? geneIdsForAnalysisRule(analysisSortRule) : undefined;
       if (sortTranscriptionState && (!sortGeneIds || sortGeneIds.length === 0)) {
@@ -1731,11 +1738,20 @@ export function Browser() {
       }
       sortLayer = layerFromSortTerm(term) ?? undefined;
       sortDescending = analysisSortRule.descending;
+      // Molecule metric and hub hit terms read no layer.
+      const layerFree = sortRuleRequestFields(analysisSortRule);
       if (sortTranscriptionState) {
         backendSortBy = 'transcription_state';
         sortLayer = undefined;
         sortRulePayload = undefined;
-      } else if (analysisSortRule.metric === 'count') {
+      } else if (layerFree) {
+        backendSortBy = layerFree.sortBy;
+        sortLayer = undefined;
+        sortRulePayload = undefined;
+        if (layerFree.sortBy === 'value') sortMoleculeMetric = layerFree.moleculeMetric;
+        else sortFeatureHub = layerFree.featureHub;
+      } else if (analysisSortRule.metric === 'count' || analysisSortRule.metric === 'value') {
+        // ('value' belongs to molecule metrics: a layer term saved with it counts.)
         backendSortBy = 'rule';
         sortRulePayload = rulePayloadFromSortTerm(term);
       } else {
@@ -1819,6 +1835,8 @@ export function Browser() {
               quality_gates: qualityGatesPayload(rule.qualityGates),
             } : undefined),
             descending: sortDescending,
+            moleculeMetric: sortMoleculeMetric,
+            featureHub: sortFeatureHub,
             linked: isLinkedGroup(roundIds, panels.filter(p => round[p.datasetId ?? ''] === (p.stateKey ?? p.datasetId))),
             // (Similarity after a graph run: the run's regions, which the datasets do not hold; graph features review.)
             peakRegions: backendSortBy === 'similarity' && !sortState.clusterPeakRegions.length && sortState.clusterMatchedRun?.graph?.regions?.length
@@ -1989,23 +2007,34 @@ export function Browser() {
     }
 
     const term = analysisFilterRule.terms[0];
+    const problem = analysisRuleTermProblem(term);
+    if (problem) {
+      reportFilter('error', `Filter rule "${analysisFilterRule.name}" ${problem}.`);
+      return;
+    }
     const transcriptionState = transcriptionStateFromTerm(term);
     const geneIds = transcriptionState ? geneIdsForAnalysisRule(analysisFilterRule) : undefined;
     if (transcriptionState && (!geneIds || geneIds.length === 0)) {
       reportFilter('error', `Filter rule "${analysisFilterRule.name}" needs a selected gene.`);
       return;
     }
-    const sortLayer = transcriptionState ? undefined : layerFromSortTerm(term) ?? undefined;
-    const rulePayload = !transcriptionState && analysisFilterRule.metric === 'count'
+    // Molecule metric ('value', between) and hub hit terms read no layer and send no size rule.
+    const fields = filterRuleRequestFields(analysisFilterRule);
+    const sortLayer = transcriptionState || fields.layerFree ? undefined : layerFromSortTerm(term) ?? undefined;
+    const rulePayload = !fields.layerFree && fields.metric === 'count'
       ? rulePayloadFromSortTerm(term)
       : undefined;
+    const combine = analysisFilterRule.combine === 'and';
 
     try {
       const responses = await Promise.all(groups.map(group => filterReadsByAnalysisRule(
         group.chrom, group.start, group.end, spanningOnly, group.datasetIds, {
-        metric: analysisFilterRule.metric,
-        operator: analysisFilterRule.operator,
-        threshold: analysisFilterRule.threshold,
+        metric: fields.metric,
+        operator: fields.operator,
+        threshold: fields.threshold,
+        thresholdMax: fields.thresholdMax,
+        moleculeMetric: fields.moleculeMetric,
+        featureHub: fields.featureHub,
         rule: rulePayload,
         peakRegions: group.peakRegions.length > 0 ? group.peakRegions : undefined,
         scopeWindows: group.windows,
@@ -2034,11 +2063,19 @@ export function Browser() {
         for (const [dsId, result] of Object.entries(responses[i].results)) {
           for (const sk of (group.stateKeysByDataset[dsId] ?? [])) {
             filteredKeys.add(sk);
-            useBrowserStore.getState().setFilteredReadIds(sk, new Set(result.read_ids), {
+            // 'and': only the reads the panel's current filter keeps too (no filter: all of them).
+            const current = combine ? now.filteredReadIds[sk] : null;
+            const ids = intersectWithCurrentFilter(result.read_ids, current);
+            useBrowserStore.getState().setFilteredReadIds(sk, ids, {
               target: 'analysis-filter',
-              label: `Rules > ${analysisFilterRule.name}`,
+              label: analysisFilterLabel(analysisFilterRule.name, current ? now.readFilterSources[sk] ?? {} : null),
             });
+            if (combine) {
+              kept += ids.size;
+              total += current ? current.size : result.total ?? 0;
+            }
           }
+          if (combine) continue;
           kept += result.filtered ?? result.read_ids.length;
           total += result.total ?? 0;
           if (DEBUG) console.log(`Filtered ${dsId} at ${group.chrom}:${group.start}-${group.end}: ${analysisFilterRule.name}, reads=${result.filtered}/${result.total}`);
@@ -2047,9 +2084,10 @@ export function Browser() {
 
       useBrowserStore.getState().setFootprintFilterKey(null);
       useBrowserStore.getState().pushSnapshot(`Filter by ${analysisFilterRule.name}`);
+      const filterName = combine ? `${analysisFilterRule.name} (within the current filter)` : analysisFilterRule.name;
       reportFilter(kept > 0 ? 'done' : 'note', total > 0
-        ? `${analysisFilterRule.name}: kept ${formatShare(kept, total, 'reads', { pct: true })}.`
-        : `${analysisFilterRule.name}: applied.`,
+        ? `${filterName}: kept ${formatShare(kept, total, 'reads', { pct: true })}.`
+        : `${filterName}: applied.`,
       // The panels it filtered (not the ones skipped or moved meanwhile): the line says so once they have closed.
       now.panels.filter(p => p.contentType === 'dataset' && filteredKeys.has((p.stateKey ?? p.datasetId)!)).map(p => p.id));
     } catch (err) {

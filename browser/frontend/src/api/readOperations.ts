@@ -10,6 +10,12 @@ import type { FireResponse, FilterMode, MetaResponse } from '../types';
 import { fetchJson, fetchJsonSharedGet, withSortedParams } from './sharedFetch';
 import type { QualityGatePayload } from '../utils/ruleMatching';
 
+/** A feature_hub term: the hub hits whose per-read state is counted, and the state that counts. */
+export interface FeatureHubPayload {
+  hits: Array<{ set_id: string; hit_id: string; chrom: string; start: number; end: number }>;
+  state: '1' | '0';
+}
+
 const API_BASE = '/api';
 
 export async function getMeta(chrom: string, start: number, end: number, datasetId?: string): Promise<MetaResponse> {
@@ -150,9 +156,16 @@ export async function filterReadsByAnalysisRule(
   spanning: boolean,
   datasetIds: string[],
   opts: {
+    /** 'value': the molecule metric itself (missing values never pass). */
     metric: string;
+    /** 'between': threshold <= value <= thresholdMax. */
     operator: string;
     threshold: number;
+    thresholdMax?: number | null;
+    /** A molecule_metric term's metric id ('nuc.nrl', ...). */
+    moleculeMetric?: string;
+    /** A feature_hub term (metric 'count': the hits where the read is in `state`). */
+    featureHub?: FeatureHubPayload;
     rule?: { size_min: number; size_max: number | null; conditions: any[]; quality_gates?: QualityGatePayload[] };
     peakRegions?: number[][];
     scopeWindows?: number[][];
@@ -179,6 +192,9 @@ export async function filterReadsByAnalysisRule(
       metric: opts.metric,
       operator: opts.operator,
       threshold: opts.threshold,
+      ...(opts.thresholdMax != null && { threshold_max: opts.thresholdMax }),
+      ...(opts.moleculeMetric && { molecule_metric: opts.moleculeMetric }),
+      ...(opts.featureHub && { feature_hub: opts.featureHub }),
       ...(opts.rule && { rule: opts.rule }),
       ...(opts.peakRegions && { peak_regions: opts.peakRegions }),
       ...(opts.scopeWindows && { scope_windows: opts.scopeWindows }),
@@ -205,6 +221,10 @@ export async function sortReads(
   sortBy: string,
   opts?: {
     rule?: { size_min: number; size_max: number | null; conditions: any[]; quality_gates?: QualityGatePayload[] };
+    /** sortBy 'value': the molecule metric (missing values sort last). */
+    moleculeMetric?: string;
+    /** sortBy 'feature_hub': the count of the hits where the read is in the state. */
+    featureHub?: FeatureHubPayload;
     descending?: boolean;
     linked?: boolean;
     peakRegions?: number[][];
@@ -245,6 +265,8 @@ export async function sortReads(
       dataset_ids: datasetIds,
       sort_by: sortBy,
       ...(opts?.rule && { rule: opts.rule }),
+      ...(opts?.moleculeMetric && { molecule_metric: opts.moleculeMetric }),
+      ...(opts?.featureHub && { feature_hub: opts.featureHub }),
       descending: opts?.descending ?? true,
       ...(opts?.linked !== undefined && { linked: opts.linked }),
       ...(opts?.peakRegions && { peak_regions: opts.peakRegions }),

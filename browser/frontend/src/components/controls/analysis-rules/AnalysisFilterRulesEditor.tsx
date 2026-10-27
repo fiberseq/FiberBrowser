@@ -22,6 +22,16 @@ import {
   summarizeAnalysisRuleScope,
 } from '../../../utils/analysisRules';
 import { AnalysisButton } from '../shared';
+import {
+  HubHitsControls,
+  MoleculeMetricSelect,
+  MoleculeMetricUnit,
+  hubHitsTerm,
+  hubSourceNote,
+  layerFreeScope,
+  moleculeMetricTerm,
+  useHubSelectionHits,
+} from './RuleTermSources';
 
 interface LayerOption {
   value: string;
@@ -75,7 +85,15 @@ const OPERATOR_OPTIONS: Array<{ value: AnalysisFilterOperator; label: string }> 
   { value: 'lte', label: '<=' },
   { value: 'lt', label: '<' },
   { value: 'eq', label: '=' },
+  { value: 'between', label: 'between' },
 ];
+
+/** The metric a term is measured by: a molecule metric's value, a hub term's count (else the rule's own). */
+function metricForSource(source: ClusterFeatureRuleTerm['source'] | undefined, metric: AnalysisFilterMetric): AnalysisFilterMetric {
+  if (source === 'molecule_metric') return 'value';
+  if (source === 'feature_hub') return 'count';
+  return metric === 'value' ? 'count' : metric;
+}
 
 function uid(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
@@ -186,6 +204,7 @@ export function AnalysisFilterRulesEditor({
   const [message, setMessage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const ruleLayerLabels = useMemo(() => layerLabelMap(layerOptions), [layerOptions]);
+  const hub = useHubSelectionHits();
 
   const showMessage = (text: string) => {
     setMessage(text);
@@ -197,6 +216,11 @@ export function AnalysisFilterRulesEditor({
     updates: Partial<AnalysisFilterRule>,
   ): Partial<AnalysisFilterRule> => {
     const next = { ...rule, ...updates };
+    const metric = metricForSource(next.terms[0]?.source, next.metric);
+    if (metric !== next.metric) {
+      next.metric = metric;
+      updates = { ...updates, metric };
+    }
     const autoName = buildAnalysisFilterRuleAutoName(next, ruleLayerLabels);
     return {
       ...updates,
@@ -411,18 +435,29 @@ export function AnalysisFilterRulesEditor({
 
               <div className="mt-2 flex flex-wrap items-center gap-1.5 rounded bg-white px-1.5 py-1 ring-1 ring-gray-200 dark:bg-black/10 dark:ring-white/10">
                 <span className="text-[11px] font-medium text-gray-400">Keep</span>
-                <select
-                  value={rule.metric}
-                  onChange={event => updateRule(rule, { metric: event.target.value as AnalysisFilterMetric })}
-                  className="input-tool text-xs"
-                >
-                  {METRIC_OPTIONS.map(option => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
+                {term.source === 'molecule_metric' ? (
+                  <MoleculeMetricUnit metric={term.moleculeMetric} />
+                ) : term.source === 'feature_hub' ? (
+                  <span className="text-[11px] text-gray-500" title="Number of the hits where the read is in the chosen state">hits in state</span>
+                ) : (
+                  <select
+                    value={rule.metric}
+                    onChange={event => updateRule(rule, { metric: event.target.value as AnalysisFilterMetric })}
+                    className="input-tool text-xs"
+                  >
+                    {METRIC_OPTIONS.map(option => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                )}
                 <select
                   value={rule.operator}
-                  onChange={event => updateRule(rule, { operator: event.target.value as AnalysisFilterOperator })}
+                  onChange={event => {
+                    const operator = event.target.value as AnalysisFilterOperator;
+                    updateRule(rule, operator === 'between' && rule.thresholdMax == null
+                      ? { operator, thresholdMax: rule.threshold }
+                      : { operator });
+                  }}
                   className="input-tool text-xs"
                 >
                   {OPERATOR_OPTIONS.map(option => (
@@ -435,8 +470,33 @@ export function AnalysisFilterRulesEditor({
                   value={rule.threshold}
                   onChange={event => updateRule(rule, { threshold: Number(event.target.value) || 0 })}
                   className="input-tool w-20 text-xs"
-                  title="Metric threshold"
+                  title={rule.operator === 'between' ? 'Lower bound (inclusive)' : 'Metric threshold'}
                 />
+                {rule.operator === 'between' && (
+                  <>
+                    <span className="text-gray-400">and</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={rule.thresholdMax ?? rule.threshold}
+                      onChange={event => updateRule(rule, { thresholdMax: Number(event.target.value) || 0 })}
+                      className="input-tool w-20 text-xs"
+                      title="Upper bound (inclusive)"
+                    />
+                  </>
+                )}
+                <label
+                  className="ml-auto flex items-center gap-1 text-[11px] text-gray-500 dark:text-gray-400"
+                  title="Keep only reads that also pass the panel's current filter, instead of replacing it"
+                >
+                  <input
+                    type="checkbox"
+                    checked={rule.combine === 'and'}
+                    onChange={event => updateRule(rule, { combine: event.target.checked ? 'and' : 'replace' })}
+                    className="rounded border-gray-300 dark:border-white/20"
+                  />
+                  Within the current filter (AND)
+                </label>
               </div>
 
               <div className="mt-2 flex flex-wrap items-center gap-1.5 rounded bg-white px-1.5 py-1 ring-1 ring-gray-200 dark:bg-black/10 dark:ring-white/10">
@@ -451,6 +511,14 @@ export function AnalysisFilterRulesEditor({
 	                      applyFootprintGroup(rule, term, footprintGroups[0].id);
 	                    } else if (source === 'transcription_state') {
 	                      applyTranscriptionState(rule, term);
+	                    } else if (source === 'molecule_metric') {
+	                      updateRule(rule, { scope: layerFreeScope(rule.scope), terms: [moleculeMetricTerm(term)] });
+	                    } else if (source === 'feature_hub') {
+	                      if (hub.hits.length === 0) {
+	                        showMessage(`Hub hits: ${hubSourceNote(hub)}.`);
+	                        return;
+	                      }
+	                      updateRule(rule, { scope: layerFreeScope(rule.scope), terms: [hubHitsTerm(term, hub.hits)] });
 	                    } else {
 	                      updateRule(rule, { terms: [{ ...term, source: 'layer', layer: layerOptions[0]?.value ?? null }] });
 	                    }
@@ -467,6 +535,10 @@ export function AnalysisFilterRulesEditor({
 		                  <option value="transcription_state" disabled={selectedGenes.length === 0}>
 		                    Pol II state {selectedGenes.length === 0 ? '(select gene first)' : '(Pause/PIC/Elongating)'}
 		                  </option>
+	                  <option value="molecule_metric">Molecule metric</option>
+	                  <option value="feature_hub" disabled={hub.hits.length === 0 && term.source !== 'feature_hub'}>
+	                    Hub hits{hub.hits.length === 0 ? ` (${hubSourceNote(hub)})` : ''}
+	                  </option>
 	                </select>
 
                 {term.source === 'layer' && (
@@ -546,6 +618,25 @@ export function AnalysisFilterRulesEditor({
 	                    </select>
 	                    <span className="text-[11px] text-gray-500">uses Transcription panel definitions</span>
 	                  </>
+	                )}
+
+	                {term.source === 'molecule_metric' && (
+	                  <>
+	                    <MoleculeMetricSelect
+	                      value={term.moleculeMetric}
+	                      onChange={metric => updateRuleTerm(rule, term.id, { moleculeMetric: metric })}
+	                    />
+	                    <span className="text-[11px] text-gray-500">per molecule; reads without a value never pass</span>
+	                  </>
+	                )}
+
+	                {term.source === 'feature_hub' && (
+	                  <HubHitsControls
+	                    term={term}
+	                    hub={hub}
+	                    onSnapshot={() => updateRuleTerm(rule, term.id, { hubHits: hub.hits })}
+	                    onState={state => updateRuleTerm(rule, term.id, { hubState: state })}
+	                  />
 	                )}
 	              </div>
 

@@ -1,5 +1,5 @@
 import type { AnalysisFilterMetric, AnalysisFilterOperator, AnalysisFilterRule, AnalysisFilterRuleSet, AnalysisSortMetric, AnalysisSortRule, AnalysisSortRuleSet, Bookmark, ClusterFeatureRule, ClusterFeatureRuleSet, ClusterFeatureRuleTerm, Colormap, ColorRule, FirePeak, FootprintGroup, Gene, PeakMode, QualityGate, ReadStateInfo, SelectedFootprint, SubTrackConfig, SubTrackType, TranscriptionStateFilters } from '../types';
-import { buildAnalysisFilterRuleAutoName, buildAnalysisSortRuleAutoName, buildClusterFeatureRuleAutoName, isRemovedTranscriptionStateTerm, normalizeAnalysisRuleScope, normalizeTranscriptionStateRuleKind } from '../utils/analysisRules';
+import { buildAnalysisFilterRuleAutoName, buildAnalysisSortRuleAutoName, buildClusterFeatureRuleAutoName, isRemovedTranscriptionStateTerm, normalizeAnalysisRuleScope, normalizeRuleTermSource, normalizeRuleTermSourceFields, normalizeTranscriptionStateRuleKind } from '../utils/analysisRules';
 import type { ReadFilterSource } from './clusterSlice';
 import { DEFAULT_COLORMAP } from '../types';
 import { FRONTEND_DIAGNOSTICS } from '../utils/diagnostics';
@@ -322,9 +322,7 @@ export function normalizeTranscriptionStateFilters(filters: unknown): Transcript
 function normalizeClusterFeatureTerm(term: unknown, idx: number): ClusterFeatureRuleTerm | null {
   if (!term || typeof term !== 'object') return null;
   const raw = term as Partial<ClusterFeatureRuleTerm> & Record<string, unknown>;
-  const source = raw.source === 'label_rule' || raw.source === 'footprint_group' || raw.source === 'footprint_class' || raw.source === 'transcription_state'
-    ? raw.source
-    : 'layer';
+  const source = normalizeRuleTermSource(raw.source);
   const rawLayer = raw.layer ?? raw.source_layer;
   const layer = rawLayer == null || rawLayer === 'primary' || rawLayer === 'footprint'
     ? null
@@ -351,6 +349,8 @@ function normalizeClusterFeatureTerm(term: unknown, idx: number): ClusterFeature
     ...(raw.footprintGroupName || raw.footprint_group_name ? { footprintGroupName: String(raw.footprintGroupName ?? raw.footprint_group_name) } : {}),
     ...(group ? { group } : {}),
     ...(source === 'transcription_state' ? { transcriptionState: normalizeTranscriptionStateRuleKind(raw.transcriptionState ?? raw.transcription_state) } : {}),
+    // Molecule metric and hub hit terms (no layer).
+    ...normalizeRuleTermSourceFields(source, raw),
   };
 }
 
@@ -422,7 +422,7 @@ export function getInitialClusterFeatureRules(): ClusterFeatureRule[] {
 }
 
 function normalizeAnalysisSortMetric(metric: unknown): AnalysisSortMetric {
-  return metric === 'occupancy' || metric === 'rate' || metric === 'accessibility' ? metric : 'count';
+  return metric === 'occupancy' || metric === 'rate' || metric === 'accessibility' || metric === 'value' ? metric : 'count';
 }
 
 export function normalizeAnalysisSortRules(rules: unknown): AnalysisSortRule[] {
@@ -497,11 +497,11 @@ export function getInitialAnalysisSortRules(): AnalysisSortRule[] {
 }
 
 function normalizeAnalysisFilterMetric(metric: unknown): AnalysisFilterMetric {
-  return metric === 'occupancy' || metric === 'rate' || metric === 'accessibility' ? metric : 'count';
+  return metric === 'occupancy' || metric === 'rate' || metric === 'accessibility' || metric === 'value' ? metric : 'count';
 }
 
 function normalizeAnalysisFilterOperator(operator: unknown): AnalysisFilterOperator {
-  if (operator === 'gt' || operator === 'lt' || operator === 'lte' || operator === 'eq') return operator;
+  if (operator === 'gt' || operator === 'lt' || operator === 'lte' || operator === 'eq' || operator === 'between') return operator;
   return 'gte';
 }
 
@@ -517,7 +517,9 @@ export function normalizeAnalysisFilterRules(rules: unknown): AnalysisFilterRule
       const metric = normalizeAnalysisFilterMetric(rule.metric);
       const operator = normalizeAnalysisFilterOperator(rule.operator);
       const threshold = Number.isFinite(Number(rule.threshold)) ? Number(rule.threshold) : 1;
-      const autoName = String(rule.autoName ?? buildAnalysisFilterRuleAutoName({ terms, scope, metric, operator, threshold }));
+      const rawMax = rule.thresholdMax ?? rule.threshold_max;
+      const thresholdMax = rawMax == null || rawMax === '' || !Number.isFinite(Number(rawMax)) ? null : Number(rawMax);
+      const autoName = String(rule.autoName ?? buildAnalysisFilterRuleAutoName({ terms, scope, metric, operator, threshold, thresholdMax }));
       const rawName = typeof rule.name === 'string' ? rule.name : '';
       const nameEdited = typeof rule.nameEdited === 'boolean'
         ? rule.nameEdited
@@ -533,6 +535,8 @@ export function normalizeAnalysisFilterRules(rules: unknown): AnalysisFilterRule
         metric,
         operator,
         threshold,
+        ...(thresholdMax != null ? { thresholdMax } : {}),
+        ...(rule.combine === 'and' ? { combine: 'and' as const } : {}),
       };
     });
 }

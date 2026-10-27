@@ -12,8 +12,8 @@ import { isPublicMode } from './publicMode';
 import { buildSessionManifest, formatSessionManifest } from './sessionManifest';
 import {
   copyReadNames, downloadClusterAssignments, downloadClusterRegionsBed, downloadPeaksBed, downloadReadBams,
-  downloadHighlightsBed, downloadReadNames, downloadReadTable, downloadStateJson, downloadViewportBed, downloadWorkingSetTsv, openPanelForExport,
-  readsInViewFromStatus, viewportViews,
+  downloadHighlightsBed, downloadNucFootprintsTsv, downloadReadNames, downloadReadTable, downloadStateJson, downloadViewportBed, downloadWorkingSetTsv,
+  nucFootprintDatasetIds, openPanelForExport, readsInViewFromStatus, viewportViews,
 } from './dataExportActions';
 import { shownPanelViews, viewLocusLabel } from './panelScope';
 import { registerDataExport, type DataExportAvailability, type DataExportContext, type DataExportEntry } from './dataExportRegistry';
@@ -262,6 +262,19 @@ export function registerBuiltinDataExports(): void {
     description: 'Opens Footprints > Saved: its Export menu saves their sequences, matched calls or rules.',
     available: ({ state }) => needs(state.footprintGroups.length > 0, 'No saved footprints yet: save some in Footprints'),
     run: ({ state }) => openPanelForExport(state, 'footprint-analysis', 'saved'),
+  });
+  registerDataExport({
+    id: 'nuc-footprints', group: 'classes', order: 45,
+    title: 'Nucleosome footprints', format: 'TSV',
+    description: 'One row per footprint of the target panels\' reads: read, coordinates, molecular length, size class, named class, posterior, z and TF flag (from a nucleosome scan or run).',
+    available: ({ state }) => {
+      const withLayer = nucFootprintDatasetIds(state);
+      if (withLayer.size === 0) return no('No nucleosome size classes: run Nucleosomes, or open a nucleosome scan');
+      const views = shownPanelViews(state);
+      const shown = views.some(view => view.panelIds.some(id => withLayer.has(state.panels.find(p => p.id === id)?.datasetId ?? '')));
+      return shown ? ok : no('No panel on screen shows a dataset with nucleosome size classes');
+    },
+    run: ({ state }) => downloadNucFootprintsTsv(state),
   });
   registerDataExport({
     id: 'co-occupancy', group: 'classes', order: 50, action: 'open',
