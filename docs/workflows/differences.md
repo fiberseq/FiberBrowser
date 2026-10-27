@@ -130,7 +130,7 @@ level, and open the insertion in the lens. See
 comes from (haplotype or reads), its interval on this genome, the change
 (reference → alternative size), its sequence or support, its **Assembly
 comparison** (below), and an **Inspect** button. It opens just below the row,
-over the reads, and scrolls; **Hide the table** in the same menu closes it.
+over the reads, and scrolls; **Hide the table** in the row's menu closes it.
 
 ![The difference table under the row](../images/pangenome/differences-table.png)
 
