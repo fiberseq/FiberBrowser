@@ -26,15 +26,24 @@ out and counted.
 
 Per source record: placements (target contig, start, end, orientation),
 the molecule strand (``st``, both sides in the molecule frame), every call
-interval per call group (``intervals``, ``fire`` and each MA layer), and
-m6A/5mC positions. Calls of a group are paired by target geometry, never by
-tag-array id (a frame conversion can renumber those): greatest base
+interval per call group (``intervals``, ``fire`` and each MA layer) with its
+payload (size or score, quality/state bytes, annotation name), m6A/5mC
+positions, and deamination positions with their channel (C->T or G->A, in
+the molecule frame). Calls of a group are paired by target geometry, never
+by tag-array id (a frame conversion can renumber those): greatest base
 overlap, ties by target order (``pair_calls``). Calls are compared two ways:
 
 - raw geometry, the parts as the rows deliver them;
 - bases: per call, the merged target bases (zero-width insertion markers
   kept as positions). Buckets: identical, within 10 bp (hull ends within
-  10 bp and at most 10 bp in the symmetric difference), different.
+  10 bp and at most 10 bp in the symmetric difference), different. A pair
+  with the same bases but a different payload is different (cause
+  ``payload``).
+
+Deamination read from reference mismatches (MD) differs between assemblies
+by design; only a record whose events all came from there, on both sides,
+is left out of the verdict (``deam_exempt``). Events from MM tags or IUPAC
+R/Y bases are always compared.
 
 Each difference gets a cause (``CALL_CAUSES``); see ``classify_call``.
 
@@ -72,12 +81,14 @@ CALL_CAUSES = {
     "insertion_marker": "a call with no target base: live lift draws a zero-width marker",
     "native_hole": "the decoder cuts the lifted record's call at an SV event (a CIGAR indel group of at "
                    "least sv_min_len) that the source record does not have; live lift keeps those bases",
+    "payload": "same geometry, different payload: the call's state/quality bytes, score, size or annotation "
+               "name differ (e.g. nfrvar open vs closed)",
     "native_only": "the call is only on the lifted record",
     "live_only": "the call is only on the live-lift row",
     "other": "unclassified (see the examples)",
 }
 # Point fields a parity verdict needs equal. deam on a record without m6A/5mC calls is read from mismatches
-# against the record's own reference (MD), so it differs between assemblies by design; see deam_from_md.
+# against the record's own reference (MD), so it differs between assemblies by design; see deam_exempt.
 VERDICT_POINTS = ("methyl_m6a", "methyl_m5c", "deam")
 
 
@@ -271,13 +282,15 @@ def overlap_bp(a, b) -> int:
     return n
 
 
-def pair_calls(live: dict, native: dict) -> list:
+def pair_calls(live: dict, native: dict, live_payloads=None, native_payloads=None) -> list:
     """Pair one call group's calls (``{call id: parts}`` per side) by target
     geometry, never by id: tag-array indices (``MA0:3``, ``ns:3``) are not
     stable across a lift, since a frame conversion re-sorts them on reverse
-    records. Greatest base overlap first, ties by target order; a call that
-    overlaps nothing on the other side stays unpaired. Returns ``[(live id |
-    None, native id | None)]``."""
+    records. Greatest base overlap first; among equal overlaps (calls stacked
+    on the same bases, such as 1-bp stubs at one insertion) the same payload,
+    then the same id, then target order; a call that overlaps nothing on the
+    other side stays unpaired. Returns ``[(live id | None, native id | None)]``."""
+    live_payloads, native_payloads = live_payloads or {}, native_payloads or {}
     def order(calls):
         keys = [k for k in calls if calls[k]]
         spans = {k: _pairing_spans(calls[k]) for k in keys}
@@ -299,10 +312,11 @@ def pair_calls(live: dict, native: dict) -> list:
         while j >= 0 and reach[j] > a:
             n = overlap_bp(sp, ns[j])
             if n:
-                candidates.append((-n, i, j))
+                same_payload = live_payloads.get(lk[i], set()) == native_payloads.get(nk[j], set())
+                candidates.append((-n, not same_payload, lk[i] != nk[j], i, j))
             j -= 1
     used_l, used_n, pairs = set(), set(), []
-    for _n, i, j in sorted(candidates):
+    for *_rank, i, j in sorted(candidates):
         if i not in used_l and j not in used_n:
             used_l.add(i)
             used_n.add(j)
@@ -318,10 +332,17 @@ def compare_calls(lp: dict, np_: dict, tolerance=TOLERANCE_BP) -> list:
     out = []
     for group in sorted(set(lp["calls"]) | set(np_["calls"])):
         lc, nc = lp["calls"].get(group, {}), np_["calls"].get(group, {})
-        for li, ni in pair_calls(lc, nc):
+        lpay, npay = lp.get("payloads", {}).get(group, {}), np_.get("payloads", {}).get(group, {})
+        for li, ni in pair_calls(lc, nc, lpay, npay):
             res = classify_call(lc.get(li, []) if li is not None else [], nc.get(ni, []) if ni is not None else [],
                                 lp.get("connectors", ()), lp.get("insertions", ()), tolerance)
-            res.update(group=group, call=li if li is not None else ni, live_call=li, native_call=ni)
+            res.update(group=group, call=li if li is not None else ni, live_call=li, native_call=ni,
+                       payload_differs=False)
+            if li is not None and ni is not None and lpay.get(li, set()) != npay.get(ni, set()):
+                # Same call, different state, score, quality or annotation: a difference whatever the geometry.
+                res["payload_differs"] = True
+                if res["bucket"] == "identical":
+                    res.update(bucket="different", cause="payload")
             out.append(res)
     return out
 
@@ -330,11 +351,16 @@ def union_placements(placements: list) -> dict:
     """One record's placements as one: every call's parts and the connectors
     and insertions of all of them (a call a split cuts compares whole)."""
     calls = collections.defaultdict(lambda: collections.defaultdict(list))
+    payloads = collections.defaultdict(lambda: collections.defaultdict(set))
     for p in placements:
         for group, by_call in p["calls"].items():
             for call, parts in by_call.items():
                 calls[group][call] += parts
+        for group, by_call in p.get("payloads", {}).items():
+            for call, pay in by_call.items():
+                payloads[group][call] |= set(pay)
     return {"calls": {g: dict(c) for g, c in calls.items()},
+            "payloads": {g: dict(c) for g, c in payloads.items()},
             "connectors": [c for p in placements for c in p.get("connectors", ())],
             "insertions": [x for p in placements for x in p.get("insertions", ())]}
 
@@ -401,11 +427,12 @@ def source_record_counts(source_bam, keys) -> dict:
     return out
 
 
-def summarize(records: list, deam_from_md: bool = False, verdict_points=VERDICT_POINTS, rejoin_bp: int = 5) -> dict:
+def summarize(records: list, verdict_points=VERDICT_POINTS, rejoin_bp: int = 5) -> dict:
     """Counts over ``[{key, live: [placement], native: [placement]}]`` records.
-    ``deam_from_md``: the lifted BAM has no MD, so deam a record reads from
-    mismatches (no m6A/5mC calls) cannot be compared; such differences count
-    as ``deam_from_md``, outside the verdict."""
+    Deamination compares ``(position, channel)`` in the molecule frame; a
+    record whose events all came from reference mismatches on both sides
+    (``deam_exempt``, per placement ``deam_source``) counts as
+    ``deam_from_md``, outside the verdict."""
     s = collections.Counter()
     calls = collections.defaultdict(collections.Counter)
     record_calls = collections.defaultdict(collections.Counter)
@@ -456,13 +483,20 @@ def summarize(records: list, deam_from_md: bool = False, verdict_points=VERDICT_
                 calls[c["group"]]["raw_" + c["raw"]] += 1
                 if c["live_call"] is not None and c["native_call"] is not None and c["live_call"] != c["native_call"]:
                     calls[c["group"]]["paired_ids_differ"] += 1
+                if c["payload_differs"]:
+                    calls[c["group"]]["payload_differs"] += 1
                 if c["cause"]:
                     causes[(c["group"], c["cause"], c["bucket"])] += 1
                     cause_bp[(c["group"], c["cause"])] += c["bp"]
+                    detail = {}
+                    if c["payload_differs"]:
+                        detail = {"live_payload": sorted(map(str, live[i]["payloads"][c["group"]][c["live_call"]])),
+                                  "native_payload": sorted(map(str, native[j]["payloads"][c["group"]][c["native_call"]]))}
                     _example(examples, f"{c['group']}:{c['cause']}", idx, rec, live_call=c["live_call"],
                              native_call=c["native_call"],
                              live=live[i]["calls"].get(c["group"], {}).get(c["live_call"], []),
-                             native=native[j]["calls"].get(c["group"], {}).get(c["native_call"], []), bp=c["bp"])
+                             native=native[j]["calls"].get(c["group"], {}).get(c["native_call"], []), bp=c["bp"],
+                             **detail)
                 if c.get("holes"):
                     holes[(c["group"], "calls_max_hole_le_rejoin_bp" if max(c["holes"]) <= rejoin_bp
                            else "calls_max_hole_gt_rejoin_bp")] += 1
@@ -473,12 +507,12 @@ def summarize(records: list, deam_from_md: bool = False, verdict_points=VERDICT_
                 points[field]["placements"] += 1
                 points[field]["placements_identical" if p["identical"] else "placements_differ"] += 1
         # Per record: points over all placements (verdict), deam read from MD set apart.
-        has_methyl = any(p["points"].get("methyl_m6a") or p["points"].get("methyl_m5c") for p in live)
+        exempt = deam_exempt(live, native)
         for field in sorted({f for p in live + native for f in p["points"]}):
             res = compare_points([x for p in live for x in p["points"].get(field, ())],
                                  [x for p in native for x in p["points"].get(field, ())])
             status = "identical" if res["identical"] else "differs"
-            if status == "differs" and field == "deam" and deam_from_md and not has_methyl:
+            if status == "differs" and field == "deam" and exempt:
                 status = "deam_from_md"
             points[field]["records_" + status] += 1
             points[field]["shared"] += res["shared"]
@@ -492,6 +526,8 @@ def summarize(records: list, deam_from_md: bool = False, verdict_points=VERDICT_
         # Per record: every call's parts over all placements (a call a split cuts compares whole).
         for c in compare_calls(union_placements(live), union_placements(native)):
             record_calls[c["group"]][c["bucket"]] += 1
+            if c["payload_differs"]:
+                record_calls[c["group"]]["payload_differs"] += 1
             if c["cause"]:
                 record_causes[(c["group"], c["cause"], c["bucket"])] += 1
             if c["bucket"] != "identical":
@@ -527,61 +563,112 @@ def _as_list(value) -> list:
                                                             for v in value]
 
 
-def _call_groups(row, live: bool) -> list:
-    """``[(group, intervals, call ids)]`` of a row: top-level intervals, fire
-    and each layer. Live rows keep ids in ``live_lift.calls``; native decodes
-    in ``_fiberbrowser_calls`` (``[id, mol_start, mol_end]``)."""
+def _payloads(ivs, layer=None, top_qualities=None) -> list:
+    """Per interval, what an analysis reads beside its geometry: the interval's
+    own fields after the endpoints (size, FIRE score, ...), its quality/state
+    bytes per named track (MA AQ: e.g. nfrvar 1 = open, 2 = closed) and its
+    annotation name. Top-level qualities run parallel to the positive intervals."""
     out = []
+    tracks, names, annotations = [], [], []
+    if layer is not None:
+        tracks = [_as_list(t) for t in (_as_list(layer.get("qualities")) or [])]
+        names = list(layer.get("quality_names") or [])
+        annotations = _as_list(layer.get("annotation_names"))
+    positive = [k for k, iv in enumerate(ivs) if len(iv) > 2 and iv[2] > 0]
+    top = _as_list(top_qualities)
+    top_rank = {k: r for r, k in enumerate(positive)} if top and len(top) == len(positive) else {}
+    for k, iv in enumerate(ivs):
+        quals = tuple((names[t] if t < len(names) else str(t), int(track[k]))
+                      for t, track in enumerate(tracks) if k < len(track))
+        if k in top_rank:
+            quals += (("q", int(top[top_rank[k]])),)
+        name = annotations[k] if k < len(annotations) else None
+        out.append((tuple(int(x) for x in iv[2:]), quals, name))
+    return out
+
+
+def _call_groups(row, live: bool) -> list:
+    """``[(group, intervals, call ids, payloads)]`` of a row: top-level
+    intervals, fire and each layer. Live rows keep ids in ``live_lift.calls``;
+    native decodes in ``_fiberbrowser_calls`` (``[id, mol_start, mol_end]``)."""
+    out = []
+    top = _as_list(row.get("intervals"))
+    fire = _as_list(row.get("fire"))
+    layers = sorted((n, l) for n, l in (row.get("layers") or {}).items() if isinstance(l, dict))
     if live:
         ids = row["live_lift"].get("calls") or {}
-        out.append(("intervals", _as_list(row.get("intervals")), ids.get("intervals") or []))
-        out.append(("fire", _as_list(row.get("fire")), ids.get("fire") or []))
-        for name, layer in sorted((row.get("layers") or {}).items()):
-            if isinstance(layer, dict):
-                out.append((f"layer:{name}", _as_list(layer.get("intervals")), ids.get(f"layer:{name}") or []))
+        out.append(("intervals", top, ids.get("intervals") or [], _payloads(top, top_qualities=row.get("qualities"))))
+        out.append(("fire", fire, ids.get("fire") or [], _payloads(fire)))
+        for name, layer in layers:
+            ivs = _as_list(layer.get("intervals"))
+            out.append((f"layer:{name}", ivs, ids.get(f"layer:{name}") or [], _payloads(ivs, layer)))
     else:
         calls = row.get("_fiberbrowser_calls") or {}
         def ids_of(raw):
             return [c[0] if c else None for c in raw or []]
-        top = _as_list(row.get("intervals"))
         top_ids = ids_of(calls.get("intervals"))
-        out.append(("intervals", top, top_ids))
-        out.append(("fire", _as_list(row.get("fire")), ids_of(calls.get("fire"))))
+        out.append(("intervals", top, top_ids, _payloads(top, top_qualities=row.get("qualities"))))
+        out.append(("fire", fire, ids_of(calls.get("fire")), _payloads(fire)))
         # Layers the decoder inferred from ns/nl (no MA layer) carry no call ids: they are the top-level
         # footprints split by size, so each takes its footprint's id (live lift's inference keeps them).
         by_extent = {(iv[0], iv[1]): cid for iv, cid in zip(top, top_ids) if cid is not None}
-        for name, layer in sorted((row.get("layers") or {}).items()):
-            if isinstance(layer, dict):
-                ivs = _as_list(layer.get("intervals"))
-                ids = ids_of(layer.get("_fiberbrowser_calls"))
-                if not any(ids) and name in ("nuc", "tf"):
-                    ids = [by_extent.get((iv[0], iv[1])) for iv in ivs]
-                out.append((f"layer:{name}", ivs, ids))
+        for name, layer in layers:
+            ivs = _as_list(layer.get("intervals"))
+            ids = ids_of(layer.get("_fiberbrowser_calls"))
+            if not any(ids) and name in ("nuc", "tf"):
+                ids = [by_extent.get((iv[0], iv[1])) for iv in ivs]
+            out.append((f"layer:{name}", ivs, ids, _payloads(ivs, layer)))
+    return out
+
+
+def lift_flipped(row) -> bool:
+    """A lifted record whose strand the lift reversed: its ``Yp`` source strand
+    differs from its own orientation (``read_strand.lift_flipped``)."""
+    yp = parse_yp((row.get("lift") or {}).get("from"))
+    if not yp or yp[2] not in ("+", "-"):
+        return False
+    return (yp[2] == "-") != (row.get("alignment_orientation") == "reverse")
+
+
+def deam_events(events, base: int, flipped: bool) -> list:
+    """Deamination events as ``(position, channel)`` (1 = C->T / Y, 0 = G->A / R)
+    in the molecule frame: a lifted record whose strand the lift reversed
+    decodes them in the target frame, so its channels swap back."""
+    out = []
+    for e in events:
+        pos, channel = (int(e[0]), int(e[1])) if isinstance(e, (list, tuple)) and len(e) > 1 else (int(e), -1)
+        if flipped and channel in (0, 1):
+            channel = 1 - channel
+        out.append((pos + base, channel))
     return out
 
 
 def placement(row, base: int, live: bool, contig: str) -> dict:
     """A row as a placement: absolute target geometry, calls ``{group:
     {call id: [[t0, t1], ...]}}`` (positive calls; zero-width markers kept),
-    points, and for live rows the connectors and whether it is on a ``-``
-    chain."""
-    calls = {}
-    for group, ivs, ids in _call_groups(row, live):
-        by_call = {}
+    their payloads ``{group: {call id: set of payload tuples}}``, points
+    (deamination with its channel, molecule frame), and for live rows the
+    connectors and whether it is on a ``-`` chain."""
+    calls, payloads = {}, {}
+    for group, ivs, ids, pays in _call_groups(row, live):
+        by_call, pay = {}, {}
         for k, iv in enumerate(ivs):
             if len(iv) > 2 and iv[2] <= 0:
                 continue  # gaps and neutral rows: derived, not calls
             call = ids[k] if k < len(ids) and ids[k] is not None else f"<no id>:{iv[0] + base}-{iv[1] + base}"
             by_call.setdefault(str(call), []).append([iv[0] + base, iv[1] + base])
+            pay.setdefault(str(call), set()).add(pays[k])
         if by_call:
             calls[group] = by_call
+            payloads[group] = pay
     points = {f: [int(x) + base for x in _as_list(row.get(f))] for f in POINT_FIELDS if row.get(f) is not None}
+    flipped = False if live else lift_flipped(row)
     if row.get("deam") is not None:
-        points["deam"] = [int(e[0]) + base for e in _as_list(row.get("deam"))]
+        points["deam"] = deam_events(_as_list(row.get("deam")), base, flipped)
     out = {"contig": contig, "start": int(row["reference_start"]), "end": int(row["reference_end"]),
            "orientation": row.get("alignment_orientation"), "strand": row.get("strand"),
            "strand_inferred": bool(row.get("_fiberbrowser_inferred_strand")),
-           "calls": calls, "points": points}
+           "calls": calls, "payloads": payloads, "points": points, "lift_flipped": flipped}
     if live:
         ll = row["live_lift"]
         out["connectors"] = [[a + base, b + base] for a, b in ll.get("connectors") or ()]
@@ -589,6 +676,54 @@ def placement(row, base: int, live: bool, contig: str) -> dict:
         out["minus_chain"] = any(seg[3] == "-" for seg in ll.get("segments") or ())
         out["segments"] = [[s[0] + base, s[1] + base] for s in ll.get("segments") or ()]
     return out
+
+
+def deam_source(read) -> str | None:
+    """Where the loader takes a record's deamination events from, in its order
+    (``compact_read_loader``): MM/ML 'mm', else IUPAC R/Y bases 'iupac', else,
+    on a record without m6A/5mC calls, reference mismatches (MD) 'mismatch'."""
+    from services.bam_tags import parse_daf_mismatches, parse_iupac_ry_positions, parse_mm_ml_tags_by_type
+
+    whole = 1 << 40
+    mm = parse_mm_ml_tags_by_type(read, 0, whole)
+    if mm.get("deam"):
+        return "mm"
+    if parse_iupac_ry_positions(read, 0, whole):
+        return "iupac"
+    if not mm.get("m6a") and not mm.get("m5c") and parse_daf_mismatches(read, 0, whole):
+        return "mismatch"
+    return None
+
+
+def attach_deam_sources(records, source_bam, lifted_bam, chrom) -> None:
+    """``deam_source`` on every placement of a record that has deamination
+    events on either side: the source record's for live placements, each
+    lifted record's for native ones."""
+    import pysam
+
+    with pysam.AlignmentFile(source_bam) as src, pysam.AlignmentFile(lifted_bam) as lifted:
+        for rec in records:
+            if not any(p["points"].get("deam") for p in rec["live"] + rec["native"]):
+                continue
+            qname, contig, start = rec["key"]
+            hit = next((r for r in src.fetch(contig, start, start + 1) if r.query_name == qname
+                        and r.reference_start == start and not r.is_secondary), None)
+            for p in rec["live"]:
+                p["deam_source"] = deam_source(hit) if hit is not None else None
+            for p in rec["native"]:
+                hit = next((r for r in lifted.fetch(chrom, p["start"], p["start"] + 1)
+                            if r.query_name == qname and r.reference_start == p["start"]
+                            and parse_yp(r.get_tag("Yp") if r.has_tag("Yp") else None)[:2] == (contig, start)), None)
+                p["deam_source"] = deam_source(hit) if hit is not None else None
+
+
+def deam_exempt(live: list, native: list) -> bool:
+    """Whether a record's deamination difference stays outside the verdict:
+    every placement with events, on either side, read them from reference
+    mismatches (they differ between assemblies by design). Events from MM
+    tags or IUPAC R/Y bases, or of unknown origin, are always compared."""
+    sources = [p.get("deam_source") for p in live + native if p["points"].get("deam")]
+    return bool(sources) and all(src == "mismatch" for src in sources)
 
 
 # ── Loading ─────────────────────────────────────────────────────────────────
@@ -652,7 +787,8 @@ def split_blocks(p: dict, g_split: int) -> list:
             kept = {c: parts for c, parts in kept.items() if parts}
             if kept:
                 q["calls"][group] = kept
-        q["points"] = {f: [x for x in xs if a <= x < b] for f, xs in p["points"].items()}
+        q["points"] = {f: [x for x in xs if a <= (x[0] if isinstance(x, tuple) else x) < b]
+                       for f, xs in p["points"].items()}
         q["connectors"] = [c for c in p.get("connectors", ()) if c[0] < b and c[1] > a]
         q["insertions"] = [x for x in p.get("insertions", ()) if a <= x <= b]
         out.append(q)
@@ -760,7 +896,8 @@ def run(args) -> dict:
             one_side_examples.append({"side": side, "cause": cause, "source": f"{key[1]}:{key[2]}"})
 
     census = lifted_bam_census(args.lifted_bam, chrom, sel0, sel1)
-    summary = summarize(records, deam_from_md=census.get("with_md", 0) == 0, rejoin_bp=settings.rejoin_bp)
+    attach_deam_sources(records, args.source_bam, args.lifted_bam, chrom)
+    summary = summarize(records, rejoin_bp=settings.rejoin_bp)
     display_ids = {r["analysis_id"] for r in display.rows}
     analysis_ids = {r["analysis_id"] for r in analysis.rows}
     result = {
@@ -831,11 +968,11 @@ def markdown(result) -> str:
         lines.append(f"| {x['side']} ({x['cause']}) | {x['n']} |")
     for title, table in (("calls per placement", result["calls"]), ("calls per record", result["record_calls"])):
         lines += ["", f"| {title} | identical | within 10 bp | different | raw identical | raw same bases | "
-                  "paired, ids differ |", "|---|---|---|---|---|---|---|"]
+                  "paired, ids differ | payload differs |", "|---|---|---|---|---|---|---|---|"]
         for g, b in table.items():
             lines.append(f"| {g} | {b.get('identical', 0)} | {b.get('within_10bp', 0)} | {b.get('different', 0)} | "
                          f"{b.get('raw_identical', '')} | {b.get('raw_same_bases', '')} | "
-                         f"{b.get('paired_ids_differ', '')} |")
+                         f"{b.get('paired_ids_differ', '')} | {b.get('payload_differs', '')} |")
     lines += ["", "| points per record | identical | differ | deam_from_md | positions shared | live only | "
               "native only |", "|---|---|---|---|---|---|---|"]
     for f, p in result["points"].items():

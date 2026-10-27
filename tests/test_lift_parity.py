@@ -244,13 +244,98 @@ def test_a_truncated_live_load_fails():
     assert "truncated" in lp.verdict(res)
 
 
-def test_deam_read_from_md_stays_out_of_the_verdict():
-    rec = {"key": ("q", "c", 1), "live": [place(0, 10, points={"deam": [3]})], "native": [place(0, 10)]}
-    res = lp.summarize([rec], deam_from_md=True)
+def test_deam_read_from_reference_mismatches_stays_out_of_the_verdict():
+    rec = {"key": ("q", "c", 1), "live": [place(0, 10, points={"deam": [(3, 1)]}, deam_source="mismatch")],
+           "native": [place(0, 10)]}
+    res = lp.summarize([rec])
     assert res["points"]["deam"]["records_deam_from_md"] == 1
     assert res["counts"]["records_identical_points"] == 1
-    strict = lp.summarize([rec], deam_from_md=False)
-    assert strict["counts"]["records_identical_points"] == 0
+    unknown = {"key": ("q", "c", 1), "live": [place(0, 10, points={"deam": [(3, 1)]})], "native": [place(0, 10)]}
+    assert lp.summarize([unknown])["counts"]["records_identical_points"] == 0
+
+
+def test_daf_deam_from_iupac_or_mm_is_always_compared():
+    # DAF records carry no m6A/5mC and the lifted BAM has no MD: a Y at 10 vs 11 is still a real difference.
+    for source in ("iupac", "mm"):
+        rec = {"key": ("q", "c", 1), "live": [place(0, 100, points={"deam": [(10, 1)]}, deam_source=source)],
+               "native": [place(0, 100, points={"deam": [(11, 1)]}, deam_source=source)]}
+        res = _result([rec])
+        assert res["points"]["deam"]["records_differs"] == 1
+        assert "points differ" in lp.verdict(res)
+    mixed = {"key": ("q", "c", 1), "live": [place(0, 100, points={"deam": [(10, 1)]}, deam_source="mismatch")],
+             "native": [place(0, 100, points={"deam": [(11, 1)]}, deam_source="iupac")]}
+    assert not lp.deam_exempt(mixed["live"], mixed["native"])
+
+
+def _live_row(deam, minus=False):
+    return {"id": "q", "reference_start": 0, "reference_end": 100, "alignment_orientation": "forward",
+            "intervals": [], "deam": deam,
+            "live_lift": {"calls": {}, "connectors": [], "badges": [],
+                          "segments": [[0, 100, 1, "-" if minus else "+", True]]}}
+
+
+def _native_row(deam, flipped=False, layers=None, fire=None, calls=None):
+    # Yp names the source strand; the record is forward here, so a '-' source means the lift reversed it.
+    return {"id": "q", "reference_start": 0, "reference_end": 100, "alignment_orientation": "forward",
+            "lift": {"from": "c:2:-" if flipped else "c:2:+"}, "intervals": [], "deam": deam,
+            "layers": layers or {}, "fire": fire or [], "_fiberbrowser_calls": calls or {}}
+
+
+def test_deam_channel_is_compared_on_a_plus_chain():
+    live = lp.placement(_live_row([[10, 1]]), 0, True, "c")
+    native = lp.placement(_native_row([[10, 0]]), 0, False, "c")
+    assert live["points"]["deam"] == [(10, 1)] and native["points"]["deam"] == [(10, 0)]
+    res = _result([{"key": ("q", "c", 1), "live": [dict(live, deam_source="iupac")],
+                    "native": [dict(native, deam_source="iupac")]}])
+    assert "points differ" in lp.verdict(res)
+
+
+def test_deam_channel_on_a_minus_chain_compares_in_the_molecule_frame():
+    # The reversed lifted record decodes C->T (Y, 1) as G->A (R, 0) in the target frame: equal once swapped back.
+    live = lp.placement(_live_row([[10, 1]], minus=True), 0, True, "c")
+    swapped = lp.placement(_native_row([[10, 0]], flipped=True), 0, False, "c")
+    assert swapped["lift_flipped"] and swapped["points"]["deam"] == [(10, 1)]
+    ok = _result([{"key": ("q", "c", 1), "live": [dict(live, deam_source="iupac")],
+                   "native": [dict(swapped, deam_source="iupac")]}])
+    assert lp.verdict(ok) == "PASS"
+    # A channel that did not follow the reversed SEQ is a difference.
+    unswapped = lp.placement(_native_row([[10, 1]], flipped=True), 0, False, "c")
+    bad = _result([{"key": ("q", "c", 1), "live": [dict(live, deam_source="iupac")],
+                    "native": [dict(unswapped, deam_source="iupac")]}])
+    assert "points differ" in lp.verdict(bad)
+
+
+def test_same_geometry_with_a_different_state_byte_is_a_payload_difference():
+    # nfrvar: state byte 1 = open, 2 = closed (same interval, same annotation name).
+    def live_row(state):
+        row = _live_row([])
+        row["layers"] = {"nfrvar": {"intervals": [[10, 60, 50]], "quality_names": ["state", "q"],
+                                    "qualities": [[state], [255]], "annotation_names": ["nfr"]}}
+        row["live_lift"]["calls"] = {"layer:nfrvar": ["MA3:0"]}
+        return row
+    native = _native_row([], layers={"nfrvar": {"intervals": [[10, 60, 50]], "quality_names": ["state", "q"],
+                                                "qualities": [[2], [255]], "annotation_names": ["nfr"],
+                                                "_fiberbrowser_calls": [["MA3:0", 0, 50]]}})
+    nat = lp.placement(native, 0, False, "c")
+    res = _result([{"key": ("q", "c", 1), "live": [lp.placement(live_row(1), 0, True, "c")], "native": [nat]}])
+    assert res["record_calls"]["layer:nfrvar"] == {"different": 1, "payload_differs": 1}
+    assert [(x["cause"], x["n"]) for x in res["causes"]] == [("payload", 1)]
+    assert "call bases differ" in lp.verdict(res)
+    same = _result([{"key": ("q", "c", 1), "live": [lp.placement(live_row(2), 0, True, "c")], "native": [nat]}])
+    assert lp.verdict(same) == "PASS"
+
+
+def test_a_different_fire_score_or_annotation_is_a_payload_difference():
+    live = _live_row([])
+    live["fire"] = [[10, 40, 128]]
+    live["live_lift"]["calls"] = {"fire": ["as:0"]}
+    native = _native_row([], fire=[[10, 40, 200]], calls={"fire": [["as:0", 0, 30]]})
+    res = _result([{"key": ("q", "c", 1), "live": [lp.placement(live, 0, True, "c")],
+                    "native": [lp.placement(native, 0, False, "c")]}])
+    assert res["calls"]["fire"]["payload_differs"] == 1 and lp.verdict(res) != "PASS"
+    a = place(0, 100, {"layer:x": {"c": [[1, 5]]}}, payloads={"layer:x": {"c": {((4,), (), "CTCF")}}})
+    b = place(0, 100, {"layer:x": {"c": [[1, 5]]}}, payloads={"layer:x": {"c": {((4,), (), "YY1")}}})
+    assert lp.compare_calls(a, b)[0]["cause"] == "payload"
 
 
 def test_differing_m6a_fails():
