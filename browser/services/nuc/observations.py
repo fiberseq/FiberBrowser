@@ -73,10 +73,23 @@ def resolve(state, obs: dict, policy: dict) -> Tuple[NucSource, list, List[Tuple
     if kind == 'graph':
         g = obs.get('graph') or {}
         contig, start, end = str(g.get('contig') or ''), int(g.get('start') or 0), int(g.get('end') or 0)
-        if not contig or end <= start:
-            raise ObservationError(f'{obs.get("label") or ds_id}: a graph observation needs its path span')
-        recs = view_records(source, [(contig, start, end)], policy)
-        windows = [(contig, start, end)]
+        if contig and end > start:
+            windows = [(contig, start, end)]
+        else:
+            # The path's span over the view: a live-lift dataset's haplotype contig from the first to the last lift
+            # piece in view (an insertion between pieces is on the path), or the view on a native dataset's target.
+            chrom, v0, v1 = str(obs.get('chrom') or ''), int(obs.get('start') or 0), int(obs.get('end') or 0)
+            if not chrom or v1 <= v0:
+                raise ObservationError(f'{obs.get("label") or ds_id}: a graph observation needs its path span or view')
+            if source.kind == 'native':
+                windows = [(chrom, v0, v1)]
+            else:
+                hulls: Dict[str, List[int]] = {}
+                for c, a, b in source_windows(state, source, chrom, v0, v1, obs.get('liftHap') or g.get('hap')):
+                    h = hulls.setdefault(c, [a, b])
+                    h[0], h[1] = min(h[0], a), max(h[1], b)
+                windows = [(c, a, b) for c, (a, b) in hulls.items()]
+        recs = view_records(source, windows, policy)
     else:
         chrom, start, end = str(obs.get('chrom') or ''), int(obs.get('start') or 0), int(obs.get('end') or 0)
         if not chrom or end <= start:
@@ -287,18 +300,21 @@ def summarize(state, observations: Sequence[dict], *, include_duplicates: bool =
             continue
         cfg = active_config(state, source.browser_id)
         rows, seen = [], set()
-        missing = 0
+        missing = undecodable = 0
         for path, sha, occ, qname, _strand in recs:
             r = STORE.get(path, sha, occ)
             if r is None:
-                missing += 1
+                if STORE.failed(path, sha, occ) is not None:
+                    undecodable += 1
+                else:
+                    missing += 1
                 continue
             mol_key = (path, qname)
             if mol_key in seen:
                 continue
             seen.add(mol_key)
             rows.append(r)
-        entry.update(records=len(recs), computed=len(rows), notComputed=missing,
+        entry.update(records=len(recs), computed=len(rows), notComputed=missing, undecodable=undecodable,
                      windows=[dict(chrom=c, start=a, end=b) for c, a, b in windows],
                      calibration=cfg.calibration.summary() if cfg is not None else None,
                      sources=sorted({r.source for r in rows}))

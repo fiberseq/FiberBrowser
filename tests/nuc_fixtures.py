@@ -72,11 +72,12 @@ def _record(out, name, mol_seq, ref_start, nucs, msps, marks, reverse, hp):
 
 
 def chromatin_bam(path, *, contig: str = 'chrS', length: int = 160_000, step: int = 900, seed: int = 21,
-                  offset: int = 0) -> str:
-    """Write and index the BAM; ``offset`` shifts every molecule (and the dyad map) along the contig."""
+                  offset: int = 0, span: int = 0) -> str:
+    """Write and index the BAM: molecules over ``[offset, offset + span)`` of a contig of ``length`` (``span`` 0:
+    to the contig's end); the dyad map is relative to ``offset``."""
     import pysam
     rng = np.random.default_rng(seed)
-    span = length - offset
+    span = int(span) or length - offset
     dyads, pos = [], 2_000.0
     while pos < span - 2_000:
         if any(a <= pos < b for a, b in ARRAYS_190):

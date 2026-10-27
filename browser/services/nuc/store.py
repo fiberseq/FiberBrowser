@@ -55,6 +55,8 @@ class _FileOutputs:
     config: Tuple[str, str]                  # (settings_hash, calibration digest)
     rows: Dict[Tuple[str, int], RecordOutputs] = field(default_factory=dict)
     revision: int = 0
+    #: records FiberHMM could not decode (no calls, a hard-clipped record, no evidence): why
+    failed: Dict[Tuple[str, int], str] = field(default_factory=dict)
 
 
 class NucStore:
@@ -99,6 +101,20 @@ class NucStore:
                 self._serial += 1
                 cur.revision = self._serial
         return added
+
+    def put_failed(self, path: str, config: Tuple[str, str], items: Iterable[Tuple[Tuple[str, int], str]]) -> None:
+        with self._lock:
+            cur = self._files.get(real(path))
+            if cur is None or cur.config != config:
+                return
+            for key, why in items:
+                cur.failed[key] = why
+
+    def failed(self, path: str, sha: str, occ: int) -> Optional[str]:
+        """Why FiberHMM could not decode a record of this configuration (None: not tried, or decoded)."""
+        with self._lock:
+            cur = self._files.get(real(path))
+            return cur.failed.get((str(sha), int(occ))) if cur is not None else None
 
     def get(self, path: str, sha: str, occ: int) -> Optional[RecordOutputs]:
         with self._lock:

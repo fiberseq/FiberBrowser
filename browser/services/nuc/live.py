@@ -122,9 +122,14 @@ def compute_regions(source: NucSource, regions: Sequence[Tuple[str, int, int]], 
                     if STORE.has(path, sha, occ) and (not keep_results or STORE.get_result(path, sha, occ, config)):
                         n.cached += 1
                         continue
+                    if STORE.failed(path, sha, occ) is not None:
+                        why = STORE.failed(path, sha, occ)
+                        n.undecodable[why] = n.undecodable.get(why, 0) + 1
+                        continue
                     out, mol, res, why = record_outputs(read, i, ctx, params, calibration)
                     if out is None:
                         n.undecodable[why] = n.undecodable.get(why, 0) + 1
+                        STORE.put_failed(path, config, [((sha, occ), why)])
                         continue
                     n.computed += 1
                     batch.append(((sha, occ), out))
