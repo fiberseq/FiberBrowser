@@ -81,7 +81,8 @@ export function applySvSplit(stateKey: string, def: SvSplitDef, assignments: Rec
   const store = useBrowserStore.getState();
   store.setClusterAssignments(stateKey, assignments, { svSplit: true });
   store.setClusterOrder(stateKey, [0, 1, 2]);
-  store.setClusterFocus(stateKey, null);
+  // (Part of this step: its own "Set cluster focus" step made Undo after a split take two presses.)
+  store.setClusterFocus(stateKey, null, { record: false });
   store.clearClusterSelection(stateKey);
   // An allele is not an accessibility pattern: never re-derived on pan.
   store.setDynamicClustering(false);
@@ -167,7 +168,7 @@ export function clearSvSplit(stateKey: string): void {
   if (!store.svSplits[stateKey]) return;
   store.setClusterAssignments(stateKey, {});
   store.setClusterOrder(stateKey, []);
-  store.setClusterFocus(stateKey, null);
+  store.setClusterFocus(stateKey, null, { record: false });
   store.clearClusterSelection(stateKey);
   store.setSvSelectedCluster(stateKey, null);
   store.pushSnapshot('Clear SV split');
