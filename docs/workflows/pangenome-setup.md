@@ -136,7 +136,8 @@ It prints a link to open when the data is loaded. Ctrl+C stops the server.
 | `--map FILE` | The lift map for the lifted BAMs: a graphlift `.graphlift.json`, or a UCSC `.chain` / `.chain.gz`. |
 | `--source-fasta FILE` | The samples' own assembly FASTA (indexed; optional; default `ref/source.fa` or `ref/source.fa.gz` when one exists). |
 | `--graph-package DIR` | A graph package (repeatable). `--no-graph` leaves graphs off, so lifted datasets open as one panel per haplotype. |
-| `--graph-helper PATH` | A `fiberbrowser-graph` you built; otherwise the companion package or the macOS app's copy is used. |
+| `--graph-helper PATH` | A `fiberbrowser-graph` you built. Without it, the launcher uses `$FIBERBROWSER_GRAPH_HELPER`, then a `fiberbrowser-graph` on your `PATH`, then the companion package or the macOS app's copy, and prints which one it used. |
+| `--locus alu\|mhc` | The demo locus when no `--sample` is given: `alu` (default), the AluY insertion both haplotypes carry; `mhc`, an 89 bp deletion on the paternal haplotype only, where graph clustering labels that haplotype's reads **Not a carrier**. The launcher prints the region to cluster on. |
 | `--fasta FILE` | The reference FASTA (with its `.fai`). |
 | `--pooled` | Lifted datasets open as one pooled panel. |
 | `--no-preview` | Turn preview features off for this server. |
@@ -151,8 +152,9 @@ above. Pass `--port`, or the default (8883) is used. `python scripts/unified_dem
 The launcher gives the server a home folder of its own, points every file the
 server keeps (settings, Library, jobs, sessions) into it and ignores
 `FIBERBROWSER_*` variables set in your shell, so it never reads or changes
-your own settings, Library or sessions. Pass the graph helper with
-`--graph-helper`, not `FIBERBROWSER_GRAPH_HELPER`. It listens on this
+your own settings, Library or sessions. The graph helper is the one exception: a
+`FIBERBROWSER_GRAPH_HELPER` set in your shell is passed on when `--graph-helper`
+isn't given. It listens on this
 computer only, without an access token: use it for demos and testing, not as a
 shared server.
 
