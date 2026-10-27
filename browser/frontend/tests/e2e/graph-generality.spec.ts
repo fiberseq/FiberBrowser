@@ -10,7 +10,8 @@
  * FIBERBROWSER_TEST_GRAPH_LIFT_GENERALITY (strain/strain.chain.graphlift.json, strain/strain.src.bam and
  * strain/dm6_chr2L.fa: the target's sequence, served as the main reference) and FIBERBROWSER_LIVE_LIFT=1.
  */
-import { test, expect, type Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import { test, expect } from './fixtures/nativeDialogs';
 import { existsSync, mkdtempSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

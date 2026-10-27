@@ -12,7 +12,8 @@
  * Needs FIBERBROWSER_TEST_GRAPH_HELPER, FIBERBROWSER_TEST_GRAPH_HPRC_PACKAGE, FIBERBROWSER_TEST_LIFT_{BAM,MAP},
  * FIBERBROWSER_TEST_FASTA (chr3) and FIBERBROWSER_LIVE_LIFT=1. FIBERBROWSER_GRAPH_SHOTS: a folder for screenshots.
  */
-import { test, expect, type Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import { test, expect } from './fixtures/nativeDialogs';
 import { existsSync, mkdtempSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

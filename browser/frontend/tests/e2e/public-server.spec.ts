@@ -10,7 +10,7 @@
 import { startServer, stopServer, pickRandomPort, testPorts } from './fixtures/server';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { test as base, expect } from '@playwright/test';
+import { test as base, expect } from './fixtures/nativeDialogs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = process.env.FIBERBROWSER_TEST_DIR

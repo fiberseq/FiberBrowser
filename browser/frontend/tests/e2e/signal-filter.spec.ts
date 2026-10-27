@@ -1,5 +1,5 @@
 /** Real indexed inputs are supplied as scratch symlinks in FIBERBROWSER_SIGNAL_DATA. */
-import { test as base, expect } from '@playwright/test';
+import { test as base, expect } from './fixtures/nativeDialogs';
 import { pickRandomPort, startServer } from './fixtures/server';
 import path from 'node:path';
 

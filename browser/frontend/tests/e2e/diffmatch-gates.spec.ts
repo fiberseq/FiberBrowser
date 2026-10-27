@@ -15,7 +15,8 @@
  * FIBERBROWSER_TEST_FASTA (chr3) and optionally FIBERBROWSER_TEST_LIFT_SOURCE_FASTA (the source assembly, for exact
  * insertion labels).
  */
-import { test, expect, type Page, type Locator } from '@playwright/test';
+import type { Page, Locator } from '@playwright/test';
+import { test, expect } from './fixtures/nativeDialogs';
 import { cpSync, existsSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

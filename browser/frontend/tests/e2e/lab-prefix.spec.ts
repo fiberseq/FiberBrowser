@@ -12,7 +12,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures/nativeDialogs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = process.env.FIBERBROWSER_TEST_DIR

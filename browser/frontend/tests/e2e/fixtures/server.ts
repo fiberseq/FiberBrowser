@@ -24,7 +24,9 @@
  *                                    strip above the reads, as if each viewer had chosen it)
  */
 import { spawn, type ChildProcess } from 'child_process';
-import { test as base, type Locator, type Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
+// Native file dialogs are answered in the browser in every test context (fixtures/nativeDialogs.ts).
+import { test as base } from './nativeDialogs';
 import { existsSync, mkdtempSync, statSync } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -381,6 +383,7 @@ export const test = base.extend<{ server: ServerFixture } & ServerOptions>({
 });
 
 export { expect } from '@playwright/test';
+export { blockNativeDialogs } from './nativeDialogs';
 
 /**
  * Settings → Show preview features on for this page (Preview features: the Variants panel, insert-expanded panels;

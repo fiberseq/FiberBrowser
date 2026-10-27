@@ -15,7 +15,8 @@
  * (prepared packages, ':'-separated; one named `alu`), and FIBERBROWSER_TEST_FASTA with chr3 (no hg38 download).
  * Optional: FIBERBROWSER_TEST_GRAPH_HPRC_PACKAGE, FIBERBROWSER_TEST_LIFT_{BAM,NATIVE,MAP} (live-lift.spec.ts).
  */
-import { test, expect, type Page, type Locator } from '@playwright/test';
+import type { Page, Locator } from '@playwright/test';
+import { test, expect } from './fixtures/nativeDialogs';
 import { execSync } from 'node:child_process';
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
