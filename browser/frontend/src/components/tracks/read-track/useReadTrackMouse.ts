@@ -130,7 +130,8 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
   const selectedReadIds = useBrowserStore(s => s.selectedReadIds[stateKey]);
 
   // Hover tooltip state
-  const [hoveredRead, setHoveredRead] = useState<{read: CompactRead; x: number; y: number; liveLiftBadge?: LiveLiftBadge} | null>(null);
+  // pos: the genome position under the pointer (the tooltip's per-position lines, e.g. nucleosome marks).
+  const [hoveredRead, setHoveredRead] = useState<{read: CompactRead; x: number; y: number; liveLiftBadge?: LiveLiftBadge; pos?: number} | null>(null);
   const [hoveredSv, setHoveredSv] = useState<SvHover | null>(null);
   // The read under the pointer whether or not tooltips are on (a live-lift link's shared hover, §5.3).
   const [pointerRead, setPointerReadState] = useState<CompactRead | null>(null);
@@ -703,7 +704,7 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
       if (showReadTooltip && !isPanning && x >= sidebarWidth) {
         const hit = pointed;
         if (hit) {
-          setHoveredRead({ ...hit, x, y });
+          setHoveredRead({ ...hit, x, y, pos: genomePosAtX(x) });
         } else {
           setHoveredRead(null);
         }
@@ -711,7 +712,7 @@ export function useReadTrackMouse(params: UseReadTrackMouseParams) {
         setHoveredRead(null);
       }
     }
-  }, [dragCluster, hasCluster, sidebarWidth, getClusterAtY, getReadHitAtXY, isPanning, showReadTooltip, svEventAtXY, setPointerRead]);
+  }, [dragCluster, hasCluster, sidebarWidth, getClusterAtY, getReadHitAtXY, isPanning, showReadTooltip, svEventAtXY, setPointerRead, genomePosAtX]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (dragCluster !== null && hoverCluster !== null && dragCluster !== hoverCluster) {

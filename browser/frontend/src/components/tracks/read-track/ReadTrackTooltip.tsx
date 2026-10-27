@@ -9,9 +9,11 @@ import { tfFamilyMetadata } from '../../../utils/tfFamilies';
 import { consensusRecordSummary } from '../../../utils/consensusVisual';
 import { LiveLiftTooltipLines } from '../../../features/liveLift/LiveLiftTooltip';
 import { readBodyExtent } from './readExtent';
+import { describeNucSegRow, describeNucSizeMark, nucSegRows, nucSegRowsAt, nucSizeIndex, nucSizeMarkAt } from '../../../utils/nucLayers';
 
 interface ReadTooltipProps {
-  hoveredRead: { read: CompactRead; x: number; y: number };
+  /** pos: the genome position under the pointer (absolute, like `start`). */
+  hoveredRead: { read: CompactRead; x: number; y: number; pos?: number };
   width: number;
   height: number;
   chrom: string;
@@ -72,6 +74,7 @@ export function ReadTooltip({
   const propagatedConsensus = Object.values(read.layers ?? {}).some(layer => (
     (layer.annotation_names ?? []).some(name => /^fhlt_[0-9a-f]+_P_/i.test(name))
   ));
+  const nucLines = nucleosomeTooltipLines(read, hoveredRead.pos, start);
 
   return (
     <div
@@ -101,6 +104,7 @@ export function ReadTooltip({
         {propagatedConsensus && (
           <div className="text-amber-300">Consensus: PCR-propagated hypothesis</div>
         )}
+        {nucLines.map(line => <div key={line} data-testid="read-nuc-line">{line}</div>)}
         <div>Span: {readSize.toLocaleString()} bp ({chrom}:{(start + readStart).toLocaleString()}-{(start + readEnd).toLocaleString()})</div>
         {read.lift && (
           <div data-testid="read-lift-provenance">
@@ -136,6 +140,22 @@ export function ReadTooltip({
       </div>
     </div>
   );
+}
+
+/**
+ * The nucleosome marks under the pointer: the size mark (class, z, posterior), the array segment (state,
+ * posterior, q-hat) and any disruption events there. `pos` is absolute; layers are relative to `start`.
+ */
+export function nucleosomeTooltipLines(read: CompactRead, pos: number | undefined, start: number): string[] {
+  if (pos === undefined || !Number.isFinite(pos) || !read.layers) return [];
+  const rel = pos - start;
+  const lines: string[] = [];
+  const mark = nucSizeMarkAt(nucSizeIndex(read.layers.nucsz), rel);
+  if (mark) lines.push(`Size class: ${describeNucSizeMark(mark)}`);
+  const { segment, events } = nucSegRowsAt(nucSegRows(read.layers.nucseg), rel);
+  if (segment) lines.push(`Array: ${describeNucSegRow(segment)}`);
+  for (const event of events) lines.push(`Disrupted: ${describeNucSegRow(event)}`);
+  return lines;
 }
 
 interface ClusterTooltipProps {

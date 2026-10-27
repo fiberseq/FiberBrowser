@@ -6,7 +6,9 @@ import { drawLiveLiftMarks, drawLiveLiftHaplotypeStripe, liveLiftBodyRects, live
 import { readBodyExtent } from './readExtent';
 import type { CoverageResponse } from '../../../api/coverage';
 import { getCanvasRenderScale, setupHighDpiCanvas } from '../../../utils/canvasUtils';
-import { buildRuleMatchContext, footprintMatchesRule, ruleTargetsLayer } from '../../../utils/ruleMatching';
+import { buildRuleMatchContext, footprintMatchesRule, ruleHasNucConditions, ruleTargetsLayer } from '../../../utils/ruleMatching';
+import { NUC_UNDRAWN_LAYERS, nucSegRows, nucSizeIndex, nucSizeMarkFor, type NucSizeMark } from '../../../utils/nucLayers';
+import { drawNucSegLane } from './nucSegCanvas';
 import { buildRuleColorResolver } from '../../../utils/ruleColors';
 import type { CompactRead, SvSummary } from './types';
 import { bodyClipRects, readSvDraw } from './svDrawing';
@@ -385,6 +387,13 @@ export function drawReadTrack(params: DrawReadsParams): void {
 
   // Build shared rule-matching context
   const ruleCtx = buildRuleMatchContext(genes, allPeaks, orthogonalTracks, start, end, activeColormap.rules, chrom);
+  // Size-class rules read each nuc/tf call's nucsz mark; the Size classes layer switches them on.
+  const nucClassRulesOn = !!enabledModTypes.nucsz
+    && activeColormap.rules.some(rule => rule.enabled && ruleHasNucConditions(rule));
+  // Array segments: a lane at the bottom of each row, on the read's ground.
+  const nucSegLaneOn = !!enabledModTypes.nucseg;
+  const nucSegDark = inkOn(readBackgroundColor).dark;
+  let nucSegRowsDrawn = 0;
 
   // Footprint cart entries paint reads via a rule-like match: size + layer +
   // (optional) reference overlap + (optional) conditions. We can't reuse the
@@ -511,13 +520,14 @@ export function drawReadTrack(params: DrawReadsParams): void {
   );
   const getColorHit = (
     intStart: number, intEnd: number, size: number, layerName?: string,
+    nucMark?: NucSizeMark | null,
   ): { color: string; opacity: number; matched: boolean } => {
     if (size <= 0) return { color: '#cccccc', opacity: 1, matched: false };
 
     const cartHit = cartMatch(start + intStart, start + intEnd, size, layerName);
     if (cartHit) return { color: cartHit, opacity: 1, matched: true };
     for (const rule of activeColormap.rules) {
-      if (footprintMatchesRule(intStart, intEnd, size, rule, ruleCtx, layerName)) {
+      if (footprintMatchesRule(intStart, intEnd, size, rule, ruleCtx, layerName, undefined, undefined, nucMark)) {
         return { color: resolveRuleColor(rule, size), opacity: ruleOpacity(rule.opacity), matched: true };
       }
     }
@@ -709,6 +719,8 @@ export function drawReadTrack(params: DrawReadsParams): void {
     }
 
     const m6aToggled = enabledModTypes.m6a || enabledModTypes.mod;
+    // The read's nucsz marks, looked up by each call's own (payload-frame) span.
+    const nucIndex = nucClassRulesOn ? nucSizeIndex(read.layers?.nucsz) : null;
 
     const drawPrimaryItems = () => {
       for (const item of primaryItems) {
@@ -747,7 +759,9 @@ export function drawReadTrack(params: DrawReadsParams): void {
 
         // Pass the actual primary layer name so target-scoped rules can gate
         // correctly; split TF intervals are handled in the overlay loop.
-        const colorHit = getColorHit(adjustedStart, adjustedEnd, size, primaryLayer);
+        const colorHit = getColorHit(
+          adjustedStart, adjustedEnd, size, primaryLayer, nucIndex ? nucSizeMarkFor(nucIndex, intStart, intEnd) : null,
+        );
         let color = colorHit.color;
         let visualOpacity = colorHit.opacity;
         let matchedExplicitColor = colorHit.matched;
@@ -965,6 +979,9 @@ export function drawReadTrack(params: DrawReadsParams): void {
       const tfCfg = activeColormap.tfOverlay;
       for (const [layerName, layer] of layerEntries) {
         if (layerName === 'nuc') continue;  // drawn as primary intervals
+        // nucsz recolours calls through rules, nucseg is the lane below, and
+        // nucmol/nfrmol are per-molecule scalars: none is an overlay.
+        if (NUC_UNDRAWN_LAYERS.has(layerName)) continue;
         const isFireLayer = layerName === 'msp' || layerName === 'fire';
         // Domain-scale layers (DddA mCG spans, per-strand coverage of DAF
         // consensus reads) go behind the segmentation calls.
@@ -1244,6 +1261,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
               }
               return intervalQualities;
             };
+            const itemNucMark = nucIndex && isTf ? nucSizeMarkFor(nucIndex, ls, le) : null;
             for (const rule of activeColormap.rules) {
               // Non-TF layers: only consider rules that explicitly target this layer.
               if (!isTf && ((rule.targetLayers ?? []).length === 0 || !ruleTargetsLayer(rule, layerName))) continue;
@@ -1257,6 +1275,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
                 layerName,
                 ruleQualities,
                 layer.annotation_names?.[li],
+                itemNucMark,
               )) {
                 fill = resolveRuleColor(rule, intervalSize);
                 visualOpacity = ruleOpacity(rule.opacity);
@@ -1524,6 +1543,13 @@ export function drawReadTrack(params: DrawReadsParams): void {
       // observed events above consensus overlays. Otherwise the footprint fill
       // hides precisely the evidence the rescue view is meant to explain.
       if (enabledModTypes.deam_opportunity) drawBaseModificationMarks(true);
+      const segRows = nucSegLaneOn ? nucSegRows(read.layers?.nucseg) : null;
+      if (segRows) {
+        nucSegRowsDrawn += drawNucSegLane(ctxNonNull, segRows, {
+          y, bodyH: rowHeight - rowGap, linkedOffset, regionWidth, toX,
+          ground: readBackgroundColor, dark: nucSegDark,
+        });
+      }
     });
     // This independent observation view is transported by the native encoder,
     // not inferred from interval gaps, reference-only targets, or family Q.
@@ -1804,6 +1830,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
     canvas.dataset.liveLiftBadges = String(liveLiftBadgesDrawn);
     canvas.dataset.liveLiftBadgeLabels = String(liveLiftBadgeLabels);
     canvas.dataset.readRowHeight = String(rowHeight);
+    canvas.dataset.nucSegRows = String(nucSegRowsDrawn);
   }
   const smoothing = activeColormap.displaySmoothing;
   // Smoothing across an inserted boundary would leak target signal into the

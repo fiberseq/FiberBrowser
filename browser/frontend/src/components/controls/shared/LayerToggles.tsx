@@ -4,8 +4,21 @@ import { useBrowserStore } from '../../../stores/browserStore';
 import { useConsensusViewStore } from '../../../stores/consensusViewStore';
 import { getCanonicalLayerEntries, getLayerColor, getLayerLabel, getLayerTitle, getNucDisplayLabel, getNucDisplayTitle, isDerivedLayerName } from '../../../utils/layerColors';
 import { isStrandRescueLayer } from '../../../utils/strandRescue';
+import { NUC_GROUP_LAYERS, isNucScalarGroup } from '../../../utils/nucLayers';
 import { ChevronDown } from '../../ui/Icons';
 import { InsertionMarksControl } from '../../../features/differences/InsertionMarksControl';
+
+/** The nucleosome scan layers, shown as one "Nucleosomes" group. */
+const NUC_GROUP_CONFIG: Record<string, { label: string; title: string }> = {
+  nucsz: {
+    label: 'Size classes',
+    title: 'Colour nucleosome calls by size class through colormap rules (Colormap: Add nucleosome size classes). Hover a call for its class, z and posterior.',
+  },
+  nucseg: {
+    label: 'Array segments',
+    title: 'A lane at the bottom of each read: regular (green), disordered (orange), undetermined (light grey), low information (dotted). Amber bars mark undersized footprint runs; triangles mark missing nucleosomes.',
+  },
+};
 
 // MSP is an internal compatibility key for older BAM/BigBed outputs. The
 // user-facing control is always FIRE; aq filtering lives in Quality Filters.
@@ -70,6 +83,8 @@ export function LayerToggles({ compact = false, wrap = true }: LayerTogglesProps
         && name !== 'msp'
         && name !== 'fire'
         && name !== 'deam_opportunity'
+        // Per-molecule scalar groups (nucmol, nfrmol) are values, not layers.
+        && !isNucScalarGroup(name)
         && !(name in MOD_TYPE_CONFIG)
       ) {
         customLayerSet.add(name);
@@ -95,7 +110,11 @@ export function LayerToggles({ compact = false, wrap = true }: LayerTogglesProps
     availableModTypes = availableModTypes.filter(t => t !== 'footprint');
   }
 
-  if (availableModTypes.length === 0 && !hasNativeLattice) return null;
+  // Nucleosome size classes and array segments render as one group.
+  const nucGroupTypes = NUC_GROUP_LAYERS.filter(type => availableModTypes.includes(type));
+  availableModTypes = availableModTypes.filter(type => !(NUC_GROUP_LAYERS as readonly string[]).includes(type));
+
+  if (availableModTypes.length === 0 && nucGroupTypes.length === 0 && !hasNativeLattice) return null;
 
   const textSize = compact ? 'text-[12px]' : 'text-[13px]';
   const gap = compact ? 'gap-2' : 'gap-3';
@@ -120,12 +139,14 @@ export function LayerToggles({ compact = false, wrap = true }: LayerTogglesProps
     const knownConfig = (MOD_TYPE_CONFIG as Record<string, { label: string; color: string; title: string }>)[modType];
     const isNucLayerEntry = modType === 'nuc' || (nucIsAlias && modType === 'nuc');
     const derivedMeta = datasets.find(d => d.derived_layers?.[modType])?.derived_layers?.[modType];
+    const nucGroupConfig = NUC_GROUP_CONFIG[modType];
     const label = isNucLayerEntry
       ? getNucDisplayLabel(datasets)
-      : (modType === 'tf_cr' ? 'Footprint classes' : modType === 'tf_rc' ? 'Footprint classes' : derivedMeta?.label ?? knownConfig?.label ?? getLayerLabel(modType));
+      : nucGroupConfig?.label
+        ?? (modType === 'tf_cr' ? 'Footprint classes' : modType === 'tf_rc' ? 'Footprint classes' : derivedMeta?.label ?? knownConfig?.label ?? getLayerLabel(modType));
     const title = isNucLayerEntry
       ? getNucDisplayTitle(datasets)
-      : (derivedMeta
+      : nucGroupConfig ? nucGroupConfig.title : (derivedMeta
         ? `Derived layer: ${derivedMeta.label ?? modType}${derivedMeta.source_layer ? ` (from ${getLayerLabel(derivedMeta.source_layer)})` : ''}`
         : (knownConfig?.title ?? getLayerTitle(modType)));
     const colorStyle = knownConfig ? undefined : { color: derivedMeta?.color ?? getLayerColor(modType) };
@@ -191,6 +212,18 @@ export function LayerToggles({ compact = false, wrap = true }: LayerTogglesProps
     >
       {standardTypes.map(renderToggle)}
       {derivedTypes.filter(t => t === 'tf_rc' || t === 'tf_cr').map(renderToggle)}
+      {nucGroupTypes.length > 0 && (
+        <span
+          className="inline-flex items-center gap-2 rounded-md border border-green-300 bg-green-50/80 px-2 py-0.5 dark:border-green-800/70 dark:bg-green-950/25"
+          data-testid="nucleosome-layer-group"
+          title="Nucleosome scan outputs: size classes recolour the calls, array segments add a lane under each read."
+        >
+          <span className="text-[11px] font-semibold text-green-800 dark:text-green-300">
+            Nucleosomes
+          </span>
+          {nucGroupTypes.map(renderToggle)}
+        </span>
+      )}
       <InsertionMarksControl compact={compact} />
       {(tfInferenceTypes.length > 0 || strandRescueTypes.length > 0 || derivedTypes.some(t => t !== 'tf_cr' && t !== 'tf_rc') || hasNativeLattice) && <details className="relative" data-testid="advanced-layers">
         <summary className={`${textSize} flex cursor-pointer list-none items-center gap-0.5 text-slate-500 dark:text-slate-400 [&::-webkit-details-marker]:hidden`}>
