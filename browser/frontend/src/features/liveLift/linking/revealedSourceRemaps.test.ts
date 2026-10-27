@@ -28,7 +28,7 @@ const source = (id: string, datasetId: string, liftPanelId: string, hap: string,
 describe('revealing open source views (agy group C, HIGH 3)', () => {
   beforeEach(() => { installTwoDatasetFixture(); });
 
-  it('Pop out of an open source view waiting on its tiles and a new one: the open one still settles at the host\'s view', async () => {
+  it('Pop out of an open source view waiting on its tiles and a new one: both come out at once, nothing waits (agy group C round 2)', async () => {
     hold.targetA = true;
     await ensureSummary('liftB', 'kB');
     await prefetchView('liftB', 'kB', 0, 'T', 1000, 20_000);
@@ -41,12 +41,15 @@ describe('revealing open source views (agy group C, HIGH 3)', () => {
     ] } as never);
     useBrowserStore.getState().clearHistory();
     popOutPaths('host', ['host', 'joined']);
+    await flush();
+    // The open one is shown and the new one opened, while the first one's tiles are still held.
+    expect(panelOf('srcA')?.collapsed).toBe(false);
+    expect(useBrowserStore.getState().panels.some(p => p.liftLink?.datasetId === 'liftB')).toBe(true);
     await releaseHeld();
     expect(panelOf('srcA')?.collapsed).toBe(false);
-    expect(viewOf('srcA')).toEqual({ chrom: 'S', start: 5000, end: 7000 });
   });
 
-  it('Pop out of two open source views waiting on their tiles: each settles into its own undo step', async () => {
+  it('Pop out of two open source views waiting on their tiles: both come out at once; the latest settles in its step; Undo steps back one at a time', async () => {
     hold.targetA = true;
     useBrowserStore.setState({ ...BASE, panels: [
       host([{ panelId: 'host', binding: 'HM' }, { panelId: 'pat', binding: 'HP' }]),
@@ -56,14 +59,15 @@ describe('revealing open source views (agy group C, HIGH 3)', () => {
     ] } as never);
     useBrowserStore.getState().clearHistory();
     popOutPaths('host', ['host', 'pat']);
+    await flush();
+    expect(panelOf('srcMat')?.collapsed).toBe(false);
+    expect(panelOf('srcPat')?.collapsed).toBe(false);
     await releaseHeld();
-    expect(viewOf('srcMat')).toEqual({ chrom: 'S', start: 5000, end: 7000 });
     expect(viewOf('srcPat')).toEqual({ chrom: 'P', start: 5000, end: 7000 });
-    // Undo "Show PAT source view": MAT stays shown where it settled.
+    // Undo "Show PAT source view": PAT folds away again, MAT stays shown.
     useBrowserStore.getState().undo();
     expect(panelOf('srcPat')?.collapsed).toBe(true);
     expect(panelOf('srcMat')?.collapsed).toBe(false);
-    expect(viewOf('srcMat')).toEqual({ chrom: 'S', start: 5000, end: 7000 });
   });
 
   it('source views split by strand: the member\'s strand is the one relinked and remapped', async () => {

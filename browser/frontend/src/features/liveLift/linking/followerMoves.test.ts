@@ -25,7 +25,7 @@ describe('moves a linked panel makes in "Each panel navigates" (agy group C, HIG
     await flush();
   });
 
-  it('a lifted panel a source view moves to another contig leaves its clusters there, and Linked navigation goes where it is', () => {
+  it('a lifted panel a source view moves to another contig keeps its clusters, and Linked navigation goes where it is', () => {
     useBrowserStore.setState({
       chrom: 'T', start: 2000, end: 3000, navigationMode: 'linked', isReversed: false, _lastRestoreTime: 0, lastMovedPanels: {},
       clusterAssignments: { mat: { r1: 0 }, src: { r1: 0 } },
@@ -40,8 +40,8 @@ describe('moves a linked panel makes in "Each panel navigates" (agy group C, HIG
     useBrowserStore.getState().setNavigationMode('perPanel');
     useBrowserStore.getState().navigatePanel('src', 'S2', 1000, 2000);
     expect(viewOf('mat')).toEqual({ chrom: 'T2', start: 2000, end: 3000 });
-    expect(useBrowserStore.getState().clusterAssignments.src).toBeUndefined();
-    expect(useBrowserStore.getState().clusterAssignments.mat).toBeUndefined();
+    expect(useBrowserStore.getState().clusterAssignments.src).toBeUndefined();   // the panel the user moved
+    expect(useBrowserStore.getState().clusterAssignments.mat).toEqual({ r1: 0 });   // the follower keeps its own
     useBrowserStore.getState().setNavigationMode('linked');
     expect(mainView()).toEqual(['T2', 2000, 3000]);
     expect(viewOf('mat')).toBeUndefined();

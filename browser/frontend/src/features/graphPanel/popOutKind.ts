@@ -10,7 +10,7 @@ import { useBrowserStore } from '../../stores/browserStore';
 import { isLiveLift } from '../../utils/datasetKinds';
 import { liftHapLabels } from '../liveLift/types';
 import type { PanelConfig } from '../../types';
-import { linkedSourcePanels, openLinkedSourceView, revealSettling } from '../liveLift/linking/liftLink';
+import { linkedSourcePanels, openLinkedSourceView } from '../liveLift/linking/liftLink';
 import { isHost, liveProvenance, panelKeyOf, popOut, provenanceCovers, provenanceLineage, provenanceShare, undoable, type GraphProvenance } from './hostMode';
 import { useReadActionsStore } from '../../stores/readActionsStore';
 import { qnameOfId } from '../../utils/recordKeys';
@@ -78,13 +78,6 @@ export function popOutPaths(hostId: string, memberIds: string[], missing: { bind
   return out;
 }
 
-/** A revealed source view's late exact remap, waited for at most `ms` (a stalled request never holds up the rest). */
-async function settledOrTimeout(settling: Promise<void>, ms = 10_000): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  await Promise.race([settling, new Promise<void>(r => { timer = setTimeout(r, ms); })]);
-  clearTimeout(timer);
-}
-
 /** One after another (each opens a dataset and a reference, and takes its own undo step). A source view already
  * open is revealed (and relinked) as one undo step of its own: openLinkedSourceView records none for it (Codex
  * review, group H). */
@@ -114,9 +107,8 @@ async function openSources(host: PanelConfig, sources: PopOutPlan['sources']): P
         seedSourceState(fromPanelId, existing.id);
       });
       step.id = lastSnapshotId();
-      // The next source only once this one settled, so each remap folds into its own step, not a later one.
-      const settling = revealSettling(existing.id);
-      if (settling) await settledOrTimeout(settling);
+      // No waiting for its late remap (agy group C round 2, NEW HIGH 1): the next reveal goes on at once; a late remap
+      // whose step is no longer the latest is dropped, and the source view then follows its next move.
       continue;
     }
     const id = await openLinkedSourceView(liftPanelId, hap, { ...(view ? { view } : {}), ...(liftPanelId !== host.id ? { besidePanelId: host.id } : {}) });

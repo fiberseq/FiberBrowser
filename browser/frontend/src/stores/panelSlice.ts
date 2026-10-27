@@ -52,10 +52,10 @@ function withUndo(get: () => BrowserState, label: string, apply: () => void, coa
 const PANEL_NAVIGATION_COALESCE_MS = 750;
 
 /** Panels linked to `panel` that keep views of their own follow its move, and theirs follow them (a source view moves
- * its graph host, which moves the host's other source views), each panel at most once. A follower moves as if the
- * user had moved it: the move is recorded for its link group (Linked navigation goes where it is), and a jump leaves
- * its clusters and filters behind, as the panel it follows did; a linked source view keeps its own, as it does when the
- * main view jumps (post-merge review, agy group C, HIGH 4). */
+ * its graph host, which moves the host's other source views), each panel at most once. The move is recorded for the
+ * follower's link group (Linked navigation goes where it is: agy group C, HIGH 4). A follower keeps its clusters and
+ * filters: a mapped span is no evidence of a jump, and graph runs survive moves on their contig (agy group C round 2,
+ * NEW HIGH 3). */
 function moveLinkedFollowers(get: () => BrowserState, set: (partial: (state: BrowserState) => Partial<BrowserState>) => void,
   panel: PanelConfig, span: { chrom: string; start: number; end: number }) {
   const moved = new Set([panel.id]);
@@ -72,7 +72,6 @@ function moveLinkedFollowers(get: () => BrowserState, set: (partial: (state: Bro
           if (!follower || !v || (v.chrom === f.span.chrom && v.start === f.span.start && v.end === f.span.end)) return state;
           const to = { chrom: f.span.chrom, start: f.span.start, end: f.span.end };
           return {
-            ...(!follower.liftLink && !isPanOrZoom(v, to) ? clearPanelState(state, panelKey(follower)) : {}),
             panels: state.panels.map(x => x.id === f.panelId ? { ...x, viewportOverride: to } : x),
             lastMovedPanels: recordPanelMove(state.lastMovedPanels, follower, to),
           };
