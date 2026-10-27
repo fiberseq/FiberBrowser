@@ -4,7 +4,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useBrowserStore } from '../../stores/browserStore';
 import type { Dataset } from '../../types';
 import type { DifferenceSelection } from '../liveLift/inspectionStore';
-import { comparisonFor, comparisonKey, compareWithAssembly, exactTargetsFor, LABEL_TEXT, linkText, useComparisonStore } from './comparison';
+import { comparisonFor, comparisonKey, compareWithAssembly, LABEL_TEXT, linkText, useComparisonStore } from './comparison';
 
 const LOCAL = ['insertion', 'deletion', 'replacement', 'snv', 'mnv'];
 
@@ -101,11 +101,16 @@ export function useInspectEntry(selection: DifferenceSelection, map: Dataset | n
 }
 
 /** A comparison that knows an exact assembly allele for this difference but froze no target for it (the target's
- * window reached past what that comparison fetched): the inspector then runs its own, wider comparison. */
+ * window reached past what that comparison fetched), for any one linked allele, or whose fetch stopped short of the
+ * read's own window: the inspector then runs its own, wider comparison. */
 export function lacksExactTarget(entry: ReturnType<typeof comparisonFor>): boolean {
-  if (!entry || exactTargetsFor(entry).length) return false;
-  if (entry.kind === 'assembly') return !!entry.value.exact_allele_id;
-  return entry.value.links.some(l => l.assembly_item_ids.some(id => !!entry.response.assembly[id]?.exact_allele_id));
+  if (!entry) return false;
+  if (entry.kind === 'assembly') return !!entry.value.exact_allele_id && !entry.value.exact_target;
+  if (entry.value.novelty?.reasons?.includes('fetch_horizon')) return true;
+  return entry.value.links.some(l => l.assembly_item_ids.some(id => {
+    const item = entry.response.assembly[id];
+    return !!item?.exact_allele_id && !item.exact_target;
+  }));
 }
 
 /** One comparison for the inspected difference; a row comparison already covering it is reused unless it lacks

@@ -84,14 +84,20 @@ export async function compareWithAssembly(body: { dataset_id: string; chrom: str
   return response;
 }
 
-/** The comparison entry for a selected difference, from whichever stored response covers it. */
+/** The comparison entry for a selected difference: the inspector's own comparison of it (wider than a row's, or
+ * with the reads' consensus) when there is one, else the newest stored response covering it. */
 export function comparisonFor(byKey: Record<string, ComparisonResponse>, prefix: string, d: Difference):
   { kind: 'reads'; value: ReadComparison; response: ComparisonResponse } | { kind: 'assembly'; value: AssemblyComparison; response: ComparisonResponse } | null {
+  const entryOf = (response: ComparisonResponse): ReturnType<typeof comparisonFor> =>
+    d.source === 'assembly' && response.assembly?.[d.id] ? { kind: 'assembly', value: response.assembly[d.id], response }
+      : d.source === 'reads' && response.reads?.[d.id] ? { kind: 'reads', value: response.reads[d.id], response } : null;
+  const own = byKey[`${prefix}inspect:${d.id}`];
+  const inspected = own ? entryOf(own) : null;
+  if (inspected) return inspected;
   let best: ReturnType<typeof comparisonFor> = null;
   for (const [key, response] of Object.entries(byKey)) {
     if (!key.startsWith(prefix) || (best && (best.response._received ?? 0) > (response._received ?? 0))) continue;
-    if (d.source === 'assembly' && response.assembly?.[d.id]) best = { kind: 'assembly', value: response.assembly[d.id], response };
-    else if (d.source === 'reads' && response.reads?.[d.id]) best = { kind: 'reads', value: response.reads[d.id], response };
+    best = entryOf(response) ?? best;
   }
   return best;
 }
