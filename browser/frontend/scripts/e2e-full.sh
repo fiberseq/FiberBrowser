@@ -33,6 +33,8 @@ fail() { echo "e2e:full: $*" >&2; exit 2; }
 fasta="${FIBERBROWSER_TEST_FASTA:-}"
 [[ -n "$fasta" ]] || fail "set FIBERBROWSER_TEST_FASTA to an indexed hg38 FASTA (tests never download hg38)"
 [[ -f "$fasta" ]] || fail "FIBERBROWSER_TEST_FASTA is not a file: $fasta"
+# Absolute: the servers run from the repository root, not from here.
+fasta="$(cd "$(dirname "$fasta")" && pwd)/$(basename "$fasta")"
 [[ -f "$fasta.fai" ]] || fail "FIBERBROWSER_TEST_FASTA has no index ($fasta.fai): run samtools faidx on it"
 for contig in chr19 chr3; do
   grep -q "^${contig}	" "$fasta.fai" || fail "FIBERBROWSER_TEST_FASTA has no $contig: the specs need hg38 with chr19 and chr3"
@@ -46,8 +48,16 @@ work="${FIBERBROWSER_E2E_WORK:-}"
 if [[ -z "$work" ]]; then
   work="$(mktemp -d "${TMPDIR:-/tmp}/fiberbrowser-e2e.XXXXXX")"
 fi
+created=""
+[[ -d "$work" ]] || { mkdir -p "$work"; created=1; }
+work="$(cd "$work" && pwd -P)"
+# Never inside the checkout: the build there would replace a tracked folder (dist/) or leave files in the tree.
+repo="$(cd "$frontend/../.." && pwd -P)"
+if [[ "$work/" == "$repo/"* ]]; then
+  [[ -n "$created" ]] && rmdir "$work" 2>/dev/null
+  fail "FIBERBROWSER_E2E_WORK must be outside the repository ($repo): $work"
+fi
 mkdir -p "$work/home"
-work="$(cd "$work" && pwd)"
 
 python="${FIBERBROWSER_TEST_PYTHON:-python}"
 export FIBERBROWSER_TEST_PYTHON="$python"

@@ -232,7 +232,13 @@ async function startServerOn(
   // job registry, no rescan of watched folders at startup, and a scratch upload cache.
   const scratch = mkdtempSync(path.join(os.tmpdir(), 'fiberbrowser-e2e-library-'));
   const fastaPath = process.env.FIBERBROWSER_TEST_FASTA?.trim();
-  if (fastaPath) args.push('--fasta', fastaPath);
+  if (fastaPath) {
+    // The server runs from the repository root: pass the path absolute, and never start one without the reference
+    // it was meant to have (with none, genome autoload can start an hg38 download).
+    const resolved = path.resolve(fastaPath);
+    if (!existsSync(resolved)) throw new Error(`FIBERBROWSER_TEST_FASTA does not exist: ${resolved}`);
+    args.push('--fasta', resolved);
+  }
   args.push(...(options.extraArgs ?? []));
   const proc = spawn(
     process.env.FIBERBROWSER_TEST_PYTHON?.trim() || 'python',
