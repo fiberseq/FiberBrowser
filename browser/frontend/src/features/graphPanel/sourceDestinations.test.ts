@@ -564,5 +564,16 @@ describe('a linked source panel is a destination of graph runs', () => {
     const st = await reopen();
     expect(st.clusterAssignments[key]).toEqual({ q1: 0, q2: 1, q3: 1 });
   });
+  it('agy post-merge A HIGH 2: reopening a run-labelled source view the user then filtered keeps the labels of reads its filter hides', async () => {
+    seed([...split(), source('srcP', '2', 'PAT')]);
+    setPanelViewMode('mat', 'graph');
+    const pat = plan().observations.find(o => o.binding === 'pat')!.id;
+    commitGraphRun(useBrowserStore.getState(), plan(), response({ [pat]: { assignments: { [aid('q1')]: 0, [aid('q2')]: 1 } } }));
+    const key = 'srcP~lift-source';
+    expect(useBrowserStore.getState().clusterAssignments[key]).toEqual({ q1: 0, q2: 1 });
+    useBrowserStore.setState(x => ({ filteredReadIds: { ...x.filteredReadIds, [key]: new Set(['q1']) } }));
+    const st = await reopen();
+    expect(st.clusterAssignments[key]).toEqual({ q1: 0, q2: 1 });
+  });
 });
 

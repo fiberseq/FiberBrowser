@@ -183,9 +183,14 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
     if (had && !runOwned(cur, tk, active)) return {};
     // A graph run's labels the member's share no longer agrees with (a later run, or a merge or split of the member,
     // while the source was folded away) follow the member's (agy post-merge review, group A, HIGH 2).
-    const stale = Boolean(had && got && !Object.entries(live!).every(([q, c]) => got[q] === c));
+    // (Judged on the reads its filter shows, which alone the share labels; reads it hides keep their labels.)
+    const inScope = ([q]: [string, number]) => !scope || scope.has(q);
+    const stale = Boolean(had && got && !Object.entries(live!).filter(inScope).every(([q, c]) => got[q] === c));
     if (had && !got && !runLabelled(cur, tk)) return {};
-    if ((!had || stale) && got) { live = got; patch.clusterAssignments = { ...cur.clusterAssignments, [tk]: got }; }
+    if ((!had || stale) && got) {
+      live = stale ? { ...Object.fromEntries(Object.entries(live!).filter(e => !inScope(e))), ...got } : got;
+      patch.clusterAssignments = { ...cur.clusterAssignments, [tk]: live };
+    }
     const labelled = Boolean(live && Object.keys(live).length);
     const order = labelled && cur.clusterOrder[fk]?.length ? [...cur.clusterOrder[fk]] : cur.clusterOrder[tk];
     // The member's focus only on groups the source has (none: it keeps its own).
