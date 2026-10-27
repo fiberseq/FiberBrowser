@@ -17,7 +17,9 @@ interface HubDataStore {
   missing: Record<string, string>;
   error: string;
   /** set id -> hits in the view the key names. */
-  hits: Record<string, { key: string; hits: FeatureHit[]; truncated: boolean; error?: string; groups?: GroupDecl[] }>;
+  hits: Record<string, { key: string; hits: FeatureHit[]; truncated: boolean; error?: string; groups?: GroupDecl[];
+    /** Why a source-frame set's hits can't all be placed here, or why graph columns are missing. */
+    note?: string }>;
   loadingHits: boolean;
   setScans: (scans: ScanInfo[]) => void;
 }
@@ -197,7 +199,8 @@ export function extraScanGroups(set: ScanSetInfo, scanId: string, hits: ScanHit[
       if (out.has(key)) continue;
       const cut = col.lastIndexOf(':');
       const base = cut > 0 ? set.groups.find(g => g.scanDataset === col.slice(0, cut)) : undefined;
-      out.set(key, { id: key, datasetId: base?.datasetId, kind: 'haplotype', label: base ? `${base.label} ${col.slice(cut + 1)}` : col });
+      out.set(key, { id: key, datasetId: base?.datasetId, kind: 'haplotype', label: base ? `${base.label} ${col.slice(cut + 1)}` : col,
+        ...(cut > 0 ? { hap: col.slice(cut + 1) } : {}) });
     }
   }
   return [...out.values()];
@@ -210,11 +213,18 @@ export function scanHitToFeature(set: ScanSetInfo, scanId: string, h: ScanHit): 
     values[key] = { ...(roles.prevalence ? { prevalence: roles.prevalence } : {}), ...(roles.strength ? { strength: roles.strength } : {}) };
   }
   const all = h.columns?.all ?? {};
+  // A source-frame hit (G1): its own frame (contig, haplotype), its lift and where it is drawn on this genome.
+  const frame: FeatureHit['frame'] = h.frame
+    ? { kind: 'source', assembly: (set.frame as { assembly?: string }).assembly ?? '', contig: h.frame.contig,
+        ...(h.frame.hap ? { hap: h.frame.hap } : {}), ...(h.frame.hapLabel ? { hapLabel: h.frame.hapLabel } : {}), datasetId: h.frame.datasetId }
+    : set.frame;
   return {
-    hitId: h.hitId, setId: set.setId, typeId: h.typeId, frame: set.frame, chrom: h.chrom, start: h.start, end: h.end, anchor: h.anchor,
+    hitId: h.hitId, setId: set.setId, typeId: h.typeId, frame, chrom: h.chrom, start: h.start, end: h.end, anchor: h.anchor,
     ...(h.strand ? { strand: h.strand } : {}), label: h.label,
     scores: { prevalence: all.prevalence?.v ?? null, strength: all.strength?.v ?? null, score: h.score },
     values, flags: h.flags, detail: { module: h.module, raw: h.raw, unitId: h.unitId, parentId: h.parentId },
+    ...(h.source ? { source: h.source } : {}), ...(h.lift ? { lift: h.lift } : {}), ...(h.target ? { target: h.target } : {}),
+    ...(h.graph ? { graph: h.graph } : {}),
   };
 }
 
@@ -248,11 +258,12 @@ export async function loadScanHits(view: HubView, hidden: string[]): Promise<voi
       byModule.set(module, [...(byModule.get(module) ?? []), set]);
     }
     for (const [module, sets] of byModule) {
-      jobs.push(scanHits(scan.scanId, module, view.chrom, view.start, view.end, undefined, controller.signal).then(res => {
+      jobs.push(scanHits(scan.scanId, module, view.chrom, view.start, view.end, undefined, controller.signal, true).then(res => {
         for (const set of sets) {
           const mine = res.hits.filter(h => h.typeId === set.typeId);
           next[set.setId] = { key, truncated: res.truncated, groups: extraScanGroups(set, scan.scanId, mine),
-            hits: mine.map(h => scanHitToFeature(set, scan.scanId, h)) };
+            hits: mine.map(h => scanHitToFeature(set, scan.scanId, h)),
+            ...(res.note || res.graphNote ? { note: [res.note, res.graphNote].filter(Boolean).join('; ') } : {}) };
         }
       }).catch(e => {
         if (controller.signal.aborted) return;

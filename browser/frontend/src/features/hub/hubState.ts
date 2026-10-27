@@ -7,7 +7,7 @@
 import { registerStoreExtension } from '../../stores/storeExtensions';
 import type { BrowserState } from '../../stores/browserStore';
 import { featureKindDef, normalizeFeatureRefs, registerFeatureKind, type FeatureRef } from '../../stores/featureStore';
-import type { AnchorSet, FeatureHit, FeatureSet, FeatureTypeDecl, Frame } from './types';
+import type { AnchorSet, FeatureHit, FeatureSet, FeatureTypeDecl, Frame, GraphAlias, LiftStatus, TargetSpan } from './types';
 import { kindOfType } from './kinds';
 
 export interface HubOpenedScan {
@@ -28,6 +28,8 @@ export interface HubUi {
   sort: { key: 'locus' | 'prevalence' | 'strength' | 'delta' | 'label'; dir: 'asc' | 'desc' };
   /** Two comparison columns (group keys) for Δ. */
   compare: [string, string] | null;
+  /** Only hits matched in another frame or set ("find shared", DESIGN §5.4). */
+  sharedOnly?: boolean;
 }
 
 /** A hub selection entry: enough to act on it without the set loaded (Use as, sessions). */
@@ -49,6 +51,11 @@ export interface HubSelected {
   hasStates?: boolean;
   /** Sets backed by a legacy run keep their legacy refs (fp-class job/family per dataset, nfr run/element, sv). */
   legacyRefs?: FeatureRef[];
+  /** A source-frame hit (G1): where it is on this genome, and its lift status. chrom/start/end stay the source's. */
+  target?: TargetSpan;
+  lift?: LiftStatus;
+  /** Its graph columns (drawn on graph hosts and pop-outs). */
+  graph?: GraphAlias;
 }
 
 export interface FeatureHubState {
@@ -71,6 +78,31 @@ declare module '../../stores/browserStore' {
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 
+const LIFT_STATUSES: LiftStatus[] = ['exact', 'split', 'partial', 'unmapped'];
+const liftOf = (v: unknown): LiftStatus | null => (LIFT_STATUSES.includes(v as LiftStatus) ? v as LiftStatus : null);
+function sourceOf(v: unknown): { chrom: string; start: number; end: number } | null {
+  const q = v as Record<string, unknown> | null;
+  if (!q || typeof q !== 'object' || !str(q.chrom) || num(q.start) === null || num(q.end) === null) return null;
+  return { chrom: str(q.chrom), start: num(q.start)!, end: num(q.end)! };
+}
+function targetOf(v: unknown): TargetSpan | null {
+  const q = v as Record<string, unknown> | null;
+  if (!q || typeof q !== 'object' || !str(q.chrom) || num(q.start) === null || num(q.end) === null) return null;
+  return { chrom: str(q.chrom), start: num(q.start)!, end: num(q.end)!, anchor: num(q.anchor) ?? num(q.start)!,
+    ...(q.insertion === true ? { insertion: true } : {}) };
+}
+/** A selection's graph columns, kept as they were (bounded: a few thousand runs). */
+function graphOf(v: unknown): GraphAlias | null {
+  const g = v as Record<string, unknown> | null;
+  if (!g || typeof g !== 'object' || !str(g.registration) || !str(g.target) || !str(g.binding) || !Array.isArray(g.columns)) return null;
+  const columns = g.columns.slice(0, 4000).filter((c): c is [string, number, number] =>
+    Array.isArray(c) && c.length === 3 && typeof c[0] === 'string' && Number.isFinite(c[1]) && Number.isFinite(c[2]));
+  const anchor = Array.isArray(g.anchor) && g.anchor.length === 2 && g.anchor.every(Number.isFinite) ? g.anchor as [number, number] : [0, 0] as [number, number];
+  const paths = g.paths && typeof g.paths === 'object' ? g.paths as GraphAlias['paths'] : {};
+  return { registration: str(g.registration), target: str(g.target), binding: str(g.binding), anchor, columns,
+    size: num(g.size) ?? columns.reduce((n, c) => n + c[2] - c[1], 0), paths };
+}
+
 /** The hub state from a session or snapshot: well formed, unknown fields dropped. */
 export function normalizeHub(value: unknown): FeatureHubState {
   if (!value || typeof value !== 'object') return EMPTY_HUB;
@@ -90,6 +122,7 @@ export function normalizeHub(value: unknown): FeatureHubState {
     minPrevalence: num(u.minPrevalence),
     sort: { key: (sortKeys.includes(str(sort.key)) ? sort.key : 'locus') as HubUi['sort']['key'], dir: sort.dir === 'desc' ? 'desc' : 'asc' },
     compare: Array.isArray(u.compare) && u.compare.length === 2 && u.compare.every(x => typeof x === 'string') ? [u.compare[0], u.compare[1]] as [string, string] : null,
+    ...(u.sharedOnly === true ? { sharedOnly: true } : {}),
   };
   const anchors = (Array.isArray(v.anchors) ? v.anchors : []).flatMap(raw => {
     const a = raw as Record<string, unknown>;
@@ -100,7 +133,9 @@ export function normalizeHub(value: unknown): FeatureHubState {
       return [{ chrom: str(q.chrom), pos: num(q.pos)!, ...(q.strand === '+' || q.strand === '-' ? { strand: q.strand as '+' | '-' } : {}),
         ...(str(q.label) ? { label: str(q.label) } : {}), ...(str(q.hitId) ? { hitId: str(q.hitId) } : {}),
         ...(num(q.start) !== null ? { start: num(q.start)! } : {}), ...(num(q.end) !== null ? { end: num(q.end)! } : {}),
-        ...(q.frame && typeof q.frame === 'object' && typeof (q.frame as { kind?: unknown }).kind === 'string' ? { frame: q.frame as Frame } : {}) }];
+        ...(q.frame && typeof q.frame === 'object' && typeof (q.frame as { kind?: unknown }).kind === 'string' ? { frame: q.frame as Frame } : {}),
+      ...(sourceOf(q.source) ? { source: sourceOf(q.source)! } : {}), ...(liftOf(q.lift) ? { lift: liftOf(q.lift)! } : {}),
+      ...(q.insertion === true ? { insertion: true } : {}) }];
     });
     return [{ id: str(a.id), label: str(a.label) || 'Anchors', sources: Array.isArray(a.sources) ? a.sources.filter((x): x is string => typeof x === 'string') : [],
       createdAt: str(a.createdAt), anchors: points }];
@@ -114,7 +149,9 @@ export function normalizeHub(value: unknown): FeatureHubState {
       ...(Array.isArray(h.datasets) ? { datasets: h.datasets.filter((x): x is string => typeof x === 'string') } : {}),
       ...(typeof h.hasStates === 'boolean' ? { hasStates: h.hasStates } : {}),
       ...(h.frame && typeof h.frame === 'object' && typeof (h.frame as { kind?: unknown }).kind === 'string' ? { frame: h.frame as Frame } : {}),
-      ...(Array.isArray(h.legacyRefs) ? { legacyRefs: normalizeFeatureRefs(h.legacyRefs) } : {}) }];
+      ...(Array.isArray(h.legacyRefs) ? { legacyRefs: normalizeFeatureRefs(h.legacyRefs) } : {}),
+      ...(targetOf(h.target) ? { target: targetOf(h.target)! } : {}), ...(liftOf(h.lift) ? { lift: liftOf(h.lift)! } : {}),
+      ...(graphOf(h.graph) ? { graph: graphOf(h.graph)! } : {}) }];
   });
   return { scans, ui, anchors, selected };
 }
@@ -210,5 +247,6 @@ export function hitSelectionEntry(set: FeatureSet, hit: FeatureHit): HubSelected
   return { setId: set.setId, hitId: hit.hitId, typeId: hit.typeId, chrom: hit.chrom, start: hit.start, end: hit.end, hasStates,
     anchor: hit.anchor, ...(hit.strand ? { strand: hit.strand } : {}), ...(hit.label ? { label: hit.label } : {}),
     datasets: set.datasets, ...(hit.frame && hit.frame.kind !== 'linear' ? { frame: hit.frame } : {}),
-    ...(hit.legacyRefs?.length ? { legacyRefs: hit.legacyRefs } : {}) };
+    ...(hit.legacyRefs?.length ? { legacyRefs: hit.legacyRefs } : {}),
+    ...(hit.target ? { target: hit.target } : {}), ...(hit.lift ? { lift: hit.lift.status } : {}), ...(hit.graph ? { graph: hit.graph } : {}) };
 }

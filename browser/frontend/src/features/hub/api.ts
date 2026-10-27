@@ -1,6 +1,6 @@
 /** The scan routes (browser/routers/scan.py): open fiberhmm-scan directories, their hits, live scans. */
 import { fetchJson } from '../../api/sharedFetch';
-import type { FeatureSet, FeatureTypeDecl, GroupDecl, HitValue, Provenance, Frame } from './types';
+import type { FeatureSet, FeatureTypeDecl, GraphAlias, GroupDecl, HitLiftInfo, HitValue, Provenance, Frame, TargetSpan } from './types';
 
 export interface ScanSetInfo extends Omit<FeatureSet, 'type' | 'groups'> {
   type: FeatureTypeDecl & { columns?: string[] };
@@ -36,6 +36,17 @@ export interface ScanHit {
   raw: Record<string, Record<string, HitValue>>;
   groupKinds: Record<string, string>;
   module: Record<string, string | number>;
+  /** A source-frame scan's hit (a live-lift dataset's own assembly, G1): its source contig and haplotype. */
+  frame?: { kind: 'source'; contig: string; hap?: string | null; hapLabel?: string | null; datasetId: string };
+  /** Its source coordinates (kept; chrom/start/end above are the same). */
+  source?: { chrom: string; start: number; end: number; anchor: number };
+  /** Its lift onto this genome (liftbed through the dataset's map). */
+  lift?: HitLiftInfo;
+  /** Where it is drawn on this genome (the lifted placement, or the junction of a hit inside an insertion). */
+  target?: TargetSpan;
+  targetStrand?: '+' | '-';
+  /** Its columns on a registered graph package, with every path's status. */
+  graph?: GraphAlias;
 }
 
 export interface ScanPlanSummary {
@@ -78,10 +89,13 @@ export const openScan = (path: string, generation?: number) =>
   fetchJson<ScanInfo>('/api/scan/open', json(generation === undefined ? { path } : { path, generation }));
 export const listScans = () => fetchJson<{ scans: ScanInfo[]; generation?: number }>('/api/scan/list');
 export const closeScan = (scanId: string) => fetchJson<{ closed: boolean }>(`/api/scan/${encodeURIComponent(scanId)}`, { method: 'DELETE' });
-export function scanHits(scanId: string, module: string, chrom: string, start: number, end: number, type?: string, signal?: AbortSignal) {
+export function scanHits(scanId: string, module: string, chrom: string, start: number, end: number, type?: string, signal?: AbortSignal,
+  graph = false) {
   const q = new URLSearchParams({ module, chrom, start: String(Math.max(0, Math.floor(start))), end: String(Math.ceil(end)) });
   if (type) q.set('type', type);
-  return fetchJson<{ hits: ScanHit[]; truncated: boolean }>(`/api/scan/${encodeURIComponent(scanId)}/hits?${q}`, signal ? { signal } : undefined);
+  if (graph) q.set('graph', 'true');
+  return fetchJson<{ hits: ScanHit[]; truncated: boolean; frame?: 'source'; note?: string | null; graphNote?: string;
+    liftStatus?: Record<string, number> }>(`/api/scan/${encodeURIComponent(scanId)}/hits?${q}`, signal ? { signal } : undefined);
 }
 export const planScan = (request: ScanRequest) => fetchJson<ScanPlanSummary>('/api/scan/plan', json(request));
 export const submitScan = (request: ScanRequest) => fetchJson<ScanJob>('/api/scan/jobs', json(request));

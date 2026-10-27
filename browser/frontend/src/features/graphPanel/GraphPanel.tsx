@@ -27,6 +27,8 @@ import { startTrace, type GraphTrace } from './timings';
 import type { GraphApiError, GraphReadBinding, GraphReadSettings, GraphReadsReport, GraphReadsResponse, GraphRegistration, GraphSubgraphResponse, GraphViewState } from './types';
 import { MAX_READ_PRIMITIVES, packMolecules, placeReads, placementIndex, type PackedLane, type PlacedMolecule } from './readGeometry';
 import { addGraphRegion, drawRunOutlines, runOutlines } from './runOutlines';
+import { drawableHits, drawHubOutlines, hubGraphOutlines, hubOutlineAt, hubOutlineText, selectFromGraph } from '../hub/graphHits';
+import { useHubData } from '../hub/hubData';
 import { bandHeight, describeReadHit, drawReadBandLabels, drawReads, effectiveReadLayers, emptyDrawStats, READ_ROW_GAP, READ_ROW_HEIGHT, type ReadDrawStats, type ReadHit, type ReadLayers } from './readCanvas';
 import { chromatinStyle } from './chromatinStyle';
 import { isInsertionGroup, hitGroup, placementsByPath, selectionForHit, sourcePlacements, focusWindow, type GraphSelection, type SourcePlacement } from './inspection';
@@ -60,7 +62,7 @@ declare global {
     /** e2e only: each host's last complexity judgement (its window and unresolved fraction). */
     __FIBERBROWSER_GRAPH_COMPLEXITY__?: Record<string, { view: string; fraction: number }>;
     /** e2e only (with __FIBERBROWSER_E2E_EXPOSE_STORE): each graph panel's last scene, to locate its geometry. */
-    __FIBERBROWSER_GRAPH_SCENES__?: Record<string, { scene: Scene; model: LayoutModel; offset: number;
+    __FIBERBROWSER_GRAPH_SCENES__?: Record<string, { scene: Scene; model: LayoutModel; offset: number; hubOutlines?: unknown[];
       reads?: { molecules: PlacedMolecule[]; lanes: Record<string, { rows: number; hidden: number }>; hits: ReadHit[]; placeMs?: number; drawMs?: number; serverMs?: number;
         drawn?: ReadDrawStats; layers?: ReadLayers; hovered?: number; hoverKey?: string | null; strips?: number; report?: GraphReadsReport } }>;
   }
@@ -641,6 +643,11 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
 
   const outlines = useMemo(() => (hostMode ? runOutlines(graphRun, scene ?? null, state?.registrationId ?? null,
     state?.targetBinding ?? null, reversed) : []), [hostMode, graphRun, scene, state?.registrationId, state?.targetBinding, reversed]);
+  // Feature hub hits on graph columns (G1): the hub's hits in view, the selected ones bold; a click selects one.
+  const hubHits = useHubData(s => s.hits);
+  const hubSelected = useBrowserStore(s => s.featureHub?.selected);
+  const hubOutlines = useMemo(() => hubGraphOutlines(scene ?? null, response?.result, state?.registrationId ?? null,
+    state?.targetBinding ?? null, reversed, drawableHits(hubSelected)), [scene, response, state?.registrationId, state?.targetBinding, reversed, hubHits, hubSelected]); // eslint-disable-line react-hooks/exhaustive-deps
   const laneCount = model?.rows.length ?? state?.selectedPathKeys.length ?? 0;
   const canvasHeight = scene?.height ?? laneTop(laneCount, laneHeight) + GRAPH_LANE_GAP;
   // While a pan's new response is on its way, the last scene slides with the viewport (its average scale).
@@ -663,6 +670,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       drawScene(ctx, scene);
       // A graph run's regions (host mode): outlined across the lanes, carrier-only parts on their carriers' lanes.
       drawRunOutlines(ctx, outlines);
+      drawHubOutlines(ctx, hubOutlines);
       if (regionPreview) {
         ctx.save();
         ctx.fillStyle = 'rgba(37, 99, 235, 0.12)';
@@ -717,7 +725,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       const shifted = sceneOffset ? { ...scene, targetMap: scene.targetMap.map(m => ({ ...m, x0: m.x0 + sceneOffset, x1: m.x1 + sceneOffset })) } : scene;
       drawRuler(ctx, shifted, viewport, width, reversed);
       if (window.__FIBERBROWSER_E2E_EXPOSE_STORE && panelId) {
-        (window.__FIBERBROWSER_GRAPH_SCENES__ ??= {})[panelId] = { scene, model, offset: sceneOffset,
+        (window.__FIBERBROWSER_GRAPH_SCENES__ ??= {})[panelId] = { scene, model, offset: sceneOffset, hubOutlines,
           ...(readLayout ? { reads: { molecules: readLayout.placed.molecules, hits: readHitsRef.current,
             placeMs: readLayout.ms, drawMs: readDrawMsRef.current, serverMs: reads.response?.timings.total_ms, drawn: readDrawStatsRef.current, layers: readLayers, hovered: hoveredRowsRef.current, hoverKey,
             lanes: Object.fromEntries([...readLayout.lanes].map(([k, l]) => [k, { rows: l.rows.length, hidden: l.hidden,
@@ -733,7 +741,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         if (trace.paintedAt === undefined) { trace.paintedAt = performance.now(); trace.outcome = trace.outcome ?? 'painted'; }
       });
     }
-  }, [scene, transform, width, canvasHeight, renderVersion, sceneOffset, readLayout, style, readSettings, readsStale, readLayers, hoverKey, decoration, outlines, regionPreview]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [scene, transform, width, canvasHeight, renderVersion, sceneOffset, readLayout, style, readSettings, readsStale, readLayers, hoverKey, decoration, outlines, hubOutlines, regionPreview]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------------------------------------------------------------- navigation
   const commitViewport = useCallback((next: GraphViewport, detach = false, linearAtStart?: LinearView | null) => {
@@ -824,12 +832,15 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       return;
     }
     const hit = sceneHitAt(scene, sx, y);
+    const hubHit = hubOutlineAt(hubOutlines, sx, y);
     if (hit) {
       // Only target-backed geometry has a target cursor: an insertion reports its boundary and length, never a
       // made-up target base.
       const inv = sceneInverse(scene, sx, y);
       const cursorX = hit.cursor && inv?.kind === 'target' ? x : null;
-      setCursor({ x, y, text: describeSceneHit(hit, sx, model, reversed), cursorX });
+      setCursor({ x, y, text: describeSceneHit(hit, sx, model, reversed) + (hubHit ? `\n${hubOutlineText(hubHit)}` : ''), cursorX });
+    } else if (hubHit) {
+      setCursor({ x, y, text: hubOutlineText(hubHit), cursorX: null });
     } else {
       const t = targetAtX(scene.targetMap, sx);
       if (t && !t.boundary) setCursor({ x, y, text: `${viewport?.contig}:${t.pos.toLocaleString('en-US')}`, cursorX: x });
@@ -905,6 +916,9 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     const rh = hostMode && e.shiftKey ? readHitAt(x, y) : null;
     if (rh) { setReadSelected(rh); return; }
     const found = selectionAt(x, y);
+    // Off the graph's own geometry, inside a feature hub hit: select it in the hub.
+    const hubHit = !found ? hubOutlineAt(hubOutlines, x - sceneOffset, y) : null;
+    if (hubHit && selectFromGraph(hubHit, e.shiftKey || e.metaKey || e.ctrlKey)) return;
     if (!found) { if (graphSelection?.panelId === panelId) selectGraph(null); return; }
     if (e.metaKey || e.ctrlKey) { selectGraph(found.sel, true); return; }
     const group = hitGroup(found.hit);

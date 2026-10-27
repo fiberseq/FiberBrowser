@@ -40,7 +40,7 @@ export interface FeatureTypeDecl {
 
 export type Frame =
   | { kind: 'linear'; genome?: string; chrom: string }
-  | { kind: 'source'; assembly: string; contig: string; hap?: string }
+  | { kind: 'source'; assembly: string; contig: string; hap?: string; hapLabel?: string; datasetId?: string }
   | { kind: 'lifted'; liftKey: string; hap: string; chrom: string }
   | { kind: 'graph'; registration: string; revision: string; binding: string };
 
@@ -67,6 +67,8 @@ export interface GroupDecl {
   kind: 'all' | 'dataset' | 'channel' | 'haplotype' | 'cluster';
   label: string;
   panelStateKeys?: string[];
+  /** A haplotype column's haplotype label (MAT, PAT): which graph path its reads are on. */
+  hap?: string;
 }
 
 export type SetStatus = 'loading' | 'partial' | 'complete' | 'stale' | 'error';
@@ -89,6 +91,42 @@ export interface FeatureSet {
   /** Why the set is stale / read-only ("scan of other files", "the BAM changed since the scan"). */
   note?: string;
   source: { kind: 'scan'; scanId: string; module: string } | { kind: 'inline'; hits: FeatureHit[] } | { kind: 'provider'; provider: string };
+}
+
+/** How a source-frame hit lifts onto this genome (DESIGN §5.4): liftbed's placement and status. */
+export type LiftStatus = 'exact' | 'split' | 'partial' | 'unmapped';
+export interface HitLiftInfo {
+  status: LiftStatus;
+  chrom?: string | null; start?: number | null; end?: number | null;
+  flipped?: boolean; placements?: number;
+  /** Why it was not lifted (liftbed's reason: no_projection, contig_not_in_map, …). */
+  reason?: string | null;
+  /** The target boundary [lo, hi] an unmapped hit sits at (inside an insertion). */
+  junction?: [number, number] | null;
+  junction_chrom?: string | null;
+  /** The hit's anchor, lifted on its own. */
+  anchor?: number;
+}
+
+/** Where a hit is on this genome: itself, its lifted placement, or (insertion) the junction it sits at. */
+export interface TargetSpan { chrom: string; start: number; end: number; anchor: number; insertion?: boolean }
+
+/** A path's coverage of a hit's graph columns (DESIGN §5.4): carried, partly carried, absent (proven) or unresolved. */
+export type PathStatus = 'carried' | 'partial' | 'absent' | 'unresolved';
+export interface GraphAlias {
+  registration: string;
+  /** The package's target binding key. */
+  target: string;
+  /** The path the columns are on (the hit's own: a source path, or the target walk). */
+  binding: string;
+  /** Target span (the junction for a hit inside an insertion). */
+  anchor: [number, number];
+  /** [node, o0, o1): node-forward offsets, in walk order. */
+  columns: Array<[string, number, number]>;
+  size: number;
+  truncated?: boolean;
+  repeats?: number;
+  paths: Record<string, { status: PathStatus; carried: number; total: number; label: string; datasets: string[]; hap?: string }>;
 }
 
 export interface HitValue { v: number | null; lo?: number | null; hi?: number | null; n?: number | null; nCallable?: number | null }
@@ -119,6 +157,14 @@ export interface FeatureHit {
   /** Open in the owning panel. */
   link?: { panel: string; payload: unknown };
   aliases?: Array<{ frame: Frame; start: number; end: number; status: 'exact' | 'split' | 'partial' | 'unmapped' | 'absent' | 'unresolved' }>;
+  /** A source-frame hit's source coordinates (G1; chrom/start/end above stay the source's too). */
+  source?: { chrom: string; start: number; end: number; anchor: number };
+  /** Its lift onto this genome. */
+  lift?: HitLiftInfo;
+  /** Where it is on this genome (absent: it can't be placed here). */
+  target?: TargetSpan;
+  /** Its graph columns and every path's status. */
+  graph?: GraphAlias;
 }
 
 /** An anchor set ("Use as → anchors"): positions with strand and label, saved with the session. */
@@ -130,5 +176,7 @@ export interface AnchorSet {
   createdAt: string;
   anchors: Array<{ chrom: string; pos: number; strand?: '+' | '-'; label?: string; hitId?: string; start?: number; end?: number;
     /** Another frame than this genome's (a scan of a source assembly); absent: this genome. */
-    frame?: Frame }>;
+    frame?: Frame;
+    /** A lifted hit's source coordinates and lift status (chrom/pos/start/end are this genome's). */
+    source?: { chrom: string; start: number; end: number }; lift?: LiftStatus; insertion?: boolean }>;
 }
