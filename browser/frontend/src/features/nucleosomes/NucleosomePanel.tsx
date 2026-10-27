@@ -65,13 +65,13 @@ export function CoarseMixBar({ sizes }: { sizes: NucObservationSummary['sizes'] 
   </div>;
 }
 
-function useDatasetStatus(ids: string[], revision: number | string, parameters?: Record<string, unknown>) {
+function useDatasetStatus(ids: string[], revision: number | string, parameters?: Record<string, unknown>, includeDuplicates = false) {
   const [status, setStatus] = useState<{ available?: boolean; reason?: string; datasets: NucDatasetStatus[] }>({ datasets: [] });
   const key = JSON.stringify([ids, parameters ?? null]);
   useEffect(() => {
     if (!ids.length) { setStatus({ datasets: [] }); return; }
     let live = true;
-    nucStatus(ids, parameters).then(s => { if (live) setStatus(s); }).catch(e => { if (live) setStatus({ available: false, reason: String(e?.message ?? e), datasets: [] }); });
+    nucStatus(ids, parameters, includeDuplicates).then(s => { if (live) setStatus(s); }).catch(e => { if (live) setStatus({ available: false, reason: String(e?.message ?? e), datasets: [] }); });
     return () => { live = false; };
   }, [key, revision]);   // eslint-disable-line react-hooks/exhaustive-deps
   return status;
@@ -95,8 +95,12 @@ export function NucleosomePanel({ isFullView, panelId }: AnalysisPanelProps) {
   const jobError = useNucJob(s => s.error);
   // Opened or closed scans change what is loaded (their rows, their calibration): summaries and status follow.
   const scansKey = useHubData(s => s.scans.map(x => `${x.scanId}:${x.manifestDigest}`).join(','));
-  const revision = `${useNucJob(s => s.revision)}|${scansKey}`;
-  const status = useDatasetStatus(datasetIds, revision, settings.parameters);
+  // The observed datasets' content (a live-lift settings change, a reload) and the duplicate policy change which
+  // records the columns hold.
+  const includeDuplicates = useBrowserStore(s => Boolean(s.showDuplicateReads));
+  const contentKey = useBrowserStore(s => s.datasets.map(d => `${d.id}:${d.source_identity ?? ''}`).join(',') + `|${s.refreshGeneration}`);
+  const revision = `${useNucJob(s => s.revision)}|${scansKey}|${contentKey}|${includeDuplicates}`;
+  const status = useDatasetStatus(datasetIds, revision, settings.parameters, includeDuplicates);
   const [summaries, setSummaries] = useState<Record<string, NucObservationSummary>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -110,7 +114,7 @@ export function NucleosomePanel({ isFullView, panelId }: AnalysisPanelProps) {
     controller.current = ctl;
     const timerId = setTimeout(() => {
       setLoading(true);
-      nucSummary(shown, ctl.signal)
+      nucSummary(shown, ctl.signal, includeDuplicates)
         .then(res => { if (!ctl.signal.aborted) { setSummaries(Object.fromEntries(res.observations.map(o => [o.obsId, o]))); setError(''); } })
         .catch(e => { if (!ctl.signal.aborted) setError(String(e?.message ?? e)); })
         .finally(() => { if (!ctl.signal.aborted) setLoading(false); });
@@ -128,7 +132,7 @@ export function NucleosomePanel({ isFullView, panelId }: AnalysisPanelProps) {
     if (!shown.length || !panelId) return;
     // Every column's own view: a linked locus or a panel at its own view computes there.
     void useNucJob.getState().submit({
-      datasets: observationDatasets(shown), views: observationViews(shown),
+      datasets: observationDatasets(shown), views: observationViews(shown), include_duplicates: includeDuplicates,
       ...(settings.parameters ? { parameters: settings.parameters } : {}),
     }, panelId);
   };

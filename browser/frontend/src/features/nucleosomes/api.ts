@@ -9,9 +9,9 @@ const json = (body: unknown, signal?: AbortSignal): RequestInit => ({
 export const nucAvailable = () => fetchJson<{ available: boolean; reason?: string; fiberhmm?: string; version?: string;
   settingsHash?: string; experimental?: boolean }>('/api/nuc/available');
 
-export const nucStatus = (datasets: string[], parameters?: Record<string, unknown>) =>
+export const nucStatus = (datasets: string[], parameters?: Record<string, unknown>, includeDuplicates = false) =>
   fetchJson<{ available: boolean; reason?: string; settingsHash?: string; version?: string; datasets: NucDatasetStatus[] }>(
-    '/api/nuc/status', json({ datasets, ...(parameters ? { parameters } : {}) }));
+    '/api/nuc/status', json({ datasets, include_duplicates: includeDuplicates, ...(parameters ? { parameters } : {}) }));
 
 export interface NucJobRequest {
   datasets: string[];
@@ -29,8 +29,9 @@ export const getNucJob = (jobId: string) => fetchJson<NucJob>(`/api/nuc/jobs/${e
 export const cancelNucJob = (jobId: string) => fetchJson<NucJob>(`/api/nuc/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' });
 
 /** The server's per-observation summaries (only the descriptor fields it reads are sent). */
-export const nucSummary = (observations: NucObservation[], signal?: AbortSignal) =>
+export const nucSummary = (observations: NucObservation[], signal?: AbortSignal, includeDuplicates = false) =>
   fetchJson<{ observations: NucObservationSummary[] }>('/api/nuc/summary', json({
+    include_duplicates: includeDuplicates,
     observations: observations.map(o => ({
       obsId: o.obsId, label: o.label, datasetId: o.datasetId, kind: o.kind, chrom: o.chrom, start: o.start, end: o.end,
       ...(o.liftHap ? { liftHap: o.liftHap } : {}), ...(o.strand ? { strand: o.strand } : {}),

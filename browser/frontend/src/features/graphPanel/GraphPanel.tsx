@@ -327,8 +327,11 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       pinned: pinnedGlobal }, MAX_GRAPH_PINS);
   }, [hostMode, members, selectedForPins, filteredForPins, pinnedGlobal, highlightForPins, branchForPins, focusForPins, assignmentsForPins]);
   const pinsKey = pins.join('\u0000');
+  // A dataset's source identity moves when outputs computed for its records (nucleosome layers) change its composed
+  // rows, while its binding revision (files and map) stays: the reads are requested again.
+  const sourceIdentities = useBrowserStore(useShallow(s => Object.fromEntries(s.datasets.map(d => [d.id, d.source_identity ?? '']))));
   const readsKey = reg && response && readPaths.length
-    ? JSON.stringify([reg.id, reg.revisions.package, readPaths, activeBindings.map(b => [b.dataset_id, b.revision]), pinsKey])
+    ? JSON.stringify([reg.id, reg.revisions.package, readPaths, activeBindings.map(b => [b.dataset_id, b.revision, sourceIdentities[b.dataset_id] ?? '']), pinsKey])
     : null;
   useEffect(() => {
     if (!readsKey || !reg || !panelId) { if (!readsKey) setReads(r => (r.response || r.loading ? { response: null, loading: false, error: null } : r)); return; }
