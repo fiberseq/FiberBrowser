@@ -177,6 +177,12 @@ function jumpWasPan(entry: ViewportHistoryEntry, to: Span3): boolean {
 // VIEWPORT SLICE — Interface
 // ============================================================
 
+/** A button on the error banner: its label and what it does. */
+export interface ErrorAction {
+  label: string;
+  run: () => void;
+}
+
 export interface ViewportSlice {
   chrom: string;
   start: number;
@@ -186,6 +192,8 @@ export interface ViewportSlice {
   chroms: ChromInfo[];
   loading: boolean;
   error: string | null;
+  /** A button on the error banner (e.g. Retry). Cleared with every setError. Never saved: it holds a function. */
+  errorAction: ErrorAction | null;
   
   // Server config (set from /api/status)
   prefetchMultiplier: number;  // How much to prefetch (e.g., 10 = 10x viewport)
@@ -218,7 +226,8 @@ export interface ViewportSlice {
   setViewport: (chrom: string, start: number, end: number) => void;
   setChroms: (chroms: ChromInfo[]) => void;
   setLoading: (loading: boolean) => void;
-  setError: (error: string | null) => void;
+  /** Show (or clear, with null) the error banner; `action` adds a button to it, such as Retry. */
+  setError: (error: string | null, action?: ErrorAction) => void;
   setPrefetchMultiplier: (multiplier: number) => void;
 
   // Vertical zoom actions
@@ -290,6 +299,7 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
   chroms: [],
   loading: false,
   error: null,
+  errorAction: null,
   
   prefetchMultiplier: 10,  // Default, updated from server
 
@@ -649,7 +659,7 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
 
   setChroms: (chroms) => set({ chroms }),
   setLoading: (loading) => set({ loading }),
-  setError: (error) => set({ error }),
+  setError: (error, action) => set({ error, errorAction: error ? action ?? null : null }),
   setPrefetchMultiplier: (multiplier) => set({ prefetchMultiplier: multiplier }),
 
   // Vertical zoom actions
@@ -793,6 +803,7 @@ export function createViewportSlice(rawSet: (partial: Partial<BrowserState> | ((
       // Clear loading/error
       loading: false,
       error: null,
+      errorAction: null,
 
     });
     // Reset pan state in ephemeral store

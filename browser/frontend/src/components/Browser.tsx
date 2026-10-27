@@ -15,6 +15,7 @@ import { captureRunViews, clusterRequestLocus, runViewsStillCurrent } from '../u
 import { serverScanSource } from '../utils/peakScanSources';
 import { useEffect, useCallback, useState, useRef, useMemo } from 'react';
 import { useBrowserStore, getTargetDatasetIds, getStateKeyMap, isLinkedGroup } from '../stores/browserStore';
+import type { ErrorAction } from '../stores/viewportSlice';
 import { useShallow } from 'zustand/react/shallow';
 import { CrashRecoveryBanner } from './controls/CrashRecoveryBanner';
 import { GenomeMismatchBanner } from './controls/GenomeMismatchBanner';
@@ -146,6 +147,34 @@ function branchReadScopeForStateKeys(
   return scope;
 }
 
+/** The red error banner under the toolbar: the message, an optional action button (e.g. Retry) and Dismiss. */
+export function ErrorBanner({ error, action, onDismiss }: { error: string; action: ErrorAction | null; onDismiss: () => void }) {
+  return (
+    <div className="flex items-start gap-3 border-b border-red-300 bg-red-100 px-4 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300">
+      <div className="min-w-0 flex-1 whitespace-pre-line">{error}</div>
+      {action && (
+        <button
+          type="button"
+          data-testid="error-banner-retry"
+          // Dismiss first: the action may set a new error of its own.
+          onClick={() => { onDismiss(); action.run(); }}
+          className="shrink-0 rounded border border-red-300 px-2 py-0.5 text-xs font-medium text-red-700 hover:bg-red-200/60 dark:border-red-700 dark:text-red-200 dark:hover:bg-red-950/40"
+        >
+          {action.label}
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="shrink-0 rounded p-0.5 text-red-500 hover:bg-red-200/60 dark:text-red-300 dark:hover:bg-red-950/40"
+        aria-label="Dismiss error"
+      >
+        <X size={15} />
+      </button>
+    </div>
+  );
+}
+
 export function Browser() {
   // The UI size, held down for the top bar and toolbar while it would leave the reads too little room (audit H5).
   const chromeZoom = useChromeZoom();
@@ -155,10 +184,10 @@ export function Browser() {
   const {
     chrom, start, end, datasets,
     loading, error, spanningOnly, downsampleCount, showGenomeOverview,
-    peakRules, peaksByRule, peaksLocked, publicMode, setBrowserError,
+    peakRules, peaksByRule, peaksLocked, publicMode, setBrowserError, errorAction,
   } = useBrowserStore(useShallow(s => ({
     chrom: s.chrom, start: s.start, end: s.end, datasets: s.datasets,
-    loading: s.loading, error: s.error, spanningOnly: s.spanningOnly,
+    loading: s.loading, error: s.error, errorAction: s.errorAction, spanningOnly: s.spanningOnly,
     downsampleCount: s.downsampleCount, showGenomeOverview: s.showGenomeOverview,
     peakRules: s.peakRules, peaksByRule: s.peaksByRule, peaksLocked: s.peaksLocked, publicMode: s.publicMode,
     setBrowserError: s.setError,
@@ -2274,17 +2303,7 @@ export function Browser() {
       {!isRenderMode && <RunResultLines />}
 
       {error && !isRenderMode && (
-        <div className="flex items-start gap-3 border-b border-red-300 bg-red-100 px-4 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300">
-          <div className="min-w-0 flex-1 whitespace-pre-line">{error}</div>
-          <button
-            type="button"
-            onClick={() => setBrowserError(null)}
-            className="shrink-0 rounded p-0.5 text-red-500 hover:bg-red-200/60 dark:text-red-300 dark:hover:bg-red-950/40"
-            aria-label="Dismiss error"
-          >
-            <X size={15} />
-          </button>
-        </div>
+        <ErrorBanner error={error} action={errorAction} onDismiss={() => setBrowserError(null)} />
       )}
 
       <div className="flex-1 min-h-[240px] overflow-hidden relative flex flex-row" data-testid="tracks-region">
