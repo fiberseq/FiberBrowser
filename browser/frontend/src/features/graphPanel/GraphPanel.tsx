@@ -276,7 +276,9 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   // reads of the bound paths' source windows, requested once the topology says what those windows are.
   const readSettings = state?.reads ?? DEFAULT_READS;
   // (A dataset's settings change bumps refreshGeneration and its server revision: its bindings are read again.)
-  const datasetKey = useBrowserStore(s => `${s.datasets.map(d => d.id).join(',')}|${s.refreshGeneration}`);
+  // (A dataset's source identity moves when outputs computed for its records change its rows, nucleosome layers
+  // included: its bindings, and their revisions, are read again.)
+  const datasetKey = useBrowserStore(s => `${s.datasets.map(d => `${d.id}:${d.source_identity ?? ''}`).join(',')}|${s.refreshGeneration}`);
   // The server's datasets (from the tab heartbeat): one added there after this page opened (a script, another tab)
   // binds too.
   const serverDatasets = useServerDatasetsStore(s => s.key);

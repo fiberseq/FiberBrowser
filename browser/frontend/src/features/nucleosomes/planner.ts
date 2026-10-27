@@ -36,15 +36,21 @@ export function nucObservations(st: PlanState, dark = false): NucObservation[] {
     if (hostDrawsGraph(panel)) {
       // One column per member the host draws (itself and its folded members, whatever their dataset), per haplotype
       // path: a pooled lifted member draws each of its haplotypes on its own path.
-      for (const { panel: member } of membersOf(st.panels, panel)) {
+      const members = membersOf(st.panels, panel);
+      for (const { panel: member } of members) {
         const mds = st.datasets.find(d => d.id === member.datasetId);
         if (!mds || !readable(mds.data_type)) continue;
         const key = member.stateKey ?? member.datasetId!;
         const mw = byKey.get(key);
         const memberName = member.id === panel.id ? short : panelTargetLabel(st, member).short;
+        // A pooled member leaves the haplotypes its dataset's haplotype members show to them, as the graph draws
+        // its bands (GraphPanel: excludeHaps).
+        const owned = new Set(member.liftHap ? [] : members.filter(x => x.panel.id !== member.id
+          && x.panel.datasetId === member.datasetId && x.panel.liftHap).map(x => x.panel.liftHap!.toUpperCase()));
         const haps: Array<string | null> = member.liftHap ? [member.liftHap]
-          : mds.data_type === 'bam_livelift' ? liftHapLabels(mds.live_lift) : [null];
-        for (const hap of haps.length ? haps : [null]) {
+          : mds.data_type === 'bam_livelift' ? liftHapLabels(mds.live_lift).filter(h => !owned.has(h.toUpperCase())) : [null];
+        if (!haps.length) continue;
+        for (const hap of haps) {
           push({
             obsId: `${key}:graph${hap ? `:${hap}` : ''}`, label: `${memberName} · graph${hap ? ` ${hap}` : ''}`,
             color: hap ? liveLiftHaplotypeColor(hap, dark) : (mds.color || FALLBACK_COLOR), kind: 'graph',

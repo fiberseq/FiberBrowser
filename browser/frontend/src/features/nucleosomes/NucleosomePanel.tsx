@@ -15,6 +15,7 @@ import { AnalysisButton, AnalysisPanelHeader } from '../../components/controls/s
 import { AnalysisPanelShell } from '../../components/controls/shared/AnalysisPanelShell';
 import { JobStatus } from '../../components/controls/shared/JobStatus';
 import { nucStatus, nucSummary } from './api';
+import { useHubData } from '../hub/hubData';
 import { isLiveJob, useNucJob } from './nucJob';
 import { nucObservations, observationDatasets, observationsKey, observationViews } from './planner';
 import type { NucCalibrationSummary, NucDatasetStatus, NucObservation, NucObservationSummary, NucPanelState } from './types';
@@ -64,7 +65,7 @@ export function CoarseMixBar({ sizes }: { sizes: NucObservationSummary['sizes'] 
   </div>;
 }
 
-function useDatasetStatus(ids: string[], revision: number, parameters?: Record<string, unknown>) {
+function useDatasetStatus(ids: string[], revision: number | string, parameters?: Record<string, unknown>) {
   const [status, setStatus] = useState<{ available?: boolean; reason?: string; datasets: NucDatasetStatus[] }>({ datasets: [] });
   const key = JSON.stringify([ids, parameters ?? null]);
   useEffect(() => {
@@ -92,7 +93,9 @@ export function NucleosomePanel({ isFullView, panelId }: AnalysisPanelProps) {
   const job = useNucJob(s => s.job);
   const jobPanel = useNucJob(s => s.panelId);
   const jobError = useNucJob(s => s.error);
-  const revision = useNucJob(s => s.revision);
+  // Opened or closed scans change what is loaded (their rows, their calibration): summaries and status follow.
+  const scansKey = useHubData(s => s.scans.map(x => `${x.scanId}:${x.manifestDigest}`).join(','));
+  const revision = `${useNucJob(s => s.revision)}|${scansKey}`;
   const status = useDatasetStatus(datasetIds, revision, settings.parameters);
   const [summaries, setSummaries] = useState<Record<string, NucObservationSummary>>({});
   const [loading, setLoading] = useState(false);

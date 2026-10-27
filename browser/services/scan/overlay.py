@@ -25,6 +25,7 @@ import hashlib
 from typing import Dict, List
 
 STATE_BYTE = {'1': 1, '0': 2, '.': 3}
+NUC_GROUPS = frozenset({'nucsz', 'nucseg'})
 LAYER_META = {
     'fpcls': ('Footprint classes (scan)', '#7c3aed', 'tf'),
     'nfrvar': ('NFR variants (scan)', '#0f766e', 'msp'),
@@ -144,6 +145,15 @@ def prepare_scan_overlay(state, dataset_id: str, chrom: str, start: int, end: in
         return None
     ds = state.datasets.get(dataset_id)
     derived = getattr(ds, 'derived_layers', None) or {}
+    from services.nuc.inputs import real
+    # Each scan row's file: (scan dataset, input index) -> the loaded file holding it, so a row never joins an identical
+    # record of another file (a merged dataset of several scan datasets).
+    file_of: Dict[tuple, str] = {}
+    for scan, _sids, _groups in scans:
+        for sid, bid, _via, files in scan.bound_pairs():
+            if bid == dataset_id:
+                for i, path in files.items():
+                    file_of[(scan.scan_id, sid, int(i))] = real(path)
     marks: Dict[str, Dict[str, list]] = {}
     for scan, sids, groups in scans:
         by_table: Dict[tuple, list] = {}
@@ -158,6 +168,7 @@ def prepare_scan_overlay(state, dataset_id: str, chrom: str, start: int, end: in
                 group = wanted[0] if table == 'states' else r.get('group')
                 if group not in wanted:
                     continue
+                r = dict(r, _file=file_of.get((scan.scan_id, r.get('dataset_id'), int(r.get('input_index') or 0))))
                 marks.setdefault(r.get('qname', ''), {}).setdefault(group, []).append(r)
     # Per-molecule scalars (molecules.tsv: exact values) for Filter/Sort terms, cluster columns and Read Stats.
     scalar_rows: Dict[str, list] = {}
@@ -167,6 +178,7 @@ def prepare_scan_overlay(state, dataset_id: str, chrom: str, start: int, end: in
                 module = key[:-len('#molecules')]
                 for r in scan.tables.fetch(f'{module}/molecules.tsv.bgz', chrom, start, end):
                     if r.get('dataset_id') in sids:
+                        r = dict(r, _file=file_of.get((scan.scan_id, r.get('dataset_id'), int(r.get('input_index') or 0))))
                         scalar_rows.setdefault(r.get('qname', ''), []).append((module, r))
     if not marks and not scalar_rows:
         return None
@@ -190,15 +202,19 @@ def prepare_scan_overlay(state, dataset_id: str, chrom: str, start: int, end: in
             # The row's own record: by its identity when the row carries it, else by where its alignment is.
             sha, occ = read.get('record_sha256'), read.get('alignment_occurrence')
             own = f'{sha}:{occ}' if sha and occ is not None else None
+            own_file = real(read['library_id']) if read.get('library_id') else None
             r_start = read.get('reference_start', read.get('start'))
             r_end = read.get('reference_end', read.get('end'))
             for group, rows in mine.items():
-                if isinstance(layers.get(group), dict) and layers[group].get('nuc_live'):
+                if group in NUC_GROUPS and (read.get('nuc_live') or
+                                            (isinstance(layers.get(group), dict) and layers[group].get('nuc_live'))):
                     continue   # live nucleosome outputs (the dataset's last Compute) win over a scan's rows
                 ivs, srcs, names, q0 = [], [], [], []
                 for row in sorted(rows, key=lambda x: (int(x['start']), int(x['end']), x.get('hit_id', ''))):
                     a, b = int(row['start']), int(row['end'])
                     b = max(b, a + 1)   # a zero-width mark (an insertion boundary) is drawn as its base
+                    if own_file is not None and row.get('_file') and row['_file'] != own_file:
+                        continue   # another file's record (an identical record in another BAM)
                     if own is not None and row.get('record'):
                         if row['record'] != own:
                             continue   # another record (a supplementary, a copy) of this read name
@@ -236,17 +252,21 @@ def prepare_scan_overlay(state, dataset_id: str, chrom: str, start: int, end: in
 
 
 _NOT_SCALARS = {'chrom', 'start', 'end', 'idx_start', 'idx_end', 'dataset_id', 'input_index', 'qname', 'record',
-                'molecule', 'calls_digest_hi', 'calls_digest_lo'}
+                'molecule', 'calls_digest_hi', 'calls_digest_lo', '_file'}
 
 
 def _with_scalars(read: dict, rows) -> dict:
     """``read`` with its record's molecules-table scalars (values already on the row, live ones, win)."""
     from services.nuc.scalars import SCALARS_KEY, scalars_from_values
+    from services.nuc.inputs import real
     sha, occ = read.get('record_sha256'), read.get('alignment_occurrence')
     own = f'{sha}:{occ}' if sha and occ is not None else None
+    own_file = real(read['library_id']) if read.get('library_id') else None
     have = dict(read.get(SCALARS_KEY) or {})
     added = False
     for module, row in rows:
+        if own_file is not None and row.get('_file') and row['_file'] != own_file:
+            continue
         if own is not None and row.get('record') and row['record'] != own:
             continue
         values = {}

@@ -102,6 +102,8 @@ def resolve(state, obs: dict, policy: dict) -> Tuple[NucSource, List[Rec], List[
                     h[0], h[1] = min(h[0], a), max(h[1], b)
                 windows = [(c, a, b) for c, (a, b) in hulls.items()]
         recs = view_records(source, windows, policy)
+        if source.kind == 'lifted':
+            recs = _with_molecule_keys(state, source, recs)
     else:
         chrom, start, end = str(obs.get('chrom') or ''), int(obs.get('start') or 0), int(obs.get('end') or 0)
         if not chrom or end <= start:
@@ -121,6 +123,16 @@ def resolve(state, obs: dict, policy: dict) -> Tuple[NucSource, List[Rec], List[
         # A DAF strand panel shows the reads whose st:Z call is that strand (the server's strand filter).
         recs = [r for r in recs if r.strand == strand]
     return source, recs, windows
+
+
+def _with_molecule_keys(state, source: NucSource, recs: List[Rec]) -> List[Rec]:
+    """A live-lift dataset's records with the provenance-qualified molecule key its lifted rows carry (the source
+    file's provenance group and the QNAME), so record keys and row identities select them on a graph path too."""
+    from services.lift.joint import molecule_key
+    ds = state.datasets[source.browser_id]
+    groups = ds.live_lift.settings.molecule_group_map(list(ds.paths), ds.id)
+    by_real = {real(p): label for p, label in groups.items()}
+    return [r._replace(molecule=molecule_key(by_real.get(r.path) or ds.id, r.qname)) for r in recs]
 
 
 def source_windows(state, source: NucSource, chrom: str, start: int, end: int, hap: Optional[str] = None):

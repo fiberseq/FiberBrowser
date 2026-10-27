@@ -1461,8 +1461,9 @@ def project_broad_read_to_viewport(
         "sv",
         "aligned_blocks", "sv_segments", "sequence_span",
         "sv_alignments", "supplementary",
-        # The molecule's scalars (nucmol / nfrmol: services/nuc/scalars.py), the same in every view.
-        "_fiberbrowser_scalars",
+        # The molecule's scalars (nucmol / nfrmol: services/nuc/scalars.py), the same in every view, and the receipt
+        # that its nucleosome groups are live outputs.
+        "_fiberbrowser_scalars", "nuc_live",
     ):
         if identity_key in read:
             adjusted_read[identity_key] = read[identity_key]

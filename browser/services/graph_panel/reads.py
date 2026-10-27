@@ -103,7 +103,9 @@ def dataset_revision(dataset) -> str:
     """The dataset's files (path, size, mtime) and lift identity: a changed BAM or map is a new revision."""
     from services.background_work import file_identity
     from services.lift.reads import lift_identity
-    raw = repr((file_identity(getattr(dataset, "paths", None) or ()), lift_identity(dataset)))
+    from services.nuc.store import nuc_identity
+    # (Nucleosome outputs computed for its records change its composed rows: services/nuc.)
+    raw = repr((file_identity(getattr(dataset, "paths", None) or ()), lift_identity(dataset), *nuc_identity(dataset)))
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 

@@ -75,6 +75,18 @@ def record_outputs(read, input_index: int, ctx, params, cal) -> Tuple[Optional[R
     return out, mol, res, 'ok'
 
 
+def bam_chrom(references, chrom: str) -> Optional[str]:
+    """A contig name as a BAM's header spells it (chr1 / 1 aliases), or None when the BAM has no such contig."""
+    if chrom in references:
+        return chrom
+    from utils.chrom import normalize_chrom_name
+    want = normalize_chrom_name(chrom)
+    for name in references:
+        if normalize_chrom_name(name) == want:
+            return name
+    return None
+
+
 def _params_key(settings: dict) -> str:
     import json
     return json.dumps(settings.get('params') or {}, sort_keys=True)
@@ -112,10 +124,11 @@ def compute_regions(source: NucSource, regions: Sequence[Tuple[str, int, int]], 
         config = (cals[path].settings_hash, cals[path].digest)
         calibration = cals[path].calibration
         with pysam.AlignmentFile(path, 'rb') as bam:
-            refs = set(bam.references)
+            refs = list(bam.references)
             ctx = _decode_context(path, bam.header, params, pkey)
             for chrom, start, end in regions:
-                if chrom not in refs:
+                chrom = bam_chrom(refs, chrom)
+                if chrom is None:
                     continue
                 batch = []
                 for read, sha, occ in iter_records(bam, chrom, int(start), int(end), filters):
@@ -239,9 +252,12 @@ def view_records(source: NucSource, regions: Sequence[Tuple[str, int, int]], pol
     seen = set()
     for path in source.paths:
         with pysam.AlignmentFile(path, 'rb') as bam:
-            refs = set(bam.references)
+            refs = list(bam.references)
+            # windows in the BAM's own contig names (chr1 / 1 aliases)
+            wins_here = [(bam_chrom(refs, c), a, b) for c, a, b in windows]
             for chrom, start, end in _merge(regions):
-                if chrom not in refs:
+                chrom = bam_chrom(refs, chrom)
+                if chrom is None:
                     continue
                 for read, sha, occ in iter_records(bam, chrom, int(start), int(end), policy['filters']):
                     key = (path, sha, occ)
@@ -249,8 +265,8 @@ def view_records(source: NucSource, regions: Sequence[Tuple[str, int, int]], pol
                         continue
                     seen.add(key)
                     strand = record_strand_fields(read).get('strand')
-                    wins = tuple(mol_window(read, int(a), int(b)) if c == read.reference_name else (-1, -1)
-                                 for c, a, b in windows)
+                    wins = tuple(mol_window(read, int(a), int(b)) if c is not None and c == read.reference_name else (-1, -1)
+                                 for c, a, b in wins_here)
                     out.append(Rec(path, sha, occ, str(read.query_name), strand if strand in ('CT', 'GA') else None,
                                    bool(read.is_supplementary), wins))
     return out

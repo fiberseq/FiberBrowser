@@ -66,6 +66,14 @@ describe('nucleosome observation planner', () => {
     expect(obs[1]).toMatchObject({ datasetId: 'lifted', liftHap: 'MAT', kind: 'graph', chrom: 'chr3', start: 1000, end: 9000 });
   });
 
+  it('a pooled graph host leaves a haplotype to the member that owns it, as the graph draws its bands', () => {
+    const host = panel({ id: 'host', datasetId: 'lifted', stateKey: 'lifted', viewMode: 'graph',
+      graphView: { role: 'host', registrationId: 'reg', targetBinding: 'grch38',
+        members: [{ panelId: 'host', binding: null }, { panelId: 'mat', binding: 'mat' }] } } as never);
+    const mat = panel({ id: 'mat', datasetId: 'lifted', stateKey: 'lifted:MAT', liftHap: 'MAT', collapsed: true, graphMemberOf: 'host' } as never);
+    expect(nucObservations(state([host, mat])).map(o => o.obsId)).toEqual(['lifted:graph:PAT', 'lifted:MAT:graph:MAT']);
+  });
+
   it('the refresh key follows the whole read membership, not its size and first ids', () => {
     const a = nucObservations(state([panel({ id: 'nat' })], { filteredReadIds: { native: new Set(['r1', 'r2', 'r3', 'r4']) } }));
     const b = nucObservations(state([panel({ id: 'nat' })], { filteredReadIds: { native: new Set(['r1', 'r2', 'r3', 'r5']) } }));

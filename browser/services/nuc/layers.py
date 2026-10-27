@@ -53,6 +53,10 @@ def injector(bam_path, region_start: int, region_end: int, *, include_layers: bo
         layers = read_data.get('layers')
         if layers is None:
             layers = read_data['layers'] = {}
+        if groups:
+            # A receipt on the row: its nucleosome groups are the live outputs, an empty one included, so a scan's
+            # overlay never brings older marks back (services/scan/overlay.py).
+            read_data['nuc_live'] = True
         for g in groups:
             # Live outputs are the dataset's active configuration (the last Compute): they replace the record's own
             # group (an annotated BAM, possibly from other settings), and the scan overlay leaves them alone.

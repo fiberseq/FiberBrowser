@@ -187,3 +187,72 @@ def test_graph_rows_carry_classes_on_call_pieces_and_a_segment_lane():
     clipped = clip_to_windows(out, [[1350, 1450]])
     assert clipped['nseg']['iv'] == [[1090, 1900, 810], [1400, 1520, 120]] and 'tf' not in clipped
     assert marks_of(out) == 5
+
+
+def test_an_empty_live_group_still_keeps_scan_marks_out(two_bams, tmp_path):
+    """Codex A2-r1: a live configuration that gives a record no segment must not let a scan's older marks back."""
+    from fiberhmm.scan import run_units
+    from fiberhmm.scan.units import plan
+    from models.domain import Dataset
+    from services.compact_read_loader import build_compact_reads_from_bam
+    from services.scan.overlay import apply_scan_overlays
+    from services.scan.registry import open_scan
+    a, _b = two_bams
+    out = tmp_path / 'scan'
+    run_units([{'dataset_id': 'dataset_1', 'paths': [a]}], plan({CONTIG: LENGTH}, genome=True, contigs=[CONTIG]),
+              modules=['nuc'], params={'nuc': SETTINGS}, out=out, annotate=False, cores=2)
+    st = _state(Dataset('one', a, label='One'))
+    open_scan(st, out)
+    rows = build_compact_reads_from_bam(a, CONTIG, 40_000, 50_000, spanning_only=False, include_layers=True)
+    assert any('nucseg' in (r.get('layers') or {}) for r in apply_scan_overlays(st, 'one', CONTIG, 40_000, 50_000, rows))
+    # Live outputs with molecules too short to segment: no nucseg rows at all.
+    no_segments = {**SETTINGS, 'params': {'seg_min_molecule_bp': 1_000_000}}
+    assert _job(st, ['one'], 40_000, 50_000, params=no_segments)['status'] == 'complete'
+    rows = build_compact_reads_from_bam(a, CONTIG, 40_000, 50_000, spanning_only=False, include_layers=True)
+    live = [r for r in rows if r.get('nuc_live')]
+    assert live and not any('nucseg' in (r.get('layers') or {}) for r in live)
+    overlaid = apply_scan_overlays(st, 'one', CONTIG, 40_000, 50_000, rows)
+    assert not any('nucseg' in (r.get('layers') or {}) for r in overlaid if r.get('nuc_live'))
+
+
+def test_graph_records_carry_provenance_molecule_keys(two_bams):
+    from services.lift.joint import molecule_key
+    from services.nuc.live import Rec
+    from services.nuc.observations import _ReadIds, _with_molecule_keys
+    a, _b = two_bams
+
+    class Settings:
+        def molecule_group_map(self, paths, dataset_id):
+            return {p: f'{dataset_id}#{i}' for i, p in enumerate(paths)}
+    ds = NS(id='lifted', paths=[a], live_lift=NS(settings=Settings()))
+    st = NS(datasets={'lifted': ds})
+    source = NS(browser_id='lifted', paths=(str(Path(a).resolve()),))
+    recs = _with_molecule_keys(st, source, [Rec(str(Path(a).resolve()), 's1', 0, 'm1/7/ccs', None, False, ())])
+    assert recs[0].molecule == molecule_key('lifted#0', 'm1/7/ccs')
+    assert _ReadIds([f'lift-record:v1 ["{recs[0].molecule}","m1/7/ccs","s1:0"]']).match(recs[0])
+
+
+def test_contig_aliases_compute_and_resolve(two_bams):
+    from models.domain import Dataset
+    from services.nuc.observations import summarize
+    a, _b = two_bams
+    st = _state(Dataset('one', a, label='One'))
+    done = _job(st, ['one'], 40_000, 50_000, )
+    assert done['results']['one']['computed'] > 5
+    from services.nuc.store import STORE
+    STORE.clear()
+    from services.nuc import jobs
+    job = jobs.submit(st, dict(datasets=['one'], chrom='S', start=40_000, end=50_000, parameters=SETTINGS, workers=2))
+    alias = jobs.wait(st, job['job_id'], timeout=900)
+    assert alias['results']['one']['computed'] == done['results']['one']['computed']
+    obs = summarize(st, [dict(obsId='o', datasetId='one', chrom='S', start=40_000, end=50_000)])['observations'][0]
+    assert obs['computed'] > 5 and obs['segments']['bp'] > 0
+
+
+def test_scan_overlay_joins_rows_by_file(two_bams, tmp_path):
+    """Codex A2-r2: an identical record in two files of a merged dataset gets its own file's scalars and marks."""
+    from services.scan.overlay import _with_scalars
+    rows = [('nuc', {'record': 's:0', 'nrl': '190.0', '_file': '/x/a.bam'}),
+            ('nuc', {'record': 's:0', 'nrl': '220.0', '_file': '/x/b.bam'})]
+    read = {'id': 'q', 'record_sha256': 's', 'alignment_occurrence': 0, 'library_id': '/x/b.bam'}
+    assert _with_scalars(read, rows)['_fiberbrowser_scalars']['nuc.nrl'] == 220.0
