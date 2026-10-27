@@ -21,6 +21,12 @@ describe('gutterLines', () => {
     expect(gutterLines('Not a carrier 51', 60, measure, 3)).toEqual(['Not a', 'carrier 51']);
   });
 
+  it('wraps the reads line before its hidden count', () => {
+    expect(gutterLines('44 reads +9', 42, measure, 2)).toEqual(['44 reads', '+9']);
+    expect(gutterLines('44 reads +9', 42, measure, 1)).toEqual(['44 reads…']);
+    expect(gutterLines('7 reads', 42, measure, 2)).toEqual(['7 reads']);
+  });
+
   it('ends in "…" when the band has no room for every line', () => {
     expect(gutterLines('C0 2 · C1 3 · C2 4', 42, measure, 2)).toEqual(['C0 2', 'C1 3…']);
     expect(gutterLines('C0 2', 42, measure, 0)).toEqual([]);
