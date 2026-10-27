@@ -26,8 +26,8 @@ Defaults live under one work folder, $PGLIFT_WORK or ~/pglift_work:
   ref/GRCh38.fa                                the reference FASTA (with its .fai)
   ref/source.fa(.gz)                           optional: the samples' own assembly FASTA (indexed)
 
-The graph helper is taken from --graph-helper, else from the `fiberbrowser[graph]` companion package
-(or the macOS app). The server gets its own HOME (a new temporary folder unless --home is given), so
+The graph helper is taken from --graph-helper, else from $FIBERBROWSER_GRAPH_HELPER, else from a
+`fiberbrowser-graph` on your PATH, else from the `fiberbrowser[graph]` companion package (or the macOS app). The server gets its own HOME (a new temporary folder unless --home is given), so
 your ~/.fiberhmm settings, Library and sessions are never read or changed. It listens on localhost
 without an access token: a demo for this computer only. Ctrl+C stops it.
 """
@@ -35,6 +35,7 @@ import argparse
 import json
 import os
 import shlex
+import shutil
 import socket
 import signal
 import subprocess
@@ -67,7 +68,8 @@ def parse_args(argv=None):
     ap.add_argument("--no-graph", action="store_true",
                     help="no graph package: lifted datasets open as one panel per haplotype")
     ap.add_argument("--graph-helper", default=None, metavar="PATH",
-                    help="fiberbrowser-graph executable (default: the fiberbrowser[graph] companion package)")
+                    help="fiberbrowser-graph executable (default: $FIBERBROWSER_GRAPH_HELPER, else fiberbrowser-graph "
+                         "on PATH, else the fiberbrowser[graph] companion package)")
     ap.add_argument("--fasta", default=work("ref", "GRCh38.fa"), help="reference FASTA (with .fai)")
     ap.add_argument("--source-fasta", default=None, metavar="FILE",
                     help="the samples' own assembly FASTA (indexed; optional): assembly bases in the inspector, Identify on "
@@ -99,6 +101,22 @@ def full(path: str) -> str:
     return os.path.abspath(os.path.expanduser(path))
 
 
+def find_graph_helper(explicit=None, environ=None, which=shutil.which):
+    """The graph helper to hand the server, and where it came from: --graph-helper, else $FIBERBROWSER_GRAPH_HELPER,
+    else `fiberbrowser-graph` on PATH. (None, None) leaves the server to its own search (the companion package, the
+    macOS app). The server's environment keeps no inherited FIBERBROWSER_* variable, so the one found is passed on."""
+    if explicit:
+        return full(explicit), "--graph-helper"
+    env = os.environ if environ is None else environ
+    from_env = (env.get("FIBERBROWSER_GRAPH_HELPER") or "").strip()
+    if from_env:
+        return full(from_env), "FIBERBROWSER_GRAPH_HELPER"
+    on_path = which("fiberbrowser-graph", path=env.get("PATH"))
+    if on_path:
+        return full(on_path), "PATH"
+    return None, None
+
+
 def check_inputs(a) -> None:
     missing = []
     a.map = full(a.map)
@@ -110,10 +128,9 @@ def check_inputs(a) -> None:
     if not a.no_graph:
         a.graph_package = [full(p) for p in a.graph_package]
         missing += [f"graph package: {p}" for p in a.graph_package if not os.path.isdir(p)]
-        if a.graph_helper:
-            a.graph_helper = full(a.graph_helper)
-            if not os.access(a.graph_helper, os.X_OK):
-                missing.append(f"graph helper: {a.graph_helper}")
+        a.graph_helper, a.graph_helper_source = find_graph_helper(a.graph_helper)
+        if a.graph_helper and not os.access(a.graph_helper, os.X_OK):
+            missing.append(f"graph helper ({a.graph_helper_source}): {a.graph_helper}")
     a.fasta = full(a.fasta)
     if a.source_fasta:
         a.source_fasta = full(a.source_fasta)
@@ -208,8 +225,9 @@ def warm_graph(port: int) -> None:
     helper = status.get("helper") or {}
     if not helper.get("available"):
         print("Graph mode is unavailable: " + (helper.get("error") or "no graph helper was found") + ".\n"
-              "  Pass --graph-helper PATH (a fiberbrowser-graph executable), or install the companion package: "
-              'pip install "fiberbrowser[graph]".', flush=True)
+              "  Looked at --graph-helper, $FIBERBROWSER_GRAPH_HELPER, fiberbrowser-graph on PATH and the companion "
+              "package.\n  Pass --graph-helper PATH (a fiberbrowser-graph executable), set FIBERBROWSER_GRAPH_HELPER, "
+              'or install the companion package: pip install "fiberbrowser[graph]".', flush=True)
         return
     regs = status.get("registrations") or []
     print(f"Graph helper ready ({helper.get('producer') or helper.get('path')}); "
@@ -243,6 +261,8 @@ def _interrupt(*_):
 def main(argv=None):
     a = parse_args(argv)
     check_inputs(a)
+    if not a.no_graph and a.graph_helper:
+        print(f"Graph helper (from {a.graph_helper_source}): {a.graph_helper}", flush=True)
     a.home = full(a.home) if a.home else tempfile.mkdtemp(prefix="fiberbrowser-unified-")
     os.makedirs(a.home, exist_ok=True)
     if a.build and not a.frontend_dist:
