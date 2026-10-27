@@ -17,6 +17,14 @@ export interface ReadStateInfo {
 }
 
 /**
+ * A fit's molecule metric cohort (services/clustering_features.py `fitted_metric_cohort`): each metric's distinct
+ * fitted values with their counts (a sorted list in older correspondence models). Kept with the fit's patterns or
+ * centroids and sent back with them, so dynamic assignment ranks a view's reads against the reads the model was
+ * fitted on rather than against each other. Empty: the fit had no molecule metric column (or predates the cohort).
+ */
+export type ClusterMetricCohort = Record<string, { values: number[]; counts: number[] } | number[]>;
+
+/**
  * A run over panels at several loci: each panel's own matched peaks (state
  * key -> absolute peaks, as sent), valid while the clustering's peaks are
  * still that run's `regions`, with the view each was clustered at.
@@ -59,6 +67,8 @@ export interface SavedCluster {
   assignments: Record<string, Record<string, number>>;
   order: Record<string, number[]>;
   patterns: Record<number, number[]>;
+  /** The fit's molecule metric cohort, with its patterns (older saves: none). */
+  metricCohort?: ClusterMetricCohort;
   /** Each clustered panel's own result, so two panels of one dataset
    *  (independently clustered, or at their own locus) come back as they were. */
   panelResults?: Array<{
@@ -124,6 +134,8 @@ export interface ClusterTreeNode {
   // reassignment (kmeans, etc.). Empty for combinatorial branches (patterns).
   centroids?: Record<number, number[]>;
   peakWidths?: number[];
+  /** The fit's molecule metric cohort, with its patterns or centroids (older nodes: none). */
+  metricCohort?: ClusterMetricCohort;
   dynamicClustering: boolean;
 
   /** A graph run's record provenance, by the state key of each panel it labelled on this node: the run's

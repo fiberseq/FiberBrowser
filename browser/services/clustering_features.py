@@ -131,6 +131,170 @@ def _quality_gates_pass(rule: dict[str, Any], qualities: dict[str, float]) -> bo
     return True
 
 
+# Nucleosome size conditions of a labeling rule (frontend ColorRule nucCoarse / nucNamed / zMin / zMax / nucTf; the
+# Filter/Sort payload spells them nuc_coarse / nuc_named / z_min / z_max / nuc_tf). An item matches through its nucsz
+# mark (CONTRACTS §11.3 bytes: coarse, named, posterior, z), as the browser's utils/ruleMatching.ts nucMarkMatchesRule
+# reads it through utils/nucLayers.ts nucSizeMarkFor.
+NUC_RULE_FIELDS = (("nucCoarse", "nuc_coarse"), ("nucNamed", "nuc_named"), ("zMin", "z_min"), ("zMax", "z_max"),
+                   ("nucTf", "nuc_tf"))
+NUC_Z_MISSING = 255
+NUC_TF_BIT = 16
+# Items that carry a nucsz mark: primary footprints (None, the browser's 'footprint'), nucleosome and TF calls.
+NUC_MARK_ITEM_LAYERS = frozenset({None, "footprint", "nuc", "tf"})
+
+
+def _finite_number(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if np.isfinite(number) else None
+
+
+def _code_set(value: Any) -> frozenset | None:
+    if not isinstance(value, (list, tuple)):
+        return None
+    codes = frozenset(n for n in (_finite_number(v) for v in value) if n is not None)
+    return codes or None
+
+
+def nuc_rule_conditions(rule: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The rule's nucleosome conditions, or None when it sets none (empty lists and null bounds are no condition)."""
+    if not isinstance(rule, dict):
+        return None
+    tf = _camel_or_snake(rule, "nucTf", "nuc_tf", None)
+    conditions = {
+        "coarse": _code_set(_camel_or_snake(rule, "nucCoarse", "nuc_coarse", None)),
+        "named": _code_set(_camel_or_snake(rule, "nucNamed", "nuc_named", None)),
+        "z_min": _finite_number(_camel_or_snake(rule, "zMin", "z_min", None)),
+        "z_max": _finite_number(_camel_or_snake(rule, "zMax", "z_max", None)),
+        "tf": tf if isinstance(tf, bool) else None,
+    }
+    return conditions if any(value is not None for value in conditions.values()) else None
+
+
+def nuc_size_index(read: dict[str, Any]) -> tuple[list, list[dict[str, float]], float] | None:
+    """A read's nucsz marks sorted by span, ``(starts, marks, longest)``; None without the layer or its coarse bytes
+    (a mark without its bytes cannot answer a class condition)."""
+    layer = (read.get("layers") or {}).get("nucsz")
+    if not isinstance(layer, dict):
+        return None
+    intervals = layer.get("intervals")
+    qualities = layer.get("qualities")
+    if intervals is None or not len(intervals) or qualities is None or not len(qualities):
+        return None
+    coarse = qualities[0]
+    if coarse is None:
+        return None
+
+    def byte(track: int, index: int, default: float) -> float:
+        values = qualities[track] if track < len(qualities) else None
+        value = values[index] if values is not None and index < len(values) else None
+        return default if value is None else value
+
+    marks = []
+    for i, iv in enumerate(intervals):
+        if i >= len(coarse) or coarse[i] is None or len(iv) < 2:
+            continue
+        start, end = _finite_number(iv[0]), _finite_number(iv[1])
+        if start is None or end is None:
+            continue
+        mark = {"start": start, "end": end, "coarse": coarse[i], "named": byte(1, i, 0),
+                "posterior": byte(2, i, 0), "z": byte(3, i, NUC_Z_MISSING)}
+        # The footprint's molecular length (the interval's third value), kept through clipping.
+        length = _finite_number(iv[2]) if len(iv) > 2 else None
+        if length is not None:
+            mark["len"] = length
+        marks.append(mark)
+    if not marks:
+        return None
+    marks.sort(key=lambda mark: (mark["start"], mark["end"]))
+    return [mark["start"] for mark in marks], marks, max(mark["end"] - mark["start"] for mark in marks)
+
+
+def _same_mark_bytes(a: dict[str, float], b: dict[str, float]) -> bool:
+    return all(a[key] == b[key] for key in ("coarse", "named", "posterior", "z"))
+
+
+def nuc_size_mark_for(index, start: float, end: float, length: float | None = None) -> dict[str, float] | None:
+    """The mark of an item spanning [start, end) whose molecular length is ``length`` (the item interval's third
+    value): the mark with the identical span, else a mark containing the item's midpoint. Among overlapping marks one
+    of the item's own length wins, else the one overlapping the item most (ties: the shorter mark). A mark of another
+    known length is never the item's (a filter may have removed the item's own mark: no mark, not a neighbour's);
+    marks or items without a length match by span. A tie that stays ambiguous (marks with different bytes) gives no
+    mark rather than another footprint's."""
+    if not index:
+        return None
+    starts, marks, longest = index
+    has_length = length is not None and np.isfinite(length)
+
+    def of_length(pool):
+        if not has_length:
+            return pool
+        same = [mark for mark in pool if mark.get("len") == length]
+        return same or [mark for mark in pool if mark.get("len") is None]
+
+    exact = []
+    k = bisect_left(starts, start)
+    while k < len(marks) and marks[k]["start"] == start:
+        if marks[k]["end"] == end:
+            exact.append(marks[k])
+        k += 1
+    pool = of_length(exact)
+    if pool:
+        return pool[0] if all(_same_mark_bytes(mark, pool[0]) for mark in pool) else None
+    mid = (start + end) / 2
+    covering = []
+    k = bisect_right(starts, mid) - 1
+    while k >= 0 and marks[k]["start"] + longest > mid:
+        if marks[k]["end"] > mid:
+            covering.append(marks[k])
+        k -= 1
+    best = None
+    best_overlap = -np.inf
+    ambiguous = False
+    for mark in of_length(covering):
+        overlap = min(end, mark["end"]) - max(start, mark["start"])
+        span = mark["end"] - mark["start"]
+        if best is None or overlap > best_overlap or (overlap == best_overlap and span < best["end"] - best["start"]):
+            best, best_overlap, ambiguous = mark, overlap, False
+        elif overlap == best_overlap and span == best["end"] - best["start"] and not _same_mark_bytes(mark, best):
+            ambiguous = True
+    return None if ambiguous else best
+
+
+def nuc_mark_matches(conditions: dict[str, Any], mark: dict[str, float] | None) -> bool:
+    """Every set nucleosome condition against an item's mark; no mark never matches."""
+    if mark is None:
+        return False
+    coarse = int(mark["coarse"])
+    if conditions["coarse"] is not None and (coarse & 15) not in conditions["coarse"]:
+        return False
+    if conditions["named"] is not None and mark["named"] not in conditions["named"]:
+        return False
+    z_min, z_max = conditions["z_min"], conditions["z_max"]
+    if z_min is not None or z_max is not None:
+        if mark["z"] >= NUC_Z_MISSING:
+            return False
+        z = (mark["z"] - 128) / 20
+        if (z_min is not None and z < z_min) or (z_max is not None and z > z_max):
+            return False
+    if conditions["tf"] is not None and bool(coarse & NUC_TF_BIT) != conditions["tf"]:
+        return False
+    return True
+
+
+def nuc_item_matches(conditions: dict[str, Any] | None, index, layer_name: str | None,
+                     start: float, end: float, length: float | None = None) -> bool:
+    """An item of ``layer_name`` (None: primary footprints) against a rule's nucleosome conditions (None: none)."""
+    if conditions is None:
+        return True
+    mark = nuc_size_mark_for(index, start, end, length) if layer_name in NUC_MARK_ITEM_LAYERS else None
+    return nuc_mark_matches(conditions, mark)
+
+
 def _conditions_pass(
     rule: dict[str, Any],
     midpoint_abs: float,
@@ -226,13 +390,21 @@ def _term_to_rule(term: dict[str, Any], base_rule: dict[str, Any]) -> dict[str, 
         target_layers = _camel_or_snake(base_rule, "targetLayers", "target_layers", []) or []
     else:
         target_layers = [layer for layer in _layers_for_term(term, base_rule) if layer is not None]
-    return {
+    normalized = {
         "sizeMin": size_min,
         "sizeMax": size_max,
         "targetLayers": target_layers,
         "qualityGates": quality_gates,
         "conditions": base_rule.get("conditions") or term.get("conditions") or [],
     }
+    # A labeling rule's nucleosome conditions (only when set, so other rules normalize as before).
+    for camel, snake in NUC_RULE_FIELDS:
+        value = _camel_or_snake(base_rule, camel, snake, None)
+        if value is None:
+            value = _camel_or_snake(term, camel, snake, None)
+        if value is not None:
+            normalized[camel] = value
+    return normalized
 
 
 def _merge_binary_intervals(intervals: list[tuple[int, int, float]]) -> list[tuple[int, int, float]]:
@@ -270,6 +442,10 @@ def _cluster_feature_rule_intervals(
             # Pol II state terms are evaluated by the sort/filter routes, where
             # transcript IDs and strand-aware state definitions are available.
             continue
+        if term.get("source") in ("molecule_metric", "feature_hub"):
+            # Not positional: a molecule metric is a column of its own (extract_features_from_compact); hub states
+            # drive Filter/Sort and Combinatorial grouping, not interval features.
+            continue
         if term.get('source') == 'footprint_class' or (
                 term.get('source') == 'footprint_group' and (term.get('group') or {}).get('consensusStateId')):
             if (rule_context or {}).get('_separate_class_columns'):
@@ -287,6 +463,8 @@ def _cluster_feature_rule_intervals(
             continue
         normalized_rule = _term_to_rule(term, base_rule)
         size_min, size_max = _size_bounds(term, base_rule)
+        nuc_conditions = nuc_rule_conditions(normalized_rule)
+        nuc_index = nuc_size_index(read) if nuc_conditions is not None else None
         for layer_name in _layers_for_term(term, base_rule):
             for iv_start, iv_end, size, actual_layer, qualities in _iter_layer_interval_entries(read, layer_name):
                 if size <= 0 or size < size_min:
@@ -296,6 +474,9 @@ def _cluster_feature_rule_intervals(
                 if not _rule_targets_layer(normalized_rule, actual_layer):
                     continue
                 if not _quality_gates_pass(normalized_rule, qualities):
+                    continue
+                # Nucleosome conditions read the item's own nucsz mark; an item without one fails them.
+                if not nuc_item_matches(nuc_conditions, nuc_index, actual_layer, iv_start, iv_end, size):
                     continue
                 midpoint_abs = region_start + (iv_start + iv_end) / 2
                 if not _conditions_pass(
@@ -404,10 +585,50 @@ def _weighted_intervals_for_mode(
             if iv[2] >= subnucleosomal_threshold
         ]
 
+    if mode.startswith(NUC_MODE_PREFIXES):
+        return _nuc_mode_intervals(layers, mode)
+
     layer = layers.get(mode)
     if layer and layer.get("intervals"):
         return [(iv[0], iv[1], 1.0) for iv in layer["intervals"]]
     return []
+
+
+# Nucleosome modes (NUC §7.1 Cluster): a coarse size class of the nucsz marks, a segment state or an event of nucseg.
+NUC_MODE_PREFIXES = ("nuc.size.", "nuc.seg.", "nuc.event.")
+NUC_SIZE_CODES = {"cant_tell": 0, "short": 1, "mono": 2, "long": 3, "multi2": 4, "multi3": 5, "edge_truncated": 6}
+NUC_SEG_CODES = {"regular": 1, "disordered": 2, "low_information": 3, "undetermined": 4}
+NUC_EVENT_CODES = {"undersized": 16, "missing": 17}
+
+
+def _nuc_mode_intervals(layers: dict, mode: str) -> list[tuple[int, int, float]]:
+    """The intervals of a nucleosome mode: nucsz marks of one coarse class ('tf': TF calls or footprints overlapping
+    one), nucseg segments of one state, or nucseg events of one kind (first byte of each mark)."""
+    group = "nucsz" if mode.startswith("nuc.size.") else "nucseg"
+    layer = layers.get(group) or {}
+    ivs = layer.get("intervals") or []
+    codes = (layer.get("qualities") or [None])[0]
+    if not ivs or codes is None:
+        return []
+    name = mode.split(".", 2)[2]
+    if mode.startswith("nuc.size."):
+        if name == "tf":
+            keep = lambda q: bool(int(q) & 16)
+        elif name in NUC_SIZE_CODES:
+            code = NUC_SIZE_CODES[name]
+            keep = lambda q: (int(q) & 15) == code
+        else:
+            return []
+    else:
+        code = (NUC_SEG_CODES if mode.startswith("nuc.seg.") else NUC_EVENT_CODES).get(name)
+        if code is None:
+            return []
+        keep = lambda q: int(q) == code
+    return [(iv[0], iv[1], 1.0) for iv, q in zip(ivs, codes) if keep(q)]
+
+
+def _molecule_metric_terms(terms) -> list:
+    return [t for t in terms or () if t.get("source") == "molecule_metric" and t.get("moleculeMetric")]
 
 
 def class_aware_pattern_slices(peak_widths, peak_modes, rules):
@@ -421,6 +642,8 @@ def class_aware_pattern_slices(peak_widths, peak_modes, rules):
         terms = rule.get('terms', []) if rule.get('enabled') is not False else []
         count = sum(t.get('source') == 'footprint_class' or
                     (t.get('source') == 'footprint_group' and bool((t.get('group') or {}).get('consensusStateId'))) for t in terms)
+        # Molecule metric columns are binary-like too: a percentile rank, split at the median (0.5).
+        count += len(_molecule_metric_terms(terms))
         spatial = width - count
         if spatial > 0 or not count:
             output.append((i, offset, max(0, spatial), False))
@@ -440,12 +663,17 @@ def extract_features_from_compact(
     cluster_feature_rules=None,
     cluster_rule_context=None,
     peak_positions=None,
+    metric_cohort=None,
 ):
     """Extract clustering features directly from compact reads.
 
     The return shape and mode semantics match the legacy
     `server.extract_features_from_compact` API:
     `(features, read_ids, peak_widths, peak_modes_used)`.
+
+    `metric_cohort` (:func:`molecule_metric_cohort`, or a fit's :func:`fitted_metric_cohort`): the known values
+    each molecule metric column ranks against, when these reads are a part (a window, a view) of a larger or an
+    earlier cohort; by default the reads given.
     """
     if not compact_reads or not peak_regions:
         return np.array([]), [], [], []
@@ -456,6 +684,7 @@ def extract_features_from_compact(
 
     peak_col_info = []
     class_columns = []
+    metric_columns = []
     class_widths = []
     cluster_rule_context = {**(cluster_rule_context or {}), '_separate_class_columns': True}
     total_cols = 0
@@ -472,14 +701,18 @@ def extract_features_from_compact(
         terms = rule.get('terms', []) if rule.get('enabled') is not False else []
         class_terms = [t for t in terms if t.get('source') == 'footprint_class' or
                        (t.get('source') == 'footprint_group' and (t.get('group') or {}).get('consensusStateId'))]
-        if class_terms and len(class_terms) == len(terms):
+        metric_terms = _molecule_metric_terms(terms)
+        if (class_terms or metric_terms) and len(class_terms) + len(metric_terms) == len(terms):
             positions = []
         peak_col_info.append((total_cols, positions, mode))
         total_cols += len(positions)
         for term in class_terms:
             class_columns.append((total_cols, term, left, right))
             total_cols += 1
-        class_widths.append(len(class_terms))
+        for term in metric_terms:
+            metric_columns.append((total_cols, term))
+            total_cols += 1
+        class_widths.append(len(class_terms) + len(metric_terms))
 
     if total_cols == 0:
         return np.array([]), [], [], [info[2] for info in peak_col_info]
@@ -558,9 +791,130 @@ def extract_features_from_compact(
                 if start <= rel_pos < end:
                     features[read_idx, start_col_idx + pos_offset] = value
 
+    if metric_columns:
+        _fill_metric_columns(features, compact_reads, metric_columns, metric_cohort)
+
     peak_widths = [len(info[1]) + class_widths[i] for i, info in enumerate(peak_col_info)]
     peak_modes_used = [info[2] for info in peak_col_info]
     return features, read_ids, peak_widths, peak_modes_used
+
+
+def molecule_metric_ids(peak_modes, cluster_feature_rules) -> list[str]:
+    """The molecule metrics the cluster columns of these modes read (enabled cluster rules' molecule_metric terms)."""
+    lookup = _feature_rule_map(cluster_feature_rules)
+    ids: list[str] = []
+    for mode in peak_modes or ():
+        if not str(mode).startswith(CLUSTER_RULE_MODE_PREFIX):
+            continue
+        rule = lookup.get(str(mode)[len(CLUSTER_RULE_MODE_PREFIX):], {})
+        if rule.get("enabled") is False:
+            continue
+        for term in _molecule_metric_terms(rule.get("terms")):
+            if term["moleculeMetric"] not in ids:
+                ids.append(term["moleculeMetric"])
+    return ids
+
+
+def molecule_metric_values(compact_reads, metric_id) -> list:
+    """Each read's scalar (None: missing)."""
+    from services.nuc.scalars import metric_value
+    return [metric_value(read, metric_id) for read in compact_reads]
+
+
+def molecule_metric_cohort(compact_reads, metric_ids) -> dict[str, list[float]]:
+    """Each metric's known values over a whole cohort, sorted: what every block or window of it ranks against."""
+    return {metric_id: sorted(v for v in molecule_metric_values(compact_reads, metric_id) if v is not None)
+            for metric_id in metric_ids}
+
+
+def metric_cohort_counts(known) -> dict[str, list]:
+    """A cohort's known values as distinct sorted ``values`` with their ``counts``: every multiplicity kept, so
+    :func:`metric_percentile_ranks` gives exactly the full cohort's ranks, in the space of its distinct values."""
+    values: list[float] = []
+    counts: list[int] = []
+    for v in sorted(float(x) for x in known if x is not None):
+        if values and values[-1] == v:
+            counts[-1] += 1
+        else:
+            values.append(v)
+            counts.append(1)
+    return {"values": values, "counts": counts}
+
+
+def fitted_metric_cohort(compact_reads, peak_modes, cluster_feature_rules) -> dict:
+    """The cohort each molecule metric column of a fit ranked against (the fitted reads), exact
+    (:func:`metric_cohort_counts`), to keep with the fitted model (patterns, centroids) so assigning reads later
+    ranks them the same way; {} when the fit has no metric column."""
+    ids = molecule_metric_ids(peak_modes, cluster_feature_rules)
+    if not ids:
+        return {}
+    return {metric_id: metric_cohort_counts(known) for metric_id, known in molecule_metric_cohort(compact_reads, ids).items()}
+
+
+def metric_percentile_ranks(values, known=None) -> np.ndarray:
+    """Molecule metric column values (NUC §7.1 Cluster): each value's percentile rank among the known values
+    (mid-rank, 0..1, so a median split is 0.5, as combinatorial grouping reads class bits); a missing value, or a
+    cohort of fewer than two known values, gives the median (0.5). ``known``: the sorted known values, or their
+    distinct values with counts (:func:`metric_cohort_counts`); by default ``values``' own."""
+    if isinstance(known, dict):
+        distinct = [float(v) for v in known.get("values") or ()]
+        counts = [int(c) for c in known.get("counts") or ()]
+        if len(counts) != len(distinct):
+            raise ValueError("A metric cohort needs one count per value")
+        below = [0]   # below[k]: known values smaller than distinct[k]
+        for c in counts:
+            below.append(below[-1] + c)
+        n = below[-1]
+        ranks = np.full(len(values), 0.5, dtype=np.float32)
+        if n < 2:
+            return ranks
+        for i, v in enumerate(values):
+            if v is None:
+                continue
+            k = bisect_left(distinct, v)
+            lo = below[k]
+            hi = lo + (counts[k] if k < len(distinct) and distinct[k] == v else 0)
+            ranks[i] = ((lo + hi) / 2) / n
+        return ranks
+    if known is None:
+        known = sorted(v for v in values if v is not None)
+    n = len(known)
+    ranks = np.full(len(values), 0.5, dtype=np.float32)
+    if n < 2:
+        return ranks
+    for i, v in enumerate(values):
+        if v is None:
+            continue
+        lo, hi = bisect_left(known, v), bisect_right(known, v)
+        ranks[i] = ((lo + hi) / 2) / n
+    return ranks
+
+
+def molecule_metric_slots(peak_widths, peak_modes, cluster_feature_rules) -> dict[int, str]:
+    """Feature column -> molecule metric, for the metric columns of an extraction (the last columns of each rule
+    peak's block, in term order, as :func:`extract_features_from_compact` lays them out)."""
+    lookup = _feature_rule_map(cluster_feature_rules)
+    slots: dict[int, str] = {}
+    offset = 0
+    for i, width in enumerate(peak_widths):
+        mode = str(peak_modes[i]) if i < len(peak_modes) else ""
+        rule = lookup.get(mode[len(CLUSTER_RULE_MODE_PREFIX):], {}) if mode.startswith(CLUSTER_RULE_MODE_PREFIX) else {}
+        terms = rule.get("terms", []) if rule.get("enabled") is not False else []
+        metric_terms = _molecule_metric_terms(terms)
+        first = offset + width - len(metric_terms)
+        for j, term in enumerate(metric_terms):
+            slots[first + j] = term["moleculeMetric"]
+        offset += width
+    return slots
+
+
+def _fill_metric_columns(features, compact_reads, metric_columns, metric_cohort=None) -> None:
+    """Molecule metric columns: percentile ranks (:func:`metric_percentile_ranks`) against the cohort's known values
+    (``metric_cohort``; by default these reads')."""
+    for col, term in metric_columns:
+        metric_id = term.get("moleculeMetric")
+        known = (metric_cohort or {}).get(metric_id)
+        features[:, col] = metric_percentile_ranks(molecule_metric_values(compact_reads, metric_id), known)
 
 
 def extract_features_grouped(compact_reads, peak_regions, region_start, groups=None, **kwargs):
@@ -573,6 +927,11 @@ def extract_features_grouped(compact_reads, peak_regions, region_start, groups=N
     """
     if not groups:
         return extract_features_from_compact(compact_reads, peak_regions, region_start, **kwargs)
+    # Molecule metric columns rank against the whole cohort, not each window's reads.
+    if kwargs.get("metric_cohort") is None:
+        metric_ids = molecule_metric_ids(kwargs.get("peak_modes"), kwargs.get("cluster_feature_rules"))
+        if metric_ids:
+            kwargs = {**kwargs, "metric_cohort": molecule_metric_cohort(compact_reads, metric_ids)}
     by_group = {}
     for read in compact_reads:
         by_group.setdefault(read.get("_cluster_group"), []).append(read)

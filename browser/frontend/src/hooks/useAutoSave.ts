@@ -33,6 +33,7 @@ export const AUTO_SAVE_WATCHED_KEYS = [
   'clusterPatterns',
   'clusterCentroids',
   'clusterPeakWidths',
+  'clusterMetricCohort',
   'clusterPeakRegions',
   'clusterWindowPeaks', 'clusterMatchedRun',
   'clusterTreeNodes',

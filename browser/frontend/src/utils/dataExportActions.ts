@@ -416,6 +416,84 @@ export async function downloadWorkingSetTsv(state: BrowserState): Promise<string
   return `Saved ${reads.toLocaleString()} read${reads === 1 ? '' : 's'}${blocks.length > 1 ? ` from ${blocks.length} regions` : ''}`;
 }
 
+// --- Nucleosome footprints -------------------------------------------------------
+
+export const NUC_FOOTPRINT_COLUMNS = [
+  'dataset_id', 'read_id', 'reference', 'chrom', 'start', 'end', 'molecular_length',
+  'coarse_class', 'named_class', 'posterior', 'z', 'tf',
+] as const;
+
+/** nucsz byte 1 (low 4 bits) and byte 2 codes, named as the nuc.size.* cluster modes are. */
+const NUC_COARSE_NAMES = ['cant_tell', 'short', 'mono', 'long', 'multi2', 'multi3', 'edge_truncated'];
+const NUC_NAMED_NAMES = ['', 'small', 'hexasome', 'octasome', 'chromatosome'];
+
+/**
+ * One row per `nucsz` mark (one per nucleosome or TF footprint) of the blocks' reads. The bytes are read by
+ * position (coarse, named, posterior, z; older scans name them q0..q3): posterior = byte / 255, z = (byte - 128) / 20
+ * with 255 missing, TF = bit 16 of the coarse byte.
+ */
+export function formatNucFootprintsTsv(blocks: WorkingSetBlock[]): { tsv: string; rows: number; reads: number } {
+  const rows: unknown[][] = [[...NUC_FOOTPRINT_COLUMNS]];
+  let reads = 0;
+  for (const block of blocks) {
+    for (const [datasetId, dataset] of Object.entries(block.datasets)) {
+      for (const read of dataset.reads ?? []) {
+        const layer = read.layers?.nucsz;
+        if (!layer?.intervals?.length) continue;
+        reads += 1;
+        const byte = (k: number, i: number): number | undefined => {
+          const v = layer.qualities?.[k]?.[i];
+          return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+        };
+        layer.intervals.forEach(([start, end, size], i) => {
+          const coarse = byte(0, i) ?? 0;
+          const named = byte(1, i) ?? 0;
+          const posterior = byte(2, i);
+          const z = byte(3, i);
+          rows.push([
+            datasetId, qnameOfId(read.id), block.reference ?? '', block.chrom,
+            block.regionStart + start, block.regionStart + end,
+            Number.isFinite(size) && size > 0 ? size : end - start,
+            NUC_COARSE_NAMES[coarse & 15] ?? `code_${coarse & 15}`,
+            NUC_NAMED_NAMES[named] ?? `code_${named}`,
+            posterior == null ? '' : Number((posterior / 255).toFixed(4)),
+            z == null || z === 255 ? '' : (z - 128) / 20,
+            coarse & 16 ? 1 : 0,
+          ]);
+        });
+      }
+    }
+  }
+  return { tsv: formatTsv(rows), rows: rows.length - 1, reads };
+}
+
+/** Datasets with a nucleosome size layer (a scan's annotated BAM, or a live nucleosome run). */
+export function nucFootprintDatasetIds(state: Pick<BrowserState, 'datasets'>): Set<string> {
+  return new Set(state.datasets.filter(d => (d.available_layers as Record<string, unknown> | undefined)?.nucsz).map(d => d.id));
+}
+
+/**
+ * The nucleosome footprints of the target panels' reads (the selected panels', else every panel on screen), one
+ * request per view as the working-set export makes them.
+ */
+export async function downloadNucFootprintsTsv(state: BrowserState): Promise<string> {
+  const withLayer = nucFootprintDatasetIds(state);
+  const views = shownPanelViews(state);
+  const blocks: WorkingSetBlock[] = [];
+  for (const view of views) {
+    const datasetIds = [...new Set(view.panelIds
+      .map(id => state.panels.find(p => p.id === id)?.datasetId)
+      .filter((id): id is string => !!id && withLayer.has(id)))];
+    if (datasetIds.length === 0) continue;
+    const response = await getCompactReadsAll<{ datasets: Record<string, { reads?: Array<any> }> }>(workingSetParams(state, view, datasetIds));
+    blocks.push({ datasets: response.datasets ?? {}, chrom: view.chrom, regionStart: view.start, reference: view.genomeKey });
+  }
+  if (blocks.length === 0) throw new Error('No panel on screen shows a dataset with nucleosome size classes');
+  const table = formatNucFootprintsTsv(blocks);
+  downloadTextFile(table.tsv, `nucleosome_footprints_${placesFileStem(views, state)}_${exportTimestamp()}.tsv`, TSV);
+  return `Saved ${table.rows.toLocaleString()} footprint${table.rows === 1 ? '' : 's'} from ${table.reads.toLocaleString()} read${table.reads === 1 ? '' : 's'}`;
+}
+
 // --- Reads --------------------------------------------------------------------
 
 /** One read name per line (each once), as samtools view -N and most tools take them. */
@@ -442,7 +520,9 @@ export async function copyReadNames(groups: ReadScopeGroup[]): Promise<number> {
 export const READ_TABLE_COLUMNS = [
   'read_id', 'dataset_id', 'reference', 'chrom', 'cluster', 'aligned_span', 'read_length', 'ref_start', 'ref_end', 'ref_contig', 'strand', 'mapq',
   'footprint_count', 'nucleosome_count', 'subnuc_count', 'avg_footprint_size', 'median_footprint_size',
-  'accessibility_pct', 'methyl_count', 'methyl_pct', 'viewer_order',
+  'accessibility_pct', 'methyl_count', 'methyl_pct',
+  'nrl', 'regularity', 'gap_cv', 'lambda_acc', 'n_short', 'n_mono', 'n_multi', 'n_cant_tell', 'reg_fraction',
+  'disordered_fraction', 'undetermined_fraction', 'n_missing', 'viewer_order',
 ] as const;
 
 /**

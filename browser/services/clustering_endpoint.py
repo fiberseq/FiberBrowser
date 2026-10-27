@@ -1607,6 +1607,12 @@ def run_cluster_all_endpoint(
             response["cluster_centroids"] = centroids
             response["cluster_peak_widths"] = centroid_peak_widths
             response["peak_regions"] = _peak_region_payload()
+    if "cluster_patterns" in response or "cluster_centroids" in response:
+        # The fit's molecule metric cohort goes with its patterns or centroids, so dynamic assignment ranks a view's
+        # reads against the reads the model was fitted on (Codex C2-1), not against the view's own.
+        metric_cohort = _fitted_metric_cohort(columnar, all_compact, peak_modes, req.cluster_feature_rules)
+        if metric_cohort:
+            response["cluster_metric_cohort"] = metric_cohort
 
     from services.background_work import checkpoint
     checkpoint()  # A cancelled fit must not replace the workspace's clustering.
@@ -1631,6 +1637,20 @@ def run_cluster_all_endpoint(
     return timings.attach(with_performance_sampling(response))
 
 
+def _fitted_metric_cohort(columnar, compact_reads, peak_modes, cluster_feature_rules) -> dict:
+    """The exact molecule metric cohort of an ordinary fit (clustering_features ``fitted_metric_cohort``): the fitted
+    compact reads, or the columnar engine's metric values (it keeps every fitted read's value per metric bit)."""
+    from services.clustering_features import fitted_metric_cohort, metric_cohort_counts, molecule_metric_ids
+    if columnar is None:
+        return fitted_metric_cohort(compact_reads, peak_modes, cluster_feature_rules)
+    if not molecule_metric_ids(peak_modes, cluster_feature_rules):
+        return {}
+    out: dict = {}
+    for metric_id, values in (getattr(columnar, "metric_bits", None) or {}).values():
+        out.setdefault(metric_id, metric_cohort_counts(values))
+    return out
+
+
 def run_assign_to_clusters_endpoint(
     *,
     state,
@@ -1650,6 +1670,9 @@ def run_assign_to_clusters_endpoint(
     use_centroids = bool(getattr(req, "cluster_centroids", None))
     if not peaks or (not req.cluster_patterns and not use_centroids):
         return {"results": {}}
+    # The fit's molecule metric cohort (sent back with its patterns or centroids); absent for older models, whose
+    # metric columns rank each view's reads against themselves as before.
+    metric_cohort = getattr(req, "cluster_metric_cohort", None) or None
 
     query = AnalysisReadQuery.from_request(
         state,
@@ -1701,6 +1724,7 @@ def run_assign_to_clusters_endpoint(
                 overlap_mode=getattr(req, "overlap_mode", "aggressive"),
                 cluster_feature_rules=req.cluster_feature_rules,
                 cluster_rule_context=cluster_rule_context,
+                metric_cohort=metric_cohort,
             )
         else:
             results[result_key] = assign_reads_to_cluster_patterns(
@@ -1714,6 +1738,7 @@ def run_assign_to_clusters_endpoint(
                 overlap_mode=getattr(req, "overlap_mode", "aggressive"),
                 cluster_feature_rules=req.cluster_feature_rules,
                 cluster_rule_context=cluster_rule_context,
+                metric_cohort=metric_cohort,
             )
 
         assignments = results[result_key]["assignments"]

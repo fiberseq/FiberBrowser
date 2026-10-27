@@ -16,7 +16,7 @@ import { useTrackFeedStore } from './trackFeedStore';
 import { useGraphReadsStore } from '../features/graphPanel/graphReadsStore';
 import { isMoleculeRecordKey, recordKey } from '../utils/recordKeys';
 import { inGenomeLinkGroup } from '../utils/panelNavigation';
-import type { AnalysisFilterRule, AnalysisFilterRuleSet, AnalysisSortRule, AnalysisSortRuleSet, ClusterFeatureRule, ClusterFeatureRuleSet, ClusterTreeNode, FirePeak, Gene, PeakMode, SelectedFootprint, FootprintGroup, TranscriptionStateFilters, ReadStateInfo, SortMode, FilterMode, ModificationType, SavedCluster, PanelConfig, ClusterWindowPeaks } from '../types';
+import type { AnalysisFilterRule, AnalysisFilterRuleSet, AnalysisSortRule, AnalysisSortRuleSet, ClusterFeatureRule, ClusterFeatureRuleSet, ClusterTreeNode, FirePeak, Gene, PeakMode, SelectedFootprint, FootprintGroup, TranscriptionStateFilters, ReadStateInfo, SortMode, FilterMode, ModificationType, SavedCluster, PanelConfig, ClusterWindowPeaks, ClusterMetricCohort } from '../types';
 import { CLUSTER_RULE_MODE_PREFIX } from '../types';
 import type { ReadProjectionIndex } from '../utils/projectionExport';
 import { fetchApiResponse } from '../api/sharedFetch';
@@ -406,6 +406,7 @@ function buildClusterTreeNodeFromState(
     patterns: { ...state.clusterPatterns },
     centroids: { ...state.clusterCentroids },
     peakWidths: [...state.clusterPeakWidths],
+    metricCohort: { ...state.clusterMetricCohort },
     dynamicClustering: state.dynamicClustering,
     assignments: cloneAssignments(state.clusterAssignments),
     order: normalizeClusterOrderRecord(state.clusterAssignments, state.clusterOrder),
@@ -488,6 +489,9 @@ export interface ClusterSlice {
   clusterPatterns: Record<number, number[]>;  // clusterId -> binary pattern (for combinatorial clustering)
   clusterCentroids: Record<number, number[]>;  // clusterId -> feature centroid (non-combinatorial dynamic reassignment)
   clusterPeakWidths: number[];  // per-peak feature-column widths (for centroid masking)
+  /** The fit's molecule metric cohort, kept with its patterns or centroids: dynamic assignment ranks a view's reads
+   * against it (Codex C2-1). Set by setClusterPatterns / setClusterCentroids with a non-empty model. */
+  clusterMetricCohort: ClusterMetricCohort;
   clusterPeakRegions: Array<{ start: number; end: number; mode?: string; chrom?: string; genome?: string }>;  // Peak regions used for clustering (chrom/genome: a panel at another locus or on another assembly)
   dynamicClustering: boolean;  // Whether to dynamically re-cluster as viewport changes
   /** Merge similar clusters: clusters under this share of reads are merged away first, */
@@ -597,8 +601,9 @@ export interface ClusterSlice {
   toggleClusterSelection: (datasetId: string, clusterId: number) => void;
   clearClusterSelection: (datasetId?: string) => void;
   mergeSelectedClusters: (datasetIds?: string[]) => number;
-  setClusterPatterns: (patterns: Record<number, number[]>) => void;
-  setClusterCentroids: (centroids: Record<number, number[]>, peakWidths: number[]) => void;
+  /** A non-empty model replaces the metric cohort with `metricCohort` (none: {}); an empty one leaves it. */
+  setClusterPatterns: (patterns: Record<number, number[]>, metricCohort?: ClusterMetricCohort) => void;
+  setClusterCentroids: (centroids: Record<number, number[]>, peakWidths: number[], metricCohort?: ClusterMetricCohort) => void;
   setClusterPeakRegions: (regions: Array<{ start: number; end: number; mode?: string; chrom?: string; genome?: string }>) => void;
   /**
    * A run over panels at several loci: each panel's own matched peaks (state
@@ -892,6 +897,7 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
   clusterPatterns: {},  // clusterId -> binary pattern for combinatorial clustering
   clusterCentroids: {},  // clusterId -> feature centroid for non-combinatorial dynamic reassignment
   clusterPeakWidths: [],  // per-peak feature-column widths (centroid masking)
+  clusterMetricCohort: {},  // the fit's molecule metric cohort (dynamic assignment ranks against it)
   clusterPeakRegions: [],  // Peak regions used for clustering
   clusterMatchedRun: null,
   clusterWindowPeaks: null,
@@ -984,6 +990,7 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
     clusterPatterns: {},
     clusterCentroids: {},
     clusterPeakWidths: [],
+    clusterMetricCohort: {},
     clusterPeakRegions: [],
     dynamicClustering: false,
     readSortOrder: {},
@@ -1242,6 +1249,7 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
       clusterPatterns: {},
       clusterCentroids: {},
       clusterPeakWidths: [],
+      clusterMetricCohort: {},
       clusterPeakRegions: [],
       dynamicClustering: false,
       readSortOrder: {},
@@ -1383,32 +1391,43 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
     get().pushSnapshot?.('Merge selected clusters', { kind: 'clustering' });
     return mergedKeys;
   },
-  setClusterPatterns: (patterns) => set(state => ({
-    clusterPatterns: patterns,
-    ...(state.activeClusterTreeNodeId && state.clusterTreeNodes[state.activeClusterTreeNodeId] ? {
-      clusterTreeNodes: {
-        ...state.clusterTreeNodes,
-        [state.activeClusterTreeNodeId]: {
-          ...state.clusterTreeNodes[state.activeClusterTreeNodeId],
-          patterns: { ...patterns },
+  setClusterPatterns: (patterns, metricCohort) => set(state => {
+    // A new model brings its own metric cohort (none: {}); clearing the patterns leaves the cohort to the centroids.
+    const cohort = Object.keys(patterns).length > 0 ? { ...(metricCohort ?? {}) } : null;
+    return {
+      clusterPatterns: patterns,
+      ...(cohort ? { clusterMetricCohort: cohort } : {}),
+      ...(state.activeClusterTreeNodeId && state.clusterTreeNodes[state.activeClusterTreeNodeId] ? {
+        clusterTreeNodes: {
+          ...state.clusterTreeNodes,
+          [state.activeClusterTreeNodeId]: {
+            ...state.clusterTreeNodes[state.activeClusterTreeNodeId],
+            patterns: { ...patterns },
+            ...(cohort ? { metricCohort: cohort } : {}),
+          },
         },
-      },
-    } : {}),
-  })),
-  setClusterCentroids: (centroids, peakWidths) => set(state => ({
-    clusterCentroids: centroids,
-    clusterPeakWidths: peakWidths,
-    ...(state.activeClusterTreeNodeId && state.clusterTreeNodes[state.activeClusterTreeNodeId] ? {
-      clusterTreeNodes: {
-        ...state.clusterTreeNodes,
-        [state.activeClusterTreeNodeId]: {
-          ...state.clusterTreeNodes[state.activeClusterTreeNodeId],
-          centroids: { ...centroids },
-          peakWidths: [...peakWidths],
+      } : {}),
+    };
+  }),
+  setClusterCentroids: (centroids, peakWidths, metricCohort) => set(state => {
+    const cohort = Object.keys(centroids).length > 0 ? { ...(metricCohort ?? {}) } : null;
+    return {
+      clusterCentroids: centroids,
+      clusterPeakWidths: peakWidths,
+      ...(cohort ? { clusterMetricCohort: cohort } : {}),
+      ...(state.activeClusterTreeNodeId && state.clusterTreeNodes[state.activeClusterTreeNodeId] ? {
+        clusterTreeNodes: {
+          ...state.clusterTreeNodes,
+          [state.activeClusterTreeNodeId]: {
+            ...state.clusterTreeNodes[state.activeClusterTreeNodeId],
+            centroids: { ...centroids },
+            peakWidths: [...peakWidths],
+            ...(cohort ? { metricCohort: cohort } : {}),
+          },
         },
-      },
-    } : {}),
-  })),
+      } : {}),
+    };
+  }),
   setDynamicOverlapMode: (mode) => set({ dynamicOverlapMode: mode }),
   setClusterWindowPeaks: (value) => set({ clusterWindowPeaks: value }),
   setClusterPeakRegions: (regions) => set(state => ({
@@ -1779,6 +1798,7 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
       clusterPatterns: { ...node.patterns },
       clusterCentroids: { ...(node.centroids ?? {}) },
       clusterPeakWidths: [...(node.peakWidths ?? [])],
+      clusterMetricCohort: { ...(node.metricCohort ?? {}) },
       clusterPeakRegions: node.peakRegions.map(region => ({ ...region })),
       dynamicClustering: node.dynamicClustering,
       clusterPreparationSamples: node.preparationSamples ?? {},
@@ -2314,6 +2334,8 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
       assignments,
       order,
       patterns: { ...state.clusterPatterns },
+      ...(Object.keys(state.clusterPatterns).length && Object.keys(state.clusterMetricCohort ?? {}).length
+        ? { metricCohort: { ...state.clusterMetricCohort } } : {}),
       panelResults,
       // Each panel's own matched peaks (a run over panels at several loci), for its charts.
       ...(state.clusterWindowPeaks ? { windowPeaks: state.clusterWindowPeaks } : {}),
@@ -2477,10 +2499,10 @@ export function withoutSvSplits(
  * Its merges come back with it (Unmerge, Split back; restoredMergeLog).
  */
 export function restoredClusteringState(
-  saved: Pick<SavedCluster, 'chrom' | 'start' | 'end' | 'mergeLog'>,
+  saved: Pick<SavedCluster, 'chrom' | 'start' | 'end' | 'mergeLog' | 'metricCohort'>,
   state: Pick<BrowserState, 'clusterAssignments' | 'clusterFocus' | 'selectedClusters' | 'clusterMergeLog' | 'clusterOrder' | 'svSplits' | 'clusterGroupLabels' | 'svCarrierEvidence'>,
   newAssignments: Record<string, Record<string, number>>,
-): Pick<BrowserState, 'clusterFocus' | 'selectedClusters' | 'activeClusterTreeNodeId' | 'clusterCentroids' | 'clusterPeakWidths' | 'restoredClusterViewport' | 'clusterMergeLog' | 'svSplits' | 'clusterGroupLabels' | 'svCarrierEvidence'> {
+): Pick<BrowserState, 'clusterFocus' | 'selectedClusters' | 'activeClusterTreeNodeId' | 'clusterCentroids' | 'clusterPeakWidths' | 'clusterMetricCohort' | 'restoredClusterViewport' | 'clusterMergeLog' | 'svSplits' | 'clusterGroupLabels' | 'svCarrierEvidence'> {
   const clusterFocus = { ...state.clusterFocus };
   const selectedClusters = { ...state.selectedClusters };
   const replaced: string[] = [];
@@ -2497,6 +2519,8 @@ export function restoredClusteringState(
     activeClusterTreeNodeId: null,
     clusterCentroids: {},
     clusterPeakWidths: [],
+    // The saved patterns' metric cohort comes back with them (older saves: none, ranked as before).
+    clusterMetricCohort: { ...(saved.metricCohort ?? {}) },
     restoredClusterViewport: { chrom: saved.chrom, start: saved.start, end: saved.end },
     clusterMergeLog: restoredMergeLog(saved, state, newAssignments),
   };

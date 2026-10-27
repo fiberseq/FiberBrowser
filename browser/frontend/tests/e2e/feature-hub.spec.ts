@@ -75,7 +75,7 @@ test('feature hub: scan, list, filter by prevalence, cluster regions, anchors in
   await page.getByTestId('hub-scan-params').fill('{"nfr": {"nfr": {"bootstrap": 0, "kmax": 3, "splits": 2}}}');
   await page.getByTestId('hub-scan-workers').fill('2');
   await expect(page.getByTestId('hub-scan-cli')).toContainText('fiberhmm-scan --bam', { timeout: 30_000 });
-  await expect(page.getByTestId('hub-scan-cli')).toContainText('--genome --contigs chr3');
+  await expect(page.getByTestId('hub-scan-cli')).toContainText('--genome --zones chr3:');
   await expect(page.getByTestId('hub-scan-cli')).toContainText('--parameters scan_parameters.json');
   await expect(page.getByTestId('hub-scan-coverage-fp')).toContainText('to compute');
   await page.getByTestId('hub-scan-submit').click();

@@ -30,7 +30,7 @@ import type {
   PrimerPair,
   TranscriptionStateRuleKind,
 } from '../types';
-import { normalizeAnalysisRuleScope, normalizeTranscriptionStateRuleKind, resolveClusterRuleRegions } from '../utils/analysisRules';
+import { analysisFilterLabel, analysisRuleTermProblem, filterRuleRequestFields, intersectWithCurrentFilter, normalizeAnalysisRuleScope, normalizeTranscriptionStateRuleKind, resolveClusterRuleRegions, sortRuleRequestFields } from '../utils/analysisRules';
 import { highlightForAction, COPILOT_ANCHORS, type HighlightOptions } from '../utils/copilotAnchors';
 import { isStrandedDafDataset } from '../utils/datasetChemistry';
 import { findTopLocus, isTopLocusStep } from '../utils/topLoci';
@@ -41,7 +41,7 @@ import { liftHapsForRound, resolveSortRequestScope, sortRounds } from '../utils/
 import { registerBackendMotifTrack, registerTrack, removeTrackAtIndex, setTrackNameFilter } from '../utils/trackLoader';
 import { CLUSTER_RULE_MODE_PREFIX } from '../types';
 import { sameChrom } from '../utils/chromAliases';
-import { qualityGatesPayload } from '../utils/ruleMatching';
+import { ruleTermPayload } from './ruleTermPayload';
 import { openSidebarSection } from '../utils/tutorialAnchors';
 import { conditionById, conditionHolds } from '../utils/tutorialMilestones';
 
@@ -510,19 +510,9 @@ function layerFromAnalysisTerm(term: ClusterFeatureRuleTerm | undefined): string
   return term.layer ?? null;
 }
 
+/** Size, conditions, quality gates and a labeling rule's nucleosome conditions (actions/ruleTermPayload.ts). */
 function rulePayloadFromAnalysisTerm(term: ClusterFeatureRuleTerm | undefined) {
-  const base = term?.source === 'label_rule'
-    ? term.rule
-    : term?.source === 'footprint_group'
-      ? term.group
-      : term;
-  const rawSizeMax = (base as any)?.sizeMax ?? term?.sizeMax;
-  return {
-    size_min: Math.max(0, Number((base as any)?.sizeMin ?? term?.sizeMin ?? 0) || 0),
-    size_max: rawSizeMax == null ? null : Math.max(0, Number(rawSizeMax) || 0),
-    conditions: [...((base as any)?.conditions ?? [])],
-    quality_gates: qualityGatesPayload((base as any)?.qualityGates ?? term?.qualityGates),
-  };
+  return ruleTermPayload(term);
 }
 
 function transcriptionStateFromAnalysisTerm(term: ClusterFeatureRuleTerm | undefined): TranscriptionStateRuleKind | null {
@@ -783,6 +773,7 @@ async function clusterPeakRegions(
   let filteredOut = 0;
   let skipped = 0;
   let lastPatterns: Record<string, unknown> | undefined;
+  let lastMetricCohort: import('../types').ClusterMetricCohort | undefined;
   let seeded = false;
   for (const round of sortRounds(runIds, mainKeys)) {
     const readIdsMap: Record<string, string[]> = {};
@@ -848,6 +839,7 @@ async function clusterPeakRegions(
     }
     if (appliedHere) {
       lastPatterns = res.cluster_patterns as Record<string, unknown> | undefined;
+      lastMetricCohort = res.cluster_metric_cohort;
       const note = performanceSamplingNote(res.results);
       if (note) performanceNotes.add(note);
     }
@@ -858,7 +850,7 @@ async function clusterPeakRegions(
     return `Clustering on the ${label} changed nothing${skipped ? ` (${skipped} panel(s) changed while it ran)` : ''}.`;
   }
   if (lastPatterns && clusterMethod === 'combinatorial') {
-    useBrowserStore.getState().setClusterPatterns(lastPatterns as never);
+    useBrowserStore.getState().setClusterPatterns(lastPatterns as never, lastMetricCohort);
     useBrowserStore.getState().setClusterPeakRegions(peakRegions);
     useBrowserStore.getState().setDynamicClustering(true);
   } else {
@@ -1331,6 +1323,9 @@ export async function executeBrowserAction(
         ...base,
         operator: valueAsString(action.operator, 'gte'),
         threshold: valueAsNumber(action.threshold, 1),
+        // 'between' bound and AND with the current filter (terms may be molecule_metric / feature_hub).
+        ...(action.threshold_max != null ? { thresholdMax: valueAsNumber(action.threshold_max, 0) } : {}),
+        ...(action.combine === 'and' ? { combine: 'and' } : {}),
       });
     } else {
       store.addAnalysisSortRule?.({
@@ -1582,14 +1577,22 @@ export async function executeBrowserAction(
     if (kind === 'sort') {
       const sortRule = rule as AnalysisSortRule;
       const term = sortRule.terms[0];
+      const problem = analysisRuleTermProblem(term);
+      if (problem) return `apply_sort_rule: rule "${sortRule.name}" ${problem}.`;
       const transcriptionState = transcriptionStateFromAnalysisTerm(term);
       const geneIds = transcriptionState ? geneIdsForAnalysisRule(sortRule) : undefined;
       if (transcriptionState && (!geneIds || geneIds.length === 0)) {
         return `apply_sort_rule: rule "${sortRule.name}" needs a selected gene.`;
       }
+      // Molecule metric ('value') and hub hit ('feature_hub') terms read no layer.
+      const layerFree = sortRuleRequestFields(sortRule);
+      // ('value' belongs to molecule metrics: a layer term saved with it counts.)
+      const countSort = sortRule.metric === 'count' || sortRule.metric === 'value';
       const backendSortBy = transcriptionState
         ? 'transcription_state'
-        : sortRule.metric === 'count'
+        : layerFree
+          ? layerFree.sortBy
+          : countSort
           ? 'rule'
           : sortRule.metric === 'rate'
             ? 'fp_rate'
@@ -1616,12 +1619,14 @@ export async function executeBrowserAction(
           clusterTreeNodes: now.clusterTreeNodes,
         });
         const res = await sortReads(chrom, start, end, store.spanningOnly, roundIds, backendSortBy, {
-          rule: !transcriptionState && sortRule.metric === 'count' ? rulePayloadFromAnalysisTerm(term) : undefined,
+          rule: !transcriptionState && !layerFree && countSort ? rulePayloadFromAnalysisTerm(term) : undefined,
+          ...(layerFree?.sortBy === 'value' ? { moleculeMetric: layerFree.moleculeMetric } : {}),
+          ...(layerFree?.sortBy === 'feature_hub' ? { featureHub: layerFree.featureHub } : {}),
           descending: sortRule.descending !== false,
           linked: isLinkedGroup(roundIds, store.panels),
           peakRegions: peakRegions.length > 0 ? peakRegions : undefined,
           selectedPeakWindows: scopeWindows,
-          layer: transcriptionState ? undefined : layerFromAnalysisTerm(term),
+          layer: transcriptionState || layerFree ? undefined : layerFromAnalysisTerm(term),
           transcriptionState,
           geneIds,
           readIds: Object.keys(scope.readIds).length > 0 ? scope.readIds : undefined,
@@ -1654,19 +1659,27 @@ export async function executeBrowserAction(
     // filter
     const filterRule = rule as AnalysisFilterRule;
     const term = filterRule.terms[0];
+    const problem = analysisRuleTermProblem(term);
+    if (problem) return `apply_filter_rule: rule "${filterRule.name}" ${problem}.`;
     const transcriptionState = transcriptionStateFromAnalysisTerm(term);
     const geneIds = transcriptionState ? geneIdsForAnalysisRule(filterRule) : undefined;
     if (transcriptionState && (!geneIds || geneIds.length === 0)) {
       return `apply_filter_rule: rule "${filterRule.name}" needs a selected gene.`;
     }
+    // Molecule metric ('value', between) and hub hit terms read no layer and send no size rule.
+    const fields = filterRuleRequestFields(filterRule);
+    const combine = filterRule.combine === 'and';
     const res = await filterReadsByAnalysisRule(chrom, start, end, store.spanningOnly, datasetIds, {
-      metric: filterRule.metric,
-      operator: filterRule.operator,
-      threshold: filterRule.threshold,
-      rule: !transcriptionState && filterRule.metric === 'count' ? rulePayloadFromAnalysisTerm(term) : undefined,
+      metric: fields.metric,
+      operator: fields.operator,
+      threshold: fields.threshold,
+      thresholdMax: fields.thresholdMax,
+      moleculeMetric: fields.moleculeMetric,
+      featureHub: fields.featureHub,
+      rule: !fields.layerFree && fields.metric === 'count' ? rulePayloadFromAnalysisTerm(term) : undefined,
       peakRegions: peakRegions.length > 0 ? peakRegions : undefined,
       scopeWindows,
-      layer: transcriptionState ? undefined : layerFromAnalysisTerm(term),
+      layer: fields.layerFree ? undefined : layerFromAnalysisTerm(term),
       transcriptionState,
       geneIds,
       sampleSeed: store.analysisSampleSeed,
@@ -1674,19 +1687,22 @@ export async function executeBrowserAction(
     const staleFilter = staleRuleResult(kind, requestSeq, { chrom, start, end });
     if (staleFilter) return `${type}: ${staleFilter}`;
     if (action.pin !== false) {
-      const liveKeys = mainViewKeyMap(keyMap, useBrowserStore.getState());
+      const now = useBrowserStore.getState();
+      const liveKeys = mainViewKeyMap(keyMap, now);
       seedHistoryBaseline(store, 'Before read filter', 'filtering');
       for (const [dsId, result] of Object.entries(res.results)) {
         for (const sk of (liveKeys[dsId] ?? [])) {
-          store.setFilteredReadIds(sk, new Set(result.read_ids ?? []), {
+          // 'and': only the reads the panel's current filter keeps too.
+          const current = combine ? now.filteredReadIds[sk] : null;
+          store.setFilteredReadIds(sk, intersectWithCurrentFilter(result.read_ids ?? [], current), {
             target: 'analysis-filter',
-            label: `Rules > ${filterRule.name}`,
+            label: analysisFilterLabel(filterRule.name, current ? now.readFilterSources[sk] ?? {} : null),
           });
         }
       }
       store.setFootprintFilterKey(null);
     }
-    return `Applied filter rule "${filterRule.name}"${action.pin !== false ? ' (pinned)' : ''}.`;
+    return `Applied filter rule "${filterRule.name}"${combine ? ' within the current filter' : ''}${action.pin !== false ? ' (pinned)' : ''}.`;
   }
 
   if (type === 'select_cluster_reads') {

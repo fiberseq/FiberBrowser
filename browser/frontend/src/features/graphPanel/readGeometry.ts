@@ -18,6 +18,8 @@
  *   the call's whole size, identity, logical part and qualities; its own left/right edge qualities go to the
  *   screen side its call edge is on (they swap where a placement runs right to left), and only on a piece that
  *   holds that edge of the call. Nothing is inferred at a node boundary.
+ * - **Segment lane.** The nucleosome segments and events (`nseg`) are cut the same way, one piece per drawn slice;
+ *   each piece keeps its whole row's span and bytes.
  */
 import type { OccurrencePlacement, Scene } from './scene';
 import type { CallLayer } from './chromatinStyle';
@@ -37,6 +39,22 @@ export interface CallPiece extends ReadPiece {
   edgeL?: number;
   edgeR?: number;
   inferred?: boolean;
+  /** nuc/tf: the call's nucsz class, named and z bytes (null: no mark, or no named byte; absent: the layer carries
+   * none). */
+  cls?: number | null;
+  nb?: number | null;
+  zb?: number | null;
+}
+
+/** A piece of a segment-lane row (`nseg`): its whole row's span, code and bytes (never the piece's). */
+export interface SegPiece extends ReadPiece {
+  index: number;
+  row: [number, number];
+  code: number;
+  /** Segments: the posterior byte; events: 10 x LLR. */
+  value: number;
+  /** Regular segments: q-hat - 100; events: the count. */
+  extra: number;
 }
 
 /** A hole in a record's coverage: a CIGAR deletion (D) or a skip (N, a hole with no D event). */
@@ -51,6 +69,8 @@ export interface PlacedMolecule {
   visits: ReadVisit[];
   body: ReadPiece[];
   calls: CallPiece[];
+  /** The segment lane's pieces (absent: the read carries no lane). */
+  seg?: SegPiece[];
   m6a: { x: number; pos: number }[];
   density: { x0: number; x1: number; count: number; bp: number }[];
   ins: { x: number; pos: number; len: number }[];
@@ -63,7 +83,7 @@ export interface PlacedMolecule {
   extent: [number, number] | null;
   /** Aligned bp inside the scene's drawn range of this path that no placement draws (clusters, summaries). */
   unplacedBp: number;
-  /** Calls and m6A ticks left out by the panel's primitive budget (the body is still drawn). */
+  /** Calls, m6A ticks and segment-lane pieces left out by the panel's primitive budget (the body is still drawn). */
   marksHidden?: boolean;
 }
 
@@ -269,6 +289,18 @@ export function placeRead(read: GraphRead, index: PlacementIndex, lane = read.b,
     return lo2;
   };
   const at = (pos: number) => { const k = first(pos); return k < drawn.length && drawn[k].s0 <= pos ? drawn[k] : null; };
+  // An interval [cs, ce) cut at the drawn slices it overlaps (visit edges, coverage holes): one piece per slice.
+  const cut = (cs: number, ce: number) => {
+    const pieces: ReadPiece[] = [];
+    for (let k = first(cs); k < drawn.length && drawn[k].s0 < ce; k++) {
+      const d = drawn[k];
+      const a = Math.max(cs, d.s0), b = Math.min(ce, d.s1);
+      if (b <= a) continue;
+      const [x0, x1] = xRangeForOffsets(d.p, a - d.vs, b - d.vs);
+      pieces.push({ x0, x1, s0: a, s1: b, occ: d.occ.id, dir: d.p.dir });
+    }
+    return pieces;
+  };
   for (const layer of (opts.calls === false ? [] : ['nuc', 'tf', 'msp']) as CallLayer[]) {
     const l: GraphReadLayer | undefined = read[layer];
     if (!l) continue;
@@ -277,22 +309,31 @@ export function placeRead(read: GraphRead, index: PlacementIndex, lane = read.b,
       for (const name of QUALITY_NAMES) { const v = l[name]?.[index]; if (v !== undefined && v !== null) qualities[name] = v; }
       const leftQ = layer === 'tf' ? qualities.el : qualities.lq;
       const rightQ = layer === 'tf' ? qualities.er : qualities.rq;
-      const pieces: CallPiece[] = [];
-      for (let k = first(cs); k < drawn.length && drawn[k].s0 < ce; k++) {
-        const d = drawn[k];
-        const a = Math.max(cs, d.s0), b = Math.min(ce, d.s1);
-        if (b <= a) continue;
-        const [x0, x1] = xRangeForOffsets(d.p, a - d.vs, b - d.vs);
+      // The footprint's class and z bytes ride on every piece of the call (no extra primitive).
+      const cls = l.cls ? { cls: l.cls[index] ?? null, nb: l.nb?.[index] ?? null, zb: l.zb?.[index] ?? null } : {};
+      const pieces: CallPiece[] = cut(cs, ce).map(pc => {
         // The call's source-left edge is on this piece's screen-left when the placement runs left to right.
-        const srcLeft = a === cs ? leftQ ?? 255 : undefined;
-        const srcRight = b === ce ? rightQ ?? 255 : undefined;
-        pieces.push({ x0, x1, s0: a, s1: b, occ: d.occ.id, dir: d.p.dir, layer, index, call: [cs, ce, size],
+        const srcLeft = pc.s0 === cs ? leftQ ?? 255 : undefined;
+        const srcRight = pc.s1 === ce ? rightQ ?? 255 : undefined;
+        return { ...pc, layer, index, call: [cs, ce, size] as [number, number, number],
           id: l.id[index] ?? null, part: l.part[index] ?? null, qualities,
-          ...(d.p.dir === 1 ? { edgeL: srcLeft, edgeR: srcRight } : { edgeL: srcRight, edgeR: srcLeft }),
-          ...(l.inferred ? { inferred: true } : {}) });
-      }
+          ...(pc.dir === 1 ? { edgeL: srcLeft, edgeR: srcRight } : { edgeL: srcRight, edgeR: srcLeft }),
+          ...(l.inferred ? { inferred: true } : {}), ...cls };
+      });
       out.calls.push(...mergeRuns(pieces, () => true));
     });
+  }
+  // The segment lane: rows without a code are not drawn (as the read track's lane).
+  const segLane = opts.calls === false ? undefined : read.nseg;
+  if (segLane?.iv.length && segLane.code) {
+    const seg: SegPiece[] = [];
+    segLane.iv.forEach(([cs, ce], index) => {
+      const code = segLane.code![index];
+      if (!code) return;
+      const bytes = { index, row: [cs, ce] as [number, number], code, value: segLane.p?.[index] ?? 0, extra: segLane.q3?.[index] ?? 0 };
+      seg.push(...mergeRuns(cut(cs, ce).map(pc => ({ ...pc, ...bytes })), () => true));
+    });
+    if (seg.length) out.seg = seg;
   }
   // m6A: ticks, or (past the budget) counts per bin of source bp placed like density.
   const binned: [number, number, number][] = [];
@@ -372,19 +413,21 @@ export function packMolecules(molecules: PlacedMolecule[], maxRows: number, gapP
   return lanes;
 }
 
-/** The panel's mark-primitive budget (DESIGN §7): call pieces, m6A ticks and density bins drawn. */
+/** The panel's mark-primitive budget (DESIGN §7): call pieces, m6A ticks, density bins and segment-lane pieces drawn. */
 export const MAX_READ_PRIMITIVES = 100_000;
 
 /** Place every read of a response; reads whose path is not drawn are counted. The budget is decided before the
- * marks are placed: past it (estimated from the calls and m6A each read carries), m6A is placed as per-pixel density
- * bins; molecules then take their calls in the response's (hash) order while the budget lasts, and the rest keep
- * their bodies only (`marksHidden`). `bpPerPx`: the view's average density (density bin size). */
+ * marks are placed: past it (estimated from the calls, segment-lane rows and m6A each read carries), m6A is placed
+ * as per-pixel density bins; molecules then take their calls and lane pieces in the response's (hash) order while
+ * the budget lasts, and the rest keep their bodies only (`marksHidden`; `segHidden` of them carried a lane).
+ * `bpPerPx`: the view's average density (density bin size). */
 export function placeReads(all: GraphRead[], index: PlacementIndex, maxPrimitives = MAX_READ_PRIMITIVES, bpPerPx = 1): {
-  molecules: PlacedMolecule[]; offLane: number; unplacedBp: number; empty: number; primitives: number; m6aAsDensity: boolean; marksHidden: number } {
+  molecules: PlacedMolecule[]; offLane: number; unplacedBp: number; empty: number; primitives: number; m6aAsDensity: boolean; marksHidden: number;
+  segHidden: number } {
   // Reads on paths the scene does not draw are counted, never estimated or placed.
   const reads = all.filter(r => index.occurrences.has(r.b));
   const offLaneReads = all.length - reads.length;
-  const callsOf = (r: GraphRead) => (r.nuc?.iv.length ?? 0) + (r.tf?.iv.length ?? 0) + (r.msp?.iv.length ?? 0);
+  const callsOf = (r: GraphRead) => (r.nuc?.iv.length ?? 0) + (r.tf?.iv.length ?? 0) + (r.msp?.iv.length ?? 0) + (r.nseg?.iv.length ?? 0);
   const binFor = () => {
     // Density bins as fine as the budget allows: at least a pixel, coarser when the reads' pixels would not fit.
     const calls = reads.reduce((t, r) => t + callsOf(r), 0);
@@ -394,7 +437,7 @@ export function placeReads(all: GraphRead[], index: PlacementIndex, maxPrimitive
   };
   const pass = (m6aBinBp: number | undefined) => {
     const molecules: PlacedMolecule[] = [];
-    let unplacedBp = 0, empty = 0, primitives = 0, marksHidden = 0, spent = false;
+    let unplacedBp = 0, empty = 0, primitives = 0, marksHidden = 0, segHidden = 0, spent = false;
     const offLane = offLaneReads;
     for (const r of reads) {
       // Marks are placed only until the budget is spent: the first molecule whose marks do not fit ends it, and
@@ -402,14 +445,17 @@ export function placeReads(all: GraphRead[], index: PlacementIndex, maxPrimitive
       const m = placeRead(r, index, r.b, { calls: !spent, m6aBinBp, visits: false });
       unplacedBp += m.unplacedBp;
       if (!m.body.length) { empty++; continue; }
-      const n = m.calls.length + m.m6a.length + m.density.length;
+      const n = m.calls.length + m.m6a.length + m.density.length + (m.seg?.length ?? 0);
       if (spent || primitives + n > maxPrimitives) {
         spent = true;
-        if (n || r.m6a?.length || r.m6a_density?.length || callsOf(r)) { m.calls = []; m.m6a = []; m.density = []; m.marksHidden = true; marksHidden++; }
+        if (n || r.m6a?.length || r.m6a_density?.length || callsOf(r)) {
+          m.calls = []; m.m6a = []; m.density = []; delete m.seg; m.marksHidden = true; marksHidden++;
+          if (r.nseg?.iv.length) segHidden++;
+        }
       } else primitives += n;
       molecules.push(m);
     }
-    return { molecules, offLane, unplacedBp, empty, primitives, marksHidden };
+    return { molecules, offLane, unplacedBp, empty, primitives, marksHidden, segHidden };
   };
   // m6A as density when the reads carry more marks than the budget; or when placing them as ticks overflowed
   // (calls split over many nodes amplify), a second pass with density bins.

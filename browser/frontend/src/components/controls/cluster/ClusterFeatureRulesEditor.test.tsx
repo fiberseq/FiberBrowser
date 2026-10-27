@@ -19,3 +19,14 @@ it('offers saved classes and preserves their run identity through rule normaliza
   expect(html).toContain('Promoter class');
   expect(html).toContain('Exact primary assignment');
 });
+
+it('offers molecule metric terms (one scalar column each)',()=>{
+  const rules=normalizeClusterFeatureRules([{id:'r',enabled:true,terms:[{id:'t',source:'molecule_metric',moleculeMetric:'nuc.regularity'}]}]);
+  const noop=vi.fn();
+  const html=renderToStaticMarkup(<ClusterFeatureRulesEditor rules={rules} savedRuleSets={[]} activeLabelRules={[]}
+    footprintGroups={[]} layerOptions={[{value:'tf',label:'TF'}]} onAddRule={noop} onUpdateRule={noop}
+    onRemoveRule={noop} onSetRules={noop} onSaveRuleSet={noop} onLoadRuleSet={noop} onDeleteRuleSet={noop} onSetDefaultRuleSet={noop}/>);
+  expect(html).toContain('Molecule metric');
+  expect(html).toContain('Regularity S');
+  expect(html).toContain('one scalar column per molecule');
+});

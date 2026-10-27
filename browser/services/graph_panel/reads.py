@@ -68,11 +68,15 @@ MAX_LEVEL = 8
 LOADER_OPTIONS = dict(include_methylation=True, ml_threshold=125, include_layers=True, include_layer_qualities=True,
                       hide_terminal_gaps=True, include_cigar=True, include_duplicates=False, sv_min_len=50)
 _LAYERS = ("nuc", "tf", "msp")
+# Lanes drawn under a graph row, one primitive per interval (the nucleosome segment lane, NUC §7.1).
+_LANES = ("nseg",)
 # The cached rows' wire form: 2 adds the identities (aid, rk, hap) and the map's molecule groups (graph primary G0);
 # 3 the DAF strand of DAF-seq records (G8; 5: its evidence by mark, resolved per molecule; 6: marks by contig and
 # absolute source position, so records cached by decodes at other origins compare alike; 7: a supplementary's
-# primary's explicit call; 8: soft clips).
-WIRE_VERSION = 8
+# primary's explicit call; 8: soft clips; 9: nucleosome classes on nuc/tf pieces and the segment lane; 10: the named
+# byte ``nb`` beside ``cls``/``zb``, and no class from a mark of another molecular length. Clients read a payload
+# without ``nb`` as no named evidence).
+WIRE_VERSION = 10
 
 
 class ReadsError(Exception):
@@ -101,6 +105,8 @@ def dataset_revision(dataset) -> str:
     """The dataset's files (path, size, mtime) and lift identity: a changed BAM or map is a new revision."""
     from services.background_work import file_identity
     from services.lift.reads import lift_identity
+    # (Nucleosome outputs computed for its records are not part of it: a saved graph binds to the files and map. They
+    # enter the composed-row cache key instead, and the client's read key follows the dataset's source identity.)
     raw = repr((file_identity(getattr(dataset, "paths", None) or ()), lift_identity(dataset)))
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
@@ -294,6 +300,77 @@ def _abs_layer(layer: Optional[dict], ids, parts, origin: int, name: str, keep) 
     return out
 
 
+def _nuc_classes(out: dict, layers: dict, origin: int, keep) -> None:
+    """Nucleosome outputs on a graph row (NUC §7.1, P-B): each nuc/tf piece gets its footprint's nucsz class byte
+    (``cls``: coarse code + 16 for TF, as nucsz Q1), named byte (``nb``: nucsz Q2, None without that track) and z
+    byte (``zb``: 20 z + 128, 255 missing) by the mark that holds the piece's midpoint, so no extra primitive is
+    spent; ``nseg`` is the segment lane (nucseg rows: [start, end, molecular length] with their code, posterior or
+    10 x LLR, and q-hat - 100 or count bytes)."""
+    sz = layers.get("nucsz")
+    if sz and sz.get("intervals"):
+        names = list(sz.get("quality_names") or [])
+        quals = sz.get("qualities") or []
+
+        def track(name, index):
+            # A byte track by its declared name, else by its §11.3 position (coarse, named, posterior, z).
+            if name in names:
+                at = names.index(name)
+                return quals[at] if at < len(quals) else None
+            return quals[index] if len(quals) > index else None
+        q0 = quals[0] if quals else None
+        qn = track("named", 1)
+        qz = track("z", 3)
+        marks = sorted((int(iv[0]) + origin, int(iv[1]) + origin, i, int(iv[2]) if len(iv) > 2 else None)
+                       for i, iv in enumerate(sz["intervals"]))
+        starts = [m[0] for m in marks]
+        import bisect
+
+        def byte(values, i):
+            return int(values[i]) if values is not None and i < len(values) and values[i] is not None else None
+
+        def bytes_of(i):
+            return (byte(q0, i), byte(qn, i), byte(qz, i))
+
+        def mark_for(a, b, size):
+            # The piece's own footprint: among the marks holding its midpoint, the one with its span and molecular
+            # length, then its length. A mark of another known length is never the piece's (a filter may have removed
+            # its own: no class rather than a neighbour's); marks or pieces without a length match by span, and
+            # overlapping footprints with other bytes never lend theirs (no class instead).
+            mid = (a + b) // 2
+            k = bisect.bisect_right(starts, mid) - 1
+            held = [marks[j] for j in range(k, max(-1, k - 16), -1)   # marks starting at or before mid (few overlap)
+                    if marks[j][0] <= mid < max(marks[j][1], marks[j][0] + 1)]
+            if size is not None:
+                held = [m for m in held if m[3] is None or m[3] == size]
+            for pool in ([m for m in held if m[0] == a and m[1] == b and m[3] == size],
+                         [m for m in held if size is not None and m[3] == size],
+                         [m for m in held if m[0] == a and m[1] == b], held):
+                if pool:
+                    first = bytes_of(pool[0][2])
+                    return pool[0][2] if all(bytes_of(m[2]) == first for m in pool) else None
+            return None
+        for name in ("nuc", "tf"):
+            layer = out.get(name)
+            if not layer:
+                continue
+            cls, nb, zb = [], [], []
+            for a, b, size in layer["iv"]:
+                hit = mark_for(int(a), int(b), int(size) if size is not None else None)
+                cls.append(byte(q0, hit) if hit is not None else None)
+                nb.append(byte(qn, hit) if hit is not None else None)
+                zb.append(byte(qz, hit) if hit is not None else None)
+            if any(c is not None for c in cls):
+                layer["cls"], layer["nb"], layer["zb"] = cls, nb, zb
+    seg = layers.get("nucseg")
+    if seg and seg.get("intervals"):
+        quals = seg.get("qualities") or []
+        idx = [i for i, iv in enumerate(seg["intervals"]) if keep(int(iv[0]) + origin, int(iv[1]) + origin)]
+        if idx:
+            out["nseg"] = {"iv": [[int(seg["intervals"][i][0]) + origin, int(seg["intervals"][i][1]) + origin,
+                                   int(seg["intervals"][i][2])] for i in idx],
+                           **{key: [int(quals[j][i]) for i in idx] for j, key in enumerate(("code", "p", "q3")) if j < len(quals)}}
+
+
 def compact_row(row: dict, origin: int, dataset_id: str, binding: str, windows: Optional[list] = None) -> dict:
     """A composed row (relative to ``origin``) as the graph wire form, in absolute source coordinates. Calls are
     whole (their own bounds, never clipped); only those touching ``windows`` are sent, and m6A inside them."""
@@ -345,6 +422,7 @@ def compact_row(row: dict, origin: int, dataset_id: str, binding: str, windows: 
         layer = _abs_layer(layers.get(name), calls.get(f"layer:{name}"), parts.get(f"layer:{name}"), origin, name, keep)
         if layer is not None:
             out[name] = layer
+    _nuc_classes(out, layers, origin, keep)
     marks = row.get("methyl_m6a")
     if type(marks) is IntColumn and marks.width is None:
         p = marks.array + origin
@@ -437,7 +515,7 @@ def resolve_molecule_strands(reads: list, evidence_only: Optional[list] = None, 
 
 
 def marks_of(read: dict) -> int:
-    return (sum(len((read.get(n) or {}).get("iv") or ()) for n in _LAYERS) + len(read.get("m6a") or ())
+    return (sum(len((read.get(n) or {}).get("iv") or ()) for n in _LAYERS + _LANES) + len(read.get("m6a") or ())
             + len(read.get("m6a_density") or ()))
 
 
@@ -463,8 +541,8 @@ def clip_to_windows(read: dict, windows: list) -> dict:
     def keep(a, b):
         return any(a < wb and b > wa for wa, wb in windows)
 
-    out = {k: v for k, v in read.items() if k not in _LAYERS and k != "m6a"}
-    for name in _LAYERS:
+    out = {k: v for k, v in read.items() if k not in _LAYERS + _LANES and k != "m6a"}
+    for name in _LAYERS + _LANES:
         layer = read.get(name)
         if not layer:
             continue
@@ -944,8 +1022,10 @@ def _load(state, reg, body: dict, *, max_molecules: int, max_marks: int, max_byt
         nonlocal decode_ms, decoded_records
         dataset, binding, contig, windows, size = job
         kept = [k for k in recs or () if k[1] in pins or keeps(k[1], lvl)]
+        from services.nuc.store import nuc_identity
+        # (Nucleosome outputs computed for the dataset's records are part of what a composed row is: services/nuc.)
         base = (dataset.id, dataset_revision(dataset), binding["key"], contig, tuple(sorted(LOADER_OPTIONS.items())),
-                WIRE_VERSION)
+                WIRE_VERSION, nuc_identity(dataset))
         keys = [_record_key(base, k) for k in kept]
         listed_n: dict = {}
         for key in keys:

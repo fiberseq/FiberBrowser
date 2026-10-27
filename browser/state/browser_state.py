@@ -976,7 +976,8 @@ class BrowserState:
         )
         if self.__dict__.get('scan_registry'):
             # fiberhmm-scan states as layers (tables-mode scans bound to this dataset), before the consensus
-            # projection so its receipt names the rows it returns.
+            # projection so its receipt names the rows it returns. Rows the working set overlaid before its quality
+            # filters carry the overlay's receipt and are returned as they are (a filtered mark never comes back).
             from services.scan.overlay import apply_to_working_set
             working_set = apply_to_working_set(self, dataset_id, chrom, start, end, working_set)
         if self.__dict__.get('consensus_workflow_active'):

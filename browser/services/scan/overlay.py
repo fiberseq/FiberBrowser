@@ -16,8 +16,12 @@ Native reads join by read name (a record's row is the one whose alignment holds 
 read scan layers from annotated BAMs (MA groups follow the read through live lift); a tables-mode overlay on
 lifted rows needs hit projection (G1).
 
-Hooked where the consensus overlay is (``BrowserState.build_working_set``, ``read_endpoint``'s display paths);
-idempotent: layers it wrote carry ``scan_overlay`` and are replaced.
+Hooked where the consensus overlay is (``BrowserState.build_working_set``, ``read_endpoint``'s display paths)
+and in the working set before quality filters (``working_sets._viewport_reads_from_broad``); idempotent. A row it
+changed carries a receipt (``RECEIPT_KEY``: the dataset's scans, the pass's window and the groups it wrote) on the
+row itself rather than on its layers, which quality filters rebuild: a later pass of the same scans over the same
+window is a no-op, so a pass after the filters never brings a rejected mark back. A pass over another window (or of
+other scans) replaces the groups the receipt names, filtered or not, and those its layers' ``scan_overlay`` names.
 """
 from __future__ import annotations
 
@@ -25,6 +29,9 @@ import hashlib
 from typing import Dict, List
 
 STATE_BYTE = {'1': 1, '0': 2, '.': 3}
+#: The row's overlay receipt (an internal field): (overlay token, chrom, start, end, groups written).
+RECEIPT_KEY = '_fiberbrowser_scan_overlay'
+NUC_GROUPS = frozenset({'nucsz', 'nucseg'})
 LAYER_META = {
     'fpcls': ('Footprint classes (scan)', '#7c3aed', 'tf'),
     'nfrvar': ('NFR variants (scan)', '#0f766e', 'msp'),
@@ -73,14 +80,28 @@ def overlay_scans(state, dataset_id: str):
             continue
         groups = _state_groups(scan)
         marks = _mark_groups(scan)
-        if groups or marks:
-            out.append((scan, sids, dict(groups, **{f'{m}#marks': ','.join(names) for m, names in marks.items()})))
+        scalars = _scalar_modules(scan)
+        if groups or marks or scalars:
+            out.append((scan, sids, dict(groups, **{f'{m}#marks': ','.join(names) for m, names in marks.items()},
+                                         **{f'{m}#molecules': '1' for m in scalars})))
+    return out
+
+
+def _scalar_modules(scan) -> List[str]:
+    """Modules with a per-molecule scalar group whose molecules table this scan wrote (nuc: nucmol, nfr: nfrmol)."""
+    out = []
+    for module, block in (scan.manifest.get('modules') or {}).items():
+        if scan.tables.has(f'{module}/molecules.tsv.bgz') and \
+                any(g.get('kind') == 'scalar' for g in block.get('ma_groups') or []):
+            out.append(module)
     return out
 
 
 def _group_names(groups: Dict[str, str]):
     """(module, table, group) of an overlay entry: state groups read states.tsv, '<module>#marks' entries marks.tsv."""
     for key, value in groups.items():
+        if key.endswith('#molecules'):
+            continue   # scalars: read by apply_scan_overlays itself
         if key.endswith('#marks'):
             module = key[:-len('#marks')]
             for name in value.split(','):
@@ -108,12 +129,47 @@ def refresh_dataset_layers(state) -> None:
                 derived[group] = dict(id=group, label=label, color=colour, kind='scan-overlay', source_layer=source)
 
 
+def overlay_signature(state, dataset_id: str) -> tuple:
+    """What the overlay on a dataset's rows depends on (its tables-mode scans): part of a cached working set's key."""
+    return tuple((sc.scan_id, sc.manifest_digest) for sc, _s, _g in overlay_scans(state, dataset_id))
+
+
+def overlay_token(dataset_id: str, scans) -> str:
+    """The receipt of a dataset's overlay by these scans (``overlay_signature``'s scans)."""
+    return 'scan:' + hashlib.sha256(repr((dataset_id, tuple((sc.scan_id, sc.manifest_digest) for sc in scans)))
+                                    .encode()).hexdigest()[:16]
+
+
 def apply_scan_overlays(state, dataset_id: str, chrom: str, start: int, end: int, reads: List[dict]) -> List[dict]:
-    scans = overlay_scans(state, dataset_id)
-    if not scans or not reads:
+    """``reads`` with the overlay on them (the same object when no row changed)."""
+    if not reads:
         return reads
+    apply_one = prepare_scan_overlay(state, dataset_id, chrom, start, end)
+    if apply_one is None:
+        return reads
+    out = [apply_one(read) for read in reads]
+    if len(out) == len(reads) and all(a is b for a, b in zip(out, reads)):
+        return reads
+    return out
+
+
+def prepare_scan_overlay(state, dataset_id: str, chrom: str, start: int, end: int):
+    """A function putting the bound tables-mode scans' layers and scalars on one row of ``[start, end)`` (rows
+    relative to ``start``), or None when nothing applies. The scans' rows are fetched once, here."""
+    scans = overlay_scans(state, dataset_id)
+    if not scans:
+        return None
     ds = state.datasets.get(dataset_id)
     derived = getattr(ds, 'derived_layers', None) or {}
+    from services.nuc.inputs import real
+    # Each scan row's file: (scan dataset, input index) -> the loaded file holding it, so a row never joins an identical
+    # record of another file (a merged dataset of several scan datasets).
+    file_of: Dict[tuple, str] = {}
+    for scan, _sids, _groups in scans:
+        for sid, bid, _via, files in scan.bound_pairs():
+            if bid == dataset_id:
+                for i, path in files.items():
+                    file_of[(scan.scan_id, sid, int(i))] = real(path)
     marks: Dict[str, Dict[str, list]] = {}
     for scan, sids, groups in scans:
         by_table: Dict[tuple, list] = {}
@@ -128,32 +184,60 @@ def apply_scan_overlays(state, dataset_id: str, chrom: str, start: int, end: int
                 group = wanted[0] if table == 'states' else r.get('group')
                 if group not in wanted:
                     continue
+                r = dict(r, _file=file_of.get((scan.scan_id, r.get('dataset_id'), int(r.get('input_index') or 0))))
                 marks.setdefault(r.get('qname', ''), {}).setdefault(group, []).append(r)
-    if not marks:
-        return reads
-    # A pass's token: rows this exact pass already overlaid (same view, same scans) are returned as they are, so a
-    # later pass keeps the row objects (and the consensus projection's receipt over them).
-    token = 'scan:' + hashlib.sha256(repr((dataset_id, chrom, int(start), int(end),
-                                           tuple((sc.scan_id, sc.manifest_digest) for sc, _s, _g in scans))).encode()).hexdigest()[:16]
-    out = []
-    for read in reads:
+    # Per-molecule scalars (molecules.tsv: exact values) for Filter/Sort terms, cluster columns and Read Stats.
+    scalar_rows: Dict[str, list] = {}
+    for scan, sids, groups in scans:
+        for key in groups:
+            if key.endswith('#molecules'):
+                module = key[:-len('#molecules')]
+                for r in scan.tables.fetch(f'{module}/molecules.tsv.bgz', chrom, start, end):
+                    if r.get('dataset_id') in sids:
+                        r = dict(r, _file=file_of.get((scan.scan_id, r.get('dataset_id'), int(r.get('input_index') or 0))))
+                        scalar_rows.setdefault(r.get('qname', ''), []).append((module, r))
+    if not marks and not scalar_rows:
+        return None
+    # Mark groups' byte names as their contract declares them (nucsz: coarse, named, posterior, z), so a tables-mode
+    # overlay names its qualities as an annotated BAM's group parses (bam_tags known_qual_names).
+    declared = {g.get('group'): list(g.get('quality_names') or []) for scan, _s, _g in scans
+                for block in (scan.manifest.get('modules') or {}).values()
+                for g in block.get('ma_groups') or [] if g.get('kind') == 'mark'}
+    # The overlay's receipt: rows these scans already overlaid over this window (the receipt on the row) are
+    # returned as they are, whatever quality filters did to their layers since, so a later pass never restores a
+    # rejected mark and keeps the row objects (and the consensus projection's receipt over them).
+    token = overlay_token(dataset_id, [sc for sc, _s, _g in scans])
+    here = (token, str(chrom), int(start), int(end))
+
+    def apply_one(read: dict) -> dict:
+        prior = read.get(RECEIPT_KEY)
+        if prior is not None and tuple(prior[:4]) == here:
+            return read
         original = read.get('layers') or {}
-        if any(isinstance(v, dict) and v.get('scan_overlay') == token for v in original.values()):
-            out.append(read)
-            continue
         mine = marks.get(str(read.get('id', '')))
-        layers = {k: v for k, v in original.items() if not (isinstance(v, dict) and v.get('scan_overlay'))}
+        # An earlier pass's groups (another window, other scans): those its receipt names, filtered or not, and any
+        # layer still carrying its token.
+        earlier = set(prior[4]) if prior is not None and len(prior) > 4 else set()
+        layers = {k: v for k, v in original.items()
+                  if k not in earlier and not (isinstance(v, dict) and v.get('scan_overlay'))}
+        written = []
         if mine:
             # The row's own record: by its identity when the row carries it, else by where its alignment is.
             sha, occ = read.get('record_sha256'), read.get('alignment_occurrence')
             own = f'{sha}:{occ}' if sha and occ is not None else None
+            own_file = real(read['library_id']) if read.get('library_id') else None
             r_start = read.get('reference_start', read.get('start'))
             r_end = read.get('reference_end', read.get('end'))
             for group, rows in mine.items():
+                if group in NUC_GROUPS and (read.get('nuc_live') or
+                                            (isinstance(layers.get(group), dict) and layers[group].get('nuc_live'))):
+                    continue   # live nucleosome outputs (the dataset's last Compute) win over a scan's rows
                 ivs, srcs, names, q0 = [], [], [], []
                 for row in sorted(rows, key=lambda x: (int(x['start']), int(x['end']), x.get('hit_id', ''))):
                     a, b = int(row['start']), int(row['end'])
                     b = max(b, a + 1)   # a zero-width mark (an insertion boundary) is drawn as its base
+                    if own_file is not None and row.get('_file') and row['_file'] != own_file:
+                        continue   # another file's record (an identical record in another BAM)
                     if own is not None and row.get('record'):
                         if row['record'] != own:
                             continue   # another record (a supplementary, a copy) of this read name
@@ -174,16 +258,61 @@ def apply_scan_overlays(state, dataset_id: str, chrom: str, start: int, end: int
                         q0.append([int(x) for x in str(row.get('q') or '').split(',') if x != ''])
                 if ivs:
                     width = max((len(q) for q in q0), default=0)
+                    names_q = declared.get(group) or []
                     layers[group] = dict(intervals=ivs, source_intervals=srcs, annotation_names=names,
-                                         quality_names=[f'q{i}' for i in range(width)],
+                                         quality_names=names_q if len(names_q) == width else [f'q{i}' for i in range(width)],
                                          qualities=[[q[i] if i < len(q) else 0 for q in q0] for i in range(width)],
                                          scan_overlay=token, source_layer=LAYER_META.get(group, ('', '', 'tf'))[2],
                                          draw_style='fill')
+                    written.append(group)
+        before = read
         if set(layers) != set(original) or any(layers[k] is not original.get(k) for k in layers):
             read = dict(read)
             read['layers'] = layers
-        out.append(read)
-    return out
+        mol_rows = scalar_rows.get(str(read.get('id', '')))
+        if mol_rows:
+            read = _with_scalars(read, mol_rows)
+        if read is not before:
+            read[RECEIPT_KEY] = (*here, tuple(sorted(written)))    # a copy: the row this pass made
+        return read
+    return apply_one
+
+
+_NOT_SCALARS = {'chrom', 'start', 'end', 'idx_start', 'idx_end', 'dataset_id', 'input_index', 'qname', 'record',
+                'molecule', 'calls_digest_hi', 'calls_digest_lo', '_file'}
+
+
+def _with_scalars(read: dict, rows) -> dict:
+    """``read`` with its record's molecules-table scalars (values already on the row, live ones, win)."""
+    from services.nuc.scalars import SCALARS_KEY, scalars_from_values
+    from services.nuc.inputs import real
+    sha, occ = read.get('record_sha256'), read.get('alignment_occurrence')
+    own = f'{sha}:{occ}' if sha and occ is not None else None
+    own_file = real(read['library_id']) if read.get('library_id') else None
+    have = dict(read.get(SCALARS_KEY) or {})
+    added = False
+    for module, row in rows:
+        if own_file is not None and row.get('_file') and row['_file'] != own_file:
+            continue
+        if own is not None and row.get('record') and row['record'] != own:
+            continue
+        values = {}
+        for k, v in row.items():
+            if k in _NOT_SCALARS:
+                continue
+            try:
+                values[k] = None if v in (None, '') else float(v)
+            except (TypeError, ValueError):
+                continue
+        for k, v in scalars_from_values(module, values).items():
+            if k not in have:
+                have[k] = v
+                added = True
+    if not added:
+        return read
+    read = dict(read)
+    read[SCALARS_KEY] = have
+    return read
 
 
 TIER_BYTE = {'': 0, 'core': 1, 'edge': 2, 'loose': 3}

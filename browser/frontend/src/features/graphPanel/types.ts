@@ -199,6 +199,26 @@ export interface GraphReadLayer {
   part: ([number, number] | null)[];
   nq?: number[]; lq?: number[]; rq?: number[]; aq?: number[]; tq?: number[]; el?: number[]; er?: number[]; q0?: number[];
   inferred?: boolean;
+  /** nuc/tf: the footprint's nucsz class byte (low 4 bits the coarse code, +16 for a TF call or one overlapping it),
+   * named byte (nucsz Q2: 0 unnamed, 1 small, 2 hexasome, 3 octasome, 4 chromatosome; wire version 10, absent in
+   * older payloads: no named evidence) and z byte (20 z + 128, 255 missing), parallel to `iv`; null where the call
+   * has no mark (or, for `nb`, its mark no named byte). */
+  cls?: (number | null)[];
+  nb?: (number | null)[];
+  zb?: (number | null)[];
+}
+
+/** The nucleosome segment lane (nucseg rows), in absolute source coordinates like the call layers. */
+export interface GraphReadSegLane {
+  /** [start, end, molecular length]. */
+  iv: [number, number, number][];
+  /** < 16 a segment state (1 regular, 2 disordered, 3 low information, 4 undetermined); 16 an undersized run,
+   * 17 a missing nucleosome. */
+  code?: number[];
+  /** Segments: the posterior byte; events: 10 x LLR capped at 255. */
+  p?: number[];
+  /** Regular segments: q-hat - 100; events: the count. */
+  q3?: number[];
 }
 
 export interface GraphRead {
@@ -233,6 +253,8 @@ export interface GraphRead {
   nuc?: GraphReadLayer;
   tf?: GraphReadLayer;
   msp?: GraphReadLayer;
+  /** The nucleosome segment lane (wire version 9). */
+  nseg?: GraphReadSegLane;
   m6a?: number[];
   /** m6A as counts per bin when the request's mark budget was spent: [start, end, count]. */
   m6a_density?: [number, number, number][];

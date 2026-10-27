@@ -1357,6 +1357,11 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
         ("tf_cross_consensus", 6): ["tq", "fi", "fq", "op", "sq", "q0"],
         ("msp", 1): ["aq"],
         ("fp_v2", 1): ["nq"],
+        # fiberhmm-scan nuc groups (CONTRACTS §11.3, their header declarations): the coarse code (+16 TF), the
+        # named code, round(255 x posterior), the z byte; the segment / event code, posterior or 10 x LLR, q-hat - 100
+        # or the event's count.
+        ("nucsz", 4): ["coarse", "named", "posterior", "z"],
+        ("nucseg", 3): ["code", "posterior_or_llr10", "q_hat_minus_100_or_count"],
     }
 
     # One logical MA type may be written as several strand sections (e.g.
@@ -1493,6 +1498,10 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
         for interval_index, (query_start, query_end, l, qual_start, ann_name, call_index) in enumerate(parsed_intervals):
             if callable(query_interval_to_ref):
                 ref_start, ref_end = query_interval_to_ref(query_start, query_end - 1)
+                if (ref_start is None or ref_end is None) and name in NUC_ENVELOPE_GROUPS:
+                    # A nucleosome mark with no aligned base (inside an insertion or a clip): drawn as the nearest
+                    # aligned base, as fiberhmm-scan gives it a zero-width envelope there (_ref_envelope).
+                    ref_start, ref_end = _nearest_aligned_base(coord_mapper, query_start, query_end)
                 if ref_start is None or ref_end is None:
                     continue
             else:
@@ -1584,6 +1593,29 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
             layers[name] = layer_payload
 
     return layers
+
+
+# fiberhmm-scan nucleosome groups keep marks with no aligned base at the nearest aligned base (CONTRACTS §6.2).
+NUC_ENVELOPE_GROUPS = frozenset({"nucsz", "nucseg"})
+
+
+def _nearest_aligned_base(coord_mapper, query_start: int, query_end: int):
+    """(ref, ref + 1) at the aligned base nearest a SEQ span's midpoint (block boundaries, as FiberHMM's
+    ``_ref_envelope``), or (None, None) when the record has no aligned base."""
+    starts = getattr(coord_mapper, "_aligned_starts", None)
+    ends = getattr(coord_mapper, "_aligned_ends", None)
+    offsets = getattr(coord_mapper, "_aligned_offsets", None)
+    if not starts or ends is None or offsets is None:
+        return None, None
+    mid = (query_start + query_end) / 2.0
+    best = None
+    for q0, q1, off in zip(starts, ends, offsets):
+        for q in (q0, q1 - 1):
+            d = abs(q - mid)
+            if best is None or d < best[0]:
+                best = (d, q + off)
+    p = int(best[1])
+    return p, p + 1
 
 
 def seq_span_to_molecular(seq_start: int, seq_end: int, read_length: int, lead_hard_clip: int,

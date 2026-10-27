@@ -75,14 +75,14 @@ export function deriveModeOptions(
     let id = entry.key as PeakMode;
     if (entry.key === 'footprint') id = 'nuc';
     if (entry.key === 'm6a') seen.add('mod');
-    if (seen.has(id)) continue;
+    if (seen.has(id) || NUC_GROUP_LAYERS.has(entry.key)) continue;
     options.push({ id, label: entry.label });
     seen.add(id);
   }
 
   const skipAsCustom = new Set([
     'accessibility', 'nuc', 'tf', 'msp', 'fire', 'mod', 'modification',
-    'footprint', 'm6a', 'm5c', 'deam',
+    'footprint', 'm6a', 'm5c', 'deam', ...NUC_GROUP_LAYERS,
   ]);
   for (const d of datasets) {
     if (!d.available_layers) continue;
@@ -98,6 +98,36 @@ export function deriveModeOptions(
   }
 
   return options;
+}
+
+/** Nucleosome scan groups: never modes by name (nucsz / nucseg come in through the nuc.* modes; nucmol / nfrmol
+ * are per-molecule scalars). */
+const NUC_GROUP_LAYERS: ReadonlySet<string> = new Set(['nucsz', 'nucseg', 'nucmol', 'nfrmol']);
+
+/** Cluster modes of the nucleosome scan layers (per region, like layer names; the backend's nuc.* modes). */
+export const NUC_CLUSTER_MODES: ReadonlyArray<{ id: PeakMode; label: string; layer: 'nucsz' | 'nucseg' }> = [
+  { id: 'nuc.size.short', label: 'Nuc size: short', layer: 'nucsz' },
+  { id: 'nuc.size.mono', label: 'Nuc size: mono', layer: 'nucsz' },
+  { id: 'nuc.size.long', label: 'Nuc size: long', layer: 'nucsz' },
+  { id: 'nuc.size.multi2', label: 'Nuc size: multi (2)', layer: 'nucsz' },
+  { id: 'nuc.size.multi3', label: 'Nuc size: multi (3+)', layer: 'nucsz' },
+  { id: 'nuc.size.cant_tell', label: "Nuc size: can't tell", layer: 'nucsz' },
+  { id: 'nuc.size.edge_truncated', label: 'Nuc size: edge-truncated', layer: 'nucsz' },
+  { id: 'nuc.size.tf', label: 'Nuc size: TF', layer: 'nucsz' },
+  { id: 'nuc.seg.regular', label: 'Nuc array: regular', layer: 'nucseg' },
+  { id: 'nuc.seg.disordered', label: 'Nuc array: disordered', layer: 'nucseg' },
+  { id: 'nuc.seg.undetermined', label: 'Nuc array: undetermined', layer: 'nucseg' },
+  { id: 'nuc.seg.low_information', label: 'Nuc array: low information', layer: 'nucseg' },
+  { id: 'nuc.event.undersized', label: 'Nuc event: undersized run', layer: 'nucseg' },
+  { id: 'nuc.event.missing', label: 'Nuc event: missing nucleosome', layer: 'nucseg' },
+];
+
+/** The nuc.* cluster modes the datasets' nucsz / nucseg layers support (Cluster only: Sort's % options stay layer modes). */
+export function nucClusterModeOptions(
+  datasets: Array<{ available_layers?: Partial<Record<string, boolean>> }>,
+): { id: PeakMode; label: string }[] {
+  const has = (name: string) => datasets.some(d => d.available_layers?.[name]);
+  return NUC_CLUSTER_MODES.filter(mode => has(mode.layer)).map(({ id, label }) => ({ id, label }));
 }
 
 const CLUSTER_METHODS: Array<{
@@ -295,13 +325,15 @@ export function ClusterPanel({
     () => clusterFeatureRules.filter(rule => rule.enabled && rule.terms.length > 0),
     [clusterFeatureRules],
   );
+  const nucModeOptions = useMemo(() => nucClusterModeOptions(datasets), [datasets]);
   const clusterModeOptions = useMemo(() => [
     ...peakModeOptions,
+    ...nucModeOptions,
     ...enabledClusterFeatureRules.map(rule => ({
       id: `${CLUSTER_RULE_MODE_PREFIX}${rule.id}` as PeakMode,
       label: resolveClusterFeatureRuleName(rule),
     })),
-  ], [peakModeOptions, enabledClusterFeatureRules]);
+  ], [peakModeOptions, nucModeOptions, enabledClusterFeatureRules]);
   const activeClusterRuleId = typeof clusterPeakMode === 'string' && clusterPeakMode.startsWith(CLUSTER_RULE_MODE_PREFIX)
     ? clusterPeakMode.slice(CLUSTER_RULE_MODE_PREFIX.length)
     : null;

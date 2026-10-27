@@ -817,7 +817,9 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
             if (newlyDiscovered.length > 0) {
               newlyDiscovered.forEach(layerName => {
                 const key = normalizeAnnotationLayer(layerName) ?? layerName;
-                const defaultOn = key === 'nuc' || key === 'tf';
+                // The nucleosome layers too (size classes, array segments): a dataset with nucleosome outputs (a
+                // Compute, an opened scan, an annotated BAM) shows them until the user turns them off.
+                const defaultOn = key === 'nuc' || key === 'tf' || key === 'nucsz' || key === 'nucseg';
                 if (defaultOn || !(key in current)) {
                   store.toggleModType(layerName as any, defaultOn);
                 }

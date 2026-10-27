@@ -15,6 +15,7 @@ import { registerAltAllelePreview } from './altAllele/preview';
 import { registerLiveLift } from './liveLift/register';
 import { registerGraphPanel } from './graphPanel/register';
 import { registerFeatureHub } from './hub/register';
+import { registerNucleosomePanel } from './nucleosomes/register';
 
 let done = false;
 
@@ -33,4 +34,5 @@ export function registerInsertionFeatures(): void {
   registerLiveLift();
   registerGraphPanel();
   registerFeatureHub();
+  registerNucleosomePanel();
 }

@@ -15,6 +15,7 @@ import { closeScanId, loadScanHits, openScanPath, refreshScans, restoreSessionSc
 import { hitSelectionEntry, type HubSelected, type HubUi } from './hubState';
 import { useHubJob } from './hubJob';
 import { asAnchors, asClusterRegions, asFilter, goToHits } from './actions';
+import { sendToNucleosomeWindow } from '../nucleosomes/handoff';
 import { ScanDialog } from './ScanDialog';
 import type { FeatureHit, FeatureSet, HitValue } from './types';
 
@@ -316,6 +317,14 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
         <AnalysisButton theme="indigo" variant="soft" disabled={busy || !selected.some(h => h.hasStates)} data-testid="hub-use-filter"
           title="Keep the reads in state 1 (a class member, open in the NFR) at any of the selected hits that have per-read states"
           onClick={() => { void act(() => asFilter(selected, 'any'), 'Filtered the reads to members of the selected hits.'); }}>Filter</AnalysisButton>
+        <AnalysisButton theme="indigo" variant="soft" data-testid="hub-use-nuc-window"
+          disabled={!selected.some(h => !h.frame || h.frame.kind === 'linear' || h.frame.kind === 'lifted')}
+          title="Measure nucleosomes around the first selected hit in the Nucleosomes panel's window mode (its anchor phases; the other selected hits can be its background)"
+          onClick={() => {
+            const h = selected.find(x => !x.frame || x.frame.kind === 'linear' || x.frame.kind === 'lifted');
+            if (h) sendToNucleosomeWindow({ chrom: h.chrom, start: h.start, end: Math.max(h.end, h.start + 1), anchor: h.anchor,
+              ...(h.strand ? { strand: h.strand } : {}), label: `${h.label || h.typeId} ${h.chrom}:${(h.start + 1).toLocaleString()}` });
+          }}>Nucleosome window</AnalysisButton>
         <button type="button" className="ml-auto text-[11px] text-ink-muted hover:underline" onClick={() => setHub({ selected: [] })}>Clear</button>
       </section>}
 
@@ -342,7 +351,10 @@ function HitRows({ row, selected, expanded, columns, kind, delta, onClick, onTog
     <tr ref={ref} className={`cursor-pointer border-t border-gray-100 dark:border-gray-800 ${selected ? 'bg-indigo-50 dark:bg-indigo-950/40' : 'hover:bg-gray-50 dark:hover:bg-white/5'}`}
       onClick={onClick} data-testid="hub-row" data-selected={selected ? 'true' : 'false'} data-type={hit.typeId}>
       <td className="px-1 text-left"><span className="rounded bg-gray-100 px-1 text-[10px] text-gray-700 dark:bg-white/10 dark:text-gray-200">{hit.typeId}</span></td>
-      <td className="px-1 text-left">{locus(hit)}{hit.end <= hit.start ? ' ⋮' : ''}</td>
+      <td className="px-1 text-left">{locus(hit)}{hit.end <= hit.start ? ' ⋮' : ''}
+        {hit.flags?.includes('open_end') && <span className="ml-1 rounded bg-amber-100 px-1 text-[10px] text-amber-800 dark:bg-amber-900/40 dark:text-amber-200"
+          title="At the edge of the scanned units: a scan reaching further may change this hit (fiberhmm-scan open_end)"
+          data-testid="hub-row-open-end">open end</span>}</td>
       <td className="max-w-[10rem] truncate px-1 text-left" title={hit.label}>{hit.label}</td>
       {columns.map(c => {
         const v = row.role ? hit.values?.[c.key]?.[row.role] : undefined;
@@ -371,6 +383,10 @@ function HitRows({ row, selected, expanded, columns, kind, delta, onClick, onTog
           <div className="flex gap-1">
             <AnalysisButton onClick={() => { goToHits([hit]); }} disabled={hit.frame?.kind === 'source'} title={hit.frame?.kind === 'source' ? 'In another assembly\'s coordinates: lifting hits onto this genome comes later' : undefined} data-testid="hub-row-goto">Go to</AnalysisButton>
             {hit.link && <AnalysisButton onClick={() => useBrowserStore.getState().openAnalysisPanel(hit.link!.panel)}>Open in its panel</AnalysisButton>}
+            {(!hit.frame || hit.frame.kind === 'linear' || hit.frame.kind === 'lifted') && <AnalysisButton data-testid="hub-row-nuc-window"
+              title="Measure nucleosomes around this hit in the Nucleosomes panel's window mode"
+              onClick={() => { sendToNucleosomeWindow({ chrom: hit.chrom, start: hit.start, end: Math.max(hit.end, hit.start + 1), anchor: hit.anchor,
+                ...(hit.strand ? { strand: hit.strand } : {}), label: `${hit.label || set.type.label} ${hit.chrom}:${(hit.start + 1).toLocaleString()}` }); }}>Nucleosome window</AnalysisButton>}
           </div>
         </div>
       </td>

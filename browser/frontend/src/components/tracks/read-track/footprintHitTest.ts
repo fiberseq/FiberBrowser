@@ -1,6 +1,7 @@
 import type { CompactRead } from './types';
 import { normalizeAnnotationLayer } from '../../../utils/layerAliases';
 import { consensusPrimaryFamily } from '../../../utils/consensusVisual';
+import { NUC_UNDRAWN_LAYERS } from '../../../utils/nucLayers';
 
 export interface FootprintHit {
   intervalIndex: number;
@@ -78,6 +79,8 @@ export function findFootprintHit(
 
   for (const [layerName, layer] of Object.entries(layers)) {
     if (clickTargetLayer && !layerNamesMatch(clickTargetLayer, layerName)) continue;
+    // Nucleosome marks, array segments and scalar groups are not footprints to click.
+    if (NUC_UNDRAWN_LAYERS.has(layerName)) continue;
     const layerEnabled = layerName === 'msp'
       ? !!(enabledModTypes.fire || enabledModTypes.msp)
       : (enabledModTypes[layerName] ?? true);

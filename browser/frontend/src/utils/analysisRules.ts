@@ -1,4 +1,7 @@
 import { geneTss } from './coordinates';
+import type { FeatureHubPayload } from '../api/readOperations';
+import { idSetHas, qnameOfId, recordKey } from './recordKeys';
+import { DEFAULT_MOLECULE_METRIC, moleculeMetricShortName, moleculeMetricUnitSuffix } from './moleculeMetrics';
 import type {
   AnalysisRuleGenePart,
   AnalysisRuleScope,
@@ -9,6 +12,7 @@ import type {
   AnalysisSortRule,
   ClusterFeatureRule,
   ClusterFeatureRuleTerm,
+  ClusterFeatureRuleTermSource,
   FirePeak,
   Gene,
   PeakMode,
@@ -172,6 +176,12 @@ export function summarizeClusterFeatureRuleTerm(
   if (term.source === 'footprint_group' || term.source === 'footprint_class') {
     return term.footprintGroupName || term.group?.name || 'Footprint class';
   }
+  if (term.source === 'molecule_metric') {
+    return moleculeMetricShortName(term.moleculeMetric);
+  }
+  if (term.source === 'feature_hub') {
+    return `Hub hits (${term.hubHits?.length ?? 0}) state ${term.hubState === '0' ? '0' : '1'}`;
+  }
 
   const parts = [layerLabel(term, layerLabels)];
   const size = sizeSummary(term);
@@ -226,11 +236,32 @@ export function buildClusterFeatureRuleAutoName(
   return scope ? `${source} @ ${scope}` : source;
 }
 
-function sortMetricLabel(metric: AnalysisSortMetric): string {
+/** '' for 'value': a molecule metric's name is the metric. */
+export function sortMetricLabel(metric: AnalysisSortMetric): string {
   if (metric === 'occupancy') return 'occupancy';
   if (metric === 'rate') return 'FP rate';
   if (metric === 'accessibility') return 'accessibility';
+  if (metric === 'value') return '';
   return 'count';
+}
+
+/** The metric a rule's first term is measured by: a molecule metric's value, a hub term's count. */
+function ruleMetric(rule: { terms?: ClusterFeatureRuleTerm[]; metric: AnalysisSortMetric }): AnalysisSortMetric {
+  const source = rule.terms?.[0]?.source;
+  if (source === 'molecule_metric') return 'value';
+  if (source === 'feature_hub') return 'count';
+  return rule.metric === 'value' ? 'count' : rule.metric;
+}
+
+/** A molecule's scalar and the hits' own states read the whole view: names leave that scope out. */
+function scopeSummaryFor(rule: { terms?: ClusterFeatureRuleTerm[]; scope?: AnalysisRuleScope }): string {
+  const terms = rule.terms ?? [];
+  if (terms.length > 0 && terms.every(isScopeFreeTerm) && normalizeAnalysisRuleScope(rule.scope).kind === 'currentWindow') return '';
+  return summarizeAnalysisRuleScope(rule.scope, { omitDefault: true });
+}
+
+function isScopeFreeTerm(term: ClusterFeatureRuleTerm): boolean {
+  return term.source === 'molecule_metric' || term.source === 'feature_hub';
 }
 
 export function buildAnalysisSortRuleAutoName(
@@ -243,21 +274,29 @@ export function buildAnalysisSortRuleAutoName(
     .join(' OR ');
   const source = termText || 'Feature';
   const direction = rule.descending === false ? 'low to high' : 'high to low';
-  const scope = summarizeAnalysisRuleScope(rule.scope, { omitDefault: true });
-  const base = `${source} ${sortMetricLabel(rule.metric)} ${direction}`;
+  const scope = scopeSummaryFor(rule);
+  const base = [source, sortMetricLabel(ruleMetric(rule)), direction].filter(Boolean).join(' ');
   return scope ? `${base} @ ${scope}` : base;
 }
 
-function filterOperatorLabel(operator: AnalysisFilterOperator): string {
+export function filterOperatorLabel(operator: AnalysisFilterOperator): string {
   if (operator === 'gt') return '>';
   if (operator === 'gte') return '>=';
   if (operator === 'lt') return '<';
   if (operator === 'lte') return '<=';
+  if (operator === 'between') return 'between';
   return '=';
 }
 
+/** A between rule's bounds, low first (the upper bound defaults to the lower). */
+export function filterRuleBounds(rule: Pick<AnalysisFilterRule, 'threshold' | 'thresholdMax'>): [number, number] {
+  const lo = Number.isFinite(rule.threshold) ? rule.threshold : 1;
+  const hi = rule.thresholdMax != null && Number.isFinite(rule.thresholdMax) ? rule.thresholdMax : lo;
+  return lo <= hi ? [lo, hi] : [hi, lo];
+}
+
 export function buildAnalysisFilterRuleAutoName(
-  rule: Pick<AnalysisFilterRule, 'terms' | 'scope' | 'metric' | 'operator' | 'threshold'>,
+  rule: Pick<AnalysisFilterRule, 'terms' | 'scope' | 'metric' | 'operator' | 'threshold'> & Partial<Pick<AnalysisFilterRule, 'thresholdMax'>>,
   layerLabels?: Record<string, string>,
 ): string {
   const termText = (rule.terms ?? [])
@@ -265,10 +304,131 @@ export function buildAnalysisFilterRuleAutoName(
     .filter(Boolean)
     .join(' OR ');
   const source = termText || 'Feature';
-  const scope = summarizeAnalysisRuleScope(rule.scope, { omitDefault: true });
+  const scope = scopeSummaryFor(rule);
   const threshold = Number.isFinite(rule.threshold) ? rule.threshold : 1;
-  const base = `${source} ${sortMetricLabel(rule.metric)} ${filterOperatorLabel(rule.operator)} ${threshold}`;
+  const term = rule.terms?.[0];
+  const unit = term?.source === 'molecule_metric' ? moleculeMetricUnitSuffix(term.moleculeMetric) : '';
+  let comparison: string;
+  if (rule.operator === 'between') {
+    const [lo, hi] = filterRuleBounds(rule);
+    comparison = `between ${lo} and ${hi}${unit}`;
+  } else {
+    comparison = `${filterOperatorLabel(rule.operator)} ${threshold}${unit}`;
+  }
+  const base = [source, sortMetricLabel(ruleMetric(rule)), comparison].filter(Boolean).join(' ');
   return scope ? `${base} @ ${scope}` : base;
+}
+
+// ------------------------------------------------------------------ term sources without a layer
+
+const RULE_TERM_SOURCES: ClusterFeatureRuleTermSource[] = [
+  'layer', 'label_rule', 'footprint_group', 'footprint_class', 'transcription_state', 'molecule_metric', 'feature_hub',
+];
+
+/** A saved term's source (unknown sources read as layer terms). */
+export function normalizeRuleTermSource(value: unknown): ClusterFeatureRuleTermSource {
+  return RULE_TERM_SOURCES.includes(value as ClusterFeatureRuleTermSource) ? value as ClusterFeatureRuleTermSource : 'layer';
+}
+
+type HubHit = NonNullable<ClusterFeatureRuleTerm['hubHits']>[number];
+
+function normalizeHubHits(value: unknown): HubHit[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap(raw => {
+    const h = raw as Record<string, unknown>;
+    if (!h || typeof h !== 'object') return [];
+    const setId = h.setId ?? h.set_id, hitId = h.hitId ?? h.hit_id;
+    const start = Number(h.start), end = Number(h.end);
+    if (typeof setId !== 'string' || !setId || typeof hitId !== 'string' || !hitId) return [];
+    if (typeof h.chrom !== 'string' || !h.chrom || !Number.isFinite(start) || !Number.isFinite(end)) return [];
+    return [{ setId, hitId, chrom: h.chrom, start, end, ...(typeof h.label === 'string' && h.label ? { label: h.label } : {}) }];
+  });
+}
+
+/** The fields of the layer-free sources a saved term keeps (sessions, rule sets, imports, every store update). */
+export function normalizeRuleTermSourceFields(
+  source: ClusterFeatureRuleTermSource,
+  raw: Record<string, unknown>,
+): Partial<ClusterFeatureRuleTerm> {
+  if (source === 'molecule_metric') {
+    const metric = raw.moleculeMetric ?? raw.molecule_metric;
+    return { layer: null, moleculeMetric: typeof metric === 'string' && metric ? metric : DEFAULT_MOLECULE_METRIC };
+  }
+  if (source === 'feature_hub') {
+    const state = raw.hubState ?? raw.hub_state;
+    return { layer: null, hubHits: normalizeHubHits(raw.hubHits ?? raw.hub_hits), hubState: state === '0' ? '0' : '1' };
+  }
+  return {};
+}
+
+/** Terms that read no layer: no `layer` and no size rule go with their request. */
+export function isLayerFreeRuleTerm(term: ClusterFeatureRuleTerm | undefined): boolean {
+  return term?.source === 'molecule_metric' || term?.source === 'feature_hub' || term?.source === 'transcription_state';
+}
+
+export type FeatureHubRequest = FeatureHubPayload;
+
+export function featureHubRequest(term: ClusterFeatureRuleTerm | undefined): FeatureHubRequest | undefined {
+  if (term?.source !== 'feature_hub') return undefined;
+  return {
+    hits: (term.hubHits ?? []).map(h => ({ set_id: h.setId, hit_id: h.hitId, chrom: h.chrom, start: h.start, end: h.end })),
+    state: term.hubState === '0' ? '0' : '1',
+  };
+}
+
+/** Why a rule cannot run as it is (null: it can). */
+export function analysisRuleTermProblem(term: ClusterFeatureRuleTerm | undefined): string | null {
+  if (term?.source === 'feature_hub' && !(term.hubHits?.length)) return 'has no hub hits: select hits in the feature hub and use them in Rules';
+  return null;
+}
+
+/** The new request fields of a filter rule (molecule metric, between, hub hits); layer and size rule are the caller's. */
+export function filterRuleRequestFields(rule: Pick<AnalysisFilterRule, 'terms' | 'metric' | 'operator' | 'threshold' | 'thresholdMax'>): {
+  metric: AnalysisSortMetric;
+  operator: AnalysisFilterOperator;
+  threshold: number;
+  thresholdMax?: number;
+  moleculeMetric?: string;
+  featureHub?: FeatureHubRequest;
+  layerFree: boolean;
+} {
+  const term = rule.terms[0];
+  const between = rule.operator === 'between';
+  const [lo, hi] = filterRuleBounds(rule);
+  return {
+    metric: ruleMetric(rule),
+    operator: rule.operator,
+    threshold: between ? lo : (Number.isFinite(rule.threshold) ? rule.threshold : 1),
+    ...(between ? { thresholdMax: hi } : {}),
+    ...(term?.source === 'molecule_metric' ? { moleculeMetric: term.moleculeMetric || DEFAULT_MOLECULE_METRIC } : {}),
+    ...(term?.source === 'feature_hub' ? { featureHub: featureHubRequest(term) } : {}),
+    layerFree: isLayerFreeRuleTerm(term),
+  };
+}
+
+/** The sort_by and new fields of a sort rule's layer-free term (null for the other sources). */
+export function sortRuleRequestFields(rule: Pick<AnalysisSortRule, 'terms'>):
+  { sortBy: 'value'; moleculeMetric: string } | { sortBy: 'feature_hub'; featureHub: FeatureHubRequest } | null {
+  const term = rule.terms[0];
+  if (term?.source === 'molecule_metric') return { sortBy: 'value', moleculeMetric: term.moleculeMetric || DEFAULT_MOLECULE_METRIC };
+  if (term?.source === 'feature_hub') return { sortBy: 'feature_hub', featureHub: featureHubRequest(term)! };
+  return null;
+}
+
+/**
+ * A filter result kept within the panel's current filter (rule combine 'and'). Identity-aware, as cluster targets
+ * are: a lifted row's id matches a kept QNAME or record key. No current filter: the result as it is.
+ */
+export function intersectWithCurrentFilter(resultIds: Iterable<string>, current: ReadonlySet<string> | null | undefined): Set<string> {
+  const ids = Array.from(resultIds);
+  if (!current) return new Set(ids);
+  return new Set(ids.filter(id => idSetHas(current, [id, qnameOfId(id)], recordKey(id))));
+}
+
+/** The filter chip's label: "Rules > A", or "Rules > A AND B" when B was applied within A. */
+export function analysisFilterLabel(ruleName: string, previous?: { label?: string } | null): string {
+  if (!previous) return `Rules > ${ruleName}`;
+  return `${previous.label?.trim() || 'Current filter'} AND ${ruleName}`;
 }
 
 export function resolveClusterFeatureRuleName(

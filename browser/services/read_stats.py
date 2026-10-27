@@ -344,6 +344,7 @@ def _collect_bam_read_stats(
                     "ref_end": ref_end,
                     "fp_intervals": fp_intervals_rel,
                     "methyl_pos": methyl_pos_rel,
+                    **nucleosome_columns(ws_read),
                 }
                 per_read.append(entry)
                 all_fp_sizes.extend(interval_stats["fp_sizes"])
@@ -407,6 +408,24 @@ def _lifted_source_record(dataset, row, handles: dict):
         except (ValueError, OSError) as exc:
             log_read_stats_diagnostic(f"[read_stats] Error fetching lifted source {contig}:{s0}-{s1}: {exc}")
     return None, None
+
+
+# Read Stats' nucleosome columns (NUC §7.1 item 5): the molecule's nucmol scalars, None when it has none.
+NUC_COLUMNS = ('nrl', 'regularity', 'gap_cv', 'lambda_acc', 'n_short', 'n_mono', 'n_multi', 'n_cant_tell',
+               'reg_fraction', 'disordered_fraction', 'undetermined_fraction', 'n_missing')
+
+
+def nucleosome_columns(read) -> dict:
+    """The nucleosome columns of a working-set row (its molecule scalars: services/nuc/scalars.py)."""
+    if not read:
+        return {name: None for name in NUC_COLUMNS}
+    from services.nuc.scalars import molecule_scalars
+    values = molecule_scalars(read)
+    out = {}
+    for name in NUC_COLUMNS:
+        v = values.get(f'nuc.{name}')
+        out[name] = None if v is None else (round(float(v), 4) if isinstance(v, float) else v)
+    return out
 
 
 def _collect_lifted_read_stats(
@@ -483,6 +502,7 @@ def _collect_lifted_read_stats(
             "ref_end": rec.reference_end if rec is not None else src.get("end"),
             "ref_contig": src.get("contig"),
             "coordinates": "source",
+            **nucleosome_columns(row),
             "lifted": True,
             # Read-relative positions are on the source record; lifted rows are drawn on target coordinates.
             "fp_intervals": None,

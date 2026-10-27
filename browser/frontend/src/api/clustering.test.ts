@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { clusterAllReads, clusterMatchedViews, fetchClusterProjection, fetchClusterVPlot } from './clustering';
+import { assignToClusters, clusterAllReads, clusterMatchedViews, fetchClusterProjection, fetchClusterVPlot } from './clustering';
 
 describe('clustering API client', () => {
   it('requests early preparation only when explicitly configured', async () => {
@@ -217,6 +217,26 @@ describe('clustering API client', () => {
     // The full-footprint V-plot with per-size-row enrichment (fb-n5-charts).
     await fetchClusterVPlot('chr2R', 100, 200, { mode: 'span', rowNormalize: true });
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toMatchObject({ mode: 'span', row_normalize: true });
+  });
+});
+
+describe('dynamic assignment request', () => {
+  it('sends the fit\'s metric cohort with patterns or centroids, and nothing without one (Codex C2-1)', async () => {
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => ({
+      ok: true, json: async () => ({ results: {} }),
+    }) as Response);
+    vi.stubGlobal('fetch', fetchMock);
+    const cohort = { 'nuc.nrl': { values: [180, 190, 200, 210], counts: [1, 1, 1, 1] } };
+    const peaks = [{ start: 0, end: 100, mode: 'cluster_rule:m' as const }];
+    await assignToClusters('chr1', 0, 100, peaks, { 0: [0], 1: [1] }, ['ds1'], false, 90, 0.5, { metricCohort: cohort });
+    await assignToClusters('chr1', 0, 100, peaks, {}, ['ds1'], false, 90, 0.5,
+      { centroids: { 0: [0.25], 1: [0.75] }, peakWidths: [1], metricCohort: cohort });
+    await assignToClusters('chr1', 0, 100, peaks, { 0: [0], 1: [1] }, ['ds1'], false, 90, 0.5, { metricCohort: {} });
+    const bodies = fetchMock.mock.calls.map(call => JSON.parse(String(call[1]?.body)));
+    expect(bodies[0].cluster_metric_cohort).toEqual(cohort);
+    expect(bodies[1].cluster_metric_cohort).toEqual(cohort);
+    expect(bodies[1].cluster_centroids).toEqual({ 0: [0.25], 1: [0.75] });
+    expect(bodies[2]).not.toHaveProperty('cluster_metric_cohort');
   });
 });
 

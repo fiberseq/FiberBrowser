@@ -1032,7 +1032,10 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
     calls = read.get("_fiberbrowser_calls") or {}
     call_ids, call_parts = {}, {}
     dropped = {"points": 0, "events": 0}
-    payload = {k: v for k, v in read.items() if k not in _REPLACED and not k.startswith("_fiberbrowser_")}
+    # (Internal fields stay with the decoded record, except the molecule scalars every row of a record shares:
+    # services/nuc/scalars.py.)
+    payload = {k: v for k, v in read.items() if k not in _REPLACED
+               and (not k.startswith("_fiberbrowser_") or k == "_fiberbrowser_scalars")}
 
     sa = []
     cuts = []

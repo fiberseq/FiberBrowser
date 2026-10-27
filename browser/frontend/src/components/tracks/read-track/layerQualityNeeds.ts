@@ -60,6 +60,9 @@ export function layerQualitiesNeeded(layers: string[], colormap: QualityColormap
     || requestedLayerSet.has('tf_consensus')
     || requestedLayerSet.has('tf_cross_consensus')
   ) return true;
+  // Nucleosome size classes and array segments are their quality bytes
+  // (class codes, z, segment states): without them they show nothing.
+  if (requestedLayerSet.has('nucsz') || requestedLayerSet.has('nucseg')) return true;
   if (colormap.qualityShading?.enabled && colormap.qualityShading.mode === 'quality') return true;
   if (layers.some(layer => overlayShadesByQuality(layer, colormap))) return true;
   if ((colormap.qualityFilters ?? []).some(filter => (

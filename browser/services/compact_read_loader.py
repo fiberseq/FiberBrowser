@@ -1891,6 +1891,16 @@ def _build_compact_reads_from_bam_region(
     def _wants_layer(*names: str) -> bool:
         return wants_layer(include_layers, requested_layer_set, *names)
 
+    # Nucleosome outputs computed for these records (services/nuc): layers of their rows, as MA groups read.
+    from services.nuc.layers import injector as _nuc_injector
+    from services.nuc.scalars import (NUC_MA_GROUPS as _NUC_GROUP_NAMES, SCALAR_GROUPS,
+                                      drop_stale_nuc_groups as _drop_stale_nuc_groups,
+                                      scalar_groups_to_fields as _scalar_groups_to_fields)
+    _SCALAR_GROUP_NAMES = frozenset(SCALAR_GROUPS)
+    nuc_inject = _nuc_injector(bam_path, region_start, region_end, include_layers=include_layers,
+                               requested_layers=requested_layer_set, include_qualities=include_layer_qualities,
+                               include_lift_meta=include_lift_meta)
+
     profile_bam = os.environ.get("FIBERBROWSER_PROFILE_BAM") == "1"
     diagnose_bam = profile_bam or bam_diagnostics_enabled()
     profile_total_t0 = time_module.perf_counter() if profile_bam else 0.0
@@ -2291,6 +2301,13 @@ def _build_compact_reads_from_bam_region(
                     _profile_add("sv_events", phase_t0)
                     if partition is not None:
                         read_data['_fiberbrowser_source_order'] = source_order
+                    if read_data.get("layers") and _NUC_GROUP_NAMES.intersection(read_data["layers"]):
+                        # The record's own nucleosome groups, only when FiberHMM reads them as current.
+                        _drop_stale_nuc_groups(read_data, read)
+                    if read_data.get("layers") and _SCALAR_GROUP_NAMES.intersection(read_data["layers"]):
+                        _scalar_groups_to_fields(read_data)
+                    if nuc_inject is not None:
+                        nuc_inject(read_data)
                     reads.append(read_data)
                     if load_budget is not None:
                         load_budget.account(read_data)
@@ -2733,6 +2750,15 @@ def _build_compact_reads_from_bam_region(
             _profile_add("sv_events", phase_t0)
             if partition is not None:
                 read_data['_fiberbrowser_source_order'] = source_order
+            if read_data.get("layers") and _NUC_GROUP_NAMES.intersection(read_data["layers"]):
+                # The record's own nucleosome groups (an annotated BAM), only when FiberHMM reads them as current
+                # for its calls: a stale or unsupported group is neither a layer nor scalars.
+                _drop_stale_nuc_groups(read_data, read)
+            if read_data.get("layers") and _SCALAR_GROUP_NAMES.intersection(read_data["layers"]):
+                # A scan's per-molecule scalar group (nucmol, nfrmol): values on the row, never a drawn layer.
+                _scalar_groups_to_fields(read_data)
+            if nuc_inject is not None:
+                nuc_inject(read_data)
             reads.append(read_data)
             if load_budget is not None:
                 load_budget.account(read_data)

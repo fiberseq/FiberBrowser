@@ -2,6 +2,7 @@ import type { LiveLiftInsertion } from './types';
 import type { LiftAxis } from '../../../features/liveLift/axis';
 import { MOD_COLORS } from './constants';
 import { getLayerColor } from '../../../utils/layerColors';
+import { NUC_UNDRAWN_LAYERS } from '../../../utils/nucLayers';
 
 /** Insertion-local coordinates are in display order already, including minus
  * rows. Only the *panel's* reversed axis is applied here; mirroring the payload
@@ -37,7 +38,7 @@ export function drawInsertionPayload(ctx: CanvasRenderingContext2D, payload: Liv
   };
   intervals(payload.layers?.nuc?.intervals ?? payload.intervals, payload.layers?.nuc ? 'nuc' : 'footprint', true);
   for (const [name, layer] of Object.entries(payload.layers ?? {})) {
-    if (name !== 'nuc' && name !== 'footprint') intervals(layer.intervals, name);
+    if (name !== 'nuc' && name !== 'footprint' && !NUC_UNDRAWN_LAYERS.has(name)) intervals(layer.intervals, name);
   }
   if (payload.fire && !payload.layers?.fire) intervals(payload.fire, 'fire');
   const points = (ps: number[] | undefined, color: string, top = 0, height = h) => {

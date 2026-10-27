@@ -15,7 +15,8 @@ import { useNativeLattice } from '../../../hooks/useNativeLattice';
 import { useEphemeralStore } from '../../../stores/ephemeralStore';
 import { useShallow } from 'zustand/react/shallow';
 import { DEBUG } from '../../../stores/utils';
-import { buildRuleMatchContext, getMatchingRuleId, hydrateOrthogonalTracks, peaksForPanelChrom, rulesNeedOrthogonalTrackData } from '../../../utils/ruleMatching';
+import { buildRuleMatchContext, getMatchingRuleId, hydrateOrthogonalTracks, peaksForPanelChrom, ruleHasNucConditions, rulesNeedOrthogonalTrackData } from '../../../utils/ruleMatching';
+import { nucSizeIndex, nucSizeMarkFor } from '../../../utils/nucLayers';
 import type { Props, CompactRead, ReadsResponse, SvSummary } from './types';
 import type { DatasetProfile, OrthogonalTrackViewportData } from '../../../types/dataset';
 import type { FirePeak } from '../../../types';
@@ -843,6 +844,8 @@ export function ReadTrack({
     const modProfile = new Float32Array(resolution);
     const fireDiff = new Float32Array(resolution + 1);
     const metaprofileRules = activeColormap.rules.filter(rule => activeMetaprofileSourceIds.has(rule.id));
+    // Size-class rules read each call's nucsz mark while Size classes is on, as the read canvas does.
+    const metaprofileNucRules = !!enabledModTypes.nucsz && metaprofileRules.some(ruleHasNucConditions);
     const ruleDiffs: Record<string, Float32Array> = {};
     for (const rule of metaprofileRules) {
       ruleDiffs[rule.id] = new Float32Array(resolution + 1);
@@ -915,6 +918,7 @@ export function ReadTrack({
 
       // Determine read span from all intervals (footprints + gaps)
       let readStart = Infinity, readEnd = -Infinity;
+      const nucIndex = metaprofileNucRules ? nucSizeIndex(read.layers?.nucsz) : null;
       for (const [intervalStart, intervalEnd, size] of read.intervals) {
         if (intervalStart < readStart) readStart = intervalStart;
         if (intervalEnd > readEnd) readEnd = intervalEnd;
@@ -923,7 +927,10 @@ export function ReadTrack({
         if (size <= 0) continue;
         if (size < 10) continue;
 
-        const ruleId = getMatchingRuleId(intervalStart, intervalEnd, size, metaprofileRules, ruleCtx);
+        const ruleId = getMatchingRuleId(
+          intervalStart, intervalEnd, size, metaprofileRules, ruleCtx,
+          nucIndex ? nucSizeMarkFor(nucIndex, intervalStart, intervalEnd, size) : null,
+        );
 
         if (ruleId && ruleDiffs[ruleId]) {
           addRange(ruleDiffs[ruleId], intervalStart, intervalEnd);
@@ -1013,7 +1020,7 @@ export function ReadTrack({
     }
 
     return { mod: Array.from(modProfile), fire: Array.from(fireProfile), rules: ruleProfiles, layers: layerProfiles };
-  }, [activeColormap, activeMetaprofileSourceIds]);
+  }, [activeColormap, activeMetaprofileSourceIds, enabledModTypes.nucsz]);
 
   // Compute metaprofile from the profile read pool, not the final drawn
   // sample, so profile tracks do not shift when Fit-mode sampling changes.

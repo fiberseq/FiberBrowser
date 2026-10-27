@@ -123,6 +123,28 @@ def assign_with_model(X, read_ids, widths, modes, model, snapshot, missing=None,
     return {rid: int(keys[int(i)]) for rid, i in zip(read_ids, np.argmin(d, axis=1))}
 
 
+NUC_QUALITY_LAYERS = {'nucsz', 'nucseg'}
+_MODE_LAYER_ALIASES = {'accessibility': 'msp', 'fire': 'msp', 'tf_layer': 'tf', 'tf_density': 'tf', 'nuc_layer': 'nuc'}
+
+
+def mode_layer(mode: str) -> str:
+    """The layer a (non-rule) cluster mode reads. Nucleosome modes read the nucsz / nucseg groups
+    (services/clustering_features.py ``_nuc_mode_intervals``)."""
+    if mode.startswith('nuc.size.'):
+        return 'nucsz'
+    if mode.startswith(('nuc.seg.', 'nuc.event.')):
+        return 'nucseg'
+    return _MODE_LAYER_ALIASES.get(mode, mode)
+
+
+def fitted_metric_cohort(reads, modes, cluster_feature_rules) -> dict:
+    """The cohort each molecule metric column of a fit ranked against (the whole fitted cohort), to keep with the
+    model so assigning new reads ranks them the same way: each metric's distinct values with their counts, exact
+    (services/clustering_features.py ``fitted_metric_cohort``). Models saved before keep a sorted list, still read."""
+    from services.clustering_features import fitted_metric_cohort as exact_cohort
+    return exact_cohort(reads, modes, cluster_feature_rules)
+
+
 def run(state, req, *, sources=None, model=None, row_cache=None, covering_out=None):
     """``sources``: graph-source windows by result key (graph primary §2.6; ``services/graph_panel/analysis.py``),
     whose rows are on a package path's own coordinates, not the window's reference. ``model``: assign every
@@ -143,8 +165,7 @@ def run(state, req, *, sources=None, model=None, row_cache=None, covering_out=No
     rule_modes = any(m.startswith('cluster_rule:') for m in modes)
     layers = cluster_modes_requested_layers(modes)
     if not rule_modes:
-        aliases = {'accessibility': 'msp', 'fire': 'msp', 'tf_layer': 'tf', 'tf_density': 'tf', 'nuc_layer': 'nuc'}
-        layers = sorted({aliases.get(m, m) for m in modes if m != 'off' and m not in METHYLATION_CLUSTER_MODES})
+        layers = sorted({mode_layer(m) for m in modes if m != 'off' and m not in METHYLATION_CLUSTER_MODES})
     groups, stats, ids, metadata = {}, {}, {}, {}
     pending, loaded = [], []
     feature_spans: list = []   # per loaded window: its feature blocks, relative to its start (folded-molecule arbitration)
@@ -177,7 +198,8 @@ def run(state, req, *, sources=None, model=None, row_cache=None, covering_out=No
                 dataset_ids=[v.dataset_id], max_reads=req.max_reads, sample_seed=seed,
                 include_methylation=cluster_modes_need_methylation(modes) or bool(v.strand),
                 include_layers=cluster_modes_need_layers(modes), requested_layers=layers,
-                include_layer_qualities=rule_modes)
+                # Rule terms and nucleosome modes read the per-item quality bytes (class, state codes).
+                include_layer_qualities=rule_modes or bool(set(layers or ()) & NUC_QUALITY_LAYERS))
             working = query.build_working_set(wstate, v.dataset_id, read_ids=v.read_ids, broad_prefetch_multiplier=1,
                                               lift_hap=v.lift_hap, strand=v.strand)
             own = working.reads
@@ -291,10 +313,12 @@ def run(state, req, *, sources=None, model=None, row_cache=None, covering_out=No
         if not same:
             raise ValueError('settings or geometry changed: cluster again')
         if reads:
+            # Molecule metric columns rank against the cohort the model was fitted on (kept with it), not the new
+            # reads alone; a model saved before that ranks against the new reads.
             X, rids, widths, used = extract_features_grouped(
                 reads, [(0, n) for n in lengths], 0, groups, step=10,
                 subnucleosomal_threshold=req.subnucleosomal_threshold, peak_modes=modes,
-                cluster_feature_rules=req.cluster_feature_rules)
+                cluster_feature_rules=req.cluster_feature_rules, metric_cohort=model.get('metric_cohort') or None)
             if model.get('peak_widths') is not None and list(widths) != list(model['peak_widths']):
                 raise ValueError('settings or geometry changed: cluster again')
             if len(rids):
@@ -340,6 +364,9 @@ def run(state, req, *, sources=None, model=None, row_cache=None, covering_out=No
                       cluster_patterns=(patterns or {}).get('cluster_patterns'),
                       peak_widths=list(features.get('peak_widths') or []), samples=positions, lengths=lengths,
                       settings=snapshot, balanced=bool(balanced), schema=1)
+        cohort = fitted_metric_cohort(reads, modes, req.cluster_feature_rules)
+        if cohort:
+            fitted['metric_cohort'] = cohort
     results = {}
     for key, original in ids.items():
         a = {rid: assignments[f'{key}::{rid}'] for rid in original if f'{key}::{rid}' in assignments}

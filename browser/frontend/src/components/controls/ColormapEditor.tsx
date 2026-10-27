@@ -15,6 +15,8 @@ import type { QualityPreset } from './labeling/QualityTab';
 import { RuleEditor } from './labeling/RuleEditor';
 import type { OrthogonalTrackInfo } from './labeling/RuleEditor';
 import { useRememberedState } from '../../hooks/useRememberedState';
+import { NUC_SIZE_LAYER, NUC_UNDRAWN_LAYERS, nucSizeClassRules } from '../../utils/nucLayers';
+import { ruleHasNucConditions } from '../../utils/ruleMatching';
 
 // Generate a short unique ID
 function uid(): string {
@@ -46,6 +48,12 @@ function hydrateImportedColormap(imported: Partial<Colormap>): Colormap | null {
     // so consumers that assume an array work.
     qualityGates: (r.qualityGates ?? []) as QualityGate[],
     requireAnnotationName: r.requireAnnotationName === true,
+    // Nucleosome size conditions (kept only when set).
+    ...(Array.isArray(r.nucCoarse) && r.nucCoarse.length ? { nucCoarse: r.nucCoarse.map(Number).filter(Number.isFinite) } : {}),
+    ...(Array.isArray(r.nucNamed) && r.nucNamed.length ? { nucNamed: r.nucNamed.map(Number).filter(Number.isFinite) } : {}),
+    ...(r.zMin != null && Number.isFinite(Number(r.zMin)) ? { zMin: Number(r.zMin) } : {}),
+    ...(r.zMax != null && Number.isFinite(Number(r.zMax)) ? { zMax: Number(r.zMax) } : {}),
+    ...(typeof r.nucTf === 'boolean' ? { nucTf: r.nucTf } : {}),
     enabled: r.enabled !== false,
   })) as ColorRule[];
   const noReadBackgroundColor = /^#[0-9a-fA-F]{6}$/.test(imported.noReadBackgroundColor ?? '')
@@ -140,7 +148,7 @@ export function ColormapEditorInline() {
     addQualityFilter, updateQualityFilter, removeQualityFilter,
     savedColormaps, saveColormap, loadColormap, deleteColormap,
     setDefaultColormap,
-    orthogonalTracks, enabledModTypes, datasets, genes,
+    orthogonalTracks, enabledModTypes, datasets, genes, toggleModType,
   } = useBrowserStore(useShallow(s => ({
     activeColormap: s.activeColormap, setActiveColormap: s.setActiveColormap,
     updateColormapRule: s.updateColormapRule, addColormapRule: s.addColormapRule, removeColormapRule: s.removeColormapRule, reorderColormapRules: s.reorderColormapRules,
@@ -151,6 +159,7 @@ export function ColormapEditorInline() {
     savedColormaps: s.savedColormaps, saveColormap: s.saveColormap, loadColormap: s.loadColormap, deleteColormap: s.deleteColormap,
     setDefaultColormap: s.setDefaultColormap,
     orthogonalTracks: s.orthogonalTracks, enabledModTypes: s.enabledModTypes, datasets: s.datasets, genes: s.genes,
+    toggleModType: s.toggleModType,
   })));
 
   const trackInfos: OrthogonalTrackInfo[] = orthogonalTracks.map(t => ({
@@ -192,7 +201,12 @@ export function ColormapEditorInline() {
   // Drives both the quality-filter layer dropdown and the per-rule
   // targetLayers chip selector so they show "Nuc / TF / FIRE / ..."
   // instead of duplicated "footprint + nuc" or internal "msp" entries.
-  const layerEntries = useMemo(() => getCanonicalLayerEntries(datasets), [datasets]);
+  // Nucleosome marks, array segments and scalar groups are never painted as
+  // layers: no rule targets them and they have no opacity of their own.
+  const layerEntries = useMemo(
+    () => getCanonicalLayerEntries(datasets).filter(entry => !NUC_UNDRAWN_LAYERS.has(entry.key)),
+    [datasets],
+  );
   const allLayerNames = useMemo(() => layerEntries.map(e => e.key), [layerEntries]);
   const hasFireLayer = allLayerNames.includes('fire');
   const layerLabelByKey = useMemo(
@@ -330,6 +344,21 @@ export function ColormapEditorInline() {
     });
   }, [addColormapRule, selectedGeneForRule]);
 
+  // Nucleosome size classes read the scan's size marks: the Size classes layer must be on for them to show.
+  const hasNucSizeMarks = datasets.some(d => !!d.available_layers?.[NUC_SIZE_LAYER]);
+  const nucRulesEnabled = activeColormap.rules.some(rule => rule.enabled && ruleHasNucConditions(rule));
+  const nucSizeLayerOn = !!(enabledModTypes as Record<string, boolean>)[NUC_SIZE_LAYER];
+  const handleAddNucSizeClasses = useCallback(() => {
+    // At the top: the default Nucleosome rule (90 bp and up) would win over rules below it.
+    const template = nucSizeClassRules();
+    const ids = new Set(template.map(rule => rule.id));
+    setActiveColormap({
+      ...activeColormap,
+      rules: [...template, ...activeColormap.rules.filter(rule => !ids.has(rule.id))],
+    });
+    if (hasNucSizeMarks && !nucSizeLayerOn) toggleModType(NUC_SIZE_LAYER as never, true);
+  }, [activeColormap, setActiveColormap, hasNucSizeMarks, nucSizeLayerOn, toggleModType]);
+
   const handleExportJSON = useCallback(() => {
     const json = JSON.stringify(activeColormap, null, 2);
     const blob = new Blob([json], { type: 'application/json' });
@@ -424,6 +453,36 @@ export function ColormapEditorInline() {
                   >
                     add rule
                   </AnalysisButton>
+                </div>
+              )}
+              <div
+                className="flex items-center gap-2 flex-wrap rounded bg-white/70 dark:bg-black/10 border border-slate-200 dark:border-white/10 px-2 py-1.5 text-[11px]"
+                data-testid="nuc-size-classes-template"
+              >
+                <span className="font-medium text-gray-600 dark:text-gray-300">Template:</span>
+                <AnalysisButton
+                  onClick={handleAddNucSizeClasses}
+                  theme="slate"
+                  variant="soft"
+                  title="Add one rule per coarse size class at the top (short amber, mono green, long teal, multi (2) blue, multi (3+) violet, can't tell grey, edge-truncated light grey), on nucleosome calls only. Needs a nucleosome scan."
+                  data-testid="add-nuc-size-classes"
+                >
+                  Add nucleosome size classes
+                </AnalysisButton>
+                <span className="text-gray-500">colours nucleosome calls by a scan's coarse size class</span>
+              </div>
+              {nucRulesEnabled && !nucSizeLayerOn && (
+                <div className="flex items-center gap-2 flex-wrap rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-800 dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-200" data-testid="nuc-size-layer-off">
+                  {hasNucSizeMarks ? (
+                    <>
+                      <span>Nucleosome size classes are off: rules with nucleosome conditions match nothing.</span>
+                      <AnalysisButton onClick={() => toggleModType(NUC_SIZE_LAYER as never, true)} theme="amber" variant="soft">
+                        Turn on
+                      </AnalysisButton>
+                    </>
+                  ) : (
+                    <span>No loaded dataset has nucleosome size marks: run a nucleosome scan for rules with nucleosome conditions to match.</span>
+                  )}
                 </div>
               )}
               <div>

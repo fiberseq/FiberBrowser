@@ -6,12 +6,15 @@
  * qualities, never by the slice of it a node or a coverage hole leaves on screen.
  *
  * Rules that need target coordinates (genes, peaks, tracks) never match here: an alternate path has no target
- * coordinates of its own (DESIGN_GRAPH_PANEL.md §5, coordinate-dependent landmarks stay unapplied).
+ * coordinates of its own (DESIGN_GRAPH_PANEL.md §5, coordinate-dependent landmarks stay unapplied). Nucleosome class
+ * rules (coarse code, named class, z, TF bit) are not coordinate-dependent: they read the class bytes the call
+ * carries, and never match a call without them (the read track's rule).
  */
 import { MOD_COLORS } from '../../components/tracks/read-track/constants';
 import { buildRuleMatchContext, footprintMatchesRule, ruleTargetsLayer, type RuleMatchContext } from '../../utils/ruleMatching';
 import { buildRuleColorResolver } from '../../utils/ruleColors';
 import { getLayerColor } from '../../utils/layerColors';
+import { NUC_NAMED_MISSING, NUC_Z_MISSING, type NucSizeMark } from '../../utils/nucLayers';
 import type { Colormap } from '../../types';
 
 export type CallLayer = 'nuc' | 'tf' | 'msp';
@@ -19,7 +22,8 @@ export type CallLayer = 'nuc' | 'tf' | 'msp';
 export interface CallStyle { color: string; opacity: number }
 
 export interface ChromatinStyle {
-  call(layer: CallLayer, size: number, qualities: Record<string, number>): CallStyle | null;
+  /** `nucMark`: the call's nucsz mark (null or absent: none, so nucleosome class rules do not match). */
+  call(layer: CallLayer, size: number, qualities: Record<string, number>, nucMark?: NucSizeMark | null): CallStyle | null;
   m6a: string;
   body: string;
   /** bp an edge of confidence q (0–255) may extend outward (0: crisp), and how edges are drawn. */
@@ -27,6 +31,16 @@ export interface ChromatinStyle {
   edgeMode: 'soft' | 'strict' | 'loose';
   applyNuc: boolean;
   applyTf: boolean;
+}
+
+/** A graph call's nucsz mark from its class, z and named bytes, in the shape the rule matcher reads (no posterior on
+ * the graph wire). A missing named byte (a payload before wire version 10) is no named evidence, which no named
+ * rule matches, never "unnamed" (0). Null without a class byte. */
+export function graphNucMark(cls: number | null | undefined, zb: number | null | undefined, nb?: number | null,
+  start = 0, end = 0): NucSizeMark | null {
+  if (cls == null || !Number.isFinite(cls)) return null;
+  return { start, end, coarse: cls, named: nb != null && Number.isFinite(nb) ? nb : NUC_NAMED_MISSING, posterior: 0,
+    z: zb != null && Number.isFinite(zb) ? zb : NUC_Z_MISSING };
 }
 
 const clamp01 = (v: unknown, fallback = 1) => {
@@ -43,13 +57,13 @@ export function chromatinStyle(colormap: Colormap, layerColors?: Record<string, 
   const targeted = (name: string) => rules.some(r => (r.targetLayers ?? []).length > 0 && ruleTargetsLayer(r, name));
   const edge = colormap.edgeAmbiguity ?? { mode: 'strict' as const, applyNuc: true, applyTf: true, maxGapBp: 30 };
 
-  const call = (layer: CallLayer, size: number, q: Record<string, number>): CallStyle | null => {
+  const call = (layer: CallLayer, size: number, q: Record<string, number>, nucMark?: NucSizeMark | null): CallStyle | null => {
     if (size <= 0) return null;
     if (layer === 'nuc') {
       // The primary (nucleosome) stream: the first matching rule, else grey; layer-targeted rules gate it.
       for (const rule of rules) {
         const gated = (rule.qualityGates?.length ?? 0) > 0;
-        if (footprintMatchesRule(0, size, size, rule, ctx, 'nuc', gated ? q : undefined)) {
+        if (footprintMatchesRule(0, size, size, rule, ctx, 'nuc', gated ? q : undefined, undefined, nucMark ?? null)) {
           return { color: resolvers.get(rule)!(size), opacity: clamp01(rule.opacity) * layerOpacity('nuc', 1) };
         }
       }
@@ -73,7 +87,7 @@ export function chromatinStyle(colormap: Colormap, layerColors?: Record<string, 
     for (const rule of rules) {
       if (!isTf && ((rule.targetLayers ?? []).length === 0 || !ruleTargetsLayer(rule, layer))) continue;
       const gated = (rule.qualityGates?.length ?? 0) > 0;
-      if (footprintMatchesRule(0, size, size, rule, ctx, layer, gated ? q : undefined)) {
+      if (footprintMatchesRule(0, size, size, rule, ctx, layer, gated ? q : undefined, undefined, nucMark ?? null)) {
         color = resolvers.get(rule)!(size);
         opacity = clamp01(rule.opacity);
         matched = true;

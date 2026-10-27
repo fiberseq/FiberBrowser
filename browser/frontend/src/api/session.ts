@@ -65,7 +65,7 @@ export const SESSION_PRE_VIEWPORT_KEYS = [
 
 export const SESSION_POST_VIEWPORT_KEYS = [
   'clusterAssignments', 'clusterOrder', 'clusterPatterns', 'clusterCentroids',
-  'clusterPeakWidths', 'clusterPeakRegions', 'clusterWindowPeaks', 'clusterMatchedRun',
+  'clusterPeakWidths', 'clusterMetricCohort', 'clusterPeakRegions', 'clusterWindowPeaks', 'clusterMatchedRun',
   'clusterTreeNodes', 'clusterTreeRootIds', 'activeClusterTreeNodeId',
   'dynamicClustering', 'dynamicOverlapMode', 'readSortOrder', 'readStateDetails',
   'peaksByRule', 'selectedPeaks', 'peakModes', 'peaksLocked',
@@ -86,7 +86,7 @@ export const SESSION_POST_VIEWPORT_KEYS = [
 /** Analysis state that belongs to a session: reset on import before the session's own is applied. */
 const SESSION_OWNED_ANALYSIS_KEYS = [
   'clusterAssignments', 'clusterOrder', 'clusterPatterns', 'clusterCentroids',
-  'clusterPeakWidths', 'clusterPeakRegions', 'clusterWindowPeaks', 'clusterMatchedRun',
+  'clusterPeakWidths', 'clusterMetricCohort', 'clusterPeakRegions', 'clusterWindowPeaks', 'clusterMatchedRun',
   'clusterTreeNodes', 'clusterTreeRootIds', 'activeClusterTreeNodeId',
   'dynamicClustering', 'readSortOrder', 'readStateDetails',
   'clusterFocus', 'selectedClusters', 'filteredReadIds', 'readFilterSources', 'selectedReadIds',

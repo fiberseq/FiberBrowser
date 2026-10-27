@@ -229,6 +229,9 @@ class AssignToClustersRequest(BaseModel):
     cluster_patterns: Dict[int, List[int]] = {}
     cluster_centroids: Optional[Dict[int, List[float]]] = None
     cluster_peak_widths: Optional[List[int]] = None
+    # The fit's molecule metric cohort ({metric: {values, counts}}, as cluster_all returns it with the patterns or
+    # centroids): metric columns rank the view's reads against the fitted reads. Absent: against the view's own.
+    cluster_metric_cohort: Optional[Dict[str, Any]] = None
     overlap_mode: str = 'aggressive'  # 'aggressive' (assign if overlaps any peak) | 'conservative' (require all peaks)
     dataset_ids: List[str] = []
     read_ids: Optional[Dict[str, List[str]]] = None
@@ -339,13 +342,24 @@ class SortReadsRequest(BaseModel):
     projection: Optional[ProjectionSortSettings] = None
     # Live lift: a split panel's haplotype (dataset id -> MAT/PAT or a map haplotype key); absent: every haplotype.
     lift_hap_by_dataset: Optional[Dict[str, str]] = None
+    # sort_by="value": a per-molecule scalar ('nuc.nrl', 'nfr.openness': services/nuc/scalars.py); missing values
+    # sort last.
+    molecule_metric: Optional[str] = None
+    # sort_by="feature_hub": the number of these hub hits where the read's state is `state`.
+    feature_hub: Optional[Dict[str, Any]] = None
 
 
 class AnalysisFilterRequest(BaseModel):
     dataset_ids: List[str] = []
-    metric: Literal["count", "occupancy", "rate", "accessibility"] = "count"
-    operator: Literal["gt", "gte", "lt", "lte", "eq"] = "gte"
+    metric: Literal["count", "occupancy", "rate", "accessibility", "value"] = "count"
+    operator: Literal["gt", "gte", "lt", "lte", "eq", "between"] = "gte"
     threshold: float = 1
+    # operator "between": threshold <= value <= threshold_max.
+    threshold_max: Optional[float] = None
+    # metric "value": a per-molecule scalar (services/nuc/scalars.py); a missing value never passes.
+    molecule_metric: Optional[str] = None
+    # metric "count" of hub hits: {hits: [{set_id, hit_id, chrom, start, end}], state: '1' | '0'}.
+    feature_hub: Optional[Dict[str, Any]] = None
     rule: Optional[dict] = None
     peak_regions: Optional[List[List[int]]] = None
     scope_windows: Optional[List[List[int]]] = None
