@@ -38,9 +38,10 @@ export function mapOptionsFor(dataset: Pick<Dataset, 'id' | 'data_type' | 'sampl
   const options = same.length ? same : lifted;
   const reason: MapOptions['reason'] = same.length === 1 ? 'one' : same.length > 1 ? 'several_of_sample'
     : known ? 'none_of_sample' : lifted.length === 1 ? 'one' : 'unknown_samples';
-  const picked = chosen ? options.find(d => d.id === chosen) ?? lifted.find(d => d.id === chosen) : undefined;
-  if (picked) return { map: picked, options: lifted.length > 1 || reason === 'none_of_sample' ? lifted : options, reason };
-  return { map: reason === 'one' ? options[0] : null, options: reason === 'none_of_sample' ? lifted : options, reason };
+  // A pick counts only among the current options: once a dataset of the sample is open, an earlier pick of another
+  // sample's no longer applies.
+  const picked = chosen ? options.find(d => d.id === chosen) : undefined;
+  return { map: picked ?? (reason === 'one' ? options[0] : null), options, reason };
 }
 
 export function useMapOptions(dataset: Dataset): MapOptions {

@@ -3,6 +3,7 @@ import { create } from 'zustand';
 import { getGraphStatus, registerGraphPackage, GraphRequestError } from './api';
 import type { GraphStatus } from './types';
 import { isPublicMode } from '../../utils/publicMode';
+import { isPublicServerPage } from '../../utils/publicServerFlag';
 import { isSandboxPage } from '../../utils/sandbox';
 
 interface GraphStatusState {
@@ -36,11 +37,13 @@ export const useGraphStatusStore = create<GraphStatusState>((set, get) => ({
   load: (force = false) => {
     if (inflight) return inflight;
     if (get().status && !force) return Promise.resolve();
-    // Graph mode is off on public servers and in tour tabs (public-mode rules): no request, no console error.
-    if (isPublicMode() || isSandboxPage()) {
+    // Graph mode is off on public servers and in tour tabs (public-mode rules): no request, no console error. Only the
+    // page itself settles it for good; a session's public flag (restored state) only skips this request.
+    if (isPublicServerPage() || isSandboxPage()) {
       if (!get().refused) set({ refused: true, error: 'Graph mode is not available on this server.' });
       return Promise.resolve();
     }
+    if (isPublicMode()) return Promise.resolve();
     if (get().refused && !force) return Promise.resolve();
     set({ loading: true });
     inflight = getGraphStatus()

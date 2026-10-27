@@ -71,5 +71,9 @@ registerStoreExtension({
   serialize: s => ({ liveLiftExpansions: s.liveLiftExpansions ?? {} }),
   restoreSnapshot: saved => ({ liveLiftExpansions: restoreExpansionState(saved) }),
   importSession: frontend => ({ liveLiftExpansions: restoreExpansionState(frontend) }),
-  onSessionImport: () => { void import('./selectionStore').then(m => m.restoreDifferenceSelection()); },
+  onSessionImport: () => {
+    void import('./selectionStore').then(m => m.restoreDifferenceSelection());
+    // Which lifted dataset a native inspector compares with is picked again in the imported session.
+    void import('./AssemblyComparisonPanel').then(m => m.useMapChoice.setState({ byDataset: {} }));
+  },
 });

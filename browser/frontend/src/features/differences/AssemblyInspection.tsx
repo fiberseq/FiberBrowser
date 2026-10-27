@@ -47,7 +47,8 @@ export function AssemblyInspection({ panel, dataset, anchor }: { panel: PanelCon
       .catch(e => { if (!controller.signal.aborted) setError(String(e.message ?? e)); });
     return () => { controller.abort(); sequenceRequest.current?.abort(); };
   }, [current, d, dataset.id, dataset.live_lift?.key, panel.liftHap, readRequested]);
-  const preferredHap = data?.preferred_hap ?? d?.hap_label;
+  // The server's answer when it gives one: null means no haplotype preference (the read-supported lane, "Reads").
+  const preferredHap = data?.preferred_hap === undefined ? d?.hap_label : data.preferred_hap;
   const model = useMemo(() => inspectionModel(data?.rows ?? [], preferredHap, d), [data, preferredHap, d]);
   useEffect(() => {
     if (!current) return;
@@ -63,7 +64,7 @@ export function AssemblyInspection({ panel, dataset, anchor }: { panel: PanelCon
     document.addEventListener('keydown', key, true);
     return () => { document.removeEventListener('keydown', key, true); useReadActionsStore.setState({ highlight: prior }); };
   }, [current, model, readRequested, dataset.id]);
-  const candidate = data?.rows.find(r => (d?.source === 'reads' ? r.hap_label === preferredHap && r.ins_id : r.ins_id === d?.id)
+  const candidate = data?.rows.find(r => (d?.source === 'reads' ? (!preferredHap || r.hap_label === preferredHap) && r.ins_id : r.ins_id === d?.id)
     && r.carries_insertion && (!r.alignment_ins_id || r.alignment_ins_id === r.ins_id) && (r.read_bases_length ?? r.read_bases.length) <= 50_000);
   const sequence = data?.sequence?.ins_id === (d?.source === 'reads' ? candidate?.ins_id : d?.id) ? data?.sequence?.sequence : undefined;
   const identifyKey = `${dataset.id}|${dataset.live_lift?.key ?? ''}|${current?.chrom ?? ''}|${d?.id ?? ''}`;
