@@ -75,9 +75,87 @@ def scan_rows(scan, browser_id: str, chrom: str, start: int, end: int) -> Dict[T
     return out
 
 
-def annotated_rows(read) -> Optional[dict]:
-    """A record's own nuc groups (an annotated BAM), decoded with the staleness rule: ``{group: {...}}``
-    (``fiberhmm.nuc.tags.read_nuc_groups``), or None when it has none."""
+def annotated_record_outputs(read, input_index: int, ctx) -> Optional[RecordOutputs]:
+    """A record's own nuc groups (an annotated BAM) as the store's row, or None when it has none or they are stale
+    (``fiberhmm.nuc.tags.read_nuc_groups``: the calls digest no longer matches, or another group version). Marks get
+    their reference envelopes through the record's alignment, as the scan writes them (``_ref_envelope``)."""
+    from fiberhmm.nuc.records import decode_record
     from fiberhmm.nuc.tags import read_nuc_groups
-    groups = read_nuc_groups(read)
-    return groups or None
+    from fiberhmm.scan.modules.nuc import _ref_envelope
+    if not read.has_tag('MA'):
+        return None
+    mol, _why = decode_record(read, ctx)
+    groups = read_nuc_groups(read, mol=mol) if mol is not None else read_nuc_groups(read)
+    if not groups or any(g.get('stale') for g in groups.values()) or 'nucmol' not in groups:
+        return None
+    out_groups: Dict[str, list] = {g: [] for g in MARK_GROUPS}
+    for g in MARK_GROUPS:
+        info = groups.get(g)
+        if not info:
+            continue
+        names = [f'{g}@{info.get("digest")}_{k}' for k in range(len(info['intervals']))] if info.get('digest') else \
+            [''] * len(info['intervals'])
+        for (s, n), q, name in zip(info['intervals'], info['q'], names):
+            if mol is not None:
+                a, b = _ref_envelope(mol, int(s), int(s) + int(n))
+            else:
+                a = b = int(read.reference_start)
+            out_groups[g].append((int(s), int(n), int(a), int(b), tuple(int(x) for x in q), name))
+    scalars = dict(groups['nucmol'].get('scalars') or {})
+    flags = groups['nucmol'].get('flags') or {}
+    from fiberhmm.nuc.tags import FLAG_BITS
+    scalars['flags'] = float(sum(1 << i for i, k in enumerate(FLAG_BITS) if flags.get(k)))
+    return RecordOutputs(
+        qname=str(read.query_name), input_index=int(input_index), chrom=str(read.reference_name),
+        ref_start=int(read.reference_start), ref_end=int(read.reference_end or read.reference_start),
+        reverse=bool(read.is_reverse), supplementary=bool(read.is_supplementary),
+        hp=int(read.get_tag('HP')) if read.has_tag('HP') else None, groups=out_groups,
+        nucmol=[int(x) for x in (groups['nucmol']['q'][0] if groups['nucmol'].get('q') else [])], scalars=scalars,
+        source='annotated', low_information=bool(flags.get('low_information')))
+
+
+def loaded_rows(state, source, windows, keys) -> Dict[Tuple[str, str, int], RecordOutputs]:
+    """Rows for ``keys`` ((file, sha, occ)) from what is loaded: the bound tables-mode scans' nuc rows, and the
+    records' own groups when the dataset's files are annotated BAMs. Live outputs are not consulted here."""
+    from services.scan.registry import list_scans
+    want = {(real(p), s, int(o)) for p, s, o in keys}
+    out: Dict[Tuple[str, str, int], RecordOutputs] = {}
+    for scan in list_scans(state):
+        if 'nuc' not in (scan.manifest.get('modules') or {}) or not scan.datasets_of_browser(source.browser_id):
+            continue
+        for chrom, a, b in windows:
+            for key, row in scan_rows(scan, source.browser_id, chrom, a, b).items():
+                if key in want and key not in out:
+                    out[key] = row
+    left = want - set(out)
+    if left:
+        out.update(_annotated(source, windows, left))
+    return out
+
+
+def _annotated(source, windows, keys) -> Dict[Tuple[str, str, int], RecordOutputs]:
+    import pysam
+    from fiberhmm.nuc.params import NucParams
+    from fiberhmm.nuc.records import DecodeContext
+    from fiberhmm.scan.reads import iter_records, resolve_read_policy
+    filters = resolve_read_policy({})['filters']
+    out: Dict[Tuple[str, str, int], RecordOutputs] = {}
+    for i, path in enumerate(source.paths):
+        if not any(k[0] == path for k in keys):
+            continue
+        with pysam.AlignmentFile(path, 'rb') as bam:
+            if not any(line.startswith('FIBERHMM-SCAN-MA:v1:') and '"nucsz"' in line
+                       for line in bam.header.to_dict().get('CO', [])):
+                continue          # not an annotated BAM with nuc groups
+            ctx = DecodeContext(bam.header, NucParams())
+            refs = set(bam.references)
+            for chrom, a, b in windows:
+                if chrom not in refs:
+                    continue
+                for read, sha, occ in iter_records(bam, chrom, int(a), int(b), {**filters, 'duplicates': 'include'}):
+                    key = (path, sha, int(occ))
+                    if key in keys and key not in out:
+                        row = annotated_record_outputs(read, i, ctx)
+                        if row is not None:
+                            out[key] = row
+    return out

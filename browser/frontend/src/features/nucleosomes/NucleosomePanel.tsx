@@ -201,6 +201,9 @@ function ObservationRow({ obs, summary, loading, onHide }: { obs: NucObservation
       <span className="mr-1 inline-block h-2.5 w-2.5 rounded-sm align-middle" style={{ background: obs.color }} />
       <span className="align-middle" title={`${obs.label}${obs.kind === 'graph' ? ' (graph path: every molecule over the path, insertions included)' : ''}${obs.readIds ? ` · ${obs.readIds.length} reads` : ''}`}>{obs.label}</span>
       <button type="button" aria-label={`Hide ${obs.label}`} className="ml-1 text-ink-muted hover:text-ink" onClick={onHide}>×</button>
+      {s?.sources?.some(x => x !== 'live') && <span className="ml-1 rounded bg-gray-100 px-1 text-[10px] text-gray-600 dark:bg-white/10 dark:text-gray-300"
+        data-testid="nuc-source" title={`Outputs read from ${s.sources.filter(x => x !== 'live').map(x => x === 'annotated' ? "the BAM's own nucleosome groups" : 'an opened scan').join(' and ')}${s.sources.includes('live') ? ', the rest computed here' : ''}`}>
+        {s.sources.includes('annotated') ? 'BAM tags' : 'scan'}</span>}
     </td>
     {s?.error ? <td colSpan={8} className="px-1 text-left text-amber-700 dark:text-amber-300">{s.error}</td> : <>
       <td className="whitespace-nowrap px-1 text-right" data-testid="nuc-molecules"

@@ -301,8 +301,17 @@ def summarize(state, observations: Sequence[dict], *, include_duplicates: bool =
         cfg = active_config(state, source.browser_id)
         rows, seen = [], set()
         missing = undecodable = 0
+        # Records not computed live: what is loaded (a bound scan's rows, an annotated BAM's groups).
+        absent = [(p, s, o) for p, s, o, _q, _st in recs if STORE.get(p, s, o) is None and STORE.failed(p, s, o) is None]
+        loaded = {}
+        if absent:
+            try:
+                from .loaded import loaded_rows
+                loaded = loaded_rows(state, source, windows, absent)
+            except Exception:   # noqa: BLE001 - loaded rows are an addition; live rows still summarise
+                loaded = {}
         for path, sha, occ, qname, _strand in recs:
-            r = STORE.get(path, sha, occ)
+            r = STORE.get(path, sha, occ) or loaded.get((path, sha, occ))
             if r is None:
                 if STORE.failed(path, sha, occ) is not None:
                     undecodable += 1

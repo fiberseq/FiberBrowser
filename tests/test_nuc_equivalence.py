@@ -188,3 +188,65 @@ def test_a_genome_nuc_scan_makes_a_view_precomputed(bam, scan_dir):
     cov = plan['coverage']['nuc']
     assert cov['to_compute'] == [] and len(cov['precomputed']) == len(plan['units'])
     assert '--genome --zones chrS:' in plan['cli']['text']
+
+
+def _summary(st, ds_id='ds0', start=40_000, end=52_000):
+    from services.nuc.observations import summarize
+    out = summarize(st, [dict(obsId='o', datasetId=ds_id, chrom=CONTIG, start=start, end=end)])['observations'][0]
+    assert 'error' not in out, out
+    return out
+
+
+def _numbers(summary):
+    return {k: summary[k] for k in ('records', 'computed', 'molecules', 'lowInformation', 'sizes', 'spacing', 'segments')}
+
+
+def test_a_loaded_scan_summarises_without_compute_and_equals_live(bam, scan_dir):
+    from services.scan.registry import open_scan
+    st = _state(bam)
+    open_scan(st, scan_dir)
+    loaded = _summary(st)
+    assert loaded['computed'] > 10 and loaded['notComputed'] == 0
+    assert all(s.startswith('scan:') for s in loaded['sources'])
+    _compute(st, 40_000, 52_000)
+    live = _summary(st)
+    assert live['sources'] == ['live']
+    assert _numbers(loaded) == _numbers(live)
+
+
+def test_an_annotated_bam_summarises_from_its_own_groups_and_equals_live(bam, tmp_path):
+    from fiberhmm.scan import run_units
+    from fiberhmm.scan.units import plan
+    out = tmp_path / 'annotated_scan'
+    run_units([{'dataset_id': 'dataset_1', 'paths': [bam]}], plan({CONTIG: LENGTH}, genome=True, contigs=[CONTIG]),
+              modules=['nuc'], params={'nuc': SETTINGS}, out=out, annotate=True, cores=2)
+    manifest = json.loads((out / 'manifest.json').read_text())
+    annotated = str(out / manifest['outputs']['annotated'][0]['path'])
+    st = _state(annotated)
+    loaded = _summary(st)
+    assert loaded['computed'] > 10 and loaded['sources'] == ['annotated']
+    # live outputs of the annotated records (their calls are the input's) use the scan's calibration
+    from services.scan.registry import open_scan
+    open_scan(st, out)
+    done = _compute(st, 40_000, 52_000)
+    assert done['results']['ds0']['calibration']['source'] == 'scan'
+    live = _summary(st)
+    assert live['sources'] == ['live']
+    # Marks are exact in both; nucmol scalars are bytes in an annotated BAM (CONTRACTS §6.4: lossy, the codec's
+    # step), so spacing summaries agree to the codec step and the bytes agree exactly.
+    a, b = _numbers(loaded), _numbers(live)
+    assert {k: a[k] for k in a if k != 'spacing'} == {k: b[k] for k in b if k != 'spacing'}
+    for key, step in (('regularity', 0.008), ('gapCv', 0.008)):
+        assert all(abs(x - y) <= step for x, y in zip(a['spacing'][key], b['spacing'][key]))
+    assert all(abs(x - y) <= 1 for x, y in zip(a['spacing']['nrl']['quantiles'], b['spacing']['nrl']['quantiles']))
+    from services.nuc.loaded import loaded_rows
+    from services.nuc.inputs import nuc_source
+    from services.nuc.store import STORE
+    live_rows = {(str(Path(annotated).resolve()), *k): v for k, v in STORE.rows_of(annotated).items()}
+    src = nuc_source(st, 'ds0')
+    STORE.clear()
+    ann = loaded_rows(_state(annotated), src, [(CONTIG, 40_000, 52_000)], list(live_rows))
+    assert len(ann) > 10
+    for key, row in ann.items():
+        assert row.nucmol == live_rows[key].nucmol, key
+        assert {g: sorted(m) for g, m in row.groups.items()} == {g: sorted(m) for g, m in live_rows[key].groups.items()}
