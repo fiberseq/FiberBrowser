@@ -107,6 +107,15 @@ test('nucleosome panel: compute in view, a column per panel, layers on the reads
   await expect(page.getByTestId('nuc-phasing-anchor').first()).toBeVisible();
   await info.attach('nucleosome-window-mode', { body: await page.getByTestId('nuc-panel').screenshot(), contentType: 'image/png' });
   await page.getByTestId('nuc-mode-segments').click();
+  // Patches: the hub's live nuc scan over the view, then each column's own score per patch.
+  await page.getByTestId('nuc-find-patches').click();
+  await expect(page.getByTestId('nuc-find-patches')).toHaveText('Find patches in view', { timeout: 300_000 });
+  await expect(page.getByTestId('nuc-patch-row').first().or(page.getByTestId('nuc-no-patches'))).toBeVisible({ timeout: 60_000 });
+  if (await page.getByTestId('nuc-patch-row').count()) {
+    await expect(page.getByTestId('nuc-patch-table')).toBeVisible();
+    const recurrent = page.locator('[data-testid=nuc-patch-row]:not([data-type=phased]):not([data-type=fuzzy])');
+    if (await recurrent.count()) await expect(recurrent.first().getByTestId('nuc-patch-score').first()).toHaveText(/\d+%/, { timeout: 60_000 });
+  }
   // Hiding a column, then showing it again.
   await page.getByRole('button', { name: /^Hide / }).first().click();
   await expect(page.getByTestId('nuc-row')).toHaveCount(1);

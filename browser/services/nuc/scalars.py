@@ -7,7 +7,9 @@ in group version 2) and ``nfrmol`` (nfr; 4 bytes). A read row gets its scalars, 
 - from the live nucleosome store (exact values; ``services.nuc.layers``);
 - from a tables-mode scan's ``<module>/molecules.tsv.bgz`` (exact values; the scan overlay);
 - from an annotated BAM's own group: the compact-read loader parses it as a layer and ``scalar_groups_to_fields``
-  decodes its bytes with the published codecs and drops the layer (a scalar group is never drawn).
+  decodes its bytes with the published codecs and drops the layer (a scalar group is never drawn). Before that,
+  ``nuc_group_validator`` drops the record's nucleosome groups FiberHMM reads as stale or unsupported (their calls
+  digest no longer matches the record's calls, or another group version), so no stale value or mark is exposed.
 
 A missing value (a codec's missing byte, a molecule too short for a repeat length) is None: it never passes a
 filter comparison and sorts last.
@@ -130,6 +132,70 @@ def scalar_groups_to_fields(read_data: dict) -> None:
             have = read_data.setdefault(SCALARS_KEY, {})
             for k, v in decoded.items():
                 have.setdefault(k, v)
+
+
+NUC_MA_GROUPS = frozenset({'nucsz', 'nucseg', 'nucmol'})
+_HEADER_VIEWS: Dict[int, tuple] = {}
+
+
+class _RecordView:
+    """A pysam record read through its header without the @SQ lines. ``read_nuc_groups`` reads the scan contracts
+    and frames from the record's header for every record; converting a large reference's header costs milliseconds
+    each time, the header without its contigs microseconds (FiberHMM accepts a header dict)."""
+    __slots__ = ('_read', 'header')
+
+    def __init__(self, read, header):
+        self._read = read
+        self.header = header
+
+    def __getattr__(self, name):
+        return getattr(self._read, name)
+
+
+def _header_view(header) -> dict:
+    """The header as a dict without its @SQ lines, once per pysam header object (records of a file share it)."""
+    cached = _HEADER_VIEWS.get(id(header))
+    if cached is not None and cached[0] is header:
+        return cached[1]
+    view = {k: v for k, v in header.to_dict().items() if k != 'SQ'}
+    if len(_HEADER_VIEWS) > 32:
+        _HEADER_VIEWS.clear()
+    _HEADER_VIEWS[id(header)] = (header, view)
+    return view
+
+
+def record_nuc_groups(record) -> Optional[dict]:
+    """``fiberhmm.nuc.tags.read_nuc_groups`` of a pysam record (with its staleness and group-version checks), or
+    None when it cannot be read (FiberHMM without the nuc module, an unreadable record)."""
+    try:
+        from fiberhmm.nuc.tags import read_nuc_groups
+    except ImportError:
+        return None
+    try:
+        return read_nuc_groups(_RecordView(record, _header_view(record.header)))
+    except Exception:
+        pass
+    try:
+        return read_nuc_groups(record)
+    except Exception:
+        return None
+
+
+def drop_stale_nuc_groups(read_data: dict, record) -> None:
+    """Drop the row's nucleosome group layers (``nucsz``, ``nucseg``, ``nucmol``) that are not current for the
+    record: stale (the calls digest in the group no longer matches the record's calls), unsupported (another group
+    version in the header contract, a ``nucmol`` of another length), or unverifiable. Each group is judged on its
+    own (FiberHMM's groups are self-contained), with FiberHMM's own rule; one read per record, only when a row has a
+    nucleosome group."""
+    layers = read_data.get('layers')
+    present = [g for g in NUC_MA_GROUPS if g in layers] if layers else ()
+    if not present:
+        return
+    groups = record_nuc_groups(record) or {}
+    for g in present:
+        info = groups.get(g)
+        if info is None or info.get('stale') or info.get('unsupported'):
+            layers.pop(g, None)
 
 
 def molecule_scalars(read: dict) -> Dict[str, Optional[float]]:

@@ -16,8 +16,12 @@ Native reads join by read name (a record's row is the one whose alignment holds 
 read scan layers from annotated BAMs (MA groups follow the read through live lift); a tables-mode overlay on
 lifted rows needs hit projection (G1).
 
-Hooked where the consensus overlay is (``BrowserState.build_working_set``, ``read_endpoint``'s display paths);
-idempotent: layers it wrote carry ``scan_overlay`` and are replaced.
+Hooked where the consensus overlay is (``BrowserState.build_working_set``, ``read_endpoint``'s display paths)
+and in the working set before quality filters (``working_sets._viewport_reads_from_broad``); idempotent. A row it
+changed carries a receipt (``RECEIPT_KEY``: the dataset's scans, the pass's window and the groups it wrote) on the
+row itself rather than on its layers, which quality filters rebuild: a later pass of the same scans over the same
+window is a no-op, so a pass after the filters never brings a rejected mark back. A pass over another window (or of
+other scans) replaces the groups the receipt names, filtered or not, and those its layers' ``scan_overlay`` names.
 """
 from __future__ import annotations
 
@@ -25,6 +29,8 @@ import hashlib
 from typing import Dict, List
 
 STATE_BYTE = {'1': 1, '0': 2, '.': 3}
+#: The row's overlay receipt (an internal field): (overlay token, chrom, start, end, groups written).
+RECEIPT_KEY = '_fiberbrowser_scan_overlay'
 NUC_GROUPS = frozenset({'nucsz', 'nucseg'})
 LAYER_META = {
     'fpcls': ('Footprint classes (scan)', '#7c3aed', 'tf'),
@@ -128,13 +134,23 @@ def overlay_signature(state, dataset_id: str) -> tuple:
     return tuple((sc.scan_id, sc.manifest_digest) for sc, _s, _g in overlay_scans(state, dataset_id))
 
 
+def overlay_token(dataset_id: str, scans) -> str:
+    """The receipt of a dataset's overlay by these scans (``overlay_signature``'s scans)."""
+    return 'scan:' + hashlib.sha256(repr((dataset_id, tuple((sc.scan_id, sc.manifest_digest) for sc in scans)))
+                                    .encode()).hexdigest()[:16]
+
+
 def apply_scan_overlays(state, dataset_id: str, chrom: str, start: int, end: int, reads: List[dict]) -> List[dict]:
+    """``reads`` with the overlay on them (the same object when no row changed)."""
     if not reads:
         return reads
     apply_one = prepare_scan_overlay(state, dataset_id, chrom, start, end)
     if apply_one is None:
         return reads
-    return [apply_one(read) for read in reads]
+    out = [apply_one(read) for read in reads]
+    if len(out) == len(reads) and all(a is b for a, b in zip(out, reads)):
+        return reads
+    return out
 
 
 def prepare_scan_overlay(state, dataset_id: str, chrom: str, start: int, end: int):
@@ -187,17 +203,24 @@ def prepare_scan_overlay(state, dataset_id: str, chrom: str, start: int, end: in
     declared = {g.get('group'): list(g.get('quality_names') or []) for scan, _s, _g in scans
                 for block in (scan.manifest.get('modules') or {}).values()
                 for g in block.get('ma_groups') or [] if g.get('kind') == 'mark'}
-    # A pass's token: rows this exact pass already overlaid (same view, same scans) are returned as they are, so a
-    # later pass keeps the row objects (and the consensus projection's receipt over them).
-    token = 'scan:' + hashlib.sha256(repr((dataset_id, chrom, int(start), int(end),
-                                           tuple((sc.scan_id, sc.manifest_digest) for sc, _s, _g in scans))).encode()).hexdigest()[:16]
+    # The overlay's receipt: rows these scans already overlaid over this window (the receipt on the row) are
+    # returned as they are, whatever quality filters did to their layers since, so a later pass never restores a
+    # rejected mark and keeps the row objects (and the consensus projection's receipt over them).
+    token = overlay_token(dataset_id, [sc for sc, _s, _g in scans])
+    here = (token, str(chrom), int(start), int(end))
 
     def apply_one(read: dict) -> dict:
-        original = read.get('layers') or {}
-        if any(isinstance(v, dict) and v.get('scan_overlay') == token for v in original.values()):
+        prior = read.get(RECEIPT_KEY)
+        if prior is not None and tuple(prior[:4]) == here:
             return read
+        original = read.get('layers') or {}
         mine = marks.get(str(read.get('id', '')))
-        layers = {k: v for k, v in original.items() if not (isinstance(v, dict) and v.get('scan_overlay'))}
+        # An earlier pass's groups (another window, other scans): those its receipt names, filtered or not, and any
+        # layer still carrying its token.
+        earlier = set(prior[4]) if prior is not None and len(prior) > 4 else set()
+        layers = {k: v for k, v in original.items()
+                  if k not in earlier and not (isinstance(v, dict) and v.get('scan_overlay'))}
+        written = []
         if mine:
             # The row's own record: by its identity when the row carries it, else by where its alignment is.
             sha, occ = read.get('record_sha256'), read.get('alignment_occurrence')
@@ -241,12 +264,16 @@ def prepare_scan_overlay(state, dataset_id: str, chrom: str, start: int, end: in
                                          qualities=[[q[i] if i < len(q) else 0 for q in q0] for i in range(width)],
                                          scan_overlay=token, source_layer=LAYER_META.get(group, ('', '', 'tf'))[2],
                                          draw_style='fill')
+                    written.append(group)
+        before = read
         if set(layers) != set(original) or any(layers[k] is not original.get(k) for k in layers):
             read = dict(read)
             read['layers'] = layers
         mol_rows = scalar_rows.get(str(read.get('id', '')))
         if mol_rows:
             read = _with_scalars(read, mol_rows)
+        if read is not before:
+            read[RECEIPT_KEY] = (*here, tuple(sorted(written)))    # a copy: the row this pass made
         return read
     return apply_one
 
