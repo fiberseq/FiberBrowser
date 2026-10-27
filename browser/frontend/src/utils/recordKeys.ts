@@ -51,6 +51,13 @@ function deriveRecordKey(id: string): string | null {
   return RECORD_PREFIX + pyJson(parts.slice(0, 3));
 }
 
+/** Whether a row identity's record key names a whole molecule (`fold_molecule`: no record part), so one key covers
+ * the molecule's records on every haplotype. */
+export function isMoleculeRecordKey(id: string | null | undefined): boolean {
+  const rk = recordKey(id);
+  return Boolean(rk && rk.endsWith(',null]'));
+}
+
 /** The row index and placement of an `analysis_id` (display precedence: the primary placement's lowest row). */
 function rowRank(id: string): number {
   if (!id.startsWith(IDENTITY_PREFIX)) return 0;

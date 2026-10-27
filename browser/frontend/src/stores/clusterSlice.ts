@@ -12,6 +12,8 @@ import { sameChrom } from '../utils/chromAliases';
 import { autoNameSuffix, sizeRangeName } from '../utils/footprintGroupNames';
 import type { BrowserState } from './browserStore';
 import { seedHistoryBaseline } from './historySlice';
+import { useTrackFeedStore } from './trackFeedStore';
+import { isMoleculeRecordKey, recordKey } from '../utils/recordKeys';
 import { inGenomeLinkGroup } from '../utils/panelNavigation';
 import type { AnalysisFilterRule, AnalysisFilterRuleSet, AnalysisSortRule, AnalysisSortRuleSet, ClusterFeatureRule, ClusterFeatureRuleSet, ClusterTreeNode, FirePeak, Gene, PeakMode, SelectedFootprint, FootprintGroup, TranscriptionStateFilters, ReadStateInfo, SortMode, FilterMode, ModificationType, SavedCluster, PanelConfig, ClusterWindowPeaks } from '../types';
 import { CLUSTER_RULE_MODE_PREFIX } from '../types';
@@ -228,6 +230,33 @@ function keptGraphProvenance(node: ClusterTreeNode | undefined, assignments: Rec
 function withGraphLabelsReplaced(node: ClusterTreeNode, key: string): ClusterTreeNode {
   if (!node.graphProvenance?.[key] || node.graphLabelsReplaced?.[key]) return node;
   return { ...node, graphLabelsReplaced: { ...(node.graphLabelsReplaced ?? {}), [key]: true } };
+}
+
+/** A grouping's molecule-level records (`fold_molecule`: one record key for a molecule's records on both haplotypes)
+ * also join the graph-run observations of the haplotypes the panel drew their rows on: a lifted row follows its
+ * molecule's primary record, which can be on another haplotype than the path whose observation labelled it, so a
+ * pop-out splitting the labels by provenance gives them to the panel that shows those rows (graph follow-ups item 5,
+ * agy review group B round 4, 2a). Only records the run already knows; rows not drawn keep the run's routing. */
+function withDrawnRowHaps(node: ClusterTreeNode, key: string, assignments: Record<string, number>): ClusterTreeNode {
+  const prov = node.graphProvenance?.[key];
+  const feed = useTrackFeedStore.getState().byStateKey[key];
+  if (!prov || !feed?.reads?.length) return node;
+  const known = new Set(Object.values(prov.owned).flat());
+  const labelled = new Set(Object.keys(assignments).filter(isMoleculeRecordKey).map(id => recordKey(id)!).filter(rk => known.has(rk)));
+  if (!labelled.size) return node;
+  let owned = prov.owned;
+  for (const r of feed.reads) {
+    const rk = recordKey(r.analysis_id);
+    const haps = [r.live_lift?.hap_label, r.live_lift?.hap].filter(Boolean).map(h => String(h).toUpperCase());
+    if (!rk || !labelled.has(rk) || !haps.length) continue;
+    for (const o of prov.observations) {
+      const oh = ((o.kind === 'linear' ? o.lift_hap : o.hap) ?? '').toUpperCase();
+      if (o.dataset_id !== feed.datasetId || !haps.includes(oh) || (o.strand && r.strand && o.strand !== r.strand)) continue;
+      if ((owned[o.id] ?? []).includes(rk)) continue;
+      owned = { ...owned, [o.id]: [...(owned[o.id] ?? []), rk] };
+    }
+  }
+  return owned === prov.owned ? node : { ...node, graphProvenance: { ...node.graphProvenance, [key]: { ...prov, owned } } };
 }
 
 function cloneAssignments(assignments: Record<string, Record<string, number>>): Record<string, Record<string, number>> {
@@ -1119,7 +1148,7 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
         clusterTreeNodes: {
           ...state.clusterTreeNodes,
           [activeNode.id]: {
-            ...(options?.merge ? activeNode : withGraphLabelsReplaced(activeNode, datasetId)),
+            ...(options?.merge ? activeNode : withDrawnRowHaps(withGraphLabelsReplaced(activeNode, datasetId), datasetId, nextAssignments)),
             assignments: cloneAssignments(clusterAssignments),
             order: cloneOrder(clusterOrder),
           },
