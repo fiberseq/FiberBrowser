@@ -1,3 +1,4 @@
+import { idSetHas, recordKey } from '../utils/recordKeys';
 import { beginProgressiveAnalysis, cancelProgressiveAnalysis, displayedScope, needsDisplayPreview } from '../utils/progressiveAnalysis';
 import { AnalysisProgressLine } from './controls/AnalysisProgressLine';
 import { scanEquivalentRegions, scanUnsharedRegions } from '../utils/equivalentScanning';
@@ -1261,7 +1262,7 @@ export function Browser() {
         // A read filter applies inside a cluster subset too: the subset's reads
         // that pass it (possibly none).
         const readFilter = state.filteredReadIds[sk];
-        const passing = (ids: string[]) => (readFilter ? ids.filter(id => readFilter.has(id)) : ids);
+        const passing = (ids: string[]) => (readFilter ? ids.filter(id => idSetHas(readFilter, [id], recordKey(id))) : ids);
         const selected = state.selectedClusters[sk];
         if (selected && selected.size > 0 && assignments) {
           const ids: string[] = [];

@@ -1,23 +1,57 @@
 """Per-read states of features for the read panel's Cluster, Sort and Filter on selected features.
 
-A feature is a footprint class of a Find classes run, or a feature of a kind a plugin pack provides
-(``PackAPI.feature_states``). Each read name gets one state per feature: '1' (a member: the class's footprint),
+A feature is a footprint class of a Find classes run, a feature of a kind a plugin pack provides
+(``PackAPI.feature_states``), or a hit of a feature-hub set (``source`` = ``hub:<16 hex>``: a fiberhmm-scan set,
+``services/scan/states.py``). Each read gets one state per feature: '1' (a member: the class's footprint),
 '0' (evaluated and not a member) or '.' (not evaluated: outside the class's scoring population, another dataset,
 or a name whose molecules disagree).
+
+Reads are keyed by read name for native datasets. A provider may key a lifted dataset's reads by record key
+(``lift-record:v1 ...``, ``services/lift/cohort.py``), so split rows of one record share their record's state
+instead of collapsing into '.'; the front end matches those keys through ``idSetHas`` (``utils/recordKeys.ts``).
 
 The states are the engines' own, on their own layers:
 - Footprint classes: exact primary class membership with the Cart co-occupancy semantics
   (``services.consensus_occupancy.class_occupancy``): eligible reads are the ones the class was scored on.
+- Hub sets: the scan's per (hit, record) states (``states.tsv.bgz``, or the MA state group of its annotated BAMs).
+
+Which provider answers a feature is decided by the provider table (``_provider``), never by kind strings in the
+callers: a kind is either core (``CORE_PROVIDERS``), a pack's (``hooks().feature_states``), or any kind whose
+``source`` names a hub set.
 """
 from __future__ import annotations
 
 MAX_FEATURES = 16
-CORE_KINDS = ('fp-class',)
+
+
+def _class_provider(state, source, feature):
+    return _class_states(state, source, feature)
+
+
+# kind -> (provider, needs a dataset_id)
+CORE_PROVIDERS = {'fp-class': (_class_provider, True)}
+CORE_KINDS = tuple(CORE_PROVIDERS)
 
 
 def _kinds():
     from plugins.packs import hooks
     return CORE_KINDS + tuple(k for k in hooks().feature_states if k not in CORE_KINDS)
+
+
+def _is_hub(source) -> bool:
+    return isinstance(source, str) and source.startswith('hub:')
+
+
+def _provider(kind, source):
+    """(provider, needs dataset) for a feature: a hub set's provider for hub sources, else the kind's."""
+    if _is_hub(source):
+        from services.scan.states import hub_feature_states
+        return hub_feature_states, False
+    if kind in CORE_PROVIDERS:
+        return CORE_PROVIDERS[kind]
+    from plugins.packs import hooks
+    fn = hooks().feature_states.get(kind)
+    return (fn, False) if fn else (None, False)
 
 
 def _clean(features):
@@ -30,13 +64,15 @@ def _clean(features):
         if not isinstance(f, dict):
             raise ValueError('Each feature is an object')
         kind, source, fid = f.get('kind'), f.get('source'), f.get('id')
-        kinds = _kinds()
-        if kind not in kinds or not isinstance(source, str) or not source or not isinstance(fid, str) or not fid:
-            raise ValueError(f"Each feature needs kind ({', '.join(kinds)}), source and id")
+        if not isinstance(kind, str) or not isinstance(source, str) or not source or not isinstance(fid, str) or not fid:
+            raise ValueError(f"Each feature needs kind ({', '.join(_kinds())}, or a hub set's), source and id")
+        provider, needs_dataset = _provider(kind, source)
+        if provider is None:
+            raise ValueError(f"Each feature needs kind ({', '.join(_kinds())}, or a hub set's), source and id")
         dataset = f.get('dataset_id') or None
-        if kind == 'fp-class' and not dataset:
+        if needs_dataset and not dataset:
             raise ValueError('A footprint class needs its dataset_id')
-        out.append(dict(kind=kind, source=source, id=fid, dataset_id=dataset if kind == 'fp-class' else None))
+        out.append(dict(kind=kind, source=source, id=fid, dataset_id=dataset))
     return out
 
 
@@ -73,19 +109,16 @@ def _class_states(state, job_id, feature):
 
 
 def feature_states(state, features):
-    """States of up to MAX_FEATURES features per read name and dataset.
+    """States of up to MAX_FEATURES features per read (name, or record key for lifted datasets) and dataset.
 
     Returns ``{features: [{kind, source, id, dataset_id, datasets, label, members, evaluated}],
-    by_dataset: {dataset: {read name: '10.'}}}``; a read name is listed for every dataset where some feature knows it.
+    by_dataset: {dataset: {read: '10.'}}}``; a read is listed for every dataset where some feature knows it.
     """
     feats = _clean(features)
     columns, info = [], []
     for f in feats:
-        if f['kind'] == 'fp-class':
-            states, datasets, label, span = _class_states(state, f['source'], f)
-        else:
-            from plugins.packs import hooks
-            states, datasets, label, span = hooks().feature_states[f['kind']](state, f['source'], f)
+        provider, needs_dataset = _provider(f['kind'], f['source'])
+        states, datasets, label, span = provider(state, f['source'], f)
         columns.append(states)
         members, evaluated = {}, {}
         for (dataset, _name), s in states.items():
@@ -93,7 +126,10 @@ def feature_states(state, features):
                 evaluated[dataset] = evaluated.get(dataset, 0) + 1
             if s == '1':
                 members[dataset] = members.get(dataset, 0) + 1
-        info.append(dict(f, datasets=datasets, label=label or f['id'], span=list(span) if span and span[0] is not None else None,
+        public = dict(f)
+        if not needs_dataset and not _is_hub(f['source']):
+            public['dataset_id'] = None   # as before: only per-dataset kinds echo their dataset
+        info.append(dict(public, datasets=datasets, label=label or f['id'], span=list(span) if span and span[0] is not None else None,
                          members=members, evaluated=evaluated))
     keys = sorted({key for states in columns for key in states})
     by_dataset = {}

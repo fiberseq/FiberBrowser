@@ -1,6 +1,7 @@
 """BAM molecular tag parsing helpers."""
 from __future__ import annotations
 
+import json
 import re
 from typing import Dict, List, Optional
 
@@ -428,6 +429,35 @@ M5C_GROUPS = frozenset({"ddda_mcg", "ddda_ucg", "ddda_mcg_hemi"})
 CONSENSUS_MOLECULAR_COORDINATES = "original_source_call_in_molecular_frame"
 
 
+SCAN_CONTRACT_PREFIX = "FIBERHMM-SCAN-MA:v1:"
+
+
+def scan_ma_contracts(header) -> dict:
+    """``group -> contract`` of the fiberhmm-scan MA groups a header declares (``@CO FIBERHMM-SCAN-MA:v1:<json>``;
+    the last valid line of a group wins)."""
+    try:
+        hd = header if isinstance(header, dict) else header.to_dict()
+    except Exception:
+        return {}
+    out = {}
+    for comment in hd.get("CO", []) or []:
+        text = str(comment)
+        if not text.startswith(SCAN_CONTRACT_PREFIX):
+            continue
+        try:
+            value = json.loads(text[len(SCAN_CONTRACT_PREFIX):])
+        except ValueError:
+            continue
+        if isinstance(value, dict) and isinstance(value.get("group"), str):
+            out[value["group"]] = value
+    return out
+
+
+def scan_molecular_groups(header) -> frozenset:
+    """The scan groups a header declares molecular (every scan group is, unless its contract says otherwise)."""
+    return frozenset(g for g, v in scan_ma_contracts(header).items() if v.get("coordinates", "molecular") == "molecular")
+
+
 class MAGroupFrame:
     """The frame of each ``MA`` group of a BAM: FiberHMM's ``fiberhmm.io.annotation_frame.MAGroupFrame`` (3.0.1),
     kept here so FiberBrowser reads the same with FiberHMM 3.0.0 (docs/reference/footprint-tag-frame.md).
@@ -448,6 +478,9 @@ class MAGroupFrame:
     def of_header(cls, header) -> "MAGroupFrame":
         layers = {layer for layer, contract in bam_consensus_contracts(header).items()
                   if isinstance(contract, dict) and contract.get("coordinates") == CONSENSUS_MOLECULAR_COORDINATES}
+        # fiberhmm-scan groups (fpcls, nfrvar, nfrmol, nucsz, ...) are molecular whatever the header rule says
+        # (contract fiberhmm.scan.v1 §6.2): a group named in a FIBERHMM-SCAN-MA line is never mirrored.
+        layers |= scan_molecular_groups(header)
         return cls(bam_ma_aq_tags_are_molecular(header), legacy_tag_frame_report(header)["source"] != "default", layers)
 
     def is_molecular(self, name: str, strand: str) -> bool:

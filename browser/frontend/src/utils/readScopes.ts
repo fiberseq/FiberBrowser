@@ -1,3 +1,5 @@
+import { idSetHas, recordKey } from './recordKeys';
+
 export type ReadIdSets = Record<string, Set<string> | null | undefined>;
 export type StateKeyMap = Record<string, string[]>;
 export type ClusterFocusSet = Set<number> | null | undefined;
@@ -59,7 +61,7 @@ export function computeEffectiveReadIdsByStateKey(
     if (clusterSet && filterSet) {
       ids = [];
       for (const id of clusterSet) {
-        if (filterSet.has(id)) ids.push(id);
+        if (idSetHas(filterSet, [id], recordKey(id))) ids.push(id);   // record-keyed filters too
       }
     } else if (clusterSet) {
       ids = Array.from(clusterSet);

@@ -12,6 +12,7 @@ import { registerTrackRenderer } from '../../components/tracks/trackRenderers';
 import { registerClassLinks, type ClassLink } from '../../components/controls/footprint-analysis/classLinks';
 import { NucleosomeFree } from '../../components/ui/Icons';
 import { registerFeatureKind, type FeatureRef } from '../../stores/featureStore';
+import { registerNfrHubProvider } from './hubProvider';
 import { useBrowserStore } from '../../stores/browserStore';
 import { registerAnalysisPreferenceMap } from '../../utils/analysisPreferences';
 import { registerFullReadAnalysis } from '../../components/tracks/read-track/ReadSampleNotice';
@@ -70,10 +71,11 @@ export function registerNfr(): void {
     layerNote: 'NFRs and variants on the accessibility layer',
     groupingNote: 'the Accessibility panel\'s "Group reads by variant" / "Split by combination pattern" groups',
   };
-  registerFeatureKind({ kind: 'nfr', layerLabel: 'accessibility', shortName: nfrShortName, regionMode: () => 'accessibility', pluralName: 'NFRs', listOrder: 0, ...notes });
-  registerFeatureKind({ kind: 'nfr-variant', layerLabel: 'accessibility', shortName: nfrShortName, regionMode: () => 'accessibility', pluralName: 'NFR variants', listOrder: 1,
+  registerFeatureKind({ kind: 'nfr', typeId: 'nfr.region', layerLabel: 'accessibility', shortName: nfrShortName, regionMode: () => 'accessibility', pluralName: 'NFRs', listOrder: 0, ...notes });
+  registerFeatureKind({ kind: 'nfr-variant', typeId: 'nfr.variant', layerLabel: 'accessibility', shortName: nfrShortName, regionMode: () => 'accessibility', pluralName: 'NFR variants', listOrder: 1,
     stateNote: 'NFR variants: open or not', ...notes });
   registerNfrGrouping();
+  registerNfrHubProvider();
   // Find variants reads every alignment of the view (the sampled-reads notice says so).
   registerFullReadAnalysis('Find NFR variants', 0);
 

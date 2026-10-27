@@ -449,7 +449,9 @@ export type ReadFilterSourceTarget =
   | 'analysis-filter'
   | 'cluster-detail'
   | 'footprint-cooccurrence'
-  | 'transcription-filters';
+  | 'transcription-filters'
+  /** The feature hub's "Use as filter" (features/hub). */
+  | 'feature-hub';
 
 export interface ReadFilterSource {
   target: ReadFilterSourceTarget;

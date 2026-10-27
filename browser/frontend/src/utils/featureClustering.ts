@@ -8,12 +8,14 @@
  */
 import { getFeatureStates, type FeatureStates } from '../api/features';
 import { getStateKeyMap, getTargetDatasetIds, useBrowserStore } from '../stores/browserStore';
-import { featureKindDef, featureKindWithActions, featureShortName, listedFeatureKinds, type FeatureRef } from '../stores/featureStore';
+import { featureKindDef, featureKindWithActions, featureRegionMode, featureShortName, listedFeatureKinds, type FeatureRef } from '../stores/featureStore';
 import { seedHistoryBaseline } from '../stores/historySlice';
 import { useReadActionsStore } from '../stores/readActionsStore';
 import { useSplitPanelStore, type SplitSource } from '../stores/splitPanelStore';
+import type { ReadFilterSourceTarget } from '../stores/clusterSlice';
 import { applyReadGroups, type ReadGroupsInput } from './readGroups';
 import { sameChrom } from './chromAliases';
+import { idSetHas, recordKey } from './recordKeys';
 import { nextSortRequest, isCurrentSortRequest } from './sortRequests';
 import { mergeScopedSortOrder, resolveSortRequestScope, sortStateStillCurrent } from './sortScope';
 import { captureRunViews, runViewsStillCurrent } from './panelRunScope';
@@ -107,7 +109,7 @@ export function patternGroups(states: FeatureStates, features: FeatureRef[]): Re
     order: groups.map(g => g.id),
     patterns: Object.fromEntries(groups.filter(g => g.pattern).map(g => [g.id, g.pattern!])),
     regions: features.filter(f => f.start != null && f.end != null)
-      .map(f => ({ start: Math.floor(f.start!), end: Math.ceil(f.end!), mode: f.kind === 'fp-class' ? 'tf' : featureKindDef(f.kind)?.regionMode?.(f) ?? 'accessibility' })),
+      .map(f => ({ start: Math.floor(f.start!), end: Math.ceil(f.end!), mode: featureRegionMode(f) ?? 'accessibility' })),
     labels: Object.fromEntries(groups.map(g => [g.id, g.label])),
   };
 }
@@ -247,7 +249,8 @@ export async function sortBySelectedFeatures(): Promise<string | null> {
       const scope = resolveSortRequestScope({ ...s0, datasetIds: [ds], sortKeyMap: { [ds]: [key] },
         panelReadIds });
       const ids = scope.readIds[ds] ? new Set(scope.readIds[ds]) : null;
-      const order = orderByStates(states.by_dataset[ds]).filter(id => !ids || ids.has(id));
+      // States of lifted datasets are per record key: a panel's analysis_ids name them through idSetHas.
+      const order = orderByStates(states.by_dataset[ds]).filter(id => !ids || idSetHas(ids, [id], recordKey(id)));
       return order.length ? [[key, mergeScopedSortOrder(now.readSortOrder[key] ?? [], order, !!ids)] as const] : [];
     }));
     if (!writes.length) return skipped ? STALE : `No read of the target panels is evaluated for ${featureNames(features)}.`;
@@ -274,9 +277,13 @@ export const FEATURE_FILTERS: { value: `features:${FeatureFilterMode}`; label: s
   { value: 'features:none', label: 'In no selected feature', title: 'Hide the members of the selected features as excluded reads (the read menu shows them again); every other read stays' },
 ];
 
-/** Keep (or hide) reads by membership at the selected features in the target panels (an undo step). */
-export async function filterBySelectedFeatures(mode: FeatureFilterMode): Promise<string | null> {
-  const { features } = featuresInView();
+/**
+ * Keep (or hide) reads by membership at the selected features in the target panels (an undo step). `override`: other
+ * features than the toolbar selection (the feature hub's selection), the filter's label and its source.
+ */
+export async function filterBySelectedFeatures(mode: FeatureFilterMode,
+  override?: { features: FeatureRef[]; label?: string; target?: ReadFilterSourceTarget }): Promise<string | null> {
+  const { features } = override ? { features: override.features } : featuresInView();
   const own = featureKindWithActions(features);
   if (own) return own.actions.sortFilter;
   if (!features.length) return `Select ${selectableKindsPhrase()} first.`;
@@ -316,9 +323,9 @@ export async function filterBySelectedFeatures(mode: FeatureFilterMode): Promise
       return null;
     }
     if (writes.every(([, keep]) => keep.size === 0)) return `No read passes this filter at ${featureNames(features)}.`;
-    const label = `Features > ${FEATURE_FILTERS.find(f => f.value === `features:${mode}`)!.label.toLowerCase()} (${featureNames(features)})`;
+    const label = override?.label ?? `Features > ${FEATURE_FILTERS.find(f => f.value === `features:${mode}`)!.label.toLowerCase()} (${featureNames(features)})`;
     seedHistoryBaseline(useBrowserStore.getState(), 'Before read filter', 'filtering');
-    for (const [key, keep] of writes) useBrowserStore.getState().setFilteredReadIds(key, keep, { target: 'analysis-filter', label });
+    for (const [key, keep] of writes) useBrowserStore.getState().setFilteredReadIds(key, keep, { target: override?.target ?? 'analysis-filter', label });
     useBrowserStore.getState().pushSnapshot(`Filter: ${label}`);
     return null;
   } catch (e) {
@@ -330,14 +337,8 @@ export async function filterBySelectedFeatures(mode: FeatureFilterMode): Promise
 export function featurePeakRegions(features: FeatureRef[]): { start: number; end: number; mode: string }[] {
   const datasets = useBrowserStore.getState().datasets;
   // A kind whose features are not regions to cluster on (regionMode null) is left out.
-  const modeOf = (f: FeatureRef): string | null => {
-    if (f.kind === 'fp-class') {
-      const layers = datasets.find(d => d.id === f.datasetId)?.available_layers ?? {};
-      return layers.tf_rc ? 'tf_rc' : layers.tf_cr ? 'tf_cr' : 'tf';
-    }
-    const def = featureKindDef(f.kind);
-    return def?.regionMode ? def.regionMode(f) : 'accessibility';
-  };
+  const modeOf = (f: FeatureRef): string | null =>
+    featureRegionMode(f, (datasets.find(d => d.id === f.datasetId)?.available_layers ?? {}) as Record<string, unknown>);
   return features.filter(f => f.start != null && f.end != null && f.end > f.start && modeOf(f) !== null)
     .map(f => ({ start: Math.floor(f.start!), end: Math.ceil(f.end!), mode: modeOf(f)! }));
 }

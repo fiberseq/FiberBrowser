@@ -9,6 +9,35 @@ package. See [Setting up live lift and graph mode](docs/workflows/pangenome-setu
 Maps, graph packages and the helper are made with
 [graphlift](https://github.com/mtcicero26/graphlift).
 
+### Feature hub and scans
+
+- **Feature hub** (panel rail: **Hub**): every feature set in one table, with a
+  column per dataset (and per haplotype for Differences): footprint classes,
+  NFRs and peaks from fiberhmm-scan, the Find classes run, NFR runs, the SVs in
+  view, the peak rules' peaks and live-lift Differences. Filter by type and
+  prevalence, sort, compare two datasets (Δ), expand a row for its values and
+  provenance, go to hits. **Use as** makes the selected hits an anchor set
+  (saved with the session), the Cluster button's regions (then clusters), or a
+  read filter (members at any selected hit). See
+  [Feature hub and scans](docs/workflows/feature-hub.md).
+- **Open scan…** opens a fiberhmm-scan output directory. Its datasets bind to
+  the loaded BAMs by file contents (bound, stale, or scan of other files); a
+  scan of a live-lift dataset's own BAM joins the lifted rows record by record.
+  Scan per-read groups (`fpcls`, `nfrvar`, `nfrmol`) in annotated BAMs show as
+  layers, also through live lift.
+- **Scan…** runs fiberhmm-scan's engine on the open BAMs: the view's 50 kb grid
+  units (and one more each side), a BED file or genes, with the modules, depth
+  caps and settings you choose. It shows what is already computed and the
+  equivalent `fiberhmm-scan` command line; units an opened scan or an earlier
+  scan computed with the same key are never computed again. Results go to the
+  scan cache (`FIBERBROWSER_SCAN_CACHE_DIR`) and give the same rows as the
+  command line. Needs FiberHMM with `fiberhmm.scan`; `nuc` (nucleosome arrays)
+  appears when the FiberHMM has it. Peak scans use the local Rare rule (8%
+  open with at least min reads molecules covering the base, independent of the
+  view); the window rule stays a setting for this release.
+- Cluster, Sort and Filter by features read hub hits' per-read states; lifted
+  datasets get them per record, so split rows of one read keep their own state.
+
 ### Live lift
 
 - **Reads from another assembly, drawn on this genome.** **Open ▾ → Add live

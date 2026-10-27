@@ -9,6 +9,11 @@ import pytest
 # (browser/services/public_mode_guard.py); test_every_route_is_classified
 # fails until it is.
 PUBLIC_DENIED = {
+    # fiberhmm-scan: opening scan directories and running live scans read the host's files and run compute.
+    ("GET", "/api/scan/available"), ("POST", "/api/scan/open"), ("GET", "/api/scan/list"), ("DELETE", "/api/scan/{scan_id}"),
+    ("GET", "/api/scan/{scan_id}/hits"), ("GET", "/api/scan/{scan_id}/units"), ("POST", "/api/scan/plan"),
+    ("POST", "/api/scan/jobs"), ("GET", "/api/scan/jobs"), ("GET", "/api/scan/jobs/{job_id}"),
+    ("DELETE", "/api/scan/jobs/{job_id}"),
     # Live lift: opening a dataset from the host's files, reading a map from them, and its settings (the flag
     # itself is harmless but is a host feature too).
     ("GET", "/api/lift/enabled"), ("GET", "/api/lift/inspect"), ("POST", "/api/lift/datasets"), ("GET", "/api/lift/datasets"),

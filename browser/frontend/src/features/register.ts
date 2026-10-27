@@ -14,6 +14,7 @@ import { registerAltAllele } from './altAllele/register';
 import { registerAltAllelePreview } from './altAllele/preview';
 import { registerLiveLift } from './liveLift/register';
 import { registerGraphPanel } from './graphPanel/register';
+import { registerFeatureHub } from './hub/register';
 
 let done = false;
 
@@ -31,4 +32,5 @@ export function registerInsertionFeatures(): void {
   registerAltAllele();
   registerLiveLift();
   registerGraphPanel();
+  registerFeatureHub();
 }
