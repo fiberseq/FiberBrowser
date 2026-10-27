@@ -9,7 +9,7 @@
  * - past 50 kb (linear tracks) Scan scans the lifted dataset too.
  *
  * Needs FIBERBROWSER_TEST_GRAPH_HELPER, FIBERBROWSER_TEST_GRAPH_HPRC_PACKAGE, FIBERBROWSER_TEST_LIFT_{BAM,MAP,NATIVE},
- * FIBERBROWSER_TEST_FASTA (chr3) and FIBERBROWSER_LIVE_LIFT=1.
+ * FIBERBROWSER_TEST_FASTA (chr3). Live lift is on unless FIBERBROWSER_LIVE_LIFT=0 (on by default since the owner's 25 Oct decision).
  */
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures/nativeDialogs';
@@ -23,7 +23,7 @@ const HPRC = process.env.FIBERBROWSER_TEST_GRAPH_HPRC_PACKAGE?.trim() ?? '';
 const LIFT_BAM = process.env.FIBERBROWSER_TEST_LIFT_BAM ?? '';
 const LIFT_MAP = process.env.FIBERBROWSER_TEST_LIFT_MAP ?? '';
 const NATIVE_BAM = process.env.FIBERBROWSER_TEST_LIFT_NATIVE ?? '';
-const READY = [HELPER, HPRC, LIFT_BAM, LIFT_MAP, NATIVE_BAM].every(p => p && existsSync(p)) && process.env.FIBERBROWSER_LIVE_LIFT === '1'
+const READY = [HELPER, HPRC, LIFT_BAM, LIFT_MAP, NATIVE_BAM].every(p => p && existsSync(p)) && process.env.FIBERBROWSER_LIVE_LIFT !== '0'
   && Boolean(process.env.FIBERBROWSER_TEST_FASTA);
 
 async function graphServer(): Promise<ServerProcess> {
@@ -39,7 +39,7 @@ async function graphServer(): Promise<ServerProcess> {
 const state = <T,>(page: Page, fn: string) => page.evaluate(`(() => { const s = window.__FIBERBROWSER_STORE__.getState(); return (${fn})(s); })()`) as Promise<T>;
 
 test('graph features: Sort, Read Stats, Scan on graph columns, Cluster, a run across Back, linear Scan (HPRC)', async ({ page }) => {
-  test.skip(!READY, 'needs the graph helper, the HPRC package, the live-lift demo data and FIBERBROWSER_LIVE_LIFT=1');
+  test.skip(!READY, 'needs the graph helper, the HPRC package, the live-lift demo data (live lift is on unless FIBERBROWSER_LIVE_LIFT=0)');
   test.setTimeout(600_000);
   const server = await graphServer();
   try {

@@ -10,7 +10,7 @@
  * - the zoom hand-off: out above 50 kb (members side by side), back at 40 kb, no flapping in between.
  *
  * Needs FIBERBROWSER_TEST_GRAPH_HELPER, FIBERBROWSER_TEST_GRAPH_HPRC_PACKAGE, FIBERBROWSER_TEST_LIFT_{BAM,MAP},
- * FIBERBROWSER_TEST_FASTA (chr3) and FIBERBROWSER_LIVE_LIFT=1. FIBERBROWSER_GRAPH_SHOTS: a folder for screenshots.
+ * FIBERBROWSER_TEST_FASTA (chr3) (live lift is on unless FIBERBROWSER_LIVE_LIFT=0). FIBERBROWSER_GRAPH_SHOTS: a folder for screenshots.
  */
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures/nativeDialogs';

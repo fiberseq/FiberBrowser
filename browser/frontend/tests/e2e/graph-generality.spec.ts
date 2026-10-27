@@ -8,7 +8,7 @@
  *
  * Needs FIBERBROWSER_TEST_GRAPH_HELPER, FIBERBROWSER_TEST_GRAPH_GENERALITY_PACKAGES (a folder named strain),
  * FIBERBROWSER_TEST_GRAPH_LIFT_GENERALITY (strain/strain.chain.graphlift.json, strain/strain.src.bam and
- * strain/dm6_chr2L.fa: the target's sequence, served as the main reference) and FIBERBROWSER_LIVE_LIFT=1.
+ * strain/dm6_chr2L.fa: the target's sequence, served as the main reference) (live lift is on unless FIBERBROWSER_LIVE_LIFT=0).
  */
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures/nativeDialogs';
