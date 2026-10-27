@@ -4,7 +4,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useBrowserStore } from '../../stores/browserStore';
 import type { Dataset } from '../../types';
 import type { DifferenceSelection } from '../liveLift/inspectionStore';
-import { comparisonFor, comparisonKey, compareWithAssembly, LABEL_TEXT, linkText, useComparisonStore } from './comparison';
+import { comparisonFor, comparisonKey, compareWithAssembly, LABEL_TEXT, linkText, useComparisonStore, withComparison } from './comparison';
 
 const LOCAL = ['insertion', 'deletion', 'replacement', 'snv', 'mnv'];
 
@@ -128,7 +128,7 @@ export function useInspectComparison(selection: DifferenceSelection, map: Datase
     if (entry && !lacksExactTarget(entry)) {
       // A row comparison that already covers it becomes the inspector's own (the same response, its arrival order
       // kept): a pan replaces the row's entry, and the exact targets would drop from Molecule calls with it.
-      useComparisonStore.setState(s => (s.byKey[key] ? s : { byKey: { ...s.byKey, [key]: entry.response } }));
+      useComparisonStore.setState(s => (s.byKey[key] ? s : { byKey: withComparison(s.byKey, key, entry.response) }));
       return;
     }
     const controller = new AbortController();

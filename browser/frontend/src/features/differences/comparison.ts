@@ -63,8 +63,19 @@ export function mergeLedger(a: Record<string, any> | undefined, b: Record<string
 
 interface Store { byKey: Record<string, ComparisonResponse>; put: (key: string, r: ComparisonResponse) => void }
 let received = 0;
+/** Inspector comparisons kept (one per inspected difference): the oldest go first. Row comparisons are one per panel,
+ * replaced as it moves. */
+export const MAX_INSPECT_ENTRIES = 64;
+/** `byKey` with `r` at `key`; past MAX_INSPECT_ENTRIES inspector entries, the oldest others are dropped. */
+export function withComparison(byKey: Record<string, ComparisonResponse>, key: string, r: ComparisonResponse): Record<string, ComparisonResponse> {
+  const next = { ...byKey, [key]: r };
+  const inspect = Object.keys(next).filter(k => k !== key && k.includes('|inspect:'));
+  const extra = inspect.length + (key.includes('|inspect:') ? 1 : 0) - MAX_INSPECT_ENTRIES;
+  if (extra > 0) for (const k of inspect.sort((a, b) => (next[a]._received ?? 0) - (next[b]._received ?? 0)).slice(0, extra)) delete next[k];
+  return next;
+}
 /** The newest comparison covering a difference wins (a consensus re-compare supersedes the row's). */
-export const useComparisonStore = create<Store>(set => ({ byKey: {}, put: (key, r) => set(s => ({ byKey: { ...s.byKey, [key]: { ...r, _received: ++received } } })) }));
+export const useComparisonStore = create<Store>(set => ({ byKey: {}, put: (key, r) => set(s => ({ byKey: withComparison(s.byKey, key, { ...r, _received: ++received }) })) }));
 
 export const comparisonKey = (datasetId: string, chrom: string, scope: string) => `${datasetId}|${chrom}|${scope}`;
 
