@@ -34,7 +34,7 @@ import { selectGraph } from './selectionStore';
 import { bumpNavigation, navigateGraph, navigationToken, showSourceSpan, sourcePanelsFor, tokenCurrent, type NavigationToken } from './navigation';
 import { useGraphReadsStore } from './graphReadsStore';
 import { moleculeKey, useLiftHover } from '../liveLift/linking/hover';
-import { xForTarget } from './scene';
+import { localBpScale, xForTarget } from './scene';
 import { conversionTargets, convertStandalone, foldIn, isHost, joinCandidates, joinGraph, membersOf, panelKeyOf, panelView, poppable, setPanelViewMode } from './hostMode';
 import { allocateRows, graphPins, packMemberBands, routeRead, STRIP_ROWS, type BandMember, type HostLane, type MemberState } from './memberBands';
 import { singleHapPathName } from './labels';
@@ -931,8 +931,11 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   }, [scene, graphSelection, panelId]);
   // Anchored zoom: once the new window's scene is drawn, the anchor's target base goes back under the pointer (the
   // layout is nonlinear, so the average-scale zoom is close, not exact). Applied only while its navigation token is
-  // current: any newer move, link change or package change drops it; the correction itself schedules none.
-  const correction = useRef<{ token: NavigationToken; anchor: number; px: number } | null>(null);
+  // current: any newer move, link change or package change drops it. A pass schedules the next only while it still
+  // misses, at most ANCHOR_PASSES in all. `pass`: the passes made so far; `prev`: where the last pass left the anchor
+  // and how far it moved the window.
+  const correction = useRef<{ token: NavigationToken; anchor: number; px: number; pass: number;
+    prev?: { x: number; deltaBp: number } } | null>(null);
   useEffect(() => {
     const c = correction.current;
     if (!c || !scene || !response || !viewport || !state || !panelId || !target) return;
@@ -944,10 +947,32 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     if (x == null || !transform) return;
     const dx = c.px - x;
     if (Math.abs(dx) < 2) return;
-    const deltaBp = Math.round((reversed ? dx : -dx) / Math.max(1e-9, bpScale(transform)));
+    // The layout is not translation-invariant: a wide-drawn insertion keeps its width and moving the window re-spreads
+    // the width on either side of it. The first pass converts the miss at the scale the sequence around the anchor is
+    // drawn at (the average scale fell 48 px short beside the AluY insertion); a later pass uses the slope the last one
+    // measured (a secant step). At most ANCHOR_PASSES passes, each a move.
+    let deltaBp: number;
+    if (c.prev) {
+      // Pixels the anchor moved per base the window moved: negative, or positive on a reversed drawing.
+      const slope = (x - c.prev.x) / c.prev.deltaBp;
+      if (!Number.isFinite(slope) || Math.abs(slope) < 1e-6 || Math.sign(slope) !== (reversed ? 1 : -1)) return;
+      deltaBp = Math.round(dx / slope);
+    } else {
+      const scale = localBpScale(scene.targetMap, c.anchor) ?? bpScale(transform);
+      deltaBp = Math.round((reversed ? dx : -dx) / Math.max(1e-9, scale));
+    }
+    // (Never more than half the window in one pass.)
+    const half = Math.floor((viewport.end - viewport.start) / 2);
+    deltaBp = Math.max(-half, Math.min(half, deltaBp));
     if (!deltaBp) return;
     const corrected = panViewport(viewport, deltaBp, target.size, target.size_inferred);
+    const moved = corrected.start - viewport.start;
+    if (!moved) return;
     if (following && !hostMode) navigateGraph(panelId, corrected); else commitViewport(corrected, true);
+    if (c.pass + 1 >= ANCHOR_PASSES) return;
+    const after = useBrowserStore.getState().panels.find(p => p.id === panelId)?.graphView;
+    correction.current = after ? { token: navigationToken(panelId, after, corrected), anchor: c.anchor, px: c.px, pass: c.pass + 1,
+      prev: { x, deltaBp: moved } } : null;
   }, [scene]); // eslint-disable-line react-hooks/exhaustive-deps
   const zoomAround = (px: number, factor: number) => {
     if (!transform || !viewport || !target || !panelId || !state) return;
@@ -968,7 +993,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     // A host zoomed past the hand-off draws linear: nothing to correct (a correction would restart its settling).
     if (hostMode && next.end - next.start > useGraphSettings.getState().outBp) return;
     const after = useBrowserStore.getState().panels.find(p => p.id === panelId)?.graphView;
-    correction.current = after ? { token: navigationToken(panelId, after, next), anchor, px } : null;
+    correction.current = after ? { token: navigationToken(panelId, after, next), anchor, px, pass: 0 } : null;
   };
   /** Where x is across the data area (mirrored when reversed): the zoomed window keeps the anchor there. The new
    * layout is nonlinear too, so this is close, not exact (exact anchoring is the Phase F navigation adapter). */
@@ -1455,6 +1480,9 @@ function hostPan(view: GraphViewport, deltaBp: number, size: number | null, size
   if (limit != null && start + width > limit) start = Math.max(0, limit - width);
   return { contig: view.contig, start, end: start + width };
 }
+
+/** Anchored zoom: correction passes after the zoom (the first at the local scale, then secant steps). */
+const ANCHOR_PASSES = 3;
 
 /** A host's zoom about `anchor` (kept at screen fraction `fraction`) on its own viewport: no 50 kb clamp (the hand-off
  * decides what it draws), at least 40 bp, inside the target when its size is known. */
