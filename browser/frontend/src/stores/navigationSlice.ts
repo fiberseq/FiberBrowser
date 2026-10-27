@@ -14,6 +14,7 @@ import {
   type PanelMoves,
 } from '../utils/panelNavigation';
 import { formatCoordinates } from '../utils/coordinates';
+import { linkedPanelView } from '../utils/panelExtensions';
 
 export type { NavigationMode } from '../utils/panelNavigation';
 
@@ -170,6 +171,21 @@ export const createNavigationSlice = (set: SetState, get: () => BrowserState): N
         // (the jump clears the main view's).
         const stay = new Set(before.filter(p => p.navOwn && !p.genome && sameLocus(p.viewportOverride, mainLocus)).map(keyOf));
         moveMainViewKeeping(get, set, mainLocus, stay);
+      } else {
+        // The main view stays: panels linked to it through a view link (live-lift source views) show it mapped, as
+        // after a main-view move, wherever "Each panel navigates" left them (post-merge review, agy group C, HIGH 4).
+        set(s => {
+          const at = { chrom: s.chrom, start: s.start, end: s.end };
+          let changed = false;
+          const out = s.panels.map(p => {
+            if (!p.viewportOverride) return p;
+            const mapped = linkedPanelView(p, at);
+            if (!mapped || sameLocus(p.viewportOverride, mapped)) return p;
+            changed = true;
+            return { ...p, viewportOverride: { chrom: mapped.chrom, start: mapped.start, end: mapped.end } };
+          });
+          return changed ? { panels: out } : {};
+        });
       }
     });
   },

@@ -55,6 +55,8 @@ for (const dark of [false, true]) {
     await expect(menu.getByRole('menuitem')).toHaveText([
       /Open file…/, /Open from Library/, /Load by path \/ URL…/, /Connect to cluster…/,
       /Process raw data \(New DAF-seq run\)…/, /Data quality \(QC a dataset\)…/,
+      // Live lift is on by default on a personal server, and graph packages register from here too.
+      /Add live lift…/, /Register graph package…/,
     ]);
     await menuOnScreen(page);
     await shot(page, `open-menu-1440-${theme}`);

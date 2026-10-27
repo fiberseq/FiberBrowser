@@ -363,3 +363,311 @@ def test_iupac_ambiguity_is_not_decoded_without_daf_chemistry():
     candidates = {"t": "ATCG" * 25, "c": "ACCG" + "ATCG" * 24, "reference": ""}
     plain = compete("AYCG" + "ATCG" * 24, candidates, target_id="t", complete=True, context=DafContext("none", "dataset_chemistry:hia5-pacbio"))
     assert plain["call"]["assignment"] == "unknown" and "ambiguous_bases" in plain["call"]["reasons"]
+
+
+def edited_map(tmp_path, reference, hap_edits):
+    """Real sidecar and FASTAs for haplotypes written by hand as (start, end, alt) edits of `reference`."""
+    from types import SimpleNamespace
+    from live_lift_fixtures import _gaps
+    ll.clear_selection_cache()
+    ll.clear_primary_cache()
+    directory = tmp_path / "edited"
+    directory.mkdir()
+    chains, sources, blocks_by_chain, gaps_by_chain, nets, entries = [], [], {}, {}, {}, []
+    for ci, (hap, edits) in enumerate(hap_edits.items()):
+        cursor = q = 0
+        blocks, parts, reasons = [], [], []
+        for start, end, alt in edits:
+            blocks.append([cursor, q, start - cursor])
+            parts += [reference[cursor:start], alt]
+            q += start - cursor + len(alt)
+            cursor = end
+            reasons.append("source_insertion" if start == end else "target_insertion" if not alt else "aligned_indel")
+        blocks.append([cursor, q, len(reference) - cursor])
+        sequence = "".join(parts) + reference[cursor:]
+        entries.append((f"chrC_{hap}", sequence))
+        sources.append(dict(name=f"chrC_{hap}", size=len(sequence), uncovered=[]))
+        chains.append(_chain(hap, hap, ci, "+", blocks, len(sequence)))
+        blocks_by_chain[str(ci)], gaps_by_chain[str(ci)] = blocks, _gaps(blocks, reasons)
+        nets[hap] = [[0, 0, len(reference), ci, []]]
+    with gzip.open(directory / "map.json.gz", "wt") as fh:
+        json.dump(dict(target=CHROM, blocks=blocks_by_chain, gaps=gaps_by_chain), fh)
+    with gzip.open(directory / "fills.json.gz", "wt") as fh:
+        json.dump(dict(target=CHROM, fills={}), fh)
+    manifest = dict(format="graphlift.sidecar", version=2, block_kinds=["anchor", "substitution", "aligned"],
+                    gap_reasons=GAP_REASONS, targets=[dict(name=CHROM, size=len(reference))], sources=sources,
+                    chains=chains, nets=nets, target_files={CHROM: ["map.json.gz", "fills.json.gz"]})
+    (directory / "map.graphlift.json").write_text(json.dumps(manifest))
+    target = _fasta(directory / "target.fa", [(CHROM, reference)])
+    source = _fasta(directory / "source.fa", entries)
+    config = LiveLiftConfig(str(directory / "map.graphlift.json"), [], source_fasta=source)
+    dataset = SimpleNamespace(id="edited", paths=[], live_lift=config, data_type="bam_livelift", label="edited")
+    return SimpleNamespace(fasta=pysam.FastaFile(target), datasets={"edited": dataset}), dataset
+
+
+def _hap_item(out, label, kind="insertion"):
+    return next(v for v in out["assembly"].values() if v["hap_label"] == label and v["kind"] == kind)
+
+
+def test_exact_target_refused_when_an_insertion_sits_at_the_fetch_end(tmp_path):
+    """Codex post-merge review B1 HIGH 1: the fetch is half-open, so an insertion at its end is not fetched, yet a
+    window reaching that end observes it; such a window must not claim a complete 'MAT / PAT' competition."""
+    state, ds = edited_map(tmp_path, T, {"MAT": [(5000, 5000, X)], "PAT": [(5000, 5000, X), (5101, 5101, Y_OTHER)],
+                                         "OTHER": [(5020, 5076, "")]})
+    # With no reads the fetch pads the view by broad_anchor_bp + max(broad_anchor_bp, diagnostic_flank_bp) = 100:
+    # [4990, 5001) fetches [4890, 5101), and OTHER's deletion grows MAT's window to [4975, 5101].
+    out = assembly_comparison(state, ds, chrom=CHROM, start=4990, end=5001)
+    assert _hap_item(out, "MAT")["exact_target"] is None
+    # Fetched in full, PAT's second insertion is in the window: no shared label, competition open.
+    out = assembly_comparison(state, ds, chrom=CHROM, start=4900, end=5200)
+    mat = _hap_item(out, "MAT")
+    target = mat["exact_target"]
+    assert target["diagnostic_start"] <= 4975 and target["diagnostic_end"] >= 5101 + 25
+    assert target["candidate_labels"][mat["exact_allele_id"]] == "MAT"
+    assert target["competition_complete"] is False
+    state.fasta.close()
+
+
+def test_exact_target_window_touching_either_fetch_edge_is_refused():
+    """Codex post-merge review B1 HIGH 1: [start, end) misses an edit ending at its start or inserted at its end,
+    and the window takes in every edit touching it, so a window touching either fetch edge is refused."""
+    from services.differences.comparison import _exact_target
+
+    class Ref:
+        def bases(self, a, b):
+            return T[a:b]
+
+    def target(pos, fetched):
+        v = dict(id=f"MAT:{pos}", item_id=f"MAT:{pos}", hap="MAT", hap_label="MAT", t_start=pos, t_end=pos,
+                 exact_allele_id="allele", alt=X, alt_bp=len(X), shared_with=[])
+        return _exact_target(v, {v["id"]: v}, (), Ref(), CHROM, ComparisonPolicy(), {}, local_all=[v], fetched=fetched)
+    assert target(5000, (4974, 5026))["competition_complete"]      # window [4975, 5025] strictly inside
+    assert target(5000, (4975, 5026)) is None
+    assert target(5000, (4974, 5025)) is None
+    assert target(10, (0, 9000))["diagnostic_start"] == 0           # nothing precedes the contig start
+
+
+def test_shifted_shared_insertion_brings_its_haplotypes_other_edits_into_the_window(tmp_path):
+    """Codex post-merge review B1 HIGH 2: in an A repeat MAT's A*100 at 5000 and PAT's at 5060 are one exact allele,
+    but PAT also deletes [5010,5020), so PAT does not carry MAT's sequence over the window."""
+    reference = T[:4990] + "A" * 120 + T[5110:]
+    state, ds = edited_map(tmp_path, reference, {"MAT": [(5000, 5000, "A" * 100)],
+                                                 "PAT": [(5010, 5020, ""), (5060, 5060, "A" * 100)]})
+    out = assembly_comparison(state, ds, chrom=CHROM, start=4900, end=5200)
+    mat = _hap_item(out, "MAT")
+    assert mat["exact_allele_id"] == _hap_item(out, "PAT")["exact_allele_id"]
+    target = mat["exact_target"]
+    assert target["diagnostic_start"] <= 4975 and target["diagnostic_end"] >= 5060 + 25
+    assert target["candidate_labels"][mat["exact_allele_id"]] == "MAT"
+    assert "PAT" not in target["candidate_labels"].values()
+    assert target["competition_complete"] is False
+    state.fasta.close()
+
+
+def test_shifted_shared_insertion_alone_shares_the_target(tmp_path):
+    """Control for B1 HIGH 2: with no other PAT edit, the window covers PAT's placement and PAT's splice is the target."""
+    reference = T[:4990] + "A" * 120 + T[5110:]
+    state, ds = edited_map(tmp_path, reference, {"MAT": [(5000, 5000, "A" * 100)], "PAT": [(5060, 5060, "A" * 100)]})
+    out = assembly_comparison(state, ds, chrom=CHROM, start=4900, end=5200)
+    mat = _hap_item(out, "MAT")
+    tid = mat["exact_allele_id"]
+    target = mat["exact_target"]
+    lo, hi = target["diagnostic_start"], target["diagnostic_end"]
+    assert hi >= 5060 + 25
+    assert target["competition_complete"] is True
+    assert target["candidate_labels"][tid] == "MAT / PAT"
+    assert set(target["candidates"]) == {tid, "reference"}
+    assert target["candidates"][tid] == reference[lo:5060] + "A" * 100 + reference[5060:hi]   # PAT's own splice
+    state.fasta.close()
+
+
+def test_repeat_target_window_spans_the_repeat_so_other_repeat_alleles_compete(tmp_path):
+    """agy post-merge review B HIGH 1(1): MAT's A*100 at 5000 and PAT's A*200 at 5060 are different alleles of one
+    A repeat. The window spans the repeat (equivalent_anchors), so PAT's allele competes and a PAT carrier is called
+    other_allele instead of a confirmed reference."""
+    reference = T[:4990] + "A" * 120 + T[5110:]
+    state, ds = edited_map(tmp_path, reference, {"MAT": [(5000, 5000, "A" * 100)], "PAT": [(5060, 5060, "A" * 200)]})
+    out = assembly_comparison(state, ds, chrom=CHROM, start=4900, end=5200)
+    mat, pat = _hap_item(out, "MAT"), _hap_item(out, "PAT")
+    lo, hi = mat["equivalent_anchors"]
+    assert lo <= 4990 and hi >= 5110 and pat["exact_allele_id"] != mat["exact_allele_id"]
+    target = mat["exact_target"]
+    assert target["diagnostic_start"] <= lo - 25 and target["diagnostic_end"] >= hi + 25
+    assert target["candidate_labels"][pat["exact_allele_id"]] == "PAT"
+    assert target["candidate_labels"][mat["exact_allele_id"]] == "MAT"
+    assert target["competition_complete"] is True
+    pat_src = reference[:5060] + "A" * 200 + reference[5060:]
+    ds.paths = [write_bam(tmp_path / "pat_carrier.bam",
+                          lambda h: [make_record(h, "pat_mol", "chrC_PAT", 4800, "600M", seq=pat_src[4800:5400])],
+                          contigs=(("chrC_MAT", len(reference) + 100), ("chrC_PAT", len(pat_src))))]
+    ds.consensus_chemistry = "hia5-pacbio"
+    from services.differences.workspace import inspect
+    calls = inspect(state, ds, chrom=CHROM, start=4800, end=5300, target=target)["targets"][0]["calls_by_molecule"]
+    assert len(calls) == 1
+    call = next(iter(calls.values()))["call"]
+    assert call["assignment"] == "other_allele", call
+    state.fasta.close()
+
+
+def test_repeat_target_refused_when_the_repeat_reaches_past_the_fetch(tmp_path):
+    """agy post-merge review B HIGH 1(2): PAT carries MAT's A*100 shifted to 5120 plus a deletion in a 160 bp A repeat.
+    Comparing [4990, 5001) fetches [4890, 5101), short of the repeat's end, so MAT gets no exact target there."""
+    reference = T[:4990] + "A" * 160 + T[5150:]
+    state, ds = edited_map(tmp_path, reference, {"MAT": [(5000, 5000, "A" * 100)],
+                                                 "PAT": [(5120, 5120, "A" * 100), (5125, 5135, "")]})
+    out = assembly_comparison(state, ds, chrom=CHROM, start=4990, end=5001)
+    mat = _hap_item(out, "MAT")
+    assert mat["equivalent_anchors"][1] >= 5150 > 5101
+    assert mat["exact_target"] is None
+    # Fetched in full, PAT's shifted copy and its deletion are both in the window: no shared label, competition open.
+    out = assembly_comparison(state, ds, chrom=CHROM, start=4900, end=5300)
+    mat = _hap_item(out, "MAT")
+    assert mat["exact_allele_id"] == _hap_item(out, "PAT")["exact_allele_id"]
+    target = mat["exact_target"]
+    assert target["diagnostic_end"] >= 5150 + 25
+    assert target["candidate_labels"][mat["exact_allele_id"]] == "MAT"
+    assert target["competition_complete"] is False
+    state.fasta.close()
+
+
+def test_isolated_300bp_insertion_keeps_a_valid_exact_target(tmp_path):
+    """An isolated insertion keeps a complete exact target; its window is its equivalent placements plus the flank
+    (here T[4999] repeats the allele's last base, so the insertion may also sit one base left)."""
+    from services.differences.projected_service import validate_target
+    from services.differences.projection import ProjectionPolicy
+    allele = "ACGT" * 75
+    state, ds = edited_map(tmp_path, T, {"MAT": [(5000, 5000, allele)]})
+    out = assembly_comparison(state, ds, chrom=CHROM, start=4990, end=5010)
+    mat = _hap_item(out, "MAT")
+    target = mat["exact_target"]
+    assert target is not None and target["competition_complete"] is True
+    validate_target(target, CHROM, 4990, 5010, ProjectionPolicy())
+    lo, hi = mat["equivalent_anchors"]
+    assert (lo, hi) == (4999, 5000)
+    assert (target["diagnostic_start"], target["diagnostic_end"]) == (lo - 25, hi + 25)
+    assert target["candidates"][mat["exact_allele_id"]] == T[lo - 25:5000] + allele + T[5000:hi + 25]
+    assert set(target["candidates"]) == {mat["exact_allele_id"], "reference"}
+    state.fasta.close()
+
+
+def test_deletion_across_the_view_edge_keeps_its_exact_target(tmp_path):
+    """agy post-merge review B HIGH 2(1): a 300 bp deletion straddling the view's right edge is fetched; the fetch
+    widens over it so its exact target (window [4975, 5325]) is not refused at the old edge 5210."""
+    state, ds = edited_map(tmp_path, T, {"MAT": [(5000, 5300, "")], "PAT": []})
+    out = assembly_comparison(state, ds, chrom=CHROM, start=4900, end=5100, read_scope={"search_complete": True},
+                              reads=[dict(id="r_del300", ref_start=5000, ref_end=5300, alt_bp=0)])
+    assert out["reads"]["r_del300"]["label"] == "confirmed_by_assembly"
+    mat = _hap_item(out, "MAT", "deletion")
+    target = mat["exact_target"]
+    assert target is not None and target["competition_complete"] is True
+    assert target["diagnostic_start"] <= 4975 and target["diagnostic_end"] >= 5325
+    assert target["candidates"]["reference"] == T[target["diagnostic_start"]:target["diagnostic_end"]]
+    state.fasta.close()
+
+
+def test_read_with_a_shifted_equal_deletion_past_the_view_is_not_novel(tmp_path):
+    """agy post-merge review B HIGH 2(2): PAT carries the read's 300 bp deletion shifted to [5220, 5520) in a 560 bp
+    A repeat. The fetch covers the read's equivalent placements, so the narrow view confirms it instead of calling
+    it novel_relative_to_assembly."""
+    reference = T[:4990] + "A" * 560 + T[5550:]
+    state, ds = edited_map(tmp_path, reference, {"MAT": [], "PAT": [(5220, 5520, "")]})
+    read = [dict(id="r_del300", ref_start=5000, ref_end=5300, alt_bp=0)]
+    for view in ((4900, 5600), (4900, 5100)):
+        out = assembly_comparison(state, ds, chrom=CHROM, start=view[0], end=view[1], reads=read,
+                                  read_scope={"search_complete": True})
+        assert out["reads"]["r_del300"]["label"] == "confirmed_by_assembly", view
+    state.fasta.close()
+
+
+def test_read_window_past_the_bounded_fetch_is_unassessed_not_novel(tmp_path):
+    """agy post-merge review B HIGH 2: the fetch widens at most max_fetch_widen_bp past the view's pad; a read whose
+    nearby window still reaches past it is unassessed (fetch_horizon), never novel."""
+    state, ds = edited_map(tmp_path, T, {"MAT": [], "PAT": []})
+    read = [dict(id="r_del300", ref_start=5000, ref_end=5300, alt_bp=0)]
+    wide = assembly_comparison(state, ds, chrom=CHROM, start=4900, end=5100, reads=read, read_scope={"search_complete": True})
+    assert wide["reads"]["r_del300"]["label"] == "novel_relative_to_assembly"   # nothing anywhere: novel
+    out = assembly_comparison(state, ds, chrom=CHROM, start=4900, end=5100, reads=read, read_scope={"search_complete": True},
+                              policy=ComparisonPolicy(max_fetch_widen_bp=150))
+    value = out["reads"]["r_del300"]
+    assert value["label"] == "unassessed"
+    assert "fetch_horizon" in value["novelty"]["reasons"] and "search_unassessed" in value["novelty"]["reasons"]
+    state.fasta.close()
+
+
+def _by_label(out, label):
+    return next(v for v in out["assembly"].values() if v["hap_label"] == label)
+
+
+def test_shortening_replacement_in_a_repeat_spans_its_net_deletion(tmp_path):
+    """agy post-merge review B2 HIGH 1: MAT replaces [5000,5400) of an 800 bp ACGT repeat with ACGT*25, which trims
+    to a 300 bp deletion whose last placement ends at 5800. The window spans it, so PAT's deletion at the repeat's
+    end competes and a PAT carrier is other_allele; a view fetching short of 5800 gets no exact target."""
+    reference = T[:5000] + "ACGT" * 200 + T[5800:]
+    state, ds = edited_map(tmp_path, reference, {"MAT": [(5000, 5400, "ACGT" * 25)], "PAT": [(5780, 5820, "")]})
+    out = assembly_comparison(state, ds, chrom=CHROM, start=4800, end=6000)
+    mat, pat = _by_label(out, "MAT"), _by_label(out, "PAT")
+    assert mat["equivalent_anchors"][1] == 5500
+    target = mat["exact_target"]
+    assert target["diagnostic_end"] >= 5800 + 25
+    assert target["candidate_labels"][pat["exact_allele_id"]] == "PAT"
+    assert target["competition_complete"] is True
+    pat_src = reference[:5780] + reference[5820:]
+    ds.paths = [write_bam(tmp_path / "pat_carrier.bam",
+                          lambda h: [make_record(h, "pat_mol", "chrC_PAT", 4800, "1100M", seq=pat_src[4800:5900])],
+                          contigs=(("chrC_MAT", len(reference) - 300), ("chrC_PAT", len(pat_src))))]
+    ds.consensus_chemistry = "hia5-pacbio"
+    from services.differences.workspace import inspect
+    calls = inspect(state, ds, chrom=CHROM, start=4800, end=6000, target=target)["targets"][0]["calls_by_molecule"]
+    assert next(iter(calls.values()))["call"]["assignment"] == "other_allele"
+    state.fasta.close()
+    (tmp_path / "b").mkdir()
+    state, ds = edited_map(tmp_path / "b", reference, {"MAT": [(5000, 5400, "ACGT" * 25)], "PAT": [(5560, 5800, "")]})
+    out = assembly_comparison(state, ds, chrom=CHROM, start=4990, end=5440)   # fetches [4890, 5541)
+    assert not any(v["hap_label"] == "PAT" for v in out["assembly"].values())
+    assert _by_label(out, "MAT")["exact_target"] is None
+    state.fasta.close()
+
+
+def test_fetch_widening_is_bounded_so_far_edits_do_not_hit_the_item_cap(tmp_path):
+    """agy post-merge review B2 HIGH 3: one 48 kb deletion across the view's edge no longer widens the fetch by 50 kb
+    into 512 far edits that would evict the view's own allele and leave every read unassessed."""
+    long_rng = random.Random(11)
+    long_ref = "".join(long_rng.choice("ACGT") for _ in range(60_000))
+    edits = {"MAT": [(3000, 3020, "")], "BIG": [(3950, 51_950, "")]}
+    for h in range(8):
+        edits[f"H{h}"] = [(10_000 + k * 500, 10_000 + k * 500 + 30, "") for k in range(64)]
+    state, ds = edited_map(tmp_path, long_ref, edits)
+    reads = [dict(id="r_confirmed", ref_start=3000, ref_end=3020, alt_bp=0), dict(id="r_novel", ref_start=2500, ref_end=2520, alt_bp=0)]
+    out = assembly_comparison(state, ds, chrom=CHROM, start=2000, end=4000, reads=reads, read_scope={"search_complete": True})
+    assert "assembly_items_cap" not in out["reasons"]
+    assert _by_label(out, "MAT")["exact_target"] is not None
+    assert out["reads"]["r_confirmed"]["label"] == "confirmed_by_assembly"
+    assert out["reads"]["r_novel"]["label"] == "novel_relative_to_assembly"
+    state.fasta.close()
+
+
+def test_item_cap_keeps_the_views_edits_first_and_counts_only_nearby(tmp_path):
+    """agy post-merge review B2 HIGH 3: under the item cap the view's and the reads' own edits are kept before larger
+    edits outside them, and a read with no dropped edit nearby keeps its verdict."""
+    state, ds = edited_map(tmp_path, T, {"MAT": [(3000, 3020, "")], "FAR": [(4005, 4035, ""), (4040, 4070, "")]})
+    reads = [dict(id="r_confirmed", ref_start=3000, ref_end=3020, alt_bp=0), dict(id="r_novel", ref_start=2500, ref_end=2520, alt_bp=0)]
+    out = assembly_comparison(state, ds, chrom=CHROM, start=2000, end=4000, reads=reads, read_scope={"search_complete": True},
+                              policy=ComparisonPolicy(max_assembly_items=1))
+    assert "assembly_items_cap" in out["reasons"]
+    assert [v["hap_label"] for v in out["assembly"].values()] == ["MAT"]
+    assert out["reads"]["r_confirmed"]["label"] == "confirmed_by_assembly"
+    assert out["reads"]["r_novel"]["label"] == "novel_relative_to_assembly"
+    state.fasta.close()
+
+
+def test_read_in_a_repeat_past_the_halo_is_unassessed_not_novel(tmp_path):
+    """agy post-merge review B2 HIGH 2: a read deletion in a 3.2 kb repeat cannot prove its placements within the
+    1 kb halo; PAT carries it at the repeat's far end, outside the fetch, so the read is unassessed, not novel."""
+    reference = T[:2000] + "ACGT" * 800 + T[5200:]
+    state, ds = edited_map(tmp_path, reference, {"MAT": [], "PAT": [(5100, 5200, "")]})
+    out = assembly_comparison(state, ds, chrom=CHROM, start=1900, end=2200, read_scope={"search_complete": True},
+                              reads=[dict(id="r", ref_start=2000, ref_end=2100, alt_bp=0)])
+    value = out["reads"]["r"]
+    assert value["label"] == "unassessed"
+    assert "normalization_incomplete" in value["novelty"]["reasons"]
+    state.fasta.close()

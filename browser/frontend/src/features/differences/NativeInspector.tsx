@@ -7,6 +7,7 @@ import { expandableAltBlock } from './capabilities';
 import { frozenTarget } from './selection';
 import { getAlternateBlocks, type AlternateBlock, type WorkspaceQuery } from './api';
 import { MoleculeCalls } from './MoleculeCalls';
+import { INSPECTOR_BUTTON } from './inspectorText';
 import { AssemblyComparisonPanel } from './AssemblyComparisonPanel';
 import { useAutoLoadBound } from './autoLoad';
 import { IdentifyTab, identifyLens } from '../insertion/IdentifyTab';
@@ -66,23 +67,25 @@ export function NativeInspector({ selection, panel, dataset, anchor }: {
     className="fixed z-[100] p-3 border rounded shadow-xl bg-white dark:bg-slate-900 text-xs overflow-auto"
     style={{ left: Math.max(8, rect?.left ?? 8), top: 60, width: Math.min(760, window.innerWidth-16), maxHeight: '85vh' }}>
     <button className="float-right" aria-label="Close difference inspection" onClick={() => useDifferenceSelection.getState().select(null)}>×</button>
-    <strong>{d.kind} · {d.ref_bp}→{d.alt_bp} bp · reads</strong>
-    <p>{selection.chrom}:{d.t_start}–{d.t_end} · sequence unavailable until loaded</p>
+    <strong>{d.kind} · {d.ref_bp.toLocaleString()}→{d.alt_bp.toLocaleString()} bp · from the reads</strong>
+    <p>{selection.chrom}:{d.t_start.toLocaleString()}–{d.t_end.toLocaleString()} · read sequence loads on request</p>
     <AssemblyComparisonPanel selection={selection} dataset={dataset} />
     <p>Reference [{d.t_start}, {d.t_end}) · alternate {d.alt_bp} bp · net {d.alt_bp-d.ref_bp} bp</p>
     <p>Boundary aligned · unaligned interior · observed bases retain their own offsets.</p>
-    {expandableAltBlock(d) && <><button onClick={() => expandDifference(selection)}>Expand alternate</button>{' '}
-      </>}{load ? <button onClick={() => setLoad(n => n+1)}>Reload observed bases and chromatin</button>
-      : <p data-testid="difference-load-reason">{bound.reason}{' '}<button onClick={() => setLoad(1)}>Load observed bases and chromatin</button></p>}
+    <div className="my-1 flex flex-wrap items-center gap-1.5">
+      {expandableAltBlock(d) && <button className={INSPECTOR_BUTTON} onClick={() => expandDifference(selection)}>{d.kind === 'insertion' ? 'Expand insertion' : 'Expand alternate'}</button>}
+      {load ? <button className={INSPECTOR_BUTTON} onClick={() => setLoad(n => n+1)}>Reload observed bases and chromatin</button>
+        : <><span data-testid="difference-load-reason">{bound.reason}</span><button className={INSPECTOR_BUTTON} onClick={() => setLoad(1)}>Load observed bases and chromatin</button></>}
+    </div>
     {selection.alternateHit && <p>Alternate-local {selection.alternateHit.layer ?? 'footprint'} [{selection.alternateHit.start}, {selection.alternateHit.end}) · read {selection.alternateHit.readId}</p>}
     <MoleculeCalls selection={selection} native />
     {error && <p role="status">{error}</p>}
     {blocks && <table className="w-full text-left"><thead><tr><th>Read / record</th><th>Observed bases</th><th>Coverage / chromatin</th><th>Sequence</th></tr></thead>
       <tbody>{blocks.map(b => <tr key={b.record_id}><td>{b.row_id} · {b.record_id.slice(0, 8)}</td><td className="font-mono break-all">{b.read_bases}{b.read_bases_length > 60 && '…'} ({b.read_bases_length} bp)</td>
         <td>{b.coverage} · {b.observation_role ?? 'unresolved observation'} · {b.intervals?.length ?? 0} calls · {b.methyl_m6a?.length ?? 0} m6A</td>
-        <td><button disabled={b.coverage !== 'full'} onClick={() => { setSequence(null); setSequenceRequest(b); }}>Load full observed sequence</button></td></tr>)}</tbody></table>}
+        <td><button className={INSPECTOR_BUTTON} disabled={b.coverage !== 'full'} onClick={() => { setSequence(null); setSequenceRequest(b); }}>Load full observed sequence</button></td></tr>)}</tbody></table>}
     {sequence !== null && <><p className="font-mono break-all">{sequence.slice(0, 60)}{sequence.length > 60 && '…'} · {sequence.length} bp · one observed {sequenceRequest?.observation_role ?? 'unresolved'} read</p>
-      <button disabled={!lens || !sequence.length || !expandableAltBlock(d)} onClick={() => setIdentify(true)}>Identify observed alternate</button></>}
+      <button className={INSPECTOR_BUTTON} disabled={!lens || !sequence.length || !expandableAltBlock(d)} onClick={() => setIdentify(true)}>Identify observed alternate</button></>}
     {identify && lens && <IdentifyTab response={lens} datasetId={dataset.id} identifyKey={identifyKey} reversed={false} visible dark={false} />}
   </div>, document.body);
 }

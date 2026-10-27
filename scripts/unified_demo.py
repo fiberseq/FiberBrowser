@@ -194,6 +194,30 @@ def post(port: int, path: str, body: dict) -> dict:
         return {"success": False, "error": str(e)}
 
 
+def warm_graph(port: int) -> None:
+    """Load the graph helper and check the packages now: the first status request does it, and on a cold start that
+    can take a minute, during which a page already open shows lifted datasets split rather than as graphs. Says
+    plainly when graph mode is unavailable."""
+    print("Checking the graph helper and packages (up to a minute on a cold start)...", flush=True)
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/graph/status", timeout=600) as r:
+            status = json.loads(r.read())
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        print(f"Could not check graph mode: {e}", flush=True)
+        return
+    helper = status.get("helper") or {}
+    if not helper.get("available"):
+        print("Graph mode is unavailable: " + (helper.get("error") or "no graph helper was found") + ".\n"
+              "  Pass --graph-helper PATH (a fiberbrowser-graph executable), or install the companion package: "
+              'pip install "fiberbrowser[graph]".', flush=True)
+        return
+    regs = status.get("registrations") or []
+    print(f"Graph helper ready ({helper.get('producer') or helper.get('path')}); "
+          f"{len(regs)} graph package{'' if len(regs) == 1 else 's'} registered.", flush=True)
+    for problem in status.get("registration_errors") or []:
+        print(f"  Graph package problem: {problem}", flush=True)
+
+
 def add_samples(a) -> None:
     settings = {"haplotype_mode": "pooled" if a.pooled else "split"}
     for s in a.sample:
@@ -241,6 +265,8 @@ def main(argv=None):
     try:
         wait_ready(a.port, proc)
         add_samples(a)
+        if not a.no_graph:
+            warm_graph(a.port)
         if proc.poll() is not None:
             sys.exit("FiberBrowser exited while the samples were loading (see its output above).")
         chrom, span = a.view.replace(",", "").split(":")

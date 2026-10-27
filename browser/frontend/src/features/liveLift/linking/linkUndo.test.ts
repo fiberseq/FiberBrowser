@@ -136,3 +136,36 @@ describe('"Each panel navigates": linked source and lifted panels move each othe
     expect([src.chrom, src.start, src.end]).toEqual(['S', 500, 1500]);
   });
 });
+
+describe('"Each panel navigates": a source-view pop-out of a graph host follows the host (Codex H r3 #4)', () => {
+  it("the host's moves take the source view along, and the source view's moves take the host along", async () => {
+    const resolves: (() => void)[] = [];
+    await setupLinkedStore(resolves);
+    // The haplotype panel the link names is folded into a graph host with a view of its own.
+    useBrowserStore.setState(s => ({ navigationMode: 'perPanel', panels: [
+      { id: 'host', contentType: 'dataset', datasetId: 'lift', subTracks: [], collapsed: false, linkGroup: null, liftHap: 'PAT',
+        viewMode: 'graph', viewportOverride: { chrom: 'T', start: 2000, end: 3000 } },
+      ...s.panels.map(p => p.id === 'mat' ? { ...p, collapsed: true, collapsedByGraphGroup: 'host', graphMemberOf: 'host',
+        viewportOverride: { chrom: 'T', start: 2000, end: 3000 } } : p),
+    ] }) as never);
+    // Load the tiles both directions need.
+    useBrowserStore.getState().setPanelViewport('src', 3990, 6090);
+    for (const r of resolves.splice(0)) r();
+    await flush();
+    useBrowserStore.getState().setPanelViewport('src', 3990, 6091);
+    for (const r of resolves.splice(0)) r();
+    await flush();
+    useBrowserStore.getState().setPanelViewport('src', 3990, 6090);
+    const view = (id: string) => { const v = useBrowserStore.getState().panels.find(p => p.id === id)!.viewportOverride!; return [v.chrom, v.start, v.end]; };
+    expect(view('host')).toEqual(['T', 5000, 7000]);
+    expect([useBrowserStore.getState().start, useBrowserStore.getState().end]).toEqual([2000, 3000]);   // main view untouched
+    useBrowserStore.getState().setPanelViewport('host', 1500, 2500);
+    for (const r of resolves.splice(0)) r();
+    await flush();
+    useBrowserStore.getState().setPanelViewport('host', 1500, 2501);
+    useBrowserStore.getState().setPanelViewport('host', 1500, 2500);
+    expect(view('src')).toEqual(['S', 500, 1500]);
+    // The link still names the haplotype's panel (ribbons, hover and retargeting keep using it).
+    expect(useBrowserStore.getState().panels.find(p => p.id === 'src')!.liftLink!.liftPanelId).toBe('mat');
+  });
+});

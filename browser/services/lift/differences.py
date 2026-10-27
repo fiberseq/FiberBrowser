@@ -332,6 +332,16 @@ def _haps(config, lift_hap):
     return [h for h in config.handle.resolve_haplotypes([lift_hap]) if h in config.haplotypes]
 
 
+def _preferred_hap(config, lift_hap):
+    """The haplotype a request names only to order its results (None when the name is not a haplotype of this map,
+    e.g. the Differences row's read-supported lane, "Reads": no preference rather than an error)."""
+    from services.lift.live_lift import LiftSettingsError
+    try:
+        return next(iter(_haps(config, lift_hap)), None)
+    except LiftSettingsError:
+        return None
+
+
 def assembly_items_for_region(config, chrom, start, end, *, lift_hap=None, min_bp=0):
     """Fresh copies of cached geometry, including events hidden by binning.
     Read evidence must match these too, otherwise a known small assembly
@@ -820,7 +830,7 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
     if selected is not None:
         pos, end = selected["t_start"], selected["t_end"]
     spans = _inspection_spans(config, chrom, pos, end, None)
-    preferred = selected["hap"] if selected else (next(iter(_haps(config, lift_hap)), None) if lift_hap else None)
+    preferred = selected["hap"] if selected else (_preferred_hap(config, lift_hap) if lift_hap else None)
     preferred_label = config.handle.haplotype_labels.get(preferred, preferred)
     spans.sort(key=lambda s: s["hap"] != preferred)
     if any(s["src"]["start"] is not None and s["src"]["end"] - s["src"]["start"] > 50_000 for s in spans):

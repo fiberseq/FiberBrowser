@@ -1,15 +1,76 @@
 import { useEffect, useState } from 'react';
+import { create } from 'zustand';
+import { useShallow } from 'zustand/react/shallow';
 import { useBrowserStore } from '../../stores/browserStore';
 import type { Dataset } from '../../types';
 import type { DifferenceSelection } from '../liveLift/inspectionStore';
-import { comparisonFor, comparisonKey, compareWithAssembly, LABEL_TEXT, linkText, useComparisonStore } from './comparison';
+import { comparisonFor, comparisonKey, compareWithAssembly, exactTargetsFor, LABEL_TEXT, linkText, useComparisonStore } from './comparison';
 
 const LOCAL = ['insertion', 'deletion', 'replacement', 'snv', 'mnv'];
 
-/** The lifted dataset whose map is the assembly for this selection: the panel's own, else the first open one. */
+/** The lifted dataset a native dataset's inspector compares with, when the user picked one (native dataset id -> it). */
+export const useMapChoice = create<{ byDataset: Record<string, string>; choose: (datasetId: string, mapId: string) => void }>(set => ({
+  byDataset: {},
+  choose: (datasetId, mapId) => set(s => ({ byDataset: { ...s.byDataset, [datasetId]: mapId } })),
+}));
+
+export interface MapOptions {
+  /** The lifted dataset to compare with (null: none open, or the user has to pick). */
+  map: Dataset | null;
+  /** The lifted datasets the user can pick from (more than one: a picker is shown). */
+  options: Dataset[];
+  /** Why there is a choice: several lifted datasets of this sample, or none of this sample (only others). */
+  reason: 'one' | 'several_of_sample' | 'none_of_sample' | 'unknown_samples' | 'none';
+}
+
+/** Which open lifted dataset's map is the assembly for a native dataset: the one of the same sample (its BAM read
+ * groups), else the only one open when the samples can't be told; with several candidates the user picks. */
+export function mapOptionsFor(dataset: Pick<Dataset, 'id' | 'data_type' | 'sample_keys'>, datasets: Dataset[], chosen?: string): MapOptions {
+  if (dataset.data_type === 'bam_livelift') {
+    const own = datasets.find(d => d.id === dataset.id) ?? (dataset as Dataset);
+    return { map: own, options: [own], reason: 'one' };
+  }
+  const lifted = datasets.filter(d => d.data_type === 'bam_livelift');
+  if (!lifted.length) return { map: null, options: [], reason: 'none' };
+  const mine = new Set(dataset.sample_keys ?? []);
+  const same = mine.size ? lifted.filter(d => (d.sample_keys ?? []).some(s => mine.has(s))) : [];
+  const known = mine.size > 0 && lifted.every(d => (d.sample_keys ?? []).length > 0);
+  const options = same.length ? same : lifted;
+  const reason: MapOptions['reason'] = same.length === 1 ? 'one' : same.length > 1 ? 'several_of_sample'
+    : known ? 'none_of_sample' : lifted.length === 1 ? 'one' : 'unknown_samples';
+  // A pick counts only among the current options: once a dataset of the sample is open, an earlier pick of another
+  // sample's no longer applies.
+  const picked = chosen ? options.find(d => d.id === chosen) : undefined;
+  return { map: picked ?? (reason === 'one' ? options[0] : null), options, reason };
+}
+
+export function useMapOptions(dataset: Dataset): MapOptions {
+  const chosen = useMapChoice(s => s.byDataset[dataset.id]);
+  const datasets = useBrowserStore(useShallow(s => s.datasets.filter(d => d.data_type === 'bam_livelift' || d.id === dataset.id)));
+  return mapOptionsFor(datasets.find(d => d.id === dataset.id) ?? dataset, datasets, chosen);
+}
+
+/** The lifted dataset whose map is the assembly for this selection: the panel's own; for a native panel, the lifted
+ * dataset of its sample (or the one the user picked). */
 export function useMapDataset(dataset: Dataset): Dataset | null {
-  return useBrowserStore(s => dataset.data_type === 'bam_livelift' ? dataset
-    : s.datasets.find(d => d.data_type === 'bam_livelift') ?? null);
+  return useMapOptions(dataset).map;
+}
+
+/** "Compared with: [lifted dataset ▾]" when a native dataset could use more than one lifted dataset's assembly. */
+function MapPicker({ dataset, options }: { dataset: Dataset; options: MapOptions }) {
+  const choose = useMapChoice(s => s.choose);
+  if (dataset.data_type === 'bam_livelift' || options.options.length < 2 && options.reason !== 'none_of_sample') return null;
+  const note = options.reason === 'several_of_sample' ? 'several live-lift datasets of this sample are open'
+    : options.reason === 'none_of_sample' ? 'no live-lift dataset of this sample is open; another sample\'s assembly may differ'
+      : 'the samples could not be told apart';
+  return <p className="my-1 text-xs" data-testid="assembly-map-picker">
+    <label>Compare with{' '}
+      <select className="rounded border border-slate-300 bg-white px-1 text-xs dark:border-slate-600 dark:bg-slate-800" value={options.map?.id ?? ''}
+        onChange={e => { if (e.target.value) choose(dataset.id, e.target.value); }} aria-label="Live-lift dataset to compare with">
+        {!options.map && <option value="">choose a live-lift dataset…</option>}
+        {options.options.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
+      </select></label>
+    <span className="text-slate-500"> · {note}</span></p>;
 }
 
 export const inspectKey = (mapId: string, s: DifferenceSelection) => comparisonKey(mapId, s.chrom, `inspect:${s.difference.id}`);
@@ -39,7 +100,16 @@ export function useInspectEntry(selection: DifferenceSelection, map: Dataset | n
   return useComparisonStore(s => map ? comparisonFor(s.byKey, `${map.id}|${selection.chrom}|`, selection.difference) : null);
 }
 
-/** One comparison for the inspected difference; a row comparison already covering it is reused. */
+/** A comparison that knows an exact assembly allele for this difference but froze no target for it (the target's
+ * window reached past what that comparison fetched): the inspector then runs its own, wider comparison. */
+export function lacksExactTarget(entry: ReturnType<typeof comparisonFor>): boolean {
+  if (!entry || exactTargetsFor(entry).length) return false;
+  if (entry.kind === 'assembly') return !!entry.value.exact_allele_id;
+  return entry.value.links.some(l => l.assembly_item_ids.some(id => !!entry.response.assembly[id]?.exact_allele_id));
+}
+
+/** One comparison for the inspected difference; a row comparison already covering it is reused unless it lacks
+ * the exact target an inspection tests reads against. */
 export function useInspectComparison(selection: DifferenceSelection, map: Dataset | null) {
   const d = selection.difference;
   const key = map ? inspectKey(map.id, selection) : '';
@@ -48,7 +118,8 @@ export function useInspectComparison(selection: DifferenceSelection, map: Datase
   const [busy, setBusy] = useState(false);
   const supported = LOCAL.includes(d.kind);
   useEffect(() => {
-    if (!map || entry || !supported) return;
+    if (!map || !supported) return;
+    if (entry && (useComparisonStore.getState().byKey[key] || !lacksExactTarget(entry))) return;
     const controller = new AbortController();
     setBusy(true); setError('');
     runInspectComparison(selection, map, undefined, controller.signal)
@@ -64,10 +135,17 @@ export function useInspectComparison(selection: DifferenceSelection, map: Datase
 
 /** Inspector header section: the design's assembly labels, typed links and novelty reasons. */
 export function AssemblyComparisonPanel({ selection, dataset }: { selection: DifferenceSelection; dataset: Dataset }) {
-  const map = useMapDataset(dataset);
+  const options = useMapOptions(dataset);
+  const picker = <MapPicker dataset={dataset} options={options} />;
+  return <>{picker}<AssemblyComparisonBody selection={selection} dataset={dataset} map={options.map} pick={options.options.length > 1 || options.reason === 'none_of_sample'} /></>;
+}
+
+function AssemblyComparisonBody({ selection, map, pick }: { selection: DifferenceSelection; dataset: Dataset; map: Dataset | null; pick: boolean }) {
   const { entry, error, busy, supported } = useInspectComparison(selection, map);
   const assembly = entry?.response.assembly ?? {};
   if (!supported) return <p data-testid="assembly-comparison">Assembly comparison: not available for this topology (geometry stays inspectable).</p>;
+  if (!map && pick) return <p data-testid="assembly-comparison"><strong data-testid="assembly-comparison-label">{LABEL_TEXT.reads_only}</strong>
+    {' '}· choose the live-lift dataset of this sample above to compare with its assembly.</p>;
   if (!map) return <p data-testid="assembly-comparison"><strong data-testid="assembly-comparison-label">{LABEL_TEXT.reads_only}</strong>
     {' '}· open a live-lift dataset on this genome to compare with its assembly.</p>;
   const d = selection.difference;

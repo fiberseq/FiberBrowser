@@ -12,7 +12,7 @@ import { seedSourceState } from './popOutKind';
 import { clusteredReadIdSet } from '../../components/tracks/read-track/readFilter';
 import { recordKey } from '../../utils/recordKeys';
 import { applySvSplit } from '../../utils/svAlleleSplit';
-import { remapDatasetIds, serializeState } from '../../stores/historySlice';
+import { deserializeSavedState, remapDatasetIds, serializeState } from '../../stores/historySlice';
 import type { GraphRegistration } from './types';
 import type { PanelConfig } from '../../types';
 
@@ -218,5 +218,30 @@ describe('pop-out provenance across panels and sessions (agy round 4)', () => {
     expect(useBrowserStore.getState().clusterTreeNodes[rootId].assignments[matId]).toEqual({ [rk(m0)]: 0, [rk(mNew)]: 1 });
     useBrowserStore.getState().applyClusterTreeNode(rootId);
     expect(useBrowserStore.getState().clusterAssignments[matId]).toEqual({ [rk(m0)]: 0, [rk(mNew)]: 1 });
+  });
+  it('post-merge A1 #5: a session saved with one run\'s provenance whole on each node is keyed on restore, so a pop-out on the parent node gets only its own rows', () => {
+    setupWorkspace();
+    const m0 = aid('ds1', 'm0'), m1 = aid('ds1', 'm1');
+    runGraphOn('hostA', { [m0]: 0, [m1]: 1 }, {});
+    const root = useBrowserStore.getState().activeClusterTreeNodeId!;
+    useBrowserStore.setState({ selectedClusters: { 'k-hostA': new Set([0]) } } as never);
+    runGraphOn('hostA', { [m0]: 0 }, {});
+    // The format before provenance was keyed by state key: one run's provenance, with its destinations, on the node.
+    const snap = JSON.parse(JSON.stringify(serializeState(useBrowserStore.getState())));
+    for (const node of Object.values(snap.clusterTreeNodes) as { graphProvenance?: Record<string, unknown> }[]) {
+      const entry = node.graphProvenance?.['k-hostA'] as { observations: unknown; owned: unknown } | undefined;
+      if (entry) node.graphProvenance = { destinations: ['k-hostA'], observations: entry.observations, owned: entry.owned };
+    }
+    useBrowserStore.setState(deserializeSavedState(snap));
+    expect(Object.keys(useBrowserStore.getState().clusterTreeNodes[root].graphProvenance ?? {})).toEqual(['k-hostA']);
+    useBrowserStore.getState().applyClusterTreeNode(root);
+    const [pat] = popOut('hostA', [], [{ binding: 'pat', hap: 'PAT' }]);
+    expect(useBrowserStore.getState().clusterAssignments[pat]).toBeUndefined();
+    // Reopened under another dataset id: the old format's destinations are renamed with the keys.
+    const remapped = remapDatasetIds({ clusterTreeNodes: { n: { parentId: null, assignments: { ds1: { [m0]: 0 } },
+      graphProvenance: { destinations: ['ds1'], observations: [{ id: 'o1', dataset_id: 'ds1' }], owned: { o1: [rk(m0)] } } } } }, { ds1: 'ds1_reopened' });
+    const gp = (remapped.clusterTreeNodes.n as { graphProvenance: Record<string, { observations: { dataset_id: string }[] }> }).graphProvenance;
+    expect(Object.keys(gp)).toEqual(['ds1_reopened']);
+    expect(gp.ds1_reopened.observations[0].dataset_id).toBe('ds1_reopened');
   });
 });

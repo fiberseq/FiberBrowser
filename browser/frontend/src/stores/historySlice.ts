@@ -601,7 +601,37 @@ const DATASET_KEYED_RECORDS = new Set([
   'excludedReadIds', 'svSplits', 'clusterGroupLabels', 'svCarrierEvidence',
 ]);
 // The same, inside each cluster-tree branch (ClusterTreeNode).
-const CLUSTER_TREE_NODE_KEYED_RECORDS = ['assignments', 'order', 'focus', 'readScope', 'groupLabels', 'graphProvenance'];
+const CLUSTER_TREE_NODE_KEYED_RECORDS = ['assignments', 'order', 'focus', 'readScope', 'groupLabels', 'graphProvenance', 'graphLabelsReplaced'];
+
+/**
+ * A tree node's graph-run provenance, keyed by state key. A node saved while it held one run's provenance whole
+ * (`{destinations, observations, owned}`; a development format, never released) gets that entry under each of its
+ * destinations, so a pop-out still splits the node's labels by the run (Codex post-merge review, group A round 1,
+ * #5). A malformed one is dropped (the pop-out then uses the current run's provenance).
+ */
+function keyedGraphProvenance<T>(node: T): T {
+  if (!node || typeof node !== 'object' || Array.isArray(node)) return node;
+  const gp = (node as { graphProvenance?: unknown }).graphProvenance;
+  const { destinations, observations, owned } = (gp ?? {}) as { destinations?: unknown; observations?: unknown; owned?: unknown };
+  // (A keyed entry is an object, never an array, whatever its state key.)
+  if (!Array.isArray(destinations)) return node;
+  const { graphProvenance: _old, ...rest } = node as Record<string, unknown>;
+  if (!Array.isArray(observations) || !owned || typeof owned !== 'object' || Array.isArray(owned)) return rest as T;
+  const entry = { observations, owned };
+  return { ...rest, graphProvenance: Object.fromEntries(destinations.filter(k => typeof k === 'string').map(k => [k, entry])) } as T;
+}
+
+/** Every tree node with keyed graph-run provenance (the same object when none needed it). */
+function withKeyedGraphProvenance(nodes: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!nodes) return {};
+  let changed = false;
+  const out = Object.fromEntries(Object.entries(nodes).map(([id, n]) => {
+    const next = keyedGraphProvenance(n);
+    if (next !== n) changed = true;
+    return [id, next];
+  }));
+  return changed ? out : nodes;
+}
 
 /**
  * Rename dataset ids in a serialized state (a reopened dataset can come back
@@ -663,7 +693,8 @@ export function remapDatasetIds<T>(value: T, idMap: Record<string, string>): T {
   // A cluster-tree branch keeps its results per state key as well.
   const mapTreeNode = (node: unknown): unknown => {
     if (!node || typeof node !== 'object' || Array.isArray(node)) return node;
-    const out = walk(node) as Record<string, unknown>;
+    // (An unkeyed provenance is keyed first, so its destinations are renamed too.)
+    const out = walk(keyedGraphProvenance(node)) as Record<string, unknown>;
     for (const field of CLUSTER_TREE_NODE_KEYED_RECORDS) if (field in out) out[field] = mapKeys(out[field]);
     return out;
   };
@@ -1058,7 +1089,7 @@ function deserializeState(
     clusterWindowPeaks: normalizeClusterWindowPeaks(s.clusterWindowPeaks),
     dynamicClustering: s.dynamicClustering,
     dynamicOverlapMode: s.dynamicOverlapMode ?? 'aggressive',
-    clusterTreeNodes: (s.clusterTreeNodes ?? {}) as any,
+    clusterTreeNodes: withKeyedGraphProvenance(s.clusterTreeNodes) as any,
     clusterTreeRootIds: s.clusterTreeRootIds ?? [],
     activeClusterTreeNodeId: s.activeClusterTreeNodeId ?? null,
     readSortOrder: s.readSortOrder,

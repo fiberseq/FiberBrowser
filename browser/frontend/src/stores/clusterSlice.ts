@@ -214,11 +214,20 @@ function sameAssignments(a: Record<string, number> | undefined, b: Record<string
 }
 
 /** A rebuilt tree node keeps the graph-run provenance of the panels whose labels did not change (another panel's
- * clustering re-syncs the node; agy review, group B round 4). */
+ * clustering re-syncs the node; agy review, group B round 4), and which of those labels another grouping replaced. */
 function keptGraphProvenance(node: ClusterTreeNode | undefined, assignments: Record<string, Record<string, number>>):
-  Pick<ClusterTreeNode, 'graphProvenance'> {
+  Pick<ClusterTreeNode, 'graphProvenance' | 'graphLabelsReplaced'> {
   const kept = Object.entries(node?.graphProvenance ?? {}).filter(([key]) => sameAssignments(node!.assignments[key], assignments[key]));
-  return kept.length ? { graphProvenance: Object.fromEntries(kept) } : {};
+  const replaced = kept.filter(([key]) => node!.graphLabelsReplaced?.[key]).map(([key]) => [key, true] as const);
+  return kept.length ? { graphProvenance: Object.fromEntries(kept), ...(replaced.length ? { graphLabelsReplaced: Object.fromEntries(replaced) } : {}) } : {};
+}
+
+/** A node whose labels for `key` a grouping other than a graph run replaced: they are no longer the run's own, even
+ * when the new labels equal the old; the run's record provenance stays, so pop-outs still split them by haplotype (a
+ * graph run clears the mark after writing; Codex post-merge review, group A rounds 2-3, #2). */
+function withGraphLabelsReplaced(node: ClusterTreeNode, key: string): ClusterTreeNode {
+  if (!node.graphProvenance?.[key] || node.graphLabelsReplaced?.[key]) return node;
+  return { ...node, graphLabelsReplaced: { ...(node.graphLabelsReplaced ?? {}), [key]: true } };
 }
 
 function cloneAssignments(assignments: Record<string, Record<string, number>>): Record<string, Record<string, number>> {
@@ -1110,7 +1119,7 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
         clusterTreeNodes: {
           ...state.clusterTreeNodes,
           [activeNode.id]: {
-            ...activeNode,
+            ...(options?.merge ? activeNode : withGraphLabelsReplaced(activeNode, datasetId)),
             assignments: cloneAssignments(clusterAssignments),
             order: cloneOrder(clusterOrder),
           },
@@ -1631,14 +1640,23 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
       if (Object.keys(merged).length) childAssignments[sk] = merged;
     }
     if (!Object.keys(childAssignments).length) return null;
+    // Panels the refinement does not label keep their order, focus, names and graph provenance (agy post-merge
+    // review, group A, HIGH 3: a refined graph run of one host wiped every other panel's).
+    const untouched = (key: string) => !(key in resultsByKey);
+    const keptOrder = Object.fromEntries(Object.entries(state.clusterOrder).filter(([k]) => untouched(k)));
+    const keptFocus = Object.fromEntries(Object.entries(state.clusterFocus).filter(([k, f]) => untouched(k) && f && k in childAssignments));
+    const order = normalizeClusterOrderRecord(childAssignments, keptOrder);
+    const groupLabels = { ...Object.fromEntries([...Object.entries(parent.groupLabels ?? {}), ...Object.entries(state.clusterGroupLabels ?? {})]
+      .filter(([k]) => untouched(k) && k in childAssignments)), ...(options.groupLabels ?? {}) };
     const id = crypto.randomUUID();
     const node: ClusterTreeNode = {
       ...buildClusterTreeNodeFromState(state, { id, parentId, name: options.name, sourceClusterIds: [], sourceLabel: options.sourceLabel }),
       assignments: cloneAssignments(childAssignments),
-      order: normalizeClusterOrderRecord(childAssignments, {}),
-      focus: {},
+      order,
+      focus: serializeClusterFocus(keptFocus),
       refinement: true,
-      ...(options.groupLabels ? { groupLabels: options.groupLabels } : {}),
+      ...(Object.keys(groupLabels).length ? { groupLabels } : {}),
+      ...keptGraphProvenance(parent, childAssignments),
     };
     set(current => ({
       ...(options.groupLabels ? { clusterGroupLabels: { ...current.clusterGroupLabels, ...options.groupLabels } } : {}),
@@ -1646,8 +1664,8 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
       activeClusterTreeNodeId: id,
       selectedClusters: {},
       clusterAssignments: cloneAssignments(childAssignments),
-      clusterOrder: normalizeClusterOrderRecord(childAssignments, {}),
-      clusterFocus: {},
+      clusterOrder: order,
+      clusterFocus: keptFocus,
     }));
     return id;
   },

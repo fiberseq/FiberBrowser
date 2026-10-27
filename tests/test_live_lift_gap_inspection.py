@@ -151,3 +151,15 @@ def test_replacement_alternate_block_and_identify_keep_both_spans(tmp_path, stra
     assert carrier["read_bases_length"] == dq and len(carrier["read_bases"]) == 60
     partial = next(r for r in result["rows"] if r["id"] == "partial")
     assert not partial["carries_insertion"] and not partial["full_span"]
+
+
+def test_a_lane_label_that_is_not_a_haplotype_orders_nothing_and_never_fails(tmp_path):
+    """The Differences row's read-supported lane ("Reads") is not a haplotype of the map: as lift_hap it is no
+    preference, not a 500 (docs tour, 26 Oct)."""
+    config = gap_map(tmp_path, 200, 0)
+    bam = write_bam(tmp_path / "source.bam", lambda h: [make_record(h, "one", MAT, 150, "40M20D40M")], contigs=((MAT, SSIZE),))
+    ds = SimpleNamespace(id="gap", paths=[bam], data_type="bam_livelift", live_lift=config)
+    state = SimpleNamespace(fasta=None, datasets={ds.id: ds})
+    plain = diff.difference_reads(state, ds, TARGET, 1100, 1300)
+    reads = diff.difference_reads(state, ds, TARGET, 1100, 1300, lift_hap="Reads")
+    assert [r["id"] for r in reads["rows"]] == [r["id"] for r in plain["rows"]]

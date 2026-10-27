@@ -77,12 +77,36 @@ function clampSpan(panel: PanelConfig, m: SpanMapping): Span {
   return { chrom: m.chrom, start: Math.max(0, start), end: Math.max(Math.max(0, start) + 1, end) };
 }
 
+/** The panel whose view is the lifted side of a link: its lifted panel, or the graph host that panel is folded into.
+ * (A source-view pop-out of a graph host's haplotype stays linked to that haplotype's panel, which is hidden in the
+ * host's graph: the host's view is the one the user moves, and it carries its folded members along.)
+ * A member the host revealed (a hand-off to linear, "View as linear", a 'both' pop-out) is carried along too while
+ * it shows exactly the host's view (handoff.ts carry, moveHostMembers): the host is its view then as well, so its
+ * source view follows the host and moves it (and so the member). One the user moved elsewhere is its own view
+ * (post-merge review, agy group C, HIGH 1). */
+function liftedViewPanel(l: Pick<LiftLinkConfig, 'liftPanelId'>, panels: PanelConfig[]): PanelConfig | undefined {
+  const lifted = panels.find(p => p.id === l.liftPanelId);
+  if (!lifted) return undefined;
+  if (lifted.collapsedByGraphGroup) return panels.find(p => p.id === lifted.collapsedByGraphGroup) ?? lifted;
+  const host = lifted.graphMemberOf && lifted.graphMemberOf !== lifted.id ? panels.find(p => p.id === lifted.graphMemberOf) : undefined;
+  const a = lifted.viewportOverride, b = host?.viewportOverride;
+  const inStep = Boolean(a && b && a.chrom === b.chrom && a.start === b.start && a.end === b.end);
+  return host?.graphView?.role === 'host' && inStep ? host : lifted;
+}
+
+/** The view a lifted panel shows when it is not the main view ("Each panel navigates", or a graph host with a locus of
+ * its own): its own view, or its host's. Null: it follows the main view. */
+export function liftedOwnView(liftPanelId: string, panels: PanelConfig[]): Span | null {
+  const v = liftedViewPanel({ liftPanelId }, panels)?.viewportOverride;
+  return v ? { chrom: v.chrom, start: v.start, end: v.end } : null;
+}
+
 /** Whether the link is live: the flag is on, its lifted dataset is open and its lifted panel follows the main view. */
 function linkActive(l: LiftLinkConfig): string | null {
   if (!useLiveLiftStore.getState().enabled) return null;
   const key = liftKey(l.datasetId);
   if (!key) return null;
-  const liftPanel = useBrowserStore.getState().panels.find(p => p.id === l.liftPanelId);
+  const liftPanel = liftedViewPanel(l, useBrowserStore.getState().panels);
   // A lifted panel with a view of its own ("Each panel navigates") is not the main view this panel follows.
   if (liftPanel?.viewportOverride) return null;
   return key;
@@ -116,7 +140,7 @@ export const liftPanelLink = {
     if (!useLiveLiftStore.getState().enabled) return [];
     const l = panel.liftLink;
     if (l) {
-      const lifted = panels.find(p => p.id === l.liftPanelId);
+      const lifted = liftedViewPanel(l, panels);
       const key = liftKey(l.datasetId);
       if (!lifted?.viewportOverride || !key) return [];
       const out = mapSpan(l.datasetId, key, 'toTarget', next, { preferChain: l.chain ?? null });
@@ -125,7 +149,7 @@ export const liftPanelLink = {
     if (!panel.viewportOverride) return [];
     const out: { panelId: string; span: Span }[] = [];
     for (const source of panels) {
-      if (source.liftLink?.liftPanelId !== panel.id || !source.viewportOverride) continue;
+      if (!source.liftLink || liftedViewPanel(source.liftLink, panels)?.id !== panel.id || !source.viewportOverride) continue;
       const view = sourceViewFor(source, next);
       if (view && view !== 'pending') { publishCandidates(source.id, view.mapping); out.push({ panelId: source.id, span: view.span }); }
     }
@@ -239,8 +263,11 @@ export function linkedSourcePanels(datasetId: string, hap?: string | null): Pane
  */
 export async function openLinkedSourceView(liftPanelId: string, hapLabel?: string | null,
   /** A graph pop-out (graph features): the view to map (the host's own view) and the panel to stack it beside (the
-   * host, when the lifted panel is folded into its graph). */
-  opts: { view?: { chrom: string; start: number; end: number }; besidePanelId?: string } = {}): Promise<string | null> {
+   * host, when the lifted panel is folded into its graph); the open source view it reveals (`existingId`: the one on
+   * the member's strand when they are split by strand), and a box the caller fills with the id of the undo step it
+   * records for that reveal (`step`), which a late exact remap folds into. */
+  opts: { view?: { chrom: string; start: number; end: number }; besidePanelId?: string; existingId?: string;
+    step?: { id: number | null } } = {}): Promise<string | null> {
   const st = useBrowserStore.getState();
   const liftPanel = st.panels.find(p => p.id === liftPanelId);
   const dataset = st.datasets.find(d => d.id === liftPanel?.datasetId);
@@ -248,16 +275,32 @@ export async function openLinkedSourceView(liftPanelId: string, hapLabel?: strin
   const hap = hapKeyFor(dataset, hapLabel ?? liftPanel.liftHap);
   if (!hap) return null;
   const label = dataset.live_lift.haplotype_labels?.[hap] ?? hap;
-  const existing = linkedSourcePanels(dataset.id, hap)[0];
+  const key = dataset.live_lift.key;
+  // A lifted panel (or graph host) with a view of its own: the source view maps that view, never the main view.
+  const own = opts.view ? { ...opts.view } : liftedOwnView(liftPanelId, st.panels);
+  const linked = linkedSourcePanels(dataset.id, hap);
+  // The one the caller reveals (never the other strand's: agy post-merge review, group C, HIGH 3).
+  const existing = linked.find(p => p.id === opts.existingId) ?? linked[0];
   if (existing) {
-    if (existing.liftLink!.liftPanelId !== liftPanelId) updateLink(existing.id, { liftPanelId });
+    settling.delete(existing.id);   // an earlier reveal's remap no longer applies (its generation is behind)
+    const relinked = existing.liftLink!.liftPanelId !== liftPanelId;
+    if (relinked) updateLink(existing.id, { liftPanelId });
+    // Reopened or relinked beside a view of its own: shown at that view now, not where it was left.
+    if (own) remapRevealedSource(existing, dataset.id, key, own, opts.step);
+    else if (relinked) {
+      // Relinked to a lifted panel that follows the main view: it shows the main view now, as after a main-view move
+      // (not the locus of the panel it was linked to; group C, HIGH 3).
+      const now = useBrowserStore.getState();
+      const fresh = now.panels.find(p => p.id === existing.id);
+      const span = fresh ? liftViewLink.toPanel(fresh, { chrom: now.chrom, start: now.start, end: now.end }) : undefined;
+      if (span) now.setPanelViewportFromLink(existing.id, span);
+    }
     return existing.id;
   }
-  const key = dataset.live_lift.key;
   try {
     const summary = await ensureSummary(dataset.id, key);
     if (!summary) throw new Error('the lift map summary is unavailable');
-    const main = opts.view ? { ...opts.view } : { chrom: st.chrom, start: st.start, end: st.end };
+    const main = own ?? { chrom: st.chrom, start: st.start, end: st.end };
     await prefetchView(dataset.id, key, 0, main.chrom, main.start, main.end);
     const out = mapSpan(dataset.id, key, 'toSource', main, { hap });
     const contigs = sourceContigsFor(summary, main.chrom, hap);
@@ -309,8 +352,8 @@ export async function openLinkedSourceView(liftPanelId: string, hapLabel?: strin
     const now = useBrowserStore.getState();
     const moved = now.chrom !== main.chrom || now.start !== main.start || now.end !== main.end;
     const installed = now.panels.find(p => p.id === id);
-    // (Opened at a host's own view: the main view's corrections are not for it.)
-    if (installed && !opts.view && (moved || !mapping.exact)) {
+    // (Opened at a view of its own, a host's or a lifted panel's: the main view's corrections are not for it.)
+    if (installed && !own && (moved || !mapping.exact)) {
       schedule(installed, bump(id), now.chrom, 'panel');
       queueMicrotask(() => applyCorrections(dataset.id));
     }
@@ -321,6 +364,65 @@ export async function openLinkedSourceView(liftPanelId: string, hapLabel?: strin
     useBrowserStore.getState().setError(`Source view: ${(e as Error).message}`);
     return null;
   }
+}
+
+/** The exact remap of a revealed source view that still waits on its tiles (null: none; never rejected): "Pop out"
+ * of several haplotypes reveals the next one only after it, so each folds into its own step. */
+const settling = new Map<string, Promise<void>>();
+export function revealSettling(panelId: string): Promise<void> | null {
+  return settling.get(panelId) ?? null;
+}
+
+/** A source view revealed (or relinked) beside a lifted panel with a view of its own goes to that view. At once when
+ * the map answers exactly (tiles loaded, as for a view on screen), so the caller's undo step records it; an
+ * approximate answer is shown at once too, and the exact one follows when the tiles arrive — only if nothing moved,
+ * was relinked, undone or recorded since, folded into the reveal's own step when the caller recorded one
+ * (post-merge review, group C rounds 2 and 3). `bound`: the caller names that step (filled right after it records
+ * it); else it is taken as the step recorded in the same turn. */
+function remapRevealedSource(existing: PanelConfig, datasetId: string, key: string, own: Span, bound?: { id: number | null }): void {
+  const map = () => {
+    const now = useBrowserStore.getState().panels.find(p => p.id === existing.id);
+    return now?.liftLink ? sourceViewFor(now, own) : null;
+  };
+  const show = (out: { span: Span; mapping: SpanMapping }) => {
+    publishCandidates(existing.id, out.mapping);
+    useBrowserStore.getState().setPanelViewportFromLink(existing.id, out.span);
+  };
+  const first = map();
+  if (!first) return;
+  if (first !== 'pending') {
+    bump(existing.id);
+    pending.delete(existing.id);
+    show(first);
+    if (first.mapping.exact) return;
+  }
+  const after = lastSnapshotId();   // before the caller records its step
+  const gen = bump(existing.id);
+  let captured: number | null = null;
+  // The caller's step, recorded right after this returns.
+  if (!bound) queueMicrotask(() => { captured = lastSnapshotId(); });
+  const viewNow = () => JSON.stringify(useBrowserStore.getState().panels.find(p => p.id === existing.id)?.viewportOverride ?? null);
+  const shown = viewNow();
+  const settle = (async () => {
+    if (!await ensureSummary(datasetId, key)) return;
+    await prefetchView(datasetId, key, 0, own.chrom, own.start, own.end);
+    const st = useBrowserStore.getState();
+    const now = st.panels.find(p => p.id === existing.id);
+    const stack = st._historyStack ?? [];
+    const latest = stack.length ? stack[stack.length - 1].id ?? 0 : 0;
+    const step = bound ? bound.id : captured;
+    if (!now?.liftLink || generation.get(existing.id) !== gen || viewNow() !== shown
+      || JSON.stringify(liftedOwnView(now.liftLink.liftPanelId, st.panels)) !== JSON.stringify(own)
+      || latest !== (step ?? after) || (stack.length > 0 && st._historyPointer !== stack.length - 1)) return;
+    const out = map();
+    if (!out || out === 'pending') return;
+    pending.delete(existing.id);
+    show(out);
+    // Into the reveal's own step (the caller recorded one, and it is still the latest and current).
+    if (step !== null && step !== after) useBrowserStore.getState().foldIntoCurrentSnapshot?.(serializeState(useBrowserStore.getState()));
+  })().catch(() => undefined);
+  settling.set(existing.id, settle);
+  void settle.then(() => { if (settling.get(existing.id) === settle) settling.delete(existing.id); });
 }
 
 /** The source panel shows the other orientation (the user's override of the entry orientation). */
@@ -337,11 +439,14 @@ export function chooseLinkChain(panelId: string, chain: number | null): void {
   if (!panel?.liftLink) return;
   const link = { ...panel.liftLink, chain };
   const next = { ...panel, liftLink: link };
-  const out = sourceViewFor(next, { chrom: st.chrom, start: st.start, end: st.end });
+  // The lifted panel's own view when it has one ("Each panel navigates", a graph host's locus), else the main view.
+  const own = liftedOwnView(panel.liftLink.liftPanelId, st.panels);
+  const out = sourceViewFor(next, own ?? { chrom: st.chrom, start: st.start, end: st.end });
   const minus = out && out !== 'pending' ? out.mapping.minus : panel.liftLink.flip;
   const gen = bump(panelId);
-  // Not loaded yet, or only approximately: the arriving tables correct it, as after a main-view move.
-  if (out === 'pending' || (out && !out.mapping.exact)) schedule(next, gen, st.chrom, 'panel');
+  // Not loaded yet, or only approximately: the arriving tables correct it, as after a main-view move (the main view's
+  // corrections are not for a panel paired with a view of its own).
+  if (!own && (out === 'pending' || (out && !out.mapping.exact))) schedule(next, gen, st.chrom, 'panel');
   else pending.delete(panelId);
   useBrowserStore.setState(s => ({ panels: s.panels.map(p => p.id === panelId ? {
     ...p, liftLink: { ...link, flip: minus },

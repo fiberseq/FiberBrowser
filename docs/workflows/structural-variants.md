@@ -92,8 +92,9 @@ opens the menu.
 When a lifted dataset is open, the inspector compares the variant with that
 dataset's assembly (**Confirmed by assembly**, **assembly-supported
 (approximate)**, ...); see [Differences](differences.md#assembly-comparison).
-It uses the first lifted dataset that was opened, whatever its sample: with
-several samples open, keep only the sample you mean to compare with.
+It uses the lifted dataset of the same sample, matched by the BAMs' read
+groups. When it can't tell (several lifted datasets of that sample are open,
+or none of it), a **Compare with** menu above the comparison lets you pick.
 
 ## Highlighted carriers
 

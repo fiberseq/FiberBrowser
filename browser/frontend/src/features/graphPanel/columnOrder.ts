@@ -90,7 +90,9 @@ export function canonicalWalk(topology: GraphTopology, bindingOrder?: readonly s
     // agy review, group H round 2).
     let anchor = -1, step = 0, last = -1, inverted = false;
     const take = (o: GraphOccurrence, c: { i: number; inv: boolean }) => {
-      claimed.add(c.i); anchor = Math.max(anchor, c.i); last = c.i; inverted = c.inv; step = 0;
+      // Insertions after the anchor count up from it: the count restarts only when the anchor moves on (two
+      // insertions behind one anchor, around an inverted visit that does not advance it, never share a rank).
+      claimed.add(c.i); if (c.i > anchor) { anchor = c.i; step = 0; } last = c.i; inverted = c.inv;
       visits.set(o.id, { rank: [c.i, 0, 0], reverse: targetOccs[c.i].reverse });
     };
     for (const o of backward ? [...occs].reverse() : occs) {

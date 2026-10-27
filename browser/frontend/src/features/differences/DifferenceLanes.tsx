@@ -234,7 +234,10 @@ export function DifferenceLanes({ panel, dataset, width, gutter = 0, height }: {
         aria-label={differenceDescription(d, chrom)} title={`${differenceDescription(d, chrom)}${label ? `\n${label.label_text}` : ''}\n${differenceHint(d)}`}
         // Above the row's resize grip (z-20), which would otherwise take clicks on the bottom lane.
         className="absolute z-30 cursor-pointer bg-transparent focus:ring-1 focus:ring-violet-500"
-        style={{ left: gutter+Math.min(x,z)-4, top:24+i*laneHeight, width:Math.max(9,Math.abs(z-x)+8), height:laneHeight }}
+        // Close marks overlap (each is at least 9 px wide): a larger difference sits on top, so a 1 bp SNV next to a
+        // 2 kb insertion never takes the insertion's clicks (z 31-39, under the table's z-40; tab order unchanged).
+        style={{ left: gutter+Math.min(x,z)-4, top:24+i*laneHeight, width:Math.max(9,Math.abs(z-x)+8), height:laneHeight,
+          zIndex: 30 + Math.min(9, Math.max(1, Math.round(Math.log2(1 + Math.max(d.ref_bp, d.alt_bp)) / 2))) }}
         // Click: expand an insertion / highlight carriers; Shift: select; ⌘/Ctrl or right-click: inspect (differenceActions).
         onClick={e => clickDifference(e, selectionOf(d), readsInView)}
         onContextMenu={e => openMenu(e, d)}

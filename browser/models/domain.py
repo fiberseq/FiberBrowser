@@ -444,6 +444,7 @@ class Dataset:
     def to_dict(self):
         from services.background_work import file_identity
         from services.lift.reads import lift_identity
+        from services.read_group_samples import sample_keys
         import hashlib
         return {
             # A live-lift dataset's settings are part of what its reads are (lift_key): client caches follow them.
@@ -468,6 +469,9 @@ class Dataset:
             # Legacy name of consensus_chemistry (older frontends and sessions).
             "family_scan_chemistry": self.consensus_chemistry,
             "chemistry_metadata": self.chemistry_metadata,
+            # Its BAM read groups' samples as opaque keys: a native dataset is matched with the lifted dataset of its
+            # sample (the names stay on the server).
+            "sample_keys": sample_keys(self),
             # Plasmid maps linked to this BAM's contigs (and what did not match).
             **({"plasmid": self.plasmid_report} if getattr(self, "plasmid_report", None) else {}),
             # A live-lift dataset's map, haplotypes and settings (services/lift/dataset.py).

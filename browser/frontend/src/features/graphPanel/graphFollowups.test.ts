@@ -407,7 +407,8 @@ describe('group H review 3: revealing an open source view is its own undo step',
     vi.mocked(openLinkedSourceView).mockClear();
     popOutPaths('mat', ['pat']);
     await new Promise(r => setTimeout(r, 0));
-    expect(openLinkedSourceView).toHaveBeenCalledWith('mat', 'PAT');
+    // (The open one it reveals, and the box for its undo step: agy post-merge review, group C, HIGH 3.)
+    expect(openLinkedSourceView).toHaveBeenCalledWith('mat', 'PAT', expect.objectContaining({ existingId: 'src' }));
     expect(get('src').collapsed).toBe(false);
     expect(useBrowserStore.getState()._historyStack?.length).toBe(steps + 1);
     useBrowserStore.getState().undo();
@@ -627,6 +628,25 @@ describe('group H agy round 2, 1: palindromic-core inversions; the anchor never 
     expect(cols.get('ins')).toEqual([3, 1, 1, 0]);
     expect(compareColumnKeys(cols.get('c'), cols.get('ins'))).toBeLessThan(0);
     expect(compareColumnKeys(cols.get('ins'), cols.get('e'))).toBeLessThan(0);
+  });
+
+  it('two insertions inside an inverted run, around visits that do not move the anchor on, get distinct ranks (Codex, post-merge A1)', () => {
+    // Target L A B C R; carrier L -C I -B J -A R: C takes the anchor, B and A lie below it, so I and J both rank after C.
+    const lens: Record<string, number> = { L: 1000, A: 60, B: 60, C: 60, I: 50, J: 50, R: 1000 };
+    const path = (binding: string, steps: string[]) => {
+      let at = 0;
+      return { binding, windows: [], coverage: [], plan: null, complete: true, occurrences: steps.map((st, j) => {
+        const node = st.replace('-', ''); const o = occ(`${binding}.${j}`, node, at, at + lens[node], st.startsWith('-')); at += lens[node]; return o; }) };
+    };
+    const tgt = path('ref', ['L', 'A', 'B', 'C', 'R']), mat = path('mat', ['L', '-C', 'I', '-B', 'J', '-A', 'R']);
+    const direct_matches = mat.occurrences.flatMap(o => tgt.occurrences.filter(t => t.node === o.node)
+      .map(t => ({ target_occurrence: t.id, source_occurrence: o.id, source_binding: 'mat', reverse: o.reverse !== t.reverse, provenance: 'direct_named_walk' })));
+    const topo = { target: 'ref', interval: { start: 0, end: 2180 }, nodes: [], edges: [], summaries: [], target_queries: [], direct_matches,
+      complete: true, correspondence_complete: true, timings: {}, paths: [tgt, mat] } as unknown as GraphTopology;
+    const walk = canonicalWalk(topo, ['ref', 'mat']);
+    const rank = (id: string) => walk.visits.get(id)!.rank;
+    expect(rank('mat.2')).not.toEqual(rank('mat.4'));
+    expect(compareColumnKeys([...rank('mat.2'), 0], [...rank('mat.4'), 0])).toBeLessThan(0);
   });
 });
 

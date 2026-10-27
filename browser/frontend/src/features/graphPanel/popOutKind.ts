@@ -14,9 +14,10 @@ import { linkedSourcePanels, openLinkedSourceView } from '../liveLift/linking/li
 import { isHost, liveProvenance, panelKeyOf, popOut, provenanceCovers, provenanceLineage, provenanceShare, undoable, type GraphProvenance } from './hostMode';
 import { useReadActionsStore } from '../../stores/readActionsStore';
 import { qnameOfId } from '../../utils/recordKeys';
+import { UNASSIGNED_CLUSTER_ID } from '../../components/tracks/read-track/constants';
 import { linkedSourceObservations, sourceLabels } from '../../utils/clusterMatchedRun';
 import { labelLinkedSource } from './graphCluster';
-import { serializeState } from '../../stores/historySlice';
+import { lastSnapshotId, serializeState } from '../../stores/historySlice';
 import type { GraphViewState } from './types';
 
 export type PopOutKind = NonNullable<GraphViewState['popOutKind']>;
@@ -92,9 +93,12 @@ async function openSources(host: PanelConfig, sources: PopOutPlan['sources']): P
     const open = lift?.datasetId ? linkedSourcePanels(lift.datasetId, hap ?? lift.liftHap ?? null) : [];
     const existing = open.find(p => (p.strand ?? null) === fromStrand) ?? open[0];
     if (existing) {
+      // The step this reveal records: a remap that waits on its tiles folds into it (agy post-merge review, group C,
+      // HIGH 3).
+      const step = { id: null as number | null };
       undoable(`Show ${existing.liftLink?.hapLabel ?? hap ?? ''} source view`.replace('  ', ' '), () => {
-        // (Synchronous for an open one: it relinks to this lifted panel and returns.)
-        void openLinkedSourceView(liftPanelId, hap);
+        // (Synchronous for an open one: it relinks this one, on the member's strand, to this lifted panel and returns.)
+        void openLinkedSourceView(liftPanelId, hap, { existingId: existing.id, step });
         useBrowserStore.setState(x => ({ panels: x.panels.map(p => (p.id === existing.id && p.collapsed ? { ...p, collapsed: false } : p)) }));
         // A peer of the member, as a new one is (agy review, group H round 2): its read state first, then the current
         // run's labels within that scope, then the member's clusters on every tree node.
@@ -102,6 +106,9 @@ async function openSources(host: PanelConfig, sources: PopOutPlan['sources']): P
         labelLinkedSource(existing.id);
         seedSourceState(fromPanelId, existing.id);
       });
+      step.id = lastSnapshotId();
+      // No waiting for its late remap (agy group C round 2, NEW HIGH 1): the next reveal goes on at once; a late remap
+      // whose step is no longer the latest is dropped, and the source view then follows its next move.
       continue;
     }
     const id = await openLinkedSourceView(liftPanelId, hap, { ...(view ? { view } : {}), ...(liftPanelId !== host.id ? { besidePanelId: host.id } : {}) });
@@ -137,8 +144,9 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
   const oneHap = liftHapLabels(st.datasets.find(d => d.id === from.datasetId)?.live_lift).length === 1;
   const hapOnly = (oneHap || (Boolean(from.liftHap) && (from.liftHap ?? '').toUpperCase() === (to.liftLink?.hapLabel ?? '').toUpperCase()))
     && from.datasetId === to.liftLink?.datasetId && !(from.strand && to.strand && from.strand !== to.strand);
-  /** A map of the member's labels as this source's QNAME labels (null: none of them are this source's for sure). */
-  const project = (labels: Record<string, number> | undefined, provs: GraphProvenance[]): Record<string, number> | null => {
+  /** A map of the member's labels as this source's QNAME labels, within the reads the source shows (`scope`: its
+   * filter; null: none of them are this source's for sure, or none is in scope). */
+  const project = (labels: Record<string, number> | undefined, provs: GraphProvenance[], scope: ReadonlySet<string> | null): Record<string, number> | null => {
     if (!labels || !Object.keys(labels).length) return null;
     let mine: Record<string, number> | null = null;
     if (provenanceCovers(provs, labels)) {
@@ -146,7 +154,7 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
       mine = provenanceShare(provs, labels, o => picked.has(o.id));
     } else if (hapOnly) mine = labels;
     if (!mine) return null;
-    const byName = sourceLabels({ assignments: { m: mine } }, ['m']);
+    const byName = sourceLabels({ assignments: { m: mine } }, ['m'], scope);
     return Object.keys(byName).length ? byName : null;
   };
   const active = st.activeClusterTreeNodeId && st.clusterTreeNodes[st.activeClusterTreeNodeId] ? st.activeClusterTreeNodeId : null;
@@ -156,14 +164,30 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
     // Live clusters: the member's share; labels the source already has (the current run's, just now) stay only while
     // they agree with it. A source clustered on its own keeps its clusters, order, focus and names untouched.
     let live = cur.clusterAssignments[tk];
-    const got = project(cur.clusterAssignments[fk], active ? provenanceLineage(cur, fk, active) : liveProvenance(cur, fk));
-    const had = Boolean(live && Object.keys(live).length);
-    if (had && got && !Object.entries(live!).every(([q, c]) => got[q] === c)) return {};
+    // Only reads its filter keeps get a label, so the labels never scope away the reads it shows (Codex post-merge
+    // review, group A round 1, #3); a filter no read passes labels none (agy post-merge review, group A, HIGH 2).
+    const scope = cur.filteredReadIds[tk] ? new Set([...cur.filteredReadIds[tk]!].map(qnameOfId)) : null;
+    const got = project(cur.clusterAssignments[fk], active ? provenanceLineage(cur, fk, active) : liveProvenance(cur, fk), scope);
+    // (Only Unassigned labels, the dead bucket a subcluster leaves for a panel it did not label, are no clustering.)
+    const had = Boolean(live && Object.values(live).some(c => c !== UNASSIGNED_CLUSTER_ID));
+    // Its own: labels no graph run gave it, even when their numbers equal the member's (Codex post-merge review,
+    // group A round 1, #2).
+    if (had && !runOwned(cur, tk, active)) return {};
+    // A graph run's labels the member's share no longer agrees with (a later run, or a merge or split of the member,
+    // while the source was folded away) follow the member's (agy post-merge review, group A, HIGH 2).
+    // (Judged on the reads its filter shows, which alone the share labels; reads it hides keep their labels.)
+    const inScope = ([q]: [string, number]) => !scope || scope.has(q);
+    const stale = Boolean(had && got && !Object.entries(live!).filter(inScope).every(([q, c]) => got[q] === c));
     if (had && !got && !runLabelled(cur, tk)) return {};
-    if (!had && got) { live = got; patch.clusterAssignments = { ...cur.clusterAssignments, [tk]: got }; }
+    if ((!had || stale) && got) {
+      live = stale ? { ...Object.fromEntries(Object.entries(live!).filter(e => !inScope(e))), ...got } : got;
+      patch.clusterAssignments = { ...cur.clusterAssignments, [tk]: live };
+    }
     const labelled = Boolean(live && Object.keys(live).length);
     const order = labelled && cur.clusterOrder[fk]?.length ? [...cur.clusterOrder[fk]] : cur.clusterOrder[tk];
-    const focus = labelled && cur.clusterFocus[fk]?.size ? new Set(cur.clusterFocus[fk]!) : cur.clusterFocus[tk] ?? null;
+    // The member's focus only on groups the source has (none: it keeps its own).
+    const inherited = labelled ? focusOn(cur.clusterFocus[fk], live!) : null;
+    const focus = inherited ? new Set(inherited) : cur.clusterFocus[tk] ?? null;
     const groupNames = labelled && cur.clusterGroupLabels?.[fk] && Object.keys(cur.clusterGroupLabels[fk]).length
       ? { ...cur.clusterGroupLabels[fk], ...(cur.clusterGroupLabels?.[tk] ?? {}) } : cur.clusterGroupLabels?.[tk];
     if (labelled) {
@@ -182,11 +206,12 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
         continue;
       }
       if (!n.assignments?.[fk] || (n.assignments[tk] && Object.keys(n.assignments[tk]).length)) continue;
-      const got = project(n.assignments[fk], provenanceLineage(cur, fk, nid));
+      const got = project(n.assignments[fk], provenanceLineage(cur, fk, nid), scope);
       if (!got) continue;
+      const nodeFocus = focusOn(n.focus?.[fk], got);
       nodes[nid] = { ...n, assignments: { ...n.assignments, [tk]: got },
         order: n.order?.[fk] ? { ...n.order, [tk]: [...n.order[fk]] } : n.order,
-        focus: n.focus?.[fk] ? { ...n.focus, [tk]: [...n.focus[fk]!] } : n.focus,
+        focus: nodeFocus ? { ...n.focus, [tk]: nodeFocus } : n.focus,
         ...(n.groupLabels?.[fk] ? { groupLabels: { ...n.groupLabels, [tk]: { ...n.groupLabels[fk] } } } : {}) };
     }
     if (Object.keys(nodes).length) patch.clusterTreeNodes = { ...cur.clusterTreeNodes, ...nodes };
@@ -194,9 +219,30 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
   });
 }
 
+/** The focused groups a label map has (null: none of them). */
+function focusOn(focus: Iterable<number> | null | undefined, labels: Record<string, number>): number[] | null {
+  if (!focus) return null;
+  const have = new Set(Object.values(labels));
+  const kept = [...focus].filter(c => have.has(c));
+  return kept.length ? kept : null;
+}
+
 /** Whether a source view's labels are the current graph run's (it is one of the run's destinations). */
 function runLabelled(s: ReturnType<typeof useBrowserStore.getState>, key: string): boolean {
   return Boolean(s.clusterMatchedRun?.graph && s.clusterMatchedRun.destinations?.some(d => d.stateKey === key));
+}
+
+/** Whether a source view's labels are a graph run's: the current run's while they are its shown labels, or those of
+ * the run that labelled it on the active tree node itself, while they are that node's and no other grouping has
+ * replaced them since (setClusterAssignments marks that; the run's record provenance stays). An ancestor's never
+ * counts: a clustering of its own keeps its order and focus however its numbers fall (Codex post-merge review,
+ * group A rounds 1-3, #2). */
+function runOwned(s: ReturnType<typeof useBrowserStore.getState>, key: string, active: string | null): boolean {
+  if (liveProvenance(s, key).length) return true;
+  const node = active ? s.clusterTreeNodes[active] : undefined;
+  const mine = node?.assignments?.[key], live = s.clusterAssignments[key];
+  return Boolean(node?.graphProvenance?.[key] && !node.graphLabelsReplaced?.[key] && mine && live
+    && Object.keys(mine).length === Object.keys(live).length && Object.entries(mine).every(([q, c]) => live[q] === c));
 }
 
 /** A source view's read state from its member, by QNAME: its filter, selection and exclusions (state it already
