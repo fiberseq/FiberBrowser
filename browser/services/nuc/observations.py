@@ -187,7 +187,8 @@ def _lifted_records(state, source: NucSource, chrom: str, start: int, end: int, 
     for key, (qname, strand, molecule) in lifted.items():
         r = by_key.get(key)
         wins = r.molwins if r is not None else tuple((-1, -1) for _w in windows)
-        out.append(Rec(*key, qname, strand, bool(r.supplementary) if r is not None else False, wins, molecule))
+        out.append(Rec(*key, qname, strand, bool(r.supplementary) if r is not None else False, wins, molecule,
+                       r.blocks if r is not None else ()))
     return out
 
 
@@ -314,6 +315,29 @@ def _window_metrics(cohort: Sequence[Rec], window, cfg) -> Optional[dict]:
                         results=results)
     agg = dict(wr.groups.get('all') or {})
     return json.loads(json.dumps(agg, default=lambda o: None if isinstance(o, float) and not math.isfinite(o) else str(o)))
+
+
+def window_hull(windows) -> Optional[Tuple[str, int, int]]:
+    """One measurement window from an observation's windows in its records' coordinates: the hull of the pieces on
+    the contig they cover most. A lifted window crossing an insertion projects to source pieces with the inserted
+    sequence between them; the hull keeps every piece and measures the insertion with them (as graph-path columns
+    count the haplotype's lift-piece hull)."""
+    by: Dict[str, List[int]] = {}
+    for c, a, b in windows or ():
+        if b <= a:
+            continue
+        h = by.setdefault(c, [a, b, 0])
+        h[0], h[1], h[2] = min(h[0], a), max(h[1], b), h[2] + (b - a)
+    if not by:
+        return None
+    c, (a, b, _n) = max(by.items(), key=lambda kv: kv[1][2])
+    return c, int(a), int(b)
+
+
+def same_contig(a: str, b: str) -> bool:
+    """Contig names equal up to the chr prefix (chr1 / 1)."""
+    norm = lambda x: str(x or '').lower().removeprefix('chr')  # noqa: E731
+    return norm(a) == norm(b)
 
 
 def frame_chrom(mols, chrom: str) -> str:

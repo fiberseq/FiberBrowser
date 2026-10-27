@@ -219,6 +219,7 @@ class Rec(NamedTuple):
     supplementary: bool
     molwins: Tuple[Tuple[int, int], ...]   # per window of the request: its molecular span on this record, or (-1, -1)
     molecule: Optional[str] = None   # a lifted row's provenance-qualified molecule key (live_lift.molecule)
+    blocks: Tuple[Tuple[int, int], ...] = ()   # the record's aligned reference blocks (deletions and skips excluded)
 
 
 def mol_window(read, start: int, end: int) -> Tuple[int, int]:
@@ -276,5 +277,6 @@ def view_records(source: NucSource, regions: Sequence[Tuple[str, int, int]], pol
                     wins = tuple(mol_window(read, int(a), int(b)) if c is not None and c == read.reference_name else (-1, -1)
                                  for c, a, b in wins_here)
                     out.append(Rec(path, sha, occ, str(read.query_name), strand if strand in ('CT', 'GA') else None,
-                                   bool(read.is_supplementary), wins))
+                                   bool(read.is_supplementary), wins, None,
+                                   tuple((int(a), int(b)) for a, b in read.get_blocks())))
     return out

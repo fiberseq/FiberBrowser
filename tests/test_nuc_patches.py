@@ -109,3 +109,29 @@ def test_an_observation_without_outputs_reports_them_missing(bam):
     out = patch_scores(st, [OBS], [dict(key='k', type='regular', chrom=CONTIG, start=40_000, end=42_000)])
     got = out['observations'][0]['patches']['k']
     assert got['p'] is None and got['fraction'] is None and got['notComputed'] > 0
+
+
+def test_measured_bases_follow_the_records_aligned_blocks_whatever_the_source():
+    """Codex E3: loaded rows (scan, annotated BAM) measure on the record's aligned blocks, like live rows and the scan
+    module: a deletion inside a segment is not measured."""
+    from services.nuc.patches import molecule_track
+    from services.nuc.store import RecordOutputs
+    # One record 900M8000D1100M from 0: a regular segment over [0, 9000) and a disordered one over [9000, 10000).
+    row = RecordOutputs('r', 0, CONTIG, 0, 10_000, False, False, None,
+                        {'nucseg': [(0, 1000, 0, 9000, (1, 200, 87), ''), (1000, 1000, 9000, 10_000, (2, 200, 0), '')]}, [], {})
+    blocks = ((0, 900), (8900, 10_000))
+    measured, kinds = molecule_track(row, None, blocks)
+    assert measured == [(0, 900), (8900, 10_000)]
+    assert kinds['reg'] == [(0, 9000)] and kinds['dis'] == [(9000, 10_000)]
+    # Without blocks (no record at hand) the envelope is all that is known.
+    assert molecule_track(row)[0] == [(0, 10_000)]
+
+
+def test_a_window_across_an_insertion_keeps_every_projected_piece():
+    """Codex E2: a lifted window projecting to source pieces on both sides of an insertion measures their hull on the
+    contig they cover most, not the largest piece alone."""
+    from services.nuc.observations import same_contig, window_hull
+    assert window_hull([('h1', 0, 1000), ('h1', 5000, 6000)]) == ('h1', 0, 6000)
+    assert window_hull([('h1', 0, 1000), ('h2', 0, 3000), ('h1', 5000, 5500)]) == ('h2', 0, 3000)
+    assert window_hull([]) is None
+    assert same_contig('chr3', '3') and not same_contig('chr3', 'chr13')

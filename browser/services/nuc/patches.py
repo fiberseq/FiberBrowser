@@ -9,9 +9,9 @@ pop-out, a strand split, a linked locus, a graph path), the observation's own mo
   observation (``enrichment.bh``).
 
 A molecule's measured bases follow the scan module (``fiberhmm.scan.modules.nuc`` run_unit): inside its decoded
-regular / disordered / undetermined segments, outside low-information ones, and on aligned bases when the decoded
-molecule is at hand (live outputs). Rows read from an opened scan or an annotated BAM have no alignment blocks here:
-their measured bases include deletions inside segments (a few bases at most per molecule).
+regular / disordered / undetermined segments, outside low-information ones, on the record's aligned reference blocks
+(whatever the outputs' source: live, an opened scan or an annotated BAM). A lifted observation measures the hull of
+its window's source pieces on the contig they cover most.
 
 Phased and fuzzy patches are scored by the scan per group (R − null, coherence, dispersion); they carry no
 per-observation test here.
@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from .observations import ObservationError, observation_cohort
+from .observations import ObservationError, observation_cohort, same_contig, window_hull
 from .store import STORE
 
 #: patch type -> the scan module's kind name (ENRICH_KINDS)
@@ -71,9 +71,10 @@ def _subtract(x, cut):
     return out
 
 
-def molecule_track(row, mol=None):
+def molecule_track(row, mol=None, blocks=()):
     """(measured reference intervals, {kind: reference intervals}) of one molecule's outputs, as the scan module
-    builds its recurrence tracks."""
+    builds its recurrence tracks: inside its regular / disordered / undetermined segments, on its aligned reference
+    blocks (``blocks``, the record's; else the decoded molecule's), outside low-information segments."""
     kinds: Dict[str, List[Tuple[int, int]]] = {k: [] for k in ('reg', 'dis', 'und', 'low', 'uds', 'mis')}
     for _ms, _ml, a, b, q, _n in row.groups.get('nucseg') or ():
         if not q or b <= a:
@@ -82,7 +83,9 @@ def molecule_track(row, mol=None):
         if k:
             kinds[k].append((int(a), int(b)))
     measured = _union(kinds['reg'] + kinds['dis'] + kinds['und'])
-    if mol is not None and getattr(mol, 'blocks', None) is not None:
+    if blocks:
+        measured = _intersect(_union(blocks), measured)
+    elif mol is not None and getattr(mol, 'blocks', None) is not None:
         measured = _intersect(_union([(int(r0), int(r0 + ln)) for _q0, r0, ln in mol.blocks]), measured)
     measured = _subtract(measured, _union(kinds['low']))
     return measured, kinds
@@ -118,13 +121,13 @@ def patch_scores(state, observations: Sequence[dict], patches: Sequence[dict], *
             if not windows:
                 entry['patches'][key] = dict(error='Not on this observation (no lift piece of its haplotype covers it)')
                 continue
-            _c, w0, w1 = max(windows, key=lambda w: w[2] - w[1])
+            contig, w0, w1 = window_hull(windows)
             tracks, covered, measured_bp, entering = [], 0, 0, 0
             for rec, row in cohort:
                 hit = STORE.get_result(rec.path, rec.sha, rec.occ, cfg.config_for(rec.path)) if cfg is not None else None
-                if row.low_information:
+                if row.low_information or not same_contig(row.chrom, contig):
                     continue
-                measured, kinds = molecule_track(row, hit[0] if hit else None)
+                measured, kinds = molecule_track(row, hit[0] if hit else None, rec.blocks)
                 if not measured:
                     continue
                 t = MeasuredTrack(measured)

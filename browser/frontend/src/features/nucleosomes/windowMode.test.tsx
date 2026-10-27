@@ -5,7 +5,7 @@ import { useBrowserStore } from '../../stores/browserStore';
 import { useReadActionsStore } from '../../stores/readActionsStore';
 import type { HubSelected } from '../hub/hubState';
 import { SegmentsView } from './SegmentsView';
-import { WindowView } from './WindowView';
+import { WindowControls, WindowView, classMixCount } from './WindowView';
 import { sendToNucleosomeWindow } from './handoff';
 import { registerNucleosomePanel } from './register';
 import { categoryLabel, highlightCategory } from './selection';
@@ -121,6 +121,24 @@ describe('views', () => {
       { kind: 'segment', state: 'disordered' }, { kind: 'event', name: 'missing' }]);
   });
 
+  it('window: FiberHMM\'s multi3+ class counts as multi (3+) (Codex E4)', () => {
+    expect(classMixCount({ mono: 1, 'multi3+': 9 }, 'multi3')).toBe(9);
+    expect(classMixCount({ mono: 1, 'multi3+': 9 }, 'mono')).toBe(1);
+    expect(classMixCount(undefined, 'mono')).toBe(0);
+  });
+
+  it('window: a typed anchor position is 1-based on screen and 0-based in the settings (Codex E5)', async () => {
+    const setSettings = vi.fn();
+    const settings = { windowSource: 'view' as const, anchor: { kind: 'position' as const, pos: 50_999, orientation: 0 as const } };
+    await act(async () => root.render(<WindowControls settings={settings} setSettings={setSettings} hubCount={0}
+      resolution={{ window: { chrom: 'chr3', start: 0, end: 1 }, label: 'View', anchor: null, background: [] }} />));
+    const input = container.querySelector('[data-testid="nuc-anchor-pos"]') as HTMLInputElement;
+    expect(input.value).toBe('51000');
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+    act(() => { setter.call(input, '52000'); input.dispatchEvent(new Event('input', { bubbles: true })); });
+    expect(setSettings).toHaveBeenLastCalledWith({ anchor: { kind: 'position', pos: 51_999, orientation: 0 } });
+  });
+
   it('window: metrics, the anchor state, phasing and the dephasing readout', async () => {
     const bin = (lo: number, r: number, p: number) => ({ lo, hi: lo + 190, R: r + 0.05, phi: 0, n_dyads: 40, n_molecules: 12, null_mean: 0.05, null_p: p, R_minus_null: r, R_max_period: r + 0.06, P_max: 188 });
     const result: NucWindowObservation = { obsId: 'o1', datasetId: 'd1', molecules: 12, metrics: {
@@ -134,6 +152,7 @@ describe('views', () => {
     } };
     await act(async () => root.render(<WindowView observations={[obs]} results={{ o1: result }} loading={false} />));
     expect(container.querySelector('[data-testid="nuc-window-molecules"]')!.textContent).toContain('12');
+    expect(container.querySelectorAll('[data-testid="nuc-window-col"]').length).toBe(1);
     expect(container.querySelector('[data-testid="nuc-window-nrl"]')!.textContent).toContain('186 [183–190]');
     expect(container.querySelector('[data-testid="nuc-window-state"]')!.textContent).toBe('7 / 4 / 1');
     expect(container.querySelector('[data-testid="nuc-phasing-anchor"]')).not.toBeNull();

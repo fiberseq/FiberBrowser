@@ -19,7 +19,7 @@ import json
 import math
 from typing import List, Optional, Sequence, Tuple
 
-from .observations import COARSE, ObservationError, observation_cohort, source_windows
+from .observations import COARSE, ObservationError, observation_cohort, same_contig, source_windows, window_hull
 from .store import STORE
 
 
@@ -99,7 +99,8 @@ def window_analysis(state, observations: Sequence[dict], window: dict, anchor: O
             entry['error'] = 'The window is not on this observation (no lift piece of its haplotype covers it)'
             out.append(entry)
             continue
-        win = max(windows, key=lambda w: w[2] - w[1])
+        # Every projected piece: the hull on the contig they cover most (a lifted window across an insertion).
+        win = window_hull(windows)
         mols, results = [], {}
         for r, _row in cohort:
             hit = STORE.get_result(r.path, r.sha, r.occ, cfg.config_for(r.path))
@@ -109,12 +110,14 @@ def window_analysis(state, observations: Sequence[dict], window: dict, anchor: O
         a = None
         if anchor is not None and anchor.get('pos') is not None:
             a = _in_frame(state, source, obs, chrom, int(anchor['pos']), int(anchor.get('orientation') or 0))
+            if a is not None and not same_contig(a[0], win[0]):
+                a = None
             if a is None:
                 entry['anchorNote'] = 'The anchor is not on this observation (an insertion or another haplotype)'
         bg = []
         for b in background or ():
             p = _in_frame(state, source, obs, str(b.get('chrom') or chrom), int(b['pos']), int(b.get('orientation') or 0))
-            if p is not None:
+            if p is not None and same_contig(p[0], win[0]):
                 bg.append(p)
         entry.update(window=dict(chrom=win[0], start=win[1], end=win[2]), molecules=len(mols),
                      notComputed=len(cohort) - len(mols) + counts['missing'])

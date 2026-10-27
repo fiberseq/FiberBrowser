@@ -54,7 +54,7 @@ export function WindowControls({ settings, setSettings, resolution, hubCount }: 
         <option value="position">position…</option>
       </select></label>
     {anchor.kind === 'position' && <input type="number" className="w-28 rounded border border-line bg-transparent px-1 dark:border-white/10" aria-label="Anchor position"
-      value={anchor.pos ?? ''} data-testid="nuc-anchor-pos" placeholder="position (bp)"
+      value={anchor.pos != null ? anchor.pos + 1 : ''} data-testid="nuc-anchor-pos" placeholder="position (bp)"
       onChange={e => setSettings({ anchor: { ...anchor, pos: e.target.value === '' ? undefined : Number(e.target.value) - 1 } })} />}
     {anchor.kind !== 'none' && <label className="flex items-center gap-1" title="Unoriented pools both flanks by distance; + or − keeps the downstream flank of a stranded anchor">Orientation
       <select className="rounded border border-line bg-transparent px-1 dark:border-white/10" value={String(anchor.orientation)} data-testid="nuc-orientation"
@@ -83,6 +83,12 @@ function phasingSummary(ph?: NucPhasing): string {
   return `${fmt(b.R_minus_null, 2)}${b.null_p != null && b.null_p < 0.05 ? '*' : ''}`;
 }
 
+/** FiberHMM's class_mix names multi (3+) `multi3+`; the panel's class key is `multi3`. */
+export function classMixCount(mix: Record<string, number> | undefined, key: string): number {
+  if (!mix) return 0;
+  return (key === 'multi3' ? (mix['multi3+'] ?? mix.multi3) : mix[key]) ?? 0;
+}
+
 /** One metric row of the window table: a label (with its tooltip) and a cell per observation. */
 interface MetricRow { key: string; label: string; title: string; cell: (m: NucWindowMetrics, r: NucWindowObservation, o: NucObservation) => ReactNode; anchor?: boolean; dephasing?: boolean }
 
@@ -92,7 +98,7 @@ const ROWS: MetricRow[] = [
       {m.n_molecules ?? 0}{m.excluded_low_information ? <span className="text-ink-muted"> · {m.excluded_low_information} low</span> : null}</span> },
   { key: 'mix', label: 'Class mix', title: 'Coarse calls of footprints centred in the window (can\'t tell and edge-truncated hatched)',
     cell: m => <div className="flex items-center gap-1">
-      <StackedShares parts={COARSE_PARTS.map(p => ({ ...p, value: (m.class_mix ?? {})[p.key] ?? 0 }))} width={84} testId="nuc-window-mix" />
+      <StackedShares parts={COARSE_PARTS.map(p => ({ ...p, value: classMixCount(m.class_mix, p.key) }))} width={84} testId="nuc-window-mix" />
       {m.insufficient && <span className="rounded bg-amber-100 px-1 text-[10px] text-amber-800 dark:bg-amber-900/40 dark:text-amber-200" data-testid="nuc-insufficient"
         title="Can't-tell calls dominate this window: its size mix is not informative">insufficient</span>}</div> },
   { key: 'nrl', label: 'NRL', title: 'Per-molecule repeat length in the window: median [IQR] · share too short for one',

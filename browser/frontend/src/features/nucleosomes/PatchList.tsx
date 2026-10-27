@@ -14,7 +14,7 @@ import { useHubData } from '../hub/hubData';
 import { useHubJob } from '../hub/hubJob';
 import { goToHits } from '../hub/actions';
 import { nucPatches, type NucCategory, type NucPatchScore } from './api';
-import { observationDatasets } from './planner';
+import { observationDatasets, observationsKey } from './planner';
 import type { NucObservation, NucPanelState } from './types';
 
 export const PATCH_TYPES: Array<{ key: string; label: string; color: string; category?: NucCategory }> = [
@@ -40,9 +40,11 @@ function scanScore(row: PatchRow): string {
   return pct(h.score);
 }
 
-export function PatchList({ observations, settings, setSettings, onSelect }: {
+export function PatchList({ observations, settings, setSettings, onSelect, revision }: {
   observations: NucObservation[]; settings: NucPanelState; setSettings: (patch: Partial<NucPanelState>) => void;
   onSelect: (obs: NucObservation, category: NucCategory) => void;
+  /** The panel's outputs revision (a compute, opened scans, the datasets' content, the duplicates policy). */
+  revision: string;
 }) {
   const view = useBrowserStore(useShallow(s => ({ chrom: s.chrom, start: s.start, end: s.end })));
   const includeDuplicates = useBrowserStore(s => Boolean(s.showDuplicateReads));
@@ -69,11 +71,13 @@ export function PatchList({ observations, settings, setSettings, onSelect }: {
   }, [scansKey, view.chrom, view.start, view.end]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const shown = rows.filter(r => !hidden.has(r.type));
-  const obsKey = observations.map(o => o.obsId + (o.readIds?.length ?? '')).join(',');
+  // The whole observation scope (membership, windows) and the outputs' revision: scores follow every change.
+  const obsKey = `${observationsKey(observations)}|${revision}`;
   const rowsKey = shown.map(r => r.key).join(',');
   useEffect(() => {
     const scored = shown.filter(r => TYPE[r.type]?.category);
-    if (!scored.length || !observations.length) { setScores({}); return; }
+    setScores({});
+    if (!scored.length || !observations.length) return;
     const ctl = new AbortController();
     setLoading(true);
     nucPatches(observations, scored.slice(0, 500).map(r => ({ key: r.key, type: r.type, chrom: r.hit.chrom, start: r.hit.start, end: r.hit.end })),

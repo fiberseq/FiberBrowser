@@ -45,7 +45,7 @@ describe('patch list', () => {
 
   it('lists the patches in view with each observation’s own score, and selects molecules from a cell', async () => {
     const onSelect = vi.fn();
-    await act(async () => root.render(<PatchList observations={obs} settings={{}} setSettings={() => { }} onSelect={onSelect} />));
+    await act(async () => root.render(<PatchList observations={obs} settings={{}} setSettings={() => { }} onSelect={onSelect} revision="r1" />));
     await act(async () => { vi.advanceTimersByTime(400); });
     await act(async () => { await Promise.resolve(); });
     await vi.waitFor(() => expect(container.querySelectorAll('[data-testid="nuc-patch-score"]').length).toBe(3));
@@ -61,10 +61,19 @@ describe('patch list', () => {
     expect(scored.patches.map((p: { type: string }) => p.type)).toEqual(['regular', 'missing']);
     act(() => (rowsEls[0].querySelector('[data-testid="nuc-patch-score"] button') as HTMLElement).click());
     expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ obsId: 'a', start: 12_000, end: 14_000 }), { kind: 'segment', state: 'regular' });
+    // Codex E1: new outputs (a compute, a scan, dataset content) or a changed read scope score again.
+    const scoredRequests = () => requests.filter(r => r.url.includes('/api/nuc/patches')).length;
+    const before = scoredRequests();
+    await act(async () => root.render(<PatchList observations={obs} settings={{}} setSettings={() => { }} onSelect={onSelect} revision="r2" />));
+    await vi.waitFor(() => expect(scoredRequests()).toBe(before + 1));
+    const scoped = [{ ...obs[0], readIds: ['q1'] }, obs[1]];
+    await act(async () => root.render(<PatchList observations={scoped} settings={{}} setSettings={() => { }} onSelect={onSelect} revision="r2" />));
+    await vi.waitFor(() => expect(scoredRequests()).toBe(before + 2));
+    expect(requests.filter(r => r.url.includes('/api/nuc/patches')).at(-1)!.body.observations[0].readIds).toEqual(['q1']);
   });
 
   it('runs the nuc scan over the view', async () => {
-    await act(async () => root.render(<PatchList observations={obs} settings={{ parameters: { calibration: 'self' } }} setSettings={() => { }} onSelect={() => { }} />));
+    await act(async () => root.render(<PatchList observations={obs} settings={{ parameters: { calibration: 'self' } }} setSettings={() => { }} onSelect={() => { }} revision="r1" />));
     await act(async () => (container.querySelector('[data-testid="nuc-find-patches"]') as HTMLElement).click());
     const submitted = requests.find(r => r.url.includes('/api/scan/jobs'))!.body;
     expect(submitted).toMatchObject({ datasets: ['dA', 'dB'], scope: 'view', chrom: 'chr3', start: 10_000, end: 40_000, modules: ['nuc'],
