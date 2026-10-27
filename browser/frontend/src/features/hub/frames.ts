@@ -29,7 +29,8 @@ export function displaySpan(h: Placeable): TargetSpan | null {
 }
 
 const where = (n: number) => (n + 1).toLocaleString('en-US');
-const span = (chrom: string, a: number, b: number) => (b > a ? `${chrom}:${where(a)}-${b.toLocaleString('en-US')}` : `${chrom}:${a.toLocaleString('en-US')} (boundary)`);
+// 1-based, as the hub's locus column: an interval; a boundary is named by the base after it (the column's "⋮").
+const span = (chrom: string, a: number, b: number) => (b > a ? `${chrom}:${where(a)}-${b.toLocaleString('en-US')}` : `before ${chrom}:${where(a)}`);
 
 /** A short chip for the lift status ('' for hits in this genome). */
 export function liftChip(h: Lifted): { text: string; tone: 'ok' | 'warn' | 'muted' } | null {
@@ -53,7 +54,11 @@ export function liftText(h: Lifted): string {
     case 'split': return `Lifted from ${from}: its bases land in ${lift.placements ?? 2} placements; the one with the most bases is kept, ${span(lift.chrom ?? '', lift.start ?? 0, lift.end ?? 0)}.`;
     case 'partial': return `Lifted from ${from} to ${span(lift.chrom ?? '', lift.start ?? 0, lift.end ?? 0)}: some bases have no place on this genome (an insertion or gap inside the hit).`;
     default:
-      if (h.target?.insertion) return `${from} is inside an insertion this genome lacks: it sits at the junction ${span(h.target.chrom, h.target.start, h.target.end)}. Graph mode draws it on the inserted sequence.`;
+      if (h.target?.insertion) {
+        const t = h.target;
+        const at = t.end > t.start ? `between ${t.chrom}:${t.start.toLocaleString('en-US')} and ${where(t.end)}` : span(t.chrom, t.start, t.end);
+        return `${from} is inside an insertion this genome lacks: it sits at the junction ${at}. Graph mode draws it on the inserted sequence.`;
+      }
       return `${from} does not lift onto this genome (${(lift.reason ?? 'not lifted').replace(/_/g, ' ')}).`;
   }
 }
