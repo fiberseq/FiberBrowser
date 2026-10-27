@@ -12,6 +12,7 @@ from typing import Optional
 
 import numpy as np
 from services.read_selection import read_body_spans, body_overlap
+from services.clustering_features import nuc_item_matches, nuc_rule_conditions, nuc_size_index
 
 
 DEFAULT_SAMPLE_SEED = "fiberbrowser-analysis"
@@ -595,8 +596,12 @@ def compute_rule_metric(
         return gene_regions
 
     gates = rule.get("quality_gates") or rule.get("qualityGates") or []
+    # A labeling rule's nucleosome conditions read each item's nucsz mark (an item without one fails them).
+    nuc_conditions = nuc_rule_conditions(rule)
+    nuc_index = nuc_size_index(read) if nuc_conditions is not None else None
     count = 0
-    for int_start, int_end, size, qualities in _rule_interval_entries(read, layer, bool(gates)):
+    for int_start, int_end, size, qualities, layer_name in _rule_interval_entries(
+            read, layer, bool(gates) or nuc_conditions is not None):
         if size <= 0:
             continue
 
@@ -607,6 +612,8 @@ def compute_rule_metric(
         # The labeling rule's quality gates, as the browser applies them (a
         # missing quality dimension fails the gate).
         if gates and not _quality_gates_pass(rule, qualities):
+            continue
+        if not nuc_item_matches(nuc_conditions, nuc_index, layer_name, int_start, int_end, size):
             continue
 
         abs_midpoint = region_start + (int_start + int_end) // 2
@@ -639,11 +646,12 @@ def compute_rule_metric(
 
 
 def _rule_interval_entries(read: dict, layer: Optional[str], with_qualities: bool):
-    """(start, end, size, qualities) for each interval a rule metric counts;
-    the qualities only when a rule has gates to check."""
+    """(start, end, size, qualities, layer name) for each interval a rule metric counts (layer name None: primary
+    footprints); the qualities and each interval's own layer only when a rule has gates or nucleosome conditions
+    to check."""
     if not with_qualities:
         for interval in get_layer_intervals(read, layer):
-            yield interval[0], interval[1], interval[2], {}
+            yield interval[0], interval[1], interval[2], {}, layer
         return
     from services.clustering_features import _interval_quality_map, _iter_layer_interval_entries
     if layer == "all_fp":
@@ -659,10 +667,22 @@ def _rule_interval_entries(read: dict, layer: Optional[str], with_qualities: boo
                 if key in seen:
                     continue
                 seen.add(key)
-                yield interval[0], interval[1], interval[2], _interval_quality_map(layer_data, idx)
+                yield interval[0], interval[1], interval[2], _interval_quality_map(layer_data, idx), layer_name
         return
-    for int_start, int_end, size, _layer_name, qualities in _iter_layer_interval_entries(read, layer):
-        yield int_start, int_end, size, qualities
+    for int_start, int_end, size, layer_name, qualities in _iter_layer_interval_entries(read, layer):
+        yield int_start, int_end, size, qualities, layer_name
+
+
+def rule_layer_request(rule: Optional[dict], include_layers: bool,
+                       requested_layers: Optional[list[str]]) -> tuple[bool, Optional[list[str]]]:
+    """(include_layers, requested_layers) for a rule metric: a rule with nucleosome conditions also needs the nucsz
+    marks (loaded with their bytes: AnalysisReadQuery keeps layer qualities by default). Other rules unchanged."""
+    if nuc_rule_conditions(rule) is None:
+        return include_layers, requested_layers
+    if requested_layers is None:
+        # Every layer already (nucsz included), or none yet: just the marks.
+        return True, (None if include_layers else ["nucsz"])
+    return True, list(requested_layers) + ([] if "nucsz" in requested_layers else ["nucsz"])
 
 
 def _quality_gates_pass(rule: dict, qualities: dict) -> bool:

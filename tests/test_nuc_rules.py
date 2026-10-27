@@ -171,3 +171,24 @@ def test_correspondence_cluster_nuc_modes_read_the_nuc_groups():
     assert mode_layer('nuc.event.missing') == 'nucseg'
     assert mode_layer('accessibility') == 'msp'
     assert mode_layer('tf_density') == 'tf'
+
+
+def test_assigning_to_a_saved_model_ranks_metrics_against_the_fitted_cohort():
+    """Codex C-4 class: new reads assigned to a saved correspondence model rank their molecule metrics against the
+    cohort the model was fitted on (kept with the model), not against themselves."""
+    from services.clustering_features import extract_features_grouped
+    from services.correspondence_clustering import fitted_metric_cohort
+    rule = {'id': 'm', 'enabled': True, 'terms': [{'id': 't', 'source': 'molecule_metric', 'moleculeMetric': 'nuc.nrl'}]}
+    fitted = [{'id': f'f{i}', 'intervals': [], '_fiberbrowser_scalars': {'nuc.nrl': v}} for i, v in enumerate([170.0, 180.0, 190.0, 200.0, None])]
+    cohort = fitted_metric_cohort(fitted, ['cluster_rule:m'], [rule])
+    assert cohort == {'nuc.nrl': [170.0, 180.0, 190.0, 200.0]}
+    assert fitted_metric_cohort(fitted, ['accessibility'], []) == {}
+    # Two new reads both above the fitted median: alone they would split 0.25 / 0.75.
+    new = [{'id': 'n0', 'intervals': [], '_fiberbrowser_scalars': {'nuc.nrl': 195.0}, '_cluster_group': 'w'},
+           {'id': 'n1', 'intervals': [], '_fiberbrowser_scalars': {'nuc.nrl': 205.0}, '_cluster_group': 'w'}]
+    groups = {'w': ([(0, 100)], 0, {})}
+    alone, _ids, _w, _m = extract_features_grouped(new, [(0, 100)], 0, groups, peak_modes=['cluster_rule:m'], cluster_feature_rules=[rule])
+    kept, _ids, _w, _m = extract_features_grouped(new, [(0, 100)], 0, groups, peak_modes=['cluster_rule:m'], cluster_feature_rules=[rule],
+                                                  metric_cohort=cohort)
+    assert [round(float(x), 3) for x in alone[:, 0]] == [0.25, 0.75]
+    assert [round(float(x), 3) for x in kept[:, 0]] == [0.75, 1.0]

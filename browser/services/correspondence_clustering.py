@@ -137,6 +137,26 @@ def mode_layer(mode: str) -> str:
     return _MODE_LAYER_ALIASES.get(mode, mode)
 
 
+METRIC_COHORT_MAX = 4001
+
+
+def fitted_metric_cohort(reads, modes, cluster_feature_rules) -> dict:
+    """The known values each molecule metric column of a fit ranked against (the whole fitted cohort), to keep with
+    the model so assigning new reads ranks them the same way. Large cohorts keep evenly spaced order statistics
+    (``METRIC_COHORT_MAX``), which give the same percentile ranks to within 1/``METRIC_COHORT_MAX``."""
+    from services.clustering_features import molecule_metric_cohort, molecule_metric_ids
+    ids = molecule_metric_ids(modes, cluster_feature_rules)
+    if not ids:
+        return {}
+    out = {}
+    for metric_id, known in molecule_metric_cohort(reads, ids).items():
+        if len(known) > METRIC_COHORT_MAX:
+            idx = np.linspace(0, len(known) - 1, METRIC_COHORT_MAX).round().astype(int)
+            known = [known[i] for i in idx]
+        out[metric_id] = [float(v) for v in known]
+    return out
+
+
 def run(state, req, *, sources=None, model=None, row_cache=None, covering_out=None):
     """``sources``: graph-source windows by result key (graph primary §2.6; ``services/graph_panel/analysis.py``),
     whose rows are on a package path's own coordinates, not the window's reference. ``model``: assign every
@@ -305,10 +325,12 @@ def run(state, req, *, sources=None, model=None, row_cache=None, covering_out=No
         if not same:
             raise ValueError('settings or geometry changed: cluster again')
         if reads:
+            # Molecule metric columns rank against the cohort the model was fitted on (kept with it), not the new
+            # reads alone; a model saved before that ranks against the new reads.
             X, rids, widths, used = extract_features_grouped(
                 reads, [(0, n) for n in lengths], 0, groups, step=10,
                 subnucleosomal_threshold=req.subnucleosomal_threshold, peak_modes=modes,
-                cluster_feature_rules=req.cluster_feature_rules)
+                cluster_feature_rules=req.cluster_feature_rules, metric_cohort=model.get('metric_cohort') or None)
             if model.get('peak_widths') is not None and list(widths) != list(model['peak_widths']):
                 raise ValueError('settings or geometry changed: cluster again')
             if len(rids):
@@ -354,6 +376,9 @@ def run(state, req, *, sources=None, model=None, row_cache=None, covering_out=No
                       cluster_patterns=(patterns or {}).get('cluster_patterns'),
                       peak_widths=list(features.get('peak_widths') or []), samples=positions, lengths=lengths,
                       settings=snapshot, balanced=bool(balanced), schema=1)
+        cohort = fitted_metric_cohort(reads, modes, req.cluster_feature_rules)
+        if cohort:
+            fitted['metric_cohort'] = cohort
     results = {}
     for key, original in ids.items():
         a = {rid: assignments[f'{key}::{rid}'] for rid in original if f'{key}::{rid}' in assignments}

@@ -105,7 +105,8 @@ import { usePanelGenomeSync } from '../hooks/usePanelGenomeSync';
 import { BrowserHosts } from '../plugins/browserHosts';
 import { panelTraits } from '../utils/panelExtensions';
 import { isSandboxPage, isWorkspacePage } from '../utils/sandbox';
-import { qualityGatesPayload, type QualityGatePayload } from '../utils/ruleMatching';
+import { qualityGatesPayload } from '../utils/ruleMatching';
+import { nucConditionsPayload, ruleTermPayload, type RuleTermPayload } from '../actions/ruleTermPayload';
 
 const DEBUG = FRONTEND_DIAGNOSTICS;
 
@@ -1138,20 +1139,8 @@ export function Browser() {
     return term.layer ?? null;
   }, []);
 
-  const rulePayloadFromSortTerm = useCallback((term: ClusterFeatureRuleTerm | undefined) => {
-    const base = term?.source === 'label_rule'
-      ? term.rule
-      : term?.source === 'footprint_group'
-        ? term.group
-        : term;
-    return {
-      size_min: Math.max(0, Number(base?.sizeMin ?? term?.sizeMin ?? 0) || 0),
-      size_max: (base?.sizeMax ?? term?.sizeMax) == null ? null : Math.max(0, Number(base?.sizeMax ?? term?.sizeMax) || 0),
-      conditions: [...((base as any)?.conditions ?? [])],
-      // The labeling rule's quality gates too, so a count matches what it paints.
-      quality_gates: qualityGatesPayload((base as any)?.qualityGates ?? term?.qualityGates),
-    };
-  }, []);
+  // Size, conditions, quality gates and a labeling rule's nucleosome conditions (actions/ruleTermPayload.ts).
+  const rulePayloadFromSortTerm = useCallback((term: ClusterFeatureRuleTerm | undefined) => ruleTermPayload(term), []);
 
   const transcriptionStateFromTerm = useCallback((term: ClusterFeatureRuleTerm | undefined): TranscriptionStateRuleKind | null => {
     if (term?.source !== 'transcription_state') return null;
@@ -1713,7 +1702,7 @@ export function Browser() {
     // Plain values (similarity, rule, etc.) pass through unchanged.
     let backendSortBy = sortBy;
     let sortLayer: string | undefined;
-    let sortRulePayload: { size_min: number; size_max: number | null; conditions: any[]; quality_gates?: QualityGatePayload[] } | undefined;
+    let sortRulePayload: RuleTermPayload | undefined;
     let sortDescending = true;
     let sortTranscriptionState: TranscriptionStateRuleKind | null = null;
     let sortGeneIds: string[] | undefined;
@@ -1833,6 +1822,7 @@ export function Browser() {
             rule: sortRulePayload ?? (rule ? {
               size_min: rule.sizeMin, size_max: rule.sizeMax, conditions: rule.conditions,
               quality_gates: qualityGatesPayload(rule.qualityGates),
+              ...nucConditionsPayload(rule),
             } : undefined),
             descending: sortDescending,
             moleculeMetric: sortMoleculeMetric,

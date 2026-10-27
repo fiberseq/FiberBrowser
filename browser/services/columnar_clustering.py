@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import numpy as np
 
-from services.clustering_features import extract_features_from_compact, class_aware_pattern_slices
+from services.clustering_features import (
+    class_aware_pattern_slices, extract_features_from_compact, metric_percentile_ranks, molecule_metric_slots,
+    molecule_metric_values,
+)
 from services.dynamic_clustering import match_pattern_to_cluster
 from services.read_metrics import read_covers_regions
 
@@ -55,6 +58,18 @@ def use_columnar_clustering(state, req, query):
     return unknown_size or estimated >= COLUMNAR_MIN_READS
 
 
+def _above(means, threshold):
+    """``means > threshold`` as the native fit compares them.
+
+    Match the native NumPy-scalar/Python-scalar comparison. NumPy 1.x
+    promotes that comparison to float64, while an array comparison would
+    round the threshold to float32. NumPy 2.x uses its scalar promotion
+    policy in result_type.
+    """
+    comparison_type = np.result_type(means.dtype.type(0), threshold)
+    return means.astype(comparison_type, copy=False) > threshold
+
+
 class ColumnarPatterns:
     """Reduce native positional features to exact pattern columns in blocks.
 
@@ -62,6 +77,12 @@ class ColumnarPatterns:
     weights equal to peak widths, as in the native endpoint's coverage filter.
     The native extractor is shared, including empty authoritative MSP layers,
     marks, quality-filtered intervals and saved footprint class rules.
+
+    Molecule metric bits are a median split of each read's percentile rank in
+    the whole cohort, which is only known once every block is in: each block
+    keeps its reads' raw scalars (one value per read, like the read IDs) and
+    the bits are set at finish, so they never depend on block boundaries or
+    read order.
     """
 
     def __init__(self, peaks, region_start, *, peak_modes=None,
@@ -79,6 +100,8 @@ class ColumnarPatterns:
         self.block_rows = max(1, min(int(block_rows), FEATURE_BLOCK_BYTES // max(4, width * 4)))
         self.pending = []
         self.blocks = []
+        # Pattern bit -> (molecule metric, raw scalars of every read so far): ranked over the cohort at finish.
+        self.metric_bits = None
         self.read_ids = []
         self.slices = None
         self.peak_widths = None
@@ -106,19 +129,20 @@ class ColumnarPatterns:
         slices = class_aware_pattern_slices(widths, modes, self.options['cluster_feature_rules'])
         if self.slices is None:
             self.slices, self.peak_widths = slices, widths
+            slots = molecule_metric_slots(widths, modes, self.options['cluster_feature_rules'])
+            self.metric_bits = {bit: (slots[offset], [])
+                                for bit, (_peak, offset, width, is_class) in enumerate(slices)
+                                if is_class and width == 1 and offset in slots}
         elif self.slices != slices or self.peak_widths != widths:
             raise ValueError('Feature schema changed during columnar clustering')
         bits = np.zeros((len(ids), len(slices)), dtype=np.uint8)
         for bit, (_peak, offset, width, is_class) in enumerate(slices):
+            if bit in self.metric_bits:
+                # Ranked against the whole cohort at finish; the block's ranks are its own.
+                self.metric_bits[bit][1].extend(molecule_metric_values(self.pending, self.metric_bits[bit][0]))
+                continue
             if width:
-                means = X[:, offset:offset + width].mean(axis=1)
-                threshold = 0.5 if is_class else self.threshold
-                # Match the native NumPy-scalar/Python-scalar comparison.
-                # NumPy 1.x promotes that comparison to float64, while an
-                # array comparison would round the threshold to float32.
-                # NumPy 2.x uses its scalar promotion policy in result_type.
-                comparison_type = np.result_type(means.dtype.type(0), threshold)
-                bits[:, bit] = means.astype(comparison_type, copy=False) > threshold
+                bits[:, bit] = _above(X[:, offset:offset + width].mean(axis=1), 0.5 if is_class else self.threshold)
         self.feature_peak_bytes = max(self.feature_peak_bytes, X.nbytes)
         self.max_expanded_reads = max(self.max_expanded_reads, len(self.pending))
         self.pattern_bytes += bits.nbytes
@@ -132,6 +156,9 @@ class ColumnarPatterns:
             return {}, {}, None, None
         columns = np.concatenate(self.blocks, axis=0)
         self.blocks.clear()
+        for bit, (_metric, values) in (self.metric_bits or {}).items():
+            # The native extractor's column for the whole cohort (float32 ranks), split at the median.
+            columns[:, bit] = _above(metric_percentile_ranks(values), 0.5)
         patterns, inverse, frequencies = np.unique(
             columns, axis=0, return_inverse=True, return_counts=True)
         from services.background_work import checkpoint

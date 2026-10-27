@@ -41,7 +41,7 @@ import { liftHapsForRound, resolveSortRequestScope, sortRounds } from '../utils/
 import { registerBackendMotifTrack, registerTrack, removeTrackAtIndex, setTrackNameFilter } from '../utils/trackLoader';
 import { CLUSTER_RULE_MODE_PREFIX } from '../types';
 import { sameChrom } from '../utils/chromAliases';
-import { qualityGatesPayload } from '../utils/ruleMatching';
+import { ruleTermPayload } from './ruleTermPayload';
 import { openSidebarSection } from '../utils/tutorialAnchors';
 import { conditionById, conditionHolds } from '../utils/tutorialMilestones';
 
@@ -510,19 +510,9 @@ function layerFromAnalysisTerm(term: ClusterFeatureRuleTerm | undefined): string
   return term.layer ?? null;
 }
 
+/** Size, conditions, quality gates and a labeling rule's nucleosome conditions (actions/ruleTermPayload.ts). */
 function rulePayloadFromAnalysisTerm(term: ClusterFeatureRuleTerm | undefined) {
-  const base = term?.source === 'label_rule'
-    ? term.rule
-    : term?.source === 'footprint_group'
-      ? term.group
-      : term;
-  const rawSizeMax = (base as any)?.sizeMax ?? term?.sizeMax;
-  return {
-    size_min: Math.max(0, Number((base as any)?.sizeMin ?? term?.sizeMin ?? 0) || 0),
-    size_max: rawSizeMax == null ? null : Math.max(0, Number(rawSizeMax) || 0),
-    conditions: [...((base as any)?.conditions ?? [])],
-    quality_gates: qualityGatesPayload((base as any)?.qualityGates ?? term?.qualityGates),
-  };
+  return ruleTermPayload(term);
 }
 
 function transcriptionStateFromAnalysisTerm(term: ClusterFeatureRuleTerm | undefined): TranscriptionStateRuleKind | null {
