@@ -84,8 +84,10 @@ async def close_scan(scan_id: str, state=Depends(get_state)):
 
 @router.get('/api/scan/{scan_id}/hits')
 async def scan_hits(scan_id: str, module: str, chrom: str, start: int = Query(..., ge=0), end: int = Query(..., ge=1),
-                    type: Optional[str] = None, state=Depends(get_state)):
-    """Hits of one module overlapping a region (padded fetch), with per-dataset score roles."""
+                    type: Optional[str] = None, graph: bool = False, state=Depends(get_state)):
+    """Hits of one module overlapping a region (padded fetch), with per-dataset score roles. A source-frame scan's
+    hits (a live-lift dataset's own assembly) are lifted onto this genome, keeping their source coordinates and a
+    lift status (G1). ``graph``: also each hit's columns on registered graph packages, with every path's status."""
     _not_on_lab_requests()
     from services.scan.serve import hits_for_view
     scan = _scan(state, scan_id)
@@ -93,7 +95,17 @@ async def scan_hits(scan_id: str, module: str, chrom: str, start: int = Query(..
         raise HTTPException(status_code=404, detail=f'No module {module!r} in this scan')
     if end <= start:
         raise HTTPException(status_code=422, detail='end must be greater than start')
-    return await asyncio.to_thread(hits_for_view, scan, module, chrom, start, end, type_id=type)
+    if (scan.frame or {}).get('kind') == 'source':
+        from services.scan.projection import source_hits_for_view
+        out = await asyncio.to_thread(source_hits_for_view, state, scan, module, chrom, start, end, type_id=type)
+    else:
+        out = await asyncio.to_thread(hits_for_view, scan, module, chrom, start, end, type_id=type)
+    if graph:
+        from services.scan.graph_hits import add_graph_aliases
+        note = await add_graph_aliases(state, out['hits'], chrom)
+        if note:
+            out['graphNote'] = note
+    return out
 
 
 @router.get('/api/scan/{scan_id}/units')
