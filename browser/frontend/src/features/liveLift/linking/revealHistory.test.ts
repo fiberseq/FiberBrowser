@@ -138,3 +138,68 @@ describe('late source-view remaps and Undo/Redo (agy group C round 3, NEW HIGH 2
     expect(viewOf('src')).toEqual({ chrom: 'S', start: 4000, end: 6000 });
   });
 });
+
+describe('several open source views popped out in a row (stabilize review, agy out-of-scope HIGH)', () => {
+  beforeEach(() => { installTwoDatasetFixture(); });
+
+  /** A graph host at its own view T:6000-8000 with PAT folded in; MAT's and PAT's source views are open but folded
+   * away, left elsewhere; the map's target tiles are still loading. */
+  async function twoOpenSources() {
+    resetNavigation();
+    hold.targetA = true;
+    useBrowserStore.setState({ ...BASE, panels: [
+      lifted('host', { navOwn: true, viewportOverride: { chrom: 'T', start: 6000, end: 8000 }, viewMode: 'graph',
+        graphView: { role: 'host', registrationId: 'r1', targetPathKey: 'T', targetViewport: null, linkMode: 'independent',
+          initiatingPanelId: null, initiatingReferenceId: null, popOutKind: 'source',
+          members: [{ panelId: 'host', binding: 'HM' }, { panelId: 'pat', binding: 'HP' }] } }),
+      lifted('pat', { liftHap: 'PAT', collapsed: true, graphMemberOf: 'host', collapsedByGraphGroup: 'host' }),
+      source('srcMat', 'host', { collapsed: true, viewportOverride: { chrom: 'S2', start: 1000, end: 2000 } }),
+      { ...source('srcPat', 'pat', { collapsed: true, viewportOverride: { chrom: 'P', start: 90_000, end: 91_000 } }),
+        liftLink: { id: 'L-srcPat', datasetId: 'liftA', liftPanelId: 'pat', hap: 'HP', hapLabel: 'PAT', contig: 'P', flip: false, chain: null } },
+    ] } as never);
+    useBrowserStore.getState().clearHistory();
+    // "Pop out all": both source views are revealed, one undo step each, without waiting on the first one's tiles.
+    popOutPaths('host', ['host', 'pat']);
+    await flush();
+  }
+
+  it('both land at the host\'s mapped view once the tiles arrive, and each step records it', async () => {
+    await twoOpenSources();
+    expect(panelOf('srcMat')?.collapsed).toBe(false);
+    expect(panelOf('srcPat')?.collapsed).toBe(false);
+    await releaseHeld();
+    expect(viewOf('srcMat')).toEqual({ chrom: 'S', start: 5000, end: 7000 });
+    expect(viewOf('srcPat')).toEqual({ chrom: 'P', start: 5000, end: 7000 });
+    expect(recorded('srcMat')).toEqual({ chrom: 'S', start: 5000, end: 7000 });
+    expect(recorded('srcPat')).toEqual({ chrom: 'P', start: 5000, end: 7000 });
+    // Undo the second reveal: the first source view stays at its exact view.
+    useBrowserStore.getState().undo();
+    expect(panelOf('srcPat')?.collapsed).toBe(true);
+    expect(panelOf('srcMat')?.collapsed).toBe(false);
+    expect(viewOf('srcMat')).toEqual({ chrom: 'S', start: 5000, end: 7000 });
+    // Undo the first: back where it was left, folded away.
+    useBrowserStore.getState().undo();
+    expect(panelOf('srcMat')?.collapsed).toBe(true);
+    expect(viewOf('srcMat')).toEqual({ chrom: 'S2', start: 1000, end: 2000 });
+    // Redo twice: both exact again.
+    useBrowserStore.getState().redo();
+    useBrowserStore.getState().redo();
+    expect(viewOf('srcMat')).toEqual({ chrom: 'S', start: 5000, end: 7000 });
+    expect(viewOf('srcPat')).toEqual({ chrom: 'P', start: 5000, end: 7000 });
+  });
+
+  it('the first one\'s late remap is still dropped once the user moved it', async () => {
+    await twoOpenSources();
+    useBrowserStore.getState().setPanelViewport('srcMat', 30_000, 31_000);
+    await releaseHeld();
+    expect(viewOf('srcMat')).toEqual({ chrom: 'S2', start: 30_000, end: 31_000 });
+  });
+
+  it('the first one\'s late remap is dropped after an Undo', async () => {
+    await twoOpenSources();
+    useBrowserStore.getState().undo();
+    await releaseHeld();
+    expect(panelOf('srcPat')?.collapsed).toBe(true);
+    expect(viewOf('srcMat')).not.toEqual({ chrom: 'S', start: 5000, end: 7000 });
+  });
+});

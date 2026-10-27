@@ -501,6 +501,12 @@ export interface HistorySlice {
    * joins it rather than making an undo step of its own. Not while history is paused.
    */
   foldIntoCurrentSnapshot: (snapshotState: SerializedState) => void;
+  /**
+   * The saved states of the steps `ids` (their labels, times and places stay) become what `update` returns: a late
+   * result that belongs to a step recorded before others that left it alone (a source view's exact remap across the
+   * next source views' reveals) joins each of them. Not while history is paused.
+   */
+  rewriteSnapshots: (ids: number[], update: (snapshotState: SerializedState) => SerializedState) => void;
   pushSerializedSnapshot: (label: string, snapshotState: SerializedState, options?: { kind?: SnapshotKind; coalesceKey?: string; coalesceMs?: number }) => void;
   undo: () => void;
   redo: () => void;
@@ -1354,6 +1360,15 @@ export function createHistorySlice(
         const stack = s._historyStack.slice();
         stack[s._historyPointer] = { ...current, state: snapshotState };
         return { _historyStack: stack };
+      });
+    },
+
+    rewriteSnapshots: (ids, update) => {
+      if (get()._historyPaused || !ids.length) return;
+      const wanted = new Set(ids);
+      set((s) => {
+        if (!s._historyStack.some(x => x.id != null && wanted.has(x.id))) return {};
+        return { _historyStack: s._historyStack.map(x => (x.id != null && wanted.has(x.id) ? { ...x, state: update(x.state) } : x)) };
       });
     },
 
