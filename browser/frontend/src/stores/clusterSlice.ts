@@ -236,27 +236,45 @@ function withGraphLabelsReplaced(node: ClusterTreeNode, key: string): ClusterTre
  * also join the graph-run observations of the haplotypes the panel drew their rows on: a lifted row follows its
  * molecule's primary record, which can be on another haplotype than the path whose observation labelled it, so a
  * pop-out splitting the labels by provenance gives them to the panel that shows those rows (graph follow-ups item 5,
- * agy review group B round 4, 2a). Only records the run already knows; rows not drawn keep the run's routing. */
-function withDrawnRowHaps(node: ClusterTreeNode, key: string, assignments: Record<string, number>): ClusterTreeNode {
-  const prov = node.graphProvenance?.[key];
+ * agy review group B round 4, 2a). The runs are the node lineage's (a subcluster's other rows are its parent run's,
+ * as pop-outs read them); the routing is stored on this node only, never in an ancestor's snapshot, and a node given
+ * provenance this way keeps its labels marked as another grouping's. Only records a run already knows; rows not drawn
+ * keep the runs' routing. */
+function withDrawnRowHaps(node: ClusterTreeNode, key: string, assignments: Record<string, number>,
+  nodes: Record<string, ClusterTreeNode>): ClusterTreeNode {
   const feed = useTrackFeedStore.getState().byStateKey[key];
-  if (!prov || !feed?.reads?.length) return node;
-  const known = new Set(Object.values(prov.owned).flat());
+  if (!feed?.reads?.length) return node;
+  const lineage: NonNullable<ClusterTreeNode['graphProvenance']>[string][] = [];
+  for (let n: ClusterTreeNode | undefined = node, seen = 0; n && seen < 1000; n = n.parentId ? nodes[n.parentId] : undefined, seen++) {
+    const p = n.graphProvenance?.[key];
+    if (p?.observations && p.owned) lineage.push(p);
+  }
+  if (!lineage.length) return node;
+  const known = new Set(lineage.flatMap(p => Object.values(p.owned).flat()));
   const labelled = new Set(Object.keys(assignments).filter(isMoleculeRecordKey).map(id => recordKey(id)!).filter(rk => known.has(rk)));
   if (!labelled.size) return node;
-  let owned = prov.owned;
+  const observations = [...new Map(lineage.flatMap(p => p.observations).map(o => [o.id, o])).values()];
+  const owns = (oid: string, rk: string) => lineage.some(p => p.owned[oid]?.includes(rk));
+  const own = node.graphProvenance?.[key];
+  let owned = own?.owned ?? {};
+  const used = new Map<string, (typeof observations)[number]>();
   for (const r of feed.reads) {
     const rk = recordKey(r.analysis_id);
     const haps = [r.live_lift?.hap_label, r.live_lift?.hap].filter(Boolean).map(h => String(h).toUpperCase());
     if (!rk || !labelled.has(rk) || !haps.length) continue;
-    for (const o of prov.observations) {
+    for (const o of observations) {
       const oh = ((o.kind === 'linear' ? o.lift_hap : o.hap) ?? '').toUpperCase();
       if (o.dataset_id !== feed.datasetId || !haps.includes(oh) || (o.strand && r.strand && o.strand !== r.strand)) continue;
-      if ((owned[o.id] ?? []).includes(rk)) continue;
+      if (owns(o.id, rk) || (owned[o.id] ?? []).includes(rk)) continue;
       owned = { ...owned, [o.id]: [...(owned[o.id] ?? []), rk] };
+      used.set(o.id, o);
     }
   }
-  return owned === prov.owned ? node : { ...node, graphProvenance: { ...node.graphProvenance, [key]: { ...prov, owned } } };
+  if (!used.size) return node;
+  const mine = own?.observations ?? [];
+  const entry = { ...own, observations: [...mine, ...[...used.values()].filter(o => !mine.some(m => m.id === o.id))], owned };
+  return { ...node, graphProvenance: { ...node.graphProvenance, [key]: entry },
+    ...(own ? {} : { graphLabelsReplaced: { ...(node.graphLabelsReplaced ?? {}), [key]: true } }) };
 }
 
 function cloneAssignments(assignments: Record<string, Record<string, number>>): Record<string, Record<string, number>> {
@@ -1148,7 +1166,7 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
         clusterTreeNodes: {
           ...state.clusterTreeNodes,
           [activeNode.id]: {
-            ...(options?.merge ? activeNode : withDrawnRowHaps(withGraphLabelsReplaced(activeNode, datasetId), datasetId, nextAssignments)),
+            ...(options?.merge ? activeNode : withDrawnRowHaps(withGraphLabelsReplaced(activeNode, datasetId), datasetId, nextAssignments, state.clusterTreeNodes)),
             assignments: cloneAssignments(clusterAssignments),
             order: cloneOrder(clusterOrder),
           },

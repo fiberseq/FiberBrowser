@@ -141,6 +141,28 @@ describe('a folded molecule after a non-graph relabel on a pooled host reaches t
     expect(st.clusterAssignments[matId]).toEqual({ [rk(molF)]: 0, [rk(m0)]: 1 });
   });
 
+  it('Codex lift1: an SV split on a subcluster node routes the folded molecule through the ancestor run\'s provenance', () => {
+    runGraph({ [fid('molA')]: 0, [fid('m1')]: 1 }, { [fid('p1')]: 0 });
+    const root = useBrowserStore.getState().activeClusterTreeNodeId!;
+    const rootProv = JSON.stringify(useBrowserStore.getState().clusterTreeNodes[root].graphProvenance);
+    useBrowserStore.getState().commitSubcluster({ 'k-hostA': { [fid('molA')]: 0, [fid('m1')]: 1, [fid('p1')]: 0 } }, { sourceClusterIds: [0, 1] });
+    const child = useBrowserStore.getState().activeClusterTreeNodeId!;
+    expect(child).not.toBe(root);
+    drawn([{ id: fid('molA', '271'), q: 'molA', hap: 'PAT' }, { id: fid('p1', '63'), q: 'p1', hap: 'PAT' }]);
+    applySvSplit('k-hostA', { datasetId: 'ds1', chrom: 'chr3', t: 'D', ref: 128_655_000, len: 500, end: 128_655_500, margin: 50,
+      label: 'DEL 500bp', counts: [1, 2, 0], viewStart: 128_650_000, viewEnd: 128_660_000 } as never,
+      { [rk(fid('molA'))]: 0, [rk(fid('m1'))]: 1, [rk(fid('p1'))]: 1 });
+    const [matId, patId] = popBoth();
+    const st = useBrowserStore.getState();
+    expect(st.clusterAssignments[patId]).toEqual({ [rk(fid('molA'))]: 0, [rk(fid('p1'))]: 1 });
+    expect(idSetHas(clusteredReadIdSet(st.clusterAssignments[patId])!, ['molA', fid('molA', '271')], rk(fid('molA')))).toBe(true);
+    expect(st.clusterAssignments[matId]).toEqual({ [rk(fid('molA'))]: 0, [rk(fid('m1'))]: 1 });
+    // The routing is stored on the subcluster node; the ancestor's snapshot is untouched, and the subcluster's labels
+    // stay marked as another grouping's (not the run's).
+    expect(JSON.stringify(st.clusterTreeNodes[root].graphProvenance)).toBe(rootProv);
+    expect(st.clusterTreeNodes[child].graphLabelsReplaced?.['k-hostA']).toBe(true);
+  });
+
   it('a molecule drawn only on MAT, or rows not drawn, keep the run\'s routing (PAT gets none of MAT\'s labels)', () => {
     runGraph({ [fid('molA')]: 0, [fid('m1')]: 1 }, {});
     drawn([{ id: fid('molA', '271'), q: 'molA', hap: 'MAT' }]);
