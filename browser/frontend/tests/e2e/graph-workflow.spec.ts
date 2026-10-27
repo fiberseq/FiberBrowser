@@ -11,9 +11,10 @@
  * - screenshots in both themes (FIBERBROWSER_GRAPH_SHOTS).
  *
  * Needs FIBERBROWSER_TEST_GRAPH_HELPER, FIBERBROWSER_TEST_GRAPH_HPRC_PACKAGE, FIBERBROWSER_TEST_LIFT_{BAM,MAP,NATIVE},
- * FIBERBROWSER_TEST_FASTA (chr3) and FIBERBROWSER_LIVE_LIFT=1.
+ * FIBERBROWSER_TEST_FASTA (chr3) (live lift is on unless FIBERBROWSER_LIVE_LIFT=0).
  */
-import { test, expect, type Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import { test, expect } from './fixtures/nativeDialogs';
 import { existsSync, mkdtempSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

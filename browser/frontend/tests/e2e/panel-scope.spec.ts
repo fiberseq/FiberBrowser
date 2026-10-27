@@ -53,8 +53,9 @@ test('Per panel: one Undo per panel step although peaks are re-scanned; View hig
   await open(page, server.baseUrl);
   await goMain(page, 'chr19:47514000-47518000');
   await expect.poll(() => store(page, s => s.start), { timeout: 20_000 }).toBe(47_514_000);
-  // The main view's undo step is pushed once it settles (500 ms).
-  await page.waitForTimeout(1_200);
+  // The main view's undo step is pushed once it settles (a 500 ms timer): wait for that step, not a fixed time.
+  await expect.poll(() => store(page, s => s._historyStack?.[s._historyPointer]?.label ?? ''), { timeout: 20_000 })
+    .toMatch(/^Navigate to chr19:47,514,000-47,518,000/);
 
   await page.getByTestId('nav-mode-perPanel').click();
   await expect.poll(() => panelLocus(page)).toBe('chr19:47514000-47518000');

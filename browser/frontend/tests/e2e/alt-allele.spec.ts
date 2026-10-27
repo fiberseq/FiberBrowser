@@ -2,7 +2,9 @@
  * Alt-allele panels on the synthetic insertion fixture (tests/insertion_fixtures.py: a
  * 2 kb insertion carried by 24 reads in the CIGAR and 3 clipped at the breakpoint, 16
  * reference reads). "Show insert expanded (carriers only)" switches the dataset panel to
- * the insertion's alternate allele: only the carriers, on a contig with the insert
+ * the insertion's alternate allele: only the confirmed carriers (the 24 with the insert in
+ * their CIGAR; the clipped ones are putative evidence, left out of the default alternate
+ * allele since the SV evidence tiers), on a contig with the insert
  * expanded, the axis reading out insert and reference positions; Cluster runs there;
  * the toggle goes back to exactly the reference view. The SV band opens a second
  * carriers panel the same way.
@@ -62,7 +64,8 @@ test('alt-allele panel: insert expanded, clustered, and back', async ({ page, se
   await page.getByRole('menuitemcheckbox', { name: 'Show insert expanded (carriers only)' }).click();
   const reply = await (await opened).json();
   expect(reply.success).toBe(true);
-  expect(reply.alt_allele.meta.carriers).toMatchObject({ total: 27, written: 27, cigar: 24 });
+  // Confirmed carriers only: the clipped reads are putative and stay out of the default alt allele.
+  expect(reply.alt_allele.meta.carriers).toMatchObject({ total: 24, written: 24, cigar: 24, clip_start: 0, clip_end: 0, hard: 0 });
   await expect(page.getByTestId('alt-allele-chip')).toBeVisible();
   const alt = await store();
   expect(alt.datasetId).toBe(reply.dataset.id);
@@ -76,8 +79,8 @@ test('alt-allele panel: insert expanded, clustered, and back', async ({ page, se
   await expect(page.locator('[data-testid^="dataset-header-"] [data-testid="preview-badge"]')).toHaveCount(0);
   await page.getByTestId('alt-allele-chip').click();
   const provenance = page.getByTestId('alt-allele-provenance');
-  await expect(provenance).toContainText('27 carriers found at the site; 27 placed on the contig');
-  await expect(provenance).toContainText('Hard-clipped (partial: their flank only');
+  await expect(provenance).toContainText('24 carriers found at the site; 24 placed on the contig');
+  await expect(provenance).toContainText('Hard-clipped (partial: their flank only, the clipped bases are not in the read): 0');
   await expect(provenance).toContainText(`Contig ${reply.layout.name}`);
   await expect(provenance).toContainText('Breakpoint: between chrT:15,000 and 15,001');
   await expect(provenance.getByTestId('preview-limitations')).toBeVisible();
@@ -90,7 +93,7 @@ test('alt-allele panel: insert expanded, clustered, and back', async ({ page, se
     const q = new URLSearchParams({ chrom, start: String(s), end: String(e), dataset_id: ds, max_reads: '500', spanning: 'false' });
     return (await (await fetch(`/api/reads/compact?${q}`)).json()).reads.map((r: any) => r.id);
   }, [reply.layout.name, reply.layout.insert_start, reply.layout.insert_end, reply.dataset.id] as const);
-  expect(altReads.length).toBe(26);  // the hard-clipped carrier holds no insert bases
+  expect(altReads.length).toBe(24);  // the confirmed carriers, each with the whole insert
   expect(altReads.some((id: string) => id.startsWith('reference_'))).toBe(false);
 
   // Both readouts: hovering inside the insert says INS n / 2,000-ish; the flank says chrT:...

@@ -16,11 +16,11 @@
  */
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { pickRandomPort, startServer, stopServer } from './fixtures/server';
+import { pickRandomPort, requireTestPorts, startServer, stopServer } from './fixtures/server';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expect, test } from '@playwright/test';
+import { expect, test, blockNativeDialogs } from './fixtures/nativeDialogs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = process.env.FIBERBROWSER_TEST_DIR ? path.resolve(process.env.FIBERBROWSER_TEST_DIR) : path.resolve(HERE, '../../../..');
@@ -35,6 +35,9 @@ async function waitFor(check: () => Promise<boolean>, timeoutMs = 60_000): Promi
   }
   throw new Error('timed out');
 }
+
+// The signed-link file server and FiberBrowser both take a test port.
+requireTestPorts(2);
 
 let files: ChildProcess | null = null;
 let fiberbrowser: ChildProcess | null = null;
@@ -72,6 +75,7 @@ const api = (p: string) => fetch(`${fbBase}${p}`, { headers: { 'X-FiberBrowser-T
 
 test('a link from another site is confirmed before anything loads, once', async ({ browser }) => {
   const owner = await browser.newContext();
+  await blockNativeDialogs(owner);
   await owner.addInitScript(() => {
     (window as any).__FIBERBROWSER_E2E_DISABLE_GENOME_AUTOLOAD = true;
     (window as any).__FIBERBROWSER_E2E_EXPOSE_STORE = true;
@@ -155,6 +159,7 @@ test('a link from another site is confirmed before anything loads, once', async 
 
 test('a browser without the access token gets the access page, not the data', async ({ browser }) => {
   const stranger = await browser.newContext();
+  await blockNativeDialogs(stranger);
   const page = await stranger.newPage();
   const before = (await api('/api/datasets')).datasets.length;
   await page.goto(`${filesBase}/portal.html`);

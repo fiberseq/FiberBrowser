@@ -22,7 +22,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { ChildProcess } from 'node:child_process';
-import { test, expect, pickRandomPort, startServer, type ServerProcess, TEST_PANEL_LAUNCHER } from './fixtures/server';
+import { test, expect, pickRandomPort, startServer, stopServer, type ServerProcess, TEST_PANEL_LAUNCHER } from './fixtures/server';
 import { TOUR_CHECKED, TOUR_PANEL_STEPS, TOUR_SANDBOX_HIDDEN, TOUR_WALKED_TITLES } from './fixtures/tourTitles';
 
 test.use({ fixtureBam: 'demo' });
@@ -257,9 +257,11 @@ test("the tour tab runs on the demo's genome, not the main tab's", async ({ page
 // tab now loads no genome of its own (the server gives it the demo's), and the tour goes on while the main tab
 // is still getting its genome.
 test.describe('a tour tab and the start-up genome', () => {
+  // Its own server only: no demo-BAM fixture server beside it (the page's baseURL would start one).
+  test.use({ baseURL: async ({}, use) => { await use(undefined); } });
   let proc: ServerProcess | null = null;
   test.afterEach(async () => {
-    proc?.kill('SIGTERM');
+    if (proc) await stopServer(proc);
     proc = null;
   });
 
@@ -340,9 +342,11 @@ test('in a narrow window the tour opens More for the toolbar groups that went th
 // launch decision (fb-n2-sessions: a saved last session becomes the card's first
 // button), then offers the tour, which opens in its own sandbox tab.
 test.describe('the Welcome card offers the tour', () => {
+  // Its own empty server only: no demo-BAM fixture server beside it (the page's baseURL would start one).
+  test.use({ baseURL: async ({}, use) => { await use(undefined); } });
   let proc: ServerProcess | null = null;
   test.afterEach(async () => {
-    proc?.kill('SIGTERM');
+    if (proc) await stopServer(proc);
     proc = null;
   });
 

@@ -15,7 +15,8 @@
  * (prepared packages, ':'-separated; one named `alu`), and FIBERBROWSER_TEST_FASTA with chr3 (no hg38 download).
  * Optional: FIBERBROWSER_TEST_GRAPH_HPRC_PACKAGE, FIBERBROWSER_TEST_LIFT_{BAM,NATIVE,MAP} (live-lift.spec.ts).
  */
-import { test, expect, type Page, type Locator } from '@playwright/test';
+import type { Page, Locator } from '@playwright/test';
+import { test, expect } from './fixtures/nativeDialogs';
 import { execSync } from 'node:child_process';
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -369,7 +370,9 @@ test('an expanded linear insertion leaves the graph panel unchanged (HPRC packag
     await page.getByTestId('live-lift-add').click();
     await expect(page.getByTestId('live-lift-chip')).toHaveCount(2, { timeout: 60_000 });
     await expect.poll(() => page.locator('[data-read-track-loading="true"]').count(), { timeout: 120_000 }).toBe(0);
-    await page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.setState({ fillReadHeight: false, readRowHeight: 16 }));
+    // Insertion marks on reads are off by default (owner, 25 Oct): turn ticks on to click one, as live-lift.spec does.
+    await page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.setState((s: any) => ({ fillReadHeight: false, readRowHeight: 16,
+      differencesSession: { ...s.differencesSession, options: { ...s.differencesSession.options, readBadges: 'ticks' } } })));
     // The lifted molecules are drawn on the graph too (Gate E): wait for them before the reference picture.
     await expect.poll(async () => Number(await graph.getAttribute('data-graph-reads') || 0), { timeout: 60_000 }).toBeGreaterThan(0);
     await expect(graph).toHaveAttribute('data-graph-reads-loading', 'false', { timeout: 60_000 });

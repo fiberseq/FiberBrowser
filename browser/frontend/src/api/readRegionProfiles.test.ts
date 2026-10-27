@@ -4,11 +4,12 @@ import { readRegionProfiles } from './readRegionProfiles';
 import { decodeReadBinary } from './readBinary';
 import { projectLoadedReads } from './loadedReadRegion';
 
-it('matches inclusive profile endpoints and half-open coverage bins', () => {
+it('bins signal and coverage half-open, as the server does', () => {
+  // [10, 20) at 2 bp per bin covers bins 5-9: its end base 20 is not in it (services/read_metrics.py).
   const reads = [{ id: 'one', intervals: [[0, 1000, 1000]] as [number, number, number][],
     layers: { tf: { intervals: [[10, 20, 10]] as [number, number, number][] } } }];
   const profile = readRegionProfiles(reads, 1000, ['tf']);
-  expect(profile.layers?.tf.slice(4, 12)).toEqual([0, 1, 1, 1, 1, 1, 1, 0]);
+  expect(profile.layers?.tf.slice(4, 12)).toEqual([0, 1, 1, 1, 1, 1, 0, 0]);
 });
 
 it('uses the server rounding rule for exact half-millionths', () => {

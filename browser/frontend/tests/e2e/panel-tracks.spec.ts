@@ -87,7 +87,8 @@ test.describe('the SV track', () => {
     await page.evaluate(() => (window as any).__FIBERBROWSER_STORE__.getState().setShowHiddenTrackStrip(false));
     await expect(strips).toHaveCount(0);
     await page.locator('[data-tour="panel-subtracks"]:visible').first().click();
-    await page.getByRole('checkbox', { name: 'Show SVs', exact: true }).check();
+    // The SV track's label is "Differences" since the Differences tracks were unified.
+    await page.getByRole('checkbox', { name: 'Show Differences', exact: true }).check();
     await page.keyboard.press('Escape');
     await expect(rows).toHaveCount(2);
   });
@@ -105,7 +106,7 @@ test.describe('the SV track', () => {
 
       // Drag its bottom edge down 80 px.
       await row.hover();
-      const handle = row.locator('[title="Resize SVs"]');
+      const handle = row.locator('[title="Resize Differences"]');  // the SV track's label since the Differences tracks
       const hb = (await handle.boundingBox())!;
       await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
       await page.mouse.down();

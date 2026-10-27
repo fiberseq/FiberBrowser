@@ -5,14 +5,17 @@
  * sign in, the app loads, its requests all go through the prefix (with the
  * CSRF header), data opens from the lab data folder, a session goes on the lab
  * shelf, and signing out ends it. Needs the frontend build (npm run build).
+ *
+ * The server and the proxy take two of FIBERBROWSER_TEST_PORTS; the proxy that forwards the prefix replaces the
+ * first one on the same port for the last test.
  */
 import { spawn, spawnSync, type ChildProcess } from 'child_process';
 import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import net from 'node:net';
 import os from 'node:os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures/nativeDialogs';
+import { pickPort, requireTestPorts, stopServer, testPorts } from './fixtures/server';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = process.env.FIBERBROWSER_TEST_DIR
@@ -22,16 +25,8 @@ const PYTHON = process.env.FIBERBROWSER_TEST_PYTHON?.trim() || 'python';
 const DEMO_BAM = path.join(REPO_ROOT, 'browser', 'data', 'demo', 'napa_ddda.bam');
 const PASSWORD = 'lab test password';
 
-async function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address();
-      server.close(() => resolve(typeof address === 'object' && address ? address.port : 0));
-    });
-  });
-}
+// The lab server and its proxy run at once.
+requireTestPorts(2);
 
 async function waitFor(url: string, timeoutMs = 45_000): Promise<void> {
   const start = Date.now();
@@ -50,11 +45,11 @@ function logTo(proc: ChildProcess, name: string) {
 }
 
 let server: ChildProcess | null = null;
-const proxies: ChildProcess[] = [];
+let proxy: ChildProcess | null = null;
 let prefix = '';
 let proxyUrl = '';
-let keepPrefixUrl = '';
 let dataDir = '';
+let startProxy: (extra: string[]) => ChildProcess;
 
 test.beforeAll(async () => {
   const scratch = mkdtempSync(path.join(os.tmpdir(), 'fiberbrowser-e2e-lab-'));
@@ -63,9 +58,8 @@ test.beforeAll(async () => {
   mkdirSync(path.join(scratch, 'runs'));
   copyFileSync(DEMO_BAM, path.join(dataDir, 'napa_ddda.bam'));
   copyFileSync(`${DEMO_BAM}.bai`, path.join(dataDir, 'napa_ddda.bam.bai'));
-  const port = await freePort();
-  const proxyPort = await freePort();
-  const keepPort = await freePort();
+  const port = await pickPort(testPorts()[0]);
+  const proxyPort = await pickPort(testPorts()[0], [port]);
   prefix = `/rnode/localhost/${port}`;
   const config = path.join(scratch, 'server.toml');
   writeFileSync(config, [
@@ -84,6 +78,9 @@ test.beforeAll(async () => {
     FIBERBROWSER_SETTINGS: path.join(REPO_ROOT, 'tests', '__no_user_settings__.json'),
     FIBERBROWSER_RUNTIME_FILE: path.join(scratch, 'runtime.json'),
     FIBERBROWSER_LIBRARY_NO_STARTUP_SCAN: '1',
+    // Only the picked test port: the server's own fallback would walk to ports outside FIBERBROWSER_TEST_PORTS.
+    FIBERBROWSER_PORT_MIN: String(port),
+    FIBERBROWSER_PORT_MAX: String(port),
   };
   const added = spawnSync(PYTHON, ['-m', 'fiberbrowser', 'users', 'add', 'alice', '--role', 'admin',
     '--password-stdin', '--config', config], { cwd: REPO_ROOT, env, input: `${PASSWORD}\n`, encoding: 'utf-8' });
@@ -91,20 +88,19 @@ test.beforeAll(async () => {
   server = spawn(PYTHON, ['-m', 'fiberbrowser', 'serve', '--config', config], { cwd: REPO_ROOT, env });
   logTo(server, 'lab-server');
   const proxyScript = path.join(REPO_ROOT, 'deploy', 'ondemand', 'dev', 'rnode_proxy.py');
-  for (const [listen, extra] of [[proxyPort, []], [keepPort, ['--keep-prefix']]] as const) {
-    const proc = spawn(PYTHON, [proxyScript, '--listen', String(listen), '--backend', `127.0.0.1:${port}`,
+  startProxy = extra => {
+    const proc = spawn(PYTHON, [proxyScript, '--listen', String(proxyPort), '--backend', `127.0.0.1:${port}`,
       '--prefix', prefix, '--quiet', ...extra], { cwd: REPO_ROOT, env });
     logTo(proc, 'proxy');
-    proxies.push(proc);
-  }
+    return proc;
+  };
+  proxy = startProxy([]);
   proxyUrl = `http://127.0.0.1:${proxyPort}`;
-  keepPrefixUrl = `http://127.0.0.1:${keepPort}`;
   await waitFor(`${proxyUrl}${prefix}/auth/login`);
-  await waitFor(`${keepPrefixUrl}${prefix}/auth/login`);
 });
 
 test.afterAll(async () => {
-  for (const proc of [server, ...proxies]) proc?.kill('SIGTERM');
+  for (const proc of [proxy, server]) if (proc) await stopServer(proc);
 });
 
 test('a lab member signs in and works under the OnDemand-style prefix', async ({ page }) => {
@@ -170,6 +166,11 @@ test('a lab member signs in and works under the OnDemand-style prefix', async ({
 });
 
 test('a proxy that forwards the prefix (OnDemand /node/ style) works too', async ({ request }) => {
+  // The same port, now a proxy that keeps the prefix.
+  if (proxy) await stopServer(proxy);
+  proxy = startProxy(['--keep-prefix']);
+  await waitFor(`${proxyUrl}${prefix}/auth/login`);
+  const keepPrefixUrl = proxyUrl;
   const login = await request.get(`${keepPrefixUrl}${prefix}/auth/login`);
   expect(login.status()).toBe(200);
   expect(await login.text()).toContain(`action='${prefix}/auth/login'`);

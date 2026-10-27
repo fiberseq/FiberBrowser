@@ -24,7 +24,9 @@
  *                                    strip above the reads, as if each viewer had chosen it)
  */
 import { spawn, type ChildProcess } from 'child_process';
-import { test as base, type Locator, type Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
+// Native file dialogs are answered in the browser in every test context (fixtures/nativeDialogs.ts).
+import { test as base } from './nativeDialogs';
 import { existsSync, mkdtempSync, statSync } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -50,6 +52,15 @@ export function testPorts(raw = process.env.FIBERBROWSER_TEST_PORTS): number[] {
 }
 const TEST_PORTS = testPorts();
 const portListText = () => TEST_PORTS.join(', ');
+
+/**
+ * Skip (with the reason) a test that runs `count` servers at once when FIBERBROWSER_TEST_PORTS lists fewer
+ * ports. Call it in the test, its describe or at the top of the spec file.
+ */
+export function requireTestPorts(count: number): void {
+  base.skip(TEST_PORTS.length < count,
+    `runs ${count} servers at once: list ${count} ports in FIBERBROWSER_TEST_PORTS (e.g. 8880,8881); it has ${portListText()}`);
+}
 const RICH_DAF_REGION = { chrom: 'chr2R', start: 9_929_319, end: 10_029_319 };
 // The tracked NAPA demo BAM: 3,202 DddA reads on chr19 starting 47,514,488-47,517,768.
 const DEMO_REGION = { chrom: 'chr19', start: 47_514_000, end: 47_518_000 };
@@ -221,7 +232,13 @@ async function startServerOn(
   // job registry, no rescan of watched folders at startup, and a scratch upload cache.
   const scratch = mkdtempSync(path.join(os.tmpdir(), 'fiberbrowser-e2e-library-'));
   const fastaPath = process.env.FIBERBROWSER_TEST_FASTA?.trim();
-  if (fastaPath) args.push('--fasta', fastaPath);
+  if (fastaPath) {
+    // The server runs from the repository root: pass the path absolute, and never start one without the reference
+    // it was meant to have (with none, genome autoload can start an hg38 download).
+    const resolved = path.resolve(fastaPath);
+    if (!existsSync(resolved)) throw new Error(`FIBERBROWSER_TEST_FASTA does not exist: ${resolved}`);
+    args.push('--fasta', resolved);
+  }
   args.push(...(options.extraArgs ?? []));
   const proc = spawn(
     process.env.FIBERBROWSER_TEST_PYTHON?.trim() || 'python',
@@ -381,6 +398,7 @@ export const test = base.extend<{ server: ServerFixture } & ServerOptions>({
 });
 
 export { expect } from '@playwright/test';
+export { blockNativeDialogs } from './nativeDialogs';
 
 /**
  * Settings → Show preview features on for this page (Preview features: the Variants panel, insert-expanded panels;
