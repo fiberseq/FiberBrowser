@@ -533,7 +533,9 @@ def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts, small):
     # So do the intervals whose ends may take the decoder's end rules (compose._legacy_ends,
     # compose._aligned_ends): an end inside a source-only stretch of the row, and for legacy calls an end
     # at the first base of a fragment after a junction, or on a '-' row an end inside a read insertion.
-    by_hand |= todo & _end_rule_candidates(E_r, A, B, E_seg, E_i, E_d, segs, F, R)
+    KA, KB = F.find(E_r, A), F.find(E_r, B - 1)   # the last fragment starting at or before each end
+    cand, stub = _end_rule_candidates(E_r, A, B, E_seg, E_i, E_d, segs, F, R, KA, KB)
+    by_hand |= todo & cand
     extra = []
     for e in np.flatnonzero(by_hand).tolist():
         s = int(E_seg[e])
@@ -541,15 +543,26 @@ def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts, small):
         d = row_read[r]
         for part in rest_parts(int(E_i[e]), u.ivs, u.calls, row, int(base[d]), items[d][2], F.rs0[r], F.width[r]):
             extra.append((s, *part))
+    # A legacy call inside one junction's source-only stretch (a badge) is the decoder's 1-bp interval at the
+    # junction's insertion (compose._legacy_ends), unless the junction cuts; an MA call there has no part.
+    for e in np.flatnonzero(todo & stub & ~by_hand & UHAS[E_u]).tolist():
+        s = int(E_seg[e])
+        r, row, _u = segs[s]
+        j = int(KA[e])
+        if row.cut[j]:
+            continue
+        p = row.pi[j] - int(RS0[r])
+        if min(p + 1, int(WID[r])) > max(p, 0):
+            extra.append((s, max(p, 0), min(p + 1, int(WID[r])), int(E_i[e]), j))
     # Every other interval: one part per fragment it overlaps (row.parts;
     # nearly always the one fragment holding it whole).
     ei = np.flatnonzero(todo & ~by_hand)
     r, a, b = E_r[ei], A[ei], B[ei]
-    k = F.find(r, a)
+    k = KA[ei]
     soff = F.soff[r]
     last = max(len(F.sidx) - 1, 0)
     k0 = np.where((k >= 0) & (F.e[F.sidx[np.clip(soff + np.maximum(k, 0), 0, last)]] > a), k, k + 1)
-    k1 = np.searchsorted(F.skey, r * _SHIFT + b, side="left") - 1 - soff
+    k1 = KB[ei]   # the last fragment starting before b
     n = np.maximum(k1 - k0 + 1, 0)
     # (interval, fragment) candidates, a slice of intervals at a time so that
     # intervals crossing many fragments never expand past the batch budget.
@@ -640,30 +653,34 @@ def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts, small):
                                   list(map(quals.__getitem__, ranks)) if quals else None)
 
 
-def _end_rule_candidates(E_r, A, B, E_seg, E_i, E_d, segs, F, R):
-    """Elements (an interval on a row) whose ends ``compose._map_group`` may move off their fragments'
-    edges: an end inside a junction's source-only stretch (a badge) of its row; for a legacy call
-    (``compose._legacy_group``) an end at the first base of a fragment that follows a junction, or, on a
-    '-' row, an end inside a read insertion. The rest map by their fragments alone."""
+def _end_rule_candidates(E_r, A, B, E_seg, E_i, E_d, segs, F, R, KA, KB):
+    """``(candidates, stubs)`` over elements (an interval on a row). Candidates: elements whose ends
+    ``compose._map_group`` may move off their fragments' edges (they go one by one): one end inside a
+    junction's source-only stretch (a badge) of its row; for a legacy call (``compose._legacy_group``) an
+    end at the first base of a fragment that follows a junction, or, on a '-' row, an end inside a read
+    insertion. Stubs: legacy elements inside one badge (the decoder's 1-bp interval there; ``KA`` is the
+    junction). An MA element inside one badge has no part. ``KA``/``KB``: ``F.find`` of each end."""
     n = len(E_r)
     out = np.zeros(n, dtype=bool)
+    stub = np.zeros(n, dtype=bool)
     if not n or not len(F.skey):
-        return out
+        return out, stub
     last = len(F.sidx) - 1
     nfr = F.nfr[E_r]
     soff = F.soff[E_r]
-    ends = []
-    for x in (A, B - 1):
-        k = F.find(E_r, x)
+    ends, badges = [], []
+    for x, k in ((A, KA), (B - 1, KB)):
         g = F.sidx[np.clip(soff + np.maximum(k, 0), 0, last)]
         gn = F.sidx[np.clip(soff + np.maximum(k, 0) + 1, 0, last)]
         inside = (k >= 0) & (x < F.e[g])
-        badge = (k >= 0) & ~inside & (k + 1 < nfr) & F.inner_next[g] & (x < F.s[gn])
-        out |= badge
+        badges.append((k >= 0) & ~inside & (k + 1 < nfr) & F.inner_next[g] & (x < F.s[gn]))
         ends.append((x, k, g, inside))
+    within = badges[0] & badges[1] & (KA == KB)   # inside one badge
+    out |= (badges[0] | badges[1]) & ~within
     legacy = np.fromiter((compose_legacy(segs[s][2]) for s in range(len(segs))), dtype=bool, count=len(segs))[E_seg]
     if not legacy.any():
-        return out
+        return out, stub
+    stub = legacy & within
     for x, k, g, inside in ends:
         out |= legacy & inside & (x == F.s[g]) & F.after[g]
     minus = legacy & F.minus[F.off[E_r]]   # a row's fragments share its strand
@@ -687,7 +704,7 @@ def _end_rule_candidates(E_r, A, B, E_seg, E_i, E_d, segs, F, R):
         ins1, ex1 = R.inserted(d, np.asarray(mr, dtype=np.int64))
         ok = np.asarray(ok, dtype=bool)
         out[idx] |= ~ok | ~ex0 | ~ex1 | ins0 | ins1
-    return out
+    return out, stub & ~out
 
 
 def compose_legacy(unit):

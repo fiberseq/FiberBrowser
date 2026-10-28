@@ -117,8 +117,9 @@ def _read(rng, i):
         # The whole record's call bounds (absolute source): the per-record footprint rules run per run.
         fp = sorted([base + v[0], base + v[1]] for v in ivs if v[2] > 0 and v[1] > v[0])
         lo_x, hi_x = rs + rng.randrange(-20, 200), re_ - rng.randrange(-20, 200)
+        fp = fp if rng.random() < 0.9 else []
         read["_fiberbrowser_call_bounds"] = {
-            "fp": fp if rng.random() < 0.9 else [],
+            "fp": fp, "fp_extent": [fp[0][0], max(e for _s, e in fp)] if fp else None,
             "extent": [lo_x, hi_x] if rng.random() < 0.6 and hi_x > lo_x else None,
             "dropped": sorted([base + v[0], base + v[1]] for v in rng.sample(ivs, min(len(ivs), 2)) if v[1] > v[0])
             if rng.random() < 0.3 else [],

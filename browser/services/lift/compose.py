@@ -677,9 +677,11 @@ def _hull_in_run(a, b, row, lo, hi, legacy):
     return t0, t1
 
 
-def _first_last(spans, a, b):
-    """Indices of the first and last of the sorted ``[s, e]`` spans overlapping ``[a, b)``, or None."""
-    starts = [s[0] for s in spans]
+def _first_last(spans, a, b, starts=None):
+    """Indices of the first and last of the sorted ``[s, e]`` spans overlapping ``[a, b)``, or None
+    (``starts``: their starts, when kept)."""
+    if starts is None:
+        starts = [s[0] for s in spans]
     i = bisect.bisect_left(starts, a)
     if i > 0 and spans[i - 1][1] > a:
         i -= 1
@@ -714,11 +716,12 @@ def _ma_ref_spans(read, runs):
     return cached
 
 
-def _extreme_hull(spans, a, b, row, lo, hi, legacy, order=None):
+def _extreme_hull(spans, a, b, row, lo, hi, legacy, order=None, starts=None):
     """Target extent ``(t0, t1)`` of the sorted ``[s, e]`` spans overlapping source ``[a, b)`` on run frags
     ``lo..hi``, from the outermost ones (first by start, last by end) that land on that run (placement is
-    monotone along a run), or None. ``order``: the spans' indices by descending end, when known."""
-    got = _first_last(spans, a, b)
+    monotone along a run), or None. ``order``: the spans' indices by descending end, ``starts`` their starts,
+    when known."""
+    got = _first_last(spans, a, b, starts)
     if got is None:
         return None
     i, j = got
@@ -746,8 +749,17 @@ def _run_calls(read, bounds, row, lo, hi, runs, whole, extent=True):
     frags = row.frags
     a, b = frags[lo].s, frags[hi].e
     fp = bounds.get("fp") or ()
-    has_fp = bool(fp) and _first_last(fp, a, b) is not None
-    fp_ext = _extreme_hull(fp, a, b, row, lo, hi, True, bounds.get("_fp_by_end")) if has_fp else None
+    if whole:  # every footprint is on the run: the record's footprint extent placed on it
+        span = bounds.get("fp_extent")
+        has_fp = span is not None
+        fp_ext = _hull_in_run(span[0], span[1], row, lo, hi, True) if has_fp else None
+    else:
+        starts = bounds.get("_fp_starts")
+        if starts is None:
+            starts = bounds["_fp_starts"] = [s[0] for s in fp]
+            bounds["_fp_by_end"] = sorted(range(len(fp)), key=lambda x: -fp[x][1])
+        has_fp = bool(fp) and _first_last(fp, a, b, starts) is not None
+        fp_ext = _extreme_hull(fp, a, b, row, lo, hi, True, bounds["_fp_by_end"], starts) if has_fp else None
     ext = None
     if not extent:  # shown terminal gaps: the decoder neither filters nor bounds gaps by the call extent
         return has_fp, fp_ext, None
@@ -810,11 +822,9 @@ def _run_filter(read, rows, runs, ctx):
         return rows
     hide = ctx.hide_terminal_gaps
     thr = ctx.terminal_gap_threshold if hide else 0
-    fp, span = bounds.get("fp") or (), bounds.get("extent")
-    if fp and "_fp_by_end" not in bounds:
-        bounds["_fp_by_end"] = sorted(range(len(fp)), key=lambda x: -fp[x][1])
-    rec_lo = min(([fp[0][0]] if fp else []) + ([span[0]] if span else []), default=None)
-    rec_hi = max(([fp[bounds["_fp_by_end"][0]][1]] if fp else []) + ([span[1]] if span else []), default=None)
+    fp_span, span = bounds.get("fp_extent"), bounds.get("extent")
+    rec_lo = min(([fp_span[0]] if fp_span else []) + ([span[0]] if span else []), default=None)
+    rec_hi = max(([fp_span[1]] if fp_span else []) + ([span[1]] if span else []), default=None)
     supplementary = _supplementary_runs(read, rows, runs)
     out = []
     for row in rows:
@@ -917,24 +927,13 @@ def _row_geometry(row, contig, runs, ctx):
         p = run[0].p
         row.segments.append([min(f.t0 for f in run), max(f.t1 for f in run), p.chain, p.strand, p.primary])
     n = max(len(row.frags) - 1, 0)
-    row.merge, row.cut, row.pi, row.ri = [False] * n, [False] * n, [0] * n, [0] * n
+    row.merge, row.cut = [False] * n, [False] * n
+    row.pi, row.ri = _BlockEdges(row, runs, False), _BlockEdges(row, runs, True)
     mols = {}
     for k, gap in enumerate(row.inner):
         prev, f = row.frags[k], row.frags[k + 1]
         if gap is not None:
             row.merge[k] = True
-            # The end of the target-left fragment's last aligned block (a read deletion at its edge ends the
-            # block early; liftbam then writes the deleted bases into the junction's D, after the I).
-            if f.minus:
-                x = runs.first_aligned_at(f.s, f.e)
-                row.pi[k] = f.T(x) + 1 if x is not None else f.t1
-                x = runs.last_aligned_before(prev.e, prev.s)
-                row.ri[k] = prev.T(x) if x is not None else prev.t0
-            else:
-                x = runs.last_aligned_before(prev.e, prev.s)
-                row.pi[k] = prev.T(x) + 1 if x is not None else prev.t1
-                x = runs.first_aligned_at(f.s, f.e)
-                row.ri[k] = f.T(x) if x is not None else f.t0
         if (gap is None and ctx.handle is not None and prev.p.primary and f.p.primary
                 and prev.p.chain == f.p.chain and prev.p.strand == f.p.strand):
             # g_split remains a display-run boundary. Preserve the exact owned
@@ -964,6 +963,41 @@ def _row_geometry(row, contig, runs, ctx):
         _junction_cuts(row, mols, ctx.sv_min_len)
 
 
+class _BlockEdges:
+    """``row.pi`` (``right`` False) or ``row.ri``, computed on first use per junction: the target-left
+    fragment's last aligned block end, or the target-right fragment's first aligned block start (a read
+    deletion at a fragment's edge moves its block edge; liftbam writes those deleted bases into the
+    junction's D, after the I)."""
+    __slots__ = ("row", "runs", "right", "cache")
+
+    def __init__(self, row, runs, right):
+        self.row, self.runs, self.right, self.cache = row, runs, right, {}
+
+    def __len__(self):
+        return len(self.row.inner)
+
+    def __getitem__(self, k):
+        v = self.cache.get(k)
+        if v is None:
+            prev, f = self.row.frags[k], self.row.frags[k + 1]
+            runs = self.runs
+            if not self.right:  # pi: after the target-left fragment's last aligned base
+                if f.minus:  # the target-left fragment is the later one in source order
+                    x = runs.first_aligned_at(f.s, f.e)
+                    v = f.T(x) + 1 if x is not None else f.t1
+                else:
+                    x = runs.last_aligned_before(prev.e, prev.s)
+                    v = prev.T(x) + 1 if x is not None else prev.t1
+            elif f.minus:  # ri: the target-right fragment's first aligned base
+                x = runs.last_aligned_before(prev.e, prev.s)
+                v = prev.T(x) if x is not None else prev.t0
+            else:
+                x = runs.first_aligned_at(f.s, f.e)
+                v = f.T(x) if x is not None else f.t0
+            self.cache[k] = v
+        return v
+
+
 def _junction_cuts(row, mols, sv_min_len):
     """``row.cut``: junctions whose map gap is part of an indel event of at least ``sv_min_len`` on the
     lifted record, grouped as the decoder groups CIGAR pieces (``sv_alleles.cigar_replacements``: pieces of
@@ -986,7 +1020,10 @@ def _junction_cuts(row, mols, sv_min_len):
     first = 0
     for run in row.runs:
         last = first + len(run) - 1
-        if any(inner[k][1] >= SV_PIECE_MIN or mols.get(k, 0) >= SV_PIECE_MIN for k in range(first, last)):
+        # An event reaches sv_min_len only with that many inserted or deleted bases among its pieces.
+        if (any(inner[k][1] >= SV_PIECE_MIN or mols.get(k, 0) >= SV_PIECE_MIN for k in range(first, last))
+                and (sum(inner[k][1] for k in range(first, last)) >= sv_min_len
+                     or sum(mols.get(k, 0) for k in range(first, last)) >= sv_min_len)):
             pieces = []
             for k in range(first, last + 1):
                 f = frags[k]
@@ -1220,6 +1257,14 @@ def _legacy_ends(st, ai, bi, call, row, runs):
     record's soft clip (another placement, or the read's own clip) is placed
     by aligned bases only; its target end follows the rule only inside the
     same record. On a '-' row the call's source start is its target end."""
+    if not st:
+        # A call inside one junction's source-only stretch lies inside the lifted record's insertion: the
+        # decoder's 1-bp interval at the insertion, unless the junction's D is cut.
+        j = row.badge_at(ai)
+        if j is not None and j == row.badge_at(bi - 1) and not row.cut[j]:
+            p = row.pi[j]
+            return [[p, p + 1, j, j]]
+        return st
     minus = row.strand == "-"
     m0, m1 = int(call[1]), int(call[2])
     rev = runs.reverse
@@ -1236,11 +1281,6 @@ def _legacy_ends(st, ai, bi, call, row, runs):
     end = _insertion_end(xe, me, row, runs) if same else None
     if start is None and end is None:
         return st if same else _aligned_ends(st, ai, bi, row, start_side=False)
-    if not st:
-        if start is None or end is None or start[1] is None or start[1] != end[1] or row.cut[start[1]]:
-            return st
-        p, j = start
-        return [[p, p + 1, j, j]]
     st = [list(s) for s in st]
     # The target start is the first stretch's on '+' (source order), the last one's on '-'.
     first, last = (st[-1], st[0]) if minus else (st[0], st[-1])

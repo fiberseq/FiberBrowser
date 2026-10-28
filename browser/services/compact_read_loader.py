@@ -2756,6 +2756,8 @@ def _build_compact_reads_from_bam_region(
                 # some of them.
                 read_data["_fiberbrowser_call_bounds"] = {
                     "fp": sorted([int(fp[0]), int(fp[1])] for fp in footprints),
+                    "fp_extent": ([min(int(fp[0]) for fp in footprints), max(int(fp[1]) for fp in footprints)]
+                                  if footprints else None),
                     "extent": [int(call_extent[0]), int(call_extent[1])] if call_extent is not None else None,
                     "dropped": sorted([int(fp[0]), int(fp[1])] for fp in dropped_footprints),
                     "ma": ((ma_tags, read_length, bool(read.is_reverse), family_contracts, lift_call_meta[1])
