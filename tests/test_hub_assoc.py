@@ -459,3 +459,28 @@ def test_m4_groups_are_dataset_ids():
               dict(hitId='p2', columns={'ds:b': {'strength': {'v': 1}}})]
     by = _hits_by_dataset(st, t, ['a', 'b'])
     assert {k: [h['hitId'] for h in v] for k, v in by.items()} == {'a': ['p1'], 'b': ['p1', 'p2']}
+
+
+def test_assembly_scan_covariates_are_read_in_source_coordinates(monkeypatch):
+    """Codex round 3 (A): a source-frame scan's molecule tables are read over the hits' source spans, never over this
+    genome's windows."""
+    from services.hub import assoc_inputs as AI
+    import services.scan.registry as reg
+    fetches = []
+
+    class Tables:
+        def has(self, rel):
+            return True
+
+        def fetch(self, rel, chrom, s, e):
+            fetches.append((chrom, s, e))
+            return [dict(dataset_id='dataset_1', record='r:0', input_index=0, qname='q1', molecule='mol:v1 a', openness='0.7')]
+    fake = NS(frame={'kind': 'source'}, tables=Tables(), scan_id='s', bound_pairs=lambda: iter([('dataset_1', 'ds_l', 'input', {})]))
+    monkeypatch.setattr(reg, 'list_scans', lambda state: [fake])
+    mols = AI.Molecules()
+    mols.add('ds_l', 'mol:v1 a', 'q1')
+    st = _state()
+    none = AI.molecule_scalars(st, mols, 'nfr', ['openness'], [(CONTIG, 0, 10_000)])
+    assert np.isnan(none['openness'][0]) and fetches == []       # no source windows: nothing read in browser coords
+    got = AI.molecule_scalars(st, mols, 'nfr', ['openness'], [(CONTIG, 0, 10_000)], source_windows=[('chrT_MAT', 100, 900)])
+    assert got['openness'][0] == pytest.approx(0.7) and fetches == [('chrT_MAT', 100, 900)]

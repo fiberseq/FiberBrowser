@@ -230,3 +230,35 @@ def test_lift_points_maps_each_sample_through_its_haplotypes_pieces(monkeypatch)
     out, contig = lift_points(state, NS(browser_id='ds'), 'MAT', 'chrT', pts)
     assert contig == 'chrT_MAT'
     assert out.tolist() == [100, 599, -1, -1, -1, 600, 1199, 999, 900, -1]
+
+
+def test_assembly_hits_are_lifted_per_sample_unless_inside_an_insertion(monkeypatch):
+    """Codex round 3 (C): a placed (non-insertion) hit of an assembly scan is sampled on this genome's axis and each
+    sample lifted, on its own dataset too; only a hit inside an insertion is sampled on its own source coordinates."""
+    import services.hub.overlay as ov
+    import services.nuc.inputs as ni
+    import services.nuc.observations as no
+    calls, fetched = [], []
+    monkeypatch.setattr(ni, 'nuc_source', lambda state, ds: NS(browser_id=ds, kind='lifted', paths=()))
+    monkeypatch.setattr(ni, 'browser_read_policy', lambda state, include_duplicates=False: {'filters': {}})
+
+    def fake_lift(state, source, hap, chrom, pts):
+        calls.append((chrom, int(pts.min()), int(pts.max())))
+        return pts + 20_000, 'chrT_MAT'
+    monkeypatch.setattr(ov, 'lift_points', fake_lift)
+
+    def fake_cohort(state, scoped, policy):
+        fetched.append(scoped['graph'])
+        return None, [], [(scoped['graph']['contig'], scoped['graph']['start'], scoped['graph']['end'])], None, [], {'missing': 0}
+    monkeypatch.setattr(no, 'observation_cohort', fake_cohort)
+    obs = [dict(obsId='m', label='MAT', datasetId='ds_lift', kind='linear', liftHap='MAT')]
+    src = dict(chrom='chrT_MAT', start=50_000, end=50_300, anchor=50_150, hap='MAT', datasetId='ds_lift')
+    placed = dict(key='p', chrom='chrT', start=1000, end=1200, anchor=1100, source=src)
+    ov.overlay(None, dict(loci=[placed], layer='regular', align='left', flank=100, observations=obs, pileMax=0))
+    assert calls and calls[0][0] == 'chrT'                       # lifted from this genome's axis
+    assert fetched[0]['contig'] == 'chrT_MAT' and 20_900 <= fetched[0]['start'] < 20_910    # the lifted samples' span
+    calls.clear(); fetched.clear()
+    inside = dict(key='i', chrom='chrT', start=1200, end=1201, anchor=1200, insertion=True, source=src)
+    ov.overlay(None, dict(loci=[inside], layer='regular', align='left', flank=100, observations=obs, pileMax=0))
+    assert not calls                                             # its own source coordinates, no lift
+    assert fetched[0]['contig'] == 'chrT_MAT' and 49_900 <= fetched[0]['start'] < 49_910    # source coordinates
