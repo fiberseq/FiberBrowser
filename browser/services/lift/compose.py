@@ -414,19 +414,61 @@ class _Row:
         return k
 
 
-def _runs_from_frags(frags, g_split):
+def _runs_from_frags(frags, g_split, seq_runs=None):
+    """Fragments as chain runs (liftbam's records): a run breaks on a chain, strand or primary change, a
+    backwards step, or a read or target gap of at least ``g_split`` between its aligned blocks (liftbam's
+    ``continues``; the source gap and the fragments' target gap without the record's aligned runs). With
+    them, each run is trimmed to its first and last aligned base (liftbam's record ends there) and a run
+    with no aligned base is dropped (liftbam writes no record)."""
     frags = sorted(frags, key=lambda f: (f.s, f.t0))
+    aligned = seq_runs if seq_runs is not None and seq_runs.ref else None
     runs = []
     for f in frags:
-        if runs:
-            prev = runs[-1][-1]
-            gap = (prev.t0 - f.t1) if f.minus else (f.t0 - prev.t1)
-            if (f.p.chain == prev.p.chain and f.p.strand == prev.p.strand and f.p.primary == prev.p.primary
-                    and f.s >= prev.e and 0 <= gap < g_split):
-                runs[-1].append(f)
-                continue
-        runs.append([f])
+        if runs and _continues(runs[-1], f, g_split, aligned):
+            runs[-1].append(f)
+        else:
+            runs.append([f])
+    if aligned is not None:
+        runs = [t for t in (_trim_run(run, aligned) for run in runs) if t]
     return runs
+
+
+def _continues(run, f, g_split, seq_runs):
+    """Whether fragment ``f`` extends ``run`` (fragments sorted by source start)."""
+    prev = run[-1]
+    if (f.p.chain != prev.p.chain or f.p.strand != prev.p.strand or f.p.primary != prev.p.primary
+            or f.s < prev.e):
+        return False
+    gap = (prev.t0 - f.t1) if f.minus else (f.t0 - prev.t1)
+    if not 0 <= gap < g_split:
+        return False
+    if seq_runs is None:
+        return f.s - prev.e < g_split
+    x = seq_runs.first_aligned_at(f.s, f.e)
+    y = seq_runs.last_aligned_before(prev.e, run[0].s)
+    if x is None or y is None:  # no aligned block on one side yet: nothing for liftbam to split
+        return True
+    fy = next((g for g in reversed(run) if g.s <= y < g.e), None)
+    if fy is None:
+        return True
+    ty, tx = fy.T(y), f.T(x)
+    dt = (ty - tx - 1) if f.minus else (tx - ty - 1)
+    dq = seq_runs.seq_at(x) - seq_runs.seq_at(y) - 1
+    return dt < g_split and dq < g_split
+
+
+def _trim_run(run, seq_runs):
+    """The run from its first aligned base to its last (empty without one)."""
+    lo, hi = run[0].s, max(f.e for f in run)
+    x, y = seq_runs.first_aligned_at(lo, hi), seq_runs.last_aligned_before(hi, lo)
+    if x is None or y is None:
+        return []
+    out = []
+    for f in run:
+        s, e = max(f.s, x), min(f.e, y + 1)
+        if e > s:
+            out.append(f if s == f.s and e == f.e else _Frag(s, e, f.p))
+    return out
 
 
 def _rows_from_runs(runs, alt, rejoin_bp):
@@ -581,7 +623,7 @@ def lift_compact_reads(reads, plan, *, handle, region_start, region_end, setting
     return out
 
 
-def _read_rows(read, indexed, settings):
+def _read_rows(read, indexed, settings, seq_runs=None):
     """A read's rows: primary fragments, then one row set per alternative chain.
     ``indexed``: ``(pieces, their q_starts[, running max of q_end])``, pieces
     sorted by ``(q_start, q_end)``."""
@@ -594,9 +636,10 @@ def _read_rows(read, indexed, settings):
         s, e = max(p.q_start, rs), min(p.q_end, re_)
         if e > s:
             (primary_frags if p.primary else alt_frags.setdefault(p.chain, [])).append(_Frag(s, e, p))
-    rows = _rows_from_runs(_runs_from_frags(primary_frags, settings.g_split), False, settings.rejoin_bp)
+    rows = _rows_from_runs(_runs_from_frags(primary_frags, settings.g_split, seq_runs), False, settings.rejoin_bp)
     for chain in sorted(alt_frags):
-        rows += _rows_from_runs(_runs_from_frags(alt_frags[chain], settings.g_split), True, settings.rejoin_bp)
+        rows += _rows_from_runs(_runs_from_frags(alt_frags[chain], settings.g_split, seq_runs), True,
+                                settings.rejoin_bp)
     return rows
 
 
@@ -610,7 +653,7 @@ def project_aligned_runs(read, pieces, settings, *, alternatives=False):
     runs = _SeqRuns(read.get("_fiberbrowser_aligned_runs"), rec)
     pieces = sorted(pieces, key=lambda p: (p.q_start, p.q_end))
     out = []
-    for idx, row in enumerate(_read_rows(read, (pieces, [p.q_start for p in pieces]), settings)):
+    for idx, row in enumerate(_read_rows(read, (pieces, [p.q_start for p in pieces]), settings, runs)):
         if row.alt and not alternatives:
             continue
         for r0, s0, n in zip(runs.ref, runs.seq, runs.len):
@@ -633,7 +676,7 @@ def _read_geometry(read, by_contig, haps, ctx):
     contig = rec.get("contig")
     runs = _SeqRuns(read.get("_fiberbrowser_aligned_runs"), rec)
     rs, re_ = int(read["reference_start"]), int(read["reference_end"])
-    rows = _read_rows(read, by_contig.get(contig) or ([], [], []), ctx.settings)
+    rows = _read_rows(read, by_contig.get(contig) or ([], [], []), ctx.settings, runs)
     if not rows:
         ctx.count("records_without_correspondence")
         return None
@@ -714,26 +757,31 @@ def _first_last(spans, a, b, starts=None):
     return i, j
 
 
+def _ma_spans(read, runs, named=False):
+    """The record's MA footprint calls (nuc, tf, fp_v2) as aligned source spans ``[r0, r1]`` (or
+    ``(r0, r1, name)``), parsed from the call bounds the source decode kept."""
+    from services.compact_read_loader import ma_footprint_query_spans
+    ma = (read.get("_fiberbrowser_call_bounds") or {}).get("ma")
+    out = []
+    if ma is not None:
+        tags, length, reverse, contracts, lead = ma
+        for name, q0, q1 in ma_footprint_query_spans(tags, read_length=length, is_reverse=reverse,
+                                                      family_contracts=contracts):
+            s0, s1 = q0 + lead, q1 + lead
+            m = (runs.length - s1, runs.length - s0) if runs.reverse else (s0, s1)
+            span = runs.ref_span(*m)
+            if span is not None:
+                out.append((span[0], span[1], name) if named else list(span))
+    out.sort()
+    return out
+
+
 def _ma_ref_spans(read, runs):
-    """The record's MA footprint calls (nuc, tf, fp_v2) as aligned source spans, sorted (parsed once per
-    record from the call bounds the source decode kept)."""
+    """``_ma_spans`` of the record, sorted, once per record."""
     bounds = read["_fiberbrowser_call_bounds"]
     cached = bounds.get("_ma_ref")
     if cached is None:
-        from services.compact_read_loader import ma_footprint_query_spans
-        ma = bounds.get("ma")
-        cached = []
-        if ma is not None:
-            tags, length, reverse, contracts, lead = ma
-            for _name, q0, q1 in ma_footprint_query_spans(tags, read_length=length, is_reverse=reverse,
-                                                            family_contracts=contracts):
-                s0, s1 = q0 + lead, q1 + lead
-                m = (runs.length - s1, runs.length - s0) if runs.reverse else (s0, s1)
-                span = runs.ref_span(*m)
-                if span is not None:
-                    cached.append(list(span))
-            cached.sort()
-        bounds["_ma_ref"] = cached
+        cached = bounds["_ma_ref"] = _ma_spans(read, runs)
     return cached
 
 
@@ -816,7 +864,7 @@ def _explicit_ma(read, row, lo, hi, ctx, supplementary):
     return bool(ctx.min_footprints <= 0 and ctx.min_fp_quality <= 0 and supplementary())
 
 
-def _record_runs(read, ctx):
+def _record_runs(read, ctx, seq_runs=None):
     """liftbam's placements of the record: its whole source span through every primary piece of the map
     (outside the selection too), as chain runs; None without a map."""
     if ctx.handle is None:
@@ -826,7 +874,7 @@ def _record_runs(read, ctx):
     haps = {p.hap for p in ctx.selection.pieces}
     frags = [_Frag(max(p.q_start, rs), min(p.q_end, re_), p) for p in ctx.projections(contig, rs, re_, haps)
              if p.primary and min(p.q_end, re_) > max(p.q_start, rs)]
-    return _runs_from_frags(frags, ctx.settings.g_split)
+    return _runs_from_frags(frags, ctx.settings.g_split, seq_runs)
 
 
 def _supplementary_runs(read, rows, runs, ctx):
@@ -838,7 +886,7 @@ def _supplementary_runs(read, rows, runs, ctx):
     if (read.get("_fiberbrowser_primary") or {}).get("is_supplementary"):
         return every
     placed = [(row, r, run) for row in rows if not row.alt for r, run in enumerate(row.runs)]
-    full = _record_runs(read, ctx)
+    full = _record_runs(read, ctx, runs)
     candidates = full if full else [run for _row, _r, run in placed]
     if not candidates:
         return every
@@ -849,6 +897,16 @@ def _supplementary_runs(read, rows, runs, ctx):
     def is_best(run):
         return any((f.p.chain, f.p.strand) in keys and any(f.s < g.e and g.s < f.e for g in best) for f in run)
     return every - {(id(row), r) for row, r, run in placed if is_best(run)}
+
+
+def _footprints_on(bounds, a, b):
+    """How many of the record's ns/nl footprints (kept and dropped read-end ones) overlap source ``[a, b)``."""
+    n = 0
+    for spans in (bounds.get("fp") or (), bounds.get("dropped") or ()):
+        got = _first_last(spans, a, b) if spans else None
+        if got is not None:
+            n += got[1] - got[0] + 1
+    return n
 
 
 def _run_filter(read, rows, runs, ctx):
@@ -881,6 +939,12 @@ def _run_filter(read, rows, runs, ctx):
         decisions, extents, lo = [], {}, 0
         for r, run in enumerate(row.runs):
             hi = lo + len(run) - 1
+            if ctx.min_footprints > 0 and _footprints_on(bounds, run[0].s, run[-1].e) < ctx.min_footprints:
+                # The decoder's membership gate, on each lifted record's own footprints (read-end ones too).
+                decisions.append(("drop", None))
+                extents[r] = None
+                lo = hi + 1
+                continue
             whole = rec_lo is not None and run[0].s <= rec_lo and run[-1].e >= rec_hi
             has_fp, fp_ext, ext = _run_calls(read, bounds, row, lo, hi, runs, whole, hide)
             t0, t1 = row.segments[r][0], row.segments[r][1]
@@ -984,6 +1048,7 @@ def _row_geometry(row, contig, runs, ctx):
     row.segments = []
     for run in row.runs:
         p = run[0].p
+        # Runs end at their first and last aligned bases (_trim_run), as liftbam's records do.
         row.segments.append([min(f.t0 for f in run), max(f.t1 for f in run), p.chain, p.strand, p.primary])
     n = max(len(row.frags) - 1, 0)
     row.merge, row.cut = [False] * n, [False] * n
@@ -1623,7 +1688,7 @@ def _subtract(iv, cuts):
     return out
 
 
-def _logical(parts, mapped, ids, frags, precut=None, rs0=0, width=0):
+def _logical(parts, mapped, ids, frags, precut=None, rs0=0, width=0, skip_runs=()):
     """Per run (one lifted placement), the footprint calls whole again: parts
     of one call (same id) joined to their hull, as the decoder saw them
     before cutting them at deletions. ``{run: [[t0, t1, size], ...]}`` sorted.
@@ -1632,7 +1697,7 @@ def _logical(parts, mapped, ids, frags, precut=None, rs0=0, width=0):
     by_run = {}
     for cid, (t0, t1, run, size) in (precut or {}).items():
         a, b = max(t0 - rs0, 0), min(t1 - rs0, width)
-        if isinstance(cid, str) and cid[:3] == "ns:" and b > a and size > 0:
+        if isinstance(cid, str) and cid[:3] == "ns:" and b > a and size > 0 and run not in skip_runs:
             by_run.setdefault(run, {})[cid] = [a, b, size]
     for j, (_t0, _t1, _i, k) in enumerate(parts):
         iv = mapped[j]
@@ -1787,7 +1852,7 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
             if len(iv) > 2 and iv[2] > 0:
                 rank[i] = n
                 n += 1
-        logical = _logical(parts, mapped, ids, row.frags, row.precut, rs0, width)
+        logical = _logical(parts, mapped, ids, row.frags, row.precut, rs0, width, row.blank_runs)
         gaps = _gaps(logical, _run_bounds(row, ctx), cuts, ctx.hide_terminal_gaps, width, _extents(row, ctx))
         combined = mapped + gaps
         order = sorted(range(len(combined)), key=lambda j: (combined[j][0], combined[j][1], j))
@@ -1809,9 +1874,9 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
             layers[name] = _map_layer(name, layer, row, base, runs, ctx, call_lo, call_ids, call_parts)
     legacy = read.get("_fiberbrowser_legacy")
     if ctx.infer_legacy and ctx.include_layers and legacy is not None:
-        _infer_legacy(read, layers, payload, parts, mapped, ids, keys,
+        _infer_legacy(read, runs, layers, payload, parts, mapped, ids, keys,
                       logical if logical is not None else
-                      (lambda: _logical(parts, mapped, ids, row.frags, row.precut, rs0, width)),
+                      (lambda: _logical(parts, mapped, ids, row.frags, row.precut, rs0, width, row.blank_runs)),
                       cuts, legacy, row, ctx, call_ids, call_parts)
     if read.get("layers") is not None or layers:
         payload["layers"] = layers
@@ -2123,7 +2188,19 @@ def _insertion_payloads(read, row, contig, runs, call_lo, ctx, p, a, b, lo, hi, 
     return block
 
 
-def _infer_legacy(read, layers, payload, parts, mapped, ids, keys, logical, cuts, legacy, row, ctx,
+def _ma_on_row(read, row, runs, name):
+    """Whether one of the record's MA ``name`` calls (whole record) has aligned bases on the row's fragments;
+    True when the record's MA calls are not known (no call bounds)."""
+    bounds = read.get("_fiberbrowser_call_bounds") or {}
+    if bounds.get("ma") is None:
+        return True
+    named = bounds.get("_ma_named")
+    if named is None:
+        named = bounds["_ma_named"] = _ma_spans(read, runs, named=True)
+    return any(n == name and any(f.s < r1 and r0 < f.e for f in row.frags) for r0, r1, n in named)
+
+
+def _infer_legacy(read, runs, layers, payload, parts, mapped, ids, keys, logical, cuts, legacy, row, ctx,
                   call_ids, call_parts):
     """Legacy nuc/tf/msp inference from ns/nl footprints after lifting (the
     loader ran with it off). Nuc/tf follow the lifted parts; MSPs come from the
@@ -2133,8 +2210,18 @@ def _infer_legacy(read, layers, payload, parts, mapped, ids, keys, logical, cuts
 
     ma_names = set(legacy.get("ma_names") or ())
     wants = ctx.wants
-    infer_nuc = wants["nuc"] and "nuc" not in ma_names and "nuc" not in layers
-    infer_tf = wants["tf"] and "tf" not in ma_names and "tf" not in layers
+
+    def canonical(name):
+        """An MA nuc/tf group keeps legacy inference off only when one of its calls lands on this row (the
+        decoder reads the MA names present on the lifted record itself; a call inside an insertion has no
+        place there)."""
+        if (layers.get(name) or {}).get("intervals"):
+            return True
+        if name not in ma_names:
+            return name in layers
+        return _ma_on_row(read, row, runs, name)
+    infer_nuc = wants["nuc"] and not canonical("nuc")
+    infer_tf = wants["tf"] and not canonical("tf")
     infer_msp = (wants["msp"] and not legacy.get("explicit_msp") and "msp" not in ma_names and "msp" not in layers)
     width = ctx.width
     if infer_nuc or infer_tf:

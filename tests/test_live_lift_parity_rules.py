@@ -103,3 +103,54 @@ def test_supplementary_status_counts_placements_outside_the_selection():
     assert compose._supplementary_runs(read, rows, runs, ctx) == {(id(rows[0]), 0)}
     ctx.projections = lambda contig, a, b, haps: [selected]
     assert compose._supplementary_runs(read, rows, runs, ctx) == set()
+
+
+def _ma(spec, quals):
+    return [("MA", spec), ("AQ", array("B", quals))]
+
+
+def test_a_read_gap_of_g_split_starts_a_new_lifted_record(tmp_path, monkeypatch):
+    # Codex review (group A, round 2): liftbam splits at a read gap of 10 kb (200M10200S and 10200S200M):
+    # no gap and no inferred MSP joins the two records' footprints.
+    path = _bam(tmp_path, [("r", 0, "10400M", [("ns", array("I", [50, 10250])), ("nl", array("I", [100, 100]))])],
+                size=20000)
+    (row,) = _lift(monkeypatch, path, _pieces([(0, 200, 0), (10200, 10400, 200)]), 1000)
+    assert _ivs(row) == [[50, 150, 100], [250, 350, 100]]
+    assert not (row.get("layers") or {}).get("msp")
+    assert len(row["live_lift"]["segments"]) == 2
+
+
+def test_a_record_ends_at_its_last_aligned_base(tmp_path, monkeypatch):
+    # Codex review (group A, round 2): a 1000 bp read deletion spans the split; liftbam's records end at
+    # their aligned bases (100M100S at 0, 100S100M at 20400), so neither footprint is a terminal-gap reject.
+    path = _bam(tmp_path, [("r", 0, "100M1000D100M", [("ns", array("I", [10, 110])), ("nl", array("I", [70, 70]))])])
+    (row,) = _lift(monkeypatch, path, _pieces([(0, 700, 0), (700, 1200, 20000)]), 21000)
+    assert [iv for iv in _ivs(row) if iv[2] > 0] == [[10, 80, 70], [20410, 20480, 70]]
+    assert [s[:2] for s in row["live_lift"]["segments"]] == [[0, 100], [20400, 20500]]
+
+
+def test_a_blanked_record_builds_no_gap_from_a_cut_call(tmp_path, monkeypatch):
+    # Codex review (group A, round 2): the terminal-gap filter rejects the lifted record (a requested MA TF
+    # call keeps it as a neutral row); the footprint inside the cut insertion builds no gap there.
+    tags = [("ns", array("I", [500, 1000])), ("nl", array("I", [100, 100]))] + _ma("2000;tf.Q:21-10", [200])
+    path = _bam(tmp_path, [("r", 0, "2000M", tags)])
+    (row,) = _lift(monkeypatch, path, _pieces([(0, 50, 0), (900, 2000, 650)]), 2000, requested_layers=["tf"])
+    assert _ivs(row) == [[0, 50, 0], [650, 1750, 0]]
+
+
+def test_an_ma_group_with_no_call_on_the_lifted_record_leaves_legacy_inference_on(tmp_path, monkeypatch):
+    # Codex review (group A, round 2): the record's only MA TF call lies inside the map insertion (no place on
+    # the lifted record 50M50I100M), so the decoder infers TF calls from ns/nl, as on any record without MA TF.
+    tags = [("ns", array("I", [10, 150])), ("nl", array("I", [30, 30]))] + _ma("200;tf.Q:61-20", [200])
+    path = _bam(tmp_path, [("r", 0, "200M", tags)])
+    (row,) = _lift(monkeypatch, path, _pieces([(0, 50, 0), (100, 200, 50)]), 400)
+    assert [list(iv) for iv in row["layers"]["tf"]["intervals"]] == [[10, 40, 30], [100, 130, 30]]
+
+
+def test_min_footprints_counts_each_lifted_record(tmp_path, monkeypatch):
+    # Codex review (group A, round 2): each half of the record lifts as its own record with one footprint.
+    path = _bam(tmp_path, [("r", 0, "1000M", [("ns", array("I", [50, 650])), ("nl", array("I", [100, 100]))])])
+    rows = _lift(monkeypatch, path, _pieces([(0, 500, 0), (500, 1000, 20000)]), 21000, min_footprints=2)
+    assert rows == []
+    rows = _lift(monkeypatch, path, _pieces([(0, 500, 0), (500, 1000, 20000)]), 21000, min_footprints=1)
+    assert len(rows) == 1 and len(rows[0]["live_lift"]["segments"]) == 2
