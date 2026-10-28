@@ -429,33 +429,35 @@ def artifact_spans(lp: dict, np_: dict) -> list:
     badge_at = collections.defaultdict(set)
     for pos, mol in lp.get("badges", ()):
         badge_at[int(mol)].add(int(pos))
+    min_len = int(np_.get("sv_min_len") or 50)
     out = []
     for ev in events:
-        kinds = set()
+        kinds, map_ins, map_del = [], 0, 0
         for n, (t, ref, ln) in enumerate(ev):
             ref, ln = int(ref), int(ln)
+            kind = None
             if t == "I" and n + 1 < len(ev) and ev[n + 1][0] == "D" and int(ev[n + 1][1]) == ref:
                 # I then D (liftbam's junction): the badge sits anywhere from the left block's end (a read
                 # deletion there moves it into the D) to the D's end.
                 dl = int(ev[n + 1][2])
                 if any(ref <= p <= ref + dl for p in badge_at.get(ln, ())):
-                    kinds.add("map")
-                    continue
-            if t == "D":
-                if (ref, ref + ln) in conns:
-                    kinds.add("map")
-                elif any(a < ref + ln and b > ref for a, b in conns):
-                    kinds.add("merged")   # a read deletion liftbam wrote into the map gap's D
-                else:
-                    kinds.add("read")
-            elif ref in anchors.get(ln, ()):
-                kinds.add("map")
-            elif ref in anchor_any:
-                kinds.add("merged")       # read bases liftbam wrote into the map gap's I
-            else:
-                kinds.add("read")
-        if "merged" in kinds or kinds >= {"map", "read"}:
-            out += [[int(ref), int(ref) + int(ln)] for t, ref, ln in ev if t == "D"]
+                    kind = "map"
+            if kind is None and t == "D":
+                over = sum(max(0, min(b, ref + ln) - max(a, ref)) for a, b in conns)
+                kind = "map" if (ref, ref + ln) in conns else "merged" if over else "read"
+                map_del += ln if kind == "map" else over
+            elif kind is None:
+                kind = "map" if ref in anchors.get(ln, ()) else "merged" if ref in anchor_any else "read"
+            if t == "I" and kind != "read":
+                map_ins += ln     # a merged I counts whole: the map-only sum stays an upper bound
+            kinds.append((t, ref, ln, kind))
+        found = {k for *_x, k in kinds}
+        if not ("merged" in found or found >= {"map", "read"}):
+            continue
+        # Map pieces alone that reach sv_min_len need a cut live lift makes itself (at the junction's D):
+        # only the read's deleted bases are left to the mixing. Otherwise every deletion of the event is.
+        map_cuts = max(map_ins, map_del) >= min_len
+        out += [[ref, ref + ln] for t, ref, ln, kind in kinds if t == "D" and (kind == "read" or not map_cuts)]
     return merge_spans(out)
 
 
@@ -664,7 +666,7 @@ def summarize(records: list, verdict_points=VERDICT_POINTS, rejoin_bp: int = 5) 
                 record_causes[(c["group"], c["cause"], c["bucket"])] += 1
             if c["bucket"] != "identical":
                 calls_same = False
-                if c["cause"] in KNOWN_CAUSES:
+                if c["cause"] in KNOWN_CAUSES and not c["payload_differs"]:
                     record_calls[c["group"]]["known"] += 1
                     known[c["cause"]] += 1
                 else:
@@ -842,6 +844,7 @@ def placement(row, base: int, live: bool, contig: str) -> dict:
         out["connectors"] = connectors
         out["insertions"] = sorted({int(bd[0]) + base for bd in ll.get("badges") or ()})
         out["badges"] = [[int(bd[0]) + base, int(bd[2])] for bd in ll.get("badges") or ()]
+        out["supplementary"] = bool((ll.get("source") or {}).get("supplementary"))
         out["minus_chain"] = any(seg[3] == "-" for seg in ll.get("segments") or ())
         out["segments"] = [[s[0] + base, s[1] + base] for s in ll.get("segments") or ()]
     return out
@@ -1006,6 +1009,11 @@ def lifted_bam_census(lifted_bam, chrom, start, end) -> dict:
 
 def unlifted_reasons(path) -> dict:
     """``{(qname, contig, start0): reason}`` of fiberhmm-lift's ``--unlifted`` BAM."""
+    return {key: reason for key, (reason, _primary) in unlifted_records(path).items()}
+
+
+def unlifted_records(path) -> dict:
+    """``{(qname, contig, start0): (reason, is primary)}`` of fiberhmm-lift's ``--unlifted`` BAM."""
     import pysam
 
     out = {}
@@ -1014,8 +1022,26 @@ def unlifted_reasons(path) -> dict:
     with pysam.AlignmentFile(path, check_sq=False) as bam:
         for rec in bam.fetch(until_eof=True):
             out[(rec.query_name, rec.reference_name, rec.reference_start)] = (
-                rec.get_tag("Yu") if rec.has_tag("Yu") else "unlifted")
+                rec.get_tag("Yu") if rec.has_tag("Yu") else "unlifted",
+                not (rec.is_supplementary or rec.is_secondary))
     return out
+
+
+def lifted_qnames(path) -> set:
+    """Every QNAME of the lifted BAM, whatever its contig (an orphan's molecule has none)."""
+    import pysam
+
+    with pysam.AlignmentFile(path) as bam:
+        return {rec.query_name for rec in bam.fetch(until_eof=True)}
+
+
+def is_orphan_supplementary(key, live_placements, unlifted: dict, lifted_names: set) -> bool:
+    """Whether a live-only source record is an orphan supplementary fiberhmm-lift drops (cause 9): every
+    live placement of it is a source supplementary, its molecule's primary record is in the unlifted BAM,
+    and the lifted BAM has no record of that molecule at all."""
+    return (bool(live_placements) and all(p.get("supplementary") for p in live_placements)
+            and any(q == key[0] and primary for (q, *_rest), (_reason, primary) in unlifted.items())
+            and key[0] not in lifted_names)
 
 
 # ── Run ─────────────────────────────────────────────────────────────────────
@@ -1063,22 +1089,26 @@ def run(args) -> dict:
             edge.add(key)
         p = placement(read, sel0, False, chrom)
         p["sv_events"] = events.get((read["id"], yp[0], yp[1], int(read["reference_start"])), [])
+        p["sv_min_len"] = int(loader_options.get("sv_min_len") or 50)
         native_by[key].append(p)
 
-    unlifted = unlifted_reasons(args.unlifted_bam)
+    unlifted_full = unlifted_records(args.unlifted_bam)
+    unlifted = {key: reason for key, (reason, _primary) in unlifted_full.items()}
+    lifted_names = None
     keys = sorted(set(live_by) | set(native_by))
     ambiguous = find_ambiguous(live_records, source_record_counts(args.source_bam, keys))
     records, one_side_keys, n_edge, n_ambiguous = join_records(live_by, native_by, edge, ambiguous)
     one_side = collections.Counter()
     one_side_examples = []
-    native_qnames = {k[0] for k in native_by}
     for key, side in one_side_keys:
         cause = "unknown"
         if side == "live_only":
             if key in unlifted:
                 cause = f"unlifted:{unlifted[key]}"
-            elif any(q == key[0] for q, *_ in unlifted) and key[0] not in native_qnames:
-                cause = "orphan_supplementary_dropped"
+            else:
+                lifted_names = lifted_names if lifted_names is not None else lifted_qnames(args.lifted_bam)
+                if is_orphan_supplementary(key, live_by.get(key, ()), unlifted_full, lifted_names):
+                    cause = "orphan_supplementary_dropped"
         elif load.truncated:
             cause = "live_load_truncated"
         elif (loader_options.get("hide_terminal_gaps", True)

@@ -490,3 +490,35 @@ def test_identical_call_groups_take_the_shortcut_with_the_same_counts():
     res = _result([rec])
     assert res["calls"]["layer:nuc"] == {"identical": 2, "raw_identical": 2}
     assert res["record_calls"]["layer:nuc"] == {"identical": 2}
+
+
+def test_a_known_cut_never_excuses_a_payload_difference():
+    # Codex review (group B, round 1): the same call cut at a mixed event and carrying another state byte fails.
+    rec = _cut_record([[40, 60]], [[("I", 40, 60), ("D", 40, 1)]])
+    rec["live"][0]["payloads"] = {"layer:nuc": {"MA0:0": {((), (("state", 1),), None)}}}
+    rec["native"][0]["payloads"] = {"layer:nuc": {"MA0:0": {((), (("state", 2),), None)}}}
+    assert lp.verdict(_result([rec])).startswith("FAIL")
+
+
+def test_a_map_deletion_that_cuts_on_its_own_is_not_excused_by_a_read_piece():
+    # Codex review (group B, round 1): a 60 bp connector cuts by itself; a 1 bp read insertion in its event
+    # excuses nothing, so a live call running across it fails.
+    rec = {"key": ("q", "chr3_MATERNAL", 10),
+           "live": [place(0, 250, {"layer:nuc": {"MA0:0": [[0, 250]]}}, connectors=[[40, 100]], badges=[])],
+           "native": [place(0, 250, {"layer:nuc": {"MA0:0": [[0, 40], [100, 250]]}},
+                            sv_events=[[("D", 40, 60), ("I", 105, 1)]])]}
+    assert lp.artifact_spans(rec["live"][0], rec["native"][0]) == []
+    assert lp.verdict(_result([rec])).startswith("FAIL")
+    # The read's own deleted bases in such an event stay excused (the map cut is live lift's own).
+    rec["native"][0]["sv_events"] = [[("D", 40, 60), ("D", 102, 2)]]
+    assert lp.artifact_spans(rec["live"][0], rec["native"][0]) == [[102, 104]]
+
+
+def test_only_a_verified_orphan_supplementary_is_listed_as_known():
+    # Codex review (group B, round 1): a live-only primary with an unrelated unlifted record of its name fails.
+    unlifted = {("q", "c2", 20): ("no_projection", True)}
+    sup = [place(0, 10, supplementary=True)]
+    assert lp.is_orphan_supplementary(("q", "c", 10), sup, unlifted, set())
+    assert not lp.is_orphan_supplementary(("q", "c", 10), [place(0, 10, supplementary=False)], unlifted, set())
+    assert not lp.is_orphan_supplementary(("q", "c", 10), sup, {("q", "c2", 20): ("no_projection", False)}, set())
+    assert not lp.is_orphan_supplementary(("q", "c", 10), sup, unlifted, {"q"})
