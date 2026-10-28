@@ -141,6 +141,10 @@ class LiftMapHandle:
         self.haplotype_labels = _haplotype_labels(self.manifest)
         self.chain_rank = {ci: (-int(c.get("score", c.get("aligned", 0)) or 0), c.get("key", "")) for ci, c in
                            enumerate(self.map.chains)}
+        self.primary_chains = {row[3] for rows in self.manifest["nets"].values() for row in rows}
+        self._primary_lift_cache = OrderedDict()
+        self._primary_chain_cache = OrderedDict()
+        self._primary_payload_cache = OrderedDict()
         self.lock = threading.Lock()
 
     def resolve_haplotypes(self, values: Iterable[str]) -> list:
@@ -804,9 +808,126 @@ def _primary_lifts(handle, contig, blocks):
     """
     if not blocks:
         return False
+    start, end = min(a for a, _ in blocks), max(b for _, b in blocks)
     with handle.lock:
-        pieces = handle.map.source_to_target(contig, min(a for a, _ in blocks), max(b for _, b in blocks))
-    return any(p.primary and any(a < p.q_end and b > p.q_start for a, b in blocks) for p in pieces)
+        lm = handle.map
+        if type(lm) is not LiftMap:
+            pieces = lm.source_to_target(contig, start, end)
+            return any(p.primary and any(a < p.q_end and b > p.q_start for a, b in blocks) for p in pieces)
+        ck = (contig, tuple((a, b) for a, b in blocks))
+        cache = handle._primary_lift_cache
+        if ck in cache:
+            cache.move_to_end(ck)
+            return cache[ck]
+        loaded = set(lm._blocks)
+        try:
+            lifted = _primary_lifts_on_map(handle, contig, blocks, start, end)
+        finally:
+            # Offscreen metadata probes must not pin whole chromosomes' Python
+            # block lists and add them to subsequent loads' GC traversal.
+            for ti in lm._blocks.keys() - loaded:
+                del lm._blocks[ti]
+        cache[ck] = lifted
+        while len(cache) > 1024:
+            cache.popitem(last=False)
+        return lifted
+
+
+def _primary_lifts_on_map(handle, contig, blocks, start, end):
+    """Short-circuit the vendored reader's inverse query; caller holds lock."""
+    lm = handle.map
+    si = lm.sources.get(contig)
+    if si is None:
+        return False
+    qsize = lm.m["sources"][si]["size"]
+    start, end = min(start, qsize), min(end, qsize)
+    if end <= start:
+        return False
+    # Try loaded targets first and skip chains with no primary net claim:
+    # enumerating alternatives can otherwise load whole other chromosomes.
+    candidates = [ci for ci in lm.by_source.get(si, ()) if ci in handle.primary_chains
+                  and lm.chains[ci]["q_end_forward"] > start
+                  and lm.chains[ci]["q_start_forward"] < end]
+    candidates.sort(key=lambda ci: lm.chains[ci]["target"] not in lm._blocks)
+    for ci in candidates:
+        c = lm.chains[ci]
+        d = _primary_chain_data(handle, ci)
+        qs, qe = (start, end) if c["strand"] == "+" else (qsize - end, qsize - start)
+        for i in range(bisect.bisect_right(d["bq"], qs), len(d["blocks"])):
+            t, q, n = map(int, d["blocks"][i])
+            if q >= qe:
+                break
+            s, e = max(q, qs), min(q + n, qe)
+            t += s - q
+            pieces = []
+            lm._pieces(ci, c, t, t + e - s, s, pieces)
+            if any(p.primary and any(a < p.q_end and b > p.q_start for a, b in blocks) for p in pieces):
+                return True
+    return False
+
+
+_BLOCKS_OBJECT = re.compile(rb'"blocks"\s*:\s*\{')
+_BLOCK_LIST_END = re.compile(rb'\]\s*\]')
+_EMPTY_BLOCK_LIST = re.compile(rb'\[\s*\]')
+_TARGET_FIELD = re.compile(rb'"target"\s*:\s*("(?:[^"\\]|\\.)*")')
+
+
+def _primary_chain_data(handle, ci):
+    """Probe-only block columns: avoid decoding/indexing all other chains.
+
+    Sidecar blocks are a JSON object of numeric chain keys and arrays of
+    integer triples. Decode just the requested array with the JSON parser;
+    retain arrays and bounded raw bytes, neither of which adds GC traversal.
+    Other payload shapes use the vendored reader unchanged. Caller holds lock.
+    """
+    import gzip
+    import numpy as np
+    import orjson
+    from services.lab.paths import open_read
+
+    lm = handle.map
+    ti = lm.chains[ci]["target"]
+    if ti in lm._blocks:
+        return lm.chain_data(ci)
+    cache = handle._primary_chain_cache
+    if ci in cache:
+        cache.move_to_end(ci)
+        return cache[ci]
+    payloads = handle._primary_payload_cache
+    if ti not in payloads:
+        name = lm.m["targets"][ti]["name"]
+        with open_read(os.path.join(lm.dir, lm.m["target_files"][name][0])) as fh:
+            raw = fh.read()
+        raw = gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw
+        target = _TARGET_FIELD.search(raw)
+        if target is None or orjson.loads(target[1]) != name:
+            return lm.chain_data(ci)  # retain the reader's target validation
+        payloads[ti] = raw
+        while len(payloads) > 4:
+            payloads.popitem(last=False)
+    payloads.move_to_end(ti)
+    raw = payloads[ti]
+    obj = _BLOCKS_OBJECT.search(raw)
+    if obj is not None:
+        end = raw.find(b'}', obj.end())  # block arrays contain no objects
+        key = re.compile(rb'"' + str(ci).encode('ascii') + rb'"\s*:\s*(\[)')
+        match = key.search(raw, obj.end(), end)
+        if match and _EMPTY_BLOCK_LIST.match(raw, match.start(1)):
+            return dict(blocks=(), bq=())
+        close = _BLOCK_LIST_END.search(raw, match.start(1), end) if match else None
+        if close is not None:
+            try:
+                values = np.asarray(orjson.loads(raw[match.start(1):close.end()]))
+            except (TypeError, ValueError, OverflowError):
+                return lm.chain_data(ci)
+            if (values.dtype == np.int64 and values.ndim == 2 and values.shape[1] == 3
+                    and int(values.min()) >= 0 and int(values.max()) < (1 << 62)):
+                values.flags.writeable = False
+                cache[ci] = dict(blocks=values, bq=values[:, 1] + values[:, 2])
+                while len(cache) > 64:
+                    cache.popitem(last=False)
+                return cache[ci]
+    return lm.chain_data(ci)
 
 
 def resolve_primary_metadata(handle: LiftMapHandle, reads: list, *, settings: LiftSettings, counts: dict,

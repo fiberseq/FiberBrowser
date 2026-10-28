@@ -32,6 +32,35 @@ BAM_DIAGNOSTICS_ENV = "FIBERBROWSER_BAM_DIAGNOSTICS"
 BIGBED_DIAGNOSTICS_ENV = "FIBERBROWSER_BIGBED_DIAGNOSTICS"
 
 
+def _lift_columns(read_data):
+    """Keep large source evidence groups in row-format-2 integer columns.
+
+    Composition can reuse their arrays directly, without validating and
+    converting the same Python coordinates again. Small groups stay lists.
+    """
+    import numpy as np
+    from services.read_columns import read_only, wrap
+
+    groups = [(read_data, key) for key in ('intervals', 'fire', 'methyl_m6a', 'methyl_m5c',
+                                          'possible_deam_ct', 'possible_deam_ga')]
+    groups.extend((layer, 'intervals') for layer in (read_data.get('layers') or {}).values()
+                  if isinstance(layer, dict))
+    for group, key in groups:
+        values = group.get(key)
+        if not isinstance(values, list) or len(values) < 16:
+            continue
+        try:
+            array = np.asarray(values)
+        except (ValueError, OverflowError):
+            continue
+        if array.dtype != np.int64 or array.ndim not in (1, 2):
+            continue
+        column = wrap(read_only(array))
+        group[key] = column
+        if group is read_data and read_data.get('methyl') is values:
+            read_data['methyl'] = column
+
+
 
 _PRIMARY_BIGBED_TYPES = ('footprint', None, 'unknown')
 _LAYER_SUFFIX_TOKENS = (
@@ -2780,6 +2809,8 @@ def _build_compact_reads_from_bam_region(
                 _scalar_groups_to_fields(read_data)
             if nuc_inject is not None:
                 nuc_inject(read_data)
+            if include_lift_meta:
+                _lift_columns(read_data)
             reads.append(read_data)
             if load_budget is not None:
                 load_budget.account(read_data)

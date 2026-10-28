@@ -130,7 +130,8 @@ def _read(rng, i):
 
 
 @pytest.mark.parametrize("seed", range(12))
-def test_columnar_pass_matches_per_row_composition(seed, monkeypatch):
+@pytest.mark.parametrize("source_columns", [False, True])
+def test_columnar_pass_matches_per_row_composition(seed, monkeypatch, source_columns):
     rng = random.Random(seed)
     composed = 0
     for _ in range(40):
@@ -143,6 +144,10 @@ def test_columnar_pass_matches_per_row_composition(seed, monkeypatch):
         sel = ll.PieceSelection("tgt", r0, r1, r0, r1, sorted(pieces, key=lambda p: (p.t_start, p.chain)))
         plan = ll.FetchPlan(sel, [], 0, 0)
         reads = [_read(rng, i) for i in range(rng.randrange(1, 10))]
+        if source_columns:
+            from services.compact_read_loader import _lift_columns
+            for read in reads:
+                _lift_columns(read)
         kw = dict(handle=None, region_start=r0, region_end=r1, key="k", dataset_id="d", molecules={},
                   settings=ll.LiftSettings(rejoin_bp=rng.choice([0, 5, 50]), g_split=rng.choice([1000, 10000])),
                   loader_options=dict(hide_terminal_gaps=rng.random() < 0.6, include_layers=rng.random() < 0.85,
@@ -162,7 +167,7 @@ def test_columnar_pass_matches_in_small_batches(monkeypatch):
     from services.lift import compose_columns
 
     monkeypatch.setattr(compose_columns, "CHUNK_ELEMENTS", 37)
-    test_columnar_pass_matches_per_row_composition(7, monkeypatch)
+    test_columnar_pass_matches_per_row_composition(7, monkeypatch, False)
 
 
 def _one(**updates):
