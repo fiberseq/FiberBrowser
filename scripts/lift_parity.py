@@ -455,21 +455,25 @@ def artifact_spans(lp: dict, np_: dict) -> list:
         if not ("merged" in found or found >= {"map", "read"}):
             continue
         # What live lift cuts there itself: the event's map pieces grouped alone, as live lift groups them
-        # (a read deletion's target bases count as aligned, a read insertion is left out, a merged I counts whole).
-        alone = []
+        # (a read deletion's target bases count as aligned, a read insertion is left out, a merged I counts
+        # whole). A merged D is the read's deleted bases with the connectors inside them: aligned bridges (as
+        # live lift sees the fragments there) between connectors; its read bases before the first connector
+        # come before the junction's I too (liftbam writes I then D). A connector that cuts loses, on live
+        # lift, its junction's D up to the aligned blocks on either side: to the D's ends at its first and
+        # last connectors, never across a fragment between two connectors (it has no aligned base).
+        alone, spans_of = [], {}
         for n, (t, ref, ln, kind, mapped) in enumerate(kinds):
             if t == "M" or (t == "D" and kind == "read"):
                 alone.append((0, 0, ln, 0))
             elif t == "D":
-                # A merged D is the read's deleted bases with the connectors inside them: aligned bridges
-                # (as live lift sees the fragments there) between connectors. Its read bases before the first
-                # connector come before the junction's I too (liftbam writes I then D).
                 inside = sorted((max(a, ref), min(b, ref + ln)) for a, b in conns if a < ref + ln and b > ref)
                 sub, pos = [], ref
-                for a, b in inside:
+                for c, (a, b) in enumerate(inside):
                     if a > pos:
                         sub.append((0, 0, a - pos, 0))
-                    sub.append((2, n, b - a, 0))
+                    tag = len(spans_of) + 1
+                    spans_of[tag] = [ref if c == 0 else a, ref + ln if c == len(inside) - 1 else b]
+                    sub.append((2, tag, b - a, 0))
                     pos = b
                 if pos < ref + ln:
                     sub.append((0, 0, ref + ln - pos, 0))
@@ -477,14 +481,16 @@ def artifact_spans(lp: dict, np_: dict) -> list:
                     alone.insert(len(alone) - 1, sub.pop(0))
                 alone += sub
             elif kind != "read":
-                alone.append((1, n, ln, 0))
+                alone.append((1, 0, ln, 0))
         from services.sv_alleles import cigar_replacements
-        live_cut = set()
+        live_cut = []
         for sub in cigar_replacements(alone, piece_min=10, merge_gap=10):
             if sub["len"] >= min_len:
-                live_cut.update(p["ref"] for p in sub.get("raw_pieces") or (dict(t=sub["t"], ref=sub["ref"]),)
-                                if p["t"] == "D")
-        out += [[ref, ref + ln] for n, (t, ref, ln, kind, _m) in enumerate(kinds) if t == "D" and n not in live_cut]
+                live_cut += [spans_of[p["ref"]] for p in sub.get("raw_pieces") or (dict(t=sub["t"], ref=sub["ref"]),)
+                             if p["t"] == "D" and p["ref"] in spans_of]
+        out += subtract_spans([[ref, ref + ln] for t, ref, ln, _k, _m in kinds if t == "D"], live_cut)
+    # Cuts the source decode makes at the read's own deletions (of at least sv_min_len) are live lift's too.
+    out = subtract_spans(out, np_.get("required_cuts") or ())
     return merge_spans(out)
 
 
@@ -521,7 +527,8 @@ def union_placements(placements: list) -> dict:
             "connectors": [c for p in placements for c in p.get("connectors", ())],
             "insertions": [x for p in placements for x in p.get("insertions", ())],
             "badges": [b for p in placements for b in p.get("badges", ())],
-            "sv_events": [e for p in placements for e in p.get("sv_events", ())]}
+            "sv_events": [e for p in placements for e in p.get("sv_events", ())],
+            "required_cuts": [c for p in placements for c in p.get("required_cuts", ())]}
 
 
 def strand_status(lp: dict, np_: dict) -> str:
@@ -873,6 +880,7 @@ def placement(row, base: int, live: bool, contig: str) -> dict:
         out["insertions"] = sorted({int(bd[0]) + base for bd in ll.get("badges") or ()})
         out["badges"] = [[int(bd[0]) + base, int(bd[2])] for bd in ll.get("badges") or ()]
         out["supplementary"] = bool((ll.get("source") or {}).get("supplementary"))
+        out["chains"] = sorted({int(seg[2]) for seg in ll.get("segments") or ()})
         out["minus_chain"] = any(seg[3] == "-" for seg in ll.get("segments") or ())
         out["segments"] = [[s[0] + base, s[1] + base] for s in ll.get("segments") or ()]
     return out
@@ -1003,6 +1011,48 @@ def split_blocks(p: dict, g_split: int) -> list:
         q["badges"] = [x for x in p.get("badges", ()) if a <= x[0] <= b]
         out.append(q)
     return out
+
+
+def source_cuts_in_target(handle, contig, cuts, chains) -> list:
+    """The source record's deletion cuts (source ``[d0, d1)``) in the target frame through the map's pieces of
+    ``chains``: from after the target base of ``d0 - 1`` to the target base of ``d1`` (either order)."""
+    out = []
+    for d0, d1 in cuts:
+        ends = []
+        for x in (d0 - 1, d1):
+            with handle.lock:
+                pieces = handle.map.source_to_target(contig, x, x + 1)
+            hit = next(((p.t_end - 1 - (x - p.q_start)) if p.strand == "-" else (p.t_start + (x - p.q_start))
+                        for p in pieces if p.chain in chains and p.q_start <= x < p.q_end), None)
+            ends.append(hit)
+        if None in ends:
+            continue
+        a, b = ends
+        lo, hi = (a + 1, b) if b > a else (b + 1, a)
+        if hi > lo:
+            out.append([lo, hi])
+    return out
+
+
+def attach_required_cuts(records, source_bam, handle, min_len: int) -> None:
+    """``required_cuts`` on the native placements of every record with indel events: the source record's
+    own deletion cuts (``sv_events.read_deletion_cuts``) in the target frame (live lift makes them too)."""
+    import pysam
+    from services.sv_events import read_deletion_cuts
+
+    with pysam.AlignmentFile(source_bam) as src:
+        for rec in records:
+            if not any(p.get("sv_events") for p in rec["native"]):
+                continue
+            qname, contig, start = rec["key"]
+            hit = next((r for r in src.fetch(contig, start, start + 1) if r.query_name == qname
+                        and r.reference_start == start and not r.is_secondary), None)
+            if hit is None:
+                continue
+            chains = {c for p in rec["live"] for c in p.get("chains", ())}
+            cuts = source_cuts_in_target(handle, contig, read_deletion_cuts(hit, min_len), chains)
+            for p in rec["native"]:
+                p["required_cuts"] = cuts
 
 
 def lifted_sv_events(lifted_bam, chrom, start, end, loader_options) -> dict:
@@ -1152,6 +1202,7 @@ def run(args) -> dict:
 
     census = lifted_bam_census(args.lifted_bam, chrom, sel0, sel1)
     attach_deam_sources(records, args.source_bam, args.lifted_bam, chrom)
+    attach_required_cuts(records, args.source_bam, handle, int(loader_options.get("sv_min_len") or 50))
     summary = summarize(records, rejoin_bp=settings.rejoin_bp)
     display_ids = {r["analysis_id"] for r in display.rows}
     analysis_ids = {r["analysis_id"] for r in analysis.rows}

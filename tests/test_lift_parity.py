@@ -522,3 +522,26 @@ def test_only_a_verified_orphan_supplementary_is_listed_as_known():
     assert not lp.is_orphan_supplementary(("q", "c", 10), [place(0, 10, supplementary=False)], unlifted, set())
     assert not lp.is_orphan_supplementary(("q", "c", 10), sup, {("q", "c2", 20): ("no_projection", False)}, set())
     assert not lp.is_orphan_supplementary(("q", "c", 10), sup, unlifted, {"q"})
+
+
+def test_a_cut_the_source_decode_makes_is_never_excused():
+    # Codex review (group B, round 2): the read's own 60 bp deletion (cut in the source frame, so on live lift
+    # too) beside a map insertion: an uncut live call fails.
+    rec = {"key": ("q", "chr3_MATERNAL", 10),
+           "live": [place(0, 300, {"layer:nuc": {"MA0:0": [[10, 200]]}}, connectors=[], badges=[[40, 60]])],
+           "native": [place(0, 300, {"layer:nuc": {"MA0:0": [[10, 40], [100, 200]]}},
+                            sv_events=[[("I", 40, 60), ("D", 40, 60)]], required_cuts=[[40, 100]])]}
+    assert lp.artifact_spans(rec["live"][0], rec["native"][0]) == []
+    assert lp.verdict(_result([rec])).startswith("FAIL")
+
+
+def test_each_connector_of_a_merged_deletion_counts_on_its_own():
+    # Codex review (group B, round 2): 40M81D160M where the D is a 60 bp connector, a fully deleted 20 bp
+    # fragment and a 1 bp connector. Live lift cuts the 60 bp one only: the rest is the decoder's merging.
+    live = place(0, 300, {"layer:nuc": {"MA0:0": [[10, 40], [100, 221]]}},
+                 connectors=[[40, 100], [120, 121]], badges=[])
+    native = place(0, 300, {"layer:nuc": {"MA0:0": [[10, 40], [121, 221]]}},
+                   sv_events=[[("M", 0, 40), ("D", 40, 81), ("M", 121, 160)]])
+    assert lp.artifact_spans(live, native) == [[100, 121]]
+    rec = {"key": ("q", "c", 1), "live": [live], "native": [native]}
+    assert lp.verdict(_result([rec])) == "PASS (known: 1 decoder_cut_artifact)"
