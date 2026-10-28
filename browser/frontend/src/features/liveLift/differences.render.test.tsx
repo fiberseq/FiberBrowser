@@ -20,6 +20,7 @@ import { AUTO_LOAD_MAX_READS } from '../differences/autoLoad';
 import type { Dataset, PanelConfig } from '../../types';
 import type { CompactRead } from '../../components/tracks/read-track/types';
 import type { Difference, DifferencesResponse } from './differenceTypes';
+import { fetchJsonSharedGet } from '../../api/sharedFetch';
 
 vi.mock('./api', async original => ({ ...await original<typeof import('./api')>(), getDifferences: vi.fn(), getDifferenceReads: vi.fn() }));
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -51,10 +52,42 @@ beforeEach(() => {
   useTrackFeedStore.setState({ byStateKey: {} }); feed();
   host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host);
 });
-afterEach(() => { act(() => root.unmount()); host.remove(); vi.useRealTimers(); });
+afterEach(() => { act(() => root.unmount()); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 const renderStrip = (p = panel) => act(() => root.render(<PanelDisplayContext.Provider value={p.id}><DifferencesStrip panel={p} dataset={dataset} width={1000} /></PanelDisplayContext.Provider>));
 
 describe('differences strip and inspection', () => {
+  it('yields to all visible read bodies, then loads the same assembly row immediately', async () => {
+    const finish: Array<() => void> = [];
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true,
+      json: () => new Promise(resolve => { finish.push(() => resolve({ reads: [] })); }),
+    })));
+    const reads = ['native', 'MAT', 'PAT'].map(id => fetchJsonSharedGet(`/api/reads/compact?dataset_id=${id}`));
+    renderStrip(); await settle();
+    expect(finish).toHaveLength(3);
+    expect(getDifferences).not.toHaveBeenCalled();
+    await act(async () => { finish[1](); await reads[1]; finish[2](); await reads[2]; });
+    expect(getDifferences).not.toHaveBeenCalled();
+    await act(async () => { finish[0](); await reads[0]; });
+    expect(getDifferences).toHaveBeenCalledTimes(1);
+    expect(getDifferences).toHaveBeenCalledWith(expect.objectContaining({ liftHap: 'MAT', start: 0, end: 1000 }), expect.any(AbortSignal));
+    expect(host.querySelector('[data-testid="live-lift-diff-item"]')).not.toBeNull();
+  });
+
+  it('drops a waiting Differences query when the user pans again', async () => {
+    let finish!: () => void;
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true,
+      json: () => new Promise(resolve => { finish = () => resolve({ reads: [] }); }),
+    })));
+    const reads = fetchJsonSharedGet('/api/reads/compact?dataset_id=pan-cancel');
+    renderStrip(); await settle();
+    expect(getDifferences).not.toHaveBeenCalled();
+    act(() => useBrowserStore.setState({ start: 1000, end: 2000 }));
+    await settle();
+    await act(async () => { finish(); await reads; });
+    expect(getDifferences).toHaveBeenCalledTimes(1);
+    expect(getDifferences).toHaveBeenCalledWith(expect.objectContaining({ start: 1000, end: 2000 }), expect.any(AbortSignal));
+  });
+
   it('⌘-click opens the inspector and loads its observations; a plain or Shift-click only selects', async () => {
     const snv: Difference = { ...diff, id: 'assembly-snv', kind: 'snv', t_end: 501, ref_bp: 1, alt_bp: 1 };
     vi.mocked(getDifferences).mockResolvedValue(response([snv]));

@@ -32,13 +32,15 @@ LAYER_META = {
 def injector(bam_path, region_start: int, region_end: int, *, include_layers: bool, requested_layers,
              include_qualities: bool, include_lift_meta: bool) -> Optional[Callable[[dict], None]]:
     """A function adding the store's nuc layers to a read row of this load (None: nothing to add)."""
-    if not include_layers or not isinstance(bam_path, str) or '://' in bam_path or not STORE.has_rows(bam_path):
+    if not include_layers or not isinstance(bam_path, str) or '://' in bam_path:
         return None
     groups = [g for g in LAYER_GROUPS if requested_layers is None or g in requested_layers]
     # The molecule scalars (nucmol: Filter/Sort terms, cluster columns, Read Stats) ride on the row as internal
     # fields whenever the request loads layers.
     scalars = requested_layers is None or 'nucmol' in requested_layers
     if not groups and not scalars:
+        return None
+    if not STORE.has_rows(bam_path):
         return None
     rows = STORE.rows_of(bam_path)
     r0, r1 = int(region_start), int(region_end)

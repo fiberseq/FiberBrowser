@@ -60,6 +60,48 @@ describe('useReadTrackData loading flag', () => {
     container.remove();
   });
 
+  it('starts native, MAT and PAT together on a pan and publishes each response independently', async () => {
+    const { useBrowserStore } = await import('../../../stores/browserStore');
+    const before = useBrowserStore.getState();
+    const states = new Map<string, ReturnType<typeof useReadTrackData>>();
+    const pending: Array<{ q: URLSearchParams; answer: (value: unknown) => void }> = [];
+    getCompactReads.mockImplementation((q: URLSearchParams) => new Promise(answer => {
+      pending.push({ q: new URLSearchParams(q), answer });
+    }));
+    function Panel({ id, start }: { id: string; start: number }) {
+      const p = params({ datasetId: id === 'native' ? 'native' : 'lift', stateKey: id,
+        liftHap: id === 'native' ? null : id, start, end: start + 1000 });
+      const data = useReadTrackData(p);
+      states.set(id, data);
+      return <div data-panel={id} data-loading={data.loading}>{data.reads.map(r => r.id).join(',')}</div>;
+    }
+    const panels = (start: number) => <>{['native', 'MAT', 'PAT'].map(id => <Panel key={id} id={id} start={start} />)}</>;
+    try {
+      useBrowserStore.setState({ datasets: [{ id: 'native', data_type: 'bam' }, { id: 'lift', data_type: 'bam_livelift' }] as any });
+      await act(async () => { root.render(panels(1000)); });
+      expect(pending).toHaveLength(3);
+      const old = pending.splice(0);
+      await act(async () => { root.render(panels(1250)); });
+      expect(pending).toHaveLength(3);
+      expect(pending.map(({ q }) => [q.get('dataset_id'), q.get('lift_hap'), q.get('start')]))
+        .toEqual([['native', null, '1250'], ['lift', 'MAT', '1250'], ['lift', 'PAT', '1250']]);
+      const response = (id: string) => ({ count: 1, total: 1, width: 1000, reads: [{ id, intervals: [[0, 100, 100]] }] });
+      await act(async () => { pending[2].answer(response('pat-row')); });
+      expect(states.get('PAT')!.loading).toBe(false);
+      expect(container.querySelector('[data-panel="PAT"]')!.textContent).toBe('pat-row');
+      expect(states.get('native')!.loading).toBe(true);
+      expect(states.get('MAT')!.loading).toBe(true);
+      await act(async () => { old[2].answer(response('stale')); });
+      expect(container.querySelector('[data-panel="PAT"]')!.textContent).toBe('pat-row');
+      await act(async () => { pending[1].answer(response('mat-row')); pending[0].answer(response('native-row')); });
+      expect([...states.values()].every(s => !s.loading)).toBe(true);
+    } finally {
+      await act(async () => { root.unmount(); });
+      root = createRoot(container);
+      useBrowserStore.setState({ datasets: before.datasets });
+    }
+  });
+
   it('sends visible bounds and refetches insertion alleles on expansion and collapse', async () => {
     const { useBrowserStore } = await import('../../../stores/browserStore');
     const before = useBrowserStore.getState();

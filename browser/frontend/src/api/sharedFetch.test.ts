@@ -1,10 +1,34 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { apiIdleToken, readIdleToken, fetchApiResponse, fetchJson, fetchJsonSharedGet } from './sharedFetch';
+import { apiIdleToken, readIdleToken, waitForReadRequests, fetchApiResponse, fetchJson, fetchJsonSharedGet } from './sharedFetch';
 
 describe('shared API transport', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
+  });
+
+  it('releases read waiters on failure or cancellation, and immediately when idle', async () => {
+    let fail!: (error: Error) => void;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise((_resolve, reject) => { fail = reject; })));
+    const reads = fetchJson('/api/reads/compact?dataset_id=failed');
+    const rejected = expect(reads).rejects.toThrow('offline');
+    const controller = new AbortController();
+    const cancelled = vi.fn();
+    const done = vi.fn();
+    const waiting = waitForReadRequests(controller.signal).then(cancelled);
+    const remaining = waitForReadRequests(new AbortController().signal).then(done);
+    await Promise.resolve();
+    expect(done).not.toHaveBeenCalled();
+    controller.abort();
+    await waiting;
+    expect(cancelled).toHaveBeenCalledTimes(1);
+    expect(done).not.toHaveBeenCalled();
+    fail(new Error('offline'));
+    await rejected;
+    await remaining;
+    expect(done).toHaveBeenCalledTimes(1);
+    await waitForReadRequests(new AbortController().signal);
+    await waitForReadRequests(controller.signal);
   });
 
   it('keeps foreground read decoding active while excluding polling and speculative fills', async () => {

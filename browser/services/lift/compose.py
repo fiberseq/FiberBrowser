@@ -1994,6 +1994,11 @@ def _row_logical(read, row, runs, ctx, call_lo, parts, mapped, ids):
     full.region_end = max(ctx.region_end, max(s[1] for s in row.segments))
     full.width = full.region_end - full.region_start
     ivs = read.get("intervals") or []
+    # This fallback traverses the whole record repeatedly, including random
+    # access in _call_identity and the hull assembly below. Materialize once:
+    # IntColumn indexing otherwise allocates the same small lists each time.
+    if type(ivs) is IntColumn:
+        ivs = ivs.tolist()
     calls = (read.get("_fiberbrowser_calls") or {}).get("intervals")
     base = int(read["_fiberbrowser_source_base"])
     whole_parts = _map_group(ivs, calls, row, base, runs, full)

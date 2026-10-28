@@ -323,25 +323,34 @@ def _index_signature(path: str) -> Optional[tuple]:
     return index, st.st_mtime_ns, st.st_size
 
 
-def estimate_dataset_reads(state, dataset, chrom: str, start: int, end: int) -> Optional[float]:
+def _lift_estimate_context(dataset):
+    """Validate the files once for the neighboring depth probes of one sample-level decision."""
+    from services.lift.live_lift import lift_key
+    config = dataset.live_lift
+    handle = config.handle
+    return (handle, lift_key(handle, config.haplotypes, config.settings), tuple(map(str, dataset.paths)),
+            tuple(_index_signature(str(p)) for p in dataset.paths))
+
+
+def estimate_dataset_reads(state, dataset, chrom: str, start: int, end: int, *, _lift_context=None) -> Optional[float]:
     """Reads of a BAM dataset expected in ``[start, end)`` (None: unknown)."""
     if getattr(dataset, "data_type", None) == "bam_livelift":
         from services.lift.live_lift import LiftRefused, select_pieces, plan_fetch, estimate_lifted_reads
         config = dataset.live_lift
-        if chrom not in config.handle.map.targets:
+        handle, identity, paths, indexes = _lift_context or _lift_estimate_context(dataset)
+        if chrom not in handle.map.targets:
             return 0.0
         # A lifted estimate selects pieces and plans a fetch: the display's
         # sample level asks for a dozen of them on every request. It depends
         # only on the lift identity, the files' indexes and the range.
-        key = (config.key(), tuple(map(str, dataset.paths)), tuple(_index_signature(str(p)) for p in dataset.paths),
-               chrom, int(start), int(end))
+        key = (identity, paths, indexes, chrom, int(start), int(end))
         with _bai_lock:
             if key in _LIFTED_ESTIMATES:
                 _LIFTED_ESTIMATES.move_to_end(key)
                 return _LIFTED_ESTIMATES[key]
         try:
-            selection = select_pieces(config.handle, chrom, start, end, haplotypes=config.haplotypes,
-                                      settings=config.settings, key=config.key())
+            selection = select_pieces(handle, chrom, start, end, haplotypes=config.haplotypes,
+                                      settings=config.settings, key=identity)
             value = estimate_lifted_reads(dataset.paths, plan_fetch(selection, config.settings, fetch_range=(start, end)))
         except LiftRefused:
             value = None
@@ -392,7 +401,11 @@ def sample_level(state, dataset, chrom: str, start: int, end: int) -> int:
     if target <= 0:
         return 0
     lo, hi = level_block(start, end)
-    in_block = estimate_dataset_reads(state, dataset, chrom, lo, hi)
+    estimate = estimate_dataset_reads
+    if getattr(dataset, 'data_type', None) == 'bam_livelift':
+        from functools import partial
+        estimate = partial(estimate, _lift_context=_lift_estimate_context(dataset))
+    in_block = estimate(state, dataset, chrom, lo, hi)
     if in_block is None:
         if getattr(state, 'performance', {}).get('effective') == 'low' and getattr(dataset, 'data_type', None) == 'bam':
             # CSI/remote indexes lack the BAI estimate. Count alignments in C
@@ -410,7 +423,7 @@ def sample_level(state, dataset, chrom: str, start: int, end: int) -> int:
     # The block's busiest view: its reads over the view's share of the block,
     # read off the densest view-wide stretch (targeted libraries are lumpy).
     total = max(in_block * width / (hi - lo),
-                max((estimate_dataset_reads(state, dataset, chrom, a, a + width) or 0.0)
+                max((estimate(state, dataset, chrom, a, a + width) or 0.0)
                     for a in range(lo, hi, max(1, width // 2))))
     if total <= target:
         return 0

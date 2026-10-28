@@ -149,6 +149,28 @@ def _stable_sampler(reads, max_reads, seed):
     return reads[:max_reads]
 
 
+def test_cached_working_set_does_not_refetch_scan_tables(monkeypatch):
+    from services.scan import overlay
+    state = FakeState()
+    state.scan_registry = object()
+    signature = [('scan', 'revision-1')]
+    prepared = []
+    monkeypatch.setattr(overlay, 'overlay_signature', lambda *a: tuple(signature))
+    monkeypatch.setattr(overlay, 'prepare_scan_overlay',
+                        lambda *a: prepared.append(True) or (lambda row: row))
+    options = dict(state=state, dataset_id='primary', chrom='chr1', start=1000, end=1100,
+                   build_bam_reads=_bam_loader_factory([]), build_bigbed_reads=_unused_bigbed_loader,
+                   load_bigbed_marks=_unused_mark_loader, stable_sampler=_stable_sampler)
+    first = build_working_set(**options)
+    assert len(prepared) == 1
+    assert build_working_set(**options) is first
+    assert len(prepared) == 1
+    # A changed scan still invalidates the working set and fetches new tables.
+    signature[:] = [('scan', 'revision-2')]
+    assert build_working_set(**options) is not first
+    assert len(prepared) == 2
+
+
 def test_bounded_analysis_keeps_broad_and_projected_evidence_in_blocks():
     from services.packed_reads import PackedReadBuilder, PackedReads, bounded_read_analysis, packed_decode
     from services.read_metrics import sample_stable_by_id

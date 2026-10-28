@@ -2313,8 +2313,6 @@ def _build_working_set(
     if state.__dict__.get('scan_registry'):
         from services.scan.overlay import overlay_signature, prepare_scan_overlay
         overlay_key = overlay_signature(state, dataset_id)
-        if overlay_key:
-            scan_overlay = prepare_scan_overlay(state, dataset_id, chrom, start, end)
     working_cache_key = make_working_cache_key(
         dataset_id,
         chrom,
@@ -2466,6 +2464,10 @@ def _build_working_set(
             )
 
     bc_start = broad_cache_key[2] if broad_cache_key else broad_start
+    # A cached working set already contains the overlay (and its quality
+    # filters). Fetch scan tables only when rows actually need projecting.
+    if overlay_key:
+        scan_overlay = prepare_scan_overlay(state, dataset_id, chrom, start, end)
     cohort_description = {}
     viewport_reads, total_overlapping, total_spanning = _viewport_reads_from_broad(
         state=state,
