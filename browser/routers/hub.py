@@ -81,3 +81,17 @@ async def assoc_cancel(job_id: str, state=Depends(get_state)):
         return cancel(state, job_id)
     except KeyError as error:
         raise HTTPException(status_code=404, detail='No such association run') from error
+
+
+@router.post('/api/hub/overlay')
+async def hub_overlay(request: dict, state=Depends(get_state)):
+    """The overlaid patch view (V1): an aligned metaprofile of a mark layer over loci, per observation, with
+    denominators (molecules measured at each position) and a pile sample."""
+    _not_on_lab_requests()
+    from services.hub.overlay import OverlayError, overlay
+    if not isinstance(request, dict):
+        raise HTTPException(status_code=422, detail='Request must be an object')
+    try:
+        return await asyncio.to_thread(overlay, state, request)
+    except OverlayError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
