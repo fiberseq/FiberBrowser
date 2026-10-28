@@ -426,3 +426,67 @@ def test_a_leading_gap_only_the_lifted_record_holds_is_a_terminal_gap_extent():
     assert [(c["group"], c["cause"]) for c in res if c["bucket"] != "identical"] == [
         ("intervals~gap", "terminal_gap_extent")]
 
+
+
+# ── known categories (lift parity) ───────────────────────────────────────────
+
+def _cut_record(live_badges, events, connectors=()):
+    """A call the lifted record cuts at [40, 41) (its event: ``events``) while live lift runs it across."""
+    return {"key": ("q", "chr3_MATERNAL", 10),
+            "live": [place(0, 100, {"layer:nuc": {"MA0:0": [[0, 90]]}}, connectors=list(connectors),
+                           badges=live_badges)],
+            "native": [place(0, 100, {"layer:nuc": {"MA0:0": [[0, 40], [41, 90]]}}, sv_events=events)]}
+
+
+def test_a_cut_at_an_event_mixing_a_map_insertion_and_a_read_deletion_is_a_known_artifact():
+    # A 60 bp map insertion at 40 (a live badge) and the read's 1 bp deletion next to it: one event of 60 bp on
+    # the lifted CIGAR (I60 D1), so the decoder cuts the D; live lift groups map pieces only.
+    rec = _cut_record([[40, 60]], [[("I", 40, 60), ("D", 40, 1)]])
+    res = _result([rec])
+    assert res["counts"]["records_identical_calls"] == 0
+    assert res["counts"]["records_identical_calls_or_known"] == 1
+    assert res["known_differences"] == {"decoder_cut_artifact": 1}
+    assert lp.verdict(res) == "PASS (known: 1 decoder_cut_artifact)"
+
+
+def test_a_cut_at_a_map_only_or_read_only_event_is_not_an_artifact():
+    # All map pieces (the D is a live connector): live lift should have cut it too.
+    rec = _cut_record([], [[("D", 40, 1)]], connectors=[[40, 41]])
+    assert lp.artifact_spans(rec["live"][0], rec["native"][0]) == []
+    assert lp.verdict(_result([rec])).startswith("FAIL")
+    # All read pieces (no live junction there): live lift's source decode cuts it in its own frame.
+    rec = _cut_record([], [[("I", 30, 60), ("D", 40, 1)]])
+    assert lp.artifact_spans(rec["live"][0], rec["native"][0]) == []
+    assert lp.verdict(_result([rec])).startswith("FAIL")
+
+
+def test_a_read_deletion_merged_into_a_map_gap_or_its_insertion_moved_by_one_is_an_artifact():
+    # liftbam wrote the read's deleted base into the junction's D (D2 where the connector is 1 bp).
+    rec = _cut_record([], [[("D", 40, 2), ("I", 42, 60)]], connectors=[[41, 42]])
+    assert lp.artifact_spans(rec["live"][0], rec["native"][0]) == [[40, 42]]
+    # The badge is at 41 (the fragment's end), the lifted I at 40 (the aligned block's end) then D1.
+    rec = _cut_record([[41, 60]], [[("I", 40, 60), ("D", 40, 1)]])
+    assert lp.artifact_spans(rec["live"][0], rec["native"][0]) == [[40, 41]]
+
+
+def test_orphan_supplementaries_are_listed_not_failed():
+    ok = {"key": ("q", "c", 1), "live": [place(0, 10)], "native": [place(0, 10)]}
+    one_side = [{"side": "live_only", "cause": "orphan_supplementary_dropped", "n": 2}]
+    assert lp.verdict(_result([ok], one_side)) == "PASS (known: 2 live_only orphan_supplementary_dropped)"
+    assert "on one side only" in lp.verdict(_result([ok], one_side + [{"side": "native_only", "cause": "x", "n": 1}]))
+
+
+def test_native_options_keep_the_native_terminal_gap_filter():
+    # Live lift's source decode skips the filter (compose applies it per lifted record); a native decode of
+    # the lifted BAM keeps the caller's threshold.
+    lp.scratch_env()
+    assert lp.native_options({})["terminal_gap_threshold"] == 500
+    assert lp.native_options({"terminal_gap_threshold": 0})["terminal_gap_threshold"] == 0
+
+
+def test_identical_call_groups_take_the_shortcut_with_the_same_counts():
+    calls = {"layer:nuc": {"MA0:0": [[0, 40]], "MA0:1": [[50, 90]]}}
+    rec = {"key": ("q", "c", 1), "live": [place(0, 100, calls)], "native": [place(0, 100, calls)]}
+    res = _result([rec])
+    assert res["calls"]["layer:nuc"] == {"identical": 2, "raw_identical": 2}
+    assert res["record_calls"]["layer:nuc"] == {"identical": 2}

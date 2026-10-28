@@ -93,10 +93,18 @@ CALL_CAUSES = {
     "terminal_gap_extent": "a gap between the record's outermost call of any kind (an MSP, say) and its first or "
                            "last footprint: the decoder ends hidden terminal gaps at the extent of all calls, live "
                            "lift at the footprints",
+    "decoder_cut_artifact": "known (cause 5): the decoder cuts the lifted record's call (or gap) at the deleted "
+                            "bases of an indel event that groups a map gap with a read indel (or a read indel "
+                            "liftbam merged into the map gap's I/D) on the lifted CIGAR; live lift groups map "
+                            "gaps with map gaps only, as the source record's own indels are grouped in its frame",
     "native_only": "the call is only on the lifted record",
     "live_only": "the call is only on the live-lift row",
     "other": "unclassified (see the examples)",
 }
+# Differences in known categories (listed, never a FAIL): decoder artifacts of the lifted CIGAR (cause 5).
+KNOWN_CAUSES = {"decoder_cut_artifact"}
+# One-side-only causes that are owner decisions (cause 9: fiberhmm-lift drops an orphan supplementary).
+KNOWN_ONE_SIDE = {"orphan_supplementary_dropped"}
 # Point fields a parity verdict needs equal. deam on a record without m6A/5mC calls is read from mismatches
 # against the record's own reference (MD), so it differs between assemblies by design; see deam_exempt.
 VERDICT_POINTS = ("methyl_m6a", "methyl_m5c", "deam")
@@ -189,11 +197,13 @@ def markers(parts) -> list:
     return sorted(int(a) for a, b in parts if int(a) == int(b))
 
 
-def classify_call(live, native, connectors=(), insertions=(), tolerance=TOLERANCE_BP) -> dict:
+def classify_call(live, native, connectors=(), insertions=(), tolerance=TOLERANCE_BP, artifacts=()) -> dict:
     """One call on one placement. ``live``/``native``: its parts ``[t0, t1]``
     (absolute target, zero-width = insertion marker); ``connectors``: the live
     row's target gaps ``[a, b)``; ``insertions``: target positions of its
-    insertion badges (source bases with no target base). Returns ``{raw,
+    insertion badges (source bases with no target base); ``artifacts``: the
+    lifted record's cuts at events mixing map and read pieces (``artifact_spans``).
+    Returns ``{raw,
     bucket, cause, bp}``: ``raw`` 'identical' | 'same_bases' | 'different';
     ``bucket`` 'identical' | 'within_10bp' | 'different'; ``cause`` a
     ``CALL_CAUSES`` key or None; ``bp`` the bases in the symmetric difference."""
@@ -210,6 +220,8 @@ def classify_call(live, native, connectors=(), insertions=(), tolerance=TOLERANC
         bp = span_bp(merge_spans(parts))
         if live and not lm:
             cause = "insertion_marker"
+        elif live and artifacts and not subtract_spans(lm, artifacts):
+            cause = "decoder_cut_artifact"
         elif native and bp == 1 and not subtract_spans(nm, after_insertion):
             cause = "insertion_stub"
         else:
@@ -226,6 +238,8 @@ def classify_call(live, native, connectors=(), insertions=(), tolerance=TOLERANC
                 "bp": bp, "holes": [b - a for a, b in missing]}
     elif not extra and missing and not subtract_spans(missing, list(connectors) + after_insertion):
         cause = "insertion_end_base"
+    elif not missing and extra and artifacts and not subtract_spans(extra, artifacts):
+        cause = "decoder_cut_artifact"
     elif not missing and extra:
         cause = "native_hole"
     else:
@@ -340,15 +354,22 @@ def pair_calls(live: dict, native: dict, live_payloads=None, native_payloads=Non
 def compare_calls(lp: dict, np_: dict, tolerance=TOLERANCE_BP) -> list:
     """Every call of every group, paired by geometry (``pair_calls``) and classified."""
     out = []
+    artifacts = artifact_spans(lp, np_)
     for group in sorted(set(lp["calls"]) | set(np_["calls"])):
         lc, nc = lp["calls"].get(group, {}), np_["calls"].get(group, {})
         if TILING_MARK in group:
-            out += compare_tiling(group, lc.get("<tile>", []), nc.get("<tile>", []), lp, tolerance)
+            out += compare_tiling(group, lc.get("<tile>", []), nc.get("<tile>", []), lp, tolerance, artifacts)
             continue
         lpay, npay = lp.get("payloads", {}).get(group, {}), np_.get("payloads", {}).get(group, {})
+        if lc == nc and lpay == npay:
+            # The same calls with the same parts and payloads: geometry pairs each with itself (calls stacked
+            # on the same bases pair among equals), so every call is identical.
+            out += [{"raw": "identical", "bucket": "identical", "cause": None, "bp": 0, "group": group, "call": c,
+                     "live_call": c, "native_call": c, "payload_differs": False} for c in lc if lc[c]]
+            continue
         for li, ni in pair_calls(lc, nc, lpay, npay):
             res = classify_call(lc.get(li, []) if li is not None else [], nc.get(ni, []) if ni is not None else [],
-                                lp.get("connectors", ()), lp.get("insertions", ()), tolerance)
+                                lp.get("connectors", ()), lp.get("insertions", ()), tolerance, artifacts)
             res.update(group=group, call=li if li is not None else ni, live_call=li, native_call=ni,
                        payload_differs=False)
             if li is not None and ni is not None and lpay.get(li, set()) != npay.get(ni, set()):
@@ -360,7 +381,7 @@ def compare_calls(lp: dict, np_: dict, tolerance=TOLERANCE_BP) -> list:
     return out
 
 
-def compare_tiling(group, live_parts, native_parts, lp: dict, tolerance=TOLERANCE_BP) -> list:
+def compare_tiling(group, live_parts, native_parts, lp: dict, tolerance=TOLERANCE_BP, artifacts=()) -> list:
     """A group's gap or neutral rows, unit by unit (``tiling_units``), classified
     like calls. A unit only the lifted record holds is refined by where live
     lift lost it: across a connector, or next to an insertion badge."""
@@ -369,7 +390,7 @@ def compare_tiling(group, live_parts, native_parts, lp: dict, tolerance=TOLERANC
     own = merge_spans(x for parts in lp["calls"].get(group.split(TILING_MARK)[0], {}).values() for x in parts)
     out = []
     for lparts, nparts in tiling_units(live_parts, native_parts, connectors):
-        res = classify_call(lparts, nparts, connectors, insertions, tolerance)
+        res = classify_call(lparts, nparts, connectors, insertions, tolerance, artifacts)
         hull = merge_spans(lparts + nparts)
         key = f"<tile>:{hull[0][0]}-{hull[-1][1]}" if hull else "<tile>"
         if res["cause"] == "native_only":
@@ -383,6 +404,73 @@ def compare_tiling(group, live_parts, native_parts, lp: dict, tolerance=TOLERANC
         res.update(group=group, call=key, live_call=key if lparts else None, native_call=key if nparts else None,
                    payload_differs=False, live_parts=lparts, native_parts=nparts)
         out.append(res)
+    return out
+
+
+def artifact_spans(lp: dict, np_: dict) -> list:
+    """The lifted record's cuts (``np_['sv_events']``: its indel events of at least ``sv_min_len`` with
+    deleted bases, as ``[(t, ref, len), ...]`` pieces) at events that mix map pieces and read pieces: a
+    ``D`` equal to one of the live row's connectors, or an ``I`` of a badge's molecular length at the badge
+    (or at the left end of the connector after it: liftbam writes I then D), is a map piece; any other
+    piece is the read's (or a read indel liftbam merged into a map gap). Live lift groups map pieces only
+    (the read's own indels are grouped in the source frame), so these cuts are a decoder artifact."""
+    events = np_.get("sv_events") or ()
+    if not events:
+        return []
+    conns = {(int(a), int(b)) for a, b in lp.get("connectors", ())}
+    left_of = collections.defaultdict(set)
+    for a, b in conns:
+        left_of[b].add(a)
+    anchors = collections.defaultdict(set)
+    for pos, mol in lp.get("badges", ()):
+        anchors[int(mol)].add(int(pos))
+        anchors[int(mol)].update(left_of.get(int(pos), ()))
+    anchor_any = set().union(*anchors.values()) if anchors else set()
+    badge_at = collections.defaultdict(set)
+    for pos, mol in lp.get("badges", ()):
+        badge_at[int(mol)].add(int(pos))
+    out = []
+    for ev in events:
+        kinds = set()
+        for n, (t, ref, ln) in enumerate(ev):
+            ref, ln = int(ref), int(ln)
+            if t == "I" and n + 1 < len(ev) and ev[n + 1][0] == "D" and int(ev[n + 1][1]) == ref:
+                # I then D (liftbam's junction): the badge sits anywhere from the left block's end (a read
+                # deletion there moves it into the D) to the D's end.
+                dl = int(ev[n + 1][2])
+                if any(ref <= p <= ref + dl for p in badge_at.get(ln, ())):
+                    kinds.add("map")
+                    continue
+            if t == "D":
+                if (ref, ref + ln) in conns:
+                    kinds.add("map")
+                elif any(a < ref + ln and b > ref for a, b in conns):
+                    kinds.add("merged")   # a read deletion liftbam wrote into the map gap's D
+                else:
+                    kinds.add("read")
+            elif ref in anchors.get(ln, ()):
+                kinds.add("map")
+            elif ref in anchor_any:
+                kinds.add("merged")       # read bases liftbam wrote into the map gap's I
+            else:
+                kinds.add("read")
+        if "merged" in kinds or kinds >= {"map", "read"}:
+            out += [[int(ref), int(ref) + int(ln)] for t, ref, ln in ev if t == "D"]
+    return merge_spans(out)
+
+
+def record_sv_events(rec, min_len: int) -> list:
+    """A lifted pysam record's indel events of at least ``min_len`` that delete bases (the decoder cuts
+    calls there: ``sv_events.read_deletion_cuts``), as ``[(t, ref, len), ...]`` indel pieces."""
+    from services.sv_events import _cigar_pieces, _indel_events
+
+    out = []
+    for ev in _indel_events(_cigar_pieces(rec.cigartuples or (), int(rec.reference_start))):
+        if ev["len"] < min_len:
+            continue
+        pieces = [(p["t"], int(p["ref"]), int(p["len"])) for p in ev.get("raw_pieces") or (ev,) if p["t"] in "ID"]
+        if any(t == "D" for t, _r, _n in pieces):
+            out.append(pieces)
     return out
 
 
@@ -401,7 +489,9 @@ def union_placements(placements: list) -> dict:
     return {"calls": {g: dict(c) for g, c in calls.items()},
             "payloads": {g: dict(c) for g, c in payloads.items()},
             "connectors": [c for p in placements for c in p.get("connectors", ())],
-            "insertions": [x for p in placements for x in p.get("insertions", ())]}
+            "insertions": [x for p in placements for x in p.get("insertions", ())],
+            "badges": [b for p in placements for b in p.get("badges", ())],
+            "sv_events": [e for p in placements for e in p.get("sv_events", ())]}
 
 
 def strand_status(lp: dict, np_: dict) -> str:
@@ -482,6 +572,7 @@ def summarize(records: list, verdict_points=VERDICT_POINTS, rejoin_bp: int = 5) 
     points = collections.defaultdict(collections.Counter)
     examples = collections.defaultdict(list)
     strand = collections.Counter()
+    known = collections.Counter()
     for idx, rec in enumerate(records):
         s["records_compared"] += 1
         live, native = rec["live"], rec["native"]
@@ -564,6 +655,7 @@ def summarize(records: list, verdict_points=VERDICT_POINTS, rejoin_bp: int = 5) 
                 _example(examples, f"points:{field}", idx, rec, live_only=res["live_only"][:10],
                          native_only=res["native_only"][:10])
         # Per record: every call's parts over all placements (a call a split cuts compares whole).
+        calls_known = True
         for c in compare_calls(union_placements(live), union_placements(native)):
             record_calls[c["group"]][c["bucket"]] += 1
             if c["payload_differs"]:
@@ -572,10 +664,18 @@ def summarize(records: list, verdict_points=VERDICT_POINTS, rejoin_bp: int = 5) 
                 record_causes[(c["group"], c["cause"], c["bucket"])] += 1
             if c["bucket"] != "identical":
                 calls_same = False
+                if c["cause"] in KNOWN_CAUSES:
+                    record_calls[c["group"]]["known"] += 1
+                    known[c["cause"]] += 1
+                else:
+                    calls_known = False
         s["records_identical_placements"] += placements_same
         s["records_identical_calls"] += calls_same
+        s["records_identical_calls_or_known"] += calls_same or calls_known
+        s["records_with_known_differences"] += (not calls_same) and calls_known
         s["records_identical_points"] += points_same
         s["records_identical"] += placements_same and calls_same and points_same
+        s["records_identical_or_known"] += placements_same and (calls_same or calls_known) and points_same
     return {"counts": dict(s), "calls": {g: dict(c) for g, c in sorted(calls.items())},
             "record_calls": {g: dict(c) for g, c in sorted(record_calls.items())},
             "causes": [{"group": g, "cause": c, "bucket": b, "n": n, "bp": cause_bp[(g, c)]}
@@ -585,7 +685,7 @@ def summarize(records: list, verdict_points=VERDICT_POINTS, rejoin_bp: int = 5) 
             "points": {f: dict(c) for f, c in sorted(points.items())},
             "connector_holes": {g: {k: n for (g2, k), n in sorted(holes.items()) if g2 == g}
                                 for g in sorted({g for g, _k in holes})},
-            "strand": dict(strand), "examples": dict(examples)}
+            "strand": dict(strand), "known_differences": dict(known), "examples": dict(examples)}
 
 
 def _example(examples, kind, idx, rec, **detail):
@@ -741,6 +841,7 @@ def placement(row, base: int, live: bool, contig: str) -> dict:
         ll = row["live_lift"]
         out["connectors"] = connectors
         out["insertions"] = sorted({int(bd[0]) + base for bd in ll.get("badges") or ()})
+        out["badges"] = [[int(bd[0]) + base, int(bd[2])] for bd in ll.get("badges") or ()]
         out["minus_chain"] = any(seg[3] == "-" for seg in ll.get("segments") or ())
         out["segments"] = [[s[0] + base, s[1] + base] for s in ll.get("segments") or ()]
     return out
@@ -811,21 +912,30 @@ def load_live(source_bam, map_path, chrom, start, end, settings, loader_options,
 
 def load_native(lifted_bam, chrom, start, end, loader_options):
     from services.compact_read_loader import build_compact_reads_from_bam
-    from services.lift.live_lift import _FIXED_LOADER_OPTIONS
 
-    options = dict(loader_options, **_FIXED_LOADER_OPTIONS)
+    options = native_options(loader_options)
     # Live lift decodes its source without legacy layer inference and infers the layers after lifting
     # (compose reads infer_legacy_layers from the caller's options, default on): the lifted BAM infers them here.
     options["infer_legacy_layers"] = bool(loader_options.get("infer_legacy_layers", True))
     return build_compact_reads_from_bam(lifted_bam, chrom, start, end, include_supplementary=True, **options)
 
 
-def decoded(bam_path, contig, start, qname, loader_options) -> bool:
-    """Whether the loader keeps the record ``(qname, contig, start)`` with these options."""
-    from services.compact_read_loader import build_compact_reads_from_bam
+def native_options(loader_options) -> dict:
+    """The loader options of a native decode (record scoped like live lift's source decode). Live lift's
+    source decode skips the terminal-gap filter (``terminal_gap_threshold=0``) because compose applies it
+    to each lifted record; a native decode of a lifted BAM applies it itself, with the caller's threshold."""
     from services.lift.live_lift import _FIXED_LOADER_OPTIONS
 
     options = dict(loader_options, **_FIXED_LOADER_OPTIONS)
+    options["terminal_gap_threshold"] = loader_options.get("terminal_gap_threshold", 500)
+    return options
+
+
+def decoded(bam_path, contig, start, qname, loader_options) -> bool:
+    """Whether the loader keeps the record ``(qname, contig, start)`` with these options."""
+    from services.compact_read_loader import build_compact_reads_from_bam
+
+    options = native_options(loader_options)
     reads = build_compact_reads_from_bam(bam_path, contig, start, start + 1, include_supplementary=True, **options)
     return any(r["id"] == qname and int(r["reference_start"]) == start for r in reads)
 
@@ -859,7 +969,23 @@ def split_blocks(p: dict, g_split: int) -> list:
                        for f, xs in p["points"].items()}
         q["connectors"] = [c for c in p.get("connectors", ()) if c[0] < b and c[1] > a]
         q["insertions"] = [x for x in p.get("insertions", ()) if a <= x <= b]
+        q["badges"] = [x for x in p.get("badges", ()) if a <= x[0] <= b]
         out.append(q)
+    return out
+
+
+def lifted_sv_events(lifted_bam, chrom, start, end, loader_options) -> dict:
+    """``{(qname, source contig, source start, target start): record_sv_events}`` of the lifted records."""
+    import pysam
+    from services.sv_events import SV_MIN_LEN_DEFAULT
+
+    min_len = int(loader_options.get("sv_min_len") or SV_MIN_LEN_DEFAULT)
+    out = {}
+    with pysam.AlignmentFile(lifted_bam) as bam:
+        for rec in bam.fetch(chrom, start, end):
+            yp = parse_yp(rec.get_tag("Yp") if rec.has_tag("Yp") else None)
+            if yp is not None and not rec.is_secondary:
+                out[(rec.query_name, yp[0], yp[1], int(rec.reference_start))] = record_sv_events(rec, min_len)
     return out
 
 
@@ -926,6 +1052,7 @@ def run(args) -> dict:
             edge.add(key)
         live_by[key] += split_blocks(placement(row, sel0, True, chrom), settings.g_split)
     no_yp = 0
+    events = lifted_sv_events(args.lifted_bam, chrom, sel0, sel1, loader_options)
     for read in native_reads:
         yp = parse_yp((read.get("lift") or {}).get("from"))
         if yp is None:
@@ -934,7 +1061,9 @@ def run(args) -> dict:
         key = (read["id"], yp[0], yp[1])
         if int(read["reference_start"]) < sel0 or int(read["reference_end"]) > sel1:
             edge.add(key)
-        native_by[key].append(placement(read, sel0, False, chrom))
+        p = placement(read, sel0, False, chrom)
+        p["sv_events"] = events.get((read["id"], yp[0], yp[1], int(read["reference_start"])), [])
+        native_by[key].append(p)
 
     unlifted = unlifted_reasons(args.unlifted_bam)
     keys = sorted(set(live_by) | set(native_by))
@@ -1002,12 +1131,14 @@ def verdict(result) -> str:
     c = result["counts"]
     n = c.get("records_compared", 0)
     problems = []
-    for key, what in (("records_identical_placements", "placements"), ("records_identical_calls", "call bases"),
-                      ("records_identical_points", "points")):
+    for key, what, note in (("records_identical_placements", "placements", ""),
+                            ("records_identical_calls_or_known", "call bases", " (outside the known categories)"),
+                            ("records_identical_points", "points", "")):
         if c.get(key, 0) != n:
-            problems.append(f"{what} differ on {n - c.get(key, 0)} of {n} records")
-    if result["join"]["one_side_only"]:
-        problems.append(f"{sum(x['n'] for x in result['join']['one_side_only'])} records on one side only")
+            problems.append(f"{what} differ on {n - c.get(key, 0)} of {n} records{note}")
+    unknown_side = [x for x in result["join"]["one_side_only"] if x["cause"] not in KNOWN_ONE_SIDE]
+    if unknown_side:
+        problems.append(f"{sum(x['n'] for x in unknown_side)} records on one side only")
     if result.get("live", {}).get("load_counts", {}).get("truncated"):
         problems.append("the live load was truncated by its budget (rerun on a smaller window or with --no-budget)")
     if result["join"].get("ambiguous_source_keys"):
@@ -1015,7 +1146,11 @@ def verdict(result) -> str:
                         "source contig and start) were not compared")
     if result.get("strand", {}).get("differs"):
         problems.append(f"st differs on {result['strand']['differs']} placements (molecule frame)")
-    return "PASS" if not problems else "FAIL: " + "; ".join(problems)
+    if problems:
+        return "FAIL: " + "; ".join(problems)
+    known = [f"{n} {cause}" for cause, n in sorted(result.get("known_differences", {}).items())]
+    known += [f"{x['n']} {x['side']} {x['cause']}" for x in result["join"]["one_side_only"]]
+    return "PASS" + (f" (known: {', '.join(known)})" if known else "")
 
 
 def markdown(result) -> str:
@@ -1025,7 +1160,8 @@ def markdown(result) -> str:
              f"Verdict: **{result['verdict']}**", "",
              f"Selection (view plus margin, both sides): {result['inputs']['selection']}", "",
              "| records | n |", "|---|---|"]
-    for k in ("records_compared", "records_identical", "records_identical_placements", "records_identical_calls",
+    for k in ("records_compared", "records_identical", "records_identical_or_known", "records_identical_placements",
+              "records_identical_calls", "records_identical_calls_or_known", "records_with_known_differences",
               "records_identical_points", "records_split_live", "records_split_native",
               "records_placement_count_differs", "placements_live", "placements_native",
               "placements_identical_geometry"):
@@ -1053,6 +1189,7 @@ def markdown(result) -> str:
     lines += ["", "| group | connector holes |", "|---|---|"]
     for g, h in result.get("connector_holes", {}).items():
         lines.append(f"| {g} | {', '.join(f'{k}={v}' for k, v in h.items())} |")
+    lines += ["", f"Known differences (calls and gaps per record): {result.get('known_differences', {})}", ""]
     lines += ["", f"Strand (st) per placement: {result['strand']}", ""]
     return "\n".join(lines)
 
