@@ -1293,6 +1293,7 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
                                  skip_query_spans=None,
                                  skip_span_layers=(),
                                  skipped_in_region=None,
+                                 skipped_spans=None,
                                  present_names=None,
                                  call_meta=None) -> Dict[str, Dict]:
     """Parse fiberseq MA:Z + AQ:B:C tags into a layers dict.
@@ -1311,7 +1312,8 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
     ``skip_span_layers`` sections that are left out (dropped read-end
     footprints); their quality bytes and names are still stepped over.
     ``skipped_in_region``: a list that receives the layer name of each skipped
-    call that would have been drawn in the region.
+    call that would have been drawn in the region; ``skipped_spans`` one that
+    receives its absolute reference span (live lift's per-record rules).
     ``present_names``: a set receiving mapped layer names before viewport clipping.
     ``call_meta``: ``(read_length, lead_hard_clip, is_reverse)`` of the record, for
     live lift (services/lift): each layer then carries ``_fiberbrowser_calls``,
@@ -1523,6 +1525,8 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
             if skip_here and (query_start, query_end) in skip_here:
                 if skipped_in_region is not None:
                     skipped_in_region.append(name)
+                if skipped_spans is not None:
+                    skipped_spans.append([int(cs), int(ce)])
                 continue
             interval = [int(cs - region_start), int(ce - region_start), int(l)]
             if call_meta is not None:

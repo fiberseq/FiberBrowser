@@ -2417,6 +2417,7 @@ def _build_compact_reads_from_bam_region(
             ma_layers = {}
             ma_layer_names = set()
             ma_skipped_in_region = []
+            ma_skipped_spans = [] if include_lift_meta else None
             if include_layers and ma_tags is not None:
                 phase_t0 = _profile_start()
                 ma_layers = parse_ma_aq_tags_into_layers(
@@ -2435,6 +2436,7 @@ def _build_compact_reads_from_bam_region(
                     skip_query_spans=terminal_drop or None,
                     skip_span_layers=_MA_FOOTPRINT_TYPES,
                     skipped_in_region=ma_skipped_in_region,
+                    skipped_spans=ma_skipped_spans,
                     present_names=ma_layer_names,
                     call_meta=lift_call_meta,
                 )
@@ -2760,6 +2762,8 @@ def _build_compact_reads_from_bam_region(
                                   if footprints else None),
                     "extent": [int(call_extent[0]), int(call_extent[1])] if call_extent is not None else None,
                     "dropped": sorted([int(fp[0]), int(fp[1])] for fp in dropped_footprints),
+                    # Requested MA calls left out as read-end calls (they still keep a record: explicit MA).
+                    "ma_skipped": sorted(ma_skipped_spans or ()),
                     "ma": ((ma_tags, read_length, bool(read.is_reverse), family_contracts, lift_call_meta[1])
                            if ma_tags is not None else None),
                 }

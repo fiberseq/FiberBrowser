@@ -285,8 +285,9 @@ class _Row:
         # fragment), where the decoder places a position inside the insertion; ri[k] the start of the
         # target-right fragment's first aligned block (pi..ri: the lifted record's D at the junction).
         self.merge, self.cut, self.pi, self.ri = [], [], [], []
-        self.blank_runs = ()     # runs whose footprints the terminal-gap filter blanks (_run_filter)
+        self.blank_runs = {}     # run -> neutral (lo, hi) or None (the run): footprints blanked (_run_filter)
         self.extents = {}        # run -> target (lo, hi) of its other footprint calls (hidden terminal gaps)
+        self.precut = {}         # legacy call id -> (t0, t1, run, size) before a junction that cuts trimmed it
 
     def add_run(self, run, rejoin_bp):
         span = self.frags[-1].span + 1 if self.frags else 0
@@ -351,6 +352,24 @@ class _Row:
                 s[0], s[1], s[3] = min(s[0], t0), max(s[1], t1), k
             else:
                 out.append([t0, t1, k, k])
+        if out and any(self.cut):
+            # A junction that cuts loses its whole D on the lifted record, from the target-left fragment's last
+            # aligned block to the target-right one's first (a read deletion at a fragment's edge is in it).
+            cut, n = self.cut, len(self.frags)
+            minus = self.strand == "-"
+            for s in out:
+                k0, k1 = s[2], s[3]
+                if k0 > 0 and cut[k0 - 1] and a < self.frags[k0].s:
+                    if minus:
+                        s[1] = min(s[1], self.pi[k0 - 1])
+                    else:
+                        s[0] = max(s[0], self.ri[k0 - 1])
+                if k1 < n - 1 and cut[k1] and b > self.frags[k1].e:
+                    if minus:
+                        s[0] = max(s[0], self.ri[k1])
+                    else:
+                        s[1] = min(s[1], self.pi[k1])
+            out = [s for s in out if s[1] > s[0]]
         return out
 
     def badge_at(self, x):
@@ -662,17 +681,19 @@ def _hull_in_run(a, b, row, lo, hi, legacy):
     jl, jr = row.badge_at(a), row.badge_at(b - 1)
     jl = jl if jl is not None and lo <= jl < hi else None
     jr = jr if jr is not None and lo <= jr < hi else None
+    # The decoder judges a record's footprints before it cuts them at deletions: a junction that cuts
+    # changes nothing here.
     if t0 is None:
-        if jl is None or jl != jr or row.cut[jl]:
+        if jl is None or jl != jr:
             return None
         return row.pi[jl], row.pi[jl] + 1
     inside = frags[lo].s <= a and b <= frags[hi].e
     # The target start (source start on '+', source end on '-') must lie on the run (else aligned bases only).
     js, je = (jr, jl) if minus else (jl, jr)
     if (frags[hi].e >= b) if minus else (frags[lo].s <= a):
-        if js is not None and not row.cut[js]:
+        if js is not None:
             t0 = min(t0, row.pi[js])
-        if inside and je is not None and not row.cut[je]:
+        if inside and je is not None:
             t1 = max(t1, row.pi[je] + 1)
     return t0, t1
 
@@ -777,46 +798,68 @@ def _run_calls(read, bounds, row, lo, hi, runs, whole, extent=True):
 
 def _explicit_ma(read, row, lo, hi, ctx, supplementary):
     """Whether the decoder keeps run frags ``lo..hi``'s lifted record for its explicit MA layers when the
-    terminal-gap rules reject its footprints (it then shows a neutral row): requested MA layer calls on
-    that run, or a supplementary record (``supplementary``) kept for its local evidence."""
-    if supplementary and ctx.min_footprints <= 0 and ctx.min_fp_quality <= 0:
-        return True
-    if ctx.requested_layer_set is None:
-        return False
-    names = set((read.get("_fiberbrowser_legacy") or {}).get("ma_names") or ())
-    base = int(read["_fiberbrowser_source_base"])
-    a, b = row.frags[lo].s - base, row.frags[hi].e - base
-    for name, layer in (read.get("layers") or {}).items():
-        if name in names and isinstance(layer, dict):
-            for iv in layer.get("intervals") or ():
-                if iv[0] < b and iv[1] > a:
-                    return True
-    return False
+    footprint rules reject it (it then shows a neutral row): requested MA layer calls on that run (drawn,
+    or left out as read-end calls), or a supplementary record (``supplementary()``) kept for its local
+    evidence."""
+    if ctx.requested_layer_set is not None:
+        names = set((read.get("_fiberbrowser_legacy") or {}).get("ma_names") or ())
+        base = int(read["_fiberbrowser_source_base"])
+        s0, s1 = row.frags[lo].s, row.frags[hi].e
+        for name, layer in (read.get("layers") or {}).items():
+            if name in names and isinstance(layer, dict):
+                for iv in layer.get("intervals") or ():
+                    if iv[0] + base < s1 and iv[1] + base > s0:
+                        return True
+        for x0, x1 in (read.get("_fiberbrowser_call_bounds") or {}).get("ma_skipped") or ():
+            if x0 < s1 and x1 > s0:
+                return True
+    return bool(ctx.min_footprints <= 0 and ctx.min_fp_quality <= 0 and supplementary())
 
 
-def _supplementary_runs(read, rows, runs):
+def _record_runs(read, ctx):
+    """liftbam's placements of the record: its whole source span through every primary piece of the map
+    (outside the selection too), as chain runs; None without a map."""
+    if ctx.handle is None:
+        return None
+    contig = (read.get("_fiberbrowser_lift_record") or {}).get("contig")
+    rs, re_ = int(read["reference_start"]), int(read["reference_end"])
+    haps = {p.hap for p in ctx.selection.pieces}
+    frags = [_Frag(max(p.q_start, rs), min(p.q_end, re_), p) for p in ctx.projections(contig, rs, re_, haps)
+             if p.primary and min(p.q_end, re_) > max(p.q_start, rs)]
+    return _runs_from_frags(frags, ctx.settings.g_split)
+
+
+def _supplementary_runs(read, rows, runs, ctx):
     """``{(id(row), run index)}`` of the runs whose lifted record is supplementary: liftbam keeps the source
     record's flag and marks every placement but the one with the most aligned bases (the first of equals)
-    0x800; a liftbam record is a run of a primary row (alternative rows have none)."""
+    0x800, over the record's whole projection (``_record_runs``; else the rows' runs). A liftbam record is a
+    run of a primary row (alternative rows have none)."""
+    every = {(id(row), r) for row in rows for r in range(len(row.runs))}
     if (read.get("_fiberbrowser_primary") or {}).get("is_supplementary"):
-        return {(id(row), r) for row in rows for r in range(len(row.runs))}
+        return every
     placed = [(row, r, run) for row in rows if not row.alt for r, run in enumerate(row.runs)]
-    out = {(id(row), r) for row in rows if row.alt for r in range(len(row.runs))}
-    if len(placed) < 2:
-        return out
-    aligned = [sum(runs.coverage(f.s, f.e, f.s, f.s)[0] for f in run) for _row, _r, run in placed]
-    best = max(range(len(placed)), key=lambda i: (aligned[i], -i))
-    out.update((id(row), r) for i, (row, r, _run) in enumerate(placed) if i != best)
-    return out
+    full = _record_runs(read, ctx)
+    candidates = full if full else [run for _row, _r, run in placed]
+    if not candidates:
+        return every
+    aligned = [sum(runs.coverage(f.s, f.e, f.s, f.s)[0] for f in run) for run in candidates]
+    best = candidates[max(range(len(candidates)), key=lambda i: (aligned[i], -i))]
+    keys = {(f.p.chain, f.p.strand) for f in best}
+
+    def is_best(run):
+        return any((f.p.chain, f.p.strand) in keys and any(f.s < g.e and g.s < f.e for g in best) for f in run)
+    return every - {(id(row), r) for row, r, run in placed if is_best(run)}
 
 
 def _run_filter(read, rows, runs, ctx):
     """The decoder's per-record rules for footprints, applied to each lifted record (a run: liftbam writes
     one record per run), with the record's calls placed as on that record: a run with no footprint, or
     whose first or last call lies more than ``terminal_gap_threshold`` from its ends (with terminal gaps
-    hidden), is left out, or blanked to a neutral row when explicit MA layers keep it (``row.blank_runs``).
-    Sets each kept row's ``extents`` (its hidden terminal gaps' bounds). The source decode skipped these
-    rules (``live_lift._FIXED_LOADER_OPTIONS``). Returns the rows, rebuilt without the runs left out."""
+    hidden), is left out, or blanked to a neutral row when explicit MA layers keep it; a run with only
+    dropped read-end footprints is a neutral row over its calls (``row.blank_runs``: run -> neutral
+    bounds, None for the run's). Sets each kept row's ``extents`` (its hidden terminal gaps' bounds). The
+    source decode skipped these rules (``live_lift._FIXED_LOADER_OPTIONS``). Returns the rows, rebuilt
+    without the runs left out."""
     bounds = read.get("_fiberbrowser_call_bounds")
     if bounds is None:
         return rows
@@ -825,7 +868,14 @@ def _run_filter(read, rows, runs, ctx):
     fp_span, span = bounds.get("fp_extent"), bounds.get("extent")
     rec_lo = min(([fp_span[0]] if fp_span else []) + ([span[0]] if span else []), default=None)
     rec_hi = max(([fp_span[1]] if fp_span else []) + ([span[1]] if span else []), default=None)
-    supplementary = _supplementary_runs(read, rows, runs)
+    dropped = bounds.get("dropped") or ()
+    supp = []   # computed on first need (a rejected run)
+
+    def supplementary(row, r):
+        if not supp:
+            supp.append(_supplementary_runs(read, rows, runs, ctx))
+        return (id(row), r) in supp[0]
+
     out = []
     for row in rows:
         decisions, extents, lo = [], {}, 0
@@ -834,27 +884,36 @@ def _run_filter(read, rows, runs, ctx):
             whole = rec_lo is not None and run[0].s <= rec_lo and run[-1].e >= rec_hi
             has_fp, fp_ext, ext = _run_calls(read, bounds, row, lo, hi, runs, whole, hide)
             t0, t1 = row.segments[r][0], row.segments[r][1]
+            stubs = (_extreme_hull(dropped, row.frags[lo].s, row.frags[hi].e, row, lo, hi, True)
+                     if not has_fp and dropped else None)
             first = last = None
-            for e in (fp_ext, ext):
+            for e in ((fp_ext if has_fp else stubs), ext):
                 if e is not None:
                     first = e[0] if first is None else min(first, e[0])
                     last = e[1] if last is None else max(last, e[1])
-            reject = not has_fp or (thr > 0 and first is not None and (first - t0 > thr or t1 - last > thr))
-            if not reject:
-                decisions.append("keep")
-            elif _explicit_ma(read, row, lo, hi, ctx, (id(row), r) in supplementary):
-                decisions.append("blank")
+            far = thr > 0 and first is not None and (first - t0 > thr or t1 - last > thr)
+            neutral = None
+            if stubs is not None and hide and first is not None:
+                # Only read-end footprints (dropped): the decoder's neutral row over the record's calls.
+                neutral = (max(first, t0), min(last, t1))
+            explicit = lambda: _explicit_ma(read, row, lo, hi, ctx, lambda: supplementary(row, r))
+            if has_fp and not far:
+                decisions.append(("keep", None))
+            elif stubs is not None and not far:
+                decisions.append(("blank", neutral))
+            elif explicit():
+                decisions.append(("blank", neutral))
             else:
-                decisions.append("drop")
+                decisions.append(("drop", None))
             extents[r] = ext
             lo = hi + 1
-        if "drop" not in decisions:
-            row.blank_runs = frozenset(r for r, d in enumerate(decisions) if d == "blank")
+        if all(d != "drop" for d, _n in decisions):
+            row.blank_runs = {r: n for r, (d, n) in enumerate(decisions) if d == "blank"}
             row.extents = {r: e for r, e in extents.items() if e is not None}
             out.append(row)
             continue
-        ctx.count("runs_terminal_gap_filtered", decisions.count("drop"))
-        kept = [(run, d, extents[r]) for r, (run, d) in enumerate(zip(row.runs, decisions)) if d != "drop"]
+        ctx.count("runs_terminal_gap_filtered", sum(d == "drop" for d, _n in decisions))
+        kept = [(run, d, extents[r]) for r, (run, d) in enumerate(zip(row.runs, decisions)) if d[0] != "drop"]
         if not kept:
             continue
         new = _Row(row.strand, row.alt)
@@ -862,7 +921,7 @@ def _run_filter(read, rows, runs, ctx):
             new.add_run(run, ctx.settings.rejoin_bp)
         new.index()
         _row_geometry(new, (read.get("_fiberbrowser_lift_record") or {}).get("contig"), runs, ctx)
-        new.blank_runs = frozenset(r for r, (_run, d, _e) in enumerate(kept) if d == "blank")
+        new.blank_runs = {r: d[1] for r, (_run, d, _e) in enumerate(kept) if d[0] == "blank"}
         new.extents = {r: e for r, (_run, _d, e) in enumerate(kept) if e is not None}
         out.append(new)
     return out
@@ -1187,7 +1246,8 @@ def _rest_parts(i, ivs, calls, row, base, runs, rs0, width):
     call = calls[i] if calls is not None and i < len(calls) else None
     st = row.stretches(ai, bi)
     if call and isinstance(call[0], str) and call[0][:3] in _LEGACY_PREFIXES:
-        st = _legacy_ends(st, ai, bi, call, row, runs)
+        size = ivs[i][2] if len(ivs[i]) > 2 else 0
+        st = _legacy_ends(st, ai, bi, call, row, runs, int(size))
     elif st:
         st = _aligned_ends(st, ai, bi, row)
     out = []
@@ -1247,7 +1307,7 @@ def _aligned_ends(st, ai, bi, row, start_side=True):
     return [s for s in st if s[1] > s[0]]
 
 
-def _legacy_ends(st, ai, bi, call, row, runs):
+def _legacy_ends(st, ai, bi, call, row, runs, size=0):
     """A legacy call's stretches with the decoder's insertion rule at its ends
     (``CigarCoordMapper.footprint_to_ref`` on the lifted record of the run
     holding its target start): a start inside an insertion maps to the
@@ -1259,11 +1319,14 @@ def _legacy_ends(st, ai, bi, call, row, runs):
     same record. On a '-' row the call's source start is its target end."""
     if not st:
         # A call inside one junction's source-only stretch lies inside the lifted record's insertion: the
-        # decoder's 1-bp interval at the insertion, unless the junction's D is cut.
+        # decoder's 1-bp interval at the insertion, unless the junction's D is cut (it is a footprint until
+        # then: its gaps and MSPs are built around it, row.precut).
         j = row.badge_at(ai)
-        if j is not None and j == row.badge_at(bi - 1) and not row.cut[j]:
+        if j is not None and j == row.badge_at(bi - 1):
             p = row.pi[j]
-            return [[p, p + 1, j, j]]
+            if not row.cut[j]:
+                return [[p, p + 1, j, j]]
+            _precut(row, call, p, p + 1, row.frags[j].run, size)
         return st
     minus = row.strand == "-"
     m0, m1 = int(call[1]), int(call[2])
@@ -1284,23 +1347,39 @@ def _legacy_ends(st, ai, bi, call, row, runs):
     st = [list(s) for s in st]
     # The target start is the first stretch's on '+' (source order), the last one's on '-'.
     first, last = (st[-1], st[0]) if minus else (st[0], st[-1])
+    whole = [first[0], last[1]]
+    cut_end = False
     if start is not None:
         p, j = start
+        whole[0] = p
         if j is not None and row.cut[j]:  # the deleted bases after P go: it starts after the junction's D
             first[0] = max(first[0], row.ri[j])
+            cut_end = True
         else:
             first[0] = p
     if end is not None:
         p, j = end
+        whole[1] = p + 1
         if j is not None and row.cut[j]:
             last[1] = min(last[1], p)
+            cut_end = True
         else:
             last[1] = p + 1
     elif not same:  # its target end lies on another record (where its start is soft-clipped): aligned bases
         je = row.badge_at(xe)
         if je is not None:
             last[1] = min(last[1], row.pi[je])
+    if cut_end:  # the decoder built the record's gaps and MSPs around the call before the cut
+        _precut(row, call, whole[0], whole[1], row.frags[first[2]].run, size)
     return [s for s in st if s[1] > s[0]]
+
+
+def _precut(row, call, t0, t1, run, size):
+    """Record a legacy call's extent before a junction that cuts trimmed it (``row.precut``: the decoder
+    builds a record's gaps and inferred MSPs from its footprints before cutting them at deletions)."""
+    cid = call[0]
+    h = row.precut.get(cid)
+    row.precut[cid] = (t0, t1, run, size) if h is None else (min(h[0], t0), max(h[1], t1), run, size)
 
 
 def _call_identity(calls, ivs, parts, row, base, runs, lo):
@@ -1544,11 +1623,17 @@ def _subtract(iv, cuts):
     return out
 
 
-def _logical(parts, mapped, ids, frags):
+def _logical(parts, mapped, ids, frags, precut=None, rs0=0, width=0):
     """Per run (one lifted placement), the footprint calls whole again: parts
     of one call (same id) joined to their hull, as the decoder saw them
-    before cutting them at deletions. ``{run: [[t0, t1, size], ...]}`` sorted."""
+    before cutting them at deletions. ``{run: [[t0, t1, size], ...]}`` sorted.
+    ``precut``: legacy ns/nl calls' extents before a junction cut them
+    (``row.precut``; absolute, clipped to ``[0, width]`` here)."""
     by_run = {}
+    for cid, (t0, t1, run, size) in (precut or {}).items():
+        a, b = max(t0 - rs0, 0), min(t1 - rs0, width)
+        if isinstance(cid, str) and cid[:3] == "ns:" and b > a and size > 0:
+            by_run.setdefault(run, {})[cid] = [a, b, size]
     for j, (_t0, _t1, _i, k) in enumerate(parts):
         iv = mapped[j]
         if iv[2] <= 0:
@@ -1636,6 +1721,9 @@ def _blank(parts, mapped, ids, keys, row, cuts, ctx):
     for run, (b0, b1) in _run_bounds(row, ctx).items():
         if run not in row.blank_runs:
             continue
+        neutral = row.blank_runs[run]
+        if neutral is not None:  # the record's calls' extent (only read-end footprints), not the whole run
+            b0, b1 = neutral[0] - ctx.region_start, neutral[1] - ctx.region_start
         for part in _subtract([b0, b1, 0], cuts):
             c0, c1 = max(part[0], 0), min(part[1], width)
             if c1 > c0:
@@ -1699,7 +1787,7 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
             if len(iv) > 2 and iv[2] > 0:
                 rank[i] = n
                 n += 1
-        logical = _logical(parts, mapped, ids, row.frags)
+        logical = _logical(parts, mapped, ids, row.frags, row.precut, rs0, width)
         gaps = _gaps(logical, _run_bounds(row, ctx), cuts, ctx.hide_terminal_gaps, width, _extents(row, ctx))
         combined = mapped + gaps
         order = sorted(range(len(combined)), key=lambda j: (combined[j][0], combined[j][1], j))
@@ -1722,7 +1810,8 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
     legacy = read.get("_fiberbrowser_legacy")
     if ctx.infer_legacy and ctx.include_layers and legacy is not None:
         _infer_legacy(read, layers, payload, parts, mapped, ids, keys,
-                      logical if logical is not None else (lambda: _logical(parts, mapped, ids, row.frags)),
+                      logical if logical is not None else
+                      (lambda: _logical(parts, mapped, ids, row.frags, row.precut, rs0, width)),
                       cuts, legacy, row, ctx, call_ids, call_parts)
     if read.get("layers") is not None or layers:
         payload["layers"] = layers

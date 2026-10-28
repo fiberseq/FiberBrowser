@@ -280,6 +280,8 @@ class _Frags:
         self.after = np.fromiter(aft, dtype=bool, count=n)
         self.run = _ints((f.run for f in frags), n)
         self.nfr = nf
+        # Rows with a junction that cuts: their parts there end at the lifted record's block edges.
+        self.row_cut = np.fromiter((any(row.cut) for row in rows), dtype=bool, count=len(rows))
         disjoint = np.fromiter((bool(row.disjoint) for row in rows), dtype=bool, count=len(rows))
         if n:
             disjoint &= ~np.bincount(self.row[(self.s < 0) | (self.e >= _SHIFT)], minlength=len(rows)).astype(bool)
@@ -547,9 +549,11 @@ def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts, small):
     # junction's insertion (compose._legacy_ends), unless the junction cuts; an MA call there has no part.
     for e in np.flatnonzero(todo & stub & ~by_hand & UHAS[E_u]).tolist():
         s = int(E_seg[e])
-        r, row, _u = segs[s]
+        r, row, u = segs[s]
         j = int(KA[e])
-        if row.cut[j]:
+        if row.cut[j]:  # no part; the per-row path records its extent before the cut (row.precut)
+            d = row_read[r]
+            rest_parts(int(E_i[e]), u.ivs, u.calls, row, int(base[d]), items[d][2], F.rs0[r], F.width[r])
             continue
         p = row.pi[j] - int(RS0[r])
         if min(p + 1, int(WID[r])) > max(p, 0):
@@ -677,6 +681,8 @@ def _end_rule_candidates(E_r, A, B, E_seg, E_i, E_d, segs, F, R, KA, KB):
         ends.append((x, k, g, inside))
     within = badges[0] & badges[1] & (KA == KB)   # inside one badge
     out |= (badges[0] | badges[1]) & ~within
+    # An interval across fragments of a row with a junction that cuts: trimmed to block edges there.
+    out |= F.row_cut[E_r] & (KA != KB)
     legacy = np.fromiter((compose_legacy(segs[s][2]) for s in range(len(segs))), dtype=bool, count=len(segs))[E_seg]
     if not legacy.any():
         return out, stub
