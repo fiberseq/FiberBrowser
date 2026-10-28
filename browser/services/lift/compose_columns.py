@@ -776,7 +776,9 @@ def _top_level(items, rows, row_read, segs, F, USZ, seg_ustart, P_seg, P_c0, P_c
     if not nseg or F.max_width >= (1 << 31):
         return
     ok = np.fromiter((u.name == "intervals" and "sv" not in items[row_read[r]][0] and u.first is None
-                      and not row.blank_runs and not any(row.cut) for r, row, u in segs), dtype=bool, count=nseg)
+                      and not row.blank_runs and not any(row.cut)
+                      and all(ctx.region_start <= s[0] and s[1] <= ctx.region_end for s in row.segments)
+                      for r, row, u in segs), dtype=bool, count=nseg)
     if not ok.any():
         return
     if not len(F.s) or int(F.run.max()) >= (1 << 20):

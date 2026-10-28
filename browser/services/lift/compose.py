@@ -9,8 +9,8 @@ Per piece ``p`` (forward source coordinates):
 - boundary ``B(x)``: ``p.t_start + (x - p.q_start)`` on ``+``, ``p.t_end - (x - p.q_start)`` on ``-``.
 
 A read's source body ``[reference_start, reference_end)`` is cut by the pieces
-into fragments. Fragments form chain runs (a run breaks on a chain, strand or
-primary change, a backwards step, or a target gap of at least ``g_split``);
+into fragments. Fragments form record runs (a run breaks on a strand or
+primary change, a backwards step, or a read or target gap of at least ``g_split``);
 consecutive runs of one orientation form a row unless a run overlaps the row
 in target coordinates. Inside a run a source gap is a badge (exact molecular
 bp from the aligned runs) and a target gap a connector; a *span* is a stretch
@@ -287,6 +287,7 @@ class _Row:
         self.merge, self.cut, self.pi, self.ri = [], [], [], []
         self.blank_runs = {}     # run -> neutral (lo, hi) or None (the run): footprints blanked (_run_filter)
         self.extents = {}        # run -> target (lo, hi) of its other footprint calls (hidden terminal gaps)
+        self.payload_cuts = []   # target deletion cuts applied after mapping call ends
         self.precut = {}         # legacy call id -> (t0, t1, run, size) before a junction that cuts trimmed it
 
     def add_run(self, run, rejoin_bp):
@@ -415,13 +416,26 @@ class _Row:
 
 
 def _runs_from_frags(frags, g_split, seq_runs=None):
-    """Fragments as chain runs (liftbam's records): a run breaks on a chain, strand or primary change, a
-    backwards step, or a read or target gap of at least ``g_split`` between its aligned blocks (liftbam's
-    ``continues``; the source gap and the fragments' target gap without the record's aligned runs). With
-    them, each run is trimmed to its first and last aligned base (liftbam's record ends there) and a run
-    with no aligned base is dropped (liftbam writes no record)."""
-    frags = sorted(frags, key=lambda f: (f.s, f.t0))
+    """Liftbam record runs, grouped by projected aligned blocks, including CIGAR gaps within a piece.
+    Collinear pieces may continue across chains. Runs end at projected aligned bases."""
     aligned = seq_runs if seq_runs is not None and seq_runs.ref else None
+    if aligned is not None:
+        split = []
+        for f in frags:
+            start, prev = f.s, None
+            i = max(0, bisect.bisect_right(aligned.ref, f.s) - 1)
+            while i < len(aligned.ref) and aligned.ref[i] < f.e:
+                a, b = max(f.s, aligned.ref[i]), min(f.e, aligned.ref[i] + aligned.len[i])
+                if b > a:
+                    if prev is not None and (a - prev >= g_split or
+                            aligned.seq_at(a) - aligned.seq_at(prev - 1) - 1 >= g_split):
+                        split.append(_Frag(start, prev, f.p))
+                        start = a
+                    prev = b
+                i += 1
+            split.append(f if start == f.s else _Frag(start, f.e, f.p))
+        frags = split
+    frags = sorted(frags, key=lambda f: (f.s, f.t0))
     runs = []
     for f in frags:
         if runs and _continues(runs[-1], f, g_split, aligned):
@@ -436,7 +450,7 @@ def _runs_from_frags(frags, g_split, seq_runs=None):
 def _continues(run, f, g_split, seq_runs):
     """Whether fragment ``f`` extends ``run`` (fragments sorted by source start)."""
     prev = run[-1]
-    if (f.p.chain != prev.p.chain or f.p.strand != prev.p.strand or f.p.primary != prev.p.primary
+    if (f.p.strand != prev.p.strand or f.p.primary != prev.p.primary
             or f.s < prev.e):
         return False
     gap = (prev.t0 - f.t1) if f.minus else (f.t0 - prev.t1)
@@ -445,7 +459,8 @@ def _continues(run, f, g_split, seq_runs):
     if seq_runs is None:
         return f.s - prev.e < g_split
     x = seq_runs.first_aligned_at(f.s, f.e)
-    y = seq_runs.last_aligned_before(prev.e, run[0].s)
+    y = next((y for g in reversed(run)
+              if (y := seq_runs.last_aligned_before(g.e, g.s)) is not None), None)
     if x is None or y is None:  # no aligned block on one side yet: nothing for liftbam to split
         return True
     fy = next((g for g in reversed(run) if g.s <= y < g.e), None)
@@ -459,8 +474,8 @@ def _continues(run, f, g_split, seq_runs):
 
 def _trim_run(run, seq_runs):
     """The run from its first aligned base to its last (empty without one)."""
-    lo, hi = run[0].s, max(f.e for f in run)
-    x, y = seq_runs.first_aligned_at(lo, hi), seq_runs.last_aligned_before(hi, lo)
+    x = next((x for f in run if (x := seq_runs.first_aligned_at(f.s, f.e)) is not None), None)
+    y = next((y for f in reversed(run) if (y := seq_runs.last_aligned_before(f.e, f.s)) is not None), None)
     if x is None or y is None:
         return []
     out = []
@@ -747,8 +762,8 @@ def _first_last(spans, a, b, starts=None):
     if starts is None:
         starts = [s[0] for s in spans]
     i = bisect.bisect_left(starts, a)
-    if i > 0 and spans[i - 1][1] > a:
-        i -= 1
+    # Starts alone cannot exclude an earlier interval containing nested calls.
+    i = next((k for k in range(i) if spans[k][1] > a), i)
     j = bisect.bisect_left(starts, b) - 1
     while i <= j and spans[i][1] <= a:
         i += 1
@@ -769,9 +784,17 @@ def _ma_spans(read, runs, named=False):
                                                       family_contracts=contracts):
             s0, s1 = q0 + lead, q1 + lead
             m = (runs.length - s1, runs.length - s0) if runs.reverse else (s0, s1)
-            span = runs.ref_span(*m)
-            if span is not None:
-                out.append((span[0], span[1], name) if named else list(span))
+            # Keep aligned blocks separately: a call's reference hull also contains deleted bases,
+            # which cannot establish MA presence on a lifted record.
+            a, b = (runs.length - m[1], runs.length - m[0]) if runs.reverse else m
+            i = max(0, bisect.bisect_right(runs.seq, a) - 1)
+            while i < len(runs.seq) and runs.seq[i] < b:
+                r, q, n = runs.ref[i], runs.seq[i], runs.len[i]
+                x, y = max(a, q), min(b, q + n)
+                if y > x:
+                    span = (r + x - q, r + y - q)
+                    out.append((*span, name) if named else list(span))
+                i += 1
     out.sort()
     return out
 
@@ -1044,7 +1067,7 @@ def _call_starts(read):
 
 
 def _row_geometry(row, contig, runs, ctx):
-    """Segments (one per chain run), connectors, inner badges and the junction table."""
+    """Segments (one per lifted record), connectors, inner badges and the junction table."""
     row.segments = []
     for run in row.runs:
         p = run[0].p
@@ -1511,6 +1534,7 @@ def _map_layer(name, layer, row, base, runs, ctx, lo, ids_out, parts_out):
     calls = layer.get("_fiberbrowser_calls")
     src = layer.get("intervals") or []
     parts, mapped, ids, keys = _group(f"layer:{name}", layer.get("intervals"), calls, row, base, runs, ctx, lo)
+    parts, mapped, ids, keys = _cut_group(parts, mapped, ids, keys, row.payload_cuts)
     out = {key: value for key, value in layer.items()
            if key not in ("intervals", "qualities", "_fiberbrowser_calls", *_ALIGNED_LIST_KEYS, *_SOURCE_SPAN_KEYS)}
     out["intervals"] = mapped
@@ -1688,15 +1712,30 @@ def _subtract(iv, cuts):
     return out
 
 
+def _cut_group(parts, mapped, ids, keys, cuts):
+    """Reapply target deletion cuts after end rules can extend a call into deleted bases.
+    Keep source indices and call identities parallel to every surviving part."""
+    if not cuts:
+        return parts, mapped, ids, keys
+    out_parts, out_mapped, out_ids, out_keys = [], [], [], []
+    for j, (_a, _b, i, k) in enumerate(parts):
+        for iv in _subtract(mapped[j], cuts):
+            out_parts.append((iv[0], iv[1], i, k))
+            out_mapped.append(iv)
+            out_ids.append(ids[j])
+            out_keys.append(keys[j])
+    return out_parts, out_mapped, out_ids, out_keys
+
+
 def _logical(parts, mapped, ids, frags, precut=None, rs0=0, width=0, skip_runs=()):
     """Per run (one lifted placement), the footprint calls whole again: parts
     of one call (same id) joined to their hull, as the decoder saw them
     before cutting them at deletions. ``{run: [[t0, t1, size], ...]}`` sorted.
     ``precut``: legacy ns/nl calls' extents before a junction cut them
-    (``row.precut``; absolute, clipped to ``[0, width]`` here)."""
+    (``row.precut``; absolute, converted to region-relative coordinates here)."""
     by_run = {}
     for cid, (t0, t1, run, size) in (precut or {}).items():
-        a, b = max(t0 - rs0, 0), min(t1 - rs0, width)
+        a, b = t0 - rs0, t1 - rs0
         if isinstance(cid, str) and cid[:3] == "ns:" and b > a and size > 0 and run not in skip_runs:
             by_run.setdefault(run, {})[cid] = [a, b, size]
     for j, (_t0, _t1, _i, k) in enumerate(parts):
@@ -1708,6 +1747,27 @@ def _logical(parts, mapped, ids, frags, precut=None, rs0=0, width=0, skip_runs=(
         h = hulls.get(key)
         hulls[key] = [iv[0], iv[1], iv[2]] if h is None else [min(h[0], iv[0]), max(h[1], iv[1]), h[2]]
     return {run: sorted(h.values()) for run, h in by_run.items()}
+
+
+def _row_logical(read, row, runs, ctx, call_lo, parts, mapped, ids):
+    """Whole footprint hulls per lifted record, before viewport clipping."""
+    if all(ctx.region_start <= s[0] and s[1] <= ctx.region_end for s in row.segments):
+        return _logical(parts, mapped, ids, row.frags, row.precut, ctx.region_start, ctx.width, row.blank_runs)
+    full = copy.copy(ctx)
+    full.region_start = min(ctx.region_start, min(s[0] for s in row.segments))
+    full.region_end = max(ctx.region_end, max(s[1] for s in row.segments))
+    full.width = full.region_end - full.region_start
+    ivs = read.get("intervals") or []
+    calls = (read.get("_fiberbrowser_calls") or {}).get("intervals")
+    base = int(read["_fiberbrowser_source_base"])
+    whole_parts = _map_group(ivs, calls, row, base, runs, full)
+    whole_ids, _ = _call_identity(calls, ivs, whole_parts, row, base, runs, call_lo.get("intervals", {}))
+    delta = full.region_start - ctx.region_start
+    whole_mapped = [[a + delta, b + delta, *ivs[i][2:]] for a, b, i, k in whole_parts]
+    keep = [j for j, p in enumerate(whole_parts) if row.frags[p[3]].run not in row.blank_runs]
+    return _logical([whole_parts[j] for j in keep], [whole_mapped[j] for j in keep],
+                    [whole_ids[j] for j in keep], row.frags, row.precut,
+                    ctx.region_start, ctx.width, row.blank_runs)
 
 
 def _run_bounds(row, ctx):
@@ -1826,6 +1886,7 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
     if any(row.cut):  # the map gaps the decoder cuts calls at on the lifted record
         cuts = sorted(cuts + _map_cuts(row, ctx))
 
+    row.payload_cuts = cuts
     # Top-level footprints: positive (and neutral size-0) intervals; gaps rebuilt per run.
     ivs = read.get("intervals") or []
     iv_calls = calls.get("intervals")
@@ -1852,8 +1913,9 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
             if len(iv) > 2 and iv[2] > 0:
                 rank[i] = n
                 n += 1
-        logical = _logical(parts, mapped, ids, row.frags, row.precut, rs0, width, row.blank_runs)
+        logical = _row_logical(read, row, runs, ctx, call_lo, parts, mapped, ids)
         gaps = _gaps(logical, _run_bounds(row, ctx), cuts, ctx.hide_terminal_gaps, width, _extents(row, ctx))
+        parts, mapped, ids, keys = _cut_group(parts, mapped, ids, keys, cuts)
         combined = mapped + gaps
         order = sorted(range(len(combined)), key=lambda j: (combined[j][0], combined[j][1], j))
         payload["intervals"] = [combined[j] for j in order]
@@ -1865,8 +1927,8 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
                                     if j < np_ and parts[j][2] in rank and rank[parts[j][2]] < len(quals)]
 
     if read.get("fire") is not None:
-        _fparts, payload["fire"], call_ids["fire"], call_parts["fire"] = _group(
-            "fire", read["fire"], calls.get("fire"), row, base, runs, ctx, call_lo)
+        _fparts, fivs, fids, fkeys = _group("fire", read["fire"], calls.get("fire"), row, base, runs, ctx, call_lo)
+        _fparts, payload["fire"], call_ids["fire"], call_parts["fire"] = _cut_group(_fparts, fivs, fids, fkeys, cuts)
 
     layers = {}
     for name, layer in (read.get("layers") or {}).items():
@@ -1876,7 +1938,7 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
     if ctx.infer_legacy and ctx.include_layers and legacy is not None:
         _infer_legacy(read, runs, layers, payload, parts, mapped, ids, keys,
                       logical if logical is not None else
-                      (lambda: _logical(parts, mapped, ids, row.frags, row.precut, rs0, width, row.blank_runs)),
+                      (lambda: _row_logical(read, row, runs, ctx, call_lo, parts, mapped, ids)),
                       cuts, legacy, row, ctx, call_ids, call_parts)
     if read.get("layers") is not None or layers:
         payload["layers"] = layers
@@ -2188,8 +2250,8 @@ def _insertion_payloads(read, row, contig, runs, call_lo, ctx, p, a, b, lo, hi, 
     return block
 
 
-def _ma_on_row(read, row, runs, name):
-    """Whether one of the record's MA ``name`` calls (whole record) has aligned bases on the row's fragments;
+def _ma_on_run(read, row, runs, name, run):
+    """Whether one of the record's MA ``name`` calls (whole record) has aligned bases on the run's fragments;
     True when the record's MA calls are not known (no call bounds)."""
     bounds = read.get("_fiberbrowser_call_bounds") or {}
     if bounds.get("ma") is None:
@@ -2197,7 +2259,7 @@ def _ma_on_row(read, row, runs, name):
     named = bounds.get("_ma_named")
     if named is None:
         named = bounds["_ma_named"] = _ma_spans(read, runs, named=True)
-    return any(n == name and any(f.s < r1 and r0 < f.e for f in row.frags) for r0, r1, n in named)
+    return any(n == name and any(f.s < r1 and r0 < f.e for f in row.runs[run]) for r0, r1, n in named)
 
 
 def _infer_legacy(read, runs, layers, payload, parts, mapped, ids, keys, logical, cuts, legacy, row, ctx,
@@ -2211,17 +2273,15 @@ def _infer_legacy(read, runs, layers, payload, parts, mapped, ids, keys, logical
     ma_names = set(legacy.get("ma_names") or ())
     wants = ctx.wants
 
-    def canonical(name):
-        """An MA nuc/tf group keeps legacy inference off only when one of its calls lands on this row (the
+    def canonical(name, run):
+        """An MA nuc/tf group keeps legacy inference off only when one of its calls lands on this run (the
         decoder reads the MA names present on the lifted record itself; a call inside an insertion has no
         place there)."""
-        if (layers.get(name) or {}).get("intervals"):
-            return True
         if name not in ma_names:
             return name in layers
-        return _ma_on_row(read, row, runs, name)
-    infer_nuc = wants["nuc"] and not canonical("nuc")
-    infer_tf = wants["tf"] and not canonical("tf")
+        return _ma_on_run(read, row, runs, name, run)
+    infer_nuc = {r for r in range(len(row.runs)) if wants["nuc"] and not canonical("nuc", r)}
+    infer_tf = {r for r in range(len(row.runs)) if wants["tf"] and not canonical("tf", r)}
     infer_msp = (wants["msp"] and not legacy.get("explicit_msp") and "msp" not in ma_names and "msp" not in layers)
     width = ctx.width
     if infer_nuc or infer_tf:
@@ -2249,6 +2309,7 @@ def _infer_legacy(read, runs, layers, payload, parts, mapped, ids, keys, logical
                 sel = picked.tolist()
             else:
                 sel = [j for j in order if keep(mapped[j][2])]
+            sel = [j for j in sel if row.frags[parts[j][3]].run in wanted]
             if not sel:
                 continue
             names, tracks = [], []
@@ -2264,11 +2325,25 @@ def _infer_legacy(read, runs, layers, payload, parts, mapped, ids, keys, logical
                         lq, rq = rq, lq
                     names += ["lq", "rq"]
                     tracks += [lq, rq]
-            layers[name] = {"intervals": (IntColumn(column[picked]) if column is not None
-                                          else [mapped[j] for j in sel]),
-                            "qualities": tracks or None, "quality_names": names}
-            call_ids[f"layer:{name}"] = [ids[j] for j in sel]
-            call_parts[f"layer:{name}"] = [keys[j] for j in sel]
+            old = layers.get(name) or {}
+            old_ivs = list(old.get("intervals") or [])
+            added = [mapped[j] for j in sel]
+            merged = old_ivs + added
+            merged_order = sorted(range(len(merged)), key=lambda j: (merged[j][0], merged[j][1], j))
+            all_names = list(old.get("quality_names") or [])
+            all_names += [n for n in names if n not in all_names]
+            old_tracks = dict(zip(old.get("quality_names") or [], old.get("qualities") or []))
+            new_tracks = dict(zip(names, tracks))
+            combined_tracks = [list(old_tracks.get(n, [0] * len(old_ivs))) +
+                               list(new_tracks.get(n, [0] * len(added))) for n in all_names]
+            layers[name] = {**old, "intervals": [merged[j] for j in merged_order],
+                            "qualities": [[t[j] for j in merged_order] for t in combined_tracks] or None,
+                            "quality_names": all_names}
+            group = f"layer:{name}"
+            all_ids = list(call_ids.get(group) or [None] * len(old_ivs)) + [ids[j] for j in sel]
+            all_parts = list(call_parts.get(group) or [None] * len(old_ivs)) + [keys[j] for j in sel]
+            call_ids[group] = [all_ids[j] for j in merged_order]
+            call_parts[group] = [all_parts[j] for j in merged_order]
     if infer_msp:
         if callable(logical):
             logical = logical()

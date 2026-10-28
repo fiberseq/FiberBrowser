@@ -982,29 +982,17 @@ def decoded(bam_path, contig, start, qname, loader_options) -> bool:
 
 
 def split_blocks(p: dict, g_split: int) -> list:
-    """A live placement cut into its lifted records: live lift keeps a read's runs (one liftbam record each)
-    on one row, as ``segments``. Two segments of different chains join when both their target gap and
-    their read gap (from ``molecular`` spans) stay below ``g_split``: liftbam's grouping continues a
-    record across colinear chains, live lift's runs do not. One placement per block, with its calls,
-    points, connectors and insertions."""
+    """A live row cut into lifted records. Annotated segments are the composer's record runs, including
+    collinear chain joins and read-gap splits. Preserve these boundaries; older, unannotated segments
+    fall back to target-gap grouping. Each placement keeps its calls, points and map edits."""
     segs = sorted(p.get("segments") or [[p["start"], p["end"]]])
-
-    def molecules(a, b):
-        ms = [m for t0, t1, m0, step in p.get("molecular") or () if t0 < b and t1 > a
-              for m in (m0, m0 + step * (t1 - t0 - 1))]
-        return (min(ms), max(ms)) if ms else None
 
     blocks = []
     for seg in segs:
         a, b = seg[0], seg[1]
         if blocks:
             last = blocks[-1]
-            joins = a - last[1] < g_split
-            if joins and len(seg) > 2 and last[2] is not None:
-                joins = seg[2] != last[2]
-                ra, rb = molecules(last[0], last[1]), molecules(a, b)
-                if joins and ra is not None and rb is not None:
-                    joins = max(rb[0] - ra[1], ra[0] - rb[1]) - 1 < g_split
+            joins = len(seg) == 2 and last[2] is None and a - last[1] < g_split
             if joins:
                 last[1], last[2] = max(last[1], b), (seg[2] if len(seg) > 2 else None)
                 continue

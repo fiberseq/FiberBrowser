@@ -25,11 +25,11 @@ def _pieces(spans):
     return [ll.LiftPiece(0, ts, ts + qe - qs, qs, qe, "+", True, "H#1", CONTIG) for qs, qe, ts in spans]
 
 
-def _lift(monkeypatch, path, pieces, end, **options):
+def _lift(monkeypatch, path, pieces, end, region_start=0, **options):
     """Lifted rows through the columnar pass, checked against the per-row functions."""
     sel = ll.PieceSelection("chrT", 0, end, 0, end, sorted(pieces, key=lambda p: (p.t_start, p.chain)))
     plan = ll.plan_fetch(sel, ll.LiftSettings())
-    kw = dict(handle=None, region_start=0, region_end=end, settings=ll.LiftSettings(), key="k", dataset_id="d",
+    kw = dict(handle=None, region_start=region_start, region_end=end, settings=ll.LiftSettings(), key="k", dataset_id="d",
               loader_options=options or None)
 
     def run():
@@ -154,3 +154,78 @@ def test_min_footprints_counts_each_lifted_record(tmp_path, monkeypatch):
     assert rows == []
     rows = _lift(monkeypatch, path, _pieces([(0, 500, 0), (500, 1000, 20000)]), 21000, min_footprints=1)
     assert len(rows) == 1 and len(rows[0]["live_lift"]["segments"]) == 2
+
+
+def test_large_insertion_inside_one_piece_splits_records(tmp_path, monkeypatch):
+    tags = [("ns", array("I", [50, 10250])), ("nl", array("I", [100, 100]))]
+    path = _bam(tmp_path, [("r", 0, "200M10000I200M", tags)])
+    (row,) = _lift(monkeypatch, path, _pieces([(0, 400, 0)]), 500)
+    assert _ivs(row) == [[50, 150, 100], [250, 350, 100]]
+    assert not row["layers"].get("msp")
+    assert [s[:2] for s in row["live_lift"]["segments"]] == [[0, 200], [200, 400]]
+
+
+def test_trim_uses_only_projected_aligned_bases(tmp_path, monkeypatch):
+    tags = [("ns", array("I", [210])), ("nl", array("I", [70]))]
+    path = _bam(tmp_path, [("r", 0, "100M1000D100M1000D100M", tags)])
+    (row,) = _lift(monkeypatch, path, _pieces([(100, 600, 0), (1200, 2300, 500)]), 1700)
+    assert _ivs(row) == [[1510, 1580, 70]]
+    assert [s[:2] for s in row["live_lift"]["segments"]] == [[1500, 1600]]
+
+
+def test_nested_ma_extent_keeps_a_valid_record(tmp_path, monkeypatch):
+    tags = [("ns", array("I", [750])), ("nl", array("I", [250]))] + _ma(
+        "2000;nuc.Q:151-150;tf.Q:161-10", [200, 200])
+    path = _bam(tmp_path, [("r", 0, "2000M", tags)])
+    (row,) = _lift(monkeypatch, path, _pieces([(200, 1500, 0)]), 1400)
+    assert [iv for iv in _ivs(row) if iv[2] > 0] == [[550, 800, 250]]
+
+
+def test_deleted_ma_bases_do_not_suppress_legacy_inference(tmp_path, monkeypatch):
+    tags = [("ns", array("I", [10, 160])), ("nl", array("I", [30, 30]))] + _ma("200;tf.Q:91-20", [200])
+    path = _bam(tmp_path, [("r", 0, "100M100D100M", tags)])
+    (row,) = _lift(monkeypatch, path, _pieces([(0, 50, 0), (120, 180, 50), (250, 300, 110)]), 200)
+    assert [list(iv) for iv in row["layers"]["tf"]["intervals"]] == [[10, 40, 30], [120, 150, 30]]
+
+
+def test_collinear_chains_share_a_record_before_filtering(tmp_path, monkeypatch):
+    tags = [("ns", array("I", [20, 150])), ("nl", array("I", [60, 30]))]
+    path = _bam(tmp_path, [("r", 0, "200M", tags)])
+    pieces = _pieces([(0, 100, 0)]) + [ll.LiftPiece(1, 110, 210, 100, 200, "+", True, "H#1", CONTIG)]
+    (row,) = _lift(monkeypatch, path, pieces, 300, min_footprints=2)
+    assert _ivs(row) == [[20, 80, 60], [80, 160, -80], [160, 190, 30]]
+    assert len(row["live_lift"]["segments"]) == 1
+
+
+def test_gaps_use_calls_outside_the_viewport(tmp_path, monkeypatch):
+    tags = [("ns", array("I", [100, 700])), ("nl", array("I", [100, 100]))]
+    path = _bam(tmp_path, [("r", 0, "1000M", tags)])
+    (row,) = _lift(monkeypatch, path, _pieces([(0, 1000, 0)]), 650, region_start=250)
+    assert _ivs(row) == [[0, 400, -500]]
+    assert [list(iv) for iv in row["layers"]["msp"]["intervals"]] == [[0, 400, 500]]
+
+
+def test_ma_suppression_is_per_record(tmp_path, monkeypatch):
+    tags = [("ns", array("I", [50, 650])), ("nl", array("I", [30, 30]))] + _ma("1000;tf.Q:61-20", [200])
+    path = _bam(tmp_path, [("r", 0, "1000M", tags)])
+    (row,) = _lift(monkeypatch, path, _pieces([(0, 500, 0), (500, 1000, 20000)]), 21000)
+    assert [list(iv) for iv in row["layers"]["tf"]["intervals"]] == [[60, 80, 20], [20150, 20180, 30]]
+
+
+def test_source_deletion_cuts_are_reapplied_after_insertion_end_rules(tmp_path, monkeypatch):
+    # The source cuts [100,160); only [100,140) projects. Its neighbor is a map insertion, so
+    # legacy end rules can create stubs or extend calls back into that deletion. The lifted record
+    # is 100M100I40D140M: those bases are still cut, in every call channel.
+    tags = [("ns", array("I", [80, 130, 190])), ("nl", array("I", [50, 30, 40])),
+            ("as", array("I", [140])), ("al", array("I", [20]))]
+    path = _bam(tmp_path, [("r", 0, "100M60D240M", tags)])
+    (row,) = _lift(monkeypatch, path, _pieces([(0, 140, 0), (260, 400, 140)]), 400)
+    assert [iv for iv in _ivs(row) if iv[2] > 0] == [[80, 100, 50], [140, 170, 40]]
+    assert not row.get("fire")
+    assert [list(iv) for iv in row["layers"]["tf"]["intervals"]] == [[80, 100, 50], [140, 170, 40]]
+    native_path = write_bam(tmp_path / "native.bam",
+                            lambda h: [make_record(h, "r", CONTIG, 0, "100M100I40D140M", tags=tags)],
+                            contigs=((CONTIG, 5000),))
+    (native,) = _native(native_path, 400)
+    assert _ivs(row) == _ivs(native)
+    assert [list(iv) for iv in row["layers"]["tf"]["intervals"]] == _ivs(native["layers"]["tf"])

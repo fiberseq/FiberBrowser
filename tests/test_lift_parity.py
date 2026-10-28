@@ -545,3 +545,46 @@ def test_each_connector_of_a_merged_deletion_counts_on_its_own():
     assert lp.artifact_spans(live, native) == [[100, 121]]
     rec = {"key": ("q", "c", 1), "live": [live], "native": [native]}
     assert lp.verdict(_result([rec])) == "PASS (known: 1 decoder_cut_artifact)"
+
+
+def test_required_source_cut_survives_an_unprojected_flank(tmp_path):
+    from threading import RLock
+    from types import SimpleNamespace
+    from live_lift_fixtures import make_record, write_bam
+    from services.lift import live_lift as ll
+
+    path = write_bam(tmp_path / 'source.bam',
+                     lambda h: [make_record(h, 'q', 'src', 0, '100M60D160M')],
+                     contigs=(('src', 1000),))
+    pieces = [ll.LiftPiece(0, 0, 40, 0, 40, '+', True, 'H#1', 'src'),
+              ll.LiftPiece(0, 40, 260, 100, 320, '+', True, 'H#1', 'src')]
+    handle = SimpleNamespace(lock=RLock(), map=SimpleNamespace(
+        source_to_target=lambda c, a, b: [p for p in pieces if p.q_start < b and p.q_end > a]))
+    rec = {'key': ('q', 'src', 0),
+           'live': [place(0, 260, {'layer:nuc': {'MA0:0': [[10, 200]]}}, chains=[0],
+                          connectors=[], badges=[[40, 60]])],
+           'native': [place(0, 260, {'layer:nuc': {'MA0:0': [[10, 40], [100, 200]]}},
+                            sv_events=[[('I', 40, 60), ('D', 40, 60)]])]}
+    lp.attach_required_cuts([rec], path, handle, 50)
+    assert rec['native'][0]['required_cuts'] == [[40, 100]]
+    assert lp.verdict(_result([rec])).startswith('FAIL')
+    rec['live'][0]['calls']['layer:nuc']['MA0:0'] = [[10, 40], [100, 200]]
+    assert lp.verdict(_result([rec])) == 'PASS'
+
+
+def test_short_target_gap_does_not_join_records_with_a_large_read_gap():
+    p = place(100, 600, {'layer:nuc': {'ns:0': [[150, 250]], 'ns:1': [[450, 550]]}},
+              segments=[[100, 300, 0], [400, 600, 1]],
+              molecular=[[100, 300, 0, 1], [400, 600, 10200, 1]], connectors=[], insertions=[])
+    a, b = lp.split_blocks(p, 10000)
+    assert (a['start'], a['end'], b['start'], b['end']) == (100, 300, 400, 600)
+    rec = {'key': ('q', 'src', 0), 'live': [a, b],
+           'native': [place(100, 300, a['calls']), place(400, 600, b['calls'])]}
+    assert lp.verdict(_result([rec])) == 'PASS'
+
+
+def test_normalization_preserves_modern_record_boundaries_across_chains():
+    # Target-sorted segments can be close even when their source order runs backwards on the target.
+    p = place(100, 600, segments=[[100, 300, 1], [400, 600, 0]],
+              molecular=[[100, 300, 200, 1], [400, 600, 0, 1]])
+    assert [(x['start'], x['end']) for x in lp.split_blocks(p, 10000)] == [(100, 300), (400, 600)]
