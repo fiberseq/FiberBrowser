@@ -1078,6 +1078,12 @@ def _compact_reads_payload(
             total_overlapping_in_viewport = 0
             total_in_viewport = 0
             total_spanning_in_viewport = 0
+            # Tables-mode scans' layers before the quality filters (as the working set does), so the display
+            # post-pass over this window is a no-op and never restores a filtered mark.
+            scan_overlay = None
+            if state.__dict__.get('scan_registry'):
+                from services.scan.overlay import prepare_scan_overlay
+                scan_overlay = prepare_scan_overlay(state, dataset_id, chrom, start, end)
             for read in iter_broad_reads_overlapping_viewport(
                 state,
                 broad_reads,
@@ -1115,6 +1121,8 @@ def _compact_reads_payload(
                 if not matches_cluster(read):
                     continue
 
+                if scan_overlay is not None:
+                    adjusted_read = scan_overlay(adjusted_read)
                 if display_quality_filters and "layers" in adjusted_read:
                     adjusted_read = apply_quality_filters(adjusted_read, display_quality_filters)
                     if adjusted_read is None:

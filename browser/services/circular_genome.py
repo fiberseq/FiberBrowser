@@ -272,7 +272,11 @@ def merge_compact_reads_by_id(reads: Iterable[dict]) -> list[dict]:
     per revolution) join, while distinct records sharing a name (exact
     duplicates, the same QNAME in two files) stay separate rows.  The row
     keeps its alignment identity and the union of its parts'
-    ``alignment_spans``."""
+    ``alignment_spans``.  A scan overlay's fields are kept too: its layers'
+    ``scan_overlay`` token (and draw fields) and the parts' row receipts
+    (``PARTS_KEY``: each names its segment's window, so the caller renames
+    them for the whole view with ``scan.overlay.rewindow_receipts``)."""
+    from services.scan.overlay import PARTS_KEY, RECEIPT_KEY
     grouped: dict[tuple, list[dict]] = {}
     order: list[tuple] = []
 
@@ -298,6 +302,9 @@ def merge_compact_reads_by_id(reads: Iterable[dict]) -> list[dict]:
         spans = [span for part in parts for span in part.get("alignment_spans") or []]
         if spans:
             target["alignment_spans"] = merged_spans(spans)
+        receipts = tuple(part[RECEIPT_KEY] for part in parts if part.get(RECEIPT_KEY) is not None)
+        if receipts:
+            target[PARTS_KEY] = receipts
         for read in sorted(parts, key=_read_position_sort_key):
             if read.get("duplicate"):
                 target["duplicate"] = True
@@ -326,6 +333,9 @@ def merge_compact_reads_by_id(reads: Iterable[dict]) -> list[dict]:
                     for meta_key in ("circular_ids", "annotation_names"):
                         if layer.get(meta_key):
                             dest.setdefault(meta_key, []).extend(layer.get(meta_key) or [])
+                    for meta_key in ("scan_overlay", "source_layer", "draw_style"):
+                        if layer.get(meta_key) is not None:
+                            dest.setdefault(meta_key, layer[meta_key])
         result.append(target)
     return result
 

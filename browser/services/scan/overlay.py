@@ -22,6 +22,10 @@ changed carries a receipt (``RECEIPT_KEY``: the dataset's scans, the pass's wind
 row itself rather than on its layers, which quality filters rebuild: a later pass of the same scans over the same
 window is a no-op, so a pass after the filters never brings a rejected mark back. A pass over another window (or of
 other scans) replaces the groups the receipt names, filtered or not, and those its layers' ``scan_overlay`` names.
+The display paths that project broad-cache rows themselves (``working_sets.build_sampled_display_working_set``,
+``read_endpoint``'s broad-cache hit) apply it before their quality filters too. A wrapped circular view merges its
+segments' rows (``circular_genome.merge_compact_reads_by_id`` keeps their receipts under ``PARTS_KEY`` and the
+layers' overlay fields); ``rewindow_receipts`` then names the wrapped view's window, before the quality filters.
 """
 from __future__ import annotations
 
@@ -31,6 +35,8 @@ from typing import Dict, List
 STATE_BYTE = {'1': 1, '0': 2, '.': 3}
 #: The row's overlay receipt (an internal field): (overlay token, chrom, start, end, groups written).
 RECEIPT_KEY = '_fiberbrowser_scan_overlay'
+#: A merged circular row's parts' receipts (each names its segment's window), until ``rewindow_receipts``.
+PARTS_KEY = RECEIPT_KEY + '_parts'
 NUC_GROUPS = frozenset({'nucsz', 'nucseg'})
 LAYER_META = {
     'fpcls': ('Footprint classes (scan)', '#7c3aed', 'tf'),
@@ -138,6 +144,26 @@ def overlay_token(dataset_id: str, scans) -> str:
     """The receipt of a dataset's overlay by these scans (``overlay_signature``'s scans)."""
     return 'scan:' + hashlib.sha256(repr((dataset_id, tuple((sc.scan_id, sc.manifest_digest) for sc in scans)))
                                     .encode()).hexdigest()[:16]
+
+
+def rewindow_receipts(rows: List[dict], chrom: str, start: int, end: int) -> List[dict]:
+    """Merged circular rows (``merge_compact_reads_by_id``) with one receipt over the wrapped view ``[start, end)``.
+
+    Each part was overlaid over its own segment's window; the row's receipt then names the view's window and the
+    union of the parts' groups, so the post-filter pass over the view is a no-op. Parts overlaid by different scans
+    leave the row without a receipt (that pass replaces the groups its layers' ``scan_overlay`` names). A part with
+    no receipt had nothing to overlay in its segment. Rows are changed in place (the merge's own new rows)."""
+    for read in rows:
+        parts = read.pop(PARTS_KEY, None)
+        if not parts:
+            continue
+        tokens = {p[0] for p in parts}
+        if len(tokens) != 1:
+            read.pop(RECEIPT_KEY, None)
+            continue
+        groups = sorted({g for p in parts if len(p) > 4 for g in p[4]})
+        read[RECEIPT_KEY] = (next(iter(tokens)), str(chrom), int(start), int(end), tuple(groups))
+    return rows
 
 
 def apply_scan_overlays(state, dataset_id: str, chrom: str, start: int, end: int, reads: List[dict]) -> List[dict]:
