@@ -238,3 +238,26 @@ def test_indels_shorter_than_sv_min_len_cut_nothing(tmp_path, monkeypatch):
     rows = _lift_bam(monkeypatch, path, [_src(0, 350)], sv_min_len=20)
     assert _ivs(rows["short"]) == [[5, 100, 95], [100, 110, -40], [130, 140, -40], [140, 245, 105]]
 
+
+
+def _split_row():
+    """A lifted row whose record splits at a g_split target gap: two runs (one fiberhmm-lift record each),
+    a connector across the gap (an owned target insertion), no call near the runs' inner ends."""
+    return {"id": "r", "intervals": [[0, 40, 40], [20060, 20100, 40]],
+            "live_lift": {"segments": [[0, 100, 0, "+", True], [20000, 20100, 0, "+", True]],
+                          "connectors": [[100, 20000]], "holes": [], "badges": [], "badge_ids": [],
+                          "insertions": {}, "calls": {"intervals": ["ns:0", "ns:1"]},
+                          "call_parts": {"intervals": [[0, 0], [100, 100]]}}}
+
+
+def test_a_view_between_two_runs_has_no_neutral_interval_across_the_gap():
+    """Cause 7: a split row's hull spans the gap between its runs, where it has no data (fiberhmm-lift writes
+    two records). A view across both inner ends gets one neutral interval per body span, not one across the gap
+    (scans and Read Stats count neutral intervals). A view inside the gap keeps the row drawn without depth
+    (test_live_lift_gap_markers)."""
+    from services.working_sets import project_broad_read_to_viewport
+    kw = dict(include_methylation=False, layer_key=None)
+    row, _ = project_broad_read_to_viewport(_split_row(), viewport_offset=50, region_width=20000, **kw)
+    assert [list(iv) for iv in row["intervals"]] == [[0, 50, 0], [19950, 20000, 0]]
+    row, _ = project_broad_read_to_viewport(_split_row(), viewport_offset=5000, region_width=1000, **kw)
+    assert row is not None and not list(row["intervals"])
