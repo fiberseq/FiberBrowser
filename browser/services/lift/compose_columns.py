@@ -146,6 +146,15 @@ def prepare_runs(runs_list, g_split):
     bad[1:] |= same & (ref[:-1] + ln[:-1] > ref[1:])
     valid = np.ones(len(n), dtype=bool)
     valid[read[bad]] = False
+    ma_bad = bad | (ref < 0) | (seq < 0) | (ref + ln >= _SHIFT) | (seq + ln >= _SHIFT)
+    ma_bad[1:] |= same & (seq[:-1] + ln[:-1] > seq[1:])
+    ma_valid = np.ones(len(n), dtype=bool)
+    ma_valid[read[ma_bad]] = False
+    # On valid records each sum is below 2**40, hence exact in bincount's
+    # float64 accumulator. These conservative whole-record bounds let small
+    # junctions skip aligned-edge searches without changing split decisions.
+    deletions = np.bincount(read[1:][same], weights=(ref[1:] - ref[:-1] - ln[:-1])[same], minlength=len(n))
+    insertions = np.bincount(read[1:][same], weights=(seq[1:] - seq[:-1] - ln[:-1])[same], minlength=len(n))
     ends = ref[:-1] + ln[:-1]
     large = same & ((ref[1:] - ends >= g_split) | (seq[1:] - seq[:-1] - ln[:-1] >= g_split))
     gi = np.flatnonzero(large)
@@ -153,8 +162,57 @@ def prepare_runs(runs_list, g_split):
     gap_ends, gap_starts = ends[gi].tolist(), ref[gi + 1].tolist()
     for d, (r, a, b) in enumerate(zip(runs_list, off[:-1].tolist(), off[1:].tolist())):
         r._arrays = (ref[a:b], seq[a:b], ln[a:b])
+        r._ma_indexable = bool(ma_valid[d])
+        r._gap_totals = (int(deletions[d]), int(insertions[d])) if ma_valid[d] else None
         lo, hi = gap_off[d], gap_off[d + 1]
         r._split_gaps[g_split] = ((gap_ends[lo:hi], gap_starts[lo:hi]) if valid[d] else None)
+
+
+def prepare_ma(reads, runs_list, queries, extent_needed=None):
+    """Index query coverage only for records needing per-run MA extents.
+
+    Extents and family presence search the union's edges against aligned
+    blocks; they never need the interior of each projected call. CIGAR
+    validity is checked window-wide by prepare_runs. Saved lists belong to
+    each record and remain independent of its selected target window.
+    """
+    if extent_needed is None:
+        extent_needed = [True] * len(reads)
+    for read, runs, need in zip(reads, runs_list, extent_needed):
+        bounds = read.get("_fiberbrowser_call_bounds")
+        if not need or not bounds or bounds.get("ma") is None or "_ma_query_presence" in bounds:
+            continue
+        valid = runs._ma_indexable
+        if valid is None:
+            # Direct callers without prepare_runs retain the same conservative
+            # contract, including Python-int coordinates outside the columns.
+            ref, seq, ln = runs.ref, runs.seq, runs.len
+            valid = (all(0 <= r < r + n < _SHIFT and 0 <= q < q + n < _SHIFT
+                         for r, q, n in zip(ref, seq, ln)) and
+                     all(ref[i] + ln[i] <= ref[i + 1] and seq[i] + ln[i] <= seq[i + 1]
+                         for i in range(len(ref) - 1)))
+        if not valid:
+            continue
+        lead = bounds["ma"][4]
+        named, all_spans = {}, []
+        for name, a, b in queries(bounds):
+            a, b = max(a + lead, 0), b + lead
+            if b > a:
+                named.setdefault(name, []).append((a, b))
+                all_spans.append((a, b))
+
+        def coverage(spans):
+            starts, ends = [], []
+            for a, b in sorted(spans):
+                if ends and a <= ends[-1]:
+                    ends[-1] = max(ends[-1], b)
+                else:
+                    starts.append(a)
+                    ends.append(b)
+            return starts, ends
+
+        bounds["_ma_query_union"] = coverage(all_spans)
+        bounds["_ma_query_presence"] = {name: coverage(spans) for name, spans in named.items()}
 
 
 class _Runs:
@@ -548,6 +606,11 @@ def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts, small):
     E_seg = np.repeat(np.arange(nseg, dtype=np.int64), seg_len)
     E_i = np.arange(len(E_seg), dtype=np.int64) - seg_off[E_seg]
     E_u = seg_ustart[E_seg] + E_i
+    # Negative-size decoder gaps are rebuilt in target coordinates, never
+    # mapped. Exclude them before the fragment and end-rule searches, while
+    # retaining the original interval indices for identities and qualities.
+    E_original = np.flatnonzero(USZ[E_u] >= 0)
+    E_seg, E_i, E_u = E_seg[E_original], E_i[E_original], E_u[E_original]
     E_r = seg_row[E_seg]
     E_d = seg_read[E_seg]
     A = base[E_d] + UA[E_u]
@@ -646,7 +709,7 @@ def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts, small):
     # key is its own molecular start; unusual calls are checked one by one.
     w1 = np.flatnonzero(has & (UB[P_u] - UA[P_u] == 1))
     if len(w1):
-        e_of = seg_off[P_seg[w1]] + P_i[w1]
+        e_of = np.searchsorted(E_original, seg_off[P_seg[w1]] + P_i[w1])
         for j, e in zip(w1[marker[e_of]].tolist(), e_of[marker[e_of]].tolist()):
             keys[j] = [mol0[e], mol0[e]]  # insertion-only: its own molecular start
         for j in w1[by_hand[e_of]].tolist():
@@ -806,19 +869,20 @@ def _top_level(items, rows, row_read, segs, F, USZ, seg_ustart, P_seg, P_c0, P_c
     """The top-level intervals of each row as ``_row_payload`` lays them out:
     footprint parts plus the gaps between whole calls of each run (one lifted
     record: ``_logical`` + ``_gaps``), sorted by ``(start, end, index)``, with
-    their qualities. Only rows whose read has no ``sv`` and whose junctions
-    cut nothing (no cuts at all), with no blanked run, and whose calls each map
+    their qualities. Only rows whose junctions cut nothing, with no blanked
+    run, and whose calls each map
     to one part per run (so each logical call is one part);
     ``row._pre.intervals`` is left None for the others. Sets it to
     ``(intervals, order, quality ranks)``: the intervals (``IntColumn``, a
     slice of one window array of parts and gaps in display order) and the
     index of each in ``mapped`` + gaps, from which ``_map_units`` orders the
-    call lists."""
+    call lists. Reads carrying SVs can use it too: _row_payload accepts this
+    layout only after checking that the row has no actual deletion cuts."""
     RS0, WID, hide = F.row_rs0, F.row_width, ctx.hide_terminal_gaps
     nseg = len(segs)
     if not nseg or F.max_width >= (1 << 31):
         return
-    ok = np.fromiter((u.name == "intervals" and "sv" not in items[row_read[r]][0] and u.first is None
+    ok = np.fromiter((u.name == "intervals" and u.first is None
                       and not row.blank_runs and not any(row.cut)
                       and all(ctx.region_start <= s[0] and s[1] <= ctx.region_end for s in row.segments)
                       for r, row, u in segs), dtype=bool, count=nseg)

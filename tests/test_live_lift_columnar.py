@@ -303,3 +303,134 @@ def test_viewport_projection_of_columns_matches_lists(seed):
                 _same(got, want)
                 projected += 1
     assert projected > 200
+
+
+@pytest.mark.parametrize("prepare", [False, True])
+def test_ma_query_index_matches_block_projection(prepare):
+    """Whole-record family coverage must retain CIGAR holes and insertion-only
+    calls, including at batch/read boundaries and beside scalar fallbacks."""
+    from services.lift import compose_columns as cc
+
+    rng = random.Random(714)
+    reads, runs_list, expected = [], [], []
+
+    def union(spans):
+        merged = []
+        for a, b in sorted(spans):
+            if merged and a <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], b)
+            else:
+                merged.append([a, b])
+        return merged
+
+    for i in range(90):
+        r, q, blocks = rng.randrange(10000), rng.randrange(20), []
+        for _ in range(rng.randrange(0, 30)):
+            n = rng.randrange(1, 30)
+            blocks.append([r, q, n])
+            r += n + rng.randrange(20)
+            q += n + rng.randrange(20)
+        calls = [(rng.choice(["nuc", "tf", "fp_v2"]), a, a + rng.randrange(-2, 80))
+                 for a in (rng.randrange(-20, max(q + 20, 1)) for _ in range(rng.randrange(50)))]
+        lead = rng.randrange(-10, 11)
+        if i % 9 == 0:
+            calls.append(("nuc", -(1 << 70), 1 << 70))
+        # Deliberately unusual block order must leave all scalar caches alone.
+        if i % 7 == 0 and len(blocks) > 2:
+            blocks[1][1] = blocks[0][1] - 1
+        runs = compose._SeqRuns(blocks, {"length": q + 100, "reverse": False})
+        read = {"_fiberbrowser_call_bounds": {"ma": [None, None, None, None, lead], "_ma_query": calls}}
+        spans = compose._ma_block_spans(calls, lead, runs)
+        expected.append(spans)
+        reads.append(read)
+        runs_list.append(runs)
+    if prepare:
+        cc.prepare_runs(runs_list, 10000)
+    cc.prepare_ma(reads, runs_list, compose._ma_queries)
+    prepared = 0
+    for read, runs, spans in zip(reads, runs_list, expected):
+        bounds = read["_fiberbrowser_call_bounds"]
+        if "_ma_query_presence" not in bounds:
+            continue
+        prepared += 1
+        lead = bounds["ma"][4]
+        starts, ends = bounds["_ma_query_union"]
+        assert list(map(list, zip(starts, ends))) == union(
+            (max(a + lead, 0), b + lead) for _n, a, b in bounds["_ma_query"]
+            if b + lead > max(a + lead, 0))
+        for name in ("nuc", "tf", "fp_v2"):
+            starts, ends = bounds["_ma_query_presence"].get(name, ([], []))
+            lead = bounds["ma"][4]
+            assert list(map(list, zip(starts, ends))) == union(
+                (max(a + lead, 0), b + lead) for n, a, b in bounds["_ma_query"]
+                if n == name and b + lead > max(a + lead, 0))
+            # Compare run membership with the original projection, including
+            # windows lying entirely in a deletion or a query insertion.
+            from types import SimpleNamespace
+            for _ in range(15):
+                a = rng.randrange(-10, max(runs.ref[-1] + runs.len[-1] + 10, 1)) if runs.ref else 0
+                b = a + rng.randrange(1, 80)
+                row = SimpleNamespace(runs=[[SimpleNamespace(s=a, e=b, _aligned=None)]])
+                assert compose._ma_on_run(read, row, runs, name, 0) == any(
+                    n == name and r0 < b and a < r1 for r0, r1, n in spans)
+    assert prepared > 60
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_ma_run_rules_match_full_block_projection(seed, monkeypatch):
+    rng = random.Random(7913 + seed)
+    for _ in range(40):
+        pieces = _pieces(rng)
+        if not pieces:
+            continue
+        lo, hi = min(p.t_start for p in pieces), max(p.t_end for p in pieces)
+        sel = ll.PieceSelection("tgt", lo, hi, lo, hi, sorted(pieces, key=lambda p: (p.t_start, p.chain)))
+        plan = ll.FetchPlan(sel, [], 0, 0)
+        reads = [_read(rng, i) for i in range(8)]
+        for read in reads:
+            base = read["_fiberbrowser_source_base"]
+            fp = sorted([base + v[0], base + v[1]] for v in read["intervals"] if v[2] > 0)
+            calls = [(rng.choice(["nuc", "tf", "fp_v2"]), a, a + rng.randrange(-2, 300))
+                     for a in (rng.randrange(-20, 3000) for _ in range(30))]
+            read["_fiberbrowser_call_bounds"] = {
+                "fp": fp, "fp_extent": [fp[0][0], max(e for _s, e in fp)] if fp else None,
+                "extent": [base, base + 3000], "dropped": [],
+                "ma": [None, None, None, None, rng.randrange(-5, 10)], "_ma_query": calls}
+            read["_fiberbrowser_legacy"] = {"ma_names": ["nuc", "tf"], "explicit_msp": False}
+        kw = dict(handle=None, region_start=lo, region_end=hi, key="k", dataset_id="d", molecules={},
+                  settings=ll.LiftSettings(g_split=rng.choice([1000, 10000])),
+                  loader_options=dict(hide_terminal_gaps=rng.random() < 0.8,
+                                      terminal_gap_threshold=rng.choice([0, 50, 500])))
+        got = compose.lift_compact_reads(copy.deepcopy(reads), plan, **kw)
+        with monkeypatch.context() as m:
+            m.setattr(compose, "prepare_ma", lambda *a, **k: None)
+            want = compose.lift_compact_reads(copy.deepcopy(reads), plan, **kw)
+        from services.read_columns import plain
+        _same(plain(got), plain(want))
+
+
+def test_cached_junction_coordinates_match_scalar_run_rules():
+    from services.lift import compose_columns as cc
+
+    rng = random.Random(23891)
+    exercised = 0
+    for i in range(400):
+        pieces = _pieces(rng)
+        read = _read(rng, i)
+        blocks = copy.deepcopy(read["_fiberbrowser_aligned_runs"])
+        if len(blocks) > 1 and rng.random() < 0.5:
+            at = rng.randrange(1, len(blocks))
+            gap = rng.choice([999, 1000, 1001, 10000])
+            for block in blocks[at:]:
+                block[1] += gap
+        runs = compose._SeqRuns(blocks, {"reverse": False, "length": blocks[-1][1] + blocks[-1][2] + 100})
+        cc.prepare_runs([runs], 1000)
+        frags = [compose._Frag(p.q_start, p.q_end, p) for p in pieces]
+        got = compose._runs_from_frags(frags, 1000, runs)
+        runs._ma_indexable = None
+        runs._gap_totals = None
+        want = compose._runs_from_frags(frags, 1000, runs)
+        signature = lambda rs: [[(f.s, f.e, f.t0, f.t1, f.p.chain) for f in r] for r in rs]
+        assert signature(got) == signature(want)
+        exercised += bool(got)
+    assert exercised > 250
