@@ -121,6 +121,42 @@ def _small(a) -> bool:
 
 # ── Runs (per read) ─────────────────────────────────────────────────────────
 
+def prepare_runs(runs_list, g_split):
+    """Build source block columns and large-gap indexes once for the whole load.
+
+    Small per-record NumPy operations cost more than their arithmetic. Shared
+    columns let geometry and every placement reuse these record slices.
+    """
+    n = _ints((len(r.ref) for r in runs_list), len(runs_list))
+    off = np.zeros(len(n) + 1, dtype=np.int64)
+    np.cumsum(n, out=off[1:])
+    total = int(off[-1])
+    try:
+        if runs_list and all(r._arrays is not None for r in runs_list):
+            ref, seq, ln = (np.concatenate([r._arrays[j] for r in runs_list]) for j in range(3))
+        else:
+            ref, seq, ln = (_ints(chain.from_iterable(getattr(r, key) for r in runs_list), total)
+                            for key in ("ref", "seq", "len"))
+    except OverflowError:
+        return  # unusual Python-int records keep their scalar geometry
+    read = np.repeat(np.arange(len(n)), n)
+    bad = (ln <= 0) | (ref <= -_SHIFT) | (ref >= _SHIFT) | (seq <= -_SHIFT) | (seq >= _SHIFT)
+    bad |= (ln <= -_SHIFT) | (ln >= _SHIFT)
+    same = read[1:] == read[:-1]
+    bad[1:] |= same & (ref[:-1] + ln[:-1] > ref[1:])
+    valid = np.ones(len(n), dtype=bool)
+    valid[read[bad]] = False
+    ends = ref[:-1] + ln[:-1]
+    large = same & ((ref[1:] - ends >= g_split) | (seq[1:] - seq[:-1] - ln[:-1] >= g_split))
+    gi = np.flatnonzero(large)
+    gap_off = np.searchsorted(read[gi], np.arange(len(n) + 1)).tolist()
+    gap_ends, gap_starts = ends[gi].tolist(), ref[gi + 1].tolist()
+    for d, (r, a, b) in enumerate(zip(runs_list, off[:-1].tolist(), off[1:].tolist())):
+        r._arrays = (ref[a:b], seq[a:b], ln[a:b])
+        lo, hi = gap_off[d], gap_off[d + 1]
+        r._split_gaps[g_split] = ((gap_ends[lo:hi], gap_starts[lo:hi]) if valid[d] else None)
+
+
 class _Runs:
     """Every read's aligned runs (``_SeqRuns``), concatenated: ``ref``, ``seq``,
     ``len`` with per-read offsets; ``ok[d]`` when read ``d``'s runs are
@@ -131,19 +167,12 @@ class _Runs:
         self.n = n
         self.off = np.zeros(len(runs_list) + 1, dtype=np.int64)
         np.cumsum(n, out=self.off[1:])
-        total = int(self.off[-1])
         # Each read's runs are read once per load: its hidden insertion blocks
-        # use the same runs again (``_cols``, kept on the runs object).
-        cols = [getattr(r, "_cols", None) for r in runs_list]
-        if all(c is not None for c in cols):
-            self.ref, self.seq, self.len = ((np.concatenate([c[j] for c in cols]) if cols
-                                             else np.zeros(0, dtype=np.int64)) for j in range(3))
-        else:
-            self.ref = read_only(_ints(chain.from_iterable(r.ref for r in runs_list), total))
-            self.seq = read_only(_ints(chain.from_iterable(r.seq for r in runs_list), total))
-            self.len = read_only(_ints(chain.from_iterable(r.len for r in runs_list), total))
-            for r, a, b in zip(runs_list, self.off[:-1].tolist(), self.off[1:].tolist()):
-                r._cols = (self.ref[a:b], self.seq[a:b], self.len[a:b])
+        # use the same arrays again (kept on the runs object).
+        cols = [r.arrays() for r in runs_list]
+        self.ref, self.seq, self.len = ((np.concatenate([c[j] for c in cols]) if cols
+                                         else np.zeros(0, dtype=np.int64)) for j in range(3))
+        total = len(self.ref)
         self.reverse = np.fromiter((bool(r.reverse) for r in runs_list), dtype=bool, count=len(runs_list))
         self.length = _ints((r.length for r in runs_list), len(runs_list))
         self.read = np.repeat(np.arange(len(runs_list), dtype=np.int64), n)
@@ -609,10 +638,10 @@ def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts, small):
     other = np.flatnonzero(group_src != part_src)
     if len(other):
         mg[other] = R.mol_at(P_d[other], group_src[other])
-    keys = np.stack([mp, mg], axis=1).tolist()
+    keys = np.stack([mp, mg], axis=1)
     has = UHAS[P_u]
-    for j in np.flatnonzero(~has).tolist():
-        keys[j] = None
+    missing_keys = np.concatenate([[0], np.cumsum(~has)]).tolist()
+    wide_keys = {}
     # Width-1 parts with a call (all among the candidates above): a marker's
     # key is its own molecular start; unusual calls are checked one by one.
     w1 = np.flatnonzero(has & (UB[P_u] - UA[P_u] == 1))
@@ -624,8 +653,13 @@ def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts, small):
             u = segs[int(P_seg[j])][2]
             call = u.calls[int(P_i[j])]
             if not items[int(P_d[j])][2].has_aligned(int(call[1]), int(call[2])):
-                keys[j] = [int(call[1]), int(call[1])]
+                value = int(call[1])
+                if -(1 << 63) <= value < (1 << 63):
+                    keys[j] = [value, value]
+                else:
+                    wide_keys[j] = [value, value]
     ids = list(map(UIDS.__getitem__, P_u.tolist()))
+    read_only(keys)
     # Mapped intervals stay one window array; each group gets a read-only
     # copy of its slice (``read_columns.owned``, read row format 2), never Python lists.
     mapped = read_only(np.stack([P_c0, P_c1, USZ[P_u]], axis=1))
@@ -640,7 +674,16 @@ def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts, small):
         lo, hi = bounds[s], bounds[s + 1]
         s += 1
         if u.calls:
-            row._pre.groups[u.name] = (LazyParts(cols, lo, hi), owned(mapped[lo:hi]), ids[lo:hi], keys[lo:hi])
+            wide = {j - lo: v for j, v in wide_keys.items() if lo <= j < hi}
+            if missing_keys[lo] == missing_keys[hi] and not wide:
+                call_keys = owned(keys[lo:hi])
+            else:
+                call_keys = keys[lo:hi].tolist()
+                for j in np.flatnonzero(~has[lo:hi]).tolist():
+                    call_keys[j] = None
+                for j, value in wide.items():
+                    call_keys[j] = value
+            row._pre.groups[u.name] = (LazyParts(cols, lo, hi), owned(mapped[lo:hi]), ids[lo:hi], call_keys)
         else:  # no calls: no identity (_call_identity)
             row._pre.groups[u.name] = (LazyParts(cols, lo, hi), owned(mapped[lo:hi]), [None] * (hi - lo),
                                        [None] * (hi - lo))

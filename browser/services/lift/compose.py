@@ -70,7 +70,7 @@ from contextlib import ExitStack
 
 import numpy as np
 
-from services.lift.compose_columns import LazyParts, precompute
+from services.lift.compose_columns import LazyParts, precompute, prepare_runs
 from services.read_columns import IntColumn
 
 _COMPLEMENT = str.maketrans("ACGTNRYKMSWBDHVacgtnrykmswbdhv", "TGCANYRMKSWVHDBtgcanyrmkswvhdb")
@@ -132,12 +132,47 @@ class _SeqRuns:
     def __init__(self, runs, record):
         length, reverse = int(record.get("length") or 0), bool(record.get("reverse"))
         self.length, self.reverse = length, reverse
-        rows = sorted((int(r0), (length - 1 - int(m0)) if reverse else int(m0), int(n)) for r0, m0, n in runs or ())
-        self.ref = [r[0] for r in rows]
-        self.seq = [r[1] for r in rows]
-        self.len = [r[2] for r in rows]
-        self._arrays = None
+        if type(runs) is IntColumn:
+            a = runs.array
+            ref, seq, ln = a[:, 0], length - 1 - a[:, 1] if reverse else a[:, 1], a[:, 2]
+            if np.any(ref[1:] <= ref[:-1]):
+                order = np.lexsort((ln, seq, ref))
+                ref, seq, ln = ref[order], seq[order], ln[order]
+            self.ref, self.seq, self.len = ref.tolist(), seq.tolist(), ln.tolist()
+            self._arrays = (ref, seq, ln)
+        else:
+            rows = sorted((int(r0), (length - 1 - int(m0)) if reverse else int(m0), int(n)) for r0, m0, n in runs or ())
+            self.ref = [r[0] for r in rows]
+            self.seq = [r[1] for r in rows]
+            self.len = [r[2] for r in rows]
+            self._arrays = None
         self._ascending = None
+        self._split_gaps = {}
+
+    def arrays(self):
+        """Aligned-block columns, shared by geometry and the window pre-pass."""
+        if self._arrays is None:
+            self._arrays = tuple(np.asarray(v, dtype=np.int64) for v in (self.ref, self.seq, self.len))
+        return self._arrays
+
+    def split_gaps(self, g_split):
+        """Large gaps between positive, disjoint blocks, computed once per record.
+        Unusual overlapping/empty blocks keep the scalar split rules."""
+        if g_split not in self._split_gaps:
+            try:
+                ref, seq, ln = self.arrays()
+            except OverflowError:  # Python-int coordinates outside the columnar range
+                self._split_gaps[g_split] = None
+                return None
+            if np.any(ln <= 0) or np.any(ref[:-1] + ln[:-1] > ref[1:]):
+                gaps = None
+            else:
+                ends = ref[:-1] + ln[:-1]
+                large = ((ref[1:] - ends >= g_split) |
+                         (seq[1:] - (seq[:-1] + ln[:-1]) >= g_split))
+                gaps = (ends[large].tolist(), ref[1:][large].tolist())
+            self._split_gaps[g_split] = gaps
+        return self._split_gaps[g_split]
 
     def seq_at(self, x):
         """SEQ index of the first aligned base at reference ``>= x``."""
@@ -159,9 +194,7 @@ class _SeqRuns:
             return [0] * len(xs)
         # Every annotation group asks about these same CIGAR runs. Materialise
         # their arrays once per source record, not once per group/placement.
-        if self._arrays is None:
-            self._arrays = tuple(np.asarray(v, dtype=np.int64) for v in (self.ref, self.seq, self.len))
-        ref, seq, ln = self._arrays
+        ref, seq, ln = self.arrays()
         x = np.asarray(xs, dtype=np.int64)
         i = np.searchsorted(ref, x, side="right") - 1
         ii = np.maximum(i, 0)
@@ -421,7 +454,18 @@ def _runs_from_frags(frags, g_split, seq_runs=None):
     aligned = seq_runs if seq_runs is not None and seq_runs.ref else None
     if aligned is not None:
         split = []
+        gaps = aligned.split_gaps(g_split)
         for f in frags:
+            if gaps is not None:
+                ends, starts = gaps
+                lo = bisect.bisect_right(ends, f.s)
+                hi = bisect.bisect_left(starts, f.e)
+                start = f.s
+                for j in range(lo, hi):
+                    split.append(_Frag(start, ends[j], f.p))
+                    start = starts[j]
+                split.append(f if start == f.s else _Frag(start, f.e, f.p))
+                continue
             start, prev = f.s, None
             i = max(0, bisect.bisect_right(aligned.ref, f.s) - 1)
             while i < len(aligned.ref) and aligned.ref[i] < f.e:
@@ -437,19 +481,24 @@ def _runs_from_frags(frags, g_split, seq_runs=None):
         frags = split
     frags = sorted(frags, key=lambda f: (f.s, f.t0))
     runs = []
+    last_aligned = None
     for f in frags:
-        if runs and _continues(runs[-1], f, g_split, aligned):
+        if runs and _continues(runs[-1][-1], f, g_split, aligned, last_aligned):
             runs[-1].append(f)
         else:
             runs.append([f])
+            last_aligned = None
+        if aligned is not None:
+            y = aligned.last_aligned_before(f.e, f.s)
+            if y is not None:
+                last_aligned = (f, y)
     if aligned is not None:
         runs = [t for t in (_trim_run(run, aligned) for run in runs) if t]
     return runs
 
 
-def _continues(run, f, g_split, seq_runs):
+def _continues(prev, f, g_split, seq_runs, last_aligned):
     """Whether fragment ``f`` extends ``run`` (fragments sorted by source start)."""
-    prev = run[-1]
     if (f.p.strand != prev.p.strand or f.p.primary != prev.p.primary
             or f.s < prev.e):
         return False
@@ -459,13 +508,9 @@ def _continues(run, f, g_split, seq_runs):
     if seq_runs is None:
         return f.s - prev.e < g_split
     x = seq_runs.first_aligned_at(f.s, f.e)
-    y = next((y for g in reversed(run)
-              if (y := seq_runs.last_aligned_before(g.e, g.s)) is not None), None)
-    if x is None or y is None:  # no aligned block on one side yet: nothing for liftbam to split
+    if x is None or last_aligned is None:  # no aligned block on one side yet: nothing for liftbam to split
         return True
-    fy = next((g for g in reversed(run) if g.s <= y < g.e), None)
-    if fy is None:
-        return True
+    fy, y = last_aligned
     ty, tx = fy.T(y), f.T(x)
     dt = (ty - tx - 1) if f.minus else (tx - ty - 1)
     dq = seq_runs.seq_at(x) - seq_runs.seq_at(y) - 1
@@ -622,10 +667,13 @@ def lift_compact_reads(reads, plan, *, handle, region_start, region_end, setting
         # intervals, calls, marks and molecular spans in one columnar pass
         # (compose_columns); then each row's payload.
         items = []
-        for i, read in enumerate(reads):
+        source_runs = [_SeqRuns(read.get("_fiberbrowser_aligned_runs"),
+                                read.get("_fiberbrowser_lift_record") or {}) for read in reads]
+        prepare_runs(source_runs, settings.g_split)
+        for i, (read, runs) in enumerate(zip(reads, source_runs)):
             if not i & 255:
                 checkpoint()
-            item = _read_geometry(read, by_contig, haps, ctx)
+            item = _read_geometry(read, by_contig, haps, ctx, runs)
             if item is not None:
                 items.append(item)
         precompute(items, ctx, point_fields=_POINT_FIELDS, rest_parts=_rest_parts, small_group=_SMALL_GROUP)
@@ -684,12 +732,13 @@ def _lift_read(read, by_contig, haps, ctx):
     return [] if item is None else _read_payloads(*item, ctx)
 
 
-def _read_geometry(read, by_contig, haps, ctx):
+def _read_geometry(read, by_contig, haps, ctx, runs=None):
     """``(read, rows, runs)`` with each row's geometry, or None (counted) for
     a read with no fragment in the selected pieces."""
     rec = read.get("_fiberbrowser_lift_record") or {}
     contig = rec.get("contig")
-    runs = _SeqRuns(read.get("_fiberbrowser_aligned_runs"), rec)
+    if runs is None:
+        runs = _SeqRuns(read.get("_fiberbrowser_aligned_runs"), rec)
     rs, re_ = int(read["reference_start"]), int(read["reference_end"])
     rows = _read_rows(read, by_contig.get(contig) or ([], [], []), ctx.settings, runs)
     if not rows:
@@ -775,27 +824,71 @@ def _first_last(spans, a, b, starts=None):
 def _ma_spans(read, runs, named=False):
     """The record's MA footprint calls (nuc, tf, fp_v2) as aligned source spans ``[r0, r1]`` (or
     ``(r0, r1, name)``), parsed from the call bounds the source decode kept."""
-    from services.compact_read_loader import ma_footprint_query_spans
-    ma = (read.get("_fiberbrowser_call_bounds") or {}).get("ma")
+    bounds = read.get("_fiberbrowser_call_bounds") or {}
+    out = bounds.get("_ma_named")
+    if out is None:
+        ma = bounds.get("ma")
+        out = []
+        if ma is not None:
+            lead = ma[4]
+            calls = _ma_queries(bounds)
+            out = _ma_block_spans(calls, lead, runs)
+        out.sort()
+        # Presence by name and the unnamed call extents use the same aligned
+        # blocks. Parsing and projecting the MA tags twice dominates cold loads.
+        bounds["_ma_named"] = out
+    return out if named else [[a, b] for a, b, _name in out]
+
+
+def _ma_queries(bounds):
+    """Whole-record MA calls, reusing the source decoder's parsed query spans."""
+    calls = bounds.get("_ma_query")
+    if calls is None:
+        from services.compact_read_loader import ma_footprint_query_spans
+        tags, length, reverse, contracts, _lead = bounds["ma"]
+        calls = bounds["_ma_query"] = ma_footprint_query_spans(
+            tags, read_length=length, is_reverse=reverse, family_contracts=contracts)
+    return calls
+
+
+def _ma_block_spans(calls, lead, runs):
+    """Project all MA calls onto aligned blocks in one pass, retaining block boundaries."""
+    if not calls or not runs.ref:
+        return []
+    try:
+        ref, seq, ln = runs.arrays()
+        ab = np.asarray([(a + lead, b + lead) for _name, a, b in calls], dtype=np.int64)
+        # The scalar loop below also defines behaviour for unusual SEQ order
+        # and Python-int coordinates outside safe columnar arithmetic.
+        safe = (np.all(seq[:-1] <= seq[1:]) and
+                all(int(v.min()) > -(1 << 40) and int(v.max()) < (1 << 40)
+                    for v in (ref, seq, ln, ab)))
+    except OverflowError:
+        safe = False
+    if safe:
+        a, b = ab[:, 0], ab[:, 1]
+        lo = np.maximum(np.searchsorted(seq, a, side="right") - 1, 0)
+        hi = np.searchsorted(seq, b, side="left")
+        count = np.maximum(hi - lo, 0)
+        ci = np.repeat(np.arange(len(calls)), count)
+        off = np.zeros(len(calls) + 1, dtype=np.int64)
+        np.cumsum(count, out=off[1:])
+        j = lo[ci] + np.arange(len(ci)) - off[ci]
+        x, y = np.maximum(a[ci], seq[j]), np.minimum(b[ci], seq[j] + ln[j])
+        keep = y > x
+        ci, j, x, y = ci[keep], j[keep], x[keep], y[keep]
+        r0, r1 = ref[j] + x - seq[j], ref[j] + y - seq[j]
+        return [(s, e, calls[i][0]) for s, e, i in zip(r0.tolist(), r1.tolist(), ci.tolist())]
     out = []
-    if ma is not None:
-        tags, length, reverse, contracts, lead = ma
-        for name, q0, q1 in ma_footprint_query_spans(tags, read_length=length, is_reverse=reverse,
-                                                      family_contracts=contracts):
-            s0, s1 = q0 + lead, q1 + lead
-            m = (runs.length - s1, runs.length - s0) if runs.reverse else (s0, s1)
-            # Keep aligned blocks separately: a call's reference hull also contains deleted bases,
-            # which cannot establish MA presence on a lifted record.
-            a, b = (runs.length - m[1], runs.length - m[0]) if runs.reverse else m
-            i = max(0, bisect.bisect_right(runs.seq, a) - 1)
-            while i < len(runs.seq) and runs.seq[i] < b:
-                r, q, n = runs.ref[i], runs.seq[i], runs.len[i]
-                x, y = max(a, q), min(b, q + n)
-                if y > x:
-                    span = (r + x - q, r + y - q)
-                    out.append((*span, name) if named else list(span))
-                i += 1
-    out.sort()
+    for name, q0, q1 in calls:
+        a, b = q0 + lead, q1 + lead
+        i = max(0, bisect.bisect_right(runs.seq, a) - 1)
+        while i < len(runs.seq) and runs.seq[i] < b:
+            r, q, n = runs.ref[i], runs.seq[i], runs.len[i]
+            x, y = max(a, q), min(b, q + n)
+            if y > x:
+                out.append((r + x - q, r + y - q, name))
+            i += 1
     return out
 
 
@@ -1115,18 +1208,20 @@ class _BlockEdges:
     fragment's last aligned block end, or the target-right fragment's first aligned block start (a read
     deletion at a fragment's edge moves its block edge; liftbam writes those deleted bases into the
     junction's D, after the I)."""
-    __slots__ = ("row", "runs", "right", "cache")
+    __slots__ = ("frags", "runs", "right", "cache")
 
     def __init__(self, row, runs, right):
-        self.row, self.runs, self.right, self.cache = row, runs, right, {}
+        # Keep the fragments, rather than the row: row.pi/ri own these lookups,
+        # so retaining the row would make every composed row a reference cycle.
+        self.frags, self.runs, self.right, self.cache = row.frags, runs, right, {}
 
     def __len__(self):
-        return len(self.row.inner)
+        return max(len(self.frags) - 1, 0)
 
     def __getitem__(self, k):
         v = self.cache.get(k)
         if v is None:
-            prev, f = self.row.frags[k], self.row.frags[k + 1]
+            prev, f = self.frags[k], self.frags[k + 1]
             runs = self.runs
             if not self.right:  # pi: after the target-left fragment's last aligned base
                 if f.minus:  # the target-left fragment is the later one in source order
@@ -2257,9 +2352,25 @@ def _ma_on_run(read, row, runs, name, run):
     if bounds.get("ma") is None:
         return True
     named = bounds.get("_ma_named")
-    if named is None:
-        named = bounds["_ma_named"] = _ma_spans(read, runs, named=True)
-    return any(n == name and any(f.s < r1 and r0 < f.e for f in row.runs[run]) for r0, r1, n in named)
+    if named is not None:
+        return any(n == name and any(f.s < r1 and r0 < f.e for f in row.runs[run]) for r0, r1, n in named)
+    # Presence needs only the first intersecting block, rather than projecting
+    # every call of every name into Python spans (usually hundreds per read).
+    lead = bounds["ma"][4]
+    frags, ref, seq, ln = row.runs[run], runs.ref, runs.seq, runs.len
+    for n, q0, q1 in _ma_queries(bounds):
+        if n != name:
+            continue
+        a, b = q0 + lead, q1 + lead
+        i = max(0, bisect.bisect_right(seq, a) - 1)
+        while i < len(seq) and seq[i] < b:
+            x, y = max(a, seq[i]), min(b, seq[i] + ln[i])
+            if y > x:
+                r0, r1 = ref[i] + x - seq[i], ref[i] + y - seq[i]
+                if any(f.s < r1 and r0 < f.e for f in frags):
+                    return True
+            i += 1
+    return False
 
 
 def _infer_legacy(read, runs, layers, payload, parts, mapped, ids, keys, logical, cuts, legacy, row, ctx,
@@ -2309,7 +2420,10 @@ def _infer_legacy(read, runs, layers, payload, parts, mapped, ids, keys, logical
                 sel = picked.tolist()
             else:
                 sel = [j for j in order if keep(mapped[j][2])]
-            sel = [j for j in sel if row.frags[parts[j][3]].run in wanted]
+            # Most rows infer on every run. Keep their LazyParts columnar;
+            # indexing even one part would materialise the entire group.
+            if len(wanted) != len(row.runs):
+                sel = [j for j in sel if row.frags[parts[j][3]].run in wanted]
             if not sel:
                 continue
             names, tracks = [], []
@@ -2326,6 +2440,15 @@ def _infer_legacy(read, runs, layers, payload, parts, mapped, ids, keys, logical
                     names += ["lq", "rq"]
                     tracks += [lq, rq]
             old = layers.get(name) or {}
+            if not old:
+                # Already in display order, with no MA layer to merge into.
+                # Preserve the array through inference just as _group does.
+                layers[name] = {"intervals": (IntColumn(column[sel]) if column is not None
+                                              else [mapped[j] for j in sel]),
+                                "qualities": tracks or None, "quality_names": names}
+                call_ids[f"layer:{name}"] = [ids[j] for j in sel]
+                call_parts[f"layer:{name}"] = [keys[j] for j in sel]
+                continue
             old_ivs = list(old.get("intervals") or [])
             added = [mapped[j] for j in sel]
             merged = old_ivs + added

@@ -2490,6 +2490,12 @@ def _build_compact_reads_from_bam_region(
             call_extent = None
             if hide_terminal_gaps and (footprints or stubs_only) and ma_tags is not None:
                 try:
+                    if include_lift_meta and ma_spans is None:
+                        # Retain the query spans call_extent already needs, so
+                        # live lift can reuse them for per-record MA presence.
+                        ma_spans = ma_footprint_query_spans(
+                            ma_tags, read_length=read_length, is_reverse=read.is_reverse,
+                            family_contracts=family_contracts)
                     call_extent = ma_footprint_call_extent(
                         ma_tags, coord_mapper, ref_start, ref_end,
                         read_length=read_length, is_reverse=read.is_reverse,
@@ -2766,6 +2772,7 @@ def _build_compact_reads_from_bam_region(
                     "ma_skipped": sorted(ma_skipped_spans or ()),
                     "ma": ((ma_tags, read_length, bool(read.is_reverse), family_contracts, lift_call_meta[1])
                            if ma_tags is not None else None),
+                    "_ma_query": ma_spans,
                 }
             _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq, mapper=coord_mapper,
                               molecule_records=molecule_records, reference=sv_reference)
@@ -3053,11 +3060,15 @@ def lift_meta_fields(read, coord_mapper, call_meta, *, interval_calls=None, fire
     ``_fiberbrowser_md`` and ``_fiberbrowser_sequence_lead`` (leading hard-clip
     length), so live lift can compare view bases with the target FASTA."""
     length, lead, reverse = call_meta
-    runs = []
-    for q0, q1, offset in zip(coord_mapper._aligned_starts, coord_mapper._aligned_ends,
-                              coord_mapper._aligned_offsets):
-        mol = length - 1 - (q0 + lead) if reverse else q0 + lead
-        runs.append([int(q0 + offset), int(mol), int(q1 - q0)])
+    import numpy as np
+    from services.read_columns import owned
+    # These blocks survive until composition: one compact column avoids a
+    # tracked Python list for every CIGAR block and repeated scalar conversion.
+    q0 = np.asarray(coord_mapper._aligned_starts, dtype=np.int64)
+    q1 = np.asarray(coord_mapper._aligned_ends, dtype=np.int64)
+    offsets = np.asarray(coord_mapper._aligned_offsets, dtype=np.int64)
+    mol = length - 1 - (q0 + lead) if reverse else q0 + lead
+    runs = owned(np.column_stack((q0 + offsets, mol, q1 - q0)))
     sa = read.get_tag("SA") if read.has_tag("SA") else None
     fields = {
         "_fiberbrowser_aligned_runs": runs,
