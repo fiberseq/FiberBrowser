@@ -14,7 +14,7 @@ import { linkedSourcePanels, markRevealStep, openLinkedSourceView } from '../liv
 import { isHost, liveProvenance, panelKeyOf, popOut, provenanceCovers, provenanceLineage, provenanceShare, undoable, type GraphProvenance } from './hostMode';
 import { useReadActionsStore } from '../../stores/readActionsStore';
 import { drawnRowOwnership, drawnRowsFor } from '../../stores/clusterSlice';
-import { qnameOfId } from '../../utils/recordKeys';
+import { isMoleculeRecordKey, qnameOfId, recordKey } from '../../utils/recordKeys';
 import { UNASSIGNED_CLUSTER_ID } from '../../components/tracks/read-track/constants';
 import { linkedSourceObservations, sourceLabels } from '../../utils/clusterMatchedRun';
 import { labelLinkedSource } from './graphCluster';
@@ -155,7 +155,8 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
     && from.datasetId === to.liftLink?.datasetId && !(from.strand && to.strand && from.strand !== to.strand);
   /** A map of the member's labels as this source's QNAME labels, within the reads the source shows (`scope`: its
    * filter; null: none of them are this source's for sure, or none is in scope). */
-  const project = (labels: Record<string, number> | undefined, provs: GraphProvenance[], scope: ReadonlySet<string> | null): Record<string, number> | null => {
+  const project = (labels: Record<string, number> | undefined, provs: GraphProvenance[], scope: ReadonlySet<string> | null,
+    hostProvs: GraphProvenance[] = []): Record<string, number> | null => {
     if (!labels || !Object.keys(labels).length) return null;
     let mine: Record<string, number> | null = null;
     if (provenanceCovers(provs, labels)) {
@@ -164,27 +165,37 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
       const all = extra ? [...provs, { destinations: [fk], ...extra }] : provs;
       const picked = new Set(all.flatMap(p => linkedSourceObservations(p.observations, to).map(o => o.id)));
       mine = provenanceShare(all, labels, o => picked.has(o.id));
-    } else if (hapOnly) mine = labels;
+    } else if (hapOnly) mine = withoutOtherPathRecords(labels, hostProvs);
     if (!mine) return null;
     const byName = sourceLabels({ assignments: { m: mine } }, ['m'], scope);
     return Object.keys(byName).length ? byName : null;
   };
   const active = st.activeClusterTreeNodeId && st.clusterTreeNodes[st.activeClusterTreeNodeId] ? st.activeClusterTreeNodeId : null;
-  // A member with no graph provenance of its own (a pooled host's new haplotype panel) holds a share of its host's
-  // runs' records: the host's provenance splits them, never every label taken as this haplotype's (a supplementary on
-  // the other haplotype's contig reaches the lifted panel by its drawn row, but is no record of this source; Codex
-  // review, stabilize 3 group A round 1).
+  // A member with no graph provenance of its own (a pooled host's new haplotype panel) gives this source its labels as
+  // one haplotype's, except a record-level key its host's runs place only on another path: a supplementary on the other
+  // haplotype's contig reaches the lifted panel by its drawn row but is no record of this source, and by QNAME its label
+  // would take the place of its primary's here (Codex review, stabilize 3 group A round 1). Molecule-level keys stay
+  // (a folded molecule labelled through the other path has its primary here: round 2).
   const hostPanel = from.graphMemberOf ? st.panels.find(p => p.id === from.graphMemberOf) : null;
   const hostKey = hostPanel ? panelKeyOf(hostPanel) : null;
+  const withoutOtherPathRecords = (labels: Record<string, number>, hostProvs: GraphProvenance[]): Record<string, number> => {
+    if (!hostProvs.length) return labels;
+    const here = new Set<string>(), elsewhere = new Set<string>();
+    for (const p of hostProvs) {
+      const shown = new Set(linkedSourceObservations(p.observations, to).map(o => o.id));
+      for (const [oid, rks] of Object.entries(p.owned)) for (const rk of rks) (shown.has(oid) ? here : elsewhere).add(rk);
+    }
+    return Object.fromEntries(Object.entries(labels).filter(([id]) => {
+      if (isMoleculeRecordKey(id)) return true;
+      const rk = recordKey(id) ?? id;
+      return here.has(rk) || !elsewhere.has(rk);
+    }));
+  };
   type Cur = ReturnType<typeof useBrowserStore.getState>;
-  const lineageOf = (cur: Cur, nid: string) => {
-    const own = provenanceLineage(cur, fk, nid);
-    return own.length || !hostKey ? own : provenanceLineage(cur, hostKey, nid);
-  };
-  const liveOf = (cur: Cur) => {
-    const own = liveProvenance(cur, fk);
-    return own.length || !hostKey ? own : liveProvenance(cur, hostKey);
-  };
+  const lineageOf = (cur: Cur, nid: string) => provenanceLineage(cur, fk, nid);
+  const liveOf = (cur: Cur) => liveProvenance(cur, fk);
+  const hostLineageOf = (cur: Cur, nid: string) => (hostKey ? provenanceLineage(cur, hostKey, nid) : []);
+  const hostLiveOf = (cur: Cur) => (hostKey ? liveProvenance(cur, hostKey) : []);
   seedSourceReadState(fromPanelId, sourcePanelId);
   useBrowserStore.setState(cur => {
     const patch: Record<string, unknown> = {};
@@ -194,7 +205,8 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
     // Only reads its filter keeps get a label, so the labels never scope away the reads it shows (Codex post-merge
     // review, group A round 1, #3); a filter no read passes labels none (agy post-merge review, group A, HIGH 2).
     const scope = cur.filteredReadIds[tk] ? new Set([...cur.filteredReadIds[tk]!].map(qnameOfId)) : null;
-    const got = project(cur.clusterAssignments[fk], active ? lineageOf(cur, active) : liveOf(cur), scope);
+    const got = project(cur.clusterAssignments[fk], active ? lineageOf(cur, active) : liveOf(cur), scope,
+      active ? hostLineageOf(cur, active) : hostLiveOf(cur));
     // (Only Unassigned labels, the dead bucket a subcluster leaves for a panel it did not label, are no clustering.)
     const had = Boolean(live && Object.values(live).some(c => c !== UNASSIGNED_CLUSTER_ID));
     // Its own: labels no graph run gave it, even when their numbers equal the member's (Codex post-merge review,
@@ -233,7 +245,7 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
         continue;
       }
       if (!n.assignments?.[fk] || (n.assignments[tk] && Object.keys(n.assignments[tk]).length)) continue;
-      const got = project(n.assignments[fk], lineageOf(cur, nid), scope);
+      const got = project(n.assignments[fk], lineageOf(cur, nid), scope, hostLineageOf(cur, nid));
       if (!got) continue;
       const nodeFocus = focusOn(n.focus?.[fk], got);
       nodes[nid] = { ...n, assignments: { ...n.assignments, [tk]: got },

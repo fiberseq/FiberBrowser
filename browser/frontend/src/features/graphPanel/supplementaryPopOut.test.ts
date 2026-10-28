@@ -5,6 +5,7 @@ import { useGraphStatusStore } from './statusStore';
 import { useGraphBindingsStore } from './bindingsStore';
 import { assignWithGraphRun, commitGraphRun, graphClusterPlan, labelLinkedSource, routedDestinationLabels } from './graphCluster';
 import { seedSourceState } from './popOutKind';
+import { clusteredReadIdSet, filterReadsByReadIdSet } from '../../components/tracks/read-track/readFilter';
 import { popOut } from './hostMode';
 import { drawnRowHapsOf, useGraphReadsStore } from './graphReadsStore';
 import { useTrackFeedStore } from '../../stores/trackFeedStore';
@@ -216,5 +217,28 @@ describe('a supplementary drawn on the other haplotype\'s path (stabilize 3, ite
     expect(useBrowserStore.getState().clusterAssignments.sourcePAT.cross).toBe(1);
     seedSourceState(patId, 'sourcePAT');
     expect(useBrowserStore.getState().clusterAssignments.sourcePAT.cross).toBe(1);
+  });
+
+  it('Codex A r2: a source view from a pooled host\'s PAT panel keeps a folded molecule\'s label on the ancestor node too', () => {
+    setup(pooledPanels(), true);
+    useGraphReadsStore.getState().publishRowHaps('hostA', drawnRowHapsOf(graphRows('PAT', true)));
+    runGraph('hostA', { [fid('molS')]: 0, [fid('m1')]: 1 }, { [fid('p1')]: 1 });
+    const rootId = useBrowserStore.getState().activeClusterTreeNodeId!;
+    useBrowserStore.getState().commitSubcluster({ 'k-a': { [rk(fid('molS'))]: 2, [rk(fid('p1'))]: 1 } }, { sourceClusterIds: [0, 1] });
+    const [patId] = popOut('hostA', [], [{ binding: 'pat', hap: 'PAT' }]);
+    expect(useBrowserStore.getState().clusterAssignments[patId][rk(fid('molS'))]).toBe(2);
+    useBrowserStore.setState(s => ({ panels: [...s.panels, {
+      id: 'sourcePAT', stateKey: 'sourcePAT', contentType: 'dataset', datasetId: 'src', genome: 'S1', subTracks: [], collapsed: false,
+      linkGroup: null, liftLink: { id: 'link', datasetId: 'ds1', liftPanelId: 'hostA', hap: 'S1#2', hapLabel: 'PAT', contig: 'S1#2#c1', flip: false, chain: null },
+    } as never] }));
+    labelLinkedSource('sourcePAT');
+    seedSourceState(patId, 'sourcePAT');
+    expect(useBrowserStore.getState().clusterAssignments.sourcePAT.molS).toBe(2);
+    expect(useBrowserStore.getState().clusterTreeNodes[rootId].assignments[patId][rk(fid('molS'))]).toBe(0);
+    useBrowserStore.getState().applyClusterTreeNode(rootId);
+    const rootLabels = useBrowserStore.getState().clusterAssignments.sourcePAT;
+    expect(rootLabels.p1).toBe(1);
+    expect(rootLabels.molS).toBe(0);
+    expect(filterReadsByReadIdSet([{ id: 'molS' }] as never, clusteredReadIdSet(rootLabels))).toHaveLength(1);
   });
 });
