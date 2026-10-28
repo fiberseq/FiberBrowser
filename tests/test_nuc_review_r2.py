@@ -259,4 +259,4 @@ def test_graph_pieces_carry_the_named_byte():
     graph_reads._nuc_classes(out, bare, 0, lambda a, b: True)
     assert out['nuc']['cls'] == [2] and out['nuc']['nb'] == [None]
     # Rows cached in the previous wire form (no named byte) are not served again.
-    assert graph_reads.WIRE_VERSION == 10
+    assert graph_reads.WIRE_VERSION >= 10   # (11: a supplementary's primary haplotype, stabilize 3)
