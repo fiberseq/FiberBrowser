@@ -7,7 +7,10 @@ lost the receipt), so the post-pass put the raw, unfiltered mark back:
 - the sampled display working set (``build_sampled_display_working_set``, the default compact-reads path);
 - the broad-cache hit of ``read_endpoint`` (read-ID filters, cluster focus, strand);
 - a wrapped view of a circular contig: segments merged by ``merge_compact_reads_by_id`` (the receipt and the layers'
-  overlay token were dropped, and each segment's receipt named its own window, not the wrapped view's).
+  overlay token were dropped, and each segment's receipt named its own window, not the wrapped view's);
+- the direct loads (``_compact_reads_payload``'s and ``compact_all_dataset_result``'s);
+- a request whose ``layer_names`` leave the scan layer out: its display quality filters skip that layer, so the
+  post-pass's layer was unfiltered; the display rows now carry only the scan layers the request asked for.
 """
 from __future__ import annotations
 
@@ -62,8 +65,8 @@ def _state(tmp_path, monkeypatch, *, read_start, span, filtered, circular=False)
 def _payload(st, start, end, **kwargs):
     from services.read_endpoint import compact_reads_payload_for_request
     payload = compact_reads_payload_for_request(state=st, chrom='chrT', start=start, end=end, max_reads=100,
-                                                dataset_id='ds_a', include_layers=True, layer_names='fpcls',
-                                                spanning=False, **kwargs)
+                                                dataset_id='ds_a', include_layers=True, spanning=False,
+                                                **{'layer_names': 'fpcls', **kwargs})
     return payload, {r['id']: r for r in payload['reads']}
 
 
@@ -130,3 +133,44 @@ def test_merge_keeps_overlay_meta_and_rewindow_names_the_wrapped_view():
     other = dict(tail, **{RECEIPT_KEY: ('scan:u', 'chrT', 0, 5, ())})
     (mixed,) = rewindow_receipts(merge_compact_reads_by_id([shifted, shift_compact_read(other, 10, 10)]), 'chrT', -10, 5)
     assert RECEIPT_KEY not in mixed
+
+
+@pytest.mark.parametrize('filtered', [False, True])
+def test_direct_load_keeps_a_filtered_scan_mark_filtered(tmp_path, monkeypatch, filtered):
+    st = _state(tmp_path, monkeypatch, read_start=1000, span=(1000, 1100), filtered=filtered)
+    payload, reads = _payload(st, 1000, 2000, hide_terminal_gaps=False)      # a direct load
+    assert 'direct_load_ms' in payload['server_timings']
+    assert _fpcls(reads['m1/1/ccs']) == ([] if filtered else [[0, 100, 100]])
+
+
+@pytest.mark.parametrize('filtered', [False, True])
+def test_compact_all_direct_load_keeps_a_filtered_scan_mark_filtered(tmp_path, monkeypatch, filtered):
+    from services.read_endpoint import compact_all_dataset_result
+    st = _state(tmp_path, monkeypatch, read_start=1000, span=(1000, 1100), filtered=filtered)
+    _ds, payload = compact_all_dataset_result(
+        state=st, query=NS(), dataset_id='ds_a', chrom='chrT', start=1000, end=2000, region_width=1000,
+        spanning=False, max_reads=100, downsample=None, include_methylation=False, include_layers=True,
+        requested_layers=('fpcls',), include_layer_qualities=True, ml_threshold=125, fill_gap_size=None,
+        min_fp_quality=0, min_footprints=0, include_metaprofile=False, profile_max_reads=100, coverage_sample=False,
+        hide_terminal_gaps=False, terminal_gap_threshold=500, infer_legacy_layers=True, legacy_nuc_min_size=90,
+        sample_seed='test-seed')
+    assert 'direct_load_ms' in payload['server_timings']
+    got = {r['id']: r for r in payload['reads']}['m1/1/ccs']
+    assert _fpcls(got) == ([] if filtered else [[0, 100, 100]])
+
+
+@pytest.mark.parametrize('path', ['sampled', 'direct', 'broad-cache-hit'])
+def test_a_scan_layer_the_request_left_out_is_not_displayed(tmp_path, monkeypatch, path):
+    """``layer_names`` without fpcls: the fpcls filter is not a display filter of the request, so the post-pass's
+    fpcls layer would be unfiltered; the display rows carry no fpcls layer at all."""
+    st = _state(tmp_path, monkeypatch, read_start=1000, span=(1000, 1100), filtered=True)
+    kwargs = dict(layer_names='tf')
+    if path == 'direct':
+        kwargs['hide_terminal_gaps'] = False
+    elif path == 'broad-cache-hit':
+        _payload(st, 1000, 2000, **kwargs)
+        kwargs['filter_ids'] = 'm1/1/ccs'
+    payload, reads = _payload(st, 1000, 2000, **kwargs)
+    assert path != 'broad-cache-hit' or payload['server_timings'].get('broad_cache_hit') == 1.0
+    assert 'fpcls' not in (reads['m1/1/ccs'].get('layers') or {})
+    assert 'fpcls' in payload['available_layers']        # still offered: the request may ask for it

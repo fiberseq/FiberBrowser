@@ -26,6 +26,8 @@ The display paths that project broad-cache rows themselves (``working_sets.build
 ``read_endpoint``'s broad-cache hit) apply it before their quality filters too. A wrapped circular view merges its
 segments' rows (``circular_genome.merge_compact_reads_by_id`` keeps their receipts under ``PARTS_KEY`` and the
 layers' overlay fields); ``rewindow_receipts`` then names the wrapped view's window, before the quality filters.
+The direct loads overlay their rows before their filters as well. A display request gets only the overlay layers it
+asked for (``without_unrequested_layers``): its display quality filters cover only those.
 """
 from __future__ import annotations
 
@@ -164,6 +166,27 @@ def rewindow_receipts(rows: List[dict], chrom: str, start: int, end: int) -> Lis
         groups = sorted({g for p in parts if len(p) > 4 for g in p[4]})
         read[RECEIPT_KEY] = (next(iter(tokens)), str(chrom), int(start), int(end), tuple(groups))
     return rows
+
+
+def without_unrequested_layers(state, dataset_id: str, reads: List[dict], layer_key) -> List[dict]:
+    """Display rows with only the overlay layers a request asked for (``layer_key``: None = every layer, () = none,
+    else the names). A request's display quality filters cover only its layers, so a scan layer it left out would be
+    drawn unfiltered. Rows are copied when a layer is dropped; the same list when none is."""
+    if layer_key is None or not reads or not state.__dict__.get('scan_registry'):
+        return reads
+    derived = getattr((getattr(state, 'datasets', None) or {}).get(dataset_id), 'derived_layers', None) or {}
+    drop = {name for name, meta in derived.items()
+            if isinstance(meta, dict) and meta.get('kind') == 'scan-overlay'} - set(layer_key)
+    if not drop:
+        return reads
+    out, changed = [], False
+    for read in reads:
+        layers = read.get('layers')
+        if layers and not drop.isdisjoint(layers):
+            read = dict(read, layers={k: v for k, v in layers.items() if k not in drop})
+            changed = True
+        out.append(read)
+    return out if changed else reads
 
 
 def apply_scan_overlays(state, dataset_id: str, chrom: str, start: int, end: int, reads: List[dict]) -> List[dict]:
