@@ -432,32 +432,59 @@ def artifact_spans(lp: dict, np_: dict) -> list:
     min_len = int(np_.get("sv_min_len") or 50)
     out = []
     for ev in events:
-        kinds, map_ins, map_del = [], 0, 0
+        kinds, idx = [], [n for n, p in enumerate(ev) if p[0] in "ID"]
         for n, (t, ref, ln) in enumerate(ev):
             ref, ln = int(ref), int(ln)
-            kind = None
-            if t == "I" and n + 1 < len(ev) and ev[n + 1][0] == "D" and int(ev[n + 1][1]) == ref:
+            kind, over = None, 0
+            if t == "M":
+                kinds.append((t, ref, ln, "bridge", 0))
+                continue
+            nxt = next((ev[m] for m in idx if m > n), None)
+            if t == "I" and nxt is not None and nxt[0] == "D" and int(nxt[1]) == ref:
                 # I then D (liftbam's junction): the badge sits anywhere from the left block's end (a read
                 # deletion there moves it into the D) to the D's end.
-                dl = int(ev[n + 1][2])
-                if any(ref <= p <= ref + dl for p in badge_at.get(ln, ())):
+                if any(ref <= p <= ref + int(nxt[2]) for p in badge_at.get(ln, ())):
                     kind = "map"
             if kind is None and t == "D":
                 over = sum(max(0, min(b, ref + ln) - max(a, ref)) for a, b in conns)
                 kind = "map" if (ref, ref + ln) in conns else "merged" if over else "read"
-                map_del += ln if kind == "map" else over
             elif kind is None:
                 kind = "map" if ref in anchors.get(ln, ()) else "merged" if ref in anchor_any else "read"
-            if t == "I" and kind != "read":
-                map_ins += ln     # a merged I counts whole: the map-only sum stays an upper bound
-            kinds.append((t, ref, ln, kind))
-        found = {k for *_x, k in kinds}
+            kinds.append((t, ref, ln, kind, over if kind == "merged" else ln))
+        found = {k for *_x, k, _o in kinds if k != "bridge"}
         if not ("merged" in found or found >= {"map", "read"}):
             continue
-        # Map pieces alone that reach sv_min_len need a cut live lift makes itself (at the junction's D):
-        # only the read's deleted bases are left to the mixing. Otherwise every deletion of the event is.
-        map_cuts = max(map_ins, map_del) >= min_len
-        out += [[ref, ref + ln] for t, ref, ln, kind in kinds if t == "D" and (kind == "read" or not map_cuts)]
+        # What live lift cuts there itself: the event's map pieces grouped alone, as live lift groups them
+        # (a read deletion's target bases count as aligned, a read insertion is left out, a merged I counts whole).
+        alone = []
+        for n, (t, ref, ln, kind, mapped) in enumerate(kinds):
+            if t == "M" or (t == "D" and kind == "read"):
+                alone.append((0, 0, ln, 0))
+            elif t == "D":
+                # A merged D is the read's deleted bases with the connectors inside them: aligned bridges
+                # (as live lift sees the fragments there) between connectors. Its read bases before the first
+                # connector come before the junction's I too (liftbam writes I then D).
+                inside = sorted((max(a, ref), min(b, ref + ln)) for a, b in conns if a < ref + ln and b > ref)
+                sub, pos = [], ref
+                for a, b in inside:
+                    if a > pos:
+                        sub.append((0, 0, a - pos, 0))
+                    sub.append((2, n, b - a, 0))
+                    pos = b
+                if pos < ref + ln:
+                    sub.append((0, 0, ref + ln - pos, 0))
+                if sub and sub[0][0] == 0 and alone and alone[-1][0] == 1 and n and kinds[n - 1][1] == ref:
+                    alone.insert(len(alone) - 1, sub.pop(0))
+                alone += sub
+            elif kind != "read":
+                alone.append((1, n, ln, 0))
+        from services.sv_alleles import cigar_replacements
+        live_cut = set()
+        for sub in cigar_replacements(alone, piece_min=10, merge_gap=10):
+            if sub["len"] >= min_len:
+                live_cut.update(p["ref"] for p in sub.get("raw_pieces") or (dict(t=sub["t"], ref=sub["ref"]),)
+                                if p["t"] == "D")
+        out += [[ref, ref + ln] for n, (t, ref, ln, kind, _m) in enumerate(kinds) if t == "D" and n not in live_cut]
     return merge_spans(out)
 
 
@@ -470,7 +497,8 @@ def record_sv_events(rec, min_len: int) -> list:
     for ev in _indel_events(_cigar_pieces(rec.cigartuples or (), int(rec.reference_start))):
         if ev["len"] < min_len:
             continue
-        pieces = [(p["t"], int(p["ref"]), int(p["len"])) for p in ev.get("raw_pieces") or (ev,) if p["t"] in "ID"]
+        # The event's pieces with its aligned bridges (M, = and X as M): live lift's map-only grouping needs them.
+        pieces = [("M" if p["t"] in "M=X" else p["t"], int(p["ref"]), int(p["len"])) for p in ev.get("raw_pieces") or (ev,)]
         if any(t == "D" for t, _r, _n in pieces):
             out.append(pieces)
     return out
