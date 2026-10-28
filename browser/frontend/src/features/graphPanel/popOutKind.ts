@@ -97,8 +97,10 @@ async function openSources(host: PanelConfig, sources: PopOutPlan['sources']): P
       // The step this reveal records: a remap that waits on its tiles folds into it (agy post-merge review, group C,
       // HIGH 3).
       const step = { id: null as number | null };
-      const before = lastSnapshotId();
+      // The last step before the reveal's own: after the baseline `undoable` may seed (stabilize 3, item 4).
+      let seeded = lastSnapshotId();
       undoable(`Show ${existing.liftLink?.hapLabel ?? hap ?? ''} source view`.replace('  ', ' '), () => {
+        seeded = lastSnapshotId();
         // (Synchronous for an open one: it relinks this one, on the member's strand, to this lifted panel and returns.)
         void openLinkedSourceView(liftPanelId, hap, { existingId: existing.id, step });
         useBrowserStore.setState(x => ({ panels: x.panels.map(p => (p.id === existing.id && p.collapsed ? { ...p, collapsed: false } : p)) }));
@@ -111,8 +113,10 @@ async function openSources(host: PanelConfig, sources: PopOutPlan['sources']): P
       step.id = lastSnapshotId();
       // No waiting for its late remap (agy group C round 2, NEW HIGH 1): the next reveal goes on at once. Its step
       // only reveals a source view, so an earlier reveal's late remap still lands across it (a step of any other kind,
-      // or an Undo, drops that remap, and the source view then follows its next move).
-      if (step.id !== before) markRevealStep(step.id);
+      // or an Undo, drops that remap, and the source view then follows its next move). Only the reveal's own step: when
+      // it was not recorded (nothing changed, just after an Undo), the newest step is the baseline `undoable` seeded,
+      // which holds changes of another kind (stabilize 3, item 4).
+      if (step.id !== seeded) markRevealStep(step.id);
       continue;
     }
     const id = await openLinkedSourceView(liftPanelId, hap, { ...(view ? { view } : {}), ...(liftPanelId !== host.id ? { besidePanelId: host.id } : {}) });

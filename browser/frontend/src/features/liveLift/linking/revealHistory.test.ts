@@ -203,3 +203,48 @@ describe('several open source views popped out in a row (stabilize review, agy o
     expect(viewOf('srcMat')).not.toEqual({ chrom: 'S', start: 5000, end: 7000 });
   });
 });
+
+describe('a reveal whose own step was not recorded (stabilize 3, item 4)', () => {
+  beforeEach(() => { installTwoDatasetFixture(); });
+
+  /** Just after an Undo: MAT's source view is revealed (its exact remap waits on tiles); then a change that no step
+   * recorded; then PAT's source view, already shown at its view and linked to the host, is revealed again from the
+   * host (a haplotype with no panel of its own). Its seed records the change as a baseline, and its own step is dropped
+   * as an echo of the Undo (nothing changed). */
+  async function revealAfterUnrecordedChange() {
+    resetNavigation();
+    hold.targetA = true;
+    useBrowserStore.setState({ ...BASE, panels: [
+      lifted('host', { navOwn: true, viewportOverride: { chrom: 'T', start: 6000, end: 8000 }, viewMode: 'graph',
+        graphView: { role: 'host', registrationId: 'r1', targetPathKey: 'T', targetViewport: null, linkMode: 'independent',
+          initiatingPanelId: null, initiatingReferenceId: null, popOutKind: 'source', members: [{ panelId: 'host', binding: 'HM' }] } }),
+      source('srcMat', 'host', { collapsed: true, viewportOverride: { chrom: 'S2', start: 1000, end: 2000 } }),
+      { ...source('srcPat', 'host', { viewportOverride: { chrom: 'P', start: 5000, end: 7000 } }),
+        liftLink: { id: 'L-srcPat', datasetId: 'liftA', liftPanelId: 'host', hap: 'HP', hapLabel: 'PAT', contig: 'P', flip: false, chain: null } },
+    ] } as never);
+    useBrowserStore.getState().clearHistory();
+    useBrowserStore.getState().pushSnapshot('Before', { kind: 'layout' });
+    // (As right after an Undo: within the 1.5 s in which an unchanged push echoes the restore.)
+    useBrowserStore.setState({ _lastRestoreTime: Date.now() } as never);
+    popOutPaths('host', ['host']);
+    await flush();
+    expect(panelOf('srcMat')?.collapsed).toBe(false);
+    expect(viewOf('srcMat')).toEqual({ chrom: 'S2', start: 1000, end: 2000 });   // still waiting on its tiles
+    // A change of another kind that no step recorded.
+    useBrowserStore.setState({ clusterK: 7 } as never);
+    const before = useBrowserStore.getState()._historyStack.length;
+    popOutPaths('host', [], [{ binding: 'HP', hap: 'PAT' }]);
+    await flush();
+    // Only the baseline was recorded (the reveal's own step echoed the Undo).
+    expect(useBrowserStore.getState()._historyStack.slice(before).map(x => x.label)).toEqual(['Before show PAT source view']);
+  }
+
+  it('the baseline is not a reveal step: MAT\'s late remap does not land across that change', async () => {
+    await revealAfterUnrecordedChange();
+    await releaseHeld();
+    expect(viewOf('srcMat')).toEqual({ chrom: 'S2', start: 1000, end: 2000 });
+    // The baseline keeps the view it recorded.
+    const st = useBrowserStore.getState();
+    expect(st._historyStack.at(-1)?.state.panels?.find(p => p.id === 'srcMat')?.viewportOverride).toEqual({ chrom: 'S2', start: 1000, end: 2000 });
+  });
+});
