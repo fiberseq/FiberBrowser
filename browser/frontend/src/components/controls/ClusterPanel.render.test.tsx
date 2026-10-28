@@ -381,6 +381,29 @@ describe('ClusterPanel toolbar groups', () => {
     expect(useBrowserStore.getState().clusterAssignments.ds1).toEqual({ r1: 0, r2: 0 });
   });
 
+  it('the toolbar merge is one undo step, also when it clears a focus (stabilize 3, item 2)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      results: { ds1: { assignments: { r1: 0, r2: 0 }, cluster_counts: { 0: 2 } } },
+      dissolved: [{ cluster: 1, count: 1, reason: 'small' }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    useBrowserStore.setState({
+      clusterAssignments: { ds1: { r1: 0, r2: 1 } },
+      clusterOrder: { ds1: [0, 1] },
+      clusterFocus: { ds1: new Set([1]) },
+      clusterPeakRegions: [{ start: 150, end: 180, mode: 'nuc' }],
+      _historyStack: [], _historyPointer: -1, _lastRestoreTime: 0,
+    } as any);
+    useBrowserStore.getState().pushSnapshot('Cluster reads', { kind: 'clustering' });
+    await renderPanel();
+    await click('toolbar-group-toggle-cluster');
+    await click('cluster-auto-cull-button');
+    const s = useBrowserStore.getState();
+    expect(s._historyStack.map(x => x.label)).toEqual(['Cluster reads', 'Merge 1 cluster']);
+    s.undo();
+    expect(useBrowserStore.getState().clusterAssignments.ds1).toEqual({ r1: 0, r2: 1 });
+    expect([...(useBrowserStore.getState().clusterFocus.ds1 ?? [])]).toEqual([1]);
+  });
+
   it('a merge answering after Clear clusters does not bring the old clusters back', async () => {
     let answer: (value: Response) => void = () => undefined;
     const fetchMock = vi.fn(() => new Promise<Response>(resolve => { answer = resolve; }));

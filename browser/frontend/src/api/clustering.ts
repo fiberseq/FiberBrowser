@@ -193,6 +193,11 @@ export async function clusterMatchedViews(args: {
   });
 }
 
+/** The fit's molecule metric cohort as a request field, only when there is one (as assignToClusters sends it). */
+function metricCohortField(cohort?: ClusterMetricCohort): { cluster_metric_cohort?: ClusterMetricCohort } {
+  return cohort && Object.keys(cohort).length ? { cluster_metric_cohort: cohort } : {};
+}
+
 export async function dissolveCluster(
   chrom: string,
   start: number,
@@ -208,6 +213,11 @@ export async function dissolveCluster(
   clusterFeatureRules?: ClusterFeatureRule[],
   /** A panel on another assembly: its reference's key (panel_genome). */
   panelGenome?: string | null,
+  options?: {
+    // The fit's molecule metric cohort (the store's clusterMetricCohort): metric columns rank these reads against
+    // the fitted reads. Absent or empty: the server's stored cohort (no explicit peaks), else these reads' own.
+    metricCohort?: ClusterMetricCohort;
+  },
 ): Promise<{ results: Record<string, ClusterResponse> }> {
   const params = new URLSearchParams({
     chrom,
@@ -228,6 +238,7 @@ export async function dissolveCluster(
       accessibility_threshold: accessibilityThreshold,
       sample_seed: sampleSeed ?? null,
       cluster_feature_rules: clusterFeatureRules ?? [],
+      ...metricCohortField(options?.metricCohort),
     }),
   });
 }
@@ -267,6 +278,10 @@ export async function autoCullClusters(
   /** A panel on another assembly: its reference's key (panel_genome). */
   panelGenome?: string | null,
   mergeBy?: MergeByOptions,
+  options?: {
+    /** The fit's molecule metric cohort, as for dissolveCluster. */
+    metricCohort?: ClusterMetricCohort;
+  },
 ): Promise<{ results: Record<string, ClusterResponse>; dissolved: DissolvedCluster[]; merge?: Record<string, unknown> }> {
   const params = new URLSearchParams({
     chrom,
@@ -290,6 +305,7 @@ export async function autoCullClusters(
       ...(mergeBy?.threshold != null ? { merge_threshold: mergeBy.threshold } : {}),
       sample_seed: sampleSeed ?? null,
       cluster_feature_rules: clusterFeatureRules ?? [],
+      ...metricCohortField(options?.metricCohort),
     }),
   });
 }
@@ -365,6 +381,8 @@ export async function fetchClusterProjection(
     clusterAssignments?: Record<string, Record<string, number>>;
     /** Per-read DAF strand (CT/GA): loads deamination marks, so only for the export. */
     includeStrands?: boolean;
+    /** The fit's molecule metric cohort, as for dissolveCluster. */
+    metricCohort?: ClusterMetricCohort;
     /** A panel on another assembly: its reference's key (panel_genome). */
     panelGenome?: string | null;
   } = {}
@@ -395,6 +413,7 @@ export async function fetchClusterProjection(
       cluster_feature_rules: options.clusterFeatureRules ?? [],
       ...(options.clusterAssignments ? { cluster_assignments: options.clusterAssignments } : {}),
       ...(options.includeStrands ? { include_strands: true } : {}),
+      ...metricCohortField(options.metricCohort),
     }),
     signal: options.signal,
   });
@@ -453,7 +472,7 @@ export async function assignToClusters(
         cluster_centroids: options!.centroids,
         cluster_peak_widths: options!.peakWidths ?? [],
       } : {}),
-      ...(options?.metricCohort && Object.keys(options.metricCohort).length ? { cluster_metric_cohort: options.metricCohort } : {}),
+      ...metricCohortField(options?.metricCohort),
     }),
     signal: options?.signal,
   });

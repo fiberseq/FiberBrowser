@@ -150,8 +150,12 @@ def apply_consensus_display_overlays(
     total_overlapping: int,
     total_spanning: int,
     projection_source=None,
+    layer_key=None,
 ) -> list[dict]:
     """Project active consensus calls onto display reads on every fetch path.
+
+    ``layer_key``: the request's layers (None = every layer). The rows keep only the scan-overlay layers it names:
+    its display quality filters cover only those, so another scan layer would be drawn unfiltered.
 
     ``BrowserState.build_working_set`` already applies this projection, but
     the optimized display sampler and the direct BAM path intentionally bypass
@@ -179,6 +183,9 @@ def apply_consensus_display_overlays(
     if active(state,dataset_id,chrom,start,end):
         working_set=project_consensus_working_set(state,dataset_id,chrom,start,end,working_set,
             projection_source=projection_source)
+    if state.__dict__.get('scan_registry'):
+        from services.scan.overlay import without_unrequested_layers
+        return without_unrequested_layers(state, dataset_id, working_set.reads, layer_key)
     return working_set.reads
 
 
@@ -226,6 +233,15 @@ def needs_direct_read_load(
         # ... and SV events at the default floor, without inserted bases.
         or (is_bam and (int(min_sv_len) < SV_MIN_LEN_DEFAULT or bool(include_sv_seq)))
     )
+
+
+def scan_overlay_before_filters(state, dataset_id: str, chrom: str, start: int, end: int, reads: list[dict]) -> list[dict]:
+    """Rows of ``[start, end)`` with the tables-mode scans' layers, put on before the quality filters (as the working
+    set does), so the display post-pass over the window is a no-op and never restores a filtered mark."""
+    if not state.__dict__.get('scan_registry'):
+        return reads
+    from services.scan.overlay import apply_scan_overlays
+    return apply_scan_overlays(state, dataset_id, chrom, start, end, reads)
 
 
 def apply_quality_filters_to_reads(reads: list[dict], filters) -> list[dict]:
@@ -817,9 +833,9 @@ def _compact_reads_payload(
 
         from services.read_sampling import sampling_info
         sampling_reads = all_reads
-        # The quality gates the working-set path applies (cached reads stay raw).
+        # The quality gates the working-set path applies (cached reads stay raw), after the scan overlay.
         all_reads = apply_quality_filters_to_reads(
-            all_reads,
+            scan_overlay_before_filters(state, dataset_id, chrom, start, end, all_reads),
             quality_filters_for_display_layers(active_quality_filters(state), layer_key),
         )
 
@@ -922,6 +938,7 @@ def _compact_reads_payload(
             total_overlapping=total_overlapping,
             total_spanning=total_spanning,
             projection_source=direct_projection,
+            layer_key=layer_key,
         )
         server_timings["display_sample_ms"] = phase_ms(phase_t0)
         has_methylation = compact_reads_have_methylation(display_reads)
@@ -1078,6 +1095,12 @@ def _compact_reads_payload(
             total_overlapping_in_viewport = 0
             total_in_viewport = 0
             total_spanning_in_viewport = 0
+            # Tables-mode scans' layers before the quality filters (as the working set does), so the display
+            # post-pass over this window is a no-op and never restores a filtered mark.
+            scan_overlay = None
+            if state.__dict__.get('scan_registry'):
+                from services.scan.overlay import prepare_scan_overlay
+                scan_overlay = prepare_scan_overlay(state, dataset_id, chrom, start, end)
             for read in iter_broad_reads_overlapping_viewport(
                 state,
                 broad_reads,
@@ -1115,6 +1138,8 @@ def _compact_reads_payload(
                 if not matches_cluster(read):
                     continue
 
+                if scan_overlay is not None:
+                    adjusted_read = scan_overlay(adjusted_read)
                 if display_quality_filters and "layers" in adjusted_read:
                     adjusted_read = apply_quality_filters(adjusted_read, display_quality_filters)
                     if adjusted_read is None:
@@ -1258,6 +1283,7 @@ def _compact_reads_payload(
         total_spanning=working_set.total_spanning,
         # Projected already on every path but the sampled display set's.
         projection_source=working_set,
+        layer_key=layer_key,
     )
 
     if fill_gap_size and fill_gap_size > 0:
@@ -1553,8 +1579,9 @@ def compact_all_dataset_result(
             ),
         )
         server_timings["direct_load_ms"] = phase_ms(phase_t0)
-        # Working sets apply the active quality gates; so must this path.
-        reads = apply_quality_filters_to_reads(reads, active_quality_filters(state))
+        # Working sets apply the active quality gates (after the scan overlay); so must this path.
+        reads = apply_quality_filters_to_reads(scan_overlay_before_filters(state, dataset_id, chrom, start, end, reads),
+                                               active_quality_filters(state))
     else:
         phase_t0 = time.perf_counter()
         working_set = query.build_working_set(

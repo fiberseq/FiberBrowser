@@ -1865,6 +1865,10 @@ def build_sampled_display_working_set(
                 segment_sampling.append(segment_set.sampling)
 
         viewport_reads = merge_compact_reads_by_id(merged_inputs)
+        # The segments' scan overlays name the wrapped view before its quality filters run (the display
+        # post-pass over this view is then a no-op and never restores a filtered mark).
+        from services.scan.overlay import rewindow_receipts
+        viewport_reads = rewindow_receipts(viewport_reads, chrom, start, end)
         if quality_filters:
             viewport_reads = [
                 filtered
@@ -2104,6 +2108,13 @@ def build_sampled_display_working_set(
                 + timings.get("display_profile_payload_ms", 0.0)
             )
 
+    # Tables-mode scans' layers go on the projected rows before the quality filters, as in
+    # _viewport_reads_from_broad, so the display post-pass over this window finds their receipt and never restores
+    # a filtered mark. (The profile rows above are broad-cache rows, in the cache's frame: left without them.)
+    scan_overlay = None
+    if state.__dict__.get('scan_registry'):
+        from services.scan.overlay import prepare_scan_overlay
+        scan_overlay = prepare_scan_overlay(state, dataset_id, chrom, start, end)
     viewport_reads = []
     phase_t0 = time.perf_counter()
     for _coverage, _idx, read, is_spanning in selected:
@@ -2118,6 +2129,8 @@ def build_sampled_display_working_set(
         )
         if adjusted_read is None:
             continue
+        if scan_overlay is not None:
+            adjusted_read = scan_overlay(adjusted_read)
         if quality_filters:
             adjusted_read = apply_quality_filters(adjusted_read, quality_filters)
             if adjusted_read is None:
@@ -2226,6 +2239,10 @@ def _build_working_set(
                 for read in segment_set.reads)
 
         viewport_reads = merge_compact_reads_by_id(merged_inputs)
+        # Each segment overlaid its rows before its quality filters: their receipts name this view, so the
+        # post-pass over it (BrowserState.build_working_set) never restores a filtered mark.
+        from services.scan.overlay import rewindow_receipts
+        viewport_reads = rewindow_receipts(viewport_reads, chrom, start, end)
         total_overlapping = len(viewport_reads)
         total_spanning = sum(1 for read in viewport_reads if is_read_spanning(read, region_width))
         if spanning:

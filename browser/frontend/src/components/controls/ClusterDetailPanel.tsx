@@ -632,6 +632,8 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
             sampleSeed: analysisSampleSeed,
             clusterFeatureRules,
             clusterAssignments: projectionRound?.assignments ?? {},
+            // Metric columns rank against the fit's cohort, as the fit did.
+            metricCohort: useBrowserStore.getState().clusterMetricCohort,
             panelGenome: viewGenome,
             signal: controller.signal,
           }
@@ -676,6 +678,7 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
           sampleSeed: analysisSampleSeed,
           clusterFeatureRules,
           clusterAssignments: projectionRound?.assignments ?? {},
+          metricCohort: useBrowserStore.getState().clusterMetricCohort,
           includeStrands: true,
           panelGenome: viewGenome,
         },
@@ -814,6 +817,8 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
           analysisSampleSeed,
           clusterFeatureRules,
           view.genome,
+          // Metric columns rank against the fit's cohort, as the fit did.
+          { metricCohort: useBrowserStore.getState().clusterMetricCohort },
         );
         // Navigated, restored or changed meanwhile: these results are for other clusters.
         if (!mountedRef.current || !chartRoundStillCurrent(round, view, useBrowserStore.getState())) continue;
@@ -829,7 +834,8 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
             setClusterOrder(sk, currentOrder.filter(c => c !== clusterToDissolve));
           }
           if (useBrowserStore.getState().clusterFocus[sk]?.has(clusterToDissolve)) {
-            setClusterFocus(sk, null);
+            // Part of the dissolve's one undo step (finish records it).
+            setClusterFocus(sk, null, { record: false });
           }
           useBrowserStore.getState().pruneClusterSelection(sk, [clusterToDissolve]);
         }
@@ -885,6 +891,7 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
           clusterFeatureRules,
           view.genome,
           { strategy: settings.strategy, threshold: settings.threshold },
+          { metricCohort: useBrowserStore.getState().clusterMetricCohort },
         );
         if (!mountedRef.current) return;
         if (!chartRoundStillCurrent(round, view, useBrowserStore.getState())) { stale = true; continue; }
@@ -902,7 +909,8 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
           if (currentOrder) {
             setClusterOrder(sk, currentOrder.filter(c => !dissolvedIds.has(c)));
           }
-          setClusterFocus(sk, null);
+          // Part of the merge's one undo step (finish records it).
+          setClusterFocus(sk, null, { record: false });
           useBrowserStore.getState().pruneClusterSelection(sk, dissolvedIds);
         }
       }

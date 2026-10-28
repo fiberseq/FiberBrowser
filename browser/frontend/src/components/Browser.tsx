@@ -32,6 +32,7 @@ import { fetchApiResponse } from '../api/sharedFetch';
 import { useDafcStore } from '../stores/dafcStore';
 import { scanPeaks } from '../api/peaks';
 import { clusterAllReads, assignToClusters } from '../api/clustering';
+import { adoptFitMetricCohort } from '../actions/browserActions';
 import { performanceSamplingNote } from '../utils/performanceProfile';
 import { mergeClusterOrder } from '../utils/clusterOrder';
 import { clusterReferenceScope, clusterRunLabel, restoredClusteringState, savedClusterStateForPanels } from '../stores/clusterSlice';
@@ -1604,6 +1605,8 @@ export function Browser() {
       } else {
         useBrowserStore.getState().setClusterPatterns({});
         useBrowserStore.getState().setClusterCentroids({}, []);
+        // No model, but merges and the map rank metric columns against this fit's cohort, not an earlier fit's.
+        adoptFitMetricCohort(res.cluster_metric_cohort);
         useBrowserStore.getState().setClusterPeakRegions(runPeakRegions);
         useBrowserStore.getState().setDynamicClustering(false);
       }
@@ -1887,6 +1890,8 @@ export function Browser() {
               // even when only selected or focused clusters are sorted.
               clusterAssignments: Object.fromEntries(Object.entries(sentAssignments)
                 .filter((entry): entry is [string, Record<string, number>] => !!entry[1])),
+              // Metric columns rank against the fit's cohort, as the Projection tab's map does.
+              metricCohort: sortState.clusterMetricCohort,
             } : undefined,
             // A panel on another assembly: its reference (chromosomes, genes).
             panelGenome: group.genome ?? null,

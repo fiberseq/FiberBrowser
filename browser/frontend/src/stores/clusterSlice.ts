@@ -263,16 +263,29 @@ type RunProvenance = { observations: GraphRunObservation[]; owned: Record<string
  * pop-out splitting the labels by provenance gives them to the panel that shows those rows (graph follow-ups item 5,
  * agy review group B round 4, 2a). Returns the ownership to add to `runs` (null: none), only for records a run
  * already knows; rows not drawn keep the runs' routing.
+ *
+ * `records`: record-level keys too, for a lifted pop-out (stabilize 3, item 1): a supplementary record is drawn on its
+ * own path but shown in the lifted panel of its primary's haplotype. Not for a source view, which shows each record on
+ * its own contig, as the run's path already routes it (a record label there is by QNAME: another haplotype's record
+ * would take its molecule's label on this one).
  */
 export function drawnRowOwnership(runs: readonly RunProvenance[], labels: Record<string, number> | undefined,
-  rows: readonly DrawnRow[]): RunProvenance | null {
+  rows: readonly DrawnRow[], options?: { records?: boolean }): RunProvenance | null {
   if (!runs.length || !labels || !rows.length) return null;
   const known = new Set(runs.flatMap(p => Object.values(p.owned).flat()));
-  const labelled = new Set(Object.keys(labels).filter(isMoleculeRecordKey).map(id => recordKey(id)!).filter(rk => known.has(rk)));
+  const labelled = new Set(Object.keys(labels).filter(id => options?.records || isMoleculeRecordKey(id)).map(id => recordKey(id))
+    .filter((rk): rk is string => Boolean(rk) && known.has(rk!)));
   if (!labelled.size) return null;
   const observations = [...new Map(runs.flatMap(p => p.observations).map(o => [o.id, o])).values()];
-  const owns = (oid: string, rk: string) => runs.some(p => p.owned[oid]?.includes(rk));
+  // (Sets: with record-level keys every drawn row may be looked up.)
+  const ownedBy = new Map<string, Set<string>>();
+  for (const p of runs) for (const [oid, rks] of Object.entries(p.owned)) {
+    const set = ownedBy.get(oid) ?? new Set<string>();
+    for (const rk of rks) set.add(rk);
+    ownedBy.set(oid, set);
+  }
   const owned: Record<string, string[]> = {};
+  const added = new Map<string, Set<string>>();
   const used = new Map<string, GraphRunObservation>();
   for (const r of rows) {
     if (!labelled.has(r.rk)) continue;
@@ -280,8 +293,9 @@ export function drawnRowOwnership(runs: readonly RunProvenance[], labels: Record
     for (const o of observations) {
       const oh = ((o.kind === 'linear' ? o.lift_hap : o.hap) ?? '').toUpperCase();
       if (o.dataset_id !== r.datasetId || !r.haps.includes(oh) || (o.strand && strand && o.strand !== strand)) continue;
-      if (owns(o.id, r.rk) || owned[o.id]?.includes(r.rk)) continue;
+      if (ownedBy.get(o.id)?.has(r.rk) || added.get(o.id)?.has(r.rk)) continue;
       (owned[o.id] ??= []).push(r.rk);
+      (added.get(o.id) ?? added.set(o.id, new Set()).get(o.id)!).add(r.rk);
       used.set(o.id, o);
     }
   }
@@ -1709,12 +1723,17 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
     if (Object.keys(childAssignments).length === 0) return null;
 
     const id = crypto.randomUUID();
-    const node: ClusterTreeNode = {
+    let node: ClusterTreeNode = {
       ...buildClusterTreeNodeFromState(state, { id, parentId, name, sourceClusterIds, sourceLabel, readScope: options?.readScope }),
       assignments: cloneAssignments(childAssignments),
       order: normalizeClusterOrderRecord(childAssignments, {}),
       focus: childFocus,
     };
+    // The rows drawn now route its molecule-level records against its parents' graph runs, stored on this node, as a
+    // grouping's write does (withDrawnRowHaps): a pop-out after the view moved still finds them (stabilize 3, item 1).
+    for (const sk of Object.keys(childAssignments)) {
+      node = withDrawnRowHaps(node, sk, childAssignments[sk], state.clusterTreeNodes, state.panels);
+    }
 
     // Single atomic write: create child, make it active, and project it into the
     // live (flat) state the renderer reads. No detach-to-null, so no React effect

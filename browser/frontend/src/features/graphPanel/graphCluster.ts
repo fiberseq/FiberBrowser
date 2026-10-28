@@ -32,7 +32,8 @@ import { seedHistoryBaseline } from '../../stores/historySlice';
 import { useRunResultStore } from '../../stores/runResultStore';
 import { sortStateStillCurrent } from '../../utils/sortScope';
 import { NOT_CARRIER_CLUSTER_ID, UNASSIGNED_CLUSTER_ID } from '../../components/tracks/read-track/constants';
-import { isHost, hostOf, membersOf } from './hostMode';
+import { isHost, hostOf, membersOf, panelKeyOf } from './hostMode';
+import { drawnRowsFor, type DrawnRow } from '../../stores/clusterSlice';
 import { hostShowsGraph } from './hostHeader';
 import { useGraphBindingsStore } from './bindingsStore';
 import { useGraphStatusStore } from './statusStore';
@@ -213,6 +214,49 @@ export function destinationAssignments(dest: GraphDestination, results: Record<s
   return out;
 }
 
+/**
+ * Labels a destination takes from the run's other observations of its dataset (stabilize 3, item 1): records whose
+ * drawn rows are on a haplotype this destination's observations show. A supplementary is drawn on its own record's
+ * path (that path's observation labels it), while the lifted panels show it on its primary's haplotype: a split host's
+ * member of that haplotype takes its label too, as does a folded molecule's. Fitted labels only (never another path's
+ * "not a carrier"), within the destination's scope; its own observations' labels win (the caller spreads them last).
+ * A linked source view (by QNAME) takes none: it shows each record on its own contig, which its path already routes.
+ */
+export function routedDestinationLabels(dest: GraphDestination, observations: readonly GraphRunObservation[],
+  results: Record<string, { assignments?: Record<string, number> }>, rows: readonly DrawnRow[]): Record<string, number> {
+  if (dest.keyBy === 'qname' || !rows.length) return {};
+  const mine = observations.filter(o => dest.observations.includes(o.id));
+  const datasets = new Set(mine.map(o => o.dataset_id));
+  const others = observations.filter(o => !dest.observations.includes(o.id) && datasets.has(o.dataset_id));
+  if (!others.length) return {};
+  const hapOf = (o: GraphRunObservation) => ((o.kind === 'linear' ? o.lift_hap : o.hap) ?? '').toUpperCase();
+  const shown = (r: DrawnRow) => mine.some(o => o.dataset_id === r.datasetId && r.haps.includes(hapOf(o))
+    && !(o.strand && (r.strand === 'CT' || r.strand === 'GA') && o.strand !== r.strand));
+  const showsRecord = new Set(rows.filter(shown).map(r => `${r.datasetId}\u0000${r.rk}`));
+  if (!showsRecord.size) return {};
+  const scope = dest.scope ? new Set(dest.scope) : null;
+  const out: Record<string, number> = {};
+  for (const o of [...others].sort((a, b) => a.id.localeCompare(b.id))) {
+    for (const [id, label] of Object.entries(results[o.id]?.assignments ?? {})) {
+      if (label < 0) continue;
+      const rk = recordKey(id);
+      const key = rk ?? id;
+      if (key in out || !showsRecord.has(`${o.dataset_id}\u0000${key}`)) continue;
+      if (scope && !idSetHas(scope, [id, qnameOfId(id)], rk)) continue;
+      out[key] = label;
+    }
+  }
+  return out;
+}
+
+/** The rows drawn for a run's panels (each destination's, and its host's graph), on the haplotype lifted panels show
+ * them on (drawnRowsFor). */
+function runDrawnRows(panels: readonly PanelConfig[], hostPanelId: string | null | undefined, destinations: readonly { stateKey: string }[]): DrawnRow[] {
+  const host = hostPanelId ? panels.find(p => p.id === hostPanelId) : null;
+  const keys = new Set([...(host ? [panelKeyOf(host)] : []), ...destinations.map(d => d.stateKey)]);
+  return [...keys].flatMap(k => drawnRowsFor(k, panels));
+}
+
 // ── The run ──────────────────────────────────────────────────────────────────
 
 interface GraphClusterResponse {
@@ -333,9 +377,14 @@ export function commitGraphRun(s: BrowserState, plan: GraphClusterPlan, response
   const stage1Results = Object.fromEntries(Object.entries(response.results).map(([k, r]) => [k, { assignments: r.stage1 ?? r.assignments }]));
   const finalBy: Record<string, Record<string, number>> = {};
   const stage1By: Record<string, Record<string, number>> = {};
+  // A supplementary labelled on its own path reaches the member that shows its lifted row (stabilize 3, item 1).
+  const drawn = runDrawnRows(now.panels, plan.host.id, plan.destinations);
+  const runObs = plan.observations as unknown as GraphRunObservation[];
   for (const d of plan.destinations) {
-    finalBy[d.stateKey] = { ...(finalBy[d.stateKey] ?? {}), ...destinationAssignments(d, response.results) };
-    stage1By[d.stateKey] = { ...(stage1By[d.stateKey] ?? {}), ...destinationAssignments(d, stage1Results) };
+    finalBy[d.stateKey] = { ...routedDestinationLabels(d, runObs, response.results, drawn), ...(finalBy[d.stateKey] ?? {}),
+      ...destinationAssignments(d, response.results) };
+    stage1By[d.stateKey] = { ...routedDestinationLabels(d, runObs, stage1Results, drawn), ...(stage1By[d.stateKey] ?? {}),
+      ...destinationAssignments(d, stage1Results) };
   }
   const refined = Object.keys(response.names ?? {}).length > 0;
   const sourceClusterIds = [...new Set(plan.destinations.flatMap(d => [...(s.selectedClusters[d.stateKey]?.size
@@ -529,8 +578,16 @@ export async function assignWithGraphRun(run: ClusterMatchedRun, signal?: AbortS
   });
   let added = 0;
   const touched: string[] = [];
+  const drawn = runDrawnRows(st.panels, g.hostPanelId, [...run.destinations, ...later]);
+  // Routed from the observations' labels as they stand after this answer (a fitted label stays; a new row takes the
+  // model's), never from a fresh prediction of a row another panel already shows labelled (Codex review, stabilize 3
+  // group A round 1).
+  const retained = Object.fromEntries(Object.entries(assignedObservations(run.assignments, response.results))
+    .map(([oid, a]) => [oid, { assignments: a }]));
   for (const d of [...run.destinations, ...later]) {
-    const labels = destinationAssignments({ ...d, scope: d.scope ?? null }, response.results);
+    const dest = { ...d, scope: d.scope ?? null };
+    // (As the run wrote them: a supplementary labelled on its own path also reaches the member that shows its row.)
+    const labels = { ...routedDestinationLabels(dest, g.observations, retained, drawn), ...destinationAssignments(dest, response.results) };
     const live = st.clusterAssignments[d.stateKey] ?? {};
     // A model label also replaces "not a carrier" (-2) on a record the model now places (agy review: a carrier molecule
     // the fit sampled out must not stay -2).

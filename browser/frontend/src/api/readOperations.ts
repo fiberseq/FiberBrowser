@@ -6,7 +6,7 @@ import type { ReadsResponse } from '../components/tracks/read-track/types';
 import { READ_STREAM_TYPE } from './readStream';
 import type { ReadRequestOptions } from './sharedFetch';
 import { readBinaryBytes, READ_BINARY_TYPE } from './readBinary';
-import type { FireResponse, FilterMode, MetaResponse } from '../types';
+import type { ClusterMetricCohort, FireResponse, FilterMode, MetaResponse } from '../types';
 import { fetchJson, fetchJsonSharedGet, withSortedParams } from './sharedFetch';
 import type { QualityGatePayload } from '../utils/ruleMatching';
 
@@ -242,6 +242,8 @@ export async function sortReads(
       subnucleosomalThreshold?: number;
       /** The whole clustering the map is drawn from (the sort may order a subset of it). */
       clusterAssignments?: Record<string, Record<string, number>>;
+      /** The fit's molecule metric cohort (as the Projection tab sends it); empty: none sent. */
+      metricCohort?: ClusterMetricCohort;
     };
     /** A panel on another assembly: its reference's key (genes and chromosomes are that reference's). */
     panelGenome?: string | null;
@@ -283,6 +285,8 @@ export async function sortReads(
           cluster_feature_rules: opts.projection.clusterFeatureRules ?? [],
           subnucleosomal_threshold: opts.projection.subnucleosomalThreshold ?? 90,
           ...(opts.projection.clusterAssignments && { cluster_assignments: opts.projection.clusterAssignments }),
+          ...(opts.projection.metricCohort && Object.keys(opts.projection.metricCohort).length
+            && { cluster_metric_cohort: opts.projection.metricCohort }),
         },
       }),
       sample_seed: opts?.sampleSeed ?? null,

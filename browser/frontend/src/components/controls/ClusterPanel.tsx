@@ -644,6 +644,8 @@ export function ClusterPanel({
           clusterFeatureRules,
           view.genome,
           mergeSettings.mergeBy,
+          // Metric columns rank against the fit's cohort, as the fit did.
+          { metricCohort: useBrowserStore.getState().clusterMetricCohort },
         );
         if (!chartRoundStillCurrent(round, view, useBrowserStore.getState())) { stale = true; continue; }
         if (res.dissolved.length === 0) continue;
@@ -661,7 +663,8 @@ export function ClusterPanel({
           if (currentOrder) {
             setClusterOrder(sk, currentOrder.filter(clusterId => !dissolvedIds.has(clusterId)));
           }
-          setClusterFocus(sk, null);
+          // Part of the merge's one undo step (finish records it).
+          setClusterFocus(sk, null, { record: false });
           useBrowserStore.getState().pruneClusterSelection(sk, dissolvedIds);
         }
       }

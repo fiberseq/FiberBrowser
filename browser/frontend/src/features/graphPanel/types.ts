@@ -234,6 +234,9 @@ export interface GraphRead {
   aid?: string;
   rk?: string | null;
   hap?: string | null;
+  /** A supplementary's primary record's haplotype label, when the server found its primary (wire version 11): the
+   * haplotype its lifted rows are shown on. `hap` stays its own path's (its band). */
+  ph?: string | null;
   /** The package path (binding key) it is aligned to, and the BAM contig. */
   b: string;
   c: string;
