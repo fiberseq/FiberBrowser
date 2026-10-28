@@ -755,7 +755,7 @@ class _FetchBudget:
 
 def lookup_primary(bam, qname: str, sa: Optional[str], budget: Optional[_FetchBudget] = None) -> Optional[dict]:
     """The primary record of a supplementary, found through its SA loci (point
-    fetches, each one charged to ``budget``): ``{contig, strand?,
+    fetches, each one charged to ``budget``): ``{contig, blocks, strand?,
     strand_conflict?}``, or None when absent, ambiguous or out of budget."""
     from services.background_work import checkpoint
     from services.read_strand import record_strand_fields
@@ -777,6 +777,7 @@ def lookup_primary(bam, qname: str, sa: Optional[str], budget: Optional[_FetchBu
             if rec.reference_start != pos:
                 continue
             found[(rec.reference_name, rec.reference_start)] = {"contig": rec.reference_name,
+                                                                "blocks": rec.get_blocks(),
                                                                 **record_strand_fields(rec)}
     if len(found) != 1:
         return None
@@ -795,9 +796,22 @@ def _bam_identity(path) -> tuple:
     return tuple(out)
 
 
+def _primary_lifts(handle, contig, blocks):
+    """Whether any aligned primary base projects anywhere in the target genome.
+
+    Query the whole primary, independent of the viewport and selected haplotypes.
+    A primary's deletion across a mapped region alone cannot rescue it.
+    """
+    if not blocks:
+        return False
+    with handle.lock:
+        pieces = handle.map.source_to_target(contig, min(a for a, _ in blocks), max(b for _, b in blocks))
+    return any(p.primary and any(a < p.q_end and b > p.q_start for a, b in blocks) for p in pieces)
+
+
 def resolve_primary_metadata(handle: LiftMapHandle, reads: list, *, settings: LiftSettings, counts: dict,
                              bam_handle_getter=None) -> dict:
-    """``{molecule_key: {hap, strand?, strand_conflict?}}`` of molecules whose
+    """``{molecule_key: {hap?, strand?, strand_conflict?, primary_lifted?}}`` of molecules whose
     primary record is known (§3.5): fetched, else (``primary_lookup``) found
     through SA point fetches (at most 32 per request, cached per BAM
     generation and molecule). Molecules left out fall back per record (each
@@ -805,15 +819,28 @@ def resolve_primary_metadata(handle: LiftMapHandle, reads: list, *, settings: Li
     counts them)."""
     out: dict = {}
     pending: dict = {}
+    primaries: dict = {}
     for read in reads:
         key = molecule_key(read)
         prim = read.get("_fiberbrowser_primary") or {}
         if not prim.get("is_supplementary"):
+            primaries[key] = read
             contig = (read.get("_fiberbrowser_lift_record") or {}).get("contig")
             out[key] = {"hap": handle.source_haplotype.get(contig),
                         **{k: read[k] for k in ("strand", "strand_conflict") if k in read}}
         else:
             pending.setdefault(key, []).append(read)
+    for key in pending.keys() & primaries.keys():
+        read = primaries[key]
+        contig = (read.get("_fiberbrowser_lift_record") or {}).get("contig")
+        blocks = (read.get("_fiberbrowser_primary") or {}).get("blocks")
+        if blocks is None:
+            runs = read.get("_fiberbrowser_aligned_runs")
+            if runs is not None:
+                blocks = [(int(a), int(a + n)) for a, _m, n in runs]
+            else:
+                continue  # a metadata-only caller without aligned bases cannot establish an orphan
+        out[key]["primary_lifted"] = _primary_lifts(handle, contig, blocks)
     if not settings.primary_lookup:
         return out
     budget = _FetchBudget(MAX_PRIMARY_LOOKUPS)
@@ -850,10 +877,12 @@ def resolve_primary_metadata(handle: LiftMapHandle, reads: list, *, settings: Li
                     _PRIMARY_CACHE[ck] = meta
                     while len(_PRIMARY_CACHE) > _PRIMARY_CACHE_MAX:
                         _PRIMARY_CACHE.popitem(last=False)
-        if meta is not None and handle.source_haplotype.get(meta["contig"]) is not None:
-            out[key] = {"hap": handle.source_haplotype[meta["contig"]],
-                        **{k: meta[k] for k in ("strand", "strand_conflict") if k in meta}}
-            counts["primary_found_by_lookup"] = counts.get("primary_found_by_lookup", 0) + 1
+        if meta is not None:
+            out[key] = {"primary_lifted": _primary_lifts(handle, meta["contig"], meta["blocks"])}
+            if handle.source_haplotype.get(meta["contig"]) is not None:
+                out[key].update(hap=handle.source_haplotype[meta["contig"]],
+                                **{k: meta[k] for k in ("strand", "strand_conflict") if k in meta})
+                counts["primary_found_by_lookup"] = counts.get("primary_found_by_lookup", 0) + 1
     counts["primary_sa_fetches"] = MAX_PRIMARY_LOOKUPS - budget.left
     return out
 

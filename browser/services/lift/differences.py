@@ -900,6 +900,7 @@ def difference_reads(state, dataset, chrom, pos, end, *, lift_hap=None, item_id=
         metadata_reads = [dict(id=r.query_name, source_path=path,
                                _fiberbrowser_lift_record=dict(contig=r.reference_name),
                                _fiberbrowser_primary=dict(is_supplementary=r.is_supplementary,
+                                                          blocks=r.get_blocks(),
                                                           sa=r.get_tag("SA") if r.has_tag("SA") else None),
                                **record_strand_fields(r)) for path, r, _ in fetched]
         molecules = resolve_primary_metadata(config.handle, metadata_reads, settings=config.settings, counts={},

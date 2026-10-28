@@ -782,7 +782,7 @@ def test_the_vectorised_mm_decoder_matches_the_reference_decoder():
         read.query_sequence = seq
         read.flag = 16 if reverse else 0
         read.reference_id, read.reference_start = 0, 10
-        read.cigartuples = [(4, 5), (0, len(seq) - 10), (1, 5)]
+        read.cigartuples = [(5, 2), (4, 3), (0, 5), (1, 2), (7, len(seq) - 15), (3, 7), (8, 3), (4, 2)]
         read.set_tag("MM", mm)
         if ml is not None:
             read.set_tag("ML", array("B", ml))
@@ -813,7 +813,9 @@ def test_the_vectorised_mm_decoder_matches_the_reference_decoder():
         fast, reference = bam_tags._decode_mm_ml_calls(read), bam_tags._decode_mm_ml_calls_reference(read)
         assert fast == reference
         assert [tuple(map(type, call)) for call in fast or []] == [tuple(map(type, call)) for call in reference or []]
-        assert bam_tags.parse_mm_ml_tags_by_type(read, 0, 100_000, 0) is not None
+        for lo, hi, threshold in ((0, 100_000, -1), (25, 150, 125), (10, 300, 255), (0, 100_000, 256)):
+            assert bam_tags.parse_mm_ml_tags_by_type(read, lo, hi, threshold) == (
+                bam_tags._parse_mm_ml_tags_by_type_reference(read, lo, hi, threshold))
 
 
 def test_a_padded_cigar_keeps_the_aligned_pairs_mapping():
@@ -898,3 +900,31 @@ def test_missing_optional_frame_policy_preserves_declared_geometry_on_both_stran
             read_length=10, is_reverse=reverse, tags_are_molecular=frame)
         assert result['nuc']['intervals'] == [interval]
         assert result['nuc']['qualities'] == qualities
+
+
+def test_cached_ma_parse_preserves_quality_name_and_call_offsets():
+    mapper = IdentityOffsetMapper()
+    ma = "60;tf.Q:bad-2,1-4,,9-3;tf.Q:20-2"
+    kwargs = dict(an_str="bad,first,second,third", call_meta=(60, 0, False))
+    first = bam_tags.parse_ma_aq_tags_into_layers(ma, [10, 20, 30], mapper, 100, 200, **kwargs)
+    second = bam_tags.parse_ma_aq_tags_into_layers(ma, [40, 50, 60], mapper, 100, 200, **kwargs)
+    assert first['tf']['intervals'] == second['tf']['intervals'] == [[0, 4, 4], [8, 11, 3], [19, 21, 2]]
+    assert first['tf']['annotation_names'] == ['first', 'second', 'third']
+    assert first['tf']['qualities'] == [[10, 20, 30]]
+    assert second['tf']['qualities'] == [[40, 50, 60]]
+    assert first['tf']['_fiberbrowser_calls'] == [['MA0:0', 0, 4], ['MA0:1', 8, 11], ['MA1:0', 19, 21]]
+    # Cache ownership never escapes: changing a returned layer cannot change later parses.
+    first['tf']['intervals'][0][0] = 99
+    again = bam_tags.parse_ma_aq_tags_into_layers(ma, [10, 20, 30], mapper, 100, 200, **kwargs)
+    assert again['tf']['intervals'][0] == [0, 4, 4]
+
+
+def test_ma_batch_projection_matches_scalar_cigar_mapper():
+    import random
+    from models.domain import CigarCoordMapper
+    rng = random.Random(19)
+    mapper = CigarCoordMapper([(4, 20), (0, 80), (1, 20), (0, 70), (2, 25), (7, 90), (3, 40), (8, 80), (4, 10)], 100)
+    intervals = [(a := rng.randrange(-50, 450), a + rng.randrange(-5, 180)) for _ in range(500)]
+    expected = [mapper.aligned_query_interval_to_ref(a, b - 1) for a, b in intervals]
+    assert bam_tags._ma_aligned_intervals(mapper, intervals) == expected
+    assert bam_tags._ma_aligned_intervals(mapper, [(2**100, 2**100 + 1)] * 16) is None

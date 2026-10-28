@@ -168,7 +168,7 @@ def ma_footprint_query_spans(ma_tags, *, read_length: int, is_reverse: bool,
     """A read's MA footprint calls (nuc, tf, fp_v2) as SEQ-frame query
     ``(name, start, end)``, over the whole read, with the section and frame
     rules of ``parse_ma_aq_tags_into_layers``."""
-    from services.bam_tags import CONSENSUS_MOLECULAR_COORDINATES, ma_group_frame
+    from services.bam_tags import CONSENSUS_MOLECULAR_COORDINATES, ma_group_frame, ma_intervals
     if ma_tags is None or not ma_tags[0] or not isinstance(ma_tags[0], str):
         return []
     spans = []
@@ -191,15 +191,7 @@ def ma_footprint_query_spans(ma_tags, *, read_length: int, is_reverse: bool,
         molecular = (ma_group_frame(ma_tags[3]).is_molecular(name, type_sig[strand_idx])
                      or contract.get("coordinates") == CONSENSUS_MOLECULAR_COORDINATES)
         flip = bool(molecular and is_reverse and read_length)
-        for iv in body.split(","):
-            iv = iv.strip()
-            if not iv or "-" not in iv:
-                continue
-            try:
-                s_str, l_str = iv.split("-", 1)
-                q_start, q_end = int(s_str) - 1, int(s_str) - 1 + int(l_str)
-            except ValueError:
-                continue
+        for q_start, q_end, _length, _annotation in ma_intervals(body)[1]:
             if flip:
                 q_start, q_end = read_length - q_end, read_length - q_start
             spans.append((name, q_start, q_end))

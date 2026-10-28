@@ -14,7 +14,8 @@ export function liveLiftTooltipLines(read: Pick<CompactRead, 'live_lift' | 'stra
   const src = ll.source;
   if (src) {
     lines.push(`Live lift from ${src.contig}:${(src.start + 1).toLocaleString()}-${src.end.toLocaleString()}`
-      + `${src.supplementary ? ' (supplementary alignment)' : ''}${ll.alt ? ' · alternative placement' : ''}`);
+      + `${ll.orphan ? ' (supplementary; its primary did not lift to this genome)'
+        : src.supplementary ? ' (supplementary alignment)' : ''}${ll.alt ? ' · alternative placement' : ''}`);
   }
   const hap = ll.hap_label ?? ll.hap;
   if (hap) lines.push(`Haplotype ${hap}${ll.hap_source === 'record' ? " (this record's contig; primary not found)" : ''}`);

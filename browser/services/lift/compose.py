@@ -813,7 +813,7 @@ def _read_geometry(read, by_contig, haps, ctx, runs=None):
         return None
     _outside_badges([r for r in rows if not r.alt], contig, rs, re_, runs, haps, ctx)
     key = (read.get("library_id") or read.get("source_path") or "", read.get("id"))
-    if key not in ctx.molecules and (read.get("_fiberbrowser_primary") or {}).get("is_supplementary"):
+    if not (ctx.molecules.get(key) or {}).get("hap") and (read.get("_fiberbrowser_primary") or {}).get("is_supplementary"):
         ctx.count("hap_from_record")
     return read, rows, runs
 
@@ -2222,7 +2222,7 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
     molecule = molecule_key(group, qname)
     mol_meta = ctx.molecules.get((library, qname))
     record_hap = row.frags[0].p.hap
-    if mol_meta is not None:
+    if mol_meta is not None and mol_meta.get("hap") is not None:
         hap, hap_source = mol_meta.get("hap") or record_hap, "primary"
         strand_fields = {k: mol_meta[k] for k in ("strand", "strand_conflict") if mol_meta.get(k) is not None}
     else:
@@ -2261,6 +2261,8 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
         "call_parts": call_parts,
         "dropped": dropped,
     }
+    if prim.get("is_supplementary") and mol_meta is not None and mol_meta.get("primary_lifted") is False:
+        payload["live_lift"]["orphan"] = True
     if (ctx.loader_options.get("include_cigar") and ctx.loader_options.get("include_mismatches", True)
             and ctx.loader_options.get("target_fasta") is not None):
         from services.lift.differences import row_mismatches

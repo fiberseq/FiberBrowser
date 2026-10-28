@@ -23,6 +23,7 @@ from typing import Optional
 LIFT_PROGRAM = "fiberhmm-lift"
 TAG_SOURCE_MAPQ = "Yq"
 TAG_SOURCE_LOCUS = "Yp"
+TAG_ORPHAN = "Yo"
 TAG_STASH_FLAG = "Yf"        # fiberhmm-lift stash (removed by the repair): source FLAG
 REPAIR_COMMAND = ("fiberhmm-lift --repair-only -i <lifted.bam> --source <source.bam> "
                   "--target-fasta <target.fa> -o <repaired.bam>")
@@ -177,13 +178,15 @@ def lift_summary_text(summary: Optional[dict]) -> str:
 
 
 def read_lift_provenance(read) -> Optional[dict]:
-    """``{'from': Yp, 'mapq': Yq}`` for a record a fiberhmm-lift repaired, else None."""
+    """Source locus/MAPQ and optional ``Yo`` orphan mark of a repaired record."""
     try:
         if not read.has_tag(TAG_SOURCE_LOCUS):
             return None
         out = {"from": str(read.get_tag(TAG_SOURCE_LOCUS))}
         if read.has_tag(TAG_SOURCE_MAPQ):
             out["mapq"] = int(read.get_tag(TAG_SOURCE_MAPQ))
+        if read.has_tag(TAG_ORPHAN):
+            out["orphan"] = bool(read.get_tag(TAG_ORPHAN))
         return out
     except (AttributeError, KeyError, TypeError, ValueError):
         return None

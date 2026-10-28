@@ -1,6 +1,8 @@
 """BAM molecular tag parsing helpers."""
 from __future__ import annotations
 
+from functools import lru_cache
+
 import json
 import re
 from typing import Dict, List, Optional
@@ -600,7 +602,10 @@ def _original_sequence(read) -> Optional[str]:
     return sequence
 
 
-def _decode_mm_ml_calls(read):
+_MM_DELTAS_RE = re.compile(r"[0-9]+(?:,[0-9]+)*")
+
+
+def _decode_mm_ml_calls(read, *, columns=False):
     """Decode raw MM/ML tags (query/SEQ coordinates, as get_aligned_pairs).
 
     Each MM section is decoded with numpy (cumulative deltas into the
@@ -608,6 +613,8 @@ def _decode_mm_ml_calls(read):
     tag, is the same as ``_decode_mm_ml_calls_reference``, which still runs
     for anything outside this path's assumptions (an ML tag that is not a
     uint8 array, a delta written with leading zeros or too many digits).
+    ``columns=True`` keeps each section's positions and probabilities as arrays;
+    nonstandard tags return ``_MM_REFERENCE`` for the caller's fallback.
     """
     import array
     from itertools import repeat
@@ -619,7 +626,7 @@ def _decode_mm_ml_calls(read):
         return []
     ml_values = _get_optional_tag(read, "ML", "Ml")
     if ml_values is not None and not (isinstance(ml_values, array.array) and ml_values.typecode == "B"):
-        return _decode_mm_ml_calls_reference(read)  # not the pysam uint8 array the fast path assumes
+        return _MM_REFERENCE if columns else _decode_mm_ml_calls_reference(read)  # nonstandard ML
 
     original_sequence = _original_sequence(read)
     if original_sequence is None:
@@ -661,6 +668,7 @@ def _decode_mm_ml_calls(read):
         ml_length = 0
 
     max_delta_digits = len(str(sequence_length))
+    long_delta = re.compile(r"[0-9]{%d}" % (max_delta_digits + 1))
     candidate_cache = {}
     calls = []
     ml_index = 0
@@ -668,8 +676,8 @@ def _decode_mm_ml_calls(read):
         section = raw_section.strip()
         if not section:
             continue
-        fields = section.split(",")
-        match = _MM_SECTION_RE.fullmatch(fields[0])
+        header, separator, delta_text = section.partition(',')
+        match = _MM_SECTION_RE.fullmatch(header)
         if match is None:
             _warn_bad_mm_tag(read, "invalid MM section header")
             return None
@@ -682,19 +690,15 @@ def _decode_mm_ml_calls(read):
         else:
             modification_codes = tuple(raw_codes)
 
-        delta_fields = fields[1:]
-        n = len(delta_fields)
-        if n:
-            # == any(not f.isascii() or not f.isdigit() for f in delta_fields)
-            joined = "".join(delta_fields)
-            if "" in delta_fields or not (joined.isascii() and joined.isdigit()):
-                _warn_bad_mm_tag(read, "invalid MM delta")
-                return None
+        n = delta_text.count(',') + 1 if separator else 0
+        if n and _MM_DELTAS_RE.fullmatch(delta_text) is None:
+            _warn_bad_mm_tag(read, "invalid MM delta")
+            return None
         if n > sequence_length:
             _warn_bad_mm_tag(read, "too many MM positions")
             return None
-        if n and max(map(len, delta_fields)) > max_delta_digits:
-            return _decode_mm_ml_calls_reference(read)  # leading zeros or an oversized delta: the original decides
+        if n and long_delta.search(delta_text) is not None:
+            return _MM_REFERENCE if columns else _decode_mm_ml_calls_reference(read)  # unusual delta
 
         if fundamental_base not in candidate_cache:
             if fundamental_base == "N":
@@ -708,7 +712,7 @@ def _decode_mm_ml_calls(read):
         if not n:
             continue
 
-        deltas = np.fromiter(map(int, delta_fields), dtype=np.int64, count=n)
+        deltas = np.fromstring(delta_text, dtype=np.int64, sep=",")
         if int(deltas.max()) > sequence_length:
             _warn_bad_mm_tag(read, "MM delta exceeds sequence length")
             return None
@@ -726,16 +730,17 @@ def _decode_mm_ml_calls(read):
             probs = np.full(total, -1, dtype=np.int64)
             available = ml_array[ml_index:ml_index + total]
             probs[:len(available)] = available
-            prob_list = probs.tolist()
         else:
-            prob_list = [-1] * total
+            probs = np.full(total, -1, dtype=np.int64)
         ml_index += total
-        if n_codes == 1:
+        if columns:
+            calls.append((fundamental_base, modification_codes, positions, probs.reshape(n, n_codes)))
+        elif n_codes == 1:
             calls.extend(zip(repeat(fundamental_base, total), repeat(modification_codes[0], total),
-                             positions.tolist(), prob_list))
+                             positions.tolist(), probs.tolist()))
         else:
             calls.extend(zip(repeat(fundamental_base, total), modification_codes * n,
-                             np.repeat(positions, n_codes).tolist(), prob_list))
+                             np.repeat(positions, n_codes).tolist(), probs.tolist()))
 
     if ml_values is not None and ml_index != ml_length:
         _warn_bad_mm_tag(read, "ML length does not match MM calls")
@@ -885,7 +890,68 @@ def _decode_mm_ml_calls_reference(read):
     return calls
 
 
+_MM_REFERENCE = object()
+
+
 def parse_mm_ml_tags_by_type(read, region_start, region_end, ml_threshold=125):
+    """Keep MM sections as arrays through quality filtering and reference mapping.
+
+    The tuple-returning decoder remains available to callers and unusual tags
+    retain the reference path. Padding retains pysam's aligned-pairs semantics.
+    """
+    import numpy as np
+
+    cigar = getattr(read, 'cigartuples', None)
+    if not cigar or any(op not in (0, 1, 2, 3, 4, 5, 7, 8) for op, _ in cigar):
+        return _parse_mm_ml_tags_by_type_reference(read, region_start, region_end, ml_threshold)
+    sections = _decode_mm_ml_calls(read, columns=True)
+    if sections is _MM_REFERENCE:
+        return _parse_mm_ml_tags_by_type_reference(read, region_start, region_end, ml_threshold)
+    by_type = _empty_mm_layers()
+    if not sections:
+        return by_type
+    # Map only called bases. Expanding all of SEQ to a Python reference-position
+    # list (then an array) costs more than decoding sparse modification calls.
+    starts, ends, offsets = [], [], []
+    q, r = 0, read.reference_start
+    for op, length in cigar:
+        if op in (0, 7, 8):
+            starts.append(q)
+            ends.append(q + length)
+            offsets.append(r - q)
+            q += length
+            r += length
+        elif op in (1, 4):
+            q += length
+        elif op in (2, 3):
+            r += length
+    if not ends:
+        return by_type
+    starts, ends, offsets = (np.asarray(values, dtype=np.int64) for values in (starts, ends, offsets))
+    for base, codes, positions, probs in sections:
+        for i, code in enumerate(codes):
+            key = 'm6a' if code == 'a' else 'm5c' if code == 'm' else 'deam' if code in ('u', 55797) else None
+            if key is None:
+                continue
+            query = positions[probs[:, i] >= ml_threshold]
+            blocks = np.searchsorted(ends, query, side='right')
+            valid = blocks < len(ends)
+            query, blocks = query[valid], blocks[valid]
+            aligned = query >= starts[blocks]
+            mapped = query[aligned] + offsets[blocks[aligned]]
+            relative = (mapped[(mapped >= region_start) & (mapped < region_end)] - region_start).tolist()
+            if key == 'deam':
+                flavor = (0 if base.upper() == 'G' else 1) ^ bool(getattr(read, 'is_reverse', False))
+                by_type[key].extend([pos, flavor] for pos in relative)
+            else:
+                by_type[key].extend(relative)
+    by_type['m6a'].sort()
+    by_type['m5c'].sort()
+    by_type['deam'].sort(key=lambda event: event[0])
+    return by_type
+
+
+def _parse_mm_ml_tags_by_type_reference(read, region_start, region_end, ml_threshold=125):
     """
     Parse methylation positions from BAM MM/ML tags, split by modification type.
 
@@ -1281,6 +1347,69 @@ def parse_deamination_opportunities(read, region_start, region_end, deam_events=
 DEAM_STRAND_LAYERS = {"+": "deam_ct", "-": "deam_ga"}
 
 
+def ma_intervals(intervals_str):
+    """Immutable SEQ-independent MA parse, shared by footprint and layer readers.
+
+    Annotation offsets count malformed interval tokens too; AQ offsets count
+    only valid intervals. Neither mapping, frame nor viewport is cached.
+    Bound the cache by section count and bypass unusually large sections.
+    """
+    return (_ma_intervals if len(intervals_str) > 32768 else _cached_ma_intervals)(intervals_str)
+
+
+@lru_cache(maxsize=1024)
+def _cached_ma_intervals(intervals_str):
+    return _ma_intervals(intervals_str)
+
+
+def _ma_intervals(intervals_str):
+    parsed = []
+    annotations = 0
+    for token in intervals_str.split(','):
+        token = token.strip()
+        if not token or '-' not in token:
+            continue
+        annotation = annotations
+        annotations += 1
+        try:
+            start, length = map(int, token.split('-', 1))
+        except ValueError:
+            continue
+        parsed.append((start - 1, start - 1 + length, length, annotation))
+    return annotations, tuple(parsed)
+
+
+def _ma_aligned_intervals(mapper, intervals):
+    """Batch the standard CIGAR mapper's MA interval projection; adapters stay scalar."""
+    from models.domain import CigarCoordMapper
+    import numpy as np
+
+    if type(mapper) is not CigarCoordMapper or len(intervals) < 16:
+        return None
+    if getattr(mapper.aligned_query_interval_to_ref, '__func__', None) is not CigarCoordMapper.aligned_query_interval_to_ref:
+        return None
+    if not mapper._aligned_starts:
+        return [(None, None)] * len(intervals)
+    try:
+        query = np.asarray([(iv[0], iv[1]) for iv in intervals], dtype=np.int64)
+    except (OverflowError, ValueError):
+        return None
+    # Inclusive query endpoints in the scalar mapper, half-open in MA.
+    starts, ends, offsets = (np.asarray(values, dtype=np.int64) for values in (
+        mapper._aligned_starts, mapper._aligned_ends, mapper._aligned_offsets))
+    first = np.searchsorted(ends, query[:, 0], side='right')
+    last = np.searchsorted(starts, query[:, 1] - 1, side='right') - 1
+    valid = (query[:, 1] > query[:, 0]) & (first <= last)
+    indices = np.flatnonzero(valid)
+    first, last = first[valid], last[valid]
+    left = (np.maximum(query[valid, 0], starts[first]) + offsets[first]).tolist()
+    right = (np.minimum(query[valid, 1], ends[last]) + offsets[last]).tolist()
+    result = [(None, None)] * len(intervals)
+    for index, lo, hi in zip(indices.tolist(), left, right):
+        result[index] = (lo, hi)
+    return result
+
+
 def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
                                  region_start: int, region_end: int,
                                  include_names=None,
@@ -1433,29 +1562,15 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
             ann_cursor += interval_count
             continue
 
-        parsed_intervals = []
-        for iv_str in intervals_str.split(","):
-            iv_str = iv_str.strip()
-            if not iv_str or "-" not in iv_str:
-                continue
-            ann_name = annotation_names[ann_cursor] if ann_cursor < len(annotation_names) else ""
-            ann_cursor += 1
-            try:
-                s_str, l_str = iv_str.split("-", 1)
-                s_one = int(s_str)
-                l = int(l_str)
-            except ValueError:
-                continue
-
-            if not keep_layer:
-                aq_cursor += n_qual_per
-                continue
-
-            query_start = s_one - 1
-            query_end = query_start + l
-            parsed_intervals.append((query_start, query_end, l, aq_cursor, ann_name, len(parsed_intervals)))
-            if include_qualities:
-                aq_cursor += n_qual_per
+        annotation_count, parsed = ma_intervals(intervals_str)
+        parsed_intervals = [
+            (qs, qe, length, aq_cursor + (k * n_qual_per if include_qualities else 0),
+             annotation_names[ann_cursor + ann] if ann_cursor + ann < len(annotation_names) else '', k)
+            for k, (qs, qe, length, ann) in enumerate(parsed)
+        ]
+        ann_cursor += annotation_count
+        if include_qualities:
+            aq_cursor += len(parsed) * n_qual_per
 
         # Molecular -> SEQ frame for reverse reads. Flipping reverses interval
         # order, so re-sort by SEQ start (the qual cursor rides along with each
@@ -1493,13 +1608,15 @@ def parse_ma_aq_tags_into_layers(ma_str: str, aq_values, coord_mapper,
         else:
             mapped_positions = []
 
+        aligned_intervals = _ma_aligned_intervals(coord_mapper, parsed_intervals) if callable(query_interval_to_ref) else None
         layer_annotation_names = []
         layer_calls = []
         keep_source_intervals = "fi" in qual_names
         skip_here = skip_query_spans if skip_query_spans and name in skip_span_layers else None
         for interval_index, (query_start, query_end, l, qual_start, ann_name, call_index) in enumerate(parsed_intervals):
             if callable(query_interval_to_ref):
-                ref_start, ref_end = query_interval_to_ref(query_start, query_end - 1)
+                ref_start, ref_end = (aligned_intervals[interval_index] if aligned_intervals is not None
+                                      else query_interval_to_ref(query_start, query_end - 1))
                 if (ref_start is None or ref_end is None) and name in NUC_ENVELOPE_GROUPS:
                     # A nucleosome mark with no aligned base (inside an insertion or a clip): drawn as the nearest
                     # aligned base, as fiberhmm-scan gives it a zero-width envelope there (_ref_envelope).

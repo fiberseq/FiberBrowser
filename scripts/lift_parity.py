@@ -103,7 +103,8 @@ CALL_CAUSES = {
 }
 # Differences in known categories (listed, never a FAIL): decoder artifacts of the lifted CIGAR (cause 5).
 KNOWN_CAUSES = {"decoder_cut_artifact"}
-# One-side-only causes that are owner decisions (cause 9: fiberhmm-lift drops an orphan supplementary).
+# Legacy lifts without Yo may still drop orphan supplementaries (cause 9).
+# New lifts retain them; their Yp source keys join and are compared as ordinary records.
 KNOWN_ONE_SIDE = {"orphan_supplementary_dropped"}
 # Point fields a parity verdict needs equal. deam on a record without m6A/5mC calls is read from mismatches
 # against the record's own reference (MD), so it differs between assemblies by design; see deam_exempt.
@@ -876,6 +877,7 @@ def placement(row, base: int, live: bool, contig: str) -> dict:
            "calls": calls, "payloads": payloads, "points": points, "lift_flipped": flipped}
     if live:
         ll = row["live_lift"]
+        out["orphan"] = bool(ll.get("orphan"))
         out["connectors"] = connectors
         out["insertions"] = sorted({int(bd[0]) + base for bd in ll.get("badges") or ()})
         out["badges"] = [[int(bd[0]) + base, int(bd[2])] for bd in ll.get("badges") or ()]
@@ -885,6 +887,8 @@ def placement(row, base: int, live: bool, contig: str) -> dict:
         out["segments"] = [[s[0] + base, s[1] + base, int(s[2])] for s in ll.get("segments") or ()]
         out["molecular"] = [[int(m[0]) + base, int(m[1]) + base, int(m[2]), int(m[3])]
                             for m in ll.get("molecular_spans") or ()]
+    elif "orphan" in (row.get("lift") or {}):
+        out["orphan"] = bool(row["lift"]["orphan"])
     return out
 
 
@@ -1100,6 +1104,7 @@ def lifted_bam_census(lifted_bam, chrom, start, end) -> dict:
             out["secondary"] += rec.is_secondary
             out["reverse"] += rec.is_reverse
             out["with_md"] += rec.has_tag("MD")
+            out["orphan"] += bool(rec.get_tag("Yo")) if rec.has_tag("Yo") else False
     return dict(out)
 
 
