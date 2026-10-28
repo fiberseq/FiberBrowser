@@ -165,7 +165,8 @@ def default_blast_db_prefix(state, fasta_path: str, output_dir: Optional[str] = 
 
     The loaded genome's name labels only the loaded reference's database; any
     other FASTA (a custom primer reference) gets a database of its own name, so
-    it never reuses or overwrites the genome's.
+    it never reuses or overwrites the genome's. FIBERBROWSER_BLAST_DB_DIR
+    overrides the cache root; an explicit output_dir still takes precedence.
     """
     genome = getattr(state, 'current_genome', None) if _same_file(fasta_path, getattr(state, 'fasta_path', None)) else None
     label = (
@@ -177,7 +178,8 @@ def default_blast_db_prefix(state, fasta_path: str, output_dir: Optional[str] = 
     root = (
         os.path.expanduser(output_dir)
         if output_dir
-        else os.path.join(os.path.expanduser('~'), '.fiberhmm', 'blast', safe_label)
+        else os.path.join(os.path.expanduser(os.environ.get('FIBERBROWSER_BLAST_DB_DIR')
+                                            or os.path.join('~', '.fiberhmm', 'blast')), safe_label)
     )
     return os.path.join(root, safe_label)
 

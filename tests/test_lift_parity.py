@@ -588,3 +588,26 @@ def test_normalization_preserves_modern_record_boundaries_across_chains():
     p = place(100, 600, segments=[[100, 300, 1], [400, 600, 0]],
               molecular=[[100, 300, 200, 1], [400, 600, 0, 1]])
     assert [(x['start'], x['end']) for x in lp.split_blocks(p, 10000)] == [(100, 300), (400, 600)]
+
+
+def test_tagged_orphans_join_and_compare_as_records(tmp_path):
+    from live_lift_fixtures import make_record, write_bam
+    from services.compact_read_loader import build_compact_reads_from_bam
+
+    path = write_bam(tmp_path / 'lifted.bam', lambda h: [
+        make_record(h, 'orphan', 'chrT', 100, '100M', flag=2048,
+                    tags=[('Yp', 'chrS:11:+'), ('Yo', 1)])], contigs=(('chrT', 1000),))
+    (row,) = build_compact_reads_from_bam(path, 'chrT', 0, 1000, include_supplementary=True, spanning_only=False,
+                                         hide_terminal_gaps=False)
+    assert row['lift']['orphan'] is True
+    native = lp.placement(row, 0, False, 'chrT')
+    assert native['orphan'] is True
+    key = ('orphan', 'chrS', 10)
+    live = dict(native, supplementary=True)
+    records, one_side, edges, ambiguous = lp.join_records({key: [live]}, {key: [native]})
+    assert len(records) == 1 and not one_side and not edges and not ambiguous
+    assert not lp.is_orphan_supplementary(key, [live], {('orphan', 'other', 30): ('no_projection', True)}, {'orphan'})
+    assert lp.verdict(_result(records)) == 'PASS'
+    # Kept orphans are real comparisons: changing their marks fails parity.
+    records[0]['native'][0] = dict(native, points={'methyl_m6a': [120]})
+    assert lp.verdict(_result(records)).startswith('FAIL')

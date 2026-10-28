@@ -264,6 +264,15 @@ describe('tooltip and chip', () => {
     expect(lines).toContain('CIGAR detail: muted source-assembly differences; normal read mismatches; amber reference-allele markers (possible mis-phasing).');
   });
 
+  it('explains a retained orphan supplementary in the read hover', () => {
+    const orphan = { ...LIFTED, live_lift: { ...LIFTED.live_lift!, orphan: true,
+      source: { ...LIFTED.live_lift!.source!, supplementary: true } } };
+    expect(liveLiftTooltipLines(orphan)[0]).toContain('supplementary; its primary did not lift to this genome');
+    const ordinary = { ...orphan, live_lift: { ...orphan.live_lift, orphan: undefined } };
+    expect(liveLiftTooltipLines(ordinary)[0]).toContain('supplementary alignment');
+    expect(liveLiftTooltipLines(ordinary)[0]).not.toContain('primary did not lift');
+  });
+
   it('chips a lifted panel by haplotype', () => {
     const dataset = { id: 'l', data_type: 'bam_livelift', live_lift: { haplotypes: ['H#1', 'H#2'],
       haplotype_labels: { 'H#1': 'MAT', 'H#2': 'PAT' } } } as never;

@@ -47,7 +47,7 @@ from operator import itemgetter
 
 import numpy as np
 
-from services.read_columns import owned, read_only
+from services.read_columns import IntColumn, owned, read_only
 
 _SHIFT = 1 << 40
 _first = itemgetter(0)
@@ -408,7 +408,7 @@ class _Unit:
     def __init__(self, name, ivs, calls):
         self.name, self.ivs, self.calls = name, ivs or [], calls
         self.ok, self.ids, self.has, self.first, self.start = True, None, None, None, 0
-        self.arr = None  # the intervals as an (n, 3) int64 array, once read
+        self.arr = ivs.array if isinstance(ivs, IntColumn) and ivs.width == 3 else None
         self.legacy = None  # compose._legacy_group of its calls (compose_legacy)
 
 
@@ -533,7 +533,7 @@ def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts, small):
         units, new = _cached(ctx, "_column_units", it[0], _read_units)
         units_by_read.append(units)
         if new:
-            fresh += units
+            fresh += [u for u in units if u.arr is None]
     flat = [u for units in units_by_read for u in units]
     every = list(chain.from_iterable(u.ivs for u in fresh))
     if every and not (set(map(len, every)) == {3} and _all_ints(chain.from_iterable(every))):
@@ -1047,11 +1047,15 @@ def _map_point_fields(items, rows, row_read, F, base, ctx, fields, small):
             if key not in read:
                 continue
             values = read[key]
-            if not isinstance(values, list):
+            if not isinstance(values, (list, IntColumn)):
+                continue
+            if isinstance(values, IntColumn) and values.width is not None:
                 continue
             if not values:
                 row._pre.points[key] = ([], 0)
                 continue
+            if isinstance(values, IntColumn):
+                store[key] = values.array
             if key not in store:
                 if len(values) <= small and not _all_ints(values):
                     store[key] = False
@@ -1210,7 +1214,7 @@ def _load(read, point_fields):
             n += len(layer.get("intervals") or ())
     for key in point_fields:
         values = read.get(key)
-        if isinstance(values, list):
+        if isinstance(values, (list, IntColumn)):
             n += len(values)
     return n
 

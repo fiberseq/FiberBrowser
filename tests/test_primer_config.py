@@ -15,6 +15,22 @@ from services.primer_config import (
 )
 
 
+def test_blast_cache_root_override_and_explicit_output(tmp_path, monkeypatch):
+    from services.primer_config import default_blast_db_prefix
+
+    home = tmp_path / 'home'
+    cache = tmp_path / 'cache'
+    monkeypatch.setenv('HOME', str(home))
+    monkeypatch.setenv('FIBERBROWSER_BLAST_DB_DIR', str(cache))
+    state = SimpleNamespace(current_genome='testgenome', fasta_path='/ref/test.fa')
+    assert default_blast_db_prefix(state, state.fasta_path) == str(cache / 'testgenome' / 'testgenome')
+    assert default_blast_db_prefix(state, '/ref/custom.fa') == str(cache / 'custom' / 'custom')
+    assert default_blast_db_prefix(state, state.fasta_path, str(tmp_path / 'explicit')) == str(
+        tmp_path / 'explicit' / 'testgenome')
+    monkeypatch.delenv('FIBERBROWSER_BLAST_DB_DIR')
+    assert default_blast_db_prefix(state, state.fasta_path) == str(home / '.fiberhmm' / 'blast' / 'testgenome' / 'testgenome')
+
+
 def test_scan_blast_dbs_uses_nin_prefixes(tmp_path):
     (tmp_path / "dm6.nin").write_text("")
     (tmp_path / "dm6.nsq").write_text("")

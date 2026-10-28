@@ -171,6 +171,8 @@ export interface LiveLiftRow {
   /** 'primary': the molecule's haplotype and strand come from its primary record; 'record': this record's own. */
   hap_source?: 'primary' | 'record';
   alt?: boolean;
+  /** Supplementary whose known primary has no placement in this genome. */
+  orphan?: boolean;
   placement?: string;
   molecule?: string;
   record?: string;

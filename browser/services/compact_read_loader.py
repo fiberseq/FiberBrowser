@@ -32,6 +32,35 @@ BAM_DIAGNOSTICS_ENV = "FIBERBROWSER_BAM_DIAGNOSTICS"
 BIGBED_DIAGNOSTICS_ENV = "FIBERBROWSER_BIGBED_DIAGNOSTICS"
 
 
+def _lift_columns(read_data):
+    """Keep large source evidence groups in row-format-2 integer columns.
+
+    Composition can reuse their arrays directly, without validating and
+    converting the same Python coordinates again. Small groups stay lists.
+    """
+    import numpy as np
+    from services.read_columns import read_only, wrap
+
+    groups = [(read_data, key) for key in ('intervals', 'fire', 'methyl_m6a', 'methyl_m5c',
+                                          'possible_deam_ct', 'possible_deam_ga')]
+    groups.extend((layer, 'intervals') for layer in (read_data.get('layers') or {}).values()
+                  if isinstance(layer, dict))
+    for group, key in groups:
+        values = group.get(key)
+        if not isinstance(values, list) or len(values) < 16:
+            continue
+        try:
+            array = np.asarray(values)
+        except (ValueError, OverflowError):
+            continue
+        if array.dtype != np.int64 or array.ndim not in (1, 2):
+            continue
+        column = wrap(read_only(array))
+        group[key] = column
+        if group is read_data and read_data.get('methyl') is values:
+            read_data['methyl'] = column
+
+
 
 _PRIMARY_BIGBED_TYPES = ('footprint', None, 'unknown')
 _LAYER_SUFFIX_TOKENS = (
@@ -168,7 +197,7 @@ def ma_footprint_query_spans(ma_tags, *, read_length: int, is_reverse: bool,
     """A read's MA footprint calls (nuc, tf, fp_v2) as SEQ-frame query
     ``(name, start, end)``, over the whole read, with the section and frame
     rules of ``parse_ma_aq_tags_into_layers``."""
-    from services.bam_tags import CONSENSUS_MOLECULAR_COORDINATES, ma_group_frame
+    from services.bam_tags import CONSENSUS_MOLECULAR_COORDINATES, ma_group_frame, ma_intervals
     if ma_tags is None or not ma_tags[0] or not isinstance(ma_tags[0], str):
         return []
     spans = []
@@ -191,15 +220,7 @@ def ma_footprint_query_spans(ma_tags, *, read_length: int, is_reverse: bool,
         molecular = (ma_group_frame(ma_tags[3]).is_molecular(name, type_sig[strand_idx])
                      or contract.get("coordinates") == CONSENSUS_MOLECULAR_COORDINATES)
         flip = bool(molecular and is_reverse and read_length)
-        for iv in body.split(","):
-            iv = iv.strip()
-            if not iv or "-" not in iv:
-                continue
-            try:
-                s_str, l_str = iv.split("-", 1)
-                q_start, q_end = int(s_str) - 1, int(s_str) - 1 + int(l_str)
-            except ValueError:
-                continue
+        for q_start, q_end, _length, _annotation in ma_intervals(body)[1]:
             if flip:
                 q_start, q_end = read_length - q_end, read_length - q_start
             spans.append((name, q_start, q_end))
@@ -2788,6 +2809,8 @@ def _build_compact_reads_from_bam_region(
                 _scalar_groups_to_fields(read_data)
             if nuc_inject is not None:
                 nuc_inject(read_data)
+            if include_lift_meta:
+                _lift_columns(read_data)
             reads.append(read_data)
             if load_budget is not None:
                 load_budget.account(read_data)
