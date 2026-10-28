@@ -1355,7 +1355,8 @@ export async function executeBrowserAction(
       if (!visible.has(clusterId)) { hidden.push(key); continue; }
       const next = new Set(all.filter(c => visible.has(c) && c !== clusterId));
       if (next.size === 0) continue;
-      store.setClusterFocus(key, next.size >= all.length ? null : next);
+      // (Part of this action's one step, recorded below.)
+      store.setClusterFocus(key, next.size >= all.length ? null : next, { record: false });
       hidden.push(key);
     }
     if (hidden.length === 0) return `hide_cluster: cluster ${clusterId} isn't a visible cluster that can be hidden (the last visible cluster stays).`;
@@ -1418,7 +1419,7 @@ export async function executeBrowserAction(
         now.setClusterAssignments(sk, result.assignments || {});
         const currentOrder = now.clusterOrder[sk];
         if (currentOrder) now.setClusterOrder(sk, currentOrder.filter(c => c !== clusterId));
-        if (now.clusterFocus[sk]?.has(clusterId)) now.setClusterFocus(sk, null);
+        if (now.clusterFocus[sk]?.has(clusterId)) now.setClusterFocus(sk, null, { record: false });
         now.pruneClusterSelection(sk, [clusterId]);
         dissolvedAny = true;
         changedKeys.push(sk);
@@ -1429,6 +1430,8 @@ export async function executeBrowserAction(
     if (dissolvedAny) {
       useBrowserStore.getState().setDynamicClustering(false);
       recordAppliedMerge(before, changedKeys, { label: `Delete C${clusterId}`, kind: 'dissolve' });
+      // Its one undo step (the focus it cleared is part of it; stabilize 3, item 2).
+      useBrowserStore.getState().pushSnapshot(`Delete C${clusterId}`, { kind: 'clustering' });
     }
     return `Dissolved cluster ${clusterId} in ${keys.length - stale} clustered panel(s)`
       + `${skippedOtherLoci ? ` (${skippedOtherLoci} panel(s) at another locus left as they are)` : ''}`
@@ -1771,16 +1774,17 @@ export async function executeBrowserAction(
           changedKeys.push(sk);
           const currentOrder = now.clusterOrder[sk];
           if (currentOrder) now.setClusterOrder(sk, currentOrder.filter(c => !dissolvedIds.has(c)));
-          now.setClusterFocus(sk, null);
+          now.setClusterFocus(sk, null, { record: false });
           now.pruneClusterSelection(sk, dissolvedIds);
         }
       }
     } finally {
       // As the Clusters panel does: the reassignment model still has the merged-away clusters.
-      // Whatever was applied (even if a later panel's request fails) can be unmerged.
+      // Whatever was applied (even if a later panel's request fails) can be unmerged, as one undo step.
       if (changedKeys.length > 0) {
         useBrowserStore.getState().setDynamicClustering(false);
         recordAppliedMerge(before, changedKeys, { label: 'Merge similar clusters', kind: 'similar', settings: mergeSettings });
+        useBrowserStore.getState().pushSnapshot('Merge similar clusters', { kind: 'clustering' });
       }
     }
     return `Merged away ${merged} cluster${merged === 1 ? '' : 's'} across ${keys.length} clustered panel(s) (min_fraction=${minFraction}, merge_by=${mergeSettings.strategy} ${mergeSettings.threshold})`

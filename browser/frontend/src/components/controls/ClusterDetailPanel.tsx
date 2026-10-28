@@ -829,7 +829,8 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
             setClusterOrder(sk, currentOrder.filter(c => c !== clusterToDissolve));
           }
           if (useBrowserStore.getState().clusterFocus[sk]?.has(clusterToDissolve)) {
-            setClusterFocus(sk, null);
+            // Part of the dissolve's one undo step (finish records it).
+            setClusterFocus(sk, null, { record: false });
           }
           useBrowserStore.getState().pruneClusterSelection(sk, [clusterToDissolve]);
         }
@@ -902,7 +903,8 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
           if (currentOrder) {
             setClusterOrder(sk, currentOrder.filter(c => !dissolvedIds.has(c)));
           }
-          setClusterFocus(sk, null);
+          // Part of the merge's one undo step (finish records it).
+          setClusterFocus(sk, null, { record: false });
           useBrowserStore.getState().pruneClusterSelection(sk, dissolvedIds);
         }
       }

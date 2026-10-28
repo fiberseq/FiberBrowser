@@ -661,7 +661,8 @@ export function ClusterPanel({
           if (currentOrder) {
             setClusterOrder(sk, currentOrder.filter(clusterId => !dissolvedIds.has(clusterId)));
           }
-          setClusterFocus(sk, null);
+          // Part of the merge's one undo step (finish records it).
+          setClusterFocus(sk, null, { record: false });
           useBrowserStore.getState().pruneClusterSelection(sk, dissolvedIds);
         }
       }
