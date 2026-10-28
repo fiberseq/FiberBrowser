@@ -156,9 +156,10 @@ class Molecules:
 
     def hap_of(self, i: int):
         """A molecule's haplotype label, or None (unphased: no label, or records that disagree; D14)."""
-        found = {h for h in self.hap.get(i, ()) if h not in (None, '', 0, '0')}
-        return next(iter(found)) if len(found) == 1 and None not in self.hap.get(i, ()) else (
-            next(iter(found)) if len(found) == 1 else None)
+        seen = self.hap.get(i, set())
+        if not seen or any(h in (None, '', 0, '0') for h in seen) or len(seen) != 1:
+            return None
+        return next(iter(seen))
 
 
 def molecule_token(qname: str, scan_token: str = '') -> str:
@@ -400,7 +401,23 @@ def inline_hits(ref: dict, regions, *, label: str = '') -> HitTable:
                                detail=h.get('detail') or {}))
     if table.counts.get('unplaced'):
         table.notes.append(f"{table.counts['unplaced']} hits have no place on this genome: left out")
+    # Where the browser computed the set (the view it was in): its absence means absence only there.
+    cov = [(str(c[0]), int(c[1]), int(c[2])) for c in ref.get('coverage') or [] if isinstance(c, (list, tuple)) and len(c) >= 3]
+    if cov:
+        cov = merge_regions(cov)
+        table.territory = cov if regions is None else _intersect_regions(cov, regions)
+        table.territory_note = 'where the browser computed the set (the view it was listed in)'
     return table
+
+
+def _intersect_regions(a, b):
+    from utils.chrom import normalize_chrom_name
+    out = []
+    for c1, s1, e1 in a:
+        for c2, s2, e2 in b:
+            if normalize_chrom_name(c1) == normalize_chrom_name(c2) and min(e1, e2) > max(s1, s2):
+                out.append((c1, max(s1, s2), min(e1, e2)))
+    return merge_regions(out)
 
 
 def anchor_hits(ref: dict, regions) -> HitTable:
@@ -622,7 +639,9 @@ def scan_territory(table: HitTable, regions) -> Tuple[List[Tuple[str, int, int]]
     if regions is None:
         raise AssocInputError(f'{table.label}: a browser set covers only what is in view; choose the view, a BED or an anchor set')
     if scan is not None:
-        return list(regions), 'the windows (an assembly scan\'s callable runs are in its own coordinates)'
+        raise AssocInputError(f'{table.label}: an assembly scan\'s callable territory is in its own coordinates and isn\'t '
+                              'lifted onto this genome yet, so M4 has no territory for it here. Compare it in its own '
+                              'assembly (fiberhmm-scan assoc on the scan), or use a scan of this genome')
     return list(regions), 'the windows (a browser set is computed for what is in view)'
 
 
@@ -663,7 +682,19 @@ def rate_data(state, a_type: str, b_kind: str, regions, datasets: Optional[Seque
     if not scans:
         raise AssocInputError('M3 needs a nucleosome scan in table mode (nuc/marks) of a loaded dataset: run Scan… '
                               'with the nuc module, or open such a scan')
-    parts, seen, used = [], set(), []
+    # One nucleosome scan per dataset: two scans of one dataset (two caches, or a cache and an opened scan) would each
+    # hold part of a molecule's geometry, and merging compressed coordinates isn't possible here.
+    owner: Dict[str, str] = {}
+    for scan, binds in scans:
+        for bs in binds.values():
+            for b in bs:
+                if b.startswith('scan:'):
+                    continue
+                if b in owner and owner[b] != scan.scan_id:
+                    raise AssocInputError(f'Several open nucleosome scans hold {getattr(state.datasets.get(b), "label", b)}: '
+                                          'close all but one in the Feature hub, so each molecule is read from one scan')
+                owner[b] = scan.scan_id
+    parts, used = [], []
     mols = Molecules()
     for scan, binds in scans:
         try:
@@ -672,15 +703,11 @@ def rate_data(state, a_type: str, b_kind: str, regions, datasets: Optional[Seque
             raise AssocInputError(str(error)) from None
         keep, ds_out = [], []
         for k in range(d.n):
-            bids = [b for b in binds.get(d.labels['dataset'][k], ()) if not b.startswith('scan:')]
-            if not bids:
-                continue
-            key = (bids[0], d.labels['molecule'][k], d.chrom[k])
-            if key in seen:
-                continue
-            seen.add(key)
-            keep.append(k)
-            ds_out.append(bids[0])
+            # every browser dataset bound to the scan dataset has its own molecules (HUB 3.4)
+            for b in binds.get(d.labels['dataset'][k], ()):
+                if not b.startswith('scan:'):
+                    keep.append(k)
+                    ds_out.append(b)
         if not keep:
             continue
         sub = d.subset(np.array(keep, dtype=np.int64))
@@ -741,6 +768,7 @@ def decoded_molecules(state, datasets: Sequence[str], regions, *, max_records: i
                     continue
                 for m in iter_molecules(path, contig=name, start=a, end=b, max_records=max_records):
                     m.meta = dict(m.meta or {}, dataset=ds)
+                    m.chrom = c                # the browser's contig name (anchors use it; BAMs may say chr1 or 1)
                     mols.append(m)
         # one record per molecule name (a molecule fetched by two windows once)
         uniq, seen = [], set()

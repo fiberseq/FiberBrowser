@@ -30,11 +30,12 @@ export interface OverlayLocus {
   /** It sits at an insertion's junction on this genome (its sequence is inside the insertion). */
   insertion?: boolean;
   /** A hit of another assembly: its source coordinates (on its haplotype's contig). */
-  source?: { chrom: string; start: number; end: number; anchor: number; hap?: string };
+  source?: { chrom: string; start: number; end: number; anchor: number; hap?: string; strand?: '+' | '-' };
 }
 
 export interface OverlaySeries {
   obsId: string; label: string; datasetId?: string; kind: string; hap?: string;
+  /** Absent on an observation that failed (error). */
   x: number[];
   num: number[];
   den: number[];
@@ -51,6 +52,8 @@ export interface OverlayPileRow {
 
 export interface OverlayResult {
   layer: OverlayLayer; align: OverlayAlign; flank: number; binBp: number; scaledBins?: number;
+  /** The axis: bin centres (bp, or 0–1 inside a scaled patch with flanks as -bp and 1 + bp). */
+  x?: number[];
   xLabel: string;
   series: OverlaySeries[];
   pile: OverlayPileRow[];

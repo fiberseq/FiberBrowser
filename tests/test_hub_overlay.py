@@ -84,8 +84,8 @@ def test_denominator_counts_molecules_measured(computed):
     axis = Axis('anchor', 1000, [2000])
     pts, bins = axis.samples(locus['start'], locus['end'], locus['anchor'], False)
     policy = browser_read_policy(computed)
-    _src, _recs, _w, cfg, cohort, _c = observation_cohort(computed, dict(OBS[0], chrom=CONTIG, start=locus['anchor'] - 1000,
-                                                                           end=locus['anchor'] + 1001), policy)
+    _src, _recs, _w, cfg, cohort, _c = observation_cohort(computed, dict(OBS[0], chrom=CONTIG, start=int(pts.min()),
+                                                                           end=int(pts.max()) + 1), policy)
     den = np.zeros(axis.nbins)
     num = np.zeros(axis.nbins)
     for rec, row in cohort:
@@ -136,17 +136,6 @@ def test_graph_mode_counts_carriers_only(computed):
     assert lin[1]['lociSkipped'] == {} and lin[1]['loci'] == 5
 
 
-def test_insertion_hit_of_another_haplotype_is_left_out(computed):
-    """A hit inside an insertion, from the PAT assembly, has no position on a MAT panel (its junction is all this
-    genome has): left out and counted, never measured at the junction's flanks."""
-    from services.hub.overlay import overlay
-    locus = dict(LOCI[0], end=LOCI[0]['start'] + 1, insertion=True, source=dict(chrom='chrP_PAT', start=100, end=400, anchor=250, hap='PAT'))
-    obs = [dict(obsId='m', label='MAT', datasetId='ds0', kind='graph', graph=dict(hap='MAT'))]
-    s = overlay(computed, dict(loci=[locus], layer='regular', align='anchor', flank=300, observations=obs, pileMax=0))['series'][0]
-    # ds0 is a native dataset here, so the rule applies only to lifted observations: measured as usual
-    assert s['lociSkipped'] == {}
-
-
 def test_pile_is_a_stable_capped_sample(computed):
     from services.hub.overlay import overlay
     req = dict(loci=LOCI, layer='nucleosome', align='scaled', flank=500, observations=OBS[:1], pileMax=30)
@@ -154,6 +143,38 @@ def test_pile_is_a_stable_capped_sample(computed):
     assert len(r1['pile']) == 30 < r1['pileTotal']
     assert [(p['locus'], p['molecule']) for p in r1['pile']] == [(p['locus'], p['molecule']) for p in r2['pile']]
     assert r1['scaledBins'] == 100 and len(r1['series'][0]['x']) == 100 + 2 * len([x for x in r1['series'][0]['x'] if x < 0])
+
+
+def test_axis_samples_stay_inside_their_bins():
+    """Bins are bounded: no sample beyond the range's end (a cut last bin), the scaled flanks cut at the flank, and a
+    '-' locus mirrors onto bases inside the locus."""
+    from services.hub.overlay import Axis
+    ax = Axis('anchor', 1000, [2000], bin_bp=30)
+    pts, bins = ax.samples(10_000, 10_100, 11_000, False)
+    assert pts.min() >= 10_000 and pts.max() <= 12_000 and bins.max() == ax.nbins - 1
+    assert ax.edges[0] == -1000 and ax.edges[-1] == 1001
+    mpts, _ = ax.samples(10_000, 10_100, 11_000, True)
+    assert mpts.min() >= 10_000 and mpts.max() <= 12_000
+    sc = Axis('scaled', 1005, [50], bin_bp=10)
+    assert sc.left_edges[0] == -1005 and sc.right_edges[-1] == 1005
+    p, b = sc.samples(10_000, 10_001, 10_000, True)          # a one-base patch on '-'
+    body = p[(b >= sc.n_left) & (b < sc.n_left + 100)]
+    assert set(body.tolist()) == {10_000}
+    p2, _ = sc.samples(10_000, 10_050, 10_025, True)
+    assert p2.min() >= 10_000 - 1005 and p2.max() < 10_050 + 1005
+
+
+def test_zero_flank_is_kept(computed):
+    from services.hub.overlay import overlay
+    res = overlay(computed, dict(loci=LOCI[:1], layer='regular', align='left', flank=0, observations=OBS[:1], pileMax=0))
+    assert res['flank'] == 0 and res['x'][0] > 0
+
+
+def test_insertion_loci_are_absent_on_this_genome(computed):
+    from services.hub.overlay import overlay
+    locus = dict(LOCI[0], end=LOCI[0]['start'] + 1, insertion=True)
+    s = overlay(computed, dict(loci=[locus], layer='regular', align='anchor', flank=300, observations=OBS[:1], pileMax=0))['series'][0]
+    assert s['lociSkipped'] == {'absent': 1} and s['molecules'] == 0
 
 
 def test_requests_are_validated(computed):
@@ -164,3 +185,25 @@ def test_requests_are_validated(computed):
         overlay(computed, dict(loci=LOCI, layer='x', observations=OBS))
     with pytest.raises(OverlayError, match='dataset panel'):
         overlay(computed, dict(loci=LOCI, observations=[]))
+
+
+def test_lift_points_maps_each_sample_through_its_haplotypes_pieces(monkeypatch):
+    """A lifted panel maps every sample through its haplotype's primary pieces: a target-only stretch (a deletion on
+    that haplotype) has no source base (nothing measured there), a '-' piece reverses, another haplotype's piece and a
+    second contig are never used."""
+    import services.lift.live_lift as ll
+    from services.hub.overlay import lift_points
+    P = ll.LiftPiece
+    pieces = [P(1, 1000, 1500, 100, 600, '+', True, 'h1', 'chrT_MAT'),
+              P(1, 2400, 3000, 600, 1200, '+', True, 'h1', 'chrT_MAT'),        # 1500-2400: target only (deleted on MAT)
+              P(2, 1000, 3000, 5000, 7000, '+', True, 'h2', 'chrT_PAT'),       # the other haplotype
+              P(3, 3000, 3100, 900, 1000, '-', True, 'h1', 'chrT_MAT'),        # a reversed piece
+              P(4, 3100, 3200, 50, 150, '+', True, 'h1', 'chrX_MAT')]           # another contig (fewer samples)
+    monkeypatch.setattr(ll, 'select_pieces', lambda *a, **k: NS(pieces=pieces))
+    monkeypatch.setattr(ll, 'lift_key', lambda *a, **k: 'k')
+    handle = NS(map=NS(targets={'chrT': 1}), resolve_haplotypes=lambda h: ['h1', 'h2'], haplotype_labels={'h1': 'MAT', 'h2': 'PAT'})
+    state = NS(datasets={'ds': NS(live_lift=NS(handle=handle, haplotypes=None, settings=None))})
+    pts = np.array([1000, 1499, 1500, 2000, 2399, 2400, 2999, 3000, 3099, 3150])
+    out, contig = lift_points(state, NS(browser_id='ds'), 'MAT', 'chrT', pts)
+    assert contig == 'chrT_MAT'
+    assert out.tolist() == [100, 599, -1, -1, -1, 600, 1199, 999, 900, -1]

@@ -35,7 +35,10 @@ export function AssocTab({ sets, scans, seed }: { sets: FeatureSet[]; scans: Sca
   const error = useAssocJob(s => s.error);
   const [draft, setDraft] = useState<AssocDraft>(DEFAULT_DRAFT);
   const [problem, setProblem] = useState('');
-  const all = useMemo(() => setChoices(sets, hub.anchors), [sets, hub.anchors]);
+  const chrom = useBrowserStore(s => s.chrom);
+  const vStart = useBrowserStore(s => s.start);
+  const vEnd = useBrowserStore(s => s.end);
+  const all = useMemo(() => setChoices(sets, hub.anchors, { chrom, start: vStart, end: vEnd }), [sets, hub.anchors, chrom, vStart, vEnd]);
   const marks = useMemo(() => markChoices(scans), [scans]);
   const { a: aChoices, b: bChoices } = choicesFor(draft.mode, all, marks);
   const natives = datasets.filter(d => (d as { data_type?: string }).data_type !== 'bam_livelift').length;

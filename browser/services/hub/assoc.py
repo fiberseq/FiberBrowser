@@ -34,8 +34,8 @@ import numpy as np
 
 from .assoc_inputs import (AssocInputError, HitTable, Molecules, anchor_hits, decoded_molecules, group_values,
                            inline_hits, intersect, jsonable, merge_regions, molecule_scalars, molecule_table,
-                           qname_of_key, rate_data, read_bed, scan_set_hits, scan_set_states, scan_territory,
-                           scope_regions, sv_states)
+                           molecule_token, native_haplotypes, qname_of_key, rate_data, read_bed, scan_set_hits,
+                           scan_set_states, scan_territory, scope_regions, sv_states)
 
 MODES = ('M1', 'M2', 'M3', 'M4')
 MODE_LABELS = {
@@ -145,11 +145,22 @@ def _cluster_check(defn: dict, regions, territory=None) -> Optional[dict]:
     from fiberhmm.assoc.groups import post_selection_check
     tested = list(regions or territory or [])
     cl = [(str(r[0]), int(r[1]), int(r[2])) for r in g.get('clusterRegions') or [] if len(r) >= 3]
-    res = post_selection_check(tested, cl, int(g.get('flank') or 0), bool(g.get('acceptPostSelection')))
+    accept = bool(g.get('acceptPostSelection'))
+    if not cl or not tested:
+        # Fail closed: a run whose regions aren't recorded (graph or region clustering), or a scope with no windows,
+        # can't be shown to be outside the tested window.
+        return {'status': 'post-selection' if accept else 'refused', 'overlaps': [], 'clusterRegions': len(cl),
+                'note': ('the cluster run records no regions (graph or region clustering): it can\'t be checked against '
+                         'the tested window' if not cl else 'the scope has no windows to check the cluster run against')}
+    res = post_selection_check(tested, cl, int(g.get('flank') or 0), accept)
     res['clusterRegions'] = len(cl)
-    if not cl:
-        res['note'] = 'the cluster run names no regions: it could not be checked against the tested window'
     return res
+
+
+def _hit_windows(tables, pad: int):
+    """The tested geometry of hit-based runs over a whole scan: every hit's span ± pad (pairs, anchors, backgrounds)."""
+    return merge_regions((h['chrom'], max(0, h['start'] - pad), max(h['end'], h['start'] + 1) + pad)
+                         for t in tables for h in t.hits)
 
 
 def _strip_group_p(res: dict) -> None:
@@ -240,12 +251,12 @@ def _run_m1(state, defn, regions, stage):
     if limits:
         return dict(status='empty', limits=limits, inputs=inputs)
     vals, gkind, ginfo = group_values(state, mols, defn.get('group'), regions)
-    check = _cluster_check(defn, regions)
+    check = _cluster_check(defn, regions or _hit_windows((A, B), o['maxDistance']))
     if check and check['status'] == 'refused':
         return dict(status='refused', postSelection=check, inputs=inputs,
-                    limits=['The cluster run used features inside the tested window or its flanks, so comparing its '
-                            'clusters here is circular. Accept a "post-selection" label to see the numbers without '
-                            'p-values.'])
+                    limits=['The cluster run used features inside the tested window or its flanks (or records no '
+                            'regions), so comparing its clusters here is circular. Accept a "post-selection" label to '
+                            'see the numbers without p-values.'])
     labels = {'group': vals} if vals is not None else {}
     stage('inputs', 'Molecule covariates')
     mt, covinfo = molecule_table(state, mols, regions, density=o['density'], labels=labels)
@@ -265,9 +276,12 @@ def _run_m1(state, defn, regions, stage):
     out = dict(result=res, inputs=inputs, limits=limits, postSelection=check, effects=effects,
                anchors=_m1_rows(res, A, B), cli=_cli_line(defn, A, B))
     if no_contrast:
-        # One state only: FiberHMM still returns an odds ratio (1 by construction), which answers nothing here.
+        # One state only: FiberHMM still returns odds ratios (1 by construction) and p-values, which answer nothing
+        # here; the counts (tables) stay.
         for e in effects:
             e.update(estimate=None, lo=None, hi=None, p=None, note='no contrast')
+        for r in out['anchors']:
+            r.update(estimate=None, lo=None, hi=None, p=None, q=None)
         out['status'] = 'empty'
     return out
 
@@ -331,10 +345,18 @@ def _m1_effects(res) -> List[dict]:
     return rows
 
 
+def _hit_geometry(table: HitTable) -> Dict[str, dict]:
+    """hit id -> this genome's span and strand (result rows hand them to Use as anchors)."""
+    return {h['hitId']: dict(start=h['start'], end=h['end'], strand=h.get('strand')) for h in table.hits}
+
+
 def _m1_rows(res, A, B) -> List[dict]:
     out = []
+    geo = _hit_geometry(A)
     for r in (res.get('pairs') or [])[:MAX_ROWS]:
+        g = geo.get(r.get('a')) or {}
         out.append(dict(id=f'{r.get("a")}|{r.get("b")}', chrom=r.get('chrom'), pos=r.get('a_anchor'), pos2=r.get('b_anchor'),
+                        aStart=g.get('start'), aEnd=g.get('end'), aStrand=g.get('strand'),
                         a=r.get('a'), b=r.get('b'), estimate=r.get('or_mh'), lo=r.get('or_lo'), hi=r.get('or_hi'),
                         p=r.get('p_exact'), q=r.get('q'), n=r.get('n'), table=r.get('table'),
                         p_b1_given_a1=r.get('p_b1_given_a1'), p_b1_given_a0=r.get('p_b1_given_a0'),
@@ -366,13 +388,35 @@ def _anchor_datasets(state, defn, A: HitTable) -> List[str]:
     return [k for k, d in (getattr(state, 'datasets', None) or {}).items() if getattr(d, 'data_type', None) == 'bam']
 
 
+#: A types whose open/closed state is defined at any position (DESIGN §7.4 "transferable"): phasing conditions on the
+#: NUC 2.3 rule at the anchor and draws matched random backgrounds with the same rule. Anchor sets are positions.
+TRANSFERABLE = ('nfr.region', 'peaks.peak', 'peaks.broad', 'anchors')
+STATE_RULE = ('open: an MSP of at least 80 bp over the anchor ± 30 bp; closed: a nucleosome over the anchor (NUC 2.3); '
+              'matched random backgrounds use the same rule')
+
+
+def _transferable(A: HitTable) -> bool:
+    if A.type_id in TRANSFERABLE:
+        return True
+    if A.scan is not None:
+        decl = A.scan.type_decl(A.module, A.type_id) or {}
+        return bool(decl.get('transferable_state'))
+    return False
+
+
 def _run_m2_phasing(state, defn, regions, stage):
+    """Phasing at anchors, one condition_stats run per dataset (each with its own calibration: repeat length, size
+    classes and prior differ between datasets, and FiberHMM's condition_stats takes one)."""
     from fiberhmm.assoc.nucleosome import condition_stats
     from fiberhmm.nuc.params import DEFAULT_PARAMS
     o = defn['options']
-    mols_index = Molecules()
-    A = _gather(state, defn['a'], regions, mols_index, [], states=False, label=_label(defn['a']))
-    inputs = dict(a=A.summary())
+    A = _gather(state, defn['a'], regions, Molecules(), [], states=False, label=_label(defn['a']))
+    inputs = dict(a=A.summary(), stateRule=STATE_RULE)
+    if not _transferable(A):
+        raise AssocInputError(f'Phasing conditions on open or closed at the anchor and compares with matched random '
+                              f'positions; {A.label} have a state only at their own hits (it isn\'t defined at random '
+                              'positions). Use NFR regions, peaks or an anchor set as anchors, or a per-molecule measure '
+                              'of a scan as the response (it uses the hits\' own states)')
     if not A.hits:
         return dict(status='empty', inputs=inputs, limits=[f'No {A.label} in the scope to use as anchors.'])
     datasets = _anchor_datasets(state, defn, A)
@@ -384,64 +428,75 @@ def _run_m2_phasing(state, defn, regions, stage):
     pad = 10 * span
     windows = merge_regions([(h['chrom'], max(0, h['anchor'] - pad), h['anchor'] + pad) for h in A.hits]
                             + [(c, max(0, a - 3 * span), b + 3 * span) for c, a, b in (regions or [])])
-    stage('inputs', f'Decoding molecules of {len(datasets)} dataset(s) (and the nucleosome calibration)')
-    decoded = decoded_molecules(state, datasets, windows)
-    molecules = [m for ms, _cal in decoded.values() for m in ms]
-    if not molecules:
-        return dict(status='empty', inputs=inputs, limits=['No molecule of the chosen datasets covers the anchors.'])
-    first = next(iter(decoded))
-    cal = decoded[first][1]
-    anchors = [(h['chrom'], int(h['anchor'])) for h in A.hits]
-    # anchors in the BAM's contig naming (chr1 / 1)
-    from services.nuc.observations import frame_chrom
-    anchors = [(frame_chrom(molecules, c), p) for c, p in anchors]
     g = defn.get('group') or {}
-    labels, group, gkind, ginfo = None, None, 'label', {}
-    names = {ds_id: getattr(d, 'label', ds_id) for ds_id, d in state.datasets.items()}
-    if g.get('kind') == 'dataset':
-        labels, group = {'group': lambda m: names.get((m.meta or {}).get('dataset'), (m.meta or {}).get('dataset'))}, 'group'
-        ginfo = dict(kind='dataset')
-    elif g.get('kind') == 'haplotype':
-        labels, group, gkind = {'group': lambda m: f'HP{m.hp}' if m.hp not in (None, 0) else None}, 'group', 'haplotype'
-        ginfo = dict(kind='haplotype', phased=sum(1 for m in molecules if m.hp not in (None, 0)),
-                     unphased=sum(1 for m in molecules if m.hp in (None, 0)))
-    elif g.get('kind') == 'cluster':
-        lab = {}
-        for ds_key, by_read in (g.get('labels') or {}).items():
-            for rid, v in (by_read or {}).items():
-                lab[(str(ds_key), qname_of_key(rid))] = str(v)
-        labels, group = {'group': lambda m: lab.get(((m.meta or {}).get('dataset'), m.name))}, 'group'
-        ginfo = dict(kind='cluster', labelled=sum(1 for m in molecules if ((m.meta or {}).get('dataset'), m.name) in lab))
-    check = _cluster_check(defn, regions)
+    check = _cluster_check(defn, windows)        # the tested geometry: every decoded window (anchors and backgrounds)
     if check and check['status'] == 'refused':
         return dict(status='refused', postSelection=check, inputs=inputs,
-                    limits=['The cluster run used features inside the tested window or its flanks: comparing its '
-                            'clusters here is circular.'])
-    inputs.update(datasets=datasets, molecules=len(molecules), anchors=len(anchors), group=ginfo,
-                  calibration=dict(dataset=first, nrlPooled=getattr(cal, 'nrl_pooled', None)))
-    stage('compute', f'M2: phasing at {len(anchors)} anchors ({", ".join(o["frames"])} frame), matched backgrounds')
-    res = condition_stats(molecules, anchors, cal=cal, frames=tuple(o['frames']), backgrounds='random', k=5,
-                          metrics=(o['metric'],), group=group, group_kind=gkind, labels=labels, n_perm=o['nPerm'],
-                          n_role=o['nPerm'], n_boot=o['nBoot'], seed=o['seed'])
-    if check and check['status'] == 'post-selection':
-        for fr in (res.get('frames') or {}).values():
-            for met in (fr.get('metrics') or {}).values():
-                _strip_group_p(met)
-    stage('store', 'Summarising')
-    effects, rows, limits = [], [], []
+                    limits=['The cluster run used features inside the tested windows or their flanks (or records no '
+                            'regions): comparing its clusters here is circular.'])
+    stage('inputs', f'Decoding molecules of {len(datasets)} dataset(s) (and the nucleosome calibration)')
+    decoded = decoded_molecules(state, datasets, windows)
+    names = {ds_id: getattr(d, 'label', ds_id) for ds_id, d in state.datasets.items()}
+    anchors = [(h['chrom'], int(h['anchor'])) for h in A.hits]
     hit_at = {(c, p): h['hitId'] for (c, p), h in zip(anchors, A.hits)}
-    for frame, fr in (res.get('frames') or {}).items():
-        for name, met in (fr.get('metrics') or {}).items():
-            effects += _m2_effects(met, f'{frame} frame · {name}')
-            rows += [dict(r, frame=frame, metric=name, hitId=hit_at.get((r.get('chrom'), r.get('pos'))))
-                     for r in _m2_rows(met)]
-    limits += _m2_limits(res, len(anchors))
+    geo = _hit_geometry(A)
+    cluster_lab = {}
+    for ds_key, by_read in (g.get('labels') or {}).items():
+        for rid, v in (by_read or {}).items():
+            cluster_lab.setdefault((str(ds_key), qname_of_key(rid)), set()).add(str(v))
+    out_res, effects, rows, limits, per_ds = {}, [], [], [], {}
+    for n_ds, (ds, (molecules, cal)) in enumerate(decoded.items()):
+        label = names.get(ds, ds)
+        if not molecules:
+            limits.append(f'{label}: no molecule covers the anchors.')
+            continue
+        labels, group, gkind, ginfo = None, None, 'label', {}
+        if g.get('kind') == 'haplotype':
+            # HP across every record of each molecule (primary and supplementary): disagreeing or missing tags leave it
+            # unphased (D14)
+            mi = Molecules()
+            idx = {m.name: mi.add(ds, molecule_token(m.name), m.name) for m in molecules}
+            native_haplotypes(state, mi, windows)
+            hap = {name: mi.hap_of(i) for name, i in idx.items()}
+            labels, group, gkind = {'group': lambda m, hap=hap: hap.get(m.name)}, 'group', 'haplotype'
+            ginfo = dict(kind='haplotype', phased=sum(1 for v in hap.values() if v is not None),
+                         unphased=sum(1 for v in hap.values() if v is None))
+        elif g.get('kind') == 'cluster':
+            lab = {k[1]: next(iter(v)) for k, v in cluster_lab.items() if k[0] == ds and len(v) == 1}
+            labels, group = {'group': lambda m, lab=lab: lab.get(m.name)}, 'group'
+            ginfo = dict(kind='cluster', labelled=sum(1 for m in molecules if m.name in lab))
+        stage('compute', f'M2: phasing in {label} at {len(anchors)} anchors ({", ".join(o["frames"])} frame), matched backgrounds')
+        res = condition_stats(molecules, anchors, cal=cal, frames=tuple(o['frames']), backgrounds='random', k=5,
+                              metrics=(o['metric'],), group=group, group_kind=gkind, labels=labels, n_perm=o['nPerm'],
+                              n_role=o['nPerm'], n_boot=o['nBoot'], seed=o['seed'])
+        if check and check['status'] == 'post-selection':
+            for fr in (res.get('frames') or {}).values():
+                for met in (fr.get('metrics') or {}).values():
+                    _strip_group_p(met)
+        out_res[label] = res
+        per_ds[label] = dict(molecules=len(molecules), group=ginfo, nrlPooled=getattr(cal, 'nrl_pooled', None))
+        prefix = f'{label} · ' if len(decoded) > 1 else ''
+        for frame, fr in (res.get('frames') or {}).items():
+            for name, met in (fr.get('metrics') or {}).items():
+                effects += _m2_effects(met, f'{prefix}{frame} frame · {name}')
+                for r in _m2_rows(met):
+                    hid = hit_at.get((r.get('chrom'), r.get('pos')))
+                    gg = geo.get(hid) or {}
+                    rows.append(dict(r, id=f'{label}|{r.get("id")}|{frame}', frame=f'{prefix}{frame}', metric=name, hitId=hid,
+                                     aStart=gg.get('start'), aEnd=gg.get('end'), aStrand=gg.get('strand')))
+        limits += [f'{prefix}{x}' for x in _m2_limits(res, len(anchors))]
+    if not out_res:
+        return dict(status='empty', inputs=inputs, limits=limits or ['No molecule of the chosen datasets covers the anchors.'])
+    if g.get('kind') == 'dataset' or len(out_res) > 1:
+        limits.append('Datasets are measured one by one, each with its own nucleosome calibration (repeat length and '
+                      'size classes); a test of the difference between datasets needs one calibration and isn\'t run.')
     if len(anchors) < 10:
         limits.append(f'Only {len(anchors)} anchors in the scope: too few to say whether {A.label} phase their flanks in '
                       'general (widen the scope: a BED of regions, or a genome scan).')
-    if len(decoded) > 1:
-        inputs['note'] = f'The nucleosome repeat length and prior come from {names.get(first, first)}\'s calibration.'
-    return dict(result=res, inputs=inputs, effects=effects, anchors=rows[:MAX_ROWS], limits=limits, postSelection=check)
+    inputs.update(datasets=list(per_ds), perDataset=per_ds, anchors=len(anchors))
+    result = next(iter(out_res.values())) if len(out_res) == 1 else {'datasets': out_res}
+    return dict(result=result, inputs=inputs, effects=effects, anchors=rows[:MAX_ROWS], limits=list(dict.fromkeys(limits)),
+                postSelection=check)
 
 
 def _m2_effects(met: dict, prefix: str) -> List[dict]:
@@ -520,9 +575,18 @@ def _run_m2_scalar(state, defn, regions, stage):
         return dict(status='empty', inputs=inputs,
                     limits=[f'No molecule has {module}:{column}: open or run a {module} scan in table mode of these datasets.'])
     vals, gkind, ginfo = group_values(state, mols, defn.get('group'), regions)
+    check = _cluster_check(defn, regions or _hit_windows((A,), 3000))
+    if check and check['status'] == 'refused':
+        return dict(status='refused', postSelection=check, inputs=inputs,
+                    limits=['The cluster run used features inside the tested window or its flanks (or records no '
+                            'regions): comparing its clusters here is circular.'])
+    # One state per (hit, physical molecule): records that agree count once, records that disagree drop out (HUB 3.4)
+    from fiberhmm.assoc.cooccur import fold_states
+    fh, fm, fs = fold_states([r[0] for r in A.rows], [r[1] for r in A.rows], [r[2] for r in A.rows])
+    folded = list(zip(fh.tolist(), fm.tolist(), fs.tolist()))
     n = len(A.hits)
-    hit = np.array([r[0] for r in A.rows], np.int64)
-    st = np.array([r[2] for r in A.rows], np.int64)
+    hit = np.array([r[0] for r in folded], np.int64)
+    st = np.array([r[2] for r in folded], np.int64)
     depth = np.bincount(hit, minlength=n).astype(float)
     prev = np.bincount(hit, weights=st, minlength=n) / np.maximum(depth, 1)
     order = np.arange(n)
@@ -543,7 +607,7 @@ def _run_m2_scalar(state, defn, regions, stage):
                                 [(A.hits[j]['chrom'], A.hits[j]['anchor']) for j in cands], mb['sets'])
     hit_of_locus = list(anchors) + [cands[j] for _a, js in mb['sets'] for j in js]
     by_hit: Dict[int, List[tuple]] = {}
-    for h, m, s in A.rows:
+    for h, m, s in folded:
         by_hit.setdefault(h, []).append((m, s))
     L, M, S = [], [], []
     for li, h in enumerate(hit_of_locus):
@@ -560,6 +624,8 @@ def _run_m2_scalar(state, defn, regions, stage):
     stage('compute', f'M2: {module}:{column} by state at {len(anchors)} anchors')
     res = condition(app, loci, mean_metric(f'mean {column}'), bins=['molecule'], n_perm=o['nPerm'], n_role=o['nPerm'],
                     n_boot=o['nBoot'], group='group' if vals is not None else None, group_kind=gkind, seed=o['seed'])
+    if check and check['status'] == 'post-selection':
+        _strip_group_p(res)
     res['backgrounds'] = {k: v for k, v in mb.items() if k != 'sets'}
     res['backgrounds']['rule'] = ('other hits of the same type outside the anchor BED (the non-transferable rule), '
                                   'matched on prevalence and depth deciles' if o.get('anchorBed') else 'none (no anchor BED)')
@@ -569,10 +635,13 @@ def _run_m2_scalar(state, defn, regions, stage):
     if not o.get('anchorBed'):
         limits.append('Every A hit is an anchor (no anchor BED): Δ site needs anchors and other hits as their matched '
                       'backgrounds, so only Δ anchor is tested.')
-    hit_at = {(h['chrom'], h['anchor']): h['hitId'] for h in A.hits}
-    rows = [dict(r, hitId=hit_at.get((r.get('chrom'), r.get('pos')))) for r in _m2_rows(res)[:MAX_ROWS]]
+    hit_at = {(h['chrom'], h['anchor']): h for h in A.hits}
+    rows = []
+    for r in _m2_rows(res)[:MAX_ROWS]:
+        h = hit_at.get((r.get('chrom'), r.get('pos'))) or {}
+        rows.append(dict(r, hitId=h.get('hitId'), aStart=h.get('start'), aEnd=h.get('end'), aStrand=h.get('strand')))
     return dict(result=res, inputs=inputs, effects=_m2_effects(res, f'{module}:{column}'), anchors=rows,
-                limits=list(dict.fromkeys(limits)))
+                limits=list(dict.fromkeys(limits)), postSelection=check)
 
 
 def _run_m3(state, defn, regions, stage):
@@ -587,11 +656,15 @@ def _run_m3(state, defn, regions, stage):
     vals, gkind, ginfo = group_values(state, mols, defn.get('group'), regions)
     inputs = dict(a=dict(type=a_type, label=_label(defn['a'])), b=dict(type=b_kind, label=_label(b) or 'TF footprint centres'),
                   molecules=int(d.n), scans=used, group=ginfo)
-    check = _cluster_check(defn, regions)
+    tested = regions
+    if tested is None:
+        from .assoc_inputs import _whole_scan_regions, nuc_scans
+        tested = merge_regions(r for scan, _b in nuc_scans(state, ds or None) for r in _whole_scan_regions(scan))
+    check = _cluster_check(defn, tested)
     if check and check['status'] == 'refused':
         return dict(status='refused', postSelection=check, inputs=inputs,
-                    limits=['The cluster run used features inside the tested window or its flanks: comparing its '
-                            'clusters here is circular.'])
+                    limits=['The cluster run used features inside the tested window or its flanks (or records no '
+                            'regions): comparing its clusters here is circular.'])
     group = None
     if vals is not None:
         d.labels['group'] = np.array([vals[i] if i is not None else None for i in order], dtype=object)

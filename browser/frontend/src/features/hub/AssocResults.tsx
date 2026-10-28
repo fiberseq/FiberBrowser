@@ -142,13 +142,19 @@ export function AssocResults({ run, onRerun, onRemove }: { run: AssocRun; onReru
   const rowLabel = (r: AssocRow) => (def.mode === 'M1' ? `${r.a ?? ''} × ${r.b ?? ''}` : r.hitId ?? `${r.chrom}:${r.pos}`);
   const selectedRows = rows.filter(r => picked.has(r.id));
   const useRows = selectedRows.length ? selectedRows : rows.filter(r => r.q != null && r.q <= 0.1);
-  const entriesFor = (list: AssocRow[]): HubSelected[] => list.flatMap(r => {
-    const hitId = def.mode === 'M1' ? r.a : r.hitId;
-    if (!hitId || !r.chrom || r.pos == null) return [];
-    const scan = def.a.kind === 'scan';
-    return [{ setId: def.a.setId ?? 'assoc', hitId, typeId: def.a.typeId ?? 'anchors', chrom: r.chrom, start: r.pos, end: r.pos + 1, anchor: r.pos,
-      label: rowLabel(r), hasStates: scan }];
-  });
+  // One entry per A hit (M2 lists a hit once per bin and frame; M1 once per B partner), with its span and strand.
+  const entriesFor = (list: AssocRow[]): HubSelected[] => {
+    const seen = new Set<string>();
+    return list.flatMap(r => {
+      const hitId = def.mode === 'M1' ? r.a : r.hitId;
+      if (!hitId || !r.chrom || r.pos == null || seen.has(hitId)) return [];
+      seen.add(hitId);
+      const scan = def.a.kind === 'scan';
+      const start = r.aStart ?? r.pos, end = Math.max(r.aEnd ?? r.pos + 1, start);
+      return [{ setId: def.a.setId ?? 'assoc', hitId, typeId: def.a.typeId ?? 'anchors', chrom: r.chrom, start, end, anchor: r.pos,
+        ...(r.aStrand === '+' || r.aStrand === '-' ? { strand: r.aStrand } : {}), label: def.mode === 'M1' ? hitId : rowLabel(r), hasStates: scan }];
+    });
+  };
   const goTo = (r: AssocRow) => { if (r.chrom && r.pos != null) setNotice(goToHits([{ chrom: r.chrom, start: Math.min(r.pos, r.pos2 ?? r.pos), end: Math.max(r.pos, r.pos2 ?? r.pos) + 1 }]) ?? ''); };
   const inputs = (res.inputs ?? {}) as Record<string, unknown>;
   const raw = (res.result ?? {}) as Record<string, unknown>;
@@ -159,7 +165,9 @@ export function AssocResults({ run, onRerun, onRemove }: { run: AssocRun; onReru
       <span className={`rounded-full px-1.5 text-[10px] ${res.status === 'ok' ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200' : 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200'}`}
         data-testid="assoc-status">{res.status === 'ok' ? 'ran' : res.status === 'refused' ? 'refused' : 'nothing to test'}</span>
       <span className="ml-auto flex gap-1">
-        <AnalysisButton onClick={onRerun} data-testid="assoc-rerun" title="Run this definition again (the view's hits as they are now for browser sets)">Run again</AnalysisButton>
+        <AnalysisButton onClick={onRerun} data-testid="assoc-rerun" disabled={Boolean(def.truncated)}
+          title={def.truncated ? 'Its browser-set hits were cut when the run was kept with the session: rebuild it in the builder to run it again'
+            : 'Run this definition again'}>Run again</AnalysisButton>
         <AnalysisButton onClick={() => exportRun(run)} data-testid="assoc-export">Export</AnalysisButton>
         <AnalysisButton onClick={onRemove}>Remove</AnalysisButton>
       </span>

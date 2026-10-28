@@ -12,7 +12,7 @@ import { downloadTextFile, formatTsv } from '../../utils/analysisExport';
 import { nucObservations } from '../nucleosomes/planner';
 import type { NucObservation } from '../nucleosomes/types';
 import { useHubData } from './hubData';
-import type { FeatureHit, FeatureSet } from './types';
+import type { FeatureHit, FeatureSet, GraphAlias } from './types';
 import { DEFAULT_OVERLAY, OVERLAY_LAYERS, type OverlayAlign, type OverlayLayer, type OverlayLocus, type OverlayResult, type OverlaySeries, type OverlayState } from './overlayTypes';
 import { displaySpan } from './frames';
 
@@ -22,21 +22,28 @@ const ALIGN_LABEL: Record<OverlayAlign, string> = { anchor: 'Anchor (with strand
 
 /** A hub hit as an overlay locus: this genome's coordinates (a lifted hit's placement), its source coordinates, and its
  * graph paths' statuses. */
+const flip = (s?: '+' | '-') => (s === '+' ? '-' : s === '-' ? '+' : undefined);
+const pathsOf = (g?: GraphAlias) => (g ? { paths: Object.fromEntries(Object.entries(g.paths).map(([k, p]) =>
+  [k, { status: p.status, ...(p.hap ? { hap: p.hap } : {}), datasets: p.datasets }])) } : {});
+
 export function locusOfHit(h: FeatureHit, setId: string): OverlayLocus | null {
   const here = displaySpan(h);
   if (!here) return null;
+  // On this genome a hit of an assembly scan has the strand its lift gives it (a flipped chain reverses it); its own
+  // source coordinates keep the original strand.
+  const strand = h.frame?.kind === 'source' && h.lift?.flipped ? flip(h.strand) : h.strand;
   return {
     key: `${setId}|${h.hitId}`, chrom: here.chrom, start: here.start, end: Math.max(here.end, here.start + 1), anchor: here.anchor,
     ...(here.insertion ? { insertion: true } : {}),
-    ...(h.strand ? { strand: h.strand } : {}), ...(h.label ? { label: h.label } : {}), hitId: h.hitId, setId,
-    ...(h.graph ? { paths: Object.fromEntries(Object.entries(h.graph.paths).map(([k, p]) => [k, { status: p.status, ...(p.hap ? { hap: p.hap } : {}), datasets: p.datasets }])) } : {}),
-    ...(h.source && h.frame?.kind === 'source' ? { source: { ...h.source, ...(h.frame.hapLabel ? { hap: h.frame.hapLabel } : {}) } } : {}),
+    ...(strand ? { strand } : {}), ...(h.label ? { label: h.label } : {}), hitId: h.hitId, setId, ...pathsOf(h.graph),
+    ...(h.source && h.frame?.kind === 'source' ? { source: { ...h.source, ...(h.strand ? { strand: h.strand } : {}),
+      ...(h.frame.hapLabel ?? h.frame.hap ? { hap: h.frame.hapLabel ?? h.frame.hap } : {}) } } : {}),
   };
 }
 
 export { sendToOverlay } from './overlayHandoff';
 
-const density = (s: OverlaySeries, i: number) => (s.den[i] > 0 ? s.num[i] / s.den[i] : null);
+const density = (s: OverlaySeries, i: number) => (s.den?.[i] > 0 ? s.num[i] / s.den[i] : null);
 
 function seriesColour(obs: NucObservation | undefined, i: number, dark: boolean): string {
   if (obs?.color) return obs.color;
@@ -53,7 +60,8 @@ function xFmt(x: number, align: OverlayAlign): string {
 function Profile({ result, series, colours, svgRef, facet }: { result: OverlayResult; series: OverlaySeries[]; colours: Record<string, string>;
   svgRef?: React.MutableRefObject<SVGSVGElement | null>; facet?: boolean }) {
   const [hover, setHover] = useState<number | null>(null);
-  const n = result.series[0]?.x.length ?? 0;
+  const axisX = result.x ?? result.series.find(s => s.x)?.x ?? [];
+  const n = axisX.length;
   const W = 520, H = facet ? 128 : 198, L = 36, R = facet ? 10 : 104, T = 18, DEN = 36, B = 22;
   const plotH = H - T - B - DEN;
   const maxDen = Math.max(1, ...series.flatMap(s => s.den));
@@ -63,7 +71,7 @@ function Profile({ result, series, colours, svgRef, facet }: { result: OverlayRe
   const x = (i: number) => L + (i + 0.5) / Math.max(1, n) * (W - L - R);
   const y = (v: number) => T + (1 - v / ymax) * plotH;
   // x ticks: round values for bp axes; the patch's 0, 0.5 and 1 (and the flanks' ends) for a scaled axis.
-  const xs = result.series[0]?.x ?? [];
+  const xs = axisX;
   const half = result.binBp / 2;
   const lo = (xs[0] ?? 0) - half, hi = (xs[n - 1] ?? 1) + half;
   const xAt = (v: number) => L + (v - lo) / Math.max(1e-9, hi - lo) * (W - L - R);
@@ -117,7 +125,7 @@ function Profile({ result, series, colours, svgRef, facet }: { result: OverlayRe
     {hover != null && <g pointerEvents="none">
       <line x1={x(hover)} x2={x(hover)} y1={T} y2={T + plotH + DEN} stroke="currentColor" strokeOpacity={0.3} />
       <rect x={Math.min(W - 170, x(hover) + 6)} y={T} width={164} height={14 + 12 * series.length} rx={4} className="fill-white stroke-gray-300 dark:fill-gray-800 dark:stroke-gray-600" />
-      <text x={Math.min(W - 170, x(hover) + 6) + 5} y={T + 11} className="fill-current text-[9px]">x = {xFmt(result.series[0].x[hover], result.align)} ({result.xLabel})</text>
+      <text x={Math.min(W - 170, x(hover) + 6) + 5} y={T + 11} className="fill-current text-[9px]">x = {xFmt(axisX[hover], result.align)} ({result.xLabel})</text>
       {series.map((s, k) => <text key={s.obsId} x={Math.min(W - 170, x(hover) + 6) + 5} y={T + 23 + 12 * k} className="fill-current text-[9px]">
         {s.label.slice(0, 18)}: {density(s, hover) == null ? '—' : density(s, hover)!.toFixed(2)} ({s.num[hover].toFixed(0)}/{s.den[hover].toFixed(0)})</text>)}
     </g>}
@@ -126,7 +134,7 @@ function Profile({ result, series, colours, svgRef, facet }: { result: OverlayRe
 
 function Pile({ result, colours, sort }: { result: OverlayResult; colours: Record<string, string>; sort: 'length' | 'group' }) {
   const rows = useMemo(() => [...result.pile].sort((a, b) => (sort === 'length' ? b.length - a.length : a.obsId.localeCompare(b.obsId) || b.length - a.length)), [result, sort]);
-  const xs = result.series[0]?.x ?? [];
+  const xs = result.x ?? result.series.find(s => s.x)?.x ?? [];
   const lo = result.align === 'scaled' ? -result.flank : (xs[0] ?? 0) - result.binBp / 2;
   const hi = result.align === 'scaled' ? 1 + result.flank : (xs[xs.length - 1] ?? 1) + result.binBp / 2;
   const W = 520, L = 8, R = 8, rowH = rows.length > 200 ? 1.5 : 3;
@@ -172,8 +180,13 @@ export function OverlayTab({ sets, seed }: { sets: FeatureSet[]; seed?: OverlayS
     if (st.loci === 'patches') return st.handed ?? [];
     if (st.loci === 'anchors') {
       const a = hub.anchors.find(x => x.id === st.anchorSetId);
-      return (a?.anchors ?? []).filter(p => !p.frame || p.frame.kind !== 'source' || p.source).map((p, i) => ({ key: `${a!.id}|${i}`, chrom: p.chrom,
-        start: p.start ?? p.pos, end: Math.max(p.end ?? p.pos + 1, (p.start ?? p.pos) + 1), anchor: p.pos, ...(p.strand ? { strand: p.strand } : {}), label: p.label, hitId: p.hitId }));
+      // Placed anchors only; a lifted anchor keeps its source coordinates and haplotype, an insertion anchor its flag.
+      return (a?.anchors ?? []).filter(p => !p.frame || p.frame.kind !== 'source' || p.source).map((p, i) => {
+        const hap = p.frame?.kind === 'source' ? (p.frame.hapLabel ?? p.frame.hap) : undefined;
+        return { key: `${a!.id}|${i}`, chrom: p.chrom, start: p.start ?? p.pos, end: Math.max(p.end ?? p.pos + 1, (p.start ?? p.pos) + 1), anchor: p.pos,
+          ...(p.strand ? { strand: p.strand } : {}), label: p.label, hitId: p.hitId, ...(p.insertion ? { insertion: true } : {}),
+          ...(p.source ? { source: { ...p.source, anchor: Math.floor((p.source.start + p.source.end) / 2), ...(hap ? { hap } : {}) } } : {}) };
+      });
     }
     if (st.loci === 'set') {
       const set = sets.find(s => s.setId === st.setId);
@@ -185,7 +198,16 @@ export function OverlayTab({ sets, seed }: { sets: FeatureSet[]; seed?: OverlayS
       const hit = set?.source.kind === 'inline' ? set.source.hits.find(h => h.hitId === sel.hitId) : undefined;
       const l = hit ? locusOfHit(hit, sel.setId) : null;
       if (l) out.push(l);
-      else if (!sel.frame || sel.frame.kind !== 'source') out.push({ key: `${sel.setId}|${sel.hitId}`, chrom: sel.chrom, start: sel.start, end: Math.max(sel.end, sel.start + 1), anchor: sel.anchor, ...(sel.strand ? { strand: sel.strand } : {}), label: sel.label, hitId: sel.hitId });
+      else if (!sel.frame || sel.frame.kind !== 'source') {
+        out.push({ key: `${sel.setId}|${sel.hitId}`, chrom: sel.chrom, start: sel.start, end: Math.max(sel.end, sel.start + 1), anchor: sel.anchor,
+          ...(sel.strand ? { strand: sel.strand } : {}), label: sel.label, hitId: sel.hitId, ...pathsOf(sel.graph) });
+      } else if (sel.target) {
+        // A hit of an assembly scan whose set isn't in view any more: its placement, source and graph carriage.
+        const hap = sel.frame.hapLabel ?? sel.frame.hap;
+        out.push({ key: `${sel.setId}|${sel.hitId}`, chrom: sel.target.chrom, start: sel.target.start, end: Math.max(sel.target.end, sel.target.start + 1),
+          anchor: sel.target.anchor, label: sel.label, hitId: sel.hitId, ...(sel.target.insertion ? { insertion: true } : {}), ...pathsOf(sel.graph),
+          source: { chrom: sel.chrom, start: sel.start, end: sel.end, anchor: sel.anchor, ...(sel.strand ? { strand: sel.strand } : {}), ...(hap ? { hap } : {}) } });
+      }
     }
     return out;
   }, [st.loci, st.handed, st.anchorSetId, st.setId, hub.anchors, hub.selected, sets]);
@@ -210,7 +232,8 @@ export function OverlayTab({ sets, seed }: { sets: FeatureSet[]; seed?: OverlayS
   const exportTsv = () => {
     if (!result) return;
     const head = ['x', ...shownSeries.flatMap(s => [`${s.label} marked`, `${s.label} measured`, `${s.label} density`])];
-    const body = result.series[0].x.map((x, i) => [x, ...shownSeries.flatMap(s => [s.num[i], s.den[i], density(s, i) ?? ''])]);
+    const xs = result.x ?? shownSeries[0]?.x ?? [];
+    const body = xs.map((x, i) => [x, ...shownSeries.flatMap(s => [s.num[i], s.den[i], density(s, i) ?? ''])]);
     downloadTextFile(formatTsv([[`# overlay layer=${result.layer} align=${result.align} flank=${result.flank} bin=${result.binBp} loci=${result.loci}`], head, ...body]),
       `overlay-${result.layer}-${result.align}.tsv`, 'text/tab-separated-values');
   };

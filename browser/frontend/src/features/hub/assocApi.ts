@@ -30,6 +30,8 @@ export interface AssocSetRef {
   label?: string;
   hits?: AssocInlineHit[];
   anchors?: Array<{ chrom: string; pos: number; start?: number; end?: number; strand?: '+' | '-'; label?: string; hitId?: string }>;
+  /** A browser set's coverage: where it was computed (its absence means absence only there). */
+  coverage?: Array<[string, number, number]>;
 }
 
 export type AssocResponse = { kind: 'phasing' } | { kind: 'scalar'; module: 'nuc' | 'nfr'; column: string };
@@ -69,6 +71,8 @@ export interface AssocRequest {
   label?: string;
   /** The §7.9 question this run answers (a preset), if any. */
   question?: string;
+  /** Inline hits were cut when the run was kept (sessions stay small): it can't be run again as it was. */
+  truncated?: boolean;
 }
 
 export interface AssocEffect {
@@ -90,6 +94,8 @@ export interface AssocRow {
   id: string; chrom?: string; pos?: number; pos2?: number; a?: string; b?: string; hitId?: string | null;
   estimate?: number | null; lo?: number | null; hi?: number | null; p?: number | null; q?: number | null; n?: number | null;
   table?: number[]; distance?: number; bin?: string; frame?: string; metric?: string; se?: number | null; shrunk?: number | null;
+  /** A's span and strand on this genome (Use as anchors keeps them). */
+  aStart?: number | null; aEnd?: number | null; aStrand?: '+' | '-' | null;
   n1?: number; n0?: number; p_b1_given_a1?: number | null; p_b1_given_a0?: number | null;
 }
 

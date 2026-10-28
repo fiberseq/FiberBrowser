@@ -96,7 +96,9 @@ const MODES: AssocMode[] = ['M1', 'M2', 'M3', 'M4'];
 export function storableRun(run: AssocRun): AssocRun {
   const capRef = (ref: AssocRequest['a'] | undefined) => (ref && ref.hits && ref.hits.length > MAX_STORED_HITS
     ? { ...ref, hits: ref.hits.slice(0, MAX_STORED_HITS) } : ref);
-  const definition = { ...run.definition, a: capRef(run.definition.a)!, ...(run.definition.b ? { b: capRef(run.definition.b) } : {}) };
+  const cut = [run.definition.a, run.definition.b].some(ref => (ref?.hits?.length ?? 0) > MAX_STORED_HITS);
+  const definition = { ...run.definition, a: capRef(run.definition.a)!, ...(run.definition.b ? { b: capRef(run.definition.b) } : {}),
+    ...(cut || run.definition.truncated ? { truncated: true } : {}) };
   const result = run.result ? { ...run.result, ...(run.result.anchors && run.result.anchors.length > MAX_STORED_ROWS
     ? { anchors: run.result.anchors.slice(0, MAX_STORED_ROWS) } : {}) } : undefined;
   return { ...run, definition, ...(result ? { result } : {}) };

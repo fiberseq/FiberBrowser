@@ -338,3 +338,84 @@ def test_jobs_run_cancel_and_dispose(world):
     gate2.set()
     assert assoc.wait(world.state, third['job_id'], timeout=10)['status'] == 'cancelled'
     assert [j['job_id'] for j in assoc.list_jobs(world.state)][-1] == third['job_id']
+
+
+def test_haplotype_of_a_molecule_folds_its_records():
+    """D14: a molecule is phased only when every record carries the same HP tag."""
+    from services.hub.assoc_inputs import Molecules
+    m = Molecules()
+    a, b, c, d = (m.add('ds', f't{i}', f'q{i}') for i in range(4))
+    m.note_hap(a, 'HP1'); m.note_hap(a, 'HP1')
+    m.note_hap(b, 'HP1'); m.note_hap(b, None)
+    m.note_hap(c, 'HP1'); m.note_hap(c, 'HP2')
+    assert [m.hap_of(i) for i in (a, b, c, d)] == ['HP1', None, None, None]
+
+
+def test_cluster_contrast_without_recorded_regions_is_refused(world):
+    from services.hub.assoc import run
+    labels = {'ds_a': {q: ('C0' if i % 3 else 'C1') for i, (q, *_r) in enumerate(world.reads)}}
+    a = dict(kind='scan', setId=world.sets['fp.class'], typeId='fp.class')
+    b = dict(kind='scan', setId=world.sets['nfr.region'], typeId='nfr.region')
+    out = run(world.state, _defn('M1', a, b, group=dict(kind='cluster', labels=labels, clusterRegions=[], flank=100)))
+    assert out['status'] == 'refused' and 'records no regions' in out['postSelection']['note']
+    whole = run(world.state, _defn('M1', a, b, scope=dict(kind='scan'),
+                                   group=dict(kind='cluster', labels=labels, clusterRegions=[[CONTIG, 40_400, 40_600]], flank=100)))
+    assert whole['status'] == 'refused'          # a whole-scan scope is checked against the hits' own windows
+
+
+def test_phasing_needs_a_transferable_anchor_state(world):
+    from services.hub.assoc import run
+    from services.hub.assoc_inputs import AssocInputError
+    with pytest.raises(AssocInputError, match='random'):
+        run(world.state, _defn('M2', dict(kind='scan', setId=world.sets['fp.class'], typeId='fp.class'), response=dict(kind='phasing')))
+
+
+def test_scalar_response_folds_records_per_molecule(tmp_path, monkeypatch):
+    """M2 with a scan measure: a molecule's records that agree count once, records that disagree drop out."""
+    reads = [(f'm64003_{i:03d}/{3000 + i}/ccs', 10_000, 3000, 0) for i in range(24)]
+    bam = _bam(tmp_path / 'f.bam', reads)
+    fp_hits = [('fp:class:chrT:10500:cccc0001', 10490, 10510)]
+    states = [(fp_hits[0][0], 10490, 10510, q, '1' if i % 2 else '0', 'pooled') for i, (q, *_r) in enumerate(reads)]
+    states.append((fp_hits[0][0], 10490, 10510, reads[0][0], '1', 'pooled'))     # a second record of molecule 0, disagreeing
+    states.append((fp_hits[0][0], 10490, 10510, reads[1][0], '1', 'pooled'))     # a second record of molecule 1, agreeing
+    scan = _scan(tmp_path / 'fscan', bam, fp_hits=fp_hits, nfr_hits=[], states=states,
+                 openness=[(q, 9_800, 0.1 * (i % 7)) for i, (q, *_r) in enumerate(reads)])
+    # the two extra rows reuse record ids: make them distinct records
+    st = _state(_dataset('ds_f', bam, 'Sample F'))
+    from services.scan import registry
+    opened = registry.open_scan(st, scan)
+    set_id = {s['typeId']: s['setId'] for s in opened.sets(st)}['fp.class']
+    seen = {}
+    import fiberhmm.assoc.condition as C
+    real = C.condition
+
+    def spy(app, loci, metric, **kw):
+        seen['pairs'] = list(zip(app.locus.tolist(), app.molecule.tolist(), app.state.tolist()))
+        return real(app, loci, metric, **kw)
+    monkeypatch.setattr(C, 'condition', spy)
+    from services.hub.assoc import run
+    out = run(st, _defn('M2', dict(kind='scan', setId=set_id, typeId='fp.class'), response=dict(kind='scalar', module='nfr', column='openness'),
+                        scope=dict(kind='view', chrom=CONTIG, start=0, end=60_000)))
+    assert out['status'] == 'ok'
+    keys = [(l, m) for l, m, _s in seen['pairs']]
+    assert len(keys) == len(set(keys)) == 23        # 24 molecules, one dropped (its records disagree), none twice
+
+
+def test_m3_every_bound_dataset_has_its_molecules(tmp_path):
+    from services.hub.assoc import run
+    reads, marks = [], []
+    for i in range(12):
+        q = f'm64004_{i:03d}/{4000 + i}/ccs'
+        s0 = 2000 + 45_000 * (i % 4) + 50 * i
+        reads.append((q, s0, 4000, 0))
+        marks += [('nucseg', q, s0, s0 + 2000, '1'), ('nucseg', q, s0 + 2000, s0 + 4000, '2'), ('nucsz', q, s0 + 500, s0 + 520, '17'),
+                  ('nucsz', q, s0 + 2500, s0 + 2520, '17')]
+    bam = _bam(tmp_path / 'b.bam', reads)
+    scan = _scan(tmp_path / 'bscan', bam, fp_hits=[], nfr_hits=[], states=[], openness=[], marks=marks)
+    st = _state(_dataset('ds_1', bam, 'One'), _dataset('ds_2', bam, 'Two'))       # one BAM opened twice
+    from services.scan import registry
+    registry.open_scan(st, scan)
+    out = run(st, _defn('M3', dict(kind='marks', typeId='nuc.seg.regular'), dict(kind='tf'), group=dict(kind='dataset'),
+                        scope=dict(kind='view', chrom=CONTIG, start=0, end=LENGTH)))
+    assert out['inputs']['molecules'] == 24
+    assert set(out['result']['groups']) == {'One', 'Two'}

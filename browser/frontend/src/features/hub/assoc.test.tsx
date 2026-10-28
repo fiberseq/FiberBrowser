@@ -5,7 +5,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { useBrowserStore } from '../../stores/browserStore';
 import { EMPTY_HUB, normalizeHub, storableRun, type AssocRun } from './hubState';
-import { buildRequest, choicesFor, DEFAULT_DRAFT, markChoices, presets, setChoices } from './assocRequest';
+import { buildRequest, choicesFor, clusterGroup, DEFAULT_DRAFT, markChoices, presets, setChoices } from './assocRequest';
 import { AssocResults } from './AssocResults';
 import { normalizeOverlay, DEFAULT_OVERLAY } from './overlayTypes';
 import { locusOfHit } from './OverlayTab';
@@ -79,11 +79,35 @@ const RUN: AssocRun = { id: 'job1', createdAt: '2026-10-27T00:00:00Z', label: 'M
   definition: { mode: 'M1', a: { kind: 'inline', typeId: 'var.sv', hits: Array.from({ length: 2500 }, (_v, i) => ({ hitId: `h${i}`, chrom: 'chr3', start: i, end: i, anchor: i })) },
     b: { kind: 'scan', setId: 'hub:fp' }, scope: { kind: 'view', chrom: 'chr3', start: 0, end: 10 } }, result: RESULT };
 
+describe('builder inputs (review round 1)', () => {
+  it('cluster labels: reads outside the run and reads two panels label differently get none', () => {
+    const s = { ...useBrowserStore.getState(), chrom: 'chr3',
+      panels: [{ id: 'p1', datasetId: 'ds1', stateKey: 'k1' }, { id: 'p2', datasetId: 'ds1', stateKey: 'k2' }] as never,
+      clusterAssignments: { k1: { r1: 0, r2: 1, r3: -1 }, k2: { r1: 1, r2: 1 } }, clusterPeakRegions: [] } as never;
+    expect(clusterGroup(s).labels).toEqual({ ds1: { r2: 'C1' } });
+  });
+  it('browser sets carry where they were computed; anchor scopes keep placed anchors only', () => {
+    const peaks = set('browser:peaks:r', 'peaks.peak', ['hit'], [hit('p1', 5000)]);
+    peaks.coverage = { territory: 'view' };
+    const c = setChoices([peaks], [], { chrom: 'chr3', start: 100, end: 900.5 })[0];
+    expect(c.ref.coverage).toEqual([['chr3', 100, 901]]);
+    const anchors = [{ id: 'a', label: 'a', sources: [], createdAt: '', anchors: [
+      { chrom: 'chr1', pos: 5, frame: { kind: 'source', assembly: 'x', contig: 'c' } as never },
+      { chrom: 'chr3', pos: 50 }] }];
+    const st = { ...useBrowserStore.getState(), chrom: 'chr3', start: 0, end: 100 } as never;
+    const all = setChoices([set('hub:fp', 'fp.class', ['hit', 'state'])], anchors);
+    const r = buildRequest({ ...DEFAULT_DRAFT, mode: 'M4', aKey: 'hub:fp', bKey: 'anchors:a', scope: 'anchors', anchorSetId: 'a' }, { all, marks: [], state: st, anchors });
+    expect('request' in r && r.request.scope.anchors).toEqual([['chr3', 50]]);
+    expect(all.find(x => x.key === 'anchors:a')!.ref.anchors).toEqual([{ chrom: 'chr3', pos: 50 }]);
+  });
+});
+
 describe('association runs in sessions', () => {
   it('round-trip through the session form, capped', () => {
     const stored = storableRun(RUN);
     expect(stored.result!.anchors).toHaveLength(5000);
     expect(stored.definition.a.hits).toHaveLength(2000);
+    expect(stored.definition.truncated).toBe(true);           // "Run again" is off for it
     const back = normalizeHub(JSON.parse(JSON.stringify({ ...EMPTY_HUB, assocRuns: [stored], ui: { ...EMPTY_HUB.ui, tab: 'assoc' } })));
     expect(back.assocRuns).toHaveLength(1);
     expect(back.assocRuns[0].result!.limits).toEqual(RESULT.limits);

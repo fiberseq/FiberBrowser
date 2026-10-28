@@ -41,11 +41,13 @@ export const useAssocJob = create<AssocJobStore>((set, get) => ({
   job: null, shown: null, error: '',
   submit: async request => {
     set({ error: '' });
+    // The session this run belongs to: an import while it is submitted or running drops it (never saved there).
+    const born = hubGeneration();
     let job: AssocJob;
     try { job = await submitAssoc(request); }
-    catch (e) { set({ error: String((e as Error).message ?? e).replace(/^API error \d+: /, '') }); return; }
+    catch (e) { if (born === hubGeneration()) set({ error: String((e as Error).message ?? e).replace(/^API error \d+: /, '') }); return; }
+    if (born !== hubGeneration()) return;
     set({ job });
-    const born = hubGeneration();
     if (timer) clearTimeout(timer);
     const poll = async () => {
       const current = get().job;
@@ -55,6 +57,7 @@ export const useAssocJob = create<AssocJobStore>((set, get) => ({
         if (get().job?.job_id !== next.job_id || born !== hubGeneration()) return;
         set({ job: next });
         if (!LIVE.has(next.status)) {
+          if (born !== hubGeneration()) return;
           if (next.status !== 'cancelled') remember(next, request);
           if (next.status === 'complete') set({ shown: next.job_id });
           return;

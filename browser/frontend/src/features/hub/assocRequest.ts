@@ -53,8 +53,21 @@ export function setLabel(set: FeatureSet): string {
   return `${set.type.plural} · ${src}`;
 }
 
-/** Every hub set as an A/B choice: scan sets by id (the backend reads the scan), browser sets with their hits in view. */
-export function setChoices(sets: FeatureSet[], anchors: AnchorSet[]): SetChoice[] {
+/** Where a browser set was computed: the view it is listed in, or its recorded regions (`chrom:start-end`). */
+function coverageOf(set: FeatureSet, view?: { chrom: string; start: number; end: number }): Array<[string, number, number]> | undefined {
+  if (set.coverage.territory === 'regions' && set.coverage.ref) {
+    const m = /^(.+):(\d+)-(\d+)$/.exec(set.coverage.ref);
+    if (m) return [[m[1], Number(m[2]), Number(m[3])]];
+  }
+  return view ? [[view.chrom, Math.floor(view.start), Math.ceil(view.end)]] : undefined;
+}
+
+/** Placed anchors only: an assembly anchor that didn't lift has no position on this genome. */
+export const placedAnchors = (a: AnchorSet) => a.anchors.filter(p => !p.frame || p.frame.kind !== 'source' || p.source);
+
+/** Every hub set as an A/B choice: scan sets by id (the backend reads the scan), browser sets with their hits in view
+ * and where they were computed (their absence means absence only there). */
+export function setChoices(sets: FeatureSet[], anchors: AnchorSet[], view?: { chrom: string; start: number; end: number }): SetChoice[] {
   const out: SetChoice[] = [];
   for (const set of sets) {
     const scan = isScanSet(set);
@@ -65,13 +78,14 @@ export function setChoices(sets: FeatureSet[], anchors: AnchorSet[]): SetChoice[
       key: set.setId, label: setLabel(set), typeId: set.typeId, kind: scan ? 'scan' : 'inline', hasStates: states || sv,
       why: states || sv ? undefined : 'no per-molecule states in the hub (scan sets and SVs have them)',
       ref: scan ? { kind: 'scan', setId: set.setId, typeId: set.typeId, label: set.type.plural }
-        : { kind: 'inline', setId: set.setId, typeId: set.typeId, label: set.type.plural, hits: hits.map(inlineHit) },
+        : { kind: 'inline', setId: set.setId, typeId: set.typeId, label: set.type.plural, hits: hits.map(inlineHit),
+          ...(coverageOf(set, view) ? { coverage: coverageOf(set, view) } : {}) },
     });
   }
   for (const a of anchors) {
     out.push({ key: `anchors:${a.id}`, label: `Anchor set · ${a.label}`, typeId: 'anchors', kind: 'anchors', hasStates: false,
       why: 'an anchor set has positions only', ref: { kind: 'anchors', label: a.label,
-        anchors: a.anchors.filter(p => !p.frame || p.frame.kind !== 'source' || p.source).map(p => ({ chrom: p.chrom, pos: p.pos,
+        anchors: placedAnchors(a).map(p => ({ chrom: p.chrom, pos: p.pos,
           ...(p.start != null ? { start: p.start } : {}), ...(p.end != null ? { end: p.end } : {}), ...(p.strand ? { strand: p.strand } : {}),
           ...(p.label ? { label: p.label } : {}), ...(p.hitId ? { hitId: p.hitId } : {}) })) } });
   }
@@ -122,14 +136,22 @@ export function choicesFor(mode: AssocMode, all: SetChoice[], marks: SetChoice[]
   }
 }
 
-/** Cluster labels of the shown cluster run, per dataset (C0, C1, …), and the regions it clustered. */
+/** Cluster labels of the shown cluster run, per dataset (C0, C1, …), and the regions it clustered. Reads outside the
+ * run (negative labels) get none; a read two panels of one dataset label differently gets none either. */
 export function clusterGroup(s: BrowserState): { labels: Record<string, Record<string, string>>; regions: Array<[string, number, number]> } {
-  const labels: Record<string, Record<string, string>> = {};
+  const found: Record<string, Record<string, Set<string>>> = {};
   for (const [key, byRead] of Object.entries(s.clusterAssignments ?? {})) {
     const panel = s.panels.find(p => (p.stateKey ?? p.datasetId) === key);
     const ds = panel?.datasetId ?? key;
-    const out = labels[ds] ?? (labels[ds] = {});
-    for (const [read, c] of Object.entries(byRead)) out[read] = `C${c}`;
+    const out = found[ds] ?? (found[ds] = {});
+    for (const [read, c] of Object.entries(byRead)) {
+      if (!Number.isFinite(c) || c < 0) continue;
+      (out[read] ?? (out[read] = new Set())).add(`C${c}`);
+    }
+  }
+  const labels: Record<string, Record<string, string>> = {};
+  for (const [ds, byRead] of Object.entries(found)) {
+    labels[ds] = Object.fromEntries(Object.entries(byRead).filter(([, v]) => v.size === 1).map(([r, v]) => [r, [...v][0]]));
   }
   const regions = (s.clusterPeakRegions ?? []).filter(r => !r.genome).map(r => [r.chrom ?? s.chrom, r.start, r.end] as [string, number, number]);
   return { labels, regions };
@@ -162,7 +184,9 @@ export function buildRequest(draft: AssocDraft, ctx: { all: SetChoice[]; marks: 
   } else if (draft.scope === 'anchors') {
     const set = ctx.anchors.find(x => x.id === draft.anchorSetId);
     if (!set) return { error: 'Choose an anchor set for the scope' };
-    scope = { kind: 'anchors', anchorSetId: set.id, flank: draft.anchorFlank, anchors: set.anchors.map(p => [p.chrom, p.pos] as [string, number]) };
+    const placed = placedAnchors(set);
+    if (!placed.length) return { error: 'None of the anchor set\'s anchors is placed on this genome' };
+    scope = { kind: 'anchors', anchorSetId: set.id, flank: draft.anchorFlank, anchors: placed.map(p => [p.chrom, p.pos] as [string, number]) };
   } else if (draft.scope === 'scan') {
     scope = { kind: 'scan' };
   }
