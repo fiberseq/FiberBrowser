@@ -882,7 +882,9 @@ def placement(row, base: int, live: bool, contig: str) -> dict:
         out["supplementary"] = bool((ll.get("source") or {}).get("supplementary"))
         out["chains"] = sorted({int(seg[2]) for seg in ll.get("segments") or ()})
         out["minus_chain"] = any(seg[3] == "-" for seg in ll.get("segments") or ())
-        out["segments"] = [[s[0] + base, s[1] + base] for s in ll.get("segments") or ()]
+        out["segments"] = [[s[0] + base, s[1] + base, int(s[2])] for s in ll.get("segments") or ()]
+        out["molecular"] = [[int(m[0]) + base, int(m[1]) + base, int(m[2]), int(m[3])]
+                            for m in ll.get("molecular_spans") or ()]
     return out
 
 
@@ -980,24 +982,41 @@ def decoded(bam_path, contig, start, qname, loader_options) -> bool:
 
 
 def split_blocks(p: dict, g_split: int) -> list:
-    """A live placement cut where its segments leave a target gap of at least
-    ``g_split`` (live lift keeps such runs on one row; liftbam writes them as
-    separate records): one placement per block, with its calls, points,
-    connectors and insertions."""
+    """A live placement cut into its lifted records: live lift keeps a read's runs (one liftbam record each)
+    on one row, as ``segments``. Two segments of different chains join when both their target gap and
+    their read gap (from ``molecular`` spans) stay below ``g_split``: liftbam's grouping continues a
+    record across colinear chains, live lift's runs do not. One placement per block, with its calls,
+    points, connectors and insertions."""
     segs = sorted(p.get("segments") or [[p["start"], p["end"]]])
+
+    def molecules(a, b):
+        ms = [m for t0, t1, m0, step in p.get("molecular") or () if t0 < b and t1 > a
+              for m in (m0, m0 + step * (t1 - t0 - 1))]
+        return (min(ms), max(ms)) if ms else None
+
     blocks = []
-    for a, b in segs:
-        if blocks and a - blocks[-1][1] < g_split:
-            blocks[-1][1] = max(blocks[-1][1], b)
-        else:
-            blocks.append([a, b])
+    for seg in segs:
+        a, b = seg[0], seg[1]
+        if blocks:
+            last = blocks[-1]
+            joins = a - last[1] < g_split
+            if joins and len(seg) > 2 and last[2] is not None:
+                joins = seg[2] != last[2]
+                ra, rb = molecules(last[0], last[1]), molecules(a, b)
+                if joins and ra is not None and rb is not None:
+                    joins = max(rb[0] - ra[1], ra[0] - rb[1]) - 1 < g_split
+            if joins:
+                last[1], last[2] = max(last[1], b), (seg[2] if len(seg) > 2 else None)
+                continue
+        blocks.append([a, b, seg[2] if len(seg) > 2 else None])
     if len(blocks) < 2:
         return [p]
     out = []
-    for a, b in blocks:
+    for a, b, _chain in blocks:
         def inside(x0, x1):
             return (x0 < b and x1 > a) or (x0 == x1 and a <= x0 <= b)
-        q = dict(p, start=a, end=b, segments=[s for s in segs if s[0] < b and s[1] > a])
+        q = dict(p, start=a, end=b, segments=[s for s in segs if s[0] < b and s[1] > a],
+                 molecular=[m for m in p.get("molecular") or () if m[0] < b and m[1] > a])
         q["calls"] = {}
         for group, by_call in p["calls"].items():
             kept = {c: [pt for pt in parts if inside(*pt)] for c, parts in by_call.items()}
@@ -1025,10 +1044,21 @@ def source_cuts_in_target(handle, contig, cuts, chains) -> list:
             hit = next(((p.t_end - 1 - (x - p.q_start)) if p.strand == "-" else (p.t_start + (x - p.q_start))
                         for p in pieces if p.chain in chains and p.q_start <= x < p.q_end), None)
             ends.append(hit)
-        if None in ends:
-            continue
-        a, b = ends
-        lo, hi = (a + 1, b) if b > a else (b + 1, a)
+        if None not in ends:
+            a, b = ends
+            lo, hi = (a + 1, b) if b > a else (b + 1, a)
+        else:  # a flank in a source-only stretch: the deleted bases the map places
+            with handle.lock:
+                pieces = handle.map.source_to_target(contig, d0, d1)
+            spans = []
+            for p in pieces:
+                s, e = max(d0, p.q_start), min(d1, p.q_end)
+                if p.chain in chains and e > s:
+                    spans.append((p.t_end - (e - p.q_start), p.t_end - (s - p.q_start)) if p.strand == "-"
+                                 else (p.t_start + (s - p.q_start), p.t_start + (e - p.q_start)))
+            if not spans:
+                continue
+            lo, hi = min(x for x, _y in spans), max(y for _x, y in spans)
         if hi > lo:
             out.append([lo, hi])
     return out
