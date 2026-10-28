@@ -206,3 +206,66 @@ def test_a_fit_without_patterns_or_centroids_returns_its_cohort(monkeypatch):
     assert 'cluster_centroids' not in fit and 'cluster_patterns' not in fit
     assert fit['cluster_metric_cohort'] == COHORT
     assert state.datasets['ds1'].cluster_feature_settings['metric_cohort'] == COHORT
+
+
+# ── sorts that rebuild the clustering's features ───────────────────────────────────────────────────────────────────
+
+def _spy_features(monkeypatch, module):
+    """Record the feature rows ``module``'s extract_features_from_compact returns (by read id)."""
+    real = module.extract_features_from_compact
+    seen = {}
+
+    def spy(reads, *args, **kwargs):
+        out = real(reads, *args, **kwargs)
+        X, ids = out[0], out[1]
+        seen.update({str(rid).split(':')[-1]: round(float(row[0]), 4) for rid, row in zip(ids, X)})
+        return out
+
+    monkeypatch.setattr(module, 'extract_features_from_compact', spy)
+    return seen
+
+
+def test_sort_by_projection_ranks_against_the_sent_cohort(monkeypatch):
+    """Sort › By projection orders reads along the Projection tab's map: the same cohort ranks its metric columns."""
+    from models.requests import ProjectionSortSettings, SortReadsRequest
+    from services import clustering_endpoint
+    from services.filtering_endpoint import sort_reads_for_request
+    state = _State()
+    seen = _spy_features(monkeypatch, clustering_endpoint)
+    settings = dict(peak_regions=PEAKS, cluster_feature_rules=[METRIC_RULE], cluster_assignments={'ds1': dict(VIEW)})
+    res = sort_reads_for_request(state, SortReadsRequest(
+        dataset_ids=['ds1'], sort_by='projection', cluster_assignments={'ds1': dict(VIEW)},
+        projection=ProjectionSortSettings(cluster_metric_cohort=COHORT, **settings)), chrom='chr1', start=0, end=100)
+    assert sorted(res['results']['ds1']['read_sort_order']) == sorted(VIEW)
+    assert seen['r200'] == 0.35
+    # None sent (explicit peaks): the view's own reads, as before.
+    seen.clear()
+    sort_reads_for_request(state, SortReadsRequest(
+        dataset_ids=['ds1'], sort_by='projection', cluster_assignments={'ds1': dict(VIEW)},
+        projection=ProjectionSortSettings(**settings)), chrom='chr1', start=0, end=100)
+    assert seen['r200'] == round(7 / 12, 4)
+
+
+def test_sort_by_projection_without_settings_uses_the_stored_cohort(monkeypatch):
+    from models.requests import SortReadsRequest
+    from services import clustering_endpoint
+    from services.filtering_endpoint import sort_reads_for_request
+    state = _State()
+    _fit(state)
+    seen = _spy_features(monkeypatch, clustering_endpoint)
+    sort_reads_for_request(state, SortReadsRequest(dataset_ids=['ds1'], sort_by='projection',
+                                                   cluster_assignments={'ds1': dict(VIEW)}),
+                           chrom='chr1', start=0, end=100)
+    assert seen['r200'] == 0.35
+
+
+def test_similarity_sort_uses_the_stored_cohort(monkeypatch):
+    """Sort › Similarity rebuilds the stored clustering's features: with its rules, threshold and fitted cohort."""
+    from services import read_sorting
+    state = _State()
+    _fit(state)
+    seen = _spy_features(monkeypatch, read_sorting)
+    out = read_sorting.sort_similarity_for_dataset(state, 'ds1', 'chr1', 0, 100, False,
+                                                   cluster_assignments_override=dict(VIEW))
+    assert sorted(out['cluster_order']) == [0, 1, 2]
+    assert seen['r200'] == 0.35

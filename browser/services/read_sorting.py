@@ -188,6 +188,9 @@ def sort_similarity_for_dataset(
                         cluster_feature_rules=feature_rules,
                         cluster_rule_context=build_cluster_rule_context(state, chrom_t, start, end),
                     )
+                # Molecule metric columns rank against the cohort the clustering was fitted on, not these reads.
+                if settings.get("metric_cohort"):
+                    feature_kwargs["metric_cohort"] = settings["metric_cohort"]
                 x, read_ids, _peak_widths, _ = extract_features_from_compact(
                     # Saved footprint-class features look reads up by dataset
                     # and chromosome (as cluster_all tags them).

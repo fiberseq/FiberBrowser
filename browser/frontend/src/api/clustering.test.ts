@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { assignToClusters, autoCullClusters, clusterAllReads, clusterMatchedViews, dissolveCluster, fetchClusterProjection, fetchClusterVPlot } from './clustering';
+import { sortReads } from './readOperations';
 
 describe('clustering API client', () => {
   it('requests early preparation only when explicitly configured', async () => {
@@ -265,6 +266,21 @@ describe('merge and projection requests', () => {
     // Callers that pass no options send none either.
     await dissolveCluster('chr1', 0, 100, 1, assignments, peaks, ['ds1'], false);
     expect(JSON.parse(String(fetchMock.mock.calls.at(-1)?.[1]?.body))).not.toHaveProperty('cluster_metric_cohort');
+  });
+
+  it('Sort by projection sends the fit\'s metric cohort with the map settings, as the Projection tab does', async () => {
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => ({
+      ok: true, json: async () => ({ results: {} }),
+    }) as Response);
+    vi.stubGlobal('fetch', fetchMock);
+    const cohort = { 'nuc.nrl': { values: [180, 190, 200, 210], counts: [1, 1, 1, 1] } };
+    const map = { peakRegions: [{ start: 0, end: 100, mode: 'cluster_rule:m' }], clusterAssignments: { ds1: { r1: 0, r2: 1 } } };
+    for (const metricCohort of [cohort, {}]) {
+      await sortReads('chr1', 0, 100, false, ['ds1'], 'projection', { projection: { ...map, metricCohort } });
+    }
+    const bodies = fetchMock.mock.calls.map(call => JSON.parse(String(call[1]?.body)));
+    expect(bodies[0].projection.cluster_metric_cohort).toEqual(cohort);
+    expect(bodies[1].projection).not.toHaveProperty('cluster_metric_cohort');
   });
 });
 

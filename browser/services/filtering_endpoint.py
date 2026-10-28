@@ -289,6 +289,9 @@ def _sort_projection_for_request(
             sample_seed=req.sample_seed,
             cluster_assignments=map_assignments,
             max_reads=settings.max_reads if settings else None,
+            # Metric columns rank against the fit's cohort, as on the Projection tab: the one sent, else (no
+            # explicit peaks) the stored clustering's.
+            cluster_metric_cohort=settings.cluster_metric_cohort if settings else None,
         ),
         chrom=chrom,
         start=start,

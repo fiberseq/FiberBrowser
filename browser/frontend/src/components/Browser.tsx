@@ -1890,6 +1890,8 @@ export function Browser() {
               // even when only selected or focused clusters are sorted.
               clusterAssignments: Object.fromEntries(Object.entries(sentAssignments)
                 .filter((entry): entry is [string, Record<string, number>] => !!entry[1])),
+              // Metric columns rank against the fit's cohort, as the Projection tab's map does.
+              metricCohort: sortState.clusterMetricCohort,
             } : undefined,
             // A panel on another assembly: its reference (chromosomes, genes).
             panelGenome: group.genome ?? null,

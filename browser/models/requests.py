@@ -330,6 +330,8 @@ class ProjectionSortSettings(BaseModel):
     # focused clusters, a filter): only those reads are ordered, but along the
     # map of all of them, so the order matches the map on screen.
     cluster_assignments: Optional[Dict[str, Dict[str, int]]] = None
+    # The fit's molecule metric cohort, as the Projection tab sends it (ProjectionRequest.cluster_metric_cohort).
+    cluster_metric_cohort: Optional[Dict[str, Any]] = None
 
 
 class SortReadsRequest(BaseModel):
