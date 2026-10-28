@@ -6,6 +6,7 @@ import { peakScanScope } from '../utils/peakScanScope';
 import { waitForViewIdle } from '../utils/viewIdle';
 import { AUTO_SCAN_BUDGET_MS, armScanBudget, scanStoppedNote } from '../utils/scanBudget';
 import { clusterBasisRunner } from '../utils/clusterRunExtensions';
+import { clusterRunReporter } from '../utils/clusterRunReporter';
 import { hasOrdinaryPeakSelection, isScannedRule } from '../utils/matchedRegions';
 import { linkChoseViewport } from '../utils/sessionLinks';
 import { registerClusterRunner, registerScanRunner } from '../utils/clusterRunner';
@@ -1214,21 +1215,17 @@ export function Browser() {
     if (datasets.length === 0) return;
     // This run's outcome replaces the last one's (beside the toolbar, not a global banner that outlives it).
     const resultRun = beginRun('cluster');
-    // (`panelIds`: the panels it clustered; the line says "(panel closed)" once they have all gone.)
-    const report = (tone: 'error' | 'note' | 'done', text: string, panelIds?: string[]) =>
-      setRunResult('cluster', { tone, text, ...(panelIds?.length ? { panelIds } : {}) }, resultRun);
-
     // The plan the toolbar showed (utils/clusterTargets.ts clusterRunPlan: what the run clusters on, and which panels),
     // followed here: the Cluster tooltip, the Panels chip and this result line say what this run does (round 3, R6/B5).
     const referenceName = (genome: string | null) => (genome ? panelGenomeLabel(usePanelGenomeStore.getState().genomes[genome], genome) : (useBrowserStore.getState().currentGenome || 'the main genome'));
     const targetPlan = clusterRunPlan(useBrowserStore.getState(), referenceName);
+    const report = clusterRunReporter(resultRun, targetPlan.advice);
     const { basis } = targetPlan;
     // Refused before any request (the feature path too) rather than clustering other panels than the targeted ones.
     if (basis.regions.length > 0 && targetPlan.refusal) {
       report('error', targetPlan.refusal);
       return;
     }
-    if (targetPlan.advice) setRunResult('cluster', { tone: 'note', ...targetPlan.advice }, resultRun);
     const extensionRun = clusterBasisRunner(basis.kind);
     if (extensionRun) {
       ++clusterRunRef.current;
