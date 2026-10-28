@@ -1414,45 +1414,49 @@ export async function executeBrowserAction(
     const changedKeys: string[] = [];
     const branch = store.activeClusterTreeNodeId ?? null;
     let stale = 0;
-    // Each round's panels get their own results back.
-    for (const round of rounds) {
-      const res = await dissolveCluster(
-        view.chrom, view.start, view.end, clusterId,
-        round.assignments,
-        peakRegions,
-        Object.keys(round.keyByDataset),
-        store.spanningOnly,
-        store.subnucleosomalThreshold,
-        store.accessibilityThreshold,
-        store.analysisSampleSeed,
-        store.clusterFeatureRules,
-        view.genome,
-        // Metric columns rank against the fit's cohort, as the fit did.
-        { metricCohort: store.clusterMetricCohort },
-      );
-      // The view, branch or clustering changed while this ran: it no longer applies.
-      if (!copilotRoundStillCurrent(round, view, branch)) { stale += Object.keys(round.keyByDataset).length; continue; }
-      for (const [dsId, result] of Object.entries(res.results ?? {})) {
-        const sk = round.keyByDataset[dsId];
-        if (!sk || !result) continue;
-        const now = useBrowserStore.getState();
-        now.setClusterAssignments(sk, result.assignments || {});
-        const currentOrder = now.clusterOrder[sk];
-        if (currentOrder) now.setClusterOrder(sk, currentOrder.filter(c => c !== clusterId));
-        if (now.clusterFocus[sk]?.has(clusterId)) now.setClusterFocus(sk, null, { record: false });
-        now.pruneClusterSelection(sk, [clusterId]);
-        dissolvedAny = true;
-        changedKeys.push(sk);
+    // Each round's panels get their own results back. Whatever was applied (even if a later round fails) is one
+    // undo step and can be unmerged, as auto_cull_clusters does (Codex review, stabilize 3 group B round 1).
+    try {
+      for (const round of rounds) {
+        const res = await dissolveCluster(
+          view.chrom, view.start, view.end, clusterId,
+          round.assignments,
+          peakRegions,
+          Object.keys(round.keyByDataset),
+          store.spanningOnly,
+          store.subnucleosomalThreshold,
+          store.accessibilityThreshold,
+          store.analysisSampleSeed,
+          store.clusterFeatureRules,
+          view.genome,
+          // Metric columns rank against the fit's cohort, as the fit did.
+          { metricCohort: store.clusterMetricCohort },
+        );
+        // The view, branch or clustering changed while this ran: it no longer applies.
+        if (!copilotRoundStillCurrent(round, view, branch)) { stale += Object.keys(round.keyByDataset).length; continue; }
+        for (const [dsId, result] of Object.entries(res.results ?? {})) {
+          const sk = round.keyByDataset[dsId];
+          if (!sk || !result) continue;
+          const now = useBrowserStore.getState();
+          now.setClusterAssignments(sk, result.assignments || {});
+          const currentOrder = now.clusterOrder[sk];
+          if (currentOrder) now.setClusterOrder(sk, currentOrder.filter(c => c !== clusterId));
+          if (now.clusterFocus[sk]?.has(clusterId)) now.setClusterFocus(sk, null, { record: false });
+          now.pruneClusterSelection(sk, [clusterId]);
+          dissolvedAny = true;
+          changedKeys.push(sk);
+        }
+      }
+    } finally {
+      // As the Clusters panel does: the reassignment model still has the dissolved cluster.
+      if (dissolvedAny) {
+        useBrowserStore.getState().setDynamicClustering(false);
+        recordAppliedMerge(before, changedKeys, { label: `Delete C${clusterId}`, kind: 'dissolve' });
+        // Its one undo step (the focus it cleared is part of it; stabilize 3, item 2).
+        useBrowserStore.getState().pushSnapshot(`Delete C${clusterId}`, { kind: 'clustering' });
       }
     }
     if (stale === keys.length) return `dissolve_cluster: the clustering changed while it ran; nothing was applied.`;
-    // As the Clusters panel does: the reassignment model still has the dissolved cluster.
-    if (dissolvedAny) {
-      useBrowserStore.getState().setDynamicClustering(false);
-      recordAppliedMerge(before, changedKeys, { label: `Delete C${clusterId}`, kind: 'dissolve' });
-      // Its one undo step (the focus it cleared is part of it; stabilize 3, item 2).
-      useBrowserStore.getState().pushSnapshot(`Delete C${clusterId}`, { kind: 'clustering' });
-    }
     return `Dissolved cluster ${clusterId} in ${keys.length - stale} clustered panel(s)`
       + `${skippedOtherLoci ? ` (${skippedOtherLoci} panel(s) at another locus left as they are)` : ''}`
       + `${stale ? `; ${stale} panel(s) changed meanwhile and were left as they are` : ''}.`;

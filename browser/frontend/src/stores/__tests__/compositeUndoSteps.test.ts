@@ -98,6 +98,31 @@ describe('one undo step per cluster action (stabilize 3, item 2)', () => {
     expect(useBrowserStore.getState().clusterAssignments.ds1).toEqual({ a: 0, b: 1, c: 2 });
   });
 
+  it('Codex B r1: a Copilot dissolve whose second round fails keeps what the first applied undoable, as one step', async () => {
+    const { executeBrowserAction } = await import('../../actions/browserActions');
+    const panel = (id: string, stateKey: string) => ({ id, stateKey, datasetId: 'ds1', contentType: 'dataset', subTracks: [], collapsed: false, linkGroup: null, layoutRow: 0 });
+    useBrowserStore.setState({
+      chrom: 'chr1', start: 1000, end: 2000,
+      datasets: [{ id: 'ds1', label: 'One', available_layers: { tf: true, nuc: true } }],
+      panels: [panel('p1', 'first'), panel('p2', 'second')], selectedDatasets: new Set(),
+      clusterAssignments: { first: { a: 0, b: 1, c: 2 }, second: { a: 0, b: 1, c: 2 } },
+      clusterOrder: { first: [0, 1, 2], second: [0, 1, 2] },
+      clusterFocus: { first: new Set([1]), second: new Set([1]) },
+      clusterPeakRegions: [{ start: 1100, end: 1200, mode: 'tf' }], dynamicClustering: true,
+      _historyStack: [], _historyPointer: -1, _lastRestoreTime: 0,
+    } as never);
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(ok({ results: { ds1: { assignments: { a: 0, b: 0, c: 2 } } } }))
+      .mockRejectedValueOnce(new Error('second round failed')));
+    await expect(executeBrowserAction({ type: 'dissolve_cluster', cluster_id: 1 })).rejects.toThrow('second round failed');
+    const s = useBrowserStore.getState();
+    expect(s.clusterAssignments.first.b).toBe(0);
+    expect(labels().filter(l => !l.startsWith('Before '))).toEqual(['Delete C1']);
+    expect(s.dynamicClustering).toBe(false);
+    s.undo();
+    expect(useBrowserStore.getState().clusterAssignments.first.b).toBe(1);
+  });
+
   it('Copilot focus_cluster over two panels is one step', async () => {
     const { executeBrowserAction } = await import('../../actions/browserActions');
     seedClusters(null);
