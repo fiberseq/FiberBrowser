@@ -118,15 +118,22 @@ def test_graph_mode_counts_carriers_only(computed):
     loci = [dict(LOCI[0], paths={'p1': dict(status='carried', hap='MAT', datasets=['ds0'])}),
             dict(LOCI[1], paths={'p1': dict(status='absent', hap='MAT', datasets=['ds0'])}),
             dict(LOCI[2], paths={'p1': dict(status='unresolved', hap='MAT', datasets=['ds0'])}),
-            dict(LOCI[3], paths={'p2': dict(status='carried', hap='PAT', datasets=['ds0'])})]
+            dict(LOCI[3], paths={'p2': dict(status='carried', hap='PAT', datasets=['ds0'])}),
+            dict(LOCI[3], key='partial', paths={'p1': dict(status='partial', hap='MAT', datasets=['ds0'])})]
     obs = [dict(obsId='g', label='MAT path', datasetId='ds0', kind='graph', graph=dict(hap='MAT'))]
     res = overlay(computed, dict(loci=loci, layer='regular', align='left', flank=500, observations=obs, pileMax=0))
     s = res['series'][0]
     assert res['graphMode'] is True
-    assert s['loci'] == 1
+    assert s['loci'] == 2                      # carried, and partly carried (its missing columns have no molecules)
     assert s['lociSkipped'] == {'absent': 1, 'unresolved': 2}
-    alone = overlay(computed, dict(loci=[loci[0]], layer='regular', align='left', flank=500, observations=obs, pileMax=0))['series'][0]
+    alone = overlay(computed, dict(loci=[loci[0], loci[4]], layer='regular', align='left', flank=500, observations=obs, pileMax=0))['series'][0]
     assert s['den'] == alone['den'] and s['num'] == alone['num']
+    # a linear panel of a haplotype the columns name follows the same rule; one they don't name is measured
+    lin = overlay(computed, dict(loci=loci, layer='regular', align='left', flank=500, pileMax=0,
+                                 observations=[dict(obsId='m', label='MAT panel', datasetId='ds0', kind='linear', liftHap='MAT'),
+                                               dict(obsId='n', label='native', datasetId='ds1', kind='linear')]))['series']
+    assert lin[0]['lociSkipped'] == {'absent': 1, 'unresolved': 1} and lin[0]['loci'] == 3   # the PAT-only locus has no MAT status: measured
+    assert lin[1]['lociSkipped'] == {} and lin[1]['loci'] == 5
 
 
 def test_pile_is_a_stable_capped_sample(computed):

@@ -53,18 +53,21 @@ function Profile({ result, series, colours, svgRef, facet }: { result: OverlayRe
   svgRef?: React.MutableRefObject<SVGSVGElement | null>; facet?: boolean }) {
   const [hover, setHover] = useState<number | null>(null);
   const n = result.series[0]?.x.length ?? 0;
-  const W = 520, H = facet ? 120 : 190, L = 36, R = facet ? 10 : 70, T = 10, DEN = 36, B = 22;
+  const W = 520, H = facet ? 120 : 190, L = 36, R = facet ? 10 : 96, T = 10, DEN = 36, B = 22;
   const plotH = H - T - B - DEN;
   const maxDen = Math.max(1, ...series.flatMap(s => s.den));
+  // The density axis fits the data (a step of 0.05 / 0.1 / 0.25 / 0.5 / 1), so low densities stay readable.
+  const top = Math.max(0, ...series.flatMap(s => s.x.map((_v, i) => density(s, i) ?? 0)));
+  const ymax = [0.05, 0.1, 0.25, 0.5, 1].find(v => top <= v) ?? 1;
   const x = (i: number) => L + (i + 0.5) / Math.max(1, n) * (W - L - R);
-  const y = (v: number) => T + (1 - v) * plotH;
+  const y = (v: number) => T + (1 - v / ymax) * plotH;
   const ticksX = Array.from({ length: 5 }, (_v, k) => Math.round(k * (n - 1) / 4));
   return <svg ref={el => { if (svgRef) svgRef.current = el; }} viewBox={`0 0 ${W} ${H}`} className="w-full max-w-[640px]" role="img"
     aria-label={`${OVERLAY_LAYERS.find(l => l.key === result.layer)?.label} density by ${result.xLabel}`}
     onMouseLeave={() => setHover(null)}
     onMouseMove={e => { const r = (e.currentTarget as SVGSVGElement).getBoundingClientRect(); const px = (e.clientX - r.left) / r.width * W;
       const i = Math.round((px - L) / (W - L - R) * n - 0.5); setHover(i >= 0 && i < n ? i : null); }}>
-    {[0, 0.5, 1].map(t => <g key={t}><line x1={L} x2={W - R} y1={y(t)} y2={y(t)} stroke="currentColor" strokeOpacity={0.12} />
+    {[0, ymax / 2, ymax].map(t => <g key={t}><line x1={L} x2={W - R} y1={y(t)} y2={y(t)} stroke="currentColor" strokeOpacity={0.12} />
       <text x={L - 4} y={y(t) + 3} textAnchor="end" className="fill-current text-[9px] opacity-70">{t}</text></g>)}
     <text x={4} y={T + 8} className="fill-current text-[9px] opacity-70">density</text>
     {series.map(s => {
@@ -74,7 +77,8 @@ function Profile({ result, series, colours, svgRef, facet }: { result: OverlayRe
       const lastI = [...s.x.keys()].reverse().find(i => density(s, i) != null);
       return <g key={s.obsId}>
         {segs.filter(g => g.length).map((g, k) => <polyline key={k} fill="none" stroke={colours[s.obsId]} strokeWidth={2} points={g.join(' ')} />)}
-        {!facet && lastI != null && series.length <= 4 && <text x={x(lastI) + 5} y={y(density(s, lastI)!) + 3} className="fill-current text-[9px]">{s.label}</text>}
+        {!facet && lastI != null && series.length <= 4 && <text x={x(lastI) + 5} y={y(density(s, lastI)!) + 3} className="fill-current text-[9px]">
+          {s.label.length > 20 ? `…${s.label.slice(-19)}` : s.label}</text>}
       </g>;
     })}
     {/* Denominators: molecules measured per position, each observation its own row of bars. */}

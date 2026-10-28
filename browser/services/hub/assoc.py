@@ -435,6 +435,9 @@ def _run_m2_phasing(state, defn, regions, stage):
             rows += [dict(r, frame=frame, metric=name, hitId=hit_at.get((r.get('chrom'), r.get('pos'))))
                      for r in _m2_rows(met)]
     limits += _m2_limits(res, len(anchors))
+    if len(anchors) < 10:
+        limits.append(f'Only {len(anchors)} anchors in the scope: too few to say whether {A.label} phase their flanks in '
+                      'general (widen the scope: a BED of regions, or a genome scan).')
     if len(decoded) > 1:
         inputs['note'] = f'The nucleosome repeat length and prior come from {names.get(first, first)}\'s calibration.'
     return dict(result=res, inputs=inputs, effects=effects, anchors=rows[:MAX_ROWS], limits=limits, postSelection=check)
@@ -705,6 +708,10 @@ def _run_m4(state, defn, regions, stage):
             limits.append(f'{name}: {r.get("message") or r.get("status")}')
         elif r.get('global_p') is None and r.get('message'):
             limits.append(f'{name}: {r["message"]}')
+    n_a = ab.get('n_a_used') or 0
+    if 0 < n_a < 10:
+        limits.append(f'Only {n_a} A hits in the territory: a p-value from so few relocated hits says little about '
+                      'whether B clusters near A in general (scan more of the genome, or use a BED of regions).')
     effects = []
     for name, r in (('A→B', ab), ('B→A', ba)):
         rows = r.get('rows') or []

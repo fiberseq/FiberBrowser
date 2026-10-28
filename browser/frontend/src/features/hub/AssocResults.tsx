@@ -114,9 +114,9 @@ function EffectTable({ effects, mode }: { effects: AssocEffect[]; mode: string }
       title={e.detail ? Object.entries(e.detail).filter(([, v]) => v != null).map(([k, v]) => `${k}: ${typeof v === 'number' ? fmt(v) : String(v)}`).join('\n') : undefined}>
       <td className="px-1 text-left">{e.label}{e.descriptive && <span className="ml-1 text-[10px] text-ink-muted">(descriptive)</span>}
         {e.scale && <span className="ml-1 text-[10px] text-ink-muted">· {e.scale}</span>}</td>
-      <td className="px-1 text-right font-medium">{fmt(e.estimate)}</td>
-      <td className="px-1 text-right text-ink-secondary">{ci(e)}</td>
-      <td className="px-1 text-right">{fmtP(e.p)}</td>
+      <td className="whitespace-nowrap px-1 text-right font-medium">{fmt(e.estimate)}</td>
+      <td className="whitespace-nowrap px-1 text-right text-[10px] text-ink-secondary">{ci(e)}</td>
+      <td className="whitespace-nowrap px-1 text-right">{fmtP(e.p)}</td>
       <td className="px-1 text-right text-ink-secondary">{e.n ?? ''}</td>
     </tr>)}</tbody>
   </table>;

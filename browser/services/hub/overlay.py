@@ -12,8 +12,11 @@ segments. A molecule that doesn't reach x, or is low-information there, is never
 DGP2 §6.2 L2, NUC §6.3). Molecules come from the observation's cohort (one record per physical molecule; live
 outputs, a bound scan's rows, or an annotated BAM's groups: ``services.nuc.observations.observation_cohort``).
 
-Graph mode: a graph-path observation counts a locus only when the hub hit's graph columns say that path **carries** it;
-paths where it is absent or unresolved are left out of numerator and denominator, and counted (``lociSkipped``).
+Graph mode: a graph-path observation counts a locus only when the hub hit's graph columns say that path **carries** it
+(whole or in part: a partial carrier's missing columns have no molecules there, so they add nothing to the
+denominator); paths where it is absent or unresolved are left out of numerator and denominator, and counted
+(``lociSkipped``). A
+linear observation whose haplotype (or dataset) the graph columns name is held to the same rule.
 A lifted observation measures the locus through its haplotype's lift pieces (the anchor projected onto the source
 contig; a ``-`` piece turns the orientation).
 
@@ -222,14 +225,15 @@ def overlay(state, request: dict) -> dict:
             a0, a1, anchor = int(locus['start']), int(locus['end']), int(locus.get('anchor', locus['start']))
             a1 = max(a1, a0 + 1)
             minus = locus.get('strand') == '-'
-            if obs.get('kind') == 'graph':
-                status = _path_status(locus, obs)
-                if status is None and locus.get('paths'):
-                    skipped['unresolved'] = skipped.get('unresolved', 0) + 1
-                    continue
-                if status is not None and status != 'carried':
-                    skipped[status] = skipped.get(status, 0) + 1
-                    continue
+            # Carriers only: a path (or a dataset's panel) whose sequence lacks the locus, or can't be resolved, is
+            # left out, never measured as absence (a graph path with no status for a locus that has graph columns too).
+            status = _path_status(locus, obs)
+            if status is None and obs.get('kind') == 'graph' and locus.get('paths'):
+                skipped['unresolved'] = skipped.get('unresolved', 0) + 1
+                continue
+            if status is not None and status not in ('carried', 'partial'):
+                skipped[status] = skipped.get(status, 0) + 1
+                continue
             # The locus window (target coordinates), then the observation's records over it.
             if align == 'anchor':
                 w0, w1 = anchor - flank, anchor + flank + 1
