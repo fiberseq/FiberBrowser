@@ -10,6 +10,7 @@ let activeApiRequests = 0;
 let apiActivity = 0;
 let activeReadRequests = 0;
 let readActivity = 0;
+const readIdleListeners = new Set<() => void>();
 const backgroundSyncPaths = new Set([
   '/api/render/live_state', '/api/tabs/heartbeat', '/api/jupyter/settings/sync',
   '/api/jupyter/browser_order', '/api/jupyter/sync_peaks', '/api/regions/catalog',
@@ -26,6 +27,25 @@ export function readIdleToken(): number | undefined {
   return activeReadRequests === 0 ? readActivity : undefined;
 }
 
+/** Auxiliary viewport work can start as soon as visible read bodies finish.
+ * Unlike speculative prefetch this needs no quiet interval. Abort releases a
+ * superseded view's waiter without starting its request. */
+export function waitForReadRequests(signal: AbortSignal): Promise<void> {
+  return new Promise(resolve => {
+    const finish = () => {
+      readIdleListeners.delete(check);
+      signal.removeEventListener('abort', finish);
+      resolve();
+    };
+    const check = () => {
+      if (signal.aborted || activeReadRequests === 0) finish();
+    };
+    readIdleListeners.add(check);
+    signal.addEventListener('abort', finish, { once: true });
+    check();
+  });
+}
+
 async function withApiActivity<T>(work: () => Promise<T>, options?: RequestInit, url = ''): Promise<T> {
   if ((options as RequestInit & { priority?: string })?.priority === 'low') return work();
   const path = new URL(url || '/', 'http://localhost').pathname;
@@ -37,7 +57,10 @@ async function withApiActivity<T>(work: () => Promise<T>, options?: RequestInit,
   try { return await work(); }
   finally {
     activeApiRequests--; apiActivity++;
-    if (isRead) { activeReadRequests--; readActivity++; }
+    if (isRead) {
+      activeReadRequests--; readActivity++;
+      if (activeReadRequests === 0) for (const listener of readIdleListeners) listener();
+    }
   }
 }
 

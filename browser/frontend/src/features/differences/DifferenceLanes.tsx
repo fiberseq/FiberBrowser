@@ -1,4 +1,4 @@
-import { fetchJson } from '../../api/sharedFetch';
+import { fetchJson, waitForReadRequests } from '../../api/sharedFetch';
 import type { WorkspaceCalls } from './api';
 import { setupHighDpiCanvas, useCanvasRenderVersion } from '../../utils/canvasUtils';
 import { usePanOffsetTransform } from '../../hooks/usePanOffsetTransform';
@@ -66,7 +66,11 @@ export function DifferenceLanes({ panel, dataset, width, gutter = 0, height }: {
     setData(null); setError(''); setBusy(false); navigation.current?.abort();
     if (!enabled || !sources.assembly) return;
     const controller = new AbortController();
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
+      // Map queries contend with read projection. Keep the pan debounce, then
+      // yield to visible reads through body decode, without delaying any panel's draw.
+      await waitForReadRequests(controller.signal);
+      if (controller.signal.aborted) return;
       void getDifferences(query, controller.signal).then(r => { if (!controller.signal.aborted) { rememberDifferences(r); setData(r); } })
         .catch(e => { if (!controller.signal.aborted) setError(String(e.message ?? e)); });
     }, 140);

@@ -399,8 +399,9 @@ GZIP_COMPRESSLEVEL = 6
 app.add_middleware(OffloopGZipMiddleware, minimum_size=1000, compresslevel=GZIP_COMPRESSLEVEL,
                    # A 9 MB read response takes ~260 ms at level 6, ~41 ms at
                    # level 1. The extra 0.5 MB is cheap across desktop loopback.
+                   # Every local browser benefits, including CLI launches.
                    # Remote requests retain level 6, including desktop shares.
-                   loopback_compresslevel=1 if os.environ.get("FIBERBROWSER_EXIT_WITH_PARENT") else None)
+                   loopback_compresslevel=1)
 
 from services.lift.guard import install_live_lift_guard
 
