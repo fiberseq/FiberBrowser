@@ -18,6 +18,9 @@ PUBLIC_DENIED = {
     ("GET", "/api/nuc/available"), ("POST", "/api/nuc/status"), ("POST", "/api/nuc/jobs"), ("GET", "/api/nuc/jobs"),
     ("GET", "/api/nuc/jobs/{job_id}"), ("DELETE", "/api/nuc/jobs/{job_id}"), ("POST", "/api/nuc/records"),
     ("POST", "/api/nuc/summary"), ("GET", "/api/nuc/metrics"), ("POST", "/api/nuc/window"), ("POST", "/api/nuc/select"), ("POST", "/api/nuc/patches"),
+    # The feature hub's analyses: association runs and overlays read scans and BAMs and run compute.
+    ("GET", "/api/hub/assoc/modes"), ("POST", "/api/hub/assoc/jobs"), ("GET", "/api/hub/assoc/jobs"),
+    ("GET", "/api/hub/assoc/jobs/{job_id}"), ("DELETE", "/api/hub/assoc/jobs/{job_id}"), ("POST", "/api/hub/overlay"),
     # Live lift: opening a dataset from the host's files, reading a map from them, and its settings (the flag
     # itself is harmless but is a host feature too).
     ("GET", "/api/lift/enabled"), ("GET", "/api/lift/inspect"), ("POST", "/api/lift/datasets"), ("GET", "/api/lift/datasets"),

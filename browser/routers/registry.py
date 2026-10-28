@@ -50,6 +50,7 @@ from routers.differences import router as differences_router
 from routers.graph_panel import router as graph_panel_router
 from routers.scan import router as scan_router
 from routers.nuc import router as nuc_router
+from routers.hub import router as hub_router
 
 API_ROUTERS = (
     jupyter_router,
@@ -99,6 +100,7 @@ API_ROUTERS = (
     graph_panel_router,
     scan_router,
     nuc_router,
+    hub_router,
 )
 
 
