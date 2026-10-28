@@ -1388,7 +1388,8 @@ export async function executeBrowserAction(
     const keys = actionStateKeys(action);
     if (keys.length === 0) return 'focus_cluster: no dataset available.';
     const store = useBrowserStore.getState();
-    for (const key of keys) store.setClusterFocus(key, new Set([clusterId]));
+    // One undo step for every panel (stabilize 3, item 2).
+    store.focusClustersIn(keys, new Set([clusterId]), `Focus cluster ${clusterId}`);
     store.openAnalysisPanel('cluster-detail');
     return `Focused on cluster ${clusterId} in ${keys.join(', ')} (others dimmed).`;
   }

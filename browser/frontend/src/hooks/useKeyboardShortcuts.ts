@@ -289,14 +289,13 @@ export function useKeyboardShortcuts(options: KeyboardShortcutsOptions = {}) {
         case '9': {
           e.preventDefault();
           const clusterIndex = parseInt(e.key) - 1;
-          for (const key of clusterFocusKeys(s)) {
-            const assignments = s.clusterAssignments[key];
-            if (!assignments) continue;
-            const clusterIds = new Set(Object.values(assignments));
-            if (clusterIds.has(clusterIndex)) {
-              s.setClusterFocus(key, new Set([clusterIndex]));
-            }
-          }
+          const keys = clusterFocusKeys(s).filter(key => Object.values(s.clusterAssignments[key] ?? {}).includes(clusterIndex));
+          if (!keys.length) break;
+          // One undo step for every panel it focuses (it took one per panel: stabilize 3, item 2), coalesced as one
+          // panel's focus is (quick presses make one step).
+          seedHistoryBaseline(s, 'Before cluster focus', 'filtering');
+          for (const key of keys) s.setClusterFocus(key, new Set([clusterIndex]), { record: false });
+          useBrowserStore.getState().pushSnapshot('Set cluster focus', { kind: 'filtering', coalesceKey: 'cluster-focus:keys', coalesceMs: 800 });
           break;
         }
 

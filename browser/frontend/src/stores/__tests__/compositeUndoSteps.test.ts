@@ -98,6 +98,24 @@ describe('one undo step per cluster action (stabilize 3, item 2)', () => {
     expect(useBrowserStore.getState().clusterAssignments.ds1).toEqual({ a: 0, b: 1, c: 2 });
   });
 
+  it('Copilot focus_cluster over two panels is one step', async () => {
+    const { executeBrowserAction } = await import('../../actions/browserActions');
+    seedClusters(null);
+    useBrowserStore.setState(s => ({ panels: [...s.panels, { ...s.panels[0], id: 'p2', stateKey: 'p2' }],
+      selectedDatasets: new Set(['p1', 'p2']) }) as never);
+    useBrowserStore.getState().setClusterAssignments('p2', { a: 0, b: 1 });
+    useBrowserStore.getState().pushSnapshot('Copy clusters', { kind: 'clustering' });
+    age();
+    const before = labels().length;
+    await executeBrowserAction({ type: 'focus_cluster', cluster_id: 1 });
+    expect(labels().slice(before)).toEqual(['Focus cluster 1']);
+    const s = useBrowserStore.getState();
+    expect([...(s.clusterFocus.ds1 ?? [])]).toEqual([1]);
+    expect([...(s.clusterFocus.p2 ?? [])]).toEqual([1]);
+    s.undo();
+    expect(useBrowserStore.getState().clusterFocus.p2 ?? null).toBeNull();
+  });
+
   it('Copilot hide_cluster is one step', async () => {
     const { executeBrowserAction } = await import('../../actions/browserActions');
     seedClusters(null);
