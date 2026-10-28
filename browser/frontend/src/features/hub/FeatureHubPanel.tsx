@@ -21,6 +21,11 @@ import { columnPathStatus, displaySpan, graphText, liftChip, liftText } from './
 import { matchHits } from './matching';
 import { useGraphStatusStore } from '../graphPanel/statusStore';
 import type { FeatureHit, FeatureSet, HitValue } from './types';
+import { AssocTab, type AssocSeed } from './AssocTab';
+import { OverlayTab, type OverlaySeed } from './OverlayTab';
+
+type HubTab = 'hits' | 'assoc' | 'overlay';
+const HUB_TABS: Array<{ key: HubTab; label: string }> = [{ key: 'hits', label: 'Hits' }, { key: 'assoc', label: 'Associate' }, { key: 'overlay', label: 'Overlay' }];
 
 interface Row { set: FeatureSet; hit: FeatureHit; role: 'prevalence' | 'strength' | null; key: string; matches: string[] }
 interface Column { key: string; label: string; colour?: string; kind: string; datasetId?: string; hap?: string }
@@ -80,6 +85,8 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
   const [notice, setNotice] = useState('');
   const [expanded, setExpanded] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [assocSeed, setAssocSeed] = useState<AssocSeed | null>(null);
+  const [overlaySeed, setOverlaySeed] = useState<OverlaySeed | null>(null);
   const view = useMemo(() => ({ chrom, start, end }), [chrom, start, end]);
   const providerSets = useProviderSets(view);
   const sessionScans = useMemo(() => hub.scans.map(s => s.path).join('\n'), [hub.scans]);
@@ -209,7 +216,10 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
   const groupsForCompare = columns.filter(c => c.kind !== 'all');
   const liveJob = job && ['queued', 'running', 'cancelling'].includes(job.status);
 
-  return <AnalysisPanelShell tabs={[]} activeTab="hub" onTabChange={() => { }} theme="indigo" layout="standard" bodyMode="none"
+  const tab: HubTab = ui.tab ?? 'hits';
+  const setTab = (t: HubTab) => setUi({ tab: t === 'hits' ? undefined : t });
+
+  return <AnalysisPanelShell tabs={HUB_TABS} activeTab={tab} onTabChange={setTab} theme="indigo" layout="standard" bodyMode="none"
     isFullView={isFullView} bodyClassName="min-w-0 break-words">
     <div data-testid="hub-panel" className="space-y-2">
       <AnalysisPanelHeader theme="indigo"
@@ -257,6 +267,9 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
         ))}
       </section>
 
+      {tab === 'assoc' && <AssocTab sets={sets} scans={scans} seed={assocSeed} />}
+      {tab === 'overlay' && <OverlayTab sets={sets} seed={overlaySeed} />}
+      {tab === 'hits' && <>
       <section data-testid="hub-sets" className="space-y-0.5">
         {!sets.length && <p className="text-ink-secondary">No feature sets yet: open a scan or run one, or run Find classes, NFRs or a peak scan.</p>}
         {sets.map(set => {
@@ -350,6 +363,12 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
             if (h) sendToNucleosomeWindow({ chrom: h.chrom, start: h.start, end: Math.max(h.end, h.start + 1), anchor: h.anchor,
               ...(h.strand ? { strand: h.strand } : {}), label: `${h.label || h.typeId} ${h.chrom}:${(h.start + 1).toLocaleString()}` });
           }}>Nucleosome window</AnalysisButton>
+        <AnalysisButton theme="indigo" variant="soft" data-testid="hub-associate"
+          title="Open the association builder with the selected hits' set as A"
+          onClick={() => { setAssocSeed({ aKey: selected[0].setId }); setTab('assoc'); }}>Associate…</AnalysisButton>
+        <AnalysisButton theme="indigo" variant="soft" data-testid="hub-overlay"
+          title="Overlay the selected hits' patches: aligned density with denominators, facets and a pile"
+          onClick={() => { setOverlaySeed({ loci: 'selection', at: Date.now() }); setTab('overlay'); }}>Overlay patches</AnalysisButton>
         <button type="button" className="ml-auto text-[11px] text-ink-muted hover:underline" onClick={() => setHub({ selected: [] })}>Clear</button>
       </section>}
 
@@ -361,6 +380,7 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
           <button type="button" className="ml-auto text-ink-muted hover:underline" onClick={() => setHub(h => ({ anchors: h.anchors.filter(x => x.id !== a.id) }))}>Remove</button>
         </div>)}
       </section>}
+      </>}
     </div>
     {dialog && <ScanDialog onClose={() => setDialog(false)} />}
   </AnalysisPanelShell>;

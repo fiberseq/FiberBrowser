@@ -165,11 +165,12 @@ def test_m1_over_scan_sets_equals_fiberhmm_scan_assoc(world):
     assert mine['pooled']['n_molecules'] == theirs['pooled']['n_molecules']
     assert mine['pooled']['or'] == pytest.approx(theirs['pooled']['or'], rel=1e-9)
     assert mine['pooled']['p'] == pytest.approx(theirs['pooled']['p'], rel=1e-9)
-    by = {(p['a'], p['b']): p for p in mine['pairs']}
+    assert 'pairs' not in mine and mine['pairs_rows_moved'] == 2      # the rows live in out['anchors']
+    by = {(p['a'], p['b']): p for p in out['anchors']}
     for p in theirs['pairs']:
         q = by[(p['a'], p['b'])]
-        assert q['table'] == p['table'] and q['p_exact'] == pytest.approx(p['p_exact'])
-        assert q['excluded_no_b_state'] == p['excluded_no_b_state']
+        assert q['table'] == p['table'] and q['p'] == pytest.approx(p['p_exact'])
+        assert q['excludedNoB'] == p['excluded_no_b_state']
     assert out['effects'][0]['key'] == 'pooled' and out['anchors'] and out['inputs']['covariates']['openness'] > 0
     assert out['cli'] and 'fiberhmm-scan assoc' in out['cli'] and '--mode cooccur' in out['cli']
 

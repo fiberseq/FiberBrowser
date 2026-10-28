@@ -188,6 +188,7 @@ def run(state, defn: dict, progress=None, cancel: Optional[threading.Event] = No
     with _thread_limits():
         out = fn(state, defn, regions, stage)
     out.setdefault('status', 'ok')
+    _strip_rows(out.get('result'))
     out['mode'] = defn['mode']
     out['modeLabel'] = MODE_LABELS[defn['mode']]
     out['unit'] = UNITS[defn['mode']]
@@ -203,6 +204,18 @@ def _thread_limits():
     except Exception:   # noqa: BLE001 - optional dependency
         import contextlib
         return contextlib.nullcontext()
+
+
+def _strip_rows(res) -> None:
+    """FiberHMM's per-pair and per-anchor rows are in ``anchors`` already: keep only their counts in the raw dict, so
+    the run stays small enough to keep with the session."""
+    if isinstance(res, dict):
+        for key in ('pairs', 'per_anchor', 'hits'):
+            if isinstance(res.get(key), list):
+                res[f'{key}_rows_moved'] = len(res.pop(key))
+        for v in res.values():
+            if isinstance(v, dict):
+                _strip_rows(v)
 
 
 def _datasets(state, defn: dict) -> List[str]:
@@ -246,17 +259,25 @@ def _run_m1(state, defn, regions, stage):
     if check and check['status'] == 'post-selection':
         _strip_group_p(res)
     stage('store', 'Summarising')
-    limits += _m1_limits(res, A, B, mols)
-    return dict(result=res, inputs=inputs, limits=limits, postSelection=check,
-                effects=_m1_effects(res), anchors=_m1_rows(res, A, B),
-                cli=_cli_line(defn, A, B))
+    more, no_contrast = _m1_limits(res, A, B, mols)
+    limits += more
+    effects = _m1_effects(res)
+    out = dict(result=res, inputs=inputs, limits=limits, postSelection=check, effects=effects,
+               anchors=_m1_rows(res, A, B), cli=_cli_line(defn, A, B))
+    if no_contrast:
+        # One state only: FiberHMM still returns an odds ratio (1 by construction), which answers nothing here.
+        for e in effects:
+            e.update(estimate=None, lo=None, hi=None, p=None, note='no contrast')
+        out['status'] = 'empty'
+    return out
 
 
-def _m1_limits(res, A, B, mols) -> List[str]:
+def _m1_limits(res, A, B, mols):
+    """(plain sentences on what the data can't answer, whether A or B has one state only)."""
     out = []
     if res.get('n_pairs_found', 0) == 0:
         out.append(f'No B hit lies within {res.get("max_distance", 5000):,} bp of an A hit in the scope: nothing to pair.')
-        return out
+        return out, False
     pairs = res.get('pairs') or []
     tested = res.get('n_pairs_tested', 0)
     if tested == 0:
@@ -283,7 +304,8 @@ def _m1_limits(res, A, B, mols) -> List[str]:
         out.append(f'Only {n} molecules carry both states: the estimate is very uncertain.')
     if not np.isfinite(pooled.get('or') if pooled.get('or') is not None else np.nan) and pairs and not out:
         out.append('The odds ratio is not estimable (separation: one cell of the 2 × 2 tables is empty).')
-    return out
+    no_contrast = bool(pairs) and (a1 == 0 or a0 == 0 or b1 == 0 or b0 == 0)
+    return out, no_contrast
 
 
 def _m1_effects(res) -> List[dict]:
@@ -315,7 +337,8 @@ def _m1_rows(res, A, B) -> List[dict]:
                         a=r.get('a'), b=r.get('b'), estimate=r.get('or_mh'), lo=r.get('or_lo'), hi=r.get('or_hi'),
                         p=r.get('p_exact'), q=r.get('q'), n=r.get('n'), table=r.get('table'),
                         p_b1_given_a1=r.get('p_b1_given_a1'), p_b1_given_a0=r.get('p_b1_given_a0'),
-                        distance=r.get('distance'), nested=r.get('nested') or None))
+                        distance=r.get('distance'), nested=r.get('nested') or None,
+                        excludedNoB=r.get('excluded_no_b_state'), excludedNoA=r.get('excluded_no_a_state')))
     return out
 
 
@@ -354,8 +377,12 @@ def _run_m2_phasing(state, defn, regions, stage):
     datasets = _anchor_datasets(state, defn, A)
     if not datasets:
         return dict(status='empty', inputs=inputs, limits=['No native dataset is loaded to measure phasing in.'])
+    # Molecules over the scope (and each anchor's flanks): matched random backgrounds are drawn where molecules are,
+    # at least 2 x span from every anchor, so the windows must reach well past the anchors.
     span = int(DEFAULT_PARAMS.phase_x0 + DEFAULT_PARAMS.phase_summary_periods * 200)
-    windows = merge_regions((h['chrom'], max(0, h['anchor'] - 3 * span), h['anchor'] + 3 * span) for h in A.hits)
+    pad = 10 * span
+    windows = merge_regions([(h['chrom'], max(0, h['anchor'] - pad), h['anchor'] + pad) for h in A.hits]
+                            + [(c, max(0, a - 3 * span), b + 3 * span) for c, a, b in (regions or [])])
     stage('inputs', f'Decoding molecules of {len(datasets)} dataset(s) (and the nucleosome calibration)')
     decoded = decoded_molecules(state, datasets, windows)
     molecules = [m for ms, _cal in decoded.values() for m in ms]
@@ -401,10 +428,12 @@ def _run_m2_phasing(state, defn, regions, stage):
                 _strip_group_p(met)
     stage('store', 'Summarising')
     effects, rows, limits = [], [], []
+    hit_at = {(c, p): h['hitId'] for (c, p), h in zip(anchors, A.hits)}
     for frame, fr in (res.get('frames') or {}).items():
         for name, met in (fr.get('metrics') or {}).items():
             effects += _m2_effects(met, f'{frame} frame · {name}')
-            rows += [dict(r, frame=frame, metric=name) for r in _m2_rows(met)]
+            rows += [dict(r, frame=frame, metric=name, hitId=hit_at.get((r.get('chrom'), r.get('pos'))))
+                     for r in _m2_rows(met)]
     limits += _m2_limits(res, len(anchors))
     if len(decoded) > 1:
         inputs['note'] = f'The nucleosome repeat length and prior come from {names.get(first, first)}\'s calibration.'
@@ -536,7 +565,9 @@ def _run_m2_scalar(state, defn, regions, stage):
     if not o.get('anchorBed'):
         limits.append('Every A hit is an anchor (no anchor BED): Δ site needs anchors and other hits as their matched '
                       'backgrounds, so only Δ anchor is tested.')
-    return dict(result=res, inputs=inputs, effects=_m2_effects(res, f'{module}:{column}'), anchors=_m2_rows(res)[:MAX_ROWS],
+    hit_at = {(h['chrom'], h['anchor']): h['hitId'] for h in A.hits}
+    rows = [dict(r, hitId=hit_at.get((r.get('chrom'), r.get('pos')))) for r in _m2_rows(res)[:MAX_ROWS]]
+    return dict(result=res, inputs=inputs, effects=_m2_effects(res, f'{module}:{column}'), anchors=rows,
                 limits=list(dict.fromkeys(limits)))
 
 
