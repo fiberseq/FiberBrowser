@@ -128,22 +128,38 @@ class Axis:
     def samples(self, a0: int, a1: int, anchor: int, minus: bool) -> Tuple[np.ndarray, np.ndarray]:
         """(genomic positions, bin index) of one locus's sample points in its own coordinates. A '-' locus is the
         mirror image: the base at offset d from the reference base r is r - d (r + d on '+')."""
+        pts, bins, _x, _w = self.samples_x(a0, a1, anchor, minus)
+        return pts, bins
+
+    def samples_x(self, a0: int, a1: int, anchor: int, minus: bool):
+        """Like ``samples``, plus each sample's axis interval (its centre and width in axis units: bp, or the patch's
+        0-1 inside a scaled locus), so a pile row drawn from samples covers exactly what was sampled."""
+        k = SAMPLES_PER_BIN
         if self.align == 'scaled':
             lo_off, lo_bins = self._within(self.left_edges)
             hi_off, hi_bins = self._within(self.right_edges)
             width = max(1, a1 - a0)
-            j = (np.arange(SCALED_BINS * SAMPLES_PER_BIN) + 0.5) / (SCALED_BINS * SAMPLES_PER_BIN)
+            j = (np.arange(SCALED_BINS * k) + 0.5) / (SCALED_BINS * k)
             inner = a0 + np.floor(j * width).astype(np.int64)
             pts = np.concatenate([a0 + lo_off, inner, a1 + hi_off])                 # '+' positions
-            bins = np.concatenate([lo_bins, self.n_left + np.repeat(np.arange(SCALED_BINS), SAMPLES_PER_BIN),
+            bins = np.concatenate([lo_bins, self.n_left + np.repeat(np.arange(SCALED_BINS), k),
                                    self.n_left + SCALED_BINS + hi_bins])
+            lw = np.repeat(np.diff(np.asarray(self.left_edges, float)) / k, k)
+            rw = np.repeat(np.diff(np.asarray(self.right_edges, float)) / k, k)
+            lx = np.repeat(np.asarray(self.left_edges[:-1], float), k) + (np.tile(np.arange(k), self.n_left) + 0.5) * lw
+            rx = 1.0 + np.repeat(np.asarray(self.right_edges[:-1], float), k) + (np.tile(np.arange(k), self.n_right) + 0.5) * rw
+            x = np.concatenate([lx, j, rx])
+            wx = np.concatenate([lw, np.full(len(j), 1.0 / (SCALED_BINS * k)), rw])
             if minus:
                 pts = a0 + a1 - 1 - pts
-            return pts.astype(np.int64), bins.astype(np.int64)
+            return pts.astype(np.int64), bins.astype(np.int64), x, wx
         off, bins = self._within(self.edges)
+        e = np.asarray(self.edges, float)
+        wx = np.repeat(np.diff(e) / k, k)
+        x = np.repeat(e[:-1], k) + (np.tile(np.arange(k), self.nbins) + 0.5) * wx
         ref = {'anchor': anchor, 'left': a0 if not minus else a1 - 1, 'right': a1 - 1 if not minus else a0}[self.align]
         pts = ref + off if not minus else ref - off
-        return pts.astype(np.int64), bins
+        return pts.astype(np.int64), bins, x, wx
 
     def to_x(self, iv: Sequence[Tuple[int, int]], a0: int, a1: int, anchor: int, minus: bool) -> List[Tuple[float, float]]:
         """Genomic intervals of one locus mapped onto the axis (pile rows), clipped to the axis range."""
@@ -245,7 +261,10 @@ def overlay(state, request: dict) -> dict:
         raise OverlayError('No dataset panel is shown to measure')
     pile_max = max(0, min(2000, int(request.get('pileMax') if request.get('pileMax') is not None else 400)))
     seed = str(request.get('seed') or 'fiberbrowser.overlay')
-    widths = [max(1, int(l['end']) - int(l['start'])) for l in loci]
+    # Edge alignment needs each patch's length: a hit inside an insertion is measured on its own haplotype's source
+    # span (its place on this genome is only the junction).
+    widths = [max(1, int(l['source']['end']) - int(l['source']['start'])) if l.get('insertion') and isinstance(l.get('source'), dict)
+              and l['source'].get('end') is not None else max(1, int(l['end']) - int(l['start'])) for l in loci]
     axis = Axis(align, flank, widths, request.get('binBp'))
     policy = browser_read_policy(state, include_duplicates=bool(request.get('includeDuplicates')))
     graph_mode = any(o.get('kind') == 'graph' for o in observations)
@@ -282,8 +301,15 @@ def overlay(state, request: dict) -> dict:
             if status is not None and status not in ('carried', 'partial'):
                 skip(status)
                 continue
+            if status == 'partial' and source.kind != 'lifted':
+                # a partial carrier is measured where its lift maps each base (bases it lacks have no source base);
+                # a native panel has no lift to mask the columns it lacks
+                skip('partial')
+                continue
             src = locus.get('source') if source.kind == 'lifted' else None
-            own = bool(src and src.get('chrom') and (not src.get('hap') or not obs_hap or src.get('hap') == obs_hap))
+            # the hit's own source coordinates only on its own dataset and haplotype
+            own = bool(src and src.get('chrom') and (not src.get('hap') or not obs_hap or src.get('hap') == obs_hap)
+                       and (not src.get('datasetId') or src.get('datasetId') == obs.get('datasetId')))
             if insertion and source.kind != 'lifted':
                 skip('absent')               # inside an insertion: this genome's own reads don't hold its sequence
                 continue
@@ -295,16 +321,22 @@ def overlay(state, request: dict) -> dict:
                 la0, la1 = int(src['start']), max(int(src['end']), int(src['start']) + 1)
                 lan = int(src.get('anchor', src['start']))
                 sminus = src.get('strand') == '-' if src.get('strand') in ('+', '-') else minus
-                pts, bins = axis.samples(la0, la1, lan, sminus)
+                pts, bins, sx, sw = axis.samples_x(la0, la1, lan, sminus)
                 contig = str(src['chrom'])
                 geo = (la0, la1, lan, sminus)
             else:
-                pts, bins = axis.samples(a0, a1, anchor, minus)
+                pts, bins, sx, sw = axis.samples_x(a0, a1, anchor, minus)
                 geo = (a0, a1, anchor, minus)
                 contig = locus['chrom']
                 if source.kind == 'lifted':
+                    if align == 'anchor':
+                        # the anchor itself must exist on this haplotype (never a substitute position)
+                        at, at_contig = lift_points(state, source, obs_hap, locus['chrom'], np.array([anchor], np.int64))
+                        if at_contig is None or at[0] < 0:
+                            skip('anchor_not_on_this_observation')
+                            continue
                     pts, contig = lift_points(state, source, obs_hap, locus['chrom'], pts)
-                    if contig is None:
+                    if contig is None or (align == 'anchor' and contig != at_contig):
                         skip('not_on_this_observation')
                         continue
             ok = pts >= 0
@@ -356,9 +388,9 @@ def overlay(state, request: dict) -> dict:
                         pm, pmeas = axis.to_x(clip(marks), la0, la1, lan, lminus), axis.to_x(clip(measured), la0, la1, lan, lminus)
                         plen = int(sum(min(b, la1) - max(a, la0) for a, b in marks if b > la0 and a < la1))
                     else:
-                        # a lifted panel: the sample points' own runs on the axis (bases the haplotype lacks are gaps)
-                        xs = np.asarray(axis.x)[bins]
-                        pm, pmeas = _runs(xs, x, axis), _runs(xs, m, axis)
+                        # a lifted panel: the sampled axis intervals, merged where they touch (bases the haplotype
+                        # lacks are gaps)
+                        pm, pmeas = _runs(sx, sw, x), _runs(sx, sw, m)
                         plen = int(x.sum())
                     pile_all.append((_pile_key(seed, lkey, mol), dict(obsId=obs.get('obsId'), locus=lkey, molecule=rec.qname,
                                                                     marks=pm, measured=pmeas, length=plen)))
@@ -381,15 +413,16 @@ def overlay(state, request: dict) -> dict:
                 graphMode=graph_mode, notes=notes)
 
 
-def _runs(xs: np.ndarray, flag: np.ndarray, axis: Axis) -> List[Tuple[float, float]]:
-    """Runs of flagged sample points as axis intervals (each sample stands for its share of its bin)."""
+def _runs(xs: np.ndarray, ws: np.ndarray, flag: np.ndarray) -> List[Tuple[float, float]]:
+    """Flagged samples as axis intervals (each covers its own share of its bin), merged where they touch."""
     out: List[Tuple[float, float]] = []
-    half = (axis.bin_bp if axis.align != 'scaled' else 1.0 / SCALED_BINS) / SAMPLES_PER_BIN / 2
-    for x, f in zip(xs.tolist(), flag.tolist()):
-        if not f:
+    order = np.argsort(xs, kind='stable')
+    for i in order.tolist():
+        if not flag[i]:
             continue
-        if out and x - half <= out[-1][1] + 1e-9:
-            out[-1] = (out[-1][0], round(x + half, 3))
+        a, b = float(xs[i] - ws[i] / 2), float(xs[i] + ws[i] / 2)
+        if out and a <= out[-1][1] + 1e-9:
+            out[-1] = (out[-1][0], round(max(out[-1][1], b), 4))
         else:
-            out.append((round(x - half, 3), round(x + half, 3)))
+            out.append((round(a, 4), round(b, 4)))
     return out

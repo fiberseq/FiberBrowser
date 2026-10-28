@@ -59,7 +59,10 @@ export function AssocTab({ sets, scans, seed }: { sets: FeatureSet[]; scans: Sca
   };
   const rerun = (id: string) => {
     const run = runs.find(r => r.id === id);
-    if (run) void useAssocJob.getState().submit(run.definition);
+    if (!run) return;
+    // a kept run whose browser-set hits were cut can't be run again as it was: rebuild it in the builder
+    if (run.definition.truncated) { setProblem('This run\'s browser-set hits were cut when it was kept with the session: rebuild it in the builder to run it again.'); return; }
+    void useAssocJob.getState().submit(run.definition);
   };
   const remove = (id: string) => {
     setHub(h => ({ assocRuns: h.assocRuns.filter(r => r.id !== id) }));

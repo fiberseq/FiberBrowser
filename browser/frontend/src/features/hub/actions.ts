@@ -22,13 +22,17 @@ import { displaySpan, inThisGenome, regionOf, type Placeable } from './frames';
  * source coordinates and lift status; a hit that can't be placed here keeps its own frame and coordinates. */
 function anchorOf(h: HubSelected): AnchorSet['anchors'][number] {
   const base = { ...(h.strand ? { strand: h.strand } : {}), ...(h.label ? { label: h.label } : {}), hitId: h.hitId };
+  // graph carriage, kept so overlays and associations at these anchors count carriers only
+  const paths = h.graph ? { paths: Object.fromEntries(Object.entries(h.graph.paths).map(([k, p]) =>
+    [k, { status: p.status, ...(p.hap ? { hap: p.hap } : {}), datasets: p.datasets }])) } : {};
   const t = !inThisGenome(h) ? h.target : undefined;
   if (t) {
     return { chrom: t.chrom, pos: t.anchor, start: t.start, end: t.end, ...base,
-      ...(h.frame ? { frame: h.frame } : {}), source: { chrom: h.chrom, start: h.start, end: h.end },
-      ...(h.lift ? { lift: h.lift } : {}), ...(t.insertion ? { insertion: true } : {}) };
+      ...(h.frame ? { frame: h.frame } : {}), source: { chrom: h.chrom, start: h.start, end: h.end, anchor: h.anchor },
+      ...(h.lift ? { lift: h.lift } : {}), ...(t.insertion ? { insertion: true } : {}),
+      ...(h.targetStrand ? { targetStrand: h.targetStrand } : {}), ...paths };
   }
-  return { chrom: h.chrom, pos: h.anchor, ...base, start: h.start, end: h.end, ...(h.frame ? { frame: h.frame } : {}) };
+  return { chrom: h.chrom, pos: h.anchor, ...base, start: h.start, end: h.end, ...(h.frame ? { frame: h.frame } : {}), ...paths };
 }
 
 export function newAnchorSet(selected: HubSelected[], label?: string): AnchorSet {

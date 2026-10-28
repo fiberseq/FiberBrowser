@@ -1,6 +1,6 @@
 import '../testSetup';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { useBrowserStore } from '../../stores/browserStore';
@@ -99,6 +99,25 @@ describe('builder inputs (review round 1)', () => {
     const r = buildRequest({ ...DEFAULT_DRAFT, mode: 'M4', aKey: 'hub:fp', bKey: 'anchors:a', scope: 'anchors', anchorSetId: 'a' }, { all, marks: [], state: st, anchors });
     expect('request' in r && r.request.scope.anchors).toEqual([['chr3', 50]]);
     expect(all.find(x => x.key === 'anchors:a')!.ref.anchors).toEqual([{ chrom: 'chr3', pos: 50 }]);
+  });
+});
+
+describe('the association job store', () => {
+  it('keeps a run that had already finished when its submission answered', async () => {
+    const { useAssocJob } = await import('./assocJob');
+    const result = { status: 'ok', mode: 'M4', effects: [], anchors: [] };
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const body = init?.method === 'POST' ? { job_id: 'quick', status: 'complete', created_at: 1, mode: 'M4' }
+        : { job_id: 'quick', status: 'complete', created_at: 1, finished_at: 2, mode: 'M4', result };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    useBrowserStore.getState().setFeatureHub({ assocRuns: [] });
+    await useAssocJob.getState().submit({ mode: 'M4', a: { kind: 'anchors', anchors: [] }, b: { kind: 'anchors', anchors: [] }, scope: { kind: 'view' } });
+    await vi.waitFor(() => expect(useBrowserStore.getState().featureHub.assocRuns.map(r => r.id)).toEqual(['quick']));
+    expect(useAssocJob.getState().shown).toBe('quick');
+    vi.unstubAllGlobals();
+    useAssocJob.getState().clear();
   });
 });
 

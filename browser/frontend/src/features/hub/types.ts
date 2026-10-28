@@ -182,5 +182,9 @@ export interface AnchorSet {
     /** Another frame than this genome's (a scan of a source assembly); absent: this genome. */
     frame?: Frame;
     /** A lifted hit's source coordinates and lift status (chrom/pos/start/end are this genome's). */
-    source?: { chrom: string; start: number; end: number }; lift?: LiftStatus; insertion?: boolean }>;
+    source?: { chrom: string; start: number; end: number; anchor?: number }; lift?: LiftStatus; insertion?: boolean;
+    /** A lifted hit's strand on this genome (its own strand is `strand`, in its source frame). */
+    targetStrand?: '+' | '-';
+    /** The hit's graph paths' statuses (carried, partial, absent, unresolved): carriers only in graph mode. */
+    paths?: Record<string, { status: string; hap?: string; datasets?: string[] }> }>;
 }

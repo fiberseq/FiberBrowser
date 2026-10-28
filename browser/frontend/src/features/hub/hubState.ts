@@ -71,6 +71,8 @@ export interface HubSelected {
   lift?: LiftStatus;
   /** Its graph columns (drawn on graph hosts and pop-outs). */
   graph?: GraphAlias;
+  /** A lifted hit's strand on this genome (a flipped chain reverses its own). */
+  targetStrand?: '+' | '-';
 }
 
 export interface FeatureHubState {
@@ -157,6 +159,19 @@ function graphOf(v: unknown): GraphAlias | null {
     size: num(g.size) ?? columns.reduce((n, c) => n + c[2] - c[1], 0), paths };
 }
 
+/** Saved graph path statuses of an anchor (bounded). */
+function pathsOfSaved(v: unknown): Record<string, { status: string; hap?: string; datasets?: string[] }> | null {
+  if (!v || typeof v !== 'object') return null;
+  const out: Record<string, { status: string; hap?: string; datasets?: string[] }> = {};
+  for (const [k, p] of Object.entries(v as Record<string, unknown>).slice(0, 64)) {
+    const q = p as Record<string, unknown>;
+    if (!q || typeof q.status !== 'string') continue;
+    out[k] = { status: q.status, ...(typeof q.hap === 'string' ? { hap: q.hap } : {}),
+      ...(Array.isArray(q.datasets) ? { datasets: q.datasets.filter((x): x is string => typeof x === 'string') } : {}) };
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 /** The hub state from a session or snapshot: well formed, unknown fields dropped. */
 export function normalizeHub(value: unknown): FeatureHubState {
   if (!value || typeof value !== 'object') return EMPTY_HUB;
@@ -189,8 +204,11 @@ export function normalizeHub(value: unknown): FeatureHubState {
         ...(str(q.label) ? { label: str(q.label) } : {}), ...(str(q.hitId) ? { hitId: str(q.hitId) } : {}),
         ...(num(q.start) !== null ? { start: num(q.start)! } : {}), ...(num(q.end) !== null ? { end: num(q.end)! } : {}),
         ...(q.frame && typeof q.frame === 'object' && typeof (q.frame as { kind?: unknown }).kind === 'string' ? { frame: q.frame as Frame } : {}),
-      ...(sourceOf(q.source) ? { source: sourceOf(q.source)! } : {}), ...(liftOf(q.lift) ? { lift: liftOf(q.lift)! } : {}),
-      ...(q.insertion === true ? { insertion: true } : {}) }];
+      ...(sourceOf(q.source) ? { source: { ...sourceOf(q.source)!, ...(num((q.source as Record<string, unknown>).anchor) !== null ? { anchor: num((q.source as Record<string, unknown>).anchor)! } : {}) } } : {}),
+      ...(liftOf(q.lift) ? { lift: liftOf(q.lift)! } : {}),
+      ...(q.insertion === true ? { insertion: true } : {}),
+      ...(q.targetStrand === '+' || q.targetStrand === '-' ? { targetStrand: q.targetStrand as '+' | '-' } : {}),
+      ...(pathsOfSaved(q.paths) ? { paths: pathsOfSaved(q.paths)! } : {}) }];
     });
     return [{ id: str(a.id), label: str(a.label) || 'Anchors', sources: Array.isArray(a.sources) ? a.sources.filter((x): x is string => typeof x === 'string') : [],
       createdAt: str(a.createdAt), anchors: points }];
@@ -206,7 +224,8 @@ export function normalizeHub(value: unknown): FeatureHubState {
       ...(h.frame && typeof h.frame === 'object' && typeof (h.frame as { kind?: unknown }).kind === 'string' ? { frame: h.frame as Frame } : {}),
       ...(Array.isArray(h.legacyRefs) ? { legacyRefs: normalizeFeatureRefs(h.legacyRefs) } : {}),
       ...(targetOf(h.target) ? { target: targetOf(h.target)! } : {}), ...(liftOf(h.lift) ? { lift: liftOf(h.lift)! } : {}),
-      ...(graphOf(h.graph) ? { graph: graphOf(h.graph)! } : {}) }];
+      ...(graphOf(h.graph) ? { graph: graphOf(h.graph)! } : {}),
+      ...(h.targetStrand === '+' || h.targetStrand === '-' ? { targetStrand: h.targetStrand as '+' | '-' } : {}) }];
   });
   const overlay = v.overlay && typeof v.overlay === 'object' ? normalizeOverlay(v.overlay) : null;
   return { scans, ui, anchors, selected, assocRuns: normalizeAssocRuns(v.assocRuns), ...(overlay ? { overlay } : {}) };
@@ -305,5 +324,6 @@ export function hitSelectionEntry(set: FeatureSet, hit: FeatureHit): HubSelected
     anchor: hit.anchor, ...(hit.strand ? { strand: hit.strand } : {}), ...(hit.label ? { label: hit.label } : {}),
     datasets: set.datasets, ...(hit.frame && hit.frame.kind !== 'linear' ? { frame: hit.frame } : {}),
     ...(hit.legacyRefs?.length ? { legacyRefs: hit.legacyRefs } : {}),
-    ...(hit.target ? { target: hit.target } : {}), ...(hit.lift ? { lift: hit.lift.status } : {}), ...(hit.graph ? { graph: hit.graph } : {}) };
+    ...(hit.target ? { target: hit.target } : {}), ...(hit.lift ? { lift: hit.lift.status } : {}), ...(hit.graph ? { graph: hit.graph } : {}),
+    ...(hit.frame?.kind === 'source' && hit.strand ? { targetStrand: hit.lift?.flipped ? (hit.strand === '+' ? '-' : '+') : hit.strand } : {}) };
 }

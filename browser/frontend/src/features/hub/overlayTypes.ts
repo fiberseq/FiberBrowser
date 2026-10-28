@@ -30,7 +30,7 @@ export interface OverlayLocus {
   /** It sits at an insertion's junction on this genome (its sequence is inside the insertion). */
   insertion?: boolean;
   /** A hit of another assembly: its source coordinates (on its haplotype's contig). */
-  source?: { chrom: string; start: number; end: number; anchor: number; hap?: string; strand?: '+' | '-' };
+  source?: { chrom: string; start: number; end: number; anchor: number; hap?: string; strand?: '+' | '-'; datasetId?: string };
 }
 
 export interface OverlaySeries {

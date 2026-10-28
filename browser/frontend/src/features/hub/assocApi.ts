@@ -96,6 +96,10 @@ export interface AssocRow {
   table?: number[]; distance?: number; bin?: string; frame?: string; metric?: string; se?: number | null; shrunk?: number | null;
   /** A's span and strand on this genome (Use as anchors keeps them). */
   aStart?: number | null; aEnd?: number | null; aStrand?: '+' | '-' | null;
+  /** A is a hit lifted from an assembly scan, or inside an insertion: its placement and carriage aren't in the row. */
+  aLifted?: boolean | null;
+  /** One state only at this pair (A or B): no odds ratio or p. */
+  noContrast?: boolean;
   n1?: number; n0?: number; p_b1_given_a1?: number | null; p_b1_given_a0?: number | null;
 }
 
@@ -115,6 +119,8 @@ export interface AssocResult {
   distances?: Array<Record<string, number | null>>;
   postSelection?: { status: 'ok' | 'refused' | 'post-selection'; overlaps?: unknown[]; note?: string; clusterRegions?: number } | null;
   cli?: string | null;
+  /** Group key (a dataset id) -> its display name. */
+  groupNames?: Record<string, string>;
   /** FiberHMM's own result (rows moved to `anchors`). */
   result?: Record<string, unknown>;
 }

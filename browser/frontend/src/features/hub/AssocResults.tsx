@@ -136,7 +136,7 @@ export function AssocResults({ run, onRerun, onRemove }: { run: AssocRun; onReru
   if (run.status !== 'complete' || !res) {
     return <div className="rounded-fb border border-red-200 bg-red-50 px-2 py-1 text-red-900 dark:border-red-800 dark:bg-red-950/40 dark:text-red-200" data-testid="assoc-error">
       {run.label}: {run.error ?? run.status}
-      <div className="mt-1 flex gap-1"><AnalysisButton onClick={onRerun}>Run again</AnalysisButton><AnalysisButton onClick={onRemove}>Remove</AnalysisButton></div>
+      <div className="mt-1 flex gap-1"><AnalysisButton onClick={onRerun} disabled={Boolean(run.definition.truncated)}>Run again</AnalysisButton><AnalysisButton onClick={onRemove}>Remove</AnalysisButton></div>
     </div>;
   }
   const rowLabel = (r: AssocRow) => (def.mode === 'M1' ? `${r.a ?? ''} × ${r.b ?? ''}` : r.hitId ?? `${r.chrom}:${r.pos}`);
@@ -147,7 +147,9 @@ export function AssocResults({ run, onRerun, onRemove }: { run: AssocRun; onReru
     const seen = new Set<string>();
     return list.flatMap(r => {
       const hitId = def.mode === 'M1' ? r.a : r.hitId;
-      if (!hitId || !r.chrom || r.pos == null || seen.has(hitId)) return [];
+      // a hit lifted from an assembly or inside an insertion keeps its placement and carriage only in the Hits tab's
+      // selection: pick it there (its anchor would lose them here)
+      if (!hitId || !r.chrom || r.pos == null || seen.has(hitId) || r.aLifted) return [];
       seen.add(hitId);
       const scan = def.a.kind === 'scan';
       const start = r.aStart ?? r.pos, end = Math.max(r.aEnd ?? r.pos + 1, start);
@@ -186,7 +188,7 @@ export function AssocResults({ run, onRerun, onRemove }: { run: AssocRun; onReru
       <div className="font-medium">{label}{it.scale ? <span className="ml-1 text-[10px] font-normal text-ink-muted">· {it.scale}</span> : null}</div>
       {it.note && <div className="text-[11px] text-ink-secondary">{it.note}</div>}
       {(it.differences ?? []).map(d => <div key={`${d.group}-${d.reference}`} className="text-[11px] tabular-nums">
-        {d.group} − {d.reference}: {fmt(d.difference)} {d.lo != null && d.hi != null ? `[${fmt(d.lo)}, ${fmt(d.hi)}]` : ''} · p {fmtP(d.p_wald ?? d.p_boot)}
+        {(res.groupNames ?? {})[d.group] ?? d.group} − {(res.groupNames ?? {})[d.reference] ?? d.reference}: {fmt(d.difference)} {d.lo != null && d.hi != null ? `[${fmt(d.lo)}, ${fmt(d.hi)}]` : ''} · p {fmtP(d.p_wald ?? d.p_boot)}
       </div>)}
       {it.p !== undefined && it.differences && it.differences.length > 1 && <div className="text-[11px]">Overall: p {fmtP(it.p)}</div>}
       {(it.differences?.length ?? 0) > 0 && <div className="text-[10px] text-ink-muted">These libraries: groups compared within the loaded samples (no replicates declared), not a population claim.{it.variance ? ` Variance: ${it.variance}.` : ''}</div>}
@@ -198,7 +200,12 @@ export function AssocResults({ run, onRerun, onRemove }: { run: AssocRun; onReru
         <span className="text-[11px] text-ink-muted">{rows.length.toLocaleString()} rows{rows.length >= 5000 ? ' (first 5,000)' : ''}, by q · click a row to go there</span>
         <span className="ml-auto flex gap-1">
           <AnalysisButton disabled={!useRows.length} data-testid="assoc-use-anchors" title="Save the picked rows (else those with q ≤ 0.1) as an anchor set"
-            onClick={() => setNotice(asAnchors(entriesFor(useRows), `${run.label} · ${useRows.length} rows`) ?? `Saved ${useRows.length} anchors.`)}>Use as anchors</AnalysisButton>
+            onClick={() => {
+              const entries = entriesFor(useRows);
+              const left = new Set(useRows.filter(r => r.aLifted).map(r => (def.mode === 'M1' ? r.a : r.hitId))).size;
+              const note = left ? ` ${left} lifted or insertion hit${left === 1 ? ' was' : 's were'} left out: select ${left === 1 ? 'it' : 'them'} in the Hits tab to keep the placement.` : '';
+              setNotice((entries.length ? (asAnchors(entries, `${run.label} · ${entries.length} hits`) ?? `Saved ${entries.length} anchors.`) : 'No anchor to save.') + note);
+            }}>Use as anchors</AnalysisButton>
           <AnalysisButton disabled={!useRows.length || def.a.kind !== 'scan'} data-testid="assoc-use-filter"
             title={def.a.kind === 'scan' ? 'Keep the reads in state 1 at A of the picked rows (else those with q ≤ 0.1)' : 'Only A sets from a scan have per-read states to filter on'}
             onClick={() => { void asFilter(entriesFor(useRows), 'any').then(err => setNotice(err ?? 'Filtered the reads to A\'s members at those rows.')); }}>Use as filter</AnalysisButton>
@@ -219,7 +226,7 @@ export function AssocResults({ run, onRerun, onRemove }: { run: AssocRun; onReru
             <td className="max-w-[12rem] truncate px-1" title={rowLabel(r)}>{rowLabel(r)}</td>
             <td className="whitespace-nowrap px-1">{r.chrom}:{r.pos != null ? (r.pos + 1).toLocaleString() : ''}{r.distance != null ? ` (${r.distance.toLocaleString()} bp apart)` : ''}</td>
             {def.mode === 'M2' && <td className="px-1">{r.frame ? `${r.frame} · ` : ''}{r.bin}</td>}
-            <td className="px-1 text-right">{fmt(r.estimate)}</td><td className="px-1 text-right">{fmtP(r.p)}</td><td className="px-1 text-right">{fmtP(r.q)}</td>
+            <td className="px-1 text-right" title={r.noContrast ? 'One state only at this pair: no contrast (the counts stay)' : undefined}>{r.noContrast ? 'no contrast' : fmt(r.estimate)}</td><td className="px-1 text-right">{fmtP(r.p)}</td><td className="px-1 text-right">{fmtP(r.q)}</td>
             <td className="px-1 text-right text-ink-secondary">{def.mode === 'M1' ? `${r.n ?? ''} · ${(r.table ?? []).join('/')}` : `${r.n1 ?? ''} / ${r.n0 ?? ''}`}</td>
           </tr>)}</tbody>
         </table>

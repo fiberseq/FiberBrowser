@@ -37,7 +37,8 @@ export function locusOfHit(h: FeatureHit, setId: string): OverlayLocus | null {
     ...(here.insertion ? { insertion: true } : {}),
     ...(strand ? { strand } : {}), ...(h.label ? { label: h.label } : {}), hitId: h.hitId, setId, ...pathsOf(h.graph),
     ...(h.source && h.frame?.kind === 'source' ? { source: { ...h.source, ...(h.strand ? { strand: h.strand } : {}),
-      ...(h.frame.hapLabel ?? h.frame.hap ? { hap: h.frame.hapLabel ?? h.frame.hap } : {}) } } : {}),
+      ...(h.frame.hapLabel ?? h.frame.hap ? { hap: h.frame.hapLabel ?? h.frame.hap } : {}),
+      ...(h.frame.datasetId ? { datasetId: h.frame.datasetId } : {}) } } : {}),
   };
 }
 
@@ -182,10 +183,15 @@ export function OverlayTab({ sets, seed }: { sets: FeatureSet[]; seed?: OverlayS
       const a = hub.anchors.find(x => x.id === st.anchorSetId);
       // Placed anchors only; a lifted anchor keeps its source coordinates and haplotype, an insertion anchor its flag.
       return (a?.anchors ?? []).filter(p => !p.frame || p.frame.kind !== 'source' || p.source).map((p, i) => {
-        const hap = p.frame?.kind === 'source' ? (p.frame.hapLabel ?? p.frame.hap) : undefined;
+        const fr = p.frame?.kind === 'source' ? p.frame : undefined;
+        const hap = fr ? (fr.hapLabel ?? fr.hap) : undefined;
+        // a lifted anchor: this genome's strand on the axis, its own strand and anchor on its source contig
+        const strand = fr ? p.targetStrand : p.strand;
         return { key: `${a!.id}|${i}`, chrom: p.chrom, start: p.start ?? p.pos, end: Math.max(p.end ?? p.pos + 1, (p.start ?? p.pos) + 1), anchor: p.pos,
-          ...(p.strand ? { strand: p.strand } : {}), label: p.label, hitId: p.hitId, ...(p.insertion ? { insertion: true } : {}),
-          ...(p.source ? { source: { ...p.source, anchor: Math.floor((p.source.start + p.source.end) / 2), ...(hap ? { hap } : {}) } } : {}) };
+          ...(strand ? { strand } : {}), label: p.label, hitId: p.hitId, ...(p.insertion ? { insertion: true } : {}), ...(p.paths ? { paths: p.paths } : {}),
+          ...(p.source ? { source: { chrom: p.source.chrom, start: p.source.start, end: p.source.end,
+            anchor: p.source.anchor ?? Math.floor((p.source.start + p.source.end) / 2), ...(p.strand ? { strand: p.strand } : {}),
+            ...(hap ? { hap } : {}), ...(fr?.datasetId ? { datasetId: fr.datasetId } : {}) } } : {}) };
       });
     }
     if (st.loci === 'set') {
@@ -206,7 +212,9 @@ export function OverlayTab({ sets, seed }: { sets: FeatureSet[]; seed?: OverlayS
         const hap = sel.frame.hapLabel ?? sel.frame.hap;
         out.push({ key: `${sel.setId}|${sel.hitId}`, chrom: sel.target.chrom, start: sel.target.start, end: Math.max(sel.target.end, sel.target.start + 1),
           anchor: sel.target.anchor, label: sel.label, hitId: sel.hitId, ...(sel.target.insertion ? { insertion: true } : {}), ...pathsOf(sel.graph),
-          source: { chrom: sel.chrom, start: sel.start, end: sel.end, anchor: sel.anchor, ...(sel.strand ? { strand: sel.strand } : {}), ...(hap ? { hap } : {}) } });
+          ...(sel.targetStrand ? { strand: sel.targetStrand } : {}),
+          source: { chrom: sel.chrom, start: sel.start, end: sel.end, anchor: sel.anchor, ...(sel.strand ? { strand: sel.strand } : {}), ...(hap ? { hap } : {}),
+            ...(sel.frame.datasetId ? { datasetId: sel.frame.datasetId } : {}) } });
       }
     }
     return out;

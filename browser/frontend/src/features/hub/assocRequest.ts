@@ -55,11 +55,17 @@ export function setLabel(set: FeatureSet): string {
 
 /** Where a browser set was computed: the view it is listed in, or its recorded regions (`chrom:start-end`). */
 function coverageOf(set: FeatureSet, view?: { chrom: string; start: number; end: number }): Array<[string, number, number]> | undefined {
+  // The hub lists a browser set's hits in view only, so its coverage is the view (within its recorded regions).
+  if (!view) return undefined;
+  const v: [string, number, number] = [view.chrom, Math.floor(view.start), Math.ceil(view.end)];
   if (set.coverage.territory === 'regions' && set.coverage.ref) {
     const m = /^(.+):(\d+)-(\d+)$/.exec(set.coverage.ref);
-    if (m) return [[m[1], Number(m[2]), Number(m[3])]];
+    if (m) {
+      const lo = Math.max(v[1], Number(m[2])), hi = Math.min(v[2], Number(m[3]));
+      return m[1] === v[0] && hi > lo ? [[v[0], lo, hi]] : [];
+    }
   }
-  return view ? [[view.chrom, Math.floor(view.start), Math.ceil(view.end)]] : undefined;
+  return [v];
 }
 
 /** Placed anchors only: an assembly anchor that didn't lift has no position on this genome. */

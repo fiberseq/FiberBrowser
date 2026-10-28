@@ -124,15 +124,17 @@ def test_graph_mode_counts_carriers_only(computed):
     res = overlay(computed, dict(loci=loci, layer='regular', align='left', flank=500, observations=obs, pileMax=0))
     s = res['series'][0]
     assert res['graphMode'] is True
-    assert s['loci'] == 2                      # carried, and partly carried (its missing columns have no molecules)
-    assert s['lociSkipped'] == {'absent': 1, 'unresolved': 2}
+    # carried; a partial carrier on a native panel is left out (no lift to mask the columns it lacks; a lifted panel
+    # measures it where its lift maps each base)
+    assert s['loci'] == 1
+    assert s['lociSkipped'] == {'absent': 1, 'unresolved': 2, 'partial': 1}
     alone = overlay(computed, dict(loci=[loci[0], loci[4]], layer='regular', align='left', flank=500, observations=obs, pileMax=0))['series'][0]
     assert s['den'] == alone['den'] and s['num'] == alone['num']
     # a linear panel of a haplotype the columns name follows the same rule; one they don't name is measured
     lin = overlay(computed, dict(loci=loci, layer='regular', align='left', flank=500, pileMax=0,
                                  observations=[dict(obsId='m', label='MAT panel', datasetId='ds0', kind='linear', liftHap='MAT'),
                                                dict(obsId='n', label='native', datasetId='ds1', kind='linear')]))['series']
-    assert lin[0]['lociSkipped'] == {'absent': 1, 'unresolved': 1} and lin[0]['loci'] == 3   # the PAT-only locus has no MAT status: measured
+    assert lin[0]['lociSkipped'] == {'absent': 1, 'unresolved': 1, 'partial': 1} and lin[0]['loci'] == 2   # the PAT-only locus has no MAT status: measured
     assert lin[1]['lociSkipped'] == {} and lin[1]['loci'] == 5
 
 
@@ -175,6 +177,27 @@ def test_insertion_loci_are_absent_on_this_genome(computed):
     locus = dict(LOCI[0], end=LOCI[0]['start'] + 1, insertion=True)
     s = overlay(computed, dict(loci=[locus], layer='regular', align='anchor', flank=300, observations=OBS[:1], pileMax=0))['series'][0]
     assert s['lociSkipped'] == {'absent': 1} and s['molecules'] == 0
+
+
+def test_pile_rows_cover_what_was_sampled():
+    """A pile row drawn from samples covers each sample's own share of its bin: a fully sampled scaled locus is one
+    run from the left flank's end to the right flank's end."""
+    from services.hub.overlay import Axis, _runs
+    ax = Axis('scaled', 1000, [400], bin_bp=10)
+    pts, bins, x, w = ax.samples_x(10_000, 10_400, 10_200, False)
+    runs = _runs(x, w, np.ones(len(x), bool))
+    # one run from the left flank's end (-1000 bp) through the patch (0-1) to the right flank's end (1 + 1000 bp)
+    assert runs == [(-1000.0, 1001.0)]
+    ax2 = Axis('left', 500, [1000], bin_bp=20)
+    _p, _b, x2, w2 = ax2.samples_x(5000, 6000, 5500, False)
+    assert _runs(x2, w2, np.ones(len(x2), bool)) == [(-500.0, 1500.0)]
+
+
+def test_cluster_style_contig_aliases_are_one_contig():
+    from services.hub.assoc import _cluster_check, normalize_request
+    d = normalize_request(dict(mode='M3', a=dict(kind='marks', typeId='nuc.seg.regular'),
+                               group=dict(kind='cluster', clusterRegions=[['1', 150, 160]], flank=0)))
+    assert _cluster_check(d, [('chr1', 100, 200)])['status'] == 'refused'
 
 
 def test_requests_are_validated(computed):

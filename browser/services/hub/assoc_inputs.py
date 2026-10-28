@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import math
 import os
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -50,6 +51,38 @@ def merge_regions(regions: Iterable[Tuple[str, int, int]]) -> List[Tuple[str, in
         else:
             cur.append([a, b])
     return [(c, a, b) for c, ivs in by.items() for a, b in ivs]
+
+
+def canon_chrom(state, name: str) -> str:
+    """A contig in the browser reference's naming (chr1 / 1 aliases), else as given."""
+    from utils.chrom import normalize_chrom_name
+    want = normalize_chrom_name(str(name))
+    for c in getattr(state, 'chroms', None) or ():
+        if str(c.name) == str(name):
+            return str(name)
+    for c in getattr(state, 'chroms', None) or ():
+        if normalize_chrom_name(str(c.name)) == want:
+            return str(c.name)
+    return str(name)
+
+
+def canon_regions(state, regions):
+    return None if regions is None else merge_regions((canon_chrom(state, c), a, b) for c, a, b in regions)
+
+
+def scan_regions(scan, rel: str, regions):
+    """Windows in a scan table's own contig naming (FiberHMM's readers match names exactly)."""
+    if regions is None:
+        return None
+    t = scan.tables.table(rel)
+    if t is None:
+        return list(regions)
+    out = []
+    for c, a, b in regions:
+        name = t.contig(c)
+        if name is not None:
+            out.append((name, a, b))
+    return out
 
 
 def read_bed(path: str, limit: int = 200_000) -> List[Tuple[str, int, int]]:
@@ -290,7 +323,7 @@ def scan_set_hits(state, set_id: str, regions, *, label: str = '') -> HitTable:
                 continue
             if place['insertion']:
                 table.bump('in_insertion')
-            hit = dict(hitId=h['hitId'], chrom=place['chrom'], start=place['start'], end=place['end'],
+            hit = dict(hitId=h['hitId'], chrom=canon_chrom(state, place['chrom']), start=place['start'], end=place['end'],
                        anchor=place['anchor'], strand=h.get('targetStrand') or h.get('strand'), label=h.get('label') or '',
                        insertion=place['insertion'], columns=h.get('columns') or {},
                        src=dict(chrom=h['chrom'], start=int(h['start']), end=int(h['end'])),
@@ -303,7 +336,8 @@ def scan_set_hits(state, set_id: str, regions, *, label: str = '') -> HitTable:
 
 
 def _bindings(scan, datasets: Optional[Sequence[str]]):
-    """scan dataset id -> [browser dataset id] (unbound scan datasets keep a scan-qualified key)."""
+    """scan dataset id -> [browser dataset id] of the bound datasets. Unbound scan datasets ("scan of other files")
+    take no part in per-molecule analyses: their molecules' covariates and labels aren't joined to anything."""
     out: Dict[str, List[str]] = {}
     for sid, bid, _via, _files in scan.bound_pairs():
         if datasets and bid not in datasets:
@@ -311,11 +345,6 @@ def _bindings(scan, datasets: Optional[Sequence[str]]):
         out.setdefault(sid, [])
         if bid not in out[sid]:
             out[sid].append(bid)
-    if not datasets:
-        for ds in scan.manifest.get('datasets') or ():
-            sid = ds.get('dataset_id')
-            if sid not in out:
-                out[sid] = [f'scan:{scan.scan_id}:{sid}']
     return out
 
 
@@ -590,9 +619,12 @@ def cluster_labels(mols: Molecules, labels: dict) -> np.ndarray:
     return out
 
 
-def dataset_labels(state, mols: Molecules) -> np.ndarray:
-    names = {ds_id: getattr(ds, 'label', ds_id) for ds_id, ds in (getattr(state, 'datasets', None) or {}).items()}
-    return np.array([names.get(ds, ds) for ds in mols.dataset], dtype=object)
+def display_names(state, ids) -> Dict[str, str]:
+    """Dataset id -> its label for display; labels two datasets share get the id added (groups are keyed by id)."""
+    labels = {ds_id: getattr(ds, 'label', ds_id) for ds_id, ds in (getattr(state, 'datasets', None) or {}).items()}
+    out = {i: labels.get(i, i) for i in ids}
+    counts = Counter(out.values())
+    return {i: (f'{v} ({i})' if counts[v] > 1 else v) for i, v in out.items()}
 
 
 def group_values(state, mols: Molecules, group: Optional[dict], regions) -> Tuple[Optional[np.ndarray], str, dict]:
@@ -601,7 +633,9 @@ def group_values(state, mols: Molecules, group: Optional[dict], regions) -> Tupl
         return None, 'label', {}
     kind = group['kind']
     if kind == 'dataset':
-        return dataset_labels(state, mols), 'label', dict(kind='dataset')
+        # keyed by dataset id (labels need not be unique); `names` shows them
+        return (np.array(list(mols.dataset), dtype=object), 'label',
+                dict(kind='dataset', names=display_names(state, sorted(set(mols.dataset)))))
     if kind == 'haplotype':
         phased = native_haplotypes(state, mols, regions)
         vals = np.array([mols.hap_of(i) for i in range(mols.n)], dtype=object)
@@ -627,21 +661,22 @@ def molecule_table(state, mols: Molecules, regions, *, density: str = 'rho_read'
 
 
 # ------------------------------------------------------------------ territory (M4)
-def scan_territory(table: HitTable, regions) -> Tuple[List[Tuple[str, int, int]], str]:
+def scan_territory(state, table: HitTable, regions) -> Tuple[List[Tuple[str, int, int]], str]:
     """Where a set's absence means absence: a linear scan's callable runs within its done zones (and the windows); an
     assembly scan or a browser set: the windows (the view, the BED or anchors) only."""
     scan = table.scan
-    if scan is not None and (scan.frame or {}).get('kind') != 'source':
-        from fiberhmm.assoc.scanio import territory
-        from fiberhmm.scan.reader import ScanDir
-        terr = territory(ScanDir(scan.path), regions=regions)
-        return [(str(c), int(a), int(b)) for c, a, b in terr], 'callable runs of every scanned dataset within done units'
-    if regions is None:
-        raise AssocInputError(f'{table.label}: a browser set covers only what is in view; choose the view, a BED or an anchor set')
-    if scan is not None:
+    if scan is not None and (scan.frame or {}).get('kind') == 'source':
         raise AssocInputError(f'{table.label}: an assembly scan\'s callable territory is in its own coordinates and isn\'t '
                               'lifted onto this genome yet, so M4 has no territory for it here. Compare it in its own '
                               'assembly (fiberhmm-scan assoc on the scan), or use a scan of this genome')
+    if scan is not None:
+        from fiberhmm.assoc.scanio import territory
+        from fiberhmm.scan.reader import ScanDir
+        terr = territory(ScanDir(scan.path), regions=scan_regions(scan, 'callable.tsv.bgz', regions))
+        return ([(canon_chrom(state, c), int(a), int(b)) for c, a, b in terr],
+                'callable runs of every scanned dataset within done units')
+    if regions is None:
+        raise AssocInputError(f'{table.label}: a browser set covers only what is in view; choose the view, a BED or an anchor set')
     return list(regions), 'the windows (a browser set is computed for what is in view)'
 
 
@@ -698,9 +733,10 @@ def rate_data(state, a_type: str, b_kind: str, regions, datasets: Optional[Seque
     mols = Molecules()
     for scan, binds in scans:
         try:
-            d = S.rate_data_from_marks(ScanDir(scan.path), a_type, b_kind, regions)
+            d = S.rate_data_from_marks(ScanDir(scan.path), a_type, b_kind, scan_regions(scan, 'nuc/marks.tsv.bgz', regions))
         except S.ScanInputError as error:
             raise AssocInputError(str(error)) from None
+        d.chrom = np.array([canon_chrom(state, c) for c in d.chrom], dtype=object)
         keep, ds_out = [], []
         for k in range(d.n):
             # every browser dataset bound to the scan dataset has its own molecules (HUB 3.4)
@@ -741,10 +777,14 @@ def rate_data(state, a_type: str, b_kind: str, regions, datasets: Optional[Seque
 def decoded_molecules(state, datasets: Sequence[str], regions, *, max_records: int = 20_000):
     """FiberHMM ``NucMolecule``s of native datasets over the windows (primary records), with each dataset's
     nucleosome calibration (the nucleosome panel's: an open scan's, the cache's, or computed now)."""
-    from fiberhmm.nuc.records import iter_molecules
+    from fiberhmm.nuc.records import DecodeContext, decode_record
+    from fiberhmm.scan.reads import iter_records
+    from services.nuc.engine import nuc_params, resolve_settings
     from services.nuc.inputs import NucInputError, browser_read_policy, nuc_source
     from services.nuc.live import bam_chrom
     import pysam
+    policy = browser_read_policy(state)
+    params = nuc_params(resolve_settings(None)[0])
     out: Dict[str, Tuple[list, object]] = {}
     for ds in datasets:
         d = (getattr(state, 'datasets', None) or {}).get(ds)
@@ -760,16 +800,26 @@ def decoded_molecules(state, datasets: Sequence[str], regions, *, max_records: i
         cal = calibration_for(state, source)
         mols = []
         for path in source.paths:
+            # the browser's read policy (duplicates, MAPQ and the other filters), as the calibration's population;
+            # primary records (molecule-wide outputs come from one record per molecule)
             with pysam.AlignmentFile(path, 'rb') as bam:
-                refs = bam.references
-            for c, a, b in regions:
-                name = bam_chrom(refs, c)
-                if name is None:
-                    continue
-                for m in iter_molecules(path, contig=name, start=a, end=b, max_records=max_records):
-                    m.meta = dict(m.meta or {}, dataset=ds)
-                    m.chrom = c                # the browser's contig name (anchors use it; BAMs may say chr1 or 1)
-                    mols.append(m)
+                ctx = DecodeContext(bam.header, params)
+                refs = list(bam.references)
+                for c, a, b in regions:
+                    name = bam_chrom(refs, c)
+                    if name is None:
+                        continue
+                    for read, _sha, _occ in iter_records(bam, name, int(a), int(b), policy['filters']):
+                        if read.is_supplementary or read.is_secondary:
+                            continue
+                        m, _reason = decode_record(read, ctx)
+                        if m is None:
+                            continue
+                        m.meta = dict(m.meta or {}, dataset=ds)
+                        m.chrom = canon_chrom(state, c)   # one contig naming (anchors use it; BAMs may say chr1 or 1)
+                        mols.append(m)
+                        if len(mols) >= max_records:
+                            break
         # one record per molecule name (a molecule fetched by two windows once)
         uniq, seen = [], set()
         for m in mols:

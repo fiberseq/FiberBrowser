@@ -412,10 +412,23 @@ def test_m3_every_bound_dataset_has_its_molecules(tmp_path):
                   ('nucsz', q, s0 + 2500, s0 + 2520, '17')]
     bam = _bam(tmp_path / 'b.bam', reads)
     scan = _scan(tmp_path / 'bscan', bam, fp_hits=[], nfr_hits=[], states=[], openness=[], marks=marks)
-    st = _state(_dataset('ds_1', bam, 'One'), _dataset('ds_2', bam, 'Two'))       # one BAM opened twice
+    st = _state(_dataset('ds_1', bam, 'Same'), _dataset('ds_2', bam, 'Same'))      # one BAM opened twice, one label
     from services.scan import registry
     registry.open_scan(st, scan)
     out = run(st, _defn('M3', dict(kind='marks', typeId='nuc.seg.regular'), dict(kind='tf'), group=dict(kind='dataset'),
                         scope=dict(kind='view', chrom=CONTIG, start=0, end=LENGTH)))
     assert out['inputs']['molecules'] == 24
-    assert set(out['result']['groups']) == {'One', 'Two'}
+    # groups are keyed by dataset id (labels need not be unique); the display names tell them apart
+    assert set(out['result']['groups']) == {'ds_1', 'ds_2'}
+    assert out['groupNames'] == {'ds_1': 'Same (ds_1)', 'ds_2': 'Same (ds_2)'}
+    assert [e['label'] for e in out['effects'] if e['key'].startswith('group:')] == ['Same (ds_1)', 'Same (ds_2)']
+
+
+def test_pairs_with_one_state_show_counts_not_estimates(world):
+    from services.hub.assoc import _m1_rows
+    from services.hub.assoc_inputs import HitTable
+    res = {'pairs': [dict(a='a1', b='b1', chrom=CONTIG, a_anchor=1, b_anchor=2, table=[10, 10, 10, 10], or_mh=1.0, p_exact=1.0, q=1.0),
+                     dict(a='a2', b='b2', chrom=CONTIG, a_anchor=3, b_anchor=4, table=[20, 20, 0, 0], or_mh=1.0, p_exact=1.0, q=1.0)]}
+    rows = _m1_rows(res, HitTable('x', 'x'), HitTable('y', 'y'))
+    assert rows[0]['estimate'] == 1.0 and rows[0].get('noContrast') is None
+    assert rows[1]['estimate'] is None and rows[1]['p'] is None and rows[1]['noContrast'] and rows[1]['table'] == [20, 20, 0, 0]

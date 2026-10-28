@@ -49,6 +49,16 @@ export const useAssocJob = create<AssocJobStore>((set, get) => ({
     if (born !== hubGeneration()) return;
     set({ job });
     if (timer) clearTimeout(timer);
+    const finish = (next: AssocJob) => {
+      if (born !== hubGeneration()) return;
+      if (next.status !== 'cancelled') remember(next, request);
+      if (next.status === 'complete') set({ shown: next.job_id });
+    };
+    if (!LIVE.has(job.status)) {
+      // already finished when the submission answered (a quick run): its result needs the full job
+      void getAssocJob(job.job_id).then(full => { if (get().job?.job_id === full.job_id) { set({ job: full }); finish(full); } }).catch(() => finish(job));
+      return;
+    }
     const poll = async () => {
       const current = get().job;
       if (!current || !LIVE.has(current.status)) return;
@@ -57,9 +67,7 @@ export const useAssocJob = create<AssocJobStore>((set, get) => ({
         if (get().job?.job_id !== next.job_id || born !== hubGeneration()) return;
         set({ job: next });
         if (!LIVE.has(next.status)) {
-          if (born !== hubGeneration()) return;
-          if (next.status !== 'cancelled') remember(next, request);
-          if (next.status === 'complete') set({ shown: next.job_id });
+          finish(next);
           return;
         }
       } catch { /* the next poll retries */ }
@@ -70,7 +78,12 @@ export const useAssocJob = create<AssocJobStore>((set, get) => ({
   cancel: async () => {
     const job = get().job;
     if (!job) return;
-    try { set({ job: await cancelAssocJob(job.job_id) }); } catch { /* polling shows the state */ }
+    const born = hubGeneration();
+    try {
+      const next = await cancelAssocJob(job.job_id);
+      // only for the job still shown, in the same session (an import or a new run meanwhile wins)
+      if (born === hubGeneration() && get().job?.job_id === next.job_id && LIVE.has(get().job?.status ?? '')) set({ job: next });
+    } catch { /* polling shows the state */ }
   },
   show: id => set({ shown: id }),
   clear: () => { if (timer) clearTimeout(timer); timer = null; set({ job: null, shown: null, error: '' }); },
