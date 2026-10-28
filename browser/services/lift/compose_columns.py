@@ -19,8 +19,12 @@ on those functions (``row._pre`` then lacks the entry):
   point fields that are not all Python ints (``deam`` pairs always);
 - reads whose aligned runs are not ascending and disjoint;
 - coordinates outside ``[0, 2**40)``;
-- top-level gaps of rows with deletion cuts (``sv``) or with a call that has
-  several parts in one span (``_logical`` would join them).
+- top-level gaps of rows with deletion cuts (``sv``, or a junction that
+  cuts), with a blanked run, or with a call that has several parts in one run
+  (``_logical`` would join them);
+- intervals whose ends may take the decoder's end rules
+  (``_end_rule_candidates``: an end inside a badge, a legacy call's end at the
+  first base after a junction or inside a read insertion on a '-' row).
 
 Hidden insertion blocks run through it too, each in its own frame
 (``precompute(regions=...)``).
@@ -187,6 +191,25 @@ class _Runs:
         ii = np.clip(off + np.clip(i, 0, np.maximum(n - 1, 0)), 0, len(self.seq) - 1)
         return (n > 0) & (i >= 0) & (self.seq[ii] + self.len[ii] > a), exact
 
+    def inserted(self, d, m):
+        """``_SeqRuns.inserted(m)`` for reads ``d`` (arrays): ``(result, exact)``, as ``has_aligned``."""
+        if self._seqkey is None:
+            self.has_aligned(d[:0], m[:0], m[:0])
+        exact = self._seq_ok[d].copy()
+        if not len(self.seq):
+            return np.zeros(len(d), dtype=bool), exact
+        n = self.n[d]
+        off = self.off[d]
+        last = np.clip(off + np.maximum(n - 1, 0), 0, len(self.seq) - 1)
+        first = np.clip(off, 0, len(self.seq) - 1)
+        s = np.where(self.reverse[d], self.length[d] - 1 - m, m)
+        body = (n > 0) & (s >= self.seq[first]) & (s < self.seq[last] + self.len[last])
+        x = np.clip(s, -1, _SHIFT - 1)
+        i = np.searchsorted(self._seqkey, d * _SHIFT + x, side="right") - 1 - off
+        ii = np.clip(off + np.clip(i, 0, np.maximum(n - 1, 0)), 0, len(self.seq) - 1)
+        aligned = (i >= 0) & (s < self.seq[ii] + self.len[ii])
+        return body & ~aligned, exact
+
     def mol_at(self, d, x):
         """``_SeqRuns.mol_at`` for reads ``d`` at reference positions ``x`` (arrays)."""
         if not len(x):
@@ -230,7 +253,6 @@ class _Frags:
         self.ts = _ints((f.p.t_start for f in frags), n)
         self.te = _ints((f.p.t_end for f in frags), n)
         self.primary = np.fromiter((bool(f.p.primary) for f in frags), dtype=bool, count=n)
-        self.span = _ints((f.span for f in frags), n)
         self.t0 = _ints((f.t0 for f in frags), n)
         self.t1 = _ints((f.t1 for f in frags), n)
         # Joinable-chain start of each fragment (row-local index).
@@ -242,6 +264,24 @@ class _Frags:
                     start = k
                 cs.append(start)
         self.chain_start = _ints(cs, n)
+        # Junction table (compose._row_geometry): merge_prev[g] when a call runs across the junction before
+        # fragment g; inner_next[g] when the junction after it lies inside its run (a source-only stretch
+        # there is a badge); after[g] when fragment g follows a junction of its run; run[g] its run index.
+        mp, inn, aft = [], [], []
+        for row in rows:
+            m = row.merge
+            mp.append(False)
+            mp.extend(m)
+            inn.extend(gap is not None for gap in row.inner)
+            inn.append(False)
+            aft.extend(row.after_junction)
+        self.merge_prev = np.fromiter(mp, dtype=bool, count=n)
+        self.inner_next = np.fromiter(inn, dtype=bool, count=n)
+        self.after = np.fromiter(aft, dtype=bool, count=n)
+        self.run = _ints((f.run for f in frags), n)
+        self.nfr = nf
+        # Rows with a junction that cuts: their parts there end at the lifted record's block edges.
+        self.row_cut = np.fromiter((any(row.cut) for row in rows), dtype=bool, count=len(rows))
         disjoint = np.fromiter((bool(row.disjoint) for row in rows), dtype=bool, count=len(rows))
         if n:
             disjoint &= ~np.bincount(self.row[(self.s < 0) | (self.e >= _SHIFT)], minlength=len(rows)).astype(bool)
@@ -276,12 +316,13 @@ class _Unit:
     ``start`` is its offset in the window's unit tables; ``ids``/``has``/``first``
     per interval (output call id, whether it has a call, the source start of
     its call's first interval as ``_call_starts`` finds it)."""
-    __slots__ = ("name", "ivs", "calls", "ok", "ids", "has", "first", "start", "arr")
+    __slots__ = ("name", "ivs", "calls", "ok", "ids", "has", "first", "start", "arr", "legacy")
 
     def __init__(self, name, ivs, calls):
         self.name, self.ivs, self.calls = name, ivs or [], calls
         self.ok, self.ids, self.has, self.first, self.start = True, None, None, None, 0
         self.arr = None  # the intervals as an (n, 3) int64 array, once read
+        self.legacy = None  # compose._legacy_group of its calls (compose_legacy)
 
 
 def _cached(ctx, name, read, make):
@@ -366,7 +407,9 @@ def _part_order(seg, c0, c1, i, k, width):
 
 def _expand(ei, r, a, b, k0, n, soff, F, RS0, WID, E_seg, E_i):
     """Parts ``(segment, c0, c1, i, k)`` of intervals ``ei`` (``[a, b)`` on
-    row ``r``) through fragments ``k0 .. k0 + n - 1``, clipped (row.parts)."""
+    row ``r``) through fragments ``k0 .. k0 + n - 1``, joined across the
+    junctions a call runs across (``F.merge_prev``) and clipped
+    (``_Row.stretches``); ``k`` is a part's first fragment."""
     rep = np.repeat(np.arange(len(ei), dtype=np.int64), n)
     first_rep = np.zeros(len(ei) + 1, dtype=np.int64)
     np.cumsum(n, out=first_rep[1:])
@@ -377,6 +420,16 @@ def _expand(ei, r, a, b, k0, n, soff, F, RS0, WID, E_seg, E_i):
     minus = F.minus[g]
     t0 = np.where(minus, F.te[g] - (b2 - F.qs[g]), F.ts[g] + (a2 - F.qs[g]))
     t1 = np.where(minus, F.te[g] - (a2 - F.qs[g]), F.ts[g] + (b2 - F.qs[g]))
+    if len(rep) > 1:
+        # A pair continues the previous one's part: the same interval, the next fragment, across a junction
+        # a call runs across.
+        cont = np.zeros(len(rep), dtype=bool)
+        cont[1:] = (rep[1:] == rep[:-1]) & (kl[1:] == kl[:-1] + 1) & F.merge_prev[g[1:]]
+        if cont.any():
+            heads = np.flatnonzero(~cont)
+            t0 = np.minimum.reduceat(t0, heads)
+            t1 = np.maximum.reduceat(t1, heads)
+            rep, kl = rep[heads], kl[heads]
     rr = r[rep]
     c0 = np.maximum(t0 - RS0[rr], 0)
     c1 = np.minimum(t1 - RS0[rr], WID[rr])
@@ -473,29 +526,47 @@ def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts, small):
     if len(A) and max(int(A.max()), int(B.max())) >= _SHIFT:
         return  # composite keys need positions below 2**40: the per-row path
     todo = USZ[E_u] >= 0
-    # Width-1 intervals of a group with calls may be insertion-only markers
-    # (a call with no aligned base: rest_parts makes a zero-width marker).
-    # Whether a call has an aligned base is looked up for all of them at once;
-    # the markers, and calls of any unusual form, go one by one exactly as
-    # _map_group does (rest_parts); the others are ordinary intervals.
+    # Width-1 intervals of a group with calls may be insertion-only calls (no
+    # aligned base: their call part key is their own molecular start). Whether
+    # a call has an aligned base is looked up for all of them at once; calls of
+    # any unusual form go one by one exactly as _map_group does (rest_parts).
     slow = todo & (B - A == 1) & seg_calls[E_seg]
     marker, by_hand, mol0 = _insertion_only(np.flatnonzero(slow), E_seg, E_i, E_d, segs, R)
+    # So do the intervals whose ends may take the decoder's end rules (compose._legacy_ends,
+    # compose._aligned_ends): an end inside a source-only stretch of the row, and for legacy calls an end
+    # at the first base of a fragment after a junction, or on a '-' row an end inside a read insertion.
+    KA, KB = F.find(E_r, A), F.find(E_r, B - 1)   # the last fragment starting at or before each end
+    cand, stub = _end_rule_candidates(E_r, A, B, E_seg, E_i, E_d, segs, F, R, KA, KB)
+    by_hand |= todo & cand
     extra = []
-    for e in np.flatnonzero(marker | by_hand).tolist():
+    for e in np.flatnonzero(by_hand).tolist():
         s = int(E_seg[e])
         r, row, u = segs[s]
         d = row_read[r]
         for part in rest_parts(int(E_i[e]), u.ivs, u.calls, row, int(base[d]), items[d][2], F.rs0[r], F.width[r]):
             extra.append((s, *part))
+    # A legacy call inside one junction's source-only stretch (a badge) is the decoder's 1-bp interval at the
+    # junction's insertion (compose._legacy_ends), unless the junction cuts; an MA call there has no part.
+    for e in np.flatnonzero(todo & stub & ~by_hand & UHAS[E_u]).tolist():
+        s = int(E_seg[e])
+        r, row, u = segs[s]
+        j = int(KA[e])
+        if row.cut[j]:  # no part; the per-row path records its extent before the cut (row.precut)
+            d = row_read[r]
+            rest_parts(int(E_i[e]), u.ivs, u.calls, row, int(base[d]), items[d][2], F.rs0[r], F.width[r])
+            continue
+        p = row.pi[j] - int(RS0[r])
+        if min(p + 1, int(WID[r])) > max(p, 0):
+            extra.append((s, max(p, 0), min(p + 1, int(WID[r])), int(E_i[e]), j))
     # Every other interval: one part per fragment it overlaps (row.parts;
     # nearly always the one fragment holding it whole).
-    ei = np.flatnonzero(todo & ~(marker | by_hand))
+    ei = np.flatnonzero(todo & ~by_hand)
     r, a, b = E_r[ei], A[ei], B[ei]
-    k = F.find(r, a)
+    k = KA[ei]
     soff = F.soff[r]
     last = max(len(F.sidx) - 1, 0)
     k0 = np.where((k >= 0) & (F.e[F.sidx[np.clip(soff + np.maximum(k, 0), 0, last)]] > a), k, k + 1)
-    k1 = np.searchsorted(F.skey, r * _SHIFT + b, side="left") - 1 - soff
+    k1 = KB[ei]   # the last fragment starting before b
     n = np.maximum(k1 - k0 + 1, 0)
     # (interval, fragment) candidates, a slice of intervals at a time so that
     # intervals crossing many fragments never expand past the batch budget.
@@ -586,6 +657,71 @@ def _map_units(items, rows, row_read, F, R, base, ctx, rest_parts, small):
                                   list(map(quals.__getitem__, ranks)) if quals else None)
 
 
+def _end_rule_candidates(E_r, A, B, E_seg, E_i, E_d, segs, F, R, KA, KB):
+    """``(candidates, stubs)`` over elements (an interval on a row). Candidates: elements whose ends
+    ``compose._map_group`` may move off their fragments' edges (they go one by one): one end inside a
+    junction's source-only stretch (a badge) of its row; for a legacy call (``compose._legacy_group``) an
+    end at the first base of a fragment that follows a junction, or, on a '-' row, an end inside a read
+    insertion. Stubs: legacy elements inside one badge (the decoder's 1-bp interval there; ``KA`` is the
+    junction). An MA element inside one badge has no part. ``KA``/``KB``: ``F.find`` of each end."""
+    n = len(E_r)
+    out = np.zeros(n, dtype=bool)
+    stub = np.zeros(n, dtype=bool)
+    if not n or not len(F.skey):
+        return out, stub
+    last = len(F.sidx) - 1
+    nfr = F.nfr[E_r]
+    soff = F.soff[E_r]
+    ends, badges = [], []
+    for x, k in ((A, KA), (B - 1, KB)):
+        g = F.sidx[np.clip(soff + np.maximum(k, 0), 0, last)]
+        gn = F.sidx[np.clip(soff + np.maximum(k, 0) + 1, 0, last)]
+        inside = (k >= 0) & (x < F.e[g])
+        badges.append((k >= 0) & ~inside & (k + 1 < nfr) & F.inner_next[g] & (x < F.s[gn]))
+        ends.append((x, k, g, inside))
+    within = badges[0] & badges[1] & (KA == KB)   # inside one badge
+    out |= (badges[0] | badges[1]) & ~within
+    # An interval across fragments of a row with a junction that cuts: trimmed to block edges there.
+    out |= F.row_cut[E_r] & (KA != KB)
+    legacy = np.fromiter((compose_legacy(segs[s][2]) for s in range(len(segs))), dtype=bool, count=len(segs))[E_seg]
+    if not legacy.any():
+        return out, stub
+    stub = legacy & within
+    for x, k, g, inside in ends:
+        out |= legacy & inside & (x == F.s[g]) & F.after[g]
+    minus = legacy & F.minus[F.off[E_r]]   # a row's fragments share its strand
+    idx = np.flatnonzero(minus & ~out)
+    if len(idx):
+        ml, mr, ok = [], [], []
+        for e in idx.tolist():
+            u = segs[int(E_seg[e])][2]
+            i = int(E_i[e])
+            call = u.calls[i] if u.calls is not None and i < len(u.calls) else None
+            if call and type(call) is list and len(call) >= 3 and type(call[1]) is int and type(call[2]) is int:
+                ml.append(call[1])
+                mr.append(call[2] - 1)
+                ok.append(True)
+            else:
+                ml.append(0)
+                mr.append(0)
+                ok.append(False)
+        d = E_d[idx]
+        ins0, ex0 = R.inserted(d, np.asarray(ml, dtype=np.int64))
+        ins1, ex1 = R.inserted(d, np.asarray(mr, dtype=np.int64))
+        ok = np.asarray(ok, dtype=bool)
+        out[idx] |= ~ok | ~ex0 | ~ex1 | ins0 | ins1
+    return out, stub & ~out
+
+
+def compose_legacy(unit):
+    """``compose._legacy_group`` of a unit's calls, once per unit."""
+    flag = unit.legacy
+    if flag is None:
+        from services.lift.compose import _legacy_group
+        flag = unit.legacy = bool(unit.calls) and _legacy_group(unit.calls)
+    return flag
+
+
 def _insertion_only(cand, E_seg, E_i, E_d, segs, R):
     """For the width-1 intervals ``cand`` (element indices) of groups with
     calls: ``(marker, by_hand, mol0)`` over all elements. ``marker``: a plain
@@ -625,10 +761,11 @@ def _insertion_only(cand, E_seg, E_i, E_d, segs, R):
 
 def _top_level(items, rows, row_read, segs, F, USZ, seg_ustart, P_seg, P_c0, P_c1, P_i, fg, bounds, ctx, mapped):
     """The top-level intervals of each row as ``_row_payload`` lays them out:
-    footprint parts plus the gaps between whole calls inside each span
-    (``_logical`` + ``_gaps``), sorted by ``(start, end, index)``, with their
-    qualities. Only rows whose read has no ``sv`` (no deletion cuts) and whose
-    calls each map to one part per span (so each logical call is one part);
+    footprint parts plus the gaps between whole calls of each run (one lifted
+    record: ``_logical`` + ``_gaps``), sorted by ``(start, end, index)``, with
+    their qualities. Only rows whose read has no ``sv`` and whose junctions
+    cut nothing (no cuts at all), with no blanked run, and whose calls each map
+    to one part per run (so each logical call is one part);
     ``row._pre.intervals`` is left None for the others. Sets it to
     ``(intervals, order, quality ranks)``: the intervals (``IntColumn``, a
     slice of one window array of parts and gaps in display order) and the
@@ -639,102 +776,102 @@ def _top_level(items, rows, row_read, segs, F, USZ, seg_ustart, P_seg, P_c0, P_c
     if not nseg or F.max_width >= (1 << 31):
         return
     ok = np.fromiter((u.name == "intervals" and "sv" not in items[row_read[r]][0] and u.first is None
-                      for r, _row, u in segs), dtype=bool, count=nseg)
+                      and not row.blank_runs and not any(row.cut)
+                      and all(ctx.region_start <= s[0] and s[1] <= ctx.region_end for s in row.segments)
+                      for r, row, u in segs), dtype=bool, count=nseg)
     if not ok.any():
         return
-    # Spans: every (row, span id) of the rows, with their target bounds.
-    nf = len(F.s)
-    if not nf:
-        return
-    new_span = np.ones(nf, dtype=bool)
-    new_span[1:] = (F.row[1:] != F.row[:-1]) | (F.span[1:] != F.span[:-1])
-    st_first = np.flatnonzero(new_span)
-    st_row = F.row[st_first]
-    st_b0 = np.minimum.reduceat(F.t0, st_first) - RS0[st_row]
-    st_b1 = np.maximum.reduceat(F.t1, st_first) - RS0[st_row]
-    row_st = np.searchsorted(st_row, np.arange(len(rows) + 1, dtype=np.int64))   # first span entry of each row
-    if int(F.span.max()) >= (1 << 20) or len(st_first) >= (1 << 30):
+    if not len(F.s) or int(F.run.max()) >= (1 << 20):
         return
     seg_row = np.fromiter((r for r, _row, _u in segs), dtype=np.int64, count=nseg)
-    # Positive parts of the eligible segments; an interval with two parts in one span disqualifies its row.
+    # Positive parts of the eligible segments, keyed by (segment, run); an interval with two parts in one
+    # run disqualifies its row.
     psz = USZ[seg_ustart[P_seg] + P_i]
     pos = np.flatnonzero(ok[P_seg] & (psz > 0))
-    sti = row_st[seg_row[P_seg[pos]]] + F.span[fg[pos]]
+    prun = F.run[fg[pos]]
     if len(pos) > 1:
-        o = np.lexsort((sti, P_i[pos], P_seg[pos]))
-        a_seg, a_i, a_st = P_seg[pos][o], P_i[pos][o], sti[o]
-        same = (a_seg[1:] == a_seg[:-1]) & (a_i[1:] == a_i[:-1]) & (a_st[1:] == a_st[:-1])
+        o = np.lexsort((prun, P_i[pos], P_seg[pos]))
+        a_seg, a_i, a_run = P_seg[pos][o], P_i[pos][o], prun[o]
+        same = (a_seg[1:] == a_seg[:-1]) & (a_i[1:] == a_i[:-1]) & (a_run[1:] == a_run[:-1])
         if same.any():
             ok[a_seg[1:][same]] = False
             keep = ok[P_seg[pos]]
-            pos, sti = pos[keep], sti[keep]
+            pos, prun = pos[keep], prun[keep]
+    if not ok.any():
+        return
+    # Each eligible segment's runs: bounds and (with terminal gaps hidden) call extents, region-relative.
+    k_seg, k_run, k_b0, k_b1, k_lo, k_hi, k_has = [], [], [], [], [], [], []
+    for j in np.flatnonzero(ok).tolist():
+        r, row, _u = segs[j]
+        rs0 = int(RS0[r])
+        for run, sgm in enumerate(row.segments):
+            ext = row.extents.get(run) if hide else None
+            k_seg.append(j)
+            k_run.append(run)
+            k_b0.append(sgm[0] - rs0)
+            k_b1.append(sgm[1] - rs0)
+            k_lo.append(ext[0] - rs0 if ext is not None else 0)
+            k_hi.append(ext[1] - rs0 if ext is not None else 0)
+            k_has.append(ext is not None)
+    nk = len(k_seg)
+    k_seg, k_run, k_b0, k_b1, k_lo, k_hi = (_ints(v, nk) for v in (k_seg, k_run, k_b0, k_b1, k_lo, k_hi))
+    k_has = np.fromiter(k_has, dtype=bool, count=nk)
+    # (segment, run) -> key index; parts sorted by key, then start.
+    kcode = (k_seg << 20) | k_run
+    korder = np.argsort(kcode, kind="stable")
+    pcode = (P_seg[pos] << 20) | prun
+    key = korder[np.searchsorted(kcode[korder], pcode)]
     c0, c1 = P_c0[pos], P_c1[pos]
-    # Gaps run between calls of one span, or with terminal gaps hidden of one
-    # rejoin group (compose._gaps); a gap that crosses span edges is cut at them.
-    st_group = F.off[st_row] + F.chain_start[st_first] if hide else np.arange(len(st_first), dtype=np.int64)
-    key = st_group[sti]
-    o = np.argsort((key << 32) | c0, kind="stable")
-    key, sti, c0, c1 = key[o], sti[o], c0[o], c1[o]
-    run = np.maximum.accumulate((key << 32) | c1) & 0xFFFFFFFF if len(key) else key
+    o = np.lexsort((c0, key))
+    key, c0, c1 = key[o], c0[o], c1[o]
     first = np.ones(len(key), dtype=bool)
     first[1:] = key[1:] != key[:-1]
-    prev = np.empty_like(run)
-    prev[1:] = run[:-1]
+    # Running maximum of the ends within each key.
+    shift = np.int64(1) << 32
+    run_end = np.maximum.accumulate(key * shift + c1) - key * shift if len(key) else c1
+    prev = np.empty_like(run_end)
+    if len(prev):
+        prev[1:] = run_end[:-1]
     inner = ~first & (c0 > prev)
-    g_st, g0, g1, g_size = [sti[inner]], [prev[inner]], [c0[inner]], [prev[inner] - c0[inner]]
-    cross = np.flatnonzero(inner & (prev < st_b0[sti]))
-    if len(cross):
-        keep = np.ones(len(g_st[0]), dtype=bool)
-        keep[np.searchsorted(np.flatnonzero(inner), cross)] = False
-        g_st, g0, g1, g_size = [g_st[0][keep]], [g0[0][keep]], [g1[0][keep]], [g_size[0][keep]]
-        xs, x0, x1, xz = [], [], [], []
-        for j in cross.tolist():
-            a, b, s = int(prev[j]), int(c0[j]), int(sti[j])
-            r = int(st_row[s])
-            for t in range(int(row_st[r]), int(row_st[r + 1])):
-                if st_group[t] == st_group[s] and min(b, st_b1[t]) > max(a, st_b0[t]):
-                    xs.append(t)
-                    x0.append(max(a, int(st_b0[t])))
-                    x1.append(min(b, int(st_b1[t])))
-                    xz.append(a - b)
-        g_st.append(np.asarray(xs, dtype=np.int64))
-        g0.append(np.asarray(x0, dtype=np.int64))
-        g1.append(np.asarray(x1, dtype=np.int64))
-        g_size.append(np.asarray(xz, dtype=np.int64))
-    if not hide:
-        # Leading gap of each span with calls, trailing gap after its last call,
-        # and the whole span when it has none (eligible rows only).
-        g_st.append(sti[first])
-        g0.append(st_b0[sti[first]])
-        g1.append(c0[first])
+    g_key, g0, g1, g_size = [key[inner]], [prev[inner]], [c0[inner]], [prev[inner] - c0[inner]]
+    last = np.ones(len(key), dtype=bool)
+    last[:-1] = key[1:] != key[:-1]
+    fk, lk = key[first], key[last]
+    if hide:
+        lead = k_has[fk] & (k_lo[fk] < c0[first])
+        g_key.append(fk[lead])
+        g0.append(k_lo[fk][lead])
+        g1.append(c0[first][lead])
         g_size.append(g0[-1] - g1[-1])
-        last = np.ones(len(sti), dtype=bool)
-        last[:-1] = sti[1:] != sti[:-1]
-        g_st.append(sti[last])
-        g0.append(run[last])
-        g1.append(st_b1[sti[last]])
+        trail = k_has[lk] & (k_hi[lk] > run_end[last])
+        g_key.append(lk[trail])
+        g0.append(run_end[last][trail])
+        g1.append(k_hi[lk][trail])
         g_size.append(g0[-1] - g1[-1])
-        row_ok = np.zeros(len(rows), dtype=bool)
-        row_ok[seg_row[ok]] = True
-        empty = row_ok[st_row]
-        empty[sti] = False
-        e = np.flatnonzero(empty)
-        g_st.append(e)
-        g0.append(st_b0[e])
-        g1.append(st_b1[e])
-        g_size.append(g0[-1] - g1[-1])
-    g_st, g0, g1, size = (np.concatenate(v) for v in (g_st, g0, g1, g_size))
-    real = g1 > g0
-    g_st, g0, g1, size = g_st[real], g0[real], g1[real], size[real]
-    k0, k1 = np.maximum(g0, 0), np.minimum(g1, WID[st_row[g_st]])
+    else:
+        w = WID[seg_row[k_seg[fk]]]
+        a, b = k_b0[fk], c0[first]
+        lead = b > a
+        g_key.append(fk[lead])
+        g0.append(a[lead])
+        g1.append(b[lead])
+        g_size.append(-(np.minimum(b, w) - np.maximum(a, 0))[lead])
+        w = WID[seg_row[k_seg[lk]]]
+        a, b = run_end[last], k_b1[lk]
+        trail = b > a
+        g_key.append(lk[trail])
+        g0.append(a[trail])
+        g1.append(b[trail])
+        g_size.append(-(np.minimum(b, w) - np.maximum(a, 0))[trail])
+    g_key, g0, g1, size = (np.concatenate(v) for v in (g_key, g0, g1, g_size))
+    gw = WID[seg_row[k_seg[g_key]]]
+    k0, k1 = np.maximum(g0, 0), np.minimum(g1, gw)
     vis = k1 > k0
-    g_st, k0, k1, size = g_st[vis], k0[vis], k1[vis], size[vis]
-    o = np.argsort((g_st << 32) | k0, kind="stable")
-    g_st, k0, k1, size = g_st[o], k0[o], k1[o], size[o]
-    # Gap -> segment (each eligible row has one "intervals" segment).
-    seg_of_row = np.full(len(rows), -1, dtype=np.int64)
-    seg_of_row[seg_row[ok]] = np.flatnonzero(ok)
-    g_seg = seg_of_row[st_row[g_st]]
+    g_key, k0, k1, size = g_key[vis], k0[vis], k1[vis], size[vis]
+    # compose._gaps order: runs in index order, then leading, internal, trailing gaps by position.
+    o = np.lexsort((k0, k_run[g_key], k_seg[g_key]))
+    g_key, k0, k1, size = g_key[o], k0[o], k1[o], size[o]
+    g_seg = k_seg[g_key]
     gaps = np.stack([k0, k1, size], axis=1)
     gb = np.searchsorted(g_seg, np.arange(nseg + 1, dtype=np.int64)).tolist()
     # Display order of parts + gaps per segment: (start, end, index), gaps after parts.

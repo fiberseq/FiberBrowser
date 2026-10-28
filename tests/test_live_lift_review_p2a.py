@@ -171,10 +171,13 @@ def test_coverage_uses_panel_supplementary_filter(lift_env, monkeypatch, reuse):
 
 @pytest.mark.parametrize('direct', [False, True])
 def test_endpoint_spanning_uses_body_not_connector(lift_env, direct):
+    """Lift parity (was: no row spans a view inside the toy's 10 bp connector): a connector that cuts no
+    call lies inside the row's body, as the lifted record's alignment covers its D, so the row spans the view.
+    A connector that cuts stays a hole (test_live_lift_map_holes.test_a_connector_that_cuts_is_a_hole)."""
     client, ds = _dataset(lift_env)
     payload = _compact(client, ds.id, start=4002, end=4008, spanning='true',
                        hide_terminal_gaps='false' if direct else 'true')
-    assert payload['reads'] == [] and payload['total_spanning'] == 0
+    assert [r['id'] for r in payload['reads']] == ['plus'] and payload['total_spanning'] == 1
 
 
 def test_one_molecule_overlapping_rows_has_depth_one(lift_env, tmp_path):
@@ -487,9 +490,10 @@ def test_launcher_isolates_child_home_and_prints_explicit_relaunch(tmp_path, mon
 
 @pytest.mark.parametrize('direct', [False, True])
 def test_compact_all_spanning_uses_body(lift_env, direct):
+    """As test_endpoint_spanning_uses_body_not_connector: the 10 bp connector cuts nothing, so it is body."""
     client, ds = _dataset(lift_env)
     response = client.get('/api/reads/compact_all', params=dict(chrom=TARGET, start=4002, end=4008,
                           spanning='true', hide_terminal_gaps='false' if direct else 'true'))
     assert response.status_code == 200, response.text
     data = response.json()['datasets'][ds.id]
-    assert data['reads'] == [] and data['total_spanning'] == 0
+    assert [r['id'] for r in data['reads']] == ['plus'] and data['total_spanning'] == 1

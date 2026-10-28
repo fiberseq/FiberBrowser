@@ -1,10 +1,12 @@
-"""Linkers across 1-bp map holes survive composition (graph follow-ups item 1).
+"""Calls and linkers across small map holes (graph follow-ups item 1; lift parity).
 
-A map hole of at most ``rejoin_bp`` (a 1-bp source base with no target, a
-badge; or a 1-bp target base with no source, a connector) splits a row into
-spans. A gap (linker) between calls on either side of it used to be dropped
-when terminal gaps are hidden, so lifted rows stopped tiling peaks. It is now
-kept, cut at the span edges: no interval crosses the hole. The columnar pass
+A map hole (a source base with no target, a badge; a target base with no
+source, a connector) sits inside one chain run. fiberhmm-lift writes it into
+the lifted record's CIGAR as ``I``/``D``, and the browser's decoder runs a call
+or linker straight across it unless the hole is part of an indel event of at
+least ``sv_min_len``. Live lift now does the same: a call or linker across a
+hole that does not cut is one interval (it used to be cut at the hole, and a
+linker across a hole wider than ``rejoin_bp`` was dropped). The columnar pass
 and the per-row functions agree.
 """
 import copy
@@ -60,36 +62,38 @@ def _ivs(row):
     return [list(iv) for iv in row["intervals"]]
 
 
-def test_linkers_across_a_badge_and_a_connector_are_kept_and_cut(monkeypatch):
+def test_linkers_run_across_a_badge_and_a_connector(monkeypatch):
+    """Was: the linkers were cut at the badge and at the connector, and the connector base stayed a hole.
+    Now each linker is one gap across the hole, as the decoder reads the lifted record's CIGAR I/D."""
     (row,) = _both(monkeypatch, [_read()])
-    assert _ivs(row) == [[5, 30, 25], [30, 50, -39], [50, 69, -39], [69, 94, 25], [94, 99, -26],
-                         [100, 120, -26], [120, 135, 15]]
+    assert _ivs(row) == [[5, 30, 25], [30, 69, -39], [69, 94, 25], [94, 120, -26], [120, 135, 15]]
     assert row["live_lift"]["connectors"] == [[99, 100]]
     assert [b[0] for b in row["live_lift"]["badges"]] == [50]
-    assert row["live_lift"]["calls"]["intervals"] == ["a", None, None, "b", None, None, "c"]
-    # Peaks either side of each hole tile; the connector base itself stays a hole.
+    assert row["live_lift"]["calls"]["intervals"] == ["a", None, "b", None, "c"]
     assert read_covers_regions(row, [(20, 80), (90, 99), (100, 130)])
-    assert not read_covers_regions(row, [(95, 105)])
+    assert read_covers_regions(row, [(95, 105)])
 
 
 def test_minus_strand_rows_keep_linkers_too(monkeypatch):
     pieces = [ll.LiftPiece(0, 140 - p.t_end, 140 - p.t_start, p.q_start, p.q_end, "-", True, "H#1", "src")
               for p in PIECES]
     (row,) = _both(monkeypatch, [_read()], pieces)
-    assert _ivs(row) == [[5, 20, 15], [20, 40, -26], [41, 46, -26], [46, 71, 25], [71, 90, -39],
-                         [90, 110, -39], [110, 135, 25]]
+    assert _ivs(row) == [[5, 20, 15], [20, 46, -26], [46, 71, 25], [71, 110, -39], [110, 135, 25]]
 
 
-def test_holes_wider_than_rejoin_bp_still_drop_the_linker(monkeypatch):
+def test_linkers_across_holes_do_not_depend_on_rejoin_bp(monkeypatch):
+    """Was: with rejoin_bp 0 the linkers across the holes were dropped. rejoin_bp only groups call parts
+    (call_parts); what crosses a hole is the decoder's rule (sv_min_len)."""
     (row,) = _both(monkeypatch, [_read()], rejoin_bp=0)
-    assert _ivs(row) == [[5, 30, 25], [69, 94, 25], [120, 135, 15]]
+    assert _ivs(row) == [[5, 30, 25], [30, 69, -39], [69, 94, 25], [94, 120, -26], [120, 135, 15]]
 
 
-def test_shown_terminal_gaps_are_unchanged(monkeypatch):
+def test_shown_terminal_gaps_reach_the_run_ends(monkeypatch):
+    """Was: shown gaps were cut at each hole (span edges)."""
     for rejoin in (0, 5):
         (row,) = _both(monkeypatch, [_read()], rejoin_bp=rejoin, hide_terminal_gaps=False)
-        assert _ivs(row) == [[0, 5, -5], [5, 30, 25], [30, 50, -20], [50, 69, -19], [69, 94, 25], [94, 99, -5],
-                             [100, 120, -20], [120, 135, 15], [135, 140, -5]]
+        assert _ivs(row) == [[0, 5, -5], [5, 30, 25], [30, 69, -39], [69, 94, 25], [94, 120, -26],
+                             [120, 135, 15], [135, 140, -5]]
 
 
 def test_a_span_with_no_call_between_two_holes_is_one_linker(monkeypatch):
@@ -99,14 +103,37 @@ def test_a_span_with_no_call_between_two_holes_is_one_linker(monkeypatch):
     read = _read(intervals=[[5, 30, 25], [30, 80, -50], [80, 100, 20]],
                  _fiberbrowser_calls={"intervals": [["a", 5, 30], None, ["b", 80, 100]]}, qualities=[])
     (row,) = _both(monkeypatch, [read], pieces)
-    assert _ivs(row) == [[5, 30, 25], [30, 40, -52], [41, 60, -52], [61, 82, -52], [82, 102, 20]]
+    assert _ivs(row) == [[5, 30, 25], [30, 82, -52], [82, 102, 20]]
 
 
 def test_inferred_msps_cross_holes_the_same_way(monkeypatch):
+    """Inferred MSPs (gaps between legacy nucleosomes) cross the holes as linkers do."""
     read = _read(_fiberbrowser_legacy={"ma_names": [], "explicit_msp": False})
     (row,) = _both(monkeypatch, [read], legacy_nuc_min_size=10)
-    assert [list(iv) for iv in row["layers"]["msp"]["intervals"]] == [
-        [30, 50, 39], [50, 69, 39], [94, 99, 26], [100, 120, 26]]
+    assert [list(iv) for iv in row["layers"]["msp"]["intervals"]] == [[30, 69, 39], [94, 120, 26]]
+
+
+def test_a_connector_that_cuts_is_a_hole(monkeypatch):
+    """A 60 bp connector is an indel event of sv_min_len on the lifted record: the decoder cuts calls and
+    linkers at its deleted bases, and the row's body breaks there (live_lift.holes); a view inside it is not
+    spanned. A connector that cuts nothing is body (calls and linkers run across it)."""
+    from services.lift.reads import body_spans_view
+    pieces = [ll.LiftPiece(0, 0, 50, 0, 50, "+", True, "H#1", "src"),
+              ll.LiftPiece(0, 110, 200, 50, 140, "+", True, "H#1", "src")]
+    read = _read(intervals=[[5, 30, 25], [30, 70, -40], [70, 95, 25]], qualities=[1, 2],
+                 _fiberbrowser_calls={"intervals": [["a", 5, 30], None, ["b", 70, 95]]})
+    sel = ll.PieceSelection("tgt", 0, 200, 0, 200, pieces)
+    kw = dict(handle=None, region_start=0, region_end=200, key="k", dataset_id="d", molecules={},
+              settings=ll.LiftSettings(), loader_options={})
+    rows = compose.lift_compact_reads(copy.deepcopy([read]), ll.FetchPlan(sel, [], 0, 0), **kw)
+    with monkeypatch.context() as m:
+        m.setattr(compose, "precompute", lambda *a, **k: None)
+        _same(rows, compose.lift_compact_reads(copy.deepcopy([read]), ll.FetchPlan(sel, [], 0, 0), **kw))
+    (row,) = rows
+    assert row["live_lift"]["connectors"] == [[50, 110]] and row["live_lift"]["holes"] == [[50, 110]]
+    assert _ivs(row) == [[5, 30, 25], [30, 50, -100], [110, 130, -100], [130, 155, 25]]
+    assert row["alignment_spans"] == [[0, 50], [110, 200]]
+    assert not body_spans_view(row["live_lift"], 60, 100) and body_spans_view(row["live_lift"], 10, 40)
 
 
 @pytest.mark.skipif(not (os.environ.get("FIBERBROWSER_TEST_LIFT_BAM") and os.environ.get("FIBERBROWSER_TEST_LIFT_MAP")),
@@ -211,3 +238,26 @@ def test_indels_shorter_than_sv_min_len_cut_nothing(tmp_path, monkeypatch):
     rows = _lift_bam(monkeypatch, path, [_src(0, 350)], sv_min_len=20)
     assert _ivs(rows["short"]) == [[5, 100, 95], [100, 110, -40], [130, 140, -40], [140, 245, 105]]
 
+
+
+def _split_row():
+    """A lifted row whose record splits at a g_split target gap: two runs (one fiberhmm-lift record each),
+    a connector across the gap (an owned target insertion), no call near the runs' inner ends."""
+    return {"id": "r", "intervals": [[0, 40, 40], [20060, 20100, 40]],
+            "live_lift": {"segments": [[0, 100, 0, "+", True], [20000, 20100, 0, "+", True]],
+                          "connectors": [[100, 20000]], "holes": [], "badges": [], "badge_ids": [],
+                          "insertions": {}, "calls": {"intervals": ["ns:0", "ns:1"]},
+                          "call_parts": {"intervals": [[0, 0], [100, 100]]}}}
+
+
+def test_a_view_between_two_runs_has_no_neutral_interval_across_the_gap():
+    """Cause 7: a split row's hull spans the gap between its runs, where it has no data (fiberhmm-lift writes
+    two records). A view across both inner ends gets one neutral interval per body span, not one across the gap
+    (scans and Read Stats count neutral intervals). A view inside the gap keeps the row drawn without depth
+    (test_live_lift_gap_markers)."""
+    from services.working_sets import project_broad_read_to_viewport
+    kw = dict(include_methylation=False, layer_key=None)
+    row, _ = project_broad_read_to_viewport(_split_row(), viewport_offset=50, region_width=20000, **kw)
+    assert [list(iv) for iv in row["intervals"]] == [[0, 50, 0], [19950, 20000, 0]]
+    row, _ = project_broad_read_to_viewport(_split_row(), viewport_offset=5000, region_width=1000, **kw)
+    assert row is not None and not list(row["intervals"])

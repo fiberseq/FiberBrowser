@@ -601,8 +601,10 @@ def lifted_decode():
 
 
 # Loader options a lifted load fixes (§3.3); callers may not override them.
+# terminal_gap_threshold=0: the source decode keeps every record; compose applies the terminal-gap filter
+# to each lifted record (compose._run_filter), whose ends and call distances are the lifted record's.
 _FIXED_LOADER_OPTIONS = dict(spanning_only=False, infer_legacy_layers=False, include_lift_meta=True,
-                             circular=False)
+                             circular=False, terminal_gap_threshold=0)
 
 
 @dataclasses.dataclass

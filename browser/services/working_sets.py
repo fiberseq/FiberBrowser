@@ -1539,11 +1539,17 @@ def project_broad_read_to_viewport(
         for layer in (adjusted_read.get("layers") or {}).values():
             visible_annotations.extend(layer.get("intervals") or [])
         # A live-lift row seen only through a body segment or a badge is still drawn.
-        from services.lift.reads import _body_spans, clip_geometry, geometry_intervals
+        from services.lift.reads import _body_spans, _merge, clip_geometry, geometry_intervals
         geometry = clip_geometry(read.get("live_lift") or {}, viewport_offset, region_width)
-        visible_annotations.extend(_body_spans(geometry))
+        body = [[max(a, 0), min(b, region_width)] for a, b in _merge(_body_spans(geometry))
+                if min(b, region_width) > max(a, 0)]
+        visible_annotations.extend(body)
         visible_annotations.extend([b[0], b[0]] for b in geometry.get("badges") or ())
-        if visible_annotations:
+        if visible_annotations and body:
+            # One neutral interval per body span: never one across a target gap between a lifted row's runs
+            # (one record each on fiberhmm-lift) or a hole, where the row has no data.
+            adjusted_read["intervals"] = [[a, b, 0] for a, b in body]
+        elif visible_annotations:
             neutral_start = min(int(iv[0]) for iv in visible_annotations)
             neutral_end = max(int(iv[1]) for iv in visible_annotations)
             adjusted_read["intervals"] = [[neutral_start, neutral_end, 0]]

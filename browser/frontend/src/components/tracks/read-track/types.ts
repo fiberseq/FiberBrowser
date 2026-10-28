@@ -182,6 +182,8 @@ export interface LiveLiftRow {
   segments: Array<[number, number, number, '+' | '-', boolean]>;
   /** Target-only gaps of the map (dashed; not deletions of the molecule). */
   connectors?: Array<[number, number]>;
+  /** Where the body breaks: the deleted bases of map gaps that cut the row's calls (absent: every connector). */
+  holes?: Array<[number, number]>;
   /** [pos, reason, molecular bp, source bp, side, target locus?]. */
   badges?: Array<[number, string, number, number, string, [string, number, number]?]>;
   calls?: Record<string, Array<string | null>>;

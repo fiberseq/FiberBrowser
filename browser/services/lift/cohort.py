@@ -240,6 +240,7 @@ def _fold(rows):
     from services.read_selection import read_body_spans
     ll["segments"] = [[a, b, 0, "+", True] for a, b in _merge(s for r in rows for s in read_body_spans(r))]
     ll["connectors"] = []
+    ll["holes"] = []
     ll["insertions"] = {}
     return out
 
@@ -316,12 +317,14 @@ def _fold_display_row(members):
                           for x, y in keep if min(b, y) > max(a, x)]
         lo, hi = keep[0][0], keep[-1][1]
         ll["connectors"] = [list(cn) for cn in row["live_lift"].get("connectors", []) if lo <= cn[0] and cn[1] <= hi]
+        if "holes" in row["live_lift"]:
+            ll["holes"] = [list(h) for h in row["live_lift"]["holes"] if lo <= h[0] and h[1] <= hi]
         clipped.append(c)
     if not clipped:
         clipped = [deepcopy(anchor)]
     if clipped[0]["live_lift"]["record"] != anchor["live_lift"]["record"]:
         clipped.insert(0, {**deepcopy(anchor), "intervals": [], "fire": [], "layers": {},
-                           "live_lift": {**deepcopy(anchor["live_lift"]), "segments": [], "connectors": [],
+                           "live_lift": {**deepcopy(anchor["live_lift"]), "segments": [], "connectors": [], "holes": [],
                                          "badges": [], "badge_ids": [], "calls": {}, "call_parts": {}}})
     out = _merge_rows(clipped)
     ll = out["live_lift"]
@@ -331,6 +334,7 @@ def _fold_display_row(members):
     ll["badge_ids"] = [ids[i] if i < len(ids) else None for i in order]
     ll["segments"] = sorted(ll["segments"], key=lambda s: (s[0], s[1]))
     ll["connectors"] = sorted(ll["connectors"])
+    ll["holes"] = sorted(ll["holes"])
     ll["molecular_spans"] = sorted(ll.get("molecular_spans", []))
     ll["insertions"] = {k: v for r in clipped for k, v in (r["live_lift"].get("insertions") or {}).items()}
     if any("gap_observations" in r["live_lift"] for r in clipped):
@@ -409,6 +413,9 @@ def _merge_rows(rows):
         ll["call_parts"][group] = [e[2] for e in entries]
     for field in ("segments", "connectors", "badges", "badge_ids", "molecular_spans"):
         ll[field] = [v for r in rows for v in r["live_lift"].get(field, [])]
+    # Holes of rows without the field (every connector) stay holes when rows merge.
+    ll["holes"] = [v for r in rows for v in (r["live_lift"]["holes"] if "holes" in r["live_lift"]
+                                              else r["live_lift"].get("connectors", []))]
     for field in ("methyl", "methyl_m6a", "methyl_m5c", "deam", "possible_deam_ct", "possible_deam_ga"):
         if any(field in r for r in rows):
             out[field] = sorted({tuple(v) if isinstance(v, list) else v for r in rows for v in r.get(field, [])})
@@ -522,4 +529,5 @@ def _clip_row(row, masks):
             out[field] = [v for v in out[field] if any(a <= (v[0] if isinstance(v, (list, tuple)) else v) < b for a, b in masks)]
     ll["segments"] = [[a, b, 0, "+", True] for a, b in masks]
     ll["connectors"] = []
+    ll["holes"] = []
     return out

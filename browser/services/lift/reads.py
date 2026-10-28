@@ -121,7 +121,8 @@ def clip_geometry(ll: dict, offset: int, width: int, *, spans_clipped: bool = Fa
         # Subtract connectors before clipping: a viewport wholly in a
         # target-only gap has no body. Keep the segment/connector encoding
         # intact when body is visible (the source chain still owns one segment).
-        body = _body_spans({"segments": [segment], "connectors": ll.get("connectors")})
+        body = _body_spans({"segments": [segment], "connectors": ll.get("connectors"),
+                            **({"holes": ll["holes"]} if "holes" in ll else {})})
         if any(b > offset and a < offset + width for a, b in body):
             segs.append([max(segment[0] - offset, 0), min(segment[1] - offset, width), *segment[2:]])
     out["segments"] = segs
@@ -136,6 +137,9 @@ def clip_geometry(ll: dict, offset: int, width: int, *, spans_clipped: bool = Fa
         if b > 0 and a < width:
             cons.append([max(a, 0), min(b, width)])
     out["connectors"] = cons
+    if "holes" in ll:
+        out["holes"] = [[max(a - offset, 0), min(b - offset, width)] for a, b in ll["holes"]
+                        if b - offset > 0 and a - offset < width]
     badges, ids = ll.get("badges") or [], ll.get("badge_ids") or []
     kept = [i for i, b in enumerate(badges) if 0 <= b[0] - offset <= width]
     out["badges"] = [[badges[i][0] - offset, *badges[i][1:]] for i in kept]
@@ -393,8 +397,10 @@ def _merge(spans):
 
 
 def _body_spans(ll: dict) -> list:
+    """Segments minus the row's holes (``live_lift.holes``: where calls are cut, the deleted bases of the
+    map gaps that cut; rows without the field: every connector)."""
     out = []
-    cons = sorted(ll.get("connectors") or ())
+    cons = sorted((ll["holes"] if "holes" in ll else ll.get("connectors")) or ())
     for s0, s1, *_rest in ll.get("segments") or ():
         pos = s0
         for c0, c1 in cons:

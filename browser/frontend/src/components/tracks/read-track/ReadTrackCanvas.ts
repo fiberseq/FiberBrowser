@@ -631,7 +631,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
     // in the deleted span.
     let bodyClip: { x: number; w: number } | Array<{ x: number; w: number }> | null = null;
     if (read.live_lift) {
-      // A live-lift row: its body is its segments minus connectors (independent of the SV display).
+      // A live-lift row: its body is its segments minus its holes (independent of the SV display).
       const rects = liveLiftBodyRects(read.live_lift, linkedOffset, regionWidth, toX);
       ctx.fillStyle = readBackgroundColor;
       for (const rect of rects) ctx.fillRect(rect.x, y, rect.w, Math.max(1, rowHeight - rowGap));
@@ -2164,7 +2164,7 @@ export function coverageHistogramBins(
       groups.push(ranges);
       if (molecule) molecules.set(molecule, ranges);
     }
-    // A live-lift row covers its body (segments minus connectors), never its hull across a connector.
+    // A live-lift row covers its body (segments minus holes), never its hull across a hole.
     const spans: Array<[number, number] | [number, number, number]> = read.live_lift
       ? liveLiftBodySpans(read.live_lift) : read.intervals;
     for (const [ivStart, ivEnd] of spans) {

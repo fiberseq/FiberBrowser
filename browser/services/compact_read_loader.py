@@ -2417,6 +2417,7 @@ def _build_compact_reads_from_bam_region(
             ma_layers = {}
             ma_layer_names = set()
             ma_skipped_in_region = []
+            ma_skipped_spans = [] if include_lift_meta else None
             if include_layers and ma_tags is not None:
                 phase_t0 = _profile_start()
                 ma_layers = parse_ma_aq_tags_into_layers(
@@ -2435,6 +2436,7 @@ def _build_compact_reads_from_bam_region(
                     skip_query_spans=terminal_drop or None,
                     skip_span_layers=_MA_FOOTPRINT_TYPES,
                     skipped_in_region=ma_skipped_in_region,
+                    skipped_spans=ma_skipped_spans,
                     present_names=ma_layer_names,
                     call_meta=lift_call_meta,
                 )
@@ -2445,6 +2447,7 @@ def _build_compact_reads_from_bam_region(
             # calls are only left out of what is drawn and analysed.
             all_footprints = footprints
             dropped_extent = None
+            dropped_footprints = []
             if terminal_drop:
                 footprints = []
                 for fp in all_footprints:
@@ -2452,6 +2455,7 @@ def _build_compact_reads_from_bam_region(
                             and (int(fp_starts_query[fp[4]]), int(fp_starts_query[fp[4]]) + int(fp_lengths[fp[4]]))
                             in terminal_drop):
                         dropped_extent = _extent_union(dropped_extent, (fp[0], fp[1]))
+                        dropped_footprints.append(fp)
                     else:
                         footprints.append(fp)
 
@@ -2668,7 +2672,9 @@ def _build_compact_reads_from_bam_region(
                                            *seq_span_to_molecular(fs_int, fs_int + fl_int, *lift_call_meta)])
                     # Color/quality semantics belong to the call, independent
                     # of whether this load was a viewport or a wider cache fill.
-                    fire_sizes.append(int(fe_ref - fs_ref))
+                    # Its size is the molecular length (al), as MA layers give theirs:
+                    # the same on every alignment of the molecule (a lifted record too).
+                    fire_sizes.append(fl_int)
                 if fire_intervals:
                     read_data["fire"] = fire_intervals
                 _profile_add("fire_overlay", phase_t0)
@@ -2745,6 +2751,22 @@ def _build_compact_reads_from_bam_region(
                     edge_qualities=_footprint_edge_qualities(footprints, lq_qualities, rq_qualities),
                     legacy={"ma_names": sorted(ma_layer_names), "explicit_msp": has_explicit_msp,
                             "fire_qualities_available": fire_qualities_available}))
+                # Live lift applies the per-record footprint rules (no footprint, the terminal-gap
+                # filter, the hidden terminal gaps' call extent) to each lifted record itself: the whole
+                # record's kept footprints, its call extent and dropped read-end calls (absolute
+                # reference), and what parses its MA footprint calls when a lifted record holds only
+                # some of them.
+                read_data["_fiberbrowser_call_bounds"] = {
+                    "fp": sorted([int(fp[0]), int(fp[1])] for fp in footprints),
+                    "fp_extent": ([min(int(fp[0]) for fp in footprints), max(int(fp[1]) for fp in footprints)]
+                                  if footprints else None),
+                    "extent": [int(call_extent[0]), int(call_extent[1])] if call_extent is not None else None,
+                    "dropped": sorted([int(fp[0]), int(fp[1])] for fp in dropped_footprints),
+                    # Requested MA calls left out as read-end calls (they still keep a record: explicit MA).
+                    "ma_skipped": sorted(ma_skipped_spans or ()),
+                    "ma": ((ma_tags, read_length, bool(read.is_reverse), family_contracts, lift_call_meta[1])
+                           if ma_tags is not None else None),
+                }
             _attach_sv_events(read_data, read, region_start, sv_min_len, include_sv_seq, mapper=coord_mapper,
                               molecule_records=molecule_records, reference=sv_reference)
             _profile_add("sv_events", phase_t0)
