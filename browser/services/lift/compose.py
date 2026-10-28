@@ -16,15 +16,33 @@ in target coordinates. Inside a run a source gap is a badge (exact molecular
 bp from the aligned runs) and a target gap a connector; a *span* is a stretch
 of fragments with neither between them.
 
-Calls are cut at fragment edges; every part keeps its call's immutable,
-record-local ``call_id`` (``live_lift.calls``), size and qualities. Logical
-identity is separate and selection-independent (``live_lift.call_parts``,
-``[part, group]`` as molecular coordinates): ``part`` is where the part starts
-on the molecule; parts joined across gaps of at most ``rejoin_bp`` on both
-sides (and the pieces of a call the decoder split at a deletion) share
-``group``. Geometry is never merged: no interval spans a connector or badge
-(v3.1). Gaps and inferred MSPs are rebuilt per span from whole calls, then
-cut at the read's deletions, as the native decoder does.
+Each run is one record of ``fiberhmm-lift`` (graphlift ``liftbam``), which
+writes every junction inside a run as ``I`` (the read's bases there) then
+``D`` (the connector), and the rows reproduce what the browser's decoder makes
+of that record (lift parity, ``scripts/lift_parity.py``):
+
+- a call runs across a junction (one interval across its badge and
+  connector) unless the junction's map gap is part of an indel event of at
+  least ``sv_min_len`` (``_junction_cuts``, map pieces only): there the
+  lifted record's ``D`` is deleted bases, cut as the decoder cuts calls;
+- a legacy tag call (ns/nl, as/al) ending inside the lifted record's
+  insertion takes the decoder's base after it, and one inside an insertion
+  is the 1-bp interval there (``_legacy_ends``); an MA call ends at aligned
+  bases (``_aligned_ends``);
+- gaps and inferred MSPs are rebuilt per run from whole calls, bounded by the
+  run's other footprint calls when terminal gaps are hidden, then cut at the
+  read's deletions and the junctions that cut;
+- the terminal-gap filter and the no-footprint rule apply to each run
+  (``_run_filter``), as the decoder applies them to each lifted record.
+
+Every part keeps its call's immutable, record-local ``call_id``
+(``live_lift.calls``), size and qualities. Logical identity is separate and
+selection-independent (``live_lift.call_parts``, ``[part, group]`` as
+molecular coordinates): ``part`` is where the part starts on the molecule;
+parts joined across gaps of at most ``rejoin_bp`` on both sides (and the
+pieces of a call the decoder split at a deletion) share ``group``. A row's
+body breaks only at its holes (``live_lift.holes``: the deleted bases of the
+junctions that cut); connectors stay drawn.
 
 The molecule's strand (``st``) never changes; on ``-`` rows only the
 presentation flips (left/right edge qualities swap, insertion sequence is
@@ -36,7 +54,8 @@ intervals, calls, marks and molecular spans of all rows of the window at once
 insertion blocks follow in one more columnar pass. The per-row functions here
 (``_map_group``, ``_call_identity``, ``_map_points``, ``_molecular_spans``,
 ``_logical``/``_gaps``) define the output and handle whatever the columnar
-pass leaves to them; it reproduces them exactly.
+pass leaves to them (among them every interval whose ends may take the
+decoder's end rules); it reproduces them exactly.
 
 Rows are read row format 2 (``services/read_columns.py``): the intervals,
 FIRE, layer intervals and point marks the columnar pass maps are
@@ -58,6 +77,8 @@ _COMPLEMENT = str.maketrans("ACGTNRYKMSWBDHVacgtnrykmswbdhv", "TGCANYRMKSWVHDBtg
 # Left/right quality tracks that trade places when intervals reverse (bam_tags.parse_ma_aq_tags_into_layers).
 _EDGE_PAIRS = (("lq", "rq"), ("el", "er"))
 _SR_LAYERS = {"nuc_sr", "tf_sr"}
+# Call ids of legacy tag calls (ns/nl footprints, as/al MSPs), placed with the decoder's insertion rule.
+_LEGACY_PREFIXES = ("ns:", "as:")
 # ``methyl`` is the loader's alias of one of these; it is derived after lifting.
 _POINT_FIELDS = ("methyl_m6a", "methyl_m5c", "possible_deam_ct", "possible_deam_ga")
 _ALIGNED_LIST_KEYS = ("annotation_names", "circular_ids")
@@ -77,12 +98,13 @@ def revcomp(seq: str) -> str:
 
 class _Frag:
     """A read's source body inside one piece: ``[s, e)`` forward source."""
-    __slots__ = ("s", "e", "p", "t0", "t1", "minus", "span")
+    __slots__ = ("s", "e", "p", "t0", "t1", "minus", "span", "run")
 
     def __init__(self, s, e, p):
         self.s, self.e, self.p = s, e, p
         self.minus = p.strand == "-"
         self.span = 0
+        self.run = 0
         if self.minus:
             self.t0, self.t1 = p.t_end - (e - p.q_start), p.t_end - (s - p.q_start)
         else:
@@ -177,6 +199,65 @@ class _SeqRuns:
         """Molecular bases (aligned or inserted) between source boundaries ``a <= b``."""
         return max(0, self.seq_at(b) - self.seq_at(a)) if self.ref else 0
 
+    def ref_span(self, mol_start, mol_end):
+        """The aligned source span ``[r0, r1)`` of the molecular span ``[mol_start, mol_end)``
+        (its first and last aligned bases, as ``aligned_query_interval_to_ref``), or None."""
+        if not self.ref or mol_end <= mol_start:
+            return None
+        a, b = (self.length - mol_end, self.length - mol_start) if self.reverse else (mol_start, mol_end)
+        seq, ref, ln = self.seq, self.ref, self.len
+        i = bisect.bisect_right(seq, a) - 1
+        if i < 0 or a >= seq[i] + ln[i]:
+            i += 1
+            if i >= len(seq) or seq[i] >= b:
+                return None
+            r0 = ref[i]
+        else:
+            r0 = ref[i] + (a - seq[i])
+        j = bisect.bisect_right(seq, b - 1) - 1
+        if j < 0:
+            return None
+        r1 = ref[j] + min(b - seq[j], ln[j])
+        return (r0, r1) if r1 > r0 else None
+
+    def last_aligned_before(self, x, lo):
+        """The last aligned reference base in ``[lo, x)``, else None."""
+        ref, ln = self.ref, self.len
+        i = bisect.bisect_right(ref, x - 1) - 1
+        if i < 0:
+            return None
+        y = min(x - 1, ref[i] + ln[i] - 1)
+        return y if y >= lo else None
+
+    def first_aligned_at(self, x, hi):
+        """The first aligned reference base in ``[x, hi)``, else None."""
+        ref, ln = self.ref, self.len
+        i = bisect.bisect_right(ref, x) - 1
+        if i >= 0 and x < ref[i] + ln[i]:
+            return x
+        i += 1
+        return ref[i] if i < len(ref) and ref[i] < hi else None
+
+    def clipped(self, m):
+        """Whether molecular base ``m`` lies outside the aligned body (a soft or hard clip)."""
+        seq = self.seq
+        if not seq:
+            return True
+        s = self.length - 1 - m if self.reverse else m
+        return s < seq[0] or s >= seq[-1] + self.len[-1]
+
+    def inserted(self, m):
+        """Whether molecular base ``m`` lies inside the aligned body on no aligned base (a read insertion;
+        never a clipped base)."""
+        seq = self.seq
+        if not seq:
+            return False
+        s = self.length - 1 - m if self.reverse else m
+        if s < seq[0] or s >= seq[-1] + self.len[-1]:
+            return False
+        i = bisect.bisect_right(seq, s) - 1
+        return not (i >= 0 and s < seq[i] + self.len[i])
+
     def has_aligned(self, mol_start, mol_end):
         """Whether the molecular span ``[mol_start, mol_end)`` holds an aligned base."""
         if not self.ref:
@@ -197,9 +278,19 @@ class _Row:
         self.badges, self.connectors = [], []
         self.badge_sources = []  # source spans parallel to badges; never part of analysis geometry
         self._pre = None         # compose_columns.RowColumns for rows of a lifted window
+        # Junctions (between frags k and k+1; _row_junctions): merge[k] when a call runs across it as the
+        # decoder runs a call across the lifted record's CIGAR I/D (same run, not a cut); cut[k] when the map
+        # gap's indel event reaches sv_min_len (the decoder cuts calls at its deleted bases); pi[k] the target
+        # position of its insertion on the lifted record (liftbam writes I then D: the end of the target-left
+        # fragment), where the decoder places a position inside the insertion; ri[k] the start of the
+        # target-right fragment's first aligned block (pi..ri: the lifted record's D at the junction).
+        self.merge, self.cut, self.pi, self.ri = [], [], [], []
+        self.blank_runs = ()     # runs whose footprints the terminal-gap filter blanks (_run_filter)
+        self.extents = {}        # run -> target (lo, hi) of its other footprint calls (hidden terminal gaps)
 
     def add_run(self, run, rejoin_bp):
         span = self.frags[-1].span + 1 if self.frags else 0
+        index = len(self.runs)
         if self.frags:
             self.joinable.append(False)
             self.inner.append(None)
@@ -213,6 +304,7 @@ class _Row:
                 if dq or dt:
                     span += 1
             f.span = span
+            f.run = index
             self.frags.append(f)
         self.runs.append(run)
 
@@ -224,6 +316,8 @@ class _Row:
         self.starts = [f.s for f in self.frags]
         self.ends = [f.e for f in self.frags]
         self.disjoint = all(a.e <= b.s for a, b in zip(self.frags, self.frags[1:]))
+        # after_junction[k]: frag k follows a junction of its run (a call may start inside its insertion)
+        self.after_junction = [False] + [gap is not None for gap in self.inner]
 
     def boundary(self, x):
         """``(frag index, B(x))`` of the first fragment holding or touching ``x``."""
@@ -245,6 +339,53 @@ class _Row:
             if span is not None:
                 out.append((span[0], span[1], k))
         return out
+
+    def stretches(self, a, b):
+        """``[t0, t1, first frag, last frag]`` of source ``[a, b)``: its parts joined across every junction
+        a call runs across (``merge``), in source order; unclipped."""
+        out = []
+        merge = self.merge
+        for t0, t1, k in self.parts(a, b):
+            if out and out[-1][3] == k - 1 and merge[k - 1]:
+                s = out[-1]
+                s[0], s[1], s[3] = min(s[0], t0), max(s[1], t1), k
+            else:
+                out.append([t0, t1, k, k])
+        return out
+
+    def badge_at(self, x):
+        """The junction ``j`` whose source-only stretch ``[frags[j].e, frags[j+1].s)`` holds source
+        position ``x`` (inside one run), else None."""
+        frags, inner = self.frags, self.inner
+        if self.disjoint:
+            k = bisect.bisect_right(self.starts, x) - 1
+            if 0 <= k < len(frags) - 1 and frags[k].e <= x < frags[k + 1].s and inner[k] is not None:
+                return k
+            return None
+        for k in range(len(frags) - 1):
+            if inner[k] is not None and frags[k].e <= x < frags[k + 1].s:
+                return k
+        return None
+
+    def run_at(self, x):
+        """The run holding source position ``x`` (in a fragment or inside a junction's source-only stretch),
+        else None."""
+        k = self.frag_at(x)
+        if k is not None:
+            return self.frags[k].run
+        j = self.badge_at(x)
+        return None if j is None else self.frags[j].run
+
+    def frag_at(self, x):
+        """Index of the fragment holding source position ``x``, else None."""
+        frags = self.frags
+        if self.disjoint:
+            k = bisect.bisect_right(self.starts, x) - 1
+            return k if k >= 0 and x < frags[k].e else None
+        for k, f in enumerate(frags):
+            if f.s <= x < f.e:
+                return k
+        return None
 
     def group_start(self, k, lo):
         """First fragment of the rejoin group frag ``k`` belongs to, for a call
@@ -295,6 +436,10 @@ class _Ctx:
         self.counts = counts if counts is not None else {}
         opts = dict(loader_options or {})
         self.hide_terminal_gaps = bool(opts.get("hide_terminal_gaps", True))
+        # The decoder's per-record footprint rules, applied per lifted record (_run_filter).
+        self.terminal_gap_threshold = int(opts.get("terminal_gap_threshold", 500) or 0)
+        self.min_footprints = int(opts.get("min_footprints", 0) or 0)
+        self.min_fp_quality = int(opts.get("min_fp_quality", 0) or 0)
         self.infer_legacy = bool(opts.get("infer_legacy_layers", True))
         self.nuc_min_size = int(opts.get("legacy_nuc_min_size", 90) or 90)
         from services.sv_events import SV_MIN_LEN_DEFAULT
@@ -305,6 +450,7 @@ class _Ctx:
         self.wants = {name: wants_layer(include, requested, *aliases) for name, aliases in
                       (("nuc", ("nuc", "footprint")), ("tf", ("tf",)), ("msp", ("msp", "fire")))}
         self.include_layers = include
+        self.requested_layer_set = requested
         self.labels = handle.haplotype_labels if handle is not None else {}
         self.molecule_groups = {}
         self.library_index = {}
@@ -475,11 +621,241 @@ def _read_geometry(read, by_contig, haps, ctx):
     for row in rows:
         row.index()
         _row_geometry(row, contig, runs, ctx)
+    rows = _run_filter(read, rows, runs, ctx)
+    if not rows:
+        # The decoder's footprint rules leave every lifted record of it out (a loader filter, as on a native
+        # load); graph reads report it so (graph_panel/reads.py).
+        ctx.count("records_terminal_gap_filtered")
+        read["_fiberbrowser_footprint_filtered"] = True
+        return None
     _outside_badges([r for r in rows if not r.alt], contig, rs, re_, runs, haps, ctx)
     key = (read.get("library_id") or read.get("source_path") or "", read.get("id"))
     if key not in ctx.molecules and (read.get("_fiberbrowser_primary") or {}).get("is_supplementary"):
         ctx.count("hap_from_record")
     return read, rows, runs
+
+
+def _hull_in_run(a, b, row, lo, hi, legacy):
+    """Target hull ``(t0, t1)`` of source ``[a, b)`` on frags ``lo..hi`` (one run), as the decoder places a
+    call on that run's lifted record: its aligned bases there; a legacy call's end inside a source-only
+    stretch at the stretch's insertion (and one inside such a stretch the 1-bp ``[P, P + 1)``). None when
+    nothing of it lands there."""
+    frags = row.frags
+    t0 = t1 = None
+    for k in range(lo, hi + 1):
+        f = frags[k]
+        if f.e <= a or f.s >= b:
+            continue
+        s0, s1 = f.span_of(a, b)
+        t0 = s0 if t0 is None else min(t0, s0)
+        t1 = s1 if t1 is None else max(t1, s1)
+    minus = frags[lo].minus
+    if not legacy:
+        if t0 is None:
+            return None
+        js, je = (row.badge_at(b - 1), row.badge_at(a)) if minus else (row.badge_at(a), row.badge_at(b - 1))
+        if js is not None and lo <= js < hi:
+            t0 = max(t0, row.ri[js])
+        if je is not None and lo <= je < hi:
+            t1 = min(t1, row.pi[je])
+        return (t0, t1) if t1 > t0 else None
+    jl, jr = row.badge_at(a), row.badge_at(b - 1)
+    jl = jl if jl is not None and lo <= jl < hi else None
+    jr = jr if jr is not None and lo <= jr < hi else None
+    if t0 is None:
+        if jl is None or jl != jr or row.cut[jl]:
+            return None
+        return row.pi[jl], row.pi[jl] + 1
+    inside = frags[lo].s <= a and b <= frags[hi].e
+    # The target start (source start on '+', source end on '-') must lie on the run (else aligned bases only).
+    js, je = (jr, jl) if minus else (jl, jr)
+    if (frags[hi].e >= b) if minus else (frags[lo].s <= a):
+        if js is not None and not row.cut[js]:
+            t0 = min(t0, row.pi[js])
+        if inside and je is not None and not row.cut[je]:
+            t1 = max(t1, row.pi[je] + 1)
+    return t0, t1
+
+
+def _first_last(spans, a, b):
+    """Indices of the first and last of the sorted ``[s, e]`` spans overlapping ``[a, b)``, or None."""
+    starts = [s[0] for s in spans]
+    i = bisect.bisect_left(starts, a)
+    if i > 0 and spans[i - 1][1] > a:
+        i -= 1
+    j = bisect.bisect_left(starts, b) - 1
+    while i <= j and spans[i][1] <= a:
+        i += 1
+    if i > j:
+        return None
+    return i, j
+
+
+def _ma_ref_spans(read, runs):
+    """The record's MA footprint calls (nuc, tf, fp_v2) as aligned source spans, sorted (parsed once per
+    record from the call bounds the source decode kept)."""
+    bounds = read["_fiberbrowser_call_bounds"]
+    cached = bounds.get("_ma_ref")
+    if cached is None:
+        from services.compact_read_loader import ma_footprint_query_spans
+        ma = bounds.get("ma")
+        cached = []
+        if ma is not None:
+            tags, length, reverse, contracts, lead = ma
+            for _name, q0, q1 in ma_footprint_query_spans(tags, read_length=length, is_reverse=reverse,
+                                                            family_contracts=contracts):
+                s0, s1 = q0 + lead, q1 + lead
+                m = (runs.length - s1, runs.length - s0) if runs.reverse else (s0, s1)
+                span = runs.ref_span(*m)
+                if span is not None:
+                    cached.append(list(span))
+            cached.sort()
+        bounds["_ma_ref"] = cached
+    return cached
+
+
+def _extreme_hull(spans, a, b, row, lo, hi, legacy, order=None):
+    """Target extent ``(t0, t1)`` of the sorted ``[s, e]`` spans overlapping source ``[a, b)`` on run frags
+    ``lo..hi``, from the outermost ones (first by start, last by end) that land on that run (placement is
+    monotone along a run), or None. ``order``: the spans' indices by descending end, when known."""
+    got = _first_last(spans, a, b)
+    if got is None:
+        return None
+    i, j = got
+    left = None
+    for idx in range(i, j + 1):
+        left = _hull_in_run(spans[idx][0], spans[idx][1], row, lo, hi, legacy)
+        if left is not None:
+            break
+    if left is None:
+        return None
+    right = None
+    for idx in (order if order is not None else sorted(range(i, j + 1), key=lambda x: -spans[x][1])):
+        if i <= idx <= j:
+            right = _hull_in_run(spans[idx][0], spans[idx][1], row, lo, hi, legacy)
+            if right is not None:
+                break
+    return min(left[0], right[0]), max(left[1], right[1])
+
+
+def _run_calls(read, bounds, row, lo, hi, runs, whole, extent=True):
+    """``(has footprints, footprint extent, extent)`` of run frags ``lo..hi`` as the decoder finds them on
+    that run's lifted record: its kept ns/nl footprints (target ``(t0, t1)`` of the outermost, or None)
+    and the extent ``(lo, hi)`` of its other footprint calls (MA nuc/tf/fp_v2, dropped read-end calls) or
+    None. ``whole``: the run holds every call of the record, so the record's bounds apply."""
+    frags = row.frags
+    a, b = frags[lo].s, frags[hi].e
+    fp = bounds.get("fp") or ()
+    has_fp = bool(fp) and _first_last(fp, a, b) is not None
+    fp_ext = _extreme_hull(fp, a, b, row, lo, hi, True, bounds.get("_fp_by_end")) if has_fp else None
+    ext = None
+    if not extent:  # shown terminal gaps: the decoder neither filters nor bounds gaps by the call extent
+        return has_fp, fp_ext, None
+    span = bounds.get("extent") if whole else None
+    if whole and (span is None or (row.frag_at(span[0]) is not None and row.frag_at(span[1] - 1) is not None)):
+        if span is not None:
+            ext = _hull_in_run(span[0], span[1], row, lo, hi, False)
+    else:  # per call (an outermost call may lie in a source-only stretch: the decoder then takes the next)
+        for spans, legacy in ((_ma_ref_spans(read, runs), False), (bounds.get("dropped") or (), True)):
+            h = _extreme_hull(spans, a, b, row, lo, hi, legacy) if spans else None
+            if h is not None:
+                ext = h if ext is None else (min(ext[0], h[0]), max(ext[1], h[1]))
+    return has_fp, fp_ext, ext
+
+
+def _explicit_ma(read, row, lo, hi, ctx, supplementary):
+    """Whether the decoder keeps run frags ``lo..hi``'s lifted record for its explicit MA layers when the
+    terminal-gap rules reject its footprints (it then shows a neutral row): requested MA layer calls on
+    that run, or a supplementary record (``supplementary``) kept for its local evidence."""
+    if supplementary and ctx.min_footprints <= 0 and ctx.min_fp_quality <= 0:
+        return True
+    if ctx.requested_layer_set is None:
+        return False
+    names = set((read.get("_fiberbrowser_legacy") or {}).get("ma_names") or ())
+    base = int(read["_fiberbrowser_source_base"])
+    a, b = row.frags[lo].s - base, row.frags[hi].e - base
+    for name, layer in (read.get("layers") or {}).items():
+        if name in names and isinstance(layer, dict):
+            for iv in layer.get("intervals") or ():
+                if iv[0] < b and iv[1] > a:
+                    return True
+    return False
+
+
+def _supplementary_runs(read, rows, runs):
+    """``{(id(row), run index)}`` of the runs whose lifted record is supplementary: liftbam keeps the source
+    record's flag and marks every placement but the one with the most aligned bases (the first of equals)
+    0x800; a liftbam record is a run of a primary row (alternative rows have none)."""
+    if (read.get("_fiberbrowser_primary") or {}).get("is_supplementary"):
+        return {(id(row), r) for row in rows for r in range(len(row.runs))}
+    placed = [(row, r, run) for row in rows if not row.alt for r, run in enumerate(row.runs)]
+    out = {(id(row), r) for row in rows if row.alt for r in range(len(row.runs))}
+    if len(placed) < 2:
+        return out
+    aligned = [sum(runs.coverage(f.s, f.e, f.s, f.s)[0] for f in run) for _row, _r, run in placed]
+    best = max(range(len(placed)), key=lambda i: (aligned[i], -i))
+    out.update((id(row), r) for i, (row, r, _run) in enumerate(placed) if i != best)
+    return out
+
+
+def _run_filter(read, rows, runs, ctx):
+    """The decoder's per-record rules for footprints, applied to each lifted record (a run: liftbam writes
+    one record per run), with the record's calls placed as on that record: a run with no footprint, or
+    whose first or last call lies more than ``terminal_gap_threshold`` from its ends (with terminal gaps
+    hidden), is left out, or blanked to a neutral row when explicit MA layers keep it (``row.blank_runs``).
+    Sets each kept row's ``extents`` (its hidden terminal gaps' bounds). The source decode skipped these
+    rules (``live_lift._FIXED_LOADER_OPTIONS``). Returns the rows, rebuilt without the runs left out."""
+    bounds = read.get("_fiberbrowser_call_bounds")
+    if bounds is None:
+        return rows
+    hide = ctx.hide_terminal_gaps
+    thr = ctx.terminal_gap_threshold if hide else 0
+    fp, span = bounds.get("fp") or (), bounds.get("extent")
+    if fp and "_fp_by_end" not in bounds:
+        bounds["_fp_by_end"] = sorted(range(len(fp)), key=lambda x: -fp[x][1])
+    rec_lo = min(([fp[0][0]] if fp else []) + ([span[0]] if span else []), default=None)
+    rec_hi = max(([fp[bounds["_fp_by_end"][0]][1]] if fp else []) + ([span[1]] if span else []), default=None)
+    supplementary = _supplementary_runs(read, rows, runs)
+    out = []
+    for row in rows:
+        decisions, extents, lo = [], {}, 0
+        for r, run in enumerate(row.runs):
+            hi = lo + len(run) - 1
+            whole = rec_lo is not None and run[0].s <= rec_lo and run[-1].e >= rec_hi
+            has_fp, fp_ext, ext = _run_calls(read, bounds, row, lo, hi, runs, whole, hide)
+            t0, t1 = row.segments[r][0], row.segments[r][1]
+            first = last = None
+            for e in (fp_ext, ext):
+                if e is not None:
+                    first = e[0] if first is None else min(first, e[0])
+                    last = e[1] if last is None else max(last, e[1])
+            reject = not has_fp or (thr > 0 and first is not None and (first - t0 > thr or t1 - last > thr))
+            if not reject:
+                decisions.append("keep")
+            elif _explicit_ma(read, row, lo, hi, ctx, (id(row), r) in supplementary):
+                decisions.append("blank")
+            else:
+                decisions.append("drop")
+            extents[r] = ext
+            lo = hi + 1
+        if "drop" not in decisions:
+            row.blank_runs = frozenset(r for r, d in enumerate(decisions) if d == "blank")
+            row.extents = {r: e for r, e in extents.items() if e is not None}
+            out.append(row)
+            continue
+        ctx.count("runs_terminal_gap_filtered", decisions.count("drop"))
+        kept = [(run, d, extents[r]) for r, (run, d) in enumerate(zip(row.runs, decisions)) if d != "drop"]
+        if not kept:
+            continue
+        new = _Row(row.strand, row.alt)
+        for run, _d, _e in kept:
+            new.add_run(run, ctx.settings.rejoin_bp)
+        new.index()
+        _row_geometry(new, (read.get("_fiberbrowser_lift_record") or {}).get("contig"), runs, ctx)
+        new.blank_runs = frozenset(r for r, (_run, d, _e) in enumerate(kept) if d == "blank")
+        new.extents = {r: e for r, (_run, _d, e) in enumerate(kept) if e is not None}
+        out.append(new)
+    return out
 
 
 def _read_payloads(read, rows, runs, ctx):
@@ -535,13 +911,30 @@ def _call_starts(read):
 
 
 def _row_geometry(row, contig, runs, ctx):
-    """Segments (one per chain run), connectors and inner badges."""
+    """Segments (one per chain run), connectors, inner badges and the junction table."""
     row.segments = []
     for run in row.runs:
         p = run[0].p
         row.segments.append([min(f.t0 for f in run), max(f.t1 for f in run), p.chain, p.strand, p.primary])
+    n = max(len(row.frags) - 1, 0)
+    row.merge, row.cut, row.pi, row.ri = [False] * n, [False] * n, [0] * n, [0] * n
+    mols = {}
     for k, gap in enumerate(row.inner):
         prev, f = row.frags[k], row.frags[k + 1]
+        if gap is not None:
+            row.merge[k] = True
+            # The end of the target-left fragment's last aligned block (a read deletion at its edge ends the
+            # block early; liftbam then writes the deleted bases into the junction's D, after the I).
+            if f.minus:
+                x = runs.first_aligned_at(f.s, f.e)
+                row.pi[k] = f.T(x) + 1 if x is not None else f.t1
+                x = runs.last_aligned_before(prev.e, prev.s)
+                row.ri[k] = prev.T(x) if x is not None else prev.t0
+            else:
+                x = runs.last_aligned_before(prev.e, prev.s)
+                row.pi[k] = prev.T(x) + 1 if x is not None else prev.t1
+                x = runs.first_aligned_at(f.s, f.e)
+                row.ri[k] = f.T(x) if x is not None else f.t0
         if (gap is None and ctx.handle is not None and prev.p.primary and f.p.primary
                 and prev.p.chain == f.p.chain and prev.p.strand == f.p.strand):
             # g_split remains a display-run boundary. Preserve the exact owned
@@ -563,8 +956,54 @@ def _row_geometry(row, contig, runs, ctx):
             row.connectors.append([f.t1, prev.t0] if f.minus else [prev.t1, f.t0])
         if dq > 0:
             pos = prev.t0 if f.minus else prev.t1
-            row.badges.append([pos, ctx.gap_reason(contig, prev.e), runs.mol_between(prev.e, f.s), dq, "I"])
+            mol = runs.mol_between(prev.e, f.s)
+            mols[k] = mol
+            row.badges.append([pos, ctx.gap_reason(contig, prev.e), mol, dq, "I"])
             row.badge_sources.append((prev.e, f.s, prev.p))
+    if n:
+        _junction_cuts(row, mols, ctx.sv_min_len)
+
+
+def _junction_cuts(row, mols, sv_min_len):
+    """``row.cut``: junctions whose map gap is part of an indel event of at least ``sv_min_len`` on the
+    lifted record, grouped as the decoder groups CIGAR pieces (``sv_alleles.cigar_replacements``: pieces of
+    at least ``SV_PIECE_MIN`` joined across at most ``SV_MERGE_GAP`` aligned bp; only deleted bases cut).
+    The lifted record (liftbam) writes each junction as ``I`` (the read's bases between the fragments,
+    ``mols``) then ``D`` (the connector) between the fragments' aligned blocks. Map pieces only: a read
+    indel next to a map gap is not grouped with it (the decoder does that on the lifted CIGAR, an artifact
+    of composing two alignments into one CIGAR)."""
+    from services.sv_events import SV_MERGE_GAP, SV_PIECE_MIN
+
+    inner, frags = row.inner, row.frags
+    big = False
+    for k, gap in enumerate(inner):
+        if gap is not None and (gap[1] >= SV_PIECE_MIN or mols.get(k, 0) >= SV_PIECE_MIN):
+            big = True
+            break
+    if not big:
+        return
+    from services.sv_alleles import cigar_replacements
+    first = 0
+    for run in row.runs:
+        last = first + len(run) - 1
+        if any(inner[k][1] >= SV_PIECE_MIN or mols.get(k, 0) >= SV_PIECE_MIN for k in range(first, last)):
+            pieces = []
+            for k in range(first, last + 1):
+                f = frags[k]
+                pieces.append((0, 0, f.t1 - f.t0, 0))
+                if k < last:
+                    if mols.get(k, 0) > 0:
+                        pieces.append((1, k, mols[k], 0))
+                    if inner[k][1] > 0:
+                        pieces.append((2, k, inner[k][1], 0))
+            for ev in cigar_replacements(pieces, piece_min=SV_PIECE_MIN, merge_gap=SV_MERGE_GAP):
+                if ev["len"] < sv_min_len:
+                    continue
+                for p in ev.get("raw_pieces") or (dict(t=ev["t"], ref=ev["ref"]),):
+                    if p["t"] == "D":
+                        row.cut[p["ref"]] = True
+                        row.merge[p["ref"]] = False
+        first = last + 1
 
 
 def _outside_badges(rows, contig, rs, re_, runs, haps, ctx):
@@ -611,44 +1050,66 @@ def _outside_badges(rows, contig, rs, re_, runs, haps, ctx):
 
 # ── Field mapping ───────────────────────────────────────────────────────────
 
+def _legacy_group(calls):
+    """Whether a group's calls are legacy tag calls (ns/nl footprints, as/al MSPs): the decoder places them
+    with ``footprint_to_ref`` (an end inside an insertion takes the base after it), not the aligned-base rule
+    of MA calls. A group is one or the other (``ns:``/``as:`` vs ``MA<n>:`` ids)."""
+    for call in calls or ():
+        if call:
+            cid = call[0]
+            return isinstance(cid, str) and cid[:3] in _LEGACY_PREFIXES
+    return False
+
+
 def _map_group(ivs, calls, row, base, runs, ctx):
     """``[(t0, t1, i, k)]``: target parts (region-relative, clipped) of a
     group's intervals ``ivs`` (region-relative source), with the interval index
-    ``i`` and the fragment ``k`` each came from; an insertion-only call (no
-    aligned base in its molecular span) is a zero-width marker at its
-    insertion boundary. Gaps (negative size) are left out.
+    ``i`` and the first fragment ``k`` of each part. A part is an interval's
+    stretch across the junctions a call runs across (``_Row.stretches``: the
+    decoder runs a call across the lifted record's CIGAR ``I``/``D`` unless the
+    map gap is a cut); a legacy call's ends follow the decoder's insertion rule
+    (``_legacy_ends``). Gaps (negative size) are left out.
 
-    Intervals inside one fragment of a row with disjoint fragments (nearly all)
-    are mapped in one pass, vectorised for large groups; the rest one by one."""
+    Intervals inside one fragment whose ends need no insertion rule (nearly
+    all) are mapped in one pass, vectorised for large groups; the rest one by
+    one."""
     if not ivs:
         return []
     width, rs0 = ctx.width, ctx.region_start
     out, rest = [], []
-    if row.disjoint and len(ivs) <= _SMALL_GROUP:
+    legacy = calls is not None and _legacy_group(calls)
+    # A legacy call on a '-' row may end inside a read insertion (the decoder's base after it lies on the
+    # other side there), and one starting at a fragment that follows a junction may start inside the
+    # lifted record's insertion: both go one by one.
+    minus_legacy = legacy and row.strand == "-"
+    after = row.after_junction if legacy else None
+    if row.disjoint and len(ivs) <= _SMALL_GROUP and not minus_legacy:
         starts, ends, frags = row.starts, row.ends, row.frags
         for i, iv in enumerate(ivs):
             if len(iv) > 2 and iv[2] < 0:
                 continue
             a, b = base + iv[0], base + iv[1]
             k = bisect.bisect_right(starts, a) - 1
-            if k < 0 or b > ends[k] or (b - a == 1 and calls is not None):
+            if k < 0 or b > ends[k] or (legacy and a == starts[k] and after[k]):
                 rest.append(i)
                 continue
             t0, t1 = frags[k].span_of(a, b)
             c0, c1 = max(t0 - rs0, 0), min(t1 - rs0, width)
             if c1 > c0:
                 out.append((c0, c1, i, k))
-    elif row.disjoint:
+    elif row.disjoint and not minus_legacy:
         n = len(ivs)
         a = np.fromiter((iv[0] for iv in ivs), dtype=np.int64, count=n) + base
         b = np.fromiter((iv[1] for iv in ivs), dtype=np.int64, count=n) + base
         size = np.fromiter((iv[2] if len(iv) > 2 else 0 for iv in ivs), dtype=np.int64, count=n)
         todo = size >= 0
-        # Insertion-only candidates (one reference base) go the slow way.
-        slow = todo & (b - a == 1) if calls is not None else np.zeros(n, dtype=bool)
-        k = np.searchsorted(np.asarray(row.starts, dtype=np.int64), a, side="right") - 1
+        starts_a = np.asarray(row.starts, dtype=np.int64)
+        ends_a = np.asarray(row.ends, dtype=np.int64)
+        k = np.searchsorted(starts_a, a, side="right") - 1
         kk = np.maximum(k, 0)
-        fast = todo & ~slow & (k >= 0) & (b <= np.asarray(row.ends, dtype=np.int64)[kk])
+        fast = todo & (k >= 0) & (b <= ends_a[kk])
+        if legacy:
+            fast &= ~((a == starts_a[kk]) & np.asarray(after, dtype=bool)[kk])
         if fast.any():
             idx = np.flatnonzero(fast)
             t0 = np.empty(len(idx), dtype=np.int64)
@@ -669,11 +1130,12 @@ def _map_group(ivs, calls, row, base, runs, ctx):
             keep = c1 > c0
             out = list(zip(c0[keep].tolist(), c1[keep].tolist(), idx[keep].tolist(), kk[idx[keep]].tolist()))
         # The rest one by one; an interval overlapping none of the fragments
-        # has no parts (row.parts) unless it may be an insertion-only marker.
-        starts, ends = np.asarray(row.starts, dtype=np.int64), np.asarray(row.ends, dtype=np.int64)
-        nxt = np.minimum(k + 1, len(starts) - 1)
-        overlaps = ((k >= 0) & (ends[kk] > a)) | ((k + 1 < len(starts)) & (starts[nxt] < b))
-        rest = np.flatnonzero(todo & ~fast & (slow | overlaps)).tolist()
+        # has no parts unless a legacy call lies inside a source-only stretch.
+        nxt = np.minimum(k + 1, len(starts_a) - 1)
+        overlaps = ((k >= 0) & (ends_a[kk] > a)) | ((k + 1 < len(starts_a)) & (starts_a[nxt] < b))
+        if legacy:
+            overlaps |= (k >= 0) & (k + 1 < len(starts_a))  # inside a badge: the decoder's 1-bp stub
+        rest = np.flatnonzero(todo & ~fast & overlaps).tolist()
     else:
         rest = [i for i, iv in enumerate(ivs) if not (len(iv) > 2 and iv[2] < 0)]
     for i in rest:
@@ -686,18 +1148,119 @@ def _rest_parts(i, ivs, calls, row, base, runs, rs0, width):
     """``_map_group``'s parts of interval ``i`` outside the one-fragment case."""
     ai, bi = base + int(ivs[i][0]), base + int(ivs[i][1])
     call = calls[i] if calls is not None and i < len(calls) else None
-    # An insertion-only call decodes to the one reference base after its insertion.
-    if call is not None and bi - ai == 1 and not runs.has_aligned(int(call[1]), int(call[2])):
-        hit = row.boundary(ai)
-        if hit is not None and 0 <= hit[1] - rs0 <= width:
-            return [(hit[1] - rs0, hit[1] - rs0, i, hit[0])]
-        return []
+    st = row.stretches(ai, bi)
+    if call and isinstance(call[0], str) and call[0][:3] in _LEGACY_PREFIXES:
+        st = _legacy_ends(st, ai, bi, call, row, runs)
+    elif st:
+        st = _aligned_ends(st, ai, bi, row)
     out = []
-    for t0, t1, k in row.parts(ai, bi):
+    for t0, t1, k, _k1 in st:
         c0, c1 = max(t0 - rs0, 0), min(t1 - rs0, width)
         if c1 > c0:
             out.append((c0, c1, i, k))
     return out
+
+
+def _insertion_end(x, m, row, runs):
+    """Where the decoder places a legacy call's end at source position ``x``
+    (molecular base ``m``) on the lifted record, when that end lies inside the
+    lifted record's insertion: ``(P, junction or None)``, ``P`` the insertion's
+    target position (the decoder maps a position inside an insertion there,
+    and an end there to ``P + 1``). None when the end is an aligned base there,
+    or a read insertion inside a fragment of a '+' row (the source decode's
+    rule then already gives the decoder's base).
+
+    Inside the lifted record's insertion: a source-only base (a badge), or a
+    read insertion right before a fragment that follows a junction (liftbam
+    writes the read's inserted bases there into the junction's ``I``)."""
+    j = row.badge_at(x)
+    if j is not None:
+        return row.pi[j], j
+    if not runs.inserted(m):
+        return None
+    k = row.frag_at(x)
+    if k is None:
+        return None
+    f = row.frags[k]
+    if x == f.s and k > 0 and row.inner[k - 1] is not None:
+        return row.pi[k - 1], k - 1
+    if f.minus:  # the insertion lies between T(x) and T(x) + 1: the base after it is T(x) + 1
+        return f.T(x) + 1, None
+    return None
+
+
+def _aligned_ends(st, ai, bi, row, start_side=True):
+    """Stretches with the decoder's aligned-base rule at ends inside the lifted record's insertion at a
+    junction (a badge): a start there goes to the right block's first aligned base, an end to the left
+    block's last one (``aligned_query_interval_to_ref``; they differ from the fragment edges when the read
+    deletes a base there). MA calls are placed so; a legacy call whose target start lies in the record's
+    soft clip too. ``start_side`` False: only the target end."""
+    minus = row.strand == "-"
+    xs, xe = (bi - 1, ai) if minus else (ai, bi - 1)
+    js = row.badge_at(xs) if start_side else None
+    je = row.badge_at(xe)
+    if (js is None and je is None) or not st:
+        return st
+    st = [list(s) for s in st]
+    first, last = (st[-1], st[0]) if minus else (st[0], st[-1])
+    if js is not None:
+        first[0] = max(first[0], row.ri[js])
+    if je is not None:
+        last[1] = min(last[1], row.pi[je])
+    return [s for s in st if s[1] > s[0]]
+
+
+def _legacy_ends(st, ai, bi, call, row, runs):
+    """A legacy call's stretches with the decoder's insertion rule at its ends
+    (``CigarCoordMapper.footprint_to_ref`` on the lifted record of the run
+    holding its target start): a start inside an insertion maps to the
+    insertion's position ``P``, an end inside one to ``P + 1``; a call inside
+    one becomes the 1-bp interval ``[P, P + 1)``. Then cut at a junction that
+    cuts (its deleted bases go). A call whose target start lies in that
+    record's soft clip (another placement, or the read's own clip) is placed
+    by aligned bases only; its target end follows the rule only inside the
+    same record. On a '-' row the call's source start is its target end."""
+    minus = row.strand == "-"
+    m0, m1 = int(call[1]), int(call[2])
+    rev = runs.reverse
+    ml, mr = (m1 - 1, m0) if rev else (m0, m1 - 1)     # molecular bases of the source start and end
+    # (source position, molecular base) of the call's target start and target end
+    (xs, ms), (xe, me) = (((bi - 1, mr), (ai, ml)) if minus else ((ai, ml), (bi - 1, mr)))
+    if runs.clipped(ms):
+        return _aligned_ends(st, ai, bi, row)
+    run = row.run_at(xs)
+    if run is None:
+        return _aligned_ends(st, ai, bi, row)
+    start = _insertion_end(xs, ms, row, runs)
+    same = not runs.clipped(me) and row.run_at(xe) == run
+    end = _insertion_end(xe, me, row, runs) if same else None
+    if start is None and end is None:
+        return st if same else _aligned_ends(st, ai, bi, row, start_side=False)
+    if not st:
+        if start is None or end is None or start[1] is None or start[1] != end[1] or row.cut[start[1]]:
+            return st
+        p, j = start
+        return [[p, p + 1, j, j]]
+    st = [list(s) for s in st]
+    # The target start is the first stretch's on '+' (source order), the last one's on '-'.
+    first, last = (st[-1], st[0]) if minus else (st[0], st[-1])
+    if start is not None:
+        p, j = start
+        if j is not None and row.cut[j]:  # the deleted bases after P go: it starts after the junction's D
+            first[0] = max(first[0], row.ri[j])
+        else:
+            first[0] = p
+    if end is not None:
+        p, j = end
+        if j is not None and row.cut[j]:
+            last[1] = min(last[1], p)
+        else:
+            last[1] = p + 1
+    elif not same:  # its target end lies on another record (where its start is soft-clipped): aligned bases
+        je = row.badge_at(xe)
+        if je is not None:
+            last[1] = min(last[1], row.pi[je])
+    return [s for s in st if s[1] > s[0]]
 
 
 def _call_identity(calls, ivs, parts, row, base, runs, lo):
@@ -792,11 +1355,11 @@ def _map_layer(name, layer, row, base, runs, ctx, lo, ids_out, parts_out):
 
 
 def _map_source_span(src, part, row, base, ctx):
-    """A call's unclipped bounds, mapped and reduced to the part of them its
-    visible part lies in."""
+    """A call's unclipped bounds, mapped (joined across the junctions a call
+    runs across) and reduced to the part of them its visible part lies in."""
     t0, t1 = part
     rs0 = ctx.region_start
-    pieces = [(a - rs0, b - rs0) for a, b, _k in row.parts(base + int(src[0]), base + int(src[1]))]
+    pieces = [(a - rs0, b - rs0) for a, b, _k, _k1 in row.stretches(base + int(src[0]), base + int(src[1]))]
     hit = [p for p in pieces if p[0] <= t0 and p[1] >= t1] or [p for p in pieces if p[0] < t1 and p[1] > t0]
     if not hit:
         return [t0, t1, *src[2:]]
@@ -866,10 +1429,10 @@ def _map_cigar(events, row, base, ctx):
                     new["seq"] = revcomp(ev["seq"])
                 out.append(new)
         elif kind == "D":
-            parts = row.parts(x, x + int(ev.get("len", 0)))
+            parts = row.stretches(x, x + int(ev.get("len", 0)))  # one deletion across a map hole inside it
             if not parts:
                 dropped += 1
-            for t0, t1, _k in parts:
+            for t0, t1, _k, _k1 in parts:
                 c0, c1 = max(t0 - rs0, 0), min(t1 - rs0, width)
                 if c1 > c0:
                     out.append(dict(ev, pos=c0, len=c1 - c0, source="reads"))
@@ -896,10 +1459,10 @@ def _map_sv(events, row, ctx):
         display = {k: ev[k] for k in ("t", "ref", "len", "side", "h", "seq") if k in ev}
         display.update(source="reads", method="display_projection", display_only=True)
         if t == "D":
-            parts = row.parts(int(ev["ref"]), int(ev["ref"]) + int(ev.get("ref_len", ev["len"])))
+            parts = row.stretches(int(ev["ref"]), int(ev["ref"]) + int(ev.get("ref_len", ev["len"])))
             if not parts:
                 dropped += 1
-            for t0, t1, _k in parts:
+            for t0, t1, _k, _k1 in parts:
                 out.append(dict(display, ref=t0, len=t1 - t0))
             continue
         hit = row.boundary(int(ev["ref"]))
@@ -927,17 +1490,6 @@ def _event_len(ev):
     return int(ev.get("len", 0))
 
 
-def _spans(row, ctx):
-    """``{span id: (t0, t1)}`` region-relative body spans (fragments with no
-    connector or badge between them)."""
-    rs0 = ctx.region_start
-    spans = {}
-    for f in row.frags:
-        lo, hi = spans.get(f.span, (f.t0, f.t1))
-        spans[f.span] = (min(lo, f.t0), max(hi, f.t1))
-    return {k: (a - rs0, b - rs0) for k, (a, b) in spans.items()}
-
-
 def _subtract(iv, cuts):
     """``iv`` (``[a, b, *rest]``) minus the ``cuts`` spans; parts keep ``rest``."""
     out, pos = [], iv[0]
@@ -952,71 +1504,67 @@ def _subtract(iv, cuts):
     return out
 
 
-def _logical(parts, mapped, ids, frags, groups=None):
-    """Per span, the footprint calls whole again: parts of one call (same id)
-    in one span joined to their hull, as the decoder saw them before cutting
-    them at deletions. ``{span: [[t0, t1, size], ...]}`` sorted. With
-    ``groups`` (``_span_groups``), per rejoin group instead: a call cut at a
-    deletion is whole again across a map hole inside it."""
-    by_span = {}
+def _logical(parts, mapped, ids, frags):
+    """Per run (one lifted placement), the footprint calls whole again: parts
+    of one call (same id) joined to their hull, as the decoder saw them
+    before cutting them at deletions. ``{run: [[t0, t1, size], ...]}`` sorted."""
+    by_run = {}
     for j, (_t0, _t1, _i, k) in enumerate(parts):
         iv = mapped[j]
         if iv[2] <= 0:
             continue
-        span = frags[k].span if groups is None else groups[frags[k].span]
         key = ids[j] if ids[j] is not None else ("part", j)
-        hulls = by_span.setdefault(span, {})
+        hulls = by_run.setdefault(frags[k].run, {})
         h = hulls.get(key)
         hulls[key] = [iv[0], iv[1], iv[2]] if h is None else [min(h[0], iv[0]), max(h[1], iv[1]), h[2]]
-    return {span: sorted(h.values()) for span, h in by_span.items()}
+    return {run: sorted(h.values()) for run, h in by_run.items()}
 
 
-def _span_groups(row):
-    """``{span id: rejoin group}``: spans whose boundary is joinable (a badge
-    and/or connector of at most ``rejoin_bp``) share a group."""
-    out, start = {}, 0
-    for k, f in enumerate(row.frags):
-        if k and not row.joinable[k - 1]:
-            start = k
-        out.setdefault(f.span, start)
-    return out
+def _run_bounds(row, ctx):
+    """``{run: (t0, t1)}``: each run's target extent (its lifted record's
+    alignment span), region-relative."""
+    rs0 = ctx.region_start
+    return {r: (s[0] - rs0, s[1] - rs0) for r, s in enumerate(row.segments)}
 
 
-def _gaps(logical, spans, cuts, hide_terminal_gaps, width, groups=None, grouped=None):
-    """Gaps between consecutive calls inside one span, then cut at the read's
-    deletions. With terminal gaps hidden, a gap between calls of two spans of
-    one rejoin group (``groups``, ``_span_groups``) is kept, cut at the spans'
-    edges, so no gap crosses a badge or connector yet a 1-bp map hole drops no
-    linker (shown terminal gaps already reach the span edges). ``grouped()``:
-    the calls per rejoin group (``_logical`` with ``groups``)."""
+def _map_cuts(row, ctx):
+    """Region-relative deleted bases of the junctions that cut (``row.cut``): the lifted record's ``D``
+    there, from the target-left fragment's last aligned block to the target-right one's first."""
+    rs0 = ctx.region_start
+    return [(row.pi[k] - rs0, row.ri[k] - rs0) for k, cut in enumerate(row.cut) if cut]
+
+
+def _gaps(logical, bounds, cuts, hide_terminal_gaps, width, extents=None):
+    """Gaps between consecutive whole calls of each run (one lifted record),
+    as the decoder builds them across the record's CIGAR, then cut at
+    ``cuts`` (the read's deletions and the junctions that cut) and clipped.
+    With terminal gaps hidden a run's other footprint calls (``extents``:
+    region-relative ``(lo, hi)`` of its MA nuc/tf/fp_v2 and dropped read-end
+    calls, the decoder's call extent) bound it; shown terminal gaps reach the
+    run's ends (sized by their visible part, as the decoder sizes them)."""
     out = []
-    if hide_terminal_gaps and groups and len(set(groups.values())) < len(groups):
-        by_group = {}
-        for span, bounds in spans.items():
-            by_group.setdefault(groups[span], []).append((bounds, span))
-        whole = grouped() if grouped is not None else None
-        for group, members in by_group.items():
-            members.sort()
-            prev = None
-            calls = (whole.get(group, []) if whole is not None
-                     else sorted(iv for _b, span in members for iv in logical.get(span, [])))
-            for iv in calls:
-                if prev is not None and iv[0] > prev:
-                    for (b0, b1), _span in members:
-                        g0, g1 = max(prev, b0), min(iv[0], b1)
-                        if g1 > g0:
-                            out.append([g0, g1, -(iv[0] - prev)])
-                prev = iv[1] if prev is None else max(prev, iv[1])
-        spans = {}
-    for span, (b0, b1) in spans.items():
-        calls = logical.get(span, [])
-        prev = None if hide_terminal_gaps else b0
+    for run, (b0, b1) in bounds.items():
+        calls = logical.get(run)
+        if not calls:
+            continue
+        ext = extents.get(run) if extents and hide_terminal_gaps else None
+        if hide_terminal_gaps:
+            prev = ext[0] if ext is not None and ext[0] < calls[0][0] else None
+        else:
+            prev = b0
+        first = True
         for iv in calls:
             if prev is not None and iv[0] > prev:
-                out.append([prev, iv[0], -(iv[0] - prev)])
+                size = (-(min(iv[0], width) - max(prev, 0)) if first and not hide_terminal_gaps
+                        else -(iv[0] - prev))
+                out.append([prev, iv[0], size])
             prev = iv[1] if prev is None else max(prev, iv[1])
-        if not hide_terminal_gaps and prev is not None and b1 > prev:
-            out.append([prev, b1, -(b1 - prev)])
+            first = False
+        if not hide_terminal_gaps:
+            if b1 > prev:
+                out.append([prev, b1, -(min(b1, width) - max(prev, 0))])
+        elif ext is not None and ext[1] > prev:
+            out.append([prev, ext[1], -(ext[1] - prev)])
     gaps = []
     for iv in out:
         for part in _subtract(iv, cuts):
@@ -1024,6 +1572,38 @@ def _gaps(logical, spans, cuts, hide_terminal_gaps, width, groups=None, grouped=
             if part[1] > part[0]:
                 gaps.append(part)
     return gaps
+
+
+def _extents(row, ctx):
+    """``row.extents`` region-relative."""
+    rs0 = ctx.region_start
+    return {r: (lo - rs0, hi - rs0) for r, (lo, hi) in row.extents.items()}
+
+
+def _blank(parts, mapped, ids, keys, row, cuts, ctx):
+    """Top-level intervals with the footprints of each blanked run (``row.blank_runs``) replaced by one
+    neutral interval over the run, cut at ``cuts``: the decoder's row for a record whose terminal gaps the
+    filter rejects while explicit MA layers keep it."""
+    frags, width = row.frags, ctx.width
+    keep = [j for j, part in enumerate(parts) if frags[part[3]].run not in row.blank_runs]
+    parts2 = [parts[j] for j in keep]
+    mapped2 = [mapped[j] for j in keep]
+    ids2 = [ids[j] for j in keep]
+    keys2 = [keys[j] for j in keep]
+    first = {}
+    for k, f in enumerate(frags):
+        first.setdefault(f.run, k)
+    for run, (b0, b1) in _run_bounds(row, ctx).items():
+        if run not in row.blank_runs:
+            continue
+        for part in _subtract([b0, b1, 0], cuts):
+            c0, c1 = max(part[0], 0), min(part[1], width)
+            if c1 > c0:
+                parts2.append((c0, c1, -1, first[run]))
+                mapped2.append([c0, c1, 0])
+                ids2.append(None)
+                keys2.append(None)
+    return parts2, mapped2, ids2, keys2
 
 
 def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
@@ -1047,22 +1627,30 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
         # floor), as the native loader cuts calls (sv_events.read_deletion_cuts).
         from services.sv_events import deletion_spans
         cuts = sorted((t0 - rs0, t1 - rs0) for a, b in deletion_spans(e for e in read["sv"] if _event_len(e) >= ctx.sv_min_len)
-                      for t0, t1, _k in row.parts(a, b))
+                      for t0, t1, _k, _k1 in row.stretches(a, b))  # a map hole inside a deletion is deleted too
         if not payload["sv"]:
             del payload["sv"]
+    if any(row.cut):  # the map gaps the decoder cuts calls at on the lifted record
+        cuts = sorted(cuts + _map_cuts(row, ctx))
 
-    # Top-level footprints: positive (and neutral size-0) intervals; gaps rebuilt per span.
+    # Top-level footprints: positive (and neutral size-0) intervals; gaps rebuilt per run.
     ivs = read.get("intervals") or []
     iv_calls = calls.get("intervals")
-    parts, mapped, ids, keys = _group("intervals", ivs, iv_calls, row, base, runs, ctx, call_lo)
-    spans = _spans(row, ctx)
     logical = None
-    top = row._pre.intervals if row._pre is not None and not cuts else None
+    top = row._pre.intervals if row._pre is not None and not cuts and not row.blank_runs else None
     if top is not None:  # laid out by the window's columnar pass (compose_columns._top_level)
+        parts, mapped, ids, keys = _group("intervals", ivs, iv_calls, row, base, runs, ctx, call_lo)
         payload["intervals"], call_ids["intervals"], call_parts["intervals"], quals_out = top
         if quals_out is not None:
             payload["qualities"] = quals_out
     else:
+        if row.blank_runs:  # per-row parts: some are replaced (_blank)
+            parts = _map_group(ivs, iv_calls, row, base, runs, ctx)
+            mapped = [[t0, t1, *ivs[i][2:]] for t0, t1, i, _k in parts]
+            ids, keys = _call_identity(iv_calls, ivs, parts, row, base, runs, call_lo.get("intervals", {}))
+            parts, mapped, ids, keys = _blank(parts, mapped, ids, keys, row, cuts, ctx)
+        else:
+            parts, mapped, ids, keys = _group("intervals", ivs, iv_calls, row, base, runs, ctx, call_lo)
         if type(mapped) is IntColumn:  # a columnar group on a row laid out here (deletion cuts)
             mapped = mapped.tolist()
         quals = read.get("qualities") or []
@@ -1072,9 +1660,7 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
                 rank[i] = n
                 n += 1
         logical = _logical(parts, mapped, ids, row.frags)
-        groups = _span_groups(row)
-        gaps = _gaps(logical, spans, cuts, ctx.hide_terminal_gaps, width, groups,
-                     lambda: _logical(parts, mapped, ids, row.frags, groups))
+        gaps = _gaps(logical, _run_bounds(row, ctx), cuts, ctx.hide_terminal_gaps, width, _extents(row, ctx))
         combined = mapped + gaps
         order = sorted(range(len(combined)), key=lambda j: (combined[j][0], combined[j][1], j))
         payload["intervals"] = [combined[j] for j in order]
@@ -1119,7 +1705,7 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
     if "_fiberbrowser_terminal_gaps" in read:
         gaps_t = []
         for a, b in read["_fiberbrowser_terminal_gaps"]:
-            gaps_t += [[t0, t1] for t0, t1, _k in row.parts(int(a), int(b))]
+            gaps_t += [[t0, t1] for t0, t1, _k, _k1 in row.stretches(int(a), int(b))]
         payload["_fiberbrowser_terminal_gaps"] = sorted(gaps_t)
 
     clipped_spans = row._pre.molecular_spans if row._pre is not None else None
@@ -1128,13 +1714,11 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
     payload["reference_start"], payload["reference_end"] = hull0, hull1
     record_reverse = read.get("alignment_orientation") == "reverse"
     payload["alignment_orientation"] = "reverse" if record_reverse != (row.strand == "-") else "forward"
-    body = []
-    for a, b in sorted(spans.values()):  # badge cuts are zero-width: rejoin touching spans
-        if body and body[-1][1] >= a + rs0:
-            body[-1][1] = max(body[-1][1], b + rs0)
-        else:
-            body.append([a + rs0, b + rs0])
-    payload["alignment_spans"] = body
+    # The lifted records' alignments: each run's segment, broken only where calls are cut (the deleted
+    # bases of map gaps that cut); a connector elsewhere lies inside the alignment, as a short deletion does.
+    from services.lift.reads import _body_spans, _merge
+    payload["alignment_spans"] = [list(s) for s in _merge(_body_spans(
+        {"segments": row.segments, "holes": [(a + rs0, b + rs0) for a, b in _map_cuts(row, ctx)]}))]
 
     # Identity components (§3.4 v3.1) and molecule metadata (§3.5): haplotype
     # and strand are the primary record's when it was found, else this
@@ -1175,6 +1759,9 @@ def _row_payload(read, row, placement, idx, count, contig, runs, call_lo, ctx):
         "molecular_spans": clipped_spans if clipped_spans is not None else _molecular_spans(row, runs, rs0),
         "segments": [[s0 - rs0, s1 - rs0, chain, strand, primary] for s0, s1, chain, strand, primary in row.segments],
         "connectors": [[c0 - rs0, c1 - rs0] for c0, c1 in sorted(row.connectors)],
+        # Where the body breaks inside a segment: the deleted bases of the junctions that cut. A connector
+        # elsewhere is a drawn map gap the row's calls and linkers run across, as across a short deletion.
+        "holes": [[a, b] for a, b in sorted(_map_cuts(row, ctx))],
         "badges": [[b[0] - rs0, *b[1:]] for b in sorted(row.badges, key=lambda b: b[0])],
         "badge_ids": [],
         "insertions": {},
@@ -1470,19 +2057,11 @@ def _infer_legacy(read, layers, payload, parts, mapped, ids, keys, logical, cuts
         if callable(logical):
             logical = logical()
         msp = []
-        # Nucleosomes of one rejoin group together; an MSP across a 1-bp map
-        # hole is cut at the spans' edges (as top-level gaps are).
-        spans, members, groups = _spans(row, ctx), {}, _span_groups(row)
-        for span, group in groups.items():
-            members.setdefault(group, []).append(span)
-        whole = (_logical(parts, mapped, ids, row.frags, groups) if len(members) < len(groups)
-                 else {groups[s]: calls for s, calls in logical.items()})
-        for group in sorted(members):
-            bounds = sorted(spans[s] for s in members[group])
-            for iv in generate_msp_from_nuc_gaps(whole.get(group, ()), min_nuc_size=ctx.nuc_min_size):
-                pieces = [[max(iv[0], b0), min(iv[1], b1), *iv[2:]] for b0, b1 in bounds
-                          if min(iv[1], b1) > max(iv[0], b0)]
-                for part in (p for piece in pieces for p in _subtract(piece, cuts)):
+        # Per run (one lifted record) from whole nucleosome calls, as the decoder infers them before it cuts
+        # the record's calls at its deletions; then cut at the read's deletions and the junctions that cut.
+        for run in sorted(logical):
+            for iv in generate_msp_from_nuc_gaps(logical[run], min_nuc_size=ctx.nuc_min_size):
+                for part in _subtract(iv, cuts):
                     part[0], part[1] = max(part[0], 0), min(part[1], width)
                     if part[1] > part[0]:
                         msp.append(part)

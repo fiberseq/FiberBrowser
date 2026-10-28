@@ -811,6 +811,8 @@ def _decode_records(dataset, contig: str, size: int, windows: list, binding: str
         return (lib, qname, int(start), int(end), bool(sup))
 
     nbytes: dict = {}
+    # Decoded records the composer's footprint rules left out (compose._run_filter): loader filters.
+    footprint_filtered = set()
     # Soft (and hard) clips, as linear read tracks show them (the loader's SV events of type S: source boundary,
     # length, side; graph features item 5), on the rows whose coverage reaches the boundary.
     clips_of: dict = {}
@@ -818,6 +820,8 @@ def _decode_records(dataset, contig: str, size: int, windows: list, binding: str
         k = ident(lib_of.get(read.get("source_path"), 0), read.get("id"), read.get("reference_start", 0),
                   read.get("reference_end", 0), (read.get("_fiberbrowser_primary") or {}).get("is_supplementary"))
         nbytes[k] = nbytes.get(k, 0) + decoded_size_estimate(read)
+        if read.get("_fiberbrowser_footprint_filtered"):
+            footprint_filtered.add(k)
         clips = [[int(ev["ref"]), int(ev["len"]), "L" if ev.get("side") == "L" else "R"] for ev in read.get("sv") or ()
                  if isinstance(ev, dict) and ev.get("t") == "S" and isinstance(ev.get("ref"), int) and int(ev.get("len") or 0) > 0]
         if clips:
@@ -870,7 +874,7 @@ def _decode_records(dataset, contig: str, size: int, windows: list, binding: str
             continue   # the batch stopped before every record of this identity: decoded again by a later request
         reason = None
         if not got:
-            if k in nbytes:
+            if k in nbytes and k not in footprint_filtered:
                 reason = "records_without_correspondence"
             elif hard and flag & 0x800 and hard_left > 0:
                 reason, hard_left = "hard_clipped_supplementary", hard_left - 1

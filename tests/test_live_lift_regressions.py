@@ -137,14 +137,25 @@ def _read():
 
 
 def test_call_identity_is_selection_independent():
-    full = _pure([_piece(0, 100, 1000), _piece(100, 300, 1110)], _read())
-    partial = _pure([_piece(100, 300, 1110)], _read())
+    # A 60 bp connector cuts the call (an indel event of sv_min_len on the lifted record): two parts.
+    full = _pure([_piece(0, 100, 1000), _piece(100, 300, 1160)], _read())
+    partial = _pure([_piece(100, 300, 1160)], _read())
     f_ll, p_ll = full[0]["live_lift"], partial[0]["live_lift"]
     assert f_ll["calls"]["intervals"] == ["ns:0", "ns:0"]
     assert p_ll["calls"]["intervals"] == ["ns:0"]
     # The second part keeps the same part and group keys whichever pieces were selected.
     assert f_ll["call_parts"]["intervals"] == [[50, 50], [100, 100]]
     assert p_ll["call_parts"]["intervals"] == [[100, 100]]
+    assert f_ll["holes"] == [[1100, 1160]]
+
+
+def test_call_runs_across_a_connector_that_cuts_nothing():
+    """Lift parity: a 10 bp connector is no indel event of sv_min_len, so the call is one part across it (it
+    was two parts, [[50, 50], [100, 100]]), as the decoder runs it across the lifted record's D."""
+    (row,) = _pure([_piece(0, 100, 1000), _piece(100, 300, 1110)], _read())
+    assert [iv for iv in row["intervals"] if iv[2] > 0] == [[1050, 1260, 200]]
+    assert row["live_lift"]["call_parts"]["intervals"] == [[50, 50]]
+    assert row["live_lift"]["connectors"] == [[1100, 1110]] and row["live_lift"]["holes"] == []
 
 
 def test_call_parts_across_rows_and_crops():
@@ -152,7 +163,7 @@ def test_call_parts_across_rows_and_crops():
     assert [r["live_lift"]["calls"]["intervals"][0] for r in rows] == ["ns:0"] * 3
     groups = [r["live_lift"]["call_parts"]["intervals"][0][1] for r in rows]
     assert len(set(groups)) == 3   # separate logical parts in separate rows
-    cropped = _pure([_piece(0, 100, 1000), _piece(100, 300, 1110)], _read(), a=1150, b=2000)
+    cropped = _pure([_piece(0, 100, 1000), _piece(100, 300, 1160)], _read(), a=1200, b=2000)
     assert cropped[0]["live_lift"]["call_parts"]["intervals"] == [[100, 100]]
 
 
@@ -164,10 +175,12 @@ def test_cigar_split_and_chain_gap_groups(toy_map, tmp_path):
     ll_ = r["live_lift"]
     parts = [(cid, part) for iv, cid, part in
              zip(r["intervals"], ll_["calls"]["intervals"], ll_["call_parts"]["intervals"]) if iv[2] > 0]
-    assert [cid for cid, _p in parts] == ["ns:0"] * 3
+    # The read's 50D cuts the call (two parts, one group); the 10 bp connector cuts nothing (lift parity:
+    # it used to split a third part off, in its own group).
+    assert [cid for cid, _p in parts] == ["ns:0"] * 2
     keys = [p for _cid, p in parts]
-    assert len({k[0] for k in keys}) == 3          # three distinct parts
-    assert keys[0][1] == keys[1][1] != keys[2][1]   # the deletion keeps the group; the 10 bp connector splits it
+    assert len({k[0] for k in keys}) == 2          # two distinct parts
+    assert keys[0][1] == keys[1][1]                # the deletion keeps the group
 
 
 def test_overlapping_primary_placements_keep_marks():

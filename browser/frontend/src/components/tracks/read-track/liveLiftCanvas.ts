@@ -1,8 +1,8 @@
 /**
  * Live-lift rows (DESIGN_LIVE_LIFT.md §5.4): a read drawn on the main genome through a graphlift map.
  *
- * The row's body is its segments minus its connectors, whatever the SV display says: a connector (a target-only
- * gap of the map, < G_split) is a dashed line, a badge (source sequence with no target here: an insertion of the
+ * The row's body is its segments minus its holes (map gaps that cut its calls), whatever the SV display says:
+ * a connector (a target-only gap of the map, < G_split) is a dashed line over the body, a badge (source sequence with no target here: an insertion of the
  * source assembly, a dissimilar bubble, a part mapped elsewhere) a notch with its molecular bp, and a segment on a
  * '-' piece (the source runs reversed here) gets a chevron edge. Coordinates are view-relative like `intervals`.
  */
@@ -41,10 +41,14 @@ export const BADGE_REASONS: Record<string, string> = {
   unknown: 'no correspondence',
 };
 
-/** View-relative body spans: segments minus connectors, sorted. */
+/**
+ * View-relative body spans: segments minus holes, sorted. Holes are where the row's calls are cut (the
+ * deleted bases of map gaps that cut); calls and linkers run across any other connector, as a native read's
+ * do across a short deletion. Rows without `holes`: every connector.
+ */
 export function liveLiftBodySpans(ll: LiveLiftRow): Array<[number, number]> {
   const out: Array<[number, number]> = [];
-  const cons = [...(ll.connectors ?? [])].sort((a, b) => a[0] - b[0]);
+  const cons = [...(ll.holes ?? ll.connectors ?? [])].sort((a, b) => a[0] - b[0]);
   for (const seg of ll.segments ?? []) {
     let pos = seg[0];
     for (const [c0, c1] of cons) {

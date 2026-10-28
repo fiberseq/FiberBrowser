@@ -182,9 +182,17 @@ describe('live-lift geometry', () => {
     expect(canvas.dataset.liveLiftBadgeTarget).toBe('');
   });
 
-  it('body spans are segments minus connectors', () => {
+  it('body spans are segments minus connectors (rows without holes)', () => {
     expect(liveLiftBodySpans(LL)).toEqual([[0, 300], [310, 600], [700, 1000]]);
     expect(liveLiftBodyRects(LL, 0, 1000, x => x)).toEqual([{ x: 0, w: 300 }, { x: 310, w: 290 }, { x: 700, w: 300 }]);
+  });
+
+  it('body spans are segments minus holes: calls run across a connector that cuts nothing', () => {
+    // The composer lists the map gaps that cut calls as holes; any other connector lies inside the body (a
+    // native read's body runs across a short deletion the same way), so calls drawn across it are not clipped.
+    expect(liveLiftBodySpans({ ...LL, holes: [] })).toEqual([[0, 600], [700, 1000]]);
+    expect(liveLiftBodySpans({ ...LL, connectors: [[300, 310], [800, 860]], holes: [[800, 860]] }))
+      .toEqual([[0, 600], [700, 800], [860, 1000]]);
   });
 
   it('finds the segment (and its strand) under a position; none in a connector or a gap', () => {

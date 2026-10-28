@@ -71,25 +71,24 @@ def test_plus_row_connector_badge_and_disconnected_parts(toy):
     assert ll_["segments"] == [[3500, 6710, 0, "+", True]]
     assert ll_["connectors"] == [[4000, 4010]]
     assert ll_["badges"] == [[6010, "source_insertion", 100, 100, "I"]]
-    assert r["intervals"] == [[3900, 4000, 200], [4010, 4110, 200], [4110, 5960, -1850], [5960, 6010, 200],
-                              [6010, 6060, 200], [6060, 6410, -350], [6410, 6610, 200]]
-    # Call ids are immutable; the parts across the 10 bp connector and the 100 bp badge
-    # are separate logical groups (call_parts: [part, group] molecular keys).
-    assert ll_["calls"]["intervals"] == ["ns:0", "ns:0", None, "ns:1", "ns:1", None, "ns:2"]
-    assert ll_["call_parts"]["intervals"] == [[400, 400], [500, 500], None, [2450, 2450], [2600, 2600], None,
-                                             [3000, 3000]]
-    assert r["qualities"] == [10, 10, 20, 20, 30]
+    # Lift parity: a call runs across the 10 bp connector and the 100 bp badge as the decoder runs it across
+    # the lifted record's CIGAR D and I (neither is an indel event of sv_min_len); it was two parts each.
+    assert r["intervals"] == [[3900, 4110, 200], [4110, 5960, -1850], [5960, 6060, 200], [6060, 6410, -350],
+                              [6410, 6610, 200]]
+    assert ll_["calls"]["intervals"] == ["ns:0", None, "ns:1", None, "ns:2"]
+    assert ll_["call_parts"]["intervals"] == [[400, 400], None, [2450, 2450], None, [3000, 3000]]
+    assert ll_["holes"] == []
+    assert r["qualities"] == [10, 20, 30]
     assert r["methyl_m6a"] == [3500]
     assert (r["reference_start"], r["reference_end"]) == (3500, 6710)
-    assert r["alignment_spans"] == [[3500, 4000], [4010, 6710]]
+    assert r["alignment_spans"] == [[3500, 6710]]  # a connector that cuts nothing lies inside the alignment
     assert r["alignment_orientation"] == "forward" and r["strand"] == "CT"
-    # MSPs inferred per continuous span: never across the connector or the badge.
+    # MSPs inferred per run (lifted record) from whole nucleosomes.
     msp = r["layers"]["msp"]["intervals"]
     assert [iv[:2] for iv in msp] == [[4110, 5960], [6060, 6410]]
-    assert not any(not iv[0] >= 4010 and iv[1] > 4000 for iv in msp)
     nuc = r["layers"]["nuc"]
     assert nuc["quality_names"] == ["nq", "lq", "rq"]
-    assert nuc["qualities"] == [[10, 10, 20, 20, 30], [1, 1, 2, 2, 3], [4, 4, 5, 5, 6]]
+    assert nuc["qualities"] == [[10, 20, 30], [1, 2, 3], [4, 5, 6]]
 
 
 def test_minus_row_formulas_insertions_and_edge_swaps(toy):
@@ -100,8 +99,10 @@ def test_minus_row_formulas_insertions_and_edge_swaps(toy):
     assert r["strand"] == "GA"  # the molecule's st: never changed by the flip
     pos = [(iv, cid) for iv, cid in zip(r["intervals"], ll_["calls"]["intervals"]) if iv[2] > 0]
     # Span [7210, 7330) on '-': [T(7329), T(7210)+1) = [13670, 13790).
-    # The two insertion-only calls: zero-width markers at B(7350) = 13650, ids kept apart.
-    assert pos == [([13650, 13650, 3], "ns:1"), ([13650, 13650, 3], "ns:2"), ([13670, 13790, 120], "ns:0")]
+    # The two insertion-only calls (the read's 5I between source 7349 and 7350): the decoder's 1-bp interval
+    # at the base after the insertion in the lifted record's order, T(7350) + 1 = 13650 (they were zero-width
+    # markers), ids kept apart.
+    assert pos == [([13650, 13651, 3], "ns:1"), ([13650, 13651, 3], "ns:2"), ([13670, 13790, 120], "ns:0")]
     assert r["qualities"] == [6, 7, 5]
     assert r["cigar"] == [{"type": "I", "pos": 13650, "len": 5, "seq": "TACGT", "source": "reads"}]
     assert r["methyl_m6a"] == [13795]  # T(7204) = 13999 - 204
@@ -118,18 +119,19 @@ def test_minus_deletion_span_and_sv(toy):
     assert {"type": "D", "pos": 13340, "len": 60, "source": "reads"} in r["cigar"]
 
 
-def test_rejoined_call_shares_id_but_never_spans_the_connector(toy):
+def test_call_runs_across_a_small_connector(toy):
+    """Lift parity (was: the call was two disconnected parts sharing a rejoin group): a 3 bp connector is
+    no indel event of sv_min_len, so the call runs across it, as the decoder runs it across the lifted
+    record's D. One part, whatever rejoin_bp."""
     (r,) = _rows(_load(toy), "rejoin")
     assert r["live_lift"]["connectors"] == [[8200, 8203]]
     ll_ = r["live_lift"]
     pos = [(iv[:2], cid, part) for iv, cid, part in
            zip(r["intervals"], ll_["calls"]["intervals"], ll_["call_parts"]["intervals"]) if iv[2] > 0]
-    # One logical call (same id, same group) drawn as two disconnected parts.
-    assert pos == [([8150, 8200], "ns:0", [100, 100]), ([8203, 8253], "ns:0", [150, 100])]
-    assert not any(iv[0] < 8203 and iv[1] > 8200 for iv in r["intervals"])
+    assert pos == [([8150, 8253], "ns:0", [100, 100])]
     no_rejoin = _rows(_load(toy, ll.LiftSettings(rejoin_bp=0)), "rejoin")[0]
-    assert [c for c in no_rejoin["live_lift"]["calls"]["intervals"] if c] == ["ns:0", "ns:0"]
-    assert [p[1] for p in no_rejoin["live_lift"]["call_parts"]["intervals"] if p] == [100, 150]
+    assert [c for c in no_rejoin["live_lift"]["calls"]["intervals"] if c] == ["ns:0"]
+    assert [p[1] for p in no_rejoin["live_lift"]["call_parts"]["intervals"] if p] == [100]
 
 
 def test_elsewhere_badge_and_alternative_rows(toy):
