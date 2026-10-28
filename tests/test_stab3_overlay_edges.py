@@ -174,3 +174,44 @@ def test_a_scan_layer_the_request_left_out_is_not_displayed(tmp_path, monkeypatc
     assert path != 'broad-cache-hit' or payload['server_timings'].get('broad_cache_hit') == 1.0
     assert 'fpcls' not in (reads['m1/1/ccs'].get('layers') or {})
     assert 'fpcls' in payload['available_layers']        # still offered: the request may ask for it
+
+
+def test_a_circular_merge_keeps_the_molecules_scan_scalars(tmp_path, monkeypatch):
+    """Codex review, stabilize 3 group B round 1: the merge dropped the row's molecule scalars, and the rewindowed
+    receipt then kept the final overlay from putting them back: a molecule metric filter matched the read in a plain
+    window but not in a wrapped one."""
+    import json
+    from models.domain import Dataset
+    from services.nuc.scalars import metric_value
+    from services.scan import registry
+    from state.browser_state import BrowserState
+    monkeypatch.setenv('FIBERBROWSER_SCAN_CACHE_DIR', str(tmp_path / 'cache'))
+    bam = tiny_bam(tmp_path / 'toy.bam', length=LN, reads=(('toy-read', 0, 0),))
+    d = write_scan_dir(tmp_path / 'scan', bam)
+    write_table(d / 'nuc' / 'molecules.tsv.bgz', ['dataset_id', 'qname', 'record', 'molecule', 'nrl'],
+                [row('chrT', 0, 500, 'dataset_1', 'toy-read', '', 'mol:v1 0', 190)], {'chrT': 0})
+    manifest = json.loads((d / 'manifest.json').read_text())
+    manifest['modules']['nuc'] = {'version': '1.0', 'settings_hash': 'n' * 16, 'feature_types': [],
+                                  'ma_groups': [{'group': 'nucmol', 'kind': 'scalar'}]}
+    manifest['outputs']['tables']['nuc/molecules.tsv.bgz'] = {'rows': 1, 'sha256': ''}
+    (d / 'manifest.json').write_text(json.dumps(manifest))
+    st = BrowserState(None)
+    st.drop_short_terminal_footprints = False
+    ds = Dataset('toy', bam, label='Toy')
+    ds.data_type = 'bam'
+    st.datasets = {'toy': ds}
+    st.dataset_order = ['toy']
+    st.chroms = [NS(name='chrT', size=LN)]
+    st.circular_chroms = {'chrT': {'size': LN}}
+    registry.open_scan(st, d)
+    plain = st.build_working_set('toy', 'chrT', 0, 300, include_layers=True)
+    assert metric_value(plain.reads[0], 'nuc.nrl') == 190
+    wrapped = st.build_working_set('toy', 'chrT', -200, 300, include_layers=True)
+    assert metric_value(wrapped.reads[0], 'nuc.nrl') == 190
+    from models.requests import AnalysisFilterRequest
+    from services.filtering_endpoint import filter_reads_by_analysis_rule_for_request
+    req = AnalysisFilterRequest(dataset_ids=['toy'], metric='value', operator='between', threshold=185, threshold_max=195,
+                                molecule_metric='nuc.nrl')
+    counts = [filter_reads_by_analysis_rule_for_request(st, req, chrom='chrT', start=a, end=b)['results']['toy']['filtered']
+              for a, b in ((0, 300), (-200, 300))]
+    assert counts == [1, 1]

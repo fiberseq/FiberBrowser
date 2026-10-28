@@ -277,6 +277,7 @@ def merge_compact_reads_by_id(reads: Iterable[dict]) -> list[dict]:
     (``PARTS_KEY``: each names its segment's window, so the caller renames
     them for the whole view with ``scan.overlay.rewindow_receipts``)."""
     from services.scan.overlay import PARTS_KEY, RECEIPT_KEY
+    from services.nuc.scalars import SCALARS_KEY
     grouped: dict[tuple, list[dict]] = {}
     order: list[tuple] = []
 
@@ -305,6 +306,15 @@ def merge_compact_reads_by_id(reads: Iterable[dict]) -> list[dict]:
         receipts = tuple(part[RECEIPT_KEY] for part in parts if part.get(RECEIPT_KEY) is not None)
         if receipts:
             target[PARTS_KEY] = receipts
+        # The record's molecule scalars (a scan's molecules table, live nucleosome outputs, an annotated BAM's scalar
+        # group): one value per molecule, the same on every part. Dropped, a rewindowed receipt would keep the final
+        # overlay from putting them back (Codex review, stabilize 3 group B round 1).
+        scalars: dict = {}
+        for part in parts:
+            for name, value in (part.get(SCALARS_KEY) or {}).items():
+                scalars.setdefault(name, value)
+        if scalars:
+            target[SCALARS_KEY] = scalars
         for read in sorted(parts, key=_read_position_sort_key):
             if read.get("duplicate"):
                 target["duplicate"] = True
