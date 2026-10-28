@@ -34,7 +34,7 @@ import { chromatinStyle } from './chromatinStyle';
 import { isInsertionGroup, hitGroup, placementsByPath, selectionForHit, sourcePlacements, focusWindow, type GraphSelection, type SourcePlacement } from './inspection';
 import { selectGraph } from './selectionStore';
 import { bumpNavigation, navigateGraph, navigationToken, showSourceSpan, sourcePanelsFor, tokenCurrent, type NavigationToken } from './navigation';
-import { useGraphReadsStore } from './graphReadsStore';
+import { drawnRowHapsOf, useGraphReadsStore } from './graphReadsStore';
 import { moleculeKey, useLiftHover } from '../liveLift/linking/hover';
 import { localBpScale, xForTarget } from './scene';
 import { conversionTargets, convertStandalone, foldIn, isHost, joinCandidates, joinGraph, membersOf, panelKeyOf, panelView, poppable, setPanelViewMode } from './hostMode';
@@ -50,7 +50,7 @@ import { setPinnedLinear, useGraphSettings } from './handoff';
 import { copyText } from '../../utils/clipboard';
 import { excludeReadsUndoably } from '../../components/tracks/read-track/ReadTrackActions';
 import { seedHistoryBaseline } from '../../stores/historySlice';
-import { idSetHas, isMoleculeRecordKey, qnameOfId } from '../../utils/recordKeys';
+import { idSetHas, qnameOfId } from '../../utils/recordKeys';
 import { branchScopesPanel, readIdSetForClusterRenderScope } from '../../utils/readScopes';
 
 const DEBOUNCE_MS = 100;
@@ -397,13 +397,13 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     if (!panelId) return;
     useGraphReadsStore.getState().publish(panelId, anyDrawn ? (drawnIdsKey ? drawnIdsKey.split(',') : []) : [], readBindings, reg?.id ?? null);
   }, [panelId, drawnIdsKey, anyDrawn, readBindings, reg?.id]);
-  // The folded molecules it drew, on their primary record's path's haplotype (the one a lifted pop-out shows them on),
-  // so a grouping or pop-out routes their labels there (graph follow-ups item 5).
+  // The rows it drew on the haplotype a lifted pop-out shows them on, so a grouping, a graph run or a pop-out routes
+  // their labels there: folded molecules' primary rows (graph follow-ups item 5), and supplementaries on their
+  // primary's haplotype (`ph`), folded or not (stabilize 3, item 1: a MAT supplementary of a PAT molecule is in the
+  // PAT lifted panel).
   useEffect(() => {
     if (!panelId) return;
-    useGraphReadsStore.getState().publishRowHaps(panelId, (reads.response?.reads ?? [])
-      .filter(r => r.rk && r.hap && !r.sup && isMoleculeRecordKey(r.rk))
-      .map(r => ({ rk: r.rk!, datasetId: r.d, hap: r.hap!, ...(r.ds ? { strand: r.ds } : {}) })));
+    useGraphReadsStore.getState().publishRowHaps(panelId, drawnRowHapsOf(reads.response?.reads ?? []));
   }, [panelId, reads.response]);
   useEffect(() => () => { if (panelId) { useGraphReadsStore.getState().clear(panelId); useLiftHover.getState().clear(panelId); } }, [panelId]);
   // The molecule hovered here or in a lifted / source / native panel of the same files (moleculeKey: dataset,

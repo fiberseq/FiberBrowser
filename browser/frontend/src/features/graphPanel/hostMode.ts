@@ -308,7 +308,8 @@ export function popOut(hostId: string, memberIds: string[], newHaps: { binding: 
     /** Each new panel's share of ``labels`` (null: not filtered, the copy stands). */
     const share = (provs: GraphProvenance[], labels: Record<string, number> | undefined) => {
       if (!provenanceCovers(provs, labels)) return null;
-      const extra = drawnRowOwnership(provs, labels, drawn);
+      // (Record-level keys too: a supplementary goes to its primary's haplotype's lifted panel; stabilize 3, item 1.)
+      const extra = drawnRowOwnership(provs, labels, drawn, { records: true });
       const all = extra ? [...provs, { destinations: [hostKey], ...extra }] : provs;
       return new Map(made.map(m => [m.id, provenanceShare(all, labels!, o => observationShownBy(o, m))]));
     };

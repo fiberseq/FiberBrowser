@@ -75,8 +75,8 @@ _LANES = ("nseg",)
 # absolute source position, so records cached by decodes at other origins compare alike; 7: a supplementary's
 # primary's explicit call; 8: soft clips; 9: nucleosome classes on nuc/tf pieces and the segment lane; 10: the named
 # byte ``nb`` beside ``cls``/``zb``, and no class from a mark of another molecular length. Clients read a payload
-# without ``nb`` as no named evidence).
-WIRE_VERSION = 10
+# without ``nb`` as no named evidence; 11: ``ph``, a supplementary's primary record's haplotype label).
+WIRE_VERSION = 11
 
 
 class ReadsError(Exception):
@@ -828,24 +828,33 @@ def _decode_records(dataset, contig: str, size: int, windows: list, binding: str
             clips_of.setdefault((k[0], str(read.get("id")), rec_id), []).extend(clips)
     composed: dict = {}
     lifted = getattr(dataset, "live_lift", None) is not None
-    # A supplementary record with no strand call of its own takes its primary's explicit call (st:Z), found as linear
-    # rows find it: in this batch, else through its SA loci (live_lift.resolve_primary_metadata: bounded, cached), so
-    # a supplementary drawn without its primary keeps its molecule's strand (graph features review, item 7).
+    # A supplementary record's primary, found as linear rows find it: in this batch, else through its SA loci
+    # (live_lift.resolve_primary_metadata: bounded, cached). Its primary lies on another contig's plan when it is on the
+    # other haplotype, so the lookup runs for every supplementary, not only for those that need a strand.
+    # - With no strand call of its own, a supplementary takes its primary's explicit call (st:Z), so one drawn without
+    #   its primary keeps its molecule's strand (graph features review, item 7).
+    # - Its primary's haplotype label goes with it as ``ph`` (``hap`` stays its own path's, which places its band): the
+    #   lifted panels show its row on that haplotype, so a pop-out routes the label its path's run gave it there
+    #   (stabilize 3, item 1).
     prim_strand: dict = {}
+    prim_hap: dict = {}
     if lifted and getattr(settings, "primary_lookup", False) and any(
-            (r.get("_fiberbrowser_primary") or {}).get("is_supplementary") and "strand" not in r for r in decoded):
+            (r.get("_fiberbrowser_primary") or {}).get("is_supplementary") for r in decoded):
         from services.lift.live_lift import molecule_key, resolve_primary_metadata
         try:
             meta = resolve_primary_metadata(dataset.live_lift.handle, decoded, settings=settings, counts=counts)
         except (OSError, ValueError, KeyError, AttributeError):   # a failed lookup leaves the record's own evidence
             meta = {}
         for read in decoded:
-            if not (read.get("_fiberbrowser_primary") or {}).get("is_supplementary") or "strand" in read:
+            if not (read.get("_fiberbrowser_primary") or {}).get("is_supplementary"):
                 continue
             m = meta.get(molecule_key(read)) or {}
-            if m.get("strand") in ("CT", "GA", "."):
-                prim_strand[ident(lib_of.get(read.get("source_path"), 0), read.get("id"), read.get("reference_start", 0),
-                                  read.get("reference_end", 0), True)] = m["strand"]
+            k = ident(lib_of.get(read.get("source_path"), 0), read.get("id"), read.get("reference_start", 0),
+                      read.get("reference_end", 0), True)
+            if m.get("hap") is not None:
+                prim_hap[k] = labels.get(m["hap"], m["hap"])
+            if "strand" not in read and m.get("strand") in ("CT", "GA", "."):
+                prim_strand[k] = m["strand"]
     for row in rows:
         read = compact_full(row, a, dataset.id, binding)
         if lifted:
@@ -853,6 +862,8 @@ def _decode_records(dataset, contig: str, size: int, windows: list, binding: str
         k = ident(read["lib"], read["q"], read["s"], read["e"], read["sup"])
         if read["sup"] and "_dsx" not in read and k in prim_strand:
             read["_dsx"] = prim_strand[k]
+        if read["sup"] and k in prim_hap:
+            read["ph"] = prim_hap[k]
         mine = [c for c in clips_of.get((read["lib"], str(read["q"]), str(read.get("rec"))), ()) if read["s"] <= c[0] <= read["e"]
                 and any(c0 <= c[0] <= c1 for c0, c1, *_ in read["cov"])]
         if mine:
