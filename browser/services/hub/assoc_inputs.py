@@ -529,16 +529,21 @@ def _scans_for(state, datasets: Iterable[str]):
             yield scan, binds
 
 
-def molecule_scalars(state, mols: Molecules, module: str, columns: Sequence[str], regions) -> Dict[str, np.ndarray]:
+def molecule_scalars(state, mols: Molecules, module: str, columns: Sequence[str], regions,
+                     source_windows: Optional[Sequence[Tuple[str, int, int]]] = None) -> Dict[str, np.ndarray]:
     """Per-molecule scalars (median over a molecule's records) from every open scan's ``<module>/molecules`` table;
-    NaN where none has the molecule."""
+    NaN where none has the molecule. An assembly (source-frame) scan's tables are in its own coordinates: they are
+    read over ``source_windows`` (the analysed hits' source spans), never over this genome's windows."""
     out = {c: np.full(mols.n, np.nan) for c in columns}
     acc: Dict[Tuple[str, int], List[float]] = {}
     rel = f'{module}/molecules.tsv.bgz'
     for scan, binds in _scans_for(state, set(mols.dataset)):
         if not scan.tables.has(rel):
             continue
-        windows = regions if regions is not None else _whole_scan_regions(scan)
+        if (scan.frame or {}).get('kind') == 'source':
+            windows = list(source_windows or [])
+        else:
+            windows = regions if regions is not None else _whole_scan_regions(scan)
         seen = set()
         for chrom, s, e in windows:
             for r in scan.tables.fetch(rel, chrom, s, e):
@@ -560,6 +565,13 @@ def molecule_scalars(state, mols: Molecules, module: str, columns: Sequence[str]
     for (c, i), vals in acc.items():
         out[c][i] = float(np.median(vals))
     return out
+
+
+def source_windows_of(*tables: 'HitTable', pad: int = 5_000) -> List[Tuple[str, int, int]]:
+    """The source-coordinate spans (± pad) of assembly-scan hits (their molecules' covariates are read there)."""
+    return merge_regions((h['src']['chrom'], max(0, h['src']['start'] - pad), h['src']['end'] + pad)
+                         for t in tables if t.scan is not None and (t.scan.frame or {}).get('kind') == 'source'
+                         for h in t.hits)
 
 
 def native_haplotypes(state, mols: Molecules, regions, tag: str = 'HP') -> int:
@@ -647,12 +659,13 @@ def group_values(state, mols: Molecules, group: Optional[dict], regions) -> Tupl
     raise AssocInputError(f'Unknown group {kind!r}')
 
 
-def molecule_table(state, mols: Molecules, regions, *, density: str = 'rho_read', labels: Optional[Dict[str, np.ndarray]] = None):
+def molecule_table(state, mols: Molecules, regions, *, density: str = 'rho_read', labels: Optional[Dict[str, np.ndarray]] = None,
+                   source_windows: Optional[Sequence[Tuple[str, int, int]]] = None):
     """``fiberhmm.assoc.MoleculeTable`` with openness (nfr scans), mark density (nuc scans) and channel where the open
     scans have them; ``None`` where none does (said in ``info``)."""
     from fiberhmm.assoc.cooccur import MoleculeTable
-    op = molecule_scalars(state, mols, 'nfr', ['openness'], regions)['openness']
-    dens = molecule_scalars(state, mols, 'nuc', [density], regions)[density]
+    op = molecule_scalars(state, mols, 'nfr', ['openness'], regions, source_windows)['openness']
+    dens = molecule_scalars(state, mols, 'nuc', [density], regions, source_windows)[density]
     ch = np.array([mols.channel.get(i, 'pooled') for i in range(mols.n)], dtype=object) if mols.channel else None
     info = dict(openness=int(np.isfinite(op).sum()), density=int(np.isfinite(dens).sum()), densityName=density,
                 channel=bool(mols.channel), molecules=mols.n)
@@ -661,7 +674,7 @@ def molecule_table(state, mols: Molecules, regions, *, density: str = 'rho_read'
 
 
 # ------------------------------------------------------------------ territory (M4)
-def scan_territory(state, table: HitTable, regions) -> Tuple[List[Tuple[str, int, int]], str]:
+def scan_territory(state, table: HitTable, regions, datasets: Optional[Sequence[str]] = None) -> Tuple[List[Tuple[str, int, int]], str]:
     """Where a set's absence means absence: a linear scan's callable runs within its done zones (and the windows); an
     assembly scan or a browser set: the windows (the view, the BED or anchors) only."""
     scan = table.scan
@@ -672,7 +685,10 @@ def scan_territory(state, table: HitTable, regions) -> Tuple[List[Tuple[str, int
     if scan is not None:
         from fiberhmm.assoc.scanio import territory
         from fiberhmm.scan.reader import ScanDir
-        terr = territory(ScanDir(scan.path), regions=scan_regions(scan, 'callable.tsv.bgz', regions))
+        here = scan_regions(scan, 'callable.tsv.bgz', regions)
+        if here is not None and not here:
+            return [], 'the scope\'s contigs aren\'t in the scan: no territory'
+        terr = territory(ScanDir(scan.path), datasets=datasets or None, regions=here)
         return ([(canon_chrom(state, c), int(a), int(b)) for c, a, b in terr],
                 'callable runs of every scanned dataset within done units')
     if regions is None:
@@ -732,8 +748,11 @@ def rate_data(state, a_type: str, b_kind: str, regions, datasets: Optional[Seque
     parts, used = [], []
     mols = Molecules()
     for scan, binds in scans:
+        here = scan_regions(scan, 'nuc/marks.tsv.bgz', regions)
+        if here is not None and not here:
+            continue            # the scope's contigs aren't in this scan (an empty list would mean "everything")
         try:
-            d = S.rate_data_from_marks(ScanDir(scan.path), a_type, b_kind, scan_regions(scan, 'nuc/marks.tsv.bgz', regions))
+            d = S.rate_data_from_marks(ScanDir(scan.path), a_type, b_kind, here)
         except S.ScanInputError as error:
             raise AssocInputError(str(error)) from None
         d.chrom = np.array([canon_chrom(state, c) for c in d.chrom], dtype=object)

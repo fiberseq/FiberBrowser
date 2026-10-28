@@ -11,12 +11,14 @@ import { fetchJson } from '../../api/sharedFetch';
 import { downloadTextFile, formatTsv } from '../../utils/analysisExport';
 import { nucObservations } from '../nucleosomes/planner';
 import type { NucObservation } from '../nucleosomes/types';
-import { useHubData } from './hubData';
+import { hubGeneration, useHubData } from './hubData';
 import type { FeatureHit, FeatureSet, GraphAlias } from './types';
 import { DEFAULT_OVERLAY, OVERLAY_LAYERS, type OverlayAlign, type OverlayLayer, type OverlayLocus, type OverlayResult, type OverlaySeries, type OverlayState } from './overlayTypes';
 import { displaySpan } from './frames';
 
 export interface OverlaySeed { loci: 'selection' | 'patches'; at: number }
+
+let overlaySeq = 0;
 
 const ALIGN_LABEL: Record<OverlayAlign, string> = { anchor: 'Anchor (with strand)', left: 'Left edge', right: 'Right edge', scaled: 'Scaled (each patch 0–1)' };
 
@@ -83,7 +85,7 @@ function Profile({ result, series, colours, svgRef, facet }: { result: OverlayRe
       return [{ at: at(0), label: `−${result.flank} bp` }, { at: at(nf), label: '0' }, { at: at(nf + (result.scaledBins ?? 100) / 2), label: '0.5' },
         { at: at(nf + (result.scaledBins ?? 100)), label: '1' }, { at: at(n), label: `+${result.flank} bp` }];
     }
-    const raw = (hi - lo) / 4;
+    const raw = (hi - lo) / 5;
     const mag = 10 ** Math.floor(Math.log10(Math.max(1, raw)));
     const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(v => v >= raw) ?? raw;
     const out = [];
@@ -224,13 +226,16 @@ export function OverlayTab({ sets, seed }: { sets: FeatureSet[]; seed?: OverlayS
     if (!loci.length) { setNotice('No loci: select hits in the Hits tab, choose a set or an anchor set, or send patches from the Nucleosomes panel.'); return; }
     if (!observations.length) { setNotice('No dataset panel is shown to measure.'); return; }
     setBusy(true); setNotice('');
+    // the session and request this overlay belongs to: an import or a newer overlay meanwhile wins
+    const born = hubGeneration();
+    const seq = ++overlaySeq;
     try {
       const result = await fetchJson<OverlayResult>('/api/hub/overlay', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ loci, layer: st.layer, align: st.align, flank: st.flank, observations,
           includeDuplicates: Boolean(useBrowserStore.getState().showDuplicateReads) }) });
-      patch({ result });
+      if (born === hubGeneration() && seq === overlaySeq) patch({ result });
     } catch (e) {
-      setNotice(String((e as Error).message ?? e).replace(/^API error \d+: /, ''));
+      if (born === hubGeneration() && seq === overlaySeq) setNotice(String((e as Error).message ?? e).replace(/^API error \d+: /, ''));
     } finally { setBusy(false); }
   };
 

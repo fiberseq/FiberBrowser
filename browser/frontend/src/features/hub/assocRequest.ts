@@ -91,9 +91,11 @@ export function setChoices(sets: FeatureSet[], anchors: AnchorSet[], view?: { ch
   for (const a of anchors) {
     out.push({ key: `anchors:${a.id}`, label: `Anchor set · ${a.label}`, typeId: 'anchors', kind: 'anchors', hasStates: false,
       why: 'an anchor set has positions only', ref: { kind: 'anchors', label: a.label,
+        // placement kept: an anchor inside an insertion has no extent on this genome (M4 leaves it out)
         anchors: placedAnchors(a).map(p => ({ chrom: p.chrom, pos: p.pos,
-          ...(p.start != null ? { start: p.start } : {}), ...(p.end != null ? { end: p.end } : {}), ...(p.strand ? { strand: p.strand } : {}),
-          ...(p.label ? { label: p.label } : {}), ...(p.hitId ? { hitId: p.hitId } : {}) })) } });
+          ...(p.start != null ? { start: p.start } : {}), ...(p.end != null ? { end: p.end } : {}),
+          ...((p.frame?.kind === 'source' ? p.targetStrand : p.strand) ? { strand: (p.frame?.kind === 'source' ? p.targetStrand : p.strand)! } : {}),
+          ...(p.label ? { label: p.label } : {}), ...(p.hitId ? { hitId: p.hitId } : {}), ...(p.insertion ? { insertion: true } : {}) })) } });
   }
   return out;
 }

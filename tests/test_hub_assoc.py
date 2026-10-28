@@ -432,3 +432,30 @@ def test_pairs_with_one_state_show_counts_not_estimates(world):
     rows = _m1_rows(res, HitTable('x', 'x'), HitTable('y', 'y'))
     assert rows[0]['estimate'] == 1.0 and rows[0].get('noContrast') is None
     assert rows[1]['estimate'] is None and rows[1]['p'] is None and rows[1]['noContrast'] and rows[1]['table'] == [20, 20, 0, 0]
+
+
+def test_scope_on_another_contig_reads_nothing_from_the_scan(tmp_path):
+    """A scoped query whose contigs a scan lacks reads nothing from it (an empty window list must not mean 'all')."""
+    from services.hub.assoc import run
+    from services.hub.assoc_inputs import AssocInputError
+    reads = [(f'm64005_{i:03d}/{5000 + i}/ccs', 2000 + 50 * i, 4000, 0) for i in range(6)]
+    marks = [('nucseg', q, s, s + 4000, '1') for q, s, _l, _h in reads]
+    bam = _bam(tmp_path / 'c.bam', reads)
+    scan = _scan(tmp_path / 'cscan', bam, fp_hits=[], nfr_hits=[], states=[], openness=[], marks=marks)
+    st = _state(_dataset('ds_c', bam, 'C'))
+    st.chroms.append(NS(name='chrU', size=LENGTH))
+    from services.scan import registry
+    registry.open_scan(st, scan)
+    with pytest.raises(AssocInputError, match='No molecule'):
+        run(st, _defn('M3', dict(kind='marks', typeId='nuc.seg.regular'), dict(kind='tf'), scope=dict(kind='view', chrom='chrU', start=0, end=10_000)))
+
+
+def test_m4_groups_are_dataset_ids():
+    from services.hub.assoc import _hits_by_dataset
+    from services.hub.assoc_inputs import HitTable
+    st = _state(_dataset('a', '/x/a.bam', 'Sample'), _dataset('b', '/x/b.bam', 'Sample'), _dataset('c', '/x/c.bam', 'Other'))
+    t = HitTable('peaks.peak', 'Peaks')
+    t.hits = [dict(hitId='p1', columns={'ds:a': {'strength': {'v': 2}}, 'ds:b': {'strength': {'v': 1}}, 'ds:c': {'strength': {'v': 3}}}),
+              dict(hitId='p2', columns={'ds:b': {'strength': {'v': 1}}})]
+    by = _hits_by_dataset(st, t, ['a', 'b'])
+    assert {k: [h['hitId'] for h in v] for k, v in by.items()} == {'a': ['p1'], 'b': ['p1', 'p2']}

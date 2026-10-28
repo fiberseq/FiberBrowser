@@ -29,7 +29,7 @@ export interface AssocSetRef {
   typeId?: string;
   label?: string;
   hits?: AssocInlineHit[];
-  anchors?: Array<{ chrom: string; pos: number; start?: number; end?: number; strand?: '+' | '-'; label?: string; hitId?: string }>;
+  anchors?: Array<{ chrom: string; pos: number; start?: number; end?: number; strand?: '+' | '-'; label?: string; hitId?: string; insertion?: boolean }>;
   /** A browser set's coverage: where it was computed (its absence means absence only there). */
   coverage?: Array<[string, number, number]>;
 }

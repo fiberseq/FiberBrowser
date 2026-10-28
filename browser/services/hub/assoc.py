@@ -35,7 +35,7 @@ import numpy as np
 from .assoc_inputs import (AssocInputError, HitTable, Molecules, anchor_hits, decoded_molecules, group_values,
                            inline_hits, intersect, jsonable, merge_regions, molecule_scalars, molecule_table,
                            molecule_token, native_haplotypes, qname_of_key, rate_data, read_bed, scan_set_hits,
-                           canon_chrom, canon_regions, display_names,
+                           canon_chrom, canon_regions, display_names, source_windows_of,
                            scan_set_states, scan_territory, scope_regions, sv_states)
 
 MODES = ('M1', 'M2', 'M3', 'M4')
@@ -262,7 +262,8 @@ def _run_m1(state, defn, regions, stage):
                             'see the numbers without p-values.'])
     labels = {'group': vals} if vals is not None else {}
     stage('inputs', 'Molecule covariates')
-    mt, covinfo = molecule_table(state, mols, regions, density=o['density'], labels=labels)
+    mt, covinfo = molecule_table(state, mols, regions, density=o['density'], labels=labels,
+                                 source_windows=source_windows_of(A, B))
     inputs['covariates'] = covinfo
     inputs['group'] = ginfo
     stage('compute', 'M1: co-occurrence (pairs, pooled score, bootstrap)')
@@ -482,8 +483,13 @@ def _run_m2_phasing(state, defn, regions, stage):
         span_ds = int(DEFAULT_PARAMS.phase_x0 + DEFAULT_PARAMS.phase_summary_periods * float(getattr(cal, 'nrl_pooled', None) or 189.0))
         cands, mb = random_backgrounds(molecules, anchors, k=5, flank=span_ds, span=span_ds, seed=o['seed'])
         if check:
+            # every reference base a response can use: the whole extent of each molecule over a tested locus (the
+            # molecule frame measures from the molecule's own barrier edges, which can lie past locus ± span)
             used = [cands[j] for _a, js in mb.get('sets') or [] for j in js]
-            tested = merge_regions([(c, max(0, p - span_ds), p + span_ds + 1) for c, p in list(anchors) + used])
+            loci_iv = merge_regions([(c, max(0, p - span_ds), p + span_ds + 1) for c, p in list(anchors) + used])
+            tested = merge_regions([(m.chrom, int(m.ref_start), int(m.ref_end)) for m in molecules
+                                    if any(m.chrom == c and m.ref_start < b and a < m.ref_end for c, a, b in loci_iv)]
+                                   + loci_iv)
             check = _cluster_check(defn, tested)
             if check['status'] == 'refused':
                 return dict(refused, postSelection=check)
@@ -593,8 +599,8 @@ def _run_m2_scalar(state, defn, regions, stage):
     if not A.rows:
         return dict(status='empty', inputs=inputs, limits=[f'No molecule has a state for the {A.label} in the scope.'])
     stage('inputs', 'Molecule measures')
-    y = molecule_scalars(state, mols, module, [column], regions)[column]
-    dens = molecule_scalars(state, mols, 'nuc', [o['density']], regions)[o['density']]
+    y = molecule_scalars(state, mols, module, [column], regions, source_windows_of(A))[column]
+    dens = molecule_scalars(state, mols, 'nuc', [o['density']], regions, source_windows_of(A))[o['density']]
     if not np.isfinite(y).any():
         return dict(status='empty', inputs=inputs,
                     limits=[f'No molecule has {module}:{column}: open or run a {module} scan in table mode of these datasets.'])
@@ -732,9 +738,9 @@ def _run_m3(state, defn, regions, stage):
                 groupNames=names)
 
 
-def _hits_by_dataset(state, table: HitTable) -> Dict[str, List[dict]]:
-    """B hits present in each browser dataset (a positive per-dataset value), for M4 group contrasts."""
-    names = {ds_id: getattr(d, 'label', ds_id) for ds_id, d in state.datasets.items()}
+def _hits_by_dataset(state, table: HitTable, datasets: Optional[List[str]] = None) -> Dict[str, List[dict]]:
+    """B hits present in each browser dataset (a positive per-dataset value), for M4 group contrasts; keyed by dataset
+    id (labels need not be unique), the chosen datasets only."""
     out: Dict[str, List[dict]] = {}
     binds = {}
     if table.scan is not None:
@@ -747,9 +753,11 @@ def _hits_by_dataset(state, table: HitTable) -> Dict[str, List[dict]]:
             ds = col[3:] if col.startswith('ds:') else binds.get(col.split(':', 1)[0]) if table.scan is not None else None
             if not ds:
                 continue
+            if datasets and ds not in datasets:
+                continue
             v = [((roles or {}).get(k) or {}).get('v') for k in ('prevalence', 'strength')]
-            if any(x is not None and x > 0 for x in v):
-                out.setdefault(names.get(ds, ds), []).append(h)
+            if any(x is not None and x > 0 for x in v) and h not in out.setdefault(ds, []):
+                out[ds].append(h)
     return out
 
 
@@ -769,8 +777,15 @@ def _run_m4(state, defn, regions, stage):
     if not A.hits or not B.hits:
         return dict(status='empty', inputs=inputs,
                     limits=[f'No {t.label} in the scope.' for t in (A, B) if not t.hits])
-    ta, na = (A.territory, A.territory_note) if A.territory else scan_territory(state, A, regions)
-    tb, nb = (B.territory, B.territory_note) if B.territory else scan_territory(state, B, regions)
+    ds_sel = _datasets(state, defn)
+
+    def scan_ds(t: HitTable):
+        # the scan datasets bound to the chosen browser datasets (callable runs of those only)
+        if not ds_sel or t.scan is None:
+            return None
+        return sorted({sid for sid, bid, _v, _f in t.scan.bound_pairs() if bid in ds_sel}) or None
+    ta, na = (A.territory, A.territory_note) if A.territory else scan_territory(state, A, regions, scan_ds(A))
+    tb, nb = (B.territory, B.territory_note) if B.territory else scan_territory(state, B, regions, scan_ds(B))
     parts = [ta, tb] + ([list(regions)] if regions is not None else [])
     terr = intersect(*parts)
     inputs['territory'] = dict(a=na, b=nb, bp=int(sum(e - s for _c, s, e in terr)), intervals=len(terr))
@@ -789,8 +804,10 @@ def _run_m4(state, defn, regions, stage):
     ba = overlap_enrichment(HB, HA, terr, strata, n_relocations=o['nPerm'], seed=o['seed'] + 1)
     res = {'A->B': ab, 'B->A': ba, 'territory_bp': inputs['territory']['bp']}
     g = defn.get('group') or {}
+    group_names = {}
     if g.get('kind') == 'dataset':
-        by = _hits_by_dataset(state, B)
+        by = _hits_by_dataset(state, B, ds_sel or None)
+        group_names = display_names(state, list(by))
         if len(by) >= 2:
             stage('compute', 'M4: group contrast (bootstrap over A clusters)')
             res['contrast'] = overlap_contrast(HA, {k: B.hitset(v) for k, v in sorted(by.items())}, terr, strata,
@@ -827,7 +844,8 @@ def _run_m4(state, defn, regions, stage):
     for r in (ab.get('rows') or []):
         rows.append(dict(id=f'd{r.get("d")}', d=r.get('d'), observed=r.get('observed'), null_mean=r.get('null_mean'),
                          estimate=r.get('o_over_e'), z=r.get('z'), p=r.get('p_descriptive'), n=r.get('n_used')))
-    return dict(result=res, inputs=inputs, effects=effects, anchors=[], curve=curve, distances=rows, limits=limits)
+    return dict(result=res, inputs=inputs, effects=effects, anchors=[], curve=curve, distances=rows, limits=limits,
+                groupNames=group_names)
 
 
 def _cli_line(defn: dict, A: HitTable, B: HitTable) -> Optional[str]:

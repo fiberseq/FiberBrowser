@@ -308,7 +308,11 @@ def overlay(state, request: dict) -> dict:
                 continue
             src = locus.get('source') if source.kind == 'lifted' else None
             # the hit's own source coordinates only on its own dataset and haplotype
-            own = bool(src and src.get('chrom') and (not src.get('hap') or not obs_hap or src.get('hap') == obs_hap)
+            # A hit inside an insertion has no bases on this genome: it is sampled on its own source coordinates, on its
+            # own dataset and haplotype. Every other locus is sampled on this genome's axis and each sample lifted, so
+            # every panel measures the same displayed position.
+            own = bool(insertion and src and src.get('chrom')
+                       and (not src.get('hap') or not obs_hap or src.get('hap') == obs_hap)
                        and (not src.get('datasetId') or src.get('datasetId') == obs.get('datasetId')))
             if insertion and source.kind != 'lifted':
                 skip('absent')               # inside an insertion: this genome's own reads don't hold its sequence
