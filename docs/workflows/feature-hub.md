@@ -7,7 +7,9 @@ footprint classes, NFRs and peaks from **fiberhmm-scan** (opened from disk or ru
 here), a **Find classes** run, an NFR run, the SVs in view, the peak rules'
 peaks and the live-lift **Differences**. Each row has a column per dataset (and
 per haplotype for Differences), so you can compare datasets side by side and
-then use the features you pick as anchors, cluster regions or a read filter.
+then use the features you pick as anchors, cluster regions or a read filter,
+test whether two feature types go together (**Associate**), or overlay many
+patches at once (**Overlay**).
 
 Open it from the panel rail (**Hub**) or the command palette (**Feature hub**).
 It docks beside the reads.
@@ -191,6 +193,134 @@ With hits selected:
 
 ![Reads clustered on two NFR variants picked in the hub](../images/feature-hub/cluster-regions.png)
 
+## Associations
+
+The **Associate** tab asks whether two feature sets go together. Every
+analysis has a feature **A**, a feature **B** (or, for one mode, a measure of
+the molecules), a **unit**, a **group** to compare, and a **scope**. The
+statistics are FiberHMM's (`fiberhmm.assoc`, the same functions as
+`fiberhmm-scan assoc`), with FiberHMM's defaults.
+
+| Mode | The question it asks | Unit | Result |
+|---|---|---|---|
+| M1 co-occurrence | On the same molecules, is B's state linked to A's state? | a pair of hits (A, B) × each molecule spanning both | odds ratio (pooled, per group), per-pair tables with exact p |
+| M2 conditional response | Does a measure of the molecules differ when A is open (or bound)? | an anchor × each molecule | Δ (open − closed) at the anchors, and Δ site: anchors against matched backgrounds |
+| M3 within-molecule rate | Is B denser inside A than outside, on the same molecules? | a molecule, inside versus outside A | rate ratio |
+| M4 overlap and distance | Are B hits nearer A hits than chance? | a hit | observed / expected by distance, one global test |
+
+![The Associate tab: the four example questions and the builder](../images/feature-hub/assoc-builder.png)
+
+**Example questions.** The four buttons at the top fill the builder for the
+questions the hub was designed around. Each says what it needs when the hub
+doesn't have it yet (for example a nucleosome scan for the first one):
+
+- *Are regular nucleosome arrays depleted of TF footprints?* M3: regular-array
+  segments of a nucleosome scan as A, its TF footprint calls as B.
+- *Do NFRs phase their flanks?* M2: NFRs of a scan as anchors, nucleosome
+  phasing (R − null) around them in the anchor's frame and the molecule's own
+  frame. Give an enhancer BED as the scope to restrict the NFRs.
+- *Is a footprint class bound more often on molecules carrying an insertion?*
+  M1: the SV's carriage (carrier or reference, from the SV row's split) as A,
+  class membership as B.
+- *Do peaks cluster near SV breakpoints?* M4: SVs as A, peaks as B, both
+  directions.
+
+**The builder.**
+
+- **Mode** and **A**, **B**: A and B are the hub's sets. M1 needs per-molecule
+  states for both: scan sets (footprint classes, NFRs) and SVs have them; peak
+  rules, Differences and anchor sets don't, and say so. M2's **Response** is
+  either nucleosome phasing or a measure per molecule from a scan (repeat
+  length, regularity, linker variability, openness). Phasing conditions on
+  open or closed at the anchor (an MSP of at least 80 bp over it, or a
+  nucleosome on it) and compares with matched random positions, so its anchors
+  must have a state defined anywhere: NFR regions, peaks or an anchor set. It
+  runs on native datasets, one at a time, each with the Nucleosomes panel's
+  calibration for it. A per-molecule measure uses A's own states (footprint
+  classes, NFRs), with other hits of A as backgrounds when an anchor BED is
+  given. M3 takes the nucleosome scan's mark types as A and its TF calls as B.
+- **Group**: none (pooled), **datasets**, **haplotypes** (HP tags of native
+  reads, MAT/PAT of an assembly scan's hits; unphased molecules are left out of
+  the contrast and reported apart), or the **cluster labels** of the shown
+  Cluster run. Comparing clusters is circular when the cluster run used the
+  tested window: the run is refused, unless you accept a "post-selection"
+  label, which shows the numbers without p-values.
+- **Scope**: the view, the regions of a BED file, an anchor set ± a flank, or
+  the scans' whole territory (scan sets only).
+- **Strata and settings** say what each mode controls for (mark density,
+  openness and channel in M1; density strata, coverage and matched backgrounds
+  in M2; each molecule's own bases in M3; the scanned territory in M4) and hold
+  the pair distance (5 kb), the pooled test, permutations, bootstrap draws
+  and the seed.
+
+**Running.** **Run** starts a job on the scan job manager, with progress and
+**Cancel**. A finished run joins **Runs**, which are kept with the session and
+come back when the session is opened again.
+
+**Results.**
+
+- **What this data can't answer** comes first, in plain words: no pairs within
+  the distance, one state only (for example every spanning molecule carries the
+  insertion, so there are no reference molecules), too few anchors or hits,
+  relocations that couldn't be placed. A run with no contrast shows its counts,
+  not an odds ratio.
+- The **effects** table: estimate, 95% interval, p and n, pooled and per group.
+  The **group difference** is an interaction test (each group keeps its own
+  margins); with one library per group it describes these libraries, not a
+  population.
+- The **pairs** (M1) or **anchors** (M2), ordered by q: click a row to go
+  there; **Use as anchors** saves the picked rows (or those with q ≤ 0.1) as an
+  anchor set; **Use as filter** keeps the reads in state 1 at A of those rows.
+- M4 draws O/E by distance for both directions (filled points: per-distance
+  p < 0.05, descriptive), with the same numbers in a table.
+- **Inputs and settings** lists the hits, molecules and states used, what was
+  left out and why, the covariates found, the territory and strata.
+- **Export** saves the run as JSON and its rows as TSV. When A and B come from
+  one opened scan, the result shows the equivalent `fiberhmm-scan assoc` line.
+
+![An M1 run where every spanning molecule carries the insertion: no contrast](../images/feature-hub/assoc-no-contrast.png)
+
+**Hits of an assembly scan.** A lifted hit is placed where it lifted. A hit
+inside an insertion has no extent on this genome: M4 leaves it out and counts
+it. A molecule never gets a state the scan didn't give it, so molecules on a
+haplotype that lacks a hit's sequence are left out, never counted as unbound.
+
+## Overlaid patches
+
+The **Overlay** tab pools a mark layer over many loci, so you can see, for
+example, every regular array at once.
+
+- **Loci**: the hub selection, all hits of a set in view, an anchor set, or the
+  patches the Nucleosomes panel's patch list sends (**Overlay…** there).
+- **Layer**: regular, disordered or undetermined array segments, low-information
+  segments, undersized runs, missing nucleosomes, nucleosome footprints or TF
+  footprints (the nucleosome outputs: **Compute in view** in the Nucleosomes
+  panel, or a scan with the nuc module).
+- **Align**: at the anchor (with strand), the left or right edge, or scaled
+  (each patch stretched to 0–1, flanks in bp).
+
+Each shown panel is measured on its own, as the Nucleosomes panel's columns
+are: a dataset panel, a haplotype pop-out, each path of a graph. At each
+position the density is the molecules with the mark over the molecules
+**measured** there (inside their decoded segments, outside low-information
+ones). A molecule that doesn't reach a position never counts as absence. The
+bars under the profile are those denominators.
+
+![Regular arrays over three phased patches, aligned at the left edge, per panel, with the molecules measured under each profile](../images/feature-hub/overlay-profile.png)
+
+**Graph mode: carriers only.** A graph path counts a locus only where it
+carries it (whole or in part); paths where it is absent or unresolved are left
+out and counted in the legend. A haplotype panel of a lifted dataset follows
+the same rule.
+
+![Nucleosome footprints over hits inside an insertion: the MAT and PAT paths carry them; the GRCh38 panel is left out (absent)](../images/feature-hub/overlay-carriers.png)
+
+**Views and export.** **Overlaid** draws every panel's profile on one axis;
+**Facets** gives each panel its own chart on the same axis; **Pile** draws a
+sample of molecule × locus rows (at most 400, the same sample on every reload),
+sorted by mark length or by panel. **TSV** saves the bins with numerators and
+denominators per panel; **SVG** saves the chart.
+
 ## Limits in this release
 
 - The table lists the hits in the main view; genome-wide lists of a scan come
@@ -201,4 +331,12 @@ With hits selected:
 - Graph columns, and so **absent**, are for scan hits; Differences, peak rules
   and Find classes rows have none yet.
 - Graph bubbles are not listed yet.
-- Association tests between feature types come later.
+- Associations: Differences have no per-molecule states in the hub yet (SVs do);
+  M2 phasing runs on native datasets, one at a time, with no test between
+  datasets; M3 reads nucleosome scans in table mode (live scans are), one per
+  dataset; M4 has no territory for an assembly scan yet; M4 strata are one per
+  contig unless a strata BED is given. SVs and Differences are listed only
+  while their panels show them (not in the hub's full view).
+- The overlay measures an assembly scan's hit inside an insertion on its own
+  haplotype's panel only.
+- The overlay measures nucleosome outputs; layers of other modules come later.

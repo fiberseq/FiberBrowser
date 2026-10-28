@@ -20,6 +20,27 @@ Maps, graph packages and the helper are made with
   (saved with the session), the Cluster button's regions (then clusters), or a
   read filter (members at any selected hit). See
   [Feature hub and scans](docs/workflows/feature-hub.md).
+- **Associate** (the hub's second tab): does feature A go with feature B? Four
+  modes, each with a plain question: the same molecules (M1, co-occurrence of
+  states), a measure of the molecules by A's state (M2, nucleosome phasing at
+  anchors or a per-molecule measure), B's rate inside A on the same molecules
+  (M3), and B hits near A hits (M4). Pick A and B from the hub's sets (scans,
+  SVs, peaks, anchor sets), a group (datasets, haplotypes with unphased
+  molecules apart, or the shown cluster run with its post-selection check) and
+  a scope (the view, a BED file, an anchor set, or the scans' territory). Runs
+  are jobs with progress and cancel; the statistics are FiberHMM's
+  (`fiberhmm.assoc`), with its defaults. Results: what the data can't answer,
+  effects with 95% intervals and p, the group difference, the pairs or
+  anchors (go to, use as anchors or filter), the distance curve, and the
+  inputs. The four example questions are presets. Runs are kept with the
+  session. See [Associations](docs/workflows/feature-hub.md#associations).
+- **Overlay** (the hub's third tab): a mark layer (regular and disordered
+  arrays, undersized runs, missing nucleosomes, nucleosome and TF footprints)
+  over many loci, aligned at the anchor, an edge or scaled, one profile per
+  panel with the molecules measured at each position, facets and a pile; graph
+  paths count only loci they carry. The Nucleosomes panel's patch list sends
+  its patches here (**Overlay…**). Exports TSV and SVG. See
+  [Overlaid patches](docs/workflows/feature-hub.md#overlaid-patches).
 - **Open scan…** opens a fiberhmm-scan output directory. Its datasets bind to
   the loaded BAMs by file contents (bound, stale, or scan of other files); a
   scan of a live-lift dataset's own BAM joins the lifted rows record by record.
