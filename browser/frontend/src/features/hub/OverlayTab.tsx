@@ -27,6 +27,7 @@ export function locusOfHit(h: FeatureHit, setId: string): OverlayLocus | null {
   if (!here) return null;
   return {
     key: `${setId}|${h.hitId}`, chrom: here.chrom, start: here.start, end: Math.max(here.end, here.start + 1), anchor: here.anchor,
+    ...(here.insertion ? { insertion: true } : {}),
     ...(h.strand ? { strand: h.strand } : {}), ...(h.label ? { label: h.label } : {}), hitId: h.hitId, setId,
     ...(h.graph ? { paths: Object.fromEntries(Object.entries(h.graph.paths).map(([k, p]) => [k, { status: p.status, ...(p.hap ? { hap: p.hap } : {}), datasets: p.datasets }])) } : {}),
     ...(h.source && h.frame?.kind === 'source' ? { source: { ...h.source, ...(h.frame.hapLabel ? { hap: h.frame.hapLabel } : {}) } } : {}),
@@ -53,7 +54,7 @@ function Profile({ result, series, colours, svgRef, facet }: { result: OverlayRe
   svgRef?: React.MutableRefObject<SVGSVGElement | null>; facet?: boolean }) {
   const [hover, setHover] = useState<number | null>(null);
   const n = result.series[0]?.x.length ?? 0;
-  const W = 520, H = facet ? 120 : 190, L = 36, R = facet ? 10 : 96, T = 10, DEN = 36, B = 22;
+  const W = 520, H = facet ? 128 : 198, L = 36, R = facet ? 10 : 104, T = 18, DEN = 36, B = 22;
   const plotH = H - T - B - DEN;
   const maxDen = Math.max(1, ...series.flatMap(s => s.den));
   // The density axis fits the data (a step of 0.05 / 0.1 / 0.25 / 0.5 / 1), so low densities stay readable.
@@ -61,26 +62,47 @@ function Profile({ result, series, colours, svgRef, facet }: { result: OverlayRe
   const ymax = [0.05, 0.1, 0.25, 0.5, 1].find(v => top <= v) ?? 1;
   const x = (i: number) => L + (i + 0.5) / Math.max(1, n) * (W - L - R);
   const y = (v: number) => T + (1 - v / ymax) * plotH;
-  const ticksX = Array.from({ length: 5 }, (_v, k) => Math.round(k * (n - 1) / 4));
-  return <svg ref={el => { if (svgRef) svgRef.current = el; }} viewBox={`0 0 ${W} ${H}`} className="w-full max-w-[640px]" role="img"
+  // x ticks: round values for bp axes; the patch's 0, 0.5 and 1 (and the flanks' ends) for a scaled axis.
+  const xs = result.series[0]?.x ?? [];
+  const half = result.binBp / 2;
+  const lo = (xs[0] ?? 0) - half, hi = (xs[n - 1] ?? 1) + half;
+  const xAt = (v: number) => L + (v - lo) / Math.max(1e-9, hi - lo) * (W - L - R);
+  const ticksX: Array<{ at: number; label: string }> = (() => {
+    if (result.align === 'scaled') {
+      const nf = (n - (result.scaledBins ?? 100)) / 2;
+      const at = (i: number) => L + i / Math.max(1, n) * (W - L - R);
+      return [{ at: at(0), label: `−${result.flank} bp` }, { at: at(nf), label: '0' }, { at: at(nf + (result.scaledBins ?? 100) / 2), label: '0.5' },
+        { at: at(nf + (result.scaledBins ?? 100)), label: '1' }, { at: at(n), label: `+${result.flank} bp` }];
+    }
+    const raw = (hi - lo) / 4;
+    const mag = 10 ** Math.floor(Math.log10(Math.max(1, raw)));
+    const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(v => v >= raw) ?? raw;
+    const out = [];
+    for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) out.push({ at: xAt(v), label: xFmt(v, result.align) });
+    return out;
+  })();
+  // Direct labels at the lines' ends, pushed apart so they never overlap.
+  const ends = series.map(s => { const i = [...s.x.keys()].reverse().find(k => density(s, k) != null); return i == null ? null : { s, i, y: y(density(s, i)!) }; })
+    .filter((e): e is { s: OverlaySeries; i: number; y: number } => e != null).sort((a, b) => a.y - b.y);
+  for (let k = 1; k < ends.length; k++) if (ends[k].y - ends[k - 1].y < 11) ends[k].y = ends[k - 1].y + 11;
+  return <svg ref={el => { if (svgRef) svgRef.current = el; }} viewBox={`0 0 ${W} ${H}`} className="w-full max-w-[900px]" role="img"
     aria-label={`${OVERLAY_LAYERS.find(l => l.key === result.layer)?.label} density by ${result.xLabel}`}
     onMouseLeave={() => setHover(null)}
     onMouseMove={e => { const r = (e.currentTarget as SVGSVGElement).getBoundingClientRect(); const px = (e.clientX - r.left) / r.width * W;
       const i = Math.round((px - L) / (W - L - R) * n - 0.5); setHover(i >= 0 && i < n ? i : null); }}>
     {[0, ymax / 2, ymax].map(t => <g key={t}><line x1={L} x2={W - R} y1={y(t)} y2={y(t)} stroke="currentColor" strokeOpacity={0.12} />
       <text x={L - 4} y={y(t) + 3} textAnchor="end" className="fill-current text-[9px] opacity-70">{t}</text></g>)}
-    <text x={4} y={T + 8} className="fill-current text-[9px] opacity-70">density</text>
+    <text x={4} y={9} className="fill-current text-[9px] opacity-70">density</text>
     {series.map(s => {
       const pts = s.x.map((_v, i) => (density(s, i) == null ? null : `${x(i)},${y(density(s, i)!)}`));
       const segs: string[][] = [[]];
       for (const p of pts) { if (p) segs[segs.length - 1].push(p); else if (segs[segs.length - 1].length) segs.push([]); }
-      const lastI = [...s.x.keys()].reverse().find(i => density(s, i) != null);
       return <g key={s.obsId}>
         {segs.filter(g => g.length).map((g, k) => <polyline key={k} fill="none" stroke={colours[s.obsId]} strokeWidth={2} points={g.join(' ')} />)}
-        {!facet && lastI != null && series.length <= 4 && <text x={x(lastI) + 5} y={y(density(s, lastI)!) + 3} className="fill-current text-[9px]">
-          {s.label.length > 20 ? `…${s.label.slice(-19)}` : s.label}</text>}
       </g>;
     })}
+    {!facet && series.length <= 4 && ends.map(e => <text key={`lab-${e.s.obsId}`} x={x(e.i) + 5} y={e.y + 3} className="fill-current text-[9px]">
+      {e.s.label.length > 22 ? `…${e.s.label.slice(-21)}` : e.s.label}</text>)}
     {/* Denominators: molecules measured per position, each observation its own row of bars. */}
     {series.map((s, k) => {
       const rowH = DEN / series.length;
@@ -91,7 +113,7 @@ function Profile({ result, series, colours, svgRef, facet }: { result: OverlayRe
       </g>;
     })}
     <text x={4} y={T + plotH + 4 + DEN / 2 + 3} className="fill-current text-[8px] opacity-70">n</text>
-    {ticksX.map(i => <text key={i} x={x(i)} y={H - 6} textAnchor="middle" className="fill-current text-[9px] opacity-70">{xFmt(result.series[0].x[i], result.align)}</text>)}
+    {ticksX.map(t => <text key={`${t.at}-${t.label}`} x={t.at} y={H - 6} textAnchor="middle" className="fill-current text-[9px] opacity-70">{t.label}</text>)}
     {hover != null && <g pointerEvents="none">
       <line x1={x(hover)} x2={x(hover)} y1={T} y2={T + plotH + DEN} stroke="currentColor" strokeOpacity={0.3} />
       <rect x={Math.min(W - 170, x(hover) + 6)} y={T} width={164} height={14 + 12 * series.length} rx={4} className="fill-white stroke-gray-300 dark:fill-gray-800 dark:stroke-gray-600" />
@@ -119,7 +141,7 @@ function Pile({ result, colours, sort }: { result: OverlayResult; colours: Recor
   };
   return <figure className="space-y-1">
     <figcaption className="text-[11px] text-ink-secondary">{rows.length} of {result.pileTotal.toLocaleString()} molecule × locus rows (a seeded sample, stable across reloads), sorted by {sort === 'length' ? 'mark length in the patch' : 'observation'}. Grey: measured; colour: the mark.</figcaption>
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full max-w-[640px]" role="img" aria-label="Pile of molecules" data-testid="overlay-pile">
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full max-w-[900px]" role="img" aria-label="Pile of molecules" data-testid="overlay-pile">
       {rows.map((r, i) => <g key={`${r.obsId}-${r.locus}-${r.molecule}-${i}`}>
         {r.measured.map(([a, b], k) => <rect key={`m${k}`} x={sx(a)} y={2 + i * rowH} width={Math.max(0.5, sx(b) - sx(a))} height={rowH * 0.8} fill="currentColor" fillOpacity={0.12} />)}
         {r.marks.map(([a, b], k) => <rect key={`k${k}`} x={sx(a)} y={2 + i * rowH} width={Math.max(0.5, sx(b) - sx(a))} height={rowH * 0.8} fill={colours[r.obsId] ?? '#6250d6'} />)}

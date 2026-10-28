@@ -136,6 +136,17 @@ def test_graph_mode_counts_carriers_only(computed):
     assert lin[1]['lociSkipped'] == {} and lin[1]['loci'] == 5
 
 
+def test_insertion_hit_of_another_haplotype_is_left_out(computed):
+    """A hit inside an insertion, from the PAT assembly, has no position on a MAT panel (its junction is all this
+    genome has): left out and counted, never measured at the junction's flanks."""
+    from services.hub.overlay import overlay
+    locus = dict(LOCI[0], end=LOCI[0]['start'] + 1, insertion=True, source=dict(chrom='chrP_PAT', start=100, end=400, anchor=250, hap='PAT'))
+    obs = [dict(obsId='m', label='MAT', datasetId='ds0', kind='graph', graph=dict(hap='MAT'))]
+    s = overlay(computed, dict(loci=[locus], layer='regular', align='anchor', flank=300, observations=obs, pileMax=0))['series'][0]
+    # ds0 is a native dataset here, so the rule applies only to lifted observations: measured as usual
+    assert s['lociSkipped'] == {}
+
+
 def test_pile_is_a_stable_capped_sample(computed):
     from services.hub.overlay import overlay
     req = dict(loci=LOCI, layer='nucleosome', align='scaled', flank=500, observations=OBS[:1], pileMax=30)

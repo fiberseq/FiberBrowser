@@ -27,6 +27,8 @@ export interface OverlayLocus {
   label?: string; hitId?: string; setId?: string;
   /** Graph columns' per-path statuses (graph mode: carriers only). */
   paths?: Record<string, { status: string; hap?: string; datasets?: string[] }>;
+  /** It sits at an insertion's junction on this genome (its sequence is inside the insertion). */
+  insertion?: boolean;
   /** A hit of another assembly: its source coordinates (on its haplotype's contig). */
   source?: { chrom: string; start: number; end: number; anchor: number; hap?: string };
 }

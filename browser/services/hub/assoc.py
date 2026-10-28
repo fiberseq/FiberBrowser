@@ -278,7 +278,6 @@ def _m1_limits(res, A, B, mols):
     if res.get('n_pairs_found', 0) == 0:
         out.append(f'No B hit lies within {res.get("max_distance", 5000):,} bp of an A hit in the scope: nothing to pair.')
         return out, False
-    pairs = res.get('pairs') or []
     tested = res.get('n_pairs_tested', 0)
     if tested == 0:
         out.append('Every A–B pair overlaps and is of one kind, so none is tested.')
@@ -287,25 +286,26 @@ def _m1_limits(res, A, B, mols):
     if tested and not n:
         out.append('No molecule carries states for both A and B of any pair (each pair needs at least 5 molecules '
                    'with both states).')
-    # One state only: the question needs molecules in both states of A (and of B).
-    a1 = sum((p.get('table') or [0, 0, 0, 0])[0] + (p.get('table') or [0, 0, 0, 0])[1] for p in pairs)
-    a0 = sum((p.get('table') or [0, 0, 0, 0])[2] + (p.get('table') or [0, 0, 0, 0])[3] for p in pairs)
-    b1 = sum((p.get('table') or [0, 0, 0, 0])[0] + (p.get('table') or [0, 0, 0, 0])[2] for p in pairs)
-    b0 = sum((p.get('table') or [0, 0, 0, 0])[1] + (p.get('table') or [0, 0, 0, 0])[3] for p in pairs)
-    if pairs and (a1 == 0 or a0 == 0):
-        which = 'state 1' if a0 == 0 else 'state 0'
-        extra = ' (every spanning molecule carries it: no reference molecules)' if A.type_id == 'var.sv' and a0 == 0 else ''
+    # One state only, judged on the molecules the pooled analysis used (every pair with at least 5 molecules; the
+    # per-pair rows list pairs with at least 10): the question needs molecules in both states of A, and of B.
+    pa1, pa0 = pooled.get('p_b1_given_a1'), pooled.get('p_b1_given_a0')
+    fin = lambda v: v is not None and np.isfinite(v)  # noqa: E731
+    items = pooled.get('n_items') or 0
+    a_one = items > 0 and (not fin(pa1) or not fin(pa0))
+    b_one = items > 0 and not a_one and pa1 == pa0 and pa1 in (0.0, 1.0)
+    if a_one:
+        which = 'state 1' if not fin(pa0) else 'state 0'
+        extra = ' (every spanning molecule carries it: no reference molecules)' if A.type_id == 'var.sv' and not fin(pa0) else ''
         out.append(f'Every molecule with both states has A in {which}{extra}: there is no contrast, so this data '
-                   f'can\'t answer the question ({a1} in state 1, {a0} in state 0 across the tested pairs).')
-    elif pairs and (b1 == 0 or b0 == 0):
-        out.append(f'Every molecule with both states has B in {"state 1" if b0 == 0 else "state 0"}: there is no '
-                   f'contrast ({b1} in state 1, {b0} in state 0 across the tested pairs).')
-    elif pairs and n and n < 20:
+                   f'can\'t answer the question ({n} molecules in {pooled.get("n_pairs", 0)} pooled pairs).')
+    elif b_one:
+        out.append(f'Every molecule with both states has B in {"state 1" if pa1 == 1.0 else "state 0"}: there is no '
+                   f'contrast ({n} molecules in {pooled.get("n_pairs", 0)} pooled pairs).')
+    elif n and n < 20:
         out.append(f'Only {n} molecules carry both states: the estimate is very uncertain.')
-    if not np.isfinite(pooled.get('or') if pooled.get('or') is not None else np.nan) and pairs and not out:
+    if not fin(pooled.get('or')) and items and not out:
         out.append('The odds ratio is not estimable (separation: one cell of the 2 × 2 tables is empty).')
-    no_contrast = bool(pairs) and (a1 == 0 or a0 == 0 or b1 == 0 or b0 == 0)
-    return out, no_contrast
+    return out, bool(a_one or b_one)
 
 
 def _m1_effects(res) -> List[dict]:
@@ -317,8 +317,9 @@ def _m1_effects(res) -> List[dict]:
                                  p_b1_given_a0=p.get('p_b1_given_a0'))))
     mh = p.get('mh_strata') or {}
     if mh:
-        rows.append(dict(key='mh', label='Pooled, design strata (MH)', estimate=mh.get('or'), lo=mh.get('or_lo'),
-                         hi=mh.get('or_hi'), p=mh.get('p'), n=mh.get('n_molecules'), scale='odds ratio', descriptive=True))
+        rows.append(dict(key='mh', label='Pooled, design strata (MH)', estimate=mh.get('or_mh'), lo=mh.get('rbg_lo'),
+                         hi=mh.get('rbg_hi'), p=mh.get('p'), n=p.get('n_molecules'), scale='odds ratio', descriptive=True,
+                         detail=dict(cells=mh.get('n_cells'), note=mh.get('note'))))
     for g, v in (res.get('groups') or {}).items():
         rows.append(dict(key=f'group:{g}', label=str(g), group=str(g), estimate=v.get('or'), lo=v.get('or_lo'),
                          hi=v.get('or_hi'), p=v.get('p'), n=v.get('n_molecules'), scale='odds ratio',

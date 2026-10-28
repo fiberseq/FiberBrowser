@@ -247,7 +247,16 @@ def overlay(state, request: dict) -> dict:
             scoped = {**obs, 'chrom': locus['chrom'], 'start': w0, 'end': w1}
             if scoped.get('kind') == 'graph':
                 scoped['graph'] = {kk: v for kk, v in (obs.get('graph') or {}).items() if kk == 'hap'}
+            # A lifted observation uses the hit's own source coordinates only on the hit's own haplotype; another
+            # haplotype's panel measures it through its own lift pieces, and a hit inside an insertion (no place on
+            # this genome but its junction) has no position there: left out and counted.
+            obs_hap = (obs.get('graph') or {}).get('hap') or obs.get('liftHap')
             src = locus.get('source') if source.kind == 'lifted' else None
+            if src and src.get('hap') and obs_hap and src.get('hap') != obs_hap:
+                src = None
+                if locus.get('insertion'):
+                    skipped['other_haplotype'] = skipped.get('other_haplotype', 0) + 1
+                    continue
             try:
                 _source, _recs, windows, cfg, cohort, counts = observation_cohort(state, scoped, policy)
             except (ObservationError, ValueError) as error:
