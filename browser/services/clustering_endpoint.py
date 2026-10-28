@@ -244,6 +244,8 @@ def assigned_cluster_feature_rows(
         return None, peaks, peak_modes, ([], [], []), None
     feature_rules = stored_settings.get("cluster_feature_rules") or req.cluster_feature_rules
     threshold = stored_settings.get("subnucleosomal_threshold", req.subnucleosomal_threshold)
+    # Molecule metric columns rank against the fit's cohort: the request's, else the stored clustering's.
+    metric_cohort = getattr(req, "cluster_metric_cohort", None) or stored_settings.get("metric_cohort") or None
 
     query = AnalysisReadQuery.from_request(
         state,
@@ -277,6 +279,7 @@ def assigned_cluster_feature_rows(
         feature_rules,
         cluster_rule_context,
         query,
+        **({"metric_cohort": metric_cohort} if metric_cohort else {}),
     )
     return query.dataset_ids, peaks, peak_modes, rows, query
 
@@ -1026,6 +1029,11 @@ def run_cluster_projection_endpoint(
             feature_kwargs["cluster_feature_rules"] = feature_rules
             feature_kwargs["cluster_rule_context"] = cluster_rule_context
         threshold = stored_settings.get("subnucleosomal_threshold", req.subnucleosomal_threshold)
+        # Molecule metric columns rank against the fit's cohort (the request's, else the stored clustering's), so
+        # every dataset's reads rank as they did in the fit, not against this view's reads.
+        metric_cohort = getattr(req, "cluster_metric_cohort", None) or stored_settings.get("metric_cohort")
+        if metric_cohort:
+            feature_kwargs["metric_cohort"] = metric_cohort
         features, read_ids, _, _ = extract_features_from_compact(
             # Saved footprint-class features look reads up by dataset and chromosome.
             [prefix_compact_read({**read, '_consensus_dataset_id': dataset_id, '_consensus_chrom': chrom}, dataset_id)
@@ -1607,12 +1615,12 @@ def run_cluster_all_endpoint(
             response["cluster_centroids"] = centroids
             response["cluster_peak_widths"] = centroid_peak_widths
             response["peak_regions"] = _peak_region_payload()
-    if "cluster_patterns" in response or "cluster_centroids" in response:
-        # The fit's molecule metric cohort goes with its patterns or centroids, so dynamic assignment ranks a view's
-        # reads against the reads the model was fitted on (Codex C2-1), not against the view's own.
-        metric_cohort = _fitted_metric_cohort(columnar, all_compact, peak_modes, req.cluster_feature_rules)
-        if metric_cohort:
-            response["cluster_metric_cohort"] = metric_cohort
+    # The fit's molecule metric cohort, for every fit with a metric column (with or without patterns or centroids):
+    # dynamic assignment (Codex C2-1), merges and the map rank a view's reads against the reads the fit ranked, not
+    # against the view's own. Kept with the stored feature settings for requests without explicit peaks.
+    metric_cohort = _fitted_metric_cohort(columnar, all_compact, peak_modes, req.cluster_feature_rules)
+    if metric_cohort:
+        response["cluster_metric_cohort"] = metric_cohort
 
     from services.background_work import checkpoint
     checkpoint()  # A cancelled fit must not replace the workspace's clustering.
@@ -1629,6 +1637,7 @@ def run_cluster_all_endpoint(
         feature_settings={
             "subnucleosomal_threshold": req.subnucleosomal_threshold,
             "cluster_feature_rules": list(req.cluster_feature_rules or []),
+            **({"metric_cohort": metric_cohort} if metric_cohort else {}),
         },
     )
 

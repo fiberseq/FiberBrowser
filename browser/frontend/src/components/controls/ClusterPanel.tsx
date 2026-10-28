@@ -644,6 +644,8 @@ export function ClusterPanel({
           clusterFeatureRules,
           view.genome,
           mergeSettings.mergeBy,
+          // Metric columns rank against the fit's cohort, as the fit did.
+          { metricCohort: useBrowserStore.getState().clusterMetricCohort },
         );
         if (!chartRoundStillCurrent(round, view, useBrowserStore.getState())) { stale = true; continue; }
         if (res.dissolved.length === 0) continue;

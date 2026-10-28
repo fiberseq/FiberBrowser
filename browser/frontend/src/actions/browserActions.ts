@@ -22,6 +22,7 @@ import type {
   CaptureRegion,
   ClusterFeatureRule,
   ClusterFeatureRuleTerm,
+  ClusterMetricCohort,
   ColorRule,
   FirePeak,
   Gene,
@@ -132,6 +133,21 @@ function isBlockedKey(key: string): boolean {
  * fragments): the blocklist must see the route that actually runs.
  * Parity: canonical_copilot_api_path.
  */
+/** A fit without a reassignment model (no patterns or centroids used) still brings its molecule metric cohort,
+ * which merges and the map rank against: it replaces an earlier fit's (none: {}) in the store and on the active
+ * cluster-tree node, as setClusterPatterns does with a model. */
+export function adoptFitMetricCohort(cohort?: ClusterMetricCohort): void {
+  const next = { ...(cohort ?? {}) };
+  useBrowserStore.setState(state => {
+    const id = state.activeClusterTreeNodeId;
+    const node = id ? state.clusterTreeNodes[id] : undefined;
+    return {
+      clusterMetricCohort: next,
+      ...(id && node ? { clusterTreeNodes: { ...state.clusterTreeNodes, [id]: { ...node, metricCohort: next } } } : {}),
+    };
+  });
+}
+
 export function canonicalApiPath(path: string): string | null {
   const raw = path.split('?', 1)[0];
   if (path.includes('#') || !raw.startsWith('/api/')) return null;
@@ -855,6 +871,7 @@ async function clusterPeakRegions(
     useBrowserStore.getState().setDynamicClustering(true);
   } else {
     useBrowserStore.getState().setClusterPatterns({});
+    adoptFitMetricCohort(lastMetricCohort);
     useBrowserStore.getState().setClusterPeakRegions(peakRegions);
     useBrowserStore.getState().setDynamicClustering(false);
   }
@@ -1409,6 +1426,8 @@ export async function executeBrowserAction(
         store.analysisSampleSeed,
         store.clusterFeatureRules,
         view.genome,
+        // Metric columns rank against the fit's cohort, as the fit did.
+        { metricCohort: store.clusterMetricCohort },
       );
       // The view, branch or clustering changed while this ran: it no longer applies.
       if (!copilotRoundStillCurrent(round, view, branch)) { stale += Object.keys(round.keyByDataset).length; continue; }
@@ -1761,6 +1780,7 @@ export async function executeBrowserAction(
           store.clusterFeatureRules,
           view.genome,
           mergeBy,
+          { metricCohort: store.clusterMetricCohort },
         );
         const dissolvedIds = new Set((res.dissolved ?? []).map(d => d.cluster));
         if (dissolvedIds.size === 0) continue;
