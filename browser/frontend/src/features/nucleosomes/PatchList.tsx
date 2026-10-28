@@ -10,6 +10,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useBrowserStore } from '../../stores/browserStore';
 import { scanHits, submitScan, type ScanHit } from '../hub/api';
+import { sendToOverlay } from '../hub/overlayHandoff';
+import type { OverlayLayer } from '../hub/overlayTypes';
 import { useHubData } from '../hub/hubData';
 import { useHubJob } from '../hub/hubJob';
 import { goToHits } from '../hub/actions';
@@ -110,6 +112,14 @@ export function PatchList({ observations, settings, setSettings, onSelect, revis
   const openHub = () => {
     useBrowserStore.getState().openAnalysisPanel('feature-hub');
   };
+  // The shown patches overlaid in the Feature hub (DESIGN §8): aligned at their left edge, the layer of their kind
+  // (phased and fuzzy patches: nucleosome footprints).
+  const overlayShown = () => {
+    const types = [...new Set(shown.map(r => r.type))];
+    const layer = (types.length === 1 && ['regular', 'disordered', 'undersized', 'missing'].includes(types[0]) ? types[0] : types.every(t => t === 'phased' || t === 'fuzzy') ? 'nucleosome' : 'regular') as OverlayLayer;
+    sendToOverlay(shown.map(r => ({ key: r.key, chrom: r.hit.chrom, start: r.hit.start, end: Math.max(r.hit.end, r.hit.start + 1), anchor: r.hit.anchor,
+      ...(r.hit.strand ? { strand: r.hit.strand } : {}), label: `${TYPE[r.type]?.label ?? r.type} patch`, hitId: r.hit.hitId })), layer);
+  };
 
   return <section className="space-y-1" data-testid="nuc-patches">
     <div className="flex flex-wrap items-center gap-2 text-[11px]">
@@ -122,6 +132,8 @@ export function PatchList({ observations, settings, setSettings, onSelect, revis
         disabled={Boolean(scanLive) || !observations.length}
         title={`Run the nuc scan over the view (the Feature hub's live scan, the same engine as fiberhmm-scan): recurrence, phased and fuzzy patches${leftOut.length ? '. Live-lift datasets are scanned in their own assembly (fiberhmm-scan on the BAM); their columns still score every patch' : ''}`}
         onClick={() => { void findInView(); }}>{scanLive ? `Scanning… ${scanJob?.progress?.fraction != null ? `${Math.round(scanJob.progress.fraction * 100)}%` : ''}` : 'Find patches in view'}</button>
+      <button type="button" className="rounded border border-line px-1.5 py-0.5 disabled:opacity-50 dark:border-white/10" onClick={overlayShown} data-testid="nuc-overlay-patches"
+        disabled={!shown.length} title="Overlay the patches listed here in the Feature hub: aligned density per panel, with the molecules measured at each position, facets and a pile">Overlay…</button>
       <button type="button" className="rounded border border-line px-1.5 py-0.5 dark:border-white/10" onClick={openHub} data-testid="nuc-open-hub"
         title="Scan a BED file or gene list, or list a scan's patches genome-wide, in the Feature hub">Feature hub…</button>
     </div>

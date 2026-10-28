@@ -200,6 +200,11 @@ def dispose_session(state) -> None:
     from .registry import new_generation
     new_generation(state)   # closes the scans; anything opened for the previous session no longer registers
     _refresh_layers(state)
+    try:
+        from services.hub.assoc import dispose_session as dispose_assoc
+        dispose_assoc(state)   # the hub's association runs of the previous session
+    except Exception:   # pragma: no cover - never fail an import on it
+        pass
 
 
 def get_job(state, job_id: str) -> dict:
