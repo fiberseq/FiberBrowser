@@ -170,6 +170,21 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
     return Object.keys(byName).length ? byName : null;
   };
   const active = st.activeClusterTreeNodeId && st.clusterTreeNodes[st.activeClusterTreeNodeId] ? st.activeClusterTreeNodeId : null;
+  // A member with no graph provenance of its own (a pooled host's new haplotype panel) holds a share of its host's
+  // runs' records: the host's provenance splits them, never every label taken as this haplotype's (a supplementary on
+  // the other haplotype's contig reaches the lifted panel by its drawn row, but is no record of this source; Codex
+  // review, stabilize 3 group A round 1).
+  const hostPanel = from.graphMemberOf ? st.panels.find(p => p.id === from.graphMemberOf) : null;
+  const hostKey = hostPanel ? panelKeyOf(hostPanel) : null;
+  type Cur = ReturnType<typeof useBrowserStore.getState>;
+  const lineageOf = (cur: Cur, nid: string) => {
+    const own = provenanceLineage(cur, fk, nid);
+    return own.length || !hostKey ? own : provenanceLineage(cur, hostKey, nid);
+  };
+  const liveOf = (cur: Cur) => {
+    const own = liveProvenance(cur, fk);
+    return own.length || !hostKey ? own : liveProvenance(cur, hostKey);
+  };
   seedSourceReadState(fromPanelId, sourcePanelId);
   useBrowserStore.setState(cur => {
     const patch: Record<string, unknown> = {};
@@ -179,7 +194,7 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
     // Only reads its filter keeps get a label, so the labels never scope away the reads it shows (Codex post-merge
     // review, group A round 1, #3); a filter no read passes labels none (agy post-merge review, group A, HIGH 2).
     const scope = cur.filteredReadIds[tk] ? new Set([...cur.filteredReadIds[tk]!].map(qnameOfId)) : null;
-    const got = project(cur.clusterAssignments[fk], active ? provenanceLineage(cur, fk, active) : liveProvenance(cur, fk), scope);
+    const got = project(cur.clusterAssignments[fk], active ? lineageOf(cur, active) : liveOf(cur), scope);
     // (Only Unassigned labels, the dead bucket a subcluster leaves for a panel it did not label, are no clustering.)
     const had = Boolean(live && Object.values(live).some(c => c !== UNASSIGNED_CLUSTER_ID));
     // Its own: labels no graph run gave it, even when their numbers equal the member's (Codex post-merge review,
@@ -218,7 +233,7 @@ export function seedSourceState(fromPanelId: string, sourcePanelId: string): voi
         continue;
       }
       if (!n.assignments?.[fk] || (n.assignments[tk] && Object.keys(n.assignments[tk]).length)) continue;
-      const got = project(n.assignments[fk], provenanceLineage(cur, fk, nid), scope);
+      const got = project(n.assignments[fk], lineageOf(cur, nid), scope);
       if (!got) continue;
       const nodeFocus = focusOn(n.focus?.[fk], got);
       nodes[nid] = { ...n, assignments: { ...n.assignments, [tk]: got },

@@ -3,7 +3,8 @@ import { useBrowserStore } from '../../stores/browserStore';
 import { drawnRowOwnership } from '../../stores/clusterSlice';
 import { useGraphStatusStore } from './statusStore';
 import { useGraphBindingsStore } from './bindingsStore';
-import { commitGraphRun, graphClusterPlan, routedDestinationLabels } from './graphCluster';
+import { assignWithGraphRun, commitGraphRun, graphClusterPlan, labelLinkedSource, routedDestinationLabels } from './graphCluster';
+import { seedSourceState } from './popOutKind';
 import { popOut } from './hostMode';
 import { drawnRowHapsOf, useGraphReadsStore } from './graphReadsStore';
 import { useTrackFeedStore } from '../../stores/trackFeedStore';
@@ -69,7 +70,7 @@ function setup(panels: PanelConfig[], fold = false) {
     binding: { kind: 'lifted', target: 'ref', paths: { mat: 'S1#1#c1', pat: 'S1#2#c1' }, haps: { mat: 'MAT', pat: 'PAT' }, revision: 'r1' } }] } } as never);
   useBrowserStore.setState({
     chrom: 'chr3', start: 128_650_000, end: 128_660_000, genomes: [{ id: 'ref_g', label: 'REF', active: true }] as never,
-    datasets: [{ id: 'ds1', label: 'Synth1', live_lift: { settings: { fold_molecule: fold }, haplotype_labels: { 'S1#1': 'MAT', 'S1#2': 'PAT' } } }] as never,
+    datasets: [{ id: 'ds1', label: 'Synth1', live_lift: { settings: { fold_molecule: fold }, haplotypes: ['S1#1', 'S1#2'], haplotype_labels: { 'S1#1': 'MAT', 'S1#2': 'PAT' } } }] as never,
     panels, selectedDatasets: new Set(), filteredReadIds: {}, selectedClusters: {}, clusterFocus: {},
     clusterAssignments: {}, clusterOrder: {}, clusterGroupLabels: {}, svSplits: {}, svCarrierEvidence: {},
     clusterMatchedRun: null, activeClusterTreeNodeId: null, clusterTreeNodes: {}, clusterTreeRootIds: [],
@@ -177,5 +178,43 @@ describe('a supplementary drawn on the other haplotype\'s path (stabilize 3, ite
     expect(drawnRowOwnership(runs as never, labels, rows, { records: true })?.owned).toEqual({ oP: [rk(SUP)] });
     expect(routedDestinationLabels({ stateKey: 'src', observations: ['oP'], panelId: 'src', scope: null, keyBy: 'qname' },
       obs, { oM: { assignments: { [SUP]: 0 } } }, rows)).toEqual({});
+  });
+
+  it('Codex A r1 #1: dynamic assignment routes a newly drawn supplementary\'s retained fitted label, not a fresh prediction', async () => {
+    setup(splitPanels());
+    // The run fitted the supplementary while the graph had not drawn it (display sampling).
+    const { obsM, obsP } = runGraph('hostM', { [SUP]: 0, [M1]: 1 }, { [PRIM]: 1, [P1]: 0 });
+    expect(useBrowserStore.getState().clusterAssignments['k-p'][rk(SUP)]).toBeUndefined();
+    // Drawn later; the model's assignment of it differs from its fitted label.
+    useGraphReadsStore.getState().publishRowHaps('hostM', drawnRowHapsOf(graphRows('PAT')));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ results: {
+      [obsM]: { assignments: { [SUP]: 1, [M1]: 1 } }, [obsP]: { assignments: { [PRIM]: 1, [P1]: 0 } } } }), { status: 200 })));
+    try {
+      await assignWithGraphRun(useBrowserStore.getState().clusterMatchedRun!);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    const st = useBrowserStore.getState();
+    expect(st.clusterAssignments['k-m'][rk(SUP)]).toBe(0);
+    expect(st.clusterMatchedRun!.assignments[obsM][SUP]).toBe(0);
+    expect(st.clusterAssignments['k-p'][rk(SUP)]).toBe(0);
+  });
+
+  it('Codex A r1 #2: a source view opened from a pooled host\'s new PAT panel keeps its own record\'s label', () => {
+    setup(pooledPanels());
+    // One molecule: its MAT supplementary (labelled C0 on the MAT path) sorts before its PAT primary (C1).
+    const sup = rid('cross', 'a-supp'), prim = rid('cross', 'z-prim');
+    useGraphReadsStore.getState().publishRowHaps('hostA', drawnRowHapsOf([{ ...graphRows('PAT')[0], rk: rk(sup), q: 'cross' }]));
+    runGraph('hostA', { [sup]: 0, [M1]: 1 }, { [prim]: 1, [P1]: 0 });
+    const [patId] = popOut('hostA', [], [{ binding: 'pat', hap: 'PAT' }]);
+    expect(useBrowserStore.getState().clusterAssignments[patId][rk(sup)]).toBe(0);
+    useBrowserStore.setState(s => ({ panels: [...s.panels, {
+      id: 'sourcePAT', stateKey: 'sourcePAT', contentType: 'dataset', datasetId: 'src', genome: 'S1', subTracks: [], collapsed: false,
+      linkGroup: null, liftLink: { id: 'link', datasetId: 'ds1', liftPanelId: 'hostA', hap: 'S1#2', hapLabel: 'PAT', contig: 'S1#2#c1', flip: false, chain: null },
+    } as never] }));
+    labelLinkedSource('sourcePAT');
+    expect(useBrowserStore.getState().clusterAssignments.sourcePAT.cross).toBe(1);
+    seedSourceState(patId, 'sourcePAT');
+    expect(useBrowserStore.getState().clusterAssignments.sourcePAT.cross).toBe(1);
   });
 });

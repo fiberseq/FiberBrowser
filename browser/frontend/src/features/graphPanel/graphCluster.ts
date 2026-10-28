@@ -579,10 +579,15 @@ export async function assignWithGraphRun(run: ClusterMatchedRun, signal?: AbortS
   let added = 0;
   const touched: string[] = [];
   const drawn = runDrawnRows(st.panels, g.hostPanelId, [...run.destinations, ...later]);
+  // Routed from the observations' labels as they stand after this answer (a fitted label stays; a new row takes the
+  // model's), never from a fresh prediction of a row another panel already shows labelled (Codex review, stabilize 3
+  // group A round 1).
+  const retained = Object.fromEntries(Object.entries(assignedObservations(run.assignments, response.results))
+    .map(([oid, a]) => [oid, { assignments: a }]));
   for (const d of [...run.destinations, ...later]) {
     const dest = { ...d, scope: d.scope ?? null };
     // (As the run wrote them: a supplementary labelled on its own path also reaches the member that shows its row.)
-    const labels = { ...routedDestinationLabels(dest, g.observations, response.results, drawn), ...destinationAssignments(dest, response.results) };
+    const labels = { ...routedDestinationLabels(dest, g.observations, retained, drawn), ...destinationAssignments(dest, response.results) };
     const live = st.clusterAssignments[d.stateKey] ?? {};
     // A model label also replaces "not a carrier" (-2) on a record the model now places (agy review: a carrier molecule
     // the fit sampled out must not stay -2).
