@@ -158,7 +158,8 @@ def test_collection_bounds_live_raw_records_before_the_first_bundle():
     bundles.close()
 
 
-def test_collection_checks_cancellation_before_consuming_the_region():
+@pytest.mark.parametrize('memory_budget', [0, 10000, 64 * 1024 * 1024])
+def test_collection_checks_cancellation_before_consuming_the_region(memory_budget):
     import threading
     from services.background_work import Cancelled, cancel_scope
     from services.sv_molecules import molecule_bundles
@@ -172,7 +173,7 @@ def test_collection_checks_cancellation_before_consuming_the_region():
                 token.set()
             yield _seg([(0, 100)])
     with cancel_scope(token), pytest.raises(Cancelled):
-        next(molecule_bundles(records(), lambda _: True))
+        next(molecule_bundles(records(), lambda _: True, memory_budget_bytes=memory_budget))
     assert 10 < consumed <= 257
 
 
@@ -222,12 +223,154 @@ def test_decode_partitions_count_only_their_own_sampling_extents(regional_bam):
         assert sorted(v for _, sampler in parts for v in getattr(sampler, field)) == sorted(getattr(expected, field))
 
 
-def test_spooling_preserves_exact_scalar_and_array_float_tags():
+@pytest.mark.parametrize('memory_budget', [0, 32 * 1024 * 1024])
+def test_spooling_preserves_exact_scalar_and_array_float_tags(memory_budget):
     import array
     from services.sv_molecules import molecule_bundles
     source = _seg([(0, 100)])
     source.set_tag('rq', 0.123456789, value_type='f')
     source.set_tag('vf', array.array('f', [0.123456789, 0.99999994]))
-    bundle, = molecule_bundles([source], lambda _: True)
+    bundle, = molecule_bundles([source], lambda _: True, memory_budget_bytes=memory_budget)
     assert bundle[0].get_tags(with_value_type=True) == source.get_tags(with_value_type=True)
     assert bundle[0].query_sequence == source.query_sequence and bundle[0].cigartuples == source.cigartuples
+
+
+@pytest.mark.parametrize('interleaved', [False, True])
+def test_spool_cursor_skips_redundant_seeks_and_recovers_interleaved_bundles(monkeypatch, interleaved):
+    from services.sv_molecules import molecule_bundles
+
+    # Several BGZF blocks, with selected molecules on both sides of skipped
+    # records. An out-of-order supplementary forces a seek and a return.
+    records = []
+    for i in range(12):
+        read = _seg([(0, 12000)], start=i * 13000)
+        read.query_name = f'molecule-{i}'
+        read.set_tag('ZZ', 'payload' * 2000)
+        records.append(read)
+    if interleaved:
+        supplementary = _seg([(0, 12000)], start=200000, supplementary=True)
+        supplementary.query_name = records[0].query_name
+        records.append(supplementary)
+    expected = [r for r in records if r.query_name != 'molecule-5']
+    original = pysam.AlignmentFile
+    seeks = []
+
+    class Reader:
+        def __init__(self, reader):
+            self.reader = reader
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.reader.close()
+
+        def tell(self):
+            return self.reader.tell()
+
+        def seek(self, offset):
+            seeks.append(offset)
+            return self.reader.seek(offset)
+
+        def __next__(self):
+            return next(self.reader)
+
+    def opened(path, mode, **kwargs):
+        file = original(path, mode, **kwargs)
+        return Reader(file) if mode == 'rb' else file
+
+    monkeypatch.setattr(pysam, 'AlignmentFile', opened)
+    bundles = list(molecule_bundles(records, lambda _: True, keep=lambda name: name != 'molecule-5',
+                                   memory_budget_bytes=0))
+    actual = [r for bundle in bundles for r in bundle]
+    key = lambda r: (r.query_name, r.reference_start)
+    assert [key(r) for r in actual] == [key(r) for r in sorted(expected, key=lambda r: (
+        int(r.query_name.split('-')[1]), bool(r.is_supplementary)))]
+    assert [bundle.source_order for bundle in bundles] == list(range(12))[:5] + list(range(6, 12))
+    for source, restored in zip(sorted(expected, key=key), sorted(actual, key=key)):
+        assert restored.to_string() == source.to_string()
+        assert restored.get_tags(with_value_type=True) == source.get_tags(with_value_type=True)
+    assert len(seeks) < len(actual) // 2
+    assert bool(seeks) == interleaved
+
+
+@pytest.mark.parametrize('memory_budget', [0, 10000, 32 * 1024 * 1024])
+def test_buffered_and_spilled_molecules_agree_with_filtered_and_interleaved_records(memory_budget):
+    from services.sv_molecules import molecule_bundles
+
+    records = [_seg([(0, 100)], start=i * 1000, supplementary=i in (0, 4)) for i in range(5)]
+    for read, name in zip(records, ('filtered', 'first', 'second', 'filtered', 'first')):
+        read.query_name = name
+    eligible = lambda read: read.query_name != 'filtered' or read.is_supplementary
+    expected = list(molecule_bundles(records, eligible, memory_budget_bytes=0))
+    actual = list(molecule_bundles(records, eligible, memory_budget_bytes=memory_budget))
+    assert [[r.to_string() for r in bundle] for bundle in actual] == [
+        [r.to_string() for r in bundle] for bundle in expected]
+    assert [b.source_order for b in actual] == [b.source_order for b in expected]
+
+
+def test_small_molecule_selections_avoid_spooling_and_copy_the_source(monkeypatch):
+    from services import sv_molecules
+    from services.background_work import interactive_read
+
+    def unexpected_spool(*args, **kwargs):
+        pytest.fail('Small selection opened a disk spool')
+
+    monkeypatch.setattr(sv_molecules.tempfile, 'TemporaryDirectory', unexpected_spool)
+    source = _seg([(0, 100)])
+    with interactive_read():
+        bundle, = sv_molecules.molecule_bundles([source], lambda _: True)
+    bundle[0].mapping_quality = 0
+    assert source.mapping_quality == 60
+
+
+def test_spill_cleans_up_on_a_budget_error(monkeypatch, tmp_path):
+    from services import sv_molecules
+    original = sv_molecules.tempfile.TemporaryDirectory
+    directories = []
+
+    def temporary_directory(**kwargs):
+        directory = original(dir=tmp_path, **kwargs)
+        directories.append(directory.name)
+        return directory
+
+    monkeypatch.setattr(sv_molecules.tempfile, 'TemporaryDirectory', temporary_directory)
+    with pytest.raises(sv_molecules.MoleculeBudgetError):
+        list(sv_molecules.molecule_bundles([_seg([(0, 100)])], lambda _: True, raw_budget_bytes=1))
+    assert len(directories) == 1 and not list(tmp_path.iterdir())
+
+
+def test_memory_limit_spills_before_collecting_the_whole_region(monkeypatch, tmp_path):
+    from services import sv_molecules
+    original = sv_molecules.tempfile.TemporaryDirectory
+    consumed = 0
+    opened = []
+
+    def temporary_directory(**kwargs):
+        opened.append(consumed)
+        return original(dir=tmp_path, **kwargs)
+
+    def records():
+        nonlocal consumed
+        for i in range(20):
+            consumed += 1
+            read = _seg([(0, 100)], start=1000 * i)
+            read.query_name = f'molecule-{i}'
+            yield read
+
+    monkeypatch.setattr(sv_molecules.tempfile, 'TemporaryDirectory', temporary_directory)
+    bundles = list(sv_molecules.molecule_bundles(records(), lambda _: True, memory_budget_bytes=10000))
+    assert opened == [3] and consumed == len(bundles) == 20
+    assert not list(tmp_path.iterdir())
+
+
+def test_an_unavailable_size_estimate_uses_the_lossless_spool(monkeypatch):
+    from services import sv_molecules
+
+    def unavailable(read):
+        raise ValueError('Unsupported auxiliary tag')
+
+    monkeypatch.setattr(sv_molecules, '_buffered_record_size', unavailable)
+    source = _seg([(0, 100)])
+    bundle, = sv_molecules.molecule_bundles([source], lambda _: True, memory_budget_bytes=10000)
+    assert bundle[0].to_string() == source.to_string()

@@ -198,6 +198,43 @@ def test_retained_size_counts_the_array():
     assert retained_size(c) == c.array.nbytes + 112
 
 
+@pytest.mark.parametrize('include_qualities', [False, True])
+def test_native_display_cache_columns_keep_the_same_projected_rows(include_qualities):
+    from types import SimpleNamespace
+    from services.background_work import interactive_read
+    from services.read_binary import reads_response
+    from services.working_sets import _load_broad_reads, project_broad_read_to_viewport
+
+    intervals = [[i * 10, i * 10 + 8, 8] for i in range(40)]
+    source = {'id': 'synthetic', 'intervals': intervals, 'qualities': list(range(40)),
+              'fire': copy.deepcopy(intervals), 'methyl': list(range(400)),
+              'layers': {'nuc': {'intervals': copy.deepcopy(intervals), 'qualities': [list(range(40))],
+                                 'quality_names': ['nq']}}}
+    dataset = SimpleNamespace(data_type='bam', paths=['native.bam'])
+
+    def load():
+        return _load_broad_reads(dataset=dataset, dataset_id='native', chrom='chrT',
+            broad_start=0, broad_end=400, broad_width=400, include_methylation=True,
+            layer_key=('nuc', 'fire'), include_layer_qualities=include_qualities,
+            build_bam_reads=lambda *a, **kw: [copy.deepcopy(source)],
+            build_bigbed_reads=lambda *a, **kw: [], load_bigbed_marks=lambda *a, **kw: [])
+
+    lists, = load()
+    with interactive_read():
+        columns, = load()
+    assert type(lists['intervals']) is list
+    assert type(columns['intervals']) is IntColumn
+    assert type(columns['layers']['nuc']['intervals']) is IntColumn
+    for offset in (-20, 0, 101):
+        project = lambda read: project_broad_read_to_viewport(read, viewport_offset=offset,
+            region_width=200, include_methylation=True, layer_key=('nuc', 'fire'),
+            include_layer_qualities=include_qualities)
+        expected, expected_spans = project(lists)
+        actual, actual_spans = project(columns)
+        assert actual_spans == expected_spans
+        assert reads_response({'reads': [actual]}).body == reads_response({'reads': [expected]}).body
+
+
 def test_columns_own_their_arrays():
     """A column never pins a larger allocation than it reports (cache budgets)."""
     from services.read_columns import owned
