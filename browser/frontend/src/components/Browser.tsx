@@ -710,6 +710,7 @@ export function Browser() {
           if (!stillCurrent()) return;
           const graphPeaks: import('../types').FirePeak[] = graphRes.peaks.map(p => ({
             start: p.start, end: p.end, index: p.index, layer: p.layer, score: p.score, threshold: p.threshold, width: p.width,
+            ...(p.graph ? { graph: p.graph } : {}),
             ...(p.graph && p.graph.kind !== 'target' ? { sourceLabel: `Graph: ${p.graph.label ? `insertion ${p.graph.label}` : 'insertion'}` } : {}),
           }));
           if (rule.source === 'accessibility' || rule.source === 'fire') {
@@ -1877,8 +1878,8 @@ export function Browser() {
             // matched peaks for a run over several loci), rules and threshold.
             projection: backendSortBy === 'projection' ? {
               // (A graph run keeps its regions in the run, not in clusterPeakRegions; graph features review.)
-              peakRegions: clusterChartRunPeaks(sortState.clusterPeakRegions.length ? sortState.clusterPeakRegions
-                : (sortState.clusterMatchedRun?.graph?.regions ?? []), sortState.clusterWindowPeaks, roundIds.map(id => round[id]),
+              peakRegions: clusterChartRunPeaks((sortState.clusterPeakRegions.length ? sortState.clusterPeakRegions
+                : (sortState.clusterMatchedRun?.graph?.regions ?? [])).map(p => ({ ...p, mode: p.mode ?? 'accessibility' })), sortState.clusterWindowPeaks, roundIds.map(id => round[id]),
                 { chrom: group.chrom, start: group.start, end: group.end, genome: group.genome ?? null }, chrom)
                 .map(p => ({ start: p.start, end: p.end, mode: p.mode || 'accessibility' })),
               clusterFeatureRules: sortState.clusterFeatureRules,

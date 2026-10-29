@@ -59,3 +59,14 @@ export function splitReadFilter(subset: SplitReads | undefined, filter: Set<stri
   const both = new Set([...ids].filter(id => idSetHas(filter, [id], recordKey(id))));
   return both.size ? both : new Set([NO_READS]);
 }
+
+
+/** Membership saved alongside split rules in sessions and undo snapshots. */
+export function serializeSplitReads(panels: import('../types').PanelConfig[]): Record<string, string[]> {
+  const reads = useSplitPanelStore.getState().reads;
+  return Object.fromEntries(panels.filter(p => p.readSubset && !p.readSubset.rule.liftHap).flatMap(p => {
+    const key = p.stateKey ?? p.datasetId ?? p.id;
+    const r = reads[key];
+    return r && (r.state === 'ready' || r.state === 'frozen') ? [[key, [...r.ids]]] : [];
+  }));
+}

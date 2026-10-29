@@ -1,3 +1,7 @@
+import { migratePeakSnapshot } from '../features/hub/peakMigration';
+import { adoptLegacyRuns, resetLegacyRuns } from '../features/hub/legacyRuns';
+import { resetGraphHub } from '../features/graphPanel/hubProvider';
+import { dualWriteFrontend, migrateHubSession, restoreHubOnly } from '../features/hub/migration';
 import { normalizeSvConflictOptions } from '../utils/svConflicts';
 import { duringSessionRestore } from '../utils/sessionRestore';
 import { validateMatchedState } from '../utils/matchedRegions';
@@ -137,7 +141,7 @@ export function collectFrontendState(): Record<string, unknown> {
   // (Only while it is still the map of these inputs: the import signs it again.)
   const projection = projectionForSave(s);
   if (projection) frontendState.readProjection = projection;
-  return frontendState;
+  return dualWriteFrontend(frontendState);
 }
 
 /**
@@ -160,7 +164,7 @@ export async function exportSession(): Promise<Blob> {
   const frontendState = collectFrontendState();
   // Embed full history in frontend_state so it persists through backend passthrough
   if (historyStack.length > 0) {
-    frontendState.historySnapshots = historyStack;
+    frontendState.historySnapshots = historyStack.map(snapshot => ({ ...snapshot, state: dualWriteFrontend(snapshot.state as unknown as Record<string, unknown>) }));
     frontendState.historyPointer = s._historyPointer;
   }
 
@@ -367,6 +371,7 @@ export function trackFiltersFromList(tracks: TrackListEntry[]): Record<number, s
 }
 
 export function applyImportedState(result: Record<string, unknown>): void {
+  if (result.frontend && typeof result.frontend === 'object') result = { ...result, frontend: restoreHubOnly(result.frontend as Record<string, unknown>) };
   const store = useBrowserStore;
   // Highlights, pins and exclusions belong to the session being left.
   useReadActionsStore.getState().reset();
@@ -762,6 +767,10 @@ export function applyImportedState(result: Record<string, unknown>): void {
       }
     }
   }
+  store.setState(migrateHubSession(store.getState()));
+  resetLegacyRuns();
+  resetGraphHub();
+  adoptLegacyRuns((result.results as { hub_legacy?: unknown } | undefined)?.hub_legacy);
   // Restored geometry is not the current viewport's geometry. Refresh even
   // when chromosome/coordinates did not change, and discard stale Fit scroll.
   store.setState(state => ({
@@ -789,7 +798,7 @@ function normalizeImportedHistorySnapshots(value: unknown): Snapshot[] {
     .map((snapshot, index) => ({
       label: typeof snapshot.label === 'string' ? snapshot.label : `Imported snapshot ${index + 1}`,
       timestamp: typeof snapshot.timestamp === 'number' ? snapshot.timestamp : Date.now(),
-      state: snapshot.state as Snapshot['state'],
+      state: migratePeakSnapshot(snapshot.state as Record<string, unknown>) as unknown as Snapshot['state'],
       kind: snapshot.kind as Snapshot['kind'],
       coalesceKey: typeof snapshot.coalesceKey === 'string' ? snapshot.coalesceKey : undefined,
       // A step that closed datasets keeps where they came from, so Undo can reopen them.

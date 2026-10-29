@@ -1,3 +1,4 @@
+import { publishGraphHub } from './hubProvider';
 /**
  * The graph-view panel (DESIGN_GRAPH_PANEL.md §§1, 4): a target backbone and up to three compared paths from a
  * registered graph package, drawn as the joint selected-path bubble layout (layout.ts → scene.ts → canvas.ts) on
@@ -428,6 +429,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
     layoutMsRef.current = performance.now() - t0;
     return m;
   }, [response, reg]);
+  useEffect(() => { if (panelId && reg && model) publishGraphHub(panelId, reg, model); }, [panelId, reg, model, datasetKey]);
   // The scene's plan (marks, clusters, scale, which lanes draw something of their own): per width and settings.
   const plan = useMemo(() => {
     if (!model) return null;

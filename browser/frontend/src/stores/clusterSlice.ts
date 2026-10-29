@@ -1,3 +1,4 @@
+import { capturePeakSelection, peakTransaction, projectPeakSelection } from '../features/hub/peakMigration';
 import { clusterSelectionKeys, type ClusterMatchedRun, type GraphRunObservation } from '../utils/clusterMatchedRun';
 import { matchedModeIndices, keepMatched } from '../utils/matchedRegions';
 import { loadPinnedMotifs, normalizePinnedMotifs, type PinnedMotifs } from '../utils/pinnedMotifs';
@@ -415,6 +416,7 @@ function buildClusterTreeNodeFromState(
     accessibilityThreshold: state.accessibilityThreshold,
     clusterFeatureRules: normalizeClusterFeatureRules(state.clusterFeatureRules),
     peakRegions: state.clusterPeakRegions.map(region => ({ ...region })),
+    peakSelection: capturePeakSelection(state.peaksByRule, state.chrom, state.selectedPeaks, state.peakModes, state.clusterPeakRegions),
     selectedPeakIndices: [...state.selectedPeaks],
     peakModes: { ...state.peakModes },
     patterns: { ...state.clusterPatterns },
@@ -432,6 +434,7 @@ function resolveClusterNodePeakSelection(
   state: BrowserState,
   node: ClusterTreeNode,
 ): { selectedPeaks: Set<number>; peakModes: Record<number, PeakMode> } {
+  if (node.peakSelection) return projectPeakSelection(state.peaksByRule, state.chrom, node.peakSelection);
   const allPeaks = state.getAllPeaks?.() ?? [];
   const selectedPeaks = new Set<number>();
   const peakModes: Record<number, PeakMode> = {};
@@ -1035,7 +1038,7 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
     }
 
     return keepMatched(state, {
-      peaksByRule: newPeaksByRule,
+      ...peakTransaction(state, newPeaksByRule),
       selectedPeaks: new Set(),
       peakModes: {},
     });
@@ -1153,7 +1156,7 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
       ...(genome ? { genome } : {}),
     };
     return {
-      peaksByRule: { ...state.peaksByRule, [customRuleId]: [...customPeaks, newPeak] },
+      ...peakTransaction(state, { ...state.peaksByRule, [customRuleId]: [...customPeaks, newPeak] }),
       peakDrawStart: null,
       peakDrawChrom: null,
     };
@@ -1161,12 +1164,10 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
   
   clearCustomPeaks: () => set(state => {
     const customRuleId = state.getCustomRuleId();
-    const customPeakIndices = new Set((state.peaksByRule[customRuleId] || []).map(p => p.index));
     const newPeaksByRule = { ...state.peaksByRule };
     delete newPeaksByRule[customRuleId];
     return {
-      peaksByRule: newPeaksByRule,
-      selectedPeaks: new Set([...state.selectedPeaks].filter(i => !customPeakIndices.has(i))),
+      ...peakTransaction(state, newPeaksByRule),
     };
   }),
   
@@ -2347,7 +2348,8 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
       accessibilityThreshold: state.accessibilityThreshold,
       clusterFeatureRules: normalizeClusterFeatureRules(state.clusterFeatureRules),
       peakRegions: state.clusterPeakRegions.map(r => ({ ...r })),
-      customPeaks: (state.peaksByRule[state.getCustomRuleId()] || []).map(p => ({ start: p.start, end: p.end, ...(p.chrom ? { chrom: p.chrom } : {}) })),
+      customPeaks: (state.peaksByRule[state.getCustomRuleId()] || []).map(p => ({ ...p })),
+      peakSelection: capturePeakSelection(state.peaksByRule, state.chrom, state.selectedPeaks, state.peakModes, state.clusterPeakRegions),
       selectedPeakIndices: [...state.selectedPeaks],
       peakModes: { ...state.peakModes },
       assignments,
@@ -2416,11 +2418,12 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
       const customRuleIdx = now.peakRules.findIndex(r => r.id === customRuleId);
       const customOffset = customRuleIdx >= 0 ? computeRuleOffset(customRuleIdx) : 0;
       const restoredCustomPeaks = saved.customPeaks.map((p, i) => ({
-        start: p.start, end: p.end, index: customOffset + i, layer: 0, isCustom: true as const,
+        ...p, index: customOffset + i, layer: 0, isCustom: true as const,
         ruleId: customRuleId,
         ...(p.chrom ? { chrom: p.chrom } : {}),
       }));
 
+      const restoredPeaks = { ...now.peaksByRule, [customRuleId]: restoredCustomPeaks };
       set({
         ...restoredClusteringState(saved, now, newAssignments),
         clusterAssignments: newAssignments,
@@ -2428,9 +2431,8 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
         clusterPatterns: saved.patterns,
         clusterPeakRegions: saved.peakRegions,
         clusterWindowPeaks: saved.windowPeaks ?? null,
-        peaksByRule: { ...now.peaksByRule, [customRuleId]: restoredCustomPeaks },
-        selectedPeaks: new Set(saved.selectedPeakIndices),
-        peakModes: saved.peakModes as Record<number, PeakMode>,
+        ...peakTransaction(now, restoredPeaks),
+        ...projectPeakSelection(restoredPeaks, now.chrom, saved.peakSelection ?? capturePeakSelection(restoredPeaks, now.chrom, saved.selectedPeakIndices, saved.peakModes, saved.peakRegions)),
         clusterMethod: saved.clusterMethod,
         clusterK: saved.clusterK,
         clusterResolution: saved.clusterResolution ?? 1,

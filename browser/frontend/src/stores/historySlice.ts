@@ -1,3 +1,5 @@
+import { serializeSplitReads } from './splitPanelStore';
+import { dualWriteFrontend, restoreHubOnly } from '../features/hub/migration';
 import { normalizeSvConflictOptions, type SvConflictOptions } from '../utils/svConflicts';
 import { validateMatchedState } from '../utils/matchedRegions';
 import { normalizeSignalFilters } from '../utils/signalFilters';
@@ -786,7 +788,7 @@ export function serializeState(state: BrowserState): SerializedState {
   // Which plugin packs wrote parts of this state: a build without one leaves them out of an undo step, a recovered
   // state or a session (api/sessionPacks.ts).
   const packs = sessionPackMarker();
-  return {
+  return dualWriteFrontend({
     ...(Object.keys(packs).length ? { packs } : {}),
     // Datasets (for crash recovery)
     datasets: (state.datasets || []).map(serializeDataset),
@@ -954,6 +956,7 @@ export function serializeState(state: BrowserState): SerializedState {
     customMotifs: state.customMotifs,
     // Plugin packs' state (stores/storeExtensions.ts).
     ...serializeExtensions(state),
+    splitPanelReads: serializeSplitReads(state.panels),
 
     // Capture regions cart
     captureRegions: state.captureRegions,
@@ -973,7 +976,7 @@ export function serializeState(state: BrowserState): SerializedState {
     savedTracks: state.savedTracks ?? [],
     coaccSettings: serializeCoaccSettings(),
     commandHistory: state.commandHistory ?? [],
-  };
+  });
 }
 
 /**
@@ -991,7 +994,7 @@ function deserializeState(
   options: { restoreViewport?: boolean } = {},
 ): Partial<BrowserState> {
   // Saved by a build with plugin packs this one doesn't have: their panels (and what only they showed) left out.
-  s = withoutMissingPackState(s);
+  s = withoutMissingPackState(restoreHubOnly(s as unknown as Record<string, unknown>) as unknown as SerializedState);
   const differences = restoreDifferencesSession(s as unknown as Record<string, unknown>);
   s = { ...s, ...restoreHistoricalMembership(s, differences) };
   const svSplits = normalizeSvSplits(legacySplitDefinitions(s as unknown as Record<string, unknown>));

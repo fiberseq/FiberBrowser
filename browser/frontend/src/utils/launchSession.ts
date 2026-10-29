@@ -123,7 +123,7 @@ export function describeSavedSession(state: SerializedState): string {
 // (a CLI-loaded dataset would otherwise overwrite it). Undecided counts for a
 // little while only: a page without the offer (public mode) saves as before.
 const DECIDING_MS = 15_000;
-const loadedAt = Date.now();
+let loadedAt = Date.now();
 let offerPending = false;
 let decided = false;
 export function setLaunchOfferPending(pending: boolean): void {
@@ -147,6 +147,7 @@ export function lastSessionSuperseded(): boolean {
 }
 /** Tests: back to a page that has not decided yet. */
 export function resetLaunchOfferForTests(decidedNow = true): void {
+  loadedAt = Date.now();
   offerPending = false;
   decided = decidedNow;
   superseded = false;

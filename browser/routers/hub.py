@@ -95,3 +95,9 @@ async def hub_overlay(request: dict, state=Depends(get_state)):
         return await asyncio.to_thread(overlay, state, request)
     except OverlayError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@router.get('/api/hub/legacy')
+async def legacy_jobs(state=Depends(get_state)):
+    from services.hub.migration import legacy_runs
+    return await asyncio.to_thread(legacy_runs, state)

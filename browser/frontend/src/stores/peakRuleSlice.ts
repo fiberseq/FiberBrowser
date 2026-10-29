@@ -1,3 +1,4 @@
+import { peakTransaction } from '../features/hub/peakMigration';
 import { equivalentFeaturePeaks } from '../utils/equivalentFeatures';
 import type { CorrespondenceScan } from '../utils/equivalentScanning';
 import { equivalentPeaks } from '../utils/equivalentPositions';
@@ -38,34 +39,10 @@ export function computeRuleOffset(ruleIndex: number): number {
   return ruleIndex * 10000;
 }
 
-/**
- * Peak selections and per-peak modes are keyed by peak index, which depends on
- * the rule's position. When indices change (rules reordered or removed), carry
- * the selection over to the same peaks; peaks that are gone drop out.
- */
-function remapPeakSelection(
-  state: BrowserState,
-  indexMap: Map<number, number | null>,
-): Pick<BrowserState, 'selectedPeaks' | 'peakModes'> {
-  const selectedPeaks = new Set<number>();
-  for (const idx of state.selectedPeaks) {
-    const next = indexMap.has(idx) ? indexMap.get(idx) : idx;
-    if (next != null) selectedPeaks.add(next);
-  }
-  const peakModes: BrowserState['peakModes'] = {};
-  for (const [key, mode] of Object.entries(state.peakModes)) {
-    const idx = Number(key);
-    const next = indexMap.has(idx) ? indexMap.get(idx) : idx;
-    if (next != null) peakModes[next] = mode;
-  }
-  return { selectedPeaks, peakModes };
-}
-
-/** Re-index each rule's peaks by the rule's position in `rules`, recording old -> new index. */
+/** Re-index each rule's legacy projection; hit identities stay attached to their peaks. */
 function reindexPeaks(
   peaksByRule: Record<string, FirePeak[]>,
   rules: PeakRule[],
-  indexMap: Map<number, number | null>,
 ): Record<string, FirePeak[]> {
   const next: Record<string, FirePeak[]> = {};
   rules.forEach((rule, ruleIdx) => {
@@ -73,7 +50,6 @@ function reindexPeaks(
     if (existing) {
       next[rule.id] = existing.map((p, localIdx) => {
         const index = computeRuleOffset(ruleIdx) + localIdx;
-        indexMap.set(p.index, index);
         return { ...p, index };
       });
     }
@@ -161,7 +137,7 @@ export function createPeakRuleSlice(
       const rule: PeakRule = { ...DEFAULT_PEAK_RULES[0], ...old, id, name, source: 'matched', enabled: true,
         color: color ?? old?.color ?? MATCHED_COLORS[state.peakRules.filter(isMatchedRule).length % MATCHED_COLORS.length],
         useGradient: false, matchGroup: matchGroup ?? old?.matchGroup };
-      const peaks = regions.map(p => ({ ...p, ruleId: id, isCustom: false, match: { ...p.match!, groupId: id } }));
+      const peaks = regions.map(p => ({ ...p, hitId: p.ruleId === id ? p.hitId : undefined, ruleId: id, isCustom: false, match: { ...p.match!, groupId: id } }));
       if (!peaks.length || peaks.length >= 10000 || peaks.some(p => !validMatchedPeak(p, id))
         || new Set(peaks.map(p => p.match.label)).size !== peaks.length || new Set(peaks.map(p => p.match.length)).size !== 1) {
         throw new Error('Invalid region map');
@@ -169,13 +145,10 @@ export function createPeakRuleSlice(
       const rules = old ? state.peakRules.map(r => r.id === id ? rule : r) : [...state.peakRules, rule];
       const offset = computeRuleOffset(rules.findIndex(r => r.id === id));
       const next = peaks.map((p, i) => ({ ...p, index: offset + i }));
-      const valid = new Set(next.map(p => p.index));
-      const removed = new Set((state.peaksByRule[id] ?? []).filter(p => !valid.has(p.index)).map(p => p.index));
-      const peakModes = Object.fromEntries(Object.entries(state.peakModes).filter(([i]) => !removed.has(Number(i))));
       const mode = (state.peaksByRule[id] ?? []).map(p => state.peakModes[p.index]).find(Boolean);
-      if (mode) for (const p of next) peakModes[p.index] = mode;
-      set({ peakRules: rules, peaksByRule: { ...state.peaksByRule, [id]: next },
-        selectedPeaks: new Set([...state.selectedPeaks].filter(i => !removed.has(i))), peakModes });
+      const transaction = peakTransaction(state, { ...state.peaksByRule, [id]: next });
+      set({ peakRules: rules, ...transaction,
+        ...(mode ? { peakModes: { ...transaction.peakModes, ...Object.fromEntries(next.map(p => [p.index, mode])) } } : {}) });
       return id;
     },
     removeMatchedGroup: id => get().removePeakRule(id),
@@ -213,18 +186,14 @@ export function createPeakRuleSlice(
       delete newSignalCache[id];
       // The removed rule's peaks leave the selection; the rules after it
       // shift up, so their peaks are re-indexed like a reorder.
-      const indexMap = new Map<number, number | null>(
-        (state.peaksByRule[id] ?? []).map(p => [p.index, null] as [number, null]),
-      );
       const rules = state.peakRules.filter(r => r.id !== id);
       return {
         ...Object.assign({}, ...storeExtensions().map(ext => ext.onPeakRuleChange?.(state, id, null))),
         peakRules: rules,
-        peaksByRule: reindexPeaks(state.peaksByRule, rules, indexMap),
         peakSignalCache: newSignalCache,
         correspondenceScans: Object.fromEntries(Object.entries(state.correspondenceScans).filter(([key]) => key !== id)
           .map(([key, scans]) => [key, Object.fromEntries(Object.entries(scans).filter(([group]) => group !== id))])),
-        ...remapPeakSelection(state, indexMap),
+        ...peakTransaction(state, reindexPeaks(state.peaksByRule, rules)),
       };
     }),
 
@@ -233,16 +202,14 @@ export function createPeakRuleSlice(
       const [moved] = rules.splice(from, 1);
       rules.splice(to, 0, moved);
       // Re-index peaks after reorder; selected peaks stay the same peaks.
-      const indexMap = new Map<number, number | null>();
-      const newPeaksByRule = reindexPeaks(state.peaksByRule, rules, indexMap);
-      return { peakRules: rules, peaksByRule: newPeaksByRule, ...remapPeakSelection(state, indexMap) };
+      const newPeaksByRule = reindexPeaks(state.peaksByRule, rules);
+      return { peakRules: rules, peaksByRule: newPeaksByRule, ...peakTransaction(state, newPeaksByRule) };
     }),
 
     setPeakRules: (incoming) => set(state => {
       const rules = [...incoming, ...state.peakRules.filter(r => isMatchedRule(r) && !incoming.some(q => q.id === r.id))];
-      const map = new Map<number, number | null>(Object.values(state.peaksByRule).flat().map(p => [p.index, null]));
-      const peaksByRule = reindexPeaks(state.peaksByRule, rules, map);
-      return { peakRules: rules, peaksByRule, ...remapPeakSelection(state, map) };
+      const peaksByRule = reindexPeaks(state.peaksByRule, rules);
+      return { peakRules: rules, peaksByRule, ...peakTransaction(state, peaksByRule) };
     }),
 
     // Peak data
@@ -251,28 +218,22 @@ export function createPeakRuleSlice(
       const offset = ruleIdx >= 0 ? computeRuleOffset(ruleIdx) : 0;
       const indexedPeaks = peaks.map((p, i) => ({
         ...p,
+        hitId: p.ruleId === ruleId ? p.hitId : undefined,
         index: offset + i,
         ruleId,
       }));
-      const old = state.peaksByRule[ruleId] ?? [];
-      const identity = (p: FirePeak) => JSON.stringify([p.chrom ?? state.chrom, p.genome ?? null, p.start, p.end, p.memberPanelId, p.match?.label]);
-      const byPosition = new Map(indexedPeaks.map(p => [identity(p), p.index]));
-      const indices = new Map(old.map(p => [p.index, byPosition.get(identity(p)) ?? null]));
-      return {
-        peaksByRule: { ...state.peaksByRule, [ruleId]: indexedPeaks },
-        ...remapPeakSelection(state, indices),
-      };
+      return peakTransaction(state, { ...state.peaksByRule, [ruleId]: indexedPeaks });
     }),
 
     clearPeaksByRule: (ruleId?) => set(state => {
       if (ruleId) {
         const newPeaksByRule = { ...state.peaksByRule };
         delete newPeaksByRule[ruleId];
-        const indices = new Map((state.peaksByRule[ruleId] ?? []).map(p => [p.index, null]));
-        return { peaksByRule: newPeaksByRule, ...remapPeakSelection(state, indices),
+        return { peaksByRule: newPeaksByRule, ...peakTransaction(state, newPeaksByRule),
           correspondenceScans: Object.fromEntries(Object.entries(state.correspondenceScans).filter(([id]) => id !== ruleId)) };
       }
-      return keepMatched(state, { peaksByRule: {}, selectedPeaks: new Set(), peakModes: {}, correspondenceScans: {} });
+      const kept = keepMatched(state, { peaksByRule: {}, selectedPeaks: new Set(), peakModes: {}, correspondenceScans: {} });
+      return { ...kept, ...peakTransaction(state, kept.peaksByRule ?? {}) };
     }),
 
     setPeaksLocked: (locked) => set({ peaksLocked: locked }),

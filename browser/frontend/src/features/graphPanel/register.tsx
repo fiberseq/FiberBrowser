@@ -1,3 +1,4 @@
+import { registerGraphHubProvider } from './hubProvider';
 /**
  * The graph-view panel type (DESIGN_GRAPH_PANEL.md §1): `contentType: 'graph-view'`, not a singleton, opened from
  * its rail tile or the strip with no dataset. A Preview feature until the graph helper ships for every platform
@@ -33,6 +34,7 @@ let done = false;
 export function registerGraphPanel(): void {
   if (done) return;
   done = true;
+  registerGraphHubProvider();
   registerPreviewFeature({
     id: GRAPH_VIEW_PREVIEW,
     label: 'Graph view',

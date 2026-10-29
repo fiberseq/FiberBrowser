@@ -16,12 +16,11 @@ import tempfile
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from services.consensus_progress import finish_progress, update_progress
 
-_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix='fiberhmm-accessibility')
+from services.scan.jobs import _EXECUTOR  # shared scan worker; legacy routes keep their job identities
 _INIT_LOCK = threading.Lock()
 SESSION_RUNS_SCHEMA = 'fiberbrowser.accessibility_runs.v1'
 EXPORT_FILES = ('variants.tsv', 'configurations.tsv', 'molecules.tsv.gz', 'coaccess.tsv', 'combos.tsv', 'manifest.json', 'result.json')

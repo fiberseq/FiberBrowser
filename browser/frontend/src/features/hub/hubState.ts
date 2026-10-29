@@ -1,3 +1,5 @@
+import { hubForSave, normalizePeakSelection, type PinnedHit } from './migration';
+import type { PeakSelection } from './peakMigration';
 /**
  * The feature hub's session state (store extension `featureHub`, DESIGN §5.6): the scans it opened (by path, with
  * the manifest digest), its list settings, saved anchor sets and the hub selection. Hub refs (scan hits) live only
@@ -76,6 +78,10 @@ export interface HubSelected {
 }
 
 export interface FeatureHubState {
+  pinned?: PinnedHit[];
+  peakSelection?: PeakSelection;
+  selectedFeatures?: FeatureRef[];
+  splitRules?: Record<string, unknown>;
   scans: HubOpenedScan[];
   ui: HubUi;
   anchors: AnchorSet[];
@@ -216,6 +222,7 @@ export function normalizeHub(value: unknown): FeatureHubState {
   const selected = (Array.isArray(v.selected) ? v.selected : []).flatMap(raw => {
     const h = raw as Record<string, unknown>;
     if (!h || !str(h.setId) || !str(h.hitId) || !str(h.chrom) || num(h.start) === null || num(h.end) === null) return [];
+    if (str(h.typeId)) ensureHubKind({ typeId: str(h.typeId), module: str(h.typeId).split('.')[0], label: str(h.typeId), plural: str(h.typeId), provides: ['hit'], anchor: 'centre', zeroWidth: true, scores: [] });
     return [{ setId: str(h.setId), hitId: str(h.hitId), typeId: str(h.typeId), chrom: str(h.chrom), start: num(h.start)!, end: num(h.end)!,
       anchor: num(h.anchor) ?? Math.floor((num(h.start)! + num(h.end)!) / 2),
       ...(h.strand === '+' || h.strand === '-' ? { strand: h.strand as '+' | '-' } : {}), ...(str(h.label) ? { label: str(h.label) } : {}),
@@ -228,7 +235,16 @@ export function normalizeHub(value: unknown): FeatureHubState {
       ...(h.targetStrand === '+' || h.targetStrand === '-' ? { targetStrand: h.targetStrand as '+' | '-' } : {}) }];
   });
   const overlay = v.overlay && typeof v.overlay === 'object' ? normalizeOverlay(v.overlay) : null;
-  return { scans, ui, anchors, selected, assocRuns: normalizeAssocRuns(v.assocRuns), ...(overlay ? { overlay } : {}) };
+  return { scans, ui, anchors, selected,
+    ...(Array.isArray(v.pinned) ? { pinned: v.pinned.flatMap(raw => {
+      if (!raw || typeof raw !== 'object' || !['class', 'nfr'].includes(raw.cart) || typeof raw.cartId !== 'string') return [];
+      const entry = normalizeHub({ selected: [raw] }).selected[0];
+      return entry ? [{ ...entry, cart: raw.cart as 'class' | 'nfr', cartId: raw.cartId }] : [];
+    }) } : {}),
+    ...(normalizePeakSelection(v.peakSelection) ? { peakSelection: normalizePeakSelection(v.peakSelection) } : {}),
+    ...(Array.isArray(v.selectedFeatures) ? { selectedFeatures: normalizeFeatureRefs(v.selectedFeatures) } : {}),
+    ...(v.splitRules && typeof v.splitRules === 'object' ? { splitRules: v.splitRules as Record<string, unknown> } : {}),
+    assocRuns: normalizeAssocRuns(v.assocRuns), ...(overlay ? { overlay } : {}) };
 }
 
 export function registerHubState(): void {
@@ -240,7 +256,7 @@ export function registerHubState(): void {
       setFeatureHub: (patch: Partial<FeatureHubState> | ((hub: FeatureHubState) => Partial<FeatureHubState>)) =>
         set(s => ({ featureHub: { ...s.featureHub, ...(typeof patch === 'function' ? patch(s.featureHub) : patch) } })),
     }),
-    serialize: s => ({ featureHub: s.featureHub ?? EMPTY_HUB }),
+    serialize: s => ({ featureHub: hubForSave(s) }),
     restoreSnapshot: saved => ('featureHub' in saved ? { featureHub: normalizeHub(saved.featureHub) } : {}),
     importSession: frontend => {
       const featureHub = normalizeHub(frontend?.featureHub);

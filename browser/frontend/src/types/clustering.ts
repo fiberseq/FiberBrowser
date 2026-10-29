@@ -59,6 +59,7 @@ export interface SavedCluster {
   // Peak regions (absolute genomic coords)
   peakRegions: Array<{ start: number; end: number; mode?: string; chrom?: string }>;
   customPeaks: Array<{ start: number; end: number; chrom?: string }>;
+  peakSelection?: import('../features/hub/peakMigration').PeakSelection;
   selectedPeakIndices: number[];
   peakModes: Record<number, string>;
 
@@ -127,6 +128,7 @@ export interface ClusterTreeNode {
 
   // Peak regions are absolute genomic coords.
   peakRegions: Array<{ start: number; end: number; mode?: string; chrom?: string }>;
+  peakSelection?: import('../features/hub/peakMigration').PeakSelection;
   selectedPeakIndices: number[];
   peakModes: Record<number, string>;
   patterns: Record<number, number[]>;
