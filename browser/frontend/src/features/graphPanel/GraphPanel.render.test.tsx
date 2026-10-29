@@ -17,6 +17,7 @@ import { makeAxis } from '../differences/axis';
 import { initialGraphView } from './state';
 import { clearGraphTraces, graphTraces } from './timings';
 import { usePanelContentHeightStore } from '../../stores/panelContentHeightStore';
+import { useHubData } from '../hub/hubData';
 import type { GraphBinding, GraphRegistration, GraphStatus } from './types';
 import type { PanelConfig } from '../../types';
 
@@ -58,6 +59,7 @@ const texts = (canvas: HTMLCanvasElement) => (calls.get(canvas) ?? []).filter(c 
 let host: HTMLDivElement;
 let root: Root;
 const original = useBrowserStore.getState();
+const originalHub = useHubData.getState();
 let fetchMock: ReturnType<typeof vi.fn>;
 let pendingResolvers: Array<(r: Response) => void>;
 
@@ -110,6 +112,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   useBrowserStore.setState(original, true);
   useGraphStatusStore.setState({ status: null, loading: false, error: null });
+  useHubData.setState(originalHub, true);
 });
 
 async function settle(ms = 0) {
@@ -123,6 +126,33 @@ async function answerAll() {
 }
 
 describe('GraphPanel', () => {
+  it('requests graph rows again when a tables-mode scan opens, changes or closes, without reloading topology', async () => {
+    const fallback = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (String(url).startsWith('/api/graph/read_bindings')) return Promise.resolve(respond({ bindings: [
+        { dataset_id: 'synthetic', label: 'Synthetic', kind: 'native', revision: 'one', paths: { target: 'chr3' }, problems: [], libraries: 1 },
+      ] }));
+      if (url === '/api/graph/reads') return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      });
+      return fallback(url, init);
+    });
+    useHubData.setState({ scans: [] });
+    useBrowserStore.setState({ panels: [graphPanel('g1')], datasets: [{ id: 'synthetic', label: 'Synthetic', data_type: 'bam' } as never] });
+    await act(async () => root.render(<GraphPanel panelId="g1" width={900} height={300} />));
+    await settle(160); await answerAll(); await settle(160);
+    const requests = () => fetchMock.mock.calls.filter(c => c[0] === '/api/graph/reads').length;
+    expect(requests()).toBe(1);
+    const topologyRequests = subgraphBodies().length;
+    const scan = { scanId: 'table-scan', manifestDigest: 'one', annotate: false, datasets: [{ dataset: 'synthetic', status: 'bound' }] };
+    act(() => useHubData.setState({ scans: [scan as never] }));
+    await settle(160); expect(requests()).toBe(2);
+    act(() => useHubData.setState({ scans: [{ ...scan, manifestDigest: 'two' } as never] }));
+    await settle(160); expect(requests()).toBe(3);
+    act(() => useHubData.setState({ scans: [] }));
+    await settle(160); expect(requests()).toBe(4);
+    expect(subgraphBodies()).toHaveLength(topologyRequests);
+  });
   it('says the helper is unavailable, with the install hint, and asks for nothing', async () => {
     useGraphStatusStore.setState({ status: { ...available, registrations: [],
       helper: { available: false, source: null, hint: 'Install the graph helper: pip install "fiberbrowser[graph]"', error: 'no graph helper found' } } });

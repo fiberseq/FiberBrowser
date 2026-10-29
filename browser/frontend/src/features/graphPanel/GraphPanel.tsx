@@ -43,6 +43,9 @@ import { allocateRows, graphPins, packMemberBands, routeRead, STRIP_ROWS, type B
 import { singleHapPathName } from './labels';
 import { popOutPaths } from './popOutKind';
 import { firstCarriedColumns } from './columnOrder';
+import { siteAt, sortGraphSite, type GraphSortSite } from './siteSort';
+import { ruleTermPayload } from '../../actions/ruleTermPayload';
+import { GraphPartsDialog } from './GraphPartsDialog';
 import { graphBindingFor } from './bindingsStore';
 import { bandSampled, drawDensityStrips, placeStrips, stripKey, type GraphBandReport, type PlacedBin } from './densityStrip';
 import { drawHostBandLabels, type ReadDecoration } from './readCanvas';
@@ -333,8 +336,11 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   // A dataset's source identity moves when outputs computed for its records (nucleosome layers) change its composed
   // rows, while its binding revision (files and map) stays: the reads are requested again.
   const sourceIdentities = useBrowserStore(useShallow(s => Object.fromEntries(s.datasets.map(d => [d.id, d.source_identity ?? '']))));
+  // Opening, replacing or removing a tables-mode scan changes composed graph rows without changing the BAM.
+  const scanLayersKey = useHubData(s => JSON.stringify(s.scans.filter(scan => !scan.annotate)
+    .map(scan => [scan.scanId, scan.manifestDigest, (scan.datasets ?? []).map(d => [d.dataset, d.status])]).sort()));
   const readsKey = reg && response && readPaths.length
-    ? JSON.stringify([reg.id, reg.revisions.package, readPaths, activeBindings.map(b => [b.dataset_id, b.revision, sourceIdentities[b.dataset_id] ?? '']), pinsKey])
+    ? JSON.stringify([reg.id, reg.revisions.package, readPaths, activeBindings.map(b => [b.dataset_id, b.revision, sourceIdentities[b.dataset_id] ?? '']), pinsKey, scanLayersKey])
     : null;
   useEffect(() => {
     if (!readsKey || !reg || !panelId) { if (!readsKey) setReads(r => (r.response || r.loading ? { response: null, loading: false, error: null } : r)); return; }
@@ -412,6 +418,9 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   const hoverKey = useLiftHover(s => s.hover?.key ?? null);
   const colormap = useBrowserStore(s => s.activeColormap);
   const style = useMemo(() => chromatinStyle(colormap), [colormap]);
+  const layerMetadata = useBrowserStore(useShallow(s => Object.fromEntries(s.datasets.map(d => [d.id, d.derived_layers]))));
+  const stylesByDataset = useMemo(() => new Map(Object.entries(layerMetadata).map(([id, meta]) => [id,
+    chromatinStyle(colormap, Object.fromEntries(Object.entries(meta ?? {}).flatMap(([key, value]) => value.color ? [[key, value.color]] : [])))])), [colormap, layerMetadata]);
 
   const compression: Compression = state?.layoutSettings.compression ?? 'log';
   // Insertions a plain click expanded: drawn at true bp inside the schematic view (by layout group ID).
@@ -581,10 +590,12 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   }, [hostMode, readLayout, readsStale, bandMembers]); // eslint-disable-line react-hooks/exhaustive-deps
   // Selected (each member's QNAME set) and highlighted ("Highlight in all panels": QNAME, cohort id or record key).
   const decoration: ReadDecoration | undefined = useMemo(() => {
-    if (!hostMode || !readLayout) return undefined;
+    const styleForRead = (m: PlacedMolecule) => stylesByDataset.get(m.read.d) ?? style;
+    if (!hostMode || !readLayout) return { styleForRead };
     const keyOf = new Map(bandMembers.map(m => [m.panelId, m.stateKey]));
     const lane = (k: string) => readLayout.lanes.get(k) as HostLane | undefined;
     return {
+      styleForRead,
       rowMember: (k, r) => lane(k)?.rowMember?.[r],
       rowCluster: (k, r) => lane(k)?.rowCluster?.[r] ?? null,
       selected: (member, m) => Boolean(member && selectedAll[keyOf.get(member) ?? '']?.has(m.read.q)),
@@ -595,7 +606,7 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         return Boolean(highlight.ids.size && idSetHas(highlight.ids, [m.read.q, m.read.aid], m.read.rk));
       },
     };
-  }, [hostMode, readLayout, bandMembers, selectedAll, highlight]);
+  }, [hostMode, readLayout, bandMembers, selectedAll, highlight, stylesByDataset, style]);
   const bands = useMemo(() => {
     if (!readLayout) return null;
     const out: Record<string, number> = {};
@@ -1046,13 +1057,15 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   };
 
   // ---------------------------------------------------------------- menu
-  const [menu, setMenu] = useState<{ x: number; y: number; sel?: GraphSelection; group?: string | null; read?: ReadHit | null } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; sel?: GraphSelection; group?: string | null; read?: ReadHit | null; site?: GraphSortSite | null } | null>(null);
   const WHAT_LABEL: Record<string, string> = { insertion: 'Insertion', deletion: 'Deletion', substitution: 'Substitution',
     inversion: 'Inversion', complex: 'Complex region', junction: 'Fragment junction', sequence: 'Sequence', gap: 'Graph gap',
     cluster: 'Clustered differences', 'open end': 'Open end' };
   const [prompt, setPrompt] = useState<'goto' | 'register' | null>(null);
   const [locusText, setLocusText] = useState('');
   const [locusError, setLocusError] = useState<string | null>(null);
+  const [partsOpen, setPartsOpen] = useState(false);
+  const [siteSortError, setSiteSortError] = useState<string | null>(null);
   const followable = useMemo(() => panels.filter(p => p.contentType === 'dataset' && p.viewportOverride && target
     && canFollow(target, { ...p.viewportOverride, reference: p.genome || main.reference })), [panels, target, main.reference]);
   const entries: ContextMenuEntry[] = [];
@@ -1075,6 +1088,14 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       entries.push({ kind: 'item', action: 'rd:exclude', icon: 'eye-off', label: `Exclude selected reads (${selected.size.toLocaleString()})` });
     }
     entries.push({ kind: 'item', action: 'rd:copy', icon: 'copy', label: 'Copy read name' });
+    if (menu.site) entries.push({ kind: 'submenu', id: 'site-sort', icon: 'settings', label: 'Sort by this graph column', entries: [
+      { kind: 'item', action: 'site-sort:footprint', icon: 'settings', label: 'Footprint size at site' },
+      { kind: 'item', action: 'site-sort:accessibility', icon: 'settings', label: 'Accessibility at site' },
+    ] });
+    if (menu.site && colormap.rules.length) entries.push({ kind: 'submenu', id: 'site-rule', icon: 'settings', label: 'Sort by rule at this column',
+      entries: colormap.rules.map((rule, i) => ({ kind: 'item' as const, action: `site-rule:${i}`, icon: 'settings', label: rule.name,
+        disabled: rule.enabled === false || Boolean(rule.conditions?.length),
+        title: rule.conditions?.length ? 'This rule needs target-coordinate annotations' : undefined })) });
     if (memberPanel && memberPanel.id !== panelId) {
       entries.push(memberPanel.collapsedByGraphGroup === panelId
         ? { kind: 'item', action: `pop:${memberPanel.id}`, icon: 'panel:graph-view', label: `Pop out ${member?.label}` }
@@ -1139,6 +1160,13 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
         { kind: 'item' as const, action: 'band:position', icon: 'settings', label: `${bandSort === 'position' ? '✓ ' : ''}By first carried column` },
         { kind: 'item' as const, action: 'band:length', icon: 'settings', label: `${bandSort === 'length' ? '✓ ' : ''}Longest first` },
       ] });
+    entries.push({ kind: 'submenu', id: 'run-options', icon: 'settings', label: 'Graph run options', entries: [
+      { kind: 'item', action: 'repeat:exclude', icon: 'settings', label: `${state.runOptions?.repeat_columns !== 'by_occurrence' ? '✓ ' : ''}Exclude repeat columns (default)` },
+      { kind: 'item', action: 'repeat:by_occurrence', icon: 'settings', label: `${state.runOptions?.repeat_columns === 'by_occurrence' ? '✓ ' : ''}Repeat columns by occurrence` },
+      { kind: 'item', action: 'carrier:refine', icon: 'settings', label: `${state.runOptions?.carrier_features !== 'drop' ? '✓ ' : ''}Refine within carriers (default)` },
+      { kind: 'item', action: 'carrier:drop', icon: 'settings', label: `${state.runOptions?.carrier_features === 'drop' ? '✓ ' : ''}Drop carrier-only features` },
+    ] });
+    if (graphRun?.graph?.hostPanelId === panel.id) entries.push({ kind: 'item', action: 'graph-parts', icon: 'search', label: 'Graph regions and carriers…' });
     entries.push({ kind: 'item', action: 'host:sync', icon: 'eye', label: `${state.syncSelection === false ? '' : '✓ '}Sync selection across the graph`,
       title: 'Selecting a read selects it in every member showing the same record' });
     entries.push({ kind: 'submenu', id: 'handoff', icon: 'settings', label: `Linear above ${formatBp(handoffSettings.outBp)}`,
@@ -1233,6 +1261,26 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
   const onMenuAction = (action: string) => {
     const at = menu;
     setMenu(null);
+    if (action === 'graph-parts') { setPartsOpen(true); return; }
+    if (action.startsWith('site-sort:') && at?.site && panelId) {
+      setSiteSortError(null);
+      void sortGraphSite(panelId, at.site, action.slice(10) as 'footprint' | 'accessibility')
+        .catch(e => setSiteSortError(String(e?.message ?? e)));
+      return;
+    }
+    if (action.startsWith('site-rule:') && at?.site && panelId) {
+      setSiteSortError(null);
+      const rule = colormap.rules[Number(action.slice(10))];
+      if (rule) void sortGraphSite(panelId, at.site, 'rule', { ...ruleTermPayload({ id: rule.id, source: 'label_rule', rule }) },
+        rule.targetLayers?.length === 1 ? rule.targetLayers[0] : undefined).catch(e => setSiteSortError(String(e?.message ?? e)));
+      return;
+    }
+    if (state && panelId && (action.startsWith('repeat:') || action.startsWith('carrier:'))) {
+      const runOptions = { ...state.runOptions };
+      if (action.startsWith('repeat:')) runOptions.repeat_columns = action.slice(7) as 'exclude' | 'by_occurrence';
+      else runOptions.carrier_features = action.slice(8) as 'refine' | 'drop';
+      setGraphView(panelId, { ...state, runOptions }); return;
+    }
     if (hostMode && panelId && panel) {
       const hit = at?.read;
       const member = hit ? bandMembers.find(m => m.panelId === hit.member) : undefined;
@@ -1433,7 +1481,8 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
             const read = hostMode ? readHitAt(px, py) : null;
             const found = read ? null : selectionAt(px, py);
             const group = found ? hitGroup(found.hit) : null;
-            setMenu({ x: e.clientX, y: e.clientY, sel: found?.sel, group: isInsertionGroup(group) ? group.id : null, read });
+            const site = read && scene && response ? siteAt(scene, response.result, px - sceneOffset, read.molecule.read.b) : null;
+            setMenu({ x: e.clientX, y: e.clientY, sel: found?.sel, group: isInsertionGroup(group) ? group.id : null, read, site });
           }} />
         {/* Lane labels' accessible names (the canvas draws them). */}
         <div className="sr-only">{model?.rows.map(l => <span key={l.key} data-testid="graph-lane-label" title={l.title} style={{ color: laneColor(l) }}>{l.label}</span>)}</div>
@@ -1469,7 +1518,11 @@ export function GraphPanel({ panelId, width: widthProp, height: heightProp }: An
       className="relative h-full min-h-0 w-full overflow-auto bg-white dark:bg-dark-bg"
       style={{ height: bodyHeight }}
       onContextMenu={e => { if (!(e.target instanceof HTMLCanvasElement)) { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY }); } }}>
+      {partsOpen && graphRun?.graph?.hostPanelId === panelId && <GraphPartsDialog run={graphRun} onClose={() => setPartsOpen(false)} />}
       {body}
+      {siteSortError && <div role="alert" data-testid="graph-site-sort-error" className="flex gap-2 px-2 py-1 text-xs text-red-600">
+        <span>{siteSortError}</span><button type="button" onClick={() => setSiteSortError(null)} aria-label="Dismiss sort error">×</button>
+      </div>}
       {prompt === 'goto' && (
         <form data-testid="graph-panel-goto" className="absolute left-2 top-8 z-20 flex flex-col gap-1 rounded border border-gray-300 bg-white p-2 shadow dark:border-gray-600 dark:bg-gray-800"
           onSubmit={e => { e.preventDefault(); submitLocus(); }}>

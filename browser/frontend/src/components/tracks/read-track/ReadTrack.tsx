@@ -1,4 +1,5 @@
 import { splitAway, splitPinnedAway } from '../../../utils/splitLocus';
+import { linearSiteOrder } from '../../../features/graphPanel/siteSort';
 import { useLiftCorrespondence } from '../../../features/liveLift/useLiftCorrespondence';
 import { isBamBacked } from '../../../utils/datasetKinds';
 import { markReadViewDrawn } from '../../../utils/viewIdle';
@@ -294,7 +295,9 @@ export function ReadTrack({
   // Get per-panel state (stateKey is unique per panel for duplicates, falls back to datasetId)
   const myClusterAssignments = clusterAssignments[stateKey] ?? EMPTY_OBJECT;
   const myClusterOrder = clusterOrder[stateKey] ?? EMPTY_NUMBER_ARRAY;
-  const myReadSortOrder = readSortOrder[stateKey] ?? EMPTY_STRING_ARRAY;
+  const sortPanel = useBrowserStore(s => s.panels.find(p => (p.stateKey ?? p.datasetId) === stateKey));
+  const rawReadSortOrder = readSortOrder[stateKey] ?? EMPTY_STRING_ARRAY;
+  const myReadSortOrder = useMemo(() => linearSiteOrder(sortPanel, rawReadSortOrder), [sortPanel?.graphSiteSort, rawReadSortOrder]);
   const myClusterFocus = clusterFocus[stateKey] ?? null;
   const mySelectedClusters = selectedClusters[stateKey] ?? null;
   const hasClusterFocus = myClusterFocus !== null && myClusterFocus.size > 0;

@@ -27,6 +27,7 @@ export const HANDOFF_SETTLE_MS = 300;
 export type LiftedOpenView = 'graph' | 'split' | 'pooled';
 
 interface GraphSettings {
+  linearHostView: 'reveal_members' | 'host_only';
   /** How a new lifted dataset opens when a registered package binds it (D2: graph). */
   defaultLiftedView: LiftedOpenView;
   outBp: number;
@@ -39,7 +40,7 @@ interface GraphSettings {
 }
 
 export type NativeOpenView = 'linear' | 'graph';
-type SettingKey = 'defaultLiftedView' | 'outBp' | 'inBp' | 'complexity' | 'nativeOpenView';
+type SettingKey = 'defaultLiftedView' | 'outBp' | 'inBp' | 'complexity' | 'nativeOpenView' | 'linearHostView';
 export const HANDOFF_MIN_BP = 10_000;
 export const HANDOFF_MAX_BP = 50_000;
 /** A threshold kept in 10–50 kb (whole bp); anything else (not a number) is null. */
@@ -61,7 +62,7 @@ const SETTINGS_KEY = 'fiberbrowser_graph_mode_settings_v1';
 
 function loadSettings(): Pick<GraphSettings, SettingKey> {
   const base = { defaultLiftedView: 'graph' as LiftedOpenView, outBp: HANDOFF_OUT_BP, inBp: HANDOFF_IN_BP, complexity: true,
-    nativeOpenView: 'linear' as NativeOpenView };
+    nativeOpenView: 'linear' as NativeOpenView, linearHostView: 'reveal_members' as const };
   try {
     const raw = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? 'null');
     if (!raw || typeof raw !== 'object') return base;
@@ -70,7 +71,8 @@ function loadSettings(): Pick<GraphSettings, SettingKey> {
     const stored = typeof raw.outBp === 'number' && typeof raw.inBp === 'number' && validHandoffPair(raw.outBp, raw.inBp);
     const { outBp, inBp } = stored ? { outBp: raw.outBp as number, inBp: raw.inBp as number } : base;
     return { defaultLiftedView: view, outBp, inBp, complexity: raw.complexity !== false,
-      nativeOpenView: raw.nativeOpenView === 'graph' ? 'graph' : 'linear' };
+      nativeOpenView: raw.nativeOpenView === 'graph' ? 'graph' : 'linear',
+      linearHostView: raw.linearHostView === 'host_only' ? 'host_only' : 'reveal_members' };
   } catch {
     return base;
   }
@@ -85,11 +87,12 @@ export const useGraphSettings = create<GraphSettings>((set, get) => ({
     Object.assign(next, normalizeHandoffPair(next.outBp, next.inBp, { outBp: get().outBp, inBp: get().inBp }));
     if (!['graph', 'split', 'pooled'].includes(next.defaultLiftedView)) next.defaultLiftedView = get().defaultLiftedView;
     if (next.nativeOpenView !== 'graph') next.nativeOpenView = 'linear';
+    if (next.linearHostView !== 'host_only') next.linearHostView = 'reveal_members';
     set({ defaultLiftedView: next.defaultLiftedView, outBp: next.outBp, inBp: next.inBp, complexity: next.complexity,
-      nativeOpenView: next.nativeOpenView });
+      nativeOpenView: next.nativeOpenView, linearHostView: next.linearHostView });
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify({ defaultLiftedView: next.defaultLiftedView, outBp: next.outBp, inBp: next.inBp,
-        complexity: next.complexity, nativeOpenView: next.nativeOpenView }));
+        complexity: next.complexity, nativeOpenView: next.nativeOpenView, linearHostView: next.linearHostView }));
     } catch { /* not kept */ }
   },
 }));
@@ -112,7 +115,7 @@ export function decideShown(prev: 'graph' | 'linear', widthBp: number, opts: { o
 
 /** Pure: the panels with a host showing `shown`: going linear reveals its folded members (marked); going back to the
  * graph folds the members it revealed (still marked). */
-export function applyShown(panels: PanelConfig[], hostId: string, shown: 'graph' | 'linear', reason?: 'width' | 'complexity'): PanelConfig[] {
+export function applyShown(panels: PanelConfig[], hostId: string, shown: 'graph' | 'linear', reason?: 'width' | 'complexity' | 'unavailable'): PanelConfig[] {
   const host = panels.find(p => p.id === hostId);
   const why = shown === 'linear' ? reason : undefined;
   return panels.map(p => {
@@ -123,7 +126,7 @@ export function applyShown(panels: PanelConfig[], hostId: string, shown: 'graph'
       return { ...p, graphView: { ...p.graphView, handoff: { ...rest, shown, ...(why ? { reason: why } : {}) } } };
     }
     if (p.graphMemberOf !== hostId) return p;
-    if (shown === 'linear' && p.collapsedByGraphGroup === hostId) {
+    if (shown === 'linear' && p.collapsedByGraphGroup === hostId && useGraphSettings.getState().linearHostView === 'reveal_members') {
       // Revealed at the host's own view, so the side-by-side panels show the same window (the host's moves carry
       // members in step with it: GraphPanel commitViewport, moveHostMembers).
       const { collapsedByGraphGroup: _c, ...rest } = p;
@@ -131,7 +134,7 @@ export function applyShown(panels: PanelConfig[], hostId: string, shown: 'graph'
         ...(host?.viewportOverride ? { viewportOverride: { ...host.viewportOverride } } : {}) };
     }
     // Back to the graph: the members it revealed fold again, unless the user moved one elsewhere meanwhile.
-    if (shown === 'graph' && p.graphHandoff === hostId
+    if ((shown === 'graph' || useGraphSettings.getState().linearHostView === 'host_only') && p.graphHandoff === hostId
       && JSON.stringify(p.viewportOverride ?? null) === JSON.stringify(host?.viewportOverride ?? null)) {
       const { graphHandoff: _h, ...rest } = p;
       return { ...rest, collapsed: true, collapsedByGraphGroup: hostId };
@@ -163,21 +166,22 @@ export function hostFollowable(host: PanelConfig, view: LinearView): boolean {
 
 /** What the host should show now (no settling), given the store, and why it is linear (the width rule — also a
  * pin or a view with no graph — or the complexity rule). */
-export function desiredHandoff(host: PanelConfig, main: LinearView, settings = useGraphSettings.getState()): { shown: 'graph' | 'linear'; reason?: 'width' | 'complexity' } {
+export function desiredHandoff(host: PanelConfig, main: LinearView, settings = useGraphSettings.getState()): { shown: 'graph' | 'linear'; reason?: 'width' | 'complexity' | 'unavailable' } {
   const view = panelView(host, main);
   const prev = host.graphView?.handoff?.shown ?? 'graph';
   // Not known yet: as it was. The helper or the package gone: the graph body, whose panel says why and relinks.
   const status = useGraphStatusStore.getState().status;
   if (!status) return { shown: prev, ...(prev === 'linear' && host.graphView?.handoff?.reason ? { reason: host.graphView.handoff.reason } : {}) };
-  if (!status.helper.available || !status.registrations.some(r => r.id === host.graphView?.registrationId)) return { shown: 'graph' };
+  if (!status.helper.available || !status.registrations.some(r => r.id === host.graphView?.registrationId)) return { shown: 'linear', reason: 'unavailable' };
   const byComplexity = prev === 'linear' && host.graphView?.handoff?.reason === 'complexity';
+  const recovering = prev === 'linear' && host.graphView?.handoff?.reason === 'unavailable';
   // The width rule's hysteresis is about the width: a host linear for complexity is graph as far as the width goes
   // (agy G7 review: at 40–50 kb it was relabelled linear-for-width and never came back).
-  const byWidth = decideShown(byComplexity ? 'graph' : prev, view.end - view.start, { outBp: settings.outBp, inBp: settings.inBp,
+  const byWidth = decideShown(byComplexity || recovering ? 'graph' : prev, view.end - view.start, { outBp: settings.outBp, inBp: settings.inBp,
     pinnedLinear: host.graphView?.handoff?.pinnedLinear, followable: hostFollowable(host, view) });
   if (byWidth === 'linear') return { shown: 'linear', reason: 'width' };
   if (!settings.complexity) return { shown: 'graph' };
-  const want = complexityShown(prev, complexityFor(host, view), byComplexity);
+  const want = complexityShown(recovering ? 'graph' : prev, complexityFor(host, view), byComplexity);
   // Not judged for this window yet: a host linear for complexity stays so until its probe answers.
   if (want == null) return byComplexity ? { shown: 'linear', reason: 'complexity' } : { shown: 'graph' };
   return want === 'linear' ? { shown: 'linear', reason: 'complexity' } : { shown: 'graph' };
@@ -238,6 +242,10 @@ export function startHandoffController(): void {
       // an unrelated change (another panel) does not.
       const sig = `${want}|${desired.reason ?? ''}|${view.chrom}:${view.start}-${view.end}`;
       if (want === shown && desired.reason === (shown === 'linear' ? reason : undefined)) {
+        const reconciled = applyShown(s.panels, host.id, shown, desired.reason);
+        if (reconciled.some((p, i) => p !== s.panels[i])) {
+          useBrowserStore.setState({ panels: reconciled }); return;
+        }
         if (pending) { window.clearTimeout(pending.timer); timers.delete(host.id); }
         // Linear for complexity, in a window the graph could draw but not judged yet: ask its topology once settled.
         if (shown === 'linear' && reason === 'complexity' && settings().complexity && view.end - view.start <= settings().outBp

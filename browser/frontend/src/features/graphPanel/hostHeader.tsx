@@ -10,6 +10,7 @@
 import { lazy, useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
 import { fadeIn, panelBodyParts } from './crossfade';
 import { featureText, notDrawnInLinear } from './linearNotices';
+import { siteSortNotice } from './siteSort';
 import { useShallow } from 'zustand/react/shallow';
 import { MenuItem } from '../../components/tracks/PanelHeader';
 import type { PanelHeaderContext } from '../../components/tracks/panelHeaderExtensions';
@@ -72,6 +73,9 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
   const outBp = useGraphSettings(s => s.outBp);
   const pickerOpen = usePopOutPicker(s => s.hostId === panel.id);
   const graphRun = useBrowserStore(s => (s.clusterMatchedRun?.graph?.hostPanelId === panel.id ? s.clusterMatchedRun : null));
+  const sortOrder = useBrowserStore(s => s.readSortOrder[panel.stateKey ?? panel.datasetId ?? '']);
+  const notice = !hostShowsGraph(panel) ? siteSortNotice(panel, sortOrder) : null;
+  const sortNotice = notice ? <div data-testid="graph-site-sort-notice" role="status" className="px-2 py-0.5 text-[11px] text-stone-600 dark:text-stone-300">{notice}</div> : null;
   const offered = useGraphOffers(s => Boolean(panel.datasetId && s.offered[panel.datasetId] && !s.done[panel.datasetId]));
   // (Which panel shows the offer depends on the dataset's other panels.)
   const offerHere = useBrowserStore(s => offered && graphOfferPanel(s.panels, panel.datasetId, useGraphOffers.getState()) === panel.id);
@@ -101,6 +105,7 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
         </MenuItem>
       ),
       wantsMenu: false,
+      body: sortNotice,
     };
   }
   const datasetLabel = dataset?.label ?? panel.datasetId;
@@ -170,8 +175,10 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
     const notDrawn = shown === 'linear' ? notDrawnInLinear(graphRun, panel.id) : [];
     const handoffBar = shown === 'linear' ? (
       <HandoffBar>
+        {sortNotice}
         <div data-testid="graph-handoff-bar" className="flex items-center gap-2 border-b border-stone-200 bg-stone-50 px-2 py-0.5 text-[11px] text-stone-600 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-300">
           <span>{pinned ? 'Linear · graph mode paused'
+            : panel.graphView?.handoff?.reason === 'unavailable' ? 'Linear · graph helper or package unavailable; graph resumes when available'
             : panel.graphView?.handoff?.reason === 'complexity' ? 'Linear · most of this window is unresolved in the graph'
               : `Linear · graph resumes below ${formatBp(useGraphSettings.getState().inBp)}`}</span>
           <button type="button" className="underline" data-testid={pinned ? 'graph-resume' : 'graph-stay-linear'}
@@ -200,7 +207,7 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
           onSelect={() => removeFromGraph(panel.id)}><span data-testid="graph-remove">Remove from graph</span></MenuItem>
       </>
     );
-    return { chipTexts: [text], chips, menu, wantsMenu: true, menuTitle: 'graph mode' };
+    return { chipTexts: [text], chips, menu, wantsMenu: true, menuTitle: 'graph mode', body: sortNotice };
   }
   // A bound linear panel: view it as a graph, or join a host already open.
   const hosts = related.filter(p => isHost(p) && joinCandidates(useBrowserStore.getState().panels, p).some(c => c.panel.id === panel.id));
@@ -230,7 +237,7 @@ export function useGraphModeHeader(ctx: PanelHeaderContext) {
         onClick={() => dismissGraphOffer(panel.datasetId!)}>×</button>
     </div>
   ) : null;
-  return { chipTexts: [`${text} ⇄ Graph`], chips, menu, wantsMenu: true, menuTitle: 'graph mode', ...(offer ? { body: offer } : {}) };
+  return { chipTexts: [`${text} ⇄ Graph`], chips, menu, wantsMenu: true, menuTitle: 'graph mode', body: <>{sortNotice}{offer}</> };
 }
 
 export { HANDOFF_OUT_BP };

@@ -45,7 +45,7 @@ export function runOutlines(run: ClusterMatchedRun | null | undefined, scene: Sc
   for (const part of parts) {
     const byLane = new Map<string, [number, number]>();
     for (const o of scene.occurrences) {
-      if (!part.nodes.has(o.node) || (part.lanes && !part.lanes.has(o.path))) continue;
+      if ((!part.nodes.has(o.node) && !part.nodes.has(JSON.stringify([o.node, o.occ]))) || (part.lanes && !part.lanes.has(o.path))) continue;
       const span = byLane.get(o.lane);
       byLane.set(o.lane, span ? [Math.min(span[0], o.x0), Math.max(span[1], o.x1)] : [o.x0, o.x1]);
     }

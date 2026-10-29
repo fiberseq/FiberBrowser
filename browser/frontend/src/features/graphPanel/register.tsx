@@ -68,9 +68,10 @@ export function registerGraphPanel(): void {
     preview: GRAPH_VIEW_PREVIEW,
     sessionKeys: ['panels[].graphView', 'graphSelection', 'graphInspect'],
     apiEndpoints: ['/api/graph/status', '/api/graph/subgraph', '/api/graph/requests/{id}', '/api/graph/read_bindings',
-      '/api/graph/reads', '/api/graph/sequence', '/api/graph/differences', '/api/graph/cluster', '/api/graph/cluster/assign'],
+      '/api/graph/reads', '/api/graph/sequence', '/api/graph/differences', '/api/graph/cluster', '/api/graph/cluster/assign', '/api/graph/sort_site'],
   });
   declareContribution('panelFields', 'graphView');
+  declareContribution('panelFields', 'graphSiteSort');
   for (const field of ['viewMode', 'graphMemberOf', 'collapsedByGraphGroup', 'graphHandoff']) declareContribution('panelFields', field);
   registerGraphMode();
 }

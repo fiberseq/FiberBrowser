@@ -17,13 +17,13 @@ import { getLayerColor } from '../../utils/layerColors';
 import { NUC_NAMED_MISSING, NUC_Z_MISSING, type NucSizeMark } from '../../utils/nucLayers';
 import type { Colormap } from '../../types';
 
-export type CallLayer = 'nuc' | 'tf' | 'msp';
+export type CallLayer = string;
 
 export interface CallStyle { color: string; opacity: number }
 
 export interface ChromatinStyle {
   /** `nucMark`: the call's nucsz mark (null or absent: none, so nucleosome class rules do not match). */
-  call(layer: CallLayer, size: number, qualities: Record<string, number>, nucMark?: NucSizeMark | null): CallStyle | null;
+  call(layer: CallLayer, size: number, qualities: Record<string, number>, nucMark?: NucSizeMark | null, annotationName?: string | null): CallStyle | null;
   m6a: string;
   body: string;
   /** bp an edge of confidence q (0–255) may extend outward (0: crisp), and how edges are drawn. */
@@ -57,13 +57,23 @@ export function chromatinStyle(colormap: Colormap, layerColors?: Record<string, 
   const targeted = (name: string) => rules.some(r => (r.targetLayers ?? []).length > 0 && ruleTargetsLayer(r, name));
   const edge = colormap.edgeAmbiguity ?? { mode: 'strict' as const, applyNuc: true, applyTf: true, maxGapBp: 30 };
 
-  const call = (layer: CallLayer, size: number, q: Record<string, number>, nucMark?: NucSizeMark | null): CallStyle | null => {
+  const call = (layer: CallLayer, size: number, q: Record<string, number>, nucMark?: NucSizeMark | null, annotationName?: string | null): CallStyle | null => {
     if (size <= 0) return null;
+    if (!['nuc', 'tf', 'msp'].includes(layer)) {
+      // Generic layers retain their own colour/opacity and use only explicitly targeted rules.
+      for (const rule of rules) {
+        if (!(rule.targetLayers ?? []).length || !ruleTargetsLayer(rule, layer)) continue;
+        if (footprintMatchesRule(0, size, size, rule, ctx, layer, q, annotationName ?? undefined, nucMark ?? null))
+          return { color: resolvers.get(rule)!(size), opacity: clamp01(rule.opacity) * layerOpacity(layer, 0.65) };
+      }
+      return { color: layerColors?.[layer] ?? getLayerColor(layer),
+        opacity: layerOpacity(layer, 0.65) * (targeted(layer) ? background(layer) : 1) };
+    }
     if (layer === 'nuc') {
       // The primary (nucleosome) stream: the first matching rule, else grey; layer-targeted rules gate it.
       for (const rule of rules) {
         const gated = (rule.qualityGates?.length ?? 0) > 0;
-        if (footprintMatchesRule(0, size, size, rule, ctx, 'nuc', gated ? q : undefined, undefined, nucMark ?? null)) {
+        if (footprintMatchesRule(0, size, size, rule, ctx, 'nuc', gated ? q : undefined, annotationName ?? undefined, nucMark ?? null)) {
           return { color: resolvers.get(rule)!(size), opacity: clamp01(rule.opacity) * layerOpacity('nuc', 1) };
         }
       }
@@ -87,7 +97,7 @@ export function chromatinStyle(colormap: Colormap, layerColors?: Record<string, 
     for (const rule of rules) {
       if (!isTf && ((rule.targetLayers ?? []).length === 0 || !ruleTargetsLayer(rule, layer))) continue;
       const gated = (rule.qualityGates?.length ?? 0) > 0;
-      if (footprintMatchesRule(0, size, size, rule, ctx, layer, gated ? q : undefined, undefined, nucMark ?? null)) {
+      if (footprintMatchesRule(0, size, size, rule, ctx, layer, gated ? q : undefined, annotationName ?? undefined, nucMark ?? null)) {
         color = resolvers.get(rule)!(size);
         opacity = clamp01(rule.opacity);
         matched = true;

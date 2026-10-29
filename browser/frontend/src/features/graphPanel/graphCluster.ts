@@ -305,14 +305,15 @@ function runIdentity(s: BrowserState, plan: Pick<GraphClusterPlan, 'host' | 'reg
     reg?.revisions ?? null]);
 }
 
-export function graphRequestBody(s: BrowserState, plan: Pick<GraphClusterPlan, 'registration' | 'target' | 'regions' | 'observations'>) {
+export function graphRequestBody(s: BrowserState, plan: Pick<GraphClusterPlan, 'registration' | 'target' | 'regions' | 'observations'> & { host?: PanelConfig }) {
   return {
     registration_id: plan.registration.id, revisions: plan.registration.revisions, target: plan.target,
     regions: plan.regions, observations: plan.observations.map(wire),
     method: s.clusterMethod, k: s.clusterK, max_reads: s.analysisSampleCount ?? null, sample_seed: s.analysisSampleSeed,
     subnucleosomal_threshold: s.subnucleosomalThreshold, accessibility_threshold: s.accessibilityThreshold,
     cluster_feature_rules: s.clusterFeatureRules, resolution: s.clusterResolution, balance_windows: true,
-    options: { carrier_features: 'refine', repeat_columns: 'exclude', coverage_rule: 'require_all' },
+    options: { carrier_features: plan.host?.graphView?.runOptions?.carrier_features ?? 'refine',
+      repeat_columns: plan.host?.graphView?.runOptions?.repeat_columns ?? 'exclude', coverage_rule: 'require_all' },
   };
 }
 

@@ -1517,7 +1517,11 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
     } : {}),
   })),
   setReadSortOrder: (datasetId, order) => set(state => ({
-    readSortOrder: { ...state.readSortOrder, [datasetId]: order }
+    readSortOrder: { ...state.readSortOrder, [datasetId]: order },
+    panels: state.panels.map(p => {
+      if ((p.stateKey ?? p.datasetId) !== datasetId || !p.graphSiteSort) return p;
+      const { graphSiteSort: _sort, ...rest } = p; return rest;
+    }),
   })),
   clearReadSortOrder: () => set({ readSortOrder: {} }),
   setFilteredReadIds: (datasetId, ids, source) => set(state => {
