@@ -206,6 +206,8 @@ def shift_compact_read(read: dict, offset: int, reference_offset: Optional[int] 
                 shift_interval(iv, offset)
                 for iv in layer.get("intervals") or []
             ]
+            if "source_intervals" in layer:
+                shifted_layer["source_intervals"] = [shift_interval(iv, offset) for iv in layer["source_intervals"]]
             shifted_layers[layer_name] = shifted_layer
         out["layers"] = shifted_layers
     return out
@@ -340,7 +342,7 @@ def merge_compact_reads_by_id(reads: Iterable[dict]) -> list[dict]:
                             existing[i].extend(qtrack)
                     if layer.get("quality_names") is not None:
                         dest["quality_names"] = layer.get("quality_names")
-                    for meta_key in ("circular_ids", "annotation_names"):
+                    for meta_key in ("circular_ids", "annotation_names", "source_intervals"):
                         if layer.get(meta_key):
                             dest.setdefault(meta_key, []).extend(layer.get(meta_key) or [])
                     for meta_key in ("scan_overlay", "source_layer", "draw_style"):

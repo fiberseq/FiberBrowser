@@ -14,7 +14,7 @@ import { registerHubProvider, type HubView } from './hubState';
 import type { FeatureHit, FeatureSet, FeatureTypeDecl, GroupDecl, HitValue } from './types';
 
 export const dsKey = (datasetId: string) => `ds:${datasetId}`;
-export const hapKey = (label: string) => `hap:${label}`;
+export const hapKey = (datasetId: string, label: string) => `${dsKey(datasetId)}:${label}`;
 
 export const overlapsView = (chrom: string, start: number, end: number, view: HubView) =>
   sameChrom(chrom, view.chrom) && (end > start ? start < view.end && view.start < end : view.start <= start && start < view.end);

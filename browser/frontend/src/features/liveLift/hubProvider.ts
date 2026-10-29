@@ -46,12 +46,13 @@ function diffSets(s: BrowserState, view: HubView): FeatureSet[] {
         hits.push({ hitId: d.id, setId, typeId: 'var.diff', frame: { kind: 'lifted', liftKey: response.lift_key, hap: d.hap, chrom: response.chrom },
           chrom: response.chrom, start: d.t_start, end: d.t_end, anchor: d.t_start,
           label: `${CHANGE[d.kind] ?? d.kind} ${bp.toLocaleString()} bp`, scores: { bp },
-          values: { [hapKey(d.hap_label)]: { strength: { v: bp } } }, flags: d.t_end <= d.t_start ? ['zero_width'] : [],
-          detail: { hap: d.hap_label, kind: d.kind, source: d.source, src: d.src, aliases: d.aliases } });
+          values: { [hapKey(datasetId, d.hap_label)]: { strength: { v: bp } } }, flags: d.t_end <= d.t_start ? ['zero_width'] : [],
+          detail: { datasetId, hap: d.hap_label, kind: d.kind, source: d.source, src: d.src, aliases: d.aliases } });
       }
     }
     haps.sort();
-    const groups: GroupDecl[] = haps.map(h => ({ id: hapKey(h), datasetId, kind: 'haplotype', label: h }));
+    const groups: GroupDecl[] = haps.map(h => ({ id: hapKey(datasetId, h), datasetId, kind: 'haplotype', hap: h,
+      label: `${dataset?.label ?? datasetId} ${h}` }));
     out.push({ setId, typeId: 'var.diff', type: DIFF_TYPE, frame: { kind: 'linear', chrom: responses[0].chrom }, datasets: [datasetId],
       groups, coverage: { territory: 'view' }, count: hits.length, status: 'complete', source: { kind: 'inline', hits },
       provenance: { producer: 'browser', module: 'live-lift', inputs: [datasetId], units: 'view',

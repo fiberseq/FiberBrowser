@@ -287,6 +287,9 @@ export async function openLinkedSourceView(liftPanelId: string, hapLabel?: strin
   const existing = linked.find(p => p.id === opts.existingId)
     ?? linked.find(p => (p.strand ?? null) === (liftPanel.strand ?? null)) ?? linked[0];
   if (existing) {
+    if (existing.collapsed) useBrowserStore.setState(s => ({
+      panels: s.panels.map(p => p.id === existing.id ? { ...p, collapsed: false } : p),
+    }));
     settling.delete(existing.id);   // an earlier reveal's remap no longer applies (its generation is behind)
     const relinked = existing.liftLink!.liftPanelId !== liftPanelId;
     if (relinked) updateLink(existing.id, { liftPanelId });

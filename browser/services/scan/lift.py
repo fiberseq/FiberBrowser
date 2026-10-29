@@ -59,9 +59,12 @@ class HitLift:
     reason: Optional[str] = None
     junction: Optional[Tuple[int, int]] = None
     junction_chrom: Optional[str] = None
+    # Every placement, for lifting callable territory without losing split pieces.
+    parts: Optional[List[Tuple[str, int, int]]] = None
 
     def public(self) -> dict:
         out = asdict(self)
+        out.pop('parts', None)
         if self.junction is not None:
             out['junction'] = list(self.junction)
         return out
@@ -176,7 +179,8 @@ def lift_intervals(map_path: str, intervals: Sequence[Tuple[str, int, int]], *, 
         target, start, end, strand = rows[0]
         n = len(placed.get(i) or ()) or 1
         status = 'split' if n > 1 else 'exact' if i in whole else 'partial'
-        out.append(HitLift(status, target, start, end, flipped=strand == '-', placements=n))
+        out.append(HitLift(status, target, start, end, flipped=strand == '-', placements=n,
+                           parts=[(c, a, b) for c, a, b, _strand in placed.get(i, rows)]))
     return out
 
 

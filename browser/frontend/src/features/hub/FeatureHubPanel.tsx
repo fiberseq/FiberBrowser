@@ -11,7 +11,7 @@ import { AnalysisPanelShell } from '../../components/controls/shared/AnalysisPan
 import { JobStatus } from '../../components/controls/shared/JobStatus';
 import { pickFolder } from '../../api/files';
 import { liveLiftHaplotypeColor } from '../liveLift/palette';
-import { closeScanId, loadScanHits, openScanPath, refreshScans, restoreSessionScans, scanSets, useHubData, useProviderSets } from './hubData';
+import { closeScanId, loadScanHits, openScanPath, refreshScans, restoreSessionScans, scanSets, useHubData, useProviderSets, withGraphGroups } from './hubData';
 import { hitSelectionEntry, type HubSelected, type HubUi } from './hubState';
 import { useHubJob } from './hubJob';
 import { asAnchors, asClusterRegions, asFilter, goToHits } from './actions';
@@ -79,6 +79,7 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
   const scanHitsBySet = useHubData(s => s.hits);
   const missing = useHubData(s => s.missing);
   const dataError = useHubData(s => s.error);
+  const providerErrors = useHubData(s => s.providerErrors);
   const job = useHubJob(s => s.job);
   const [dialog, setDialog] = useState(false);
   const [pathText, setPathText] = useState('');
@@ -113,8 +114,8 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
   const sets: FeatureSet[] = useMemo(() => {
     const fromScans = scanSets(scans).map(s => ({ ...s, groups: [...s.groups, ...(scanHitsBySet[s.setId]?.groups ?? [])],
       source: { kind: 'inline' as const, hits: scanHitsBySet[s.setId]?.hits ?? [] } }));
-    return [...fromScans, ...providerSets];
-  }, [scans, scanHitsBySet, providerSets]);
+    return [...fromScans, ...providerSets].map(set => withGraphGroups(set, datasets));
+  }, [scans, scanHitsBySet, providerSets, datasets]);
   const visible = sets.filter(s => !hub.ui.hiddenSets.includes(s.setId));
   const typeIds = [...new Set(sets.map(s => s.typeId))];
   const ui = hub.ui;
@@ -129,7 +130,7 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
       for (const g of set.groups) {
         if (seen.has(g.id) || g.id === 'all') continue;
         const hits = set.source.kind === 'inline' ? set.source.hits : [];
-        if (!hits.some(h => h.values?.[g.id])) continue;
+        if (!hits.some(h => h.values?.[g.id] || columnPathStatus(h.graph, { datasetId: g.datasetId, hap: g.hap }) !== undefined)) continue;
         seen.add(g.id);
         const colour = g.kind === 'haplotype' ? liveLiftHaplotypeColor(g.hap ?? g.label, dark) : undefined;
         extra.push({ key: g.id, label: g.label, kind: g.kind, colour, ...(g.datasetId ? { datasetId: g.datasetId } : {}), ...(g.hap ? { hap: g.hap } : {}) });
@@ -239,6 +240,7 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
         onCancel={liveJob ? () => { void useHubJob.getState().cancel(); } : undefined}
         result={job.status === 'complete' ? `${job.where}: ${job.computed_units} unit-module${job.computed_units === 1 ? '' : 's'} computed, the rest reused` : job.error ?? undefined} />}
       {(notice || dataError) && <p role="status" className="text-ink-secondary" data-testid="hub-notice">{notice || dataError}</p>}
+      {providerErrors.map(e => <p key={e} role="status" className="text-ink-secondary">{e}</p>)}
 
       <section data-testid="hub-scans" className="space-y-1">
         {scans.map(s => {

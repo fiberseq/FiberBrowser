@@ -111,6 +111,31 @@ def test_circular_sampled_display_merge_keeps_a_filtered_scan_mark_filtered(tmp_
     assert _fpcls(reads['m1/1/ccs']) == ([] if filtered else [[300, 400, 100]])
 
 
+@pytest.mark.parametrize('start', [LN, LN + 50, 2 * LN + 50])
+@pytest.mark.parametrize('path', ['working', 'sampled', 'direct'])
+def test_scan_marks_after_a_whole_circular_turn(tmp_path, monkeypatch, start, path):
+    st = _state(tmp_path, monkeypatch, read_start=0, span=(100, 200), filtered=False, circular=True)
+    if path == 'working':
+        reads = st.build_working_set('ds_a', 'chrT', start, start + 300, include_layers=True).reads
+    else:
+        payload, _ = _payload(st, start, start + 300, **({'hide_terminal_gaps': False} if path == 'direct' else {}))
+        reads = payload['reads']
+    marked = [r for r in reads if _fpcls(r)]
+    assert len(marked) == 1
+    offset = 100 - start % LN
+    assert _fpcls(marked[0]) == [[offset, offset + 100, 100]]
+
+
+def test_circular_shift_and_merge_keep_unclipped_layer_sources():
+    from services.circular_genome import merge_compact_reads_by_id, shift_compact_read
+    original = dict(id='synthetic', intervals=[[0, 5, 5]], layers={
+        'mark': dict(intervals=[[0, 5, 5]], source_intervals=[[-10, 10, 20]])})
+    shifted = shift_compact_read(original, 30)
+    assert shifted['layers']['mark']['source_intervals'] == [[20, 40, 20]]
+    (merged,) = merge_compact_reads_by_id([original, shifted])
+    assert merged['layers']['mark']['source_intervals'] == [[-10, 10, 20], [20, 40, 20]]
+
+
 def test_merge_keeps_overlay_meta_and_rewindow_names_the_wrapped_view():
     from services.circular_genome import merge_compact_reads_by_id, shift_compact_read
     from services.scan.overlay import RECEIPT_KEY, rewindow_receipts

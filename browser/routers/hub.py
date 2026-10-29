@@ -10,6 +10,22 @@ from state.dependencies import get_state
 router = APIRouter(tags=["hub"])
 
 
+@router.post('/api/hub/columns')
+async def provider_columns(request: dict, state=Depends(get_state)):
+    """Graph columns for browser-provider hits, through the scan hits' fixed-tile path."""
+    _not_on_lab_requests()
+    from services.scan.graph_hits import add_graph_aliases
+    hits = request.get('hits')
+    chrom = request.get('chrom')
+    if not isinstance(chrom, str) or not isinstance(hits, list) or len(hits) > 20_000:
+        raise HTTPException(status_code=422, detail='Give a chromosome and at most 20,000 hits')
+    for h in hits:
+        if not isinstance(h, dict) or not isinstance(h.get('start'), int) or not isinstance(h.get('end'), int):
+            raise HTTPException(status_code=422, detail='Each hit needs integer start and end coordinates')
+    note = await add_graph_aliases(state, hits, chrom)
+    return dict(hits=hits, note=note)
+
+
 def _not_on_lab_requests() -> None:
     """Association and overlays read scan directories and BAMs that a lab server's read roots don't describe."""
     from services.lab.paths import enforcing

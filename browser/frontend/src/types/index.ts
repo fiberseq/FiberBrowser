@@ -111,6 +111,7 @@ export interface ClusterPreparationSample {
 }
 
 export interface ClusterResponse {
+  record_sources?: Record<string, { contig: string; hap: string }>;
   cohort?: { records: number; supplementary_rows: number; folded: boolean; excluded_alt: number; alternative_rows: number; hap?: string | null; rows: number; scope?: string };
   assignments: Record<string, number>;
   cluster_counts: Record<number, number>;

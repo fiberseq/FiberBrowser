@@ -10,6 +10,16 @@ import { registerHubProvider, type HubView } from '../hub/hubState';
 import { datasetGroups, dsKey, overlapsView } from '../hub/providers';
 import type { FeatureHit, FeatureSet, FeatureTypeDecl, HitValue } from '../hub/types';
 import { svFeatureRef, svMatches, svName, type SvLike } from './svFeatures';
+import type { ReadPanelFeed } from '../../stores/trackFeedStore';
+
+// The hub owns these loads: full view can unmount every read track.
+const hubFeeds = new Map<string, ReadPanelFeed>();
+const listeners = new Set<() => void>();
+export function rememberHubSv(feed: ReadPanelFeed): void {
+  hubFeeds.set(feed.datasetId, feed);
+  listeners.forEach(fn => fn());
+}
+export function clearHubSv(): void { hubFeeds.clear(); listeners.forEach(fn => fn()); }
 
 const SV_TYPE: FeatureTypeDecl = {
   // No per-read states through the hub yet (SV genotypes group reads through the SV tab's own split).
@@ -21,11 +31,13 @@ const SV_TYPE: FeatureTypeDecl = {
 
 function svSets(s: BrowserState, view: HubView): FeatureSet[] {
   const merged: Array<{ sv: SvLike; byDataset: Record<string, { support: number; informative: number }> }> = [];
-  for (const [stateKey, feed] of Object.entries(useTrackFeedStore.getState().byStateKey)) {
+  const feeds = [...Object.entries(useTrackFeedStore.getState().byStateKey), ...[...hubFeeds].map(([id, feed]) => [`hub:${id}`, feed] as const)];
+  for (const [stateKey, feed] of feeds) {
+    if (stateKey.startsWith('hub:') && !s.datasets.some(d => d.id === feed.datasetId)) continue;
     // A panel on another reference (its own genome) is not in this genome's coordinates.
     const panel = s.panels.find(p => (p.stateKey ?? p.datasetId) === stateKey);
     if (panel?.genome) continue;
-    if (!feed.sv || feed.zoomedOut || !overlapsView(feed.dataChrom, view.start, view.end, view)) continue;
+    if (!feed.sv || feed.zoomedOut || !overlapsView(feed.dataChrom, feed.dataStart, feed.dataEnd, view)) continue;
     for (const c of feed.sv.clusters) {
       const sv: SvLike = { t: c.t, ref: c.ref, len: c.len };
       const end = c.t === 'D' ? c.ref + c.len : c.ref;
@@ -62,5 +74,8 @@ function svSets(s: BrowserState, view: HubView): FeatureSet[] {
 }
 
 export function registerSvHubProvider(): void {
-  registerHubProvider({ id: 'sv', sets: svSets, subscribe: fn => useTrackFeedStore.subscribe(fn) });
+  registerHubProvider({ id: 'sv', sets: svSets, subscribe: fn => {
+    listeners.add(fn); const off = useTrackFeedStore.subscribe(fn);
+    return () => { listeners.delete(fn); off(); };
+  } });
 }

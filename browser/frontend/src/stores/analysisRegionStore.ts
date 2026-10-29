@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { ClassRegionOutline } from './classRegionOutlineStore';
 
-export type AnalysisOutline = ClassRegionOutline & { color: string };
+export type AnalysisOutline = ClassRegionOutline & { color: string; selected?: boolean; onSelect?: (additive: boolean) => void };
 /** Ephemeral analysis regions share the existing ruler/read outline treatment. */
 export const useAnalysisRegionStore = create<{
   outlines: Record<string, AnalysisOutline[]>;
