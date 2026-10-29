@@ -1,3 +1,5 @@
+import { cartPins } from './migration';
+import { peakHitId } from './peakMigration';
 /**
  * Core browser providers of hub sets (DESIGN §9): the shown Find classes run (footprint classes per dataset, legacy
  * fp-class refs) and the peak rules' peaks (one set per rule, ids by position so a rescan keeps them). Plugin packs
@@ -91,17 +93,17 @@ function classSets(s: BrowserState, view: HubView): FeatureSet[] {
 function peakSets(s: BrowserState, view: HubView): FeatureSet[] {
   const out: FeatureSet[] = [];
   for (const rule of s.peakRules) {
-    if (!rule.enabled || rule.source === 'custom' || rule.source === 'matched') continue;
+    if (!rule.enabled) continue;
     // Peaks of a panel on another reference (p.genome) are not this genome's coordinates.
     const peaks = (s.peaksByRule[rule.id] ?? []).filter(p => !p.genome && overlapsView(p.chrom ?? s.chrom, p.start, p.end, view));
     const setId = `browser:peaks:${rule.id}`;
     const hits: FeatureHit[] = peaks.map(p => {
       const chrom = p.chrom ?? s.chrom;
-      return { hitId: `peak:${rule.id}:${chrom}:${p.start}-${p.end}`, setId, typeId: 'peaks.peak', frame: { kind: 'linear', chrom }, chrom,
+      return { hitId: peakHitId(p, rule.id, s.chrom), setId, typeId: 'peaks.peak', frame: { kind: 'linear', chrom }, chrom,
         start: p.start, end: p.end, anchor: Math.floor((p.start + p.end) / 2),
         label: ['Strong', 'Medium', 'Weak', 'Rare'][p.layer ?? 0] ?? 'Peak',
         scores: { score: p.score ?? null, tier: p.layer ?? null }, values: { all: { strength: { v: p.score ?? null } } },
-        detail: { rule: rule.name, width: p.width, threshold: p.threshold } };
+        detail: { rule: rule.name, width: p.width, threshold: p.threshold, ...(p.graph ? { graph: p.graph } : {}), ...(p.match ? { match: p.match } : {}) } };
     });
     out.push({ setId, typeId: 'peaks.peak', type: { ...PEAK_TYPE, plural: `Peaks · ${rule.name}` }, frame: { kind: 'linear', chrom: view.chrom },
       datasets: [], groups: [{ id: 'all', kind: 'all', label: 'All' }], coverage: { territory: 'view' }, count: hits.length,
@@ -114,4 +116,13 @@ function peakSets(s: BrowserState, view: HubView): FeatureSet[] {
 export function registerCoreHubProviders(): void {
   registerHubProvider({ id: 'find-classes', sets: classSets, subscribe: fn => useConsensusViewStore.subscribe(fn) });
   registerHubProvider({ id: 'peaks', sets: peakSets });
+  registerHubProvider({ id: 'pinned', sets: (s, view) => cartPins(s).filter(p => !(p.frame?.kind === 'linear' && p.frame.genome) && overlapsView(p.chrom, p.start, p.end, view)).map(p => {
+    const type = p.cart === 'class' ? CLASS_TYPE : { ...CLASS_TYPE, typeId: 'nfr.variant', module: 'browser:nfr', label: 'NFR variant', plural: 'NFR variants' };
+    const { lift: _lift, ...pin } = p;
+    const hit: FeatureHit = { ...pin, frame: { kind: 'linear', chrom: p.chrom }, scores: {}, flags: ['pinned'], detail: { cartId: p.cartId } };
+    return { setId: p.setId, typeId: p.typeId, type,
+      frame: hit.frame, datasets: p.datasets ?? [], groups: datasetGroups(s, p.datasets ?? []), coverage: { territory: 'regions' },
+      count: 1, status: 'complete', source: { kind: 'inline', hits: [hit] },
+      provenance: { producer: 'browser', module: 'cart', inputs: p.datasets ?? [], units: 'regions', summary: 'Pinned from a legacy cart' } };
+  }) });
 }

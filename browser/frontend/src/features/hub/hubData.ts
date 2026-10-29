@@ -1,3 +1,5 @@
+import { featureKey } from '../../stores/featureStore';
+import { refreshLegacyRuns } from './legacyRuns';
 /**
  * The hub's live data (transient): the scans open on the server, their hits in view, and the browser providers'
  * sets. The session keeps only what to reopen (featureHub.scans); this store is rebuilt from it.
@@ -279,16 +281,43 @@ export async function loadScanHits(view: HubView, hidden: string[]): Promise<voi
 /** The browser providers' sets for a view, recomputed when their sources change. */
 export function useProviderSets(view: HubView): FeatureSet[] {
   const [version, setVersion] = useState(0);
-  const state = useBrowserStore(useShallow(s => ({ peaksByRule: s.peaksByRule, peakRules: s.peakRules, datasets: s.datasets })));
+  const state = useBrowserStore(useShallow(s => ({ peaksByRule: s.peaksByRule, peakRules: s.peakRules, datasets: s.datasets, panels: s.panels, footprintGroups: s.footprintGroups, savedNfrVariants: s.savedNfrVariants, graphSelection: s.graphSelection })));
   useEffect(() => {
+    void refreshLegacyRuns();
     const bump = () => setVersion(v => v + 1);
-    const subs = hubProviders().flatMap(p => (p.subscribe ? [p.subscribe(bump)] : []));
+    const subs = hubProviders().flatMap(p => (p.subscribe ? [p.subscribe(() => {
+      bump();
+      if (p.id === 'find-classes' || p.id === 'nfr') void refreshLegacyRuns();
+    })] : []));
     const off = onHubProvidersChanged(bump);
     return () => { subs.forEach(u => u()); off(); };
   }, []);
   return useMemo(() => {
     const s = useBrowserStore.getState();
-    return hubProviders().flatMap(p => { try { return p.sets(s, view); } catch { return []; } });
+    return mergeProviderSets(hubProviders().flatMap(p => { try { return p.sets(s, view); } catch { return []; } }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version, view.chrom, view.start, view.end, state]);
+}
+
+/** Merge facades, live panels and cart pins into one row per set/hit, retaining the richest live values. */
+export function mergeProviderSets(sets: FeatureSet[]): FeatureSet[] {
+  const merged = new Map<string, FeatureSet>();
+  for (const incoming of sets) {
+    const prior = merged.get(incoming.setId);
+    if (!prior || prior.source.kind !== 'inline' || incoming.source.kind !== 'inline') {
+      merged.set(incoming.setId, incoming); continue;
+    }
+    const hits = new Map(prior.source.hits.map(h => [h.hitId, h]));
+    for (const h of incoming.source.hits) {
+      const prev = hits.get(h.hitId);
+      hits.set(h.hitId, prev ? { ...h, ...prev,
+        flags: [...new Set([...(prev.flags ?? []), ...(h.flags ?? [])])],
+        legacyRefs: [...new Map([...(prev.legacyRefs ?? []), ...(h.legacyRefs ?? [])].map(r => [featureKey(r), r])).values()],
+        detail: { ...h.detail, ...prev.detail } } : h);
+    }
+    merged.set(incoming.setId, { ...prior, datasets: [...new Set([...prior.datasets, ...incoming.datasets])],
+      groups: [...new Map([...prior.groups, ...incoming.groups].map(g => [g.id, g])).values()],
+      count: hits.size, source: { kind: 'inline', hits: [...hits.values()] } });
+  }
+  return [...merged.values()];
 }

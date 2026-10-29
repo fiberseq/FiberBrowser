@@ -1,0 +1,520 @@
+{
+  "version": "2.0",
+  "viewport": {
+    "chrom": "chrT",
+    "start": 100,
+    "end": 900
+  },
+  "datasets": [
+    {
+      "id": "sample-a",
+      "label": "Sample A",
+      "paths": [
+        "/data/sample.bam"
+      ],
+      "color": "#336699",
+      "data_type": "bam"
+    }
+  ],
+  "frontend": {
+    "chrom": "chrT",
+    "start": 100,
+    "end": 900,
+    "selectedPeaks": [],
+    "peakModes": {},
+    "clusterPeakRegions": [],
+    "clusterTreeNodes": {},
+    "clusterTreeRootIds": [],
+    "activeClusterTreeNodeId": null,
+    "peakRules": [
+      {
+        "id": "default-accessibility",
+        "name": "Accessibility",
+        "source": "accessibility",
+        "enabled": true,
+        "color": "#1d4ed8",
+        "opacity": 0.7,
+        "useGradient": true,
+        "smoothWidth": 100,
+        "thresholds": [
+          0.5,
+          0.3,
+          0.15,
+          0.08
+        ],
+        "minPeakWidth": 80,
+        "minReads": 5
+      },
+      {
+        "id": "default-custom",
+        "name": "Custom",
+        "source": "custom",
+        "enabled": true,
+        "color": "#f59e0b",
+        "opacity": 0.65,
+        "useGradient": false,
+        "smoothWidth": 100,
+        "thresholds": [
+          0.5,
+          0.3,
+          0.15,
+          0.08
+        ],
+        "minPeakWidth": 1,
+        "minReads": 1
+      }
+    ],
+    "peaksByRule": {
+      "default-accessibility": [
+        {
+          "start": 128650206,
+          "end": 128650330,
+          "index": 0,
+          "layer": 1,
+          "score": 0.324057936668396,
+          "threshold": 0.3,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128650795,
+          "end": 128650957,
+          "index": 1,
+          "layer": 1,
+          "score": 0.4498465061187744,
+          "threshold": 0.3,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128650355,
+          "end": 128650654,
+          "index": 2,
+          "layer": 2,
+          "score": 0.28246375918388367,
+          "threshold": 0.15,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128650982,
+          "end": 128651062,
+          "index": 3,
+          "layer": 2,
+          "score": 0.2686566710472107,
+          "threshold": 0.15,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128651110,
+          "end": 128651210,
+          "index": 4,
+          "layer": 2,
+          "score": 0.19552239775657654,
+          "threshold": 0.15,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128653652,
+          "end": 128653901,
+          "index": 5,
+          "layer": 2,
+          "score": 0.24402984976768494,
+          "threshold": 0.15,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128654191,
+          "end": 128654278,
+          "index": 6,
+          "layer": 2,
+          "score": 0.18868029117584229,
+          "threshold": 0.15,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128663268,
+          "end": 128663450,
+          "index": 7,
+          "layer": 2,
+          "score": 0.2094285637140274,
+          "threshold": 0.15,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128650080,
+          "end": 128650181,
+          "index": 8,
+          "layer": 3,
+          "score": 0.24710145592689514,
+          "threshold": 0.08,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128653024,
+          "end": 128653120,
+          "index": 9,
+          "layer": 3,
+          "score": 0.09914066642522812,
+          "threshold": 0.08,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128653155,
+          "end": 128653627,
+          "index": 10,
+          "layer": 3,
+          "score": 0.16820895671844482,
+          "threshold": 0.08,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128653926,
+          "end": 128654166,
+          "index": 11,
+          "layer": 3,
+          "score": 0.13651514053344727,
+          "threshold": 0.08,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128654368,
+          "end": 128654509,
+          "index": 12,
+          "layer": 3,
+          "score": 0.12358509004116058,
+          "threshold": 0.08,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128654596,
+          "end": 128654934,
+          "index": 13,
+          "layer": 3,
+          "score": 0.11218749731779099,
+          "threshold": 0.08,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128655057,
+          "end": 128655201,
+          "index": 14,
+          "layer": 3,
+          "score": 0.09939732402563095,
+          "threshold": 0.08,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128655922,
+          "end": 128656011,
+          "index": 15,
+          "layer": 3,
+          "score": 0.0925000011920929,
+          "threshold": 0.08,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128656074,
+          "end": 128656359,
+          "index": 16,
+          "layer": 3,
+          "score": 0.1513793021440506,
+          "threshold": 0.08,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128656635,
+          "end": 128656725,
+          "index": 17,
+          "layer": 3,
+          "score": 0.10948275774717331,
+          "threshold": 0.08,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128656808,
+          "end": 128657068,
+          "index": 18,
+          "layer": 3,
+          "score": 0.10929824411869049,
+          "threshold": 0.08,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128657592,
+          "end": 128658535,
+          "index": 19,
+          "layer": 3,
+          "score": 0.14169231057167053,
+          "threshold": 0.08,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128658578,
+          "end": 128658752,
+          "index": 20,
+          "layer": 3,
+          "score": 0.16469696164131165,
+          "threshold": 0.08,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128659280,
+          "end": 128659734,
+          "index": 21,
+          "layer": 3,
+          "score": 0.1336764693260193,
+          "threshold": 0.08,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128659904,
+          "end": 128660005,
+          "index": 22,
+          "layer": 3,
+          "score": 0.10884057730436325,
+          "threshold": 0.08,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128660025,
+          "end": 128660207,
+          "index": 23,
+          "layer": 3,
+          "score": 0.12317705899477005,
+          "threshold": 0.08,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128660241,
+          "end": 128660417,
+          "index": 24,
+          "layer": 3,
+          "score": 0.13979262113571167,
+          "threshold": 0.08,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128660862,
+          "end": 128661057,
+          "index": 25,
+          "layer": 3,
+          "score": 0.11334702372550964,
+          "threshold": 0.08,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128662668,
+          "end": 128662772,
+          "index": 26,
+          "layer": 3,
+          "score": 0.11514286696910858,
+          "threshold": 0.08,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128663008,
+          "end": 128663117,
+          "index": 27,
+          "layer": 3,
+          "score": 0.10128571093082428,
+          "threshold": 0.08,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128663891,
+          "end": 128664003,
+          "index": 28,
+          "layer": 3,
+          "score": 0.11014492809772491,
+          "threshold": 0.08,
+          "ruleId": "default-accessibility"
+        },
+        {
+          "start": 128664742,
+          "end": 128664991,
+          "index": 29,
+          "layer": 3,
+          "score": 0.1052054762840271,
+          "threshold": 0.08,
+          "ruleId": "default-accessibility"
+        }
+      ]
+    },
+    "peaksLocked": false,
+    "sessionName": "Migration corpus",
+    "panels": [
+      {
+        "id": "panel-dataset",
+        "contentType": "dataset",
+        "datasetId": "sample-a",
+        "subTracks": [],
+        "collapsed": false,
+        "layoutRow": 0
+      },
+      {
+        "id": "panel-dataset-layout",
+        "contentType": "dataset-layout",
+        "datasetId": null,
+        "subTracks": [],
+        "collapsed": false,
+        "layoutRow": 0
+      },
+      {
+        "id": "panel-colormap",
+        "contentType": "colormap",
+        "datasetId": null,
+        "subTracks": [],
+        "collapsed": false,
+        "layoutRow": 0
+      },
+      {
+        "id": "panel-cluster-detail",
+        "contentType": "cluster-detail",
+        "datasetId": null,
+        "subTracks": [],
+        "collapsed": false,
+        "layoutRow": 0
+      },
+      {
+        "id": "panel-cluster-features",
+        "contentType": "cluster-features",
+        "datasetId": null,
+        "subTracks": [],
+        "collapsed": false,
+        "layoutRow": 0
+      },
+      {
+        "id": "panel-transcription-state",
+        "contentType": "transcription-state",
+        "datasetId": null,
+        "subTracks": [],
+        "collapsed": false,
+        "layoutRow": 0
+      },
+      {
+        "id": "panel-footprint-analysis",
+        "contentType": "footprint-analysis",
+        "datasetId": null,
+        "subTracks": [],
+        "collapsed": false,
+        "layoutRow": 0
+      },
+      {
+        "id": "panel-contact-map",
+        "contentType": "contact-map",
+        "datasetId": null,
+        "subTracks": [],
+        "collapsed": false,
+        "layoutRow": 0
+      },
+      {
+        "id": "panel-read-stats",
+        "contentType": "read-stats",
+        "datasetId": null,
+        "subTracks": [],
+        "collapsed": false,
+        "layoutRow": 0
+      },
+      {
+        "id": "panel-primer-design",
+        "contentType": "primer-design",
+        "datasetId": null,
+        "subTracks": [],
+        "collapsed": false,
+        "layoutRow": 0
+      },
+      {
+        "id": "panel-history",
+        "contentType": "history",
+        "datasetId": null,
+        "subTracks": [],
+        "collapsed": false,
+        "layoutRow": 0
+      },
+      {
+        "id": "panel-track-browser",
+        "contentType": "track-browser",
+        "datasetId": null,
+        "subTracks": [],
+        "collapsed": false,
+        "layoutRow": 0
+      },
+      {
+        "id": "panel-co-accessibility",
+        "contentType": "co-accessibility",
+        "datasetId": null,
+        "subTracks": [],
+        "collapsed": false,
+        "layoutRow": 0
+      },
+      {
+        "id": "panel-annotations",
+        "contentType": "annotations",
+        "datasetId": null,
+        "subTracks": [],
+        "collapsed": false,
+        "layoutRow": 0
+      },
+      {
+        "id": "panel-capture",
+        "contentType": "capture",
+        "datasetId": null,
+        "subTracks": [],
+        "collapsed": false,
+        "layoutRow": 0
+      },
+      {
+        "id": "panel-peak-detection",
+        "contentType": "peak-detection",
+        "datasetId": null,
+        "subTracks": [],
+        "collapsed": false,
+        "layoutRow": 0
+      },
+      {
+        "id": "panel-sync-regions",
+        "contentType": "sync-regions",
+        "datasetId": null,
+        "subTracks": [],
+        "collapsed": false,
+        "layoutRow": 0
+      },
+      {
+        "id": "panel-circular",
+        "contentType": "circular-genome",
+        "datasetId": null,
+        "subTracks": [],
+        "collapsed": false,
+        "layoutRow": 0
+      }
+    ],
+    "footprintGroups": [],
+    "savedClusters": [],
+    "selectedFeatures": [],
+    "savedNfrVariants": [],
+    "historySnapshots": []
+  },
+  "_corpus": {
+    "release": "3.0.1",
+    "revision": "24c7a5c58",
+    "coverage": [
+      "dataset",
+      "dataset-layout",
+      "colormap",
+      "cluster-detail",
+      "cluster-features",
+      "transcription-state",
+      "footprint-analysis",
+      "contact-map",
+      "read-stats",
+      "primer-design",
+      "history",
+      "track-browser",
+      "co-accessibility",
+      "annotations",
+      "capture",
+      "peak-detection",
+      "sync-regions",
+      "circular-genome"
+    ],
+    "synthetic": true
+  }
+}

@@ -1,3 +1,4 @@
+import { registerLegacyHubProvider } from './legacyRuns';
 /**
  * The feature hub (native/feature_hub/DESIGN.md): the singleton analysis panel docked beside the reads, its session
  * state, the core browser providers, and the kinds of hub types. Registered through the same extension points a
@@ -18,6 +19,7 @@ export function registerFeatureHub(): void {
   done = true;
   registerHubState();
   registerCoreHubProviders();
+  registerLegacyHubProvider();
   installHubOutlines();
   registerAnalysisPanel({
     contentType: 'feature-hub', label: 'Feature hub', shortLabel: 'Hub', headerColor: '#4f46e5', component: Panel,

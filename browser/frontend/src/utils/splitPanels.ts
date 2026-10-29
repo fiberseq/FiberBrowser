@@ -17,7 +17,7 @@ import { withoutGraphMembership } from '../stores/graphMembership';
 import { getClusterColor } from '../components/tracks/read-track/constants';
 import { useBrowserStore } from '../stores/browserStore';
 import { seedHistoryBaseline } from '../stores/historySlice';
-import { useSplitPanelStore, type SplitSource } from '../stores/splitPanelStore';
+import { serializeSplitReads, useSplitPanelStore, type SplitSource } from '../stores/splitPanelStore';
 import { generatePanelId } from '../stores/utils';
 import { openSplitFrom } from '../stores/splitSources';
 import { inComparisonGroup } from './panelNavigation';
@@ -354,14 +354,7 @@ export function setSplitSessionFallback(value: unknown): void {
 
 /** The names to save with a session: every resolved split panel's. */
 export function splitSessionReads(): Record<string, string[]> {
-  const panels = useBrowserStore.getState().panels.filter(p => p.readSubset && !p.readSubset.rule.liftHap);
-  const reads = useSplitPanelStore.getState().reads;
-  const out: Record<string, string[]> = {};
-  for (const p of panels) {
-    const r = reads[panelKey(p)];
-    if (r && (r.state === 'ready' || r.state === 'frozen')) out[panelKey(p)] = [...r.ids];
-  }
-  return out;
+  return serializeSplitReads(useBrowserStore.getState().panels);
 }
 
 /** A rule's identity (panels of one rule resolve together): not which dataset and groups it shows. */

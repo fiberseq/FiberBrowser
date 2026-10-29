@@ -5,17 +5,21 @@
  * Code checks a kind through its `FeatureKindDef` (stores/featureStore.ts), never by its string.
  */
 
-const LEGACY: Record<string, string> = {
+export const LEGACY_KINDS: Record<string, string> = {
   'fp.class': 'fp-class',
   'nfr.region': 'nfr',
   'nfr.variant': 'nfr-variant',
   'var.sv': 'sv',
+  'peaks.peak': 'peaks-peak',
+  'var.diff': 'var-diff',
+  'graph.bubble': 'graph-bubble',
+  'var.snp': 'var-snp',
 };
-const LEGACY_TYPE: Record<string, string> = Object.fromEntries(Object.entries(LEGACY).map(([t, k]) => [k, t]));
+const LEGACY_TYPE: Record<string, string> = Object.fromEntries(Object.entries(LEGACY_KINDS).map(([t, k]) => [k, t]));
 
 /** The selection kind of a type's refs. */
 export function kindOfType(typeId: string): string {
-  return LEGACY[typeId] ?? typeId.replace(/[._]/g, '-');
+  return LEGACY_KINDS[typeId] ?? typeId.replace(/[._]/g, '-');
 }
 
 /**

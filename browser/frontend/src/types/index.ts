@@ -52,6 +52,9 @@ export interface MatchedRegionInfo {
 }
 
 export interface FirePeak {
+  /** Stable hub identity; legacy index is dual-written for older builds. */
+  hitId?: string;
+  graph?: Record<string, unknown>;
   /** The accepted map used to call a pooled peak, before projecting its copies. */
   correspondenceId?: string;
   memberPanelId?: string;

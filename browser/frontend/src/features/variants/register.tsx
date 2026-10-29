@@ -1,3 +1,4 @@
+import { registerSnpHubProvider } from './snpHubProvider';
 /**
  * The Variants panel (SNPs, SNP combinations and SVs, the reads split by allele), its SNP channel
  * over the reads, and SVs as selectable features (multi-SV and mixed SNP+SV splits).
@@ -76,6 +77,7 @@ export function clearSvSelectionOfSplit(panels: { readSubset?: { rule?: { splitS
 
 export function registerVariants(): void {
   registerSvHubProvider();
+  registerSnpHubProvider();
   registerAnalysisPanel({
     contentType: 'variants',
     label: 'Variants',

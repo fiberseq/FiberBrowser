@@ -638,6 +638,9 @@ def _import_session(state, req, *, dafc_state=None) -> dict:
     results["consensus_runs_failed"] = run_problems
     # Plugin packs restore their parts; a session written with packs this build doesn't have is said so.
     run_hooks("session_import_end", state, session, results)
+    from services.hub.migration import legacy_runs
+    hub_legacy = legacy_runs(state)
+    results["hub_legacy"] = hub_legacy
     missing = _missing_packs(session)
     if missing:
         results["missing_packs"] = missing

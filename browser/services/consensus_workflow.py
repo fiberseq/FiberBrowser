@@ -5,7 +5,6 @@ Successful results are installed atomically and displayed from frozen records.
 """
 from __future__ import annotations
 from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import math
@@ -20,7 +19,7 @@ from services.chemistry_metadata import dataset_consensus_chemistry
 from utils.chrom import normalize_chrom_name
 from services.oriented_regions import source_ids, request_windows
 
-_EXECUTOR=ThreadPoolExecutor(max_workers=1,thread_name_prefix='fiberhmm-consensus')
+from services.scan.jobs import _EXECUTOR  # shared scan worker; legacy routes keep their job identities
 _INIT_LOCK=threading.Lock()
 LAYER_LABELS={
     'nuc_native_replay':('Native replay · nucleosomes','#64748b'),

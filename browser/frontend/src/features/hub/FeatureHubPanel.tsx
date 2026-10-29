@@ -411,6 +411,8 @@ function HitRows({ row, selected, expanded, columns, kind, delta, onClick, onTog
         {chip && <span className={`ml-1 rounded px-1 text-[10px] ${CHIP_TONE[chip.tone]}`} data-testid="hub-lift-chip" title={hover}>{chip.text}</span>}
         {matched.length > 0 && <span className="ml-1 rounded bg-emerald-50 px-1 text-[10px] text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200"
           data-testid="hub-match-chip" title={`The same feature in another frame or set:\n${matchText}`}>≡ {matched.length}</span>}
+        {hit.flags?.includes('pinned') && <span className="ml-1 rounded bg-indigo-100 px-1 text-[10px] text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-200"
+          title="Kept in the legacy class or NFR cart">Pinned</span>}
         {hit.flags?.includes('open_end') && <span className="ml-1 rounded bg-amber-100 px-1 text-[10px] text-amber-800 dark:bg-amber-900/40 dark:text-amber-200"
           title="At the edge of the scanned units: a scan reaching further may change this hit (fiberhmm-scan open_end)"
           data-testid="hub-row-open-end">open end</span>}
