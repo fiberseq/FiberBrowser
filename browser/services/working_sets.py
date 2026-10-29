@@ -708,6 +708,14 @@ def _load_broad_reads(
                     f"  Derived layers: matched {matched}/{len(layer_reads)} sidecar rows "
                     f"from {len(derived_paths)} bundle(s)"
                 )
+        from services.background_work import is_interactive_read
+        if is_interactive_read() and isinstance(all_reads, list):
+            # Native display caches can use row format 2 too: arrays avoid
+            # retaining and sizing a Python object for every coordinate, and
+            # the viewport projector already handles their numeric columns.
+            from services.compact_read_loader import _lift_columns
+            for read in all_reads:
+                _lift_columns(read)
         return all_reads
 
     from services.signal_evidence import signal_keeps
