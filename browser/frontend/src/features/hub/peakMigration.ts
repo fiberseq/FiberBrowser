@@ -42,15 +42,18 @@ export function migratePeakOwners<T extends { selectedPeakIndices: number[]; pea
   }));
 }
 
-/** Atomic current selection + tree + saved clustering update. History keeps each snapshot's own geometry. */
-export function peakTransaction(state: BrowserState, next: Record<string, FirePeak[]>): Partial<BrowserState> {
+/** Atomic current selection + tree + saved clustering update. History keeps each snapshot's own geometry.
+ * Rescans preserve selection by identity; deliberate resets supply the selection for the resulting peak set.
+ */
+export function peakTransaction(state: BrowserState, next: Record<string, FirePeak[]>,
+  selectionOverride?: Pick<BrowserState, 'selectedPeaks' | 'peakModes'>): Partial<BrowserState> {
   const peaksByRule = identifyPeaks(next, state.chrom);
   const selection = capturePeakSelection(state.peaksByRule, state.chrom, state.selectedPeaks, state.peakModes);
   const projected = projectPeakSelection(peaksByRule, state.chrom, selection);
   const known = new Set(Object.values(state.peaksByRule).flat().map(p => p.index));
   for (const i of state.selectedPeaks) if (!known.has(i)) projected.selectedPeaks.add(i);
   for (const [i, mode] of Object.entries(state.peakModes)) if (!known.has(Number(i))) projected.peakModes[Number(i)] = mode;
-  return { peaksByRule, ...projected,
+  return { peaksByRule, ...(selectionOverride ?? projected),
     clusterTreeNodes: migratePeakOwners(state.clusterTreeNodes, state.peaksByRule, peaksByRule, state.chrom),
     savedClusters: migrateSavedPeakOwners(state, peaksByRule) };
 }

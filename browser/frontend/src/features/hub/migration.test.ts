@@ -86,6 +86,16 @@ describe('3.0.x session corpus', () => {
 describe('peak identity transaction', () => {
   function load() { restore(corpus.find(c => c.name === '301-peaks-history.json')!.session); }
   const p = (start: number, end = start + 20): FirePeak => ({ start, end, index: 0 });
+  it('preserves selection on a count-only rescan and clears it when loading a preset', () => {
+    load();
+    const s = useBrowserStore.getState(), before = peakView();
+    s.setPeaksByRule('rule-a', s.peaksByRule['rule-a'].map(peak => ({ ...peak, hitId: undefined, score: 42 })));
+    expect(peakView()).toEqual(before);
+    useBrowserStore.setState({ savedPeakPresets: [{ name: 'Replacement', rules: s.peakRules.map(r => ({ ...r })) }] });
+    s.loadPeakPreset('Replacement');
+    expect(peakView()).toEqual({ selected: [], modes: {} });
+    expect(useBrowserStore.getState().peaksByRule).toEqual({});
+  });
   it('survives inserted, reordered and removed peaks in the same rule, including modes and tree nodes', () => {
     load();
     useBrowserStore.getState().setPeaksByRule('rule-a', [p(100), p(400), p(200)]);
