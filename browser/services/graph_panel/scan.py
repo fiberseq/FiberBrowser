@@ -94,7 +94,8 @@ def scan(state, reg, body: dict, tiles: dict, spec: dict) -> dict:
         path_occs[src] = gc.merge_occurrences([per[c] for c in cells if c in per], src)
         cell_results[src] = {c: per[c] for c in cells if c in per}
     cols = gc.region_columns(0, start, end, target, target_occs, observations, path_occs, cell_results,
-                             insertions=True, binding_order=spec.get("binding_order"))
+                             insertions=True, binding_order=spec.get("binding_order"),
+                             repeat_columns=(spec.get("options") or {}).get("repeat_columns", "exclude"))
     insertions = [f for f in cols.features if f.kind == "insertion"]
     t_num, t_tot = np.zeros(length, dtype=np.int64), np.zeros(length, dtype=np.int64)
     i_counts = [(np.zeros(f.length, dtype=np.int64), np.zeros(f.length, dtype=np.int64)) for f in insertions]

@@ -30,6 +30,7 @@ export function graphScanBody(state: BrowserState, call: PeakScanCall): Record<s
     registration_id: plan.registration.id, revisions: plan.registration.revisions, target: plan.target,
     window: { start: call.start, end: call.end },
     observations: plan.observations.map(o => wire(o as never)),
+    options: { repeat_columns: plan.host.graphView?.runOptions?.repeat_columns ?? 'exclude' },
     scan: {
       signal_source: call.source, min_width: call.minWidth, min_reads: call.minReads,
       smooth_width: call.thresholds.smoothWidth, threshold_strong: call.thresholds.thresholdStrong,

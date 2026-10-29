@@ -214,3 +214,26 @@ export function matchedRunCounts(run: ClusterMatchedRun) {
     return { cluster, counts, totalCount: counts.reduce((a, b) => a + b, 0) };
   });
 }
+
+/** Source pop-outs are chart destinations too. Their QNAME labels form a separate displayed column without
+ * adding observations, refitting, or changing the persisted run/model. A source clustered independently stays out. */
+export function withGraphSourceColumns(run: ClusterMatchedRun | null, panels: readonly PanelConfig[],
+  live: BrowserState['clusterAssignments']): ClusterMatchedRun | null {
+  if (!run?.graph) return run;
+  const windows = [...run.windows];
+  const assignments = { ...run.assignments };
+  for (const p of panels) {
+    if (p.collapsed || p.collapsedByGraphGroup || !p.liftLink) continue;
+    const observations = linkedSourceObservations(run.graph.observations, p);
+    if (!observations.length) continue;
+    const stateKey = p.stateKey ?? p.datasetId ?? p.id;
+    const labels = live[stateKey];
+    if (!labels || !Object.keys(labels).length || !compatibleSourceLabels(run, labels, observations.map(o => o.id))) continue;
+    const key = `source:${p.id}`;
+    if (windows.some(w => w.key === key)) continue;
+    windows.push({ key, stateKey, panelId: p.id, datasetId: p.datasetId ?? undefined, label: p.title || `${observations.map(o => o.label).join(' / ')} source`,
+      genome: p.genome ?? null });
+    assignments[key] = labels;
+  }
+  return windows.length === run.windows.length ? run : { ...run, windows, assignments };
+}

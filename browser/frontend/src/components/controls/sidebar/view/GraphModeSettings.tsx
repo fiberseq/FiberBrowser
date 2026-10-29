@@ -28,6 +28,10 @@ export function canManageGraphPackages(): boolean {
 }
 
 export const GRAPH_MODE_SETTINGS = defineSettings({
+  linearHost: {
+    id: 'view.graph-linear-host', label: 'Linear view of a host',
+    keywords: ['graph mode', 'host only', 'reveal members'], location: inSidebar('view.graph'), hiddenReason: notPublic,
+  },
   liftedView: {
     id: 'view.graph-lifted-view',
     label: 'Open lifted datasets as',
@@ -118,6 +122,14 @@ export function GraphModeSettings() {
             onChange={on => settings.set({ nativeOpenView: on ? 'graph' : 'linear' })}
             helpText="Off by default: a BAM on this genome opens linear and the panel's Linear / Graph toggle switches it. On: BAMs you open (Open file, drag and drop, Load by path) open as a graph when a registered package binds their contig." />
         </div>
+
+        <SidebarSettingRow setting={GRAPH_MODE_SETTINGS.linearHost}
+          helpText="When a graph host switches to linear, reveal its folded members beside it or keep them folded. Panels you popped out stay visible.">
+          <select aria-label="Linear view of a host" className="input-tool flex-1 text-xs" value={settings.linearHostView}
+            onChange={e => settings.set({ linearHostView: e.target.value as 'reveal_members' | 'host_only' })}>
+            <option value="reveal_members">Reveal members (default)</option><option value="host_only">Host only</option>
+          </select>
+        </SidebarSettingRow>
 
         <div className="space-y-1" {...settingAnchor(GRAPH_MODE_SETTINGS.handoff)} data-testid="graph-settings-handoff">
           <div className="text-[12px] text-gray-700 dark:text-gray-300">{GRAPH_MODE_SETTINGS.handoff.label}</div>

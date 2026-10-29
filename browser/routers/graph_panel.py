@@ -303,8 +303,12 @@ async def _graph_cluster(request: Request, state, mode: str):
         _checked(body, reg)
         from services.lift.capability import require_for_ids
         require_for_ids(state, [o.get("dataset_id") for o in body.get("observations") or [] if isinstance(o, dict)],
-                        "clustering")
-        out = await handle(state, reg, body, mode=mode)
+                        "sort" if mode == "sort" else "clustering")
+        if mode == "sort":
+            from services.graph_panel.site_sort import handle as sort_site
+            out = await sort_site(state, reg, body)
+        else:
+            out = await handle(state, reg, body, mode=mode)
     except graph_reads.ReadsError as exc:
         return _reads_error(exc)
     except GraphRunError as exc:
@@ -325,6 +329,11 @@ async def graph_cluster_route(request: Request, state=Depends(get_state)):
 @router.post("/api/graph/cluster/assign")
 async def graph_cluster_assign_route(request: Request, state=Depends(get_state)):
     return await _graph_cluster(request, state, "assign")
+
+
+@router.post("/api/graph/sort_site")
+async def graph_sort_site_route(request: Request, state=Depends(get_state)):
+    return await _graph_cluster(request, state, "sort")
 
 
 @router.post("/api/graph/scan_peaks")

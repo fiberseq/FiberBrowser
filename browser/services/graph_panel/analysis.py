@@ -251,8 +251,9 @@ def parse(state, reg, body: dict) -> dict:
     options = body.get("options") or {}
     if not isinstance(options, dict):
         raise GraphRunError("options must be an object")
-    if options.get("repeat_columns", "exclude") != "exclude":
-        raise GraphRunError("repeat_columns: only exclude is available")
+    repeat_columns = options.get("repeat_columns", "exclude")
+    if repeat_columns not in ("exclude", "by_occurrence"):
+        raise GraphRunError("repeat_columns must be exclude or by_occurrence")
     carrier = options.get("carrier_features", "refine")
     if carrier not in ("refine", "drop"):
         raise GraphRunError("carrier_features must be refine or drop (masked fits are not available)")
@@ -267,7 +268,7 @@ def parse(state, reg, body: dict) -> dict:
             "binding_order": [b["key"] for b in reg.bindings],
             # Every path compared with the target: insertion frames are canonical over the package, not the run.
             "compared": sorted({m.get("source") for m in reg.maps if m.get("target") == target and m.get("source")}),
-            "options": {"repeat_columns": "exclude", "carrier_features": carrier, "coverage_rule": "require_all",
+            "options": {"repeat_columns": repeat_columns, "carrier_features": carrier, "coverage_rule": "require_all",
                         "insertions": options.get("insertions", "include") != "exclude",
                         "carrier_min_samples": min_samples}}
 
@@ -316,7 +317,8 @@ def build_geometry(spec: dict, tiles: dict):
             cell_results[source] = {c: per[c] for c in cells if c in per}
         regions.append(gc.region_columns(i, r["start"], r["end"], target, target_occs, observations, path_occs,
                                          cell_results, insertions=spec["options"]["insertions"],
-                                         binding_order=spec.get("binding_order")))
+                                         binding_order=spec.get("binding_order"),
+                                         repeat_columns=spec["options"].get("repeat_columns", "exclude")))
     plan = gc.stage_plan(regions, [o.id for o in observations],
                          carrier_features=spec["options"]["carrier_features"],
                          carrier_min_samples=spec["options"]["carrier_min_samples"])
