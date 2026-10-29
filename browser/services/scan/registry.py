@@ -191,7 +191,15 @@ class OpenScan:
             }
         found: Dict[str, list] = {sid: [] for sid in wanted}
         overlaps: Dict[str, str] = {}
-        for ds_id, files in loaded.items():
+        variants = list(loaded.items())
+        from .live_evidence import input_ids
+        for ds_id, dataset in (getattr(state, 'datasets', None) or {}).items():
+            if getattr(dataset, 'data_type', None) == 'bam_livelift':
+                try:
+                    variants.append((ds_id, list(zip(dataset.paths, input_ids(dataset)))))
+                except (OSError, ValueError, AttributeError):
+                    pass
+        for ds_id, files in variants:
             by_cid = {cid: path for path, cid in files if cid}
             own = set(by_cid)
             if not own or len(by_cid) != len(files):
@@ -512,7 +520,9 @@ def close_scan(state, scan_id: str) -> bool:
 
 
 def _loaded_signature(state) -> tuple:
-    return tuple(sorted((ds_id, tuple(getattr(ds, 'paths', None) or ()), getattr(ds, 'data_type', None))
+    from services.lift.reads import lift_identity
+    return tuple(sorted((ds_id, tuple(getattr(ds, 'paths', None) or ()), getattr(ds, 'data_type', None),
+                         lift_identity(ds) if getattr(ds, 'data_type', None) == 'bam_livelift' else ())
                         for ds_id, ds in (getattr(state, 'datasets', None) or {}).items())) + \
         (tuple((str(c.name), int(c.size)) for c in (getattr(state, 'chroms', None) or [])),)
 

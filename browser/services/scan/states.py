@@ -107,8 +107,23 @@ def states_from_table(state, scan, module: str, hit: dict, bound) -> Dict[Tuple[
             if r.get('hit_id') == hit['hit_id'] and r.get('dataset_id') in sids]
     if not rows:
         return found
+    from .live_evidence import source_record_map
+    record_map = source_record_map(scan)
     for pair, binding in bound.items():
-        _states_for_binding(state, hit, rows, pair, binding, found)
+        if record_map:
+            sid, bid = pair
+            keyer = _Keyer(state, bid, binding[2])
+            for row in rows:
+                if row.get('dataset_id') != sid:
+                    continue
+                i = int(row.get('input_index') or 0)
+                source = record_map.get((sid, i, row.get('record')))
+                if source is None:
+                    continue
+                key = keyer.key(i, row.get('qname', ''), source)
+                found.setdefault((bid, key), []).append(_state_char(row.get('state')))
+        else:
+            _states_for_binding(state, hit, rows, pair, binding, found)
     return found
 
 

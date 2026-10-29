@@ -56,6 +56,21 @@ describe('association builder', () => {
     expect(choicesFor('M2', all, marks).b).toEqual([]);
   });
 
+  it('keeps a cross-scan B choice and held-out discovery in the submitted request', () => {
+    const ctx = { all, marks: markChoices([nucScan]), state: useBrowserStore.getState(), anchors: [] };
+    const m3 = buildRequest({ ...DEFAULT_DRAFT, mode: 'M3', aKey: 'marks:nuc.seg.regular', bKey: 'hub:fp' }, ctx);
+    expect('request' in m3 && m3.request.b).toMatchObject({ kind: 'scan', setId: 'hub:fp' });
+    const q2 = presets(all, ctx.marks, 2).find(p => p.id === 'q2')!;
+    const m2 = buildRequest({ ...DEFAULT_DRAFT, ...q2.draft }, ctx);
+    expect('request' in m2 && m2.request.options?.heldOut).toBe(true);
+  });
+
+  it('does not submit an empty dataset selection', () => {
+    expect(buildRequest({ ...DEFAULT_DRAFT, datasets: [] }, {
+      all, marks: [], state: useBrowserStore.getState(), anchors: [],
+    })).toEqual({ error: 'Choose at least one dataset' });
+  });
+
   it('the four §7.9 questions say what is missing', () => {
     const qs = presets(all, markChoices([]), 1);
     expect(qs.map(q => q.id)).toEqual(['q1', 'q2', 'q3', 'q4']);
@@ -155,9 +170,11 @@ describe('association runs in sessions', () => {
 describe('overlay state', () => {
   it('normalizes its session form and keeps graph path statuses on loci', () => {
     expect(normalizeOverlay({})).toEqual(DEFAULT_OVERLAY);
+    expect(normalizeOverlay({ layer: 'layer:fpcls' }).layer).toBe('layer:fpcls');
     expect(normalizeOverlay({ align: 'scaled', layer: 'tf', flank: 99999, view: 'pile' })).toMatchObject({ align: 'scaled', layer: 'tf', flank: 20000, view: 'pile' });
     const l = locusOfHit(hit('h', 100, { graph: { registration: 'r', target: 't', binding: 'b', anchor: [100, 200], columns: [], size: 100,
       paths: { MAT: { status: 'carried', carried: 100, total: 100, label: 'MAT', datasets: ['ds1'], hap: 'MAT' }, PAT: { status: 'absent', carried: 0, total: 100, label: 'PAT', datasets: ['ds1'], hap: 'PAT' } } } }), 'hub:x');
+    expect(l!.graph).toMatchObject({ registration: 'r', target: 't', binding: 'b' });
     expect(l!.paths).toEqual({ MAT: { status: 'carried', hap: 'MAT', datasets: ['ds1'] }, PAT: { status: 'absent', hap: 'PAT', datasets: ['ds1'] } });
     // a hit of another assembly that doesn't lift has no place here
     expect(locusOfHit(hit('u', 5, { frame: { kind: 'source', assembly: 'a', contig: 'c' }, lift: { status: 'unmapped' } }), 'hub:x')).toBeNull();

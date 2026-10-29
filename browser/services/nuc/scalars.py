@@ -135,48 +135,29 @@ def scalar_groups_to_fields(read_data: dict) -> None:
 
 
 NUC_MA_GROUPS = frozenset({'nucsz', 'nucseg', 'nucmol'})
-_HEADER_VIEWS: Dict[int, tuple] = {}
+_HEADER_CONTEXTS: Dict[int, tuple] = {}
 
 
-class _RecordView:
-    """A pysam record read through its header without the @SQ lines. ``read_nuc_groups`` reads the scan contracts
-    and frames from the record's header for every record; converting a large reference's header costs milliseconds
-    each time, the header without its contigs microseconds (FiberHMM accepts a header dict)."""
-    __slots__ = ('_read', 'header')
-
-    def __init__(self, read, header):
-        self._read = read
-        self.header = header
-
-    def __getattr__(self, name):
-        return getattr(self._read, name)
-
-
-def _header_view(header) -> dict:
-    """The header as a dict without its @SQ lines, once per pysam header object (records of a file share it)."""
-    cached = _HEADER_VIEWS.get(id(header))
+def nuc_header_context(header):
+    """Parse contracts and call frames once per shared BAM header."""
+    cached = _HEADER_CONTEXTS.get(id(header))
     if cached is not None and cached[0] is header:
-        return cached[1]
-    view = {k: v for k, v in header.to_dict().items() if k != 'SQ'}
-    if len(_HEADER_VIEWS) > 32:
-        _HEADER_VIEWS.clear()
-    _HEADER_VIEWS[id(header)] = (header, view)
-    return view
+        return cached[1:]
+    from fiberhmm.io.scan_ma import scan_contracts
+    from fiberhmm.nuc.records import FrameContext
+    contracts, context = scan_contracts(header), FrameContext(header)
+    if len(_HEADER_CONTEXTS) > 32:
+        _HEADER_CONTEXTS.clear()
+    _HEADER_CONTEXTS[id(header)] = (header, contracts, context)
+    return contracts, context
 
 
 def record_nuc_groups(record) -> Optional[dict]:
-    """``fiberhmm.nuc.tags.read_nuc_groups`` of a pysam record (with its staleness and group-version checks), or
-    None when it cannot be read (FiberHMM without the nuc module, an unreadable record)."""
+    """Read current nuc groups using cached public contracts and decode context."""
     try:
         from fiberhmm.nuc.tags import read_nuc_groups
-    except ImportError:
-        return None
-    try:
-        return read_nuc_groups(_RecordView(record, _header_view(record.header)))
-    except Exception:
-        pass
-    try:
-        return read_nuc_groups(record)
+        contracts, context = nuc_header_context(record.header)
+        return read_nuc_groups(record, contracts=contracts, context=context)
     except Exception:
         return None
 

@@ -41,7 +41,10 @@ export function AssocTab({ sets, scans, seed }: { sets: FeatureSet[]; scans: Sca
   const all = useMemo(() => setChoices(sets, hub.anchors, { chrom, start: vStart, end: vEnd }), [sets, hub.anchors, chrom, vStart, vEnd]);
   const marks = useMemo(() => markChoices(scans), [scans]);
   const { a: aChoices, b: bChoices } = choicesFor(draft.mode, all, marks);
-  const natives = datasets.filter(d => (d as { data_type?: string }).data_type !== 'bam_livelift').length;
+  const phasing = draft.mode === 'M2' && draft.response === 'phasing';
+  const eligibleDatasets = datasets.filter(d => d.data_type === 'bam' || (!phasing && d.data_type === 'bam_livelift'));
+  const chosenDatasets = draft.datasets ?? eligibleDatasets.map(d => d.id);
+  const natives = datasets.filter(d => d.data_type === 'bam').length;
   const qs = useMemo(() => presets(all, marks, natives), [all, marks, natives]);
   const clusters = useBrowserStore(s => hasClusters(s));
   const live = job && LIVE.has(job.status);
@@ -84,7 +87,7 @@ export function AssocTab({ sets, scans, seed }: { sets: FeatureSet[]; scans: Sca
       <div className="grid gap-1">
         {qs.map(q => <button key={q.id} type="button" data-testid={`assoc-preset-${q.id}`} disabled={Boolean(live)}
           className="rounded-fb border border-line px-2 py-1 text-left hover:bg-indigo-50/60 disabled:opacity-60 dark:border-white/10 dark:hover:bg-indigo-950/30"
-          title={q.note} onClick={() => { setProblem(q.missing ? `This question needs ${q.missing}.` : ''); setDraft(d => ({ ...d, ...q.draft })); }}>
+          title={q.note} onClick={() => { setProblem(q.missing ? `This question needs ${q.missing}.` : ''); setDraft(d => ({ ...d, datasets: null, ...q.draft })); }}>
           <span className="font-medium">{q.question}</span>
           <span className="block text-[10px] text-ink-muted">{q.missing ? `Needs ${q.missing}.` : q.note}</span>
         </button>)}
@@ -95,7 +98,7 @@ export function AssocTab({ sets, scans, seed }: { sets: FeatureSet[]; scans: Sca
       <label className="flex items-center gap-1 text-[11px]">
         <span className="w-14 shrink-0 font-medium">Mode</span>
         <select className="input-tool min-h-0 flex-1 rounded px-1.5 py-0.5 text-[11px]" value={draft.mode} data-testid="assoc-mode" aria-label="Mode"
-          onChange={e => patch({ mode: e.target.value as AssocMode, aKey: '', bKey: e.target.value === 'M3' ? 'tf' : '' })}>
+          onChange={e => patch({ mode: e.target.value as AssocMode, datasets: null, aKey: '', bKey: e.target.value === 'M3' ? 'tf' : '' })}>
           {MODES.map(m => <option key={m} value={m}>{m} · {MODE_SHORT[m]}: {MODE_LABELS[m]}</option>)}
         </select>
       </label>
@@ -103,8 +106,8 @@ export function AssocTab({ sets, scans, seed }: { sets: FeatureSet[]; scans: Sca
       {draft.mode === 'M2'
         ? <label className="flex items-center gap-1 text-[11px]"><span className="w-14 shrink-0 font-medium">Response</span>
           <select className="input-tool min-h-0 min-w-0 flex-1 rounded px-1.5 py-0.5 text-[11px]" value={draft.response} data-testid="assoc-response" aria-label="Response"
-            onChange={e => patch({ response: e.target.value })}>{RESPONSES.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}</select></label>
-        : pick('b', bChoices, draft.mode === 'M3' ? 'tf' : draft.bKey, v => patch({ bKey: v }), 'assoc-b', 'B', draft.mode === 'M1')}
+            onChange={e => patch({ response: e.target.value, datasets: null })}>{RESPONSES.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}</select></label>
+        : pick('b', bChoices, draft.bKey, v => patch({ bKey: v }), 'assoc-b', 'B', draft.mode === 'M1')}
       <div className="text-[11px] text-ink-muted" data-testid="assoc-unit">Unit: {MODE_UNITS[draft.mode]}</div>
       <label className="flex items-center gap-1 text-[11px]"><span className="w-14 shrink-0 font-medium">Group</span>
         <select className="input-tool min-h-0 flex-1 rounded px-1.5 py-0.5 text-[11px]" value={draft.group} data-testid="assoc-group" aria-label="Group"
@@ -118,6 +121,14 @@ export function AssocTab({ sets, scans, seed }: { sets: FeatureSet[]; scans: Sca
         <input type="checkbox" checked={draft.acceptPostSelection} onChange={e => patch({ acceptPostSelection: e.target.checked })} data-testid="assoc-accept-post" />
         If the cluster run used this window, show the numbers without p-values (post-selection)
       </label>}
+      <fieldset className="flex flex-wrap items-center gap-2 text-[11px]" data-testid="assoc-datasets">
+        <legend className="font-medium">Datasets{phasing ? ' (native)' : ''}</legend>
+        {eligibleDatasets.map(dataset => <label key={dataset.id} className="flex items-center gap-1">
+          <input type="checkbox" checked={chosenDatasets.includes(dataset.id)} onChange={e => patch({
+            datasets: e.target.checked ? [...new Set([...chosenDatasets, dataset.id])] : chosenDatasets.filter(id => id !== dataset.id),
+          })} />{dataset.label}
+        </label>)}
+      </fieldset>
       <div className="flex flex-wrap items-center gap-1 text-[11px]"><span className="w-14 shrink-0 font-medium">Scope</span>
         <select className="input-tool min-h-0 rounded px-1.5 py-0.5 text-[11px]" value={draft.scope} data-testid="assoc-scope" aria-label="Scope"
           onChange={e => patch({ scope: e.target.value as AssocDraft['scope'] })}>
@@ -146,6 +157,7 @@ export function AssocTab({ sets, scans, seed }: { sets: FeatureSet[]; scans: Sca
               <option value="rho_read">mark density (rho_read)</option><option value="lambda_acc">accessible-mark rate (lambda_acc)</option></select></label>
           </>}
           {draft.mode === 'M2' && draft.response === 'phasing' && <>
+            <label><input type="checkbox" checked={Boolean(draft.options.heldOut)} onChange={e => patchOptions({ heldOut: e.target.checked })} data-testid="assoc-held-out" /> Rediscover NFR anchors on held-out molecule halves</label>
             <label>Metric <select className="input-tool min-h-0 rounded px-1 py-0.5 text-[11px]" value={draft.options.metric} onChange={e => patchOptions({ metric: e.target.value as 'R' | 'R_minus_null' })}>
               <option value="R_minus_null">R − null (default)</option><option value="R">R</option></select></label>
             <label><input type="checkbox" checked={draft.options.frames?.includes('molecule')} onChange={e => patchOptions({ frames: e.target.checked ? ['anchor', 'molecule'] : ['anchor'] })} /> molecule frame too</label>

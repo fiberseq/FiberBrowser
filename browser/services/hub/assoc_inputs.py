@@ -738,7 +738,34 @@ def nuc_scans(state, datasets: Optional[Sequence[str]] = None):
     return out
 
 
-def rate_data(state, a_type: str, b_kind: str, regions, datasets: Optional[Sequence[str]] = None):
+class _DatasetMappedScan:
+    """A scan reader whose dataset labels refer to the A scan's bound inputs."""
+    def __init__(self, scan, mapping):
+        self.scan, self.mapping, self.manifest = scan, mapping, scan.manifest
+
+    def has(self, rel):
+        return self.scan.has(rel)
+
+    def table(self, rel):
+        table, mapping = self.scan.table(rel), self.mapping
+        class Table:
+            def translate(self, rows):
+                for row in rows:
+                    if 'dataset_id' not in row:
+                        yield row
+                    else:
+                        for dataset in mapping.get(row['dataset_id'], ()):
+                            yield dict(row, dataset_id=dataset)
+
+            def rows(self):
+                return self.translate(table.rows())
+
+            def fetch(self, chrom, start, end):
+                return self.translate(table.fetch(chrom, start, end))
+        return Table()
+
+
+def rate_data(state, a_type: str, b_kind: str, regions, datasets: Optional[Sequence[str]] = None, *, b_ref=None):
     """``RateData`` for M3 from every bound nuc scan's marks (the first scan holding a molecule keeps it), with
     datasets translated to browser datasets. ``b_kind``: 'tf' (TF footprint centres from the nuc calls) or a state type
     in the same scan."""
@@ -751,6 +778,11 @@ def rate_data(state, a_type: str, b_kind: str, regions, datasets: Optional[Seque
     if not scans:
         raise AssocInputError('M3 needs a nucleosome scan in table mode (nuc/marks) of a loaded dataset: run Scan… '
                               'with the nuc module, or open such a scan')
+    b_source = None
+    if b_ref and b_ref.get('kind') == 'scan':
+        b_source, _module, resolved_type = resolve_scan_set(state, str(b_ref.get('setId') or ''))
+        if resolved_type != b_kind or (b_source.frame or {}).get('kind') == 'source':
+            raise AssocInputError('B must be a state set in the same coordinate frame as A')
     # One nucleosome scan per dataset: two scans of one dataset (two caches, or a cache and an opened scan) would each
     # hold part of a molecule's geometry, and merging compressed coordinates isn't possible here.
     owner: Dict[str, str] = {}
@@ -770,7 +802,22 @@ def rate_data(state, a_type: str, b_kind: str, regions, datasets: Optional[Seque
         if here is not None and not here:
             continue            # the scope's contigs aren't in this scan (an empty list would mean "everything")
         try:
-            d = S.rate_data_from_marks(ScanDir(scan.path), a_type, b_kind, here)
+            kwargs = {}
+            if b_source is not None:
+                b_binds = _bindings(b_source, datasets)
+                mapping = {sid: sorted({a_sid for a_sid, a_bs in binds.items() if set(a_bs) & set(bs)})
+                           for sid, bs in b_binds.items()}
+                shared = {sid for ids in mapping.values() for sid in ids}
+                if not shared:
+                    continue
+                binds = {sid: bs for sid, bs in binds.items() if sid in shared}
+                b_ids = [sid for sid, mapped in mapping.items() if mapped]
+                territory, _note = scan_territory(state, HitTable(b_kind, b_kind, scan=b_source), regions, b_ids)
+                here = scan_regions(scan, 'nuc/marks.tsv.bgz', territory)
+                if not here:
+                    continue
+                kwargs['b_scan'] = _DatasetMappedScan(ScanDir(b_source.path), mapping)
+            d = S.rate_data_from_marks(ScanDir(scan.path), a_type, b_kind, here, **kwargs)
         except S.ScanInputError as error:
             raise AssocInputError(str(error)) from None
         d.chrom = np.array([canon_chrom(state, c) for c in d.chrom], dtype=object)
@@ -794,7 +841,7 @@ def rate_data(state, a_type: str, b_kind: str, regions, datasets: Optional[Seque
         parts.append(sub)
         used.append(scan.label)
     if not parts:
-        raise AssocInputError('No molecule of the chosen datasets has nucleosome marks in the scope')
+        raise AssocInputError('No molecule has measured nucleosome marks in the shared scan territory')
     merged = parts[0] if len(parts) == 1 else RateData(
         np.concatenate([p.length for p in parts]), sum((p.intervals for p in parts), []), sum((p.points for p in parts), []),
         np.concatenate([p.chrom for p in parts]), np.concatenate([p.midpoint for p in parts]),
@@ -811,7 +858,7 @@ def rate_data(state, a_type: str, b_kind: str, regions, datasets: Optional[Seque
 
 
 # ------------------------------------------------------------------ decoded molecules (M2 phasing)
-def decoded_molecules(state, datasets: Sequence[str], regions, *, max_records: int = 20_000):
+def decoded_molecules(state, datasets: Sequence[str], regions, *, max_records: int = 20_000, cancel=None, include_duplicates=False):
     """FiberHMM ``NucMolecule``s of native datasets over the windows (primary records), with each dataset's
     nucleosome calibration (the nucleosome panel's: an open scan's, the cache's, or computed now)."""
     from fiberhmm.nuc.records import DecodeContext, decode_record
@@ -820,10 +867,13 @@ def decoded_molecules(state, datasets: Sequence[str], regions, *, max_records: i
     from services.nuc.inputs import NucInputError, browser_read_policy, nuc_source
     from services.nuc.live import bam_chrom
     import pysam
-    policy = browser_read_policy(state)
+    policy = browser_read_policy(state, include_duplicates=include_duplicates)
     params = nuc_params(resolve_settings(None)[0])
     out: Dict[str, Tuple[list, object]] = {}
     for ds in datasets:
+        if cancel is not None and cancel():
+            from .assoc import Cancelled
+            raise Cancelled()
         d = (getattr(state, 'datasets', None) or {}).get(ds)
         if d is None:
             continue
@@ -834,9 +884,13 @@ def decoded_molecules(state, datasets: Sequence[str], regions, *, max_records: i
             source = nuc_source(state, ds)
         except NucInputError as error:
             raise AssocInputError(str(error)) from None
-        cal = calibration_for(state, source)
-        mols = []
+        cal = calibration_for(state, source, cancel=cancel, policy=policy)
+        with_headers = []
         for path in source.paths:
+            with pysam.AlignmentFile(path, 'rb') as bam:
+                with_headers.append(bam.header)
+        mols = []
+        for input_index, path in enumerate(source.paths):
             # the browser's read policy (duplicates, MAPQ and the other filters), as the calibration's population;
             # primary records (molecule-wide outputs come from one record per molecule)
             with pysam.AlignmentFile(path, 'rb') as bam:
@@ -847,12 +901,15 @@ def decoded_molecules(state, datasets: Sequence[str], regions, *, max_records: i
                     if name is None:
                         continue
                     for read, _sha, _occ in iter_records(bam, name, int(a), int(b), policy['filters']):
+                        if cancel is not None and cancel():
+                            from .assoc import Cancelled
+                            raise Cancelled()
                         if read.is_supplementary or read.is_secondary:
                             continue
                         m, _reason = decode_record(read, ctx)
                         if m is None:
                             continue
-                        m.meta = dict(m.meta or {}, dataset=ds)
+                        m.meta = dict(m.meta or {}, dataset=ds, input_index=input_index, record=read, headers=with_headers)
                         m.chrom = canon_chrom(state, c)   # one contig naming (anchors use it; BAMs may say chr1 or 1)
                         mols.append(m)
                         if len(mols) >= max_records:
@@ -869,19 +926,28 @@ def decoded_molecules(state, datasets: Sequence[str], regions, *, max_records: i
     return out
 
 
-def calibration_for(state, source):
+def calibration_for(state, source, cancel=None, policy=None):
     """The dataset's nucleosome calibration (NucCalibration), as the nucleosome panel finds or computes it."""
     from services.nuc.calibration import compute_calibration, find_calibration
     from services.nuc.engine import module_version, resolve_settings
     from services.nuc.inputs import browser_read_policy
     settings, settings_hash = resolve_settings(None)
     version = module_version()
-    policy = browser_read_policy(state)
+    policy = policy or browser_read_policy(state)
+    from services.nuc.jobs import active_config
+    active = active_config(state, source.browser_id)
+    if active is not None and active.settings.get('params') == settings.get('params') and \
+            active.policy.get('filters') == policy.get('filters') and \
+            set(source.paths) <= set(active.calibrations) and \
+            len({ref.digest for ref in active.calibrations.values()}) == 1:
+        return active.calibration.calibration
     found = find_calibration(state, source, settings_hash, version, policy.get('filters') or {})
     if found:
         ref = next(iter(found.values()))
         return ref.calibration
-    ref = compute_calibration(source, settings, settings_hash, version, policy)
+    from types import SimpleNamespace
+    ref = compute_calibration(source, settings, settings_hash, version, policy,
+                              cancel=SimpleNamespace(is_set=cancel) if cancel is not None else None)
     return ref.calibration
 
 

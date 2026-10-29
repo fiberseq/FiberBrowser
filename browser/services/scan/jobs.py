@@ -145,7 +145,13 @@ def submit(state, request: dict, *, runner=None) -> dict:
                     existing = (Path(module['cache_dir']) / 'manifest.json').is_file() or \
                         (Path(module['cache_dir']) / 'work' / 'scan_key.json').is_file()
                     params = {module['name']: plan['parameters'][module['name']]} if module['name'] in plan['parameters'] else {}
-                    run(datasets, (tuple(units), info), modules=[module['name']], params=params,
+                    execute = run
+                    inputs = datasets
+                    if any(d.get('live_lift') for d in plan['datasets']):
+                        from .live_evidence import run_live_units
+                        execute = lambda ds, units, **kw: run_live_units(state, ds, units, runner=run, **kw)
+                        inputs = plan['datasets']
+                    execute(inputs, (tuple(units), info), modules=[module['name']], params=params,
                         read_policy=plan['raw_read_policy'], out=module['cache_dir'], annotate=False,
                         progress=_Progress(job, lock, module['name'], i, count), cancel=job['_cancel'],
                         cores=plan['workers'], window_jobs=0, continue_run=existing, extend=existing)
@@ -174,9 +180,10 @@ def submit(state, request: dict, *, runner=None) -> dict:
                 job['message'] = 'Cancelled'
         except BaseException as error:   # noqa: BLE001 - the job records every failure
             with lock:
-                job['status'] = 'error'
-                job['message'] = str(error) or type(error).__name__
-                job['error'] = job['message']
+                job['status'] = 'cancelled' if job['_cancel'].is_set() else 'error'
+                job['message'] = 'Cancelled' if job['_cancel'].is_set() else str(error) or type(error).__name__
+                if job['status'] == 'error':
+                    job['error'] = job['message']
         finally:
             with lock:
                 job['finished_at'] = time.time()
