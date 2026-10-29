@@ -77,7 +77,8 @@ export function dualWriteFrontend<T extends Record<string, unknown>>(saved: T): 
   const hub = { ...((out.featureHub as Record<string, unknown>) ?? {}) };
   if (Array.isArray(out.selectedFeatures)) {
     const refs = out.selectedFeatures as FeatureRef[];
-    hub.selectedFeatures = hub.selectedFeatures ?? refs;
+    // Match hubForSave: an absent empty selection must stay absent across undo/redo.
+    if (refs.length || hub.selectedFeatures) hub.selectedFeatures = hub.selectedFeatures ?? refs;
     out.selectedFeatures = legacyRefs(refs);
   }
   if (Array.isArray(out.panels)) {

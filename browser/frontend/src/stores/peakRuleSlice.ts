@@ -233,7 +233,9 @@ export function createPeakRuleSlice(
           correspondenceScans: Object.fromEntries(Object.entries(state.correspondenceScans).filter(([id]) => id !== ruleId)) };
       }
       const kept = keepMatched(state, { peaksByRule: {}, selectedPeaks: new Set(), peakModes: {}, correspondenceScans: {} });
-      return { ...kept, ...peakTransaction(state, kept.peaksByRule ?? {}) };
+      return { ...kept, ...peakTransaction(state, kept.peaksByRule ?? {}, {
+        selectedPeaks: kept.selectedPeaks ?? new Set(), peakModes: kept.peakModes ?? {},
+      }) };
     }),
 
     setPeaksLocked: (locked) => set({ peaksLocked: locked }),

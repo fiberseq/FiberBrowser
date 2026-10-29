@@ -21,6 +21,8 @@ PUBLIC_DENIED = {
     # The feature hub's analyses: association runs and overlays read scans and BAMs and run compute.
     ("GET", "/api/hub/assoc/modes"), ("POST", "/api/hub/assoc/jobs"), ("GET", "/api/hub/assoc/jobs"),
     ("GET", "/api/hub/assoc/jobs/{job_id}"), ("DELETE", "/api/hub/assoc/jobs/{job_id}"), ("POST", "/api/hub/overlay"),
+    # Legacy facades return local artifact paths and read/write scan files on the host.
+    ("GET", "/api/hub/legacy"),
     # Live lift: opening a dataset from the host's files, reading a map from them, and its settings (the flag
     # itself is harmless but is a host feature too).
     ("GET", "/api/lift/enabled"), ("GET", "/api/lift/inspect"), ("POST", "/api/lift/datasets"), ("GET", "/api/lift/datasets"),
@@ -246,6 +248,7 @@ def test_allowlist_has_no_stale_entries(standalone_app):
     ("GET", "/openapi.json"),
     ("GET", "/docs"),
     ("GET", "/api/no_such_route"),
+    ("GET", "/api/hub/legacy"),
     ("GET", "/api/lift/difference_sequence?dataset_id=missing&chrom=chrT&item_id=test&pos=0"),
     ("POST", "/api/lift/provenance/missing"),
     ("POST", "/api/lift/analysis/summary"), ("POST", "/api/lift/analysis/split"),
