@@ -17,7 +17,7 @@ The backend endpoint and frontend store checks cover old-session restore equival
 
 Matched-window class hits are projected to their recorded genomic windows, including reverse windows. They are listed as hit-only, with a note to use the legacy panel for per-read states; the existing legacy feature resolver does not carry a window channel. A run lacking genomic provenance reports a conversion problem and retains its legacy panel.
 
-The facade is a projection of frozen legacy output. It does not rerun old analyses through `run_units` or replace the peak engine; that would change discovery/sampling semantics and belongs with the separately gated engine migration.
+The facade remains a projection of frozen output and never reruns restored analyses. New native BAM lattice-recaller, NFR and molecule peak jobs now execute through `run_units`; see [engine consolidation](feature-hub-engine.md) for adapters, parity gates and remaining compatibility paths.
 
 ## Validation
 

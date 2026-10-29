@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from services.scoped_read_analysis import scoped_analysis
 
+import hashlib
 import time
 from typing import Any, Dict, Optional
 
@@ -653,7 +654,26 @@ def run_scan_peaks_endpoint(
         f"Signal stats: max={combined_signal.max():.3f}, mean={combined_signal.mean():.3f}"
     )
 
-    thresholds = build_peak_thresholds(
+    scan_result = None
+    execution_note = None
+    if signal_source in ('accessibility', 'tf_density') and getattr(req, 'execution_engine', 'scan') == 'scan':
+        from services.scan.legacy_execution import native_inputs, run_peak_counts
+        region = dict(chrom=resolved_chrom, start=start, end=end)
+        scan_inputs, execution_note = native_inputs(state, dict(region, dataset_ids=list(query.dataset_ids)))
+        if scan_inputs:
+            params = {k: getattr(req, k) for k in ('min_width', 'min_reads', 'threshold_strong',
+                'threshold_medium', 'threshold_weak', 'threshold_rare')}
+            params.update(smooth_width=smooth_width,
+                          max_peak_width=getattr(req, 'max_peak_width', DEFAULT_MAX_PEAK_WIDTH),
+                          signal_source=signal_source, tier_rule=getattr(req, 'tier_rule', 'local'))
+            scan_result = run_peak_counts(scan_inputs, region, numerator, total_counts, n_reads, params,
+                population=dict(dataset_ids=list(query.dataset_ids), spanning=spanning,
+                    sample_seed=req.sample_seed, read_ids_sha256=hashlib.sha256(
+                        repr((req.read_ids, req.read_ids_by_dataset)).encode()).hexdigest(),
+                    strand=getattr(req, 'strand', None)))
+            combined_signal = scan_result['smoothed']
+
+    thresholds = scan_result['thresholds'] if scan_result is not None else build_peak_thresholds(
         req.threshold_strong,
         req.threshold_medium,
         req.threshold_weak,
@@ -669,16 +689,20 @@ def run_scan_peaks_endpoint(
 
     phase_t0 = time.perf_counter()
     broad_peaks: list[dict] = []
-    all_peaks, layer_info = detect_threshold_layers(
-        combined_signal,
-        total_counts,
-        thresholds,
-        req.min_width,
-        req.min_reads,
-        smooth_width,
-        max_width=getattr(req, "max_peak_width", DEFAULT_MAX_PEAK_WIDTH),
-        broad_out=broad_peaks,
-    )
+    if scan_result is not None:
+        all_peaks, layer_info = scan_result['peaks'], scan_result['layer_info']
+        broad_peaks = scan_result['broad']
+    else:
+        all_peaks, layer_info = detect_threshold_layers(
+            combined_signal,
+            total_counts,
+            thresholds,
+            req.min_width,
+            req.min_reads,
+            smooth_width,
+            max_width=getattr(req, "max_peak_width", DEFAULT_MAX_PEAK_WIDTH),
+            broad_out=broad_peaks,
+        )
     server_timings["detect_ms"] = phase_ms(phase_t0)
     for info in layer_info:
         log_clustering_diagnostic(f"  Layer {info['layer']} ({info['label']}): {info['n_peaks']} peaks")
@@ -709,6 +733,9 @@ def run_scan_peaks_endpoint(
 
     result = {
         "peaks": peaks_list,
+        "execution_engine": 'scan:peaks' if scan_result is not None else 'legacy',
+        "tier_rule": getattr(req, 'tier_rule', 'local') if scan_result is not None else 'window',
+        **({"execution_note": execution_note} if execution_note else {}),
         "layer_info": layer_info,
         "n_reads": n_reads,
         # Above a tier's threshold but wider than max_peak_width: the view's

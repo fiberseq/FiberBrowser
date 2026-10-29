@@ -90,6 +90,9 @@ class PeakRegion(BaseModel):
     mode: str = 'accessibility'  # 'accessibility', 'tf', 'modification', 'annotation', or 'off'
 
 class ScanPeaksRequest(BaseModel):
+    # One-release compatibility controls (the owner accepted local Rare as default).
+    execution_engine: Literal['scan', 'legacy'] = 'scan'
+    tier_rule: Literal['local', 'window'] = 'local'
     lift_hap: Optional[str] = None
     strand: Optional[Literal["CT", "GA"]] = None
     min_width: int = 80
