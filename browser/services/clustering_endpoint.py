@@ -1641,9 +1641,32 @@ def run_cluster_all_endpoint(
         },
     )
 
+    for key, result in results.items():
+        rows = [r for r in all_compact if r.get('_cluster_group') == key]
+        dsid = next((r.get('_consensus_dataset_id') for r in rows), key)
+        sources = record_sources(state.get_dataset(dsid), rows)
+        if sources:
+            result['record_sources'] = {rid: src for rid, src in sources.items() if rid in result['assignments']}
     response['results'] = results
     timings.add("response_assembly", phase_start)
     return timings.attach(with_performance_sampling(response))
+
+
+def record_sources(dataset, reads) -> dict:
+    """Origins of fitted records, independently of the primary haplotype that places a lifted display row."""
+    handle = getattr(getattr(dataset, 'live_lift', None), 'handle', None)
+    if handle is None:
+        return {}
+    haps = getattr(handle, 'source_haplotype', {})
+    labels = getattr(handle, 'haplotype_labels', {})
+    out = {}
+    for read in reads:
+        contig = ((read.get('live_lift') or {}).get('source') or {}).get('contig')
+        hap = haps.get(contig)
+        rid = read.get('_original_id') or read.get('analysis_id') or read.get('id')
+        if contig and hap and rid:
+            out[rid] = dict(contig=contig, hap=labels.get(hap, hap))
+    return out
 
 
 def _fitted_metric_cohort(columnar, compact_reads, peak_modes, cluster_feature_rules) -> dict:
@@ -1753,6 +1776,10 @@ def run_assign_to_clusters_endpoint(
         assignments = results[result_key]["assignments"]
         results[result_key]["assignments"] = {split_prefixed_read_id(k, ds_id)[1]: v for k, v in assignments.items()}
         results[result_key]["filtered_read_ids"] = list(results[result_key]["assignments"])
+        sources = record_sources(state.get_dataset(ds_id), working_set.reads)
+        if sources:
+            results[result_key]['record_sources'] = {rid: src for rid, src in sources.items()
+                                                      if rid in results[result_key]['assignments']}
         if getattr(working_set, "lift_cohort", None):
             results[result_key]["cohort"] = working_set.lift_cohort
         dataset = state.get_dataset(ds_id)

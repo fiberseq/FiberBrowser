@@ -10,8 +10,13 @@ import { useShallow } from 'zustand/react/shallow';
 import { useBrowserStore } from '../../stores/browserStore';
 import { closeScan as apiClose, listScans, openScan as apiOpen, scanHits, type ScanHit, type ScanInfo, type ScanSetInfo } from './api';
 import { ensureHubKind, hubProviders, onHubProvidersChanged, type HubOpenedScan, type HubView } from './hubState';
-import { dsKey } from './providers';
+import { dsKey, hapKey } from './providers';
 import type { FeatureHit, FeatureSet, GroupDecl, HitValue } from './types';
+import { fetchJson } from '../../api/sharedFetch';
+import { loadProviderInputs } from './providerInputs';
+import { useGraphStatusStore } from '../graphPanel/statusStore';
+import { clearHubSv } from '../variants/hubProvider';
+import { clearDifferenceCache } from '../liveLift/differenceCache';
 
 interface HubDataStore {
   scans: ScanInfo[];
@@ -23,11 +28,14 @@ interface HubDataStore {
     /** Why a source-frame set's hits can't all be placed here, or why graph columns are missing. */
     note?: string }>;
   loadingHits: boolean;
+  providers: FeatureSet[];
+  providerErrors: string[];
+  epoch: number;
   setScans: (scans: ScanInfo[]) => void;
 }
 
 export const useHubData = create<HubDataStore>(set => ({
-  scans: [], missing: {}, error: '', hits: {}, loadingHits: false,
+  scans: [], missing: {}, error: '', hits: {}, loadingHits: false, providers: [], providerErrors: [], epoch: 0,
   setScans: scans => set({ scans }),
 }));
 
@@ -81,7 +89,9 @@ export const hubGeneration = () => generation;
 export function resetHubData(): void {
   generation += 1;
   hitsController?.abort();
-  useHubData.setState({ scans: [], missing: {}, error: '', hits: {}, loadingHits: false });
+  clearHubSv();
+  clearDifferenceCache();
+  useHubData.setState({ scans: [], missing: {}, error: '', hits: {}, loadingHits: false, providers: [], providerErrors: [], epoch: generation });
 }
 
 /** Open a scan directory (Open scan…): binds it to the loaded datasets and lists its sets. */
@@ -282,6 +292,19 @@ export async function loadScanHits(view: HubView, hidden: string[]): Promise<voi
 export function useProviderSets(view: HubView): FeatureSet[] {
   const [version, setVersion] = useState(0);
   const state = useBrowserStore(useShallow(s => ({ peaksByRule: s.peaksByRule, peakRules: s.peakRules, datasets: s.datasets, panels: s.panels, footprintGroups: s.footprintGroups, savedNfrVariants: s.savedNfrVariants, graphSelection: s.graphSelection })));
+  const inputKey = state.datasets.map(d => `${d.id}:${d.path}:${d.live_lift?.key ?? ''}`).join('|');
+  const refresh = useBrowserStore(s => s.refreshGeneration);
+  const epoch = useHubData(s => s.epoch);
+  useEffect(() => {
+    const controller = new AbortController(), born = generation;
+    const timer = setTimeout(() => {
+      void loadProviderInputs(useBrowserStore.getState(), view, controller.signal, () => current(born)).then(errors => {
+        if (!controller.signal.aborted && current(born)) useHubData.setState({ providerErrors: errors });
+      });
+    }, 150);
+    return () => { clearTimeout(timer); controller.abort(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view.chrom, view.start, view.end, inputKey, refresh, epoch]);
   useEffect(() => {
     void refreshLegacyRuns();
     const bump = () => setVersion(v => v + 1);
@@ -292,11 +315,30 @@ export function useProviderSets(view: HubView): FeatureSet[] {
     const off = onHubProvidersChanged(bump);
     return () => { subs.forEach(u => u()); off(); };
   }, []);
-  return useMemo(() => {
+  const raw = useMemo(() => {
     const s = useBrowserStore.getState();
     return mergeProviderSets(hubProviders().flatMap(p => { try { return p.sets(s, view); } catch { return []; } }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version, view.chrom, view.start, view.end, state]);
+  const graphKey = useGraphStatusStore(s => (s.status?.registrations ?? []).map(r => `${r.id}@${r.revisions.package}`).join(','));
+  const [enriched, setEnriched] = useState<{ raw: FeatureSet[]; graphKey: string; sets: FeatureSet[] } | null>(null);
+  useEffect(() => {
+    if (!graphKey || !raw.length) return;
+    const controller = new AbortController(), born = generation;
+    const hits = raw.flatMap(set => set.source.kind === 'inline' ? set.source.hits : []);
+    if (!hits.length) return;
+    void fetchJson<{ hits: FeatureHit[]; note?: string }>('/api/hub/columns', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chrom: view.chrom, hits }), signal: controller.signal }).then(res => {
+      if (controller.signal.aborted || !current(born)) return;
+      const byId = new Map(res.hits.map(h => [`${h.setId}|${h.hitId}`, h]));
+      setEnriched({ raw, graphKey, sets: raw.map(set => ({ ...set, source: set.source.kind === 'inline'
+        ? { kind: 'inline', hits: set.source.hits.map(h => byId.get(`${h.setId}|${h.hitId}`) ?? h) } : set.source })) });
+    }).catch(() => { /* Provider hits remain usable when a package is unavailable. */ });
+    return () => controller.abort();
+  }, [raw, graphKey, view.chrom]);
+  const result = enriched?.raw === raw && enriched.graphKey === graphKey ? enriched.sets : raw;
+  useEffect(() => { useHubData.setState({ providers: result }); }, [result]);
+  return result;
 }
 
 /** Merge facades, live panels and cart pins into one row per set/hit, retaining the richest live values. */
@@ -320,4 +362,19 @@ export function mergeProviderSets(sets: FeatureSet[]): FeatureSet[] {
       count: hits.size, source: { kind: 'inline', hits: [...hits.values()] } });
   }
   return [...merged.values()];
+}
+
+/** Path-status columns also exist when a provider has no measured value for that path. */
+export function withGraphGroups(set: FeatureSet, datasets: { id: string; label: string }[]): FeatureSet {
+  const groups = new Map(set.groups.map(g => [g.id, g]));
+  for (const h of set.source.kind === 'inline' ? set.source.hits : []) {
+    for (const p of Object.values(h.graph?.paths ?? {})) for (const id of p.datasets) {
+      const key = p.hap ? hapKey(id, p.hap) : dsKey(id);
+      if (groups.has(key)) continue;
+      const label = datasets.find(d => d.id === id)?.label ?? id;
+      groups.set(key, { id: key, datasetId: id, kind: p.hap ? 'haplotype' : 'dataset',
+        label: p.hap ? `${label} ${p.hap}` : label, ...(p.hap ? { hap: p.hap } : {}) });
+    }
+  }
+  return { ...set, groups: [...groups.values()] };
 }

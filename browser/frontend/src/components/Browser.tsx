@@ -1,4 +1,5 @@
 import { idSetHas, recordKey } from '../utils/recordKeys';
+import { adoptLinearSources } from '../features/graphPanel/linearSources';
 import { beginProgressiveAnalysis, cancelProgressiveAnalysis, displayedScope, needsDisplayPreview } from '../utils/progressiveAnalysis';
 import { AnalysisProgressLine } from './controls/AnalysisProgressLine';
 import { scanEquivalentRegions, scanUnsharedRegions } from '../utils/equivalentScanning';
@@ -33,7 +34,7 @@ import { fetchApiResponse } from '../api/sharedFetch';
 import { useDafcStore } from '../stores/dafcStore';
 import { scanPeaks } from '../api/peaks';
 import { clusterAllReads, assignToClusters } from '../api/clustering';
-import { adoptFitMetricCohort } from '../actions/browserActions';
+import { adoptClusterFit } from '../utils/adoptClusterFit';
 import { performanceSamplingNote } from '../utils/performanceProfile';
 import { mergeClusterOrder } from '../utils/clusterOrder';
 import { clusterReferenceScope, clusterRunLabel, restoredClusteringState, savedClusterStateForPanels } from '../stores/clusterSlice';
@@ -591,6 +592,8 @@ export function Browser() {
               result.assignments || {},
               { mirror: false, merge: true },
             );
+            if (result.record_sources) adoptLinearSources(sk, datasets.find(d => d.id === datasetId)?.id
+              ?? panels.find(p => (p.stateKey ?? p.datasetId) === sk)?.datasetId ?? datasetId, result.record_sources, true);
             if (result.cluster_counts) {
               const counts = result.cluster_counts as Record<number, number>;
               const order = mergeClusterOrder(
@@ -1587,27 +1590,7 @@ export function Browser() {
       // child for a subcluster run, or the root for a full run). Combinatorial
       // uses binary patterns; other methods (kmeans, etc.) use per-cluster
       // centroids. Either enables dynamic reassignment as the viewport changes.
-      if (res.cluster_patterns && clusterMethod === 'combinatorial') {
-        // With the fit's molecule metric cohort, which dynamic assignment ranks against.
-        useBrowserStore.getState().setClusterPatterns(res.cluster_patterns, res.cluster_metric_cohort);
-        useBrowserStore.getState().setClusterCentroids({}, []);
-        useBrowserStore.getState().setClusterPeakRegions(runPeakRegions);
-        useBrowserStore.getState().setDynamicClustering(true);
-        lastDynamicClusterRef.current = { chrom, start, end };
-      } else if (res.cluster_centroids && Object.keys(res.cluster_centroids).length > 0) {
-        useBrowserStore.getState().setClusterPatterns({});
-        useBrowserStore.getState().setClusterCentroids(res.cluster_centroids, res.cluster_peak_widths ?? [], res.cluster_metric_cohort);
-        useBrowserStore.getState().setClusterPeakRegions(runPeakRegions);
-        useBrowserStore.getState().setDynamicClustering(true);
-        lastDynamicClusterRef.current = { chrom, start, end };
-      } else {
-        useBrowserStore.getState().setClusterPatterns({});
-        useBrowserStore.getState().setClusterCentroids({}, []);
-        // No model, but merges and the map rank metric columns against this fit's cohort, not an earlier fit's.
-        adoptFitMetricCohort(res.cluster_metric_cohort);
-        useBrowserStore.getState().setClusterPeakRegions(runPeakRegions);
-        useBrowserStore.getState().setDynamicClustering(false);
-      }
+      if (adoptClusterFit(res, clusterMethod, runPeakRegions)) lastDynamicClusterRef.current = { chrom, start, end };
 
       // With each window's view (locus and reference), so its charts use them only there.
       useBrowserStore.getState().setClusterWindowPeaks(windowPeaks ? {
@@ -1636,6 +1619,16 @@ export function Browser() {
           afterClusterState.syncActiveClusterTreeNode();
         } else {
           afterClusterState.captureActiveClusterTreeNode({ name: 'All reads' });
+        }
+      }
+
+      for (const [resultKey, result] of Object.entries(res.results)) {
+        if (!result.record_sources) continue;
+        const keys = !isPreview && useExistingChromPath ? clusterWindows.filter(view =>
+          (view.chrom === chrom ? view.dataset_id : `${view.dataset_id}_${view.chrom}`) === resultKey).map(view => view.result_key) : [resultKey];
+        for (const key of keys.length ? keys : [resultKey]) {
+          const dsid = clusterWindows.find(w => w.result_key === key)?.dataset_id;
+          if (dsid) adoptLinearSources(key, dsid, result.record_sources, subclusterRun);
         }
       }
 

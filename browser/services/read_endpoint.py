@@ -320,10 +320,14 @@ def load_direct_reads_for_dataset(
                 sv_min_len=sv_min_len,
                 include_sv_seq=include_sv_seq,
             )
+            segment_reads = scan_overlay_before_filters(state, getattr(dataset, 'id', '') or '', chrom, segment.ref_start,
+                                                       segment.ref_end, segment_reads)
             shift = segment.logical_start - start
             merged_inputs.extend(shift_compact_read(read, shift, segment.logical_start - segment.ref_start)
                 for read in segment_reads)
         merged = merge_compact_reads_by_id(merged_inputs)
+        from services.scan.overlay import rewindow_receipts
+        merged = rewindow_receipts(merged, chrom, start, end)
         if spanning_only:
             region_width = end - start
             return [read for read in merged if is_read_spanning(read, region_width)]

@@ -675,16 +675,34 @@ def molecule_table(state, mols: Molecules, regions, *, density: str = 'rho_read'
 
 # ------------------------------------------------------------------ territory (M4)
 def scan_territory(state, table: HitTable, regions, datasets: Optional[Sequence[str]] = None) -> Tuple[List[Tuple[str, int, int]], str]:
-    """Where a set's absence means absence: a linear scan's callable runs within its done zones (and the windows); an
-    assembly scan or a browser set: the windows (the view, the BED or anchors) only."""
+    """Where a set's absence means absence: callable runs within done zones, lifted for assembly scans and clipped
+    to the analysis windows. A browser set covers only its windows."""
     scan = table.scan
-    if scan is not None and (scan.frame or {}).get('kind') == 'source':
-        raise AssocInputError(f'{table.label}: an assembly scan\'s callable territory is in its own coordinates and isn\'t '
-                              'lifted onto this genome yet, so M4 has no territory for it here. Compare it in its own '
-                              'assembly (fiberhmm-scan assoc on the scan), or use a scan of this genome')
     if scan is not None:
         from fiberhmm.assoc.scanio import territory
         from fiberhmm.scan.reader import ScanDir
+        if (scan.frame or {}).get('kind') == 'source':
+            from services.scan.projection import lifted_datasets
+            from services.scan.lift import LiftUnavailable, lift_intervals
+            # Read callable runs in their own frame, including the done-unit restriction. Clip only after lifting.
+            source = territory(ScanDir(scan.path), datasets=datasets or None)
+            lifted = []
+            ids = lifted_datasets(state, scan)
+            if not ids:
+                raise AssocInputError(f'{table.label}: no live-lift dataset is loaded to lift its callable territory')
+            for did in ids:
+                config = state.datasets[did].live_lift
+                if getattr(config.handle, 'plain_chain', False):
+                    raise AssocInputError('Callable territory requires a graphlift sidecar for liftbed')
+                try:
+                    # No bridging target gaps: a target insertion is not callable source sequence. Keep all splits.
+                    parts = lift_intervals(config.handle.path, source, split_gap=0)
+                except LiftUnavailable as error:
+                    raise AssocInputError(str(error)) from error
+                lifted.extend((canon_chrom(state, c), a, b) for part in parts for c, a, b in (part.parts or []) if b > a)
+            merged = merge_regions(lifted)
+            return (merged if regions is None else _intersect_regions(merged, regions),
+                    'callable runs within done units lifted onto this genome with liftbed (all mapped pieces)')
         here = scan_regions(scan, 'callable.tsv.bgz', regions)
         if here is not None and not here:
             return [], 'the scope\'s contigs aren\'t in the scan: no territory'

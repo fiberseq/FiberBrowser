@@ -20,6 +20,7 @@ def test_cluster_endpoints_and_folded_subset_cold_warm(lift_env):
     assert response.status_code == 200, response.text
     data = response.json()
     assignments = data['results'][did]['assignments']
+    assert set(data['results'][did]['record_sources']) == set(assignments)
     assert assignments and all('|' in key for key in assignments)
     assert data['results'][did]['cohort']['folded']
     from services.analysis_query import AnalysisReadQuery
@@ -35,6 +36,7 @@ def test_cluster_endpoints_and_folded_subset_cold_warm(lift_env):
         'dataset_ids': [did], 'peak_regions': peaks, 'cluster_patterns': data['cluster_patterns']})
     assert dynamic.status_code == 200, dynamic.text
     assert set(dynamic.json()['results'][did]['assignments']) == set(assignments)
+    assert set(dynamic.json()['results'][did]['record_sources']) == set(assignments)
     projection = client.post('/api/cluster_projection', params=query, json={
         'dataset_ids': [did], 'peak_regions': peaks, 'cluster_assignments': {did: assignments}, 'method': 'pca'})
     assert projection.status_code == 200, projection.text

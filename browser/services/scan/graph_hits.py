@@ -314,6 +314,15 @@ async def add_graph_aliases(state, hits: List[dict], view_chrom: str) -> Optiona
 def _hit_plan(h: dict, by_contig: dict, target: str):
     """``(own path or None, start, end, target anchor)`` of a hit, else None (not on this package)."""
     frame = h.get('frame') or {}
+    if h.get('typeId') == 'var.diff':
+        detail = h.get('detail') or {}
+        src = detail.get('src') or {}
+        # Deleted bases belong to the target; other assembly alleles use their source sequence.
+        if detail.get('source') == 'assembly' and detail.get('kind') != 'deletion':
+            own = by_contig.get((detail.get('datasetId'), src.get('contig')))
+            if own is None or src.get('start') is None or src.get('end') is None:
+                return None
+            return own, int(src['start']), int(src['end']), (int(h['start']), int(h['end']))
     if frame.get('kind') == 'source':
         own = by_contig.get((frame.get('datasetId'), frame.get('contig')))
         if own is None:

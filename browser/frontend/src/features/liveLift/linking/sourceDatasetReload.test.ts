@@ -60,6 +60,14 @@ describe('a source view dataset after a reload', () => {
     expect(useBrowserStore.getState().panels.filter(p => p.contentType === 'dataset').map(p => p.datasetId)).toEqual(['lift']);
   });
 
+  it('Open source view unfolds an existing collapsed source panel', async () => {
+    useBrowserStore.setState(s => ({ datasets: [...s.datasets, SOURCE], panels: [...s.panels,
+      { id: 'source', contentType: 'dataset', datasetId: SOURCE.id, collapsed: true, subTracks: [], linkGroup: null,
+        liftLink: { id: 'link', datasetId: 'lift', liftPanelId: 'mat', hap: 'H#1', hapLabel: 'MAT', contig: MAT, flip: false, chain: null } } as PanelConfig] }));
+    expect(await openLinkedSourceView('mat')).toBe('source');
+    expect(useBrowserStore.getState().panels.find(p => p.id === 'source')?.collapsed).toBe(false);
+  });
+
   it('an ordinary native BAM still opens its own panel; an open source view keeps its panel', () => {
     useBrowserStore.setState({ panels: [{ id: 'src', contentType: 'dataset', datasetId: 'native', subTracks: [], collapsed: false, linkGroup: null } as PanelConfig] } as never);
     const plain = { ...SOURCE, id: 'plain', lift_source_of: undefined } as Dataset;

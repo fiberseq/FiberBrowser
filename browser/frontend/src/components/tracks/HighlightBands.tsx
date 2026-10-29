@@ -112,7 +112,6 @@ export function HighlightBands({ panel, width, gutter, labels = false, guides = 
   return (
     <div
       ref={ref}
-      aria-hidden="true"
       className="pointer-events-none absolute inset-y-0 z-[5] overflow-hidden"
       style={{ left: gutter, width: inner }}
       data-testid="highlight-bands"
@@ -142,8 +141,15 @@ export function HighlightBands({ panel, width, gutter, labels = false, guides = 
         const span = highlightSpans([{ ...o, id: `${kind}-${i}`, genome }], { ...view, genome }, inner, isReversed)[0];
         if (!span) return [];
         return <div key={`${kind}-${i}`} data-testid={`${kind}-region-outline`} data-region={`${o.chrom}:${o.start}-${o.end}`}
-          className={`absolute inset-y-0 border-dashed ${labels ? 'border-2' : 'border-x-2'}`}
-          style={{ left: span.x, width: span.w, borderColor: o.color }}>
+          className={`absolute inset-y-0 border-dashed ${labels ? 'border-2' : 'border-x-2'} ${o.onSelect ? 'pointer-events-auto cursor-pointer' : ''}`}
+          style={{ left: span.x, width: span.w, borderColor: o.color, opacity: o.selected === false ? 0.55 : 1 }}
+          role={o.onSelect ? 'button' : undefined} tabIndex={o.onSelect ? 0 : undefined}
+          aria-label={o.onSelect ? `Select ${o.label} in Feature hub` : undefined}
+          title={o.onSelect ? `${o.label}. Click to select in Feature hub; Shift-click to add or remove.` : undefined}
+          onPointerDown={o.onSelect ? e => e.stopPropagation() : undefined}
+          onMouseDown={o.onSelect ? e => e.stopPropagation() : undefined}
+          onClick={o.onSelect ? e => { e.stopPropagation(); o.onSelect!(e.shiftKey || e.metaKey || e.ctrlKey); } : undefined}
+          onKeyDown={o.onSelect ? e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); o.onSelect!(e.shiftKey || e.metaKey || e.ctrlKey); } } : undefined}>
           {labels && span.w > 24 && <span className="absolute right-0.5 top-0 truncate rounded-sm bg-white/80 dark:bg-gray-900/80 px-0.5 text-[9px] font-semibold leading-3"
             style={{ maxWidth: span.w - 4, color: o.color }}>{o.label}</span>}
         </div>;
