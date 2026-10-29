@@ -1,10 +1,7 @@
 """Live nucleosome outputs for a region's records, from the complete source records.
 
-``record_outputs`` is ``fiberhmm.scan.modules.nuc.NucModule.molecule_outputs`` written out so the browser keeps
-the decoded molecule and FiberHMM's ``MoleculeResult`` (window metrics and phasing need them) without computing
-twice: ``decode_record`` on the stored record, ``molecule_outputs`` with the calibration, the MA rows of
-``group_rows`` with each mark's reference envelope (``_ref_envelope``), and the scalars with the flag bits and the
-calls digest. ``tests/test_nuc_equivalence.py`` checks every row against ``fiberhmm-scan``'s for the same record.
+``record_outputs`` adapts the public ``fiberhmm.nuc.record_outputs`` tuple to the browser store.
+The decoded molecule and result are retained for window metrics and phasing without recomputing them.
 
 Records come from ``fiberhmm.scan.reads.iter_records`` (the scan's own iterator: read filters, SHA-256 and
 occurrence), over
@@ -17,8 +14,6 @@ from __future__ import annotations
 
 import threading
 from typing import Callable, Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
-
-import numpy as np
 
 from .calibration import CalibrationRef
 from .inputs import NucSource
@@ -44,28 +39,22 @@ def _decode_context(path: str, header, params, params_key: str):
 
 def record_outputs(read, input_index: int, ctx, params, cal) -> Tuple[Optional[RecordOutputs], object, object, str]:
     """(outputs, molecule, result, reason) of one stored record; outputs is None when FiberHMM can't decode it."""
-    from fiberhmm.nuc.molecule import molecule_outputs as nuc_outputs
-    from fiberhmm.nuc.records import decode_record
-    from fiberhmm.nuc.tags import FLAG_BITS, NUCMOL, digest_pieces, group_rows
-    from fiberhmm.scan.modules.nuc import _ref_envelope
-    mol, why = decode_record(read, ctx)
+    from fiberhmm.nuc import record_outputs as nuc_record_outputs
+    from fiberhmm.nuc.tags import NUCMOL, group_rows
+    from fiberhmm.scan.types import RecordRef
+    record = RecordRef('', int(input_index), str(read.query_name), '', 0, str(read.reference_name),
+                       int(read.reference_start), int(read.reference_end or read.reference_start))
+    mol, res, scan = nuc_record_outputs(read, record, cal, params=params, context=ctx)
     if mol is None:
-        return None, None, None, why
-    res = nuc_outputs(mol, params, cal)
-    groups: Dict[str, list] = {}
-    nucmol: List[int] = []
-    for group, (_spec, rows) in group_rows(res).items():
-        if group == NUCMOL:
-            nucmol = [int(x) for x in rows[0][2]] if rows else []
-            continue
-        marks = []
-        for s, n, q, name in rows:
-            a, b = _ref_envelope(mol, s, s + n)
-            marks.append((int(s), int(n), int(a), int(b), tuple(int(x) for x in q), str(name)))
-        groups[group] = marks
-    scalars = {k: (None if v is None or not np.isfinite(v) else float(v)) for k, v in res.scalars.items()}
-    scalars['flags'] = float(sum(1 << i for i, k in enumerate(FLAG_BITS) if res.flags.get(k)))
-    scalars['calls_digest_hi'], scalars['calls_digest_lo'] = digest_pieces(res.digest)
+        from fiberhmm.nuc.records import decode_record
+        _mol, reason = decode_record(read, ctx)
+        return None, None, None, reason
+    groups: Dict[str, list] = {'nucsz': [], 'nucseg': []}
+    for mark in scan.marks:
+        groups.setdefault(mark.group, []).append((*mark.mol, mark.start, mark.end, mark.q, mark.name))
+    rows = group_rows(res).get(NUCMOL, (None, []))[1]
+    nucmol = [int(x) for x in rows[0][2]] if rows else []
+    scalars = scan.scalars
     out = RecordOutputs(
         qname=str(read.query_name), input_index=int(input_index), chrom=str(read.reference_name),
         ref_start=int(read.reference_start), ref_end=int(read.reference_end or read.reference_start),

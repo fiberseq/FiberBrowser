@@ -108,7 +108,9 @@ async def hub_overlay(request: dict, state=Depends(get_state)):
     if not isinstance(request, dict):
         raise HTTPException(status_code=422, detail='Request must be an object')
     try:
-        return await asyncio.to_thread(overlay, state, request)
+        from services.hub.graph_overlay import prepare_graph_loci
+        prepared = await prepare_graph_loci(state, request)
+        return await asyncio.to_thread(overlay, state, prepared)
     except OverlayError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 

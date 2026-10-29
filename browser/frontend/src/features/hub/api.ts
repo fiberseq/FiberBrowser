@@ -82,7 +82,7 @@ export interface ScanRequest {
 
 const json = (body: unknown): RequestInit => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
-export const scanAvailable = () => fetchJson<{ available: boolean; reason?: string; fiberhmm?: string;
+export const scanAvailable = () => fetchJson<{ available: boolean; reason?: string; fiberhmm?: string; liveLiftScans?: boolean;
   modules: Array<{ name: string; version: string; experimental: boolean; types: string[] }> }>('/api/scan/available');
 /** `generation`: the server's scan generation the caller read (a restore): refused (409) once a session replaced it. */
 export const openScan = (path: string, generation?: number) =>

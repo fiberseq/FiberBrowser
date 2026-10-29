@@ -21,14 +21,14 @@ export function ScanDialog({ onClose }: { onClose: () => void }) {
   const showDuplicates = useBrowserStore(s => Boolean(s.showDuplicateReads));
   const start = useBrowserStore(s => s.start);
   const end = useBrowserStore(s => s.end);
-  const scannable = useMemo(() => datasets.filter(d => d.data_type === 'bam'), [datasets]);
+  const scannable = useMemo(() => datasets.filter(d => d.data_type === 'bam' || d.data_type === 'bam_livelift'), [datasets]);
   const shown = useMemo(() => new Set(panels.filter(p => p.contentType === 'dataset' && !p.collapsed && p.datasetId).map(p => p.datasetId!)), [panels]);
   const [chosen, setChosen] = useState<string[]>(() => scannable.filter(d => shown.has(d.id)).map(d => d.id));
   const [scope, setScope] = useState<ScanRequest['scope']>('view');
   const [bed, setBed] = useState('');
   const [genes, setGenes] = useState('');
   const [modules, setModules] = useState<string[]>(DEFAULT_MODULES);
-  const [available, setAvailable] = useState<{ available: boolean; reason?: string; modules: Array<{ name: string; experimental: boolean }> } | null>(null);
+  const [available, setAvailable] = useState<{ available: boolean; reason?: string; liveLiftScans?: boolean; modules: Array<{ name: string; experimental: boolean }> } | null>(null);
   const [paramsText, setParamsText] = useState('');
   const [editJson, setEditJson] = useState(false);
   const [capDiscovery, setCapDiscovery] = useState('');
@@ -116,7 +116,7 @@ export function ScanDialog({ onClose }: { onClose: () => void }) {
                 onChange={e => setChosen(c => e.target.checked ? [...c, d.id] : c.filter(x => x !== d.id))} /> {d.label}
             </label>
           )) : <span className="text-ink-secondary">Open a FiberHMM-called BAM first.</span>}
-          {lifted.length > 0 && <p className="mt-1 text-[11px] text-ink-muted">Live-lift datasets are scanned in their own assembly: run fiberhmm-scan on their BAM and open the scan here (their reads get its per-read states).</p>}
+          {lifted.length > 0 && <p className="mt-1 text-[11px] text-ink-muted">{available?.liveLiftScans ? 'Live-lift datasets are pooled in this genome’s frame using complete lifted records.' : 'Target-frame live-lift scans await the scan-table parity gate; scan a fiberhmm-lift BAM meanwhile.'}</p>}
         </fieldset>
         <fieldset className="mb-2">
           <legend className="mb-1 font-medium">Where</legend>

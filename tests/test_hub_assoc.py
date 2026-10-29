@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import random
-from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace as NS
 
@@ -28,6 +27,13 @@ pytest.importorskip('fiberhmm.assoc')
 from scan_fixtures import row, write_table
 
 CONTIG, LENGTH = 'chrT', 200_000
+
+
+def _cli_args(**values):
+    from fiberhmm.assoc.cli import _parser
+    defaults = _parser().parse_args(['scan', '--mode', values['mode'], '--a', values['a'], '-o', 'out'])
+    vars(defaults).update(values)
+    return defaults
 
 
 def _bam(path: Path, reads):
@@ -54,6 +60,9 @@ def _scan(out: Path, bam: str, *, fp_hits, nfr_hits, states, openness, marks=(),
           dataset_id='dataset_1', scan_id='feedfacefeedface'):
     """A table-mode scan: fp.class and nfr.region hits with states, nfr/molecules openness, optional nuc marks."""
     from services.scan.identity import content_id
+    import hashlib
+    with pysam.AlignmentFile(bam) as records:
+        record_keys = {r.query_name: hashlib.sha256(r.to_string().encode()).hexdigest() + ':0' for r in records}
     order = {CONTIG: 0}
     tables = {}
     hit_cols = ['hit_id', 'type', 'anchor', 'strand', 'unit_id', 'score', 'label', 'flags', 'parent_id']
@@ -63,24 +72,24 @@ def _scan(out: Path, bam: str, *, fp_hits, nfr_hits, states, openness, marks=(),
                         [row(CONTIG, s, e, h, type_id, (s + e) // 2, '.', unit, '0.5', h.split(':')[-1], '', '')
                          for h, s, e in hits], order)
         tables[f'{module}/hits.tsv.bgz'] = dict(rows=n)
-        rows = [row(CONTIG, s, e, h, dataset_id, 0, q, f'{q}sha:0', _mol(q), st) + ([ch] if module == 'fp' else [])
+        rows = [row(CONTIG, s, e, h, dataset_id, 0, q, record_keys[q], _mol(q), st) + ([ch] if module == 'fp' else [])
                 for (h, s, e, q, st, ch) in states if h.split(':')[0] == module]
         cols = ['hit_id', 'dataset_id', 'input_index', 'qname', 'record', 'molecule', 'state'] + (['channel'] if module == 'fp' else [])
         n = write_table(out / module / 'states.tsv.bgz', cols, rows, order)
         tables[f'{module}/states.tsv.bgz'] = dict(rows=n)
     n = write_table(out / 'nfr' / 'molecules.tsv.bgz', ['dataset_id', 'input_index', 'qname', 'record', 'molecule', 'openness'],
-                    [row(CONTIG, s, s + 3000, dataset_id, 0, q, f'{q}sha:0', _mol(q), o) for q, s, o in openness], order)
+                    [row(CONTIG, s, s + 3000, dataset_id, 0, q, record_keys[q], _mol(q), o) for q, s, o in openness], order)
     tables['nfr/molecules.tsv.bgz'] = dict(rows=n)
     modules = {
-        'fp': dict(version='1.0', settings_hash='aaaa', feature_types=[dict(type_id='fp.class', module='fp', label='Footprint class',
+        'fp': dict(version='1.0', settings_hash='aaaa', ma_groups=[dict(group='fpcls', kind='state')], feature_types=[dict(type_id='fp.class', module='fp', label='Footprint class',
                    plural='Footprint classes', provides=['hit', 'state'], anchor='centre', scores=[])]),
-        'nfr': dict(version='1.0', settings_hash='bbbb', feature_types=[dict(type_id='nfr.region', module='nfr', label='NFR',
+        'nfr': dict(version='1.0', settings_hash='bbbb', ma_groups=[dict(group='nfrvar', kind='state')], feature_types=[dict(type_id='nfr.region', module='nfr', label='NFR',
                     plural='NFRs', provides=['hit', 'state'], anchor='centre', scores=[], transferable_state=True)]),
     }
     if marks:
         n = write_table(out / 'nuc' / 'marks.tsv.bgz',
                         ['group', 'dataset_id', 'input_index', 'qname', 'record', 'molecule', 'mol_start', 'mol_len', 'q', 'name'],
-                        [row(CONTIG, s, e, g, dataset_id, 0, q, f'{q}sha:0', _mol(q), 0, e - s, code, '') for g, q, s, e, code in marks], order)
+                        [row(CONTIG, s, e, g, dataset_id, 0, q, record_keys[q], _mol(q), 0, e - s, code, '') for g, q, s, e, code in marks], order)
         tables['nuc/marks.tsv.bgz'] = dict(rows=n)
         modules['nuc'] = dict(version='2.2', settings_hash='cccc', feature_types=[])
     n = write_table(out / 'callable.tsv.bgz', ['dataset_id', 'min_molecules'],
@@ -157,7 +166,7 @@ def test_m1_over_scan_sets_equals_fiberhmm_scan_assoc(world):
     out = run(world.state, _defn('M1', dict(kind='scan', setId=world.sets['fp.class'], typeId='fp.class'),
                                  dict(kind='scan', setId=world.sets['nfr.region'], typeId='nfr.region')))
     assert out['status'] == 'ok', out.get('limits')
-    cli = cli_run(Namespace(scan_dir=str(world.scan), mode='cooccur', a='fp.class', b='nfr.region', region=[f'{CONTIG}:0-60000'],
+    cli = cli_run(_cli_args(scan_dir=str(world.scan), mode='cooccur', a='fp.class', b='nfr.region', region=[f'{CONTIG}:0-60000'],
                             group=None, haplotype_tag='HP', labels=None, group_label=None, density='rho_read',
                             max_distance=5000, test='adjusted', strata=None, n_perm=99, n_boot=50, seed=3, response=None, bed=None))
     mine, theirs = out['result'], cli
@@ -285,7 +294,7 @@ def test_m3_rate_equals_fiberhmm_scan_assoc(tmp_path):
     registry.open_scan(st, scan)
     out = run(st, _defn('M3', dict(kind='marks', typeId='nuc.seg.regular', label='Regular arrays'), dict(kind='tf'),
                         scope=dict(kind='view', chrom=CONTIG, start=0, end=LENGTH)))
-    cli = cli_run(Namespace(scan_dir=str(scan), mode='rate', a='nuc.seg.regular', b='tf', region=[f'{CONTIG}:0-{LENGTH}'],
+    cli = cli_run(_cli_args(scan_dir=str(scan), mode='rate', a='nuc.seg.regular', b='tf', region=[f'{CONTIG}:0-{LENGTH}'],
                             group=None, haplotype_tag='HP', labels=None, group_label=None, density='rho_read', max_distance=5000,
                             test='adjusted', strata=None, n_perm=99, n_boot=50, seed=3, response=None, bed=None))
     res = out['result']

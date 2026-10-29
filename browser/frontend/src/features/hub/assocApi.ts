@@ -56,7 +56,7 @@ export interface AssocScope {
 export interface AssocOptions {
   maxDistance?: number; test?: 'adjusted' | 'strata'; density?: 'rho_read' | 'lambda_acc';
   nPerm?: number; nBoot?: number; seed?: number; frames?: Array<'anchor' | 'molecule'>; metric?: 'R_minus_null' | 'R';
-  strataBed?: string; anchorBed?: string;
+  strataBed?: string; anchorBed?: string; heldOut?: boolean;
 }
 
 export interface AssocRequest {

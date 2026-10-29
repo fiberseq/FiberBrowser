@@ -242,7 +242,8 @@ def overlay(state, request: dict) -> dict:
     from services.nuc.patches import molecule_track
     from services.nuc.store import STORE
     layer = str(request.get('layer') or 'regular')
-    if layer not in LAYERS:
+    generic = layer.startswith('layer:') and bool(layer[6:])
+    if layer not in LAYERS and not generic:
         raise OverlayError(f'Unknown layer {layer!r} (one of {", ".join(LAYERS)})')
     align = str(request.get('align') or 'left')
     if align not in ALIGNS:
@@ -263,7 +264,8 @@ def overlay(state, request: dict) -> dict:
     seed = str(request.get('seed') or 'fiberbrowser.overlay')
     # Edge alignment needs each patch's length: a hit inside an insertion is measured on its own haplotype's source
     # span (its place on this genome is only the junction).
-    widths = [max(1, int(l['source']['end']) - int(l['source']['start'])) if l.get('insertion') and isinstance(l.get('source'), dict)
+    graph_mode = any(o.get('kind') == 'graph' for o in observations)
+    widths = [max(1, int(l['source']['end']) - int(l['source']['start'])) if (l.get('insertion') or (graph_mode and l.get('graph', {}).get('binding') != l.get('graph', {}).get('target'))) and isinstance(l.get('source'), dict)
               and l['source'].get('end') is not None else max(1, int(l['end']) - int(l['start'])) for l in loci]
     axis = Axis(align, flank, widths, request.get('binBp'))
     policy = browser_read_policy(state, include_duplicates=bool(request.get('includeDuplicates')))
@@ -293,6 +295,10 @@ def overlay(state, request: dict) -> dict:
             a1 = max(a1, a0 + 1)
             minus = locus.get('strand') == '-'
             insertion = bool(locus.get('insertion'))
+            geometry = locus.get('_graph_geometry') if graph_mode else None
+            if graph_mode and locus.get('_graph_error'):
+                skip('graph_columns_unavailable')
+                continue
             # Carriers only (module docstring).
             status = _path_status(locus, obs)
             if status is None and obs.get('kind') == 'graph' and locus.get('paths'):
@@ -301,7 +307,7 @@ def overlay(state, request: dict) -> dict:
             if status is not None and status not in ('carried', 'partial'):
                 skip(status)
                 continue
-            if status == 'partial' and source.kind != 'lifted':
+            if status == 'partial' and source.kind != 'lifted' and geometry is None:
                 # a partial carrier is measured where its lift maps each base (bases it lacks have no source base);
                 # a native panel has no lift to mask the columns it lacks
                 skip('partial')
@@ -314,14 +320,33 @@ def overlay(state, request: dict) -> dict:
             own = bool(insertion and src and src.get('chrom')
                        and (not src.get('hap') or not obs_hap or src.get('hap') == obs_hap)
                        and (not src.get('datasetId') or src.get('datasetId') == obs.get('datasetId')))
-            if insertion and source.kind != 'lifted':
+            if insertion and source.kind != 'lifted' and geometry is None:
                 skip('absent')               # inside an insertion: this genome's own reads don't hold its sequence
                 continue
-            if insertion and not own:
+            if insertion and not own and geometry is None:
                 skip('other_haplotype')      # another haplotype's insertion hit: no position on this panel's contig
                 continue
             # The sample points in the records' own coordinates.
-            if own:
+            column_mapped = geometry is not None
+            if column_mapped:
+                from .graph_overlay import graph_points
+                canonical_source = locus.get('source') if geometry['canonical'] != (locus.get('graph') or {}).get('target') else None
+                base = canonical_source or locus
+                ca, cb = int(base['start']), max(int(base['end']), int(base['start']) + 1)
+                cp = int(base.get('anchor', ca))
+                cm = base.get('strand') == '-'
+                samples, bins, sx, sw = axis.samples_x(ca, cb, cp, cm)
+                if align == 'anchor':
+                    mapped_anchor, _ = graph_points(geometry, obs, np.array([cp], np.int64))
+                    if mapped_anchor[0] < 0:
+                        skip('anchor_not_on_this_observation')
+                        continue
+                pts, contig = graph_points(geometry, obs, samples)
+                if contig is None:
+                    skip('unresolved')
+                    continue
+                geo = (ca, cb, cp, cm)
+            elif own:
                 la0, la1 = int(src['start']), max(int(src['end']), int(src['start']) + 1)
                 lan = int(src.get('anchor', src['start']))
                 sminus = src.get('strand') == '-' if src.get('strand') in ('+', '-') else minus
@@ -348,7 +373,7 @@ def overlay(state, request: dict) -> dict:
                 skip('not_on_this_observation')
                 continue
             w0, w1 = int(pts[ok].min()), int(pts[ok].max()) + 1
-            if source.kind == 'lifted':
+            if source.kind == 'lifted' or column_mapped:
                 # the records over exactly the mapped samples, on the haplotype's own contig
                 scoped = {**obs, 'kind': 'graph', 'chrom': locus['chrom'], 'start': a0, 'end': a1,
                           'graph': {'contig': contig, 'start': w0, 'end': w1, **({'hap': obs_hap} if obs_hap else {})}}
@@ -357,7 +382,11 @@ def overlay(state, request: dict) -> dict:
                 if scoped.get('kind') == 'graph':
                     scoped['graph'] = {kk: v for kk, v in (obs.get('graph') or {}).items() if kk == 'hap'}
             try:
-                _source, _recs, windows, cfg, cohort, counts = observation_cohort(state, scoped, policy)
+                if generic:
+                    from .layer_cohort import layer_cohort
+                    _source, _recs, windows, cfg, cohort, counts = layer_cohort(state, scoped, policy, layer[6:])
+                else:
+                    _source, _recs, windows, cfg, cohort, counts = observation_cohort(state, scoped, policy)
             except (ObservationError, ValueError) as error:
                 skip('error')
                 entry.setdefault('errors', []).append(str(error))
@@ -371,13 +400,16 @@ def overlay(state, request: dict) -> dict:
                 if row.low_information or not same_contig(row.chrom, contig):
                     continue
                 hit = STORE.get_result(rec.path, rec.sha, rec.occ, cfg.config_for(rec.path)) if cfg is not None else None
-                measured, kinds = molecule_track(row, hit[0] if hit else None, rec.blocks)
+                if generic:
+                    measured, kinds = _union(row.measured), {}
+                else:
+                    measured, kinds = molecule_track(row, hit[0] if hit else None, rec.blocks, hit[1] if hit else None)
                 if not measured:
                     continue
                 m = _inside(pts, measured)
                 if not m.any():
                     continue
-                marks = marks_of(row, layer, kinds)
+                marks = _union(row.marks) if generic else marks_of(row, layer, kinds)
                 x = _inside(pts, marks) & m
                 np.add.at(den, bins[m], 1.0)
                 np.add.at(num, bins[x], 1.0)
@@ -386,7 +418,7 @@ def overlay(state, request: dict) -> dict:
                 molecules.add(mol)
                 if pile_max:
                     lkey = str(locus.get('key') or locus.get('hitId') or f'{locus["chrom"]}:{a0}')
-                    if own or source.kind != 'lifted':
+                    if not column_mapped and (own or source.kind != 'lifted'):
                         la0, la1, lan, lminus = geo
                         clip = lambda iv: [(max(a, w0), min(b, w1)) for a, b in iv if b > w0 and a < w1]  # noqa: E731
                         pm, pmeas = axis.to_x(clip(marks), la0, la1, lan, lminus), axis.to_x(clip(measured), la0, la1, lan, lminus)
@@ -408,8 +440,7 @@ def overlay(state, request: dict) -> dict:
     pile_all.sort(key=lambda kv: kv[0])
     pile = [r for _k, r in pile_all[:pile_max]]
     if not any(s.get('molecules') for s in series):
-        notes.append('no molecule has nucleosome outputs over these loci: Compute in view in the Nucleosomes panel, or '
-                     'scan the view with the nuc module (Scan… in the hub)')
+        notes.append('No measured molecule carries this layer over these loci. Load or compute its outputs first.')
     if graph_mode:
         notes.append('graph paths count a locus only where they carry it (absent and unresolved paths are left out)')
     return dict(layer=layer, align=align, flank=flank, binBp=axis.bin_bp, scaledBins=SCALED_BINS if align == 'scaled' else None,

@@ -1,6 +1,6 @@
 """What a live scan computes, and the fiberhmm-scan command that computes the same.
 
-A live scan always reads **files** (never payloads the browser built) through ``fiberhmm.scan.run_units``, the
+A live scan reads files or full target-frame record evidence through ``fiberhmm.scan.run_units``, the
 entry point the CLI uses, so a browser scan equals a CLI scan given the same inputs, read policy, settings and
 units (DESIGN §4.2). This module fixes each of those the same way the CLI would:
 
@@ -70,7 +70,8 @@ def available() -> dict:
             continue
         mods.append(dict(name=name, version=m.version, experimental=bool(m.experimental),
                          types=[t.type_id for t in m.feature_types()]))
-    return dict(available=True, fiberhmm=getattr(fiberhmm, '__version__', None), modules=mods)
+    from .live_evidence import LIVE_LIFT_SCAN_PARITY
+    return dict(available=True, liveLiftScans=LIVE_LIFT_SCAN_PARITY, fiberhmm=getattr(fiberhmm, '__version__', None), modules=mods)
 
 
 # ------------------------------------------------------------------ datasets and read policy
@@ -86,12 +87,14 @@ def _dataset_inputs(state, dataset_ids: Sequence[str]) -> List[dict]:
         if ds is None:
             raise ScanPlanError(f'Dataset {ds_id!r} is not loaded')
         label = getattr(ds, 'label', ds_id)
-        if getattr(ds, 'data_type', None) == 'bam_livelift':
+        lifted = getattr(ds, 'data_type', None) == 'bam_livelift'
+        from .live_evidence import LIVE_LIFT_SCAN_PARITY
+        if lifted and not LIVE_LIFT_SCAN_PARITY:
             raise ScanPlanError(f'{label}: a live-lift dataset is scanned in its own assembly. Run fiberhmm-scan on its '
                                 'BAM and open the scan here: its per-read states join the lifted rows and its hits are '
                                 'lifted onto this genome. Pooled scans of lifted molecules in this genome\'s frame need '
                                 'fiberhmm-lift and fiberhmm-scan on the lifted BAM for now')
-        if getattr(ds, 'data_type', None) != 'bam':
+        if getattr(ds, 'data_type', None) not in ('bam', 'bam_livelift'):
             raise ScanPlanError(f'{label}: scans read FiberHMM-called BAMs')
         paths = list(getattr(ds, 'paths', None) or [ds.path])
         if any(is_url(p) or str(p).startswith('ssh://') for p in paths):
@@ -100,6 +103,10 @@ def _dataset_inputs(state, dataset_ids: Sequence[str]) -> List[dict]:
         chemistry = getattr(ds, 'consensus_chemistry', None) if meta.get('source') == 'user-selection' else None
         items.append(dict(browser_id=ds_id, label=label, paths=[str(p) for p in paths], chemistry=chemistry,
                           content_ids=[content_id(p) for p in paths]))
+        if lifted:
+            from .live_evidence import input_ids
+            items[-1].update(content_ids=input_ids(ds), live_lift=True, lift_map=str(ds.live_lift.handle.path),
+                             split_gap=ds.live_lift.settings.g_split)
     items.sort(key=lambda x: (tuple(x['content_ids']), x['browser_id']))
     for i, x in enumerate(items, 1):
         x['dataset_id'] = f'dataset_{i}'
@@ -268,7 +275,11 @@ def build_plan(state, request: dict) -> dict:
         if mod.needs(settings):
             raise ScanPlanError(f'{name} with these settings uses {", ".join(sorted(mod.needs(settings)))} results: '
                                 'run it with fiberhmm-scan and open the scan here')
-    reference = _reference_of(datasets[0]['paths'])
+    if datasets[0].get('live_lift'):
+        config = state.datasets[datasets[0]['browser_id']].live_lift
+        reference = {t['name']: int(t['size']) for t in config.handle.map.m['targets']}
+    else:
+        reference = _reference_of(datasets[0]['paths'])
     contigs = list(reference.items())
     gene_dir = cache_root() / 'inputs'
     if scope == 'view':
@@ -327,7 +338,7 @@ def build_plan(state, request: dict) -> dict:
         module_names=[m['name'] for m in module_plans], parameters=params, units=[u.to_json() for u in units],
         units_info=info, where=where_label, contigs_sha256=contigs_sha, neighbours=neighbours,
         contig_order={c: i for i, c in enumerate(reference)},
-        workers=max(1, min(int(request.get('workers') or default_workers()), os.cpu_count() or 1)),
+        workers=max(1, min(4, int(request.get('workers') or default_workers()), os.cpu_count() or 1)),
     )
     plan['coverage'] = coverage(state, plan)
     plan['cli'] = command_line(plan, cli_where)
@@ -359,6 +370,16 @@ def command_line(plan: dict, where: List[str]) -> dict:
     def q(text: str) -> str:
         text = _home_short(str(text))
         return text if all(c.isalnum() or c in '/._-:~,=+' for c in text) else "'" + text.replace("'", "'\\''") + "'"
+    preparations = []
+    scan_paths = {}
+    for dataset in plan['datasets']:
+        paths = list(dataset['paths'])
+        if dataset.get('live_lift'):
+            paths = [f'lifted_{dataset["dataset_id"]}_{i}.bam' for i in range(len(paths))]
+            for source, target in zip(dataset['paths'], paths):
+                preparations.append(' '.join(['fiberhmm-lift', '-i', q(source), '--map', q(dataset['lift_map']),
+                                              '--split-gap', str(dataset.get('split_gap', 10000)), '-o', q(target)]))
+        scan_paths[dataset['dataset_id']] = paths
     args = ['fiberhmm-scan']
     chems = {d['chemistry'] for d in plan['datasets'] if d['chemistry']}
     # A dataset of several BAMs (or datasets of different chosen chemistries) needs --datasets: repeated --bam flags
@@ -367,12 +388,12 @@ def command_line(plan: dict, where: List[str]) -> dict:
         (chems and any(not d['chemistry'] for d in plan['datasets']))
     datasets_json = None
     if grouped:
-        datasets_json = [dict(dataset_id=d['dataset_id'], paths=[_home_short(p) for p in d['paths']],
+        datasets_json = [dict(dataset_id=d['dataset_id'], paths=[_home_short(p) for p in scan_paths[d['dataset_id']]],
                               **({'chemistry': d['chemistry']} if d['chemistry'] else {})) for d in plan['datasets']]
         args += ['--datasets', 'scan_datasets.json']
     else:
         for d in plan['datasets']:
-            for p in d['paths']:
+            for p in scan_paths[d['dataset_id']]:
                 args += ['--bam', q(p)]
         if chems:
             args += ['--chemistry', next(iter(chems))]
@@ -391,6 +412,8 @@ def command_line(plan: dict, where: List[str]) -> dict:
         args += ['--parameters', 'scan_parameters.json']
     args += ['--no-annotate', '-o', 'scan_dir']
     notes = []
+    if any(d.get('live_lift') for d in plan['datasets']):
+        notes.append('For each live-lift dataset, run fiberhmm-lift first with its map and scan the resulting target BAM.')
     if plan['scope'] == 'view':
         notes.append('--genome --zones plans the same genome-grid units as the browser (the view\'s and one more each '
                      'side); a genome scan of the contig has them too, and opening either makes them precomputed.')
@@ -398,7 +421,7 @@ def command_line(plan: dict, where: List[str]) -> dict:
         notes.append('scan_datasets.json lists the datasets (several BAMs in one dataset, or chosen chemistries)')
     notes.append('Drop --no-annotate to write per-molecule results into annotated BAMs (the default for genome scans). '
                  '--cores and --window-jobs never change a row.')
-    return dict(args=args, text=' '.join(args), parameters=extra or None, datasets=datasets_json, notes=notes)
+    return dict(args=args, text=' && '.join(preparations + [' '.join(args)]), parameters=extra or None, datasets=datasets_json, notes=notes)
 
 
 # ------------------------------------------------------------------ coverage by open scans

@@ -25,70 +25,31 @@ from .store import STORE
 
 #: patch type -> the scan module's kind name (ENRICH_KINDS)
 PATCH_KIND = {'regular': 'reg', 'disordered': 'dis', 'undersized': 'uds', 'missing': 'mis'}
-_STATE_KIND = {1: 'reg', 2: 'dis', 4: 'und', 3: 'low'}
-_EVENT_KIND = {16: 'uds', 17: 'mis'}
 
 
-def _union(iv):
-    out: List[List[int]] = []
-    for a, b in sorted((int(a), int(b)) for a, b in iv if b > a):
-        if out and a <= out[-1][1]:
-            out[-1][1] = max(out[-1][1], b)
-        else:
-            out.append([a, b])
-    return [(a, b) for a, b in out]
-
-
-def _intersect(x, y):
-    out, i, j = [], 0, 0
-    while i < len(x) and j < len(y):
-        a, b = max(x[i][0], y[j][0]), min(x[i][1], y[j][1])
-        if b > a:
-            out.append((a, b))
-        if x[i][1] < y[j][1]:
-            i += 1
-        else:
-            j += 1
-    return out
-
-
-def _subtract(x, cut):
-    out = []
-    for a, b in x:
-        pieces = [(a, b)]
-        for c, d in cut:
-            nxt = []
-            for p, q in pieces:
-                if d <= p or c >= q:
-                    nxt.append((p, q))
-                    continue
-                if c > p:
-                    nxt.append((p, c))
-                if d < q:
-                    nxt.append((d, q))
-            pieces = nxt
-        out.extend(pieces)
-    return out
-
-
-def molecule_track(row, mol=None, blocks=()):
-    """(measured reference intervals, {kind: reference intervals}) of one molecule's outputs, as the scan module
-    builds its recurrence tracks: inside its regular / disordered / undetermined segments, on its aligned reference
-    blocks (``blocks``, the record's; else the decoded molecule's), outside low-information segments."""
-    kinds: Dict[str, List[Tuple[int, int]]] = {k: [] for k in ('reg', 'dis', 'und', 'low', 'uds', 'mis')}
-    for _ms, _ml, a, b, q, _n in row.groups.get('nucseg') or ():
+def molecule_track(row, mol=None, blocks=(), result=None):
+    """Adapt live or stored marks to the public patch-test track helper."""
+    from fiberhmm.nuc import measured_track
+    from types import SimpleNamespace
+    if mol is not None and result is not None:
+        return measured_track(mol, result)
+    envelopes = {}
+    segments, events = [], []
+    for start, length, a, b, q, _name in row.groups.get('nucseg') or ():
         if not q or b <= a:
             continue
-        k = _STATE_KIND.get(q[0]) or _EVENT_KIND.get(q[0])
-        if k:
-            kinds[k].append((int(a), int(b)))
-    measured = _union(kinds['reg'] + kinds['dis'] + kinds['und'])
-    if blocks:
-        measured = _intersect(_union(blocks), measured)
-    elif mol is not None and getattr(mol, 'blocks', None) is not None:
-        measured = _intersect(_union([(int(r0), int(r0 + ln)) for _q0, r0, ln in mol.blocks]), measured)
-    measured = _subtract(measured, _union(kinds['low']))
-    return measured, kinds
+        envelopes[(start, start + length)] = (a, b)
+        if q[0] in (1, 2, 3, 4):
+            segments.append(SimpleNamespace(start=start, end=start + length, state=q[0]))
+        elif q[0] in (16, 17):
+            events.append(SimpleNamespace(start=start, end=start + length, kind=q[0]))
+    aligned = list(blocks) or ([(r, r + n) for _q, r, n in mol.blocks]
+                              if mol is not None and mol.blocks is not None else [(getattr(row, 'ref_start', min((a for a, _b in envelopes.values()), default=0)),
+                                     getattr(row, 'ref_end', max((b for _a, b in envelopes.values()), default=0)))])
+    proxy = SimpleNamespace(blocks=[(0, a, b - a) for a, b in aligned],
+                            mol_interval_to_ref=lambda a, b: envelopes.get((a, b)))
+    result = SimpleNamespace(flags={'low_information': getattr(row, 'low_information', False)}, segments=segments, events=events)
+    return measured_track(proxy, result)
 
 
 def patch_scores(state, observations: Sequence[dict], patches: Sequence[dict], *, include_duplicates: bool = False,
@@ -127,7 +88,7 @@ def patch_scores(state, observations: Sequence[dict], patches: Sequence[dict], *
                 hit = STORE.get_result(rec.path, rec.sha, rec.occ, cfg.config_for(rec.path)) if cfg is not None else None
                 if row.low_information or not same_contig(row.chrom, contig):
                     continue
-                measured, kinds = molecule_track(row, hit[0] if hit else None, rec.blocks)
+                measured, kinds = molecule_track(row, hit[0] if hit else None, rec.blocks, hit[1] if hit else None)
                 if not measured:
                     continue
                 t = MeasuredTrack(measured)
