@@ -135,6 +135,8 @@ SRC_ROOT_ARG=()
   --platform windows-x64 --fiberhmm-version "$FIBERHMM_VERSION" --commit "$FB_COMMIT" \
   ${SRC_ROOT_ARG[@]+"${SRC_ROOT_ARG[@]}"} \
   || die "could not write the build information"
+"$PY" "$HERE/write_update_trust.py" "$CTX/build.json" \
+  || die "could not write the trusted Windows update publisher"
 # The smoke test, for the owner of a Windows PC: wsl -d FiberBrowser -- fiberbrowser-check-distro
 cp "$HERE/check_distro.sh" "$CTX/rootfs/usr/local/bin/fiberbrowser-check-distro"
 chmod 755 "$CTX/rootfs/usr/local/bin/"*

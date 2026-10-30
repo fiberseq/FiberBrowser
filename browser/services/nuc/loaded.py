@@ -35,18 +35,20 @@ def scan_rows(scan, browser_id: str, chrom: str, start: int, end: int):
     """Read scan outputs in the loaded records' frame, including live evidence snapshots."""
     from services.scan.live_evidence import source_record_map
     mapping = source_record_map(scan)
-    if not mapping:
-        return _native_scan_rows(scan, browser_id, chrom, start, end)
-    cache_key = (scan.manifest_digest, browser_id)
-    cached = _EVIDENCE_ROWS.get(cache_key)
     files = {(sid, int(i)): real(path) for sid, bid, _via, by_index in scan.bound_pairs()
              if bid == browser_id for i, path in by_index.items()}
+    mapped_inputs = {(sid, i) for sid, i, _record in mapping} & files.keys()
+    if not mapped_inputs:
+        return _native_scan_rows(scan, browser_id, chrom, start, end)
+    out = _native_scan_rows(scan, browser_id, chrom, start, end, inputs=files.keys() - mapped_inputs)
+    cache_key = (scan.manifest_digest, browser_id)
+    cached = _EVIDENCE_ROWS.get(cache_key)
     if cached is None:
         targets = {(files[(sid, i)], *record.rsplit(':', 1)): source_record
                    for (sid, i, record), source_record in mapping.items() if (sid, i) in files}
         cached = {}
         for contig, length in scan.manifest['reference']['contigs']:
-            rows = _native_scan_rows(scan, browser_id, contig, 0, int(length))
+            rows = _native_scan_rows(scan, browser_id, contig, 0, int(length), inputs=mapped_inputs)
             for (path, sha, occurrence), row in rows.items():
                 original = targets.get((path, sha, str(occurrence)))
                 if original is not None:
@@ -64,8 +66,7 @@ def scan_rows(scan, browser_id: str, chrom: str, start: int, end: int):
     from .live import bam_chrom
     params = nuc_params(scan.module('nuc').get('settings') or {})
     filters = resolve_read_policy({})['filters']
-    out = {}
-    for path in set(files.values()):
+    for path in {files[key] for key in mapped_inputs}:
         with pysam.AlignmentFile(path, 'rb') as bam:
             name = bam_chrom(bam.references, chrom)
             if name is None:
@@ -87,14 +88,15 @@ def scan_rows(scan, browser_id: str, chrom: str, start: int, end: int):
     return out
 
 
-def _native_scan_rows(scan, browser_id: str, chrom: str, start: int, end: int) -> Dict[Tuple[str, str, int], RecordOutputs]:
+def _native_scan_rows(scan, browser_id: str, chrom: str, start: int, end: int, *, inputs=None) -> Dict[Tuple[str, str, int], RecordOutputs]:
     """``{(file, sha, occ): RecordOutputs}`` of a tables-mode scan's nuc rows for a bound browser dataset, over
     records whose alignment overlaps ``[start, end)`` (molecules) and their marks."""
     files: Dict[Tuple[str, int], str] = {}
     for sid, bid, _via, by_index in scan.bound_pairs():
         if bid == browser_id:
             for i, path in by_index.items():
-                files[(sid, int(i))] = real(path)
+                if inputs is None or (sid, int(i)) in inputs:
+                    files[(sid, int(i))] = real(path)
     if not files or not scan.tables.has('nuc/molecules.tsv.bgz'):
         return {}
     out: Dict[Tuple[str, str, int], RecordOutputs] = {}

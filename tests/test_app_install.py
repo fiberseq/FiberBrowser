@@ -234,6 +234,8 @@ def test_cancel_during_verification_cannot_become_ready(install_offer, monkeypat
 def windows(monkeypatch, tmp_path):
     monkeypatch.setattr(app_install, "powershell", lambda: "powershell.exe")
     monkeypatch.setattr(app_install, "windows_path", lambda p: "C:\\Downloads\\" + p.name)
+    monkeypatch.setattr(app_build, 'build_info', lambda: {
+        'windows_update_signer': {'subject': 'CN=FiberBrowser Release', 'thumbprint': 'AB' * 20}})
     installer = tmp_path / "Setup.exe"
     installer.write_bytes(b"installer")
     return installer
@@ -316,3 +318,61 @@ def test_windows_download_folder_uses_utf8_profile_path(monkeypatch):
     monkeypatch.setattr(app_install.subprocess, 'run', runner)
     assert app_update.downloads_dir() == Path('/mnt/c/Profiles/Zoë/Downloads')
     assert 'OutputEncoding' in calls[0][0][-1] and calls[0][1]['encoding'] == 'utf-8'
+
+
+@pytest.mark.parametrize('subject,thumbprint', [
+    ('CN=Unrelated Publisher', 'CD' * 20),
+    ('CN=FiberBrowser Release', 'CD' * 20),
+    ('CN=Unrelated Publisher', 'AB' * 20),
+    ('CN=FiberBrowser Release', 'AB' * 20),
+])
+def test_windows_valid_signature_requires_own_publisher(windows, subject, thumbprint):
+    """Mock a Valid Authenticode signature, evaluating the emitted publisher gates."""
+    import re
+    def runner(argv, **kwargs):
+        script = argv[-1]
+        expected_subject = re.search(r"SignerCertificate.Subject -cne '([^']+)'", script)
+        expected_key = re.search(r"SignerCertificate.Thumbprint -ne '([^']+)'", script)
+        rejected = ((expected_subject and subject != expected_subject[1]) or
+                    (expected_key and thumbprint != expected_key[1]))
+        return SimpleNamespace(returncode=int(bool(rejected)), stdout='', stderr='publisher refused')
+    trusted = subject == 'CN=FiberBrowser Release' and thumbprint == 'AB' * 20
+    if trusted:
+        app_install.verify_installer(windows, runner=runner)
+    else:
+        with pytest.raises(app_install.InstallError, match='publisher refused'):
+            app_install.stage_windows(windows, runner=runner)
+    plan = dict(installer=str(windows), root='C:\\Apps', launcher=42)
+    helper = app_install.windows_helper(plan, 'a' * 64)
+    assert "SignerCertificate.Subject -cne 'CN=FiberBrowser Release'" in helper
+    assert "SignerCertificate.Thumbprint -ne '" + 'AB' * 20 + "'" in helper
+    assert helper.index('SignerCertificate.Thumbprint') < helper.index('Start-Process -FilePath $installer')
+
+
+@pytest.mark.parametrize('signer', [None, {}, {'subject': 'CN=FiberBrowser'},
+                                  {'subject': 'CN=FiberBrowser', 'thumbprint': 'bad'}])
+def test_windows_unconfigured_publisher_refuses_staging_and_helper(windows, monkeypatch, signer):
+    monkeypatch.setattr(app_build, 'build_info', lambda: {'windows_update_signer': signer})
+    runner = Runner()
+    with pytest.raises(app_install.InstallError, match='no trusted FiberBrowser'):
+        app_install.stage_windows(windows, runner=runner)
+    with pytest.raises(app_install.InstallError, match='no trusted FiberBrowser'):
+        app_install.windows_helper(dict(installer=str(windows), root='C:\\Apps', launcher=42), 'a' * 64)
+    assert not runner.calls
+
+
+def test_mac_restart_retains_desktop_pid_after_parent_watcher(bundles, monkeypatch):
+    from fiberbrowser import cli
+    # No watcher loop, process signal or helper execution occurs in this test.
+    monkeypatch.setattr(cli.threading, 'Thread', lambda **kw: SimpleNamespace(start=lambda: None))
+    monkeypatch.setattr(cli, 'desktop_parent_pid', None, raising=False)
+    monkeypatch.setenv(cli.EXIT_WITH_PARENT_ENV, '12346')
+    cli.watch_parent_process()
+    assert cli.EXIT_WITH_PARENT_ENV not in os.environ
+    plan = app_install.stage_mac(bundles[1], bundles[0], runner=Runner())
+    calls = []
+    monkeypatch.setattr(app_install.os, 'getpid', lambda: 12345)
+    app_install.launch_helper(plan, 'a' * 64, runner=Runner(), popen=lambda *a, **kw: calls.append(a))
+    helper = Path(calls[0][0][1]).read_text()
+    assert 'wait_for_exit 12345\nwait_for_exit 12346' in helper
+    assert helper.index('wait_for_exit 12346') < helper.index('/usr/bin/open "$running"')

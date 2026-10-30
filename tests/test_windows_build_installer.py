@@ -75,3 +75,27 @@ def test_rootfs_outside_the_build_dir(tmp_path, relative):
     listing = subprocess.run(["unzip", "-l", str(portable)], capture_output=True, text=True)
     if listing.returncode == 0:
         assert f"FiberBrowser-9.8.7-windows-portable/{rootfs.name}" in listing.stdout
+
+
+@pytest.mark.parametrize('subject,thumbprint,valid', [
+    ('CN=FiberBrowser Release', 'ab' * 20, True), ('', '', True),
+    ('CN=FiberBrowser Release', '', False), ('', 'ab' * 20, False),
+    ('CN=FiberBrowser Release', 'invalid', False),
+])
+def test_windows_build_embeds_publisher_constants(tmp_path, monkeypatch, subject, thumbprint, valid):
+    import json
+    import runpy
+    writer = runpy.run_path(str(ROOT / 'packaging/windows/write_update_trust.py'))['write_trust']
+    path = tmp_path / 'build.json'
+    path.write_text(json.dumps({'platform': 'windows-x64'}))
+    monkeypatch.setenv('FB_WINDOWS_PUBLISHER_SUBJECT', subject)
+    monkeypatch.setenv('FB_WINDOWS_PUBLISHER_THUMBPRINT', thumbprint)
+    if valid:
+        writer(path)
+        assert json.loads(path.read_text())['windows_update_signer'] == {
+            'subject': subject, 'thumbprint': thumbprint.upper()}
+    else:
+        with pytest.raises(ValueError, match='Set both'):
+            writer(path)
+    script = (ROOT / 'packaging/windows/build_wsl_distro.sh').read_text()
+    assert '"$HERE/write_update_trust.py" "$CTX/build.json"' in script

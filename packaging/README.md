@@ -139,6 +139,16 @@ and open remain available for manual installation.
    in-app installer. The existing Windows build does not sign automatically.
    NSIS `/S` upgrades preserve data and abort on setup errors without prompts,
    including insufficient backup space; the updater never passes `-RemoveData`.
+   Before building the WSL distribution, set `FB_WINDOWS_PUBLISHER_SUBJECT` to
+   FiberBrowser's own release certificate's exact Subject and
+   `FB_WINDOWS_PUBLISHER_THUMBPRINT` to its 40-hex SHA-1 certificate thumbprint.
+   `windows/write_update_trust.py`, called by `build_wsl_distro.sh`, writes both
+   as build-time constants under `windows_update_signer` in the installed
+   `build.json`. Both must match the Authenticode signer at staging, handoff,
+   and in the detached helper. The manifest cannot override this identity.
+   Unset constants disable automatic Windows installation; partial or malformed
+   configuration fails the build. For certificate rotation, first ship a release
+   trusted by the installed certificate that embeds the next release's identity.
 3. Generate `fiberbrowser.update.v1` with `tools/make_update_manifest.py`, giving
    both platform build-info files and the final DMG, zip and signed Setup.
    A DMG argument also discovers its already-built sibling zip automatically;
@@ -218,6 +228,7 @@ checks. Do not use an active research session or the development profile.
    account/install path with spaces and non-ASCII characters. Confirm a launcher
    that never exits times out with a log/alert and no replacement.
 6. Repeat Windows with a modified hash, unsigned/invalid/revoked installer,
+   a valid signature from an unrelated publisher, unset trusted build identity,
    missing launcher state, and insufficient backup space. Confirm signature/hash
    failures never execute Setup, setup failures never launch the new app, and
    no silent path offers or performs deletion of user data. Check both logs.
