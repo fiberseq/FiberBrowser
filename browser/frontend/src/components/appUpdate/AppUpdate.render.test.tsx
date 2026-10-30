@@ -9,18 +9,34 @@ let check: UpdateCheck;
 let info: AppInfo;
 let download: DownloadStatus = { state: 'idle' };
 const calls: string[] = [];
+let saveError: Error | null = null;
+let releaseSave: (() => void) | null = null;
+let holdSave = false;
 
 vi.mock('../../api/appUpdate', () => ({
   checkForUpdates: vi.fn(async (o: { startup?: boolean; force?: boolean }) => { calls.push(`check:${o.startup ? 'startup' : 'manual'}`); return check; }),
   getUpdateDownload: vi.fn(async () => download),
-  startUpdateDownload: vi.fn(async () => { calls.push('download'); download = { state: 'done', name: 'FiberBrowser-3.0.1-arm64.dmg', path: '/Users/x/Downloads/FiberBrowser-3.0.1-arm64.dmg' }; return { state: 'downloading', received: 0, total: 100 }; }),
-  cancelUpdateDownload: vi.fn(async () => ({ state: 'cancelled' })),
+  startUpdateDownload: vi.fn(async () => { calls.push('download'); download = { state: 'done', name: 'FiberBrowser-3.0.1-arm64.dmg', path: '/tmp/Downloads/FiberBrowser-3.0.1-arm64.dmg' }; return { state: 'downloading', received: 0, total: 100 }; }),
+  cancelUpdateDownload: vi.fn(async () => { calls.push('cancel'); download = { ...download, state: 'cancelled', error: 'Cancelled.' }; return download; }),
   openUpdateDownload: vi.fn(async () => { calls.push('open'); return { opened: 'x' }; }),
+  startUpdateInstall: vi.fn(async () => { calls.push('install'); return { state: 'downloading', mode: 'install', name: 'update.zip' }; }),
+  restartUpdateInstall: vi.fn(async () => { calls.push('restart'); return { ...download, state: 'restarting' }; }),
+  quitForUpdate: vi.fn(async () => { calls.push('quit'); return { success: true }; }),
   getAppInfo: vi.fn(async () => info),
   setFiberhmmChoice: vi.fn(async (source: string, path: string) => { calls.push(`fiberhmm:${source}:${path}`); return { ...info, checked: { path, version: '3.0.0', missing: ['the extra engine'] } }; }),
   setUpdateSettings: vi.fn(async (values: Record<string, unknown>) => { calls.push(`settings:${JSON.stringify(values)}`); return { ...info, updates: { ...info.updates, ...values } }; }),
   saveGithubToken: vi.fn(async () => { calls.push('token'); return { auth: info.auth }; }),
   removeGithubToken: vi.fn(async () => ({ auth: info.auth })),
+}));
+
+vi.mock('../../hooks/useAutoSave', () => ({ autoSaveNow: vi.fn(async () => {
+  calls.push('save');
+  if (holdSave) await new Promise<void>(resolve => { releaseSave = resolve; });
+  if (saveError) throw saveError;
+}) }));
+vi.mock('../../utils/launchSession', async orig => ({
+  ...(await orig<typeof import('../../utils/launchSession')>()),
+  markUpdateRestart: vi.fn(async (pending: boolean) => { calls.push(`reopen:${pending}`); }),
 }));
 
 import { AppUpdateHost, resetStartupCheckForTests, STARTUP_CHECK_DELAY_MS, updateSummary } from './AppUpdateHost';
@@ -67,6 +83,7 @@ const button = (label: string) => [...host.querySelectorAll('button')].find(b =>
 
 beforeEach(() => {
   calls.length = 0;
+  saveError = null; releaseSave = null; holdSave = false;
   download = { state: 'idle' };
   check = available;
   info = appInfo();
@@ -102,11 +119,100 @@ describe('update check in the window', () => {
     expect(text()).toContain('signed in with GitHub CLI');
     await click(host.querySelector('[data-testid="app-update-download"]'));
     expect(calls).toContain('download');
-    await act(async () => { useAppUpdateStore.setState({ download: { state: 'done', name: 'FiberBrowser-3.0.1-arm64.dmg', sha256: 'a'.repeat(64), path: '/Users/x/Downloads/FiberBrowser-3.0.1-arm64.dmg' } }); });
+    await act(async () => { useAppUpdateStore.setState({ download: { state: 'done', name: 'FiberBrowser-3.0.1-arm64.dmg', sha256: 'a'.repeat(64), path: '/tmp/Downloads/FiberBrowser-3.0.1-arm64.dmg' } }); });
     await flush();
     expect(text()).toContain('Downloaded and verified');
     await click(host.querySelector('[data-testid="app-update-open"]'));
     expect(calls).toContain('open');
+  });
+
+
+  it('offers install and download, shows progress, then saves before restart and quit', async () => {
+    vi.useFakeTimers();
+    check = { ...available, installable: true, install_download: { name: 'update.zip', kind: 'zip', size: 100, sha256: 'b'.repeat(64) } };
+    await act(async () => { root.render(<AppUpdateHost />); useAppUpdateStore.setState({ check, dialogOpen: true }); });
+    expect(host.querySelector('[data-testid="app-update-download"]')).toBeTruthy();
+    await click(host.querySelector('[data-testid="app-update-install"]'));
+    expect(text()).toContain('Downloading…');
+    expect(calls).toEqual(['install']);
+    download = { state: 'verifying', mode: 'install', name: 'update.zip' };
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(text()).toContain('Verifying checksum and signature');
+    holdSave = true;
+    download = { state: 'ready', mode: 'install', name: 'update.zip' };
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(text()).toContain('Ready. Saving session');
+    expect(calls).toEqual(['install', 'save']);
+    await act(async () => { releaseSave?.(); });
+    await flush();
+    expect(calls).toEqual(['install', 'save', 'reopen:true', 'restart', 'quit']);
+    expect(text()).toContain('Restarting FiberBrowser');
+  });
+
+  it('cancels while session saving and never restarts', async () => {
+    vi.useFakeTimers();
+    check = { ...available, installable: true, install_download: { name: 'update.zip', kind: 'zip', size: 100, sha256: 'b'.repeat(64) } };
+    await act(async () => { root.render(<AppUpdateHost />); useAppUpdateStore.setState({ check, dialogOpen: true }); });
+    await click(host.querySelector('[data-testid="app-update-install"]'));
+    holdSave = true;
+    download = { state: 'ready', mode: 'install', name: 'update.zip' };
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    await click(button('Cancel'));
+    await act(async () => { releaseSave?.(); });
+    await flush();
+    expect(calls).toContain('cancel');
+    expect(calls).not.toContain('restart');
+    expect(text()).toContain('Cancelled.');
+  });
+
+  it('blocks restart on a failed save, explains the error, and allows retry', async () => {
+    vi.useFakeTimers();
+    check = { ...available, installable: true, install_download: { name: 'update.zip', kind: 'zip', size: 100, sha256: 'b'.repeat(64) } };
+    await act(async () => { root.render(<AppUpdateHost />); useAppUpdateStore.setState({ check, dialogOpen: true }); });
+    saveError = new Error('Session storage is full');
+    await click(host.querySelector('[data-testid="app-update-install"]'));
+    download = { state: 'ready', mode: 'install', name: 'update.zip' };
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(text()).toContain('Session storage is full');
+    expect(calls).not.toContain('restart');
+    saveError = null;
+    await click(button('Retry restart'));
+    expect(calls.slice(-4)).toEqual(['save', 'reopen:true', 'restart', 'quit']);
+  });
+
+
+  it('resumes progress after reopening the update dialog', async () => {
+    vi.useFakeTimers();
+    check = { ...available, installable: true, install_download: { name: 'update.zip', kind: 'zip', size: 100, sha256: 'b'.repeat(64) } };
+    download = { state: 'verifying', mode: 'install', name: 'update.zip' };
+    await act(async () => { root.render(<AppUpdateHost />); useAppUpdateStore.getState().openDialog(false); });
+    await flush();
+    expect(text()).toContain('Verifying checksum and signature');
+    download = { ...download, state: 'ready' };
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(calls.slice(-4)).toEqual(['save', 'reopen:true', 'restart', 'quit']);
+  });
+
+  it('shows verification failure while keeping the DMG fallback available', async () => {
+    await act(async () => {
+      root.render(<AppUpdateHost />);
+      useAppUpdateStore.setState({ check: { ...available, installable: true }, dialogOpen: true,
+        download: { state: 'done', mode: 'download', fallback: true, name: available.download!.name,
+          error: 'Install failed: spctl assessment failed. The disk image has been opened.' } });
+    });
+    expect(text()).toContain('spctl assessment failed');
+    expect(host.querySelector('[data-testid="app-update-open"]')).toBeTruthy();
+    expect(host.querySelector('[data-testid="app-update-install"]')).toBeNull();
+  });
+
+  it('keeps source and pip runs on the pip command without install or download', async () => {
+    await act(async () => {
+      root.render(<AppUpdateHost />);
+      useAppUpdateStore.setState({ check: { ...available, packaged: false, download: null, pip_command: 'pip install -U fiberbrowser' }, dialogOpen: true });
+    });
+    expect(text()).toContain('pip install -U fiberbrowser');
+    expect(host.querySelector('[data-testid="app-update-install"]')).toBeNull();
+    expect(host.querySelector('[data-testid="app-update-download"]')).toBeNull();
   });
 
   it('does not offer to open an earlier release downloaded before a newer check', async () => {

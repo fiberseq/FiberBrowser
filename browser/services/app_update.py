@@ -16,7 +16,7 @@ A download names its file (``name``: a release asset, or a file next to the mani
 Where the manifest is, in order:
 
 1. ``FIBERBROWSER_UPDATE_URL``, else the app setting (Settings > Updates > Manifest), else the build's
-   ``update_manifest_url``: an https:// URL, a file:// URL or a path (a shared drive, a Dropbox-synced folder);
+   ``update_manifest_url``: an https:// URL, a file:// URL or a path (a shared drive, a synced folder);
 2. else the latest GitHub release of the channel's repository, the manifest being one of its assets: the public
    channel reads ``fiberseq/FiberBrowser`` without signing in; a plugin pack names its own channel in its
    manifest (``"update": {"repos": [...], "private": true, "manifest_asset": "..."}``; the first repository
@@ -28,8 +28,9 @@ or a pip install (services/app_settings.py default_check_at_startup); Settings >
 every run. A check asked for (Check for Updates…) runs either way, and ``FIBERBROWSER_NO_UPDATE_CHECK=1`` turns
 every check off.
 
-An update is never installed by the app: it downloads the file the person asks for, checks its sha256 against
-the manifest, and opens it (the DMG, the Windows installer).
+Packaged apps can stage a verified update and hand it to a detached installer after the page saves its
+session. macOS uses the zip, codesign, the running app's Team ID and Gatekeeper; Windows uses Authenticode
+and the NSIS installer. Download/open remains available as a fallback. Source and pip runs only show pip.
 """
 from __future__ import annotations
 
@@ -408,7 +409,18 @@ def _check_now(base: dict) -> tuple[dict, dict]:
         return result, {}
     result["download"] = {"name": entry["name"], "kind": entry["kind"], "size": entry["size"],
                           "sha256": entry["sha256"]}
-    return result, {"entry": entry, "origin": origin, "version": manifest["version"]}
+    from services import app_install
+    entries = manifest["downloads"].get(base["platform"], [])
+    install_entry = None
+    if base["platform"].startswith("macos-") and app_install.running_bundle() is not None:
+        install_entry = next((e for e in entries if e["kind"] == "zip"), None)
+    elif base["platform"] == "windows-x64":
+        install_entry = next((e for e in entries if e["kind"] in ("installer", "exe")), None)
+    result["installable"] = install_entry is not None
+    result["install_download"] = ({key: install_entry.get(key) for key in ("name", "kind", "size", "sha256")}
+                                  if install_entry else None)
+    return result, {"entry": entry, "install_entry": install_entry, "platform": base["platform"],
+                    "origin": origin, "version": manifest["version"]}
 
 
 # --- download, verify, open -----------------------------------------------------------------------------------------
@@ -416,6 +428,9 @@ def _check_now(base: dict) -> tuple[dict, dict]:
 _job_lock = threading.Lock()
 _job: dict = {"state": "idle"}
 _cancel = threading.Event()
+_install_plan: dict = {}
+_install_private: dict = {}
+ACTIVE_STATES = ("downloading", "verifying", "ready", "restarting")
 
 
 def downloads_dir() -> Path:
@@ -425,9 +440,9 @@ def downloads_dir() -> Path:
         if is_wsl():
             ps = windows_program("powershell.exe")
             if ps:
-                done = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-Command",
-                                       "[Environment]::GetFolderPath('UserProfile')"], capture_output=True,
-                                      text=True, timeout=20, stdin=subprocess.DEVNULL)
+                from services.app_install import command
+                done = command([ps, "-NoProfile", "-NonInteractive", "-Command",
+                                "[Environment]::GetFolderPath('UserProfile')"])
                 profile = done.stdout.strip()
                 if done.returncode == 0 and profile:
                     return Path(to_wsl_path(profile, True)) / "Downloads"
@@ -469,7 +484,7 @@ def start_download() -> dict:
     if not private.get("entry"):
         raise UpdateError("Check for updates first: there is no download to fetch.")
     with _job_lock:
-        if _job.get("state") in ("downloading", "verifying"):
+        if _job.get("state") in ACTIVE_STATES:
             return dict(_job)
         entry = private["entry"]
         target = downloads_dir() / entry["name"]
@@ -494,12 +509,14 @@ def _set(**values) -> None:
         _job.update(values)
 
 
-def _download(entry: dict, origin: dict, target: Path) -> None:
+def _download(entry: dict, origin: dict, target: Path, *, completed_state: str = "done") -> None:
     part = target.with_name(target.name + ".part")
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
+        if _cancel.is_set():
+            raise UpdateError("Cancelled.")
         if target.is_file() and sha256_of(target) == entry["sha256"]:
-            _set(state="done", path=str(target), received=target.stat().st_size, total=target.stat().st_size)
+            _set(state=completed_state, path=str(target), received=target.stat().st_size, total=target.stat().st_size)
             return
         limit = entry.get("size") or MAX_DOWNLOAD_BYTES
         digest = hashlib.sha256()
@@ -525,8 +542,10 @@ def _download(entry: dict, origin: dict, target: Path) -> None:
         if digest.hexdigest() != entry["sha256"]:
             raise UpdateError(f"{entry['name']} failed its checksum (sha256 differs from the update manifest); "
                               "it was deleted.")
+        if _cancel.is_set():
+            raise UpdateError("Cancelled.")
         os.replace(part, target)
-        _set(state="done", path=str(target))
+        _set(state=completed_state, path=str(target))
     except (UpdateError, GitHubError, OSError) as error:
         try:
             part.unlink()
@@ -536,8 +555,125 @@ def _download(entry: dict, origin: dict, target: Path) -> None:
 
 
 def cancel_download() -> dict:
-    _cancel.set()
+    global _install_plan
+    from services import app_install
+    with _job_lock:
+        if _job.get("state") == "restarting":
+            raise UpdateError("Installation has already been handed off; it cannot be cancelled.")
+        _cancel.set()
+        if _job.get("state") == "ready":
+            app_install.discard(_install_plan)
+            _install_plan = {}
+            _job.update(state="cancelled", error="Cancelled.")
     return download_status()
+
+
+def start_install() -> dict:
+    """Download and verify only. The page must save before calling restart_install."""
+    global _job, _install_private
+    from services.app_build import is_packaged
+    if not is_packaged():
+        raise UpdateError(f"Update this installation with: {PIP_COMMAND}")
+    with _lock:
+        private = dict(_last_private)
+    if not private.get("install_entry"):
+        raise UpdateError("This update cannot be installed here. Use Download, or check for updates again.")
+    with _job_lock:
+        if _job.get("state") in ACTIVE_STATES:
+            return dict(_job)
+        entry = private["install_entry"]
+        _install_private = private
+        _cancel.clear()
+        _job = {"state": "downloading", "mode": "install", "name": entry["name"], "sha256": entry["sha256"],
+                "version": private["version"], "received": 0, "total": entry.get("size"), "error": None}
+    threading.Thread(target=_prepare_install, args=(private,), name="fiberbrowser-update-install", daemon=True).start()
+    return download_status()
+
+
+def _fallback(private: dict, error: Exception) -> None:
+    """Keep a useful failure visible while fetching/opening the ordinary installer."""
+    entry = private["entry"]
+    message = f"Install failed: {error} Use Download to install manually."
+    if _cancel.is_set():
+        _set(state="cancelled", error="Cancelled.")
+        return
+    # Never open a zip or a failed verification's payload automatically.
+    if entry["kind"] != "dmg":
+        _set(state="error", error=message, mode="download", fallback=True)
+        return
+    _set(state="downloading", error=message, mode="download", fallback=True,
+         name=entry["name"], sha256=entry["sha256"], received=0, total=entry.get("size"))
+    _download(entry, private["origin"], downloads_dir() / entry["name"])
+    if download_status()["state"] == "done" and not _cancel.is_set():
+        try:
+            open_download()
+            _set(error=f"{message} The disk image has been opened.")
+        except (UpdateError, OSError) as opening:
+            _set(error=f"{message} Could not open the disk image: {opening}")
+
+
+def _prepare_install(private: dict) -> None:
+    global _install_plan
+    from services import app_install
+    plan = {}
+    try:
+        entry = private["install_entry"]
+        target = downloads_dir() / entry["name"]
+        _download(entry, private["origin"], target, completed_state="verifying")
+        job = download_status()
+        if job["state"] in ("error", "cancelled"):
+            if job["state"] == "error":
+                raise UpdateError(job["error"])
+            return
+        if private["platform"].startswith("macos-"):
+            bundle = app_install.running_bundle()
+            if bundle is None:
+                raise UpdateError("The running application bundle could not be found.")
+            plan = app_install.stage_mac(target, bundle)
+        else:
+            plan = app_install.stage_windows(target)
+        with _job_lock:
+            if _cancel.is_set():
+                app_install.discard(plan)
+                _job.update(state="cancelled", error="Cancelled.")
+            else:
+                _install_plan = plan
+                _job.update(state="ready")
+    except (UpdateError, app_install.InstallError, OSError, subprocess.SubprocessError) as error:
+        app_install.discard(plan)
+        _fallback(private, error)
+
+
+def restart_install() -> dict:
+    """Handoff after the page's durable autosave; page then uses the existing normal Quit route."""
+    global _install_plan
+    from services import app_install
+    from services.app_build import is_packaged
+    if not is_packaged():
+        raise UpdateError(f"Update this installation with: {PIP_COMMAND}")
+    with _job_lock:
+        if _job.get("state") == "restarting":
+            return dict(_job)
+        if _job.get("state") != "ready" or not _install_plan or _cancel.is_set():
+            raise UpdateError("There is no verified update ready to install.")
+    try:
+        with _job_lock:
+            if _job.get("state") == "restarting":
+                return dict(_job)
+            if _job.get("state") != "ready" or not _install_plan or _cancel.is_set():
+                raise UpdateError("There is no verified update ready to install.")
+            path = Path(_job["path"])
+            if sha256_of(path) != _job["sha256"]:
+                raise UpdateError("The update changed after verification (sha256).")
+            app_install.launch_helper(_install_plan, _job["sha256"])
+            _job.update(state="restarting")
+            return dict(_job)
+    except (app_install.InstallError, OSError, subprocess.SubprocessError, UpdateError) as error:
+        with _job_lock:
+            app_install.discard(_install_plan)
+            _install_plan = {}
+        _fallback(_install_private, error)
+        raise UpdateError(str(error)) from None
 
 
 def open_download() -> dict:
@@ -559,6 +695,8 @@ def open_download() -> dict:
 def open_argv(path: Path) -> Optional[list]:
     if sys.platform == "darwin":
         return ["/usr/bin/open", str(path)]
+    if sys.platform == "win32":
+        return ["explorer.exe", str(path)]
     try:
         from services.wsl_interop import is_wsl, to_windows_path, windows_program
         if is_wsl():
@@ -580,9 +718,12 @@ def forget_check() -> None:
 
 def reset() -> None:
     """Forget the cached check and a finished download (tests). A download in progress is cancelled first."""
-    global _job
+    global _job, _install_plan, _install_private
     forget_check()
     _cancel.set()
     with _job_lock:
         if _job.get("state") not in ("downloading", "verifying"):
+            from services import app_install
+            app_install.discard(_install_plan)
+            _install_plan, _install_private = {}, {}
             _job = {"state": "idle"}

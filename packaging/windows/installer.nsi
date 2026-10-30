@@ -127,6 +127,9 @@ Section "FiberBrowser"
   StrCpy $0 "-Action Check"
   Call RunSetup
   ${If} $Code != 0
+    IfSilent 0 +3
+      SetErrorLevel $Code
+      Abort "WSL must already be available for a silent update."
     MessageBox MB_YESNO|MB_ICONINFORMATION "FiberBrowser runs in WSL 2 (Windows Subsystem for Linux), which is not installed on this PC or is too old.$\r$\n$\r$\nInstall it now? Windows asks for administrator approval, and may need a restart (Setup then continues after you sign in again).$\r$\n$\r$\nNo installs nothing; you can run Setup again later." IDYES install_wsl
     Abort "WSL 2 is needed: FiberBrowser was not installed."
   install_wsl:
@@ -151,6 +154,12 @@ Section "FiberBrowser"
   retry_install:
   StrCpy $0 '-Action Install -Tarball "$PLUGINSDIR\rootfs.tar.gz" -InstallDir "$INSTDIR" $R1'
   Call RunSetup
+  ; An in-app /S update must never prompt, delete data, or report success on failure.
+  ${If} $Code != 0
+    IfSilent 0 +3
+      SetErrorLevel $Code
+      Abort "Silent update failed; previous data is kept. See logs/setup.log."
+  ${EndIf}
   ${If} $Code == 40
     MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "FiberBrowser (or another FiberBrowser Setup) is running. Quit it (close its window), then click Retry." IDRETRY retry_install
     Abort "FiberBrowser is running."
