@@ -10,6 +10,10 @@ The screenshots show the two demos that ship with FiberBrowser: DddA-seq
 PacBio Fiber-seq reads from H1 cells around a 7,471-bp insertion on
 chromosome 1. The steps work the same way on your own data.
 
+Upgrading from 3.0.1? [What's new](whats-new.md) introduces live lift,
+Differences, graph mode, the Feature hub and Nucleosomes. Each has a separate
+workflow page with its controls and limits.
+
 In each screenshot the dark box is the tour's popover. It gives the step's
 title, one or two sentences about it, and (in green) how to do it yourself.
 The control the step is about has a green ring. **Next** moves on, and many
@@ -1225,6 +1229,12 @@ else starts fresh. **On launch** chooses whether to offer it, always reopen,
 or start fresh. After a crash, a banner offers to **Restore** the unsaved
 session instead; the welcome card still shows below it.
 
+Sessions from 3.0.x keep their saved class and NFR analyses. The Feature hub
+also lists those hits without rerunning discovery. New sessions can embed
+small browser scans and keep association and overlay results. See
+[Opening sessions from 3.0.x](workflows/session-migration.md) for missing scans,
+pinned carts and sharing with older builds.
+
 ![A new independent workspace](images/guide/x10_new_workspace.png)
 
 **New Independent Workspace** opens a new tab with its own datasets and
@@ -1253,10 +1263,12 @@ your last genome (else hg38), choosing one that matches your data's
 chromosome names. Pick another in the sidebar's **Reference & Tracks**
 section, then repeat the steps above.
 
-The display shows a sample of the reads for speed. Clustering and the
-analyses use every eligible read unless you set **Analysis cap** (sidebar →
-**Analysis & Reproducibility**); Read Stats describes the selected reads, or
-the reads shown.
+The display shows a sample of the reads for speed. **Low memory** also caps
+analysis working sets at 2,000 reads. Choose **Standard** or **High performance**
+for full working sets; **Analysis cap** can still limit them (sidebar →
+**Analysis & Reproducibility**). Check sampling notices on results. Read Stats
+describes the selected reads, or the reads shown. See
+[Navigation and speed](workflows/navigation-speed.md).
 
 ## Updating the screenshots
 

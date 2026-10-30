@@ -3,10 +3,11 @@
 [← Docs index](../index.md) · [← README](../../README.md)
 
 The **Feature hub** lists every set of features the browser knows in one table:
-footprint classes, NFRs and peaks from **fiberhmm-scan** (opened from disk or run
-here), a **Find classes** run, an NFR run, the SVs in view, the peak rules'
-peaks and the live-lift **Differences**. Each row has a column per dataset (and
-per haplotype for Differences), so you can compare datasets side by side and
+footprint classes, NFRs, nucleosome patches and peaks from **fiberhmm-scan**
+(opened from disk or run here), a **Find classes** run, an NFR run, the SVs in
+view, the peak rules' peaks, SNPs, graph bubbles and live-lift **Differences**.
+Each row has a column per dataset (and per haplotype for Differences), so you
+can compare datasets side by side and
 then use the features you pick as anchors, cluster regions or a read filter,
 test whether two feature types go together (**Associate**), or overlay many
 patches at once (**Overlay**).
@@ -20,7 +21,8 @@ It docks beside the reads.
 
 A scan is a fiberhmm-scan output directory: `manifest.json`, tables of pooled
 hits per module (`fp` footprint classes, `nfr` NFRs, `peaks` accessibility
-peaks), and per-read results, either as annotated BAMs or as tables. See
+peaks, `nuc` nucleosome arrays), and per-read results as annotated BAMs or
+tables. See
 FiberHMM's `docs/workflows/scanning.md` for running scans on the command line.
 
 ### Opening a scan
@@ -31,6 +33,8 @@ file contents (not its name or path), and says how it went:
 
 - **bound**: the scan's per-read states join this dataset's reads, so its hits
   can filter, sort and cluster reads;
+- **partly bound**: only some scan datasets match. Read actions use the bound
+  datasets. Hover the badge to see which files are missing;
 - **stale**: a loaded BAM has the scanned file's name but different contents
   (it changed since the scan). Re-scan it;
 - **scan of other files**: no loaded dataset matches. The hits are listed, but
@@ -61,8 +65,9 @@ browser's own scans) give the same layers to the bound datasets.
 
 ![The scan dialog: datasets, units, modules, what is already computed, and the command line](../images/feature-hub/scan-dialog.png)
 
-- **Datasets**: FiberHMM-called BAMs (live-lift datasets are scanned in their
-  own assembly: run fiberhmm-scan on their BAM and open the scan).
+- **Datasets**: FiberHMM-called BAMs, including live-lift datasets. Live-lift
+  scans pool complete lifted records in this genome's frame. To scan in the
+  sample's own assembly, run `fiberhmm-scan` on the source BAM and open its scan.
 - **Where**: the view's units of the genome grid (50 kb units, each owning its
   central 25 kb) and one more on each side; a BED file; or genes (TSS ± 5 kb).
 - **Modules**: `fp`, `nfr` (experimental), `peaks`, and `nuc` (nucleosome
@@ -79,8 +84,9 @@ browser's own scans) give the same layers to the bound datasets.
   computed with the same datasets, read policy and settings. They are never
   computed again.
 - **Command line equivalent**: the `fiberhmm-scan` command that computes the
-  same rows. **Copy** copies it. For a view it scans the whole chromosome; open
-  that scan later and every unit of it counts as computed.
+  same rows. **Copy** copies it. A view uses `--genome --zones` for its grid
+  units, including the neighbours. Follow any accompanying file or snapshot
+  instructions for grouped datasets and live-lift records.
 
 The scan runs in the background with a progress bar and **Cancel**. Its results
 go into the browser's scan cache (`~/.fiberhmm/scan_cache`, or the folder
@@ -89,13 +95,23 @@ go into the browser's scan cache (`~/.fiberhmm/scan_cache`, or the folder
 to the same cache, so panning back costs nothing.
 
 A browser scan and the command line give the same rows for the same units,
-datasets, depth caps and settings: both call `fiberhmm.scan.run_units` on the
-BAM files.
+records, read policy, depth caps and settings. Browser signal filters are not
+scan inputs; check the dialog's notice before starting a scan.
+
+**Genome-wide footprint scans are slow.** A 30× genome takes about 154 hours
+on four workers. Use region scans for `fp`. For genome-wide work, use the
+`nuc`, `nfr` or `peaks` modules, then open the results here. This is a timing
+guide, not a completion-time guarantee.
+
+Hits marked **open end** touch the edge of the computed territory. Extending
+the scan can change them. Nucleosome calibration uses a fixed sample of the
+dataset, so extending a scan reuses it. Patch q-values are corrected across
+the scan and can change when its territory grows.
 
 ## The table
 
-- **Sets**: untick a set to leave its hits out of the table. The count is the
-  hits in view.
+- **Sets**: untick a set to leave its hits out of the table. Counts say
+  **on page** and, when available, **in set**.
 - **Columns**: **All** is the pool; then one column per dataset (and per
   haplotype, in MAT orange and PAT blue, for Differences). Footprint classes and
   NFR variants show their prevalence (the share of callable molecules that are
@@ -106,16 +122,21 @@ BAM files.
   dataset the set did not scan.
 - **Type**, **Prevalence ≥**, **Sort** and **Compare** (a Δ column between two
   datasets) filter and order the rows.
-- Click a row to select it (shift-click adds); **Select shown** selects every
-  row in the table. **▸** shows the values with their counts and intervals,
+- Click a row to select it (Shift- or Cmd/Ctrl-click adds). **Select shown**
+  selects the current page. **▸** shows values with their counts and intervals,
   where the set came from, and **Go to** / **Open in its panel**.
 
-**Scope** chooses the view, a BED file, gene names around their TSS, an anchor
-set, one complete scan, or all open scans genome-wide. Genome scopes use scan
+**Scope** offers **In view**, **BED regions**, **Gene list**, **Anchor set**,
+**Whole scan** and **Genome (scan files)**. Genome scopes use scan
 files; browser providers retain the territory in which they were computed.
 The server filters and sorts the full hit set before returning a page (50–500
-rows). **Select shown** selects that page. Selection survives changing pages.
-Strength, q, and declared-score filters combine with prevalence and type.
+rows). **Previous page**, **Next page** and **Page size** control the page.
+Selection survives changing pages. **Select shown** replaces the selection
+with this page; Shift- or Cmd/Ctrl-click adds individual rows across pages.
+**Strength ≥**, **q ≤** and **Declared score…** filters combine with
+prevalence and type.
+
+![The hub scoped to scan files, with page controls and a retained selection](../images/feature-hub/hub-paging.png)
 
 The session keeps scans, list settings, selection, and anchor sets. Browser
 scan directories are embedded up to a cumulative 25 MiB of uncompressed files;
@@ -176,12 +197,14 @@ popped out of the graph, and the linked source views of the assembly.
 
 ![Graph mode with a MAT hit inside the AluY insertion selected in the hub: drawn on the inserted sequence and the reads of both haplotypes, and at the junction on the GRCh38 panel](../images/feature-hub/lifted-hits-graph.png)
 
-**Pooled scans in this genome's frame.** A scan that pools the lifted molecules
-of several haplotypes in GRCh38 coordinates is made with `fiberhmm-lift` (a
-lifted BAM) and then `fiberhmm-scan` on that BAM. The browser can't run it from
-live-lift rows yet: live lift places the records where `fiberhmm-lift` does,
-but some footprint calls differ at small map gaps, so the two would not give
-the same rows.
+**Pooled scans in this genome's frame.** **Scan…** can pool live-lift records
+on this genome. It needs complete records,
+including sequence, flags and molecular annotations for the calibration
+population. Truncated, hard-clipped, folded or noncolinear evidence is refused.
+Use complete source records, scan in the source assembly, or make a lifted BAM
+with `fiberhmm-lift` and scan that BAM. A refusal means the browser could not
+build the complete evidence; it does not mean no features were found.
+A region scan can still read source records outside the view for calibration.
 
 ## Use as
 
@@ -243,8 +266,10 @@ doesn't have it yet (for example a nucleosome scan for the first one):
 **The builder.**
 
 - **Mode** and **A**, **B**: A and B are the hub's sets. M1 needs per-molecule
-  states for both: scan sets (footprint classes, NFRs) and SVs have them; peak
-  rules, Differences and anchor sets don't, and say so. M2's **Response** is
+  states for both. Scan states, SVs, SNPs, Differences, graph bubbles and
+  measured peak openness can supply them. Unmeasured or unresolved records
+  stay unknown. Choices without states are disabled with a reason.
+  M2's **Response** is
   either nucleosome phasing or a measure per molecule from a scan (repeat
   length, regularity, linker variability, openness). Phasing conditions on
   open or closed at the anchor (an MSP of at least 80 bp over it, or a
@@ -303,6 +328,12 @@ come back when the session is opened again.
 
 ![An M1 run where every spanning molecule carries the insertion: no contrast](../images/feature-hub/assoc-no-contrast.png)
 
+**M4 group contrasts are conservative.** They can miss a difference between
+datasets. A non-significant contrast does not establish equality. Use the
+global test for the overall proximity question; individual distance p-values
+are descriptive. M4 group comparisons support datasets, not haplotype or
+cluster groups.
+
 **Hits of an assembly scan.** A lifted hit is placed where it lifted. A hit
 inside an insertion has no extent on this genome: M4 leaves it out and counts
 it. A molecule never gets a state the scan didn't give it, so molecules on a
@@ -318,7 +349,8 @@ example, every regular array at once.
 - **Layer**: regular, disordered or undetermined array segments, low-information
   segments, undersized runs, missing nucleosomes, nucleosome footprints or TF
   footprints (the nucleosome outputs: **Compute in view** in the Nucleosomes
-  panel, or a scan with the nuc module).
+  panel, or a scan with the nuc module). Loaded MA layers and bound scan
+  state/mark layers are also available.
 - **Align**: at the anchor (with strand), the left or right edge, or scaled
   (each patch stretched to 0–1, flanks in bp).
 
@@ -329,7 +361,7 @@ position the density is the molecules with the mark over the molecules
 ones). A molecule that doesn't reach a position never counts as absence. The
 bars under the profile are those denominators.
 
-![Regular arrays over three phased patches, aligned at the left edge, per panel, with the molecules measured under each profile](../images/feature-hub/overlay-profile.png)
+![Regular arrays around selected NFR anchors, per panel and graph path, with measured counts under the profiles](../images/feature-hub/overlay-profile.png)
 
 **Graph mode: carriers only.** A graph path counts a locus only where it
 carries it (whole or in part); paths where it is absent or unresolved are left
@@ -346,17 +378,24 @@ denominators per panel; **SVG** saves the chart.
 
 ## Limits in this release
 
+- Staged and oriented class workflows still use the legacy engine. New local
+  native BAM lattice-recaller jobs use the shared scan engine. Restored class
+  runs keep their original results; opening them does not rerun discovery.
 - A scan in another assembly is lifted onto this genome through a live-lift
   dataset of its BAM; without one, its hits can't be placed here. Lifting needs
   graphlift's `liftbed` next to the graph helper (or `FIBERBROWSER_LIFTBED`).
 - Browser-produced graph bubbles share the list, path columns, outlines, and
   selection with scan hits. Geometry-only variation identities are labelled
   separately from exact alleles; legacy ids remain aliases.
-- Associations: M2 phasing runs on native datasets with per-dataset calibration and dataset
-  interaction tests; M3 reads nucleosome scans in table mode (live scans are), one per
-  dataset; M4 has no territory for an assembly scan yet; M4 strata are one per
-  contig unless a strata BED is given. The hub loads SV and Differences inputs
-  independently of mounted read panels.
+- M2 phasing runs on native datasets with per-dataset calibration and dataset
+  interaction tests. M3 needs target-frame nucleosome scans in table mode
+  (browser scans are), one per dataset.
+- M4 can lift an assembly scan's callable territory through its bound live-lift
+  dataset. This needs a graphlift sidecar and `liftbed`; a plain chain alone
+  cannot supply it. Inserted hits without target extent are still left out.
+  M4 strata are one per contig unless a strata BED is given. Group contrasts
+  remain conservative.
+- The hub loads SV and Differences inputs independently of mounted read panels.
 - The overlay measures an assembly scan's hit inside an insertion on its own
   haplotype's panel only.
 - The overlay also accepts loaded MA layers and bound scan state/mark layers.

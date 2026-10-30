@@ -23,7 +23,7 @@
  *   --out DIR          pangenome PNGs (default: <repo>/docs/images/pangenome)
  *   --graph-out DIR    graph-mode PNGs (default: <repo>/docs/images/graph)
  *   --work-dir DIR     where the demo data lives; shown as ~/pglift_work in dialogs (default: $PGLIFT_WORK or ~/pglift_work)
- *   --only a,b         take only these shots (names without .png)
+ *   --only a,b         take only these shots (names without .png); release-docs takes the eight release shots
  *   --python PATH      Python with Pillow, for compression (default: python3)
  *   --no-compress      keep the raw 2x PNGs
  *   --width W          final PNG width (default 1600)
@@ -42,6 +42,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { captureReleaseDocs, RELEASE_SHOTS, RELEASE_OUTPUTS } from './capture-release-screenshots.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../../..');
@@ -77,6 +78,10 @@ function parseArgs(argv) {
     else throw new Error(`Unknown option ${a}`);
   }
   if (!opts.baseUrl) throw new Error('--base-url is required (a server started by scripts/unified_demo.py)');
+  if (opts.only?.has('release-docs')) {
+    opts.only.delete('release-docs');
+    for (const name of RELEASE_SHOTS) opts.only.add(name);
+  }
   if (!['alu', 'mhc'].includes(opts.locus)) throw new Error('--locus is alu or mhc');
   // The MHC server has one shot of its own, and the AluY server never takes it.
   const mhcShots = ['graph-mode-not-a-carrier'];
@@ -128,6 +133,10 @@ async function redact(page, workDir) {
       const cell = tr.querySelector('td');
       if (cell && cell.firstChild) cell.textContent = `read ${i + 1}`;
     });
+    // A graph read menu's heading contains an arbitrary molecule name, not necessarily a movie or UUID.
+    document.querySelectorAll('[data-testid="graph-panel-menu"] > div').forEach(el => {
+      if (!el.hasAttribute('data-testid') && el.textContent.includes(' · ')) el.textContent = 'molecule · Sample A';
+    });
   }, { home: os.homedir(), work: workDir, realHome: real(os.homedir()), realWork: real(workDir) });
 }
 
@@ -147,7 +156,7 @@ async function idle(page, ms = 800) {
   await sleep(ms);
 }
 
-async function openPage(browser, baseUrl, { lifted = 'split', view = AT } = {}) {
+async function openPage(browser, baseUrl, { lifted = 'split', view = AT, beforeGoto } = {}) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 });
   page.on('pageerror', e => console.warn(`  pageerror: ${e.message}`));
   await page.addInitScript(view => {
@@ -156,6 +165,7 @@ async function openPage(browser, baseUrl, { lifted = 'split', view = AT } = {}) 
     sessionStorage.setItem('fiberhmm_welcome_dismissed', '1');
     localStorage.setItem('fiberbrowser_graph_mode_settings_v1', JSON.stringify({ defaultLiftedView: view }));
   }, lifted);
+  if (beforeGoto) await beforeGoto(page);
   await page.goto(`${baseUrl}/?chr=${view.chrom}&start=${view.start}&end=${view.end}`);
   await page.waitForFunction(() => window.__FIBERBROWSER_STORE__?.getState().panels.some(p => p.contentType === 'dataset'), null, { timeout: 120_000 });
   await idle(page, 2000);
@@ -218,9 +228,12 @@ async function main() {
       if (!initial.has(id)) await fetch(`${opts.baseUrl}/api/datasets/${encodeURIComponent(id)}`, { method: 'DELETE' });
     }
   };
-  const newPage = async lifted => { await resetDatasets(); return openPage(browser, opts.baseUrl, { lifted }); };
+  const newPage = async (lifted, beforeGoto) => { await resetDatasets(); return openPage(browser, opts.baseUrl, { lifted, beforeGoto }); };
 
   try {
+    if (opts.locus === 'alu' && wantAny(...RELEASE_SHOTS)) {
+      await captureReleaseDocs({ newPage, take, shoot, want, store, idle, nativeLabel: NATIVE });
+    }
     // ================================================================ "Not a carrier" (the --locus mhc server)
     if (opts.locus === 'mhc' && want('graph-mode-not-a-carrier')) {
       await resetDatasets();
@@ -789,7 +802,11 @@ async function main() {
   if (opts.compress && done.length) compressAll(stage, opts.width, opts.python);
   mkdirSync(opts.out, { recursive: true });
   for (const f of readdirSync(stage).filter(f => f.endsWith('.png'))) {
-    copyFileSync(path.join(stage, f), path.join(f.startsWith('graph-mode-') ? opts.graphOut : opts.out, f));
+    const extra = RELEASE_OUTPUTS[f.slice(0, -4)];
+    const destination = extra ? path.join(REPO_ROOT, 'docs', 'images', extra)
+      : path.join(f.startsWith('graph-mode-') ? opts.graphOut : opts.out, f);
+    mkdirSync(path.dirname(destination), { recursive: true });
+    copyFileSync(path.join(stage, f), destination);
   }
   rmSync(stage, { recursive: true, force: true });
   console.log(`${done.length} screenshots${failed.length ? `; failed: ${failed.join(', ')}` : ''}`);

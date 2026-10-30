@@ -2,290 +2,185 @@
 
 ## Unreleased
 
-Everything since 3.0.1. Live lift is on by default
-(`FIBERBROWSER_LIVE_LIFT=0` turns it off for a server; a lab server keeps it
-off unless started with `=1`); graph mode needs the graph helper and a graph
-package. See [Setting up live lift and graph mode](docs/workflows/pangenome-setup.md).
-Maps, graph packages and the helper are made with
-[graphlift](https://github.com/mtcicero26/graphlift).
+Changes since 3.0.1. See [What's new](docs/whats-new.md) for an illustrated
+introduction and [the docs index](docs/index.md) for the workflows.
+
+### Live lift and linked source views
+
+- **Open ▾ → Add live lift…** draws a BAM aligned to another assembly on this
+  genome, without realigning. It accepts graphlift maps and UCSC chains.
+  **View on another assembly (live lift)…** starts from a BAM panel and
+  suggests matching maps. A source assembly FASTA is optional.
+- **Open as** offers **Graph**, **One panel per haplotype** and **Pooled**.
+  Graph is the default when a registered package binds the dataset. Otherwise
+  haplotypes open as separate panels. Reads keep their filters, selections,
+  clusters and source alignment information.
+- **Open MAT source view** (or another haplotype) opens the same molecules on
+  their own assembly. A ribbon shows corresponding sequence; hover and
+  navigation follow both views, including reversed matches. Links are saved
+  with sessions.
+- Coverage hatching marks sequence a haplotype lacks. Insertion ticks are
+  optional: **Off**, **Ticks** or **Ticks with size**. Supplementaries can
+  have their own rows, fold onto the primary row or be hidden. Separate
+  settings control how records enter analyses.
+- Native and lifted panels can share clustering. **BAM subset** exports the
+  source-assembly records with their tags. Unsupported analyses explain which
+  input to use. Live lift is enabled locally by default; lab servers must
+  enable it, and public servers do not offer it.
+
+### Differences and structural variants
+
+- The **Differences** row replaces the SV row. Lifted panels show assembly
+  differences by haplotype and optional read-supported edits. Native panels
+  show structural variants in their reads. Arrows jump between differences.
+- Click an insertion to expand its sequence across panels. Matching haplotype
+  insertions share a column; shorter alleles keep their own length. Native
+  reads can join with **Associate native layout**. This matches position and
+  length and does not establish allele identity.
+- Cmd/Ctrl-click or **Inspect…** opens the inspector. It shows assembly and
+  read evidence, carriers, reference molecules and uninformative records.
+  With a matching source FASTA, it can compare consensus and assembly,
+  confirm an insertion and copy its sequence. **Identify** reports candidate
+  sequence matches and their evidence. The insertion lens provides a separate
+  view of an insertion's reads.
+- Carrier evidence distinguishes confirmed, putative, conflicting and ambiguous
+  support. Highlights, filtering, grouping and splits follow that evidence.
+  Saved SV splits and expanded insertions from 3.0.x still restore.
+- Read-difference analysis, SNP scans, conflicting clips and consensus no longer
+  apply MAPQ 20 by default. **Read analysis MAPQ ≥**, **MapQ ≥** and
+  **Min elsewhere MAPQ** still let you set a minimum.
+- Reconstruction jobs respect memory budgets and cancellation. Failed
+  insert-expanded builds offer **Retry**. Inspector comparisons remain stable
+  while browsing, and pooled-panel Identify uses the selected carrier.
+
+### Graph mode
+
+- View a dataset on graph lanes, one per haplotype or assembly, with a read
+  band per panel. Switch with **Linear ⇄ Graph** or **View as graph**. Native
+  BAMs can also open as graphs when a package binds their contig.
+- Pop out haplotypes as lifted panels, source views or both. **Pop out paths…**
+  chooses several at once. Fold them back, or add other datasets to the graph.
+  Selection and cluster labels follow the molecules across these views.
+- **Scan** finds peaks on graph columns. **Cluster** uses shared sequence and
+  can refine within carriers of inserted sequence. **Not a carrier** requires
+  complete evidence; unresolved sequence is left out with a reason.
+- Right-click a read for **Sort by this graph column** or **Sort by rule at
+  this column**, including inserted sites. Uncovered sites sort last. Rules
+  needing reference annotations are disabled there.
+- **Graph run options** offers **Exclude repeat columns** or **Repeat columns
+  by occurrence**, and **Refine within carriers** or **Drop carrier-only
+  features**. **Graph regions and carriers…** reports the parts used.
+- Layers on graph rows include scan classes and states, custom annotations,
+  nucleosome size and segment layers, 5mC and deamination marks. Split pieces
+  retain annotation names, molecular sizes and quality values.
+- Wide or unresolved views switch to linear. The default thresholds are 50 kb
+  out and 40 kb back. **Stay linear** pauses the return. **Linear view of a
+  host → Host only** keeps folded members hidden; popped-out panels stay open.
+  Bands show density strips and counts when not every molecule fits.
+- Register packages with **Open ▾ → Register graph package…**. Dataset graph
+  mode does not need preview features; the standalone **Graph view** panel
+  does. The macOS app includes the helper; pip offers `fiberbrowser[graph]`.
 
 ### Feature hub and scans
 
-- **Feature hub** (panel rail: **Hub**): every feature set in one table, with a
-  column per dataset (and per haplotype for Differences): footprint classes,
-  NFRs and peaks from fiberhmm-scan, the Find classes run, NFR runs, the SVs in
-  view, the peak rules' peaks and live-lift Differences. Filter by type and
-  prevalence, sort, compare two datasets (Δ), expand a row for its values and
-  provenance, go to hits. **Use as** makes the selected hits an anchor set
-  (saved with the session), the Cluster button's regions (then clusters), or a
-  read filter (members at any selected hit). See
-  [Feature hub and scans](docs/workflows/feature-hub.md).
-- **Associate** (the hub's second tab): does feature A go with feature B? Four
-  modes, each with a plain question: the same molecules (M1, co-occurrence of
-  states), a measure of the molecules by A's state (M2, nucleosome phasing at
-  anchors or a per-molecule measure), B's rate inside A on the same molecules
-  (M3), and B hits near A hits (M4). Pick A and B from the hub's sets (scans,
-  SVs, peaks, anchor sets), a group (datasets, haplotypes with unphased
-  molecules apart, or the shown cluster run with its post-selection check) and
-  a scope (the view, a BED file, an anchor set, or the scans' territory). Runs
-  are jobs with progress and cancel; the statistics are FiberHMM's
-  (`fiberhmm.assoc`), with its defaults. Results: what the data can't answer,
-  effects with 95% intervals and p, the group difference, the pairs or
-  anchors (go to, use as anchors or filter), the distance curve, and the
-  inputs. The four example questions are presets. Runs are kept with the
-  session. See [Associations](docs/workflows/feature-hub.md#associations).
-- **Overlay** (the hub's third tab): a mark layer (regular and disordered
-  arrays, undersized runs, missing nucleosomes, nucleosome and TF footprints)
-  over many loci, aligned at the anchor, an edge or scaled, one profile per
-  panel with the molecules measured at each position, facets and a pile; graph
-  paths count only loci they carry. The Nucleosomes panel's patch list sends
-  its patches here (**Overlay…**). Exports TSV and SVG. See
-  [Overlaid patches](docs/workflows/feature-hub.md#overlaid-patches).
-- **Open scan…** opens a fiberhmm-scan output directory. Its datasets bind to
-  the loaded BAMs by file contents (bound, stale, or scan of other files); a
-  scan of a live-lift dataset's own BAM joins the lifted rows record by record.
-  Scan per-read groups (`fpcls`, `nfrvar`, `nfrmol`) in annotated BAMs show as
-  layers, also through live lift.
-- **Hits of an assembly scan** (a scan of a live-lift dataset's own BAM) are
-  lifted onto this genome with graphlift's `liftbed`, keeping their source
-  coordinates, with a status: lifted, split, partial, in insertion (placed at
-  the junction) or unmapped. With a graph package, each hit knows which paths
-  carry it: a column whose path lacks it says **absent**. Hits of one feature in
-  two frames match (≡, **Matched only**). Use as works on them, and graph mode
-  draws the hub's hits on the graph (Shift-click selects).
-- **Scan…** runs fiberhmm-scan's engine on the open BAMs: the view's 50 kb grid
-  units (and one more each side), a BED file or genes, with the modules, depth
-  caps and settings you choose. It shows what is already computed and the
-  equivalent `fiberhmm-scan` command line; units an opened scan or an earlier
-  scan computed with the same key are never computed again. Results go to the
-  scan cache (`FIBERBROWSER_SCAN_CACHE_DIR`) and give the same rows as the
-  command line. Needs FiberHMM with `fiberhmm.scan`; `nuc` (nucleosome arrays)
-  appears when the FiberHMM has it. Peak scans use the local Rare rule (8%
-  open with at least min reads molecules covering the base, independent of the
-  view); the window rule stays a setting for this release.
-- Cluster, Sort and Filter by features read hub hits' per-read states; lifted
-  datasets get them per record, so split rows of one read keep their own state.
+- **Hub** lists classes, NFRs, nucleosome patches, peaks, SNPs, SVs, Differences
+  and graph bubbles. Compare dataset and haplotype values, expand provenance,
+  filter by prevalence, strength, q or declared scores, and find matched hits.
+- Choose a view, BED regions, genes, anchors, a whole scan or genome scan files.
+  Results are filtered and sorted before paging. Selection survives page
+  changes. **Select shown** replaces it with the current page.
+- **Open scan…** binds a scan by file contents. Bound scans join per-record
+  states. Stale scans offer **Re-scan…**. Scans of other files remain read-only:
+  browse their hits and values without applying their states to loaded reads.
+- **Scan…** runs `fp`, `nfr`, `nuc` and `peaks` over view grid units, a BED file
+  or genes, with progress, cancellation and a command line equivalent. View
+  commands use `--genome --zones`. Matching completed units are reused.
+- Live-lift scans can pool complete lifted records in the target frame. They
+  refuse truncated, hard-clipped, folded or noncolinear evidence. Source-frame
+  scans can still be made from the source BAM and opened here.
+- Source-assembly hits lift onto this genome with their source positions and
+  lift status retained. Inserted hits attach at their junction. Graph paths
+  that lack the sequence say **absent**. Hits draw on carrier graph columns;
+  Shift-click selects them. M4 can also lift their callable territory with a
+  graphlift sidecar and `liftbed`.
+- **Use as** supports anchors, cluster regions, filters, state-pattern splits,
+  highlights, saved regions and conditional analysis. BED6 and value exports
+  preserve coordinates, counts and provenance.
+- **Associate** tests co-occurrence (M1), conditional responses (M2),
+  within-molecule rates (M3), and overlap and distance (M4). Four presets fill
+  the builder. Results show limits, effects, intervals, group differences,
+  pairs or anchors, and exports. M2 supports dataset-specific calibration and
+  held-out NFR discovery. M3 can compare state sets from compatible scans.
+  M4 group contrasts are conservative and can miss differences; distance
+  p-values are descriptive.
+- **Overlay** aligns many loci at an anchor, edge or scaled span. Profiles,
+  facets and a sampled pile show marked and measured molecules per panel or
+  graph path. Missing alleles and unresolved or repeated graph positions stay
+  unmeasured. Loaded MA layers and bound scan states are supported. Export TSV
+  or SVG, or send patches from Nucleosomes with **Overlay…**.
+- Rare peaks now use local openness of at least 8% with minimum local coverage,
+  independent of the window's read count. Scan grid units count supplementary
+  records. The older window peak rule remains available for BED/region scans.
+- Genome-wide footprint-class scans are slow: about 154 hours on four workers
+  at 30×. Use region scans for `fp`, or `nuc`, `nfr` and `peaks` genome-wide.
+  Staged and oriented class workflows still use the legacy engine.
 
-### Live lift
+### Nucleosomes
 
-- **Reads from another assembly, drawn on this genome.** **Open ▾ → Add live
-  lift…** shows a BAM aligned to a sample's own assembly (for example HG002's
-  maternal and paternal haplotypes) on the genome you are browsing, through a
-  graphlift map or a plain UCSC chain (`.chain`, `.chain.gz`), without
-  realigning. Only the view and a margin are lifted, as
-  you browse. By default each haplotype gets its own panel (**MAT**, **PAT**),
-  next to the same reads aligned to the reference; **Open as** also offers
-  **Graph** and **Pooled**. See [Live lift](docs/workflows/live-lift.md).
-- **View on another assembly (live lift)…** in a BAM panel's **…** menu opens
-  the same dialog for that BAM, with the maps it found next to the BAM, in its
-  folders and in the Library, best match first. On a lab server the search
-  stays in its data folders.
-- **Source assembly FASTA (optional)** in the dialog: with the sample's own
-  assembly, the inspector shows its bases, **Copy sequence** copies assembly
-  insertions, insertions can be **Confirmed by assembly**, and a spot check of
-  the map's anchors refuses a FASTA that doesn't match.
-- Lifted reads are drawn in pieces where the assemblies differ, with dashed
-  connectors across gaps. **Hatching** on the coverage track marks stretches
-  with no counterpart on the haplotype, so they don't look like stretches with
-  no reads.
-- **Insertions on reads**: optional ticks where a read has bases the reference
-  lacks: **Off** (the default; the Differences row shows the insertions),
-  **Ticks** or **Ticks with size**, from the **Insertions** control in the
-  toolbar's **Layers** row, the row's right-click menu or the settings. Ticks stay visible at every row height; this fixes insertion badges
-  that showed on one haplotype only at some window sizes.
-- **Supplementary alignments**: **Own rows** (the default), **On the primary's
-  row** or **Hide**.
-- **Live-lift settings…** (display, the Differences row and how lifted reads
-  enter analyses) are saved with sessions. Haplotypes other than MAT and PAT get
-  their own stable colours.
-- Lifted panels work with **Sort**, **Filter**, **Read Stats** and clustering.
-  Native and lifted panels can share one clustering model, with options for
-  supplementaries, alternative placements and molecules shared between
-  libraries. **Export data → Reads → BAM subset** writes lifted reads as they
-  are on their source assembly.
-- Analyses that don't support lifted datasets yet refuse them with a message
-  that says what to use instead. Live lift is not available on public servers.
+- The **Nuc** panel compares footprint sizes, repeat length, regularity, array
+  segments and events for each panel or graph path. **Compute in view** uses
+  complete molecules and a fixed dataset calibration. Open scans and annotated
+  BAMs can supply existing outputs.
+- **Segments** shows size and NRL distributions, segment shares and events.
+  Click a bar, bin or count to highlight its molecules. **Window** adds an
+  anchor, orientation, phasing and dephasing against selected background hits.
+  The hub's **Nucleosome window** opens it at a hit.
+- **Patches** lists regular, disordered, undersized, missing, phased and fuzzy
+  patches from scans. Each panel scores recurrence with its own molecules.
+  **Find patches in view** scans native datasets; use the hub for other scopes
+  or complete live-lift records. Patch discovery q-values cover the whole scan.
+- **Size classes** and **Array segments** draw on linear and graph reads.
+  Nucleosome conditions and molecule metrics work in colour rules, Filter,
+  Sort and Cluster. Read Stats adds columns; **Nucleosome footprints** exports
+  per-footprint values. Named classes require absolute calibration; otherwise
+  sizes are coarse calls and density-matched z.
 
-### Linked panels
+### Sessions and updates
 
-- **Open MAT source view** (or PAT) on a lifted panel opens the same reads on
-  the sample's own assembly, under the lifted panel, without an assembly FASTA.
-  See [Linked panels](docs/workflows/linked-panels.md).
-- A **ribbon** joins the two panels: which stretches correspond, matches on the
-  opposite strand, and wedges where one side has bases the other lacks.
-- **Shared hover**: a molecule is outlined in both panels, with a line across
-  the ribbon, with tooltips on or off.
-- **Shared navigation**: the source view follows the main view through the map,
-  and moving the source view moves the main view; in *Each panel navigates*
-  the two panels still move each other. Expanding an insertion moves the
-  source view to its bases. **Zoom to read** follows a read to another
-  chromosome.
-- Source views are named after the sample in the lift map (for example *HG002
-  MAT source*), not a fixed name.
-- Where a view matches several stretches (*N correspondences*), the source
-  view's menu chooses which one to follow; a match on the opposite strand opens
-  reversed. Links are saved with sessions.
+- Sessions from 3.0.x retain frozen class and NFR runs, curation, selections,
+  peak modes, branches and saved clusterings. Their hits also appear in the
+  hub. Saved cart items are marked **Pinned**. Restore does not rerun analyses.
+- Sessions keep hub scopes and selection, anchors, association runs and the
+  last overlay result. Small browser scans are embedded up to 25 MiB total
+  uncompressed; larger scans remain references. Missing scans offer reopening
+  or re-scanning. Graph run options and site-sort provenance travel with panels.
+- Packaged apps offer **Install and restart** for supported signed updates.
+  Downloads and signatures are verified, the session is saved, and a helper
+  installs after exit and reopens it. Manual download and pip updates remain
+  available. See [Updates](docs/updates.md).
 
-### The Differences row and inspector
+### Navigation and fixes
 
-- **The SV row is now the Differences row.** On a BAM aligned to this genome it
-  shows the structural variants in the reads, as before. On a lifted dataset it
-  shows where each haplotype differs from this genome, one lane per haplotype,
-  and optionally the edits the reads support. ◀ ▶ jump to the next difference.
-  See [Differences](docs/workflows/differences.md).
-- **Click an insertion to expand it in place.** Its inserted bases open as a
-  column shared by every panel, with each carrier's m6A, accessibility and
-  footprints. Matching MAT and PAT insertions share one column. Click a
-  different kind of difference to highlight its carriers. The same clicks work
-  on read ticks and on the native row.
-- **⌘/Ctrl-click, or right-click → Inspect…, opens the inspector**: the
-  difference on both assemblies, molecule calls (carriers, reference, not
-  informative), per-haplotype counts and each read's own bases and chromatin.
-  Observed bases load by themselves for up to 2,000 reads in view.
-- The row's right-click menu holds its options (sources, minimum size, the
-  difference table, insertion ticks) and each difference's actions (inspect,
-  expand, highlight, split by carrier, show in the source view, copy the
-  sequence). The same options are under **Live-lift settings… → Differences
-  row**.
-- **Assembly comparison.** A read difference is compared with the sample's
-  assembly and labelled ✓ **Confirmed by assembly** (the same change),
-  ≈ **assembly-supported (approximate)** (at least 90% identity) or
-  ? **Assembly candidate (geometry only)**, in the **Reads** lane, its tooltip,
-  the table's new **Assembly comparison** column and the inspector, with each
-  haplotype's link. **Compare consensus with assembly** compares an insertion
-  through the reads' consensus. A native BAM's inspector compares with an open
-  lifted dataset's assembly. See
-  [Differences](docs/workflows/differences.md#assembly-comparison).
-- **Exact assembly alleles**: the inspector's **Allele target** calls carriers
-  of the assembly's exact allele (up to about 1 kb), not only its shape.
-  **Load molecule calls** works on lifted datasets.
-- Enter on a focused mark opens the inspector. Carrier highlights stay within
-  the lifted dataset and the difference's own haplotype. The inspector's read
-  table shows read names, and its columns are named after the map's sample and
-  reference.
-- **Split by carrier** works on lifted differences, from the inspector. Splits
-  can be frozen and saved; sessions with 3.0 SV splits and expanded insertions
-  open with them migrated, and a relink step reattaches saved cohorts to moved
-  files.
-
-### Structural variants
-
-- **Evidence levels.** Each molecule's evidence for a variant is **confirmed**
-  (its alignment holds the event, or is split across it), **putative** (only
-  clipped there), **conflicting** (the clip aligns well somewhere else) or
-  **ambiguous** (the clip fits more than one variant), with its own count in the
-  SVs tab, the Differences row, highlights, the split dialog and the insertion
-  lens. See [Structural variants](docs/workflows/structural-variants.md).
-- Carriers default to **confirmed + putative**. **Confirmed only**, and adding
-  conflicting or ambiguous reads, are options in the SVs tab, the row's menu
-  and the lens. Putative and other uncertain carriers are drawn with dashed
-  outlines. Saved splits keep the choices they were made with.
-- The conflicting-clip rule is set under **Settings › Read Filters ›
-  Structural variants › Advanced carrier evidence**.
-- Counts follow the same rules everywhere: one molecule per variant, with one
-  10 bp evidence floor whatever the display cutoff. Molecules that align near a variant only
-  through supplementary alignments are recovered. Replacements are trimmed to
-  their real size, and equivalent breakpoints in repeats count as one variant.
-- The SVs tab counts read *N confirmed of M informative reads* (was *N carriers
-  of M informative reads*), and each row has **Inspect difference**. The
-  native row's menu is headed *Differences (SVs and indels in reads)*, and `i`
-  inspects from the keyboard.
-
-### Graph mode and the graph view
-
-- **Graph mode**: a dataset panel drawn on a pangenome graph, with the
-  reference and each haplotype as lanes and each panel's reads in a band on
-  its lane. Switch with the **Linear ⇄ Graph** pill or **View as graph**. New
-  lifted datasets open in graph mode when a registered package binds them.
-  The other haplotypes fold into the graph and can be popped out as ordinary
-  panels and folded back; other panels can be added. See
-  [Graph mode](docs/workflows/graph-mode.md).
-- Read tools work on every band: selection, highlight, the read menu, filters,
-  Sort, Filter and the toolbar layers, DAF-seq strands and soft clips.
-  **Cluster** runs on the graph itself (each haplotype fitted once, so every
-  band of a haplotype gets the same labels), and **Scan** finds peaks on the
-  graph. Runs survive pans, bookmarks and Back/Forward.
-- Past 50 kb, or where most of the window is not resolved in the graph, the
-  panel switches to linear and returns below 40 kb (**Stay linear**, **Linear
-  above…**). Bands fill the panel; a band that can't show every read gets a
-  density strip and a count of what is drawn. Read budgets follow
-  **Performance mode**.
-- **Graph view panel** (preview): a sequence tube map of the graph in view, with
-  inversions (a palindromic core drawn as one inversion), repeats and small
-  differences, reads along their walks, click to expand an insertion and
-  ⌘-click to inspect.
-- **Register graph package…** in **Open ▾**, and a **Graph packages** list in
-  **Settings › Reads & Display › Graph mode** (register, **Remove**), without
-  preview features; on a lab server only its admins manage them.
-- **Settings › Reads & Display › Graph mode**: **Open lifted datasets as**,
-  **Open native BAMs in graph mode**, the zoom-out hand-off (any 10–50 kb pair)
-  and **Complexity hand-off**. **Load by path** has **Open in graph mode**.
-- A one-time **View as graph** offer on restored split sessions and when a
-  package binds a dataset late.
-- **Pop out paths…** pops out a chosen set of haplotypes; **Pop out as: lifted
-  panel / source view / lifted and source** chooses what a pop-out opens.
-  Source views take a graph run's labels.
-- Rows are ordered by their first carried graph column; switching between graph
-  and linear fades; a panel drawn linear lists the inserted sequence a run used;
-  a single-haplotype dataset is labelled by its path name; **Not a carrier** is
-  given only with complete evidence.
-- **The graph helper** ships as the `fiberbrowser[graph]` extra (not in
-  `[all]`; built for Apple silicon Macs so far) and is included in the macOS
-  app. Checked packages are remembered, so the check is not repeated at each
-  start.
-
-### BAMs lifted with fiberhmm-lift
-
-- BAMs lifted through a graph show each molecule once: records that the lift
-  marks as supplementary or secondary of the source (its `Yf` tag) are hidden.
-  A lift that kept no `Yf` tag shows every record, and the BAM check suggests
-  repairing it with FiberHMM's `fiberhmm-lift --repair-only`. Native `vg
-  giraffe` BAMs are no longer taken for lifts.
-- A read's DAF-seq strand (CT or GA) comes from its own `st` tag; a record whose
-  strand fiberhmm-lift reversed shows its source `st`, so CT/GA agree across
-  native, live-lifted, fiberhmm-lifted and graph rows. The tooltip
-  shows a repaired lift's source locus and source MAPQ, and the Library shows
-  the lift (source → target, graph).
-
-### Clustering and analysis
-
-- **No MAPQ filter by default.** Read-difference calls, conflicting clips,
-  split-read junctions, the SNP scan and consensus evidence no longer drop
-  reads below MAPQ 20. A minimum can still be set: **Read analysis MAPQ ≥** (new,
-  in Live-lift settings), **MapQ ≥** in the SNPs tab and **Min elsewhere MAPQ**
-  for conflicting clips.
-
-- Cluster assignment counts only positions a read covers, breaks ties the same
-  way every time, and no longer depends on read order.
-- Metaprofile signal and coverage use the same bins.
-
-### Performance
-
-- Lifted panels pan 2–3.5 times faster and open up to twice as fast. In graph
-  mode a pan decodes only the new records.
-- Large reconstructions stay within their memory budget, can be cancelled, and
-  release idle workers.
-- Native panning reuses cached reads again.
-
-### Fixed
-
-- Loading could hang (HTTP 499) when two panels read the same BAM.
-- DAF-C read and contact views show nucleosomes from FiberHMM 3.0 `MA` and
-  fibertools 0.13 `Ma` BAMs, and the BAM check no longer reports "missing
-  Fiber-seq tags" for fibertools 0.13 `Ma`/`Aq` BAMs.
-- Datasets added to the server after a page opened now appear in it.
-- A crash in SV projection, stale split and export requests, DAF consensus for
-  circular carriers, and insertion marks on minus-strand reads.
-- Lifted rows keep their connectors across 1 bp map holes, keep deleted bases
-  cut, and cut calls only at indels of at least the SV minimum, as native rows
-  do.
-
-### For developers
-
-- `scripts/unified_demo.py` starts a server with live lift, the graph helper, a
-  graph package and preview features on, and loads demo samples with neutral
-  labels ([how](docs/workflows/pangenome-setup.md#trying-everything-at-once-the-demo-launcher)).
-- `FIBERBROWSER_FRONTEND_DIST` serves a frontend built outside the checkout.
+- Native pans and outward zooms reuse compatible cached interiors and fetch
+  newly exposed edges. Live lift and graph mode reuse decoded records. Actual
+  speed depends on the window, data, cache and connection.
+- **Performance mode** controls memory, workers and sampling. Low memory caps
+  analysis working sets at 2,000 reads; Standard and High performance allow
+  full sets, subject to a separate Analysis cap.
+- Back and Forward follow typed loci, saved regions, Differences jumps and
+  **Zoom to read**, including per-panel navigation. Composite split, cluster,
+  merge, delete and focus actions use one undo step.
+- Graph pop-outs retain labels for folded and supplementary records. Source
+  views opened in succession reach their mapped locations. Reload no longer
+  adds an empty panel for a source-view BAM.
+- Automatic peak scans that stop at the time limit show a retry note beside
+  **Scan**. Graph zoom keeps the position under the pointer.
+- Fixed concurrent BAM loads that could hang, stale split and export requests,
+  SV projection crashes, minus-strand insertion marks and circular DAF
+  consensus. Scan layers obey quality filters on sampled and cached paths.
+- FiberHMM and fibertools MA annotations display in DAF-C reads and contacts.
+  Repaired lifted BAMs retain source strand and provenance. Records marked as
+  source supplementaries are hidden rather than counted twice.
 
 ## 3.0.1 — 2026-10-16
 

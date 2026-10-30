@@ -1,5 +1,7 @@
 # Updates and the FiberHMM FiberBrowser runs
 
+[← Docs index](index.md) · [What's new since 3.0.1](whats-new.md)
+
 ## Which FiberHMM runs
 
 FiberBrowser runs FiberHMM in its own process for footprint classes, chemistry detection, consensus BAM export and
@@ -46,10 +48,19 @@ signature and uses the NSIS installer silently. Cancellation is available until 
 reason; on Mac the verified DMG opens for manual installation.
 
 **Download** remains available: it fetches the DMG (Mac) or installer (Windows) to Downloads and checks its SHA-256;
-**Open** mounts the DMG or starts the installer. Quit FiberBrowser and finish the manual install as usual. Your
+**Open the disk image** mounts the DMG; **Run the installer** starts the Windows installer. Quit FiberBrowser and finish the manual install as usual. Your
 settings, sessions and Library are kept. FiberHMM updates come inside the app, since it is bundled. Maintainers:
-see [packaging/README.md](../packaging/README.md#in-app-update-releases) for release steps and the deferred Phase G
-signed update procedure.
+see [packaging/README.md](../packaging/README.md#in-app-update-releases) for the signed update procedure.
+
+![The Software update dialog with Install and restart and a manual download](images/updates/update-prompt.png)
+
+The screenshot uses a simulated update offer. It does not announce a released
+version. In normal use, read the notes, then choose **Install and restart**.
+The app downloads and verifies the package before saving the session and
+handing off the install. **Cancel** is available during download and verification.
+If saving or restarting fails, the dialog says why and can offer **Retry restart**.
+Referenced BAMs, maps and large scan directories must still be available when
+the saved session reopens. See [Session migration](workflows/session-migration.md).
 
 A quiet check also runs when the app starts (once, a few seconds after the window opens). It shows a one-line note
 only when there is an update or the check needs you to sign in. Turn it off with **Check for updates at startup**
