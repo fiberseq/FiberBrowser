@@ -2,6 +2,8 @@ import '../testSetup';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import '../../plugins/builtinPanels';
 import { useBrowserStore } from '../../stores/browserStore';
 import { groupByAlleles, scanSnps } from './api';
@@ -9,6 +11,7 @@ import { openInsertionLens } from '../insertion/insertionLensTarget';
 import { VariantsPanel } from './VariantsPanel';
 import { scan, snp } from './variantsTestData';
 import { updateVariantsState, useVariantsStore } from './variantsState';
+import { applyImportedState, collectFrontendState } from '../../api/session';
 
 vi.mock('./api', async importOriginal => ({
   ...(await importOriginal<typeof import('./api')>()),
@@ -58,6 +61,28 @@ const q = (id: string) => container.querySelector(`[data-testid="${id}"]`) as HT
 const qa = (id: string) => [...document.querySelectorAll(`[data-testid="${id}"]`)] as HTMLElement[];
 
 describe('Variants panel', () => {
+  it('renders a legacy saved scan while a fresh scan is pending or fails, keeping the saved calls and selection', async () => {
+    const session = JSON.parse(readFileSync(resolve(process.cwd(), '../../tests/fixtures/sessions/301-variants.json'), 'utf8'));
+    applyImportedState({ ...session, success: true });
+    let rejectScan!: (error: Error) => void;
+    vi.mocked(scanSnps).mockReturnValue(new Promise((_resolve, reject) => { rejectScan = reject; }));
+    await act(async () => root.render(<VariantsPanel />));
+    expect(q('variants-row')?.dataset.snp).toBe('150:snv:A/T');
+    expect(q('variants-selected')?.textContent).toBe('1 selected');
+    expect(q('variants-summary')?.textContent).not.toMatch(/NaN|undefined/);
+    await wait(650);
+    expect(q('variants-scan')?.textContent).toBe('Scanning…');
+    await act(async () => rejectScan(new Error('Scan unavailable')));
+    expect(q('variants-scan')?.textContent).toBe('Find SNPs in view');
+    expect(q('variants-row')?.dataset.snp).toBe('150:snv:A/T');
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe('Scan unavailable');
+    const saved = (collectFrontendState().panels as any[]).find(p => p.contentType === 'variants');
+    expect(saved.variants).toEqual(session.frontend.panels.find((p: any) => p.contentType === 'variants').variants);
+    act(() => updateVariantsState({ tab: 'combos' }));
+    expect((q('variants-source-hp') as HTMLInputElement).disabled).toBe(true);
+    expect(q('variants-source-hp')?.closest('label')?.title).toBe('HP tags were not saved with this scan');
+  });
+
   it('Clear empties the scan and the selection (and forgets them for the next open)', async () => {
     act(() => root.render(<VariantsPanel />));
     await wait(650);

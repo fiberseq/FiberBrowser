@@ -341,12 +341,13 @@ async function importSessionNow(
   const serverMissing = ((result.results ?? {}) as { missing_packs?: unknown }).missing_packs;
   const note = missingPacksNote([...missing, ...(Array.isArray(serverMissing) ? serverMissing.map(String) : [])]);
   if (note) result.pack_note = note;
-  // The imported session is a step at once (before anything is awaited): the
-  // view-moved effect would otherwise find an empty history and record the
-  // previous session's view as "Before navigation". Its echo of the move
-  // isn't a step either.
-  useBrowserStore.getState().pushSnapshot('Import session');
-  useBrowserStore.setState({ _lastRestoreTime: Date.now() } as any);
+  // Keep the imported timeline and its redo branch. Only a session without
+  // history needs an initial baseline; importing is never an extra undo step.
+  // Seed it before awaiting tracks so the navigation effect cannot record
+  // the previous session's view as "Before navigation".
+  if (useBrowserStore.getState()._historyStack.length === 0) {
+    useBrowserStore.getState().pushSnapshot('Import session');
+  }
   // The imported tracks carry their own name filters on the server; mirror
   // them (the batch fetch sends these and they override the server's).
   try {
@@ -371,6 +372,9 @@ export function trackFiltersFromList(tracks: TrackListEntry[]): Record<number, s
 }
 
 export function applyImportedState(result: Record<string, unknown>): void {
+  // Effects and synchronous subscribers must see every migration as a restore,
+  // including before the imported history replaces the old session's history.
+  useBrowserStore.setState({ _lastRestoreTime: Date.now() } as any);
   if (result.frontend && typeof result.frontend === 'object') result = { ...result, frontend: restoreHubOnly(result.frontend as Record<string, unknown>) };
   const store = useBrowserStore;
   // Highlights, pins and exclusions belong to the session being left.
