@@ -24,8 +24,9 @@ def native_inputs(state, request):
         ds = state.get_dataset(dsid)
         if getattr(ds, 'data_type', None) != 'bam' or is_lifted(ds):
             return None, 'Scan execution requires native BAM evidence'
-        paths = getattr(ds, 'paths', None) or ds.path
-        paths = [paths] if isinstance(paths, str) else list(paths)
+        paths = list(ds.paths)
+        if not paths:
+            return None, 'Prepared evidence has no corresponding BAM sources'
         for path in paths:
             if '://' in str(path):
                 return None, 'Remote evidence retains the browser loader'

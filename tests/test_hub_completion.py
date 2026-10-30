@@ -308,3 +308,52 @@ def test_reopening_session_cache_retains_browser_scan_origin(scanned):
     result = asyncio.run(open_route(dict(path=str(scan.path), source='cache'), state=state))
     assert result['source'] == 'cache'
     assert result['sets'][0]['setId'] == old_set
+
+
+def test_paged_lifted_insertion_gets_target_path_absence(monkeypatch):
+    import asyncio
+    from routers.hub import hub_hits_query
+    from services.graph_panel import service
+    from services.graph_panel.columns import Occ
+    from services.scan import graph_hits
+
+    # As in the lifted e2e: the scan row retains its MAT coordinates, while
+    # the target placement is a zero-width insertion junction on chrT.
+    hit = dict(hitId='inside', chrom='chrT_MATERNAL', start=100, end=105,
+               frame=dict(kind='source', contig='chrT_MATERNAL', datasetId='lifted'),
+               source=dict(chrom='chrT_MATERNAL', start=100, end=105),
+               target=dict(chrom='chrT', start=50, end=50, insertion=True),
+               lift=dict(status='unmapped', junction=[50, 50]))
+    native = dict(hitId='native', chrom='chrT', start=50, end=55)
+    result = dict(rows=[dict(source='scan', setId='set', hit=hit),
+                        dict(source='native-scan', setId='native-set', hit=native)], total=2)
+    monkeypatch.setattr('services.hub.paging.query_hits', lambda *_: result)
+    reg = NS(id='graph', maps=[dict(target='ref', source='mat')],
+             binding=lambda key: dict(path=dict(contig='chrT'), size=1000))
+    monkeypatch.setattr(service, 'registry', lambda: NS(list=lambda: [dict(id='graph')], get=lambda _: reg))
+
+    async def ready():
+        return NS(available=True)
+    monkeypatch.setattr(service, 'ensure_ready', ready)
+    monkeypatch.setattr(graph_hits, 'package_bindings', lambda *_: {
+        'ref': dict(label='GRCh38', datasets=['native'], contigs={'native': 'chrT'}),
+        'mat': dict(label='MAT', datasets=['lifted'], contigs={'lifted': 'chrT_MATERNAL'}, hap='MAT')})
+    # Complete target response walks around the insertion; MAT carries its node.
+    tile = dict(complete=True, paths=[dict(binding='ref', complete=True, coverage=[dict(kind='covered')])])
+
+    async def fetch(*_):
+        return {None: {0: tile}, 'mat': {0: tile}}
+    monkeypatch.setattr(graph_hits, '_fetch', fetch)
+    monkeypatch.setattr(graph_hits, 'merged_occurrences', lambda *_: {
+        'ref': {'r': Occ('r', 'reference', 1000, False, (0, 1000), [(0, 1000)])},
+        'mat': {'i': Occ('i', 'insertion', 5, False, (100, 105), [(0, 5)])}})
+
+    page = asyncio.run(hub_hits_query(dict(scope=dict(kind='view', chrom='chrT', start=0, end=100)), state=NS()))
+    inside = page['rows'][0]['hit']
+    assert inside['chrom'] == 'chrT_MATERNAL' and inside['target']['start'] == inside['target']['end'] == 50
+    assert inside['lift']['status'] == 'unmapped'
+    assert inside['graph']['columns'] == [['insertion', 0, 5]]
+    assert inside['graph']['paths']['ref'] == dict(status='absent', carried=0, total=5, label='GRCh38', datasets=['native'])
+    assert inside['graph']['paths']['mat']['status'] == 'carried'
+    assert inside['graph']['paths']['mat']['hap'] == 'MAT'
+    assert native['graph']['binding'] == 'ref'

@@ -25,6 +25,8 @@ PUBLIC_DENIED = {
     ("GET", "/api/hub/legacy"),
     # Graph columns for browser-provider hits use the host's registered graph packages.
     ("POST", "/api/hub/columns"),
+    # Paged queries accept a scope.bed host path and read its intervals.
+    ("POST", "/api/hub/hits/query"),
     # Live lift: opening a dataset from the host's files, reading a map from them, and its settings (the flag
     # itself is harmless but is a host feature too).
     ("GET", "/api/lift/enabled"), ("GET", "/api/lift/inspect"), ("POST", "/api/lift/datasets"), ("GET", "/api/lift/datasets"),
@@ -52,6 +54,9 @@ PUBLIC_DENIED = {
     ("POST", "/api/graph/sequence"), ("POST", "/api/graph/differences"),
     # its clustering on graph columns, and dynamic assignment with a run's model (local workspace operations)
     ("POST", "/api/graph/cluster"), ("POST", "/api/graph/cluster/assign"), ("POST", "/api/graph/scan_peaks"),
+    # Site sorting returns ordering of loaded reads, but tile/helper failures
+    # propagate host diagnostics (including paths), so it remains host-only.
+    ("POST", "/api/graph/sort_site"),
     # Cross-region correspondence analyses are local workspace operations.
     ("POST", "/api/cluster-regions"), ("POST", "/api/scan-correspondence"),
     ("GET", "/api/app/performance"), ("POST", "/api/app/performance"),
@@ -251,6 +256,7 @@ def test_allowlist_has_no_stale_entries(standalone_app):
     ("GET", "/docs"),
     ("GET", "/api/no_such_route"),
     ("GET", "/api/hub/legacy"),
+    ("POST", "/api/hub/hits/query"),
     ("GET", "/api/lift/difference_sequence?dataset_id=missing&chrom=chrT&item_id=test&pos=0"),
     ("POST", "/api/lift/provenance/missing"),
     ("POST", "/api/lift/analysis/summary"), ("POST", "/api/lift/analysis/split"),
@@ -268,6 +274,7 @@ def test_allowlist_has_no_stale_entries(standalone_app):
     ("POST", "/api/graph/sequence"), ("POST", "/api/graph/differences"),
     # its clustering on graph columns, and dynamic assignment with a run's model (local workspace operations)
     ("POST", "/api/graph/cluster"), ("POST", "/api/graph/cluster/assign"), ("POST", "/api/graph/scan_peaks"),
+    ("POST", "/api/graph/sort_site"),
     ("POST", "/api/plugins/anything/run"),
 ])
 def test_public_mode_denies(client, public, method, path):

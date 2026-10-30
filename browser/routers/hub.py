@@ -25,7 +25,10 @@ async def hub_hits_query(request: dict, state=Depends(get_state)):
     from collections import defaultdict
     by_chrom = defaultdict(list)
     for row in result['rows']:
-        by_chrom[row['hit']['chrom']].append(row['hit'])
+        hit = row['hit']
+        # Lifted scan hits keep their source contig in chrom. Packages are
+        # registered on the target genome, including insertion junctions.
+        by_chrom[(hit.get('target') or hit)['chrom']].append(hit)
     for chrom, hits in by_chrom.items():
         await add_graph_aliases(state, hits, chrom)
     return result

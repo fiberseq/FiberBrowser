@@ -2,6 +2,7 @@
 import copy
 import gzip
 import json
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 import uuid
@@ -45,6 +46,22 @@ def _progress(*args, **kwargs):
 
 
 _progress.report = _progress
+
+
+def test_native_inputs_uses_all_dataset_paths_without_a_singular_path(tmp_path):
+    sources = _source(tmp_path)
+    second = tmp_path / 'second.bam'
+    shutil.copyfile(sources[0]['paths'][0], second)
+    pysam.index(str(second))
+    paths = [*sources[0]['paths'], str(second)]
+    ds = SimpleNamespace(data_type='bam', paths=paths)
+    state = SimpleNamespace(get_dataset=lambda _: ds)
+    request = dict(dataset_ids=['d'], chrom='chrT', start=0, end=500)
+    datasets, reason = native_inputs(state, request)
+    assert reason is None and datasets[0]['paths'] == paths
+    ds.paths = []
+    datasets, reason = native_inputs(state, request)
+    assert datasets is None and 'no corresponding BAM sources' in reason
 
 
 def _public(value):
