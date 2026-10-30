@@ -99,7 +99,18 @@ export function entryHasWork(entry: { state: SerializedState; acted?: boolean } 
  * (a fresh load, or just a genome/FASTA loaded) never replaces a save that
  * has work in it: that work would be gone after the next reload.
  */
-export async function autoSaveNow({ required = false }: { required?: boolean } = {}): Promise<void> {
+let saveQueue: Promise<void> = Promise.resolve();
+
+export function autoSaveNow({ required = false }: { required?: boolean } = {}): Promise<void> {
+  // Queue the whole operation, including capture: a required update save drains
+  // earlier requests before reading the final state, and no older write can follow it.
+  const save = saveQueue.then(() => performAutoSave(required));
+  // A failed save still rejects its caller, but must not block subsequent saves.
+  saveQueue = save.catch(() => {});
+  return save;
+}
+
+async function performAutoSave(required: boolean): Promise<void> {
   // A session being restored is half there: the saved copy stays until the
   // restore is done (it saves itself then).
   if (useLaunchUiStore.getState().restoring) {
