@@ -323,21 +323,21 @@ export function LibraryPanel({ onClose }: { onClose: () => void }) {
         </div>
 
         {/* Table */}
-        <div className="flex-1 min-w-0 flex flex-col">
-          {checked.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1 px-2 py-1 border-b border-gray-100 dark:border-white/5" data-testid="library-bulk">
-              <span className="text-[11.5px] text-gray-600 dark:text-gray-300">{checked.length} selected</span>
-              <button type="button" className={BUTTON} disabled={busy} data-testid="library-open-selected"
-                onClick={() => open(checked.map(id => byId.get(id)).filter((e): e is LibraryEntry => Boolean(e)))}>Open</button>
-              <button type="button" className={BUTTON} onClick={() => setGroupTarget(checked)} data-testid="library-bulk-group">Add to group…</button>
-              <button type="button" className={`${BUTTON} text-red-600`} disabled={busy} onClick={() => act(async () => {
-                const res = await removeLibraryEntries(checked);
-                setChecked([]);
-                return `Removed ${res.removed} from the Library (files were not touched).`;
-              })}>Remove</button>
-              <button type="button" className={BUTTON} onClick={() => setChecked([])}>Clear</button>
-            </div>
-          )}
+        <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+          {/* Keep the toolbar in flow even with no checks: inserting it on the
+              first check moves every row down beneath a stationary pointer. */}
+          <div className="shrink-0 flex flex-wrap items-center gap-1 px-2 py-1 border-b border-gray-100 dark:border-white/5" data-testid="library-bulk">
+            <span className="w-24 shrink-0 whitespace-nowrap text-[11.5px] tabular-nums text-gray-600 dark:text-gray-300">{checked.length} selected</span>
+            <button type="button" className={BUTTON} disabled={busy || !checked.length} data-testid="library-open-selected"
+              onClick={() => open(checked.map(id => byId.get(id)).filter((e): e is LibraryEntry => Boolean(e)))}>Open</button>
+            <button type="button" className={BUTTON} disabled={!checked.length} onClick={() => setGroupTarget(checked)} data-testid="library-bulk-group">Add to group…</button>
+            <button type="button" className={`${BUTTON} text-red-600`} disabled={busy || !checked.length} onClick={() => act(async () => {
+              const res = await removeLibraryEntries(checked);
+              setChecked([]);
+              return `Removed ${res.removed} from the Library (files were not touched).`;
+            })}>Remove</button>
+            <button type="button" className={BUTTON} disabled={!checked.length} onClick={() => setChecked([])}>Clear</button>
+          </div>
           {review && (
             <div className="px-2 py-1">
               <SuggestionReview
@@ -379,9 +379,11 @@ export function LibraryPanel({ onClose }: { onClose: () => void }) {
           </div>
         </div>
 
-        {/* Details */}
-        {selected && (
-          <div className="w-[360px] shrink-0 overflow-y-auto border-l border-gray-200 dark:border-white/10 p-3">
+        {/* Reserve details width before selection. Otherwise the first click
+            narrows the table, wraps badges and changes row heights before the
+            second click of a double click can reach the same visible row. */}
+        <div className="w-[360px] shrink-0 min-h-0 overflow-y-auto border-l border-gray-200 dark:border-white/10 p-3" data-testid="library-details-slot">
+          {selected ? (
             <LibraryDetails
               entry={selected}
               groups={groups}
@@ -390,8 +392,10 @@ export function LibraryPanel({ onClose }: { onClose: () => void }) {
               onChanged={message => { if (message) setStatus(message); void refresh(); }}
               onAddToGroup={ids => setGroupTarget(ids)}
             />
-          </div>
-        )}
+          ) : (
+            <div className="text-[12px] text-gray-500">Select a file to see its details.</div>
+          )}
+        </div>
       </div>
     </div>
   );
