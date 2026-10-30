@@ -79,9 +79,9 @@ anchor.
 
 ![Window mode: an NFR hit as the window, phased at its anchor, with the dephasing readout against the other NFR hits](../images/nucleosome/panel-window.png)
 
-- **Window**: the view, the first selected peak, the first selected Feature
-  hub hit, typed coordinates (`chr3:128,655,000-128,657,000`), or a window
-  sent from another panel. A peak, hit or hand-off is widened to its anchor
+- **Window**: **View**, **Selected peak**, **Hub hit**, **Coordinates**
+  (`chr3:128,655,000-128,657,000`), or **From a panel**. Peak and hub sources
+  use the first selected feature. A peak, hit or hand-off is widened to its anchor
   ± the flank (1 kb by default) so the nucleosomes around it are measured.
 - **Anchor**: none, the feature's own anchor (a hit's anchor, a peak's
   centre), the window centre, or a position. **Orientation** comes from the
@@ -97,6 +97,11 @@ whole-period bin (solid bars are p < 0.05), the summary over all bins, and the
 positional dispersion σ. With background anchors, **Dephasing** places the
 anchor's phase coherence among matched backgrounds (matched on marking rate
 and depth): p is the share of backgrounds at or below it.
+
+Window segment shares use the whole window as the denominator. Unsegmented
+bases stay empty; the coloured shares need not sum to 100%. A lifted window
+uses the span enclosing its projected source pieces on the best-covered
+contig, including inserted sequence.
 
 **From the Feature hub**: **Nucleosome window** on a selected hit, or in a
 hit's details, opens this mode at that hit.
@@ -115,11 +120,12 @@ every open scan with the nuc module:
   phase; scored by the positional dispersion.
 
 **Find patches in view** runs the nuc scan over the view (the hub's live scan,
-the same engine as `fiberhmm-scan`) for the datasets on this genome. A
-live-lift dataset is scanned in its own assembly: run `fiberhmm-scan` on its
-BAM and open the scan in the Feature hub. Its columns still score every patch
-with their own molecules. For a BED file or gene list, scan from the Feature
-hub (**Feature hub…**); its patches list here wherever you go.
+the same engine as `fiberhmm-scan`) for native datasets. This shortcut leaves
+live-lift datasets out. To scan them, use the hub's **Scan…** with complete
+lifted records, or scan the source BAM with `fiberhmm-scan` and open its scan.
+Their columns still score patches with their own molecules. For a BED file or
+gene list, scan from the hub (**Feature hub…**). Its patches list here wherever
+you go.
 
 ![The patch list over 60 kb of the demo: phased patches with the scan's per-dataset R − null](../images/nucleosome/patches.png)
 
@@ -127,7 +133,10 @@ Each observation scores each recurrence patch with its own molecules: the
 fraction of its measured bases with the kind, and the same recurrence test on
 its molecules alone, with a q-value across the listed patches (bold:
 recurrent at 5% FDR). Phased and fuzzy patches show the scan's per-dataset
-values. Click a score to highlight those molecules; ▶ goes to the patch.
+values only for fully bound, unfiltered dataset columns. Scoped columns do
+not inherit the whole dataset's score. Click a score to highlight those
+molecules; ▶ goes to the patch. Scan patch discovery corrects q-values across
+the whole scan; extending its territory can change the patch list.
 
 ## In the read tracks
 

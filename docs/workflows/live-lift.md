@@ -6,11 +6,12 @@ Live lift draws a BAM aligned to another assembly on the genome you are
 browsing, without realigning it. A typical case is a sample's reads aligned to
 its own phased assembly (maternal and paternal haplotypes) and viewed on GRCh38.
 The records are lifted through a map as you browse: only the view and a margin
-around it are lifted, so a new dataset opens in seconds.
+around it are lifted. Opening time depends on the data and map.
 
-Each haplotype gets its own panel by default, next to any panel of the same
-reads aligned to the reference, so you can compare them side by side and
-cluster them together.
+When a registered graph package binds the dataset, it opens in **Graph** by
+default. **Open as → One panel per haplotype** gives each haplotype a panel;
+**Pooled** puts them together. You can compare native and lifted reads side
+by side and cluster them together.
 
 ![A lifted sample split into MAT and PAT panels, under the same reads aligned to GRCh38](../images/pangenome/live-lift-split.png)
 
@@ -187,6 +188,13 @@ tracks. Open the source view, or the same reads aligned to the reference, for
 them. **Scan** works on lifted datasets: in the linear view it finds peaks in
 the lifted reads on the reference's coordinates, every haplotype pooled, and
 in graph mode on the graph.
+
+The hub's separate **Scan…** can pool complete lifted records in this genome's
+frame. Incomplete records are refused, including truncated, hard-clipped,
+folded or noncolinear evidence. This protects the scan's calibration and
+population. For a source-assembly scan, scan the original BAM with
+`fiberhmm-scan` and open the result in the hub. See
+[Feature hub and scans](feature-hub.md#hits-of-an-assembly-scan).
 
 ## Troubleshooting
 

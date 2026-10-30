@@ -91,6 +91,10 @@ carry it show a gap.
 Insertions shorter than 50 bp or longer than 50 kb can't be expanded; the row
 says why. They can still be inspected.
 
+If an insert-expanded build fails, its error banner offers **Retry**. This
+repeats the same action, including the originating split panel's read set.
+A timeout can clear on retry; a missing input still needs fixing.
+
 ## The right-click menu
 
 Right-click a mark for its actions, then the row's own options.
@@ -244,3 +248,6 @@ options (they are also in its right-click menu):
 
 **Save** applies them to every panel of the dataset. **Insertions on reads**
 and **Read analysis MAPQ ≥** apply to the whole session.
+
+Saved splits and expanded insertions from 3.0.x still restore. See
+[Opening sessions from 3.0.x](session-migration.md).

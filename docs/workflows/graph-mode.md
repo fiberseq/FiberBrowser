@@ -157,6 +157,8 @@ sites sort after measured values. A site shared with the target keeps its order
 in linear view. A carrier-only site uses cluster order in linear view, with a
 notice; returning to the graph restores its site order.
 
+![A read's graph-column sort menu, including sites in inserted sequence](../images/graph/graph-mode-site-sort.png)
+
 The toolbar's **Layers** switches also control scan state groups such as classes
 and NFR variants, custom annotation layers, 5mC and deamination marks on graph
 rows. Calls keep their original sizes, annotation names and quality bytes when
@@ -277,13 +279,16 @@ How many reads are drawn follows the **Performance mode** setting (Settings):
 | Profile | Molecules per view | Decoded reads in memory |
 |---|---|---|
 | Low memory | 1,000 | 8 MB |
-| Standard and High | 4,000 | 32 MB |
+| Standard and High performance | 4,000 | 32 MB |
 
 The molecules are shared between the bands (at least 50 each). When a view
 holds more, each band is sampled by read name, so the same reads are drawn every
 time you come back; the band's label and the status line say so. With long
 fiber-seq reads the memory limit usually applies first: a band then shows a few
 hundred molecules and its density strip.
+
+For native BAM caching, performance profiles and navigation history, see
+[Navigation and speed](navigation-speed.md).
 
 ## Sessions
 
@@ -301,7 +306,7 @@ panels. A dataset host restored without its graph package falls back to linear.
 | A band is missing | The panel is not on this graph's paths, or it was removed from the graph. Check **Add ‹dataset› to this graph**. |
 | A native BAM opened linear | **Open native BAMs in graph mode** is off, or no package binds its contig; switch it with **Linear ⇄ Graph**. |
 | The panel keeps showing linear | The view is wider than the hand-off width, **Stay linear** is on, or most of the window is unresolved; the bar under the header says which. |
-| Sort or Filter does nothing on a band | The rule counts only reference positions: a region inside an insertion has none. Choose a region on the reference. |
+| Sort or Filter does nothing on a band | Toolbar rules count reference positions. For an inserted site, right-click a read and use **Sort by this graph column** or **Sort by rule at this column**. |
 | Fewer reads than in the linear view | The band is sampled or past its rows: its label and the status line give the counts. Choose a higher **Performance mode**, or fix a row count in the **Reads** menu. |
 
 See also [Haplotype comparison](haplotype-comparison.md) for comparing two
