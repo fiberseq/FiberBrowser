@@ -123,3 +123,105 @@ Nothing is code-signed: SmartScreen warns about Setup until it is signed with
 an (OV/EV) Windows code-signing certificate (`osslsigncode` can sign from
 macOS/Linux: sign `FiberBrowser.exe` before `installer.nsi` packs it, then the
 Setup and the uninstaller).
+
+## In-app update releases
+
+Packaged apps offer **Install and restart** when the manifest contains a supported
+payload. Source and pip runs continue to show the pip upgrade command. Download
+and open remain available for manual installation.
+
+1. Build macOS and Windows from the same source/version/build number. The Mac
+   build now writes `FiberBrowser-<version>-arm64.zip` from the final signed and
+   stapled app, alongside its DMG. Never zip the pre-notarization bundle. The
+   updater extracts with `ditto` so framework links and bundle metadata survive.
+2. Sign the Windows NSIS Setup executable with the release Authenticode
+   certificate after building it. Unsigned or invalid signatures cannot use the
+   in-app installer. The existing Windows build does not sign automatically.
+   NSIS `/S` upgrades preserve data and abort on setup errors without prompts,
+   including insufficient backup space; the updater never passes `-RemoveData`.
+3. Generate `fiberbrowser.update.v1` with `tools/make_update_manifest.py`, giving
+   both platform build-info files and the final DMG, zip and signed Setup.
+   A DMG argument also discovers its already-built sibling zip automatically;
+   explicitly listing both works too. The tool records each artifact's size and
+   sha256. Publish all listed files together with the manifest, then publish the
+   release only after the checks below.
+
+For example, from the repository root (replace the version/build artifacts):
+
+```sh
+python3 tools/make_update_manifest.py --channel public --version 3.0.2 \
+  --build-info build/macos/dist/FiberBrowser.app/Contents/Resources/fiberbrowser-build.json \
+  --build-info build/windows/context/build.json \
+  --out build/fiberbrowser-update-public.json \
+  build/macos/dist/FiberBrowser-3.0.2-arm64.dmg \
+  build/macos/dist/FiberBrowser-3.0.2-arm64.zip \
+  build/windows/FiberBrowser-3.0.2-Setup.exe
+```
+
+The Mac updater checks sha256, stages beside the running bundle, runs
+`codesign --verify --deep --strict`, compares the staged Team ID with the running
+app's `codesign -dv` result, and requires `spctl --assess --type execute` to pass.
+There is no hard-coded team exception. Unwritable bundle folders, unsafe zip
+contents, checksum failures and verification failures keep the app running and
+fetch/open the DMG with an explanation. A failed DMG download/open is shown too.
+
+At Ready, the page awaits a durable autosave, records a one-time reopen request,
+starts the verified helper and uses the existing normal Quit route. A save
+failure blocks restart and offers retry; cancellation works through Ready.
+The Mac helper waits for both server and desktop pids, rechecks the signature,
+Team ID and Gatekeeper after they exit, moves the old bundle into a unique folder
+in `~/.Trash`, replaces it, clears quarantine, then uses `open` to relaunch.
+A failed replacement moves the old app back. The helper keeps `install.log` in
+its staging folder and shows an alert on failure. Staging folders/logs remain
+for diagnosis; cancelled or rejected staging is removed.
+
+On Windows the installer and helper live on a Windows drive, outside the WSL
+filesystem being replaced. PowerShell validates Authenticode before Ready and
+again at handoff. The detached Windows helper waits for the Windows launcher
+pid from `run/server.json`, rechecks sha256 and Authenticode, runs NSIS `/S`,
+checks its exit code, then launches `app/FiberBrowser.exe`. Failures show an
+alert and write `<installer>.install.log` beside the download; installer details
+are in the installation's `logs/setup.log`. Signature failure offers Download
+with the reason and does not automatically run the rejected executable.
+
+### Phase G: manual signed update test (deferred)
+
+Use disposable signed installations and test data, with separate OS test
+accounts/profiles. These tests have not been run by the implementation's unit
+checks. Do not use an active research session or the development profile.
+
+1. Publish a test manifest pointing to a newer signed, notarized and stapled Mac
+   zip plus DMG, and an Authenticode-signed Windows Setup. Verify versions,
+   architecture, build numbers, sizes and hashes match the final files. Point
+   the older packaged apps at that manifest through Settings > Updates.
+2. On macOS, install the older app in a writable folder, open representative
+   datasets, change the locus and analysis, and click **Install and restart**
+   once. Observe Downloading, Verifying, Ready and Restarting. Confirm both app
+   processes exit before any move, the new version launches from the same path,
+   and the datasets/locus/analysis reopen even with the normal launch preference
+   set to Ask or Fresh. Confirm that preference still applies on the next
+   ordinary launch. Check the old bundle in Trash and the staging log.
+3. Repeat with cancellation during download, verification and session saving.
+   Confirm no helper installs or restarts, the old app stays usable, and staging
+   is removed. Simulate unavailable/full browser storage: restart must be
+   blocked with a save error, then succeed after retry when storage works.
+4. Test a non-writable app folder, an invalid zip, a changed sha256, a damaged
+   signature, a valid signature from a different team, and a Gatekeeper-rejected
+   bundle (including offline assessment). Each must retain the original app and
+   explain the failed gate while downloading/opening the verified DMG. Confirm
+   rejected payloads have no quarantine removed. Make replacement fail after
+   the Trash move; confirm rollback and the diagnostic alert/log.
+5. On Windows 10/11 with WSL 2, update an older per-user installation. Confirm
+   the helper survives the old launcher and WSL distribution exiting, NSIS runs
+   silently, existing data and browser profile survive, the new launcher starts
+   only after a zero installer exit, and the session reopens. Include a Windows
+   account/install path with spaces and non-ASCII characters. Confirm a launcher
+   that never exits times out with a log/alert and no replacement.
+6. Repeat Windows with a modified hash, unsigned/invalid/revoked installer,
+   missing launcher state, and insufficient backup space. Confirm signature/hash
+   failures never execute Setup, setup failures never launch the new app, and
+   no silent path offers or performs deletion of user data. Check both logs.
+7. In source and pip runs, confirm there is no installation action and the pip
+   command remains visible. Check manual Download/Open in both packaged apps.
+   Record OS/build identifiers, logs, restore results and all failure cases for
+   Phase G sign-off before enabling a public rollout.

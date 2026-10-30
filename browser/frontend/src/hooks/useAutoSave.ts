@@ -99,27 +99,39 @@ export function entryHasWork(entry: { state: SerializedState; acted?: boolean } 
  * (a fresh load, or just a genome/FASTA loaded) never replaces a save that
  * has work in it: that work would be gone after the next reload.
  */
-export async function autoSaveNow(): Promise<void> {
+export async function autoSaveNow({ required = false }: { required?: boolean } = {}): Promise<void> {
   // A session being restored is half there: the saved copy stays until the
   // restore is done (it saves itself then).
-  if (useLaunchUiStore.getState().restoring) return;
+  if (useLaunchUiStore.getState().restoring) {
+    if (required) throw new Error('Wait for the session to finish reopening before updating.');
+    return;
+  }
   const state = useBrowserStore.getState();
   const serialized = withDatasetReferences(serializeState(state));
   // The Projection map, so "reopen last session" brings it back with its clustering (not in undo snapshots: too big).
   const projection = projectionForSave(state);
   if (projection) serialized.readProjection = projection;
   // Genomes declared for custom FASTAs live on the server: a restarted server has lost them (Reopen puts them back).
-  const declarations = await getGenomeDeclarations().catch(() => null);
+  const declarations = await getGenomeDeclarations().catch(error => {
+    if (required) throw new Error(`Could not save reference declarations: ${String(error)}`);
+    return null;
+  });
   if (declarations && declarations.length) serialized.genomeDeclarations = declarations;
   // Moving around alone isn't work to offer back.
   const acted = hasRestoredWork() || (state._historyStack ?? []).some(snapshot => snapshot.kind !== 'navigation');
   // The last session is being offered back: keep it until something is done here.
-  if (!acted && launchOfferPending()) return;
+  if (!acted && launchOfferPending()) {
+    if (!required || (await loadAutoSave())?.bootId) return;
+  }
   if (!acted && !autoSaveHasWork(serialized) && !lastSessionSuperseded() && entryHasWork(await loadAutoSave())) return;
   const launch = await getLaunchInfo();
+  if (required && !launch) throw new Error('Could not read session launch information.');
   // A restore started meanwhile: this is the page before it.
-  if (useLaunchUiStore.getState().restoring) return;
-  await saveAutoSave(serialized, acted, launch?.boot_id ?? null);
+  if (useLaunchUiStore.getState().restoring) {
+    if (required) throw new Error('Wait for the session to finish reopening before updating.');
+    return;
+  }
+  await saveAutoSave(serialized, acted, launch?.boot_id ?? null, required);
 }
 
 /** Each dataset with the reference of its own it is on (a panel genome): a

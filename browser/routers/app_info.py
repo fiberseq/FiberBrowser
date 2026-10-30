@@ -9,6 +9,7 @@ device; services/public_mode_guard.py, services/lab/auth.py, services/remote_acc
 - ``POST /api/app/update/settings``: the check at startup, the manifest address, the repository.
 - ``POST`` / ``DELETE /api/app/update/token``: a GitHub token kept in the OS keychain.
 - ``POST /api/app/update/download``, ``GET`` it, ``POST .../cancel``, ``POST /api/app/update/open``.
+- ``POST /api/app/update/install`` stages a verified update; ``POST .../restart`` hands it off after autosave.
 """
 from __future__ import annotations
 
@@ -152,7 +153,28 @@ async def download_status():
 @router.post("/api/app/update/download/cancel")
 async def cancel_download():
     from services import app_update
-    return app_update.cancel_download()
+    try:
+        return app_update.cancel_download()
+    except app_update.UpdateError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.post("/api/app/update/install")
+async def install_update():
+    from services import app_update
+    try:
+        return await asyncio.to_thread(app_update.start_install)
+    except app_update.UpdateError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.post("/api/app/update/restart")
+async def restart_update():
+    from services import app_update
+    try:
+        return await asyncio.to_thread(app_update.restart_install)
+    except app_update.UpdateError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @router.post("/api/app/update/open")

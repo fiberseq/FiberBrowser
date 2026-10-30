@@ -195,3 +195,13 @@ def test_smoke_tests_assert_the_bundled_fiberhmm_is_used_by_default(script, tmp_
                           text=True, timeout=120)
     assert done.returncode == 0, done.stderr[-2000:]
     assert done.stdout.startswith("bundled FiberHMM")
+
+
+def test_manifest_includes_built_sibling_zip_when_given_dmg(tmp_path):
+    tool = load("tools/make_update_manifest.py")
+    files = built_files(tmp_path)
+    data = tool.make_manifest("public", "3.0.1", [str(files[0])])
+    entries = data["downloads"]["macos-arm64"]
+    assert [e["kind"] for e in entries] == ["dmg", "zip"]
+    assert entries[1]["sha256"] == hashlib.sha256(files[1].read_bytes()).hexdigest()
+    assert entries[1]["size"] == files[1].stat().st_size

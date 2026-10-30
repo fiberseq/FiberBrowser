@@ -17,6 +17,7 @@
 import { create } from 'zustand';
 import { fetchJson } from '../api/sharedFetch';
 import type { SerializedState } from '../stores/historySlice';
+import { loadAutoSave } from '../stores/historyStorage';
 import { isPublicMode } from './publicMode';
 import { isPublicServerPage } from './publicServerFlag';
 import { isSandboxPage } from './sandbox';
@@ -52,6 +53,15 @@ export function resetLaunchInfoForTests(): void {
 /** What to do at launch after a normal quit: ask (default), reopen without asking, or start fresh. */
 export type LastSessionPreference = 'ask' | 'reopen' | 'fresh';
 const PREFERENCE_KEY = 'fiberbrowser.lastSessionOnLaunch';
+const UPDATE_REOPEN_KEY = 'fiberbrowser.updateReopen';
+
+/** One restart only; preserve the person's usual launch preference. */
+export async function markUpdateRestart(pending: boolean): Promise<void> {
+  if (!pending) { localStorage.removeItem(UPDATE_REOPEN_KEY); return; }
+  const saved = await loadAutoSave();
+  if (!saved?.bootId) throw new Error('Could not prepare the saved session to reopen.');
+  localStorage.setItem(UPDATE_REOPEN_KEY, saved.bootId);
+}
 
 export function getLastSessionPreference(): LastSessionPreference {
   try {
@@ -99,6 +109,12 @@ export function decideLaunchOffer(
   // Saved in this run by a page that is still open (a new tab next to it): that page's live session, not a crash.
   if (!fromEarlierRun && entry.bootId && launch && options.otherTabLive) return null;
   if (fromEarlierRun && launch?.previous_exit === 'clean') {
+    try {
+      if (localStorage.getItem(UPDATE_REOPEN_KEY) === entry.bootId) {
+        localStorage.removeItem(UPDATE_REOPEN_KEY);
+        return 'auto-reopen';
+      }
+    } catch { /* use the normal launch preference */ }
     // A normal quit: anything that was open is worth offering back.
     const datasets = entry.state.datasets?.length ?? 0;
     if (datasets === 0 && !entry.acted && !options.hasWork(entry.state)) return null;

@@ -27,7 +27,7 @@ pack adds its own in its `fiberbrowser-pack.json`, ARCHITECTURE.md). The FiberHM
 files when FiberBrowser starts. An app whose custom FiberHMM lacks something falls back to its bundled FiberHMM and
 says so in one line (in the server log, in Settings and in About), for example:
 
-> Custom FiberHMM at /Users/me/FiberHMM lacks the provenance API; using the bundled FiberHMM 3.0.0.
+> Custom FiberHMM at /src/FiberHMM lacks the provenance API; using the bundled FiberHMM 3.0.0.
 
 A pip or source run keeps the FiberHMM it was given and says what won't work with it. Nothing runs silently without
 the features it needs.
@@ -38,11 +38,18 @@ About shows it too, and the server prints it at startup.
 ## Updating
 
 **The apps.** *FiberBrowser > Check for Updates…* (or the button in Settings > FiberHMM & Updates, or *Check for
-updates* in the command palette) shows whether a newer build of your app's channel is out, with its notes. **Download**
-fetches the DMG (Mac) or the installer (Windows) to your Downloads folder and checks it against the SHA-256 in the
-channel's update manifest; **Open** then mounts the DMG or starts the installer. Quit FiberBrowser and finish the
-install as usual: the app never replaces itself. Your settings, sessions and Library are kept. FiberHMM updates come
-inside the app, since it is bundled.
+updates* in the command palette) shows whether a newer build of your app's channel is out, with its notes.
+**Install and restart**, when available, downloads and verifies the update, saves your session, and starts a
+detached helper that installs after FiberBrowser exits and relaunches it with your session. The Mac app requires
+a signed zip from the same Team ID and a passing Gatekeeper assessment; Windows requires a valid Authenticode
+signature and uses the NSIS installer silently. Cancellation is available until handoff. Failed checks show the
+reason; on Mac the verified DMG opens for manual installation.
+
+**Download** remains available: it fetches the DMG (Mac) or installer (Windows) to Downloads and checks its SHA-256;
+**Open** mounts the DMG or starts the installer. Quit FiberBrowser and finish the manual install as usual. Your
+settings, sessions and Library are kept. FiberHMM updates come inside the app, since it is bundled. Maintainers:
+see [packaging/README.md](../packaging/README.md#in-app-update-releases) for release steps and the deferred Phase G
+signed update procedure.
 
 A quiet check also runs when the app starts (once, a few seconds after the window opens). It shows a one-line note
 only when there is an update or the check needs you to sign in. Turn it off with **Check for updates at startup**
@@ -103,7 +110,7 @@ Where the app looks for the manifest, first match wins:
    [fiberseq/FiberBrowser](https://github.com/fiberseq/FiberBrowser) releases without signing in.
 
 Steps 1-3 take an `https://` address, a `file://` address or a plain path, so a manifest can sit on a shared drive
-or in a Dropbox-synced folder next to the files it lists.
+or in a synced folder next to the files it lists.
 
 ### Signing in to GitHub (private channels)
 
@@ -126,7 +133,7 @@ FiberBrowser follows those redirects itself without the token.
 
 ## Publishing an update (maintainers)
 
-1. Build: `bash packaging/macos/build_app.sh` (the DMG) and the Windows app (`packaging/windows/build_wsl_distro.sh`,
+1. Build: `bash packaging/macos/build_app.sh` (the DMG and signed/stapled app zip) and the Windows app (`packaging/windows/build_wsl_distro.sh`,
    then `build_installer.sh`). Each build writes its channel, version and build number into the app
    (`Contents/Resources/fiberbrowser-build.json`; `/opt/fiberbrowser/share/fiberbrowser/build.json` in the WSL
    distribution, `packaging/write_build_info.py`). Their presence is what makes the app use its bundled FiberHMM
@@ -141,7 +148,8 @@ FiberBrowser follows those redirects itself without the token.
        --build-info build/windows/context/build.json \
        --notes-file notes.txt --notes-url https://github.com/fiberseq/FiberBrowser/releases/tag/v3.0.1 \
        --out fiberbrowser-update-public.json \
-       build/macos/dist/FiberBrowser-3.0.1-arm64.dmg build/windows/FiberBrowser-3.0.1-Setup.exe
+       build/macos/dist/FiberBrowser-3.0.1-arm64.dmg build/macos/dist/FiberBrowser-3.0.1-arm64.zip \
+       build/windows/FiberBrowser-3.0.1-Setup.exe
    ```
 
 3. Publish the files and the manifest together. On GitHub (push the tag `v3.0.1` first):

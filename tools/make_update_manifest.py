@@ -11,7 +11,7 @@
 Each file is listed under its platform with its sha256 and size; the platform and kind come from the name
 (``*-arm64.dmg``: macos-arm64 dmg, ``*-arm64.zip``: macos-arm64 zip, ``*Setup*.exe``: windows-x64 installer), or
 ``PLATFORM:KIND=PATH`` says them. Files are named, not linked: the app finds them among the release's assets
-(GitHub) or next to the manifest (a shared folder, a Dropbox folder). ``--base-url`` gives https links instead
+(GitHub) or next to the manifest (a shared folder, a synced folder). ``--base-url`` gives https links instead
 (a web server). Publish the manifest together with the files (tools/publish_release.py for GitHub).
 """
 from __future__ import annotations
@@ -65,6 +65,16 @@ def make_manifest(channel: str, version: str, files: list[str], *, build: str = 
     if base_url and not base_url.startswith("https://"):
         raise SystemExit("make_update_manifest: --base-url must be https://")
     downloads: dict[str, list] = {}
+    # A standard release always includes the built sibling zip when given its DMG.
+    # Do not manufacture a zip here: it must contain the final signed/stapled app.
+    files = list(files)
+    classified = [classify(spec) for spec in files]
+    listed = {path.resolve() for _, _, path in classified}
+    for platform, kind, path in classified:
+        sibling = path.with_suffix('.zip')
+        if platform.startswith('macos-') and kind == 'dmg' and sibling.is_file() and sibling.resolve() not in listed:
+            files.append(f'{platform}:zip={sibling}')
+            listed.add(sibling.resolve())
     for spec in files:
         platform, kind, path = classify(spec)
         if not path.is_file():

@@ -73,11 +73,15 @@ export interface UpdateCheck {
   token_source?: string | null;
   pip_command?: string;
   download?: { name: string; kind: string; size: number | null; sha256: string } | null;
+  installable?: boolean;
+  install_download?: UpdateCheck['download'];
   cached?: boolean;
 }
 
 export interface DownloadStatus {
-  state: 'idle' | 'downloading' | 'verifying' | 'done' | 'error' | 'cancelled';
+  state: 'idle' | 'downloading' | 'verifying' | 'ready' | 'restarting' | 'done' | 'error' | 'cancelled';
+  mode?: 'install' | 'download';
+  fallback?: boolean;
   name?: string;
   version?: string;
   received?: number;
@@ -126,3 +130,7 @@ export const getUpdateDownload = () => call<DownloadStatus>('/api/app/update/dow
 export const cancelUpdateDownload = () => call<DownloadStatus>('/api/app/update/download/cancel', { method: 'POST' });
 
 export const openUpdateDownload = () => call<{ opened: string }>('/api/app/update/open', { method: 'POST' });
+
+export const startUpdateInstall = () => call<DownloadStatus>('/api/app/update/install', { method: 'POST' });
+export const restartUpdateInstall = () => call<DownloadStatus>('/api/app/update/restart', { method: 'POST' });
+export const quitForUpdate = () => call<{ success: boolean }>('/api/quit', { method: 'POST' });
