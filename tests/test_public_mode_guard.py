@@ -65,6 +65,7 @@ PUBLIC_DENIED = {
     ("POST", "/api/app/update/settings"), ("POST", "/api/app/update/token"), ("DELETE", "/api/app/update/token"),
     ("POST", "/api/app/update/download"), ("GET", "/api/app/update/download"),
     ("POST", "/api/app/update/download/cancel"), ("POST", "/api/app/update/open"),
+    ("POST", "/api/app/update/install"), ("POST", "/api/app/update/restart"),
     # identifying an insertion: host processes (BLAST/minimap2), library downloads, Dfam
     ("GET", "/api/insertions/te_library"), ("POST", "/api/insertions/te_library/download"),
     ("POST", "/api/insertions/identify"), ("GET", "/api/insertions/identify/jobs/{job_id}"),
