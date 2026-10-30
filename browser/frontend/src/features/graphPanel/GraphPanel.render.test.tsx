@@ -7,6 +7,8 @@
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import alu from './__fixtures__/alu.topology.json';
 import { GraphPanel } from './GraphPanel';
 import { useGraphStatusStore } from './statusStore';
@@ -20,6 +22,7 @@ import { usePanelContentHeightStore } from '../../stores/panelContentHeightStore
 import { useHubData } from '../hub/hubData';
 import type { GraphBinding, GraphRegistration, GraphStatus } from './types';
 import type { PanelConfig } from '../../types';
+import { applyImportedState, collectFrontendState } from '../../api/session';
 
 const bindings = alu.bindings as unknown as GraphBinding[];
 const registration: GraphRegistration = {
@@ -126,6 +129,25 @@ async function answerAll() {
 }
 
 describe('GraphPanel', () => {
+  it.each([false, true])('renders an empty legacy graph view with helper availability %s', async helperAvailable => {
+    const session = JSON.parse(readFileSync(resolve(process.cwd(), '../../tests/fixtures/sessions/30x-graph-differences.json'), 'utf8'));
+    applyImportedState({ ...session, success: true });
+    useGraphStatusStore.setState({ status: { ...available, helper: { ...available.helper, available: helperAvailable }, registrations: [] } });
+    await act(async () => root.render(<GraphPanel panelId="panel-graph-view" width={900} height={300} />));
+    expect(host.querySelector(helperAvailable ? '[data-testid="graph-panel-empty"]' : '[data-testid="graph-panel-unavailable"]')).not.toBeNull();
+    expect(host.querySelector('[data-graph-loading]')?.getAttribute('data-graph-loading')).toBe('false');
+    expect(subgraphBodies()).toEqual([]);
+    expect((collectFrontendState().panels as PanelConfig[]).find(p => p.contentType === 'graph-view')?.graphView).toEqual({});
+  });
+
+  it('initializes an empty legacy graph view when a package is available', async () => {
+    useBrowserStore.setState({ panels: [graphPanel('g1', {} as PanelConfig['graphView'])] });
+    await act(async () => root.render(<GraphPanel panelId="g1" width={900} height={300} />));
+    expect(useBrowserStore.getState().panels[0].graphView?.registrationId).toBe(registration.id);
+    await settle(200);
+    expect(subgraphBodies()).toHaveLength(1);
+  });
+
   it('requests graph rows again when a tables-mode scan opens, changes or closes, without reloading topology', async () => {
     const fallback = fetchMock.getMockImplementation()!;
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {

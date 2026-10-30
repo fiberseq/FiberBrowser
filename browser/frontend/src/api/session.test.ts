@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import {
   applyImportedState,
   collectFrontendState,
@@ -1028,6 +1030,31 @@ describe('session transport', () => {
 });
 
 describe('the imported session starts its history at once (Codex review)', () => {
+  it.each([false, true])('keeps the legacy history pointer through import and dual-write export (redo branch: %s)', async withRedo => {
+    const session = JSON.parse(readFileSync(resolve(process.cwd(), '../../tests/fixtures/sessions/301-peaks-history.json'), 'utf8'));
+    if (withRedo) session.frontend.historySnapshots.push({
+      ...structuredClone(session.frontend.historySnapshots[0]), label: 'Later edit',
+    });
+    const fetchMock = vi.fn(async (url: RequestInfo | URL, _init?: RequestInit) => ({
+      ok: true,
+      json: async () => String(url).includes('/session/import') ? { ...session, success: true } : { tracks: [] },
+      blob: async () => new Blob(),
+    }) as Response);
+    vi.stubGlobal('fetch', fetchMock);
+    await importSession(session);
+    const state = useBrowserStore.getState();
+    expect(state._historyPointer).toBe(session.frontend.historyPointer);
+    expect(state._historyStack.map(h => h.label)).toEqual(session.frontend.historySnapshots.map((h: any) => h.label));
+    expect(state.canRedo()).toBe(withRedo);
+    await exportSession();
+    const body = JSON.parse(String(fetchMock.mock.calls.find(([url]) => String(url).includes('/session/export'))?.[1]?.body));
+    expect(body.frontend_state.historyPointer).toBe(session.frontend.historyPointer);
+    expect(body.frontend_state.historySnapshots).toHaveLength(session.frontend.historySnapshots.length);
+    for (const [i, snapshot] of session.frontend.historySnapshots.entries()) {
+      expect(body.frontend_state.historySnapshots[i].state.selectedPeaks).toEqual(snapshot.state.selectedPeaks);
+    }
+  });
+
   it("records 'Import session' before the track list is read, so the view-moved effect never records the previous session", async () => {
     let releaseTracks: (v: Response) => void = () => undefined;
     vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL) => {

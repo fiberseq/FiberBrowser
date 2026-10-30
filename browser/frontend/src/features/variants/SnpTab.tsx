@@ -36,7 +36,8 @@ export function scanSummary(scan: SnpScan, passingOnly: boolean): string {
   const indels = shown.length - snvs;
   const failing = scan.snps.length - scan.snps.filter(s => s.passes).length;
   const parts = [`${snvs.toLocaleString()} SNP${snvs === 1 ? '' : 's'}${indels ? ` and ${indels} small indel${indels === 1 ? '' : 's'}` : ''}`,
-    `${scan.n_reads.toLocaleString()} reads (median depth ${Math.round(scan.median_depth).toLocaleString()})`];
+    // Older saved scans omit summary statistics: unknown is not zero reads.
+    `${scan.n_reads?.toLocaleString() ?? '—'} reads (median depth ${Number.isFinite(scan.median_depth) ? Math.round(scan.median_depth).toLocaleString() : '—'})`];
   if (passingOnly && failing) parts.push(`${failing} more fail a filter`);
   if (scan.fixed) parts.push(`${scan.fixed.toLocaleString()} fixed difference${scan.fixed === 1 ? '' : 's'} from the reference (every read; not informative)`);
   return parts.join(' · ');
@@ -115,9 +116,9 @@ export function SnpTab({ state, scan, status, onScan, onCancel, onSplit, onGroup
               conversion directions are unknown, so no C&gt;T / G&gt;A call can be DAF-safe: load the genome</span>
           )}
           {daf
-            ? <span className="text-amber-700 dark:text-amber-300" data-testid="variants-daf-note"> · DAF-seq: C&gt;T / G&gt;A calls must show on both conversion directions to be DAF-safe ({scan.directions.CT.toLocaleString()} CT, {scan.directions.GA.toLocaleString()} GA reads; {scan.daf_policy})</span>
-            : <span> · basecalls ({scan.chemistry ?? 'Fiber-seq'})</span>}
-          {scan.hp.tagged > 0 && <span> · {scan.hp.tagged.toLocaleString()} reads carry HP tags</span>}
+            ? <span className="text-amber-700 dark:text-amber-300" data-testid="variants-daf-note"> · DAF-seq: C&gt;T / G&gt;A calls must show on both conversion directions to be DAF-safe ({scan.directions?.CT?.toLocaleString() ?? '—'} CT, {scan.directions?.GA?.toLocaleString() ?? '—'} GA reads; {scan.daf_policy})</span>
+            : scan.mode === 'basecall' && <span> · basecalls ({scan.chemistry ?? 'Fiber-seq'})</span>}
+          {(scan.hp?.tagged ?? 0) > 0 && <span> · {scan.hp.tagged.toLocaleString()} reads carry HP tags</span>}
         </div>
       )}
       {scan && (
@@ -170,7 +171,7 @@ export function SnpTab({ state, scan, status, onScan, onCancel, onSplit, onGroup
             <tbody>
               {rows.slice(0, MAX_ROWS).map(snp => {
                 const isSel = state.selected.includes(snp.id);
-                const s0 = snp.strands[strandNames[0]], s1 = snp.strands[strandNames[1]];
+                const s0 = snp.strands?.[strandNames[0]], s1 = snp.strands?.[strandNames[1]];
                 return (
                   <tr key={snp.id} data-testid="variants-row" data-snp={snp.id} data-selected={isSel || undefined}
                     data-hovered={hovered === snp.id || undefined} tabIndex={0} aria-selected={isSel}
@@ -188,8 +189,8 @@ export function SnpTab({ state, scan, status, onScan, onCancel, onSplit, onGroup
                     <td>{snp.depth.toLocaleString()}{snp.low_depth && <span className="text-amber-600" title="Under half the view's median depth (a repeat, a breakpoint?)"> ▾</span>}</td>
                     <td>{pct(snp.maf)}</td>
                     <td title={snp.strand_balance == null ? undefined : `${pct(snp.strand_balance)} of the minor allele on ${strandNames[0]}`}
-                      className={snp.both_strands ? '' : 'text-amber-700 dark:text-amber-300'}>
-                      {s0?.minor ?? 0} / {s1?.minor ?? 0}{snp.both_strands ? '' : ' (one strand)'}
+                      className={snp.both_strands === false ? 'text-amber-700 dark:text-amber-300' : ''}>
+                      {s0?.minor ?? '—'} / {s1?.minor ?? '—'}{snp.both_strands === false ? ' (one strand)' : ''}
                     </td>
                     {daf && (
                       <td title={snp.daf_reason} data-testid="variants-daf-safe" data-safe={String(snp.daf_safe)}>

@@ -47,7 +47,7 @@ export function CombosTab({ state, scan, duplicates, params, onSplit, onGroup, b
   const key = comboRequestKey(scan, combo, selected, svIds);
   const lastKey = useRef('');
   const setCombo = (patch: Partial<ComboOptions>) => updateVariantsState({ combo: { ...combo, ...patch } });
-  const canRun = Boolean(scan) && (combo.source !== 'selected' || selected.length > 0 || svs.length > 0) && (combo.source !== 'hp' || (scan?.hp.tagged ?? 0) > 0)
+  const canRun = Boolean(scan) && (combo.source !== 'selected' || selected.length > 0 || svs.length > 0) && (combo.source !== 'hp' || (scan?.hp?.tagged ?? 0) > 0)
     && !(combo.source === 'selected' && tooManySvs);
   const describe = (id: string) => {
     const s = scan?.snps.find(x => x.id === id);
@@ -114,9 +114,9 @@ export function CombosTab({ state, scan, duplicates, params, onSplit, onGroup, b
               <input type="radio" name="variants-combo-source" checked={combo.source === 'informative'} onChange={() => setCombo({ source: 'informative', partial: true })} data-testid="variants-source-informative" />
               All informative SNPs in view
             </label>
-            <label className={`flex items-center gap-1 ${scan.hp.tagged ? 'cursor-pointer' : 'opacity-50'}`} title={scan.hp.tagged ? 'Reads by their HP tag (phased upstream)' : 'No read in view carries an HP tag'}>
-              <input type="radio" name="variants-combo-source" disabled={!scan.hp.tagged} checked={combo.source === 'hp'} onChange={() => setCombo({ source: 'hp' })} data-testid="variants-source-hp" />
-              HP tags{scan.hp.tagged ? ` (${scan.hp.tagged.toLocaleString()} reads)` : ''}
+            <label className={`flex items-center gap-1 ${scan.hp?.tagged ? 'cursor-pointer' : 'opacity-50'}`} title={scan.hp?.tagged ? 'Reads by their HP tag (phased upstream)' : scan.hp ? 'No read in view carries an HP tag' : 'HP tags were not saved with this scan'}>
+              <input type="radio" name="variants-combo-source" disabled={!scan.hp?.tagged} checked={combo.source === 'hp'} onChange={() => setCombo({ source: 'hp' })} data-testid="variants-source-hp" />
+              HP tags{scan.hp?.tagged ? ` (${scan.hp.tagged.toLocaleString()} reads)` : ''}
             </label>
           </fieldset>
           {combo.source !== 'hp' && (
