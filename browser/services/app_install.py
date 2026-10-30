@@ -178,12 +178,34 @@ def windows_path(path: Path) -> str:
     return target
 
 
+def windows_publisher() -> tuple[str, str]:
+    """Release constants in the installed build, never supplied by an update."""
+    from services.app_build import build_info
+    signer = (build_info() or {}).get('windows_update_signer') or {}
+    if not isinstance(signer, dict):
+        raise InstallError('The build has no trusted FiberBrowser Authenticode publisher configured.')
+    subject = signer.get('subject', '')
+    thumbprint = signer.get('thumbprint', '')
+    if (not isinstance(subject, str) or not subject.strip() or
+            not isinstance(thumbprint, str) or not re.fullmatch(r'[A-Fa-f0-9]{40}', thumbprint)):
+        raise InstallError('The build has no trusted FiberBrowser Authenticode publisher configured.')
+    return subject, thumbprint.upper()
+
+
+def publisher_check(variable: str) -> str:
+    subject, thumbprint = windows_publisher()
+    return (f"if ({variable}.SignerCertificate.Subject -cne {ps_quote(subject)} -or "
+            f"{variable}.SignerCertificate.Thumbprint -ne {ps_quote(thumbprint)}) {{ "
+            "throw 'The installer is not signed by the trusted FiberBrowser publisher.' }")
+
+
 def verify_installer(path: Path, *, runner=None) -> None:
+    check = publisher_check('$s')
     command([powershell(), "-NoProfile", "-NonInteractive", "-Command",
              "$ErrorActionPreference='Stop'; "
              f"$s=Get-AuthenticodeSignature -LiteralPath {ps_quote(windows_path(path))}; "
              "if ($s.Status -ne 'Valid' -or $null -eq $s.SignerCertificate) { "
-             "throw ('Authenticode verification failed: ' + $s.Status) }"], runner=runner)
+             "throw ('Authenticode verification failed: ' + $s.Status) }; " + check], runner=runner)
 
 
 def stage_windows(installer: Path, *, runner=None) -> dict:
@@ -219,6 +241,7 @@ try {{
     if ($signature.Status -ne 'Valid' -or $null -eq $signature.SignerCertificate) {{
         throw ('Authenticode verification failed: ' + $signature.Status)
     }}
+    {publisher_check('$signature')}
     # NSIS: /S is case sensitive. Keep the existing per-user installation.
     $process = Start-Process -FilePath $installer -ArgumentList @('/S', ('/D=' + $root)) -Wait -PassThru
     if ($process.ExitCode -ne 0) {{ throw ('Installer failed with exit code ' + $process.ExitCode) }}
@@ -235,12 +258,8 @@ try {{
 def launch_helper(plan: dict, sha256: str, *, runner=None, popen=None) -> None:
     if plan["platform"] == "macos":
         verify_bundle(Path(plan["staged"]), Path(plan["running"]), runner=runner)
-        try:
-            app_pid = int(os.environ.get("FIBERBROWSER_EXIT_WITH_PARENT") or os.getpid())
-            if app_pid <= 0:
-                raise ValueError()
-        except ValueError:
-            raise InstallError("The desktop app's pid could not be read.") from None
+        from fiberbrowser.cli import desktop_parent_pid
+        app_pid = desktop_parent_pid or os.getpid()
         helper = Path(plan["stage"]) / "install.sh"
         helper.write_text(mac_helper(plan, os.getpid(), app_pid))
         helper.chmod(0o700)

@@ -109,9 +109,12 @@ def states_from_table(state, scan, module: str, hit: dict, bound) -> Dict[Tuple[
         return found
     from .live_evidence import source_record_map
     record_map = source_record_map(scan)
+    mapped_inputs = {(sid, i) for sid, i, _record in record_map}
     for pair, binding in bound.items():
-        if record_map:
-            sid, bid = pair
+        sid, bid = pair
+        native_rows = [r for r in rows if (r.get('dataset_id'), int(r.get('input_index') or 0)) not in mapped_inputs]
+        _states_for_binding(state, hit, native_rows, pair, binding, found)
+        if any(s == sid for s, _i in mapped_inputs):
             keyer = _Keyer(state, bid, binding[2])
             for row in rows:
                 if row.get('dataset_id') != sid:
@@ -122,8 +125,6 @@ def states_from_table(state, scan, module: str, hit: dict, bound) -> Dict[Tuple[
                     continue
                 key = keyer.key(i, row.get('qname', ''), source)
                 found.setdefault((bid, key), []).append(_state_char(row.get('state')))
-        else:
-            _states_for_binding(state, hit, rows, pair, binding, found)
     return found
 
 
