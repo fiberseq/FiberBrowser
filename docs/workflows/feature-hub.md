@@ -110,10 +110,19 @@ BAM files.
   row in the table. **▸** shows the values with their counts and intervals,
   where the set came from, and **Go to** / **Open in its panel**.
 
-The hub lists the hits in the main view. It is saved with the session: the
-scans it opened (reopened when the session is), its settings, the selection and
-the anchor sets. A scan that can't be found is listed as **Scan not found**:
-open it again from where it is now, or re-scan.
+**Scope** chooses the view, a BED file, gene names around their TSS, an anchor
+set, one complete scan, or all open scans genome-wide. Genome scopes use scan
+files; browser providers retain the territory in which they were computed.
+The server filters and sorts the full hit set before returning a page (50–500
+rows). **Select shown** selects that page. Selection survives changing pages.
+Strength, q, and declared-score filters combine with prevalence and type.
+
+The session keeps scans, list settings, selection, and anchor sets. Browser
+scan directories are embedded up to a cumulative 25 MiB of uncompressed files;
+larger scans stay references. Embedded scans restore even after the original
+cache was removed. A missing reference offers **Open scan** or **Re-scan**.
+Scans of other files remain read-only: their hits and values are available,
+but they cannot join molecules from the loaded datasets.
 
 ## Hits of an assembly scan
 
@@ -186,9 +195,15 @@ With hits selected:
   needs the **Custom** peak rule on. Cluster uses the reads that span every
   region, so pick hits that the same reads cover.
 - **Filter** keeps the reads that are members (state 1: in the class, open in
-  the NFR) of any selected hit with per-read states; peaks, SVs and Differences
-  have none here and are left out, as the notice says. The filter chip says
-  **Feature hub**.
+  the NFR) of any selected hit with per-record states. SVs, SNPs, Differences,
+  graph bubbles, and measured peak openness also supply states. Unmeasured or
+  unresolved records retain “.”. The filter chip says **Feature hub**.
+- **Split** opens the state-pattern panel split; its descriptors survive sessions.
+- **Highlight** highlights carrier reads and the selected regions.
+- **Region catalog** saves placed hits under **Feature hub**.
+- **Condition** opens M2 with exactly the selected hits as A, including earlier pages.
+- **Export BED6** retains zero-width insertion boundaries. **Export values**
+  includes group values, bounds, counts, and provenance.
 - **Go to** shows the selected hits.
 
 ![Reads clustered on two NFR variants picked in the hub](../images/feature-hub/cluster-regions.png)
@@ -331,20 +346,17 @@ denominators per panel; **SVG** saves the chart.
 
 ## Limits in this release
 
-- The table lists the hits in the main view; genome-wide lists of a scan come
-  later.
 - A scan in another assembly is lifted onto this genome through a live-lift
   dataset of its BAM; without one, its hits can't be placed here. Lifting needs
   graphlift's `liftbed` next to the graph helper (or `FIBERBROWSER_LIFTBED`).
-- Graph columns, and so **absent**, are for scan hits; Differences, peak rules
-  and Find classes rows have none yet.
-- Graph bubbles are not listed yet.
-- Associations: Differences have no per-molecule states in the hub yet (SVs do);
-  M2 phasing runs on native datasets with per-dataset calibration and dataset
+- Browser-produced graph bubbles share the list, path columns, outlines, and
+  selection with scan hits. Geometry-only variation identities are labelled
+  separately from exact alleles; legacy ids remain aliases.
+- Associations: M2 phasing runs on native datasets with per-dataset calibration and dataset
   interaction tests; M3 reads nucleosome scans in table mode (live scans are), one per
   dataset; M4 has no territory for an assembly scan yet; M4 strata are one per
-  contig unless a strata BED is given. SVs and Differences are listed only
-  while their panels show them (not in the hub's full view).
+  contig unless a strata BED is given. The hub loads SV and Differences inputs
+  independently of mounted read panels.
 - The overlay measures an assembly scan's hit inside an insertion on its own
   haplotype's panel only.
 - The overlay also accepts loaded MA layers and bound scan state/mark layers.

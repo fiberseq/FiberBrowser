@@ -18,6 +18,7 @@ export const MODE_UNITS: Record<AssocMode, string> = {
 };
 
 export interface AssocInlineHit {
+  hubHit?: import('./hubState').HubSelected;
   hitId: string; chrom: string; start: number; end: number; anchor: number; strand?: '+' | '-'; label?: string;
   frame?: { kind: string }; target?: { chrom: string; start: number; end: number; anchor: number; insertion?: boolean };
   values?: Record<string, Record<string, { v: number | null }>>; legacyRefs?: Array<Record<string, unknown>>;

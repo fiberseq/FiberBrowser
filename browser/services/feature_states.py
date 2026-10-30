@@ -44,6 +44,9 @@ def _is_hub(source) -> bool:
 
 def _provider(kind, source):
     """(provider, needs dataset) for a feature: a hub set's provider for hub sources, else the kind's."""
+    if isinstance(source, str) and source.startswith('browser:'):
+        from services.hub.provider_states import browser_feature_states
+        return browser_feature_states, False
     if _is_hub(source):
         from services.scan.states import hub_feature_states
         return hub_feature_states, False
@@ -72,7 +75,7 @@ def _clean(features):
         dataset = f.get('dataset_id') or None
         if needs_dataset and not dataset:
             raise ValueError('A footprint class needs its dataset_id')
-        out.append(dict(kind=kind, source=source, id=fid, dataset_id=dataset))
+        out.append(dict(kind=kind, source=source, id=fid, dataset_id=dataset, **({'hub_hit': f['hub_hit']} if isinstance(f.get('hub_hit'), dict) else {})))
     return out
 
 
@@ -101,6 +104,20 @@ def _class_states(state, job_id, feature):
         chrom = job['result']['manifest']['region']['chrom']
         tier = recaller_tier(job, family)
     group = dict(consensusStateId=family, consensusJobId=job_id, sourceDatasetId=dataset, consensusTier=tier)
+    ds = (getattr(state, 'datasets', None) or {}).get(dataset)
+    if getattr(ds, 'data_type', None) == 'bam_livelift' and hasattr(state, 'build_working_set'):
+        from services.hub.provider_states import record_states
+        region = job['result']['manifest']['region']
+        lo, hi = int(region.get('start', 0)), int(region.get('end', 0))
+        if hi <= lo:
+            return {}, [dataset], None, None
+        reads = state.build_working_set(dataset, chrom, lo, hi, include_layers=False, include_methylation=False).reads
+        def evaluate(read):
+            members, eligible = class_occupancy(state, dataset, chrom, [read], [group])
+            rid = str(read['id'])
+            return '1' if rid in members.get(0, ()) else '0' if rid in eligible.get(0, ()) else '.'
+        per = {(dataset, key): value for key, value in record_states(reads, evaluate).items()}
+        return per, [dataset], None, None
     members, eligible = class_occupancy(state, dataset, chrom, [{'id': n} for n in names], [group])
     per = {}
     for n in names:
@@ -126,7 +143,7 @@ def feature_states(state, features):
                 evaluated[dataset] = evaluated.get(dataset, 0) + 1
             if s == '1':
                 members[dataset] = members.get(dataset, 0) + 1
-        public = dict(f)
+        public = {k: v for k, v in f.items() if k != 'hub_hit'}
         if not needs_dataset and not _is_hub(f['source']):
             public['dataset_id'] = None   # as before: only per-dataset kinds echo their dataset
         info.append(dict(public, datasets=datasets, label=label or f['id'], span=list(span) if span and span[0] is not None else None,

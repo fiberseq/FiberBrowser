@@ -89,6 +89,9 @@ def score_roles(scores: List[dict]) -> dict:
     strength = next((x for x in others if x.get('perGroup')), None) or (others[0] if others else None)
     if strength:
         roles['strength'] = strength['name']
+    q = next((x for x in scores if x.get('kind') == 'q' and str(x.get('name', '')).startswith('q')), None)
+    if q:
+        roles['q'] = q['name']
     return roles
 
 
@@ -98,8 +101,11 @@ def _camel_type(decl: dict) -> dict:
     scores = [dict(name=s.get('name'), label=s.get('label') or s.get('name'), kind=s.get('kind', 'fraction'),
                    better=s.get('better', 'none'), perGroup=bool(s.get('per_group'))) for s in decl.get('scores') or []]
     roles = dict(CONTRACT_ROLES.get(type_id) or score_roles(scores))
+    provides = list(decl.get('provides') or [])
+    if type_id.startswith('peaks.') and 'state' not in provides:
+        provides.append('state')
     return dict(typeId=type_id, module=decl.get('module', ''), label=decl.get('label') or type_id,
-                plural=decl.get('plural') or decl.get('label') or type_id, provides=list(decl.get('provides') or []),
+                plural=decl.get('plural') or decl.get('label') or type_id, provides=provides,
                 anchor=decl.get('anchor', 'centre'), zeroWidth=bool(decl.get('zero_width')), scores=scores,
                 stateRule=decl.get('state_rule') or '', transferableState=bool(decl.get('transferable_state')),
                 roles=roles, columns=list(decl.get('columns') or []))
@@ -139,7 +145,7 @@ class OpenScan:
     def set_id(self, type_id: str, module: str) -> str:
         """A set's id: over the scan id for opened scans; over the directory for the browser's cache, whose scan id
         changes as it grows (another chromosome), so a selection keeps naming its sets."""
-        key = f'cache:{self.path}' if self.source == 'cache' else self.scan_id
+        key = (self.manifest.get('browser_set_identity') or f'cache:{self.path}') if self.source == 'cache' else self.scan_id
         return set_id_of(type_id, key, module, self.module(module).get('settings_hash', ''))
 
     def dataset_of_browser(self, browser_id: str) -> Optional[str]:

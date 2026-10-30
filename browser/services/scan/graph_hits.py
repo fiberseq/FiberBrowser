@@ -276,6 +276,29 @@ async def add_graph_aliases(state, hits: List[dict], view_chrom: str) -> Optiona
         if target is None:
             continue
         bindings = package_bindings(state, reg)
+        # Browser-produced graph hits already carry the layout's exact node columns.
+        # Bind their paths through the same checked dataset identities as scan hits.
+        for h in hits:
+            graph = h.get('graph') or {}
+            if graph.get('registration') != reg.id:
+                continue
+            for key, path in graph.get('paths', {}).items():
+                binding = bindings.get(key) or {}
+                path.update(datasets=list(binding.get('datasets') or []))
+                if binding.get('hap'):
+                    path['hap'] = binding['hap']
+                spec = (h.get('stateSpec') or {}).get('paths', {}).get(key)
+                if spec is not None:
+                    spec.update(datasets=path['datasets'], hap=path.get('hap'))
+                    for dataset in path['datasets']:
+                        col = f'ds:{dataset}' + (':' + path['hap'] if path.get('hap') else '')
+                        value = int(spec['state']) if spec.get('state') in ('1', '0') else None
+                        h.setdefault('values', {})[col] = dict(prevalence=dict(v=value))
+            states = [(h.get('stateSpec') or {}).get('paths', {}).get(k, {}).get('state') for k in graph.get('paths', {})]
+            measured = [int(v) for v in states if v in ('1', '0')]
+            if measured:
+                h.setdefault('values', {})['all'] = dict(prevalence=dict(v=sum(measured)/len(measured)))
+                h.setdefault('scores', {})['prevalence'] = sum(measured)/len(measured)
         by_contig = {}
         for key, b in bindings.items():
             for ds, contig in b['contigs'].items():

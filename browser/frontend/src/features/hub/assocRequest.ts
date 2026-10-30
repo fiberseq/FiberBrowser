@@ -2,6 +2,7 @@
  * The association builder's choices and request (DESIGN §7.1): which hub sets can be A or B in each mode, the
  * responses of M2, the groups and scopes, and the four example questions of DESIGN §7.9 as presets.
  */
+import { hitSelectionEntry } from './hubState';
 import type { BrowserState } from '../../stores/browserStore';
 import type { AssocMode, AssocOptions, AssocRequest, AssocSetRef } from './assocApi';
 import type { ScanInfo } from './api';
@@ -77,14 +78,14 @@ export function setChoices(sets: FeatureSet[], anchors: AnchorSet[], view?: { ch
   const out: SetChoice[] = [];
   for (const set of sets) {
     const scan = isScanSet(set);
-    const states = set.type.provides.includes('state') && scan;
+    const states = set.type.provides.includes('state') && (scan || (set.source.kind === 'inline' && set.source.hits.every(h => Boolean(h.stateSpec) || Boolean(h.legacyRefs?.length) || Boolean((h.detail?.hubSelection as import('./hubState').HubSelected | undefined)?.hasStates))));
     const sv = set.typeId === 'var.sv';
     const hits = set.source.kind === 'inline' ? set.source.hits : [];
     out.push({
       key: set.setId, label: setLabel(set), typeId: set.typeId, kind: scan ? 'scan' : 'inline', hasStates: states || sv,
       why: states || sv ? undefined : 'no per-molecule states in the hub (scan sets and SVs have them)',
       ref: scan ? { kind: 'scan', setId: set.setId, typeId: set.typeId, label: set.type.plural }
-        : { kind: 'inline', setId: set.setId, typeId: set.typeId, label: set.type.plural, hits: hits.map(inlineHit),
+        : { kind: 'inline', setId: set.setId, typeId: set.typeId, label: set.type.plural, hits: hits.map(h => ({ ...inlineHit(h), hubHit: (h.detail?.hubSelection as import('./hubState').HubSelected | undefined) ?? hitSelectionEntry(set, h) })),
           ...(coverageOf(set, view) ? { coverage: coverageOf(set, view) } : {}) },
     });
   }

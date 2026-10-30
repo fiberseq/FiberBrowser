@@ -11,10 +11,10 @@ import { AnalysisPanelShell } from '../../components/controls/shared/AnalysisPan
 import { JobStatus } from '../../components/controls/shared/JobStatus';
 import { pickFolder } from '../../api/files';
 import { liveLiftHaplotypeColor } from '../liveLift/palette';
-import { closeScanId, loadScanHits, openScanPath, refreshScans, restoreSessionScans, scanSets, useHubData, useProviderSets, withGraphGroups } from './hubData';
+import { closeScanId, openScanPath, refreshScans, restoreSessionScans, scanSets, useHubData, useProviderSets, withGraphGroups } from './hubData';
 import { hitSelectionEntry, type HubSelected, type HubUi } from './hubState';
 import { useHubJob } from './hubJob';
-import { asAnchors, asClusterRegions, asFilter, goToHits } from './actions';
+import { asAnchors, asClusterRegions, asFilter, asSplit, asHighlight, asRegionCatalog, conditioningSet, exportHits, goToHits } from './actions';
 import { sendToNucleosomeWindow } from '../nucleosomes/handoff';
 import { ScanDialog } from './ScanDialog';
 import { columnPathStatus, displaySpan, graphText, liftChip, liftText } from './frames';
@@ -23,6 +23,8 @@ import { useGraphStatusStore } from '../graphPanel/statusStore';
 import type { FeatureHit, FeatureSet, HitValue } from './types';
 import { AssocTab, type AssocSeed } from './AssocTab';
 import { OverlayTab, type OverlaySeed } from './OverlayTab';
+
+import { queryHubPage, pageSets, type HubPage } from './paging';
 
 type HubTab = 'hits' | 'assoc' | 'overlay';
 const HUB_TABS: Array<{ key: HubTab; label: string }> = [{ key: 'hits', label: 'Hits' }, { key: 'assoc', label: 'Associate' }, { key: 'overlay', label: 'Overlay' }];
@@ -65,7 +67,7 @@ const CHIP_TONE = {
   warn: 'bg-amber-50 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200',
   muted: 'bg-violet-50 text-violet-800 dark:bg-violet-900/30 dark:text-violet-200',
 };
-const sameSel = (a: HubSelected, set: FeatureSet, hit: FeatureHit) => a.setId === set.setId && a.hitId === hit.hitId;
+const sameSel = (a: HubSelected, set: FeatureSet, hit: FeatureHit) => a.setId === set.setId && (a.hitId === hit.hitId || Boolean(hit.idAliases?.includes(a.hitId)));
 
 export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
   const chrom = useBrowserStore(s => s.chrom);
@@ -84,8 +86,15 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
   const [dialog, setDialog] = useState(false);
   const [pathText, setPathText] = useState('');
   const [notice, setNotice] = useState('');
+  const [scoreName, setScoreName] = useState('');
+  const [scoreOp, setScoreOp] = useState<'>=' | '<='>('>=');
+  const [scoreValue, setScoreValue] = useState('');
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [page, setPage] = useState<HubPage | null>(null);
+  const [pageError, setPageError] = useState('');
+  const [loadingPage, setLoadingPage] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [condition, setCondition] = useState<FeatureSet | null>(null);
   const [assocSeed, setAssocSeed] = useState<AssocSeed | null>(null);
   const [overlaySeed, setOverlaySeed] = useState<OverlaySeed | null>(null);
   const view = useMemo(() => ({ chrom, start, end }), [chrom, start, end]);
@@ -95,31 +104,60 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
   // Reopen the session's scans (a restored session, a restarted server).
   useEffect(() => { void restoreSessionScans(); }, [sessionScans]);
   // Hits in view of the visible scan sets (debounced while browsing).
-  const hidden = hub.ui.hiddenSets.join('\n');
   // A scan's columns follow its bindings: they change when datasets open or close.
   const scanKey = scans.map(s => `${s.scanId}:${s.manifestDigest}:${s.datasets.map(d => `${d.scanDataset}=${d.status}:${d.dataset ?? ''}`).join(',')}`).join('|');
   const datasetKey = datasets.map(d => `${d.id}:${(d.paths ?? [d.path]).join(',')}`).join('|');
   // Graph columns come with the hits: registering or removing a package reads them again.
   const graphKey = useGraphStatusStore(s => (s.status?.registrations ?? []).map(r => `${r.id}@${r.revisions.package}`).join(','));
   useEffect(() => { if (hub.scans.length) void refreshScans(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [datasetKey]);
-  useEffect(() => {
-    const t = setTimeout(() => { void loadScanHits(view, hub.ui.hiddenSets); }, 250);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, hidden, scanKey, graphKey]);
-  // A finished live scan: its hits.
   const jobDone = job && !['queued', 'running', 'cancelling'].includes(job.status) ? job.job_id + job.status : '';
-  useEffect(() => { if (jobDone) void loadScanHits(view, hub.ui.hiddenSets); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [jobDone]);
+  useEffect(() => {
+    const controller = new AbortController();
+    setPage(null); setLoadingPage(true); setPageError('');
+    const timer = setTimeout(() => {
+      void queryHubPage(hub.ui, view, providerSets, hub.anchors, controller.signal).then(result => {
+        if (controller.signal.aborted) return;
+        setPage(result); setLoadingPage(false);
+      }).catch(e => { if (!controller.signal.aborted) { setPageError(String((e as Error).message)); setLoadingPage(false); } });
+    }, 150);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [view, hub.ui, hub.anchors, providerSets, scanKey, graphKey, jobDone]);
 
   const sets: FeatureSet[] = useMemo(() => {
+    if (page) return pageSets(page, scans, providerSets).map(set => withGraphGroups(set, datasets));
     const fromScans = scanSets(scans).map(s => ({ ...s, groups: [...s.groups, ...(scanHitsBySet[s.setId]?.groups ?? [])],
       source: { kind: 'inline' as const, hits: scanHitsBySet[s.setId]?.hits ?? [] } }));
-    return [...fromScans, ...providerSets].map(set => withGraphGroups(set, datasets));
-  }, [scans, scanHitsBySet, providerSets, datasets]);
+    let remaining = hub.ui.pageSize ?? 100;
+    return [...fromScans, ...providerSets].map(set => {
+      if (set.source.kind !== 'inline') return set;
+      const hits = set.source.hits.slice(0, remaining);
+      remaining -= hits.length;
+      return withGraphGroups({ ...set, source: { kind: 'inline', hits } }, datasets);
+    });
+  }, [scans, scanHitsBySet, providerSets, datasets, page, hub.ui.pageSize]);
+  useEffect(() => {
+    if (!page) return;
+    const providers = sets.filter(set => set.provenance.producer === 'browser');
+    const hits = Object.fromEntries(sets.filter(set => set.provenance.producer !== 'browser').map(set => [set.setId, {
+      key: `${view.chrom}:${view.start}-${view.end}`, hits: set.source.kind === 'inline' ? set.source.hits : [], truncated: false,
+    }]));
+    useHubData.setState({ providers, hits });
+    const current = useBrowserStore.getState().featureHub.selected;
+    let changed = false;
+    const selected = current.map(old => {
+      for (const set of sets) for (const hit of set.source.kind === 'inline' ? set.source.hits : []) {
+        if (sameSel(old, set, hit) && (old.hitId !== hit.hitId || (!old.stateSpec && hit.stateSpec))) {
+          changed = true; return hitSelectionEntry(set, hit);
+        }
+      }
+      return old;
+    });
+    if (changed) useBrowserStore.getState().setFeatureHub({ selected });
+  }, [page]);
   const visible = sets.filter(s => !hub.ui.hiddenSets.includes(s.setId));
   const typeIds = [...new Set(sets.map(s => s.typeId))];
   const ui = hub.ui;
-  const setUi = (patch: Partial<HubUi>) => setHub(h => ({ ui: { ...h.ui, ...patch } }));
+  const setUi = (patch: Partial<HubUi>) => setHub(h => ({ ui: { ...h.ui, offset: 0, ...patch } }));
 
   const columns: Column[] = useMemo(() => {
     const out: Column[] = [{ key: 'all', label: 'All', kind: 'all' }];
@@ -148,13 +186,14 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
   const rows: Row[] = useMemo(() => {
     const out: Row[] = [];
     for (const set of visible) {
-      if (ui.typeFilter && set.typeId !== ui.typeFilter) continue;
+      if (!page && ui.typeFilter && set.typeId !== ui.typeFilter) continue;
       const role = roleOf(set);
       for (const hit of set.source.kind === 'inline' ? set.source.hits : []) {
         const key = rowKey(set, hit);
         out.push({ set, hit, role, key, matches: matches.get(key) ?? [] });
       }
     }
+    if (page) return out;
     const shared = ui.sharedOnly ? out.filter(r => r.matches.length > 0) : out;
     const filtered = ui.minPrevalence == null ? shared : shared.filter(r => (maxPrevalence(r) ?? -1) >= ui.minPrevalence!);
     const delta = (r: Row) => {
@@ -175,8 +214,8 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
     return filtered.sort((a, b) => {
       const ka = key(a), kb = key(b);
       return (ka < kb ? -1 : ka > kb ? 1 : 0) * dir || placeOf(a.hit) - placeOf(b.hit) || a.hit.hitId.localeCompare(b.hit.hitId);
-    });
-  }, [visible, ui, matches]);
+    }).slice(0, ui.pageSize ?? 100);
+  }, [visible, ui, matches, page]);
 
   const selected = hub.selected;
   const isSelected = (r: Row) => selected.some(x => sameSel(x, r.set, r.hit));
@@ -261,6 +300,7 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
         {Object.entries(missing).map(([path, why]) => (
           <div key={path} className="rounded-fb border border-amber-300 bg-amber-50 px-2 py-1 text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200" data-testid="hub-scan-missing">
             Scan not found: {path.split(/[\\/]/).pop()} — {why}. Locate it (Open scan…) or re-scan.
+            <button type="button" className="ml-2 underline" onClick={() => setDialog(true)}>Re-scan…</button>
             <button type="button" className="ml-2 underline" onClick={() => {
               setHub(h => ({ scans: h.scans.filter(x => x.path !== path) }));
               useHubData.setState(st => { const m = { ...st.missing }; delete m[path]; return { missing: m }; });
@@ -269,7 +309,7 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
         ))}
       </section>
 
-      {tab === 'assoc' && <AssocTab sets={sets} scans={scans} seed={assocSeed} />}
+      {tab === 'assoc' && <AssocTab sets={condition ? [...sets, condition] : sets} scans={scans} seed={assocSeed} />}
       {tab === 'overlay' && <OverlayTab sets={sets} seed={overlaySeed} />}
       {tab === 'hits' && <>
       <section data-testid="hub-sets" className="space-y-0.5">
@@ -282,7 +322,7 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
             <input type="checkbox" checked={on} onChange={e => setUi({ hiddenSets: e.target.checked ? ui.hiddenSets.filter(x => x !== set.setId) : [...ui.hiddenSets, set.setId] })} />
             <span className="font-medium">{set.type.plural}</span>
             <span className="text-[11px] text-ink-muted">{set.typeId}</span>
-            <span className="tabular-nums" data-testid="hub-set-count">{n} in view</span>
+            <span className="tabular-nums" data-testid="hub-set-count">{n} on page{set.count != null ? ` · ${set.count} in set` : ''}</span>
             {experimental && <span className="rounded bg-amber-100 px-1 text-[10px] text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">experimental</span>}
             {set.status !== 'complete' && <span className="rounded bg-gray-100 px-1 text-[10px] text-gray-600 dark:bg-white/10 dark:text-gray-300">{set.status}</span>}
             {set.note && <span className="truncate text-[11px] text-amber-700 dark:text-amber-300" title={set.note}>{set.note}</span>}
@@ -292,6 +332,21 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
         })}
       </section>
 
+      <section className="flex flex-wrap items-center gap-2" data-testid="hub-scope-controls">
+        <label>Scope <select aria-label="Hub scope" className="input-tool" value={ui.scope?.kind ?? 'view'} onChange={e => {
+          const kind = e.target.value;
+          setUi({ scope: kind === 'bed' ? { kind, bed: '' } : kind === 'genes' ? { kind, genes: [] } : kind === 'anchors'
+            ? { kind, anchorSetId: hub.anchors[0]?.id ?? '' } : kind === 'scan' ? { kind, scanId: scans[0]?.scanId ?? '' } : { kind: kind as 'view' | 'genome' } });
+        }}><option value="view">In view</option><option value="bed">BED regions</option><option value="genes">Gene list</option>
+          <option value="anchors">Anchor set</option><option value="scan">Whole scan</option><option value="genome">Genome (scan files)</option></select></label>
+        {ui.scope?.kind === 'bed' && <input aria-label="Scope BED" className="input-tool" value={ui.scope.bed} onChange={e => setUi({ scope: { kind: 'bed', bed: e.target.value } })} />}
+        {ui.scope?.kind === 'genes' && <input aria-label="Scope genes" className="input-tool" value={ui.scope.genes.join(', ')} onChange={e => setUi({ scope: { kind: 'genes', genes: e.target.value.split(/[,\s]+/).filter(Boolean) } })} />}
+        {ui.scope?.kind === 'anchors' && <select aria-label="Scope anchor set" className="input-tool" value={ui.scope.anchorSetId} onChange={e => setUi({ scope: { kind: 'anchors', anchorSetId: e.target.value } })}>
+          {hub.anchors.map(a => <option key={a.id} value={a.id}>{a.label}</option>)}</select>}
+        {ui.scope?.kind === 'scan' && <select aria-label="Scope scan" className="input-tool" value={ui.scope.scanId} onChange={e => setUi({ scope: { kind: 'scan', scanId: e.target.value } })}>
+          {scans.map(scan => <option key={scan.scanId} value={scan.scanId}>{scan.label}</option>)}</select>}
+      </section>
+      {pageError && <p role="status">{pageError}</p>}
       <section data-testid="hub-hits" className="space-y-1">
         <div className="flex flex-wrap items-center gap-2">
           <select className="input-tool min-h-0 rounded px-1.5 py-0.5 text-[11px]" value={ui.typeFilter} onChange={e => setUi({ typeFilter: e.target.value })} data-testid="hub-type-filter" aria-label="Type">
@@ -302,14 +357,25 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
             <input type="number" min={0} max={1} step={0.05} className="input-tool w-16 min-h-0 rounded px-1 py-0.5 text-[11px]" value={ui.minPrevalence ?? ''}
               onChange={e => setUi({ minPrevalence: e.target.value === '' ? null : Math.max(0, Math.min(1, Number(e.target.value))) })} data-testid="hub-min-prevalence" />
           </label>
+          <label>Strength ≥ <input aria-label="Minimum strength" type="number" className="input-tool w-16" value={ui.minStrength ?? ''} onChange={e => setUi({ minStrength: e.target.value === '' ? null : Number(e.target.value) })} /></label>
+          <label>q ≤ <input aria-label="Maximum q" type="number" min={0} max={1} step={0.01} className="input-tool w-16" value={ui.maxQ ?? ''} onChange={e => setUi({ maxQ: e.target.value === '' ? null : Number(e.target.value) })} /></label>
           <select className="input-tool min-h-0 rounded px-1.5 py-0.5 text-[11px]" value={`${ui.sort.key}:${ui.sort.dir}`} aria-label="Sort" data-testid="hub-sort"
             onChange={e => { const [key, dir] = e.target.value.split(':'); setUi({ sort: { key: key as HubUi['sort']['key'], dir: dir as 'asc' | 'desc' } }); }}>
             <option value="locus:asc">Sort: position</option>
             <option value="prevalence:desc">Sort: prevalence</option>
-            <option value="strength:desc">Sort: strength</option>
+            <option value="strength:desc">Sort: strength</option><option value="q:asc">Sort: q</option>
             <option value="label:asc">Sort: label</option>
             {ui.compare && <option value="delta:desc">Sort: Δ</option>}
           </select>
+          <select aria-label="Score filter" className="input-tool" value={scoreName} onChange={e => setScoreName(e.target.value)}>
+            <option value="">Declared score…</option>{[...new Set(sets.flatMap(set => set.type.scores.map(s => s.name)))].map(name => <option key={name}>{name}</option>)}
+          </select>
+          <select aria-label="Score operator" className="input-tool" value={scoreOp} onChange={e => setScoreOp(e.target.value as '>=' | '<=')}><option value=">=">≥</option><option value="<=">≤</option></select>
+          <input aria-label="Score threshold" type="number" className="input-tool w-16" value={scoreValue} onChange={e => setScoreValue(e.target.value)} />
+          <AnalysisButton disabled={!scoreName || scoreValue === '' || !Number.isFinite(Number(scoreValue))} onClick={() => {
+            setUi({ scoreFilters: [...(ui.scoreFilters ?? []), { name: scoreName, op: scoreOp, value: Number(scoreValue) }] }); setScoreValue('');
+          }}>Add score filter</AnalysisButton>
+          {(ui.scoreFilters ?? []).map((f, i) => <button key={i} type="button" onClick={() => setUi({ scoreFilters: ui.scoreFilters?.filter((_, j) => j !== i) })}>{f.name} {f.op} {f.value} ×</button>)}
           <label className="inline-flex items-center gap-1 text-[11px]" title="Only hits found again in another frame or set: the same feature in this genome's scan and a lifted scan of an assembly, or on both haplotypes">
             <input type="checkbox" checked={Boolean(ui.sharedOnly)} onChange={e => setUi({ sharedOnly: e.target.checked })} data-testid="hub-shared-only" />Matched only
           </label>
@@ -318,8 +384,14 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
             <option value="">Compare: off</option>
             {groupsForCompare.flatMap((a, i) => groupsForCompare.slice(i + 1).map(b => <option key={`${a.key}|${b.key}`} value={`${a.key}|${b.key}`}>Δ {a.label} − {b.label}</option>))}
           </select>
-          <span className="ml-auto text-[11px] text-ink-muted" data-testid="hub-hit-count">{rows.length} hit{rows.length === 1 ? '' : 's'} in view</span>
+          <span className="ml-auto text-[11px] text-ink-muted" data-testid="hub-hit-count">{page?.total ?? rows.length} hit{(page?.total ?? rows.length) === 1 ? '' : 's'}{(ui.scope?.kind ?? 'view') === 'view' ? ' in view' : ' in scope'}</span>
           <button type="button" className="text-[11px] text-indigo-700 hover:underline dark:text-indigo-300" onClick={selectAllShown} data-testid="hub-select-shown">Select shown</button>
+        </div>
+        <div className="flex items-center gap-2" data-testid="hub-paging">
+          <AnalysisButton disabled={loadingPage || !(ui.offset ?? 0)} onClick={() => setUi({ offset: Math.max(0, (ui.offset ?? 0) - (ui.pageSize ?? 100)) })}>Previous page</AnalysisButton>
+          <span>{loadingPage ? 'Loading…' : `${page?.total ? (page.offset + 1) : 0}–${page ? Math.min(page.total, page.offset + page.rows.length) : rows.length} of ${page?.total ?? rows.length}`}</span>
+          <AnalysisButton disabled={loadingPage || !page?.hasMore} onClick={() => setUi({ offset: (ui.offset ?? 0) + (ui.pageSize ?? 100) })}>Next page</AnalysisButton>
+          <select aria-label="Page size" className="input-tool" value={ui.pageSize ?? 100} onChange={e => setUi({ pageSize: Number(e.target.value) })}>{[50, 100, 250, 500].map(n => <option key={n}>{n}</option>)}</select>
         </div>
         <div className="max-h-[360px] overflow-auto rounded border border-gray-200 dark:border-gray-700">
           <table className="w-full text-[11px] tabular-nums" data-testid="hub-table">
@@ -357,6 +429,12 @@ export function FeatureHubPanel({ isFullView }: AnalysisPanelProps) {
         <AnalysisButton theme="indigo" variant="soft" disabled={busy || !selected.some(h => h.hasStates)} data-testid="hub-use-filter"
           title="Keep the reads in state 1 (a class member, open in the NFR) at any of the selected hits that have per-read states"
           onClick={() => { void act(() => asFilter(selected, 'any'), 'Filtered the reads to members of the selected hits.'); }}>Filter</AnalysisButton>
+        <AnalysisButton disabled={busy || !selected.every(h => h.hasStates)} data-testid="hub-use-split" onClick={() => { void act(() => asSplit(selected), 'Choose the state patterns to split.'); }}>Split</AnalysisButton>
+        <AnalysisButton disabled={busy} data-testid="hub-use-highlight" onClick={() => { void act(() => asHighlight(selected), 'Highlighted the selected hits.'); }}>Highlight</AnalysisButton>
+        <AnalysisButton disabled={busy} data-testid="hub-use-catalog" onClick={() => { void act(() => asRegionCatalog(selected), 'Saved regions in the Feature hub category.'); }}>Region catalog</AnalysisButton>
+        <AnalysisButton data-testid="hub-export-bed" onClick={() => exportHits(selected, 'bed')}>Export BED6</AnalysisButton>
+        <AnalysisButton data-testid="hub-export-values" onClick={() => exportHits(selected, 'values')}>Export values</AnalysisButton>
+        <AnalysisButton data-testid="hub-use-condition" onClick={() => { const set = conditioningSet(selected); if (set) { setCondition(set); setAssocSeed({ aKey: set.setId, mode: 'M2' }); setTab('assoc'); } }}>Condition</AnalysisButton>
         <AnalysisButton theme="indigo" variant="soft" data-testid="hub-use-nuc-window"
           disabled={!selected.some(h => !h.frame || h.frame.kind === 'linear' || h.frame.kind === 'lifted')}
           title="Measure nucleosomes around the first selected hit in the Nucleosomes panel's window mode (its anchor phases; the other selected hits can be its background)"

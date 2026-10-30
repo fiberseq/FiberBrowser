@@ -16,7 +16,7 @@ const CHANGE: Record<string, string> = {
 };
 
 const DIFF_TYPE: FeatureTypeDecl = {
-  typeId: 'var.diff', module: 'browser:diff', label: 'Difference', plural: 'Differences', provides: ['hit'], anchor: 'start', zeroWidth: true,
+  typeId: 'var.diff', module: 'browser:diff', label: 'Difference', plural: 'Differences', provides: ['hit', 'state'], anchor: 'start', zeroWidth: true,
   scores: [{ name: 'bp', label: 'Size', kind: 'bp', better: 'none', perGroup: false }], roles: { strength: 'bp' },
 };
 
@@ -47,7 +47,8 @@ function diffSets(s: BrowserState, view: HubView): FeatureSet[] {
           chrom: response.chrom, start: d.t_start, end: d.t_end, anchor: d.t_start,
           label: `${CHANGE[d.kind] ?? d.kind} ${bp.toLocaleString()} bp`, scores: { bp },
           values: { [hapKey(datasetId, d.hap_label)]: { strength: { v: bp } } }, flags: d.t_end <= d.t_start ? ['zero_width'] : [],
-          detail: { datasetId, hap: d.hap_label, kind: d.kind, source: d.source, src: d.src, aliases: d.aliases } });
+          stateSpec: { kind: 'difference', target: d.target ?? { target_id: d.id, revision: 1, target_type: 'geometry', chrom: response.chrom, ref_start: d.t_start, ref_end: d.t_end, alt_bp: d.alt_bp } }, idAliases: [d.id, ...(d.aliases ?? [])],
+          detail: { alleleId: d.target?.target_type === 'exact' ? d.target.target_id : undefined, length: bp, alt_bp: d.alt_bp, datasetId, hap: d.hap_label, kind: d.kind, source: d.source, src: d.src, aliases: d.aliases } });
       }
     }
     haps.sort();

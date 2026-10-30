@@ -20,16 +20,24 @@ export interface HubOpenedScan {
   manifestDigest: string;
   label: string;
   source: 'opened' | 'cache';
+  embedding?: 'embedded' | 'reference';
+  rescanPrompt?: string;
 }
 
 export interface HubUi {
+  scope?: import('./paging').HubScope;
+  offset?: number;
+  pageSize?: number;
+  minStrength?: number | null;
+  maxQ?: number | null;
+  scoreFilters?: { name: string; op: '>=' | '<=' | '=' | '>' | '<'; value: number }[];
   /** Sets left out of the hit list (by set id). */
   hiddenSets: string[];
   /** '' = every type, else a type id. */
   typeFilter: string;
   /** Keep hits with a prevalence at least this in some column (null: no filter). */
   minPrevalence: number | null;
-  sort: { key: 'locus' | 'prevalence' | 'strength' | 'delta' | 'label'; dir: 'asc' | 'desc' };
+  sort: { key: 'locus' | 'prevalence' | 'strength' | 'delta' | 'label' | 'q'; dir: 'asc' | 'desc' };
   /** Two comparison columns (group keys) for Δ. */
   compare: [string, string] | null;
   /** Only hits matched in another frame or set ("find shared", DESIGN §5.4). */
@@ -51,6 +59,11 @@ export interface AssocRun {
 
 /** A hub selection entry: enough to act on it without the set loaded (Use as, sessions). */
 export interface HubSelected {
+  idAliases?: string[];
+  stateSpec?: Record<string, unknown>;
+  scores?: FeatureHit['scores'];
+  values?: FeatureHit['values'];
+  provenance?: FeatureSet['provenance'];
   setId: string;
   hitId: string;
   typeId: string;
@@ -186,15 +199,23 @@ export function normalizeHub(value: unknown): FeatureHubState {
     const s = raw as Record<string, unknown>;
     if (!s || typeof s !== 'object' || !str(s.path) || !str(s.scanId)) return [];
     return [{ path: str(s.path), scanId: str(s.scanId), manifestDigest: str(s.manifestDigest), label: str(s.label) || str(s.path),
-      source: s.source === 'cache' ? 'cache' as const : 'opened' as const }];
+      source: s.source === 'cache' ? 'cache' as const : 'opened' as const,
+      ...(s.embedding === 'embedded' || s.embedding === 'reference' ? { embedding: s.embedding as HubOpenedScan['embedding'] } : {}),
+      ...(str(s.rescanPrompt) ? { rescanPrompt: str(s.rescanPrompt) } : {}) }];
   });
   const u = (v.ui && typeof v.ui === 'object' ? v.ui : {}) as Record<string, unknown>;
   const sort = (u.sort && typeof u.sort === 'object' ? u.sort : {}) as Record<string, unknown>;
-  const sortKeys = ['locus', 'prevalence', 'strength', 'delta', 'label'];
+  const sortKeys = ['locus', 'prevalence', 'strength', 'delta', 'label', 'q'];
   const ui: HubUi = {
     hiddenSets: Array.isArray(u.hiddenSets) ? u.hiddenSets.filter((x): x is string => typeof x === 'string') : [],
     typeFilter: str(u.typeFilter),
     minPrevalence: num(u.minPrevalence),
+    ...(u.scope && typeof u.scope === 'object' && ['view', 'genome', 'scan', 'bed', 'genes', 'anchors', 'regions'].includes(String((u.scope as {kind?: string}).kind)) ? { scope: u.scope as HubUi['scope'] } : {}),
+    ...(num(u.offset) !== null ? { offset: Math.max(0, Math.floor(num(u.offset)!)) } : {}),
+    ...(num(u.pageSize) !== null ? { pageSize: Math.min(500, Math.max(1, Math.floor(num(u.pageSize)!))) } : {}),
+    ...(num(u.minStrength) !== null ? { minStrength: num(u.minStrength) } : {}),
+    ...(num(u.maxQ) !== null ? { maxQ: num(u.maxQ) } : {}),
+    ...(Array.isArray(u.scoreFilters) ? { scoreFilters: u.scoreFilters.filter((f): f is NonNullable<HubUi['scoreFilters']>[number] => Boolean(f && typeof f.name === 'string' && ['>=','<=','=','>','<'].includes(f.op) && num(f.value) !== null)) } : {}),
     sort: { key: (sortKeys.includes(str(sort.key)) ? sort.key : 'locus') as HubUi['sort']['key'], dir: sort.dir === 'desc' ? 'desc' : 'asc' },
     compare: Array.isArray(u.compare) && u.compare.length === 2 && u.compare.every(x => typeof x === 'string') ? [u.compare[0], u.compare[1]] as [string, string] : null,
     ...(u.sharedOnly === true ? { sharedOnly: true } : {}),
@@ -224,6 +245,10 @@ export function normalizeHub(value: unknown): FeatureHubState {
     if (!h || !str(h.setId) || !str(h.hitId) || !str(h.chrom) || num(h.start) === null || num(h.end) === null) return [];
     if (str(h.typeId)) ensureHubKind({ typeId: str(h.typeId), module: str(h.typeId).split('.')[0], label: str(h.typeId), plural: str(h.typeId), provides: ['hit'], anchor: 'centre', zeroWidth: true, scores: [] });
     return [{ setId: str(h.setId), hitId: str(h.hitId), typeId: str(h.typeId), chrom: str(h.chrom), start: num(h.start)!, end: num(h.end)!,
+      ...(h.stateSpec && typeof h.stateSpec === 'object' ? { stateSpec: h.stateSpec as Record<string, unknown> } : {}),
+      ...(Array.isArray(h.idAliases) ? { idAliases: h.idAliases.filter((x): x is string => typeof x === 'string') } : {}),
+      ...(h.scores ? { scores: h.scores as FeatureHit['scores'] } : {}), ...(h.values ? { values: h.values as FeatureHit['values'] } : {}),
+      ...(h.provenance ? { provenance: h.provenance as FeatureSet['provenance'] } : {}),
       anchor: num(h.anchor) ?? Math.floor((num(h.start)! + num(h.end)!) / 2),
       ...(h.strand === '+' || h.strand === '-' ? { strand: h.strand as '+' | '-' } : {}), ...(str(h.label) ? { label: str(h.label) } : {}),
       ...(Array.isArray(h.datasets) ? { datasets: h.datasets.filter((x): x is string => typeof x === 'string') } : {}),
@@ -322,10 +347,10 @@ export function ensureHubKind(type: FeatureTypeDecl): string {
 export function selectionRefs(selected: HubSelected[]): FeatureRef[] {
   const out: FeatureRef[] = [];
   for (const h of selected) {
-    if (h.legacyRefs?.length) { out.push(...h.legacyRefs); continue; }
+    if (h.legacyRefs?.length && !h.stateSpec) { out.push(...h.legacyRefs); continue; }
     // One ref per hub hit: the scan provider reads every bound dataset's states from it (no dataset fan-out).
     const kind = kindOfType(h.typeId);
-    out.push({ kind, source: h.setId, id: h.hitId, chrom: h.chrom, start: h.start, end: h.end, label: h.label } as FeatureRef);
+    out.push({ ...(h.stateSpec ? { hubHit: h } : {}), kind, source: h.setId, id: h.hitId, chrom: h.chrom, start: h.start, end: h.end, label: h.label } as FeatureRef);
   }
   return out;
 }
@@ -334,10 +359,11 @@ export function hitSelectionEntry(set: FeatureSet, hit: FeatureHit): HubSelected
   // Per-read states: scan sets declaring 'state' (read from the scan), and legacy sets whose refs a states provider
   // answers (Find classes, NFR runs). Kinds with their own actions (SVs) have none here.
   const legacy = hit.legacyRefs ?? [];
-  const hasStates = set.type.provides.includes('state') && (legacy.length
-    ? legacy.every(r => !featureKindDef(r.kind)?.actions) : set.source.kind === 'scan' || set.setId.startsWith('hub:'));
+  const hasStates = Boolean(hit.stateSpec && set.datasets.length) || (set.type.provides.includes('state') && (legacy.length
+    ? legacy.every(r => !featureKindDef(r.kind)?.actions) : (set.source.kind === 'scan' || set.setId.startsWith('hub:')) && set.datasets.length > 0));
   return { setId: set.setId, hitId: hit.hitId, typeId: hit.typeId, chrom: hit.chrom, start: hit.start, end: hit.end, hasStates,
-    anchor: hit.anchor, ...(hit.strand ? { strand: hit.strand } : {}), ...(hit.label ? { label: hit.label } : {}),
+    ...(hit.stateSpec ? { stateSpec: hit.stateSpec } : {}), ...(hit.idAliases ? { idAliases: hit.idAliases } : {}),
+    scores: hit.scores, values: hit.values, provenance: set.provenance, anchor: hit.anchor, ...(hit.strand ? { strand: hit.strand } : {}), ...(hit.label ? { label: hit.label } : {}),
     datasets: set.datasets, ...(hit.frame && hit.frame.kind !== 'linear' ? { frame: hit.frame } : {}),
     ...(hit.legacyRefs?.length ? { legacyRefs: hit.legacyRefs } : {}),
     ...(hit.target ? { target: hit.target } : {}), ...(hit.lift ? { lift: hit.lift.status } : {}), ...(hit.graph ? { graph: hit.graph } : {}),

@@ -94,7 +94,7 @@ def role_columns(type_id: str, raw: Dict[str, Dict[str, dict]], kinds: Dict[str,
     else:
         # Declared roles, read in every group the values carry (datasets, channels, haplotypes such as '<ds>:HP1').
         for role, name in (roles or {'prevalence': 'prevalence'}).items():
-            if role not in ('prevalence', 'strength') or not name:
+            if role not in ('prevalence', 'strength', 'q') or not name:
                 continue
             for group, cells in raw.items():
                 put(group, role, cells.get(name))
@@ -117,6 +117,12 @@ def hits_for_view(scan, module: str, chrom: str, start: int, end: int, *, type_i
         for v in scan.tables.fetch(f'{module}/values.tsv.bgz', chrom, lo, hi):
             if v.get('hit_id') in wanted:
                 values.setdefault(v['hit_id'], []).append(v)
+    hits = format_hits(scan, module, rows, values, chrom)
+    return dict(hits=hits, truncated=truncated, chrom=chrom, start=start, end=end, module=module)
+
+
+def format_hits(scan, module, rows, values, chrom=None):
+    """Normalize a bounded batch of rows; shared by region serving and the paged index."""
     scan_datasets = [d.get('dataset_id') for d in scan.manifest.get('datasets') or []]
     from .registry import _camel_type
     roles_of = {d.get('type_id'): _camel_type(d)['roles'] for d in (scan.module(module) or {}).get('feature_types') or []}
@@ -133,14 +139,14 @@ def hits_for_view(scan, module: str, chrom: str, start: int, end: int, *, type_i
         a, b = int(r['start']), int(r['end'])
         hits.append(dict(
             # The caller's name for the contig (an alias of the table's, chr1 / 1), so navigation stays on its genome.
-            hitId=r['hit_id'], typeId=r.get('type'), chrom=chrom if scan.frame is None else r['chrom'], start=a, end=b,
+            hitId=r['hit_id'], typeId=r.get('type'), chrom=(chrom or r['chrom']) if scan.frame is None else r['chrom'], start=a, end=b,
             anchor=int(r['anchor']) if r.get('anchor') not in (None, '') else (a + b) // 2,
             strand=r.get('strand') if r.get('strand') in ('+', '-') else None,
             label=r.get('label') or '', score=_num(r.get('score')), unitId=r.get('unit_id'),
             parentId=r.get('parent_id') or None, flags=flags, zeroWidth=b <= a or 'zero_width' in flags,
             columns=columns, raw=raw, groupKinds=kinds, module=module_cols,
         ))
-    return dict(hits=hits, truncated=truncated, chrom=chrom, start=start, end=end, module=module)
+    return hits
 
 
 def units_for_view(scan, chrom: str, start: int, end: int) -> List[dict]:

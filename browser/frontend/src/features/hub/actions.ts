@@ -1,3 +1,7 @@
+import { useSplitPanelStore } from '../../stores/splitPanelStore';
+import { useReadActionsStore } from '../../stores/readActionsStore';
+import { getFeatureStates } from '../../api/features';
+import { addRegionsToCategory } from '../../stores/regionCatalogStore';
 /**
  * The hub's "Use as" actions (DESIGN §6.2) on the hub selection:
  * - anchors: an anchor set (positions, strand, label) saved with the session (association, overlays, sync windows);
@@ -8,9 +12,10 @@
  */
 import { useBrowserStore } from '../../stores/browserStore';
 import { featureRegionMode, type FeatureRef } from '../../stores/featureStore';
-import { filterBySelectedFeatures, type FeatureFilterMode } from '../../utils/featureClustering';
+import { requestGuard, STALE, filterBySelectedFeatures, type FeatureFilterMode } from '../../utils/featureClustering';
 import { runUiCluster } from '../../utils/clusterRunner';
 import { seedHistoryBaseline } from '../../stores/historySlice';
+import { mainGenomeKey } from '../../utils/regionNavigation';
 import { sameChrom } from '../../utils/chromAliases';
 import { selectionRefs, type HubSelected } from './hubState';
 import { kindOfType } from './kinds';
@@ -176,4 +181,79 @@ export function goToHits(all: Array<{ chrom: string; start: number; end: number;
   const start = Math.max(0, Math.round((lo + hi) / 2 - width / 2));
   s.setViewport(chrom, start, start + width);
   return null;
+}
+
+/** State-pattern splits retain the descriptors needed to restore their states. */
+export function asSplit(selected: HubSelected[]): string | null {
+  if (!selected.length || selected.some(h => !h.hasStates)) return 'Every selected hit must have per-record states to split.';
+  const features = selectionRefs(selected);
+  if (features.length > 16) return 'Split on 16 or fewer hits at a time.';
+  useSplitPanelStore.getState().request({ kind: 'patterns', features });
+  return null;
+}
+
+export async function asHighlight(selected: HubSelected[]): Promise<string | null> {
+  if (!selected.length) return 'Select hits first.';
+  const withStates = selected.filter(h => h.hasStates);
+  if (withStates.length) {
+    if (selectionRefs(withStates).length > 16) return 'Highlight on 16 or fewer hits at a time.';
+    const current = requestGuard('hub-highlight');
+    const result = await getFeatureStates(selectionRefs(withStates));
+    if (!current()) return STALE;
+    const scopedRows: Record<string, Set<string>> = {};
+    for (const [dataset, reads] of Object.entries(result.by_dataset)) scopedRows[dataset] = new Set(Object.entries(reads).filter(([, pattern]) => pattern.includes('1')).map(([id]) => id));
+    useReadActionsStore.getState().highlightReads([...new Set(Object.values(scopedRows).flatMap(ids => [...ids]))], { scopedRows });
+  }
+  const s = useBrowserStore.getState();
+  const regions = selected.flatMap(h => {
+    const t = displaySpan(h);
+    return t ? [{ chrom: t.chrom, start: t.start, end: Math.max(t.end, t.start + 1), label: h.label, genome: mainGenomeKey(s) }] : [];
+  });
+  s.addHighlights(regions);
+  return regions.length || withStates.length ? null : 'These hits have no placement on this reference.';
+}
+
+export function asRegionCatalog(selected: HubSelected[], category = 'Feature hub'): string | null {
+  const s = useBrowserStore.getState();
+  const regions = selected.flatMap(h => {
+    const t = displaySpan(h);
+    return t ? [{ chrom: t.chrom, start: t.start, end: Math.max(t.end, t.start + 1), label: h.label || h.typeId,
+      source: 'saved' as const, ...(h.strand ? { strand: h.targetStrand ?? h.strand } : {}),
+      detail: `${h.typeId} · ${h.hitId}${t.end === t.start ? ' · insertion boundary (BED display width 1)' : ''}` }] : [];
+  });
+  if (!regions.length) return 'These hits have no placement on this reference.';
+  addRegionsToCategory(mainGenomeKey(s), category, regions);
+  return null;
+}
+
+const cell = (v: unknown) => String(v ?? '').replace(/[\t\r\n]/g, ' ');
+export function hitExportText(selected: HubSelected[], format: 'bed' | 'values'): string {
+  const provenance = [...new Map(selected.filter(h => h.provenance).map(h => [h.setId, h.provenance!])).values()];
+  const header = '# Feature hub; coordinates=0-based-half-open\n# provenance=' + JSON.stringify(provenance) + '\n';
+  if (format === 'bed') return header + selected.map(h => [h.chrom, h.start, h.end, h.label || h.hitId,
+    Math.round(Math.max(0, Math.min(1000, (h.scores?.prevalence ?? 0) * 1000))), h.strand ?? '.'].map(cell).join('\t')).join('\n') + '\n';
+  return header + 'set_id\thit_id\ttype\tchrom\tstart\tend\tframe\tgroup\tscore\tvalue\tlo\thi\tn\tn_callable\n' + selected.flatMap(h => {
+    const groups: NonNullable<import('./types').FeatureHit['values']> = h.values && Object.keys(h.values).length ? h.values : { all: Object.fromEntries(Object.entries(h.scores ?? {}).map(([k, v]) => [k, { v }])) };
+    return Object.entries(groups).flatMap(([group, scores]) => Object.entries(scores).map(([score, v]) =>
+      [h.setId, h.hitId, h.typeId, h.chrom, h.start, h.end, h.frame?.kind ?? 'linear', group, score, v.v, v.lo, v.hi, v.n, v.nCallable].map(cell).join('\t')));
+  }).join('\n') + '\n';
+}
+export function exportHits(selected: HubSelected[], format: 'bed' | 'values'): void {
+  const url = URL.createObjectURL(new Blob([hitExportText(selected, format)], { type: 'text/plain;charset=utf-8' }));
+  const a = document.createElement('a'); a.href = url; a.download = format === 'bed' ? 'hub-hits.bed' : 'hub-values.tsv'; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+/** A conditioning variable over exactly the chosen hits, including selections on earlier pages. */
+export function conditioningSet(selected: HubSelected[]): import('./types').FeatureSet | null {
+  if (!selected.length) return null;
+  const setId = 'browser:hub-conditioning';
+  const stateful = selected.every(h => h.hasStates);
+  return { setId, typeId: 'hub.conditioning', type: { typeId: 'hub.conditioning', module: 'browser', label: 'Selected hits',
+    plural: 'Selected hits', provides: stateful ? ['hit', 'state'] : ['hit'], anchor: 'start', zeroWidth: true, scores: [] },
+    frame: { kind: 'linear', chrom: selected[0].chrom }, datasets: [...new Set(selected.flatMap(h => h.datasets ?? []))], groups: [],
+    coverage: { territory: 'regions' }, count: selected.length, status: 'complete',
+    source: { kind: 'inline', hits: selected.map(h => ({ ...h, lift: h.lift ? { status: h.lift } : undefined, frame: h.frame ?? { kind: 'linear', chrom: h.chrom },
+      scores: h.scores ?? {}, detail: { hubSelection: h } })) },
+    provenance: { producer: 'browser', module: 'selection', inputs: [...new Set(selected.map(h => h.setId))], units: 'regions' } };
 }

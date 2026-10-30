@@ -296,7 +296,7 @@ def hub_feature_states(state, source: str, feature: dict):
         raise ValueError('The scan of this feature is not open in this session: open it in the Feature hub')
     scan, module, type_id = found_set
     decl = scan.type_decl(module, type_id) or {}
-    if 'state' not in (decl.get('provides') or []):
+    if 'state' not in (decl.get('provides') or []) and not type_id.startswith('peaks.'):
         raise ValueError(f'{decl.get("plural") or type_id} have no per-read states')
     hit = find_hit(scan, module, feature['id'])
     if hit is None:
@@ -304,6 +304,12 @@ def hub_feature_states(state, source: str, feature: dict):
     bound = _bindings(scan, feature.get('dataset_id'))
     if not bound:
         raise ValueError('No loaded dataset is bound to this scan (scan of other files): no per-read states')
+    if type_id.startswith('peaks.') and not scan.tables.has(f'{module}/states.tsv.bgz'):
+        from services.hub.provider_states import browser_feature_states
+        hit_descriptor = dict(setId='browser:scan-peak', hitId=feature['id'], typeId=type_id, chrom=hit['chrom'],
+            start=int(hit['start']), end=int(hit['end']), anchor=int(hit.get('anchor') or hit['start']),
+            datasets=sorted({bid for bid, _via, _files in bound.values()}), stateSpec=dict(kind='open'))
+        return browser_feature_states(state, hit_descriptor['setId'], dict(hub_hit=hit_descriptor, id=feature['id']))
     if scan.tables.has(f'{module}/states.tsv.bgz'):
         found = states_from_table(state, scan, module, hit, bound)
     else:

@@ -427,7 +427,7 @@ def inline_hits(ref: dict, regions, *, label: str = '') -> HitTable:
                                anchor=anchor, strand=h.get('strand') if h.get('strand') in ('+', '-') else None,
                                label=str(h.get('label') or ''), insertion=insertion, columns=h.get('values') or {},
                                src=dict(chrom=chrom, start=s, end=max(s, e)), legacyRefs=h.get('legacyRefs') or [],
-                               detail=h.get('detail') or {}))
+                               detail=h.get('detail') or {}, hubHit=h.get('hubHit')))
     if table.counts.get('unplaced'):
         table.notes.append(f"{table.counts['unplaced']} hits have no place on this genome: left out")
     # Where the browser computed the set (the view it was in): its absence means absence only there.
@@ -971,3 +971,30 @@ def jsonable(value):
     if value is None or isinstance(value, (str, int, bool)):
         return value
     return str(value)
+
+
+def browser_set_states(state, table, mols, datasets):
+    """Use the same provider states as Filter/Split, retaining the record's molecule provenance."""
+    from services.feature_states import feature_states
+    import json
+    table.has_states = True
+    for i, h in enumerate(table.hits):
+        hit = h.get('hubHit')
+        if not hit:
+            raise AssocInputError('Browser hit is missing its state descriptor')
+        if datasets:
+            hit = dict(hit, datasets=[d for d in hit.get('datasets', []) if d in datasets])
+        refs = hit.get('legacyRefs') if not hit.get('stateSpec') else None
+        features = [dict(kind=r['kind'], source=r['source'], id=r['id'], dataset_id=r.get('datasetId')) for r in refs] if refs else [
+            dict(kind=table.type_id.replace('.', '-'), source=hit['setId'], id=hit['hitId'], hub_hit=hit)]
+        result = feature_states(state, features)
+        for ds, rows in result['by_dataset'].items():
+            for key, pattern in rows.items():
+                called = {s for s in pattern if s in ('1', '0')}
+                if len(called) != 1:
+                    continue
+                parts = json.loads(key[len('lift-record:v1 '):]) if key.startswith('lift-record:v1 ') else None
+                q = qname_of_key(key)
+                token = parts[0] if parts else molecule_token(q)
+                m = mols.add(ds, token, q)
+                table.rows.append((i, m, int(next(iter(called)))))

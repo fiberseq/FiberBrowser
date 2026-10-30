@@ -134,7 +134,10 @@ def _gather(state, ref: dict, regions, mols: Molecules, datasets, *, states: boo
     if kind == 'inline':
         table = inline_hits(ref, regions, label=label)
         if states:
-            if table.type_id == 'var.sv':
+            if table.hits and all(h.get('hubHit') for h in table.hits):
+                from .assoc_inputs import browser_set_states
+                browser_set_states(state, table, mols, datasets or [])
+            elif table.type_id == 'var.sv':
                 sv_states(state, table, mols, datasets or [], include_duplicates=False)
             else:
                 raise AssocInputError(f'{table.label} have no per-molecule states in the hub yet (SVs and scan sets do)')

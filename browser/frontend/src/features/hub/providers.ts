@@ -33,7 +33,7 @@ const CLASS_TYPE: FeatureTypeDecl = {
 
 export const PEAK_TYPE: FeatureTypeDecl = {
   typeId: 'peaks.peak', module: 'browser:peaks', label: 'Accessibility peak', plural: 'Peaks',
-  provides: ['hit'], anchor: 'centre', zeroWidth: false,
+  provides: ['hit', 'state'], anchor: 'centre', zeroWidth: false,
   scores: [{ name: 'score', label: 'Peak score', kind: 'fraction', better: 'high', perGroup: false },
     { name: 'tier', label: 'Tier', kind: 'code', better: 'low', perGroup: false }],
   roles: { strength: 'score' },
@@ -99,14 +99,14 @@ function peakSets(s: BrowserState, view: HubView): FeatureSet[] {
     const setId = `browser:peaks:${rule.id}`;
     const hits: FeatureHit[] = peaks.map(p => {
       const chrom = p.chrom ?? s.chrom;
-      return { hitId: peakHitId(p, rule.id, s.chrom), setId, typeId: 'peaks.peak', frame: { kind: 'linear', chrom }, chrom,
+      return { stateSpec: { kind: 'open' }, hitId: peakHitId(p, rule.id, s.chrom), setId, typeId: 'peaks.peak', frame: { kind: 'linear', chrom }, chrom,
         start: p.start, end: p.end, anchor: Math.floor((p.start + p.end) / 2),
         label: ['Strong', 'Medium', 'Weak', 'Rare'][p.layer ?? 0] ?? 'Peak',
         scores: { score: p.score ?? null, tier: p.layer ?? null }, values: { all: { strength: { v: p.score ?? null } } },
         detail: { rule: rule.name, width: p.width, threshold: p.threshold, ...(p.graph ? { graph: p.graph } : {}), ...(p.match ? { match: p.match } : {}) } };
     });
     out.push({ setId, typeId: 'peaks.peak', type: { ...PEAK_TYPE, plural: `Peaks · ${rule.name}` }, frame: { kind: 'linear', chrom: view.chrom },
-      datasets: [], groups: [{ id: 'all', kind: 'all', label: 'All' }], coverage: { territory: 'view' }, count: hits.length,
+      datasets: s.datasets.map(d => d.id), groups: datasetGroups(s, s.datasets.map(d => d.id)), coverage: { territory: 'view' }, count: hits.length,
       status: 'complete', source: { kind: 'inline', hits },
       provenance: { producer: 'browser', module: 'peaks', inputs: [], units: 'view', summary: `Peak rule ${rule.name} (${rule.source}), scanned in the browser` } });
   }
