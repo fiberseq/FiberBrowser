@@ -37,7 +37,7 @@ export function locusOfHit(h: FeatureHit, setId: string): OverlayLocus | null {
   return {
     key: `${setId}|${h.hitId}`, chrom: here.chrom, start: here.start, end: Math.max(here.end, here.start + 1), anchor: here.anchor,
     ...(here.insertion ? { insertion: true } : {}),
-    ...(strand ? { strand } : {}), ...(h.label ? { label: h.label } : {}), hitId: h.hitId, setId, ...pathsOf(h.graph),
+    ...(strand ? { strand } : {}), ...(h.label ? { label: h.label } : {}), hitId: h.hitId, setId, ...pathsOf(h.graph), ...(h.graph ? { graph: h.graph } : {}),
     ...(h.source && h.frame?.kind === 'source' ? { source: { ...h.source, ...(h.strand ? { strand: h.strand } : {}),
       ...(h.frame.hapLabel ?? h.frame.hap ? { hap: h.frame.hapLabel ?? h.frame.hap } : {}),
       ...(h.frame.datasetId ? { datasetId: h.frame.datasetId } : {}) } } : {}),
@@ -97,7 +97,7 @@ function Profile({ result, series, colours, svgRef, facet }: { result: OverlayRe
     .filter((e): e is { s: OverlaySeries; i: number; y: number } => e != null).sort((a, b) => a.y - b.y);
   for (let k = 1; k < ends.length; k++) if (ends[k].y - ends[k - 1].y < 11) ends[k].y = ends[k - 1].y + 11;
   return <svg ref={el => { if (svgRef) svgRef.current = el; }} viewBox={`0 0 ${W} ${H}`} className="w-full max-w-[900px]" role="img"
-    aria-label={`${OVERLAY_LAYERS.find(l => l.key === result.layer)?.label} density by ${result.xLabel}`}
+    aria-label={`${OVERLAY_LAYERS.find(l => l.key === result.layer)?.label ?? result.layer.replace('layer:', '')} density by ${result.xLabel}`}
     onMouseLeave={() => setHover(null)}
     onMouseMove={e => { const r = (e.currentTarget as SVGSVGElement).getBoundingClientRect(); const px = (e.clientX - r.left) / r.width * W;
       const i = Math.round((px - L) / (W - L - R) * n - 0.5); setHover(i >= 0 && i < n ? i : null); }}>
@@ -163,10 +163,14 @@ function Pile({ result, colours, sort }: { result: OverlayResult; colours: Recor
 
 export function OverlayTab({ sets, seed }: { sets: FeatureSet[]; seed?: OverlaySeed | null }) {
   const hub = useBrowserStore(s => s.featureHub);
+  const datasets = useBrowserStore(s => s.datasets);
+  const layerChoices = useMemo(() => [...OVERLAY_LAYERS, ...[...new Set(datasets.flatMap(d =>
+    Object.entries(d.available_layers ?? {}).filter(([, enabled]) => enabled).map(([group]) => group)))].filter(g => !['nucmol', 'nfrmol'].includes(g)).sort()
+    .map(g => ({ key: `layer:${g}` as OverlayLayer, label: g }))], [datasets]);
+
   const setHub = useBrowserStore(s => s.setFeatureHub);
   const dark = useBrowserStore(s => s.darkMode);
   const panels = useBrowserStore(s => s.panels);
-  const datasets = useBrowserStore(s => s.datasets);
   const scans = useHubData(s => s.scans);
   const st = hub.overlay ?? DEFAULT_OVERLAY;
   const [busy, setBusy] = useState(false);
@@ -275,7 +279,7 @@ export function OverlayTab({ sets, seed }: { sets: FeatureSet[]; seed?: OverlayS
       </div>
       <div className="flex flex-wrap items-center gap-1"><span className="w-14 shrink-0 font-medium">Layer</span>
         <select className="input-tool min-h-0 rounded px-1.5 py-0.5 text-[11px]" value={st.layer} onChange={e => patch({ layer: e.target.value as OverlayLayer })} data-testid="overlay-layer" aria-label="Layer">
-          {OVERLAY_LAYERS.map(l => <option key={l.key} value={l.key}>{l.label}</option>)}
+          {layerChoices.map(l => <option key={l.key} value={l.key}>{l.label}</option>)}
         </select>
         <span className="ml-2 font-medium">Align</span>
         <select className="input-tool min-h-0 rounded px-1.5 py-0.5 text-[11px]" value={st.align} onChange={e => patch({ align: e.target.value as OverlayAlign })} data-testid="overlay-align" aria-label="Align">
@@ -294,7 +298,7 @@ export function OverlayTab({ sets, seed }: { sets: FeatureSet[]; seed?: OverlayS
     </section>
     {result && <section className="space-y-1" data-testid="overlay-result" data-series={shownSeries.length}>
       <div className="flex flex-wrap items-center gap-2 text-[11px]">
-        <strong>{OVERLAY_LAYERS.find(l => l.key === result.layer)?.label}</strong>
+        <strong>{OVERLAY_LAYERS.find(l => l.key === result.layer)?.label ?? result.layer.replace('layer:', '')}</strong>
         <span className="text-ink-muted">{result.loci} loci · aligned: {ALIGN_LABEL[result.align].toLowerCase()} · flanks {result.flank.toLocaleString()} bp · {result.binBp} bp bins</span>
         <span className="ml-auto flex gap-1">
           {(['profile', 'facets', 'pile'] as const).map(v => <button key={v} type="button" data-testid={`overlay-view-${v}`}

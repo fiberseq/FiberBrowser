@@ -18,6 +18,7 @@ export const MODE_UNITS: Record<AssocMode, string> = {
 };
 
 export interface AssocInlineHit {
+  hubHit?: import('./hubState').HubSelected;
   hitId: string; chrom: string; start: number; end: number; anchor: number; strand?: '+' | '-'; label?: string;
   frame?: { kind: string }; target?: { chrom: string; start: number; end: number; anchor: number; insertion?: boolean };
   values?: Record<string, Record<string, { v: number | null }>>; legacyRefs?: Array<Record<string, unknown>>;
@@ -56,7 +57,7 @@ export interface AssocScope {
 export interface AssocOptions {
   maxDistance?: number; test?: 'adjusted' | 'strata'; density?: 'rho_read' | 'lambda_acc';
   nPerm?: number; nBoot?: number; seed?: number; frames?: Array<'anchor' | 'molecule'>; metric?: 'R_minus_null' | 'R';
-  strataBed?: string; anchorBed?: string;
+  strataBed?: string; anchorBed?: string; heldOut?: boolean;
 }
 
 export interface AssocRequest {

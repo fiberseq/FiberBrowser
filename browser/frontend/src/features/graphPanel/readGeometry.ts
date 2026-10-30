@@ -28,6 +28,7 @@ import type { GraphOccurrence, GraphRead, GraphReadLayer, GraphTopology, Span } 
 export interface ReadPiece { x0: number; x1: number; /** absolute source span */ s0: number; s1: number; occ: string; dir: 1 | -1 }
 
 export interface CallPiece extends ReadPiece {
+  annotationName?: string | null;
   layer: CallLayer;
   index: number;
   /** The whole call: span, size and identity (never the piece's). */
@@ -159,7 +160,11 @@ function drawnParts(list: OccurrencePlacement[] | undefined, path: string): { p:
   return out;
 }
 
-const QUALITY_NAMES = ['nq', 'lq', 'rq', 'aq', 'tq', 'el', 'er', 'q0'] as const;
+/** The dedicated nucsz/nucseg renderers consume these groups once, rather than painting duplicate intervals. */
+export function graphCallLayers(read: GraphRead): Record<string, GraphReadLayer | undefined> {
+  const { nucsz: _sizes, nucseg: _segments, ...extra } = read.layers ?? {};
+  return { nuc: read.nuc, tf: read.tf, msp: read.msp, ...extra };
+}
 
 /** Merge pieces that continue each other on screen and in source (a call or a body over contiguous nodes of one
  * tube): fewer primitives, the same geometry. Edge qualities come from the pieces that hold them. */
@@ -301,12 +306,14 @@ export function placeRead(read: GraphRead, index: PlacementIndex, lane = read.b,
     }
     return pieces;
   };
-  for (const layer of (opts.calls === false ? [] : ['nuc', 'tf', 'msp']) as CallLayer[]) {
-    const l: GraphReadLayer | undefined = read[layer];
+  for (const [layer, l] of opts.calls === false ? [] : Object.entries(graphCallLayers(read))) {
     if (!l) continue;
     l.iv.forEach(([cs, ce, size], index) => {
       const qualities: Record<string, number> = {};
-      for (const name of QUALITY_NAMES) { const v = l[name]?.[index]; if (v !== undefined && v !== null) qualities[name] = v; }
+      for (const [name, values] of Object.entries(l)) {
+        if (['iv', 'id', 'part', 'annotation_names', 'cls', 'nb', 'zb'].includes(name) || !Array.isArray(values)) continue;
+        const v = values[index]; if (typeof v === 'number') qualities[name] = v;
+      }
       const leftQ = layer === 'tf' ? qualities.el : qualities.lq;
       const rightQ = layer === 'tf' ? qualities.er : qualities.rq;
       // The footprint's class and z bytes ride on every piece of the call (no extra primitive).
@@ -317,6 +324,7 @@ export function placeRead(read: GraphRead, index: PlacementIndex, lane = read.b,
         const srcRight = pc.s1 === ce ? rightQ ?? 255 : undefined;
         return { ...pc, layer, index, call: [cs, ce, size] as [number, number, number],
           id: l.id[index] ?? null, part: l.part[index] ?? null, qualities,
+          annotationName: l.annotation_names?.[index],
           ...(pc.dir === 1 ? { edgeL: srcLeft, edgeR: srcRight } : { edgeL: srcRight, edgeR: srcLeft }),
           ...(l.inferred ? { inferred: true } : {}), ...cls };
       });
@@ -427,7 +435,7 @@ export function placeReads(all: GraphRead[], index: PlacementIndex, maxPrimitive
   // Reads on paths the scene does not draw are counted, never estimated or placed.
   const reads = all.filter(r => index.occurrences.has(r.b));
   const offLaneReads = all.length - reads.length;
-  const callsOf = (r: GraphRead) => (r.nuc?.iv.length ?? 0) + (r.tf?.iv.length ?? 0) + (r.msp?.iv.length ?? 0) + (r.nseg?.iv.length ?? 0);
+  const callsOf = (r: GraphRead) => Object.values(graphCallLayers(r)).reduce((n, l) => n + (l?.iv.length ?? 0), 0) + (r.nseg?.iv.length ?? 0);
   const binFor = () => {
     // Density bins as fine as the budget allows: at least a pixel, coarser when the reads' pixels would not fit.
     const calls = reads.reduce((t, r) => t + callsOf(r), 0);

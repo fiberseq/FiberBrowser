@@ -620,7 +620,19 @@ def submit(state,request,*,payload_loader=None,analysis_runner=None):
             from fiberhmm.inference.consensus.artifacts import write_json
             progress('saving_input','Saving the complete native evidence snapshot')
             write_json(out/'evidence.json.gz',payload)
-            result=(analysis_runner or workflow.run_analysis)(payload,request.get('parameters'),out,progress)
+            from services.scan.legacy_execution import native_inputs, run_prepared
+            scan_inputs, reason = (native_inputs(state, request) if not payload.get('pooling')
+                                   and getattr(options.get('cr'), 'engine', None) == RECALLER_MODE and analysis_runner is None
+                                   else (None, 'This class engine or oriented population has no fp scan module'))
+            if scan_inputs:
+                result, execution_scan = run_prepared('fp', scan_inputs, payload, request.get('parameters'),
+                    out, progress, runner=workflow.run_analysis, cancel=job['_cancel'])
+                with lock:
+                    job.update(execution_engine='scan:fp', execution_scan=execution_scan)
+            else:
+                with lock:
+                    job.update(execution_engine='legacy', execution_note=reason)
+                result=(analysis_runner or workflow.run_analysis)(payload,request.get('parameters'),out,progress)
             if payload.get('pooling'):
                 from services.oriented_regions import retain_provenance
                 retain_provenance(result,payload)

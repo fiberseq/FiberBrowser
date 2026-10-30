@@ -148,6 +148,7 @@ export interface GraphMember { panelId: string; binding: string | null }
  * standalone) or `host` (a dataset panel in graph mode, whose own viewport is the only authority: `linkMode` and
  * `targetViewport` are unused there). */
 export interface GraphViewState {
+  runOptions?: { repeat_columns?: 'exclude' | 'by_occurrence'; carrier_features?: 'refine' | 'drop' };
   schema: 1 | 2;
   role?: 'host' | 'standalone';
   /** Host: its members in band order, itself first. */
@@ -155,7 +156,7 @@ export interface GraphViewState {
   /** Host: the zoom-out hand-off (§7): "Stay linear" pinned, and the mode last drawn (hysteresis across reloads). */
   handoff?: { pinnedLinear?: boolean; shown?: 'graph' | 'linear';
     /** Why it is drawn linear: the width rule (also a pin or a view with no graph) or the complexity rule (§7.2). */
-    reason?: 'width' | 'complexity' };
+    reason?: 'width' | 'complexity' | 'unavailable' };
   /** Host: how each sub-band orders rows without a sort or clusters ('position': first carried graph column in canonical walk order, 'length'). */
   bandSort?: 'position' | 'length';
   /** Host: selection changes mirror to the host's other members showing the same record (D14, default on). */
@@ -197,6 +198,7 @@ export interface GraphReadLayer {
   id: (string | null)[];
   /** Logical identity across the decoder's pieces: [molecular start, group]. */
   part: ([number, number] | null)[];
+  annotation_names?: (string | null)[];
   nq?: number[]; lq?: number[]; rq?: number[]; aq?: number[]; tq?: number[]; el?: number[]; er?: number[]; q0?: number[];
   inferred?: boolean;
   /** nuc/tf: the footprint's nucsz class byte (low 4 bits the coarse code, +16 for a TF call or one overlapping it),
@@ -256,6 +258,8 @@ export interface GraphRead {
   nuc?: GraphReadLayer;
   tf?: GraphReadLayer;
   msp?: GraphReadLayer;
+  /** All other MA groups and point channels, with their original quality byte names (wire version 12). */
+  layers?: Record<string, GraphReadLayer>;
   /** The nucleosome segment lane (wire version 9). */
   nseg?: GraphReadSegLane;
   m6a?: number[];

@@ -1,7 +1,7 @@
 import { panelReversed } from '../../hooks/usePanelDisplayStore';
 import { openRegionPanels } from '../../utils/regionPanels';
 import { getClusterColor } from '../tracks/ReadTrack';
-import { currentMatchedRun, matchedRunCounts } from '../../utils/clusterMatchedRun';
+import { currentMatchedRun, matchedRunCounts, withGraphSourceColumns } from '../../utils/clusterMatchedRun';
 import { useMemo, useEffect, useState, useCallback, useRef } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useBrowserStore } from '../../stores/browserStore';
@@ -306,7 +306,7 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
   const mapVisible = activeTab === 'overview' && overviewShown !== 'profiles';
 
   const savedMatchedRun = useBrowserStore(s => s.clusterMatchedRun);
-  const matchedRun = useMemo(() => currentMatchedRun(savedMatchedRun, clusterAssignments), [savedMatchedRun, clusterAssignments]);
+  const matchedRun = useMemo(() => withGraphSourceColumns(currentMatchedRun(savedMatchedRun, clusterAssignments), panels, clusterAssignments), [savedMatchedRun, clusterAssignments, panels]);
 
   // stateKeys with cluster data (respects selectedDatasets + link groups + duplicates)
   const datasetIds = useMemo(() => {

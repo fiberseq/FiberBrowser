@@ -1,0 +1,110 @@
+{
+  "passed": true,
+  "tables": {
+    "callable.tsv.bgz": [
+      343,
+      343
+    ],
+    "fp/classes.tsv.bgz": [
+      42,
+      42
+    ],
+    "fp/hits.tsv.bgz": [
+      42,
+      42
+    ],
+    "fp/marks.tsv.bgz": [
+      0,
+      0
+    ],
+    "fp/states.tsv.bgz": [
+      3509,
+      3509
+    ],
+    "fp/units.tsv.bgz": [
+      1949,
+      1949
+    ],
+    "fp/values.tsv.bgz": [
+      420,
+      420
+    ],
+    "nfr/hits.tsv.bgz": [
+      78,
+      78
+    ],
+    "nfr/marks.tsv.bgz": [
+      0,
+      0
+    ],
+    "nfr/molecules.tsv.bgz": [
+      1955,
+      1955
+    ],
+    "nfr/states.tsv.bgz": [
+      5965,
+      5965
+    ],
+    "nfr/units.tsv.bgz": [
+      1949,
+      1949
+    ],
+    "nfr/values.tsv.bgz": [
+      300,
+      300
+    ],
+    "nfr/variants.tsv.bgz": [
+      36,
+      36
+    ],
+    "nuc/hits.tsv.bgz": [
+      102,
+      102
+    ],
+    "nuc/marks.tsv.bgz": [
+      143434,
+      143434
+    ],
+    "nuc/molecules.tsv.bgz": [
+      1878,
+      1878
+    ],
+    "nuc/states.tsv.bgz": [
+      0,
+      0
+    ],
+    "nuc/units.tsv.bgz": [
+      0,
+      0
+    ],
+    "nuc/values.tsv.bgz": [
+      897,
+      897
+    ],
+    "peaks/hits.tsv.bgz": [
+      1347,
+      1347
+    ],
+    "peaks/marks.tsv.bgz": [
+      0,
+      0
+    ],
+    "peaks/states.tsv.bgz": [
+      0,
+      0
+    ],
+    "peaks/units.tsv.bgz": [
+      0,
+      0
+    ],
+    "peaks/values.tsv.bgz": [
+      2694,
+      2694
+    ],
+    "units.tsv.bgz": [
+      26,
+      26
+    ]
+  },
+  "different": []
+}

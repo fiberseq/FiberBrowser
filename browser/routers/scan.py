@@ -57,7 +57,7 @@ async def open_scan(request: dict, state=Depends(get_state)):
     # A restore names the scan generation it read (/api/scan/list): an open for a session replaced since is refused.
     gen = request.get('generation')
     try:
-        scan = await asyncio.to_thread(do_open, state, path.strip(), generation=gen if isinstance(gen, int) else None)
+        scan = await asyncio.to_thread(do_open, state, path.strip(), source='cache' if request.get('source') == 'cache' else 'opened', generation=gen if isinstance(gen, int) else None)
     except ScanOpenError as error:
         status = 409 if 'Another session' in str(error) else 422
         raise HTTPException(status_code=status, detail=str(error)) from error

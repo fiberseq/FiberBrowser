@@ -10,6 +10,27 @@ from state.dependencies import get_state
 router = APIRouter(tags=["hub"])
 
 
+@router.post('/api/hub/hits/query')
+async def hub_hits_query(request: dict, state=Depends(get_state)):
+    """Server-side scopes, filters, global sorting and bounded pages."""
+    _not_on_lab_requests()
+    _confine_paths(request)
+    from services.hub.paging import query_hits
+    try:
+        result = await asyncio.to_thread(query_hits, state, request)
+    except (ValueError, TypeError, KeyError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    # Only page-sized graph enrichment, grouped by contig. Existing native graph columns win.
+    from services.scan.graph_hits import add_graph_aliases
+    from collections import defaultdict
+    by_chrom = defaultdict(list)
+    for row in result['rows']:
+        by_chrom[row['hit']['chrom']].append(row['hit'])
+    for chrom, hits in by_chrom.items():
+        await add_graph_aliases(state, hits, chrom)
+    return result
+
+
 @router.post('/api/hub/columns')
 async def provider_columns(request: dict, state=Depends(get_state)):
     """Graph columns for browser-provider hits, through the scan hits' fixed-tile path."""
@@ -108,7 +129,9 @@ async def hub_overlay(request: dict, state=Depends(get_state)):
     if not isinstance(request, dict):
         raise HTTPException(status_code=422, detail='Request must be an object')
     try:
-        return await asyncio.to_thread(overlay, state, request)
+        from services.hub.graph_overlay import prepare_graph_loci
+        prepared = await prepare_graph_loci(state, request)
+        return await asyncio.to_thread(overlay, state, prepared)
     except OverlayError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 

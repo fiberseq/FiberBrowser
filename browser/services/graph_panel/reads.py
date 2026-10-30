@@ -75,8 +75,9 @@ _LANES = ("nseg",)
 # absolute source position, so records cached by decodes at other origins compare alike; 7: a supplementary's
 # primary's explicit call; 8: soft clips; 9: nucleosome classes on nuc/tf pieces and the segment lane; 10: the named
 # byte ``nb`` beside ``cls``/``zb``, and no class from a mark of another molecular length. Clients read a payload
-# without ``nb`` as no named evidence; 11: ``ph``, a supplementary's primary record's haplotype label).
-WIRE_VERSION = 11
+# without ``nb`` as no named evidence; 11: ``ph``, a supplementary's primary record's haplotype label;
+# 12: arbitrary annotation groups, named quality bytes, annotation names and the other point channels).
+WIRE_VERSION = 12
 
 
 class ReadsError(Exception):
@@ -292,8 +293,11 @@ def _abs_layer(layer: Optional[dict], ids, parts, origin: int, name: str, keep) 
             return None
         ivs = [[int(column[i][0]) + origin, int(column[i][1]) + origin, int(column[i][2])] for i in idx]
     out = {"iv": ivs, "id": [ids[i] for i in idx], "part": [parts[i] for i in idx]}
+    if layer.get("annotation_names") is not None:
+        labels = layer["annotation_names"]
+        out["annotation_names"] = [labels[i] if i < len(labels) else None for i in idx]
     for qn, track in zip(names, quals):
-        if track is not None and qn in ("nq", "lq", "rq", "aq", "tq", "el", "er", "q0"):
+        if track is not None and qn not in ("iv", "id", "part", "annotation_names", "inferred", "cls", "nb", "zb"):
             out[qn] = [track[i] for i in idx]
     if name == "msp" and all(i is None for i in out["id"]):
         out["inferred"] = True
@@ -422,6 +426,27 @@ def compact_row(row: dict, origin: int, dataset_id: str, binding: str, windows: 
         layer = _abs_layer(layers.get(name), calls.get(f"layer:{name}"), parts.get(f"layer:{name}"), origin, name, keep)
         if layer is not None:
             out[name] = layer
+    # Preserve every interval annotation group, including scan states and future custom groups. The reserved nucsz and
+    # nucseg groups also retain their specialised presentation below; the generic form keeps all their bytes.
+    extra = {}
+    for name, raw in layers.items():
+        if name in _LAYERS:
+            continue
+        layer = _abs_layer(raw, calls.get(f"layer:{name}"), parts.get(f"layer:{name}"), origin, name, keep)
+        if layer is not None:
+            extra[name] = layer
+    for name, field in (("m5c", "methyl_m5c"), ("deam_opportunity_ct", "possible_deam_ct"),
+                        ("deam_opportunity_ga", "possible_deam_ga")):
+        points = [int(p) + origin for p in row.get(field) or () if inside(int(p) + origin)]
+        if points:
+            extra[name] = {"iv": [[p, p + 1, 1] for p in points], "id": [None] * len(points),
+                           "part": [None] * len(points)}
+    events = [int(e[0]) + origin for e in row.get("deam") or () if inside(int(e[0]) + origin)]
+    if events:
+        extra["deam"] = {"iv": [[p, p + 1, 1] for p in events], "id": [None] * len(events),
+                         "part": [None] * len(events)}
+    if extra:
+        out["layers"] = extra
     _nuc_classes(out, layers, origin, keep)
     marks = row.get("methyl_m6a")
     if type(marks) is IntColumn and marks.width is None:
@@ -516,6 +541,7 @@ def resolve_molecule_strands(reads: list, evidence_only: Optional[list] = None, 
 
 def marks_of(read: dict) -> int:
     return (sum(len((read.get(n) or {}).get("iv") or ()) for n in _LAYERS + _LANES) + len(read.get("m6a") or ())
+            + sum(len(l.get("iv") or ()) for l in (read.get("layers") or {}).values())
             + len(read.get("m6a_density") or ()))
 
 
@@ -541,18 +567,23 @@ def clip_to_windows(read: dict, windows: list) -> dict:
     def keep(a, b):
         return any(a < wb and b > wa for wa, wb in windows)
 
-    out = {k: v for k, v in read.items() if k not in _LAYERS + _LANES and k != "m6a"}
-    for name in _LAYERS + _LANES:
-        layer = read.get(name)
+    out = {k: v for k, v in read.items() if k not in _LAYERS + _LANES and k not in ("m6a", "layers")}
+    def clipped(layer):
         if not layer:
-            continue
+            return None
         idx = [i for i, iv in enumerate(layer["iv"]) if keep(iv[0], iv[1])]
         if not idx:
-            continue
+            return None
         if len(idx) == len(layer["iv"]):
+            return layer
+        return {k: ([v[i] for i in idx] if isinstance(v, list) else v) for k, v in layer.items()}
+    for name in _LAYERS + _LANES:
+        layer = clipped(read.get(name))
+        if layer:
             out[name] = layer
-            continue
-        out[name] = {k: ([v[i] for i in idx] if isinstance(v, list) else v) for k, v in layer.items()}
+    extra = {name: hit for name, layer in (read.get("layers") or {}).items() if (hit := clipped(layer))}
+    if extra:
+        out["layers"] = extra
     m6a = [p for p in read.get("m6a") or () if any(wa <= p < wb for wa, wb in windows)]
     if m6a:
         out["m6a"] = m6a
@@ -777,7 +808,7 @@ def _record_key(base: tuple, rec: tuple) -> tuple:
 
 
 def _decode_records(dataset, contig: str, size: int, windows: list, binding: str, missing: list, region: tuple,
-                    base: tuple, listed_n: Optional[dict] = None, max_bytes: int = MAX_DECODED_BYTES) -> tuple:
+                    base: tuple, listed_n: Optional[dict] = None, max_bytes: int = MAX_DECODED_BYTES, state=None) -> tuple:
     """Decode and compose the ``missing`` listed records (only them: by QNAME, over their own spans inside the
     windows) and cache each: ``(entries, truncated, scoped counts)``. A record of the batch that composed to nothing
     is cached with its reason: a hard-clipped supplementary whose tags cannot be scoped, a record the loader's
@@ -805,6 +836,18 @@ def _decode_records(dataset, contig: str, size: int, windows: list, binding: str
                               key=f"graph:{binding}", dataset_id=dataset.id, counts=counts,
                               loader_options=LOADER_OPTIONS,
                               molecule_groups=settings.molecule_group_map(list(dataset.paths), dataset.id))
+    if state is not None:
+        from services.scan.overlay import apply_scan_overlays, overlay_signature
+        if overlay_signature(state, dataset.id):
+            # The overlay's record join uses absolute alignment bounds and the input file, while annotation
+            # intervals remain relative to this composition's origin. Never join another record of a QNAME.
+            overlay_rows = []
+            for row in rows:
+                ll = row["live_lift"]
+                source = ll.get("source") or {}
+                overlay_rows.append({**row, "reference_start": source.get("start"), "reference_end": source.get("end"),
+                                     "library_id": dataset.paths[int(ll.get("library", 0))]})
+            rows = apply_scan_overlays(state, dataset.id, contig, a, b, overlay_rows)
     lib_of = {p: i for i, p in enumerate(dataset.paths)}
 
     def ident(lib, qname, start, end, sup):
@@ -1038,9 +1081,10 @@ def _load(state, reg, body: dict, *, max_molecules: int, max_marks: int, max_byt
         dataset, binding, contig, windows, size = job
         kept = [k for k in recs or () if k[1] in pins or keeps(k[1], lvl)]
         from services.nuc.store import nuc_identity
+        from services.scan.overlay import overlay_signature
         # (Nucleosome outputs computed for the dataset's records are part of what a composed row is: services/nuc.)
         base = (dataset.id, dataset_revision(dataset), binding["key"], contig, tuple(sorted(LOADER_OPTIONS.items())),
-                WIRE_VERSION, nuc_identity(dataset))
+                WIRE_VERSION, nuc_identity(dataset), overlay_signature(state, dataset.id))
         keys = [_record_key(base, k) for k in kept]
         listed_n: dict = {}
         for key in keys:
@@ -1069,7 +1113,7 @@ def _load(state, reg, body: dict, *, max_molecules: int, max_marks: int, max_byt
                       min(size + 1, max([windows[-1][1], *(k[4] for k in missing)]) + 1))
             t = time.perf_counter()
             got, truncated, sc, n_decoded = _decode_records(dataset, contig, size + 1, windows, binding["key"], missing,
-                                                            region, base, listed_n, allowance)
+                                                            region, base, listed_n, allowance, state=state)
             decode_ms += (time.perf_counter() - t) * 1000
             decoded_records += n_decoded
             for kk, vv in (sc or {}).items():
@@ -1239,7 +1283,7 @@ def _load(state, reg, body: dict, *, max_molecules: int, max_marks: int, max_byt
     for r in reads:
         n = marks_of(r)
         if marks + n > max_marks:
-            for name in (*_LAYERS, "m6a_density"):
+            for name in (*_LAYERS, *_LANES, "layers", "m6a", "m6a_density"):
                 r.pop(name, None)
             r["calls_omitted"] = True
             n = 0

@@ -23,7 +23,7 @@ export function clearHubSv(): void { hubFeeds.clear(); listeners.forEach(fn => f
 
 const SV_TYPE: FeatureTypeDecl = {
   // No per-read states through the hub yet (SV genotypes group reads through the SV tab's own split).
-  typeId: 'var.sv', module: 'browser:sv', label: 'SV', plural: 'SVs', provides: ['hit'], anchor: 'start', zeroWidth: true,
+  typeId: 'var.sv', module: 'browser:sv', label: 'SV', plural: 'SVs', provides: ['hit', 'state'], anchor: 'start', zeroWidth: true,
   scores: [{ name: 'prevalence', label: 'Carrier share', kind: 'fraction', better: 'none', perGroup: true },
     { name: 'support', label: 'Carriers', kind: 'count', better: 'high', perGroup: true }],
   roles: { prevalence: 'prevalence', strength: 'support' },
@@ -64,7 +64,7 @@ function svSets(s: BrowserState, view: HubView): FeatureSet[] {
     values.all = { prevalence: { v: informative ? carriers / informative : null, n: informative }, strength: { v: carriers } };
     return { hitId: `sv:${view.chrom}:${sv.t}:${sv.ref}:${sv.len}`, setId, typeId: 'var.sv', frame: { kind: 'linear', chrom: view.chrom },
       chrom: view.chrom, start: span.start, end: span.end, anchor: span.start, label: svName(sv, refs[0].datasetId!, view.chrom),
-      scores: { prevalence: values.all.prevalence.v, support: carriers }, values, legacyRefs: refs,
+      scores: { prevalence: values.all.prevalence.v, support: carriers }, stateSpec: { kind: 'sv', t: sv.t, length: sv.len }, values, legacyRefs: refs,
       flags: span.zeroWidth ? ['zero_width'] : [], detail: { kind: sv.t === 'I' ? 'insertion' : 'deletion', length: sv.len },
       link: { panel: 'variants', payload: null } };
   });

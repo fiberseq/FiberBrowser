@@ -89,6 +89,9 @@ export function drawableHits(selected: HubSelected[] = useBrowserStore.getState(
   for (const [setId, entry] of Object.entries(useHubData.getState().hits)) {
     for (const h of entry.hits) out.set(`${setId}|${h.hitId}`, { hit: { ...h, setId }, selected: sel.has(`${setId}|${h.hitId}`) });
   }
+  for (const set of useHubData.getState().providers) for (const hit of set.source.kind === 'inline' ? set.source.hits : []) {
+    const key = `${set.setId}|${hit.hitId}`; out.set(key, { hit, selected: sel.has(key) });
+  }
   for (const s of selected) if (!out.has(`${s.setId}|${s.hitId}`)) out.set(`${s.setId}|${s.hitId}`, { hit: s, selected: true });
   return [...out.values()];
 }
@@ -177,7 +180,9 @@ export function selectFromGraph(o: HubGraphOutline, additive: boolean): boolean 
   const entry = (() => {
     const fromSel = hub.selected.find(s => s.setId === o.setId && s.hitId === o.hitId);
     if (fromSel) return fromSel;
-    const h = useHubData.getState().hits[o.setId]?.hits.find(x => x.hitId === o.hitId);
+    const provider = useHubData.getState().providers.find(s => s.setId === o.setId);
+    const h = useHubData.getState().hits[o.setId]?.hits.find(x => x.hitId === o.hitId)
+      ?? (provider?.source.kind === 'inline' ? provider.source.hits.find(x => x.hitId === o.hitId) : undefined);
     return h ? selectionEntryOf(o.setId, h) : null;
   })();
   if (!entry) return false;
@@ -189,6 +194,6 @@ export function selectFromGraph(o: HubGraphOutline, additive: boolean): boolean 
 }
 
 function selectionEntryOf(setId: string, hit: FeatureHit): HubSelected | null {
-  const set = scanSets(useHubData.getState().scans).find(s => s.setId === setId);
+  const set = [...scanSets(useHubData.getState().scans), ...useHubData.getState().providers].find(s => s.setId === setId);
   return set ? hitSelectionEntry(set, hit) : null;
 }

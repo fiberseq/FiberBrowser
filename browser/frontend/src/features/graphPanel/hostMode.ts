@@ -181,7 +181,7 @@ export function leaveGraph(panels: PanelConfig[], hostId: string): PanelConfig[]
   const host = panels.find(p => p.id === hostId);
   return panels.map(p => {
     if (p.id === hostId) return { ...p, viewMode: 'linear' as const };
-    if (p.graphMemberOf === hostId && p.collapsedByGraphGroup === hostId) return host ? sharedView(reveal(p, hostId), host) : reveal(p, hostId);
+    if (p.graphMemberOf === hostId && p.collapsedByGraphGroup === hostId && useGraphSettings.getState().linearHostView === 'reveal_members') return host ? sharedView(reveal(p, hostId), host) : reveal(p, hostId);
     return p;
   });
 }

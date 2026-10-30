@@ -19,6 +19,7 @@ export interface PackFeatureKinds {}
 export type FeatureKind = 'fp-class' | Extract<keyof PackFeatureKinds, string>;
 
 export interface FeatureRef {
+  hubHit?: import('../features/hub/hubState').HubSelected;
   kind: FeatureKind;
   /** The run the feature comes from (fp-class: the Find classes run; a pack's kind: its own source). */
   source: string;
@@ -103,7 +104,7 @@ export interface FeatureKindActions {
 export function featureKindWithActions(features: FeatureRef[]): (FeatureKindDef & { actions: FeatureKindActions }) | null {
   for (const f of features) {
     const def = kinds.get(f.kind);
-    if (def?.actions) return def as FeatureKindDef & { actions: FeatureKindActions };
+    if (!f.hubHit && def?.actions) return def as FeatureKindDef & { actions: FeatureKindActions };
   }
   return null;
 }
@@ -172,8 +173,9 @@ export function normalizeFeatureRefs(value: unknown): FeatureRef[] {
     const def = typeof r.kind === 'string' ? kinds.get(r.kind) : undefined;
     if (!def) continue;  // a kind of a plugin pack this build doesn't have
     if (typeof r.source !== 'string' || typeof r.id !== 'string' || !r.source || !r.id) continue;
-    if (def.perDataset && (typeof r.datasetId !== 'string' || !r.datasetId)) continue;
+    if (def.perDataset && !r.hubHit && (typeof r.datasetId !== 'string' || !r.datasetId)) continue;
     const ref: FeatureRef = { kind: r.kind as FeatureKind, source: r.source, id: r.id };
+    if (r.hubHit && typeof r.hubHit === 'object') ref.hubHit = r.hubHit as FeatureRef['hubHit'];
     if (typeof r.datasetId === 'string' && r.datasetId) ref.datasetId = r.datasetId;
     if (typeof r.chrom === 'string' && r.chrom) ref.chrom = r.chrom;
     // Zero-width coordinates (an insertion boundary) are kept only for kinds that declare them.

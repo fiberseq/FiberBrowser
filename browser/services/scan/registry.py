@@ -89,6 +89,9 @@ def score_roles(scores: List[dict]) -> dict:
     strength = next((x for x in others if x.get('perGroup')), None) or (others[0] if others else None)
     if strength:
         roles['strength'] = strength['name']
+    q = next((x for x in scores if x.get('kind') == 'q' and str(x.get('name', '')).startswith('q')), None)
+    if q:
+        roles['q'] = q['name']
     return roles
 
 
@@ -98,8 +101,11 @@ def _camel_type(decl: dict) -> dict:
     scores = [dict(name=s.get('name'), label=s.get('label') or s.get('name'), kind=s.get('kind', 'fraction'),
                    better=s.get('better', 'none'), perGroup=bool(s.get('per_group'))) for s in decl.get('scores') or []]
     roles = dict(CONTRACT_ROLES.get(type_id) or score_roles(scores))
+    provides = list(decl.get('provides') or [])
+    if type_id.startswith('peaks.') and 'state' not in provides:
+        provides.append('state')
     return dict(typeId=type_id, module=decl.get('module', ''), label=decl.get('label') or type_id,
-                plural=decl.get('plural') or decl.get('label') or type_id, provides=list(decl.get('provides') or []),
+                plural=decl.get('plural') or decl.get('label') or type_id, provides=provides,
                 anchor=decl.get('anchor', 'centre'), zeroWidth=bool(decl.get('zero_width')), scores=scores,
                 stateRule=decl.get('state_rule') or '', transferableState=bool(decl.get('transferable_state')),
                 roles=roles, columns=list(decl.get('columns') or []))
@@ -139,7 +145,7 @@ class OpenScan:
     def set_id(self, type_id: str, module: str) -> str:
         """A set's id: over the scan id for opened scans; over the directory for the browser's cache, whose scan id
         changes as it grows (another chromosome), so a selection keeps naming its sets."""
-        key = f'cache:{self.path}' if self.source == 'cache' else self.scan_id
+        key = (self.manifest.get('browser_set_identity') or f'cache:{self.path}') if self.source == 'cache' else self.scan_id
         return set_id_of(type_id, key, module, self.module(module).get('settings_hash', ''))
 
     def dataset_of_browser(self, browser_id: str) -> Optional[str]:
@@ -191,7 +197,15 @@ class OpenScan:
             }
         found: Dict[str, list] = {sid: [] for sid in wanted}
         overlaps: Dict[str, str] = {}
-        for ds_id, files in loaded.items():
+        variants = list(loaded.items())
+        from .live_evidence import input_ids
+        for ds_id, dataset in (getattr(state, 'datasets', None) or {}).items():
+            if getattr(dataset, 'data_type', None) == 'bam_livelift':
+                try:
+                    variants.append((ds_id, list(zip(dataset.paths, input_ids(dataset)))))
+                except (OSError, ValueError, AttributeError):
+                    pass
+        for ds_id, files in variants:
             by_cid = {cid: path for path, cid in files if cid}
             own = set(by_cid)
             if not own or len(by_cid) != len(files):
@@ -512,7 +526,9 @@ def close_scan(state, scan_id: str) -> bool:
 
 
 def _loaded_signature(state) -> tuple:
-    return tuple(sorted((ds_id, tuple(getattr(ds, 'paths', None) or ()), getattr(ds, 'data_type', None))
+    from services.lift.reads import lift_identity
+    return tuple(sorted((ds_id, tuple(getattr(ds, 'paths', None) or ()), getattr(ds, 'data_type', None),
+                         lift_identity(ds) if getattr(ds, 'data_type', None) == 'bam_livelift' else ())
                         for ds_id, ds in (getattr(state, 'datasets', None) or {}).items())) + \
         (tuple((str(c.name), int(c.size)) for c in (getattr(state, 'chroms', None) or [])),)
 

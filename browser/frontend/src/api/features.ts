@@ -28,6 +28,6 @@ export const getFeatureStates = (features: FeatureRef[]) => fetchJson<FeatureSta
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   // Per-dataset kinds (footprint classes, SVs) carry their dataset; a hub set's ref may name one to restrict to it.
-  body: JSON.stringify({ features: features.map(f => ({ kind: f.kind, source: f.source, id: f.id,
+  body: JSON.stringify({ features: features.map(f => ({ kind: f.kind, source: f.source, id: f.id, ...(f.hubHit ? { hub_hit: f.hubHit } : {}),
     ...(f.datasetId && (featureKindDef(f.kind)?.perDataset || isHubSource(f.source)) ? { dataset_id: f.datasetId } : {}) })) }),
 });

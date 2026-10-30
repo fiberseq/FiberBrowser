@@ -107,8 +107,23 @@ def states_from_table(state, scan, module: str, hit: dict, bound) -> Dict[Tuple[
             if r.get('hit_id') == hit['hit_id'] and r.get('dataset_id') in sids]
     if not rows:
         return found
+    from .live_evidence import source_record_map
+    record_map = source_record_map(scan)
     for pair, binding in bound.items():
-        _states_for_binding(state, hit, rows, pair, binding, found)
+        if record_map:
+            sid, bid = pair
+            keyer = _Keyer(state, bid, binding[2])
+            for row in rows:
+                if row.get('dataset_id') != sid:
+                    continue
+                i = int(row.get('input_index') or 0)
+                source = record_map.get((sid, i, row.get('record')))
+                if source is None:
+                    continue
+                key = keyer.key(i, row.get('qname', ''), source)
+                found.setdefault((bid, key), []).append(_state_char(row.get('state')))
+        else:
+            _states_for_binding(state, hit, rows, pair, binding, found)
     return found
 
 
@@ -281,7 +296,7 @@ def hub_feature_states(state, source: str, feature: dict):
         raise ValueError('The scan of this feature is not open in this session: open it in the Feature hub')
     scan, module, type_id = found_set
     decl = scan.type_decl(module, type_id) or {}
-    if 'state' not in (decl.get('provides') or []):
+    if 'state' not in (decl.get('provides') or []) and not type_id.startswith('peaks.'):
         raise ValueError(f'{decl.get("plural") or type_id} have no per-read states')
     hit = find_hit(scan, module, feature['id'])
     if hit is None:
@@ -289,6 +304,12 @@ def hub_feature_states(state, source: str, feature: dict):
     bound = _bindings(scan, feature.get('dataset_id'))
     if not bound:
         raise ValueError('No loaded dataset is bound to this scan (scan of other files): no per-read states')
+    if type_id.startswith('peaks.') and not scan.tables.has(f'{module}/states.tsv.bgz'):
+        from services.hub.provider_states import browser_feature_states
+        hit_descriptor = dict(setId='browser:scan-peak', hitId=feature['id'], typeId=type_id, chrom=hit['chrom'],
+            start=int(hit['start']), end=int(hit['end']), anchor=int(hit.get('anchor') or hit['start']),
+            datasets=sorted({bid for bid, _via, _files in bound.values()}), stateSpec=dict(kind='open'))
+        return browser_feature_states(state, hit_descriptor['setId'], dict(hub_hit=hit_descriptor, id=feature['id']))
     if scan.tables.has(f'{module}/states.tsv.bgz'):
         found = states_from_table(state, scan, module, hit, bound)
     else:

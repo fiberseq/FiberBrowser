@@ -91,6 +91,7 @@ def _write_facade(state, kind, job, mappings):
     from fiberhmm.scan.tables import COMMON, TableWriter
     curation = job.get('_curation') or {}
     payload = dict(kind=kind, job_id=job['job_id'], mappings=mappings, filters=job.get('filters'),
+                   execution_scan=job.get('execution_scan'),
                    view_stage=job.get('view_stage'), curation={k: curation.get(k) for k in ('revision', 'cursor')})
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
     directory = Path(job['artifact_dir']) / 'hub-scan' / digest[:20]
@@ -121,7 +122,8 @@ def _write_facade(state, kind, job, mappings):
                     modules={module: dict(version='legacy', settings_hash=digest, feature_types=[dict(type_id=t, module=module,
                         label=t, plural=t, provides=['hit'], anchor='centre', zero_width=False, scores=[]) for t in types])},
                     outputs={'annotate': False, 'tables': {f'{module}/hits.tsv.bgz': table}},
-                    legacy=dict(job_id=job['job_id'], kind=kind, state_resolver='legacy', mappings=mappings))
+                    legacy=dict(job_id=job['job_id'], kind=kind, state_resolver='legacy', mappings=mappings),
+                    execution=dict(engine=job.get('execution_engine', 'legacy'), scan=job.get('execution_scan')))
     # Publish manifest last. Readers cannot see a complete snapshot before its tables exist.
     tmp = directory / 'manifest.tmp'
     tmp.write_text(json.dumps(manifest, sort_keys=True))
@@ -150,6 +152,7 @@ def legacy_runs(state):
                     mappings = _rows(kind, job)
                     directory = _write_facade(state, kind, job, mappings)
                     run = dict(kind=kind, jobId=job['job_id'], path=directory, mappings=mappings,
+                               executionEngine=job.get('execution_engine', 'legacy'),
                                active=kind == 'consensus' and state.__dict__.get('consensus_workflow_active') == job['job_id'])
                     job['hub'] = dict(path=directory, mappings=mappings)
                     runs.append(run)

@@ -28,7 +28,66 @@ def _float(value) -> Optional[float]:
         return None
 
 
-def scan_rows(scan, browser_id: str, chrom: str, start: int, end: int) -> Dict[Tuple[str, str, int], RecordOutputs]:
+_EVIDENCE_ROWS = {}
+
+
+def scan_rows(scan, browser_id: str, chrom: str, start: int, end: int):
+    """Read scan outputs in the loaded records' frame, including live evidence snapshots."""
+    from services.scan.live_evidence import source_record_map
+    mapping = source_record_map(scan)
+    if not mapping:
+        return _native_scan_rows(scan, browser_id, chrom, start, end)
+    cache_key = (scan.manifest_digest, browser_id)
+    cached = _EVIDENCE_ROWS.get(cache_key)
+    files = {(sid, int(i)): real(path) for sid, bid, _via, by_index in scan.bound_pairs()
+             if bid == browser_id for i, path in by_index.items()}
+    if cached is None:
+        targets = {(files[(sid, i)], *record.rsplit(':', 1)): source_record
+                   for (sid, i, record), source_record in mapping.items() if (sid, i) in files}
+        cached = {}
+        for contig, length in scan.manifest['reference']['contigs']:
+            rows = _native_scan_rows(scan, browser_id, contig, 0, int(length))
+            for (path, sha, occurrence), row in rows.items():
+                original = targets.get((path, sha, str(occurrence)))
+                if original is not None:
+                    source_sha, source_occ = original.rsplit(':', 1)
+                    cached.setdefault((path, source_sha, int(source_occ)), row)
+        if len(_EVIDENCE_ROWS) >= 4:
+            _EVIDENCE_ROWS.clear()
+        _EVIDENCE_ROWS[cache_key] = cached
+    import pysam
+    from dataclasses import replace
+    from fiberhmm.nuc.records import DecodeContext, decode_record
+    from fiberhmm.scan.modules.nuc import _ref_envelope
+    from fiberhmm.scan.reads import iter_records, resolve_read_policy
+    from .engine import nuc_params
+    from .live import bam_chrom
+    params = nuc_params(scan.module('nuc').get('settings') or {})
+    filters = resolve_read_policy({})['filters']
+    out = {}
+    for path in set(files.values()):
+        with pysam.AlignmentFile(path, 'rb') as bam:
+            name = bam_chrom(bam.references, chrom)
+            if name is None:
+                continue
+            context = DecodeContext(bam.header, params)
+            for read, sha, occurrence in iter_records(bam, name, start, end, {**filters, 'duplicates': 'include'}):
+                key = path, sha, int(occurrence)
+                row = cached.get(key)
+                if row is None:
+                    continue
+                mol, _reason = decode_record(read, context)
+                if mol is None:
+                    continue
+                groups = {group: [(ms, ml, *_ref_envelope(mol, ms, ms + ml), q, label)
+                                   for ms, ml, _a, _b, q, label in marks] for group, marks in row.groups.items()}
+                out[key] = replace(row, chrom=name, ref_start=read.reference_start, ref_end=read.reference_end,
+                                   reverse=read.is_reverse, supplementary=read.is_supplementary,
+                                   hp=int(read.get_tag('HP')) if read.has_tag('HP') else None, groups=groups)
+    return out
+
+
+def _native_scan_rows(scan, browser_id: str, chrom: str, start: int, end: int) -> Dict[Tuple[str, str, int], RecordOutputs]:
     """``{(file, sha, occ): RecordOutputs}`` of a tables-mode scan's nuc rows for a bound browser dataset, over
     records whose alignment overlaps ``[start, end)`` (molecules) and their marks."""
     files: Dict[Tuple[str, int], str] = {}
@@ -85,8 +144,10 @@ def annotated_record_outputs(read, input_index: int, ctx) -> Optional[RecordOutp
     if not read.has_tag('MA'):
         return None
     mol, _why = decode_record(read, ctx)
-    groups = read_nuc_groups(read, mol=mol) if mol is not None else read_nuc_groups(read)
-    if not groups or any(g.get('stale') for g in groups.values()) or 'nucmol' not in groups:
+    from .scalars import nuc_header_context
+    contracts, _context = nuc_header_context(read.header)
+    groups = read_nuc_groups(read, mol=mol, contracts=contracts, context=ctx)
+    if not groups or any(g.get('stale') or g.get('unsupported') for g in groups.values()) or 'nucmol' not in groups:
         return None
     out_groups: Dict[str, list] = {g: [] for g in MARK_GROUPS}
     for g in MARK_GROUPS:

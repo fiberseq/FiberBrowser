@@ -31,6 +31,7 @@ export interface ScanHit {
   hitId: string; typeId: string; chrom: string; start: number; end: number; anchor: number;
   strand?: '+' | '-' | null; label: string; score: number | null; unitId?: string; parentId?: string | null;
   flags: string[]; zeroWidth: boolean;
+  scores?: Record<string, number | null>;
   /** Per column ('all' and each scan dataset id): the type's score roles. */
   columns: Record<string, { prevalence?: HitValue; strength?: HitValue }>;
   raw: Record<string, Record<string, HitValue>>;
@@ -82,11 +83,11 @@ export interface ScanRequest {
 
 const json = (body: unknown): RequestInit => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
-export const scanAvailable = () => fetchJson<{ available: boolean; reason?: string; fiberhmm?: string;
+export const scanAvailable = () => fetchJson<{ available: boolean; reason?: string; fiberhmm?: string; liveLiftScans?: boolean;
   modules: Array<{ name: string; version: string; experimental: boolean; types: string[] }> }>('/api/scan/available');
 /** `generation`: the server's scan generation the caller read (a restore): refused (409) once a session replaced it. */
-export const openScan = (path: string, generation?: number) =>
-  fetchJson<ScanInfo>('/api/scan/open', json(generation === undefined ? { path } : { path, generation }));
+export const openScan = (path: string, generation?: number, source?: 'opened' | 'cache') =>
+  fetchJson<ScanInfo>('/api/scan/open', json({ path, ...(generation === undefined ? {} : { generation }), ...(source ? { source } : {}) }));
 export const listScans = () => fetchJson<{ scans: ScanInfo[]; generation?: number }>('/api/scan/list');
 export const closeScan = (scanId: string) => fetchJson<{ closed: boolean }>(`/api/scan/${encodeURIComponent(scanId)}`, { method: 'DELETE' });
 export function scanHits(scanId: string, module: string, chrom: string, start: number, end: number, type?: string, signal?: AbortSignal,

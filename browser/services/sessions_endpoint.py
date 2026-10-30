@@ -148,7 +148,11 @@ def build_session_export_for_request(state, req, *, now: datetime | None = None,
         session["clustering"] = clustering_data
 
     if req.frontend_state:
-        session["frontend"] = req.frontend_state
+        from services.scan.session import export_scans
+        saved_frontend, scan_bundles = export_scans(state, req.frontend_state)
+        session["frontend"] = saved_frontend
+        if scan_bundles:
+            session["hub_scans"] = scan_bundles
 
     # Completed footprint-class runs the saved classes (and the active view) refer to, frozen into the session:
     # their artifacts are temporary and gone after a restart.
@@ -636,6 +640,10 @@ def _import_session(state, req, *, dafc_state=None) -> dict:
     restored_runs, run_problems = restore_session_runs(state, session)
     results["consensus_runs_restored"] = len(restored_runs)
     results["consensus_runs_failed"] = run_problems
+    from services.scan.session import restore_scans
+    restored_scans, scan_problems = restore_scans(state, session)
+    results["hub_scans_restored"] = len(restored_scans)
+    results["hub_scans_failed"] = scan_problems
     # Plugin packs restore their parts; a session written with packs this build doesn't have is said so.
     run_hooks("session_import_end", state, session, results)
     from services.hub.migration import legacy_runs

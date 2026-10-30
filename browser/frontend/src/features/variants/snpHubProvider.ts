@@ -5,7 +5,7 @@ import { datasetGroups, dsKey, overlapsView } from '../hub/providers';
 import type { FeatureHit, FeatureSet, FeatureTypeDecl } from '../hub/types';
 import { useVariantsStore } from './variantsState';
 
-const TYPE: FeatureTypeDecl = { typeId: 'var.snp', module: 'browser:snp', label: 'SNP', plural: 'SNPs', provides: ['hit'],
+const TYPE: FeatureTypeDecl = { typeId: 'var.snp', module: 'browser:snp', label: 'SNP', plural: 'SNPs', provides: ['hit', 'state'],
   anchor: 'start', zeroWidth: true, scores: [{ name: 'maf', label: 'Minor allele fraction', kind: 'fraction', better: 'none', perGroup: true }],
   roles: { prevalence: 'maf' } };
 export function snpSets(s: BrowserState, view: HubView): FeatureSet[] {
@@ -18,7 +18,8 @@ export function snpSets(s: BrowserState, view: HubView): FeatureSet[] {
       setId, hitId: `snp:${ds}:${chrom}:${n.id}`, typeId: TYPE.typeId, frame: { kind: 'linear', chrom }, chrom, start: n.pos,
       end: n.pos + (n.kind === 'del' ? n.length : n.kind === 'ins' ? 0 : 1), anchor: n.pos, label: `${n.alleles.join('/')} @ ${n.pos + 1}`,
       scores: { maf: n.maf }, values: { [dsKey(ds)]: { prevalence: { v: n.maf, n: n.depth } } },
-      detail: { kind: n.kind, passes: n.passes, scan: scan.scan_key }, link: { panel: 'variants', payload: { snp: n.id } },
+      stateSpec: { kind: 'snp', alleles: n.alleles, alt: n.alt, variantKind: n.kind, length: n.length },
+      detail: { kind: n.kind, length: n.length, alleleId: n.kind === 'snv' && n.ref ? `snv:${n.ref}>${n.alt}` : undefined,  passes: n.passes, scan: scan.scan_key }, link: { panel: 'variants', payload: { snp: n.id } },
     }));
     return [{ setId, typeId: TYPE.typeId, type: TYPE, frame: { kind: 'linear' as const, chrom }, datasets: [ds], groups: datasetGroups(s, [ds]),
       coverage: { territory: 'regions' as const, ref: `${chrom}:${scan.region.start}-${scan.region.end}` }, count: hits.length, status: 'complete' as const,

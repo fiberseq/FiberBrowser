@@ -149,6 +149,20 @@ are worked out on the reference's coordinates, so sequence that only a
 haplotype carries (an insertion) does not count towards a footprint or
 accessibility rule. A haplotype panel (MAT or PAT) is sorted on its own reads.
 
+For a site on the graph, right-click a read and choose **Sort by this graph
+column** (footprint size or accessibility), or **Sort by rule at this column**.
+This uses the reads on the paths that carry that node column, including inserted
+sequence. Rules that need reference annotations are disabled here. Uncovered
+sites sort after measured values. A site shared with the target keeps its order
+in linear view. A carrier-only site uses cluster order in linear view, with a
+notice; returning to the graph restores its site order.
+
+The toolbar's **Layers** switches also control scan state groups such as classes
+and NFR variants, custom annotation layers, 5mC and deamination marks on graph
+rows. Calls keep their original sizes, annotation names and quality bytes when
+split across nodes or coverage holes. Native scan-table layers refresh when the
+bound scan changes.
+
 ### Clustering
 
 With a panel drawing its graph, **Cluster** clusters on the graph itself.
@@ -192,7 +206,16 @@ fitted)*).
 
 An open source view of a haplotype in the run takes the run's labels by read
 name (its own strand), follows selections and gets labels for new reads as you
-pan. It is not a separate column in the cluster charts.
+pan. Each visible source view also has its own column in the cluster charts;
+opening one does not add an observation to the fit.
+
+The graph menu's **Graph run options** chooses **Exclude repeat columns**
+(default) or **Repeat columns by occurrence**, and **Refine within carriers**
+(default) or **Drop carrier-only features**. Occurrence mode distinguishes each
+visit by its stable graph identity; it does not pair copies on different paths
+by their order. These options are saved with the host and snapshotted in each
+run. After clustering, **Graph regions and carriers…** lists the run's parts,
+their carriers and any dropped parts.
 
 A cluster run stays while you pan and zoom on the same chromosome: new reads
 that come into view are given labels from the same run.
@@ -225,6 +248,10 @@ resolved place in the graph (for example a region the graph could not build at
 this width), and comes back when less than 30% is unresolved. The bar then says
 *Linear · most of this window is unresolved in the graph*.
 
+If the helper or registered package is unavailable, a dataset host also shows
+linear tracks with an explanation. It returns to graph mode when the helper
+and package are available again.
+
 ![Past 50 kb: the panel is linear and the haplotypes are beside it](../images/graph/graph-mode-handoff.png)
 
 - **Stay linear** (on the bar, or in the graph's right-click menu) keeps the
@@ -236,6 +263,9 @@ this width), and comes back when less than 30% is unresolved. The bar then says
   Graph mode** takes any pair from 10 to 50 kb (**Linear when wider than**,
   **Graph again at or below**) and **Complexity hand-off**. These apply in this
   browser, to every panel.
+- **Linear view of a host** in the same settings chooses **Reveal members**
+  (default) or **Host only**. Host only keeps folded members hidden during the
+  hand-off and when choosing **View as linear**. Panels you popped out stay visible.
 - Switching between graph and linear fades over 150 ms (not with reduced
   motion). After a graph run, a panel drawn linear lists the inserted sequence
   the run used as *Not drawn in linear view: …*.
@@ -259,8 +289,9 @@ hundred molecules and its density strip.
 
 Graph mode, the folded and popped-out panels, **Stay linear**, the pop-out
 kind and the cluster run are saved with sessions and the undo history. The
-hand-off widths are kept in this browser, not in sessions. A session opened on a
-computer without the graph package shows the panel with **View as linear**.
+hand-off widths and host-only preference are kept in this browser, not in
+sessions. Graph run options and graph-site sort provenance travel with the
+panels. A dataset host restored without its graph package falls back to linear.
 
 ## Troubleshooting
 

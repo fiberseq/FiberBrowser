@@ -136,6 +136,8 @@ export interface GraphAlias {
 export interface HitValue { v: number | null; lo?: number | null; hi?: number | null; n?: number | null; nCallable?: number | null }
 
 export interface FeatureHit {
+  idAliases?: string[];
+  stateSpec?: Record<string, unknown>;
   hitId: string;
   setId: string;
   typeId: string;

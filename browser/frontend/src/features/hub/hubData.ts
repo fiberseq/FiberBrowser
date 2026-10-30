@@ -165,7 +165,7 @@ async function restoreOnce(): Promise<void> {
       if (!current(born)) return;   // another session was imported meanwhile: its own restore runs
       if (open.has(s.path)) { delete missing[s.path]; continue; }
       try {
-        const info = await apiOpen(s.path, serverGeneration);
+        const info = await apiOpen(s.path, serverGeneration, s.source);
         delete missing[s.path];
         if (s.manifestDigest && info.manifestDigest !== s.manifestDigest) missing[s.path] = 'the scan changed since the session was saved: its hits may differ';
       } catch (e) {
@@ -222,7 +222,7 @@ export function scanHitToFeature(set: ScanSetInfo, scanId: string, h: ScanHit): 
   const values: Record<string, Record<string, HitValue>> = {};
   for (const [col, roles] of Object.entries(h.columns ?? {})) {
     const key = scanColumnKey(set, col, scanId);
-    values[key] = { ...(roles.prevalence ? { prevalence: roles.prevalence } : {}), ...(roles.strength ? { strength: roles.strength } : {}) };
+    values[key] = roles;
   }
   const all = h.columns?.all ?? {};
   // A source-frame hit (G1): its own frame (contig, haplotype), its lift and where it is drawn on this genome.
@@ -233,7 +233,7 @@ export function scanHitToFeature(set: ScanSetInfo, scanId: string, h: ScanHit): 
   return {
     hitId: h.hitId, setId: set.setId, typeId: h.typeId, frame, chrom: h.chrom, start: h.start, end: h.end, anchor: h.anchor,
     ...(h.strand ? { strand: h.strand } : {}), label: h.label,
-    scores: { prevalence: all.prevalence?.v ?? null, strength: all.strength?.v ?? null, score: h.score },
+    scores: { ...h.scores, prevalence: all.prevalence?.v ?? null, strength: all.strength?.v ?? null, score: h.score },
     values, flags: h.flags, detail: { module: h.module, raw: h.raw, unitId: h.unitId, parentId: h.parentId },
     ...(h.source ? { source: h.source } : {}), ...(h.lift ? { lift: h.lift } : {}), ...(h.target ? { target: h.target } : {}),
     ...(h.graph ? { graph: h.graph } : {}),

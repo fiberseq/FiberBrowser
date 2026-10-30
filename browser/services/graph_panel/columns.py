@@ -277,15 +277,30 @@ class RegionColumns:
 def region_columns(region: int, start: int, end: int, target: str, target_occs: dict[str, Occ],
                    observations: list[Observation], path_occs: dict[str, dict[str, Occ]],
                    tile_results: dict[str, dict[int, dict]], *, insertions: bool = True,
-                   binding_order: Optional[list[str]] = None) -> RegionColumns:
+                   binding_order: Optional[list[str]] = None, repeat_columns: str = "exclude") -> RegionColumns:
     """A region's features (shared target feature, non-target runs, deleted stretches) with every observation's
     blocks, from the merged occurrences of the cells the region meets. ``path_occs[binding]`` and
     ``tile_results[binding][cell]`` hold each graph observation's path; linear observations carry the target walk
     by identity."""
     if end - start > MAX_FEATURE_BP:
         raise ValueError(f"A graph region is at most {MAX_FEATURE_BP:,} bp; this one is {end - start:,} bp")
+    if repeat_columns not in ("exclude", "by_occurrence"):
+        raise ValueError("repeat_columns must be exclude or by_occurrence")
+    repeat_counts = {ob.id: sum(len(qs) for qs in visits(target_occs if ob.binding in (None, target)
+                    else path_occs.get(ob.binding, {})).values() if len(qs) > 1) for ob in observations}
+    if repeat_columns == "by_occurrence":
+        # Occurrence ids are absolute helper identities, never ranks within a tile or a selected-path list.
+        # Qualifying repeated visits keeps their columns distinct. Different paths' visits are not homologous
+        # merely because they are the first or second copy of a node; unique flanks still frame their runs.
+        def qualified(occs):
+            repeated = {n for n, qs in visits(occs).items() if len(qs) > 1}
+            return {oid: replace(q, node=json.dumps([q.node, q.id], separators=(",", ":"), ensure_ascii=False))
+                    if q.node in repeated else q for oid, q in occs.items()}
+        target_occs = qualified(target_occs)
+        path_occs = {b: qualified(occs) for b, occs in path_occs.items()}
     length = end - start
-    report: dict = {"unresolved": {}, "absent": {}, "repeats": {}, "dropped": []}
+    report: dict = {"unresolved": {}, "absent": {}, "repeats": {}, "dropped": [], "repeat_columns": repeat_columns,
+                    "repeat_occurrences": {oid: n for oid, n in repeat_counts.items() if n}}
     t_visits = visits(target_occs)
     # The target walk: frame position u -> (node, node-forward offset, target occurrence).
     cols: list[Optional[tuple[str, int, Occ]]] = [None] * length
@@ -549,7 +564,7 @@ def stage_plan(regions: list[RegionColumns], observation_ids: list[str], *, carr
     sets = [{"carriers": list(k), "features": fs} for k, fs in order]
     report: dict = {"dropped": dropped}
     for r in regions:
-        for k in ("unresolved", "absent", "repeats"):
+        for k in ("unresolved", "absent", "repeats", "repeat_occurrences"):
             for oid, n in r.report.get(k, {}).items():
                 report.setdefault(k, {}).setdefault(oid, 0)
                 report[k][oid] += n

@@ -8,7 +8,7 @@
  */
 
 export type OverlayAlign = 'anchor' | 'left' | 'right' | 'scaled';
-export type OverlayLayer = 'regular' | 'disordered' | 'undetermined' | 'low_information' | 'undersized' | 'missing' | 'nucleosome' | 'tf';
+export type OverlayLayer = 'regular' | 'disordered' | 'undetermined' | 'low_information' | 'undersized' | 'missing' | 'nucleosome' | 'tf' | `layer:${string}`;
 
 export const OVERLAY_LAYERS: Array<{ key: OverlayLayer; label: string }> = [
   { key: 'regular', label: 'Regular arrays (nucseg)' },
@@ -26,6 +26,7 @@ export interface OverlayLocus {
   chrom: string; start: number; end: number; anchor: number; strand?: '+' | '-';
   label?: string; hitId?: string; setId?: string;
   /** Graph columns' per-path statuses (graph mode: carriers only). */
+  graph?: import('./types').GraphAlias;
   paths?: Record<string, { status: string; hap?: string; datasets?: string[] }>;
   /** It sits at an insertion's junction on this genome (its sequence is inside the insertion). */
   insertion?: boolean;
@@ -84,7 +85,7 @@ const LOCI = ['selection', 'set', 'anchors', 'patches'] as const;
 
 export function normalizeOverlay(value: unknown): OverlayState {
   const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>;
-  const layer = OVERLAY_LAYERS.some(l => l.key === v.layer) ? v.layer as OverlayLayer : DEFAULT_OVERLAY.layer;
+  const layer = (OVERLAY_LAYERS.some(l => l.key === v.layer) || (typeof v.layer === 'string' && v.layer.startsWith('layer:') && v.layer.length > 6)) ? v.layer as OverlayLayer : DEFAULT_OVERLAY.layer;
   const result = v.result && typeof v.result === 'object' && Array.isArray((v.result as OverlayResult).series) ? v.result as OverlayResult : null;
   return {
     loci: LOCI.includes(v.loci as typeof LOCI[number]) ? v.loci as OverlayState['loci'] : 'selection',

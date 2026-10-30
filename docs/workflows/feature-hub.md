@@ -110,10 +110,19 @@ BAM files.
   row in the table. **▸** shows the values with their counts and intervals,
   where the set came from, and **Go to** / **Open in its panel**.
 
-The hub lists the hits in the main view. It is saved with the session: the
-scans it opened (reopened when the session is), its settings, the selection and
-the anchor sets. A scan that can't be found is listed as **Scan not found**:
-open it again from where it is now, or re-scan.
+**Scope** chooses the view, a BED file, gene names around their TSS, an anchor
+set, one complete scan, or all open scans genome-wide. Genome scopes use scan
+files; browser providers retain the territory in which they were computed.
+The server filters and sorts the full hit set before returning a page (50–500
+rows). **Select shown** selects that page. Selection survives changing pages.
+Strength, q, and declared-score filters combine with prevalence and type.
+
+The session keeps scans, list settings, selection, and anchor sets. Browser
+scan directories are embedded up to a cumulative 25 MiB of uncompressed files;
+larger scans stay references. Embedded scans restore even after the original
+cache was removed. A missing reference offers **Open scan** or **Re-scan**.
+Scans of other files remain read-only: their hits and values are available,
+but they cannot join molecules from the loaded datasets.
 
 ## Hits of an assembly scan
 
@@ -186,9 +195,15 @@ With hits selected:
   needs the **Custom** peak rule on. Cluster uses the reads that span every
   region, so pick hits that the same reads cover.
 - **Filter** keeps the reads that are members (state 1: in the class, open in
-  the NFR) of any selected hit with per-read states; peaks, SVs and Differences
-  have none here and are left out, as the notice says. The filter chip says
-  **Feature hub**.
+  the NFR) of any selected hit with per-record states. SVs, SNPs, Differences,
+  graph bubbles, and measured peak openness also supply states. Unmeasured or
+  unresolved records retain “.”. The filter chip says **Feature hub**.
+- **Split** opens the state-pattern panel split; its descriptors survive sessions.
+- **Highlight** highlights carrier reads and the selected regions.
+- **Region catalog** saves placed hits under **Feature hub**.
+- **Condition** opens M2 with exactly the selected hits as A, including earlier pages.
+- **Export BED6** retains zero-width insertion boundaries. **Export values**
+  includes group values, bounds, counts, and provenance.
 - **Go to** shows the selected hits.
 
 ![Reads clustered on two NFR variants picked in the hub](../images/feature-hub/cluster-regions.png)
@@ -235,10 +250,13 @@ doesn't have it yet (for example a nucleosome scan for the first one):
   open or closed at the anchor (an MSP of at least 80 bp over it, or a
   nucleosome on it) and compares with matched random positions, so its anchors
   must have a state defined anywhere: NFR regions, peaks or an anchor set. It
-  runs on native datasets, one at a time, each with the Nucleosomes panel's
-  calibration for it. A per-molecule measure uses A's own states (footprint
+  runs jointly on native datasets, using each dataset's own repeat length,
+  marking prior and size calibration. Choose **Datasets** for the test of the
+  difference between datasets. A per-molecule measure uses A's own states (footprint
   classes, NFRs), with other hits of A as backgrounds when an anchor BED is
-  given. M3 takes the nucleosome scan's mark types as A and its TF calls as B.
+  given. M3 takes nucleosome marks as A and TF calls or a state set from
+  another compatible scan as B. Dataset bindings join the scans; only their
+  shared callable territory contributes exposure.
 - **Group**: none (pooled), **datasets**, **haplotypes** (HP tags of native
   reads, MAT/PAT of an assembly scan's hits; unphased molecules are left out of
   the contrast and reported apart), or the **cluster labels** of the shown
@@ -254,7 +272,12 @@ doesn't have it yet (for example a nucleosome scan for the first one):
   and the seed.
 
 **Running.** **Run** starts a job on the scan job manager, with progress and
-**Cancel**. A finished run joins **Runs**, which are kept with the session and
+**Cancel**. Cancellation is checked during the engine's resampling batches.
+For NFR phasing, **Rediscover NFR anchors on held-out molecule halves**
+reruns NFR discovery on one stable molecule half and tests the other, then
+reverses the halves. The Q2 preset enables this option. The pooled readout
+uses the mean of the two directions and their independent permutation nulls;
+group contrasts are shown for each held-out direction. A finished run joins **Runs**, which are kept with the session and
 come back when the session is opened again.
 
 **Results.**
@@ -323,20 +346,21 @@ denominators per panel; **SVG** saves the chart.
 
 ## Limits in this release
 
-- The table lists the hits in the main view; genome-wide lists of a scan come
-  later.
 - A scan in another assembly is lifted onto this genome through a live-lift
   dataset of its BAM; without one, its hits can't be placed here. Lifting needs
   graphlift's `liftbed` next to the graph helper (or `FIBERBROWSER_LIFTBED`).
-- Graph columns, and so **absent**, are for scan hits; Differences, peak rules
-  and Find classes rows have none yet.
-- Graph bubbles are not listed yet.
-- Associations: Differences have no per-molecule states in the hub yet (SVs do);
-  M2 phasing runs on native datasets, one at a time, with no test between
-  datasets; M3 reads nucleosome scans in table mode (live scans are), one per
+- Browser-produced graph bubbles share the list, path columns, outlines, and
+  selection with scan hits. Geometry-only variation identities are labelled
+  separately from exact alleles; legacy ids remain aliases.
+- Associations: M2 phasing runs on native datasets with per-dataset calibration and dataset
+  interaction tests; M3 reads nucleosome scans in table mode (live scans are), one per
   dataset; M4 has no territory for an assembly scan yet; M4 strata are one per
-  contig unless a strata BED is given. SVs and Differences are listed only
-  while their panels show them (not in the hub's full view).
+  contig unless a strata BED is given. The hub loads SV and Differences inputs
+  independently of mounted read panels.
 - The overlay measures an assembly scan's hit inside an insertion on its own
   haplotype's panel only.
-- The overlay measures nucleosome outputs; layers of other modules come later.
+- The overlay also accepts loaded MA layers and bound scan state/mark layers.
+  State layers count only evaluated intervals in their denominators. Graph
+  observations align through unique node columns; missing alleles, repeated
+  nodes and offsets outside path clips stay unmeasured. Graph alignment needs
+  a registered package covering each locus.

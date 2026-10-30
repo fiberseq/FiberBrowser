@@ -9,7 +9,7 @@ import type { FeatureSet } from './types';
 
 interface Mapping { hasStates?: boolean; note?: string; detail?: Record<string, unknown>; jobId: string; family: string; datasetId: string; setId: string; hitId: string; typeId: string;
   chrom: string; start: number; end: number; anchor: number; label: string; legacyRef: FeatureRef }
-export interface LegacyRuns { runs: { kind: string; jobId: string; path: string; active: boolean; mappings: Mapping[] }[]; problems: unknown[] }
+export interface LegacyRuns { runs: { kind: string; jobId: string; path: string; active: boolean; executionEngine?: string; mappings: Mapping[] }[]; problems: unknown[] }
 export const useLegacyRuns = create<{ data: LegacyRuns }>(() => ({ data: { runs: [], problems: [] } }));
 let generation = 0;
 export function resetLegacyRuns(): void { generation++; useLegacyRuns.setState({ data: { runs: [], problems: [] } }); }
@@ -30,7 +30,8 @@ export function legacySets(s: BrowserState, view: HubView): FeatureSet[] {
       set = { setId: row.setId, typeId: row.typeId, type: { typeId: row.typeId, module: `browser:${run.kind}`, label: row.typeId,
         plural: row.typeId, provides: row.hasStates === false ? ['hit'] : ['hit', 'state'], anchor: 'centre', zeroWidth: false, scores: [] },
         ...(row.note ? { note: row.note } : {}), frame: { kind: 'linear', chrom: row.chrom }, datasets: [], groups: [], coverage: { territory: 'regions' }, status: 'complete',
-        source: { kind: 'inline', hits: [] }, provenance: { producer: 'browser', module: run.kind, inputs: [], units: 'regions', summary: 'Restored legacy run' } };
+        source: { kind: 'inline', hits: [] }, provenance: { producer: 'browser', module: run.kind, inputs: [], units: 'regions',
+          summary: run.executionEngine?.startsWith('scan:') ? 'Scan engine run' : 'Restored legacy run' } };
       sets.set(row.setId, set);
     }
     if (!set.datasets.includes(row.datasetId)) { set.datasets.push(row.datasetId); set.groups = datasetGroups(s, set.datasets); }

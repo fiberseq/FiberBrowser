@@ -13,6 +13,7 @@ import { SV_COLORS } from '../../components/tracks/read-track/svDrawing';
 import { drawNucSegLane } from '../../components/tracks/read-track/nucSegCanvas';
 import { inkOn } from '../../components/tracks/read-track/ReadTrackCanvas';
 import { describeNucClassBytes, describeNucSegRow, isNucSegEvent, nucSegLaneGeometry, type NucSegRow, type NucSegRows } from '../../utils/nucLayers';
+import { getLayerLabel } from '../../utils/layerColors';
 
 const SV_CLIP_COLOR = SV_COLORS.clip;
 import type { HostLane } from './memberBands';
@@ -25,8 +26,10 @@ export const READ_ROW_HEIGHT = 7;
 export const READ_ROW_GAP = 2;
 /** Read insertions drawn as carets from this many bp (1–4 bp HiFi indels would be noise at panel scale). */
 export const READ_INSERTION_MIN_BP = 10;
+const BACKGROUND_LAYERS = new Set(['ddda_mcg', 'ddda_mcg_hemi', 'deam_ct', 'deam_ga']);
 
 export interface ReadLayers { nuc: boolean; tf: boolean; msp: boolean; m6a: boolean;
+  extra?: Record<string, boolean | undefined>;
   /** Soft clips of at least this length, as the read tracks' SV display draws them (null or absent: off). */
   clipsMinLen?: number | null;
   /** Nucleosomes group: size-class rules read each call's class bytes (`nucsz`), the segment lane (`nucseg`). */
@@ -43,6 +46,7 @@ export interface ReadLayers { nuc: boolean; tf: boolean; msp: boolean; m6a: bool
 export function effectiveReadLayers(enabled: Record<string, boolean | undefined> | null | undefined,
   panel?: Partial<ReadLayers> | null): ReadLayers {
   const g = enabled ?? {};
+  const extra = Object.fromEntries(Object.entries(g).filter(([key]) => !['nuc', 'tf', 'msp', 'fire', 'm6a', 'mod', 'nucsz', 'nucseg'].includes(key)));
   const global: ReadLayers = {
     // Graph reads always carry a nuc layer (legacy inference included): the read track then reads `nuc` alone.
     nuc: g.nuc ?? true,
@@ -52,11 +56,20 @@ export function effectiveReadLayers(enabled: Record<string, boolean | undefined>
   };
   return { nuc: global.nuc && panel?.nuc !== false, msp: global.msp && panel?.msp !== false,
     tf: global.tf && panel?.tf !== false, m6a: global.m6a && panel?.m6a !== false,
-    nucsz: Boolean(g.nucsz), nucseg: Boolean(g.nucseg) };
+    nucsz: Boolean(g.nucsz), nucseg: Boolean(g.nucseg), ...(Object.keys(extra).length ? { extra } : {}) };
+}
+
+/** Alias groups use the same switch as their native channel; every other annotation uses its own switch. */
+function extraLayerEnabled(layer: string, layers: ReadLayers): boolean {
+  if (layer === 'fire') return layers.msp;
+  if (layer === 'm6a' || layer === 'mod') return layers.m6a;
+  if (layer === 'footprint') return Boolean(layers.extra?.footprint ?? layers.nuc);
+  return Boolean(layer.startsWith('deam_opportunity_') ? layers.extra?.deam_opportunity : layers.extra?.[layer]);
 }
 
 /** What one draw put on the canvas, per layer (e2e and tests read it). */
 export interface ReadDrawStats { nuc: number; tf: number; msp: number; m6a: number; m6aDensity: number; outlined?: number; clips?: number;
+  extra?: Record<string, number>;
   /** Segment-lane rows drawn (segments and events). */
   nucSeg?: number }
 
@@ -70,6 +83,7 @@ export interface ReadHit { x0: number; x1: number; y0: number; y1: number; molec
 
 /** Host mode (graph primary G3): what each row is and how it is marked. */
 export interface ReadDecoration {
+  styleForRead?: (m: PlacedMolecule) => ChromatinStyle;
   /** Per lane: the member and cluster of each row (-1 unassigned, null: no clusters). */
   rowMember?: (lane: string, row: number) => string | undefined;
   rowCluster?: (lane: string, row: number) => number | null;
@@ -99,7 +113,7 @@ export function bandHeight(lane: PackedLane | undefined, rowHeight = READ_ROW_HE
 /** A call piece's style: its whole call's size and qualities, and its class bytes while size classes are on (off:
  * no mark, so class rules match nothing). */
 export function callPieceStyle(style: ChromatinStyle, c: CallPiece, nucClasses: boolean): CallStyle | null {
-  return style.call(c.layer, c.call[2], c.qualities, nucClasses ? graphNucMark(c.cls, c.zb, c.nb, c.call[0], c.call[1]) : null);
+  return style.call(c.layer, c.call[2], c.qualities, nucClasses ? graphNucMark(c.cls, c.zb, c.nb, c.call[0], c.call[1]) : null, c.annotationName);
 }
 
 /** A molecule's segment-lane pieces as lane rows in screen x, shifted by `base` so none starts left of 0 (the lane
@@ -161,6 +175,7 @@ export function drawReads(ctx: CanvasRenderingContext2D, scene: Scene, lanes: Ma
       const y = row.bandTop + gap + r * (rowHeight + gap);
       const mid = y + rowHeight / 2;
       for (const m of items) {
+        const callStyle = deco?.styleForRead?.(m) ?? style;
         const pxPerBp = pxPerBpOf(m);
         // The walk through connector space and undrawn bp: dashed, never body.
         // Connector space (a bypassed allele, the curve where a branch leaves): a faint solid line; bp the scene
@@ -182,10 +197,20 @@ export function drawReads(ctx: CanvasRenderingContext2D, scene: Scene, lanes: Ma
         ctx.beginPath();
         for (const b of m.body) ctx.rect(b.x0, y - 0.5, Math.max(0.5, b.x1 - b.x0), rowHeight + 1);
         ctx.clip();
+        const extraCalls = (background: boolean) => {
+          for (const c of m.calls) {
+            if (['nuc', 'tf', 'msp'].includes(c.layer) || BACKGROUND_LAYERS.has(c.layer) !== background) continue;
+            if (!extraLayerEnabled(c.layer, layers)) continue;
+            drawCall(ctx, c, y, rowHeight, callStyle, pxPerBp, alpha);
+            if (stats) { stats.extra ??= {}; stats.extra[c.layer] = (stats.extra[c.layer] ?? 0) + 1; }
+          }
+        };
+        extraCalls(true);
         for (const layer of ['nuc', 'tf', 'msp'] as const) {
           if (!layers[layer]) continue;
-          for (const c of m.calls) if (c.layer === layer) { drawCall(ctx, c, y, rowHeight, style, pxPerBp, alpha, Boolean(layers.nucsz)); if (stats) stats[layer]++; }
+          for (const c of m.calls) if (c.layer === layer) { drawCall(ctx, c, y, rowHeight, callStyle, pxPerBp, alpha, Boolean(layers.nucsz)); if (stats) stats[layer]++; }
         }
+        extraCalls(false);
         if (layers.m6a) {
           ctx.fillStyle = style.m6a;
           const w = Math.max(1, Math.min(2, pxPerBp * 0.8));
@@ -388,8 +413,12 @@ export function describeReadHit(hit: ReadHit, x: number, datasetLabel: (id: stri
   const withLane = (text: string) => (lane ? `${text} — ${lane}` : text);
   // Only calls of a drawn layer are named (a hidden layer is not under the pointer).
   const call = (['msp', 'tf', 'nuc'] as const).filter(l => !layers || layers[l]).map(l => m.calls.find(c => c.layer === l && near(c.x0, c.x1))).find(Boolean);
-  if (call) {
-    const name = call.layer === 'nuc' ? 'nucleosome' : call.layer === 'tf' ? 'TF footprint' : call.inferred ? 'MSP (inferred from nucleosome gaps)' : 'MSP';
+  const found = call ?? m.calls.find(c => !['nuc', 'tf', 'msp'].includes(c.layer)
+    && (!layers || extraLayerEnabled(c.layer, layers)) && near(c.x0, c.x1));
+  if (found) {
+    const call = found;
+    const name = call.layer === 'nuc' ? 'nucleosome' : call.layer === 'tf' ? 'TF footprint'
+      : call.layer !== 'msp' ? getLayerLabel(call.layer) : call.inferred ? 'MSP (inferred from nucleosome gaps)' : 'MSP';
     const q = Object.entries(call.qualities).map(([k, v]) => `${k} ${v}`).join(', ');
     const pieces = m.calls.filter(c => c.layer === call.layer && c.index === call.index).length;
     // Its size class and z (while size classes are on).

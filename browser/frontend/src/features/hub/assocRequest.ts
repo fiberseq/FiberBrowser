@@ -2,6 +2,7 @@
  * The association builder's choices and request (DESIGN §7.1): which hub sets can be A or B in each mode, the
  * responses of M2, the groups and scopes, and the four example questions of DESIGN §7.9 as presets.
  */
+import { hitSelectionEntry } from './hubState';
 import type { BrowserState } from '../../stores/browserStore';
 import type { AssocMode, AssocOptions, AssocRequest, AssocSetRef } from './assocApi';
 import type { ScanInfo } from './api';
@@ -77,14 +78,14 @@ export function setChoices(sets: FeatureSet[], anchors: AnchorSet[], view?: { ch
   const out: SetChoice[] = [];
   for (const set of sets) {
     const scan = isScanSet(set);
-    const states = set.type.provides.includes('state') && scan;
+    const states = set.type.provides.includes('state') && (scan || (set.source.kind === 'inline' && set.source.hits.every(h => Boolean(h.stateSpec) || Boolean(h.legacyRefs?.length) || Boolean((h.detail?.hubSelection as import('./hubState').HubSelected | undefined)?.hasStates))));
     const sv = set.typeId === 'var.sv';
     const hits = set.source.kind === 'inline' ? set.source.hits : [];
     out.push({
       key: set.setId, label: setLabel(set), typeId: set.typeId, kind: scan ? 'scan' : 'inline', hasStates: states || sv,
       why: states || sv ? undefined : 'no per-molecule states in the hub (scan sets and SVs have them)',
       ref: scan ? { kind: 'scan', setId: set.setId, typeId: set.typeId, label: set.type.plural }
-        : { kind: 'inline', setId: set.setId, typeId: set.typeId, label: set.type.plural, hits: hits.map(inlineHit),
+        : { kind: 'inline', setId: set.setId, typeId: set.typeId, label: set.type.plural, hits: hits.map(h => ({ ...inlineHit(h), hubHit: (h.detail?.hubSelection as import('./hubState').HubSelected | undefined) ?? hitSelectionEntry(set, h) })),
           ...(coverageOf(set, view) ? { coverage: coverageOf(set, view) } : {}) },
     });
   }
@@ -139,7 +140,7 @@ export function choicesFor(mode: AssocMode, all: SetChoice[], marks: SetChoice[]
   switch (mode) {
     case 'M1': return { a: all.filter(c => c.kind !== 'anchors'), b: all.filter(c => c.kind !== 'anchors') };
     case 'M2': return { a: all, b: [] };
-    case 'M3': return { a: marks, b: [TF_CHOICE] };
+    case 'M3': return { a: marks, b: [TF_CHOICE, ...all.filter(c => c.kind === 'scan' && c.hasStates)] };
     default: return { a: all, b: all };
   }
 }
@@ -172,12 +173,13 @@ export function hasClusters(s: BrowserState): boolean {
 /** The request of a draft, or why it can't run. */
 export function buildRequest(draft: AssocDraft, ctx: { all: SetChoice[]; marks: SetChoice[]; state: BrowserState; anchors: AnchorSet[] }):
   { request: AssocRequest } | { error: string } {
+  if (draft.datasets && !draft.datasets.length) return { error: 'Choose at least one dataset' };
   const { a: aList, b: bList } = choicesFor(draft.mode, ctx.all, ctx.marks);
   const a = aList.find(c => c.key === draft.aKey);
   if (!a) return { error: 'Choose feature A' };
   if (draft.mode === 'M3' && a.why) return { error: `${a.label}: ${a.why}` };
-  const b = draft.mode === 'M3' ? TF_CHOICE : bList.find(c => c.key === draft.bKey);
-  if ((draft.mode === 'M1' || draft.mode === 'M4') && !b) return { error: 'Choose feature B' };
+  const b = bList.find(c => c.key === draft.bKey) ?? (draft.mode === 'M3' && !draft.bKey ? TF_CHOICE : undefined);
+  if ((draft.mode === 'M1' || draft.mode === 'M3' || draft.mode === 'M4') && !b) return { error: 'Choose feature B' };
   if (draft.mode === 'M1') {
     if (!a.hasStates) return { error: `A (${a.label}): ${a.why}` };
     if (!b!.hasStates) return { error: `B (${b!.label}): ${b!.why}` };
@@ -206,10 +208,12 @@ export function buildRequest(draft: AssocDraft, ctx: { all: SetChoice[]; marks: 
   } else if (draft.group !== 'none') {
     group = { kind: draft.group };
   }
+  const chosenDatasets = draft.datasets ?? (draft.mode === 'M2' && draft.response === 'phasing'
+    ? s.datasets.filter(dataset => dataset.data_type === 'bam').map(dataset => dataset.id) : null);
   const request: AssocRequest = {
     mode: draft.mode, a: a.ref, ...(b && draft.mode !== 'M2' ? { b: b.ref } : {}),
     ...(draft.mode === 'M2' ? { response: resp?.module ? { kind: 'scalar', module: resp.module, column: resp.column! } : { kind: 'phasing' } } : {}),
-    ...(group ? { group } : {}), scope, ...(draft.datasets ? { datasets: draft.datasets } : {}),
+    ...(group ? { group } : {}), scope, ...(chosenDatasets?.length ? { datasets: chosenDatasets } : {}),
     options: draft.options, ...(draft.question ? { question: draft.question } : {}),
   };
   return { request };
@@ -240,7 +244,7 @@ export function presets(all: SetChoice[], marks: SetChoice[], nativeDatasets: nu
       missing: regular && !regular.why ? '' : 'a nucleosome scan in table mode (Scan… with nuc)',
       draft: { mode: 'M3', aKey: regular?.key ?? '', bKey: 'tf', group, question: 'q1' }, note: `M3 · rate ratio per group and the ratio of ratios · ${groupNote}` },
     { id: 'q2', question: 'Do NFRs phase their flanks?', missing: nfr ? '' : 'NFR regions from a scan (Scan… with nfr)',
-      draft: { mode: 'M2', aKey: nfr?.key ?? '', response: 'phasing', group, question: 'q2' },
+      draft: { mode: 'M2', aKey: nfr?.key ?? '', response: 'phasing', group, question: 'q2', options: { ...DEFAULT_DRAFT.options, heldOut: true } },
       note: `M2 · Δ site per bin, both frames · NFRs in the scope (an enhancer BED as the scope restricts them) · ${groupNote}` },
     { id: 'q3', question: 'Is a footprint class bound more often on molecules carrying an insertion?',
       missing: [sv ? '' : 'an SV in view (the SV row)', fp ? '' : 'footprint classes from a scan (Scan… with fp)'].filter(Boolean).join(' and '),
