@@ -3,7 +3,7 @@ import { useReadActionsStore } from '../../stores/readActionsStore';
 import { useEffect, useRef, useState } from 'react';
 import { useBrowserStore } from '../../stores/browserStore';
 import { loadAutoSave, clearAutoSave, markRestoredWork } from '../../stores/historyStorage';
-import { addDataset, getDatasets } from '../../api/datasets';
+import { addDataset, getDatasets, type Dataset } from '../../api/datasets';
 import { loadGenome, loadFasta, restoreGenomeDeclarations } from '../../api/reference';
 import { fetchJson } from '../../api/sharedFetch';
 import { deserializeSavedState, remapDatasetIds, type SerializedState, type SerializedDataset } from '../../stores/historySlice';
@@ -34,9 +34,27 @@ function normPath(p: string): string {
   return p.replace(/\/+$/, '');
 }
 
+/** JSON settings compared by value, including nested records, regardless of object key order. */
+function orderedSettings(_key: string, value: unknown): unknown {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))) : value;
+}
+
+/** The same files can be opened natively or with several different lift configurations. */
+function sameDatasetConfiguration(saved: SerializedDataset, loaded: Dataset): boolean {
+  // Older ordinary BAM snapshots and servers did not always include data_type.
+  if ((saved.data_type ?? 'bam') !== (loaded.data_type ?? 'bam')) return false;
+  const a = saved.live_lift;
+  const b = loaded.live_lift;
+  if (!a || !b) return !a && !b;
+  return normPath(a.manifest) === normPath(b.manifest)
+    && JSON.stringify([...a.haplotypes].sort()) === JSON.stringify([...b.haplotypes].sort())
+    && JSON.stringify(a.settings, orderedSettings) === JSON.stringify(b.settings, orderedSettings);
+}
+
 /**
  * Reconcile saved datasets with current backend state.
- * - Matches existing backend datasets by paths (avoids duplicates)
+ * - Matches existing backend datasets by paths, type and lift configuration (avoids duplicates)
  * - Only adds datasets not already on the backend
  * - Returns the final dataset list + an ID mapping (saved ID → actual ID)
  */
@@ -61,7 +79,7 @@ async function reconcileDatasets(savedDatasets: SerializedDataset[]): Promise<{
     // Reuse a backend dataset only when it holds exactly the saved files: a
     // merged [A, B] isn't restored by a loaded A alone. The saved dataset's
     // own id first (the same server run).
-    const free = currentDatasets.filter((d: { id: string }) => !taken.has(d.id));
+    const free = currentDatasets.filter(d => !taken.has(d.id) && sameDatasetConfiguration(saved, d));
     const sameId = free.find((d: { id: string }) => d.id === saved.id);
     const existingDs = (sameId && matchSavedDataset(saved.paths, [sameId])) || matchSavedDataset(saved.paths, free);
 
@@ -75,7 +93,12 @@ async function reconcileDatasets(savedDatasets: SerializedDataset[]): Promise<{
     // Not on backend — add it
     try {
       const pathArg = saved.paths.length === 1 ? saved.paths[0] : saved.paths;
-      const result = await addDataset(pathArg, saved.label);
+      const result = saved.live_lift
+        ? await (await import('../../features/liveLift/api')).addLiveLiftDataset({
+          paths: saved.paths, label: saved.label, manifest: saved.live_lift.manifest,
+          haplotypes: saved.live_lift.haplotypes, settings: saved.live_lift.settings,
+        })
+        : await addDataset(pathArg, saved.label);
       if (result.success && result.dataset) {
         idMap[saved.id] = result.dataset.id;
         addedIds.add(result.dataset.id);

@@ -15,6 +15,7 @@ import { saveAutoSave } from '../stores/historyStorage';
 import { getGenomeDeclarations } from '../api/reference';
 import { autoSaveNow } from './useAutoSave';
 import { setLaunchUi } from '../utils/launchSession';
+import { useBrowserStore } from '../stores/browserStore';
 
 const mocked = <T,>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
 
@@ -45,5 +46,43 @@ describe('autosave and genome declarations', () => {
     await autoSaveNow();
     expect(mocked(saveAutoSave)).toHaveBeenCalledTimes(2);
     for (const [state] of mocked(saveAutoSave).mock.calls) expect(state.genomeDeclarations).toBeUndefined();
+  });
+
+  it('drains older saves before capturing and committing the required update save', async () => {
+    let release!: (value: []) => void;
+    mocked(getGenomeDeclarations).mockImplementationOnce(() => new Promise<[]>(resolve => { release = resolve; }))
+      .mockResolvedValue([]);
+    const commits: number[] = [];
+    mocked(saveAutoSave).mockImplementation(async state => { commits.push(state.start); });
+
+    useBrowserStore.setState({ start: 10 });
+    const older = autoSaveNow();
+    await vi.waitFor(() => expect(getGenomeDeclarations).toHaveBeenCalledTimes(1));
+    useBrowserStore.setState({ start: 20 });
+    const final = autoSaveNow({ required: true });
+    // Edits while the old save drains must be in the final snapshot too.
+    useBrowserStore.setState({ start: 30 });
+    release([]);
+    await Promise.all([older, final]);
+
+    expect(commits).toEqual([10, 30]);
+    expect(mocked(saveAutoSave).mock.calls.map(call => call[3])).toEqual([false, true]);
+  });
+
+  it('serializes background saves through storage completion too', async () => {
+    mocked(getGenomeDeclarations).mockResolvedValue([]);
+    let release!: () => void;
+    mocked(saveAutoSave).mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }))
+      .mockResolvedValue(undefined);
+    useBrowserStore.setState({ start: 10 });
+    const older = autoSaveNow();
+    await vi.waitFor(() => expect(saveAutoSave).toHaveBeenCalledTimes(1));
+    useBrowserStore.setState({ start: 20 });
+    const next = autoSaveNow();
+    useBrowserStore.setState({ start: 30 });
+    release();
+    await Promise.all([older, next]);
+
+    expect(mocked(saveAutoSave).mock.calls.map(call => call[0].start)).toEqual([10, 30]);
   });
 });

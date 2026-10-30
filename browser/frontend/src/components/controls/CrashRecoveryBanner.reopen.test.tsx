@@ -8,12 +8,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../api/datasets', () => ({ getDatasets: vi.fn(), addDataset: vi.fn() }));
+vi.mock('../../features/liveLift/api', () => ({ addLiveLiftDataset: vi.fn() }));
 vi.mock('../../api/reference', () => ({ loadGenome: vi.fn(), loadFasta: vi.fn() }));
 vi.mock('../../api/panelGenomes', () => ({ getPanelGenomes: vi.fn(), attachPanelGenome: vi.fn() }));
 vi.mock('../../api/footprints', () => ({ loadDerivedLayers: vi.fn() }));
 vi.mock('../../api/consensusWorkflow', () => ({ getConsensusJobs: vi.fn(), activateConsensus: vi.fn() }));
 
 import { addDataset, getDatasets } from '../../api/datasets';
+import { addLiveLiftDataset } from '../../features/liveLift/api';
 import { loadGenome } from '../../api/reference';
 import { attachPanelGenome, getPanelGenomes } from '../../api/panelGenomes';
 import { loadDerivedLayers } from '../../api/footprints';
@@ -23,6 +25,7 @@ import { useBrowserStore } from '../../stores/browserStore';
 import { useReadActionsStore } from '../../stores/readActionsStore';
 import { serializeState, type SerializedState } from '../../stores/historySlice';
 import { autoSaveHasWork, restoreDatasetReferences, restoreSnapshot, startHistoryAtRestoredState } from './CrashRecoveryBanner';
+import { EMPTY_HUB, registerHubState, selectionRefs } from '../../features/hub/hubState';
 
 const mocked = <T,>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>;
 
@@ -103,6 +106,74 @@ describe('datasets are matched one to one (Codex 4)', () => {
     const { filteredReadIds } = useBrowserStore.getState();
     expect([...(filteredReadIds.x ?? [])]).toEqual(['r1']);
     expect([...(filteredReadIds.y ?? [])]).toEqual(['r2']);
+  });
+});
+
+describe('reopening live-lift datasets', () => {
+  const saved = {
+    id: 'sample', label: 'Lifted sample', paths: ['/data/sample.bam'], color: '#123456', data_type: 'bam_livelift',
+    live_lift: { manifest: '/maps/lift.json', haplotypes: ['MAT', 'PAT'],
+      settings: { g_split: 10000, supplementary_display: 'fold', molecule_groups: [['a', 'b']] } },
+  };
+
+  it('reopens through the lift API with its manifest, haplotypes and settings', async () => {
+    const reopened = { ...saved, id: 'reopened' };
+    mocked(getDatasets).mockResolvedValueOnce({ datasets: [] }).mockResolvedValue({ datasets: [reopened] });
+    mocked(addLiveLiftDataset).mockResolvedValue({ success: true, dataset: reopened });
+
+    await restoreSnapshot(savedState({ datasets: [saved],
+      panels: [{ id: 'p', contentType: 'dataset', datasetId: saved.id, subTracks: [] }],
+      filteredReadIds: { sample: ['read-a'] } }));
+
+    expect(addLiveLiftDataset).toHaveBeenCalledExactlyOnceWith({ paths: saved.paths, label: saved.label, ...saved.live_lift });
+    expect(addDataset).not.toHaveBeenCalled();
+    expect(useBrowserStore.getState().datasets[0]).toMatchObject(reopened);
+    expect(useBrowserStore.getState().panels[0].datasetId).toBe('reopened');
+    expect(useBrowserStore.getState().filteredReadIds.reopened).toEqual(new Set(['read-a']));
+  });
+
+  it.each([
+    ['ordinary BAM', { data_type: 'bam', live_lift: undefined }],
+    ['different type', { data_type: 'unknown' }],
+    ['different manifest', { live_lift: { ...saved.live_lift, manifest: '/maps/other.json' } }],
+    ['different haplotypes', { live_lift: { ...saved.live_lift, haplotypes: ['MAT'] } }],
+    ['different settings', { live_lift: { ...saved.live_lift, settings: { ...saved.live_lift.settings, g_split: 20000 } } }],
+  ])('does not reuse the same paths and ID with %s', async (_label, overrides) => {
+    const loaded = { ...saved, ...overrides };
+    const reopened = { ...saved, id: 'reopened' };
+    mocked(getDatasets).mockResolvedValueOnce({ datasets: [loaded] }).mockResolvedValue({ datasets: [loaded, reopened] });
+    mocked(addLiveLiftDataset).mockResolvedValue({ success: true, dataset: reopened });
+
+    await restoreSnapshot(savedState({ datasets: [saved], filteredReadIds: { sample: ['read-a'] } }));
+
+    expect(addLiveLiftDataset).toHaveBeenCalledTimes(1);
+    expect(addDataset).not.toHaveBeenCalled();
+    expect(useBrowserStore.getState().filteredReadIds.reopened).toEqual(new Set(['read-a']));
+  });
+
+  it('does not reuse a lifted dataset for a saved ordinary BAM', async () => {
+    const ordinary = { ...saved, data_type: 'bam', live_lift: undefined };
+    const reopened = { ...ordinary, id: 'ordinary' };
+    mocked(getDatasets).mockResolvedValueOnce({ datasets: [saved] }).mockResolvedValue({ datasets: [saved, reopened] });
+    mocked(addDataset).mockResolvedValue({ success: true, dataset: reopened });
+
+    await restoreSnapshot(savedState({ datasets: [ordinary] }));
+
+    expect(addDataset).toHaveBeenCalledExactlyOnceWith(saved.paths[0], saved.label);
+    expect(addLiveLiftDataset).not.toHaveBeenCalled();
+  });
+
+  it('reuses an equivalent configuration despite object key and haplotype order', async () => {
+    const loaded = { ...saved, id: 'loaded', live_lift: { ...saved.live_lift, haplotypes: ['PAT', 'MAT'],
+      settings: { molecule_groups: [['a', 'b']], supplementary_display: 'fold', g_split: 10000 } } };
+    // A wrong same-ID candidate must not hide the compatible dataset under another ID.
+    mocked(getDatasets).mockResolvedValue({ datasets: [{ ...saved, live_lift: undefined, data_type: 'bam' }, loaded] });
+
+    await restoreSnapshot(savedState({ datasets: [saved], filteredReadIds: { sample: ['read-a'] } }));
+
+    expect(addLiveLiftDataset).not.toHaveBeenCalled();
+    expect(addDataset).not.toHaveBeenCalled();
+    expect(useBrowserStore.getState().filteredReadIds.loaded).toEqual(new Set(['read-a']));
   });
 });
 
@@ -230,4 +301,28 @@ describe('the Sort selector choice is saved (L9)', () => {
     await restoreSnapshot(saved);
     expect(useBrowserStore.getState().sortSelection).toBe('projection');
   });
+});
+
+it('restores hub action references when same-basename BAMs are registered in reverse order', async () => {
+  registerHubState();
+  const datasets = [
+    { id: 'sample', label: 'A', paths: ['/data/a/sample.bam'], color: '#111', data_type: 'bam' },
+    { id: 'sample_1', label: 'B', paths: ['/data/b/sample.bam'], color: '#222', data_type: 'bam' },
+  ];
+  const hit = { setId: 'browser:snp', hitId: 'snp-a', typeId: 'var.snp', chrom: 'chrT', start: 10, end: 11,
+    anchor: 10, datasets: ['sample_1'], hasStates: true, stateSpec: { kind: 'snp' } };
+  mocked(getDatasets).mockResolvedValue({ datasets: [
+    { ...datasets[1], id: 'sample' }, { ...datasets[0], id: 'sample_1' },
+  ] });
+
+  await restoreSnapshot(savedState({ datasets,
+    panels: [{ id: 'p', contentType: 'dataset', datasetId: 'sample_1', subTracks: [] }],
+    featureHub: { ...EMPTY_HUB, selected: [hit] },
+  }));
+
+  expect(addDataset).not.toHaveBeenCalled();
+  expect(useBrowserStore.getState().panels[0].datasetId).toBe('sample');
+  const selected = useBrowserStore.getState().featureHub.selected;
+  expect(selected[0].datasets).toEqual(['sample']);
+  expect(selectionRefs(selected)[0].hubHit?.datasets).toEqual(['sample']);
 });

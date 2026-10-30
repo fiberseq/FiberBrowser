@@ -673,6 +673,10 @@ export function remapDatasetIds<T>(value: T, idMap: Record<string, string>): T {
     for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
       // A panel on its dataset's own contigs (reference key `contigs:<dataset id>`).
       if (k === 'genome' && typeof x === 'string' && x.startsWith(CONTIGS_KEY)) out[k] = CONTIGS_KEY + mapId(x.slice(CONTIGS_KEY.length));
+      // Hub descriptors (selected hits, nested hubHit objects, graph paths and
+      // association requests) keep dataset IDs in `datasets` string arrays.
+      // Dataset objects and historical content identities keep their own shape.
+      else if (k === 'datasets' && Array.isArray(x) && x.every(id => typeof id === 'string')) out[k] = x.map(mapId);
       else out[k] = DATASET_ID_FIELDS.has(k) ? mapIdValues(x) : walk(x);
     }
     return out;
