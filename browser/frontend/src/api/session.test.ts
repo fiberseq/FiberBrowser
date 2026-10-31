@@ -1042,6 +1042,8 @@ describe('the imported session starts its history at once (Codex review)', () =>
     }) as Response);
     vi.stubGlobal('fetch', fetchMock);
     await importSession(session);
+    // The navigation effect's restore echo must preserve the imported pointer and redo branch.
+    useBrowserStore.getState().pushSnapshot('Navigate to restored viewport', { kind: 'navigation' });
     const state = useBrowserStore.getState();
     expect(state._historyPointer).toBe(session.frontend.historyPointer);
     expect(state._historyStack.map(h => h.label)).toEqual(session.frontend.historySnapshots.map((h: any) => h.label));

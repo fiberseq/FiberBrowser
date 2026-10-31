@@ -164,9 +164,12 @@ export function sameHistoryState(a: SerializedState | undefined | null, b: Seria
  */
 function echoesRestore(state: BrowserState, snapshotState: SerializedState, kind: SnapshotKind, explicit = false): boolean {
   if (!(state._historyPaused || Date.now() - state._lastRestoreTime < 1500)) return false;
-  if (state._historyPaused || (kind === 'navigation' && !explicit)) return true;
+  if (state._historyPaused) return true;
   const current = state._historyStack[state._historyPointer];
+  // An import without history still needs its first checkpoint, even during
+  // the restore window: with no current snapshot, there is nothing to echo.
   if (!current) return false;
+  if (kind === 'navigation' && !explicit) return true;
   try {
     return JSON.stringify(historyComparable(current.state)) === JSON.stringify(historyComparable(snapshotState));
   } catch {
