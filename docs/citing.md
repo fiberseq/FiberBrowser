@@ -1,7 +1,12 @@
 # How to cite
 
-If you use FiberBrowser in published work, please cite **FiberBrowser** and **FiberHMM**, which calls the chromatin
-footprints FiberBrowser shows.
+If you use FiberBrowser or FiberHMM, which calls the chromatin footprints FiberBrowser shows, please cite our preprint:
+
+> Tullius, T. W., Catalano, C., Ranchalis, J., Hu, J., Vollger, M. R., Stergachis, A. B., & Levine, M. S. (2026).
+> FiberBrowser: a unified framework for single-molecule genomics. *bioRxiv*.
+> https://doi.org/10.64898/2026.10.29.762797
+
+The software references below give the versions.
 
 - **FiberBrowser** (this repository): the full reference, with its version, is in
   [CITATION.cff](../CITATION.cff) (GitHub's *Cite this repository* reads it), e.g.

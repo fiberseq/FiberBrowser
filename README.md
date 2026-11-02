@@ -172,9 +172,27 @@ What is supported and what is Preview in 3.0:
 
 ## How to cite
 
-If you use FiberBrowser in published work, please cite FiberBrowser and
-[FiberHMM](https://github.com/fiberseq/FiberHMM), which calls the footprints it
-shows. The reference with its version is in
+If you use FiberBrowser or [FiberHMM](https://github.com/fiberseq/FiberHMM),
+which calls the footprints FiberBrowser shows, please cite our preprint:
+
+> Tullius, T. W., Catalano, C., Ranchalis, J., Hu, J., Vollger, M. R.,
+> Stergachis, A. B., & Levine, M. S. (2026). FiberBrowser: a unified framework
+> for single-molecule genomics. *bioRxiv*.
+> https://doi.org/10.64898/2026.10.29.762797
+
+```bibtex
+@article{tullius2026fiberbrowser,
+  title   = {{FiberBrowser}: a unified framework for single-molecule genomics},
+  author  = {Tullius, Thomas W. and Catalano, Christopher and Ranchalis, Jane and
+             Hu, Jie and Vollger, Mitchell R. and Stergachis, Andrew B. and
+             Levine, Michael S.},
+  journal = {bioRxiv},
+  year    = {2026},
+  doi     = {10.64898/2026.10.29.762797}
+}
+```
+
+Please also give the FiberBrowser version you used. The reference with its version is in
 [CITATION.cff](https://github.com/fiberseq/FiberBrowser/blob/main/CITATION.cff)
 (GitHub's *Cite this repository*); see
 [How to cite](https://github.com/fiberseq/FiberBrowser/blob/main/docs/citing.md).

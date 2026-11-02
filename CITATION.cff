@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: >-
-  If you use FiberBrowser in published work, please cite it as below, and cite
-  FiberHMM, which calls the footprints FiberBrowser shows.
+  If you use FiberBrowser or FiberHMM, please cite the preprint below
+  (preferred-citation), and give the FiberBrowser version you used.
 type: software
 title: "FiberBrowser: a genome browser for single-molecule chromatin data (Fiber-seq and DAF-seq)"
 version: 3.0.1
@@ -17,6 +17,28 @@ abstract: >-
   by their footprints at a locus, displays structural variants and the
   chromatin inside insertions, and exports figures and data. Footprints are
   called by FiberHMM.
+preferred-citation:
+  type: article
+  title: "FiberBrowser: a unified framework for single-molecule genomics"
+  authors:
+    - family-names: Tullius
+      given-names: Thomas W.
+    - family-names: Catalano
+      given-names: Christopher
+    - family-names: Ranchalis
+      given-names: Jane
+    - family-names: Hu
+      given-names: Jie
+    - family-names: Vollger
+      given-names: Mitchell R.
+    - family-names: Stergachis
+      given-names: Andrew B.
+    - family-names: Levine
+      given-names: Michael S.
+  journal: bioRxiv
+  year: 2026
+  doi: 10.64898/2026.10.29.762797
+  url: "https://www.biorxiv.org/content/10.64898/2026.10.29.762797v1"
 keywords:
   - bioinformatics
   - chromatin
