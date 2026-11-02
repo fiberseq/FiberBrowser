@@ -1,5 +1,5 @@
 /**
- * The hub's available hits and selection on linear dataset panels and pop-outs. Each hit is drawn with
+ * The hub's selection on linear dataset panels and pop-outs. Selected hits are drawn with
  * the analysis-region outline (ruler and reads, `stores/analysisRegionStore`, never in figures, sessions or undo):
  *
  * - where it is on this genome (its own coordinates, its lift, or its insertion's junction) on every dataset panel
@@ -29,14 +29,19 @@ function samePaths(a: FileHolder, b: FileHolder): boolean {
 export const HUB_OUTLINE_COLOUR = '#4f46e5';
 const MAX_OUTLINES = 64;
 
-export function hubOutlinesFor(s: BrowserState, selected: HubSelected[], available: HubSelected[] = []): AnalysisOutline[] {
+export function hubOutlinesFor(s: BrowserState, selected: HubSelected[]): AnalysisOutline[] {
+  return hubHitTargetsFor(s, selected.slice(0, MAX_OUTLINES));
+}
+
+/** All placeable hits remain clickable, without creating a visible box for each one. */
+export function hubHitTargetsFor(s: BrowserState, selected: HubSelected[], available: HubSelected[] = []): AnalysisOutline[] {
   const hits = [...new Map([...selected, ...available].map(h => [`${h.setId}|${h.hitId}`, h])).values()];
   if (!hits.length) return [];
   const main = mainGenomeKey(s);
   const datasetIds = s.datasets.map(d => d.id);
   const genomes = usePanelGenomeStore.getState().genomes;
   const out: AnalysisOutline[] = [];
-  for (const h of hits.slice(0, MAX_OUTLINES)) {
+  for (const h of hits) {
     const isSelected = selected.some(x => x.setId === h.setId && x.hitId === h.hitId);
     const clickable = { selected: isSelected, onSelect: (additive: boolean) => {
       useBrowserStore.getState().setFeatureHub(cur => {
@@ -94,7 +99,8 @@ export function installHubOutlines(): void {
     const sets = [...scanSets(data.scans).map(set => ({ ...set, source: { kind: 'inline' as const, hits: data.hits[set.setId]?.hits ?? [] } })), ...data.providers];
     const available = sets.filter(set => !s.featureHub.ui.hiddenSets.includes(set.setId)).flatMap(set => set.source.kind === 'inline'
       ? set.source.hits.map(h => hitSelectionEntry(set, h)) : []);
-    const next = hubOutlinesFor(s, selected, available);
+    const next = hubOutlinesFor(s, selected);
+    useAnalysisRegionStore.getState().setHitTargets(HUB_OUTLINE_KIND, hubHitTargetsFor(s, selected, available).filter(o => !o.selected));
     const cur = useAnalysisRegionStore.getState().outlines[HUB_OUTLINE_KIND] ?? [];
     if (!next.length && !cur.length) return;
     useAnalysisRegionStore.getState().set(HUB_OUTLINE_KIND, next);

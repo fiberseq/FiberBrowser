@@ -1,5 +1,5 @@
-import { useAnalysisRegionStore } from '../../stores/analysisRegionStore';
-import { useMemo, useRef } from 'react';
+import { useAnalysisRegionStore, type AnalysisOutline } from '../../stores/analysisRegionStore';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { usePanelDisplayStore as useBrowserStore } from '../../hooks/usePanelDisplayStore';
 import type { PanelConfig } from '../../types';
@@ -89,6 +89,50 @@ export function HighlightBands({ panel, width, gutter, labels = false, guides = 
   );
   // The region Find classes analyses, on the panels of the datasets it analyses (stores/classRegionOutlineStore).
   const extraOutlines = useAnalysisRegionStore(s => s.outlines);
+  const hitTargets = useAnalysisRegionStore(s => s.hitTargets);
+  const [hovered, setHovered] = useState<AnalysisOutline | null>(null);
+  const pointerDown = useRef<{ x: number; y: number } | null>(null);
+  const targetSpans = useMemo(() => Object.values(hitTargets).flat().flatMap(o => {
+    if (!panel.datasetId || !o.datasetIds.includes(panel.datasetId) || o.genomeKey !== genome) return [];
+    return highlightSpans([{ ...o, id: '', genome }], { ...view, genome }, inner, isReversed).map(span => ({ ...span, outline: o }));
+    // Prefer the narrowest hit when regions overlap, with stable ordering for ties.
+  }).sort((a, b) => a.w - b.w), [hitTargets, panel.datasetId, genome, view.chrom, view.start, view.end, inner, isReversed]);
+  useEffect(() => {
+    const layer = ref.current;
+    const track = layer?.parentElement;
+    if (!layer || !track || !targetSpans.length) { setHovered(null); return; }
+    // Listen on the track: an invisible target must not cover reads or intercept empty-space clicks.
+    const at = (e: MouseEvent) => {
+      if (e.target instanceof Element && e.target.closest('button, a, input, select, [role="button"]')) return null;
+      const box = layer.getBoundingClientRect();
+      const x = e.clientX - box.left;
+      if (x < 0 || x >= inner || e.clientY < box.top || e.clientY >= box.bottom) return null;
+      return targetSpans.find(s => x >= s.x && x <= s.x + s.w)?.outline ?? null;
+    };
+    const down = (e: MouseEvent) => { pointerDown.current = { x: e.clientX, y: e.clientY }; };
+    const move = (e: MouseEvent) => setHovered(e.buttons ? null : at(e));
+    const leave = () => setHovered(null);
+    const click = (e: MouseEvent) => {
+      const start = pointerDown.current;
+      pointerDown.current = null;
+      const dragged = start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 4;
+      if (dragged) return;
+      const hit = at(e);
+      if (!hit?.onSelect || e.button !== 0) return;
+      e.stopPropagation();
+      hit.onSelect(e.shiftKey || e.metaKey || e.ctrlKey);
+    };
+    track.addEventListener('pointerdown', down, true);
+    track.addEventListener('pointermove', move, true);
+    track.addEventListener('pointerleave', leave);
+    track.addEventListener('click', click, true);
+    return () => {
+      track.removeEventListener('pointerdown', down, true);
+      track.removeEventListener('pointermove', move, true);
+      track.removeEventListener('pointerleave', leave);
+      track.removeEventListener('click', click, true);
+    };
+  }, [targetSpans, inner]);
   const outline = useClassRegionOutlineStore(s => s.outline);
   const outlineSpan = useMemo(() => {
     if (!outline || !panel.datasetId || !outline.datasetIds.includes(panel.datasetId)) return null;
@@ -154,6 +198,13 @@ export function HighlightBands({ panel, width, gutter, labels = false, guides = 
             style={{ maxWidth: span.w - 4, color: o.color }}>{o.label}</span>}
         </div>;
       }))}
+      {targetSpans.filter(s => s.outline === hovered).slice(0, 1).map(({ outline: o, x, w }) => (
+        <div key="hover" data-testid="hub-region-hover" className={`absolute inset-y-0 border-dashed ${labels ? 'border-2' : 'border-x-2'}`}
+          style={{ left: x, width: w, borderColor: o.color, opacity: 0.3 }}>
+          {labels && w > 24 && <span className="absolute right-0.5 top-0 truncate bg-white/80 px-0.5 text-[9px]"
+            style={{ maxWidth: w - 4, color: o.color }}>{o.label}</span>}
+        </div>
+      ))}
       {guideSpans.map(({ snp, x }) => (
         // On screen dashed; in figures (data-figure-overlay) a solid line of the same width and opacity.
         <div key={`snp-guide-${snp.id}`} className="absolute inset-y-0" data-testid="split-snp-guide" data-snp={snp.id}

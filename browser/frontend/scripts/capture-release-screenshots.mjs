@@ -15,6 +15,14 @@ export const RELEASE_OUTPUTS = {
 };
 export const RELEASE_SHOTS = [...Object.keys(RELEASE_OUTPUTS), 'graph-mode-site-sort'];
 
+const COMPUTE_TIMEOUT = 600_000;
+const RESULT_TIMEOUT = 180_000;
+
+async function visible(locator, stage, timeout = RESULT_TIMEOUT) {
+  try { await locator.waitFor({ state: 'visible', timeout }); }
+  catch (e) { throw new Error(`${stage}: ${e.message}`); }
+}
+
 async function graphReady(page) {
   await page.waitForFunction(() => {
     const graph = document.querySelector('[data-testid="graph-host-body"] [data-testid="graph-panel"]');
@@ -63,8 +71,29 @@ export async function captureReleaseDocs({ newPage, take, shoot, want, store, id
   if (hubShots.some(want)) {
     const page = await newPage('graph');
     await page.setViewportSize({ width: 1600, height: 1000 });
+    let computed;
+    const ensureNuc = () => computed ??= (async () => {
+      await store(page, `s.getState().openAnalysisPanel('nucleosomes')`);
+      await visible(page.getByTestId('nuc-panel'), 'Nucleosomes panel');
+      await visible(page.getByTestId('nuc-row').first(), 'Nucleosome observations');
+      await page.getByTestId('nuc-compute').click({ timeout: RESULT_TIMEOUT });
+      await visible(page.getByTestId('nuc-job'), 'Compute in view job', COMPUTE_TIMEOUT);
+      await page.waitForFunction(() => ['complete', 'error', 'cancelled'].includes(document.querySelector('[data-testid="nuc-job"]')?.getAttribute('data-state')),
+        null, { timeout: COMPUTE_TIMEOUT });
+      if (await page.getByTestId('nuc-job').getAttribute('data-state') !== 'complete') {
+        throw new Error(`Demo nucleosome compute did not complete: ${await page.getByTestId('nuc-job').innerText()}`);
+      }
+      // Job completion precedes the dataset refresh and summary fetch. Wait for real computed molecules.
+      await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="nuc-molecules"]')]
+        .some(el => Number(el.textContent.split('/')[0].replaceAll(',', '').trim()) > 0), null, { timeout: RESULT_TIMEOUT });
+      // Give the hub the drawer again; keep the real outputs and remove only the extra panel.
+      await store(page, `for (const p of s.getState().panels.filter(p => p.contentType === 'nucleosomes')) s.getState().removePanel(p.id);`);
+      await store(page, `s.getState().openAnalysisPanel('feature-hub')`);
+    })();
     let scanned;
     const ensureScan = () => scanned ??= (async () => {
+      // Compute refreshes dataset identities. Scan afterwards so its bindings reflect those real outputs.
+      if (['overlay-profile', 'whats-new-hub-hero', 'panel-window'].some(want)) await ensureNuc();
       await store(page, `s.getState().openAnalysisPanel('feature-hub')`);
       await page.getByTestId('hub-scan').click();
       const dialog = page.getByTestId('hub-scan-dialog');
@@ -86,28 +115,19 @@ export async function captureReleaseDocs({ newPage, take, shoot, want, store, id
       await page.getByTestId('hub-scan-submit').click();
       await page.getByTestId('hub-job').waitFor({ timeout: 30_000 });
       await page.waitForFunction(() => ['complete', 'error', 'cancelled'].includes(document.querySelector('[data-testid="hub-job"]')?.getAttribute('data-state')),
-        null, { timeout: 600_000 });
+        null, { timeout: COMPUTE_TIMEOUT });
       if (await page.getByTestId('hub-job').getAttribute('data-state') !== 'complete') throw new Error('Demo scan did not complete');
       await page.getByTestId('hub-row').first().waitFor({ timeout: 60_000 });
     })();
     const hits = async () => {
       await ensureScan();
-      await store(page, `s.getState().setFeatureHub(h => ({ui: {...h.ui, tab: undefined, scope: {kind: 'view'}, offset: 0, pageSize: 500, typeFilter: ''}}));`);
-      await page.getByTestId('hub-table').waitFor();
+      await store(page, `s.getState().openAnalysisPanel('feature-hub')`);
+      // Use the actual tab control: a preceding shot may have left Associate or Overlay active.
+      await page.locator('button[data-analysis-tab="hits"]').first().click();
+      await store(page, `s.getState().setFeatureHub(h => ({selected: [], ui: {...h.ui, scope: {kind: 'view'}, offset: 0, pageSize: 500, typeFilter: ''}}));`);
+      await visible(page.getByTestId('hub-table'), 'Hub hits table');
       await idle(page);
     };
-    let computed;
-    const ensureNuc = () => computed ??= (async () => {
-      await ensureScan();
-      await store(page, `s.getState().openAnalysisPanel('nucleosomes')`);
-      await page.getByTestId('nuc-compute').click();
-      await page.waitForFunction(() => ['complete', 'error', 'cancelled'].includes(document.querySelector('[data-testid="nuc-job"]')?.getAttribute('data-state')),
-        null, { timeout: 600_000 });
-      if (await page.getByTestId('nuc-job').getAttribute('data-state') !== 'complete') throw new Error('Demo nucleosome compute did not complete');
-      // Give the hub the drawer again; keep the real outputs and remove only the extra panel.
-      await store(page, `for (const p of s.getState().panels.filter(p => p.contentType === 'nucleosomes')) s.getState().removePanel(p.id);`);
-      await store(page, `s.getState().openAnalysisPanel('feature-hub')`);
-    })();
     try {
       await take('hub-paging', async () => {
         await hits();
@@ -134,15 +154,25 @@ export async function captureReleaseDocs({ newPage, take, shoot, want, store, id
         await hits();
         await page.getByTestId('hub-type-filter').selectOption('nfr.region');
         await idle(page);
-        await page.locator('[data-testid="hub-row"][data-type="nfr.region"]').first().waitFor();
+        await visible(page.locator('[data-testid="hub-row"][data-type="nfr.region"]').first(), 'NFR scan hits in view');
         await page.getByTestId('hub-select-shown').click();
+        await visible(page.getByTestId('hub-selected-count'), 'Selected NFR hits');
         await page.getByTestId('hub-overlay').click();
+        await visible(page.getByTestId('overlay-builder'), 'Overlay builder');
+        await page.getByTestId('overlay-loci').selectOption('selection');
         await page.getByTestId('overlay-layer').selectOption('regular');
         await page.getByTestId('overlay-align').selectOption('anchor');
-        await page.getByTestId('overlay-run').click();
-        await page.getByTestId('overlay-result').waitFor({ timeout: 180_000 });
+        // Register before clicking so a fast real response cannot be missed.
+        const [response] = await Promise.all([
+          page.waitForResponse(r => new URL(r.url()).pathname === '/api/hub/overlay' && r.request().method() === 'POST', { timeout: COMPUTE_TIMEOUT }),
+          page.getByTestId('overlay-run').click(),
+        ]);
+        if (!response.ok()) throw new Error(`Overlay failed (${response.status()}): ${await response.text()}`);
+        await visible(page.getByTestId('overlay-result'), 'Overlay result', COMPUTE_TIMEOUT);
         const valid = await store(page, `return s.getState().featureHub.overlay.result?.series.some(x => !x.error && x.den.some(v => v > 0));`);
         if (!valid) throw new Error('Overlay has no measured molecules');
+        await page.getByTestId('overlay-view-profile').click();
+        await visible(page.getByTestId('overlay-result').getByRole('img', { name: /density by/ }), 'Measured overlay profile');
         await idle(page);
       })();
       await take('overlay-profile', async () => { await ensureOverlay(); await shoot(page, 'overlay-profile'); });
@@ -152,13 +182,24 @@ export async function captureReleaseDocs({ newPage, take, shoot, want, store, id
         await hits();
         await page.getByTestId('hub-type-filter').selectOption('nfr.region');
         await idle(page);
-        await page.locator('[data-testid="hub-row"][data-type="nfr.region"]').first().waitFor();
+        await visible(page.locator('[data-testid="hub-row"][data-type="nfr.region"]').first(), 'NFR scan hits in view');
         await page.getByTestId('hub-select-shown').click();
         await page.getByTestId('hub-use-nuc-window').click();
-        await page.getByTestId('nuc-mode-window').waitFor();
+        await visible(page.getByTestId('nuc-window-controls'), 'Nucleosome window controls');
         await store(page, `for (const p of s.getState().panels.filter(p => p.contentType === 'feature-hub')) s.getState().removePanel(p.id);`);
-        await page.getByTestId('nuc-background').selectOption('hub');
-        await page.getByTestId('nuc-phasing-anchor').first().waitFor({ timeout: 180_000 });
+        // WindowView always renders its table shell. Its metric cells exist only once /api/nuc/window returns metrics.
+        const [response] = await Promise.all([
+          page.waitForResponse(r => new URL(r.url()).pathname === '/api/nuc/window' && r.request().method() === 'POST'
+            && Boolean(r.request().postDataJSON()?.background?.length), { timeout: COMPUTE_TIMEOUT }),
+          page.getByTestId('nuc-background').selectOption('hub'),
+        ]);
+        if (!response.ok()) throw new Error(`Nucleosome window failed (${response.status()}): ${await response.text()}`);
+        const result = await response.json();
+        if (!result.observations?.some(o => !o.error && o.metrics?.n_molecules > 0)) {
+          throw new Error(`Nucleosome window has no measured molecules: ${JSON.stringify(result)}`);
+        }
+        await visible(page.getByTestId('nuc-window-molecules').first(), 'Nucleosome window metrics', COMPUTE_TIMEOUT);
+        await visible(page.getByTestId('nuc-phasing-anchor').first(), 'Nucleosome anchor phasing', COMPUTE_TIMEOUT);
         await idle(page);
         await shoot(page, 'panel-window');
       });
