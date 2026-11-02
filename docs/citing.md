@@ -1,7 +1,12 @@
 # How to cite
 
-If you use FiberBrowser in published work, please cite **FiberBrowser** and **FiberHMM**, which calls the chromatin
-footprints FiberBrowser shows.
+If you use FiberBrowser or FiberHMM, which calls the chromatin footprints FiberBrowser shows, please cite our preprint:
+
+> Tullius, T. W., Catalano, C., Ranchalis, J., Hu, J., Vollger, M. R., Stergachis, A. B., & Levine, M. S. (2026).
+> FiberBrowser: a unified framework for single-molecule genomics. *bioRxiv*.
+> https://doi.org/10.64898/2026.10.29.762797
+
+The software references below give the versions.
 
 - **FiberBrowser** (this repository): the full reference, with its version, is in
   [CITATION.cff](../CITATION.cff) (GitHub's *Cite this repository* reads it), e.g.
@@ -16,8 +21,7 @@ does a saved session's `fiberbrowser_version`).
 ## In the app
 
 - **About FiberBrowser** (the app menu) and the toolbar's **⋮ → How to cite** give the citation, with a button to copy it.
-- **Exported figures** carry a small citation line at the foot: *Made with FiberBrowser 3.0.1
-  (github.com/fiberseq/FiberBrowser) · please cite FiberBrowser and FiberHMM*. It is on by default; turn it off
+- **Exported figures** carry a small citation line at the foot: *Made with FiberBrowser 3.0.1 · please cite Tullius et al., bioRxiv 2026 (doi:10.64898/2026.10.29.762797)*. It is on by default; turn it off
   with **Citation line** in the Export panel (remembered in this browser).
 
 ## Data you identify with it

@@ -87,10 +87,12 @@ describe('figure footer (audit M12: the datasets line was cut off)', () => {
 });
 
 describe('citation (How to cite, the figure line)', () => {
-  it('names the version, FiberBrowser and FiberHMM', () => {
+  it('cites the shared preprint and gives the FiberBrowser version used', () => {
     expect(FIBERBROWSER_VERSION).toMatch(/^\d+\.\d+\.\d+/);
-    expect(citationText()).toBe(`How to cite: FiberBrowser ${FIBERBROWSER_VERSION} (github.com/fiberseq/FiberBrowser; CITATION.cff) and FiberHMM (github.com/fiberseq/FiberHMM).`);
-    expect(figureCitationLine('3.0.0')).toBe('Made with FiberBrowser 3.0.0 (github.com/fiberseq/FiberBrowser) · please cite FiberBrowser and FiberHMM');
+    expect(citationText()).toBe(`How to cite: Tullius, T. W., Catalano, C., Ranchalis, J., Hu, J., Vollger, M. R., Stergachis, A. B., & Levine, M. S. (2026). FiberBrowser: a unified framework for single-molecule genomics. bioRxiv. https://doi.org/10.64898/2026.10.29.762797\nFiberBrowser version used: ${FIBERBROWSER_VERSION}.`);
+    expect(citationText('3.0.0')).toContain('FiberBrowser version used: 3.0.0.');
+    expect(figureCitationLine('3.0.0')).toBe('Made with FiberBrowser 3.0.0 · please cite Tullius et al., bioRxiv 2026 (doi:10.64898/2026.10.29.762797)');
+    expect(figureCitationLine()).not.toMatch(/[\r\n]/);
   });
 
   it('the figure line is on by default and remembered when turned off', () => {

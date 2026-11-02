@@ -173,8 +173,11 @@ def test_about_says_how_to_cite():
     # The About box's citation block (macOS: its credits; elsewhere the About window's last paragraph).
     from fiberbrowser import _paths
     text = desktop.citation_text()
-    assert text.startswith(f"How to cite: FiberBrowser {_paths.version()}") and "CITATION.cff" in text
-    assert "FiberHMM (github.com/fiberseq/FiberHMM)" in text
+    assert text == ("How to cite: Tullius, T. W., Catalano, C., Ranchalis, J., Hu, J., Vollger, M. R., "
+                    "Stergachis, A. B., & Levine, M. S. (2026). "
+                    "FiberBrowser: a unified framework for single-molecule genomics. bioRxiv. "
+                    "https://doi.org/10.64898/2026.10.29.762797\n"
+                    f"FiberBrowser version used: {_paths.version()}.")
     assert "{cite}" in desktop._ABOUT_HTML
 
 
@@ -191,7 +194,11 @@ def test_about_window_shows_the_fiberhmm_line_and_the_citation(monkeypatch):
     app.show_about()
     page = shown["html"]
     assert "FiberHMM 3.0.0 (bundled) at /App/fiberhmm" in page
-    assert "How to cite: FiberBrowser" in page and "CITATION.cff" in page and "{cite}" not in page
+    assert "How to cite: Tullius, T. W., Catalano, C." in page and "{cite}" not in page
+    assert "&amp; Levine, M. S. (2026)" in page
+    assert "FiberBrowser: a unified framework for single-molecule genomics. bioRxiv." in page
+    assert '<a href="https://doi.org/10.64898/2026.10.29.762797" target="_blank">' in page
+    assert f"<br>FiberBrowser version used: {desktop.version()}." in page
     assert any(i.kind == "command" and i.target == "check-updates" for i in iter_items())
 
 

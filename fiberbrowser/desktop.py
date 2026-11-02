@@ -126,10 +126,16 @@ _ABOUT_HTML = """<!doctype html><html><head><meta charset="utf-8"><title>About F
 <p style="font-size:12px;opacity:.8">{cite}</p></body></html>"""
 
 
+PREPRINT_DOI_URL = "https://doi.org/10.64898/2026.10.29.762797"
+
+
 def citation_text() -> str:
-    """How to cite: FiberBrowser (CITATION.cff) and FiberHMM, which calls the footprints it shows."""
-    return (f"How to cite: {APP_NAME} {version()} (github.com/fiberseq/FiberBrowser; CITATION.cff) "
-            "and FiberHMM (github.com/fiberseq/FiberHMM).")
+    """The shared preprint for FiberBrowser and FiberHMM, with the software version used."""
+    return ("How to cite: Tullius, T. W., Catalano, C., Ranchalis, J., Hu, J., Vollger, M. R., "
+            "Stergachis, A. B., & Levine, M. S. (2026). "
+            "FiberBrowser: a unified framework for single-molecule genomics. bioRxiv. "
+            f"{PREPRINT_DOI_URL}\n"
+            f"FiberBrowser version used: {version()}.")
 
 
 def fiberhmm_version() -> str:
@@ -705,8 +711,10 @@ class DesktopApp:
             except Exception:
                 pass
         import html
+        citation_html = html.escape(citation_text()).replace("\n", "<br>").replace(
+            PREPRINT_DOI_URL, f'<a href="{PREPRINT_DOI_URL}" target="_blank">{PREPRINT_DOI_URL}</a>')
         self.create_window(html=_ABOUT_HTML.replace("{text}", html.escape(self.about_text()).replace("\n", "<br>"))
-                           .replace("{cite}", html.escape(citation_text())),
+                           .replace("{cite}", citation_html),
                            title=f"About {APP_NAME}")
 
     def menu(self):
