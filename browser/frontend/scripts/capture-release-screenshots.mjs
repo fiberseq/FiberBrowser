@@ -152,6 +152,8 @@ export async function captureReleaseDocs({ newPage, take, shoot, want, store, id
       const ensureOverlay = () => overlaid ??= (async () => {
         await ensureNuc();
         await hits();
+        // The demo view itself holds no NFR; the scan's other grid units do.
+        await page.getByLabel('Hub scope', { exact: true }).selectOption('genome');
         await page.getByTestId('hub-type-filter').selectOption('nfr.region');
         await idle(page);
         await visible(page.locator('[data-testid="hub-row"][data-type="nfr.region"]').first(), 'NFR scan hits in view');
@@ -180,6 +182,8 @@ export async function captureReleaseDocs({ newPage, take, shoot, want, store, id
       await take('panel-window', async () => {
         await ensureNuc();
         await hits();
+        // The demo view itself holds no NFR; the scan's other grid units do.
+        await page.getByLabel('Hub scope', { exact: true }).selectOption('genome');
         await page.getByTestId('hub-type-filter').selectOption('nfr.region');
         await idle(page);
         await visible(page.locator('[data-testid="hub-row"][data-type="nfr.region"]').first(), 'NFR scan hits in view');
