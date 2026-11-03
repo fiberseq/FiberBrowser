@@ -2,7 +2,8 @@
 
 In ``--public`` mode every ``/api`` route is denied unless its (method,
 route template) is on ``PUBLIC_ALLOWED``: browsing, catalog loading and
-per-visitor analysis. New routes are therefore closed until someone
+per-visitor analysis. FiberHMM install/activate (install), revert and restart routes remain owner-only.
+New routes are therefore closed until someone
 decides they are safe for anonymous visitors (tests/test_public_mode_guard.py
 fails for a route that is on neither list).
 
@@ -273,6 +274,10 @@ def public_request_allowed(app: FastAPI, scope) -> bool:
         return not path.startswith("/api/")
     if method == "HEAD":
         method = "GET"
+    # Runtime selection and wheel activation are owner actions, including in
+    # tour tabs; never let an allowlist addition expose them to visitors.
+    if template.startswith("/api/app/fiberhmm"):
+        return False
     if (method, template) in PUBLIC_ALLOWED:
         return True
     from services.runtime import current_sandbox_id

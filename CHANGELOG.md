@@ -1,5 +1,57 @@
 # Changelog
 
+## 3.0.2 — 2026-11-03
+
+FiberBrowser 3.0.2 bundles FiberHMM 3.0.3 and requires
+`fiberhmm[consensus]>=3.0.3,<4`.
+
+### Added
+
+- **QC-fail reads are hidden by default, like duplicates.** Reads with the SAM
+  QC-fail flag (`0x200`) are left out of the read panels and analyses. This
+  includes the DAF strand-swap chimeras that FiberHMM 3.0.3 now flags
+  (`xc:Z:strand_swap`): reads with C-to-T deaminations in one segment and G-to-A
+  in another, which earlier versions wrote unmarked so they looked like reads
+  without footprints. **Quality → Show QC-fail reads (incl. FiberHMM
+  chimeras)** (also under **Reads & Display → Read Filters**) shows them again,
+  with an amber marker and a QC or chimera label in the hover and the Read Stats
+  inspector. Hidden-read counts list chimeras separately. Sessions save the
+  switch; older sessions open with it off. Re-call DAF-seq BAMs with FiberHMM
+  3.0.3 to flag their chimeras.
+- **Install and restart.** When an update is out, the Mac and Windows apps can
+  install it in one step: FiberBrowser downloads and verifies the update, saves
+  your session, quits, installs, and reopens with the session. On the Mac the
+  update must be signed by FiberBrowser's Team ID and pass Gatekeeper; the old
+  app goes to the Trash, and is put back if the new one fails to install or to
+  start. On Windows the installer must carry FiberBrowser's Authenticode
+  signature; the old application and its WSL distribution are restored if the
+  new one fails. **Download** still fetches the DMG or Setup for a manual
+  install. This 3.0.2 Windows build is not code-signed, so on Windows updates
+  install with **Download** and Setup.
+- **FiberHMM updates between app releases.** Settings > FiberHMM & Updates
+  offers **Update FiberHMM to X.Y.Z** when PyPI has a newer FiberHMM 3 than the
+  app bundles. FiberBrowser checks the wheel's SHA-256, its requirements and its
+  features before it switches, installs it outside the signed app, and restarts
+  with your session. Running jobs keep the FiberHMM they started with. **Use
+  bundled FiberHMM** goes back in one click; a damaged update falls back to the
+  bundled FiberHMM at startup and can be reinstalled.
+- **FiberBrowser has a preprint to cite.** About, How to cite and the
+  citation line on exported figures now cite Tullius et al., bioRxiv 2026,
+  doi:10.64898/2026.10.29.762797.
+
+### Fixed
+
+- **Clicks land where the pointer is.** In the Mac app the whole page could
+  scroll up under the title bar (for example after a menu opened), cutting off
+  the toolbar so clicks landed above the pointer. The page no longer scrolls;
+  long dialogs, such as the update notes, scroll inside the window.
+- **Library rows stay put.** Selecting files or showing the bulk-action bar no
+  longer shifts the rows under the pointer.
+- **Re-calls keep one chimera mode.** Re-calling a Library dataset made by
+  FiberHMM 3.0.3 carries its chimera mode once; each re-call used to repeat
+  it in the recorded settings. The Mac app and the WSL package no longer
+  contain local build paths in their package metadata.
+
 ## 3.0.1 — 2026-10-16
 
 FiberBrowser 3.0.1 bundles FiberHMM 3.0.2 and requires

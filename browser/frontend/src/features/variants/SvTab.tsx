@@ -50,6 +50,7 @@ export function SvTab({ datasetId: chosen, params, duplicates }: { datasetId: st
   const sourcePanelId = useBrowserStore(s => svSourcePanel(s, chosen)?.panelId ?? null);
   const identity = useBrowserStore(s => variantScanIdentity(s, datasetId));
   const svMinLen = useBrowserStore(s => s.svMinLen);
+  const qcfail = useBrowserStore(s => Boolean(s.showQcFailReads));
   const [clusters, setClusters] = useState<SvClusterInView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -58,7 +59,7 @@ export function SvTab({ datasetId: chosen, params, duplicates }: { datasetId: st
   // What the listed SVs were found for: while a refresh for another view (or dataset, or setting) is on its way, the
   // rows are of the old view and their actions would act on it under the new one: shown, but greyed and not
   // actionable (round 2, N16).
-  const viewKey = JSON.stringify([targetKey, identity, svMinLen, duplicates]);
+  const viewKey = JSON.stringify([targetKey, identity, svMinLen, duplicates, qcfail]);
   const currentView = useRef(viewKey);
   currentView.current = viewKey;
   const [loadedFor, setLoadedFor] = useState<string | null>(null);

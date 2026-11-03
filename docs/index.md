@@ -85,7 +85,7 @@ export, sessions and workspaces.
 | [Analysis data exports](analysis_data_exports.md) | Where to download the numbers behind every view (plot data vs observation-level data) and how to reload an exact browser state. |
 | [Lattice consensus](LATTICE_CONSENSUS.md) | The Footprints panel's footprint-class workflow: the lattice recaller's use, parameters and outputs. |
 | [Genome windows](GENOME_WINDOWS.md) | Linked vs independent windows, multiple FASTA/annotation pairs, BED gene annotations, and clustering across windows. |
-| [How to cite](citing.md) | Citing FiberBrowser (CITATION.cff) and FiberHMM; the citation in About, the toolbar and exported figures. |
+| [How to cite](citing.md) | Citing the FiberBrowser and FiberHMM preprint and reporting software versions; the citation in About, the toolbar and exported figures. |
 
 ## Troubleshooting
 

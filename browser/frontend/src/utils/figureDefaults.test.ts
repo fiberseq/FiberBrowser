@@ -26,7 +26,7 @@ const SETTINGS = [
   'enabledModTypes', 'enabledMetaProfiles', 'fillReadHeight', 'readSeparatorMode', 'readSeparatorMinHeight',
   'readSeparatorWidth', 'subnucleosomalThreshold', 'accessibilityThreshold', 'maxRegionForReads', 'clusterK',
   'clusterMethod', 'motifThreshold', 'isReversed', 'peakRules', 'peakSettings', 'hideTerminalGaps',
-  'terminalGapThreshold', 'fillSmallGaps', 'fillGapSize', 'minFpQuality', 'showDuplicateReads', 'minFootprints', 'analysisSampleSeed',
+  'terminalGapThreshold', 'fillSmallGaps', 'fillGapSize', 'minFpQuality', 'showDuplicateReads', 'showQcFailReads', 'minFootprints', 'analysisSampleSeed',
 ] as const;
 
 const LAYER_KEYS = [

@@ -47,7 +47,18 @@ datas = []
 for path in sorted(PKG.rglob("*")):
     if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc":
         datas.append((str(path), str(Path("fiberbrowser") / path.relative_to(PKG).parent)))
-datas += copy_metadata("fiberhmm") + copy_metadata("fiberbrowser")
+# The overlay installer checks Requires-Dist against the actual bundled versions.
+# Include metadata for the consensus extra too (recursive=True alone follows
+# dependencies whose markers match the base package, without its extras).
+from importlib.metadata import requires
+from packaging.requirements import Requirement
+metadata_names = {"fiberhmm", "fiberbrowser"}
+for requirement in requires("fiberhmm") or []:
+    dependency = Requirement(requirement)
+    if not dependency.marker or any(dependency.marker.evaluate({"extra": extra}) for extra in ("", "consensus")):
+        metadata_names.add(dependency.name)
+for name in sorted(metadata_names):
+    datas += copy_metadata(name, recursive=True)
 datas += collect_data_files("fiberhmm")
 # pyjaspar bundles every JASPAR release (~20 MB each); the browser reads
 # JASPAR2024 (services/motifs.py). Keep that and the newest.

@@ -59,6 +59,8 @@ with ProcessPoolExecutor(max_workers=2, context=get_context("loky")) as pool:
 
 BIN="$APP/Contents/MacOS/FiberBrowser"
 echo "Smoke test: $APP"
+check "package metadata privacy" "$BIN" "$APP/Contents/Resources/package_metadata.py" \
+  --build-home "${FB_BUILD_HOME:-$HOME}" "$APP/Contents"
 check "numba JIT + FiberHMM kernel" "$BIN" -c "$JIT_TEST"
 check "loky worker pool" "$BIN" -c "$POOL_TEST"
 check "primer design (primer3, seqfold)" "$BIN" -c "import primer3, seqfold; print('Tm', round(primer3.calc_tm('GTAAAACGACGGCCAGT'), 1), 'dG', seqfold.dg('GGGAGGTCGTTACATCTGGGTAACACCGGTACTGATCCGGTGACCTCCC', temp=37.0))"

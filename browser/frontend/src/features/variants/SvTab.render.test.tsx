@@ -3,11 +3,11 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useBrowserStore } from '../../stores/browserStore';
-import { svsInView } from './api';
+import { svLinkage, svsInView } from './api';
 import { SvTab, WEAK_SV_CARRIERS, splitWeakSvs } from './SvTab';
 import { DEFAULT_SNP_PARAMS } from './api';
 
-vi.mock('./api', async importOriginal => ({ ...(await importOriginal<typeof import('./api')>()), svsInView: vi.fn() }));
+vi.mock('./api', async importOriginal => ({ ...(await importOriginal<typeof import('./api')>()), svsInView: vi.fn(), svLinkage: vi.fn() }));
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 const wait = (ms: number) => act(async () => { await new Promise(r => setTimeout(r, ms)); });
@@ -24,9 +24,10 @@ const q = (id: string) => container.querySelector(`[data-testid="${id}"]`) as HT
 const qa = (id: string) => [...container.querySelectorAll(`[data-testid="${id}"]`)] as HTMLElement[];
 
 beforeEach(() => {
+  vi.clearAllMocks();
   vi.mocked(svsInView).mockResolvedValue({ clusters: CLUSTERS, n_reads: 7_225, min_len: 50 });
   useBrowserStore.setState({
-    chrom: 'chr2L', start: 9_462_000, end: 9_492_000, svMinLen: 50, selectedFeatures: [],
+    chrom: 'chr2L', start: 9_462_000, end: 9_492_000, svMinLen: 50, selectedFeatures: [], showQcFailReads: false,
     datasets: [{ id: 'numb', label: 'numb', path: '/x.bam', data_type: 'bam' }],
     panels: [{ id: 'p1', contentType: 'dataset', datasetId: 'numb', subTracks: [], collapsed: false, linkGroup: 'default', layoutRow: 0 }],
   } as any);
@@ -37,6 +38,28 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); container.remove(); });
 
 describe('Variants › SVs', () => {
+  it('refreshes QC-fail counts, disables stale actions and discards linkage from the previous policy', async () => {
+    useBrowserStore.setState({ showQcFailReads: true });
+    act(() => root.render(<SvTab datasetId="numb" params={DEFAULT_SNP_PARAMS} duplicates={false} />));
+    await wait(450);
+    let resolveLinkage!: (value: any) => void;
+    vi.mocked(svLinkage).mockReturnValue(new Promise(resolve => { resolveLinkage = resolve; }));
+    act(() => qa('variants-sv-linkage')[0].click());
+    let resolveScan!: (value: any) => void;
+    vi.mocked(svsInView).mockReturnValue(new Promise(resolve => { resolveScan = resolve; }));
+    act(() => useBrowserStore.setState({ showQcFailReads: false }));
+    await wait(450);
+    expect(svsInView).toHaveBeenCalledTimes(2);
+    expect(q('variants-sv-list')!.dataset.stale).toBe('true');
+    expect(([...qa('variants-sv')[0].querySelectorAll('button')] as HTMLButtonElement[]).every(b => b.disabled)).toBe(true);
+    await act(async () => resolveLinkage({ counts: { carriers: 3267, reference: 333 }, linked: 0, tested: 0, snps: [] }));
+    expect(q('variants-sv-linkage-result')).toBeNull();
+    await act(async () => resolveScan({ clusters: [{ ...CLUSTERS[0], support: 3000 }], n_reads: 3600, min_len: 50 }));
+    expect(q('variants-sv-list')!.dataset.stale).toBeUndefined();
+    expect(qa('variants-sv-carriers')[0].textContent).toContain('3,000 carriers');
+    expect((qa('variants-sv-linkage')[0] as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it('the combined-split bar is there before anything is ticked (rows never move), its buttons disabled', async () => {
     act(() => root.render(<SvTab datasetId="numb" params={DEFAULT_SNP_PARAMS} duplicates={false} />));
     await wait(450);

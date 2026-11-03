@@ -11,7 +11,7 @@ def test_backend_and_frontend_versions_agree():
     from version import __version__
     package = json.loads((ROOT / "browser" / "frontend" / "package.json").read_text())
     lock = json.loads((ROOT / "browser" / "frontend" / "package-lock.json").read_text())
-    assert __version__ == "3.0.1"
+    assert __version__ == "3.0.2"
     assert package["version"] == __version__
     assert lock["version"] == __version__ and lock["packages"][""]["version"] == __version__
 

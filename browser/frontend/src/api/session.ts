@@ -44,7 +44,7 @@ export const SESSION_PRE_VIEWPORT_KEYS = [
   'clusterK', 'clusterResolution', 'clusterMethod', 'clusterPeakMode', 'clusterFeatureRules', 'analysisSortRules', 'analysisFilterRules', 'subnucleosomalThreshold', 'accessibilityThreshold',
   'mergeMinFraction', 'mergeMaxSimilarity', 'mergeStrategy', 'mergeThresholds',
   'enabledModTypes', 'enabledMetaProfiles', 'cachedLayerTypes', 'legacyLayerInference', 'legacyNucMinSize', 'clickTargetLayer', 'footprintAnalysisLayer',
-  'fillSmallGaps', 'fillGapSize', 'hideTerminalGaps', 'terminalGapThreshold', 'hideShortEndFootprints', 'minFpQuality', 'minFootprints', 'minFootprintsAuto', 'showDuplicateReads', 'signalFilters',
+  'fillSmallGaps', 'fillGapSize', 'hideTerminalGaps', 'terminalGapThreshold', 'hideShortEndFootprints', 'minFpQuality', 'minFootprints', 'minFootprintsAuto', 'showDuplicateReads', 'showQcFailReads', 'signalFilters',
   'enabledCigarTypes', 'svDisplayEnabled', 'svMinLen', 'svMinSupport', 'isReversed', 'darkMode', 'peakSettings', 'activeColormap', 'fillReadHeight', 'showHiddenTrackStrip',
   'readSeparatorMode', 'readSeparatorMinHeight', 'readSeparatorWidth',
   'showReadTooltip', 'showCoverageHistogram', 'maxRegionForReads', 'motifThreshold', 'readRowHeight',
@@ -366,6 +366,7 @@ export function applyImportedState(result: Record<string, unknown>): void {
 
   // Name filters are per track index: the previous session's would land on
   // whichever imported track now has that index.
+  batch.showQcFailReads = false;
   batch.trackFilters = {};
   // The track cart belongs to the session: one saved before the cart (no
   // catalog/composites) shows its tracks through its panels' legacy track

@@ -50,6 +50,9 @@ export function SummaryTab({ aggregate: agg, isBam, perRead, chrom, containerWid
           <div className="text-[11px] font-mono text-gray-700 dark:text-gray-300 break-all select-all">
             {read.read_id}
           </div>
+          {read.qcfail && <div className="text-[11px] text-amber-700 dark:text-amber-300">
+            {read.chimera === 'strand_swap' ? 'Chimera (DAF strand swap, FiberHMM)' : 'QC fail'}
+          </div>}
           {isBam && read.ref_start != null && read.ref_end != null && (
             <div className="text-[11px] text-gray-500">
               {chrom}:{read.ref_start.toLocaleString()}-{read.ref_end.toLocaleString()}

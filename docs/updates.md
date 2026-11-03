@@ -11,7 +11,7 @@ DAF-seq runs. Which FiberHMM depends on how FiberBrowser was installed.
 2. else the app's own choice: **Settings > Analysis & Reproducibility > FiberHMM & Updates > FiberHMM**: *Bundled
    (default)* or *Custom path…* (a FiberHMM source tree). It is kept in `~/.fiberhmm/app_settings.json` and takes
    effect when the app restarts;
-3. else the bundled FiberHMM.
+3. else a verified FiberHMM update selected here, or the bundled FiberHMM.
 
 `fiberhmm_source_dir` in `~/.fiberhmm/browser_settings.json` does **not** apply to the apps: that file is for
 FiberBrowser started from source or pip, and scripts.
@@ -27,7 +27,7 @@ pack adds its own in its `fiberbrowser-pack.json`, ARCHITECTURE.md). The FiberHM
 files when FiberBrowser starts. An app whose custom FiberHMM lacks something falls back to its bundled FiberHMM and
 says so in one line (in the server log, in Settings and in About), for example:
 
-> Custom FiberHMM at /Users/me/FiberHMM lacks the provenance API; using the bundled FiberHMM 3.0.0.
+> Custom FiberHMM at /src/FiberHMM lacks the provenance API; using the bundled FiberHMM 3.0.0.
 
 A pip or source run keeps the FiberHMM it was given and says what won't work with it. Nothing runs silently without
 the features it needs.
@@ -38,11 +38,20 @@ About shows it too, and the server prints it at startup.
 ## Updating
 
 **The apps.** *FiberBrowser > Check for Updates…* (or the button in Settings > FiberHMM & Updates, or *Check for
-updates* in the command palette) shows whether a newer build of your app's channel is out, with its notes. **Download**
-fetches the DMG (Mac) or the installer (Windows) to your Downloads folder and checks it against the SHA-256 in the
-channel's update manifest; **Open** then mounts the DMG or starts the installer. Quit FiberBrowser and finish the
-install as usual: the app never replaces itself. Your settings, sessions and Library are kept. FiberHMM updates come
-inside the app, since it is bundled.
+updates* in the command palette) shows whether a newer build of your app's channel is out, with its notes.
+**Install and restart**, when available, downloads and verifies the update, saves your session, and starts a
+detached helper that installs after FiberBrowser exits and relaunches it with your session. The Mac app requires
+a signed zip from the same FiberBrowser Team ID (`D57M2AHZJ2`) and a passing Gatekeeper assessment; Windows requires
+a valid Authenticode signature from the build's trusted FiberBrowser signer and uses the NSIS installer silently. Cancellation is available until handoff. Failed checks show the
+reason; on Mac the verified DMG opens for manual installation.
+
+**Download** remains available: it fetches the DMG (Mac) or installer (Windows) to Downloads and checks its SHA-256;
+**Open the disk image** mounts the DMG; **Run the installer** starts the Windows installer. Quit FiberBrowser and finish the manual install as usual. Your
+settings, sessions and Library are kept. FiberHMM can also be updated independently (below). Maintainers:
+see [packaging/README.md](../packaging/README.md#in-app-update-releases) for the signed update procedure.
+
+If saving or restarting fails, the dialog says why and can offer **Retry restart**.
+Referenced BAMs, maps and large scan directories must still be available when the saved session reopens.
 
 A quiet check also runs when the app starts (once, a few seconds after the window opens). It shows a one-line note
 only when there is an update or the check needs you to sign in. Turn it off with **Check for updates at startup**
@@ -51,7 +60,7 @@ only when there is an update or the check needs you to sign in. Turn it off with
 **pip.** Update both packages in FiberBrowser's Python:
 
 ```bash
-pip install -U fiberbrowser "fiberhmm[consensus]>=3.0.2,<4"
+pip install -U fiberbrowser "fiberhmm[consensus]>=3.0.3,<4"
 ```
 
 (`pip install -U fiberhmm` updates FiberHMM alone; FiberHMM's own commands also tell pip users when a newer FiberHMM
@@ -65,10 +74,35 @@ Updates…* (the button in Settings > FiberHMM & Updates, or the command palette
 set the switch, your choice is kept in `~/.fiberhmm/app_settings.json` (`"updates": {"check_at_startup": …}`) and
 applies to every FiberBrowser on this computer; remove that key to go back to the default.
 
+### FiberHMM updates
+
+The same update check also queries `https://pypi.org/pypi/fiberhmm/json` for the newest stable,
+non-yanked `fiberhmm` wheel in this build's supported range (`>=3.0.3,<4` for this build).
+It compares that release with the FiberHMM in use. Network failures are logged silently and do not
+block startup; the startup switch and check cadence apply to both packages.
+
+In the Mac and Windows apps, **Update FiberHMM to X.Y.Z** verifies the wheel's SHA-256 from PyPI,
+checks its declared requirements against the bundled environment (including the consensus extra),
+and runs the startup feature/import check in a separate process. It installs no dependencies.
+If requirements cannot be met, it says “FiberHMM X.Y.Z needs a newer FiberBrowser app; update the app”.
+Only a passing update is activated. Files are staged and atomically renamed into
+`fiberhmm/<version>/site` beside the app settings, outside the signed bundle; the selected version
+is saved in `app_settings.json`. **Restart FiberBrowser** saves and restores the session using
+the app updater's restart flow. The running process keeps its existing FiberHMM until restart.
+
+Settings shows **bundled X** or **updated Y** and offers **Use bundled FiberHMM**. Old overlays
+are pruned, retaining the active and previous versions. A broken overlay automatically falls back
+to bundled FiberHMM at startup, with a notice in Settings and the log. `FIBERHMM_SOURCE_DIR` and
+**Custom path** always take precedence; install, revert and restart actions for overlays are
+unavailable while either override is selected. Public and lab visitors cannot use these routes.
+
+Source and pip runs show `pip install -U "fiberhmm[consensus]>=3.0.3,<4"` in FiberBrowser's Python,
+without modifying that environment themselves.
+
 ### Privacy
 
 A check is a plain HTTPS GET of the channel's update manifest (and, for a channel on GitHub, of GitHub's release
-metadata). Nothing about this computer, its data or how FiberBrowser is used is sent. The welcome screen's
+metadata), alongside the PyPI FiberHMM JSON request. Nothing about this computer, its data or how FiberBrowser is used is sent. The welcome screen's
 *update available* note uses the same check (and so is off by default in source runs). Turn the check at startup
 off in Settings; `FIBERBROWSER_NO_UPDATE_CHECK=1`
 turns every check off (the welcome note, the startup check and *Check for Updates…*). Public and lab servers never
@@ -103,7 +137,7 @@ Where the app looks for the manifest, first match wins:
    [fiberseq/FiberBrowser](https://github.com/fiberseq/FiberBrowser) releases without signing in.
 
 Steps 1-3 take an `https://` address, a `file://` address or a plain path, so a manifest can sit on a shared drive
-or in a Dropbox-synced folder next to the files it lists.
+or in a synced folder next to the files it lists.
 
 ### Signing in to GitHub (private channels)
 
@@ -126,7 +160,7 @@ FiberBrowser follows those redirects itself without the token.
 
 ## Publishing an update (maintainers)
 
-1. Build: `bash packaging/macos/build_app.sh` (the DMG) and the Windows app (`packaging/windows/build_wsl_distro.sh`,
+1. Build: `bash packaging/macos/build_app.sh` (the DMG and signed/stapled app zip) and the Windows app (`packaging/windows/build_wsl_distro.sh`,
    then `build_installer.sh`). Each build writes its channel, version and build number into the app
    (`Contents/Resources/fiberbrowser-build.json`; `/opt/fiberbrowser/share/fiberbrowser/build.json` in the WSL
    distribution, `packaging/write_build_info.py`). Their presence is what makes the app use its bundled FiberHMM
@@ -141,7 +175,8 @@ FiberBrowser follows those redirects itself without the token.
        --build-info build/windows/context/build.json \
        --notes-file notes.txt --notes-url https://github.com/fiberseq/FiberBrowser/releases/tag/v3.0.1 \
        --out fiberbrowser-update-public.json \
-       build/macos/dist/FiberBrowser-3.0.1-arm64.dmg build/windows/FiberBrowser-3.0.1-Setup.exe
+       build/macos/dist/FiberBrowser-3.0.1-arm64.dmg build/macos/dist/FiberBrowser-3.0.1-arm64.zip \
+       build/windows/FiberBrowser-3.0.1-Setup.exe
    ```
 
 3. Publish the files and the manifest together. On GitHub (push the tag `v3.0.1` first):

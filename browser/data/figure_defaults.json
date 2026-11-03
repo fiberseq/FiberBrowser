@@ -86,6 +86,7 @@
     "fillGapSize": 50,
     "minFpQuality": 0,
     "showDuplicateReads": false,
+    "showQcFailReads": false,
     "minFootprints": 5,
     "analysisSampleSeed": "fiberbrowser-analysis"
   },

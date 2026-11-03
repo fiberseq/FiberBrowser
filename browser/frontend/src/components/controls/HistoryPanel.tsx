@@ -9,7 +9,7 @@ const SNAPSHOT_CHANGE_FIELDS = {
   view: ['chrom', 'start', 'end', 'isReversed', 'showRelativeCoords', 'relativeTSS'],
   clusters: ['clusterK', 'clusterResolution', 'clusterMethod', 'clusterFeatureRules', 'clusterAssignments', 'clusterOrder', 'clusterPatterns', 'clusterPeakRegions', 'dynamicClustering', 'readSortOrder'],
   peaks: ['selectedPeaks', 'peakModes', 'peakRules', 'peaksByRule', 'peaksLocked'],
-  filters: ['filteredReadIds', 'clusterFocus', 'readStateDetails', 'transcriptionStateFilters', 'minFpQuality', 'minFootprints', 'showDuplicateReads'],
+  filters: ['filteredReadIds', 'clusterFocus', 'readStateDetails', 'transcriptionStateFilters', 'minFpQuality', 'minFootprints', 'showDuplicateReads', 'showQcFailReads'],
   tracks: ['catalog', 'compositeTracks', 'savedTracks', 'enabledModTypes', 'enabledMetaProfiles', 'cachedLayerTypes'],
   labeling: ['activeColormap'],
   selection: ['selectedReadIds', 'selectedDatasets', 'selectedFootprints', 'footprintGroups', 'selectedGenes'],

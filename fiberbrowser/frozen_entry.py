@@ -104,6 +104,21 @@ def configure_frozen_process() -> None:
     prepare_process_environment()
 
 
+def _select_fiberhmm() -> None:
+    """Select the app's FiberHMM (an update, the Custom path or the bundled one) in a child process.
+
+    Only the server role puts the backend (``browser/``, which holds ``services``) on ``sys.path``; the module,
+    script and entry-point roles (loky workers, the ``fiberhmm-*`` commands) get it here, appended so it never
+    shadows the working directory or FiberHMM's own modules.
+    """
+    from ._paths import browser_dir
+    backend = str(browser_dir())
+    if backend not in sys.path:
+        sys.path.append(backend)
+    from services.fiberhmm_runtime import configure_fiberhmm_runtime
+    configure_fiberhmm_runtime()
+
+
 def run(argv: Optional[Sequence[str]] = None) -> int:
     import multiprocessing
     multiprocessing.freeze_support()  # spawn workers (--multiprocessing-fork) end here
@@ -119,6 +134,9 @@ def run(argv: Optional[Sequence[str]] = None) -> int:
         # link relay (services.link_proxy) is started this way from browser/.
         if os.getcwd() not in sys.path:
             sys.path.insert(0, os.getcwd())
+        # Apply the explicit runtime after cwd, so cwd cannot shadow an overlay
+        # (or the Custom path selection).
+        _select_fiberhmm()
         sys.argv = [args[0], *args[1:]]
         runpy.run_module(args[0], run_name="__main__", alter_sys=True)
         return 0
@@ -131,9 +149,11 @@ def run(argv: Optional[Sequence[str]] = None) -> int:
         script_dir = os.path.dirname(os.path.abspath(args[0]))
         if script_dir not in sys.path:
             sys.path.insert(0, script_dir)
+        _select_fiberhmm()
         runpy.run_path(args[0], run_name="__main__")
         return 0
     if role == "entry-point":
+        _select_fiberhmm()
         name = args[0]
         sys.argv = [name, *args[1:]]
         result = _console_script(name)()

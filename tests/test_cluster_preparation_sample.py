@@ -50,6 +50,36 @@ def test_early_sampler_uses_exact_raw_names():
     assert Sampler(1, only_ids={'fiber'}).keep('fiber_1')
 
 
+def test_qcfail_cannot_consume_preparation_sample_slots(tmp_path):
+    import pysam
+    from services.read_sampling import name_hash
+    from state.browser_state import BrowserState
+    names = sorted([f'fiber_{i}' for i in range(8)], key=lambda n: (name_hash(n), n))
+    eligible = set(names[-2:])
+    path = tmp_path / 'qc-heavy.bam'
+    header = {'HD': {'SO': 'coordinate'}, 'SQ': [{'SN': 'chrT', 'LN': 1000}]}
+    with pysam.AlignmentFile(str(path), 'wb', header=header) as out:
+        for name in names:
+            read = pysam.AlignedSegment(out.header)
+            read.query_name = name
+            read.query_sequence = 'A' * 300
+            read.reference_id = 0
+            read.reference_start = 100
+            read.cigartuples = [(0, 300)]
+            read.flag = 0 if name in eligible else 0x200
+            out.write(read)
+    pysam.index(str(path))
+    state = BrowserState(None, reference_only=True)
+    state.add_dataset('reads', str(path))
+    sample = prepare_cluster_sample(state, 'reads', 'chrT', 100, 400, 1, DEFAULT_SAMPLE_SEED)
+    assert sample is not None
+    assert sample.names == frozenset([names[-2]])
+    assert sample.total == 2
+    with using_cluster_sample(sample):
+        working = state.build_working_set('reads', 'chrT', 100, 400)
+    assert {read['id'] for read in working.reads} == set(sample.names)
+
+
 @pytest.mark.parametrize('spanning', [False, True])
 @pytest.mark.parametrize('quality_filters', [[], [{'layer': 'nuc', 'quality_name': 'aq', 'min_value': 150}]])
 def test_sample_evidence_matches_full_and_never_serves_full_key(cohort, spanning, quality_filters):

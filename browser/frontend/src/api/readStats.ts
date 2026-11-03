@@ -1,3 +1,4 @@
+import { useBrowserStore } from '../stores/browserStore';
 import { fetchJson } from './sharedFetch';
 
 const API_BASE = '/api';
@@ -8,6 +9,8 @@ export interface CigarOp {
 }
 
 export interface PerReadStats {
+  qcfail?: boolean;
+  chimera?: 'strand_swap';
   signal?: import('../utils/signalFilters').SignalEvidence;
   read_id: string;
   dataset_id: string;
@@ -102,6 +105,7 @@ export async function fetchReadStats(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
+      include_qcfail: Boolean(useBrowserStore.getState().showQcFailReads),
       read_ids_by_dataset: readIdsByDataset,
       sample_seed: sampleSeed ?? null,
       ...(options?.extraRegions?.length ? { extra_regions: options.extraRegions } : {}),

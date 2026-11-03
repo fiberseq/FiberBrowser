@@ -21,7 +21,7 @@
 #                       python3.11, python3.10, python3). Its minimum macOS carries into the app.
 #   FB_FIBERBROWSER     what to install as FiberBrowser (default: this checkout)
 #   FB_FIBERHMM         FiberHMM to bundle: a pip requirement or a source folder
-#                       (default: fiberhmm[consensus]>=3.0.2,<4 from PyPI)
+#                       (default: fiberhmm[consensus]>=3.0.3,<4 from PyPI)
 #   FB_MINIMAP2         an existing arm64 minimap2 to bundle (default: build v$MINIMAP2_VERSION
 #                       from source; MIT licence, copied into the app)
 #   FB_BLAST_TARBALL    a local copy of NCBI's ncbi-blast-<version>+-aarch64-macosx.tar.gz (offline
@@ -134,7 +134,7 @@ python_ok "$VENV/bin/python" || die "the build venv $VENV was made with a Python
 pip_install() { env PATH="$VENV/bin:$CLEAN_PATH" "$VENV/bin/python" -m pip install --disable-pip-version-check "$@"; }
 say "Installing FiberBrowser, FiberHMM, pywebview and PyInstaller into $VENV"
 pip_install -q --upgrade pip
-FIBERHMM_SPEC="${FB_FIBERHMM:-fiberhmm[consensus]>=3.0.2,<4}"
+FIBERHMM_SPEC="${FB_FIBERHMM:-fiberhmm[consensus]>=3.0.3,<4}"
 if [ -d "$FIBERHMM_SPEC" ]; then
   # A source folder: always reinstall it (its version may not have changed).
   pip_install -q --force-reinstall --no-deps "$FIBERHMM_SPEC"
@@ -317,6 +317,11 @@ if [ "${FB_ALLOW_NEWER_MACOS:-0}" != 1 ] && [ "$(printf '%s\n%s\n' "$MACOS_TARGE
 fi
 
 # --- 6. sign ---------------------------------------------------------------------------
+# pip's direct_url.json records local wheel/checkouts (including the builder's home).
+# PyInstaller puts metadata directly in Contents/Resources, with links from Frameworks.
+cp "$ROOT/packaging/package_metadata.py" "$APP/Contents/Resources/package_metadata.py"
+"$VENV/bin/python" "$APP/Contents/Resources/package_metadata.py" --remove-direct-urls --record-build-home \
+  --build-home "$HOME" "$APP/Contents" || die "private build paths in package metadata"
 KEYCHAIN_ARGS=()
 [ -n "${FB_KEYCHAIN:-}" ] && KEYCHAIN_ARGS=(--keychain "$FB_KEYCHAIN")
 IDENTITY="${FB_SIGN_IDENTITY:-}"
@@ -438,13 +443,18 @@ if [ "${FB_SKIP_DMG:-0}" != "1" ]; then
   fi
 fi
 
+# The updater needs a zip of the final stapled bundle, alongside the DMG fallback.
+ZIP="$DIST/FiberBrowser-$VERSION-arm64.zip"
+ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
+
 # --- summary -----------------------------------------------------------------------------
 say "Done"
 echo "  app:     $APP ($(du -sh "$APP" | cut -f1))"
+echo "  zip:     $ZIP"
 [ -f "$DMG" ] && echo "  dmg:     $DMG ($(du -h "$DMG" | cut -f1))"
 echo "  signed:  $SIGN_KIND"
 echo "  notarized: $( [ "$NOTARIZE" = "1" ] && echo yes || echo no)"
-echo "  update manifest: python3 tools/make_update_manifest.py --channel $FLAVOR --version $VERSION --out $DIST/fiberbrowser-update-$FLAVOR.json $( [ -f "$DMG" ] && echo "$DMG")"
+echo "  update manifest: python3 tools/make_update_manifest.py --channel $FLAVOR --version $VERSION --out $DIST/fiberbrowser-update-$FLAVOR.json $ZIP $( [ -f "$DMG" ] && echo "$DMG")"
 if [ "$IDENTITY" != "-" ]; then
   spctl -a -vv "$APP" 2>&1 | sed 's/^/  spctl: /' || true
 fi

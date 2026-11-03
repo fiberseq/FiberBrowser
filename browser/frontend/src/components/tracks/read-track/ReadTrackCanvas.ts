@@ -546,18 +546,24 @@ export function drawReadTrack(params: DrawReadsParams): void {
       const clippedEnd = Math.min(regionWidth, adjustedEnd);
       if (readSv && readSv.deletions.length > 0 && clippedEnd > clippedStart) {
         const rects = bodyClipRects({ start: adjustedStart, end: adjustedEnd }, readSv.deletions, regionWidth, toX);
-        ctx.fillStyle = readBackgroundColor;
+        ctx.fillStyle = read.qcfail ? '#d97706' : readBackgroundColor;
         for (const rect of rects) ctx.fillRect(rect.x, y, rect.w, Math.max(1, rowHeight - rowGap));
         bodyClip = rects;
       } else if (clippedEnd > clippedStart) {
         const x = isReversed ? toX(clippedEnd) : toX(clippedStart);
         const w = Math.max(1, (clippedEnd - clippedStart) * scale);
-        ctx.fillStyle = readBackgroundColor;
+        ctx.fillStyle = read.qcfail ? '#d97706' : readBackgroundColor;
         ctx.fillRect(x, y, w, Math.max(1, rowHeight - rowGap));
         bodyClip = { x, w };
       } else {
         bodyClip = { x: 0, w: 0 };
       }
+    }
+
+    if (read.qcfail && readExtent) {
+      const markerX = Math.max(sidebarWidth, Math.min(width - 3, toX(Math.max(0, readExtent.start + linkedOffset))));
+      ctx.fillStyle = '#d97706';
+      ctx.fillRect(markerX, y, 3, Math.max(1, rowHeight - rowGap));
     }
 
     // Primary interval rendering. Each layer is independent:

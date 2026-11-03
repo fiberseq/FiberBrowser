@@ -74,6 +74,7 @@ export function altAlleleProvenance(layout: AltAlleleLayout, info: AltAlleleInfo
   const left = [
     ex?.other_insert ? `${n(ex.other_insert)} with another insertion at the site (a different length)` : '',
     ex?.not_informative ? `${n(ex.not_informative)} not informative (they don't span the breakpoint)` : '',
+    def && !def.include_qcfail ? 'QC-fail reads (including FiberHMM chimeras) are left out' : '',
     def && !def.include_duplicates ? 'duplicates (flagged) are left out' : '',
   ].filter(Boolean);
   if (left.length) out.push({ title: 'Left out', lines: left });

@@ -372,6 +372,7 @@ export interface SerializedState {
   minFootprintsAuto?: boolean;
   signalFilters?: import('../utils/signalFilters').SignalFilters;
   showDuplicateReads?: boolean;
+  showQcFailReads?: boolean;
   enabledCigarTypes: { mismatches: boolean; insertions: boolean; deletions: boolean };
   darkMode: boolean;
   peakSettings: {
@@ -837,6 +838,7 @@ export function serializeState(state: BrowserState): SerializedState {
     minFootprintsAuto: state.minFootprintsAuto,
     signalFilters: { ...state.signalFilters },
     showDuplicateReads: state.showDuplicateReads,
+    showQcFailReads: state.showQcFailReads,
     enabledCigarTypes: { ...state.enabledCigarTypes },
     svDisplayEnabled: state.svDisplayEnabled,
     svMinLen: state.svMinLen,
@@ -1084,6 +1086,7 @@ function deserializeState(
     ...(s.minFootprints !== 0 ? { minFootprintsNotice: null } : {}),
     signalFilters: normalizeSignalFilters(s.signalFilters),
     showDuplicateReads: s.showDuplicateReads ?? false,
+    showQcFailReads: s.showQcFailReads ?? false,
     enabledCigarTypes: s.enabledCigarTypes,
     svDisplayEnabled: s.svDisplayEnabled ?? true,
     svMinLen: clampMinSvLen(s.svMinLen ?? SV_MIN_LEN_DEFAULT),

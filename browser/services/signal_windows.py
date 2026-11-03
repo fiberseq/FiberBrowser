@@ -32,10 +32,11 @@ class SignalWindow:
         self.regions = tuple((left, right) for left, right in regions) if regions is not None else ((start, end),)
         self.source = source
         self.identity = _identity(path)
-        self.max_records = min(1_000_000, _windows.max_bytes // 19)
+        self.max_records = min(1_000_000, _windows.max_bytes // 21)
         self.enabled = self.identity is not None and self.max_records > 0
         self.starts, self.ends = array("q"), array("q")
         self.status, self.structure, self.duplicates = array("B"), array("B"), array("B")
+        self.qcfail, self.chimeras = array("B"), array("B")
 
     def append(self, read, evidence):
         if not self.enabled:
@@ -43,7 +44,7 @@ class SignalWindow:
         if len(self.starts) >= self.max_records:
             # Genome-scale analysis cannot accumulate an unbounded sidecar.
             self.enabled = False
-            self.starts = self.ends = self.status = self.structure = self.duplicates = None
+            self.starts = self.ends = self.status = self.structure = self.duplicates = self.qcfail = self.chimeras = None
             return
         self.starts.append(read.reference_start)
         self.ends.append(read.reference_end)
@@ -51,17 +52,19 @@ class SignalWindow:
         structure = evidence["structure"]["status"]
         self.structure.append(0 if structure == "unscored" else 1 if structure == "supported" else 2)
         self.duplicates.append(bool(getattr(read, "is_duplicate", False)))
+        self.qcfail.append(bool(getattr(read, "is_qcfail", False)))
+        self.chimeras.append(bool(getattr(read, "is_qcfail", False) and read.has_tag("xc") and read.get_tag("xc") == "strand_swap"))
 
     def finish(self):
         if not self.enabled or self.identity != _identity(self.path):
             return
         for name, dtype in (("starts", np.int64), ("ends", np.int64),
-                            ("status", np.uint8), ("structure", np.uint8), ("duplicates", np.uint8)):
+                            ("status", np.uint8), ("structure", np.uint8), ("duplicates", np.uint8), ("qcfail", np.uint8), ("chimeras", np.uint8)):
             values = np.frombuffer(getattr(self, name), dtype=dtype)
             values.flags.writeable = False
             setattr(self, name, values)
         self.retained_bytes = sum(getattr(self, name).nbytes for name in
-                                  ("starts", "ends", "status", "structure", "duplicates")) + 1024
+                                  ("starts", "ends", "status", "structure", "duplicates", "qcfail", "chimeras")) + 1024
         sink = signal_window_sink.get()
         if sink is not None:
             sink(self)
@@ -72,21 +75,26 @@ class SignalWindow:
         """Publish a completed local/worker fetch only if its source still matches."""
         if not self.enabled or self.identity != _identity(self.path):
             return
-        for name in ('starts', 'ends', 'status', 'structure', 'duplicates'):
+        for name in ('starts', 'ends', 'status', 'structure', 'duplicates', 'qcfail', 'chimeras'):
             getattr(self, name).flags.writeable = False
         _windows[(self.identity, self.chrom, self.start, self.end, self.regions)] = self
         if self.source is not None:
             _sources[self.identity] = self.source
             self.source = None  # metadata has its own byte budget and LRU entry
 
-    def counts(self, start, end, *, include_duplicates=False, spanning=False, previous=()):
+    def counts(self, start, end, *, include_duplicates=False, include_qcfail=False, spanning=False, previous=()):
         selected = (self.starts < end) & (self.ends > start)
-        if not include_duplicates:
-            selected &= self.duplicates == 0
         if spanning:
             selected &= (self.starts <= start) & (self.ends >= end)
         for left, right in previous:
             selected &= ~((self.starts < right) & (self.ends > left))
+        duplicate_hidden = int(np.count_nonzero(selected & (self.duplicates != 0))) if not include_duplicates else 0
+        qcfail_hidden = int(np.count_nonzero(selected & (self.qcfail != 0))) if not include_qcfail else 0
+        chimera_hidden = int(np.count_nonzero(selected & (self.chimeras != 0))) if not include_qcfail else 0
+        if not include_duplicates:
+            selected &= self.duplicates == 0
+        if not include_qcfail:
+            selected &= self.qcfail == 0
         status, structure = self.status[selected], self.structure[selected]
         frequencies = np.bincount(status, minlength=len(_STATUSES))
         counts = {name: int(frequencies[index]) for index, name in enumerate(_STATUSES)}
@@ -101,7 +109,7 @@ class SignalWindow:
         if filters["requireStructure"]:
             kept &= structure == 1
         kept_count = int(np.count_nonzero(kept))
-        return dict(counts, total=len(status), kept=kept_count, hidden=len(status)-kept_count,
+        return dict(counts, duplicate_hidden=duplicate_hidden, qcfail_hidden=qcfail_hidden, chimera_hidden=chimera_hidden, total=len(status), kept=kept_count, hidden=len(status)-kept_count,
                     structure_scored=int(np.count_nonzero(structure)))
 
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import sys
 
 import pytest
@@ -181,6 +182,17 @@ REVIEW_SETTINGS = {"dedup": "off", "snp_screen": "off", "prob_threshold": 200, "
                    "primary_only": False, "chimera_filter": False, "min_mapq": 40}
 
 
+def _records_chimera_mode():
+    from packaging.version import Version
+    fiberhmm = pytest.importorskip("fiberhmm")
+    return Version(fiberhmm.__version__) >= Version("3.0.3")
+
+
+def _expected_call_args(arguments, mode="flag"):
+    # 3.0.2 only recorded the boolean; 3.0.3 also appends the effective DAF mode.
+    return [*arguments, *(["--chimeras", mode] if _records_chimera_mode() else [])]
+
+
 def test_recall_carries_the_original_calling_settings(tmp_path, monkeypatch):
     # Review round 4 repro: these settings were recorded, and the submitted job had
     # options={} and none of their flags.
@@ -226,7 +238,7 @@ def test_recalled_settings_round_trip_through_the_real_pipeline_parser(tmp_path,
                             outdir=plan["outdir"], sample=plan["sample"], cores=plan["cores"], progress="p.jsonl",
                             regions=plan["regions"], extra=plan["extra"])
     config = parser_module.config_from_args(parser_module.parse_args(args))
-    assert config.calling_settings() == recorded
+    assert config.calling_settings() == {**recorded, "call_args": _expected_call_args(recorded["call_args"], "keep")}
 
 
 def _recalled_settings(tmp_path, plan, parser_module):
@@ -265,7 +277,8 @@ def test_fiberhmm_3_run_settings_round_trip_through_the_real_pipeline_parser(tmp
     run = _run_with_settings(tmp_path, **{k: v for k, v in recorded.items() if k != "enzyme"})
     plan = jobs.plan_recall(_entry(run["called_bam"]), outdir=str(tmp_path / "recall"))
     assert plan["settings"]["changed_defaults"] == [] and plan["settings"]["rewrites"] == []
-    assert _recalled_settings(tmp_path, plan, parser_module) == recorded
+    assert _recalled_settings(tmp_path, plan, parser_module) == {
+        **recorded, "call_args": _expected_call_args(recorded["call_args"])}
     if changed.get("call_args") == ["--no-daf-mask-unaligned"]:
         assert "--no-daf-mask-unaligned" not in plan["extra"]  # carried in --call-args, not doubled
 
@@ -323,7 +336,73 @@ def test_retired_options_in_the_recorded_call_args_are_dropped_and_listed(tmp_pa
          "why": "retired in FiberHMM 3.0: caused artifacts"},
         {"flag": "--call-args --nuc-recall-policy", "from": "topology", "to": None,
          "why": "retired in FiberHMM 3.0: caused artifacts"}]
-    assert _recalled_settings(tmp_path, plan, parser_module)["call_args"] == ["--min-llr", "6"]
+    assert _recalled_settings(tmp_path, plan, parser_module)["call_args"] == _expected_call_args(["--min-llr", "6"])
+
+
+@pytest.mark.parametrize("mode", ["flag", "keep", "remove"])
+def test_chimera_mode_and_call_args_are_stable_across_three_recalls(tmp_path, mode):
+    parser_module = _real_pipeline()
+    if mode == "remove" and not _records_chimera_mode():
+        pytest.skip("FiberHMM 3.0.2 cannot record or replay the --chimeras remove mode")
+    base_args = ["--with-scores", "--min-llr", "6"]
+    expected = base_args + (["--chimeras", "remove"] if mode == "remove" else [])
+    recorded = pipeline_settings("dddb", chimera_filter=mode != "keep",
+                                 call_args=_expected_call_args(expected, mode))
+    previous_args = None
+    previous_recorded = recorded["call_args"]
+    for generation in range(3):
+        run = _run_with_settings(tmp_path / str(generation),
+                                 **{k: v for k, v in recorded.items() if k != "enzyme"})
+        plan = jobs.plan_recall(_entry(run["called_bam"]), outdir=str(tmp_path / f"recall-{generation}"))
+        settings = plan["settings"]
+        assert plan["options"]["chimera_filter"] is (mode != "keep")
+        assert f"{mode} chimeras" in settings["labels"]
+        # Only remove needs a caller override; flag uses the default, keep the legacy boolean.
+        actual_args = [shlex.split(a.split("=", 1)[1]) for a in plan["extra"]
+                       if a.startswith("--call-args=")]
+        assert actual_args == [expected]
+        if previous_args is not None:
+            assert actual_args == previous_args
+        recorded = _recalled_settings(tmp_path, plan, parser_module)
+        assert recorded["chimera_filter"] is (mode != "keep")
+        # For remove, FiberHMM records the override plus its own effective pair (two pairs).
+        assert recorded["call_args"] == _expected_call_args(expected, mode)
+        assert recorded["call_args"] == previous_recorded
+        previous_args, previous_recorded = actual_args, recorded["call_args"]
+
+
+@pytest.mark.parametrize("mode", ["flag", "keep", "remove"])
+@pytest.mark.parametrize("attached", [False, True])
+def test_recorded_chimera_mode_uses_last_pair_and_overrides_boolean(mode, attached):
+    pair = [f"--chimeras={mode}"] if attached else ["--chimeras", mode]
+    arguments = ["--chimeras", "remove", "--with-scores", "--chimeras=keep", "--min-llr", "6", *pair]
+    original = list(arguments)
+    entry = {"pipeline": {"settings": pipeline_settings("dddb", chimera_filter=mode == "keep",
+                                                       call_args=arguments)}}
+    result = jobs.recall_settings(entry, "dddb", None)
+    assert result["options"]["chimera_filter"] is (mode != "keep")
+    assert f"{mode} chimeras" in result["labels"]
+    expected = ["--with-scores", "--min-llr", "6"] + (["--chimeras", "remove"] if mode == "remove" else [])
+    assert [shlex.split(a.split("=", 1)[1]) for a in result["extra"]
+            if a.startswith("--call-args=")] == [expected]
+    assert ("--no-chimera-filter" in result["extra"]) is (mode == "keep")
+    assert arguments == original  # reviewing a plan never edits the saved settings
+
+
+@pytest.mark.parametrize("enabled,mode", [(True, "flag"), (False, "keep")])
+def test_recorded_chimera_mode_falls_back_to_boolean(enabled, mode):
+    entry = {"pipeline": {"settings": pipeline_settings("dddb", chimera_filter=enabled)}}
+    result = jobs.recall_settings(entry, "dddb", None)
+    assert f"{mode} chimeras" in result["labels"]
+    assert not any(a.startswith("--call-args=") for a in result["extra"])
+    assert ("--no-chimera-filter" in result["extra"]) is (not enabled)
+
+
+@pytest.mark.parametrize("arguments", [["--chimeras"], ["--chimeras="], ["--chimeras", "unknown"]])
+def test_invalid_recorded_chimera_modes_are_refused(arguments):
+    entry = {"pipeline": {"settings": pipeline_settings("dddb", call_args=arguments)}}
+    with pytest.raises(jobs.RecallError, match="--chimeras"):
+        jobs.recall_settings(entry, "dddb", None)
 
 
 def test_contradictory_or_unknown_3_0_settings_are_refused(tmp_path, monkeypatch):
@@ -753,7 +832,7 @@ def test_the_frozen_apps_module_role_is_probed_with_its_own_import_path(tmp_path
     _printing_fiberhmm(out, "3.0.LOCAL")
     app = tmp_path / "app"
     app.write_text(f"#!{sys.executable}\nimport sys\n"
-                   f"sys.path[:] = [{str(repo)!r}, {str(bundled)!r}] + [p for p in sys.path if p not in ('', {str(tmp_path)!r})]\n"
+                   f"sys.path[:] = [{str(repo)!r}, {str(repo / 'browser')!r}, {str(bundled)!r}] + [p for p in sys.path if p not in ('', {str(tmp_path)!r})]\n"
                    "sys.frozen = True\nfrom fiberbrowser import frozen_entry\nraise SystemExit(frozen_entry.run())\n")
     app.chmod(0o755)
     command = {"argv": [str(app), "-m", "fiberhmm.cli.pipeline"], "env": {}}

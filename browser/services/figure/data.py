@@ -55,7 +55,7 @@ class DataCache:
                 filter_ids=",".join(filter_ids) if filter_ids else None,
                 hide_terminal_gaps=bool(fe.get("hideTerminalGaps", True)),
                 terminal_gap_threshold=int(fe.get("terminalGapThreshold") or 500),
-                include_duplicates=bool(fe.get("showDuplicateReads")),
+                include_duplicates=bool(fe.get("showDuplicateReads")), include_qcfail=bool(fe.get("showQcFailReads")),
                 include_metaprofile=include_metaprofile,
                 profile_max_reads=int(fe.get("backgroundReadCap") or 0),
                 metaprofile_layers=",".join(metaprofile_layers) if metaprofile_layers else None,

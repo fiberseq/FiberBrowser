@@ -459,7 +459,7 @@ def _fetch(ctx: TrackContext, plan: dict, max_reads: int, filter_param: str, ser
         terminal_gap_threshold=int(_num(fe.get('terminalGapThreshold'), 500)),
         infer_legacy_layers=bool(fe.get('legacyLayerInference', True)),
         legacy_nuc_min_size=int(_num(fe.get('legacyNucMinSize'), 90)),
-        include_duplicates=bool(fe.get('showDuplicateReads')),
+        include_duplicates=bool(fe.get('showDuplicateReads')), include_qcfail=bool(fe.get('showQcFailReads')),
         include_metaprofile=bool(server_meta),
         profile_max_reads=int(profile_cap) if server_meta else 1000,
         metaprofile_layers=','.join(meta_layers) or None,
@@ -541,6 +541,8 @@ def _compute_display(ctx: TrackContext) -> dict:
 
     if not fe.get('showDuplicateReads'):
         reads = [r for r in reads if not r.get('duplicate')]
+    if not fe.get('showQcFailReads'):
+        reads = [r for r in reads if not r.get('qcfail')]
     if st['filter'] is not None:
         # An applied filter matching no reads shows none (useReadTrackData.ts).
         expanded = st['filter'] | {strip_segment_suffix(i) for i in st['filter']}
@@ -1564,10 +1566,11 @@ def _draw_zoomed_out(surface, ctx: TrackContext, height: float):
     bins = int(max(100, min(ctx.width, 2000)))
     try:
         include_duplicates = bool(ctx.fe.get('showDuplicateReads'))
-        cov = ctx.data.get(('coverage', ctx.panel.dataset_id, bins, include_duplicates) + ctx.region,
+        include_qcfail = bool(ctx.fe.get('showQcFailReads'))
+        cov = ctx.data.get(('coverage', ctx.panel.dataset_id, bins, include_duplicates, include_qcfail) + ctx.region,
                            lambda: get_coverage_payload(
             ctx.state, chrom=ctx.chrom, start=ctx.start, end=ctx.end, bins=bins, dataset_id=ctx.panel.dataset_id,
-            include_duplicates=include_duplicates))
+            include_duplicates=include_duplicates, include_qcfail=include_qcfail))
     except Exception:
         cov = None
     values = (cov or {}).get('coverage') or []

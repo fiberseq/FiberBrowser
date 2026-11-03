@@ -45,8 +45,8 @@ export function panelForDataset(panels: PanelConfig[], datasetId: string): Panel
 
 /** A scan's identity on this page: the dataset (and its files: a reused id with other files is another scan), the
  * reference, the view and the settings. */
-export function clientScanKey(target: ScanTarget, params: SnpParams, duplicates: boolean, identity = ''): string {
-  return JSON.stringify([target.datasetId, identity, target.genome ?? null, target.readIds ?? null, target.chrom, Math.floor(target.start), Math.ceil(target.end), params, duplicates,
+export function clientScanKey(target: ScanTarget, params: SnpParams, duplicates: boolean, identity = '', qcfail = false): string {
+  return JSON.stringify([target.datasetId, identity, target.genome ?? null, target.readIds ?? null, target.chrom, Math.floor(target.start), Math.ceil(target.end), params, duplicates, qcfail,
     // (A subset scan is its panel's: another panel's same reads are scanned for it.)
     ...(target.readIds && target.panelKey ? [target.panelKey] : [])]);
 }
@@ -61,17 +61,17 @@ export function useSnpScan({ datasetId, params, autoScan, active }: {
   datasetId: string; params: SnpParams; autoScan: boolean; active: boolean;
 }) {
   useSplitPanelStore(s => s.reads);
-  const { chrom, start, end, genome, readScope, panelKey, duplicates, identity } = useBrowserStore(useShallow(s => {
+  const { chrom, start, end, genome, readScope, panelKey, duplicates, qcfail, identity } = useBrowserStore(useShallow(s => {
     const view = variantScanTarget(s, datasetId);
     return {
       chrom: view.chrom, start: view.start, end: view.end, genome: view.genome, readScope: JSON.stringify(view.readIds ?? null),
-      panelKey: view.panelKey, duplicates: Boolean(s.showDuplicateReads),
+      panelKey: view.panelKey, duplicates: Boolean(s.showDuplicateReads), qcfail: Boolean(s.showQcFailReads),
       identity: variantScanIdentity(s, datasetId),
     };
   }));
   const target = useMemo<ScanTarget | null>(() => (datasetId && chrom ? { datasetId, chrom, ...(genome ? { genome } : {}), ...(readScope !== "null" ? { readIds: JSON.parse(readScope), ...(panelKey ? { panelKey } : {}) } : {}), start: Math.floor(start), end: Math.ceil(end) } : null),
     [datasetId, chrom, start, end, genome, readScope, panelKey]);
-  const key = target ? clientScanKey(target, params, duplicates, identity) : '';
+  const key = target ? clientScanKey(target, params, duplicates, identity, qcfail) : '';
   const [status, setStatus] = useState<ScanStatus>({ kind: 'idle' });
   const controller = useRef<AbortController | null>(null);
   const currentKey = useRef(key);

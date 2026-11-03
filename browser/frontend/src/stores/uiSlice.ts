@@ -112,6 +112,7 @@ export interface UiSlice {
   signalCounts: Record<string, { datasetId: string; locus: string; counts: SignalCounts }>;
   setSignalCounts: (key: string, summary: { datasetId: string; locus: string; counts: SignalCounts } | null) => void;
   showDuplicateReads: boolean;  // Include BAM 0x400 / BigBed isDuplicate reads
+  showQcFailReads: boolean;  // Include BAM 0x400 / BigBed isQcFail reads
   showHiddenTrackStrip: boolean;
   setShowHiddenTrackStrip: (show: boolean) => void;
   fillReadHeight: boolean;  // Sparse tracks expand rows to fill height; dense tracks use selected row height.
@@ -190,6 +191,7 @@ export interface UiSlice {
   relaxDefaultMinFootprints: (notice: MinFootprintsNotice) => boolean;
   dismissMinFootprintsNotice: () => void;
   setShowDuplicateReads: (show: boolean) => void;
+  setShowQcFailReads: (show: boolean) => void;
   /** Datasets whose panels load every read in view ("Load all"), not a deep view's sample. */
   loadAllReads: Record<string, boolean>;
   setLoadAllReads: (datasetId: string, on: boolean) => void;
@@ -301,6 +303,7 @@ export function createUiSlice(set: (partial: Partial<BrowserState> | ((state: Br
     return { signalCounts: next };
   }),
   showDuplicateReads: false,
+  showQcFailReads: false,
   loadAllReads: {},
   setLoadAllReads: (datasetId, on) => set(state => {
     const next = { ...state.loadAllReads };
@@ -593,6 +596,12 @@ export function createUiSlice(set: (partial: Partial<BrowserState> | ((state: Br
   setShowDuplicateReads: (show) => set(state => ({
     showDuplicateReads: show,
     // Duplicate visibility changes read membership, so force a new request
+    // immediately instead of waiting for a viewport change.
+    refreshGeneration: state.refreshGeneration + 1,
+  })),
+  setShowQcFailReads: (show) => set(state => ({
+    showQcFailReads: show,
+    // QC-fail visibility changes read membership, so force a new request
     // immediately instead of waiting for a viewport change.
     refreshGeneration: state.refreshGeneration + 1,
   })),

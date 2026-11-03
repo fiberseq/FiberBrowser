@@ -61,6 +61,7 @@ export function ReadTooltip({
         {read.id}
       </div>
       <div className="text-gray-300 text-[11px] space-y-0.5">
+        {read.qcfail && <div className="text-amber-300">{read.chimera === 'strand_swap' ? 'Chimera (DAF strand swap, FiberHMM)' : 'QC fail'}</div>}
         {read.signal && <div data-testid="signal-read-status">{SIGNAL_LABELS[read.signal.status]}</div>}
         <div>Footprints: {footprints.length}{read.qualities ? ` (${footprints.length} scored)` : ''}</div>
         {familySummaries.map(summary => (

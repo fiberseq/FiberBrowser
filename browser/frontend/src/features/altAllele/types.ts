@@ -21,7 +21,7 @@ export interface AltAlleleInfo {
   source_dataset_id: string | null;
   source_paths?: string[];
   definition: { chrom: string; ref: number | null; length: number | null; pos: number | null; flank: number;
-    include_reference: boolean; max_carriers: number; include_duplicates: boolean };
+    include_reference: boolean; max_carriers: number; include_duplicates: boolean; include_qcfail?: boolean };
   layout: AltAlleleLayout;
   meta?: {
     sv?: { t: 'I'; ref: number; len: number };

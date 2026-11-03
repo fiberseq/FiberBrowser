@@ -126,7 +126,8 @@ def qc_command() -> dict:
         return {"argv": shlex.split(override), "env": {}}
     from services.pipeline_inputs import _fiberhmm_source_root, _module_available
     if _module_available("fiberhmm.cli.qc"):
-        env = {}
+        from services.fiberhmm_runtime import worker_environment
+        env = worker_environment()
         root = _fiberhmm_source_root()
         if root:
             env["PYTHONPATH"] = root + (os.pathsep + os.environ["PYTHONPATH"] if os.environ.get("PYTHONPATH") else "")

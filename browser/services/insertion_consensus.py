@@ -319,7 +319,7 @@ def daf_aware_consensus(records: list, module=None) -> tuple[Optional[dict], Opt
     for read, q, length in records:
         key = module.record_key(read)
         strand = strands.get(key)
-        if strand is None or read.is_duplicate or (key, int(q)) in seen:
+        if strand is None or read.is_duplicate or getattr(read, "is_qcfail", False) or (key, int(q)) in seen:
             continue
         seen.add((key, int(q)))
         seq = read.query_sequence or ""

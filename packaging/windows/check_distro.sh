@@ -32,6 +32,7 @@ if [ "${1:-}" != "--inside" ] && [ "$(basename "$0")" != fiberbrowser-check-dist
   user="$(docker run --rm --platform linux/amd64 "$image" sh -c \
     "sed -n 's/^default *= *//p' /etc/wsl.conf | head -1")"
   docker run --rm --platform linux/amd64 -i -u "${user:-fiberbrowser}" -e HOME="/home/${user:-fiberbrowser}" \
+    -e FB_BUILD_HOME="${FB_BUILD_HOME:-$HOME}" \
     -e WSL_DISTRO_NAME=FiberBrowser -w "/home/${user:-fiberbrowser}" "$image" bash -s -- --inside < "$0"
   exit $?
 fi
@@ -89,6 +90,8 @@ with ProcessPoolExecutor(max_workers=2, context=get_context("loky")) as pool:
 '
 echo
 echo "Runtime"
+check "package metadata privacy" "$PY" /opt/fiberbrowser/share/fiberbrowser/package_metadata.py \
+  --build-home "${FB_BUILD_HOME:-$HOME}" /opt/fiberbrowser/lib /usr/local/lib
 check "versions" "$PY" -c "import fiberbrowser, fiberhmm, pysam, numpy; print('FiberBrowser', fiberbrowser.__version__, 'FiberHMM', fiberhmm.__version__, 'pysam', pysam.__version__, 'numpy', numpy.__version__)"
 check "numba JIT + FiberHMM kernel" "$PY" -c "$JIT_TEST"
 check "loky worker pool" "$PY" -c "$POOL_TEST"

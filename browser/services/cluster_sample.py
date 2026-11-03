@@ -119,7 +119,7 @@ def prepare_cluster_sample(state, dataset_id, chrom, start, end, target, seed, *
                     for index, read in enumerate(records):
                         if not index & 255:
                             checkpoint()
-                        if read.flag & (4 | 256 | 2048):
+                        if read.flag & (4 | 256 | 512 | 2048):
                             continue
                         total += 1
                         yield read.query_name

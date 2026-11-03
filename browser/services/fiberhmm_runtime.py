@@ -4,17 +4,17 @@ Which FiberHMM a process runs (``fiberhmm_selection``):
 
 - **Packaged apps** (the Mac app, the Windows app's WSL distribution; services/app_build.py) run the FiberHMM
   bundled with them. ``FIBERHMM_SOURCE_DIR`` > the app's own choice (Settings > FiberHMM: bundled or a custom
-  source tree, ``~/.fiberhmm/app_settings.json``) > bundled. ``fiberhmm_source_dir`` in
+  source tree or verified update, ``~/.fiberhmm/app_settings.json``) > bundled. ``fiberhmm_source_dir`` in
   ``~/.fiberhmm/browser_settings.json`` does not apply to them.
 - **Source runs and pip installs** (``python browser.py``, ``fiberbrowser``): ``FIBERHMM_SOURCE_DIR`` >
   ``fiberhmm_source_dir`` in ``~/.fiberhmm/browser_settings.json`` > the ``fiberhmm`` installed in their Python
-  (``pip install "fiberhmm[consensus]>=3.0.2,<4"``).
+  (``pip install "fiberhmm[consensus]>=3.0.3,<4"``).
 
 A source tree is put first on ``sys.path`` so an older installed package never shadows it.
 
 Each build declares the FiberHMM features it needs: core needs FiberHMM 3.0 (``CORE_REQUIREMENTS``), a plugin
 pack adds its own (``"fiberhmm"`` in its ``fiberbrowser-pack.json``). The selected FiberHMM is checked from its
-files, without importing it (a package imported and then swapped is never safe). A packaged app whose custom
+files, without importing it into the server (a package imported and then swapped is never safe). A packaged app whose custom
 FiberHMM lacks a feature falls back to its bundled one, with a one-line notice; a source run keeps the tree it was
 pointed at and says what won't work. Nothing runs silently without the features. ``log_fiberhmm_runtime`` prints
 the choice and its notices at startup.
@@ -27,6 +27,7 @@ import json
 import os
 import re
 import sys
+import subprocess
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -34,10 +35,12 @@ from typing import Iterable, Optional
 _CONFIGURED_ROOT: Optional[str] = None
 # The app's own choice (Settings), read once per process: changing it takes effect at the next start.
 _APP_CHOICE: Optional[tuple] = None
+_OVERLAY_CHECKS: dict[tuple, Optional[str]] = {}
+ACTIVE_CHOICE_ENV = "FIBERBROWSER_ACTIVE_FIBERHMM"
 
 
 MIN_FIBERHMM_MAJOR = 3
-FIBERHMM_REQUIREMENT = "fiberhmm[consensus]>=3.0.2,<4"
+FIBERHMM_REQUIREMENT = "fiberhmm[consensus]>=3.0.3,<4"
 # What every build needs. Plugin packs add theirs in their manifest (plugins/packs.py, ARCHITECTURE.md):
 #   "fiberhmm": {"features": [{"label": "...", "module": "fiberhmm.x.y",
 #                              "names": ["function", ...],                       (optional: defined in that module)
@@ -163,7 +166,10 @@ def default_package_dir(exclude: Iterable[str] = ()) -> Optional[Path]:
     skip = {str(Path(p).resolve()) for p in exclude if p}
     if _CONFIGURED_ROOT:
         skip.add(_CONFIGURED_ROOT)
-    search = [p for p in sys.path if str(Path(p or ".").resolve()) not in skip]
+    from services import app_settings
+    overlays = (app_settings.settings_path().parent / "fiberhmm").resolve()
+    search = [p for p in sys.path if str(Path(p or ".").resolve()) not in skip
+              and not Path(p or ".").resolve().is_relative_to(overlays)]
     try:
         spec = importlib.machinery.PathFinder.find_spec("fiberhmm", search)
     except (ImportError, ValueError):
@@ -177,9 +183,13 @@ def default_package_dir(exclude: Iterable[str] = ()) -> Optional[Path]:
 
 def _default_version(package_dir: Optional[Path]) -> Optional[str]:
     try:
-        from importlib.metadata import version as dist_version
+        from importlib.metadata import distributions
         if package_dir is not None and getattr(sys, "frozen", False):
-            return dist_version("fiberhmm")
+            # An active overlay has its own dist-info first on sys.path. Only
+            # metadata beside the bundled package describes the bundled version.
+            for distribution in distributions(path=[str(package_dir.parent)]):
+                if distribution.metadata.get("Name", "").lower() == "fiberhmm":
+                    return distribution.version
     except Exception:
         pass
     return package_version(package_dir)
@@ -188,10 +198,43 @@ def _default_version(package_dir: Optional[Path]) -> Optional[str]:
 def _app_choice() -> tuple:
     global _APP_CHOICE
     if _APP_CHOICE is None:
+        inherited = os.environ.get(ACTIVE_CHOICE_ENV)
+        if inherited:
+            choice = json.loads(inherited)
+            if (not isinstance(choice, list) or len(choice) != 3 or
+                    choice[0] not in ("bundled", "custom", "updated") or
+                    not all(isinstance(part, str) for part in choice)):
+                raise ValueError("Invalid active FiberHMM worker selection")
+            _APP_CHOICE = tuple(choice)
+            return _APP_CHOICE  # workers never read pending settings or prune
         from services import app_settings
         choice = app_settings.load()["fiberhmm"]
-        _APP_CHOICE = (str(choice.get("source") or "bundled"), str(choice.get("custom_path") or ""))
+        _APP_CHOICE = (str(choice.get("source") or "bundled"), str(choice.get("custom_path") or ""),
+                       str(choice.get("overlay_version") or ""))
+        # Finish cleanup deferred while the previous process still used an old
+        # overlay. This is once per packaged process, before its imports/jobs.
+        from services.fiberhmm_update import prune
+        prune()
     return _APP_CHOICE
+
+
+def worker_environment() -> dict[str, str]:
+    """Pass the server's active runtime across the frozen worker boundary.
+
+    Use the resolved selection, including any bundled fallback. A newly saved
+    choice belongs to the next server, never to a job in this one.
+    """
+    from services.app_build import is_packaged
+    if not is_packaged():
+        return {}
+    selected = fiberhmm_selection()
+    if selected['source'] == 'updated':
+        choice = ('updated', '', _app_choice()[2])
+    elif selected['source'] == 'app':
+        choice = ('custom', selected['root'], '')
+    else:
+        choice = ('bundled', '', '')
+    return {ACTIVE_CHOICE_ENV: json.dumps(choice)}
 
 
 def _join(labels: list) -> str:
@@ -199,13 +242,13 @@ def _join(labels: list) -> str:
 
 
 _SOURCE_NAMES = {"env": "FIBERHMM_SOURCE_DIR", "app": "the app's Settings", "settings": "browser_settings.json",
-                 "bundled": "bundled with the app", "installed": "installed in this Python"}
+                 "updated": "updated FiberHMM", "bundled": "bundled with the app", "installed": "installed in this Python"}
 
 
 def fiberhmm_selection() -> dict:
     """Which FiberHMM this process runs, why, and what it lacks (see the module's docstring).
 
-    ``source``: ``env`` | ``app`` | ``settings`` (a source tree) or ``bundled`` | ``installed``; ``root``: the
+    ``source``: ``env`` | ``app`` | ``settings`` (a source tree), ``updated`` (an overlay), or ``bundled`` | ``installed``; ``root``: the
     source tree put on ``sys.path`` (None: the bundled / installed package); ``notices``: one-line messages for
     the person (a fallback, missing features).
     """
@@ -217,8 +260,14 @@ def fiberhmm_selection() -> dict:
     if env:
         requested = ("env", env)
     elif packaged:
-        source, custom = _app_choice()
+        source, custom, overlay = _app_choice()
         requested = ("app", custom) if source == "custom" and custom else ("bundled", "")
+        if source == "updated" and overlay:
+            from services.fiberhmm_update import overlay_site
+            try:
+                requested = ("updated", str(overlay_site(overlay)))
+            except ValueError:
+                requested = ("updated", "")
     else:
         from_file = settings_file_fiberhmm_source_dir()
         requested = ("settings", from_file) if from_file else ("installed", "")
@@ -226,9 +275,18 @@ def fiberhmm_selection() -> dict:
     notices: list[str] = []
     root: Optional[Path] = None
     requirements = required_features()
-    default_dir = default_package_dir()
+    default_dir = default_package_dir(exclude=(raw,) if raw else ())
     default_version = _default_version(default_dir)
     default_label = f"the {default_kind} FiberHMM" + (f" {default_version}" if default_version else "")
+    if kind == "updated":
+        overlay = _app_choice()[2]
+        key = (raw, overlay, str(BROWSER_DIR))
+        if key not in _OVERLAY_CHECKS:
+            _OVERLAY_CHECKS[key] = check_overlay(Path(raw), overlay) if raw else "invalid overlay setting"
+        error = _OVERLAY_CHECKS[key]
+        if error:
+            notices.append(f"Updated FiberHMM {overlay} could not load ({error}); using {default_label}.")
+            raw, kind = "", default_kind
     if raw:
         root = _valid_source_tree(raw)
         if root is None:
@@ -249,9 +307,15 @@ def fiberhmm_selection() -> dict:
     choice = None
     if packaged:
         from services import app_settings
-        stored = app_settings.load()["fiberhmm"]
+        if os.environ.get(ACTIVE_CHOICE_ENV):
+            source, custom, overlay = _app_choice()
+            stored = {'source': source, 'custom_path': custom, 'overlay_version': overlay}
+        else:
+            stored = app_settings.load()["fiberhmm"]
         choice = {"source": stored.get("source"), "custom_path": stored.get("custom_path") or "",
-                  "restart_needed": (str(stored.get("source")), str(stored.get("custom_path") or "")) != _app_choice()}
+                  "overlay_version": stored.get("overlay_version") or "",
+                  "restart_needed": (str(stored.get("source")), str(stored.get("custom_path") or ""),
+                                     str(stored.get("overlay_version") or "")) != _app_choice()}
     return {
         "packaged": packaged,
         "requested": {"source": requested[0], "path": requested[1] or None},
@@ -354,6 +418,16 @@ def configure_fiberhmm_runtime(*, strict: bool = False) -> Optional[str]:
     global _CONFIGURED_ROOT
     root = bundled_fiberhmm_root()
     if root is None:
+        from services.app_build import is_packaged
+        if is_packaged():
+            from services import app_settings
+            overlays = (app_settings.settings_path().parent / "fiberhmm").resolve()
+            # PYTHONPATH/cwd may already contain a failed overlay in a child.
+            # Falling back must remove that search path before the first import.
+            sys.path[:] = [p for p in sys.path if not Path(p or ".").resolve().is_relative_to(overlays)]
+            if _CONFIGURED_ROOT and Path(_CONFIGURED_ROOT).is_relative_to(overlays):
+                _CONFIGURED_ROOT = None
+            importlib.invalidate_caches()
         return _CONFIGURED_ROOT
     root_text = str(root)
 
@@ -384,3 +458,45 @@ def configure_fiberhmm_runtime(*, strict: bool = False) -> Optional[str]:
     return _CONFIGURED_ROOT
 
 
+
+def check_overlay(site: Path, expected_version: str) -> Optional[str]:
+    """Check the existing feature contract and import in a disposable process.
+
+    No FiberHMM modules are loaded into the server before runtime selection.
+    The explicit path insertion is also necessary for the frozen interpreter.
+    """
+    code = """
+import sys, json, importlib
+from pathlib import Path
+site, backend, version, requirements = json.loads(sys.argv[1])
+sys.path[:0] = [site, backend]
+from services.fiberhmm_runtime import missing_features
+missing = missing_features(Path(site) / 'fiberhmm', requirements)
+if missing:
+    raise RuntimeError(', '.join(missing))
+import fiberhmm
+if Path(fiberhmm.__file__).resolve().parent != (Path(site) / 'fiberhmm').resolve():
+    raise RuntimeError('the overlay import was shadowed')
+if str(getattr(fiberhmm, '__version__', '')) != version:
+    raise RuntimeError('overlay version does not match its release')
+for requirement in requirements:
+    for feature in requirement.get('features') or []:
+        module = importlib.import_module(feature['module'])
+        for name in feature.get('names') or []:
+            getattr(module, name)
+        schema = feature.get('schema')
+        if schema:
+            schema_module = importlib.import_module(schema.get('module') or feature['module'])
+            getattr(schema_module, schema.get('name') or 'SCHEMA')
+print(version)
+"""
+    try:
+        result = subprocess.run([sys.executable, "-c", code,
+                                 json.dumps([str(site.resolve()), str(BROWSER_DIR), expected_version, required_features()])],
+                                cwd=str(site) if site.is_dir() else str(BROWSER_DIR),
+                                capture_output=True, text=True, timeout=60)
+        if result.returncode:
+            return (result.stderr or result.stdout or "import failed").strip()[-1200:]
+    except (OSError, subprocess.SubprocessError) as error:
+        return str(error)
+    return None

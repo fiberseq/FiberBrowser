@@ -1,3 +1,4 @@
+import { useBrowserStore } from '../../stores/browserStore';
 import { usePanelGenomeStore } from '../../stores/panelGenomeStore';
 /**
  * The Variants panel's endpoints (browser/routers/variants.py): SNPs in a view, reads grouped by SNP allele or
@@ -154,7 +155,7 @@ function body(target: ScanTarget, params: SnpParams, includeDuplicates: boolean,
   return JSON.stringify({
     dataset_id: target.datasetId, chrom: target.chrom, start: Math.floor(target.start), end: Math.ceil(target.end),
     ...(target.readIds ? { read_ids: target.readIds } : {}),
-    ...params, include_duplicates: includeDuplicates, ...extra,
+    ...params, include_duplicates: includeDuplicates, include_qcfail: Boolean(useBrowserStore.getState().showQcFailReads), ...extra,
   });
 }
 
@@ -189,7 +190,7 @@ export function svsInView(target: ScanTarget, minLen: number, includeDuplicates:
   return fetchJson(scopedUrl('/api/variants/svs', target), {
     ...post,
     body: JSON.stringify({ dataset_id: target.datasetId, chrom: target.chrom, start: Math.floor(target.start), end: Math.ceil(target.end),
-      ...(target.readIds ? { read_ids: target.readIds } : {}), min_len: minLen, include_duplicates: includeDuplicates }),
+      ...(target.readIds ? { read_ids: target.readIds } : {}), min_len: minLen, include_duplicates: includeDuplicates, include_qcfail: Boolean(useBrowserStore.getState().showQcFailReads) }),
     signal,
   });
 }

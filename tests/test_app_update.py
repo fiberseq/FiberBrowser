@@ -85,6 +85,9 @@ class FakeGitHub:
 
 @pytest.fixture
 def updates(tmp_path, monkeypatch):
+    from services import fiberhmm_update
+    monkeypatch.setattr(fiberhmm_update, "_read_url", lambda *a: b'{"releases": {}}')
+    fiberhmm_update.reset()
     monkeypatch.delenv("FIBERBROWSER_NO_UPDATE_CHECK", raising=False)
     monkeypatch.delenv("FIBERBROWSER_UPDATE_URL", raising=False)
     monkeypatch.delenv("FIBERBROWSER_UPDATE_REPO", raising=False)
@@ -512,7 +515,7 @@ def test_fiberhmm_route_validates_the_custom_tree(client, updates, tmp_path):
     r = client.post("/api/app/fiberhmm", json={"source": "custom", "custom_path": str(tree)})
     assert r.status_code == 200 and r.json()["checked"]["version"] == "3.0.0"
     assert "FiberHMM 3.0 core (footprint classes)" in r.json()["checked"]["missing"]
-    assert app_settings.load()["fiberhmm"] == {"source": "custom", "custom_path": str(tree)}
+    assert app_settings.load()["fiberhmm"] == {"source": "custom", "custom_path": str(tree), "overlay_version": "", "previous_overlay_version": ""}
     assert client.post("/api/app/fiberhmm", json={"source": "bundled"}).status_code == 200
     assert app_settings.load()["fiberhmm"]["source"] == "bundled"
 

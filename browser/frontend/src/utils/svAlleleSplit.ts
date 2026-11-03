@@ -38,6 +38,7 @@ export function requestSvSplit(target: SvSplitTarget, sv: Pick<SvCluster, 't' | 
       t: sv.t, ref: sv.ref, len: sv.len, margin,
       // Reads the panel shows: duplicates too when they are on (else they'd get no group).
       include_duplicates: Boolean(useBrowserStore.getState().showDuplicateReads),
+      include_qcfail: Boolean(useBrowserStore.getState().showQcFailReads),
     }),
     signal,
   });
@@ -51,6 +52,7 @@ export function svSplitDef(target: SvSplitTarget, sv: Pick<SvCluster, 't' | 'ref
     label: svAlleleLabel(sv.t, sv.ref, sv.len, target.chrom),
     counts: response.counts,
     viewStart: target.viewStart, viewEnd: target.viewEnd,
+    includeQcFail: Boolean(useBrowserStore.getState().showQcFailReads),
     includeDuplicates: Boolean(useBrowserStore.getState().showDuplicateReads),
   };
 }
@@ -91,19 +93,26 @@ export async function splitIntoPanelsBySv(target: SvSplitTarget, sv: Pick<SvClus
 
 /**
  * The reads of a new view, classified for an active split and merged into
- * its groups (reads that left the view keep theirs). Not an undo step.
+ * its groups (reads that left the view keep theirs). A visibility-policy
+ * change replaces the cohort so hidden reads cannot survive in exports.
+ * Not an undo step.
  */
 export async function refreshSvSplit(target: SvSplitTarget, def: SvSplitDef, signal?: AbortSignal): Promise<void> {
+  const { showQcFailReads, showDuplicateReads } = useBrowserStore.getState();
+  const includeQcFail = Boolean(showQcFailReads);
+  const includeDuplicates = Boolean(showDuplicateReads);
   const response = await requestSvSplit(target, def, def.margin, signal);
   const store = useBrowserStore.getState();
-  if (store.svSplits[target.stateKey] !== def) return;  // replaced or dropped meanwhile
-  const merged = { ...(store.clusterAssignments[target.stateKey] ?? {}), ...response.assignments };
+  if (signal?.aborted || store.svSplits[target.stateKey] !== def) return;  // replaced or dropped meanwhile
+  if (Boolean(store.showQcFailReads) !== includeQcFail || Boolean(store.showDuplicateReads) !== includeDuplicates) return;
+  const policyChanged = Boolean(def.includeQcFail) !== includeQcFail || Boolean(def.includeDuplicates) !== includeDuplicates;
+  const merged = { ...(policyChanged ? {} : store.clusterAssignments[target.stateKey]), ...response.assignments };
   const counts: [number, number, number] = [0, 0, 0];
   for (const group of Object.values(merged)) if (group >= 0 && group <= 2) counts[group] += 1;
   store.setClusterAssignments(target.stateKey, merged, { svSplit: true, mirror: false });
   store.setSvSplit(target.stateKey, {
     ...def, counts, viewStart: target.viewStart, viewEnd: target.viewEnd,
-    includeDuplicates: Boolean(store.showDuplicateReads),
+    includeQcFail, includeDuplicates,
   }, SV_GROUP_LABELS);
 }
 

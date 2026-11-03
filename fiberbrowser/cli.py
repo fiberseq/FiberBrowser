@@ -36,6 +36,9 @@ from typing import Optional, Sequence
 
 from ._paths import browser_script, bundle_bin_dirs, is_frozen, version
 
+# Retain the desktop identity after removing its environment variable from children.
+desktop_parent_pid: Optional[int] = None
+
 LAUNCHER_FLAGS = ("--app", "--install-shortcut", "--uninstall-shortcut", "--open-link")
 
 # Set by the app window (fiberbrowser.desktop) on the server it starts: the
@@ -88,13 +91,17 @@ def _parent_alive(pid: int) -> bool:
 
 def watch_parent_process(poll_s: float = 2.0) -> Optional[threading.Thread]:
     """Stop this server when the process that started it exits."""
+    global desktop_parent_pid
     raw = os.environ.pop(EXIT_WITH_PARENT_ENV, None)
     if not raw:
         return None
     try:
         pid = int(raw)
+        if pid <= 0:
+            return None
     except ValueError:
         return None
+    desktop_parent_pid = pid
 
     def watch() -> None:
         import signal

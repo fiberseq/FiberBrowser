@@ -146,6 +146,7 @@ def scan_params(body: dict) -> dict:
         "max_indel": _int(body.get("max_indel"), 30, 1, 1000),
         "mode": mode,
         "include_duplicates": bool(body.get("include_duplicates", False)),
+        "include_qcfail": bool(body.get("include_qcfail", False)),
     }
 
 
@@ -178,7 +179,7 @@ def _entry(state, dataset_id: str, chrom: str, start: int, end: int, params: dic
     fasta_id = (str(fasta_name), _stamps([fasta_name]) if fasta_name else None)
     from services.signal_evidence import signal_filter_key
     key = (dataset_id, chrom, start, end, params["min_bq"], params["min_mapq"], params["max_indel"],
-           params["include_duplicates"], stamps, str(fasta_id), getattr(state, "_variant_read_ids", None), signal_filter_key(state))
+           params["include_duplicates"], params["include_qcfail"], stamps, str(fasta_id), getattr(state, "_variant_read_ids", None), signal_filter_key(state))
     with _LOCK:
         hit = _CACHE.get(key) if stamps is not None else None
         if hit is not None:
@@ -189,7 +190,7 @@ def _entry(state, dataset_id: str, chrom: str, start: int, end: int, params: dic
     ref = _reference(state, chrom, start, end)
     pile = snp_scan.pileup(_records(state, dataset, chrom, start, end), chrom, start, end, ref=ref,
                            min_bq=params["min_bq"], min_mapq=params["min_mapq"], max_indel=params["max_indel"],
-                           include_duplicates=params["include_duplicates"], cancelled=cancelled)
+                           include_duplicates=params["include_duplicates"], include_qcfail=params["include_qcfail"], cancelled=cancelled)
     if pile.cancelled:
         raise VariantsCancelled()
     entry = {"key": key, "pile": pile, "dataset": dataset, "chemistry": _chemistry(dataset),
@@ -216,7 +217,7 @@ def scan_key(dataset_id: str, chrom: str, start: int, end: int, params: dict, id
     digest = hashlib.sha1(repr(identity).encode()).hexdigest()[:10]
     return "|".join(str(x) for x in (dataset_id, chrom, start, end, params["min_maf"], params["min_depth"],
                                      params["both_strands"], params["min_bq"], params["min_mapq"],
-                                     params["max_indel"], params["mode"], params["include_duplicates"], digest))
+                                     params["max_indel"], params["mode"], params["include_duplicates"], params["include_qcfail"], digest))
 
 
 def snps_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = None) -> dict:
@@ -266,7 +267,7 @@ def _matrix(state, entry: dict, candidates: list[dict], params: dict,
         matrix = snp_scan.read_alleles(_records(state, entry["dataset"], pile.chrom, pile.start, pile.end),
                                        pile.chrom, pile.start, pile.end, candidates,
                                        min_bq=params["min_bq"], min_mapq=params["min_mapq"],
-                                       include_duplicates=params["include_duplicates"], cancelled=cancelled)
+                                       include_duplicates=params["include_duplicates"], include_qcfail=params["include_qcfail"], cancelled=cancelled)
         if matrix.cancelled:
             raise VariantsCancelled()
     with entry["lock"]:
@@ -417,7 +418,7 @@ def _genotype_payload(state, body, entry, called, matrix, mcands, col_of, candid
             raise VariantsCancelled()
         try:
             res = sv_split_payload(state, dataset_id=dataset_id, chrom=chrom, start=start, end=end, t=sv["t"],
-                                   ref=sv["ref"], length=sv["len"], include_duplicates=params["include_duplicates"])
+                                   ref=sv["ref"], length=sv["len"], include_duplicates=params["include_duplicates"], include_qcfail=params["include_qcfail"])
         except SvRequestError as exc:
             raise VariantsRequestError(str(exc)) from None
         calls.append(res["assignments"])
@@ -482,7 +483,7 @@ def clear_cache() -> None:
 # ---------------------------------------------------------------------------
 # SVs in view, and how an SV's carriers line up with the SNP alleles
 
-def _sv_records(state, dataset, chrom: str, start: int, end: int, include_duplicates: bool) -> list[tuple]:
+def _sv_records(state, dataset, chrom: str, start: int, end: int, include_duplicates: bool, include_qcfail: bool = False) -> list[tuple]:
     from services.bam_handles import get_bam_handle
     from services.signal_evidence import record_keeps_signal, signal_header
     from services.plasmid_reconcile import contig_links
@@ -508,6 +509,8 @@ def _sv_records(state, dataset, chrom: str, start: int, end: int, include_duplic
                 continue
             if read.is_duplicate and not include_duplicates:
                 continue
+            if getattr(read, "is_qcfail", False) and not include_qcfail:
+                continue
             out.append((read, actual))
     return out
 
@@ -522,8 +525,9 @@ def svs_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = Non
     dataset = _dataset(state, dataset_id)
     min_len = normalize_min_sv_len(body.get("min_len"))
     include_duplicates = bool(body.get("include_duplicates", False))
+    include_qcfail = bool(body.get("include_qcfail", False))
     compact = []
-    for n, (read, _c) in enumerate(_sv_records(state, dataset, chrom, start, end, include_duplicates)):
+    for n, (read, _c) in enumerate(_sv_records(state, dataset, chrom, start, end, include_duplicates, include_qcfail)):
         if cancelled is not None and n % 500 == 0 and cancelled():
             raise VariantsCancelled()
         item = {"id": read.query_name, "reference_start": int(read.reference_start),
@@ -561,9 +565,9 @@ def sv_linkage_payload(state, body: dict, cancelled: Optional[Callable[[], bool]
     matrix = _matrix(state, entry, candidates, params, cancelled)
     col_of = {sid: j for j, sid in enumerate(matrix.ids)}
     mcands = _columns(entry, matrix, candidates)
-    records = _sv_records(state, entry["dataset"], chrom, start, end, params["include_duplicates"])
+    records = _sv_records(state, entry["dataset"], chrom, start, end, params["include_duplicates"], params["include_qcfail"])
     classified = classify_records(records, t=t, ref=ref, length=length,
-                                  include_duplicates=params["include_duplicates"])
+                                  include_duplicates=params["include_duplicates"], include_qcfail=params["include_qcfail"])
     allele = {name: v["allele"] for name, v in classified.items()}
     counts = {"carriers": sum(1 for a in allele.values() if a == 0),
               "reference": sum(1 for a in allele.values() if a == 1),

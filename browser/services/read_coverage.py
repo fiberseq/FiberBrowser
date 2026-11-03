@@ -99,6 +99,7 @@ def compute_binned_read_coverage(
     circular: bool = False,
     contig_links: Optional[dict] = None,
     include_duplicates: bool = False,
+    include_qcfail: bool = False,
 ) -> dict:
     """Compute binned read counts for BAM and BigBed datasets.
 
@@ -171,7 +172,7 @@ def compute_binned_read_coverage(
                                 if not record_keeps_signal(read, signal_provenance):
                                     continue
                                 found = True
-                                if not include_duplicates and getattr(read, "is_duplicate", False):
+                                if (not include_duplicates and getattr(read, "is_duplicate", False)) or (not include_qcfail and getattr(read, "is_qcfail", False)):
                                     continue
                                 read_start = max(read.reference_start, pass_start)
                                 read_end = min(read.reference_end or read.reference_start + 1, pass_end)

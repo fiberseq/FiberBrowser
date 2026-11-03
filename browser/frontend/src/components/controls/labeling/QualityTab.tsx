@@ -1,3 +1,4 @@
+import { QcFailReadToggle } from '../sidebar/view/FootprintReadFilters';
 import type { ColormapQualityShading, DisplaySmoothingConfig, LayerOpacityMap, LayerQualityFilter, TfOverlayConfig } from '../../../types';
 import { getLayerLabel } from '../../../utils/layerColors';
 import { AnalysisButton } from '../shared';
@@ -77,6 +78,7 @@ export function QualityTab({
   const showDetails = useBrowserStore(state => state.showAnalysisDetails);
   return (
     <div className="space-y-2">
+      <QcFailReadToggle />
       {showDetails && strandRescueLayerNames.length > 0 && (
         <div className="rounded border border-violet-200 bg-violet-50/70 p-2 dark:border-violet-900/60 dark:bg-violet-950/20">
           <div className="text-xs font-semibold text-violet-900 dark:text-violet-200">Consensus-refinement quality</div>

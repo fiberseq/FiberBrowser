@@ -81,6 +81,47 @@ describe('Split by SV allele', () => {
     expect(getClusterLabel(0)).toBe('Cluster 0');
   });
 
+  it.each(['showQcFailReads', 'showDuplicateReads'] as const)('replaces assignments and exports when %s changes', async setting => {
+    useBrowserStore.setState({ showQcFailReads: false, showDuplicateReads: false, [setting]: true });
+    mockSplit({ normal: 0, hidden: 0, outsideView: 1 });
+    const def = await splitBySv(TARGET, SV);
+    useBrowserStore.setState({ [setting]: false });
+    const fetchMock = mockSplit({ normal: 0 });
+    await refreshSvSplit(TARGET, def);
+    const s = useBrowserStore.getState();
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({ include_qcfail: false, include_duplicates: false });
+    expect(s.clusterAssignments.ds).toEqual({ normal: 0 });
+    expect(s.svSplits.ds.counts).toEqual([1, 0, 0]);
+    const { formatClusterAssignmentsTsv } = await import('./clusterExport');
+    const tsv = formatClusterAssignmentsTsv(s);
+    expect(tsv).toContain('normal\tds\t0\tCarriers');
+    expect(tsv).not.toContain('hidden');
+    expect(tsv).not.toContain('outsideView');
+  });
+
+  it('keeps assignments outside the new view when visibility policy is unchanged', async () => {
+    mockSplit({ outsideView: 0, normal: 0 });
+    const def = await splitBySv(TARGET, SV);
+    mockSplit({ normal: 0, incoming: 1 });
+    await refreshSvSplit({ ...TARGET, viewStart: 9000 }, def);
+    expect(useBrowserStore.getState().clusterAssignments.ds).toEqual({ outsideView: 0, normal: 0, incoming: 1 });
+  });
+
+  it('discards a refresh if QC-fail visibility changes while its request is in flight', async () => {
+    useBrowserStore.setState({ showQcFailReads: false });
+    mockSplit({ normal: 0 });
+    const def = await splitBySv(TARGET, SV);
+    useBrowserStore.setState({ showQcFailReads: true });
+    let resolve!: (response: Response) => void;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(r => { resolve = r; })));
+    const pending = refreshSvSplit({ ...TARGET, viewStart: 9000 }, def);
+    useBrowserStore.setState({ showQcFailReads: false });
+    resolve(new Response(JSON.stringify({ assignments: { normal: 0, chimera: 0 }, counts: [2, 0, 0], margin: 100 })));
+    await pending;
+    expect(useBrowserStore.getState().clusterAssignments.ds).toEqual({ normal: 0 });
+    expect(useBrowserStore.getState().svSplits.ds).toBe(def);
+  });
+
   it('keepSvSplitsInView keeps only splits whose locus overlaps the view', () => {
     const def = { datasetId: 'a', chrom: 'chrSV', t: 'D' as const, ref: 10_000, len: 1500, end: 11_500, margin: 100, label: '', counts: [1, 1, 1] as [number, number, number], viewStart: 0, viewEnd: 1 };
     const state = {

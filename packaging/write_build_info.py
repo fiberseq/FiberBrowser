@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -57,6 +58,17 @@ def default_build_number(source: dict | None = None, root: Path = HERE.parent) -
     return time.strftime("%Y%m%d.%H%M", time.gmtime(when if when is not None else time.time()))
 
 
+def fiberhmm_minimum(root: Path) -> str:
+    """Freeze this source build's supported FiberHMM floor into its build info."""
+    try:
+        match = re.search(r'fiberhmm\[consensus\]>=([0-9.]+),<4', (root / "pyproject.toml").read_text())
+        if match:
+            return match.group(1)
+    except OSError:
+        pass
+    return "3.0.3"
+
+
 def build_info(flavor: str, version: str, platform: str, fiberhmm_version: str = "", commit: str = "",
                environ=None, source: dict | None = None, source_root: Path | None = None) -> dict:
     """`source_root`: the tree being packaged (default: the one holding this script); its packaging/source.json and
@@ -80,6 +92,7 @@ def build_info(flavor: str, version: str, platform: str, fiberhmm_version: str =
         "source_commit": source_commit or commit or None,
         "platform": platform,
         "fiberhmm_version": fiberhmm_version or None,
+        "fiberhmm_min_version": fiberhmm_minimum(root),
         "update_manifest_url": (env.get("FB_UPDATE_URL") or "").strip(),
         "update_repo": (env.get("FB_UPDATE_REPO") or "").strip(),
         "built_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

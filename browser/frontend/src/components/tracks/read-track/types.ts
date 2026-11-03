@@ -122,6 +122,8 @@ export interface CompactRead {
   id: string;
   /** BAM 0x400 / FiberHMM BigBed isDuplicate annotation. */
   duplicate?: boolean;
+  qcfail?: boolean;
+  chimera?: 'strand_swap';
   intervals: [number, number, number][]; // [start, end, size] - size negative for gaps (primary layer, backward compat)
   /** Legacy union field — populated with whichever modification signal is
    *  primary for this read (m6a preferred, then m5c, then deam positions).

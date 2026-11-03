@@ -243,7 +243,7 @@ def test_app_settings_file_is_separate_private_and_validated(tmp_path, monkeypat
     path = tmp_path / "app_settings.json"
     monkeypatch.setenv("FIBERBROWSER_APP_SETTINGS", str(path))
     monkeypatch.setattr(app_settings, "_cache", None)
-    assert app_settings.load()["fiberhmm"] == {"source": "bundled", "custom_path": ""}
+    assert app_settings.load()["fiberhmm"] == {"source": "bundled", "custom_path": "", "overlay_version": "", "previous_overlay_version": ""}
     monkeypatch.setattr(app_build, "is_packaged", lambda: True)
     assert app_settings.load()["updates"]["check_at_startup"] is True
     app_settings.update("updates", {"check_at_startup": False, "manifest_url": "file:///Volumes/lab/update.json"})

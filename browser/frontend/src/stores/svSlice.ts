@@ -30,6 +30,7 @@ export interface SvSplitDef {
   viewEnd: number;
   /** Duplicate reads were classified too (the panel showed them). */
   includeDuplicates?: boolean;
+  includeQcFail?: boolean;
 }
 
 export interface SvSlice {

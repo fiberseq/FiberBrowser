@@ -201,6 +201,7 @@ def needs_direct_read_load(
     terminal_gap_threshold: int = 500,
     include_cigar: bool = False,
     include_duplicates: bool = False,
+    include_qcfail: bool = False,
     ml_threshold: int = 125,
     include_methylation: bool = False,
     min_sv_len: int = SV_MIN_LEN_DEFAULT,
@@ -212,6 +213,7 @@ def needs_direct_read_load(
     return (
         needs_bam_data
         or include_duplicates
+        or include_qcfail
         or not hide_terminal_gaps
         or terminal_gap_threshold != 500
         # Working sets are cached with marks at the default threshold.
@@ -255,6 +257,7 @@ def load_direct_reads_for_dataset(
     infer_legacy_layers: bool,
     legacy_nuc_min_size: int,
     include_duplicates: bool = False,
+    include_qcfail: bool = False,
     min_footprints: int = 0,
     short_terminal_footprint_bp: Optional[int] = None,
     sv_min_len: int = SV_MIN_LEN_DEFAULT,
@@ -288,7 +291,7 @@ def load_direct_reads_for_dataset(
                 include_layer_qualities=include_layer_qualities,
                 infer_legacy_layers=infer_legacy_layers,
                 legacy_nuc_min_size=legacy_nuc_min_size,
-                include_duplicates=include_duplicates,
+                include_duplicates=include_duplicates, include_qcfail=include_qcfail,
                 min_footprints=min_footprints,
                 short_terminal_footprint_bp=short_terminal_footprint_bp,
                 sv_min_len=sv_min_len,
@@ -336,7 +339,7 @@ def load_direct_reads_for_dataset(
             include_cigar=include_cigar,
             hide_terminal_gaps=hide_terminal_gaps,
             terminal_gap_threshold=terminal_gap_threshold,
-            include_duplicates=include_duplicates,
+            include_duplicates=include_duplicates, include_qcfail=include_qcfail,
             sv_min_len=sv_min_len,
             include_sv_seq=include_sv_seq,
         ),
@@ -344,7 +347,7 @@ def load_direct_reads_for_dataset(
             spanning_only=spanning_only,
             hide_terminal_gaps=hide_terminal_gaps,
             terminal_gap_threshold=terminal_gap_threshold,
-            include_duplicates=include_duplicates,
+            include_duplicates=include_duplicates, include_qcfail=include_qcfail,
         ),
     )
     return reads
@@ -464,6 +467,7 @@ def _compact_reads_payload(
     infer_legacy_layers: bool = True,
     legacy_nuc_min_size: int = 90,
     include_duplicates: bool = False,
+    include_qcfail: bool = False,
     include_metaprofile: bool = False,
     profile_max_reads: int = 1000,
     metaprofile_layers: Optional[str] = None,
@@ -499,6 +503,7 @@ def _compact_reads_payload(
     legacy_nuc_min_size = query_int(legacy_nuc_min_size, 90)
     include_metaprofile = query_bool(include_metaprofile, False)
     include_duplicates = query_bool(include_duplicates, False)
+    include_qcfail = query_bool(include_qcfail, False)
     profile_max_reads = query_int(profile_max_reads, 1000)
     layer_names = unwrap_query_default(layer_names, None)
     metaprofile_layers = unwrap_query_default(metaprofile_layers, None)
@@ -585,7 +590,7 @@ def _compact_reads_payload(
         hide_terminal_gaps=hide_terminal_gaps,
         terminal_gap_threshold=terminal_gap_threshold,
         include_cigar=include_cigar,
-        include_duplicates=include_duplicates,
+        include_duplicates=include_duplicates, include_qcfail=include_qcfail,
         ml_threshold=ml_threshold,
         include_methylation=include_methylation,
         min_sv_len=min_sv_len,
@@ -630,7 +635,7 @@ def _compact_reads_payload(
             terminal_gap_threshold,
             infer_legacy_layers,
             legacy_nuc_min_size,
-            include_duplicates,
+            include_duplicates, include_qcfail,
             direct_min_footprints,
             read_load_token(state, chrom, direct_terminal_bp, sample_level=direct_level),
             sv_floor,
@@ -648,7 +653,7 @@ def _compact_reads_payload(
                 hide_terminal_gaps=hide_terminal_gaps, terminal_gap_threshold=terminal_gap_threshold,
                 include_layers=include_layers, requested_layers=requested_layers,
                 include_layer_qualities=include_layer_qualities, infer_legacy_layers=infer_legacy_layers,
-                legacy_nuc_min_size=legacy_nuc_min_size, include_duplicates=include_duplicates,
+                legacy_nuc_min_size=legacy_nuc_min_size, include_duplicates=include_duplicates, include_qcfail=include_qcfail,
                 min_footprints=direct_min_footprints, short_terminal_footprint_bp=direct_terminal_bp,
                 sv_min_len=sv_floor, include_sv_seq=include_sv_seq,
             )
@@ -752,7 +757,7 @@ def _compact_reads_payload(
                         terminal_gap_threshold=terminal_gap_threshold, include_layers=False,
                         requested_layers=None, include_layer_qualities=False,
                         infer_legacy_layers=False, legacy_nuc_min_size=legacy_nuc_min_size,
-                        include_duplicates=include_duplicates, min_footprints=direct_min_footprints,
+                        include_duplicates=include_duplicates, include_qcfail=include_qcfail, min_footprints=direct_min_footprints,
                         short_terminal_footprint_bp=direct_terminal_bp,
                     )
                 }
@@ -1291,7 +1296,7 @@ def compact_reads_payload_for_request(state, *, pin_ids: Optional[str] = None, *
     signal_t0 = time.perf_counter()
     attach_signal_counts(payload, state, payload.get("dataset_id") or kwargs.get("dataset_id"),
                          kwargs["chrom"], kwargs["start"], kwargs["end"],
-                         include_duplicates=query_bool(kwargs.get("include_duplicates"), False),
+                         include_duplicates=query_bool(kwargs.get("include_duplicates"), False), include_qcfail=query_bool(kwargs.get("include_qcfail"), False),
                          spanning=query_bool(kwargs.get("spanning"), False))
     signal_ms = (time.perf_counter() - signal_t0) * 1000
     payload.setdefault('server_timings', {})['signal_counts_ms'] = round(signal_ms, 1)
@@ -1378,6 +1383,7 @@ def compact_all_dataset_result(
     legacy_nuc_min_size: int,
     sample_seed: str,
     include_duplicates: bool = False,
+    include_qcfail: bool = False,
     min_sv_len: int = SV_MIN_LEN_DEFAULT,
     include_sv_summary: bool = True,
 ):
@@ -1413,7 +1419,7 @@ def compact_all_dataset_result(
         min_fp_quality=min_fp_quality,
         hide_terminal_gaps=hide_terminal_gaps,
         terminal_gap_threshold=terminal_gap_threshold,
-        include_duplicates=include_duplicates,
+        include_duplicates=include_duplicates, include_qcfail=include_qcfail,
         ml_threshold=ml_threshold,
         include_methylation=include_methylation,
     )
@@ -1438,7 +1444,7 @@ def compact_all_dataset_result(
             include_layer_qualities=effective_include_layer_qualities,
             infer_legacy_layers=infer_legacy_layers,
             legacy_nuc_min_size=legacy_nuc_min_size,
-            include_duplicates=include_duplicates,
+            include_duplicates=include_duplicates, include_qcfail=include_qcfail,
             min_footprints=(
                 min_footprints
                 if getattr(dataset, "available_layers", {}).get("footprint", True)
@@ -1566,7 +1572,7 @@ def compact_all_dataset_result(
     from services.signal_counts import attach_signal_counts
     phase_t0 = time.perf_counter()
     attach_signal_counts(result, state, dataset_id, chrom, start, end,
-                         include_duplicates=include_duplicates, spanning=spanning)
+                         include_duplicates=include_duplicates, include_qcfail=include_qcfail, spanning=spanning)
     server_timings["signal_counts_ms"] = phase_ms(phase_t0)
     result["server_timings"] = {name: round(elapsed, 1) for name, elapsed in server_timings.items()}
     result["server_elapsed_ms"] = round((time.time() - t0) * 1000, 1)

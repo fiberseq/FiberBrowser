@@ -755,7 +755,8 @@ def pipeline_command() -> dict:
     if override:
         return {"argv": shlex.split(override), "source": "environment", "env": {}}
     if _module_available("fiberhmm.cli.pipeline"):
-        env = {}
+        from services.fiberhmm_runtime import worker_environment
+        env = worker_environment()
         root = _fiberhmm_source_root()
         if root:
             env["PYTHONPATH"] = root + (os.pathsep + os.environ["PYTHONPATH"] if os.environ.get("PYTHONPATH") else "")
@@ -767,7 +768,7 @@ def pipeline_command() -> dict:
         from services.fiberhmm_runtime import fiberhmm_install_help
         hint = fiberhmm_install_help()
     except Exception:
-        hint = "Install FiberHMM 3 (pip install 'fiberhmm[consensus]>=3.0.2,<4') in FiberBrowser's Python."
+        hint = "Install FiberHMM 3 (pip install 'fiberhmm[consensus]>=3.0.3,<4') in FiberBrowser's Python."
     return {"argv": None, "source": None, "env": {},
             "hint": "fiberhmm-pipeline (FiberHMM 3.0 or newer) is not installed. " + hint}
 

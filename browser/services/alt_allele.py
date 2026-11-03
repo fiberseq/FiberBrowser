@@ -102,6 +102,7 @@ def normalize_definition(raw: dict) -> dict:
         "include_reference": bool(raw.get("include_reference")),
         "max_carriers": max(1, min(int(raw.get("max_carriers") or DEFAULT_MAX_CARRIERS), MAX_CARRIERS)),
         "include_duplicates": bool(raw.get("include_duplicates")),
+        "include_qcfail": bool(raw.get("include_qcfail", False)),
     }
     if out["ref"] is None or out["length"] is None:
         if out["pos"] is None:
@@ -222,7 +223,7 @@ def build_alt_allele(bam_paths: list[str], definition: dict, out_dir: str, *, fa
         from services.bam_handles import get_bam_handle as bam_handle_getter
     d = definition
     site = classify_site(bam_paths, d["chrom"], pos=d["pos"] if d["pos"] is not None else d["ref"],
-                         ref=d["ref"], length=d["length"], include_duplicates=d["include_duplicates"],
+                         ref=d["ref"], length=d["length"], include_duplicates=d["include_duplicates"], include_qcfail=d["include_qcfail"],
                          bam_handle_getter=bam_handle_getter, chrom_map=chrom_map, contig_links=contig_links)
     if not site["success"]:
         raise AltAlleleError(site.get("error") or "No insertion there")

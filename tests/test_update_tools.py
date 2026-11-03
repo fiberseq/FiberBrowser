@@ -195,3 +195,25 @@ def test_smoke_tests_assert_the_bundled_fiberhmm_is_used_by_default(script, tmp_
                           text=True, timeout=120)
     assert done.returncode == 0, done.stderr[-2000:]
     assert done.stdout.startswith("bundled FiberHMM")
+
+
+def test_manifest_includes_built_sibling_zip_when_given_dmg(tmp_path):
+    tool = load("tools/make_update_manifest.py")
+    files = built_files(tmp_path)
+    data = tool.make_manifest("public", "3.0.1", [str(files[0])])
+    entries = data["downloads"]["macos-arm64"]
+    assert [e["kind"] for e in entries] == ["dmg", "zip"]
+    assert entries[1]["sha256"] == hashlib.sha256(files[1].read_bytes()).hexdigest()
+    assert entries[1]["size"] == files[1].stat().st_size
+    # The 3.0.2 zip is additive: keep the existing public manifest contract and
+    # the DMG preferred by 3.0.1's download-only prompt.
+    assert data["schema"] == "fiberbrowser.update.v1" and data["channel"] == "public"
+    assert app_update.pick_download(app_update.parse_manifest(data), "macos-arm64")["kind"] == "dmg"
+    assert all("url" not in entry for entry in entries)
+
+
+def test_packaged_build_records_its_supported_fiberhmm_minimum(tmp_path):
+    tool = load("packaging/write_build_info.py")
+    (tmp_path / 'pyproject.toml').write_text('[project]\ndependencies = ["fiberhmm[consensus]>=3.7.2,<4"]\n')
+    info = tool.build_info('public', '3.0.2', 'windows-x64', source={}, environ={}, source_root=tmp_path)
+    assert info['fiberhmm_min_version'] == '3.7.2'

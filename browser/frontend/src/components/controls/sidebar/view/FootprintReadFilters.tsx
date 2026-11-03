@@ -11,6 +11,13 @@ export const FOOTPRINT_FILTER_SETTINGS = defineSettings({
     location: inSidebar('view.advanced'),
     toggle: storeToggle('showDuplicateReads', 'setShowDuplicateReads'),
   },
+  showQcFailReads: {
+    id: 'view.show-qcfail-reads',
+    label: 'Show QC-fail reads (incl. FiberHMM chimeras)',
+    keywords: ['QC fail', '0x200', 'chimera', 'strand swap'],
+    location: inSidebar('view.advanced'),
+    toggle: storeToggle('showQcFailReads', 'setShowQcFailReads'),
+  },
   minFootprints: {
     id: 'view.min-footprints',
     label: 'Min footprints',
@@ -56,6 +63,8 @@ export function FootprintReadFilters() {
           (0x400)
         </span>
       </label>
+
+      <QcFailReadToggle />
 
       <div className="flex items-center gap-2" {...settingAnchor(FOOTPRINT_FILTER_SETTINGS.minFootprints)}>
         <span className="text-[13px] text-gray-600 dark:text-gray-400">{FOOTPRINT_FILTER_SETTINGS.minFootprints.label}:</span>
@@ -110,4 +119,14 @@ export function FootprintReadFilters() {
       )}
     </>
   );
+}
+
+
+export function QcFailReadToggle() {
+  const show = useBrowserStore(s => s.showQcFailReads);
+  const setShow = useBrowserStore(s => s.setShowQcFailReads);
+  return <label className="flex items-center gap-2 text-[13px] text-gray-600 dark:text-gray-400" {...settingAnchor(FOOTPRINT_FILTER_SETTINGS.showQcFailReads)}>
+    <input type="checkbox" checked={show} onChange={e => setShow(e.target.checked)} className="rounded" />
+    {FOOTPRINT_FILTER_SETTINGS.showQcFailReads.label}
+  </label>;
 }

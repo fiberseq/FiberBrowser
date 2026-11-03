@@ -330,7 +330,8 @@ export function InsertionLensPanel() {
   // follow the panels' setting, as "Split by this SV" does (same reads).
   const showDuplicateReads = useBrowserStore(s => Boolean(s.showDuplicateReads));
   const refreshGeneration = useBrowserStore(s => s.refreshGeneration);
-  const dupParam = { include_duplicates: String(showDuplicateReads) };
+  const showQcFailReads = useBrowserStore(s => Boolean(s.showQcFailReads));
+  const dupParam = { include_duplicates: String(showDuplicateReads), include_qcfail: String(showQcFailReads) };
   const fetchKey = target ? lensParams(target, dupParam).toString() : '';
   useEffect(() => {
     if (!target) return;

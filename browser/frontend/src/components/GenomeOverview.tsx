@@ -32,6 +32,7 @@ export function GenomeOverview() {
   const setViewport = useBrowserStore(s => s.setViewport);
   const darkMode = useBrowserStore(s => s.darkMode);
   // Duplicate-flagged molecules count only while the read panels show them.
+  const showQcFailReads = useBrowserStore(s => s.showQcFailReads);
   const showDuplicateReads = useBrowserStore(s => s.showDuplicateReads);
 
   const chromInfo = findChromInfo(chroms, chrom);
@@ -51,7 +52,7 @@ export function GenomeOverview() {
     return catalog.entries.filter(e => shown.has(e.category) && sameChrom(e.chrom, chrom)).slice(0, 5000);
   }, [catalog, fingerprints, chrom]);
   const [hoverLabel, setHoverLabel] = useState<string | null>(null);
-  const datasetKey = datasets.map(d => d.id).join(',') + (showDuplicateReads ? '|dup' : '');
+  const datasetKey = datasets.map(d => d.id).join(',') + (showDuplicateReads ? '|dup' : '') + (showQcFailReads ? '|qc' : '');
 
   // Observe container width. The container only exists once chromosomes are
   // known (render returns null before), so re-attach when it appears.
@@ -86,7 +87,7 @@ export function GenomeOverview() {
     setIsLoading(true);
 
     logFrontendDiagnostic(`[GenomeOverview] Fetching coverage: ${chrom}:0-${chromInfo.size}, ${bins} bins, datasets=${datasetKey}`);
-    getCoverage(chrom, 0, chromInfo.size, bins, undefined, { signal: controller.signal }, showDuplicateReads)
+    getCoverage(chrom, 0, chromInfo.size, bins, undefined, { signal: controller.signal }, showDuplicateReads, showQcFailReads)
       .then(result => {
         if (controller.signal.aborted) return;
         logFrontendDiagnostic(`[GenomeOverview] Coverage received: max=${result.max}, nonzero=${result.coverage.filter((v: number) => v > 0).length}/${result.coverage.length} bins`);
@@ -102,7 +103,7 @@ export function GenomeOverview() {
       });
 
     return () => controller.abort();
-  }, [chrom, chromInfo, datasetKey, containerWidth, showDuplicateReads]);
+  }, [chrom, chromInfo, datasetKey, containerWidth, showDuplicateReads, showQcFailReads]);
 
   // Draw
   useEffect(() => {

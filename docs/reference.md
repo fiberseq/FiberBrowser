@@ -211,6 +211,9 @@ Notes:
 - Reads flagged as duplicates (SAM flag `0x400`, or `isDuplicate=1` in a
   BigBed) are hidden unless **Show duplicate reads** is on (**Reads & Display →
   Read Filters**). Unmapped, secondary and supplementary alignments are not shown.
+- QC-fail BAM reads (`0x200`), including FiberHMM chimeras (`xc:Z:strand_swap`),
+  are also excluded by default. **Quality → Show QC-fail reads (incl. FiberHMM chimeras)**
+  includes them for inspection; sessions save this switch (off for old sessions).
 - Footprint-class layers written by FiberHMM's consensus tools are described in
   [LATTICE_CONSENSUS.md](LATTICE_CONSENSUS.md).
 

@@ -5,9 +5,10 @@
  */
 
 export interface FiberhmmSelection {
+  pip_command?: string;
   packaged: boolean;
   requested: { source: string; path: string | null };
-  source: 'env' | 'app' | 'settings' | 'bundled' | 'installed';
+  source: 'env' | 'app' | 'settings' | 'bundled' | 'installed' | 'updated';
   source_label: string;
   root: string | null;
   package_dir: string | null;
@@ -16,7 +17,7 @@ export interface FiberhmmSelection {
   requirements: string[];
   missing: string[];
   notices: string[];
-  app_choice: { source: 'bundled' | 'custom'; custom_path: string; restart_needed: boolean } | null;
+  app_choice: { source: 'bundled' | 'custom' | 'updated'; overlay_version?: string; custom_path: string; restart_needed: boolean } | null;
   running?: { available: boolean; version: string | null; path: string | null };
 }
 
@@ -55,6 +56,7 @@ export type UpdateStatus =
   | 'update_available' | 'up_to_date' | 'disabled' | 'auth_required' | 'auth_invalid' | 'not_published' | 'error';
 
 export interface UpdateCheck {
+  fiberhmm?: FiberhmmUpdateCheck;
   status: UpdateStatus;
   current: string;
   build: string | null;
@@ -73,11 +75,15 @@ export interface UpdateCheck {
   token_source?: string | null;
   pip_command?: string;
   download?: { name: string; kind: string; size: number | null; sha256: string } | null;
+  installable?: boolean;
+  install_download?: UpdateCheck['download'];
   cached?: boolean;
 }
 
 export interface DownloadStatus {
-  state: 'idle' | 'downloading' | 'verifying' | 'done' | 'error' | 'cancelled';
+  state: 'idle' | 'downloading' | 'verifying' | 'ready' | 'restarting' | 'done' | 'error' | 'cancelled';
+  mode?: 'install' | 'download';
+  fallback?: boolean;
   name?: string;
   version?: string;
   received?: number;
@@ -126,3 +132,25 @@ export const getUpdateDownload = () => call<DownloadStatus>('/api/app/update/dow
 export const cancelUpdateDownload = () => call<DownloadStatus>('/api/app/update/download/cancel', { method: 'POST' });
 
 export const openUpdateDownload = () => call<{ opened: string }>('/api/app/update/open', { method: 'POST' });
+
+export const startUpdateInstall = () => call<DownloadStatus>('/api/app/update/install', { method: 'POST' });
+export const restartUpdateInstall = () => call<DownloadStatus>('/api/app/update/restart', { method: 'POST' });
+export const quitForUpdate = () => call<{ success: boolean }>('/api/quit', { method: 'POST' });
+
+export interface FiberhmmUpdateCheck {
+  status: 'update_available' | 'up_to_date' | 'disabled' | 'unavailable';
+  current: string | null;
+  latest?: string;
+  packaged: boolean;
+  blocked: boolean;
+  pip_command: string;
+}
+export interface FiberhmmUpdateJob {
+  state: 'idle' | 'installing' | 'ready' | 'needs_app_update' | 'error' | 'restarting';
+  version?: string;
+  message?: string;
+}
+export const getFiberhmmUpdate = () => call<FiberhmmUpdateJob>('/api/app/fiberhmm/update');
+export const installFiberhmmUpdate = () => call<FiberhmmUpdateJob>('/api/app/fiberhmm/install', { method: 'POST' });
+export const revertFiberhmmUpdate = () => call<FiberhmmUpdateJob>('/api/app/fiberhmm/revert', { method: 'POST' });
+export const restartFiberhmmUpdate = () => call<FiberhmmUpdateJob>('/api/app/fiberhmm/restart', { method: 'POST' });

@@ -28,10 +28,10 @@ import { logPerfTiming, nowMs } from '../../../utils/perfDebug';
 import { computeReadRowGap } from './layout';
 import { getBrowserPerformanceProfile } from '../../../utils/performanceProfile';
 
-/** Identifies a zoomed-out coverage request (dataset, region, bins, duplicates shown). */
+/** Identifies a zoomed-out coverage request (dataset, region, bins, duplicate and QC-fail visibility). */
 export function coverageRequestKey(datasetId: string, chrom: string, start: number, end: number, bins: number,
-  includeDuplicates = false): string {
-  return `${datasetId}|${chrom}:${start}-${end}|${bins}${includeDuplicates ? '|dup' : ''}`;
+  includeDuplicates = false, includeQcFail = false): string {
+  return `${datasetId}|${chrom}:${start}-${end}|${bins}${includeDuplicates ? '|dup' : ''}${includeQcFail ? '|qc' : ''}`;
 }
 
 const EMPTY_OVERLAY_MARKS: Record<string, Record<string, number[]>> = {};
@@ -224,6 +224,7 @@ interface UseReadTrackDataParams {
   minFpQuality: number;
   minFootprints: number;
   showDuplicateReads: boolean;
+  showQcFailReads?: boolean;
   downsampleCount: number | null;
   readDisplayMode: ReadDisplayMode;
   allReadsDisplayCap: number;
@@ -283,7 +284,7 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
     needsMethylation, needsLayers, requestedLayers, needsLayerQualities, batchNeedsMethylation, batchRequestedLayers, batchNeedsLayerQualities,
     useServerMetaprofile, serverMetaprofileLayers,
     needsCigar, fillSmallGaps, fillGapSize, hideTerminalGaps,
-    terminalGapThreshold, minFpQuality, minFootprints, showDuplicateReads, downsampleCount, readDisplayMode, allReadsDisplayCap, backgroundReadCap, readRowHeight,
+    terminalGapThreshold, minFpQuality, minFootprints, showDuplicateReads, showQcFailReads = false, downsampleCount, readDisplayMode, allReadsDisplayCap, backgroundReadCap, readRowHeight,
     readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth,
     exportMatchedReadCount, exportMatchedReadFetchCount,
     legacyLayerInference, legacyNucMinSize,
@@ -518,6 +519,7 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
             infer_legacy_layers: legacyLayerInference.toString(),
             legacy_nuc_min_size: legacyNucMinSize.toString(),
             include_duplicates: showDuplicateReads.toString(),
+            include_qcfail: showQcFailReads.toString(),
             sample_seed: sampleSeed,
             read_end_footprints: readEndFootprints,
           });
@@ -556,6 +558,7 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
             include_layer_qualities: needsLayerQualities.toString(),
             include_cigar: needsCigar.toString(),
             include_duplicates: showDuplicateReads.toString(),
+            include_qcfail: showQcFailReads.toString(),
             ml_threshold: '125',
             hide_terminal_gaps: hideTerminalGaps.toString(),
             terminal_gap_threshold: terminalGapThreshold.toString(),
@@ -816,7 +819,7 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
 
     fetchReads();
     return () => { controller.abort(); };
-  }, [chrom, start, end, datasetId, needsMethylation, needsLayers, requestedLayersKey, needsLayerQualities, batchNeedsMethylation, batchRequestedLayersKey, batchNeedsLayerQualities, useServerMetaprofile, serverMetaprofileLayersKey, needsCigar, fillSmallGaps, fillGapSize, hideTerminalGaps, terminalGapThreshold, legacyLayerInference, legacyNucMinSize, showDuplicateReads, isBAM, minFpQuality, minFootprints, spanningOnly, readDisplayMode, downsampleCount, allReadsDisplayCap, backgroundReadCap, height, readRowHeight, readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth, exportMatchedReadFetchCount, hasPushedReads, jupyterPushedReads, requestFilterIdsParam, requestFilterKey, rootClusterFocusReadIdsKey, clusteredReadIdsKey, linkedSessionId, linkedRegion, linkedSortBy, panelLabel, refreshGeneration, maxRegionForReads, sampleSeed, batchDatasetIds, batchSourceIdentity, batchNeedsSvSummary, readStrand, showsMainView, readEndFootprints, pinnedKey, minSvLen, svSummaryEnabled, loadAllReads]);
+  }, [chrom, start, end, datasetId, needsMethylation, needsLayers, requestedLayersKey, needsLayerQualities, batchNeedsMethylation, batchRequestedLayersKey, batchNeedsLayerQualities, useServerMetaprofile, serverMetaprofileLayersKey, needsCigar, fillSmallGaps, fillGapSize, hideTerminalGaps, terminalGapThreshold, legacyLayerInference, legacyNucMinSize, showDuplicateReads, showQcFailReads, isBAM, minFpQuality, minFootprints, spanningOnly, readDisplayMode, downsampleCount, allReadsDisplayCap, backgroundReadCap, height, readRowHeight, readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth, exportMatchedReadFetchCount, hasPushedReads, jupyterPushedReads, requestFilterIdsParam, requestFilterKey, rootClusterFocusReadIdsKey, clusteredReadIdsKey, linkedSessionId, linkedRegion, linkedSortBy, panelLabel, refreshGeneration, maxRegionForReads, sampleSeed, batchDatasetIds, batchSourceIdentity, batchNeedsSvSummary, readStrand, showsMainView, readEndFootprints, pinnedKey, minSvLen, svSummaryEnabled, loadAllReads]);
 
   // Fetch coverage data when zoomed out past maxRegionForReads
   useEffect(() => {
@@ -828,9 +831,9 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
 
     const controller = new AbortController();
     const bins = Math.max(100, Math.min(width, 2000));
-    const key = coverageRequestKey(datasetId, chrom, start, end, bins, showDuplicateReads);
+    const key = coverageRequestKey(datasetId, chrom, start, end, bins, showDuplicateReads, showQcFailReads);
 
-    getCoverage(chrom, start, end, bins, datasetId, { signal: controller.signal }, showDuplicateReads)
+    getCoverage(chrom, start, end, bins, datasetId, { signal: controller.signal }, showDuplicateReads, showQcFailReads)
       .then(result => {
         if (controller.signal.aborted) return;
         setCoverage({ key, data: result.coverage, max: result.max,
@@ -843,7 +846,7 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
       });
 
     return () => controller.abort();
-  }, [chrom, start, end, datasetId, width, linkedSessionId, maxRegionForReads, showDuplicateReads]);
+  }, [chrom, start, end, datasetId, width, linkedSessionId, maxRegionForReads, showDuplicateReads, showQcFailReads]);
 
   // Derive displayReads: apply client-side filters and ordering only
   const { displayReads, profileReads, displaySampleCount } = useMemo(() => {
@@ -871,7 +874,7 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
     if (!reads || reads.length === 0) {
       return finish({ displayReads: [], profileReads: [], displaySampleCount: 0 }, 'empty');
     }
-    const duplicateFilteredReads = reads.filter(read => (showDuplicateReads || !read.duplicate) && keepsSignal(read.signal, signalFilters));
+    const duplicateFilteredReads = reads.filter(read => (showDuplicateReads || !read.duplicate) && (showQcFailReads || !read.qcfail) && keepsSignal(read.signal, signalFilters));
 
     const displayMax = Math.max(1, Math.min(200_000, allReadsDisplayCap || DEFAULT_ALL_READS_DISPLAY_CAP));
     const profileLimit = backgroundReadCap == null
@@ -998,7 +1001,7 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
       console.error('Error deriving display reads:', err);
       return finish({ displayReads: [], profileReads: [], displaySampleCount: 0 }, 'error');
     }
-  }, [reads, signalFilters, showDuplicateReads, datasetId, hasJupyterFilter, jupyterFilterSet, hasFilter, myFilteredReadIds,
+  }, [reads, signalFilters, showDuplicateReads, showQcFailReads, datasetId, hasJupyterFilter, jupyterFilterSet, hasFilter, myFilteredReadIds,
       myJupyterOrder, myReadSortOrder, hasCluster, myClusterOrder, myClusterAssignments, hasClusterFocus, myClusterFocus,
       linkedSessionId, linkedRegion, linkedFilteredIds, excludeIds, branchReadIds, branchReadScopeActive, panelLabel,
       readDisplayMode, downsampleCount, allReadsDisplayCap, backgroundReadCap, height, readRowHeight, readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth, exportMatchedReadCount, sampleSeed, pinnedKey]);
@@ -1036,7 +1039,7 @@ export function useReadTrackData(params: UseReadTrackDataParams) {
     return () => { controller.abort(); };
   }, [chrom, start, end, modificationOverlays]);
 
-  const coverageKey = coverageRequestKey(datasetId, chrom, start, end, Math.max(100, Math.min(width, 2000)), showDuplicateReads);
+  const coverageKey = coverageRequestKey(datasetId, chrom, start, end, Math.max(100, Math.min(width, 2000)), showDuplicateReads, showQcFailReads);
   const currentCoverage = coverage && coverage.key === coverageKey ? coverage : null;
   const coverageData = currentCoverage?.data ?? null;
   const coverageMax = currentCoverage?.max ?? 0;

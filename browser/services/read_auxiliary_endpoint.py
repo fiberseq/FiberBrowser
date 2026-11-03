@@ -477,6 +477,7 @@ def get_coverage_payload(
     bins: int = 1000,
     dataset_id: Optional[str] = None,
     include_duplicates: bool = False,
+    include_qcfail: bool = False,
 ) -> dict:
     original_chrom = chrom
     chrom = state.translate_chrom(chrom)
@@ -517,7 +518,7 @@ def get_coverage_payload(
     # way, but a circular contig's coverage counts wrapped tails.
     from services.signal_evidence import signal_filter_key
     cache_key = (signal_filter_key(state), tuple(_source_identity(d) for d in datasets_to_query), chrom, start, end, bins,
-                 tuple(query_segments or ()), circular_topology_token(state, chrom), bool(include_duplicates),
+                 tuple(query_segments or ()), circular_topology_token(state, chrom), bool(include_duplicates), bool(include_qcfail),
                  tuple((d_id, tuple(sorted(l.items()))) for d_id, l in links.items() if l))
 
     now = time.time()
@@ -539,7 +540,7 @@ def get_coverage_payload(
         query_segments=query_segments,
         circular=is_circular_chrom(state, chrom),
         contig_links=links,
-        include_duplicates=bool(include_duplicates),
+        include_duplicates=bool(include_duplicates), include_qcfail=bool(include_qcfail),
     )
 
     # Requests run in worker threads: evict without assuming no one else did.

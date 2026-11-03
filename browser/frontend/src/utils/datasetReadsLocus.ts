@@ -43,6 +43,7 @@ export async function readsKeptByFilters(
     include_layers: 'false',
     include_layer_qualities: 'false',
     include_duplicates: String(Boolean(s.showDuplicateReads)),
+    include_qcfail: String(Boolean(s.showQcFailReads)),
     min_footprints: String(Math.max(0, s.minFootprints || 0)),
   });
   // Its own deadline, and the caller's cancel: a stalled request never leaves

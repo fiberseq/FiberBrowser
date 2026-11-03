@@ -116,6 +116,7 @@ async function requestAltAllele(cluster: AltAlleleCluster, opts: { includeRefere
       dataset_id: cluster.datasetId, chrom: cluster.chrom, ref: cluster.ref, length: cluster.len, pos: cluster.pos,
       include_reference: Boolean(opts.includeReference), flank: opts.flank,
       include_duplicates: Boolean(st.showDuplicateReads),
+      include_qcfail: Boolean(st.showQcFailReads),
     });
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) };

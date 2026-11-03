@@ -179,7 +179,7 @@ def load_reads_from_bam(
                 records_seen += 1
                 if not records_seen & 255:
                     checkpoint()  # a background job whose client went away stops here
-                if read.is_unmapped or read.is_secondary or read.is_supplementary:
+                if read.is_unmapped or read.is_secondary or read.is_supplementary or read.is_qcfail:
                     continue
 
                 if not record_keeps_signal(read, signal_provenance):

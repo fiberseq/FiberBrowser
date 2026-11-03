@@ -1,7 +1,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AppInfo, DownloadStatus, UpdateCheck } from '../../api/appUpdate';
+import type { AppInfo, DownloadStatus, UpdateCheck, FiberhmmUpdateJob } from '../../api/appUpdate';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -9,13 +9,30 @@ let check: UpdateCheck;
 let info: AppInfo;
 let download: DownloadStatus = { state: 'idle' };
 const calls: string[] = [];
+let saveError: Error | null = null;
+let releaseSave: (() => void) | null = null;
+let holdSave = false;
+let fiberJob: FiberhmmUpdateJob = { state: 'idle' };
+let holdFiberInstall = false;
+let releaseFiberInstall: ((job: FiberhmmUpdateJob) => void) | null = null;
 
 vi.mock('../../api/appUpdate', () => ({
   checkForUpdates: vi.fn(async (o: { startup?: boolean; force?: boolean }) => { calls.push(`check:${o.startup ? 'startup' : 'manual'}`); return check; }),
   getUpdateDownload: vi.fn(async () => download),
-  startUpdateDownload: vi.fn(async () => { calls.push('download'); download = { state: 'done', name: 'FiberBrowser-3.0.1-arm64.dmg', path: '/Users/x/Downloads/FiberBrowser-3.0.1-arm64.dmg' }; return { state: 'downloading', received: 0, total: 100 }; }),
-  cancelUpdateDownload: vi.fn(async () => ({ state: 'cancelled' })),
+  startUpdateDownload: vi.fn(async () => { calls.push('download'); download = { state: 'done', name: 'FiberBrowser-3.0.1-arm64.dmg', path: '/tmp/Downloads/FiberBrowser-3.0.1-arm64.dmg' }; return { state: 'downloading', received: 0, total: 100 }; }),
+  cancelUpdateDownload: vi.fn(async () => { calls.push('cancel'); download = { ...download, state: 'cancelled', error: 'Cancelled.' }; return download; }),
   openUpdateDownload: vi.fn(async () => { calls.push('open'); return { opened: 'x' }; }),
+  startUpdateInstall: vi.fn(async () => { calls.push('install'); return { state: 'downloading', mode: 'install', name: 'update.zip' }; }),
+  restartUpdateInstall: vi.fn(async () => { calls.push('restart'); return { ...download, state: 'restarting' }; }),
+  quitForUpdate: vi.fn(async () => { calls.push('quit'); return { success: true }; }),
+  getFiberhmmUpdate: vi.fn(async () => fiberJob),
+  installFiberhmmUpdate: vi.fn(async () => {
+    calls.push('fiberhmm-install');
+    if (holdFiberInstall) return new Promise<FiberhmmUpdateJob>(resolve => { releaseFiberInstall = resolve; });
+    return fiberJob;
+  }),
+  revertFiberhmmUpdate: vi.fn(async () => { calls.push('fiberhmm-revert'); return { state: 'ready', message: 'Bundled FiberHMM selected. Restart FiberBrowser to use it.' }; }),
+  restartFiberhmmUpdate: vi.fn(async () => { calls.push('fiberhmm-restart'); return { state: 'restarting' }; }),
   getAppInfo: vi.fn(async () => info),
   setFiberhmmChoice: vi.fn(async (source: string, path: string) => { calls.push(`fiberhmm:${source}:${path}`); return { ...info, checked: { path, version: '3.0.0', missing: ['the extra engine'] } }; }),
   setUpdateSettings: vi.fn(async (values: Record<string, unknown>) => { calls.push(`settings:${JSON.stringify(values)}`); return { ...info, updates: { ...info.updates, ...values } }; }),
@@ -23,8 +40,19 @@ vi.mock('../../api/appUpdate', () => ({
   removeGithubToken: vi.fn(async () => ({ auth: info.auth })),
 }));
 
+vi.mock('../../hooks/useAutoSave', () => ({ autoSaveNow: vi.fn(async () => {
+  calls.push('save');
+  if (holdSave) await new Promise<void>(resolve => { releaseSave = resolve; });
+  if (saveError) throw saveError;
+}) }));
+vi.mock('../../utils/launchSession', async orig => ({
+  ...(await orig<typeof import('../../utils/launchSession')>()),
+  markUpdateRestart: vi.fn(async (pending: boolean) => { calls.push(`reopen:${pending}`); }),
+}));
+
 import { AppUpdateHost, resetStartupCheckForTests, STARTUP_CHECK_DELAY_MS, updateSummary } from './AppUpdateHost';
 import { useAppUpdateStore } from './appUpdateStore';
+import { useFiberhmmUpdateStore } from './fiberhmmUpdateStore';
 import { AppSettings } from '../controls/sidebar/analysis/AppSettings';
 import { useBrowserStore } from '../../stores/browserStore';
 import { runAppCommand } from '../../utils/appCommands';
@@ -40,6 +68,7 @@ function appInfo(over: Partial<AppInfo> = {}): AppInfo {
   return {
     version: '3.0.0', packaged: true, build: { channel: 'lab', version: '3.0.0' }, platform: 'macos-arm64',
     fiberhmm: {
+      pip_command: 'pip install -U "fiberhmm[consensus]>=3.0.3,<4"',
       packaged: true, requested: { source: 'app', path: '/src/Release' }, source: 'bundled', source_label: 'bundled with the app',
       root: null, package_dir: '/Applications/FiberBrowser.app/Contents/Resources/fiberhmm', version: '3.0.0',
       bundled: { path: '/Applications/FiberBrowser.app/Contents/Resources/fiberhmm', version: '3.0.0', kind: 'bundled' },
@@ -67,6 +96,9 @@ const button = (label: string) => [...host.querySelectorAll('button')].find(b =>
 
 beforeEach(() => {
   calls.length = 0;
+  fiberJob = { state: 'idle' }; holdFiberInstall = false; releaseFiberInstall = null;
+  useFiberhmmUpdateStore.setState({ job: { state: 'idle' }, error: null, restartBusy: false });
+  saveError = null; releaseSave = null; holdSave = false;
   download = { state: 'idle' };
   check = available;
   info = appInfo();
@@ -102,11 +134,100 @@ describe('update check in the window', () => {
     expect(text()).toContain('signed in with GitHub CLI');
     await click(host.querySelector('[data-testid="app-update-download"]'));
     expect(calls).toContain('download');
-    await act(async () => { useAppUpdateStore.setState({ download: { state: 'done', name: 'FiberBrowser-3.0.1-arm64.dmg', sha256: 'a'.repeat(64), path: '/Users/x/Downloads/FiberBrowser-3.0.1-arm64.dmg' } }); });
+    await act(async () => { useAppUpdateStore.setState({ download: { state: 'done', name: 'FiberBrowser-3.0.1-arm64.dmg', sha256: 'a'.repeat(64), path: '/tmp/Downloads/FiberBrowser-3.0.1-arm64.dmg' } }); });
     await flush();
     expect(text()).toContain('Downloaded and verified');
     await click(host.querySelector('[data-testid="app-update-open"]'));
     expect(calls).toContain('open');
+  });
+
+
+  it('offers install and download, shows progress, then saves before restart and quit', async () => {
+    vi.useFakeTimers();
+    check = { ...available, installable: true, install_download: { name: 'update.zip', kind: 'zip', size: 100, sha256: 'b'.repeat(64) } };
+    await act(async () => { root.render(<AppUpdateHost />); useAppUpdateStore.setState({ check, dialogOpen: true }); });
+    expect(host.querySelector('[data-testid="app-update-download"]')).toBeTruthy();
+    await click(host.querySelector('[data-testid="app-update-install"]'));
+    expect(text()).toContain('Downloading…');
+    expect(calls).toEqual(['install']);
+    download = { state: 'verifying', mode: 'install', name: 'update.zip' };
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(text()).toContain('Verifying checksum and signature');
+    holdSave = true;
+    download = { state: 'ready', mode: 'install', name: 'update.zip' };
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(text()).toContain('Ready. Saving session');
+    expect(calls).toEqual(['install', 'save']);
+    await act(async () => { releaseSave?.(); });
+    await flush();
+    expect(calls).toEqual(['install', 'save', 'reopen:true', 'restart', 'quit']);
+    expect(text()).toContain('Restarting FiberBrowser');
+  });
+
+  it('cancels while session saving and never restarts', async () => {
+    vi.useFakeTimers();
+    check = { ...available, installable: true, install_download: { name: 'update.zip', kind: 'zip', size: 100, sha256: 'b'.repeat(64) } };
+    await act(async () => { root.render(<AppUpdateHost />); useAppUpdateStore.setState({ check, dialogOpen: true }); });
+    await click(host.querySelector('[data-testid="app-update-install"]'));
+    holdSave = true;
+    download = { state: 'ready', mode: 'install', name: 'update.zip' };
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    await click(button('Cancel'));
+    await act(async () => { releaseSave?.(); });
+    await flush();
+    expect(calls).toContain('cancel');
+    expect(calls).not.toContain('restart');
+    expect(text()).toContain('Cancelled.');
+  });
+
+  it('blocks restart on a failed save, explains the error, and allows retry', async () => {
+    vi.useFakeTimers();
+    check = { ...available, installable: true, install_download: { name: 'update.zip', kind: 'zip', size: 100, sha256: 'b'.repeat(64) } };
+    await act(async () => { root.render(<AppUpdateHost />); useAppUpdateStore.setState({ check, dialogOpen: true }); });
+    saveError = new Error('Session storage is full');
+    await click(host.querySelector('[data-testid="app-update-install"]'));
+    download = { state: 'ready', mode: 'install', name: 'update.zip' };
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(text()).toContain('Session storage is full');
+    expect(calls).not.toContain('restart');
+    saveError = null;
+    await click(button('Retry restart'));
+    expect(calls.slice(-4)).toEqual(['save', 'reopen:true', 'restart', 'quit']);
+  });
+
+
+  it('resumes progress after reopening the update dialog', async () => {
+    vi.useFakeTimers();
+    check = { ...available, installable: true, install_download: { name: 'update.zip', kind: 'zip', size: 100, sha256: 'b'.repeat(64) } };
+    download = { state: 'verifying', mode: 'install', name: 'update.zip' };
+    await act(async () => { root.render(<AppUpdateHost />); useAppUpdateStore.getState().openDialog(false); });
+    await flush();
+    expect(text()).toContain('Verifying checksum and signature');
+    download = { ...download, state: 'ready' };
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(calls.slice(-4)).toEqual(['save', 'reopen:true', 'restart', 'quit']);
+  });
+
+  it('shows verification failure while keeping the DMG fallback available', async () => {
+    await act(async () => {
+      root.render(<AppUpdateHost />);
+      useAppUpdateStore.setState({ check: { ...available, installable: true }, dialogOpen: true,
+        download: { state: 'done', mode: 'download', fallback: true, name: available.download!.name,
+          error: 'Install failed: spctl assessment failed. The disk image has been opened.' } });
+    });
+    expect(text()).toContain('spctl assessment failed');
+    expect(host.querySelector('[data-testid="app-update-open"]')).toBeTruthy();
+    expect(host.querySelector('[data-testid="app-update-install"]')).toBeNull();
+  });
+
+  it('keeps source and pip runs on the pip command without install or download', async () => {
+    await act(async () => {
+      root.render(<AppUpdateHost />);
+      useAppUpdateStore.setState({ check: { ...available, packaged: false, download: null, pip_command: 'pip install -U fiberbrowser' }, dialogOpen: true });
+    });
+    expect(text()).toContain('pip install -U fiberbrowser');
+    expect(host.querySelector('[data-testid="app-update-install"]')).toBeNull();
+    expect(host.querySelector('[data-testid="app-update-download"]')).toBeNull();
   });
 
   it('does not offer to open an earlier release downloaded before a newer check', async () => {
@@ -186,6 +307,106 @@ describe('FiberHMM & Updates settings', () => {
     await openSection();
     expect(host.querySelector('[data-testid="app-fiberhmm-choice"]')).toBeNull();
     expect(text()).toContain('from browser_settings.json');
-    expect(text()).toContain('pip install -U fiberhmm');
+    expect(text()).toContain('pip install -U "fiberhmm[consensus]>=3.0.3,<4"');
+  });
+});
+
+
+describe('independent FiberHMM updates', () => {
+  it('bounds long update dialogs to the viewport with an independently scrolling body', async () => {
+    await act(async () => {
+      root.render(<AppUpdateHost />);
+      useAppUpdateStore.setState({ dialogOpen: true, check: { ...available, notes: 'Long release notes\n'.repeat(1000) } });
+    });
+    const dialog = host.querySelector('[data-testid="app-update-dialog"]')!;
+    expect(dialog.classList.contains('max-h-[calc(100dvh-2rem)]')).toBe(true);
+    expect(dialog.classList.contains('flex-col')).toBe(true);
+    const body = host.querySelector('[data-testid="app-update-content"]')!;
+    expect(body.classList.contains('min-h-0')).toBe(true);
+    expect(body.classList.contains('overflow-y-auto')).toBe(true);
+    expect(body.querySelector('button')?.textContent).toBeTruthy();
+    expect(dialog.querySelector('[aria-label="Close software update"]')).toBeTruthy();
+  });
+
+  const offer = () => {
+    check = { ...available, status: 'up_to_date', fiberhmm: {
+      status: 'update_available', current: '3.0.3', latest: '3.1.0', packaged: true, blocked: false,
+      pip_command: 'pip install -U "fiberhmm[consensus]>=3.0.3,<4"',
+    } };
+    info.fiberhmm = { ...info.fiberhmm, requested: { source: 'bundled', path: null }, source: 'bundled',
+      app_choice: { source: 'bundled', custom_path: '', restart_needed: false }, notices: [] };
+  };
+
+  it('announces a FiberHMM release even when FiberBrowser is current, and renders installing then needs-app-update', async () => {
+    offer();
+    holdFiberInstall = true;
+    await act(async () => { root.render(<AppUpdateHost />); });
+    await act(async () => { await useAppUpdateStore.getState().runCheck(); });
+    expect(text()).toContain('FiberHMM 3.1.0 is available');
+    await click(button('View'));
+    await click(button('Update FiberHMM to 3.1.0'));
+    expect(text()).toContain('Installing FiberHMM');
+    expect((button('Update FiberHMM to 3.1.0') as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => { releaseFiberInstall?.({ state: 'needs_app_update', message: 'FiberHMM 3.1.0 needs a newer FiberBrowser app; update the app' }); });
+    await flush();
+    expect(text()).toContain('needs a newer FiberBrowser app; update the app');
+    expect(button('Restart FiberBrowser')).toBeUndefined();
+  });
+
+  it('shows active overlay and revert in Settings, then saves the session before restart and quit', async () => {
+    offer();
+    info.fiberhmm = { ...info.fiberhmm, source: 'updated', version: '3.1.0',
+      app_choice: { source: 'updated', custom_path: '', overlay_version: '3.1.0', restart_needed: false } };
+    localStorage.setItem('fiberhmm_sidebar_analysis.app_collapsed', '0');
+    await act(async () => { root.render(<AppSettings />); });
+    await flush();
+    expect(text()).toContain('FiberHMM in use: updated 3.1.0');
+    await click(button('Use bundled FiberHMM'));
+    expect(calls).toContain('fiberhmm-revert');
+    expect(text()).toContain('Bundled FiberHMM selected');
+    await click(button('Restart FiberBrowser'));
+    expect(calls.slice(-4)).toEqual(['save', 'reopen:true', 'fiberhmm-restart', 'quit']);
+  });
+
+  it('holds the restart handoff until the durable save finishes and retains a retry on save failure', async () => {
+    offer(); holdSave = true;
+    fiberJob = { state: 'ready', message: 'FiberHMM update saved.' };
+    await act(async () => { root.render(<AppUpdateHost />); });
+    await act(async () => { useAppUpdateStore.getState().openDialog(); });
+    await flush();
+    await click(button('Restart FiberBrowser'));
+    expect(calls).toContain('save');
+    expect(calls).not.toContain('fiberhmm-restart');
+    saveError = new Error('disk full');
+    await act(async () => { releaseSave?.(); });
+    await flush();
+    expect(text()).toContain('Could not restart');
+    expect(calls).not.toContain('quit');
+    expect(calls).toContain('reopen:false');
+    holdSave = false; saveError = null;
+    await click(button('Restart FiberBrowser'));
+    expect(calls.slice(-4)).toEqual(['save', 'reopen:true', 'fiberhmm-restart', 'quit']);
+  });
+
+  it('shows a compatible pip command without install controls for source runs', async () => {
+    offer();
+    check.fiberhmm!.packaged = false;
+    await act(async () => { root.render(<AppUpdateHost />); });
+    await act(async () => { useAppUpdateStore.getState().openDialog(); });
+    await flush();
+    expect(text()).toContain('pip install -U "fiberhmm[consensus]>=3.0.3,<4"');
+    expect(button('Update FiberHMM to')).toBeUndefined();
+  });
+
+  it.each(['custom', 'env'])('respects %s source precedence', async source => {
+    offer();
+    if (source === 'custom') info.fiberhmm.app_choice!.source = 'custom';
+    else info.fiberhmm.requested.source = 'env';
+    await act(async () => { root.render(<AppUpdateHost />); });
+    await act(async () => { useAppUpdateStore.getState().openDialog(); });
+    await flush();
+    expect(text()).toContain('takes precedence');
+    expect(button('Update FiberHMM to')).toBeUndefined();
+    expect(button('Use bundled FiberHMM')).toBeUndefined();
   });
 });

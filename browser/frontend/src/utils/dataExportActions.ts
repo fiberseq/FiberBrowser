@@ -378,6 +378,7 @@ function workingSetParams(state: BrowserState, view: PanelView, datasetIds: stri
     min_fp_quality: state.minFpQuality.toString(),
     min_footprints: state.minFootprints.toString(),
     include_duplicates: state.showDuplicateReads.toString(),
+    include_qcfail: state.showQcFailReads.toString(),
     infer_legacy_layers: state.legacyLayerInference.toString(),
     legacy_nuc_min_size: state.legacyNucMinSize.toString(),
     sample_seed: state.analysisSampleSeed,

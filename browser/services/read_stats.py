@@ -6,6 +6,7 @@ from typing import Optional
 import numpy as np
 
 from services.bam_handles import get_bam_handle
+from services.compact_read_loader import qcfail_metadata
 from utils.chrom import resolve_reference_name
 from services.analysis_query import AnalysisReadQuery
 from services.diagnostics import log_if_enabled
@@ -105,6 +106,7 @@ def compute_read_stats(
             per_read=per_read, all_fp_sizes=all_fp_sizes, all_acc_pcts=all_acc_pcts,
             all_lengths=all_lengths, all_mapqs=all_mapqs, all_methyl_pcts=all_methyl_pcts,
             strand_counts=strand_counts, missing_read_ids_by_dataset=missing_read_ids_by_dataset,
+            include_qcfail=getattr(request, "include_qcfail", False),
         )
 
     aggregate = _build_aggregate(
@@ -141,6 +143,7 @@ def compute_read_stats(
 def _collect_scope(
     state, query, start, end, read_ids_by_dataset, *, per_read, all_fp_sizes, all_acc_pcts,
     all_lengths, all_mapqs, all_methyl_pcts, strand_counts, missing_read_ids_by_dataset,
+    include_qcfail=False,
 ):
     """Per-read stats for one region's selected reads, added to the accumulators."""
     chrom = query.chrom
@@ -158,17 +161,34 @@ def _collect_scope(
 
         # Scope the working set to the selected IDs so backend caps do not
         # sample selected reads out before per-read stats are computed.
-        ws = query.build_working_set(
-            state,
-            dataset_id,
-            read_ids=requested_ids,
-            include_methylation=True,
-            # BAM: the selected reads in this region only, no 10x prefetch around
-            # it (with methylation decoded that load took 5-72 s on deep data).
-            # BigBed keeps the prefetch: its companion layers outside the view
-            # count in the terminal-gap filter, so a narrower load can change it.
-            broad_prefetch_multiplier=READ_STATS_PREFETCH_MULTIPLIER if is_bam else None,
-        )
+        if is_bam and include_qcfail:
+            # Opt-in reads are outside the default analysis cache. Use the same
+            # direct read policy and quality gates as their displayed panel.
+            from models.domain import WorkingSet
+            from services.read_endpoint import compact_reads_payload_for_request
+            payload = compact_reads_payload_for_request(
+                state, chrom=chrom, start=start, end=end, dataset_id=dataset_id,
+                spanning=query.spanning, max_reads=0, filter_ids=",".join(requested_ids),
+                include_qcfail=True, include_methylation=True, include_layers=query.include_layers,
+                layer_names=",".join(query.requested_layers) or None,
+                include_layer_qualities=query.include_layer_qualities,
+                infer_legacy_layers=query.infer_legacy_layers, legacy_nuc_min_size=query.legacy_nuc_min_size,
+                min_footprints=query.min_footprints,
+            )
+            ws = WorkingSet(payload["reads"], payload["total_overlapping"], payload["total_spanning"],
+                            chrom, start, end)
+        else:
+            ws = query.build_working_set(
+                state,
+                dataset_id,
+                read_ids=requested_ids,
+                include_methylation=True,
+                # BAM: the selected reads in this region only, no 10x prefetch around
+                # it (with methylation decoded that load took 5-72 s on deep data).
+                # BigBed keeps the prefetch: its companion layers outside the view
+                # count in the terminal-gap filter, so a narrower load can change it.
+                broad_prefetch_multiplier=READ_STATS_PREFETCH_MULTIPLIER if is_bam else None,
+            )
 
         if is_bam:
             from services.plasmid_reconcile import contig_links
@@ -176,6 +196,7 @@ def _collect_scope(
                 dataset=dataset,
                 dataset_id=dataset_id,
                 contig_links=contig_links(state, dataset_id=dataset_id),
+                include_qcfail=include_qcfail,
                 wanted=wanted,
                 read_ids=read_ids,
                 ws=ws,
@@ -226,6 +247,7 @@ def _collect_bam_read_stats(
     all_methyl_pcts: list,
     strand_counts: dict,
     contig_links: dict | None = None,
+    include_qcfail: bool = False,
 ) -> None:
     """Collect stats from BAM alignment records plus compact working-set intervals."""
     for bam_path in dataset.paths:
@@ -247,6 +269,8 @@ def _collect_bam_read_stats(
                 # sharing its name must not stand in for it.
                 if (getattr(read, "is_unmapped", False) or getattr(read, "is_secondary", False)
                         or getattr(read, "is_supplementary", False)):
+                    continue
+                if getattr(read, "is_qcfail", False) and not include_qcfail:
                     continue
                 if not record_keeps_signal(read, provenance):
                     continue
@@ -301,6 +325,7 @@ def _collect_bam_read_stats(
                         methyl_pos_rel = [p + offset for p in ws_read["methyl"]]
 
                 entry = {
+                    **qcfail_metadata(read),
                     "read_id": read.query_name,
                     "dataset_id": dataset_id,
                     "signal": record_signal(read, provenance),

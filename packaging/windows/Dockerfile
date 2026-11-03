@@ -78,6 +78,10 @@ COPY te_libraries/ /opt/fiberbrowser/share/fiberbrowser/te_libraries/
 RUN BLAST_USAGE_REPORT=false blastn -version && BLAST_USAGE_REPORT=false makeblastdb -version
 # The build information (services/app_build.py): a packaged app, which runs its bundled FiberHMM by default.
 COPY build.json /opt/fiberbrowser/share/fiberbrowser/build.json
+COPY package_metadata.py /opt/fiberbrowser/share/fiberbrowser/package_metadata.py
+# pip records local wheel locations in direct_url.json, even for non-editable installs.
+RUN /opt/fiberbrowser/bin/python /opt/fiberbrowser/share/fiberbrowser/package_metadata.py \
+      --remove-direct-urls --record-build-home /opt/fiberbrowser/lib /usr/local/lib
 COPY rootfs/ /
 # The user FiberBrowser runs as (uid 1000, as WSL's own distributions use);
 # /etc/wsl.conf makes it the default. Its home holds ~/.fiberhmm (settings,

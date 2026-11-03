@@ -371,6 +371,7 @@ class ReadStatsRegion(BaseModel):
 
 
 class ReadStatsRequest(BaseModel):
+    include_qcfail: bool = False
     read_ids_by_dataset: Dict[str, List[str]]
     sample_seed: Optional[str] = None
     extra_regions: List[ReadStatsRegion] = []

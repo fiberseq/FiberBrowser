@@ -4,11 +4,14 @@ device; services/public_mode_guard.py, services/lab/auth.py, services/remote_acc
 - ``GET /api/app/info``: the build, which FiberHMM runs (and why), the update settings and what can sign in to
   GitHub (never a token).
 - ``POST /api/app/fiberhmm``: the app's FiberHMM choice (bundled or a custom source tree); takes effect at the
-  next start.
+  next start. ``POST .../fiberhmm/install`` verifies and activates an overlay for the next start;
+  ``GET .../fiberhmm/update`` reports progress; ``POST .../revert`` selects bundled and ``POST .../restart``
+  relaunches after session autosave. All are owner-only.
 - ``GET /api/app/update``: the update check (``startup=1``: the quiet check at startup; ``force=1``: not cached).
 - ``POST /api/app/update/settings``: the check at startup, the manifest address, the repository.
 - ``POST`` / ``DELETE /api/app/update/token``: a GitHub token kept in the OS keychain.
 - ``POST /api/app/update/download``, ``GET`` it, ``POST .../cancel``, ``POST /api/app/update/open``.
+- ``POST /api/app/update/install`` stages a verified update; ``POST .../restart`` hands it off after autosave.
 """
 from __future__ import annotations
 
@@ -43,7 +46,7 @@ def set_performance(request: PerformanceModeRequest, state=Depends(get_state)):
 
 
 def _info() -> dict:
-    from services import app_settings, app_update, github_auth
+    from services import app_settings, app_update, github_auth, fiberhmm_update
     from services.app_build import build_info, is_packaged, platform_key
     from services.fiberhmm_runtime import describe_fiberhmm, fiberhmm_selection
     from version import __version__
@@ -53,7 +56,8 @@ def _info() -> dict:
         "packaged": is_packaged(),
         "build": build_info(),
         "platform": platform_key(),
-        "fiberhmm": {**fiberhmm_selection(), "running": describe_fiberhmm()},
+        "fiberhmm": {**fiberhmm_selection(), "running": describe_fiberhmm(),
+                     "pip_command": fiberhmm_update.pip_command()},
         "updates": {**app_settings.load()["updates"], "channel": config["channel"], "source": config["source"],
                     "where": config["manifest_url"] or " or ".join(config["repos"]),
                     "manifest_from": config["manifest_from"], "private": config["private"],
@@ -75,6 +79,8 @@ async def set_fiberhmm(request: dict):
     from services import app_settings
     from services.fiberhmm_runtime import _valid_source_tree, missing_features, package_version
     source = request.get("source")
+    if source not in ("bundled", "custom"):
+        raise HTTPException(status_code=422, detail="Choose bundled or custom; overlays require a verified install.")
     path = str(request.get("custom_path") or "").strip()
     report = None
     if source == "custom":
@@ -97,8 +103,11 @@ async def set_fiberhmm(request: dict):
 
 @router.get("/api/app/update")
 async def update_check(startup: bool = False, force: bool = False):
-    from services import app_update
-    return await asyncio.to_thread(app_update.check, startup=startup, force=force)
+    from services import app_update, fiberhmm_update
+    app, fiberhmm = await asyncio.gather(
+        asyncio.to_thread(app_update.check, startup=startup, force=force),
+        asyncio.to_thread(fiberhmm_update.check, startup=startup, force=force))
+    return {**app, "fiberhmm": fiberhmm}
 
 
 @router.post("/api/app/update/settings")
@@ -152,7 +161,28 @@ async def download_status():
 @router.post("/api/app/update/download/cancel")
 async def cancel_download():
     from services import app_update
-    return app_update.cancel_download()
+    try:
+        return app_update.cancel_download()
+    except app_update.UpdateError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.post("/api/app/update/install")
+async def install_update():
+    from services import app_update
+    try:
+        return await asyncio.to_thread(app_update.start_install)
+    except app_update.UpdateError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.post("/api/app/update/restart")
+async def restart_update():
+    from services import app_update
+    try:
+        return await asyncio.to_thread(app_update.restart_install)
+    except app_update.UpdateError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @router.post("/api/app/update/open")
@@ -161,4 +191,37 @@ async def open_download():
     try:
         return await asyncio.to_thread(app_update.open_download)
     except app_update.UpdateError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.get("/api/app/fiberhmm/update")
+async def fiberhmm_update_status():
+    from services import fiberhmm_update
+    return fiberhmm_update.status()
+
+
+@router.post("/api/app/fiberhmm/install")
+async def install_fiberhmm():
+    from services import fiberhmm_update
+    try:
+        return await asyncio.to_thread(fiberhmm_update.start_install)
+    except fiberhmm_update.UpdateError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.post("/api/app/fiberhmm/revert")
+async def revert_fiberhmm():
+    from services import fiberhmm_update
+    try:
+        return await asyncio.to_thread(fiberhmm_update.revert)
+    except fiberhmm_update.UpdateError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.post("/api/app/fiberhmm/restart")
+async def restart_fiberhmm():
+    from services import fiberhmm_update
+    try:
+        return await asyncio.to_thread(fiberhmm_update.restart)
+    except (ValueError, OSError, RuntimeError) as error:
         raise HTTPException(status_code=409, detail=str(error)) from error

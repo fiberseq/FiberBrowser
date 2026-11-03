@@ -30,6 +30,12 @@ registerBrowserHost('app-update', AppUpdateHost, { interactiveOnly: true });
 // The ChIP-Atlas choice, pinned and custom motifs kept on this computer (not per port): read once, then followed.
 if (!window.__FIBERBROWSER_RENDER_MODE) void initAnalysisPreferences();
 
+// The page itself never scrolls (index.css): if a focus or scrollIntoView still moves the root, put it back, or the
+// top toolbar is cut off and every click lands above the pointer (seen in the Mac app's WKWebView).
+window.addEventListener('scroll', () => {
+  if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
+}, { passive: true });
+
 // Apply limits before panels fetch; changing them during that load starts it twice.
 void initializePerformanceMode().then(() => {
   ReactDOM.createRoot(document.getElementById('root')!).render(

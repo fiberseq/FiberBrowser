@@ -14,6 +14,7 @@ export interface AltAlleleRequest {
   include_reference?: boolean;
   max_carriers?: number;
   include_duplicates?: boolean;
+  include_qcfail?: boolean;
 }
 
 export interface AltAlleleResponse {

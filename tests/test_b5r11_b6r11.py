@@ -143,7 +143,7 @@ def test_dense_loader_keeps_soft_clipped_footprints(monkeypatch):
         reference_end = 300
         cigartuples = [(4, 10), (0, 200)]
         is_reverse = False
-        is_secondary = is_supplementary = is_unmapped = is_duplicate = False
+        is_secondary = is_supplementary = is_unmapped = is_duplicate = is_qcfail = False
         mapping_quality = 60
         query_length = 210
 

@@ -66,6 +66,7 @@ async def get_insertion_lens(
     ref: Optional[int] = Query(None, ge=0),
     length: Optional[int] = Query(None, ge=1),
     include_duplicates: bool = Query(False),
+    include_qcfail: bool = Query(False, description="Include SAM QC-fail reads (0x200)"),
     flank: int = Query(DEFAULT_FLANK, ge=0, le=MAX_FLANK),
     max_carriers: int = Query(DEFAULT_MAX_CARRIERS, ge=1, le=1000),
     max_reference: int = Query(DEFAULT_MAX_REFERENCE, ge=0, le=500),
@@ -83,7 +84,7 @@ async def get_insertion_lens(
     payload = await asyncio.to_thread(
         insertion_lens_payload, state, chrom=chrom, pos=pos, dataset_id=dataset_id,
         tolerance=tolerance, len_min=len_min, len_max=len_max, ref=ref, length=length,
-        include_duplicates=include_duplicates, flank=flank,
+        include_duplicates=include_duplicates, include_qcfail=include_qcfail, flank=flank,
         max_carriers=max_carriers, max_reference=max_reference, consensus=consensus,
         include_sequences=include_sequences, ml_threshold=ml_threshold,
         layer_names=parse_optional_csv_list(layer_names), include_methylation=include_methylation,
@@ -102,6 +103,7 @@ class AltAlleleRequest(BaseModel):
     include_reference: bool = False
     max_carriers: Optional[int] = None
     include_duplicates: bool = False
+    include_qcfail: bool = False
 
 
 @router.post("/api/alt_allele/open")

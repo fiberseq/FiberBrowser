@@ -4,7 +4,7 @@ The choices the app's Settings make for this computer, kept apart from ``browser
 defaults scripts and source runs read, which the app never writes):
 
 ``fiberhmm``
-    ``{"source": "bundled" | "custom", "custom_path": "/path/to/FiberHMM"}``: which FiberHMM a packaged app runs
+    ``{"source": "bundled" | "custom" | "updated", "custom_path": "/path/to/FiberHMM", "overlay_version": ""}``: which FiberHMM a packaged app runs
     (services/fiberhmm_runtime.py). Read once per process: a change takes effect at the next start.
 ``updates``
     ``{"check_at_startup": true, "manifest_url": "", "repo": ""}``: the update check (services/app_update.py).
@@ -29,11 +29,11 @@ from typing import Any
 
 DEFAULTS: dict[str, Any] = {
     "performance": {"mode": "auto"},
-    "fiberhmm": {"source": "bundled", "custom_path": ""},
+    "fiberhmm": {"source": "bundled", "custom_path": "", "overlay_version": "", "previous_overlay_version": ""},
     # check_at_startup None: the kind of run decides (default_check_at_startup).
     "updates": {"check_at_startup": None, "manifest_url": "", "repo": ""},
 }
-FIBERHMM_SOURCES = ("bundled", "custom")
+FIBERHMM_SOURCES = ("bundled", "custom", "updated")
 
 _lock = threading.Lock()
 _cache: tuple[str, tuple, dict] | None = None
@@ -130,6 +130,14 @@ def _clean(section: str, values: dict) -> dict:
             if not isinstance(values["custom_path"], str):
                 raise ValueError("custom_path must be text")
             out["custom_path"] = values["custom_path"].strip()
+        for key in ("overlay_version", "previous_overlay_version"):
+            if key in values:
+                from services.fiberhmm_update import overlay_site
+                if not isinstance(values[key], str):
+                    raise ValueError(f"{key} must be text")
+                if values[key]:
+                    overlay_site(values[key])
+                out[key] = values[key]
         return out
     if section == "updates":
         out = {}

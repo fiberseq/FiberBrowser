@@ -146,10 +146,10 @@ def walk(read, start: int, end: int) -> Optional[ReadWalk]:
     return ReadWalk(qi=qi, ri=ri, dels=dels, ins=ins, span=(first, last), skips=skips)
 
 
-def keep_record(read, min_mapq: int, include_duplicates: bool) -> bool:
+def keep_record(read, min_mapq: int, include_duplicates: bool, include_qcfail: bool = False) -> bool:
     if read.is_unmapped or read.is_secondary or read.is_supplementary:
         return False
-    if read.is_duplicate and not include_duplicates:
+    if (read.is_duplicate and not include_duplicates) or (getattr(read, "is_qcfail", False) and not include_qcfail):
         return False
     return int(read.mapping_quality) >= min_mapq
 
@@ -206,7 +206,7 @@ class Pileup:
 
 
 def pileup(records: Iterable, chrom: str, start: int, end: int, *, ref: Optional[np.ndarray] = None,
-           min_bq: int = 20, min_mapq: int = 20, max_indel: int = 30, include_duplicates: bool = False,
+           min_bq: int = 20, min_mapq: int = 20, max_indel: int = 30, include_duplicates: bool = False, include_qcfail: bool = False,
            cancelled: Optional[Callable[[], bool]] = None) -> Pileup:
     """Allele counts per position, strand class and base over ``[start, end)``.
 
@@ -226,7 +226,7 @@ def pileup(records: Iterable, chrom: str, start: int, end: int, *, ref: Optional
         if cancelled is not None and n % 200 == 0 and cancelled():
             pile.cancelled = True
             break
-        if not keep_record(read, min_mapq, include_duplicates):
+        if not keep_record(read, min_mapq, include_duplicates, include_qcfail):
             continue
         name = read.query_name
         if name in seen:
@@ -473,7 +473,7 @@ class AlleleMatrix:
 
 
 def read_alleles(records: Iterable, chrom: str, start: int, end: int, candidates: list[dict], *,
-                 min_bq: int = 20, min_mapq: int = 20, include_duplicates: bool = False,
+                 min_bq: int = 20, min_mapq: int = 20, include_duplicates: bool = False, include_qcfail: bool = False,
                  cancelled: Optional[Callable[[], bool]] = None) -> AlleleMatrix:
     """Each read's allele code at each candidate (``MISSING`` where it does not cover it)."""
     pos = np.array([c["pos"] for c in candidates], dtype=np.int64)
@@ -492,7 +492,7 @@ def read_alleles(records: Iterable, chrom: str, start: int, end: int, candidates
         if cancelled is not None and n % 200 == 0 and cancelled():
             stopped = True
             break
-        if not keep_record(read, min_mapq, include_duplicates):
+        if not keep_record(read, min_mapq, include_duplicates, include_qcfail):
             continue
         if read.query_name in seen:
             continue

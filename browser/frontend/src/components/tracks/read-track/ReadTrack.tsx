@@ -34,7 +34,7 @@ import { DEFAULT_MIN_FOOTPRINTS, minFootprintsNoticeApplies } from '../../../sto
 import { FindReadsControl } from './FindReadsControl';
 import { blockingProblemFor, findReadsPromptAllowed, useGenomeCheckStore } from '../../../stores/genomeCheckStore';
 import { GenomeMismatchNotice } from '../../controls/GenomeMismatchBanner';
-import { signalCountText } from '../../../utils/signalFilters';
+import { signalCountText, readPolicyHiddenText } from '../../../utils/signalFilters';
 import { useReadStatusStore } from '../../../stores/readStatusStore';
 import { syncBrowserReadOrder } from '../../../api/jupyter';
 import { getMetaprofileSourceEntries } from '../../../utils/layerColors';
@@ -155,7 +155,7 @@ export function ReadTrack({
   // Group 2: Config (rarely changes)
   const {
     enabledModTypes, fillSmallGaps, fillGapSize, hideTerminalGaps, terminalGapThreshold,
-    minFpQuality, minFootprints, minFootprintsAuto, minFootprintsNotice, showDuplicateReads, modificationOverlays,
+    minFpQuality, minFootprints, minFootprintsAuto, minFootprintsNotice, showDuplicateReads, showQcFailReads, modificationOverlays,
     enabledMetaProfiles, cachedLayerTypes,
     legacyLayerInference, legacyNucMinSize,
     enabledCigarTypes, anyCigarEnabled, isReversed, activeColormap, orthogonalTracks,
@@ -173,6 +173,7 @@ export function ReadTrack({
     minFootprintsAuto: s.minFootprintsAuto,
     minFootprintsNotice: s.minFootprintsNotice,
     showDuplicateReads: s.showDuplicateReads,
+    showQcFailReads: s.showQcFailReads,
     modificationOverlays: s.modificationOverlays,
     enabledMetaProfiles: s.enabledMetaProfiles, cachedLayerTypes: s.cachedLayerTypes,
     legacyLayerInference: s.legacyLayerInference, legacyNucMinSize: s.legacyNucMinSize,
@@ -566,7 +567,7 @@ export function ReadTrack({
     useServerMetaprofile: canUseServerMetaprofile,
     serverMetaprofileLayers,
     needsCigar, fillSmallGaps, fillGapSize, hideTerminalGaps,
-    terminalGapThreshold, minFpQuality, minFootprints, showDuplicateReads, downsampleCount, readDisplayMode, allReadsDisplayCap,
+    terminalGapThreshold, minFpQuality, minFootprints, showDuplicateReads, showQcFailReads, downsampleCount, readDisplayMode, allReadsDisplayCap,
     backgroundReadCap,
     readRowHeight: renderReadRowHeight,
     readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth,
@@ -1386,12 +1387,14 @@ export function ReadTrack({
     spanning: totalSpanningReads,
   });
   const signalSummary = useBrowserStore(s => s.signalCounts[stateKey]?.counts);
+  const policyStatus = signalSummary ? readPolicyHiddenText(signalSummary) : '';
+  const visibleStatusText = policyStatus ? `${statusText} · ${policyStatus}` : statusText;
   const signalStatusTitle = signalSummary ? `${statusTitle}; Signal: ${signalCountText(signalSummary)} (before call filters and sampling)` : statusTitle;
   const setReadStatus = useReadStatusStore(st => st.setStatus);
   useEffect(() => {
     if (!stateKey) return;
-    setReadStatus(stateKey, { text: statusText, title: signalStatusTitle });
-  }, [setReadStatus, stateKey, statusText, signalStatusTitle]);
+    setReadStatus(stateKey, { text: visibleStatusText, title: signalStatusTitle });
+  }, [setReadStatus, stateKey, visibleStatusText, signalStatusTitle]);
   useEffect(() => () => { if (stateKey) setReadStatus(stateKey, null); }, [setReadStatus, stateKey]);
 
   const cursorClass = isPanning

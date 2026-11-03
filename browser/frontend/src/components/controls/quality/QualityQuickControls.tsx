@@ -1,3 +1,4 @@
+import { QcFailReadToggle } from '../sidebar/view/FootprintReadFilters';
 import { useEffect, useMemo, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useBrowserStore } from '../../../stores/browserStore';
@@ -191,6 +192,7 @@ export function QualityQuickControls() {
 
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]" data-testid="quality-controls-toolbar">
+      <QcFailReadToggle />
       {lines.length === 0 ? (
         <span className="text-gray-500 dark:text-gray-400">No quality filters: every call is drawn and counted.</span>
       ) : (

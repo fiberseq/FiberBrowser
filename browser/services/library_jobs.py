@@ -321,6 +321,26 @@ def _call_switch(call_args: list[str], flag: str) -> Optional[bool]:
     return value
 
 
+def _recorded_chimeras(call_args: list[str]) -> tuple[list[str], Optional[str]]:
+    """Strip all recorded mode pairs; FiberHMM appends the effective mode on every run."""
+    remaining: list[str] = []
+    mode = None
+    arguments = iter(call_args)
+    for argument in arguments:
+        if argument == "--chimeras":
+            value = next(arguments, None)
+        elif argument.startswith("--chimeras="):
+            value = argument.split("=", 1)[1]
+        else:
+            remaining.append(argument)
+            continue
+        if value not in ("flag", "remove", "keep"):
+            raise RecallError(f"The original run records --chimeras {value!r}, which this FiberBrowser "
+                              "does not know.")
+        mode = value
+    return remaining, mode
+
+
 # 3.0 default changes a run recorded before them (outputs.json, run record): text and the pipeline flag
 # that keeps the original behaviour. Shared with the header re-call's (services/recall_header.py).
 def _pipeline_default_changes() -> dict:
@@ -371,6 +391,7 @@ def recall_settings(entry: dict, enzyme: str, help_text: Optional[str],
         call_args = settings.get("call_args") or []
         if not isinstance(call_args, list) or not all(isinstance(a, str) for a in call_args):
             raise RecallError(f"The original run records call_args={call_args!r}, which is not a list of arguments.")
+        call_args, chimera_mode = _recorded_chimeras(call_args)
         call_args, dropped = rh.drop_retired(call_args)
         rewrites += [{"flag": f"--call-args {d['flag']}", "from": d["value"], "to": None, "why": d["why"]}
                      for d in dropped]
@@ -407,6 +428,10 @@ def recall_settings(entry: dict, enzyme: str, help_text: Optional[str],
         if not isinstance(options["chimera_filter"], bool):
             raise RecallError(f"The original run records chimera_filter={options['chimera_filter']!r}, which is "
                               "not true/false.")
+        chimera_mode = chimera_mode or ("flag" if options["chimera_filter"] else "keep")
+        options["chimera_filter"] = chimera_mode != "keep"
+        if chimera_mode == "remove":
+            call_args += ["--chimeras", "remove"]
         seq = settings.get("seq")
         # A concrete platform is always passed on: since FiberHMM 3.0 a DAF run without --seq takes the
         # platform from the reads' header records, which need not match what the original run used.
@@ -492,6 +517,8 @@ def recall_settings(entry: dict, enzyme: str, help_text: Optional[str],
     except pi.InputError as exc:
         raise RecallError(f"The original run's settings cannot be used for a re-call: {exc}") from exc
     labels = pi.changed_options(options, enzyme)
+    if source == "outputs.json" and chimera_mode != "keep":
+        labels.append(f"{chimera_mode} chimeras")
     for label, flag in more:
         name = flag[0].split("=", 1)[0]
         if help_text is not None and not pi._has_flag(help_text, name):
@@ -667,6 +694,9 @@ _LOCATE_PACKAGE = (
     "    sys.path[0] = first\n"
     "elif getattr(sys, 'frozen', False) and first not in sys.path:\n"
     "    sys.path.insert(0, first)  # the frozen app's -m role puts its cwd first too (fiberbrowser/frozen_entry.py)\n"
+    "if getattr(sys, 'frozen', False):\n"
+    "    from services.fiberhmm_runtime import configure_fiberhmm_runtime\n"
+    "    configure_fiberhmm_runtime()  # match the -m role's explicit Custom path/overlay precedence\n"
     "spec = importlib.util.find_spec(sys.argv[1])\n"
     "print(json.dumps({'locations': list(getattr(spec, 'submodule_search_locations', None) or []) if spec else [],"
     " 'origin': getattr(spec, 'origin', None) if spec else None, 'python': sys.version.split()[0]}))\n"

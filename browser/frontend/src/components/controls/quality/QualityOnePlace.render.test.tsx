@@ -40,8 +40,10 @@ describe('quality filters have one editor', () => {
     await act(async () => { root.render(<QualityQuickControls />); });
     const group = container.querySelector('[data-testid="quality-controls-toolbar"]')!;
     expect(group).not.toBeNull();
-    // No checkbox, number or slider that changes a filter here.
-    expect(group.querySelectorAll('input')).toHaveLength(0);
+    // Read eligibility lives here; footprint score cutoffs still have one editor.
+    expect(group.querySelectorAll('input')).toHaveLength(1);
+    expect(group.querySelector('label')?.textContent).toContain('Show QC-fail reads (incl. FiberHMM chimeras)');
+    expect(group.querySelectorAll('input[type="number"], input[type="range"]')).toHaveLength(0);
     const link = container.querySelector<HTMLButtonElement>('[data-testid="quality-edit-link"]')!;
     expect(link.textContent).toBe('Edit filters…');
     const opened: string[] = [];

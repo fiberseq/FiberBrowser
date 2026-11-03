@@ -105,7 +105,8 @@ def insertion_span(cigartuples, reference_start: int, q: int, length: int) -> tu
 
 
 def resolve_cluster(records: Iterable, *, pos: int, tolerance: int, len_min: int,
-                    len_max: Optional[int]) -> Optional[dict]:
+                    len_max: Optional[int], include_duplicates: bool = False,
+                    include_qcfail: bool = False) -> Optional[dict]:
     """The insertion cluster at a clicked position (sv_events clustering, as
     the SV summary does): of the clusters within ``tolerance`` of ``pos`` and
     in the length range, the one with most carriers, nearest on ties."""
@@ -113,6 +114,9 @@ def resolve_cluster(records: Iterable, *, pos: int, tolerance: int, len_min: int
     compact = []
     for item in records:
         read = item[0]
+        if (getattr(read, "is_duplicate", False) and not include_duplicates
+                or getattr(read, "is_qcfail", False) and not include_qcfail):
+            continue
         events = extract_sv_events(read, floor)
         if events:
             compact.append({"id": read.query_name, "sv": events})
@@ -545,7 +549,7 @@ def _carrier_plan(read, evidence: dict, cluster_len: int) -> dict:
 def classify_site(bam_paths, chrom, *, pos: int, tolerance: int = DEFAULT_TOLERANCE,
                   len_min: int = DEFAULT_MIN_LEN, len_max: Optional[int] = None,
                   ref: Optional[int] = None, length: Optional[int] = None, margin: int = SV_SPAN_MARGIN,
-                  include_duplicates: bool = False, bam_handle_getter=None, chrom_map=None,
+                  include_duplicates: bool = False, include_qcfail: bool = False, bam_handle_getter=None, chrom_map=None,
                   contig_links=None) -> dict:
     """The insertion at a site and its reads: ``{success, ref, length, margin, carriers:
     [(plan, record, path, handle)], reference: [(record, path, handle)], excluded}``.
@@ -564,6 +568,7 @@ def classify_site(bam_paths, chrom, *, pos: int, tolerance: int = DEFAULT_TOLERA
         cluster = resolve_cluster(
             _site_records(bam_paths, chrom, pos - tolerance - 1, pos + tolerance + 1, **records),
             pos=int(pos), tolerance=int(tolerance), len_min=int(len_min), len_max=len_max,
+            include_duplicates=include_duplicates, include_qcfail=include_qcfail,
         )
         if cluster is None:
             return {"success": False, "error": (
@@ -579,7 +584,7 @@ def classify_site(bam_paths, chrom, *, pos: int, tolerance: int = DEFAULT_TOLERA
     reach = int(math.ceil(max(margin, insertion_clip_tolerance(length), breakpoint_tolerance(longest)))) + 1
     by_name = classify_records(
         _site_records(bam_paths, chrom, ref - reach, ref + reach, **records),
-        t="I", ref=ref, length=length, margin=margin, include_duplicates=include_duplicates,
+        t="I", ref=ref, length=length, margin=margin, include_duplicates=include_duplicates, include_qcfail=include_qcfail,
     )
 
     carriers_all = []
@@ -622,6 +627,7 @@ def build_lens(
     chrom_map=None,
     contig_links=None,
     include_duplicates: bool = False,
+    include_qcfail: bool = False,
     daf: bool = False,
 ) -> dict:
     """The lens payload for one insertion across ``bam_paths``.
@@ -645,7 +651,7 @@ def build_lens(
     records = dict(bam_handle_getter=bam_handle_getter, chrom_map=chrom_map, contig_links=contig_links)
 
     site = classify_site(bam_paths, chrom, pos=pos, tolerance=tolerance, len_min=len_min, len_max=len_max,
-                         ref=ref, length=length, margin=margin, include_duplicates=include_duplicates, **records)
+                         ref=ref, length=length, margin=margin, include_duplicates=include_duplicates, include_qcfail=include_qcfail, **records)
     if not site["success"]:
         return site
     ref, length, margin = site["ref"], site["length"], site["margin"]
@@ -687,7 +693,7 @@ def build_lens(
             spanning_only=False,
             bam_handle_getter=lambda _p, _bam=bam, _r=source: _OneReadHandle(_bam, _r),
             chrom_map=chrom_map, contig_links=contig_links,
-            include_duplicates=True,
+            include_duplicates=True, include_qcfail=True,
             **loader_kwargs,
         )
         entry = {
@@ -732,7 +738,7 @@ def build_lens(
             spanning_only=False,
             bam_handle_getter=lambda _p, _bam=bam, _r=read: _OneReadHandle(_bam, _r),
             chrom_map=chrom_map, contig_links=contig_links,
-            include_duplicates=True,
+            include_duplicates=True, include_qcfail=True,
             **loader_kwargs,
         )
         reference_out.append({
@@ -828,6 +834,7 @@ def find_clusters(
     chrom_map=None,
     contig_links=None,
     include_duplicates: bool = False,
+    include_qcfail: bool = False,
     tile_cache=None,
 ) -> list[dict]:
     """Insertions (>= ``min_len``) in ``[start, end)`` as the SV summary
@@ -843,11 +850,11 @@ def find_clusters(
     if tile_cache is not None and bam_paths and all(_file_stamp(p)[0] is not None for p in bam_paths):
         compact = _tiled_sv_reads(bam_paths, chrom, start, end, floor, tile_cache=tile_cache,
                                   bam_handle_getter=bam_handle_getter, chrom_map=chrom_map,
-                                  contig_links=contig_links, include_duplicates=include_duplicates)
+                                  contig_links=contig_links, include_duplicates=include_duplicates, include_qcfail=include_qcfail)
     else:
         compact = [item for _key, item in _sv_reads(bam_paths, chrom, start, end, floor, bam_handle_getter=bam_handle_getter,
                                                    chrom_map=chrom_map, contig_links=contig_links,
-                                                   include_duplicates=include_duplicates)]
+                                                   include_duplicates=include_duplicates, include_qcfail=include_qcfail)]
     summary = sv_summary_for_reads(compact, start, end, floor, chrom=chrom) or {"clusters": []}
     out = []
     for c in summary["clusters"]:
@@ -857,7 +864,7 @@ def find_clusters(
     return out
 
 
-def _sv_reads(bam_paths, chrom, start, end, floor, *, bam_handle_getter, chrom_map, contig_links, include_duplicates):
+def _sv_reads(bam_paths, chrom, start, end, floor, *, bam_handle_getter, chrom_map, contig_links, include_duplicates, include_qcfail=False):
     """((file, name, start, end, strand), {id, reference_start, reference_end[, sv]}) per primary
     alignment in ``[start, end)``, in file order."""
     from services.background_work import checkpoint
@@ -872,6 +879,8 @@ def _sv_reads(bam_paths, chrom, start, end, floor, *, bam_handle_getter, chrom_m
         if not seen & 255:
             checkpoint()  # the list's client went away
         if getattr(read, "is_duplicate", False) and not include_duplicates:
+            continue
+        if getattr(read, "is_qcfail", False) and not include_qcfail:
             continue
         ref_start, ref_end = int(read.reference_start), int(read.reference_end)
         item = {"id": read.query_name, "reference_start": ref_start, "reference_end": ref_end}
@@ -897,14 +906,14 @@ def cluster_tile_size(span: int) -> int:
 
 
 def _tiled_sv_reads(bam_paths, chrom, start, end, floor, *, tile_cache, bam_handle_getter, chrom_map,
-                    contig_links, include_duplicates) -> list[dict]:
+                    contig_links, include_duplicates, include_qcfail=False) -> list[dict]:
     """``_sv_reads`` over ``[start, end)`` from cached tiles; missing tiles are read in
     contiguous runs (one fetch per run, each read's events extracted once)."""
     from services.signal_evidence import signal_filter_key
     size = cluster_tile_size(end - start)
     first, last = max(0, start) // size, max(0, end - 1) // size
     identity = (tuple((p, *_file_stamp(p)) for p in bam_paths), repr(chrom_map), repr(contig_links),
-                chrom, size, int(floor), bool(include_duplicates), signal_filter_key())
+                chrom, size, int(floor), bool(include_duplicates), bool(include_qcfail), signal_filter_key())
     tiles: dict[int, list] = {}
     missing = []
     for t in range(first, last + 1):
@@ -924,7 +933,7 @@ def _tiled_sv_reads(bam_paths, chrom, start, end, floor, *, tile_cache, bam_hand
         fresh: dict[int, list] = {t: [] for t in run}
         for key, item in _sv_reads(bam_paths, chrom, lo, hi, floor, bam_handle_getter=bam_handle_getter,
                                    chrom_map=chrom_map, contig_links=contig_links,
-                                   include_duplicates=include_duplicates):
+                                   include_duplicates=include_duplicates, include_qcfail=include_qcfail):
             for t in run:
                 if item["reference_end"] > t * size and item["reference_start"] < (t + 1) * size:
                     fresh[t].append((key, item))
@@ -1038,7 +1047,7 @@ def insertion_clusters_payload(state, *, chrom: str, start: int, end: int,
 def insertion_lens_payload(state, *, chrom: str, pos: int, dataset_id: Optional[str] = None,
                            tolerance: int = DEFAULT_TOLERANCE, len_min: int = DEFAULT_MIN_LEN,
                            len_max: Optional[int] = None, ref: Optional[int] = None,
-                           length: Optional[int] = None, include_duplicates: bool = False,
+                           length: Optional[int] = None, include_duplicates: bool = False, include_qcfail: bool = False,
                            flank: int = DEFAULT_FLANK,
                            max_carriers: int = DEFAULT_MAX_CARRIERS,
                            max_reference: int = DEFAULT_MAX_REFERENCE,
@@ -1071,7 +1080,7 @@ def insertion_lens_payload(state, *, chrom: str, pos: int, dataset_id: Optional[
     key = (
         dataset_id, stamps, repr(chrom_map), repr(links),
         chrom, int(pos), int(tolerance), int(len_min),
-        len_max, ref, length, bool(include_duplicates), int(flank), int(max_carriers), int(max_reference), bool(consensus),
+        len_max, ref, length, bool(include_duplicates), bool(include_qcfail), int(flank), int(max_carriers), int(max_reference), bool(consensus),
         bool(include_sequences), repr(sorted(loader_kwargs.items())), daf, signal_filter_key(state),
     )
     with _cache_lock:
@@ -1083,7 +1092,7 @@ def insertion_lens_payload(state, *, chrom: str, pos: int, dataset_id: Optional[
         paths, chrom, pos=int(pos), tolerance=max(0, int(tolerance)), len_min=max(1, int(len_min)),
         len_max=int(len_max) if len_max is not None else None, flank=int(flank),
         ref=int(ref) if ref is not None else None, length=int(length) if length is not None else None,
-        include_duplicates=bool(include_duplicates),
+        include_duplicates=bool(include_duplicates), include_qcfail=bool(include_qcfail),
         max_carriers=max(1, int(max_carriers)), max_reference=max(0, int(max_reference)),
         consensus=consensus, include_sequences=include_sequences, loader_kwargs=loader_kwargs,
         chrom_map=chrom_map,

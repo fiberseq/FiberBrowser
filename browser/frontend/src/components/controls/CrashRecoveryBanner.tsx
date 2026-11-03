@@ -372,6 +372,7 @@ export async function restoreSnapshot(saved: SerializedState) {
     minFootprints: r.minFootprints,
     minFootprintsAuto: r.minFootprintsAuto ?? false,
     showDuplicateReads: r.showDuplicateReads ?? false,
+    showQcFailReads: r.showQcFailReads ?? false,
     enabledCigarTypes: r.enabledCigarTypes,
     svDisplayEnabled: r.svDisplayEnabled ?? true,
     svMinLen: r.svMinLen ?? 50,

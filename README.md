@@ -24,7 +24,7 @@ together with FiberHMM 3.0 and installs it.
 |----------|---------|
 | The Mac app (Apple silicon, macOS 14+) | Download `FiberBrowser-<version>-arm64.dmg` from [Releases](https://github.com/fiberseq/FiberBrowser/releases) and drag it to Applications. It bundles Python, FiberHMM 3, minimap2 and BLAST+. |
 | The Windows app (Windows 10 2004+ or 11, x64) | Run `FiberBrowser-<version>-Setup.exe` from [Releases](https://github.com/fiberseq/FiberBrowser/releases). It runs in WSL 2 and opens in its own window. |
-| The `fiberbrowser` command (macOS, Linux, or WSL; Python 3.10+) | `pipx install "fiberbrowser[app]"` (or `python3 -m pip install "fiberbrowser[app]"`). This installs FiberHMM 3 (`fiberhmm[consensus]>=3.0.2,<4`) from PyPI. |
+| The `fiberbrowser` command (macOS, Linux, or WSL; Python 3.10+) | `pipx install "fiberbrowser[app]"` (or `python3 -m pip install "fiberbrowser[app]"`). This installs FiberHMM 3 (`fiberhmm[consensus]>=3.0.3,<4`) from PyPI. |
 | A source checkout | `git clone https://github.com/fiberseq/FiberBrowser && cd FiberBrowser`, then `bash scripts/install.sh` (or `python3 -m pip install -r requirements.txt`) and `python browser.py`. |
 | A read-only server for reviewers | The Docker image `ghcr.io/fiberseq/fiberbrowser:<version>` (runs `--public`). |
 
@@ -57,6 +57,11 @@ walks through the main tools in 58 steps. It never changes your own work. The
 follows the same path in text, and the
 [user guide](https://github.com/fiberseq/FiberBrowser/blob/main/docs/guide.md)
 has a screenshot of every step.
+
+QC-fail reads (`0x200`), including FiberHMM DAF strand-swap chimeras, are
+excluded from read panels and analyses by default. **Quality → Show QC-fail
+reads (incl. FiberHMM chimeras)** includes them for inspection; the choice is
+saved in sessions. See [Quality filters](docs/guide.md#34-quality-filters).
 
 ## What you can do
 

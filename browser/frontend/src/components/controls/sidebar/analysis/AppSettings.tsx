@@ -1,3 +1,4 @@
+import { FiberhmmUpdates } from '../../../appUpdate/FiberhmmUpdates';
 import { useCallback, useEffect, useState } from 'react';
 import {
   getAppInfo, removeGithubToken, saveGithubToken, setFiberhmmChoice, setUpdateSettings, type AppInfo,
@@ -48,6 +49,7 @@ export const APP_SETTINGS = defineSettings({
 });
 
 const SOURCE_TEXT: Record<string, string> = {
+  updated: 'updated FiberHMM',
   bundled: 'bundled with the app',
   installed: 'installed in FiberBrowser\'s Python',
   env: 'from FIBERHMM_SOURCE_DIR',
@@ -92,7 +94,7 @@ function AppSettingsBody() {
 
   const apply = useCallback((next: AppInfo) => {
     setInfo(next);
-    setMode(next.fiberhmm.app_choice?.source ?? 'bundled');
+    setMode(next.fiberhmm.app_choice?.source === 'custom' ? 'custom' : 'bundled');
     setCustomPath(next.fiberhmm.app_choice?.custom_path ?? '');
     setManifest(next.updates.manifest_url ?? '');
   }, []);
@@ -127,7 +129,7 @@ function AppSettingsBody() {
           <SidebarSettingRow
             setting={APP_SETTINGS.fiberhmm}
             helpText={fh.packaged
-              ? 'The app runs the FiberHMM bundled with it. FIBERHMM_SOURCE_DIR, then a custom source tree chosen here, override it; one lacking what this build needs is not used.'
+              ? 'The app runs bundled FiberHMM or a verified update. FIBERHMM_SOURCE_DIR, then a custom source tree chosen here, override it; one lacking what this build needs is not used.'
               : 'A source or pip run: FIBERHMM_SOURCE_DIR, then fiberhmm_source_dir in ~/.fiberhmm/browser_settings.json, then the installed fiberhmm package.'}
           >
             {fh.packaged ? (
@@ -189,9 +191,7 @@ function AppSettingsBody() {
           {fh.requested.source === 'env' && (
             <SidebarSettingNote>FIBERHMM_SOURCE_DIR is set for this run; it wins over the choice above.</SidebarSettingNote>
           )}
-          {!fh.packaged && (
-            <SidebarSettingNote>FiberHMM updates: pip install -U fiberhmm (in FiberBrowser's Python).</SidebarSettingNote>
-          )}
+          <FiberhmmUpdates selection={fh} />
 
           <div className="pt-1" />
           <SidebarSettingToggle
@@ -276,7 +276,7 @@ function AppSettingsBody() {
           )}
           {info.updates.disabled && <SidebarSettingNote>{info.updates.disabled}</SidebarSettingNote>}
           <SidebarSettingNote tone="slate">
-            Privacy: a check is a plain request for the update manifest{info.updates.source === 'github' ? ' (and GitHub\'s release list)' : ''}; nothing about this computer or your data is sent. Updates are never installed by themselves: you open the downloaded, checksum-verified installer.
+            Privacy: a check is a plain request for the update manifest{info.updates.source === 'github' ? ' (and GitHub\'s release list)' : ''} and PyPI’s FiberHMM release list; nothing about this computer or your data is sent. You choose when to install updates.
           </SidebarSettingNote>
         </>
       )}

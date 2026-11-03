@@ -1,9 +1,10 @@
 /**
  * The update check in the window: the quiet check at startup (once per page; nothing when it is turned off in
  * Settings), its one-line banner, and the update dialog (version, notes, download with sha256 check, open the
- * installer). The app never replaces itself: the person runs the DMG or the installer.
+ * installer), or a verified install and restart with session autosave.
  */
 import { useEffect } from 'react';
+import { FiberhmmUpdates } from './FiberhmmUpdates';
 import type { UpdateCheck } from '../../api/appUpdate';
 import { AlertTriangle, Download, ExternalLink, X } from '../ui/Icons';
 import { updatesAvailableHere, useAppUpdateStore } from './appUpdateStore';
@@ -32,8 +33,8 @@ const BANNER_STATUSES = new Set(['update_available', 'auth_required', 'auth_inva
 
 export function AppUpdateBanner() {
   const { check, bannerDismissed, dialogOpen, openDialog, dismissBanner } = useAppUpdateStore();
-  if (!check || bannerDismissed || dialogOpen || !BANNER_STATUSES.has(check.status)) return null;
-  const update = check.status === 'update_available';
+  if (!check || bannerDismissed || dialogOpen || (!BANNER_STATUSES.has(check.status) && check.fiberhmm?.status !== 'update_available')) return null;
+  const update = check.status === 'update_available' || check.fiberhmm?.status === 'update_available';
   return (
     <div
       role="status"
@@ -41,7 +42,7 @@ export function AppUpdateBanner() {
       className="fixed bottom-3 right-3 z-[90] flex max-w-sm items-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-2 text-[12px] text-gray-700 shadow-lg dark:border-white/10 dark:bg-gray-800 dark:text-gray-200"
     >
       {update ? <Download size={14} /> : <AlertTriangle size={14} />}
-      <span className="min-w-0 flex-1">{update ? updateSummary(check) : check.message}</span>
+      <span className="min-w-0 flex-1">{check.status === 'update_available' ? updateSummary(check) : check.fiberhmm?.status === 'update_available' ? `FiberHMM ${check.fiberhmm.latest} is available.` : check.message}</span>
       <button type="button" className="fb-btn-secondary px-2 py-0.5 text-[11px]" onClick={() => openDialog(false)}>
         {update ? 'View' : 'Settings'}
       </button>
@@ -55,7 +56,7 @@ export function AppUpdateBanner() {
 export function AppUpdateDialog() {
   const {
     dialogOpen, closeDialog, check, checking, error, runCheck, download, startDownload, cancelDownload,
-    openDownload, openError,
+    openDownload, openError, finishInstall,
   } = useAppUpdateStore();
   useEffect(() => {
     if (!dialogOpen) return;
@@ -64,11 +65,11 @@ export function AppUpdateDialog() {
     return () => window.removeEventListener('keydown', onKey);
   }, [dialogOpen, closeDialog]);
   if (!dialogOpen) return null;
-  const file = check?.download;
+  const file = download.mode === 'install' ? check?.install_download ?? check?.download : check?.download;
   // A download of another file (an earlier offer) is not this one: offer this one afresh.
   const thisFile = !!file && download.name === file.name && (!download.sha256 || download.sha256 === file.sha256);
   const state = download.state === 'idle' || thisFile ? download.state : 'idle';
-  const busy = state === 'downloading' || state === 'verifying';
+  const busy = state === 'downloading' || state === 'verifying' || state === 'ready';
   const progress = download.total ? Math.min(100, Math.round(((download.received ?? 0) / download.total) * 100)) : null;
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center" onClick={closeDialog}>
@@ -79,15 +80,15 @@ export function AppUpdateDialog() {
         aria-labelledby="app-update-title"
         data-testid="app-update-dialog"
         onClick={e => e.stopPropagation()}
-        className="relative mx-4 w-full max-w-md rounded-lg bg-white shadow-xl dark:bg-gray-800"
+        className="relative mx-4 flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col overflow-hidden rounded-lg bg-white shadow-xl dark:bg-gray-800"
       >
-        <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-white/10">
+        <div className="flex shrink-0 items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-white/10">
           <h2 id="app-update-title" className="text-sm font-semibold text-gray-700 dark:text-gray-200">Software update</h2>
           <button type="button" className="fb-icon-btn h-6 w-6" aria-label="Close software update" onClick={closeDialog}>
             <X size={14} />
           </button>
         </div>
-        <div className="space-y-3 px-4 py-3 text-[13px] text-gray-700 dark:text-gray-300">
+        <div data-testid="app-update-content" className="min-h-0 overflow-y-auto space-y-3 px-4 py-3 text-[13px] text-gray-700 dark:text-gray-300">
           {checking && !check && <p>Checking for updates…</p>}
           {error && <p className="text-rose-700 dark:text-rose-400">Couldn't check: {error}</p>}
           {check && (
@@ -116,17 +117,30 @@ export function AppUpdateDialog() {
                         {file.name}{file.size ? ` · ${formatBytes(file.size)}` : ''} · checked against its sha256 before it opens
                       </div>
                       {state === 'idle' || state === 'error' || state === 'cancelled' ? (
+                        <div className="flex gap-2">
+                        {check.installable && !download.fallback && (
+                          <button type="button" className="fb-btn-primary px-3 py-1 text-[12px]"
+                            onClick={() => void startDownload(true)} data-testid="app-update-install">
+                            Install and restart
+                          </button>
+                        )}
                         <button type="button" className="fb-btn-primary inline-flex items-center gap-1.5 px-3 py-1 text-[12px]"
                           onClick={() => void startDownload()} data-testid="app-update-download">
                           <Download size={13} /> Download {check.latest}
                         </button>
+                        </div>
                       ) : null}
                       {busy && (
                         <div className="flex items-center gap-2 text-[12px]">
-                          <span>{state === 'verifying' ? 'Checking sha256…' : `Downloading… ${progress !== null ? `${progress}%` : formatBytes(download.received)}`}</span>
+                          <span role="status">{state === 'ready' ? 'Ready. Saving session before restart…' : state === 'verifying' ? (download.mode === 'install' ? 'Verifying checksum and signature…' : 'Checking sha256…') : `Downloading… ${progress !== null ? `${progress}%` : formatBytes(download.received)}`}</span>
                           <button type="button" className="fb-btn-secondary px-2 py-0.5 text-[11px]" onClick={() => void cancelDownload()}>Cancel</button>
+                          {state === 'ready' && openError && <button type="button" onClick={() => void finishInstall()}>Retry restart</button>}
                         </div>
                       )}
+                      {state === 'restarting' && <div>
+                        <p role="status">Restarting FiberBrowser… Your saved session will reopen.</p>
+                        {openError && <button type="button" onClick={() => void finishInstall()}>Retry restart</button>}
+                      </div>}
                       {state === 'done' && (
                         <div className="space-y-1">
                           <div className="text-[12px] text-emerald-700 dark:text-emerald-400">Downloaded and verified: {download.path}</div>
@@ -139,8 +153,8 @@ export function AppUpdateDialog() {
                           </div>
                         </div>
                       )}
-                      {(state === 'error' || state === 'cancelled') && download.error && (
-                        <div className="text-[12px] text-rose-700 dark:text-rose-400">{download.error}</div>
+                      {download.error && (
+                        <div role="alert" className="text-[12px] text-rose-700 dark:text-rose-400">{download.error}</div>
                       )}
                       {openError && <div className="text-[12px] text-rose-700 dark:text-rose-400">{openError}</div>}
                     </div>
@@ -152,8 +166,9 @@ export function AppUpdateDialog() {
               </p>
             </>
           )}
+          <FiberhmmUpdates />
           <div className="flex justify-end gap-2 pt-1">
-            <button type="button" className="fb-btn-secondary px-3 py-1 text-[12px]" disabled={checking}
+            <button type="button" className="fb-btn-secondary px-3 py-1 text-[12px]" disabled={checking || busy || state === 'restarting'}
               onClick={() => void runCheck({ force: true })}>
               {checking ? 'Checking…' : 'Check again'}
             </button>

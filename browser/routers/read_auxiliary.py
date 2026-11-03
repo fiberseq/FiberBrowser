@@ -198,6 +198,7 @@ async def get_coverage(
     bins: int = Query(1000),
     dataset_id: Optional[str] = Query(None),
     include_duplicates: bool = Query(False),
+    include_qcfail: bool = Query(False, description="Include SAM QC-fail reads (0x200)"),
     state=Depends(get_state),
 ):
     """Return binned read counts across a region (duplicate-flagged molecules
@@ -212,7 +213,7 @@ async def get_coverage(
         end=end,
         bins=bins,
         dataset_id=dataset_id,
-        include_duplicates=include_duplicates,
+        include_duplicates=include_duplicates, include_qcfail=include_qcfail,
     )
 
 

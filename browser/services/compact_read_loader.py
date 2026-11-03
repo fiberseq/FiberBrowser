@@ -841,6 +841,7 @@ def build_compact_reads_from_bigbed(
     infer_legacy_layers=True,
     legacy_nuc_min_size=90,
     include_duplicates=False,
+    include_qcfail=False,
     min_footprints=0,
     bigbed_handle_getter=None,
     overlay_type_detector=None,
@@ -1554,6 +1555,7 @@ def build_compact_reads_from_bam(
     infer_legacy_layers=True,
     legacy_nuc_min_size=90,
     include_duplicates=False,
+    include_qcfail=False,
     min_footprints=0,
     bam_handle_getter=None,
     chrom_map=None,
@@ -1595,7 +1597,7 @@ def build_compact_reads_from_bam(
         include_layer_qualities=include_layer_qualities,
         infer_legacy_layers=infer_legacy_layers,
         legacy_nuc_min_size=legacy_nuc_min_size,
-        include_duplicates=include_duplicates,
+        include_duplicates=include_duplicates, include_qcfail=include_qcfail,
         min_footprints=min_footprints,
         bam_handle_getter=bam_handle_getter,
         chrom_map=chrom_map,
@@ -1791,6 +1793,7 @@ def _build_compact_reads_from_bam_region(
     infer_legacy_layers=True,
     legacy_nuc_min_size=90,
     include_duplicates=False,
+    include_qcfail=False,
     min_footprints=0,
     bam_handle_getter=None,
     chrom_map=None,
@@ -1852,6 +1855,8 @@ def _build_compact_reads_from_bam_region(
         "records_unmapped": 0,
         "records_nonspanning": 0,
         "records_duplicate_hidden": 0,
+        "records_qcfail_hidden": 0,
+        "records_chimera_hidden": 0,
         "tagged_reads": 0,
         "raw_reads": 0,
         "terminal_gap_filtered": 0,
@@ -1950,13 +1955,20 @@ def _build_compact_reads_from_bam_region(
             # A sampled display load (services/read_sampling.py): decided on the
             # name after signal eligibility; a skipped read leaves its extent.
             if sampler is not None:
-                counted = include_duplicates or not read.is_duplicate
+                counted = (include_duplicates or not read.is_duplicate) and (include_qcfail or not getattr(read, "is_qcfail", False))
                 if not sampler.keep(read.query_name):
                     if counted:
                         sampler.skip(read.reference_start, read.reference_end)
                     continue
                 if counted:
                     sampler.kept(read.reference_start, read.reference_end)
+            if getattr(read, "is_qcfail", False) and not include_qcfail:
+                if profile_bam:
+                    if getattr(read, "is_duplicate", False) and not include_duplicates:
+                        profile_counts["records_duplicate_hidden"] += 1
+                    profile_counts["records_qcfail_hidden"] += 1
+                    profile_counts["records_chimera_hidden"] += bool(read.has_tag("xc") and read.get_tag("xc") == "strand_swap")
+                continue
             is_duplicate = bool(getattr(read, "is_duplicate", False))
             if is_duplicate and not include_duplicates:
                 if profile_bam:
@@ -2050,6 +2062,7 @@ def _build_compact_reads_from_bam_region(
                             0,
                         ]],
                     }
+                    read_data.update(qcfail_metadata(read))
                     if is_duplicate:
                         read_data["duplicate"] = True
                     if include_layers and ma_tags is not None:
@@ -2403,6 +2416,7 @@ def _build_compact_reads_from_bam_region(
             if is_duplicate:
                 read_data["duplicate"] = True
 
+            read_data.update(qcfail_metadata(read))
             if fp_quality_list:
                 read_data["qualities"] = fp_quality_list
 
@@ -2711,3 +2725,11 @@ def extract_cigar_events(read, region_start, region_end):
 def build_cigar_coord_mapper(cigartuples, ref_start):
     """Build efficient CIGAR coordinate mapper."""
     return CigarCoordMapper(cigartuples, ref_start)
+
+
+def qcfail_metadata(read):
+    """QC annotation shared by raw and footprint-bearing BAM reads."""
+    if not getattr(read, "is_qcfail", False):
+        return {}
+    return {"qcfail": True, **({"chimera": "strand_swap"}
+        if read.has_tag("xc") and read.get_tag("xc") == "strand_swap" else {})}

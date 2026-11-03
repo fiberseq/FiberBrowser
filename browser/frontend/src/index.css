@@ -99,9 +99,18 @@ html.dark body {
   color-scheme: dark;
 }
 
+/* The app fills the window and never scrolls as a page: panels, drawers and dialogs scroll inside themselves.
+   A scrolled root (WKWebView in the Mac app lets it scroll when anything attached to <body> overflows, or when a
+   focus or scrollIntoView reaches it) cut off the top toolbar and put every click above the pointer. */
+html, body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 #root {
-  width: 100vw;
-  height: 100vh;
+  position: fixed;
+  inset: 0;
 }
 
 /* Native controls take the brand colour (checkboxes, radios, sliders). */

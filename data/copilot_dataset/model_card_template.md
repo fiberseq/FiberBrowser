@@ -86,7 +86,13 @@ The browser validates every plan through the same Python validator that produced
 
 ## Citation
 
-If this model is useful in your work, please cite the FiberBrowser repository.
+If this model is useful in your work, please cite the FiberBrowser and FiberHMM preprint:
+
+> Tullius, T. W., Catalano, C., Ranchalis, J., Hu, J., Vollger, M. R., Stergachis, A. B., & Levine, M. S. (2026).
+> FiberBrowser: a unified framework for single-molecule genomics. *bioRxiv*.
+> https://doi.org/10.64898/2026.10.29.762797
+
+Please also give the FiberBrowser version you used.
 
 ## License
 

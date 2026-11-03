@@ -599,6 +599,14 @@ footprint classes reads the calls with its own settings). The toolbar's
 **Quality** group shows the cutoffs in effect, and its **Edit
 filters** opens this tab.
 
+QC-fail reads (SAM `0x200`), including FiberHMM DAF strand-swap chimeras
+(`xc:Z:strand_swap`), are excluded from panels and analyses by default.
+**Show QC-fail reads (incl. FiberHMM chimeras)** in **Quality** (also under
+**Reads & Display → Read Filters**) includes them for inspection. They have an
+amber marker and a QC/chimera label in the hover and Read Stats inspector;
+hidden counts report chimeras separately. Sessions save the switch; older
+sessions start with it off. Other filters, such as minimum footprints, still apply.
+
 ### 35. Rules
 
 ![Step 35: the Rules panel](images/guide/35_rules.png)

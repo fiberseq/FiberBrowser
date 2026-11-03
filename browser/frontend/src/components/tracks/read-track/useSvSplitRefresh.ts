@@ -12,11 +12,12 @@ export function useSvSplitRefresh({ stateKey, datasetId, chrom, start, end, enab
   stateKey: string; datasetId: string; chrom: string; start: number; end: number; enabled: boolean;
 }): void {
   const def = useBrowserStore(s => s.svSplits[stateKey]);
+  const qcfail = useBrowserStore(s => Boolean(s.showQcFailReads));
   const duplicates = useBrowserStore(s => Boolean(s.showDuplicateReads));
   useEffect(() => {
     if (!enabled || !def || def.datasetId !== datasetId || def.chrom !== chrom) return;
     // Classified for this view (and duplicate setting) already.
-    if (def.viewStart === start && def.viewEnd === end && Boolean(def.includeDuplicates) === duplicates) return;
+    if (def.viewStart === start && def.viewEnd === end && Boolean(def.includeDuplicates) === duplicates && Boolean(def.includeQcFail) === qcfail) return;
     if (!(def.ref < end && def.end + 1 > start)) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
@@ -24,5 +25,5 @@ export function useSvSplitRefresh({ stateKey, datasetId, chrom, start, end, enab
         .catch(() => { /* the groups stay as they were */ });
     }, 250);
     return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [enabled, def, stateKey, datasetId, chrom, start, end, duplicates]);
+  }, [enabled, def, stateKey, datasetId, chrom, start, end, duplicates, qcfail]);
 }

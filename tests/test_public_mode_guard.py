@@ -13,10 +13,13 @@ PUBLIC_DENIED = {
     ("POST", "/api/cluster-regions"), ("POST", "/api/scan-correspondence"),
     ("GET", "/api/app/performance"), ("POST", "/api/app/performance"),
     # the app's own settings, its FiberHMM choice and its update check (the host's files, keychain, downloads)
+    ("GET", "/api/app/fiberhmm/update"), ("POST", "/api/app/fiberhmm/install"),
+    ("POST", "/api/app/fiberhmm/revert"), ("POST", "/api/app/fiberhmm/restart"),
     ("GET", "/api/app/info"), ("POST", "/api/app/fiberhmm"), ("GET", "/api/app/update"),
     ("POST", "/api/app/update/settings"), ("POST", "/api/app/update/token"), ("DELETE", "/api/app/update/token"),
     ("POST", "/api/app/update/download"), ("GET", "/api/app/update/download"),
     ("POST", "/api/app/update/download/cancel"), ("POST", "/api/app/update/open"),
+    ("POST", "/api/app/update/install"), ("POST", "/api/app/update/restart"),
     # identifying an insertion: host processes (BLAST/minimap2), library downloads, Dfam
     ("GET", "/api/insertions/te_library"), ("POST", "/api/insertions/te_library/download"),
     ("POST", "/api/insertions/identify"), ("GET", "/api/insertions/identify/jobs/{job_id}"),
@@ -193,6 +196,11 @@ def test_allowlist_has_no_stale_entries(standalone_app):
 
 
 @pytest.mark.parametrize("method,path", [
+    ("POST", "/api/app/fiberhmm/install"),
+    ("POST", "/api/app/fiberhmm/revert"),
+    ("POST", "/api/app/fiberhmm/restart"),
+    ("POST", "/api/app/update/install"),
+    ("POST", "/api/app/update/restart"),
     ("GET", "/api/pick_file"),
     ("POST", "/api/datasets/add"),
     ("POST", "/api/load_folder?path=/etc"),

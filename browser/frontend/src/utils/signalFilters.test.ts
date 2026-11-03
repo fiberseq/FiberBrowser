@@ -1,6 +1,6 @@
 import { getCoaccMatrixImageUrl, getCoaccStripUrl } from '../api/coaccessibility';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { DEFAULT_SIGNAL_FILTERS, keepsSignal, signalFilterParams, signalFilterUrl, type SignalEvidence } from './signalFilters';
+import { DEFAULT_SIGNAL_FILTERS, readPolicyHiddenText, keepsSignal, signalFilterParams, signalFilterUrl, type SignalEvidence } from './signalFilters';
 import { useBrowserStore } from '../stores/browserStore';
 import { serializeState } from '../stores/historySlice';
 import { readRegionGeneration } from '../api/loadedReadRegion';
@@ -73,4 +73,12 @@ describe('alignment signal filters', () => {
     applyImportedState({ datasets: [], overlays: [], has_fasta: false });
     expect(useBrowserStore.getState().signalFilters).toEqual(DEFAULT_SIGNAL_FILTERS);
   });
+});
+
+
+it('reports hidden QC-fail reads and the FiberHMM chimera subset separately', () => {
+  expect(readPolicyHiddenText({ total: 0, kept: 0, hidden: 0, background: 0, detectable: 0,
+    unclassified: 0, unscored: 0, unknown: 0, structure_scored: 0,
+    duplicate_hidden: 2, qcfail_hidden: 3, chimera_hidden: 1 })).toBe(
+    '2 duplicate reads hidden · 3 QC-fail reads hidden · 1 chimeric reads hidden (FiberHMM QC fail)');
 });

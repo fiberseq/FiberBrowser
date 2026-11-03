@@ -37,6 +37,7 @@ export interface SignalCounts {
   total: number; kept: number; hidden: number;
   background: number; detectable: number; unclassified: number; unscored: number; unknown: number;
   structure_scored: number;
+  duplicate_hidden?: number; qcfail_hidden?: number; chimera_hidden?: number;
 }
 export const SIGNAL_LABELS: Record<SignalEvidence['status'], string> = {
   background: 'Background-compatible signal', detectable: 'Detectable assay signal',
@@ -71,7 +72,17 @@ export function signalFilterUrl(url: string): string {
 }
 
 /** Exact signal counts in this locus, before call filters and display sampling. */
+export function readPolicyHiddenText(counts: SignalCounts): string {
+  const n = (value: number) => value.toLocaleString();
+  return [
+    counts.duplicate_hidden ? `${n(counts.duplicate_hidden)} duplicate reads hidden` : '',
+    counts.qcfail_hidden ? `${n(counts.qcfail_hidden)} QC-fail reads hidden` : '',
+    counts.chimera_hidden ? `${n(counts.chimera_hidden)} chimeric reads hidden (FiberHMM QC fail)` : '',
+  ].filter(Boolean).join(' · ');
+}
+
 export function signalCountText(counts: SignalCounts): string {
   const n = (value: number) => value.toLocaleString();
-  return `${n(counts.kept)} of ${n(counts.total)} kept · ${n(counts.hidden)} hidden · ${n(counts.unclassified)} unclassified · ${n(counts.unscored)} unscored · ${n(counts.unknown)} unavailable`;
+  const hidden = readPolicyHiddenText(counts);
+  return `${hidden ? hidden + ' · ' : ''}${n(counts.kept)} of ${n(counts.total)} kept · ${n(counts.hidden)} hidden · ${n(counts.unclassified)} unclassified · ${n(counts.unscored)} unscored · ${n(counts.unknown)} unavailable`;
 }

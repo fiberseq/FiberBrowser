@@ -78,17 +78,18 @@ def _compact_record(read, file_chrom: str, floor: int) -> dict:
         "reference_end": int(read.reference_end),
         "sv": extract_sv_events(read, floor) or [],
         "duplicate": bool(read.is_duplicate),
+        "qcfail": bool(getattr(read, "is_qcfail", False)),
         "file_chrom": file_chrom,
     }
 
 
 def classify_compact(entries, *, t: str, ref: int, length: int, margin: int = SV_SPAN_MARGIN,
-                     include_duplicates: bool = False) -> dict:
+                     include_duplicates: bool = False, include_qcfail: bool = False) -> dict:
     """``classify_records`` over compact entries (``_compact_record``); each
     entry's ``record`` is the entry itself (or what ``item`` carried)."""
     by_name: dict[str, dict] = {}
     for compact, item in entries:
-        if compact["duplicate"] and not include_duplicates:
+        if (compact["duplicate"] and not include_duplicates) or (compact.get("qcfail") and not include_qcfail):
             continue
         allele, evidence = classify_allele_evidence(compact, t, ref, length, margin, chrom=compact["file_chrom"])
         name = compact["id"]
@@ -100,7 +101,7 @@ def classify_compact(entries, *, t: str, ref: int, length: int, margin: int = SV
 
 
 def classify_records(records, *, t: str, ref: int, length: int, margin: int = SV_SPAN_MARGIN,
-                     include_duplicates: bool = False) -> dict:
+                     include_duplicates: bool = False, include_qcfail: bool = False) -> dict:
     """Every primary record as carrier (0), reference (1) or not informative
     (2) for one SV: ``{name: {'allele', 'evidence', 'record'}}``. A name seen
     twice (merged files) keeps its most informative call. The allele split
@@ -113,7 +114,7 @@ def classify_records(records, *, t: str, ref: int, length: int, margin: int = SV
     entries = ((_compact_record(item[0], item[1], floor), item) for item in records
                if include_duplicates or not item[0].is_duplicate)
     return classify_compact(entries, t=t, ref=ref, length=length, margin=margin,
-                            include_duplicates=include_duplicates)
+                            include_duplicates=include_duplicates, include_qcfail=include_qcfail)
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +191,7 @@ def scan_view(state, dataset_id: str, chrom: str, start: int, end: int, floor: i
 
 
 def sv_split_payload(state, *, dataset_id: str, chrom: str, start: int, end: int, t: str, ref: int,
-                     length: int, margin: Optional[int] = None, include_duplicates: bool = False) -> dict:
+                     length: int, margin: Optional[int] = None, include_duplicates: bool = False, include_qcfail: bool = False) -> dict:
     """Every primary read in ``[start, end)`` as carrier (0), reference (1) or
     not informative (2) for the SV ``t``/``ref``/``length`` (an insertion's
     clipped reads are carriers: sv_events.carrier_evidence)."""
@@ -205,7 +206,7 @@ def sv_split_payload(state, *, dataset_id: str, chrom: str, start: int, end: int
     margin = SV_SPAN_MARGIN if margin is None else max(0, int(margin))
     entries = scan_view(state, dataset_id, chrom, int(start), int(end), allele_floor(length))
     by_name = classify_compact(((c, c) for c in entries), t=t, ref=ref, length=length,
-                               margin=margin, include_duplicates=include_duplicates)
+                               margin=margin, include_duplicates=include_duplicates, include_qcfail=include_qcfail)
     assignments: dict[str, int] = {}
     counts = [0, 0, 0]
     by_kind = {"cigar": 0, "sa": 0, "clip": 0}

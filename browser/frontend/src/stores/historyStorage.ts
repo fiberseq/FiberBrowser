@@ -31,7 +31,7 @@ function openDB(): Promise<IDBDatabase> {
   });
 }
 
-export async function saveAutoSave(state: SerializedState, acted = false, bootId: string | null = null): Promise<void> {
+export async function saveAutoSave(state: SerializedState, acted = false, bootId: string | null = null, required = false): Promise<void> {
   try {
     const db = await openDB();
     const tx = db.transaction(STORE_NAME, 'readwrite');
@@ -41,9 +41,11 @@ export async function saveAutoSave(state: SerializedState, acted = false, bootId
     await new Promise<void>((resolve, reject) => {
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error ?? new Error('Session save was aborted'));
     });
     db.close();
-  } catch {
+  } catch (error) {
+    if (required) throw error;
     // Silently fail — IndexedDB may be unavailable
   }
 }

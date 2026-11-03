@@ -70,6 +70,7 @@ async def get_reads_compact(
     filter_set: Optional[str] = Query(None, description="A read-name set registered with POST /api/read_sets (a subset too large for filter_ids); narrowed by filter_ids if both"),
     include_cigar: bool = Query(False, description="Include CIGAR events (mismatches, insertions, deletions) for visualization"),
     include_duplicates: bool = Query(False, description="Include BAM 0x400 / BigBed isDuplicate reads (hidden by default)"),
+    include_qcfail: bool = Query(False, description="Include SAM QC-fail reads (0x200)"),
     hide_terminal_gaps: bool = Query(True, description="Hide leading/trailing gaps in reads (before first footprint, after last footprint)"),
     terminal_gap_threshold: int = Query(500, description="Max terminal gap size (bp). Reads with leading/trailing gaps larger than this are filtered out. 0 = no filtering."),
     infer_legacy_layers: bool = Query(True, description="Infer TF/nuc/FIRE layers from legacy primary footprints"),
@@ -142,7 +143,7 @@ async def get_reads_compact(
         cluster_focus=cluster_focus,
         filter_ids=filter_ids,
         include_cigar=include_cigar,
-        include_duplicates=include_duplicates,
+        include_duplicates=include_duplicates, include_qcfail=include_qcfail,
         hide_terminal_gaps=hide_terminal_gaps,
         terminal_gap_threshold=terminal_gap_threshold,
         infer_legacy_layers=infer_legacy_layers,
@@ -196,6 +197,7 @@ async def get_reads_compact_all(
     infer_legacy_layers: bool = Query(True, description="Infer TF/nuc/FIRE layers from legacy primary footprints"),
     legacy_nuc_min_size: int = Query(90, description="Footprint size cutoff for inferred legacy nucleosomes"),
     include_duplicates: bool = Query(False, description="Include BAM 0x400 / BigBed isDuplicate reads (hidden by default)"),
+    include_qcfail: bool = Query(False, description="Include SAM QC-fail reads (0x200)"),
     sample_seed: Optional[str] = Query(None, description="Seed for reproducible sampling paths"),
     pin_ids: Optional[str] = Query(None, description="Comma-separated read IDs the display sample keeps when they are in view (a read gone to by name)"),
     min_sv_len: int = Query(50, description="Smallest deletion/insertion/clip (bp) in `sv` events and `sv_summary` (served at no less than 50 here)"),
@@ -211,6 +213,7 @@ async def get_reads_compact_all(
     t0 = time.time()
     infer_legacy_layers = _query_bool(infer_legacy_layers, True)
     include_duplicates = _query_bool(include_duplicates, False)
+    include_qcfail = _query_bool(include_qcfail, False)
     legacy_nuc_min_size = _query_int(legacy_nuc_min_size, 90)
     profile_max_reads = _query_int(profile_max_reads, 1000)
     requested_layers = normalize_requested_layers(layer_names)
@@ -268,7 +271,7 @@ async def get_reads_compact_all(
             terminal_gap_threshold=terminal_gap_threshold,
             infer_legacy_layers=infer_legacy_layers,
             legacy_nuc_min_size=legacy_nuc_min_size,
-            include_duplicates=include_duplicates,
+            include_duplicates=include_duplicates, include_qcfail=include_qcfail,
             sample_seed=sample_seed,
             min_sv_len=min_sv_len,
             include_sv_summary=include_sv_summary,
