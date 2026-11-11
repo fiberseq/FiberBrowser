@@ -1,5 +1,30 @@
 # Changelog
 
+## 3.0.3 — 2026-11-11
+
+FiberBrowser 3.0.3 bundles FiberHMM 3.0.4 and requires
+`fiberhmm[consensus]>=3.0.3,<4`.
+
+### Fixed
+
+- **New DAF-seq run accepts Hia5 reads.** A PacBio or Nanopore BAM with MM/ML
+  m6A calls (aligned or not) can now be run with Hia5 from the run wizard;
+  before, Hia5 was offered only for raw Nanopore POD5. The platform is read
+  from the reads, and no kinetics are needed. Library re-calls of Hia5 runs
+  work too.
+- **Download in the run wizard downloads the genome.** Clicking **Download**
+  for a genome that was already open from a local FASTA did nothing. That
+  FASTA is now used as the run's reference directly. Other downloads show
+  progress and can be cancelled; a failed download lists each mirror tried
+  and why it failed, with **Retry** and **Use a FASTA file instead**. The
+  download no longer replaces the genome open in the browser.
+- **An aligned, indexed BAM runs without minimap2.** The wizard refused every
+  run when minimap2 was missing, although FiberHMM calls an aligned BAM in
+  place. It now shows a warning for such a BAM and runs it. FASTQ and
+  unaligned BAMs still need minimap2.
+- **Library re-calls keep the chimera mode once.** With FiberHMM 3.0.4 the
+  recorded settings of a re-call match the original run exactly.
+
 ## 3.0.2 — 2026-11-03
 
 FiberBrowser 3.0.2 bundles FiberHMM 3.0.3 and requires

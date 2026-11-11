@@ -264,7 +264,7 @@ def test_status_reports_dorado_and_the_basecall_defaults(api, fake_dorado, monke
     status = api.get("/api/pipeline/status").json()
     assert status["dorado"]["ok"] is False and "nanoporetech/dorado" in status["dorado"]["hint"]
     assert status["default_basecall"]["model"] == "sup"
-    assert {e["id"]: e["raw_only"] for e in status["enzymes"]} == {"dddb": False, "ddda": False, "hia5": True}
+    assert {e["id"]: e["raw_only"] for e in status["enzymes"]} == {"dddb": False, "ddda": False, "hia5": False}
     _on_path(monkeypatch, os.path.dirname(fake_dorado))
     # Found after installing: "Check again" asks with refresh.
     assert api.get("/api/pipeline/status?refresh=1").json()["dorado"]["version"] == "2.0.1+fake"
@@ -278,12 +278,13 @@ def test_validate_a_pod5_run_without_dorado_shows_how_to_install_it(api, fake_en
     assert result["dorado"]["ok"] is False
 
 
-def test_pod5_and_reads_are_not_mixed_and_hia5_needs_pod5(api, fake_env, fake_dorado, monkeypatch):
+def test_pod5_and_reads_are_not_mixed(api, fake_env, fake_dorado, monkeypatch):
     _on_path(monkeypatch, os.path.dirname(fake_dorado))
     body = _pod5_body(fake_env, input_kind="reads")
     result = api.post("/api/pipeline/validate", json=body).json()
     fields = {e["field"] for e in result["errors"]}
-    assert {"enzyme", "reads"} <= fields  # Hia5 runs start from POD5; a POD5 folder is not reads
+    assert "reads" in fields  # a POD5 folder is not reads
+    assert "enzyme" not in fields  # Hia5 also runs from reads with MM/ML m6A calls
     fastq = fake_env / "r.fastq"
     fastq.write_text("@r\nACGT\n+\nIIII\n")
     body = _pod5_body(fake_env)

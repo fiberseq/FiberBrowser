@@ -73,6 +73,21 @@ describe('LibraryDetails re-call', () => {
     expect(button()).not.toBeNull();
   });
 
+  it('offers Re-call for Hia5 Fiber-seq entries (PacBio and Nanopore) as for DAF-seq', async () => {
+    for (const key of ['hia5-pacbio', 'hia5-nanopore']) {
+      api.get.mockImplementation(async (id: string) => ({ entry: { ...entry(id), chemistry: { key, declared: true, enzyme: 'hia5' } } }));
+      await act(async () => root.render(
+        <LibraryDetails entry={{ ...entry(key), chemistry: { key, declared: true, enzyme: 'hia5' } }} groups={[]} fiberhmmVersion="3.0.0"
+          onOpen={() => {}} onChanged={() => {}} onAddToGroup={() => {}} />));
+      expect(button()).not.toBeNull();
+    }
+    api.get.mockImplementation(async (id: string) => ({ entry: { ...entry(id), chemistry: { key: 'unknown', declared: false } } }));
+    await act(async () => root.render(
+      <LibraryDetails entry={{ ...entry('U'), chemistry: { key: 'unknown', declared: false } }} groups={[]} fiberhmmVersion="3.0.0"
+        onOpen={() => {}} onChanged={() => {}} onAddToGroup={() => {}} />));
+    expect(button()).toBeNull();
+  });
+
   it("drops a late dry-run answer for another entry and starts only the shown entry's reviewed plan", async () => {
     // Review round 4: A's dry run answered after B was selected, B showed A's plan,
     // and Start re-called B with no plan at all.

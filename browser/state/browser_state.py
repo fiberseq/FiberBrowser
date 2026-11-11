@@ -758,7 +758,7 @@ class BrowserState:
         self.refresh_circular_chrom_flags()
 
     @staticmethod
-    def _download_fasta_to_cache(url, fai_url=None, fasta_urls=None, fai_urls=None):
+    def _download_fasta_to_cache(url, fai_url=None, fasta_urls=None, fai_urls=None, progress=None, errors=None):
         """Download a remote FASTA and its .fai index to the cache directory, one download at a time per
         cache file name (services/download_locks.py): a second request for it waits and then finds the cached
         file, or (another source of that name) takes a source-hashed name."""
@@ -772,10 +772,11 @@ class BrowserState:
         plain = os.path.abspath(os.path.join(cache_dir, _plain_fasta_basename(first)))
         with holding(f"fasta-cache:{plain}"):
             return BrowserState._download_fasta_to_cache_unlocked(
-                url, fai_url=fai_url, fasta_urls=fasta_urls, fai_urls=fai_urls)
+                url, fai_url=fai_url, fasta_urls=fasta_urls, fai_urls=fai_urls, progress=progress, errors=errors)
 
     @staticmethod
-    def _download_fasta_to_cache_unlocked(url, fai_url=None, fasta_urls=None, fai_urls=None):
+    def _download_fasta_to_cache_unlocked(url, fai_url=None, fasta_urls=None, fai_urls=None, progress=None,
+                                          errors=None):
         """Download a remote FASTA to the cache directory and index it there (ensure_verified_index).
 
         Supports fallback URL lists: tries each URL in order until one succeeds.
@@ -785,9 +786,13 @@ class BrowserState:
             fai_url: Accepted for compatibility; the index is built locally.
             fasta_urls: List of FASTA URLs to try in order.
             fai_urls: Accepted for compatibility; the index is built locally.
+            progress: Optional ``progress(url, bytes_done, bytes_total)`` (total 0 when unknown), per chunk; it
+                may raise ``http_download.DownloadCancelled`` to stop: that propagates (no other mirror is tried).
+            errors: Optional list; each mirror that fails appends ``{"url", "error"}`` (why it failed).
 
         Returns the local path to the cached .fa file, or None on failure.
         """
+        from services.http_download import DownloadCancelled
         import urllib.request
         import hashlib
         import subprocess
@@ -824,11 +829,21 @@ class BrowserState:
         # Download .fa (can be large - show progress)
         if not os.path.exists(local_fa):
             downloaded = False
+            published = False
             for fa_url in fa_urls:
                 print(f"  Downloading FASTA: {fa_url}")
                 try:
-                    def _progress(block_num, block_size, total_size):
+                    download_tmp = local_fa + '.download.tmp'
+
+                    def _progress(block_num, block_size, total_size, fa_url=fa_url, download_tmp=download_tmp):
                         downloaded_bytes = block_num * block_size
+                        if progress is not None:
+                            # A block is one read, often shorter than block_size: the bytes on disk are the count.
+                            try:
+                                done = os.path.getsize(download_tmp)
+                            except OSError:
+                                done = 0
+                            progress(fa_url, done, max(int(total_size or 0), 0))
                         if total_size > 0:
                             pct = min(100, downloaded_bytes * 100 // total_size)
                             mb = downloaded_bytes / (1024 * 1024)
@@ -839,7 +854,6 @@ class BrowserState:
                             mb = downloaded_bytes / (1024 * 1024)
                             print(f"    {mb:.0f} MB downloaded...")
 
-                    download_tmp = local_fa + '.download.tmp'
                     _http_fetch(fa_url, download_tmp, _progress)
                     if fa_url.split('?')[0].endswith('.gz'):
                         print(f"  Decompressing FASTA: {os.path.basename(fa_url)}")
@@ -849,19 +863,33 @@ class BrowserState:
                     else:
                         os.rename(download_tmp, local_fa + '.tmp')
                     if not _ensure_plain_fasta(local_fa + '.tmp'):
-                        raise RuntimeError("Downloaded file is not a plain FASTA")
+                        raise RuntimeError("the server sent something other than a FASTA (or gzipped FASTA)")
                     os.rename(local_fa + '.tmp', local_fa)
+                    published = True
                     record_fasta_source(local_fa, fa_url)
+                    # Indexed before this mirror is accepted: a file that cannot be indexed (a mirror that sent
+                    # something else beginning with '>') is removed and the next mirror is tried.
+                    ensure_verified_index(local_fa)
                     size_mb = os.path.getsize(local_fa) / (1024 * 1024)
                     print(f"  FASTA saved: {local_fa} ({size_mb:.0f} MB)")
                     downloaded = True
                     break
-                except Exception as e:
+                except BaseException as e:
+                    leftovers = [local_fa + '.tmp', local_fa + '.download.tmp']
+                    if published:
+                        leftovers += [local_fa, local_fa + '.fai', local_fa + '.fai.verified', local_fa + '.source']
+                    for leftover in leftovers:
+                        if os.path.exists(leftover):
+                            try:
+                                os.remove(leftover)
+                            except OSError:
+                                pass
+                    published = False
+                    if isinstance(e, DownloadCancelled) or not isinstance(e, Exception):
+                        raise   # the user cancelled (or the process is stopping): no other mirror
                     print(f"  Failed: {e}")
-                    if os.path.exists(local_fa + '.tmp'):
-                        os.remove(local_fa + '.tmp')
-                    if os.path.exists(local_fa + '.download.tmp'):
-                        os.remove(local_fa + '.download.tmp')
+                    if errors is not None:
+                        errors.append({"url": fa_url, "error": _download_error_text(e)})
 
             if not downloaded:
                 print(f"  ERROR: All FASTA download URLs failed")
@@ -1746,6 +1774,20 @@ def ensure_verified_index(fasta_path: str) -> None:
                 f"again.") from exc
     _write_stamp(fasta_path, fai, before)
     print(f"  Index built: {fai}")
+
+
+def _download_error_text(exc: BaseException) -> str:
+    """Why one download failed, in a few words (HTTP status, timeout, unreachable host, short body)."""
+    import urllib.error
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"HTTP {exc.code} {exc.reason or ''}".strip()
+    if isinstance(exc, urllib.error.ContentTooShortError):
+        return "the download ended early (connection dropped)"
+    if isinstance(exc, urllib.error.URLError):
+        return f"could not reach the server ({exc.reason})"
+    if isinstance(exc, TimeoutError) or type(exc).__name__ in ("DownloadTimeout", "timeout"):
+        return f"timed out ({exc})" if str(exc) else "timed out"
+    return str(exc) or type(exc).__name__
 
 
 def _ensure_plain_cached_fasta(path: str) -> bool:

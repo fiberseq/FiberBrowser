@@ -511,6 +511,9 @@ def recall_settings(entry: dict, enzyme: str, help_text: Optional[str],
     unknown_keep = keep - {c["id"] for c in changed_defaults if c["restore"]}
     if unknown_keep:
         raise RecallError(f"There is no original behaviour to keep for {sorted(unknown_keep)[0]} in this re-call.")
+    if not daf:
+        # DAF-seq's calling options do not apply to Hia5 (the pipeline records them as off): never passed back.
+        options.update({k: pi.DEFAULT_OPTIONS[k] for k in pi.DAF_ONLY_OPTIONS})
     try:
         options = pi.normalize_options(options)
         extra = pi.option_args(options, enzyme, help_text)
@@ -1255,8 +1258,8 @@ def plan_recall(entry: dict, *, outdir: Optional[str] = None, cores: Optional[in
         raise RecallError("Only a BAM can be re-called.")
     enzyme = str((entry.get("chemistry") or {}).get("enzyme") or (entry.get("pipeline") or {}).get("enzyme") or "").lower()
     if enzyme not in pi.ENZYMES:
-        raise RecallError("Re-calling from the Library handles DddA and DddB DAF-seq; this BAM is "
-                          f"{enzyme or 'of unknown chemistry'}.")
+        raise RecallError("Re-calling from the Library handles DddA, DddB (DAF-seq) and Hia5 (Fiber-seq); this BAM "
+                          f"is {enzyme or 'of unknown chemistry'}.")
     if _settings_source(entry) is None:
         return _plan_header_recall(entry, enzyme, outdir=outdir, cores=cores, input_path=input_path,
                                    keep_old=keep_old)

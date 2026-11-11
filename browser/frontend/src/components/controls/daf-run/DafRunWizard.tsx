@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  getPipelineStatus, scanReads, submitRun, validateRun,
+  cancelGenomeDownload, getGenomeDownload, getPipelineStatus, scanReads, startGenomeDownload, submitRun, validateRun,
+  type GenomeDownload,
   type BasecallSettings, type DoradoStatus, type Enzyme, type InputKind, type PipelineOptions, type PipelineStatus,
   type TriState, type ValidateResult,
 } from '../../../api/pipeline';
 import { pickAnyFile, pickFolder, uploadFile } from '../../../api/files';
-import { loadGenome } from '../../../api/reference';
 import {
   BASECALL_DEVICES, BASECALL_MODELS, DEFAULT_BASECALL, ENZYME_INFO, WIZARD_STEPS, basecallSummary, buildRunRequest,
   changedOptionLabels, defaultOutputRoot, enzymesFor, formatBytes, includedSamples, initialWizardState,
-  sampleNameError, sampleOutdir, samplesFromScan, stepIssues, type WizardState, type WizardStep,
+  genomeDownloadText, hintText, sampleNameError, sampleOutdir, samplesFromScan, stepIssues, type WizardState, type WizardStep,
 } from '../../../utils/dafRun';
 import { useDafRunStore } from './dafRunStore';
 
@@ -132,7 +132,9 @@ export function DafRunWizard() {
   const [scanning, setScanning] = useState<string | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
   const [pathInput, setPathInput] = useState('');
-  const [downloading, setDownloading] = useState<string | null>(null);
+  // The selected genome's FASTA download (services/genome_download.py): progress, or why it failed.
+  const [genomeDl, setGenomeDl] = useState<GenomeDownload | null>(null);
+  const dlPoll = useRef(0);
   // The server's check of the run, for the exact request it was made for.
   const [check, setCheck] = useState<RunCheck | null>(null);
   const [recheck, setRecheck] = useState(0);
@@ -280,16 +282,63 @@ export function DafRunWizard() {
     await addPaths(paths);
   };
 
-  const downloadGenome = async (genomeId: string) => {
-    setDownloading(genomeId);
+  /** Follow a genome download until it ends (a newer poll, or closing the wizard, stops this one). */
+  const followGenomeDownload = useCallback(async (genomeId: string, first?: GenomeDownload) => {
+    const seq = ++dlPoll.current;
+    const lost = (err: unknown) => setGenomeDl({
+      genome_id: genomeId, state: 'error',
+      error: `Lost contact with FiberBrowser during the download: ${err instanceof Error ? err.message : String(err)}`,
+    });
+    let dl: GenomeDownload;
     try {
-      const res = await loadGenome(genomeId);
-      if (!res.success || res.fasta_loaded === false) setScanError(res.fasta_error || `Could not download ${genomeId}.`);
-      await loadStatus();
-    } finally {
-      setDownloading(null);
+      dl = first ?? await getGenomeDownload(genomeId);
+    } catch (err) {
+      if (seq === dlPoll.current && first) lost(err);
+      return;
+    }
+    while (seq === dlPoll.current) {
+      setGenomeDl(dl);
+      if (dl.state !== 'running') break;
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      if (seq !== dlPoll.current) return;
+      try {
+        dl = await getGenomeDownload(genomeId);
+      } catch (err) {
+        if (seq === dlPoll.current) lost(err);
+        return;
+      }
+    }
+    if (seq === dlPoll.current && dl.state === 'done') await loadStatus();
+  }, [loadStatus]);
+
+  const downloadGenome = async (genomeId: string) => {
+    setGenomeDl({ genome_id: genomeId, state: 'running', bytes: 0, total: 0 });
+    try {
+      await followGenomeDownload(genomeId, await startGenomeDownload(genomeId));
+    } catch (err) {
+      setGenomeDl({
+        genome_id: genomeId, state: 'error',
+        error: `Could not start the ${genomeId} download: ${err instanceof Error ? err.message : String(err)}`,
+      });
     }
   };
+  const cancelDownload = async (genomeId: string) => {
+    try {
+      await cancelGenomeDownload(genomeId);
+    } catch { /* the poll reports what happened */ }
+  };
+
+  // Choosing a genome shows its download if one is under way (the wizard was closed meanwhile), else nothing.
+  useEffect(() => {
+    setGenomeDl(null);
+    const g = status?.genomes.find(x => x.id === state.genomeId);
+    if (state.step !== 1 || state.referenceMode !== 'genome' || !g || g.downloaded) {
+      dlPoll.current++;
+      return;
+    }
+    void followGenomeDownload(g.id);
+  }, [state.genomeId, state.step, state.referenceMode, status, followGenomeDownload]);
+  useEffect(() => () => { dlPoll.current++; }, []);
 
   const issues = useMemo(() => stepIssues(state, state.step, status), [state, status]);
   const errors = useMemo(() => issues.map(i => i.message), [issues]);
@@ -345,7 +394,7 @@ export function DafRunWizard() {
         return;
       }
       if (!res.success) {
-        setSubmitErrors((res.errors ?? []).map(e => (e.hint ? `${e.message} ${e.hint}` : e.message)));
+        setSubmitErrors((res.errors ?? []).map(e => (hintText(e.hint) ? `${e.message} ${hintText(e.hint)}` : e.message)));
         return;
       }
       upsert(res.jobs ?? []);
@@ -548,13 +597,54 @@ export function DafRunWizard() {
                   {(() => {
                     const g = status?.genomes.find(x => x.id === state.genomeId);
                     if (!g || g.downloaded) return null;
+                    const running = genomeDl?.genome_id === g.id && genomeDl.state === 'running';
                     return (
-                      <button type="button" className={BUTTON} disabled={downloading !== null} onClick={() => downloadGenome(g.id)} data-testid="daf-run-download-genome">
-                        {downloading === g.id ? 'Downloading…' : `Download ${g.id}`}
-                      </button>
+                      <>
+                        <button type="button" className={BUTTON} disabled={running} onClick={() => void downloadGenome(g.id)} data-testid="daf-run-download-genome">
+                          {running ? 'Downloading…' : `Download ${g.id}`}
+                        </button>
+                        {running && (
+                          <button type="button" className={BUTTON} onClick={() => void cancelDownload(g.id)} data-testid="daf-run-genome-cancel">Cancel</button>
+                        )}
+                      </>
                     );
                   })()}
                 </div>
+                {(() => {
+                  const g = status?.genomes.find(x => x.id === state.genomeId);
+                  if (!g) return null;
+                  if (g.downloaded) {
+                    return g.fasta ? <div className="text-[11px] text-gray-500 break-all" data-testid="daf-run-genome-fasta">FASTA: {g.fasta}</div> : null;
+                  }
+                  if (!genomeDl || genomeDl.genome_id !== g.id) return null;
+                  const line = genomeDownloadText(genomeDl);
+                  if (line.kind === 'progress') {
+                    const pct = genomeDl.total ? Math.min(100, ((genomeDl.bytes ?? 0) * 100) / genomeDl.total) : null;
+                    return (
+                      <div className="space-y-0.5" data-testid="daf-run-genome-progress">
+                        <div className="text-[12px] text-blue-600 dark:text-blue-300">{line.text}</div>
+                        {pct !== null && (
+                          <div className="h-1 w-64 max-w-full rounded bg-gray-200 dark:bg-white/10 overflow-hidden">
+                            <div className="h-full bg-blue-500" style={{ width: `${pct}%` }} />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
+                  if (line.kind === 'error') {
+                    return (
+                      <div className="space-y-1" data-testid="daf-run-genome-error">
+                        <div className="text-[12px] text-red-600 whitespace-pre-wrap break-all">{line.text}</div>
+                        <div className="flex gap-1">
+                          <button type="button" className={BUTTON} onClick={() => void downloadGenome(g.id)} data-testid="daf-run-genome-retry">Retry</button>
+                          <button type="button" className={BUTTON} onClick={() => update({ referenceMode: 'file' })} data-testid="daf-run-genome-use-file">Use a FASTA file instead</button>
+                        </div>
+                      </div>
+                    );
+                  }
+                  if (genomeDl.state === 'cancelled') return <div className="text-[12px] text-gray-500" data-testid="daf-run-genome-cancelled">Download cancelled.</div>;
+                  return null;
+                })()}
                 <label className="block text-[12px] text-gray-600 dark:text-gray-300">
                   Amplicon region(s), optional
                   <textarea
@@ -612,7 +702,7 @@ export function DafRunWizard() {
 
       {state.step === 2 && (
         <section className="space-y-3">
-          <div className={`grid grid-cols-1 gap-2 ${raw ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
             {enzymesFor(state.inputKind).map((id: Enzyme) => (
               <label
                 key={id}
@@ -800,7 +890,7 @@ export function DafRunWizard() {
           {shownValidation && validation && !errors.length && (
             <div className="space-y-1 text-[11.5px]" data-testid="daf-run-preview">
               {shownValidation.errors.map(e => (
-                <div key={e.message} className="text-red-600 whitespace-pre-wrap">{e.message}{e.hint ? `\n${e.hint}` : ''}</div>
+                <div key={e.message} className="text-red-600 whitespace-pre-wrap">{e.message}{hintText(e.hint) ? `\n${hintText(e.hint)}` : ''}</div>
               ))}
               {validation.warnings.map(w => <div key={w} className="text-amber-700 dark:text-amber-300">{w}</div>)}
               {validation.ok && validation.jobs.map(job => (

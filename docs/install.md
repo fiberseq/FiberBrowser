@@ -262,7 +262,7 @@ The public/reviewer server image is published to the GitHub Container Registry
 on every release:
 
 ```bash
-docker pull ghcr.io/fiberseq/fiberbrowser:3.0.2
+docker pull ghcr.io/fiberseq/fiberbrowser:3.0.3
 ```
 
 It runs `--public` (read-only catalog, per-visitor sessions, rate limits). How

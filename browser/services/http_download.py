@@ -34,6 +34,11 @@ class DownloadTimeout(socket.timeout):
     pass
 
 
+class DownloadCancelled(Exception):
+    """Raised by a progress hook to stop a download (the user cancelled it): callers that try mirrors in turn
+    let it through instead of trying the next one."""
+
+
 def _socket_of(response):
     raw = getattr(getattr(response, "fp", None), "raw", None)
     return getattr(raw, "_sock", None)

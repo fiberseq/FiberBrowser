@@ -164,10 +164,10 @@ describe('New run wizard: raw Nanopore (POD5)', () => {
     expect((q('daf-run-submit') as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it('does not offer Hia5 for reads (FASTQ/BAM)', async () => {
+  it('offers Hia5 for reads: a BAM with MM/ML m6A calls, PacBio or Nanopore, without basecalling', async () => {
     api.scanReads.mockImplementation(async () => ({
-      success: true, warnings: [], samples: [{ key: 'k', name: 'embryo', order: null, barcode: null, size: 1,
-        files: [{ path: '/tmp/embryo.fastq', kind: 'fastq', size: 1 }], kinds: ['fastq'] }],
+      success: true, warnings: [], samples: [{ key: 'k', name: 'fibers', order: null, barcode: null, size: 1,
+        files: [{ path: '/tmp/fibers.bam', kind: 'bam', size: 1 }], kinds: ['bam'] }],
     }));
     api.pickFolder.mockResolvedValue({ success: true, path: '/tmp/reads' });
     await act(async () => root.render(<DafRunHost />));
@@ -176,8 +176,22 @@ describe('New run wizard: raw Nanopore (POD5)', () => {
     expect(api.scanReads).toHaveBeenCalledWith(['/tmp/reads'], 'reads');
     await click('daf-run-next');
     await click('daf-run-next');
-    expect(q('daf-run-enzyme-hia5')).toBeNull();
+    const card = q('daf-run-enzyme-hia5');
+    expect(card).not.toBeNull();
+    expect(card!.textContent).toContain('MM/ML m6A calls');
+    expect(card!.textContent).toContain('PacBio or Nanopore');
+    expect(card!.textContent).toContain('no kinetics needed');
+    expect(card!.textContent).toContain('POD5');
+    await click('daf-run-enzyme-hia5');
     expect(q('daf-run-basecall')).toBeNull();
+    expect(q('daf-run-opt-dedup')).toBeNull();  // DAF-seq's options do not apply to Hia5
+    expect(box.textContent).not.toContain('start from raw Nanopore');
+    await wait(450);
+    const request = api.validateRun.mock.calls.at(-1)![0];
+    expect(request.enzyme).toBe('hia5');
+    expect(request.input_kind).toBe('reads');
+    expect(request).not.toHaveProperty('basecall');
+    expect(request.samples[0].files[0]).toEqual({ path: '/tmp/fibers.bam', kind: 'bam', size: 1 });
   });
 });
 

@@ -294,6 +294,31 @@ export function getPipelineStatus(refresh = false): Promise<PipelineStatus> {
   return fetchJson(refresh ? '/api/pipeline/status?refresh=1' : '/api/pipeline/status');
 }
 
+/** The wizard's download of a catalog genome's FASTA (cache only; the browser's open genome is untouched). */
+export interface GenomeDownload {
+  genome_id: string;
+  name?: string;
+  state: 'idle' | 'running' | 'done' | 'error' | 'cancelled';
+  url?: string | null;
+  bytes?: number;
+  total?: number;
+  error?: string | null;
+  errors?: { url: string; error: string }[];
+  fasta?: string | null;
+}
+
+export function startGenomeDownload(genomeId: string): Promise<GenomeDownload> {
+  return fetchJson(`/api/pipeline/genome_download?genome_id=${encodeURIComponent(genomeId)}`, { method: 'POST' });
+}
+
+export function getGenomeDownload(genomeId: string, options?: RequestInit): Promise<GenomeDownload> {
+  return fetchJson(`/api/pipeline/genome_download?genome_id=${encodeURIComponent(genomeId)}`, options);
+}
+
+export function cancelGenomeDownload(genomeId: string): Promise<GenomeDownload> {
+  return fetchJson(`/api/pipeline/genome_download/cancel?genome_id=${encodeURIComponent(genomeId)}`, { method: 'POST' });
+}
+
 export function scanReads(paths: string[], inputKind: InputKind = 'reads'): Promise<ScanResult> {
   return fetchJson('/api/pipeline/scan', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ paths, input_kind: inputKind }) });
 }

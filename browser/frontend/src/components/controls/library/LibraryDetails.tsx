@@ -290,7 +290,9 @@ export function LibraryDetails({ entry, groups, fiberhmmVersion, onOpen, onChang
 
   const verdicts = entry.qc?.verdicts ?? {};
   const advisories = full.advisories?.items ?? [];
-  const canRecall = entry.kind === 'bam' && ['dddb', 'ddda'].includes(entry.chemistry?.key ?? '');
+  // DddA and DddB DAF-seq, and Hia5 Fiber-seq (PacBio or Nanopore), as the backend's plan_recall accepts.
+  const canRecall = entry.kind === 'bam' && (['dddb', 'ddda', 'hia5-pacbio', 'hia5-nanopore'].includes(entry.chemistry?.key ?? '')
+    || ['dddb', 'ddda', 'hia5'].includes(entry.chemistry?.enzyme ?? ''));
   const inGroups = groups.filter(g => g.entry_ids.includes(entry.id));
   const ref = full.reference;
 

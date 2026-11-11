@@ -378,7 +378,7 @@ def _run_body(tmp_path, **changes):
 
 
 def test_route_validate_reports_every_problem(api, fake_env):
-    body = _run_body(fake_env, enzyme="hia5", reference={"kind": "file", "path": str(fake_env / "x.txt")},
+    body = _run_body(fake_env, enzyme="tn5", reference={"kind": "file", "path": str(fake_env / "x.txt")},
                      samples=[], cores=10_000)
     (fake_env / "x.txt").write_text("x")
     result = api.post("/api/pipeline/validate", json=body).json()

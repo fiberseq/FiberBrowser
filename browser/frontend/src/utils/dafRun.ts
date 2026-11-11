@@ -4,15 +4,15 @@
  * server validates again before anything runs (routers/pipeline.py).
  */
 import type {
-  BasecallSettings, DetectedSample, Enzyme, InputKind, PipelineOptions, PipelineStatus, ReadFileEntry, RunRequest,
+  BasecallSettings, DetectedSample, Enzyme, GenomeDownload, InputKind, PipelineOptions, PipelineStatus, ReadFileEntry, RunRequest,
   ScanResult,
 } from '../api/pipeline';
 
 export const WIZARD_STEPS = ['Reads', 'Reference', 'Run'] as const;
 export type WizardStep = 0 | 1 | 2;
 
-/** The wizard's chemistries. ``rawOnly``: offered for raw Nanopore (POD5) input only. */
-export const ENZYME_INFO: Record<Enzyme, { label: string; line: string; rawOnly?: boolean }> = {
+/** The wizard's chemistries, each offered for reads and raw Nanopore (POD5) alike. */
+export const ENZYME_INFO: Record<Enzyme, { label: string; line: string }> = {
   dddb: {
     label: 'DddB',
     line: 'Deaminates C on both strands; the recommended DAF-seq enzyme (e.g. a Plasmidsaurus Nanopore run).',
@@ -23,14 +23,13 @@ export const ENZYME_INFO: Record<Enzyme, { label: string; line: string; rawOnly?
   },
   hia5: {
     label: 'Hia5 (Fiber-seq)',
-    line: 'm6A Fiber-seq on Nanopore: basecalled with dorado sup and the 6mA modification model.',
-    rawOnly: true,
+    line: 'm6A Fiber-seq: PacBio or Nanopore reads with MM/ML m6A calls (a BAM, aligned or not; the platform is read from the reads, no kinetics needed), or raw Nanopore POD5, basecalled with dorado sup + 6mA.',
   },
 };
 
-/** The enzymes offered for this input. */
-export function enzymesFor(inputKind: InputKind): Enzyme[] {
-  return (Object.keys(ENZYME_INFO) as Enzyme[]).filter(id => inputKind === 'pod5' || !ENZYME_INFO[id].rawOnly);
+/** The enzymes offered for this input (since Hia5 runs from reads too: every one, for either input). */
+export function enzymesFor(_inputKind: InputKind): Enzyme[] {
+  return Object.keys(ENZYME_INFO) as Enzyme[];
 }
 
 /** The pipeline's own basecalling defaults: no --dorado-* flag is passed for them. */
@@ -229,7 +228,7 @@ export function stepIssues(state: WizardState, step: WizardStep, status?: Pick<P
     if (included.length === 0) {
       missing(state.inputKind === 'pod5'
         ? 'Add raw Nanopore data: a POD5 folder (e.g. MinKNOW\'s pod5/) or POD5 files.'
-        : 'Add reads: FASTQ files, a folder or a Plasmidsaurus .zip.');
+        : 'Add reads: FASTQ or BAM files, a folder or a Plasmidsaurus .zip.');
     }
     included.forEach((s, i) => {
       const others = included.filter((_, j) => j !== i).map(o => o.name);
@@ -252,9 +251,6 @@ export function stepIssues(state: WizardState, step: WizardStep, status?: Pick<P
     parseRegionsText(state.regionsText).errors.forEach(invalid);
   } else {
     if (!state.enzyme) missing('Choose the enzyme.');
-    else if (!enzymesFor(state.inputKind).includes(state.enzyme)) {
-      invalid(`${ENZYME_INFO[state.enzyme].label} runs start from raw Nanopore (POD5) here; choose DddB or DddA.`);
-    }
     if (state.inputKind === 'pod5') {
       const batch = state.basecall.batchsize;
       if (batch !== null && (!Number.isInteger(batch) || batch < 1 || batch > 100000)) invalid('Batch size: a whole number from 1 to 100000 (blank: dorado chooses).');
@@ -328,4 +324,34 @@ export function formatBytes(bytes: number): string {
     unit += 1;
   }
   return `${value >= 10 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
+}
+
+/** A server hint that is a machine token (``download_genome``) is for the UI, not text to show. */
+export function hintText(hint?: string | null): string {
+  const h = (hint ?? '').trim();
+  return /^[a-z][a-z0-9_]*$/.test(h) ? '' : h;
+}
+
+/** The wizard's line for a genome download: progress while it runs, the reason (each mirror's) when it failed. */
+export function genomeDownloadText(dl: GenomeDownload | null | undefined): { kind: 'progress' | 'error' | 'none'; text: string } {
+  if (!dl) return { kind: 'none', text: '' };
+  const name = dl.name || dl.genome_id;
+  if (dl.state === 'running') {
+    const done = dl.bytes ?? 0;
+    const total = dl.total ?? 0;
+    let host = '';
+    try { host = dl.url ? new URL(dl.url).host : ''; } catch { host = ''; }
+    const from = host ? ` from ${host}` : '';
+    if (total > 0) {
+      const pct = Math.min(100, Math.floor((done * 100) / total));
+      return { kind: 'progress', text: `Downloading ${name}${from}: ${formatBytes(done)} of ${formatBytes(total)} (${pct}%)` };
+    }
+    return { kind: 'progress', text: done > 0 ? `Downloading ${name}${from}: ${formatBytes(done)}` : `Starting the ${name} download${from}…` };
+  }
+  if (dl.state === 'error') {
+    const lines = (dl.errors ?? []).map(e => `${e.url}: ${e.error}`);
+    const head = lines.length ? `Could not download ${name}. Tried:` : (dl.error || `Could not download ${name}.`);
+    return { kind: 'error', text: [head, ...lines].join('\n') };
+  }
+  return { kind: 'none', text: '' };
 }

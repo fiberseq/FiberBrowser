@@ -98,6 +98,8 @@ PUBLIC_DENIED = {
     ("DELETE", "/api/lab/sessions/{session_id}"),
     # New DAF-seq run: host processes on host files (routers/pipeline.py)
     ("GET", "/api/pipeline/status"), ("POST", "/api/pipeline/scan"), ("POST", "/api/pipeline/validate"),
+    ("GET", "/api/pipeline/genome_download"), ("POST", "/api/pipeline/genome_download"),
+    ("POST", "/api/pipeline/genome_download/cancel"),
     ("POST", "/api/pipeline/jobs"), ("GET", "/api/pipeline/jobs"), ("GET", "/api/pipeline/jobs/{job_id}"),
     ("GET", "/api/pipeline/jobs/{job_id}/log"), ("POST", "/api/pipeline/jobs/{job_id}/cancel"),
     ("POST", "/api/pipeline/jobs/{job_id}/retry"), ("DELETE", "/api/pipeline/jobs/{job_id}"),

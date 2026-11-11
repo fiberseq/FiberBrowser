@@ -90,8 +90,9 @@ command palette finds them by these names):
   URL (with an S3-compatible endpoint), in **Data & Sessions**.
 - **Connect to cluster…** opens files that stay on a cluster; see
   [Data on a cluster](workflows/remote-cluster-data.md).
-- **Process raw data (New DAF-seq run)…** aligns and calls raw DAF-seq reads,
-  or basecalls raw Nanopore POD5 first (DAF-seq or Hia5 Fiber-seq); see
+- **Process raw data (New DAF-seq run)…** aligns and calls DAF-seq reads or
+  Hia5 Fiber-seq reads with MM/ML m6A calls (PacBio or Nanopore), or
+  basecalls raw Nanopore POD5 first (DAF-seq or Hia5 Fiber-seq); see
   [A DAF-seq run, from raw reads](workflows/daf-seq-quick-run.md) and
   [Run everything from the app (POD5)](#run-everything-from-the-app-pod5).
 - **Data quality (QC a dataset)…** runs fiberhmm-qc on a loaded BAM, or on a

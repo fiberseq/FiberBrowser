@@ -70,12 +70,11 @@ def test_recall_plan_for_a_pipeline_run(tmp_path, monkeypatch):
     assert plan["enzyme"] == "dddb" and plan["outdir"] == str(tmp_path / "out")
 
 
-def test_recall_refuses_non_daf_and_unknown_reference(tmp_path, monkeypatch):
+def test_recall_refuses_unknown_chemistry_and_unknown_reference(tmp_path, monkeypatch):
     monkeypatch.setenv("FIBERBROWSER_PIPELINE_COMMAND", "fiberhmm-pipeline")
-    hia5 = make_fiberhmm_bam(tmp_path / "h.bam", comments=[
-        "FIBERHMM-CHEMISTRY:v1:assay=fiber-seq;enzyme=hia5;platform=pacbio;mode=pacbio-fiber"])
-    with pytest.raises(jobs.RecallError, match="DddA and DddB"):
-        jobs.plan_recall(_entry(hia5), outdir=str(tmp_path / "o"))
+    unknown = make_fiberhmm_bam(tmp_path / "u.bam", comments=[])
+    with pytest.raises(jobs.RecallError, match="DddA, DddB .* and Hia5"):
+        jobs.plan_recall(_entry(unknown, chemistry={}), outdir=str(tmp_path / "o"))
     # A fiberhmm-pipeline re-call (recorded settings) needs the reference the reads were aligned to.
     # (Without recorded settings the header's fiberhmm-call command is re-run, which needs none.)
     lone = make_fiberhmm_bam(tmp_path / "lone.bam", contigs=(("contig_1", 5000),))
@@ -188,9 +187,27 @@ def _records_chimera_mode():
     return Version(fiberhmm.__version__) >= Version("3.0.3")
 
 
+def _records_chimera_mode_once():
+    """Probe the installed FiberHMM: 3.0.3 appended --chimeras to call_args even when they already named it;
+    3.0.4 records it once."""
+    import tempfile
+    parser_module = pytest.importorskip("fiberhmm.cli.pipeline")
+    with tempfile.TemporaryDirectory() as tmp:
+        argv = ["a.bam", "--reference", "ref.fa", "--enzyme", "dddb", "-o", tmp, "--call-args", "--chimeras flag"]
+        settings = parser_module.config_from_args(parser_module.parse_args(argv)).calling_settings()
+    return settings["call_args"].count("--chimeras") == 1
+
+
+def _names_chimeras(arguments):
+    return any(a == "--chimeras" or a.startswith("--chimeras=") for a in arguments)
+
+
 def _expected_call_args(arguments, mode="flag"):
-    # 3.0.2 only recorded the boolean; 3.0.3 also appends the effective DAF mode.
-    return [*arguments, *(["--chimeras", mode] if _records_chimera_mode() else [])]
+    # 3.0.2 only recorded the boolean; 3.0.3 also appends the effective DAF mode, every time;
+    # 3.0.4 appends it only when the call_args do not already name it.
+    if not _records_chimera_mode() or (_records_chimera_mode_once() and _names_chimeras(arguments)):
+        return list(arguments)
+    return [*arguments, "--chimeras", mode]
 
 
 def test_recall_carries_the_original_calling_settings(tmp_path, monkeypatch):
@@ -403,6 +420,23 @@ def test_invalid_recorded_chimera_modes_are_refused(arguments):
     entry = {"pipeline": {"settings": pipeline_settings("dddb", call_args=arguments)}}
     with pytest.raises(jobs.RecallError, match="--chimeras"):
         jobs.recall_settings(entry, "dddb", None)
+
+
+@pytest.mark.parametrize("changed", [dict(), dict(chimera_filter=False), dict(call_args=["--chimeras", "remove"]),
+                                     dict(call_args=["--min-llr", "6"])])
+def test_a_recall_of_a_recall_plans_the_same_run(tmp_path, monkeypatch, changed):
+    """Re-call a run, record what that re-call would record, re-call again: the two plans are identical."""
+    parser_module = _real_pipeline()
+    first_run = _run_with_settings(tmp_path / "g1", **changed)
+    first = jobs.plan_recall(_entry(first_run["called_bam"]), outdir=str(tmp_path / "recall"))
+    recorded = _recalled_settings(tmp_path, first, parser_module)
+    second_run = _run_with_settings(tmp_path / "g2", **{k: v for k, v in recorded.items() if k != "enzyme"})
+    second = jobs.plan_recall(_entry(second_run["called_bam"]), outdir=str(tmp_path / "recall"))
+    assert second["extra"] == first["extra"]
+    assert second["settings"]["labels"] == first["settings"]["labels"]
+    assert _recalled_settings(tmp_path, second, parser_module) == recorded
+    if _records_chimera_mode_once():  # FiberHMM 3.0.4: the mode is recorded once
+        assert recorded["call_args"].count("--chimeras") == 1
 
 
 def test_contradictory_or_unknown_3_0_settings_are_refused(tmp_path, monkeypatch):

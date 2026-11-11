@@ -70,7 +70,7 @@ describe('New DAF-seq run wizard state', () => {
 
   it('validates each step', () => {
     const empty = initialWizardState(status);
-    expect(stepErrors(empty, 0, status)).toEqual(['Add reads: FASTQ files, a folder or a Plasmidsaurus .zip.']);
+    expect(stepErrors(empty, 0, status)).toEqual(['Add reads: FASTQ or BAM files, a folder or a Plasmidsaurus .zip.']);
     const state = withSamples();
     expect(stepErrors(state, 0, status)).toEqual([]);
     expect(stepErrors({ ...state, samples: state.samples.map(s => ({ ...s, name: 'same' })) }, 0, status)).toHaveLength(2);
@@ -87,7 +87,7 @@ describe('New DAF-seq run wizard state', () => {
 
   it('tells missing inputs (help until the user tries Next) from wrong ones (L15)', () => {
     const empty = initialWizardState(status);
-    expect(stepIssues(empty, 0, status)).toEqual([{ message: 'Add reads: FASTQ files, a folder or a Plasmidsaurus .zip.', missing: true }]);
+    expect(stepIssues(empty, 0, status)).toEqual([{ message: 'Add reads: FASTQ or BAM files, a folder or a Plasmidsaurus .zip.', missing: true }]);
     const state = withSamples();
     expect(stepIssues({ ...state, samples: state.samples.map(s => ({ ...s, name: 'same' })) }, 0, status).every(i => !i.missing)).toBe(true);
     expect(stepIssues({ ...state, regionsText: 'bad' }, 1, status)).toEqual([expect.objectContaining({ missing: false })]);
@@ -139,11 +139,18 @@ describe('raw Nanopore (POD5) runs', () => {
     expect(changedOptionLabels(state.options, 'hia5')).toEqual(['ML threshold 200']);
   });
 
-  it('offers Hia5 only for POD5 and checks the Advanced choices', () => {
-    expect(enzymesFor('reads')).toEqual(['dddb', 'ddda']);
+  it('offers Hia5 for reads and POD5 alike and checks the Advanced choices', () => {
+    expect(enzymesFor('reads')).toEqual(['dddb', 'ddda', 'hia5']);
     expect(enzymesFor('pod5')).toEqual(['dddb', 'ddda', 'hia5']);
     expect(stepErrors(pod5State(), 2)).toEqual([]);
-    expect(stepErrors(pod5State({ inputKind: 'reads' }), 2)[0]).toContain('start from raw Nanopore (POD5)');
+    // Hia5 from reads (a BAM with MM/ML m6A calls): no basecalling, no DAF-seq options.
+    const reads = pod5State({ inputKind: 'reads' });
+    expect(stepErrors(reads, 2)).toEqual([]);
+    const request = buildRunRequest(reads);
+    expect(request.enzyme).toBe('hia5');
+    expect(request.input_kind).toBe('reads');
+    expect(request).not.toHaveProperty('basecall');
+    expect(request.options.dedup).toBe(DEFAULT_OPTIONS.dedup);
     expect(stepErrors(pod5State({ basecall: { ...DEFAULT_BASECALL, batchsize: 0 } }), 2)[0]).toContain('Batch size');
     expect(stepErrors(pod5State({ samples: [] }), 0)[0]).toContain('POD5 folder');
   });

@@ -70,6 +70,8 @@ async function fillWizard(page: Page, files: ReturnType<typeof inputs>) {
   await page.getByTestId('daf-run-reference-path').fill(files.fasta);
   await page.getByTestId('daf-run-next').click();
 
+  // Every chemistry is offered for reads: Hia5 too (a BAM with MM/ML m6A calls), not only for raw POD5.
+  await expect(page.getByTestId('daf-run-enzyme-hia5')).toBeVisible();
   await page.getByTestId('daf-run-enzyme-dddb').click();
   await page.getByTestId('daf-run-output').fill(files.out);
   await page.getByTestId('daf-run-auto-open').uncheck();

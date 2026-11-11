@@ -43,13 +43,13 @@ PLASMID_MAP_SUFFIXES = (".dna", ".gb", ".gbk", ".genbank", ".embl")
 ENZYMES = {
     "dddb": "DddB: deaminates C on both strands; the recommended DAF-seq enzyme (Plasmidsaurus route).",
     "ddda": "DddA: deaminates C in TC context on one strand per molecule; for DddA (SsDddA) libraries.",
+    "hia5": ("Hia5: m6A Fiber-seq. Reads that carry MM/ML m6A calls, PacBio or Nanopore (an aligned or unaligned "
+             "BAM; the platform is detected from the reads, and no kinetics are needed), or raw Nanopore POD5, "
+             "basecalled with dorado sup and the 6mA modification model."),
 }
-# The wizard's chemistries: DAF-seq (ENZYMES; also what the Library re-calls), plus Hia5 m6A
-# Fiber-seq for raw Nanopore input, which the pipeline basecalls with dorado sup + 6mA.
-PIPELINE_ENZYMES = {
-    **ENZYMES,
-    "hia5": "Hia5: m6A Fiber-seq on Nanopore; POD5 is basecalled with dorado sup and the 6mA modification model.",
-}
+# The wizard's chemistries, for reads and raw POD5 input alike; also what the Library re-calls.
+# (PIPELINE_ENZYMES: the same, under the name older code imports.)
+PIPELINE_ENZYMES = ENZYMES
 DAF_ONLY_OPTIONS = ("dedup", "dedup_mode", "snp_screen", "snp_mask", "chimera_filter", "use_m5c", "cpg_mask_policy")
 PIPELINE_ENV = "FIBERBROWSER_PIPELINE_COMMAND"
 CALL_ENV = "FIBERBROWSER_CALL_COMMAND"
@@ -86,6 +86,19 @@ def read_file_kind(name: str) -> Optional[str]:
     if suffix is None:
         return None
     return "bam" if suffix == ".bam" else "fastq"
+
+
+def aligned_bam_in_place(path: str) -> bool:
+    """Whether ``path`` is a BAM with @SQ lines and an index: fiberhmm-pipeline calls such a BAM in place
+    when it matches the reference (and carries MD tags for DAF-seq), without aligning it again."""
+    if read_file_kind(path) != "bam":
+        return False
+    try:
+        import pysam
+        with pysam.AlignmentFile(path, "rb", check_sq=False) as bam:
+            return bool(bam.references) and bam.has_index()
+    except (OSError, ValueError):
+        return False
 
 
 def is_raw_file(name: str) -> bool:
@@ -610,9 +623,61 @@ def genome_cache_dir() -> str:
     return os.path.join(os.path.expanduser("~"), ".fiberhmm", "genomes")
 
 
-def catalog_genome_fasta(genome_id: str, *, verify: bool = True) -> tuple[Optional[str], Optional[str]]:
+_OPEN_FASTA_CHECKED: dict = {}
+
+
+def _index_describes(path: str) -> bool:
+    """Whether ``path``.fai is exactly the index of ``path`` (names, lengths, offsets, line geometry), so
+    fiberhmm-pipeline uses it as it is and never rebuilds it beside the user's FASTA. The index is rebuilt in a
+    private temporary folder to compare; the answer is kept for the unchanged pair."""
+    from state.browser_state import _fai_matches_fasta
+    try:
+        key = (path, *[(st.st_size, st.st_mtime_ns) for st in (os.stat(path), os.stat(path + ".fai"))])
+    except OSError:
+        return False
+    if key not in _OPEN_FASTA_CHECKED:
+        try:
+            _OPEN_FASTA_CHECKED[key] = bool(_fai_matches_fasta(path + ".fai", path))
+        except Exception:   # noqa: BLE001 - an unreadable or compressed FASTA is not used in place
+            _OPEN_FASTA_CHECKED[key] = False
+    return _OPEN_FASTA_CHECKED[key]
+
+
+def loaded_genome_fasta(state, genome_id: str, *, verify: bool = True) -> Optional[str]:
+    """The workspace's open reference when it is this catalog genome and a local FASTA with its index
+    (``--fasta dm6.fa``, or a FASTA the user loaded): the run uses it instead of asking for a download. The
+    user's file is only read, never re-indexed (no stamp written beside it)."""
+    if state is None or not genome_id:
+        return None
+    from services.genome_loading import genome_already_loaded
+    try:
+        if not genome_already_loaded(state, genome_id):
+            return None
+    except Exception:   # noqa: BLE001 - a half-built state is just "not loaded"
+        return None
+    path = str(getattr(state, "fasta_path", None) or "")
+    if not path or re.match(r"^[a-z][a-z0-9+.-]*://", path):
+        return None
+    if not (os.path.isfile(path) and os.path.isfile(path + ".fai") and os.access(path, os.R_OK)):
+        return None
+    try:
+        # An index older than the FASTA would be rebuilt beside the user's file by fiberhmm-pipeline:
+        # such a FASTA is not used in place (the catalog download stays available).
+        if os.path.getmtime(path + ".fai") < os.path.getmtime(path):
+            return None
+    except OSError:
+        return None
+    # A run's reference (verify): the index must also describe this file, or fiberhmm-pipeline would
+    # rebuild it beside the user's FASTA. Listings only need the cheap checks above.
+    if verify and not _index_describes(path):
+        return None
+    return path
+
+
+def catalog_genome_fasta(genome_id: str, *, verify: bool = True, state=None) -> tuple[Optional[str], Optional[str]]:
     """(local FASTA path or None, error) for a genome in FiberBrowser's catalog. ``verify=False`` only says
-    whether it is downloaded (listings); a path that will be used is verified (the default)."""
+    whether it is downloaded (listings); a path that will be used is verified (the default). With ``state``,
+    the workspace's open local FASTA of that genome counts too (``loaded_genome_fasta``)."""
     from services.genome_registry import GENOME_REGISTRY
     from state.browser_state import cached_fasta_path
     info = GENOME_REGISTRY.get(genome_id)
@@ -635,6 +700,9 @@ def catalog_genome_fasta(genome_id: str, *, verify: bool = True) -> tuple[Option
             return None, str(exc)
         if verified:
             return verified, None
+    loaded = loaded_genome_fasta(state, genome_id, verify=verify)
+    if loaded:
+        return loaded, None
     return None, f"{info['name']} is not downloaded on this computer yet."
 
 
@@ -643,7 +711,7 @@ def genome_choices(state=None) -> list[dict]:
     current = getattr(state, "current_genome", None) if state is not None else None
     out = []
     for genome_id, info in GENOME_REGISTRY.items():
-        local, _ = catalog_genome_fasta(genome_id, verify=False)
+        local, _ = catalog_genome_fasta(genome_id, verify=False, state=state)
         out.append({"id": genome_id, "name": info["name"], "downloaded": bool(local),
                     "fasta": local, "loaded": genome_id == current})
     return out
@@ -674,13 +742,14 @@ def reference_kind(path: str) -> Optional[str]:
     return None
 
 
-def resolve_reference(ref: dict) -> dict:
-    """{'path', 'kind', 'label', 'genome_id'?} for the wizard's reference choice."""
+def resolve_reference(ref: dict, state=None) -> dict:
+    """{'path', 'kind', 'label', 'genome_id'?} for the wizard's reference choice (``state``: the workspace,
+    whose open local FASTA of the chosen genome is used when the catalog's copy is not downloaded)."""
     ref = ref or {}
     choice = ref.get("kind")
     if choice == "genome":
         genome_id = str(ref.get("genome_id") or "")
-        local, error = catalog_genome_fasta(genome_id)
+        local, error = catalog_genome_fasta(genome_id, state=state)
         if local is None:
             raise InputError(error or "Genome unavailable", "reference",
                              hint="download_genome" if error and "not downloaded" in error else "")

@@ -88,7 +88,7 @@ def _job_or_404(job_id: str) -> None:
 # Planning: validation and argv construction
 # --------------------------------------------------------------------------
 
-def plan_run(req: RunRequest, *, check_tools: bool = True) -> dict:
+def plan_run(req: RunRequest, *, check_tools: bool = True, state=None) -> dict:
     """Validate a run and build one job spec per sample (nothing is started or extracted)."""
     from services import pipeline_inputs as pi
 
@@ -106,6 +106,7 @@ def plan_run(req: RunRequest, *, check_tools: bool = True) -> dict:
     # Tools first: without the pipeline nothing else matters.
     command = pi.pipeline_command()
     aligner = {"ok": True, "hint": ""}
+    aligner_missing = None
     dorado = None
     help_text = None
     if check_tools:
@@ -115,8 +116,9 @@ def plan_run(req: RunRequest, *, check_tools: bool = True) -> dict:
         else:
             aligner = pi.aligner_status(command)
             if not aligner.get("ok"):
-                errors.append({"field": "aligner", "message": "minimap2 is not installed.",
-                               "hint": aligner.get("hint") or pi.GENERIC_ALIGNER_HINT})
+                # Decided once the reads are known: an aligned BAM the pipeline uses in place needs no aligner.
+                aligner_missing = {"field": "aligner", "message": "minimap2 is not installed.",
+                                   "hint": aligner.get("hint") or pi.GENERIC_ALIGNER_HINT}
             help_text = pi.pipeline_help(command["argv"], command.get("env"))
         if raw:
             # dorado is not bundled: the pipeline finds it, the wizard shows which (or how to install it).
@@ -126,10 +128,8 @@ def plan_run(req: RunRequest, *, check_tools: bool = True) -> dict:
                                "raw POD5 must be basecalled with it first.", "hint": dorado.get("hint") or ""})
 
     enzyme = str(req.enzyme or "").lower()
-    if enzyme not in (pi.PIPELINE_ENZYMES if raw else pi.ENZYMES):
-        fail(pi.InputError("Choose the enzyme: DddB, DddA or Hia5 (Fiber-seq)." if raw else
-                           "Choose the enzyme: DddB or DddA (Hia5 Fiber-seq: start from raw Nanopore POD5).",
-                           "enzyme"))
+    if enzyme not in pi.ENZYMES:
+        fail(pi.InputError("Choose the enzyme: DddB, DddA or Hia5 (Fiber-seq).", "enzyme"))
     from services.lab.jobs import max_cores as _lab_max_cores
     max_cores = _lab_max_cores()  # os.cpu_count(), or a lab server's per-run cap
     cores = int(req.cores or min(pi.default_cores(), max_cores))
@@ -139,7 +139,7 @@ def plan_run(req: RunRequest, *, check_tools: bool = True) -> dict:
 
     reference = None
     try:
-        reference = pi.resolve_reference(req.reference)
+        reference = pi.resolve_reference(req.reference, state)
     except pi.InputError as exc:
         fail(exc)
     regions: list[str] = []
@@ -171,7 +171,7 @@ def plan_run(req: RunRequest, *, check_tools: bool = True) -> dict:
     samples = [{"name": pi.sanitize_sample_name(s.name), "files": s.files} for s in req.samples]
     if not samples:
         fail(pi.InputError("Add raw Nanopore data: a POD5 folder (e.g. MinKNOW's pod5/) or POD5 files." if raw else
-                           "Add reads: FASTQ files, a folder or a Plasmidsaurus .zip.", "reads"))
+                           "Add reads: FASTQ or BAM files, a folder or a Plasmidsaurus .zip.", "reads"))
     pi.unique_sample_names(samples)
     for original, sample in zip(req.samples, samples):
         if pi.sanitize_sample_name(original.name) != original.name.strip():
@@ -233,6 +233,17 @@ def plan_run(req: RunRequest, *, check_tools: bool = True) -> dict:
                             "refuses the run if its inputs or settings changed.")
         jobs.append({"sample": sample["name"], "outdir": outdir, "reads": reads, "zips": zips})
 
+    if aligner_missing is not None:
+        # fiberhmm-pipeline calls one indexed, aligned BAM per sample in place (no minimap2); it realigns
+        # anything else (FASTQ, unaligned or unindexed BAMs, several BAMs together) and then needs one.
+        if not raw and jobs and all(len(j["reads"]) == 1 and not j["zips"] and pi.aligned_bam_in_place(j["reads"][0])
+                                    for j in jobs):
+            warnings.append("minimap2 is not installed. The BAM is already aligned and indexed, so FiberHMM calls it "
+                            "in place; if it was aligned to another reference or has no MD tags, the run stops at "
+                            "alignment and asks for minimap2.")
+        else:
+            errors.insert(0, aligner_missing)
+
     return {"ok": not errors, "errors": errors, "warnings": warnings, "jobs": jobs, "enzyme": enzyme,
             "cores": cores, "reference": reference, "regions": regions, "options": options, "extra": extra,
             "output_root": output_root, "command": command, "aligner": aligner, "input_kind": input_kind,
@@ -283,7 +294,8 @@ async def pipeline_status(refresh: bool = False, state=Depends(get_state)):
             "cores": os.cpu_count() or 1, "default_cores": pi.default_cores(),
             "default_output_root": pi.default_output_root("run"),
             "output_parent": os.path.join(os.path.expanduser("~"), "FiberHMM runs"),
-            "enzymes": [{"id": k, "description": v, "raw_only": k not in pi.ENZYMES}
+            # raw_only: kept for older clients; every chemistry takes reads and raw POD5 alike.
+            "enzymes": [{"id": k, "description": v, "raw_only": False}
                         for k, v in pi.PIPELINE_ENZYMES.items()],
             "dorado": pi.dorado_status(refresh=refresh),
             "default_basecall": pi.DEFAULT_BASECALL,
@@ -293,6 +305,27 @@ async def pipeline_status(refresh: bool = False, state=Depends(get_state)):
             "default_options": pi.DEFAULT_OPTIONS,
         }
     return await asyncio.to_thread(work)
+
+
+@router.get("/api/pipeline/genome_download", dependencies=[Depends(local_only)])
+async def pipeline_genome_download_status(genome_id: str):
+    """The wizard's download of a catalog genome's FASTA: state, bytes / total, the mirror, errors."""
+    from services import genome_download
+    return genome_download.status(genome_id)
+
+
+@router.post("/api/pipeline/genome_download", dependencies=[Depends(local_only)])
+async def pipeline_genome_download_start(genome_id: str):
+    """Download a catalog genome's FASTA into the cache, in the background (the browser's open genome is
+    untouched); poll the GET for progress."""
+    from services import genome_download
+    return await asyncio.to_thread(genome_download.start, genome_id)
+
+
+@router.post("/api/pipeline/genome_download/cancel", dependencies=[Depends(local_only)])
+async def pipeline_genome_download_cancel(genome_id: str):
+    from services import genome_download
+    return genome_download.cancel(genome_id)
 
 
 @router.post("/api/pipeline/scan", dependencies=[Depends(local_only)])
@@ -306,20 +339,20 @@ async def pipeline_scan(req: ScanRequest):
 
 
 @router.post("/api/pipeline/validate", dependencies=[Depends(local_only)])
-async def pipeline_validate(req: RunRequest):
-    plan = await asyncio.to_thread(plan_run, req)
+async def pipeline_validate(req: RunRequest, state=Depends(get_state)):
+    plan = await asyncio.to_thread(lambda: plan_run(req, state=state))
     return {"ok": plan["ok"], "errors": plan["errors"], "warnings": plan["warnings"],
             "jobs": _preview(plan), "output_root": plan["output_root"], "aligner": plan["aligner"],
             "dorado": plan["dorado"]}
 
 
 @router.post("/api/pipeline/jobs", dependencies=[Depends(local_only)])
-async def pipeline_submit(req: RunRequest):
+async def pipeline_submit(req: RunRequest, state=Depends(get_state)):
     """Queue one fiberhmm-pipeline job per sample."""
     from services import pipeline_inputs as pi
 
     def work():
-        plan = plan_run(req)
+        plan = plan_run(req, state=state)
         if not plan["ok"]:
             return {"success": False, "errors": plan["errors"], "warnings": plan["warnings"]}
         from services.lab.jobs import check_submit, owner

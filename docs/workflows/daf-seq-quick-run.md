@@ -13,11 +13,13 @@ screen are on by default), and runs `fiberhmm-qc`.
 A few thousand reads take one to two minutes. The runs in
 [timings](#timings) are real examples.
 
-It is for DAF-seq (DddA or DddB) reads from ONT, and for raw Nanopore data
-(POD5), DAF-seq or Hia5 Fiber-seq, which it basecalls with dorado first: see
+It is for DAF-seq (DddA or DddB) reads from ONT, for Hia5 Fiber-seq reads
+that carry MM/ML m6A calls (PacBio or Nanopore, a BAM, aligned or not), and
+for raw Nanopore data (POD5), DAF-seq or Hia5 Fiber-seq, which it basecalls
+with dorado first: see
 [Run everything from the app (POD5)](#run-everything-from-the-app-pod5).
-Aligned Fiber-seq BAMs (e.g. PacBio, aligned with pbmm2 on the cluster) are
-loaded with **Open** as usual.
+Fiber-seq BAMs that already carry FiberHMM calls are loaded with **Open** as
+usual.
 
 ## What you need
 
@@ -93,6 +95,11 @@ to FiberBrowser first. **Choose files…** and **Choose folder…** avoid the co
   - **DddB** deaminates C on both strands. It is the recommended DAF-seq
     enzyme, for example for a Plasmidsaurus Nanopore run.
   - **DddA** deaminates C in a TC context, on one strand per molecule.
+  - **Hia5 (Fiber-seq)** marks accessible A with m6A. The reads must carry
+    MM/ML m6A calls (for PacBio, as jasmine writes them; for Nanopore, as
+    dorado writes them); kinetics are not needed. The platform is read from
+    the reads (PacBio reads have `T-a` calls), so there is nothing to set.
+    DAF-seq's calling options are not shown for Hia5.
 - **Output folder**: the default is `~/FiberHMM runs/<date>_<sample>`, or
   `<date>_<order>` for several samples. With several samples, each gets its
   own subfolder.

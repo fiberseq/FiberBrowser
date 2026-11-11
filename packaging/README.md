@@ -159,13 +159,13 @@ and open remain available for manual installation.
 For example, from the repository root (replace the version/build artifacts):
 
 ```sh
-python3 tools/make_update_manifest.py --channel public --version 3.0.2 \
+python3 tools/make_update_manifest.py --channel public --version 3.0.3 \
   --build-info build/macos/dist/FiberBrowser.app/Contents/Resources/fiberbrowser-build.json \
   --build-info build/windows/context/build.json \
   --out build/fiberbrowser-update-public.json \
-  build/macos/dist/FiberBrowser-3.0.2-arm64.dmg \
-  build/macos/dist/FiberBrowser-3.0.2-arm64.zip \
-  build/windows/FiberBrowser-3.0.2-Setup.exe
+  build/macos/dist/FiberBrowser-3.0.3-arm64.dmg \
+  build/macos/dist/FiberBrowser-3.0.3-arm64.zip \
+  build/windows/FiberBrowser-3.0.3-Setup.exe
 ```
 
 The Mac updater checks sha256, stages beside the running bundle, runs
