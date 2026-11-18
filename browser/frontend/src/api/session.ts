@@ -9,6 +9,7 @@ import { missingPacksNote, missingSessionPacks, usesPackParts, withoutMissingPac
 import { applyExcludedReads, useReadActionsStore } from '../stores/readActionsStore';
 import { useBrowserStore } from '../stores/browserStore';
 import { restoredMergeSettings, serializeState } from '../stores/historySlice';
+import { normalizeFootprintSizeSettings } from '../utils/footprintSizeSettings';
 import { normalizeMergeLog } from '../stores/clusterMergeLog';
 import type { SerializedDataset, Snapshot } from '../stores/historySlice';
 import { deserializeSets } from '../stores/hydration';
@@ -42,7 +43,7 @@ const API_BASE = '/api';
 export const SESSION_PRE_VIEWPORT_KEYS = [
   'viewMode', 'sortMode', 'sortSelection', 'filterMode', 'spanningOnly', 'downsampleCount', 'readDisplayMode', 'allReadsDisplayCap', 'backgroundReadCap', 'clusterPreparationCount', 'clusterPreparationSamples', 'analysisSampleCount', 'analysisSampleSeed', 'classRegionMode',
   'clusterK', 'clusterResolution', 'clusterMethod', 'clusterPeakMode', 'clusterFeatureRules', 'analysisSortRules', 'analysisFilterRules', 'subnucleosomalThreshold', 'accessibilityThreshold',
-  'mergeMinFraction', 'mergeMaxSimilarity', 'mergeStrategy', 'mergeThresholds',
+  'mergeMinFraction', 'mergeMaxSimilarity', 'mergeStrategy', 'mergeThresholds', 'footprintSizeSettings',
   'enabledModTypes', 'enabledMetaProfiles', 'cachedLayerTypes', 'legacyLayerInference', 'legacyNucMinSize', 'clickTargetLayer', 'footprintAnalysisLayer',
   'fillSmallGaps', 'fillGapSize', 'hideTerminalGaps', 'terminalGapThreshold', 'hideShortEndFootprints', 'minFpQuality', 'minFootprints', 'minFootprintsAuto', 'showDuplicateReads', 'showQcFailReads', 'signalFilters',
   'enabledCigarTypes', 'svDisplayEnabled', 'svMinLen', 'svMinSupport', 'isReversed', 'darkMode', 'peakSettings', 'activeColormap', 'fillReadHeight', 'showHiddenTrackStrip',
@@ -100,6 +101,8 @@ export function collectFrontendState(): Record<string, unknown> {
   const s = useBrowserStore.getState();
   const frontendState = serializeState(s) as unknown as Record<string, unknown>;
   frontendState.dafcSettings = serializeDafcSettings();
+  // Footprint size plots' settings (display only: not part of undo history).
+  frontendState.footprintSizeSettings = s.footprintSizeSettings;
   frontendState.annotationSettings = {
     annotationFiles: s.annotationFiles,
     enabledAnnotationTypes: s.enabledAnnotationTypes,
@@ -436,6 +439,8 @@ export function applyImportedState(result: Record<string, unknown>): void {
     }
     for (const key of ['mergeMinFraction', 'mergeMaxSimilarity', 'mergeStrategy', 'mergeThresholds'] as const) delete batch[key];
     Object.assign(batch, restoredMergeSettings(frontend));
+    // Footprint size plots: the session's settings, else the defaults (sessions before them have none).
+    batch.footprintSizeSettings = normalizeFootprintSizeSettings(frontend.footprintSizeSettings);
     if ('analysisSortRules' in batch) {
       batch.analysisSortRules = normalizeAnalysisSortRules(batch.analysisSortRules);
     }

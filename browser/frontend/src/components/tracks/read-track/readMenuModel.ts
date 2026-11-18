@@ -26,6 +26,8 @@ export type ReadMenuAction =
   | 'zoom-out'
   | 'copy-view-locus'
   | 'copy-position'
+  // Footprint size plots of this panel's view (Clusters › Footprint sizes, Size enrichment; no clustering needed)
+  | 'footprint-size-enrichment'
   // Structural variants (fb-n9-sv)
   | 'sv-split-this'
   | 'sv-split-at-cursor'
@@ -41,7 +43,7 @@ export type ReadMenuAction =
 
 export type ReadMenuIcon =
   | 'reads' | 'footprint' | 'stats' | 'copy' | 'pin' | 'target' | 'zoom-in' | 'zoom-out'
-  | 'filter' | 'eye' | 'eye-off' | 'x' | 'search' | 'clipboard' | 'split'
+  | 'filter' | 'eye' | 'eye-off' | 'x' | 'search' | 'clipboard' | 'split' | 'sizes'
   // a panel's icon, or one a plugin pack registered (ReadContextMenu registerMenuIcon)
   | `panel:${string}` | `ext:${string}`;
 
@@ -210,6 +212,7 @@ const splitPanelsTitle = (): string => [SPLIT_PANELS_BASE, ...shown().map(c => c
 export const item = (action: ReadMenuAction, label: string, icon: ReadMenuIcon, extra: Partial<ReadMenuItem> = {}): ReadMenuItem =>
   ({ kind: 'item', action, label, icon, ...extra });
 const SEP: ReadMenuSeparator = { kind: 'separator' };
+const FOOTPRINT_SIZES_ITEM_TITLE = 'Footprint size by position for this view, coloured by where each size is enriched (one plot per dataset; per cluster when clustered). Opens Clusters › Footprint sizes.';
 
 export function buildReadMenu(ctx: ReadMenuContext): ReadMenuEntry[] {
   const mod = ctx.isMac ? '⌘' : 'Ctrl';
@@ -248,6 +251,9 @@ export function buildReadMenu(ctx: ReadMenuContext): ReadMenuEntry[] {
     );
     if (ctx.anyHighlight) entries.push(item('clear-highlight', 'Remove highlight', 'x'));
   }
+
+  // Footprint size enrichment of this view, on a read or in empty track space (no clustering needed).
+  entries.push(item('footprint-size-enrichment', 'Footprint size enrichment here', 'sizes', { title: FOOTPRINT_SIZES_ITEM_TITLE }), SEP);
 
   const sv = ctx.sv;
   if (sv && (sv.thisEvent || sv.atCursor || sv.splitActive)) {

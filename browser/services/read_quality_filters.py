@@ -54,6 +54,11 @@ def _layer_matches(filter_layer: str, layer_name: str) -> bool:
     )
 
 
+def _fire_scored(layer) -> bool:
+    """A layer whose aq is a fibertools FIRE score (services/fire_quality): 0 is a score there."""
+    return isinstance(layer, dict) and layer.get('quality_source') == 'fire'
+
+
 def _placeholder_quality_array(layer_name: str, quality_name: str, values) -> bool:
     """Whether a declared quality vector is actually legacy missing-data padding.
 
@@ -114,7 +119,7 @@ def apply_quality_filters(read: dict, quality_filters: Iterable[dict]) -> Option
                     continue
                 qi = quality_names.index(qname)
                 q_arr = qualities[qi]
-                if _placeholder_quality_array(layer_name, qname, q_arr):
+                if not _fire_scored(layer) and _placeholder_quality_array(layer_name, qname, q_arr):
                     continue
                 for i in range(n):
                     # A short/malformed AQ track is missing evidence,
@@ -177,7 +182,7 @@ def apply_quality_filters(read: dict, quality_filters: Iterable[dict]) -> Option
             interval[2] for interval in read['fire']
             if len(interval) >= 3 and interval[2] is not None
         ]
-        fire_quality_missing = bool(fire_quality_values) and all(
+        fire_quality_missing = read.get('fire_quality_source') != 'fire' and bool(fire_quality_values) and all(
             value in (0, 128) for value in fire_quality_values
         )
         filtered_fire = []
@@ -235,7 +240,7 @@ def _filter_keeps(layer_name: str, layer: dict, filt: dict) -> list[bool]:
             return [True] * n
         return [False] * n if filt.get('layer', '*') != '*' else [True] * n
     q_arr = qualities[quality_names.index(qname)]
-    if _placeholder_quality_array(layer_name, qname, q_arr):
+    if not _fire_scored(layer) and _placeholder_quality_array(layer_name, qname, q_arr):
         return [True] * n
     return [i < len(q_arr) and q_arr[i] is not None and q_arr[i] >= min_val for i in range(n)]
 
@@ -276,7 +281,7 @@ def available_quality_names(reads: Iterable[dict]) -> dict[str, list[str]]:
             for index, name in enumerate(names):
                 if index >= len(qualities) or not qualities[index]:
                     continue
-                if _placeholder_quality_array(layer_name, name, qualities[index]):
+                if not _fire_scored(layer) and _placeholder_quality_array(layer_name, name, qualities[index]):
                     continue
                 found.setdefault(layer_name, set()).add(name)
     return {layer: sorted(names) for layer, names in found.items()}

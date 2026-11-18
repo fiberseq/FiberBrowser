@@ -18,6 +18,26 @@ over the window's expectation for that size, so sizes that are rare overall
 are as visible as common ones. A row drawn from only a few footprints would be
 all noise (one footprint is a huge "enrichment" of its size), so rows with
 fewer than ``row_min_footprints`` footprints in the window are left at 0.
+
+Footprint size enrichment (``finish_vplot(normalization=...)``) generalises
+this to four normalisations of the same matrix:
+
+- ``row``: each size row over its mean across positions (as above; the paper
+  style "size enrichment" plot, centred on 1);
+- ``column``: each position column over its mean across sizes (which sizes are
+  over-represented at a position, against the size mix at that position);
+- ``oe``: observed over expected from both margins, ``obs * total /
+  (row_sum * col_sum)`` (1 = what the size's and the position's totals predict);
+- ``raw``: the counts.
+
+The minimum-footprints guard blanks rows (``row``, ``oe``) or columns
+(``column``) drawn from fewer than ``min_footprints`` footprints.
+
+Smoothing is a separable 2-D Gaussian with its own sigma for each axis, given
+in bp (``sigma_size_bp``, ``sigma_pos_bp``) and converted to bins with the
+axis's bin width (0 = no smoothing on that axis). It is applied to the counts,
+before normalising. The older single ``smooth`` value was one sigma in bins on
+both axes: ``legacy_sigmas_bp`` turns it into the bp pair.
 """
 from __future__ import annotations
 
@@ -27,6 +47,8 @@ import numpy as np
 
 VPlotMode = Literal["midpoint", "span"]
 VPLOT_MODES = ("midpoint", "span")
+VPlotNormalization = Literal["row", "column", "oe", "raw"]
+VPLOT_NORMALIZATIONS = ("row", "column", "oe", "raw")
 
 
 def footprint_arrays(intervals: Iterable[Sequence[int]], offset: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -55,11 +77,14 @@ def accumulate_vplot(
     n_pos_bins: int,
     mode: str = "midpoint",
     row_counts: np.ndarray | None = None,
+    col_counts: np.ndarray | None = None,
 ) -> np.ndarray:
     """Raw counts, shape ``(n_size_bins, n_pos_bins)``; positions are 0-based in the window.
 
     ``row_counts`` (length ``n_size_bins``), if given, gets the number of
-    footprints drawn in each size row added to it.
+    footprints drawn in each size row added to it. ``col_counts`` (length
+    ``n_pos_bins``) gets the number of footprints touching each position bin
+    (midpoint: centred in it; full footprint: covering any of it).
     """
     matrix = np.zeros((n_size_bins, n_pos_bins), dtype=float)
     if len(sizes) == 0:
@@ -76,6 +101,8 @@ def accumulate_vplot(
         np.add.at(matrix, (size_idx[keep], pos_idx[keep]), 1.0)
         if row_counts is not None:
             row_counts += np.bincount(size_idx[keep], minlength=n_size_bins)[:n_size_bins]
+        if col_counts is not None:
+            col_counts += np.bincount(pos_idx[keep], minlength=n_pos_bins)[:n_pos_bins]
         return matrix
 
     window = n_pos_bins * pos_bin
@@ -89,6 +116,11 @@ def accumulate_vplot(
         row_counts += np.bincount(row, minlength=n_size_bins)[:n_size_bins]
     b0 = s // pos_bin           # first bin touched
     b1 = (e - 1) // pos_bin     # last bin touched
+    if col_counts is not None:
+        touched = np.zeros(n_pos_bins + 1, dtype=np.int64)
+        np.add.at(touched, b0, 1)
+        np.add.at(touched, b1 + 1, -1)
+        col_counts += np.cumsum(touched)[:n_pos_bins]
     same = b0 == b1
     # A footprint inside one bin: its covered fraction of that bin.
     np.add.at(matrix, (row[same], b0[same]), (e[same] - s[same]) / pos_bin)
@@ -123,6 +155,64 @@ def normalize_rows(matrix: np.ndarray, row_counts: np.ndarray | None = None, min
     return out
 
 
+def normalize_columns(matrix: np.ndarray, col_counts: np.ndarray | None = None, min_footprints: int = 0,
+                      blank: float = 0.0) -> np.ndarray:
+    """Each position column over its mean across sizes (blank: no signal, or under ``min_footprints``)."""
+    if matrix.size == 0:
+        return matrix.astype(float)
+    means = matrix.mean(axis=0, keepdims=True)
+    usable = means > 0
+    if col_counts is not None and min_footprints > 0:
+        usable = usable & (np.asarray(col_counts).reshape(1, -1) >= min_footprints)
+    out = np.full(matrix.shape, blank, dtype=float)
+    np.divide(matrix, means, out=out, where=usable & np.ones_like(matrix, dtype=bool))
+    return out
+
+
+def observed_over_expected(matrix: np.ndarray, row_counts: np.ndarray | None = None, min_footprints: int = 0,
+                           blank: float = 0.0) -> np.ndarray:
+    """``obs / (row_sum * col_sum / total)``: 1 = what the size's and the position's totals predict.
+
+    Blank where the expectation is 0, and in size rows drawn from fewer than
+    ``min_footprints`` footprints.
+    """
+    if matrix.size == 0:
+        return matrix.astype(float)
+    total = float(matrix.sum())
+    out = np.full(matrix.shape, blank, dtype=float)
+    if total <= 0:
+        return out
+    expected = matrix.sum(axis=1, keepdims=True) * matrix.sum(axis=0, keepdims=True) / total
+    usable = expected > 0
+    if row_counts is not None and min_footprints > 0:
+        usable = usable & (np.asarray(row_counts).reshape(-1, 1) >= min_footprints)
+    np.divide(matrix, expected, out=out, where=usable)
+    return out
+
+
+def sigma_bins(sigma_bp: float | None, bin_bp: int) -> float:
+    """A Gaussian sigma in bp as bins of ``bin_bp`` (0 when off or invalid)."""
+    if not sigma_bp or sigma_bp <= 0 or bin_bp <= 0:
+        return 0.0
+    return float(sigma_bp) / float(bin_bp)
+
+
+def legacy_sigmas_bp(smooth: float | None, size_bin: int, pos_bin: int) -> tuple[float, float]:
+    """The older ``smooth`` (one sigma in bins, both axes) as ``(sigma_size_bp, sigma_pos_bp)``."""
+    if not smooth or smooth <= 0:
+        return 0.0, 0.0
+    return float(smooth) * size_bin, float(smooth) * pos_bin
+
+
+def gaussian_smooth(matrix: np.ndarray, sigma_size_bins: float, sigma_pos_bins: float) -> np.ndarray:
+    """Separable 2-D Gaussian: ``sigma_size_bins`` down the size axis (0), ``sigma_pos_bins`` along positions (1)."""
+    out = matrix.astype(float)
+    if out.size == 0 or (sigma_size_bins <= 0 and sigma_pos_bins <= 0):
+        return out
+    from scipy.ndimage import gaussian_filter
+    return gaussian_filter(out, sigma=(max(0.0, sigma_size_bins), max(0.0, sigma_pos_bins)))
+
+
 def finish_vplot(
     matrix: np.ndarray,
     *,
@@ -131,14 +221,35 @@ def finish_vplot(
     log: bool = False,
     row_counts: np.ndarray | None = None,
     row_min_footprints: int = 0,
+    normalization: str | None = None,
+    sigma_bins_size: float | None = None,
+    sigma_bins_pos: float | None = None,
+    col_counts: np.ndarray | None = None,
+    blank: float = 0.0,
 ) -> np.ndarray:
-    """Smooth, then (optionally) per-size-row enrichment, then log1p. Scaling to [0, 1] is the caller's."""
-    out = matrix.astype(float)
-    if smooth and smooth > 0:
-        from scipy.ndimage import gaussian_filter
-        out = gaussian_filter(out, sigma=smooth)
-    if row_normalize:
+    """Smooth, then normalise, then (optionally) log1p. Scaling to [0, 1] is the caller's.
+
+    ``normalization`` (``row`` / ``column`` / ``oe`` / ``raw``) overrides
+    ``row_normalize`` when given. ``sigma_bins_size`` / ``sigma_bins_pos``
+    override ``smooth`` (one sigma in bins on both axes) when either is given.
+    ``row_min_footprints`` is the minimum-footprints guard for whichever
+    normalisation is used; ``blank`` is the value of cells it leaves out.
+    """
+    if sigma_bins_size is None and sigma_bins_pos is None:
+        s_size = s_pos = float(smooth) if smooth and smooth > 0 else 0.0
+    else:
+        s_size, s_pos = float(sigma_bins_size or 0.0), float(sigma_bins_pos or 0.0)
+    out = gaussian_smooth(matrix, s_size, s_pos)
+    norm = normalization if normalization in VPLOT_NORMALIZATIONS else ("row" if row_normalize else "raw")
+    if norm == "row":
         out = normalize_rows(out, row_counts, row_min_footprints)
+        if blank != 0.0:
+            usable = out.mean(axis=1, keepdims=True) > 0
+            out = np.where(usable, out, blank) if out.size else out
+    elif norm == "column":
+        out = normalize_columns(out, col_counts, row_min_footprints, blank=blank)
+    elif norm == "oe":
+        out = observed_over_expected(out, row_counts, row_min_footprints, blank=blank)
     if log:
         out = np.log1p(out)
     return out

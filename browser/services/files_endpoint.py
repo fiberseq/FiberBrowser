@@ -95,13 +95,24 @@ def diagnose_bam_payload(state, *, bam_path=None, dataset_idx: int = 0, chrom=No
                 f"Missing Fiber-seq tags: {', '.join(result['fiberseq_missing'])}"
             )
         frame = result.get("legacy_tag_frame") or {}
+        from services.legacy_frame import BASIS_READS
+        drawn_frame = result.get("legacy_frame") or frame.get("frame")
+        from_reads = result.get("legacy_frame_basis") == BASIS_READS
         if frame.get("ambiguous") and (result.get("has_nucleosomes") or result.get("has_msps")):
             votes = frame.get("votes") or {}
             recommendations.append(
                 "The @PG history has branches whose last footprint writers disagree on the ns/nl/as/al "
                 f"coordinate frame ({votes.get('molecular', 0)} molecular, {votes.get('seq', 0)} SEQ); "
-                f"reverse-strand footprints are drawn in {frame.get('frame')} frame. Files merged from "
+                f"reverse-strand footprints are drawn in {drawn_frame} frame"
+                + (", the frame the reads' m6A calls fit" if from_reads else "") + ". Files merged from "
                 "different producers can mix frames; re-call them with one tool if reverse reads look mirrored."
+            )
+        elif frame.get("source") == "default" and from_reads and drawn_frame == "molecular":
+            recommendations.append(
+                "The header does not say which coordinate frame the footprint tags use (no footprint writer in @PG "
+                "and no coord=molecular line; a pipeline may have stripped them). The reads' m6A calls fit "
+                "molecular frame (few calls inside nucleosomes, many inside MSPs), so ns/nl/as/al are read in "
+                "molecular frame. Keep the producer's @PG/@CO header lines to make this explicit."
             )
         elif frame.get("source") == "default" and bam_frame_unverifiable(bam_path):
             # FiberHMM's rule (read_has_frame_dependent_annotations): legacy arrays or non-m5C MA groups.

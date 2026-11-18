@@ -272,6 +272,10 @@ describe('palette ranking and analysis commands (fb-n3-search)', () => {
     ['export projection', 'cmd:export-projection-table'],
     ['scan peaks', 'cmd:scan-peaks'],
     ['co-occupancy', 'cmd:co-occupancy'],
+    ['size enrichment', 'cmd:footprint-size-enrichment'],
+    ['footprint sizes', 'cmd:footprint-size-enrichment'],
+    ['v-plot', 'cmd:footprint-vplot'],
+    ['vplot', 'cmd:footprint-vplot'],
   ])('"%s" finds the analysis %s near the top', (query, id) => {
     const items = buildPaletteItems();
     const rank = rankOf(query, id, items);

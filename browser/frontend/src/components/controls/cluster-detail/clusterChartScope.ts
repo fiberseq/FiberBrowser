@@ -36,7 +36,7 @@ export interface ClusterChartScope {
 
 const viewId = (v: Pick<PanelView, 'genomeKey' | 'chrom' | 'start' | 'end'>) => `${v.genomeKey}|${v.chrom}:${v.start}-${v.end}`;
 
-export function clusterChartScope(s: PanelScopeState, clusteredKeys: string[]): ClusterChartScope {
+export function clusterChartScope(s: PanelScopeState, clusteredKeys: string[], invokedFrom?: string | null): ClusterChartScope {
   const visible = new Set(visibleDatasetPanels(s).map(p => p.id));
   const main: PanelView = {
     chrom: s.chrom, start: s.start, end: s.end, panelId: null, genome: null,
@@ -48,7 +48,8 @@ export function clusterChartScope(s: PanelScopeState, clusteredKeys: string[]): 
     panels.sort((a, b) => Number(visible.has(b.id)) - Number(visible.has(a.id)));
     return [key, panels.length ? panels.map(p => panelView(s, p)) : [main]] as const;
   }));
-  const active = activePanelView(s);
+  // invokedFrom: a request made from one panel (the read menu's "here") plots that panel's view.
+  const active = activePanelView(s, invokedFrom);
   const shows = (key: string, id: string) => (viewsOf.get(key) ?? []).some(v => viewId(v) === id);
   const firstKey = clusteredKeys[0];
   const view = clusteredKeys.some(key => shows(key, viewId(active)))

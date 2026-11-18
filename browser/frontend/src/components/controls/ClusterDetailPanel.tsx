@@ -1,3 +1,4 @@
+import { getDatasetLayerLabel, getLayerLabel, isAccessibilityLayer } from '../../utils/layerColors';
 import { panelReversed } from '../../hooks/usePanelDisplayStore';
 import { openRegionPanels } from '../../utils/regionPanels';
 import { getClusterColor } from '../tracks/ReadTrack';
@@ -5,7 +6,7 @@ import { currentMatchedRun, matchedRunCounts } from '../../utils/clusterMatchedR
 import { useMemo, useEffect, useState, useCallback, useRef } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useBrowserStore } from '../../stores/browserStore';
-import { dissolveCluster, autoCullClusters, fetchClusterVPlot, fetchClusterProjection, type ClusterVPlotData, type VPlotMode, type ProjectionResponse, type ProjectionMethod } from '../../api/clustering';
+import { dissolveCluster, autoCullClusters, fetchClusterProjection, type ProjectionResponse, type ProjectionMethod } from '../../api/clustering';
 import { getCompactReads } from '../../api/readOperations';
 import { formatProjectionTsv, indexProjection, projectionFilename, projectionInputSignature } from '../../utils/projectionExport';
 import { referenceAt } from '../../utils/dataExportActions';
@@ -37,7 +38,10 @@ import { useReadActionsStore } from '../../stores/readActionsStore';
 import { currentMergeSettings, describeMergeSettings, type MergeStrategy } from '../../utils/mergeStrategies';
 import { clusteringBeforeMerge, recordAppliedMerge } from '../../utils/clusterMergeActions';
 import { SavedClustersTab } from './cluster-detail/SavedClustersTab';
-import { VPlotTabContent } from './cluster-detail/VPlotTabContent';
+import { FootprintSizesView, type FootprintSizesTarget } from './cluster-detail/FootprintSizesView';
+import { useFootprintSizesInvokedFrom } from '../../utils/footprintSizeEntry';
+import { FOOTPRINT_SIZE_VIEW_HELP, withView } from '../../utils/footprintSizeSettings';
+import { viewLocusLabel } from '../../utils/panelScope';
 import { ClusterBranchMap, hasClusterBranches } from './cluster-detail/ClusterBranchMap';
 import { clusterOperationRounds } from './cluster-detail/clusterOperationRounds';
 import { chartRoundStillCurrent, clusterChartScope, clusterChartScopeNote, clusterMergeInputs, clusterMergePeaks, scopedClusters } from './cluster-detail/clusterChartScope';
@@ -65,7 +69,6 @@ import {
   buildClusterAssignmentSignature,
   buildClusterEnrichmentRequestKey,
   buildClusterProjectionRequestKey,
-  buildClusterVplotRequestKey,
 } from '../../utils/clusterDetailRequestKey';
 import { Check, ReadClusters, Sliders } from '../ui/Icons';
 import { useRememberedState } from '../../hooks/useRememberedState';
@@ -224,24 +227,6 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
   const [saveFeedback, setSaveFeedback] = useState(false);
   const [editingNameId, setEditingNameId] = useState<string | null>(null);
 
-  // V-plot state
-  // V-plots with the request they answer: shown only for the current settings.
-  const [vplotEntry, setVplotEntry] = useState<{ key: string; data: Record<string, Record<number, ClusterVPlotData>> } | null>(null);
-  const [vplotError, setVplotError] = useState<string | null>(null);
-  const [vplotLoading, setVplotLoading] = useState(false);
-  const [vplotSizeBin, setVplotSizeBin] = useState(10);
-  const [vplotPosBin, setVplotPosBin] = useState(10);
-  const [vplotSizeMin, setVplotSizeMin] = useState(10);
-  const [vplotSizeMax, setVplotSizeMax] = useState(300);
-  const [vplotLog, setVplotLog] = useState(true);
-  const [vplotSmooth, setVplotSmooth] = useState(1.0);
-  // New: layer source (null = primary, 'tf' = LLR-recalled TF subset),
-  // normalization mode, and a preset dropdown for quick size-range swaps.
-  const [vplotLayer, setVplotLayer] = useState<string | null>(null);
-  const [vplotNormalize, setVplotNormalize] = useState<'per_cluster' | 'shared'>('per_cluster');
-  const [vplotMode, setVplotMode] = useState<VPlotMode>('midpoint');
-  const [vplotRowNormalize, setVplotRowNormalize] = useState(false);
-  const [showVplotSettings, setShowVplotSettings] = useState(false);
 
   // Enrichment state
   const [enrichmentReads, setEnrichmentReads] = useState<Record<string, CompactReadLike[]> | null>(null);
@@ -270,7 +255,6 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
     (patch: { minFraction?: number; strategy?: MergeStrategy; threshold?: number }) => useBrowserStore.getState().setMergeSettings(patch),
     [],
   );
-  const vplotRequestSeqRef = useRef(0);
   const enrichmentRequestSeqRef = useRef(0);
   const projectionRequestSeqRef = useRef(0);
 
@@ -387,27 +371,6 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
   // Quality filters and layer inference change the reads every cluster plot is
   // computed from: part of each plot's request key.
   const settingsKey = useAnalysisSettingsKey();
-  const vplotRequestKey = useMemo(() => `${buildClusterVplotRequestKey({
-    chrom,
-    start,
-    end,
-    sizeBin: vplotSizeBin,
-    posBin: vplotPosBin,
-    sizeMin: vplotSizeMin,
-    sizeMax: vplotSizeMax,
-    logNorm: vplotLog,
-    smooth: vplotSmooth,
-    layer: vplotLayer,
-    normalize: vplotNormalize,
-    mode: vplotMode,
-    rowNormalize: vplotRowNormalize,
-    sampleSeed: analysisSampleSeed,
-    assignmentSignature: clusterAssignmentSignature,
-  })}|${viewGenome ?? ''}|${settingsKey}`, [
-    analysisSampleSeed, chrom, clusterAssignmentSignature, end, start, viewGenome, vplotLayer,
-    vplotLog, vplotNormalize, vplotPosBin, vplotSizeBin, vplotSizeMax,
-    vplotSizeMin, vplotSmooth, settingsKey, vplotMode, vplotRowNormalize,
-  ]);
 
   // Rules match TF calls and any layer they target, which live in each
   // read's layers rather than its top-level intervals.
@@ -471,63 +434,8 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
   const projectionFullKey = `${projectionRequestKey}|${viewGenome ?? ''}|${chartView.followsMain ? '' : chartView.panelId ?? ''}|${peakRegionsKey}|${clusterFeatureRulesKey}|${settingsKey}`;
   const projectionData = projectionFetched?.key === projectionFullKey ? projectionFetched.data : null;
 
-  // Fetch cluster V-plots when tab is active
-  useEffect(() => {
-    if (activeTab !== 'vplot' || !hasClusterAssignments) {
-      vplotRequestSeqRef.current += 1;
-      setVplotLoading(false);
-      return;
-    }
-    const controller = new AbortController();
-    const requestSeq = ++vplotRequestSeqRef.current;
-    const key = vplotRequestKey;
-    setVplotError(null);
-    const timer = setTimeout(() => {
-      if (vplotRequestSeqRef.current !== requestSeq) return;
-      setVplotLoading(true);
-      Promise.all(analysisRounds.map(round => fetchClusterVPlot(chrom, start, end, {
-        sizeBin: vplotSizeBin, posBin: vplotPosBin,
-        sizeMin: vplotSizeMin, sizeMax: vplotSizeMax, logNorm: vplotLog, smooth: vplotSmooth,
-        layer: vplotLayer, normalize: vplotNormalize, sampleSeed: analysisSampleSeed,
-        mode: vplotMode, rowNormalize: vplotRowNormalize,
-        clusterAssignments: round.assignments,
-        panelGenome: viewGenome,
-        signal: controller.signal,
-      }).then(res => ({ round, res }))))
-        .then(answers => {
-          if (vplotRequestSeqRef.current !== requestSeq || controller.signal.aborted) return;
-          // Each panel's V-plots, from the round that carried its assignments.
-          const byPanel: Record<string, Record<number, ClusterVPlotData>> = {};
-          for (const { round, res } of answers) {
-            if (!res.success) continue;
-            for (const [dsId, sk] of Object.entries(round.keyByDataset)) {
-              if (res.data[dsId]) byPanel[sk] = res.data[dsId];
-            }
-          }
-          setVplotEntry({ key, data: byPanel });
-        })
-        .catch(err => {
-          if (controller.signal.aborted || err?.name === 'AbortError') return;
-          if (vplotRequestSeqRef.current === requestSeq) {
-            setVplotError(`V-plots could not be computed: ${err instanceof Error ? err.message : String(err)}`);
-          }
-        })
-        .finally(() => {
-          if (vplotRequestSeqRef.current === requestSeq && !controller.signal.aborted) {
-            setVplotLoading(false);
-          }
-        });
-    }, 300);
-    return () => {
-      controller.abort();
-      clearTimeout(timer);
-      if (vplotRequestSeqRef.current === requestSeq) vplotRequestSeqRef.current += 1;
-      setVplotLoading(false);
-    };
-  }, [activeTab, hasClusterAssignments, vplotRequestKey]);
 
   // Changed settings (layer, bins, clusters…): the old plots aren't shown for them.
-  const vplotData = vplotEntry?.key === vplotRequestKey ? vplotEntry.data : null;
 
   // Fetch reads for enrichment tab when activated
   const enabledRules = activeColormap.rules.filter(r => r.enabled);
@@ -952,6 +860,25 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
     () => scopedClusters(analysisKeys, { clusterAssignments, clusterOrder, clusterFocus, selectedClusters }),
     [analysisKeys, clusterAssignments, clusterOrder, clusterFocus, selectedClusters],
   );
+  // Footprint sizes from all reads (no clustering needed): the panels in focus showing one view (the panel a
+  // read-menu "here" came from, else the active one); clusters, when there are, as the other grouping.
+  const footprintInvokedFrom = useFootprintSizesInvokedFrom(s => s.panelId);
+  const settingsGroupByClusters = useBrowserStore(s => s.footprintSizeSettings.groupBy === 'clusters');
+  const allReadsScope = useMemo(() => {
+    const sc = clusterChartScope(scopeState, targetStateKeys, footprintInvokedFrom);
+    return {
+      view: sc.view,
+      keys: sc.keys,
+      note: sc.leftOut > 0 ? `${sc.leftOut} panel${sc.leftOut === 1 ? '' : 's'} showing another locus or reference ${sc.leftOut === 1 ? 'is' : 'are'} left out (the plots show ${viewLocusLabel(sc.view)}).` : null,
+    };
+  }, [scopeState, targetStateKeys, footprintInvokedFrom]);
+  const footprintPanel = useCallback((key: string) => ({
+    key, datasetId: stateKeyToDs[key] || key, label: keyLabel(key) ?? key, datasetLabel: getDsForKey(key)?.label, color: keyColor(key),
+  }), [stateKeyToDs, keyLabel, keyColor, getDsForKey]);
+  const allReadsTarget: FootprintSizesTarget = useMemo(() => ({
+    chrom: allReadsScope.view.chrom, start: allReadsScope.view.start, end: allReadsScope.view.end,
+    genome: allReadsScope.view.genome ?? null, panels: allReadsScope.keys.map(footprintPanel),
+  }), [allReadsScope, footprintPanel]);
   const differencesScope = useMemo(
     () => scopedClusters(enrichmentCohorts.keys, { clusterAssignments, clusterOrder, clusterFocus, selectedClusters }),
     [enrichmentCohorts.keys, clusterAssignments, clusterOrder, clusterFocus, selectedClusters],
@@ -1104,16 +1031,27 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
     hasClusterAssignments,
   ]);
 
-  if (!hasClusterAssignments && savedClusters.length === 0) {
+  if (!hasClusterAssignments && savedClusters.length === 0 && activeTab !== 'vplot') {
+    // Inside the measured container: the panel's width is tracked from its first render (a later chart is sized right).
     return (
-      <AnalysisStatus kind="empty" center className="flex h-full flex-col items-center justify-center p-4" icon={<ReadClusters size={20} />}>
-        No clusters computed. Select peaks and click Cluster.
-      </AnalysisStatus>
+      <div ref={containerRef} className="h-full">
+        <AnalysisStatus kind="empty" center className="flex h-full flex-col items-center justify-center p-4" icon={<ReadClusters size={20} />}>
+          <div className="flex flex-col items-center gap-2">
+            <span>No clusters computed. Select peaks and click Cluster.</span>
+            <span className="text-[11px]">Or, with no clustering, plot footprint sizes from every read in view:</span>
+            <AnalysisButton theme="cyan" variant="soft" size="sm" data-testid="cluster-detail-open-footprint-sizes"
+              title={FOOTPRINT_SIZE_VIEW_HELP.enrichment}
+              onClick={() => { useBrowserStore.getState().setFootprintSizeSettings(withView(useBrowserStore.getState().footprintSizeSettings, 'enrichment')); setActiveTab('vplot'); }}>
+              Footprint size enrichment
+            </AnalysisButton>
+          </div>
+        </AnalysisStatus>
+      </div>
     );
   }
 
-  // If no active clusters but have saved ones, force saved tab
-  if (!hasClusterAssignments && savedClusters.length > 0 && activeTab !== 'saved') {
+  // If no active clusters but have saved ones, force saved tab (the footprint size plots need no clusters)
+  if (!hasClusterAssignments && savedClusters.length > 0 && activeTab !== 'saved' && activeTab !== 'vplot') {
     // Use setTimeout to avoid setState during render
     setTimeout(() => setActiveTab('saved'), 0);
   }
@@ -1127,7 +1065,7 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
   const chartTabs: Array<{ key: ClusterDetailTab; label: string }> = hasClusterAssignments ? [
     { key: 'profiles', label: 'Profiles' },
     { key: 'composition', label: 'Composition' },
-    { key: 'vplot', label: 'V-Plot' },
+    { key: 'vplot', label: 'Footprint sizes' },
     ...(hasRules ? [{ key: 'enrichment' as const, label: 'Differences' }] : []),
   ] : [];
   const isChartTab = chartTabs.some(tab => tab.key === activeTab);
@@ -1136,7 +1074,10 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
     ...(hasClusterAssignments ? [
       { key: 'overview' as const, label: 'Overview' },
       { key: 'charts' as const, label: 'Charts' },
-    ] : []),
+    ] : [
+      // No clusters: the footprint size plots, from all reads, stay one click away.
+      { key: 'vplot' as const, label: 'Footprint sizes' },
+    ]),
     { key: 'saved' as const, label: savedClusters.length > 0 ? `Saved (${savedClusters.length})` : 'Saved' },
   ];
   const topTab: ClusterDetailTab | 'charts' = isChartTab ? 'charts' : activeTab;
@@ -1147,12 +1088,11 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
   };
   const clusterHeaderTitle = hasClusterAssignments
     ? `${clusterData.length} clusters`
-    : 'Saved clusters';
+    : activeTab === 'vplot' ? 'Footprint sizes' : 'Saved clusters';
   const clusterHeaderDetail = hasClusterAssignments
     ? `${clusteredReadTotal.toLocaleString()} assigned reads${multiDs ? ` · ${datasetIds.length} dataset views` : ''}`
-    : `${savedClusters.length} saved snapshot${savedClusters.length !== 1 ? 's' : ''}`;
-  const vplotLayerLabel = vplotLayer === null ? 'HMM calls' : (vplotLayer === 'msp' || vplotLayer === 'fire') ? 'Accessibility' : vplotLayer;
-  const vplotSettingsSummary = `${vplotLayerLabel} · ${vplotSizeMin}-${vplotSizeMax}bp · ${vplotPosBin}bp bins`;
+    : activeTab === 'vplot' ? 'All reads in view, one plot per dataset (no clustering needed)'
+      : `${savedClusters.length} saved snapshot${savedClusters.length !== 1 ? 's' : ''}`;
 
   return (
     <div ref={containerRef}>
@@ -1422,6 +1362,7 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
           isReversed={isReversed}
           getDatasetLabel={sk => keyLabel(sk)}
           getDatasetColor={sk => keyColor(sk)}
+          getLayerLabelFor={(sk, layerKey) => getDatasetLayerLabel(layerKey, getDsForKey(sk))}
         />
       )}
 
@@ -1438,50 +1379,21 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
         />
       )}
 
-      {/* === V-Plot tab === */}
-      {(activeTab === 'vplot' || activeTab === 'enrichment') && offLocusNote && (
+      {/* === Footprint sizes tab (size enrichment / V-plot) === */}
+      {activeTab === 'enrichment' && offLocusNote && (
         <div className="px-2 py-1 text-[11px] text-amber-700 dark:text-amber-300" data-testid="cluster-detail-off-locus-note">
           {offLocusNote}
         </div>
       )}
       {activeTab === 'vplot' && (
-        <VPlotTabContent
-          vplotData={vplotData}
-          vplotError={vplotError}
-          vplotLoading={vplotLoading}
-          showVplotSettings={showVplotSettings}
-          setShowVplotSettings={setShowVplotSettings}
-          vplotSettingsSummary={vplotSettingsSummary}
-          vplotSizeBin={vplotSizeBin}
-          setVplotSizeBin={setVplotSizeBin}
-          vplotPosBin={vplotPosBin}
-          setVplotPosBin={setVplotPosBin}
-          vplotSizeMin={vplotSizeMin}
-          setVplotSizeMin={setVplotSizeMin}
-          vplotSizeMax={vplotSizeMax}
-          setVplotSizeMax={setVplotSizeMax}
-          vplotLog={vplotLog}
-          setVplotLog={setVplotLog}
-          vplotSmooth={vplotSmooth}
-          setVplotSmooth={setVplotSmooth}
-          vplotNormalize={vplotNormalize}
-          setVplotNormalize={setVplotNormalize}
-          vplotLayer={vplotLayer}
-          setVplotLayer={setVplotLayer}
-          vplotMode={vplotMode}
-          setVplotMode={setVplotMode}
-          vplotRowNormalize={vplotRowNormalize}
-          setVplotRowNormalize={setVplotRowNormalize}
-          pickKeys={analysisKeys}
-          start={start}
-          end={end}
-          datasetIds={analysisKeys}
-          multiDs={analysisKeys.length > 1}
-          visibleClusterData={vplotScope.visible}
+        <FootprintSizesView
+          allReads={allReadsTarget}
+          clusters={hasClusterAssignments ? { chrom, start, end, genome: viewGenome ?? null, panels: analysisKeys.map(footprintPanel), rounds: analysisRounds, visible: vplotScope.visible, assignmentSignature: clusterAssignmentSignature } : null}
           chartWidth={chartWidth}
           isFullView={isFullView}
-          getDatasetLabel={sk => keyLabel(sk)}
-          getDatasetColor={sk => keyColor(sk)}
+          sampleSeed={analysisSampleSeed}
+          settingsKey={settingsKey}
+          note={hasClusterAssignments && settingsGroupByClusters ? offLocusNote : allReadsScope.note}
         />
       )}
 

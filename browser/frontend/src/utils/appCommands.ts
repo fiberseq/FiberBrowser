@@ -1,4 +1,5 @@
 import { removeMatchedGroups } from './matchedGroupActions';
+import { openFootprintSizes } from './footprintSizeEntry';
 /**
  * The app's command bus: named commands that do what the in-app controls do,
  * callable as `window.fiberbrowserCommand(name, args?)`.
@@ -102,6 +103,8 @@ export const APP_COMMANDS = [
   'cluster-neighbourhoods',
   'sort-by-projection',
   'co-occupancy',
+  'footprint-size-enrichment',
+  'footprint-vplot',
   // from the desktop app itself, not the menu: the real paths of dropped files (utils/nativeDrop)
   'native-drop',
 ] as const;
@@ -227,6 +230,19 @@ export const APP_COMMAND_INFO: Record<AppCommandName, AppCommandInfo | null> = {
     label: 'Find classes in this view',
     detail: 'Footprints › Classes, on the whole view the panels show (not only the selected peaks)',
     keywords: ['classes', 'footprint classes', 'view', 'whole view', 'region', 'recaller', 'run'],
+    disabledReason: () => (hasDatasets() ? null : NEEDS_DATASET),
+  },
+  'footprint-size-enrichment': {
+    label: 'Footprint size enrichment',
+    detail: 'Clusters › Footprint sizes: footprint size by position, coloured by where each size is enriched (one plot per dataset, no clustering needed; per cluster when clustered)',
+    keywords: ['size enrichment', 'footprint sizes', 'footprint size', 'v-plot', 'vplot', 'v plot', 'enrichment', 'heatmap',
+      'size by position', 'fragment size', 'nucleosome', 'pol ii', 'polymerase'],
+    disabledReason: () => (hasDatasets() ? null : NEEDS_DATASET),
+  },
+  'footprint-vplot': {
+    label: 'V-plot (footprint midpoints)',
+    detail: 'Clusters › Footprint sizes, V-plot view: each footprint counted once at its midpoint, by size',
+    keywords: ['v-plot', 'vplot', 'v plot', 'midpoint', 'footprint sizes', 'size enrichment', 'fragment size'],
     disabledReason: () => (hasDatasets() ? null : NEEDS_DATASET),
   },
   'open-projection': {
@@ -415,6 +431,8 @@ export const BUILTIN_COMMANDS: Partial<Record<AppCommandName, AppCommandHandler>
   'previous-region': () => stepRegion(-1) === null,
   'find-classes': () => findFootprintClasses(),
   'find-classes-view': () => findFootprintClassesInView(),
+  'footprint-size-enrichment': () => (hasDatasets() ? openFootprintSizes({ view: 'enrichment' }) : false),
+  'footprint-vplot': () => (hasDatasets() ? openFootprintSizes({ view: 'vplot' }) : false),
   'open-projection': () => openProjection(),
   'export-projection-table': () => exportProjectionTable(),
   // The Cluster group's button with that method (it reads the method when it runs).

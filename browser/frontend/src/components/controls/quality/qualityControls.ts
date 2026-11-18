@@ -39,3 +39,55 @@ export function qualityLabel(name: string): string {
   const plain = PLAIN_NAMES[name];
   return plain ? `${plain} (${name})` : name;
 }
+
+/** The FIRE accessibility filter: MSP score aq (= 255 x FIRE precision). */
+export const FIRE_LAYER = 'fire';
+export const FIRE_SCORE = 'aq';
+
+/** FDR presets offered beside the FIRE threshold slider. */
+export const FIRE_FDR_PRESETS = [0.05, 0.1, 0.2] as const;
+
+/** aq cutoff for a FIRE false-discovery rate (aq = 255 x precision): 5% -> 242, 10% -> 230, 20% -> 204. */
+export function fireAqForFdr(fdr: number): number {
+  return Math.round(255 * (1 - fdr));
+}
+
+/** FIRE false-discovery rate (0-1) at an aq cutoff. */
+export function fireFdrForAq(aq: number): number {
+  return Math.max(0, Math.min(1, 1 - aq / 255));
+}
+
+/** "10%": the FDR at an aq cutoff, as a whole percent. */
+export function fireFdrLabel(aq: number): string {
+  return `${Math.round(100 * fireFdrForAq(aq))}%`;
+}
+
+/** Index of the FIRE filter row (layer fire, score aq) in the full list, or -1. */
+export function fireFilterIndex(filters: LayerQualityFilter[]): number {
+  return filters.findIndex(f => f.layer === FIRE_LAYER && f.qualityName === FIRE_SCORE);
+}
+
+/** Whether a filter row is a FIRE filter row (Labeling can add several). */
+export function isFireFilter(f: LayerQualityFilter): boolean {
+  return f.layer === FIRE_LAYER && f.qualityName === FIRE_SCORE;
+}
+
+/**
+ * All FIRE rows read as one filter: on when any is on, at the strictest
+ * cutoff in effect (every enabled row applies), else the first row's.
+ */
+export function fireFilterState(filters: LayerQualityFilter[]): { present: boolean; on: boolean; minValue: number | null } {
+  const rows = filters.filter(isFireFilter);
+  const active = rows.filter(f => f.enabled && f.minValue > 0);
+  if (active.length) return { present: true, on: true, minValue: Math.max(...active.map(f => f.minValue)) };
+  const first = rows.find(f => f.minValue > 0);
+  return { present: rows.length > 0, on: false, minValue: first ? first.minValue : null };
+}
+
+/** Set the FIRE filter: duplicate FIRE rows collapse to one (where the first was), or one is added. */
+export function withFireFilter(filters: LayerQualityFilter[], next: { minValue: number; enabled: boolean }): LayerQualityFilter[] {
+  const row: LayerQualityFilter = { layer: FIRE_LAYER, qualityName: FIRE_SCORE, minValue: Math.round(next.minValue), enabled: next.enabled };
+  const at = filters.findIndex(isFireFilter);
+  if (at < 0) return [...filters, row];
+  return filters.flatMap((f, i) => (i === at ? [row] : isFireFilter(f) ? [] : [f]));
+}

@@ -1252,7 +1252,7 @@ export function tourSteps(demo: DemoRegion | null, withOwnData = false, sv: Demo
       panel: 'cluster-detail',
       click: '[data-panel-content-type="cluster-detail"] [data-analysis-tab="profiles"]',
       selector: '[data-panel-content-type="cluster-detail"] [data-analysis-tab="profiles"]',
-      text: 'The Charts tab compares the clusters: their average Profiles, Composition (Bar, Pie or Line), V-Plot (Midpoint or Full footprint) and Differences. Click cluster names above a chart to show only those clusters.',
+      text: 'The Charts tab compares the clusters: their average Profiles, Composition (Bar, Pie or Line), Footprint sizes (Size enrichment or V-plot) and Differences. Click cluster names above a chart to show only those clusters.',
     },
     {
       id: 'projection',

@@ -1,7 +1,7 @@
 /**
  * Cluster charts (fb-n5-charts): with one dataset loaded Composition shows the
- * bar chart (and Pie); the V-plot switches between Midpoint and Full
- * footprint; picking a cluster by its name filters Profiles, and the pick is
+ * bar chart (and Pie); Footprint sizes shows Size enrichment per cluster and
+ * switches to the V-plot; picking a cluster by its name filters Profiles, and the pick is
  * the app's cluster selection.
  *
  * Pinned to the tracked NAPA demo BAM (chr19:47514000-47518000).
@@ -85,30 +85,31 @@ test('one dataset: Composition shows the bar chart, and Pie; Line needs two data
   await expect(composition.getByTestId('composition-pie').locator('canvas').first()).toBeVisible();
 });
 
-test('V-plot toggles between Midpoint and Full footprint', async ({ server, page }) => {
+test('Footprint sizes per cluster: Size enrichment by default, V-plot in one click', async ({ server, page }) => {
   test.setTimeout(180_000);
   await openAt(page, server);
   await cluster(page);
   const first = page.waitForResponse(res => res.url().includes('/api/cluster/vplot'), { timeout: 90_000 });
   const panel = await openChart(page, 'vplot');
-  expect(JSON.parse((await first).request().postData() || '{}').mode).toBe('midpoint');
-  const vplot = panel.getByTestId('cluster-vplot');
-  await expect(vplot).toHaveAttribute('data-vplot-mode', 'midpoint');
-  await expect(vplot.locator('canvas').first()).toBeVisible({ timeout: 60_000 });
+  const req = JSON.parse((await first).request().postData() || '{}');
+  expect(req).toMatchObject({ mode: 'span', normalization: 'row', group_by: 'cluster', raw_values: true });
+  const sizes = panel.getByTestId('footprint-sizes');
+  await expect(sizes).toHaveAttribute('data-view', 'enrichment');
+  await expect(sizes).toHaveAttribute('data-group', 'clusters');
+  await expect(sizes.getByTestId('footprint-sizes-plot').locator('canvas').first()).toBeVisible({ timeout: 60_000 });
 
-  const span = page.waitForResponse(res => res.url().includes('/api/cluster/vplot')
-    && JSON.parse(res.request().postData() || '{}').mode === 'span', { timeout: 90_000 });
-  await vplot.getByRole('button', { name: 'Full footprint', exact: true }).click();
-  const answer = await span;
-  expect(JSON.parse(answer.request().postData() || '{}').row_normalize).toBe(false);
+  const mid = page.waitForResponse(res => res.url().includes('/api/cluster/vplot')
+    && JSON.parse(res.request().postData() || '{}').mode === 'midpoint', { timeout: 90_000 });
+  await sizes.getByTestId('footprint-sizes-view-vplot').click();
+  const answer = await mid;
+  expect(JSON.parse(answer.request().postData() || '{}').normalization).toBe('raw');
   const body = await answer.json();
   const matrices = Object.values(body.data as Record<string, Record<string, { mode: string; matrix: number[][] }>>)
     .flatMap(byCluster => Object.values(byCluster));
   expect(matrices.length).toBeGreaterThan(0);
-  expect(matrices.every(m => m.mode === 'span')).toBe(true);
-  await expect(vplot).toHaveAttribute('data-vplot-mode', 'span');
-  await expect(panel.getByTestId('vplot-caption')).toContainText('Full footprint');
-  await expect(vplot.locator('canvas').first()).toBeVisible({ timeout: 60_000 });
+  expect(matrices.every(m => m.mode === 'midpoint')).toBe(true);
+  await expect(sizes).toHaveAttribute('data-view', 'vplot');
+  await expect(panel.getByTestId('vplot-caption')).toContainText('Midpoint');
 });
 
 test('picking a cluster by its name filters Profiles and selects it in the app', async ({ server, page }) => {

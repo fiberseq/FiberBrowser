@@ -21,8 +21,8 @@ from services.primer_state import (
 )
 from services.primer_blast_runtime import (
     PrimerDesignAborted,
-    blast_and_score_cached,
     check_abort as _check_abort,
+    score_primer_specificity as _score_primer_specificity,
     primer_design_run as _primer_design_run,
     run_in_design_context as _run_in_design_context,
 )
@@ -34,7 +34,8 @@ from services.primer_blast_validation import (
 from services.primer_filters import filter_by_exclude_regions as _filter_by_exclude_regions
 from services.primer_reference import (
     get_fasta_interface as _get_fasta_interface,
-    resolve_chrom as _resolve_chrom,
+    resolve_template_chrom as _resolve_template_chrom,
+    template_sequences as _template_sequences,
 )
 
 
@@ -49,6 +50,8 @@ def _design_standard_primers_payload(req: PrimerDesignRequest, state):
 
     runtime_config, config_error = _resolve_primer_runtime_config(
         state,
+        chroms=[req.chrom],
+        template_in_db=req.template_in_db,
         missing_fasta_message="FASTA file not configured. Load a reference genome or set BLAST config.",
         missing_blast_message="BLAST database not configured. Set the BLAST DB path in Primer Design settings.",
     )
@@ -79,13 +82,19 @@ def _design_standard_primers_payload(req: PrimerDesignRequest, state):
         fetch_seq, get_chrom_len, available_chroms = _get_fasta_interface(state, fasta_path)
 
         # Resolve chromosome name (handle chr prefix mismatch)
-        chrom_key = _resolve_chrom(req.chrom, available_chroms)
+        chrom_key = _resolve_template_chrom(req.chrom, available_chroms, state)
         if chrom_key is None:
             _set_primer_progress_payload({"active": False, "stage": "error", "progress": 0, "message": ""})
             avail = ', '.join(sorted(available_chroms)[:10])
             return {"success": False, "message": f"Chromosome {req.chrom} not in FASTA (available: {avail}...)"}
 
         chrom_len = get_chrom_len(chrom_key)
+        templates = _template_sequences(state, [chrom_key])
+        if chrom_key in templates and chrom_len <= req.min_product:
+            _set_primer_progress_payload({"active": False, "stage": "error", "progress": 0, "message": ""})
+            return {"success": False, "message": (
+                f"{chrom_key} is {chrom_len:,} bp, not longer than the minimum product ({req.min_product:,} bp). "
+                f"Lower Min product in the primer parameters to fit the plasmid.")}
 
         # Validate target coordinates against chromosome length
         target_start = req.start
@@ -342,9 +351,10 @@ def _design_standard_primers_payload(req: PrimerDesignRequest, state):
             if not seqs:
                 return set(), {}, 0, 0, ""
             try:
-                passing, counts, n_cached, n_blasted, stderr_text = blast_and_score_cached(
-                    seqs, runtime_config.blast_db_path,
+                passing, counts, n_cached, n_blasted, stderr_text = _score_primer_specificity(
+                    [(seqs, chrom_key)], runtime_config, templates=templates,
                     check_three_prime=req.check_three_prime_specificity,
+                    check_template_self=req.check_template_self,
                 )
             except PrimerDesignAborted:
                 raise
@@ -691,7 +701,11 @@ def _design_standard_primers_payload(req: PrimerDesignRequest, state):
             "target_end": target_end,
             "pairs": top_pairs,
             "pair": top_pairs[0],
-            "message": f"Found {len(top_pairs)} primer pair(s)",
+            "message": f"Found {len(top_pairs)} primer pair(s)" + (
+                f" on {chrom_key}, checked against {os.path.basename(runtime_config.blast_db_path)} for off-target binding"
+                + (" and against itself for a single binding site" if req.check_template_self else "")
+                if not runtime_config.expects_home_hit(chrom_key) else ""),
+            "blast_db": runtime_config.blast_db_path,
             **({"warning": blast_db_mismatch_warning} if blast_db_mismatch_warning else {})
         }
         

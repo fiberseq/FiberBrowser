@@ -19,6 +19,7 @@ import type { ReadProjectionIndex } from '../utils/projectionExport';
 import { fetchApiResponse } from '../api/sharedFetch';
 import { isPublicServerPage } from '../utils/publicServerFlag';
 import { computeRuleOffset } from './peakRuleSlice';
+import { DEFAULT_FOOTPRINT_SIZE_SETTINGS, normalizeFootprintSizeSettings, type FootprintSizeSettings } from '../utils/footprintSizeSettings';
 import {
   mergeLogStatus,
   normalizeMergeLog,
@@ -404,6 +405,9 @@ export interface ClusterSlice {
   /** Set by a restore: its clusters belong to this view, so don't re-derive them here. */
   restoredClusterViewport: { chrom: string; start: number; end: number } | null;
   dynamicOverlapMode: 'conservative' | 'aggressive';  // Partial-overlap handling for centroid reassignment
+  /** Footprint size plots (Clusters › Footprint sizes): view, bins, Gaussian sigmas, normalisation (saved with the session). */
+  footprintSizeSettings: FootprintSizeSettings;
+  setFootprintSizeSettings: (patch: Partial<FootprintSizeSettings>) => void;
   readSortOrder: Record<string, string[]>;  // datasetId -> sorted read ID list
   filteredReadIds: Record<string, Set<string> | null>;  // datasetId -> read ids (from filter operation)
   readFilterSources: Record<string, ReadFilterSource | null>;  // datasetId/stateKey -> provenance for active read filters
@@ -800,6 +804,7 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
   clusterMergeLog: null,
   restoredClusterViewport: null,
   dynamicOverlapMode: 'aggressive',  // Default: a read is Unassigned only if it overlaps NO clustering peak; partial overlaps still get reassigned
+  footprintSizeSettings: DEFAULT_FOOTPRINT_SIZE_SETTINGS,
   readSortOrder: {},
   filteredReadIds: {},
   readFilterSources: {},
@@ -1304,6 +1309,10 @@ export function createClusterSlice(set: (partial: Partial<BrowserState> | ((stat
     } : {}),
   })),
   setDynamicOverlapMode: (mode) => set({ dynamicOverlapMode: mode }),
+  // Display only: a new plot is fetched; reads and clusters are left as they are.
+  setFootprintSizeSettings: (patch) => set(state => ({
+    footprintSizeSettings: normalizeFootprintSizeSettings({ ...state.footprintSizeSettings, ...patch }),
+  })),
   setClusterWindowPeaks: (value) => set({ clusterWindowPeaks: value }),
   setClusterPeakRegions: (regions) => set(state => ({
     clusterPeakRegions: regions,

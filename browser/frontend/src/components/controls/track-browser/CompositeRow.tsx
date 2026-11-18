@@ -13,7 +13,7 @@ import type {
   CatalogEntry,
 } from '../../../types/dataset';
 import { TRACK_COLORS } from '../../tracks/TrackContainerConstants';
-import { getLayerColor, getLayerLabel, getMetaprofileSourceEntries } from '../../../utils/layerColors';
+import { getDatasetLayerLabel, getLayerColor, getLayerLabel, getMetaprofileSourceEntries } from '../../../utils/layerColors';
 import { AnalysisButton } from '../shared';
 import { catalogRefKind, unloadCompositeSource, unloadCompositeTrack } from '../../../utils/trackLoader';
 import { AddTrackBox } from './AddTrackBox';
@@ -155,7 +155,10 @@ function SourceRow({ composite, source }: { composite: CompositeTrack; source: T
   let unavailable = false;
   const ref = source.ref;
   if (ref.kind === 'metaprofile') {
-    label = getLayerLabel(ref.ruleId === 'mod' ? 'm6a' : ref.ruleId);
+    const layerKey = ref.ruleId === 'mod' ? 'm6a' : ref.ruleId;
+    // A source pinned to one dataset is named as that dataset names it.
+    const pinned = ref.datasetId ? useBrowserStore.getState().datasets.find(d => d.id === ref.datasetId) : undefined;
+    label = pinned ? getDatasetLayerLabel(layerKey, pinned) : getLayerLabel(layerKey);
   } else {
     const e = catalog.find(c => c.id === ref.catalogEntryId);
     if (e) {

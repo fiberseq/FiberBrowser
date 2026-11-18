@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as Rea
 import { createPortal } from 'react-dom';
 import {
   BarChart, ClipboardList, Copy, Download, Eye, EyeOff, Layers, Library, Minus, Pin, Plus, Reads, RowHeight, Search, Settings, Sliders, Split, Target, TfFootprint, X,
+  SizeMap,
 } from '../../ui/Icons';
 import { PanelIcon } from '../../ui/panelIcons';
 import {
@@ -13,7 +14,7 @@ import {
 const ICONS: Record<string, (p: { size?: number }) => JSX.Element> = {
   reads: Reads, footprint: TfFootprint, stats: BarChart, copy: Copy, clipboard: ClipboardList, pin: Pin,
   target: Target, 'zoom-in': Plus, 'zoom-out': Minus, filter: Sliders, eye: Eye, 'eye-off': EyeOff, x: X, search: Search,
-  split: Split,
+  split: Split, sizes: SizeMap,
   // Track menus (fb-n11-tracks)
   layers: Layers, resize: RowHeight, settings: Settings, download: Download, library: Library,
 };

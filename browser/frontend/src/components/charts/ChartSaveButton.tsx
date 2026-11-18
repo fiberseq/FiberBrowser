@@ -144,6 +144,7 @@ export function ChartSaveButton({
           {dataTsv && (
             <button
               onClick={saveDataTsv}
+              data-testid="chart-save-tsv"
               className="block w-full whitespace-nowrap border-t border-gray-100 px-2 py-0.5 text-left text-[11px] text-gray-700 hover:bg-gray-100 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-700"
               title="Download the exact numeric values supplied to this chart"
             >

@@ -3569,3 +3569,18 @@ def test_cluster_by_footprints_only_uses_reads_evaluated_for_every_definition():
     assert set(result["assignments"]["ds1"]) == {"a", "b", "c"}
     patterns = {entry["pattern"]: entry["label"] for entry in result["legend"]}
     assert patterns == {"11": "+nuc  +tf", "10": "+nuc  -tf", "00": "-nuc  -tf"}
+
+
+def test_footprint_size_enrichment_client_asks_for_all_reads_and_raw_values():
+    client = DummyClient()
+    client.get_footprint_size_enrichment(chrom="chr2L", start=100, end=1000, normalization="oe",
+                                         sigma_size_bp=0, sigma_pos_bp=30, dataset_ids=["ds1"])
+    _, endpoint, body, params = client.calls[-1]
+    assert endpoint == "/api/cluster/vplot"
+    assert params == {"chrom": "chr2L", "region_start": 100, "region_end": 1000}
+    assert body["group_by"] == "all" and body["raw_values"] is True and body["mode"] == "span"
+    assert body["normalization"] == "oe" and body["dataset_ids"] == ["ds1"]
+    assert body["sigma_size_bp"] == 0.0 and body["sigma_pos_bp"] == 30.0 and body["row_min_footprints"] == 20
+    assert body["layer"] == "all_footprints"
+    client.get_footprint_size_enrichment(chrom="chr2L", start=100, end=1000, layer=None)
+    assert client.calls[-1][2]["layer"] is None

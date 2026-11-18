@@ -85,10 +85,10 @@ def test_reverse_read_nucleosomes_sit_on_the_m6a_free_gaps(name):
 def test_fire_elements_keep_their_quality_on_reverse_reads(name):
     # ft 0.13 writes FIRE as an Ma `fire.Q` layer + Aq; ft 0.6.2 writes aq parallel to as/al, both in molecular
     # order (fire.rs reverses the precisions for reverse reads). Each element must keep its own score.
+    # Both end up as the MSP layer's aq (services/fire_quality folds ft 0.13's fire group into its MSPs).
     reads = _render(FIXTURES / name)
-    layer = "fire" if "0.13" in name else "msp"
     for rid in READS:
-        lay = reads[rid]["layers"][layer]
+        lay = reads[rid]["layers"]["msp"]
         quals = lay["qualities"][0]
         got = sorted([iv[0], iv[1], q] for iv, q in zip(lay["intervals"], quals) if q not in (0, 128))
         assert got == EXPECTED["fixtures"][name]["fire"][rid], (name, rid)

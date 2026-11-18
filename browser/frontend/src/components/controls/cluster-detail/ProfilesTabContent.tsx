@@ -16,6 +16,8 @@ interface ProfilesTabContentProps {
   isReversed: boolean;
   getDatasetLabel: (datasetId: string) => string | undefined;
   getDatasetColor: (datasetId: string) => string | undefined;
+  /** A layer's name in one dataset view (the accessibility layer reads "FIRE" for a FIRE file). */
+  getLayerLabelFor?: (datasetId: string, layerKey: string) => string;
 }
 
 export function ProfilesTabContent({
@@ -28,6 +30,7 @@ export function ProfilesTabContent({
   isFullView,
   isReversed,
   getDatasetLabel,
+  getLayerLabelFor,
   getDatasetColor,
 }: ProfilesTabContentProps) {
   // Only the picked clusters (picked here, in the read panel or on the map); all when none is.
@@ -68,7 +71,7 @@ export function ProfilesTabContent({
               <div key={layerKey} data-testid="cluster-profile-chart" data-series={series.map(item => item.label).join(',')}>
                 <div className="flex items-center gap-1 text-[11px] text-gray-600 dark:text-gray-400 mb-0.5">
                   <span className="inline-block w-2 h-2 rounded-sm" style={{ backgroundColor: getLayerColor(layerKey) }} />
-                  <span>{getLayerLabel(layerKey)}</span>
+                  <span>{getLayerLabelFor ? getLayerLabelFor(sk, layerKey) : getLayerLabel(layerKey)}</span>
                 </div>
                 <OverlayProfileChart
                   series={series}
@@ -76,7 +79,7 @@ export function ProfilesTabContent({
                   height={isFullView ? 140 : 70}
                   showLegend={true}
                   isReversed={isReversed}
-                  yLabel={getLayerLabel(layerKey)}
+                  yLabel={getLayerLabelFor ? getLayerLabelFor(sk, layerKey) : getLayerLabel(layerKey)}
                   filename={`cluster_profile_${sk}_${layerKey}`}
                 />
               </div>

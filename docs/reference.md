@@ -313,7 +313,7 @@ PNG/SVG/PDF save buttons.
 
 | Group | Panel | Tabs | Opens with |
 |-------|-------|------|------------|
-| Analyze | **Clusters** | Overview; Charts (Profiles, Composition — Bar, Pie or Line — V-Plot — Midpoint or Full footprint — Projection — a t-SNE map by default, with **Export table** — and Differences, with rules); click cluster names above a chart to pick clusters; Saved | **Detail** in the **Cluster** group, or click the cluster bar |
+| Analyze | **Clusters** | Overview; Charts (Profiles, Composition — Bar, Pie or Line — Footprint sizes — Size enrichment or V-plot, also without clusters — Projection — a t-SNE map by default, with **Export table** — and Differences, with rules); click cluster names above a chart to pick clusters; Saved | **Detail** in the **Cluster** group, or click the cluster bar; Footprint sizes also from **Sizes** beside **Cluster** in the toolbar, the read menu (**Footprint size enrichment here**) and ⌘K |
 | Analyze | **Footprints** | Classes, Saved, Co-occupancy | Cmd/Ctrl+click a footprint |
 | Analyze | **Transcription** | Filters, Distribution, Co-occur, Pol II COM | Cmd/Ctrl+click a gene |
 | Analyze | **Read Stats** | Summary, Table, Distributions | Shift+click a read |

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { openFootprintSizes } from '../../utils/footprintSizeEntry';
 import { sampledFitCount } from '../../utils/clusterPreparation';
 import { FEATURE_FILTERS, FEATURE_SORT, featureNames, filterBySelectedFeatures, selectableKindsPhrase, selectedKindNotes, sortBySelectedFeatures, type FeatureFilterMode } from '../../utils/featureClustering';
 import { FeatureSelectionChip, useFeaturesInView } from './FeatureSelectionChip';
@@ -18,7 +19,7 @@ import {
   resolveClusterRuleRegions,
   summarizeAnalysisRuleScope,
 } from '../../utils/analysisRules';
-import { ListIcon, Peaks, Pencil, ReadClusters, Sliders, Trash, X } from '../ui/Icons';
+import { ListIcon, Peaks, Pencil, ReadClusters, SizeMap, Sliders, Trash, X } from '../ui/Icons';
 import { ToolbarGroup, ToolbarRow, type ToolbarGroupSpec } from './ToolbarGroups';
 import { ActionButton } from '../ui/ActionButton';
 import { QualityQuickControls, QualitySummary } from './quality/QualityQuickControls';
@@ -63,7 +64,7 @@ export function deriveModeOptions(
   // the toolbar label and backend mode agree. Keep the legacy accessibility
   // heuristic only for older footprint-only datasets.
   if (has('msp') || has('fire')) {
-    options.push({ id: 'fire', label: getLayerLabel('fire') });
+    options.push({ id: 'fire', label: getLayerLabel('fire', datasets) });
     seen.add('fire');
     seen.add('msp');
   } else if (has('nuc') || has('footprint')) {
@@ -864,6 +865,17 @@ export function ClusterPanel({
           )}
           {/* Which panels the run clusters, said before it runs (and the picker to choose them). */}
           <ClusterAppliesTo />
+          {/* Footprint size enrichment, always on show (no clustering needed): one click to the paper-style view. */}
+          <button
+            type="button"
+            data-testid="cluster-footprint-sizes-quick"
+            aria-label="Footprint size enrichment"
+            onClick={() => openFootprintSizes({ view: 'enrichment' })}
+            className="inline-flex items-center gap-1 rounded-md border border-cyan-200 bg-white px-1.5 py-0.5 text-[11px] font-medium text-cyan-700 hover:bg-cyan-50 dark:border-cyan-900/60 dark:bg-transparent dark:text-cyan-300 dark:hover:bg-cyan-950/40"
+            title="Footprint size enrichment: footprint size by position, coloured by where each size is enriched. No clustering needed (one plot per dataset); per cluster once clustered."
+          >
+            <SizeMap size={12} aria-hidden="true" /> Sizes
+          </button>
           </span>
         )}
       >
@@ -920,6 +932,18 @@ export function ClusterPanel({
             Sampled fit: {sampledFitCount(clusterPreparationSamples, clusteredStateKeys).toLocaleString()} fibers
           </span>
         )}
+        {/* Footprint size enrichment: works before (and without) clustering; per cluster once clustered. */}
+        <AnalysisButton
+          data-testid="cluster-footprint-sizes-button"
+          onClick={() => openFootprintSizes({ view: 'enrichment' })}
+          theme="cyan"
+          variant="soft"
+          size="sm"
+          className="inline-flex items-center gap-1 px-2.5"
+          title="Footprint size enrichment: footprint size by position, coloured by where each size is enriched. No clustering needed (one plot per dataset); per cluster once clustered. Also on the read menu and in ⌘K."
+        >
+          <SizeMap size={12} aria-hidden="true" /> Footprint sizes
+        </AnalysisButton>
         <AnalysisButton
           data-testid="cluster-auto-cull-button"
           data-copilot-anchor="cluster-auto-cull-button"

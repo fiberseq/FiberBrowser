@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { openFootprintSizes } from '../../../utils/footprintSizeEntry';
 import { useSplitPanelStore } from '../../../stores/splitPanelStore';
 import { useShallow } from 'zustand/react/shallow';
 import { useBrowserStore } from '../../../stores/browserStore';
@@ -328,6 +329,12 @@ export function ReadTrackActions(props: ReadTrackActionsProps) {
       case 'sv-clear-split':
         clearSvSplit(stateKey);
         break;
+      case 'footprint-size-enrichment': {
+        // This panel's view, Size enrichment (Clusters › Footprint sizes; all reads when not clustered).
+        const panel = store.panels.find(p => p.contentType === 'dataset' && (p.stateKey ?? p.datasetId) === stateKey);
+        openFootprintSizes({ view: 'enrichment', panelId: panel?.id ?? null });
+        break;
+      }
       case 'sv-split-panels': {
         // The allele groups this panel shows, one panel each (their read names: SV groups belong to this view).
         const panel = store.panels.find(p => p.contentType === 'dataset' && (p.stateKey ?? p.datasetId) === stateKey);

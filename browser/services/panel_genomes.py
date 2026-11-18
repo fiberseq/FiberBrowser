@@ -37,7 +37,7 @@ REFERENCE_ATTRS = (
     'registry_fasta',
     # Primer design reads the primer FASTA / BLAST database the main genome
     # was set up with: a panel on another assembly must not use them.
-    'primer_fasta', 'primer_blast_db',
+    'primer_fasta', 'primer_blast_db', 'primer_blast_db_pin',
 )
 MAIN = 'main'
 # One change to the references at a time (key choice, loading, assignment, pruning).

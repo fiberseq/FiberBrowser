@@ -178,6 +178,8 @@ function numericOrNull(value: unknown): number | null {
 }
 
 function footprintRuleLayerLabel(layer: string | null): string {
+  // Saved with the session: the accessibility layer keeps its fixed name here (not the session-dependent FIRE label).
+  if (layer === 'msp' || layer === 'fire') return 'Accessibility';
   return layer ? getLayerLabel(layer) : 'Base intervals';
 }
 

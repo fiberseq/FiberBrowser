@@ -4,13 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({
   fetchClusterProjection: vi.fn(),
-  fetchClusterVPlot: vi.fn(),
+  fetchFootprintSizes: vi.fn(),
   getCompactReads: vi.fn(),
 }));
 vi.mock('../../api/clustering', async (orig) => ({
   ...(await orig<typeof import('../../api/clustering')>()),
   fetchClusterProjection: api.fetchClusterProjection,
-  fetchClusterVPlot: api.fetchClusterVPlot,
+  fetchFootprintSizes: api.fetchFootprintSizes,
 }));
 vi.mock('../../api/readOperations', async (orig) => ({
   ...(await orig<typeof import('../../api/readOperations')>()),
@@ -82,7 +82,7 @@ beforeEach(() => {
     return fakeContext(this) as never;
   });
   api.fetchClusterProjection.mockReset().mockResolvedValue(projection);
-  api.fetchClusterVPlot.mockReset().mockResolvedValue({ success: true, data: {} });
+  api.fetchFootprintSizes.mockReset().mockResolvedValue({ success: true, data: {} });
   api.getCompactReads.mockReset().mockResolvedValue({ reads: [] });
   usePanelGenomeStore.setState({ genomes: {}, assignments: { flyamp: 'dm6' } });
   const colormap = useBrowserStore.getState().activeColormap;

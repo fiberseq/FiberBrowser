@@ -256,6 +256,24 @@ class ClusterVPlotRequest(BaseModel):
     row_min_footprints: int = 20
     sample_seed: Optional[str] = None
     cluster_assignments: Optional[Dict[str, Dict[str, int]]] = None
+    # Footprint size enrichment (fb size-enrichment). All optional: a request
+    # without them is answered exactly as before.
+    # "cluster": one matrix per cluster (needs assignments); "all": one matrix
+    # per dataset from every read in its working set (no clustering needed),
+    # under the cluster key -1.
+    group_by: str = "cluster"
+    # Restrict to these datasets (None: the analysis scope's datasets).
+    dataset_ids: Optional[List[str]] = None
+    # "row" | "column" | "oe" | "raw"; None: row_normalize decides (row / raw).
+    normalization: Optional[str] = None
+    # Separable Gaussian, one sigma per axis in bp (0 = off on that axis).
+    # Both None: the older `smooth` (one sigma in bins on both axes).
+    sigma_size_bp: Optional[float] = Field(None, ge=0, le=10_000)
+    sigma_pos_bp: Optional[float] = Field(None, ge=0, le=100_000)
+    # True: the matrix holds the values themselves (enrichment ratios or
+    # counts, no log1p, not scaled to a maximum; blank cells null) with the
+    # reads and footprints behind each matrix. False: the older scaled matrix.
+    raw_values: bool = False
 
 class ProjectionRequest(BaseModel):
     dataset_ids: List[str] = []
@@ -538,6 +556,11 @@ class PrimerDesignRequest(BaseModel):
     tm_method: str = "primer3"
     check_tandem_repeats: bool = True
     check_three_prime_specificity: bool = True
+    # Primers on a loaded plasmid map: whether the template is in the BLAST database ('auto': a contig of
+    # the database's FASTA is, a plasmid map is not, so every database hit counts as off-target), and
+    # whether they are also checked against the plasmid itself for a single binding site.
+    template_in_db: Literal['auto', 'yes', 'no'] = 'auto'
+    check_template_self: bool = True
     optimize_for: str = "closest"
     max_results: int = 5
     min_spacing: int = 50
@@ -563,6 +586,11 @@ class DafcPrimerDesignRequest(BaseModel):
     tm_method: str = "primer3"
     check_tandem_repeats: bool = True
     check_three_prime_specificity: bool = True
+    # Primers on a loaded plasmid map: whether the template is in the BLAST database ('auto': a contig of
+    # the database's FASTA is, a plasmid map is not, so every database hit counts as off-target), and
+    # whether they are also checked against the plasmid itself for a single binding site.
+    template_in_db: Literal['auto', 'yes', 'no'] = 'auto'
+    check_template_self: bool = True
     optimize_for: str = "closest"
     max_results: int = 5
     min_spacing: int = 50
@@ -586,6 +614,11 @@ class FourCPrimerDesignRequest(BaseModel):
     tm_method: str = "primer3"
     check_tandem_repeats: bool = True
     check_three_prime_specificity: bool = True
+    # Primers on a loaded plasmid map: whether the template is in the BLAST database ('auto': a contig of
+    # the database's FASTA is, a plasmid map is not, so every database hit counts as off-target), and
+    # whether they are also checked against the plasmid itself for a single binding site.
+    template_in_db: Literal['auto', 'yes', 'no'] = 'auto'
+    check_template_self: bool = True
     max_results: int = 5
     exclude_regions: Optional[List[List[int]]] = None
 

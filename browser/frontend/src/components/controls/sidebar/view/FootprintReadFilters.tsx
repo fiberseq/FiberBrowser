@@ -80,7 +80,7 @@ export function FootprintReadFilters() {
       </div>
 
       <div className="text-[11px] text-gray-500 dark:text-gray-400">
-        Quality filters (score cutoffs) are set in one place, Labeling &gt; Quality.{' '}
+        Quality filters (score cutoffs) are added and edited in Labeling &gt; Quality; the toolbar's Quality group turns them on or off.{' '}
         <button
           type="button"
           onClick={() => openSummaryTarget('quality', 'sidebar-footprint-read-filters')}

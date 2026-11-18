@@ -1,4 +1,5 @@
 import { setSignalFilterSource } from '../utils/signalFilters';
+import { setAccessibilityLabelSource } from '../utils/layerColors';
 import { clearLoadedReadRegions } from '../api/loadedReadRegion';
 import { useRunResultStore } from './runResultStore';
 import { storePinnedMotifs } from '../utils/pinnedMotifs';
@@ -221,6 +222,16 @@ useBrowserStore.subscribe((state, previous) => {
 });
 
 setSignalFilterSource(() => useBrowserStore.getState().signalFilters);
+// The accessibility layer is named "FIRE" when the loaded files carry FIRE scores
+// (utils/layerColors getLayerLabel): keep that name in step with the datasets.
+let lastLabelDatasets: BrowserState['datasets'] | undefined;
+const syncAccessibilityLabel = (state: BrowserState) => {
+  if (state.datasets === lastLabelDatasets) return;
+  lastLabelDatasets = state.datasets;
+  setAccessibilityLabelSource(state.datasets);
+};
+syncAccessibilityLabel(useBrowserStore.getState());
+useBrowserStore.subscribe(syncAccessibilityLabel);
 function readSourceKey(dataset: Dataset): string {
   return JSON.stringify([
     dataset.source_identity ?? dataset.paths ?? dataset.path ?? dataset.id,

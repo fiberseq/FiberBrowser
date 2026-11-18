@@ -75,7 +75,8 @@ can be on its own genome.
 **Clustering, sorting and filtering.** Select peaks and cluster the molecules by
 their footprints there (K-means, Neighbourhoods on the t-SNE graph,
 hierarchical, HDBSCAN, combinatorial), merge similar clusters, focus one,
-compare their profiles, composition and V-plots, and see every read on a t-SNE,
+compare their profiles, composition and footprint size plots (also without
+clustering), and see every read on a t-SNE,
 UMAP or PCA map. Sort reads within clusters and filter them with reusable
 rules.
 

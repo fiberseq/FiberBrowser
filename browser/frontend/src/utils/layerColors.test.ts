@@ -32,7 +32,7 @@ describe('layer color semantics', () => {
     expect(entries).toContainEqual(expect.objectContaining({ key: 'fire', label: 'Accessibility' }));
     expect(getMetaprofileSourceEntries([
       { available_layers: { fire: true } },
-    ])).toContainEqual(expect.objectContaining({ key: 'fire', label: 'Accessibility' }));
+    ])).toContainEqual(expect.objectContaining({ key: 'fire', label: 'FIRE' })); // a FIRE file names it FIRE
     expect(getLayerLabel('msp')).toBe('Accessibility');
     expect(getLayerColor('msp')).toBe(getLayerColor('fire'));
   });

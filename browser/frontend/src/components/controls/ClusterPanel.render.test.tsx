@@ -169,7 +169,7 @@ describe('ClusterPanel toolbar groups', () => {
       expect(toggle.textContent).toBe('');
       expect(toggle.getAttribute('aria-label')).toMatch(/options$/);
       expect(toggle.getAttribute('data-tour')).toBe(`${id}-controls-expand`);
-      expect(byId(`toolbar-group-${id}`)!.firstElementChild!.textContent).toBe(id === 'cluster' ? 'ClusterPanels: all▾' : name);
+      expect(byId(`toolbar-group-${id}`)!.firstElementChild!.textContent).toBe(id === 'cluster' ? 'ClusterPanels: all▾ Sizes' : name);
     }
     expect(byId('toolbar-group-toggle-reads')!.textContent).toBe('Reads');
   });
@@ -519,5 +519,22 @@ describe('ClusterPanel toolbar groups', () => {
     expect(container.querySelector('[data-testid="open-lattice-consensus-button"]')).toBeNull();
     expect(container.querySelector('[data-testid="targeted-tf-refine-button"]')).toBeNull();
     expect(container.querySelector('[data-testid="targeted-family-scan-button"]')).toBeNull();
+  });
+});
+
+describe('Footprint size enrichment from the Cluster group', () => {
+  it('is on show beside Cluster (and in its options), before any clustering', async () => {
+    const { openFootprintSizes } = await import('../../utils/footprintSizeEntry');
+    expect(typeof openFootprintSizes).toBe('function');
+    useBrowserStore.setState({ clusterAssignments: {} } as never);
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const r = createRoot(host);
+    await act(async () => { r.render(<ClusterPanel />); });
+    const quick = host.querySelector('[data-testid="cluster-footprint-sizes-quick"]') as HTMLButtonElement;
+    expect(quick?.getAttribute('aria-label')).toBe('Footprint size enrichment');
+    expect(quick.title).toMatch(/No clustering needed/);
+    act(() => r.unmount());
+    host.remove();
   });
 });

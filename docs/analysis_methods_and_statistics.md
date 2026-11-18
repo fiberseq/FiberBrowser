@@ -46,7 +46,7 @@ or hierarchical models.
 | Cluster composition donut | Composition of the currently displayed cluster set | Assigned read among displayed clusters | 95% Wilson interval for each displayed segment |
 | Labeling-rule enrichment by cluster | Fraction of reads in a cluster matching a rule | Assigned read in that cluster | 95% Wilson interval; cluster-versus-rest Fisher exact test; odds ratio; BH q-value |
 | Cluster metaprofile | Aggregated layer signal by position | Aggregate profile currently retained by the clustering store | No interval; per-read contributions are not retained |
-| Cluster V-plot | Footprint count by size and relative position | Footprint event, nested within read | Descriptive matrix; no cellwise interval or test |
+| Footprint size plot (size enrichment / V-plot) | Footprint count by size and position, optionally normalised (per size row, per position, obs/expected) | Footprint event, nested within read | Descriptive matrix; no cellwise interval or test |
 | Cluster projection | PCA, UMAP, or t-SNE coordinate per read | Read | No coordinate interval or test |
 | Footprint overlap | Reads with a qualifying footprint overlapping a target | All reads in the dataset working set | 95% Wilson interval |
 | Footprint size histogram | First overlapping footprint size for each overlapping read | One first-overlap size per overlapping read | Per-bin 95% Wilson interval on the count scale |
@@ -342,20 +342,48 @@ computed by resampling those aggregate bins would treat genomic positions as
 independent observations and would be invalid. Valid future uncertainty needs
 per-read contributions or biological-replicate profiles upstream.
 
-### Cluster V-plots
+### Footprint size plots (size enrichment and V-plots)
 
-A V-plot bins footprint events by footprint size on one axis and position
-relative to the selected reference/peak on the other. In **Midpoint** mode (the
-traditional V-plot) each footprint adds 1 at its centre. In **Full footprint**
-mode each footprint adds to every position bin it covers, in its size row (a
-partly covered bin gets the covered fraction), so a row is the occupancy of
-that footprint size along the window. **Per size row** divides each row by its
-mean across the window (after smoothing, before the log): 1 = as common at that
-position as the size is anywhere in the window. Rows drawn from fewer than 20
-footprints (`row_min_footprints`) are left at 0, since a handful of footprints
-divided by their own mean is noise. Counts may be smoothed, log-transformed for
-display, or normalized per cluster or with a shared scale. Those operations
-change visualization scale but do not create inferential statistics.
+Clusters › Footprint sizes bins footprint events by footprint size (rows) and
+position in the view (columns), from every read in view of each dataset
+(`group_by: all`, no clustering needed) or per cluster. In **Midpoint** mode
+(the traditional V-plot) each footprint adds 1 at its centre. In **Full
+footprint** mode each footprint adds to every position bin it covers, in its
+size row (a partly covered bin gets the covered fraction), so a row is the
+occupancy of that footprint size along the window. The default source,
+`all_footprints`, takes each read's Nuc layer (the nucleosome-sized
+footprints, which are FiberHMM's calls) and its TF layer (the small
+footprints), counting a footprint that appears in more than one once. Any
+other layer can be named (`nuc`, `tf`, `fire`, a footprint-class layer);
+`layer: null` uses the calls alone (API only).
+
+The counts are first smoothed by a separable 2-D Gaussian. Each axis has its
+own sigma in bp (`sigma_size_bp`, `sigma_pos_bp`), converted to bins by that
+axis's bin width; 0 turns that axis off. Older requests send one `smooth`
+value: a sigma in bins on both axes, read as `smooth x bin` bp per axis. The
+counts are then normalised:
+
+- **Per size row** (`row`; the Size enrichment default): each row is divided
+  by its mean across the window. 1 means the size is as common at that position
+  as anywhere in the window.
+- **Per position** (`column`): each column is divided by its mean across
+  sizes.
+- **Observed / expected** (`oe`): each cell is divided by row sum x column sum
+  / total.
+- **Counts** (`raw`).
+
+Rows drawn from fewer than `row_min_footprints` footprints (default 20) are
+left blank, since a handful of footprints divided by their own mean is noise.
+This applies to row and O/E; under column normalisation the rule is applied to
+positions instead.
+
+Enrichment is drawn by default as log2 over a range symmetric about 0 (1x), in
+the sequential magma colormap; linear enrichment spans 1/fold to fold. Counts
+use a sequential scale (viridis by default), optionally log1p. The log2 ratio
+of two plots, a comparison, uses the diverging RdBu colormap centred on 0. The optional ratio panel is
+log2(A / B) per cell. Counts are first divided by each panel's footprints, so
+it compares distributions rather than depth. These operations change the
+display scale; they do not create inferential statistics.
 
 No cellwise confidence interval or p-value is shown. Multiple events from the
 same read are correlated, neighboring cells are coupled by binning and optional

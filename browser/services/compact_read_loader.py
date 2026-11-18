@@ -1811,7 +1811,6 @@ def _build_compact_reads_from_bam_region(
     import traceback
 
     from services.bam_tags import (
-        bam_legacy_frame,
         bam_ma_group_frame,
         read_legacy_tags_are_molecular,
         bam_consensus_contracts,
@@ -1901,10 +1900,13 @@ def _build_compact_reads_from_bam_region(
 
         # Legacy ns/nl/as/al tags carry no frame signal; infer molecular vs SEQ
         # from @PG/@CO provenance (fibertools add-nucleosome, or an explicit
-        # coord=molecular marker). MA/AQ only flips when the file explicitly
-        # declares molecular coordinates. Detected once per file.
+        # coord=molecular marker), and from the reads' m6A when the header gives
+        # no evidence or is ambiguous (services/legacy_frame; cached per file).
+        # MA/AQ only flips when the file explicitly declares molecular
+        # coordinates. Detected once per file.
         try:
-            legacy_frame = bam_legacy_frame(bam.header)
+            from services.legacy_frame import bam_legacy_frame_for
+            legacy_frame = bam_legacy_frame_for(bam_path, bam.header)
         except Exception:
             legacy_frame = (False, False)
         ma_aq_tags_molecular = bam_ma_group_frame(bam.header)
@@ -1912,6 +1914,9 @@ def _build_compact_reads_from_bam_region(
         from services.signal_evidence import signal_header, record_signal, signal_keeps
         signal_provenance = signal_header(bam.header)
         family_contracts = bam_consensus_contracts(bam.header)
+        # Whether this file's MSP scores are fibertools FIRE scores (services/fire_quality: per file, reads first).
+        from services.fire_quality import apply_msp_quality_source, file_fire_status
+        msp_scores_are_fire = file_fire_status(bam_path, bam.header)["fire"]
         phase_t0 = _profile_start()
         references = bam.references
         actual_chrom = resolve_reference_name(chrom, references, chrom_map, links=contig_links)
@@ -2015,9 +2020,9 @@ def _build_compact_reads_from_bam_region(
                     try:
                         fire_quals = read.get_tag("aq")
                         fire_qual_values = parse_optional_int_tag_values(fire_quals) or []
-                        fire_quals_all_zero = bool(fire_qual_values) and all(v == 0 for v in fire_qual_values)
-                        if fire_quals_all_zero:
-                            fire_quals = None
+                        # All-0 (or all-128) scores are real: FIRE scores of a read without FIRE elements, or
+                        # FiberHMM posteriors (services/fire_quality decides which per file).
+                        fire_quals_all_zero = False
                     except KeyError:
                         pass
                 except KeyError:
@@ -2150,6 +2155,7 @@ def _build_compact_reads_from_bam_region(
                     _profile_add("sv_events", phase_t0)
                     if partition is not None:
                         read_data['_fiberbrowser_source_order'] = records_seen
+                    apply_msp_quality_source(read_data, msp_scores_are_fire, read)
                     reads.append(read_data)
                     if stream is not None:
                         stream.append(read_data)
@@ -2462,7 +2468,7 @@ def _build_compact_reads_from_bam_region(
             fire_intervals = []
             fire_sizes = []
             has_explicit_msp = fire_starts is not None and len(fire_starts) > 0
-            fire_qualities_available = fire_quals is not None and any(int(q) not in (0, 128) for q in fire_quals)
+            fire_qualities_available = fire_quals is not None
             if _wants_layer("fire", "msp") and fire_starts is not None and fire_lengths is not None:
                 phase_t0 = _profile_start()
                 fs_list = list(fire_starts)
@@ -2562,6 +2568,7 @@ def _build_compact_reads_from_bam_region(
             _profile_add("sv_events", phase_t0)
             if partition is not None:
                 read_data['_fiberbrowser_source_order'] = records_seen
+            apply_msp_quality_source(read_data, msp_scores_are_fire, read)
             reads.append(read_data)
             if stream is not None:
                 stream.append(read_data)

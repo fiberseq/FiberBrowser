@@ -225,7 +225,7 @@ percentile-derived autoscan peaks when finalizing an analysis.
 | `POST /api/cluster_expand` | Expand/focus clusters in the browser. |
 | `POST /api/auto_cull_clusters` | Hide/cull low-signal clusters by current criteria. |
 | `POST /api/cluster_projection` | Compute cluster projection/embedding. |
-| `POST /api/cluster/vplot` | Compute cluster-centered V-plots. |
+| `POST /api/cluster/vplot` | Footprint size matrices (V-plots and size enrichment): per cluster, or `group_by: all` for every read per dataset (no clustering); `normalization` row / column / oe / raw, `sigma_size_bp` / `sigma_pos_bp`, `layer: all_footprints`, `raw_values`. |
 | `GET /api/jupyter/clusters` | Return browser-synced cluster assignments. |
 | `POST /api/sort_reads` | Sort reads by cluster, name, screen order, position, or other supported modes. |
 | `POST /api/filter_by_analysis_rule` | Filter reads by an Analysis Rules filter definition. |

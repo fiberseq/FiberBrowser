@@ -4,8 +4,8 @@ message: >-
   (preferred-citation), and give the FiberBrowser version you used.
 type: software
 title: "FiberBrowser: a genome browser for single-molecule chromatin data (Fiber-seq and DAF-seq)"
-version: 3.0.3
-date-released: "2026-11-11"
+version: 3.0.4
+date-released: "2026-11-18"
 authors:
   - name: "FiberBrowser Authors"
 license: MIT

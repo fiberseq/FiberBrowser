@@ -65,3 +65,14 @@ describe('plugin packs\' items', () => {
     expect(buildReadMenu({ ...base, bamReads: true }).some(e => e.kind === 'item' && e.action.startsWith('ext:'))).toBe(false);
   });
 });
+
+describe('footprint size enrichment on the read menu', () => {
+  it('is offered on a read and in empty track space, with no clustering needed', () => {
+    for (const ctx of [{}, { readId: null, footprint: null }]) {
+      const it_ = byAction(ctx, 'footprint-size-enrichment');
+      expect(it_?.label).toBe('Footprint size enrichment here');
+      expect(it_?.disabled).toBeFalsy();
+      expect(it_?.title).toMatch(/no clustering|one plot per dataset/);
+    }
+  });
+});

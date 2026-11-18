@@ -43,7 +43,8 @@ async def set_primer_config(
         if not _blast_db_exists(blast_db_path):
             from services.primer_config import blast_db_missing_message
             return {"success": False, "message": blast_db_missing_message(blast_db_path)}
-        await asyncio.to_thread(set_primer_paths, state, blast_db=blast_db_path)
+        # The user's choice: kept while this genome stays loaded (no auto-switch to a sibling database).
+        await asyncio.to_thread(lambda: set_primer_paths(state, blast_db=blast_db_path, pin=True))
 
     return {"success": True, **(await asyncio.to_thread(_primer_config_payload, state))}
 

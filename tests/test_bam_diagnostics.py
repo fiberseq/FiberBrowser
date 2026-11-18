@@ -131,7 +131,8 @@ def test_diagnose_bam_tags_detects_layers(monkeypatch):
     assert result["sampled_reads"] == 1
     assert result["has_nucleosomes"] is True
     assert result["has_msps"] is True
-    assert result["has_fire"] is True
+    # aq with no ft fire @PG and too few scores for their pattern: not FIRE (services/fire_quality).
+    assert result["has_fire"] is False and result["fire_basis"] == "header"
     assert result["has_m6a"] is True
     assert result["has_m5c"] is True
     assert result["has_deam"] is True
@@ -176,7 +177,8 @@ def test_diagnose_bam_tags_resolves_chromosome_alias_for_sampling(monkeypatch):
     result = diagnose_bam_tags("https://example.org/sample.bam", chrom="2R", limit=1)
 
     assert result["reads_checked"] == 1
-    assert result["has_fire"] is True
+    # aq with no ft fire @PG and too few scores for their pattern: not FIRE (services/fire_quality).
+    assert result["has_fire"] is False and result["fire_basis"] == "header"
     assert any(chrom == "chr2R" and start is not None for chrom, start, _end in fake_bam.calls)
 
 

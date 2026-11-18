@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({
   fetchClusterProjection: vi.fn(),
-  fetchClusterVPlot: vi.fn(),
+  fetchFootprintSizes: vi.fn(),
 }));
 vi.mock('../../api/clustering', async (orig) => ({ ...(await orig<typeof import('../../api/clustering')>()), ...api }));
 
@@ -36,7 +36,7 @@ beforeEach(() => {
   try { localStorage.clear(); } catch { /* none */ }
   useRunResultStore.setState({ showSummaries: false, results: { cluster: { tone: 'note', text: 'The clusters largely separate the regions (NMI 0.75).', run: 1, at: 1 } } });
   api.fetchClusterProjection.mockReset().mockResolvedValue(projection);
-  api.fetchClusterVPlot.mockReset().mockResolvedValue({ success: true, data: {} });
+  api.fetchFootprintSizes.mockReset().mockResolvedValue({ success: true, data: {} });
   usePanelGenomeStore.setState({ genomes: {}, assignments: { flyamp: 'dm6' } });
   host = document.createElement('div');
   document.body.appendChild(host);
@@ -82,9 +82,11 @@ describe('Clusters charts in Per panel mode', () => {
     expect(host.textContent).not.toContain('run clustering first');
 
     await openTab('vplot');
-    expect(api.fetchClusterVPlot).toHaveBeenCalledTimes(1);
-    const [vChrom, vStart, vEnd, vOptions] = api.fetchClusterVPlot.mock.calls[0];
+    // Footprint sizes, per cluster (the default with clusters): the clustered panel's locus and reference.
+    expect(api.fetchFootprintSizes).toHaveBeenCalledTimes(1);
+    const [vChrom, vStart, vEnd, vOptions] = api.fetchFootprintSizes.mock.calls[0];
     expect([vChrom, vStart, vEnd]).toEqual(locus);
+    expect(vOptions.groupBy).toBe('cluster');
     expect(Object.keys(vOptions.clusterAssignments)).toEqual([clustered]);
     expect(vOptions.panelGenome ?? undefined).toBe(genome);
   });

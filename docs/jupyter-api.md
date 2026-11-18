@@ -293,6 +293,7 @@ the full argument list and docstring.
 | `assign_to_clusters(cluster_patterns, peak_regions, dataset_ids=None, chrom=None, start=None, end=None, …, **kwargs)` | Assign reads to existing cluster patterns (for dynamic clustering). |
 | `expand_cluster(cluster_ids, chrom=None, start=None, end=None, spanning=False, max_reads=500, …)` | Expand clusters to get reads from all datasets matching the pattern. |
 | `get_cluster_vplot(chrom=None, start=None, end=None, spanning=False, size_bin=10, pos_bin=10, size_min=10, …)` | Get V-plot data (footprint size vs. |
+| `get_footprint_size_enrichment(chrom=None, start=None, end=None, group_by='all', normalization='row', mode='span', …)` | Footprint size enrichment matrices, no clustering needed: all footprints by default, Gaussian sigma per axis in bp, raw values with reads and footprints per matrix. |
 | `get_cluster_projection(peak_regions, dataset_ids=None, chrom=None, start=None, end=None, spanning=False, …)` | Project clustered reads into PCA/UMAP/t-SNE coordinates. |
 
 ### Analysis rules, sorting and filtering

@@ -14,7 +14,7 @@ from services.primer_state import (
 )
 from services.primer_blast_runtime import (
     PrimerDesignAborted,
-    blast_and_score_cached,
+    score_primer_specificity as _score_primer_specificity,
     check_abort as _check_abort,
     primer_design_run as _primer_design_run,
 )
@@ -29,7 +29,8 @@ from services.primer_loci import (
 )
 from services.primer_reference import (
     get_fasta_interface as _get_fasta_interface,
-    resolve_chrom as _resolve_chrom,
+    resolve_template_chrom as _resolve_template_chrom,
+    template_sequences as _template_sequences,
 )
 from services.read_metrics import normalize_sample_seed
 
@@ -78,7 +79,8 @@ def _design_dafc_primers_payload(req: DafcPrimerDesignRequest, state):
     """Design Tm-compatible primer pairs for two 3C loci."""
     sample_seed = normalize_sample_seed(req.sample_seed)
 
-    runtime_config, config_error = _resolve_primer_runtime_config(state)
+    runtime_config, config_error = _resolve_primer_runtime_config(
+        state, chroms=[req.chrom, req.y_chrom or req.chrom], template_in_db=req.template_in_db)
     if config_error:
         return config_error
     fasta_path = runtime_config.fasta_path
@@ -90,7 +92,7 @@ def _design_dafc_primers_payload(req: DafcPrimerDesignRequest, state):
         import primer3
 
         fetch_seq, get_chrom_len, available_chroms = _get_fasta_interface(state, fasta_path)
-        chrom_key = _resolve_chrom(req.chrom, available_chroms)
+        chrom_key = _resolve_template_chrom(req.chrom, available_chroms, state)
         if chrom_key is None:
             _set_primer_progress_payload({"active": False, "stage": "error", "progress": 0, "message": ""})
             return {"success": False, "message": f"Chromosome {req.chrom} not in FASTA"}
@@ -101,7 +103,7 @@ def _design_dafc_primers_payload(req: DafcPrimerDesignRequest, state):
         y_chrom_key = chrom_key
         y_chrom_len = chrom_len
         if req.y_chrom and req.y_chrom != req.chrom:
-            y_chrom_key = _resolve_chrom(req.y_chrom, available_chroms)
+            y_chrom_key = _resolve_template_chrom(req.y_chrom, available_chroms, state)
             if y_chrom_key is None:
                 _set_primer_progress_payload({"active": False, "stage": "error", "progress": 0, "message": ""})
                 return {"success": False, "message": f"Chromosome {req.y_chrom} not in FASTA"}
@@ -188,10 +190,14 @@ def _design_dafc_primers_payload(req: DafcPrimerDesignRequest, state):
             unique_primers=len(all_seqs),
         )
 
-        blast_passing, _dafc_hit_counts, n_cached, n_blasted, stderr_text = blast_and_score_cached(
-            list(all_seqs),
-            runtime_config.blast_db_path,
+        x_seqs = set(valid_fwd_x['sequences'].values[np.unique(x_fwd_idx)]) | set(valid_rev_x['sequences'].values[np.unique(x_rev_idx)])
+        y_seqs = set(valid_fwd_y['sequences'].values[np.unique(y_fwd_idx)]) | set(valid_rev_y['sequences'].values[np.unique(y_rev_idx)])
+        seq_groups = ([(sorted(all_seqs), chrom_key)] if y_chrom_key == chrom_key
+                      else [(sorted(x_seqs), chrom_key), (sorted(y_seqs), y_chrom_key)])
+        blast_passing, _dafc_hit_counts, n_cached, n_blasted, stderr_text = _score_primer_specificity(
+            seq_groups, runtime_config, templates=_template_sequences(state, {chrom_key, y_chrom_key}),
             check_three_prime=req.check_three_prime_specificity,
+            check_template_self=req.check_template_self,
         )
         validation = _validate_shared_blast_result(blast_passing, _dafc_hit_counts, stderr_text)
         if validation:

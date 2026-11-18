@@ -298,6 +298,9 @@ def merge_compact_reads_by_id(reads: Iterable[dict]) -> list[dict]:
         for read in sorted(parts, key=_read_position_sort_key):
             if read.get("duplicate"):
                 target["duplicate"] = True
+            if read.get("fire_quality_source"):
+                # The file's FIRE verdict (services/fire_quality): its 0/128 scores are scores.
+                target["fire_quality_source"] = read["fire_quality_source"]
             target["intervals"].extend([list(iv) for iv in read.get("intervals") or []])
             _append_optional_values(target, read, "qualities")
             for key in ("methyl", "methyl_m6a", "methyl_m5c", "deam", "fire"):
@@ -320,6 +323,8 @@ def merge_compact_reads_by_id(reads: Iterable[dict]) -> list[dict]:
                             existing[i].extend(qtrack)
                     if layer.get("quality_names") is not None:
                         dest["quality_names"] = layer.get("quality_names")
+                    if layer.get("quality_source"):
+                        dest["quality_source"] = layer["quality_source"]
                     for meta_key in ("circular_ids", "annotation_names"):
                         if layer.get(meta_key):
                             dest.setdefault(meta_key, []).extend(layer.get(meta_key) or [])

@@ -293,6 +293,7 @@ class BrowserState:
         # Primer config — per-session in public mode (each visitor picks their
         # own BLAST DB). Set here so BrowserState is authoritative.
         self.primer_blast_db = None
+        self.primer_blast_db_pin = None
         self.primer_fasta = None
 
         if not reference_only:
@@ -429,6 +430,7 @@ class BrowserState:
 
         # Primer config is per-session (each visitor picks their own BLAST DB).
         self.primer_blast_db = None
+        self.primer_blast_db_pin = None
         self.primer_fasta = None
 
         # Suppress unused-import warning when copy isn't hit.

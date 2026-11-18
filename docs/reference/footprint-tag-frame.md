@@ -225,6 +225,53 @@ A `FIBERHMM-CHEMISTRY` declaration never decides a frame: pass-through
 producers such as `fiberhmm-merge --recall` and `fiberhmm-pair` add it while
 carrying historical reads unchanged.
 
+## The reads' m6A, when the header can't tell (FiberBrowser 3.0.4)
+
+For legacy `ns/nl/as/al`, FiberBrowser also reads the frame from the data
+when the header has no evidence (source `default`) or is ambiguous
+(`browser/services/legacy_frame.py`). Nucleosomes hold few m6A calls; MSPs
+(`as/al`) hold many. Read in the wrong frame, a reverse read's intervals land
+at `L - x`, on unrelated sequence. For reverse reads among the first 2,000
+records (primary, not hard-clipped, with legacy intervals and `MM`/`ML` m6A
+calls at ML ≥ 125), the calls inside the intervals are counted in both frames:
+
+- nucleosomes decide: the true frame has far fewer calls inside them;
+- MSPs confirm with the opposite sign (more calls inside), veto a nucleosome
+  verdict they contradict (z ≥ 3), and decide alone when the nucleosomes
+  can't (no `ns/nl`, or below the thresholds).
+
+A frame wins with at least 10 intervals, at least 20 calls on the side with
+more of them (nucleosomes: the losing frame; MSPs: the winning frame), a z-score `|a − b| / √(a + b)` of at least 5 and a count ratio of at
+least 1.5. Sampling stops early after 5 scored reverse reads once z ≥ 10.
+One reverse read with ~25 nucleosomes is enough (z ≈ 21 on the synthetic
+fixtures). Forward reads are the same in both frames and do not vote. Files
+without m6A (DAF), with too few reverse reads or with similar counts are
+inconclusive. The verdict is cached per file (path, size, modification time).
+
+| Header | Reads | Legacy frame | `legacy_frame_basis` |
+|---|---|---|---|
+| Evidence (writer on a chain, or `coord=molecular`), not ambiguous | not read | The header's | `header` |
+| No evidence | molecular | Molecular, every read | `m6A in reads` |
+| No evidence | SEQ | Section above: SEQ, or molecular for a read with `.` MA footprint groups | `m6A in reads` |
+| No evidence | inconclusive | Same as above | `default` |
+| Ambiguous | decisive | The reads' | `m6A in reads` |
+| Ambiguous | inconclusive | The header's resolution (section 4) | `header` |
+
+A SEQ verdict keeps the per-read `MA` rule so that a merge of FiberHMM ≥
+2.13.2 reads into an old SEQ-frame file is not forced into one frame.
+
+**A header with evidence always wins, even when the reads disagree.** The
+reads would catch the known limit below and hand-edited headers. But a header
+with evidence is right for every file FiberBrowser has been tested on, and a
+data rule that overrides it would also act on unusual chromatin (sparse
+methylation, short reads, footprints that are mostly not nucleosomes). The
+diagnostics report the basis, so a disagreement can be checked by hand.
+
+`diagnose_bam_tags` reports `legacy_frame` (`molecular` / `seq`) and
+`legacy_frame_basis` next to `fire_basis`. When the reads made the frame
+molecular, Diagnose BAM says so instead of the unverifiable-frame warning.
+The warning shown when the dataset is added is FiberHMM's and is unchanged.
+
 ## Examples
 
 **Example 1:** `ft0.6.2_addnuc_fire.bam`.

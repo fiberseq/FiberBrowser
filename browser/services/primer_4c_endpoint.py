@@ -15,7 +15,7 @@ from services.primer_state import (
 )
 from services.primer_blast_runtime import (
     PrimerDesignAborted,
-    blast_and_score_cached,
+    score_primer_specificity as _score_primer_specificity,
     check_abort as _check_abort,
     primer_design_run as _primer_design_run,
 )
@@ -26,7 +26,8 @@ from services.primer_blast_validation import (
 from services.primer_filters import filter_by_exclude_regions as _filter_by_exclude_regions
 from services.primer_reference import (
     get_fasta_interface as _get_fasta_interface,
-    resolve_chrom as _resolve_chrom,
+    resolve_template_chrom as _resolve_template_chrom,
+    template_sequences as _template_sequences,
 )
 
 # =============================================================================
@@ -48,7 +49,8 @@ def _design_4c_primers_payload(req: FourCPrimerDesignRequest, state):
     When a captured fragment ligates and circularizes, they amplify across the junction.
     """
 
-    runtime_config, config_error = _resolve_primer_runtime_config(state)
+    runtime_config, config_error = _resolve_primer_runtime_config(
+        state, chroms=[req.chrom], template_in_db=req.template_in_db)
     if config_error:
         return config_error
     fasta_path = runtime_config.fasta_path
@@ -60,7 +62,7 @@ def _design_4c_primers_payload(req: FourCPrimerDesignRequest, state):
         import primer3
 
         fetch_seq, get_chrom_len, available_chroms = _get_fasta_interface(state, fasta_path)
-        chrom_key = _resolve_chrom(req.chrom, available_chroms)
+        chrom_key = _resolve_template_chrom(req.chrom, available_chroms, state)
         if chrom_key is None:
             _set_primer_progress_payload({"active": False, "stage": "error", "progress": 0, "message": ""})
             return {"success": False, "message": f"Chromosome {req.chrom} not in FASTA"}
@@ -193,10 +195,10 @@ def _design_4c_primers_payload(req: FourCPrimerDesignRequest, state):
         _set_primer_progress("blast", 55, f"BLASTing {len(all_seqs):,} unique primers...", unique_primers=len(all_seqs))
         log_primer_diagnostic(f"BLASTing {len(all_seqs)} unique primers")
 
-        blast_passing, _4c_hit_counts, n_cached, n_blasted, stderr_text = blast_and_score_cached(
-            list(all_seqs),
-            runtime_config.blast_db_path,
+        blast_passing, _4c_hit_counts, n_cached, n_blasted, stderr_text = _score_primer_specificity(
+            [(sorted(all_seqs), chrom_key)], runtime_config, templates=_template_sequences(state, [chrom_key]),
             check_three_prime=req.check_three_prime_specificity,
+            check_template_self=req.check_template_self,
         )
         validation = _validate_shared_blast_result(blast_passing, _4c_hit_counts, stderr_text)
         if validation:

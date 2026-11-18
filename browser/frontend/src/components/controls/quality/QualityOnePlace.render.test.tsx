@@ -10,8 +10,8 @@ import { FootprintReadFilters } from '../sidebar/view/FootprintReadFilters';
 
 const FIRE = { layer: 'fire', qualityName: 'aq', minValue: 230, enabled: true };
 
-// M9: quality filters are edited in one place (Labeling > Quality); the toolbar
-// group and the sidebar only summarise and link to it.
+// M9: quality filters are added and fully edited in one place (Labeling > Quality);
+// the toolbar group toggles them (and sets the FIRE threshold), the sidebar links to it.
 describe('quality filters have one editor', () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -36,14 +36,15 @@ describe('quality filters have one editor', () => {
     vi.restoreAllMocks();
   });
 
-  it('the toolbar group summarises the filters and links to the editor, with no filter controls', async () => {
+  it('the toolbar group has the FIRE toggle and threshold, and links to the full editor', async () => {
     await act(async () => { root.render(<QualityQuickControls />); });
     const group = container.querySelector('[data-testid="quality-controls-toolbar"]')!;
     expect(group).not.toBeNull();
-    // Read eligibility lives here; footprint score cutoffs still have one editor.
-    expect(group.querySelectorAll('input')).toHaveLength(1);
+    // Read eligibility, the FIRE on/off box and its aq slider; nothing else is edited here.
     expect(group.querySelector('label')?.textContent).toContain('Show QC-fail reads (incl. FiberHMM chimeras)');
-    expect(group.querySelectorAll('input[type="number"], input[type="range"]')).toHaveLength(0);
+    expect(group.querySelector('[data-testid="fire-filter-toggle"]')).not.toBeNull();
+    expect(group.querySelectorAll('input[type="range"]')).toHaveLength(1);
+    expect(group.querySelectorAll('input[type="number"]')).toHaveLength(0);
     const link = container.querySelector<HTMLButtonElement>('[data-testid="quality-edit-link"]')!;
     expect(link.textContent).toBe('Edit filters…');
     const opened: string[] = [];

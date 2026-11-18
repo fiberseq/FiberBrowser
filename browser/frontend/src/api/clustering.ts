@@ -510,3 +510,79 @@ export async function fetchClusterVPlot(
     signal: options?.signal,
   });
 }
+
+/** The cluster key of a dataset's all-reads matrix (group_by 'all'). */
+export const ALL_READS_KEY = -1;
+
+/** One footprint size matrix (raw_values mode): the values themselves, null where the guard leaves a cell blank. */
+export interface FootprintSizeData {
+  matrix: (number | null)[][];
+  size_min: number;
+  size_max: number;
+  size_bin: number;
+  pos_bin: number;
+  mode: VPlotMode;
+  normalization: 'row' | 'column' | 'oe' | 'raw';
+  row_min_footprints: number;
+  sigma_size_bp: number;
+  sigma_pos_bp: number;
+  group_by: 'all' | 'cluster';
+  n_reads: number;
+  n_footprints: number;
+  layer?: string | null;
+}
+
+/**
+ * Footprint size plots (size enrichment or V-plot) through /api/cluster/vplot: per cluster with assignments, or
+ * (`groupBy: 'all'`) one matrix per dataset from all its reads, under ALL_READS_KEY. Values come back unscaled.
+ */
+export async function fetchFootprintSizes(
+  chrom: string,
+  regionStart: number,
+  regionEnd: number,
+  options: {
+    sizeBin: number; posBin: number; sizeMin: number; sizeMax: number;
+    mode: VPlotMode;
+    normalization: 'row' | 'column' | 'oe' | 'raw';
+    sigmaSizeBp: number; sigmaPosBp: number;
+    minFootprints: number;
+    layer?: string | null;
+    groupBy: 'all' | 'cluster';
+    datasetIds?: string[];
+    clusterAssignments?: Record<string, Record<string, number>>;
+    sampleSeed?: string;
+    panelGenome?: string | null;
+    signal?: AbortSignal;
+  },
+): Promise<{ success: boolean; data: Record<string, Record<number, FootprintSizeData> | { error: string }> }> {
+  const params = new URLSearchParams({
+    chrom,
+    region_start: regionStart.toString(),
+    region_end: regionEnd.toString(),
+  });
+  if (options.panelGenome) params.set('panel_genome', options.panelGenome);
+  return fetchJson(`${API_BASE}/cluster/vplot?${params}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      size_bin: options.sizeBin,
+      pos_bin: options.posBin,
+      size_min: options.sizeMin,
+      size_max: options.sizeMax,
+      mode: options.mode,
+      normalization: options.normalization,
+      row_normalize: options.normalization === 'row',
+      sigma_size_bp: options.sigmaSizeBp,
+      sigma_pos_bp: options.sigmaPosBp,
+      row_min_footprints: options.minFootprints,
+      log_norm: false,
+      raw_values: true,
+      layer: options.layer ?? null,
+      group_by: options.groupBy,
+      sample_seed: options.sampleSeed ?? null,
+      ...(options.datasetIds?.length ? { dataset_ids: options.datasetIds } : {}),
+      ...(options.clusterAssignments ? { cluster_assignments: options.clusterAssignments } : {}),
+    }),
+    signal: options.signal,
+  });
+}

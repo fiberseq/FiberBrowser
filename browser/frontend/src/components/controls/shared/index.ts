@@ -12,8 +12,6 @@ export type { AnalysisStatusKind } from './AnalysisStatus';
 export { ClusterFocusBadge } from './ClusterFocusBadge';
 export { LayerSelector } from './LayerSelector';
 export type { LayerSelectorProps } from './LayerSelector';
-export { VPlotControls } from './VPlotControls';
-export type { VPlotNormalize } from './VPlotControls';
 export { MotifScoringControl, MODE_HELP } from './MotifScoringControl';
 export { JobStatus, formatElapsed, useElapsed, isLive } from './JobStatus';
 export type { JobState, JobStatusProps, JobStep, JobProgress } from './JobStatus';

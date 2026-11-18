@@ -127,8 +127,9 @@ goes to the *NAPA* promoter.
    focused reads. **Snapshot** keeps the clustering in **Saved** to restore
    later. ([17](guide.md#17-the-clusters-panel))
 6. Open **Charts**: **Profiles** overlays the clusters' average profiles,
-   **Composition** shows each dataset's share, **V-Plot** plots footprint size
-   against position, and **Differences** (once you have labeling rules) shows
+   **Composition** shows each dataset's share, **Footprint sizes** plots footprint size
+   against position (Size enrichment or V-plot; it also works without
+   clustering, see [Footprint size enrichment plots](guide.md#footprint-size-enrichment-plots)), and **Differences** (once you have labeling rules) shows
    what sets each cluster apart. ([18](guide.md#18-profiles-and-other-views))
 7. In **Overview**, choose **Map**: each read is a dot on a t-SNE map,
    coloured by cluster. Neighbours are similar reads; distances between groups
@@ -196,8 +197,8 @@ goes to the *NAPA* promoter.
    wins. **Quick add** makes common ones, such as *Pol II footprints NOT in* a
    gene. ([33](guide.md#33-labeling))
 2. Its **Quality** tab sets how confident a call must be to count, for the
-   colours and the analyses. The toolbar's **Quality** group shows what is in
-   effect. ([34](guide.md#34-quality-filters))
+   colours and the analyses. The toolbar's **Quality** group turns the FIRE
+   filter on or off, sets its threshold (FDR) and switches the other filters. ([34](guide.md#34-quality-filters))
 3. **Rules** holds reusable definitions (**Peaks**, **Cluster**, **Sort**,
    **Filter**), such as "open at the promoter and bound at the enhancer". A rule
    you add appears in that toolbar group. ([35](guide.md#35-rules))

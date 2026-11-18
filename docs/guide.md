@@ -314,11 +314,9 @@ The **Charts** tab compares the clusters:
 - **Profiles** overlays the clusters' average profiles, one plot per layer.
 - **Composition** shows each dataset's share of reads in each cluster, as
   **Bar**, **Pie** or **Line** (Line joins datasets, so it needs two).
-- **V-Plot** plots footprint size against position. **Midpoint** is the
-  traditional V-plot (each footprint counted at its centre); **Full footprint**
-  adds each footprint to every position it covers, so each row shows where
-  footprints of that size sit. **Per size row** (in the settings) colours each
-  row by its enrichment over that size's average across the window.
+- **Footprint sizes** plots footprint size against position, as a **Size
+  enrichment** plot or a **V-plot** (see
+  [Footprint size enrichment plots](#footprint-size-enrichment-plots)).
 - **Differences** (once labeling rules are defined) shows what sets each
   cluster apart: for each rule, how much more or less common a matching
   footprint is in the cluster's reads than in all the other clusters.
@@ -326,6 +324,79 @@ The **Charts** tab compares the clusters:
 Click cluster names above a chart to show only those clusters; **All** shows
 them all again. A cluster picked in the read panel or on the Overview is picked
 in the charts too.
+
+### Footprint size enrichment plots
+
+![Footprint size enrichment on the demo data](images/guide/footprint_size_enrichment.png)
+
+A footprint size enrichment plot puts footprint size on the y axis and position
+on the x axis, and colours each cell by how enriched that size is at that
+position. It needs no clustering. Open it in any of these ways:
+
+- right-click the reads and choose **Footprint size enrichment here** (without
+  clusters it plots the view of the panel you clicked; with clusters, the
+  clustered panels' view, as the other cluster charts);
+- click **Sizes** beside **Cluster** in the toolbar (also **Footprint sizes** in
+  the Cluster group's options);
+- press ⌘K (Ctrl+K) and type *size enrichment*, *footprint sizes* or *V-plot*;
+- open the **Clusters** panel and click **Footprint size enrichment**, or, once
+  you have clusters, use **Charts › Footprint sizes**.
+
+Without clusters there is one plot per dataset, made from every read in view,
+side by side on one colour scale. With clusters there is one plot per cluster;
+**Per dataset** switches back to all reads. Each plot shows how many reads and
+footprints it rests on, and a note appears when the plots rest on very
+different numbers of reads.
+
+Choose one of two views:
+
+- **Size enrichment** (the default). Each footprint fills every position it
+  covers. Each size row is divided by its average across the window, so 1 means
+  that size is as common here as anywhere in the window. Brighter is more
+  common, darker less, coloured by log2 (0 = average) in magma; the colour bar
+  is in log2.
+- **V-plot**. This is the classic plot: each footprint is counted once at its
+  midpoint, coloured by count.
+
+Settings:
+
+- **Gaussian σ size / position**: the smoothing on each axis, in bp (0 = off).
+  It is a separable Gaussian applied to the counts before normalising.
+- **Size bin** and **Pos bin**: the bin widths, in bp.
+- **Normalise**:
+  - **Per size row**: each size over its mean across the window;
+  - **Per position**: each position over its mean across sizes;
+  - **Obs / expected**: the observed count over the count expected from the
+    size and position totals;
+  - **Counts**: no normalisation.
+- **More settings**:
+  - the size range;
+  - **Min footprints**: sizes, or positions under Per position, with fewer
+    footprints are left blank (hatched); the default is 20;
+  - log2 or linear colour;
+  - a shared or per-plot colour range, and its limit;
+  - **Colormap** and **Reverse**. Single plots use a sequential map: magma
+    for Size enrichment (log2 or linear) and viridis, as V-plots have always
+    used, for the V-plot. The log2 ratio, a comparison, has its own
+    **Colormap** beside its picker, RdBu by default (blue lower, red higher,
+    white equal). Any of Magma, Viridis, Inferno, Plasma, Cividis, Greys or
+    RdBu can be picked; each keeps its own pick, so switching to the V-plot
+    and back restores it. A diverging colormap keeps 0 at its white middle.
+    The colour bar and the PNG, SVG and PDF downloads use it, and it is saved
+    with the session;
+  - **Layer**, the source: **All footprints** (the default) joins the Nuc
+    layer, the nucleosome-sized footprints, with the TF layer, which holds the
+    small ones, counting each footprint once. The other choices are the
+    layers in the Layers toolbar, with the same names and colours: Nuc, TF,
+    the accessibility layer and any footprint-class or other interval layer
+    in the loaded files.
+- **log2 ratio** (with two or more plots): adds a plot of log2(A / B) for two
+  plots you choose. Counts are first divided by each plot's footprints, so the
+  ratio compares distributions rather than read numbers.
+
+Export: each plot's save menu (top right, on hover) saves PNG, SVG or PDF.
+**Export TSV** saves every matrix, each with its settings in a `#` header.
+The settings are saved with the session.
 
 ### 19. The read map
 
@@ -597,8 +668,11 @@ are below the list.
 The **Quality** tab sets which footprint calls count, by their confidence
 scores. It changes what the analyses use, not only the colours (Find
 footprint classes reads the calls with its own settings). The toolbar's
-**Quality** group shows the cutoffs in effect, and its **Edit
-filters** opens this tab.
+**Quality** group turns the FIRE filter on or off and sets its threshold
+(`aq`, shown with its FDR, with 5 %, 10 % and 20 % presets); turning it off
+keeps the threshold for when it is turned back on. The group also has an
+on/off box for each other filter and shows how many calls each keeps in view.
+Its **Edit filters** opens this tab, where filters are added and fully edited.
 
 QC-fail reads (SAM `0x200`), including FiberHMM DAF strand-swap chimeras
 (`xc:Z:strand_swap`), are excluded from panels and analyses by default.

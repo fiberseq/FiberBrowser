@@ -11,7 +11,7 @@ import pyBigWig
 
 from models.domain import CigarCoordMapper, ContactMode
 from services.sv_events import read_deletion_cuts, split_span
-from services.bam_tags import bam_legacy_frame, legacy_starts_in_seq_frame, read_legacy_tags_are_molecular
+from services.bam_tags import legacy_starts_in_seq_frame, read_legacy_tags_are_molecular
 from services.dafc_diagnostics import DAFC_DIAGNOSTICS_ENV, log_dafc_diagnostic
 from state.dependencies import get_dafc_state, get_state
 from utils.chrom import get_chrom_variants
@@ -96,7 +96,8 @@ def query_bam_for_dafc(bam_path: str, chrom: str, start: int, end: int) -> List[
             # Molecular-frame legacy tags are flipped on reverse reads, as the
             # compact loader does; detected once per file.
             try:
-                legacy_frame = bam_legacy_frame(bam.header)
+                from services.legacy_frame import bam_legacy_frame_for   # the header, else the reads' m6A
+                legacy_frame = bam_legacy_frame_for(bam_path, bam.header)
             except Exception:
                 legacy_frame = (False, False)
 

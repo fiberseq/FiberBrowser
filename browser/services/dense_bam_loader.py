@@ -10,7 +10,6 @@ import pandas as pd
 
 from models.domain import CigarCoordMapper
 from services.bam_tags import (
-    bam_legacy_frame,
     read_legacy_tags_are_molecular,
     MA_ALL_MOLECULAR,
     bam_ma_group_frame,
@@ -166,7 +165,8 @@ def load_reads_from_bam(
             # Legacy tags in the molecular frame (fibertools, marked FiberHMM)
             # are flipped on reverse reads, as the compact loader does.
             try:
-                legacy_frame = bam_legacy_frame(bam.header)
+                from services.legacy_frame import bam_legacy_frame_for   # the header, else the reads' m6A
+                legacy_frame = bam_legacy_frame_for(bam_path, bam.header)
             except Exception:
                 legacy_frame = (False, False)
             ma_molecular = bam_ma_group_frame(bam.header)

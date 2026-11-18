@@ -11,13 +11,17 @@ def apply_blast_filters(seq: str, hits: List[tuple],
                         three_prime_min_length: int = 12,
                         three_prime_min_pident: float = 90.0,
                         check_three_prime: bool = True,
-                        home_min_pident: float = 99.0) -> dict:
-    """Compute on-target, off-target, and 3-prime threat counts from BLAST rows."""
+                        home_min_pident: float = 99.0,
+                        count_home: bool = True) -> dict:
+    """Compute on-target, off-target, and 3-prime threat counts from BLAST rows.
+
+    ``count_home=False``: the template is not in the database (a plasmid checked against the genome), so
+    no hit is its home: a full-length match counts as off-target like any other."""
     primer_len = len(seq)
     counts = {'on_target': 0, 'off_target': 0, 'three_prime_threats': 0}
     off_target_min_length = max(12, int(primer_len * off_target_length_frac))
     for (pident, length, qend) in hits:
-        if length == primer_len and pident >= home_min_pident:
+        if count_home and length == primer_len and pident >= home_min_pident:
             counts['on_target'] += 1
             continue
         if pident >= off_target_min_pident and length >= off_target_min_length:
@@ -80,3 +84,43 @@ def parse_blast_hits(output_file, seq_to_id, seq_sources=None,
         if c['on_target'] == 1 and c['off_target'] == 0 and c['three_prime_threats'] == 0
     }
     return passing, per_seq, per_seq_hits
+
+
+def _rc(seq: str) -> str:
+    return seq.translate(str.maketrans('ACGTNacgtn', 'TGCANtgcan'))[::-1]
+
+
+def _count_occurrences(text: str, word: str, *, circular: bool = False) -> int:
+    """Sites of ``word`` in ``text``; on a circular one also those across the origin, each counted once
+    (a site is its start position on the circle)."""
+    if not word or not text:
+        return 0
+    n_text = len(text)
+    search = text + text[:len(word) - 1] if circular and n_text > 1 else text
+    n, i = 0, search.find(word)
+    while i != -1 and i < n_text:
+        n += 1
+        i = search.find(word, i + 1)
+    return n
+
+
+def template_self_counts(seq: str, template: str, *, circular: bool = True, check_three_prime: bool = True,
+                         three_prime_min_length: int = 12) -> dict:
+    """Where a primer binds its own template (a plasmid held in memory), both strands, across the origin
+    of a circular one: ``home`` exact full-length sites (one expected) and ``three_prime_threats``, other
+    sites of its 3'-terminal ``three_prime_min_length`` bases."""
+    primer = seq.upper()
+    text = template.upper()
+
+    def sites(word: str) -> int:
+        n = _count_occurrences(text, word, circular=circular)
+        rc_word = _rc(word)
+        if rc_word != word:
+            n += _count_occurrences(text, rc_word, circular=circular)
+        return n
+
+    home = sites(primer)
+    threats = 0
+    if check_three_prime and len(primer) >= three_prime_min_length:
+        threats = max(0, sites(primer[-three_prime_min_length:]) - home)
+    return {'home': home, 'three_prime_threats': threats}

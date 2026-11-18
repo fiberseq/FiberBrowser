@@ -429,7 +429,7 @@
    "reveal": {
     "expand": "quality-controls-expand"
    },
-   "description": "Set the minimum call quality for each layer."
+   "description": "Turn the FIRE filter on or off and set its threshold (aq, with the matching FDR); tick other filters on or off. Edit filters... opens Labeling > Quality to add or fully edit filters."
   },
   {
    "id": "reads-controls-expand",
@@ -914,14 +914,14 @@
   },
   {
    "id": "clusters-vplot",
-   "label": "Clusters > V-Plot tab",
+   "label": "Clusters > Footprint sizes tab",
    "selector": "[data-panel-content-type=\"cluster-detail\"] [data-analysis-tab=\"vplot\"]",
    "where": "Clusters panel",
    "reveal": {
     "panel": "cluster-detail",
     "tab": "vplot"
    },
-   "description": "Footprint size against position, per cluster.",
+   "description": "Footprint size against position: Size enrichment (where each size is enriched) or V-plot (midpoints), per dataset or per cluster.",
    "needs": "has_clusters"
   },
   {
@@ -2333,14 +2333,14 @@
   },
   {
    "id": "clusters-vplot-settings",
-   "label": "V-plot settings",
+   "label": "Footprint size settings",
    "selector": "[data-tour=\"clusters-vplot-settings\"]",
-   "where": "Clusters > V-Plot",
+   "where": "Clusters > Footprint sizes",
    "reveal": {
     "panel": "cluster-detail",
     "tab": "vplot"
    },
-   "description": "Size bins, layer and axes of the footprint size-vs-position plot.",
+   "description": "Size range, guard, colour scale and layer of the footprint size plots (bins and Gaussian sigmas sit above them).",
    "needs": "has_clusters"
   },
   {

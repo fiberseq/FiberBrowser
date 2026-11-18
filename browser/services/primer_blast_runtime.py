@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from typing import Dict, List, Optional
 
 from services.primer_blast_scoring import apply_blast_filters, parse_blast_hits
-from services.primer_config import log_primer_diagnostic
+from services.primer_config import blast_path_arg, log_primer_diagnostic
 
 
 class PrimerDesignAborted(Exception):
@@ -191,7 +191,7 @@ def run_blast(query_file, db_path, output_file):
     check_abort()
     from services.external_tools import tool_path
     proc = subprocess.Popen(
-        [tool_path('blastn') or 'blastn', '-query', query_file, '-db', db_path, '-word_size', '7',
+        [tool_path('blastn') or 'blastn', '-query', query_file, '-db', blast_path_arg(db_path), '-word_size', '7',
          '-task', 'blastn-short',
          '-num_threads', str(blast_thread_count()),
          '-outfmt', '6 qseqid pident length qstart qend sseqid sstart send',
@@ -225,8 +225,12 @@ def run_blast(query_file, db_path, output_file):
 def blast_and_score_cached(seqs_to_check: List[str], db_path: str,
                            check_three_prime: bool = True,
                            off_target_min_pident: float = 90.0,
-                           off_target_length_frac: float = 0.85) -> tuple:
-    """Resolve per-seq BLAST hit counts using the content-addressed cache."""
+                           off_target_length_frac: float = 0.85,
+                           expect_home_hit: bool = True) -> tuple:
+    """Resolve per-seq BLAST hit counts using the content-addressed cache.
+
+    ``expect_home_hit=False``: the template is not in the database (primers on a plasmid checked against
+    the genome): a primer passes with no off-target hit and no 3'-end threat, and every hit counts."""
     check_abort()
     db_signature = blast_db_signature(db_path)
     dedup = list(dict.fromkeys(seqs_to_check))
@@ -282,15 +286,80 @@ def blast_and_score_cached(seqs_to_check: List[str], db_path: str,
             off_target_min_pident=off_target_min_pident,
             off_target_length_frac=off_target_length_frac,
             check_three_prime=check_three_prime,
+            count_home=expect_home_hit,
         )
         for seq in dedup
     }
     passing = {
         seq for seq, counts_for_seq in counts.items()
         if (
-            counts_for_seq['on_target'] == 1
+            (counts_for_seq['on_target'] == 1 or not expect_home_hit)
             and counts_for_seq['off_target'] == 0
             and counts_for_seq['three_prime_threats'] == 0
         )
     }
     return passing, counts, len(cached_hits), len(uncached), stderr_text
+
+
+def score_primer_specificity(seq_groups, runtime_config, *, templates=None, check_three_prime: bool = True,
+                             check_template_self: bool = True) -> tuple:
+    """BLAST-score primers grouped by the contig they were designed on.
+
+    ``seq_groups``: ``[(seqs, chrom), ...]``. A contig of the database's own FASTA keeps the rule of one
+    home hit, no off-target hit and no 3'-end threat. A loaded plasmid/custom sequence
+    (``runtime_config.expects_home_hit(chrom)`` False) is checked against the chosen database for any
+    hit at all (off-target binding in the genome) and, with ``check_template_self``, against its own
+    sequence (``templates[chrom] = (sequence, circular)``) for exactly one binding site and no other 3'-end
+    site. Its ``on_target`` is then that site count (1 without the self check), so callers read the
+    counts the same way for both. Returns ``(passing, counts, n_cached, n_blasted, stderr_text)``; a
+    primer in several groups passes only when it passes in every one."""
+    from services.primer_blast_scoring import template_self_counts
+    templates = templates or {}
+    all_counts: Dict[str, dict] = {}
+    failed: set = set()
+    passed: set = set()
+    n_cached = n_blasted = 0
+    stderrs: List[str] = []
+    for seqs, chrom in seq_groups:
+        seqs = list(seqs)
+        if not seqs:
+            continue
+        expect_home = runtime_config.expects_home_hit(chrom)
+        passing, counts, cached, blasted, stderr_text = blast_and_score_cached(
+            seqs, runtime_config.blast_db_path, check_three_prime=check_three_prime,
+            expect_home_hit=expect_home)
+        n_cached += cached
+        n_blasted += blasted
+        if stderr_text:
+            stderrs.append(stderr_text)
+        missing = set(seqs) - set(counts)
+        if missing:
+            # blastn failed for this batch: its primers were never checked. The whole request fails with
+            # the error (a primer another batch passed must not pass unchecked here).
+            label = f" on {chrom}" if chrom else ""
+            detail = stderr_text or (f"blastn exited with an error while checking {len(missing):,} primer(s){label} "
+                                     f"against {os.path.basename(runtime_config.blast_db_path)}.")
+            return set(), {}, n_cached, n_blasted, ' '.join(dict.fromkeys(stderrs + [detail]))
+        if not expect_home:
+            template = templates.get(chrom)
+            for seq, c in counts.items():
+                c = dict(c)
+                c['db_hits'] = c['off_target']
+                if check_template_self and template:
+                    own = template_self_counts(seq, template[0], circular=bool(template[1]),
+                                               check_three_prime=check_three_prime)
+                    c['on_target'] = own['home']
+                    c['three_prime_threats'] += own['three_prime_threats']
+                else:
+                    c['on_target'] = 1
+                counts[seq] = c
+            passing = {seq for seq, c in counts.items()
+                       if c['on_target'] == 1 and c['off_target'] == 0 and c['three_prime_threats'] == 0}
+        for seq, c in counts.items():
+            if seq in passing:
+                passed.add(seq)
+                all_counts.setdefault(seq, c)
+            else:
+                failed.add(seq)
+                all_counts[seq] = c
+    return passed - failed, all_counts, n_cached, n_blasted, ' '.join(stderrs)

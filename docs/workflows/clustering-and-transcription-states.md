@@ -60,7 +60,9 @@ In the **Clusters** panel, **Overview** tab:
 
 Other tabs: **Profiles** (average profiles overlaid), **Composition** (each
 dataset's share of reads per cluster, as **Bar**, **Pie** or **Line**),
-**V-Plot** (footprint size vs position, by **Midpoint** or **Full footprint**),
+**Footprint sizes** (footprint size vs position as a **Size enrichment** plot
+or a **V-plot**; it also works without clustering, see the guide's
+[Footprint size enrichment plots](../guide.md#footprint-size-enrichment-plots)),
 **Projection** (PCA, UMAP or t-SNE of every read), and **Differences** (when
 labeling rules are defined: what sets each cluster apart). Click cluster names
 above a chart to show only those clusters; the pick is shared with the read

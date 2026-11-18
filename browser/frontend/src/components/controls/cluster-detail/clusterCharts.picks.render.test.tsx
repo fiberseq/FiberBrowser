@@ -10,15 +10,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useBrowserStore } from '../../../stores/browserStore';
 import { CompositionTabContent, compositionPieSegments, compositionProportions } from './CompositionTabContent';
 import { ProfilesTabContent } from './ProfilesTabContent';
-import { VPlotTabContent, vplotModeCaption } from './VPlotTabContent';
 import { pickedClusterData, pickedClusterIds, togglePick } from './clusterPicks';
 import type { ClusterSummary } from './OverviewTabContent';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('../../charts/VPlotChart', () => ({
-  VPlotChart: ({ filename }: { filename: string }) => <div data-testid="vplot">{filename}</div>,
-}));
 vi.mock('../../charts/OverlayProfileChart', () => ({
   OverlayProfileChart: ({ series }: { series: Array<{ label: string }> }) => (
     <div data-testid="profile">{series.map(s => s.label).join(',')}</div>
@@ -63,10 +59,6 @@ describe('cluster picks (pure)', () => {
       .toEqual([['C1', 50], ['Other clusters', 50]]);
   });
 
-  it('says what each V-plot mode shows', () => {
-    expect(vplotModeCaption('span', true)).toMatch(/Full footprint.*every position it covers.*enriched/);
-    expect(vplotModeCaption('midpoint', false)).toMatch(/Midpoint.*centre.*count/);
-  });
 });
 
 describe('cluster charts render', () => {
@@ -153,30 +145,5 @@ describe('cluster charts render', () => {
         allClusterData={clusters} chartWidth={300} getDatasetLabel={() => 'ds'} />,
     ));
     expect(q('bar')?.textContent).toBe('ds:2=0.20');
-    act(() => root.unmount());
-    root = createRoot(container);
-    const noop = () => {};
-    const vp = { matrix: [[1]], size_min: 10, size_max: 300, size_bin: 10, pos_bin: 10 } as any;
-    const setMode = vi.fn();
-    const setRowNorm = vi.fn();
-    act(() => root.render(
-      <VPlotTabContent
-        vplotData={{ ds: { 0: vp, 1: vp, 2: vp } }}
-        vplotLoading={false} showVplotSettings={false} setShowVplotSettings={noop} vplotSettingsSummary=""
-        vplotSizeBin={10} setVplotSizeBin={noop} vplotPosBin={10} setVplotPosBin={noop}
-        vplotSizeMin={10} setVplotSizeMin={noop} vplotSizeMax={300} setVplotSizeMax={noop}
-        vplotLog setVplotLog={noop} vplotSmooth={1} setVplotSmooth={noop}
-        vplotNormalize="per_cluster" setVplotNormalize={noop} vplotLayer={null} setVplotLayer={noop}
-        vplotMode="midpoint" setVplotMode={setMode} vplotRowNormalize={false} setVplotRowNormalize={setRowNorm}
-        start={0} end={100} datasetIds={['ds']} multiDs={false} visibleClusterData={clusters}
-        chartWidth={300} getDatasetLabel={sk => sk} getDatasetColor={() => '#000'}
-      />,
-    ));
-    expect([...container.querySelectorAll('[data-testid="vplot"]')].map(e => e.textContent)).toEqual(['vplot_midpoint_c2']);
-    // The toggle asks for the full-footprint plot (counts; per-size-row enrichment is a setting).
-    act(() => button('Full footprint').click());
-    expect(setMode).toHaveBeenCalledWith('span');
-    expect(setRowNorm).not.toHaveBeenCalled();
-    expect(q('vplot-caption')?.textContent).toMatch(/Midpoint/);
   });
 });

@@ -73,9 +73,16 @@ FiberBrowser builds one read per fiber from the decorator rows:
   FiberBrowser paints an MSP as FIRE when `aq ≥ 230` (FDR ≤ 10 %, the
   **FIRE default** quality setting). Yellow MSPs (`aq` 192), which fibertools
   still names `FIRE`, stay in the layer as accessible stretches but are not
-  painted as FIRE unless you lower the `aq` threshold (**Quality → Custom
-  filters**). The colour, not the row name, decides: older fibertools named
+  painted as FIRE unless you lower the `aq` threshold (the FIRE slider in the
+  toolbar's **Quality** group, or **Labeling → Quality**). The colour, not the row name, decides: older fibertools named
   linker rows `FIRE` too.
+- **The layer's name.** When FiberBrowser finds FIRE scores in a file, its
+  accessibility layer is named **FIRE** instead of **Accessibility**: in that
+  dataset's own views (per-dataset profiles) and in the controls when every
+  loaded file with the layer has FIRE scores. In a session that mixes FIRE and
+  non-FIRE files, the controls that act on all of them (layer toggle, layer
+  menus) read **Accessibility / FIRE**. Only the name changes: layer ids,
+  sessions and filters are the same.
 - **m6A** and **5mC** marks come from the `m6A` and `5mC` rows. Turn them on
   like any other mark layer.
 

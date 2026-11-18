@@ -129,6 +129,38 @@ def unopenable_blast_dbs(directory: str) -> List[str]:
     return sorted(p for p in _marker_prefixes(directory) if not blast_db_exists(p))
 
 
+# The genome id a session gets when only plasmid maps are loaded (routers/genome.py _publish_plasmid): not a
+# genome, so no BLAST database is expected to match it.
+PLASMID_ONLY_GENOME = 'plasmids'
+
+
+def _local_file(path) -> Optional[str]:
+    if isinstance(path, bytes):
+        path = path.decode(errors='replace')
+    if isinstance(path, str) and path and os.path.isfile(os.path.expanduser(path)):
+        return os.path.expanduser(path)
+    return None
+
+
+def local_primer_fasta(state) -> Optional[str]:
+    """The FASTA file primers are designed from, as a local file, or None.
+
+    An explicit primer FASTA wins; otherwise the loaded reference. A genome opened from the Online picker
+    keeps its URL in ``fasta_path`` while its handle reads the downloaded copy in the cache: that copy is
+    the file (``state.fasta.filename``)."""
+    override = getattr(state, 'primer_fasta', None)
+    if override:
+        return _local_file(override)
+    loaded = getattr(state, 'fasta_path', None)
+    return _local_file(loaded) or (_local_file(getattr(getattr(state, 'fasta', None), 'filename', None))
+                                   if loaded else None)
+
+
+def primer_fasta_setting(state) -> Optional[str]:
+    """The configured primer FASTA as the user named it (override, else loaded reference), local or not."""
+    return getattr(state, 'primer_fasta', None) or getattr(state, 'fasta_path', None)
+
+
 def genome_hints(state) -> List[str]:
     """Collect lowercase tokens that identify the reference primer design uses.
 
@@ -143,7 +175,7 @@ def genome_hints(state) -> List[str]:
                          == os.path.abspath(os.path.expanduser(loaded))):
         return [strip_fasta_extension(override).lower()]
     genome = getattr(state, 'current_genome', None)
-    if genome:
+    if genome and genome != PLASMID_ONLY_GENOME:
         hints.append(genome.lower())
     fasta_path = loaded or override
     if fasta_path:
@@ -167,7 +199,12 @@ def default_blast_db_prefix(state, fasta_path: str, output_dir: Optional[str] = 
     other FASTA (a custom primer reference) gets a database of its own name, so
     it never reuses or overwrites the genome's.
     """
-    genome = getattr(state, 'current_genome', None) if _same_file(fasta_path, getattr(state, 'fasta_path', None)) else None
+    loaded = getattr(state, 'fasta_path', None)
+    is_loaded = _same_file(fasta_path, loaded) or (
+        bool(loaded) and _same_file(fasta_path, _local_file(getattr(getattr(state, 'fasta', None), 'filename', None))))
+    genome = getattr(state, 'current_genome', None) if is_loaded else None
+    if genome == PLASMID_ONLY_GENOME:
+        genome = None
     label = (
         genome
         or strip_fasta_extension(fasta_path)
@@ -180,6 +217,123 @@ def default_blast_db_prefix(state, fasta_path: str, output_dir: Optional[str] = 
         else os.path.join(os.path.expanduser('~'), '.fiberhmm', 'blast', safe_label)
     )
     return os.path.join(root, safe_label)
+
+
+# makeblastdb -parse_seqids accepts local sequence ids of at most this many characters.
+MAKEBLASTDB_MAX_LOCAL_ID = 50
+def _open_fasta_text(path: str):
+    import gzip
+    with open(path, 'rb') as probe:
+        gzipped = probe.read(2) == b'\x1f\x8b'
+    if gzipped:
+        return gzip.open(path, 'rt', encoding='ascii', errors='replace'), True
+    return open(path, 'r', encoding='ascii', errors='replace'), False
+
+
+def fasta_problem(path: str) -> Optional[str]:
+    """Why ``path`` can't be read as a FASTA (None when it can): a binary map such as a SnapGene .dna
+    or a GenBank file named as the FASTA is reported here, not by makeblastdb."""
+    try:
+        handle, _gz = _open_fasta_text(path)
+        with handle:
+            for line in handle:
+                if line.strip():
+                    if line.startswith('>'):
+                        return None
+                    break
+    except (OSError, EOFError) as exc:
+        return f"Can't read {path}: {exc}"
+    name = os.path.basename(path)
+    return (f"{name} is not a FASTA file (a FASTA starts with a '>' header line). A plasmid map "
+            "(SnapGene .dna, GenBank) is opened with Load plasmid map instead; primers designed on it are "
+            "checked against the genome BLAST database you choose.")
+
+
+def rejected_seq_ids(path: str, limit: int = 5) -> List[str]:
+    """Sequence ids (a header's first word) makeblastdb -parse_seqids refuses: longer than
+    MAKEBLASTDB_MAX_LOCAL_ID characters. At most ``limit`` are returned."""
+    found: List[str] = []
+    try:
+        handle, _gz = _open_fasta_text(path)
+        with handle:
+            for line in handle:
+                if line.startswith('>'):
+                    seq_id = (line[1:].split() or [''])[0]
+                    if len(seq_id) > MAKEBLASTDB_MAX_LOCAL_ID:
+                        found.append(seq_id)
+                        if len(found) >= limit:
+                            break
+    except (OSError, EOFError):
+        pass
+    return found
+
+
+def blast_path_arg(path: str) -> str:
+    """A path as BLAST+ reads it: ``-in``/``-db`` split their value on spaces (a list of files or
+    databases), so a path with whitespace is passed in double quotes."""
+    return f'"{path}"' if any(ch.isspace() for ch in path) else path
+
+
+class _CompletedLike:
+    def __init__(self, returncode, stdout='', stderr=''):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
+def _run_makeblastdb(input_fasta: str, prefix: str) -> tuple:
+    """Run makeblastdb into ``prefix``. makeblastdb can't write to a path with whitespace (even quoted), so
+    such a database is built in a temporary folder and its files moved into place."""
+    import shutil
+    import tempfile
+    from services.external_tools import tool_path
+    build_prefix, staging = prefix, None
+    if any(ch.isspace() for ch in prefix):
+        staging = tempfile.mkdtemp(prefix='fiberbrowser-blastdb-')
+        if any(ch.isspace() for ch in staging):
+            shutil.rmtree(staging, ignore_errors=True)
+            return [tool_path('makeblastdb') or 'makeblastdb'], _CompletedLike(1, stderr=(
+                f"BLAST+ can't write a database to a folder whose path contains spaces ({os.path.dirname(prefix)}), "
+                "and the temporary folder has spaces too. Choose an existing database with Browse instead."))
+        build_prefix = os.path.join(staging, os.path.basename(prefix))
+    command = [
+        tool_path('makeblastdb') or 'makeblastdb',
+        '-in', blast_path_arg(input_fasta),
+        '-dbtype', 'nucl',
+        '-parse_seqids',
+        '-out', build_prefix,
+    ]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=MAKEBLASTDB_TIMEOUT_SECONDS)
+        if staging and result.returncode == 0:
+            base = os.path.basename(prefix)
+            for name in os.listdir(staging):
+                if name == base or name.startswith(base + '.'):
+                    shutil.move(os.path.join(staging, name), os.path.join(os.path.dirname(prefix), name))
+    finally:
+        if staging:
+            shutil.rmtree(staging, ignore_errors=True)
+    return command, result
+
+
+def no_fasta_to_build_message(state) -> str:
+    """Why Build has nothing to work from, naming what is loaded and what to do instead."""
+    plasmids = sorted(supplemental_names(state))
+    remote = getattr(state, 'fasta_path', None)
+    if remote and not local_primer_fasta(state):
+        return (f"The loaded reference is not a local file ({remote}), so a BLAST database can't be built from it "
+                "here. Download the genome FASTA (or reopen the genome once its download has finished) and build "
+                "again, or use Browse to choose an existing BLAST database.")
+    if plasmids:
+        names = ', '.join(plasmids[:3]) + ('...' if len(plasmids) > 3 else '')
+        return (f"No genome FASTA is open, so there is no genome to build a BLAST database from. Primers "
+                f"designed on {names} don't need a database built from the plasmid: they are checked against the "
+                "genome BLAST database you choose. Use Browse to choose it (for example your dm6 database), or "
+                "open the genome FASTA first and build its database.")
+    return "No FASTA loaded. Load a reference genome before building a primer BLAST DB."
+
+
+def supplemental_names(state) -> set:
+    sequences = getattr(state, 'plasmid_sequences', None)
+    return set(sequences) if isinstance(sequences, dict) else set()
 
 
 def build_blast_db_from_fasta(
@@ -195,15 +349,23 @@ def build_blast_db_from_fasta(
     this helper turns that same FASTA into a local BLAST DB and updates primer
     configuration. It never downloads data; missing BLAST+ is reported with a
     concrete install command.
+
+    The FASTA is indexed as it is: a database of renamed ids could not map hits back to the contigs, so
+    ids makeblastdb refuses are reported for the user to rename.
     """
-    resolved_fasta = fasta_path or getattr(state, 'primer_fasta', None) or getattr(state, 'fasta_path', None)
-    if not resolved_fasta:
-        return {
-            "success": False,
-            "message": "No FASTA loaded. Load a reference genome before building a primer BLAST DB.",
-        }
+    if fasta_path:
+        resolved_fasta = fasta_path
+    else:
+        resolved_fasta = local_primer_fasta(state)
+        if not resolved_fasta:
+            if primer_fasta_setting(state) and not getattr(state, 'fasta_path', None):
+                return {"success": False, "message": f"FASTA file not found: {primer_fasta_setting(state)}"}
+            return {"success": False, "message": no_fasta_to_build_message(state)}
     if not os.path.isfile(resolved_fasta):
         return {"success": False, "message": f"FASTA file not found: {resolved_fasta}"}
+    problem = fasta_problem(resolved_fasta)
+    if problem:
+        return {"success": False, "message": problem}
     if not makeblastdb_available():
         return {
             "success": False,
@@ -216,12 +378,24 @@ def build_blast_db_from_fasta(
     if output_dir:
         from services.lab.paths import confine
         confine(output_dir, write=True)  # a lab server: only in a writable data root
-    os.makedirs(os.path.dirname(prefix), exist_ok=True)
+    try:
+        os.makedirs(os.path.dirname(prefix), exist_ok=True)
+    except OSError as exc:
+        return {"success": False, "message": (
+            f"Can't create the BLAST database folder {os.path.dirname(prefix)}: {exc.strerror or exc}. "
+            "Choose an existing database with Browse, or open the FASTA from a folder you can write to.")}
+    if not os.access(os.path.dirname(prefix), os.W_OK):
+        return {"success": False, "message": (
+            f"The BLAST database folder {os.path.dirname(prefix)} is not writable. Choose an existing database "
+            "with Browse instead.")}
+    # An explicitly named FASTA becomes the primer override; the loaded
+    # reference is used automatically and so keeps following genome loads.
+    override = resolved_fasta if fasta_path else None
 
     # A database is reused only when it was built from this same FASTA (its
     # recorded source); one built from another file, or since changed, is rebuilt.
     if blast_db_exists(prefix) and not force and blast_db_source_matches(prefix, resolved_fasta):
-        set_primer_paths(state, fasta=resolved_fasta if fasta_path else None, blast_db=prefix)
+        set_primer_paths(state, fasta=override, blast_db=prefix)
         return {
             "success": True,
             "message": f"Using existing BLAST DB: {prefix}",
@@ -230,29 +404,33 @@ def build_blast_db_from_fasta(
             **primer_config_payload(state, validate_blast=False),
         }
 
-    from services.external_tools import tool_path
-    command = [
-        tool_path('makeblastdb') or 'makeblastdb',
-        '-in', resolved_fasta,
-        '-dbtype', 'nucl',
-        '-parse_seqids',
-        '-out', prefix,
-    ]
+    with open(resolved_fasta, 'rb') as probe:
+        if probe.read(2) == b'\x1f\x8b':
+            return {"success": False, "message": (
+                f"{os.path.basename(resolved_fasta)} is gzip-compressed; makeblastdb needs a plain FASTA. "
+                "Decompress it (gunzip -k) and build from the .fa file.")}
     try:
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=MAKEBLASTDB_TIMEOUT_SECONDS,
-        )
+        command, result = _run_makeblastdb(resolved_fasta, prefix)
     except subprocess.TimeoutExpired:
         return {
             "success": False,
             "message": "makeblastdb timed out while building the primer BLAST DB.",
-            "command": command,
         }
 
     if result.returncode != 0:
+        too_long = rejected_seq_ids(resolved_fasta)
+        if too_long:
+            names = ', '.join(too_long)
+            return {
+                "success": False,
+                "message": (
+                    f"makeblastdb refused sequence names in {os.path.basename(resolved_fasta)} longer than "
+                    f"{MAKEBLASTDB_MAX_LOCAL_ID} characters: {names}. Rename those FASTA headers to short names "
+                    "without spaces (for example >my_construct) and build again."),
+                "command": command,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }
         detail = (result.stderr or result.stdout or "").strip()
         message = "makeblastdb failed while building the primer BLAST DB."
         if detail:
@@ -275,9 +453,7 @@ def build_blast_db_from_fasta(
         }
 
     record_blast_db_source(prefix, resolved_fasta)
-    # An explicitly named FASTA becomes the primer override; the loaded
-    # reference is used automatically and so keeps following genome loads.
-    set_primer_paths(state, fasta=resolved_fasta if fasta_path else None, blast_db=prefix)
+    set_primer_paths(state, fasta=override, blast_db=prefix)
     return {
         "success": True,
         "message": f"Built BLAST DB: {prefix}",
@@ -376,6 +552,22 @@ def resolve_blast_db_for_genome(state, *, wait: bool = False):
     except Exception:
         siblings = []
 
+    match = next((sib for sib in siblings if sib != current and prefix_matches_hints(sib, hints)), None)
+    pin = getattr(state, 'primer_blast_db_pin', None)
+    if pin is not None and tuple(pin) == tuple(hints):
+        # The user chose this database with this genome loaded (a background for plasmid primers, say): it
+        # stays chosen. A design on this genome's own contigs uses the matching database for that run only.
+        if wait and match:
+            return match, None
+        genome_label = hints[0]
+        db_label = os.path.basename(current)
+        return None, (
+            f"BLAST database '{db_label}' (your choice) doesn't match current genome '{genome_label}'. "
+            "Primers on loaded plasmid maps are checked against it. "
+            + (f"Designs on {genome_label} contigs use '{os.path.basename(match)}' from the same folder."
+               if match else f"For designs on {genome_label} contigs, pick a matching database.")
+        )
+
     if len(siblings) > 1:
         for sibling in siblings:
             if sibling != current and prefix_matches_hints(sibling, hints):
@@ -414,23 +606,29 @@ def primer_config_payload(state, *, validate_blast: bool = True) -> dict:
         _, warning = resolve_blast_db_for_genome(state)
     # The FASTA design will use: an explicit override, else the loaded reference.
     fasta = getattr(state, 'primer_fasta', None) or getattr(state, 'fasta_path', None)
+    local = local_primer_fasta(state)
     from services.external_tools import blast_summary
     return {
         "blast_tool": blast_summary(),
         "fasta": fasta,
         "blast_db": getattr(state, 'primer_blast_db', None),
         "configured": fasta is not None,
+        # The FASTA as a local file (a genome opened from the picker: its downloaded copy); None when design
+        # has no FASTA file to read (Build is then not offered) and works on loaded plasmid maps only.
+        "fasta_local": local,
+        "plasmids": sorted(supplemental_names(state)),
         "current_genome": getattr(state, 'current_genome', None),
         "blast_db_warning": warning,
     }
 
 
-def set_primer_paths(state, *, fasta=None, blast_db=None, wait: bool = True) -> bool:
+def set_primer_paths(state, *, fasta=None, blast_db=None, wait: bool = True, pin: bool = False) -> bool:
     """Publish the primer FASTA / BLAST database (reference fields, routed to a view's context) under the
     workspace's state lock and the view's context lock (services/genome_loading.reference_write_lock).
 
     ``wait=False`` (the auto-switch made while reading the config, also from /api/status on the event loop): when
-    the locks are busy (a genome loading) nothing is written and False is returned; the next read switches."""
+    the locks are busy (a genome loading) nothing is written and False is returned; the next read switches.
+    ``pin``: the database is the user's choice (see resolve_blast_db_for_genome)."""
     from services.genome_loading import reference_write_lock
     locks = reference_write_lock(state)._locks
     taken = []
@@ -443,6 +641,10 @@ def set_primer_paths(state, *, fasta=None, blast_db=None, wait: bool = True) -> 
             state.primer_fasta = fasta
         if blast_db is not None:
             state.primer_blast_db = blast_db
+            # pin: the user chose it (POST /api/primer_config): it is not auto-switched while the genome it
+            # was chosen with stays loaded (resolve_blast_db_for_genome). Any other setting (Build, a switch)
+            # releases the pin.
+            state.primer_blast_db_pin = tuple(genome_hints(state)) if pin else None
         return True
     finally:
         for lock in reversed(taken):

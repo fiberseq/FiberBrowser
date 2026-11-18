@@ -388,7 +388,9 @@ def test_bam_compact_loader_builds_expected_compact_reads():
         "reference_start": 100, "reference_end": 200, "alignment_orientation": "forward",
         "intervals": [[10, 30, 20], [30, 50, -20], [50, 80, 30]],
         "qualities": [80, 90],
-        "fire": [[35, 45, 200]],
+        # No ft fire @PG and too few scores for their pattern: not FIRE scores (services/fire_quality), so the
+        # aq is FiberHMM-style (hq) and the overlay carries no score.
+        "fire": [[35, 45, 128]],
         "layers": {
             "tf": {
                 "intervals": [[10, 30, 20], [50, 80, 30]],
@@ -398,7 +400,7 @@ def test_bam_compact_loader_builds_expected_compact_reads():
             "msp": {
                 "intervals": [[35, 45, 10]],
                 "qualities": [[200]],
-                "quality_names": ["aq"],
+                "quality_names": ["hq"],
             },
         },
     }]
@@ -588,7 +590,8 @@ def test_deamination_opportunity_scan_is_explicitly_requested(monkeypatch):
     assert opportunity[0]["possible_deam_ga"] == [9]
 
 
-def test_bam_compact_loader_treats_all_zero_fire_aq_as_missing():
+def test_bam_compact_loader_keeps_all_zero_aq_as_scores():
+    """All-0 aq is a real score (services/fire_quality); without FIRE evidence it is FiberHMM-style hq."""
     read = FakeBamRead(
         "read1",
         100,
@@ -616,8 +619,8 @@ def test_bam_compact_loader_treats_all_zero_fire_aq_as_missing():
     assert result[0]["fire"] == [[35, 45, 128]]
     assert result[0]["layers"]["msp"] == {
         "intervals": [[35, 45, 10]],
-        "qualities": None,
-        "quality_names": [],
+        "qualities": [[0]],
+        "quality_names": ["hq"],
     }
 
 

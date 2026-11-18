@@ -85,9 +85,91 @@ export function getLayerColor(name: string): string {
   return hslToHex(Math.abs(hash) % 360, 0.7, 0.5);
 }
 
-/** Get a display label for a layer name. */
-export function getLayerLabel(name: string): string {
+/** The accessibility layer's keys: legacy/internal `msp` and `fire` (one user-facing layer). */
+export function isAccessibilityLayer(name: string | null | undefined): boolean {
+  return name === 'msp' || name === 'fire';
+}
+
+type AccessibilityDataset = { available_layers?: Partial<Record<string, boolean>>; layer_type?: string };
+
+/**
+ * Whether a dataset's accessibility (MSP) intervals are FIRE elements. The
+ * backend decides this once per file (services/fire_quality.py
+ * file_fire_status) and reports it as `available_layers.fire` (a BAM whose
+ * MSP scores are not FIRE scores reports `msp` instead); a FIRE bigBed has
+ * layer_type `fire`. Label only: layer ids and filters are unchanged.
+ */
+export function datasetHasFireScores(dataset: AccessibilityDataset | null | undefined): boolean {
+  return Boolean(dataset?.available_layers?.fire) || dataset?.layer_type === 'fire';
+}
+
+function datasetHasAccessibility(dataset: AccessibilityDataset): boolean {
+  return datasetHasFireScores(dataset) || Boolean(dataset.available_layers?.msp) || dataset.layer_type === 'msp';
+}
+
+/** Among datasets with an accessibility layer: none FIRE, all FIRE, or a mix. */
+export type AccessibilityMode = 'accessibility' | 'fire' | 'mixed';
+
+export function accessibilityMode(datasets: readonly AccessibilityDataset[] | null | undefined): AccessibilityMode {
+  const withLayer = (datasets ?? []).filter(datasetHasAccessibility);
+  const fire = withLayer.filter(datasetHasFireScores).length;
+  if (fire === 0) return 'accessibility';
+  return fire === withLayer.length ? 'fire' : 'mixed';
+}
+
+/**
+ * The accessibility layer's name: "FIRE" when every dataset that has the layer
+ * carries FIRE scores ("FIRE elements" with `long`), "Accessibility" when none
+ * does, and "Accessibility / FIRE" for a mix (a control that acts on all of them).
+ */
+export function accessibilityLabel(mode: AccessibilityMode, { long = false }: { long?: boolean } = {}): string {
+  if (mode === 'fire') return long ? 'FIRE elements' : 'FIRE';
+  if (mode === 'mixed') return 'Accessibility / FIRE';
+  return 'Accessibility';
+}
+
+// The loaded datasets' mode, for labels drawn without the datasets at hand
+// (set by the browser store whenever its datasets change).
+let sessionAccessibilityMode: AccessibilityMode = 'accessibility';
+export function setAccessibilityLabelSource(datasets: readonly AccessibilityDataset[] | null | undefined): void {
+  sessionAccessibilityMode = accessibilityMode(datasets);
+}
+export function getSessionAccessibilityMode(): AccessibilityMode {
+  return sessionAccessibilityMode;
+}
+
+/**
+ * Get a display label for a layer name. The accessibility layer (msp/fire)
+ * is named for `datasets` when given (one dataset: that dataset's own name for
+ * it), else for the loaded datasets.
+ */
+export function getLayerLabel(name: string, datasets?: readonly AccessibilityDataset[] | null): string {
+  if (isAccessibilityLayer(name)) {
+    return accessibilityLabel(datasets ? accessibilityMode(datasets) : sessionAccessibilityMode);
+  }
   return KNOWN_LABELS[name] ?? name;
+}
+
+/** One dataset's accessibility layer, for its hover text: FIRE elements, plain MSPs, or nothing without the layer. */
+export function datasetAccessibilityNote(dataset: AccessibilityDataset | null | undefined): string | null {
+  if (!dataset || !datasetHasAccessibility(dataset)) return null;
+  return datasetHasFireScores(dataset)
+    ? 'Accessibility layer: FIRE (FIRE elements; FIRE scores found)'
+    : 'Accessibility layer: Accessibility (MSPs; no FIRE scores)';
+}
+
+/** The accessibility layer's name in one dataset: "FIRE" for a FIRE file, else "Accessibility". */
+export function getDatasetLayerLabel(name: string, dataset: AccessibilityDataset | null | undefined): string {
+  if (isAccessibilityLayer(name)) return datasetHasFireScores(dataset) ? 'FIRE' : 'Accessibility';
+  return KNOWN_LABELS[name] ?? name;
+}
+
+/** Tooltip for the accessibility layer, saying which datasets carry FIRE scores. */
+export function fireLayerTitle(datasets?: readonly AccessibilityDataset[] | null): string {
+  const mode = datasets ? accessibilityMode(datasets) : sessionAccessibilityMode;
+  if (mode === 'fire') return 'FIRE elements: accessible stretches scored by fibertools FIRE (aq-filtered by the FIRE quality filter)';
+  if (mode === 'mixed') return 'Accessibility intervals; in datasets with FIRE scores these are FIRE elements (aq-filtered by the FIRE quality filter)';
+  return 'Accessibility intervals (MSPs)';
 }
 
 /** Get a longer title (tooltip) for a layer name. */
@@ -178,6 +260,7 @@ export interface LayerEntry {
 
 type LayerDataset = {
   available_layers?: Partial<Record<string, boolean>>;
+  layer_type?: string;
   derived_layers?: Record<string, {
     id?: string;
     label?: string;
@@ -236,7 +319,7 @@ export function getCanonicalLayerGroups(
 
   // FIRE — user-facing alias for either explicit FIRE or legacy MSP/as/al.
   if (has('msp') || has('fire')) {
-    push('fire', getLayerLabel('fire'), getLayerTitle('fire'));
+    push('fire', getLayerLabel('fire', datasets), fireLayerTitle(datasets));
   }
 
   // TF — only when an explicit TF layer exists.
@@ -361,7 +444,7 @@ export function getMetaprofileSourceEntries(
   }
   if (hasTf) push('tf', 'TF', getLayerTitle('tf'));
   if (has('fire')) {
-    push('fire', getLayerLabel('fire'), 'FIRE accessibility density profile. Cached by default; can be disabled in Layer Cache for performance.');
+    push('fire', getLayerLabel('fire', datasets), `${accessibilityMode(datasets) === 'fire' ? 'FIRE element' : 'Accessibility'} density profile. Cached by default; can be disabled in Layer Cache for performance.`);
   }
   if (has('deam')) {
     push('deam', 'Deam', 'DAF deamination profile. Cached by default; can be disabled in Layer Cache for performance.');

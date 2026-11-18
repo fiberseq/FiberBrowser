@@ -1,6 +1,7 @@
 import type { Dataset } from '../types/dataset';
+import { datasetAccessibilityNote } from './layerColors';
 
-type DatasetLabelSource = Pick<Partial<Dataset>, 'id' | 'label' | 'path' | 'paths' | 'sample'>;
+type DatasetLabelSource = Pick<Partial<Dataset>, 'id' | 'label' | 'path' | 'paths' | 'sample' | 'available_layers' | 'layer_type'>;
 
 const DATASET_EXTENSIONS = [
   '.recalled.bam',
@@ -78,6 +79,13 @@ export function getDatasetHoverLabel(
   dataset: DatasetLabelSource | undefined,
 ): string {
   if (!dataset) return 'Dataset';
+  // What this file's accessibility layer is (FIRE elements or plain MSPs), when it has one.
+  const note = datasetAccessibilityNote(dataset);
+  const text = datasetHoverText(dataset);
+  return note ? `${text}\n\n${note}` : text;
+}
+
+function datasetHoverText(dataset: DatasetLabelSource): string {
   const label = dataset.label || dataset.id || 'Dataset';
   const paths = dataset.paths?.length ? dataset.paths : dataset.path ? [dataset.path] : [];
   if (paths.length === 0) return dataset.sample && dataset.sample !== label ? `${label}\nSample: ${dataset.sample}` : label;

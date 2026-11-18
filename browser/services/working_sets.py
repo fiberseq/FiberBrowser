@@ -1319,6 +1319,9 @@ def _project_layer_intervals(
             ]
             if any(projected_values):
                 adjusted_layer[meta_key] = projected_values
+    if "quality_source" in layer:
+        # A FIRE-scored MSP layer (services/fire_quality): 0 is a score there.
+        adjusted_layer["quality_source"] = layer["quality_source"]
     return adjusted_layer
 
 
@@ -1391,6 +1394,8 @@ def project_broad_read_to_viewport(
                 adjusted_fire.append([clipped[0], clipped[1], clipped[2]])
         if adjusted_fire:
             adjusted_read["fire"] = adjusted_fire
+            if read.get("fire_quality_source"):
+                adjusted_read["fire_quality_source"] = read["fire_quality_source"]
     if layer_key_has_payload(layer_key) and read.get("layers"):
         adjusted_layers = {}
         derived_layers = []

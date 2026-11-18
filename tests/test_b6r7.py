@@ -15,7 +15,7 @@ def test_4c_viewpoint_beyond_the_chromosome_is_refused(monkeypatch):
 
     seq = "ACGT" * 500  # 2,000 bp
     monkeypatch.setattr(ep, "_resolve_primer_runtime_config",
-                        lambda state: (SimpleNamespace(fasta_path="/ref.fa"), None))
+                        lambda state, **_kw: (SimpleNamespace(fasta_path="/ref.fa"), None))
     monkeypatch.setattr(ep, "_get_fasta_interface",
                         lambda state, path: (lambda c, s, e: seq[s:e], lambda c: len(seq), {"chr1"}))
     result = ep.design_4c_primers_payload(FourCPrimerDesignRequest(chrom="chr1", start=1000, end=2200), SimpleNamespace())

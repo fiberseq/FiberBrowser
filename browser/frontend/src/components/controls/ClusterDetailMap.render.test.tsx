@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({
   fetchClusterProjection: vi.fn(),
-  fetchClusterVPlot: vi.fn(),
+  fetchFootprintSizes: vi.fn(),
 }));
 vi.mock('../../api/clustering', async (orig) => ({ ...(await orig<typeof import('../../api/clustering')>()), ...api }));
 
@@ -60,7 +60,7 @@ beforeEach(() => {
     return fakeContext(this) as never;
   });
   api.fetchClusterProjection.mockReset().mockResolvedValue(projection);
-  api.fetchClusterVPlot.mockReset().mockResolvedValue({ success: true, data: {} });
+  api.fetchFootprintSizes.mockReset().mockResolvedValue({ success: true, data: {} });
   useReadActionsStore.getState().reset();
   useBrowserStore.setState({
     chrom: 'chr19', start: 47_514_037, end: 47_518_985,

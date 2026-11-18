@@ -251,6 +251,8 @@ def diagnose_bam_tags(
         from services.remote_sources.opening import open_alignment_file
         with open_alignment_file(bam_path, "rb") as bam:
             chroms = [ref["SN"] for ref in bam.header["SQ"]]
+            from services.fire_quality import file_fire_status
+            fire_status = file_fire_status(bam_path, bam.header)
             if chrom:
                 chroms_to_try = []
                 for candidate in [chrom, *get_chrom_variants(chrom)]:
@@ -272,6 +274,12 @@ def diagnose_bam_tags(
             circular_contigs = header_circular_contigs(bam.header)
             from services.bam_tags import legacy_tag_frame_report
             legacy_tag_frame = legacy_tag_frame_report(bam.header)
+            # The frame the loaders use: the header, else the reads' m6A (services/legacy_frame; cached per file).
+            from services.legacy_frame import file_legacy_frame
+            try:
+                legacy_frame = file_legacy_frame(bam_path, bam.header)
+            except Exception:
+                legacy_frame = {"frame": legacy_tag_frame.get("frame"), "basis": "header"}
             ma_layer_types: set[str] = set(declared_ma_layer_types)
             # Annotation types actually seen in MA/Ma tags (not just declared in the header).
             observed_ma_types: set[str] = set()
@@ -465,7 +473,15 @@ def diagnose_bam_tags(
             # legacy ns/nl, as/al signals (they drive the `footprint` layer).
             "has_ma_nucleosomes": "nuc" in observed_ma_types,
             "has_ma_msps": "msp" in observed_ma_types,
-            "has_fire": "aq" in tag_counts and "as" in tag_counts and "al" in tag_counts,
+            # Whether the MSP scores are fibertools FIRE scores, and on what basis (services/fire_quality).
+            "has_fire": fire_status["fire"] and (
+                ("aq" in tag_counts and "as" in tag_counts and "al" in tag_counts)
+                or "fire" in observed_ma_types or "Ma" in tag_counts),
+            "fire_basis": fire_status["basis"],
+            # Frame of the legacy ns/nl/as/al tags on reverse reads ("molecular" | "seq") and its basis: "header",
+            # "m6A in reads" (header without evidence or ambiguous; services/legacy_frame) or "default".
+            "legacy_frame": legacy_frame.get("frame"),
+            "legacy_frame_basis": legacy_frame.get("basis"),
             "has_m6a": has_m6a_mm or (("MM" in tag_counts) and not has_m5c_mm and not has_m6a_mm),
             "has_m5c": has_m5c_mm,
             "has_deam": has_iupac_ry or has_daf_mismatches,

@@ -1,7 +1,7 @@
 import { useShallow } from 'zustand/react/shallow';
 import { useBrowserStore } from '../../../stores/browserStore';
 import { useConsensusViewStore } from '../../../stores/consensusViewStore';
-import { getCanonicalLayerEntries, getLayerColor, getLayerLabel, getLayerTitle, getNucDisplayLabel, getNucDisplayTitle, isDerivedLayerName } from '../../../utils/layerColors';
+import { fireLayerTitle, getCanonicalLayerEntries, getLayerColor, getLayerLabel, getLayerTitle, getNucDisplayLabel, getNucDisplayTitle, isDerivedLayerName } from '../../../utils/layerColors';
 import { isStrandRescueLayer } from '../../../utils/strandRescue';
 import { ChevronDown } from '../../ui/Icons';
 
@@ -118,13 +118,16 @@ export function LayerToggles({ compact = false, wrap = true }: LayerTogglesProps
     const knownConfig = (MOD_TYPE_CONFIG as Record<string, { label: string; color: string; title: string }>)[modType];
     const isNucLayerEntry = modType === 'nuc' || (nucIsAlias && modType === 'nuc');
     const derivedMeta = datasets.find(d => d.derived_layers?.[modType])?.derived_layers?.[modType];
+    // The accessibility toggle is named for the loaded files: FIRE, Accessibility, or both.
     const label = isNucLayerEntry
       ? getNucDisplayLabel(datasets)
+      : modType === 'fire' ? getLayerLabel('fire', datasets)
       : (modType === 'tf_cr' ? 'Footprint classes' : modType === 'tf_rc' ? 'Footprint classes' : derivedMeta?.label ?? knownConfig?.label ?? getLayerLabel(modType));
     const title = isNucLayerEntry
       ? getNucDisplayTitle(datasets)
+      : modType === 'fire' ? fireLayerTitle(datasets)
       : (derivedMeta
-        ? `Derived layer: ${derivedMeta.label ?? modType}${derivedMeta.source_layer ? ` (from ${getLayerLabel(derivedMeta.source_layer)})` : ''}`
+        ? `Derived layer: ${derivedMeta.label ?? modType}${derivedMeta.source_layer ? ` (from ${getLayerLabel(derivedMeta.source_layer, datasets)})` : ''}`
         : (knownConfig?.title ?? getLayerTitle(modType)));
     const colorStyle = knownConfig ? undefined : { color: derivedMeta?.color ?? getLayerColor(modType) };
     const colorClass = knownConfig?.color ?? '';

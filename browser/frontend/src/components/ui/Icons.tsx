@@ -49,6 +49,14 @@ export const BarChart = ({ size, ...p }: IconProps) => (
   </svg>
 );
 
+/** Footprint size plots: a size-by-position grid with a V. */
+export const SizeMap = ({ size, ...p }: IconProps) => (
+  <svg {...iconDefaults(size)} {...p}>
+    <rect x="3" y="3" width="18" height="18" rx="2" />
+    <path d="M7 7l5 10 5-10" />
+  </svg>
+);
+
 export const ChevronLeft = ({ size, ...p }: IconProps) => (
   <svg {...iconDefaults(size)} {...p}>
     <path d="M15 18l-6-6 6-6" />

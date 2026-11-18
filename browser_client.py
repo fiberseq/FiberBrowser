@@ -4867,6 +4867,55 @@ class BrowserClient:
             data['sample_seed'] = str(sample_seed)
         return self._post("/api/cluster/vplot", data=data, params=params)
 
+    def get_footprint_size_enrichment(self, chrom: str = None, start: int = None, end: int = None,
+                                      group_by: str = "all", normalization: str = "row",
+                                      mode: str = "span", size_bin: int = 10, pos_bin: int = 10,
+                                      size_min: int = 10, size_max: int = 300,
+                                      sigma_size_bp: float = 10.0, sigma_pos_bp: float = 20.0,
+                                      min_footprints: int = 20, layer: str = "all_footprints",
+                                      dataset_ids: list = None, sample_seed: str = None) -> dict:
+        """Footprint size enrichment: footprint size (rows) by position (columns), no clustering needed.
+
+        The values themselves are returned (not scaled; blank cells None), with
+        ``n_reads`` and ``n_footprints`` per matrix.
+
+        Args:
+            group_by: 'all' (one matrix per dataset, under cluster key -1) or
+                'cluster' (one per cluster of the current clustering)
+            normalization: 'row' (each size row over its mean across the window:
+                enrichment, 1 = average), 'column' (each position over its mean
+                across sizes), 'oe' (observed / expected from both margins) or
+                'raw' (counts)
+            mode: 'span' (full footprint) or 'midpoint' (classic V-plot)
+            sigma_size_bp, sigma_pos_bp: Gaussian sigma in bp down the size axis
+                and along positions (0 = off on that axis)
+            min_footprints: rows (row, oe) or columns (column) drawn from fewer
+                footprints are left blank
+            layer: 'all_footprints' (default: the Nuc and TF layers together,
+                each footprint once), a layer ('nuc', 'tf', 'fire', a
+                footprint-class layer) or None (the calls only)
+
+        Example:
+            se = client.get_footprint_size_enrichment()
+            m = se['data'][dataset_id]['-1']['matrix']
+        """
+        if chrom is None:
+            region = self.get_region()
+            chrom, start, end = region['chrom'], region['start'], region['end']
+        params = {'chrom': chrom, 'region_start': int(start), 'region_end': int(end)}
+        data = {
+            'size_bin': size_bin, 'pos_bin': pos_bin, 'size_min': size_min, 'size_max': size_max,
+            'mode': mode, 'group_by': group_by, 'normalization': normalization,
+            'sigma_size_bp': float(sigma_size_bp), 'sigma_pos_bp': float(sigma_pos_bp),
+            'row_min_footprints': int(min_footprints), 'raw_values': True,
+            'layer': self._normalize_annotation_layer(layer),
+        }
+        if dataset_ids:
+            data['dataset_ids'] = list(dataset_ids)
+        if sample_seed:
+            data['sample_seed'] = str(sample_seed)
+        return self._post("/api/cluster/vplot", data=data, params=params)
+
     def fetch_cluster_vplot(self, chrom: str, region_start: int, region_end: int,
                             size_bin: int = 5, pos_bin: int = 5,
                             size_min: int = 10, size_max: int = 300,

@@ -1,5 +1,59 @@
 # Changelog
 
+## 3.0.4 — 2026-11-18
+
+FiberBrowser 3.0.4 bundles FiberHMM 3.0.4 and requires
+`fiberhmm[consensus]>=3.0.3,<4`.
+
+### Fixed
+
+- **Primer design works on a loaded plasmid map.** Primers can be designed on
+  a SnapGene .dna, GenBank or EMBL map, with or without a genome open. They
+  are checked against the BLAST database you choose (for example dm6), where
+  any hit counts as off-target, and against the plasmid itself for a single
+  binding site (this check can be turned off). Before, design on a plasmid
+  always failed. 3C designs with one locus on the genome and one on a plasmid
+  are not supported yet: design those loci separately.
+- **Building a primer BLAST database works in more places:** for a genome
+  opened from the online genome picker, and for files in folders whose path
+  contains a space. When it cannot build, the message says what to do.
+- **The FIRE filter applies only to FIRE scores.** FiberHMM's own MSP score
+  (`fiberhmm-apply --scores`, written as `aq`) is no longer hidden by the
+  default FIRE filter, so all FiberHMM MSPs show. fibertools 0.13 FIRE files
+  are now filtered like older ones: MSPs that are not FIRE elements are hidden
+  by default. Supported: FIRE-only and FiberHMM→FIRE files, with or without
+  their header history.
+- **Reverse reads of header-stripped files are no longer drawn mirrored.**
+  When a BAM's `@PG`/`@CO` lines were removed, legacy `ns`/`nl`/`as`/`al` tags
+  (fibertools ≤0.12, FiberHMM) were read in the wrong frame on reverse reads.
+  The frame is now read from the reads' m6A calls; a header that states it
+  still decides.
+
+### Added
+
+- **FIRE on/off and threshold in the toolbar.** The toolbar's Quality group
+  has a FIRE switch, an `aq` slider with its FDR (for example "230 (FDR
+  10%)"), presets for FDR 5, 10 and 20%, and an on/off box for each other
+  filter. Turning FIRE off keeps the threshold for when you turn it back on.
+- **The accessibility layer is called FIRE** in files with FIRE scores, and
+  Accessibility otherwise.
+- **Footprint size enrichment plots** (Mol Cell 2024 style). Clusters ›
+  Charts › V-Plot is now **Footprint sizes**, with **Size enrichment** (the
+  default) and **V-plot** views, one plot per dataset or per cluster. Open it
+  from **Footprint size enrichment here** on the read menu, **Sizes** in the
+  toolbar, or ⌘K. Choose the source from the toolbar's layers or **All
+  footprints** (the default). The default plot is log2 enrichment in magma;
+  comparative plots (log2 ratio of two plots) use RdBu_r centred on 0, and the
+  V-plot view uses viridis, as before. Colormaps can be changed and reversed.
+  Plots export as PNG, SVG, PDF and TSV and are saved with the session.
+
+### Known limitations
+
+- Merged FIRE + FiberHMM files follow one per-file rule. Turn the FIRE
+  filter off to see all MSPs.
+- Header-stripped files whose `MA` tag has FiberHMM ≤2.13.1 `+`/`-`
+  footprint groups still follow the header rule for those groups.
+
 ## 3.0.3 — 2026-11-11
 
 FiberBrowser 3.0.3 bundles FiberHMM 3.0.4 and requires
