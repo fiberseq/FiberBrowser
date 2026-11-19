@@ -22,7 +22,7 @@ from services.circular_genome import (
     concat_compact_read_parts,
     wrap_passes,
 )
-from services.bam_tags import interval_tag_pair
+from services.bam_tags import footprint_call_summary, interval_tag_pair, read_has_footprint_calls
 from services.diagnostics import env_flag_enabled, log_if_enabled
 from utils.validation import is_url
 
@@ -1558,6 +1558,7 @@ def build_compact_reads_from_bam(
     include_duplicates=False,
     include_qcfail=False,
     min_footprints=0,
+    hide_uncalled=False,
     bam_handle_getter=None,
     chrom_map=None,
     circular=False,
@@ -1576,6 +1577,9 @@ def build_compact_reads_from_bam(
 
     ``short_terminal_footprint_bp``: drop a footprint call at either end of a
     read shorter than this (``SHORT_TERMINAL_FOOTPRINT_BP``; 0 keeps them).
+
+    ``hide_uncalled``: drop records without footprint calls
+    (``bam_tags.read_has_footprint_calls``), independently of ``min_footprints``.
 
     On a circular contig (``@SQ TP:circular``, or ``circular=True`` from the
     browser's circular flags) a window starting inside the contig also gets
@@ -1600,6 +1604,7 @@ def build_compact_reads_from_bam(
         legacy_nuc_min_size=legacy_nuc_min_size,
         include_duplicates=include_duplicates, include_qcfail=include_qcfail,
         min_footprints=min_footprints,
+        hide_uncalled=hide_uncalled,
         bam_handle_getter=bam_handle_getter,
         chrom_map=chrom_map,
         contig_links=contig_links,
@@ -1796,6 +1801,7 @@ def _build_compact_reads_from_bam_region(
     include_duplicates=False,
     include_qcfail=False,
     min_footprints=0,
+    hide_uncalled=False,
     bam_handle_getter=None,
     chrom_map=None,
     contig_links=None,
@@ -1857,6 +1863,7 @@ def _build_compact_reads_from_bam_region(
         "records_duplicate_hidden": 0,
         "records_qcfail_hidden": 0,
         "records_chimera_hidden": 0,
+        "records_uncalled_hidden": 0,
         "tagged_reads": 0,
         "raw_reads": 0,
         "terminal_gap_filtered": 0,
@@ -1954,14 +1961,21 @@ def _build_compact_reads_from_bam_region(
                 if name_hash(read.query_name) % partition[1] != partition[0]:
                     continue
             signal_evidence = record_signal(read, signal_provenance)
+            # One uncalled-read rule (bam_tags.read_has_footprint_calls) for the
+            # filter, the sampler's totals and the hidden-read counts.
             if signal_window is not None:
-                signal_window.append(read, signal_evidence)
+                # The hidden-read counts by reason (uncalled; fewer calls than Min footprints).
+                called, fp_calls = footprint_call_summary(read, legacy_frame)
+                signal_window.append(read, signal_evidence, called=called, footprint_calls=fp_calls)
+            else:
+                called = read_has_footprint_calls(read) if hide_uncalled else True
             if not signal_keeps(signal_evidence):
                 continue
             # A sampled display load (services/read_sampling.py): decided on the
             # name after signal eligibility; a skipped read leaves its extent.
             if sampler is not None:
-                counted = (include_duplicates or not read.is_duplicate) and (include_qcfail or not getattr(read, "is_qcfail", False))
+                counted = ((include_duplicates or not read.is_duplicate) and (include_qcfail or not getattr(read, "is_qcfail", False))
+                           and (called or not hide_uncalled or getattr(read, "is_qcfail", False)))
                 if not sampler.keep(read.query_name):
                     if counted:
                         sampler.skip(read.reference_start, read.reference_end)
@@ -1979,6 +1993,13 @@ def _build_compact_reads_from_bam_region(
             if is_duplicate and not include_duplicates:
                 if profile_bam:
                     profile_counts["records_duplicate_hidden"] += 1
+                continue
+            # A QC-fail read shown by choice (FiberHMM chimeras carry no calls by design) is kept.
+            if hide_uncalled and not called and not getattr(read, "is_qcfail", False):
+                # Uncalled reads are hidden at every Min footprints (its relax to 0 included)
+                # but "All reads, including uncalled" (hide_uncalled=False).
+                if profile_bam:
+                    profile_counts["records_uncalled_hidden"] += 1
                 continue
 
             ref_start = read.reference_start

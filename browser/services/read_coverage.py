@@ -100,6 +100,7 @@ def compute_binned_read_coverage(
     contig_links: Optional[dict] = None,
     include_duplicates: bool = False,
     include_qcfail: bool = False,
+    hide_uncalled: bool = False,
 ) -> dict:
     """Compute binned read counts for BAM and BigBed datasets.
 
@@ -122,6 +123,9 @@ def compute_binned_read_coverage(
     rule), as samtools depth and IGV count by default.  In a wrapped view, a
     BigBed molecule's rows sharing a name (pieces either side of the seam) are
     one molecule, as the read panel merges them, and count once per bin.
+
+    ``hide_uncalled``: BAM records without footprint calls
+    (``bam_tags.read_has_footprint_calls``) don't count, as the read panel hides them.
     """
     region_size = end - start
     if bins <= 0 or region_size <= 0:
@@ -151,6 +155,7 @@ def compute_binned_read_coverage(
                     continue
 
                 from services.signal_evidence import signal_header, record_keeps_signal
+                from services.bam_tags import read_has_footprint_calls
                 signal_provenance = signal_header(getattr(bam, "header", None))
                 try:
                     count = 0
@@ -173,6 +178,8 @@ def compute_binned_read_coverage(
                                     continue
                                 found = True
                                 if (not include_duplicates and getattr(read, "is_duplicate", False)) or (not include_qcfail and getattr(read, "is_qcfail", False)):
+                                    continue
+                                if hide_uncalled and not getattr(read, "is_qcfail", False) and not read_has_footprint_calls(read):
                                     continue
                                 read_start = max(read.reference_start, pass_start)
                                 read_end = min(read.reference_end or read.reference_start + 1, pass_end)

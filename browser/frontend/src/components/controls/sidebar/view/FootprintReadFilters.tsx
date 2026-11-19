@@ -1,5 +1,6 @@
 import { useShallow } from 'zustand/react/shallow';
 import { useBrowserStore } from '../../../../stores/browserStore';
+import { MIN_FOOTPRINTS_ALL_READS, minFootprintsThreshold } from '../../../../stores/uiSlice';
 import { openSummaryTarget } from '../../shared';
 import { defineSettings, inSidebar, settingAnchor, storeToggle } from '../../../../utils/settingsCatalog';
 
@@ -21,7 +22,8 @@ export const FOOTPRINT_FILTER_SETTINGS = defineSettings({
   minFootprints: {
     id: 'view.min-footprints',
     label: 'Min footprints',
-    keywords: ['minimum footprints per read', 'read filter', 'sparse reads', 'hide reads'],
+    keywords: ['minimum footprints per read', 'read filter', 'sparse reads', 'hide reads',
+      'uncalled reads', 'not called', 'no footprint calls', 'all reads, including uncalled'],
     location: inSidebar('view.advanced'),
   },
   minFpQuality: {
@@ -45,6 +47,7 @@ export function FootprintReadFilters() {
   })));
 
   const hasLegacyQualityFilter = minFpQuality > 0;
+  const allReads = minFootprints === MIN_FOOTPRINTS_ALL_READS;
 
   return (
     <>
@@ -70,13 +73,21 @@ export function FootprintReadFilters() {
         <span className="text-[13px] text-gray-600 dark:text-gray-400">{FOOTPRINT_FILTER_SETTINGS.minFootprints.label}:</span>
         <input
           data-copilot-anchor="min-footprints-input"
+          data-testid="min-footprints-input"
           type="number"
-          value={minFootprints}
+          value={minFootprintsThreshold(minFootprints)}
+          disabled={allReads}
           onChange={e => setMinFootprints(Math.max(0, parseInt(e.target.value) || 0))}
-          className="input-tool w-14 text-xs"
+          className="input-tool w-14 text-xs disabled:opacity-50"
           min={0}
-          title="Minimum footprints per read. Reads with fewer are hidden. 0 = no filter."
+          title="Minimum footprints per read. Reads with fewer are hidden. 0 = every called read. Reads without footprint calls are hidden at every value."
         />
+        <label className="flex items-center gap-1 text-[12px] text-gray-600 dark:text-gray-400" title={MIN_FOOTPRINTS_ALL_READS_TOOLTIP}
+          data-testid="min-footprints-all-reads">
+          <input type="checkbox" checked={allReads} className="rounded"
+            onChange={e => (e.target.checked ? setMinFootprints(MIN_FOOTPRINTS_ALL_READS) : useBrowserStore.getState().leaveAllReadsMinFootprints())} />
+          {MIN_FOOTPRINTS_ALL_READS_LABEL}
+        </label>
       </div>
 
       <div className="text-[11px] text-gray-500 dark:text-gray-400">
@@ -121,6 +132,12 @@ export function FootprintReadFilters() {
   );
 }
 
+
+/** Min footprints' last choice (MIN_FOOTPRINTS_ALL_READS): no threshold, uncalled reads shown. */
+export const MIN_FOOTPRINTS_ALL_READS_LABEL = 'All reads, including uncalled';
+export const MIN_FOOTPRINTS_ALL_READS_TOOLTIP = 'Min footprints hides reads without footprint calls at every value (0 = every called read): '
+  + 'reads the footprint caller skipped (no MA/Ma nuc, msp or tf group, no ns/nl or as/al arrays). '
+  + 'This choice shows every read, those included. Turning Min footprints off on sparse data never does.';
 
 export function QcFailReadToggle() {
   const show = useBrowserStore(s => s.showQcFailReads);

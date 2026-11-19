@@ -206,13 +206,22 @@ export function projectLoadedReads(data: ReadsResponse, offset: number, width: n
     clusters: data.sv_summary.clusters.filter(c => c.ref < end && (c.t === 'D' ? c.end : c.ref + 1) > start),
     clips: readRegionClips(reads) };
   return { ...data, reads, width, sv_summary: summary && (summary.clusters.length || summary.clips.length) ? summary : undefined,
-    ...(data.signal_counts ? { signal_counts: { ...data.signal_counts,
-      total: reads.length, kept: reads.length, unknown: reads.length } } : {}),
+    ...(data.signal_counts ? { signal_counts: projectedSignalCounts(data.signal_counts, reads.length, start, end) } : {}),
     count: reads.length, display_count: reads.length,
     total: reads.length, total_in_scope: reads.length, working_count: reads.length,
     total_overlapping: reads.length, total_spanning: spanning,
     has_methylation: reads.some(read => Boolean(read.methyl?.length)), server_elapsed_ms: 0,
     server_timings: { client_region_hit: 1 } };
+}
+
+/** A reused sub-view's signal counts: its own reads, and the uncalled reads Min footprints hid
+ *  that overlap it (from the loaded region's uncalled alignment extents). Totals are "before
+ *  call filters": the hidden uncalled alignments count in them. */
+export function projectedSignalCounts(counts: NonNullable<ReadsResponse['signal_counts']>, reads: number, start: number, end: number) {
+  const extents = counts.uncalled_extents?.filter(([lo, hi]) => lo < end && hi > start);
+  const total = reads + (extents?.length ?? 0);
+  return { ...counts, total, kept: total, unknown: total,
+    ...(extents ? { uncalled_extents: extents, uncalled: extents.length, uncalled_hidden: extents.length } : {}) };
 }
 
 function readRegionClips(reads: CompactRead[]): NonNullable<ReadsResponse['sv_summary']>['clips'] {

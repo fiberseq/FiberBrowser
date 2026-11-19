@@ -11,6 +11,7 @@ import pandas as pd
 from models.domain import CigarCoordMapper
 from services.bam_tags import (
     interval_tag_pair,
+    read_has_footprint_calls,
     read_legacy_tags_are_molecular,
     MA_ALL_MOLECULAR,
     bam_ma_group_frame,
@@ -129,12 +130,16 @@ def load_reads_from_bam(
     spanning_only=True,
     chrom_map: Optional[dict] = None,
     contig_links: Optional[dict] = None,
+    hide_uncalled: bool = False,
 ):
     """
     Load BAM reads into the legacy signed-footprint DataFrame format.
 
     This supports older image/read endpoints that still consume dense DataFrames.
     Newer interactive paths should prefer compact-read loading.
+
+    ``hide_uncalled``: leave out records without footprint calls
+    (``bam_tags.read_has_footprint_calls``), as the compact loader does.
     """
     import pysam
 
@@ -184,6 +189,8 @@ def load_reads_from_bam(
                     continue
 
                 if not record_keeps_signal(read, signal_provenance):
+                    continue
+                if hide_uncalled and not read_has_footprint_calls(read):
                     continue
                 ref_start = read.reference_start
                 ref_end = read.reference_end

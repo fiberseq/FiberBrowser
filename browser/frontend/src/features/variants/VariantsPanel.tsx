@@ -19,6 +19,7 @@ import { SnpTab } from './SnpTab';
 import { SvTab } from './SvTab';
 import { chooseDataset, useSnpScan, variantDatasets } from './useSnpScan';
 import { VariantSplitDialog } from './VariantSplitDialog';
+import { FiberhmmLayerControls } from '../fiberhmmLayers/FiberhmmLayerControls';
 import {
   normalizeVariantsState, scanFor, snpLabel, updateVariantsState, useVariantsPanelState, useVariantsStore, type VariantsTab,
 } from './variantsState';
@@ -157,6 +158,7 @@ export function VariantsPanel({ isFullView }: { isFullView?: boolean }) {
           {scan.cached ? ' (cached)' : scan.elapsed_ms ? ` (${(scan.elapsed_ms / 1000).toFixed(1)} s)` : ''}
         </span>
       )}
+      {datasetId && <FiberhmmLayerControls datasetId={datasetId} />}
       {raw && (scan || state.selected.length > 0) && (
         <button type="button" className="ml-auto text-[11px] text-ink-secondary underline decoration-dotted" onClick={clearAnalysis}
           data-testid="variants-clear" title="Clear the scan, the selection and the combinations (closing the panel keeps them for its next open)">

@@ -186,3 +186,52 @@ describe("Read Stats: one read's chromosome is its panel's", () => {
     expect(text).not.toContain('chr19:6,356,893');
   });
 });
+
+describe('Read Stats: no called read in scope', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  const fetchMock = vi.mocked(fetchReadStats);
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    // Two reads FiberHMM skipped: footprint fields null, means null (NA), not 0 / 100%.
+    fetchMock.mockImplementation(async (_c, _s, _e, _sp, ids) => {
+      const perRead = (ids.ds1 ?? []).map(id => ({
+        ...row(id, 0, 0), call_status: 'not called', accessibility_pct: null, footprint_count: null,
+        nucleosome_count: null, subnuc_count: null, avg_footprint_size: null, median_footprint_size: null,
+      }));
+      return {
+        per_read: perRead, is_bam: true, requested_count: perRead.length, found_count: perRead.length, truncated: false,
+        aggregate: { n_reads: perRead.length, n_datasets: 1, strand_counts: { '+': perRead.length, '-': 0 },
+          mean_accessibility_pct: null, mean_footprint_count: null, mean_footprint_size: null, median_footprint_size: null,
+          n_not_called: perRead.length, hist_accessibility: [], hist_fp_count: null },
+      } as never;
+    });
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    useBrowserStore.setState({
+      chrom: 'chr19', start: 1000, end: 6000,
+      datasets: [{ id: 'ds1', label: 'uncalled', color: '#3b82f6' }],
+      panels: [{ id: 'p1', contentType: 'dataset', datasetId: 'ds1', subTracks: [], collapsed: false, linkGroup: null, layoutRow: 0 }],
+      selectedReadIds: {},
+      activeReadIds: { ds1: ['r1', 'r2'] },
+      clusterAssignments: { ds1: { r1: 1, r2: 1 } },
+      clusterOrder: {}, clusterFocus: {},
+    } as never);
+  });
+  afterEach(() => { act(() => root.unmount()); container.remove(); });
+
+  it('shows NA means, the not-called count and NA cluster means', async () => {
+    await act(async () => root.render(<ReadStatsPanel />));
+    await wait(400);
+    const text = container.textContent ?? '';
+    expect(text).toContain('Mean Accessibility');
+    expect(text).not.toContain('100.0%');
+    expect(text).not.toMatch(/Mean Accessibility\s*0\.0%/);
+    expect(text).toContain('2 reads (no footprint calls');
+    const byCluster = container.querySelector('[data-testid="read-stats-by-cluster"]')!;
+    expect(byCluster.textContent).toContain('NA');
+    expect(byCluster.textContent).not.toContain('NaN');
+  });
+});

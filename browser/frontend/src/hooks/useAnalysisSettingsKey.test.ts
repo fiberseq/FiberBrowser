@@ -14,6 +14,9 @@ describe('analysis settings key (round 12)', () => {
     expect(analysisSettingsKey(0, false, 90, off)).not.toBe(base);
     // A disabled or zero cutoff filters nothing: same key.
     expect(analysisSettingsKey(0, true, 90, [{ ...on[0], enabled: false }])).toBe(base);
+    // Min footprints' "All reads, including uncalled" changes the reads; hidden (the default) keeps older keys.
+    expect(analysisSettingsKey(0, true, 90, off, true)).not.toBe(base);
+    expect(analysisSettingsKey(0, true, 90, off, false)).toBe(base);
   });
 
   it('is part of the transcription and enrichment request keys', () => {

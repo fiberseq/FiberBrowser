@@ -66,7 +66,9 @@ def test_library_counts_do_not_call_dorado_reads_annotated(tmp_path):
 
 
 def test_reads_compact_route_shows_dorado_reads(client, tmp_path):
-    # The plain display route: every read of the view, the Dorado ones included.
+    # The plain display route: the Dorado reads with calls are shown. The raw Dorado read
+    # (a scalar ns:i, no calls) is hidden and counted as uncalled by Min footprints
+    # (the default); with hide_uncalled=false every read of the view is shown.
     path = _write(tmp_path / "ont.bam")
     added = client.post("/api/datasets/add", json={"path": path, "label": "ont"})
     assert added.status_code == 200, added.text
@@ -74,7 +76,17 @@ def test_reads_compact_route_shows_dorado_reads(client, tmp_path):
     did = body.get("id") or body.get("dataset_id") or (body.get("dataset") or {}).get("id")
     resp = client.get("/api/reads/compact", params=dict(dataset_id=did, chrom="chrT", start=900, end=3400))
     assert resp.status_code == 200, resp.text
-    assert {r["id"] for r in resp.json()["reads"]} >= {"dorado_raw", "dorado_called", "fibertools"}
+    ids = {r["id"] for r in resp.json()["reads"]}
+    assert ids >= {"dorado_called", "fibertools"} and "dorado_raw" not in ids
+    assert resp.json()["signal_counts"]["uncalled_hidden"] == 1
+    shown = client.get("/api/reads/compact", params=dict(dataset_id=did, chrom="chrT", start=900, end=3400,
+                                                         hide_uncalled="false"))
+    assert shown.status_code == 200, shown.text
+    assert {r["id"] for r in shown.json()["reads"]} >= {"dorado_raw", "dorado_called", "fibertools"}
+    assert shown.json()["signal_counts"]["uncalled_hidden"] == 0
+    # The frontend's Min footprints "All reads, including uncalled" (-1) does the same.
+    hatch = client.get("/api/reads/compact", params=dict(dataset_id=did, chrom="chrT", start=900, end=3400, min_footprints=-1))
+    assert {r["id"] for r in hatch.json()["reads"]} >= {"dorado_raw", "dorado_called", "fibertools"}
 
 
 def _write_odd(path):

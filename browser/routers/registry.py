@@ -14,6 +14,7 @@ from routers.datasets import router as datasets_router
 from routers.derived_layers import router as derived_layers_router
 from routers.external_tracks import router as external_tracks_router
 from routers.features import router as features_router
+from routers.fiberhmm_layers import router as fiberhmm_layers_router
 from routers.files import router as files_router
 from routers.filtering import router as filtering_router
 from routers.footprint import router as footprint_router
@@ -59,6 +60,7 @@ API_ROUTERS = (
     reads_router,
     sv_router,
     variants_router,
+    fiberhmm_layers_router,
     regions_router,
     read_auxiliary_router,
     insertions_router,

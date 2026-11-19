@@ -191,6 +191,8 @@ REMOTE_ALLOWED: frozenset[tuple[str, str]] = frozenset({
     # the Variants panel's scans (read-only, cached per view)
     (_POST, "/api/variants/snps"), (_POST, "/api/variants/alleles"), (_POST, "/api/variants/svs"),
     (_POST, "/api/variants/sv_linkage"),
+    # the FiberHMM var / sv layers' info and read-row overlay (read-only, from the dataset's own files)
+    (_GET, "/api/fiberhmm_layers/info"), (_GET, "/api/fiberhmm_layers/reads"),
     (_POST, "/api/session/export"),  # the session JSON as a download (nothing written on the server)
 })
 

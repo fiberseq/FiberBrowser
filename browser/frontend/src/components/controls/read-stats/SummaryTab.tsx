@@ -1,7 +1,7 @@
 import type { PerReadStats, ReadStatsResponse } from '../../../api/readStats';
+import { readStatsHiddenText, type ClusterSummaryRow } from '../../../utils/readStatsScope';
 import { SignalDetails } from './SignalDetails';
 import { CigarDetail } from './CigarDetail';
-import type { ClusterSummaryRow } from '../../../utils/readStatsScope';
 
 export function SummaryTab({ aggregate: agg, isBam, perRead, chrom, containerWidth, byCluster, onPickCluster }: {
   aggregate: ReadStatsResponse['aggregate'];
@@ -16,11 +16,14 @@ export function SummaryTab({ aggregate: agg, isBam, perRead, chrom, containerWid
 }) {
   const isSingle = perRead.length === 1;
   const read = isSingle ? perRead[0] : null;
+  // Which read filter hid which reads in the region (not among the reads summarised).
+  const hiddenText = readStatsHiddenText(agg);
 
   const cards: { label: string; value: string; show: boolean }[] = isSingle && read ? [
-    { label: 'Accessibility', value: `${read.accessibility_pct.toFixed(1)}%`, show: true },
-    { label: 'Footprints', value: `${read.footprint_count} (${read.nucleosome_count} nuc, ${read.subnuc_count} small)`, show: true },
-    { label: 'Avg FP Size', value: `${read.avg_footprint_size.toFixed(0)} bp`, show: true },
+    // A read the caller skipped (no call tags) has unknown footprints and accessibility, not 0 / 100%.
+    { label: 'Accessibility', value: read.accessibility_pct != null ? `${read.accessibility_pct.toFixed(1)}%` : 'not called', show: true },
+    { label: 'Footprints', value: read.footprint_count != null ? `${read.footprint_count} (${read.nucleosome_count} nuc, ${read.subnuc_count} small)` : 'not called', show: true },
+    { label: 'Avg FP Size', value: read.avg_footprint_size != null ? `${read.avg_footprint_size.toFixed(0)} bp` : '-', show: true },
     { label: 'Read Length', value: `${read.read_length.toLocaleString()} bp`, show: true },
     { label: 'MAPQ', value: read.mapq != null ? `${read.mapq}` : '-', show: isBam },
     { label: 'Strand', value: read.strand ?? '-', show: isBam },
@@ -28,10 +31,12 @@ export function SummaryTab({ aggregate: agg, isBam, perRead, chrom, containerWid
     { label: 'Aligned Span', value: `${read.aligned_span.toLocaleString()} bp`, show: true },
     { label: 'Modifications', value: read.methyl_count != null ? `${read.methyl_count} modified bases (${read.methyl_pct?.toFixed(1)}%)` : '-', show: read.methyl_count != null },
   ] : [
-    { label: 'Mean Accessibility', value: `${agg.mean_accessibility_pct?.toFixed(1) ?? '-'}%`, show: true },
-    { label: 'Mean FP Count', value: `${agg.mean_footprint_count?.toFixed(1) ?? '-'}`, show: true },
-    { label: 'Mean FP Size', value: `${agg.mean_footprint_size?.toFixed(0) ?? '-'} bp`, show: true },
-    { label: 'Median FP Size', value: `${agg.median_footprint_size?.toFixed(0) ?? '-'} bp`, show: true },
+    // null / missing: no read in scope has footprint calls (NA, not 0).
+    { label: 'Mean Accessibility', value: agg.mean_accessibility_pct != null ? `${agg.mean_accessibility_pct.toFixed(1)}%` : 'NA', show: true },
+    { label: 'Mean FP Count', value: agg.mean_footprint_count != null ? `${agg.mean_footprint_count.toFixed(1)}` : 'NA', show: true },
+    { label: 'Not Called', value: `${agg.n_not_called ?? 0} reads (no footprint calls; left out of the means)`, show: (agg.n_not_called ?? 0) > 0 },
+    { label: 'Mean FP Size', value: agg.mean_footprint_size != null ? `${agg.mean_footprint_size.toFixed(0)} bp` : 'NA', show: true },
+    { label: 'Median FP Size', value: agg.median_footprint_size != null ? `${agg.median_footprint_size.toFixed(0)} bp` : 'NA', show: true },
     { label: 'Mean Read Length', value: `${agg.mean_read_length?.toFixed(0) ?? '-'} bp`, show: true },
     { label: 'Mean MAPQ', value: agg.mean_mapq != null ? `${agg.mean_mapq.toFixed(1)}` : '-', show: isBam },
     {
@@ -63,6 +68,12 @@ export function SummaryTab({ aggregate: agg, isBam, perRead, chrom, containerWid
       )}
 
       {isSingle && isBam && <SignalDetails signal={read?.signal} />}
+      {hiddenText && (
+        <div className="text-[11px] text-gray-500 dark:text-gray-400" data-testid="read-stats-hidden"
+          title="Reads in the region Min footprints hid: 'uncalled' reads have no footprint calls (hidden at every Min footprints but 'All reads, including uncalled'); the others have calls but fewer than Min footprints.">
+          Min footprints: {hiddenText}
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-2">
         {cards.filter(c => c.show).map(c => (
           <div key={c.label} className="bg-violet-50 dark:bg-violet-900/20 rounded p-2">
@@ -101,9 +112,9 @@ export function SummaryTab({ aggregate: agg, isBam, perRead, chrom, containerWid
                     </span>
                   </td>
                   <td className="py-0.5 pr-2 text-right">{row.n.toLocaleString()}</td>
-                  <td className="py-0.5 pr-2 text-right">{row.meanAccessibility.toFixed(1)}%</td>
-                  <td className="py-0.5 pr-2 text-right">{row.meanFootprints.toFixed(1)}</td>
-                  <td className="py-0.5 pr-2 text-right">{row.meanFootprintSize.toFixed(0)} bp</td>
+                  <td className="py-0.5 pr-2 text-right">{row.meanAccessibility != null ? `${row.meanAccessibility.toFixed(1)}%` : 'NA'}</td>
+                  <td className="py-0.5 pr-2 text-right">{row.meanFootprints != null ? row.meanFootprints.toFixed(1) : 'NA'}</td>
+                  <td className="py-0.5 pr-2 text-right">{row.meanFootprintSize != null ? `${row.meanFootprintSize.toFixed(0)} bp` : 'NA'}</td>
                   {byCluster.some(r => r.meanModPct != null) && (
                     <td className="py-0.5 text-right">{row.meanModPct != null ? `${row.meanModPct.toFixed(1)}%` : '-'}</td>
                   )}

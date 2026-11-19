@@ -23,6 +23,8 @@ function keyOf(r: InsertionRef): string {
 }
 
 export function fetchInsertedSequence(r: InsertionRef): Promise<string> {
+  // An event from a FiberHMM sv bigBed has no read sequence (q -1): the bases need the BAM.
+  if (r.event.q < 0) return Promise.reject(new Error('The SV layer has no read sequence: open the BAM for the inserted bases.'));
   const key = keyOf(r);
   const have = cache.get(key);
   if (have) return have;

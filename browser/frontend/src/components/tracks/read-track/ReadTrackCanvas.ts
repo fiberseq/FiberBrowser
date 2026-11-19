@@ -5,6 +5,8 @@ import { buildRuleColorResolver } from '../../../utils/ruleColors';
 import type { CompactRead, SvSummary } from './types';
 import { bodyClipRects, readSvDraw } from './svDrawing';
 import { drawReadSvMarks, drawSvBand } from './svCanvas';
+import { drawReadVariantMarks, drawSplitLinks } from '../../../features/fiberhmmLayers/drawing';
+import type { FiberhmmRead } from '../../../features/fiberhmmLayers/model';
 import type { Gene, FirePeak, Colormap, SelectedFootprint, FootprintGroup } from '../../../types';
 import type { OrthogonalTrack, ModificationOverlay } from '../../../types/dataset';
 import {
@@ -138,6 +140,8 @@ interface DrawReadsParams {
   svSummary?: SvSummary | null;
   /** Zoomed out: px at the bottom kept clear of the coverage plot (the zoomed-out banner sits there). */
   coverageFooterHeight?: number;
+  /** FiberHMM SV layer with "Link split reads" on: join a read's pieces across rows (features/fiberhmmLayers). */
+  splitReadLinks?: boolean;
 }
 
 export function drawReadTrack(params: DrawReadsParams): void {
@@ -160,6 +164,7 @@ export function drawReadTrack(params: DrawReadsParams): void {
     annotationOpacityMin, annotationOpacityMax, annotationThresholds,
     layerColors,selectedConsensusFamily,selectedConsensusFamilies,relatedConsensusFamilies,consensusViewJobId,nativeLattice,latticeShowHits,latticeStyle,
     svEnabled = false, svMinLen = 50, svBandHeight = 0, svSummary = null, coverageFooterHeight = 0,
+    splitReadLinks = false,
   } = params;
   const selectedFootprints = allSelectedFootprints.filter(fp => fp.genome === undefined || fp.genome === (genome ?? null));
 
@@ -1456,6 +1461,14 @@ export function drawReadTrack(params: DrawReadsParams): void {
       ctx.restore();
     }
 
+    // FiberHMM var layer: the read's allele at each site in view (features/fiberhmmLayers).
+    const readVar = (read as FiberhmmRead).var;
+    if (readVar) {
+      drawReadVariantMarks(ctx, readVar, {
+        y, rowHeight: Math.max(1, rowHeight - rowGap), toX, viewStart: start, viewEnd: end, scale,
+      });
+    }
+
     if (readSv) {
       drawReadSvMarks(ctx, readSv, {
         y, rowHeight: Math.max(1, rowHeight - rowGap), toX, isReversed,
@@ -1628,6 +1641,14 @@ export function drawReadTrack(params: DrawReadsParams): void {
       ctx.fillStyle = '#06b6d4';
       ctx.fillRect(sidebarWidth, y, 4, rowHeight - rowGap);
     }
+  }
+
+  if (splitReadLinks && svEnabled) {
+    drawSplitLinks(ctx, displayReads as FiberhmmRead[], {
+      first: firstVisibleRow, last: lastVisibleRow,
+      rowY: i => headerHeight + histogramHeight + i * (rowHeight + rowGap) - (needsScroll ? clampedScrollOffset : 0),
+      rowHeight: Math.max(1, rowHeight - rowGap), toX, viewChrom: chrom, viewStart: start, viewEnd: end, left: sidebarWidth,
+    });
   }
 
   const smoothing = activeColormap.displaySmoothing;

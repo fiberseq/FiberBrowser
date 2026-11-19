@@ -316,6 +316,7 @@ def _compute_scan_counts_from_broad_cache(
 
     layer_key = make_layer_key(query.include_layers, query.requested_layers)
     dataset = state.get_dataset(dataset_id)
+    from services.working_sets import effective_hide_uncalled
     effective_min_footprints = (
         int(query.min_footprints or 0)
         if dataset is not None
@@ -335,6 +336,7 @@ def _compute_scan_counts_from_broad_cache(
         infer_legacy_layers=query.infer_legacy_layers,
         legacy_nuc_min_size=query.legacy_nuc_min_size,
         min_footprints=effective_min_footprints,
+        hide_uncalled=effective_hide_uncalled(dataset, query.hide_uncalled),
     )
     read_ids = query.read_ids_for_dataset(dataset_id)
     if (broad_reads is None or broad_key is None) and read_ids:
@@ -348,6 +350,7 @@ def _compute_scan_counts_from_broad_cache(
             include_layer_qualities=query.include_layer_qualities, infer_legacy_layers=query.infer_legacy_layers,
             legacy_nuc_min_size=query.legacy_nuc_min_size, min_footprints=effective_min_footprints,
             terminal_bp=short_terminal_footprint_bp_for(state),
+            hide_uncalled=effective_hide_uncalled(dataset, query.hide_uncalled),
         )
     if broad_reads is None or broad_key is None:
         return None
@@ -1657,6 +1660,7 @@ def run_cluster_endpoint(
     min_footprints: int,
     sample_seed: str | None,
     cluster_compact_reads_impl=cluster_compact_reads,
+    hide_uncalled: bool | None = None,
 ) -> Dict[str, Any]:
     """Cluster a single dataset for the backwards-compatible `/api/cluster` route."""
     query = AnalysisReadQuery.from_request(
@@ -1668,6 +1672,7 @@ def run_cluster_endpoint(
         dataset_id=dataset_id,
         sample_seed=sample_seed,
         min_footprints=min_footprints,
+        hide_uncalled=hide_uncalled,
         include_methylation=False,
         include_layers=False,
     )

@@ -1,5 +1,46 @@
 # Changelog
 
+## 3.0.6 — 2026-11-19
+
+FiberBrowser 3.0.6 bundles FiberHMM 3.0.4 and requires
+`fiberhmm[consensus]>=3.0.3,<4`.
+
+### Changed
+
+- **Reads FiberHMM didn't call are no longer shown.** A read the footprint
+  caller skipped (for example under FiberHMM's `--min-read-length`) has no
+  call tags. Min footprints now hides such reads at every setting, including
+  0 and when it relaxes itself to 0 on sparse data, so 0 means "every called
+  read". Called reads that are fully accessible still show. The hidden count
+  says how many reads were hidden and why, for example "312 uncalled · 40 with
+  < 5 footprints hidden". Min footprints › **All reads, including uncalled**
+  brings them back; leaving it returns to the threshold you had. Sessions
+  saved with 0 open as "every called read". The same rule applies to Read
+  Stats, clustering, cluster charts, footprint sizes, peak scans and exports.
+  With "Show QC-fail reads" on, QC-fail reads (FiberHMM chimeras) still show.
+
+### Added
+
+- **Variants and structural variants from FiberHMM's extract files.** When a
+  sample's bigBeds include the `fiberhmm_var` and `fiberhmm_sv` files that
+  `fiberhmm-extract` writes, the Variants panel groups reads by allele, the
+  SV tab lists deletions and insertions and splits reads by them, and read
+  rows can show each read's alleles and SV marks, all without the BAM. These
+  files are written by FiberHMM 3.2.0 and later (not yet released when
+  3.0.6 came out; FiberHMM 3.1.0 and earlier don't write them). They are read
+  only when used, so opening a dataset costs nothing extra. They follow the
+  same reads as the read track: uncalled reads and QC-fail reads are left out
+  unless you choose to show them. Grouping by a SNP and an SV together, and
+  SV–SNP linkage, still need the BAM.
+
+### Fixed
+
+- **Read Stats no longer shows uncalled reads as fully accessible.** When
+  they are shown, their footprint count, footprint size and accessibility read
+  NA / "not called" instead of 0 footprints and 100% accessible, and they are
+  left out of the footprint and accessibility means. A mean with no called
+  read behind it shows NA, not 0. The TSV export has a `call_status` column.
+
 ## 3.0.5 — 2026-11-19
 
 FiberBrowser 3.0.5 bundles FiberHMM 3.0.4 and requires

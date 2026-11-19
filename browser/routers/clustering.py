@@ -134,12 +134,13 @@ async def scan_peaks(
     from services.read_quality_filters import active_quality_filters
     from services.remote_access import current_request_is_remote
     from services.working_sets import read_load_token
+    from services.signal_evidence import request_hide_uncalled
     body = req.model_dump_json() if hasattr(req, "model_dump_json") else req.json()
     scan_ids = list(req.dataset_ids or ([dataset_id] if dataset_id else getattr(state, "dataset_order", []) or []))
     # Shared only by a request for the same data (files, generation) under the same settings.
     key = ("scan_peaks", id(state), chrom, start, end, dataset_id, spanning,
            hashlib.sha1(body.encode()).hexdigest(), dataset_identity(state, scan_ids),
-           repr(read_load_token(state, state.translate_chrom(chrom))),
+           repr(read_load_token(state, state.translate_chrom(chrom))), request_hide_uncalled(),
            bool(getattr(state, "infer_legacy_layers", True)), int(getattr(state, "legacy_nuc_min_size", 90) or 90),
            repr(active_quality_filters(state)),
            # save_plot writes the owner's diagnostic PNG only for the owner's own requests: never share across scopes.
@@ -324,6 +325,7 @@ async def do_cluster(
     spanning: bool = Query(False),
     dataset_id: Optional[str] = Query(None),
     min_footprints: int = Query(0, description="Min number of footprints per read"),
+    hide_uncalled: Optional[bool] = Query(None, description="false: Min footprints' \"All reads, including uncalled\" (also asked by min_footprints=-1). Otherwise BAM reads without footprint calls (no MA/Ma nuc/msp/tf group, no ns/nl or as/al arrays) are hidden at every min_footprints"),
     sample_seed: Optional[str] = Query(None),
     state=Depends(get_state)):
     """Cluster a single dataset (for backwards compatibility).
@@ -340,6 +342,7 @@ async def do_cluster(
         spanning=spanning,
         dataset_id=dataset_id,
         min_footprints=min_footprints,
+        hide_uncalled=hide_uncalled,
         sample_seed=sample_seed,
         cluster_compact_reads_impl=cluster_compact_reads,
     )
@@ -416,9 +419,11 @@ async def scan_correspondence(req: CorrespondenceScanRequest, request: Request, 
     from services.correspondence_scanning import run
     from services.background_work import run_background, Cancelled, cancelled_response, dataset_identity
     from services.read_quality_filters import active_quality_filters
+    from services.signal_evidence import request_hide_uncalled
     key = ('scan-correspondence', id(state), req.model_dump_json(),
            dataset_identity(state, [v.dataset_id for v in req.viewports]), repr(active_quality_filters(state)),
-           bool(getattr(state, 'infer_legacy_layers', True)), getattr(state, 'legacy_nuc_min_size', 90))
+           bool(getattr(state, 'infer_legacy_layers', True)), getattr(state, 'legacy_nuc_min_size', 90),
+           request_hide_uncalled())
     try:
         return await run_background(request, key, lambda: run(state, req))
     except Cancelled:

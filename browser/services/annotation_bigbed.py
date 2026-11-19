@@ -70,6 +70,15 @@ def is_annotation_bigbed(path: str) -> bool:
     if manifest and ("types" in manifest or "source" in manifest):
         return True
 
+    # FiberHMM var / sv layers (told by their autoSQL table, a header read): never
+    # annotation, and their rows are read only on request.
+    try:
+        from services.bigbed_detection import detect_bigbed_autosql_type
+        if detect_bigbed_autosql_type(path) in ("var", "sv"):
+            return False
+    except Exception:
+        pass
+
     try:
         bb = _get_bigbed_handle(path)
         if bb is None:

@@ -70,8 +70,11 @@ export function TableTab({
   );
 }
 
+const CALL_FIELDS = new Set(['footprint_count', 'avg_footprint_size', 'accessibility_pct']);
+
 function formatCell(col: string, val: unknown): string {
-  if (val == null) return '-';
+  // Footprint fields are null for a read the caller skipped: not called, not 0 / 100%.
+  if (val == null) return CALL_FIELDS.has(col) ? 'NA' : '-';
   if (col === 'read_id') {
     const s = String(val);
     return s.length > 20 ? s.slice(0, 8) + '...' + s.slice(-8) : s;

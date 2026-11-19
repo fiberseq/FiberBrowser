@@ -29,6 +29,18 @@ def _normalize_read_id_map(state, values: Optional[Mapping[str, Sequence[str]]])
     return out
 
 
+def _resolve_explicit(value):
+    from services.signal_evidence import parse_hide_uncalled
+    return parse_hide_uncalled(getattr(value, "default", value))
+
+
+def _resolve_hide_uncalled(value) -> bool:
+    """An explicit setting, else the request's ``hide_uncalled`` (default: hide)."""
+    from services.signal_evidence import parse_hide_uncalled, request_hide_uncalled
+    parsed = parse_hide_uncalled(getattr(value, "default", value))
+    return request_hide_uncalled() if parsed is None else parsed
+
+
 @dataclass(frozen=True)
 class AnalysisReadQuery:
     chrom: str
@@ -42,6 +54,9 @@ class AnalysisReadQuery:
     singleton_read_ids: Optional[list[str]] = None
     max_reads: Optional[int] = None
     min_footprints: int = 0
+    # Reads without footprint calls: hidden at every min_footprints unless False
+    # (Min footprints' "All reads, including uncalled", the frontend's -1).
+    hide_uncalled: bool = True
     include_methylation: bool = True
     include_layers: bool = True
     requested_layers: tuple[str, ...] = ()
@@ -67,6 +82,7 @@ class AnalysisReadQuery:
         read_ids_by_dataset: Optional[Mapping[str, Sequence[str]]] = None,
         max_reads: Optional[int] = None,
         min_footprints: int = 0,
+        hide_uncalled: Optional[bool] = None,
         include_methylation: bool = True,
         include_layers: bool = True,
         requested_layers: Optional[Iterable[str] | str] = None,
@@ -76,6 +92,11 @@ class AnalysisReadQuery:
         strand_by_dataset: Optional[Mapping[str, str]] = None,
     ) -> "AnalysisReadQuery":
         resolved_dataset_ids = resolve_dataset_ids(state, dataset_ids=dataset_ids, dataset_id=dataset_id)
+        if int(getattr(min_footprints, "default", min_footprints) or 0) < 0:
+            # Min footprints' "All reads, including uncalled" choice (the frontend's -1).
+            min_footprints = 0
+            if _resolve_explicit(hide_uncalled) is None:
+                hide_uncalled = False
         from services.read_strand import normalize_strand
         strands = {str(k): s for k, v in (strand_by_dataset or {}).items() if (s := normalize_strand(v))}
         if strands:
@@ -93,6 +114,7 @@ class AnalysisReadQuery:
             ),
             max_reads=int(max_reads) if max_reads and int(max_reads) > 0 else None,
             min_footprints=max(0, int(min_footprints or 0)),
+            hide_uncalled=_resolve_hide_uncalled(hide_uncalled),
             include_methylation=bool(include_methylation),
             include_layers=bool(include_layers),
             requested_layers=normalize_requested_layers(requested_layers),
@@ -209,6 +231,7 @@ class AnalysisReadQuery:
             self.end if end is None else int(end),
             self.spanning if spanning is None else bool(spanning),
             self.min_footprints,
+            hide_uncalled=self.hide_uncalled,
             read_ids=list(read_ids) if read_ids is not None else self.read_ids_for_dataset(dataset_id),
             include_methylation=self.include_methylation if include_methylation is None else bool(include_methylation),
             include_layers=self.include_layers if include_layers is None else bool(include_layers),

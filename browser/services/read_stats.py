@@ -6,6 +6,8 @@ from typing import Optional
 import numpy as np
 
 from services.bam_handles import get_bam_handle
+# One uncalled-read rule for the read loaders and read stats (re-exported here).
+from services.bam_tags import footprint_call_count, read_has_footprint_calls  # noqa: F401
 from services.compact_read_loader import qcfail_metadata
 from utils.chrom import resolve_reference_name
 from services.analysis_query import AnalysisReadQuery
@@ -68,6 +70,7 @@ def compute_read_stats(
         read_ids_by_dataset=request.read_ids_by_dataset,
         sample_seed=request.sample_seed,
         include_methylation=True,
+        hide_uncalled=getattr(request, "hide_uncalled", None),
     )
     sample_seed = query.sample_seed
     # The main view's selection, then any selected in panels at another locus
@@ -83,6 +86,7 @@ def compute_read_stats(
             read_ids_by_dataset=region.read_ids_by_dataset,
             sample_seed=request.sample_seed,
             include_methylation=True,
+            hide_uncalled=query.hide_uncalled,
         )
         scopes.append((extra, region.start, region.end, extra.read_ids_by_dataset))
     scopes, requested_total, truncated = _cap_scopes(scopes, MAX_READ_STATS_IDS)
@@ -97,6 +101,9 @@ def compute_read_stats(
     missing_read_ids_by_dataset = {}
     requested_count = 0
     dataset_ids = set()
+    # Reads in the regions the read filters hid (whichever reads were selected).
+    hidden = {"uncalled": 0, "min_footprints": 0}
+    min_footprints = max(0, int(getattr(request, "min_footprints", 0) or 0))
 
     for scope_query, scope_start, scope_end, scope_ids in scopes:
         requested_count += sum(len(dict.fromkeys(ids)) for ids in (scope_ids or {}).values())
@@ -107,6 +114,7 @@ def compute_read_stats(
             all_lengths=all_lengths, all_mapqs=all_mapqs, all_methyl_pcts=all_methyl_pcts,
             strand_counts=strand_counts, missing_read_ids_by_dataset=missing_read_ids_by_dataset,
             include_qcfail=getattr(request, "include_qcfail", False),
+            min_footprints=min_footprints, hidden=hidden,
         )
 
     aggregate = _build_aggregate(
@@ -120,6 +128,11 @@ def compute_read_stats(
         strand_counts=strand_counts,
     )
     aggregate["n_datasets"] = len(dataset_ids)
+    # Which read filter hid what: "N uncalled hidden · M with < K footprints hidden".
+    aggregate["hide_uncalled"] = bool(query.hide_uncalled)
+    aggregate["n_hidden_uncalled"] = hidden["uncalled"] if query.hide_uncalled else 0
+    aggregate["min_footprints"] = min_footprints
+    aggregate["n_hidden_min_footprints"] = hidden["min_footprints"] if min_footprints > 0 else 0
 
     any_bam = any(
         state.get_dataset(ds_id) and state.get_dataset(ds_id).data_type == "bam"
@@ -143,7 +156,7 @@ def compute_read_stats(
 def _collect_scope(
     state, query, start, end, read_ids_by_dataset, *, per_read, all_fp_sizes, all_acc_pcts,
     all_lengths, all_mapqs, all_methyl_pcts, strand_counts, missing_read_ids_by_dataset,
-    include_qcfail=False,
+    include_qcfail=False, min_footprints=0, hidden=None,
 ):
     """Per-read stats for one region's selected reads, added to the accumulators."""
     chrom = query.chrom
@@ -174,6 +187,7 @@ def _collect_scope(
                 include_layer_qualities=query.include_layer_qualities,
                 infer_legacy_layers=query.infer_legacy_layers, legacy_nuc_min_size=query.legacy_nuc_min_size,
                 min_footprints=query.min_footprints,
+                hide_uncalled=query.hide_uncalled,
             )
             ws = WorkingSet(payload["reads"], payload["total_overlapping"], payload["total_spanning"],
                             chrom, start, end)
@@ -197,6 +211,10 @@ def _collect_scope(
                 dataset_id=dataset_id,
                 contig_links=contig_links(state, dataset_id=dataset_id),
                 include_qcfail=include_qcfail,
+                hide_uncalled=query.hide_uncalled,
+                spanning=query.spanning,
+                min_footprints=min_footprints,
+                hidden=hidden,
                 wanted=wanted,
                 read_ids=read_ids,
                 ws=ws,
@@ -248,8 +266,19 @@ def _collect_bam_read_stats(
     strand_counts: dict,
     contig_links: dict | None = None,
     include_qcfail: bool = False,
+    hide_uncalled: bool = False,
+    spanning: bool = False,
+    min_footprints: int = 0,
+    hidden: dict | None = None,
 ) -> None:
-    """Collect stats from BAM alignment records plus compact working-set intervals."""
+    """Collect stats from BAM alignment records plus compact working-set intervals.
+
+    ``hidden``: adds the region's reads (as the read track counts them: primary,
+    not duplicate, QC-fail or signal-hidden, spanning when asked) that "Hide reads
+    without footprint calls" (``uncalled``, with ``hide_uncalled``) and "Min
+    footprints" (``min_footprints``: reads with fewer calls, uncalled ones too when
+    they are shown) hid. An uncalled read is never reported as selected when hidden."""
+    counted = set()
     for bam_path in dataset.paths:
         bam = get_bam_handle(bam_path)
         if bam is None:
@@ -262,6 +291,8 @@ def _collect_bam_read_stats(
             continue
         from services.signal_evidence import record_keeps_signal, record_signal, signal_header
         provenance = signal_header(getattr(bam, "header", None))
+        from services.signal_counts import _legacy_frame
+        legacy_frame = _legacy_frame(bam_path, bam) if getattr(bam, "header", None) is not None else None
         try:
             for read in bam.fetch(bam_chrom, start, end):
                 # Only the primary alignment is the displayed read (the read
@@ -273,6 +304,21 @@ def _collect_bam_read_stats(
                 if getattr(read, "is_qcfail", False) and not include_qcfail:
                     continue
                 if not record_keeps_signal(read, provenance):
+                    continue
+                called = read_has_footprint_calls(read)
+                # A QC-fail read shown by choice is never hidden as uncalled (chimeras carry no calls).
+                exempt = bool(getattr(read, "is_qcfail", False))
+                if hidden is not None and read.query_name not in counted and not getattr(read, "is_duplicate", False) and (
+                        not spanning or (read.reference_start <= start and (read.reference_end or 0) >= end)):
+                    counted.add(read.query_name)
+                    if not called and hide_uncalled and not exempt:
+                        hidden["uncalled"] += 1
+                    elif min_footprints > 0 and (not called or footprint_call_count(read, legacy_frame) < min_footprints):
+                        # With uncalled reads shown, Min footprints hides them too (0 calls), as the loaders do.
+                        hidden["min_footprints"] += 1
+                if hide_uncalled and not called and not exempt:
+                    # Hidden from the read track and every analysis: not a selected read.
+                    wanted.discard(read.query_name)
                     continue
                 if read.query_name not in wanted:
                     continue
@@ -334,12 +380,15 @@ def _collect_bam_read_stats(
                     "read_length": read_length,
                     "aligned_span": aligned_span,
                     "nm": nm,
-                    "footprint_count": interval_stats["fp_count"],
-                    "nucleosome_count": interval_stats["nuc_count"],
-                    "subnuc_count": interval_stats["subnuc_count"],
-                    "avg_footprint_size": round(interval_stats["avg_fp_size"], 1),
-                    "median_footprint_size": round(interval_stats["median_fp_size"], 1),
-                    "accessibility_pct": round(interval_stats["acc_pct"], 1),
+                    # A read the caller skipped has no footprint calls: these are unknown (None),
+                    # not 0 footprints / 100% accessible. call_status says why the cells are empty.
+                    "call_status": "called" if called else "not called",
+                    "footprint_count": interval_stats["fp_count"] if called else None,
+                    "nucleosome_count": interval_stats["nuc_count"] if called else None,
+                    "subnuc_count": interval_stats["subnuc_count"] if called else None,
+                    "avg_footprint_size": round(interval_stats["avg_fp_size"], 1) if called else None,
+                    "median_footprint_size": round(interval_stats["median_fp_size"], 1) if called else None,
+                    "accessibility_pct": round(interval_stats["acc_pct"], 1) if called else None,
                     "methyl_count": methyl_count,
                     "methyl_pct": round(methyl_pct, 1) if methyl_pct is not None else None,
                     "cigar_string": cigar_string,
@@ -350,8 +399,9 @@ def _collect_bam_read_stats(
                     "methyl_pos": methyl_pos_rel,
                 }
                 per_read.append(entry)
-                all_fp_sizes.extend(interval_stats["fp_sizes"])
-                all_acc_pcts.append(interval_stats["acc_pct"])
+                if called:
+                    all_fp_sizes.extend(interval_stats["fp_sizes"])
+                    all_acc_pcts.append(interval_stats["acc_pct"])
                 all_lengths.append(read_length)
                 all_mapqs.append(mapq)
                 strand_counts[strand] += 1
@@ -484,18 +534,21 @@ def _build_aggregate(
     if not per_read:
         return aggregate
 
-    aggregate["mean_accessibility_pct"] = round(float(np.mean(all_acc_pcts)), 1) if all_acc_pcts else 0.0
-    aggregate["mean_footprint_count"] = round(float(np.mean([r["footprint_count"] for r in per_read])), 1)
-    aggregate["mean_footprint_size"] = round(float(np.mean(all_fp_sizes)), 1) if all_fp_sizes else 0.0
+    # No called read in scope: the footprint and accessibility means are unknown (None), not 0.
+    aggregate["mean_accessibility_pct"] = round(float(np.mean(all_acc_pcts)), 1) if all_acc_pcts else None
+    called_counts = [r["footprint_count"] for r in per_read if r.get("footprint_count") is not None]
+    aggregate["n_not_called"] = len(per_read) - len(called_counts)
+    aggregate["mean_footprint_count"] = round(float(np.mean(called_counts)), 1) if called_counts else None
+    aggregate["mean_footprint_size"] = round(float(np.mean(all_fp_sizes)), 1) if all_fp_sizes else None
     aggregate["mean_read_length"] = round(float(np.mean(all_lengths)), 1) if all_lengths else 0.0
     aggregate["mean_mapq"] = round(float(np.mean(all_mapqs)), 1) if all_mapqs else None
-    aggregate["median_footprint_size"] = round(float(np.median(all_fp_sizes)), 1) if all_fp_sizes else 0.0
+    aggregate["median_footprint_size"] = round(float(np.median(all_fp_sizes)), 1) if all_fp_sizes else None
     aggregate["mean_methyl_pct"] = round(float(np.mean(all_methyl_pcts)), 1) if all_methyl_pcts else None
 
     aggregate["hist_accessibility"] = _build_histogram(all_acc_pcts, 0, 100, 10)
     aggregate["hist_fp_size"] = _build_histogram(all_fp_sizes, 0, max(all_fp_sizes) + 10 if all_fp_sizes else 300, 20)
-    fp_counts = [r["footprint_count"] for r in per_read]
-    aggregate["hist_fp_count"] = _build_histogram(fp_counts, 0, max(fp_counts) + 1, None)
+    fp_counts = called_counts
+    aggregate["hist_fp_count"] = _build_histogram(fp_counts, 0, max(fp_counts) + 1, None) if fp_counts else None
     aggregate["hist_read_length"] = _build_histogram(all_lengths, 0, max(all_lengths) + 100 if all_lengths else 10000, None)
     aggregate["hist_mapq"] = _build_histogram(all_mapqs, 0, 60, 5) if all_mapqs else None
     aggregate["hist_methyl_pct"] = _build_histogram(all_methyl_pcts, 0, 100, 10) if all_methyl_pcts else None

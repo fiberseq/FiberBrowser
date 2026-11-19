@@ -107,6 +107,7 @@ async def jupyter_get_reads(
     end: int = Query(None),
     spanning: bool = Query(True),
     min_footprints: int = Query(0),
+    hide_uncalled: Optional[bool] = Query(None, description="false: Min footprints' \"All reads, including uncalled\" (also asked by min_footprints=-1). Otherwise BAM reads without footprint calls (no MA/Ma nuc/msp/tf group, no ns/nl or as/al arrays) are hidden at every min_footprints"),
     sample_seed: Optional[str] = Query(None),
     state=Depends(get_state),
 ):
@@ -119,6 +120,7 @@ async def jupyter_get_reads(
         end=end,
         spanning=spanning,
         min_footprints=min_footprints,
+        hide_uncalled=hide_uncalled,
         sample_seed=sample_seed,
     )
 

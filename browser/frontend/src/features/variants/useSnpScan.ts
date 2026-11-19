@@ -13,6 +13,7 @@ import { scanSnps, type ScanTarget, type SnpParams, type SnpScan } from './api';
 import type { PanelConfig } from '../../types';
 import type { Dataset } from '../../types/dataset';
 import { trimScan, updateVariantsState, useVariantsStore } from './variantsState';
+import { hasVariantLayers } from '../fiberhmmLayers/model';
 
 export const MAX_SCAN_SPAN = 300_000;
 export const SCAN_DEBOUNCE_MS = 500;
@@ -24,10 +25,11 @@ export type ScanStatus =
   | { kind: 'too-wide'; message: string }
   | { kind: 'error'; message: string };
 
-/** The BAM datasets shown in read panels (the main view's first), and the one the panel scans. */
+/** The BAM datasets (and bigBed datasets with FiberHMM variant layers) shown in read panels (the main view's first), and the one the panel scans. */
 export function variantDatasets(panels: PanelConfig[], datasets: Dataset[]): Dataset[] {
   const shown = panels.filter(p => p.contentType === 'dataset' && p.datasetId ).map(p => p.datasetId!);
-  const bam = datasets.filter(d => d.data_type === 'bam');
+  // (BigBed datasets with FiberHMM var / sv layers too: the server answers from those layers.)
+  const bam = datasets.filter(d => d.data_type === 'bam' || hasVariantLayers(d));
   const ordered = [...new Set(shown)].map(id => bam.find(d => d.id === id)).filter((d): d is Dataset => Boolean(d));
   return ordered.length ? ordered : bam;
 }
@@ -66,7 +68,8 @@ export function useSnpScan({ datasetId, params, autoScan, active }: {
     return {
       chrom: view.chrom, start: view.start, end: view.end, genome: view.genome, readScope: JSON.stringify(view.readIds ?? null),
       panelKey: view.panelKey, duplicates: Boolean(s.showDuplicateReads), qcfail: Boolean(s.showQcFailReads),
-      identity: variantScanIdentity(s, datasetId),
+      // Min footprints' "All reads, including uncalled" changes the read set of the FiberHMM var layer.
+      identity: variantScanIdentity(s, datasetId) + (s.minFootprints === -1 ? '|uncalled' : ''),
     };
   }));
   const target = useMemo<ScanTarget | null>(() => (datasetId && chrom ? { datasetId, chrom, ...(genome ? { genome } : {}), ...(readScope !== "null" ? { readIds: JSON.parse(readScope), ...(panelKey ? { panelKey } : {}) } : {}), start: Math.floor(start), end: Math.ceil(end) } : null),

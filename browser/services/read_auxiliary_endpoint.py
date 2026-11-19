@@ -478,7 +478,10 @@ def get_coverage_payload(
     dataset_id: Optional[str] = None,
     include_duplicates: bool = False,
     include_qcfail: bool = False,
+    hide_uncalled: Optional[bool] = None,
 ) -> dict:
+    from services.analysis_query import _resolve_hide_uncalled
+    hide_uncalled = _resolve_hide_uncalled(hide_uncalled)
     original_chrom = chrom
     chrom = state.translate_chrom(chrom)
     bins = min(bins, 4000)
@@ -519,6 +522,7 @@ def get_coverage_payload(
     from services.signal_evidence import signal_filter_key
     cache_key = (signal_filter_key(state), tuple(_source_identity(d) for d in datasets_to_query), chrom, start, end, bins,
                  tuple(query_segments or ()), circular_topology_token(state, chrom), bool(include_duplicates), bool(include_qcfail),
+                 bool(hide_uncalled),
                  tuple((d_id, tuple(sorted(l.items()))) for d_id, l in links.items() if l))
 
     now = time.time()
@@ -541,6 +545,7 @@ def get_coverage_payload(
         circular=is_circular_chrom(state, chrom),
         contig_links=links,
         include_duplicates=bool(include_duplicates), include_qcfail=bool(include_qcfail),
+        hide_uncalled=hide_uncalled,
     )
 
     # Requests run in worker threads: evict without assuming no one else did.

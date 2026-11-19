@@ -55,7 +55,33 @@ describe('Read Stats groups', () => {
     const byCluster = summarizeByCluster(rows, (_ds, id) => assignments.ds1[id as 'a'], [1, 2]);
     expect(byCluster.map(r => [r.label, r.n, r.meanAccessibility, r.meanFootprints, r.meanFootprintSize, r.meanModPct])).toEqual([
       ['Cluster 1', 2, 20, 3, 120, null],
-      ['Cluster 2', 1, 50, 0, 0, 5],
+      ['Cluster 2', 1, 50, 0, null, 5], // no footprints: the mean size is NA, not 0 bp
     ]);
+  });
+
+  it('leaves reads without footprint calls out of the footprint and accessibility means', () => {
+    const rows = [
+      { read_id: 'a', dataset_id: 'ds1', accessibility_pct: 20, footprint_count: 4, avg_footprint_size: 100, methyl_pct: 3 },
+      { read_id: 'c', dataset_id: 'ds1', accessibility_pct: null, footprint_count: null, avg_footprint_size: null, methyl_pct: 1 },
+    ];
+    const [row] = summarizeByCluster(rows, (_ds, id) => assignments.ds1[id as 'a'], [1]);
+    expect([row.n, row.meanAccessibility, row.meanFootprints, row.meanFootprintSize, row.meanModPct]).toEqual([2, 20, 4, 100, 2]);
+  });
+
+  it('gives null (NA) means, not 0, for a cluster with no called read', () => {
+    const rows = [
+      { read_id: 'a', dataset_id: 'ds1', accessibility_pct: null, footprint_count: null, avg_footprint_size: null, methyl_pct: 4 },
+      { read_id: 'c', dataset_id: 'ds1', accessibility_pct: null, footprint_count: null, avg_footprint_size: null, methyl_pct: null },
+    ];
+    const [row] = summarizeByCluster(rows, (_ds, id) => assignments.ds1[id as 'a'], [1]);
+    expect([row.n, row.meanAccessibility, row.meanFootprints, row.meanFootprintSize, row.meanModPct]).toEqual([2, null, null, null, 4]);
+  });
+
+  it('keeps a called, fully accessible read in the means (100%, 0 footprints, size NA)', () => {
+    const rows = [
+      { read_id: 'a', dataset_id: 'ds1', accessibility_pct: 100, footprint_count: 0, avg_footprint_size: 0, methyl_pct: null },
+    ];
+    const [row] = summarizeByCluster(rows, (_ds, id) => assignments.ds1[id as 'a'], [1]);
+    expect([row.n, row.meanAccessibility, row.meanFootprints, row.meanFootprintSize]).toEqual([1, 100, 0, null]);
   });
 });

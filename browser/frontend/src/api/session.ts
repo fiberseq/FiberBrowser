@@ -8,6 +8,7 @@ import { storeExtensions } from '../stores/storeExtensions';
 import { missingPacksNote, missingSessionPacks, usesPackParts, withoutMissingPackState } from './sessionPacks';
 import { applyExcludedReads, useReadActionsStore } from '../stores/readActionsStore';
 import { useBrowserStore } from '../stores/browserStore';
+import { DEFAULT_MIN_FOOTPRINTS } from '../stores/uiSlice';
 import { restoredMergeSettings, serializeState } from '../stores/historySlice';
 import { normalizeFootprintSizeSettings } from '../utils/footprintSizeSettings';
 import { normalizeMergeLog } from '../stores/clusterMergeLog';
@@ -45,7 +46,7 @@ export const SESSION_PRE_VIEWPORT_KEYS = [
   'clusterK', 'clusterResolution', 'clusterMethod', 'clusterPeakMode', 'clusterFeatureRules', 'analysisSortRules', 'analysisFilterRules', 'subnucleosomalThreshold', 'accessibilityThreshold',
   'mergeMinFraction', 'mergeMaxSimilarity', 'mergeStrategy', 'mergeThresholds', 'footprintSizeSettings',
   'enabledModTypes', 'enabledMetaProfiles', 'cachedLayerTypes', 'legacyLayerInference', 'legacyNucMinSize', 'clickTargetLayer', 'footprintAnalysisLayer',
-  'fillSmallGaps', 'fillGapSize', 'hideTerminalGaps', 'terminalGapThreshold', 'hideShortEndFootprints', 'minFpQuality', 'minFootprints', 'minFootprintsAuto', 'showDuplicateReads', 'showQcFailReads', 'signalFilters',
+  'fillSmallGaps', 'fillGapSize', 'hideTerminalGaps', 'terminalGapThreshold', 'hideShortEndFootprints', 'minFpQuality', 'minFootprints', 'minFootprintsAuto', 'minFootprintsBeforeAllReads', 'showDuplicateReads', 'showQcFailReads', 'signalFilters',
   'enabledCigarTypes', 'svDisplayEnabled', 'svMinLen', 'svMinSupport', 'isReversed', 'darkMode', 'peakSettings', 'activeColormap', 'fillReadHeight', 'showHiddenTrackStrip',
   'readSeparatorMode', 'readSeparatorMinHeight', 'readSeparatorWidth',
   'showReadTooltip', 'showCoverageHistogram', 'maxRegionForReads', 'motifThreshold', 'readRowHeight',
@@ -370,6 +371,13 @@ export function applyImportedState(result: Record<string, unknown>): void {
   // Name filters are per track index: the previous session's would land on
   // whichever imported track now has that index.
   batch.showQcFailReads = false;
+  // A session without a saved Min footprints keeps uncalled reads hidden: never the open
+  // session's "All reads, including uncalled" (its own saved value replaces this below).
+  if (useBrowserStore.getState().minFootprints === -1) {
+    batch.minFootprints = DEFAULT_MIN_FOOTPRINTS;
+    batch.minFootprintsAuto = true;
+  }
+  batch.minFootprintsBeforeAllReads = DEFAULT_MIN_FOOTPRINTS;
   batch.trackFilters = {};
   // The track cart belongs to the session: one saved before the cart (no
   // catalog/composites) shows its tracks through its panels' legacy track
@@ -427,7 +435,13 @@ export function applyImportedState(result: Record<string, unknown>): void {
       batch.activeColormap = migrateColormap(batch.activeColormap as any);
     }
     // A saved Min footprints is the user's unless the session says it was the untouched default.
+    // (A saved 0 is "every called read": uncalled reads stay hidden; only -1 shows them.)
     if ('minFootprints' in batch && !('minFootprintsAuto' in batch)) batch.minFootprintsAuto = false;
+    // The threshold "All reads, including uncalled" returns to: the session's, never another session's.
+    if (!('minFootprintsBeforeAllReads' in frontend)) {
+      const saved = Number(batch.minFootprints ?? useBrowserStore.getState().minFootprints);
+      batch.minFootprintsBeforeAllReads = saved >= 0 ? saved : DEFAULT_MIN_FOOTPRINTS;
+    }
     // Sessions from before the setting existed: its default (on), not the open session's.
     if (!('hideShortEndFootprints' in batch)) batch.hideShortEndFootprints = true;
     // SV display (fb-n9-sv): a session saved before it gets its defaults, not the open session's.

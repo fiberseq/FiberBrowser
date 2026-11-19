@@ -103,7 +103,10 @@ export function ReadStatsPanel({ isFullView }: Props) {
   // Quality filters and legacy layer inference change the server's reads: stats
   // from before are hidden at once, and fetched again once the server has the
   // new settings (the quality sync bumps refreshGeneration when it lands).
-  const analysisSettingsKey = useAnalysisSettingsKey();
+  const baseAnalysisSettingsKey = useAnalysisSettingsKey();
+  // Min footprints is sent with the request (the reads it hid, by reason, are in the summary).
+  const minFootprints = useBrowserStore(s => s.minFootprints);
+  const analysisSettingsKey = `${baseAnalysisSettingsKey}|minfp:${minFootprints}`;
   const stateKeyToDatasetId = useMemo(() => {
     const map: Record<string, string> = {};
     for (const p of panels) {
@@ -359,7 +362,7 @@ export function ReadStatsPanel({ isFullView }: Props) {
 
   const readStatsTsvRows = useCallback(() => {
     if (!result) return;
-    const cols = ['read_id', 'dataset_id', 'aligned_span', 'footprint_count', 'avg_footprint_size', 'accessibility_pct', 'methyl_count', 'methyl_pct', 'mapq', 'strand', 'viewer_order'];
+    const cols = ['read_id', 'dataset_id', 'aligned_span', 'footprint_count', 'avg_footprint_size', 'accessibility_pct', 'methyl_count', 'methyl_pct', 'mapq', 'strand', 'viewer_order', 'call_status'];
     return [
       cols,
       ...sortedRows.map(r =>

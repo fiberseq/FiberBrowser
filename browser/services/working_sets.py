@@ -35,7 +35,7 @@ from services.read_selection import is_read_spanning, read_matches_id_filter
 
 LayerKey = Optional[tuple[str, ...]]
 WORKING_SET_DIAGNOSTICS_ENV = "FIBERBROWSER_WORKING_SET_DIAGNOSTICS"
-BROAD_CACHE_SCHEMA_VERSION = 5
+BROAD_CACHE_SCHEMA_VERSION = 6
 _BROAD_CACHE_SYNC_INIT_LOCK = threading.Lock()
 
 
@@ -153,6 +153,22 @@ def broad_cache_legacy_layer_settings(broad_key: tuple) -> tuple[bool, int]:
 def broad_cache_min_footprints(broad_key: tuple) -> int:
     """Extract the whole-fiber footprint threshold from a broad-cache key."""
     return int(broad_key[9] or 0) if len(broad_key) > 9 else 0
+
+
+def broad_cache_hide_uncalled(broad_key: tuple) -> bool:
+    """Whether a broad-cache entry was loaded with "Hide reads without footprint
+    calls" (bam_tags.read_has_footprint_calls); keys without it hid them (the default)."""
+    return bool(broad_key[11]) if len(broad_key) > 11 else True
+
+
+def effective_hide_uncalled(dataset, hide_uncalled: Optional[bool] = None) -> bool:
+    """The uncalled-read filter a load applies (None: as the request asked, default
+    hide; services/signal_evidence.request_hide_uncalled). BAM records only: BigBed
+    rows are called by construction, so their loads always share the default key."""
+    if hide_uncalled is None:
+        from services.signal_evidence import request_hide_uncalled
+        hide_uncalled = request_hide_uncalled()
+    return bool(hide_uncalled) or getattr(dataset, "data_type", None) != "bam"
 
 
 def read_load_token(state, chrom: str, terminal_bp: Optional[int] = None, *, sample_level: int = 0) -> tuple:
@@ -363,7 +379,7 @@ def make_quality_key(quality_filters: Iterable[dict]) -> tuple:
 
 def _sampled_entry_with_reads(state, dataset, dataset_id, chrom, start, end, read_ids, include_methylation,
                               layer_key, now, *, include_layer_qualities, infer_legacy_layers, legacy_nuc_min_size,
-                              min_footprints, terminal_bp):
+                              min_footprints, terminal_bp, hide_uncalled=True):
     """The read display's sampled load of this view (services/read_sampling.py), when
     every read asked about is in its sample: an analysis of the reads a panel shows
     reuses what the display loaded instead of loading every read. (None, None) otherwise."""
@@ -395,6 +411,7 @@ def _sampled_entry_with_reads(state, dataset, dataset_id, chrom, start, end, rea
                 state, dataset_id, chrom, start, end, include_methylation, layer_key, now,
                 include_layer_qualities=include_layer_qualities, infer_legacy_layers=infer_legacy_layers,
                 legacy_nuc_min_size=legacy_nuc_min_size, min_footprints=floor, load_token=token,
+                hide_uncalled=hide_uncalled,
             )
             if reads is None:
                 continue
@@ -429,6 +446,7 @@ def make_working_cache_key(
     legacy_nuc_min_size: int = 90,
     include_layer_qualities: bool = True,
     topology: Optional[tuple] = None,
+    hide_uncalled: bool = True,
 ) -> tuple:
     """Cache identity for viewport-adjusted working sets."""
     return (
@@ -447,6 +465,7 @@ def make_working_cache_key(
         bool(infer_legacy_layers),
         int(legacy_nuc_min_size or 90),
         topology,
+        bool(hide_uncalled),
     )
 
 
@@ -465,6 +484,7 @@ def find_broad_cache_entry(
     legacy_nuc_min_size: int = 90,
     min_footprints: int = 0,
     load_token: Optional[tuple] = None,
+    hide_uncalled: bool = True,
 ):
     ensure_broad_cache_schema(state)
     # Lookup, expiry and LRU updates share the per-state lock with stores and
@@ -479,6 +499,7 @@ def find_broad_cache_entry(
             legacy_nuc_min_size=legacy_nuc_min_size,
             min_footprints=min_footprints,
             load_token=load_token,
+            hide_uncalled=hide_uncalled,
         )
 
 
@@ -497,6 +518,7 @@ def _find_broad_cache_entry_locked(
     legacy_nuc_min_size: int = 90,
     min_footprints: int = 0,
     load_token: Optional[tuple] = None,
+    hide_uncalled: bool = True,
 ):
     all_reads = None
     broad_cache_key = None
@@ -522,6 +544,7 @@ def _find_broad_cache_entry_locked(
             bc_infer_legacy_layers != bool(infer_legacy_layers)
             or bc_legacy_nuc_min_size != int(legacy_nuc_min_size or 90)
             or bc_min_footprints != int(min_footprints or 0)
+            or broad_cache_hide_uncalled(broad_key) != bool(hide_uncalled)
         ):
             continue
         if include_methylation and not bc_include_methylation:
@@ -572,6 +595,7 @@ def _load_broad_reads(
     bigbed_read_options: Optional[dict] = None,
     short_terminal_footprint_bp: Optional[int] = None,
     sample_level: int = 0,
+    hide_uncalled: bool = True,
 ) -> list[dict]:
     """Load reads with every layer source the dataset has (companions, derived
     sidecars, marks). ``bam_read_options`` / ``bigbed_read_options`` pass the
@@ -628,6 +652,7 @@ def _load_broad_reads(
                     infer_legacy_layers=infer_legacy_layers,
                     legacy_nuc_min_size=legacy_nuc_min_size,
                     min_footprints=min_footprints,
+                    hide_uncalled=bool(hide_uncalled),
                     **terminal_option,
                     **{"spanning_only": False, "min_fp_quality": 0, **(bam_read_options or {})},
             )
@@ -711,11 +736,16 @@ def _load_broad_reads(
         layer_companion_paths.extend(_derived_layer_paths_for_request(dataset, layer_key))
     paths_to_load = []
     seen_paths = set()
-    for path in list(primary_paths) + layer_companion_paths:
+    from services.fiberhmm_variant_layers import span_reads_for_rows, strip_variant_paths
+    # FiberHMM var / sv bigBeds are companions read on request, never footprint rows.
+    for path in strip_variant_paths(list(primary_paths) + layer_companion_paths):
         if path in seen_paths:
             continue
         paths_to_load.append(path)
         seen_paths.add(path)
+    if not paths_to_load:
+        # Only variant layers in this dataset: their reads as plain spans.
+        return span_reads_for_rows(dataset, chrom, broad_start, broad_end)
     all_reads = build_bigbed_reads(
         paths_to_load,
         chrom,
@@ -899,6 +929,7 @@ def _load_and_cache_broad_reads_singleflight(
     min_footprints: int,
     short_terminal_footprint_bp: Optional[int] = None,
     sample_level: int = 0,
+    hide_uncalled: bool = True,
 ) -> tuple[list[dict], tuple]:
     """Load one broad-cache miss while identical concurrent callers wait.
 
@@ -928,6 +959,7 @@ def _load_and_cache_broad_reads_singleflight(
         # Taken before the load: a topology (or read-end footprint setting)
         # change during it leaves an entry consistent with what it was loaded under.
         load_token,
+        bool(hide_uncalled),
     )
     cache_lock, inflight = _broad_cache_sync(state)
     # The ID's current source: waiters on a load for an older source don't share it.
@@ -955,6 +987,7 @@ def _load_and_cache_broad_reads_singleflight(
                 legacy_nuc_min_size=legacy_nuc_min_size,
                 min_footprints=min_footprints,
                 load_token=load_token,
+                hide_uncalled=hide_uncalled,
             )
             if cached_reads is not None and cached_key is not None:
                 return cached_reads, cached_key
@@ -990,6 +1023,7 @@ def _load_and_cache_broad_reads_singleflight(
                 min_footprints=min_footprints,
                 short_terminal_footprint_bp=short_terminal_footprint_bp,
                 sample_level=sample_level,
+                hide_uncalled=hide_uncalled,
             )
             retained = _store_broad_cache_entry(state, exact_key, loaded_reads, generation)
             log_working_set_diagnostic(
@@ -1583,6 +1617,7 @@ def build_sampled_display_working_set(
     max_reads: int,
     spanning: bool = False,
     min_footprints: int = 0,
+    hide_uncalled: Optional[bool] = None,
     include_methylation: bool = True,
     include_layers: bool = True,
     requested_layers: Optional[Iterable[str] | str] = None,
@@ -1630,6 +1665,8 @@ def build_sampled_display_working_set(
         if dataset.available_layers.get("footprint", True)
         else 0
     )
+    # Independent of Min footprints: its relaxation to 0 never shows uncalled reads.
+    hide_uncalled = effective_hide_uncalled(dataset, hide_uncalled)
 
     layer_key = make_layer_key(include_layers, requested_layers)
     quality_filters = list(
@@ -1658,6 +1695,7 @@ def build_sampled_display_working_set(
                 max_reads=0,
                 spanning=False,
                 min_footprints=effective_min_footprints,
+                hide_uncalled=hide_uncalled,
                 include_methylation=include_methylation,
                 include_layers=layer_key_has_payload(layer_key),
                 requested_layers=None if layer_key is None else layer_key,
@@ -1796,6 +1834,7 @@ def build_sampled_display_working_set(
         legacy_nuc_min_size=legacy_nuc_min_size,
         min_footprints=effective_min_footprints,
         load_token=load_token,
+        hide_uncalled=hide_uncalled,
     )
 
     if all_reads is None:
@@ -1819,6 +1858,7 @@ def build_sampled_display_working_set(
             legacy_nuc_min_size=legacy_nuc_min_size,
             min_footprints=effective_min_footprints,
             sample_level=level,
+            hide_uncalled=hide_uncalled,
         )
     if timings is not None:
         timings['display_load_ms'] = (time.perf_counter() - phase_t0) * 1000
@@ -1968,6 +2008,7 @@ def _build_working_set(
     *,
     spanning: bool = False,
     min_footprints: int = 0,
+    hide_uncalled: Optional[bool] = None,
     read_ids: Optional[list] = None,
     include_methylation: bool = True,
     include_layers: bool = True,
@@ -1987,6 +2028,8 @@ def _build_working_set(
     """Build a viewport working set from broad read caches.
 
     ``broad_prefetch_multiplier`` defaults to the server's ``--prefetch``.
+    ``hide_uncalled``: leave out BAM reads without footprint calls
+    (bam_tags.read_has_footprint_calls), whatever ``min_footprints`` is.
     """
     t0 = time.time()
     ensure_broad_cache_schema(state)
@@ -2007,6 +2050,8 @@ def _build_working_set(
         if dataset.available_layers.get("footprint", True)
         else 0
     )
+    # Independent of Min footprints: its relaxation to 0 never shows uncalled reads.
+    hide_uncalled = effective_hide_uncalled(dataset, hide_uncalled)
 
     chrom_size = circular_chrom_size(state, chrom)
     if chrom_size and circular_region_wraps(start, end, chrom_size):
@@ -2021,6 +2066,7 @@ def _build_working_set(
                 segment.ref_end,
                 spanning=False,
                 min_footprints=effective_min_footprints,
+                hide_uncalled=hide_uncalled,
                 read_ids=read_ids,
                 include_methylation=include_methylation,
                 include_layers=include_layers,
@@ -2112,6 +2158,7 @@ def _build_working_set(
         legacy_nuc_min_size,
         include_layer_qualities,
         topology=topology,
+        hide_uncalled=hide_uncalled,
     )
     if cacheable and not force_reload:
         cache_lock, _inflight = _broad_cache_sync(state)
@@ -2159,13 +2206,14 @@ def _build_working_set(
             legacy_nuc_min_size=legacy_nuc_min_size,
             min_footprints=effective_min_footprints,
             load_token=topology,
+            hide_uncalled=hide_uncalled,
         )
         if all_reads is None and read_ids is not None:
             all_reads, broad_cache_key = _sampled_entry_with_reads(
                 state, dataset, dataset_id, chrom, start, end, read_ids, include_methylation, layer_key, now,
                 include_layer_qualities=include_layer_qualities, infer_legacy_layers=infer_legacy_layers,
                 legacy_nuc_min_size=legacy_nuc_min_size, min_footprints=effective_min_footprints,
-                terminal_bp=terminal_bp,
+                terminal_bp=terminal_bp, hide_uncalled=hide_uncalled,
             )
             served_sampled = all_reads is not None
 
@@ -2177,7 +2225,7 @@ def _build_working_set(
             raw_aliases={re.sub(r'_\d+$', '', str(name)) for name in read_ids}))
         try:
             return _build_working_set(state, dataset_id, chrom, start, end,
-                spanning=spanning, min_footprints=min_footprints, read_ids=read_ids,
+                spanning=spanning, min_footprints=min_footprints, hide_uncalled=hide_uncalled, read_ids=read_ids,
                 include_methylation=include_methylation, include_layers=include_layers,
                 requested_layers=requested_layers, include_layer_qualities=include_layer_qualities,
                 quality_filters=quality_filters, build_bam_reads=build_bam_reads,
@@ -2207,13 +2255,14 @@ def _build_working_set(
                 min_footprints=effective_min_footprints,
                 short_terminal_footprint_bp=terminal_bp,
                 sample_level=level,
+                hide_uncalled=hide_uncalled,
             )
             broad_cache_key = (
                 dataset_id, chrom, broad_start, broad_end,
                 bool(include_methylation), layer_key,
                 bool(include_layer_qualities), bool(infer_legacy_layers),
                 int(legacy_nuc_min_size or 90), effective_min_footprints,
-                topology,
+                topology, bool(hide_uncalled),
             )
             _store_broad_cache_entry(state, broad_cache_key, all_reads, generation)
         else:
@@ -2238,6 +2287,7 @@ def _build_working_set(
                 min_footprints=effective_min_footprints,
                 short_terminal_footprint_bp=terminal_bp,
                 sample_level=level,
+                hide_uncalled=hide_uncalled,
             )
 
     bc_start = broad_cache_key[2] if broad_cache_key else broad_start

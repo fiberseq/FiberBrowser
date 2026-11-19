@@ -130,7 +130,7 @@ tag.
 
 ```bash
 APP=build/macos/dist/FiberBrowser.app
-DMG=build/macos/dist/FiberBrowser-3.0.5-arm64.dmg
+DMG=build/macos/dist/FiberBrowser-3.0.6-arm64.dmg
 codesign -dv --verbose=4 "$APP"             # Authority=Developer ID Application: …, TeamIdentifier=TEAMID,
                                             # Runtime Version=…, Timestamp=…
 codesign --verify --deep --strict --verbose=2 "$APP"

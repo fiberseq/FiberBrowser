@@ -1,3 +1,5 @@
+import type { ReadStatsAggregate } from '../api/readStats';
+import { minFootprintsHiddenText } from './signalFilters';
 import { getClusterColor, getClusterLabel, UNASSIGNED_CLUSTER_ID } from '../components/tracks/read-track/constants';
 
 /**
@@ -144,25 +146,31 @@ export interface ClusterSummaryRow {
   label: string;
   color: string;
   n: number;
-  meanAccessibility: number;
-  meanFootprints: number;
-  meanFootprintSize: number;
+  /** null when no read of the cluster has footprint calls (NA, not 0). */
+  meanAccessibility: number | null;
+  meanFootprints: number | null;
+  meanFootprintSize: number | null;
   meanModPct: number | null;
 }
 
 /** Per-cluster means over per-read statistics (the "By cluster" table). */
 export function summarizeByCluster(
-  rows: Array<{ read_id: string; dataset_id: string; accessibility_pct: number; footprint_count: number; avg_footprint_size: number; methyl_pct: number | null }>,
+  rows: Array<{ read_id: string; dataset_id: string; accessibility_pct: number | null; footprint_count: number | null; avg_footprint_size: number | null; methyl_pct: number | null }>,
   clusterOf: (datasetId: string, readId: string) => number | undefined,
   order?: number[],
 ): ClusterSummaryRow[] {
-  const acc = new Map<number, { n: number; a: number; f: number; s: number; sN: number; m: number; mN: number }>();
+  // cN: reads with footprint calls. A read the caller skipped (null fields) counts toward n but not the
+  // footprint and accessibility means.
+  const acc = new Map<number, { n: number; cN: number; a: number; f: number; s: number; sN: number; m: number; mN: number }>();
   for (const r of rows) {
     const c = clusterOf(r.dataset_id, r.read_id);
     if (c == null) continue;
-    const e = acc.get(c) ?? { n: 0, a: 0, f: 0, s: 0, sN: 0, m: 0, mN: 0 };
-    e.n += 1; e.a += r.accessibility_pct; e.f += r.footprint_count;
-    if (r.footprint_count > 0) { e.s += r.avg_footprint_size; e.sN += 1; }
+    const e = acc.get(c) ?? { n: 0, cN: 0, a: 0, f: 0, s: 0, sN: 0, m: 0, mN: 0 };
+    e.n += 1;
+    if (r.footprint_count != null && r.accessibility_pct != null) {
+      e.cN += 1; e.a += r.accessibility_pct; e.f += r.footprint_count;
+      if (r.footprint_count > 0 && r.avg_footprint_size != null) { e.s += r.avg_footprint_size; e.sN += 1; }
+    }
     if (r.methyl_pct != null) { e.m += r.methyl_pct; e.mN += 1; }
     acc.set(c, e);
   }
@@ -173,10 +181,15 @@ export function summarizeByCluster(
       label: getClusterLabel(c),
       color: getClusterColor(c),
       n: e.n,
-      meanAccessibility: e.a / e.n,
-      meanFootprints: e.f / e.n,
-      meanFootprintSize: e.sN ? e.s / e.sN : 0,
+      meanAccessibility: e.cN ? e.a / e.cN : null,
+      meanFootprints: e.cN ? e.f / e.cN : null,
+      meanFootprintSize: e.sN ? e.s / e.sN : null,
       meanModPct: e.mN ? e.m / e.mN : null,
     };
   });
+}
+
+/** "312 uncalled · 40 with < 5 footprints hidden": the reads Min footprints hid, by reason. */
+export function readStatsHiddenText(aggregate: Pick<ReadStatsAggregate, 'n_hidden_uncalled' | 'min_footprints' | 'n_hidden_min_footprints'>): string {
+  return minFootprintsHiddenText(aggregate.n_hidden_uncalled ?? 0, aggregate.n_hidden_min_footprints ?? 0, aggregate.min_footprints ?? 0);
 }

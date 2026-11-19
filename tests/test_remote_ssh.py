@@ -508,8 +508,9 @@ def test_remote_bam_and_plasmid_map_end_to_end(app_client, tmp_path):
     dataset = opened["datasets"][0]
     assert dataset["path"] == bam_ref and dataset["is_remote"] is True
 
+    # The fixture's reads carry no footprint calls: Min footprints' "All reads, including uncalled" shows them.
     reads = app_client.get("/api/reads/compact", params={
-        "chrom": "pRenamed", "start": 0, "end": len(seq), "dataset_id": dataset["id"]}).json()
+        "chrom": "pRenamed", "start": 0, "end": len(seq), "dataset_id": dataset["id"], "min_footprints": -1}).json()
     assert len(reads["reads"]) == 12
 
     # Sessions keep the reference, and restore can tell whether it is reachable.

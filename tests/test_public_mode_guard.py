@@ -53,6 +53,8 @@ PUBLIC_DENIED = {
     ("POST", "/api/load_fasta"), ("POST", "/api/load_gtf"), ("DELETE", "/api/gtf"),
     ("POST", "/api/load_plasmid"), ("POST", "/api/load_plasmids"), ("POST", "/api/circular_chrom"),
     ("POST", "/api/plasmid/open"), ("POST", "/api/plasmid/confirm"), ("GET", "/api/plasmid/links"),
+    # Lifting the FiberHMM var / sv layers opens a chain file the client names.
+    ("POST", "/api/fiberhmm_layers/lift"),
     ("POST", "/api/reference_pairs"), ("GET", "/api/cache/status"), ("POST", "/api/reference/declare_genome"),
     ("GET", "/api/reference/genome_declarations"), ("POST", "/api/reference/genome_declarations"),
     # host processes and shutdown

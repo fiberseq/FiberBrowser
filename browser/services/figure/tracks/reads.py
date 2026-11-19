@@ -453,6 +453,7 @@ def _fetch(ctx: TrackContext, plan: dict, max_reads: int, filter_param: str, ser
         ml_threshold=125,
         fill_gap_size=int(_num(fe.get('fillGapSize'), 0)) if fe.get('fillSmallGaps') and _num(fe.get('fillGapSize'), 0) > 0 else None,
         min_fp_quality=int(_num(fe.get('minFpQuality'), 0)) if ds.get('data_type') == 'bam' else 0,
+        # -1: "All reads, including uncalled" (uncalled reads are hidden at every threshold).
         min_footprints=int(_num(fe.get('minFootprints', 5), 5)),
         filter_ids=filter_param or None,
         hide_terminal_gaps=bool(fe.get('hideTerminalGaps', True)),

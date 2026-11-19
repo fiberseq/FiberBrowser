@@ -210,3 +210,107 @@ def test_every_bam_read_has_its_alignment_bounds_not_only_a_single_read():
         assert row["strand"] in ("+", "-")
         # The CIGAR and read-relative detail stay a single read's.
         assert row["cigar_string"] is None and row["fp_intervals"] is None
+
+
+def test_read_without_calls_is_not_called_not_fully_accessible(tmp_path):
+    """A read the footprint caller skipped (e.g. under --min-read-length) carries no call tags. Its row is only a
+    placeholder span, so footprints and accessibility are unknown (None, 'not called'), not 0 / 100%, and it is
+    left out of the footprint and accessibility aggregates."""
+    from types import SimpleNamespace
+
+    import array
+    import pysam
+
+    header = pysam.AlignmentHeader.from_dict({"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "chr1", "LN": 10000}]})
+    path = tmp_path / "calls.bam"
+    with pysam.AlignmentFile(str(path), "wb", header=header) as out:
+        for name, called in (("called", True), ("skipped", False)):
+            r = pysam.AlignedSegment(header)
+            r.query_name, r.query_sequence, r.flag, r.reference_id = name, "A" * 2000, 0, 0
+            r.reference_start, r.mapping_quality, r.cigartuples = 1000, 60, [(0, 2000)]
+            if called:
+                r.set_tag("MA", "2000;nuc.Q:1-147,400-147;msp.:148-252", "Z")
+                r.set_tag("AQ", array.array("B", [200, 200]))
+            out.write(r)
+    pysam.index(str(path))
+    ws = SimpleNamespace(read_by_id={
+        "called": {"intervals": [[0, 147, 147], [147, 399, 0], [399, 546, 147], [546, 2000, 0]], "methyl": [200, 300]},
+        "skipped": {"intervals": [[0, 2000, 0]], "methyl": [5]},
+    })
+    per_read, fp, acc = [], [], []
+    read_stats_service._collect_bam_read_stats(
+        dataset=SimpleNamespace(paths=[str(path)]), dataset_id="ds1", wanted={"called", "skipped"},
+        read_ids=["called", "skipped"], ws=ws, chrom="chr1", start=1000, end=3000, per_read=per_read,
+        all_fp_sizes=fp, all_acc_pcts=acc, all_lengths=[], all_mapqs=[], all_methyl_pcts=[],
+        strand_counts={"+": 0, "-": 0})
+    rows = {r["read_id"]: r for r in per_read}
+    assert rows["called"]["call_status"] == "called" and rows["called"]["footprint_count"] == 2
+    skipped = rows["skipped"]
+    assert skipped["call_status"] == "not called"
+    assert skipped["accessibility_pct"] is None and skipped["footprint_count"] is None
+    assert skipped["methyl_count"] == 1                # modifications are still reported
+    assert len(acc) == 1 and fp == [147, 147]          # aggregates use the called read only
+    agg = read_stats_service._build_aggregate(
+        per_read=per_read, request=None, all_fp_sizes=fp, all_acc_pcts=acc, all_lengths=[2000, 2000],
+        all_mapqs=[60, 60], all_methyl_pcts=[], strand_counts={"+": 2, "-": 0})
+    assert agg["n_not_called"] == 1 and agg["mean_footprint_count"] == 2.0
+
+
+def test_read_has_footprint_calls_recognises_ma_and_legacy_tags():
+    class R:
+        def __init__(self, tags):
+            self.tags = tags
+
+        def has_tag(self, t):
+            return t in self.tags
+
+        def get_tag(self, t):
+            return self.tags[t]
+
+    f = read_stats_service.read_has_footprint_calls
+    assert f(R({"MA": "500;nuc.QQQ:1-147"}))
+    assert f(R({"Ma": "500;msp.:10-50"}))
+    assert f(R({"ns": [1, 200], "nl": [147, 147]}))
+    assert not f(R({}))
+    assert not f(R({"MA": "500;fp_CTCF.QQQ:10-20"}))       # only derived layers: no caller calls
+    assert not f(R({"ns": 3, "nl": 5}))                      # scalar tags of another pipeline
+
+
+def test_fully_accessible_called_read_is_called_and_empty_groups_are_not():
+    """A called read can be fully accessible: an msp interval and no nuc/tf intervals, or an empty nuc group next to
+    an msp group. It is 'called'. A read whose groups are all empty carries no calls."""
+    from array import array
+
+    class R:
+        def __init__(self, tags):
+            self.tags = tags
+
+        def has_tag(self, t):
+            return t in self.tags
+
+        def get_tag(self, t):
+            if t not in self.tags:
+                raise KeyError(t)
+            return self.tags[t]
+
+    f = read_stats_service.read_has_footprint_calls
+    assert f(R({"MA": "2000;msp+Q:1-2000"}))                          # msp only: fully accessible, called
+    assert f(R({"MA": "2000;nuc+Q:;msp+Q:1-2000"}))                   # empty nuc group beside an msp group
+    assert f(R({"as": array("I", [0]), "al": array("I", [2000])}))    # legacy MSP covering the read
+    assert not f(R({"MA": "2000;nuc+Q:;msp+Q:;tf+QQQ:"}))             # only empty groups
+    assert not f(R({"ns": array("I", []), "nl": array("I", [])}))     # empty legacy arrays
+    assert not f(R({"ns": 48213}))                                    # Dorado's scalar ns:i, no nl
+    assert not f(R({"ns": "raw", "nl": "none"}))                      # strings are no calls (shared pair rule)
+
+
+def test_no_called_read_gives_null_means_not_zero():
+    """When no read in scope has footprint calls the footprint and accessibility means are None (NA), not 0."""
+    per_read = [{"read_id": "a", "footprint_count": None}, {"read_id": "b", "footprint_count": None}]
+    agg = read_stats_service._build_aggregate(
+        per_read=per_read, request=None, all_fp_sizes=[], all_acc_pcts=[], all_lengths=[2000, 2000],
+        all_mapqs=[60, 60], all_methyl_pcts=[], strand_counts={"+": 2, "-": 0})
+    assert agg["n_not_called"] == 2
+    for key in ("mean_accessibility_pct", "mean_footprint_count", "mean_footprint_size", "median_footprint_size",
+                "hist_fp_count"):
+        assert agg[key] is None, key
+    assert agg["hist_accessibility"] == [] and agg["mean_read_length"] == 2000.0

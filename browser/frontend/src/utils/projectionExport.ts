@@ -187,7 +187,7 @@ function signatureParts(s: ProjectionInputs): unknown[] {
     s.chrom, s.start, s.end, s.analysisSampleSeed ?? null, s.subnucleosomalThreshold ?? null, !!s.spanningOnly,
     s.clusterFeatureRules ?? [], regions.map(r => [r.start, r.end, r.mode ?? 'accessibility']), selected,
     analysisSettingsKey(s.refreshGeneration ?? 0, !!s.legacyLayerInference, s.legacyNucMinSize ?? 0,
-      s.activeColormap?.qualityFilters ?? []),
+      s.activeColormap?.qualityFilters ?? [], (s as { minFootprints?: number }).minFootprints === -1),
     cohort,
     // A view on another assembly: its reference (main-genome maps keep their earlier signature).
     ...(s.genome ? [s.genome] : []),

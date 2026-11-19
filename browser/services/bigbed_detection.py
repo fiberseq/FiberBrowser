@@ -38,6 +38,10 @@ _FIBERHMM_TABLE_TO_TYPE = {
     # blocks (not per-base marks, not footprints): its own interval layer.
     'fiberhmm_bothstrand': 'bothstrand',
     'fiberhmm_fiberlayers': 'fiberlayers',
+    # Per-read alleles at VCF sites and per-record structural events
+    # (services/fiberhmm_variant_layers.py): companions, never read rows.
+    'fiberhmm_var': 'var',
+    'fiberhmm_sv': 'sv',
     'fiberbrowser_fiberlayers': 'fiberlayers',
     'fiberbrowser_derived_layers': 'fiberlayers',
 }
@@ -52,6 +56,8 @@ _DISPLAY_LAYER_TYPE_LABELS = {
     'deam': 'Deamination',
     'bothstrand': 'Both-strand coverage',
     'fiberlayers': 'Derived layers',
+    'var': 'Variant alleles',
+    'sv': 'Structural events',
     'unknown': 'Unknown',
 }
 

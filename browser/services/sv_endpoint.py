@@ -204,6 +204,12 @@ def sv_split_payload(state, *, dataset_id: str, chrom: str, start: int, end: int
     if length <= 0:
         raise SvRequestError("len must be positive")
     margin = SV_SPAN_MARGIN if margin is None else max(0, int(margin))
+    from services import fiberhmm_variant_layers as fvl
+    dataset = state.get_dataset(dataset_id) if dataset_id else None
+    if dataset is not None and fvl.has_layer(dataset, fvl.SV_LAYER):
+        return fvl.sv_split_payload(state, dataset, chrom=chrom, start=int(start), end=int(end), t=t, ref=ref,
+                                    length=length, margin=margin, include_duplicates=include_duplicates,
+                                    include_qcfail=include_qcfail)
     entries = scan_view(state, dataset_id, chrom, int(start), int(end), allele_floor(length))
     by_name = classify_compact(((c, c) for c in entries), t=t, ref=ref, length=length,
                                margin=margin, include_duplicates=include_duplicates, include_qcfail=include_qcfail)

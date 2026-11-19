@@ -31,6 +31,9 @@ async def get_read_stats(
 
 def _read_stats(*, chrom, start, end, spanning, request, state):
     request = request or ReadStatsRequest(read_ids_by_dataset={})
+    if request.min_footprints < 0:
+        # Min footprints' "All reads, including uncalled" choice (the frontend's -1).
+        request.min_footprints, request.hide_uncalled = 0, False
     query = AnalysisReadQuery.from_request(
         state,
         chrom=chrom,
@@ -39,6 +42,7 @@ def _read_stats(*, chrom, start, end, spanning, request, state):
         spanning=spanning,
         read_ids_by_dataset=request.read_ids_by_dataset,
         sample_seed=request.sample_seed,
+        hide_uncalled=request.hide_uncalled,
     )
     request.read_ids_by_dataset = query.read_ids_by_dataset
     return compute_read_stats(

@@ -167,7 +167,9 @@ export function fetchApiResponse(input: RequestInfo | URL, options?: RequestInit
   if (options?.method && !['GET', 'HEAD'].includes(options.method.toUpperCase())
     && !['/api/render/live_state', '/api/tabs/heartbeat', '/api/jupyter/settings/sync',
       '/api/jupyter/browser_order', '/api/jupyter/sync_peaks', '/api/scan_peaks',
-      '/api/regions/catalog', '/api/preferences/analysis', '/api/quality_filters'].includes(path)) clearLoadedReadRegions();
+      '/api/regions/catalog', '/api/preferences/analysis', '/api/quality_filters',
+      // Read-only counts of the view (the toolbar's Quality group): never a reason to drop loaded reads.
+      '/api/quality/impact'].includes(path)) clearLoadedReadRegions();
   return withApiActivity(async () => {
     const response = await fetch(input, { ...(options ?? {}), credentials: 'include' });
     if (path === '/api/quality_filters' && options?.method?.toUpperCase() === 'POST' && response.ok) {

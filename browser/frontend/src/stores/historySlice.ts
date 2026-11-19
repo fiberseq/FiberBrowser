@@ -26,6 +26,7 @@ import { DEFAULT_CLASS_REGION_MODE, isClassRegionMode } from '../utils/classRegi
 import { normalizeMergeLog } from './clusterMergeLog';
 import { isMergeStrategy } from '../utils/mergeStrategies';
 import { sessionPackMarker, withoutMissingPackState, type SessionPacks } from '../api/sessionPacks';
+import { DEFAULT_MIN_FOOTPRINTS } from './uiSlice';
 
 /** Merge similar clusters' settings from a step or session (absent in older ones: left as they are). */
 export function restoredMergeSettings(s: {
@@ -370,6 +371,8 @@ export interface SerializedState {
   minFootprints: number;
   /** Min footprints is the untouched default (it may turn itself off); older saves: false. */
   minFootprintsAuto?: boolean;
+  /** The threshold "All reads, including uncalled" returns to; older saves: the saved threshold (or the default). */
+  minFootprintsBeforeAllReads?: number;
   signalFilters?: import('../utils/signalFilters').SignalFilters;
   showDuplicateReads?: boolean;
   showQcFailReads?: boolean;
@@ -836,6 +839,7 @@ export function serializeState(state: BrowserState): SerializedState {
     minFpQuality: state.minFpQuality,
     minFootprints: state.minFootprints,
     minFootprintsAuto: state.minFootprintsAuto,
+    minFootprintsBeforeAllReads: state.minFootprintsBeforeAllReads,
     signalFilters: { ...state.signalFilters },
     showDuplicateReads: state.showDuplicateReads,
     showQcFailReads: state.showQcFailReads,
@@ -1082,6 +1086,7 @@ function deserializeState(
     minFootprints: s.minFootprints,
     // A restored value is the user's unless the save says it was the untouched default.
     minFootprintsAuto: s.minFootprintsAuto ?? false,
+    minFootprintsBeforeAllReads: s.minFootprintsBeforeAllReads ?? (s.minFootprints >= 0 ? s.minFootprints : DEFAULT_MIN_FOOTPRINTS),
     // "Min footprints is off" is about the live setting: gone once a restore turns it back on.
     ...(s.minFootprints !== 0 ? { minFootprintsNotice: null } : {}),
     signalFilters: normalizeSignalFilters(s.signalFilters),

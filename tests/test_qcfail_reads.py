@@ -38,6 +38,8 @@ def qc_bam(tmp_path):
 @pytest.mark.parametrize("include_duplicates", [False, True])
 def test_panel_coverage_and_hidden_counts(qc_bam, include_qcfail, include_duplicates):
     state = _state({"bam": qc_bam})
+    # The chimeras carry no footprint calls: shown with QC-fail reads all the same (the
+    # explicit QC-fail choice wins over the uncalled-read rule; see below).
     options = dict(include_qcfail=include_qcfail, include_duplicates=include_duplicates)
     # Exercise both the default working set and the opt-in direct path, then cache reuse.
     payload, reads = _payload(state, 0, 500, **options)
@@ -58,6 +60,27 @@ def test_panel_coverage_and_hidden_counts(qc_bam, include_qcfail, include_duplic
         assert reads["chimera"]["qcfail"] is True
         assert reads["other_qcfail"]["qcfail"] is True
         assert "chimera" not in reads["other_qcfail"]
+
+
+def test_qcfail_choice_shows_uncalled_chimeras_despite_the_uncalled_rule(qc_bam):
+    # FiberHMM chimeras carry no footprint calls by design. "Show QC-fail reads" shows them:
+    # the uncalled rule (on by default at every Min footprints) does not override that choice.
+    state = _state({"bam": qc_bam})
+    payload, reads = _payload(state, 0, 500, include_qcfail=True)
+    assert set(reads) == {"unique", "chimera", "other_qcfail"}
+    assert payload["signal_counts"]["uncalled_hidden"] == 0
+    assert get_coverage_payload(state, chrom=CONTIG, start=0, end=500, bins=1, include_qcfail=True)["coverage"] == [3]
+    stats = compute_read_stats(state, CONTIG, 0, 500, False, ReadStatsRequest(
+        read_ids_by_dataset={"wrap": ["unique", "chimera", "other_qcfail"]}, include_qcfail=True))
+    assert {r["read_id"] for r in stats["per_read"]} == {"unique", "chimera", "other_qcfail"}
+    assert stats["aggregate"]["n_hidden_uncalled"] == 0
+    # A Min footprints threshold still applies to them (0 calls), as in 3.0.5, and says so.
+    payload, reads = _payload(state, 0, 500, include_qcfail=True, min_footprints=1)
+    assert set(reads) == {"unique", "other_qcfail"}
+    assert (payload["signal_counts"]["uncalled_hidden"], payload["signal_counts"]["min_footprints_hidden"]) == (0, 1)
+    # QC-fail reads hidden (the default): nothing about them is counted as uncalled.
+    payload, reads = _payload(state, 0, 500)
+    assert set(reads) == {"unique"} and payload["signal_counts"]["uncalled_hidden"] == 0
 
 
 def test_cold_and_cached_counts_match(qc_bam):

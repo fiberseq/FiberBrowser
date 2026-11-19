@@ -552,6 +552,8 @@ export async function fetchFootprintSizes(
     clusterAssignments?: Record<string, Record<string, number>>;
     sampleSeed?: string;
     panelGenome?: string | null;
+    /** Hide reads without footprint calls (false: Min footprints' "All reads, including uncalled"). */
+    hideUncalled?: boolean;
     signal?: AbortSignal;
   },
 ): Promise<{ success: boolean; data: Record<string, Record<number, FootprintSizeData> | { error: string }> }> {
@@ -559,6 +561,7 @@ export async function fetchFootprintSizes(
     chrom,
     region_start: regionStart.toString(),
     region_end: regionEnd.toString(),
+    hide_uncalled: String(options.hideUncalled !== false),
   });
   if (options.panelGenome) params.set('panel_genome', options.panelGenome);
   return fetchJson(`${API_BASE}/cluster/vplot?${params}`, {

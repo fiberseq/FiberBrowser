@@ -917,7 +917,8 @@ class BrowserState:
                           infer_legacy_layers: bool = None,
                           legacy_nuc_min_size: int = None,
                           broad_prefetch_multiplier: Optional[int] = None,
-                          force_reload: bool = False) -> WorkingSet:
+                          force_reload: bool = False,
+                          hide_uncalled: Optional[bool] = None) -> WorkingSet:
         """
         Build a working set for a viewport region from the broad cache.
         
@@ -929,6 +930,8 @@ class BrowserState:
         
         Args:
             min_footprints: Minimum number of footprints (intervals with size > 0) required.
+            hide_uncalled: Leave out BAM reads without footprint calls ("Hide reads
+                without footprint calls"), independently of min_footprints.
             include_methylation: Include methylation/deamination fields in BAM/BigBed
                 reads. Leave True for display compatibility; analysis callers that
                 only need interval layers can set False to avoid expensive mark parsing.
@@ -988,6 +991,7 @@ class BrowserState:
             end,
             spanning=spanning,
             min_footprints=min_footprints,
+            hide_uncalled=hide_uncalled,
             read_ids=read_ids,
             include_methylation=include_methylation,
             include_layers=include_layers,

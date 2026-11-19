@@ -43,6 +43,36 @@ def _dataset(state, dataset_id: str):
     return dataset
 
 
+def _variant_layer_dataset(state, body: dict, layer: str):
+    """The bigBed dataset whose FiberHMM ``var`` / ``sv`` layer answers this request, or None
+    (services/fiberhmm_variant_layers.py)."""
+    from services import fiberhmm_variant_layers as fvl
+    dataset = state.get_dataset(str(body.get("dataset_id") or "")) if body.get("dataset_id") else None
+    return dataset if dataset is not None and fvl.has_layer(dataset, layer) else None
+
+
+def _from_variant_layer(fn, state, body: dict, layer: str):
+    from services import fiberhmm_variant_layers as fvl
+    dataset = _variant_layer_dataset(state, body, layer)
+    if dataset is None:
+        return None
+    try:
+        return fn(state, dataset, body)
+    except fvl.VariantLayerError as exc:
+        raise VariantsRequestError(str(exc), exc.status) from None
+
+
+# FiberHMM var / sv layers (services/fiberhmm_variant_layers.py): what they don't do yet.
+VARIANT_LAYER_NEEDS_BAM = ("Combining SNPs with SVs, and SV–SNP linkage, need the BAM for now: with the FiberHMM "
+                           "var / sv layers, group by the SNPs or by the SVs.")
+
+
+def _refuse_mixed_on_variant_layers(state, body: dict) -> None:
+    from services import fiberhmm_variant_layers as fvl
+    if _variant_layer_dataset(state, body, fvl.VAR_LAYER) or _variant_layer_dataset(state, body, fvl.SV_LAYER):
+        raise VariantsRequestError(VARIANT_LAYER_NEEDS_BAM, 409)
+
+
 def _scoped_state(state, body):
     from copy import copy
     from services.panel_genomes import for_datasets
@@ -221,6 +251,10 @@ def scan_key(dataset_id: str, chrom: str, start: int, end: int, params: dict, id
 
 
 def snps_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = None) -> dict:
+    from services import fiberhmm_variant_layers as fvl
+    layered = _from_variant_layer(fvl.snps_payload, state, body, fvl.VAR_LAYER)
+    if layered is not None:
+        return layered
     state = _scoped_state(state, body)
     dataset_id = str(body.get("dataset_id") or "")
     chrom, start, end = _region(body)
@@ -290,6 +324,13 @@ def _columns(entry: dict, matrix: snp_scan.AlleleMatrix, candidates: list[dict])
 
 def alleles_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = None) -> dict:
     """Group the view's reads by allele (one SNP), by allele combination (several), or by HP tag."""
+    from services import fiberhmm_variant_layers as fvl
+    if not body.get("svs"):
+        layered = _from_variant_layer(fvl.alleles_payload, state, body, fvl.VAR_LAYER)
+        if layered is not None:
+            return layered
+    elif body.get("snps"):
+        _refuse_mixed_on_variant_layers(state, body)  # SNPs + SVs together: not from the layers yet
     state = _scoped_state(state, body)
     dataset_id = str(body.get("dataset_id") or "")
     chrom, start, end = _region(body)
@@ -399,7 +440,9 @@ def _genotype_payload(state, body, entry, called, matrix, mcands, col_of, candid
     wanted = body.get("snps")
     wanted = wanted if isinstance(wanted, list) else []
     if entry is None:
-        _dataset(state, dataset_id)
+        from services import fiberhmm_variant_layers as fvl
+        if _variant_layer_dataset(state, body, fvl.SV_LAYER) is None:
+            _dataset(state, dataset_id)
         cols, snp_letters, row_of, matrix_names = [], [], {}, []
     else:
         missing = [s for s in wanted if s not in col_of]
@@ -518,7 +561,11 @@ def _sv_records(state, dataset, chrom: str, start: int, end: int, include_duplic
 def svs_payload(state, body: dict, cancelled: Optional[Callable[[], bool]] = None) -> dict:
     """SV clusters (deletions and insertions of at least ``min_len``) in the view, as the SV band clusters them."""
     from services.sv_events import extract_sv_events, normalize_min_sv_len, sv_summary_for_reads
+    from services import fiberhmm_variant_layers as fvl
 
+    layered = _from_variant_layer(fvl.svs_payload, state, body, fvl.SV_LAYER)
+    if layered is not None:
+        return layered
     state = _scoped_state(state, body)
     dataset_id = str(body.get("dataset_id") or "")
     chrom, start, end = _region(body)
@@ -548,6 +595,7 @@ def sv_linkage_payload(state, body: dict, cancelled: Optional[Callable[[], bool]
     how many SNPs separate them (>= 0.9 in one, <= 0.1 in the other)."""
     from services.sv_endpoint import classify_records
 
+    _refuse_mixed_on_variant_layers(state, body)  # not from the FiberHMM layers yet
     state = _scoped_state(state, body)
     dataset_id = str(body.get("dataset_id") or "")
     chrom, start, end = _region(body)

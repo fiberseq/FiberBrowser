@@ -116,6 +116,18 @@ COPILOT_MLX_MODELS_URL = os.environ.get(
 )
 
 
+
+def _means_all_reads(value) -> bool:
+    """Min footprints' "All reads, including uncalled" asked for by name or as -1."""
+    if isinstance(value, str):
+        text = value.strip().lower()
+        return text in {"all", "all reads", "all reads, including uncalled", "all reads including uncalled",
+                        "include uncalled", "including uncalled", "uncalled", "-1"}
+    try:
+        return float(value) < 0
+    except (TypeError, ValueError):
+        return False
+
 def _mlx_chat_url() -> str:
     return os.environ.get("FIBERBROWSER_COPILOT_MLX_URL", COPILOT_MLX_URL)
 
@@ -391,7 +403,7 @@ High-level browser actions (preferred when they fit):
   Display/track/primer/footprint actions:
     {"type":"toggle_layer","layer":"nuc","enabled":false}
     {"type":"set_quality_filter","value":200}
-    {"type":"set_min_footprints","value":3}
+    {"type":"set_min_footprints","value":3}   (0 = every called read; "all" = All reads, including uncalled)
     {"type":"set_spanning_only","enabled":false}
     {"type":"add_track_from_url","path":"https://example.org/signal.bw","track_label":"ATAC"}
     {"type":"remove_track","track_index":0}
@@ -1515,6 +1527,14 @@ def _normalize_action(state, action: Any, *, context: Optional[dict[str, Any]]) 
             "layer": layer,
             "enabled": bool(enabled) if enabled is not None else True,
             "label": str(action.get("label") or f"{'Show' if enabled is not False else 'Hide'} {layer} layer"),
+        }, warnings
+
+    if action_type == "set_min_footprints" and _means_all_reads(action.get("value", action.get("threshold"))):
+        # Min footprints' last choice: every read, those without footprint calls included.
+        return {
+            "type": action_type,
+            "value": -1,
+            "label": str(action.get("label") or "Min footprints = All reads, including uncalled"),
         }, warnings
 
     if action_type in {"set_quality_filter", "set_min_footprints"}:

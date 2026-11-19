@@ -141,6 +141,7 @@ def _coacc_matrix_cache_key(
         None if query.singleton_read_ids is None else _ids_signature(tuple(query.singleton_read_ids)),
         query.max_reads,
         query.min_footprints,
+        bool(query.hide_uncalled),
         bool(query.include_methylation),
         bool(query.include_layers),
         tuple(query.requested_layers),

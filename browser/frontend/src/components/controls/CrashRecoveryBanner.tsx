@@ -27,6 +27,7 @@ import { otherTabLive, startTabHeartbeat, stopTabHeartbeat, watchOtherTabs } fro
 import { restoreSavedProjection } from '../../utils/projectionExport';
 import { withoutMissingPackState } from '../../api/sessionPacks';
 import { clampMinSvSupport, SV_MIN_SUPPORT_DEFAULT } from '../tracks/read-track/svDrawing';
+import { DEFAULT_MIN_FOOTPRINTS } from '../../stores/uiSlice';
 
 /** Normalize path for comparison (resolve trailing slashes, case on macOS). */
 function normPath(p: string): string {
@@ -371,6 +372,7 @@ export async function restoreSnapshot(saved: SerializedState) {
     minFpQuality: r.minFpQuality,
     minFootprints: r.minFootprints,
     minFootprintsAuto: r.minFootprintsAuto ?? false,
+    minFootprintsBeforeAllReads: r.minFootprintsBeforeAllReads ?? (r.minFootprints >= 0 ? r.minFootprints : DEFAULT_MIN_FOOTPRINTS),
     showDuplicateReads: r.showDuplicateReads ?? false,
     showQcFailReads: r.showQcFailReads ?? false,
     enabledCigarTypes: r.enabledCigarTypes,

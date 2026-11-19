@@ -143,3 +143,21 @@ it('preserves the visible terminal-gap size across deletion-split pieces', () =>
   expect(projectLoadedReads(original, 10, 980, 100)?.reads[0].intervals)
     .toEqual([[0, 190, -790], [390, 790, -790], [790, 980, 200]]);
 });
+
+it('reuses a region whose uncalled reads Min footprints hid, counting the sub-view\'s own', () => {
+  const original = { ...data(), signal_counts: { total: 3, kept: 3, hidden: 0, background: 0, detectable: 0, unclassified: 0,
+    unscored: 0, unknown: 3, structure_scored: 0, uncalled: 2, uncalled_hidden: 2, min_footprints: 0, min_footprints_hidden: 0,
+    uncalled_extents: [[5, 15], [80, 95]] as [number, number][] } };
+  readAlignmentBounds.set(original.reads[0], [0, 100]);
+  readRegionProjectionSafe.add(original);
+  rememberReadRegion(params(), original, 100, readRegionGeneration());
+  const left = lookupReadRegion(params(0, 50))!;
+  expect(left.reads).toHaveLength(1);
+  expect(left.signal_counts?.uncalled_hidden).toBe(1);
+  expect(left.signal_counts?.uncalled_extents).toEqual([[5, 15]]);
+  // "Before call filters": the hidden uncalled alignment counts in the totals.
+  expect([left.signal_counts?.total, left.signal_counts?.kept, left.signal_counts?.unknown]).toEqual([2, 2, 2]);
+  expect(lookupReadRegion(params(20, 70))!.signal_counts?.uncalled_hidden).toBe(0);
+  expect(lookupReadRegion(params(20, 70))!.signal_counts?.total).toBe(1);
+  expect(lookupReadRegion(params(60, 100))!.signal_counts?.uncalled_hidden).toBe(1);
+});

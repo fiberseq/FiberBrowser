@@ -46,6 +46,18 @@ export const SHORT_END_FOOTPRINT_BP = 90;
 export const SHORT_END_FOOTPRINT_MAX_END_GAP_BP = 30;
 
 /** Why the default Min footprints was turned off (shown on that dataset's reads). */
+/** Min footprints' last choice, "All reads, including uncalled": no threshold, and the reads the
+ *  footprint caller skipped (no call tags) are shown too. Never set by the automatic relax. */
+export const MIN_FOOTPRINTS_ALL_READS = -1;
+/** Whether a Min footprints value hides reads without footprint calls (every value but the last choice). */
+export function minFootprintsHidesUncalled(minFootprints: number): boolean {
+  return minFootprints !== MIN_FOOTPRINTS_ALL_READS;
+}
+/** The footprint-count threshold a Min footprints value applies (0 for the last choice). */
+export function minFootprintsThreshold(minFootprints: number): number {
+  return Math.max(0, Math.round(Number(minFootprints) || 0));
+}
+
 export interface MinFootprintsNotice {
   datasetId: string;
   label: string;
@@ -101,7 +113,11 @@ export interface UiSlice {
   appliedHideShortEndFootprints: boolean;
   setAppliedHideShortEndFootprints: (hide: boolean) => void;
   minFpQuality: number;  // Min footprint quality (0-255), 0 = no filter
-  minFootprints: number;  // Min footprints per read, 0 = no filter
+  /** Min footprints per read. Reads without footprint calls are hidden at every threshold:
+   *  0 = every called read; MIN_FOOTPRINTS_ALL_READS (-1) = "All reads, including uncalled". */
+  minFootprints: number;
+  /** The threshold in use when "All reads, including uncalled" was chosen: leaving it returns there. */
+  minFootprintsBeforeAllReads: number;
   /** Min footprints is still the untouched default: data whose reads in view all
    *  fall below it (short reads, amplicons) turn it off (relaxDefaultMinFootprints). */
   minFootprintsAuto: boolean;
@@ -186,6 +202,8 @@ export interface UiSlice {
   setHideShortEndFootprints: (hide: boolean) => void;
   setMinFpQuality: (quality: number) => void;
   setMinFootprints: (count: number) => void;
+  /** Leave "All reads, including uncalled" for the threshold in use before it. */
+  leaveAllReadsMinFootprints: () => void;
   /** The default Min footprints hid every read of a dataset in view: turn it off
    *  (once; only while the user hasn't set it) and say so on that dataset. */
   relaxDefaultMinFootprints: (notice: MinFootprintsNotice) => boolean;
@@ -291,6 +309,7 @@ export function createUiSlice(set: (partial: Partial<BrowserState> | ((state: Br
   setAppliedHideShortEndFootprints: (hide) => set({ appliedHideShortEndFootprints: hide }),
   minFpQuality: 0,
   minFootprints: DEFAULT_MIN_FOOTPRINTS,
+  minFootprintsBeforeAllReads: DEFAULT_MIN_FOOTPRINTS,
   minFootprintsAuto: true,
   minFootprintsNotice: null,
   signalFilters: { ...DEFAULT_SIGNAL_FILTERS },
@@ -557,7 +576,14 @@ export function createUiSlice(set: (partial: Partial<BrowserState> | ((state: Br
   setHideShortEndFootprints: (hide) => set({ hideShortEndFootprints: hide }),
   setMinFpQuality: (quality) => set({ minFpQuality: quality }),
   // Any explicit choice (sidebar, Copilot, the notice's buttons) is the user's: no more auto.
-  setMinFootprints: (count) => set({ minFootprints: count, minFootprintsAuto: false, minFootprintsNotice: null }),
+  setMinFootprints: (count) => set(state => ({
+    minFootprints: count, minFootprintsAuto: false, minFootprintsNotice: null,
+    ...(count === MIN_FOOTPRINTS_ALL_READS && state.minFootprints !== MIN_FOOTPRINTS_ALL_READS
+      ? { minFootprintsBeforeAllReads: minFootprintsThreshold(state.minFootprints) } : {}),
+  })),
+  leaveAllReadsMinFootprints: () => set(state => (state.minFootprints === MIN_FOOTPRINTS_ALL_READS
+    ? { minFootprints: minFootprintsThreshold(state.minFootprintsBeforeAllReads), minFootprintsAuto: false, minFootprintsNotice: null }
+    : {})),
   relaxDefaultMinFootprints: (notice) => {
     const s = get();
     if (!s.minFootprintsAuto || s.minFootprints !== DEFAULT_MIN_FOOTPRINTS) return false;

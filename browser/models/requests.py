@@ -390,6 +390,11 @@ class ReadStatsRegion(BaseModel):
 
 class ReadStatsRequest(BaseModel):
     include_qcfail: bool = False
+    # Min footprints as the read track applies it: hide_uncalled=false (or
+    # min_footprints=-1) is its "All reads, including uncalled" choice; which reads it
+    # hid in the region, by reason, is part of the summary.
+    hide_uncalled: bool = True
+    min_footprints: int = 0
     read_ids_by_dataset: Dict[str, List[str]]
     sample_seed: Optional[str] = None
     extra_regions: List[ReadStatsRegion] = []

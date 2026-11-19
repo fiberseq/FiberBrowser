@@ -86,8 +86,12 @@ def prepare_cluster_sample(state, dataset_id, chrom, start, end, target, seed, *
     sources = tuple((path, file_stamp(path, bam_index_candidates(path))) for path in paths)
     links = [contig_links(state, path=path) for path in paths]
     chrom_map = getattr(state, 'chrom_map', None) or {}
+    # Uncalled reads Min footprints hides never take a sample slot (as QC-fail ones).
+    from services.signal_evidence import request_hide_uncalled
+    from services.bam_tags import read_has_footprint_calls
+    hide_uncalled = request_hide_uncalled()
     key = ('cluster_names_v1', dataset_id, generation, sources, chrom, start, end, target, seed,
-           json.dumps([chrom_map, links], sort_keys=True))
+           json.dumps([chrom_map, links], sort_keys=True), hide_uncalled)
     cached = _selections.get(key)
     if cached is not None:
         _selections.move_to_end(key)
@@ -120,6 +124,8 @@ def prepare_cluster_sample(state, dataset_id, chrom, start, end, target, seed, *
                         if not index & 255:
                             checkpoint()
                         if read.flag & (4 | 256 | 512 | 2048):
+                            continue
+                        if hide_uncalled and not read_has_footprint_calls(read):
                             continue
                         total += 1
                         yield read.query_name

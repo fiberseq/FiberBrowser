@@ -64,7 +64,10 @@ export function formatReadStatus(counts: ReadStatusCounts): { text: string; titl
  * M14): "586 of 3,170 rows drawn" -> "586/3,170", "0 spanning / 125 overlapping"
  * -> "0/125" (and the older "586/3,170 visible", "42 reads"). Anything else is kept.
  */
-export function compactReadStatus(text: string): string {
+export function compactReadStatus(full: string): string {
+  // The count leads; what follows " · " (reads hidden by Min footprints, QC-fail, duplicates)
+  // stays in the full text and the tooltip, so a narrow header keeps the count.
+  const text = full.split(' · ')[0];
   const drawn = text.match(/^([\d,]+) of ([\d,]+) rows? drawn$/);
   if (drawn) return `${drawn[1]}/${drawn[2]}`;
   const visible = text.match(/^([\d,]+)\/([\d,]+) visible$/);
@@ -73,5 +76,5 @@ export function compactReadStatus(text: string): string {
   if (count) return count[1];
   const span = text.match(/^([\d,]+) spanning \/ ([\d,]+) overlapping$/);
   if (span) return `${span[1]}/${span[2]}`;
-  return text;
+  return full;
 }

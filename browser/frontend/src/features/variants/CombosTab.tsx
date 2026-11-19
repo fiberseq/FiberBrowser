@@ -14,6 +14,10 @@ import { useShallow } from 'zustand/react/shallow';
 import { useBrowserStore } from '../../stores/browserStore';
 import { sameChrom } from '../../utils/chromAliases';
 import { SV_COMBO_MAX, svOfFeature, svSelectionTitle } from './svFeatures';
+import { hasVariantLayers } from '../fiberhmmLayers/model';
+
+/** Said where FiberHMM var / sv layers can't do something yet (the server says the same). */
+export const VARIANT_LAYER_NEEDS_BAM = 'Combining SNPs with SVs, and SV–SNP linkage, need the BAM for now: with the FiberHMM var / sv layers, group by the SNPs or by the SVs.';
 import {
   saveGrouping, snpLabel, updateVariantsState, type ComboOptions, type NormalizedVariantsState,
 } from './variantsState';
@@ -43,12 +47,15 @@ export function CombosTab({ state, scan, duplicates, params, onSplit, onGroup, b
   const [result, setResult] = useState<{ key: string; grouping: AlleleGrouping } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // FiberHMM var / sv layers (a bigBed dataset): SNPs and SVs are grouped separately for now.
+  const layered = useBrowserStore(s => hasVariantLayers(s.datasets.find(d => d.id === scan?.dataset_id)));
+  const mixedOnLayers = layered && combo.source === 'selected' && svs.length > 0 && selected.length > 0;
   const withSvs = combo.source === 'selected' && svs.length > 0;
   const key = comboRequestKey(scan, combo, selected, svIds);
   const lastKey = useRef('');
   const setCombo = (patch: Partial<ComboOptions>) => updateVariantsState({ combo: { ...combo, ...patch } });
   const canRun = Boolean(scan) && (combo.source !== 'selected' || selected.length > 0 || svs.length > 0) && (combo.source !== 'hp' || (scan?.hp.tagged ?? 0) > 0)
-    && !(combo.source === 'selected' && tooManySvs);
+    && !(combo.source === 'selected' && tooManySvs) && !mixedOnLayers;
   const describe = (id: string) => {
     const s = scan?.snps.find(x => x.id === id);
     return s ? snpLabel(s) : id;
@@ -145,6 +152,9 @@ export function CombosTab({ state, scan, duplicates, params, onSplit, onGroup, b
             <div className="text-red-600 dark:text-red-400" role="alert" data-testid="variants-combos-too-many-svs">
               {svs.length} SVs are selected: a combination takes {SV_COMBO_MAX} or fewer. Untick some in the SVs tab (or shift-click them in the SV row).
             </div>
+          )}
+          {mixedOnLayers && (
+            <div className="text-amber-700 dark:text-amber-300" role="note" data-testid="variants-combos-needs-bam">{VARIANT_LAYER_NEEDS_BAM}</div>
           )}
           {loading && <div className="text-ink-muted" data-testid="variants-combos-loading">Grouping the reads…</div>}
           {error && <div className="text-red-600 dark:text-red-400" role="alert">{error}</div>}

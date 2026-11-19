@@ -110,6 +110,8 @@ PUBLIC_ALLOWED: frozenset[tuple[str, str]] = frozenset({
     # SNPs, allele groups, SVs and SV-SNP linkage of the catalog's reads (a bounded view)
     (_POST, "/api/variants/snps"), (_POST, "/api/variants/alleles"),
     (_POST, "/api/variants/svs"), (_POST, "/api/variants/sv_linkage"),
+    # FiberHMM var / sv layers of the catalog's bigBeds: which layers, and the read rows' overlay
+    (_GET, "/api/fiberhmm_layers/info"), (_GET, "/api/fiberhmm_layers/reads"),
     (_POST, "/api/render"),  # headless engine, no session files (checked in the route)
     (_POST, "/api/footprint/consensus/jobs"),  # no client-chosen cache dir (checked in the route)
     (_DELETE, "/api/footprint/consensus/jobs/{job_id}"),

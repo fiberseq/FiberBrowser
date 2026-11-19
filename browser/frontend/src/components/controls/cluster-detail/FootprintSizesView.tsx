@@ -132,6 +132,8 @@ export function FootprintSizesView({ allReads, clusters, chartWidth, isFullView,
   const setSettings = useBrowserStore(s => s.setFootprintSizeSettings);
   const dark = useBrowserStore(s => s.darkMode);
   const datasets = useBrowserStore(s => s.datasets);
+  // Min footprints' uncalled-read rule: the plots are of the reads the read track shows.
+  const hideUncalled = useBrowserStore(s => s.minFootprints !== -1);
   const layerOptions = useMemo(() => footprintSizeLayerOptions(datasets, settings.layer), [datasets, settings.layer]);
   const [showSettings, setShowSettings] = useState(false);
   const useClusters = !!clusters && clusters.panels.length > 0 && settings.groupBy === 'clusters';
@@ -153,9 +155,9 @@ export function FootprintSizesView({ allReads, clusters, chartWidth, isFullView,
     assignments: useClusters ? clusters!.assignmentSignature ?? null : null,
     mode: settings.mode, normalization: settings.normalization, sigmaSizeBp: settings.sigmaSizeBp, sigmaPosBp: settings.sigmaPosBp,
     sizeBin: settings.sizeBin, posBin: settings.posBin, sizeMin: settings.sizeMin, sizeMax: settings.sizeMax,
-    minFootprints: settings.minFootprints, layer: settings.layer, sampleSeed: sampleSeed ?? null, settingsKey,
+    minFootprints: settings.minFootprints, layer: settings.layer, sampleSeed: sampleSeed ?? null, settingsKey, hideUncalled,
   }), [useClusters, target, clusters, settings.mode, settings.normalization, settings.sigmaSizeBp, settings.sigmaPosBp,
-    settings.sizeBin, settings.posBin, settings.sizeMin, settings.sizeMax, settings.minFootprints, settings.layer, sampleSeed, settingsKey]);
+    settings.sizeBin, settings.posBin, settings.sizeMin, settings.sizeMax, settings.minFootprints, settings.layer, sampleSeed, settingsKey, hideUncalled]);
 
   useEffect(() => {
     if (!target.panels.length || target.end <= target.start) { setLoading(false); return; }
@@ -166,6 +168,7 @@ export function FootprintSizesView({ allReads, clusters, chartWidth, isFullView,
       sizeBin: settings.sizeBin, posBin: settings.posBin, sizeMin: settings.sizeMin, sizeMax: settings.sizeMax,
       mode: settings.mode, normalization: settings.normalization, sigmaSizeBp: settings.sigmaSizeBp, sigmaPosBp: settings.sigmaPosBp,
       minFootprints: settings.minFootprints, layer: settings.layer, sampleSeed, panelGenome: target.genome, signal: controller.signal,
+      hideUncalled,
     };
     const timer = window.setTimeout(() => {
       setLoading(true);

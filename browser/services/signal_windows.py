@@ -32,19 +32,23 @@ class SignalWindow:
         self.regions = tuple((left, right) for left, right in regions) if regions is not None else ((start, end),)
         self.source = source
         self.identity = _identity(path)
-        self.max_records = min(1_000_000, _windows.max_bytes // 21)
+        self.max_records = min(1_000_000, _windows.max_bytes // 24)
         self.enabled = self.identity is not None and self.max_records > 0
         self.starts, self.ends = array("q"), array("q")
         self.status, self.structure, self.duplicates = array("B"), array("B"), array("B")
         self.qcfail, self.chimeras = array("B"), array("B")
+        # Records without footprint calls (bam_tags.read_has_footprint_calls).
+        self.uncalled = array("B")
+        # Whole-fiber footprint calls (bam_tags.footprint_call_count), capped at 65535.
+        self.fp_calls = array("H")
 
-    def append(self, read, evidence):
+    def append(self, read, evidence, *, called=True, footprint_calls=0):
         if not self.enabled:
             return
         if len(self.starts) >= self.max_records:
             # Genome-scale analysis cannot accumulate an unbounded sidecar.
             self.enabled = False
-            self.starts = self.ends = self.status = self.structure = self.duplicates = self.qcfail = self.chimeras = None
+            self.starts = self.ends = self.status = self.structure = self.duplicates = self.qcfail = self.chimeras = self.uncalled = self.fp_calls = None
             return
         self.starts.append(read.reference_start)
         self.ends.append(read.reference_end)
@@ -54,17 +58,20 @@ class SignalWindow:
         self.duplicates.append(bool(getattr(read, "is_duplicate", False)))
         self.qcfail.append(bool(getattr(read, "is_qcfail", False)))
         self.chimeras.append(bool(getattr(read, "is_qcfail", False) and read.has_tag("xc") and read.get_tag("xc") == "strand_swap"))
+        self.uncalled.append(not called)
+        self.fp_calls.append(min(65535, max(0, int(footprint_calls or 0))))
 
     def finish(self):
         if not self.enabled or self.identity != _identity(self.path):
             return
         for name, dtype in (("starts", np.int64), ("ends", np.int64),
-                            ("status", np.uint8), ("structure", np.uint8), ("duplicates", np.uint8), ("qcfail", np.uint8), ("chimeras", np.uint8)):
+                            ("status", np.uint8), ("structure", np.uint8), ("duplicates", np.uint8), ("qcfail", np.uint8), ("chimeras", np.uint8),
+                            ("uncalled", np.uint8), ("fp_calls", np.uint16)):
             values = np.frombuffer(getattr(self, name), dtype=dtype)
             values.flags.writeable = False
             setattr(self, name, values)
         self.retained_bytes = sum(getattr(self, name).nbytes for name in
-                                  ("starts", "ends", "status", "structure", "duplicates", "qcfail", "chimeras")) + 1024
+                                  ("starts", "ends", "status", "structure", "duplicates", "qcfail", "chimeras", "uncalled", "fp_calls")) + 1024
         sink = signal_window_sink.get()
         if sink is not None:
             sink(self)
@@ -75,14 +82,15 @@ class SignalWindow:
         """Publish a completed local/worker fetch only if its source still matches."""
         if not self.enabled or self.identity != _identity(self.path):
             return
-        for name in ('starts', 'ends', 'status', 'structure', 'duplicates', 'qcfail', 'chimeras'):
+        for name in ('starts', 'ends', 'status', 'structure', 'duplicates', 'qcfail', 'chimeras', 'uncalled', 'fp_calls'):
             getattr(self, name).flags.writeable = False
         _windows[(self.identity, self.chrom, self.start, self.end, self.regions)] = self
         if self.source is not None:
             _sources[self.identity] = self.source
             self.source = None  # metadata has its own byte budget and LRU entry
 
-    def counts(self, start, end, *, include_duplicates=False, include_qcfail=False, spanning=False, previous=()):
+    def counts(self, start, end, *, include_duplicates=False, include_qcfail=False, spanning=False, previous=(),
+               min_footprints=0, extents_cap=0):
         selected = (self.starts < end) & (self.ends > start)
         if spanning:
             selected &= (self.starts <= start) & (self.ends >= end)
@@ -109,8 +117,26 @@ class SignalWindow:
         if filters["requireStructure"]:
             kept &= structure == 1
         kept_count = int(np.count_nonzero(kept))
+        # Shown reads (past the duplicate, QC-fail and signal filters) without footprint calls.
+        # A QC-fail read shown by choice is never hidden as uncalled (chimeras carry no calls).
+        uncalled_mask = (self.uncalled[selected] != 0) & (self.qcfail[selected] == 0)
+        uncalled = int(np.count_nonzero(kept & uncalled_mask))
+        # Shown called reads with fewer footprint calls than Min footprints.
+        few = (int(np.count_nonzero(kept & ~uncalled_mask & (self.fp_calls[selected] < int(min_footprints))))
+               if min_footprints and int(min_footprints) > 0 else 0)
+        # Alignment extents of the uncalled ones (a view inside this one counts its own), only
+        # when asked and at most extents_cap of them: None past the cap (nothing is built).
+        extents = []
+        if extents_cap and uncalled:
+            if uncalled > extents_cap:
+                extents = None
+            else:
+                hidden_uncalled = kept & uncalled_mask
+                extents = np.stack([self.starts[selected][hidden_uncalled], self.ends[selected][hidden_uncalled]],
+                                   axis=1).tolist()
         return dict(counts, duplicate_hidden=duplicate_hidden, qcfail_hidden=qcfail_hidden, chimera_hidden=chimera_hidden, total=len(status), kept=kept_count, hidden=len(status)-kept_count,
-                    structure_scored=int(np.count_nonzero(structure)))
+                    structure_scored=int(np.count_nonzero(structure)), uncalled=uncalled, few_footprints=few,
+                    uncalled_extents=extents)
 
 
 class _CombinedWindow:
@@ -128,7 +154,14 @@ class _CombinedWindow:
             # overlap rather than QNAME or alignment coordinates as an identity.
             values = window.counts(start, end, previous=seen, **options)
             for name, value in values.items():
-                counts[name] = counts.get(name, 0) + value
+                if name == "uncalled_extents":
+                    # None (past the cap) wins; the union stays bounded by the cap.
+                    previous = counts.get(name, [])
+                    cap = options.get("extents_cap", 0)
+                    joined = None if previous is None or value is None else previous + value
+                    counts[name] = None if joined is not None and cap and len(joined) > cap else joined
+                    continue
+                counts[name] = counts[name] + value if name in counts else value
             seen.extend(window.regions)
         return counts
 

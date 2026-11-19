@@ -10,6 +10,10 @@ from urllib.parse import parse_qs
 STATUS_CODES = {1: "background", 0: "detectable", -1: "unclassified", -2: "unscored"}
 FILTER_KEYS = ("hideBackground", "excludeUnscored", "requireDetectable", "requireStructure")
 _filters = ContextVar("signal_filters", default=None)
+# Reads without footprint calls (bam_tags.read_has_footprint_calls): the request's
+# ``hide_uncalled`` query parameter (false: Min footprints' "All reads, including
+# uncalled"); None: not given (hidden).
+_hide_uncalled = ContextVar("hide_uncalled", default=None)
 _ABSENT = object()
 _CLASSES = {
     "no detectable DddB signal (consistent with untreated/failed)": "background",
@@ -43,6 +47,35 @@ def signal_filters_for_request(value):
         _filters.reset(token)
 
 
+def parse_hide_uncalled(value):
+    """A ``hide_uncalled`` request value as a bool; None when absent or unreadable."""
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    if text in ("1", "true", "yes", "on"):
+        return True
+    if text in ("0", "false", "no", "off"):
+        return False
+    return None
+
+
+def request_hide_uncalled(default: bool = True) -> bool:
+    """Whether this request hides reads without footprint calls. Every analysis
+    that builds a working set without an explicit setting uses this, so the
+    reads it sees are the ones the read track shows (default: hidden)."""
+    value = _hide_uncalled.get()
+    return default if value is None else bool(value)
+
+
+@contextmanager
+def hide_uncalled_for_request(value):
+    token = _hide_uncalled.set(parse_hide_uncalled(value))
+    try:
+        yield
+    finally:
+        _hide_uncalled.reset(token)
+
+
 class SignalFilterMiddleware:
     """Keep each request's predicate through worker jobs and streaming responses."""
     def __init__(self, app):
@@ -51,12 +84,13 @@ class SignalFilterMiddleware:
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
-        raw = parse_qs(scope.get("query_string", b"").decode("utf-8", "replace")).get("signal_filters", ["{}"]) [0]
+        query = parse_qs(scope.get("query_string", b"").decode("utf-8", "replace"))
+        raw = query.get("signal_filters", ["{}"])[0]
         try:
             value = json.loads(raw)
         except (ValueError, TypeError):
             value = {}
-        with signal_filters_for_request(value):
+        with signal_filters_for_request(value), hide_uncalled_for_request(query.get("hide_uncalled", [None])[0]):
             await self.app(scope, receive, send)
 
 

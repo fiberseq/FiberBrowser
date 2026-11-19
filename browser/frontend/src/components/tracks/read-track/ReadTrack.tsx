@@ -25,12 +25,13 @@ import { SvTooltip } from './SvTooltip';
 import { SV_BAND_HEIGHT, visibleSvSummary } from './svDrawing';
 import { useTrackFeedStore } from '../../../stores/trackFeedStore';
 import { useSvSplitRefresh } from './useSvSplitRefresh';
+import { overlaySvSummary, useFiberhmmReadLayers, useMergedReads } from '../../../features/fiberhmmLayers/useFiberhmmReadLayers';
 import { formatReadStatus, readFilterCounts } from './readCounts';
 import { isTopLocusStep } from '../../../utils/topLoci';
 import { findDatasetReadsLocus } from '../../../utils/datasetReadsLocus';
 import { ReadSampleNotice } from './ReadSampleNotice';
 import { takeFirstReadsJump, viewportKey } from '../../../utils/firstReadsJump';
-import { DEFAULT_MIN_FOOTPRINTS, minFootprintsNoticeApplies } from '../../../stores/uiSlice';
+import { DEFAULT_MIN_FOOTPRINTS, MIN_FOOTPRINTS_ALL_READS, minFootprintsHidesUncalled, minFootprintsNoticeApplies } from '../../../stores/uiSlice';
 import { FindReadsControl } from './FindReadsControl';
 import { blockingProblemFor, findReadsPromptAllowed, useGenomeCheckStore } from '../../../stores/genomeCheckStore';
 import { GenomeMismatchNotice } from '../../controls/GenomeMismatchBanner';
@@ -555,9 +556,9 @@ export function ReadTrack({
   const {
     reads, totalReads, totalOverlappingReads, totalSpanningReads, loading, hasMethylationData,
     workingReads, hiddenByMinFootprints, workingSampling, warning, fetchFailed,
-    displayReads, profileReads, displaySampleCount, fetchSequenceRef, currentDataSequenceRef, dataSequence,
+    displayReads: payloadDisplayReads, profileReads, displaySampleCount, fetchSequenceRef, currentDataSequenceRef, dataSequence,
     coverageData, coverageMax, coverageReads, dataViewportKey, serverMetaprofile, fulfilledReadFetchCount,
-    overlayMarks, svSummary,
+    overlayMarks, svSummary: payloadSvSummary,
   } = useReadTrackData({
     stateKey, readStrand,
     chrom, start, end, datasetId, spanningOnly, width, isBAM,
@@ -584,18 +585,26 @@ export function ReadTrack({
     minSvLen: svMinLen,
     svSummaryEnabled: svDisplayEnabled && isBAM,
   });
+  // FiberHMM var / sv bigBed layers (features/fiberhmmLayers): fetched only while turned on for this dataset, merged
+  // onto the reads; the SV display then works as for a BAM.
+  const fiberhmmLayers = useFiberhmmReadLayers(currentDataset, chrom, start, end, svMinLen);
+  const displayReads = useMergedReads(payloadDisplayReads, fiberhmmLayers, start, end);
+  const svSummary = overlaySvSummary(fiberhmmLayers, payloadSvSummary);
+  const svCapable = isBAM || fiberhmmLayers.svActive;
+  // (Turning the FiberHMM SV layer on shows it whatever the BAM SV display setting is.)
+  const svShown = (svDisplayEnabled && isBAM) || fiberhmmLayers.svActive;
 
   // The SV summary band (fb-n9-sv): this view's SV clusters at the min size;
   // no band when nothing in view passes it.
   const svVisibleSummary = useMemo(
-    () => (svDisplayEnabled && isBAM && dataViewportKey === [chrom, start, end, datasetId, linkedSessionId ?? '', linkedRegion ?? '', readStrand ?? ''].join('|')
+    () => (svShown && dataViewportKey === [chrom, start, end, datasetId, linkedSessionId ?? '', linkedRegion ?? '', readStrand ?? ''].join('|')
       ? visibleSvSummary(svSummary, svMinLen, svMinSupport) : null),
-    [svDisplayEnabled, isBAM, svSummary, svMinLen, svMinSupport, dataViewportKey, chrom, start, end, datasetId, linkedSessionId, linkedRegion, readStrand],
+    [svShown, svSummary, svMinLen, svMinSupport, dataViewportKey, chrom, start, end, datasetId, linkedSessionId, linkedRegion, readStrand],
   );
   const svBand = !publishFeed && svVisibleSummary && regionWidth <= maxRegionForReads ? SV_BAND_HEIGHT : 0;
   // A panel's rows start right below the header (the SV and coverage rows are their own tracks).
   const topBandsHeight = (showCoverageHistogram ? 30 : 0) + svBand;
-  useSvSplitRefresh({ stateKey, datasetId, chrom, start, end, enabled: isBAM && !linkedSessionId });
+  useSvSplitRefresh({ stateKey, datasetId, chrom, start, end, enabled: svCapable && !linkedSessionId });
 
   // Reads left over from the previous view (the new request is still pending,
   // or failed) are drawn by nothing and must not be hit or read either: their
@@ -713,7 +722,7 @@ export function ReadTrack({
     readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth,
     showReadTooltip, showCoverageHistogram,
     linkedBoundsStart, linkedSessionId, onViewportChange, panScope, genome,
-    svEnabled: svDisplayEnabled && isBAM, svMinLen, svBandHeight: svBand, svSummary: svVisibleSummary,
+    svEnabled: svShown, svMinLen, svBandHeight: svBand, svSummary: svVisibleSummary,
   });
 
   // Cluster counts shown in tooltips should match the full cluster assignment,
@@ -1293,10 +1302,11 @@ export function ReadTrack({
       annotationOpacityMax,
       annotationThresholds,
       layerColors,
-      svEnabled: svDisplayEnabled && isBAM,
+      svEnabled: svShown,
       svMinLen,
       svBandHeight: svBand,
       svSummary: svVisibleSummary,
+      splitReadLinks: fiberhmmLayers.svActive && fiberhmmLayers.settings.linkSplit,
       coverageFooterHeight: zoomedOutBannerShown && !exportInProgress ? ZOOMED_OUT_BANNER_HEIGHT : 0,
     });
     const drawMs = nowMs() - drawStarted;
@@ -1327,7 +1337,7 @@ export function ReadTrack({
       const { panOffset: currentPanOffset, panScope: currentPanScope, setPanOffset } = useEphemeralStore.getState();
       if (currentPanOffset !== 0 && currentPanScope === panScope) setPanOffset(0);
     }
-  }, [loading, dataSequence, isDataViewportStale, displayReads, width, renderHeight, regionWidth, chrom, start, end, hasCluster, myClusterAssignments, myClusterOrder, drawLoadingState, hasStaleDisplayReads, fetchFailed, genes, allPeaks, hasFilter, myFilteredReadIds, datasetLabel, datasetColor, sidebarWidth, enabledModTypes, enabledCigarTypes, isBAM, layerType, modificationOverlays, overlayMarks, jupyterReadHighlights, jupyterFootprintColorMap, allJupyterMarkers, hasClusterFocus, myClusterFocus, mySelectedClusters, linkedBoundsStart, linkedHighlightIds, clusterStateConsensus, isReversed, activeColormap, orthogonalTracksForRules, renderFillReadHeight, renderReadRowHeight, readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth, renderReadScrollOffset, selectedReadIds, showCoverageHistogram, maxRegionForReads, selectedFootprints, footprintCrossHighlight, footprintGroups, selectedFamilyGroupId, footprintAnalysisLayer, coverageData, coverageMax, myAnnotationOverlays, annotationColors, enabledAnnotationTypes, annotationOpacityMin, annotationOpacityMax, annotationThresholds, layerColors, isPanning, canvasRenderVersion, consensusView, highlightedConsensusFamilies, nativeLattice, exportInProgress, readHighlightIds, svDisplayEnabled, svMinLen, svBand, svVisibleSummary, zoomedOutBannerShown]);
+  }, [loading, dataSequence, isDataViewportStale, displayReads, width, renderHeight, regionWidth, chrom, start, end, hasCluster, myClusterAssignments, myClusterOrder, drawLoadingState, hasStaleDisplayReads, fetchFailed, genes, allPeaks, hasFilter, myFilteredReadIds, datasetLabel, datasetColor, sidebarWidth, enabledModTypes, enabledCigarTypes, isBAM, layerType, modificationOverlays, overlayMarks, jupyterReadHighlights, jupyterFootprintColorMap, allJupyterMarkers, hasClusterFocus, myClusterFocus, mySelectedClusters, linkedBoundsStart, linkedHighlightIds, clusterStateConsensus, isReversed, activeColormap, orthogonalTracksForRules, renderFillReadHeight, renderReadRowHeight, readSeparatorMode, readSeparatorMinHeight, readSeparatorWidth, renderReadScrollOffset, selectedReadIds, showCoverageHistogram, maxRegionForReads, selectedFootprints, footprintCrossHighlight, footprintGroups, selectedFamilyGroupId, footprintAnalysisLayer, coverageData, coverageMax, myAnnotationOverlays, annotationColors, enabledAnnotationTypes, annotationOpacityMin, annotationOpacityMax, annotationThresholds, layerColors, isPanning, canvasRenderVersion, consensusView, highlightedConsensusFamilies, nativeLattice, exportInProgress, readHighlightIds, svDisplayEnabled, svShown, svMinLen, svBand, svVisibleSummary, zoomedOutBannerShown, fiberhmmLayers.svActive, fiberhmmLayers.settings.linkSplit]);
 
   // What this panel loaded and shows, for Copilot's troubleshooting diagnostics.
   useEffect(() => {
@@ -1419,7 +1429,11 @@ export function ReadTrack({
   // reads and amplicons rarely carry that many footprints.
   const minFootprintsEmptied = !loading && !isDataViewportStale && displayReads.length === 0
     && minFootprints > 0 && hiddenByMinFootprints > 0 && !filterEmptied;
-  const showSpanNudge = !loading && displayReads.length === 0 && spanningOnly && totalSpanningReads === 0 && totalOverlappingReads > 0 && !filterEmptied && !minFootprintsEmptied;
+  // Min footprints hid every read in view as uncalled (the caller skipped them all, or the file is not called).
+  const hiddenUncalled = minFootprintsHidesUncalled(minFootprints) ? (signalSummary?.uncalled_hidden ?? 0) : 0;
+  const uncalledEmptied = !loading && !isDataViewportStale && displayReads.length === 0
+    && hiddenUncalled > 0 && !filterEmptied && !minFootprintsEmptied;
+  const showSpanNudge = !loading && displayReads.length === 0 && spanningOnly && totalSpanningReads === 0 && totalOverlappingReads > 0 && !filterEmptied && !minFootprintsEmptied && !uncalledEmptied;
   const showFilterNudge = filterEmptied;
   const showMinFootprintsNudge = minFootprintsEmptied;
   // The default (untouched) Min footprints hid this dataset's reads: it suits
@@ -1623,6 +1637,37 @@ export function ReadTrack({
           </div>
         </div>
       )}
+      {uncalledEmptied && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none" data-render-hide="true">
+          <div className="bg-amber-50 dark:bg-amber-900/40 border border-amber-300 dark:border-amber-600/60 rounded-lg px-5 py-4 shadow-md pointer-events-auto max-w-md" data-testid={`uncalled-hidden-${datasetId}`}>
+            <div className="text-sm font-medium text-amber-900 dark:text-amber-100 mb-1">
+              {hiddenUncalled.toLocaleString()} read{hiddenUncalled !== 1 ? 's' : ''} without footprint calls hidden by Min footprints
+            </div>
+            <div className="text-xs text-amber-800 dark:text-amber-200/90 mb-3 leading-relaxed">
+              No read of {currentDataset?.label || datasetLabel || 'this dataset'} in view has footprint calls: the footprint caller
+              skipped them, or the file has not been called yet. Min footprints hides such reads at every threshold;
+              its last choice, All reads, including uncalled, shows them.
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => useBrowserStore.getState().setMinFootprints(MIN_FOOTPRINTS_ALL_READS)}
+                className="px-3 py-1 text-xs font-medium bg-amber-600 hover:bg-amber-700 dark:bg-amber-700 dark:hover:bg-amber-600 text-white rounded shadow-sm"
+                data-testid={`uncalled-show-all-${datasetId}`}
+              >
+                All reads, including uncalled
+              </button>
+              <button
+                type="button"
+                onClick={openReadFilters}
+                className="px-3 py-1 text-xs font-medium border border-amber-400 dark:border-amber-600 text-amber-900 dark:text-amber-100 rounded hover:bg-amber-100 dark:hover:bg-amber-900/60"
+              >
+                Read filters…
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {showMinFootprintsNotice && minFootprintsNotice && (
         <div className="absolute top-1 left-1/2 -translate-x-1/2 z-20 max-w-[92%] pointer-events-none" data-render-hide="true">
           <div className="flex items-start gap-2 bg-amber-50 dark:bg-amber-900/50 border border-amber-300 dark:border-amber-600 rounded px-2 py-1.5 text-xs text-amber-800 dark:text-amber-200 shadow-sm pointer-events-auto" data-testid={`min-footprints-notice-${datasetId}`}>
@@ -1805,7 +1850,7 @@ export function ReadTrack({
         layout={actionsLayout}
         rowsTop={(datasetLabel ? 16 : 0) + topBandsHeight}
         svSummary={svVisibleSummary}
-        svEnabled={svDisplayEnabled && isBAM}
+        svEnabled={svShown}
         svMinLen={svMinLen}
         width={width}
         sidebarWidth={sidebarWidth}

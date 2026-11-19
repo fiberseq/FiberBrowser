@@ -199,10 +199,12 @@ async def get_coverage(
     dataset_id: Optional[str] = Query(None),
     include_duplicates: bool = Query(False),
     include_qcfail: bool = Query(False, description="Include SAM QC-fail reads (0x200)"),
+    hide_uncalled: bool = Query(True, description="Leave out BAM reads without footprint calls, as the read panel does"),
     state=Depends(get_state),
 ):
     """Return binned read counts across a region (duplicate-flagged molecules
-    only with ``include_duplicates``, as the read panel shows them)."""
+    only with ``include_duplicates``, reads without footprint calls only
+    without ``hide_uncalled``: as the read panel shows them)."""
     # Reads every alignment in the region (3.3 s for 5 Mb of the E02 DddB BAM):
     # off the event loop.
     return await asyncio.to_thread(
@@ -214,6 +216,7 @@ async def get_coverage(
         bins=bins,
         dataset_id=dataset_id,
         include_duplicates=include_duplicates, include_qcfail=include_qcfail,
+        hide_uncalled=hide_uncalled,
     )
 
 

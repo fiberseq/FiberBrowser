@@ -94,6 +94,21 @@ describe('MatrixCanvas request lifecycle', () => {
     expect(getCoaccMatrixImageUrl).toHaveBeenLastCalledWith('chr2R', 100, 200, expect.objectContaining({ panelGenome: 'second' }));
   });
 
+  it('fetches again, with a new image URL, when Min footprints shows or hides uncalled reads at the same locus', async () => {
+    const { useBrowserStore } = await import('../../../stores/browserStore');
+    useBrowserStore.setState({ minFootprints: 5 } as any);
+    vi.mocked(getCoaccMetadata).mockResolvedValue({ n_bins: 0 } as never);
+    await act(async () => { root.render(<MatrixCanvas {...baseProps} />); });
+    await act(async () => { vi.advanceTimersByTime(451); });
+    const metadataCalls = vi.mocked(getCoaccMetadata).mock.calls.length;
+    const imageCalls = vi.mocked(getCoaccMatrixImageUrl).mock.calls.length;
+    await act(async () => { useBrowserStore.getState().setMinFootprints(-1); });
+    await act(async () => { vi.advanceTimersByTime(451); });
+    expect(vi.mocked(getCoaccMetadata).mock.calls.length).toBeGreaterThan(metadataCalls);
+    expect(vi.mocked(getCoaccMatrixImageUrl).mock.calls.length).toBeGreaterThan(imageCalls);
+    useBrowserStore.setState({ minFootprints: 5 } as any);
+  });
+
   it('clears the loading indicator after an empty matrix response', async () => {
     const metadata = deferred<any>();
     vi.mocked(getCoaccMetadata).mockReturnValueOnce(metadata.promise);

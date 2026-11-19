@@ -221,7 +221,10 @@ it('keeps decoded regions across viewport reports and invalidates on mutations',
   vi.stubGlobal('fetch', fetchMock);
   try {
     const before = readRegionGeneration();
-    for (const path of ['/api/render/live_state', '/api/tabs/heartbeat?tab=test', '/api/jupyter/settings/sync', '/api/jupyter/browser_order', '/api/jupyter/sync_peaks', '/api/scan_peaks?chrom=chr1&start=0&end=100']) {
+    for (const path of ['/api/render/live_state', '/api/tabs/heartbeat?tab=test', '/api/jupyter/settings/sync', '/api/jupyter/browser_order', '/api/jupyter/sync_peaks', '/api/scan_peaks?chrom=chr1&start=0&end=100',
+      // The Quality group's read-only counts: firing as a view settles, it used to drop the
+      // planned read prefetch (every pan then waited for a cold load).
+      '/api/quality/impact']) {
       await fetchApiResponse(path, { method: 'POST', body: '{}' });
     }
     expect(readRegionGeneration()).toBe(before);

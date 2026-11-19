@@ -145,4 +145,9 @@ describe('compactReadStatus', () => {
     expect(compactReadStatus('0 spanning / 125 overlapping')).toBe('0/125');
     expect(compactReadStatus('Loading...')).toBe('Loading...');
   });
+
+  it('keeps the count when Min footprints or QC-fail hid reads (the suffix stays in the full text)', () => {
+    expect(compactReadStatus('8 of 60 rows drawn · 3 uncalled · 49 with < 5 footprints hidden')).toBe('8/60');
+    expect(compactReadStatus('42 reads · 2 QC-fail reads hidden')).toBe('42');
+  });
 });

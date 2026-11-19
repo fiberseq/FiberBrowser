@@ -65,6 +65,7 @@ async def get_reads_compact(
     fill_gap_size: Optional[int] = Query(None, description="Fill gaps smaller than this size (bp) within footprints"),
     min_fp_quality: int = Query(0, description="Min footprint quality score (0-255). Footprints below threshold are hidden."),
     min_footprints: int = Query(0, description="Min number of footprints per read. Set to 5 to filter reads with <5 footprints."),
+    hide_uncalled: Optional[bool] = Query(None, description="false: Min footprints' \"All reads, including uncalled\" (also asked by min_footprints=-1). Otherwise BAM reads without footprint calls (no MA/Ma nuc/msp/tf group, no ns/nl or as/al arrays) are hidden at every min_footprints"),
     cluster_focus: Optional[str] = Query(None, description="Comma-separated cluster IDs to focus on"),
     filter_ids: Optional[str] = Query(None, description="Comma-separated read IDs (base IDs) to filter to before sampling"),
     filter_set: Optional[str] = Query(None, description="A read-name set registered with POST /api/read_sets (a subset too large for filter_ids); narrowed by filter_ids if both"),
@@ -140,6 +141,7 @@ async def get_reads_compact(
         fill_gap_size=fill_gap_size,
         min_fp_quality=min_fp_quality,
         min_footprints=min_footprints,
+        hide_uncalled=hide_uncalled,
         cluster_focus=cluster_focus,
         filter_ids=filter_ids,
         include_cigar=include_cigar,
@@ -189,6 +191,7 @@ async def get_reads_compact_all(
     fill_gap_size: Optional[int] = Query(None),
     min_fp_quality: int = Query(0),
     min_footprints: int = Query(0, description="Min number of footprints per read. Set to 5 to filter reads with <5 footprints."),
+    hide_uncalled: Optional[bool] = Query(None, description="false: Min footprints' \"All reads, including uncalled\" (also asked by min_footprints=-1). Otherwise BAM reads without footprint calls (no MA/Ma nuc/msp/tf group, no ns/nl or as/al arrays) are hidden at every min_footprints"),
     include_metaprofile: bool = Query(True),
     profile_max_reads: int = Query(1000, description="Stable read cap for compact_all metaprofiles. 0 disables the cap."),
     coverage_sample: bool = Query(False),
@@ -227,6 +230,7 @@ async def get_reads_compact_all(
         spanning=spanning,
         sample_seed=sample_seed,
         min_footprints=min_footprints,
+        hide_uncalled=hide_uncalled,
         include_methylation=include_methylation,
         include_layers=include_layers,
         requested_layers=requested_layers,
@@ -502,10 +506,11 @@ async def quality_filter_impact_endpoint(payload: dict, request: Request, state=
 
     from services.background_work import Cancelled, cancelled_response, dataset_identity, run_background
     from services.working_sets import read_load_token
+    from services.signal_evidence import request_hide_uncalled
     # The client's revision (a data refresh, a new footprint-class result) is part of the question.
     key = ("quality_impact", id(state), chrom, start, end,
            tuple((f["layer"], f["quality_name"], f["min_value"]) for f in filters),
-           dataset_identity(state, dataset_ids), repr(read_load_token(state, chrom)),
+           dataset_identity(state, dataset_ids), repr(read_load_token(state, chrom)), request_hide_uncalled(),
            bool(getattr(state, "infer_legacy_layers", True)), int(getattr(state, "legacy_nuc_min_size", 90) or 90),
            str(payload.get("revision") or ""))
     try:

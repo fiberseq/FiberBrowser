@@ -22,6 +22,7 @@ from services.bigbed_detection import (
 )
 from services.chemistry_metadata import inspect_dataset_chemistry
 from services.diagnostics import env_flag_enabled, log_if_enabled
+from services.fiberhmm_variant_layers import tidy_dataset_layers
 from services.derived_layers import (
     find_derived_layer_bigbeds,
     is_derived_layer_bigbed,
@@ -120,6 +121,15 @@ def _bigbed_has_circular_groups(paths: list[str], sample_per_chrom: int = 20) ->
         except Exception:
             continue
     return False
+
+
+def _is_variant_layer(path: str) -> bool:
+    from services.bigbed_detection import detect_bigbed_autosql_type
+    from services.fiberhmm_variant_layers import VARIANT_LAYER_TYPES
+    try:
+        return detect_bigbed_autosql_type(path) in VARIANT_LAYER_TYPES
+    except Exception:
+        return False
 
 
 def validate_dataset_source(path) -> tuple[str, bool]:
@@ -360,7 +370,10 @@ def configure_bigbed_dataset_layers(state: Any, dataset_id: str, dataset: Datase
     # dropped the remote reads, and an all-remote [footprint, m6a] pair was read
     # as two primary sources (every molecule counted twice) with no companions.
     remote_bigbeds = _remote_bigbed_urls(dataset.paths if len(dataset.paths) > 1 else primary_path)
-    dataset.has_circular_annotations = _bigbed_has_circular_groups(local_bigbeds)
+    # FiberHMM var / sv layers are told by their autoSQL table (a header read) and never
+    # sampled here: their rows are read only when the Variants panel or overlay asks.
+    variant_paths = {p for p in local_bigbeds + remote_bigbeds if _is_variant_layer(p)}
+    dataset.has_circular_annotations = _bigbed_has_circular_groups([p for p in local_bigbeds if p not in variant_paths])
     is_group_source = (len(local_bigbeds) + len(remote_bigbeds) > 1
                        or (not is_url(primary_path) and os.path.isdir(primary_path)))
     if is_group_source:
@@ -369,6 +382,11 @@ def configure_bigbed_dataset_layers(state: Any, dataset_id: str, dataset: Datase
         data_paths: list[str] = []
         path_layers: dict[str, str] = {}
         for path in local_bigbeds + remote_bigbeds:
+            if path in variant_paths:
+                data_paths.append(path)
+                path_layers[path] = detect_overlay_type(path)
+                layer_files.setdefault(path_layers[path], []).append(path)
+                continue
             if is_annotation_bigbed(path):
                 annotation_paths.append(path)
                 continue
@@ -394,6 +412,8 @@ def configure_bigbed_dataset_layers(state: Any, dataset_id: str, dataset: Datase
         add_legacy_inferred_layers(dataset)
         # fibertools/FIRE per-fiber bigBeds carry m6A / 5mC marks themselves.
         for path in data_paths:
+            if path in variant_paths:
+                continue
             for mark_layer in fire_bigbed_mark_layers(path):
                 dataset.available_layers[mark_layer] = True
         for layer_id in getattr(dataset, "derived_layers", {}) or {}:
@@ -404,6 +424,7 @@ def configure_bigbed_dataset_layers(state: Any, dataset_id: str, dataset: Datase
             if layer_type != primary_layer
         }
         add_m5c_interval_layer(dataset)
+        tidy_dataset_layers(dataset)
         if data_paths:
             priority = {
                 'footprint': 0, 'nuc': 0, 'tf': 1, 'msp': 2,
@@ -424,16 +445,19 @@ def configure_bigbed_dataset_layers(state: Any, dataset_id: str, dataset: Datase
         discover_derived_layer_files(dataset, primary_path)
         return
 
-    detected_type = 'unknown' if is_annotation_bigbed(primary_path) else detect_overlay_type(primary_path)
+    primary_is_variant = primary_path in variant_paths
+    detected_type = ('unknown' if not primary_is_variant and is_annotation_bigbed(primary_path)
+                     else detect_overlay_type(primary_path))
     if detected_type == 'unknown':
         detected_type = 'footprint'
     dataset.layer_type = detected_type
     dataset.available_layers = {detected_type: True}
     add_legacy_inferred_layers(dataset)
     # fibertools/FIRE per-fiber bigBeds carry m6A / 5mC marks themselves.
-    for mark_layer in fire_bigbed_mark_layers(primary_path):
+    for mark_layer in ([] if primary_is_variant else fire_bigbed_mark_layers(primary_path)):
         dataset.available_layers[mark_layer] = True
     add_m5c_interval_layer(dataset)
+    tidy_dataset_layers(dataset)
     log_dataset_diagnostic(f"  BigBed layer_type: {detected_type}")
 
     if dataset.is_remote or len(dataset.paths) != 1:
@@ -445,6 +469,7 @@ def configure_bigbed_dataset_layers(state: Any, dataset_id: str, dataset: Datase
         for layer_type in companions:
             dataset.available_layers[layer_type] = True
         add_m5c_interval_layer(dataset)
+        tidy_dataset_layers(dataset)
         log_dataset_diagnostic(f"  Companion layers: {companions}")
 
     update_existing_companion_layers(state, dataset_id)
@@ -468,6 +493,7 @@ def update_existing_companion_layers(state: Any, dataset_id: str) -> None:
             for layer_type in companions:
                 existing_ds.available_layers[layer_type] = True
             add_m5c_interval_layer(existing_ds)
+            tidy_dataset_layers(existing_ds)
             invalidate_dataset_caches(state, existing_id)
             log_dataset_diagnostic(f"  Reciprocal companion update for {existing_id}: {companions}")
 

@@ -38,6 +38,12 @@ export interface SignalCounts {
   background: number; detectable: number; unclassified: number; unscored: number; unknown: number;
   structure_scored: number;
   duplicate_hidden?: number; qcfail_hidden?: number; chimera_hidden?: number;
+  /** Reads without footprint calls in view, and how many Min footprints hid as uncalled. */
+  uncalled?: number; uncalled_hidden?: number;
+  /** Min footprints' threshold, and the reads in view it hid for fewer footprint calls. */
+  min_footprints?: number; min_footprints_hidden?: number; few_footprints?: number;
+  /** Alignment extents [start, end) of the uncalled reads hidden (views loaded without a threshold). */
+  uncalled_extents?: [number, number][];
 }
 export const SIGNAL_LABELS: Record<SignalEvidence['status'], string> = {
   background: 'Background-compatible signal', detectable: 'Detectable assay signal',
@@ -56,19 +62,33 @@ export function keepsSignal(signal: SignalEvidence | undefined, filters: SignalF
 }
 
 let source = () => DEFAULT_SIGNAL_FILTERS;
+let hideUncalledSource = () => true;
 /** Installed by the store without introducing a fetch/store import cycle. */
 export function setSignalFilterSource(get: () => SignalFilters): void { source = get; }
+/** Whether Min footprints hides reads without footprint calls (every choice but "All reads,
+ *  including uncalled"), installed by the store. */
+export function setHideUncalledSource(get: () => boolean): void { hideUncalledSource = get; }
 export function signalFilterParams(params: URLSearchParams): URLSearchParams {
   const next = new URLSearchParams(params);
   if (!next.has('signal_filters') && Object.values(source()).some(Boolean)) next.set('signal_filters', JSON.stringify(source()));
+  if (!next.has('hide_uncalled') && !hideUncalledSource()) next.set('hide_uncalled', 'false');
   return next;
 }
-/** Capture the predicate in the URL so shared requests cannot cross settings. */
+/** Capture the predicate in the URL so shared requests cannot cross settings. Every
+ *  analysis request also says when reads without footprint calls are shown
+ *  (hide_uncalled=false; the server hides them by default), so it sees the
+ *  reads the read track shows. */
 export function signalFilterUrl(url: string): string {
   if (!url.startsWith('/api/')) return url;
   const [, query = ''] = url.split('?');
-  if (new URLSearchParams(query).has('signal_filters') || !Object.values(source()).some(Boolean)) return url;
-  return `${url}${query ? '&' : '?'}signal_filters=${encodeURIComponent(JSON.stringify(source()))}`;
+  const present = new URLSearchParams(query);
+  const parts: string[] = [];
+  if (!present.has('signal_filters') && Object.values(source()).some(Boolean)) {
+    parts.push(`signal_filters=${encodeURIComponent(JSON.stringify(source()))}`);
+  }
+  if (!present.has('hide_uncalled') && !hideUncalledSource()) parts.push('hide_uncalled=false');
+  if (!parts.length) return url;
+  return `${url}${query ? '&' : '?'}${parts.join('&')}`;
 }
 
 /** Exact signal counts in this locus, before call filters and display sampling. */
@@ -78,7 +98,17 @@ export function readPolicyHiddenText(counts: SignalCounts): string {
     counts.duplicate_hidden ? `${n(counts.duplicate_hidden)} duplicate reads hidden` : '',
     counts.qcfail_hidden ? `${n(counts.qcfail_hidden)} QC-fail reads hidden` : '',
     counts.chimera_hidden ? `${n(counts.chimera_hidden)} chimeric reads hidden (FiberHMM QC fail)` : '',
+    minFootprintsHiddenText(counts.uncalled_hidden ?? 0, counts.min_footprints_hidden ?? 0, counts.min_footprints ?? 0),
   ].filter(Boolean).join(' · ');
+}
+
+/** The reads Min footprints hid, by reason: "312 uncalled · 40 with < 5 footprints hidden". */
+export function minFootprintsHiddenText(uncalled: number, fewer: number, threshold: number): string {
+  const parts = [
+    uncalled > 0 ? `${uncalled.toLocaleString()} uncalled` : '',
+    fewer > 0 && threshold > 0 ? `${fewer.toLocaleString()} with < ${threshold} footprints` : '',
+  ].filter(Boolean);
+  return parts.length ? `${parts.join(' · ')} hidden` : '';
 }
 
 export function signalCountText(counts: SignalCounts): string {

@@ -262,6 +262,7 @@ def load_direct_reads_for_dataset(
     short_terminal_footprint_bp: Optional[int] = None,
     sv_min_len: int = SV_MIN_LEN_DEFAULT,
     include_sv_seq: bool = False,
+    hide_uncalled: bool = True,
 ) -> list[dict]:
     """Load compact reads directly from BAM/BigBed for non-cacheable options.
 
@@ -296,6 +297,7 @@ def load_direct_reads_for_dataset(
                 short_terminal_footprint_bp=short_terminal_footprint_bp,
                 sv_min_len=sv_min_len,
                 include_sv_seq=include_sv_seq,
+                hide_uncalled=hide_uncalled,
             )
             shift = segment.logical_start - start
             merged_inputs.extend(shift_compact_read(read, shift, segment.logical_start - segment.ref_start)
@@ -327,6 +329,7 @@ def load_direct_reads_for_dataset(
         infer_legacy_layers=infer_legacy_layers,
         legacy_nuc_min_size=legacy_nuc_min_size,
         min_footprints=min_footprints,
+        hide_uncalled=hide_uncalled,
         ml_threshold=ml_threshold,
         short_terminal_footprint_bp=short_terminal_footprint_bp,
         sample_level=(sample_level(state, dataset, chrom, start, end)
@@ -459,6 +462,7 @@ def _compact_reads_payload(
     fill_gap_size: Optional[int] = None,
     min_fp_quality: int = 0,
     min_footprints: int = 0,
+    hide_uncalled: Optional[bool] = None,
     cluster_focus: Optional[str] = None,
     filter_ids: Optional[str | list[str]] = None,  # a list: exact names (a registered read set)
     include_cigar: bool = False,
@@ -518,6 +522,7 @@ def _compact_reads_payload(
         dataset_id=dataset_id,
         sample_seed=sample_seed,
         min_footprints=min_footprints,
+        hide_uncalled=hide_uncalled,
         include_methylation=include_methylation,
         include_layers=include_layers,
         requested_layers=requested_layers,
@@ -583,6 +588,9 @@ def _compact_reads_payload(
             error=f"Dataset '{dataset_id}' not found",
         )
 
+    # Uncalled reads: hidden at every Min footprints unless "All reads, including uncalled" (BAM only).
+    from services.working_sets import effective_hide_uncalled
+    hide_uncalled = effective_hide_uncalled(dataset, query.hide_uncalled)
     bam_warning = bam_index_warning(dataset)
     needs_direct_load = needs_direct_read_load(
         dataset,
@@ -640,6 +648,7 @@ def _compact_reads_payload(
             read_load_token(state, chrom, direct_terminal_bp, sample_level=direct_level),
             sv_floor,
             include_sv_seq,
+            hide_uncalled,
         )
 
         if not hasattr(state, "_methylation_cache"):
@@ -655,7 +664,7 @@ def _compact_reads_payload(
                 include_layer_qualities=include_layer_qualities, infer_legacy_layers=infer_legacy_layers,
                 legacy_nuc_min_size=legacy_nuc_min_size, include_duplicates=include_duplicates, include_qcfail=include_qcfail,
                 min_footprints=direct_min_footprints, short_terminal_footprint_bp=direct_terminal_bp,
-                sv_min_len=sv_floor, include_sv_seq=include_sv_seq,
+                sv_min_len=sv_floor, include_sv_seq=include_sv_seq, hide_uncalled=hide_uncalled,
             )
 
         generation = dataset_generation(state, dataset_id)
@@ -758,7 +767,7 @@ def _compact_reads_payload(
                         requested_layers=None, include_layer_qualities=False,
                         infer_legacy_layers=False, legacy_nuc_min_size=legacy_nuc_min_size,
                         include_duplicates=include_duplicates, include_qcfail=include_qcfail, min_footprints=direct_min_footprints,
-                        short_terminal_footprint_bp=direct_terminal_bp,
+                        short_terminal_footprint_bp=direct_terminal_bp, hide_uncalled=hide_uncalled,
                     )
                 }
 
@@ -945,6 +954,7 @@ def _compact_reads_payload(
             infer_legacy_layers=infer_legacy_layers,
             legacy_nuc_min_size=legacy_nuc_min_size,
             min_footprints=effective_min_footprints,
+            hide_uncalled=hide_uncalled,
         )
         server_timings["broad_cache_lookup_ms"] = phase_ms(phase_t0)
         viewport_offset = start - broad_key[2] if broad_key else 0
@@ -1111,6 +1121,7 @@ def _compact_reads_payload(
                 max_reads=projection_max_reads,
                 spanning=spanning,
                 min_footprints=min_footprints,
+                hide_uncalled=hide_uncalled,
                 include_methylation=include_methylation,
                 include_layers=include_layers,
                 requested_layers=requested_layers,
@@ -1273,8 +1284,15 @@ def compact_reads_payload_for_request(state, *, pin_ids: Optional[str] = None, *
     how many reads it hid (``hidden_by_min_footprints``), so the read track
     can say a filter is responsible (short reads and amplicons rarely carry 5
     footprints) instead of looking empty. Counted only in that case: one more
-    load of the view with every other filter as asked.
+    load of the view with every other filter as asked (uncalled reads stay
+    hidden: the two filters are independent).
+
+    Min footprints never shows reads without footprint calls (any threshold, 0
+    included); ``hide_uncalled=false`` is its "All reads, including uncalled" choice,
+    which a negative ``min_footprints`` also asks for. ``signal_counts`` says how many
+    reads it hid by reason (``uncalled_hidden``, ``min_footprints_hidden``).
     """
+    kwargs = normalize_min_footprints_choice(kwargs)
     from services.read_pins import parse_pin_ids, pinned_reads
     with pinned_reads(parse_pin_ids(unwrap_query_default(pin_ids, None))):
         payload = _compact_reads_payload(state, **kwargs)
@@ -1293,9 +1311,13 @@ def compact_reads_payload_for_request(state, *, pin_ids: Optional[str] = None, *
         if hidden > 0:
             payload["hidden_by_min_footprints"] = hidden
     from services.signal_counts import attach_signal_counts
+    from services.analysis_query import _resolve_hide_uncalled
     signal_t0 = time.perf_counter()
+    # signal_counts: the reads Min footprints hid here, by reason.
     attach_signal_counts(payload, state, payload.get("dataset_id") or kwargs.get("dataset_id"),
                          kwargs["chrom"], kwargs["start"], kwargs["end"],
+                         hide_uncalled=_resolve_hide_uncalled(kwargs.get("hide_uncalled")),
+                         min_footprints=_effective_min_footprints(state, kwargs.get("dataset_id"), min_footprints),
                          include_duplicates=query_bool(kwargs.get("include_duplicates"), False), include_qcfail=query_bool(kwargs.get("include_qcfail"), False),
                          spanning=query_bool(kwargs.get("spanning"), False))
     signal_ms = (time.perf_counter() - signal_t0) * 1000
@@ -1303,6 +1325,28 @@ def compact_reads_payload_for_request(state, *, pin_ids: Optional[str] = None, *
     if 'server_elapsed_ms' in payload:
         payload['server_elapsed_ms'] += signal_ms
     return payload
+
+
+def normalize_min_footprints_choice(kwargs: dict) -> dict:
+    """Min footprints' "All reads, including uncalled" choice as a negative
+    ``min_footprints`` (the frontend's value): no threshold, uncalled reads shown."""
+    raw = int(query_int(kwargs.get("min_footprints", 0), 0) or 0)
+    if raw >= 0:
+        return kwargs
+    out = {**kwargs, "min_footprints": 0}
+    from services.signal_evidence import parse_hide_uncalled
+    if parse_hide_uncalled(getattr(kwargs.get("hide_uncalled"), "default", kwargs.get("hide_uncalled"))) is None:
+        out["hide_uncalled"] = False
+    return out
+
+
+def _effective_min_footprints(state, dataset_id, min_footprints) -> int:
+    """The threshold the loaders applied (none on a dataset without footprint calls)."""
+    from services.query_params import resolve_dataset_id
+    dataset = state.get_dataset(resolve_dataset_id(state, dataset_id)) if dataset_id else None
+    if dataset is not None and not getattr(dataset, "available_layers", {}).get("footprint", True):
+        return 0
+    return max(0, int(min_footprints or 0))
 
 
 def _empty_payload(payload) -> bool:
@@ -1386,6 +1430,7 @@ def compact_all_dataset_result(
     include_qcfail: bool = False,
     min_sv_len: int = SV_MIN_LEN_DEFAULT,
     include_sv_summary: bool = True,
+    hide_uncalled: Optional[bool] = None,
 ):
     """Build one dataset payload for `/api/reads/compact_all`.
 
@@ -1414,6 +1459,12 @@ def compact_all_dataset_result(
         effective_include_layers = True
 
     warning = bam_index_warning(dataset)
+    from services.working_sets import effective_hide_uncalled
+    if hide_uncalled is None:
+        hide_uncalled = getattr(query, "hide_uncalled", None)
+    from services.analysis_query import _resolve_hide_uncalled
+    request_hides_uncalled = _resolve_hide_uncalled(hide_uncalled)  # the counts' setting
+    hide_uncalled = effective_hide_uncalled(dataset, hide_uncalled)
     direct = needs_direct_read_load(
         dataset,
         min_fp_quality=min_fp_quality,
@@ -1450,6 +1501,7 @@ def compact_all_dataset_result(
                 if getattr(dataset, "available_layers", {}).get("footprint", True)
                 else 0
             ),
+            hide_uncalled=hide_uncalled,
         )
         server_timings["direct_load_ms"] = phase_ms(phase_t0)
         # Working sets apply the active quality gates; so must this path.
@@ -1571,7 +1623,8 @@ def compact_all_dataset_result(
     server_timings["sv_summary_ms"] = phase_ms(phase_t0)
     from services.signal_counts import attach_signal_counts
     phase_t0 = time.perf_counter()
-    attach_signal_counts(result, state, dataset_id, chrom, start, end,
+    attach_signal_counts(result, state, dataset_id, chrom, start, end, hide_uncalled=request_hides_uncalled,
+                         min_footprints=(min_footprints if getattr(dataset, "available_layers", {}).get("footprint", True) else 0),
                          include_duplicates=include_duplicates, include_qcfail=include_qcfail, spanning=spanning)
     server_timings["signal_counts_ms"] = phase_ms(phase_t0)
     result["server_timings"] = {name: round(elapsed, 1) for name, elapsed in server_timings.items()}

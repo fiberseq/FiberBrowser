@@ -9,6 +9,7 @@ import { searchGene } from '../api/reference';
 import { getStateKeyMap, getTargetDatasetIds, isLinkedGroup, useBrowserStore } from '../stores/browserStore';
 import { seedHistoryBaseline } from '../stores/historySlice';
 import { clusterRunLabel } from '../stores/clusterSlice';
+import { MIN_FOOTPRINTS_ALL_READS } from '../stores/uiSlice';
 import { chartRoundStillCurrent, clusterMergeInputs, type ClusterMergeInputs } from '../components/controls/cluster-detail/clusterChartScope';
 import type { ClusterOperationRound } from '../components/controls/cluster-detail/clusterOperationRounds';
 import type { PanelView } from '../utils/panelScope';
@@ -1460,9 +1461,16 @@ export async function executeBrowserAction(
   }
 
   if (type === 'set_min_footprints') {
+    const setMinFootprints = (useBrowserStore.getState() as unknown as { setMinFootprints?: (v: number) => void }).setMinFootprints;
+    // Its last choice, "All reads, including uncalled" (-1): by name or as a negative value.
+    const raw = typeof action.value === 'string' ? action.value.trim().toLowerCase() : action.value;
+    if ((typeof raw === 'string' && /^(all( reads)?(,? including uncalled)?|(include|including) uncalled|uncalled|-1)$/.test(raw))
+      || (typeof raw === 'number' && raw < 0)) {
+      setMinFootprints?.(MIN_FOOTPRINTS_ALL_READS);
+      return 'Min footprints set to All reads, including uncalled.';
+    }
     const value = valueAsNumber(action.value, 0);
-    (useBrowserStore.getState() as unknown as { setMinFootprints?: (v: number) => void })
-      .setMinFootprints?.(Math.max(0, Math.round(value)));
+    setMinFootprints?.(Math.max(0, Math.round(value)));
     return `Min footprints per read set to ${Math.round(value)}.`;
   }
 

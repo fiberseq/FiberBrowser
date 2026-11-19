@@ -19,12 +19,14 @@ export interface PerReadStats {
   read_length: number;
   aligned_span: number;
   nm: number | null;
-  footprint_count: number;
-  nucleosome_count: number;
-  subnuc_count: number;
-  avg_footprint_size: number;
-  median_footprint_size: number;
-  accessibility_pct: number;
+  /** "not called": the footprint caller skipped this read (no call tags); footprint fields are then null. */
+  call_status?: "called" | "not called";
+  footprint_count: number | null;
+  nucleosome_count: number | null;
+  subnuc_count: number | null;
+  avg_footprint_size: number | null;
+  median_footprint_size: number | null;
+  accessibility_pct: number | null;
   methyl_count: number | null;
   methyl_pct: number | null;
   // Single-read BAM details
@@ -47,12 +49,14 @@ export interface ReadStatsAggregate {
   n_reads: number;
   n_datasets: number;
   strand_counts: Record<string, number>;
-  mean_accessibility_pct?: number;
-  mean_footprint_count?: number;
-  mean_footprint_size?: number;
+  mean_accessibility_pct?: number | null;
+  mean_footprint_count?: number | null;
+  /** Reads without footprint calls, left out of the footprint and accessibility means. */
+  n_not_called?: number;
+  mean_footprint_size?: number | null;
   mean_read_length?: number;
   mean_mapq?: number | null;
-  median_footprint_size?: number;
+  median_footprint_size?: number | null;
   hist_accessibility?: HistogramBin[];
   hist_fp_size?: HistogramBin[];
   hist_fp_count?: HistogramBin[];
@@ -60,7 +64,13 @@ export interface ReadStatsAggregate {
   hist_mapq?: HistogramBin[] | null;
   mean_methyl_pct?: number | null;
   hist_methyl_pct?: HistogramBin[];
+  /** Reads in the regions Min footprints hid: without footprint calls, and with < min_footprints calls. */
+  hide_uncalled?: boolean;
+  n_hidden_uncalled?: number;
+  min_footprints?: number;
+  n_hidden_min_footprints?: number;
 }
+
 
 export interface ReadStatsResponse {
   per_read: PerReadStats[];
@@ -106,6 +116,10 @@ export async function fetchReadStats(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       include_qcfail: Boolean(useBrowserStore.getState().showQcFailReads),
+      // Min footprints as the read track applies it (-1: "All reads, including uncalled"):
+      // the summary says which reads it hid, by reason.
+      hide_uncalled: useBrowserStore.getState().minFootprints !== -1,
+      min_footprints: Math.max(0, useBrowserStore.getState().minFootprints || 0),
       read_ids_by_dataset: readIdsByDataset,
       sample_seed: sampleSeed ?? null,
       ...(options?.extraRegions?.length ? { extra_regions: options.extraRegions } : {}),

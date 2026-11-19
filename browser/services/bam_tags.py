@@ -37,6 +37,137 @@ def has_interval_tags(read, start_tag: str, length_tag: str) -> bool:
     return interval_tag_pair(read, start_tag, length_tag)[0] is not None
 
 
+_CALL_GROUPS = ("nuc", "msp", "tf")
+
+
+def read_has_footprint_calls(read) -> bool:
+    """Whether a BAM record carries any footprint caller annotation.
+
+    A record a caller skipped (too short, low MAPQ, no usable marks) has none:
+    no non-empty MA/Ma nuc/msp/tf group and no non-empty legacy ns/nl or as/al
+    array pair. Its displayed row is only a placeholder span, so footprint and
+    accessibility statistics for it are unknown, not "0 footprints, 100%
+    accessible"; Min footprints hides it at every threshold. A called read
+    that is fully accessible (msp only, or an empty nuc group beside msp) is
+    called. A record without tag access (a lightweight stub) counts as called.
+    One rule for the read loaders, signal counts and read stats."""
+    if not callable(getattr(read, "has_tag", None)):
+        return True
+    for tag in ("MA", "Ma"):
+        try:
+            if read.has_tag(tag):
+                ma = str(read.get_tag(tag))
+                for section in ma.split(";")[1:]:
+                    head, _, body = section.partition(":")
+                    name = head.rstrip("PQ").rstrip("+-.")
+                    if name in _CALL_GROUPS and body.strip(","):
+                        return True
+        except (KeyError, ValueError, TypeError):
+            continue
+    for start_tag, length_tag in (("ns", "nl"), ("as", "al")):
+        # The reader's array-pair rule: a scalar ns:i (Dorado's signal sample count) or a string is no call.
+        try:
+            starts, _lengths = interval_tag_pair(read, start_tag, length_tag)
+            if starts is not None and len(starts):
+                return True
+        except (ValueError, TypeError):
+            continue
+    return False
+
+
+_ALIGNED_OPS = (0, 7, 8)  # M, =, X
+
+
+def _exact_mapped_count(read, starts, lengths) -> int:
+    """The loader's own steps: CigarCoordMapper.query_to_ref + map_tagged_footprints."""
+    from models.domain import CigarCoordMapper
+    from services.compact_read_loader import map_tagged_footprints
+    mapper = CigarCoordMapper(getattr(read, "cigartuples", None) or (), read.reference_start)
+    return len(map_tagged_footprints(starts, lengths, None, mapper.query_to_ref, min_fp_quality=0))
+
+
+def _mapped_legacy_count(read, starts, lengths, legacy_frame) -> int:
+    """How many legacy (ns/nl, or as/al-complement) footprints the read loader places on
+    the reference (its frame flip, then CigarCoordMapper + map_tagged_footprints at
+    min_fp_quality 0), so Min footprints' counts agree with what it hides.
+
+    The mapper drops a footprint only when its start has no reference position (a soft
+    clip, or past the query) and no base of it is aligned; an insertion maps to its
+    anchor. That needs only the soft clips and the aligned span, which pysam gives in C
+    (query_alignment_start/end, get_cigar_stats). A read whose aligned part begins or ends
+    with an insertion, or with a single aligned block and insertions (the mapper's
+    single-block path), is mapped exactly instead."""
+    from services.compact_read_loader import parse_int_tag_values
+    starts, lengths = parse_int_tag_values(starts), parse_int_tag_values(lengths)
+    if starts is None or lengths is None or len(starts) != len(lengths):
+        return 0  # the loader skips such a read entirely
+    if not starts:
+        return 0
+    molecular = read_legacy_tags_are_molecular(read, legacy_frame or (False, True))
+    starts = legacy_starts_in_seq_frame(starts, lengths, read, molecular)
+    cigar = getattr(read, "cigartuples", None)
+    if not cigar or not hasattr(read, "get_cigar_stats"):
+        return _exact_mapped_count(read, starts, lengths)
+    blocks = read.get_cigar_stats()[1]
+    aligned_blocks = int(blocks[0] + blocks[7] + blocks[8])
+    # The fast path below holds only when the aligned part begins and ends with an aligned
+    # op (M/=/X) right inside the clips (S/H). Anything else (no aligned block, or an I, D,
+    # N or P next to a clip) and a single aligned block with insertions go through the
+    # loader's exact mapper.
+    head = next((op for op, _length in cigar if op not in (4, 5)), None)
+    tail = next((op for op, _length in reversed(cigar) if op not in (4, 5)), None)
+    if (aligned_blocks == 0 or head not in (0, 7, 8) or tail not in (0, 7, 8)
+            or (aligned_blocks == 1 and blocks[1])):
+        return _exact_mapped_count(read, starts, lengths)
+    first, last = read.query_alignment_start, read.query_alignment_end  # aligned span [first, last)
+    leading_clip = first > 0
+    count = 0
+    for start, length in zip(starts, lengths):
+        end = start + length - 1
+        if first <= start < last:
+            count += 1
+        elif aligned_blocks == 1:
+            # Single aligned block: kept when the footprint overlaps it.
+            count += end >= start and start < last and end >= first
+        elif start < first:
+            # Before the aligned span: in the leading clip (kept by its aligned part), else
+            # (no clip, a negative start) mapped through the first block.
+            count += (end >= start and end >= first) if leading_clip else 1
+        # In the trailing clip or past the query: no reference position, no aligned base.
+    return count
+
+
+def footprint_call_count(read, legacy_frame=None) -> int:
+    """Whole-fiber footprint calls a record carries, as the read loaders count them for
+    "Min footprints": its ns/nl footprints that place on the reference, else the
+    stretches between its as/al MSPs that do, else its MA/Ma nucleosome and TF
+    annotations. 0 for an uncalled record. ``legacy_frame``: the file's legacy-tag
+    frame (``services.legacy_frame.bam_legacy_frame_for``; default: decided per read)."""
+    try:
+        starts, lengths = interval_tag_pair(read, "ns", "nl")
+        if starts is not None:
+            return _mapped_legacy_count(read, starts, lengths, legacy_frame)
+        msp_starts, msp_lengths = interval_tag_pair(read, "as", "al")
+        if msp_starts is not None:
+            from services.compact_read_loader import msp_complement
+            comp_starts, comp_lengths = msp_complement(msp_starts, msp_lengths, getattr(read, "query_length", 0) or 0)
+            return _mapped_legacy_count(read, comp_starts, comp_lengths, legacy_frame)
+        from services.compact_read_loader import ma_footprint_count
+        for tag in ("MA", "Ma"):
+            if read.has_tag(tag):
+                return ma_footprint_count(read.get_tag(tag))
+    except (KeyError, ValueError, TypeError, AttributeError):
+        pass
+    return 0
+
+
+def footprint_call_summary(read, legacy_frame=None) -> tuple[bool, int]:
+    """``(called, footprint calls)``: ``read_has_footprint_calls`` and, for a called
+    record, ``footprint_call_count`` (0 for an uncalled one)."""
+    called = read_has_footprint_calls(read)
+    return called, (footprint_call_count(read, legacy_frame) if called and callable(getattr(read, "has_tag", None)) else 0)
+
+
 def _header_declares_coord_molecular(hdr: dict) -> bool:
     """Return True when @PG/@CO explicitly declares molecular coordinates."""
     for pg in hdr.get("PG", []) or []:

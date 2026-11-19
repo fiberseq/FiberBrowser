@@ -1,4 +1,4 @@
-import { setSignalFilterSource } from '../utils/signalFilters';
+import { setHideUncalledSource, setSignalFilterSource } from '../utils/signalFilters';
 import { setAccessibilityLabelSource } from '../utils/layerColors';
 import { clearLoadedReadRegions } from '../api/loadedReadRegion';
 import { useRunResultStore } from './runResultStore';
@@ -222,6 +222,8 @@ useBrowserStore.subscribe((state, previous) => {
 });
 
 setSignalFilterSource(() => useBrowserStore.getState().signalFilters);
+// Min footprints' "All reads, including uncalled" choice: requests say so (hide_uncalled=false).
+setHideUncalledSource(() => useBrowserStore.getState().minFootprints !== -1);
 // The accessibility layer is named "FIRE" when the loaded files carry FIRE scores
 // (utils/layerColors getLayerLabel): keep that name in step with the datasets.
 let lastLabelDatasets: BrowserState['datasets'] | undefined;

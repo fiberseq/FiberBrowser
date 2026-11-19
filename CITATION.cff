@@ -4,7 +4,7 @@ message: >-
   (preferred-citation), and give the FiberBrowser version you used.
 type: software
 title: "FiberBrowser: a genome browser for single-molecule chromatin data (Fiber-seq and DAF-seq)"
-version: 3.0.5
+version: 3.0.6
 date-released: "2026-11-19"
 authors:
   - name: "FiberBrowser Authors"

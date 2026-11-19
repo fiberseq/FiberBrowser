@@ -376,9 +376,11 @@ function workingSetParams(state: BrowserState, view: PanelView, datasetIds: stri
     hide_terminal_gaps: state.hideTerminalGaps.toString(),
     terminal_gap_threshold: state.terminalGapThreshold.toString(),
     min_fp_quality: state.minFpQuality.toString(),
-    min_footprints: state.minFootprints.toString(),
+    min_footprints: String(Math.max(0, state.minFootprints || 0)),
     include_duplicates: state.showDuplicateReads.toString(),
     include_qcfail: state.showQcFailReads.toString(),
+    // Min footprints' "All reads, including uncalled" (-1) shows reads without footprint calls.
+    hide_uncalled: String(state.minFootprints !== -1),
     infer_legacy_layers: state.legacyLayerInference.toString(),
     legacy_nuc_min_size: state.legacyNucMinSize.toString(),
     sample_seed: state.analysisSampleSeed,

@@ -13,6 +13,8 @@ import { splitBySv } from '../../utils/svAlleleSplit';
 import { REQUIRE_ALL_SVS_HELP, SV_GROUP_SPLIT_NOTE, groupBySelectedSvs, splitBySelectedSvs, goToSvView, svComboView, svFeatureInView, svFeatureIs, svSelectionPlace, svSelectionTitle, toggleSvFeature } from './svFeatures';
 import { svAlleleLabel } from '../../components/tracks/read-track/svDrawing';
 import { targetForCluster } from '../insertion/insertionLensModel';
+import { hasVariantLayers } from '../fiberhmmLayers/model';
+import { VARIANT_LAYER_NEEDS_BAM } from './CombosTab';
 import { openInsertionLens } from '../insertion/insertionLensTarget';
 import { AnalysisButton, CheckboxRow } from '../../components/controls/shared';
 import { panelForDataset } from './useSnpScan';
@@ -51,6 +53,9 @@ export function SvTab({ datasetId: chosen, params, duplicates }: { datasetId: st
   const identity = useBrowserStore(s => variantScanIdentity(s, datasetId));
   const svMinLen = useBrowserStore(s => s.svMinLen);
   const qcfail = useBrowserStore(s => Boolean(s.showQcFailReads));
+  const uncalled = useBrowserStore(s => s.minFootprints === -1);
+  // FiberHMM var / sv layers: SV–SNP linkage needs the BAM for now (the button is disabled, and says why).
+  const layered = useBrowserStore(s => hasVariantLayers(s.datasets.find(d => d.id === datasetId)));
   const [clusters, setClusters] = useState<SvClusterInView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -59,7 +64,7 @@ export function SvTab({ datasetId: chosen, params, duplicates }: { datasetId: st
   // What the listed SVs were found for: while a refresh for another view (or dataset, or setting) is on its way, the
   // rows are of the old view and their actions would act on it under the new one: shown, but greyed and not
   // actionable (round 2, N16).
-  const viewKey = JSON.stringify([targetKey, identity, svMinLen, duplicates, qcfail]);
+  const viewKey = JSON.stringify([targetKey, identity, svMinLen, duplicates, qcfail, uncalled]);
   const currentView = useRef(viewKey);
   currentView.current = viewKey;
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
@@ -213,8 +218,8 @@ export function SvTab({ datasetId: chosen, params, duplicates }: { datasetId: st
                       Open in lens
                     </AnalysisButton>
                   )}
-                  <AnalysisButton variant="soft" theme="rose" onClick={() => loadLinkage(c)} disabled={stale || link === 'loading'} data-testid="variants-sv-linkage"
-                    title="Which SNP alleles the carriers have and the reference reads don't (or the other way round)">
+                  <AnalysisButton variant="soft" theme="rose" onClick={() => loadLinkage(c)} disabled={stale || link === 'loading' || layered} data-testid="variants-sv-linkage"
+                    title={layered ? VARIANT_LAYER_NEEDS_BAM : "Which SNP alleles the carriers have and the reference reads don't (or the other way round)"}>
                     SNP alleles
                   </AnalysisButton>
                 </div>

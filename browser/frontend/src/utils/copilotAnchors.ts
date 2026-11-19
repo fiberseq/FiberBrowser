@@ -326,8 +326,10 @@ export const COPILOT_ANCHORS: Record<string, AnchorDef> = {
   },
   set_min_footprints: {
     buttonAnchor: 'min-footprints-input',
-    manualHow: () => 'Sidebar → View → Min footprints field.',
-    describe: (a) => `Min footprints per read set to ${_asInt(a.value) ?? '?'}.`,
+    manualHow: () => 'Sidebar → View → Min footprints field (its last choice: All reads, including uncalled).',
+    describe: (a) => (_asInt(a.value) ?? 0) < 0 || /all|uncalled/i.test(String(a.value ?? ''))
+      ? 'Min footprints set to All reads, including uncalled.'
+      : `Min footprints per read set to ${_asInt(a.value) ?? '?'}.`,
   },
   set_spanning_only: {
     buttonAnchor: 'spanning-only-toggle',

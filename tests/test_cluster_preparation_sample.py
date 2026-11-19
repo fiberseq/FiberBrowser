@@ -1,4 +1,5 @@
 """Early sampling keeps complete molecular evidence and isolated caches."""
+import array
 import random
 
 import pytest
@@ -67,6 +68,9 @@ def test_qcfail_cannot_consume_preparation_sample_slots(tmp_path):
             read.reference_start = 100
             read.cigartuples = [(0, 300)]
             read.flag = 0 if name in eligible else 0x200
+            # Called reads: only the QC-fail flag decides eligibility here.
+            read.set_tag('ns', array.array('I', [10]))
+            read.set_tag('nl', array.array('I', [100]))
             out.write(read)
     pysam.index(str(path))
     state = BrowserState(None, reference_only=True)

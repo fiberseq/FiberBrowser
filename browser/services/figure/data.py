@@ -51,6 +51,7 @@ class DataCache:
                 layer_names=",".join(layers) or None, include_layer_qualities=True,
                 fill_gap_size=int(fe.get("fillGapSize") or 0) if fe.get("fillSmallGaps") else None,
                 min_fp_quality=int(fe.get("minFpQuality") or 0),
+                # -1: "All reads, including uncalled" (uncalled reads are hidden at every threshold).
                 min_footprints=int(fe.get("minFootprints") or 0),
                 filter_ids=",".join(filter_ids) if filter_ids else None,
                 hide_terminal_gaps=bool(fe.get("hideTerminalGaps", True)),

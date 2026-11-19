@@ -188,6 +188,7 @@ def get_reads_payload(
     spanning: bool = True,
     min_footprints: int = 0,
     sample_seed: Optional[str] = None,
+    hide_uncalled: Optional[bool] = None,
 ) -> dict:
     """Get compact reads for notebook analysis from the working set."""
     if chrom is None:
@@ -206,6 +207,7 @@ def get_reads_payload(
         dataset_id=dataset_id,
         sample_seed=sample_seed,
         min_footprints=min_footprints,
+        hide_uncalled=hide_uncalled,
     )
     if not query.dataset_ids:
         return {"reads": [], "error": "No datasets available"}
@@ -240,6 +242,7 @@ def get_reads_payload(
         "dataset_id": resolved_id,
         "spanning": spanning,
         "min_footprints": min_footprints,
+        "hide_uncalled": query.hide_uncalled,
         "sample_seed": query.sample_seed,
     }
 

@@ -54,6 +54,7 @@ export async function getCoverage(
   options?: RequestInit,
   includeDuplicates = false,
   includeQcFail = false,
+  hideUncalled = true,
 ): Promise<CoverageResponse> {
   const params = new URLSearchParams({
     chrom,
@@ -65,6 +66,8 @@ export async function getCoverage(
   // Duplicate-flagged molecules count only when the read panel shows them.
   if (includeDuplicates) params.set('include_duplicates', 'true');
   if (includeQcFail) params.set('include_qcfail', 'true');
+  // Reads without footprint calls count only when the read panel shows them.
+  params.set('hide_uncalled', String(hideUncalled));
   return fetchJsonSharedGet(coverageQueryKey(params), options);
 }
 
