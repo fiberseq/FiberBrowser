@@ -360,6 +360,7 @@ def qc_json_path(outputs: Optional[dict], outdir: Optional[str] = None) -> Optio
 
 def _count_bam(path: str, cap: int) -> dict:
     import pysam
+    from services.bam_tags import interval_tag_pair
     records = mapped = called = duplicates = 0
     nucleosomes = 0
     approximate = False
@@ -372,11 +373,15 @@ def _count_bam(path: str, cap: int) -> dict:
                 mapped += 1
             if read.is_duplicate:
                 duplicates += 1
-            if read.has_tag("MA") or read.has_tag("nl") or read.has_tag("ns"):
+            # ns/nl only as an array pair: Dorado writes a scalar ns:i (signal samples) on uncalled reads.
+            # A read with fibertools Ma or an as/al MSP pair is called too (before, a scalar ns counted it).
+            footprints = interval_tag_pair(read, "ns", "nl")[1]
+            msps = interval_tag_pair(read, "as", "al")[1]
+            if read.has_tag("MA") or read.has_tag("Ma") or footprints is not None or msps is not None:
                 called += 1
-                if read.has_tag("nl"):
+                if footprints is not None:
                     with contextlib.suppress(Exception):
-                        nucleosomes += len(read.get_tag("nl"))
+                        nucleosomes += len(footprints)
             if records >= cap:
                 approximate = True
                 break

@@ -22,6 +22,7 @@ from services.circular_genome import (
     concat_compact_read_parts,
     wrap_passes,
 )
+from services.bam_tags import interval_tag_pair
 from services.diagnostics import env_flag_enabled, log_if_enabled
 from utils.validation import is_url
 
@@ -2000,8 +2001,10 @@ def _build_compact_reads_from_bam_region(
             rq_tag = None
 
             try:
-                ns_tag = read.get_tag("ns")
-                nl_tag = read.get_tag("nl")
+                # Both tags, as arrays (a scalar ns:i is Dorado's signal sample count, not footprints).
+                ns_tag, nl_tag = interval_tag_pair(read, "ns", "nl")
+                if ns_tag is None:
+                    raise KeyError("ns")
                 try:
                     nq_tag = read.get_tag("nq")
                 except KeyError:
@@ -2015,8 +2018,9 @@ def _build_compact_reads_from_bam_region(
                 except KeyError:
                     pass
                 try:
-                    fire_starts = read.get_tag("as")
-                    fire_lengths = read.get_tag("al")
+                    fire_starts, fire_lengths = interval_tag_pair(read, "as", "al")
+                    if fire_starts is None:
+                        raise KeyError("as")
                     try:
                         fire_quals = read.get_tag("aq")
                         fire_qual_values = parse_optional_int_tag_values(fire_quals) or []
@@ -2032,8 +2036,9 @@ def _build_compact_reads_from_bam_region(
 
             if ns_tag is None:
                 try:
-                    msp_starts = read.get_tag("as")
-                    msp_lengths = read.get_tag("al")
+                    msp_starts, msp_lengths = interval_tag_pair(read, "as", "al")
+                    if msp_starts is None:
+                        raise KeyError("as")
                     # as/al are accessible MSPs, not footprints: the footprints
                     # are the stretches between them (same frame as the MSPs).
                     ns_tag, nl_tag = msp_complement(msp_starts, msp_lengths, read.query_length or 0)

@@ -19,6 +19,24 @@ _REVERSE_COMPLEMENT = str.maketrans(
 )
 
 
+def interval_tag_pair(read, start_tag: str, length_tag: str):
+    """A fiber interval tag pair (ns/nl footprints, as/al MSPs) as (starts, lengths), or (None, None) unless both
+    tags are present and both are arrays (not a number or a string). Other producers reuse these names for scalars: Dorado writes ns:i (the
+    read's signal sample count), so a basecalled ONT read without footprint tags must not count as tagged."""
+    try:
+        starts = read.get_tag(start_tag)
+        lengths = read.get_tag(length_tag)
+    except KeyError:
+        return None, None
+    if isinstance(starts, (int, float, str, bytes)) or isinstance(lengths, (int, float, str, bytes)):
+        return None, None
+    return starts, lengths
+
+
+def has_interval_tags(read, start_tag: str, length_tag: str) -> bool:
+    return interval_tag_pair(read, start_tag, length_tag)[0] is not None
+
+
 def _header_declares_coord_molecular(hdr: dict) -> bool:
     """Return True when @PG/@CO explicitly declares molecular coordinates."""
     for pg in hdr.get("PG", []) or []:

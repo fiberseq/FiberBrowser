@@ -11,7 +11,7 @@ import pyBigWig
 
 from models.domain import CigarCoordMapper, ContactMode
 from services.sv_events import read_deletion_cuts, split_span
-from services.bam_tags import legacy_starts_in_seq_frame, read_legacy_tags_are_molecular
+from services.bam_tags import interval_tag_pair, legacy_starts_in_seq_frame, read_legacy_tags_are_molecular
 from services.dafc_diagnostics import DAFC_DIAGNOSTICS_ENV, log_dafc_diagnostic
 from state.dependencies import get_dafc_state, get_state
 from utils.chrom import get_chrom_variants
@@ -113,8 +113,8 @@ def query_bam_for_dafc(bam_path: str, chrom: str, start: int, end: int) -> List[
                 footprints_called = False
 
                 try:
-                    ns_tag = read.get_tag('ns')
-                    nl_tag = read.get_tag('nl')
+                    # Both tags, as arrays (a scalar ns:i is Dorado's signal sample count, not footprints).
+                    ns_tag, nl_tag = interval_tag_pair(read, 'ns', 'nl')
 
                     if ns_tag is not None and nl_tag is not None:
                         footprints_called = True

@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.0.5 — 2026-11-19
+
+FiberBrowser 3.0.5 bundles FiberHMM 3.0.4 and requires
+`fiberhmm[consensus]>=3.0.3,<4`.
+
+### Fixed
+
+- **Nanopore reads basecalled with Dorado show again.** Dorado writes an `ns`
+  tag (the read's signal sample count) on every read. FiberBrowser took it for
+  footprint starts, could not read it, and left the read out of the read views
+  and analyses, its FiberHMM calls included. These reads now show. `ns`/`nl` and
+  `as`/`al` count as footprints or MSPs only when both tags of the pair are
+  present as lists.
+- **Library call counts are corrected.** Uncalled Dorado reads no longer count
+  as called, and reads with fibertools `Ma` or `as`/`al` calls now do.
+
 ## 3.0.4 — 2026-11-18
 
 FiberBrowser 3.0.4 bundles FiberHMM 3.0.4 and requires

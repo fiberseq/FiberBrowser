@@ -10,6 +10,7 @@ import pandas as pd
 
 from models.domain import CigarCoordMapper
 from services.bam_tags import (
+    interval_tag_pair,
     read_legacy_tags_are_molecular,
     MA_ALL_MOLECULAR,
     bam_ma_group_frame,
@@ -194,16 +195,14 @@ def load_reads_from_bam(
                 nl_tag = None
                 msp_only = False
 
-                try:
-                    ns_tag = read.get_tag('ns')
-                    nl_tag = read.get_tag('nl')
-                except KeyError:
-                    pass
+                # Both tags, as arrays (a scalar ns:i is Dorado's signal sample count, not footprints).
+                ns_tag, nl_tag = interval_tag_pair(read, 'ns', 'nl')
 
                 if ns_tag is None:
                     try:
-                        ns_tag = read.get_tag('as')
-                        nl_tag = read.get_tag('al')
+                        ns_tag, nl_tag = interval_tag_pair(read, 'as', 'al')
+                        if ns_tag is None:
+                            raise KeyError('as')
                         # as/al are accessible MSPs, not footprints: the
                         # footprints are the stretches between them.
                         msp_only = True
