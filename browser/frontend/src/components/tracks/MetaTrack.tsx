@@ -1,5 +1,6 @@
 import { logicalOffset } from '../../utils/scaledCoordinates';
-import { useRef, useEffect, useState, useCallback } from 'react';
+import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import { defaultMetaprofileTogglesKey, togglesFromKey } from '../../utils/defaultMetaprofile';
 import { usePanelDisplayStore as useBrowserStore } from '../../hooks/usePanelDisplayStore';
 import { setupHighDpiCanvas, useCanvasRenderVersion } from '../../utils/canvasUtils';
 import { DEBUG } from '../../stores/utils';
@@ -34,7 +35,9 @@ export function MetaTrack({ width, height, datasetId: datasetIdProp, profileKey,
   const start = viewport?.start ?? storeStart;
   const end = viewport?.end ?? storeEnd;
   const loading = useBrowserStore(s => s.loading);
-  const enabledMetaProfiles = useBrowserStore(s => s.enabledMetaProfiles);
+  // What the default metaprofile shows (follows the active layers unless set to manual).
+  const defaultMetaprofileKey = useBrowserStore(s => defaultMetaprofileTogglesKey(s));
+  const enabledMetaProfiles = useMemo(() => togglesFromKey(defaultMetaprofileKey), [defaultMetaprofileKey]);
   const activeColormap = useBrowserStore(s => s.activeColormap);
   const datasets = useBrowserStore(s => s.datasets);
   const isReversed = useBrowserStore(s => s.isReversed);
@@ -44,7 +47,7 @@ export function MetaTrack({ width, height, datasetId: datasetIdProp, profileKey,
 
   // Get per-dataset profiles (new dynamic format)
   const dsProfiles = datasetProfiles[profileKey ?? datasetId] ?? { mod: [], fire: [], rules: {}, layers: {} };
-  const modProfile = enabledMetaProfiles['mod'] ? (dsProfiles.mod ?? []) : [];
+  const modProfile = (enabledMetaProfiles['m6a'] || enabledMetaProfiles['mod']) ? (dsProfiles.mod ?? []) : [];
   const hasLayerFireProfile = Boolean(dsProfiles.layers?.fire?.length || dsProfiles.layers?.msp?.length);
   const fireProfile = enabledMetaProfiles['fire'] && !hasLayerFireProfile ? (dsProfiles.fire ?? []) : [];
 

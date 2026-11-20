@@ -12,6 +12,8 @@ import {
 } from '../plugins/registry';
 import type { ParsedPeakBedEntry } from '../utils/peakBed';
 import { normalizeAnnotationLayer, normalizeLayerToggleMap } from '../utils/layerAliases';
+import { applyDefaultMetaprofileToggles } from '../utils/defaultMetaprofile';
+import { keepPickedSourceColors } from '../stores/compositeTracksSlice';
 
 type BrowserSettingsSource = Omit<BrowserSettingsSnapshot, 'selected_read_ids'> & {
   selected_peaks_set: Set<number>;
@@ -229,7 +231,8 @@ export function applyJupyterStateToBrowser(state: JupyterState, debug = false): 
       store.setCatalog(state.settings_update.catalog);
     }
     if (Array.isArray(state.settings_update.composite_tracks)) {
-      store.setCompositeTracks(state.settings_update.composite_tracks);
+      // A colour the notebook changed on a default-coloured source is the user's choice (keepPickedSourceColors).
+      store.setCompositeTracks(keepPickedSourceColors(state.settings_update.composite_tracks, store.compositeTracks ?? []));
     }
     if (Array.isArray(state.settings_update.saved_tracks)) {
       store.setSavedTracks(state.settings_update.saved_tracks);
@@ -260,11 +263,14 @@ export function applyJupyterStateToBrowser(state: JupyterState, debug = false): 
         enabledModTypes: { ...store.enabledModTypes, ...(enabledModTypes ?? {}) },
       } as any);
     }
+    // settings_update.enabled_meta_profiles (set_metaprofile_layers): explicit settings for the default
+    // metaprofile's sources. A change switches it to manual, as a hand edit does; a map that matches what it
+    // shows (a replayed snapshot) keeps it following (utils/defaultMetaprofile.ts).
     if (state.settings_update.enabled_meta_profiles && typeof state.settings_update.enabled_meta_profiles === 'object') {
-      const enabledMetaProfiles = normalizeLayerToggleMap(state.settings_update.enabled_meta_profiles as Record<string, boolean>);
-      useBrowserStore.setState({
-        enabledMetaProfiles: { ...store.enabledMetaProfiles, ...(enabledMetaProfiles ?? {}) },
-      } as any);
+      const toggles = normalizeLayerToggleMap(state.settings_update.enabled_meta_profiles as Record<string, boolean>) ?? {};
+      const current = useBrowserStore.getState().compositeTracks;
+      const next = applyDefaultMetaprofileToggles(current, toggles);
+      if (next !== current) useBrowserStore.setState({ compositeTracks: next });
     }
     if (state.settings_update.cached_layer_types && typeof state.settings_update.cached_layer_types === 'object') {
       const cachedLayerTypes = normalizeLayerToggleMap(state.settings_update.cached_layer_types as Record<string, boolean>);

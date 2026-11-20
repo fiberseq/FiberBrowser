@@ -18,6 +18,7 @@ import { AnalysisButton } from '../shared';
 import { catalogRefKind, unloadCompositeSource, unloadCompositeTrack } from '../../../utils/trackLoader';
 import { AddTrackBox } from './AddTrackBox';
 import { Check, Eye, EyeOff } from '../../ui/Icons';
+import { followsActiveLayers, isDefaultMetaprofile } from '../../../utils/defaultMetaprofile';
 import { DisclosureChevron } from '../../ui/Disclosure';
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -570,6 +571,21 @@ export function CompositeRow({
                 </label>
               </div>
             </div>
+          )}
+
+          {isDefaultMetaprofile(composite) && (
+            <label className="flex items-center gap-1.5 px-1"
+              title="Show the read layers switched on in Tracks, and keep up as you switch them. Turning a layer source on or off by hand switches this off and keeps your choice.">
+              <input
+                type="checkbox"
+                data-testid="default-metaprofile-follow-layers"
+                checked={followsActiveLayers(composite)}
+                onChange={e => updateComposite(composite.id, { followActiveLayers: e.target.checked })}
+                className="w-3.5 h-3.5"
+              />
+              <span className="text-gray-700 dark:text-gray-300">Follow active layers</span>
+              {!followsActiveLayers(composite) && <span className="text-[11px] text-gray-400">(manual)</span>}
+            </label>
           )}
 
           <div>

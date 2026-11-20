@@ -389,7 +389,7 @@ the full argument list and docstring.
 | `set_display_settings(enabled_mod_types=None, enabled_meta_profiles=None, cached_layer_types=None, …)` | Push browser display/layer controls from a notebook. |
 | `set_legacy_layer_inference(enabled=True, nuc_min_size=90)` | Configure inferred TF/nuc/FIRE layers for legacy footprint-only files. |
 | `set_visible_layers(layers=None, **layer_states)` | Toggle read-level layer visibility from Python/Jupyter. |
-| `set_metaprofile_layers(layers=None, **layer_states)` | Toggle metaprofile rows from Python/Jupyter. |
+| `set_metaprofile_layers(layers=None, **layer_states)` | Show or hide the default metaprofile's sources; a change switches it from following the active layers to manual. |
 | `set_layer_cache(layers=None, **layer_states)` | Toggle which optional layers are prefetched into read-window caches. |
 | `set_browser_settings(**kwargs)` | Push browser settings using either aliases or raw snapshot keys. |
 | `get_browser_settings()` | Return the latest browser-synced reproducibility/peak settings. |

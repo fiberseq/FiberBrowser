@@ -15,7 +15,8 @@ import { serializeState } from '../stores/historySlice';
 import { createDefaultSubTracks } from '../stores/utils';
 import { DEFAULT_METAPROFILE_ID } from '../types/dataset';
 import { DEFAULT_COLORMAP } from '../types';
-import { getLayerColor, getLayerLabel, getMetaprofileSourceEntries } from './layerColors';
+import { CURATED_LAYER_KEYS, EXTRA_LAYER_PALETTE, assignExtraLayerColors, getLayerColor, getLayerLabel, getMetaprofileSourceEntries } from './layerColors';
+import { layerToggleOn } from './defaultMetaprofile';
 import * as constants from '../components/tracks/TrackContainerConstants';
 import { PANEL_HEADER_HEIGHT } from '../components/tracks/PanelHeader';
 
@@ -23,7 +24,7 @@ const FILE = path.resolve(__dirname, '../../../data/figure_defaults.json');
 
 const SETTINGS = [
   'readRowHeight', 'allReadsDisplayCap', 'backgroundReadCap', 'spanningOnly', 'readDisplayMode',
-  'enabledModTypes', 'enabledMetaProfiles', 'fillReadHeight', 'readSeparatorMode', 'readSeparatorMinHeight',
+  'enabledModTypes', 'fillReadHeight', 'readSeparatorMode', 'readSeparatorMinHeight',
   'readSeparatorWidth', 'subnucleosomalThreshold', 'accessibilityThreshold', 'maxRegionForReads', 'clusterK',
   'clusterMethod', 'motifThreshold', 'isReversed', 'peakRules', 'peakSettings', 'hideTerminalGaps',
   'terminalGapThreshold', 'fillSmallGaps', 'fillGapSize', 'minFpQuality', 'showDuplicateReads', 'showQcFailReads', 'minFootprints', 'analysisSampleSeed',
@@ -32,6 +33,14 @@ const SETTINGS = [
 const LAYER_KEYS = [
   'nuc', 'footprint', 'tf', 'fire', 'msp', 'deam', 'deam_opportunity', 'm6a', 'mod', 'm5c', 'nuc_sr', 'tf_sr',
   'tf_consensus', 'tf_cross_consensus', 'ddda_mcg', 'ddda_mcg_hemi', 'tf_cr', 'tf_xcr', 'pol2', 'ctcf', 'enhancer',
+];
+
+// Extra layers' palette colours over a loaded set (ported to services/figure/defaults.py).
+const EXTRA_LAYER_CASES = [
+  [{ available_layers: { nuc: true, tf: true, tf2: true, tf3: true, tf4: true, nuc_a: true, nuc_b: true } }],
+  [{ available_layers: { cr_split_gap: true, tf_cr: true, deam_ct: true, tf2: true } }],
+  [{ layer_type: 'pol2', available_layers: { ctcf: true }, derived_layers: { scan_hits: { color: '#5571be' }, scan_raw: {} } }],
+  [{ available_layers: Object.fromEntries(Array.from({ length: 27 }, (_, i) => [`x${String(i).padStart(2, '0')}`, true])) }],
 ];
 
 const METAPROFILE_CASES = [
@@ -56,12 +65,19 @@ function buildDefaults() {
       microc: constants.MICROC_HEIGHT, coacc: constants.COACC_HEIGHT,
     },
     trackColors: constants.TRACK_COLORS,
-    layers: Object.fromEntries(LAYER_KEYS.map(key => [key, { color: getLayerColor(key), label: getLayerLabel(key) }])),
+    layers: Object.fromEntries([...new Set([...LAYER_KEYS, ...[...CURATED_LAYER_KEYS].sort()])].map(key => [key, { color: getLayerColor(key), label: getLayerLabel(key) }])),
+    extraLayerPalette: EXTRA_LAYER_PALETTE,
+    curatedLayerKeys: [...CURATED_LAYER_KEYS].sort(),
+    extraLayerCases: EXTRA_LAYER_CASES.map(datasets => ({
+      datasets,
+      colors: Object.fromEntries([...assignExtraLayerColors(datasets).entries()].sort()),
+    })),
     metaprofileCases: METAPROFILE_CASES.map(dataset => ({
       dataset,
       sources: getMetaprofileSourceEntries([dataset]).map(entry => ({
         key: entry.key, label: entry.label, color: getLayerColor(entry.key),
-        visible: entry.key === 'nuc' || entry.key === 'footprint' || entry.key === 'tf',
+        // The default metaprofile follows the active layers (here, the default ones).
+        visible: layerToggleOn(entry.key, useBrowserStore.getState().enabledModTypes),
       })),
     })),
   };

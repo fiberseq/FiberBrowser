@@ -67,7 +67,6 @@ export const AUTO_SAVE_WATCHED_KEYS = [
   'compositeTracks',
   'savedTracks',
   'enabledModTypes',
-  'enabledMetaProfiles',
   'cachedLayerTypes',
   'clickTargetLayer',
   'footprintAnalysisLayer',

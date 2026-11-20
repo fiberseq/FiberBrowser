@@ -177,6 +177,9 @@ export interface TrackSource {
   visible: boolean;
   negate: boolean;             // sign-flip; covers PRO-seq +/-
   scale: number;               // multiplier, default 1
+  /** Default metaprofile only: the colour is the layer's default (it tracks the loaded set's layer colours);
+   *  a colour the user picks clears it. Absent on older sources (only 3.0.6's name-hash colour is migrated). */
+  autoColor?: boolean;
 }
 
 export type CompositeKind = 'signal' | 'annotation' | 'metaprofile';
@@ -213,6 +216,10 @@ export interface CompositeTrack {
    *  hidden, not deleted. Used for the seeded default metaprofile. Defaults
    *  to true (removable). */
   removable?: boolean;
+  /** Default metaprofile only: its layer sources follow the read layers
+   *  switched on in Tracks. Absent = true (old sessions follow). A user edit
+   *  of a layer source's visibility sets it false (manual). */
+  followActiveLayers?: boolean;
 }
 
 /** Stable id for the seeded default metaprofile composite. Lives in the cart

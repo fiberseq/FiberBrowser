@@ -1,5 +1,5 @@
 import { setHideUncalledSource, setSignalFilterSource } from '../utils/signalFilters';
-import { setAccessibilityLabelSource } from '../utils/layerColors';
+import { setAccessibilityLabelSource, setLayerColorSource } from '../utils/layerColors';
 import { clearLoadedReadRegions } from '../api/loadedReadRegion';
 import { useRunResultStore } from './runResultStore';
 import { storePinnedMotifs } from '../utils/pinnedMotifs';
@@ -40,7 +40,7 @@ import { createPeakRuleSlice } from './peakRuleSlice';
 import type { PeakRuleSlice } from './peakRuleSlice';
 import { createCatalogSlice } from './catalogSlice';
 import type { CatalogSlice } from './catalogSlice';
-import { createCompositeTracksSlice } from './compositeTracksSlice';
+import { createCompositeTracksSlice, bindDefaultMetaprofileFollow } from './compositeTracksSlice';
 import type { CompositeTracksSlice } from './compositeTracksSlice';
 import { createSavedTracksSlice } from './savedTracksSlice';
 import type { SavedTracksSlice } from './savedTracksSlice';
@@ -188,6 +188,9 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
   ...createSvSlice(set as any, get),
 }) as BrowserState);
 
+// The default metaprofile follows the active read layers (utils/defaultMetaprofile.ts): one rule, applied here.
+bindDefaultMetaprofileFollow(useBrowserStore as never);
+
 // Cluster names a group source set (svSlice) reach getClusterLabel's call sites.
 // Only when some panel has names: otherwise no work on clustering updates.
 let lastClusterGroupLabels: BrowserState['clusterGroupLabels'] | undefined;
@@ -231,6 +234,8 @@ const syncAccessibilityLabel = (state: BrowserState) => {
   if (state.datasets === lastLabelDatasets) return;
   lastLabelDatasets = state.datasets;
   setAccessibilityLabelSource(state.datasets);
+  // Extra layers' default colours are assigned over the loaded set (utils/layerColors).
+  setLayerColorSource(state.datasets);
 };
 syncAccessibilityLabel(useBrowserStore.getState());
 useBrowserStore.subscribe(syncAccessibilityLabel);

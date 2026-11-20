@@ -156,9 +156,9 @@ describe('_summarizeValue — savedClusters', () => {
   });
 });
 
-describe('_summarizeValue — bool-map watchers (transcriptionStateFilters / enabledMetaProfiles / enabledModTypes)', () => {
+describe('_summarizeValue — bool-map watchers (transcriptionStateFilters / enabledModTypes)', () => {
   it.each([
-    'transcriptionStateFilters', 'enabledMetaProfiles', 'enabledModTypes',
+    'transcriptionStateFilters', 'enabledModTypes',
   ])('extracts only the enabled keys for %s', (key) => {
     const value = { pause: true, pic: false, elongating: true };
     const out = _summarizeValue(key, value);

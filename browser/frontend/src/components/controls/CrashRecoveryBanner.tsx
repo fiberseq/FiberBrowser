@@ -357,7 +357,6 @@ export async function restoreSnapshot(saved: SerializedState) {
     analysisSampleCount: r.analysisSampleCount ?? null,
     analysisSampleSeed: r.analysisSampleSeed ?? 'fiberbrowser-analysis',
     enabledModTypes: normalizeLayerToggleMap(r.enabledModTypes as any) ?? {},
-    enabledMetaProfiles: normalizeLayerToggleMap(r.enabledMetaProfiles as any) ?? {},
     cachedLayerTypes: normalizeLayerToggleMap(r.cachedLayerTypes as any) ?? {},
     clickTargetLayer: r.clickTargetLayer ?? null,
     footprintAnalysisLayer: r.footprintAnalysisLayer ?? null,

@@ -38,7 +38,6 @@ beforeEach(() => {
     peaksByRule: {},
     activeColormap: { ...DEFAULT_COLORMAP },
     enabledModTypes: {},
-    enabledMetaProfiles: {},
     cachedLayerTypes: {},
     clickTargetLayer: null,
     footprintAnalysisLayer: null,
@@ -236,5 +235,20 @@ describe('Jupyter refresh', () => {
     const before = useBrowserStore.getState().refreshGeneration;
     applyJupyterStateToBrowser({ refresh: true } as never);
     expect(useBrowserStore.getState().refreshGeneration).toBe(before + 1);
+  });
+
+  it('set_metaprofile_layers sets the default metaprofile by hand; a matching map keeps it following', () => {
+    useBrowserStore.setState({ compositeTracks: [], enabledModTypes: { nuc: true, tf: true } } as any);
+    useBrowserStore.getState().seedDefaultMetaprofile();
+    const track = () => useBrowserStore.getState().compositeTracks.find(c => c.id === '__default_metaprofile__')!;
+    const shown = () => track().sources.filter(s => s.visible).map(s => (s.ref as any).ruleId).sort();
+    expect(shown()).toEqual(['nuc', 'tf']);
+
+    applyJupyterStateToBrowser({ settings_update: { enabled_meta_profiles: { nuc: true, tf: true } } } as never);
+    expect(track().followActiveLayers).toBe(true);
+
+    applyJupyterStateToBrowser({ settings_update: { enabled_meta_profiles: { msp: true, tf: false } } } as never);
+    expect(track().followActiveLayers).toBe(false);
+    expect(shown()).toEqual(['fire', 'nuc']);
   });
 });

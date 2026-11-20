@@ -16,14 +16,6 @@
       "nuc": true,
       "tf": true
     },
-    "enabledMetaProfiles": {
-      "nuc": true,
-      "tf": true,
-      "fire": false,
-      "m6a": false,
-      "m5c": false,
-      "deam": false
-    },
     "fillReadHeight": true,
     "readSeparatorMode": "auto",
     "readSeparatorMinHeight": 3,
@@ -375,18 +367,216 @@
       "label": "XCR · relationships"
     },
     "pol2": {
-      "color": "#d96526",
+      "color": "#ae7709",
       "label": "pol2"
     },
     "ctcf": {
-      "color": "#d92632",
+      "color": "#de77f8",
       "label": "ctcf"
     },
     "enhancer": {
-      "color": "#d926a9",
+      "color": "#e97067",
       "label": "enhancer"
+    },
+    "cr_split_gap": {
+      "color": "#f59e0b",
+      "label": "CR · split separators"
+    },
+    "deam_ct": {
+      "color": "#2563eb",
+      "label": "CT strand"
+    },
+    "deam_ga": {
+      "color": "#e11d48",
+      "label": "GA strand"
+    },
+    "nuc_cr_split": {
+      "color": "#14b8a6",
+      "label": "CR · split alternatives"
+    },
+    "tf_cr_recalled": {
+      "color": "#0d9488",
+      "label": "CR · including recall"
+    },
+    "tf_native_replay": {
+      "color": "#94a3b8",
+      "label": "Native · analysis baseline"
+    },
+    "tf_recall": {
+      "color": "#db2777",
+      "label": "Recall · new calls"
+    },
+    "tf_sr_lattice": {
+      "color": "#8b5cf6",
+      "label": "SR · boundaries"
     }
   },
+  "extraLayerPalette": [
+    "#5571be",
+    "#bbb11b",
+    "#ae0998",
+    "#6f662a",
+    "#e97067",
+    "#c297d8",
+    "#9b3b4e",
+    "#f6995a",
+    "#de77f8",
+    "#ae7709",
+    "#d897a4",
+    "#be5594"
+  ],
+  "curatedLayerKeys": [
+    "cr_split_gap",
+    "ddda_mcg",
+    "ddda_mcg_hemi",
+    "deam",
+    "deam_ct",
+    "deam_ga",
+    "deam_opportunity",
+    "fire",
+    "footprint",
+    "m5c",
+    "m6a",
+    "mod",
+    "msp",
+    "nuc",
+    "nuc_cr_split",
+    "nuc_sr",
+    "tf",
+    "tf_consensus",
+    "tf_cr",
+    "tf_cr_recalled",
+    "tf_cross_consensus",
+    "tf_native_replay",
+    "tf_recall",
+    "tf_sr",
+    "tf_sr_lattice",
+    "tf_xcr"
+  ],
+  "extraLayerCases": [
+    {
+      "datasets": [
+        {
+          "available_layers": {
+            "nuc": true,
+            "tf": true,
+            "tf2": true,
+            "tf3": true,
+            "tf4": true,
+            "nuc_a": true,
+            "nuc_b": true
+          }
+        }
+      ],
+      "colors": {
+        "nuc_a": "#5571be",
+        "nuc_b": "#bbb11b",
+        "tf2": "#ae0998",
+        "tf3": "#6f662a",
+        "tf4": "#e97067"
+      }
+    },
+    {
+      "datasets": [
+        {
+          "available_layers": {
+            "cr_split_gap": true,
+            "tf_cr": true,
+            "deam_ct": true,
+            "tf2": true
+          }
+        }
+      ],
+      "colors": {
+        "tf2": "#5571be"
+      }
+    },
+    {
+      "datasets": [
+        {
+          "layer_type": "pol2",
+          "available_layers": {
+            "ctcf": true
+          },
+          "derived_layers": {
+            "scan_hits": {
+              "color": "#5571be"
+            },
+            "scan_raw": {}
+          }
+        }
+      ],
+      "colors": {
+        "ctcf": "#bbb11b",
+        "pol2": "#ae0998",
+        "scan_raw": "#6f662a"
+      }
+    },
+    {
+      "datasets": [
+        {
+          "available_layers": {
+            "x00": true,
+            "x01": true,
+            "x02": true,
+            "x03": true,
+            "x04": true,
+            "x05": true,
+            "x06": true,
+            "x07": true,
+            "x08": true,
+            "x09": true,
+            "x10": true,
+            "x11": true,
+            "x12": true,
+            "x13": true,
+            "x14": true,
+            "x15": true,
+            "x16": true,
+            "x17": true,
+            "x18": true,
+            "x19": true,
+            "x20": true,
+            "x21": true,
+            "x22": true,
+            "x23": true,
+            "x24": true,
+            "x25": true,
+            "x26": true
+          }
+        }
+      ],
+      "colors": {
+        "x00": "#5571be",
+        "x01": "#bbb11b",
+        "x02": "#ae0998",
+        "x03": "#6f662a",
+        "x04": "#e97067",
+        "x05": "#c297d8",
+        "x06": "#9b3b4e",
+        "x07": "#f6995a",
+        "x08": "#de77f8",
+        "x09": "#ae7709",
+        "x10": "#d897a4",
+        "x11": "#be5594",
+        "x12": "#3d5189",
+        "x13": "#877f13",
+        "x14": "#7d066d",
+        "x15": "#50491e",
+        "x16": "#a8514a",
+        "x17": "#8c6d9c",
+        "x18": "#702a38",
+        "x19": "#b16e41",
+        "x20": "#a056b3",
+        "x21": "#7d5606",
+        "x22": "#9c6d76",
+        "x23": "#893d6b",
+        "x24": "#8599d0",
+        "x25": "#cec75b",
+        "x26": "#c54eb5"
+      }
+    }
+  ],
   "metaprofileCases": [
     {
       "dataset": {
@@ -480,7 +670,7 @@
         {
           "key": "pol2",
           "label": "pol2",
-          "color": "#d96526",
+          "color": "#ae7709",
           "visible": false
         }
       ]

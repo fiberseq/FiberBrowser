@@ -260,7 +260,8 @@ describe('session frontend restore coverage', () => {
     expect(state.clickTargetLayer).toBe('fire');
     expect(state.footprintAnalysisLayer).toBeNull();
     expect(state.enabledModTypes).toEqual({ fire: true });
-    expect(state.enabledMetaProfiles).toEqual({ fire: true });
+    // Retired: an old session's enabledMetaProfiles is not restored (the default metaprofile follows the layers).
+    expect((state as any).enabledMetaProfiles).toBeUndefined();
     expect(state.cachedLayerTypes).toEqual({ fire: false });
     expect(state.activeColormap.qualityFilters[0].layer).toBe('fire');
     expect(state.activeColormap.rules[0].targetLayers).toEqual(['fire']);

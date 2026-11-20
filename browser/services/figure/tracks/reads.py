@@ -244,6 +244,25 @@ def _active_metaprofile_ids(fe: dict) -> set:
     return ids
 
 
+def _default_metaprofile_toggles(fe: dict) -> dict:
+    """What the default metaprofile shows (ReadTrack's defaultMetaprofileToggles; it replaced the retired
+    enabledMetaProfiles). Saved sessions carry its source flags already following the layers, and its layers are
+    requested even while the track is hidden. No default track: the active layers, which `enabledModTypes` covers."""
+    out = {}
+    for comp in fe.get('compositeTracks') or []:
+        if not isinstance(comp, dict) or comp.get('id') != '__default_metaprofile__':
+            continue
+        for src in comp.get('sources') or []:
+            ref = (src or {}).get('ref') or {}
+            if not src.get('visible') or ref.get('kind') != 'metaprofile':
+                continue
+            rule = ref.get('ruleId')
+            key = _metaprofile_key('m6a' if rule == 'mod' else rule)
+            if key:
+                out[key] = True
+    return out
+
+
 def _source_ids(ds: dict, cached: dict, cache_only: bool) -> set:
     from services.figure.defaults import metaprofile_source_entries
     ids = set()
@@ -262,7 +281,7 @@ def _source_ids(ds: dict, cached: dict, cache_only: bool) -> set:
 def _request_plan(fe: dict, ds: dict) -> dict:
     """What ReadTrack.tsx asks /api/reads/compact for (layers, methylation, qualities)."""
     enabled = fe.get('enabledModTypes') or {}
-    meta = fe.get('enabledMetaProfiles') or {}
+    meta = _default_metaprofile_toggles(fe)
     active = _active_metaprofile_ids(fe)
     cached = _source_ids(ds, fe.get('cachedLayerTypes') or {}, True)
     layer_backed = _source_ids(ds, {}, False)
@@ -906,8 +925,17 @@ def _paint_reads(p: _Painter, reads: list, st: dict, peaks: list, genes: list, d
     all_groups = [g for g in fe.get('footprintGroups') or []
                   if isinstance(g, dict) and _group_on_chrom(g, ctx.chrom)]
     groups = [g for g in all_groups if g.get('enabled')]
-    layer_colors = {k: v.get('color') for k, v in (dataset.get('derived_layers') or {}).items()
-                    if isinstance(v, dict) and v.get('color')}
+    # The loaded set's palette colours for layers without a curated one (the browser's
+    # assignExtraLayerColors), then each derived layer's own colour.
+    from services.figure.defaults import assign_extra_layer_colors, dataset_dict
+    # Over every loaded dataset, as the browser assigns them (not only the panels drawn).
+    loaded = [dataset_dict(d) for d in (getattr(getattr(p.ctx, 'state', None), 'datasets', None) or {}).values()]
+    if not loaded:
+        spec_panels = getattr(getattr(p.ctx, 'spec', None), 'panels', None) or []
+        loaded = [panel.dataset for panel in spec_panels if isinstance(getattr(panel, 'dataset', None), dict)] or [dataset]
+    layer_colors = {**assign_extra_layer_colors(loaded),
+                    **{k: v.get('color') for k, v in (dataset.get('derived_layers') or {}).items()
+                       if isinstance(v, dict) and v.get('color')}}
     targeted = set()
     for rule in rules:
         for t in rule.get('targetLayers') or []:

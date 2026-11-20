@@ -20,7 +20,7 @@ export const ACTIVITY_WATCHED_KEYS = [
   'editMode', 'showRelativeCoords', 'relativeTSS',
   'currentGenome', 'uiScale', 'sessionName',
   'savedClusters', 'savedTracks', 'compositeTracks',
-  'enabledMetaProfiles', 'enabledModTypes',
+  'enabledModTypes',
   'activeColormap',
 ] as const;
 
@@ -194,7 +194,6 @@ export function _summarizeValue(key: string, value: unknown): unknown {
     }
 
     case 'transcriptionStateFilters':
-    case 'enabledMetaProfiles':
     case 'enabledModTypes':
       return _enabledKeys(value);
 

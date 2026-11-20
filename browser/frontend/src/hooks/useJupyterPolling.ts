@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useBrowserStore } from '../stores/browserStore';
+import { defaultMetaprofileTogglesKey, togglesFromKey } from '../utils/defaultMetaprofile';
 import { isPublicMode } from '../utils/publicMode';
 import { useCoaccStore } from '../stores/coaccStore';
 import { getJupyterState, syncJupyterBrowserSettings } from '../api/jupyter';
@@ -48,7 +49,9 @@ export function useJupyterPolling() {
     primer_mode: s.primer.mode,
     primer_cart_track_display: s.primer.cartTrackDisplay,
     enabled_mod_types: s.enabledModTypes,
-    enabled_meta_profiles: s.enabledMetaProfiles,
+    // Reported for the Python client: what the default metaprofile shows (it follows the layers).
+    // A string here so the shallow selector stays stable; expanded to a map when sent.
+    enabled_meta_profiles: defaultMetaprofileTogglesKey(s),
     cached_layer_types: s.cachedLayerTypes,
     legacy_layer_inference: s.legacyLayerInference,
     legacy_nuc_min_size: s.legacyNucMinSize,
@@ -98,7 +101,7 @@ export function useJupyterPolling() {
     const timeoutId = setTimeout(() => {
       const run = () => {
         syncJupyterBrowserSettings(
-          buildJupyterBrowserSettingsPayload(browserSettingsSnapshot, coaccSettingsSnapshot)
+          buildJupyterBrowserSettingsPayload({ ...browserSettingsSnapshot, enabled_meta_profiles: togglesFromKey(browserSettingsSnapshot.enabled_meta_profiles) }, coaccSettingsSnapshot)
         ).catch(() => {
           // Best-effort mirror for notebooks; polling still handles commands.
         });

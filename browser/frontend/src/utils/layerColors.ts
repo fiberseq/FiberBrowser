@@ -3,8 +3,8 @@
  *
  * The fiberseq Molecular-annotation-spec is extensible — tools can define
  * arbitrary annotation types (e.g. 'pol2', 'ctcf', 'enhancer'). Known types
- * get curated colors; unknown types get a deterministic hash-based color
- * so repeated encounters of the same layer name always produce the same color.
+ * get curated colors; the loaded datasets' other types get distinct palette
+ * colours, the same for the same set of layers (assignExtraLayerColors).
  */
 
 const KNOWN_COLORS: Record<string, string> = {
@@ -71,18 +71,155 @@ function hslToHex(hue: number, saturation: number, lightness: number): string {
 }
 
 /**
- * Get a color for a layer name. Known layers get curated colors; unknowns get
- * a deterministic six-digit hex color from the name. The read-track canvas
- * appends an alpha byte (`color + 'a6'`), so this must be #rrggbb: an hsl()
- * string would become an invalid paint value and draw in the previous color.
+ * Default colours for layers without a curated colour (extra MA-tag layers such
+ * as `tf2`, `nuc_a`, scan products). Twelve colours, each at least ~26 CIE76 ΔE
+ * from the others and from every KNOWN_COLORS entry, and at least ~16 apart
+ * under simulated deuteranopia and protanopia; lightness 38-71, so they read on
+ * light and dark backgrounds. The first slots alternate hue families: a dataset
+ * with a few extra layers gets clearly different colours.
  */
-export function getLayerColor(name: string): string {
-  if (KNOWN_COLORS[name]) return KNOWN_COLORS[name];
+export const EXTRA_LAYER_PALETTE: readonly string[] = [
+  '#5571be', // blue
+  '#bbb11b', // mustard
+  '#ae0998', // magenta
+  '#6f662a', // olive brown
+  '#e97067', // coral
+  '#c297d8', // lilac
+  '#9b3b4e', // wine
+  '#f6995a', // apricot
+  '#de77f8', // orchid
+  '#ae7709', // ochre
+  '#d897a4', // rose
+  '#be5594', // raspberry
+];
+
+/** Container formats that `layer_type` can name instead of a layer. */
+const FILE_LAYER_TYPES = new Set(['bam', 'bigbed', 'bb', 'cram']);
+
+function hexToRgb(hex: string): [number, number, number] {
+  const h = hex.replace('#', '');
+  return [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16)) as [number, number, number];
+}
+
+/** A palette slot past the palette's length: the same colour a lightness step
+ *  darker (odd cycles) or lighter (even cycles), never a near-identical hue. */
+function extraLayerPaletteColor(slot: number): string {
+  const n = EXTRA_LAYER_PALETTE.length;
+  const base = EXTRA_LAYER_PALETTE[((slot % n) + n) % n];
+  const cycle = Math.floor(Math.max(0, slot) / n);
+  if (cycle === 0) return base;
+  const step = Math.ceil(cycle / 2) * 0.28;
+  const toward = cycle % 2 === 1 ? 0 : 255;
+  const rgb = hexToRgb(base).map(c => Math.round(c + (toward - c) * Math.min(step, 0.7)));
+  return `#${rgb.map(c => c.toString(16).padStart(2, '0')).join('')}`;
+}
+
+type ColorSourceDataset = {
+  available_layers?: Partial<Record<string, boolean>>;
+  layer_type?: string;
+  derived_layers?: Record<string, { color?: string | null } | undefined> | null;
+};
+
+/**
+ * The default colours of the loaded datasets' layers that have no curated
+ * colour: palette slots in sorted key order, so the same set of layers always
+ * gets the same colours (reload, session restore, any load order). A layer
+ * with its own colour (a derived layer's `color`) keeps it, and a palette slot
+ * holding one of those colours is skipped. Past the palette, slots cycle with
+ * a lightness step (extraLayerPaletteColor).
+ */
+export function assignExtraLayerColors(datasets: readonly ColorSourceDataset[] | null | undefined): Map<string, string> {
+  const keys = new Set<string>();
+  const taken = new Set<string>();
+  for (const d of datasets ?? []) {
+    for (const [name, meta] of Object.entries(d.derived_layers ?? {})) {
+      const color = meta?.color;
+      if (typeof color === 'string' && color) taken.add(color.toLowerCase());
+      else keys.add(name);
+    }
+    for (const [name, present] of Object.entries(d.available_layers ?? {})) {
+      if (present) keys.add(name);
+    }
+    if (d.layer_type && !FILE_LAYER_TYPES.has(d.layer_type)) keys.add(d.layer_type);
+  }
+  for (const d of datasets ?? []) {
+    for (const [name, meta] of Object.entries(d.derived_layers ?? {})) {
+      if (typeof meta?.color === 'string' && meta.color) keys.delete(name);
+    }
+  }
+  const out = new Map<string, string>();
+  let slot = 0;
+  for (const key of [...keys].filter(k => !KNOWN_COLORS[k]).sort()) {
+    let color = extraLayerPaletteColor(slot);
+    // A colour already in use stays with its owner; bounded so it always ends.
+    for (let guard = 0; taken.has(color.toLowerCase()) && guard < 4 * EXTRA_LAYER_PALETTE.length; guard++) {
+      slot += 1;
+      color = extraLayerPaletteColor(slot);
+    }
+    out.set(key, color);
+    taken.add(color.toLowerCase());
+    slot += 1;
+  }
+  return out;
+}
+
+let extraLayerColors: Map<string, string> = new Map();
+
+/** The loaded datasets whose extra layers get palette colours (set from the
+ *  store whenever `datasets` changes, before anything renders with them). */
+export function setLayerColorSource(datasets: readonly ColorSourceDataset[] | null | undefined): void {
+  extraLayerColors = assignExtraLayerColors(datasets);
+}
+
+function nameHash(name: string): number {
   let hash = 0;
   for (let i = 0; i < name.length; i++) {
     hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
   }
-  return hslToHex(Math.abs(hash) % 360, 0.7, 0.5);
+  return hash;
+}
+
+/** The colour 3.0.6 and earlier gave a layer without a curated colour (a hue
+ *  from the name's hash; near-identical for names like tf2/tf3). Only used to
+ *  recognise colours stamped into saved tracks by that rule. */
+export function legacyHashLayerColor(name: string): string {
+  return hslToHex(Math.abs(nameHash(name)) % 360, 0.7, 0.5);
+}
+
+let defaultPaletteColors: Set<string> | null = null;
+
+/** Whether a colour is one of the extra-layer palette's (any lightness cycle up to 8 rounds): a default
+ *  colour, as opposed to one a user typed. Only for telling a replayed cart's stale default from a pick. */
+export function isExtraPaletteColor(color: string | null | undefined): boolean {
+  if (!color) return false;
+  if (!defaultPaletteColors) {
+    defaultPaletteColors = new Set();
+    for (let slot = 0; slot < EXTRA_LAYER_PALETTE.length * 8; slot++) defaultPaletteColors.add(extraLayerPaletteColor(slot));
+  }
+  return defaultPaletteColors.has(color.toLowerCase());
+}
+
+/** The curated layer keys (KNOWN_COLORS), for the headless renderer's port. */
+export const CURATED_LAYER_KEYS: readonly string[] = Object.keys(KNOWN_COLORS);
+
+/** Whether a layer has a curated colour. */
+export function hasKnownLayerColor(name: string): boolean {
+  return Boolean(KNOWN_COLORS[name]);
+}
+
+/**
+ * Get a color for a layer name. Known layers get curated colors; the loaded
+ * datasets' other layers get collision-free palette colours
+ * (assignExtraLayerColors); a name outside them gets a palette colour picked by
+ * its hash (deterministic). The read-track canvas appends an alpha byte
+ * (`color + 'a6'`), so this must be #rrggbb: an hsl() string would become an
+ * invalid paint value and draw in the previous color.
+ */
+export function getLayerColor(name: string): string {
+  if (KNOWN_COLORS[name]) return KNOWN_COLORS[name];
+  const assigned = extraLayerColors.get(name);
+  if (assigned) return assigned;
+  return EXTRA_LAYER_PALETTE[Math.abs(nameHash(name)) % EXTRA_LAYER_PALETTE.length];
 }
 
 /** The accessibility layer's keys: legacy/internal `msp` and `fire` (one user-facing layer). */

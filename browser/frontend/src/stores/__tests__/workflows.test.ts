@@ -422,7 +422,6 @@ describe('history undo/redo workflow', () => {
     store.setState({
       clusterK: 3,
       enabledModTypes: { msp: true } as any,
-      enabledMetaProfiles: { msp: true },
       cachedLayerTypes: { msp: false },
       clickTargetLayer: 'msp',
       footprintAnalysisLayer: 'all',
@@ -455,7 +454,7 @@ describe('history undo/redo workflow', () => {
 
     const serialized = serializeState(store.getState());
     expect(serialized.enabledModTypes).toEqual({ fire: true });
-    expect(serialized.enabledMetaProfiles).toEqual({ fire: true });
+    expect('enabledMetaProfiles' in serialized).toBe(false);
     expect(serialized.cachedLayerTypes).toEqual({ fire: false });
     expect(serialized.clickTargetLayer).toBe('fire');
     expect(serialized.footprintAnalysisLayer).toBeNull();
@@ -467,7 +466,6 @@ describe('history undo/redo workflow', () => {
     store.setState({
       clusterK: 5,
       enabledModTypes: { tf: true } as any,
-      enabledMetaProfiles: { tf: true },
       cachedLayerTypes: { tf: true },
       clickTargetLayer: 'tf',
       footprintAnalysisLayer: 'tf',
@@ -479,7 +477,6 @@ describe('history undo/redo workflow', () => {
     store.getState().undo();
     const restored = store.getState();
     expect(restored.enabledModTypes).toEqual({ fire: true });
-    expect(restored.enabledMetaProfiles).toEqual({ fire: true });
     expect(restored.cachedLayerTypes).toEqual({ fire: false });
     expect(restored.clickTargetLayer).toBe('fire');
     expect(restored.footprintAnalysisLayer).toBeNull();

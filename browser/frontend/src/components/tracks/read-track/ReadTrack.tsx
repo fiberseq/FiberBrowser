@@ -1,3 +1,4 @@
+import { defaultMetaprofileTogglesKey, togglesFromKey } from '../../../utils/defaultMetaprofile';
 import { splitAway, splitPinnedAway } from '../../../utils/splitLocus';
 import { markReadViewDrawn } from '../../../utils/viewIdle';
 import { SplitAwayBanner } from './SplitAwayBanner';
@@ -153,11 +154,15 @@ export function ReadTrack({
     readStateDetails: s.readStateDetails,
   })));
 
+  // What the default metaprofile shows (it follows the active layers unless set to manual): its layers are
+  // requested even while the track is hidden, since the cluster panel's profiles read them too.
+  const defaultMetaprofileKey = useBrowserStore(s => defaultMetaprofileTogglesKey(s));
+  const defaultMetaprofileToggles = useMemo(() => togglesFromKey(defaultMetaprofileKey), [defaultMetaprofileKey]);
   // Group 2: Config (rarely changes)
   const {
     enabledModTypes, fillSmallGaps, fillGapSize, hideTerminalGaps, terminalGapThreshold,
     minFpQuality, minFootprints, minFootprintsAuto, minFootprintsNotice, showDuplicateReads, showQcFailReads, modificationOverlays,
-    enabledMetaProfiles, cachedLayerTypes,
+    cachedLayerTypes,
     legacyLayerInference, legacyNucMinSize,
     enabledCigarTypes, anyCigarEnabled, isReversed, activeColormap, orthogonalTracks,
     fillReadHeight, exportFullReadTracks, exportMatchedReadCount, exportMatchedReadFetchCount,
@@ -176,7 +181,7 @@ export function ReadTrack({
     showDuplicateReads: s.showDuplicateReads,
     showQcFailReads: s.showQcFailReads,
     modificationOverlays: s.modificationOverlays,
-    enabledMetaProfiles: s.enabledMetaProfiles, cachedLayerTypes: s.cachedLayerTypes,
+    cachedLayerTypes: s.cachedLayerTypes,
     legacyLayerInference: s.legacyLayerInference, legacyNucMinSize: s.legacyNucMinSize,
     enabledCigarTypes: s.enabledCigarTypes, anyCigarEnabled: s.anyCigarEnabled,
     isReversed: s.isReversed, activeColormap: s.activeColormap,
@@ -432,7 +437,7 @@ export function ReadTrack({
   }, [datasets, cachedLayerTypes]);
   const wantsMethylation = Array.from(METHYLATION_LAYER_KEYS).some(key =>
     !!enabledModTypes[key] ||
-    !!enabledMetaProfiles[key] ||
+    !!defaultMetaprofileToggles[key] ||
     activeMetaprofileSourceIds.has(key) ||
     cachedMetaprofileSourceIds.has(key)
   );
@@ -440,7 +445,7 @@ export function ReadTrack({
   const needsMethylation = wantsMethylation && hasMethylationLayer;
   const batchWantsMethylation = Array.from(METHYLATION_LAYER_KEYS).some(key =>
     !!enabledModTypes[key] ||
-    !!enabledMetaProfiles[key] ||
+    !!defaultMetaprofileToggles[key] ||
     activeMetaprofileSourceIds.has(key) ||
     batchCachedMetaprofileSourceIds.has(key)
   );
@@ -466,7 +471,7 @@ export function ReadTrack({
       }
     };
     Object.entries(enabledModTypes).forEach(([key, enabled]) => addIfNeeded(key, enabled));
-    Object.entries(enabledMetaProfiles).forEach(([key, enabled]) => addIfNeeded(key, enabled));
+    Object.entries(defaultMetaprofileToggles).forEach(([key, enabled]) => addIfNeeded(key, enabled));
     cachedSourceIds.forEach(key => addIfNeeded(key, true));
     activeMetaprofileSourceIds.forEach(key => addIfNeeded(key, true));
     if (footprintAnalysisLayer) addIfNeeded(footprintAnalysisLayer, true);
@@ -487,10 +492,10 @@ export function ReadTrack({
   };
   const requestedLayers = useMemo(() => {
     return buildRequestedLayers(currentDataset ? [currentDataset] : [], cachedMetaprofileSourceIds);
-  }, [enabledModTypes, enabledMetaProfiles, cachedMetaprofileSourceIds, activeMetaprofileSourceIds, footprintAnalysisLayer, currentDataset, layerType, isBAM]);
+  }, [enabledModTypes, defaultMetaprofileToggles, cachedMetaprofileSourceIds, activeMetaprofileSourceIds, footprintAnalysisLayer, currentDataset, layerType, isBAM]);
   const batchRequestedLayers = useMemo(() => {
     return buildRequestedLayers(datasets, batchCachedMetaprofileSourceIds);
-  }, [enabledModTypes, enabledMetaProfiles, batchCachedMetaprofileSourceIds, activeMetaprofileSourceIds, footprintAnalysisLayer, datasets]);
+  }, [enabledModTypes, defaultMetaprofileToggles, batchCachedMetaprofileSourceIds, activeMetaprofileSourceIds, footprintAnalysisLayer, datasets]);
   // Edge ambiguity (soft/loose) draws each footprint edge from the per-edge
   // sharpness dims (el/er, lq/rq). For BigBed those live in the nuc/tf LAYER
   // payload + its quality arrays, which only ship when include_layers AND
@@ -824,7 +829,9 @@ export function ReadTrack({
   ): { mod: number[]; fire: number[]; rules: Record<string, number[]>; layers: Record<string, number[]> } => {
     const modProfile = new Float32Array(resolution);
     const fireDiff = new Float32Array(resolution + 1);
-    const metaprofileRules = activeColormap.rules.filter(rule => activeMetaprofileSourceIds.has(rule.id));
+    // Rule sources the default metaprofile shows count even while its track is hidden (cluster profiles read them).
+    const metaprofileRules = activeColormap.rules.filter(rule =>
+      activeMetaprofileSourceIds.has(rule.id) || !!defaultMetaprofileToggles[rule.id]);
     const ruleDiffs: Record<string, Float32Array> = {};
     for (const rule of metaprofileRules) {
       ruleDiffs[rule.id] = new Float32Array(resolution + 1);
@@ -836,7 +843,7 @@ export function ReadTrack({
     const coverageDiff = new Float32Array(resolution + 1);
 
     // Per-type modification counters, written into the layers dict so the
-    // existing `enabledMetaProfiles.{m6a,m5c,deam}` toggles pick them up
+    // default metaprofile's m6a/m5c/deam sources pick them up
     // without any extra plumbing. Legacy `modProfile` still tracks the union
     // (methyl) field for back-compat with the 'mod' toggle.
     const getOrAllocLayer = (name: string) => {
@@ -995,7 +1002,7 @@ export function ReadTrack({
     }
 
     return { mod: Array.from(modProfile), fire: Array.from(fireProfile), rules: ruleProfiles, layers: layerProfiles };
-  }, [activeColormap, activeMetaprofileSourceIds]);
+  }, [activeColormap, activeMetaprofileSourceIds, defaultMetaprofileToggles]);
 
   // Compute metaprofile from the profile read pool, not the final drawn
   // sample, so profile tracks do not shift when Fit-mode sampling changes.

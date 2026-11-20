@@ -540,7 +540,7 @@ DEFAULT_ENABLED_MOD_TYPES = {
     "mod": False, "m6a": False, "m5c": False, "deam": False, "deam_opportunity": False,
     "msp": False, "fire": False, "footprint": True, "nuc": True, "tf": True,
 }
-DEFAULT_ENABLED_META_PROFILES = {"nuc": True, "tf": True, "fire": False, "m6a": False, "m5c": False, "deam": False}
+# The default metaprofile follows enabledModTypes in the browser (enabledMetaProfiles is retired).
 
 
 def _explicit_fields(req) -> set:
@@ -632,7 +632,6 @@ def _state_for_request(req, state) -> dict[str, Any]:
     # setState replaces these maps whole, so they're sent complete.
     explicit = _explicit_fields(req)
     enabled_mod_types: dict[str, bool] = {}
-    enabled_meta_profiles: dict[str, bool] = {}
     if explicit & {"show_mods", "show_layers", "show_fire", "show_deam_opportunities"}:
         enabled_mod_types = dict(DEFAULT_ENABLED_MOD_TYPES)
         if "show_mods" in explicit:
@@ -643,7 +642,6 @@ def _state_for_request(req, state) -> dict[str, Any]:
             enabled_mod_types.update(dict.fromkeys(("tf", "nuc"), bool(req.show_layers)))
         if "show_fire" in explicit:
             enabled_mod_types["fire"] = bool(req.show_fire)
-            enabled_meta_profiles = {**DEFAULT_ENABLED_META_PROFILES, "fire": bool(req.show_fire)}
 
     # Always ship the full enabledCigarTypes shape. Earlier we shipped {}
     # when show_cigar was false, which made `state.enabledCigarTypes.mismatches`
@@ -719,8 +717,6 @@ def _state_for_request(req, state) -> dict[str, Any]:
         payload["orthogonalTracks"] = orthogonal_tracks
     if enabled_mod_types:
         payload["enabledModTypes"] = enabled_mod_types
-    if enabled_meta_profiles:
-        payload["enabledMetaProfiles"] = enabled_meta_profiles
     if active_colormap:
         payload["activeColormap"] = active_colormap
     if req.sort_by:

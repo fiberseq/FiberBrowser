@@ -41,7 +41,7 @@ export interface DatasetSlice {
   setFire: (peaks: FirePeak[], signal: number[], trackType?: FireTrackType) => void;
   setDatasetProfiles: (profiles: Record<string, DatasetProfile> | ((prev: Record<string, DatasetProfile>) => Record<string, DatasetProfile>)) => void;
   /** Per-cluster, per-layer metaprofiles — `datasetId → clusterId → layerKey → profile`.
-   *  Layer keys mirror `enabledMetaProfiles` (e.g. `nuc`, `tf`, `fire`, `mod`,
+   *  Layer keys mirror the default metaprofile's sources (e.g. `nuc`, `tf`, `fire`, `mod`,
    *  any custom layer or color-rule id). The Profiles tab renders one chart
    *  per enabled layer, with clusters as the series within each chart. */
   setClusterProfiles: (datasetId: string, profiles: Record<number, Record<string, number[]>>) => void;

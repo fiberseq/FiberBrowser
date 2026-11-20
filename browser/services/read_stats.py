@@ -210,6 +210,7 @@ def _collect_scope(
                 dataset=dataset,
                 dataset_id=dataset_id,
                 contig_links=contig_links(state, dataset_id=dataset_id),
+                short_terminal_footprint_bp=_short_terminal_bp(state),
                 include_qcfail=include_qcfail,
                 hide_uncalled=query.hide_uncalled,
                 spanning=query.spanning,
@@ -270,8 +271,14 @@ def _collect_bam_read_stats(
     spanning: bool = False,
     min_footprints: int = 0,
     hidden: dict | None = None,
+    short_terminal_footprint_bp: int = 0,
 ) -> None:
     """Collect stats from BAM alignment records plus compact working-set intervals.
+
+    A read whose calls are only in MA/Ma tags (current FiberHMM, fibertools
+    ``Ma``) has a placeholder row in the working set (its calls sit in layers,
+    which Read Stats may not have loaded): its footprints and gaps are read
+    from the record's MA tag instead (``_ma_only_intervals``).
 
     ``hidden``: adds the region's reads (as the read track counts them: primary,
     not duplicate, QC-fail or signal-hidden, spanning when asked) that "Hide reads
@@ -293,6 +300,7 @@ def _collect_bam_read_stats(
         provenance = signal_header(getattr(bam, "header", None))
         from services.signal_counts import _legacy_frame
         legacy_frame = _legacy_frame(bam_path, bam) if getattr(bam, "header", None) is not None else None
+        ma_frame, ma_contracts = _ma_header_context(bam)
         try:
             for read in bam.fetch(bam_chrom, start, end):
                 # Only the primary alignment is the displayed read (the read
@@ -335,7 +343,12 @@ def _collect_bam_read_stats(
                     nm = None
 
                 ws_read = ws.read_by_id.get(read.query_name)
-                interval_stats = _summarize_intervals(ws_read.get("intervals") if ws_read else [])
+                ma_intervals = None
+                if called and _calls_only_in_ma(read):
+                    ma_intervals = _ma_only_intervals(
+                        read, start, end, ma_frame, ma_contracts, short_terminal_footprint_bp)
+                interval_stats = _summarize_intervals(
+                    ma_intervals if ma_intervals is not None else (ws_read.get("intervals") if ws_read else []))
 
                 methyl_count = None
                 methyl_pct = None
@@ -362,7 +375,10 @@ def _collect_bam_read_stats(
                     cigar_ops = _summarize_cigar(read.cigartuples)
 
                     offset = start - ref_start
-                    if ws_read and ws_read.get("intervals"):
+                    if ma_intervals is not None:
+                        # Request-relative (start) to read-relative, as the working-set ones below.
+                        fp_intervals_rel = [[iv[0] + offset, iv[1] + offset, iv[2]] for iv in ma_intervals]
+                    elif ws_read and ws_read.get("intervals"):
                         fp_intervals_rel = [
                             [iv[0] + offset, iv[1] + offset, iv[2] if len(iv) > 2 else 0]
                             for iv in ws_read["intervals"]
@@ -474,6 +490,82 @@ def _collect_bigbed_read_stats(
         all_lengths.append(est_length)
         if methyl_pct is not None:
             all_methyl_pcts.append(methyl_pct)
+
+
+def _short_terminal_bp(state) -> int:
+    """The read-end footprint cutoff the workspace's reads are loaded with (0 = keep all)."""
+    try:
+        from services.compact_read_loader import short_terminal_footprint_bp_for
+        return int(short_terminal_footprint_bp_for(state))
+    except Exception:
+        return 0
+
+
+def _ma_header_context(bam):
+    """A BAM's MA group frame and consensus contracts, as the compact loader reads them."""
+    from services.bam_tags import bam_consensus_contracts, bam_ma_group_frame
+    header = getattr(bam, "header", None)
+    if header is None:
+        return None, None
+    try:
+        return bam_ma_group_frame(header), bam_consensus_contracts(header)
+    except Exception:
+        return None, None
+
+
+def _calls_only_in_ma(read) -> bool:
+    """A record with no legacy ns/nl or as/al array pair (its calls, if any, are MA/Ma)."""
+    from services.bam_tags import interval_tag_pair
+    for start_tag, length_tag in (("ns", "nl"), ("as", "al")):
+        try:
+            if interval_tag_pair(read, start_tag, length_tag)[0] is not None:
+                return False
+        except (KeyError, ValueError, TypeError):
+            continue
+    return True
+
+
+def _ma_only_intervals(read, start: int, end: int, ma_frame, contracts, short_terminal_bp: int = 0):
+    """Footprints and gaps of an MA-only called read inside ``[start, end)``, as
+    request-relative ``[start, end, size]`` (size > 0: a footprint's length; <= 0:
+    a gap), or None when the record's MA tag can't be read.
+
+    The calls are the MA nuc/tf/fp_v2 groups, parsed and placed as the read loaders
+    place them (``ma_footprint_query_spans``, the aligned-base CIGAR projection of
+    ``parse_ma_aq_tags_into_layers``, the same read-end stub drop), and walked into
+    footprints and gaps as legacy ns/nl reads are (terminal gaps hidden). A called
+    read with no footprint call in MA (MSP only) is one accessible span."""
+    from models.domain import CigarCoordMapper
+    from services.compact_read_loader import (
+        _read_ma_tags, ma_footprint_query_spans, short_terminal_spans, walk_read_intervals,
+    )
+    try:
+        ma_tags = _read_ma_tags(read, ma_frame)
+        if ma_tags is None:
+            return None
+        read_length = read.query_length or 0
+        spans = ma_footprint_query_spans(
+            ma_tags, read_length=read_length, is_reverse=read.is_reverse, family_contracts=contracts)
+        drop = short_terminal_spans(None, None, spans, short_terminal_bp, read_length=read_length) if spans else set()
+        ref_start, ref_end = int(read.reference_start), int(read.reference_end or read.reference_start)
+        mapper = CigarCoordMapper(read.cigartuples, ref_start)
+        blocks = []
+        for _name, q_start, q_end in spans:
+            if (q_start, q_end) in drop:
+                continue
+            r_start, r_end = mapper.aligned_query_interval_to_ref(q_start, q_end - 1)
+            if r_start is None or r_end is None or r_end <= r_start:
+                continue
+            blocks.append((int(r_start), int(r_end), int(q_end - q_start)))
+        if not blocks:
+            lo, hi = max(ref_start, start), min(ref_end, end)
+            return [[lo - start, hi - start, 0]] if hi > lo else []
+        blocks.sort()
+        return [[int(a - start), int(b - start), int(size)]
+                for a, b, size, _i in walk_read_intervals(blocks, ref_start, ref_end, start, end, True)]
+    except Exception as exc:
+        log_read_stats_diagnostic(f"[read_stats] MA footprints unreadable for {getattr(read, 'query_name', '?')}: {exc}")
+        return None
 
 
 def _summarize_intervals(intervals: list) -> dict:

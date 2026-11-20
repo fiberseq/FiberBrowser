@@ -68,7 +68,7 @@ export function ProfilesTabContent({
             })).filter(s => s.data.length > 0);
             if (series.length === 0) return null;
             return (
-              <div key={layerKey} data-testid="cluster-profile-chart" data-series={series.map(item => item.label).join(',')}>
+              <div key={layerKey} data-testid="cluster-profile-chart" data-layer={layerKey} data-series={series.map(item => item.label).join(',')}>
                 <div className="flex items-center gap-1 text-[11px] text-gray-600 dark:text-gray-400 mb-0.5">
                   <span className="inline-block w-2 h-2 rounded-sm" style={{ backgroundColor: getLayerColor(layerKey) }} />
                   <span>{getLayerLabelFor ? getLayerLabelFor(sk, layerKey) : getLayerLabel(layerKey)}</span>

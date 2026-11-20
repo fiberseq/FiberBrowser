@@ -355,7 +355,8 @@ export interface SerializedState {
   /** Which region Find classes analyses (utils/classRegion.ts); absent in older snapshots. */
   classRegionMode?: string;
   enabledModTypes: Record<string, boolean>;
-  enabledMetaProfiles: Record<string, boolean>;
+  /** Retired (the default metaprofile follows the layers); present in older snapshots, ignored. */
+  enabledMetaProfiles?: Record<string, boolean>;
   cachedLayerTypes?: Record<string, boolean>;
   legacyLayerInference?: boolean;
   legacyNucMinSize?: number;
@@ -825,7 +826,6 @@ export function serializeState(state: BrowserState): SerializedState {
     analysisSampleSeed: state.analysisSampleSeed,
     classRegionMode: state.classRegionMode,
     enabledModTypes: normalizeLayerToggleMap(state.enabledModTypes) ?? {},
-    enabledMetaProfiles: normalizeLayerToggleMap(state.enabledMetaProfiles) ?? {},
     cachedLayerTypes: normalizeLayerToggleMap(state.cachedLayerTypes) ?? {},
     legacyLayerInference: state.legacyLayerInference,
     legacyNucMinSize: state.legacyNucMinSize,
@@ -1071,7 +1071,6 @@ function deserializeState(
     analysisSampleSeed: s.analysisSampleSeed ?? 'fiberbrowser-analysis',
     classRegionMode: isClassRegionMode(s.classRegionMode) ? s.classRegionMode : DEFAULT_CLASS_REGION_MODE,
     enabledModTypes: (normalizeLayerToggleMap(s.enabledModTypes as any) ?? {}) as any,
-    enabledMetaProfiles: normalizeLayerToggleMap(s.enabledMetaProfiles as any) ?? {},
     cachedLayerTypes: normalizeLayerToggleMap(s.cachedLayerTypes as any) ?? {},
     legacyLayerInference: s.legacyLayerInference ?? true,
     legacyNucMinSize: s.legacyNucMinSize ?? 90,

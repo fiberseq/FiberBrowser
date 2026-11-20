@@ -6,7 +6,10 @@ import type {
 import { DEFAULT_METAPROFILE_ID } from '../types/dataset';
 import type { SubTrackType, SubTrackConfig, PanelConfig } from '../types';
 import { TRACK_COLORS } from '../components/tracks/TrackContainerConstants';
-import { getLayerColor, getMetaprofileSourceEntries } from '../utils/layerColors';
+import { getLayerColor, getMetaprofileSourceEntries, hasKnownLayerColor, isExtraPaletteColor, legacyHashLayerColor, setLayerColorSource } from '../utils/layerColors';
+import {
+  applyFollowActiveLayers, canonicalMetaprofileKey, isDefaultMetaprofile, isLayerSource, layerToggleOn, metaprofileLayerKeys,
+} from '../utils/defaultMetaprofile';
 
 // ============================================================
 // COMPOSITE TRACKS SLICE — the cart. Each entry is a CompositeTrack with
@@ -156,8 +159,9 @@ function normalizeMetaprofileSourceId(ruleId: string): string {
   return ruleId === 'mod' ? 'm6a' : ruleId;
 }
 
-function defaultMetaprofileSourceVisible(ruleId: string): boolean {
-  return ruleId === 'nuc' || ruleId === 'footprint' || ruleId === 'tf';
+/** A newly added default-metaprofile layer source starts as its layer toggle is. */
+function defaultMetaprofileSourceVisible(state: BrowserState, ruleId: string): boolean {
+  return layerToggleOn(ruleId, state.enabledModTypes ?? {});
 }
 
 function reconcileDefaultMetaprofileSources(state: BrowserState, existingSources: TrackSource[] = []): TrackSource[] {
@@ -192,7 +196,8 @@ function reconcileDefaultMetaprofileSources(state: BrowserState, existingSources
       id: crypto.randomUUID(),
       ref: { kind: 'metaprofile' as const, ruleId: entry.key },
       color: getLayerColor(entry.key),
-      visible: defaultMetaprofileSourceVisible(entry.key),
+      ...(hasKnownLayerColor(entry.key) ? {} : { autoColor: true }),
+      visible: defaultMetaprofileSourceVisible(state, entry.key),
       negate: false,
       scale: 1,
     };
@@ -206,6 +211,115 @@ function reconcileDefaultMetaprofileSources(state: BrowserState, existingSources
   }
 
   return [...desiredSources, ...preserved];
+}
+
+/**
+ * The default metaprofile's sources with default colours of uncurated layers (`autoColor`, or 3.0.6's
+ * name-hash colour on an older source) moved to the layer's current colour, so they match the read track
+ * whatever the load order or session; a colour the user picked (autoColor false) is kept. Same array when
+ * nothing changes.
+ */
+export function refreshAutoSourceColors(sources: TrackSource[]): TrackSource[] {
+  let changed = false;
+  const next = sources.map(source => {
+    if (source.ref.kind !== 'metaprofile') return source;
+    const key = source.ref.ruleId;
+    if (hasKnownLayerColor(key)) return source;
+    const auto = source.autoColor === true
+      || (source.autoColor === undefined && source.color?.toLowerCase() === legacyHashLayerColor(key));
+    if (!auto) return source;
+    const color = getLayerColor(key);
+    if (color === source.color && source.autoColor === true) return source;
+    changed = true;
+    return { ...source, color, autoColor: true };
+  });
+  return changed ? next : sources;
+}
+
+/** The default metaprofile's sources plus a source for each loaded layer that has none (matched by alias);
+ *  existing sources, extra same-layer ones included, are kept as they are. Same array when none is missing. */
+function addMissingLayerSources(state: BrowserState, sources: TrackSource[]): TrackSource[] {
+  const have = new Set(sources.filter(s => s.ref.kind === 'metaprofile')
+    .map(s => canonicalMetaprofileKey((s.ref as { ruleId: string }).ruleId)));
+  const added: TrackSource[] = [];
+  for (const entry of getMetaprofileSourceEntries(state.datasets)) {
+    if (have.has(canonicalMetaprofileKey(entry.key))) continue;
+    added.push({
+      id: crypto.randomUUID(),
+      ref: { kind: 'metaprofile' as const, ruleId: entry.key },
+      color: getLayerColor(entry.key),
+      ...(hasKnownLayerColor(entry.key) ? {} : { autoColor: true }),
+      visible: defaultMetaprofileSourceVisible(state, entry.key),
+      negate: false,
+      scale: 1,
+    });
+  }
+  return added.length ? [...sources, ...added] : sources;
+}
+
+/**
+ * A cart replaced from outside the UI (Jupyter set_track_cart). For a default-metaprofile source still marked
+ * autoColor: with the colour it has now, it keeps the current flag (a pick made by an earlier submission
+ * stays); with another colour, a default one (palette or 3.0.6 hash: a replayed older cart) stays automatic
+ * and any other colour is the caller's pick (autoColor false).
+ */
+export function keepPickedSourceColors(incoming: CompositeTrack[], current: CompositeTrack[]): CompositeTrack[] {
+  const now = current.find(isDefaultMetaprofile);
+  const byId = new Map((now?.sources ?? []).map(s => [s.id, s]));
+  return incoming.map(track => !isDefaultMetaprofile(track) || !Array.isArray(track.sources) ? track : {
+    ...track,
+    sources: track.sources.map(s => {
+      if (!s.autoColor || s.ref?.kind !== 'metaprofile') return s;
+      const cur = byId.get(s.id);
+      if (cur && cur.color === s.color) return cur.autoColor === false ? { ...s, autoColor: false } : s;
+      const isDefault = isExtraPaletteColor(s.color)
+        || s.color?.toLowerCase() === legacyHashLayerColor(s.ref.ruleId);
+      return isDefault ? s : { ...s, autoColor: false };
+    }),
+  });
+}
+
+function refreshDefaultMetaprofileColors(tracks: CompositeTrack[]): CompositeTrack[] {
+  const idx = tracks.findIndex(isDefaultMetaprofile);
+  if (idx < 0) return tracks;
+  const sources = refreshAutoSourceColors(tracks[idx].sources);
+  if (sources === tracks[idx].sources) return tracks;
+  const next = [...tracks];
+  next[idx] = { ...tracks[idx], sources };
+  return next;
+}
+
+/** A user edit of a default-metaprofile layer source's visibility: the track stops following the layers. */
+function manualPatchFor(state: BrowserState, composite: CompositeTrack | undefined, source: Pick<TrackSource, 'ref'> | undefined): Partial<CompositeTrack> {
+  if (!composite || !source || !isDefaultMetaprofile(composite) || composite.followActiveLayers === false) return {};
+  return isLayerSource(source as TrackSource, metaprofileLayerKeys(state.datasets)) ? { followActiveLayers: false } : {};
+}
+
+/**
+ * The one place the follow rule runs: after every store change, while the
+ * default metaprofile follows, its layer sources take the layer toggles'
+ * state. Covers layer toggles, new datasets (seed/reconcile), session
+ * restore, undo/redo and Jupyter alike. Returns the unsubscribe.
+ */
+export function bindDefaultMetaprofileFollow(store: {
+  getState: () => BrowserState;
+  setState: (partial: Partial<BrowserState>) => void;
+  subscribe: (listener: (state: BrowserState, previous: BrowserState) => void) => () => void;
+}): () => void {
+  const run = (state: BrowserState, previous?: BrowserState) => {
+    if (previous
+      && state.compositeTracks === previous.compositeTracks
+      && state.enabledModTypes === previous.enabledModTypes
+      && state.datasets === previous.datasets) return;
+    // The loaded set's layer colours before the cart reads them (browserStore keeps them in step too).
+    if (!previous || state.datasets !== previous.datasets) setLayerColorSource(state.datasets ?? []);
+    const followed = applyFollowActiveLayers(state.compositeTracks ?? [], state.enabledModTypes ?? {}, state.datasets ?? []);
+    // Colours too (any follow mode): a restored or imported cart takes the loaded set's layer colours.
+    const next = refreshDefaultMetaprofileColors(followed);
+    if (next !== state.compositeTracks) store.setState({ compositeTracks: next });
+  };
+  run(store.getState());
+  return store.subscribe(run);
 }
 
 export function createCompositeTracksSlice(
@@ -284,6 +398,13 @@ export function createCompositeTracksSlice(
       set(state => ({
         compositeTracks: state.compositeTracks.map(c => c.id === id ? { ...c, ...patch } : c),
       }));
+      // Following again: a layer source removed by hand comes back (reconcile), then takes its toggle's state.
+      if (isDefaultMetaprofile(target) && patch.followActiveLayers === true) {
+        set(state => ({
+          compositeTracks: state.compositeTracks.map(c => c.id === id
+            ? { ...c, sources: addMissingLayerSources(state, c.sources) } : c),
+        }));
+      }
       const visibleChange = keys.length === 1 && keys[0] === 'visible';
       const label = visibleChange
         ? `${patch.visible ? 'Show' : 'Hide'} track ${target.label || 'track'}`
@@ -323,11 +444,14 @@ export function createCompositeTracksSlice(
         scale: source.scale ?? 1,
       };
       ensureCartBaseline();
-      set(state => ({
-        compositeTracks: state.compositeTracks.map(c =>
-          c.id === compositeId ? { ...c, sources: [...c.sources, full] } : c
-        ),
-      }));
+      set(state => {
+        const manual = manualPatchFor(state, composite, full);
+        return {
+          compositeTracks: state.compositeTracks.map(c =>
+            c.id === compositeId ? { ...c, ...manual, sources: [...c.sources, full] } : c
+          ),
+        };
+      });
       pushCartHistory(`Add source to ${composite?.label || 'track'}`);
       return sid;
     },
@@ -337,11 +461,14 @@ export function createCompositeTracksSlice(
       const source = composite?.sources.find(s => s.id === sourceId);
       if (!composite || !source) return;
       ensureCartBaseline();
-      set(state => ({
-        compositeTracks: state.compositeTracks.map(c =>
-          c.id === compositeId ? { ...c, sources: c.sources.filter(s => s.id !== sourceId) } : c
-        ),
-      }));
+      set(state => {
+        const manual = manualPatchFor(state, composite, source);
+        return {
+          compositeTracks: state.compositeTracks.map(c =>
+            c.id === compositeId ? { ...c, ...manual, sources: c.sources.filter(s => s.id !== sourceId) } : c
+          ),
+        };
+      });
       pushCartHistory(`Remove source from ${composite.label || 'track'}`);
     },
 
@@ -353,13 +480,19 @@ export function createCompositeTracksSlice(
       const changed = keys.some(key => source[key] !== patch[key]);
       if (!changed) return;
       ensureCartBaseline();
-      set(state => ({
-        compositeTracks: state.compositeTracks.map(c =>
-          c.id === compositeId
-            ? { ...c, sources: c.sources.map(s => s.id === sourceId ? { ...s, ...patch } : s) }
-            : c
-        ),
-      }));
+      // A colour the user picks stays (it is no longer the layer's default colour).
+      const applied: Partial<TrackSource> = ('color' in patch && !('autoColor' in patch) && isDefaultMetaprofile(composite))
+        ? { ...patch, autoColor: false } : patch;
+      set(state => {
+        const manual = 'visible' in patch ? manualPatchFor(state, composite, source) : {};
+        return {
+          compositeTracks: state.compositeTracks.map(c =>
+            c.id === compositeId
+              ? { ...c, ...manual, sources: c.sources.map(s => s.id === sourceId ? { ...s, ...applied } : s) }
+              : c
+          ),
+        };
+      });
       const visibleChange = keys.length === 1 && keys[0] === 'visible';
       const label = visibleChange
         ? `${patch.visible ? 'Show' : 'Hide'} source in ${composite.label || 'track'}`
@@ -419,6 +552,7 @@ export function createCompositeTracksSlice(
         groupAutoscaleSelected: false,
         showAxes: true,
         removable: false,
+        followActiveLayers: true,
       };
 
       const nextComposites = [seeded, ...state.compositeTracks];

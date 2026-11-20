@@ -12,7 +12,9 @@ import copy
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from services.figure.defaults import dataset_dict, default_metaprofile, default_sub_tracks, defaults
+from services.figure.defaults import (
+    apply_follow_active_layers, refresh_auto_source_colors, dataset_dict, default_metaprofile, default_sub_tracks, defaults,
+)
 
 
 @dataclass
@@ -109,8 +111,16 @@ def build_panels(state, fe: dict, dataset_ids: Optional[list[str]] = None,
     datasets = {ds_id: dataset_dict(ds) for ds_id, ds in (getattr(state, "datasets", {}) or {}).items()}
     fe_datasets = {d.get("id"): d for d in fe.get("datasets") or [] if isinstance(d, dict)}
     composites = [c for c in fe.get("compositeTracks") or [] if isinstance(c, dict)]
+    enabled_mod_types = fe.get("enabledModTypes") if isinstance(fe.get("enabledModTypes"), dict) else None
     if not composites:
-        composites = [default_metaprofile(datasets.values())]
+        composites = [default_metaprofile(datasets.values(), enabled_mod_types)]
+        fe["compositeTracks"] = composites
+    else:
+        # The default metaprofile follows the active layers, as in the browser. fe carries the result too: the
+        # profile requests (tracks/composite.py) read fe["compositeTracks"], and must ask for what is drawn.
+        composites = apply_follow_active_layers(composites, enabled_mod_types, datasets.values())
+        # Default colours too, as the browser's cart takes them (a saved session's old colours).
+        composites = refresh_auto_source_colors(composites, datasets.values())
         fe["compositeTracks"] = composites
     by_id = {c.get("id"): c for c in composites}
 

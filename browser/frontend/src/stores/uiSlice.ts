@@ -88,7 +88,6 @@ export interface UiSlice {
   /** Which region Find classes analyses (utils/classRegion.ts): the selected peaks, the view, or a saved region. */
   classRegionMode: ClassRegionMode;
   enabledModTypes: Record<ModificationType, boolean>;  // Which modification types to display
-  enabledMetaProfiles: Record<string, boolean>;  // Which metaprofile layer/rule sources to display
   cachedLayerTypes: Record<string, boolean>;  // Which layer payloads to prefetch/cache with read windows
   legacyLayerInference: boolean;  // Infer TF/nuc/FIRE layers from legacy footprint-only datasets
   legacyNucMinSize: number;  // Footprint size cutoff for inferred nucleosomes
@@ -189,7 +188,6 @@ export interface UiSlice {
   toggleModType: (modType: ModificationType, enabled: boolean) => void;
   isModTypeAvailable: (modType: ModificationType) => boolean;  // Check if mod type can be shown
   initModTypeDefaults: () => void;  // Auto-enable mod types based on available layers
-  toggleMetaProfile: (profileType: string, enabled: boolean) => void;
   setCachedLayerType: (layerType: string, enabled: boolean) => void;
   setLegacyLayerInference: (enabled: boolean) => void;
   setLegacyNucMinSize: (size: number) => void;
@@ -292,7 +290,6 @@ export function createUiSlice(set: (partial: Partial<BrowserState> | ((state: Br
     nuc: true,
     tf: true,
   },
-  enabledMetaProfiles: { nuc: true, tf: true, fire: false, m6a: false, m5c: false, deam: false },
   cachedLayerTypes: {},
   legacyLayerInference: true,
   legacyNucMinSize: 90,
@@ -543,25 +540,8 @@ export function createUiSlice(set: (partial: Partial<BrowserState> | ((state: Br
       mod:       defaultEnabled('mod',       false),
     };
 
-    const defaultMeta = (key: string, defaultOn: boolean) =>
-      Object.prototype.hasOwnProperty.call(state.enabledMetaProfiles, key)
-        ? (state.enabledMetaProfiles as Record<string, boolean>)[key]
-        : defaultOn;
-    const nextMeta: Record<string, boolean> = {
-      ...state.enabledMetaProfiles,
-      nuc:  defaultMeta('nuc',  has.nuc || has.footprint),
-      tf:   defaultMeta('tf',   has.tf),
-      fire: defaultMeta('fire', false),
-      m6a:  defaultMeta('m6a',  false),
-      m5c:  defaultMeta('m5c',  false),
-      deam: defaultMeta('deam', false),
-    };
-
-    return { enabledModTypes: nextLayers, enabledMetaProfiles: nextMeta };
-  }),
-  toggleMetaProfile: (profileType, enabled) => set(state => {
-    const layer = normalizeAnnotationLayer(profileType) ?? profileType;
-    return { enabledMetaProfiles: { ...state.enabledMetaProfiles, [layer]: enabled } };
+    // The default metaprofile follows these layers (utils/defaultMetaprofile.ts).
+    return { enabledModTypes: nextLayers };
   }),
   setCachedLayerType: (layerType, enabled) => set(state => {
     const layer = normalizeAnnotationLayer(layerType) ?? layerType;

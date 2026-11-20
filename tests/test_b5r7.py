@@ -175,7 +175,8 @@ def test_playwright_layer_toggles_are_sent_complete_both_ways():
     off = _state_for_request(RenderRequest(chrom="c", start=0, end=10, engine="playwright",
                                            show_layers=False, show_mods=False, show_fire=False), state)
     assert off["enabledModTypes"] == {**DEFAULT_ENABLED_MOD_TYPES, "tf": False, "nuc": False}
-    assert off["enabledMetaProfiles"]["fire"] is False and off["enabledMetaProfiles"]["nuc"] is True
+    # The default metaprofile follows enabledModTypes in the browser; the retired map is no longer sent.
+    assert "enabledMetaProfiles" not in off and off["enabledModTypes"]["fire"] is False
     mods = _state_for_request(RenderRequest(chrom="c", start=0, end=10, engine="playwright", show_mods=True), state)
     # Asking for mods keeps the default footprint/nuc/tf layers on.
     assert mods["enabledModTypes"]["m6a"] and mods["enabledModTypes"]["mod"]

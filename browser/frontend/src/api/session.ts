@@ -45,7 +45,7 @@ export const SESSION_PRE_VIEWPORT_KEYS = [
   'viewMode', 'sortMode', 'sortSelection', 'filterMode', 'spanningOnly', 'downsampleCount', 'readDisplayMode', 'allReadsDisplayCap', 'backgroundReadCap', 'clusterPreparationCount', 'clusterPreparationSamples', 'analysisSampleCount', 'analysisSampleSeed', 'classRegionMode',
   'clusterK', 'clusterResolution', 'clusterMethod', 'clusterPeakMode', 'clusterFeatureRules', 'analysisSortRules', 'analysisFilterRules', 'subnucleosomalThreshold', 'accessibilityThreshold',
   'mergeMinFraction', 'mergeMaxSimilarity', 'mergeStrategy', 'mergeThresholds', 'footprintSizeSettings',
-  'enabledModTypes', 'enabledMetaProfiles', 'cachedLayerTypes', 'legacyLayerInference', 'legacyNucMinSize', 'clickTargetLayer', 'footprintAnalysisLayer',
+  'enabledModTypes', 'cachedLayerTypes', 'legacyLayerInference', 'legacyNucMinSize', 'clickTargetLayer', 'footprintAnalysisLayer',
   'fillSmallGaps', 'fillGapSize', 'hideTerminalGaps', 'terminalGapThreshold', 'hideShortEndFootprints', 'minFpQuality', 'minFootprints', 'minFootprintsAuto', 'minFootprintsBeforeAllReads', 'showDuplicateReads', 'showQcFailReads', 'signalFilters',
   'enabledCigarTypes', 'svDisplayEnabled', 'svMinLen', 'svMinSupport', 'isReversed', 'darkMode', 'peakSettings', 'activeColormap', 'fillReadHeight', 'showHiddenTrackStrip',
   'readSeparatorMode', 'readSeparatorMinHeight', 'readSeparatorWidth',
@@ -464,9 +464,8 @@ export function applyImportedState(result: Record<string, unknown>): void {
     if ('enabledModTypes' in batch) {
       batch.enabledModTypes = normalizeLayerToggleMap(batch.enabledModTypes as any) ?? batch.enabledModTypes;
     }
-    if ('enabledMetaProfiles' in batch) {
-      batch.enabledMetaProfiles = normalizeLayerToggleMap(batch.enabledMetaProfiles as any) ?? batch.enabledMetaProfiles;
-    }
+    // Older sessions' `enabledMetaProfiles` is retired and not restored: the default metaprofile
+    // (compositeTracks, followActiveLayers absent = follow) follows enabledModTypes.
     if ('cachedLayerTypes' in batch) {
       batch.cachedLayerTypes = normalizeLayerToggleMap(batch.cachedLayerTypes as any) ?? batch.cachedLayerTypes;
     }

@@ -1,5 +1,44 @@
 # Changelog
 
+## 3.0.7 — 2026-11-19
+
+FiberBrowser 3.0.7 bundles FiberHMM 3.0.4 and requires
+`fiberhmm[consensus]>=3.0.3,<4`.
+
+### Changed
+
+- **The default metaprofile follows the layers you switch on.** Turning a read
+  layer on or off in Tracks (FIRE, m6A, 5mC, deamination, extra MA layers)
+  now shows or hides it in the default metaprofile straight away, for new
+  datasets and restored sessions too. Cluster profiles, and the layers the
+  read track loads for them, follow the default metaprofile, so clustering
+  now profiles the layers you have on instead of always nucleosomes and TF.
+  Showing or hiding one of its layers by hand switches that track to manual
+  and keeps your choice; **Follow active layers** in its settings switches
+  following back on. Sessions save the choice; older sessions open following.
+  Colour-rule sources in the metaprofile work as before. The separate
+  metaprofile setting older sessions carried is no longer used, and is ignored
+  when they load. The notebook call `set_metaprofile_layers` now shows or
+  hides the default metaprofile's sources, and switches it to manual if that
+  changes anything.
+- **Extra MA-tag layers get clearly different colours.** Layers without a
+  built-in colour (for example `tf2`, `tf3`, `nuc_a`) used to get colours from
+  their names, so similar names came out in near-identical shades. They now
+  get colours from a 12-colour palette that keeps clear of the built-in layer
+  colours and stays distinguishable with common colour-vision deficiencies.
+  The same set of loaded layers always gets the same colours, whatever order
+  the datasets load in, and older sessions' metaprofiles take them too.
+  Colours you have set yourself are kept; past 12 layers the palette repeats a
+  shade lighter or darker. Exported figures use the same colours.
+
+### Fixed
+
+- **Read Stats counts footprints carried only in MA tags.** For reads whose
+  calls are only in MA tags (what current FiberHMM writes) or fibertools `Ma`
+  tags, Read Stats showed called reads as 0 footprints and 100% accessible.
+  It now reads their footprints, sizes and accessible fraction from the tag,
+  placed as on the read track. Reads with ns/nl tags are unchanged.
+
 ## 3.0.6 — 2026-11-19
 
 FiberBrowser 3.0.6 bundles FiberHMM 3.0.4 and requires

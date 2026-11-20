@@ -22,7 +22,7 @@ import { createAnnotationSlice } from '../annotationSlice';
 import { createCaptureSlice } from '../captureSlice';
 import { createPeakRuleSlice } from '../peakRuleSlice';
 import { createCatalogSlice } from '../catalogSlice';
-import { createCompositeTracksSlice } from '../compositeTracksSlice';
+import { createCompositeTracksSlice, bindDefaultMetaprofileFollow } from '../compositeTracksSlice';
 import { createSavedTracksSlice } from '../savedTracksSlice';
 import { registerAnalysisPanel, getAnalysisPanel } from '../../plugins/registry';
 
@@ -130,7 +130,7 @@ export function ensureBuiltinPanelsRegistered() {
  * Returns a Zustand store with all slices composed.
  */
 export function createTestStore() {
-  return create<BrowserState>((set, get) => ({
+  const store = create<BrowserState>((set, get) => ({
     ...createViewportSlice(set, get),
     ...createDatasetSlice(set, get),
     ...createClusterSlice(set, get),
@@ -151,4 +151,6 @@ export function createTestStore() {
     ...createHighlightSlice(set as any, get),
     ...createSvSlice(set as any, get),
 }) as BrowserState);
+  bindDefaultMetaprofileFollow(store as never);
+  return store;
 }

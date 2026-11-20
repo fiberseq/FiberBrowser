@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import { createTestStore } from './helpers';
+import { defaultMetaprofileToggles } from '../../utils/defaultMetaprofile';
 
 let store: ReturnType<typeof createTestStore>;
 
@@ -69,8 +70,6 @@ describe('read display defaults', () => {
 describe('layer visibility defaults', () => {
   it('starts with nuc and TF visible, with secondary layers off', () => {
     const enabled = store.getState().enabledModTypes as Record<string, boolean>;
-    const enabledMeta = store.getState().enabledMetaProfiles as Record<string, boolean>;
-
     expect(enabled.footprint).toBe(true);
     expect(enabled.nuc).toBe(true);
     expect(enabled.tf).toBe(true);
@@ -80,9 +79,7 @@ describe('layer visibility defaults', () => {
     expect(enabled.fire).toBe(false);
     expect(enabled.m6a).toBe(false);
     expect(enabled.m5c).toBe(false);
-    expect(enabledMeta.nuc).toBe(true);
-    expect(enabledMeta.tf).toBe(true);
-    expect(enabledMeta.subnuc).toBeUndefined();
+    expect('enabledMetaProfiles' in store.getState()).toBe(false);
   });
 
   it('keeps TF as a primary default when datasets expose all DAF layers', () => {
@@ -143,7 +140,7 @@ describe('layer visibility defaults', () => {
     expect(store.getState().enabledModTypes.deam_opportunity).toBe(false);
   });
 
-  it('defaults detected TF metaprofiles on for old sessions missing the key', () => {
+  it('the default metaprofile follows detected layers on old sessions (the retired enabledMetaProfiles is ignored)', () => {
     store.setState({
       datasets: [{
         id: 'daf',
@@ -151,40 +148,15 @@ describe('layer visibility defaults', () => {
         path: '/tmp/daf.bam',
         color: '#111111',
         data_type: 'bam',
-        available_layers: {
-          nuc: true,
-          tf: true,
-          fire: true,
-          deam: true,
-        },
+        available_layers: { nuc: true, tf: true, fire: true, deam: true },
       }],
-      enabledMetaProfiles: { nuc: true, fire: false, deam: false },
-    });
+      enabledMetaProfiles: { nuc: true, tf: false, fire: true },
+    } as any);
 
     store.getState().initModTypeDefaults();
-    const enabledMeta = store.getState().enabledMetaProfiles as Record<string, boolean>;
+    store.getState().seedDefaultMetaprofile();
+    const toggles = defaultMetaprofileToggles(store.getState());
 
-    expect(enabledMeta.nuc).toBe(true);
-    expect(enabledMeta.tf).toBe(true);
-    expect(enabledMeta.fire).toBe(false);
-    expect(enabledMeta.deam).toBe(false);
-  });
-
-  it('preserves an explicit user-disabled TF metaprofile', () => {
-    store.setState({
-      datasets: [{
-        id: 'daf',
-        label: 'DAF',
-        path: '/tmp/daf.bam',
-        color: '#111111',
-        data_type: 'bam',
-        available_layers: { nuc: true, tf: true },
-      }],
-      enabledMetaProfiles: { nuc: true, tf: false },
-    });
-
-    store.getState().initModTypeDefaults();
-
-    expect(store.getState().enabledMetaProfiles.tf).toBe(false);
+    expect(toggles).toEqual({ nuc: true, tf: true });
   });
 });

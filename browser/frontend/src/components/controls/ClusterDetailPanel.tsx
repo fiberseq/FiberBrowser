@@ -72,6 +72,7 @@ import {
 } from '../../utils/clusterDetailRequestKey';
 import { Check, ReadClusters, Sliders } from '../ui/Icons';
 import { useRememberedState } from '../../hooks/useRememberedState';
+import { defaultMetaprofileTogglesKey, togglesFromKey } from '../../utils/defaultMetaprofile';
 
 const CLUSTER_DETAIL_TAB_STORAGE_KEY = 'fiberbrowser_cluster_detail_tab';
 // 'projection' is not a tab of its own: the read map is part of Overview (fb-n5-projection);
@@ -131,7 +132,6 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
     savedClusters, saveCurrentClustering, removeSavedCluster, updateSavedClusterName,
     clearSavedClusters, restoreSavedCluster,
     activeColormap, genes, orthogonalTracks,
-    enabledMetaProfiles,
     analysisSampleCount,
     peaksLocked,
     analysisSampleSeed,
@@ -172,11 +172,13 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
     removeSavedCluster: s.removeSavedCluster, updateSavedClusterName: s.updateSavedClusterName,
     clearSavedClusters: s.clearSavedClusters, restoreSavedCluster: s.restoreSavedCluster,
     activeColormap: s.activeColormap, genes: s.genes, orthogonalTracks: s.orthogonalTracks,
-    enabledMetaProfiles: s.enabledMetaProfiles,
     analysisSampleCount: s.analysisSampleCount,
     peaksLocked: s.peaksLocked,
     analysisSampleSeed: s.analysisSampleSeed,
   })));
+  // "Default" = what the default metaprofile shows (it follows the active layers unless set to manual).
+  const defaultProfileKey = useBrowserStore(s => defaultMetaprofileTogglesKey(s));
+  const defaultProfileToggles = useMemo(() => togglesFromKey(defaultProfileKey), [defaultProfileKey]);
 
   // What the panels show (panelScope): the charts plot a clustered panel's own view.
   const scopeState = useBrowserStore(useShallow(s => ({
@@ -1271,7 +1273,7 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
             clearClusterSelection={clearClusterSelection}
             mergeSelectedClusters={mergeSelectedClusters}
             combinedProfiles={combinedProfiles}
-            enabledMetaProfiles={enabledMetaProfiles}
+            enabledMetaProfiles={defaultProfileToggles}
             proportions={proportions}
             chartWidth={Math.max(200, listWidth - 12)}
             containerWidth={listWidth + 8}
@@ -1356,7 +1358,7 @@ export function ClusterDetailPanel({ isFullView }: { isFullView?: boolean }) {
           multiDs={multiDs}
           visibleClusterData={visibleClusterData}
           clusterProfiles={clusterProfiles}
-          enabledMetaProfiles={enabledMetaProfiles}
+          enabledMetaProfiles={defaultProfileToggles}
           chartWidth={chartWidth}
           isFullView={isFullView}
           isReversed={isReversed}
