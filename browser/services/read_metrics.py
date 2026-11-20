@@ -410,6 +410,26 @@ def _interval_bin_diff(start_bins: np.ndarray, end_bins: np.ndarray, resolution:
     return (starts - ends).astype(np.float32, copy=False)
 
 
+def _read_union_bin_diff(read_ids: np.ndarray, start_bins: np.ndarray, end_bins: np.ndarray, resolution: int) -> np.ndarray:
+    """A diff vector in which each read adds the union of its intervals' bins (inclusive end bins), so a read counts
+    at most once per bin however many of its intervals meet there (two calls sharing a bin used to count it twice)."""
+    if read_ids.size == 0:
+        return np.zeros(resolution + 1, dtype=np.float32)
+    order = np.lexsort((start_bins, read_ids))
+    reads_sorted = read_ids[order].astype(np.int64)
+    starts = start_bins[order].astype(np.int64)
+    ends = end_bins[order].astype(np.int64)
+    # Running max of the end within each read: offset each read's ends past every earlier read's.
+    offset = reads_sorted * (resolution + 2)
+    reach = np.maximum.accumulate(ends + offset) - offset
+    new_run = np.ones(starts.size, dtype=bool)
+    new_run[1:] = (reads_sorted[1:] != reads_sorted[:-1]) | (starts[1:] > reach[:-1])
+    run_starts = starts[new_run]
+    run_last = np.flatnonzero(np.r_[new_run[1:], True])
+    run_ends = reach[run_last]
+    return _interval_bin_diff(run_starts.astype(np.intp), run_ends.astype(np.intp), resolution)
+
+
 def _profile_values_for_json(values: np.ndarray) -> list[float]:
     return np.round(values.astype(np.float64, copy=False), 6).tolist()
 
@@ -483,10 +503,10 @@ def compute_compact_metaprofile_payload(
     cov_starts = []
     cov_ends = []
     profile_points = {
-        name: ([], [], [])
+        name: ([], [], [], [])
         for name in profile_defs
     }
-    for read in reads:
+    for read_index, read in enumerate(reads):
         primary_intervals = read.get("intervals") or []
         if not primary_intervals:
             continue
@@ -494,8 +514,22 @@ def compute_compact_metaprofile_payload(
         _intervals, primary_starts, primary_ends = _get_interval_index(read)
         read_start = int(primary_starts[0]) - coordinate_offset if primary_starts else 0
         read_end = int(primary_ends[-1]) - coordinate_offset if primary_ends else 0
-        cov_starts.append(read_start)
-        cov_ends.append(read_end)
+        # The read's coverage spans every layer and FIRE interval it carries, whichever profiles were asked for (as in
+        # ReadTrack and the headless engine): an MSP past the last footprint, with terminal gaps hidden, must not add
+        # signal without coverage, and the denominator must not depend on the requested sources.
+        for layer_data in (read.get("layers") or {}).values():
+            if not isinstance(layer_data, dict):
+                continue
+            # Bounds of the intervals as they are now (not the cached index, which keys on identity and length).
+            called = [interval for interval in layer_data.get("intervals") or ()
+                      if len(interval) >= 3 and int(interval[2]) > 0]
+            if called:
+                read_start = min(read_start, min(int(interval[0]) for interval in called) - coordinate_offset)
+                read_end = max(read_end, max(int(interval[1]) for interval in called) - coordinate_offset)
+        for interval in read.get("fire") or []:
+            if len(interval) >= 2:
+                read_start = min(read_start, int(interval[0]) - coordinate_offset)
+                read_end = max(read_end, int(interval[1]) - coordinate_offset)
 
         view_start = coordinate_offset
         view_end = coordinate_offset + region_width
@@ -508,14 +542,17 @@ def compute_compact_metaprofile_payload(
                     profile_intervals = _visible_intervals_from_container(layer_payload, view_start, view_end)
                 else:
                     profile_intervals = get_layer_intervals(read, source_layer)
-            starts_out, ends_out, sizes_out = profile_points[name]
-            for interval in profile_intervals:
-                if len(interval) < 2:
-                    continue
-                size = int(interval[2]) if len(interval) >= 3 else int(interval[1]) - int(interval[0])
-                starts_out.append(int(interval[0]) - coordinate_offset)
-                ends_out.append(int(interval[1]) - coordinate_offset)
-                sizes_out.append(size)
+            starts_out, ends_out, sizes_out, reads_out = profile_points[name]
+            kept = [interval for interval in profile_intervals if len(interval) >= 2]
+            if not kept:
+                continue
+            starts_out.extend([int(interval[0]) - coordinate_offset for interval in kept])
+            ends_out.extend([int(interval[1]) - coordinate_offset for interval in kept])
+            sizes_out.extend([int(interval[2]) if len(interval) >= 3 else int(interval[1]) - int(interval[0])
+                              for interval in kept])
+            reads_out.extend([read_index] * len(kept))
+        cov_starts.append(read_start)
+        cov_ends.append(read_end)
 
     if cov_starts:
         starts = np.clip(np.array(cov_starts, dtype=np.float64), 0, region_width)
@@ -523,13 +560,14 @@ def compute_compact_metaprofile_payload(
         valid = ends > starts
         if np.any(valid):
             start_bins = np.clip((starts[valid] / bin_size).astype(np.intp), 0, resolution - 1)
-            end_coords = np.maximum(starts[valid], ends[valid] - 1)
-            end_bins = np.clip((end_coords / bin_size).astype(np.intp), 0, resolution - 1)
+            # Half-open [s, e): the last bin is the one before ceil(e / bin), as ReadTrack and the headless engine
+            # bin (also when bins are fractional bases wide).
+            end_bins = np.clip(np.ceil(ends[valid] / bin_size).astype(np.intp) - 1, 0, resolution - 1)
             coverage_diff = _interval_bin_diff(start_bins, end_bins, resolution)
 
     profile_diffs = {}
     for name, (_source_layer, min_size, max_size) in profile_defs.items():
-        all_starts, all_ends, all_sizes = profile_points[name]
+        all_starts, all_ends, all_sizes, all_reads = profile_points[name]
         diff = np.zeros(resolution + 1, dtype=np.float32)
         if all_starts:
             starts = np.clip(np.array(all_starts, dtype=np.float64), 0, region_width)
@@ -543,8 +581,9 @@ def compute_compact_metaprofile_payload(
             )
             if np.any(valid):
                 start_bins = np.clip((starts[valid] / bin_size).astype(np.intp), 0, resolution - 1)
-                end_bins = np.clip((ends[valid] / bin_size).astype(np.intp), 0, resolution - 1)
-                diff = _interval_bin_diff(start_bins, end_bins, resolution)
+                end_bins = np.clip(np.ceil(ends[valid] / bin_size).astype(np.intp) - 1, 0, resolution - 1)
+                read_ids = np.array(all_reads, dtype=np.intp)[valid]
+                diff = _read_union_bin_diff(read_ids, start_bins, end_bins, resolution)
         profile_diffs[name] = diff
 
     coverage = np.cumsum(coverage_diff[:resolution])

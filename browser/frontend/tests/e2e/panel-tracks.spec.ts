@@ -185,6 +185,56 @@ test.describe('panel header and track menus (demo data)', () => {
     }
   });
 
+  // 3.0.7 bug: the menu sits inside the solid (white-text) dataset header and its titles inherited white, so every
+  // row's name was white on the white menu. Each title must have size and contrast with the menu behind it.
+  for (const height of [600, 900]) {
+    test(`"Tracks in this panel" titles are readable on a dataset panel at 1280x${height}`, async ({ page, server }) => {
+      test.setTimeout(90_000);
+      await page.emulateMedia({ colorScheme: 'light' });
+      await page.setViewportSize({ width: 1280, height });
+      await open(page, server.baseUrl);
+      const header = page.locator('[data-testid^="dataset-header-"]').first();
+      const tracksButton = header.locator('[data-testid^="panel-tracks-"]');
+      if (await tracksButton.count()) await tracksButton.click();
+      else {
+        await header.locator('[data-testid^="panel-actions-"]').click();
+        await page.locator('[role="menu"] [data-tour="panel-subtracks"]').click();
+      }
+      const menu = page.locator('[data-testid^="panel-tracks-menu-"]');
+      await expect(menu).toBeVisible();
+      const titles = await menu.evaluate((root) => {
+        const rgba = (c: string) => (c.match(/[\d.]+/g) ?? []).map(Number);
+        const lum = ([r, g, b]: number[]) => {
+          const f = (v: number) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; };
+          return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+        };
+        const bg = (el: Element | null): number[] => {
+          for (; el; el = el.parentElement) {
+            const c = rgba(getComputedStyle(el).backgroundColor);
+            if (c.length >= 3 && (c.length < 4 || c[3] > 0.5)) return c;
+          }
+          return [255, 255, 255];
+        };
+        return [...root.querySelectorAll('label input[type="checkbox"]')].map((box) => {
+          const name = box.parentElement!.querySelector('span > span') as HTMLElement;
+          const style = getComputedStyle(name);
+          const rect = name.getBoundingClientRect();
+          const fg = rgba(style.webkitTextFillColor || style.color);
+          const [a, b] = [lum(fg), lum(bg(name))].sort((x, y) => y - x);
+          return { text: name.textContent ?? '', width: rect.width, height: rect.height,
+            alpha: fg.length > 3 ? fg[3] : 1, contrast: (a + 0.05) / (b + 0.05), color: style.color };
+        });
+      });
+      expect(titles.length).toBeGreaterThan(3);
+      for (const t of titles) {
+        expect(t.text.trim(), JSON.stringify(t)).not.toBe('');
+        expect(t.width * t.height, JSON.stringify(t)).toBeGreaterThan(0);
+        expect(t.alpha, JSON.stringify(t)).toBeGreaterThan(0.5);
+        expect(t.contrast, JSON.stringify(t)).toBeGreaterThan(3);
+      }
+    });
+  }
+
   test('right-clicking the metaprofile opens its menu, which opens Rules', async ({ page, server }) => {
     test.setTimeout(90_000);
     await page.setViewportSize({ width: 1440, height: 900 });

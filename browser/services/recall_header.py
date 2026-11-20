@@ -151,6 +151,10 @@ if sys.path and sys.path[0] == '':
     sys.path[0] = first
 elif getattr(sys, 'frozen', False) and first not in sys.path:
     sys.path.insert(0, first)
+if getattr(sys, 'frozen', False):
+    # As the -m role and the package probe: the app's FiberHMM (an update, the Custom path or the bundled one).
+    from services.fiberhmm_runtime import configure_fiberhmm_runtime
+    configure_fiberhmm_runtime()
 out = {}
 try:
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -962,10 +966,22 @@ def build(*, tool: str, cl: str, ds: str, table: Table, entry_path: str, enzyme:
                          "why": "the platform this BAM declares (FIBERHMM-CHEMISTRY); 3.0 would otherwise "
                                 "take it from the input's header"})
 
+    # The MAPQ threshold the original pipeline run recorded (@PG DS "primary MAPQ>=N") when its command line left
+    # --min-mapq out: given again, since FiberHMM's default changed (20 before 3.2, 0 since) and the re-call would
+    # otherwise run at the installed FiberHMM's default while the plan says it keeps the original settings.
+    mapq = re.search(r"MAPQ>=(\d+)", ds or "") if tool == "fiberhmm-pipeline" else None
+    if mapq and "--min-mapq" not in flags_used and table.has("--min-mapq"):
+        items.append({"flag": "--min-mapq", "spelled": None, "dest": table.by_option["--min-mapq"]["dest"],
+                      "action": table.by_option["--min-mapq"], "values": [mapq.group(1)]})
+        rewrites.append({"flag": "--min-mapq", "from": None, "to": mapq.group(1),
+                         "why": "the MAPQ threshold the original run recorded (@PG DS); FiberHMM's default changed"})
+
     # A basecaller override the original recorded only in its @PG DS (not on its command line): given
     # again, so the re-call keeps it even when its input does not record it (e.g. a file you chose).
     # Per field, as FiberHMM's precedence is: what the command line gives stays, the rest is added.
-    override_dests: list[str] = []
+    # (The recorded MAPQ above is a recorded value given again too, listed the same way.)
+    override_dests: list[str] = [table.by_option["--min-mapq"]["dest"]] if mapq and any(
+        i["flag"] == "--min-mapq" and i.get("spelled") is None for i in items) else []
     carried = recorded_override(ds)
     if carried and table.has("--basecaller-info") and table.has("--modbase-model"):
         info_dest = table.by_option["--basecaller-info"]["dest"]

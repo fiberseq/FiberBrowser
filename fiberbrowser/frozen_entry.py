@@ -104,17 +104,22 @@ def configure_frozen_process() -> None:
     prepare_process_environment()
 
 
-def _select_fiberhmm() -> None:
-    """Select the app's FiberHMM (an update, the Custom path or the bundled one) in a child process.
-
-    Only the server role puts the backend (``browser/``, which holds ``services``) on ``sys.path``; the module,
-    script and entry-point roles (loky workers, the ``fiberhmm-*`` commands) get it here, appended so it never
-    shadows the working directory or FiberHMM's own modules.
-    """
+def _add_backend_path() -> None:
+    """Append the backend (``browser/``, which holds ``services``) to ``sys.path``, so it never shadows the working
+    directory or FiberHMM's own modules."""
     from ._paths import browser_dir
     backend = str(browser_dir())
     if backend not in sys.path:
         sys.path.append(backend)
+
+
+def _select_fiberhmm() -> None:
+    """Select the app's FiberHMM (an update, the Custom path or the bundled one) in a child process.
+
+    Only the server role puts the backend (``browser/``, which holds ``services``) on ``sys.path``; the module,
+    script and entry-point roles (loky workers, the ``fiberhmm-*`` commands) get it here.
+    """
+    _add_backend_path()
     from services.fiberhmm_runtime import configure_fiberhmm_runtime
     configure_fiberhmm_runtime()
 
@@ -141,6 +146,9 @@ def run(argv: Optional[Sequence[str]] = None) -> int:
         runpy.run_module(args[0], run_name="__main__", alter_sys=True)
         return 0
     if role == "code":
+        # The backend too: the Library re-call probes run in the job's interpreter with -c and import
+        # services.fiberhmm_runtime to select the app's FiberHMM (without it no re-call could be planned in the app).
+        _add_backend_path()
         sys.argv = ["-c", *args[1:]]
         exec(compile(args[0], "<string>", "exec"), {"__name__": "__main__"})
         return 0

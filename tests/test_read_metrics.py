@@ -1,5 +1,6 @@
 """Regression tests for compact-read metric and filtering helpers."""
 
+import pytest
 from services import read_metrics
 
 
@@ -198,7 +199,8 @@ def test_compact_metaprofile_payload_supports_coordinate_offsets():
         coordinate_offset=100,
     )
 
-    assert payload["layers"]["tf"][10:21] == [1.0] * 11
+    assert payload["layers"]["tf"][10:20] == [1.0] * 10
+    assert payload["layers"]["tf"][20] == 0.0
     assert payload["nucleosome_profile"] == []
     assert payload["subnuc_profile"] == []
 
@@ -286,3 +288,95 @@ def test_rule_metric_supports_specific_gene_conditions():
     assert read_metrics.compute_rule_metric(
         read, 100, fallback_name, gene_regions, peak_regions, gene_regions_by_key=gene_regions_by_key
     ) == 1
+
+
+@pytest.mark.parametrize("width", [1000, 1001, 1337, 2999])
+def test_compact_metaprofile_bins_match_the_headless_and_client_rule(width):
+    """The server's profile bins a call [s, e) like ReadTrack and the headless engine (no extra end bin), also
+    when bins are fractional bases wide."""
+    import numpy as np
+    from services.figure.tracks._metaprofile import compute_metaprofile
+
+    rng = np.random.default_rng(7)
+    reads = []
+    for i in range(40):
+        start = int(rng.integers(0, width * 3 // 10))
+        end = int(rng.integers(width * 7 // 10, width))
+        calls = []
+        for _ in range(6):
+            s = int(rng.integers(start, end - 5))
+            calls.append([s, s + int(rng.integers(1, 40)), 0])
+        calls += [[start, start + 2, 0], [end - 4, end, 0]]  # calls that end on a bin edge
+        calls = [[s, min(e, end), min(e, end) - s] for s, e, _ in calls]
+        reads.append({"id": f"r{i}", "intervals": [[start, end, end - start]], "layers": {"tf": {"intervals": calls}}})
+
+    server = read_metrics.compute_compact_metaprofile_payload(
+        reads, width, ["tf"], max_bins=500, include_legacy_profiles=False)["layers"]["tf"]
+    headless = compute_metaprofile(reads, float(width), [], None)["layers"]["tf"]
+
+    assert len(server) == len(headless) == 500
+    assert np.allclose(server, headless, atol=1e-6)
+
+
+def test_compact_metaprofile_counts_a_read_once_per_bin_and_covers_every_interval():
+    """Two calls of one read meeting inside a bin count the read once there; a layer call past the read's primary
+    intervals brings its own coverage. Every profile stays within [0, 1] (server and headless engine alike)."""
+    import numpy as np
+    from services.figure.tracks._metaprofile import compute_metaprofile
+
+    reads = [
+        # Two nucleosomes with a 1 bp linker inside one 8 bp bin (bins of 8 bp over 4000 bp / 500).
+        {"id": "a", "intervals": [[0, 4000, 4000]], "layers": {"nuc": {"intervals": [[100, 245, 145], [246, 391, 145]]}}},
+        # Abutting, overlapping and duplicated calls.
+        {"id": "b", "intervals": [[0, 4000, 4000]],
+         "layers": {"nuc": {"intervals": [[100, 245, 145], [245, 390, 145], [300, 380, 80], [300, 380, 80]]}}},
+        # An MSP past the last footprint (terminal gaps hidden): its signal needs coverage under it.
+        {"id": "c", "intervals": [[1000, 2000, 1000]], "layers": {"msp": {"intervals": [[2000, 2600, 600]]}}},
+    ]
+    server = read_metrics.compute_compact_metaprofile_payload(
+        reads, 4000, ["nuc", "fire"], max_bins=500, include_legacy_profiles=False)["layers"]
+    headless = compute_metaprofile(reads, 4000.0, [], None)["layers"]
+
+    for name in ("nuc", "fire"):
+        assert max(server[name]) <= 1.0 and min(server[name]) >= 0.0, name
+        assert np.allclose(server[name], headless[name], atol=1e-6), name
+    assert server["nuc"][30] == 1.0          # bin 240-248 holds both of read a's calls: counted once, 2 of 2 reads
+    # Bin 2160-2168: reads a and b cover it, and read c through its MSP: 1 of 3 (without c's coverage, 1 of 2).
+    assert server["fire"][270] == round(1 / 3, 6)
+    assert server["fire"][320] == round(1 / 3, 6)  # bin 2560-2568, inside the MSP
+
+
+def test_compact_metaprofile_coverage_does_not_depend_on_the_requested_sources():
+    """Adding a profile source must not change another profile: coverage spans every layer/FIRE interval a read has."""
+    reads = [
+        {"id": "a", "intervals": [[0, 4000, 4000]], "layers": {"nuc": {"intervals": [[2100, 2250, 150]]}}},
+        {"id": "b", "intervals": [[1000, 2000, 1000]], "layers": {"msp": {"intervals": [[2000, 2600, 600]]}}},
+    ]
+    nuc_only = read_metrics.compute_compact_metaprofile_payload(
+        reads, 4000, ["nuc"], max_bins=500, include_legacy_profiles=False)["layers"]["nuc"]
+    both = read_metrics.compute_compact_metaprofile_payload(
+        reads, 4000, ["nuc", "fire"], max_bins=500, include_legacy_profiles=False)["layers"]["nuc"]
+    assert nuc_only == both
+    assert nuc_only[270] == 0.5  # bin 2160-2168: read b covers it through its MSP
+
+
+def test_headless_metaprofile_counts_msp_and_fire_aliases_once():
+    from services.figure.tracks._metaprofile import compute_metaprofile
+
+    reads = [{"id": "a", "intervals": [[0, 1000, 1000]],
+              "layers": {"msp": {"intervals": [[100, 200, 100]]}, "fire": {"intervals": [[100, 200, 100]]}}}]
+    fire = compute_metaprofile(reads, 1000.0, [], None)["layers"]["fire"]
+    assert max(fire) == 1.0
+
+
+def test_compact_metaprofile_coverage_reads_the_intervals_as_they_are_now():
+    """The coverage span comes from the current intervals, not a cached index (keyed on identity and length)."""
+    reads = [
+        {"id": "a", "intervals": [[40, 60, 20]], "layers": {"tf": {"intervals": [[40, 60, 20]]}}},
+        {"id": "b", "intervals": [[0, 100, 100]], "layers": {"tf": {"intervals": [[0, 100, 100]]}}},
+    ]
+    read_metrics.compute_compact_metaprofile_payload(reads, 100, ["tf"], max_bins=100, include_legacy_profiles=False)
+    reads[0]["layers"]["tf"]["intervals"][0] = [10, 90, 80]  # same list, same length
+    tf = read_metrics.compute_compact_metaprofile_payload(
+        reads, 100, ["tf"], max_bins=100, include_legacy_profiles=False)["layers"]["tf"]
+    assert max(tf) <= 1.0

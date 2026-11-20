@@ -458,7 +458,9 @@ def test_sampled_display_working_set_computes_profile_from_raw_broad_reads():
     assert working_count == 2
     assert len(ws.reads) == 1
     assert ws.profile_read_count == 2
-    assert ws.profile_metaprofile["layers"]["tf"][10:21] == [1.0] * 11
+    # Half-open [10, 20): bins 10-19, not the end base (as the dev line asserts).
+    assert ws.profile_metaprofile["layers"]["tf"][10:20] == [1.0] * 10
+    assert ws.profile_metaprofile["layers"]["tf"][20] == 0
 
 
 def test_working_set_diagnostics_are_quiet_by_default(capsys, monkeypatch):

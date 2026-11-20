@@ -116,7 +116,7 @@ export function SubTrackMenu({ panelId, subTracks, anchorRect, onClose }: Props)
       role="dialog"
       aria-label="Tracks in this panel"
       data-testid={`panel-tracks-menu-${panelId}`}
-      className="fb-menu !fixed !z-50 max-h-[70vh] w-[17.5rem] overflow-y-auto !py-1"
+      className="fb-menu !fixed !z-50 max-h-[70vh] w-[17.5rem] overflow-y-auto !py-1 text-ink dark:text-gray-100"
       style={{ top: pos.top, left: pos.left, right: 'auto', marginTop: 0 }}
       onMouseDown={e => e.stopPropagation()}
     >
@@ -153,7 +153,7 @@ export function SubTrackMenu({ panelId, subTracks, anchorRect, onClose }: Props)
             <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2" title={`${checked ? `Minimize ${label} in all panels` : `Show ${label} in all panels`}${when ? ` (it draws ${when})` : ''}`}>
               <input type="checkbox" checked={checked} onChange={handleToggle} className="h-3.5 w-3.5 shrink-0" aria-label={`Show ${label}`} />
               <span className="min-w-0 flex-1 leading-tight">
-                <span className="block truncate">{label}</span>
+                <span className="block truncate" data-track-title>{label}</span>
                 {when && <span className="block truncate text-[10.5px] text-ink-muted">{when}</span>}
               </span>
             </label>
@@ -186,7 +186,7 @@ export function SubTrackMenu({ panelId, subTracks, anchorRect, onClose }: Props)
               data-testid={`panel-track-restore-${type}`}
             >
               <span className="flex w-4 justify-center text-ink-muted" aria-hidden="true"><Plus size={12} /></span>
-              <span className="flex-1 truncate">{getTrackLabel(type)}</span>
+              <span className="flex-1 truncate" data-track-title>{getTrackLabel(type)}</span>
             </button>
           ))}
         </>

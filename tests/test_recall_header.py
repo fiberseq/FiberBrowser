@@ -736,3 +736,26 @@ def test_a_recorded_override_fills_only_the_fields_the_command_does_not_give(tmp
     assert args[args.index("--modbase-model") + 1] == "none"
     before, after = real_parse(result["original_args"]), real_parse(result["args"])
     assert rh.silent_changes(before, after, rh.allowed_changes("fiberhmm-call", result)) == []
+
+
+def test_a_pipeline_header_recall_keeps_the_mapq_its_ds_recorded(tmp_path):
+    """The pipeline's @PG DS records its MAPQ threshold ("primary MAPQ>=N"). A command line that left --min-mapq out
+    ran at that FiberHMM's default, which changed (20 before 3.2, 0 since): the re-call passes the recorded value,
+    listed as a rewrite, and an explicit --min-mapq on the command line stays."""
+    from fiberhmm.cli.pipeline import parse_args
+    reads = make_bam(tmp_path / "in.bam")
+    ref = tmp_path / "ref.fa"
+    ref.write_text(">c\nACGT\n")
+    ds = "primary MAPQ>=20; alignments=primary-supplementary; origin_merge=on; hard_clip=circular"
+    common = dict(tool="fiberhmm-pipeline", table=pipeline_table(), enzyme="dddb", platform="nanopore",
+                  outdir=str(tmp_path / "out"), cores=2, ds=ds, call_table=call_table(),
+                  entry_path=str(tmp_path / "entry.bam"))
+    result = rh.build(cl=f"fiberhmm-pipeline {reads} --reference {ref} --enzyme dddb -o /old/out", **common)
+    assert parse_args(result["args"]).min_mapq == 20
+    assert ("--min-mapq", None, "20") in [(r["flag"], r["from"], r["to"]) for r in result["rewrites"]]
+    before, after = vars(parse_args(result["original_args"])), vars(parse_args(result["args"]))
+    assert rh.silent_changes(before, after, rh.allowed_changes("fiberhmm-pipeline", result)) == []
+    explicit = rh.build(cl=f"fiberhmm-pipeline {reads} --reference {ref} --enzyme dddb -o /old/out --min-mapq 5",
+                        **common)
+    assert parse_args(explicit["args"]).min_mapq == 5
+    assert not [r for r in explicit["rewrites"] if r["flag"] == "--min-mapq"]

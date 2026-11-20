@@ -46,6 +46,7 @@ import { installTrackSelectionGuard } from '../../../utils/pointerDrag';
 import { layerQualitiesNeeded, qualityLayerKey } from './layerQualityNeeds';
 import { computeReadTrackLayout } from './layout';
 import { clusterAssignmentForRead, clusteredReadIdSet } from './readFilter';
+import { addReadIntervals } from '../../../utils/metaprofileBins';
 import { logPerfTiming, nowMs } from '../../../utils/perfDebug';
 import { isLayerCacheEnabled } from '../../../utils/layerCache';
 import { branchScopesPanel, readIdSetForClusterRenderScope } from '../../../utils/readScopes';
@@ -902,8 +903,13 @@ export function ReadTrack({
         }
       }
 
-      // Determine read span from all intervals (footprints + gaps)
+      // Determine read span from all intervals (footprints + gaps), widened below to every layer/FIRE interval the read
+      // adds, so no bin gets a read's signal without its coverage. Each channel adds the union of the read's interval
+      // bins (utils/metaprofileBins): two intervals meeting inside one bin count the read once there, so every
+      // profile stays within [0, 1].
       let readStart = Infinity, readEnd = -Infinity;
+      const widen = (a: number, b: number) => { if (a < readStart) readStart = a; if (b > readEnd) readEnd = b; };
+      const ruleIntervals: Record<string, [number, number][]> = {};
       for (const [intervalStart, intervalEnd, size] of read.intervals) {
         if (intervalStart < readStart) readStart = intervalStart;
         if (intervalEnd > readEnd) readEnd = intervalEnd;
@@ -915,35 +921,40 @@ export function ReadTrack({
         const ruleId = getMatchingRuleId(intervalStart, intervalEnd, size, metaprofileRules, ruleCtx);
 
         if (ruleId && ruleDiffs[ruleId]) {
-          addRange(ruleDiffs[ruleId], intervalStart, intervalEnd);
+          (ruleIntervals[ruleId] ??= []).push([intervalStart, intervalEnd]);
         }
       }
+      for (const [ruleId, ivs] of Object.entries(ruleIntervals)) addReadIntervals(ruleDiffs[ruleId], ivs, viewWidth, resolution);
 
       // Per-layer presence profiles — iterate read.layers[name].intervals.
       // Quality filters were applied at working-set construction so the
       // intervals here reflect the filtered state automatically.
       if (read.layers) {
+        // msp and fire both feed the 'fire' profile: their intervals are united per read before binning, so a read
+        // carrying both aliases still counts once per bin.
+        const calledByProfile: Record<string, [number, number][]> = {};
         for (const [layerName, layer] of Object.entries(read.layers)) {
           const ivs = layer?.intervals;
           if (!ivs || ivs.length === 0) continue;
           const profileLayerName = layerName === 'msp' ? 'fire' : layerName;
-          let arr = layerDiffs[profileLayerName];
-          if (!arr) {
-            arr = new Float32Array(resolution + 1);
-            layerDiffs[profileLayerName] = arr;
-          }
+          if (!layerDiffs[profileLayerName]) layerDiffs[profileLayerName] = new Float32Array(resolution + 1);
+          const called = (calledByProfile[profileLayerName] ??= []);
           for (const [intStart, intEnd, size] of ivs) {
             if (size <= 0) continue;
-            addRange(arr, intStart, intEnd);
+            called.push([intStart, intEnd]);
+            widen(intStart, intEnd);
           }
+        }
+        for (const [profileLayerName, called] of Object.entries(calledByProfile)) {
+          addReadIntervals(layerDiffs[profileLayerName], called, viewWidth, resolution);
         }
       }
 
       // FIRE density profile
       if (read.fire) {
-        for (const [fStart, fEnd] of read.fire) {
-          addRange(fireDiff, fStart, fEnd);
-        }
+        const spans: [number, number][] = [];
+        for (const [fStart, fEnd] of read.fire) { spans.push([fStart, fEnd]); widen(fStart, fEnd); }
+        addReadIntervals(fireDiff, spans, viewWidth, resolution);
       }
 
       // Increment coverage bins for this read's span

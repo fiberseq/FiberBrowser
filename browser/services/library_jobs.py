@@ -439,11 +439,14 @@ def recall_settings(entry: dict, enzyme: str, help_text: Optional[str],
             if seq not in ("nanopore", "pacbio"):
                 raise RecallError(f"The original run records seq={seq!r}, which this FiberBrowser does not know.")
             more.append((f"{seq} reads", ["--seq", str(seq)]))
-        for key, flag, label in (("min_mapq", "--min-mapq", "MAPQ"), ("min_read_length", "--min-read-length",
-                                                                          "min read length")):
-            value = _int_setting(settings, key)
-            if value is not None and value != PIPELINE_DEFAULTS[key]:
-                more.append((f"{label} {value}", [flag, str(value)]))
+        # The recorded MAPQ is always passed: FiberHMM's default changed (20 before 3.2, 0 since), so leaving it to
+        # the default would re-call an older run at another MAPQ while the plan says it keeps the original settings.
+        min_mapq = _int_setting(settings, "min_mapq")
+        if min_mapq is not None:
+            more.append((f"MAPQ {min_mapq}", ["--min-mapq", str(min_mapq)]))
+        min_read_length = _int_setting(settings, "min_read_length")
+        if min_read_length is not None and min_read_length != PIPELINE_DEFAULTS["min_read_length"]:
+            more.append((f"min read length {min_read_length}", ["--min-read-length", str(min_read_length)]))
         # hard_clip: on / off / circular since FiberHMM 3.0 (circular: the DAF default); true/false before.
         hard_clip = settings.get("hard_clip")
         if hard_clip is False or hard_clip == "off":

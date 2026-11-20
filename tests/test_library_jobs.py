@@ -287,6 +287,9 @@ def _real_pipeline():
     dict(basecaller_override={"program": "dorado", "version": "0.9.6",
                               "basecall_model": "dna_r10.4.1_e8.2_400bps_sup@v5.0.0", "modbase_models": []}),
     dict(basecaller_override={"modbase_models": ["dna_r10.4.1_e8.2_400bps_sup@v5.0.0_6mA@v2"]}),
+    # MAPQ off (FiberHMM 3.2's default) and a custom MAPQ: both kept whatever the installed FiberHMM's default is.
+    dict(min_mapq=0),
+    dict(min_mapq=37),
 ])
 def test_fiberhmm_3_run_settings_round_trip_through_the_real_pipeline_parser(tmp_path, monkeypatch, changed):
     parser_module = _real_pipeline()
@@ -873,3 +876,39 @@ def test_the_frozen_apps_module_role_is_probed_with_its_own_import_path(tmp_path
     runs = jobs._fiberhmm_identity(command, str(out))["runs"]
     ran = subprocess.run(command["argv"], cwd=out, capture_output=True, text=True, timeout=60)
     assert ran.returncode == 0 and ran.stdout.split()[-1] == runs["version"] == "3.0.LOCAL"
+
+
+def test_the_frozen_apps_code_role_finds_the_backend_for_the_recall_probe(tmp_path):
+    """In the Mac app only the server role starts with browser/ on sys.path. The re-call probes run the app binary's
+    -c role and import services.fiberhmm_runtime, so that role must add the backend (3.0.3-3.0.7 apps could not plan
+    any Library re-call: "can't import fiberhmm from the job's environment")."""
+    import subprocess
+    from pathlib import Path
+    repo = Path(__file__).resolve().parents[1]
+    bundled, out = tmp_path / "bundled", tmp_path / "output"
+    _printing_fiberhmm(bundled, "3.0.BUNDLED")
+    out.mkdir()
+    app = tmp_path / "app"
+    # As the frozen app starts: the fiberbrowser package and the bundled site, never browser/ itself.
+    app.write_text(f"#!{sys.executable}\nimport sys\n"
+                   f"sys.path[:] = [{str(repo)!r}, {str(bundled)!r}] + [p for p in sys.path if p not in ('', {str(tmp_path)!r}, {str(repo / 'browser')!r})]\n"
+                   "sys.frozen = True\nfrom fiberbrowser import frozen_entry\nraise SystemExit(frozen_entry.run())\n")
+    app.chmod(0o755)
+    probe = subprocess.run([str(app), "-c", "import services.fiberhmm_runtime; print('ok')"], cwd=out,
+                           capture_output=True, text=True, timeout=60, env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"})
+    assert probe.returncode == 0 and probe.stdout.split()[-1] == "ok", probe.stderr[-800:]
+    command = {"argv": [str(app), "-m", "fiberhmm.cli.pipeline"], "env": {}}
+    assert jobs._fiberhmm_identity(command, str(out))["runs"]["version"] == "3.0.BUNDLED"
+
+
+
+@pytest.mark.parametrize("recorded", [20, 0])
+def test_a_recall_passes_the_recorded_mapq_explicitly(tmp_path, monkeypatch, recorded):
+    """FiberHMM's MAPQ default changed (20 before 3.2, 0 since): the re-call always passes the original run's
+    min_mapq, and the plan says so, instead of leaving it to whatever FiberHMM is installed."""
+    run = _run_with_settings(tmp_path, **{k: v for k, v in pipeline_settings("dddb", min_mapq=recorded).items()
+                                          if k != "enzyme"})
+    plan = jobs.plan_recall(_entry(run["called_bam"]), outdir=str(tmp_path / "recall"))
+    extra = plan["extra"]
+    assert extra[extra.index("--min-mapq") + 1] == str(recorded) and extra.count("--min-mapq") == 1
+    assert f"MAPQ {recorded}" in plan["settings"]["labels"]

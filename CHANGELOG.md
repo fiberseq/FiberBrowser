@@ -1,5 +1,50 @@
 # Changelog
 
+## 3.0.8 — 2026-11-20
+
+FiberBrowser 3.0.8 bundles FiberHMM 3.0.4 and requires
+`fiberhmm[consensus]>=3.0.3,<4`.
+
+### Fixed
+
+- **Track names in a panel's Tracks menu are readable.** In light mode the
+  "Tracks in this panel" menu showed its track names white on white, so only
+  the subtitles could be read. The names now use the menu's own text colour,
+  in light and dark mode.
+- **Library Re-call works in the Mac app again.** Since 3.0.3 the packaged
+  Mac app could not plan any re-call ("can't import fiberhmm from the job's
+  environment"), even with its bundled FiberHMM.
+- **Library Re-call keeps the original run's MAPQ.** A re-call now always
+  passes the MAPQ threshold the original run recorded, in its run record or
+  in its BAM header. Before, a run made at FiberHMM's old default (MAPQ 20)
+  was re-called with no MAPQ setting, so with FiberHMM 3.2 or later
+  (default 0) it ran at MAPQ 0 while the plan said it kept the original
+  settings. The plan now lists the MAPQ it uses.
+- **Reloading the only open tab no longer stops the server.** A check that
+  ran between the old page closing and the reloaded page reporting in could
+  find no tab open and shut the server down, so the reloaded page showed
+  "connection refused".
+- **Files with only MA/Ma calls no longer report missing Fiber-seq tags.**
+  Opening a BAM written by current fibertools (Ma/Aq tags) or FiberHMM (MA/AQ
+  tags) warned "Missing Fiber-seq tags: ns, nl, as, al ...". Nucleosome and
+  MSP or FIRE calls in an MA/Ma tag now count for those tags.
+- **Derived-layer exports now write their BigBed.** `bedToBigBed` refused
+  the bundle's table definition, so every derived-layer export wrote BED and
+  JSON only and no BigBed was added to the dataset.
+- **Metaprofile layer signal ends at the call's last base.** The server's
+  metaprofile, and the one recomputed when you zoom in within loaded reads,
+  counted each call one bin past its end. They now bin calls as the read
+  track's own metaprofile and exported figures already did.
+- **Metaprofile values are no longer over-counted where calls meet within a
+  bin.** When two calls on one read met inside the same bin (for example two
+  nucleosomes with a short linker), that read counted twice there, so
+  metaprofiles read slightly high (up to about 5% per bin on the main track,
+  and cluster nucleosome profiles could go above 1). A read now counts at most
+  once per bin in each profile, and a call past the read's footprints (such
+  as an MSP at the read end) also counts towards the reads covering that
+  bin. This applies to the metaprofile track, cluster profiles and exported
+  figures.
+
 ## 3.0.7 — 2026-11-19
 
 FiberBrowser 3.0.7 bundles FiberHMM 3.0.4 and requires

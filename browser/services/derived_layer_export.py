@@ -25,7 +25,7 @@ FIBERLAYERS_AUTOSQL = """table fiberbrowser_fiberlayers
     char[1] strand;      "Strand"
     uint thickStart;     "Start position (same as chromStart)"
     uint thickEnd;       "End position (same as chromEnd)"
-    string itemRgb;      "Class color"
+    uint itemRgb;        "Class color (R,G,B; bedToBigBed requires the BED standard type here)"
     int blockCount;      "Number of intervals in this class/read row"
     int[blockCount] blockSizes;   "Interval sizes"
     int[blockCount] chromStarts;  "Interval starts relative to chromStart"

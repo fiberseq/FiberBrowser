@@ -4,11 +4,34 @@ import { readRegionProfiles } from './readRegionProfiles';
 import { decodeReadBinary } from './readBinary';
 import { projectLoadedReads } from './loadedReadRegion';
 
-it('matches inclusive profile endpoints and half-open coverage bins', () => {
+it('bins signal and coverage half-open, as the server does', () => {
+  // [10, 20) at 2 bp per bin covers bins 5-9: its end base 20 is not in it (services/read_metrics.py).
   const reads = [{ id: 'one', intervals: [[0, 1000, 1000]] as [number, number, number][],
     layers: { tf: { intervals: [[10, 20, 10]] as [number, number, number][] } } }];
   const profile = readRegionProfiles(reads, 1000, ['tf']);
-  expect(profile.layers?.tf.slice(4, 12)).toEqual([0, 1, 1, 1, 1, 1, 1, 0]);
+  expect(profile.layers?.tf.slice(4, 12)).toEqual([0, 1, 1, 1, 1, 1, 0, 0]);
+});
+
+it('ends a call at the bin before ceil(end / bin) when bins are fractional, like ReadTrack', () => {
+  // 1001 bp over 500 bins: [2, 3) reaches past 2.002, so it shows in bins 0 and 1 (ReadTrack's addRange).
+  const reads = [{ id: 'one', intervals: [[0, 1001, 1001]] as [number, number, number][],
+    layers: { tf: { intervals: [[2, 3, 1]] as [number, number, number][] } } }];
+  const profile = readRegionProfiles(reads, 1001, ['tf']);
+  expect(profile.layers?.tf.slice(0, 3)).toEqual([1, 1, 0]);
+});
+
+it('counts a read once in a bin its calls share and covers a call past its intervals, as the server does', () => {
+  // 4000 bp over 500 bins of 8 bp: two nucleosomes with a 1 bp linker share the bin 240-248.
+  const reads = [
+    { id: 'a', intervals: [[0, 4000, 4000]] as [number, number, number][],
+      layers: { nuc: { intervals: [[100, 245, 145], [246, 391, 145]] as [number, number, number][] } } },
+    { id: 'c', intervals: [[1000, 2000, 1000]] as [number, number, number][],
+      layers: { nuc: { intervals: [[2000, 2600, 600]] as [number, number, number][] } } },
+  ];
+  const nuc = readRegionProfiles(reads, 4000, ['nuc']).layers!.nuc;
+  expect(Math.max(...nuc)).toBeLessThanOrEqual(1);
+  expect(nuc[30]).toBe(1);    // read a once (alone covers it), not 2
+  expect(nuc[270]).toBe(0.5); // read c's call past its intervals is covered by it: 1 of 2 reads, not 1 of 1
 });
 
 it('uses the server rounding rule for exact half-millionths', () => {
